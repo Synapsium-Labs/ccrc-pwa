@@ -14,7 +14,7 @@ import {
   askScreen, liveQuestion, namedQuestion, pairEnvelope, pairMatches, questionCorresponds, shownQuestion, titleMatches,
 } from '../src/pane/askPairing.js';
 import { pairMatches as transcriptPairMatches } from '../src/transcript/ask.js';
-import { CORPUS } from './askPairingStream.js';
+import { CORPUS, SCENARIOS, runScenario, tablePairing } from './askPairingStream.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const PANES = path.join(ROOT, 'server/test/fixtures/panes');
@@ -71,4 +71,30 @@ describe('pane/askPairing.ts: the server\'s envelope pairing (Task Q3g)', () => 
     expect(pairMatches('  Yes,  deploy ', 'yes, deploy now')).toBe(true);
     expect(pairMatches('', 'x')).toBe(false);
   });
+});
+
+/** Per scenario, per frame sent (`askPairingStream.ts`'s order): the table row its `pairing` equals, or null for none. */
+const EXPECTED: Record<string, ([string, string] | null)[]> = {
+  'dialog first': [null, null, ['cc300-ask-1q-open', 'COLOUR_ONE']],
+  'envelope first': [null, ['cc300-ask-1q-open', 'COLOUR_ONE']],
+  'envelope changed under the same dialog': [null, ['cc300-ask-1q-open', 'COLOUR_ONE'], ['cc300-ask-1q-open', 'FRUIT_DRINK']],
+  'dialog repainted unparsed': [null, ['cc300-ask-multiselect-next-open', 'COLOUR_FEATURES'],
+    ['cc300-ask-multiselect-digit1', 'COLOUR_FEATURES'], ['cc300-ask-multiselect-digit1-3', 'COLOUR_FEATURES']],
+  'both cleared': [null, ['cc300-ask-1q-open', 'COLOUR_ONE'], null, null],
+  'an approval envelope under a menu': [null, null, ['cc300-ask-1q-open', 'COLOUR_ONE'], null],
+};
+
+describe('the session stream sends the pairing on the frames it already sends (Task Q3g)', () => {
+  it.each(SCENARIOS.map((sc) => [sc.name, sc] as const))('%s', async (_n, sc) => {
+    const frames = await runScenario(sc);
+    const want = EXPECTED[sc.name]!;
+    expect(frames).toHaveLength(want.length);
+    frames.forEach(({ frame }, i) => {
+      const at = `${sc.name}: frame ${i} (${frame.type})`;
+      const w = want[i]!;
+      if (w === null) expect('pairing' in frame, at).toBe(false);
+      else expect((frame as { pairing?: unknown }).pairing, at).toEqual(tablePairing(w[0], w[1]));
+      if (frame.type === 'dialog') expect('pairing' in frame.dialog, `${at}: never inside dialog`).toBe(false);
+    });
+  }, 30_000);
 });

@@ -16,7 +16,8 @@ import { SessionWorkflows, sessionDirOf } from './workflows/read.js';
 import { workflowsFrame, type Proc } from './workflows/model.js';
 import { foldHookStateRead, type HookStateRawRead } from './hookstate.js';
 import { askKey, nextAgedKeep, NO_AGED_KEEP, type AgedKeep } from './askkey.js';
-import type { Dialog, DialogAsk, DialogMulti, SessionStatus, SessionStreamMsg } from '../../shared/api.js';
+import { pairEnvelope } from './pane/askPairing.js';
+import type { Dialog, DialogAsk, DialogMulti, HookAsk, SessionStatus, SessionStreamMsg } from '../../shared/api.js';
 import { reviewQuestions, reviewRows } from '../../shared/ask-menu.js';
 
 const POLL_MS = 2000;
@@ -144,6 +145,11 @@ export class SessionStream implements FeedSubscriber {
    *  (fixing round 1, I1): `ask_cleared` at minimum, confirming to a
    *  possibly-stale client that there is truly nothing pending. */
   private lastAskJson: string | null | undefined = undefined;
+  /** D-7031: the envelope and the dialog this stream last SENT (an `ask` frame's wire envelope, a `dialog` frame's
+   *  dialog), the two sides of the `pairing` field (`paired`). Each is null after its `_cleared` frame and before its
+   *  first frame. Recorded as sent, never read back for a gate: no frame is added, dropped or reordered for them. */
+  private sentAsk: HookAsk | null = null;
+  private sentDialog: Dialog | null = null;
   /** One memo per stream (§5.4): steady state is ONE stat per tick for this
    *  session, and a session with nothing at any exact address pays for a full
    *  search on a back-off rather than every two seconds. */
@@ -211,7 +217,8 @@ export class SessionStream implements FeedSubscriber {
     this.seenDialog = seen;
     if (!msg) return;
     console.log(dialogFrameLine(this.id, msg, from, startedAt === null ? null : Date.now() - startedAt));
-    this.send(msg);
+    this.sentDialog = msg.type === 'dialog' ? msg.dialog : null;
+    this.send(this.paired(msg));
   }
 
   constructor(
@@ -572,7 +579,20 @@ export class SessionStream implements FeedSubscriber {
     if (json === this.lastAskJson) return;
     this.lastAskJson = json;
     // D-5298 (spec §6.7): an approval's summary leaves redacted (`wireHookAsk`); the key is the envelope's own.
-    this.send(ask === null ? { type: 'ask_cleared' } : { type: 'ask', ask: wireHookAsk(ask), key: askKey(ask) });
+    this.sentAsk = ask === null ? null : wireHookAsk(ask);
+    this.send(this.sentAsk === null ? { type: 'ask_cleared' } : this.paired({ type: 'ask', ask: this.sentAsk, key: askKey(ask) }));
+  }
+
+  /** D-7031: `msg` with the pairing of the envelope and the dialog this stream last sent (`pane/askPairing.ts`), as an
+   *  optional TOP-LEVEL `pairing` field: an `ask` frame against the last dialog, a `dialog` frame against the last
+   *  envelope. `msg` itself, key for key, when either side is absent or the envelope is an approval, so such a frame is
+   *  byte for byte what it was. It rides a frame already being sent and never causes one. */
+  private paired(msg: SessionStreamMsg): SessionStreamMsg {
+    if (msg.type !== 'ask' && msg.type !== 'dialog') return msg;
+    const ask = msg.type === 'ask' ? msg.ask : this.sentAsk;
+    const dialog = msg.type === 'dialog' ? msg.dialog : this.sentDialog;
+    if (ask === null || dialog === null || !('questions' in ask)) return msg;
+    return { ...msg, pairing: pairEnvelope(ask, dialog) };
   }
 
   stop(): void {
