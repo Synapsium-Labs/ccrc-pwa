@@ -602,6 +602,13 @@ export interface FleetSession {
   /** Where this workspace was RELEASED from, or `null` — `ReleasedFrom`, at the end of this file, carries the
    *  contract; `releasedFromOf` there is the field's one reader. */
   readonly releasedFrom: ReleasedFrom | null;
+
+  /** The newest run that names THIS incarnation of the session, in any state, or `null` — `SessionRun`, at the end of this
+   *  file, carries the contract; `sessionRunOf` there is the field's one reader. Optional on the type because the live
+   *  frame is cast and an older server omits the key; the server's `assembleFleet` always sends it. */
+  readonly run?: SessionRun | null;
+  /** The newest OPEN run that names this incarnation, or `null`: the other named query beside `run`, with its contract. */
+  readonly openRun?: SessionRun | null;
 }
 
 /**
@@ -3331,6 +3338,10 @@ export function reviveFleetSession(raw: unknown, unnamedSpawnWord: UnnamedSpawnW
       child: reviveChildMark(o, 'child'),
       role: reviveSessionRole(o, 'role'),
       releasedFrom: reviveReleasedFrom(o, 'releasedFrom'),
+      // Both fields are optional on the type: an absent key stays absent (a snapshot from before the field describes
+      // nothing), and `sessionRunOf` reads either as null. A present value this build cannot read revives as null.
+      ...(o['run'] === undefined ? {} : { run: reviveSessionRun(o, 'run') }),
+      ...(o['openRun'] === undefined ? {} : { openRun: reviveSessionRun(o, 'openRun') }),
     };
 
     // A recorded bucket is taken as recorded, timestamp and all — the server
@@ -6687,6 +6698,12 @@ export interface RunSummary {
    * omits it and a `RunSummary` is cast, never revived: absent reads as unmeasured, never as "not waiting".
    */
   reviewCap: ReviewCapStatus | null;
+
+  /** The ids of the open runs this run's COORDINATOR (`claimedBy`) has working for it, each bound to the incarnation of
+   *  the worker it was opened for: `childrenOf` (`server/src/coord/runBinding.ts`), asked once per frame. The same list
+   *  rides every run of that coordinator, so a reader holding one run needs no second lookup. Read it ONLY through
+   *  `childIdsOf`; see there for what absent and empty mean. */
+  childIds?: readonly number[];
 }
 
 /** Speed and quality per run (routing spec 2026-09-14 §6), READ-ONLY, from the
@@ -9902,6 +9919,53 @@ function reviveReleasedFrom(o: RawObj, k: string): ReleasedFrom | null {
   if (claimedBy !== null && typeof claimedBy !== 'string') return null;
   if (!isPositiveDecimalSafeInteger(closedAt) || typeof child !== 'boolean') return null;
   return { runId, program, programTitle, claimedBy, closedAt, child };
+}
+
+/**
+ * `FleetSession.run` and `FleetSession.openRun` — the newest run that names this INCARNATION of the session, in ANY state (consolidation spec §3 K10,
+ * ARCH-61, GitHub #796). The server computes it once per assembly, in `assembleFleet`, through `bindingOf`
+ * (`server/src/coord/runBinding.ts`); nothing else decides which run is a session's. A recycled workspace name does not
+ * inherit a run opened for the occupant before it (#746, D6 of D-5920). The OPEN run is the other named query and its own
+ * field, `FleetSession.openRun`: the newest bound run whose `state` is outside `TERMINAL_RUN_STATES` (a state this build
+ * cannot name counts as open). It differs from `run` when a newer run has closed while an older one is still open, so a
+ * reader that wants the open one reads `openRun` and never walks the runs frame to find it.
+ *
+ *   - `id`, `state`, `claimedBy` — the run's own columns; `claimedBy` is `null` for an ownerless run.
+ *
+ * `null` collapses THREE conditions, deliberately, as `releasedFrom` does: no run binds this incarnation; this server did not
+ * decide (an older peer, or a snapshot from a build predating the field); and it could not decide (its `coord.db` read
+ * failed this tick, which warns). A reader does the identical thing with all three, and none may branch on which.
+ *
+ * ADDITIVE; `FLEET_PROTO` is not bumped. The LIVE `fleet` frame is CAST, not revived, so a row from an older server has no
+ * key at all: read it ONLY through `sessionRunOf`.
+ */
+export interface SessionRun {
+  readonly id: number;
+  readonly state: RunState;
+  readonly claimedBy: string | null;
+}
+
+/** THE ONE READER of `FleetSession.run` and `FleetSession.openRun`. `undefined` (a live frame from a server predating the
+ *  field) reads as `null`. */
+export function sessionRunOf(s: { readonly run?: SessionRun | null; readonly openRun?: SessionRun | null }, which: 'newest' | 'open' = 'newest'): SessionRun | null {
+  return (which === 'open' ? s.openRun : s.run) ?? null;
+}
+
+/** THE ONE READER of `RunSummary.childIds`. `undefined` (an emitter that does not compute it, or a server predating the
+ *  field) reads as `[]`: absence permits, and a renderer nests nothing under a run it was not told had children. */
+export function childIdsOf(run: { readonly childIds?: readonly number[] }): readonly number[] {
+  return run.childIds ?? [];
+}
+
+/** `FleetSession.run`'s persistence contract: null → `null` (an absent key is not revived at all, above). A present value this build cannot read ALSO revives as
+ *  `null`, as `releasedFrom` does: the degrade leaves the row where it rendered before this field existed. */
+function reviveSessionRun(o: RawObj, k: string): SessionRun | null {
+  const v = o[k];
+  if (v === undefined || v === null || typeof v !== 'object' || Array.isArray(v)) return null;
+  const { id, state, claimedBy } = v as RawObj;
+  if (!isPositiveDecimalSafeInteger(id) || typeof state !== 'string' || !isRunState(state)) return null;
+  if (claimedBy !== null && typeof claimedBy !== 'string') return null;
+  return { id, state, claimedBy };
 }
 
 /** What a `~/.ccrc/update.json` text says about a run IN FLIGHT (design

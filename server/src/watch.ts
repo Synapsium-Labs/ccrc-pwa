@@ -134,6 +134,7 @@ import {
 import { definitionsIn, floorFromScan, unallocatedDefinitions } from './coord/ledger.js';
 import { LEDGER_FLOOR_DIRS, SWEEP_POLICY, readLedgerDocs } from './coord/ledgerseed.js';
 import type { ProvenancePair } from './coord/store.js';
+import { incarnationsOfSessions, withChildIds } from './coord/runWire.js';
 import { coordinatorOfRun, openRunsClaimedBy, readCoordinatorOfRun } from './coord/bindingReads.js';
 import type { PushPayload } from './push.js';
 import { notify, noticeSink } from './notice.js';
@@ -2708,7 +2709,7 @@ export class FleetWatcher {
       // Independent of the `fleet` diff below: runs change on a different
       // clock from sessions, and an unchanged session snapshot must not
       // suppress a run transition from reaching an already-connected client.
-      this.emitRuns();
+      this.emitRuns(sessions);
       const json = JSON.stringify(sessions);
       if (json === this.lastJson) return;
       this.lastJson = json;
@@ -2741,7 +2742,7 @@ export class FleetWatcher {
    * `lastRunsJson` is left untouched so a later successful tick still diffs
    * correctly against whatever was last actually broadcast.
    */
-  private emitRuns(): void {
+  private emitRuns(sessions: readonly FleetSession[]): void {
     const coord = this.deps.coord;
     if (!coord) return;
     let runs: RunSummary[];
@@ -2756,7 +2757,8 @@ export class FleetWatcher {
         console.warn(`ccrc-server: emitRuns refused (${read.detail}) — no runs frame this tick`);
         return;
       }
-      runs = read.runs.map(toRunSummary);
+      // ARCH-61 (#796): `childIds`, decided through `childrenOf` against this tick's reading of the fleet's sessions.
+      runs = withChildIds(coord, read.runs.map(toRunSummary), incarnationsOfSessions(coord, sessions), (c, d) => console.warn(`ccrc-server: emitRuns could not read the series of ${c} (${d}) — childIds absent for its runs`));
     }
     catch (err) {
       console.warn(`ccrc-server: emitRuns failed (${err instanceof Error ? err.message : String(err)}) — one bad read must not kill the poll`);
