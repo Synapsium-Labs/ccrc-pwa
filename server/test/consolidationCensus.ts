@@ -2,8 +2,8 @@
 // exit or a PR body quotes comes from one of these NAMED queries, run on the PR's tip, never typed. Each query returns
 // the sites it found (`{ file, line, text }`), so a count is the list's length and a PR body can print the list.
 // `consolidation-census.test.ts` holds each query against a fixture tree and finds its cited site on the real one.
-// No count is pinned here: a census reports until its series reaches its target, and the may-only-shrink pin lands in
-// the commit that reaches it (spec §5.1 rule 3, rev 2).
+// A count is pinned only once its series reaches its target: a census reports until then, and the may-only-shrink pin
+// lands in the commit that reaches it (spec §5.1 rule 3, rev 2).
 //
 // KNOWN WIDTH, every query: comments are dropped LINE by line. A line whose first token is `//`, `*` or `/*` is prose,
 // and a trailing `// …` on a code line is cut. A line inside a block comment that does not start with `*`, and a call
@@ -654,4 +654,28 @@ export function registryListingSites(root: string = REPO): RegistryListingSite[]
     out.push({ file: 'server/src/watch.ts', line: c.line, text: lines[c.line - 1]!, method: inner.name, tag });
   }
   return out;
+}
+
+// ARCH-52 (#787; spec 2026-10-19 §5.5 exit "SessionStream polls: 4 -> 0, dialog frames per change per socket: 2 -> 1"; D-6977).
+// The two counts below are the exit's PIN: unlike the series above they have reached their target, so
+// `consolidation-census.test.ts` holds them to it and they may only stay there.
+
+/** The per-session reads `SessionStream` made every 2 s before ARCH-52: the pane (`tmux.capture`, `parseDialog` and the
+ *  transcript's ask, `readPendingAsk` / `alignAsk`), the plan (`readTasks`), the hookstate (`readHookStateRaw`,
+ *  `readHookStateRawMeasured`) and the mail (`outstandingMailFor`). Call expressions in `server/src/sessionws.ts`; an
+ *  import, a comment and a method NAMED in prose are not calls. 0 on `ba36d7420`: they live in `sessionFeed.ts`, once
+ *  per open session.
+ *  KNOWN WIDTH: only `server/src/sessionws.ts` is read, and only these call names; a poll moved to another file, or made
+ *  through a renamed or aliased reader, is not seen. */
+export function sessionStreamPollSites(root: string = REPO): CensusSite[] {
+  const re = /(?:\btmux\.capture|\bparseDialog|\breadPendingAsk|\balignAsk|\breadTasks|\breadHookStateRaw(?:Measured)?|\boutstandingMailFor)\s*\(/g;
+  return sitesOf(root, ['server/src'], re, (f) => f !== 'server/src/sessionws.ts');
+}
+
+/** The files under `server/src` that build a `{ type: 'dialog' }` or `{ type: 'dialog_cleared' }` wire frame: one site
+ *  per file (its first literal). 1 on `ba36d7420` (`sessionws.ts`'s `nextDialogFrame`, which a poll's reading and an
+ *  answer both go through); the watcher's own copy, the second producer, is gone. */
+export function dialogFrameProducers(root: string = REPO): CensusSite[] {
+  const seen = new Set<string>();
+  return sitesOf(root, ['server/src'], /\btype:\s*'dialog(?:_cleared)?'/g).filter((s) => !seen.has(s.file) && seen.add(s.file));
 }
