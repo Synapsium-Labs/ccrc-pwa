@@ -21,7 +21,6 @@ import {
   type DelegationProjectionWire,
   type DelegationRowGroup,
   type DelegationUnownedWire,
-  type RunSummary,
   type SessionStatus,
 } from '../../../shared/api.js';
 import {
@@ -34,7 +33,7 @@ import {
 } from './delegation-model.js';
 import { isUnownedWorkReason } from './delegation-policy.js';
 import { delegationTreeKey } from './delegation-correlation.js';
-import { claimantAt } from './runBinding.js';
+import { claimantAt, type StampedRun } from './runBinding.js';
 import { ccdIdForWorktree } from '../divergence.js';
 
 /** How many newest closed runs the R9 mapping reads (L4 passes it to the store's narrow read). A worker whose run is older than
@@ -42,8 +41,9 @@ import { ccdIdForWorktree } from '../divergence.js';
 export const DELEGATION_PROJECTION_CLOSED_RUNS = 200;
 
 export interface DelegationProjectionSession { id: string; status: SessionStatus }
-/** One run's stamp, from the narrow read `delegationRunStamps`, never the full `runs()` hydration. */
-export type DelegationProjectionRun = Pick<RunSummary, 'id' | 'sessionId' | 'claimedBy' | 'openedAt' | 'closedAt'>;
+/** One run's stamp, from the narrow read `delegationRunStamps`, never the full `runs()` hydration: the binding module's
+ *  `StampedRun`, declared once there (R9's decider reads it). */
+export type DelegationProjectionRun = StampedRun;
 export interface DelegationProjectionInput {
   checkpoint: Pick<DelegationCheckpointV1, 'activities' | 'leases' | 'attempts'>;
   census: {
