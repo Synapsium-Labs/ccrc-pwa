@@ -543,8 +543,30 @@ hooks never delete; no session invokes these verbs and no skill names them.
   without its PreToolUse: once a PostToolUse has decided its PreToolUse no pruning hold names either
   record, and a PostToolUse replayed alone would open the call with itself as identity record (widened
   2026-10-22 from "such a call", the coordinator's ruling on review 767, D-6267).
-- **Retention (proposed):** the journal keeps ≥ 30 days and never drops an event an open lease or
-  lineage edge references.
+- **Retention (amended 2026-10-26, operator rulings D-7000, D-7021, D-7022; wave 4):** the journal keeps
+  10 days, which exceeds the lane's evidence horizon (192 hours of interval retention plus the 20-minute
+  margin), and never drops an event an open lease or lineage edge references. Once a day the server cuts
+  the journal through S = min(F - 1, applied - 1), where F is the first record accepted inside the floor
+  and `applied` the checkpoint anchor, so the anchor always stays. Every record at or below S that a carry
+  rule still needs is copied verbatim into a second durable file, `delegation-carried.log`: whole lines in
+  increasing sequence, every one below the journal's first sequence, with no chain between them; the
+  journal stays a contiguous chain that may begin after 1. The carry rules: K1 the records an open lease or
+  open lineage edge holds; K2 every record naming an identity candidate's key; K3 the identity record of
+  every activity that has not ended; K4 the launch response of every Workflow run that has not ended; K5
+  every record observed within 20 minutes of a raw lease's creating call, on every repository (D-6999); K6
+  every record of a Bash call kept together, so no PostToolUse is retained without its PreToolUse (with the
+  record that aged a carried call, and a call split across the previous cut). The carried file is renamed
+  before the journal, so a crash between the two leaves a valid retained set; every reader of the retained
+  set reads the carried file first. `delegation_events` follows the journal: its cut rows are deleted in
+  chunks, and a repair deletes rows below the journal's first sequence that are not carried evidence before
+  anything else, never a wipe. Compaction runs from the first ready pass with no marker (D-7022); a build
+  without it, rolled back to after a compaction, stays `reconstructing` until a pre-compaction snapshot is
+  restored.
+- **Retirement behind the cut (amended 2026-10-26, operator rulings D-7001, D-7024; wave 4):** after a cut
+  is durable, an ended activity that no lease or lineage edge names, whose identity record no hold names and
+  that no retained record (carried or above S) names leaves the checkpoint with its natural-key mapping and
+  its Workflow launch entry; a Workflow worker leaves only with its run. Sessions and attempts are not
+  retired.
 - **Pruning (amended 2026-10-07, review 328 F1):** whatever the retention, pruning may not pass an
   accepted event until a durable checkpoint covers every activity, lease and lineage projection applied
   through that event; an activity whose identity event precedes its opening (for example a bare
