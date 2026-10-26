@@ -128,7 +128,7 @@ describe('the bind records the occupant\'s birth (ARCH-62 slice 4, #1407)', () =
     expect(binding.undecided).toEqual([]);
   });
 
-  it('a birth the minting run cannot place (it differs from the run\'s dispatchStartedAt) is still the occupant\'s: the newest recorded birth is stamped, as the reader anchors it', () => {
+  it('a birth the minting run cannot place (it differs from the run\'s dispatchStartedAt) is still the occupant\'s: the newest recorded birth is stamped', () => {
     const s = store();
     const a = open(s, 'prog-a', 'coord-1', OLD);
     mint(s, a, 'demo-w', OLD);

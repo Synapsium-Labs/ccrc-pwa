@@ -1,8 +1,11 @@
 // ARCH-60 follow-up (#1407, part of #795): every bind records the incarnation it binds to. This file pins, by name, what
 // `CoordStore.bindSession` writes for the bound incarnation, and the two gaps #1407 names. Red on the pre-fix source
-// (d6aae6879: GAP 1, GAP 2, four census arms and the measured allow-list fail) and green after. The adopted read-back case
-// at the end has its read half red at 0d1b8ead5 (the first anchor, which borrowed an earlier occupant's birth) and its
-// stamp half red on the merge base; the rollback case is red at b974fc5e7. All green after.
+// (d6aae6879: GAP 2, four census arms and the measured allow-list fail) and green after. GAP 1 (unplaceable) is an
+// inherited residual since round 5 of #1573 (the readers keep the merge base's id-string rule for every unplaceable
+// worker), pinned at the merge base's answer. The adopted read-back case at the end has its read half red at 0d1b8ead5
+// (the first anchor, which borrowed an earlier occupant's birth) and its stamp half red on the merge base; the rollback
+// case is red at b974fc5e7. All green after. Every shape the reviews reported, with both answers, is in
+// run-binding-probe-corpus.test.ts.
 import { mkdirSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -67,7 +70,7 @@ describe('a bind with no placeable birth still records an incarnation (the gaps 
     expect(binding.newest?.id).toBe(w2);
   });
 
-  it('GAP 1 (unplaceable): an unplaceable worker whose own minting run recorded its birth is that birth, so an earlier occupant\'s open run is no parent', () => {
+  it('GAP 1 (unplaceable), inherited residual: an unplaceable worker keeps the id-string rule, so an earlier occupant\'s open run is still its parent, as on the merge base', () => {
     const s = store();
     const ghost = open(s, 'prog-old', 'coord-gone', OLD);
     s.setSession(ghost, 'demo-w', OLD);
@@ -75,10 +78,11 @@ describe('a bind with no placeable birth still records an incarnation (the gaps 
     s.setSession(live, 'demo-w', BORN);
     s.db.prepare("UPDATE runs SET state = 'done' WHERE id = ?").run(live);
     const incarnation = incarnationOf('demo-w', childBirthOf(s.run(live), 'demo-w'));
-    expect(incarnation).toMatchObject({ kind: 'unborn', why: 'unplaceable', recordedAt: BORN });
+    expect(incarnation).toEqual({ kind: 'unborn', sessionId: 'demo-w', why: 'unplaceable' });
+    // The follow-up for D6 gap 1 owns this: the answer below is the merge base's, and it is wrong (coord-gone).
     const binding = bindingOf(series(s, 'demo-w'), incarnation);
-    expect(binding.open).toBeNull();
-    expect(parentOf(binding)).toBeNull();
+    expect(binding.open?.id).toBe(ghost);
+    expect(parentOf(binding)).toBe('coord-gone');
     expect(binding.newest?.id).toBe(live);
   });
 
@@ -92,12 +96,12 @@ describe('a bind with no placeable birth still records an incarnation (the gaps 
   });
 });
 
-// The stamp and the anchor agree on the re-stamped arm (review of #1573, round 4). The stamp writes the NEWEST birth on
-// record for the id; the anchor would read only the birth the worker's own minting run recorded. After a cross-build
-// rollback with a same-id redraw the two differ, and anchoring then dropped the live occupant's own new-build wave and made
-// a dead coordinator's wave the parent. The reviewer's probe, pinned: red at b974fc5e7 (childParentOf and claimantsOf
-// answered coord-gone), green at the merge base ccba6f9b6 and after.
-describe('the stamp and the anchor agree after a cross-build rollback with a same-id redraw (#1573 round 4)', () => {
+// A cross-build rollback with a same-id redraw (review of #1573, round 4). The stamp writes the NEWEST birth on record for
+// the id; an anchor to the birth the worker's own minting run recorded would differ from it, drop the live occupant's own
+// new-build wave and make a dead coordinator's wave the parent. Since round 5 no reader anchors an unplaceable worker. The
+// reviewer's probe, pinned: red at b974fc5e7 (childParentOf and claimantsOf answered coord-gone), green at the merge base
+// and after.
+describe('a cross-build rollback with a same-id redraw (#1573 round 4)', () => {
   it('a worker whose minting run kept an OLDER birth than one on record reads by the id-string rule, so its new-build wave is its parent', () => {
     const s = store();
     const W = 'demo-w';
@@ -249,15 +253,14 @@ describe('every bind site records an incarnation, or is named (ARCH-60 follow-up
     expect(nothing).toEqual(RECORDS_NOTHING);
   });
 
-  // READ BACK, not only what the bind wrote (review of #1573: the census above never read an adopted worker back through
-  // the anchor). D6's ghost parent (D-5920) over the residual arm: an EARLIER occupant of the recycled name was minted
-  // (placeable birth OLD_BIRTH) by a run that is still OPEN because its coordinator is gone; a run planned before that
-  // mint then dispatches and ADOPTS the name's workspace, recording no birth (D-6993). The adopted worker's minting run
-  // carries no birth, so it keeps the id-string rule: its parent is the adopting run's claimant, never the dead
-  // coordinator the earlier occupant's birth would anchor it to. The read half is red at 0d1b8ead5 (every unplaceable
-  // worker anchored to the newest recorded birth of its id: childParentOf/claimantsOf/sessionRunRead answered coord-gone)
-  // and green on the merge base ccba6f9b6. The stamp half is red on the merge base: its placeable-only stamp gave wave 2
-  // the earlier occupant's birth (OLD_BIRTH).
+  // READ BACK, not only what the bind wrote (review of #1573: the census above never read an adopted worker back). D6's
+  // ghost parent (D-5920) over the residual arm: an EARLIER occupant of the recycled name was minted (placeable birth
+  // OLD_BIRTH) by a run that is still OPEN because its coordinator is gone; a run planned before that mint then
+  // dispatches and ADOPTS the name's workspace, recording no birth (D-6993). The adopted worker keeps the id-string rule:
+  // its parent is the adopting run's claimant (the newest open run naming it), never the dead coordinator the earlier
+  // occupant's birth would date it to. The read half is red at 0d1b8ead5 (every unplaceable worker anchored to the newest
+  // recorded birth of its id: childParentOf/claimantsOf/sessionRunRead answered coord-gone) and green on the merge base.
+  // The stamp half is red on the merge base: its placeable-only stamp gave wave 2 the earlier occupant's birth (OLD_BIRTH).
   it('an adopted worker under a recycled name whose earlier occupant\'s run is still open reads the ADOPTING run\'s claimant, and its later wave borrows no birth', async () => {
     const T0 = 1_700_000_000_000;
     const OLD_BIRTH = T0 + 5000;

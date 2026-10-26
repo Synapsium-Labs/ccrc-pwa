@@ -24,7 +24,7 @@
 import { ASK_OPERATOR_PRINCIPAL, type AskMintReleaseReason, type ChildMark } from '../../../shared/api.js';
 import type { SessionRecord } from '../registry.js';
 import { childBirthOf } from './childSpent.js';
-import { bindingOf, hasOwnerlessUndecidedOpen, incarnationOf } from './runBinding.js';
+import { bindingOf, boundRunsOf, hasOwnerlessUndecidedOpen, incarnationOf, type Incarnation } from './runBinding.js';
 import { claimantMeasuredDead, measureClaimant, type ReclaimDeps } from './reclaim.js';
 import { childParentRead } from './bindingReads.js';
 
@@ -32,6 +32,17 @@ export type HeldFor =
   | { readonly kind: 'not-a-child' }
   | { readonly kind: 'held'; readonly parent: string; readonly runId: number }
   | { readonly kind: 'released'; readonly parent: string; readonly runId: number; readonly reason: AskMintReleaseReason };
+
+/** How many open runs bind the child's incarnation: over `series` (the read `childParentRead` decided the parent from)
+ *  when it is readable, else the store's proven reader. A failed read throws, as every store read here does. */
+function openBindingCount(
+  coord: ReclaimDeps['coord'], childId: string, incarnation: Incarnation, series: ReturnType<typeof childParentRead>['series'],
+): number {
+  if (series.ok) return boundRunsOf(series.runs, incarnation, 'open').length;
+  const sib = coord.openRunsForSession(childId, undefined, incarnation);
+  if (!sib.ok) throw new Error(`heldFor: ${sib.detail}`);
+  return sib.siblings.length;
+}
 
 export async function heldFor(
   deps: ReclaimDeps, childId: string, mark: ChildMark, recs: readonly Pick<SessionRecord, 'id' | 'archivedAt' | 'stopped'>[],
@@ -57,9 +68,9 @@ export async function heldFor(
   const nobody = (reason: AskMintReleaseReason): HeldFor => ({ kind: 'released', parent: ASK_OPERATOR_PRINCIPAL, runId, reason });
   if (parent === null) {
     // No claimant on the newest open run naming the child — or no open run at all, which is not a child (spec §4).
-    const sib = coord.openRunsForSession(childId, undefined, incarnation);
-    if (!sib.ok) throw new Error(`heldFor: ${sib.detail}`);
-    if (sib.siblings.length === 0) {
+    // The siblings come from the SAME series the parent was read from, so the two answers cannot disagree about which
+    // runs bind the child. Only when that series cannot be represented does the store's own reader count them.
+    if (openBindingCount(coord, childId, incarnation, series) === 0) {
       // An ownerless open run the binding cannot place (a wave N >= 2 planned before the birth, bound without a stamp)
       // still counts as a sibling: the ruling on ARCH-62 slice 1 keeps today's `run-unclaimed` for it.
       if (!series.ok || !hasOwnerlessUndecidedOpen(bindingOf(series.runs, incarnation))) return notAChild;

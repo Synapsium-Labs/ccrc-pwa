@@ -31,10 +31,13 @@ import type { ChildBirth } from './childSpent.js';
  *     ghost coordinator), and is never dropped: `bindingOf` lists it in `undecided`. Since ARCH-62 slice 4 (#1407)
  *     `CoordStore.bindSession` records the occupant's birth on a later wave it binds (`stampOccupantBirth`), so a run
  *     bound to the live worker is `bound` and a run bound to an earlier occupant is `unbound`, whatever its `openedAt`;
- *     the undecidable arm is left for rows bound before the stamp. An `unborn` session that reuses a name keeps the
- *     id-string rule (gap 1 of #1407, tracked in #1532). One LEGACY exception, accepted and pinned
+ *     the undecidable arm is left for rows bound before the stamp. The stamp's birth is `occupantBirthOf`'s: the newest
+ *     birth the session's series records for the id, placeable or not, unless the name was adopted since (D-6993). An
+ *     `unborn` session keeps the id-string rule, whatever its runs record (gap 1 of #1407, tracked in #1532): no birth
+ *     on record is provably the live occupant's own when `childBirthOf` cannot place it, so no reader anchors to one. One
+ *     LEGACY exception, accepted and pinned
  *     (`run-binding-bound-birth.test.ts`): migration 16's backfill dated every bound run to its OWN `dispatchStartedAt`,
- *     later waves included, so for a worker alive across that migration the newest placeable birth of its id can be a
+ *     later waves included, so for a worker alive across that migration the newest birth of its id can be a
  *     backfilled wave-N row rather than its minting run. A wave bound after this build is then stamped with that
  *     wave-N instant and reads `unbound` for the live occupant, as the backfilled wave-N row itself already does. The
  *     columns cannot tell a backfilled wave-N row from a minting run, so the stamp does not guess; such workers age out.
@@ -77,6 +80,9 @@ export interface BindingRun {
   readonly openedAt: number;
   readonly sessionBornAt: number | null;
   readonly sessionBornFor: string | null;
+  /** When the run's fresh-spawn dispatch began (`CoordStore.markDispatchStarted`), or `null`. Read by `occupantBirthOf`
+   *  alone, for its adoption test (D-6993). */
+  readonly dispatchStartedAt: number | null;
 }
 
 /** Whether `run` binds `incarnation`: yes, no, or `'undecidable'` (an unstamped run opened before the birth). */
@@ -110,6 +116,24 @@ export interface SessionBinding {
 }
 
 const byIdDesc = (a: BindingRun, b: BindingRun): number => b.id - a.id;
+
+/** The birth a LATER wave bound to `sessionId` records (`CoordStore.stampOccupantBirth` writes it on run `stampedRunId`,
+ *  over `bindingRunsOf`'s series): the NEWEST birth any run of the series recorded for the id, placeable or not, so a moved
+ *  `dispatchStartedAt` on the minting run does not stop the stamp. `null`, and no stamp, when no run recorded one, and when
+ *  ANOTHER run of the series names the session, records no birth and was dispatched after that birth: the adopted arm of
+ *  `dispatch.ts#spawnFresh` has that shape (D-6993), and then the newest birth on record can be an earlier occupant's of a
+ *  recycled name. The shape proves no adoption (a run whose fresh spawn failed and that was later rebound to the worker
+ *  has it too), so the stamp declines rather than guesses. The run being stamped is never its own adopter: its birth was
+ *  just cleared by the bind, and a failed spawn attempt on it is not an adoption of the name. The stamp dates a run for a
+ *  `born` reader only; an `unborn` one reads the id-string rule and never reads the stamp. */
+export function occupantBirthOf(runs: readonly BindingRun[], sessionId: string, stampedRunId: number): number | null {
+  const births = runs.filter((r) => r.sessionBornFor === sessionId && r.sessionBornAt !== null).map((r) => r.sessionBornAt as number);
+  if (births.length === 0) return null;
+  const newest = Math.max(...births);
+  const adoptedSince = runs.some((r) => r.id !== stampedRunId && runNamesSession(r, sessionId) && r.sessionBornAt === null
+    && r.dispatchStartedAt !== null && r.dispatchStartedAt > newest);
+  return adoptedSince ? null : newest;
+}
 
 export function bindingOf(runs: readonly BindingRun[], incarnation: Incarnation): SessionBinding {
   const bound = runs.filter((r) => binds(incarnation, r)).sort(byIdDesc);

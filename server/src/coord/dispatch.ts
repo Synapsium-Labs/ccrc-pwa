@@ -443,8 +443,8 @@ async function spawnFresh(
   // adopted arm (child-reclamation spec §5.1) dates NO birth: the workspace may be an EARLIER attempt's, so
   // `childBirthOf` refuses to date any PR row against it, `childBindGate` refuses on any PR evidence, and the close
   // holds rather than guessing which attempt this workspace's history belongs to. The one bind that records no
-  // incarnation (D-6993): any birth on record for its id may be an EARLIER occupant's, so neither the occupant stamp
-  // nor the reader's anchor borrows one (`runBinding.occupantBirthOf`, `anchoredIncarnation`).
+  // incarnation (D-6993): any birth on record for its id may be an EARLIER occupant's, so the occupant stamp borrows
+  // none on a later wave (`runBinding.occupantBirthOf`), and the worker reads by the id-string rule.
   coord.setSession(run.id, winner.id, adopted ? null : startedAt);
   // Routing spec §6 "Arms": the `arm:` record, only when routing was actually seeded onto the argv, and gated on the
   // dispatch BINDING a session, never on `res.ok` (an adopted spawn reaches here with `res.ok === false`).
