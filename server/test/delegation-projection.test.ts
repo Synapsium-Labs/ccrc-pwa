@@ -202,6 +202,25 @@ describe('projectDelegation: R9, one level, bound to the run live at the instant
     ]);
   });
 
+  it('W4-P19: several runs of one session cover the instant: the greatest run id answers', () => {
+    const out = projectDelegation(input({
+      leases: [lease({ leaseId: 'l1', adminRecord: 't1', parentId: 'w', firstObservedAt: at(12) })],
+      sessions: [alive('w'), alive('c1'), alive('c2')], runs: [run(5, 'w', 'c2', 0, null), run(3, 'w', 'c1', 0, null)],
+    }));
+    expect(out.leases.map((l) => [l.parentId, l.via])).toEqual([['c2', 'w']]);
+  });
+
+  it('W4-P20: the interval is inclusive at both ends: an instant equal to openedAt or to closedAt answers that run', () => {
+    const out = projectDelegation(input({
+      leases: [
+        lease({ leaseId: 'l-open', adminRecord: 't1', parentId: 'w', firstObservedAt: at(10) }),
+        lease({ leaseId: 'l-close', adminRecord: 't2', parentId: 'w', firstObservedAt: at(20) }),
+      ],
+      sessions: [alive('w'), alive('c')], runs: [run(5, 'w', 'c', 10, 20)],
+    }));
+    expect(out.leases.map((l) => [l.leaseId, l.parentId, l.via])).toEqual([['l-open', 'c', 'w'], ['l-close', 'c', 'w']]);
+  });
+
   it('R9 ignores a run claimed by nobody or by the worker itself', () => {
     const out = projectDelegation(input({
       leases: [lease({ leaseId: 'l1', adminRecord: 't1', parentId: 'w', firstObservedAt: at(12) })],
@@ -310,6 +329,18 @@ describe('projectDelegation: programme ownership, the inferred marker and unowne
       attempts: [attempt({ attemptId: 'x1', adminRecord: 't1' })], absences: [{ project: PROJECT, adminRecord: 't1' }],
     }));
     expect(absent.unowned, 'a measured-absent tree').toEqual([]);
+  });
+
+  it('W4-P21 (D-7003, the other direction): an older unresolved and a newer conflicting attempt on an agent-leased tree give the unowned row and no lease row', () => {
+    const out = projectDelegation(input({
+      leases: [lease({ leaseId: 'l1', adminRecord: 't1' })],
+      attempts: [
+        attempt({ attemptId: 'x1', adminRecord: 't1', verdict: 'unresolved', attemptedAt: at(20) }),
+        attempt({ attemptId: 'x2', adminRecord: 't1', verdict: 'conflicting', detail: 'rungs-disagree', attemptedAt: at(25) }),
+      ],
+    }));
+    expect(out.leases).toEqual([]);
+    expect(out.unowned.map((u) => [u.adminRecord, u.verdict, u.attemptedAt])).toEqual([['t1', 'conflicting', at(25)]]);
   });
 
   it('a superseded conflict: a newer unresolved attempt on a leased tree leaves the agent lease its row (D-7003)', () => {
