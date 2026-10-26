@@ -3624,7 +3624,7 @@ export class FleetWatcher {
       // HELD" rule this comment already states for an unreadable `.hold`. The
       // sweep's act is a branch rename; a workspace this box could not prove
       // unclaimed is one it must not rename.
-      const sib = this.deps.coord?.openRunsForSession(r.id);
+      const sib = this.deps.coord?.bindingsOf(r.id).worker();
       if (r.held !== null || (sib !== undefined && (!sib.ok || sib.siblings.length > 0))) continue;
       // Keyed by id AND uuid, not id alone: `<project>-<slug>` is a SLUG,
       // recycled by ws-reap (`ccd:3313`'s "144 per project, recycled") —
