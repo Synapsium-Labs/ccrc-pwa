@@ -133,7 +133,7 @@ const CONTRACT = [
   // Fleet disk retention, DR-25 (spec 2026-10-23 §2.7.2, §10). ASCII only, no apostrophe, no quote.
   'A workflow script, a worker brief or a test step never sets `TMPDIR` to a path inside a work tree and never writes scratch inside one: it uses the temp root this session was started with (`TMPDIR`, or `CCRC_SESSION_TMPDIR` where `TMPDIR` has been overridden). Long command output goes to a file there, or through `tail`, never into the work tree.',
   // Workflow rule, operator ruling 2026-10-25. ASCII only, no apostrophe, no quote.
-  'Workflows are not a default. This session launches a workflow only for short, self-contained work that needs nothing from its own children and finishes in minutes: a review, a verification or an audit, or at least three independent items worth running in parallel. Each such workflow carries a time cap, its agents run at `medium` effort, and its vitest runs pass `--maxWorkers=2`. Nobody uses a workflow for a mechanical edit: a D-number substitution, a PR body edit, a rebase or a re-pin. This session never holds its turn open on anything that waits for its own children: it dispatches, ends its turn, and wakes on mail. Mail to a coordinator is held while it reads busy or waiting, so child mail has sat undelivered for hours behind a background workflow that died still reading busy and behind an operator question left open overnight.',
+  'Workflows are not a default. This session launches a workflow only for short, self-contained work that needs nothing from its own children and finishes in minutes: a review, a verification or an audit, or at least three independent items worth running in parallel. Each such workflow carries a time cap, its agents run at `medium` effort, and its vitest runs pass `--maxWorkers=2`. Nobody uses a workflow for a mechanical edit: a D-number substitution, a PR body edit, a rebase or a re-pin. This session never holds its turn open on anything that waits for its own children: it dispatches, ends its turn, and wakes on mail. Mail to a coordinator is held while it reads busy or waiting, so child mail has sat undelivered for hours behind a background workflow that died still reading busy and behind an operator question left open overnight. While any child is active, this session asks the operator in its closing turn text and ends the turn, never with an AskUserQuestion dialog, which reads waiting and holds every child mail behind it (`POST /api/mail` takes no `operator` recipient), and it never leaves a blocking question open while a child waits. A background workflow that stops, for any reason, is a wake: on its task notification, read the held mail (`GET /api/mail?to=<your id>`) in that turn.',
 ];
 
 describe('the coordinator skill: its contract', () => {
@@ -506,6 +506,14 @@ describe('the coordinator skill: clause 19, workflows are not a default (operato
     // The public repo carries the mechanism, never a session, host or account name.
     expect(CLAUSE_19).not.toMatch(/ccrc-pwa-|quiet-|calm-|clear-mesa|bright-delta/);
   });
+
+  it('asks the operator without a blocking dialog while children are active, and wakes on a stopped workflow', () => {
+    // Measured 2026-10-22: one AskUserQuestion open overnight held every child mail behind it (the gate refuses `waiting`).
+    expect(CLAUSE_19).toContain('While any child is active, this session asks the operator in its closing turn text and ends the turn, never with an AskUserQuestion dialog');
+    expect(CLAUSE_19).toContain('it never leaves a blocking question open while a child waits');
+    expect(CLAUSE_19).toContain('A background workflow that stops, for any reason, is a wake');
+    expect(CLAUSE_19).toContain('read the held mail (`GET /api/mail?to=<your id>`) in that turn');
+  });
 });
 
 describe('the coordinator skill: clause 17, coordinator intent', () => {
@@ -554,6 +562,16 @@ describe('the coordinator skill: clause 17, coordinator intent', () => {
     expect(cells[4]).toContain('clause 19');
     // Clause 17 names neither the mode nor the effort, so it cannot contradict the row.
     expect(CLAUSE_17).not.toMatch(/workflow mode|ultracode|effort/i);
+  });
+
+  it('the routing matrix\'s brainstorm row agrees with clause 19: a short, time-capped workflow whose agents run at medium', () => {
+    const row = refs('routing-matrix.md').split('\n').find((l) => l.startsWith('| Brainstorm, spec, architecture'));
+    expect(row, 'the brainstorm row is gone from the matrix').toBeDefined();
+    const cells = row!.split('|').slice(1, -1).map((c) => c.trim());
+    expect(cells[2]).toContain('short, time-capped clause-19 workflow');
+    expect(cells[2]).toContain('· medium');
+    expect(cells[2]).not.toMatch(/· (high|xhigh|max)\b/);
+    expect(cells[3]).toContain('a short, time-capped judge panel');
   });
 
   it('names no later-wave lease or cleanup verb anywhere in the corpus', () => {
