@@ -92,7 +92,7 @@ import { redactedStored } from './redact.js';
 import { renderApprovalBrief } from './approvalbrief.js';
 import { approvalNudgeSubject } from './rundefs.js';
 import { heldFor } from './heldFor.js';
-import { openFor } from './questions.js';
+import { approvalFor, openFor } from './questions.js';
 import { noticeSink, type NoticeSink } from '../notice.js';
 import {
   APPROVALS_DISABLED_FILE, loadOrCreateApprovalSigner, rulingsAllowedHere, serverApprovalsDisabled, type ApprovalSigner,
@@ -4406,7 +4406,7 @@ export function registerCoordRoutes(
     if (!(await requireAttribution(reply, q.fromId, q.fromUuid, 'fromUuid'))) return;
     const id = parseCanonicalPositiveSafeInteger((req.params as { id: string }).id);
     if (id === null) return refuseRoute(reply, 'bad-request');
-    const read = coord.approvalById(id);
+    const read = approvalFor(coord, id);
     if (!read.ok) return refuseRoute(reply, 'approval-unreadable', { detail: read.detail });
     const row = read.row;
     if (row === null) return refuseRoute(reply, 'unknown-approval');

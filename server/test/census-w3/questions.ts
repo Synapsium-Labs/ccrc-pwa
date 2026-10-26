@@ -315,8 +315,6 @@ export const QUESTION_STORE_OWNERS: Readonly<Record<string, 'Q3b' | 'Q3d' | 'Q3e
   'server/src/watch.ts | FleetWatcher.settleClearedApproval': 'Q3d',
   'server/src/watch.ts | FleetWatcher.tryHold': 'Q3d',
   'server/src/watch.ts | FleetWatcher.hold': 'Q3d',
-  'server/src/coord/routes.ts | GET /api/asks': 'Q3b',
-  'server/src/coord/routes.ts | GET /api/approvals/:id': 'Q3b',
   'server/src/coord/routes.ts | POST /api/approvals': 'Q3e',
   'server/src/coord/routes.ts | POST /api/asks/:id/answer': 'Q3f',
   'server/src/coord/routes.ts | POST /api/asks/:id/release': 'Q3f',
@@ -324,9 +322,4 @@ export const QUESTION_STORE_OWNERS: Readonly<Record<string, 'Q3b' | 'Q3d' | 'Q3e
   'server/src/coord/routes.ts | POST /api/approvals/:id/release': 'Q3f',
   'server/src/server.ts | POST /api/sessions/:id/dialog': 'Q3f',
   'server/src/server.ts | POST /api/sessions/:id/ask': 'Q3f',
-  'server/src/coord/digest.ts | buildDigest': 'Q3b',
-  'server/src/coord/digest.ts | correctDigestRow': 'Q3b',
-  'server/src/fleet.ts | readHeldApprovals': 'Q3b',
-  'server/src/fleet.ts | readCurrentAsks': 'Q3b',
-  'server/src/coord/driftLane.ts | pass': 'Q3b',
 };
