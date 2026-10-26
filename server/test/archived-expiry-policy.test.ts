@@ -1151,6 +1151,8 @@ describe('L1', () => {
     const froms = [...src.matchAll(/from\s+'([^']+)'/g)].map((m) => m[1]);
     // D-5855: the live switch is re-exported from its row in the L0 switchboard.
     // ARCH-14 (#560): the machine token's reader is L0 too (`shared/ccd-refusal.ts`).
-    expect(froms).toEqual(['../../shared/nestedRescue.js', '../../shared/api.js', '../../shared/ccd-refusal.js', '../../shared/switches.js']);
+    // ARCH-41 (#776): the expiry words are typed and narrowed from L0's `WORKSPACE_TRANSITIONS`.
+    expect(froms).toEqual(['../../shared/nestedRescue.js', '../../shared/api.js', '../../shared/ccd-refusal.js',
+      '../../shared/workspaceTransitions.js', '../../shared/switches.js']);
   });
 });
