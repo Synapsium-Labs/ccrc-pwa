@@ -7931,7 +7931,7 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         'ccd/session-hook.sh:1175-1177',
         // ENTERS at the design-system wave, on this branch's one added import
         // line in the cited file — see the note above this assertion.
-        // single-definition.test.ts line 32-37 left the census: the file was split by area (D-6928)
+        'server/test/single-definition.test.ts' + ':32-37',
         'deploy/deploy.sh:560',
         'ccd/ccrc:5217',
         'ccd/ccrc:6531',
@@ -8135,8 +8135,8 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     expect(r.failures.map(refKey), 'a `|` row stopped naming what the ROW quotes — re-measure')
       .toEqual([
         'ccd/ccd:203',
-        // single-definition.test.ts line 1274 left the census: the file was split by area (D-6928)
-        // single-definition.test.ts line 1319-1320 left the census: the file was split by area (D-6928)
+        'server/test/single-definition.test.ts' + ':1274',
+        'server/test/single-definition.test.ts' + ':1319-1320',
         'server/test/ccd-ws-reap.test.ts:344',
         'ccd/ccd' + ':3038',
         'ccd/ccd:5797',
@@ -8213,8 +8213,8 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     const seen = new Set([...audit(realCorpus()).failures, ...filesAudit(realCorpus()).failures].map(site));
     expect(r.failures.map(site).filter((k) => seen.has(k)),
       'the rows this pass reads that another pass already reaches').toEqual([
-        'spec:308 server/test/single-definition.test.ts:1274',
-        'spec:308 server/test/single-definition.test.ts:1319-1320',
+        'spec:308 server/test/single-definition.test.ts' + ':1274',
+        'spec:308 server/test/single-definition.test.ts' + ':1319-1320',
         'spec:2124 ccd/ccd' + ':3038',
         'spec:2125 ccd/ccd:5797',
         'spec:2125 ccd/ccd:7568',
