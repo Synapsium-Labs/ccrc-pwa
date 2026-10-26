@@ -14,7 +14,7 @@ line in a file another wave holds under claim (below).
 
 | # | scope | PRs | state |
 |---|---|---|---|
-| 1 | A truncated census is retried with a back-off, starting at `ORPHAN_RETRY_MS`, and each one writes a feed row that names the rows seen and the seconds taken. The unreadable arm's retry gets its first row. | — | **DISPATCHED** 2026-10-26 11:56 UTC, run 986. |
+| 1 | A truncated census is retried with a back-off, starting at `ORPHAN_RETRY_MS`, and each one writes a feed row that names the rows seen and the seconds taken. The unreadable arm's retry gets its first row. | #1569 | **IN REVIEW** 2026-10-26 12:16 UTC: review run 990, on the held-out panel plus a lens on load and on failing toward keeping. The wave-done (mail 10145) re-measured at `9efdbd52d`: the workspace branch, the handoff and the PR head agree, the PR touches the plan and three server files only, and it merges cleanly. Was **DISPATCHED** 2026-10-26 11:56 UTC, run 986. |
 | 2 | Pressure reads the disk alarm's critical state (`DiskAlarmLane.block()?.pressure`), through a third port on `OrphanTreeBeat` and one line in `server/src/watch.ts`. | — | **PLANNED.** It is dispatched once the other wave's claim on `watch.ts` is released, after the delegation broker's soak ends on 2026-10-31. |
 
 ## Decisions & deviations
@@ -31,6 +31,10 @@ line in a file another wave holds under claim (below).
 - **The plan** was drafted by workflow `wf_0ee53f23-476` (a Sonnet scout, an Opus planner and an Opus critic) at `ea1e84c09`, and ruled by the coordinator. The plan's closing section holds the rulings.
 - **Routing:** a worker executing a spec'd plan, one small dependent chain. That is Opus at high effort, Sonnet high
   subagents, workflows off and compaction at 40. The review uses the held-out panel.
+
+- **The worker's two open readings, ruled 2026-10-26 12:16 UTC.**
+  - (a) The back-off's cap is the pass's cadence (`censusMs`), which equals `ORPHAN_CENSUS_MS` until wave 2: accepted.
+  - (b) An unreadable census neither resets nor extends the truncated streak: accepted.
 
 ## Carried constraints
 
