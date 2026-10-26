@@ -30,8 +30,10 @@ header NAME, every event type, every finished item's type, the terminal's `end_t
 never a header value, a text, an id or an encrypted content. The answer is recorded raw, head and body, in the lane's
 recordings directory as `liveprobe-<step>-<utc>-<n>.sse` (0600, directory 0700; `n` the request's count, so a bridge
 recording's cap never counts it), for the operator to scrub into the corpus (`record.py scrub`) in a reviewed change.
-A refusal is one stderr line, `liveprobe: refused <word>: <sentence>`. Exit 0 answered 2xx, 1 refused (nothing
-sent), 2 usage, 3 sent but not answered 2xx.
+A refusal is one stderr line, `liveprobe: refused <word>: <sentence>`; any other failure before the send is
+`liveprobe: failed <class>; nothing was sent`, and one after it `liveprobe: transport <class>`: an exception is named
+by its class only, never its text (http.client formats a header value it refuses with %r). Exit 0 answered 2xx, 1
+refused or failed (nothing sent), 2 usage, 3 sent but not answered 2xx.
 
 The CLI runs only under `__main__` (the block below), so importing the module through `load_all()` does nothing.
 """
@@ -47,8 +49,6 @@ if __name__ == "__main__":  # run as a file under -I: the package's parent goes 
     _sys.exit(_liveprobe.main(_sys.argv[1:]))
 
 import hashlib
-import http.client
-import json
 import os
 import re
 import sys
@@ -115,21 +115,14 @@ def lane_files(lane: str) -> LaneFiles:
         raise Refused("no-marker", "the lane directory holds no " + ALLOW_MARKER + " marker; the operator touches it "
                       "for the first live step and removes it after")
     try:
-        with open(os.path.join(lane_dir, server.LANE_FILE), "rb") as f:
-            manifest = json.loads(f.read().decode("utf-8"))
-    except (OSError, ValueError, RecursionError):
-        raise Refused("lane-unknown", "the lane's lane.json is missing or not JSON; run 'ccrc update'")
-    if not isinstance(manifest, dict) or manifest.get("id") != lane:
-        raise Refused("lane-unknown", "the lane's lane.json names another lane; run 'ccrc update'")
-    auth = manifest.get("authDir")
-    files = manifest.get("bridgeFiles")
-    rec = files.get(server._BridgeFiles._fields[2]) if isinstance(files, dict) else None
-    if not isinstance(auth, str) or not auth or auth.startswith("/") or ".." in auth.split("/"):
-        raise Refused("lane-malformed", "the lane's lane.json carries no HOME-relative authDir; run 'ccrc update'")
-    if not isinstance(rec, str) or not server.FILE_NAME_RE.fullmatch(rec):
-        raise Refused("lane-malformed", "the lane's lane.json names no recordings directory; run 'ccrc update'")
+        manifest = server.read_manifest(home, lane_dir, lane)  # the bridge's own reader, so the two read it alike
+    except server.ManifestError as e:
+        if e.kind == "unknown":
+            raise Refused("lane-unknown", "the lane's lane.json is missing, not JSON or names another lane; run "
+                          "'ccrc update'")
+        raise Refused("lane-malformed", "the lane's lane.json is out of shape at " + e.field + "; run 'ccrc update'")
     session = str(uuid.uuid5(uuid.NAMESPACE_URL, "ccrc-liveprobe:" + lane))
-    return LaneFiles(lane, lane_dir, os.path.join(home, auth), os.path.join(lane_dir, rec),
+    return LaneFiles(lane, lane_dir, manifest.auth_dir, os.path.join(lane_dir, manifest.files.recordings),
                      os.path.join(home, ".ccrc", "models", lane + ".json"), session)
 
 
@@ -326,7 +319,7 @@ def report(up: backend.Upstream, rec: Optional[record.Recording]) -> int:
     except backend.UpstreamTimeout as e:
         _out("transport timeout-" + _name(e.phase))
         ok = False
-    except (OSError, http.client.HTTPException) as e:
+    except Exception as e:  # its class only: an exception's text can carry a value
         _out("transport " + _name(type(e).__name__))
         ok = False
     if terminal is not None or ok:
@@ -400,27 +393,33 @@ def main(argv: List[str]) -> int:
         reading = credential(files)
         ua = backend.user_agent(os.environ.get("CCGPT_CCRC_VERSION") or "dev")
         headers = backend.headers_for(reading, files.session, ua)
+        n = count + 1
+        write_count(files.lane_dir, n)  # raised before the request is sent, so a request that dies still counts
     except Refused as r:
         sys.stderr.write(PREFIX + "refused " + r.word + ": " + r.sentence + "\n")
         return 1
-    n = count + 1
-    write_count(files.lane_dir, n)  # raised before the request is sent, so a request that dies still counts
+    except Exception as e:  # its class only: an exception's text can carry a value (nothing has been sent)
+        sys.stderr.write(PREFIX + "failed " + _name(type(e).__name__) + "; nothing was sent\n")
+        return 1
     try:
         up = backend.post(base, body, headers)
     except backend.UpstreamTimeout as e:
         _out("transport timeout-" + _name(e.phase))
         return 3
-    except (OSError, http.client.HTTPException) as e:
+    except Exception as e:  # its class only: http.client formats a header it refuses with %r, the token's included
         _out("transport " + _name(type(e).__name__))
         return 3
     rec = None  # type: Optional[record.Recording]
-    if record.ensure_dir(files.rec_dir):
-        name = "liveprobe-%d-%s-%d.sse" % (step, time.strftime(record.UTC_FORMAT, time.gmtime()), n)
-        rec = record.open_file(files.rec_dir, name)
     try:
+        if record.ensure_dir(files.rec_dir):
+            name = "liveprobe-%d-%s-%d.sse" % (step, time.strftime(record.UTC_FORMAT, time.gmtime()), n)
+            rec = record.open_file(files.rec_dir, name)
         if rec is not None:
             rec.write(record.head(up.status, up.headers))
         return report(up, rec)
+    except Exception as e:  # its class only, as above
+        _out("transport " + _name(type(e).__name__))
+        return 3
     finally:
         if rec is not None:
             rec.close()

@@ -8,8 +8,8 @@
 // an environment built from scratch and a mkTmp HOME; every token is a synthetic JWT built at runtime. The two CLIs
 // run as files under `-I`, as the runbook runs them.
 import { afterEach, describe, it, expect } from 'vitest';
-import { spawn } from 'node:child_process';
-import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { spawn, spawnSync } from 'node:child_process';
+import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { request as httpRequest } from 'node:http';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -20,7 +20,7 @@ import {
   ACCOUNT_CLAIM, CLOSED_AUTH_BASE, FIXTURE_ACCOUNT_ID, fakeAuthServer, syntheticJwt,
 } from './codexAuthFixture.js';
 import {
-  BRIDGE_AUTH_LIB, BRIDGE_DIR, BRIDGE_FILES, BRIDGE_MODELS, driverLines, fakeResponses, killBridges, plantBridgeLane,
+  BRIDGE_AUTH_LIB, BRIDGE_DIR, BRIDGE_FILES, BRIDGE_MODELS, CCD_DIR, driverLines, fakeResponses, killBridges, plantBridgeLane,
   runBridgeDriver, spawnBridge, type BridgeLane, type SpawnedBridge,
 } from './codexBridgeFixture.js';
 
@@ -114,6 +114,29 @@ function callBridge(b: SpawnedBridge, text: string): Promise<{ status: number; t
 const mode = (p: string): number => statSync(p).mode & 0o777;
 const recordingsDir = (lane: BridgeLane): string => path.join(lane.laneDir, BRIDGE_FILES.recordings);
 const touch = (p: string): void => writeFileSync(p, '');
+/** Rewrite the lane's planted `lane.json` through `edit`. */
+function editLaneJson(lane: BridgeLane, edit: (m: Json) => void): void {
+  const file = path.join(lane.laneDir, 'lane.json');
+  const m = JSON.parse(readFileSync(file, 'utf8')) as Json;
+  edit(m);
+  writeFileSync(file, JSON.stringify(m));
+}
+/** The text a bridge answer streamed: its text deltas joined, and whether it ended with message_stop. */
+function streamedText(sse: string): { text: string; stopped: boolean; errored: boolean } {
+  let text = '';
+  let stopped = false;
+  let errored = false;
+  for (const line of sse.split('\n')) {
+    if (!line.startsWith('data: ')) continue;
+    const d = JSON.parse(line.slice(6)) as Json;
+    if (d.type === 'content_block_delta' && d.delta?.type === 'text_delta') text += d.delta.text;
+    if (d.type === 'message_stop') stopped = true;
+    if (d.type === 'error') errored = true;
+  }
+  return { text, stopped, errored };
+}
+/** prlimit(1), which lowers a running process's file-size limit (util-linux; absent on macOS). */
+const HAS_PRLIMIT = process.platform === 'linux' && spawnSync('prlimit', ['--version'], { stdio: 'ignore' }).status === 0;
 
 /** A token endpoint's answer, which a refresh would take: only a case where the probe must NOT refresh scripts it. */
 function issuedAnswer(): Json {
@@ -179,6 +202,111 @@ describe.skipIf(!PY)('recordings: the raw upstream bytes, only while record-stre
       await up.close();
     }
   });
+
+  it('a recordings path that is a regular file is never recorded into, and the stream is whole', async () => {
+    const home = mkTmp('cb-live-rec-file-');
+    const lane = plantBridgeLane(home, LANE);
+    touch(path.join(lane.laneDir, 'record-streams'));
+    const planted = recordingsDir(lane);
+    writeFileSync(planted, 'planted\n', { mode: 0o600 });
+    chmodSync(planted, 0o600);
+    const up = await fakeResponses([{ status: 200, sse: textReply('whole reply') }]);
+    try {
+      const b = await spawnBridge(home, LANE, { consts: { 'stats.FLUSH_S': 0 }, env: { CCGPT_BRIDGE_UPSTREAM_BASE: up.base } });
+      const a = await callBridge(b, 'one');
+      expect(a.status, a.text).toBe(200);
+      expect(streamedText(a.text)).toEqual({ text: 'whole reply', stopped: true, errored: false });
+      await b.stop('SIGKILL');
+      expect(readFileSync(planted, 'utf8')).toBe('planted\n');
+      expect(mode(planted), 'the planted file keeps its mode').toBe(0o600);
+    } finally {
+      await up.close();
+    }
+  });
+
+  it('a recordings path that is a symlink is never followed, and the stream is whole', async () => {
+    const home = mkTmp('cb-live-rec-link-');
+    const lane = plantBridgeLane(home, LANE);
+    touch(path.join(lane.laneDir, 'record-streams'));
+    const outside = path.join(home, 'outside');
+    mkdirSync(outside, { mode: 0o755 });
+    chmodSync(outside, 0o755);
+    symlinkSync(outside, recordingsDir(lane));
+    const up = await fakeResponses([{ status: 200, sse: textReply('whole reply') }]);
+    try {
+      const b = await spawnBridge(home, LANE, { consts: { 'stats.FLUSH_S': 0 }, env: { CCGPT_BRIDGE_UPSTREAM_BASE: up.base } });
+      const a = await callBridge(b, 'one');
+      expect(a.status, a.text).toBe(200);
+      expect(streamedText(a.text)).toEqual({ text: 'whole reply', stopped: true, errored: false });
+      await b.stop('SIGKILL');
+      expect(readdirSync(outside), 'nothing is written through the link').toEqual([]);
+      expect(mode(outside), 'the link target keeps its mode').toBe(0o755);
+    } finally {
+      await up.close();
+    }
+  });
+
+  it.skipIf(!HAS_PRLIMIT)('a recording whose writes fail mid-stream is dropped, and the stream is whole', async () => {
+    const home = mkTmp('cb-live-rec-full-');
+    const lane = plantBridgeLane(home, LANE);
+    touch(path.join(lane.laneDir, 'record-streams'));
+    const big = 'w'.repeat(200_000);
+    const up = await fakeResponses([{ status: 200, sse: textReply(big) }]);
+    try {
+      const b = await spawnBridge(home, LANE, { consts: { 'stats.FLUSH_S': 0 }, env: { CCGPT_BRIDGE_UPSTREAM_BASE: up.base } });
+      // every file this process grows past 64 KiB now fails with EFBIG (Python ignores SIGXFSZ): the recording does
+      const limit = 65536;
+      const pl = spawnSync('prlimit', ['--pid', String(b.proc.pid), `--fsize=${limit}`], { encoding: 'utf8' });
+      expect(pl.status, pl.stderr).toBe(0);
+      const a = await callBridge(b, 'one');
+      expect(a.status, a.text).toBe(200);
+      const got = streamedText(a.text);
+      expect(got.errored, 'the stream carries no error event').toBe(false);
+      expect(got.stopped, 'the stream ends with message_stop').toBe(true);
+      expect(got.text.length).toBe(big.length);
+      await b.stop('SIGKILL');
+      const files = readdirSync(recordingsDir(lane));
+      expect(files).toHaveLength(1);
+      const p = path.join(recordingsDir(lane), files[0]);
+      expect(statSync(p).size, 'the recording stopped at the limit').toBe(limit);
+      expect(readFileSync(p, 'utf8').startsWith('HTTP/1.1 200\n')).toBe(true);
+    } finally {
+      await up.close();
+    }
+  });
+
+  it('a recording that raises when it starts is dropped, logged by its class, and the stream is whole', async () => {
+    const home = mkTmp('cb-live-rec-raise-');
+    const lane = plantBridgeLane(home, LANE);
+    touch(path.join(lane.laneDir, 'record-streams'));
+    const up = await fakeResponses([{ status: 200, sse: textReply('whole reply') }]);
+    try {
+      // a RECORD_MAX that is not a number: `start`'s cap comparison raises TypeError, inside the bridge's hook
+      const b = await spawnBridge(home, LANE, {
+        consts: { 'stats.FLUSH_S': 0, 'record.RECORD_MAX': 'not-a-number' }, env: { CCGPT_BRIDGE_UPSTREAM_BASE: up.base },
+      });
+      const a = await callBridge(b, 'one');
+      expect(a.status, a.text).toBe(200);
+      expect(streamedText(a.text)).toEqual({ text: 'whole reply', stopped: true, errored: false });
+      await b.stop('SIGKILL');
+      expect(b.stderr()).toContain('TypeError');
+      expect(b.stderr()).not.toContain('Traceback');
+      expect(b.stderr()).not.toContain('not-a-number');
+      expect(readdirSync(recordingsDir(lane))).toEqual([]);
+    } finally {
+      await up.close();
+    }
+  });
+
+  it("the bridge's start refuses a lane.json whose bridgeFiles names no recordings directory", async () => {
+    const home = mkTmp('cb-live-rec-nokey-');
+    const lane = plantBridgeLane(home, LANE);
+    editLaneJson(lane, (m) => { delete m.bridgeFiles.recordings; });
+    const err = await spawnBridge(home, LANE, { consts: { 'stats.FLUSH_S': 0 } }).then(() => null, (e: Error) => e);
+    expect(err).not.toBeNull();
+    expect(err!.message).toMatch(/: ccgpt-proxy: direct: lane\.json's bridgeFiles\.recordings is not a file name\n?$/);
+    expect(err!.message).not.toContain('Traceback');
+  });
 });
 
 // ── the scrubber ─────────────────────────────────────────────────────────────────────────────────────────────────
@@ -239,18 +367,65 @@ describe.skipIf(!PY)('the scrubber: a recording becomes a corpus stream (codex-b
     expect(existsSync(path.join(BRIDGE_DIR, '__pycache__')), 'a __pycache__ in ccd/codexbridge').toBe(false);
   });
 
-  it('the scrubber refuses an output that still matches', async () => {
-    const home = mkTmp('cb-live-scrub-refuse-');
+  // A field the scrubber does not know keeps its value, so each value below survives the rewrite, and the residue
+  // check refuses it by the one pattern it matches. Each value is fixed (never random), so no other pattern can match
+  // it by chance: the JWT is built from fixed segments.
+  const b64 = (o: object | string): string => Buffer.from(typeof o === 'string' ? o : JSON.stringify(o)).toString('base64url');
+  const FIXED_JWT = `${b64({ alg: 'none', typ: 'JWT' })}.${b64({ sub: 'fixture', exp: 1 })}.${b64('fixture-signature')}`;
+  for (const [pattern, value] of [
+    ['jwt', FIXED_JWT],
+    ['id', 'see rs_ab12cd34ef for the item'],
+    ['key', `sk-${'A1'.repeat(12)}`],
+  ] as const) {
+    it(`the scrubber refuses an output that still matches ${pattern}`, async () => {
+      const home = mkTmp('cb-live-scrub-refuse-');
+      const inFile = path.join(home, 'in.sse');
+      const outFile = path.join(home, 'out.sse');
+      writeFileSync(inFile, textReply('fine') + ev('response.note', { trace_blob: value }));
+      const r = await runCli(home, RECORD_PY, ['scrub', inFile, outFile]);
+      expect(r.status).toBe(1);
+      expect(r.stderr).toBe(`record: refused: the output still matches ${pattern}; nothing written\n`);
+      expect(r.stderr).not.toContain(value);
+      expect(existsSync(outFile), 'a refused scrub writes nothing').toBe(false);
+    });
+  }
+
+  it('the residue check names each pattern it matches, the two defence-in-depth patterns included', () => {
+    // encrypted-content and header-line are defence in depth (record.py's SCRUB_PATTERNS comment): asked directly
+    const inputs: Array<[string, string]> = [
+      ['id', 'data: {"note":"see rs_ab12cd34ef"}\n'],
+      ['jwt', `data: {"note":"${FIXED_JWT}"}\n`],
+      ['encrypted-content', 'data: {"encrypted_content":"gAAAAB-not-replaced"}\n'],
+      ['key', `data: {"note":"sk-${'A1'.repeat(12)}"}\n`],
+      ['header-line', 'event: response.created\nset-cookie: fixture=1\n'],
+      ['none', 'event: response.created\ndata: {"id":"rs_fx1","encrypted_content":"ENC-1"}\n'],
+    ];
+    const script = [
+      'import json, sys',
+      'sys.dont_write_bytecode = True',
+      'sys.path.insert(0, sys.argv[1])',
+      'from codexbridge import record',
+      'print(json.dumps([record.residue(s.encode("utf-8")) for s in json.loads(sys.argv[2])]))',
+    ].join('\n');
+    const r = spawnSync(PY!, ['-I', '-c', script, CCD_DIR, JSON.stringify(inputs.map(([, s]) => s))], {
+      encoding: 'utf8', env: { PATH: process.env.PATH ?? '/usr/bin:/bin' },
+    });
+    expect(r.status, r.stderr).toBe(0);
+    expect(JSON.parse(r.stdout)).toEqual(inputs.map(([name]) => (name === 'none' ? [] : [name])));
+  });
+
+  it('a text that has the shape of an id is rewritten as a text, so its deltas still join to its done text', async () => {
+    const home = mkTmp('cb-live-scrub-idtext-');
     const inFile = path.join(home, 'in.sse');
     const outFile = path.join(home, 'out.sse');
-    // a field the scrubber does not know, holding a token-shaped value: it is kept, and the check refuses it
-    const token = syntheticJwt({ sub: 'fixture', exp: 1 });
-    writeFileSync(inFile, textReply('fine') + ev('response.note', { trace_blob: token }));
+    writeFileSync(inFile, ev('response.output_text.delta', { item_id: 'msg_fx1', output_index: 0, content_index: 0, delta: 'ab_12345678' })
+      + ev('response.output_text.delta', { item_id: 'msg_fx1', output_index: 0, content_index: 0, delta: ' ok' })
+      + ev('response.output_item.done', { output_index: 0, item: msgItem('msg_fx1', 'ab_12345678 ok') }));
     const r = await runCli(home, RECORD_PY, ['scrub', inFile, outFile]);
-    expect(r.status).toBe(1);
-    expect(r.stderr).toMatch(/^record: refused: the output still matches jwt; nothing written\n$/);
-    expect(r.stderr).not.toContain(token);
-    expect(existsSync(outFile), 'a refused scrub writes nothing').toBe(false);
+    expect(r.status, r.stderr).toBe(0);
+    const out = readFileSync(outFile, 'utf8');
+    expect(out).toContain('"delta":"xx_xxxxxxxx"');
+    expect(out).toContain('"text":"xx_xxxxxxxx xx"');
   });
 
   it("the scrubber's output is a corpus stream: the replay suite's reader parses it", async () => {
@@ -279,6 +454,9 @@ describe.skipIf(!PY)('the scrubber: a recording becomes a corpus stream (codex-b
     for (const block of text.split('\n\n').filter(Boolean)) expect(block).toMatch(/^event: [a-z_.]+\ndata: \{.*\}$/);
   });
 });
+
+/** A fixed base64url segment of `s`, for a token-shaped fixture value. */
+const b64token = (s: string): string => Buffer.from(`{"fixture":"${s}"}`).toString('base64url');
 
 // ── the live probe ───────────────────────────────────────────────────────────────────────────────────────────────
 describe.skipIf(!PY)('the live probe: the first live step, bounded (codex-bridge Task 18, runbook step 2)', () => {
@@ -415,6 +593,81 @@ describe.skipIf(!PY)('the live probe: the first live step, bounded (codex-bridge
       expect(files[0]).toMatch(/^liveprobe-1-[0-9]{8}T[0-9]{6}Z-1\.sse$/);
       expect(mode(path.join(dir, files[0]))).toBe(0o600);
       expect(readFileSync(path.join(dir, files[0]), 'utf8').endsWith(sse)).toBe(true);
+    } finally {
+      await up.close();
+    }
+  });
+
+  for (const [what, edit] of [
+    ['names no recordings directory', (m: Json) => { delete m.bridgeFiles.recordings; }],
+    ['names a recordings directory outside the lane', (m: Json) => { m.bridgeFiles.recordings = '../x'; }],
+  ] as const) {
+    it(`the live probe refuses a lane.json that ${what}`, async () => {
+      const home = mkTmp('cb-live-probe-manifest-');
+      const lane = plantBridgeLane(home, LANE);
+      touch(path.join(lane.laneDir, 'liveprobe-allowed'));
+      editLaneJson(lane, edit);
+      const up = await fakeResponses([{ status: 200, sse: textReply('ok') }]);
+      try {
+        const r = await probe(home, 1, { CCGPT_BRIDGE_UPSTREAM_BASE: up.base });
+        expect(r.status).toBe(1);
+        expect(r.stderr).toBe("liveprobe: refused lane-malformed: the lane's lane.json is out of shape at "
+          + "bridgeFiles.recordings; run 'ccrc update'\n");
+        expect(up.requests).toHaveLength(0);
+        expect(existsSync(path.join(lane.laneDir, 'liveprobe.count')), 'a refused probe counts nothing').toBe(false);
+        expect(existsSync(path.join(lane.laneDir, '..', 'x')), 'nothing is made outside the lane').toBe(false);
+      } finally {
+        await up.close();
+      }
+    });
+  }
+
+  it('a request that is never answered still counts', async () => {
+    const home = mkTmp('cb-live-probe-unanswered-');
+    const lane = plantBridgeLane(home, LANE);
+    touch(path.join(lane.laneDir, 'liveprobe-allowed'));
+    // no upstream: CCGPT_BRIDGE_UPSTREAM_BASE is CLOSED_AUTH_BASE, a loopback port nothing listens on
+    const r = await probe(home, 1);
+    expect(r.status, r.stderr).toBe(3);
+    expect(r.stdout).toBe('liveprobe: transport ConnectionRefusedError\n');
+    expect(readFileSync(path.join(lane.laneDir, 'liveprobe.count'), 'utf8')).toBe('1\n');
+  });
+
+  it('a count that cannot be raised sends nothing, and the failure is named by its class', async () => {
+    const home = mkTmp('cb-live-probe-nocount-');
+    const lane = plantBridgeLane(home, LANE);
+    touch(path.join(lane.laneDir, 'liveprobe-allowed'));
+    // the count's temporary file is a directory, so write_count's open raises IsADirectoryError
+    mkdirSync(path.join(lane.laneDir, 'liveprobe.count.tmp'));
+    const up = await fakeResponses([{ status: 200, sse: textReply('ok') }]);
+    try {
+      const r = await probe(home, 1, { CCGPT_BRIDGE_UPSTREAM_BASE: up.base });
+      expect(r.status).toBe(1);
+      expect(r.stderr).toBe('liveprobe: failed IsADirectoryError; nothing was sent\n');
+      expect(r.stdout).toBe('');
+      expect(up.requests).toHaveLength(0);
+      expect(existsSync(path.join(lane.laneDir, 'liveprobe.count'))).toBe(false);
+    } finally {
+      await up.close();
+    }
+  });
+
+  it('a credential http.client refuses as a header is never printed', async () => {
+    const home = mkTmp('cb-live-probe-header-');
+    // a token with a line break: Stage 1's read takes any non-empty string, and the stored expires_at is in the future
+    const head = `${b64token('head')}.${b64token('fixture')}`;
+    const tail = `${b64token('tail')}SENTINELTAIL`;
+    const token = `${head}\n${tail}`;
+    const lane = plantBridgeLane(home, LANE, { credential: { extra: { access_token: token } } });
+    touch(path.join(lane.laneDir, 'liveprobe-allowed'));
+    const up = await fakeResponses([{ status: 200, sse: textReply('ok') }]);
+    try {
+      const r = await probe(home, 1, { CCGPT_BRIDGE_UPSTREAM_BASE: up.base });
+      expect(r.status, r.stderr).toBe(3);
+      expect(r.stdout).toBe('liveprobe: transport ValueError\n');
+      const all = r.stdout + r.stderr;
+      for (const s of [head, tail, 'SENTINELTAIL', 'Bearer']) expect(all, s).not.toContain(s);
+      expect(up.requests).toHaveLength(0);
     } finally {
       await up.close();
     }

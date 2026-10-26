@@ -208,7 +208,9 @@ ARGUMENTS_KEY = "arguments"
 _ID_VALUE_RE = re.compile(r"^([a-z]{1,8})_(?=[A-Za-z0-9-]*[0-9])[A-Za-z0-9-]{8,}$")
 MALFORMED_LINE = 'data: {"malformed"'
 
-# What a scrubbed stream must not hold. Each pattern is searched in the whole output text.
+# What a scrubbed stream must not hold. Each pattern is searched in the whole output text. `encrypted-content` and
+# `header-line` are defence in depth: `scrub` rewrites every string under ENCRYPTED_KEY and writes only `event:` and
+# `data:` lines (json.dumps escapes a newline), so only a change to `scrub` itself can make either match.
 SCRUB_PATTERNS = (
     ("id", re.compile(r"(?<![A-Za-z0-9_])[a-z]{1,8}_(?!fx[0-9]+(?![A-Za-z0-9-]))(?=[A-Za-z0-9-]*[0-9])"
                       r"[A-Za-z0-9-]{8,}")),
@@ -272,12 +274,14 @@ class _Scrubber:
             return value
         if key == ENCRYPTED_KEY:
             return self.encrypted_of(value)
-        if key in ID_KEYS or _ID_VALUE_RE.fullmatch(value):
+        if key in ID_KEYS:
             return self.id_of(value)
         if key == ARGUMENTS_KEY:
             return self.arguments(value)
-        if key in TEXT_KEYS:
+        if key in TEXT_KEYS:  # before the id shape: a text that looks like an id keeps its length, so deltas join
             return _synthetic(value)
+        if _ID_VALUE_RE.fullmatch(value):
+            return self.id_of(value)
         return value
 
 

@@ -157,10 +157,54 @@ def _required(environ: Mapping[str, str], name: str) -> str:
     return value
 
 
+class ManifestError(Exception):
+    """A `lane.json` that cannot be used (`read_manifest`). `kind` is `unknown` (missing, not JSON, or naming
+    another lane) or `malformed`; `field` names what is out of shape; `reason` is the start's sentence. None holds a
+    value."""
+
+    def __init__(self, kind: str, field: str, reason: str) -> None:
+        super().__init__(reason)
+        self.kind = kind
+        self.field = field
+        self.reason = reason
+
+
+class LaneManifest(NamedTuple):
+    files: _BridgeFiles  # the file names, each checked by FILE_NAME_RE (join them onto the lane directory)
+    auth_dir: str
+    config_dir: str
+
+
 def _home_relative(home: str, value: object, what: str) -> str:
     if not isinstance(value, str) or not value or value.startswith("/") or ".." in value.split("/"):
-        _refuse("lane.json's " + what + " is not a HOME-relative path")
+        raise ManifestError("malformed", what, "lane.json's " + what + " is not a HOME-relative path")
     return os.path.join(home, value)
+
+
+def read_manifest(home: str, lane_dir: str, lane: str) -> LaneManifest:
+    """The lane's `lane.json` in `lane_dir`, read once: its id must be `lane`, every `bridgeFiles` key a file name,
+    `authDir` and `configDir` HOME-relative. Raises ManifestError. The one reader of the file in this package: the
+    start (`config_from_env`) exits on the error, and the live probe (`liveprobe.lane_files`) refuses on it."""
+    try:
+        with open(os.path.join(lane_dir, LANE_FILE), "rb") as f:
+            manifest = json.loads(f.read().decode("utf-8"))
+    except (OSError, ValueError, RecursionError):  # nesting past the decoder's recursion limit is not JSON either
+        raise ManifestError("unknown", LANE_FILE, "lane.json in CCGPT_LANE_DIR is missing or not JSON")
+    if not isinstance(manifest, dict) or manifest.get("id") != lane:
+        raise ManifestError("unknown", "id", "lane.json in CCGPT_LANE_DIR names another lane")
+    files = manifest.get("bridgeFiles")
+    if not isinstance(files, dict):
+        raise ManifestError("malformed", "bridgeFiles",
+                            "lane.json carries no bridgeFiles; run 'ccrc update', which re-renders it")
+    names = {}
+    for key in _BridgeFiles._fields:
+        value = files.get(key)
+        if not isinstance(value, str) or not FILE_NAME_RE.fullmatch(value):
+            raise ManifestError("malformed", "bridgeFiles." + key, "lane.json's bridgeFiles." + key
+                                + " is not a file name")
+        names[key] = value
+    return LaneManifest(files=_BridgeFiles(**names), auth_dir=_home_relative(home, manifest.get("authDir"), "authDir"),
+                        config_dir=_home_relative(home, manifest.get("configDir"), "configDir"))
 
 
 def config_from_env(environ: Mapping[str, str]) -> BridgeConfig:
@@ -184,23 +228,10 @@ def config_from_env(environ: Mapping[str, str]) -> BridgeConfig:
     except ValueError:
         _refuse(backend.UPSTREAM_BASE_ENV + " must be an http:// URL on a loopback host; unset it for the default")
     try:
-        with open(os.path.join(lane_dir, LANE_FILE), "rb") as f:
-            manifest = json.loads(f.read().decode("utf-8"))
-    except (OSError, ValueError, RecursionError):  # nesting past the decoder's recursion limit is not JSON either
-        _refuse("lane.json in CCGPT_LANE_DIR is missing or not JSON")
-    if not isinstance(manifest, dict) or manifest.get("id") != lane:
-        _refuse("lane.json in CCGPT_LANE_DIR names another lane")
-    files = manifest.get("bridgeFiles")
-    if not isinstance(files, dict):
-        _refuse("lane.json carries no bridgeFiles; run 'ccrc update', which re-renders it")
-    names = {}
-    for key in _BridgeFiles._fields:
-        value = files.get(key)
-        if not isinstance(value, str) or not FILE_NAME_RE.fullmatch(value):
-            _refuse("lane.json's bridgeFiles." + key + " is not a file name")
-        names[key] = value
-    auth_dir = _home_relative(home, manifest.get("authDir"), "authDir")
-    config_dir = _home_relative(home, manifest.get("configDir"), "configDir")
+        manifest = read_manifest(home, lane_dir, lane)
+    except ManifestError as e:
+        _refuse(e.reason)
+    names = manifest.files
     try:
         with open(os.path.join(lane_dir, RUNTIME_ENV), "rb") as f:
             text = f.read(4096).decode("ascii")
@@ -209,11 +240,11 @@ def config_from_env(environ: Mapping[str, str]) -> BridgeConfig:
     m = KEY_RE.fullmatch(text.rstrip("\n"))
     if m is None:
         _refuse("runtime.env does not hold one well-formed LITELLM_MASTER_KEY line (its bytes are not printed)")
-    return BridgeConfig(lane=lane, port=int(raw_port), lane_dir=lane_dir, auth_dir=auth_dir, config_dir=config_dir,
-                        key=m.group(1), catalogue=catalogue, auth_lib=auth_lib, ccrc_version=version,
-                        upstream_base=base, stats_path=os.path.join(lane_dir, names["stats"]),
-                        store_path=os.path.join(lane_dir, names["store"]),
-                        recordings_path=os.path.join(lane_dir, names[_BridgeFiles._fields[2]]))
+    return BridgeConfig(lane=lane, port=int(raw_port), lane_dir=lane_dir, auth_dir=manifest.auth_dir,
+                        config_dir=manifest.config_dir, key=m.group(1), catalogue=catalogue, auth_lib=auth_lib,
+                        ccrc_version=version, upstream_base=base, stats_path=os.path.join(lane_dir, names.stats),
+                        store_path=os.path.join(lane_dir, names.store),
+                        recordings_path=os.path.join(lane_dir, names.recordings))
 
 
 # ── the credential library ───────────────────────────────────────────────────────────────────────────────────────
