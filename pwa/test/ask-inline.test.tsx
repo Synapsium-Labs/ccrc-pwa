@@ -319,6 +319,19 @@ const agedQuestion2 = (): Dialog => {
   };
 };
 
+/** R115: a DIFFERENT aged ask (another question, other options, another pane dialog id) as the pane paints it, with no
+ *  envelope, so its rows are keyed by position like fixture 2's. */
+const OTHER_QUESTION = 'Which database should the service use?';
+const otherAgedAsk = (): Dialog => {
+  const options = [{ label: 'Postgres', description: 'A server.' }, { label: 'SQLite', description: 'A file.' }, { label: 'Neither' }];
+  return {
+    ...askFixture(2).dialog!, id: 'dlg-other-ask', title: OTHER_QUESTION, body: OTHER_QUESTION, selectedIndex: 1,
+    options: [...options.map((o, n) => ({ index: n + 1, label: o.label, description: o.description })),
+      { index: options.length + 1, label: 'Type something.' }, { index: options.length + 2, label: 'Chat about this' }],
+    ask: { question: OTHER_QUESTION, header: 'Database', multiSelect: false, options: options.map((o) => ({ ...o })) },
+  };
+};
+
 describe('the keys survive a screen change inside the card (D-6326)', () => {
   it('after a key answers a question in the card, the next question takes no focus and a digit sends nothing (R102)', async () => {
     media(true);
@@ -1332,19 +1345,41 @@ describe('a raise rendered in one batch with a Deny\'s completion unlocks nothin
   });
 });
 
-// THE RETAINED PATH, pinned as today's behaviour and NOT endorsed. R99 and R102 leave one case alone: an engagement made by a
-// NON-ANSWER key (an arrow), across a screen change this client did not send (a socket frame). It continues, and the new
-// screen's highlighted row takes focus when the engaged row unmounted with the old screen. This is the external-replacement
-// residual, unwaived: a send this client initiates releases (above), an arrow does not. The cases deliver the change by a frame,
-// for the hooked ask and for the aged one, question to question, question to review and review to question.
-describe('an arrow-engaged keyboard continues across a screen change this client did not send (the unwaived residual)', () => {
+// R115 (the operator's choice, amending R64 for these changes): at the DESK, a screen change this client did not send (a
+// socket frame: another client, the terminal, the session moving on, or a redraw under a new aged dialog id) ENDS the
+// keyboard's engagement and FENCES the card when the keyboard was engaged or focus was inside the card. Nothing moves
+// focus into the new screen, no key on its rows sends (a row node the new screen reused and left focused included), Tab
+// still moves focus without unlocking, and only a NEW eligible pointer press in the card or Go to question re-enters. This
+// replaces the retained R99 path, where an arrow-engaged keyboard continued into the new screen. The phone's Sheet is
+// unchanged. Not covered, and not claimed: an externally driven BYTE-IDENTICAL replacement, which changes no identity this
+// client can see, and a request already issued, which no client fence can revoke.
+describe('a screen change this client did not send fences the card at the desk; only a new eligible act re-enters (R115)', () => {
   const reviewD = (): Dialog => askFixture(8).dialog!;
+  const goTo = (): HTMLButtonElement =>
+    [...document.querySelectorAll<HTMLButtonElement>('.tool-ask .ask-state button')].find((b) => b.textContent === 'Go to question')!;
+
+  /** The new screen took no focus, its highlighted row (`row`), focused as Tab would, sends nothing on a digit, Enter or
+   *  Space, and a pointer press on it then lets a digit answer once. `answer` is the spied `api.answerDialog`. */
+  function expectFencedThenPress(w: { seen: () => string[] }, answer: ReturnType<typeof vi.spyOn>, row: HTMLElement): void {
+    expect(w.seen(), 'nothing moved focus into the new screen').toEqual([]);
+    expect(document.activeElement, 'focus stays on the page body, where the engaged row\'s removal left it').toBe(document.body);
+    act(() => row.focus()); // as Tab would: the fence lets focus move and unlocks nothing
+    key(row, '1');
+    expect(fireEvent.keyDown(row, { key: 'Enter' }), 'Enter is stopped by the fence').toBe(false);
+    expect(fireEvent.keyDown(row, { key: ' ' }), 'Space is stopped by the fence').toBe(false);
+    expect(fireEvent.keyUp(row, { key: ' ' }), 'Space\'s keyup too').toBe(false);
+    expect(answer, 'no key sent anything').not.toHaveBeenCalled();
+    fireEvent.pointerDown(row);
+    key(row, '1');
+    expect(answer, 'after a pointer press a digit answers once').toHaveBeenCalledTimes(1);
+  }
 
   it.each([
     ['question to question', (): Dialog => nextScreen(), /^Yes/],
     ['question to the review', reviewD, /^Submit answers/],
-  ] as const)('hooked ask, %s: the new screen\'s highlighted row takes focus', async (_what, next, row) => {
+  ] as const)('hooked ask, %s: the new screen takes no focus and its keys are fenced', async (_what, next, row) => {
     media(true);
+    const answer = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
     const { arrive, store } = mount();
     await frame();
     arrive(1);
@@ -1353,14 +1388,16 @@ describe('an arrow-engaged keyboard continues across a screen change this client
     key(first, 'ArrowDown'); // engages, sends nothing; focus is on the second row
     const moved = document.activeElement as HTMLElement;
     expect(card().contains(moved) && moved !== first, 'premise: the arrow moved focus to another row').toBe(true);
+    const w = watchCardFocus();
     act(() => store.getState().apply({ type: 'dialog', dialog: next() }));
     await frame();
     expect(moved.isConnected, 'premise: the engaged row left the DOM with its screen').toBe(false);
-    expect(document.activeElement, 'the new screen\'s highlighted row took focus').toBe(opt(card(), row));
+    expectFencedThenPress(w, answer, opt(card(), row));
   });
 
-  it('hooked ask, the review to a question: the question\'s highlighted row takes focus', async () => {
+  it('hooked ask, the review to a question: the question takes no focus and its keys are fenced', async () => {
     media(true);
+    const answer = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
     const { arrive, store } = mount();
     await frame();
     arrive(8);
@@ -1369,15 +1406,17 @@ describe('an arrow-engaged keyboard continues across a screen change this client
     key(submit, 'ArrowDown');
     const moved = document.activeElement as HTMLElement;
     expect(card().contains(moved) && moved !== submit, 'premise: the arrow moved focus to the Cancel row').toBe(true);
+    const w = watchCardFocus();
     act(() => store.getState().apply({ type: 'dialog', dialog: askFixture(1).dialog! }));
     await frame();
     expect(within(card()).getByText(QUESTION), 'premise: question 1 is up').toBeInTheDocument();
     expect(moved.isConnected, 'premise: the engaged row left the DOM').toBe(false);
-    expect(document.activeElement, 'the question\'s highlighted row took focus').toBe(opt(card(), /^Redis/));
+    expectFencedThenPress(w, answer, opt(card(), /^Redis/));
   });
 
-  it('aged ask, a question whose third row is gone on the next question: the next question\'s highlighted row takes focus', async () => {
+  it('aged ask, a question whose third row is gone on the next question: the next question takes no focus and its keys are fenced', async () => {
     media(true);
+    const answer = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
     const { arrive, store } = mount();
     await frame();
     arrive(2);
@@ -1388,14 +1427,16 @@ describe('an arrow-engaged keyboard continues across a screen change this client
     key(document.activeElement!, 'ArrowDown');
     const third = opt(card(), /^None/);
     expect(document.activeElement, 'premise: the arrows moved focus to the third row').toBe(third);
+    const w = watchCardFocus();
     act(() => store.getState().apply({ type: 'dialog', dialog: agedQuestion2() }));
     await frame();
     expect(third.isConnected, 'premise: the third row\'s node left the DOM').toBe(false);
-    expect(document.activeElement, 'the next question\'s highlighted row took focus').toBe(opt(card(), /^Yes/));
+    expectFencedThenPress(w, answer, opt(card(), /^Yes/));
   });
 
-  it('aged ask, a question to the review: the review\'s highlighted row takes focus', async () => {
+  it('aged ask, a question to the review: the review takes no focus and its keys are fenced', async () => {
     media(true);
+    const answer = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
     const { arrive, store } = mount();
     await frame();
     arrive(2);
@@ -1405,14 +1446,16 @@ describe('an arrow-engaged keyboard continues across a screen change this client
     key(document.activeElement!, 'ArrowDown');
     const third = opt(card(), /^None/);
     expect(document.activeElement, 'premise: the arrows moved focus to the third row').toBe(third);
+    const w = watchCardFocus();
     act(() => store.getState().apply({ type: 'dialog', dialog: reviewD() }));
     await frame();
     expect(third.isConnected, 'premise: the third row\'s node left the DOM').toBe(false);
-    expect(document.activeElement, 'the review\'s highlighted row took focus').toBe(opt(card(), /^Submit answers/));
+    expectFencedThenPress(w, answer, opt(card(), /^Submit answers/));
   });
 
-  it('aged ask, the review to its question: the question\'s highlighted row takes focus', async () => {
+  it('aged ask, the review to its question: the question takes no focus and its keys are fenced', async () => {
     media(true);
+    const answer = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
     const { arrive, store } = mount();
     await frame();
     arrive(8);
@@ -1423,11 +1466,116 @@ describe('an arrow-engaged keyboard continues across a screen change this client
     key(submit, 'ArrowDown');
     const moved = document.activeElement as HTMLElement;
     expect(card().contains(moved) && moved !== submit, 'premise: the arrow moved focus to the Cancel row').toBe(true);
+    const w = watchCardFocus();
     act(() => store.getState().apply({ type: 'dialog', dialog: askFixture(2).dialog! }));
     await frame();
     expect(within(card()).getByText(QUESTION), 'premise: the question is up').toBeInTheDocument();
     expect(moved.isConnected, 'premise: the engaged row left the DOM').toBe(false);
-    expect(document.activeElement, 'the question\'s highlighted row took focus').toBe(opt(card(), /^Redis/));
+    expectFencedThenPress(w, answer, opt(card(), /^Redis/));
+  });
+
+  // F3 of review 939, the external path: a DIFFERENT aged ask (another question, other options, another pane dialog id)
+  // replaces the first with no clear observed between them. Aged rows are keyed by position, so the row that holds focus is
+  // REUSED by the second ask, still focused, with no focus event at all.
+  /** Aged fixture 2 up, `prep` puts focus in the card; then a frame brings a DIFFERENT aged ask, with no clear. */
+  async function otherAskOver(prep: (first: HTMLElement) => void) {
+    media(true);
+    const answer = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+    const { arrive, store } = mount({ events: [...EVENTS, ASK_CALL] });
+    await frame();
+    arrive(2);
+    const first = opt(card(), /^Redis/);
+    prep(first);
+    const held = document.activeElement as HTMLElement;
+    expect(card().contains(held), 'premise: focus is on a row in the card').toBe(true);
+    const w = watchCardFocus();
+    act(() => store.getState().apply({ type: 'dialog', dialog: otherAgedAsk() }));
+    await frame();
+    expect(within(card()).getByText(OTHER_QUESTION), 'premise: the other ask is in the card').toBeInTheDocument();
+    expect(store.getState().askEpoch, 'premise: no clear was observed').toBe(0);
+    expect(held.isConnected, 'premise: the other ask REUSED the focused row node').toBe(true);
+    expect(held, 'premise: and the node is enabled').toBeEnabled();
+    expect(w.seen(), 'nothing moved focus into the new screen').toEqual([]);
+    expect(document.activeElement, 'focus is still on the reused node, where it was').toBe(held);
+    return { answer, held, w, store };
+  }
+
+  it('an arrow-engaged keyboard on a reused row: a digit, Enter and Space send nothing, nothing moves focus, a press re-enters', async () => {
+    const m = await otherAskOver((first) => {
+      act(() => first.focus());
+      key(first, 'ArrowDown'); // engages; focus moves to the second row
+    });
+    key(m.held, '1');
+    expect(fireEvent.keyDown(m.held, { key: 'Enter' }), 'Enter is stopped by the fence').toBe(false);
+    expect(fireEvent.keyDown(m.held, { key: ' ' }), 'Space is stopped by the fence').toBe(false);
+    expect(fireEvent.keyUp(m.held, { key: ' ' }), 'Space\'s keyup too').toBe(false);
+    key(m.held, 'ArrowDown');
+    expect(document.activeElement, 'an arrow moves nothing either').toBe(m.held);
+    expect(m.w.seen(), 'no focus was assigned inside the card').toEqual([]);
+    expect(m.answer, 'nothing was sent to the other ask').not.toHaveBeenCalled();
+    fireEvent.pointerDown(m.held);
+    key(m.held, '1');
+    expect(m.answer, 'after a pointer press a digit answers the other ask once').toHaveBeenCalledTimes(1);
+    expect(m.answer).toHaveBeenLastCalledWith(ID, 'dlg-other-ask', 1);
+  });
+
+  it('focus on a row with NO key pressed (Tab or a script put it there) is fenced too: a digit sends nothing', async () => {
+    const m = await otherAskOver((first) => act(() => first.focus()));
+    key(m.held, '1');
+    expect(fireEvent.keyDown(m.held, { key: 'Enter' }), 'Enter is stopped by the fence').toBe(false);
+    expect(m.answer, 'nothing was sent to the other ask').not.toHaveBeenCalled();
+  });
+
+  it('Tab after the change moves focus and unlocks nothing; Go to question then re-enters and a digit answers once', async () => {
+    const m = await otherAskOver((first) => {
+      act(() => first.focus());
+      key(first, 'ArrowDown');
+    });
+    expect(fireEvent.keyDown(m.held, { key: 'Tab' }), 'Tab is not prevented').toBe(true);
+    act(() => opt(card(), /^Postgres/).focus());
+    key(document.activeElement!, '2');
+    expect(m.answer, 'a digit after Tab sends nothing').not.toHaveBeenCalled();
+    fireEvent.click(goTo());
+    key(document.activeElement!, '2');
+    expect(m.answer, 'after Go to question a digit answers once').toHaveBeenCalledTimes(1);
+    expect(m.answer).toHaveBeenLastCalledWith(ID, 'dlg-other-ask', 2);
+  });
+
+  it('with focus outside the card and no key pressed in it, the change fences nothing: Tab in, then a digit, answers', async () => {
+    media(true);
+    const answer = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+    const { arrive, store } = mount();
+    await frame();
+    arrive(2);
+    act(() => composer().focus());
+    act(() => store.getState().apply({ type: 'dialog', dialog: otherAgedAsk() }));
+    await frame();
+    expect(document.activeElement, 'premise: focus stayed in the composer').toBe(composer());
+    const row = opt(card(), /^Postgres/);
+    act(() => row.focus());
+    key(row, '1');
+    expect(answer, 'an operator who was not in the card is not fenced').toHaveBeenCalledTimes(1);
+  });
+
+  it('the phone keeps its Sheet\'s behaviour: the same change leaves the reused row\'s keys live (a guard, green before and after)', async () => {
+    media(false);
+    const answer = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+    const { arrive, store } = mount();
+    await frame();
+    arrive(2);
+    expect(dialogs(), 'premise: the phone shows the Sheet').toHaveLength(1);
+    const first = within(dialogs()[0]!).getByRole('button', { name: /^Redis/ });
+    act(() => first.focus());
+    key(first, 'ArrowDown');
+    const held = document.activeElement as HTMLElement;
+    act(() => store.getState().apply({ type: 'dialog', dialog: otherAgedAsk() }));
+    await frame();
+    expect(within(dialogs()[0]!).getByText(OTHER_QUESTION), 'premise: the other ask is in the Sheet').toBeInTheDocument();
+    expect(held.isConnected, 'premise: the Sheet reused the row node that held focus').toBe(true);
+    expect(dialogs()[0]!.contains(document.activeElement), 'focus is on a row in the Sheet').toBe(true);
+    key(document.activeElement!, '1');
+    expect(answer, 'on the phone a digit answers, as it always has').toHaveBeenCalledTimes(1);
+    expect(answer).toHaveBeenLastCalledWith(ID, 'dlg-other-ask', 1);
   });
 });
 
