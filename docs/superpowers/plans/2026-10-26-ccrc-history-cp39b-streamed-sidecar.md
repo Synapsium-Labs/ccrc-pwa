@@ -211,7 +211,7 @@ Method: the default reporter prints nothing on a passing run, so every figure wa
 
 The high GC mode was reached locally: alone on four of the five printed walk-cap runs, and pinned on all five. Each of those runs was over 262,144, so the case was red. That agrees with CI's 270,984-272,028 on the floor leg.
 
-**After**, at `28d4ab3a5` (Task 1 before its D-6973 follow-up, which adds only an error handler and a destroy on the error path):
+**After**, at `28d4ab3a5`. That is Task 1 before its D-6973 follow-up `15b862fd7`, which rewrote the error path's control flow: the `finished` handler, the try/catch and the destroy. The rows below therefore measure the threshold and the reused piece, not that control flow, which the next two sets of figures cover.
 
 | Case | Alone | Pinned |
 |---|---|---|
@@ -223,6 +223,17 @@ The largest reading is 250,176 (walk-cap, pinned): 11,968 KiB, or 4.6%, under 26
 **The box's Node, v24.14.1** (bound 512 MiB), alone, at `28d4ab3a5`:
 - walk-cap: 333,588 · 273,264 · 189,808;
 - DM47: 210,872 · 210,484 · 210,988.
+
+**The held-out review's figures**, at `16b76d47b`, which carries the follow-up's control flow. They are review 979's own, on Node 22.16.0 (tarball sha256 checked), walk-cap pinned with `taskset -c 11`: 246,672 · 223,088 · 188,364. All three passed.
+
+**At the fix-round tip**, `efd29f404`, after fix round 1 (each piece raced against `finished`, D-6973). Node 22.16.0 (the official tarball, sha256 checked), pinned with `taskset -c 5`, `--reporter=verbose --silent=false`, one per call, with `free -m` read first (at least 14.7 GB available):
+
+| Case | Pinned |
+|---|---|
+| Walk-cap | 246,808 · 249,008 · 225,300 |
+| DM47's 64 MiB case | 189,416 · 193,452 · 188,840 |
+
+The largest is 249,008 (walk-cap): 13,136 KiB, or 5.0%, under 262,144, and under the fix round's 252,000 KiB stop line. Every run passed.
 
 ## Residuals named
 
