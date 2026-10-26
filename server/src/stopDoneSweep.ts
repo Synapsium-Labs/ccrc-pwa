@@ -11,6 +11,7 @@ import { HIBERNATE_DISABLED_MARKER, NO_HIBERNATE_SUFFIX } from './coord/hibernat
 import { RECLAIM_PAUSE_MARKER } from './coord/rundefs.js';
 import { programmeHoldOf } from './coord/rundefs.js';
 import { PRESENCE_OPEN_TTL_MS, TERMINAL_RUN_STATES, type FleetSession } from '../../shared/api.js';
+import { readSwitches } from '../../shared/switches.js';
 import {
   STOP_DONE_ACTOR, STOP_DONE_DISABLED_MARKER, STOP_DONE_GRACE_MS, STOP_DONE_MEASURES_PER_PASS, STOP_DONE_PARKED_STATES,
   STOP_DONE_PER_PASS, STOP_DONE_RETRY_MS,
@@ -217,8 +218,11 @@ export async function stopDonePass(
   deps: StopDoneSweepDeps, mem: StopDoneMemory,
   sessions: readonly FleetSession[], records: readonly SessionRecord[], names: readonly string[],
 ): Promise<StopDoneOutcome[]> {
-  if (names.includes(STOP_DONE_DISABLED_MARKER) || names.includes(RECLAIM_PAUSE_MARKER)
-    || names.includes(HIBERNATE_DISABLED_MARKER)) return [];
+  // D-7041: the lane's three kill switches through the one reader. `names` is a listing (never `null`), so no switch
+  // reads `'unmeasurable'` here.
+  const switches = readSwitches(names);
+  if (switches[STOP_DONE_DISABLED_MARKER] === 'set' || switches[RECLAIM_PAUSE_MARKER] === 'set'
+    || switches[HIBERNATE_DISABLED_MARKER] === 'set') return [];
   const serial = deps.serial;
   if (serial === null) return [];
   const byId = new Map(records.map((r) => [r.id, r] as const));
