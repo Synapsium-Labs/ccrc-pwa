@@ -2501,17 +2501,18 @@ describe('sweepStalls: coord-blocked (D-6942)', () => {
   });
 
   it('recovery then a new episode: once the held mail goes through the episode closes, and new held mail pushes again under its own key', async () => {
-    const { coord, w, sent } = await setup();
+    const { h, coord, w, sent } = await setup();
     await sweepThrough(w, sessions, [], tickWith(), FIRE_AT, FIRE_AT + STALL_SWEEP_MS);
     const DONE_AT = FIRE_AT + 2 * STALL_SWEEP_MS;
     at(DONE_AT);
+    seedCoordLive(h, 'idle', DONE_AT);                // the turn ends and the held mail goes through
     coord.db.prepare("UPDATE mail_deliveries SET state = 'acked', deliveredAt = ?, ackedAt = ? WHERE toId = ?").run(DONE_AT, DONE_AT, COORD);
     await sweepThrough(w, sessions, [], tickWith(), DONE_AT, DONE_AT + 2 * STALL_SWEEP_MS);
     const MAIL2 = DONE_AT + 3 * STALL_SWEEP_MS;
     at(MAIL2);
     queue(coord, 'status');
     await sweepThrough(w, sessions, [], tickWith(), MAIL2, MAIL2 + COORD_BLOCKED_HELD_MS + STALL_SWEEP_MS);
-    expect(blockedPushes(sent).map((p) => p.tag).filter((t) => t!.includes('-coord-blocked-1-')))
+    expect(blockedPushes(sent).map((p) => p.tag))
       .toEqual([`stall-${COORD}-coord-blocked-1-${MAIL_AT}`, `stall-${COORD}-coord-blocked-1-${MAIL2}`]);
   });
 

@@ -10191,7 +10191,7 @@ export const STALL_LEVEL_TEXT = {
   },
   alert: {
     label: 'Alert coordinator and you',
-    does: "Adds a report to the worker's coordinator after an unanswered check, then a push to you, and pushes to you about a long usage limit, a dialog left open, a coordinator that has held a run too long, and a coordinator whose turn has stayed open while mail to it waits. Pushes arrive wherever push notifications are switched on in Settings.",
+    does: "Adds a report to the worker's coordinator after an unanswered check, then a push to you, and pushes to you about a long usage limit, a dialog left open, a coordinator that has held a run too long, and mail to a coordinator that has not reached it. Pushes arrive wherever push notifications are switched on in Settings.",
   },
   deliver: {
     label: 'Deliver mail to busy sessions',
