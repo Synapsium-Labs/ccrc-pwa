@@ -9836,7 +9836,8 @@ function inputsByStore(name, inputs, want, record) {
  *  derives one sorted qid per reason-bearing record, and armsSummaryOf must reproduce that optional summary field byte for
  *  byte (W2-5b1's build departure; re-anchor at W2-5b1's merged code). A record's own record_sha256 is not compared: it is
  *  written once, under the record in force when its question settled, and amendments only append (W2-D90). Answers the
- *  records by qid, their files' shas and their stamps. */
+ *  records by qid, their files' shas and their stamps. A record marked correct whose answer state is not `value` is not settled
+ *  either: only a value is ever correct (W2-D63, W2-D64), and decideGate throws on one (CP-27 F1). */
 function nodeAnswersOf({ summary, storeId, recordSha256, entries }) {
   const s = summary.value;
   const at = `arms-summary ${storeId}`;
@@ -9864,7 +9865,7 @@ function nodeAnswersOf({ summary, storeId, recordSha256, entries }) {
       refuse('input-invalid', `${at}: ${rel} is not one of this node's frozen questions`);
     }
     if (!Array.isArray(r.stamps) || (r.run !== null && (!plainObject(r.answer_field) || !ANSWER_STATES.includes(r.answer_field.state)
-      || typeof r.correct !== 'boolean' || !plainObject(r.uptake)))) {
+      || typeof r.correct !== 'boolean' || !plainObject(r.uptake) || (r.correct === true && r.answer_field.state !== 'value')))) {
       refuse('input-invalid', `${at}: ${rel} is not a settled answer record`);
     }
     recs.set(judgePairKey(r.qid, r.arm), r);
@@ -9922,7 +9923,9 @@ function verifyQuizOf(v, storeId, recordSha256) {
 }
 
 /** One node's verify --section ab output (W2-D84, Q15, V1): this record's, listing exactly the record's assignment on this
- *  store, each family once with its arm and an AB_STATES word. Answers the states by familyKey. */
+ *  store, each family once with its arm and an AB_STATES word. An entry that is no object or names no assigned family of this
+ *  store, one under another arm, and one in a state off AB_STATES are refused apart, each by its own detail (CP-27 A10).
+ *  Answers the states by familyKey. */
 function verifyAbOf(v, storeId, recordSha256, assignment) {
   const at = `verify-ab ${storeId}`;
   if (!plainObject(v) || v.kind !== VERIFY_AB_KIND || v.v !== 1 || !Array.isArray(v.families)) refuse('input-invalid', `${at} is not a verify --section ab output`);
@@ -9931,7 +9934,9 @@ function verifyAbOf(v, storeId, recordSha256, assignment) {
   const states = new Map();
   for (const f of v.families) {
     const a = plainObject(f) ? want.find((x) => x.ccrc_id === f.ccrc_id && x.generation === f.generation) : undefined;
-    if (a === undefined || f.arm !== a.arm || !AB_STATES.includes(f.state)) refuse('input-invalid', `${at} lists ${JSON.stringify(f?.ccrc_id ?? null)} off the record's assignment`);
+    if (a === undefined) refuse('input-invalid', `${at} lists ${JSON.stringify(f?.ccrc_id ?? null)} off the record's assignment`);
+    if (f.arm !== a.arm) refuse('input-invalid', `${at} lists ${JSON.stringify(f.ccrc_id)} under arm ${JSON.stringify(f.arm ?? null)}, not the record's ${JSON.stringify(a.arm)}`);
+    if (!AB_STATES.includes(f.state)) refuse('input-invalid', `${at} lists ${JSON.stringify(f.ccrc_id)} in state ${JSON.stringify(f.state ?? null)}, not one of AB_STATES`);
     const key = familyKeyOf(a);
     if (states.has(key)) refuse('input-invalid', `${at} lists ${a.ccrc_id} twice`);
     states.set(key, f.state);

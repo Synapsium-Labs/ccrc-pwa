@@ -23943,7 +23943,7 @@ b2t5Describe('W2-5b2 Task 5 fix round 2: nodeAnswersOf refuses an answer record 
 b2t5Describe('W2-5b2 Task 5 fix round 2: nodeAnswersOf refuses a question that is not settled in its answer records, term by term (W2-D80; review 998 F1)', () => {
   const s1 = B2T5_S1;
   const detail = (w: B2t5R): string => `arms-summary ${s1}: question ${fr2First(w)} is not settled in its answer records (W2-D80)`;
-  b2t5It('CONTROL: the unedited world, and one whose first question is run-failed in both arms, report', async () => {
+  b2t5It('CONTROL: the unedited world, and one whose node 2 question is run-failed (its control arm failed twice), report', async () => {
     b2t5Expect((await b2t5Report(b2t5World().argv())).refusal).toBeNull();
     const failed = b2t5World({ runFailed: (e) => e.store_id === B2T5_S2 });
     const r = await b2t5Report(failed.argv());
@@ -24031,7 +24031,7 @@ b2t5Describe('W2-5b2 Task 5 fix round 2: verifyAbOf refuses a family entry that 
     const w = b2t5World();
     const id = listed(w)[0]!.ccrc_id as string;
     b2t5Edit(w, s1, 'verifyAb', (v) => ({ ...v, families: [{ ...v.families[0], state: 'maybe' }, ...v.families.slice(1)] }));
-    b2t5Expect(await f4Refused(w)).toEqual({ word: 'input-invalid', detail: `verify-ab ${s1} lists ${JSON.stringify(id)} off the record's assignment` });
+    b2t5Expect(await f4Refused(w)).toEqual({ word: 'input-invalid', detail: `verify-ab ${s1} lists ${JSON.stringify(id)} in state "maybe", not one of AB_STATES` });
   });
 });
 
@@ -24485,4 +24485,83 @@ w27Describe.skipIf(process.platform === 'darwin')('W2-7 Task 2: a budget-exhaust
       budget: { in_force: 600_000, spend_budget: 1_000_000, n_node: 3, n_all: 5 }, counts: { questions: 3, answered: 3, not_run: 0 } });
     w27Expect(w5b4Runs(home), 'three questions, two arms, the first run read back and never respawned (W2-D53)').toHaveLength(6);
   }, 120_000);
+});
+
+// ── W2-7 Task 3: report's carried checks (CP-27 F1, A10, A13) ─────────────────────────────────────────────────────────
+
+/** Node 0's second question answered UNKNOWN by the treatment arm (so its record's state is not `value`), every other treatment
+ *  answer right and every control answer UNKNOWN: a world that reports. */
+const w27F1World = () => {
+  let n = 0;
+  return b2t5World({ answer: (e, arm) => (arm === B2T5_T && e.store_id === B2T5_S1 && ++n === 2 ? { text: 'ANSWER: UNKNOWN' } : { text: arm === B2T5_T ? `ANSWER: ${e.fact as string}` : 'ANSWER: UNKNOWN' }) });
+};
+
+w27Describe('W2-7 Task 3: nodeAnswersOf refuses a record marked correct whose answer state is not value, before --out and never INTERNAL (CP-27 F1)', () => {
+  w27It('F1-CONTROL: a world whose node-0 second question the treatment arm answers UNKNOWN reports', async () => {
+    const r = await b2t5Report(w27F1World().argv());
+    w27Expect(r.refusal, r.stderr).toBeNull();
+  });
+
+  w27It('F1-SWAP: two answer records of one arm and node with answer_field.state swapped under an untouched summary refuse input-invalid "is not a settled answer record", naming the record marked correct, before --out', async () => {
+    const w = w27F1World();
+    const [q1, q2] = w.nodes[B2T5_S1].mine.map((e: B2t5R) => e.qid as string) as [string, string];
+    const p = (q: string): string => join(w.nodes[B2T5_S1].root, 'quiz', 'answers', `${q}.${B2T5_T}.json`);
+    const r1 = JSON.parse(readFileSync(p(q1), 'utf8')) as B2t5R;
+    const r2 = JSON.parse(readFileSync(p(q2), 'utf8')) as B2t5R;
+    w27Expect([r1.answer_field.state, r1.correct, r2.answer_field.state, r2.correct], 'CONTROL: the records as the world wrote them').toEqual(['value', true, 'unknown', false]);
+    const s1 = r1.answer_field.state as string;
+    r1.answer_field = { ...r1.answer_field, state: r2.answer_field.state };
+    r2.answer_field = { ...r2.answer_field, state: s1 };
+    writeFileSync(p(q1), `${b2t5Lib.canonicalJson(r1) as string}\n`);
+    writeFileSync(p(q2), `${b2t5Lib.canonicalJson(r2) as string}\n`);
+    w27Expect(await f4Refused(w)).toEqual({ word: 'input-invalid', detail: `arms-summary ${B2T5_S1}: quiz/answers/${q1}.${B2T5_T}.json is not a settled answer record` });
+  });
+});
+
+w27Describe('W2-7 Task 3: verifyAbOf names each defect of a family entry by its own detail (CP-27 A10)', () => {
+  const s1 = B2T5_S1;
+  const fam = (w: B2t5R): B2t5R => w.nodes[s1].verifyAb.value.families[0] as B2t5R;
+  const other = (arm: string): string => (arm === B2T5_T ? B2T5_C : B2T5_T);
+  const edited = (edit: (f: B2t5R) => B2t5R | null): { w: B2t5R; f: B2t5R } => {
+    const w = b2t5World();
+    const f = structuredClone(fam(w)) as B2t5R;
+    b2t5Edit(w, s1, 'verifyAb', (v) => ({ ...v, families: [edit(structuredClone(f) as B2t5R), ...v.families.slice(1)] }));
+    return { w, f };
+  };
+  w27It('A10-CONTROL: the unedited world reports', async () => {
+    w27Expect((await b2t5Report(b2t5World().argv())).refusal).toBeNull();
+  });
+
+  w27It('A10-OBJ: a family entry that is null refuses "lists null off the record\'s assignment"', async () => {
+    const { w } = edited(() => null);
+    w27Expect(await f4Refused(w)).toEqual({ word: 'input-invalid', detail: `verify-ab ${s1} lists null off the record's assignment` });
+  });
+
+  w27It('A10-OFF: a family entry naming a family this store was not assigned refuses "lists \"live-not-assigned\" off the record\'s assignment"', async () => {
+    const { w } = edited((f) => ({ ...f, ccrc_id: 'live-not-assigned' }));
+    w27Expect(await f4Refused(w)).toEqual({ word: 'input-invalid', detail: `verify-ab ${s1} lists "live-not-assigned" off the record's assignment` });
+  });
+
+  w27It('A10-ARM: a family entry under the other arm refuses naming both arms', async () => {
+    const { w, f } = edited((e) => ({ ...e, arm: other(e.arm as string) }));
+    w27Expect(await f4Refused(w)).toEqual({ word: 'input-invalid',
+      detail: `verify-ab ${s1} lists ${JSON.stringify(f.ccrc_id)} under arm ${JSON.stringify(other(f.arm as string))}, not the record's ${JSON.stringify(f.arm)}` });
+  });
+
+  w27It('A10-NOARM: a family entry with no arm refuses "under arm null", naming the record\'s arm', async () => {
+    const { w, f } = edited((e) => { delete e.arm; return e; });
+    w27Expect(await f4Refused(w)).toEqual({ word: 'input-invalid',
+      detail: `verify-ab ${s1} lists ${JSON.stringify(f.ccrc_id)} under arm null, not the record's ${JSON.stringify(f.arm)}` });
+  });
+
+  w27It('A10-STATE: a family entry in a state off AB_STATES refuses "in state \"maybe\", not one of AB_STATES"', async () => {
+    const { w, f } = edited((e) => ({ ...e, state: 'maybe' }));
+    w27Expect(await f4Refused(w)).toEqual({ word: 'input-invalid', detail: `verify-ab ${s1} lists ${JSON.stringify(f.ccrc_id)} in state "maybe", not one of AB_STATES` });
+  });
+
+  w27It('A10-ORDER: an entry under the other arm and in a state off AB_STATES refuses by the arm (it is held first)', async () => {
+    const { w, f } = edited((e) => ({ ...e, arm: other(e.arm as string), state: 'maybe' }));
+    w27Expect(await f4Refused(w)).toEqual({ word: 'input-invalid',
+      detail: `verify-ab ${s1} lists ${JSON.stringify(f.ccrc_id)} under arm ${JSON.stringify(other(f.arm as string))}, not the record's ${JSON.stringify(f.arm)}` });
+  });
 });
