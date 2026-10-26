@@ -2,9 +2,9 @@
 // The cadence chain (launchd and systemd timer cadences, ARCH-69)
 // fills it with its census queries, in C8a, then C8b.
 // Each query returns `CensusSite` rows the way `consolidationCensus.ts`'s own do, and it imports what it needs from
-// `consolidationCensus.ts`, which never re-exports it (D-TBD-c8-0b-header-wording), so no import cycle forms, and
-// every count a W8 PR body quotes comes from a named query of this module. It reads no imported value at top level
-// (only types, and functions called inside a query). Its fixture and real-tree rows live in the sibling
-// `cadence.test.ts`, which the chain's first task creates. No other chain edits this file; a chain's first task that
-// finds it non-empty stops and reports.
+// `consolidationCensus.ts`; it never re-exports this module, so no import cycle forms, and every count a W8 PR body
+// quotes comes from a named query of this module. It reads no imported value at top level (only types, and functions
+// called inside a query). Its fixture and real-tree rows live in the sibling `cadence.test.ts`, which the chain's
+// first task creates. No other chain edits this file; a chain's first task that finds it non-empty stops and
+// reports.
 export {};
