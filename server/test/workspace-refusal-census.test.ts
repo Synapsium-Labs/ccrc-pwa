@@ -319,14 +319,16 @@ describe('WORKSPACE_TRANSITIONS answers the census (ARCH-41, #776)', () => {
     const flags = { force: false, interrupt: false, programmeEnd: false };
     const idle = { ok: true as const, siblings: [] };
     const open = { ok: true as const, siblings: [{ id: 1 } as never] };
-    const port = (o: object) => ({ openRunsForSession: () => idle, openRunsClaimedBy: () => idle, abandonRefusal: () => null, abandon: async () => ({ ok: true }) as never, ...o });
+    const port = (o: { worker?: typeof idle; claimant?: typeof idle; abandonRefusal?: () => never }) => ({
+      bindingsOf: () => ({ worker: () => o.worker ?? idle, claimant: () => o.claimant ?? idle }),
+      abandonRefusal: o.abandonRefusal ?? (() => null), abandon: async () => ({ ok: true }) as never });
     const decided = [
       await decideArchive(null, 's', flags, m({ turn: 'unmeasured' })),
       await decideArchive(null, 's', flags, m({ turn: 'busy' })),
       await decideArchive(null, 's', flags, m({ worktree: 'absent' })),
-      await decideArchive(port({ openRunsForSession: () => open }), 's', flags, m({})),
-      await decideArchive(port({ openRunsClaimedBy: () => open }), 's', flags, m({})),
-      await decideArchive(port({ openRunsClaimedBy: () => open, abandonRefusal: () => ({ ok: false, kind: 'x' }) as never }), 's', { ...flags, programmeEnd: true }, m({})),
+      await decideArchive(port({ worker: open }), 's', flags, m({})),
+      await decideArchive(port({ claimant: open }), 's', flags, m({})),
+      await decideArchive(port({ claimant: open, abandonRefusal: () => ({ ok: false, kind: 'x' }) as never }), 's', { ...flags, programmeEnd: true }, m({})),
     ];
     expect(decided.map((d) => !d.ok && d.reply.body.error)).toEqual(
       ['status-unknown', 'session-busy', 'worktree-gone', 'run-open', 'coordinator-has-open-runs', 'programme-partly-ended']);

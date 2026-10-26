@@ -11,7 +11,7 @@ import { REPO } from '../consolidationCensus.js';
 import { BOUND_BY_READERS, boundByCalls, boundBySites, type BoundBySite } from './bindings.js';
 
 /** The real tree's site count may only shrink: each move onto `bindingsOf` lowers it in the same commit. */
-const BOUND_BY_CEILING = 24;
+const BOUND_BY_CEILING = 22;
 
 /** Where each reader is defined, by its qualified name: a rename moves the reader out of the census, and this row says so. */
 const READER_HOMES: Readonly<Record<string, readonly [string, string]>> = {
