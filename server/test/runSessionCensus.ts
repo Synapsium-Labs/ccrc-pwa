@@ -13,8 +13,7 @@
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import ts from 'typescript-api';
-import { parseSource } from './scan/parse.js';
+import { identifierReferences, parseSource } from './scan/parse.js';
 import { BINDING_WRITER_VERBS } from '../src/coord/runBinding.js';
 
 export const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -289,37 +288,11 @@ const HELPER = 'runNamesSession';
  *  and the ESCAPES: any other reference (a re-export under any name, a copy into a local, a destructure, a value passed
  *  on), each of which would let a call be made under a name the call count cannot see. An import specifier is neither. */
 function runNamesSessionUsesOf(text: string, file: string): { calls: number; escapes: string[] } {
-  const sf = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
-  const aliases = new Set<string>([HELPER]);
-  const visitImports = (n: ts.Node): void => {
-    if (ts.isImportSpecifier(n) && (n.propertyName ?? n.name).text === HELPER) aliases.add(n.name.text);
-    ts.forEachChild(n, visitImports);
+  const refs = identifierReferences(text, file, new Set([HELPER]));
+  return {
+    calls: refs.filter((r) => r.role === 'call').length,
+    escapes: refs.filter((r) => r.role === 'other').map((r) => `${file}:${r.line}: ${r.context.slice(0, 120)}`),
   };
-  visitImports(sf);
-  let calls = 0;
-  const escapes: string[] = [];
-  const isCallee = (id: ts.Node): boolean => {
-    const p = id.parent;
-    if (ts.isCallExpression(p) && p.expression === id) return true;
-    // `ns.runNamesSession(…)`: the property name of an access that is itself the callee.
-    return ts.isPropertyAccessExpression(p) && p.name === id && ts.isCallExpression(p.parent) && p.parent.expression === p;
-  };
-  const visit = (n: ts.Node): void => {
-    if (ts.isIdentifier(n) && aliases.has(n.text)) {
-      const p = n.parent;
-      const inImport = ts.isImportSpecifier(p);
-      if (!inImport) {
-        if (isCallee(n)) calls += 1;
-        else {
-          const { line } = sf.getLineAndCharacterOfPosition(n.getStart(sf));
-          escapes.push(`${file}:${line + 1}: ${p.getText(sf).replace(/\s*\n\s*/g, ' ').slice(0, 120)}`);
-        }
-      }
-    }
-    ts.forEachChild(n, visit);
-  };
-  visit(sf);
-  return { calls, escapes };
 }
 
 /** The calls of `runNamesSession` in one source text, under its own name, a local alias or a namespace (an import is not a call). */

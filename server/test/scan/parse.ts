@@ -298,6 +298,52 @@ const unionLiterals = (t: ts.TypeNode): string[] | null => {
 };
 
 /** Parse TypeScript (or JS/TSX, by `fileName`'s extension) text. Syntax only. */
+/** One reference to a named identifier (`identifierReferences`). `role`: `import` for an import specifier (`imported` is
+ *  the module's name for it, `name` the local one), `call` for the callee of a call (`f(…)`, or the property of
+ *  `ns.f(…)`), `other` for anything else (an export specifier, a copy, a destructure, a value passed on). `context` is
+ *  the parent node's source with line breaks removed, `line` 1-based. */
+export interface IdentifierReference {
+  name: string;
+  role: 'import' | 'call' | 'other';
+  imported: string | null;
+  line: number;
+  context: string;
+}
+
+/** Every identifier of `text` whose text is in `names` (and, transitively, the local alias of any import specifier that
+ *  imports one of them, `import { a as b }` adding `b`), in source order. Property names count (`ns.a`, `{ a: x }`). */
+export function identifierReferences(text: string, fileName: string, names: ReadonlySet<string>): IdentifierReference[] {
+  const sf = ts.createSourceFile(fileName, text, ts.ScriptTarget.Latest, true, scriptKindOf(fileName));
+  const wanted = new Set(names);
+  const collectAliases = (n: ts.Node): void => {
+    if (ts.isImportSpecifier(n) && wanted.has((n.propertyName ?? n.name).text)) wanted.add(n.name.text);
+    ts.forEachChild(n, collectAliases);
+  };
+  collectAliases(sf);
+  const out: IdentifierReference[] = [];
+  const isCallee = (id: ts.Node): boolean => {
+    const p = id.parent;
+    if (ts.isCallExpression(p) && p.expression === id) return true;
+    return ts.isPropertyAccessExpression(p) && p.name === id && ts.isCallExpression(p.parent) && p.parent.expression === p;
+  };
+  const visit = (n: ts.Node): void => {
+    if (ts.isIdentifier(n) && wanted.has(n.text)) {
+      const p = n.parent;
+      const imp = ts.isImportSpecifier(p);
+      out.push({
+        name: n.text,
+        role: imp ? 'import' : isCallee(n) ? 'call' : 'other',
+        imported: imp ? (p.propertyName ?? p.name).text : null,
+        line: sf.getLineAndCharacterOfPosition(n.getStart(sf)).line + 1,
+        context: p.getText(sf).replace(/\s*\n\s*/g, ' '),
+      });
+    }
+    ts.forEachChild(n, visit);
+  };
+  visit(sf);
+  return out;
+}
+
 export function parseSource(text: string, fileName = 'source.ts'): ParsedFile {
   const sf = ts.createSourceFile(fileName, text, ts.ScriptTarget.Latest, true, scriptKindOf(fileName));
   const lineOf = (pos: number): number => sf.getLineAndCharacterOfPosition(pos).line + 1;
