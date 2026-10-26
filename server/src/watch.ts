@@ -8397,7 +8397,7 @@ export class FleetWatcher {
           const s = landingVerdict(ask, facts);
           switch (s.step) {
             case 'runs': {
-              const sib = coord.openRunsForSession(r.id);
+              const sib = coord.bindingsOf(r.id).worker();
               run = sib.ok ? survivorOf(sib.siblings) : null;
               facts.runs = sib.ok ? { ok: true, run } : { ok: false, detail: sib.detail };
               break;
