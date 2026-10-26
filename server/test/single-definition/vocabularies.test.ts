@@ -633,6 +633,40 @@ describe('delegation wave 3: the closed vocabularies are declared once, in share
 });
 
 
+// Delegation broker wave 4, PR1 Task 1.1: the `delegation` frame's closed words. These follow `SESSION_ROLE_MAP`'s idiom
+// (a hand-typed union, a sibling `Record<X, true>` map, a list from `Object.keys` and a guard), so the type line is the one
+// hand-typed copy the idiom allows: the union fingerprint must find it in shared/api.ts exactly once, and nowhere else.
+describe('delegation wave 4: the projection\'s closed words are declared once, in shared/api.ts', () => {
+  const VOCABS = [
+    ['DELEGATION_LIVENESS_MAP', 'DelegationLiveness', 'DELEGATION_LIVENESS', ['live', 'stale', 'ended', 'unmeasured']],
+    ['DELEGATION_ROW_GROUP_MAP', 'DelegationRowGroup', 'DELEGATION_ROW_GROUPS', ['parent', 'offline-coordinator']],
+    ['DELEGATION_ACTIVITY_PLACEMENT_MAP', 'DelegationActivityPlacement', 'DELEGATION_ACTIVITY_PLACEMENTS', ['row', 'chip']],
+    ['DELEGATION_CREATOR_KIND_MAP', 'DelegationCreatorKind', 'DELEGATION_CREATOR_KINDS', ['bash-call', 'unmeasured']],
+  ] as const;
+  const declaredIn = (decl: RegExp): string[] => ALL.filter((f) => decl.test(readFileSync(f, 'utf8'))).map(rel);
+  const UNION_RUN = /'[^'\n]+'(?:\s*\|\s*'[^'\n]+')+/g;
+  const unionCount = (text: string, members: readonly string[]): number =>
+    (text.match(UNION_RUN) ?? []).map((run) => new Set([...run.matchAll(/'([^'\n]+)'/g)].map((m) => m[1]!)))
+      .filter((set) => set.size === members.length && members.every((m) => set.has(m))).length;
+
+  for (const [map, type, list, members] of VOCABS) {
+    it(`W4-V1: ${map} and ${type} are each declared exactly once, in shared/api.ts`, () => {
+      expect(declaredIn(new RegExp(`^\\s*(?:export\\s+)?const\\s+${map}\\b`, 'm')), map).toEqual(['shared/api.ts']);
+      expect(declaredIn(new RegExp(`^\\s*(?:export\\s+)?type\\s+${type}\\b\\s*=`, 'm')), type).toEqual(['shared/api.ts']);
+    });
+
+    it(`W4-V2: ${list} is exported with the plan's members in the plan's order`, async () => {
+      const api = (await import('../../../shared/api.js')) as unknown as Record<string, unknown>;
+      expect(api[list], `${list} is exported`).toEqual(members);
+    });
+
+    it(`W4-V3: a union equal to ${type}'s members is held only by shared/api.ts, exactly once`, () => {
+      const holders = ALL.map((f) => [rel(f), unionCount(readFileSync(f, 'utf8'), members)] as const).filter(([, n]) => n > 0);
+      expect(holders).toEqual([['shared/api.ts', 1]]);
+    });
+  }
+});
+
 // Delegation broker wave 3, Task 4: `ReadFailure` stays declared ONCE, in
 // `shared/agent-protocol.ts` (D-1438), and the two consumer shapes this task
 // adds to the seam carry it by NAME. A `{ok:false; reason: 'absent' |
