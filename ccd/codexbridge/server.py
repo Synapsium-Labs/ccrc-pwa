@@ -23,7 +23,8 @@ cut it): the helper's answer, when it comes, is dropped and its connection close
 posted upstream again (`_one_response` checks before each post, the one after a refresh included). Then the reasoning
 store, the stats file and, when the status file read an upstream state, `ok`. An upstream failure the bridge meets
 itself (the idle bound, a timeout or transport failure of the post) is recorded in the status file with a bounded code
-too, like every classified one.
+too, like every classified one. While the lane directory holds the operator's `record-streams` marker, each 2xx answer
+is also written raw into the lane's recordings directory (`record.start`, Task 18), at most `record.RECORD_MAX` files.
 
 THE CATALOGUE. A model outside it is the client's: 404 `not_found_error`, counted `modelSubstitution:<model>`. A
 catalogue that is absent, unreadable, nested too deep to decode or not in its shape (a row that is not an object with
@@ -72,7 +73,7 @@ import time
 import uuid
 from typing import Callable, Dict, List, Mapping, NamedTuple, Optional, Tuple
 
-from . import backend, count, errors, inbound, reducer, sse, stats, store, stream
+from . import backend, count, errors, inbound, record, reducer, sse, stats, store, stream
 
 PING_S = 15.0
 HOLD_S = 15.0
@@ -123,6 +124,16 @@ class BridgeConfig(NamedTuple):
     upstream_base: str
     stats_path: str
     store_path: str
+    recordings_path: str = ""  # the recordings directory (Task 18); empty records nothing
+
+
+class _BridgeFiles(NamedTuple):
+    """The keys of `lane.json`'s `bridgeFiles` the bridge reads; each value is a file name `laneManifest` spells
+    (`deploy/models-op.mjs`). The keys are field names, never quoted here, because the third key is also its own file
+    name, and the file names have one quoted spelling (single-definition's Task 10 row)."""
+    stats: str
+    store: str
+    recordings: str
 
 
 class Hooks(NamedTuple):
@@ -146,10 +157,54 @@ def _required(environ: Mapping[str, str], name: str) -> str:
     return value
 
 
+class ManifestError(Exception):
+    """A `lane.json` that cannot be used (`read_manifest`). `kind` is `unknown` (missing, not JSON, or naming
+    another lane) or `malformed`; `field` names what is out of shape; `reason` is the start's sentence. None holds a
+    value."""
+
+    def __init__(self, kind: str, field: str, reason: str) -> None:
+        super().__init__(reason)
+        self.kind = kind
+        self.field = field
+        self.reason = reason
+
+
+class LaneManifest(NamedTuple):
+    files: _BridgeFiles  # the file names, each checked by FILE_NAME_RE (join them onto the lane directory)
+    auth_dir: str
+    config_dir: str
+
+
 def _home_relative(home: str, value: object, what: str) -> str:
     if not isinstance(value, str) or not value or value.startswith("/") or ".." in value.split("/"):
-        _refuse("lane.json's " + what + " is not a HOME-relative path")
+        raise ManifestError("malformed", what, "lane.json's " + what + " is not a HOME-relative path")
     return os.path.join(home, value)
+
+
+def read_manifest(home: str, lane_dir: str, lane: str) -> LaneManifest:
+    """The lane's `lane.json` in `lane_dir`, read once: its id must be `lane`, every `bridgeFiles` key a file name,
+    `authDir` and `configDir` HOME-relative. Raises ManifestError. The one reader of the file in this package: the
+    start (`config_from_env`) exits on the error, and the live probe (`liveprobe.lane_files`) refuses on it."""
+    try:
+        with open(os.path.join(lane_dir, LANE_FILE), "rb") as f:
+            manifest = json.loads(f.read().decode("utf-8"))
+    except (OSError, ValueError, RecursionError):  # nesting past the decoder's recursion limit is not JSON either
+        raise ManifestError("unknown", LANE_FILE, "lane.json in CCGPT_LANE_DIR is missing or not JSON")
+    if not isinstance(manifest, dict) or manifest.get("id") != lane:
+        raise ManifestError("unknown", "id", "lane.json in CCGPT_LANE_DIR names another lane")
+    files = manifest.get("bridgeFiles")
+    if not isinstance(files, dict):
+        raise ManifestError("malformed", "bridgeFiles",
+                            "lane.json carries no bridgeFiles; run 'ccrc update', which re-renders it")
+    names = {}
+    for key in _BridgeFiles._fields:
+        value = files.get(key)
+        if not isinstance(value, str) or not FILE_NAME_RE.fullmatch(value):
+            raise ManifestError("malformed", "bridgeFiles." + key, "lane.json's bridgeFiles." + key
+                                + " is not a file name")
+        names[key] = value
+    return LaneManifest(files=_BridgeFiles(**names), auth_dir=_home_relative(home, manifest.get("authDir"), "authDir"),
+                        config_dir=_home_relative(home, manifest.get("configDir"), "configDir"))
 
 
 def config_from_env(environ: Mapping[str, str]) -> BridgeConfig:
@@ -173,23 +228,10 @@ def config_from_env(environ: Mapping[str, str]) -> BridgeConfig:
     except ValueError:
         _refuse(backend.UPSTREAM_BASE_ENV + " must be an http:// URL on a loopback host; unset it for the default")
     try:
-        with open(os.path.join(lane_dir, LANE_FILE), "rb") as f:
-            manifest = json.loads(f.read().decode("utf-8"))
-    except (OSError, ValueError, RecursionError):  # nesting past the decoder's recursion limit is not JSON either
-        _refuse("lane.json in CCGPT_LANE_DIR is missing or not JSON")
-    if not isinstance(manifest, dict) or manifest.get("id") != lane:
-        _refuse("lane.json in CCGPT_LANE_DIR names another lane")
-    files = manifest.get("bridgeFiles")
-    if not isinstance(files, dict):
-        _refuse("lane.json carries no bridgeFiles; run 'ccrc update', which re-renders it")
-    names = {}
-    for key in ("stats", "store"):
-        value = files.get(key)
-        if not isinstance(value, str) or not FILE_NAME_RE.fullmatch(value):
-            _refuse("lane.json's bridgeFiles." + key + " is not a file name")
-        names[key] = value
-    auth_dir = _home_relative(home, manifest.get("authDir"), "authDir")
-    config_dir = _home_relative(home, manifest.get("configDir"), "configDir")
+        manifest = read_manifest(home, lane_dir, lane)
+    except ManifestError as e:
+        _refuse(e.reason)
+    names = manifest.files
     try:
         with open(os.path.join(lane_dir, RUNTIME_ENV), "rb") as f:
             text = f.read(4096).decode("ascii")
@@ -198,10 +240,11 @@ def config_from_env(environ: Mapping[str, str]) -> BridgeConfig:
     m = KEY_RE.fullmatch(text.rstrip("\n"))
     if m is None:
         _refuse("runtime.env does not hold one well-formed LITELLM_MASTER_KEY line (its bytes are not printed)")
-    return BridgeConfig(lane=lane, port=int(raw_port), lane_dir=lane_dir, auth_dir=auth_dir, config_dir=config_dir,
-                        key=m.group(1), catalogue=catalogue, auth_lib=auth_lib, ccrc_version=version,
-                        upstream_base=base, stats_path=os.path.join(lane_dir, names["stats"]),
-                        store_path=os.path.join(lane_dir, names["store"]))
+    return BridgeConfig(lane=lane, port=int(raw_port), lane_dir=lane_dir, auth_dir=manifest.auth_dir,
+                        config_dir=manifest.config_dir, key=m.group(1), catalogue=catalogue, auth_lib=auth_lib,
+                        ccrc_version=version, upstream_base=base, stats_path=os.path.join(lane_dir, names.stats),
+                        store_path=os.path.join(lane_dir, names.store),
+                        recordings_path=os.path.join(lane_dir, names.recordings))
 
 
 # ── the credential library ───────────────────────────────────────────────────────────────────────────────────────
@@ -731,7 +774,7 @@ class _Request:
             st.stats.usage_headers(up.headers)
             rid = errors.request_id_of(up.headers)  # the table's own reader of x-request-id / request-id, bounded
             if 200 <= up.status < 300:
-                return self._reduce(turn, up, out, rid, reading)
+                return self._reduce(turn, self._recorded(up), out, rid, reading)
             e = backend.error_of(up, now=time.time())
             if up.status == 401 and not self.retried_401:
                 self.retried_401 = True
@@ -745,6 +788,17 @@ class _Request:
                 continue
             self.record(e, rid)
             return e
+
+    def _recorded(self, up: backend.Upstream) -> backend.Upstream:
+        """`up`, teed into a new recording while the lane's `record-streams` marker exists (Task 18). A recording
+        that cannot be started is dropped, logged by its class only, and the answer is read as it is."""
+        cfg = self.state.cfg
+        try:
+            rec = record.start(cfg.lane_dir, cfg.recordings_path, up.status, up.headers)
+        except Exception as e:
+            log_exception(e)
+            return up
+        return up if rec is None else record.tee(up, rec)  # type: ignore[return-value]
 
     def _reduce(self, turn: inbound.NeutralRequest, up: backend.Upstream, out: stream.AnthropicStream,
                 rid: Optional[str], reading: object) -> object:

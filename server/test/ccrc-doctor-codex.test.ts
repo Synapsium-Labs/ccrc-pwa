@@ -17,6 +17,7 @@ import { createStore } from '../../ccd/history/store.mjs';
 import { HEALTH_COUNTERS, HEALTH_META, HEALTH_WORDS, RECOVERY_STALL_TICKS, SCHEMA_VERSION, deriveHealth, historyPaths, formatOpMarker, procStartOf, bootIdOf } from '../../ccd/history/lib.mjs';
 import { PRELOADS, preloadOptions } from './historyHelpers.js';
 import { plantDirectLane, plantRunningBridge, writeBridgeRecord } from './ccrc-doctorFixture.js';
+import { runBridgeDriver } from './codexBridgeFixture.js';
 import { SW_DENYLIST_DEFAULT, swJs } from './swFixtures.js';
 import { SERVER_CAPS_LEASE_S } from '../../shared/api.js';
 import { installDoctorHooks, here, REPO, CCRC_SRC, CHECKS_SRC, BASH, realPath, Result, installCcrc, writeChecks, stubBin, stub, unstub, linkReal, stubNode, RosterEntry, UPSTREAM, writeRoster, writeRawRoster, entry, binDir, shq, writeCcrcEnv, stubLaunchctl, unitDirOf, unitFileOf, writeUnitFile, removeUnitFile, containedPath, doctorEnv, OOM_DROPIN, plantOomPolicy, DOCTOR_DEADLINE_BIN, runDoctorBounded, runDoctor, DH_INSTALLER, installerEvents, installerHook, plantHookRegistration, plantSpoolDir, BT_PY_ARM, healthy, PY, describeCodex, itCodex, writeLaneModels, renderLane, startedJson, lanePorts, editRosterRow, healthyCodexBox, broken, tableNames, lineFor, anyVerdictFor, HEALTHY_SKIPS, noRunnerBugLine, plantSession, checksDecl, FixCodexCase, AGED, laneFileText, SHARED_PORT_REFUSAL, FIX_TRIPWIRES, plantHistoryShim, historyBox } from './ccrc-doctorFixture.js';
@@ -5453,6 +5454,384 @@ describeCodex('ccrc doctor: codex, a direct lane\'s rows (codex bridge Stage 2, 
     expect(p.stdout).toContain('install: codex tiers: codex-a bridge: restarted — it was running code this install replaced');
     expect(p.stdout).toContain('install: codex tiers: codex-c shim: restarted — it was running code this install replaced');
     expect(p.stdout).toContain('install: codex tiers: 3 codex lane(s) — 2 restarted, 0 left as they were, 0 not restarted');
+  });
+});
+
+
+// ── codex bridge Stage 2, Task 17: D3, the doctor warns on an unexplained name ──────────────────────────────────────
+// A `direct` lane's bridge lists every name `known.py` does not explain in its stats file's `unexplained` (Task 5);
+// the doctor reads that list, and only that list, from the file `lane.json`'s `bridgeFiles.stats` names, and prints
+// each name bounded by stats.py's NAME_RE (else `unrecognised`), never a value. The stats files here are written by
+// the real `Stats` through the bridge driver, except the one case that must hold what no `Stats` would write.
+describeCodex('ccrc doctor: codex, the drift row on a direct lane (codex bridge Stage 2, Task 17)', () => {
+  const laneDir = (home: string, id: string): string => join(home, '.ccrc', 'codex', id);
+  /** `lane.json`'s `bridgeFiles.stats`, read back: the name is `laneManifest`'s, never spelled here. */
+  const statsFile = (home: string, id: string): string =>
+    join(laneDir(home, id), (JSON.parse(readFileSync(join(laneDir(home, id), 'lane.json'), 'utf8')) as
+      { bridgeFiles: Record<string, string> }).bridgeFiles['stats']);
+  const DRIFT = (id: string, n: number, list: string): string =>
+    `WARN codex: ${id}: the bridge met ${n} name(s) it does not know: ${list} (names only, never content). Each is a protocol change to read; it is explained by adding it to ccd/codexbridge/known.py in a reviewed change.`;
+  const DRIFT_FIX = '  remedy: read what each name is in the upstream Codex source (openai/codex), then explain it by adding it to ccd/codexbridge/known.py in a reviewed change; the rollout of that change restarts the bridge, whose start drops an explained name from the list, and this line clears — ccrc never explains a name for you';
+  /** Lane `id`'s stats file as its bridge writes it: the real `Stats`, each name counted through `name()`, then a
+   *  forced flush (tmp, fchmod 0600, fsync, rename). */
+  const writeStats = async (home: string, id: string, names: ReadonlyArray<readonly [string, string]>): Promise<string> => {
+    const file = statsFile(home, id);
+    const ops = [
+      { op: 'stats-open', path: file, lane: id },
+      ...names.map(([family, name]) => ({ op: 'stats-call', method: 'name', args: [family, name] })),
+      { op: 'stats-call', method: 'flush', kwargs: { force: true } },
+    ];
+    const r = await runBridgeDriver(home, { ops });   // its 10 s default, inside vitest's 20 s per-test bound
+    expect(r.timedOut, r.stderr).toBe(false);
+    const lines = driverLines(r.stdout);
+    expect(lines.map((l) => l['op']), `${r.stdout}\n${r.stderr}`).toEqual(ops.map((o) => o.op));
+    for (const l of lines) expect(l['raised'], JSON.stringify(l)).toBeUndefined();
+    expect(lines[lines.length - 1]['result']).toBe(true);
+    return file;
+  };
+  // Fix round 2, R6: a recording exists only while the operator's `record-streams` marker is in the lane directory.
+  // The whole-wave fix round, Z2: each marker clause says, by family, what can show the name behind it, and that the
+  // bridge's restart clears the marker (Z1). `classes` holds the kinds of family the marker was listed in: `s` an
+  // event, item, error-code or incomplete-reason family (read from a 2xx stream), `h` responseHeader, `r` a
+  // request-side family or any other.
+  const MARKER_WHERE = (dir: string, classes: string, what: string, them: string): string =>
+    (classes.includes('s') ? `; for an event, item, error-code or incomplete-reason name, put the operator's record-streams marker in ${dir} (the bridge records the lane's stream only while it is there) and read ${what} in the recording when the bridge meets ${them} again` : '')
+    + (classes.includes('h') ? `; for a responseHeader name, put the operator's record-streams marker in ${dir} and read ${what} in the recording when the bridge meets ${them} again on a 2xx answer: only a 2xx answer's head is recorded` : '')
+    + (classes.includes('r') ? `; for a requestField, unsupportedField, betaValue, contextEdit, modelSubstitution or other name, no recording holds ${what}: those families' names come from Claude Code's request, and the bridge records only the upstream's answers, so read ${what} from the client's request, for example from Claude Code's release notes or a reviewed diagnostic` : '');
+  const UNREC_CLAUSE = (dir: string, classes: string): string => `; unrecognised is not a name: it stands for one outside the bound the bridge writes every name under (NAME_RE in ccd/codexbridge/stats.py)${MARKER_WHERE(dir, classes, 'that name', 'it')}; the bridge's restart clears unrecognised from the list, and it comes back when the bridge meets such a name again; never add unrecognised to known.py`;
+  const OVER_CLAUSE = (dir: string, classes: string): string => `; overflow is not a name: it stands for more distinct names in that family than the bridge counts (NAMES_MAX in ccd/codexbridge/stats.py)${MARKER_WHERE(dir, classes, 'the names past it', 'them')}; the bridge's restart clears overflow from the list but keeps that family's counted names, so the next name in it that the bridge has not counted is overflow again, which is new drift; never add overflow to known.py`;
+  // Fix round 2, M1: a stats file the row cannot read as the bridge's is the drift row's own unmeasured WARN, so it
+  // is printed whatever else the codex check finds (a lane word reached output only on the PASS line).
+  const UNMEASURED = (id: string, file: string, why: string): string =>
+    `WARN codex: ${id}: whether the bridge met a name it does not know cannot be told: its stats file ${file} cannot be read as the bridge's (${why}) — unmeasured, never read as no unexplained name`;
+  const MOVE_FIX = (id: string, file: string): string =>
+    `  remedy: stop the lane (ccrc codex stop ${id}), move ${file} aside by hand, then start it again: the bridge starts a new stats file, which this line reads, and lists again any name it meets — ccrc never removes it for you`;
+  const NOT_V1 = 'it is not one version-1 JSON document of this lane with an unexplained object';
+  /** The line `UNMEASURED` names, exactly once, with its remedy next. */
+  const expectUnmeasured = (stdout: string, id: string, file: string, why: string, fix: string): void => {
+    const re = new RegExp(`^${reEsc(UNMEASURED(id, file, why))}$`, 'm');
+    expect(stdout, stdout).toMatch(re);
+    expect(remedyAfter(stdout, re)).toBe(fix);
+    expect(stdout.split('\n').filter((l) => l.startsWith(`WARN codex: ${id}: whether the bridge met`))).toHaveLength(1);
+  };
+  /** A hand-planted stats file, owner-only, as `_dr_cx_bridge_files` passes it. */
+  const plantStats = (file: string, body: string | Buffer): void => {
+    writeFileSync(file, body, { mode: 0o600 });
+    chmodSync(file, 0o600);
+  };
+  /** stats.py's NAMES_MAX and known.KNOWN's families, in its order, read from the shipped sources (the pin below and
+   *  the bound's edge case both build on these, never on the doctor's own copies). */
+  const bridgeBounds = (): { namesMax: number; families: string[] } => {
+    const py = [...readFileSync(join(REPO, 'ccd', 'codexbridge', 'stats.py'), 'utf8').matchAll(/^NAMES_MAX = (\d+)\s+#/gm)];
+    expect(py).toHaveLength(1);
+    const block = /^KNOWN = \{\n([\s\S]*?)^\}/m.exec(readFileSync(join(REPO, 'ccd', 'codexbridge', 'known.py'), 'utf8'));
+    expect(block, 'known.py holds KNOWN = { ... } in the shape this reader takes').not.toBeNull();
+    const families = [...(block as RegExpExecArray)[1].matchAll(/^ {4}"([A-Za-z]+)": /gm)].map((m) => m[1]);
+    return { namesMax: Number(py[0][1]), families };
+  };
+  const KNOWN_EVENT = 'response.metadata';   // in known.KNOWN's eventType family (codex-bridge-count-stats.test.ts)
+  const NEW_EVENT = 'response.fx_new_event';
+
+  it('a direct lane with an unexplained event type warns, naming it', async () => {
+    const home = await healthyCodexBox('ccrc-doctor-codex-drift-warn-', ['codex-a']);
+    plantDirectLane(home, 'codex-a');
+    const file = await writeStats(home, 'codex-a', [['eventType', KNOWN_EVENT], ['eventType', NEW_EVENT], ['eventType', NEW_EVENT]]);
+    expect((JSON.parse(readFileSync(file, 'utf8')) as { unexplained: unknown }).unexplained).toEqual({ eventType: [NEW_EVENT] });
+    const r = runDoctor(home);
+    const re = new RegExp(`^${reEsc(DRIFT('codex-a', 1, `eventType:${NEW_EVENT}`))}$`, 'm');
+    expect(r.stdout, r.stdout).toMatch(re);
+    expect(remedyAfter(r.stdout, re)).toBe(DRIFT_FIX);
+    expect(r.stdout.split('\n').filter((l) => /the bridge met/.test(l))).toHaveLength(1);
+    expect(r.stdout).not.toContain(KNOWN_EVENT);
+    noRunnerBugLine(r.stdout, 'codex');
+  });
+
+  // Fix round 2, R2: lane b is direct with no stats file at all (no bridge has served yet), the absent arm; lane a's
+  // readable file lists nothing, the empty arm. Neither is unmeasured, so the codex line is PASS for both.
+  it('a known name never warns', async () => {
+    const home = await healthyCodexBox('ccrc-doctor-codex-drift-known-', ['codex-a', 'codex-b']);
+    for (const id of ['codex-a', 'codex-b']) plantDirectLane(home, id);
+    const file = await writeStats(home, 'codex-a', [['eventType', KNOWN_EVENT], ['eventType', KNOWN_EVENT]]);
+    const doc = JSON.parse(readFileSync(file, 'utf8')) as { names: Record<string, unknown>; unexplained: unknown };
+    expect(doc.names['eventType']).toEqual({ [KNOWN_EVENT]: 2 });
+    expect(doc.unexplained).toEqual({});
+    expect(existsSync(statsFile(home, 'codex-b'))).toBe(false);
+    const r = runDoctor(home);
+    expect(r.stdout).not.toMatch(/the bridge met/);
+    expect(r.stdout).not.toMatch(/cannot be read as the bridge's/);
+    for (const id of ['codex-a', 'codex-b']) {
+      expect(lineFor(r.stdout, 'codex') ?? '', r.stdout).toMatch(new RegExp(`^PASS codex: .*${reEsc(id)} \\(ports \\d+\\/\\d+, direct mode, `));
+    }
+    noRunnerBugLine(r.stdout, 'codex');
+  });
+
+  // A lane switched back to litellm keeps its bridge files (Task 13), and with them the unexplained list its bridge
+  // left: no bridge runs there, so the list is no drift of that lane's.
+  it('a litellm lane has no drift row', async () => {
+    const home = await healthyCodexBox('ccrc-doctor-codex-drift-litellm-', ['codex-a', 'codex-b']);
+    plantDirectLane(home, 'codex-b');
+    for (const id of ['codex-a', 'codex-b']) await writeStats(home, id, [['eventType', NEW_EVENT]]);
+    const r = runDoctor(home);
+    expect(r.stdout, r.stdout).toMatch(new RegExp(`^${reEsc(DRIFT('codex-b', 1, `eventType:${NEW_EVENT}`))}$`, 'm'));
+    expect(r.stdout).not.toMatch(/codex-a: the bridge met/);
+    noRunnerBugLine(r.stdout, 'codex');
+  });
+
+  // No `Stats` writes a name outside NAME_RE, so this file is planted by hand: each name or family outside it prints
+  // `unrecognised`, once, and no byte of any of them reaches the output.
+  it('the WARN line holds names only', async () => {
+    const home = await healthyCodexBox('ccrc-doctor-codex-drift-bounded-', ['codex-a']);
+    plantDirectLane(home, 'codex-a');
+    const file = statsFile(home, 'codex-a');
+    const sentinels = [
+      'fx-sentinel value with spaces',
+      `fx-sentinel-${'x'.repeat(64)}`,
+      'fx-sentinel\nWARN codex: forged line',
+      'fx-s\u00ebntinel',   // U+00EB, outside ASCII
+      'fx-sentinel\u0000nul',
+    ];
+    writeFileSync(file, `${JSON.stringify({
+      version: 1, lane: 'codex-a',
+      unexplained: { eventType: ['response.fx_ok', ...sentinels, 42], 'fx-sentinel family': ['response.fx_two'] },
+    })}\n`, { mode: 0o600 });
+    chmodSync(file, 0o600);
+    const r = runDoctor(home);
+    const list = 'eventType:response.fx_ok, eventType:unrecognised, unrecognised:response.fx_two';
+    const re = new RegExp(`^${reEsc(DRIFT('codex-a', 3, list))}$`, 'm');
+    expect(r.stdout, r.stdout).toMatch(re);
+    expect(remedyAfter(r.stdout, re)).toBe(`${DRIFT_FIX}${UNREC_CLAUSE(laneDir(home, 'codex-a'), 'sr')}`);
+    expect(r.stdout).not.toMatch(/sentinel|s\u00ebntinel|forged/);
+    noRunnerBugLine(r.stdout, 'codex');
+  });
+
+  // Fix round 1, M2: the doctor's own `local LC_ALL=C` is what keeps NAME_RE's ranges ASCII. doctorEnv sets LC_ALL=C
+  // for every other case, so this one runs with LC_ALL unset and LANG a UTF-8 locale this box has, under which bash's
+  // `[A-Za-z]` accepts a letter outside ASCII (measured per sentinel below; skipped where no such locale exists).
+  const utf8 = ((): string | null => {
+    const have = (spawnSync('locale', ['-a'], { encoding: 'utf8' }).stdout ?? '').split('\n').map((l) => l.trim());
+    return ['en_US.UTF-8', 'en_US.utf8', 'en_GB.UTF-8', 'en_GB.utf8', 'C.UTF-8', 'C.utf8'].find((l) => have.includes(l)) ?? null;
+  })();
+  // Fix round 2: spelled as escapes, so no editor or normaliser can fold either to ASCII unseen. U+212A KELVIN SIGN is
+  // the one letter bash's `[A-Za-z]` accepts even under C.utf8 (measured); U+00EB only under a language locale.
+  const LEAKY = utf8 === null ? [] : ['fx-s\u00ebntinel', 'fx-\u212aelvin'].filter((s) => spawnSync(BASH,
+    ['-c', 're="$2"; [[ "$1" =~ $re ]]', 'probe', s, '^[A-Za-z0-9_.:/-]{1,64}$'],
+    { env: { PATH: process.env['PATH'] ?? '', LANG: utf8 } }).status === 0);
+  it.skipIf(LEAKY.length === 0)('the bound holds under a UTF-8 locale: a non-ASCII letter prints unrecognised', async () => {
+    const home = await healthyCodexBox('ccrc-doctor-codex-drift-locale-', ['codex-a']);
+    plantDirectLane(home, 'codex-a');
+    plantStats(statsFile(home, 'codex-a'), `${JSON.stringify({ version: 1, lane: 'codex-a', unexplained: { eventType: ['response.fx_ok', ...LEAKY] } })}\n`);
+    const r = runDoctor(home, ['doctor'], { LC_ALL: undefined, LANG: utf8 as string });
+    const re = new RegExp(`^${reEsc(DRIFT('codex-a', 2, 'eventType:response.fx_ok, eventType:unrecognised'))}$`, 'm');
+    expect(r.stdout, r.stdout).toMatch(re);
+    expect(remedyAfter(r.stdout, re)).toBe(`${DRIFT_FIX}${UNREC_CLAUSE(laneDir(home, 'codex-a'), 's')}`);
+    expect(r.stdout).not.toMatch(/fx-s.ntinel|elvin/);
+  });
+
+  // Fix round 1, T17-CQ1: only a regular file is opened. A FIFO at the stats path would block jq for good, and a
+  // symlink would report names from whatever file it points at; each is `_dr_cx_bridge_files`' FAIL, and no drift row.
+  it('a stats path that is a FIFO or a symlink is never read: its FAIL, and no drift row', async () => {
+    const home = await healthyCodexBox('ccrc-doctor-codex-drift-kind-', ['codex-a', 'codex-b']);
+    for (const id of ['codex-a', 'codex-b']) plantDirectLane(home, id);
+    const fifo = statsFile(home, 'codex-a');
+    expect(spawnSync('mkfifo', [fifo]).status).toBe(0);
+    const link = statsFile(home, 'codex-b');
+    const elsewhere = join(home, 'elsewhere.stats.json');
+    plantStats(elsewhere, `${JSON.stringify({ version: 1, lane: 'codex-b', unexplained: { eventType: [NEW_EVENT] } })}\n`);
+    symlinkSync(elsewhere, link);
+    const r = runDoctorBounded(home, 30_000);
+    for (const [id, f] of [['codex-a', fifo], ['codex-b', link]]) {
+      expect(r.stdout, r.stdout).toMatch(new RegExp(`^FAIL codex: ${id}'s bridge stats file ${reEsc(f)} is not a regular file \\(`, 'm'));
+    }
+    expect(r.stdout).not.toMatch(/the bridge met/);
+    noRunnerBugLine(r.stdout, 'codex');
+  }, 45_000);   // above runDoctorBounded's 30 s deadline, so that deadline is what reds
+
+  // Fix round 1, M1: a regular stats file this row cannot read as the bridge's is never "no unexplained name". Each
+  // file below holds an unexplained name, so a reader that took it would print a drift row.
+  it('a stats file that is not JSON, or has no unexplained object, is unmeasured, never no drift', async () => {
+    const home = await healthyCodexBox('ccrc-doctor-codex-drift-unread-', ['codex-a', 'codex-b']);
+    for (const id of ['codex-a', 'codex-b']) plantDirectLane(home, id);
+    plantStats(statsFile(home, 'codex-a'), `{"version": 1, "lane": "codex-a", "unexplained": {"eventType": ["${NEW_EVENT}"]}\n`);
+    plantStats(statsFile(home, 'codex-b'), `${JSON.stringify({ version: 1, lane: 'codex-b', names: { eventType: { [NEW_EVENT]: 1 } } })}\n`);
+    const r = runDoctor(home);
+    expect(r.stdout, r.stdout).not.toMatch(/the bridge met \d/);
+    for (const id of ['codex-a', 'codex-b']) expectUnmeasured(r.stdout, id, statsFile(home, id), NOT_V1, MOVE_FIX(id, statsFile(home, id)));
+    noRunnerBugLine(r.stdout, 'codex');
+  });
+
+  // Fix round 2, M1 and R1: the unmeasured state survives another finding. Lane a's file is unparseable while lane b
+  // has a drift WARN of its own, so the codex line is not PASS, and lane a is still said.
+  it('a stats file the row cannot read is said beside another lane\'s WARN', async () => {
+    const home = await healthyCodexBox('ccrc-doctor-codex-drift-unread-beside-', ['codex-a', 'codex-b']);
+    for (const id of ['codex-a', 'codex-b']) plantDirectLane(home, id);
+    plantStats(statsFile(home, 'codex-a'), `{"version": 1, "lane": "codex-a", "unexplained": {"eventType": ["${NEW_EVENT}"]}\n`);
+    await writeStats(home, 'codex-b', [['eventType', NEW_EVENT]]);
+    const r = runDoctor(home);
+    expect(r.stdout, r.stdout).toMatch(new RegExp(`^${reEsc(DRIFT('codex-b', 1, `eventType:${NEW_EVENT}`))}$`, 'm'));
+    expect(lineFor(r.stdout, 'codex') ?? '', r.stdout).not.toMatch(/^PASS /);
+    expectUnmeasured(r.stdout, 'codex-a', statsFile(home, 'codex-a'), NOT_V1, MOVE_FIX('codex-a', statsFile(home, 'codex-a')));
+    expect(r.stdout).not.toMatch(/codex-a: the bridge met \d/);
+    noRunnerBugLine(r.stdout, 'codex');
+  });
+
+  // Fix round 1, T17-CQ2: the bridge carries a file only when its version is 1 AND its lane is this lane, and resets
+  // any other at its next start (stats.py `_load`); the doctor reads the same files as the bridge's.
+  it('a stats file of another version or another lane gives no drift row, and is unmeasured', async () => {
+    const home = await healthyCodexBox('ccrc-doctor-codex-drift-foreign-', ['codex-a', 'codex-b']);
+    for (const id of ['codex-a', 'codex-b']) plantDirectLane(home, id);
+    plantStats(statsFile(home, 'codex-a'), `${JSON.stringify({ version: 2, lane: 'codex-a', unexplained: { eventType: [NEW_EVENT] } })}\n`);
+    plantStats(statsFile(home, 'codex-b'), `${JSON.stringify({ version: 1, lane: 'codex-a', unexplained: { eventType: [NEW_EVENT] } })}\n`);
+    const r = runDoctor(home);
+    expect(r.stdout, r.stdout).not.toMatch(/the bridge met \d/);
+    for (const id of ['codex-a', 'codex-b']) expectUnmeasured(r.stdout, id, statsFile(home, id), NOT_V1, MOVE_FIX(id, statsFile(home, id)));
+    noRunnerBugLine(r.stdout, 'codex');
+  });
+
+  // Fix round 1, T17-CQ4: a stats file over stats.py's READ_MAX is one the bridge reads as unreadable (and resets), so
+  // the doctor never runs jq on it. This one is a well-formed v1 file padded with whitespace past the bound.
+  it('a stats file larger than READ_MAX is unmeasured, and no drift row', async () => {
+    const home = await healthyCodexBox('ccrc-doctor-codex-drift-large-', ['codex-a']);
+    plantDirectLane(home, 'codex-a');
+    const body = `${JSON.stringify({ version: 1, lane: 'codex-a', unexplained: { eventType: [NEW_EVENT] } })}\n`;
+    plantStats(statsFile(home, 'codex-a'), Buffer.concat([Buffer.from(body), Buffer.alloc(16 * 2 ** 20, 0x20)]));
+    const r = runDoctor(home);
+    expect(r.stdout, r.stdout).not.toMatch(/the bridge met \d/);
+    const file = statsFile(home, 'codex-a');
+    expectUnmeasured(r.stdout, 'codex-a', file, 'it is larger than the bridge reads, READ_MAX in ccd/codexbridge/stats.py', MOVE_FIX('codex-a', file));
+  });
+
+  // Fix round 2, R4: a size `stat` cannot measure is unmeasured too, never size 0. The stub fails only the size
+  // query of this one file (`%s`, or darwin's `%z`) and runs the real `stat` for everything else, its mode included.
+  it('a stats file whose size cannot be measured is unmeasured, and no drift row', async () => {
+    const home = await healthyCodexBox('ccrc-doctor-codex-drift-nosize-', ['codex-a']);
+    plantDirectLane(home, 'codex-a');
+    const file = await writeStats(home, 'codex-a', [['eventType', NEW_EVENT]]);
+    const realStat = realPath('stat');
+    unstub(home, 'stat');   // the fixture's `stat` is a symlink to the real binary: never write through it
+    stub(home, 'stat', `for a in "$@"; do last="$a"; done\ncase "$*" in *%s*|*%z*) [ "$last" != ${shq(file)} ] || exit 1 ;; esac\nexec ${shq(realStat)} "$@"`);
+    const r = runDoctor(home);
+    expect(r.stdout, r.stdout).not.toMatch(/the bridge met \d/);
+    expectUnmeasured(r.stdout, 'codex-a', file, 'its size could not be measured',
+      `  remedy: check that stat runs on PATH (coreutils on a GNU box, the base system on macOS) and can read ${file}, then re-run doctor`);
+    expect(r.stdout).not.toMatch(/bridge stats file .* has mode/);
+  });
+
+  // Fix round 2, R5: a bridge writes at most NAMES_MAX names and `overflow` in each of known.KNOWN's families, so a
+  // file listing more is no bridge's, and the row never walks it name by name.
+  it('a stats file listing more names than any bridge writes is unmeasured, and no drift row', async () => {
+    const home = await healthyCodexBox('ccrc-doctor-codex-drift-many-', ['codex-a']);
+    plantDirectLane(home, 'codex-a');
+    const many = Array.from({ length: 10 * 257 + 1 }, (_, i) => `response.fx_m${i}`);
+    const file = statsFile(home, 'codex-a');
+    plantStats(file, `${JSON.stringify({ version: 1, lane: 'codex-a', unexplained: { eventType: many } })}\n`);
+    const r = runDoctor(home);
+    expect(r.stdout, r.stdout).not.toMatch(/the bridge met \d/);
+    expectUnmeasured(r.stdout, 'codex-a', file,
+      'it lists more names than the bridge writes, NAMES_MAX names and overflow in each of the families of ccd/codexbridge/known.py',
+      MOVE_FIX('codex-a', file));
+  });
+
+  // Fix round 3, T17-R2-3: the bound's edge. A file at exactly known.KNOWN's family count times (NAMES_MAX + 1) names,
+  // every family full as a bridge leaves it (`overflow` and NAMES_MAX names), is one a real bridge can write, so the
+  // row walks it: a drift WARN that counts the rest, and no unmeasured WARN.
+  it('a stats file at the most names a bridge writes is walked, never unmeasured', async () => {
+    const home = await healthyCodexBox('ccrc-doctor-codex-drift-edge-', ['codex-a']);
+    plantDirectLane(home, 'codex-a');
+    const { namesMax, families } = bridgeBounds();
+    const unexplained = Object.fromEntries(families.map((f, fi) => [f,
+      ['overflow', ...Array.from({ length: namesMax }, (_, i) => `response.fx_e${fi}_${String(i).padStart(3, '0')}`)]]));
+    const total = families.length * (namesMax + 1);
+    const file = statsFile(home, 'codex-a');
+    plantStats(file, `${JSON.stringify({ version: 1, lane: 'codex-a', unexplained })}\n`);
+    const r = runDoctor(home);
+    expect(r.stdout, r.stdout).not.toMatch(/cannot be read as the bridge's/);
+    const first = unexplained[families[0]];
+    const shown = first.slice(0, 32).map((n) => `${families[0]}:${n}`).join(', ');
+    const re = new RegExp(`^${reEsc(DRIFT('codex-a', total, `${shown}, … and ${total - 32} more`))}$`, 'm');
+    expect(r.stdout).toMatch(re);
+    expect(remedyAfter(r.stdout, re)).toBe(`${DRIFT_FIX}${OVER_CLAUSE(laneDir(home, 'codex-a'), 'shr')}`);
+    noRunnerBugLine(r.stdout, 'codex');
+  });
+
+  // Fix round 3, T17-R2-1: a stats file this user cannot open is said as that, never as "not version 1". The file is a
+  // real `Stats` file of this lane, so only its mode keeps it from being read; its mode FAIL is said beside it.
+  it.skipIf(process.getuid?.() === 0)('a stats file that cannot be opened is unmeasured as unreadable, and no drift row', async () => {
+    const home = await healthyCodexBox('ccrc-doctor-codex-drift-noread-', ['codex-a']);
+    plantDirectLane(home, 'codex-a');
+    const file = await writeStats(home, 'codex-a', [['eventType', NEW_EVENT]]);
+    chmodSync(file, 0o000);
+    const r = runDoctor(home);
+    expect(r.stdout, r.stdout).not.toMatch(/the bridge met \d/);
+    expectUnmeasured(r.stdout, 'codex-a', file, 'it could not be opened for reading',
+      `  remedy: make ${file} readable by the user the bridge and doctor run as: if another user owns it, chown it to that user; then chmod 600 ${file} (the mode the bridge keeps it at), and re-run doctor`);
+    expect(r.stdout).toMatch(new RegExp(`^FAIL codex: codex-a's bridge stats file ${reEsc(file)} has mode `, 'm'));
+  });
+
+  // Fix round 1, T17-CQ3 and T17-CQ4, through the real `Stats`: a 65-character name is listed as `unrecognised`, and a
+  // 257th distinct name as `overflow`; the remedy says each is a marker and never a name for known.py. The line prints
+  // the first 32 names and counts the rest, while <n> stays the full distinct count.
+  it('unrecognised and overflow are named as markers, and the line prints 32 names and counts the rest', async () => {
+    const home = await healthyCodexBox('ccrc-doctor-codex-drift-markers-', ['codex-a', 'codex-b']);
+    for (const id of ['codex-a', 'codex-b']) plantDirectLane(home, id);
+    await writeStats(home, 'codex-a', [['eventType', `response.${'x'.repeat(56)}`]]);
+    const many = Array.from({ length: 257 }, (_, i) => `response.fx_n${String(i).padStart(3, '0')}`);
+    const fileB = await writeStats(home, 'codex-b', many.map((n) => ['eventType', n] as const));
+    const heldB = (JSON.parse(readFileSync(fileB, 'utf8')) as { unexplained: { eventType: string[] } }).unexplained.eventType;
+    expect(heldB).toHaveLength(257);
+    expect(heldB[0]).toBe('overflow');
+    const r = runDoctor(home);
+    const reA = new RegExp(`^${reEsc(DRIFT('codex-a', 1, 'eventType:unrecognised'))}$`, 'm');
+    expect(r.stdout, r.stdout).toMatch(reA);
+    expect(remedyAfter(r.stdout, reA)).toBe(`${DRIFT_FIX}${UNREC_CLAUSE(laneDir(home, 'codex-a'), 's')}`);
+    const shown = ['eventType:overflow', ...many.slice(0, 31).map((n) => `eventType:${n}`)].join(', ');
+    const reB = new RegExp(`^${reEsc(DRIFT('codex-b', 257, `${shown}, … and 225 more`))}$`, 'm');
+    expect(r.stdout).toMatch(reB);
+    expect(remedyAfter(r.stdout, reB)).toBe(`${DRIFT_FIX}${OVER_CLAUSE(laneDir(home, 'codex-b'), 's')}`);
+    noRunnerBugLine(r.stdout, 'codex');
+  });
+
+  // The whole-wave fix round, Z2: a request-side family's names come from Claude Code's request, which no recording
+  // holds, so its marker's remedy never sends the operator to the record-streams marker. The name is a real `Stats`
+  // one, 65 characters, so the bridge lists it as `requestField:unrecognised`.
+  it('a request-side marker is never sent to record-streams, and its clause says a restart clears it', async () => {
+    const home = await healthyCodexBox('ccrc-doctor-codex-drift-reqmarker-', ['codex-a']);
+    plantDirectLane(home, 'codex-a');
+    await writeStats(home, 'codex-a', [['requestField', `fx_${'x'.repeat(62)}`]]);
+    const r = runDoctor(home);
+    const re = new RegExp(`^${reEsc(DRIFT('codex-a', 1, 'requestField:unrecognised'))}$`, 'm');
+    expect(r.stdout, r.stdout).toMatch(re);
+    const fix = remedyAfter(r.stdout, re);
+    expect(fix).toBe(`${DRIFT_FIX}${UNREC_CLAUSE(laneDir(home, 'codex-a'), 'r')}`);
+    expect(fix).not.toContain('record-streams');
+    noRunnerBugLine(r.stdout, 'codex');
+  });
+
+  // One bound, two spellings that cannot drift: the bridge bounds every name it writes by stats.py's NAME_RE, and the
+  // doctor bounds every name it prints by the same pattern text.
+  it('the doctor bounds a name by stats.py\'s NAME_RE, spelled the same', () => {
+    const py = [...readFileSync(join(REPO, 'ccd', 'codexbridge', 'stats.py'), 'utf8').matchAll(/^NAME_RE = re\.compile\(r"([^"]+)"\)$/gm)];
+    const sh = [...readFileSync(CHECKS_SRC, 'utf8').matchAll(/^\s*local name_re='([^']+)'$/gm)];
+    expect(py).toHaveLength(1);
+    expect(sh).toHaveLength(1);
+    expect(sh[0][1]).toBe(py[0][1]);
+  });
+
+  it('the doctor reads no stats file larger than stats.py\'s READ_MAX, spelled the same', () => {
+    const py = [...readFileSync(join(REPO, 'ccd', 'codexbridge', 'stats.py'), 'utf8').matchAll(/^READ_MAX = ([^#\n]+?)\s+#/gm)];
+    const sh = [...readFileSync(CHECKS_SRC, 'utf8').matchAll(/^\s*local read_max=\$\(\( ([^)]+?) \)\) /gm)];
+    expect(py).toHaveLength(1);
+    expect(sh).toHaveLength(1);
+    expect(sh[0][1]).toBe(py[0][1]);
+  });
+
+  // Fix round 2, R5: the most names a bridge writes is known.KNOWN's family count times NAMES_MAX plus `overflow`.
+  it('the doctor bounds a file\'s names by stats.py\'s NAMES_MAX and known.KNOWN\'s families, counted the same', () => {
+    const { namesMax, families } = bridgeBounds();
+    const sh = [...readFileSync(CHECKS_SRC, 'utf8').matchAll(/^\s*local read_max=.* names_max=(\d+) families=(\d+) /gm)];
+    expect(sh).toHaveLength(1);
+    expect(new Set(families).size).toBe(families.length);
+    expect(Number(sh[0][1])).toBe(namesMax);
+    expect(Number(sh[0][2])).toBe(families.length);
   });
 });
 

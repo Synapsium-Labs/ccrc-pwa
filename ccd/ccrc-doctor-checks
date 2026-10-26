@@ -7312,6 +7312,7 @@ _dr_cx_lane() {   # <id> <models: 1 = its model state is measurable> <roster> �
       "set the lane's upstream back to \"backend\" (or remove it) in \$HOME/.ccrc/accounts.json by hand, then run 'ccrc doctor --fix' (it re-renders lane.json from the roster), then: ccrc codex start $id — ccrc never edits a roster row for you"
   fi
   _dr_cx_bridge_files "$id"
+  [ "$mode" != direct ] || _dr_cx_drift "$id"
   if [ "$models" -ne 1 ]; then DRX_LANE_WORDS+=", model state unread"; return 0; fi
   # The lane's model state, ONLY through models-op's `show`.
   ans="$(_models_node show --file "$roster" --id "$id" 2>/dev/null)"
@@ -7642,6 +7643,157 @@ _dr_cx_bridge_files() {   # <id>
     fi
   done
   return 0
+}
+
+# THE DRIFT ROW (codex-bridge Stage 2, Task 17; spec §2.9 D3, D-6418), a
+# direct lane's only: a litellm lane runs no bridge, and the stats file a lane
+# switched back keeps is no drift of its. The bridge lists every name
+# `ccd/codexbridge/known.py` does not explain in its stats file's
+# `unexplained` (Task 5), and drops one a reviewed change explains when it
+# next starts, so the list is the whole question: a name is explained only in
+# code, and this row never asks known.py itself. The file is lane.json's
+# `bridgeFiles.stats`, read as `_dr_cx_bridge_files` reads it, and only a
+# regular file is opened (a symlink or another kind of file is that row's
+# FAIL; a FIFO is never opened). NAMES ONLY, NEVER CONTENT: jq hands over each
+# family and name on a line of its own, or an empty line for a non-string or
+# a string holding a control character (so no name spans two lines), and each
+# is printed only when it matches `name_re`, else `unrecognised`. `name_re` is
+# stats.py's NAME_RE, the bound the bridge writes every name under, in the same
+# pattern text (ccrc-doctor-codex.test.ts pins the two equal), matched under
+# LC_ALL=C so a range never reaches past ASCII (under a UTF-8 locale bash's
+# `[A-Za-z]` accepts letters such as `ë`, measured). The line prints the first
+# `shown` names and counts the rest, so one file cannot make it unbounded.
+# WHAT THIS ROW READS: names only from one JSON document of version 1 and of
+# THIS lane (`.lane`) whose `unexplained` is an object, no larger than
+# stats.py's READ_MAX and listing at most `families` times `names_max` + 1
+# names (known.KNOWN's families, each NAMES_MAX names and `overflow`; READ_MAX,
+# NAMES_MAX and the family count are pinned equal to the doctor's own by
+# ccrc-doctor-codex.test.ts), which is every file a real `Stats` writes. It is
+# not stats.py's `_load`, and the known differences are all files no `Stats`
+# writes, only a hand-edited or foreign one. Stricter than the bridge: a file
+# of this lane with no `unexplained` object, or with more names than a bridge
+# writes, is one the bridge carries (as no names, or filtered to its families
+# and bounded names) and this row calls unmeasured. Looser: jq's
+# `.version == 1` is true of `1.0`, which stats.py's `_is_int` resets (jq 1.6
+# cannot tell the two apart at all); jq reads invalid UTF-8 as U+FFFD where
+# stats.py's strict decode resets the file (such a name prints
+# `unrecognised`); an entry that is not a string or fails NAME_RE, which
+# `_load` drops, prints `unrecognised` here, at most once per family in <n>,
+# and counts toward the names bound; and a family outside known.KNOWN, which the bridge drops, is listed here. An absent file
+# has no drift row (no bridge has served yet). A regular file this row cannot
+# read so (its size unmeasured, unreadable by this user, too large, too many
+# names, unparseable, another version or another lane's, no `unexplained`
+# object) is never read as "no unexplained name": it is this
+# row's unmeasured WARN, a form of the drift row as the bridge tier's "cannot
+# be told" WARN is a form of its stale row, so it is printed whatever else the
+# codex check finds. `unrecognised` and `overflow` (more names in a family
+# than the bridge counts) are markers, not names, and the remedy says so
+# whenever the list holds one (`_dr_cx_drift_marker`): neither is ever
+# explained in known.py, and the bridge's restart clears both (stats.py's
+# `_load`, the Stage 2 wave 3 whole-wave fix round's Z1).
+_dr_cx_drift() {   # <id>
+  local id="$1" dir lj sf p i fam name sz list fix why='' LC_ALL=C unrec='' over='' kind
+  local name_re='^[A-Za-z0-9_.:/-]{1,64}$'
+  local read_max=$(( 16 * 2**20 )) names_max=256 families=10 shown=32
+  local -a got=() listed=()
+  local -A seen=()
+  dir="$(_codex_lane_dir "$id")"; lj="$dir/lane.json"
+  [ -f "$lj" ] || return 0
+  sf="$(jq -r 'if type == "object" and (.bridgeFiles | type) == "object" and (.bridgeFiles.stats | type) == "string"
+      then .bridgeFiles.stats else "" end' "$lj" 2>/dev/null)" || return 0
+  [[ "$sf" =~ ^[A-Za-z0-9._-]+$ ]] && [ "$sf" != . ] && [ "$sf" != .. ] || return 0
+  p="$dir/$sf"
+  [ -f "$p" ] && [ ! -L "$p" ] || return 0
+  sz="$(_plat_size -- "$p" 2>/dev/null)" || sz=''
+  if [[ ! "$sz" =~ ^[0-9]+$ ]]; then
+    why='its size could not be measured'
+  elif [ "$sz" -gt "$read_max" ]; then
+    why='it is larger than the bridge reads, READ_MAX in ccd/codexbridge/stats.py'
+  elif [ ! -r "$p" ]; then
+    why='it could not be opened for reading'
+  else
+    mapfile -t got < <(jq -rs --arg id "$id" --argjson max "$(( families * (names_max + 1) ))" 'def line: if type == "string" and (explode | all(. >= 32 and . != 127)) then . else "" end;
+        if length == 1 and (.[0] | type == "object" and .version == 1 and .lane == $id and (.unexplained | type) == "object")
+        then if ([.[0].unexplained[] | arrays | length] | add // 0) > $max then "many"
+          else "v1", (.[0].unexplained | to_entries[] | (.key | line) as $f
+            | (.value | if type == "array" then .[] else empty end) | $f, line) end
+        else "other" end' "$p" 2>/dev/null)
+    case "${got[0]:-}" in
+      v1) ;;
+      many) why='it lists more names than the bridge writes, NAMES_MAX names and overflow in each of the families of ccd/codexbridge/known.py' ;;
+      *) why='it is not one version-1 JSON document of this lane with an unexplained object' ;;
+    esac
+  fi
+  if [ -n "$why" ]; then
+    if [ "$why" = 'its size could not be measured' ]; then
+      fix="check that stat runs on PATH (coreutils on a GNU box, the base system on macOS) and can read $p, then re-run doctor"
+    elif [ "$why" = 'it could not be opened for reading' ]; then
+      fix="make $p readable by the user the bridge and doctor run as: if another user owns it, chown it to that user; then chmod 600 $p (the mode the bridge keeps it at), and re-run doctor"
+    else
+      fix="stop the lane (ccrc codex stop $id), move $p aside by hand, then start it again: the bridge starts a new stats file, which this line reads, and lists again any name it meets — ccrc never removes it for you"
+    fi
+    _dr_cx_warn "$id: whether the bridge met a name it does not know cannot be told: its stats file $p cannot be read as the bridge's ($why) — unmeasured, never read as no unexplained name" "$fix"
+    return 0
+  fi
+  for (( i = 1; i + 1 < ${#got[@]}; i += 2 )); do
+    fam="${got[$i]}"; name="${got[$((i + 1))]}"
+    [[ "$fam" =~ $name_re ]] || fam=unrecognised
+    [[ "$name" =~ $name_re ]] || name=unrecognised
+    case "$fam" in
+      eventType|itemType|errorCode|incompleteReason) kind=s ;;
+      responseHeader) kind=h ;;
+      *) kind=r ;;
+    esac
+    [ "$fam" != unrecognised ] && [ "$name" != unrecognised ] || unrec+="$kind"
+    [ "$name" != overflow ] || over+="$kind"
+    [ -z "${seen[$fam:$name]:-}" ] || continue
+    seen[$fam:$name]=1
+    listed+=("$fam:$name")
+  done
+  [ "${#listed[@]}" -gt 0 ] || return 0
+  list="$(_dr_cx_join ', ' "${listed[@]:0:$shown}")"
+  [ "${#listed[@]}" -le "$shown" ] || list+=", … and $(( ${#listed[@]} - shown )) more"
+  fix="read what each name is in the upstream Codex source (openai/codex), then explain it by adding it to ccd/codexbridge/known.py in a reviewed change; the rollout of that change restarts the bridge, whose start drops an explained name from the list, and this line clears — ccrc never explains a name for you"
+  [ -z "$unrec" ] || fix+="$(_dr_cx_drift_marker unrecognised "$unrec" "$dir")"
+  [ -z "$over" ] || fix+="$(_dr_cx_drift_marker overflow "$over" "$dir")"
+  _dr_cx_warn "$id: the bridge met ${#listed[@]} name(s) it does not know: $list (names only, never content). Each is a protocol change to read; it is explained by adding it to ccd/codexbridge/known.py in a reviewed change." "$fix"
+  return 0
+}
+
+# A MARKER'S CLAUSE in the drift row's remedy (the Stage 2 wave 3 whole-wave
+# fix round, Z2): what can show the name behind `unrecognised` or `overflow`
+# depends on the family it was listed in, so the clause says it for each kind
+# of family the marker was met in (<kinds>, from `_dr_cx_drift`'s walk). `s`:
+# an event, item, error-code or incomplete-reason family, which the bridge
+# reads from a 2xx stream, so a recording holds it, made only while the
+# operator's `record-streams` marker is in the lane directory. `h`:
+# responseHeader, counted on every answer but recorded only on a 2xx one
+# (server.py counts `header_names` before its 2xx branch records). `r`: every
+# other family, the request side (inbound.py names requestField,
+# unsupportedField, betaValue and contextEdit, and server.py's catalogue
+# check modelSubstitution, all from Claude Code's request, which nothing the
+# bridge writes holds) and any family no bridge writes, so that clause never
+# sends the operator to `record-streams`. Each clause ends by saying that the
+# bridge's restart clears the marker (stats.py's `_load`, Z1) and that it
+# comes back when the bridge meets such a name again.
+_dr_cx_drift_marker() {   # <unrecognised|overflow> <kinds> <lane dir>
+  local m="$1" kinds="$2" dir="$3" what them out
+  if [ "$m" = overflow ]; then
+    what='the names past it'; them=them
+    out="; overflow is not a name: it stands for more distinct names in that family than the bridge counts (NAMES_MAX in ccd/codexbridge/stats.py)"
+  else
+    what='that name'; them=it
+    out="; unrecognised is not a name: it stands for one outside the bound the bridge writes every name under (NAME_RE in ccd/codexbridge/stats.py)"
+  fi
+  [[ "$kinds" != *s* ]] || out+="; for an event, item, error-code or incomplete-reason name, put the operator's record-streams marker in $dir (the bridge records the lane's stream only while it is there) and read $what in the recording when the bridge meets $them again"
+  [[ "$kinds" != *h* ]] || out+="; for a responseHeader name, put the operator's record-streams marker in $dir and read $what in the recording when the bridge meets $them again on a 2xx answer: only a 2xx answer's head is recorded"
+  [[ "$kinds" != *r* ]] || out+="; for a requestField, unsupportedField, betaValue, contextEdit, modelSubstitution or other name, no recording holds $what: those families' names come from Claude Code's request, and the bridge records only the upstream's answers, so read $what from the client's request, for example from Claude Code's release notes or a reviewed diagnostic"
+  if [ "$m" = overflow ]; then
+    out+="; the bridge's restart clears overflow from the list but keeps that family's counted names, so the next name in it that the bridge has not counted is overflow again, which is new drift; never add overflow to known.py"
+  else
+    out+="; the bridge's restart clears unrecognised from the list, and it comes back when the bridge meets such a name again; never add unrecognised to known.py"
+  fi
+  printf '%s' "$out"
 }
 
 # The lane's LIVE sessions: `~/.cc-sessions/<sid>.wrapper` names the account a
