@@ -568,3 +568,33 @@ the merge probe exited 0. Claims 2505, 2507, 2509, 2511 and 2516 were released a
 history lines, adds 47 and 125 lines for this route, and recomputes the counts from the merged tree: coord routes 47,
 `ROUTES` 125, the HTTP half 122, gated 80, exempt still 42. The three comments its prose pins read now say 125 and 122.
 `auth/gate.ts`'s docstring goes to 122 routes.
+
+**Conflict-sync 2 (2026-10-26).** The coordinator's mail, verbatim:
+
+> Run 946, wave 1: conflict-sync 2. The merge queue dequeued PR #1524 at 02:51:35Z, before any queue run. A PR ahead of it landed, and the PR now conflicts with main. merge-tree exits 1, with one conflict, `README.md`. Run 946 is back at working, for this sync only. Record this mail in As built as "Conflict-sync 2 (2026-10-26)", with each resolution.
+>
+> **The cause** is #1528 (d363d73d5), "cite code by named anchor and split single-definition by area". It rewrote the very README sentence your F2 re-anchored. The line citations became named anchors: `shared/api.ts#@purge-refusal-union`, plus `#@lc-word-purge-refused`, `#@lc-word-purge-incomplete` and `#@lc-word-purge-mechanism-absent`.
+>
+> **The resolution.**
+> 1. **README.md: take main's side whole.** A named anchor does not move with line numbers, so your re-anchoring hunk falls away. README then differs from main by nothing in this PR, and no consent from its claim holder is needed for it.
+> 2. **session-hook.test.ts.** #1528 changed this file, and the citation-debt census. It merged clean, but make sure your F2 and V2 note there is still true on the merged tree. Drop it or reword it if it now describes line anchors that no longer exist. Make no other change.
+> 3. **The single-definition split.** `single-definition.test.ts` is now `single-definition/<area>.test.ts`. Your wave never edited it, but its pins read files you touched, such as `routes.ts` at 38 in the W1a and W1b ceilings. Run every area file.
+>
+> Make no other edit.
+>
+> **Gates.** Run each file whole, one at a time, with `--pool=forks --maxWorkers=2`, and re-run a timeout alone:
+> - session-hook, citations, docs-parity, and every `single-definition/*.test.ts`;
+> - auth-gate, coordinator-skill, box-token-census, coord-pause-route;
+> - routes, run-routes, review-cap, secret-mask;
+> - growth-check, typecheck-tests, and deviation-refs after `git fetch origin main`.
+>
+> Run the probe in its own step, and push once only if it exits 0. Then send a wave-done that names every file whose wave diff changed since f50e90bdb other than by main's own changes. I re-verify that mechanically, then re-enqueue once CI's checks pass.
+>
+> If the merge conflicts anywhere else, or a gate reds on a line this wave wrote, stop and ask me.
+
+Resolutions. `origin/main` was merged at `1b5fae2f7`; `README.md` was the only conflict.
+- `README.md`: main's side, whole. #1528 replaced the sentence's line citations with named anchors, so this wave's
+  re-anchoring hunk (review 951 F2) falls away, and README now differs from main by nothing in this PR.
+- `server/test/session-hook.test.ts`: the F2 and V2 note in the README census row was dropped. It recorded re-anchoring
+  four README line citations, a repair this PR no longer makes. The file now matches main byte for byte.
+- The `single-definition` split: this wave never edited those files. Every `single-definition/<area>.test.ts` was run.
