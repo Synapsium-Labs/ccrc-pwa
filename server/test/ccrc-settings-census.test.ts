@@ -738,3 +738,36 @@ describe('W29: the ccd-* sweeps read their settings through the shared reader fi
   });
 });
 
+// ── W29 (R38, D-6983): the validators of values ccrc reads from outside spell their digits ────────────────────────────
+// A bracket range is collation-dependent: under en_US.UTF-8 on Linux, `[0-9]` takes `²`, `٣` and `５` as digits
+// (measured), so a validator of an operator's value spells the ten digits, as R34 spelled `_keep_ok`. The scope is the
+// seven bodies R38 named and, in each sweep, every `=~` test of a setting or of the keepalive's `${!knob}` loop; about 93
+// internal-format ranges (tags, pids, hashes) are carried as one issue (Reading 15).
+describe('W29 (R38): the validators of outside values spell their digits', () => {
+  const RANGE = /=~[^\n]*\[[^\]\n]*[0-9]-[0-9]/;
+  const BODIES = ['cmd_wrappers', '_acct_candidates', '_codex_port_ok', '_upd_deadline_ms', '_upd_watchdog_probe_gap_s', '_upd_sweep', '_keep_ok'];
+  it('W29-A1: the validators of outside values spell their digits', () => {
+    const hits: string[] = [];
+    let seen = 0;
+    for (const fn of BODIES) {
+      const span = bodySpan(CODE['ccd/ccrc'], fn);
+      expect(span, `ccd/ccrc defines ${fn}`).not.toBeNull();
+      for (const l of CODE['ccd/ccrc'].slice(span!.start, span!.end).split('\n')) {
+        if (!l.includes('=~')) continue;
+        seen++;
+        if (RANGE.test(l)) hits.push(`ccd/ccrc ${fn}: ${l.trim()}`);
+      }
+    }
+    const TESTED = /\[\[ "\$\{?(?:!knob|(CCRC_[A-Z0-9_]+))\}?" =~/;
+    for (const f of SIBLING_FILES)
+      for (const l of SIBLING_CODE[f]!.split('\n')) {
+        const m = TESTED.exec(l);
+        if (m === null || (m[1] !== undefined && !SETTINGS.includes(m[1]))) continue;
+        seen++;
+        if (RANGE.test(l)) hits.push(`${f}: ${l.trim()}`);
+      }
+    expect(seen, 'non-vacuity: the scope holds validators').toBeGreaterThanOrEqual(11);
+    expect(hits).toEqual([]);
+  });
+});
+

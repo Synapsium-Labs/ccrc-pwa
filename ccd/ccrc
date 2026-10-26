@@ -4556,7 +4556,7 @@ cmd_wrappers() {
     || _ccrc_die "the manifest from $gen has no summary line, so there is nothing to check the wrapper records against — nothing was written"
   local f
   for f in "$sum_total" "$sum_gen" "$sum_up" "$sum_ext" "$sum_codex"; do
-    [[ "$f" =~ ^[0-9]+$ ]] \
+    [[ "$f" =~ ^[0123456789]+$ ]] \
       || _ccrc_die "the manifest from $gen has a summary whose counts are not all numbers — nothing was written"
   done
   [ "$sum_total" -eq "$((sum_gen + sum_up + sum_ext + sum_codex))" ] \
@@ -4709,7 +4709,7 @@ cmd_wrappers() {
   fi
   for ((wi = 0; wi < ${#wit_cand[@]}; wi++)); do
     wf="${wit_cand[$wi]}"; wname="${wf##*/}"; wsz="${wit_size[$wi]}"
-    [[ "$wsz" =~ ^[0-9]+$ ]] || { wit_blind="$wit_blind $wname"; continue; }
+    [[ "$wsz" =~ ^[0123456789]+$ ]] || { wit_blind="$wit_blind $wname"; continue; }
     [ "$wsz" -gt "$WRAPPER_WITNESS_MAX_BYTES" ] && continue
     # ITS OWN `-r` TEST, and this is not belt-and-braces. `_wrap_parse_shape`
     # folds "I could not read it" into "not a wrapper" (its `[ -r ]` guard),
@@ -6816,7 +6816,7 @@ _acct_candidates() {
     # callers already in this tree pass `-L` for the same reason (:2601,
     # ccrc-doctor-checks:2542).
     sz="$(_plat_size -L -- "$f" 2>/dev/null)" || sz=""
-    [[ "$sz" =~ ^[0-9]+$ ]] \
+    [[ "$sz" =~ ^[0123456789]+$ ]] \
       || _acct_refuse 1 unmeasurable "stat could not size $WRAPPER_BIN_DIR/$name, and a pick list that reported a launcher without its size would be inviting a choice on no evidence. Nothing was written."
     [ "$sz" -le "$WRAPPER_OVERSIZE_BYTES" ] || continue
     _wrap_is_script "$f" || continue
@@ -12384,7 +12384,7 @@ _codex_tier_ok() {   # <token> -> 0 iff it is one of CODEX_TIERS
 }
 
 _codex_port_ok() {   # <token> -> 0 iff it can be a TCP port
-  [[ "${1:-}" =~ ^[1-9][0-9]{0,4}$ ]] && [ "$1" -le 65535 ]
+  [[ "${1:-}" =~ ^[123456789][0123456789]{0,4}$ ]] && [ "$1" -le 65535 ]
 }
 
 # THE ONE tier -> port mapping (the fix wave's ruling: four hand-written
@@ -20882,7 +20882,7 @@ _upd_deadline_ms() {   # [min|max]
   for f in "" ${1:+"$BOX_ENV_FILE" "$CCRC_EXPOSURE_FILE"}; do
     if [ -z "$f" ]; then _ccrc_knob CCRC_UPDATE_DEADLINE_MS 900000; else BOX_ENV_FILE="$f" _ccrc_knob CCRC_UPDATE_DEADLINE_MS 900000 file; fi && v="$KNOB" || v=""
     [ -z "$f" ] || [ "$KNOB_FROM" != default ] || continue
-    [[ "$v" =~ ^[1-9][0-9]{0,14}$ ]] || { v=900000; rc=1; }
+    [[ "$v" =~ ^[123456789][0123456789]{0,14}$ ]] || { v=900000; rc=1; }
     [ "$v" -le "$hi" ] || hi="$v"
     [ -n "$lo" ] && [ "$lo" -le "$v" ] || lo="$v"
   done
@@ -20901,7 +20901,7 @@ _upd_deadline_ms() {   # [min|max]
 _upd_watchdog_probe_gap_s() {
   local v="${CCRC_WATCHDOG_PROBE_GAP_S:-}"
   if [ -z "$v" ]; then printf '%s' 5; return 0; fi
-  if [[ "$v" =~ ^[0-9]+$ ]]; then printf '%s' "$v"; return 0; fi
+  if [[ "$v" =~ ^[0123456789]+$ ]]; then printf '%s' "$v"; return 0; fi
   echo "watchdog: CCRC_WATCHDOG_PROBE_GAP_S='$v' is not digits-only — using 5" >&2
   printf '%s' 5
 }
@@ -24344,7 +24344,7 @@ _upd_sweep() {
   fi
   local -a units=() missing=() crash=() unrec=() ncfail=()
   local vdir="" vjobs="${CCRC_SWEEP_VERIFY_JOBS:-128}" i j k r lrc d o cu _cl cw _cs _cd clist crc=0 m inb cb kc=0 mn=0 rfail="" lpid="" ltrap=""
-  [[ "$vjobs" =~ ^[1-9][0-9]{0,3}$ ]] || vjobs=128
+  [[ "$vjobs" =~ ^[123456789][0123456789]{0,3}$ ]] || vjobs=128
   # A unit the pre-restart listing showed `activating` or `failed` is never verified, even when this listing shows it
   # active (wave 16, D-5136; one absent from that listing, or shown in any other state, is still verified). Type=simple
   # reads `active` the moment try-restart forks it, so a crash-looping one is usually here: it goes to `pback`, named below.

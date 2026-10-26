@@ -282,7 +282,7 @@ _ka_flock_works \
 for knob in CCRC_KEEPALIVE_FRESH CCRC_KEEPALIVE_TURN_TIMEOUT \
             CCRC_KEEPALIVE_BACKOFF_AFTER CCRC_KEEPALIVE_BACKOFF_BASE \
             CCRC_KEEPALIVE_BACKOFF_MAX; do
-  [[ "${!knob}" =~ ^[0-9]+$ ]] \
+  [[ "${!knob}" =~ ^[0123456789]+$ ]] \
     || { src=""; [ "$knob" != CCRC_KEEPALIVE_FRESH ] || src="$KA_FRESH_FROM"
          _ka_say "$knob must be a whole number — got '${!knob}'$src; nothing was measured"; exit 1; }
 done
