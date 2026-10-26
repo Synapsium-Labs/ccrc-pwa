@@ -202,6 +202,7 @@ describe('WORKSPACE_TRANSITIONS answers the census (ARCH-41, #776)', () => {
   it('archiveDoor.ts takes every refusal from workspaceEdge: no literal status at a refuse() site', () => {
     expect(DOOR).toMatch(/workspaceEdge/);
     expect(DOOR).toMatch(/shared\/workspaceTransitions\.js/);
-    expect(DOOR.match(/\brefuse\(\s*\d{3}\b/g) ?? []).toEqual([]);
+    // The only literal status left is `unsupported()`'s 501, a route-shape word with no state behind it.
+    expect((DOOR.match(/\b(?:refuse|reply)\(\s*\d{3}\b/g) ?? []).map((m) => m.replace(/\s+/g, ''))).toEqual(['reply(501']);
   });
 });

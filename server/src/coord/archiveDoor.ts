@@ -33,6 +33,7 @@
 import {
   ARCHIVE_REFUSALS, archiveInterrupts, type ArchiveBody, type ArchiveRefusal, type FleetSession,
 } from '../../../shared/api.js';
+import { workspaceEdge } from '../../../shared/workspaceTransitions.js';
 import type { MeasuredStat } from '../io.js';
 import { turnSays, turnWordOf } from '../sessionReading.js';
 import type { CloseOutcome } from './close.js';
@@ -222,8 +223,16 @@ export type ArchiveDecision =
   | { readonly ok: false; readonly reply: ArchiveReply }
   | { readonly ok: true; readonly stop: boolean; readonly wsArchive: boolean; readonly ended: readonly OpenSibling[] };
 
-const refuse = (status: number, error: ArchiveRefusal | 'unsupported', extra: Record<string, unknown> = {}):
-  ArchiveDecision => ({ ok: false, reply: { status, body: { ok: false, error, ...extra } } });
+const reply = (status: number, error: ArchiveRefusal | 'unsupported', extra: Record<string, unknown>): ArchiveDecision =>
+  ({ ok: false, reply: { status, body: { ok: false, error, ...extra } } });
+
+/** A refusal is an edge of `WORKSPACE_TRANSITIONS` (ARCH-41, #776): its status rides the table's row, and a word with no
+ *  row throws rather than being sent. */
+const refuseEdge = (code: ArchiveRefusal, extra: Record<string, unknown> = {}): ArchiveDecision =>
+  reply(workspaceEdge('archive', code).status, code, extra);
+
+/** A box whose ccd predates the verb: a route-shape word (no state of the workspace causes it), so no table row. */
+const unsupported = (): ArchiveDecision => reply(501, 'unsupported', {});
 
 const thrown = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
@@ -252,38 +261,38 @@ export async function decideArchive(
 ): Promise<ArchiveDecision> {
   // `unmeasured` first, and blind to the consents: `interrupt` is the consent to lose a turn that was READ in progress,
   // never to act on a state nobody could read (D-3881). Then a measured busy, which `interrupt` lets through.
-  if (m.turn === 'unmeasured') return refuse(409, ARCHIVE_REFUSALS.statusUnknown);
-  if (m.turn === 'busy' && !flags.interrupt) return refuse(409, ARCHIVE_REFUSALS.sessionBusy);
+  if (m.turn === 'unmeasured') return refuseEdge(ARCHIVE_REFUSALS.statusUnknown);
+  if (m.turn === 'busy' && !flags.interrupt) return refuseEdge(ARCHIVE_REFUSALS.sessionBusy);
   // A PROVEN absence only. `unmeasured` proceeds: see `ArchiveMeasure.worktree`.
-  if (m.workspace && m.worktree === 'absent') return refuse(409, ARCHIVE_REFUSALS.worktreeGone);
+  if (m.workspace && m.worktree === 'absent') return refuseEdge(ARCHIVE_REFUSALS.worktreeGone);
   let claimed: readonly OpenSibling[] = [];
   if (port !== null) {
     if (!flags.force) {
       const worker = measured(() => port.openRunsForSession(id));
       // D-2545: refused as CLAIMED with an EMPTY `runs` — the field's shape does not change with the condition — and
       // the store's own `detail`, which this answer used to drop (workspace lifecycle wave 3b, the carried follow-up).
-      if (!worker.ok) return refuse(409, ARCHIVE_REFUSALS.runOpen, { runs: [], detail: worker.detail });
-      if (worker.siblings.length > 0) return refuse(409, ARCHIVE_REFUSALS.runOpen, { runs: worker.siblings });
+      if (!worker.ok) return refuseEdge(ARCHIVE_REFUSALS.runOpen, { runs: [], detail: worker.detail });
+      if (worker.siblings.length > 0) return refuseEdge(ARCHIVE_REFUSALS.runOpen, { runs: worker.siblings });
     }
     const coordinates = measured(() => port.openRunsClaimedBy(id));
     // Fail-shut, with or without `programme:'end'`: a programme this box cannot enumerate cannot be ended.
-    if (!coordinates.ok) return refuse(409, ARCHIVE_REFUSALS.coordinatorHasOpenRuns, { runs: [], detail: coordinates.detail });
+    if (!coordinates.ok) return refuseEdge(ARCHIVE_REFUSALS.coordinatorHasOpenRuns, { runs: [], detail: coordinates.detail });
     claimed = coordinates.siblings;
     if (claimed.length > 0 && !flags.programmeEnd) {
-      return refuse(409, ARCHIVE_REFUSALS.coordinatorHasOpenRuns, { runs: claimed });
+      return refuseEdge(ARCHIVE_REFUSALS.coordinatorHasOpenRuns, { runs: claimed });
     }
   }
-  if (m.workspace && !m.verbSupported) return refuse(501, 'unsupported');
+  if (m.workspace && !m.verbSupported) return unsupported();
   // The last check: every run the abandon arm could not move from its row alone, found BEFORE the first is ended —
   // otherwise whether a programme is left partly ended would depend on run id order. Nothing is ended here.
   for (const run of claimed) {
     let why: Extract<CloseOutcome, { ok: false }> | null;
     try { why = port!.abandonRefusal(run.id); } catch (e) {
-      return refuse(409, ARCHIVE_REFUSALS.programmePartlyEnded,
+      return refuseEdge(ARCHIVE_REFUSALS.programmePartlyEnded,
         { closed: [], notClosed: claimed, refusal: { id: run.id, kind: 'threw', detail: thrown(e) } });
     }
     if (why !== null) {
-      return refuse(409, ARCHIVE_REFUSALS.programmePartlyEnded,
+      return refuseEdge(ARCHIVE_REFUSALS.programmePartlyEnded,
         { closed: [], notClosed: claimed, refusal: closeRefusalOf(run.id, why) });
     }
   }
@@ -294,11 +303,11 @@ export async function decideArchive(
   for (const [i, run] of claimed.entries()) {
     let out: CloseOutcome;
     try { out = await port!.abandon(run.id); } catch (e) {
-      return refuse(409, ARCHIVE_REFUSALS.programmePartlyEnded,
+      return refuseEdge(ARCHIVE_REFUSALS.programmePartlyEnded,
         { closed: ended, notClosed: claimed.slice(i), refusal: { id: run.id, kind: 'threw', detail: thrown(e) } });
     }
     if (!out.ok) {
-      return refuse(409, ARCHIVE_REFUSALS.programmePartlyEnded,
+      return refuseEdge(ARCHIVE_REFUSALS.programmePartlyEnded,
         { closed: ended, notClosed: claimed.slice(i), refusal: closeRefusalOf(run.id, out) });
     }
     ended.push(run);
