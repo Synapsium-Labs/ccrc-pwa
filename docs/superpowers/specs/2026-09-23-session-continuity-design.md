@@ -309,7 +309,7 @@ the compaction-card citation-corpus procedure.
 
 The historical backlog on source accounts is not recovered (§11).
 
-**Amended 2026-10-26 (issue #317 items 3-4): the stale transcript copies are collected (D-TBD-carry-dedupe).** A carry
+**Amended 2026-10-26 (issue #317 items 3-4): the stale transcript copies are collected.** A carry
 copies the transcript and keeps the source, so every account a session visits keeps a full stale copy (measured
 2026-10-26 on one box: 238 uuids on more than one account, 49.4 GiB in copies other than the largest). Wave 1 is the
 operator verb `ccd carry-dedupe [--apply] [--uuid U] [--min-age-hours 24]`, a dry run unless `--apply` is given. Per
