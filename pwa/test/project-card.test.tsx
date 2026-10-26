@@ -11,7 +11,7 @@ import { NEST_BRACKET, POOL_UNAVAILABLE_TEXT, ProjectCard } from '../src/fleet/P
 import { waveLabel } from '../src/fleet/runWords';
 import { TEST_ROSTER } from './rosterFixture';
 import { fleetTree } from '../src/fleet/fleetTree';
-import { TOOL_USE_ID, frame, lease, unowned } from './delegationFixture';
+import { TOOL_USE_ID, activity, frame, lease, unowned } from './delegationFixture';
 import { WARN_GLYPH } from '@ccrc/ui';
 
 // vitest runs without globals, so RTL's auto-cleanup never registers itself —
@@ -1408,6 +1408,15 @@ describe('delegation rows on a project card (delegation broker wave 4)', () => {
     expect(via?.textContent).toContain('inferred');
     expect(container.textContent).toContain('Offline coordinator (1)');
     expect(container.textContent).toContain('Unowned work (1)');
+  });
+
+  it('R9 on the card: a programme worker\'s live activity is a chip on its row, never a row of its own', () => {
+    const w = frame({ activities: [activity({ activityId: 'a-w', parentId: 'worker-a', placement: 'chip' })] });
+    const { container } = render(<ProjectCard group={cardFor(w, [coordA, workerA], [prun({})])} onOpen={() => {}} onActions={() => {}} />);
+    expect(container.querySelectorAll('.proj-work')).toHaveLength(0);
+    const chips = [...container.querySelectorAll('.sess-meta-chip')];
+    expect(chips.map((c) => c.textContent)).toEqual(['1 delegated']);
+    expect(chips[0]!.closest('.proj-nest')).not.toBeNull();
   });
 
   it('W4-U30: a group is a closed disclosure by default, opened under its composite key', async () => {

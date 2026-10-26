@@ -19,7 +19,7 @@
 // the conditional that made SessionCard mean two different things is gone.
 import { useRef } from 'react';
 import type { ReactNode } from 'react';
-import type { FleetSession, ProjectPoolWire, RosterWire } from '../../../shared/api';
+import type { DelegationActivityWire, FleetSession, ProjectPoolWire, RosterWire } from '../../../shared/api';
 import { Icon, StatusDot, TypedLabel, useNow } from '@ccrc/ui';
 import type { ChildRunContext } from './runWords';
 import type { CoordPresence } from './coordWords';
@@ -63,6 +63,7 @@ export function SessionLine({
   coordinator = null,
   coordinatorTitle,
   now,
+  delegated,
 }: {
   session: FleetSession;
   onOpen: (id: string) => void;
@@ -105,6 +106,9 @@ export function SessionLine({
   coordinatorTitle?: string;
   /** The clock, for a test; the row ticks its own otherwise. */
   now?: number;
+  /** R9 (delegation broker wave 4): the delegated work `nestFleet` attached to this row, drawn as one chip when any
+   *  of it is live. Absent = today's row, byte for byte. */
+  delegated?: readonly DelegationActivityWire[];
 }): ReactNode {
   // D-5545: every fact this row shows is decided by `sessionFacts`, the model the session header reads too —
   // so the card is a glance (the name, the state word, ONE context fact, at most ONE marker and the
@@ -117,7 +121,7 @@ export function SessionLine({
   const tick = useNow(30_000, busy && now === undefined);
   const facts = sessionFacts({
     session, now: now ?? tick, roster, projectPool, ...(childRun === undefined ? {} : { childRun }),
-    workingOn, coordinator, coordinatorTitle: coordinatorTitle ?? null,
+    workingOn, coordinator, coordinatorTitle: coordinatorTitle ?? null, ...(delegated === undefined ? {} : { delegated }),
   });
   const glance = cardFacts(facts);
   const label = glance.name.text;

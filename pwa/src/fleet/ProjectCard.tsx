@@ -15,7 +15,9 @@
 import { Fragment } from 'react';
 import type { ReactNode } from 'react';
 import { BareRow, Button, Icon } from '@ccrc/ui';
-import type { FleetSession, ProjectedHome, ProjectPoolWire, ProjectPoolsWire, RosterWire, RunSummary } from '../../../shared/api';
+import type {
+  DelegationActivityWire, FleetSession, ProjectedHome, ProjectPoolWire, ProjectPoolsWire, RosterWire, RunSummary,
+} from '../../../shared/api';
 import { navigate } from '../lib/router';
 import { orphanNote, type OrphanNote } from './orphanWords';
 import { addWorkspaceLabel, poolOfPlacement, type ProjectPlacementRead } from './placementWords';
@@ -331,7 +333,9 @@ export function ProjectCard({
    *  written out three times — here, in the released fold and in the archived
    *  fold — which is three places that have to agree about what a row on THIS
    *  card knows: its pool, its run door and whether its repo needs saying. */
-  const line = (s: FleetSession, note: OrphanNote | null = null): ReactNode => (
+  const line = (
+    s: FleetSession, note: OrphanNote | null = null, delegated?: readonly DelegationActivityWire[],
+  ): ReactNode => (
     <SessionLine
       key={s.id}
       session={s}
@@ -345,6 +349,7 @@ export function ProjectCard({
       childRun={childRunContext(s, runs, coordOf)}
       coordinator={note?.presence ?? null}
       {...(note === null ? {} : { coordinatorTitle: note.title })}
+      {...(delegated === undefined ? {} : { delegated })}
     />
   );
 
@@ -396,7 +401,7 @@ export function ProjectCard({
         </BareRow>
       );
     }
-    return row.kind === 'session' ? line(row.session, noteFor(row))
+    return row.kind === 'session' ? line(row.session, noteFor(row), row.delegated)
     : row.kind === 'pending' ? <PendingSpawn run={row.run} nowMs={nowMs} />
     : (
       // D-6088 rule 6: the coordinator's workers as one line, the Released fold's disclosure in the row's place.
