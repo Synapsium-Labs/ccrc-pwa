@@ -5373,7 +5373,7 @@ const lexists = (p: string): boolean => { try { lstatSync(p); return true; } cat
 // These cases deliberately share one process across sequential ordinary tests.
 // The first mimics setup failing after it obtained a current-run supervisor; the
 // second is its only pre-fix escape hatch, and proves afterEach drained it.
-describe.sequential('ccrc account: setup failures keep current-run fixture ownership', () => {
+describe('ccrc account: setup failures keep current-run fixture ownership', { concurrent: false }, () => {
   let failedSetup: { home: string; port: number; pid: number } | null = null;
 
   it.skipIf(!PY3)('first setup rejection leaves its current-run fake to file-level cleanup', async () => {

@@ -33,13 +33,22 @@
 // fixtures are bundles + digests, not 3 MB tarballs); `ccrc update` always
 // passes --blob.
 //
-// Dependency majors (D-3131): @sigstore/verify@^3.1, @sigstore/bundle@^4.0
-// and @sigstore/protobuf-specs@^0.5 — not the newest majors the plan
-// originally named — because the v4/v5 majors declare
-// `engines.node ^22.22.2 || ^24.15.0` and the fleet (and this box) run node
-// 24.14.1. Export names (`Verifier`, `toSignedEntity`, `toTrustMaterial`,
-// `bundleFromJSON`, `TrustedRoot`) were re-measured on the installed v3/v4
-// modules and match the spike's v4.1.2/v5.0.0 names verbatim.
+// Dependency majors: @sigstore/verify@^4.1, @sigstore/bundle@^5.0 and
+// @sigstore/protobuf-specs@^0.5. D-3131 first held these one major back
+// (v3/v4) because the v4/v5 majors declare `engines.node ^22.22.2 ||
+// ^24.15.0 || >=26`, and some boxes run node 24.14.1, which that range
+// leaves out. Per their changelogs the majors' one breaking change is
+// dropping Node 20; v4 also carries later hardening (tlog entries
+// de-duplicated before the threshold count, stricter checkpoint parsing) and
+// accepts DSSE bundles with a Rekor v2 `hashedrekord` entry. Re-measured at
+// the bump: every case in server/test/verify-provenance.test.ts, the
+// bad-signature, tamper, wrong-identity, untrusted-CA and expired-certificate
+// refusals among them, passes on node 22.16.0 (the repo floor), 24.14.1 and
+// 26.5.0, and `npm ci --omit=dev` on 24.14.1 installs with an EBADENGINE
+// warning, not an error. A box below the declared range runs the library
+// outside what its authors test; if the library fails to load there, that is
+// exit 3, never a verdict. The export names (`Verifier`, `toSignedEntity`,
+// `toTrustMaterial`, `bundleFromJSON`, `TrustedRoot`) are unchanged.
 //
 // exit 0 verified (one stdout line naming the identity); 1 refused (one
 // stderr line saying why); 2 usage; 3 the verifier could not RUN at all —
