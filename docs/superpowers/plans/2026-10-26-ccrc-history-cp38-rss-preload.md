@@ -19,7 +19,8 @@ The fix moves the measurement into one small pure function in a sibling fixture 
 - **Linux reads its own peak.** `<n>` is `VmHWM` from `/proc/self/status`, in kB as the kernel prints it. Where that file is absent, unreadable, or has no parseable `VmHWM` line, `<n>` is `process.resourceUsage().maxRSS` and the source line says `maxrss`. The exit hook never throws and never prints 0 or a non-integer.
 - **No new environment seam.** The preload stays a `--import` fixture. The fallback is tested through the pure function with an injected reader, never through an environment variable (§10.1).
 - **Bounds unchanged.** `IX_RSS_BOUND_KIB`, `IX_LINE_RSS_BOUND_KIB`, DM47's bound and history-recall's bound keep their values. Only the comments' MEASURED figures are corrected, measured over predicted, each naming the Node version it was measured on. Tightening a bound, O20's included, is a Later decision, and O20's is the operator's.
-- **D-numbers.** This wave was issued D-6964, D-6965 and D-6966. This plan defines D-6964 and D-6965. D-6966 is spare: a departure found while executing takes it, defined in "Deviations found" in the commit that first cites it. Never write any other undefined number.
+- **D-numbers.** This wave was issued three numbers: D-6964, D-6965 and the one after them. This plan defines D-6964 and D-6965. The third is spare: a departure found while executing takes it, defined in "Deviations found" in the commit that first cites it. Never write any other undefined number.
+  - Measured: the plan as first committed named the spare number in full without defining it, and `deviation-refs` red on it ("a tracked file names a global D-ref above the ledger high-water D-6965"). An issued but undefined number is described by count, so the line now does that. Nothing took the spare.
 - **The fixture ring.** `history-lib.test.ts`'s `FIXTURE_RING` gives every `.mjs` file in `fixtures/history/` a ring, and a `preload-*.mjs` file may import only `node:*`.
   - `rss-peak.mjs` gets a ring that forbids every import.
   - One exact per-file static allowance, `{ 'preload-rss.mjs': ['./rss-peak.mjs'] }`, is added in the style of `LAZY_IMPORTS` (D-6965).
@@ -147,6 +148,23 @@ On Linux, a spawned child's `process.resourceUsage().maxRSS` inherits the parent
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
 ```
+
+## Measured
+
+Each consumer case was run once alone per side on Node v24.14.1 (Linux 6.8): "Before" with the dispatch base's preload (`3a0bd0ad1`, inherited `maxRSS`), "After" with Task 1's (`VmHWM`, the process's own peak).
+
+| Case | Before (KiB) | After (KiB) | Bound (KiB) | Node |
+|---|---|---|---|---|
+| O20's pass (`history-ingest`) | 299,488 | 314,756 | 524,288 | v24.14.1 |
+| D-4345 heaviest structured line | 315,656 | 331,912 | 524,288 | v24.14.1 |
+| D-4419 U+008F line | 363,324 | 364,268 | 524,288 | v24.14.1 |
+| DM47 64 MiB sidecar | 230,940 | 227,648 | 524,288 | v24.14.1 |
+| CP-39 walk-cap | 319,320 | 311,052 | 524,288 | v24.14.1 |
+| history-recall expand | 276,416 | 276,744 | 1,048,576 | v24.14.1 |
+
+On this run the two sides differ by a few percent either way, which is run-to-run noise: the vitest worker was not the larger of the two here. The correction matters where the worker is large (D-6964), not here.
+
+The node floor (22.16.0) leg's figure for O20 goes in the PR body once this PR's CI has run.
 
 ## Deviations found
 

@@ -3201,7 +3201,8 @@ describe.skipIf(process.platform === 'darwin')('expand at scale (Task 16, review
   const SCALE_MS = 20_000;
   /** Peak RSS for one page of a ~64 MiB blob (*chosen*): one blob decompressed, only the page's window redacted
    *  (Task 12's redactDisplayWindow), never the store. Redacting the whole blob instead peaked at 1,954 MiB (review
-   *  finding R36), which Step 13's mutant (b) shows red here; windowed, a prototype page peaked at 201,720 KiB. */
+   *  finding R36), which Step 13's mutant (b) shows red here; windowed, a prototype page peaked at 201,720 KiB (read with the inherited maxRSS, D-6964; with the preload's own peak this case measured
+   *  276744 KiB on Node 24.14.1, 276416 KiB read the old way). */
   const RSS_KIB = 1_048_576;
   const RSS_PRELOAD = path.join(rH.REPO, 'server', 'test', 'fixtures', 'history', 'preload-rss.mjs');
   const S = t16random(32).toString('hex');
