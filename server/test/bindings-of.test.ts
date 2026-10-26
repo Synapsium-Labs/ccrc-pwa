@@ -1,5 +1,5 @@
 // ARCH-42 (#777): `CoordStore.bindingsOf` answers through the readers it replaces, and reads only what it is asked
-// (D-TBD-bindings-of-lazy). Each answer is the reader's own, so a site moved onto it reads what it read before.
+// (D-7070). Each answer is the reader's own, so a site moved onto it reads what it read before.
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { openCoordDb } from '../src/coord/db.js';

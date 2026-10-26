@@ -12,7 +12,7 @@ its parent, which open run does its card show, whom does it work for) asks it th
 No new rule and no parallel path: every answer is the reader the caller used before, read in the same order with the
 same arguments, so each move is behaviour-identical by construction.
 
-## D-TBD-bound-by-census: the counting rule
+## D-7069: the counting rule
 
 A SITE is a named production code unit under `server/src/` (a function, a method, or an arrow bound to a name, as the
 parsed-symbol scanner `server/test/scan/symbols.ts` names it) that CALLS one of the five bound-by readers:
@@ -122,8 +122,8 @@ is red with this branch's changes stashed too (a NUL-leading `claimedBy` through
 
 ## Decisions
 
-- **D-TBD-bound-by-census**: the counting rule above.
-- **D-TBD-bindings-of-lazy**: `bindingsOf` is a view of five lazy answers, not one eager read of both roles. An eager read
+- **D-7069**: the counting rule above.
+- **D-7070**: `bindingsOf` is a view of five lazy answers, not one eager read of both roles. An eager read
   would read the claimant column for a worker-only caller (and the reverse), so a read that fails in the column a caller
   never used would change its answer; the lazy view keeps every move behaviour-identical, and the rule stays in
   `runBinding.ts`.

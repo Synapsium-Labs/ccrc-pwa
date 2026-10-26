@@ -1,4 +1,4 @@
-// ARCH-42 (GitHub #777): the bound-by census (D-TBD-bound-by-census; plan 2026-10-26-arch-42-bindings-of.md). Its own
+// ARCH-42 (GitHub #777): the bound-by census (D-7069; plan 2026-10-26-arch-42-bindings-of.md). Its own
 // module, as W3's questions and W8's chains keep theirs (`census-w3/`, `census-w8/`): no series appends to
 // `consolidationCensus.ts`'s tail (spec §5.1 rule 6). The query returns `CensusSite` rows through that module's shared
 // helpers, and its fixture and real-tree rows live in the sibling `bindings.test.ts`.
@@ -56,7 +56,7 @@ export function boundByCalls(root: string = REPO): BoundByCall[] {
   return out;
 }
 
-/** The census: one row per named unit that calls a bound-by reader (`D-TBD-bound-by-census`). */
+/** The census: one row per named unit that calls a bound-by reader (`D-7069`). */
 export function boundBySites(root: string = REPO): BoundBySite[] {
   const byOwner = new Map<string, { site: BoundByCall; readers: string[] }>();
   for (const c of boundByCalls(root)) {

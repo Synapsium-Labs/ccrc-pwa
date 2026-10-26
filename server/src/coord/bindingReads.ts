@@ -88,7 +88,7 @@ export function sessionRunRead(port: Pick<BindingReadPort, 'bindingRunsOf'>, ses
  *   - `parent`: the session's parent, the claimant of its open binding (`childParentRead`, `childParentOf`);
  *   - `card`: the newest and the newest open bound run (`sessionRunRead`, `bindingOf`);
  *   - `claimants`: every coordinator the session currently works for (`claimantsOfSession`, `claimantsOf`).
- * LAZY (D-TBD-bindings-of-lazy): each answer reads when it is asked and not before, so a caller reads exactly what it
+ * LAZY (D-7070): each answer reads when it is asked and not before, so a caller reads exactly what it
  * read before the move, in its order, and a column it never asked cannot fail or throw into its answer.
  */
 export interface SessionBindings {

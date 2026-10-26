@@ -1,4 +1,4 @@
-// ARCH-42's bound-by census, held two ways (`consolidation-census.test.ts`'s discipline; D-TBD-bound-by-census; plan
+// ARCH-42's bound-by census, held two ways (`consolidation-census.test.ts`'s discipline; D-7069; plan
 // 2026-10-26-arch-42-bindings-of.md): against a FIXTURE tree, so the query counts what it claims and passes over what it
 // must not, and against the REAL tree, as a may-only-shrink ceiling that the commit moving each site onto
 // `CoordStore.bindingsOf` lowers by one.
@@ -27,7 +27,7 @@ const show = (sites: readonly BoundBySite[]): void => {
   console.log(`census bound-by: ${sites.length}\n${sites.map((s) => `  ${s.file} ${s.owner} [${s.readers.join(', ')}]`).join('\n')}`);
 };
 
-describe('ARCH-42 bound-by census (D-TBD-bound-by-census)', () => {
+describe('ARCH-42 bound-by census (D-7069)', () => {
   it('FIXTURE: one row per named unit that calls a reader; readers, other reads, comments and tests are not sites', () => {
     const t = mkdtempSync(path.join(tmpdir(), 'w4-bound-by-'));
     try {
