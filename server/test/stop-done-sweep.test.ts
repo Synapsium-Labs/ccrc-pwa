@@ -847,3 +847,63 @@ describe('the watcher\'s own pass, its deps unmocked (D-5370)', () => {
     }
   });
 });
+
+// D-7041 (ARCH-43, the run-done funnel task), characterization: green on the lane before its feed pair moved onto the
+// funnel and its switches onto `readSwitches`, and green after. A throwing archive costs the archive row alone and
+// prints the lane's own line, `stop-done: ` prefix and degrade sentence byte for byte, for both rows; each of the
+// three switches, raised alone, stops the pass before anything is read, composed or recorded.
+describe('stopDonePass: the feed pair and the switches, before and after the funnel (D-7041)', () => {
+  const DISK_FULL = 'disk full';
+  const archiveThrows = (f: Fake): StopDoneSweepDeps => ({
+    ...f.deps, coord: { ...f.deps.coord, recordFeedEvent: () => { throw new Error(DISK_FULL); } },
+  });
+  const failLines = (warn: { mock: { calls: unknown[][] } }): string[] =>
+    warn.mock.calls.map((c) => String(c[0])).filter((l) => l.includes('recordFeedEvent failed'));
+
+  it('a throwing archive: the asleep row warns with its sentence, the ring still records it, the act is unchanged', async () => {
+    const f = fake([ID]);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      const out = await stopDonePass(archiveThrows(f), { retryAt: new Map(), mailOnly: 0 }, [row(ID)], [rec(ID)], []);
+      expect(out).toEqual([{ id: ID, kind: 'hibernated', runId: 10 }]);
+      expect(sleepRows(f)).toEqual([{ sessionId: ID, runId: 10 }]);
+      expect(failLines(warn)).toEqual([`ccrc-server: stop-done: recordFeedEvent failed (${DISK_FULL}) — ${ID}'s sleep has no feed row`]);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('a throwing archive: the mail-only row warns with its sentence, and the ring still records it', async () => {
+    const f = fake([ID]);
+    f.mailTo.add(ID);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      const out = await stopDonePass(archiveThrows(f), mem(), [row(ID)], [rec(ID)], []);
+      expect(out).toEqual([]);
+      expect(f.feed.filter((e) => e.kind === 'coord').map((e) => e.title)).toEqual(['Workers kept awake by unread mail: 1']);
+      expect(failLines(warn)).toEqual(['ccrc-server: stop-done: recordFeedEvent failed (disk full) — the mail-only count has no feed row']);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it.each([STOP_DONE_DISABLED_MARKER, RECLAIM_PAUSE_MARKER, HIBERNATE_DISABLED_MARKER])(
+    '%s raised alone stops the pass: nothing is read, composed or recorded', async (k) => {
+      const f = fake([ID]);
+      const live = vi.fn(f.deps.liveWord);
+      const last = vi.fn(f.deps.coord.lastRunBySession);
+      const deps = { ...f.deps, liveWord: live, coord: { ...f.deps.coord, lastRunBySession: last } };
+      expect(await stopDonePass(deps, mem(), [row(ID)], [rec(ID)], ['project-a-other.uuid', k])).toEqual([]);
+      expect(f.argv).toEqual([]);
+      expect(f.feed, 'not even the first pass\'s mail-only zero').toEqual([]);
+      expect(live).not.toHaveBeenCalled();
+      expect(last).not.toHaveBeenCalled();
+      expect(f.serialCalls).toBe(0);
+    });
+
+  it('CONTROL: with none of the three raised, the same pass sleeps the worker', async () => {
+    const f = fake([ID]);
+    expect(await stopDonePass(f.deps, mem(), [row(ID)], [rec(ID)], ['project-a-other.uuid']))
+      .toEqual([{ id: ID, kind: 'hibernated', runId: 10 }]);
+  });
+});
