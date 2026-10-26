@@ -15,6 +15,13 @@ plan file itself carries the literal placeholders, so the plan PR meets the same
 
 ## Departures from the plan's text
 
+- **`question-census-module` (where the queries live).** The plan appends W3's queries at `consolidationCensus.ts`'s
+  tail. Two open PRs append at that same tail (#1594, W8's census split; #1596, the sleep-lane pin), so under rule 6 W3
+  takes its own module, as W8's chains do: `server/test/census-w3/questions.ts`, with its rows in the sibling
+  `census-w3/questions.test.ts`. `consolidationCensus.ts` changes by five words only: `sourceFiles`, `sitesOf`, `esc`,
+  `watcherFacts` and `siteAt` are exported, so the W3 module reads the tree through the same helpers. Q3b to Q3g quote
+  the census from `census-w3/questions.ts`, and their Verify runs `census-w3/questions` where the plan says
+  `consolidation-census`.
 - **`question-census-table-row` (the store-call table).** The plan's Q3a table lists `watch.ts`'s `answeredLate:
   approvalsForChild (1)`. Measured, `FleetWatcher.answeredLate` makes no store call; the one `approvalsForChild` call
   outside the sweep and the hand-over door is `FleetWatcher.tryHoldApproval`'s. The file's count (22) and the owning task
