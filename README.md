@@ -1734,9 +1734,9 @@ ccrc account add …                   # connect a lane by verb rather than by h
   if the map ever comes back.
 
 **`/accounts`** (one of the app's top-level routes, reached from the labelled **Account** button in the fleet
-header, or from the `AccountsStrip` — a row of lane cards below the bar on a wide screen in either skin, inside the
-fleet list on a phone: each card opens the screen at its account, and **All accounts** opens the full screen) shows
-every account ccd knows about, not just the ones with headroom.
+header, or from the `AccountsStrip` — a row of lane cards below the bar on a wide screen in either skin, on a phone
+in Refined's fleet header or Instrument's fleet list: each card opens the screen at its account, and **All accounts**
+opens the full screen) shows every account ccd knows about, not just the ones with headroom.
 It rides the existing `GET /api/accounts` pipeline — no new route, no new
 whitelist grant — with its own 20 s poller. Per account:
 
