@@ -17,6 +17,7 @@ import { mkTmp } from './tmpHelpers.js';
 import { unreadableField as withUnreadableField } from './ioDoubles.js';
 import { okRun } from './coordReadHelpers.js';
 import { isChildReclaimKebab } from '../src/coord/childReclaim.js';
+import { isClaimantState } from '../src/coord/staleSibling.js';
 import { isApprovalKebab } from '../src/coord/approvalsign.js';
 import { isDigestKebab } from '../src/coord/digest.js';
 import { isStallKebab } from '../src/coord/stall.js';
@@ -981,8 +982,12 @@ describe('the rejection table is total, in both directions', () => {
         // THE DRIFT RECONCILER'S LANE (D-5922): `coord/driftLane.ts` tags its summary push and its shadow notice with two
         // fixed literals. A tag names a ring row, never a `refused` or `reject.code`. Admitted through the exported guard,
         // derived from `DRIFT_LANE_TAGS`, never NOT_CODES.
-        || isDriftLaneTag(tok),
-        `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode, SessionLifecycle, ReclaimRefuseCode, AskRefuseCode, RunRouteRefuseCode, SetAccountPoolsRefuseCode, UpdateStoreRefuseCode, child-reclaim word, stall-watch word, expiry word, stall-watch settings word, dead-coordinator word, temp-root collector word, delegation word, collector switch word, collector-switch route refusal, hibernation word, drift kind, notice mode, archive gate, stale-archive outcome or drift lane tag`).toBe(true);
+        || isDriftLaneTag(tok)
+        // THE STALE SIBLING (D-6923): `coord/staleSibling.ts` names a run claimant's state as literals. A state decides
+        // whether a sibling run keeps a child, never a `refused` or `reject.code`. Admitted through the exported guard,
+        // derived from `CLAIMANT_STATES`, never NOT_CODES.
+        || isClaimantState(tok),
+        `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode, SessionLifecycle, ReclaimRefuseCode, AskRefuseCode, RunRouteRefuseCode, SetAccountPoolsRefuseCode, UpdateStoreRefuseCode, child-reclaim word, stall-watch word, expiry word, stall-watch settings word, dead-coordinator word, temp-root collector word, delegation word, collector switch word, collector-switch route refusal, hibernation word, drift kind, notice mode, archive gate, stale-archive outcome, drift lane tag or stale-sibling claimant state`).toBe(true);
     }
   });
 });

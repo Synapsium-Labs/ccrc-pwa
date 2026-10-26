@@ -2923,3 +2923,122 @@ describe('the sweep with child-reclaim-disabled set', () => {
     expect(f.requests).toHaveLength(1);
   });
 });
+
+// The kept reason and the stale sibling (D-6923). `review-report-live` and `siblings-open`
+// are `ordinary` skip words, so no surface named the run that kept a child; the feed now does, once per child per day.
+// And a sibling run that is provably abandoned (planned, never dispatched, fourteen days old, its coordinator archived
+// or gone) no longer keeps the child: it is reported as a stale sibling, and never closed.
+describe('the kept reason and the stale sibling — named in the feed, ignored when abandoned', () => {
+  const DAY = 24 * 3_600_000;
+  const TITLE = 'child reclaim kept';
+  const feedFixture = async (opts: FixtureOpts = {}) => {
+    const home = mkTmp('ccrc-child-reclaim-sweep-reason-');
+    const notifyLog = new NotifyLog(path.join(home, '.ccrc', 'notify.json'));
+    await notifyLog.load();
+    return fixture({ ...opts, home, notifyLog });
+  };
+  const rows = (f: ReturnType<typeof fixture>) =>
+    f.coord.feedEvents(50).filter((e) => e.title === TITLE && e.sessionId === 'demo-a');
+  /** A registry row for a coordinator, live unless `archived`. */
+  const plantCoordinator = (f: ReturnType<typeof fixture>, id: string, archived = false): void => {
+    const fields: Record<string, string> = { uuid: `u-${id}`, wrapper: 'claude', project: 'demo', workdir: `/w/${id}`,
+      started: '1', ...(archived ? { archived: '1790000000' } : {}) };
+    for (const [k, v] of Object.entries(fields)) writeFileSync(path.join(f.reg, `${id}.${k}`), v);
+  };
+  /** A finished child with a second run, planned now by `demo-coord`, naming the same session. */
+  const siblingChild = (f: ReturnType<typeof fixture>): { runId: number; siblingId: number } => {
+    const runId = finishedChild(f);
+    const sibling = f.openRun();
+    f.coord.setSession(sibling.id, 'demo-a');
+    return { runId, siblingId: sibling.id };
+  };
+
+  it('a sibling run kept by a LIVE coordinator is named in the feed by id and age, and the child is not asked', async () => {
+    const f = await feedFixture();
+    const { siblingId } = siblingChild(f);
+    plantCoordinator(f, 'demo-coord');
+    f.advance(15 * DAY);
+    await f.pass(); f.next(); await f.pass();
+    expect(f.requests).toEqual([]);
+    expect(rows(f)).toHaveLength(1);
+    expect(rows(f)[0]!.body).toContain(`run #${siblingId} (open 15 days)`);
+    expect(rows(f)[0]!.body).not.toContain('stale sibling');
+  });
+
+  it('a stale sibling (claimant gone, planned, 15 days) does not keep the child, and is reported, not closed', async () => {
+    const f = await feedFixture();
+    const { siblingId } = siblingChild(f);
+    f.advance(15 * DAY);
+    await f.pass(); f.next(); await f.pass();
+    expect(f.requests.map((q) => q.sessionId), 'the child reaches the executor').toEqual(['demo-a']);
+    expect(rows(f)).toHaveLength(1);
+    expect(rows(f)[0]!.body).toContain(`stale sibling run #${siblingId}`);
+    expect(rows(f)[0]!.body).toContain('ccrc does not close it');
+    const after = f.coord.run(siblingId);
+    expect(after.ok && after.run?.state, 'the stale sibling is left open').toBe('planned');
+  });
+
+  it('a stale sibling whose claimant is ARCHIVED is ignored too', async () => {
+    const f = await feedFixture();
+    siblingChild(f);
+    plantCoordinator(f, 'demo-coord', true);
+    f.advance(15 * DAY);
+    await f.pass(); f.next(); await f.pass();
+    expect(f.requests).toHaveLength(1);
+  });
+
+  it('a 13-day-old sibling of a gone coordinator still keeps the child', async () => {
+    const f = await feedFixture();
+    const { siblingId } = siblingChild(f);
+    f.advance(13 * DAY);
+    await f.pass(); f.next(); await f.pass();
+    expect(f.requests).toEqual([]);
+    expect(rows(f)[0]!.body).toContain(`run #${siblingId}`);
+  });
+
+  it('a DISPATCHED sibling of a gone coordinator still keeps the child', async () => {
+    const f = await feedFixture();
+    finishedChild(f);
+    const sibling = f.openRun();
+    f.coord.markDispatched(sibling.id, 'demo-a', 'demo-a', 'ws/a', false);
+    f.advance(15 * DAY);
+    await f.pass(); f.next(); await f.pass();
+    expect(f.requests).toEqual([]);
+  });
+
+  it('the row is written once per child per day, then again after a day', async () => {
+    const f = await feedFixture();
+    siblingChild(f);
+    plantCoordinator(f, 'demo-coord');
+    await f.pass(); f.next(); await f.pass(); f.next(); await f.pass();
+    expect(rows(f)).toHaveLength(1);
+    f.advance(DAY);
+    await f.pass();
+    expect(rows(f)).toHaveLength(2);
+  });
+
+  it('review-report-live names the reviewed run and its age', async () => {
+    const f = await feedFixture();
+    const work = f.openRun();
+    const review = f.openReview(work);
+    f.abandon(review);
+    f.plant('demo-a', { child: String(review.id) });
+    f.advance(3 * DAY);
+    await f.pass();
+    expect(f.requests).toEqual([]);
+    expect(rows(f)).toHaveLength(1);
+    expect(rows(f)[0]!.body).toContain(`run #${work.id} (open 3 days) is not closed`);
+  });
+
+  it('an unreadable sibling run keeps the child and is named without an age', async () => {
+    const f = await feedFixture();
+    const { siblingId } = siblingChild(f);
+    f.advance(15 * DAY);
+    const real = f.coord.run.bind(f.coord);
+    vi.spyOn(f.coord, 'run').mockImplementation((id: number) =>
+      (id === siblingId ? { ok: false as const, kind: 'run-unreadable' as const, detail: 'unreadable' } : real(id)));
+    await f.pass(); f.next(); await f.pass();
+    expect(f.requests).toEqual([]);
+    expect(rows(f)[0]!.body).toContain(`run #${siblingId} `);
+  });
+});
