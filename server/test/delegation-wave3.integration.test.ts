@@ -1661,7 +1661,8 @@ describe('8. the closed scope census', () => {
       'projectChanged: (prior, next) => coord.projectDelegationCheckpointChanges(prior, next),',
       'insertEvents: (rows) => coord.insertDelegationEvents(rows),',
       'eventStats: () => coord.delegationEventStats(),',
-      'if (this.deps.coord === undefined) return;',
+      // wave 4 (PR1 Task 1.3): `sweep` answers whether a pass ran, so the watcher projects only after one
+      'if (this.deps.coord === undefined) return false;',
     ]);
     expect(lane).toMatch(/private readonly dropped = new Map/);
     expect(lane).toMatch(/pathsByProject = new Map/);
