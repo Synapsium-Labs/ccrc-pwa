@@ -12201,6 +12201,13 @@ w6cDescribe('W2-6 Task 2: the five spec counters, their folds and their place (W
     ])).toEqual({ hits: 3, errors: 1, untimed: 1, unreadable: { tombstone: 2, 'no-tool-result': 2 }, prov_stale: 1, recall_calls: 4, gap: 1 });
   });
 
+  w6cIt('foldEcho: an unreadable key is only ever summed, as a number, whatever its name: __proto__ and constructor are kept, never dropped or turned into a string (review 965 F1)', () => {
+    const one = (): W6cR => ({ hits: 0, errors: 0, untimed: 0, unreadable: JSON.parse('{"tombstone":1,"__proto__":3,"constructor":3}'), prov_stale: 0, recall_calls: 0, gap: 0 });
+    const t = W6C_T2.foldEcho([one(), one()]).unreadable as Record<string, unknown>;
+    w6cExpect(Object.entries(t).sort(), 'CONTROL: tombstone sums as it did, and the two odd keys with it').toEqual([['__proto__', 6], ['constructor', 6], ['tombstone', 2]]);
+    w6cExpect(w6cLib.canonicalJson(t), 'the keys reach the report').toBe('{"__proto__":6,"constructor":6,"tombstone":2}');
+  });
+
   w6cIt('foldLag: the measured lags, ascending', () => {
     w6cExpect(W6C_T2.foldLag([{ lag_ms: 50, tick_ts_ms: 10 }, { lag_ms: 7, tick_ts_ms: 9 }])).toEqual({ lag_ms: [7, 50] });
   });

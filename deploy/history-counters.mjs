@@ -630,10 +630,11 @@ export function echoAt(ctx) {
   return measured(v);
 }
 
-/** Echo hits over one stratum: the measured windows' counts summed, `unreadable` merged word by word, and the gap of the
- *  sums (recall_calls - hits). */
+/** Echo hits over one stratum: the measured windows' counts summed, `unreadable` merged word by word (into a prototype-less
+ *  object, so no key of a node report, `__proto__` and `constructor` included, is dropped or read as inherited), and the
+ *  gap of the sums (recall_calls - hits). */
 export function foldEcho(values) {
-  const t = { hits: 0, errors: 0, untimed: 0, unreadable: {}, prov_stale: 0, recall_calls: 0, gap: 0 };
+  const t = { hits: 0, errors: 0, untimed: 0, unreadable: Object.create(null), prov_stale: 0, recall_calls: 0, gap: 0 };
   for (const v of nonEmpty('foldEcho', values)) {
     t.hits += v.hits;
     t.errors += v.errors;
