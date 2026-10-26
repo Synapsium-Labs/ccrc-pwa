@@ -44,6 +44,9 @@ export interface NoticeOpts {
   readonly url?: string;
   /** The writer's degrade sentence: the text after `— ` in the archive-failure warning. */
   readonly degraded?: string;
+  /** D-7041 (departure `notice-lane-prefix`): the writer's lane, printed after `ccrc-server: ` in the archive-failure
+   *  warning (`ccrc-server: stop-done: recordFeedEvent failed (…) — …`). Absent, the line is the funnel's own. */
+  readonly lane?: string;
   /** D-5860: the notice's once-only key, archived beside its row (`CoordStore.hasNotice` reads it). Passed through to
    *  the archive and nothing else: the funnel never suppresses the ring or the push on it, and the archive refuses
    *  nothing; whether to raise the notice at all is the caller's read, made before the write. */
@@ -122,8 +125,8 @@ function raise(deps: NoticeDeps, event: NoticeRecord, mode: NoticeMode, opts: No
         archived = 'landed';
       } catch (err) {
         archived = 'failed';
-        console.warn(`ccrc-server: recordFeedEvent failed (${err instanceof Error ? err.message : String(err)}) — `
-          + (opts.degraded ?? NOTICE_DEGRADED_DEFAULT));
+        console.warn(`ccrc-server: ${opts.lane === undefined ? '' : `${opts.lane}: `}recordFeedEvent failed (${
+          err instanceof Error ? err.message : String(err)}) — ` + (opts.degraded ?? NOTICE_DEGRADED_DEFAULT));
       }
     }
   }
