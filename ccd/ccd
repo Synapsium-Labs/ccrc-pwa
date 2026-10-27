@@ -44257,6 +44257,11 @@ cmd_ws_title() {   # ccd ws-title --session <id> (--title <text> | --clear) — 
 # from the environment: these are the platforms' standard locations (GNU coreutils, perl's shasum, BSD/macOS sha256).
 __CCD_HASH_TOOLS=(/usr/bin/sha256sum /bin/sha256sum /usr/local/bin/sha256sum /usr/bin/shasum /bin/shasum /usr/local/bin/shasum /sbin/sha256 /usr/bin/sha256)
 __CCD_LIB_SHA256=stamp-at-install
+# THE DOCS REDACTOR'S PINS (D-7077, OA-C11 (a)): the SHA-256 of `shared/redact.mjs` and `shared/redact-cli.mjs`, installed beside
+# this body. Placeholders here, rendered by ccd/ccd-entry-install.py from exactly one line each, as the library pin is. Read only by
+# `_docs_redact_cli` and `_docs_front`; written only here (the census in ccd-lib-load.test.ts).
+__CCD_REDACT_SHA256=stamp-at-install
+__CCD_REDACT_CLI_SHA256=stamp-at-install
 # WHAT THE LOAD DECIDED, PUBLISHED (D-7125). `_ccd_lib_load` is the one writer of these two: `__CCD_LAYOUT` is `source` (the
 # source checkout's arm) or `installed` (the digest checked), and `__CCD_HASH_CMD` the hashing command it chose. The docs front
 # and `_docs_redact_cli` read them; the front reads the layout only as `[[ $__CCD_LAYOUT == source ]]`, so anything else is the

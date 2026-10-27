@@ -33,12 +33,24 @@ export const CCD_LIB = path.resolve(__dirname, '../../ccd/lib/disk-retention.sh'
 /** The committed placeholder for the library pin (D-6913): like line 2's stamp, the digest is written at install time. */
 export const CCD_LIB_PIN_PLACEHOLDER = '__CCD_LIB_SHA256=stamp-at-install';
 
-/** What `ccd/ccd-entry-install.py` publishes for a ccd source beside library bytes `lib`: the pin placeholder rendered to the
- *  library's SHA-256 FIRST, then the line-2 placeholder swapped, in place, for the marker `markGenerated` writes, so the stamp
- *  covers the pin. A mirror for fixtures; `ccd-entry-install.test.ts` holds it equal to the installer's real output. */
-export function installedCcdBody(source: string, lib: string | Buffer): string {
+/** The docs redactor's two files (D-7077, OA-C11 (a)): installed beside the body in `shared/`, read by the installer from the
+ *  tree's `shared/`, and pinned by digest in the body like the library. */
+export const CCD_REDACT = path.resolve(__dirname, '../../shared/redact.mjs');
+export const CCD_REDACT_CLI = path.resolve(__dirname, '../../shared/redact-cli.mjs');
+
+/** What `ccd/ccd-entry-install.py` publishes for a ccd source beside library bytes `lib` and the redactor's two files
+ *  (`shared`, the repository's by default): the three pin placeholders rendered to their files' SHA-256 FIRST, then the line-2
+ *  placeholder swapped, in place, for the marker `markGenerated` writes, so the stamp covers the pins. A mirror for fixtures;
+ *  `ccd-entry-install.test.ts` holds it equal to the installer's real output. */
+export function installedCcdBody(
+  source: string, lib: string | Buffer,
+  shared: { redact: string | Buffer; cli: string | Buffer } = { redact: fs.readFileSync(CCD_REDACT), cli: fs.readFileSync(CCD_REDACT_CLI) },
+): string {
   const digest = createHash('sha256').update(lib).digest('hex');
-  const lines = source.replace(/^__CCD_LIB_SHA256=stamp-at-install$/m, `__CCD_LIB_SHA256=${digest}`).split('\n');
+  const sha = (b: string | Buffer): string => createHash('sha256').update(b).digest('hex');
+  const lines = source.replace(/^__CCD_REDACT_SHA256=stamp-at-install$/m, `__CCD_REDACT_SHA256=${sha(shared.redact)}`)
+    .replace(/^__CCD_REDACT_CLI_SHA256=stamp-at-install$/m, `__CCD_REDACT_CLI_SHA256=${sha(shared.cli)}`)
+    .replace(/^__CCD_LIB_SHA256=stamp-at-install$/m, `__CCD_LIB_SHA256=${digest}`).split('\n');
   if ((lines[1] ?? '').startsWith('# ccrc:stamp-at-install')) lines.splice(1, 1);
   return markGenerated(lines.join('\n'));
 }
@@ -141,6 +153,10 @@ export function installDirectEntry(home: string, opts: { body?: string | Buffer 
     fs.mkdirSync(path.join(libexec, 'lib'), { recursive: true });
     fs.copyFileSync(CCD_LIB, path.join(libexec, 'lib', 'disk-retention.sh'));
   }
+  // The docs redactor (D-7077), where the installer puts it: `shared/` beside the body.
+  fs.mkdirSync(path.join(libexec, 'shared'), { recursive: true });
+  fs.copyFileSync(CCD_REDACT, path.join(libexec, 'shared', 'redact.mjs'));
+  fs.copyFileSync(CCD_REDACT_CLI, path.join(libexec, 'shared', 'redact-cli.mjs'));
   fs.rmSync(entry, { force: true });
   if (!fs.existsSync(CCD_ENTRY)) {
     fs.writeFileSync(entry, bodyBytes, { mode: 0o755 });

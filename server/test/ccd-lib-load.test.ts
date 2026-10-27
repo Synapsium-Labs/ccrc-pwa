@@ -333,7 +333,7 @@ describe('loaderGlobals: every write and read of the loader\'s globals, over ccd
   };
 
   it('FIXTURE: one line of every write form is reported, a library line included; a test, a comment and a heredoc are not writes', () => {
-    const names = ['__CCD_LAYOUT', '__CCD_HASH_CMD'];
+    const names = ['__CCD_LAYOUT', '__CCD_HASH_CMD', '__CCD_REDACT_SHA256', '__CCD_REDACT_CLI_SHA256'];
     const planted = names.flatMap(writeForms);
     const t = tmpTree({
       'ccd/ccd': [
@@ -341,6 +341,7 @@ describe('loaderGlobals: every write and read of the loader\'s globals, over ccd
         '_fx() {',
         ...planted.map((l) => `  ${l}`),
         '  [[ $__CCD_LAYOUT == source ]] && echo "${__CCD_HASH_CMD[@]}"',
+        '  echo "$__CCD_REDACT_SHA256,${__CCD_REDACT_CLI_SHA256}"',
         '  # __CCD_LAYOUT=commented',
         "  cat <<'EOF'",
         '__CCD_LAYOUT=in-a-heredoc',
@@ -348,15 +349,18 @@ describe('loaderGlobals: every write and read of the loader\'s globals, over ccd
         '}',
         '',
       ].join('\n'),
-      'ccd/lib/extra.sh': '__CCD_LAYOUT=source\n',
+      'ccd/lib/extra.sh': `__CCD_LAYOUT=source\n__CCD_REDACT_CLI_SHA256=${'a'.repeat(64)}\n`,
     });
     const got = loaderGlobals(t);
     expect(got.writes.filter((s) => s.file === 'ccd/ccd').map((s) => s.text.trim())).toEqual(planted);
     expect(got.writes.filter((s) => s.file === 'ccd/ccd').every((s) => s.fn === '_fx')).toBe(true);
-    expect(got.writes.filter((s) => s.file === 'ccd/lib/extra.sh').map(site)).toEqual(['ccd/lib/extra.sh#<top>: __CCD_LAYOUT=source']);
+    expect(got.writes.filter((s) => s.file === 'ccd/lib/extra.sh').map(site))
+      .toEqual(['ccd/lib/extra.sh#<top>: __CCD_LAYOUT=source', `ccd/lib/extra.sh#<top>: __CCD_REDACT_CLI_SHA256=${'a'.repeat(64)}`]);
     expect(got.reads.map((s) => `${s.global} ${s.text.trim()}`)).toEqual(expect.arrayContaining([
       '__CCD_LAYOUT [[ $__CCD_LAYOUT == source ]] && echo "${__CCD_HASH_CMD[@]}"',
       '__CCD_HASH_CMD [[ $__CCD_LAYOUT == source ]] && echo "${__CCD_HASH_CMD[@]}"',
+      '__CCD_REDACT_SHA256 echo "$__CCD_REDACT_SHA256,${__CCD_REDACT_CLI_SHA256}"',
+      '__CCD_REDACT_CLI_SHA256 echo "$__CCD_REDACT_SHA256,${__CCD_REDACT_CLI_SHA256}"',
     ]));
   });
 
@@ -369,6 +373,19 @@ describe('loaderGlobals: every write and read of the loader\'s globals, over ccd
       'ccd/ccd#_ccd_lib_load: __CCD_LAYOUT=installed',
       'ccd/ccd#_ccd_lib_load: __CCD_HASH_CMD=("${hash[@]}")',
     ]);
+  });
+
+  it('REAL: each redactor pin is written only by its top-level placeholder line in ccd/ccd, which the installer stamps', () => {
+    const w = loaderGlobals().writes.filter((s) => s.global === '__CCD_REDACT_SHA256' || s.global === '__CCD_REDACT_CLI_SHA256');
+    expect(w.map(site)).toEqual([
+      'ccd/ccd#<top>: __CCD_REDACT_SHA256=stamp-at-install',
+      'ccd/ccd#<top>: __CCD_REDACT_CLI_SHA256=stamp-at-install',
+    ]);
+  });
+
+  it('REAL: each redactor pin is read only inside _docs_redact_cli and _docs_front', () => {
+    const r = loaderGlobals().reads.filter((s) => s.global === '__CCD_REDACT_SHA256' || s.global === '__CCD_REDACT_CLI_SHA256');
+    expect(r.filter((s) => s.fn !== '_docs_redact_cli' && s.fn !== '_docs_front').map(site)).toEqual([]);
   });
 
   const PUBLISHED = 'source "$1" || exit 9; printf \'%s|%s\\n\' "$__CCD_LAYOUT" "${__CCD_HASH_CMD[*]}"';
