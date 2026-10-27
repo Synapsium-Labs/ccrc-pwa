@@ -14,7 +14,8 @@
 //   - a string in a JSX child expression (`{cond ? 'a' : 'b'}`);
 //   - sentence constants: a top-level `const` holding a string, a template, or an arrow that returns one (exported or
 //     not: a private constant is rendered all the same), and a top-level function's returned strings;
-//   - the sentence values of a `Record` table (a top-level const typed `Record<…>`);
+//   - the sentence values of a `Record` table (a top-level const typed `Record<…>`), at any depth under a value that is
+//     itself an object or an array (`STATUS_GROUPS`' `{ order, label, folds }` keeps its `label` one level down);
 //   - the first argument of `toast(…)`, which is a sentence the operator reads.
 // It never scans `className`, `data-*`, object keys, import specifiers, route literals or comments.
 //
@@ -106,6 +107,20 @@ function leaves(expr: ts.Node | undefined): ts.Node[] {
   return [];
 }
 
+/** `leaves`, and every string under an object literal's property values or an array's elements at any depth: a Record
+ *  table whose value is a small record (`STATUS_GROUPS`' `{ order, label, folds }`) keeps its sentence one level down. */
+function nestedLeaves(expr: ts.Node | undefined): ts.Node[] {
+  if (expr === undefined) return [];
+  if (ts.isParenthesizedExpression(expr) || ts.isAsExpression(expr) || ts.isSatisfiesExpression(expr)) {
+    return nestedLeaves(expr.expression);
+  }
+  if (ts.isObjectLiteralExpression(expr)) {
+    return expr.properties.flatMap((p) => (ts.isPropertyAssignment(p) ? nestedLeaves(p.initializer) : []));
+  }
+  if (ts.isArrayLiteralExpression(expr)) return expr.elements.flatMap(nestedLeaves);
+  return leaves(expr);
+}
+
 /** The text a string-like node says. A template's expressions are dropped (they are values, not words). */
 const textOf = (n: ts.Node): string => {
   if (ts.isTemplateExpression(n)) return n.head.text + n.templateSpans.map((s) => ` ${s.literal.text}`).join('');
@@ -164,7 +179,7 @@ export function visibleStrings(file: string, text?: string, only?: readonly stri
       if (!ts.isPropertyAssignment(p)) continue;
       const key = ts.isStringLiteral(p.name) || ts.isIdentifier(p.name) ? p.name.text : null;
       if (only !== undefined && (key === null || !only.includes(key))) continue;
-      for (const v of leaves(p.initializer)) add(v, 'a Record table value');
+      for (const v of nestedLeaves(p.initializer)) add(v, 'a Record table value');
     }
   };
 
@@ -302,6 +317,8 @@ describe('the scanner reads positions, not shapes', () => {
     ['a sentence-returning arrow', 'export const S = (n: number) => `In the terminal ${n} on the pane`;'],
     ['a returned sentence', 'export function f(x: boolean) { if (x) return "own-words"; return "ok"; }'],
     ['a Record table value', 'const T: Readonly<Record<string, string>> = { a: "fine", b: "the envelope" };'],
+    ['a Record table value nested in an object', 'const T: Record<string, { order: number; label: string }> = { a: { order: 1, label: "fine" }, b: { order: 2, label: "the envelope" } };'],
+    ['a Record table value nested two deep', 'const T: Record<string, { a: { b: string[] } }> = { x: { a: { b: ["fine", "the pane"] } } };'],
     ['a toast', 'toast("claude is asking");'],
     ['a kicker attribute', 'export const A = () => <AskHeader kicker="claude is asking" />;'],
     ['a parameter default', 'export function H({ kicker = "claude is asking" }: { kicker?: string }) { return kicker; }'],
