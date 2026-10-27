@@ -1784,8 +1784,16 @@ describe('ccrc update: one update at a time (the lock)', () => {
   it('an update with no qualifying nvm node refuses with the library\'s reason, installs nothing, and changes nothing', () => {
     const home = stubBox('ccrc-update-node-refuse-');
     plantNvm(home, ['v18.0.0'], 'v18.0.0');
-    const r = runUpdate(home);
+    // The node on PATH is the library's second choice (it falls back to a qualifying PATH node before refusing), and
+    // this fixture's PATH node forwards to the real interpreter, which qualifies. Shadow it with one below the floor,
+    // so "no qualifying node" is what the box measures.
+    const old = join(home, 'old-node-bin');
+    mkdirSync(old, { recursive: true });
+    writeFileSync(join(old, 'node'), '#!/bin/sh\n[ "$1" = --version ] && { echo v18.0.0; exit 0; }\nexit 1\n', { mode: 0o755 });
+    for (const b of ['npm', 'npx']) writeFileSync(join(old, b), '#!/bin/sh\nexit 1\n', { mode: 0o755 });
+    const r = runUpdate(home, [], { PATH: `${old}:${updateEnv(home).PATH}` });
     expect(r.code, `stdout: ${r.stdout}`).toBe(1);
+    expect(r.stderr).toMatch(/the node on PATH: .*v18\.0\.0/m);
     expect(r.stderr).toMatch(/^ccrc: no usable node: no installed nvm node meets the floor \(>=\d+\.\d+\.\d+\)/m);
     expect(r.stderr).toMatch(/installing is disabled for this run \(NODE_NO_INSTALL=1\).* Nothing on this box was changed\.$/m);
     expect(existsSync(join(home, 'nvm-install-calls')), 'an update ran `nvm install`').toBe(false);
