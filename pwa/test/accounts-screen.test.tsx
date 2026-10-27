@@ -14,7 +14,7 @@ import { AccountsScreen } from '../src/screens/AccountsScreen';
 import { ApiError, api } from '../src/lib/api';
 import { navigate } from '../src/lib/router';
 import { useFleetStore } from '../src/stores/fleet';
-import { declValue, ruleIn } from './cssRule';
+import { atBlock, declValue, ruleIn } from './cssRule';
 import { TEST_ROSTER } from './rosterFixture';
 
 const fleetCss = readFileSync(path.join(import.meta.dirname, '..', 'src', 'fleet', 'fleet.css'), 'utf8');
@@ -161,8 +161,8 @@ describe('AccountsScreen — every account, never hidden', () => {
   });
 });
 
-describe('AccountsScreen — the %/reset/— three-way (accounts-strip.test.tsx\'s own fixtures)', () => {
-  it('shows an inferred zero as "reset", a measured zero as 0%, and an unmeasured window as —', async () => {
+describe('AccountsScreen — the 0%/0% inferred/— three-way (accounts-strip.test.tsx\'s own fixtures)', () => {
+  it('shows an inferred zero as 0% named as reset and inferred, a measured zero as 0%, and an unmeasured window as —', async () => {
     stubAccounts([
       acct({
         wrapper: 'claude', five: 0, fiveResetAt: nowSec - 60, fiveRolledOver: true,
@@ -180,12 +180,16 @@ describe('AccountsScreen — the %/reset/— three-way (accounts-strip.test.tsx\
     // construction here. That is exactly the "never hides it" behaviour under
     // test elsewhere in this file; this block only asserts the three-way.
     const claudeRow = (await screen.findByText('team·max')).closest('[data-disabled]') as HTMLElement;
-    expect(within(claudeRow).getByText('reset')).toBeInTheDocument();  // rolled-over 5h
+    // rolled-over 5h: prints 0% (R48), and its spoken words say the window reset and the 0% is inferred
+    expect(within(claudeRow).getByText(/inferred: the window reset/)).toBeInTheDocument();
+    expect(within(claudeRow).getByText('0%', { selector: '[aria-hidden="true"]' })).toBeInTheDocument();
     expect(within(claudeRow).getByText('57%')).toBeInTheDocument();    // measured 7d
 
     const claude9Row = screen.getByText('team·alt').closest('[data-disabled]') as HTMLElement;
-    expect(within(claude9Row).getByText('0%')).toBeInTheDocument();   // really-measured-at-zero 5h
-    expect(within(claude9Row).getByText('—')).toBeInTheDocument();    // never-measured 7d
+    expect(within(claude9Row).getByText('0%')).toBeInTheDocument();   // really-measured-at-zero 5h: one node, nothing inferred
+    expect(within(claude9Row).queryByText(/inferred/)).toBeNull();
+    expect(within(claude9Row).getByText('—', { selector: '[aria-hidden="true"]' })).toBeInTheDocument();    // never-measured 7d
+    expect(within(claude9Row).getByText('not measured')).toBeInTheDocument();
   });
 });
 
@@ -463,5 +467,133 @@ describe('AccountsScreen on the page scaffold (D-5102)', () => {
     expect(h1).toHaveLength(1);
     expect(h1[0]).toHaveAccessibleName('Accounts');
     expect(screen.getByRole('button', { name: 'Back to fleet' })).toBeInTheDocument();
+  });
+});
+
+// T2c (D-6329, Q14): a lane card opens the screen at its lane, `/accounts?lane=<id>`. The arrival is a PASSIVE effect
+// keyed on the lane param and on whether that lane's row exists: the rows render only once the poll lands, and the
+// shell's layout-effect pane reset (app.tsx) must run before the scroll, not after it.
+describe('AccountsScreen — opens at a lane (?lane=<id>)', () => {
+  const rowOf = (id: string): HTMLElement => {
+    const el = document.querySelector<HTMLElement>(`.accounts-row[data-lane="${id}"]`);
+    expect(el, `the row of lane ${id}`).not.toBeNull();
+    return el!;
+  };
+  /** The elements `scrollIntoView` was called on, in order, with the options it got. */
+  const spyScroll = (): { readonly calls: HTMLElement[]; readonly spy: ReturnType<typeof vi.spyOn> } => {
+    const spy = vi.spyOn(HTMLElement.prototype, 'scrollIntoView').mockImplementation(() => {});
+    return { spy, get calls() { return spy.mock.contexts as HTMLElement[]; } };
+  };
+  const twoLanes = [acct({ wrapper: 'claude', five: 10, seven: 5 }), acct({ wrapper: 'claude9', five: 20, seven: 6 })];
+
+  it("/accounts?lane=<id> scrolls that lane's row into view and focuses it, once", async () => {
+    stubAccounts(twoLanes);
+    navigate('/accounts?lane=claude9');
+    const scroll = spyScroll();
+    render(<AccountsScreen />);
+    await screen.findByText('team·alt');
+    await act(async () => {});     // the arrival's own state write (the accent edge) lands after the poll's render
+    const row = rowOf('claude9');
+    expect(scroll.calls).toEqual([row]);
+    expect(scroll.spy).toHaveBeenCalledWith({ block: 'start' });
+    expect(row).toHaveAttribute('tabindex', '-1');
+    expect(document.activeElement).toBe(row);
+    expect(row).toHaveAttribute('data-arrived', 'true');
+    expect(rowOf('claude')).not.toHaveAttribute('data-arrived');
+    // ONCE: the focus moves on arrival, not on every render. Move it away and re-render the screen (a fleet store
+    // change re-renders it); neither the scroll nor the focus comes back.
+    (document.activeElement as HTMLElement).blur();
+    act(() => useFleetStore.setState({ sessions: [sess()] }));
+    expect(scroll.calls).toHaveLength(1);
+    expect(document.activeElement).toBe(document.body);
+  });
+
+  it('focuses without scrolling the page a second time (preventScroll)', async () => {
+    stubAccounts(twoLanes);
+    navigate('/accounts?lane=claude9');
+    spyScroll();
+    const focus = vi.spyOn(HTMLElement.prototype, 'focus');
+    render(<AccountsScreen />);
+    await screen.findByText('team·alt');
+    expect(focus).toHaveBeenCalledWith({ preventScroll: true });
+  });
+
+  it('the lane arrives after the poll lands', async () => {
+    let land!: (r: Awaited<ReturnType<typeof api.accounts>>) => void;
+    vi.spyOn(api, 'accounts').mockReturnValue(new Promise((res) => { land = res; }));
+    navigate('/accounts?lane=claude9');
+    const scroll = spyScroll();
+    render(<AccountsScreen />);
+    await act(async () => { await Promise.resolve(); });
+    expect(scroll.calls, 'no row yet, so nothing to scroll to').toHaveLength(0);
+    expect(document.activeElement).toBe(document.body);
+    await act(async () => { land({ accounts: twoLanes, projected: null, roster: TEST_ROSTER }); });
+    expect(scroll.calls).toEqual([rowOf('claude9')]);
+    expect(document.activeElement).toBe(rowOf('claude9'));
+  });
+
+  it('a second ?lane= on the same mount scrolls to the new lane, once', async () => {
+    stubAccounts(twoLanes);
+    navigate('/accounts?lane=claude');
+    const scroll = spyScroll();
+    render(<AccountsScreen />);
+    await screen.findByText('team·alt');
+    expect(scroll.calls).toEqual([rowOf('claude')]);
+    act(() => { navigate('/accounts?lane=claude9'); });
+    expect(scroll.calls).toEqual([rowOf('claude'), rowOf('claude9')]);
+    expect(document.activeElement).toBe(rowOf('claude9'));
+    expect(rowOf('claude9')).toHaveAttribute('data-arrived', 'true');
+    expect(rowOf('claude')).not.toHaveAttribute('data-arrived');
+  });
+
+  it('an unknown lane opens the screen at its top and moves no focus', async () => {
+    stubAccounts(twoLanes);
+    navigate('/accounts?lane=no-such-lane');
+    const scroll = spyScroll();
+    render(<AccountsScreen />);
+    await screen.findByText('team·alt');
+    expect(scroll.calls).toHaveLength(0);
+    expect(document.activeElement).toBe(document.body);
+    expect(document.querySelector('[data-arrived]')).toBeNull();
+  });
+
+  it('a known lane, then an unknown one, then the first again scrolls to it once more', async () => {
+    stubAccounts(twoLanes);
+    navigate('/accounts?lane=claude');
+    const scroll = spyScroll();
+    render(<AccountsScreen />);
+    await screen.findByText('team·alt');
+    await act(async () => {});
+    expect(scroll.calls).toEqual([rowOf('claude')]);
+    // The unknown lane arrives nowhere, and the record of the first follows the param: no edge left on the old row.
+    act(() => { navigate('/accounts?lane=no-such-lane'); });
+    expect(document.querySelector('[data-arrived]')).toBeNull();
+    expect(scroll.calls).toHaveLength(1);
+    // Back to the first: the shell's pane reset has put the pane at the top, so the row must arrive again.
+    act(() => { navigate('/accounts?lane=claude'); });
+    expect(scroll.calls).toEqual([rowOf('claude'), rowOf('claude')]);
+    expect(rowOf('claude')).toHaveAttribute('data-arrived', 'true');
+    expect(document.activeElement).toBe(rowOf('claude'));
+  });
+
+  it('the arrived row keeps a mark under forced colours, where the accent edge (a box-shadow) is dropped', () => {
+    const forced = atBlock(fleetCss, '@media (forced-colors: active)');
+    // Both states: arrived, and arrived while focused (the `:focus` outline reset is more specific than the first).
+    for (const sel of ['.accounts-row[data-arrived]', '.accounts-row[data-arrived][tabindex="-1"]:focus']) {
+      const rule = ruleIn(forced, sel);
+      expect(declValue(rule, 'outline'), sel).toBe('2px solid CanvasText');
+      expect(declValue(rule, 'outline-offset'), sel).toBe('-2px');
+    }
+  });
+
+  it('with no ?lane= nothing scrolls or takes focus, and each row is still a programmatic focus target only', async () => {
+    stubAccounts(twoLanes);
+    navigate('/accounts');
+    const scroll = spyScroll();
+    render(<AccountsScreen />);
+    await screen.findByText('team·alt');
+    expect(scroll.calls).toHaveLength(0);
+    expect(document.activeElement).toBe(document.body);
+    expect(rowOf('claude')).toHaveAttribute('tabindex', '-1');
   });
 });

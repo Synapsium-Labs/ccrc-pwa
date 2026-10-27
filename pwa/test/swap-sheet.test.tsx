@@ -360,7 +360,7 @@ describe('SwapSheet does not rank an account on an inferred zero', () => {
     // Wait for the poll before asserting an ABSENCE: every row says "limits
     // unknown" until it lands, so this would otherwise pass against the
     // pre-poll state and measure nothing.
-    await waitFor(() => expect(screen.getAllByText('reset')).toHaveLength(3));
+    await waitFor(() => expect(screen.getAllByText(/inferred/)).toHaveLength(3));
     expect(screen.queryByText('suggested')).not.toBeInTheDocument();
     // Not scoring is not hiding: every target is still listed and tappable.
     for (const label of ['team·alt', 'team·b', 'gpt', 'team·d']) {
@@ -368,27 +368,64 @@ describe('SwapSheet does not rank an account on an inferred zero', () => {
     }
   });
 
-  it('renders a rolled-over window as "reset", never as a confident 0%', async () => {
-    // `AccountsScreen`'s `Bar` already owns this vocabulary — "reset" (an
-    // inferred zero) ≠ "0%" (measured) ≠ "—" (nobody measured) — and this is
-    // the same fact on a second surface, so it says the same word rather than
-    // inventing a second visual language for it.
-    // `44`, not a round `40`: "40%" CONTAINS "0%", so the negative assertion
-    // below would fire on the honest half and this test would pass for the
-    // wrong reason (measured, first run).
+  it('renders a rolled-over window as 0% named as reset and inferred, its track left empty', async () => {
+    // R48 (the coordinator's ruling): every window everywhere prints a percentage, through `windowReading`. A
+    // rolled-over window prints "0%" and its spoken words say the window reset and the 0% is inferred, so the
+    // reading is no longer the word "reset" and a measured 0% is told apart by those words, not by the glyphs.
+    // `44`, not a round `40`, so the measured half cannot be mistaken for the other 0%.
     stubAccounts([acct({ wrapper: 'claude9', five: 0, seven: 44, fiveRolledOver: true })]);
     renderSwap();
     const row = await screen.findByRole('button', { name: /team·alt/ });
-    await waitFor(() => expect(row).toHaveTextContent('reset'));
-    expect(row).not.toHaveTextContent('0%');
+    await waitFor(() => expect(row).toHaveTextContent('0%, inferred: the window reset'));
     // The measured half is untouched — the flags are per-window.
     expect(row).toHaveTextContent('44%');
+    // The visible reading node itself is "0%" (not only the row's combined text, which the spoken words also fill).
+    const shown = [...row.querySelectorAll('.acct-gauge-pct [aria-hidden="true"]')].map((n) => n.textContent);
+    expect(shown).toEqual(['0%']);
     // AND THE TRACK IS LEFT EMPTY on the rolled half — exactly one fill in
-    // this row, the honest one. A bar drawn beside the word "reset" would
-    // contradict it in the same row, and the width would be a number nobody
+    // this row, the honest one. A bar drawn beside an inferred 0% would
+    // claim a measurement in the same row, and the width would be a number nobody
     // took: `limits.ts` happens to zero the value when it sets the flag, so a
     // fill would be invisible TODAY, which is precisely why only a DOM count
     // can hold the rule.
+    expect(row.querySelectorAll('.limit-fill')).toHaveLength(1);
+  });
+
+  it('reads a window nobody measured as "—" even when its rolled-over flag is set (never measured is not zero)', async () => {
+    // `value === null` decides first: a window with nothing read has nothing the server could have zeroed, so a
+    // flag beside it must not turn it into the inferred "0%". The measured half (44) stays untouched.
+    stubAccounts([acct({ wrapper: 'claude9', five: null, seven: 44, fiveRolledOver: true })]);
+    renderSwap();
+    const row = await screen.findByRole('button', { name: /team·alt/ });
+    await waitFor(() => expect(row).toHaveTextContent('not measured'));
+    expect(row).not.toHaveTextContent('inferred: the window reset');
+    const shown = [...row.querySelectorAll('.acct-gauge-pct [aria-hidden="true"]')].map((n) => n.textContent);
+    expect(shown).toEqual(['—']);
+    expect(row).toHaveTextContent('44%');
+  });
+
+  it('prints a measured window rounded and clamped, once, with its track filled', async () => {
+    // The measured arm through the real row: `37.6` rounds to 38 and `140` clamps to 100, each printed once in its
+    // own reading node (shown and spoken agree, so no `sr-only` twin and no `aria-hidden` glyphs), both tracks filled.
+    stubAccounts([acct({ wrapper: 'claude9', five: 37.6, seven: 140 })]);
+    renderSwap();
+    const row = await screen.findByRole('button', { name: /team·alt/ });
+    await waitFor(() => expect(row).toHaveTextContent('38%'));
+    const readings = [...row.querySelectorAll('.acct-gauge-pct')];
+    expect(readings.map((n) => n.textContent)).toEqual(['38%', '100%']);
+    for (const n of readings) {
+      expect(n.querySelector('.sr-only')).toBeNull();
+      expect(n.querySelector('[aria-hidden="true"]')).toBeNull();
+    }
+    expect(row.querySelectorAll('.limit-fill')).toHaveLength(2);
+  });
+
+  it('leaves the track empty for a window nobody measured, flag or no flag', async () => {
+    // Beside the case above: the never-measured half draws no fill, so only the measured half (44) does.
+    stubAccounts([acct({ wrapper: 'claude9', five: null, seven: 44, fiveRolledOver: true })]);
+    renderSwap();
+    const row = await screen.findByRole('button', { name: /team·alt/ });
+    await waitFor(() => expect(row).toHaveTextContent('not measured'));
     expect(row.querySelectorAll('.limit-fill')).toHaveLength(1);
   });
 });

@@ -1,26 +1,16 @@
 // The inspector's Lane (W2 Task S8, D-5474): the session's lane as ONE meter, its name in mono. The reading is the
-// lane's BINDING window, the fuller of its two (the one that runs out first), through `AccountMeterRow`, the accounts
-// strip's and screen's own row, so the three-way "reset" / "0%" / "—" and the reset countdown mean what they mean
-// there. The numbers come from the fleet store's `usage`, the store's one read of `GET /api/accounts`; a session route
-// opens no poll of its own.
+// lane's BINDING window, the fuller of its two (the one that runs out first, `bindingWindow`'s in laneOrder.ts), through
+// `AccountMeterRow`, the accounts strip's and screen's own row; a rolled-over window reads "0%" through `windowReading`
+// (laneWords.ts), spoken as inferred, and the reset countdown means what it means there. The numbers come from the
+// fleet store's `usage`, the store's one read of `GET /api/accounts`; a session route opens no poll of its own.
 import type { ReactNode } from 'react';
 import { useNow } from '@ccrc/ui';
-import type { AccountUsage } from '../../../shared/api';
 import { AccountMeterRow } from '../fleet/AccountMeterRow';
+import { bindingWindow } from '../fleet/laneOrder';
 import { accountLabel } from '../lib/accounts';
 import { useFleetStore } from '../stores/fleet';
 import { InspectorSection } from './InspectorSection';
 import { useInspectorSession } from './useInspectorSession';
-
-/** The window that binds: the fuller of the two, the 7d one on a tie (it resets later). `null` when neither is read. */
-export function bindingWindow(a: AccountUsage): { label: '5h' | '7d'; pct: number | null; resetAt: number | null; rolledOver: boolean } | null {
-  const five = { label: '5h' as const, pct: a.five, resetAt: a.fiveResetAt, rolledOver: a.fiveRolledOver };
-  const seven = { label: '7d' as const, pct: a.seven, resetAt: a.sevenResetAt, rolledOver: a.sevenRolledOver };
-  if (a.five === null && a.seven === null) return null;
-  if (a.five === null) return seven;
-  if (a.seven === null) return five;
-  return a.five > a.seven ? five : seven;
-}
 
 function LaneBody({ wrapper }: { wrapper: string }): ReactNode {
   const roster = useFleetStore((s) => s.roster);

@@ -48,7 +48,8 @@ import type { ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { INSTRUMENT, REFINED } from '@ccrc/ui';
-import type { FleetSession, NotifyEvent, RunSummary } from '../../shared/api';
+import type { AccountUsage, FleetSession, NotifyEvent, RunSummary } from '../../shared/api';
+import { api } from '../src/lib/api';
 import { poolLagText } from '../src/fleet/poolLag';
 import { fleetSession } from './fleetFixture';
 
@@ -136,6 +137,8 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
+  // The `api.accounts` spies the lanes-row cases add must not leak into the next case.
+  vi.restoreAllMocks();
   navigate('/');
   act(() => useFleetStore.setState({ sessions: [], conn: 'connecting', notices: [], blocked: false, pools: null, feed: [] }));
   resetAcks();
@@ -242,14 +245,13 @@ describe('the top bar', () => {
     expect(screen.getByRole('combobox', { name: 'Command palette' })).toBeInTheDocument();
   });
 
-  it('the top bar renders the wordmark first, then the crumbs, the command field, the meters door and +', () => {
+  it('the top bar renders the wordmark first, then the crumbs, the command field and +', () => {
     mount('/');
     const bar = topBar();
     const order = [
       bar.querySelector('[data-wordmark]'),
       bar.querySelector('.ins-crumbs'),
       within(bar).getByRole('button', { name: 'Search or run a command' }),
-      bar.querySelector('.accounts-compact[data-compact="led"]'),
       within(bar).getByRole('button', { name: 'New session' }),
     ];
     for (const el of order) expect(el).not.toBeNull();
@@ -329,8 +331,25 @@ describe('the status bar', () => {
   });
 });
 
+describe('the lanes row (T2c, D-6329)', () => {
+  it("the top bar's line holds no meters, and the header's second line is the lanes row", async () => {
+    const lane = (wrapper: string, five: number): AccountUsage => ({
+      wrapper, five, seven: five, ts: 1, fiveResetAt: null, sevenResetAt: null, fiveRolledOver: false, sevenRolledOver: false,
+      disabled: false, authDead: false,
+    });
+    const lanes = ['lane-a', 'lane-b', 'lane-c', 'lane-d', 'lane-e', 'lane-f', 'lane-g', 'lane-h'].map((w, i) => lane(w, 5 + i));
+    vi.spyOn(api, 'accounts').mockResolvedValue({ accounts: lanes, projected: { wrapper: 'lane-a', score: 0 }, roster: [] });
+    mount('/');
+    const line = topBar().querySelector<HTMLElement>('.ins-topbar')!;
+    await within(topBar()).findByText('lane-h');
+    expect(line.querySelector('.accounts-strip, .account-gauge, .meter')).toBeNull();
+    expect([...topBar().children]).toEqual([line, topBar().querySelector('.accounts-strip')]);
+    expect(topBar().querySelectorAll('.accounts-strip > .account-gauge')).toHaveLength(lanes.length);
+  });
+});
+
 describe('one instance per width', () => {
-  it('one banner stack and one set of lane meters at any width', () => {
+  it('one banner stack and one full strip at any width: at 900 the full strip, in the header', () => {
     for (const desk of [false, true]) {
       stubWidth(desk);
       act(() => useFleetStore.setState({ conn: 'down', sessions: [S] }));
@@ -338,9 +357,9 @@ describe('one instance per width', () => {
       render(<App />);
       const at = desk ? '900' : '899';
       expect(document.querySelectorAll('[data-banner="offline"]').length, `${at}: banner stacks`).toBe(1);
-      const meters = document.querySelectorAll('.accounts-compact, .accounts-strip');
-      expect(meters.length, `${at}: lane meters`).toBe(1);
-      expect(meters[0]!.matches('.accounts-compact[data-compact="led"]'), at).toBe(desk);
+      const meters = document.querySelectorAll('.accounts-strip');
+      expect(meters.length, `${at}: lanes`).toBe(1);
+      expect(meters[0]!.closest('header.shell-accounts') !== null, at).toBe(desk);
       // The rail and the status bar are desk parts: mounted at 900, absent at 899.
       expect(document.querySelectorAll('nav[aria-label="Primary"]').length, `${at}: rail`).toBe(desk ? 1 : 0);
       expect(document.querySelectorAll('footer.shell-status').length, `${at}: status bar`).toBe(desk ? 1 : 0);
