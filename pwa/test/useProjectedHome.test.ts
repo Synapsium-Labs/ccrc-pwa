@@ -11,7 +11,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, renderHook } from '@testing-library/react';
 import type { AccountsResponse } from '../../shared/api';
 import { api } from '../src/lib/api';
-import { createFleetStore, type FleetStore } from '../src/stores/fleet';
+import { createFleetStore, useFleetStore, type FleetStore } from '../src/stores/fleet';
 import { useAccountUsage, useProjectedHome } from '../src/fleet/useProjectedHome';
 
 let accountsSpy: ReturnType<typeof vi.spyOn>;
@@ -81,9 +81,13 @@ describe('useProjectedHome', () => {
   });
 
   it('reads the app-wide store when no store is passed', () => {
-    const { result } = renderHook(() => useProjectedHome());
-    // The app-wide store has not read anything in this file: its own "no answer yet".
-    expect(result.current).toBeUndefined();
+    act(() => { useFleetStore.setState({ projected: { wrapper: 'claude', score: 7 } }); });
+    try {
+      const { result } = renderHook(() => useProjectedHome());
+      expect(result.current).toEqual({ wrapper: 'claude', score: 7 });
+    } finally {
+      useFleetStore.setState({ projected: undefined });
+    }
   });
 
   // Review fix round 1, Minor 2 (Task 13): `active` is the caller's `open`, for
