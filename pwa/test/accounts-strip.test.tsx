@@ -973,6 +973,24 @@ describe('the lanes fold (S5b, D-6530)', () => {
       expect(flyoutOf(phone.container)).toBeNull();
     });
 
+    it('unmounting with the open delay pending, or the close grace pending, leaves no timer behind', async () => {
+      for (const pending of ['open', 'close']) {
+        const container = await mountDesk();
+        const idle = vi.getTimerCount();
+        fireEvent.pointerEnter(groupOf(container));
+        expect(vi.getTimerCount(), `${pending}: the open delay is pending`).toBe(idle + 1);
+        if (pending === 'close') {
+          advance(FLYOUT_OPEN_MS);
+          expect(flyoutOf(container)).not.toBeNull();
+          fireEvent.pointerLeave(groupOf(container));
+          expect(vi.getTimerCount(), `${pending}: the close grace is pending`).toBe(idle + 1);
+        }
+        cleanup();
+        expect(vi.getTimerCount(), `${pending}: no timer outlives the strip`).toBe(idle);
+        vi.useRealTimers();
+      }
+    });
+
     it('no flyout when nothing is folded away', async () => {
       stubDesk(1248);
       stubLanes(seventeenLanes(nowSec).accounts.slice(0, 3));    // three lanes fit the line with the end cell
