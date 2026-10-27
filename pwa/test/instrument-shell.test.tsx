@@ -46,8 +46,8 @@
 // W2 Task T2d (desk-polish, D-6330): the rail's Inbox door counts what waits on the operator, as Refined's tab does.
 // MUTATION TABLE (plan Task T2d Step 3; RUN, each mutant on the working tree, this suite alone, then reverted):
 //   the rail's Inbox door left on the unread count .... "the rail's Inbox door says 'waiting for you' with Refined's count"
-// R32's F5 case (mail at the ack's own stamp) left this file with the rail's unread count: the Inbox's own rows hold
-// it now (mail-screen.test.tsx), so the two T2e rows above that name it run there.
+// T2e's rows 1 and 2 under "T2e review R32, F5" above are retired: `unreadMailCount` is gone, and no door here counts
+// unread mail. The F5 case and its two mutants now live in mail-screen.test.tsx, against the Inbox's own row mark.
 import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import type { ReactNode } from 'react';
