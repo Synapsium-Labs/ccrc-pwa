@@ -59,12 +59,20 @@ const FORBIDDEN: readonly { readonly word: RegExp; readonly name: string; readon
     why: 'one word for one thing: the terminal is what the operator opens, and "pane" is its tmux name',
   },
   {
-    word: /\bCoordinator row\b/i, name: 'Coordinator row', say: 'the coordinator\'s name, in a held line',
-    why: 'a registry word; the ask surface says who may answer first in a sentence',
+    word: /\bCoordinator row\b/i, name: 'Coordinator row', say: 'the coordinator\'s name, in a held line; "Automatic" in the class chooser',
+    why: 'a registry word; the ask surface says who may answer first in a sentence, and the chooser names the routing matrix\'s pick',
   },
   {
     word: /\bhot-file\b/i, name: 'hot-file', say: 'what the file holds',
     why: "the hook's file name for its live state; never a word for the operator",
+  },
+  {
+    word: /\bhot files\b/i, name: 'hot files', say: 'Claimed files',
+    why: "the hook's internal name for contested paths; the operator sees files a session has claimed",
+  },
+  {
+    word: /\bmixed\b/i, name: 'mixed', say: 'several accounts',
+    why: 'a word for a disagreement that does not say what disagrees; the card says the accounts differ',
   },
   {
     // Case-SENSITIVE on purpose: the lowercase literal was the old kicker's source text; the kicker is sentence case now.
@@ -232,13 +240,32 @@ describe('the ask surfaces speak plainly (D-6325)', () => {
 
   it('keeps every forbidden word with a replacement and a reason', () => {
     expect(FORBIDDEN.map((f) => f.name)).toEqual([
-      'own-words', 'own words row', 'envelope', 'pane', 'Coordinator row', 'hot-file', 'claude is asking',
+      'own-words', 'own words row', 'envelope', 'pane', 'Coordinator row', 'hot-file', 'hot files', 'mixed', 'claude is asking',
     ]);
     for (const f of FORBIDDEN) {
       expect(f.say.length, f.name).toBeGreaterThan(3);
       expect(f.why.length, f.name).toBeGreaterThan(20);
     }
   });
+});
+
+// The fleet list's words (D-6331, T3a): the card head, the claims strip and the class chooser, in both places it lives.
+// Task B of T3a adds the bucket chips' files (BucketBar.tsx, statusGroups.ts, markSeen.ts, skins/instrument/FleetTable.tsx).
+const SRC = path.join(import.meta.dirname, '..', 'src');
+const FLEET_LIST = [
+  ...['ProjectCardHead.tsx', 'HotFilesStrip.tsx', 'NewSessionSheet.tsx'].map((f) => path.join(SRC, 'fleet', f)),
+  path.join(SRC, 'screens', 'FleetScreen.tsx'),
+];
+
+describe('the fleet list speaks plainly (D-6331)', () => {
+  it.each(FLEET_LIST.map((f) => [path.relative(SRC, f), f] as const))(
+    '%s says none of the forbidden words where an operator reads',
+    (_name, file) => {
+      const strings = visibleStrings(file);
+      expect(strings.length, 'the scan reads its sentences').toBeGreaterThan(0);
+      expect(offences(file, strings), 'rewrite the sentence; the table above says what to say').toEqual([]);
+    },
+  );
 });
 
 describe('the scanner reads positions, not shapes', () => {
