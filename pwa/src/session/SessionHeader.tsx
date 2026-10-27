@@ -115,6 +115,15 @@ export function HeaderBack({ onBack }: { onBack: () => void }): ReactNode {
   );
 }
 
+/** The title's own node, both skins'. A workspace's title is its row's label, which a rename changes, so it types in
+ *  (`TypedLabel`); a main checkout's (no crumb) is its project, which nothing renames, so it is plain text and mounts
+ *  no TypedLabel, as before the title was the label (desktop polish T3c, D-6333). */
+export function HeaderTitleText({ view }: { view: SessionHeaderView }): ReactNode {
+  return view.crumb !== null
+    ? <TypedLabel className="chat-title-text" text={view.title} />
+    : <span className="chat-title-text">{view.title}</span>;
+}
+
 /** The session's title, the project before it as its crumb ("project-a › ws-a"; desktop polish T3c, D-6333). The title
  *  text is a node of its own, so a skin that draws the crumb elsewhere (Refined's, above the title) keeps this one. */
 export function HeaderTitle({ view }: { view: SessionHeaderView }): ReactNode {
@@ -128,7 +137,7 @@ export function HeaderTitle({ view }: { view: SessionHeaderView }): ReactNode {
           </span>
         </>
       )}
-      <TypedLabel className="chat-title-text" text={view.title} />
+      <HeaderTitleText view={view} />
     </h1>
   );
 }

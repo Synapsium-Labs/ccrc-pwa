@@ -12,7 +12,7 @@
 import type { ReactNode } from 'react';
 import { TypedLabel } from '@ccrc/ui';
 import {
-  HeaderBack, HeaderChips, HeaderCoordination, HeaderDoors, useSessionChromeInputs, useSessionHeaderView,
+  HeaderBack, HeaderChips, HeaderCoordination, HeaderDoors, HeaderTitleText, useSessionChromeInputs, useSessionHeaderView,
 } from '../../session/SessionHeader';
 import { useSessionFlows } from '../../session/SessionFlows';
 
@@ -28,7 +28,7 @@ export function SessionChrome(): ReactNode {
       <div className="ref-session-title">
         {view.crumb !== null && <TypedLabel className="chat-crumb ref-session-crumb" text={view.crumb} />}
         <h1 className="chat-title">
-          <TypedLabel className="chat-title-text" text={view.title} />
+          <HeaderTitleText view={view} />
         </h1>
       </div>
       <HeaderDoors view={view} openMenu={openMenu} />
