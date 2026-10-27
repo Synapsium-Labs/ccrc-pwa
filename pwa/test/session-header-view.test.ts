@@ -10,7 +10,9 @@ import { UNCHECKED_PR, type FleetSession, type SessionStatus } from '../../share
 import type { Coordination } from '../src/fleet/fleetTree';
 import { sessionFacts } from '../src/fleet/sessionFacts';
 import { sessionMenu } from '../src/session/SessionFlows';
-import { headerTickMs, sessionHeaderView, type HeaderChipKind, type SessionHeaderViewInput } from '../src/session/sessionHeaderView';
+import {
+  deepLinkFallback, headerTickMs, sessionHeaderView, type HeaderChipKind, type SessionHeaderViewInput,
+} from '../src/session/sessionHeaderView';
 import { fleetSession } from './fleetFixture';
 import { TEST_ROSTER } from './rosterFixture';
 import { SessionHeaderHost, type HeaderHostProps } from './sessionHost';
@@ -128,7 +130,7 @@ describe('sessionHeaderView (W2 Task S7a, D-5471)', () => {
     const p = hostProps(allChips(), 'idle');
     const v = viewOf(p);
     const { container } = render(createElement(SessionHeaderHost, p));
-    expect(container.querySelector('.chat-title')?.textContent).toBe(`${v.title}›${v.crumb ?? ''}`);
+    expect(container.querySelector('.chat-title')?.textContent).toBe(`${v.crumb ?? ''}${v.crumb === null ? '' : '›'}${v.title}`);
     for (const c of v.chips) {
       const sel = CHIP_SELECTORS.find(([k]) => k === c.kind)?.[1] ?? '';
       const el = container.querySelector(sel);
@@ -208,5 +210,87 @@ describe('sessionHeaderView (W2 Task S7a, D-5471)', () => {
     };
     expect(variantOf(working, 'busy')).toBe('busy');
     expect(variantOf(idle, 'idle')).toBe('idle');
+  });
+});
+
+describe('the header names the session (desktop polish T3c, D-6333)', () => {
+  const ws = (over: Partial<FleetSession> = {}): FleetSession => fleetSession({
+    id: 'project-a-quiet-basin', project: 'project-a', workspace: 'quiet-basin', name: null, branch: 'ws/quiet-basin',
+    status: 'idle', bucket: 'idle', model: 'model-x', effort: 'high', ...over,
+  });
+  const viewFor = (session: FleetSession) => viewOf(hostProps(session, 'idle'));
+  const kindsOf = (session: FleetSession) => viewFor(session).chips.map((c) => c.kind);
+
+  it("a workspace session's title is its row's name, and its crumb the project", () => {
+    // A chosen name wins, as the fleet row shows it; with none, the branch it was born with.
+    expect(viewFor(ws({ name: 'tidy-up' }))).toMatchObject({ title: 'tidy-up', crumb: 'project-a' });
+    expect(viewFor(ws())).toMatchObject({ title: 'ws/quiet-basin', crumb: 'project-a' });
+    expect(viewFor(ws({ title: 'The sentence the operator gave', name: 'tidy-up' })))
+      .toMatchObject({ title: 'The sentence the operator gave', crumb: 'project-a' });
+  });
+
+  it("a main checkout's title is the project", () => {
+    const main = fleetSession({ id: 'lane-a-project-a', project: 'project-a', workspace: null, name: 'whatever', branch: 'main' });
+    expect(viewFor(main)).toMatchObject({ title: 'project-a', crumb: null });
+  });
+
+  it('the branch chip is dropped when it repeats the title', () => {
+    // No chosen name: the label falls through to the branch, so the chip would say the title again.
+    expect(kindsOf(ws())).not.toContain('branch');
+    // A chosen name: the branch says something the title does not.
+    expect(kindsOf(ws({ name: 'tidy-up' }))).toContain('branch');
+    // A main checkout is titled by its project, so a branch that happens to read the same stays: the comparison is
+    // for a workspace only.
+    const main = fleetSession({
+      id: 'lane-a-project-a', project: 'project-a', workspace: null, name: null, branch: 'project-a', model: 'model-x', effort: 'high',
+    });
+    expect(kindsOf(main)).toContain('branch');
+  });
+
+  it("a deep link's fallback title is the session's label", () => {
+    // The title must not jump when the first fleet frame lands: before it, the id's own label; after it, the row's.
+    const roster = [{ id: 'lane-a', label: 'lane-a', hue: 'cyan', homeAble: true, hidden: false, pool: null }];
+    const row = ws();
+    const before = sessionHeaderView({
+      session: null, status: 'idle', statusUpdatedAt: null, now: NOW, finePointer: false, roster,
+      fallback: deepLinkFallback(row.id, roster, [{ name: 'project-a' }], { title: 'quiet-basin', wrapper: 'lane-a' }),
+    });
+    const after = viewFor(row);
+    expect(before.title).toBe(after.title);
+    expect(before.crumb).toBe(after.crumb);
+  });
+
+  it("a deep link's fallback: a known project's workspace id reads ws/<slug> under its project", () => {
+    const roster = [{ id: 'lane-a', label: 'lane-a', hue: 'cyan', homeAble: true, hidden: false, pool: null }];
+    const today = { title: 'quiet-basin', wrapper: 'lane-a' };
+    expect(deepLinkFallback('project-a-quiet-basin', roster, [{ name: 'project-a' }], today))
+      .toEqual({ title: 'ws/quiet-basin', crumb: 'project-a', wrapper: 'lane-a' });
+    // The longest known project wins: `project` is a prefix of `project-a`, whose slug is the rest.
+    expect(deepLinkFallback('project-a-quiet-basin', roster, [{ name: 'project' }, { name: 'project-a' }], today))
+      .toEqual({ title: 'ws/quiet-basin', crumb: 'project-a', wrapper: 'lane-a' });
+  });
+
+  it("a deep link's fallback: an unknown project keeps today's fallback", () => {
+    const roster = [{ id: 'lane-a', label: 'lane-a', hue: 'cyan', homeAble: true, hidden: false, pool: null }];
+    const today = { title: 'unlisted-basin', wrapper: 'lane-z' };
+    const same = { title: 'unlisted-basin', crumb: null, wrapper: 'lane-z' };
+    expect(deepLinkFallback('project-z-unlisted-basin', roster, [{ name: 'project-a' }], today)).toEqual(same);
+    // The projects have not loaded: nothing to split by, and no guess.
+    expect(deepLinkFallback('project-z-unlisted-basin', roster, null, today)).toEqual(same);
+    expect(deepLinkFallback('project-z-unlisted-basin', [], [], today)).toEqual(same);
+  });
+
+  it('a deep link\'s fallback: a lane-prefixed id is a main checkout titled by its project', () => {
+    const roster = [
+      { id: 'lane', label: 'lane', hue: 'cyan', homeAble: true, hidden: false, pool: null },
+      { id: 'lane-a', label: 'lane-a', hue: 'cyan', homeAble: true, hidden: false, pool: null },
+    ];
+    const today = { title: 'ignored', wrapper: 'ignored' };
+    // The longest roster id that prefixes the id is the lane; the rest is the project.
+    expect(deepLinkFallback('lane-a-project-a', roster, [{ name: 'project-a' }], today))
+      .toEqual({ title: 'project-a', crumb: null, wrapper: 'lane-a' });
+    // A lane prefix outranks a project prefix: the id is read as a main checkout first.
+    expect(deepLinkFallback('lane-project-a', roster, [{ name: 'lane' }], today))
+      .toEqual({ title: 'project-a', crumb: null, wrapper: 'lane' });
   });
 });
