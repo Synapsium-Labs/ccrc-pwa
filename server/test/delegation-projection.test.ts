@@ -262,6 +262,41 @@ describe('projectDelegation: programme ownership, the inferred marker and unowne
     expect(out.unowned, 'the session project-a-other owns /real/project-a/other').toEqual([]);
   });
 
+  it('W4-P22 (D-7006): ccd\'s flat layout, `<root>/<project>-<slug>`, is owned by the session `<project>-<slug>` and by no other derived id', () => {
+    const world = (owners: string[]) => projectDelegation(input({
+      leases: [lease({ leaseId: 'l1', adminRecord: 'project-a-slug', canonicalPath: '/root/project-a-slug' })],
+      attempts: [attempt({ attemptId: 'x1', adminRecord: 'project-a-other', canonicalPath: '/root/project-a-other' })],
+      census: census({ [PROJECT]: [
+        record('project-a-slug', { canonicalPath: '/root/project-a-slug' }), record('project-a-other', { canonicalPath: '/root/project-a-other' }),
+      ] }),
+      sessions: [alive('p'), ...owners.map((id) => alive(id))],
+    }));
+    const owned = world(['project-a-slug', 'project-a-other']);
+    expect(owned.leases, 'the flat tree\'s owner is listed').toEqual([]);
+    expect(owned.unowned, 'the flat attempt\'s owner is listed').toEqual([]);
+    // the basename-join reading (`<project>-<basename>`) names other ids; listing only those owns nothing
+    const other = world(['project-a-project-a-slug', 'project-a-project-a-other']);
+    expect(other.leases.map((l) => l.leaseId)).toEqual(['l1']);
+    expect(other.unowned.map((u) => u.adminRecord)).toEqual(['project-a-other']);
+  });
+
+  it('W4-P23 (D-7006): the nested reading wins: `<root>/<project>/<project>-x` is the session `<project>-<project>-x`, not `<project>-x`', () => {
+    const world = (owners: string[]) => projectDelegation(input({
+      leases: [lease({ leaseId: 'l1', adminRecord: 'project-a-x', canonicalPath: '/root/project-a/project-a-x' })],
+      attempts: [attempt({ attemptId: 'x1', adminRecord: 'project-a-y', canonicalPath: '/root/project-a/project-a-y' })],
+      census: census({ [PROJECT]: [
+        record('project-a-x', { canonicalPath: '/root/project-a/project-a-x' }), record('project-a-y', { canonicalPath: '/root/project-a/project-a-y' }),
+      ] }),
+      sessions: [alive('p'), ...owners.map((id) => alive(id))],
+    }));
+    const nested = world(['project-a-project-a-x', 'project-a-project-a-y']);
+    expect(nested.leases, 'the nested id owns the tree').toEqual([]);
+    expect(nested.unowned, 'the nested id owns the attempt\'s tree').toEqual([]);
+    const flatFirst = world(['project-a-x', 'project-a-y']);
+    expect(flatFirst.leases.map((l) => l.leaseId), 'the flat reading\'s id owns nothing').toEqual(['l1']);
+    expect(flatFirst.unowned.map((u) => u.adminRecord), 'the flat reading\'s id owns nothing').toEqual(['project-a-y']);
+  });
+
   it('W4-P18 (D-7006): a path that names no ccd id is owned by nobody: an Agent-tool lease keeps its row beside a listed workspace', () => {
     const out = projectDelegation(input({
       leases: [lease({ leaseId: 'l1', adminRecord: 'agent-x', canonicalPath: '/root/project-a/.claude/worktrees/agent-x' })],
