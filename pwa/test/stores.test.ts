@@ -1490,6 +1490,80 @@ describe('fleet store', () => {
         vi.useRealTimers();
       }
     });
+
+    // C8 (D-6440): the store is the one `/api/accounts` reader, so an answer equal to the last one must leave every
+    // field it writes at the same reference, or every subscriber re-renders every 20 s for nothing.
+    const fullAnswer = (five: number): AccountsResponse => ({
+      accounts: [{
+        wrapper: 'claude', five, seven: 40, ts: 1_700_000_000, fiveResetAt: null, sevenResetAt: null,
+        fiveRolledOver: false, sevenRolledOver: false, disabled: false, authDead: false,
+      }],
+      projected: { wrapper: 'claude', score: five },
+      roster: TEST_ROSTER.map((r) => ({ ...r })),
+      lanes: { claude: { state: 'ok' } } as unknown as AccountsResponse['lanes'],
+      connect: { enabled: true } as unknown as AccountsResponse['connect'],
+    });
+    const ACCOUNT_FIELDS = ['roster', 'usage', 'lanes', 'accountsConnect', 'projected'] as const;
+
+    it('an equal answer leaves roster, usage, lanes, accountsConnect and projected unchanged (===)', async () => {
+      // A NEW object on every call, structurally equal: what a JSON body is on every poll.
+      const fetchAccounts = vi.fn().mockImplementation(async () => fullAnswer(10));
+      const store = createFleetStore({ makeSocket, fetchAccounts });
+      await store.getState().refreshAccounts();
+      const before = store.getState();
+      for (const f of ACCOUNT_FIELDS) expect(before[f], f).not.toBeNull();
+      let writes = 0;
+      const unsubscribe = store.subscribe(() => { writes += 1; });
+      await store.getState().refreshAccounts();
+      unsubscribe();
+      const after = store.getState();
+      for (const f of ACCOUNT_FIELDS) expect(after[f], f).toBe(before[f]);
+      expect(writes, 'an equal answer writes nothing at all').toBe(0);
+    });
+
+    it('a changed answer replaces only the field that changed', async () => {
+      let five = 10;
+      const fetchAccounts = vi.fn().mockImplementation(async () => {
+        const r = fullAnswer(10);
+        r.accounts[0]!.five = five;
+        return r;
+      });
+      const store = createFleetStore({ makeSocket, fetchAccounts });
+      await store.getState().refreshAccounts();
+      const before = store.getState();
+      five = 70;
+      await store.getState().refreshAccounts();
+      const after = store.getState();
+      expect(after.usage).not.toBe(before.usage);
+      expect(after.usage![0]!.five).toBe(70);
+      for (const f of ['roster', 'lanes', 'accountsConnect', 'projected'] as const) expect(after[f], f).toBe(before[f]);
+    });
+
+    it('projected is undefined before an answer, the server\'s null after one, and kept across a failed or malformed poll', async () => {
+      vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const answers: Array<() => Promise<AccountsResponse>> = [
+        async () => accountsResponse(TEST_ROSTER),                                       // projected: null
+        async () => fullAnswer(10),                                                      // projected: an object
+        async () => { throw new Error('offline'); },                                     // a failed poll
+        async () => ({ accounts: 'x', roster: 'x', projected: 'x' }) as unknown as AccountsResponse, // malformed
+        async () => ({ accounts: [], roster: TEST_ROSTER }) as unknown as AccountsResponse,          // no projected
+      ];
+      let call = 0;
+      const fetchAccounts = vi.fn().mockImplementation(() => answers[call++]!());
+      const store = createFleetStore({ makeSocket, fetchAccounts });
+      expect(store.getState().projected).toBeUndefined();
+      await store.getState().refreshAccounts();
+      expect(store.getState().projected).toBeNull();
+      await store.getState().refreshAccounts();
+      const landed = store.getState().projected;
+      expect(landed).toEqual({ wrapper: 'claude', score: 10 });
+      await store.getState().refreshAccounts();
+      expect(store.getState().projected).toBe(landed);
+      await store.getState().refreshAccounts();
+      expect(store.getState().projected).toBe(landed);
+      await store.getState().refreshAccounts();
+      expect(store.getState().projected).toBe(landed);
+    });
   });
 
   // Build 7 / Task 10: additive, so no FLEET_PROTO bump — an already-deployed
