@@ -246,7 +246,6 @@ const realRow = (s: { check: string; kept: string | null; text: string }): strin
  *  checks, the scope-sweep default among them (kept: call-bound), plus the kept OnActiveSec note. Each move commit of
  *  C8b removes its own row from this list. */
 const REAL_BASE: string[] = [
-  'models elif [ "$age" -gt 10800 ]; then',
   'codex _DR_CODEX_USAGE_STALE_S=2700',
   'codex _DR_CODEX_USAGE_STALE_DIRECT_S=3600',
   'codex (kept) note+=("no usage row yet (enabled $((now - en))s ago; the fi',

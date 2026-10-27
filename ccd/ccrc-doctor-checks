@@ -6357,7 +6357,7 @@ _check_models() {
           warn+=("$lid's catalogue claims a fetchedAt $((-age)) s in the future — its age is unmeasurable, not fresh; run: ccrc models refresh $lid")
         elif [ "$bound_rc" -ne 0 ]; then
           unmeasured+=("$lid's catalogue ($age_min min old)")
-        elif [ "$age" -gt 10800 ]; then
+        elif [ "$age" -gt "$bound" ]; then
           # ARM 1 (C4): stale:false but old — the silent case `services`'
           # `known` unit list cannot see (see this function's header comment).
           # C6: the `services` check measures ACTIVATION, not production — it
