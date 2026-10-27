@@ -97,7 +97,7 @@ export interface PickOption {
 
 /** Whose model list `modelOptions` picks for a lane. The dedicated list belongs to ONE lane, named by its wrapper
  *  id and kept as it is (the lane's tiers map onto Codex models through its own settings env, the header above);
- *  every other lane gets the Anthropic list, whatever it runs. */
+ *  every other lane gets the Anthropic list, whatever it runs (departure `model-list-names-its-provider`). */
 export function modelListProvider(wrapper: string): 'anthropic' | 'openai' {
   return wrapper === 'gpt' ? 'openai' : 'anthropic';
 }

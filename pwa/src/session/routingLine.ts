@@ -4,8 +4,14 @@
 //
 // PURE. The provider does not come in here: it reaches the line through `routeView`, which already holds the
 // measurability rule, so the session header's model chip and this line share one decision about what is pending and
-// cannot disagree. The word "queued" is the header badge's, for a class the lane can read back; this line never
-// says it.
+// cannot disagree. The word "queued" is the header badge's, for a field the lane can read back; this line never
+// says it. The header shows ONE badge when both fields are pending (the effort first, `wireQueuedField`), while this
+// line names every pending field, so a class can be asked here with no badge on the model chip: the rail may say
+// more than the header, never something else. With no routing record at all (`route` absent) the line asks nothing,
+// whatever the header's local-write badge says for its 60 seconds (`routeView` states that residual).
+//
+// The line takes the whole `RouteView` rather than reading the record itself (departure
+// `routing-line-takes-the-view`), so the one decision about what is pending stays in `routeView`.
 //
 // The line's words live ONCE, in `WORDS`, and the line is handed out as ordered `parts`: the sentence is their join,
 // and the inspector's markup maps them (the two chooser doors, the pending style) without spelling a word itself, so
@@ -21,6 +27,7 @@ const WORDS: Readonly<Record<'runs' | 'on' | 'effort' | 'asked' | 'askedEffort' 
   on: ' on ',
   effort: ' · effort ',
   asked: ' · asked ',
+  // The asked effort is the departure `routing-line-says-pending-effort`: the header badges it, so the rail names it.
   askedEffort: ' · asked effort ',
   unreadable: ' · routing could not be read',
   inertEffort: 'set by the lane',
@@ -60,8 +67,8 @@ export interface RoutingLine {
 export function routingLine(row: FleetSession, view: RouteView, lane: string): RoutingLine {
   const model = row.model;
   const effort = view.effortInert ? WORDS.inertEffort : row.ultracode ? WORDS.ultracode : (row.effort ?? WORDS.unreadEffort);
-  // A class the lane's list does not carry cannot be pending (`classPending` needs its readback), but fall back to
-  // the raw word rather than drop a degradation the reader cannot name.
+  // Unreachable today: `classPending` already found this label on the same list. Kept so a miss shows the raw word
+  // rather than nothing, and the type stays total.
   const askedClass = view.classPending && view.classIntended !== null
     ? (modelOptions(row.wrapper, null).find((o) => o.route.value === view.classIntended)?.label ?? view.classIntended)
     : null;

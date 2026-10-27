@@ -11,7 +11,9 @@
 //
 // The local-write lane is NOT here. `useQueuedRoute` owns it, it is a hook with
 // its own timers, and the two are mutually exclusive by design — see
-// `queuedField` below.
+// `queuedField` below. The stated residual: with no routing record (`route` absent) the header's badge comes from
+// that local-write lane for the tap's own moment (up to 60 seconds, then its toast), while the inspector's line reads
+// only the record and says nothing is asked.
 import type { FleetSession, RouteField } from '../../../shared/api';
 import type { ProviderId } from '../../../shared/providers';
 import { classReadbackMeasurable, effortIsKnown, modelReadbackFor } from '../lib/models';
@@ -34,10 +36,10 @@ export interface RouteView {
    *  (`classReadbackMeasurable`). */
   readonly wireQueuedField: RouteField | null;
   /** The effort intended has not been read back yet — `wireQueuedField`'s effort arm, kept apart so a caller can say
-   *  what is asked of each field. `false` when `route` is absent. */
+   *  what is asked of each field (departure `route-view-splits-pending`). `false` when `route` is absent. */
   readonly effortPending: boolean;
   /** The class intended has not been read back yet, AND its readback is measurable on this lane
-   *  (`classReadbackMeasurable`, D-6334). `false` when `route` is absent. */
+   *  (`classReadbackMeasurable`, D-6334; departure `route-view-splits-pending`). `false` when `route` is absent. */
   readonly classPending: boolean;
 }
 
