@@ -138,6 +138,24 @@ describe('the routing line says what runs and asks only what it can measure', ()
       .toBe('Runs Sonnet 5 on Lane A · effort medium · routing could not be read');
   });
 
+  it('the parts join to the sentence', () => {
+    const rows: [FleetSession, Parameters<typeof routeView>[2]][] = [
+      [fleetSession({ wrapper: 'lane-a', model: 'Sonnet 5', effort: 'low', route: route({ fields: { class: 'opus', effort: 'high' } }) }), 'anthropic'],
+      [fleetSession({ wrapper: 'lane-a', model: 'Sonnet 5', effort: 'low', route: route({ unreadable: ['class'] }) }), 'anthropic'],
+      [fleetSession({ wrapper: 'lane-a', route: route({ fields: { effort: 'high' }, inert: ['effort'] }) }), null],
+      [fleetSession({ wrapper: 'lane-a', model: 'Opus 5', effort: 'xhigh', ultracode: true }), 'anthropic'],
+    ];
+    for (const [row, provider] of rows) {
+      const out = line(row, provider);
+      expect(out.parts.map((p) => p.text).join('')).toBe(out.sentence);
+      // The two doors are the live model and the live effort, once each, in that order.
+      expect(out.parts.filter((p) => p.kind === 'model' || p.kind === 'effort').map((p) => p.kind))
+        .toEqual(['model', 'effort']);
+    }
+    expect(line(rows[0]![0], 'anthropic').parts.filter((p) => p.kind === 'asked').map((p) => p.text))
+      .toEqual([' · asked Opus 5.5', ' · asked effort high']);
+  });
+
   it('a failed read says routing could not be read', () => {
     const row = fleetSession({
       wrapper: 'lane-a', model: 'Sonnet 5', effort: 'medium',
