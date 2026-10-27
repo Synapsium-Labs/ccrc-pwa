@@ -11,8 +11,8 @@ const show = (name: string, sites: readonly CensusSite[]): void => {
   console.log(`census ${name}: ${sites.length}\n${sites.map((s) => `  ${s.file}:${s.line}  ${s.text.trim()}`).join('\n')}`);
 };
 
-// ARCH-43 (spec K1; plan C4a): the sleep lanes' censuses. REAL rows report and never red until their series starts
-// (spec §5.1 rule 3): `sleepVerdictLadders` is pinned at C4b, `hibernateActSites` at C4d.
+// ARCH-43 (spec K1; plan C4a): the sleep lanes' censuses. REAL rows report and never red (spec §5.1 rule 3); the pins
+// are in `single-definition/late-census.test.ts`: `sleepVerdictLadders` since C4b, `hibernateActSites` at C4d.
 describe('the sleep lanes\' censuses (ARCH-43)', () => {
   let tree = '';
   const at = (rel: string, body: string): void => {
@@ -86,7 +86,7 @@ describe('the sleep lanes\' censuses (ARCH-43)', () => {
     ]);
   });
 
-  it('REAL sleepVerdictLadders: reports the ladders by name (2 -> 1 at C4b; not yet pinned)', () => {
+  it('REAL sleepVerdictLadders: reports the ladders by name (2 -> 1 at C4b; pinned at 1 by late-census since C4b)', () => {
     const sites = sleepVerdictLadders();
     show('sleepVerdictLadders', sites);
     console.log(sites.map((s) => `  ${s.symbol}`).join('\n'));

@@ -591,7 +591,7 @@ describe('codex bridge Stage 2 Task 10: the bridge file names and the lane mode 
 
 // D-7040 (ARCH-43, consolidation plan 2026-10-26 Task C4b; spec K1, C4 "Policies, not lanes"). APPENDED. The two sleep
 // lanes share ONE hold ladder, `decideSleep` in `server/src/sleep.ts`, steered by each policy row's fields and never by
-// its name. `sleepVerdictLadders` (the census in `consolidationCensus.ts`: each server/src function whose body returns a
+// its name. `sleepVerdictLadders` (the census in `census-w4/sleep.ts`: each server/src function whose body returns a
 // `hold('viewer')` call) read 2 at C4b's base (`stopDone.ts#stopDoneVerdict`, `coord/hibernate.ts#hibernateVerdict`)
 // and is pinned at 1 here; it may only shrink. The name scan walks `decideSleep`'s parsed body (`scan/symbols.ts`,
 // `scan/parse.ts`), never a text match over the file: a read of `.name` (a comparison, a `switch`, a destructure), of
