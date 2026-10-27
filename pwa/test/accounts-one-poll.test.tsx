@@ -80,7 +80,11 @@ afterEach(() => {
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
   act(() => { navigate('/'); });
-  act(() => useFleetStore.setState({ sessions: [], conn: 'connecting', notices: [], feed: [], runs: [], runsFrameSeen: false }));
+  act(() => useFleetStore.setState({
+    sessions: [], conn: 'connecting', notices: [], feed: [], runs: [], runsFrameSeen: false,
+    // The accounts answer too, so each case starts with nothing landed and its first read is what draws.
+    usage: null, projected: undefined, roster: [], lanes: null, accountsConnect: null,
+  }));
 });
 
 describe('one /api/accounts poll per tab (C8, D-6440)', () => {
@@ -111,13 +115,17 @@ function sourceFiles(dir: string = SRC): string[] {
 describe('the one reader (C8, D-6440)', () => {
   it('no module but stores/fleet.ts calls api.accounts', () => {
     // An AST walk, not a text grep: a comment that names `api.accounts` is not a call, and a line that calls it is.
+    // It reads `api.accounts`, `api['accounts']` and a destructuring of `accounts` out of `api`.
     const callers: string[] = [];
+    const isApi = (e: ts.Expression): boolean => ts.isIdentifier(e) && e.text === 'api';
     for (const rel of sourceFiles()) {
       const src = parseTs(path.join(SRC, '..', '..', rel));
       const visit = (n: ts.Node): void => {
-        if (ts.isPropertyAccessExpression(n) && n.name.text === 'accounts' && ts.isIdentifier(n.expression) && n.expression.text === 'api') {
-          callers.push(rel);
-        }
+        if (ts.isPropertyAccessExpression(n) && n.name.text === 'accounts' && isApi(n.expression)) callers.push(rel);
+        if (ts.isElementAccessExpression(n) && isApi(n.expression) && ts.isStringLiteralLike(n.argumentExpression)
+          && n.argumentExpression.text === 'accounts') callers.push(rel);
+        if (ts.isVariableDeclaration(n) && n.initializer !== undefined && isApi(n.initializer) && ts.isObjectBindingPattern(n.name)
+          && n.name.elements.some((el) => ((el.propertyName ?? el.name) as ts.Identifier).text === 'accounts')) callers.push(rel);
         ts.forEachChild(n, visit);
       };
       visit(src);
@@ -139,8 +147,9 @@ describe('the one reader (C8, D-6440)', () => {
       return <output data-testid="probe">{`${usage === null ? 'none' : usage.map((u) => u.wrapper).join(',')}|${projected === undefined ? 'unasked' : projected === null ? 'null' : projected.wrapper}`}</output>;
     }
     render(<><App /><SheetProbe /></>);
-    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
     const lanes = (): number => document.querySelectorAll('.account-gauge').length;
+    expect(screen.getByTestId('probe'), 'nothing has landed before the first read').toHaveTextContent('none|unasked');
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
     expect(lanes()).toBe(2);
     expect(screen.getByTestId('probe')).toHaveTextContent('claude,claude9|claude');
     good = false;
