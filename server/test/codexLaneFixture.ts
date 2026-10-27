@@ -584,6 +584,16 @@ export function plantFakeRuntime(home: string, opts: FakeRuntimeOptions = {}): F
  *  of it, can never carry it. */
 export const MANAGER_STANDIN_MARK = '# ccrc-manager-standin (Plan 2b-2 final review F4)';
 
+/** A real user manager's PATH, emulated (node-runtime-under-nvm verification gate) — ONE snippet for every stub
+ *  `systemctl` here that answers `show-environment`. A manager reads environment.d at a `daemon-reload`, never in
+ *  between: its PATH carries ccrc's node link directory first only once a reload ran while ccrc's fragment existed, and
+ *  a reload without the fragment drops it again. The reload's verdict is one fixture file.
+ *  {@link MANAGER_RELOAD_LINE} runs on a `daemon-reload` (it exits nothing); {@link MANAGER_PATH_LINE} prints the
+ *  `PATH=` line of a `show-environment` answer. Doctor's `node-path` reads that line (ccd/ccrc-doctor-checks). */
+export const MANAGER_SYSTEM_PATH = '/usr/local/bin:/usr/bin:/bin';
+export const MANAGER_RELOAD_LINE = 'if [ -e "$HOME/.config/environment.d/50-ccrc-node.conf" ]; then : > "$HOME/fixture-mgr-reloaded-with-fragment"; else rm -f "$HOME/fixture-mgr-reloaded-with-fragment"; fi';
+export const MANAGER_PATH_LINE = `if [ -e "$HOME/fixture-mgr-reloaded-with-fragment" ]; then echo "PATH=$HOME/.local/libexec/ccrc/node-bin:${MANAGER_SYSTEM_PATH}"; else echo "PATH=${MANAGER_SYSTEM_PATH}"; fi`;
+
 const FAKE_SYSTEMCTL = `#!/usr/bin/env bash
 ${MANAGER_STANDIN_MARK}
 # codexLaneFixture: a FAKE user manager. Records every argv to
@@ -615,6 +625,7 @@ shift
 case "\${1:-}" in
   show-environment)
     up || { echo "Failed to connect to bus: No medium found" >&2; exit 1; }
+    ${MANAGER_PATH_LINE}
     printf 'HOME=%s\\n' "$HOME"; exit 0 ;;
   is-active)
     up || exit 1
@@ -1525,6 +1536,8 @@ export function spineSystemctlArms(): string[] {
     // ONE ordered log of every manager call, systemctl and systemd-run alike,
     // so "stopped BEFORE it was started again" is a measurement.
     'printf \'systemctl --user %s\\n\' "$*" >> "$HOME/manager-calls"',
+    // The manager re-reads environment.d here; the harness's own `daemon-reload` arm still answers the call.
+    `if [ "$1" = daemon-reload ]; then ${MANAGER_RELOAD_LINE}; fi`,
     'cx="$HOME/.local/bin/.codex-systemctl"',
     'case "$1" in',
     '  show-environment|stop|reset-failed) [ -x "$cx" ] && exec "$cx" --user "$@" ;;',
@@ -1535,7 +1548,7 @@ export function spineSystemctlArms(): string[] {
     // No fake user manager planted: a manager that IS up (the spine's own
     // units are enabled through this same stub) and has never loaded a codex
     // unit — so a stray start reaches the refusing `systemd-run`, never nohup.
-    'if [ "$1" = show-environment ]; then echo "HOME=$HOME"; exit 0; fi',
+    `if [ "$1" = show-environment ]; then ${MANAGER_PATH_LINE}; echo "HOME=$HOME"; exit 0; fi`,
     'case " $* " in',
     '  *" ccgpt-"*)',
     '    u=""; for a in "$@"; do case "$a" in ccgpt-*) u="$a" ;; esac; done',
