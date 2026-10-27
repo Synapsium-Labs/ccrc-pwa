@@ -15,10 +15,10 @@ import type { FleetClient, FleetState } from './remote/client.js';
 // every reader of this one. It is written only when the connection epoch is the one it was asked under. Otherwise
 // it is dropped: the next ready's frame and the next minute's refresh measure the current agent.
 //
-// THE WRITER (D-7079; D-7232). `fleetstate.ts#recordCcdVerbs` is the one writer of `ccdVerbs`, and its measured
-// rule is the guard above (a non-null list, under the epoch asked). It comes in as `record`, passed by the composition
-// root, and is imported here only as a type: a runtime import of `fleetstate.ts` (L3) from this file (L1) would be an
-// outward ring edge.
+// THE WRITER (D-7079). `fleetstate.ts#recordCcdVerbs` is the one writer of `ccdVerbs`, and its measured rule is the
+// guard above (a non-null list, under the epoch asked). It comes in as `record`, passed by the composition root, and
+// is imported here only as a type: a runtime import of `fleetstate.ts` (L3) from this file (L1) would be an outward
+// ring edge, so the coordinator's ring ruling (option (a)) has the root hand it in.
 export function makeRefreshCaps(
   client: Pick<FleetClient, 'caps'>, state: FleetState, identity: Pick<FleetIdentityCell, 'epochNow'>,
   record: typeof recordCcdVerbs,
