@@ -198,9 +198,10 @@ export function SessionLine({
           title={glance.name.short === undefined || glance.name.short === label ? undefined : label}
           onClick={open}
         >
-          {/* D-5545: the full name wherever the column holds it (wrapping at a hyphen, never an ellipsis), and
+          {/* D-5545: the full name wherever the column holds it (wrapping at a hyphen or a space), and
               shortened by whole tokens only below the desk (`Fit`: fleet.css's container query for a wide
-              tablet's track, and from 900px up the full form on up to two lines, D-6332). The
+              tablet's track, and from 900px up the full form on up to two lines, where a longer name ends in the
+              browser's clamp `…` at the end of the second line, D-6332). The
               button's accessible name is the FULL name either way (verifier round 1): both drawn forms are
               `aria-hidden`, and the name is spoken once. */}
           {glance.name.short === undefined || glance.name.short === label ? (

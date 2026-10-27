@@ -8,9 +8,10 @@
 //     line in the operator's terms (`<programme> · wave N of M`, or `· review of
 //     wave N`; for a session no run names, its PR or its branch, or nothing), at
 //     most ONE attention marker chosen by the fixed priority `MARKER_ORDER`, and
-//     the cross-project chip (D-5527). No bookkeeping ids, no fragment cut by an
-//     ellipsis: a long name or programme is shortened HERE, by whole tokens
-//     (`shortenByToken`), never mid-token, and the full text rides `title`.
+//     the cross-project chip (D-5527). No bookkeeping ids, no fragment cut mid-token:
+//     below the 900px desk a long name or programme is shortened HERE, by whole tokens
+//     (`shortenByToken`), and from 900px up the full form draws (a name or branch past
+//     two lines ends in the browser's clamp `…`, D-6332); the full text rides `title`.
 //   • The HEADER is the full set — a SUPERSET of the card: every card fact under
 //     the same key, with its full text, plus everything the card leaves out.
 //     `cardFacts(f)` ⊆ `headerFacts(f)` is pinned by `card-header-facts.test.tsx`.
