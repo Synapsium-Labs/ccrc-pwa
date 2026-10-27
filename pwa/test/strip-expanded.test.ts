@@ -105,7 +105,9 @@ describe('remembered and shared', () => {
     act(() => setStripExpanded(true));
     first.unmount();
     expect(renderHook(() => useStripExpanded()).result.current).toBe(true);
-    // A reload keeps storage and loses the page's own value: a fresh module reads what was stored.
+    // A reload keeps storage and loses the page's own value: a fresh module reads what was stored. This relies on
+    // `react` being externalised by the test runner, so the fresh module and `renderHook` share one React instance
+    // across `vi.resetModules()`; were React inlined, the fresh import would bring its own and the hook would throw.
     vi.resetModules();
     const fresh = await import('../src/fleet/stripExpanded');
     const { result } = renderHook(() => fresh.useStripExpanded());

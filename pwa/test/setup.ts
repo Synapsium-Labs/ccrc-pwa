@@ -35,10 +35,11 @@ import { useFleetStore } from '../src/stores/fleet';
 //
 // A no-op wherever nothing connected: `disconnect()` on an unconnected store
 // removes two listeners that were never added and returns. It is deliberately
-// the FIRST thing in this file's teardown and this file's first `src/` import —
-// a global hook that reached further into the app would be a fixture pretending
-// to be a harness. (The second is (3)'s fold memory, which is a module value
-// plus a storage key, so only this hook can reset both for every file.)
+// the FIRST thing in this file's teardown, and the fleet store the only app state
+// it reaches for — a global hook that reached further into the app would be a
+// fixture pretending to be a harness. (The one other reach is (3)'s fold memory,
+// `stripExpanded`, which is a module value plus a storage key, so only this hook
+// can reset both for every file.)
 //
 // (2) Radix's FocusScope returns focus on unmount from a `setTimeout(..., 0)`
 // (@radix-ui/react-focus-scope dist/index.mjs, the unmount CustomEvent). A

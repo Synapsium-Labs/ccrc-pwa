@@ -28,8 +28,9 @@
 // the same `laneCard` function, and the same `open-lane` door; it is a group of its own, one tab stop with the arrows,
 // Home and End across it. It sits in the DOM inside the strip's group, after the line's cards and before the end cell,
 // so Tab goes line, flyout, control, All accounts, and focus moving between them never leaves the strip. It opens after
-// `FLYOUT_OPEN_MS` and closes after `FLYOUT_CLOSE_MS` once the pointer has left the strip or focus has (a pointer passing
-// by, or crossing the gap, flickers nothing), and at once on Escape; a close that finds focus in the flyout hands it
+// `FLYOUT_OPEN_MS` and closes after `FLYOUT_CLOSE_MS` once the pointer has left the strip, or focus has left it with the
+// pointer outside (a pointer passing by, or crossing the gap, flickers nothing), and at once on Escape, which is
+// default-prevented so the desk's Escape interrupt skips it; a close that finds focus in the flyout hands it
 // back to the line's tab stop first. Only focus arriving from outside the strip opens it, so an Escape holds against the
 // arrow keys. Not foldable, expanded, or below the desk: it is not mounted and nothing about it runs. Presentation
 // state, per mount.

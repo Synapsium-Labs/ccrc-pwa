@@ -6,7 +6,8 @@
 // A phone folds to a LANE COUNT (`FOLD_SHOWN`), not a measured fit: four fills two rows of the two-column grid and one
 // row of the four-column grid from 700 px, so no width draws a ragged row and the hidden set never changes when a
 // tablet rotates. A desk folds to one line, as many cards as `rowFit` says the line's tracks hold, less the track the
-// end cell (the control and All accounts) takes.
+// end cell (the control and All accounts) takes. The file also holds the two delays of the desk's hover flyout
+// (`FLYOUT_OPEN_MS`, `FLYOUT_CLOSE_MS`), which are pure numbers the strip's timers and the tests share.
 import type { AccountUsage } from '../../../shared/api';
 import type { AccountStateWord } from '../../../shared/accounts';
 import { stateWordFor } from '../../../shared/accounts';
