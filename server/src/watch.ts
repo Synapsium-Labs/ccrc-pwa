@@ -220,6 +220,8 @@ import { NO_FLEET_IDENTITY } from './fleetidentity.js';
 import { stopDonePass, type StopDoneMemory } from './stopDoneSweep.js';
 import { STOP_DONE_SWEEP_MS } from './stopDone.js';
 import { hibernatePass, type HibernateSweepMemory } from './hibernateSweep.js';
+import { SLEEP_LANES } from './sleepLane.js';
+import type { SleepPolicyName } from './sleep.js';
 import { StaleArchiveBeat } from './staleArchiveBeat.js';
 import { wakeAdmit, type WakeKind } from './coord/wakeBudget.js';
 import { HIBERNATE_AFTER_HOURS_FILE, HIBERNATE_SWEEP_MS } from './coord/hibernate.js';
@@ -2149,6 +2151,29 @@ export class FleetWatcher {
     } finally {
       this.hibernateSweeping = false;
     }
+  }
+
+  /** Each sleep lane's own body, by its policy's name (D-7045): `sweepSleep` starts them in `SLEEP_LANES`' order. */
+  private readonly sleepRunners: Readonly<Record<SleepPolicyName,
+    (sessions: readonly FleetSession[], records: readonly SessionRecord[], names: readonly string[]) => Promise<void>>> = {
+    'run-done': (sessions, records, names) => this.sweepStopDone(sessions, records, names),
+    'idle-hours': (sessions, records, names) => this.sweepHibernate(sessions, records, names),
+  };
+
+  /**
+   * THE SLEEP LANES (D-5370, D-5242; ARCH-43, D-7045): walks `SLEEP_LANES` in today's order (`run-done`, then
+   * `idle-hours`) and STARTS each lane's pass without awaiting the other, so a pass waiting on the coordination
+   * serialiser or a session's queue never delays, stops or re-times the other lane's (Review focus 9). The order is
+   * only the order the passes start in. The promise settles once every pass it started has settled; the tick never
+   * awaits it. `lane` names one lane (the suites' door).
+   */
+  sweepSleep(sessions: readonly FleetSession[], records: readonly SessionRecord[], names: readonly string[], lane?: SleepPolicyName): Promise<void> {
+    const started: Promise<void>[] = [];
+    for (const row of SLEEP_LANES) {
+      if (lane !== undefined && row.policy.name !== lane) continue;
+      started.push(this.sleepRunners[row.policy.name](sessions, records, names));
+    }
+    return Promise.allSettled(started).then(() => undefined);
   }
 
   /** The STALE-ARCHIVE ARM (D-6643, fleet disk retention spec §2.7.5): `StaleArchiveBeat` holds the clock, the memory and the
