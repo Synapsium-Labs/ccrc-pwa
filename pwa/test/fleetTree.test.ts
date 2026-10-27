@@ -22,7 +22,7 @@ const run = (over: Partial<RunSummary> = {}): RunSummary => ({
   unreadMail: 0,
   health: { mailOutstanding: 0, mailParked: 0, mailReplayMax: 0, doneRejects: 0,
             lastRejectCode: null, briefQueued: true, clearError: null,
-            coordKickoffPendingSince: null }, childReclaim: null, ...over,
+            coordKickoffPendingSince: null }, childReclaim: null, reviewCap: null, ...over,
 });
 
 const coordinator = sess(COORD, { workspace: null, role: 'coordinator', name: 'the coordinator' });

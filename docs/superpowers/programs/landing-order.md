@@ -24,7 +24,7 @@ merges, workers never do, and an unattended landing is the goal when every safeg
 | 3b | 3 | `ccd-land-probe`, the read-only conflict radar, and its opt-in mirror | ccd, deploy | wave 3 | — | run 310 open (planned; the run's wave 4), block 4326–4335; to plan |
 | 3c | — | Task 7's re-run preconditions: `pr-state`'s per-workspace git cost, a sweep failure the server reports, the two suite flakes the queue turned into removals, the runbook's re-run changes | ccd, server, tests, plan text | wave 2's proof run | plan #974; #1046 | merged 2026-10-21 (`4ce282f8`) after reviews 718, 724 and 726 and two fix rounds; run 710 (the run's wave 5) closed; its block of 10 defined in the plan; deployed 2026-10-21 by ccrc's updater, fleet box first (v0.0.508); Task 7's re-run followed (Decisions, 2026-10-21 12:15) |
 | 3d | 2, the lane | the dequeue lane treats the removal GitHub records at a successful queue merge as no dequeue: `pr-state` reads the removal's `reason`, and a removal whose reason is `merged` reads `landed`, never `dequeued`; any other reason, or none, is still announced on its first read; no two-sweep wait, no new wire field, no reason allowlist; and the `merged` feed record is kept once per workspace and PR across a server restart (stop rule 6; Decisions, 2026-10-21 14:49) | server, ccd | Task 7's re-run | plan #1088; #1096 | merged 2026-10-21 (`e173c1aa`) through the merge queue after review 759, with no fix round; run 751 (the run's wave 6) closed; three numbers of its block of 10 defined in the plan; deploy via ccrc's updater (either box first, the fleet box by default), then the live proof (Decisions, 2026-10-21 19:17) |
-| 3e | 2, the landing route | the coordinator reads the repository's own rules before each landing: the merge method from every effective `pull_request` rule and the merge settings, the required checks from the rulesets and classic protection (confirmed absence apart from an unreadable read), three routes (the native queue, a gated direct merge, an ungated direct merge), a merge-commits-only repository landing with `--merge` at the reviewed head, and every conflict a stop (spec §5.7) | skills, tests | wave 3d | plan #1121 | §5.7's text approved 2026-10-22; planned 2026-10-22 in `docs/superpowers/plans/2026-10-22-landing-order-wave3e-landing-route.md` (Decisions, 2026-10-22 07:13); its run and block open at dispatch |
+| 3e | 2, the landing route | the coordinator reads the repository's own rules before each landing: the merge method from every effective `pull_request` rule and the merge settings, the required checks from the rulesets and classic protection (confirmed absence apart from an unreadable read), three routes (the native queue, a gated direct merge, an ungated direct merge), a merge-commits-only repository landing with `--merge` at the reviewed head, and every conflict a stop (spec §5.7) | skills, tests | wave 3d | plan #1121 | §5.7's text approved 2026-10-22; planned 2026-10-22 in `docs/superpowers/plans/2026-10-22-landing-order-wave3e-landing-route.md` (Decisions, 2026-10-22 07:13); run 774 (the run's wave 7), PR #1127; fix rounds 1–5; at `awaiting-review` on `04745c73`, its fresh review held by the review-round cap (Decisions, 2026-10-27 08:20) |
 | 3f | — | the server's checks word reads a queued or running check run as `pending`, not `pass`; the cost of the 30 s sweep cadence is measured in its plan (spec §5.7.8) | server | wave 3e | — | ruled 2026-10-21; to plan |
 | 4 | 4 | the opted-in lineage table; `lineage-unmeasured` | server | wave 3 | — | to plan |
 | 5 | 5 | the landing line: entries, intents, holds, `land-candidate`, the coordinator's pinned merge, the PWA doors | server, ccd, skills, pwa | waves 2–4; session-continuity wave 1 | — | to plan |
@@ -635,6 +635,66 @@ carries it (spec §5.1, amended 2026-09-24).
     - (d) is read before each run's final close, because the close reclaims the child workspace.
     - (e)'s feed body may not read "No open run names a coordinator to tell", because D's workspace belongs to an
       open run (at `awaiting-review`, not `merging`). It is recorded as found.
+- **2026-10-07 01:39 — Task 7 Steps 1, 2 and 4 done: the merge queue is ON for `main` (ruleset write 01:38:37 UTC).**
+  - **Deploy.** Wave 3 has been on both boxes since 2026-10-07 00:51 UTC. Both boxes run v0.0.112 (`543777fb`, which
+    contains `9a255a74`), applied from the console: the fleet box finished at 00:51:18 and the server box at 00:51:42.
+    Each box's `update.json` reads phase `done`, and `ccrc version` reads `install: complete` on both.
+  - **Step 1.**
+    - `merge_group` is on `main`'s `ci.yml` (`1`).
+    - The trusted full run is 37552120108 (`workflow_dispatch` on `9a255a74`, five server shards). `typecheck (server)`,
+      `server 1/5`–`5/5`, `test (server)`, `test (agent)`, `test (pwa)` and `build-pwa` all read `success`. The macOS
+      legs are not read; one failed.
+    - `MERGE_PARSE_CAP=2048` is in the installed hook (`1`). Doctor reads `PASS jq_regex`, with no FAIL line.
+    - THE CANARY printed `deny` on the fleet box's `/usr/bin/jq`, jq-1.7.
+    - The census read `census-done: 11 coordinator(s) checked`, with no MARKED or HELD line.
+    - **Substitution:** both boxes were measured with `ccrc version` and `update.json` instead of
+      `ccrc rollout --check --to v0.0.112`, because the operator's 2026-09-30 ruling forbids running `ccrc rollout`
+      by hand.
+  - **Step 2** matched the runbook's 2026-09-23 values:
+    - Two rulesets: main's is 22520257, and stable's is 23740920.
+    - Main's one rule was `pull_request` with 1 approval, and its bypass actors were roles 2 (maintain) and 5 (admin),
+      both in `pull_request` mode.
+    - Classic protection: `strict` false, the four required contexts, `enforce_admins` true, 0 approvals.
+    - Repository settings: `allow_squash_merge` true, `allow_auto_merge` false, `allow_update_branch` false and
+      `delete_branch_on_merge` true.
+    - The only new reading is three parameters GitHub now reports on the rule, a schema addition:
+      `allowed_merge_methods`, `dismissal_restriction` and `require_extra_approval_for_unattributed_changes` (true).
+  - **Step 3 and Step 4.** Step 4a's diff showed exactly the three changes:
+    - the maintain bypass (role 2) removed, as R9 ruled;
+    - approvals 1 → 0;
+    - the `merge_queue` rule added: SQUASH, build concurrency 1, group size 1–1, wait 0, ALLGREEN, timeout 60 minutes.
+
+    Step 4b's PUT answered `rules: ["pull_request","merge_queue"]` with the one bypass actor (role 5), and a re-read
+    shows the same. The ruleset's name still says "Admin and Maintain bypass", because the runbook's transform keeps the
+    name. `ruleset-before.json`, `ruleset-rollback.json`, `ruleset-after.json` and `ruleset-written.json` are kept in
+    the coordinator's evidence folder. The rollback is a PUT of `ruleset-rollback.json` to ruleset 22520257.
+  - **Next: (a0) on this ledger PR (slot C)** once its own CI is green, then the proof dispatches.
+- **2026-10-07 01:53 — (a0) hit STOP RULE 4. The proof halts, the ruleset is ROLLED BACK, and the operator decides.**
+  - **(a0)** ran at 01:52:12 on this ledger PR (#311, slot C), with every required check green at `907cb649`.
+    `gh pr merge 311 --match-head-commit 0000…` answered `GraphQL: Auto merge is not allowed for this repository
+    (enablePullRequestAutoMerge)`, rc 1. The read-back showed `mergeQueueEntry: null` and `autoMergeRequest: null`:
+    nothing was queued and nothing was armed. gh 2.45 reaches a required queue through the auto-merge mutation
+    (Pre-flight finding 16), and the repository's `allow_auto_merge` is false (Step 2). The refusal names auto-merge,
+    not the head, so it is stop rule 4, not (a0)'s pass. Under the operator's 2026-09-29 ruling the proof halts here.
+    The coordinator does not change that setting (clause 15).
+  - **The rollback, at 01:52:56.** This revises the sequence entry's "the queue stays on meanwhile", for this reason.
+    On a native-queue project, clause 15 tells every coordinator to land with
+    `gh pr merge <n> --match-head-commit <sha>`, never with `--admin`. With auto-merge off, that spelling can land
+    nothing. So any ccrc-pwa coordinator following its clause literally could not land until the operator rules,
+    while the proof can make no progress either way. `ruleset-rollback.json` was PUT back. A re-read is identical to
+    it: the `pull_request` rule with 1 approval, and the maintain and admin bypasses. The queue was on from 01:38:37
+    to 01:52:56. Nothing merged to `main` in that window (the last merge was #310, at 00:47).
+  - **For the operator: three ways on.**
+    1. **Enable "Allow auto-merge"** (Settings → General → Pull Requests). The coordinator then re-applies Step 4 from
+       the saved `ruleset-after.json` and re-runs the proof from (a0). This is the path the runbook assumes: (a1)
+       expects an armed auto-merge request. Held and child sessions are already denied every `gh pr merge`, `--auto`
+       included, and wave 2b closes the `gh api graphql` mutations. **Recommended.**
+    2. **Keep auto-merge off,** and land through the queue with a direct GraphQL `enqueuePullRequest` call that
+       carries `expectedHeadOid`. That is not clause 15's spelling, so clause 15, the runbook and the hook's deny
+       need a wave first.
+    3. **Park Task 7,** and keep landing with `--admin` as now.
+  - **Slot C (#311)** stays open, unmerged, until the operator rules. The proof programme `landing-order-proof` is NOT
+    opened, and no dispatch was spent.
 - **2026-10-20 13:00 — Task 7's proof run, stopped by stop rule 3; the queue is off.** This is Step 7's record.
   - **Arming.** The operator chose "Run Task 7 now" on 2026-10-20. Step 1 was clean: a trusted full run on `main`
     (daily run 39364571048), both boxes on one release, the payload cap in the installed hook, doctor's
@@ -917,6 +977,19 @@ carries it (spec §5.1, amended 2026-09-24).
     worker re-measures each one.
 - **2026-10-25 — R5 overturned: unattended landing is the goal (D-6857).** The operator ruled "WE WANT UNATTENDED MERGES ... maximise autonomy with safeguards". A lane, a timer or the operator's keeper may land a PR unattended when the native queue re-tests the combined code, the required checks gate the enqueue, the landing binds the verified head with `--match-head-commit`, and there is no `--admin` and no `update-branch`. Orchestrator call, open to overturn: a worker never merges its own PR. The coordinator skill (clause 15 and the wave lifecycle) and the worker skill (clause 16) match; the wave lifecycle's allowance of `--admin` where the ruleset requires it is withdrawn. Stages 3 to 5 are not touched here; where their text says a landing never comes from a timer, R5 as amended governs.
 - **2026-10-25 — rulings 2, 3 and 5 (D-6857).** Ruling 5: governance of merges (who may merge, `--admin`, GitHub API merges, bypass) belongs to the repository's external policy authority, not to ccrc text; ccrc provides the enforcement points. It supersedes the narrow approval-licence pointer: in the wave lifecycle, `--admin` and GitHub API merge or enqueue calls are governed by that authority, and until it answers (wave 2b) a coordinator never uses them. Ruling 2: the live queue's grouping (build 2, merge 3) is accepted; one release may cover several commits. Ruling 3: the two private repositories should drop strict protection; the native queue is not available on their plan, so how they land is open.
+- **2026-10-27 08:20 — wave 3e: fix round 5 handed off; its fresh review waits on the review-round cap.**
+  - **The run.** Wave 3e is run 774 (the run's wave 7) on `ws/warm-summit`, PR #1127. Reviews 780, 827 and 863 each
+    ruled a fix round (1, 2 and 3). The fourth review run, 903, was abandoned; the operator authorised one local
+    independent review in its place, which ruled CHANGES REQUIRED at `1ba4d1f0` (four important source-boundary
+    findings at reads 1, 3 and 6, and one minor), and fix round 4 answered them.
+  - **Fix round 5**, approved by the operator on 2026-10-26, made one more ordinary merge of a pinned `main`
+    (`ba36d742`) into the PR and reconciled clause 15 and the wave lifecycle's route paragraph with ruling 5: the narrow
+    approval licence is retired, the route prints `admin=never`, and a direct route whose required approval is missing
+    stops. Its wave-done was verified at `04745c73`: the workspace branch and the PR head agree, the exact-head CI run
+    passed with both owning test files in its selection, and run 774 moved to `awaiting-review`.
+  - **Held.** Opening the fresh review was refused `cap-review-rounds` (4 rounds against a cap of 3) on 2026-10-26 at
+    15:27 UTC and again on 2026-10-27 at 08:08. The ask is the operator's: the console lifts a run's cap. The worker
+    keeps the branch frozen, and nothing lands until a fresh independent review is accepted.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
   this file until a plan on the same ref defines it (`deviation-refs.test.ts`).
 
@@ -1091,6 +1164,11 @@ above were read on 2026-10-25 and end at that day's midday; a later run of the s
 
 ## Carried constraints
 
+- **A run the dead-coordinator lane closes is an operator abandon here** (workspace-lifecycle spec §6, the Landing-order
+  bullet; recorded 2026-10-07, where the spec said it already was). Workspace lifecycle's wave 4 (run 314) adds
+  `causedBy: 'sweep'` to `closeRun`'s abandon arm. Every landing reading keyed on an abandon treats a `sweep` close
+  exactly as an `operator` one. Wave 4's plan measures what landing code keys on `causedBy` today and pins the
+  equivalence with a test. A landing plan written after it inherits the rule.
 - **CI test selection landed first (#183, `814fc53d`).** Wave 2's re-plan derives its `ci.yml` edits against that shape
   rather than overwriting it: a `merge_group` run keeps a run-unique concurrency group (never the shared push-to-main
   refresh group, which may drop runs), the mode table gains a `merge_group` row, the macOS legs and `full-suite` skip a

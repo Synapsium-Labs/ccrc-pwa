@@ -1,5 +1,8 @@
-import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { describe, it, expect, afterAll } from 'vitest';
+import { spawnSync } from 'node:child_process';
+import { copyFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import path from 'node:path';
+import { mkTmp } from './tmpHelpers.js';
 import { markGenerated, verifyMarker } from '../../shared/mark.mjs';
 // The path to the ccd script is spelled in exactly ONE file in this tree, and
 // `single-definition.test.ts` enforces it by scanning for the shapes a copy
@@ -7,7 +10,7 @@ import { markGenerated, verifyMarker } from '../../shared/mark.mjs';
 // script. Joining that path here scored a hit as a second copy; so, on the
 // next run, did this comment while trying to explain it, which is why it now
 // describes the shape instead of writing it.
-import { CCD } from './ccdWsHelpers.js';
+import { CCD, canonicalPython3 } from './ccdWsHelpers.js';
 
 const MARKER_RE = /^# ccrc:generated 1 sha256=([0-9a-f]{64})$/;
 
@@ -119,83 +122,70 @@ describe('provenance marker', () => {
   });
 });
 
-// Task 10 stamped the COMMITTED `ccd/ccd` with the marker, which is what
-// lets stage 2b's installer tell ccrc's own shipped ccd apart from one an
-// operator has hand-edited on a box. That claim has a maintenance cost and
-// no natural enforcement: `ccd` is edited constantly, every edit invalidates
-// the hash, and a stale marker does not fail quietly — it makes ccrc's own,
-// untouched, freshly-deployed ccd report `ccrc-edited` on every box forever,
-// which is precisely the verdict that will tell 2b's installer NOT to
-// replace it. So the re-stamp is a gate, not a convention.
-//
-//   Re-stamp after editing ccd:
-//     node --input-type=module -e "import { readFileSync, writeFileSync } from 'node:fs'; \
-//       const { markGenerated } = await import('./shared/mark.mjs'); \
-//       writeFileSync('ccd/ccd', markGenerated(readFileSync('ccd/ccd', 'utf8')))"
-//
-// `markGenerated` is idempotent (it strips any existing marker before
-// hashing), so that command is safe to run whether or not the file is
-// already stamped.
-describe('the committed ccd carries a marker that matches its own bytes', () => {
-  const ccd = readFileSync(CCD, 'utf8');
+// Task 10 stamped the COMMITTED `ccd/ccd` with the marker, which is what lets the installer tell ccrc's own
+// shipped ccd apart from one an operator has hand-edited on a box. That claim had a maintenance cost: `ccd` is
+// edited constantly, every edit invalidated the hash, and the line conflicted in 85 of the 98 conflicted
+// absorptions measured in 30 days. The stamp is therefore written AT INSTALL TIME: the committed file carries
+// one fixed placeholder on line 2 (`# ccrc:stamp-at-install ...`), and `ccd/ccd-entry-install.py` writes the
+// marker into the installed copy. The claim these cases hold is unchanged and now measured where it is made,
+// on the installer's OUTPUT, never on the committed file: the installed ccd keeps the shebang on line 1 and the
+// marker on line 2, carries exactly ONE line claiming provenance, and verifies as ccrc-unmodified.
+// `ccd-install-stamp.test.ts` owns the rest of the install-time contract (placeholder, legacy stamp, restamp).
+describe('the INSTALLED ccd carries a marker that matches its own bytes', () => {
+  const REPO = path.resolve(path.dirname(CCD), '..');
+  const home = mkTmp('ccrc-ownership-install-');
+  const tree = path.join(home, 'ccrc');
+  mkdirSync(path.join(tree, 'ccd'), { recursive: true });
+  writeFileSync(path.join(tree, 'ccd', path.basename(CCD)), readFileSync(CCD, 'utf8'), { mode: 0o755 });
+  for (const f of ['ccd-entry.py', 'ccd-entry-install.py']) copyFileSync(path.join(REPO, 'ccd', f), path.join(tree, 'ccd', f));
+  // The library the body pins (D-6913): the installer renders its digest into the body, then stamps it.
+  mkdirSync(path.join(tree, 'ccd', 'lib'), { recursive: true });
+  copyFileSync(path.join(REPO, 'ccd', 'lib', 'disk-retention.sh'), path.join(tree, 'ccd', 'lib', 'disk-retention.sh'));
+  const r = spawnSync(canonicalPython3(), ['-IS', path.join(tree, 'ccd', 'ccd-entry-install.py'), 'install', tree, home],
+    { encoding: 'utf8', cwd: home, env: { HOME: home, PATH: process.env['PATH'] ?? '/usr/bin:/bin' } });
+  const ccd = r.status === 0 ? readFileSync(path.join(home, '.local', 'libexec', 'ccrc', path.basename(CCD)), 'utf8') : '';
+  afterAll(() => { rmSync(home, { recursive: true, force: true }); });
+
+  it('installs (the fixture the cases below read)', () => {
+    expect(r.status, String(r.stderr)).toBe(0);
+  });
 
   // WHY THE SHEBANG STAYS (D-3696): `ccd/ccd` is no longer what a box executes
-  // directly — `~/.local/bin/ccd` is the rendered Python launcher
+  // directly - `~/.local/bin/ccd` is the rendered Python launcher
   // (`ccd/ccd-entry.py`), which starts this file as `bash [-p] -- <body>` from
   // `~/.local/libexec/ccrc/ccd`. It keeps line 1 because it is still a Bash
   // file in its own right: SOURCEABLE (every `source ccd/ccd` harness), the
   // active Bash body, and the copy the shipped tree carries at `~/ccrc/ccd/ccd`.
-  it('keeps the shebang on line 1 and the marker on line 2 — ccd stays a sourceable Bash file and the active body', () => {
+  it('keeps the shebang on line 1 and the marker on line 2 - ccd stays a sourceable Bash file and the active body', () => {
     const lines = ccd.split('\n');
     expect(lines[0]).toBe('#!/usr/bin/env bash');
     expect(lines[1]).toMatch(/^# ccrc:generated 1 sha256=[0-9a-f]{64}$/);
   });
 
   // A MARKER CHECK THAT PASSES IS NOT A CHECK THAT THE FILE HAS ONE MARKER
-  // (D-2216, and this case is the mechanism that entry shipped without). The
-  // case above reads line 2; the one below re-hashes the body. Neither can see
-  // a SECOND marker line further down, because that line IS part of the body
-  // both of them hash. This PR's own history is the proof rather than the
-  // worry: two of its commits shipped `ccd/ccd` with a stray
-  // `# ccrc:generated 1 sha256=PLACEHOLDER` as line 3, and `verifyMarker`
-  // answered `ccrc-unmodified` at both — `stripMarkerLine` removes only the
-  // line at `markerLineIndex`, so the placeholder was hashed IN and the digest
-  // covering it was correct.
+  // (D-2216). The case above reads line 2; the one below re-hashes the body.
+  // Neither can see a SECOND marker line further down, because that line IS
+  // part of the body both of them hash: two commits once shipped `ccd/ccd` with
+  // a stray `# ccrc:generated 1 sha256=PLACEHOLDER` as line 3, and
+  // `verifyMarker` answered `ccrc-unmodified` at both - `stripMarkerLine`
+  // removes only the line at `markerLineIndex`, so the placeholder was hashed IN
+  // and the digest covering it was correct.
   //
   // COUNT ON THE PREFIX, NOT ON `MARKER_RE`. The line that actually shipped
   // carries `PLACEHOLDER` where the digest goes, so it does not match the
-  // 64-hex marker regex at all: a count of WELL-FORMED markers would have
-  // found exactly one and passed, on the very file that carried the defect.
-  // What is wrong is a second line CLAIMING provenance, whatever it claims.
-  //
-  // WHY THIS FILE AND NO OTHER, measured rather than assumed. The recurrence
-  // mechanism is a merge conflict on the marker line — every edit to `ccd`
-  // changes line 2, so a merge whose BOTH sides edited `ccd` conflicts exactly
-  // there. (Not "every merge of a ccd-touching branch": a merge where only one
-  // side touched `ccd` takes that side's line and merges clean — measured at
-  // round 5's refute pass, and the looser sentence is the kind of overstatement
-  // this round is otherwise spent removing.) It needs a generated file that is
-  // COMMITTED. `grep -rn
-  // '^# ccrc:generated' .`, outside `node_modules/`, `graphify-out/` and the
-  // two `docs/` lines that quote the format, returns line 2 of `ccd/ccd` and,
-  // since ARCH-74, the stamp inside the session hook's generated helpers region
-  // (`hook-helpers-generated.test.ts` owns that one). `~/.ccrc/accounts.sh` and the wrappers are generated at
-  // deploy time from bodies that never contain the prefix and are never
-  // merged, so they cannot take this shape and are not scanned here.
-  it('carries exactly ONE line claiming provenance — a second one is hashed in and verifies clean', () => {
+  // 64-hex marker regex at all: what is wrong is a second line CLAIMING
+  // provenance, whatever it claims. Now measured on the installer's output: the
+  // installer writes exactly one, so a second can only be a line of the source.
+  it('carries exactly ONE line claiming provenance - a second one is hashed in and verifies clean', () => {
     const claiming = ccd.split('\n').filter((l) => l.startsWith('# ccrc:generated'));
     expect(claiming,
-      'ccd/ccd carries more than one line beginning "# ccrc:generated". Three ways to get here: '
-      + 'a merge that keeps both sides of the line-2 conflict; a re-stamp over a placeholder, '
-      + 'which leaves the extra line INSIDE the hashed body where verifyMarker cannot see it and '
-      + 'every suite stays green; or a COMMENT quoting the marker format at column 0 — if that '
-      + 'is what this is, indent the example by one space and it stops being a claim.')
+      'the installed ccd carries more than one line beginning "# ccrc:generated". ccd/ccd must hold the '
+      + 'placeholder on line 2 and no other such line; a COMMENT quoting the marker format at column 0 '
+      + 'is a claim too - indent the example by one space and it stops being one.')
       .toHaveLength(1);
   });
 
-  it('verifies as ccrc-unmodified — re-stamp ccd/ccd after editing it (see the note above)', () => {
-    expect(verifyMarker(ccd),
-      'ccd/ccd was edited without re-stamping its provenance marker; run the re-stamp '
-      + 'command in the comment above this describe').toBe('ccrc-unmodified');
+  it('verifies as ccrc-unmodified', () => {
+    expect(verifyMarker(ccd), 'the installer wrote a marker that does not match the body it installed').toBe('ccrc-unmodified');
   });
 });

@@ -15,7 +15,8 @@ export const ORPHAN_LICENCE_MS = 60 * 60 * 1000;
 /** Learning audits per pass, and under pressure. The act job is separate: at most one per pass fleet-wide. */
 export const ORPHAN_AUDITS_PER_PASS = 2;
 export const ORPHAN_AUDITS_PER_PASS_PRESSURE = 4;
-/** A tree whose audit could not be measured is asked again after this. */
+/** A tree whose audit could not be measured, and an unreadable census, are asked again after this. A truncated census
+ *  starts its back-off here (`orphanTruncatedWaitMs`). */
 export const ORPHAN_RETRY_MS = 15 * 60 * 1000;
 /** One lane-wide `KeyedQueue` key: every audit and act of the lane runs one at a time. */
 export const ORPHAN_QUEUE_KEY = 'orphan-tree-lane';
@@ -183,6 +184,7 @@ export const ORPHAN_FEED_TITLE = {
   removed: 'orphan worktree removed',
   would: 'orphan worktree would be removed',
   left: 'orphan worktree left',
+  truncated: 'orphan census truncated',
 } as const;
 
 export function orphanFeedRow(hex: string, cls: OrphanClass, o: OrphanOutcome): { readonly title: string; readonly body: string } {
@@ -193,6 +195,25 @@ export function orphanFeedRow(hex: string, cls: OrphanClass, o: OrphanOutcome): 
   }
   const tail = o.rescued ? ' after its commits are pinned in the attic' : '';
   return { title: ORPHAN_FEED_TITLE[o.kind], body: `${where}${tail}` };
+}
+
+/** #1565 (D-6987): the wait before a truncated census is asked again. `streak` counts the truncated censuses in a row,
+ *  this one included; the wait doubles from `ORPHAN_RETRY_MS` and stops at the pass's own cadence, so a box whose every
+ *  census meets its bound is asked about 4 times a day, not 96. */
+export const orphanTruncatedWaitMs = (streak: number, censusMs: number): number =>
+  Math.min(ORPHAN_RETRY_MS * 2 ** (streak - 1), censusMs);
+
+/** The `lastCensus` that makes the next census due `waitMs` after now, at a cadence of `censusMs` (`orphanCensusDue`). */
+export const orphanCensusRetryMono = (nowMono: number, censusMs: number, waitMs: number): number => nowMono - censusMs + waitMs;
+
+/** #1565 (D-6988): the row for a truncated census. The answer carries only `truncated`, so the row cannot say which of
+ *  ccd's bounds stopped it; the rows seen and the seconds the call took let a reader tell, and ccd's bounds are not
+ *  copied here. */
+export function orphanTruncatedRow(rowsSeen: number, tookMs: number, waitMs: number): { readonly title: string; readonly body: string } {
+  return {
+    title: ORPHAN_FEED_TITLE.truncated,
+    body: `the orphan census stopped at its bound after ${rowsSeen} rows in ${(tookMs / 1000).toFixed(1)} s (the answer does not say whether rows or time); nothing was audited this pass, asked again in ${waitMs / 60_000} min`,
+  };
 }
 
 // ── the lane's memory, and who is asked ──────────────────────────────────────

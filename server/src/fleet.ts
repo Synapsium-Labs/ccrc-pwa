@@ -24,11 +24,14 @@ import type { ApprovalRow, AskRow, CoordStore } from './coord/store.js';
 // in L3 is what let the two halves disagree about what the hop is keyed on.
 import { boardPlacement, foldCoordPlacements, type StampLookup } from './coord/placement.js';
 import { foldLastRuns, releasedFrom, type ReleasedLookup } from './coord/released.js';
+import { incarnationOfMark, type SessionRunRead } from './coord/runWire.js';
 // F2(b): the `held` chip's ceiling, DERIVED from the lane's own two
 // windows. It lives in `askwindow.ts` because `watch.ts` (their first
 // reader) imports this module, so the constants could not stay there.
 import { ASK_HELD_CHIP_MAX_MS, askNotifyAt } from './askwindow.js';
 import { redactCommand } from './coord/redact.js';
+// D-7026: the question tables are read through `coord/questions.ts`; the guard and the warn stay here.
+import { currentFor } from './coord/questions.js';
 
 /** `FleetSession.askSummary`'s ceiling — a fleet card row, not a transcript; an ask push's too (D-5356). */
 export const ASK_SUMMARY_MAX_LEN = 80;
@@ -201,7 +204,7 @@ function fleetWithCoordinator(row: AskRow | null, nowMs: number, approval: Appro
 function readHeldApprovals(coord: CoordStore | undefined, childIds: readonly string[]): Map<string, ApprovalRow> {
   if (!coord || childIds.length === 0) return new Map();
   try {
-    const read = coord.heldApprovalsFor(childIds);
+    const read = currentFor(coord, childIds, 'approval');
     if (!read.ok) {
       console.warn(`ccrc-server: heldApprovalsFor refused — ${read.detail} — one bad read must not kill the poll`);
       return new Map();
@@ -231,7 +234,7 @@ function readHeldApprovals(coord: CoordStore | undefined, childIds: readonly str
 function readCurrentAsks(coord: CoordStore | undefined, childIds: readonly string[]): Map<string, AskRow> {
   if (!coord || childIds.length === 0) return new Map();
   try {
-    const read = coord.currentAsksFor(childIds);
+    const read = currentFor(coord, childIds, 'ask');
     // D-2545. An unreadable ask row degrades the WHOLE frame's ask chips to
     // absent, exactly as a throw already did — the fail-safe direction this
     // function was written for, reached by a typed result instead of an
@@ -329,6 +332,26 @@ function readReleased(coord: CoordStore | undefined, sessionIds: readonly string
   } catch (err) {
     console.warn(`ccrc-server: lastRunBySession failed while computing released rows — ${err instanceof Error ? err.message : String(err)} — releasedFrom reads null this tick`);
     return { ok: false };
+  }
+}
+
+/**
+ * `FleetSession.run` and `.openRun`'s guarded read (ARCH-61, #796): each row's binding, decided by `bindingOf` over the
+ * session's series, one read per row in this assembly. `coord` absent (a dark box, every older test) answers no run for every
+ * row, as `readReleased` does. A series this process cannot represent, or a throw from `node:sqlite`, is caught and warned
+ * once per row's read, never thrown out of `assembleFleet`, and answers null for that row this tick (`SessionRun`'s contract:
+ * doubt leaves the row where it was).
+ */
+function readSessionRun(coord: CoordStore | undefined, r: { id: string; child: SessionRecord['child'] }): SessionRunRead {
+  const none: SessionRunRead = { ok: true, run: null, openRun: null };
+  if (!coord) return none;
+  try {
+    const read = coord.bindingsOf(r.id).card(incarnationOfMark(coord, r.id, r.child));
+    if (!read.ok) console.warn(`ccrc-server: session run refused for ${r.id} — ${read.detail} — run reads null this tick`);
+    return read;
+  } catch (err) {
+    console.warn(`ccrc-server: session run failed for ${r.id} — ${err instanceof Error ? err.message : String(err)} — run reads null this tick`);
+    return { ok: false, detail: 'threw' };
   }
 }
 
@@ -536,6 +559,7 @@ export async function assembleFleet(
     // to the substrate-unreachable spec: what the fleet view shows for
     // cannot-ask is a product judgement (a new SessionStatus crosses the wire
     // and every render seam), not a guard this assembly may improvise.
+    const sessionRun = readSessionRun(coord, r);
     const verdict = await tmux.sessionVerdict(r.id);
     const alive = verdict.verdict === 'live';
     let status: SessionStatus = 'dead';
@@ -880,6 +904,9 @@ export async function assembleFleet(
           archived: r.archivedAt !== null, child: r.child.kind !== 'none',
         })
         : null,
+      // ARCH-61 (#796): the two named queries over the row's binding, decided once, here.
+      run: sessionRun.ok ? sessionRun.run : null,
+      openRun: sessionRun.ok ? sessionRun.openRun : null,
       bucket: 'idle', bucketSince: null,   // replaced immediately below
     };
     // Computed FROM the assembled session, never from a second copy of the

@@ -23,9 +23,9 @@
 // is compliant with no stub of its own.
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
-import { CCD } from './ccdWsHelpers.js';
+import { ccdSource } from './ccdWsHelpers.js';
 
-const src = withoutReclaim(readFileSync(CCD, 'utf8'));
+const src = withoutReclaim(ccdSource());
 
 const scan = (text: string): string[] => {
   const t = new Set<string>();
@@ -114,7 +114,7 @@ describe('the lifecycle block cannot poison wsaudit.test.ts\'s scan', () => {
     // one word, LEFT none; the scan outside the three blocks still answers 55.
     // 67 -> 68 (fleet disk retention DR-26, D-6638): `not-idle`, the stale reclaim's refusal of a child that worked
     // within seven days, spelled in the RECLAIM region and given `SENTENCES` copy. ENTERED one word, LEFT none.
-    const full = readFileSync(CCD, 'utf8');
+    const full = ccdSource();
     expect.soft(scan(full)).toHaveLength(68);
     expect.soft(scan(full).filter((t) => !scan(src).includes(t)))
       .toEqual(['attached', 'child', 'containment-unproven', 'expire-in-progress', 'in-use', 'live', 'not-a-child',

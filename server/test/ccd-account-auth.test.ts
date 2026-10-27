@@ -9,9 +9,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync, spawn } from 'node:child_process';
-import {
-  makeCcdHarness, ghContainedEnv, harnessBin, seedAccountsSh, CCD, type CcdHarness,
-} from './ccdWsHelpers.js';
+import { makeCcdHarness, ghContainedEnv, harnessBin, seedAccountsSh, CCD, type CcdHarness, ccdSource } from './ccdWsHelpers.js';
 import { DEFAULT_TEST_ROSTER } from './helpers.js';
 import { spawnSyncGroup } from './spawnGroup.js';
 import { CCD_CAPABILITY_TOKENS } from './ccdCapTokens.js';
@@ -122,7 +120,7 @@ describe('ccd-account-auth — the argv contract', () => {
 });
 
 describe('ccd-account-auth — the platform shim it had to carry', () => {
-  const ccd = fs.readFileSync(CCD, 'utf8');
+  const ccd = ccdSource();
   const helper = fs.readFileSync(HELPER, 'utf8');
   const body = (src: string, name: string): string => {
     const m = new RegExp(`${name}\\(\\) \\{[^\\n]*\\n([\\s\\S]*?)\\n\\}`).exec(src);
@@ -217,10 +215,12 @@ describe('the dot-prefixed registry inventory is a census, not a memory', () => 
    *  the scan by naming an artifact nothing creates. */
   const derived = (): Set<string> => {
     const out = new Set<string>();
-    for (const name of fs.readdirSync(CCD_ROOT, { withFileTypes: true })
+    // `ccd/lib/*.sh` is ccd's own code, loaded at its foot (D-6913): it has no shebang, and is scanned all the same.
+    const libs = fs.readdirSync(path.join(CCD_ROOT, 'lib')).filter((n) => n.endsWith('.sh')).map((n) => path.join('lib', n));
+    for (const name of [...fs.readdirSync(CCD_ROOT, { withFileTypes: true })
       .filter((e) => e.isFile())
       .map((e) => e.name)
-      .filter((n) => fs.readFileSync(path.join(CCD_ROOT, n), 'utf8').startsWith('#!'))) {
+      .filter((n) => fs.readFileSync(path.join(CCD_ROOT, n), 'utf8').startsWith('#!')), ...libs]) {
       const code = fs.readFileSync(path.join(CCD_ROOT, name), 'utf8')
         .split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
       for (const m of code.matchAll(/\$(?:REG|_SVC_REG)\/\.([a-z][a-z0-9-]*)/g)) {
@@ -231,7 +231,7 @@ describe('the dot-prefixed registry inventory is a census, not a memory', () => 
   };
 
   it('names every dot-prefixed artifact the shipped bash actually writes', () => {
-    const src = fs.readFileSync(CCD, 'utf8');
+    const src = ccdSource();
     const from = src.indexOf(REGION_FROM);
     const to = src.indexOf(REGION_TO, from);
     expect(from, 'the R-3 block moved — re-anchor this test').toBeGreaterThan(-1);
@@ -1922,7 +1922,7 @@ describe('ccd-account-auth — advertised, shipped, taken back off, and agent-fi
     // …and it is NOT dispatchable: `ccd account-v1` is not a command. Through
     // the shared `CCD` constant, not a second spelling of that path —
     // `single-definition.test.ts` holds it to one file and is right to.
-    expect(fs.readFileSync(CCD, 'utf8')).not.toMatch(/^ {2}account-v1\)/m);
+    expect(ccdSource()).not.toMatch(/^ {2}account-v1\)/m);
   });
 
   it('the capability is named in the list that partitions caps output', () => {

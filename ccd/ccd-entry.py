@@ -59,6 +59,13 @@
 # stopped by it, and the window between hashing the body and Bash opening it
 # is not closed.
 #
+# THE BODY'S LIBRARY (#1279). The body loads one more file, `lib/disk-retention.sh` beside it, and pins that
+# file's SHA-256 in its own text, which THIS digest covers: the launcher pins the body, the body pins the library.
+# The body reads the library once, hashes what it read and evaluates what it hashed; a missing, linked or changed
+# file refuses the start with status 125 before any verb runs. The path comes from the body's own location, so no
+# environment variable and no argument names it. It is the same trust surface as the body: PATH, and the hashing
+# tool it selects, are trusted prerequisites.
+#
 # STANDARD LIBRARY ONLY, and the shebang's `-IS` is load-bearing: isolated mode
 # ignores every PYTHON* variable, user site-packages and the current directory,
 # and `-S` imports no `site` (so no `sitecustomize` either). No bytecode is

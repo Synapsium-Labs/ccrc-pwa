@@ -37,7 +37,7 @@ import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
 import { spawnSyncGroup } from './spawnGroup.js';
-import { CCD, ghContainedEnv } from './ccdWsHelpers.js';
+import { CCD, ghContainedEnv, ccdSource } from './ccdWsHelpers.js';
 import { PROVIDERS, PROVIDER_IDS } from '../../shared/providers.js';
 import { markGenerated } from '../../shared/mark.mjs';
 import { generateWrapperBody } from '../../shared/wrapper.mjs';
@@ -3265,7 +3265,7 @@ describe('ccrc account add: the lane is off, and the verb says what it did not d
     // "is spelled in exactly one file, and that file is ccdWsHelpers.ts" went
     // red on this file. Measured, not remembered — and apt, given this case is
     // itself about two spellings of one name drifting apart.
-    const ccd = readFileSync(CCD, 'utf8');
+    const ccd = ccdSource();
     expect(ccd).toContain('_lane_enabled() { [[ ! -f "$REG/$1-disabled" ]]; }');
     expect(ccd).toContain('_account_ok() { [[ -x "$WRAPPER_DIR/$1" ]] && _lane_enabled "$1"; }');
   });
@@ -5373,7 +5373,7 @@ const lexists = (p: string): boolean => { try { lstatSync(p); return true; } cat
 // These cases deliberately share one process across sequential ordinary tests.
 // The first mimics setup failing after it obtained a current-run supervisor; the
 // second is its only pre-fix escape hatch, and proves afterEach drained it.
-describe.sequential('ccrc account: setup failures keep current-run fixture ownership', () => {
+describe('ccrc account: setup failures keep current-run fixture ownership', { concurrent: false }, () => {
   let failedSetup: { home: string; port: number; pid: number } | null = null;
 
   it.skipIf(!PY3)('first setup rejection leaves its current-run fake to file-level cleanup', async () => {
@@ -5776,6 +5776,58 @@ describe('ccrc account remove', () => {
     } finally { await killLaneProcesses(home); }
   });
 
+  // Codex bridge Stage 2, Task 11: a direct lane's one tier, the bridge, on the shim's port. Its stand-in holds the
+  // bridge's exact argv (`<python3> -I <shim file> --ccrc-bridge=direct --ccrc-lane=<id>`, the shim file a tiny server
+  // here) and answers `/ccgpt/lane` in the bridge's shape; it is reparented through nohup, so a stop reaps it while
+  // `spawnSync` blocks this event loop, and it ends itself after 60 s whatever happens.
+  it.skipIf(!PY3 || process.platform === 'darwin')('C2b: a direct lane\'s running bridge is stopped FIRST, then its bridge files are reaped', async () => {
+    const home = box('ccrc-account-remove-codex-bridge-');
+    const lane = await codexLaneOnFreePorts();
+    seedRosterJson(home, [UPSTREAM, { ...lane, exec: { ...lane.exec, bridge: 'direct' } }, HOMEABLE('team-shared', 'blue')]);
+    for (const id of ['claude', 'team-shared']) plantLauncher(home, id);
+    plantCodexLauncher(home);
+    const state = plantLaneState(home, lane);
+    const dir = join(home, '.ccrc', 'codex', lane.id);
+    const lj = JSON.parse(readFileSync(join(dir, 'lane.json'), 'utf8')) as Record<string, unknown>;
+    writeFileSync(join(dir, 'lane.json'), `${JSON.stringify({ ...lj, bridge: 'direct', upstream: 'backend',
+      bridgeFiles: { stats: 'bridge.stats.json', store: 'reasoning.sqlite', recordings: 'recordings' } }, null, 2)}\n`);
+    const bridgeFiles = ['bridge.stats.json', 'reasoning.sqlite', 'reasoning.sqlite-wal', 'reasoning.sqlite-shm',
+      'record-streams', 'bridge-instructions'].map((f) => join(dir, f));
+    for (const f of bridgeFiles) writeFileSync(f, 'fixture\n', { mode: 0o600 });
+    mkdirSync(join(dir, 'recordings'), { mode: 0o700 });
+    writeFileSync(join(dir, 'recordings', 'r1.sse'), 'event: fixture\n\n');
+    const shim = join(home, '.local', 'bin', 'ccgpt-proxy.py');
+    mkdirSync(path.dirname(shim), { recursive: true });
+    writeFileSync(shim, [
+      'import http.server, json, os, threading',
+      'class H(http.server.BaseHTTPRequestHandler):',
+      '    def do_GET(self):',
+      '        b = json.dumps({"lane": "codex-a", "mode": "direct"}).encode()',
+      '        self.send_response(200); self.send_header("Content-Type", "application/json")',
+      '        self.send_header("Content-Length", str(len(b))); self.end_headers(); self.wfile.write(b)',
+      '    def log_message(self, *a): pass',
+      's = http.server.HTTPServer(("127.0.0.1", int(os.environ["FAKE_BRIDGE_PORT"])), H)',
+      'threading.Timer(60, lambda: os._exit(0)).start()',
+      's.serve_forever()', ''].join('\n'), { mode: 0o755 });
+    const plant = spawnSync(BASH, ['-c',
+      'FAKE_BRIDGE_PORT="$2" nohup "$0" -I "$1" --ccrc-bridge=direct --ccrc-lane=codex-a </dev/null >/dev/null 2>&1 & echo $!',
+      PY3!, shim, String(lane.exec.proxyPort)], { encoding: 'utf8' });
+    const pid = Number(plant.stdout.trim());
+    expect(pid > 1, plant.stderr).toBe(true);
+    await eventually(() => portAccepts(lane.exec.proxyPort), 'the stand-in bridge to bind', 10_000);
+    writeFileSync(join(dir, 'bridge.pid'), `${pid}\n`, { mode: 0o600 });
+    writeFileSync(join(dir, 'bridge.started'), '{"fixture":"bridge"}\n', { mode: 0o600 });
+    plantTmux(home, []);
+    const r = run(home, ['account', 'remove', '--id', 'codex-a']);
+    expect(r.code, r.stderr).toBe(0);
+    oneObject(r);
+    await eventually(() => !alive(pid), 'the bridge to stop with its account', 15_000);
+    expect(await portAccepts(lane.exec.proxyPort)).toBe(false);
+    for (const f of [...state.reaped, ...bridgeFiles, join(dir, 'bridge.pid'), join(dir, 'bridge.started'), join(dir, 'recordings')]) {
+      expect(existsSync(f), `${f} survived the reap`).toBe(false);
+    }
+  }, 60_000);
+
   it.skipIf(!PY3 || process.platform === 'darwin' || !HAVE_FLOCK)(
     'C3: a stop that fails refuses the removal before the roster changes, and reaps nothing', async () => {
       const home = box('ccrc-account-remove-codex-stuck-');
@@ -6100,6 +6152,82 @@ describe('ccrc account remove', () => {
     expect(r.stderr).not.toMatch(/stop that owner by hand/);
     expect(readFileSync(roster, 'utf8'), 'the roster was dropped past an unproven tier').toBe(rosterBefore);
     for (const f of state.laneOnly) expect(existsSync(f), `${f} was reaped past an unproven tier`).toBe(true);
+  });
+
+  // The whole-wave addendum (LB-2 part a): the shim and the bridge share one port and one unit, so one fact there
+  // reads on both. The re-measure walks `_codex_stop_order` (a litellm lane: shim, litellm, bridge), reads the other
+  // mode's tier through `_codex_tier_is_other_mode`, and names a finding on that shared port or unit once.
+  /** The re-measure's answer for the two front tiers, which share one port and one unit; litellm reads not running. */
+  const frontAnswers = (rc: number, why: string): string =>
+    '_codex_tier_ours() { _codex_row "$1" >/dev/null 2>&1; CX_TIER_VIA=""; CX_TIER_PID=""; CX_TIER_WHY=""; '
+    + `case "$2" in shim|bridge) CX_TIER_WHY='${why}'; return ${rc} ;; esac; return 1; }`;
+  /** `plantLaneState`'s lane.json, given the mode word a litellm lane's render carries. */
+  const asLitellmLane = (home: string, id: string): void => {
+    const f = join(home, '.ccrc', 'codex', id, 'lane.json');
+    writeFileSync(f, `${JSON.stringify({ ...JSON.parse(readFileSync(f, 'utf8')) as Record<string, unknown>, bridge: 'litellm', upstream: 'backend' }, null, 2)}\n`, { mode: 0o600 });
+  };
+
+  it('C11b: a stranger on the shim port reads on both front tiers of that one port, and is named as one operator step, the shim\'s', async () => {
+    const home = box('ccrc-account-remove-codex-shared-port-');
+    const lane = await codexLaneOnFreePorts();
+    seedRosterJson(home, [UPSTREAM, lane, HOMEABLE('team-shared', 'blue')]);
+    for (const id of ['claude', 'team-shared']) plantLauncher(home, id);
+    plantCodexLauncher(home);
+    plantLaneState(home, lane);
+    asLitellmLane(home, lane.id);
+    plantTmux(home, []);
+    const r = removeWithStubs(home, ['_codex_stop_lane() { return 0; }', frontAnswers(2, 'listener-unidentified')].join('\n'));
+    expect(r.code, r.stderr).toBe(0);
+    const steps = (oneObject(r)['operator-steps'] ?? []) as string[];
+    const onPort = steps.filter((s) => s.includes(`port ${lane.exec.proxyPort}`));
+    expect(onPort, JSON.stringify(steps)).toHaveLength(1);
+    expect(onPort[0]).toContain(`Codex lane ${lane.id}'s shim tier, port ${lane.exec.proxyPort}`);
+    expect(steps.join('\n')).not.toMatch(/bridge tier/);
+  });
+
+  it('C11c: a crash-looping shim unit on a litellm lane refuses the removal by its shim alone, and names no bridge', async () => {
+    const home = box('ccrc-account-remove-codex-shared-unit-');
+    const lane = await codexLaneOnFreePorts();
+    seedRosterJson(home, [UPSTREAM, lane, HOMEABLE('team-shared', 'blue')]);
+    for (const id of ['claude', 'team-shared']) plantLauncher(home, id);
+    plantCodexLauncher(home);
+    const state = plantLaneState(home, lane);
+    asLitellmLane(home, lane.id);
+    plantTmux(home, []);
+    const roster = join(home, '.ccrc', 'accounts.json');
+    const rosterBefore = readFileSync(roster, 'utf8');
+    const r = removeWithStubs(home, ['_codex_stop_lane() { return 0; }', frontAnswers(2, 'unit-unproven')].join('\n'));
+    expect(r.code, r.stderr).toBe(1);
+    const j = oneObject(r);
+    expect(j['error']).toBe('codex-reap-failed');
+    expect(String(j['detail'])).toMatch(new RegExp(`codex lane ${lane.id}'s shim tier\\(s\\) still run`));
+    expect(r.stderr.split('\n').filter((l) => l.startsWith('ccrc codex: unit-foreign: '))).toHaveLength(1);
+    expect(r.stderr).not.toMatch(/bridge tier/);
+    expect(readFileSync(roster, 'utf8'), 'the roster was dropped past an unproven tier').toBe(rosterBefore);
+    for (const f of state.laneOnly) expect(existsSync(f), `${f} was reaped past an unproven tier`).toBe(true);
+  });
+
+  it('C11d: a shim still starting as this lane\'s after the stop refuses the removal by the shim alone: the bridge tier its shared unit covers is not running', async () => {
+    const home = box('ccrc-account-remove-codex-other-mode-');
+    const lane = await codexLaneOnFreePorts();
+    seedRosterJson(home, [UPSTREAM, lane, HOMEABLE('team-shared', 'blue')]);
+    for (const id of ['claude', 'team-shared']) plantLauncher(home, id);
+    plantCodexLauncher(home);
+    plantLaneState(home, lane);
+    asLitellmLane(home, lane.id);
+    plantTmux(home, []);
+    // The real `_codex_tier_ours` records each answer in CX_TIER_SEEN, which `_codex_tier_is_other_mode` reads; this
+    // stub does too. The shim is this lane's and still starting (4), and the bridge tier reads its shared unit.
+    const r = removeWithStubs(home, ['_codex_stop_lane() { return 0; }',
+      '_codex_tier_ours() { _codex_row "$1" >/dev/null 2>&1; CX_TIER_VIA=""; CX_TIER_PID=""; CX_TIER_WHY=""; local rc=1; '
+      + 'case "$2" in shim) rc=4 ;; bridge) CX_TIER_WHY=unit-unproven; rc=2 ;; esac; '
+      + 'declare -p CX_TIER_SEEN >/dev/null 2>&1 || declare -gA CX_TIER_SEEN=(); CX_TIER_SEEN["$1/$2"]="$rc"; return "$rc"; }',
+    ].join('\n'));
+    expect(r.code, r.stderr).toBe(1);
+    const j = oneObject(r);
+    expect(j['error']).toBe('codex-reap-failed');
+    expect(String(j['detail'])).toMatch(new RegExp(`codex lane ${lane.id}'s shim tier\\(s\\) still run`));
+    expect(r.stderr).not.toMatch(/bridge tier/);
   });
 
   itSystemd('C12: removing a codex account disables ccrc\'s own usage timer for it, reports the link removed, keeps its OAuth and logs, and never names another repository\'s (Plan 3a Task 7)', async () => {
@@ -7116,7 +7244,7 @@ describe('ccrc account remove', () => {
   });
 
   it('names registry destinations exactly the way ccd does', () => {
-    const ccd = readFileSync(CCD, 'utf8');
+    const ccd = ccdSource();
     const ccrc = readFileSync(CCRC_SRC, 'utf8');
     expect(ccd).toContain('_plat_mv_notdir "$tmp" "$REG/$1.$2"');
     expect(ccrc).toContain('_plat_mv_notdir "$tmp" "$_SVC_REG/$1.$2"');
@@ -10529,7 +10657,7 @@ describe('ccrc account check: the probe', () => {
     // `ccdWsHelpers.ts` alone; building it here from REPO and two segments reds
     // it — measured, D-2132's defect in the task that cites it. And the scan
     // reads comments too, so this sentence must not spell the shape either.
-    const ccd = readFileSync(CCD, 'utf8');
+    const ccd = ccdSource();
     const ccrc = readFileSync(join(REPO, 'ccd', 'ccrc'), 'utf8');
     const a = /^LIMITS_DIR="([^"]+)"/m.exec(ccd)?.[1];
     const b = /^CCRC_LIMITS_DIR="([^"]+)"/m.exec(ccrc)?.[1];
@@ -10924,6 +11052,11 @@ describe('ccrc account check: the probe', () => {
       if (!src.startsWith('#!')) continue;
       const n = [...src.matchAll(CALLS)].length;
       if (n > 0) sites.set(f.name, n);
+    }
+    // ccd's library, loaded at ccd's foot (D-6913), has no shebang and is ccd's code all the same.
+    for (const f of readdirSync(join(ccdDir, 'lib')).filter((n) => n.endsWith('.sh'))) {
+      const n = [...readFileSync(join(ccdDir, 'lib', f), 'utf8').matchAll(CALLS)].length;
+      if (n > 0) sites.set(`lib/${f}`, n);
     }
     const census = [...sites].map(([f, n]) => `${f}=${n}`).join(' ');
     const total = [...sites.values()].reduce((a, b) => a + b, 0);

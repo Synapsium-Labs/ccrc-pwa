@@ -17,9 +17,11 @@ import { mkTmp } from './tmpHelpers.js';
 import { unreadableField as withUnreadableField } from './ioDoubles.js';
 import { okRun } from './coordReadHelpers.js';
 import { isChildReclaimKebab } from '../src/coord/childReclaim.js';
+import { isClaimantState } from '../src/coord/staleSibling.js';
 import { isApprovalKebab } from '../src/coord/approvalsign.js';
 import { isDigestKebab } from '../src/coord/digest.js';
-import { isStallKebab } from '../src/coord/stall.js';
+import { isStallKebab, isStallCoordGate } from '../src/coord/stall.js';
+import { isQuestionPolicyKebab } from '../src/coord/questionPolicy.js';
 import { isHibernateKebab } from '../src/coord/hibernate.js';
 import { isArchivedExpiryKebab } from '../src/archivedExpiry.js';
 import { isStallSettingsKebab } from '../src/coord/stallsettings.js';
@@ -981,8 +983,20 @@ describe('the rejection table is total, in both directions', () => {
         // THE DRIFT RECONCILER'S LANE (D-5922): `coord/driftLane.ts` tags its summary push and its shadow notice with two
         // fixed literals. A tag names a ring row, never a `refused` or `reject.code`. Admitted through the exported guard,
         // derived from `DRIFT_LANE_TAGS`, never NOT_CODES.
-        || isDriftLaneTag(tok),
-        `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode, SessionLifecycle, ReclaimRefuseCode, AskRefuseCode, RunRouteRefuseCode, SetAccountPoolsRefuseCode, UpdateStoreRefuseCode, child-reclaim word, stall-watch word, expiry word, stall-watch settings word, dead-coordinator word, temp-root collector word, delegation word, collector switch word, collector-switch route refusal, hibernation word, drift kind, notice mode, archive gate, stale-archive outcome or drift lane tag`).toBe(true);
+        || isDriftLaneTag(tok)
+        // THE STALE SIBLING (D-6923): `coord/staleSibling.ts` names a run claimant's state as literals. A state decides
+        // whether a sibling run keeps a child, never a `refused` or `reject.code`. Admitted through the exported guard,
+        // derived from `CLAIMANT_STATES`, never NOT_CODES.
+        || isClaimantState(tok)
+        // THE COORD-BLOCKED ARM (D-6942): `coord/stall.ts` names why a coordinator's mail is held as literals
+        // (`'busy-unread'`). A gate reason words the operator push, never a `refused` or `reject.code`. Admitted through
+        // the exported guard, derived from `STALL_COORD_GATES`, never NOT_CODES.
+        || isStallCoordGate(tok)
+        // THE QUESTION SWEEP'S DECIDERS (W3 Q3c, D-7027): `coord/questionPolicy.ts` names its answer words and the ask
+        // read's stages as literals (`'push-and-drop'`, `'row-refused'`). A word decides the sweep's act, never a `refused`
+        // or `reject.code`. Admitted through the exported guard, derived from that file's tables, never NOT_CODES.
+        || isQuestionPolicyKebab(tok),
+        `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode, SessionLifecycle, ReclaimRefuseCode, AskRefuseCode, RunRouteRefuseCode, SetAccountPoolsRefuseCode, UpdateStoreRefuseCode, child-reclaim word, stall-watch word, expiry word, stall-watch settings word, dead-coordinator word, temp-root collector word, delegation word, collector switch word, collector-switch route refusal, hibernation word, drift kind, notice mode, archive gate, stale-archive outcome, drift lane tag, stale-sibling claimant state, coord-blocked gate reason or question-sweep word`).toBe(true);
     }
   });
 });
@@ -1022,7 +1036,7 @@ describe('resolving the \'coordinator\' role (fix-round finding 4/6)', () => {
     const home = mkTmp('ccrc-mail-');
     seed(home, 'demo-quiet-mesa');
     const w = await withMail(home); app = w.app;
-    // No program opened at all: resolveCoordinator(null) sees zero active
+    // No program opened at all: soleActiveCoordinator() sees zero active
     // programs — absent, not ambiguous, but the same refusal either way.
     const res = await send(app, GOOD);   // toId: 'coordinator', no runId
     expect(res.statusCode).toBe(404);
@@ -1038,7 +1052,7 @@ describe('resolving the \'coordinator\' role (fix-round finding 4/6)', () => {
     const w = await withMail(home); app = w.app;
     w.coord.openRun({ program: 'pA', title: 'A', project: 'demo', wave: 1, waveOf: 1, claimedBy: 'demo-coord-a' });
     w.coord.openRun({ program: 'pB', title: 'B', project: 'demo', wave: 1, waveOf: 1, claimedBy: 'demo-coord-b' });
-    const res = await send(app, GOOD);   // toId: 'coordinator', no runId -> resolveCoordinator(null)
+    const res = await send(app, GOOD);   // toId: 'coordinator', no runId -> soleActiveCoordinator()
     expect(res.statusCode).toBe(404);
     expect(res.json()).toMatchObject({ ok: false, error: 'unknown-recipient' });
     expect(w.coord.dueDeliveries(Date.now(), 60_000)).toEqual([]);

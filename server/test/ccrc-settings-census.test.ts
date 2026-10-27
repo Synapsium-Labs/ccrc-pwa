@@ -13,12 +13,13 @@
 // `CCRC_SETTINGS=(…)` line of ccd/ccrc, never from a second list here, and
 // each setting's default from the second argument of its literal
 // `_ccrc_knob`/`_keep_knob` calls. Held here, each with its reason, are the
-// exceptions: `ENV_ONLY` (D-6588's 42 environment-only names, in six classes),
-// `SERVER_SETTINGS` (the keys ccrc reads where the server reads them, from the
-// server's own files), `VAR_KEY_BODIES` (the functions that may hand those
-// readers a key in a variable) and `SOURCING_BODIES` (the one function that
-// may source the box env file, for the server, how often, and only inside the
-// launchd command string it emits). A new name reds a row until it is classed.
+// exceptions: `ENV_ONLY` (D-6588's 42 environment-only names and D-6921's one,
+// in six classes), `SERVER_SETTINGS` (the keys ccrc reads where the server
+// reads them, from the server's own files), `VAR_KEY_BODIES` (the functions
+// that may hand those readers a key in a variable) and `SOURCING_BODIES` (the
+// one function that may source the box env file, for the server, how often, and
+// only inside the launchd command string it emits). A new name reds a row until
+// it is classed.
 //
 // WHAT IT GUARDS: THE SPELLINGS IT NAMES (D-6746). It is not a proof that no
 // other reader exists. It sees a `${NAME…}` or `$NAME` expansion of a setting
@@ -92,8 +93,9 @@ const SETTINGS: string[] = (() => {
 })();
 
 type EnvOnlyClass = 'call-bound' | 'fixture-path' | 'per-run' | 'rollout' | 'handshake' | 'constant';
-/** D-6588's 42 environment-only names. Each is a reasoned exception: a value
- *  for one call, one test, one run or one process, never a box's setting. */
+/** D-6588's 42 environment-only names and D-6921's one. Each is a reasoned
+ *  exception: a value for one call, one test, one run or one process, never a
+ *  box's setting. */
 const ENV_ONLY: Record<string, { cls: EnvOnlyClass; why: string }> = {
   // call bound: a time, size or concurrency bound on one call or wait, overridable so a suite need not wait it out.
   CCRC_HEALTH_TIMEOUT: { cls: 'call-bound', why: 'The header above its `:=` default in ccd/ccrc bounds one call to this box\'s server and says the default is what an operator gets, the override existing so a test need not wait out a production timeout.' },
@@ -119,13 +121,14 @@ const ENV_ONLY: Record<string, { cls: EnvOnlyClass; why: string }> = {
   CCRC_DOCTOR_DOCS_TIMEOUT: { cls: 'call-bound', why: 'The header above its `:=` default in ccd/ccrc-doctor-checks bounds one `ccd docs-index --all` call, overridable for the gh knob\'s reason.' },
   CCRC_SCOPE_SWEEP_STALE_S: { cls: 'call-bound', why: '`_check_scope-sweep` uses it as the age past which one verdict record reads stale.' },
   CCRC_SCOPE_SETTLE_SEC: { cls: 'call-bound', why: '`_check_scopes` waits this settle inside one scope measurement.' },
-  // fixture path: a path or permission a test points elsewhere.
+  // fixture path: a path, endpoint or permission a test points elsewhere.
   CCRC_CADDY_SYSTEM_FILE: { cls: 'fixture-path', why: 'Its header in ccd/ccrc says it is overridable so the suite can point the root-owned Caddyfile at a fixture.' },
   CCRC_CADDY_ROOT_CA: { cls: 'fixture-path', why: 'Its header in ccd/ccrc makes it a constant for CCRC_CADDY_SYSTEM_FILE\'s reason, a root-side path a test points at a fixture.' },
   CCRC_SCOPE_SWEEP_STATE: { cls: 'fixture-path', why: '`_check_scope-sweep` reads the sweep\'s verdict record there, a runtime path a test points at a fixture.' },
   CCRC_CGROUP_ROOT: { cls: 'fixture-path', why: '`_check_scopes` reads the cgroup tree there, which a test points at a fixture.' },
   CCRC_PROC_ROOT: { cls: 'fixture-path', why: '`_check_scopes` reads /proc there, which a test points at a fixture.' },
   CCRC_ALLOW_SANDBOX_LAUNCHCTL: { cls: 'fixture-path', why: '`_svc_launchctl` lets a harness that asks reach launchctl from a home that is not the real one.' },
+  CCRC_CODEX_AUTH_BASE: { cls: 'fixture-path', why: '`_codex_bridge_prepare` forwards it to a direct lane\'s bridge only when its caller set it, the auth endpoint a test points at a loopback fake and a live box never sets (D-6921).' },
   // per run: the address for one run.
   CCRC_ADDR: { cls: 'per-run', why: '`_box_server_addr` takes it as one run\'s address, the box\'s own being CCRC_HOST and CCRC_PORT read from the file.' },
   // rollout: coordinates on the deploying machine, in deploy.env.

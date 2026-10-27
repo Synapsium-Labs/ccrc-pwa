@@ -25,7 +25,7 @@ import {
 } from '../src/childReclaimSweep.js';
 import { CHILD_RECLAIM_FEED_QUIET_NONE, reclaimChild, type ChildReclaimDeps, type ChildReclaimOutcome,
   type ChildReclaimRequest } from '../src/coord/childReclaim.js';
-import { CHILD_STALE_RECLAIM_LIVE_MARKER } from '../../shared/switches.js';
+import { CHILD_STALE_RECLAIM_LIVE_MARKER, CHILD_SUPERSEDED_RECLAIM_LIVE_MARKER } from '../../shared/switches.js';
 import { NotifyLog } from '../src/notifylog.js';
 import type { FleetState } from '../src/fleetstate.js';
 import type { Runner } from '../src/exec.js';
@@ -176,7 +176,7 @@ const T0 = 1_790_000_000_000;
 const GEN = '1790000000000000000';
 const STALE_FEED = 'child would be reclaimed (stale)';
 
-interface LaneOpts { cap?: boolean; armed?: boolean }
+interface LaneOpts { cap?: boolean; armed?: boolean; supersededArmed?: boolean }
 
 const lane = (opts: LaneOpts = {}) => {
   let clock = T0;
@@ -187,6 +187,7 @@ const lane = (opts: LaneOpts = {}) => {
   const reg = path.join(home, '.cc-sessions');
   mkdirSync(reg, { recursive: true });
   if (opts.armed === true) writeFileSync(path.join(reg, CHILD_STALE_RECLAIM_LIVE_MARKER), '');
+  if (opts.supersededArmed === true) writeFileSync(path.join(reg, CHILD_SUPERSEDED_RECLAIM_LIVE_MARKER), '');
   const cfg = loadConfig({ CCRC_HOME: home, CCRC_PROJECTS_ROOT: mkTmp('ccrc-projects-') } as never);
   const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
   const requests: ChildReclaimRequest[] = [];
@@ -245,7 +246,18 @@ const lane = (opts: LaneOpts = {}) => {
   const feedTitles = (): string[] => coord.feedEvents(200).map((e) => e.title);
   const mailFromOperator = (): number =>
     (coord.db.prepare("SELECT COUNT(*) AS n FROM mail WHERE fromId = 'operator'").get() as { n: number }).n;
-  return { reg, coord, watcher, requests, plant, openRun, abandon, journal, pass, passes, advance, next, feedTitles,
+  /** A review of `work` that ended `done`; the work run stays open. */
+  const closedReview = (work: { id: number; program: string }): number => {
+    const r = coord.openRun({ program: work.program, title: work.program, project: 'demo', wave: 1, waveOf: null,
+      claimedBy: 'demo-coord', kind: 'review', reviews: work.id });
+    if (!('id' in r)) throw new Error(`openRun refused: ${JSON.stringify(r)}`);
+    for (const to of ['dispatched', 'working', 'done'] as const) {
+      const moved = coord.advance(r.id, to, 'test');
+      if (!moved.ok) throw new Error(`advance refused: ${JSON.stringify(moved)}`);
+    }
+    return r.id;
+  };
+  return { reg, coord, watcher, requests, closedReview, plant, openRun, abandon, journal, pass, passes, advance, next, feedTitles,
     mailFromOperator, io: deps.io, now: () => clock, answerWith: (f: typeof answer) => { answer = f; } };
 };
 
@@ -518,13 +530,33 @@ describe('reclaimChild on the stale arm (D-6639)', () => {
 
   it('a run-absent child has no coordinator: a coord feed row, and no mail', async () => {
     const r = await rig();
-    // the run the marker names is gone from the database; resolveCoordinator has nobody to answer
-    const spy = vi.spyOn(r.coord, 'resolveCoordinator').mockReturnValue(null);
+    // the run the marker names is gone from the database; the coordinator read has nobody to answer
+    const spy = vi.spyOn(r.coord, 'run').mockReturnValue({ ok: true, run: null });
     const out = await reclaimChild(r.deps, r.req({ word: 'run-absent', holdDigest: null, holdText: null }));
     expect(out.kind).toBe('reclaimed');
     expect(spy).not.toHaveBeenCalledWith(r.runId);
     expect(r.mail()).toEqual([]);
     expect(r.feed()).toContain('stale child reclaimed');
+  });
+
+  it('a coordinator read that fails after the reclaim is not "nobody to tell": the feed row says the coordinator could not be read, and why', async () => {
+    const r = await rig();
+    const real = r.coord.run.bind(r.coord);
+    // only the told step's read fails: every read before the verb ran answers as the store does
+    const spy = vi.spyOn(r.coord, 'run').mockImplementation((id) => (r.calls.some((c) => c[0] === 'ws-reclaim')
+      ? { ok: false, kind: 'run-unreadable', detail: 'wave past 2^53' } : real(id)));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      const out = await reclaimChild(r.deps, r.req({ word: 'review', holdDigest: null, holdText: null }));
+      expect(out.kind, 'the reclaim stands').toBe('reclaimed');
+      expect(r.mail()).toEqual([]);
+      const row = r.coord.feedEvents(50).find((e) => e.title === 'stale child reclaimed');
+      expect(row).toBeDefined();
+      expect(row!.body).toContain('could not be read');
+      expect(row!.body).toContain('wave past 2^53');
+      expect(row!.body).toContain(REF);
+      expect(warn.mock.calls.some((c) => String(c[0]).includes('wave past 2^53'))).toBe(true);
+    } finally { warn.mockRestore(); spy.mockRestore(); }
   });
 
   it('the mail is not sent when the reclaim did not finish', async () => {
@@ -543,5 +575,63 @@ describe('reclaimChild on the stale arm (D-6639)', () => {
     const out = await reclaimChild(r.deps, r.req({ word: 'review', holdDigest: null, holdText: null }));
     expect(out).toMatchObject({ kind: 'deferred', why: 'unsupported' });
     expect(r.calls).toEqual([]);
+  });
+});
+
+describe('sweepChildReclaim: the superseded review release (D-6922)', () => {
+  const SUPERSEDED_FEED = 'review report would be reclaimed (superseded)';
+  /** Two closed reviews of one open work run, each with a child workspace: `demo-a` the earlier, `demo-b` the newest. */
+  const twoReviews = (f: ReturnType<typeof lane>): void => {
+    const work = f.openRun();
+    f.plant('demo-a', { child: String(f.closedReview(work)) });
+    f.plant('demo-b', { child: String(f.closedReview(work)) });
+  };
+
+  it('shadowed: records once for the earlier review child, requests nothing, and never names the newest', async () => {
+    const f = lane();
+    twoReviews(f);
+    await f.passes(4);
+    expect(f.requests).toEqual([]);
+    const rows = f.coord.feedEvents(200).filter((e) => e.title === SUPERSEDED_FEED);
+    expect(rows.map((e) => e.sessionId)).toEqual(['demo-a']);
+  });
+
+  it('armed: the earlier review child is reclaimed after two sightings, the newest stays', async () => {
+    const f = lane({ supersededArmed: true });
+    twoReviews(f);
+    await f.passes(4);
+    expect([...new Set(f.requests.map((q) => q.sessionId))], 'the fixture box leaves the row standing, so it is asked again').toEqual(['demo-a']);
+    expect(f.requests[0]!.stale, 'an ordinary sweep reclaim, not the stale arm').toBeUndefined();
+    expect(f.feedTitles()).not.toContain(SUPERSEDED_FEED);
+  });
+
+  it('shadowed: a superseded review child kept for another reason (a hand hold) is not recorded', async () => {
+    const f = lane();
+    const work = f.openRun();
+    f.plant('demo-a', { child: String(f.closedReview(work)), hold: HAND });
+    f.plant('demo-b', { child: String(f.closedReview(work)) });
+    await f.passes(4);
+    expect(f.feedTitles()).not.toContain(SUPERSEDED_FEED);
+  });
+
+  it('shadowed: a superseded review child with a sibling run open is not recorded (armed, it would still be kept)', async () => {
+    const f = lane();
+    twoReviews(f);
+    const sibling = f.openRun();
+    f.coord.markDispatched(sibling.id, 'demo-a', 'demo-a', 'ws/demo-a', false);
+    await f.passes(4);
+    expect(f.requests).toEqual([]);
+    expect(f.feedTitles()).not.toContain(SUPERSEDED_FEED);
+  });
+
+  it('a later review that has not closed, or the work run closing, changes nothing for the newest and releases as before', async () => {
+    const f = lane({ supersededArmed: true });
+    const work = f.openRun();
+    f.plant('demo-a', { child: String(f.closedReview(work)) });
+    await f.passes(4);
+    expect(f.requests, 'the only review is the newest').toEqual([]);
+    f.abandon(work);
+    await f.passes(4);
+    expect([...new Set(f.requests.map((q) => q.sessionId))], 'the reviewed run closed: released as before').toEqual(['demo-a']);
   });
 });

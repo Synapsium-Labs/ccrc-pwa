@@ -42,6 +42,8 @@ describe('README: the roster mirror table', () => {
     const fields = mirrorRows().map((r) => r[0]);
     expect(fields).toEqual([
       '`hidden`', '`exec.secretsFile`', '`exec.provider`', '`exec.baseUrl`', '`exec.models`',
+      // codex-bridge Stage 2, Task 10: the codex arm's two additive words.
+      '`exec.bridge`', '`exec.upstream`',
     ]);
   });
 

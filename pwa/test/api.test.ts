@@ -316,8 +316,8 @@ describe('coordPause (Task 11, spec §4.2)', () => {
     // The component tests always inject, so without a fetch-level block here a
     // new client method has NO coverage at all — measured for `coordPause`,
     // which is why this describe exists.
-    const view = { caps: { maxConcurrentWorkers: 3, maxSessionsPerDay: 12 },
-                   usage: { running: 1, dispatchedIn24h: 4 } };
+    const view = { caps: { maxConcurrentWorkers: 3 },
+                   usage: { running: 1 } };
     const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, view));
     const api = createApi(fetchImpl as unknown as typeof fetch);
 
@@ -327,9 +327,39 @@ describe('coordPause (Task 11, spec §4.2)', () => {
     expect(init?.method ?? 'GET').toBe('GET');
   });
 
+  // D-6911: the review cap's read and lift. No box token on either: an operator's same-origin call.
+  it('GETs /api/coord/review-cap/:id and returns the parsed view', async () => {
+    const view = { ok: true, askedAt: 5, liftedAt: null, ask: { run: 12, rounds: 3, cap: 3,
+      lastReview: { reviewRunId: 15, summary: 's', report: null, findings: { state: 'unnamed' } } } };
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, view));
+    const api = createApi(fetchImpl as unknown as typeof fetch);
+    expect(await api.reviewCap(12)).toEqual(view);
+    const [url, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('/api/coord/review-cap/12');
+    expect(init?.method ?? 'GET').toBe('GET');
+  });
+
+  it('POSTs exactly { run } to /api/coord/review-cap', async () => {
+    const answer = { ok: true, run: 12, rounds: 3, cap: 3, lifted: true };
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, answer));
+    const api = createApi(fetchImpl as unknown as typeof fetch);
+    expect(await api.liftReviewCap(12)).toEqual(answer);
+    const [url, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('/api/coord/review-cap');
+    expect(init.method).toBe('POST');
+    expect(JSON.parse(init.body as string)).toEqual({ run: 12 });
+    expect(new Headers(init.headers).get('x-ccrc-mail-token')).toBeNull();
+  });
+
+  it('a refused lift rejects with ApiError carrying the status', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(404, { ok: false, error: 'not-found' }));
+    const api = createApi(fetchImpl as unknown as typeof fetch);
+    await expect(api.liftReviewCap(12)).rejects.toMatchObject({ status: 404 });
+  });
+
   it('POSTs only the given fields as JSON to /api/coord/caps', async () => {
-    const view = { caps: { maxConcurrentWorkers: 5, maxSessionsPerDay: 12 },
-                   usage: { running: 1, dispatchedIn24h: 4 } };
+    const view = { caps: { maxConcurrentWorkers: 5 },
+                   usage: { running: 1 } };
     const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, view));
     const api = createApi(fetchImpl as unknown as typeof fetch);
 

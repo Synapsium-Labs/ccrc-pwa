@@ -22,7 +22,7 @@ import type { SessionVerdict } from '../src/exec.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import { unreadableField } from './ioDoubles.js';
-import { okRun } from './coordReadHelpers.js';
+import { okRun, parentOfSession } from './coordReadHelpers.js';
 
 const NOW = 1_000_000_000_000;            // epoch MILLISECONDS, the units the ladder takes
 const SEC = Math.floor(NOW / 1000);       // …and what ccd's `date +%s` actually writes to $REG
@@ -388,7 +388,7 @@ describe('reclaimRun — the order is the guard', () => {
     const wave2 = seedRun(s, DEAD, 2);        // wave 2 of the SAME programme
     s.bindSession(wave2, LIVE);               // …and LIVE is ITS worker
     seedRow(home, DEAD); seedRow(home, LIVE);
-    expect(s.parentOfSession(LIVE)).toBe(DEAD);   // the fixture reaches the arm
+    expect(parentOfSession(s, LIVE)).toBe(DEAD);   // the fixture reaches the arm
     const r = await reclaimRun(depsFor(home, s, GONE), id, LIVE);
     expect(r).toMatchObject({ ok: true, program: PROGRAM, from: DEAD, to: LIVE });
     // EVERY row of the programme moved, not just the one named — `reclaimProgram`
@@ -419,7 +419,7 @@ describe('reclaimRun — the order is the guard', () => {
     // THE FIXTURE'S POINT, measured: the newest-only read answers `DEAD`, which
     // is `from`, which D-3028 admits — so under that read this reclaim SUCCEEDS
     // with LIVE still bound to `demo-other-coordinator`'s open run.
-    expect(s.parentOfSession(LIVE)).toBe(DEAD);
+    expect(parentOfSession(s, LIVE)).toBe(DEAD);
     const w = watchCommit(s);
     const r = await reclaimRun(depsFor(home, s, GONE), id, LIVE);
     expect(r).toEqual({ ok: false, kind: 'heir-is-a-worker', by: 'demo-other-coordinator' });
@@ -544,7 +544,7 @@ describe('reclaimRun — the order is the guard', () => {
     const w1 = seedRun(s, DEAD, 1);
     const w2 = seedRun(s, DEAD, 2);
     // Wave 1 has finished. It is the row `openRun`'s guard (store.ts:381-383) and
-    // `resolveCoordinator(null)` both read FIRST — `ORDER BY id LIMIT 1`, with no
+    // `soleActiveCoordinator()` both read FIRST — `ORDER BY id LIMIT 1`, with no
     // state predicate — so a terminal-sparing rewrite leaves both readers still
     // answering the corpse, and the wedge survives the reclaim.
     s.db.prepare("UPDATE runs SET state = 'done' WHERE id = ?").run(w1);

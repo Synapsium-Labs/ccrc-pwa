@@ -12,12 +12,15 @@
 //
 // EVERY UNCERTAIN ANSWER IS "NOT THIS PASS". The path these verdicts feed asks for a deletion with no human in it;
 // the executor re-reads, and ccd re-proves inside its lock at the instant of deletion. This file narrows the window.
-import { nestedWouldRescueCount } from '../../shared/nestedRescue.js';
+import { nestedWouldRescueCount, nestedWouldRescuePaths } from '../../shared/nestedRescue.js';
 import {
   TERMINAL_RUN_STATES, leafKeptWord, type ArchivedHeld, type ArchivedHeldRow, type ChildMark, type ExpiryAttention,
   type LcRefusalToken, type LeafKeptWord, type RunState,
 } from '../../shared/api.js';
 import { CCD_LOCK_UNOPENABLE, readCcdRefusal, withoutCcdRefusal } from '../../shared/ccd-refusal.js';
+import {
+  isWorkspacePostActWord, isWorkspaceRefusal, type WorkspacePostActWord, type WorkspaceRefusal,
+} from '../../shared/workspaceTransitions.js';
 
 /** THE LANE'S LIVE SWITCH (the coordinator's safety ruling (E), the scope sweep's precedent). Until `$REG/<this>`
  *  exists the lane AUDITS and RECORDS "would expire <id>" — a feed row and an attention entry — and NEVER composes
@@ -29,14 +32,12 @@ export { EXPIRE_LANE_LIVE_MARKER, EXPIRE_CHILD_LIVE_MARKER, STALE_ARCHIVE_LIVE_M
 /** The `lastOutcome` key of a marked child the lane has recorded as "would be cleaned up (child)": one row per archive. */
 export const CHILD_SHADOW_OUTCOME = 'would-expire-child';
 
-/** Every word `ws-expire` and `ws-audit --expire` refuse with — and NO other. `archived-expiry-policy.test.ts` holds
- *  this set equal to what ccd's EXPIRE region and the shared ladder (`_ws_reclaim_ladder`) emit, in both directions,
- *  the way `CHILD_RECLAIM_TOKEN_KIND` is held to the RECLAIM region. */
-export type ExpireToken =
-  | 'no-such-session' | 'not-archived' | 'not-a-workspace' | 'branch-elsewhere' | 'tree-unreadable'
-  | 'containment-unproven' | 'no-worktree-record' | 'not-expired' | 'child' | 'paused' | 'held' | 'attached'
-  | 'live' | 'in-use' | 'tree-busy' | 'state-changed' | 'in-progress' | 'reap-in-progress' | 'reclaim-in-progress'
-  | 'nested-rescue-too-large' | 'nested-rescue-failed';
+/** Every word `ws-expire` and `ws-audit --expire` refuse with — and NO other: the expire edges of
+ *  `WORKSPACE_TRANSITIONS` (ARCH-41) and the two post-act words the rescue prints, DERIVED from that table, so
+ *  `EXPIRE_TOKEN_KIND` below fails to compile on a word the table lacks or a row it lacks. `archived-expiry-policy.test.ts`
+ *  holds this set equal to what ccd's EXPIRE region and the shared ladder (`_ws_reclaim_ladder`) emit, in both
+ *  directions, the way `CHILD_RECLAIM_TOKEN_KIND` is held to the RECLAIM region. */
+export type ExpireToken = WorkspaceRefusal<'expire'> | WorkspacePostActWord;
 
 /** What each word means to the lane, spelled ONCE (wave 3's plan, "Wave 3b inherits", the words by kind):
  *   - `gone`: the row left the population — returned, re-archived from scratch, or removed. Drop it, no report.
@@ -68,13 +69,13 @@ export const EXPIRE_TOKEN_KIND: Readonly<Record<ExpireToken, 'gone' | 'terminal'
   'nested-rescue-failed': 'retry',
 };
 
+/** Is `v` an expiry word? Answered from `WORKSPACE_TRANSITIONS` (its expire edges) and the post-act words, never from
+ *  a list of this lane's own. */
+const isExpireToken = (v: unknown): v is ExpireToken => isWorkspaceRefusal('expire', v) || isWorkspacePostActWord(v);
+
 /** `EXPIRE_TOKEN_KIND` read TOTALLY: the word's kind, or null for one this build was never compiled to know. */
 export const expireTokenKind = (token: string): 'gone' | 'terminal' | 'retry' | null =>
-  Object.prototype.hasOwnProperty.call(EXPIRE_TOKEN_KIND, token)
-    ? EXPIRE_TOKEN_KIND[token as ExpireToken]
-    : null;
-
-const isExpireToken = (v: unknown): v is ExpireToken => typeof v === 'string' && expireTokenKind(v) !== null;
+  isExpireToken(token) ? EXPIRE_TOKEN_KIND[token] : null;
 
 /** The two BOX words (wave 3's plan, "Wave 3b inherits", the verb): `cmd_ws_expire` refuses through `_lc_refuse` —
  *  exit 1, NOTHING on stdout — when the box has no util-linux `flock` (`flock-unavailable`: PERMANENT for that box)
@@ -157,6 +158,7 @@ export type ExpireAuditRead =
       readonly sensitive: number; readonly inUse: readonly ExpireInUse[];
       /** How many nested repositories the audit says the rescue arm would rescue (D-6633); absent when none. */
       readonly nestedWouldRescue?: number;
+      readonly nestedWouldRescuePaths?: readonly string[];
       readonly verdict:
         | { readonly kind: 'expirable'; readonly token: string }
         | { readonly kind: 'refused'; readonly token: ExpireToken; readonly detail: string } };
@@ -180,7 +182,8 @@ export function parseExpireAudit(sessionId: string, ok: boolean, stdout: string)
     ? [{ pid: u.pid, comm: u.comm, cwd: u.cwd }] : [])) : [];
   const wouldRescue = nestedWouldRescueCount(v);
   const base = { kind: 'document' as const, archivedAt: epochOrNull(v.archivedAt), expiresAt: expireAuditExpiresAt(v),
-    sensitive, inUse, ...(wouldRescue > 0 ? { nestedWouldRescue: wouldRescue } : {}) };
+    sensitive, inUse,
+    ...(wouldRescue > 0 ? { nestedWouldRescue: wouldRescue, nestedWouldRescuePaths: nestedWouldRescuePaths(v) } : {}) };
   if (v.verdict === 'expirable') {
     if (typeof v.token !== 'string' || !TOKEN_SHAPE.test(v.token)) {
       return { kind: 'unreadable', detail: 'ws-audit --expire said expirable with no 64-hex token' };

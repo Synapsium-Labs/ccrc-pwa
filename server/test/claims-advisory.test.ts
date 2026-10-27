@@ -7,6 +7,7 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { parsedFile } from './scan/symbols.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(here, '..', '..');
@@ -48,17 +49,14 @@ describe('claims are advisory (D12)', () => {
                              // sweepDivergences feeds divergence.claim-orphan.
                              // Whole-file admission would blind the scan to a NEW
                              // call site, so the count pin below carries the load.
-      'stopDoneSweep.ts',    // D-5370: a live claim HOLDS the server's own unattended
-                             // stop of the claim's HOLDER, and nothing else. It never
-                             // refuses, delays or redirects another party's work, so it
-                             // cannot become enforcement: the only effect of a claim is
-                             // that its holder's process is left running (hibernation's
-                             // `claim` hold, spec §5.11, is the same shape). The count
-                             // pin below keeps a second, differently-shaped use out.
-      'hibernateSweep.ts',   // D-5242: the same shape, for hibernation's own verdict —
-                             // a live claim HOLDS its holder awake (`claim`) and does
-                             // nothing else. In Task 17a the sweep only logs, so the
-                             // claim reaches nobody's work at all. Count-pinned below.
+      'sleepLane.ts',        // D-5370, D-5242 (one executor since D-7042): for both sleep
+                             // lanes a live claim HOLDS the server's own unattended sleep
+                             // of the claim's HOLDER awake (`claim`), and does nothing
+                             // else. It never refuses, delays or redirects another
+                             // party's work, so it cannot become enforcement: the only
+                             // effect of a claim is that its holder's process is left
+                             // running (hibernation's `claim` hold, spec §5.11). The
+                             // count pin below keeps a second, differently-shaped use out.
     ]);
     const holders = walk(srcRoot)
       .filter((f) => f.endsWith('.ts'))
@@ -85,18 +83,16 @@ describe('claims are advisory (D12)', () => {
     expect(watchSrc.split('activeClaims').length - 1,
       'watch.ts gained or lost an activeClaims call site — argue the D12 shape here before re-pinning')
       .toBe(4);
-    // The stop-done lane's exception, held by COUNT as watch.ts's is: the pass
-    // docstring naming the read, the store port's Pick, and the one batched read
-    // that feeds the `claim` hold.
-    const stopDoneSrc = readFileSync(path.join(srcRoot, 'stopDoneSweep.ts'), 'utf8');
-    expect(stopDoneSrc.split('activeClaims').length - 1,
-      'stopDoneSweep.ts gained or lost an activeClaims call site — argue the D12 shape here before re-pinning')
-      .toBe(3);
-    // Hibernation's exception (D-5242), held by COUNT the same way: the store port's Pick and the one per-pass read
-    // that feeds the `claim` hold.
-    const hibernateSrc = readFileSync(path.join(srcRoot, 'hibernateSweep.ts'), 'utf8');
-    expect(hibernateSrc.split('activeClaims').length - 1,
-      'hibernateSweep.ts gained or lost an activeClaims call site — argue the D12 shape here before re-pinning')
-      .toBe(2);
+    // The sleep lanes' exception (D-5370, D-5242; D-7042), held by COUNT of CALLS over EVERY call scan/symbols.ts
+    // parses in sleepLane.ts: one `coord.activeClaims()` call in each lane row's binding read (run-done's batched
+    // `storeReads`, idle-hours' once-a-pass `claimantsOf`), each feeding the `claim` hold. The count is over the
+    // whole file, not over its top-level symbols: RUN_DONE_LANE and IDLE_HOURS_LANE are object-literal consts with
+    // no symbol of their own, and a lane row's arrows (`bindings`, `asks.*`, `notices`) are exactly where a new
+    // lane-shaped claim use would land. The store ports' `Pick`s and the docstrings are not calls and are not counted.
+    const SLEEP_LANE = path.join(srcRoot, 'sleepLane.ts');
+    const claimCalls = parsedFile(SLEEP_LANE).calls.filter((c) => c.name === 'activeClaims');
+    expect(claimCalls.map((c) => c.callee),
+      'sleepLane.ts gained or lost an activeClaims call site — argue the D12 shape here before re-pinning')
+      .toEqual(['coord.activeClaims', 'coord.activeClaims']);
   });
 });

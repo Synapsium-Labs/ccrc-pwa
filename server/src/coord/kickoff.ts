@@ -83,7 +83,7 @@ export type KickoffOutcome =
  * The sender is the OPERATOR, not the coordinator (D-1040): the recipient is the
  * session that is about to BECOME the coordinator, so `from: coordinator` would
  * be a false statement on the face of its own envelope — and would send
- * `watch.ts`'s `tellSender` through `resolveCoordinator(null)`, whose answer is
+ * `watch.ts`'s `tellSender` through `soleActiveCoordinator()`, whose answer is
  * whichever program happens to be the single active one.
  *
  * It names NO run, because there is none: opening run 1 is the first thing this

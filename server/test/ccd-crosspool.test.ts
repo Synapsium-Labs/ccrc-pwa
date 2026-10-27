@@ -28,8 +28,7 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
-import { CCD, ghContainedEnv, makeCcdHarness, plantPoolEpoch, plantPoolSyncTimer, seedAccountsSh, WS_ADD,
-  type CcdHarness, WIDE_PANE } from './ccdWsHelpers.js';
+import { CCD, ghContainedEnv, makeCcdHarness, plantPoolEpoch, plantPoolSyncTimer, seedAccountsSh, WS_ADD, type CcdHarness, WIDE_PANE, ccdSource } from './ccdWsHelpers.js';
 import { POOLED_TEST_ROSTER, POOL_BY_ID } from './fixtures/poolRule.js';
 import { eventsOf, measOf, decOf } from './lifecycleHelpers.js';
 
@@ -1859,7 +1858,7 @@ describe('S3 — the type check reaches `_reg_get` too, not just its measured si
     // BYTE-IDENTICAL and could only prove "two such lines exist": they are
     // distinct now, so each entry names one function's line and a reader moved
     // between the two would red.
-    const src = fs.readFileSync(CCD, 'utf8');
+    const src = ccdSource();
     const lines = src.split('\n')
       .filter((l) => l.includes('_reg_get "') && !l.trim().startsWith('#'));
     expect(lines.length, 'the census moved; re-measure the comment too')

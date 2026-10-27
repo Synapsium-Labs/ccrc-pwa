@@ -113,6 +113,59 @@ describe.skipIf(!PY)('inbound: the mapping table (codex-bridge spec §2.3)', () 
     expect(l.request.items).toEqual([userText('a'), dev('mid string'), asst('ok'), dev('mid blocks'), userText('b')]);
   });
 
+  // D-7094: the blocks a system entry drops are counted by type, names only (`inbound._count_dropped`). Claude Code's
+  // two tool-change betas (D-7093) send `tool_addition`/`tool_removal` blocks here; a `tool_addition` also counts its
+  // `tool`'s type, so the by-value case (a `tool_definition`, a tool absent from `tools`) reads apart from the
+  // by-reference one. Nothing sent changes: the control is the same entry holding its text alone.
+  const TOOL = { name: 'ToolFx0', description: 'd0', input_schema: { type: 'object', properties: {} } };
+  const removal = { type: 'tool_removal', tool: { type: 'tool_reference', name: 'ToolFx1' } };
+  const byValue = {
+    type: 'tool_addition',
+    tool: { type: 'tool_definition', definition: { name: 'ToolFx2', description: 'desc-sentinel', input_schema: { type: 'object', properties: { argSentinel: { type: 'string' } } } } },
+  };
+  const byReference = { type: 'tool_addition', tool: { type: 'tool_reference', name: 'ToolFx3' }, cache_control: { type: 'ephemeral' } };
+  const DROPPED_NAMES = [
+    'tool_removal-block', 'tool_addition-block', 'tool_addition-block.tool_definition', 'tool_addition-block',
+    'tool_addition-block.tool_reference',
+  ];
+  const withEntry = (content: unknown): Record<string, unknown> => body({
+    tools: [TOOL],
+    messages: [{ role: 'user', content: 'a' }, { role: 'system', content }, { role: 'user', content: 'b' }],
+  });
+
+  it('a system entry counts each block it drops by type, and a tool_addition its tool type; what is sent is unchanged (D-7094)', async () => {
+    const [mixed, control, known] = await run([
+      op(withEntry([{ type: 'text', text: 'mid text' }, removal, byValue, byReference])),
+      op(withEntry([{ type: 'text', text: 'mid text' }])),
+      { op: 'known' },
+    ]);
+    expect(fam(mixed, 'requestField')).toEqual(DROPPED_NAMES);
+    expect(fam(control, 'requestField')).toEqual([]);
+    // The control: the developer item, the tools and every other field of the request are what the text alone gives.
+    expect(mixed.request.items).toEqual([userText('a'), dev('mid text'), userText('b')]);
+    // (`cache_key` is a fresh `ccrc:anon-<uuid4>` per request when no session header is sent, so it is set aside.)
+    const sent = (l: Line): Line => ({ ...l.request, cache_key: undefined });
+    expect(sent(mixed)).toEqual(sent(control));
+    expect(Object.keys(mixed.request).sort()).toEqual([...NEUTRAL_FIELDS].sort());
+    expect(mixed.request.tools.map((t: Line) => t.name)).toEqual(['ToolFx0']);
+    // Names only: no tool name, description, schema key or cache marker of a dropped block is counted or sent.
+    const text = JSON.stringify(mixed);
+    for (const s of ['ToolFx1', 'ToolFx2', 'ToolFx3', 'desc-sentinel', 'argSentinel', 'cache_control']) expect(text).not.toContain(s);
+    // Unexplained on purpose, so the doctor's drift WARN names one the day it arrives.
+    for (const n of DROPPED_NAMES) expect(known.known.requestField, n).not.toContain(n);
+    expect(known.prefixes.requestField).toBeUndefined();
+  });
+
+  it('a system entry with no text counts its blocks, an unknown one by its type, and still gives no item (D-7094)', async () => {
+    const [l] = await run([op(withEntry([removal, byReference, { type: 'future_fx' }, 'not-a-block', { type: 'tool_addition' }]))]);
+    expect(fam(l, 'requestField')).toEqual([
+      'tool_removal-block', 'tool_addition-block', 'tool_addition-block.tool_reference', 'future_fx-block',
+      'unrecognised-block', 'tool_addition-block', 'tool_addition-block.unrecognised',
+    ]);
+    expect(l.request.items).toEqual([userText('a'), userText('b')]);
+    expect(l.request.tools.map((t: Line) => t.name)).toEqual(['ToolFx0']);
+  });
+
   it('user text and images are a user message of input_text and input_image', async () => {
     const l = await one(body({
       messages: [{

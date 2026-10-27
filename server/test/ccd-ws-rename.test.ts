@@ -3,7 +3,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import path from 'node:path';
 import fs from 'node:fs';
-import { makeCcdHarness, CCD, WS_ADD, type CcdHarness } from './ccdWsHelpers.js';
+import { makeCcdHarness, CCD, WS_ADD, type CcdHarness, ccdSource } from './ccdWsHelpers.js';
 
 let h: CcdHarness;
 beforeEach(() => { h = makeCcdHarness('ccrc-ccd-rename-'); });
@@ -552,7 +552,7 @@ describe('ws-rename', () => {
   // contribute no token at all and the reverse direction would go red for a
   // reason whose author would never guess it.
   it('emits the held token as an inline literal inside cmd_ws_rename', () => {
-    const src = fs.readFileSync(CCD, 'utf8');
+    const src = ccdSource();
     const from = src.indexOf('cmd_ws_rename() {');
     const to = src.indexOf('\ncmd_', from + 1);
     const body = src.slice(from, to === -1 ? undefined : to);

@@ -5,7 +5,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { CCD, makeCcdHarness, WS_ADD, type CcdHarness } from './ccdWsHelpers.js';
+import { makeCcdHarness, WS_ADD, type CcdHarness, ccdSource } from './ccdWsHelpers.js';
 
 let h: CcdHarness;
 beforeEach(() => { h = makeCcdHarness('ccrc-ccd-nopane-'); });
@@ -109,7 +109,7 @@ describe('ws-archive --if-no-pane', () => {
 
 describe('ccd caps', () => {
   it('advertises archive-if-no-pane-v1 once', () => {
-    const src = fs.readFileSync(CCD, 'utf8');
+    const src = ccdSource();
     expect(src.match(/echo archive-if-no-pane-v1/g)?.length).toBe(1);
   });
 });

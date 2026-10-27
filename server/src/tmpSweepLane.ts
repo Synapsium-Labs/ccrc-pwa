@@ -1,22 +1,24 @@
 // D-6624 (plan Task DR-12): the census lane's I/O. L4 delivery: it READS the tmp sweep's census through the fleet io and
 // QUEUES the system mail; every decision (the parse, which rows are receipts, which sessions are owed a notice, the
-// words) is `tmpSweep.ts`'s (L1). `watch.ts` owns the clock and the state and calls `runTmpSweepCensusLane` once per
-// pass; the lane's module-free shape is what keeps the watcher's growth to a call site.
+// words) is `tmpSweep.ts`'s (L1). `TmpCensusBeat` owns the clock, the state and the holders it last named (moved out of
+// `watch.ts` by the consolidation, GitHub #1279); the watcher owns one and calls `sweep()` from its tick.
 //
 // FAIL TOWARD KEEPING: a census that cannot be read or parsed mails nothing and names no holders; a mail that throws
 // latches nothing, so the next pass tries again; the coord store's own subject check (`hasMailWithSubject`, every
 // delivery state) is what makes a restart re-send nothing.
 import path from 'node:path';
 import type { DiskHolder } from '../../shared/disk.js';
+import type { Deps } from './deps.js';
 import { NODE_FILES } from '../../shared/agent-protocol.js';
 import type { CoordStore } from './coord/store.js';
 import { queueSystemMail } from './coord/rundefsTx.js';
 import { survivorOf } from './coord/rundefs.js';
+import { readCoordinatorOfRun } from './coord/bindingReads.js';
 import type { FleetIO } from './io.js';
 import { openPoolReadDeadline } from './pools.js';
 import { INVENTORY_BUDGET_MS, readNodeFile } from './update/inventory.js';
 import {
-  TMP_SWEEP_CENSUS_CAP_BYTES, parseTmpSweepCensus, tmpSweepBudget, tmpSweepHolders, tmpSweepReceipts,
+  TMP_SWEEP_CENSUS_CAP_BYTES, parseTmpSweepCensus, tmpSweepBudget, tmpSweepHolders, tmpSweepInodeBudget, tmpSweepReceipts,
 } from './tmpSweep.js';
 
 export interface TmpSweepLaneDeps {
@@ -50,14 +52,18 @@ function mailOnce(coord: CoordStore, toId: string, subject: string, body: string
   queueSystemMail(coord, null, { fromId: 'operator', toId, runId: null, kind: 'status', subject, body });
 }
 
-/** The coordinator of the run a session is the worker of, or `null` (a coordinating session has no run of its own). */
-function coordinatorOf(coord: CoordStore, sessionId: string): string | null {
-  const open = coord.openRunsForSession(sessionId);
-  if (!open.ok) return null;
+/** The coordinator of the run a session is the worker of: `id: null` when there is none to tell (a coordinating session has
+ *  no run of its own, the run is ownerless, or the session claims it itself), `ok: false` when the session's runs or the run
+ *  row cannot be read. The caller LATCHES the notice on an answer, so an unreadable read must defer, never read as "nobody to
+ *  tell" (D-2545; `readCoordinatorOfRun`, not the collapsing `coordinatorOfRun`). */
+function coordinatorOf(coord: CoordStore, sessionId: string): { ok: true; id: string | null } | { ok: false; detail: string } {
+  const open = coord.bindingsOf(sessionId).worker();
+  if (!open.ok) return { ok: false, detail: open.detail };
   const run = survivorOf(open.siblings);
-  if (run === null) return null;
-  const claimant = coord.resolveCoordinator(run.id);
-  return claimant !== null && claimant !== sessionId ? claimant : null;
+  if (run === null) return { ok: true, id: null };
+  const read = readCoordinatorOfRun(coord, run.id);
+  if (!read.ok) return read;
+  return { ok: true, id: read.id !== null && read.id !== sessionId ? read.id : null };
 }
 
 /**
@@ -96,18 +102,49 @@ export async function runTmpSweepCensusLane(
       mailOnce(coord, m.toId, m.subject, m.body);
     }
     state.mailed = receipts.mailed;
-    for (const n of tmpSweepBudget(census, state.noticed)) {
+    for (const n of [...tmpSweepBudget(census, state.noticed), ...tmpSweepInodeBudget(census, state.noticed)]) {
       if (!known.has(n.sessionId)) {
         warnOnce(state, `unknown:${n.sessionId}`, `${n.sessionId} has no registry row; its budget notice is not mailed`);
         continue;
       }
       mailOnce(coord, n.sessionId, n.subject, n.body);
       const claimant = coordinatorOf(coord, n.sessionId);
-      if (claimant !== null && known.has(claimant)) mailOnce(coord, claimant, n.subject, n.coordinatorBody);
+      if (!claimant.ok) {
+        // Not latched: the session's own notice is already queued (and `mailOnce` will not queue it twice), so the next pass
+        // only retries the coordinator copy.
+        warnOnce(state, `coordinator:${n.key}`, `the coordinator of ${n.sessionId} cannot be read (${claimant.detail}); its copy waits for the next pass`);
+        continue;
+      }
+      if (claimant.id !== null && known.has(claimant.id)) mailOnce(coord, claimant.id, n.subject, n.coordinatorBody);
       state.noticed.add(n.key);
     }
   } catch (err) {
     console.warn(`ccrc-server: tmp-sweep census: mail failed (${err instanceof Error ? err.message : String(err)}); the next pass retries`);
   }
   return { holders };
+}
+
+/** The census lane's clock (D-6624, spec §2.1): the census is read and its mail queued every 5 minutes. */
+export const TMP_SWEEP_CENSUS_MS = 5 * 60_000;
+
+/** The census lane's beat: its own wall clock (the first pass is at once), its memory, and the holders it last named. */
+export class TmpCensusBeat {
+  private last = 0;
+  private readonly state = newTmpSweepLaneState();
+  private named: DiskHolder[] = [];
+
+  constructor(private readonly deps: () => Pick<Deps, 'io' | 'cfg' | 'coord'>) {}
+
+  /** The five largest sessions as the last pass named them: `disk.holders`. Empty until a census reads. */
+  holders(): readonly DiskHolder[] { return this.named; }
+
+  /** One pass, throttled. `known` is the registry ids of the last good listing, `null` until one lands. PUBLIC through the
+   *  watcher for the reason `sweepReadiness` is: `tick()` dispatches it with `void`. */
+  async sweep(known: ReadonlySet<string> | null): Promise<void> {
+    const now = Date.now();
+    if (this.last !== 0 && now - this.last < TMP_SWEEP_CENSUS_MS) return;
+    this.last = now;
+    const { io, cfg, coord } = this.deps();
+    this.named = (await runTmpSweepCensusLane({ io, ccrcDir: cfg.ccrcDir, coord }, this.state, known)).holders;
+  }
 }

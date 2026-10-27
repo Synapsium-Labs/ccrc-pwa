@@ -115,6 +115,24 @@ describe('_ws_leaf_checkouts — refused: rc 1, a checkout git records elsewhere
     expect(a.why).toContain('no longer exists');
   }, 60_000);
 
+  it('a MISSING git dir spelled OUTSIDE the leaf is refused, even when it shares the leaf as a string prefix', () => {
+    const wt = path.join(leafOf(), 'wt');
+    fs.mkdirSync(wt, { recursive: true });
+    fs.writeFileSync(path.join(wt, '.git'), `gitdir: ${leafOf()}-x/repo/.git/worktrees/wt\n`);
+    const a = ask(leafOf());
+    expect(a.rc, a.why).toBe('1');
+    expect(a.why).toContain('no longer exists');
+  }, 60_000);
+
+  it('a MISSING relative git dir that climbs out of the leaf is refused', () => {
+    const wt = path.join(leafOf(), 'wt');
+    fs.mkdirSync(wt, { recursive: true });
+    fs.writeFileSync(path.join(wt, '.git'), 'gitdir: ../../elsewhere/repo/.git/worktrees/wt\n');
+    const a = ask(leafOf());
+    expect(a.rc, a.why).toBe('1');
+    expect(a.why).toContain('no longer exists');
+  }, 60_000);
+
   it('an admin dir with NO back-link file at all is refused', () => {
     const { admin } = movedTree(path.join(leafOf(), 'parked', 'still-harbor'));
     fs.rmSync(path.join(admin, 'gitdir'));
@@ -177,6 +195,58 @@ describe('_ws_leaf_checkouts — refused: rc 1, a checkout git records elsewhere
 });
 
 describe('_ws_leaf_checkouts — passes: rc 0, the leaf’s own scratch', () => {
+  // A fixture worktree INSIDE the leaf whose git directory was pruned or removed: the
+  // `.git` file names a path that is spelled inside the leaf, and nothing stands there. Git
+  // can record the tree nowhere else, and the removal takes the leaf whole, so it is the
+  // leaf's own scratch, not a tree git records elsewhere.
+  const fixtureWorktree = (): { repo: string; wt: string; admin: string } => {
+    const g = path.join(leafOf(), 'scratchpad', 'gitx');
+    const repo = path.join(g, 'repo');
+    cloneAt(repo);
+    const wt = path.join(g, 'wt');
+    h.git(repo, 'worktree', 'add', '-q', '-b', 'side', wt);
+    const admin = h.git(wt, 'rev-parse', '--absolute-git-dir');
+    const moved = path.join(g, 'wt-moved');
+    fs.renameSync(wt, moved);
+    return { repo, wt: moved, admin };
+  };
+
+  it('a moved fixture worktree whose admin dir inside the leaf was PRUNED passes', () => {
+    const { repo } = fixtureWorktree();
+    h.git(repo, 'worktree', 'prune');
+    const a = ask(leafOf());
+    expect(a.rc, a.why).toBe('0');
+  }, 60_000);
+
+  it('a fixture worktree whose whole repository inside the leaf is gone passes', () => {
+    const { repo } = fixtureWorktree();
+    fs.rmSync(repo, { recursive: true, force: true });
+    const a = ask(leafOf());
+    expect(a.rc, a.why).toBe('0');
+  }, 60_000);
+
+  it('a RELATIVE gitdir naming an absent dir refuses: a --relative-paths worktree of an outside repo moved into the leaf is not the leaf\'s', () => {
+    const main = h.makeRepo('demo2');
+    const wt = path.join(leafOf(), 'x', 'side');
+    fs.mkdirSync(wt, { recursive: true });
+    // what `git worktree add --relative-paths` writes for a sibling of the repo, spelled from where the tree was
+    fs.mkdirSync(path.join(main, '.git', 'worktrees', 'side'), { recursive: true });
+    fs.writeFileSync(path.join(wt, '.git'), 'gitdir: ../demo2/.git/worktrees/side\n');
+    fs.writeFileSync(path.join(wt, 'precious.txt'), 'uncommitted');
+    const a = ask(leafOf());
+    expect(a.rc, a.why).toBe('1');
+    expect(a.why).toContain('no longer exists');
+  }, 60_000);
+
+  it('a RELATIVE gitdir with no dot segment naming an absent dir under the tree refuses: only an absolute spelling is claimed', () => {
+    const wt = path.join(leafOf(), 'x', 'side');
+    fs.mkdirSync(wt, { recursive: true });
+    fs.writeFileSync(path.join(wt, '.git'), 'gitdir: gone/.git/worktrees/side\n');
+    const a = ask(leafOf());
+    expect(a.rc, a.why).toBe('1');
+    expect(a.why).toContain('no longer exists');
+  }, 60_000);
+
   it('an empty leaf, and a leaf with no `.git` anywhere', () => {
     fs.mkdirSync(path.join(leafOf(), 'cdk.out', 'deep'), { recursive: true });
     fs.writeFileSync(path.join(leafOf(), 'cdk.out', 'manifest.json'), '{}');

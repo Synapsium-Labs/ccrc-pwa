@@ -226,7 +226,11 @@ describe('ccrc: dispatch and usage', () => {
     const home = mkTmp('ccrc-cli-usage-verbs-');
     const r = runCcrcRaw(home, ['-h']);
     expect(r.stdout).toMatch(/usage: ccrc \{doctor\|status\|adopt\|wrappers\|account\|memory\|models\|codex\|install\|update\|rollback\|versions\|channel\|rollout\|uninstall\|backup\|coordination-snapshot\|logs\|passwd\|expose\|token\|restamp\|version\|watchdog\|history\}/);
-    expect(r.stdout).toMatch(/^ {2}codex {5}run a Codex lane's two tiers/m);
+    // codex bridge Stage 2's whole-wave addendum (U-1): the paragraph names each mode's tiers, and `switch`.
+    expect(r.stdout).toMatch(/^ {2}codex {5}run a Codex lane's tiers - in litellm mode its LiteLLM gateway$/m);
+    expect(r.stdout.replace(/\s+/g, ' ')).toContain('in direct mode its bridge alone');
+    expect(r.stdout.replace(/\s+/g, ' ')).toContain('waits until the mode\'s tiers answer');
+    expect(r.stdout.replace(/\s+/g, ' ')).toContain('"switch <id> litellm|direct" moves the lane between modes');
     expect(r.stdout).toMatch(/^ {2}account {3}connect, check and remove the accounts/m);
     expect(r.stdout).toMatch(/^ {2}memory {4}census every \(home, project\) memory pair/m);
     expect(r.stdout).toMatch(/^ {2}models {4}the model-class registry/m);
@@ -271,6 +275,25 @@ describe('ccrc: dispatch and usage', () => {
     expect(r.stdout).toMatch(/^ {2}passwd {4}set \(or rotate\) this box's PWA passphrase/m);
     expect(r.stdout).toMatch(/CCRC_AUTH=on/);
     expect(r.stdout).toMatch(/enrolled passkeys keep working/);
+  });
+
+  // codex bridge Stage 2, Task 12: `switch` joins `ccrc codex`'s subcommand list, and its mode is checked before any
+  // lane is read. `server/test/ccrc-codex.test.ts` owns what it does; this case owns that an operator can find it.
+  it('ccrc codex names switch among its subcommands, and refuses a switch with no mode as usage', () => {
+    const home = mkTmp('ccrc-cli-codex-switch-');
+    const r = runCcrcRaw(home, ['codex']);
+    expect(r.code).toBe(2);
+    expect(r.stderr).toMatch(/^ccrc codex: usage: ccrc codex needs a subcommand: ccrc codex \{start\|stop\|status\|login\|switch\} <id>/m);
+    expect(r.stderr).toContain('ccrc codex switch <id> litellm|direct');
+    const other = runCcrcRaw(home, ['codex', 'flip', 'lane-a']);
+    expect(other.code).toBe(2);
+    expect(other.stderr).toContain('it implements start, stop, status, login and switch.');
+    for (const argv of [['codex', 'switch', 'lane-a'], ['codex', 'switch', 'lane-a', 'bridge'],
+      ['codex', 'switch', 'lane-a', 'direct', 'extra']]) {
+      const u = runCcrcRaw(home, argv);
+      expect(u.code, argv.join(' ')).toBe(2);
+      expect(u.stderr, argv.join(' ')).toMatch(/^ccrc codex: usage: .*ccrc codex switch <id> litellm\|direct/m);
+    }
   });
 
   // ── install's ARGUMENT surface ──────────────────────────────────────────

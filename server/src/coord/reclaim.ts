@@ -396,7 +396,7 @@ export async function reclaimRun(
     //
     // `by` is the FIRST offender, and the list is newest-first, so the operator
     // is sent to the most recent binding rather than the oldest.
-    const heirWorkerOf = deps.coord.openClaimantsOf(to).find((c) => c !== to && c !== from);
+    const heirWorkerOf = deps.coord.bindingsOf(to).claimants().find((c) => c !== to && c !== from);
     if (heirWorkerOf !== undefined) {
       return { ok: false, kind: 'heir-is-a-worker', by: heirWorkerOf };
     }

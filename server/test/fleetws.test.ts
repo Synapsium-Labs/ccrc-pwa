@@ -784,6 +784,45 @@ describe('fleet REST + WS', () => {
       ws.close();
     });
 
+    // ARCH-61 (#796): `childIds` is `childrenOf` the run's coordinator, decided on the socket's own frame AND on the watcher's
+    // broadcast from the same tick's reading of the fleet's marks, so a recycled workspace name's stale run is no child.
+    it('carries childIds — the cold-start frame and the watcher broadcast agree, and a ghost of a recycled name is no child', async () => {
+      const BORN = 1_700_000_000_000;
+      const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+      const openRun = (program: string, claimedBy: string): number =>
+        (coord.openRun({ program, title: program, project: 'ccrc-pwa', wave: 1, waveOf: 3, claimedBy }) as { id: number }).id;
+      const stale = openRun('old', 'ccrc-pwa-gone');
+      coord.setSession(stale, 'ccrc-pwa-worker');
+      coord.db.prepare('UPDATE runs SET openedAt = ? WHERE id = ?').run(BORN - 1000, stale);
+      const fresh = openRun('new', 'ccrc-pwa-coordinator');
+      coord.setSession(fresh, 'ccrc-pwa-worker', BORN);
+      coord.db.prepare('UPDATE runs SET dispatchStartedAt = ? WHERE id = ?').run(BORN, fresh);
+      seedSession(home, 'ccrc-pwa-coordinator', 'claude-a');
+      seedSession(home, 'ccrc-pwa-worker', 'claude-a');
+      writeFileSync(path.join(home, '.cc-sessions', 'ccrc-pwa-worker.child'), String(fresh));
+      const deps = { ...testDeps(home), coord };
+      const bus = new Bus();
+      const broadcast: Array<Array<{ id: number; childIds?: number[] }>> = [];
+      bus.on('runs', (runs) => broadcast.push(runs as never));
+      const watcher = mkWatcher(deps, bus);
+      app = await buildServer(deps, bus, watcher);
+      await watcher.tick();
+      expect(broadcast.at(-1)?.map((r) => [r.id, r.childIds])).toEqual([[stale, []], [fresh, [fresh]]]);
+
+      await app.listen({ host: '127.0.0.1', port: 0 });
+      const addr = app.server.address();
+      const port = typeof addr === 'object' && addr !== null ? addr.port : 0;
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/fleet`);
+      const next = collect(ws, { dropDivergence: true });
+      await new Promise<void>((resolve, reject) => { ws.on('open', () => resolve()); ws.on('error', reject); });
+      expect((await next()).type).toBe('hello');
+      expect((await next()).type).toBe('fleet');
+      const runs = await next();
+      expect(runs.type).toBe('runs');
+      expect(runs.runs.map((r: { id: number; childIds?: number[] }) => [r.id, r.childIds])).toEqual([[stale, []], [fresh, [fresh]]]);
+      ws.close();
+    });
+
     it('drops the frame from the broadcast when the JSON is unchanged', async () => {
       const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
       // The claimant is a registered session (workspace lifecycle wave 4): an open run's claimant with NO registry row

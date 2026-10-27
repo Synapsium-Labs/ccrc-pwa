@@ -5,10 +5,10 @@
 // double-quoted `bash -c` string. That second shape is what this forbids.
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
-import { CCD } from './ccdWsHelpers.js';
+import { CCD, ccdSource } from './ccdWsHelpers.js';
 import { LIFECYCLE_MEAS_KEYS, LIFECYCLE_DEC_KEYS } from '../../shared/api.js';
 
-const src = readFileSync(CCD, 'utf8');
+const src = ccdSource();
 const BEGIN = '# ── lifecycle journal ';
 const END = '# ── end lifecycle journal ';
 

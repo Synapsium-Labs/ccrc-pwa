@@ -3,15 +3,25 @@
 // Reading/writing it is task 5's job.
 import { describe, it, expect } from 'vitest';
 import path from 'node:path';
-import { COORD_SCHEMA_VERSION, openCoordDb } from '../src/coord/db.js';
+import { openCoordDb } from '../src/coord/db.js';
+import { MIGRATIONS } from '../src/coord/schema.js';
 import { CoordStore } from '../src/coord/store.js';
 import { mkTmp } from './tmpHelpers.js';
-import { okAsk, okAsksByChild } from './coordReadHelpers.js';
+import { okAsk, okAsksByChild, parentOfSession } from './coordReadHelpers.js';
 import { ASK_STATES, isAskState, RUN_HOLD_NUMBER_MAX } from '../../shared/api.js';
 
 const dbPathIn = (home: string): string => path.join(home, '.ccrc', 'coord.db');
 
+/** True when some migration in `list` creates the asks table. */
+const hasAsksMigration = (list: readonly string[]): boolean =>
+  list.some((ddl) => /CREATE TABLE asks \(/.test(ddl));
+
 describe('the asks table', () => {
+  it('the asks-migration check finds the DDL in a list and fails on a stub list without it', () => {
+    expect(hasAsksMigration(['CREATE TABLE runs (id TEXT)', 'CREATE TABLE asks (id TEXT)'])).toBe(true);
+    expect(hasAsksMigration(['CREATE TABLE runs (id TEXT)', 'ALTER TABLE runs ADD COLUMN x TEXT'])).toBe(false);
+  });
+
   it('the cross-repo columns added at schema version 10 are still present at the current version', () => {
     const home = mkTmp('ccrc-coord-');
     const db = openCoordDb(dbPathIn(home));
@@ -37,10 +47,12 @@ describe('the asks table', () => {
     // columns, D-5838), MIGRATIONS[27] (`secret_fingerprints`, D-5513,
     // accounts plan Task A10) and MIGRATIONS[28] (`feed_events.dedupe_key`,
     // D-5860). Only MIGRATIONS[20] and MIGRATIONS[24]
-    // touch the asks table. This pin only needs the CURRENT total — it
-    // asserts "no migration after the one this test knows about has changed
-    // the asks table's columns", not anything about any of the twelve.
-    expect(COORD_SCHEMA_VERSION).toBe(31);
+    // touch the asks table. This test asserts "no migration after the one it
+    // knows about has changed the asks table's columns", not anything about
+    // any of the twelve. The total is not pinned: the asks migration is found
+    // by its DDL (slot order is coord-db.test.ts's), so a new migration
+    // elsewhere never forces a re-pin here.
+    expect(hasAsksMigration(MIGRATIONS)).toBe(true);
     const cols = (db.prepare("SELECT name FROM pragma_table_info('asks')").all() as
       { name: string }[]).map((r) => r.name).sort();
     expect(cols).toEqual([
@@ -63,8 +75,8 @@ describe('ask store methods', () => {
     const run = s.openRun({ program: 'prog', title: 'Prog', project: 'p',
       wave: 1, waveOf: null, claimedBy: 'coord-1' }) as { id: number };
     s.setSession(run.id, 'child-1');
-    expect(s.parentOfSession('child-1')).toBe('coord-1');
-    expect(s.parentOfSession('nobody')).toBeNull();
+    expect(parentOfSession(s, 'child-1')).toBe('coord-1');
+    expect(parentOfSession(s, 'nobody')).toBeNull();
   });
 
   it('follows a reclaim, because the parent is derived and not stored', () => {
@@ -76,7 +88,7 @@ describe('ask store methods', () => {
     // real signature (`reclaimProgram(runId, to, at, null)`), not the brief's
     // illustrative `('prog', 'coord-2', ...)`.
     s.reclaimProgram(run.id, 'coord-2', Date.now(), null);
-    expect(s.parentOfSession('child-1')).toBe('coord-2');
+    expect(parentOfSession(s, 'child-1')).toBe('coord-2');
   });
 
   it('refuses a second taker — the row is the mutex (D-2171)', () => {
@@ -115,7 +127,7 @@ describe('ask store methods', () => {
       wave: 1, waveOf: null, claimedBy: 'coord-1' }) as { id: number };
     s.setSession(run.id, 'child-1');
     s.db.prepare("UPDATE runs SET state = 'unknown' WHERE id = ?").run(run.id);
-    expect(s.parentOfSession('child-1')).toBe('coord-1');
+    expect(parentOfSession(s, 'child-1')).toBe('coord-1');
   });
 
   // Fix round 1, finding 2: the `ORDER BY id DESC` tie-break was a comment,
@@ -136,7 +148,7 @@ describe('ask store methods', () => {
     const second = s.openRun({ program: 'prog-b', title: 'B', project: 'p',
       wave: 1, waveOf: null, claimedBy: 'coord-2' }) as { id: number };
     s.setSession(second.id, 'child-1');
-    expect(s.parentOfSession('child-1')).toBe('coord-2');
+    expect(parentOfSession(s, 'child-1')).toBe('coord-2');
   });
 
   // Fix round 1, finding 3: `untakeAsk` — the rollback for a take whose

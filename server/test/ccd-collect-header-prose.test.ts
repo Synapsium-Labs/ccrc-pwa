@@ -13,10 +13,11 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { ccdSource } from './ccdWsHelpers.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const readRel = (r: string): string => readFileSync(path.join(ROOT, r), 'utf8');
-const ccdSrc = readRel('ccd/ccd');
+const ccdSrc = ccdSource();
 
 /** `text` from `from` to the first `to` after it. Both anchors are asserted, so a lost one reds rather than widening
  *  the slice. */

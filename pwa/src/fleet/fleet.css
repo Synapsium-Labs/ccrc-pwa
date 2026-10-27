@@ -2384,6 +2384,8 @@ button.proj-card-pool::before {
   font-variant-numeric: tabular-nums; color: var(--ink-tertiary);
 }
 .mail-row .mail-body { grid-column: 1 / -1; font-size: var(--fs-meta); color: var(--ink-secondary); }
+/* D-6911: the review cap's Lift cap door, on its own line under the record's body. */
+.mail-row .mail-cap-door { grid-column: 1 / -1; justify-self: start; }
 
 /* The programme filter and its headers. Chips take the same ground and the same
    inks the rest of this screen does — `--ink-secondary` for a chip that is off,
@@ -2796,9 +2798,15 @@ button.proj-card-pool::before {
    grounded rule and one copy that drifts. */
 /* `.update-move-sheet` is the third body with these six (programme wave 5's
    move sheet), grouped here for the reason the first two already were. */
+/* `.lift-cap-sheet` is the fourth (D-6911, the review cap's lift), and renders
+   the same measured `.abandon-error` descendant for a refused lift. The run
+   board's `.review-cap-band` is the fifth: the same decision, waiting on the
+   board before the sheet opens. */
 .abandon-sheet,
 .archive-conflict-sheet,
-.update-move-sheet {
+.update-move-sheet,
+.lift-cap-sheet,
+.review-cap-band {
   display: grid;
   gap: var(--sp-3);
   color: var(--ink-primary);
@@ -2811,10 +2819,52 @@ button.proj-card-pool::before {
    tokens.css's own comment), reused rather than a third rule re-deriving
    the same ratio. */
 .abandon-sheet .abandon-error,
-.archive-conflict-sheet .abandon-error {
+.archive-conflict-sheet .abandon-error,
+.lift-cap-sheet .abandon-error {
   margin: 0;
   font-size: var(--fs-sm);
   color: var(--status-dead-text);
+}
+/* The ask's lines take the sheet's own ground and ink: no colour of their own. */
+.lift-cap-sheet .lift-cap-note,
+.lift-cap-sheet .lift-cap-findings {
+  margin: 0;
+  font-size: var(--fs-sm);
+}
+.lift-cap-sheet .lift-cap-findings {
+  padding-left: var(--sp-4);
+  display: grid;
+  gap: var(--sp-1);
+}
+.lift-cap-sheet .lift-cap-report {
+  overflow-wrap: anywhere;
+}
+
+/* The run board's "Waiting on you" band (D-6911): the review cap's ask, above
+   the programme groups. Its ground is the sheet bodies' rule (grouped there,
+   not copied); a decision waiting, not a living pane, so no --glow, no
+   animation and no box-shadow. */
+.review-cap-band .review-cap-band-head {
+  margin: 0;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+.review-cap-band .review-cap-band-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: var(--sp-2);
+}
+.review-cap-band .review-cap-band-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  font-size: var(--fs-sm);
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 /* ------------------------------------------------------------------ *

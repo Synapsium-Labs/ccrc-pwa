@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { CCD, WS_ADD, ghContainedEnv } from './ccdWsHelpers.js';
+import { CCD, WS_ADD, ghContainedEnv, ccdSource } from './ccdWsHelpers.js';
 import { CFG_DIR, GH_STUB, makePrHarness, mergedRow, type PrHarness } from './ccdPrHelpers.js';
 import { describeLinux, describeDarwin, itLinux } from './platformFixtures.js';
 
@@ -369,7 +369,7 @@ describe('the proof ladder', () => {
     // Verified in this worktree: `-- A B` exits 0 for ANY two shas (the
     // revisions become pathspecs) while `A B --` exits 1 correctly. A grep is
     // the only assertion that catches the wrong form being reintroduced.
-    const src = fs.readFileSync(CCD, 'utf8');
+    const src = ccdSource();
     expect(src).not.toMatch(/diff --quiet\s+--\s+"/);
     expect(src).toContain('diff --quiet "$M" "$tip" --');
   });

@@ -727,6 +727,24 @@ describe('no writing models-op call runs outside the lane lock (D21)', () => {
       'clear-window', 'materialise']) expect([...seen], op).toContain(op);
   });
 
+  it('lower-windows is a write op and refused outside the lane-files lock', () => {
+    // Codex-bridge D25 (Stage 2 Task 15): the hourly refresh's lowering pass writes the lane's windows file and
+    // re-materialises, so its op is in MODELS_WRITE_OPS (and the bare-call scan above refuses it unlocked), and every
+    // call site that names it takes the lane-files lock on the lane it names in --id.
+    expect(writeOps()).toContain('lower-windows');
+    const sites: string[] = [];
+    const bad: string[] = [];
+    for (const f of ['ccrc', 'ccrc-doctor-checks']) {
+      for (const l of code(f)) {
+        if (!/\b_models_(?:answer|node)\w*\s[^\n]*\blower-windows\b/.test(l)) continue;
+        const m = /\b_models_node_locked "\$([A-Za-z_]+)" lower-windows .*--id "\$([A-Za-z_]+)"/.exec(l);
+        if (m === null || m[1] !== m[2]) bad.push(`${f}: ${l.trim()}`); else sites.push(`${f}: ${l.trim()}`);
+      }
+    }
+    expect(bad).toEqual([]);
+    expect(sites.length, 'no call site runs lower-windows').toBeGreaterThan(0);
+  });
+
   it('the lock order never reverses: no lane-files lock function takes the tier lock (_codex_lock)', () => {
     const src = fs.readFileSync(join(REPO, 'ccd', 'ccrc'), 'utf8');
     for (const fn of ['_models_lock', '_models_unlock', '_models_answer_locked', '_models_node_locked']) {

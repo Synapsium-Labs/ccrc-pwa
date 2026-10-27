@@ -38,7 +38,7 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync, existsSync } from 'node:fs';
 import path from 'node:path';
-import { CCD, makeCcdHarness, WIDE_PANE } from './ccdWsHelpers.js';
+import { makeCcdHarness, WIDE_PANE, ccdSource } from './ccdWsHelpers.js';
 
 describe('arithmetic-injection containment (D-299): no swept site evaluates a torn field', () => {
   it('_auto_swap_check does not evaluate a payload planted in lastswap', () => {
@@ -262,7 +262,7 @@ describe('arithmetic-injection containment (D-299): no swept site evaluates a to
     // Pins the fact the test above depends on. If that assignment ever becomes
     // `${SWAP_JITTER:-120}`, this goes red and the reader is sent to the guard
     // that then starts carrying real weight instead of defence in depth.
-    const src = readFileSync(CCD, 'utf8');
+    const src = ccdSource();
     expect(src).toMatch(/^SWAP_JITTER=[0-9]+\s/m);
     expect(src).not.toMatch(/^SWAP_JITTER=\$\{/m);
   });
@@ -330,7 +330,7 @@ describe('structural: every swept site guards its arithmetic operand with =~ ^[0
   // depends on the statement form — the assertion is that the `=~ ^[0-9]` guard
   // precedes the arithmetic ON THE SAME LINE — so the filter is widened rather
   // than the code contorted back into a shape a scanner happened to assume.
-  const codeLines = readFileSync(CCD, 'utf8').split('\n')
+  const codeLines = ccdSource().split('\n')
     .map((line) => line.trim())
     .map((line) => (line.startsWith('if [[') ? line.slice(3) : line))
     .filter((line) => line.startsWith('[['));   // guards only, never comments

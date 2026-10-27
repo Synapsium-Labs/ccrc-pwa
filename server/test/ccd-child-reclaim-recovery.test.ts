@@ -24,7 +24,7 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { makePrHarness, type PrHarness } from './ccdPrHelpers.js';
-import { CCD, WS_ADD } from './ccdWsHelpers.js';
+import { WS_ADD, ccdSource } from './ccdWsHelpers.js';
 import { eventsOf } from './lifecycleHelpers.js';
 import {
   CHILD_ENV, CHILD_ID, CHILD_RUN, CHILD_STUBS, childReclaimVerb, evalOf, makeChild, type Child, type LadderAnswer,
@@ -484,7 +484,7 @@ describe('what the recovery never does', () => {
   }, 120_000);
 
   it('its four bodies never create, prune or remove anything, never read process, pane or unit state, and never read the journal', () => {
-    const src = fs.readFileSync(CCD, 'utf8');
+    const src = ccdSource();
     const FORBIDDEN: readonly [string, RegExp][] = [
       ['creates a directory', /\bmkdir\b/],
       ['prunes git’s records', /\bprune\b|\bgc\b/],

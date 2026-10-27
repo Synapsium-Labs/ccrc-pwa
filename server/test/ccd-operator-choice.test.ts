@@ -17,7 +17,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { makeCcdHarness, type CcdHarness, WIDE_PANE, WS_ADD, CCD, BOUNDED, ghContainedEnv } from './ccdWsHelpers.js';
+import { makeCcdHarness, type CcdHarness, WIDE_PANE, WS_ADD, CCD, BOUNDED, ghContainedEnv, ccdSource } from './ccdWsHelpers.js';
 import { inheritedEnv } from './gitEnvStrip.js';
 import { familyClassOf, FAMILY_TOKENS } from '../../shared/models.mjs';
 
@@ -121,9 +121,10 @@ describe('ccd journals its own keystrokes in $REG/<id>.typed', () => {
   it('the settle journals its /effort before it types it', () => {
     seed();
     h.sh(`${STUBS} _inject_spawn_effort cc-${ID}`, { PANE_TEXT: READY });
-    expect(h.calls()).toContain(`tmux send-keys -t =cc-${ID}: -l /effort ultracode`);
+    // The box default is `high` since coordinator clause 19 (operator ruling 2026-10-25).
+    expect(h.calls()).toContain(`tmux send-keys -t =cc-${ID}: -l /effort high`);
     expect(typedRows()).toHaveLength(1);
-    expect(typedRows()[0]).toMatch(/^\d{10} effort ultracode$/);
+    expect(typedRows()[0]).toMatch(/^\d{10} effort high$/);
   });
 
   it('a session whose record carries an effort types nothing and journals nothing', () => {
@@ -222,7 +223,7 @@ describe('a /model value maps through the alias table, then familyClassOf\'s das
     const bash = h.sh(corpus.map((id) => `out=$(_model_family_class ${JSON.stringify(id)}); echo "[$out]"`).join('; ')).split('\n').map((l) => l.slice(1, -1));
     expect(bash).toHaveLength(corpus.length);
     corpus.forEach((id, i) => expect(bash[i], id).toBe(familyClassOf(id) ?? ''));
-    const declared = /^MODEL_FAMILY_TOKENS="([^"]+)"/m.exec(fs.readFileSync(CCD, 'utf8'));
+    const declared = /^MODEL_FAMILY_TOKENS="([^"]+)"/m.exec(ccdSource());
     expect(declared?.[1]).toBe(FAMILY_TOKENS.map(([t, c]) => `${t}:${c}`).join(' '));
   });
 });
@@ -547,7 +548,7 @@ describe('_operator_choice_keep writes the operator\'s own /model and /effort to
     h.sh(`sleep() { :; }; tmux() { ${WIDE_PANE} case "\${1:-}" in capture-pane) printf '? for shortcuts\\n❯ \\n' ;; esac; return 0; };
       _pane_box_draft() { printf ''; }; _inject_spawn_effort cc-${ID}`);
     const t = now() + 2;
-    writeTranscript([cmd(t, 'effort', 'ultracode'), ack(t, ULTRACODE_ACK)]);
+    writeTranscript([cmd(t, 'effort', 'high'), ack(t, EFFORT_ACK('high'))]);   // the box default the settle typed
     keep();
     expect(h.reg(ID, 'effort'), 'the box default became an operator choice').toBeNull();
   });
@@ -818,7 +819,7 @@ describe('every stop that a spawn follows keeps the operator\'s choice first', (
       cmd_account_pane: 'an account\'s login pane, not a session',
       cmd_supervise: 'a crash loop\'s give-up: Claude Code already exited, and no ccd stop precedes a revival',
     };
-    const src = fs.readFileSync(CCD, 'utf8').split('\n');
+    const src = ccdSource().split('\n');
     const owner = (i: number): string => {
       for (let j = i; j >= 0; j--) { const m = /^([A-Za-z_][A-Za-z0-9_]*)\(\) \{/.exec(src[j]!); if (m) return m[1]!; }
       return '';
@@ -875,7 +876,7 @@ describe('every stop that a spawn follows keeps the operator\'s choice first', (
       _tmux_new_session: 'the primitive itself: the wrapper that places the tmux server',
       cmd_account_pane: 'an account\'s login pane, not a Claude Code session',
     };
-    const src = fs.readFileSync(CCD, 'utf8').split('\n');
+    const src = ccdSource().split('\n');
     const owner = (i: number): string => {
       for (let j = i; j >= 0; j--) { const m = /^([A-Za-z_][A-Za-z0-9_]*)\(\) \{/.exec(src[j]!); if (m) return m[1]!; }
       return '';

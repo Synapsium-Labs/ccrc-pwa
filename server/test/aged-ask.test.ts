@@ -29,7 +29,7 @@ const raw = (over: {
   },
 });
 
-/** The aligned menu for question `k` of QUESTIONS, as `checkDialog` frames it. */
+/** The aligned menu for question `k` of QUESTIONS, as the session's feed reads it (`sessionFeed.ts`'s `readDialog`). */
 const parsedMenu = (k: number, labels?: (string | null)[]): MenuEvidence => {
   const q = (QUESTIONS as { questions: { question: string; options: { label: string }[] }[] }).questions[k]!;
   return {

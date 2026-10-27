@@ -97,6 +97,12 @@ describe('ccrc install: the order is stated in one place', () => {
       // sanctioned toucher of `claude-session@*` (spec §7.4). After
       // `_inst_bins` (the shim's code) and `_inst_codex_runtime` (the
       // generation): the two things a tier's staleness is measured against.
+      // Codex bridge Stage 2, Task 11. Right BEFORE the tier restart, which
+      // reads each lane's mode from lane.json: a lane.json rendered before
+      // the bridge reads stale and is re-rendered here, through the one
+      // writer, so the tiers step and the doctor read a current one. A
+      // failure DEGRADES (`codex-lanes`).
+      '_inst_codex_lanes',
       // Only running, verified-own, stale tiers, by stop+start; a failure
       // DEGRADES (`codex-tiers`).
       '_inst_codex_tiers',

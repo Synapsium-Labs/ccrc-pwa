@@ -146,6 +146,10 @@ export interface CodexLaneRow {
   /** Default `codex`. `none` exists so a suite can build a roster on which the
    *  telemetry-keyed `CCRC_CODEX_BACKEND` and `exec.kind` disagree. */
   telemetry?: 'codex' | 'none';
+  /** `exec.bridge` (codex bridge Stage 2, Task 10); absent unless a case names it, so every older roster is unchanged. */
+  bridge?: 'litellm' | 'direct';
+  /** `exec.upstream` (Task 10); absent unless a case names it. */
+  upstream?: 'backend' | 'siwc';
 }
 
 /** Writes `~/.ccrc/accounts.json` — the upstream `claude` row, one
@@ -176,6 +180,8 @@ export function codexRoster(
         exec: {
           kind: 'codex', provider: 'openai',
           proxyPort: l.proxyPort, litellmPort: l.litellmPort, authDir: codexAuthDir(l.id),
+          ...(l.bridge !== undefined ? { bridge: l.bridge } : {}),
+          ...(l.upstream !== undefined ? { upstream: l.upstream } : {}),
         },
         homeAble: false, telemetry: l.telemetry ?? 'codex',
       })),
@@ -588,6 +594,12 @@ d="$HOME/fake-systemd"
 up() { [ -f "$d/user-manager" ] && [ "$(<"$d/user-manager")" = up ]; }
 # A spawned unit's state is written by its retained Python supervisor. This
 # reader has no PID-liveness or signal path: pid files are observations only.
+# Test-only knob: CCRC_FIXTURE_WRITE_GAP_MS widens the window between two
+# writes so a reader that races them reds deterministically.
+gap() {
+  [ "\${CCRC_FIXTURE_WRITE_GAP_MS:-0}" -gt 0 ] 2>/dev/null || return 0
+  sleep "$(awk -v ms="$CCRC_FIXTURE_WRITE_GAP_MS" 'BEGIN { print ms / 1000 }')"
+}
 valid_unit() {
   [[ "\${1:-}" =~ ^[A-Za-z0-9@._:-]+$ ]] && [ "$1" != . ] && [ "$1" != .. ]
 }
@@ -643,8 +655,10 @@ case "\${1:-}" in
       else
         # A seeded fakeUnit has no exact-child supervisor. It becomes inactive
         # without treating its observed PID as signal authority.
-        printf 'inactive\\n' > "$unit/state"
-        printf '0\\n' > "$unit/pid"
+        # pid first, state last, each whole-file: state marks the commit.
+        printf '0\\n' > "$unit/pid.tmp" && mv "$unit/pid.tmp" "$unit/pid"
+        gap
+        printf 'inactive\\n' > "$unit/state.tmp" && mv "$unit/state.tmp" "$unit/state"
       fi
     done
     exit "$rc" ;;
@@ -849,8 +863,8 @@ PY
 # Every state write the launcher makes lands BEFORE the fork. From the fork on,
 # only the supervisor writes this unit's state and pid, so a launcher that is
 # descheduled after it can never overwrite the supervisor's \`active\` and pid.
-printf '0\\n' > "$u/pid"
-printf 'starting\\n' > "$u/state"
+printf '0\\n' > "$u/pid.tmp" && mv "$u/pid.tmp" "$u/pid"
+printf 'starting\\n' > "$u/state.tmp" && mv "$u/state.tmp" "$u/state"
 : > "$u/spawned"
 ( cd "$wd" || exit 1; exec env -i "PATH=$PATH" "PYTHONPATH=\${PYTHONPATH:-}" "PYTHONNOUSERSITE=\${PYTHONNOUSERSITE:-}" "PYTHONDONTWRITEBYTECODE=\${PYTHONDONTWRITEBYTECODE:-}" "\${envs[@]}" "\${fenv[@]}" "$py" -B "$u/supervisor.py" "$u" "$wd" "\${out:-/dev/null}" "\${err:-/dev/null}" "$@" ) \\
   </dev/null >/dev/null 2>&1 &
@@ -992,7 +1006,8 @@ export async function spawnFakeLitellm(
   const log = path.join(fakeProcs(home), `litellm-${o.port}.log`);
   const argv = ['-B', script, '-m', 'litellm.proxy.proxy_cli', '--config', o.config,
     '--host', '127.0.0.1', '--port', String(o.port)];
-  const env = { PATH: process.env['PATH'] ?? '/usr/bin:/bin', HOME: home, PYTHONDONTWRITEBYTECODE: '1' };
+  const env: NodeJS.ProcessEnv = { PATH: process.env['PATH'] ?? '/usr/bin:/bin', HOME: home, PYTHONDONTWRITEBYTECODE: '1' };
+  if (process.env['CCRC_FIXTURE_WRITE_GAP_MS'] !== undefined) env['CCRC_FIXTURE_WRITE_GAP_MS'] = process.env['CCRC_FIXTURE_WRITE_GAP_MS'];
   let pid: number;
   let owner: ChildProcess;
   if (o.reparent === true) {
@@ -1034,8 +1049,11 @@ export async function spawnFakeLitellm(
       '    signal.signal(sig, finish)',
       'with open(log, "ab", buffering=0) as stream:',
       '    proc = subprocess.Popen(argv, cwd=os.getcwd(), env=os.environ.copy(), stdin=subprocess.DEVNULL, stdout=stream, stderr=stream)',
-      '    with open(pidfile, "w") as out:',
+      '    tmp = pidfile + ".tmp"',
+      '    with open(tmp, "w") as out:',
+      '        time.sleep(float(os.environ.get("CCRC_FIXTURE_WRITE_GAP_MS", "0")) / 1000)',
       '        out.write(str(proc.pid) + "\\n")',
+      '    os.replace(tmp, pidfile)',
       '    while proc.poll() is None:',
       '        time.sleep(0.05)',
       '    if not finishing:',
@@ -1151,8 +1169,9 @@ export function registerLaneCleanup(
  *  body at status 500; `text` is the OTHER repository's shim (`text/plain`, the
  *  bare id); `404` answers every path with a JSON 404, as a LiteLLM proxy
  *  would. One mode per clause of `_codex_lane_answer`'s shape, so deleting any
- *  one clause reds exactly one case. */
-export type ListenerAnswer = 'json' | 'json-extra' | 'json-as-text' | 'json-500' | 'text' | '404';
+ *  one clause reds exactly one case. `direct` is the bridge's shape
+ *  (`{"lane": <lane>, "mode": "direct"}`, codex bridge Stage 2, Task 13). */
+export type ListenerAnswer = 'json' | 'json-extra' | 'json-as-text' | 'json-500' | 'text' | '404' | 'direct';
 
 /** EXPORTED for ccrc-codex.test.ts' no-reverse-lookup pin. Its `Server` is
  *  `fakeLitellmSource`'s: no `socket.getfqdn` between bind and listen. */
@@ -1186,6 +1205,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(500, "application/json", json.dumps({"lane": LANE}).encode())
             if ANSWER == "text":
                 return self._send(200, "text/plain", LANE.encode())
+            if ANSWER == "direct":
+                return self._send(200, "application/json", json.dumps({"lane": LANE, "mode": "direct"}).encode())
         return self._send(404, "application/json", b'{"error": "not found"}')
 class Server(ThreadingHTTPServer):
     def server_bind(self):
@@ -2049,7 +2070,9 @@ export const stateCallsNaming = (argv: readonly string[], unit: RegExp): string[
 // A python child like every listener in this file, bound to 127.0.0.1 on a
 // port the kernel chose. It answers the shim's lane probe, `GET /ccgpt/lane`,
 // as the lane it was started for (or as another lane, or 404, by a `lane` file
-// in its record directory), and `POST /v1/messages` the way the lane's shim and
+// in its record directory), in the shim's shape or, by a `lane-shape` file, the
+// bridge's direct shape (codex bridge Stage 2, Task 11b), and
+// `POST /v1/messages` the way the lane's shim and
 // LiteLLM can, by a MODE FILE there (`mode.<model>` first, then `mode`, default
 // `ok`). It records every POST (its path, its header NAMES and VALUES, its
 // Authorization VALUE once more on its own, and its body) to `req.<n>.json`,
@@ -2099,6 +2122,13 @@ def lane_answer():
             v = f.read().strip()
         return None if v == "-" else v
     return LANE
+def lane_shape(lane):
+    p = os.path.join(REC, "lane-shape")
+    if os.path.isfile(p):
+        with open(p) as f:
+            if f.read().strip() == "direct":
+                return {"lane": lane, "mode": "direct"}
+    return {"lane": lane}
 def lane_mode():
     p = os.path.join(REC, "lane-mode")
     if os.path.isfile(p):
@@ -2169,7 +2199,7 @@ class Handler(BaseHTTPRequestHandler):
         if lane is None:
             return self._json(404, {"error": "not found"})
         if mode == "pad":
-            return self._body(200, "application/json", b" " * 5000 + json.dumps({"lane": lane}).encode())
+            return self._body(200, "application/json", b" " * 5000 + json.dumps(lane_shape(lane)).encode())
         if mode == "hang":
             time.sleep(60)
             return
@@ -2184,7 +2214,7 @@ class Handler(BaseHTTPRequestHandler):
                     self.wfile.flush()
             except (BrokenPipeError, ConnectionResetError):
                 return
-        return self._json(200, {"lane": lane})
+        return self._json(200, lane_shape(lane))
     def do_POST(self):
         raw = self.rfile.read(int(self.headers.get("Content-Length") or 0))
         try:
@@ -2312,9 +2342,14 @@ export function laneProxyMode(p: FakeLaneProxy, mode: LaneProxyMode, model?: str
   writeFileSync(join(p.rec, model === undefined ? 'mode' : `mode.${model}`), `${mode}\n`);
 }
 
-/** Which lane the fake's lane probe answers as from now on; null: a 404. */
-export function laneProxyAnswersAs(p: FakeLaneProxy, lane: string | null): void {
+/** Which lane the fake's lane probe answers as from now on; null: a 404. `shape` is the answer's shape: `shim`, today's
+ *  shim's `{"lane": <id>}` (the default), or `direct`, the bridge's `{"lane": <id>, "mode": "direct"}` (codex bridge
+ *  Stage 2, Task 11b). */
+export function laneProxyAnswersAs(p: FakeLaneProxy, lane: string | null, shape: 'shim' | 'direct' = 'shim'): void {
   writeFileSync(join(p.rec, 'lane'), `${lane ?? '-'}\n`);
+  const file = join(p.rec, 'lane-shape');
+  if (shape === 'shim') fs.rmSync(file, { force: true });
+  else writeFileSync(file, `${shape}\n`);
 }
 
 /** How the fake's lane probe answers: a stalled, padded or endless response. */

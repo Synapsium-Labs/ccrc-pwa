@@ -30,7 +30,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { makeCcdHarness, CCD, type CcdHarness, WIDE_PANE } from './ccdWsHelpers.js';
+import { makeCcdHarness, type CcdHarness, WIDE_PANE, ccdSource } from './ccdWsHelpers.js';
 
 let h: CcdHarness;
 beforeEach(() => { h = makeCcdHarness('ccrc-ccd-swap-pin-'); });
@@ -248,7 +248,7 @@ describe('source pins: the two properties no fixture can observe', () => {
     // through behaviour that a later edit could satisfy by accident. The order
     // of these three anchors inside `_auto_swap_check` is what makes "a limit
     // still evacuates a pinned session" true by construction.
-    const src = fs.readFileSync(CCD, 'utf8');
+    const src = ccdSource();
     const rescue = src.indexOf('auto-rescue $id: $wrapper (blocked)');
     const pinCheck = src.indexOf('if _swap_pinned "$id" "$wrapper"; then');
     const hold = src.indexOf('[[ -e "$REG/$id.hold" ]] && { _standdown_note "$id" hold; return 0; }');   // D-6180 says the hold
@@ -264,7 +264,7 @@ describe('source pins: the two properties no fixture can observe', () => {
     // hour. The file holds ONE account name; the end of a pin is a measurement
     // (`_swap_pin_tick`), never a clock — and a field with no number in it is a
     // field D-299's class cannot reach.
-    const src = fs.readFileSync(CCD, 'utf8');
+    const src = ccdSource();
     expect(src).toContain('_reg_set "$id" swappin "$target"');
     const arith = src.split('\n').filter((l) => l.includes('swappin"') && l.includes('$(('));
     expect(arith, 'the pin grew an epoch; give it a digit guard and an arith-containment row').toEqual([]);

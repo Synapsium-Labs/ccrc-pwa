@@ -23,7 +23,7 @@ import {
   ACT_NO_DOCUMENT, COLLECTED, DAY, DIE, MIN, NO_DOCUMENT, OBSERVE, PASS, T1, T2, UNREADABLE, WALL0, collectable,
   failedAct, refusedAct, step, unmeasured, verdict,
 } from './collectAnswers.js';
-import { CCD } from './ccdWsHelpers.js';
+import { ccdSource } from './ccdWsHelpers.js';
 import { codeOnly } from './sourceScan.js';
 
 const C = CHILD_RECLAIM_DEFER_CEILING_MS;
@@ -58,7 +58,7 @@ const TERMINAL_WORDS = COLLECT_VERDICT_WORDS.filter((w) => COLLECT_VERDICT_TABLE
 
 describe('the verdict table is ccd\'s collector refusal words, and agrees with the refusal table', () => {
   it('holds exactly the words ccd\'s `_ws_collect_refuse` is called with, in both directions', () => {
-    const src = readFileSync(CCD, 'utf8');
+    const src = ccdSource();
     const words = [...new Set([...src.matchAll(/\b_ws_collect_refuse ([a-z-]+) /g)].map((m) => m[1]!))].sort();
     expect(words.length, 'a floor: the scan reads something').toBeGreaterThanOrEqual(9);
     expect([...COLLECT_VERDICT_WORDS].sort()).toEqual(words);
@@ -809,9 +809,12 @@ describe('wave 8\'s formula, imported: one definer', () => {
     const lane = codeOnly(readFileSync(path.join(srcRoot, 'collectLane.ts'), 'utf8'));
     const from = [...new Set([...lane.matchAll(/from\s+'([^']+)'/g)].map((m) => m[1]))].sort();
     // `shared/switches.js` is L0: the lane's live marker is spelled once there (D-5855). So is `shared/ccd-refusal.js`
-    // (ARCH-14, #560): the machine token's reader.
-    expect(from, 'L1: L0 and the one L1 file whose formula it shares')
-      .toEqual(['../../shared/api.js', '../../shared/ccd-refusal.js', '../../shared/switches.js', './childReclaimSweep.js']);
+    // (ARCH-14, #560): the machine token's reader. And `shared/workspaceTransitions.js` (ARCH-41, #776): its refusal words.
+    // And `./journalKernel.js` (D-7059, ARCH-73 #808), L1 importing nothing, for the journal's framer alone: no formula.
+    expect(from, 'L1: L0, the one L1 file whose formula it shares, and the journal framer')
+      .toEqual(['../../shared/api.js', '../../shared/ccd-refusal.js', '../../shared/switches.js',
+        '../../shared/workspaceTransitions.js', './childReclaimSweep.js', './journalKernel.js']);
+    expect(/import\s*\{([^}]*)\}\s*from\s*'\.\/journalKernel\.js'/.exec(lane)?.[1]?.trim()).toBe('splitJournalRecords');
     const imported = /import\s*\{([^}]*)\}\s*from\s*'\.\/childReclaimSweep\.js'/.exec(lane)?.[1] ?? '';
     for (const name of ['childReclaimTierFrom', 'childReclaimTierPaceMs', 'childReclaimBackoffMs']) {
       expect(imported, name).toMatch(new RegExp(`\\b${name}\\b`));

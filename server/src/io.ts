@@ -5,6 +5,8 @@ import path from 'node:path';
 import type { ReadFailure } from '../../shared/agent-protocol.js';
 import type { DiskMeasured } from '../../shared/disk.js';
 import { measureDisk } from '../../agent/src/disk.js';
+import { measurePressure } from '../../agent/src/pressure.js';
+import type { HostPsi } from '../../shared/pressure.js';
 import { isReadFromRange, LANE_STATE_DIR_NAME, laneStateOpenHolds } from '../../shared/agent-protocol.js';
 
 /** Why a read couldn't produce content — and, since `MeasuredStat` below,
@@ -246,7 +248,17 @@ export interface FleetIO {
    *  Failure contract: never rejects; locally a fault is `unreadable`, and remotely an agent too old to answer the
    *  op, a malformed reply, or any fault on the wire is `unmeasured`; never a measurement of zero. */
   statfsMeasured(): Promise<MeasuredDisk>;
+  /** The host's memory and io PSI (#1170). Takes nothing: the adapter reads ITS box's /proc/pressure.
+   *  Failure contract: never rejects. `unsupported` is a box that cannot answer at all (an agent too old to list the
+   *  op, a kernel with no PSI): never a stall. `unanswered` is an ask the link or the agent failed (a timeout, a
+   *  disconnect, an error reply, a malformed one): the evidence of a stall. Neither is ever a reading of zero. */
+  pressureMeasured(): Promise<MeasuredPressure>;
 }
+
+/** The `pressure` reading as a seam answers it (#1170), or why there is none. */
+export type MeasuredPressure =
+  | { ok: true; psi: HostPsi }
+  | { ok: false; reason: 'unsupported' | 'unanswered' };
 
 /** Read byte range [start, end) of `file` (createReadStream `end` is inclusive). */
 function readRange(file: string, start: number, end: number): Promise<Buffer> {
@@ -469,6 +481,12 @@ export const localIO: FleetIO = {
 
   // The process home by default; a server with a configured home wires `localIOFor(cfg.home)` instead.
   statfsMeasured: () => measureLocalDisk(os.homedir()),
+
+  // The agent's own reader on this box's /proc (#1170): a box with no PSI (not Linux, or an old kernel) is
+  // `unsupported`, never a stall, so a local fleet never reads its own missing /proc as host pressure.
+  pressureMeasured: async () => {
+    try { return { ok: true, psi: measurePressure() }; } catch { return { ok: false, reason: 'unsupported' }; }
+  },
 };
 
 /** The agent's own measurer on `home`: the one implementation of the `disk` op's arithmetic, so the two adapters

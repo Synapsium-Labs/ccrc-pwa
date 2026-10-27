@@ -317,7 +317,7 @@ describe('the account op', () => {
     agent = await boot(fixture!);
     const c = new TestClient(agent.port);
     clients.push(c);
-    expect((await c.hello() as AgentReady).ops).toEqual(['update', 'token-sync', 'account', 'disk']);
+    expect((await c.hello() as AgentReady).ops).toEqual(['update', 'token-sync', 'account', 'disk', 'pressure']);
   });
 
   it("the op reaches no exec path: case 'account' and the port name no exec-surface symbol, and spawn the absolute launcher", () => {

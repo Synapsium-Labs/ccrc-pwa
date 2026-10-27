@@ -120,13 +120,17 @@ describe('every ccd/history module and history test fixture keeps its ring (spec
    *   (FU6, B3M21/B3M22): a lazy `import()` that LAZY_IMPORTS names for that file, exactly. preload-faults.mjs reads store.mjs's
    *   StoreError that way, past its patches, so that a fault it injects is the error class the reader really classifies. A test
    *   preload reading a shipped error class crosses no shipped ring, and the list is per file and exact, never a switch.
+   * - The one STATIC allowance (CP-38, D-6965), in the same style: preload-rss.mjs imports `./rss-peak.mjs`, the pure reader of the process's
+   *   own peak, and STATIC_IMPORTS names that for that file, exactly (an unused allowance reds too). rss-peak.mjs itself imports nothing.
    * - run-pass imports the three history modules and node builtins, never `node:sqlite`, so it reaches SQLite only through store.mjs.
    */
   const FIXTURE_RING = (name: string): ((s: string) => boolean) | null =>
     /^preload-[a-z0-9-]+\.mjs$/.test(name) ? (s) => !s.startsWith('node:')
     : name === 'run-pass.mjs' ? (s) => !(/^(\.\.\/){4}ccd\/history\/(sweep|store|lib)\.mjs$/.test(s) || (s.startsWith('node:') && s !== 'node:sqlite'))
+    : name === 'rss-peak.mjs' ? () => true
     : null;
   const LAZY_IMPORTS: Record<string, string[]> = { 'preload-faults.mjs': ['../../../../ccd/history/store.mjs'] };
+  const STATIC_IMPORTS: Record<string, string[]> = { 'preload-rss.mjs': ['./rss-peak.mjs'] };
 
   it("CONTROL: the scanner reads named, default, namespace, multi-line, export-from and side-effect imports, skips comment lines, and is not blinded by a /* inside a string", () => {
     expect(specsOf("import a from 'x1';\nimport * as b from 'x2';\nimport {\n c,\n} from 'x3';\nexport { d } from 'x4';\nimport 'x5';\n// import 'x6'\n/* import 'x7' */").sort()).toEqual(['x1', 'x2', 'x3', 'x4', 'x5']);
@@ -192,7 +196,7 @@ describe('every ccd/history module and history test fixture keeps its ring (spec
       const forbids = FIXTURE_RING(n);
       expect(forbids, `${n} has no ring`).not.toBeNull();
       const src = readFileSync(join(FIX, n), 'utf8');
-      expect(specsOf(src).filter(forbids!), n).toEqual([]);
+      expect(specsOf(src).filter(forbids!), n).toEqual(STATIC_IMPORTS[n] ?? []);
       // The one dynamic-import door a fixture may hold is named per file and exact (a list, not a switch): FU4's M30 fault
       // takes StoreError from store.mjs lazily, past its patches. Any other `import(` in a fixture reds.
       const dynamic = [...codeOf(src).matchAll(/(?<![.\w])import\s*\(\s*['"]([^'"]+)['"]\s*\)/g)].map((x) => x[1]!);
@@ -11836,5 +11840,179 @@ describe('W2-2b review fix (D-6445): decideScope\'s workspace arm keeps the env 
       source: 'env', id: 'claude-a-demo', generation: { value: null, via: 'newest' }, flags: { project: false, workspace: true, session: null },
       reg: { project: { state: 'absent' }, workdir: v('/t/a '), sessionProject: null },
     }), 'env: the project refusal stays').toEqual(refused);
+  });
+});
+
+describe('CP-39 Task 1: sidecarNameMatcher answers every asked name a text holds, in one pass (D-6930)', () => {
+  it('answers exactly what String.prototype.includes answers, in the order asked, each once', async () => {
+    const lib = await import('../../ccd/history/lib.mjs');
+    const astral = String.fromCharCode(0xd83d, 0xde00);
+    const names = ['data.txt', 'a.txt', 'toolu_01EEE.json', 'zz-orphan.txt', 'ata.t', 'b7k2q9z1x.txt', 'aaa', 'aa', `${astral}x`];
+    const texts = [
+      'saved to: /home/u/x/tool-results/data.txt',
+      'Output too large. Full output saved to: /home/u/x/tool-results/b7k2q9z1x.txt and aaaa',
+      'names toolu_01EEE.json twice toolu_01EEE.json',
+      '', 'no name here', 'a.tx', `${astral}a.txt ${astral}x`, `${String.fromCharCode(0xd83d)}x`,
+    ];
+    const m = lib.sidecarNameMatcher(names);
+    for (const t of texts) expect(m.namesIn(t), JSON.stringify(t)).toEqual(names.filter((n) => t.includes(n)));
+  });
+  it('agrees with includes over 400 generated texts and 60 generated, overlapping names', async () => {
+    const lib = await import('../../ccd/history/lib.mjs');
+    let x = 0x39;
+    const rnd = (k: number): number => { x = (x * 1103515245 + 12345) % 2147483648; return x % k; };
+    const word = (len: number): string => Array.from({ length: len }, () => 'ab.t'[rnd(4)]).join('');
+    const names = Array.from({ length: 60 }, () => word(1 + rnd(5)));
+    const m = lib.sidecarNameMatcher(names);
+    const asked = [...new Set(names)];
+    for (let i = 0; i < 400; i += 1) {
+      const t = word(rnd(80));
+      expect(m.namesIn(t), t).toEqual(asked.filter((n) => t.includes(n)));
+    }
+  });
+  it('holds at most one state per name unit plus the root, and a duplicate name is answered once', async () => {
+    const lib = await import('../../ccd/history/lib.mjs');
+    const names = ['out1.txt', 'out10.txt', 'out1.txt', 'toolu_01A.json'];
+    const m = lib.sidecarNameMatcher(names);
+    expect(m.states).toBeLessThanOrEqual(1 + [...new Set(names)].reduce((n, s) => n + s.length, 0));
+    expect(m.namesIn('…/tool-results/out10.txt and …/out1.txt')).toEqual(['out1.txt', 'out10.txt']);
+  });
+});
+
+describe('CP-39 Task 2: the walk state, its extension and its first-match fold (D-6931)', () => {
+  type Pair = [string, number];
+  interface Part { names: string[]; text: Pair[]; toolu: Pair[] }
+  interface State { v: 1; done: Part; walk: (Part & { after: number }) | null }
+  const state = (over: Partial<State> = {}): State => ({ v: 1, done: { names: [], text: [], toolu: [] }, walk: null, ...over });
+
+  it('round-trips, with pairs and never object keys', async () => {
+    const lib = await import('../../ccd/history/lib.mjs');
+    const s = state({
+      done: { names: ['__proto__', 'a name.txt', 'toolu_01A.json'], text: [['__proto__', 3], ['a name.txt', 3]], toolu: [['toolu_01A', 5]] },
+      walk: { names: ['late.txt'], after: 2 ** 31, text: [], toolu: [] },
+    });
+    expect(lib.parseSidecarWalk(lib.formatSidecarWalk(s))).toEqual(s);
+    expect(lib.parseSidecarWalk(lib.formatSidecarWalk(state({ walk: { names: ['x.txt'], after: 0, text: [], toolu: [] } })))?.walk?.after).toBe(0);
+    expect(lib.formatSidecarWalk(lib.emptySidecarWalk()), 'the empty state, keys in order').toBe('{"v":1,"done":{"names":[],"text":[],"toolu":[]},"walk":null}');
+  });
+
+  it('anything malformed is null, so the walk starts again from row 0', async () => {
+    const lib = await import('../../ccd/history/lib.mjs');
+    const ok = state({ done: { names: ['a.txt'], text: [['a.txt', 3]], toolu: [] }, walk: { names: ['b.txt'], after: 7, text: [], toolu: [] } });
+    expect(lib.parseSidecarWalk(JSON.stringify(ok)), 'CONTROL: a well-formed state parses').toEqual(ok);
+    const w = ok.walk!;
+    const bad: unknown[] = [
+      '', '{}', 'not json', { ...ok, v: 2 },
+      { ...ok, walk: { ...w, after: -1 } }, { ...ok, walk: { ...w, after: 1.5 } }, { ...ok, walk: { ...w, after: '7' } },
+      { ...ok, done: { ...ok.done, names: 'a.txt' } }, { ...ok, done: { ...ok.done, names: [7] } },
+      { ...ok, done: { ...ok.done, text: [['a.txt']] } }, { ...ok, done: { ...ok.done, text: [['a.txt', 0]] } },
+      { ...ok, done: { ...ok.done, names: ['a.txt', 'a.txt'] } },
+      { ...ok, walk: { ...w, names: ['a.txt'] } },                     // a name both parts hold
+      { ...ok, done: { ...ok.done, text: [['zz.txt', 3]] } },          // a pair for a name its part does not hold
+      { ...ok, done: { ...ok.done, toolu: [['toolu_01Z', 3]] } },      // a stem no name of its part has
+    ];
+    for (const b of bad) expect(lib.parseSidecarWalk(typeof b === 'string' ? b : JSON.stringify(b)), JSON.stringify(b)).toBeNull();
+    expect(lib.parseSidecarWalk(`{"v":1,"done":{"names":["${'q'.repeat(64 * 1024 * 1024)}"],"text":[],"toolu":[]},"walk":null}`), 'over 64 MiB, refused before parsing').toBeNull();
+  });
+
+  it('the fold keeps the first entry; finishing merges into done, which keeps its entry for a stem both parts hold', async () => {
+    const lib = await import('../../ccd/history/lib.mjs');
+    const s = state({ done: { names: ['toolu_01A.json'], text: [], toolu: [['toolu_01A', 2]] }, walk: { names: ['a.txt', 'data.txt', 'toolu_01A.txt'], after: 0, text: [], toolu: [] } });
+    lib.foldWalkCandidates(s, [
+      { entryId: 3, text: 'data.txt\0a.txt', toolUseIds: ['toolu_01A'] },
+      { entryId: 5, text: 'a.txt', toolUseIds: ['toolu_01A'] },
+    ]);
+    expect(s.walk).toMatchObject({ text: [['data.txt', 3], ['a.txt', 3]], toolu: [['toolu_01A', 3]] });
+    lib.finishSidecarWalk(s);
+    expect(s.walk).toBeNull();
+    expect([...s.done.names].sort()).toEqual(['a.txt', 'data.txt', 'toolu_01A.json', 'toolu_01A.txt']);
+    expect(s.done.toolu, 'done keeps its own entry for the shared stem').toEqual([['toolu_01A', 2]]);
+  });
+
+  it('walkCandidates offers linkSidecar what it would pick from the full candidate list', async () => {
+    const lib = await import('../../ccd/history/lib.mjs');
+    const full = [
+      { entryId: 2, text: '', toolUseIds: ['toolu_01A'] },              // answers toolu_01A
+      { entryId: 3, text: 'data.txt\0a.txt', toolUseIds: [] },
+      { entryId: 4, text: 'toolu_01A.json', toolUseIds: [] },           // names toolu_01A.json AFTER the row that answers it
+      { entryId: 6, text: 'a.txt', toolUseIds: ['toolu_01Z'] },
+    ];
+    const names = ['a.txt', 'data.txt', 'toolu_01A.json', 'toolu_01Z.txt', 'zz.txt'];
+    const s = state({ walk: { names, after: 0, text: [], toolu: [] } });
+    lib.foldWalkCandidates(s, full);
+    lib.finishSidecarWalk(s);
+    for (const n of names) expect(lib.linkSidecar(n, lib.walkCandidates(s, n)), n).toBe(lib.linkSidecar(n, full));
+  });
+
+  it('walkNames: the uncovered unseen names, sorted, each once, within the room, and always the name that asked', async () => {
+    const lib = await import('../../ccd/history/lib.mjs');
+    expect(lib.walkNames(['c.txt', 'a.txt', 'c.txt', 'b.txt'], 'c.txt', ['b.txt'])).toEqual(['a.txt', 'c.txt']);
+    const big = Array.from({ length: 600 }, (_, i) => `${String(i).padStart(4, '0')}${'q'.repeat(996)}`);   // 1,000 units each
+    expect(lib.walkNames(big, big[0]!), '524 names of 1,000 units fit 524,288').toHaveLength(524);
+    const huge = 'h'.repeat(lib.SIDECAR_WALK_CHARS_MAX + 1);
+    expect(lib.walkNames([huge, 'a.txt'], huge), 'the asking name alone, over the room').toEqual([huge]);
+  });
+
+  it('startSidecarWalk prunes done to the names still unseen and starts an extension at row 0 over the uncovered ones', async () => {
+    const lib = await import('../../ccd/history/lib.mjs');
+    const s = state({ done: { names: ['a.txt', 'b.txt', 'toolu_01A.json'], text: [['a.txt', 3], ['b.txt', 4]], toolu: [['toolu_01A', 2]] } });
+    lib.startSidecarWalk(s, new Set(['b.txt', 'late.txt', 'later.txt']), 'late.txt');
+    expect(s.done, "a seen name's pairs go; an unseen covered name keeps its state").toEqual({ names: ['b.txt'], text: [['b.txt', 4]], toolu: [] });
+    expect(s.walk).toEqual({ names: ['late.txt', 'later.txt'], after: 0, text: [], toolu: [] });
+  });
+});
+
+describe('CP-39 Task 3: the sidecar scan cursor and what a finished wrap records (D-6938)', () => {
+  it('round-trips; no row is a clean wrap from the start; anything malformed is a held wrap from the start', async () => {
+    const lib = await import('../../ccd/history/lib.mjs');
+    const at = { v: 1, dir: '/home/u/x/projects/-home-u-tree/6f1c2e3a-0b4d-4c5e-8f60-718293a4b5c6', taken: 3, left: 1, held: false };
+    expect(lib.parseSidecarScanAt(lib.formatSidecarScanAt(at))).toEqual(at);
+    expect(lib.parseSidecarScanAt(lib.formatSidecarScanAt({ ...at, dir: null }))).toEqual({ ...at, dir: null });
+    expect(lib.parseSidecarScanAt(null)).toEqual({ v: 1, dir: null, taken: 0, left: 0, held: false });
+    for (const b of ['', '{}', 'not json', JSON.stringify({ ...at, v: 2 }), JSON.stringify({ ...at, taken: -1 }), JSON.stringify({ ...at, left: 1.5 }), JSON.stringify({ ...at, held: 'no' }), JSON.stringify({ ...at, dir: 7 })]) {
+      expect(lib.parseSidecarScanAt(b), b).toEqual({ v: 1, dir: null, taken: 0, left: 0, held: true });
+    }
+  });
+  it('a finished wrap records its count always, and the mark only when nothing held it', async () => {
+    const lib = await import('../../ccd/history/lib.mjs');
+    expect(lib.sidecarWrapClose({ v: 1, dir: null, taken: 3, left: 2, held: false })).toEqual({ unseen: 5, mark: true });
+    expect(lib.sidecarWrapClose({ v: 1, dir: null, taken: 3, left: 2, held: true })).toEqual({ unseen: 5, mark: false });
+  });
+});
+
+describe('CP-39 Task 4: the ladder of ceilings and the floors, from one set of shares (D-6935, D-6939)', () => {
+  it('the default budget: ingest ends at 54 s; each step\'s ceiling is the budget less the shares after it; each floor is its share; the floors sum to 36 s', async () => {
+    const lib = await import('../../ccd/history/lib.mjs');
+    expect(lib.DERIVE_SHARES).toEqual({ fts: 150, nodes: 100, card: 50, census: 100 });
+    const run = { maxMs: lib.RUN_BUDGET_MS, maxBytes: lib.RUN_BUDGET_BYTES };
+    const r = lib.budgetRungs(run);
+    expect(Object.fromEntries(Object.entries(r).map(([k, v]) => [k, v.maxMs]))).toEqual({ ingest: 54_000, fts: 67_500, nodes: 76_500, card: 81_000, census: 90_000 });
+    expect(r.ingest.maxBytes).toBe(Math.floor(lib.RUN_BUDGET_BYTES * 600 / 1000));
+    expect(r.census).toEqual(run);
+    const f = lib.budgetFloors(run);
+    expect(Object.fromEntries(Object.entries(f).map(([k, v]) => [k, v.maxMs]))).toEqual({ fts: 13_500, nodes: 9_000, card: 4_500, census: 9_000 });
+    expect(f.fts.maxBytes).toBe(Math.floor(lib.RUN_BUDGET_BYTES * 150 / 1000));
+    expect(Object.values(f).reduce((n, x) => n + x.maxMs, 0), 'the overrun bound\'s time part').toBe(36_000);
+  });
+  it('a ceiling admits one unit whenever the run\'s own limit is at least 1; a floor rounds down to none (P1)', async () => {
+    const lib = await import('../../ccd/history/lib.mjs');
+    for (const v of Object.values(lib.budgetRungs({ maxMs: 1, maxBytes: 1 }))) expect(v).toEqual({ maxMs: 1, maxBytes: 1 });
+    for (const v of Object.values(lib.budgetRungs({ maxMs: 0, maxBytes: 0 }))) expect(v).toEqual({ maxMs: 0, maxBytes: 0 });
+    for (const v of Object.values(lib.budgetFloors({ maxMs: 1, maxBytes: 1 }))) expect(v).toEqual({ maxMs: 0, maxBytes: 0 });
+  });
+  it('monotone, integral and never above the run\'s limits, for any budget a test injects', async () => {
+    const lib = await import('../../ccd/history/lib.mjs');
+    for (const b of [{ maxMs: 0, maxBytes: 0 }, { maxMs: 1, maxBytes: 1 }, { maxMs: 35, maxBytes: 1024 }, { maxMs: 1_000, maxBytes: 7 }]) {
+      const r = lib.budgetRungs(b);
+      const order = [r.ingest, r.fts, r.nodes, r.card, r.census];
+      for (let i = 1; i < order.length; i += 1) {
+        expect(order[i]!.maxMs).toBeGreaterThanOrEqual(order[i - 1]!.maxMs);
+        expect(order[i]!.maxBytes).toBeGreaterThanOrEqual(order[i - 1]!.maxBytes);
+      }
+      for (const x of [...order, ...Object.values(lib.budgetFloors(b))]) {
+        expect(Number.isInteger(x.maxMs) && x.maxMs <= b.maxMs).toBe(true);
+        expect(Number.isInteger(x.maxBytes) && x.maxBytes <= b.maxBytes).toBe(true);
+      }
+    }
   });
 });

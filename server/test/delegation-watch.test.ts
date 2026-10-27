@@ -159,7 +159,7 @@ function world(opts: WorldOptions = {}): World {
   const ccdVerbs = opts.ccdVerbs === undefined ? ['caps', DELEGATION_EVENTS_CAP] : opts.ccdVerbs;
   const fleet = { connected: true, downSince: null, ccdVerbs };
   const deps = {
-    ...testDeps(home), cfg, io, ...(opts.coord === false ? {} : { coord }),
+    ...testDeps(home), monotonicMs: () => Date.now(), cfg, io, ...(opts.coord === false ? {} : { coord }),
     fleetState: fleet,
   };
   const made: World = { home, cfg, watcher: new FleetWatcher(deps as never, new Bus(), 10_000), coord, io, faults, calls, ccrcDir: path.join(home, '.ccrc'), fleet };

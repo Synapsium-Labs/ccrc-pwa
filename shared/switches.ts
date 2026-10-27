@@ -52,6 +52,10 @@ export const DEAD_COORDINATOR_LANE_LIVE_MARKER = 'dead-coordinator-lane-live';
 /** `$REG/child-stale-reclaim-live`: arms the child reclaim's stale arm (D-6639): a kept child idle for seven days is
  *  reclaimed. Absent, the lane records "child would be reclaimed (stale)" and acts on nothing. */
 export const CHILD_STALE_RECLAIM_LIVE_MARKER = 'child-stale-reclaim-live';
+/** `$REG/child-superseded-reclaim-live`: arms the child reclaim's superseded-review release (D-6922):
+ *  an earlier review child is reclaimed once a later review of the same run has closed, though the reviewed run is open.
+ *  Absent, the lane records "review report would be reclaimed (superseded)" and acts on nothing. */
+export const CHILD_SUPERSEDED_RECLAIM_LIVE_MARKER = 'child-superseded-reclaim-live';
 /** `$REG/idle-compact-nudge-disabled`: the idle-compaction nudge's kill switch. */
 export const IDLE_NUDGE_DISABLED_MARKER = 'idle-compact-nudge-disabled';
 /** `$REG/mail-gate-strict`: the mail gate's pre-wave-1 rule. */
@@ -190,12 +194,17 @@ export const SWITCHES = {
   },
   [CHILD_RECLAIM_DISABLED_MARKER]: {
     storage: { marker: CHILD_RECLAIM_DISABLED_MARKER }, default: 'absent: child reclaim runs', owner: 'C4',
-    meaning: 'Meant to switch off child reclaim alone, leaving expiry, collect and the coordinator reclaim running. Nothing reads it yet: touching it stops nothing until the child-spent reason moves (ARCH-44).',
+    meaning: 'Switches off child reclaim alone: the sweep and the close hand-off queue none, and the executor refuses to act. Expiry, collect, the dead-coordinator lane and stop-done keep running; reclaim-paused stops those too.',
     writer: 'hand-only',
   },
   [CHILD_STALE_RECLAIM_LIVE_MARKER]: {
     storage: { marker: CHILD_STALE_RECLAIM_LIVE_MARKER }, default: 'absent: shadow, the lane records what it would reclaim',
     owner: 'C4', meaning: 'The stale arm acts: a kept child idle for seven days is reclaimed, its work pinned to the attic.',
+    writer: 'hand-only',
+  },
+  [CHILD_SUPERSEDED_RECLAIM_LIVE_MARKER]: {
+    storage: { marker: CHILD_SUPERSEDED_RECLAIM_LIVE_MARKER }, default: 'absent: shadow, the lane records what it would reclaim',
+    owner: 'C4', meaning: 'An earlier review child is reclaimed once a later review of the same run has closed, though the reviewed run is still open.',
     writer: 'hand-only',
   },
   [IDLE_NUDGE_DISABLED_MARKER]: {

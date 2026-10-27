@@ -9,7 +9,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import fs from 'node:fs';
-import { makeCcdHarness, ghContainedEnv, CCD, WS_ADD, type CcdHarness } from './ccdWsHelpers.js';
+import { makeCcdHarness, ghContainedEnv, CCD, WS_ADD, type CcdHarness, ccdSource } from './ccdWsHelpers.js';
 
 let h: CcdHarness;
 let home: string;
@@ -275,7 +275,7 @@ describe('the sanitiser and the writer are ws-add\'s, not a second copy', () => 
   });
 
   it('cmd_ws_add and cmd_ws_title both call _ws_title_check and _ws_title_set, and neither writes `title` itself', () => {
-    const src = fs.readFileSync(CCD, 'utf8');
+    const src = ccdSource();
     const body = (name: string): string => {
       const m = new RegExp(`^${name}\\(\\) \\{[\\s\\S]*?^\\}$`, 'm').exec(src);
       if (m === null) throw new Error(`no ${name} in ccd`);

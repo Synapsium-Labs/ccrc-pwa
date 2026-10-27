@@ -719,6 +719,16 @@ function pairDecl(): { bodySource: string; templateSource: string; entryDest: st
   return { bodySource: one('BODY_SOURCE'), templateSource: one('TEMPLATE_SOURCE'), entryDest: one('ENTRY_DEST'), bodyDest: one('BODY_DEST') };
 }
 
+/** The library the body pins and the publisher places FIRST (D-6913): its source and destination, read from the same helper. */
+function libDecl(): { libSource: string; libDest: string } {
+  const one = (name: string): string => {
+    const all = [...PAIR_HELPER.matchAll(new RegExp(`^${name} = '([^'\\n]+)'$`, 'gm'))];
+    if (all.length !== 1) throw new Error(`install-census.test.ts: expected exactly one \`${name} = '…'\` line in ${PAIR_HELPER_REL}, found ${all.length}`);
+    return all[0]![1]!;
+  };
+  return { libSource: one('LIB_SOURCE'), libDest: one('LIB_DEST') };
+}
+
 /** The `.local/bin` name the pair publisher places, when `body` calls `publisher`
  *  — exactly once, or a THROW: a second call is a second publication nobody ordered. */
 function pairBin(body: string, publisher: string, where: string): Set<string> {
@@ -1790,6 +1800,45 @@ describe('ccd\'s pair (D-3696): the body under ~/.local/libexec is placed, remov
     expect(b, `_upd_backup_set does not back up the body at $HOME/${bodyDest}`).toBeGreaterThan(-1);
     expect(e, `_upd_backup_set does not back up the launcher at $HOME/${entryDest}`).toBeGreaterThan(-1);
     expect(b, 'the body must be backed up (and so restored) BEFORE the launcher that names its digest').toBeLessThan(e);
+  });
+});
+
+describe('ccd\'s library (D-6913): the file the body pins is placed by the pair publisher, removed by name and backed up before the body', () => {
+  it('the publisher declares it once, under a lib/ directory beside the body, and it is a tracked file', () => {
+    const { libSource, libDest } = libDecl();
+    const { bodyDest } = pairDecl();
+    expect(libDest, 'the library lives in lib/ beside the body').toBe(`${path.posix.dirname(bodyDest)}/lib/${path.posix.basename(libSource)}`);
+    expect(trackedFiles().has(libSource), `${libSource} is not tracked`).toBe(true);
+  });
+
+  it('the uninstall removes the library by name and its directory only with rmdir, before the directory that holds it', () => {
+    const { libDest } = libDecl();
+    const { bodyDest } = pairDecl();
+    const body = fnBody('_uninst_tree_bins');
+    expect(rmFOperands(body), `_uninst_tree_bins does not rm -f the library at $HOME/${libDest}`).toContain(`$HOME/${libDest}`);
+    const libDir = `$HOME/${path.posix.dirname(libDest)}`;
+    const dirs = calls(body, 'rmdir').map(operands);
+    expect(dirs, `_uninst_tree_bins does not rmdir ${libDir} (only-if-empty)`).toContainEqual([libDir]);
+    expect(dirs.findIndex((o) => o[0] === libDir), 'the library directory is removed before its parent')
+      .toBeLessThan(dirs.findIndex((o) => o[0] === `$HOME/${path.posix.dirname(bodyDest)}`));
+  });
+
+  it('the update backup takes the library BEFORE the body that pins it — arm 3 restores in that order', () => {
+    const { libDest } = libDecl();
+    const { bodyDest } = pairDecl();
+    const sources = calls(fnBody('_upd_backup_set'), '_upd_backup_copy').map((a) => a[0]!);
+    expect(sources.indexOf(`$HOME/${libDest}`), `_upd_backup_set does not back up the library at $HOME/${libDest}`).toBeGreaterThan(-1);
+    expect(sources.indexOf(`$HOME/${libDest}`)).toBeLessThan(sources.indexOf(`$HOME/${bodyDest}`));
+  });
+
+  it('deploy.sh backs the library up before the body, in the same remote command', () => {
+    const { libDest } = libDecl();
+    const { bodyDest } = pairDecl();
+    const text = deployText();
+    const l = text.indexOf(`~/${libDest}`);
+    const b = text.indexOf(`~/${bodyDest} ~/ccrc-backups`);
+    expect(l, `deploy.sh does not back up the library at ~/${libDest}`).toBeGreaterThan(-1);
+    expect(l).toBeLessThan(b);
   });
 });
 

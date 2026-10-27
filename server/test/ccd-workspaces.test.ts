@@ -1548,15 +1548,11 @@ describe('every _ws_slug_residue and ws-add-refusal assertion is on the disposit
       what: 'retargeted to `<id>.`-prefixed basenames — one assertion and two comments naming the glob family it shares' },
     { file: 'ccd-authdead.test.ts', grammar: 'residue', count: 1,
       what: 'a comment naming the three globs that share the dot-leading second pass' },
-    { file: 'session-hook.test.ts', grammar: 'residue', count: 4,
+    { file: 'session-hook.test.ts', grammar: 'residue', count: 2,
       what: 'the documentation-consistency pin that the hook comment names BOTH halves of the pair (a comment '
-        + 'stating the pair rule, and the assertion itself) — plus TWO prose mentions added when the deferred '
-        + 'citation census landed on the merged tree (account-pool-membership wave 1): both name '
-        + '`_ws_slug_residue` as the REFERENT whose body moved, quoting its old and new line spans as the proof '
-        + 'that a `**Files:**` anchor shifted rather than broke. They are census EVIDENCE, not assertions about '
-        + 'slug residue, and they are counted here for the same reason the brace-template entry below counts its '
-        + 'own retracting comments: this grammar deliberately sees prose, so the honest move is to name what the '
-        + 'prose is rather than reword a citation proof to duck an unrelated census' },
+        + 'stating the pair rule, and the assertion itself). The two prose mentions the deferred citation census '
+        + 'once added (re-measure evidence quoting `_ws_slug_residue`\'s moved line spans) left with that '
+        + 'narrative when the frozen compaction-card documents moved to being measured at their freeze commit' },
     { file: 'ccd-child-tmproot-witness.test.ts', grammar: 'residue', count: 2,
       what: 'the temp-root witness\'s walker census (child-reclamation wave 6): a case title and one assertion that `_ws_slug_residue` names nothing for a slug whose only trace is its dotless `$REG/tmproots/<id>` witness, the proof that the witness is invisible to the slug walkers' },
     { file: 'ccd-collect-record.test.ts', grammar: 'residue', count: 2,

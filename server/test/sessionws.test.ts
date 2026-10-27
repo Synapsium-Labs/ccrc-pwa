@@ -407,8 +407,10 @@ const fixture = (name: string): string =>
 /** One poll of a live stream. `tick` is private only to keep it off the class's
  *  public surface; the harness wants exactly what the 2 s interval does, awaited,
  *  so these tests never sleep. */
-const pollOnce = (s: SessionStream): Promise<void> =>
-  (s as unknown as { tick: () => Promise<void> }).tick();
+const pollOnce = async (s: SessionStream): Promise<void> => {
+  await (s as unknown as { tick: () => Promise<void> }).tick();
+  await (s as unknown as { feed: { poll(): Promise<void> } | null }).feed?.poll();   // the session feed's own tick (ARCH-52)
+};
 
 /**
  * Run a SessionStream against a scripted sequence of pane captures and transcript
@@ -3209,6 +3211,7 @@ describe('outstanding mail push (Build 7 Task 6)', () => {
   let app: FastifyInstance | undefined;
   let port: number;
   let coord: CoordStore;
+  let bus: Bus;
 
   beforeEach(async () => {
     home = mkTmp('ccrc-sws-mail-');
@@ -3222,7 +3225,8 @@ describe('outstanding mail push (Build 7 Task 6)', () => {
     const cfg = loadConfig({ CCRC_HOME: home });
     coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
     const deps: Deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(), coord };
-    app = await buildServer(deps, new Bus());
+    bus = new Bus();
+    app = await buildServer(deps, bus);
     await app.listen({ host: '127.0.0.1', port: 0 });
     const addr = app.server.address();
     port = typeof addr === 'object' && addr !== null ? addr.port : 0;
@@ -3436,6 +3440,8 @@ describe('outstanding mail push (Build 7 Task 6)', () => {
     expect(initialMail?.mail).toEqual([]);
 
     queueTo(ID, 'fresh mail after connect');
+    // The tick is the watcher's (ARCH-52): a session's feed has no clock, a published pane is what wakes it.
+    bus.emit(`pane:${ID}`, { at: Date.now(), doneAt: Date.now(), pane: 'idle\n❯ \n' });
     let mailFrame: { type: string; mail: { subject: string }[] } | undefined;
     for (let i = 0; i < 6 && !mailFrame; i++) {
       const m = await next(6000);
@@ -3713,7 +3719,7 @@ describe('the tasks frame carries touchedAt (D-5372)', () => {
       await stream.start();
       const later = new Date('2026-10-17T18:00:00Z');
       utimesSync(path.join(home, '.claude-a', 'tasks', UUID_A, '1.json'), later, later);
-      await (stream as unknown as { checkTasks(c: string, u: string): Promise<void> }).checkTasks(path.join(home, '.claude-a'), UUID_A);
+      await (stream as unknown as { feed: { poll(): Promise<void> } }).feed.poll();   // the next reading of the plan
     } finally {
       stream.stop();
     }

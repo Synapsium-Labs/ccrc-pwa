@@ -384,6 +384,14 @@ leave a wave undispatchable pending a ruling below.
   run is terminal the review child is reclaimed like any other. Wave 3 DROPS its coordinator step-6
   "copy the report before closing" change and restores the step's text and pins. Wave 5's row for such a child
   answers `pending` with a sentence saying it is kept while the run it reviewed is open.
+  - **Amended by review-report-superseded (D-6922).** "Lives until the run it reviewed is terminal" is no longer
+    all of it: an EARLIER review child is released while the reviewed run is still open once a LATER review of the
+    same run (`runs.reviews`, a higher run id) has itself closed `done`, because the coordinator now cites that newer
+    report. A later review still open, or one that ended `failed` or abandoned, supersedes nothing, and the newest
+    review child is never released this way. Every other keep still answers first. The release ships shadow-first
+    behind the hand-only marker `$REG/child-superseded-reclaim-live`: absent, the verdict keeps the child as before
+    and the lane records "review report would be reclaimed (superseded)" once per pair, only when the verdict with
+    the marker standing would answer eligible (or `hold-retired`).
 - **R17 — an archive request on an eligible child is overruled: ACCEPTED** (wave 3's
   `child-archive-overruled`). For an eligible child, `state:'failed', archive:true` takes the release arm and
   the child is reclaimed; a non-child's archive is unchanged. Rule 4: an archived child would wait on a human.

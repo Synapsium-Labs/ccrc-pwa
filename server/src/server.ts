@@ -63,6 +63,7 @@ import { maskBody, maskedError, maskFleetFrame } from './accounts/egress.js';
 import { Viewers } from './viewer.js';
 import { MAIL_TOKEN_HEADER, checkMailToken } from './coord/token.js';
 import { registerCoordRoutes } from './coord/routes.js';
+import { createQuestions } from './coord/questions.js';
 import { registerUpdateRoutes } from './update/routes.js';
 import { composeDocs, registerDocsReadRoutes, registerDocsRefreshRoute } from './docs/routes.js';
 import { installDocsRequestPolicy, installDocsResponsePolicy } from './docs/hooks.js';
@@ -75,6 +76,7 @@ import { classifyTitleFailure, planRetitle } from './workspaceTitle.js';
 import { queueProgramKickoff } from './coord/kickoff.js';
 import { buildDigest, correctDigestRow, digestDayFor, digestWindow, parseDigestCorrectBody, parseDigestDay, readDigestHour } from './coord/digest.js';
 import { toRunSummary, type AskRow, type AskTakeResult, type CoordStore, type NodeRow } from './coord/store.js';
+import { incarnationsOfSessions, withChildIds } from './coord/runWire.js';
 import { buildInfoOfRow } from './update/inventory.js';
 import { AuthSecretUnusable, readAuthSecret, verifyPassphrase, type AuthSecret } from './auth/secret.js';
 import { ABSOLUTE_TTL_MS, SessionStore } from './auth/sessions.js';
@@ -205,7 +207,7 @@ export const WRITE_ANSWER_EXEMPT = /^\/api\/(?:auth\/|token\/|sessions\/:id\/upl
 export const MASKED_GET_ROUTES: ReadonlySet<string> = new Set([
   '/api/fleet', '/api/digest', '/api/sessions/:id/pr', '/api/sessions/:id/workspace/audit', '/api/coord/stall-watch',
   '/api/runs', '/api/runs/:id', '/api/runs/:id/signals', '/api/lifecycle', '/api/peers', '/api/claims', '/api/ledger', '/api/asks',
-  '/api/approvals/:id',
+  '/api/approvals/:id', '/api/coord/review-cap/:id',
 ]);
 /** Whether the one answer hook masks a route's answer (D-5995). */
 export const answerMasked = (method: string, url: string | undefined): boolean =>
@@ -1270,6 +1272,8 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     const archivedHeld = watcher?.archivedHeld() ?? undefined;
     // The disk alarm's block (D-6615), held by `sweepDisk`. Absent before its first sweep: absence reads as UNKNOWN.
     const disk = watcher?.disk() ?? undefined;
+    // The host's PSI and the link's classification by it (#1170). Local mode has no link: it is always up.
+    const psi = watcher?.pressure(deps.cfg.fleetMode !== 'remote' || deps.fleetState?.connected === true) ?? undefined;
     if (deps.cfg.fleetMode === 'remote' && deps.fleetState) {
       // The two stamps: with a coordination database, the inventory's rows —
       // re-measured every minute by `sweepInventory`, superseded rows excluded
@@ -1294,6 +1298,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
         ...(delegation ? { delegation } : {}),
         ...(archivedHeld ? { archivedHeld } : {}),
         ...(disk ? { disk } : {}),
+        ...(psi ? { psi } : {}),
       };
     }
     // Local mode drives ccd on this same box, off this same roster: there is
@@ -1317,6 +1322,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       ...(delegation ? { delegation } : {}),
       ...(archivedHeld ? { archivedHeld } : {}),
       ...(disk ? { disk } : {}),
+      ...(psi ? { psi } : {}),
     };
   });
 
@@ -1586,7 +1592,10 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
           if (!read.ok) {
             console.warn(`ccrc-server: /ws/fleet cold-start runs() refused (${read.detail}) — no runs frame for this socket`);
           } else {
-            onRuns(read.runs.map(toRunSummary));
+            // ARCH-61 (#796): `childIds` against the fleet this socket's frame carries; with no listable registry there is
+            // no reading of the sessions to decide against, so the frame goes without it (absence permits).
+            const summaries = read.runs.map(toRunSummary);
+            onRuns(sessions === null ? summaries : withChildIds(deps.coord, summaries, incarnationsOfSessions(deps.coord, sessions), (c, d) => console.warn(`ccrc-server: /ws/fleet cold-start could not read the series of ${c} (${d}) — childIds absent for its runs`)));
           }
         }
         catch (err) {
@@ -1854,7 +1863,10 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   //
   // It answers with its handle (workspace lifecycle §5.2): the coordination serialiser with the operator abandon inside
   // it, which the archive door below runs its `{programme:'end'}` on.
-  const coordRoutes = registerCoordRoutes(app, deps, bus, sessionAuth, askDeps, watcher, notice);
+  // D-7026: this server's ONE owner of question state, the watcher's own when it is given one (`index.ts` hands it
+  // one, so production has exactly one instance), and its own otherwise; never module scope.
+  const questions = watcher?.questions ?? createQuestions(deps);
+  const coordRoutes = registerCoordRoutes(app, deps, bus, sessionAuth, askDeps, watcher, notice, questions);
   // The dead-coordinator lane (workspace lifecycle §5.4) ends a programme only on this same serialiser: the watcher is
   // handed the sweep's abandon here, and has no other way to close a run. Called optionally: a test's stand-in watcher
   // (a structural double, not a `FleetWatcher`) carries no such method, and has no lane to hand it to.
@@ -3854,8 +3866,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     const plan = coord === undefined
       ? await decideArchive(null, id, flags, measure)
       : await coordRoutes.withAbandon(coord, (abandon, abandonRefusal) => decideArchive({
-        openRunsForSession: (sid) => coord.openRunsForSession(sid),
-        openRunsClaimedBy: (sid) => coord.openRunsClaimedBy(sid),
+        bindingsOf: (sid) => coord.bindingsOf(sid),
         abandonRefusal,
         abandon,
       }, id, flags, measure));

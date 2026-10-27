@@ -23,16 +23,21 @@ import type { ChildBirth } from './childSpent.js';
  *
  * WHICH RUNS BIND A BORN INCARNATION. A run names the session, and
  *   - carries a birth: it binds iff that birth is THIS incarnation's (same instant, recorded for this session id);
- *   - carries none (a later wave opened on a worker that already exists, which `bindSession` leaves unstamped): opened
- *     at or after the birth it binds; opened BEFORE the birth it is UNDECIDABLE, a third answer and not `false`. Two
- *     histories produce that row and the columns cannot tell them apart: a ghost (#746, #758: the run was opened for an
- *     earlier occupant of a reused name) and a live binding (`openRun`'s dup arm returns the planned run with its
- *     original `openedAt`, and the open route then binds it, so a run opened before the occupant was born is bound to
- *     it). Deviation from #758: the rule is not "a run opened before the birth cannot bind". An undecidable run is
- *     never a parent, a claimant or a child (no ghost coordinator), and is never dropped: `bindingOf` lists it in
- *     `undecided`, so a reader says "unknown" and not "coordinator gone". The exact answer needs the bind to record
- *     the incarnation it bound (a bound-birth column written by `bindSession`); that migration is #1407, which also
- *     closes the `unborn` gap above (an unborn session that reuses a name keeps the id-string rule).
+ *   - carries none (a run bound before this build's stamp, or to a session that never had a placeable birth): opened at or
+ *     after the birth it binds; opened BEFORE the birth it is UNDECIDABLE, a third answer and not `false`. Two histories
+ *     produce that row and the columns cannot tell them apart: a ghost (#746, #758: the run was opened for an earlier
+ *     occupant of a reused name) and a live binding (`openRun`'s dup arm returns the planned run with its original
+ *     `openedAt`, and the open route then binds it). An undecidable run is never a parent, a claimant or a child (no
+ *     ghost coordinator), and is never dropped: `bindingOf` lists it in `undecided`. Since ARCH-62 slice 4 (#1407)
+ *     `CoordStore.bindSession` records the occupant's birth on a later wave it binds (`stampOccupantBirth`), so a run
+ *     bound to the live worker is `bound` and a run bound to an earlier occupant is `unbound`, whatever its `openedAt`;
+ *     the undecidable arm is left for rows bound before the stamp. An `unborn` session that reuses a name keeps the
+ *     id-string rule (gap 1 of #1407, tracked in #1532). One LEGACY exception, accepted and pinned
+ *     (`run-binding-bound-birth.test.ts`): migration 16's backfill dated every bound run to its OWN `dispatchStartedAt`,
+ *     later waves included, so for a worker alive across that migration the newest placeable birth of its id can be a
+ *     backfilled wave-N row rather than its minting run. A wave bound after this build is then stamped with that
+ *     wave-N instant and reads `unbound` for the live occupant, as the backfilled wave-N row itself already does. The
+ *     columns cannot tell a backfilled wave-N row from a minting run, so the stamp does not guess; such workers age out.
  *
  * TWO QUERIES, NAMED. `newest` is the newest run that binds the incarnation in ANY state (the card's `session.run`);
  * `open` is the newest that is not terminal (`session.openRun`). A state this build cannot name counts as open, as
@@ -77,9 +82,14 @@ export interface BindingRun {
 /** Whether `run` binds `incarnation`: yes, no, or `'undecidable'` (an unstamped run opened before the birth). */
 export type RunBinds = 'bound' | 'unbound' | 'undecidable';
 
+/** Whether `run` names `sessionId` as its worker: the id-string rule, the first test of `bindsRun` and the whole test for a
+ *  caller that holds ONE run (the minting run of a child's marker, a hold candidate) and no series. It proves no birth, so a
+ *  decision that must tell one occupant of a reused name from another reads the series through `bindingOf` instead. */
+export const runNamesSession = (run: { readonly sessionId: string | null }, sessionId: string): boolean => run.sessionId === sessionId;
+
 /** Whether `run` is bound to `incarnation`, by the rules above. */
 export function bindsRun(incarnation: Incarnation, run: BindingRun): RunBinds {
-  if (run.sessionId !== incarnation.sessionId) return 'unbound';
+  if (!runNamesSession(run, incarnation.sessionId)) return 'unbound';
   if (incarnation.kind === 'unborn') return 'bound';
   if (run.sessionBornAt !== null) {
     return run.sessionBornFor === incarnation.sessionId && run.sessionBornAt === incarnation.bornAt ? 'bound' : 'unbound';
@@ -120,18 +130,18 @@ export function parentOrMinter(binding: SessionBinding, minter: string | null): 
   return binding.undecided.find((r) => isOpen(r) && r.claimedBy === minter)?.claimedBy ?? null;
 }
 
-/** A child's parent, decided once for every caller (heldFor, the drift lane): the store's proven parent when it has one,
- *  else `parentOrMinter` over the child's binding series, so a run planned before the birth and bound to it (wave N >= 2)
- *  keeps the minting run's claimant while a ghost of another programme never becomes the parent. `series` is the
- *  store's `bindingRunsOf` read; a failed read decides nothing (`null`). */
-export function childParentOf(
-  proven: string | null,
-  series: { readonly ok: true; readonly runs: readonly BindingRun[] } | { readonly ok: false },
-  minter: string | null,
-  incarnation: Incarnation,
-): string | null {
-  if (proven !== null || !series.ok) return proven;
-  return parentOrMinter(bindingOf(series.runs, incarnation), minter);
+/** Whether the series holds an OPEN run that names the session but that the binding cannot place (`undecided`) and that
+ *  records no claimant. It still counts as a sibling, as every reader counted it before the binding (the ruling on ARCH-62
+ *  slice 1): the child keeps a run it cannot prove, so it is `run-unclaimed`, not "no run names it". */
+export const hasOwnerlessUndecidedOpen = (binding: SessionBinding): boolean =>
+  binding.undecided.some((r) => isOpen(r) && r.claimedBy === null);
+
+/** A child's parent, decided once for every caller (heldFor, the drift lane): the claimant of its open binding, else
+ *  `parentOrMinter` over the same series, so a run planned before the birth and bound to it (wave N >= 2) keeps the
+ *  minting run's claimant while a ghost of another programme never becomes the parent. `runs` is the store's
+ *  `bindingRunsOf` series for the child; `minter` the claimant of the run the child's mark names. */
+export function childParentOf(runs: readonly BindingRun[], minter: string | null, incarnation: Incarnation): string | null {
+  return parentOrMinter(bindingOf(runs, incarnation), minter);
 }
 
 /** EVERY coordinator that currently has this incarnation working for it, newest open run first, each once. */

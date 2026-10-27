@@ -33,10 +33,13 @@
 import {
   ARCHIVE_REFUSALS, archiveInterrupts, type ArchiveBody, type ArchiveRefusal, type FleetSession,
 } from '../../../shared/api.js';
+import { REFUSAL_STATUS } from '../../../shared/refusal.js';
+import { workspaceEdge } from '../../../shared/workspaceTransitions.js';
 import type { MeasuredStat } from '../io.js';
 import { turnSays, turnWordOf } from '../sessionReading.js';
 import type { CloseOutcome } from './close.js';
 import type { OpenSibling, OpenSiblingsResult } from './store.js';
+import type { SessionBindings } from './bindingReads.js';
 
 /** The consents a request carries, read once. `force` and `interrupt` are honoured only as `true` (anything else is
  *  absent, as `force` always was); `programme` is `'end'` or absent — a consent to end a programme is exact or it is
@@ -207,8 +210,9 @@ export function worktreeOf(s: MeasuredStat): ArchiveMeasure['worktree'] {
  *  and the two functions `CoordRoutesHandle.withAbandon` hands it; `null` on a box with no coordination database,
  *  which archives exactly as it did before coordination existed. */
 export interface ArchiveCoordPort {
-  openRunsForSession(sessionId: string): OpenSiblingsResult;
-  openRunsClaimedBy(claimantId: string): OpenSiblingsResult;
+  /** The session's open binding, asked through the one query (`CoordStore.bindingsOf`, ARCH-42): its open runs as worker
+   *  and as claimant. */
+  bindingsOf(sessionId: string): Pick<SessionBindings, 'worker' | 'claimant'>;
   /** What the abandon arm would refuse for this run from its row alone, read without acting (close.ts's
    *  `abandonRefusal`); `null` when it can move it. */
   abandonRefusal(runId: number): Extract<CloseOutcome, { ok: false }> | null;
@@ -222,8 +226,17 @@ export type ArchiveDecision =
   | { readonly ok: false; readonly reply: ArchiveReply }
   | { readonly ok: true; readonly stop: boolean; readonly wsArchive: boolean; readonly ended: readonly OpenSibling[] };
 
-const refuse = (status: number, error: ArchiveRefusal | 'unsupported', extra: Record<string, unknown> = {}):
-  ArchiveDecision => ({ ok: false, reply: { status, body: { ok: false, error, ...extra } } });
+const reply = (status: number, error: ArchiveRefusal | 'unsupported', extra: Record<string, unknown>): ArchiveDecision =>
+  ({ ok: false, reply: { status, body: { ok: false, error, ...extra } } });
+
+/** A refusal is an edge of `WORKSPACE_TRANSITIONS` (ARCH-41, #776) and its status is `REFUSAL_STATUS`'s, the one table
+ *  the wire reads (ARCH-36): a word with no row throws rather than being sent, and no status is spelled here. */
+export const edgeStatus = (code: ArchiveRefusal): number => REFUSAL_STATUS[workspaceEdge('archive', code).refusal];
+const refuseEdge = (code: ArchiveRefusal, extra: Record<string, unknown> = {}): ArchiveDecision =>
+  reply(edgeStatus(code), code, extra);
+
+/** A box whose ccd predates the verb: a route-shape word (no state of the workspace causes it), so no table row. */
+const unsupported = (): ArchiveDecision => reply(501, 'unsupported', {});
 
 const thrown = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
@@ -252,38 +265,38 @@ export async function decideArchive(
 ): Promise<ArchiveDecision> {
   // `unmeasured` first, and blind to the consents: `interrupt` is the consent to lose a turn that was READ in progress,
   // never to act on a state nobody could read (D-3881). Then a measured busy, which `interrupt` lets through.
-  if (m.turn === 'unmeasured') return refuse(409, ARCHIVE_REFUSALS.statusUnknown);
-  if (m.turn === 'busy' && !flags.interrupt) return refuse(409, ARCHIVE_REFUSALS.sessionBusy);
+  if (m.turn === 'unmeasured') return refuseEdge(ARCHIVE_REFUSALS.statusUnknown);
+  if (m.turn === 'busy' && !flags.interrupt) return refuseEdge(ARCHIVE_REFUSALS.sessionBusy);
   // A PROVEN absence only. `unmeasured` proceeds: see `ArchiveMeasure.worktree`.
-  if (m.workspace && m.worktree === 'absent') return refuse(409, ARCHIVE_REFUSALS.worktreeGone);
+  if (m.workspace && m.worktree === 'absent') return refuseEdge(ARCHIVE_REFUSALS.worktreeGone);
   let claimed: readonly OpenSibling[] = [];
   if (port !== null) {
     if (!flags.force) {
-      const worker = measured(() => port.openRunsForSession(id));
+      const worker = measured(() => port.bindingsOf(id).worker());
       // D-2545: refused as CLAIMED with an EMPTY `runs` — the field's shape does not change with the condition — and
       // the store's own `detail`, which this answer used to drop (workspace lifecycle wave 3b, the carried follow-up).
-      if (!worker.ok) return refuse(409, ARCHIVE_REFUSALS.runOpen, { runs: [], detail: worker.detail });
-      if (worker.siblings.length > 0) return refuse(409, ARCHIVE_REFUSALS.runOpen, { runs: worker.siblings });
+      if (!worker.ok) return refuseEdge(ARCHIVE_REFUSALS.runOpen, { runs: [], detail: worker.detail });
+      if (worker.siblings.length > 0) return refuseEdge(ARCHIVE_REFUSALS.runOpen, { runs: worker.siblings });
     }
-    const coordinates = measured(() => port.openRunsClaimedBy(id));
+    const coordinates = measured(() => port.bindingsOf(id).claimant());
     // Fail-shut, with or without `programme:'end'`: a programme this box cannot enumerate cannot be ended.
-    if (!coordinates.ok) return refuse(409, ARCHIVE_REFUSALS.coordinatorHasOpenRuns, { runs: [], detail: coordinates.detail });
+    if (!coordinates.ok) return refuseEdge(ARCHIVE_REFUSALS.coordinatorHasOpenRuns, { runs: [], detail: coordinates.detail });
     claimed = coordinates.siblings;
     if (claimed.length > 0 && !flags.programmeEnd) {
-      return refuse(409, ARCHIVE_REFUSALS.coordinatorHasOpenRuns, { runs: claimed });
+      return refuseEdge(ARCHIVE_REFUSALS.coordinatorHasOpenRuns, { runs: claimed });
     }
   }
-  if (m.workspace && !m.verbSupported) return refuse(501, 'unsupported');
+  if (m.workspace && !m.verbSupported) return unsupported();
   // The last check: every run the abandon arm could not move from its row alone, found BEFORE the first is ended —
   // otherwise whether a programme is left partly ended would depend on run id order. Nothing is ended here.
   for (const run of claimed) {
     let why: Extract<CloseOutcome, { ok: false }> | null;
     try { why = port!.abandonRefusal(run.id); } catch (e) {
-      return refuse(409, ARCHIVE_REFUSALS.programmePartlyEnded,
+      return refuseEdge(ARCHIVE_REFUSALS.programmePartlyEnded,
         { closed: [], notClosed: claimed, refusal: { id: run.id, kind: 'threw', detail: thrown(e) } });
     }
     if (why !== null) {
-      return refuse(409, ARCHIVE_REFUSALS.programmePartlyEnded,
+      return refuseEdge(ARCHIVE_REFUSALS.programmePartlyEnded,
         { closed: [], notClosed: claimed, refusal: closeRefusalOf(run.id, why) });
     }
   }
@@ -294,11 +307,11 @@ export async function decideArchive(
   for (const [i, run] of claimed.entries()) {
     let out: CloseOutcome;
     try { out = await port!.abandon(run.id); } catch (e) {
-      return refuse(409, ARCHIVE_REFUSALS.programmePartlyEnded,
+      return refuseEdge(ARCHIVE_REFUSALS.programmePartlyEnded,
         { closed: ended, notClosed: claimed.slice(i), refusal: { id: run.id, kind: 'threw', detail: thrown(e) } });
     }
     if (!out.ok) {
-      return refuse(409, ARCHIVE_REFUSALS.programmePartlyEnded,
+      return refuseEdge(ARCHIVE_REFUSALS.programmePartlyEnded,
         { closed: ended, notClosed: claimed.slice(i), refusal: closeRefusalOf(run.id, out) });
     }
     ended.push(run);
@@ -315,7 +328,7 @@ export async function decideArchive(
  */
 export function refusedAtStop(verdict: 'busy' | 'unmeasured', ended: readonly OpenSibling[]): ArchiveReply {
   const error = verdict === 'busy' ? ARCHIVE_REFUSALS.sessionBusy : ARCHIVE_REFUSALS.statusUnknown;
-  return { status: 409, body: { ok: false, error, ...(ended.length > 0 ? { ended } : {}) } };
+  return { status: edgeStatus(error), body: { ok: false, error, ...(ended.length > 0 ? { ended } : {}) } };
 }
 
 /**
@@ -350,6 +363,6 @@ export function archiveOutcome(
   const detail = res.stderr.trim();
   if (stopped) return { status: 200, body: { ok: true, archived: false, stopped: true, ended, refusal, detail } };
   const endedSpread = ended.length > 0 ? { ended } : {};
-  if (refusal !== null) return { status: 409, body: { ok: false, error: refusal, detail, ...endedSpread } };
+  if (refusal !== null) return { status: edgeStatus(refusal), body: { ok: false, error: refusal, detail, ...endedSpread } };
   return { status: 502, body: { ok: false, stderr: res.stderr, ...endedSpread } };
 }

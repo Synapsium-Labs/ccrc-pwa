@@ -47,6 +47,19 @@ export const RUN_BUDGET_MS: number;
 export const RUN_BUDGET_BYTES: number;
 export const REDERIVE_SLICE_MS: number;
 export const REDERIVE_SLICE_BYTES: number;
+export const EXPORT_SLICE_MS: number;
+export const EXPORT_SLICE_BYTES: number;
+export const EXPORT_CHECK_SLICE_MS: number;
+export const EXPORT_CHECK_SLICE_BYTES: number;
+export const DERIVE_SHARES: Readonly<{ fts: number; nodes: number; card: number; census: number }>;
+export function budgetRungs(
+  run: { maxMs: number; maxBytes: number },
+  shares?: { fts: number; nodes: number; card: number; census: number },
+): Record<'ingest' | 'fts' | 'nodes' | 'card' | 'census', { maxMs: number; maxBytes: number }>;
+export function budgetFloors(
+  run: { maxMs: number; maxBytes: number },
+  shares?: { fts: number; nodes: number; card: number; census: number },
+): Record<'fts' | 'nodes' | 'card' | 'census', { maxMs: number; maxBytes: number }>;
 export const CAP_DEFAULT_GB: number;
 export const CAP_WARN_PCT: number;
 export const FLOOR_GIB: number;
@@ -373,8 +386,30 @@ export function rawRowKey(ccSessionUuid: string, rawShaHex: string): string;
 export function launchFactsOf(row: unknown): { cwd: string | null; gitBranch: string | null };
 export function lagOfTick(i: { tickStartMs: number; newEntries: number; minNewTsMs: number | null }): number | null;
 export const SIDECAR_WHOLE_MAX: 67108864;
+export const SIDECAR_READ_WHOLE_MAX: 8388608;
 export const SIDECAR_MAX_BYTES: 134217728;
 export function linkSidecar(name: string, candidates: ReadonlyArray<{ entryId: number; text: string; toolUseIds: readonly string[] }>): number | null;
+export function sidecarNameMatcher(names: Iterable<string>): { namesIn(text: string): string[]; states: number };
+/** CP-39 (D-6931): a transcript's link-walk state, meta `sidecar_walk:<transcript_pk>`. */
+export const SIDECAR_WALK_META: 'sidecar_walk:';
+export const SIDECAR_WALK_CHARS_MAX: 524288;
+export interface WalkPart { names: string[]; text: [string, number][]; toolu: [string, number][] }
+export interface WalkProgress extends WalkPart { after: number }
+export interface WalkState { v: 1; done: WalkPart; walk: WalkProgress | null }
+export interface WalkCandidate { entryId: number; text: string; toolUseIds: string[] }
+export function walkNames(unseen: Iterable<string>, first: string, covered?: Iterable<string>, room?: number): string[];
+export function parseSidecarWalk(text: string | null): WalkState | null;
+export function formatSidecarWalk(state: WalkState): string;
+export function emptySidecarWalk(): WalkState;
+export function startSidecarWalk(state: WalkState, unseen: Iterable<string>, first: string): void;
+export function foldWalkCandidates(state: WalkState, candidates: ReadonlyArray<{ entryId: number; text: string; toolUseIds: readonly string[] }>): void;
+export function finishSidecarWalk(state: WalkState): void;
+export function walkCandidates(state: WalkState, name: string): WalkCandidate[];
+/** CP-39 (D-6938): the sidecar scan's cursor, meta `scan_sidecars_at`. */
+export interface SidecarScanAt { v: number; dir: string | null; taken: number; left: number; held: boolean }
+export function parseSidecarScanAt(text: string | null): SidecarScanAt;
+export function formatSidecarScanAt(at: SidecarScanAt): string;
+export function sidecarWrapClose(at: SidecarScanAt): { unseen: number; mark: boolean };
 export function secretKindOf(source: object | null, path: string): 'sessions' | 'env-identifier' | 'env' | 'token' | 'json';
 export function ftsPhrase(value: string): string;
 /** D-5748: the op marker, `<verb> <pid> <start_ms> <proc_start> <boot_id>`; a legacy three-field marker has procStart and bootId null. */

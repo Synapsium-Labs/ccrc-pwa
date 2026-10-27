@@ -292,8 +292,7 @@ describe('the abandon arm closes a bad stored id failed with no fleet act (spec 
     const handle = registerCoordRoutes(Fastify({ logger: false }), { ...d.base, coord: d.coord }, new Bus(), undefined,
       { tmux: d.base.tmux, queue: d.base.queue, readAsk: async () => null });
     const plan = await handle.withAbandon(d.coord, (abandon, refusalOf) => decideArchive({
-      openRunsForSession: (sid) => d.coord.openRunsForSession(sid),
-      openRunsClaimedBy: (sid) => d.coord.openRunsClaimedBy(sid),
+      bindingsOf: (sid) => d.coord.bindingsOf(sid),
       abandonRefusal: refusalOf,
       abandon,
     }, CLAIMED_BY, { force: false, interrupt: false, programmeEnd: true }, IDLE_MAIN));

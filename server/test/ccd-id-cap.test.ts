@@ -24,7 +24,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { CCD, FIXTURE_MOUNTINFO, WS_ADD, ghContainedEnv, makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
+import { CCD, FIXTURE_MOUNTINFO, WS_ADD, ghContainedEnv, makeCcdHarness, type CcdHarness, ccdSource } from './ccdWsHelpers.js';
 import { inheritedEnv } from './gitEnvStrip.js';
 import { eventsOf } from './lifecycleHelpers.js';
 
@@ -250,7 +250,7 @@ const supervisedStarts = (): string[] => h.calls().filter((c) => c.startsWith('s
 
 describe('a new id fits every name ccd derives from it (path-identity spec §2.6)', () => {
   it('the cap is the value the census and the ruling give', () => {
-    const ccd = read('ccd/ccd');
+    const ccd = ccdSource();
     for (const r of ID_NAME_TEMPLATES) {
       expect(r.overhead, `${r.template}: its overhead is its parts at their widest`).toBe(overheadOf(r.template));
     }
@@ -295,7 +295,7 @@ describe('a new id fits every name ccd derives from it (path-identity spec §2.6
       .map((r) => `${r.file} ${r.template}`), 'a census row names a template its file no longer holds').toEqual([]);
     // The two out-var readers' own templates are seen: `_reg_get_to`'s `$REG/$2.$3`, and `_reg_read_to`'s
     // `$REG/$1.$2`, spelled after its `shift`.
-    const ccd = read('ccd/ccd');
+    const ccd = read('ccd/ccd');   // line numbers below are the FILE's, so the file itself
     for (const fn of ['_reg_get_to', '_reg_read_to']) {
       const first = ccd.slice(0, ccd.indexOf(`\n${fn}() {`)).split('\n').length + 1;
       const last = first + bodyOf(ccd, fn).split('\n').length - 2;
@@ -317,7 +317,7 @@ describe('a new id fits every name ccd derives from it (path-identity spec §2.6
   });
 
   it('each mint site carries its own die line', () => {
-    const ccd = read('ccd/ccd');
+    const ccd = ccdSource();
     const DIE = /_reg_id_cap "[^"\n]+" \|\| die "\$_REG_ID_CAP_WHY — [^"\n]+; nothing was created"/g;
     for (const fn of ['cmd_ws_add', 'cmd_start', 'cmd_enable']) {
       expect(bodyOf(ccd, fn).match(DIE) ?? [], `${fn} holds exactly one _reg_id_cap … || die "$_REG_ID_CAP_WHY …" line`)

@@ -6,13 +6,19 @@
 # ONE pipeline, several MODES (design 2026-09-23 §3). The trigger decides the
 # mode, the `select` job computes what that mode runs, and every other job
 # reads select's outputs:
-#   pull_request        selected — the server tests the change can affect
-#                       (a measured dependency map, .github/ci/select-tests.mjs),
-#                       sharded; agent, pwa, build-pwa, probe-macos in full (no macOS tests).
-#   merge_group         selected — a merge-queue run runs what a pull request
-#                       runs (operator ruling 2026-09-28), the pipeline check
-#                       included, in a concurrency group of its own; no macOS
-#                       leg and no full-suite.
+#   pull_request        selected — the LIGHT run (operator ruling 2026-10-25):
+#                       the server tests the change can affect (a measured
+#                       dependency map, .github/ci/select-tests.mjs), sharded;
+#                       the agent, pwa and browser TESTS only when the change
+#                       can reach them (.github/ci/reach.mjs); every typecheck,
+#                       the build and the static checks always. The `full-ci`
+#                       label (read when a run starts: a label starts none),
+#                       or a change under .github/, makes it a full run.
+#   merge_group         full     — the queue is where the whole suite runs
+#                       (operator ruling 2026-10-25, replacing 2026-09-28's
+#                       "what a pull request runs"): every server shard, the
+#                       agent, pwa and browser tests, in a concurrency group
+#                       of its own; no macOS leg and no full-suite.
 #   schedule (hourly)   refresh  — re-trace the tests every merge since the
 #                       last refresh affected and update the map. No test legs.
 #                       Not a push trigger: a refresh per merge held 8-15 runner
@@ -46,13 +52,21 @@ permissions:
   contents: read
 
 on:
+  # The default activity types only (opened, synchronize, reopened): NOT
+  # `labeled`. A run started by any label gets this PR's concurrency group, so
+  # it cancels the run in progress, and its check runs supersede the earlier
+  # ones on the same head commit. Ending such a run early would report the
+  # required checks green over a red or cancelled run, and a job-level `if:`
+  # would too (a skipped required job reads as success); so a label starts no
+  # run at all. The `full-ci` label is read when the next run starts: add it,
+  # then push (or close and reopen the pull request).
   pull_request:
   # THE MERGE QUEUE (landing-order stage 2, spec §5.2). A queue runs the
   # REQUIRED checks on the group it built before it merges, and a workflow that
   # does not listen for `merge_group` never reports them — the entry waits out
   # the queue's timeout and is removed. This trigger is on `main` BEFORE the
   # operator turns the queue on (the spec's rollout step 1). A queue run runs
-  # what a pull request runs (the mode table above). There is no `push`
+  # the full suite (the mode table above). There is no `push`
   # trigger, so the queue's own `gh-readonly-queue/main/*` branches start no
   # second run.
   merge_group:
@@ -119,6 +133,36 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  # D-6926: a pull request that is not a ledger pull request (head branch `ledger/<programme>`) may not
+  # modify or delete an existing file under docs/superpowers/programs/ or docs/superpowers/plans/; it adds
+  # a per-task note instead, and a `Ledger-Edit: <reason>` trailer on the HEAD commit is the escape, written
+  # to the step summary. Its OWN job, so an internal error or a violation fails only this check and never
+  # skips the test jobs that `needs: select`. WARN-ONLY first (LEDGER_GUARD_MODE=warn: it reports and exits
+  # 0, and `continue-on-error` holds while the mode is warn) while the open pull requests that already edit
+  # a ledger land or move their edit; flip the value to `enforce` to arm it. It checks out the PR's head
+  # commit, not the merge commit, because only the head commit's trailers count. A pull request that edits
+  # this script runs the PR's own copy, so a change to the rule is judged by the rule it changes only in
+  # warn mode; arming is a separate, reviewed one-line change.
+  ledger-guard:
+    name: ledger guard
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      LEDGER_GUARD_MODE: warn
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha }}
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+      # Step-level: a job-level continue-on-error cannot read `env`.
+      - name: Ledger documents are edited on a ledger branch only
+        continue-on-error: ${{ env.LEDGER_GUARD_MODE == 'warn' }}
+        run: node .github/ci/ledger-guard.mjs --repo "$GITHUB_WORKSPACE" --base "origin/${{ github.base_ref }}"
+
   # What this run runs (design 2026-09-23 §4.1, §6). Dependency-free Node, so
   # it runs before any `npm ci`. Every uncertainty — no map, an unreadable one,
   # a change under .github/ or to a lockfile, any internal error — answers
@@ -276,13 +320,16 @@ jobs:
         id: select
         env:
           EVENT: ${{ github.event_name }}
+          # The `full-ci` label asks a pull request for the full suite, as a change under .github/ does.
+          FULL_LABEL: ${{ contains(github.event.pull_request.labels.*.name, 'full-ci') }}
           INPUT_MODE: ${{ inputs.mode || (github.event.schedule == '23 * * * *' && 'refresh') || '' }}
           FULL_GREEN: ${{ steps.green.outputs.full_green || 'false' }}
           PIPELINE_CHANGED: ${{ steps.pipeline.outputs.changed }}
           FLOOR: ${{ steps.floor.outputs.run }}
+          BASE: ${{ format('origin/{0}', github.base_ref) }}
         run: |
-          args=(--repo "$GITHUB_WORKSPACE" --event "$EVENT" --selection "$CCRC_SELECTION" --full-green "$FULL_GREEN" --map "$RUNNER_TEMP/ci-cache/testmap.json" --trace-list "$RUNNER_TEMP/ci-cache/traced.txt")
-          if [ -n "$INPUT_MODE" ]; then args+=(--input-mode "$INPUT_MODE"); elif [ "$PIPELINE_CHANGED" = true ]; then args+=(--input-mode full); fi
+          args=(--repo "$GITHUB_WORKSPACE" --event "$EVENT" --base "$BASE" --selection "$CCRC_SELECTION" --full-green "$FULL_GREEN" --map "$RUNNER_TEMP/ci-cache/testmap.json" --trace-list "$RUNNER_TEMP/ci-cache/traced.txt")
+          if [ -n "$INPUT_MODE" ]; then args+=(--input-mode "$INPUT_MODE"); elif [ "$PIPELINE_CHANGED" = true ] || [ "$FULL_LABEL" = true ]; then args+=(--input-mode full); fi
           if [ -f "$RUNNER_TEMP/ci-cache/testtimes.json" ]; then args+=(--times "$RUNNER_TEMP/ci-cache/testtimes.json"); fi
           # D-6771: the files the node floor runs, read from its own job so the list has one source; select.mjs
           # answers `floor` true when its selection holds one of them, or when FLOOR (the static inputs) is true.
@@ -422,8 +469,9 @@ jobs:
       # with no jsdom and falsely reports "no tests" alongside 39 errors.
       # Positional file arguments are SUBSTRING filters (`a.test.ts` also runs
       # `xa.test.ts`), so the shard's list goes through vitest.select.config.ts,
-      # whose include is exactly the listed paths. The JSON report is the
-      # per-file durations the daily run publishes for the next plan.
+      # whose include is exactly the listed paths. The file-times reporter
+      # (whole-file wall time, hooks and collection included) is the per-file
+      # durations the daily run publishes for the next plan.
       - name: Test
         working-directory: server
         env:
@@ -432,7 +480,7 @@ jobs:
           WORKERS: ${{ matrix.workers }}
         run: |
           echo "$FILES" | tr ' ' '\n' > "$RUNNER_TEMP/tests.txt"
-          CCRC_TEST_LIST="$RUNNER_TEMP/tests.txt" ./node_modules/.bin/vitest run --config vitest.select.config.ts ${VITEST_SHARD:+--shard=$VITEST_SHARD} --maxWorkers="$WORKERS" --reporter=default --reporter=json --outputFile.json="$RUNNER_TEMP/times.json"
+          CCRC_FILE_TIMES_OUT="$RUNNER_TEMP/times.json" CCRC_TEST_LIST="$RUNNER_TEMP/tests.txt" ./node_modules/.bin/vitest run --config vitest.select.config.ts ${VITEST_SHARD:+--shard=$VITEST_SHARD} --maxWorkers="$WORKERS" --reporter=default --reporter=../.github/ci/file-times-reporter.mjs
 
       - name: Keep the durations
         if: always() && needs.select.outputs.tests == 'full'
@@ -463,6 +511,46 @@ jobs:
       - name: Typecheck
         working-directory: server
         run: ./node_modules/.bin/tsc --noEmit
+
+  # THE HOOK'S WALL-CLOCK BUDGETS, ON A RUNNER OF THEIR OWN (D-6929, ARCH root-cause rank 7 of the 2026-10-25 landing
+  # measurement). session-hook.test.ts times `bash ccd/session-hook.sh` against an absolute 150 ms p95, a 4.2x ratio, the
+  # compaction serve's 4x ratio and a 1.5x ratio. In a server shard those rows run beside twelve workers of fork-heavy suites,
+  # and the p95 of the old twenty samples was the second-largest of them, so two scheduler stalls failed it: 24 flaky jobs and
+  # 2 queue ejections in the fourteen days before this job. The rows are skipped unless CCRC_PERF=1 (`it.runIf` /
+  # `describe.runIf`), and this job sets it: one file, one worker, no file parallelism, nothing else on the runner. Each p95
+  # row discards one warm-up and takes 40 samples (p95 = the third-largest); the ratio rows read median over median after their
+  # warm-up. Every threshold is the one it always had; nothing was loosened, the rows moved to a quiet machine (operator
+  # principle 2026-10-25: no wall-clock assertion in a required check). What the required suite
+  # keeps of the hook's cost is a load-independent pin: the fork count of the cheap PostToolUse arm under strace.
+  # NOT REQUIRED: operator ruling 2026-10-25. It becomes a required check on merge_group after two weeks with zero flakes
+  # (counted by the flaky-job method, from the first green run of this job); until then a red here blocks nothing.
+  # Same gate as the server shards: it runs when a selection or a full run exists, and not for a docs-only change.
+  server-perf:
+    name: perf (server)
+    needs: [select, deps]
+    if: ${{ !cancelled() && needs.select.outputs.count != '0' && (needs.select.outputs.tests == 'selected' || needs.select.outputs.tests == 'full') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: |
+            server/package-lock.json
+            agent/package-lock.json
+            pwa/package-lock.json
+      - uses: ./.github/actions/server-deps
+        with:
+          platform: linux
+      # `-t` picks the budget rows by title, and CCRC_PERF=1 un-skips them. Local binary, never npx (see server-shard).
+      - name: Budgets
+        working-directory: server
+        env:
+          CCRC_PERF: '1'
+        run: |
+          ./node_modules/.bin/vitest run test/session-hook.test.ts --maxWorkers=1 --no-file-parallelism -t 'p95 of 40|costs no more than 4\.2x|costs no more than 4x the cheap|spool.s increment'
 
   # THE REQUIRED `test (server)` CHECK (design 2026-09-23 §4.2). A summary,
   # because the server tests now run as a variable number of shards and a
@@ -542,8 +630,20 @@ jobs:
 
       # Local binary, never npx: `npx vitest` resolves to a global cache copy
       # with no jsdom and falsely reports "no tests" alongside 39 errors.
+      # The light pull-request rule (operator ruling 2026-10-25): the agent's
+      # tests skip when the change cannot reach them. The Install and the
+      # Typecheck below run either way, and so does this job, so
+      # `test (agent)` reports on every run. Only a pull request ever skips.
+      - name: Can this change reach the agent tests?
+        id: reach
+        if: env.CCRC_LEG == 'run' && github.event_name == 'pull_request'
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          FULL_LABEL: ${{ contains(github.event.pull_request.labels.*.name, 'full-ci') }}
+        run: node .github/ci/reach.mjs --pkg agent --event pull_request --base "origin/$BASE_REF" --full-label "$FULL_LABEL"
+
       - name: Test
-        if: env.CCRC_LEG == 'run'
+        if: env.CCRC_LEG == 'run' && steps.reach.outputs.skip != 'true'
         working-directory: ${{ matrix.package }}
         run: ./node_modules/.bin/vitest run
 
@@ -584,10 +684,20 @@ jobs:
         with:
           fetch-depth: 0
 
+      # The light pull-request rule (operator ruling 2026-10-25), see the agent leg:
+      # only a pull request asks, and only the three shards' tests skip.
+      - name: Can this change reach the pwa tests?
+        id: reach
+        if: env.CCRC_LEG == 'run' && github.event_name == 'pull_request'
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          FULL_LABEL: ${{ contains(github.event.pull_request.labels.*.name, 'full-ci') }}
+        run: node .github/ci/reach.mjs --pkg pwa --event pull_request --base "origin/$BASE_REF" --full-label "$FULL_LABEL"
+
       # '22', as `deps` and the server shards: the trees' cache key names the
       # node version setup-node resolves, so another string would always miss.
       - uses: actions/setup-node@v7
-        if: env.CCRC_LEG == 'run'
+        if: env.CCRC_LEG == 'run' && steps.reach.outputs.skip != 'true'
         with:
           node-version: '22'
           cache: npm
@@ -608,16 +718,32 @@ jobs:
       # directory already exists; this ordering is the only thing that proves
       # it on a clean checkout.
       - uses: ./.github/actions/server-deps
-        if: env.CCRC_LEG == 'run'
+        if: env.CCRC_LEG == 'run' && steps.reach.outputs.skip != 'true'
         with:
           platform: linux
 
       # Local binary, never npx: `npx vitest` resolves to a global cache copy
       # with no jsdom and falsely reports "no tests" alongside 39 errors.
       - name: Test
-        if: env.CCRC_LEG == 'run'
+        if: env.CCRC_LEG == 'run' && steps.reach.outputs.skip != 'true'
         working-directory: pwa
-        run: ./node_modules/.bin/vitest run --shard=${{ matrix.shard }}/${{ matrix.total }}
+        env:
+          SCOPE: ${{ steps.reach.outputs.scope }}
+          ALWAYS: ${{ steps.reach.outputs.always }}
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          if [ "$SCOPE" = changed ]; then
+            # The light pull-request run: the tests vitest relates to this change (its imports, from the merge base),
+            # sharded; then, sharded too, every test that reads the tree from disk (reach.mjs's alwaysRunPwaTests:
+            # the CSS, boundary, census and guard suites import none of what they read), whatever changed.
+            mb=$(git merge-base "origin/$BASE_REF" HEAD)
+            ./node_modules/.bin/vitest run --shard=${{ matrix.shard }}/${{ matrix.total }} --changed "$mb" --passWithNoTests
+            # Word-split on purpose: one pwa-relative path per word (ci-reach.test.ts pins the shape).
+            # shellcheck disable=SC2086
+            ./node_modules/.bin/vitest run --shard=${{ matrix.shard }}/${{ matrix.total }} --passWithNoTests $ALWAYS
+          else
+            ./node_modules/.bin/vitest run --shard=${{ matrix.shard }}/${{ matrix.total }}
+          fi
 
   # The pwa checks that are not tests, once (D-6768): the typecheck of pwa runs
   # here and nowhere else. @ccrc/ui rides this job rather than the shards: the
@@ -1044,26 +1170,38 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         if: env.CCRC_LEG == 'run'
+        with:
+          fetch-depth: 0
+      # The light pull-request rule (operator ruling 2026-10-25), see the agent leg:
+      # only a pull request asks, and only the browser leg's tests skip.
+      - name: Can this change reach the browser tests?
+        id: reach
+        if: env.CCRC_LEG == 'run' && github.event_name == 'pull_request'
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          FULL_LABEL: ${{ contains(github.event.pull_request.labels.*.name, 'full-ci') }}
+        run: node .github/ci/reach.mjs --pkg browser --event pull_request --base "origin/$BASE_REF" --full-label "$FULL_LABEL"
+
       - uses: actions/setup-node@v7
-        if: env.CCRC_LEG == 'run'
+        if: env.CCRC_LEG == 'run' && steps.reach.outputs.skip != 'true'
         with:
           node-version: '22'
           cache: npm
           cache-dependency-path: pwa/package-lock.json
       - name: Install
-        if: env.CCRC_LEG == 'run'
+        if: env.CCRC_LEG == 'run' && steps.reach.outputs.skip != 'true'
         working-directory: pwa
         run: npm ci
       # BEFORE the browser config runs, for the test matrix's reason above: pwa
       # reads @ccrc/ui as SOURCE, and the leg's imports reach it (lib/router.ts,
       # through DocImage), which resolves only from ui's own node_modules.
       - name: Install @ccrc/ui
-        if: env.CCRC_LEG == 'run'
+        if: env.CCRC_LEG == 'run' && steps.reach.outputs.skip != 'true'
         working-directory: ui
         run: npm ci
       # Local binary, never npx (see the test matrix above).
       - name: Test
-        if: env.CCRC_LEG == 'run'
+        if: env.CCRC_LEG == 'run' && steps.reach.outputs.skip != 'true'
         working-directory: pwa
         run: ./node_modules/.bin/vitest run --config vitest.browser.config.ts
 
@@ -1142,6 +1280,7 @@ jobs:
           test/history-skill.test.ts
           test/history-card.test.ts
           test/history-replay.test.ts
+          test/history-rss-preload.test.ts
           EOF
           CCRC_TEST_LIST="$RUNNER_TEMP/tests.txt" ./node_modules/.bin/vitest run --config vitest.select.config.ts
 
@@ -1159,9 +1298,12 @@ jobs:
     needs: [select, deps]
     if: ${{ !cancelled() && needs.select.outputs.trace != 'none' && needs.select.outputs.trace_count != '0' }}
     runs-on: ubuntu-latest
-    # Tracing costs 1.7-4.3x wall-clock (measured on the fleet box), and the
-    # shard planner packs trace shards to about 15 minutes at that cost; 60 is
-    # oss-metadata.test.ts's ceiling and the most any job here may take.
+    # Tracing costs 1.7-4.3x wall-clock (measured on the fleet box). A refresh
+    # is BOUNDED (planTraceBatch, .github/ci/shards.mjs): select plans at most
+    # 45 minutes of that cost per shard and defers the rest to the next
+    # refresh, so a shard cannot reach this timeout, which cancels it and
+    # leaves no map. 60 is oss-metadata.test.ts's ceiling and the most any job
+    # here may take.
     timeout-minutes: 60
     strategy:
       fail-fast: false

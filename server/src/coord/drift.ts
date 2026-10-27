@@ -45,7 +45,7 @@ export interface DriftReviewRow {
 }
 /** A `held` or `answering` asks row. */
 export interface DriftAskRow { readonly id: number; readonly at: number; readonly childId: string; readonly state: string }
-/** A worker's child mark beside `parentOfSession`'s answer and the marked run's `claimedBy`. */
+/** A worker's child mark beside the series' parent (`childParentOf`) and the marked run's `claimedBy`. */
 export interface DriftWorkerRow {
   readonly sessionId: string; readonly markRunId: number; readonly parentId: string | null;
   readonly runClaimedBy: string | null;

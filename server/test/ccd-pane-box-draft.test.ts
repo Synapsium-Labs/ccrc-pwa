@@ -21,7 +21,7 @@ import { spawnSync } from 'node:child_process';
 import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { CCD, ghContainedEnv, makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
+import { CCD, ghContainedEnv, makeCcdHarness, type CcdHarness, ccdSource } from './ccdWsHelpers.js';
 // The OTHER reader. "One reader for the box row" is this file's whole thesis,
 // and until now it was asserted only in prose: the parity table below makes it
 // an assertion, over the escape-carrying rows that are the entire reason the
@@ -94,7 +94,7 @@ describe('_pane_box_draft', () => {
   // The mutation table: reinstating either half of the old rule reds a test
   // above. `grep -m1` reds test 1; a plain-space-only separator reds test 2.
   it('is the ONLY box-row reader left in ccd — no inline grep survives', () => {
-    const src = readFileSync(CCD, 'utf8');
+    const src = ccdSource();
     expect(src.match(/grep -m1 "\^❯ "/g), 'an inline box-row grep is back').toBeNull();
     expect((src.match(/_pane_box_draft\(\)/g) ?? []).length).toBe(1);
   });
@@ -190,7 +190,7 @@ describe('_pane_box_draft reads an ANSI capture, exactly as draftOf does', () =>
   // The reader can only strip what it is given. Every call site must capture
   // with `-e`; a plain `-p` read is the regression measured above.
   it('every call site hands it an ANSI capture', () => {
-    const src = readFileSync(CCD, 'utf8');
+    const src = ccdSource();
     // Greedy to the LAST `)"` on the line, not `[^)]*` to the first: D-2363's
     // site resolves its own tmux target (`-t "$(_tmux "$id")"`), so a nested
     // `)"` sits mid-call, ahead of the real close — a class excluding `)`

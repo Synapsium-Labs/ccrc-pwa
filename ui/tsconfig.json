@@ -19,5 +19,9 @@
     // `vite.config.ts` and `pwa/vite.config.ts` all agree about it.
     "paths": { "@/*": ["./src/*"] }
   },
-  "include": ["src", ".storybook", "vite.config.ts"]
+  // `.storybook/*.ts`, not `.storybook`: a bare directory include expands to
+  // a wildcard, and tsc's wildcards skip dot-directories, so `.storybook`
+  // alone matched nothing (`tsc --listFilesOnly` showed neither main.ts nor
+  // preview.ts under TS 6 or TS 7) while CI's step claimed to check them.
+  "include": ["src", ".storybook/*.ts", "vite.config.ts"]
 }

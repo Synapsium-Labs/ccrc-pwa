@@ -6,11 +6,12 @@
 import { describe, it, expect, beforeAll } from 'vitest';
 import { spawn, spawnSync } from 'node:child_process';
 import { mkdirSync, readFileSync, writeFileSync, existsSync, statSync, lstatSync, chmodSync, readdirSync, appendFileSync, renameSync, rmSync, symlinkSync, readlinkSync, utimesSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { mkTmp, removeTmpFixturesEachTest } from './tmpHelpers.js';
 import { ccrcContainedEnv } from './ccrcContainment.js';
 import { assertNoRealTool } from './containedTools.js';
 import { itLinux } from './platformFixtures.js';
+import { installedCcdBody } from './ccdWsHelpers.js';
 import { installVersionedTree, keepDigest } from './installTreeFixture.js';
 import {
   REPO,
@@ -55,6 +56,11 @@ import {
   onKeptV1,
   verKeptAnswer,
 } from './ccrc-updateFixture.js';
+
+/** The installed body for a tree's ccd source: ccd-entry-install.py renders the library pin from the tree's library,
+ *  then swaps the source's line-2 placeholder, in place, for the marker (ccd-install-stamp.test.ts owns the rule). */
+const installedBodyOf = (src: string): string =>
+  installedCcdBody(readFileSync(src, 'utf8'), readFileSync(join(dirname(src), 'lib', 'disk-retention.sh')));
 
 describe('ccrc update: restore arm 1 — a flip back to the kept previous version (W6 Task 4)', () => {
   const GATE_DENIED = 'gate: GET http://127.0.0.1:7788/health got no answer (curl exited 7)';
@@ -103,7 +109,7 @@ describe('ccrc update: restore arm 1 — a flip back to the kept previous versio
     expect(fileText(join(home, '.ccrc', 'installed'))).toBe(keptRec);
     expect(fileText(join(v1, '.ccrc-stamp.json')), 'the kept stamp was rewritten').toBe(keptStamp);
     expect(fileText(join(v1, '.ccrc-installed')), 'the kept record was rewritten').toBe(keptRec);
-    expect(fileText(join(home, '.local', 'libexec', 'ccrc', 'ccd'))).toBe(fileText(join(v1, 'ccd/ccd')));
+    expect(fileText(join(home, '.local', 'libexec', 'ccrc', 'ccd'))).toBe(installedBodyOf(join(v1, 'ccd/ccd')));
     expect(fileText(join(home, '.local', 'libexec', 'ccrc', 'ccd'))).toContain(CCD_SENTINEL);
     // A return is not a new baseline, and the floor never lowers.
     expect(fileText(join(home, '.ccrc', 'previous'))).toBe(`v1.0.0\n${V1_SHA}\n`);
@@ -861,7 +867,7 @@ describe('ccrc rollback: by flip when the version is kept (W6 Task 4)', () => {
     expect(r.stdout).toContain('rollback: v1.0.0 is kept at $HOME/ccrc-versions/v1.0.0 — no release-host question and no download');
     expect(localUrls(home)).toEqual([]);
     expect(linkOf(home)).toBe(v1);
-    expect(fileText(join(home, '.local', 'libexec', 'ccrc', 'ccd'))).toBe(fileText(join(v1, 'ccd/ccd')));
+    expect(fileText(join(home, '.local', 'libexec', 'ccrc', 'ccd'))).toBe(installedBodyOf(join(v1, 'ccd/ccd')));
     expect(fileText(join(home, '.local', 'libexec', 'ccrc', 'ccd'))).toContain(CCD_SENTINEL);
     expect(fileText(join(home, '.ccrc', 'build.json'))).toBe(keptStamp);
     expect(fileText(join(home, '.ccrc', 'installed'))).toBe(keptRec);

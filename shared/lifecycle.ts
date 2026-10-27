@@ -160,11 +160,12 @@ export const LIFECYCLE: readonly LifecycleClass[] = [
     creators: ['ccd/history/sweep.mjs (--op recall-off)'],
     collector: 'ccrc history recall-off <id> --clear, and recall-off --clear-all at W2 close (operator verbs through the shim, spec §10.6), or rm for an entry --clear-all skips; a stale ~tmp.<pid> is removed by the next recall-off pass',
     bound: 'until cleared; every file by W2 close', tier: 'one generation per file: at most 37 B (a UUID and one LF), empty for a legacy family', ruling: null },
-  // #316: the server suite's one temp parent per vitest run, every fixture inside it. Ephemeral (E): its creator
+  // #316: the server suite's one temp parent per vitest run, every fixture inside it; the agent suite runs the same
+  // module, so its runs are rows of this class too. Ephemeral (E): its creator
   // collects it, and a later run collects one whose owner was SIGKILLed, once its socket refuses and it is quiet.
   // The window is named, not numbered: RUN_QUIET_S lives once, in the .mjs, which L0 cannot import.
   { name: 'server-test-run-dirs', root: '${TMPDIR:-/tmp}/ccrc-testrun-<6>/ (+ .dead mid-removal)', pattern: 'E',
-    creators: ['server vitest globalSetup (server/test/run-tmp.globalsetup.mjs)'],
+    creators: ['server vitest globalSetup (server/test/run-tmp.globalsetup.mjs)', 'agent vitest globalSetup (the same module, wired by agent/vitest.config.ts)'],
     collector: 'server/test/run-tmp.globalsetup.mjs (teardown; SIGTERM/SIGINT/SIGHUP/exit arm; a later run\'s reap at setup and teardown: owner socket refuses AND ctime-quiet for RUN_QUIET_S); ccd/ccd-tmp-sweep\'s test-run arm (DR-10, D-6622) for a root no later run visits: no socket bound at live.sock, ctime-quiet 6 h (1 h under pressure), unheld, in the box\'s TMPDIR and each witnessed child leaf with a row; shadow unless the live arm\'s marker exists',
     bound: 'one test run; after a SIGKILL, until a later run under the same TMPDIR finds it quiet, or the sweep\'s test-run arm does (6 h quiet)',
     tier: '1,551 dirs / 5.74 GiB from five timed-out shards in one morning (#316, 2026-10-07)', ruling: null },
