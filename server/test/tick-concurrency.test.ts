@@ -303,3 +303,123 @@ describe('the frames of one fixture, recorded as literals', () => {
     expect(sortedEntries(r.w.currentTaskProgress())).toEqual(RECORDED_TASKS);
   }, 60_000);
 });
+
+/** Task-file reads among a tick's requests (a path under a `tasks` directory), and `.uuid` reads. */
+const taskReads = (paths: readonly string[]): string[] => paths.filter((p) => p.includes(`${path.sep}tasks${path.sep}`));
+const uuidReads = (paths: readonly string[]): string[] => paths.filter((p) => p.endsWith('.uuid'));
+
+describe('the capture pass of one tick (D-6435)', () => {
+  // The registry hand-off to `sweepTasks` landed in #1240: a due sweep is handed the tick's listing, so it reads no
+  // `.uuid` of its own. Green on the serial code; the case holds it through the bounded pass.
+  it('a due task sweep adds no uuid read', async () => {
+    const r = rig();
+    await primed(r);
+    r.setMono(r.mono() + 2000);
+    r.w.kick('tasks');
+    const kicked = await r.during(() => r.tick());
+    r.setMono(r.mono() + 2000);
+    const plain = await r.during(() => r.tick());
+    expect(taskReads(kicked).length, 'the kicked tick ran the sweep: it read task files').toBeGreaterThan(0);
+    expect(taskReads(plain), 'the plain tick did not: the lane was not due').toEqual([]);
+    expect(uuidReads(plain).length, 'CONTROL: the tick\'s own registry read counts .uuid requests').toBeGreaterThan(0);
+    expect(uuidReads(kicked).length - uuidReads(plain).length).toBe(0);
+  }, 60_000);
+
+  // RED on the serial code: the second capture waits for the first. The waits are bounded, so it fails by assertion, then
+  // every held capture is let go so the tick finishes.
+  it('a second capture is issued before the first resolves', async () => {
+    const r = rig();
+    const tick = r.w.tick();
+    let spins = 0;
+    while (r.gate.issued.length < 1 && spins < 5000) { await macrotask(); spins += 1; }
+    for (let i = 0; i < 25; i += 1) await macrotask();
+    const issuedBeforeAnyRelease = r.gate.issued.length;
+    const releasedBeforeAnyRelease = r.gate.releases;
+    await r.gate.drive(tick);
+    expect(releasedBeforeAnyRelease, 'nothing was let go before the count').toBe(0);
+    expect(issuedBeforeAnyRelease, 'captures issued while the first was still pending').toBeGreaterThanOrEqual(2);
+  }, 60_000);
+
+  // Green on the serial code (it never has more than one); its mutant is an unbounded `Promise.all` over the 12 rows.
+  it('never more than the capture bound in flight', async () => {
+    const r = rig();
+    await r.tick();
+    expect(new Set(r.gate.issued).size, 'every row was captured, and there are more rows than the bound').toBe(N);
+    expect(N).toBeGreaterThan(CAPTURE_BOUND);
+    expect(r.gate.maxInFlight).toBeLessThanOrEqual(CAPTURE_BOUND);
+    expect(r.gate.maxInFlight).toBeGreaterThanOrEqual(1);
+  }, 60_000);
+
+  it('dialog frames equal the recorded ones, in registry order', async () => {
+    const r = rig();
+    const seen = await recordedTick(r, 'reverse');
+    expect(seen.panes).toEqual(RECORDED_PANES);
+    expect(r.sent).toEqual(RECORDED_PUSHES);
+  }, 60_000);
+
+  it('fleet, statuslines and task progress equal the recorded ones', async () => {
+    const r = rig();
+    const seen = await recordedTick(r, 'reverse');
+    expect(seen.fleets, 'one fleet frame on the recorded tick').toHaveLength(1);
+    expect(fleetSubset(seen.fleets[0]!)).toEqual(RECORDED_FLEET);
+    expect(sortedEntries(r.w.currentStatuslines())).toEqual(RECORDED_STATUSLINES);
+    expect(sortedEntries(r.w.currentTaskProgress())).toEqual(RECORDED_TASKS);
+  }, 60_000);
+
+  it('task files are read at most once per TASK_SWEEP_MS', async () => {
+    const r = rig();
+    await primed(r);
+    r.setMono(r.mono() + TASK_SWEEP_MS + 2000);
+    const first = await r.during(() => r.tick());
+    r.setMono(r.mono() + 2000);
+    const within = await r.during(() => r.tick());
+    r.setMono(r.mono() + TASK_SWEEP_MS);
+    const past = await r.during(() => r.tick());
+    expect(taskReads(first).length, 'the first tick reads task files').toBeGreaterThan(0);
+    expect(taskReads(within), 'a tick inside the cadence reads none').toEqual([]);
+    expect(taskReads(past).length, 'past the cadence they are read again').toBeGreaterThan(0);
+  }, 60_000);
+
+  it('an unlistable tick reads no task file and keeps progress', async () => {
+    const r = rig();
+    await primed(r);
+    r.setMono(r.mono() + TASK_SWEEP_MS + 2000);
+    await r.tick();
+    const before = sortedEntries(r.w.currentTaskProgress());
+    expect(before.map(([id]) => id), 'a listed tick filled the progress of the two task rows').toEqual([idOf(4), idOf(6)]);
+    r.unlist(true);
+    r.w.kick('tasks');
+    r.setMono(r.mono() + 2000);
+    const unlisted = await r.during(() => r.tick());
+    expect(unlisted.filter((p) => p.endsWith('.uuid')), 'CONTROL: the tick tried to read the registry and got nothing').toEqual([]);
+    expect(taskReads(unlisted), 'no task file is read').toEqual([]);
+    expect(sortedEntries(r.w.currentTaskProgress())).toEqual(before);
+    // CONTROL: listed again and kicked, the same tick does read them, so the zero above was the listing's doing.
+    r.unlist(false);
+    r.w.kick('tasks');
+    r.setMono(r.mono() + 2000);
+    expect(taskReads(await r.during(() => r.tick())).length).toBeGreaterThan(0);
+  }, 60_000);
+
+  // The wall clock steps to a distinct value before each capture is let go, and the captures return newest first. A
+  // pane's `doneAt` is when ITS capture returned, and `at` when it was issued, whatever happened to the others meanwhile.
+  it("a pane's doneAt is its own capture's return time", async () => {
+    const r = rig();
+    await primed(r);
+    for (let i = 0; i < N; i += 1) r.gate.panes.set(idOf(i), paneOf(i, true));
+    r.gate.issued.length = 0;
+    r.gate.issuedAt.clear();
+    r.gate.releases = 0;
+    r.gate.beforeRelease = (_id, k) => { vi.setSystemTime(T0 + 1000 * k); };
+    const panes: { id: string; at: number; doneAt: number }[] = [];
+    for (const id of IDS) r.bus.on(`pane:${id}`, (p: { at: number; doneAt: number }) => { panes.push({ id, at: p.at, doneAt: p.doneAt }); });
+    r.setMono(r.mono() + 2000);
+    await r.tick('reverse');
+    expect(panes.map((p) => p.id), 'every row published once, in registry order').toEqual([...IDS]);
+    expect(new Set(r.gate.releasedAt.values()).size, 'the release times are twelve distinct values').toBe(N);
+    for (const p of panes) {
+      expect(p.doneAt, `${p.id} doneAt is its own release time`).toBe(r.gate.releasedAt.get(p.id));
+      expect(p.at, `${p.id} at is its own issue time`).toBe(r.gate.issuedAt.get(p.id));
+    }
+  }, 60_000);
+});
