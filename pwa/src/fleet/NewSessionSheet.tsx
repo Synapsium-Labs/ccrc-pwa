@@ -499,11 +499,11 @@ export function NewSessionSheet({
               option is derived from `CLASSES`/`effortOptions` at render time,
               never a hand-typed list, so a class or effort rung this build
               adds or drops shows up here for free. Leaving all three unset
-              sends no `route` key at all — the coordinator row an ordinary
-              start has always landed on. */}
+              sends no `route` key at all — "Automatic" (unset), the coordinator
+              row an ordinary start has always landed on. */}
           <div className="route-row">
             <RouteField label="Class" value={routeClass} onChange={setRouteClass}>
-              <option value="">Coordinator row</option>
+              <option value="" title="The routing matrix picks the class">Automatic</option>
               <option value="default">Default</option>
               {[...CLASSES].reverse().map((c) => (
                 <option key={c} value={c}>{classDisplayLabel(wrapper, c)}</option>
