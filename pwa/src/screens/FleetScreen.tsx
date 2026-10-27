@@ -341,7 +341,11 @@ export function FleetScreen({
         </section>
       ) : (
         <>
-          <BucketBar sessions={sessions} acks={acks} ackAll={ackAll} />
+          {/* The counts once per screen (T3a, D-6331). A skin whose `FleetList` part draws its own groups carries the
+              counts itself (Instrument's status heads, and its own bar in project mode), so a second set of chips
+              above it would count every bucket twice. A part fact, never a skin name; the shared cards (Refined, or
+              no frame) have no counts of their own, so they keep this bar. */}
+          {FleetList === null && <BucketBar sessions={sessions} acks={acks} ackAll={ackAll} />}
 
           {/* The list itself: the skin's own (Instrument's status-grouped table, W2 Task S10, D-5473), or the shared
               project cards (`FleetCards`), which that table also places in its project mode. */}
