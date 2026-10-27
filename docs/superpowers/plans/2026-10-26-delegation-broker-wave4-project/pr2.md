@@ -59,8 +59,8 @@ second definition line as a collision.
   worktree and so cannot see it. In the offline group, worktrees come before activities, as W4-U16 states.
 - Task 2.5: the count of activities no card can draw is `unplacedActivities` in `fleetTree.ts`, so `FleetCards` reads a
   decision rather than counting.
-- Task 2.7: W4-U27's "today's code path" is a pass-through mock of `fleetTree` in `fleet-screen.test.tsx` that drops the fifth
-  argument when a case sets it; every other case in that file runs the real function.
+- Task 2.7: W4-U27 first compared the screen with a pass-through mock of `fleetTree` in `fleet-screen.test.tsx` that dropped
+  the fifth argument. Fix round 1 replaced that comparison and removed the mock (F1 below).
 - Task 2.8: W4-UM19's first half (drop `card.delegated` from `cardWithinHeader`) survived as the plan predicts. W4-U33 also
   feeds the predicate a header without the chip, so both halves now red it.
 - Task 2.8 Step 4, the census footprint measured with the census's own regexes (comments stripped): `delegation` is named by ten
@@ -68,3 +68,109 @@ second definition line as a collision.
   `updateHalt.ts`). No file outside the list.
 - `server/src/watch.ts` and `server/src/coord/store.ts` are untouched (growth 0). PR2's only `server/` and `shared/` changes are
   PR1's cherry-picked Task 1.1 commit, the one-line spec citation the brief licensed, and D-7010's row.
+
+## Fix round 1 (review 1029)
+
+Review 1029 read the tip `8fdfb1d52`. Its held-out panel confirmed F1, and the reviewer's own mutant O4 found F2. This round
+changes tests and this note only: no file under `pwa/src`, `server/`, `shared/` or any stylesheet changes, and no number is
+allocated.
+
+### F1: W4-U27 compares today's screen with the base's own render
+
+The plan's Task 2.7 prescribed comparing each card's body with "the same render with `fleetTree` called with no fifth
+argument". Both sides of that comparison ran today's code with a null frame (the argument defaults to `null`), so a
+regression the two paths share left it green. That is a flaw in the prescribed oracle, not a regression found in production.
+The contract it served is Review Focus 4: no frame gives the base's view, with only the declared availability mark added.
+
+- **The world.** `pwa/test/olderServerWorld.tsx` renders one deterministic world: a quiet project, a working one, a
+  coordinator whose five workers fold into one line with one of them asking, and a coordinator whose worker, a workspace of
+  another project, sits on its card with the works-on chip and a programme label. It runs on `rollupFixture`'s fixed clock and
+  leaves every request unanswered. It drives the store with an older server's frame sequence (hello, fleet, runs, coord, pools,
+  divergence; no `delegation`). It returns four views of `document.body.innerHTML`: `cold` (rows set before the socket opens),
+  `connected` (after the frames), `opened` (after project-a's card and the workers line are opened), and `instrument` (Instrument's
+  fleet table over the same store). The module imports only files that exist unchanged at PR2's base: `git diff --quiet
+  7dc486b97 HEAD` holds for each of them, for `pwa/test/setup.ts` and `pwa/vite.config.ts`, and for the lockfiles of `pwa` and `ui`.
+- **The baseline and how it was captured.** `pwa/test/fixtures/older-server/render-7dc486b97.json` was rendered by the
+  code at `7dc486b975741a88aaecb9fb98929b44de2d681a`. The capture:
+  1. extracted that commit's `pwa`, `ui` and `shared` with `git archive` into a scratch tree;
+  2. linked `pwa`'s packages from this branch's install (the same lockfile) and `@ccrc/ui` to the archive's own `ui`;
+  3. copied in the world module (sha256 `5488ddb5f9642f6f9fc011d8fa6af825a9fcc0a8d08d63a44ad593645978c79a`, which the baseline
+     records and W4-U27 checks);
+  4. ran a one-case vitest file, never committed, that calls `renderOlderServerWorld()` once and writes what it returns.
+
+  Two runs in two processes wrote byte-identical files. The committed views, compared with no normalization at all against
+  the base's own render (another scratch-only file), are green.
+- **Normalization.** The capture applies none. W4-U27 removes only `data-delegation="unavailable"` from each
+  `class="fleet-list"` element of today's render. Each view must hold exactly one such mark per fleet list in the baseline
+  (1, 1, 1, 0), no other `data-delegation` attribute, and none of `inferred`, `Unowned work`, `Offline coordinator` and
+  `delegated`. Then it must equal the baseline byte for byte. Today's code passes with no other difference, so nothing in
+  production was changed and no expectation was re-blessed.
+- **One render per file.** React's `useId` counter runs per module graph. In the scratch capture, a second render in the same
+  file numbered Instrument's tab ids `_r_s_` instead of `_r_9_`, and nothing else differed. So the world is rendered once, in a
+  file of its own, `pwa/test/older-server-render.test.tsx`. `fleet-screen.test.tsx` loses the old case and its pass-through
+  mock. The cold-store pin is now the `cold` view, the availability pin is the per-list mark, and the forbidden words are
+  checked on the markup.
+- **Mutants**, each in a scratch tree at `492c059e5` and restored from a saved copy with its sha256 checked. W4-U27 was
+  green in that tree before them:
+
+  | Mutant | Change | W4-U27 goes red at | The former W4-U27 |
+  |---|---|---|---|
+  | W4-UM1 | the store's initial `delegation` is an empty frame | `cold: each fleet list reads unavailable` (0 marks, not 1) | not run |
+  | W4-UM16 | `FleetCards` reads `delegation ?? EMPTY_WIRE` | the same assertion | not run |
+  | F1-M1 | `ProjectCard`'s workers line draws its closed chevron as `›` instead of `▸` | `connected: the base's markup, byte for byte` | passed |
+  | F1-M2 | `nestFleet` pushes a parent's children in reverse order | `opened: the base's markup, byte for byte` | passed |
+
+  F1-M1 and F1-M2 change both of the former comparison's sides equally. The former W4-U27 is `fleet-screen.test.tsx` at
+  `8fdfb1d52`, run in the same tree; it passed under both.
+- **Two pins, two jobs.** The 70 JSON fingerprints of D-7009 are unchanged. They pin the output of `nestFleet`, `fleetTree` and
+  `rollupFleet` captured on `main`. This baseline pins rendered markup. Neither one replaces the other.
+
+### F2: the reader at the tree's seam
+
+Review 1029's mutant O4 replaced `delegationSlices(readDelegation(delegation), cards)` with `delegationSlices(delegation, cards)`
+in `fleetTree.ts`, and six suites (304 tests) stayed green, because every row that fed future words tested the helper
+alone. Two rows now feed the frame as the socket parses it. The members are objects with words this build has never heard
+of and a field it does not know. Nothing mocks the reader, and nothing normalizes the input first.
+
+- **W4-U7b** (`fleetTree.test.ts`) calls the real `fleetTree`. Every member is kept once (2 activities, 2 worktrees,
+  1 unowned item). An unknown group is re-filed `offline-coordinator` and an unknown placement `row`. An unknown liveness or
+  workspace reads `unmeasured`. Only the two members the server measured live read live. The group headers count 2 and 1. The
+  raw worktree keeps its `inferred` chip, and a creator chip naming the Bash call; the agent worktree wears neither.
+- **W4-U7c** (`fleet-screen.test.tsx`) sends the same frame through the socket, the store, `FleetCards` and the card. It
+  opens the coordinator's summary line (its two children fold into `1 delegated · 1 worktree`, D-6088's W/D rule, as W4-U31
+  pins), then the two groups, and reads each row as the cells it draws. A future liveness or workspace word draws
+  `unmeasured` and never `running` or `unrecognised`.
+
+O4 was measured alone, in the scratch tree with these two files copied in, one suite per run:
+
+- W4-U7b went red: the `a-group` member read group `future-group` where `offline-coordinator` was expected.
+- W4-U7c went red: the `reword` row's liveness cell read `unrecognised` where `unmeasured` was expected.
+- These suites stayed green: `delegation-words` (6), `nestFleet` (32), `project-card` (106), `fleet-rollup-render` (17) and
+  `older-server-render` (1). None of them hands the tree a frame with future words.
+
+Restored, `fleetTree.ts`'s sha256 matched the tracked file, and `fleetTree.test.ts` (34) and `fleet-screen.test.tsx` (110)
+were green. The member vocabulary, the wire, the workdir rule, the missing-parent rules and every other policy are unchanged.
+
+### Residuals recorded, not fixed
+
+- **Sort keys a member must carry.** `readDelegation` checks the envelope and that each member is an object. It does not
+  check the strings a member must carry. Measured in a scratch-only file on today's code:
+  - an activity missing `openedAt` throws a `TypeError` out of `fleetTree` when it is the second of two activities, because
+    the sort reads it as the comparator's receiver;
+  - the same activity draws when it is first, or alone;
+  - a lease missing `firstObservedAt` throws the same way.
+
+  This is the robustness of a malformed wire, not a supported mixed-version case: those fields are mandatory, and no
+  producer was shown to omit them. This round adds no member validation or drop policy.
+- **An empty display name.** `activityLine` leaves an empty `displayName` out of the row, but `delegatedChip` keeps it, empty,
+  in its title (`delegated work running: , map`, measured). No producer was shown to emit one. It is latent and cosmetic,
+  and nothing changes.
+
+### What this round does not show
+
+- The panel's containment was not audited in full.
+- The cause of the `ccd-ws-orphan-verb` failure CI saw once at `8fdfb1d52` is unmeasured: it passed on a re-run, and it passed
+  alone locally.
+- The three post-PR1-merge reruns (`fleet-health`, `delegation-wave3.integration`, `typecheck-tests`) are still owed after
+  `main` absorbs PR1.
+- The full merge-queue run is still owed at landing.
