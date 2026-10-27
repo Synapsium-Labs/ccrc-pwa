@@ -1212,7 +1212,8 @@ describe('C4b: decideSleep, one ladder, answers each policy\'s word for the whol
 
   it('a fact the input did not read holds wherever a row reads it (null is never a pass)', () => {
     const base = hibernateSleepInput(HB, NOW, N);
-    const reads = { ...IDLE_HOURS_POLICY, entry: RUN_DONE_POLICY.entry, verbBeforeMeasure: true, turnVerdict: true };
+    // The hybrid row answers run-done's words, so it carries run-done's hold list (C4d: a word outside the list throws).
+    const reads = { ...IDLE_HOURS_POLICY, holds: RUN_DONE_POLICY.holds, entry: RUN_DONE_POLICY.entry, verbBeforeMeasure: true, turnVerdict: true };
     expect(dword(decideSleep(base, reads))).toBe('child-unreadable');
     expect(dword(decideSleep({ ...base, child: { kind: 'child', runId: 1 } } as SleepInput, reads))).toBe('stopped');
     expect(dword(decideSleep(stopDoneSleepInput(SD), { ...RUN_DONE_POLICY, entry: { ...RUN_DONE_POLICY.entry, paneDead: true } }))).toBe('pane');
@@ -1224,5 +1225,19 @@ describe('C4b: decideSleep, one ladder, answers each policy\'s word for the whol
     const asRunDone = { ...IDLE_HOURS_POLICY, name: SLEEP_POLICY_NAMES[0] };
     expect(RD_MATRIX.filter(([, i]) => dword(decideSleep(stopDoneSleepInput(i), asIdle)) !== rdw(i)).map(([n]) => n)).toEqual([]);
     expect(IH_MATRIX.filter(([, i]) => dword(decideSleep(hibernateSleepInput(i, NOW, N), asRunDone)) !== ihw(i)).map(([n]) => n)).toEqual([]);
+  });
+});
+
+// C4d follow-ups of C4b's review (D-7040's decider; ARCH-43). The ladder answers only words of the policy's own list,
+// checked at run time rather than cast; and the fail-closed turn verdict's fallback is written as the base wrote it.
+describe('C4d: decideSleep answers only its policy\'s words, and its turn fallback is the base\'s', () => {
+  it('a word outside the policy\'s hold list is never answered: the ladder throws rather than answer it', () => {
+    const viewer = stopDoneSleepInput(sdIn({ viewer: true })(SD));
+    expect(dword(decideSleep(viewer, RUN_DONE_POLICY)), 'CONTROL: the input reaches viewer').toBe('viewer');
+    const narrowed = { ...RUN_DONE_POLICY, holds: RUN_DONE_POLICY.holds.filter((h) => h !== 'viewer') };
+    expect(() => decideSleep(viewer, narrowed)).toThrow(/viewer/);
+    // Every word the real rows answer over the whole matrix is in their lists, so neither row ever throws.
+    expect(RD_MATRIX.filter(([, i]) => { try { rd(i); return false; } catch { return true; } }).map(([n]) => n)).toEqual([]);
+    expect(IH_MATRIX.filter(([, i]) => { try { ih(i); return false; } catch { return true; } }).map(([n]) => n)).toEqual([]);
   });
 });
