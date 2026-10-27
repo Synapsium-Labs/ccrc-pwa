@@ -113,6 +113,11 @@ function literals(): Map<string, string[]> {
   return found;
 }
 
+/** The whole tree, parsed ONCE, at module load. A full TypeScript parse of every file is seconds of synchronous work
+ *  (1.5 s idle, 4.8 s on one contended core), and inside a case it ran three times against the 5 s per-case deadline:
+ *  the first case timed out under load. Collection has no such deadline. */
+const LITERALS = literals();
+
 /** ACROSS FILES, never within one. A literal repeated inside ONE file is that
  *  file's own business — two arms of a ternary, a fixture used twice — and the
  *  drift this census is about is between files that cannot see each other. */
@@ -145,14 +150,14 @@ const REGISTERED: Record<string, string> = {
 
 describe('literal census', () => {
   it('registers every literal written in two files', () => {
-    const dups = duplicated(literals());
+    const dups = duplicated(LITERALS);
     const missing = dups.filter((d) => REGISTERED[d] === undefined);
     expect(missing, 'a sentence spelled in two files is copy that drifts — register it or fold it')
       .toEqual([]);
   });
 
   it('keeps no stale entry', () => {
-    const dups = new Set(duplicated(literals()));
+    const dups = new Set(duplicated(LITERALS));
     const stale = Object.keys(REGISTERED).filter((k) => !dups.has(k));
     expect(stale, 'this literal is no longer duplicated — drop the entry').toEqual([]);
   });
@@ -164,7 +169,7 @@ describe('literal census', () => {
   it('reads strings at all, and still excludes specifiers', () => {
     // The whole census is a parse away from a serene zero.
     expect(FILES.length).toBeGreaterThan(80);
-    const all = literals();
+    const all = LITERALS;
     expect(all.size).toBeGreaterThan(300);
     // The exclusion is asserted rather than assumed: this path is imported by
     // two files in `@ccrc/ui` and would be a duplicate without it.
