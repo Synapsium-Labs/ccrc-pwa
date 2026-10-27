@@ -122,6 +122,22 @@ function expectNoRefocus(w: { seen: () => string[] }, atAnswer: Element | null, 
   expect([atAnswer, document.body], `${what}: focus is where the answer left it, or on the body`).toContain(document.activeElement);
 }
 
+/** A case's premise "focus falls to the page body". jsdom 30 runs the spec's unfocusing steps, which return early for a
+ *  control that is not a focusable area, so `blur()` leaves a DISABLED row focused (a row is disabled while an answer is in
+ *  flight); jsdom 28 blurred it, its `tabindex` counting. The attribute is lifted for the blur alone, so the events are
+ *  jsdom 28's on both: `blur` and `focusout` on the row, and no `focusin` anywhere. */
+function focusToBody(): void {
+  act(() => {
+    const at = document.activeElement;
+    if (!(at instanceof HTMLElement) || at === document.body) return;
+    const disabled = at.hasAttribute('disabled');
+    if (disabled) at.removeAttribute('disabled');
+    at.blur();
+    if (disabled) at.setAttribute('disabled', '');
+  });
+  expect(document.activeElement, 'premise: focus fell to the page body').toBe(document.body);
+}
+
 const cards = (): HTMLElement[] => [...document.querySelectorAll<HTMLElement>('[data-ask-surface]')];
 const dialogs = (): HTMLElement[] => [...document.querySelectorAll<HTMLElement>('[role="dialog"]')];
 const overlays = (): HTMLElement[] => [...document.querySelectorAll<HTMLElement>('[data-testid="sheet-overlay"]')];
@@ -394,7 +410,7 @@ describe('a keyboard engagement ends with its ask (D-6326)', () => {
     });
     await frame();
     expect(cards()).toHaveLength(0);
-    act(() => (document.activeElement as HTMLElement | null)?.blur());
+    focusToBody();
     // A new menu arrives with focus on the page body: it is a new ask, and an arriving ask takes no focus.
     arrive(4);
     await frame();
@@ -465,7 +481,7 @@ describe('one keyboard engagement per logical ask (R64 F1, F2)', () => {
     act(() => submit.focus());
     key(submit, 'ArrowDown');
     expect(section.contains(document.activeElement), 'premise: the arrow engaged the keyboard inside the card').toBe(true);
-    act(() => (document.activeElement as HTMLElement | null)?.blur());
+    focusToBody();
     act(() => {
       store.getState().apply({ type: 'ask_cleared' });
       for (const f of askFixture(4).frames) store.getState().apply(f);
@@ -491,7 +507,7 @@ describe('one keyboard engagement per logical ask (R64 F1, F2)', () => {
     act(() => first.focus());
     key(first, 'ArrowDown');
     act(() => { fireEvent.pointerDown(target()); });
-    act(() => (document.activeElement as HTMLElement | null)?.blur());
+    focusToBody();
     act(() => store.getState().apply({ type: 'dialog', dialog: nextScreen() }));
     await frame();
     expect(within(card()).getByText(QUESTION_2), 'premise: question 2 is in the card').toBeInTheDocument();
@@ -514,7 +530,7 @@ describe('one keyboard engagement per logical ask (R64 F1, F2)', () => {
     arrive(7);
     await frame();
     expect(cards(), 'premise: the approval is up in the card').toHaveLength(1);
-    act(() => (document.activeElement as HTMLElement | null)?.blur());
+    focusToBody();
     arrive(1);
     await frame();
     expect(within(card()).getByText(QUESTION), 'premise: fixture 1 is back').toBeInTheDocument();
@@ -558,7 +574,7 @@ describe('one keyboard engagement per logical ask (R64 F1, F2)', () => {
     });
     await frame();
     expect(cards(), 'premise: the card left').toHaveLength(0);
-    act(() => (document.activeElement as HTMLElement | null)?.blur());
+    focusToBody();
     arrive(1);
     await frame();
     expect(cards(), 'premise: the card is back').toHaveLength(1);
@@ -655,7 +671,7 @@ describe('one lifecycle generation in the ask identity (R69 F1, F4)', () => {
     act(() => submit.focus());
     key(submit, 'ArrowDown');
     expect(section.contains(document.activeElement), 'premise: the arrow engaged the keyboard inside the card').toBe(true);
-    act(() => (document.activeElement as HTMLElement | null)?.blur());
+    focusToBody();
     act(() => {
       store.getState().apply({ type: 'ask_cleared' });
       for (const f of askFixture(8).frames) store.getState().apply(f);
@@ -685,7 +701,7 @@ describe('one lifecycle generation in the ask identity (R69 F1, F4)', () => {
     const at: { node: Element | null } = { node: null };
     key(first, '1');
     at.node = document.activeElement;
-    act(() => (document.activeElement as HTMLElement | null)?.blur());
+    focusToBody();
     act(() => store.setState({ conn: 'down', askFrameSeen: false, dialog: null }));
     act(() => store.setState({ conn: 'open' }));
     act(() => {
@@ -713,7 +729,7 @@ describe('one lifecycle generation in the ask identity (R69 F1, F4)', () => {
     const first = opt(card(), /^Redis/);
     act(() => first.focus());
     key(first, '1');
-    act(() => (document.activeElement as HTMLElement | null)?.blur());
+    focusToBody();
     act(() => {
       store.getState().apply({ type: 'dialog_cleared' });
       store.getState().apply({ type: 'dialog', dialog: agedQuestion2() });
@@ -740,7 +756,7 @@ describe('one lifecycle generation in the ask identity (R69 F1, F4)', () => {
     const at: { node: Element | null } = { node: null };
     key(first, '1');
     at.node = document.activeElement;
-    act(() => (document.activeElement as HTMLElement | null)?.blur());
+    focusToBody();
     act(() => store.getState().apply({ type: 'dialog_cleared' }));
     await frame();
     expect(store.getState().ask, 'premise: the envelope is still held').not.toBeNull();
@@ -771,7 +787,7 @@ describe('one lifecycle generation in the ask identity (R69 F1, F4)', () => {
     at.node = document.activeElement;
     act(() => store.getState().apply({ type: 'dialog', dialog: askFixture(2).dialog! }));
     await frame();
-    act(() => (document.activeElement as HTMLElement | null)?.blur());
+    focusToBody();
     act(() => store.getState().apply({ type: 'dialog', dialog: agedQuestion2() }));
     await frame();
     expect(within(card()).getByText(HOOK_QUESTIONS[1]!.question), 'premise: question 2 is in the card').toBeInTheDocument();
@@ -793,7 +809,7 @@ describe('one lifecycle generation in the ask identity (R69 F1, F4)', () => {
     act(() => yes.focus());
     key(yes, 'ArrowDown');
     expect(section.contains(document.activeElement), 'premise: the arrow engaged the keyboard inside the card').toBe(true);
-    act(() => (document.activeElement as HTMLElement | null)?.blur());
+    focusToBody();
     const other: Dialog = {
       ...askFixture(4).dialog!, id: 'dlg-a4-other', title: 'Run the migration?',
       options: [{ index: 1, label: 'Run it now' }, { index: 2, label: 'Not yet' }],
@@ -869,7 +885,10 @@ describe('a send this client initiates releases the keyboard (R102)', () => {
     key(first, '2');
     expect(answer, 'the gap refuses the digit').not.toHaveBeenCalled();
     key(first, 'ArrowDown');
-    expect(document.activeElement, 'ArrowDown still moves the highlight to the next row').toBe(opt(card(), /^In-process/));
+    // The highlight is the roving tab stop. In the gap the rows are disabled, and jsdom 30 (like Chrome) moves no focus
+    // onto a disabled row, so focus is no oracle here: jsdom 28 moved it, its `tabindex` counting.
+    expect(opt(card(), /^In-process/).tabIndex, 'ArrowDown still moves the highlight to the next row').toBe(0);
+    expect(first.tabIndex, 'the first row is no longer the highlight').toBe(-1);
   });
 
   it('on the phone (coarse pointer, below 900) a key answer still moves focus to the next screen\'s row, as before', async () => {
