@@ -16,6 +16,7 @@ import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
+import { ccrcContainedEnv } from './ccrcContainment.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(here, '..', '..');
@@ -29,7 +30,7 @@ interface Answer { code: number; stdout: string; stderr: string }
 function call(fn: string, ...args: string[]): Answer {
   const home = mkTmp('ccrc-timer-period-');
   const r = spawnSync(BASH, ['-c', `. "$1"; shift; ${fn} "$@"`, 'bash', CCRC, ...args],
-    { env: { ...process.env, HOME: home }, encoding: 'utf8', input: '' });
+    { env: ccrcContainedEnv(home, process.env, { managers: true, curl: 'poison' }), encoding: 'utf8', input: '' });
   return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
 }
 

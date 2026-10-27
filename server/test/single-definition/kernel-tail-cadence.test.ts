@@ -7,6 +7,7 @@ import { spawnSync } from 'node:child_process';
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { mkTmp } from '../tmpHelpers.js';
+import { ccrcContainedEnv } from '../ccrcContainment.js';
 import { ddnsTranscriptCadences, launchdCadenceLiterals, timerSpellings } from '../census-w8/cadence.js';
 import { ccrcRoot } from './helpers.js';
 
@@ -36,7 +37,7 @@ describe('ARCH-69, the launchd half (D-7053): the ddns job\'s cadence comes from
       const f = join(dir, `spelling-${i}.timer`);
       writeFileSync(f, `[Timer]\n${line}\n`);
       const r = spawnSync('bash', ['-c', '. "$1"; _timer_period_s "$2"', 'bash', join(ccrcRoot, 'ccd', 'ccrc'), f],
-        { env: { ...process.env, HOME: dir }, encoding: 'utf8', input: '' });
+        { env: ccrcContainedEnv(dir, process.env, { managers: true, curl: 'poison' }), encoding: 'utf8', input: '' });
       expect(r.status, `${line}: ${r.stderr}`).toBe(0);
       expect(r.stdout).toMatch(/^[1-9]\d*\n$/);
     }
