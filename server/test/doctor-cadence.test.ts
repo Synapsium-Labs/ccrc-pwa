@@ -428,3 +428,26 @@ describeLinux('C8b step 4: pool-sync, its unit file unreadable or its reader unl
     expect(m.code).toBe(1);
   });
 });
+
+describeLinux('C8b step 4: update-sync, its unit file unreadable or its reader unloaded', () => {
+  it.each([119, 120])('an unreadable ccd-update-sync.timer makes update-sync WARN unmeasured (installed %i s ago), never compare against a literal or an empty operand', (age) => {
+    const now = fixedNow();
+    const home = box(`c8b-update-sync-unread-${age}-`, now);
+    unitAged(home, 'ccd-update-sync.timer', now, age);
+    noTimer(home, 'ccd-update-sync.timer');
+    const r = runChecks(home, '_check_update-sync');
+    expect(r.stdout.split('\n')).toEqual([
+      ...warnUnread('update-sync', 'ccd-update-sync.timer', 'the not-yet-synced grace for ~/.ccrc/update-intent (two of the timer\'s periods)'), '']);
+    expect(r.stderr).toBe('');
+    expect(r.code).toBe(2);
+  });
+
+  it('BOX_TREE_DIR not loaded: the grace FAILs naming the bug', () => {
+    const now = fixedNow();
+    const home = box('c8b-update-sync-unloaded-', now);
+    unitAged(home, 'ccd-update-sync.timer', now, 120);
+    const r = runChecks(home, 'BOX_TREE_DIR=; _check_update-sync');
+    expect(r.stdout.split('\n')).toEqual([...unloaded('update-sync', 'ccd-update-sync.timer', 'the not-yet-synced grace'), '']);
+    expect(r.code).toBe(1);
+  });
+});

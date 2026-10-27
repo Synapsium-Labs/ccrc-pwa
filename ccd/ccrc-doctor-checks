@@ -4590,10 +4590,18 @@ _check_update-sync() {
   # a box that has not had one tick yet, never for a fixture the puller
   # itself already wrote and got wrong.
   if [ "$UPD_INTENT_WHY" = "never synced" ]; then
-    local update_sync_grace=$((2 * 60)) unit_mtime unit_age
+    local update_sync_grace=$((2 * 60)) unit_mtime unit_age grace period cad_rc=0
     unit_mtime="$(_plat_mtime "$unit_path" 2>/dev/null)"
     if [[ "$unit_mtime" =~ ^[0-9]+$ ]]; then
       unit_age=$(($(date +%s) - unit_mtime))
+      # pool-sync's reading of the shipped unit file, for this unit (D-7054;
+      # OA-C8c (a), D-7062): unmeasured, never a literal.
+      grace="$(_dr_cycles_s ccd-update-sync.timer 2)" || cad_rc=$?
+      [ "$cad_rc" -ne 0 ] || period="$(_dr_cycles_s ccd-update-sync.timer 1)" || cad_rc=$?
+      case "$cad_rc" in
+        1) _dr_cadence_unread update-sync ccd-update-sync.timer "the not-yet-synced grace for ~/.ccrc/update-intent (two of the timer's periods)"; return 2 ;;
+        3) _dr_cadence_unloaded update-sync ccd-update-sync.timer "the not-yet-synced grace"; return 1 ;;
+      esac
       if [ "$unit_age" -ge 0 ] && [ "$unit_age" -lt "$update_sync_grace" ]; then
         _dr_warn update-sync "update-sync-not-yet-synced: ccd-update-sync.timer was installed ${unit_age}s ago and ~/.ccrc/update-intent has not been written yet — the timer fires every 60s (OnUnitActiveSec) and converges on its own; expected right after an install, not a fault" \
           "wait for the timer to fire (up to ~60s) and re-run ccrc doctor — still absent past that window is the real fault: read the oneshot's own log ($(_dr_log_hint ccd-update-sync.service))"

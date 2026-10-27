@@ -250,7 +250,7 @@ const REAL_BASE: string[] = [
   'pool-sync _dr_warn pool-sync "pool-sync-not-yet-synced: ccd-pool-sync.',
   'pool-sync "wait for the timer to fire (up to ~60s) and re-run ccrc doc',
   'pool-sync local period cad_rc=0 every=" (every 60s)"',
-  'update-sync local update_sync_grace=$((2 * 60)) unit_mtime unit_age',
+  'update-sync local update_sync_grace=$((2 * 60)) unit_mtime unit_age grac',
   'update-sync _dr_warn update-sync "update-sync-not-yet-synced: ccd-update',
   'update-sync "wait for the timer to fire (up to ~60s) and re-run ccrc doc',
   'graphify if [ "$age" -gt 2700 ]; then',
