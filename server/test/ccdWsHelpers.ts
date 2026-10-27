@@ -680,10 +680,19 @@ export function makeCcdHarness(prefix: string): CcdHarness {
   // CONTAINED_TOOLS name is planted here, at creation.
   ghContainedEnv(home, {}, { systemd: true, tmux: true, net: true });
 
+  // Fixture git runs with auto-maintenance and auto-gc OFF. Each commit would
+  // otherwise start `git maintenance run --auto --detach`, which outlives the
+  // commit; on git 2.55 its default task is a geometric `repack -d`, which can
+  // merge and delete the temporary pack of a fixture's own explicit `gc` before
+  // gc's cruft pass reads it ("could not find pack '.tmp-…'"). An explicit
+  // `git gc` is not affected. `inheritedEnv()` drops any inherited
+  // GIT_CONFIG_COUNT/KEY/VALUE, so these are the only pairs.
   const gitEnv = (): NodeJS.ProcessEnv => ({
     ...inheritedEnv(), HOME: home,
     GIT_AUTHOR_NAME: 'T', GIT_AUTHOR_EMAIL: 't@x',
     GIT_COMMITTER_NAME: 'T', GIT_COMMITTER_EMAIL: 't@x',
+    GIT_CONFIG_COUNT: '2', GIT_CONFIG_KEY_0: 'maintenance.auto', GIT_CONFIG_VALUE_0: 'false',
+    GIT_CONFIG_KEY_1: 'gc.auto', GIT_CONFIG_VALUE_1: '0',
   });
 
   const git = (cwd: string, ...args: string[]): string =>
