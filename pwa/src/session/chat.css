@@ -333,6 +333,9 @@ button.metachip:active {
 /* The doors carry words from 900 (desktop polish T3c, D-6333): "Terminal", "More" and the PR door's word (`#123`, or
    what a tap does) beside the glyph. Below 900 they stay glyphs at the 44px floor, each with a `title`, and the More
    sheet lists every door with its word. The PR cap swaps two spans: the legend below 900, the door's word from it. */
+/* The hide is the word's own, not the header's: the inspector draws the same PR cap outside `.chat-head`
+   (`PrSection`), and there the legend alone shows. Only the show below is the header's. */
+.keycap--pr .keycap-word,
 .chat-head .keycap-word { display: none; }
 @media (min-width: 900px) {
   .chat-head .keycap-word {
