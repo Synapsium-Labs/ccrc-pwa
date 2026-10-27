@@ -47,6 +47,7 @@
 // MUTATION TABLE (plan Task T2b Step 3; RUN, each mutant on the working tree, this suite alone, then reverted):
 //   `PhoneFab` mounted at every width .................. "exactly one [data-command=new-session] at 900, 1280 and 1920"
 //   `PhoneFab` with its own `onClick` that navigates ... "at 390 the round + dispatches the new-session door event"
+//   `PhoneFab` gated on a narrower width (min-width: 600px) "at 899 the round + is the one New session door"
 import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import type { ReactNode } from 'react';
@@ -638,5 +639,14 @@ describe('no floating + at the desk (T2b, D-6328)', () => {
     fireEvent.click(buttons[0]!);
     expect(seen).toEqual(['new-session']);
     window.removeEventListener(DOOR_EVENT, listen);
+  });
+
+  it('at 899 the round + is the one New session door', () => {
+    stubAt(899);
+    mount('/');
+    const doors = document.querySelectorAll('[data-command="new-session"]');
+    expect(doors).toHaveLength(1);
+    expect(doors[0]).toHaveClass('fab');
+    expect(screen.getAllByRole('button', { name: 'New session' })).toHaveLength(1);
   });
 });
