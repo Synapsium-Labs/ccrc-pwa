@@ -2089,13 +2089,23 @@ export class FleetWatcher {
     this.stopDoneSerial = (fn) => h.serial(fn);
   }
 
+  /** The stop-done lane (`run-done`) alone, through `sweepSleep` (C4f deletes this door). */
+  sweepStopDone(sessions: readonly FleetSession[], records: readonly SessionRecord[], names: readonly string[]): Promise<void> {
+    return this.sweepSleep(sessions, records, names, 'run-done');
+  }
+
+  /** Hibernation (`idle-hours`) alone, through `sweepSleep` (C4f deletes this door). */
+  sweepHibernate(sessions: readonly FleetSession[], records: readonly SessionRecord[], names: readonly string[]): Promise<void> {
+    return this.sweepSleep(sessions, records, names, 'idle-hours');
+  }
+
   /**
    * THE STOP-DONE LANE (D-5370): a finished run's dispatched worker is stopped once idle, and restarts on re-dispatch.
    * A sibling on the tick, at its own cadence, on THIS tick's assembled rows and registry listing (the listing carries
    * the kill switch). Never awaited by the tick; one pass at a time. The rule is `stopDoneVerdict` (L1), the pass
-   * `stopDonePass` (L4).
+   * `stopDonePass` (L4). Started by `sweepSleep`.
    */
-  async sweepStopDone(sessions: readonly FleetSession[], records: readonly SessionRecord[], names: readonly string[]): Promise<void> {
+  private async sleepRunDone(sessions: readonly FleetSession[], records: readonly SessionRecord[], names: readonly string[]): Promise<void> {
     const coord = this.deps.coord;
     if (!coord || this.stopDoneSweeping) return;
     const now = Date.now();
@@ -2125,9 +2135,10 @@ export class FleetWatcher {
    * registry listing (the listing carries the switches), `hibernatePass` asks `hibernateVerdict` about every row. Shadow
    * (a `hibernate-shadow` line) unless the operator armed it with `$REG/hibernate-live`; armed, it composes
    * `ccd hibernate` on the coordination serialiser (the stop-done lane's, handed over by `useStopDoneSerialiser`) and
-   * the session's queue, after re-reading everything there. Never awaited by the tick; one pass at a time.
+   * the session's queue, after re-reading everything there. Never awaited by the tick; one pass at a time. Started by
+   * `sweepSleep`.
    */
-  async sweepHibernate(sessions: readonly FleetSession[], records: readonly SessionRecord[], names: readonly string[]): Promise<void> {
+  private async sleepIdleHours(sessions: readonly FleetSession[], records: readonly SessionRecord[], names: readonly string[]): Promise<void> {
     if (this.hibernateSweeping) return;
     const now = Date.now();
     if (this.lastHibernateSweep !== 0 && now - this.lastHibernateSweep < HIBERNATE_SWEEP_MS) return;
@@ -2156,8 +2167,8 @@ export class FleetWatcher {
   /** Each sleep lane's own body, by its policy's name (D-7045): `sweepSleep` starts them in `SLEEP_LANES`' order. */
   private readonly sleepRunners: Readonly<Record<SleepPolicyName,
     (sessions: readonly FleetSession[], records: readonly SessionRecord[], names: readonly string[]) => Promise<void>>> = {
-    'run-done': (sessions, records, names) => this.sweepStopDone(sessions, records, names),
-    'idle-hours': (sessions, records, names) => this.sweepHibernate(sessions, records, names),
+    'run-done': (sessions, records, names) => this.sleepRunDone(sessions, records, names),
+    'idle-hours': (sessions, records, names) => this.sleepIdleHours(sessions, records, names),
   };
 
   /**
