@@ -167,7 +167,7 @@ const DOCTOR_CADENCE_READERS = new Set(['_dr_timer_period_s', '_dr_cycles_s']);
 const NUMBER_WORD = 'two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|fifteen|twenty|thirty|forty|forty-five|fifty|sixty';
 /** A duration spelled in a double-quoted string the doctor prints (or interpolates into what it prints). */
 const DOCTOR_DURATION = new RegExp([
-  String.raw`\bevery \d+(?:s|min|h)\b`, String.raw`\bevery minute\b`, String.raw`\bevery (?:${NUMBER_WORD}) minutes\b`,
+  String.raw`\bevery \d+ ?(?:s|secs?|seconds?|min|mins|minutes?|h|hours?)\b`, String.raw`\bevery minute\b`, String.raw`\bevery (?:${NUMBER_WORD}) minutes\b`,
   String.raw`\b\d+-minute\b`, String.raw`\bup to ~\d+`, String.raw`\b(?:\d+|${NUMBER_WORD}) minutes after\b`,
 ].join('|'));
 const DOUBLE_QUOTED = /"(?:[^"\\]|\\.)*"/g;
