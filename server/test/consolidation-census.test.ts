@@ -270,6 +270,7 @@ describe('capabilityChoiceSites: verbSupported(, capSupported( and ccdCan( calls
       '  const m = { verbSupported: true };',                                       // 11: a key, not a call
       '}',
     ].join('\n'));
+    // D-7042: a former W4 file is held to the one verb question like any other (W4_HELD_FILES is empty).
     at('server/src/hibernateSweep.ts', 'export const p = (a: A) => verbSupported(a.fleetState, argv);\n');
   });
   afterAll(() => { if (tree) rmSync(tree, { recursive: true, force: true }); });
@@ -277,7 +278,7 @@ describe('capabilityChoiceSites: verbSupported(, capSupported( and ccdCan( calls
   it('FIXTURE: each form and tag, and never a comment, a key or the defining file', async () => {
     expect((await capabilityChoiceSites(tree)).map((x) => [x.file.replace('server/src/', ''), x.line, x.form, x.token, x.tag]))
       .toEqual([
-        ['hibernateSweep.ts', 1, 'verbSupported', null, 'w4-held'],
+        ['hibernateSweep.ts', 1, 'verbSupported', null, 'verb'],
         ['lane.ts', 2, 'ccdCan', null, 'verb'],
         ['lane.ts', 3, 'verbSupported', null, 'verb'],
         ['lane.ts', 4, 'capSupported', 'expire-v1', 'verb'],

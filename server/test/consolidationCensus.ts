@@ -373,9 +373,10 @@ export function runCcdOldFoldSites(root: string = REPO, table: readonly RanTable
   return runCcdSiteArms(root, table).filter((s) => s.arm === null).map(({ file, line, text }) => ({ file, line, text }));
 }
 
-/** D-5866 (Task C1k; ARCH-71 #806): the W4 files W1b never edits. Their capability sites are reported, tagged
- *  `w4-held`, and W4 moves them. */
-export const W4_HELD_FILES: readonly string[] = ['server/src/hibernateSweep.ts', 'server/src/stopDoneSweep.ts'];
+/** D-5866 (Task C1k; ARCH-71 #806): the W4 files W1b never edits. Their capability sites were reported, tagged
+ *  `w4-held`, and W4 moved them: since D-7042 (ARCH-43 C4d) both sleep lanes ask `ccdCan` in the one executor
+ *  (`sleepLane.ts`), and no file is held. */
+export const W4_HELD_FILES: readonly string[] = [];
 
 /** What a capability site asks. `verb`: whether this box's ccd can run a `CCD_ARGV` row (every `ccdCan(` and every
  *  `verbSupported(`, and a `capSupported(` of some `CCD_CAN` row's token). `verb-precondition`: a `capSupported(` on
