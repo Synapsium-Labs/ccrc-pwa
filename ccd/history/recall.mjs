@@ -407,9 +407,15 @@ export function runTree(rc, a) {
 //  - A hit is one in-scope REFERRER of a matching blob: an entry (its first body), an entry variant (a
 //    later body of the same uuid), or a sidecar. Blobs are shared across families, so a blob's match says
 //    nothing about scope until it is joined to a referrer.
-//  - The scope join and the provenance filter run INSIDE the ranking statement, before its LIMIT
+//  - The scope term and the provenance filter run INSIDE the ranking statement, before its LIMIT
 //    (RANK_POOL), so exit 3 means zero in-scope matches, never zero in a global top-N (C27).
-//  - total is a separate count of every in-scope matching referrer: the N of "shown K of N" (§8.3).
+//  - Each arm is driven from the scope's transcripts, not from the box's match: it carries its own
+//    `transcript_pk IN :tpks` term, the entry and variant arms read `entries` through `INDEXED BY entries_ts`, and every
+//    blob term carries a unary `+`, so no blob-led index can drive an arm and a family's grep costs what its scope holds
+//    (D-7095 (history-grep-scope-first)).
+//  - Rank (BM25) is read only by a sort whose ORDER BY names it; recency reads none.
+//  - total is `count(*) OVER ()` on the ranked statement's own rows, read from its first row: the true count of every
+//    in-scope matching referrer, the N of "shown K of N" (§8.3), with the global match run once.
 //  - Every select names its columns through selectColumns, so a store older than this code answers NULL
 //    for a column it lacks (§6.11, DM44); none is a wildcard projection (C43).
 // ---------------------------------------------------------------------------------------------
@@ -423,13 +429,16 @@ const FRAME_RESERVE = 1200;
 /** The entries columns a referrer carries. */
 const REFERRER_ENTRY_COLS = Object.freeze(['entry_id', 'uuid', 'transcript_pk', 'ts_ms', 'role', 'provenance', 'tool_name', 'blob_id']);
 
-/** The FTS match: each blob whose redacted plain text holds the sanitised query, with its BM25 rank. */
-const FTS_MATCH = 'SELECT rowid, rank FROM blobs_fts WHERE blobs_fts MATCH :q';
+/** The FTS match: each blob whose redacted plain text holds the sanitised query. No rank: a sort that orders by BM25 reads
+ *  it through `rk` (rankedSql). Exported as a test seam (the `leafHeads` precedent). */
+export const FTS_MATCH = 'SELECT rowid FROM blobs_fts WHERE blobs_fts MATCH :q';
 
-/** The scope join, the provenance filter and grep's filters, over `refs r`. Named parameters: :tpks and :provs
- *  are JSON arrays (json_each), :nodes a JSON array or NULL, the rest a value or NULL. */
-const GREP_FILTER = `r.transcript_pk IN (SELECT value FROM json_each(:tpks))
-      AND r.provenance IN (SELECT value FROM json_each(:provs))
+/** The scope term of every arm: the transcripts in :tpks (a JSON array). Each arm carries it on its own table. */
+const SCOPE_IN = 'IN (SELECT value FROM json_each(:tpks))';
+
+/** The provenance filter and grep's filters, over `refs r`; the scope term is each arm's own (SCOPE_IN). Named parameters:
+ *  :provs is a JSON array (json_each), :nodes a JSON array or NULL, the rest a value or NULL. */
+const GREP_FILTER = `r.provenance IN (SELECT value FROM json_each(:provs))
       AND (:role IS NULL OR r.role = :role)
       AND (:tool IS NULL OR r.tool_name = :tool)
       AND (:since IS NULL OR r.ts_ms >= :since)
@@ -437,9 +446,10 @@ const GREP_FILTER = `r.transcript_pk IN (SELECT value FROM json_each(:tpks))
       AND (:nodes IS NULL OR r.entry_id IN (SELECT value FROM json_each(:nodes)))`;
 
 /** One table as a derived table holding the columns the store's version has (NULL AS <col> for one a later
- *  version adds). SQLite flattens it into the enclosing join, so the table's own indexes still serve it. */
-function versioned(rc, table, alias, cols) {
-  return `(SELECT ${selectColumns(rc.version, table, cols, rc.schema)} FROM ${table}) AS ${alias}`;
+ *  version adds). SQLite flattens it into the enclosing join, so the table's own indexes still serve it. With `indexedBy`
+ *  the table is read through that index (`FROM <table> INDEXED BY <index>`), which the planner then cannot leave. */
+function versioned(rc, table, alias, cols, indexedBy = null) {
+  return `(SELECT ${selectColumns(rc.version, table, cols, rc.schema)} FROM ${table}${indexedBy === null ? '' : ` INDEXED BY ${indexedBy}`}) AS ${alias}`;
 }
 
 /** The named parameters `sql` uses, taken from `all`. node:sqlite refuses a named parameter the statement does
@@ -525,51 +535,60 @@ export function asOfCutOf(rc, asof) {
   return asOfCut({ asof, boundary, copy, kept });
 }
 
-/** `refs`: every referrer of a blob `matchSql` selects as (blob_id, rank). That is the FTS MATCH here, and the
- *  regex child's blob list in Task 14. `ref_key` is the referrer's own immutable identity, unique across the three
+/** `refs`: every in-scope referrer of a blob `matchSql` selects as (blob_id), and `m` the match's blob ids with no rank (that
+ *  is the FTS MATCH here, and the regex child's blob list in Task 14). `ref_key` is the referrer's own immutable identity, unique across the three
  *  routes (an entry by its id, a variant by its entry and blob, a sidecar by its primary key: transcript, name,
  *  blob), so the ranked order can be total. A variant whose blob is the entry's first body is that entry's own row
  *  (§6.2: the first body also gets a variant row once a second appears), so it is not counted twice.
+ *  Each arm is driven from the scope (D-7095): it filters its own transcript (`transcript_pk IN :tpks`), the entry and variant arms read
+ *  `entries` through `INDEXED BY entries_ts` (with an `entries_ts` row in sqlite_stat1, which the writer's `PRAGMA optimize`
+ *  writes, the planner would otherwise plan `SCAN entries`), and each tests its blob against the match with a unary `+`, which
+ *  takes the blob-led indexes (entries_blob, entries_blob_prov, entry_variants_blob, sidecars_blob) out of the planner's
+ *  choices. So a family's grep costs what its scope holds, never what the box's match holds. The sidecar arm names no index:
+ *  measured, it plans on sqlite_autoindex_sidecars_1 (transcript_pk=?) while sqlite_stat1 has no sidecars row, and scans the
+ *  table once it has one (a small table: about 0.4 ms more at 6,300 sidecars, warm), so no blob-led index drives it either way.
  *  Under an as-of cut each arm keeps only the referrers whose entry is visible, inside the CTE, so before the scope
  *  filter, the ranking, the LIMIT and the count (W2-D35, W2-D36; C27). A variant follows its entry, and a sidecar the
  *  entry it is linked to. A sidecar linked to none is absent: lib's predicate is never true over the LEFT JOIN's NULL row. */
 function referrerSql(rc, matchSql) {
-  const e = (alias) => versioned(rc, 'entries', alias, REFERRER_ENTRY_COLS);
-  return `WITH m(blob_id, rank) AS (${matchSql}),
-  refs(via, entry_id, uuid, transcript_pk, ts_ms, role, provenance, tool_name, blob_id, name, rank, ref_key) AS (
-    SELECT 'entry', e.entry_id, e.uuid, e.transcript_pk, e.ts_ms, e.role, e.provenance, e.tool_name, m.blob_id, NULL, m.rank,
+  const e = (alias) => versioned(rc, 'entries', alias, REFERRER_ENTRY_COLS, 'entries_ts');
+  return `WITH m(blob_id) AS (${matchSql}),
+  refs(via, entry_id, uuid, transcript_pk, ts_ms, role, provenance, tool_name, blob_id, name, ref_key) AS (
+    SELECT 'entry', e.entry_id, e.uuid, e.transcript_pk, e.ts_ms, e.role, e.provenance, e.tool_name, e.blob_id, NULL,
         'entry:' || e.entry_id
-      FROM m JOIN ${e('e')} ON e.blob_id = m.blob_id${cutAnd(rc, 'e')}
+      FROM ${e('e')}
+      WHERE e.transcript_pk ${SCOPE_IN} AND +e.blob_id IN (SELECT blob_id FROM m)${cutAnd(rc, 'e')}
     UNION ALL
-    SELECT 'variant', e.entry_id, e.uuid, e.transcript_pk, e.ts_ms, e.role, e.provenance, e.tool_name, m.blob_id, NULL, m.rank,
+    SELECT 'variant', e.entry_id, e.uuid, e.transcript_pk, e.ts_ms, e.role, e.provenance, e.tool_name, v.blob_id, NULL,
         'variant:' || e.entry_id || ':' || v.blob_id
-      FROM m JOIN ${versioned(rc, 'entry_variants', 'v', ['entry_id', 'blob_id'])} ON v.blob_id = m.blob_id
-        JOIN ${e('e')} ON e.entry_id = v.entry_id
-      WHERE v.blob_id <> e.blob_id${cutAnd(rc, 'e')}
+      FROM ${e('e')}
+        JOIN ${versioned(rc, 'entry_variants', 'v', ['entry_id', 'blob_id'])} ON v.entry_id = e.entry_id
+      WHERE e.transcript_pk ${SCOPE_IN} AND +v.blob_id IN (SELECT blob_id FROM m) AND v.blob_id <> e.blob_id${cutAnd(rc, 'e')}
     UNION ALL
     SELECT 'sidecar', s.entry_id, se.uuid, s.transcript_pk, COALESCE(se.ts_ms, s.first_seen_ms), NULL, 'tool', NULL,
-        m.blob_id, s.name, m.rank, 'sidecar:' || s.transcript_pk || ':' || s.name || ':' || s.blob_id
-      FROM m JOIN ${versioned(rc, 'sidecars', 's', ['transcript_pk', 'name', 'blob_id', 'entry_id', 'first_seen_ms'])} ON s.blob_id = m.blob_id
-        LEFT JOIN ${versioned(rc, 'entries', 'se', ['entry_id', 'uuid', 'ts_ms'])} ON se.entry_id = s.entry_id${cutOf(rc) === null ? '' : `
-      WHERE ${cutTerm(rc, 'se')}`}
+        s.blob_id, s.name, 'sidecar:' || s.transcript_pk || ':' || s.name || ':' || s.blob_id
+      FROM ${versioned(rc, 'sidecars', 's', ['transcript_pk', 'name', 'blob_id', 'entry_id', 'first_seen_ms'])}
+        LEFT JOIN ${versioned(rc, 'entries', 'se', ['entry_id', 'uuid', 'ts_ms'])} ON se.entry_id = s.entry_id
+      WHERE s.transcript_pk ${SCOPE_IN} AND +s.blob_id IN (SELECT blob_id FROM m)${cutAnd(rc, 'se')}
   )`;
 }
 
-/** The top RANK_POOL in-scope referrers in `sort` order. The scope sits in this statement's WHERE, before its
- *  LIMIT (C27). The tie-break makes the order total (the last term, `ref_key`, is unique per referrer), so a
- *  cursor's position means one hit even among sidecars that share rank, time, blob and a NULL entry. */
+/** The top RANK_POOL in-scope referrers in `sort` order, each with `total`, the true in-scope count on every row
+ *  (`count(*) OVER ()`, taken after the filters and before ORDER BY and LIMIT). The scope sits in the arms' WHERE,
+ *  before this statement's LIMIT (C27). The tie-break makes the order total (the last term, `ref_key`, is unique per
+ *  referrer), so a cursor's position means one hit even among sidecars that share rank, time, blob and a NULL entry.
+ *  A sort whose ORDER BY names `rank` (ftsOrderBy's own text decides) joins `rk`, the match's BM25 by blob; recency reads
+ *  none. BM25 depends on the row and the table's own statistics, never on which other rows are read. */
 function rankedSql(rc, matchSql, sort) {
-  return `${referrerSql(rc, matchSql)}
+  const order = ftsOrderBy(sort, 'r.ts_ms');
+  const readsRank = /\brank\b/.test(order);
+  return `${referrerSql(rc, matchSql)}${readsRank ? `,
+  rk(blob_id, rank) AS (SELECT rowid, rank FROM blobs_fts WHERE blobs_fts MATCH :q)` : ''}
   SELECT r.via AS via, r.entry_id AS entry_id, r.uuid AS uuid, r.ts_ms AS ts_ms, r.role AS role,
-      r.provenance AS provenance, r.blob_id AS blob_id, r.name AS name, r.transcript_pk AS transcript_pk
-    FROM refs r WHERE ${GREP_FILTER}
-    ORDER BY ${ftsOrderBy(sort, 'r.ts_ms')}, r.blob_id, r.entry_id, r.ref_key LIMIT :pool`;
-}
-
-/** The true in-scope count, the same filter with no LIMIT. */
-function countSql(rc, matchSql) {
-  return `${referrerSql(rc, matchSql)}
-  SELECT count(*) AS n FROM refs r WHERE ${GREP_FILTER}`;
+      r.provenance AS provenance, r.blob_id AS blob_id, r.name AS name, r.transcript_pk AS transcript_pk,
+      count(*) OVER () AS total
+    FROM refs r${readsRank ? ' JOIN rk ON rk.blob_id = r.blob_id' : ''} WHERE ${GREP_FILTER}
+    ORDER BY ${order}, r.blob_id, r.entry_id, r.ref_key LIMIT :pool`;
 }
 
 /** A refusing VerbResult. Its exit is the one REASONS maps the word to (2, 4, 5 or 7). `hint` is the hint's text;
@@ -668,14 +687,17 @@ function grepParams(rc, a, nodes, extra) {
   };
 }
 
-/** The ranked pool and the true count. When blobs_fts vanished between the gate and the statement (a
- *  `doctor --repair` drop and recreate), the answer is 7 fts-pending, never exit 1 (review focus 5). */
-function rankedAndCounted(rc, matchSql, sort, all) {
+/** The ranked pool and the true count, from ONE statement: `total` is the window count on every row, read from the first
+ *  (0 when there is none) and stripped from each pooled row, so the pool keeps exactly its nine columns and the global
+ *  match runs once. `all.pool` is at least 1, since the count rides on the first row. Exported as a test seam (the
+ *  `leafHeads` precedent). When blobs_fts vanished between the gate and the statement (a `doctor --repair` drop and
+ *  recreate), the answer is 7 fts-pending, never exit 1 (review focus 5). */
+export function rankedAndCounted(rc, matchSql, sort, all) {
   try {
     const rs = rankedSql(rc, matchSql, sort);
-    const cs = countSql(rc, matchSql);
-    const pool = rc.db.prepare(rs).all(bindFor(rs, all));
-    const total = Number(rc.db.prepare(cs).get(bindFor(cs, all)).n);
+    const rows = rc.db.prepare(rs).all(bindFor(rs, all));
+    const total = rows.length === 0 ? 0 : Number(rows[0].total);
+    const pool = rows.map(({ total: _total, ...hit }) => hit);
     return { pool, total };
   } catch (e) {
     if (/no such table: (?:main\.)?blobs_fts\b/.test(String(e && e.message))) return { result: refusal('fts-pending') };
@@ -1010,8 +1032,8 @@ export function grepVerb(rc, argv) {
 export const WORKER_PATH = fileURLToPath(new URL('./regex-worker.mjs', import.meta.url));
 /** The child's stdout bound: one short JSON line per matching blob. */
 const WORKER_MAX_BUFFER = 64 * 1024 * 1024;
-/** The child's matches as the (blob_id, rank) rows referrerSql reads. */
-const REGEX_MATCH = 'SELECT value, 0 FROM json_each(:blobs)';
+/** The child's matches as the (blob_id) rows referrerSql reads. Exported as a test seam (the `leafHeads` precedent). */
+export const REGEX_MATCH = 'SELECT value FROM json_each(:blobs)';
 
 /** The parent's pair index as the pairs the child rebuilds it from: (len, sha256) only, never a value. It iterates
  *  each length's set, so `idx` must be a makePairIndex result (rc.pairIdx always is): lib.d.mts types the values as
