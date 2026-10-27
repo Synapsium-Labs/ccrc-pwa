@@ -4,8 +4,8 @@
 // (`browser/app.ts`) reads Chrome's `TaskDuration` over a window around each frame (CDP `Performance.getMetrics`). A
 // window runs from the first read to the second: the first read's round trip, the frame's send, `during` (the
 // self-tests' hook), the wait of `gapMs` (2 s in the gate cases) and the second read's round trip. That is at least
-// `gapMs`; a loaded host stretches it, so `FrameCost.spans` records each window's measured length, and a window that
-// spans more than `gapMs + SPAN_SLACK_MS` fails the attempt as `window-overrun`, never as a cost: its figures are not
+// `gapMs`, with no upper bound of its own (spans of seconds were measured on a loaded box), so `FrameCost.spans`
+// records each window's measured length, and a window that spans more than `gapMs + SPAN_SLACK_MS` fails the attempt as `window-overrun`, never as a cost: its figures are not
 // taken as the frame's cost.
 // Since the operator's R104 contract, `frameCost` defers the fixture's `/api` answers into an unmeasured drain before
 // each window, so the gates measure a window in which the harness fulfils no fixture answer. That changed what the

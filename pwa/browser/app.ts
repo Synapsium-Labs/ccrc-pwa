@@ -351,7 +351,7 @@ export interface FrameCost {
    *  second (see `frameCost`), so it is at least `gapMs` long and, in a returned result, at most `gapMs + SPAN_SLACK_MS`. */
   readonly idle: Cost;
   /** One entry per frame: the main thread's TaskDuration and ScriptDuration over that frame's window, which starts
-   *  just before the frame is sent and lasts at least `gapMs` (`spans` has the measured length). */
+   *  at its first Chrome read and lasts at least `gapMs` (`spans` has the measured length). */
   readonly frames: readonly Cost[];
   readonly median: Cost;
   readonly mean: Cost;
@@ -421,9 +421,8 @@ const QUIET_TASK_MS = 1;
 /** Send each of `frames` to the newest socket on `path`, `gapMs` apart, and read Chrome's `TaskDuration` and
  *  `ScriptDuration` (`Performance.getMetrics`, seconds) before and after each window. A window runs from its first
  *  read to its second: the first read's round trip, the frame's send, `during`, the wait of `gapMs` and the second
- *  read's round trip. That is at least
- *  `gapMs`, and a loaded host stretches the waits and the reads, so `FrameCost.spans` records each window's measured
- *  length and a window past `gapMs + SPAN_SLACK_MS` fails the attempt (below). One idle window with no frame is
+ *  read's round trip. That is at least `gapMs`, with no upper bound of its own (spans of seconds were measured on a
+ *  loaded box), so `FrameCost.spans` records each window's measured length and a window past `gapMs + SPAN_SLACK_MS` fails the attempt (below). One idle window with no frame is
  *  measured first, on the page as it stands before `frames`: it is not matched to a page that has taken them (an
  *  identical frame re-sent after many changes is measured against this one idle window). Nothing runs in the page: the meter is a CDP session on the test side.
  *
