@@ -14628,9 +14628,9 @@ for line in children:
 }
 
 cmd_ws_reap() {   # ccd ws-reap --expect <token> --session <id>
-  # The ONLY destructive verb. Every guard is re-evaluated HERE, on the box, at
-  # the instant of deletion — the audit's verdict is not trusted, it is
-  # recomputed. A refusal prints on stdout and exits 0: it is an answer.
+  # Every guard is re-evaluated HERE, on the box, at the instant of deletion —
+  # the audit's verdict is not trusted, it is recomputed. A refusal prints on
+  # stdout and exits 0: it is an answer.
   [[ $# -eq 4 && $1 == --expect && $3 == --session ]] \
     || die "usage: ccd ws-reap --expect <token> --session <id>"
   local token=$2 id=$4
@@ -30119,9 +30119,11 @@ _ws_reclaim_reset() {   # every REAP_* global `_ws_reap_reset` owns, plus the re
   _WS_LEGACY_ROWS=""; _WS_PENDING_ROWS=""   # the rows rung's entry-field counts: '' = not counted, printed null
 }
 
-_ws_reclaim_fingerprint() {   # key=value... -> the reclaim token. Every input is NAMED, so a
-  # reclaim token can never equal a reap token or a resume token over the same
-  # facts: the first input is always `mode=…`.
+_ws_reclaim_fingerprint() {   # key=value... -> the token. THE ONE ENCODING: every verb's
+  # token is this hash, reap's included (`_ws_fingerprint` hands it its fourteen
+  # facts). Every input is NAMED, so no two verbs' tokens can be equal over the
+  # same facts: every other verb's first input is `mode=…`, and the reap's is
+  # `id=…`, the one token whose first input is not a mode.
   printf '%s\n' "$@" | _plat_sha256 | cut -d' ' -f1
 }
 
