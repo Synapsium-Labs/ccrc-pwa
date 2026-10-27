@@ -1,7 +1,7 @@
 // Refined's phone header, accounts strip and `+ New` (W2 Task S5, D-5471; the strip is the full one again, desktop-polish
 // S5a), in a real Chrome over the production build.
 //
-// What jsdom cannot hold: at 360, 390 and 438 in both palettes, with a three-digit Inbox count and five lanes, the
+// What jsdom cannot hold: at 360, 390 and 438 in both palettes, with a three-digit Runs count and five lanes, the
 // header is one row with nothing cut, every door is at least 44 x 44 under the phone's touch screen, the readout is one
 // line, the strip's lane cards sit in two columns, the `+ New` clears the last card once the list is scrolled to its
 // end and sits above the home indicator, a toast's host sits above it, and the page does not scroll sideways. At 900,
@@ -58,8 +58,10 @@ const FIXTURE: AppFixture = {
     },
     {
       type: 'runs',
-      runs: Array.from({ length: 3 }, (_, i) => ({
+      // A three-digit Runs badge: 120 runs whose worker (`s0`) waits on the operator (T2d, D-6330).
+      runs: Array.from({ length: 120 }, (_, i) => ({
         id: i + 1, program: 'p', programTitle: 'P', wave: 1, waveOf: 1, project: 'x', homeProject: null, state: 'working', closedAt: null,
+        sessionId: 's0', claimedBy: null,
       })),
     },
   ],
@@ -89,7 +91,8 @@ describe("Refined's phone header is one row of finger-sized doors, and `+ New` c
       try {
         await page.goto(server!.origin + '/');
         await page.waitForFunction(() => document.querySelectorAll('.ref-phone-head .account-gauge').length === 5
-          && document.querySelector('.ref-phone-head [aria-label="Inbox, 120 unread"]') !== null
+          && document.querySelector('.ref-phone-head [aria-label="Inbox, 1 waiting for you"]') !== null
+          && document.querySelector('.ref-phone-head [aria-label="Runs, 120 needs you"]') !== null
           && document.querySelectorAll('.proj-card').length > 0 && document.querySelector('.ref-fab') !== null, undefined, { timeout: 20_000 });
         await page.waitForTimeout(200); // the FAB's ResizeObserver publishes
         const faults = await page.evaluate(() => {
@@ -108,9 +111,9 @@ describe("Refined's phone header is one row of finger-sized doors, and `+ New` c
             if (r.right > rr.right + 0.5 || r.left < rr.left - 0.5) out.push(`${name} is cut`);
             if (p.matches('[data-command]') && (r.width < 43.5 || r.height < 43.5)) out.push(`${name} is ${Math.round(r.width)} x ${Math.round(r.height)}`);
           }
-          const badge = row.querySelector<HTMLElement>('.ref-phone-badge');
-          if (badge === null) out.push('no badge on Inbox');
-          else {
+          const badges = [...row.querySelectorAll<HTMLElement>('.ref-phone-badge')];
+          if (badges.length !== 2) out.push(`${badges.length} badges, not Inbox's and Runs'`);
+          for (const badge of badges) {
             const br = badge.getBoundingClientRect();
             if (br.right > rr.right + 0.5) out.push('the badge is cut');
             // The glyph is the door's only visible label: a "99+" may sit on its top-right corner, never its middle.
