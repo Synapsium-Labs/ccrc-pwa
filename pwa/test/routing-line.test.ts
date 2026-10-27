@@ -103,6 +103,41 @@ describe('the routing line says what runs and asks only what it can measure', ()
     expect(out.sentence).toBe('Runs Sonnet 5 on Lane A · effort medium · asked effort high');
   });
 
+  it('both a pending effort and a pending class read in the line\'s order', () => {
+    const row = fleetSession({
+      wrapper: 'lane-a', model: 'Sonnet 5', effort: 'low',
+      route: route({ fields: { class: 'opus', effort: 'high' } }),
+    });
+    const view = routeView(row, 'lane-a', 'anthropic');
+    // Today's precedence: the effort is the field the wire reports as queued.
+    expect(view.wireQueuedField).toBe('effort');
+    expect(view.classPending).toBe(true);
+    expect(view.effortPending).toBe(true);
+    expect(routingLine(row, view, 'Lane A').sentence)
+      .toBe('Runs Sonnet 5 on Lane A · effort low · asked Opus 5.5 · asked effort high');
+  });
+
+  it('with no routing record nothing is pending', () => {
+    const row = fleetSession({ wrapper: 'lane-a', model: 'Sonnet 5', effort: 'low', route: null });
+    const view = routeView(row, 'lane-a', 'anthropic');
+    expect(view.classPending).toBe(false);
+    expect(view.effortPending).toBe(false);
+    expect(view.wireQueuedField).toBeNull();
+    expect(routingLine(row, view, 'Lane A').sentence).toBe('Runs Sonnet 5 on Lane A · effort low');
+  });
+
+  it('an unreadable effort says routing could not be read and asks nothing of the effort', () => {
+    const row = fleetSession({
+      wrapper: 'lane-a', model: 'Sonnet 5', effort: 'medium',
+      route: route({ unreadable: ['effort'] }),
+    });
+    const view = routeView(row, 'lane-a', 'anthropic');
+    expect(view.effortUnreadable).toBe(true);
+    expect(view.effortPending).toBe(false);
+    expect(routingLine(row, view, 'Lane A').sentence)
+      .toBe('Runs Sonnet 5 on Lane A · effort medium · routing could not be read');
+  });
+
   it('a failed read says routing could not be read', () => {
     const row = fleetSession({
       wrapper: 'lane-a', model: 'Sonnet 5', effort: 'medium',
