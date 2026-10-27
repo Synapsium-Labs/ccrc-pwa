@@ -1,13 +1,15 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import ts from 'typescript';
 import type { AccountUsage } from '../../shared/api';
 import { CommandLayer } from '../src/command/CommandLayer';
 import { AccountsStrip } from '../src/fleet/AccountsStrip';
 import { ACCOUNTS_DOOR_LABEL } from '../src/fleet/laneWords';
+import { lanesByFree } from '../src/fleet/laneOrder';
+import { FLYOUT_CLOSE_MS, FLYOUT_OPEN_MS } from '../src/fleet/stripFold';
 import { api } from '../src/lib/api';
 import { navigate } from '../src/lib/router';
 import { declValue, ruleIn } from './cssRule';
@@ -702,6 +704,235 @@ describe('the lanes fold (S5b, D-6530)', () => {
     expect(screen.queryByRole('button')).toBeNull();
   });
 
+  // ── the desk's hover and focus flyout (R120, strip-hover-flyout) ──
+  // The folded desk line opens a panel under it holding every lane. The delays are fake timers; the strip is rendered
+  // and its poll read under real ones, since `findBy` polls with timers a fake clock would starve.
+  describe('the flyout (strip-hover-flyout)', () => {
+    afterEach(() => { vi.useRealTimers(); });
+    const flyoutOf = (container: HTMLElement): HTMLElement | null => container.querySelector<HTMLElement>('.accounts-flyout');
+    const groupOf = (container: HTMLElement): HTMLElement => container.querySelector<HTMLElement>('.accounts-strip')!;
+    const flyCardsOf = (container: HTMLElement): HTMLElement[] => [...(flyoutOf(container)?.querySelectorAll<HTMLElement>('.account-gauge') ?? [])];
+    const lineCardsOf = (container: HTMLElement): HTMLElement[] => [...groupOf(container).children].filter((c): c is HTMLElement => c.classList.contains('account-gauge'));
+    const advance = (ms: number): void => { act(() => { vi.advanceTimersByTime(ms); }); };
+    /** A folded desk strip, mounted and read, with the fake clock installed after the poll landed. */
+    const mountDesk = async (): Promise<HTMLElement> => {
+      stubDesk(1248);
+      stubSeventeen();
+      const { container } = render(<AccountsStrip />);
+      await screen.findByText('lane-a');
+      // The poll lands before the row is measured: wait for the fold, whose control is the sign of it.
+      await waitFor(() => expect(control()).toBeInTheDocument());
+      vi.useFakeTimers();
+      return container;
+    };
+    const openByHover = async (): Promise<HTMLElement> => {
+      const container = await mountDesk();
+      fireEvent.pointerEnter(groupOf(container));
+      advance(FLYOUT_OPEN_MS);
+      expect(flyoutOf(container)).not.toBeNull();
+      return container;
+    };
+    const names = seventeenLanes(nowSec);
+    const labelOf = (id: string): string => names.roster.find((r) => r.id === id)!.label;
+
+    it('at the desk, folded, hovering the line opens the flyout after FLYOUT_OPEN_MS, holding every lane in lanesByFree\'s order', async () => {
+      const container = await mountDesk();
+      expect(flyoutOf(container)).toBeNull();
+      fireEvent.pointerEnter(groupOf(container));
+      advance(FLYOUT_OPEN_MS - 1);
+      expect(flyoutOf(container)).toBeNull();
+      advance(1);
+      const fly = flyoutOf(container)!;
+      expect(fly).not.toBeNull();
+      expect(flyCardsOf(container).map(nameOf)).toEqual(lanesByFree(names.accounts).map((a) => labelOf(a.wrapper)));
+      expect(flyCardsOf(container)).toHaveLength(17);
+      // In the strip's group, after the line's cards and before the end cell; named as the line's group is, with no new words.
+      expect([...groupOf(container).children].map((c) => c.className)).toEqual(
+        ['account-gauge', 'account-gauge', 'account-gauge', 'accounts-flyout', 'accounts-end']);
+      expect(fly).toHaveAttribute('role', 'group');
+      expect(fly.getAttribute('aria-label')).toBe(groupOf(container).getAttribute('aria-label'));
+      // Not a dialog, and it took no focus.
+      expect(fly).not.toHaveAttribute('aria-modal');
+      expect(fly.contains(document.activeElement)).toBe(false);
+    });
+
+    it('focus moving into the line opens the flyout', async () => {
+      const container = await mountDesk();
+      act(() => { lineCardsOf(container)[0]!.focus(); });
+      expect(flyoutOf(container)).toBeNull();
+      advance(FLYOUT_OPEN_MS);
+      expect(flyoutOf(container)).not.toBeNull();
+      expect(flyCardsOf(container)).toHaveLength(17);
+    });
+
+    it('a pointer passing by does not open it', async () => {
+      const container = await mountDesk();
+      fireEvent.pointerEnter(groupOf(container));
+      advance(FLYOUT_OPEN_MS - 1);
+      expect(flyoutOf(container)).toBeNull();
+      fireEvent.pointerLeave(groupOf(container));
+      advance(5000);
+      expect(flyoutOf(container)).toBeNull();
+    });
+
+    it('leaving the line and the flyout closes it after FLYOUT_CLOSE_MS; coming back within the grace keeps it', async () => {
+      const container = await openByHover();
+      fireEvent.pointerLeave(groupOf(container));
+      advance(FLYOUT_CLOSE_MS - 1);
+      expect(flyoutOf(container)).not.toBeNull();
+      fireEvent.pointerEnter(groupOf(container));
+      advance(5000);
+      expect(flyoutOf(container)).not.toBeNull();
+      fireEvent.pointerLeave(groupOf(container));
+      advance(FLYOUT_CLOSE_MS - 1);
+      expect(flyoutOf(container)).not.toBeNull();
+      advance(1);
+      expect(flyoutOf(container)).toBeNull();
+    });
+
+    it('Escape closes it and returns focus to the card it came from', async () => {
+      const container = await openByHover();
+      const fromLine = lineCardsOf(container)[0]!;
+      const card = flyCardsOf(container)[9]!;
+      act(() => { card.focus(); });
+      expect(document.activeElement).toBe(card);
+      fireEvent.keyDown(card, { key: 'Escape' });
+      expect(flyoutOf(container)).toBeNull();                 // at once, no grace
+      expect(document.activeElement).toBe(fromLine);
+      // The focus it gave back does not open it again, and it stays shut under the grace and the delay alike.
+      advance(5000);
+      expect(flyoutOf(container)).toBeNull();
+      // Escape with focus on a line card closes it too, and leaves focus there.
+      act(() => { fromLine.blur(); });
+      act(() => { fromLine.focus(); });
+      advance(FLYOUT_OPEN_MS);
+      expect(flyoutOf(container)).not.toBeNull();
+      fireEvent.keyDown(fromLine, { key: 'Escape' });
+      expect(flyoutOf(container)).toBeNull();
+      expect(document.activeElement).toBe(fromLine);
+    });
+
+    it('focus leaving the strip closes it, and focus moving between the line and the flyout does not', async () => {
+      const container = await mountDesk();
+      const fromLine = lineCardsOf(container)[0]!;
+      act(() => { fromLine.focus(); });
+      advance(FLYOUT_OPEN_MS);
+      const inside = flyCardsOf(container)[4]!;
+      // A focusout whose destination is inside the strip is a move, not a leave.
+      fireEvent.focusOut(fromLine, { relatedTarget: inside });
+      advance(5000);
+      expect(flyoutOf(container)).not.toBeNull();
+      act(() => { fromLine.blur(); });                         // out of the document: no destination
+      advance(FLYOUT_CLOSE_MS - 1);
+      expect(flyoutOf(container)).not.toBeNull();
+      advance(1);
+      expect(flyoutOf(container)).toBeNull();
+    });
+
+    it('a pointer still inside keeps the flyout open when focus leaves it; a pointer leaving closes it even with focus inside, handing the focus to the line\'s card', async () => {
+      const container = await openByHover();
+      const card = lineCardsOf(container)[1]!;
+      act(() => { card.focus(); });
+      act(() => { card.blur(); });
+      advance(5000);
+      expect(flyoutOf(container)).not.toBeNull();             // the pointer is still on the strip
+      const inFlyout = flyCardsOf(container)[5]!;
+      act(() => { inFlyout.focus(); });
+      fireEvent.pointerLeave(groupOf(container));
+      advance(FLYOUT_CLOSE_MS);
+      expect(flyoutOf(container)).toBeNull();
+      expect(document.activeElement).toBe(card);   // the line's tab stop (the card focused above): focus was not dropped with the panel
+      advance(5000);
+      expect(flyoutOf(container)).toBeNull();
+    });
+
+    it('the flyout\'s cards are one tab stop, and the arrow keys, Home and End step across all of them without wrapping', async () => {
+      const container = await openByHover();
+      const cards = (): HTMLElement[] => flyCardsOf(container);
+      expect(cards().filter((c) => c.tabIndex === 0).map(nameOf)).toEqual([nameOf(cards()[0]!)]);
+      expect(cards().filter((c) => c.tabIndex === -1)).toHaveLength(16);
+      act(() => { cards()[0]!.focus(); });
+      fireEvent.keyDown(cards()[0]!, { key: 'ArrowLeft' });    // no wrap at the start
+      expect(document.activeElement).toBe(cards()[0]);
+      fireEvent.keyDown(cards()[0]!, { key: 'ArrowRight' });
+      expect(document.activeElement).toBe(cards()[1]);
+      fireEvent.keyDown(cards()[1]!, { key: 'End' });
+      expect(document.activeElement).toBe(cards()[16]);
+      fireEvent.keyDown(cards()[16]!, { key: 'ArrowDown' });   // no wrap at the end
+      expect(document.activeElement).toBe(cards()[16]);
+      expect(cards().filter((c) => c.tabIndex === 0)).toEqual([cards()[16]]);
+      fireEvent.keyDown(cards()[16]!, { key: 'Home' });
+      expect(document.activeElement).toBe(cards()[0]);
+    });
+
+    it('the tab order is the line\'s stop, the flyout\'s stop, the control, then All accounts', async () => {
+      const container = await openByHover();
+      const tabbable = [...container.querySelectorAll<HTMLElement>('[tabindex="0"], button')].filter((e) => e.tabIndex >= 0);
+      expect(tabbable.map((e) => e.className.includes('account-gauge') ? `${flyoutOf(container)!.contains(e) ? 'fly' : 'line'}:${nameOf(e)}` : e.textContent))
+        .toEqual(['line:lane-a', `fly:${nameOf(flyCardsOf(container)[0]!)}`, '+14 more · 1 sign-in expired · 1 rate-limited', 'All accounts']);
+    });
+
+    it('each flyout card is its lane\'s open-lane door: a tap and Enter open /accounts?lane=<id>', async () => {
+      const container = await openByHover();
+      for (const card of flyCardsOf(container)) {
+        expect(card).toHaveAttribute('role', 'link');
+        expect(card).toHaveAttribute('data-action', 'open-lane');
+        expect(card).not.toHaveAttribute('data-command');
+      }
+      const order = lanesByFree(names.accounts).map((a) => a.wrapper);
+      fireEvent.click(flyCardsOf(container)[12]!);
+      expect(location.pathname + location.search).toBe(`/accounts?lane=${order[12]}`);
+      navigate('/');
+      fireEvent.keyDown(flyCardsOf(container)[3]!, { key: 'Enter' });
+      expect(location.pathname + location.search).toBe(`/accounts?lane=${order[3]}`);
+    });
+
+    it('no flyout while expanded, and none below 900', async () => {
+      const container = await mountDesk();
+      // Expanded: the control pins the strip open, and the open flyout goes with it.
+      fireEvent.pointerEnter(groupOf(container));
+      advance(FLYOUT_OPEN_MS);
+      expect(flyoutOf(container)).not.toBeNull();
+      fireEvent.click(control());
+      expect(flyoutOf(container)).toBeNull();
+      expect(cardsOf(container)).toHaveLength(17);
+      fireEvent.pointerLeave(groupOf(container));
+      fireEvent.pointerEnter(groupOf(container));
+      act(() => { lineCardsOf(container)[0]!.focus(); });
+      advance(5000);
+      expect(flyoutOf(container)).toBeNull();
+      // Folded again under the pointer: the pointer entered while expanded, so nothing re-opens until it comes back.
+      fireEvent.click(control('Show fewer'));
+      advance(5000);
+      expect(flyoutOf(container)).toBeNull();
+      cleanup();
+      // A phone has no hover: nothing mounts at any width below the desk's.
+      vi.useRealTimers();
+      vi.unstubAllGlobals();
+      stubSeventeen();
+      const phone = render(<AccountsStrip />);
+      await screen.findByText('lane-a');
+      vi.useFakeTimers();
+      fireEvent.pointerEnter(groupOf(phone.container));
+      act(() => { lineCardsOf(phone.container)[0]!.focus(); });
+      advance(5000);
+      expect(flyoutOf(phone.container)).toBeNull();
+    });
+
+    it('no flyout when nothing is folded away', async () => {
+      stubDesk(1248);
+      stubLanes(seventeenLanes(nowSec).accounts.slice(0, 3));    // three lanes fit the line with the end cell
+      const { container } = render(<AccountsStrip />);
+      await screen.findByText('lane-a');
+      vi.useFakeTimers();
+      expect(screen.queryByRole('button', { name: /more|Show fewer/ })).toBeNull();
+      fireEvent.pointerEnter(groupOf(container));
+      act(() => { lineCardsOf(container)[0]!.focus(); });
+      advance(5000);
+      expect(flyoutOf(container)).toBeNull();
+    });
+  });
+
   // The two source scans read the component's CODE, comments out, so its own header may name what it must not do.
   const stripSrc = (): string => readFileSync(path.join(import.meta.dirname, '..', 'src', 'fleet', 'AccountsStrip.tsx'), 'utf8');
   // Whole-line comments first: one of them names `~/.cc-limits/*.json`, whose `/*` is no block comment's start.
@@ -726,5 +957,12 @@ describe('the lanes fold (S5b, D-6530)', () => {
     visit(src);
     expect(literals.filter((l) => /more|Show fewer|sign-in expired|rate-limited/.test(l))).toEqual([]);
     expect(codeOf(stripSrc())).toMatch(/foldWords\(/);
+  });
+
+  it('the flyout\'s cards render through the line\'s own card code: one card markup in the component', () => {
+    const code = codeOf(stripSrc());
+    expect(code.match(/className="account-gauge"/g)).toHaveLength(1);
+    // The flyout is one element of its own, and its cards are the same function's output as the line's.
+    expect(code.match(/className="accounts-flyout"/g)).toHaveLength(1);
   });
 });

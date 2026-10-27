@@ -123,9 +123,33 @@
      measures (`rowFit`) agree. auto-fill, not auto-fit, so the tracks keep a card's width when the last line holds
      fewer cards than the line. */
   .shell-accounts .accounts-strip {
+    position: relative;
     grid-template-columns: repeat(auto-fill, minmax(var(--lane-card-min), 1fr));
     gap: var(--sp-2);
     margin: 0;
+  }
+  /* The flyout (R120, strip-hover-flyout): every lane's card in a panel under the folded line, drawn over the content
+     and pushing none of it down. It is out of flow, hung from the line's bottom edge (`top: 100%` of the strip, which
+     is `position: relative` above) and spanning its width, above the frame's content in the sheet layer. Its cards
+     wrap in the line's own tracks and gap, the same card in the same floor. Taller than the room under the line, it
+     scrolls itself: at most 70% of the viewport's height, since the line sits at the top of the window. Layer, hairline
+     and the pop shadow: the surface the other floating panels use, no token of its own. */
+  .shell-accounts .accounts-flyout {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    z-index: var(--z-sheet);
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(var(--lane-card-min), 1fr));
+    gap: var(--sp-2);
+    max-height: 70dvh;
+    overflow-y: auto;
+    padding: var(--sp-2);
+    background: var(--bg-surface);
+    border: 1px solid var(--edge-subtle);
+    border-radius: var(--r-md);
+    box-shadow: var(--elev-pop);
   }
   /* Gauge: the account name moves from ABOVE its windows to BESIDE them, which is
      where the height comes from — three stacked lines become two. The windows

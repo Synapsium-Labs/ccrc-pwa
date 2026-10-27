@@ -15,6 +15,14 @@ import { SIGN_IN_EXPIRED } from '../lib/accounts';
 /** The lanes a folded strip shows on a phone, at every phone width. */
 export const FOLD_SHOWN = 4;
 
+/** How long the pointer, or focus, rests on the desk's folded line before its flyout opens (strip-hover-flyout): long
+ *  enough that a pointer crossing the line to somewhere else never flickers it open, short enough to read as a hover. */
+export const FLYOUT_OPEN_MS = 150;
+
+/** How long the flyout stays open after the pointer, and focus, have left the line and the flyout (strip-hover-flyout):
+ *  the grace in which a pointer crossing the gap between the line and the panel, or coming back, keeps it. */
+export const FLYOUT_CLOSE_MS = 250;
+
 /** A lane card's floor in px: the one place the figure is written. It reaches the lanes row's grid as the custom
  *  property `--lane-card-min` (written by the strip), so the grid's tracks and `rowFit`'s count agree. */
 export const LANE_CARD_MIN = 260;

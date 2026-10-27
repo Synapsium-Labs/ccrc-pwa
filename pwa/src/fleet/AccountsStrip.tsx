@@ -22,6 +22,17 @@
 // command door, the next tab stop; so a phone, where a card is a small target, still has the whole screen one tap
 // away. The row itself is a group, not a door.
 //
+// THE FLYOUT (R120, strip-hover-flyout). At the desk, while the strip is folded, resting the pointer on the line (the
+// group, its end cell included) or moving focus into it opens `.accounts-flyout`: a panel under the line, drawn over
+// the content, holding EVERY lane in `lanesByFree`'s order, the line's own cards among them. It is the same card, from
+// the same `laneCard` function, and the same `open-lane` door; it is a group of its own, one tab stop with the arrows,
+// Home and End across it. It sits in the DOM inside the strip's group, after the line's cards and before the end cell,
+// so Tab goes line, flyout, control, All accounts, and focus moving between them never leaves the strip. It opens after
+// `FLYOUT_OPEN_MS` and closes after `FLYOUT_CLOSE_MS` once the pointer has left the strip or focus has (a pointer passing
+// by, or crossing the gap, flickers nothing), and at once on Escape; a close that finds focus in the flyout hands it
+// back to the line's tab stop first. Not
+// foldable, expanded, or below the desk: it is not mounted and nothing about it runs. Presentation state, per mount.
+//
 // THE PLACEHOLDER DOOR (D-161). With no lane to show the strip is exactly one `go-accounts` door and never renders
 // nothing. As a full-width readout of meters the strip read as DATA rather than navigation, so an operator hunting for
 // the passkey enrolment button on the screen behind it never found it. FleetScreen's header now carries a named
@@ -31,7 +42,7 @@
 // copy, see homeAbleLabelList in lib/accounts.ts). So the link stays mounted, with a quiet placeholder body, instead
 // of disappearing with the cards.
 import { useEffect, useId, useRef, useState } from 'react';
-import type { CSSProperties, KeyboardEvent, ReactNode } from 'react';
+import type { CSSProperties, FocusEvent, KeyboardEvent, ReactNode } from 'react';
 import type { AccountUsage, RosterWire } from '../../../shared/api';
 import { accountColorVar, accountLabel, warnNonArrayRoster } from '../lib/accounts';
 import { api } from '../lib/api';
@@ -42,7 +53,7 @@ import { rovingStep } from '../lib/rovingStep';
 import { accountsLaneHref } from '../lib/routes';
 import { navigate } from '../lib/router';
 import { lanesByFree } from './laneOrder';
-import { foldLanes, foldShown, foldWords, LANE_CARD_MIN, rowFit } from './stripFold';
+import { FLYOUT_CLOSE_MS, FLYOUT_OPEN_MS, foldLanes, foldShown, foldWords, LANE_CARD_MIN, rowFit } from './stripFold';
 import { setStripExpanded, useStripExpanded } from './stripExpanded';
 import { useRowWidth } from './useRowWidth';
 import { ACCOUNTS_DOOR_LABEL, ALL_ACCOUNTS, laneDoorLabel, lanesRowLabel, NO_READING } from './laneWords';
@@ -79,6 +90,25 @@ export function AccountsStrip(): ReactNode {
     scrollAfterFold.current = false;
     controlRef.current?.scrollIntoView({ block: 'nearest' });
   }, [expanded]);
+
+  // The flyout (strip-hover-flyout). `flyOpen` is the whole of its state; the rest is bookkeeping for its delays: the two
+  // timers, and whether the pointer is inside the strip now (a close is cancelled by the pointer coming back, and a
+  // focus leaving closes nothing while the pointer is on the strip). Its own roving stop is tracked by lane id like the
+  // line's.
+  const [flyOpen, setFlyOpen] = useState(false);
+  const [flyStopId, setFlyStopId] = useState<string | null>(null);
+  const flyRefs = useRef(new Map<string, HTMLElement>());
+  const openTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pointerIn = useRef(false);
+  // Set while Escape hands focus back to the line's card, so the focus it moves is not read as focus arriving.
+  const returningFocus = useRef(false);
+  const stopTimers = (): void => {
+    if (openTimer.current !== null) clearTimeout(openTimer.current);
+    if (closeTimer.current !== null) clearTimeout(closeTimer.current);
+    openTimer.current = null;
+    closeTimer.current = null;
+  };
 
   useEffect(() => {
     let live = true;
@@ -134,6 +164,20 @@ export function AccountsStrip(): ReactNode {
   else if (accounts.length === 0) placeholder = 'no accounts reporting';
   else if (live.length === 0) placeholder = 'all lanes disabled';
 
+  // An unmeasured desk row answers a null count, which folds nothing (`foldLanes`).
+  const count = foldShown(desk, desk ? rowFit(row?.width ?? null, LANE_CARD_MIN, row?.gap ?? 0) : null);
+  const fold = foldLanes(live, expanded, count);
+  // The flyout exists only at the desk, on a folded strip with lanes folded away.
+  const flyoutOn = desk && fold.foldable && !fold.expanded;
+  // The timers die with the component, and with whatever makes the flyout moot: the strip expanding, the desk ending.
+  useEffect(() => stopTimers, []);
+  useEffect(() => {
+    if (flyoutOn) return;
+    stopTimers();
+    setFlyOpen(false);
+    setFlyStopId(null);
+  }, [flyoutOn]);
+
   // With no lane to show the strip is the `go-accounts` door itself: it asks the command layer, which navigates, as the
   // palette's "Go to Accounts" does.
   if (placeholder !== null) {
@@ -153,9 +197,6 @@ export function AccountsStrip(): ReactNode {
     );
   }
 
-  // An unmeasured desk row answers a null count, which folds nothing (`foldLanes`).
-  const count = foldShown(desk, desk ? rowFit(row?.width ?? null, LANE_CARD_MIN, row?.gap ?? 0) : null);
-  const fold = foldLanes(live, expanded, count);
   const { shown } = fold;
   const words = foldWords(fold, now);
   const toggle = (): void => {
@@ -165,19 +206,105 @@ export function AccountsStrip(): ReactNode {
   };
 
   const stop = shown.some((a) => a.wrapper === stopId) ? stopId : shown[0]!.wrapper;
-  // Enter opens the lane (a link, so Space does not); the arrow keys, Home and End step across the shown cards, none
-  // wrapping, and moving focus moves the stop (`onFocus` records it). `shown` is never empty here, so `rovingStep` has
-  // at least one card to land on.
-  const onCardKey = (e: KeyboardEvent<HTMLElement>, i: number, open: () => void): void => {
-    if (e.key === 'Enter') {
-      e.preventDefault();
-      open();
-      return;
+  const flyStop = live.some((a) => a.wrapper === flyStopId) ? flyStopId : live[0]!.wrapper;
+  const flyShown = flyoutOn && flyOpen;
+
+  // The flyout's delays and its closing. Closing a flyout that holds focus would drop focus to the page, so focus goes
+  // back first to the line's tab stop, the card the operator came from; `returningFocus` keeps that move from reading
+  // as focus arriving.
+  const closeFlyout = (): void => {
+    stopTimers();
+    const held = [...flyRefs.current.values()].some((c) => c.contains(document.activeElement));
+    if (held) {
+      returningFocus.current = true;
+      cardRefs.current.get(stop)?.focus();
+      returningFocus.current = false;
     }
-    const to = rovingStep(e.key, i, shown.length, { wrap: false });
-    if (to === null) return;
-    e.preventDefault();
-    cardRefs.current.get(shown[to]!.wrapper)?.focus();
+    setFlyOpen(false);
+    setFlyStopId(null);
+  };
+  const scheduleOpen = (): void => {
+    if (!flyoutOn || flyOpen || openTimer.current !== null) return;
+    openTimer.current = setTimeout(() => { openTimer.current = null; setFlyOpen(true); }, FLYOUT_OPEN_MS);
+  };
+  const scheduleClose = (): void => {
+    if (openTimer.current !== null) { clearTimeout(openTimer.current); openTimer.current = null; }
+    if (!flyOpen || closeTimer.current !== null) return;
+    closeTimer.current = setTimeout(() => { closeTimer.current = null; closeFlyout(); }, FLYOUT_CLOSE_MS);
+  };
+  const cancelClose = (): void => {
+    if (closeTimer.current !== null) { clearTimeout(closeTimer.current); closeTimer.current = null; }
+  };
+  const onEnter = (): void => { pointerIn.current = true; cancelClose(); scheduleOpen(); };
+  const onLeave = (): void => { pointerIn.current = false; scheduleClose(); };
+  // `onFocus` and `onBlur` are React's focusin and focusout, so they fire for any element inside, the flyout's too.
+  const onGroupFocus = (): void => {
+    cancelClose();
+    if (!returningFocus.current) scheduleOpen();
+  };
+  // A focusout whose destination is inside the strip is a move between the line and the flyout, not a leave; one with no
+  // destination (focus left the page, or went to nothing) is a leave.
+  const onGroupBlur = (e: FocusEvent<HTMLElement>): void => {
+    if (e.relatedTarget instanceof Node && e.currentTarget.contains(e.relatedTarget)) return;
+    if (!pointerIn.current) scheduleClose();
+  };
+  const onGroupKey = (e: KeyboardEvent<HTMLElement>): void => {
+    if (e.key !== 'Escape' || !flyOpen) return;
+    closeFlyout();
+  };
+
+  // One card, one markup: the line's cards and the flyout's are this function's output. `list` is what the group holds
+  // (`shown` on the line, every live lane in the flyout), `at` the roving stop's lane, `refs` and `onStop` its group's.
+  // Enter opens the lane (a link, so Space does not); the arrow keys, Home and End step across `list`, none wrapping, and
+  // moving focus moves the stop (`onFocus` records it). `list` is never empty here, so `rovingStep` has a card to land on.
+  const laneCard = (
+    a: AccountUsage, i: number, list: readonly AccountUsage[], at: string,
+    refs: Map<string, HTMLElement>, onStop: (id: string) => void,
+  ): ReactNode => {
+    // `off` as the Accounts screen computes it (D-5494). The filter above
+    // already dropped a switched-off lane, so here it is a sign-in-expired
+    // one: its numbers are frozen, so its fills grey while each meter keeps
+    // its band. `=== true`: a server built before `authDead` omits it.
+    const off = a.disabled === true || a.authDead === true;
+    const door = actionDoor('open-lane', () => navigate(accountsLaneHref(a.wrapper)));
+    const name = accountLabel(roster, a.wrapper);
+    const onKeyDown = (e: KeyboardEvent<HTMLElement>): void => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        door.onClick();
+        return;
+      }
+      const to = rovingStep(e.key, i, list.length, { wrap: false });
+      if (to === null) return;
+      e.preventDefault();
+      refs.get(list[to]!.wrapper)?.focus();
+    };
+    return (
+      <div
+        key={a.wrapper}
+        className="account-gauge"
+        role="link"
+        tabIndex={a.wrapper === at ? 0 : -1}
+        aria-label={laneDoorLabel(a, roster, nowSec)}
+        ref={(el) => { if (el === null) refs.delete(a.wrapper); else refs.set(a.wrapper, el); }}
+        onFocus={() => onStop(a.wrapper)}
+        {...door}
+        onKeyDown={onKeyDown}
+      >
+        <span className="account-gauge-label" title={name} style={{ color: `var(${accountColorVar(roster, a.wrapper)})` }}>
+          {name}
+        </span>
+        {/* Wrapped so the label can sit inline beside the windows on desktop
+            (a flex row); on mobile this stays a plain block under the label.
+            Only render a window that exists (gpt, Codex Pro, is weekly-only); a lane with neither says
+            NO_READING and draws no row, so no meter claims a zero nobody measured. */}
+        <div className="acct-rows">
+          {a.five === null && a.seven === null && <span className="acct-unread">{NO_READING}</span>}
+          {a.five !== null && <AccountMeterRow label="5h" pct={a.five} resetAt={a.fiveResetAt} nowSec={nowSec} rolledOver={a.fiveRolledOver} off={off} />}
+          {a.seven !== null && <AccountMeterRow label="7d" pct={a.seven} resetAt={a.sevenResetAt} nowSec={nowSec} rolledOver={a.sevenRolledOver} off={off} />}
+        </div>
+      </div>
+    );
   };
 
   return (
@@ -188,42 +315,19 @@ export function AccountsStrip(): ReactNode {
       ref={groupRef}
       aria-label={lanesRowLabel(live, roster)}
       style={{ '--lane-card-min': `${LANE_CARD_MIN}px` } as CSSProperties}
+      onPointerEnter={onEnter}
+      onPointerLeave={onLeave}
+      onFocus={onGroupFocus}
+      onBlur={onGroupBlur}
+      onKeyDown={onGroupKey}
     >
-      {shown.map((a, i) => {
-        // `off` as the Accounts screen computes it (D-5494). The filter above
-        // already dropped a switched-off lane, so here it is a sign-in-expired
-        // one: its numbers are frozen, so its fills grey while each meter keeps
-        // its band. `=== true`: a server built before `authDead` omits it.
-        const off = a.disabled === true || a.authDead === true;
-        const door = actionDoor('open-lane', () => navigate(accountsLaneHref(a.wrapper)));
-        const name = accountLabel(roster, a.wrapper);
-        return (
-          <div
-            key={a.wrapper}
-            className="account-gauge"
-            role="link"
-            tabIndex={a.wrapper === stop ? 0 : -1}
-            aria-label={laneDoorLabel(a, roster, nowSec)}
-            ref={(el) => { if (el === null) cardRefs.current.delete(a.wrapper); else cardRefs.current.set(a.wrapper, el); }}
-            onFocus={() => setStopId(a.wrapper)}
-            onKeyDown={(e) => onCardKey(e, i, door.onClick)}
-            {...door}
-          >
-            <span className="account-gauge-label" title={name} style={{ color: `var(${accountColorVar(roster, a.wrapper)})` }}>
-              {name}
-            </span>
-            {/* Wrapped so the label can sit inline beside the windows on desktop
-                (a flex row); on mobile this stays a plain block under the label.
-                Only render a window that exists (gpt, Codex Pro, is weekly-only); a lane with neither says
-                NO_READING and draws no row, so no meter claims a zero nobody measured. */}
-            <div className="acct-rows">
-              {a.five === null && a.seven === null && <span className="acct-unread">{NO_READING}</span>}
-              {a.five !== null && <AccountMeterRow label="5h" pct={a.five} resetAt={a.fiveResetAt} nowSec={nowSec} rolledOver={a.fiveRolledOver} off={off} />}
-              {a.seven !== null && <AccountMeterRow label="7d" pct={a.seven} resetAt={a.sevenResetAt} nowSec={nowSec} rolledOver={a.sevenRolledOver} off={off} />}
-            </div>
-          </div>
-        );
-      })}
+      {shown.map((a, i) => laneCard(a, i, shown, stop, cardRefs.current, setStopId))}
+      {flyShown && (
+        // Not a dialog and it takes no focus: it is a second group of the same lanes, named as the line's is.
+        <div className="accounts-flyout" role="group" aria-label={lanesRowLabel(live, roster)}>
+          {live.map((a, i) => laneCard(a, i, live, flyStop, flyRefs.current, setFlyStopId))}
+        </div>
+      )}
       <div className="accounts-end">
         {/* Rendered iff the fold folds, the same element folded and expanded (never keyed on state), so focus stays on it
             across a toggle. Its words are its name; it is no door (no data-command, no data-action). */}
