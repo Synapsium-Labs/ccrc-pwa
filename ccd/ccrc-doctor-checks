@@ -490,7 +490,7 @@ _check_node-path() {
   fi
   local line named=0
   while IFS= read -r line || [ -n "$line" ]; do
-    case "$line" in PATH=*"$dir"*) named=1 ;; esac
+    case "$line" in "PATH=$dir:"*|"PATH=$dir") named=1 ;; esac   # :-bounded: never <dir>-old
   done < "$frag"
   if [ "$named" -ne 1 ]; then
     _dr_fail node-path "$frag has no PATH= line naming $dir — the user manager's PATH does not include it" \

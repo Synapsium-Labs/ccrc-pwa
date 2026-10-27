@@ -174,6 +174,14 @@ describe('ccrc doctor: node-path', () => {
     expect(r.out).not.toMatch(/is missing/);
   });
 
+  it('FAILs when the fragment names only a longer directory (<dir>-old), not the directory itself', () => {
+    const home = box('ccrc-nodepath-fragold-');
+    writeFileSync(fragOf(home), `PATH=${dirOf(home)}-old:\${PATH}\n`);
+    const r = check(home);
+    expect(r.rc).toBe(1);
+    expect(r.out).toMatch(/^FAIL node-path: .* has no PATH= line naming /m);
+  });
+
   it('FAILs when the manager answers and its PATH lacks the directory', () => {
     const home = box('ccrc-nodepath-mgr-');
     writeFileSync(join(home, 'fixture-mgr-env'), 'PATH=/usr/bin\n');
