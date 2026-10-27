@@ -9374,8 +9374,8 @@ _check_server-caps() {
         return 3
       fi
       period="$(_dr_cycles_s ccd-update-sync.timer 1)" || cad_rc=$?
-      writer="ccd-update-sync (it asks the server's /health every minute)"
-      [ "$cad_rc" -eq 0 ] || writer="ccd-update-sync"
+      writer="ccd-update-sync"
+      [ "$cad_rc" -ne 0 ] || writer="ccd-update-sync (it asks the server's /health $(_dr_every_words "$period"))"
       remedy="run systemctl --user start ccd-update-sync.service and read its log ($(_dr_log_hint ccd-update-sync.service)); the server CCRC_SERVER_URL names in ~/.ccrc/agent.env must answer /health" ;;
     both)
       writer_unit=ccrc.service
