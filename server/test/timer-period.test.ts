@@ -130,6 +130,14 @@ describe('_timer_period_s: everything else is refused, rc 1, one line why, nothi
     it(`\`${spelling}\` is refused (a spelling no shipped file uses)`, () => expectRefused(period(timer(spelling))));
   }
   it('`15m` is refused', () => expectRefused(period(timer('OnUnitActiveSec=15m'))));
+  // D-TBD-oncalendar-step-divides-hour: `*:0/<n>` fires at :00 and every <n> minutes after it within the hour, so the
+  // gap is one number only when <n> divides 60; any other step has two gaps, and the reader refuses to pick one.
+  it('`OnCalendar=*:0/15` is 900, a step that divides the hour', () => expectPeriod(period(timer('OnCalendar=*:0/15')), 900));
+  it('`OnCalendar=*:0/7` is refused: its last gap of the hour is 4 minutes, not 7', () =>
+    expectRefused(period(timer('OnCalendar=*:0/7'))));
+  for (const spelling of ['OnUnitActiveSec=0s', 'OnUnitActiveSec=015min', 'OnCalendar=*:0/0']) {
+    it(`\`${spelling}\` is refused (no zero period, no leading zero)`, () => expectRefused(period(timer(spelling))));
+  }
   it('a refusal never prints the file\'s contents', () => {
     const a = period(timer('OnUnitActiveSec=fixture-secret-7d1'));
     expectRefused(a);

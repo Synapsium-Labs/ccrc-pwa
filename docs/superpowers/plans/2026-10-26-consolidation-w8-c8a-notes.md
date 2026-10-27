@@ -56,4 +56,27 @@ TypeScript only and has nothing to read here.
 
 ## Departures
 
-(none yet)
+- **D-TBD-oncalendar-step-divides-hour.** The plan reads `OnCalendar=*:0/<n>` as "every `<n>` minutes". That holds
+  only when `<n>` divides 60: `*:0/<n>` fires at `:00` and every `<n>` minutes after it within the hour, so `*:0/7`
+  fires at `:49`, `:56`, then `:00`, and has two gaps. `_timer_period_s` therefore reads `*:0/<n>` only for a step
+  that divides the hour (`*:0/5` is 300, `*:0/15` is 900) and refuses any other step, as it refuses every spelling it
+  cannot turn into one number. It also refuses a zero period and a leading zero (`0s`, `015min`, `*:0/0`): the regex
+  takes `[1-9]` first, which also keeps bash arithmetic from reading `015` as octal. `timer-period.test.ts` pins each.
+
+## Notes on the steps (no departure)
+
+- **Census before the failure arm.** The census module and its tests land right after the reader (Step 3), so their
+  real-tree rows record the base counts (1 launchd cadence literal, 3 ddns transcript cadences) and each move commit
+  updates its own row: the heredoc commit 1 -> 0, the transcript commit 3 -> 1. The ratchet file is the last commit.
+- **"Byte for byte", normalised.** The characterization rows compare the whole plist and the whole stdout after
+  replacing three fixture-varying tokens with placeholders: the sandbox HOME, the uid (`gui/<uid>`) and the
+  generator's pid (`.tmp.<pid>.new`). `ss` is stubbed to answer no listener, so the `:443` sentence is the fixture's
+  and not the runner's. A pty merges stdout and stderr, so the transcript is both streams in order.
+- **"Unreadable".** The failure-arm rows exercise an absent `ccrc-ddns.timer` and one with its `OnCalendar=` line
+  removed (no cadence line), each with `plutil` on `PATH` (a recorder) and off it (every `PATH` directory holding one
+  replaced by a farm of links to its other entries). Not `chmod 000`: a root runner reads that file anyway.
+- **One more row than the plan lists.** `ccrc-expose.test.ts` also holds a 90-second fixture timer, whose job writes
+  `StartInterval` 90 and whose two Darwin sentences say "90-second tick" and "every 90 seconds": the red that proves
+  the two sentences read `$period` (Step 5's second commit), beside `_timer_period_words`' own rows.
+- **Growth.** `ccd/ccrc` grows by 33 net code lines (12214 -> 12247 against `fd32f3ecd`), under the check's limit of
+  40; no waiver file.
