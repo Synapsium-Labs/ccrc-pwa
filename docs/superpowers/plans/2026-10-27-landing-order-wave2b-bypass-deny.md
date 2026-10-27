@@ -31,14 +31,14 @@ The coordinator's exact-head enqueue, `gh pr merge <n> --match-head-commit <sha>
        - (the stripped command matches `GH_MERGE_RE`, and `a` is set); or
        - (the stripped command matches the new `GH_API_RE`, and `w` or `p` is set).
      - Over the cap it is denied when `<kinds>` holds `admin` or `api`.
-- **The wide reading, on purpose (D-TBD-raw-read).** Once a real `gh … pr … merge` head or `gh … api` head is present, the deny reads `--admin`, the mutation words and the paths from the whole raw command, not from the merge's own segment.
+- **The wide reading, on purpose (D-7111).** Once a real `gh … pr … merge` head or `gh … api` head is present, the deny reads `--admin`, the mutation words and the paths from the whole raw command, not from the merge's own segment.
   - The strip deletes quoted spans, so a quoted flag, a quoted path or a quoted GraphQL query would otherwise be invisible. A per-segment rule also misses a `$(…)` argument, a backslash-newline and a repeated `-X` (the plan review's findings).
   - The cost is that a command holding a real merge head and an unrelated `--admin` mention is refused, for example a merge then `git commit -m "never --admin"` in one command. The reason says so, and the cost is tested.
-- **No GET exemption (D-TBD-no-get-exemption).** A `GET …/pulls/<n>/merge` is refused like any other call to that path. `gh pr view <n> --json state,mergedAt` answers the same question, and the reason names it. Exempting GET from text would let `-X GET -X PUT`, or a GET written inside a quoted field, through.
+- **No GET exemption (D-7112).** A `GET …/pulls/<n>/merge` is refused like any other call to that path. `gh pr view <n> --json state,mergedAt` answers the same question, and the reason names it. Exempting GET from text would let `-X GET -X PUT`, or a GET written inside a quoted field, through.
 - **Precedence.**
   - Wave 2's wave-hold and child-marker reason is asked first, and its text is unchanged. Over the cap it fires only when `<kinds>` holds `merge`.
   - The bypass reason covers what wave 2's does not.
-- **What passes unparsed, said rather than hidden (D-TBD-unread-spellings).** Each class is measured passing, listed in the hook header's "WHAT PASSES UNPARSED" list, and pinned as a LISTED pass:
+- **What passes unparsed, said rather than hidden (D-7114).** Each class is measured passing, listed in the hook header's "WHAT PASSES UNPARSED" list, and pinned as a LISTED pass:
   - a query or body read from a file (`-F query=@file`, `--input file.json`, `cat f | gh api graphql --input -`);
   - a word or path assembled at run time (`q="merge""PullRequest"`, a path in a variable built from pieces);
   - a variable or quoted command word (`$GH api …`, `"gh" api …`);
@@ -99,7 +99,7 @@ This wave's workspace is a fresh child from `main`.
   - `single-definition/*`, `single-definition-pin`, `topology-clean`, `deviation-refs` and `typecheck-tests`.
 - **Fixture HOMEs only.** No real `gh` runs; the hook reads text.
 - **Branch discipline and mutations:** as for every wave. Each guard has a measured red, and every mutation is restored from a saved copy.
-- **Deviation numbers come from this wave's block, minted at run-open.** Departures are written `D-TBD-<slug>` until then.
+- **Deviation numbers are issued, never chosen.** This plan's own are D-7111 to D-7116. A departure found while executing it goes in the wave-done mail, and the coordinator numbers it.
 
 ## Review Focus
 
@@ -113,7 +113,7 @@ This wave's workspace is a fresh child from `main`.
 3. **Every `--admin` spelling the raw text can show is refused in every session.** That covers a flag before or after the number, `--admin=true`, a quoted `'--admin'` or `"--admin"`, an `--admin` after a `$(…)` argument, and one after a backslash-newline.
 4. **Every spelling of the six endpoints in the raw text is refused.** That is any method on either path, quoted or bare, and each mutation word in `-f`, `--raw-field` or a `--input -` heredoc, over the cap too. The unread classes are LISTED passes, not silent ones.
 5. **Text is not a command, and the wide reading's cost is named.**
-   - Under the cap, commit messages, PR bodies, heredocs and mail texts that name `--admin` or a mutation word pass when no real merge or api head is present. Over the cap the hook cannot parse, so such a text is refused in every session with the split-or-rephrase reason. That is wave 2's accepted over-cap cost, now for every session (D-TBD-over-cap-every-session).
+   - Under the cap, commit messages, PR bodies, heredocs and mail texts that name `--admin` or a mutation word pass when no real merge or api head is present. Over the cap the hook cannot parse, so such a text is refused in every session with the split-or-rephrase reason. That is wave 2's accepted over-cap cost, now for every session (D-7115).
    - A command with a real head and an unrelated mention is refused. The reason explains it, and a test pins it.
 
 ---
@@ -263,12 +263,12 @@ This wave's workspace is a fresh child from `main`.
 
 ## Deviations found
 
-Numbers are ISSUED, never chosen; a worker never calls the allocator. Until this wave's block is minted, departures are written `D-TBD-<slug>`.
+Numbers are ISSUED, never chosen; a worker never calls the allocator (worker clause 11). The programme coordinator minted this plan's block, 7111–7116, before the plan landed, and this plan defines all six. A departure found while executing it is named in the wave-done mail, and the coordinator assigns its number when it records the ruling.
 
-- **D-TBD-raw-read** (Architecture): the spec's deny is "the spellings it can parse". Once a real merge or api head is present, this plan reads `--admin`, the mutation words and the paths from the whole raw command, quotes included. Segment parsing over the stripped text missed quoted flags and paths, `$(…)` arguments, backslash-newlines and repeated method flags. The cost is that a command holding a real head and an unrelated mention is refused. That cost is tested and named in the reason.
-- **D-TBD-no-get-exemption** (Architecture): a `GET` of `…/pulls/<n>/merge` is refused too. `gh pr view <n> --json state,mergedAt` is the substitute, and the reason names it. A text-read GET exemption could be defeated by a later `-X PUT`, or by a GET inside a quoted field.
-- **D-TBD-two-more-endpoints** (Goal): the spec names the pulls merge endpoint and three mutations. This plan adds `mergeBranch` and `repos/<o>/<r>/merges`, which merge into a branch past the queue just as well, under the fleet login's admin bypass.
-- **D-TBD-unread-spellings** (Architecture): these pass unread and are listed and pinned as LISTED passes:
+- **D-7111** — `raw-read` (Architecture): the spec's deny is "the spellings it can parse". Once a real merge or api head is present, this plan reads `--admin`, the mutation words and the paths from the whole raw command, quotes included. Segment parsing over the stripped text missed quoted flags and paths, `$(…)` arguments, backslash-newlines and repeated method flags. The cost is that a command holding a real head and an unrelated mention is refused. That cost is tested and named in the reason.
+- **D-7112** — `no-get-exemption` (Architecture): a `GET` of `…/pulls/<n>/merge` is refused too. `gh pr view <n> --json state,mergedAt` is the substitute, and the reason names it. A text-read GET exemption could be defeated by a later `-X PUT`, or by a GET inside a quoted field.
+- **D-7113** — `two-more-endpoints` (Goal): the spec names the pulls merge endpoint and three mutations. This plan adds `mergeBranch` and `repos/<o>/<r>/merges`, which merge into a branch past the queue just as well, under the fleet login's admin bypass.
+- **D-7114** — `unread-spellings` (Architecture): these pass unread and are listed and pinned as LISTED passes:
   - a query or body read from a file;
   - a word or path assembled at run time;
   - a variable or quoted command word;
@@ -276,5 +276,5 @@ Numbers are ISSUED, never chosen; a worker never calls the allocator. Until this
   - ways to move `main` that are not merges, which are out of this wave's scope: `gh api -X PATCH repos/<o>/<r>/git/refs/heads/<b>`, the GraphQL `updateRef`, `updateRefs` and `createCommitOnBranch` mutations, and `git push` to a protected branch.
 
   The hook is a contract the fleet honours, not an access boundary (spec §4).
-- **D-TBD-over-cap-every-session** (Review Focus 5): over the cap the hook cannot parse. An over-cap command whose raw text reads as an admin merge or an api merge is refused in every session, prose included, with the split-or-rephrase reason. Wave 2 accepted that cost for held sessions; this wave extends it to every session. A long PR body or mail that quotes these words is sent as a file (`--body-file`, `--json` from a file) or split.
-- **D-TBD-fleet-reach** (Prerequisite): spec §5.2's rollout step 4 states the arming gate for this repository. The hook has no project scope, so the operator confirms the fleet-wide reach before dispatch, from the coordinator's private measurement.
+- **D-7115** — `over-cap-every-session` (Review Focus 5): over the cap the hook cannot parse. An over-cap command whose raw text reads as an admin merge or an api merge is refused in every session, prose included, with the split-or-rephrase reason. Wave 2 accepted that cost for held sessions; this wave extends it to every session. A long PR body or mail that quotes these words is sent as a file (`--body-file`, `--json` from a file) or split.
+- **D-7116** — `fleet-reach` (Prerequisite): spec §5.2's rollout step 4 states the arming gate for this repository. The hook has no project scope, so the operator confirms the fleet-wide reach before dispatch, from the coordinator's private measurement.

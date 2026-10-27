@@ -18,14 +18,14 @@
   1. Decide.
   2. On accept, re-read the live tip, and refuse if it moved.
   3. Continue to the existing PR checks, with `measured.branchTip` set to the live tip and `measured.via = 'base-only-merge'`.
-- **The verified head is bound downstream (D-TBD-verified-head).** After an accept:
+- **The verified head is bound downstream (D-7102).** After an accept:
   - `advanceAct`'s merging episode (`mergingAtDetail`) and the work close's recorded `handoffCommit` take the live tip;
   - `AdvanceOk` gains an optional, additive `verifiedHead` (absent means the claim);
   - the server's landing briefs (`landing.ts`'s `renderDequeueBrief` and `renderMergedBrief`) write the recorded episode head as a value, so a coordinator that ended its turn still has it;
   - every `<handoffCommit>` spelling in `wave-lifecycle.md` §5 names the recorded head: the native-queue enqueue, the spent-producer arm and the MERGED proof.
 
   Clause 15's own words do not change, because wave 3e's PR edits clause 15.
-- **The new refusal word.** `lineage-unmeasured` joins `MAIL_REJECT_CODES` and `DONE_AUTHORITY_CODES`. A derived `DONE_REFUSAL_CODES` (the authority codes without it) is what every refusal count reads, so a radar-timing wait never counts as a refusal (D-TBD-not-a-refusal).
+- **The new refusal word.** `lineage-unmeasured` joins `MAIL_REJECT_CODES` and `DONE_AUTHORITY_CODES`. A derived `DONE_REFUSAL_CODES` (the authority codes without it) is what every refusal count reads, so a radar-timing wait never counts as a refusal (D-7107).
 - **Skills.**
   - Worker clause 9 gains its exception. The reviewer's clause 3 gains its matching exception.
   - The coordinator skill names the word, states who re-sends, says how a brief names the opt-in, and never rules on a `TIP MOVED` report.
@@ -64,7 +64,7 @@ A session that can forge those files can already move its own ref, so stage 4 ad
 - a tip that moves between the reads never accepts;
 - the PR checks still run on the live head.
 
-`readFileMeasured` follows symlinks, and `FleetIO` has no `lstat`, so wave 3b's "regular file" rule is the probe's own and is not re-proved here (D-TBD-symlink-gap). The PR body says all of this.
+`readFileMeasured` follows symlinks, and `FleetIO` has no `lstat`, so wave 3b's "regular file" rule is the probe's own and is not re-proved here (D-7109). The PR body says all of this.
 
 ## Global Constraints
 
@@ -94,7 +94,7 @@ A session that can forge those files can already move its own ref, so stage 4 ad
   - `citations`, `deviation-refs`, `typecheck-tests` and `topology-clean`.
 - **Fixture HOMEs only.** The end-to-end case spawns the probe from a `server/test/ccd*.ts` file under `makeCcdHarness` and `ghContainedEnv(..., {systemd: true, tmux: true, net: true})`.
 - **Every commit is green on the guards it touches**, and every guard has a measured red.
-- **Deviation numbers come from this wave's block, minted at run-open.** Until then departures are written `D-TBD-<slug>`.
+- **Deviation numbers are issued, never chosen.** This plan's own are D-7102 to D-7110. A departure found while executing it goes in the wave-done mail, and the coordinator numbers it.
 
 ## Review Focus
 
@@ -183,7 +183,7 @@ A session that can forge those files can already move its own ref, so stage 4 ad
   4. On `accept`, call `readBranchTip` again. A different sha is `stale-tip` with detail `the tip moved between reads`. A `null` is today's `tip-unmeasurable`, never folded into the moved answer.
   5. Then run the PR checks as today, and add `measured.via = 'base-only-merge'` to the ok arm.
 - **`verifyReviewDone`** does the same, with `claim.reviewedTip`, today's `stale-review`, and the work run's session, project and branch, which it already resolves.
-  - A review of any chain member is accepted, because each step is a clean base merge, which is stage 4's premise (D-TBD-review-any-chain-member).
+  - A review of any chain member is accepted, because each step is a clean base merge, which is stage 4's premise (D-7108).
 - **The verified head, after an accept** (`measured.via === 'base-only-merge'`):
   - `advanceAct` builds `mergingAtDetail(verdict.measured.branchTip, …)` and returns `{ok: true, run, verifiedHead: measured.branchTip}`.
   - `closeDecide`'s `decideVerified` carries `measured.branchTip` in its plan, and `closeWorkRun` passes it to `coord.closeRun` as the recorded `handoffCommit` whenever verify ran. An abandon still records `null`.
@@ -317,7 +317,7 @@ Appended to clause 3's sentence about a moving ref: "In a project your brief nam
   - an outstanding `wave-done-rejected` does not suppress the unmeasured one;
   - a path with no `enabled` marker answers exactly today's bodies.
 
-  **`run-signals.test.ts`:** a run with two `lineage-unmeasured` rows and then an accepted close has `closeRefusals: 0`, `firstSubmission: true`, and a run-health `doneRejects` of 0. Its `waveDoneMails` counts the re-sent `wave-done`s, as declared in D-TBD-not-a-refusal.
+  **`run-signals.test.ts`:** a run with two `lineage-unmeasured` rows and then an accepted close has `closeRefusals: 0`, `firstSubmission: true`, and a run-health `doneRejects` of 0. Its `waveDoneMails` counts the re-sent `wave-done`s, as declared in D-7107.
 
   **`stall-verdict.test.ts`:** after `wave-advance-unmeasured` and before the re-send, the ball is with the worker; the re-sent `wave-done` passes it to the coordinator.
 
@@ -408,14 +408,14 @@ Appended to clause 3's sentence about a moving ref: "In a project your brief nam
 
 ## Deviations found
 
-Numbers are ISSUED, never chosen; a worker never calls the allocator. Until this wave's block is minted at run-open, departures are written `D-TBD-<slug>`.
+Numbers are ISSUED, never chosen; a worker never calls the allocator (worker clause 11). The programme coordinator minted this plan's block, 7102–7110, before the plan landed, and this plan defines all nine. A departure found while executing it is named in the wave-done mail, and the coordinator assigns its number when it records the ruling.
 
-- **D-TBD-verified-head** (Architecture): spec §5.4's accept row names only the fingerprint answer. Spec §7's R5 says "the landing binds the verified head", so after an accept the live tip replaces the claim everywhere the server binds a head, and the coordinator learns it from `AdvanceOk.verifiedHead`. Clause 15's own words are unchanged, because wave 3e's PR edits it; the landing paragraph defines the substitution instead.
-- **D-TBD-pause-reads-today** (Design): "probe paused for this project → as today" also covers the global pause (wave 3b's D-4326) and an unreadable pause marker.
-- **D-TBD-marker-freshness** (Design): the spec's table has no stale row. The marker is trusted for 900 s, so a radar that stopped ticking cannot keep acceptance alive.
-- **D-TBD-lineage-not-expected** (Design): a row the probe never measures answers today's refusal rather than `lineage-unmeasured`, so no claim waits for a file that cannot come. The probe's qualifying predicate is restated on the server.
-- **D-TBD-partly-measured-accepts** (Design): a claim found in the `chain` of an `unmeasured` lineage is accepted, because each listed step was proven.
-- **D-TBD-not-a-refusal** (Architecture): `lineage-unmeasured` is a verdict code, but not a counted refusal. `DONE_REFUSAL_CODES`, derived, keeps it out of `closeRefusals`, `firstSubmission`, run health and the PWA chip, so §10's stage 4 metric ("refusals caused by a clean main sync: 0") is not inflated by radar timing. A re-sent `wave-done` still counts in `waveDoneMails`, because it is a real mail. The run-signals case pins that.
-- **D-TBD-review-any-chain-member** (Design): a review of any commit in the chain is accepted. Each step after it is a proven clean base merge, which is stage 4's premise.
-- **D-TBD-symlink-gap** (What this does not claim): `readFileMeasured` follows symlinks, and `FleetIO` has no `lstat`, so wave 3b's regular-file rule is not re-proved on the server. That is attribution-grade, like the rest.
-- **D-TBD-console-half-is-4b** (Architecture): spec §5.3's server reader, wire fields and PWA chip are wave 4b's.
+- **D-7102** — `verified-head` (Architecture): spec §5.4's accept row names only the fingerprint answer. Spec §7's R5 says "the landing binds the verified head", so after an accept the live tip replaces the claim everywhere the server binds a head, and the coordinator learns it from `AdvanceOk.verifiedHead`. Clause 15's own words are unchanged, because wave 3e's PR edits it; the landing paragraph defines the substitution instead.
+- **D-7103** — `pause-reads-today` (Design): "probe paused for this project → as today" also covers the global pause (wave 3b's D-4326) and an unreadable pause marker.
+- **D-7104** — `marker-freshness` (Design): the spec's table has no stale row. The marker is trusted for 900 s, so a radar that stopped ticking cannot keep acceptance alive.
+- **D-7105** — `lineage-not-expected` (Design): a row the probe never measures answers today's refusal rather than `lineage-unmeasured`, so no claim waits for a file that cannot come. The probe's qualifying predicate is restated on the server.
+- **D-7106** — `partly-measured-accepts` (Design): a claim found in the `chain` of an `unmeasured` lineage is accepted, because each listed step was proven.
+- **D-7107** — `not-a-refusal` (Architecture): `lineage-unmeasured` is a verdict code, but not a counted refusal. `DONE_REFUSAL_CODES`, derived, keeps it out of `closeRefusals`, `firstSubmission`, run health and the PWA chip, so §10's stage 4 metric ("refusals caused by a clean main sync: 0") is not inflated by radar timing. A re-sent `wave-done` still counts in `waveDoneMails`, because it is a real mail. The run-signals case pins that.
+- **D-7108** — `review-any-chain-member` (Design): a review of any commit in the chain is accepted. Each step after it is a proven clean base merge, which is stage 4's premise.
+- **D-7109** — `symlink-gap` (What this does not claim): `readFileMeasured` follows symlinks, and `FleetIO` has no `lstat`, so wave 3b's regular-file rule is not re-proved on the server. That is attribution-grade, like the rest.
+- **D-7110** — `console-half-is-4b` (Architecture): spec §5.3's server reader, wire fields and PWA chip are wave 4b's.
