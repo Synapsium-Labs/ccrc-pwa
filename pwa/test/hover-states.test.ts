@@ -332,7 +332,11 @@ describe('the selected row is tint plus rail, not reverse video', () => {
 
   it('lifts an unselected row under the mouse, inside (hover: hover) only', () => {
     const rows = hoverRules(fleet).filter((r) => r.selector.includes('.sess-line'));
-    expect(rows.map((r) => r.selector)).toEqual(['.sess-line:not(.sess-line--active):hover']);
+    // D-6332: the second is the row's ⋯ shown under a mouse (opacity only); it lifts nothing.
+    expect(rows.map((r) => r.selector)).toEqual([
+      '.sess-line:not(.sess-line--active):hover',
+      '.sess-line:hover .sess-actions, .sess-line:focus-within .sess-actions, .sess-line--active .sess-actions',
+    ]);
     expect(rows.every((r) => r.guarded)).toBe(true);
     // D-5455: the selected row keeps its tint under the mouse.
     expect(fleet).toMatch(/\.sess-line:not\(\.sess-line--active\):hover\s*\{\s*background:\s*var\(--bg-hover\);/);
