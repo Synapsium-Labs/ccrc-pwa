@@ -7480,6 +7480,40 @@ _acct_mark_off() {   # <id> <what-still-stands> — the regular marker ccd reads
 }
 
 
+# THE ONE WRITER OF `$_SVC_REG/<id>-disabled` (D-7050; ARCH-72, spec K16, §2.2 C1).
+# It refuses nothing: it answers a class, and each caller maps it onto its own
+# envelope and sentence. The switch is an operator kill switch, never projected
+# from the roster's kind fields. Three strictnesses, because the callers refuse
+# different objects (pinned in `account-markers-pin.test.ts`):
+#   off     add, declare, disable: stage + rename (D-2470, `_acct_mark_off`).
+#           1 no `$_SVC_REG`, 2 the staged empty file, 3 the rename (temp
+#           removed), 4 not a regular marker after it.
+#   on      enable: marker or absent. 5 the object is neither a regular file nor
+#           a symlink (nothing removed), 6 `rm` failed, 7 it remains after.
+#   on-any  remove: 8 absent (not listed), 5 a directory that is not a symlink
+#           (nothing removed; a FIFO or socket is removed), 6 `rm` failed. No
+#           postcondition, as remove's artefact loop has none.
+_acct_switch_write() {   # <id> off|on|on-any -> rc, see above
+  local marker="$_SVC_REG/$1-disabled" tmp="$_SVC_REG/.$1-disabled.tmp.$$"
+  case "$2" in
+    off)
+      _acct_own_temp "$tmp"
+      mkdir -p "$_SVC_REG" || return 1
+      rm -f -- "$tmp"
+      : > "$tmp" || return 2
+      _plat_mv_notdir "$tmp" "$marker" || { rm -f -- "$tmp"; return 3; }
+      { [ -f "$marker" ] && [ ! -L "$marker" ]; } || return 4 ;;
+    on)
+      [ ! -e "$marker" ] || [ -f "$marker" ] || [ -L "$marker" ] || return 5
+      rm -f -- "$marker" || return 6
+      { [ ! -e "$marker" ] && [ ! -L "$marker" ]; } || return 7 ;;
+    on-any)
+      { [ -e "$marker" ] || [ -L "$marker" ]; } || return 8
+      { [ ! -d "$marker" ] || [ -L "$marker" ]; } || return 5
+      rm -f -- "$marker" || return 6 ;;
+  esac
+}
+
 # ── THE ORDERED WRITE ──────────────────────────────────────────────────────
 # Spec §5's order, and the two properties it buys.
 #
