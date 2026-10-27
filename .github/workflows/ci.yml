@@ -552,7 +552,7 @@ jobs:
         run: |
           ./node_modules/.bin/vitest run test/session-hook.test.ts --maxWorkers=1 --no-file-parallelism -t 'p95 of 40|costs no more than 4\.2x|costs no more than 4x the cheap|spool.s increment'
 
-  # SECRET-MASK'S SLICING ROW, ON A RUNNER OF ITS OWN (D-7117). The row is `a 2 MB TUI pane history: after a warm-up
+  # SECRET-MASK'S SLICING ROW, ON A RUNNER OF ITS OWN (c1-secret-mask-wall-clock-to-perf-job). The row is `a 2 MB TUI pane history: after a warm-up
   # pass`: the longest gap between two slices of a 2 MB pane history stays under BOUND / 5. The threshold is unchanged.
   # It failed on a loaded runner for two measured causes: a cold first slice, and a major GC of about 100 ms landing inside
   # one slice. Neither is a defect in the masker, and the principle is the one that moved the hook rows (D-6929): no
@@ -560,7 +560,7 @@ jobs:
   # the required suite keeps a pin on the slices themselves (their size, the pause between two, the same answer as one string).
   # NOT REQUIRED, and in no required summary or verdict: no other job lists it in `needs:`. It has NO promotion clock of its
   # own (giving it one would need an operator ruling), and it is a job apart from `perf (server)` so that a flake here never
-  # counts against that job's two-week zero-flake clock, nor a red step here hides the hook budgets (D-7117).
+  # counts against that job's two-week zero-flake clock, nor a red step here hides the hook budgets (c1-secret-mask-wall-clock-to-perf-job).
   # Same gate as the server shards: it runs when a selection or a full run exists, and not for a docs-only change.
   mask-perf:
     name: perf (secret-mask)

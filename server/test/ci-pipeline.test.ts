@@ -1460,8 +1460,8 @@ describe('ci.yml: the session-hook budgets run in `perf (server)`, which is not 
   });
 });
 
-// ── D-7117: secret-mask's 2 MB slicing wall clock runs in a non-required job of its own ──
-describe('ci.yml: the secret-mask slicing row runs in `perf (secret-mask)`, a job of its own that is not required and has no promotion clock (D-7117)', () => {
+// ── c1-secret-mask-wall-clock-to-perf-job: secret-mask's 2 MB slicing wall clock runs in a non-required job of its own ──
+describe('ci.yml: the secret-mask slicing row runs in `perf (secret-mask)`, a job of its own that is not required and has no promotion clock (c1-secret-mask-wall-clock-to-perf-job)', () => {
   const MASK_TEST = 'server/test/secret-mask.test.ts';
 
   it('is one job, named `perf (secret-mask)`, gated like the server shards, with a deadline and no part in any required summary', () => {
@@ -1491,7 +1491,10 @@ describe('ci.yml: the secret-mask slicing row runs in `perf (secret-mask)`, a jo
   it('`perf (server)` carries no part of it: no `Mask slices` step and no mention of secret-mask, so its promotion clock is the hook rows\' alone', () => {
     const b = job('server-perf');
     expect(steps(b).filter((st) => st.includes('name: Mask slices\n')), 'the mask step belongs to mask-perf').toHaveLength(0);
-    expect(b).not.toMatch(/secret-mask/);
+    // Comment lines are left out: the job text runs on to the next job's header, so it carries mask-perf's own leading
+    // comment, which names this row by its slug.
+    const yamlLines = b.split('\n').filter((line) => !/^\s*#/.test(line)).join('\n');
+    expect(yamlLines, 'no step or script of perf (server) names secret-mask').not.toMatch(/secret-mask/);
   });
 
   it('the gated row keeps the bound, the required row pins the slices and reads no clock', () => {
