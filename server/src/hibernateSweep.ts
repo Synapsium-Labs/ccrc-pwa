@@ -3,7 +3,6 @@ import type { Deps } from './server.js';
 import type { FleetState } from './fleetstate.js';
 import type { SessionRecord } from './registry.js';
 import type { CoordStore } from './coord/store.js';
-import { openRunsClaimedBy } from './coord/bindingReads.js';
 import type { FleetSession } from '../../shared/api.js';
 import { CCD_ARGV, sweepDec, verbSupported } from './ccdargv.js';
 import {
@@ -27,8 +26,8 @@ import {
  * ONE PASS (`FleetWatcher.sweepHibernate`, every `HIBERNATE_SWEEP_MS`, on the tick's own rows and listing):
  *  1. `$REG/hibernate-disabled` listed → nothing is read, logged or done;
  *  2. N is `$REG/hibernate-after-hours` when listed (read then, and only then), else the default;
- *  3. per row with a registry record: the store's answers (open runs as worker through `openRunsForSession` and as
- *     claimant through `openRunsClaimedBy`, both `state NOT IN` the terminal set; the live claims, read once a pass;
+ *  3. per row with a registry record: the store's answers (open runs as worker and as claimant through `bindingsOf`
+ *     (`openRunsForSession`, `openRunsClaimedBy`), both `state NOT IN` the terminal set; the live claims, read once a pass;
  *     outstanding mail), `Viewers.isOpen`, the opt-out marker from the listing; a read that fails, or no store at
  *     all, holds `runs-unreadable`;
  *  4. a row the verdict answers `measure` for has its raw live word and its turn marker read, and is asked again;
@@ -64,7 +63,7 @@ export interface HibernateActPort {
 
 export interface HibernateSweepDeps {
   /** Undefined without a coordination store: every row then holds `runs-unreadable`. */
-  readonly coord: Pick<CoordStore, 'openRunsForSession' | 'activeClaims' | 'outstandingMailFor'> | undefined;
+  readonly coord: Pick<CoordStore, 'bindingsOf' | 'activeClaims' | 'outstandingMailFor'> | undefined;
   /** Undefined: every row holds `viewer` (fail closed): a screen nothing measured is never an empty one. */
   readonly viewers: Pick<Viewers, 'isOpen'> | undefined;
   /** `turnverdict.ts`'s `liveWordFor`, over the watcher's thunks. */
@@ -113,9 +112,10 @@ function storeRead(coord: HibernateSweepDeps['coord'], claimants: ReadonlySet<st
   if (coord === undefined) return { ok: false, detail: 'no coordination store' };
   if (claimants === null) return { ok: false, detail: 'the live claims could not be read' };
   try {
-    const worker = coord.openRunsForSession(id);
+    const bound = coord.bindingsOf(id);
+    const worker = bound.worker();
     if (!worker.ok) return { ok: false, detail: worker.detail };
-    const claimant = openRunsClaimedBy(coord, id);
+    const claimant = bound.claimant();
     if (!claimant.ok) return { ok: false, detail: claimant.detail };
     return {
       ok: true, openWorker: worker.siblings.length > 0, openClaimant: claimant.siblings.length > 0,

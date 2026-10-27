@@ -319,7 +319,7 @@ async function refuseSpentChild(
   const pr = gate.pr;
   const keep = (detail: string): ChildSpentOutcome =>
     ({ ok: false, kind: 'childSpent', code: 'workspace-spent', pr, detail, unbound: false });
-  const sibRead = deps.coord.openRunsForSession(run.sessionId, run.id);
+  const sibRead = deps.coord.bindingsOf(run.sessionId).worker({ excludeRunId: run.id });
   if (!sibRead.ok) return keep(`the other runs naming this workspace could not be read: ${sibRead.detail}`);
   const survivor = survivorOf(sibRead.siblings);
   let handoff: HoldReasonVerdict | null = null;

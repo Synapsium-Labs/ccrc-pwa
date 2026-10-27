@@ -14,7 +14,7 @@ type SiblingFacts =
   | { readonly ok: false; readonly detail: string };
 
 function siblingFacts(coord: CoordStore, sessionId: string): SiblingFacts {
-  const sib = coord.openRunsForSession(sessionId);
+  const sib = coord.bindingsOf(sessionId).worker();
   if (!sib.ok) return { ok: false, detail: sib.detail };
   const facts: SiblingFact[] = [];
   const unread: { id: number; openedAt: number }[] = [];

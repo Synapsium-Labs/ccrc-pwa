@@ -24,7 +24,7 @@ import type { ApprovalRow, AskRow, CoordStore } from './coord/store.js';
 // in L3 is what let the two halves disagree about what the hop is keyed on.
 import { boardPlacement, foldCoordPlacements, type StampLookup } from './coord/placement.js';
 import { foldLastRuns, releasedFrom, type ReleasedLookup } from './coord/released.js';
-import { incarnationOfMark, sessionRunRead, type SessionRunRead } from './coord/runWire.js';
+import { incarnationOfMark, type SessionRunRead } from './coord/runWire.js';
 // F2(b): the `held` chip's ceiling, DERIVED from the lane's own two
 // windows. It lives in `askwindow.ts` because `watch.ts` (their first
 // reader) imports this module, so the constants could not stay there.
@@ -344,7 +344,7 @@ function readSessionRun(coord: CoordStore | undefined, r: { id: string; child: S
   const none: SessionRunRead = { ok: true, run: null, openRun: null };
   if (!coord) return none;
   try {
-    const read = sessionRunRead(coord, r.id, incarnationOfMark(coord, r.id, r.child));
+    const read = coord.bindingsOf(r.id).card(incarnationOfMark(coord, r.id, r.child));
     if (!read.ok) console.warn(`ccrc-server: session run refused for ${r.id} — ${read.detail} — run reads null this tick`);
     return read;
   } catch (err) {

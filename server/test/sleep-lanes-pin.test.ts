@@ -9,6 +9,7 @@
 // one `it` per fact; the act-time rows, including today's gap (a kill switch raised between the pass and the act does
 // not hold the act); two policies on one session in one tick; and the cadence rows, through the watcher's real sweeps.
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { withBindingsOf } from './bindingsFake.js';
 import path from 'node:path';
 import { mkdirSync } from 'node:fs';
 import {
@@ -444,13 +445,13 @@ function hbDeps(w: World, o: { act?: boolean } = {}): HibernateSweepDeps {
     queueRun: queueOf(w), rowAtAct: rowAtActOf(w),
   };
   return {
-    coord: {
+    coord: withBindingsOf({
       openRunsForSession: ((id: string, _e?: number, _i?: undefined, role?: 'worker' | 'claimant') => ({
         ok: true, siblings: role !== 'claimant' && w.openWorker.has(id) ? [{ id: 1, program: 'program-a', wave: 1, waveOf: 1 }] : [],
       })) as never,
       activeClaims: () => [],
       outstandingMailFor: (id: string) => (w.mail.has(id) ? [{ parkedAt: null }] : []) as never,
-    },
+    }),
     viewers: { isOpen: (id: string) => w.viewers.has(id) },
     liveWord: liveWordOf(w),
     mark: markOf(w),

@@ -3,6 +3,8 @@
 // Nothing in this task can hibernate a session: the pass is handed no ccd runner at all, and the watcher's own pass,
 // run end to end below with a runner that records every command, reaches ccd for nothing whatever the markers say.
 import { describe, expect, it, vi } from 'vitest';
+import { withBindingsOf } from './bindingsFake.js';
+import type { Incarnation } from '../src/coord/runBinding.js';
 import path from 'node:path';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -50,10 +52,12 @@ const mark = (ageMs: number, o: Partial<HibernateMark> = {}): HibernateMark =>
 
 const store = (): CoordStore => new CoordStore(openCoordDb(path.join(mkTmp('ccrc-hib-'), '.ccrc', 'coord.db')));
 /** The store port the sweep declares, over a real store, with any read overridden. */
-const port = (s: CoordStore, o: Partial<NonNullable<HibernateSweepDeps['coord']>> = {}): NonNullable<HibernateSweepDeps['coord']> => ({
-  openRunsForSession: (...a) => s.openRunsForSession(...a),
+/** The readers the store port answers through: `bindingsOf` is the store's own view over the port's `openRunsForSession`. */
+type HibReaders = Pick<CoordStore, 'openRunsForSession' | 'activeClaims' | 'outstandingMailFor'>;
+const port = (s: CoordStore, o: Partial<HibReaders> = {}): NonNullable<HibernateSweepDeps['coord']> & HibReaders => withBindingsOf({
+  openRunsForSession: (...a: Parameters<CoordStore['openRunsForSession']>) => s.openRunsForSession(...a),
   activeClaims: () => s.activeClaims(),
-  outstandingMailFor: (id, n) => s.outstandingMailFor(id, n),
+  outstandingMailFor: (id: string, n?: number) => s.outstandingMailFor(id, n),
   ...o,
 });
 
@@ -393,10 +397,10 @@ describe('hibernatePass: the store and presence are read again after the live re
   it('a run opened for the session while the live reads run holds run-worker', async () => {
     const f = fake();
     let calls = 0;
-    const real = f.deps.coord!;
+    const real = f.coord;
     const coord: NonNullable<HibernateSweepDeps['coord']> = {
-      ...real,
-      openRunsForSession: (id, e, i, role) => {
+      ...f.deps.coord!,
+      openRunsForSession: (id: string, e?: number, i?: Incarnation, role?: 'worker' | 'claimant') => {
         if (role === 'claimant') return real.openRunsForSession(id, e, i, role);
         calls += 1;
         return calls > 1 ? { ok: true, siblings: [{ id: 1, program: 'program-a', wave: 1, waveOf: 1 }] } : real.openRunsForSession(id, e, i, role);
@@ -537,7 +541,7 @@ describe('hibernatePass: the live act', () => {
 
   // The store, the live claims and the mail queue are read again INSIDE the serialiser (D-5428): what the tick read
   // is not what holds at the kill. Each case flips its read only once the serialiser has been entered.
-  const atAct = (o: (inside: () => boolean) => Partial<NonNullable<HibernateSweepDeps['coord']>>) => {
+  const atAct = (o: (inside: () => boolean) => Partial<NonNullable<HibernateSweepDeps['coord']> & HibReaders>) => {
     let inside = false;
     const l = live();
     const coord = { ...l.f.deps.coord!, ...o(() => inside) } as NonNullable<HibernateSweepDeps['coord']>;

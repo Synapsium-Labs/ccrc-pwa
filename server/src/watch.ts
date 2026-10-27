@@ -137,7 +137,7 @@ import { definitionsIn, floorFromScan, unallocatedDefinitions } from './coord/le
 import { LEDGER_FLOOR_DIRS, SWEEP_POLICY, readLedgerDocs } from './coord/ledgerseed.js';
 import type { ProvenancePair } from './coord/store.js';
 import { incarnationsOfSessions, withChildIds } from './coord/runWire.js';
-import { coordinatorOfRun, openRunsClaimedBy, readCoordinatorOfRun } from './coord/bindingReads.js';
+import { coordinatorOfRun, readCoordinatorOfRun } from './coord/bindingReads.js';
 import type { PushPayload } from './push.js';
 import { notify, noticeSink } from './notice.js';
 import { runDriftPass } from './coord/driftLane.js';
@@ -3624,7 +3624,7 @@ export class FleetWatcher {
       // HELD" rule this comment already states for an unreadable `.hold`. The
       // sweep's act is a branch rename; a workspace this box could not prove
       // unclaimed is one it must not rename.
-      const sib = this.deps.coord?.openRunsForSession(r.id);
+      const sib = this.deps.coord?.bindingsOf(r.id).worker();
       if (r.held !== null || (sib !== undefined && (!sib.ok || sib.siblings.length > 0))) continue;
       // Keyed by id AND uuid, not id alone: `<project>-<slug>` is a SLUG,
       // recycled by ws-reap (`ccd:3313`'s "144 per project, recycled") —
@@ -5911,7 +5911,7 @@ export class FleetWatcher {
       if (key !== this.deadCoordinatorBreakerCommittedKey) {
         if (next.length === 0 && this.deadCoordinatorBreakerHeldRunId !== null) record.push(this.deadCoordinatorBreakerHeldRunId);
         for (const id of [...next.map((m) => m.id), ...before.map((m) => m.id), ...ids]) {
-          const open = openRunsClaimedBy(coord, id);
+          const open = coord.bindingsOf(id).claimant();
           if (open.ok && open.siblings.length > 0) { record.push(open.siblings[0]!.id); break; }
         }
       }
@@ -8275,7 +8275,7 @@ export class FleetWatcher {
       // sentence falls back to a GENERIC one naming no row detail: the reason
       // is display-only here, and a notification must not assert a run number,
       // a programme or a wave off a read that did not happen.
-      const sib = this.deps.coord?.openRunsForSession(r.id);
+      const sib = this.deps.coord?.bindingsOf(r.id).worker();
       const unreadable = sib !== undefined && !sib.ok;
       const openRuns = sib?.ok ? sib.siblings : [];
       const run = openRuns[openRuns.length - 1];
@@ -8397,7 +8397,7 @@ export class FleetWatcher {
           const s = landingVerdict(ask, facts);
           switch (s.step) {
             case 'runs': {
-              const sib = coord.openRunsForSession(r.id);
+              const sib = coord.bindingsOf(r.id).worker();
               run = sib.ok ? survivorOf(sib.siblings) : null;
               facts.runs = sib.ok ? { ok: true, run } : { ok: false, detail: sib.detail };
               break;
@@ -9718,7 +9718,7 @@ export class FleetWatcher {
     // behaviour. Reached by a typed result rather than by `node:sqlite`'s bare
     // `RangeError`, but landing in the same place on purpose, and it throws
     // BEFORE `insertAsk` so there is nothing to compensate.
-    const sib = this.deps.coord!.openRunsForSession(r.id);
+    const sib = this.deps.coord!.bindingsOf(r.id).worker();
     if (!sib.ok) throw new Error(`hold: ${sib.detail}`);
     const openRuns = sib.siblings;
     const runId = openRuns.length > 0 ? openRuns[openRuns.length - 1]!.id : null;

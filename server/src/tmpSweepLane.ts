@@ -57,7 +57,7 @@ function mailOnce(coord: CoordStore, toId: string, subject: string, body: string
  *  row cannot be read. The caller LATCHES the notice on an answer, so an unreadable read must defer, never read as "nobody to
  *  tell" (D-2545; `readCoordinatorOfRun`, not the collapsing `coordinatorOfRun`). */
 function coordinatorOf(coord: CoordStore, sessionId: string): { ok: true; id: string | null } | { ok: false; detail: string } {
-  const open = coord.openRunsForSession(sessionId);
+  const open = coord.bindingsOf(sessionId).worker();
   if (!open.ok) return { ok: false, detail: open.detail };
   const run = survivorOf(open.siblings);
   if (run === null) return { ok: true, id: null };

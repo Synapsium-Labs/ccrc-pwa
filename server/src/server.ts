@@ -76,7 +76,6 @@ import { queueProgramKickoff } from './coord/kickoff.js';
 import { buildDigest, correctDigestRow, digestDayFor, digestWindow, parseDigestCorrectBody, parseDigestDay, readDigestHour } from './coord/digest.js';
 import { toRunSummary, type AskRow, type AskTakeResult, type CoordStore, type NodeRow } from './coord/store.js';
 import { incarnationsOfSessions, withChildIds } from './coord/runWire.js';
-import { openRunsClaimedBy } from './coord/bindingReads.js';
 import { buildInfoOfRow } from './update/inventory.js';
 import { AuthSecretUnusable, readAuthSecret, verifyPassphrase, type AuthSecret } from './auth/secret.js';
 import { ABSOLUTE_TTL_MS, SessionStore } from './auth/sessions.js';
@@ -3863,8 +3862,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     const plan = coord === undefined
       ? await decideArchive(null, id, flags, measure)
       : await coordRoutes.withAbandon(coord, (abandon, abandonRefusal) => decideArchive({
-        openRunsForSession: (sid) => coord.openRunsForSession(sid),
-        openRunsClaimedBy: (sid) => openRunsClaimedBy(coord, sid),
+        bindingsOf: (sid) => coord.bindingsOf(sid),
         abandonRefusal,
         abandon,
       }, id, flags, measure));

@@ -15,6 +15,7 @@ import type { CoordPlacementStamp } from './placement.js';
 import type { LastRun } from './released.js';
 import type { BindingRun, Incarnation } from './runBinding.js';
 import { boundRows, openRows, type SeriesRow } from './bindingRows.js';
+import { bindingsOver, type SessionBindings } from './bindingReads.js';
 // Stall watch wave 1: the stall lane's row shapes are declared by their CONSUMER,
 // the L1 `stall.ts` (the same port rule as `CoordPlacementStamp` above); the
 // reads below implement them.
@@ -1955,6 +1956,15 @@ export class CoordStore {
         sessionBornAt: r.sessionBornAt, sessionBornFor: r.sessionBornFor });
     }
     return { ok: true, runs };
+  }
+
+  /**
+   * "Is this session bound by coordination, and by whom?" (ARCH-42, #777): the ONE query every unit outside the binding
+   * asks it through. A view of five lazy answers over this store's own binding readers (`bindingsOver`,
+   * `coord/bindingReads.ts`), so the rule stays in `coord/runBinding.ts` and each answer reads only when it is asked.
+   */
+  bindingsOf(sessionId: string): SessionBindings {
+    return bindingsOver(this, sessionId);
   }
 
   /**
