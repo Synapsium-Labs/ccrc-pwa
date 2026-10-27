@@ -5,7 +5,7 @@ import { readFileSync, existsSync } from 'node:fs';
 import path from 'node:path';
 import { sourceOfSymbol } from '../scan/symbols.js';
 import { identifierReferences, stringExpressions } from '../scan/parse.js';
-import { sleepVerdictLadders } from '../consolidationCensus.js';
+import { sleepVerdictLadders } from '../census-w4/sleep.js';
 import { SLEEP_POLICY_NAMES } from '../../src/sleep.js';
 import { SWITCHES } from '../../../shared/switches.js';
 import { ALL, ALL_MJS, BASH, HISTORY_DIR, HISTORY_MJS, ccrcRoot, codeLines, here, holdersOf, mjsUnder, prose, rel, stallCode, stallCodeText } from './helpers.js';
