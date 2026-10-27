@@ -18,6 +18,8 @@ import {
   HistorySection, InspectorSections, LaneSection, MailSection, PrSection, RoutingSection, TasksSection,
 } from '../src/inspector/InspectorSections';
 import { navigate } from '../src/lib/router';
+import { routeView } from '../src/session/routeView';
+import { routingLine } from '../src/session/routingLine';
 import { SessionScreen } from '../src/screens/SessionScreen';
 import { SkinSetProvider } from '../src/skins/frame';
 import { INSTRUMENT_SET } from '../src/skins/instrument/parts';
@@ -291,6 +293,35 @@ describe('a section with nothing to show renders nothing (desktop polish T3d, D-
     el = line();
     expect(el.textContent).toMatch(/ · asked Opus 5\.5$/);
     expect(el.querySelector('.route-queued')?.textContent).toBe(' · asked Opus 5.5');
+  });
+
+  it('the routing line reads exactly the sentence, whichever parts it carries', () => {
+    stubWidth(1920);
+    goTo(`/s/${ID}`);
+    act(() => useFleetStore.setState({
+      roster: [{ id: 'lane-a', label: 'Lane A', hue: 'acct-1', homeAble: true, provider: 'anthropic' } as never],
+    }));
+    const route = (over: Partial<NonNullable<FleetSession['route']>>): FleetSession['route'] =>
+      ({ fields: {}, degraded: null, inert: [], unreadable: [], ...over });
+    const cases: [string, Partial<FleetSession>, string][] = [
+      ['an asked class', { model: 'Sonnet 5', route: route({ fields: { class: 'opus' } }) }, ' · asked Opus 5.5'],
+      ['an asked effort', { route: route({ fields: { effort: 'max' } }) }, ' · asked effort max'],
+      ['an unreadable field', { route: route({ unreadable: ['effort'] }) }, ' · routing could not be read'],
+      ['no model yet', { model: null }, 'Runs a model not read yet on Lane A'],
+      ['ultracode', { effort: 'xhigh', ultracode: true }, ' · effort ultracode'],
+      ['an inert effort', { route: route({ fields: { effort: 'max' }, inert: ['effort'] }) }, ' · effort set by the lane'],
+    ];
+    for (const [name, over, expected] of cases) {
+      const row: FleetSession = { ...ROW, ...over };
+      act(() => useFleetStore.setState({ sessions: [row] }));
+      const { container, unmount } = render(<RoutingSection />);
+      const el = container.querySelector<HTMLElement>('.insp-routing-row')!;
+      const sentence = routingLine(row, routeView(row, row.wrapper, 'anthropic'), 'Lane A').sentence;
+      // The shape really carries its part, and the component prints the sentence and nothing else.
+      expect(sentence, name).toContain(expected);
+      expect(el.textContent, name).toBe(sentence);
+      unmount();
+    }
   });
 });
 
