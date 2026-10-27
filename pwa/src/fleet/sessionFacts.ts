@@ -46,10 +46,12 @@ import { unmeasuredTitle } from './chips';
 export const CRITICAL = 75;
 /** Context-pressure floor (D-2011), statusline-command.sh's own. */
 export const CTX_PRESSURE = 80;
-/** The card's name budget, in characters, and its programme budget. Chosen by
- *  measurement at 360px (both skins): the card's text column is 226px — ~30
- *  label characters at 7.4px, ~31 mono characters at 7.2px — and the context
- *  line holds the programme plus its wave (` · wave 3 of 5`, 14 characters). */
+/** The PHONE's name budget, in characters, and its programme budget: the length of the token-shortened form
+ *  (`Fit`) a card draws below the 900px desk breakpoint. Chosen by measurement at 360px (both skins): the card's text
+ *  column is 226px — ~30 label characters at 7.4px, ~31 mono characters at 7.2px — and the context line holds the
+ *  programme plus its wave (` · wave 3 of 5`, 14 characters). From 900px up the full form draws instead, a name and
+ *  a branch on up to two lines and a programme slug whole (fleet.css, D-6332, `desk-rule-not-container-threshold`),
+ *  so no budget applies at the desk. */
 export const NAME_BUDGET = 28;
 export const PROGRAMME_BUDGET = 16;
 
