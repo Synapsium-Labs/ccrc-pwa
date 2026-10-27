@@ -562,6 +562,16 @@ function measureProgramme(page: Page, name: string): Promise<ProgrammeBox> {
   }, name);
 }
 
+/** The name of the row that holds the focus, or null when the focus is in no row. */
+function focusedRow(page: Page): Promise<string | null> {
+  return page.evaluate(() => {
+    const line = document.activeElement?.closest('.sess-line');
+    if (line === null || line === undefined) return null;
+    const open = line.querySelector('.sess-open');
+    return (open?.querySelector('.sr-only') ?? open?.querySelector('.sess-label'))?.textContent ?? null;
+  });
+}
+
 /** The names of the rows whose ⋯ is drawn (computed opacity 1), in list order. */
 function litActions(page: Page): Promise<string[]> {
   return page.evaluate(() => [...document.querySelectorAll<HTMLElement>('.sess-line')].flatMap((l) => {
@@ -698,6 +708,31 @@ describe('D-6332: a session row shows its name whole where it has room', () => {
         // A hovered row shows its own, and the selected row's goes dark while it is hovered: never two.
         await page.locator('.sess-line').filter({ has: page.locator(`.sess-label[aria-label="${NAME_12}"]`) }).hover();
         expect(await litActions(page), 'hovering another row shows that row\'s ⋯ and no other').toEqual([NAME_12]);
+        expect(errors).toEqual([]);
+      } finally {
+        await close();
+      }
+    });
+
+    it(`a ⋯ given focus back by a sheet closed with the mouse lights no second ⋯ at rest (${named(view)}, ${mode})`, async () => {
+      const { page, errors, close } = await bootFit(view, mode, `/s/${FIT_SELECTED}`);
+      try {
+        await expectSelectedRow(page);
+        // Open another row's actions sheet with the mouse and close it on its scrim: the sheet gives the focus back to
+        // that row's ⋯, by script after a pointer, so it is not `:focus-visible`.
+        const row = page.locator('.sess-line').filter({ has: page.locator(`.sess-label[aria-label="${NAME_12}"]`) });
+        await row.locator('.sess-actions').click();
+        await page.locator('.sheet-scrim').waitFor();
+        await page.locator('.sheet-scrim').click({ position: { x: 4, y: 4 } });
+        await page.locator('.sheet-scrim').waitFor({ state: 'detached' });
+        expect(await focusedRow(page), 'the closed sheet gave the focus back to that row').toBe(NAME_12);
+        await page.mouse.move(view.width - 4, 896);
+        expect(await litActions(page), 'at rest only the selected row shows ⋯').toEqual([NAME_SELECTED]);
+        // A keyboard's focus keeps the reveal: the row the next Tab lands in draws its ⋯.
+        await page.keyboard.press('Tab');
+        const keyed = await focusedRow(page);
+        expect(keyed, 'the Tab landed in a row').not.toBeNull();
+        expect(await litActions(page), 'the keyboard-focused row shows its ⋯').toContain(keyed);
         expect(errors).toEqual([]);
       } finally {
         await close();

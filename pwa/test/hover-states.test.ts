@@ -336,7 +336,7 @@ describe('the selected row is tint plus rail, not reverse video', () => {
     // (opacity only); neither lifts anything.
     expect(rows.map((r) => r.selector)).toEqual([
       '.sess-line:not(.sess-line--active):hover',
-      '.sess-line:hover .sess-actions, .sess-line:focus-within .sess-actions, .sess-line--active .sess-actions',
+      '.sess-line:hover .sess-actions, .sess-line:has(:focus-visible) .sess-actions, .sess-line--active .sess-actions',
       '.fleet:has(.sess-line:hover) .sess-line:not(:hover) .sess-actions:not(:focus-visible)',
     ]);
     expect(rows.every((r) => r.guarded)).toBe(true);

@@ -174,9 +174,13 @@ describe('fleet density and alignment', () => {
 
   it('a hovered, focused or selected row shows ⋯', () => {
     const fine = atBlock(css, '@media (hover: hover) and (pointer: fine)');
-    for (const sel of ['.sess-line:hover .sess-actions', '.sess-line:focus-within .sess-actions', '.sess-line--active .sess-actions']) {
+    for (const sel of ['.sess-line:hover .sess-actions', '.sess-line:has(:focus-visible) .sess-actions', '.sess-line--active .sess-actions']) {
       expect(declValue(ruleIn(fine, sel), 'opacity'), `${sel} shows the button`).toBe('1');
     }
+    // A keyboard's focus reveals ⋯, a pointer's does not: a row whose ⋯ took the focus from a click or a closing sheet
+    // must not light a second ⋯ beside the selected row's, so no reveal keys on `:focus-within`.
+    expect(rulesFor(fine, '.sess-actions').flatMap((r) => r.selectors).filter((sel) => sel.includes(':focus-within')),
+      'no ⋯ reveal keys on :focus-within').toEqual([]);
     // One ⋯ at a time (the plan's acceptance): while any row of the fleet is hovered, every other row's ⋯ goes dark,
     // the selected row's and a focused row's included, unless that ⋯ itself holds the keyboard's focus.
     const elsewhere = '.fleet:has(.sess-line:hover) .sess-line:not(:hover) .sess-actions:not(:focus-visible)';
