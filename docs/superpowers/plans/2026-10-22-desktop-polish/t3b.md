@@ -47,7 +47,9 @@ A width threshold on the track cannot tell the desk from a phone, so the desk is
   track.
 
 The ⋯ reveal: inside `@media (hover: hover) and (pointer: fine)`, `.sess-actions` is `opacity: 0` until its row is
-hovered, holds focus or is the selected row. While any row of the fleet is hovered, every other row's ⋯ goes dark,
+hovered, holds a keyboard's focus (`:has(:focus-visible)`) or is the selected row. A pointer's focus reveals nothing:
+a row whose ⋯ took the focus from a click, or got it back from a sheet closed with the mouse, lights no second ⋯
+beside the selected row's. While any row of the fleet is hovered, every other row's ⋯ goes dark,
 the selected and the focused row's included, unless that ⋯ itself holds the keyboard's focus: one ⋯ at a time under a
 mouse, the plan's acceptance. Opacity only, with no transition: the button stays mounted, focusable, in the
 accessibility tree, with its 44 px overlay and its `open-actions` door. A touch screen draws every row's ⋯.
@@ -98,7 +100,7 @@ Each mutant was applied to a saved copy, its suite run, and the file restored fr
 | `opacity: 0` on the unconditional `.sess-actions` rule | fleet-css | red: same case |
 | the reveal under `(pointer: coarse)` | fleet-css | red: both reveal cases |
 | the selected-row arm removed | fleet-css | red: "a hovered, focused or selected row shows ⋯" |
-| the focus-within arm removed | fleet-css | red: same case |
+| the focus arm removed (then `:focus-within`) | fleet-css | red: same case |
 | a clamp on the programme slug | fleet-css | red: the clamp-scope case and "the programme half never ends in an ellipsis" |
 | the clamp on the whole context line instead of the branch cell | fleet-css | red: the clamp-scope case |
 | `overflow-wrap: anywhere` removed | row-fit (browser), fleet-css | red: the `_`-joined name runs out of its box sideways; the clamp-scope case |
@@ -107,6 +109,8 @@ Each mutant was applied to a saved copy, its suite run, and the file restored fr
 | the desk's full-form rule narrowed to the name and branch cells | row-fit (browser) | red: "the programme slug renders whole at the desk" (12 of 12) |
 | the rule that darkens the other rows' ⋯ under a hover removed | row-fit (browser), fleet-css, hover-states | red: "under a mouse one row shows its ⋯ at a time" (12 of 12, two ⋯ lit); "a hovered, focused or selected row shows ⋯"; the hover census |
 | that rule without its `:not(:focus-visible)` | fleet-css, hover-states | red: "a hovered, focused or selected row shows ⋯"; the hover census |
+| the keyboard arm widened back to `:focus-within` | row-fit (browser), fleet-css, hover-states | red: "a ⋯ given focus back by a sheet closed with the mouse lights no second ⋯ at rest" (12 of 12, two ⋯ lit); "a hovered, focused or selected row shows ⋯"; the hover census |
+| the keyboard arm removed | row-fit (browser), fleet-css, hover-states | red: the same browser case (12 of 12, the Tab-focused row's ⋯ dark); "a hovered, focused or selected row shows ⋯"; the hover census |
 
 No survivors among the rows run. Not run: a browser mutant for the branch clamp alone. The "stays inside its box
 sideways" assertion that replaced "fills the track" (which a block box always met) failed on the base for the plain
