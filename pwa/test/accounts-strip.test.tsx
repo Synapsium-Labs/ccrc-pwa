@@ -690,6 +690,22 @@ describe('the lanes fold (S5b, D-6530)', () => {
     expect(screen.queryByRole('button', { name: /more|Show fewer/ })).toBeNull();
   });
 
+  it('five lanes render no fold control at all, folded or expanded: the only button in the strip is All accounts', async () => {
+    stubLanes(seventeenLanes(nowSec).accounts.slice(0, 5));
+    for (const stored of ['folded', 'expanded']) {
+      window.localStorage.setItem('ccrc-accounts-strip', stored);
+      const { container, unmount } = render(<AccountsStrip />);
+      await screen.findByText('lane-a');
+      // Every button, by element and not by name: a control with no words has no accessible name, so a query by name
+      // cannot see a nameless one.
+      const buttons = [...container.querySelectorAll<HTMLElement>('button, [role="button"]')];
+      expect(buttons.map((b) => b.textContent), stored).toEqual(['All accounts']);
+      expect(container.querySelectorAll('[aria-expanded], [aria-controls]'), stored).toHaveLength(0);
+      expect(container.querySelector('.accounts-end')!.children, stored).toHaveLength(1);
+      unmount();
+    }
+  });
+
   it('no control in the placeholder states', async () => {
     vi.spyOn(api, 'accounts').mockReturnValue(new Promise(() => {}));
     render(<AccountsStrip />);
