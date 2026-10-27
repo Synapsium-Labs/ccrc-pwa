@@ -2484,8 +2484,9 @@ describe('the programme tree on the fleet screen', () => {
    *
    *  THE ADAPTATION against the runs-screen twin, which asserts on the whole
    *  recorded array: that tree is single-interval, and this one is not.
-   *  `useProjectedHome` (20_000), `AccountsStrip` (20_000 for its poll and
-   *  30_000 for its own `useNow`), `FleetHostBanner` (15_000 + 30_000),
+   *  The fleet store's one /api/accounts poll (20_000, which this screen's
+   *  `connect()` starts), `AccountsStrip` (30_000 for its own `useNow`),
+   *  `FleetHostBanner` (15_000 + 30_000),
    *  `useUpdatesView` (60_000 — the screen's one /api/updates poll, read by
    *  UpdateIndicator) and `HotFilesStrip` (30_000) all start polling from this
    *  screen's mount, and
