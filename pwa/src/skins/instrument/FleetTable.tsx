@@ -196,7 +196,7 @@ function StatusTable({ selectedId, phoneTab, onTab }: {
     const runs = card?.runs ?? activeRuns;
     const child = childRunContext(s, runs, lookup);
     const crumb = parentIdOf(s, runs) === null ? null : child.coordinator;
-    const note = card === null ? null
+    const orphan = card === null ? null
       : orphanNote({ kind: 'session', depth: 0, session: s }, card.runs, card.project, card.sessions, lookup, frameSeen);
     return (
       <li key={s.id} data-row={s.id} className="ins-row min-h-row">
@@ -210,8 +210,8 @@ function StatusTable({ selectedId, phoneTab, onTab }: {
           onOpenRun={runForSession(runs, s) === null ? null : () => navigate('/runs')}
           workingOn={workingOn(s, cards)}
           childRun={child}
-          coordinator={note?.presence ?? null}
-          {...(note === null ? {} : { coordinatorTitle: note.title })}
+          coordinator={orphan?.presence ?? null}
+          {...(orphan === null ? {} : { coordinatorTitle: orphan.title })}
         />
         {crumb !== null && (
           <span className="ins-coord-crumb" title={`coordinated by ${crumb}`}>
