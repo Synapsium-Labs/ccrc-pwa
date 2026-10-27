@@ -258,7 +258,8 @@ function StatusTable({ selectedId, phoneTab, onTab }: {
             <span className="ins-group-count"> · {g.sessions.length}</span>
             {g.unseen > 0 && (
               <>
-                <span className="ins-group-count" aria-hidden="true"> · </span>
+                {/* Read, not hidden: the fold row's name is its content, and without this "3" and "4 new" run into "34 new". */}
+                <span className="ins-group-count"> · </span>
                 <CountBadge aria-label={`${g.unseen} new`}>{g.unseen} new</CountBadge>
               </>
             )}

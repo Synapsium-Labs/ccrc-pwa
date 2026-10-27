@@ -290,6 +290,17 @@ describe('the counts once per screen', () => {
     expect(within(groupOf('attention')).getByRole('button', { name: 'Mark all Needs you seen' })).toBeInTheDocument();
   });
 
+  it("a head's fold row is named by its visible words, in order: the count and the badge never run together", () => {
+    mount(UNSEEN, []);
+    // The badge's separator is read like the count's own: aria-hidden, "3" and "2 new" collapsed into "32 new" (F10).
+    // jsdom's name computation trims the whitespace around an inline span's text ("Done· 3·2 new"), so the pin is the
+    // order and the middot between the numbers, not the spaces a real browser keeps ("Done · 3 · 2 new").
+    expect(head(groupOf('done'))).toHaveAccessibleName(/^Done\W*3\s*·\s*2 new$/);
+    expect(head(groupOf('attention'))).toHaveAccessibleName(/^Needs you\W*1\s*·\s*1 new/);
+    // An unbadged head has no badge to separate.
+    expect(head(groupOf('working'))).toHaveAccessibleName(/^Working\W*1$/);
+  });
+
   it('on a phone, Mark all seen in a tab acks its group, announces it and returns focus to the head', () => {
     stubWidth(false, false);
     mount(UNSEEN, []);
