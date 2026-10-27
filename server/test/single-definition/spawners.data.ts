@@ -17,6 +17,10 @@ export const PROCESS_SPAWNERS: EntrySet = {
     reason: 'the one bounded update spawner (D-7055): its own group, stdin closed, SIGKILL at the bound, a drain deadline',
     since: '2026-10-27',
   },
+  'shared/spawn.mjs#boundedStdinSpawn': {
+    reason: 'the one account-op spawner (D-7057, OA-C8a (a)): the secret on stdin (D-5513), an explicit env, TERM to the group, KILL after the grace',
+    since: '2026-10-27',
+  },
   'server/src/pty.ts#attachPty': {
     reason: "the terminal drawer's local tmux attach through node-pty: an interactive pty, not a bounded read",
     since: '2026-10-27',

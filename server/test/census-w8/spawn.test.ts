@@ -126,7 +126,7 @@ describe('processSpawnSites — every process spawner in server/src, agent/src a
     expect(processSpawnSites(root).map((s) => s.key)).toEqual(['agent/src/e.ts#<module>']);
   });
 
-  it('real tree: the nine spawners (10 at ccba6f9b6, before C8c folded the update pair into shared/spawn.mjs)', () => {
+  it('real tree: the spawners (10 at ccba6f9b6, 9 once C8c folded the update pair into shared/spawn.mjs; C8e adds boundedStdinSpawn, then folds the account-op pair onto it)', () => {
     expect(processSpawnSites().map((s) => s.key)).toEqual([
       'server/src/accounts/ops.ts#localAccountOps.run',
       'server/src/exec.ts#realRunner',
@@ -137,6 +137,7 @@ describe('processSpawnSites — every process spawner in server/src, agent/src a
       'agent/src/server.ts#runExec',
       'agent/src/tokensync.ts#makeTokenSyncSpawn',
       'shared/spawn.mjs#boundedSpawn',
+      'shared/spawn.mjs#boundedStdinSpawn',
     ]);
   });
 });
