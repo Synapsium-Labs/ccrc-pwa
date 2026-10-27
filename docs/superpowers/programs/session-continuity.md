@@ -544,6 +544,13 @@ re-measures the citation corpus and the `_reg_get` census on the merged tree bef
     day. The instrument's verdict-record mode is `shadow`.
   - This is baseline B, not evidence to arm a kill path: nothing creates `$REG/scope-sweep-live`. Run 308 may now be
     planned for the pressure-reap spawn variable, 3925's `/clear` fix and the carried wave-4 residue.
+- **2026-10-08 11:15 — the operator's session takes ccrc-pwa #317, the carry's EXDEV copies (mail 4000).** Its first
+  PR links through a common mount of the same filesystem when there is one, and makes the copy fallback loud, with its
+  byte count. It does not drop the source after a carry and adds no dedupe verb. It touches `_swap_carry_*` and the
+  merge walk, and it replaces the EXDEV fallback this spec records as a named cost (§2). No open or planned wave of
+  this programme edits the carry: 4b sets a spawn variable and fixes `/clear`. Wave 6 (spec stage 3) writes the
+  manifest in the swap body right after the carry call. **Before wave 6's plan is written, mail the session that took #317.**
+  The plan reads main with #317 in it, or waits for #317 while it is open. Answered in mail 4001.
 - **2026-10-14 05:36 — wave 4b's written plan is drafted and self-reviewed; operator review is pending.**
   - Plan: `docs/superpowers/plans/2026-10-13-session-continuity-wave4b-pressure-reap-and-clear.md`. Tasks 1–4 are
     the worker's sequential units: FIRST the full wave-4 residue, then the child spawn environment, outgoing
