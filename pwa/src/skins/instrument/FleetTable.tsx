@@ -268,7 +268,7 @@ function StatusTable({ selectedId, phoneTab, onTab }: {
             // The group is IN the name, as the chips' is: three badged groups are not three buttons named alike.
             <Button
               variant="ghost"
-              className="ins-group-seen"
+              className="ins-group-seen shrink-0"
               aria-label={`Mark all ${g.label} seen`}
               onClick={() => markSeen(g.bucket, g.sessions, g.unseen)}
             >
