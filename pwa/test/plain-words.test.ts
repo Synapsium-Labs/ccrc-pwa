@@ -9,7 +9,7 @@
 //
 // WHAT IT SCANS, by POSITION and never by shape (a class string that happens to say "pane" is not copy):
 //   - JSX text;
-//   - the string values of the attributes `aria-label`, `title`, `placeholder`, `alt`, `label`, `sublabel` and `kicker`;
+//   - the string values of the attributes `aria-label`, `title`, `placeholder`, `alt`, `label`, `sublabel`, `kicker` and `headline`;
 //   - a string that is a parameter's default (`function H({ kicker = '…' })`);
 //   - a string in a JSX child expression (`{cond ? 'a' : 'b'}`);
 //   - sentence constants: a top-level `const` holding a string, a template, or an arrow that returns one (exported or
@@ -142,7 +142,7 @@ function returned(fn: ts.Node): ts.Node[] {
   return out;
 }
 
-const SENTENCE_ATTRS = new Set(['aria-label', 'title', 'placeholder', 'alt', 'label', 'sublabel', 'kicker']);
+const SENTENCE_ATTRS = new Set(['aria-label', 'title', 'placeholder', 'alt', 'label', 'sublabel', 'kicker', 'headline']);
 
 /** One operator-visible string: where it is, which position kind found it, and what it says. */
 export interface Visible {
@@ -320,6 +320,7 @@ describe('the scanner reads positions, not shapes', () => {
     ['a Record table value nested in an object', 'const T: Record<string, { order: number; label: string }> = { a: { order: 1, label: "fine" }, b: { order: 2, label: "the envelope" } };'],
     ['a Record table value nested two deep', 'const T: Record<string, { a: { b: string[] } }> = { x: { a: { b: ["fine", "the pane"] } } };'],
     ['a toast', 'toast("claude is asking");'],
+    ['a headline attribute', 'export const A = (n: number) => <Strip headline={n === 1 ? "1 hot-file claim" : "fine"} />;'],
     ['a kicker attribute', 'export const A = () => <AskHeader kicker="claude is asking" />;'],
     ['a parameter default', 'export function H({ kicker = "claude is asking" }: { kicker?: string }) { return kicker; }'],
     ['a plain parameter default', 'export const H = (kicker: string = "the pane") => kicker;'],
