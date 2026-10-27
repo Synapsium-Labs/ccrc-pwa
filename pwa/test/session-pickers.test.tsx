@@ -625,3 +625,29 @@ describe('routing slice 6 whole-branch review fix wave', () => {
     expect(screen.getByRole('button', { name: /Opus 5/ }).className).toContain('opt--selected');
   });
 });
+
+// D-6334: the header's chip and the inspector's routing line decide "pending" through the one `routeView`, and a class
+// is pending only where the lane's provider is known and its readback can be measured.
+describe("the header's model chip asks only what the lane can read back (desktop polish T3d)", () => {
+  const withLaneProvider = (provider: RosterWire['provider'] | undefined): RosterWire[] =>
+    BASE_ROSTER.map((a) => (a.id === 'claude' ? { ...a, ...(provider === undefined ? {} : { provider }) } : a));
+  const askedOpus: Partial<FleetSession> = {
+    model: 'Sonnet 5',
+    route: { fields: { class: 'opus' }, degraded: null, inert: [], unreadable: [] },
+  };
+
+  it("the header's model chip shows no queued badge where the rail says nothing is asked", () => {
+    for (const provider of [undefined, 'openrouter'] as const) {
+      const { fleet } = renderScreen(askedOpus);
+      act(() => { fleet.setState({ roster: withLaneProvider(provider) }); });
+      expect(document.querySelector('.route-queued')).toBeNull();
+      cleanup();
+    }
+  });
+
+  it('control: the same session on an Anthropic lane shows its queued badge', () => {
+    const { fleet } = renderScreen(askedOpus);
+    act(() => { fleet.setState({ roster: withLaneProvider('anthropic') }); });
+    expect(screen.getByText('queued')).toBeInTheDocument();
+  });
+});

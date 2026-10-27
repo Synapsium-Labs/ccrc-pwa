@@ -5,8 +5,10 @@
 import type { ReactNode } from 'react';
 import type { FleetSession } from '../../../shared/api';
 import { commandDoor } from '../command/door';
+import { accountProvider } from '../lib/accounts';
 import { metaChipTone, type MetaChipTone } from '../session/chipTones';
 import { routeView } from '../session/routeView';
+import { useFleetStore } from '../stores/fleet';
 import { InspectorSection } from './InspectorSection';
 import { useInspectorSession } from './useInspectorSession';
 
@@ -38,7 +40,8 @@ function RoutingRow({ label, command, tone, text, note }: {
 }
 
 function RoutingRows({ row }: { row: FleetSession }): ReactNode {
-  const view = routeView(row, row.wrapper);
+  const roster = useFleetStore((s) => s.roster);
+  const view = routeView(row, row.wrapper, accountProvider(roster, row.wrapper));
   return (
     <dl className="insp-routing">
       <RoutingRow
