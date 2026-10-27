@@ -36,7 +36,7 @@ import { askActions, askKey } from './askkey.js';
 // module — `watch.ts` imports `assembleFleet` from it — so they now live
 // where both may read them. `ASK_SWEEP_MS` below is unaffected: it is this
 // lane's poll cadence, not a window, and this file is still its only reader.
-import { ASK_ANSWERING_MAX_MS, ASK_SETTLE_TICKS, askNotifyAt } from './askwindow.js';
+import { ASK_SETTLE_TICKS, askNotifyAt } from './askwindow.js';
 import { UNTRUSTED_CAP_BYTES, untrustedBlock } from './coord/untrusted.js';
 import type { SessionRecord } from './registry.js';
 import type {
@@ -198,6 +198,8 @@ import {
 } from './coord/endDeadCoordinator.js';
 import type { CoordRoutesHandle } from './coord/routes.js';
 import { createQuestions, type Questions } from './coord/questions.js';
+import { decideAskLapse, type AskLapse } from './coord/questionPolicy.js';
+import { isAskState } from '../../shared/api.js';
 import { localIO } from './io.js';
 import { measureFleetReadiness, type FleetReadiness } from './readiness.js';
 import { FLEET_LABEL, SERVER_LABEL, sweepInventory, type InventoryDeps, type SweepOutcome } from './update/inventory.js';
@@ -9265,19 +9267,39 @@ export class FleetWatcher {
 
     if (this.heldAsks.size === 0) return;
     for (const [id, held] of [...this.heldAsks]) {
-      if (held.until > now) continue;
+      // The decisions are `coord/questionPolicy.ts#decideAskLapse`'s (W3 Q3c, D-7027), asked at each stage of what this
+      // sweep reads (the window, the release CAS, the re-read row); the acts below are this method's. `recordLapse` says
+      // whether this sweep's own CAS moved the row: only that lapse is recorded for a late answer (D-5289).
+      const act = (answer: AskLapse, recordLapse = false): void => {
+        switch (answer) {
+          case 'wait':
+          case 'keep':
+            return;                    // the hold stays; a later sweep retries
+          case 'keep-reset':
+            held.answeringSince = null;
+            return;
+          case 'drop':
+            this.heldAsks.delete(id);    // settled by someone else — no push
+            return;
+          case 'push-and-drop':
+            this.heldAsks.delete(id);
+            if (recordLapse) this.lapsedAsks.set(id, { askId: held.askId, ev: held.ev });
+            this.pushOne(held.ev, this.activeProjects);
+            return;
+        }
+      };
+      if (decideAskLapse(held, { kind: 'window' }, now) === 'wait') continue;
 
       let released: boolean;
       try {
         released = store.releaseAsk(held.askId, now);
       } catch (err) {
         console.warn(`ccrc-server: releaseAsk failed for ask ${held.askId} (session ${id}) (${err instanceof Error ? err.message : String(err)}) — leaving the hold in place to retry next sweep`);
+        act(decideAskLapse(held, { kind: 'release-threw' }, now));
         continue;
       }
       if (released) {
-        this.heldAsks.delete(id);
-        this.lapsedAsks.set(id, { askId: held.askId, ev: held.ev });
-        this.pushOne(held.ev, this.activeProjects);
+        act(decideAskLapse(held, { kind: 'release-won' }, now), true);
         continue;
       }
 
@@ -9292,66 +9314,44 @@ export class FleetWatcher {
         // row that is gone, and `row === null` below fires the push.
         if (!read.ok) {
           console.warn(`ccrc-server: askById refused for ask ${held.askId} (session ${id}) (${read.detail}) — leaving the hold in place to retry next sweep`);
+          act(decideAskLapse(held, { kind: 'row-refused' }, now));
           continue;
         }
         row = read.ask;
       } catch (err) {
         console.warn(`ccrc-server: askById failed for ask ${held.askId} (session ${id}) (${err instanceof Error ? err.message : String(err)}) — leaving the hold in place to retry next sweep`);
+        act(decideAskLapse(held, { kind: 'row-threw' }, now));
         continue;
       }
-      if (row === null) {
-        this.heldAsks.delete(id);
-        this.pushOne(held.ev, this.activeProjects);
-        continue;
+      // Bounded (fix round 1, item 1) — see `ASK_ANSWERING_MAX_MS`'s own
+      // docstring and this method's own. `answeringSince` is set on the
+      // sweep that FIRST observes this row `'answering'`, never
+      // re-derived, so the bound is measured from the first sighting,
+      // not from whenever `takeAskForAnswer` actually ran.
+      if (row !== null && row.state === 'answering' && held.answeringSince === null) held.answeringSince = now;
+      const answer = decideAskLapse(held, { kind: 'row', row }, now);
+      // The warn sentences follow the decider's answer: `keep-reset` is the `held` race, and a `push-and-drop` of a row
+      // that is not `answering` is a state this sweep cannot read.
+      if (answer === 'keep-reset') {
+        // Unreachable under ordinary single-threaded execution (see this
+        // method's own docstring) — a genuine race with another writer,
+        // not a defect this sweep can fix. KEEP: the row is demonstrably
+        // still open, so the next sweep's `releaseAsk` simply succeeds and
+        // pushes on its own; dropping here would orphan the row instead.
+        // Reset the answering timer too — a LATER `'answering'` sighting
+        // for this same entry is a fresh episode, not a continuation of
+        // whatever earlier one (if any) left a stale timestamp behind.
+        console.warn(`ccrc-server: sweepAsks saw ask ${held.askId} (session ${id}) unexpectedly still 'held' after a failed release — keeping the hold for the next sweep to resolve`);
+      } else if (answer === 'push-and-drop' && row !== null && row.state === 'unknown') {
+        // An out-of-vocabulary state token read back off disk
+        // (`hydrateAsk`'s own degrade) — the "cannot tell" case F9's
+        // missing-row arm already rules on: degrade to notifying the
+        // operator rather than swallowing the question.
+        console.warn(`ccrc-server: sweepAsks saw ask ${held.askId} (session ${id}) in an unrecognised state after a failed release — pushing and dropping the hold`);
+      } else if (answer === 'push-and-drop' && row !== null && !isAskState(row.state)) {
+        console.warn(`ccrc-server: sweepAsks saw ask ${held.askId} (session ${id}) in an unrecognised state '${String(row.state)}' after a failed release — pushing and dropping the hold`);
       }
-      switch (row.state) {
-        case 'answering': {
-          // Bounded (fix round 1, item 1) — see `ASK_ANSWERING_MAX_MS`'s own
-          // docstring and this method's own. `answeringSince` is set on the
-          // sweep that FIRST observes this row `'answering'`, never
-          // re-derived, so the bound is measured from the first sighting,
-          // not from whenever `takeAskForAnswer` actually ran.
-          if (held.answeringSince === null) held.answeringSince = now;
-          if (now - held.answeringSince >= ASK_ANSWERING_MAX_MS) {
-            this.heldAsks.delete(id);
-            this.pushOne(held.ev, this.activeProjects);
-          }
-          continue;                    // still under the bound — retry next sweep, no push
-        }
-        case 'answered':
-        case 'released':
-        case 'declined':
-        case 'stale':
-          this.heldAsks.delete(id);    // settled by someone else — no push
-          continue;
-        case 'held':
-          // Unreachable under ordinary single-threaded execution (see this
-          // method's own docstring) — a genuine race with another writer,
-          // not a defect this sweep can fix. KEEP: the row is demonstrably
-          // still open, so the next sweep's `releaseAsk` simply succeeds and
-          // pushes on its own; dropping here would orphan the row instead.
-          // Reset the answering timer too — a LATER `'answering'` sighting
-          // for this same entry is a fresh episode, not a continuation of
-          // whatever earlier one (if any) left a stale timestamp behind.
-          console.warn(`ccrc-server: sweepAsks saw ask ${held.askId} (session ${id}) unexpectedly still 'held' after a failed release — keeping the hold for the next sweep to resolve`);
-          held.answeringSince = null;
-          continue;
-        case 'unknown':
-          // An out-of-vocabulary state token read back off disk
-          // (`hydrateAsk`'s own degrade) — the "cannot tell" case F9's
-          // missing-row arm already rules on: degrade to notifying the
-          // operator rather than swallowing the question.
-          console.warn(`ccrc-server: sweepAsks saw ask ${held.askId} (session ${id}) in an unrecognised state after a failed release — pushing and dropping the hold`);
-          this.heldAsks.delete(id);
-          this.pushOne(held.ev, this.activeProjects);
-          continue;
-        default: {
-          const _exhaustive: never = row.state;
-          console.warn(`ccrc-server: sweepAsks saw ask ${held.askId} (session ${id}) in an unrecognised state '${String(_exhaustive)}' after a failed release — pushing and dropping the hold`);
-          this.heldAsks.delete(id);
-          this.pushOne(held.ev, this.activeProjects);
-        }
-      }
+      act(answer);
     }
   }
 
