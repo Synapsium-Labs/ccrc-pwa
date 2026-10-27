@@ -96,31 +96,31 @@ suite's rows in its usage-rows describe.
 
 ## Departures
 
-- **D-TBD-doctor-cadence-cache-per-shell.** The plan says `_dr_timer_period_s` "caches it per doctor run". Each check
+- **D-7130.** The plan says `_dr_timer_period_s` "caches it per doctor run". Each check
   runs inside `$( … )` in `cmd_doctor`, and every `$(_dr_cycles_s …)` is a shell of its own, so a cache in a shell
   variable holds only within the shell that asked: later calls in that shell read no file (the counting-stub row: two
   units, five calls, two reads), and what a `$( … )` call caches goes with it. A check reads a unit at most twice per
   run (pool-sync and update-sync: the grace and the period), a file of a few hundred bytes. A cache that crossed checks
   would need a file, which a read-only doctor should not write.
-- **D-TBD-doctor-cadence-test-files.** The plan names no file for the Step 1 and Step 2 rows. They are in a new suite,
+- **D-7131.** The plan names no file for the Step 1 and Step 2 rows. They are in a new suite,
   `server/test/doctor-cadence.test.ts` (pool-sync, update-sync, scope-sweep, server-caps, the helpers, the
   sourced-alone rows), and, where a check needs its suite's own fixture, in `ccrc-doctor-graphify.test.ts`,
   `ccrc-doctor-exposure.test.ts` and `ccrc-doctor-codex.test.ts`. Two new helpers: `fixedClock.ts` (a `date` that
   answers `+%s` from a file, so a boundary row cannot flake on a tick; it removes a symlinked `date` before writing,
   because the fixtures' `stub` writes through one) and `shippedTimers.ts`. The graphify suite's own `installCcrc` is
   edited as the doctor fixture's is, because it builds its own tree.
-- **D-TBD-doctor-structural-spaced-units.** The plan's structural form `every <n>(s|min|h)` does not see its own
+- **D-7132.** The plan's structural form `every <n>(s|min|h)` does not see its own
   mutation row, "the timer fires every 15 min" (a space). The form takes an optional space and the spelled-out units
   (`sec`/`seconds`, `min`/`mins`/`minutes`, `h`/`hours`); the real tree's rows are unchanged.
-- **D-TBD-doctor-cadence-codex-globals-step6.** The codex move commits switch `_dr_codex_usage` to the computed bounds
+- **D-7133.** The codex move commits switch `_dr_codex_usage` to the computed bounds
   but leave the two globals defined, unused, until Step 6, because the old pin row reads them by sourcing the table:
   removing them in the move would red that row a commit before Step 6 replaces it. Step 6 removes both, replaces the
   pin with the derived-bound row, and pins their absence.
-- **D-TBD-doctor-cadence-printers.** Beyond the plan's three helpers, the rc 1 WARN and the rc 3 FAIL are said once
+- **D-7134.** Beyond the plan's three helpers, the rc 1 WARN and the rc 3 FAIL are said once
   (`_dr_cadence_unread`, `_dr_cadence_unloaded`, and their `_what`/`_fix` halves for the checks that record findings
   before printing), and the codex rows record theirs through `_dr_codex_usage_unmeasured`. A check whose lines carry a
   suffix (graphify's gate state) or that records findings (models, codex) prints its own line from the halves.
-- **D-TBD-doctor-cadence-bash53-wording.** The empty-operand assertion matched "integer expression expected" only;
+- **D-7135.** The empty-operand assertion matched "integer expression expected" only;
   bash 5.3 says "integer expected", so the compare-before-rc mutant passed until the pattern took both (measured in
   Step 8, fixed in its own commit).
 
