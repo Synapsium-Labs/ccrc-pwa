@@ -36,6 +36,7 @@ import { DEFAULT_TEST_ROSTER as t18roster } from './helpers.js';
 import { removeTmpFixturesEachTest } from './tmpHelpers.js';
 // Every spawn that can run the auth library's code names a closed auth endpoint (codex-bridge Stage 1's rule).
 import { CLOSED_AUTH_BASE as c49AuthBase } from './codexAuthFixture.js';
+import { wrapRealTool } from './wrapRealTool.js';
 
 removeTmpFixturesEachTest();
 
@@ -4218,7 +4219,7 @@ describe.skipIf(process.platform === 'darwin')('C49b: when the library cannot an
       expect(at, `CONTROL: ${t} is on this process's PATH`).toBeDefined();
       if (!fs.existsSync(path.join(tools, t))) fs.symlinkSync(at!, path.join(tools, t));
     }
-    if (!fs.existsSync(path.join(tools, 'node'))) fs.symlinkSync(process.execPath, path.join(tools, 'node'));
+    if (!fs.existsSync(path.join(tools, 'node'))) wrapRealTool(process.execPath, path.join(tools, 'node'));
     const PATH = [...kept, tools].join(':');
     expect(PATH.split(':').some((d) => fs.existsSync(path.join(d, 'python3'))), 'CONTROL: no python3 on this PATH').toBe(false);
     const r = rH.runShim(box, [], { env: { PATH, CCRC_CODEX_AUTH_BASE: c49AuthBase } });

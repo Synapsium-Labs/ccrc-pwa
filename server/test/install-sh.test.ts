@@ -36,6 +36,7 @@ import {
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
+import { wrapRealTool } from './wrapRealTool.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(here, '..', '..');
@@ -244,7 +245,7 @@ describe('install.sh: the node floor, before anything is built', () => {
     const root = fixtureRoot(home, '>=99.0.0');
     plantNpmRecorder(home);
     const bin = fixtureBin(home);
-    symlinkSync(REAL_NODE, join(bin, 'node'));
+    wrapRealTool(REAL_NODE, join(bin, 'node'));
     const r = runInstallSh(root, [], home, bin);
     expect(r.code).toBe(1);
     expect(r.stderr).toMatch(/^install\.sh: node v[0-9.]+ at .* is below the floor \(>=99\.0\.0\)$/m);
@@ -598,7 +599,7 @@ describe('install.sh: the checkout hand-off strips an ambient CCRC_UPDATE_VERIFI
     ].join('\n') + '\n', { mode: 0o755 });
     const bin = fixtureBin(home);
     symlinkSync(BASH, join(bin, 'bash'));
-    symlinkSync(REAL_NODE, join(bin, 'node'));
+    wrapRealTool(REAL_NODE, join(bin, 'node'));
     plantNpmRecorder(home);
     const r = runInstallSh(root, [], home, bin, { env: { CCRC_UPDATE_VERIFIED: '1' } });
     expect(r.code, `stderr: ${r.stderr}`).toBe(0);

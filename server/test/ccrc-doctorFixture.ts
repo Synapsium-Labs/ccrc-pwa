@@ -51,6 +51,7 @@ import { CLOSED_AUTH_BASE } from './codexAuthFixture.js';
 import { createStore } from '../../ccd/history/store.mjs';
 import { HEALTH_WORDS, deriveHealth } from '../../ccd/history/lib.mjs';
 import { swJs } from './swFixtures.js';
+import { wrapRealTool } from './wrapRealTool.js';
 
 export const here = path.dirname(fileURLToPath(import.meta.url));
 
@@ -218,7 +219,7 @@ export const linkReal = (home: string, name: string): void => {
   // that re-links one it needs (the oversize-wrapper test predates that) must
   // not trip over the fixture already having it. Last caller wins.
   rmSync(join(stubBin(home), name), { force: true });
-  symlinkSync(realPath(name), join(stubBin(home), name));
+  wrapRealTool(realPath(name), join(stubBin(home), name));
 };
 
 export function stubNode(home: string, version: string): void {

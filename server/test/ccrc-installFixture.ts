@@ -90,6 +90,7 @@ import { NODE_FILES } from '../../shared/agent-protocol.js';
 import { plantFakeRuntime, codexRoster, plantSystemd, killLaneProcesses, adoptPlantedSystemd, assertSpineFrontContained, spineSystemctlArms, spineSystemdRun, managerCalls, isolationManagerStubs, assertIsolationWallFirst, strayManagerCalls, ccrcFunction, ccrcLine, recordingStub, lockStub, plantLaneAuth, plantLaneConfig, fakeLitellmSource, registerLaneCleanup, GPT_LANE_BINS, REHEARSAL_REGISTRY, writeRehearsalCatalogue, doctorClasses, type StubRc, type LanePorts } from './codexLaneFixture.js';
 import { docsProbeProgram } from './docsHelperPy.js';
 import { DOCS_INDEX_READY } from './docsIndexFixtures.js';
+import { wrapRealTool } from './wrapRealTool.js';
 
 /** The two python3 invocations ccd's Docs front makes when the closing
  *  doctor's `docs` check runs the installed ccd (Docs W1a): the floor probe,
@@ -700,8 +701,7 @@ export function ccrcEnv(home: string, omit: string[] = []): NodeJS.ProcessEnv {
     for (const n of ['node', 'npx']) {
       const real = onPath(n);
       if (real === undefined) continue;   // a box with no node: the verb's own probe says so
-      rmSync(join(nodeDir, n), { force: true });
-      symlinkSync(real, join(nodeDir, n));
+      wrapRealTool(real, join(nodeDir, n));
     }
     rmSync(join(nodeDir, 'npm'), { force: true });
     symlinkSync(join(fixtureBin, 'npm'), join(nodeDir, 'npm'));
@@ -1030,7 +1030,8 @@ export function pathWithout(home: string, missing: string): string {
     // `_node_select` puts the directory of the node it chose — THIS farm — first on PATH, so a real tool linked here
     // would shadow the stub the runner plants in `.local/bin`. The stubbed names link to the stub instead (dangling
     // until the runner plants it; an `omit` removes it, which reads as absent, as it should).
-    symlinkSync(stubbed ? join(home, '.local', 'bin', b) : realPath(b), join(d, b));
+    if (stubbed) symlinkSync(join(home, '.local', 'bin', b), join(d, b));   // a link to a FIXTURE file
+    else wrapRealTool(realPath(b), join(d, b));
   }
   return `${join(home, '.local', 'bin')}:${d}`;
 }
@@ -1056,7 +1057,7 @@ export function plantNvm(home: string, versions: string[], def?: string): (v: st
     mkdirSync(d, { recursive: true });
     writeFileSync(join(d, 'node'), `#!/bin/sh\n[ "$1" = --version ] && { echo ${v}; exit 0; }\nexec ${realPath('node')} "$@"\n`, { mode: 0o755 });
     writeFileSync(join(d, 'npm'), '#!/bin/sh\nexec "$HOME/.local/bin/npm" "$@"\n', { mode: 0o755 });
-    symlinkSync(realPath('npx'), join(d, 'npx'));
+    wrapRealTool(realPath('npx'), join(d, 'npx'));
   }
   return binOf;
 }

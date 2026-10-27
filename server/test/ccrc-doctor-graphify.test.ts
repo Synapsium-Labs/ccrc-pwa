@@ -47,6 +47,7 @@ import { FIXTURE_DF_INODES_LINES } from './fixtureDfInodes.js';
 import { ghContainedEnv } from './ccdWsHelpers.js';
 import { parseRoster } from '../../shared/roster.js';
 import { generateAccountsSh } from '../../shared/generate.mjs';
+import { wrapRealTool } from './wrapRealTool.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(here, '..', '..');
@@ -95,7 +96,7 @@ function stub(home: string, name: string, body: string): void {
  *  specific test must not trip over the fixture already having one. */
 const linkReal = (home: string, name: string): void => {
   rmSync(join(stubBin(home), name), { force: true });
-  symlinkSync(realPath(name), join(stubBin(home), name));
+  wrapRealTool(realPath(name), join(stubBin(home), name));
 };
 
 /** `df -Pk <path>` answering a POSIX table whose Available column (field 4,

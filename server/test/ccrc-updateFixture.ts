@@ -60,6 +60,7 @@ import { adoptPlantedSystemd, assertSpineFrontContained, spineSystemctlArms, spi
 import { docsProbeProgram } from './docsHelperPy.js';
 import { DOCS_INDEX_READY } from './docsIndexFixtures.js';
 import { swJs } from './swFixtures.js';
+import { wrapRealTool } from './wrapRealTool.js';
 
 /** The two python3 invocations ccd's Docs front makes when the closing
  *  doctor's `docs` check runs the installed ccd (Docs W1a): the floor probe,
@@ -705,8 +706,7 @@ export function updateEnv(home: string): NodeJS.ProcessEnv {
   ].join('\n') + '\n');
   // `ccrc update` chooses its node before anything else (`_ccrc_node_choose`, ccd/ccrc-node) and requires npm and npx
   // beside it — in the directory of THIS shim. npm is the recorder above; npx is the real one, linked.
-  rmSync(join(home, '.local', 'bin', 'npx'), { force: true });
-  symlinkSync(realPath('npx'), join(home, '.local', 'bin', 'npx'));
+  wrapRealTool(realPath('npx'), join(home, '.local', 'bin', 'npx'));
   for (const k of ['CCRC_ADDR', 'CCRC_HEALTH_TIMEOUT', 'CCRC_DOCTOR_GH_TIMEOUT', 'CCRC_DOCTOR_DOCS_TIMEOUT',
     'CCRC_RELEASE_BASE_URL', 'CCRC_BACKUP_KEEP', 'CCRC_BACKUP_DATA_KEEP', 'CCRC_VERSIONS_KEEP', 'CCRC_CODEX_PROBE_S', 'CCRC_CODEX_READY_S',
     'CCRC_UPDATE_DEADLINE_MS', 'CCRC_MODELS_ADVANCE_BUDGET_S']) delete env[k];
@@ -1281,7 +1281,7 @@ export function pathWithoutJq(home: string): string {
   // `_upd_report_readable` (its own portable `_plat_size`, i.e. `stat`)
   // before its `command -v jq` preflight — without it this PATH would die
   // at "unreadable or malformed" (rc 2, `stat` missing), never at jq's.
-  for (const b of ['tar', 'gzip', 'awk', 'flock', 'mkdir', 'stat']) symlinkSync(realPath(b), join(d, b));
+  for (const b of ['tar', 'gzip', 'awk', 'flock', 'mkdir', 'stat']) wrapRealTool(realPath(b), join(d, b));
   return `${join(home, '.local', 'bin')}:${d}`;
 }
 
@@ -1300,7 +1300,7 @@ export function pathWithoutFlock(home: string): string {
   // dies before any window opens — DOES write a `failed` report, and
   // `_upd_phase`'s own write needs both to place it.
   for (const b of ['jq', 'tar', 'gzip', 'awk', 'mkdir', 'date', 'stat', 'mv', 'chmod'])
-    symlinkSync(realPath(b), join(d, b));
+    wrapRealTool(realPath(b), join(d, b));
   return `${join(home, '.local', 'bin')}:${d}`;
 }
 
@@ -1316,7 +1316,7 @@ export function pathWithoutCurl(home: string): string {
   const d = join(home, 'no-curl-bin');
   mkdirSync(d, { recursive: true });
   for (const b of ['flock', 'jq', 'tar', 'gzip', 'awk', 'mkdir', 'date', 'stat', 'bash', 'sh', 'mv', 'chmod'])
-    symlinkSync(realPath(b), join(d, b));
+    wrapRealTool(realPath(b), join(d, b));
   return d;
 }
 
