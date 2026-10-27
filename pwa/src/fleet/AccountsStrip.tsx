@@ -55,20 +55,17 @@ export function AccountsStrip({ store = useFleetStore }: { store?: FleetStore } 
   const nowSec = Math.floor(now / 1000);
 
   // Three flavours of "nothing to gauge", each still worth naming rather than
-  // collapsing into one silence: no poll has landed/succeeded yet (or every
-  // poll so far has failed — `.catch` never sets state either, so this is
-  // indistinguishable from "hasn't landed" and stays named as one thing), a
-  // poll landed with zero accounts (fresh host, no `.cc-limits/*.json` yet),
-  // or every account that DID report is markered `-disabled`. The strip's own
-  // filter for which GAUGES render stays exactly as it was ("the strip's
-  // filter stays as is", Rider A) — only the element itself no longer
-  // vanishes with them.
-  // `!accounts`, not `accounts === null`: the original bail-out this
-  // replaces was falsy-checked, and a malformed/short JSON body (a stub in
-  // one test returns bare `{}` for every unmatched route, `.accounts`
-  // reading `undefined`) is a real shape `.then` can hand `setAccounts`
-  // despite the declared `AccountUsage[] | null` — the strict check crashed
-  // on exactly that instead of degrading to the same placeholder `null` did.
+  // collapsing into one silence: no good answer has landed in the store yet
+  // (or every read so far has failed or was malformed — the store writes
+  // nothing then, so this is indistinguishable from "hasn't landed" and stays
+  // named as one thing), a read landed with zero accounts (fresh host, no
+  // `.cc-limits/*.json` yet), or every account that DID report is markered
+  // `-disabled`. The strip's own filter for which GAUGES render stays exactly
+  // as it was ("the strip's filter stays as is", Rider A) — only the element
+  // itself no longer vanishes with them.
+  // `accounts` is the store's `usage`: `null` until a good answer lands, an
+  // array after it, and never `undefined` (the store keeps the last good rows
+  // across a malformed answer, C8, D-6440).
   let placeholder: string | null = null;
   if (!accounts) placeholder = 'checking accounts…';
   else if (accounts.length === 0) placeholder = 'no accounts reporting';
