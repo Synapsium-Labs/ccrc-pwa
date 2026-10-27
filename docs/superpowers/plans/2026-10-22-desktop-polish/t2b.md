@@ -10,7 +10,7 @@ this file is not the ledger. Times are UTC, 2026-10-27.
 | `FleetScreen.tsx`'s legacy round `+` (the `Fab` fallback) | ≈:356-358 | :375-379; the `Fab` slot is read at :154. It stays: it is what renders outside a frame, where `useFrameSet()` is null |
 | `instrument.css`'s desk `.ins-frame .fab` | ≈:47-52 | :47-52, with its comment at :45-46, inside `@media (min-width: 900px)` |
 | `TopBar.tsx`'s `+` | ≈:44-46 | :41-43 |
-| `door.ts`'s `DOOR_EVENT` | ≈:15 | :15 |
+| `door.ts`'s `DOOR_EVENT` | ≈:15 | :17 (the first Step 0 report said :15, a miscount; corrected under review 1083's A6) |
 | `sheet-focus-ring.browser.test.tsx`'s locator | `button.fab`, ≈:52-56 | #1139 had already widened it to `[data-command="new-session"]:visible, button.fab[aria-label="New session"]:visible`. T2b narrows it to the first arm, since every visible New session door now carries the mark |
 
 ## What changed
@@ -41,13 +41,34 @@ refined-phone (browser), red-first for R13:
 
 | Mutant | Old file | New file |
 |---|---|---|
-| MA: `.ref-fab`'s `bottom` without `var(--safe-bottom)` | green (P0) | RED: "+ New sits on the home indicator (16 px clear of the edge, inset 34)", both palettes at 390 |
-| MB: `ToastHost`'s bottom without `var(--phone-nav-h,0px)` | green (P0) | RED: the toast's bottom 786 against + New's top 784, both palettes at 390 |
+| MA: `.ref-fab`'s `bottom` without `var(--safe-bottom)` | green (P0) | RED: "+ New sits on the home indicator (16 px clear of the edge, inset 34)" in all six phone views (360, 390 and 438, both palettes) |
+| MB: `ToastHost`'s bottom without `var(--phone-nav-h,0px)` | green (P0) | RED: the toast's bottom against + New's top in all six phone views (786 against 784 at 390) |
 
 MA and MB ran together in both P0 and P1, one run each, not one mutant at a time. MA only lowers `+ New`, which can only
-help the toast case pass, so the toast case's red under both is a red under MB alone.
+help the toast case pass, so the toast case's red under both is a red under MB alone. The worker's own new-file run was
+filtered to the two views at 390; review 1083 measured all six phone views red.
+
+instrument-fab (browser, `pwa/browser/instrument-fab.browser.test.ts`, added under review 1083's A2), Instrument at
+899, 900 and 1280 in both palettes, each mutant on the working tree, then restored:
+
+| Mutant | Result |
+|---|---|
+| `PhoneFab` mounted at every width | RED at 900 and 1280, both palettes: two doors and a `.fab` (`{ doors: 2, fabs: 1, fabIsDoor: false, inTopBar: false }`) |
+| `PhoneFab` gated on `(min-width: 600px)` | RED at 899, both palettes: no door (`{ doors: 0, fabs: 0, fabIsDoor: false, inTopBar: false }`) |
+
+Unmutated: 6 of 6. The jsdom suites (instrument-shell, skin-boundary, control-census, fleet-flows) pass 98 of 98 at the
+tip with the standard flags.
 
 ## Departures, by slug
 
 - `t2b-carries-r13-in-refined-phone-browser`: `refined-phone.browser.test.ts` is not in the plan's Files for T2b. The
   coordinator added it for R13's two cases only (ask 168), with S5b's consent.
+- The 899 case in `instrument-shell.test.tsx` and its mutation-table row went beyond S5b's first consent (mail 11070,
+  two cases). S5b consented to exactly those lines afterwards (mail 11283).
+
+## Follow-up for S11
+
+`shell.css`'s desk rule `.app-shell .fab` (it moves the round `+` to the sidebar's lower left) now places nothing in
+Instrument, whose desk mounts no `.fab`; it still applies to the legacy fallback outside a frame. It is outside T2b's
+Files (S5b holds the file), so it stays; S11, which replaces the phone `+`, is where it goes.
+
