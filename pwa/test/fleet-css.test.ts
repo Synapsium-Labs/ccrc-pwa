@@ -1235,7 +1235,7 @@ describe('the fleet head holds one row, and the class chooser is not on it', () 
     // FAULT 2, and the one no width could have fixed. `.fleet-head-right`'s
     // four other items — count, accounts door, mail badge, bell — need 244px
     // of min-content, and the group has 294px at 390px; the chooser's widest
-    // option, "Coordinator row", measures 167px against the ~38px left once
+    // option, then "Coordinator row" (now "Automatic"), measures 167px against the ~38px left once
     // its gap is paid. A 129px deficit is not closable by a floor, a cap or a
     // shrink factor, so the control leaves the head. Those figures are browser
     // measurements and deliberately are NOT recomputed here — an arithmetic
