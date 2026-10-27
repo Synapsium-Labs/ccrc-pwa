@@ -7,7 +7,7 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { callsIn, parsedFile } from './scan/symbols.js';
+import { parsedFile } from './scan/symbols.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(here, '..', '..');
@@ -83,14 +83,14 @@ describe('claims are advisory (D12)', () => {
     expect(watchSrc.split('activeClaims').length - 1,
       'watch.ts gained or lost an activeClaims call site — argue the D12 shape here before re-pinning')
       .toBe(4);
-    // The sleep lanes' exception (D-5370, D-5242; D-7042), held by COUNT of CALLS, read through scan/symbols.ts over
-    // sleepLane.ts's top-level symbols: one `coord.activeClaims()` call in each lane row's binding read (run-done's
-    // batched `storeReads`, idle-hours' once-a-pass `claimantsOf`), each feeding the `claim` hold. The store ports'
-    // `Pick`s and the docstrings are not calls and are not counted.
+    // The sleep lanes' exception (D-5370, D-5242; D-7042), held by COUNT of CALLS over EVERY call scan/symbols.ts
+    // parses in sleepLane.ts: one `coord.activeClaims()` call in each lane row's binding read (run-done's batched
+    // `storeReads`, idle-hours' once-a-pass `claimantsOf`), each feeding the `claim` hold. The count is over the
+    // whole file, not over its top-level symbols: RUN_DONE_LANE and IDLE_HOURS_LANE are object-literal consts with
+    // no symbol of their own, and a lane row's arrows (`bindings`, `asks.*`, `notices`) are exactly where a new
+    // lane-shaped claim use would land. The store ports' `Pick`s and the docstrings are not calls and are not counted.
     const SLEEP_LANE = path.join(srcRoot, 'sleepLane.ts');
-    const tops = parsedFile(SLEEP_LANE).symbols.filter((sym) => !sym.name.includes('.'));
-    const claimCalls = tops.flatMap((sym) => callsIn({ ...sym, file: SLEEP_LANE, text: '' }))
-      .filter((c) => c.name === 'activeClaims');
+    const claimCalls = parsedFile(SLEEP_LANE).calls.filter((c) => c.name === 'activeClaims');
     expect(claimCalls.map((c) => c.callee),
       'sleepLane.ts gained or lost an activeClaims call site — argue the D12 shape here before re-pinning')
       .toEqual(['coord.activeClaims', 'coord.activeClaims']);
