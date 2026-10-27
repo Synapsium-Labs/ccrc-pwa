@@ -16,6 +16,7 @@ import { diskBannerShows } from '../fleet/diskWords';
 import { PressureBanner } from '../fleet/PressureBanner';
 import { pressureBannerShows } from '../fleet/pressureWords';
 import { UpdateIndicator } from '../fleet/UpdateIndicator';
+import { AUTOMATIC_CLASS } from '../fleet/classWords';
 import { UPDATES_STALE_TEXT } from '../fleet/useUpdatesView';
 import { SubstrateBanner, substrateBannerShows } from '../fleet/SubstrateBanner';
 import { PasskeyNotice, passkeyNoticeShows, usePasskeyStatus } from '../fleet/PasskeyNotice';
@@ -275,7 +276,7 @@ export function FleetScreen({
         {/* The class chooser (routing spec, slice 5, Task 6): forecasts
             EVERY card's placement for one class at a time, the same
             `GET /api/projects?class=` this build has carried since slice 4
-            but with no caller until now. "Coordinator row" (unset) is the
+            but with no caller until now. "Automatic" (unset) is the
             class-blind fetch every build before this task has always sent;
             "Default" asks explicitly for the record's own "no override"
             word — the projects handler (`server.ts`) treats it identically
@@ -301,7 +302,7 @@ export function FleetScreen({
           value={projects.classFilter}
           onChange={(e) => projects.chooseClass(e.target.value as '' | 'default' | ModelClass)}
         >
-          <option value="">Coordinator row</option>
+          <option value="" title={AUTOMATIC_CLASS.title}>{AUTOMATIC_CLASS.word}</option>
           <option value="default">Default</option>
           {[...CLASSES].reverse().map((c) => (
             <option key={c} value={c}>{c.charAt(0).toUpperCase() + c.slice(1)}</option>
@@ -337,7 +338,11 @@ export function FleetScreen({
         </section>
       ) : (
         <>
-          <BucketBar sessions={sessions} acks={acks} ackAll={ackAll} />
+          {/* The counts once per screen (T3a, D-6331). A skin whose `FleetList` part draws its own groups carries the
+              counts itself (Instrument's status heads, and its own bar in project mode), so a second set of chips
+              above it would count every bucket twice. A part fact, never a skin name; the shared cards (Refined, or
+              no frame) have no counts of their own, so they keep this bar. */}
+          {FleetList === null && <BucketBar sessions={sessions} acks={acks} ackAll={ackAll} />}
 
           {/* The list itself: the skin's own (Instrument's status-grouped table, W2 Task S10, D-5473), or the shared
               project cards (`FleetCards`), which that table also places in its project mode. */}

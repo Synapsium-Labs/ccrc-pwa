@@ -165,6 +165,8 @@
    and groupFleet.ts for the shape it used to have, where `Cleanup` counted
    rows that rendered nowhere on this screen. The one chip whose rows sit
    behind a fold is `Archived`, and that fold states the identical count.
+   The words are `STATUS_GROUPS`' labels (Needs you, Done, ... Exited), one
+   vocabulary with Instrument's group heads (T3a, D-6331).
    Every chip is self-grounded (background + color on the ONE rule) so the
    count, the unseen badge and "Mark all seen" are all measured by
    design/audit.mjs's own descendant-of-a-self-grounded-ancestor pass —
@@ -185,10 +187,21 @@
   padding: var(--sp-1) var(--sp-3);
   font: var(--weight-medium) var(--fs-xs) / 1 var(--family-ui);
 }
-.bucket-head .bucket-head-count {
+.bucket-head .bucket-head-count,
+.bucket-head .bucket-head-sep {
   font-family: var(--family-mono);
   font-variant-numeric: tabular-nums;
   color: var(--ink-tertiary);
+}
+/* Exited and Archived are quiet (T3a, D-6331): nothing is asked of you there, so the chip recedes by ink and weight
+   and draws no unseen badge (`lib/seen.ts`'s BADGED holds only attention, done and cleanup). `data-quiet` is the
+   marker `BucketBar` sets. Self-grounded like every chip (background and color on this ONE rule, so the audit's
+   descendant pass measures the label and the count), from tokens: `--ink-tertiary` on `--bg-surface` is 5.77 dark and
+   5.70 light, both over 4.5. Never `opacity`, which composites the whole subtree (see the note above `.fleet-list`). */
+.bucket-head[data-quiet] {
+  background: var(--bg-surface);
+  color: var(--ink-tertiary);
+  font-weight: var(--weight-regular);
 }
 /* Same tokens as the "waiting on you" badge elsewhere on this screen
    (--status-attention-text on --status-attention-tint) — reused, not

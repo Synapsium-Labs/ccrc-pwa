@@ -144,7 +144,7 @@ describe('the fleet screen class chooser (routing slice 5, Task 6)', () => {
     });
     await waitFor(() => expect(urls.some((u) => u.includes('/api/projects'))).toBe(true));
 
-    // The chooser starts on "Coordinator row" (unset) — never touched here.
+    // The chooser starts on "Automatic" (unset) — never touched here.
     expect((screen.getByLabelText('Class') as HTMLSelectElement).value).toBe('');
     expect(urls.some((u) => u.includes('/api/projects?class='))).toBe(false);
 
@@ -185,7 +185,7 @@ describe('the fleet screen class chooser (routing slice 5, Task 6)', () => {
     expect(add).toHaveBeenCalledWith('alpha', { route: { class: 'default' } });
   });
 
-  it('offers the four classes in capability order, plus Coordinator row and Default', () => {
+  it('offers the four classes in capability order, plus Automatic and Default', () => {
     const store = makeStore();
     renderFleet(<FleetScreen store={store} />);
     seed(store, { conn: 'open', sessions: [session()] });
@@ -193,13 +193,17 @@ describe('the fleet screen class chooser (routing slice 5, Task 6)', () => {
     const select = screen.getByLabelText('Class') as HTMLSelectElement;
     const labels = Array.from(select.options).map((o) => o.value);
     expect(labels).toEqual(['', 'default', 'fable', 'opus', 'sonnet', 'haiku']);
+    // The unset option's word and its title (T3a, D-6331): "Coordinator row" is the registry's name for it.
+    expect(select.options[0]).toHaveTextContent('Automatic');
+    expect(select.options[0]).toHaveAttribute('title', 'The routing matrix picks the class');
+    expect(Array.from(select.options).map((o) => o.textContent)).not.toContain('Coordinator row');
   });
 
   it('renders outside the fleet head, on the runs line', () => {
     // Where this control LIVES is a layout fact with a measured cause, not a
     // cosmetic one: `.fleet-head-right`'s four other items need 244px of
     // min-content and the group has 294px at 390px, while this select is
-    // sized to its widest option, "Coordinator row", at 167px. While it sat
+    // sized to its widest option, then "Coordinator row" (now "Automatic"), at 167px. While it sat
     // in the head the fleet screen overflowed the viewport by 225px at 390px
     // and 219px at 700px — measured in Chromium against this component's own
     // rendered markup. Nothing about its BEHAVIOUR is different out here,
