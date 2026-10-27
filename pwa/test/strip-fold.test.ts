@@ -197,7 +197,7 @@ describe('the fold reads no layout and the card floor is written once', () => {
   });
 
   it('stripFold.ts reads no layout', () => {
-    for (const file of ['fleet/stripFold.ts']) {
+    for (const file of ['fleet/stripFold.ts', 'fleet/stripExpanded.ts']) {
       expect(code(sourceOf(file)), file).not.toMatch(/matchMedia|useMediaQuery|useDesk|innerWidth|ResizeObserver/);
     }
   });
