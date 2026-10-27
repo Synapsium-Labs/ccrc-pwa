@@ -49,7 +49,7 @@ import { cardsOf, childRunContext, fleetTree, parentIdOf, workingOn, type FleetT
 import { orphanNote } from '../../fleet/orphanWords';
 import { isRunClosed, runForSession } from '../../fleet/runWords';
 import { SessionLine } from '../../fleet/SessionLine';
-import { useMarkSeen } from '../../fleet/markSeen';
+import { markAllSeenLabel, useMarkSeen } from '../../fleet/markSeen';
 import { groupByStatus, STATUS_GROUPS, type StatusGroup } from '../../fleet/statusGroups';
 import { ackAll, acksSnapshot, subscribeAcks } from '../../lib/seen';
 import { matchRoute } from '../../lib/routes';
@@ -270,7 +270,7 @@ function StatusTable({ selectedId, phoneTab, onTab }: {
               variant="ghost"
               size="fit"
               className="ins-group-seen shrink-0"
-              aria-label={`Mark all ${g.label} seen`}
+              aria-label={markAllSeenLabel(g.bucket)}
               onClick={() => markSeen(g.bucket, g.sessions, g.unseen)}
             >
               Mark all seen

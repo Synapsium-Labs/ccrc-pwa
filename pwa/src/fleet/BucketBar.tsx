@@ -19,7 +19,7 @@ import { CountBadge } from '@ccrc/ui';
 import { BUCKET_ORDER } from './sortFleet';
 import { STATUS_GROUPS } from './statusGroups';
 import { isUnseen, type Acks } from '../lib/seen';
-import { useMarkSeen } from './markSeen';
+import { markAllSeenLabel, useMarkSeen } from './markSeen';
 import './fleet.css';
 
 /** The chip's word for each bucket — DERIVED from `STATUS_GROUPS`, the one table Instrument's group heads read too, so
@@ -116,7 +116,7 @@ export function BucketBar(
                            picking the wrong one silently cleared the badge on
                            the session Claude is still blocked on, with no way
                            to restore it. */
-                        aria-label={`Mark all ${SECTION_LABEL[bucket]} seen`}
+                        aria-label={markAllSeenLabel(bucket)}
                         onClick={() => markSeen(bucket, inBucket, unseenCount)}
                       >
                         Mark all seen
