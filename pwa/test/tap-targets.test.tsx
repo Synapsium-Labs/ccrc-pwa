@@ -382,7 +382,7 @@ describe('.mail-badge — the only door to /mail', () => {
     expect(declValue(ruleIn(fleetCss, '.mail-badge'), 'min-width')).toBe('var(--tap-min)');
   });
   it('is the class the rendered head control actually carries', () => {
-    render(<MailBadge unread={0} />);
+    render(<MailBadge waiting={0} />);
     expect(screen.getByRole('button', { name: /mail/i })).toHaveClass('mail-badge');
   });
 });
