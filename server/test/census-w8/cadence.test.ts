@@ -246,7 +246,6 @@ const realRow = (s: { check: string; kept: string | null; text: string }): strin
  *  checks, the scope-sweep default among them (kept: call-bound), plus the kept OnActiveSec note. Each move commit of
  *  C8b removes its own row from this list. */
 const REAL_BASE: string[] = [
-  'update-sync local update_sync_grace=$((2 * 60)) unit_mtime unit_age grac',
   'update-sync _dr_warn update-sync "update-sync-not-yet-synced: ccd-update',
   'update-sync "wait for the timer to fire (up to ~60s) and re-run ccrc doc',
   'graphify elif [ "$age" -gt 2700 ]; then',
