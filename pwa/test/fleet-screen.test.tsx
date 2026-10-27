@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import type { ReactNode } from 'react';
 import userEvent from '@testing-library/user-event';
 import { SPAWN_STALL_MS, type FleetSession, type NodeWire, type ProjectPoolsWire, type ProjectRow, type RunSummary, type UpdatesView } from '../../shared/api';
 import { fleetSession } from './fleetFixture';
@@ -1954,7 +1955,7 @@ describe('bucket sections', () => {
   // itself (Instrument's group heads), so the screen draws no chips above it; a set with no such part (Refined, or no
   // frame at all) keeps the chips as today. A part fact, never a skin name: this stub is a set, not a skin.
   it("with a skin's FleetList part, the screen draws no bucket chips; without one it does", () => {
-    const StubList = (): JSX.Element => <div data-testid="stub-list" />;
+    const StubList = (): ReactNode => <div data-testid="stub-list" />;
     const sessions = [session({ id: 'a', project: 'alpha', bucket: 'attention', bucketSince: Date.now() })];
 
     const store = makeStore();
