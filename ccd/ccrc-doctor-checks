@@ -6685,7 +6685,7 @@ _dr_codex_usage() {   # <id> -> WARN findings for this lane, recorded; rc 2 if a
     # each verdict that needs it unmeasured (OA-C8c (a), D-7062).
     local cycles cycles_rc=0
     cycles="$(_dr_cycles_s ccrc-codex-usage@.timer 3)" || cycles_rc=$?
-    bound="$_DR_CODEX_USAGE_STALE_S"
+    bound="$cycles"
     if mode="$(_codex_lane_mode "$id" 2>/dev/null)" && [ "$mode" = direct ]; then bound="$_DR_CODEX_USAGE_STALE_DIRECT_S"; else mode=''; fi
     row="$HOME/.cc-limits/$id.json"
     if ! now="$(date +%s 2>/dev/null)" || ! [[ "$now" =~ ^[0-9]+$ ]]; then
