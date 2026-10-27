@@ -9,7 +9,8 @@ import { sessionHeaderView } from '../session/sessionHeaderView';
 
 const FLEET_TITLE = ROUTES.find((r) => r.id === 'fleet')!.title;
 
-/** The crumbs, outermost first: "Fleet › project › workspace" on a session, "Settings › Updates" on a section page,
+/** The crumbs, outermost first: "Fleet › project › session" on a workspace session (the header's crumb, then its title),
+ *  "Fleet › project" on a main checkout, "Settings › Updates" on a section page,
  *  the route's own title on a top route. Empty off the table. A session the fleet does not list (yet) reads as
  *  "Fleet › Session", never as a guessed name. */
 export function breadcrumb(path: string, sessions: readonly FleetSession[]): string[] {
@@ -20,7 +21,7 @@ export function breadcrumb(path: string, sessions: readonly FleetSession[]): str
     const session = sessions.find((s) => s.id === param) ?? null;
     if (session === null) return [FLEET_TITLE, route.title];
     const view = sessionHeaderView({ session, status: null, statusUpdatedAt: null, now: 0, finePointer: true });
-    return view.crumb === null ? [FLEET_TITLE, view.title] : [FLEET_TITLE, view.title, view.crumb];
+    return view.crumb === null ? [FLEET_TITLE, view.title] : [FLEET_TITLE, view.crumb, view.title];
   }
   const top = topRouteOf(path);
   if (top === null || top.id === route.id || top.title === route.title) return [route.title];
