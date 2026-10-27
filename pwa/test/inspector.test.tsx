@@ -292,7 +292,8 @@ describe('a section with nothing to show renders nothing (desktop polish T3d, D-
     }));
     el = line();
     expect(el.textContent).toMatch(/ · asked Opus 5\.5$/);
-    expect(el.querySelector('.route-queued')?.textContent).toBe(' · asked Opus 5.5');
+    // The pill holds the asked words only: the separator is plain text beside it, so the pill never wraps it.
+    expect(el.querySelector('.route-queued')?.textContent).toBe('asked Opus 5.5');
   });
 
   it('the routing line reads exactly the sentence, whichever parts it carries', () => {
@@ -306,6 +307,7 @@ describe('a section with nothing to show renders nothing (desktop polish T3d, D-
     const cases: [string, Partial<FleetSession>, string][] = [
       ['an asked class', { model: 'Sonnet 5', route: route({ fields: { class: 'opus' } }) }, ' · asked Opus 5.5'],
       ['an asked effort', { route: route({ fields: { effort: 'max' } }) }, ' · asked effort max'],
+      ['an inert class', { route: route({ fields: { class: 'opus' }, inert: ['class'] }) }, ' · model set by the lane'],
       ['an unreadable field', { route: route({ unreadable: ['effort'] }) }, ' · routing could not be read'],
       ['no model yet', { model: null }, 'Runs a model not read yet on Lane A'],
       ['ultracode', { effort: 'xhigh', ultracode: true }, ' · effort ultracode'],
@@ -322,6 +324,17 @@ describe('a section with nothing to show renders nothing (desktop polish T3d, D-
       expect(el.textContent, name).toBe(sentence);
       unmount();
     }
+
+    // An inert effort on an ultracode pane draws a plain door, not the accent one around 'set by the lane'.
+    const inertUltra: FleetSession = {
+      ...ROW, effort: 'xhigh', ultracode: true, route: route({ fields: { effort: 'max' }, inert: ['effort'] }),
+    };
+    act(() => useFleetStore.setState({ sessions: [inertUltra] }));
+    const r = render(<RoutingSection />);
+    const door = r.container.querySelector<HTMLElement>("[data-command='session-effort']")!;
+    expect(door.textContent).toBe('set by the lane');
+    expect(door.className).not.toContain('ultra');
+    r.unmount();
   });
 });
 

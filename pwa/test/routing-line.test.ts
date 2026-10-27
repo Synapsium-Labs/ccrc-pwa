@@ -153,7 +153,50 @@ describe('the routing line says what runs and asks only what it can measure', ()
         .toEqual(['model', 'effort']);
     }
     expect(line(rows[0]![0], 'anthropic').parts.filter((p) => p.kind === 'asked').map((p) => p.text))
-      .toEqual([' · asked Opus 5.5', ' · asked effort high']);
+      .toEqual(['asked Opus 5.5', 'asked effort high']);
+  });
+
+  it('the separator is its own text part, so an asked part and the note hold only their words', () => {
+    const both = line(fleetSession({
+      wrapper: 'lane-a', model: 'Sonnet 5', effort: 'low',
+      route: route({ fields: { class: 'opus', effort: 'high' }, unreadable: [] }),
+    }), 'anthropic');
+    const kinds = both.parts.map((p) => `${p.kind}:${p.text}`);
+    expect(kinds.slice(-5)).toEqual([
+      'effort:low', 'text: · ', 'asked:asked Opus 5.5', 'text: · ', 'asked:asked effort high',
+    ]);
+    const note = line(fleetSession({
+      wrapper: 'lane-a', model: 'Sonnet 5', effort: 'medium', route: route({ unreadable: ['effort'] }),
+    }), 'anthropic');
+    expect(note.parts.slice(-2).map((p) => `${p.kind}:${p.text}`))
+      .toEqual(['text: · ', 'note:routing could not be read']);
+  });
+
+  it("an inert effort on an ultracode pane is a plain door", () => {
+    const inert = line(fleetSession({
+      wrapper: 'lane-a', model: 'Opus 5', effort: 'xhigh', ultracode: true,
+      route: route({ fields: { effort: 'max' }, inert: ['effort'] }),
+    }), 'anthropic');
+    expect(inert.parts.find((p) => p.kind === 'effort')).toMatchObject({ text: 'set by the lane', tone: 'plain' });
+    const live = line(fleetSession({ wrapper: 'lane-a', model: 'Opus 5', effort: 'xhigh', ultracode: true }), 'anthropic');
+    expect(live.parts.find((p) => p.kind === 'effort')).toMatchObject({ text: 'ultracode', tone: 'ultra' });
+    const plain = line(fleetSession({ wrapper: 'lane-a', model: 'Opus 5', effort: 'high' }), 'anthropic');
+    expect(plain.parts.find((p) => p.kind === 'effort')).toMatchObject({ tone: 'plain' });
+    expect(plain.parts.find((p) => p.kind === 'model')).toMatchObject({ tone: 'model' });
+  });
+
+  it("an inert class reads 'model set by the lane' and asks nothing of the class", () => {
+    const row = fleetSession({
+      wrapper: 'lane-a', model: 'Sonnet 5', effort: 'medium',
+      route: route({ fields: { class: 'opus' }, inert: ['class'] }),
+    });
+    const view = routeView(row, 'lane-a', 'anthropic');
+    expect(view.classInert).toBe(true);
+    expect(view.classPending).toBe(false);
+    const out = routingLine(row, view, 'Lane A');
+    expect(out.askedClass).toBeNull();
+    expect(out.sentence).toBe('Runs Sonnet 5 on Lane A · effort medium · model set by the lane');
+    expect(out.parts.slice(-2).map((p) => `${p.kind}:${p.text}`)).toEqual(['text: · ', 'note:model set by the lane']);
   });
 
   it('a failed read says routing could not be read', () => {

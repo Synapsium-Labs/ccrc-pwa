@@ -27,14 +27,14 @@ export function RoutingSection(): ReactNode {
     switch (p.kind) {
       case 'model':
         return (
-          <button key={i} type="button" className={metaChipTone('model')} aria-label={`Model: ${p.text}, change`}
+          <button key={i} type="button" className={metaChipTone(p.tone ?? 'plain')} aria-label={`Model: ${p.text}, change`}
             {...commandDoor('session-model')}>
             <span className="metachip-text">{p.text}</span>
           </button>
         );
       case 'effort':
         return (
-          <button key={i} type="button" className={metaChipTone(row.ultracode ? 'ultra' : 'plain')}
+          <button key={i} type="button" className={metaChipTone(p.tone ?? 'plain')}
             aria-label={`Effort: ${p.text}, change`} {...commandDoor('session-effort')}>
             <span className="metachip-text">{p.text}</span>
           </button>

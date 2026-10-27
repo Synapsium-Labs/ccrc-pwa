@@ -60,6 +60,10 @@
   border-radius: var(--r-md);
   vertical-align: middle;
 }
+/* The pending pill is the header's, set on an inline span: it never breaks across two lines as two half-pills. */
+.insp-routing-row .route-queued {
+  white-space: nowrap;
+}
 /* The whole value, wrapped: the header's row shows the full model id, so the rail (a superset) never cuts it. */
 .insp-routing-row .metachip-text {
   white-space: normal;

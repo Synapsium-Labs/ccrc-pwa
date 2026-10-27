@@ -18,18 +18,22 @@
 // the sentence and the rail cannot drift and the plain-words census reads every word.
 import type { FleetSession } from '../../../shared/api';
 import { modelOptions } from '../lib/models';
+import type { MetaChipTone } from './chipTones';
 import type { RouteView } from './routeView';
 
 /** Every word the line says, apart from the live values it is made around. */
-const WORDS: Readonly<Record<'runs' | 'on' | 'effort' | 'asked' | 'askedEffort' | 'unreadable'
-  | 'inertEffort' | 'unreadEffort' | 'unreadModel' | 'ultracode', string>> = {
+const WORDS: Readonly<Record<'runs' | 'on' | 'effort' | 'sep' | 'asked' | 'askedEffort' | 'unreadable'
+  | 'inertModel' | 'inertEffort' | 'unreadEffort' | 'unreadModel' | 'ultracode', string>> = {
   runs: 'Runs ',
   on: ' on ',
   effort: ' · effort ',
-  asked: ' · asked ',
+  // Its own plain-text part before each asked part and note, so the asked pill holds only the asked words.
+  sep: ' · ',
+  asked: 'asked ',
   // The asked effort is the departure `routing-line-says-pending-effort`: the header badges it, so the rail names it.
-  askedEffort: ' · asked effort ',
-  unreadable: ' · routing could not be read',
+  askedEffort: 'asked effort ',
+  unreadable: 'routing could not be read',
+  inertModel: 'model set by the lane',
   inertEffort: 'set by the lane',
   unreadEffort: 'not read yet',
   unreadModel: 'a model not read yet',
@@ -41,6 +45,9 @@ const WORDS: Readonly<Record<'runs' | 'on' | 'effort' | 'asked' | 'askedEffort' 
 export interface RoutingPart {
   readonly kind: 'text' | 'model' | 'effort' | 'asked' | 'note';
   readonly text: string;
+  /** A door's chip tone, decided here and not by the markup: 'model' for the model door, and for the effort door
+   *  'ultra' only on a live ultracode pane whose effort is not set by the lane, else 'plain'. Absent on the rest. */
+  readonly tone?: MetaChipTone;
 }
 
 export interface RoutingLine {
@@ -76,14 +83,16 @@ export function routingLine(row: FleetSession, view: RouteView, lane: string): R
   const unreadable = view.classUnreadable || view.effortUnreadable;
   const parts: RoutingPart[] = [
     { kind: 'text', text: WORDS.runs },
-    { kind: 'model', text: model ?? WORDS.unreadModel },
+    { kind: 'model', text: model ?? WORDS.unreadModel, tone: 'model' },
     { kind: 'text', text: WORDS.on },
     { kind: 'text', text: lane },
     { kind: 'text', text: WORDS.effort },
-    { kind: 'effort', text: effort },
+    { kind: 'effort', text: effort, tone: !view.effortInert && row.ultracode ? 'ultra' : 'plain' },
   ];
-  if (askedClass !== null) parts.push({ kind: 'asked', text: `${WORDS.asked}${askedClass}` });
-  if (askedEffort !== null) parts.push({ kind: 'asked', text: `${WORDS.askedEffort}${askedEffort}` });
-  if (unreadable) parts.push({ kind: 'note', text: WORDS.unreadable });
+  const sep: RoutingPart = { kind: 'text', text: WORDS.sep };
+  if (askedClass !== null) parts.push(sep, { kind: 'asked', text: `${WORDS.asked}${askedClass}` });
+  if (askedEffort !== null) parts.push(sep, { kind: 'asked', text: `${WORDS.askedEffort}${askedEffort}` });
+  if (view.classInert) parts.push(sep, { kind: 'note', text: WORDS.inertModel });
+  if (unreadable) parts.push(sep, { kind: 'note', text: WORDS.unreadable });
   return { model, lane, effort, askedClass, askedEffort, unreadable, parts, sentence: parts.map((p) => p.text).join('') };
 }
