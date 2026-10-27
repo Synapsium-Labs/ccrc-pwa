@@ -13,10 +13,11 @@
 //   chevron's line and the meta wraps inside the toggle; a name longer than the line is cut only at its cap, still on
 //   the chevron's line.
 //
-// - D-6332: at the desk (900 and up) a session row draws its name, its branch and its programme whole, the name and the
-//   branch on at most two lines, and a name or branch longer than that is cut at its second line's end, filling the
-//   `.sess-body` track; below 900 a long name keeps its token-shortened form. Measured in the Refined cards, in
-//   Instrument's status mode (its default) and in its project mode.
+// - D-6332: at the desk (900 and up) a session row draws its name, its branch and its programme whole, the name (paired
+//   or plain) and the branch on at most two lines and never out of their box sideways, and a name or branch longer
+//   than that is cut at its second line's end; below 900 a long name and a long programme keep their token-shortened
+//   forms. Under a mouse one row's ⋯ is drawn at a time. Measured in the Refined cards, in Instrument's status mode
+//   (its default) and in its project mode.
 //
 // Each case runs both skins and both Phosphor palettes, and also asserts no horizontal overflow and no page error.
 // `test/account-row-fit.test.tsx` and `test/folded-card-floor.test.ts` keep the CSS and markup pins that produce this
