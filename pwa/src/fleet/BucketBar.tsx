@@ -14,7 +14,7 @@
 // markup and stays OUTSIDE the chip, for the reason its own comment gives: the
 // update it reports is the one that unmounts the chip.
 import type { ReactNode } from 'react';
-import type { FleetSession } from '../../../shared/api';
+import type { FleetSession, SessionBucket } from '../../../shared/api';
 import { CountBadge } from '@ccrc/ui';
 import { BUCKET_ORDER } from './sortFleet';
 import { STATUS_GROUPS } from './statusGroups';
@@ -31,6 +31,10 @@ import './fleet.css';
 const SECTION_LABEL = Object.fromEntries(
   BUCKET_ORDER.map((b) => [b, STATUS_GROUPS[b].label]),
 ) as Record<(typeof BUCKET_ORDER)[number], string>;
+
+/** The chips that draw quietly (T3a, D-6331): nothing is asked of you in a bucket that has exited or been archived. A
+ *  marker for the stylesheet, not a decision about the badge: `lib/seen.ts`'s BADGED already keeps these two unbadged. */
+const QUIET_BUCKETS: ReadonlySet<SessionBucket> = new Set<SessionBucket>(['dead', 'archived']);
 
 export function BucketBar(
   { sessions, acks, ackAll }: {
@@ -79,7 +83,8 @@ export function BucketBar(
               if (inBucket.length === 0) return null;
               const unseenCount = inBucket.filter((s) => isUnseen(s, acks)).length;
               return (
-                <div key={bucket} role="group" className="bucket-head" aria-label={SECTION_LABEL[bucket]}>
+                <div key={bucket} role="group" className="bucket-head" aria-label={SECTION_LABEL[bucket]}
+                     data-quiet={QUIET_BUCKETS.has(bucket) ? 'true' : undefined}>
                   <span
                     className="bucket-head-label"
                     /* The focus target after an ack — see `markSeen.ts`. -1, so
