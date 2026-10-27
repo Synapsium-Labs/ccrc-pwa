@@ -12647,10 +12647,9 @@ _ws_fingerprint() {   # id branch tip headOid mergeOid proof dirty igndigest sen
   # was added, even though the parent's own facts were all unchanged —
   # exactly the TOCTOU `_ws_reap_eval`'s reason for the clips digest describes,
   # one line up, for a different set.
-  printf '%s\n' "id=$1" "branch=$2" "tip=$3" "headRefOid=$4" "mergeCommit=$5" "proof=$6" \
+  _ws_reclaim_fingerprint "id=$1" "branch=$2" "tip=$3" "headRefOid=$4" "mergeCommit=$5" "proof=$6" \
     "dirtyCount=$7" "ignoredDigest=$8" "sensitiveDigest=$9" "stashCount=${10}" \
-    "worktreeHead=${11}" "baseOid=${12}" "clipsDigest=${13}" "childrenDigest=${14}" \
-    | _plat_sha256 | cut -d' ' -f1
+    "worktreeHead=${11}" "baseOid=${12}" "clipsDigest=${13}" "childrenDigest=${14}"
 }
 
 _ws_reap_reset() {
