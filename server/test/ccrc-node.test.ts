@@ -6,7 +6,7 @@
 // case that needs a terminal redefines that function after sourcing. Chosen over
 // `script -qc` because `script`'s flags differ between util-linux and BSD.
 import { spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, symlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { mkTmp } from './tmpHelpers';
@@ -31,13 +31,14 @@ function fixture(versions: string[], def: string | null, nvm = true): Fx {
   mkdirSync(bin, { recursive: true });
   exe(path.join(bin, 'systemctl'), `echo "$@" >> "${sysctlLog}"`);
   if (nvm) {
+    mkdirSync(nvmDir, { recursive: true });
     for (const v of versions) mkVersion(nvmDir, v);
     writeFileSync(path.join(home, 'default'), def ?? '');
     writeFileSync(path.join(nvmDir, 'nvm.sh'), `
 nvm() {
   case "$1" in
-    version) if [ "$2" = default ]; then v=$(cat "${home}/default"); if [ -n "$v" ]; then echo "$v"; else echo N/A; fi; fi ;;
-    install) echo "$@" >> "${installLog}"; mkdir -p "$NVM_DIR/versions/node/v99.0.0/bin"
+    version) if [ "$2" = default ]; then v=$(cat "${home}/default"); if [ -n "$v" ]; then echo "$v"; else echo N/A; return 3; fi; fi ;;
+    install) echo "$@" >> "${installLog}"; [ -e "${home}/install-fails" ] && return 5; mkdir -p "$NVM_DIR/versions/node/v99.0.0/bin"
              for b in node npm npx; do printf '#!/bin/sh\\necho v99.0.0\\n' > "$NVM_DIR/versions/node/v99.0.0/bin/$b"; chmod +x "$NVM_DIR/versions/node/v99.0.0/bin/$b"; done ;;
   esac
 }
@@ -150,14 +151,15 @@ describe('_node_select under nvm', () => {
 });
 
 describe('_node_select without nvm', () => {
-  it('uses the PATH node, resolved through symlinks', () => {
+  it('uses the directory of the PATH node as found, never resolving a shim', () => {
     const fx = fixture([], null, false);
     const real = path.join(fx.home, 'opt/real/bin');
     exe(path.join(real, 'node'), 'echo v22.20.0');
     for (const b of ['npm', 'npx']) exe(path.join(real, b), 'true');
     symlinkSync(path.join(real, 'node'), path.join(fx.bin, 'node'));
+    for (const b of ['npm', 'npx']) exe(path.join(fx.bin, b), 'true');
     const r = run(fx, '_node_select 22.16.0; echo "rc=$? ver=$NODE_VERSION dir=$NODE_BIN_DIR"');
-    expect(r.out).toBe(`rc=0 ver=v22.20.0 dir=${realpathSync(real)}`);
+    expect(r.out).toBe(`rc=0 ver=v22.20.0 dir=${fx.bin}`);
   });
   it('rc 1 when the PATH node is below the floor', () => {
     const fx = fixture([], null, false);
@@ -183,7 +185,7 @@ describe('_node_publish', () => {
     for (const n of ['node', 'npm', 'npx']) expect(readlinkSync(path.join(links(fx), n))).toBe(path.join(a, n));
     const text = readFileSync(frag(fx), 'utf8');
     expect(text).toMatch(/^#.*ccrc/m);
-    expect(text).toContain(`PATH=${links(fx)}:$PATH`);
+    expect(text).toContain(`PATH=${links(fx)}:\${PATH}\n`);
     expect(lstatSync(frag(fx)).mode & 0o777).toBe(0o644);
     expect(readFileSync(fx.sysctlLog, 'utf8')).toContain('--user daemon-reload');
     publish(fx, a);
@@ -215,5 +217,88 @@ describe('_node_publish', () => {
     expect(r.out).toBe('rc=0');
     expect(existsSync(links(fx))).toBe(false);
     expect(existsSync(frag(fx))).toBe(false);
+  });
+});
+
+describe('_node_select: distinct refusals', () => {
+  const sel = (fx: Fx, extra = ':', env: Record<string, string> = {}) =>
+    run(fx, `${extra}; _node_select 22.16.0; echo "rc=$? why=$NODE_WHY"`, env);
+  it('a failed interactive install says so, with its rc', () => {
+    const fx = fixture(['v20.1.0'], null);
+    writeFileSync(path.join(fx.home, 'install-fails'), '');
+    expect(sel(fx, '_node_is_tty() { return 0; }').out).toMatch(/rc=1 why=.*nvm install --lts failed \(rc 5\)/);
+  });
+  it('NODE_NO_INSTALL names itself, not "not interactive"', () => {
+    const fx = fixture(['v20.1.0'], null);
+    const o = sel(fx, '_node_is_tty() { return 0; }', { NODE_NO_INSTALL: '1' }).out;
+    expect(o).toMatch(/NODE_NO_INSTALL/);
+    expect(sel(fixture(['v20.1.0'], null), '_node_is_tty() { return 1; }').out).not.toMatch(/NODE_NO_INSTALL/);
+  });
+  it('an nvm.sh that fails to source is not "no node meets the floor"', () => {
+    const fx = fixture(['v22.16.0'], null);
+    writeFileSync(path.join(fx.nvm, 'nvm.sh'), 'return 1\n');
+    const o = sel(fx).out;
+    expect(o).toMatch(/rc=1 why=.*nvm\.sh/);
+    expect(o).not.toMatch(/meets the floor/);
+  });
+  it('an unreadable versions directory is its own refusal', () => {
+    const fx = fixture(['v22.16.0'], null);
+    const d = path.join(fx.nvm, 'versions/node');
+    chmodSync(d, 0o000);
+    try {
+      const o = sel(fx).out;
+      expect(o).toMatch(/rc=1 why=.*not readable/);
+      expect(o).not.toMatch(/meets the floor/);
+    } finally { chmodSync(d, 0o755); }
+  });
+  it('npm or npx missing beside node: that version is skipped, and named when none is left', () => {
+    const fx = fixture(['v22.16.0'], 'v22.16.0');
+    exe(path.join(fx.nvm, 'versions/node/v24.0.0/bin/node'), 'echo v24.0.0');
+    expect(sel(fx).out).toBe('rc=0 why=');
+    const fx2 = fixture([], null);
+    exe(path.join(fx2.nvm, 'versions/node/v24.0.0/bin/node'), 'echo v24.0.0');
+    expect(sel(fx2).out).toMatch(/rc=1 why=.*npm.*v24\.0\.0/);
+  });
+  it('no-nvm: npm missing next to node is named', () => {
+    const fx = fixture([], null, false);
+    exe(path.join(fx.bin, 'node'), 'echo v22.20.0');
+    expect(sel(fx).out).toMatch(/rc=1 why=.*npm/);
+  });
+  it('a node that prints no version is its own refusal', () => {
+    const fx = fixture([], null, false);
+    for (const b of ['node', 'npm', 'npx']) exe(path.join(fx.bin, b), 'echo not-a-version');
+    const o = sel(fx).out;
+    expect(o).toMatch(/rc=1 why=.*not a version/);
+    expect(o).not.toMatch(/below the floor/);
+  });
+});
+
+describe('errexit safety: a caller under set -euo pipefail calls bare', () => {
+  const strict = (fx: Fx, body: string) =>
+    run(fx, `set -euo pipefail; _node_is_tty() { return 1; }; ${body}; echo survived`);
+  it('no default alias (nvm answers N/A and fails): bare select survives and picks', () => {
+    const fx = fixture(['v22.16.0'], null);
+    expect(strict(fx, '_node_select 22.16.0; echo "ver=$NODE_VERSION"').out).toBe('ver=v22.16.0\nsurvived');
+  });
+  it('a broken last version dir and an empty versions dir: bare select survives', () => {
+    const fx = fixture(['v22.16.0'], 'v22.16.0');
+    mkdirSync(path.join(fx.nvm, 'versions/node/v99.9.9'), { recursive: true });
+    expect(strict(fx, '_node_select 22.16.0; echo "ver=$NODE_VERSION"').out).toBe('ver=v22.16.0\nsurvived');
+    const fx2 = fixture([], null);
+    mkdirSync(path.join(fx2.nvm, 'versions/node'), { recursive: true });
+    expect(strict(fx2, 'rc=0; _node_select 22.16.0 || rc=$?; echo "rc=$rc"').out).toBe('rc=1\nsurvived');
+  });
+  it('no user manager: bare publish survives with rc 0', () => {
+    const fx = fixture(['v22.16.0'], null);
+    exe(path.join(fx.bin, 'systemctl'), 'exit 1');
+    expect(strict(fx, `NODE_BIN_DIR="${fx.nvm}/versions/node/v22.16.0/bin"; _node_publish; echo "why=$NODE_WHY"`).out).toMatch(/^why=.+\nsurvived$/);
+  });
+  it('bare floor read of a good file survives; a bad one is caught by || rc=$?', () => {
+    const fx = fixture([], null, false);
+    const f = path.join(fx.home, 'package.json');
+    writeFileSync(f, '{"engines":{"node":">=22.16.0"}}');
+    expect(strict(fx, `_node_floor "${f}"; echo "$NODE_FLOOR"`).out).toBe('22.16.0\nsurvived');
+    writeFileSync(f, '{}');
+    expect(strict(fx, `rc=0; _node_floor "${f}" || rc=$?; echo "rc=$rc"`).out).toBe('rc=1\nsurvived');
   });
 });
