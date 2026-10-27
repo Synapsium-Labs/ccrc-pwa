@@ -106,3 +106,89 @@ export function spawnKernelWireLiterals(root: string = REPO): CensusSite[] {
   for (const c of p.calls) if (c.name === 'setTimeout' && c.callee === 'setTimeout' && NUMERIC.test(c.args[1]?.text ?? '')) lines.add(c.line);
   return [...lines].sort((a, b) => a - b).map((line) => siteOf(p, SPAWN_KERNEL_FILE, line));
 }
+
+// C8d (D-7056; ARCH-73 (#808); spec K17 "Audited one at a time"): every process spawner in the source trees, so each
+// one carries a row and a reason in `single-definition/spawners.data.ts#PROCESS_SPAWNERS`. KNOWN WIDTH: a call counts
+// when its callee is a `node:child_process` process starter the file imports (by name, an alias, or `ns.<name>` over a
+// namespace or default import), or, in the spawn kernel alone, the `spawn` its host injects (the `.mjs` carve-out lets
+// it import no `node:child_process`, D-7055). A local binding that merely shares the name (`update/converge.ts`'s
+// `const spawn = deps.runLocal`, the injected update spawner) is not a process start and is not counted; neither is a
+// `require(…)`, which no source file uses.
+
+/** The `node:child_process` functions that start a process. */
+export const PROCESS_STARTERS: readonly string[] = ['spawn', 'execFile', 'spawnSync', 'execFileSync', 'execSync', 'fork', 'exec'];
+
+/** The source trees a process spawner could be written in: both packages and the shared layer. */
+export const PROCESS_SPAWN_DIRS: readonly string[] = ['server/src', 'agent/src', 'shared'];
+
+/** One process-starting call: its census site and the `file#symbol` key its `PROCESS_SPAWNERS` row carries (the
+ *  innermost named symbol holding the call, or `file#<module>` at module scope). */
+export interface ProcessSpawnSite extends CensusSite {
+  key: string;
+  callee: string;
+}
+
+/** The modules whose functions start a process, and those functions: `node:child_process`'s starters, and
+ *  `node-pty`'s `spawn` (the terminal drawer's `tmux attach`). */
+const STARTER_MODULES: ReadonlyMap<string, readonly string[]> = new Map([
+  ['node:child_process', PROCESS_STARTERS],
+  ['child_process', PROCESS_STARTERS],
+  ['node-pty', ['spawn']],
+]);
+
+/** The local callee texts that reach a process starter in `p`: `spawn`, an alias `sp` of it, or `cp.spawn`. */
+function starterCallees(p: ParsedFile, file: string): Set<string> {
+  const out = new Set<string>();
+  for (const imp of p.imports) {
+    const starters = STARTER_MODULES.get(imp.specifier);
+    if (starters === undefined || imp.typeOnly || imp.kind !== 'import') continue;
+    for (const n of imp.names) {
+      if (imp.typeNames?.includes(n)) continue;
+      if (n.startsWith('* as ')) { for (const s of starters) out.add(`${n.slice(5)}.${s}`); continue; }
+      if (starters.includes(n)) {
+        out.add(n);
+        // `import { spawn as sp }`: the parser records the imported name; the alias is read from the text.
+        const alias = new RegExp(`\\b${n}\\s+as\\s+([A-Za-z_$][\\w$]*)`).exec(p.text);
+        if (alias !== null) out.add(alias[1]!);
+        continue;
+      }
+      // Any other value name of a starter module's import is a default import: the module object.
+      for (const s of starters) out.add(`${n}.${s}`);
+    }
+  }
+  if (file === SPAWN_KERNEL_FILE) out.add('spawn');
+  return out;
+}
+
+/** Every process-starting call in `server/src`, `agent/src` and `shared/`, in file then source order. A comment, a
+ *  string and an import name no call; a call through a same-named local binding is not one (KNOWN WIDTH above). */
+export function processSpawnSites(root: string = REPO, dirs: readonly string[] = PROCESS_SPAWN_DIRS): ProcessSpawnSite[] {
+  const out: ProcessSpawnSite[] = [];
+  for (const dir of dirs) {
+    for (const abs of sourceFiles(root, dir)) {
+      const file = rel(root, abs);
+      const text = readFileSync(abs, 'utf8');
+      if (file !== SPAWN_KERNEL_FILE && ![...STARTER_MODULES.keys()].some((m) => text.includes(m))) continue;
+      const p = parseSource(text, abs);
+      const callees = starterCallees(p, file);
+      if (callees.size === 0) continue;
+      for (const c of p.calls) {
+        if (!callees.has(c.callee)) continue;
+        // A `const|let|var` of the same name in scope is a local binding, not the import (KNOWN WIDTH above).
+        if (p.bindings.some((b) => b.name === c.callee && b.scopeStart <= c.start && c.start < b.scopeEnd)) continue;
+        const owner = innermostSymbol(p, c.start);
+        out.push({ ...siteOf(p, file, c.line), key: `${file}#${owner ?? '<module>'}`, callee: c.callee });
+      }
+    }
+  }
+  return out;
+}
+
+/** The name of the innermost named symbol of `p` holding offset `at`, or `null`. */
+function innermostSymbol(p: ParsedFile, at: number): string | null {
+  let best: { name: string; start: number; end: number } | null = null;
+  for (const s of p.symbols) {
+    if (s.start <= at && at < s.end && (best === null || s.end - s.start < best.end - best.start)) best = s;
+  }
+  return best?.name ?? null;
+}

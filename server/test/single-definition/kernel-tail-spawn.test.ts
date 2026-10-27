@@ -6,7 +6,9 @@
 // and C8e extend it); a repo-walking guard, so a `WALK_FLOOR` member (`.github/ci/testmap.mjs`).
 import { describe, expect, it } from 'vitest';
 import { REPO, sitesOf } from '../consolidationCensus.js';
-import { spawnKernelWireLiterals, updateSpawnBodies, updateSpawnCalls } from '../census-w8/spawn.js';
+import { processSpawnSites, spawnKernelWireLiterals, updateSpawnBodies, updateSpawnCalls } from '../census-w8/spawn.js';
+import { malformedEntries } from '../rings/exemptions.js';
+import { PROCESS_SPAWNERS } from './spawners.data.js';
 
 /** Every tree a definition could be written in. */
 const DIRS = ['agent/src', 'server/src', 'shared', 'deploy', 'pwa/src'];
@@ -31,5 +33,33 @@ describe('one bounded update spawner, shared/spawn.mjs (D-7055; ARCH-73)', () =>
   it('UPDATE_SPAWN_DRAIN_MS and UPDATE_SPAWN_TIMEOUT_MS are each defined once, in shared/agent-protocol.ts', () => {
     expect(definedIn('UPDATE_SPAWN_DRAIN_MS')).toEqual(['shared/agent-protocol.ts']);
     expect(definedIn('UPDATE_SPAWN_TIMEOUT_MS')).toEqual(['shared/agent-protocol.ts']);
+  });
+});
+
+// D-7056 (W8 Task C8d; ARCH-73 (#808); spec K17 "Audited one at a time"): every process spawner has a row and a reason
+// in `spawners.data.ts`, and the set may only shrink. Measured: 10 spawners at ccba6f9b6, 9 once C8c folded the update
+// pair into `shared/spawn.mjs`. C8e folds the account-op pair and lowers the ceiling to its count.
+const PROCESS_SPAWNERS_CEILING = 9;
+
+describe('every process spawner is audited, with its reason (D-7056; ARCH-73)', () => {
+  const sites = (): string[] => [...new Set(processSpawnSites().map((s) => s.key))].sort();
+  const rows = (): string[] => Object.keys(PROCESS_SPAWNERS).sort();
+
+  it('every spawner has a reason: each processSpawnSites() key has a PROCESS_SPAWNERS row', () => {
+    expect(sites().filter((k) => !(k in PROCESS_SPAWNERS)), 'a new spawner needs a row and a reason in spawners.data.ts').toEqual([]);
+  });
+
+  it('no stale spawner row: each PROCESS_SPAWNERS row names a site processSpawnSites() finds', () => {
+    const found = new Set(sites());
+    expect(rows().filter((k) => !found.has(k)), 'a row whose site is gone must go').toEqual([]);
+  });
+
+  it('the set may only shrink, and every row is well formed', () => {
+    expect(rows().length).toBeLessThanOrEqual(PROCESS_SPAWNERS_CEILING);
+    expect(malformedEntries(PROCESS_SPAWNERS)).toEqual([]);
+  });
+
+  it('localcaps.ts#execCapped carries the audit\'s verdict: kept', () => {
+    expect(PROCESS_SPAWNERS['server/src/localcaps.ts#execCapped']?.reason).toMatch(/^KEPT by the C8d audit \(D-7056\)/);
   });
 });

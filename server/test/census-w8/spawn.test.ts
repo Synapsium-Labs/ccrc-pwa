@@ -6,7 +6,7 @@ import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { mkTmp } from '../tmpHelpers.js';
 import { REPO } from '../consolidationCensus.js';
-import { SPAWN_KERNEL_FILE, spawnKernelWireLiterals, updateSpawnBodies, updateSpawnCalls } from './spawn.js';
+import { SPAWN_KERNEL_FILE, processSpawnSites, spawnKernelWireLiterals, updateSpawnBodies, updateSpawnCalls } from './spawn.js';
 
 const roots: string[] = [];
 afterEach(() => { for (const r of roots.splice(0)) rmSync(r, { recursive: true, force: true }); });
@@ -74,5 +74,69 @@ describe('spawnKernelWireLiterals — a drain or a bound written into shared/spa
 
   it('real tree: none — the kernel defines no drain or bound and passes setTimeout no literal', () => {
     expect(spawnKernelWireLiterals()).toEqual([]);
+  });
+});
+
+describe('processSpawnSites — every process spawner in server/src, agent/src and shared/ (D-7056)', () => {
+  it('fixture: each call shape is one site, keyed file#symbol; a comment, a string, an import and a type pass over', () => {
+    const root = tree({
+      'server/src/a.ts': "import { spawn, execFile, spawnSync, execFileSync, execSync, fork } from 'node:child_process';\n"
+        + "// spawn('in a comment') and execFile('in a comment')\n"
+        + "const words = \"spawn('in a string')\";\n"
+        + "export function one() { return spawn('a', []); }\n"
+        + "export function two() { return execFile('a', [], () => undefined); }\n"
+        + "export function three() { return spawnSync('a'); }\n"
+        + "export function four() { return execFileSync('a'); }\n"
+        + "export function five() { return execSync('a'); }\n"
+        + "export function six() { return fork('a'); }\n"
+        + 'export const seven = words;\n',
+      // An alias, a namespace import and a default import each reach a starter.
+      'server/src/b.ts': "import { spawn as sp } from 'node:child_process';\nexport function alias() { return sp('a', []); }\n",
+      'agent/src/c.ts': "import * as cp from 'node:child_process';\nexport function ns() { return cp.execFile('a', []); }\n",
+      'agent/src/d.ts': "import cp from 'child_process';\nexport const viaDefault = () => cp.spawn('a', []);\n",
+      // node-pty's spawn starts a process too.
+      'server/src/pty.ts': "import { spawn } from 'node-pty';\nexport function attach() { return spawn('tmux', ['attach']); }\n",
+      // The kernel's spawn is its injected host's.
+      [SPAWN_KERNEL_FILE]: 'export function boundedSpawn(host) {\n  const { spawn } = host;\n  return spawn(\'a\', []);\n}\n',
+    });
+    expect(processSpawnSites(root).map((s) => `${s.key} ${s.callee}`)).toEqual([
+      'server/src/a.ts#one spawn', 'server/src/a.ts#two execFile', 'server/src/a.ts#three spawnSync',
+      'server/src/a.ts#four execFileSync', 'server/src/a.ts#five execSync', 'server/src/a.ts#six fork',
+      'server/src/b.ts#alias sp', 'server/src/pty.ts#attach spawn',
+      'agent/src/c.ts#ns cp.execFile', 'agent/src/d.ts#viaDefault cp.spawn',
+      'shared/spawn.mjs#boundedSpawn spawn',
+    ]);
+  });
+
+  it('fixture: a same-named local binding, a type-only import and a module that starts nothing are no site', () => {
+    const root = tree({
+      // `update/converge.ts`'s shape: the injected update spawner bound to a local `spawn`.
+      'server/src/update/converge.ts': "import { boundedUpdateSpawn } from './spawn.js';\n"
+        + 'export function localAnswer(deps) {\n  const spawn = deps.runLocal;\n  return spawn(\'update\', \'x\');\n}\n',
+      'server/src/t.ts': "import type { ChildProcess } from 'node:child_process';\nexport function spawn(): ChildProcess | null { return null; }\nexport const x = spawn();\n",
+      'server/src/u.ts': "import { spawn } from './elsewhere.js';\nexport function y() { return spawn('a'); }\n",
+      // A shared module other than the kernel gets no injected-host pass.
+      'shared/other.mjs': 'export function z(host) {\n  const { spawn } = host;\n  return spawn(\'a\', []);\n}\n',
+    });
+    expect(processSpawnSites(root)).toEqual([]);
+  });
+
+  it('fixture: a call at module scope is keyed file#<module>', () => {
+    const root = tree({ 'agent/src/e.ts': "import { execFileSync } from 'node:child_process';\nexecFileSync('a');\n" });
+    expect(processSpawnSites(root).map((s) => s.key)).toEqual(['agent/src/e.ts#<module>']);
+  });
+
+  it('real tree: the nine spawners (10 at ccba6f9b6, before C8c folded the update pair into shared/spawn.mjs)', () => {
+    expect(processSpawnSites().map((s) => s.key)).toEqual([
+      'server/src/accounts/ops.ts#localAccountOps.run',
+      'server/src/exec.ts#realRunner',
+      'server/src/localcaps.ts#execCapped',
+      'server/src/pty.ts#attachPty',
+      'agent/src/accountop.ts#makeAccountOpSpawn',
+      'agent/src/pty.ts#spawnFleetPty',
+      'agent/src/server.ts#runExec',
+      'agent/src/tokensync.ts#makeTokenSyncSpawn',
+      'shared/spawn.mjs#boundedSpawn',
+    ]);
   });
 });
