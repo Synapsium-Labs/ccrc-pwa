@@ -184,3 +184,614 @@ describe('characterization: the helper redactor before it moves (D-7077; C5h com
     expect(normalized(r.stdout, draftsSubs(h, main, r))).toBe(DRAFTS_TREE_LINE);
   });
 });
+
+// ---- C5h commit 7: the redactor process and its failure path (O2 (b), spec §5.13; D-7127; design note §3.2-§3.4) ----
+// The helper redacts through ONE node per docs verb, started lazily at the first redaction by `Sys._redactor` (never
+// `self.spawn`), fed the CLI's and `redact.mjs`'s bytes that python read once and checked against the pins, and bounded
+// by one per-verb budget. A redactor that fails answers the whole verb `helper-failed` / `redactor-failed`: no python copy
+// of the rules stands behind it.
+//
+// THE STUB CLIs. Each stub holds the specifier './redact.mjs' exactly once (its one import) and no other spelling of it,
+// sits beside a copy of the repository's `redact.mjs`, and writes a START MARKER (its pid, one line appended per start) as
+// its first statement, so a row can tell a stub that ran from a redactor refused before node started. Each stub row
+// asserts its marker before its answer.
+import { execFileSync, spawnSync as spawnSyncC7 } from 'node:child_process';
+import crypto from 'node:crypto';
+import { DOCS_MAX_DOC_BYTES } from '../../shared/docs.js';
+import { CCD, CCD_REDACT, CCD_REDACT_CLI, ghContainedEnv, installDirectEntry } from './ccdWsHelpers.js';
+import { REAL_PYTHON3 } from './ccdDocsHelpers.js';
+import { docsHelperSource, runDocsUnit } from './docsHelperPy.js';
+
+const REPO_C7 = path.resolve(here, '..', '..');
+const roots = (): string[] => [path.join(h.home, 'projects'), path.join(h.home, 'worktrees'), path.join(h.home, '.cc-sessions')];
+const pyStr = (s: string): string => JSON.stringify(s);
+const sha256 = (p: string): string => crypto.createHash('sha256').update(fs.readFileSync(p)).digest('hex');
+const SECRET_FETCH = "fatal: unable to access 'https://u:tok@example.invalid/x.git/': Could not resolve host\n";
+/** The failure line every redactor failure answers, elapsedMs normalized. */
+const failedLine = (verb: string): string =>
+  `{"v":1,"verb":"${verb}","ok":false,"elapsedMs":0,"failure":"helper-failed","detail":"redactor-failed"}\n`;
+const fetchArgv = (project = 'demo'): string[] => ['docs-fetch', ...roots(), '--project', project];
+const treeArgv = (): string[] => ['docs-tree', ...roots(), '--project', 'demo'];
+const indexArgv = (): string[] => ['docs-index', ...roots(), '--all'];
+/** A docs-fetch whose git fetch fails with a secret in its stderr: four redactions (the head, fetch_detail, then
+ *  failure_line's detail and stderrHead). One project per fetch: a project fetched under 10 s ago is fetch-too-soon. */
+const plantFetchFailure = (...projects: string[]): void => {
+  for (const p of projects.length ? projects : ['demo']) h.makeRepo(p);
+  plantGitStderr(h.home, 'fetch', 128, SECRET_FETCH);
+};
+
+/** The helper as a file, run through main() as a process: `python3 <helper> <cli> <pins> <argv...>`, contained, with the
+ *  fixture HOME. */
+function mainRun(cli: string, pins: string, argv: readonly string[], env: NodeJS.ProcessEnv = {}): DocsRun {
+  const file = path.join(h.home, 'c5h-helper', 'docs_helper.py');
+  if (!fs.existsSync(file)) {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, docsHelperSource());
+  }
+  const r = spawnSyncC7(REAL_PYTHON3, [file, cli, pins, ...argv], {
+    cwd: h.home, encoding: 'utf8', timeout: 120_000,
+    env: ghContainedEnv(h.home, { ...process.env, HOME: h.home, PYTHONDONTWRITEBYTECODE: '1', ...env }, { systemd: true, tmux: true }),
+  });
+  return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: `${r.stderr ?? ''}${r.error ? String(r.error) : ''}` };
+}
+
+type StubMode = 'mask' | 'mask-linger' | 'exit-at-line' | 'exit-now' | 'hang-after-read' | 'slow-150' | 'never-read' | 'answer-once-exit' | 'env';
+/** A stub CLI in its own directory beside a copy of the repository's redact.mjs (unless `sibling` is false). Returns its
+ *  path and its start marker. */
+function stubCli(name: string, mode: StubMode, sibling = true): { cli: string; marker: string; envFile: string } {
+  const dir = path.join(h.home, 'c5h-stubs', name);
+  fs.mkdirSync(dir, { recursive: true });
+  const marker = path.join(dir, 'started');
+  const envFile = path.join(dir, 'env-keys');
+  if (sibling) fs.copyFileSync(CCD_REDACT, path.join(dir, 'redact.mjs'));
+  const body = {
+    'mask': 'lines((l) => answer(l));',
+    'mask-linger': 'lines((l) => answer(l)); setInterval(() => {}, 1 << 30);',
+    'exit-at-line': 'lines(() => process.exit(1));',
+    'exit-now': 'process.exit(1);',
+    'hang-after-read': 'lines(() => {}); setInterval(() => {}, 1 << 30);',
+    'slow-150': 'lines((l) => setTimeout(() => answer(l), 150));',
+    'never-read': 'setInterval(() => {}, 1 << 30);',
+    'answer-once-exit': 'lines((l) => { answer(l); process.stdout.end(() => process.exit(0)); });',
+    'env': `writeFileSync(${pyStr(envFile)}, JSON.stringify(Object.keys(process.env).sort())); lines((l) => answer(l));`,
+  }[mode];
+  fs.writeFileSync(path.join(dir, 'redact-cli.mjs'), [
+    "import { appendFileSync, writeFileSync } from 'node:fs';",
+    "import { redact } from './redact.mjs';",
+    `appendFileSync(${pyStr(marker)}, process.pid + '\\n');`,
+    'const answer = (l) => process.stdout.write(JSON.stringify(redact(\'docs\', JSON.parse(l))) + \'\\n\');',
+    "const lines = (f) => { let b = ''; process.stdin.setEncoding('utf8'); process.stdin.on('data', (c) => { b += c; let i; while ((i = b.indexOf('\\n')) >= 0) { const l = b.slice(0, i); b = b.slice(i + 1); f(l); } }); };",
+    'void writeFileSync;',
+    body,
+    '',
+  ].join('\n'));
+  return { cli: path.join(dir, 'redact-cli.mjs'), marker, envFile };
+}
+/** The pids a stub's marker recorded, one per start. */
+const startsOf = (marker: string): number[] =>
+  fs.existsSync(marker) ? fs.readFileSync(marker, 'utf8').split('\n').filter(Boolean).map(Number) : [];
+/** Whether any process of the group `pgid` stands. */
+const groupAlive = (pgid: number): boolean => { try { process.kill(-pgid, 0); return true; } catch { return false; } };
+
+/** A unit body's prologue: a `Sys` subclass that counts `_redactor` starts (and optional class overrides), bound as SYS. */
+const counting = (overrides: readonly string[] = []): string => [
+  'class Counting(H.Sys):',
+  '    starts = 0',
+  ...overrides.map((o) => `    ${o}`),
+  '    def _redactor(self):',
+  '        type(self).starts += 1',
+  '        return super()._redactor()',
+  'H.SYS = Counting()',
+].join('\n');
+
+describe('the redactor process: one node per verb, bounded, failing closed (D-7077; O2 (b), spec §5.13)', () => {
+  it.each(['docs-fetch', 'docs-tree'] as const)('CLI non-zero: a stub that exits 1 at its first line answers %s helper-failed / redactor-failed, rc 0, stderr empty', (verb) => {
+    if (verb === 'docs-fetch') plantFetchFailure(); else plantDraftsFixture(h);
+    const s = stubCli('exit-at-line', 'exit-at-line');
+    const r = mainRun(s.cli, '-', verb === 'docs-fetch' ? fetchArgv() : treeArgv());
+    expect(startsOf(s.marker), 'the stub started').toHaveLength(1);
+    expect([r.code, normalized(r.stdout), r.stderr]).toEqual([0, failedLine(verb), '']);
+  });
+
+  it.each(['docs-tree', 'docs-fetch'] as const)('CLI exits before reading (%s): one line, one node start, no drafts row, stderr empty', (verb) => {
+    if (verb === 'docs-fetch') plantFetchFailure(); else plantDraftsFixture(h);
+    const s = stubCli('exit-now', 'exit-now');
+    const r = runDocsUnit(h.home, [
+      `H.Sys.redact_cli = ${pyStr(s.cli)}`,
+      counting(),
+      `line = H.run(${JSON.stringify(verb === 'docs-fetch' ? fetchArgv() : treeArgv())})`,
+      "out({'line': line.decode('utf-8'), 'starts': Counting.starts})",
+    ].join('\n'));
+    expect(startsOf(s.marker), 'the stub started').toHaveLength(1);
+    expect(r.stderr).toBe('');
+    const got = JSON.parse(r.stdout) as { line: string; starts: number };
+    expect(got.starts).toBe(1);
+    expect(normalized(got.line)).toBe(failedLine(verb));
+    expect(got.line).not.toContain('drafts');
+  });
+
+  it('a pipe error from a node that exited before reading is RedactorFailed, which is no OSError (so no `except OSError` swallows it)', () => {
+    const s = stubCli('exit-now-big', 'exit-now');
+    const r = runDocsUnit(h.home, [
+      `H.Sys.redact_cli = ${pyStr(s.cli)}`,
+      'try:',
+      "    H.SYS.redact('x' * (1 << 20))",
+      "    got = ['answered', False]",
+      'except Exception as e:',
+      '    got = [type(e).__name__, isinstance(e, OSError)]',
+      'out(got)',
+    ].join('\n'));
+    expect(startsOf(s.marker), 'the stub started').toHaveLength(1);
+    expect(JSON.parse(r.stdout)).toEqual(['RedactorFailed', false]);
+  });
+
+  it('CLI absent: main() given a CLI path that does not exist answers the same one line', () => {
+    plantFetchFailure();
+    const r = mainRun(path.join(h.home, 'no-such-dir', 'redact-cli.mjs'), '-', fetchArgv());
+    expect([r.code, normalized(r.stdout), r.stderr]).toEqual([0, failedLine('docs-fetch'), '']);
+  });
+
+  it('the marker CONTROL: a stub whose sibling redact.mjs is missing answers redactor-failed with no marker, so a marker tells the two causes apart', () => {
+    plantFetchFailure();
+    const s = stubCli('no-sibling', 'mask', false);
+    const r = mainRun(s.cli, '-', fetchArgv());
+    expect([r.code, normalized(r.stdout), r.stderr]).toEqual([0, failedLine('docs-fetch'), '']);
+    expect(startsOf(s.marker), 'no node started').toEqual([]);
+  });
+
+  it('redact_cli None: a unit that runs H.run without setting it gets the same one line from run()', () => {
+    plantFetchFailure();
+    const r = runDocsUnit(h.home, ['H.Sys.redact_cli = None', `out(H.run(${JSON.stringify(fetchArgv())}).decode('utf-8'))`].join('\n'));
+    expect(r.stderr).toBe('');
+    expect(normalized(JSON.parse(r.stdout) as string)).toBe(failedLine('docs-fetch'));
+  });
+
+  it('budget spent on a read: a stub that reads and never answers, under a 200 ms budget, answers the same line and leaves no group', () => {
+    plantFetchFailure();
+    const s = stubCli('hang', 'hang-after-read');
+    const r = runDocsUnit(h.home, [`H.Sys.redact_cli = ${pyStr(s.cli)}`, counting(['redact_budget_ms = 200']),
+      `out(H.run(${JSON.stringify(fetchArgv())}).decode('utf-8'))`].join('\n'));
+    const [pid] = startsOf(s.marker);
+    expect(pid, 'the stub started').toBeGreaterThan(0);
+    expect(normalized(JSON.parse(r.stdout) as string)).toBe(failedLine('docs-fetch'));
+    expect(groupAlive(pid!), 'the stub\'s group still stands').toBe(false);
+  });
+
+  it('budget spent across calls: four answers 150 ms apart under a 400 ms budget fail the verb; the budget is the verb\'s, not each call\'s', () => {
+    plantFetchFailure('demo', 'demo2');
+    const s = stubCli('slow', 'slow-150');
+    const run = (budget: string[], project: string): string => {
+      const r = runDocsUnit(h.home, [`H.Sys.redact_cli = ${pyStr(s.cli)}`, counting(budget),
+        `out(H.run(${JSON.stringify(fetchArgv(project))}).decode('utf-8'))`].join('\n'));
+      return normalized(JSON.parse(r.stdout) as string);
+    };
+    expect(run(['redact_budget_ms = 400'], 'demo')).toBe(failedLine('docs-fetch'));
+    expect(startsOf(s.marker), 'one node for the verb').toHaveLength(1);
+    // CONTROL: the same stub inside the verb's default budget answers the verb.
+    expect(JSON.parse(run([], 'demo2'))).toMatchObject({ ok: false, failure: 'fetch-transport' });
+  });
+
+  it('budget spent on a write: a stub that never reads, and a 2 MiB request under a 300 ms budget, fails within the budget plus 1 s and leaves no group', () => {
+    const s = stubCli('never-read', 'never-read');
+    const r = runDocsUnit(h.home, [
+      'import os, time',
+      `H.Sys.redact_cli = ${pyStr(s.cli)}`,
+      counting(['redact_budget_ms = 300']),
+      't0 = time.perf_counter()',
+      'try:',
+      "    H.redact('x' * (2 * 1024 * 1024))",
+      "    got = 'answered'",
+      'except H.RedactorFailed:',
+      "    got = 'RedactorFailed'",
+      "out({'got': got, 'ms': (time.perf_counter() - t0) * 1000})",
+    ].join('\n'), { timeoutMs: 60_000 });
+    const got = JSON.parse(r.stdout) as { got: string; ms: number };
+    const [pid] = startsOf(s.marker);
+    expect(pid, 'the stub started').toBeGreaterThan(0);
+    expect(got.got).toBe('RedactorFailed');
+    expect(got.ms).toBeLessThan(1300);
+    expect(groupAlive(pid!)).toBe(false);
+  });
+
+  it.each(['mask', 'exit-at-line'] as const)('no node left after a verb through main() (a %s stub)', (mode) => {
+    plantFetchFailure();
+    const s = stubCli(mode, mode);
+    const r = mainRun(s.cli, '-', fetchArgv());
+    const [pid] = startsOf(s.marker);
+    expect(pid, 'the stub started').toBeGreaterThan(0);
+    expect(r.code).toBe(0);
+    expect(groupAlive(pid!), 'the stub\'s group outlived the verb').toBe(false);
+  });
+
+  it('run()\'s finally closes the redactor: its group is gone when run() returns, before python exits', () => {
+    plantFetchFailure();
+    const s = stubCli('closed', 'mask');
+    const r = runDocsUnit(h.home, [
+      'import os',
+      `H.Sys.redact_cli = ${pyStr(s.cli)}`,
+      `H.run(${JSON.stringify(fetchArgv())})`,
+      `pid = int(open(${pyStr(s.marker)}).read().split()[0])`,
+      'try:',
+      '    os.killpg(pid, 0)',
+      "    out('stands')",
+      'except ProcessLookupError:',
+      "    out('gone')",
+    ].join('\n'));
+    expect(JSON.parse(r.stdout)).toBe('gone');
+  });
+
+  it('the failure is sticky: a second redact after a RedactorFailed raises at once and starts no second node', () => {
+    const s = stubCli('sticky', 'exit-at-line');
+    const r = runDocsUnit(h.home, [
+      `H.Sys.redact_cli = ${pyStr(s.cli)}`,
+      'got = []',
+      'for _ in range(2):',
+      '    try:',
+      "        H.SYS.redact('https://u:tok@h/x')",
+      "        got.append('answered')",
+      '    except H.RedactorFailed:',
+      "        got.append('RedactorFailed')",
+      'out(got)',
+    ].join('\n'));
+    expect(JSON.parse(r.stdout)).toEqual(['RedactorFailed', 'RedactorFailed']);
+    expect(startsOf(s.marker), 'one node, never a second').toHaveLength(1);
+  });
+
+  it('no node left after a unit: three H.Sys instances redact outside run(), and the atexit hook closes all three', () => {
+    // A stub that keeps running after its input closes, so only the hook can end it.
+    const s = stubCli('three', 'mask-linger');
+    const r = runDocsUnit(h.home, [
+      `H.Sys.redact_cli = ${pyStr(s.cli)}`,
+      'class A(H.Sys):', '    pass',
+      "out([A().redact('https://u:tok@h/%d' % i) for i in range(3)])",
+    ].join('\n'));
+    expect(JSON.parse(r.stdout)).toEqual(['https://***@h/0', 'https://***@h/1', 'https://***@h/2']);
+    const pids = startsOf(s.marker);
+    expect(pids, 'three nodes started').toHaveLength(3);
+    expect(pids.filter(groupAlive), 'a redactor outlived its unit').toEqual([]);
+  });
+
+  it(`docs-index fails closed: the ${FANOUT_N}-project root with a stub that exits 1 answers redactor-failed for the whole verb`, () => {
+    plantFanoutRoot(h);
+    const s = stubCli('index-exit', 'exit-at-line');
+    const r = mainRun(s.cli, '-', indexArgv());
+    expect(startsOf(s.marker)).toHaveLength(1);
+    expect([r.code, normalized(r.stdout), r.stderr]).toEqual([0, failedLine('docs-index'), '']);
+  });
+
+  it('the budget is time inside the redactor, not wall time: four redactions 500 ms of git apart answer ok, through one node', () => {
+    for (const p of ['a', 'b', 'c', 'd']) fs.mkdirSync(path.join(h.home, 'projects', p, '.git'), { recursive: true });
+    fs.writeFileSync(path.join(harnessBin(h.home), 'git'),
+      ['#!/bin/sh', 'case " $* " in *" rev-parse "*) sleep 0.5 ;; esac', `exec ${shWord(REAL_GIT)} "$@"`, ''].join('\n'), { mode: 0o755 });
+    const t0 = Date.now();
+    const r = runDocsUnit(h.home, [counting(), `line = H.run(${JSON.stringify(indexArgv())})`,
+      "out({'line': line.decode('utf-8'), 'starts': Counting.starts})"].join('\n'));
+    const got = JSON.parse(r.stdout) as { line: string; starts: number };
+    expect(Date.now() - t0, 'the verb\'s wall time is past the redactor budget').toBeGreaterThan(2000);
+    expect(got.starts).toBe(1);
+    expect(JSON.parse(got.line)).toMatchObject({ ok: true, projects: [{ project: 'a', state: 'repo-unreadable' },
+      { project: 'b', state: 'repo-unreadable' }, { project: 'c', state: 'repo-unreadable' }, { project: 'd', state: 'repo-unreadable' }] });
+  });
+
+  it('close_redactor never raises: a stub that exits right after its one answer leaves run() one line, rc 0, stderr empty, no group', () => {
+    const main = plantDraftsFixture(h);
+    const s = stubCli('once', 'answer-once-exit');
+    const r = mainRun(s.cli, '-', treeArgv());
+    const [pid] = startsOf(s.marker);
+    expect(pid, 'the stub started').toBeGreaterThan(0);
+    expect([r.code, r.stderr]).toEqual([0, '']);
+    expect(normalized(r.stdout, draftsSubs(h, main, r))).toBe(DRAFTS_TREE_LINE);
+    expect(groupAlive(pid!)).toBe(false);
+  });
+
+  it('state resets per run(): a failed run, then a run with the real CLI on the same SYS, answers as a fresh process does', () => {
+    plantFetchFailure('demo', 'demo2', 'demo3');
+    const s = stubCli('reset', 'exit-at-line');
+    const r = runDocsUnit(h.home, [
+      `H.Sys.redact_cli = ${pyStr(s.cli)}`,
+      `first = H.run(${JSON.stringify(fetchArgv('demo'))}).decode('utf-8')`,
+      `H.Sys.redact_cli = ${pyStr(CCD_REDACT_CLI)}`,
+      `second = H.run(${JSON.stringify(fetchArgv('demo2'))}).decode('utf-8')`,
+      'out([first, second])',
+    ].join('\n'));
+    const [first, second] = JSON.parse(r.stdout) as [string, string];
+    expect(normalized(first)).toBe(failedLine('docs-fetch'));
+    const fresh = mainRun(CCD_REDACT_CLI, '-', fetchArgv('demo3'));
+    expect(normalized(second)).toBe(normalized(fresh.stdout));
+    expect(JSON.parse(second)).toMatchObject({ ok: false, failure: 'fetch-transport' });
+  });
+
+  it('the redactor never goes through self.spawn: a unit\'s spawn override sees git, and never node', () => {
+    plantDraftsFixture(h);
+    const r = runDocsUnit(h.home, [
+      'seen = []',
+      'class Rec(H.Sys):',
+      '    starts = 0',
+      '    def spawn(self, argv, *a, **k):',
+      '        seen.append(list(argv))',
+      '        return super().spawn(argv, *a, **k)',
+      '    def _redactor(self):',
+      '        type(self).starts += 1',
+      '        return super()._redactor()',
+      'H.SYS = Rec()',
+      `o = H.json.loads(H.run(${JSON.stringify(treeArgv())}).decode('utf-8'))`,
+      "out({'ok': o['ok'], 'starts': Rec.starts, 'argv0': sorted(set(a[0] for a in seen)), 'node': [a for a in seen if 'node' in a[:1] or '--input-type=module' in a]})",
+    ].join('\n'));
+    expect(JSON.parse(r.stdout)).toEqual({ ok: true, starts: 1, argv0: ['git'], node: [] });
+  });
+
+  it('spawn count: one node for all 40 projects, one for the drafts fixture, none for an ok docs-show', () => {
+    plantFanoutRoot(h);
+    const main = plantDraftsFixture(h);
+    const commit = h.git(main, 'rev-parse', 'HEAD');
+    const show = ['docs-show', ...roots(), '--project', 'demo', '--commit', commit, '--ref', 'refs/remotes/origin/main',
+      '--section', 'specs', '--path', 'a.md', '--max-bytes', String(DOCS_MAX_DOC_BYTES)];
+    const counts = (argv: readonly string[]): { starts: number; ok: boolean } => JSON.parse(runDocsUnit(h.home, [counting(),
+      `o = H.json.loads(H.run(${JSON.stringify(argv)}).decode('utf-8'))`, "out({'starts': Counting.starts, 'ok': o['ok']})"].join('\n')).stdout);
+    expect(counts(indexArgv())).toEqual({ starts: 1, ok: true });
+    expect(counts(treeArgv())).toEqual({ starts: 1, ok: true });
+    expect(counts(show)).toEqual({ starts: 0, ok: true });
+  });
+});
+
+/** A scratch copy of the repository's CLI and redact.mjs in its own directory, for the read-once rows. */
+function scratchPair(name: string): { dir: string; cli: string; mjs: string; pins: string } {
+  const dir = path.join(h.home, 'c5h-pair', name);
+  fs.mkdirSync(dir, { recursive: true });
+  const cli = path.join(dir, 'redact-cli.mjs');
+  const mjs = path.join(dir, 'redact.mjs');
+  fs.copyFileSync(CCD_REDACT_CLI, cli);
+  fs.copyFileSync(CCD_REDACT, mjs);
+  return { dir, cli, mjs, pins: `${sha256(mjs)},${sha256(cli)}` };
+}
+/** One byte of the docs userinfo rule's mask changed: `***@` becomes `**!@`. */
+const editRule = (mjs: string): void => {
+  const t = fs.readFileSync(mjs, 'utf8');
+  if (!t.includes("'***@']")) throw new Error('the docs userinfo mask moved');
+  fs.writeFileSync(mjs, t.replace("'***@']", "'**!@']"));
+};
+const LEAK = 'fatal: https://u:tok@h/r \udcff';
+const MASKED = 'fatal: https://***@h/r \udcff';
+/** A unit that redacts LEAK once through `cli` with `pins`, counting Popen calls: its answer (or the exception's class),
+ *  the Popen count and whether a process was left on the instance. */
+function readOnce(cli: string, pins: string, pre: readonly string[] = [], opts: { env?: NodeJS.ProcessEnv; cwd?: string } = {}): { got: string; popens: number; proc: boolean } {
+  const r = runDocsUnit(h.home, [
+    'import subprocess',
+    `H.Sys.redact_cli, H.Sys.redact_pins = ${pyStr(cli)}, ${pyStr(pins)}`,
+    'popens = []',
+    '_real_popen = H.subprocess.Popen',
+    'def _counting_popen(*a, **k):',
+    '    popens.append(1)',
+    '    return _real_popen(*a, **k)',
+    'H.subprocess.Popen = _counting_popen',
+    ...pre,
+    'try:',
+    `    got = H.SYS.redact(${pyStr(LEAK)})`,
+    'except Exception as e:',
+    '    got = type(e).__name__',
+    'finally:',
+    '    H.subprocess.Popen = _real_popen',
+    "out({'got': got, 'popens': len(popens), 'proc': H.SYS._rd_proc is not None})",
+  ].join('\n'), { env: opts.env });
+  if (r.code !== 0) throw new Error(`readOnce unit exited ${r.code}: ${r.stderr}`);
+  return JSON.parse(r.stdout);
+}
+
+describe('the read-once start: python checks the bytes it hands node, and node opens no file (D-7127; design note §3.3)', () => {
+  it('the checked pair redacts, through exactly one _redactor call', () => {
+    const p = scratchPair('ok');
+    const r = runDocsUnit(h.home, [`H.Sys.redact_cli, H.Sys.redact_pins = ${pyStr(p.cli)}, ${pyStr(p.pins)}`, counting(),
+      `out({'got': [H.SYS.redact(s) for s in ${JSON.stringify([LEAK, 'GET /x?token=abc', 'plain'])}], 'starts': Counting.starts})`].join('\n'));
+    expect(JSON.parse(r.stdout)).toEqual({ got: [MASKED, 'GET /x?token=***', 'plain'], starts: 1 });
+  });
+
+  it('redact.mjs changed by one byte after the pins were taken: RedactorFailed, and no node started', () => {
+    const p = scratchPair('edited-mjs');
+    editRule(p.mjs);
+    expect(readOnce(p.cli, p.pins)).toEqual({ got: 'RedactorFailed', popens: 0, proc: false });
+  });
+
+  it('the CLI changed after the pins were taken (an echo CLI that writes each line back unmasked): RedactorFailed, no node', () => {
+    const p = scratchPair('echo-cli');
+    fs.appendFileSync(p.cli, "process.stdin.on('data', (c) => process.stdout.write(c));\n");
+    expect(readOnce(p.cli, p.pins)).toEqual({ got: 'RedactorFailed', popens: 0, proc: false });
+  });
+
+  it('a mixed pair (this CLI beside another tree\'s redact.mjs): RedactorFailed', () => {
+    const a = scratchPair('mixed');
+    const pins = a.pins;
+    editRule(a.mjs);
+    expect(readOnce(a.cli, pins)).toEqual({ got: 'RedactorFailed', popens: 0, proc: false });
+  });
+
+  it('pins `-` (a source checkout) with the same edited redact.mjs redacts by the edited rules: `-` is "unchecked" and nothing else', () => {
+    const p = scratchPair('dash');
+    editRule(p.mjs);
+    expect(readOnce(p.cli, '-')).toMatchObject({ got: 'fatal: https://**!@h/r \udcff', popens: 1 });
+  });
+
+  it('node is given bytes, not a path: redact.mjs edited on disk right after python read it still answers by the checked rules', () => {
+    const p = scratchPair('swap');
+    expect(readOnce(p.cli, p.pins, [
+      '_real_rd_read = H._rd_read',
+      'def _edit_after_read(path):',
+      '    data = _real_rd_read(path)',
+      "    if path.rsplit('/', 1)[-1] == 'redact.mjs':",
+      "        t = open(path).read()",
+      "        open(path, 'w').write(t.replace(\"'***@']\", \"'**!@']\"))",
+      '    return data',
+      'H._rd_read = _edit_after_read',
+    ])).toMatchObject({ got: MASKED, popens: 1 });
+    expect(fs.readFileSync(p.mjs, 'utf8'), 'the file on disk was edited').toContain("'**!@']");
+  });
+
+  it.each(['the CLI', 'redact.mjs'] as const)('%s as a link to an identical file: RedactorFailed, and no node started', (which) => {
+    const p = scratchPair(`link-${which === 'the CLI' ? 'cli' : 'mjs'}`);
+    const other = scratchPair(`link-target-${which === 'the CLI' ? 'cli' : 'mjs'}`);
+    const at = which === 'the CLI' ? p.cli : p.mjs;
+    fs.rmSync(at);
+    fs.symlinkSync(which === 'the CLI' ? other.cli : other.mjs, at);
+    expect(readOnce(p.cli, p.pins)).toEqual({ got: 'RedactorFailed', popens: 0, proc: false });
+  });
+
+  it.each([
+    ['no \'./redact.mjs\' spelling', (t: string) => t.replace("from './redact.mjs';", "from './rules.mjs';")],
+    ['two \'./redact.mjs\' spellings', (t: string) => t.replace("import { redact } from './redact.mjs';", "import { redact } from './redact.mjs';\nimport './redact.mjs';")],
+  ])('a CLI with %s: RedactorFailed, and no node started', (_why, edit) => {
+    const p = scratchPair(`spell-${_why.length}`);
+    fs.writeFileSync(p.cli, edit(fs.readFileSync(p.cli, 'utf8')));
+    expect(readOnce(p.cli, '-')).toEqual({ got: 'RedactorFailed', popens: 0, proc: false });
+  });
+
+  it.each([
+    ['a comment spelling plus a double-quoted import', (t: string) => t.replace("import { redact } from './redact.mjs';", "// see './redact.mjs'\nimport { redact } from \"./redact.mjs\";")],
+    ['a dynamic import(', (t: string) => `${t}void import('./x.mjs');\n`],
+  ])('the residue check: %s is refused before any Popen', (_why, edit) => {
+    const p = scratchPair(`residue-${_why.length}`);
+    fs.writeFileSync(p.cli, edit(fs.readFileSync(p.cli, 'utf8')));
+    expect(readOnce(p.cli, '-')).toEqual({ got: 'RedactorFailed', popens: 0, proc: false });
+  });
+
+  it('the planted cwd: a redact.mjs that masks nothing in python\'s cwd is never what node runs', () => {
+    fs.writeFileSync(path.join(h.home, 'redact.mjs'), 'export function redact(p, s) { return s; }\n');
+    expect(readOnce(CCD_REDACT_CLI, '-')).toMatchObject({ got: MASKED, popens: 1 });
+  });
+
+  it('the end-to-end swap: an installed docs-index whose redact.mjs changes after the front and before node answers redactor-failed, never the edited rules', () => {
+    plantFanoutRoot(h);
+    const { body } = installDirectEntry(h.home);
+    const mjs = path.join(path.dirname(body), 'shared', 'redact.mjs');
+    const wrapper = (rewrite: boolean): void => {
+      fs.writeFileSync(path.join(harnessBin(h.home), 'python3'), [
+        '#!/bin/sh',
+        // Only the helper's start (`/dev/fd/3`), never the front's `-c` probe: the rewrite lands after the front's check.
+        ...(rewrite ? [`[ "$1" = /dev/fd/3 ] && ${shWord(REAL_PYTHON3)} -c 'import sys; p = sys.argv[1]; t = open(p).read(); open(p, "w").write(t.replace("\\x27***@\\x27]", "\\x27**!@\\x27]", 1))' ${shWord(mjs)}`] : []),
+        `exec ${shWord(REAL_PYTHON3)} "$@"`,
+        '',
+      ].join('\n'), { mode: 0o755 });
+    };
+    const run = (): DocsRun => {
+      const r = spawnSyncC7('bash', [body, 'docs-index', '--all'], { cwd: h.home, encoding: 'utf8', timeout: 120_000,
+        env: ghContainedEnv(h.home, { ...process.env, HOME: h.home }, { systemd: true, tmux: true }) });
+      return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
+    };
+    wrapper(false);
+    const control = run();
+    expect([control.code, normalized(control.stdout), control.stderr], 'CONTROL: no rewrite answers the pinned index').toEqual([0, FANOUT_INDEX_LINE, '']);
+    wrapper(true);
+    const swapped = run();
+    expect(fs.readFileSync(mjs, 'utf8'), 'the installed redact.mjs was rewritten').toContain("'**!@']");
+    expect([swapped.code, normalized(swapped.stdout), swapped.stderr]).toEqual([0, failedLine('docs-index'), '']);
+  });
+});
+
+describe('what node is started with: its environment and the files python reads (D-7127; design note §3.4)', () => {
+  const PRELOAD = '--import data:text/javascript,String.prototype.replace=function(){return%20String(this)}';
+
+  it('an inherited NODE_OPTIONS preload never reaches the redactor: rc 0 and exactly the masked line', () => {
+    expect(readOnce(CCD_REDACT_CLI, '-', [], { env: { NODE_OPTIONS: PRELOAD } })).toMatchObject({ got: MASKED, popens: 1 });
+  });
+
+  it('CONTROL: the same preload given to a node started on the redactor\'s own argv with the inherited environment answers exactly the unmasked line', () => {
+    const r = runDocsUnit(h.home, [
+      'import base64, json, os, subprocess',
+      `cli = ${pyStr(CCD_REDACT_CLI)}`,
+      "mjs = open(os.path.join(os.path.dirname(cli), 'redact.mjs'), 'rb').read()",
+      "src = open(cli, 'rb').read().decode('utf-8').replace(\"'./redact.mjs'\", \"'data:text/javascript;base64,%s'\" % base64.b64encode(mjs).decode('ascii'))",
+      "p = subprocess.run(['node', '--input-type=module', '-e', src, '--', cli, '--profile', 'docs'], cwd='/',",
+      `                   input=(json.dumps(${pyStr(LEAK)}) + '\\n').encode('ascii'), stdout=subprocess.PIPE, stderr=subprocess.PIPE)`,
+      "out([p.returncode, json.loads(p.stdout.decode('utf-8')) if p.stdout else None])",
+    ].join('\n'), { env: { NODE_OPTIONS: PRELOAD } });
+    expect(JSON.parse(r.stdout)).toEqual([0, LEAK]);
+  });
+
+  it('node reports the environment it received: no NODE_* key, and PATH', () => {
+    const s = stubCli('env', 'env');
+    expect(readOnce(s.cli, '-', [], { env: { NODE_PATH: path.join(h.home, 'nm'), NODE_DEBUG: 'module' } })).toMatchObject({ got: MASKED });
+    expect(startsOf(s.marker), 'the stub started').toHaveLength(1);
+    const keys = JSON.parse(fs.readFileSync(s.envFile, 'utf8')) as string[];
+    expect(keys.filter((k) => k.startsWith('NODE_'))).toEqual([]);
+    expect(keys).toContain('PATH');
+  });
+
+  it('a FIFO at the redact.mjs path: RedactorFailed at once, inside the budget, with no node started', () => {
+    const p = scratchPair('fifo');
+    fs.rmSync(p.mjs);
+    execFileSync('mkfifo', [p.mjs]);
+    const t0 = Date.now();
+    expect(readOnce(p.cli, '-')).toEqual({ got: 'RedactorFailed', popens: 0, proc: false });
+    expect(Date.now() - t0).toBeLessThan(15_000);
+  });
+
+  it('a redact.mjs of REDACT_FILE_MAX + 1 bytes: RedactorFailed, and no node started', () => {
+    const p = scratchPair('big');
+    fs.writeFileSync(p.mjs, `${fs.readFileSync(p.mjs, 'utf8')}\n//${'x'.repeat(98_304)}\n`);
+    expect(fs.statSync(p.mjs).size).toBeGreaterThan(98_304);
+    expect(readOnce(p.cli, '-')).toEqual({ got: 'RedactorFailed', popens: 0, proc: false });
+  });
+
+  it('the orphan kill: a raise right after Popen kills node\'s group, and nothing is left on the instance or in _REDACT_LIVE', () => {
+    const r = runDocsUnit(h.home, [
+      'import os',
+      'seen = []',
+      '_real = H.os.set_blocking',
+      'def _fails(fd, flag):',
+      '    seen.extend(p.pid for p in H._REDACT_LIVE)',
+      "    raise OSError(5, 'planted')",
+      'H.os.set_blocking = _fails',
+      'try:',
+      "    H.SYS.redact('x')",
+      "    got = 'answered'",
+      'except H.RedactorFailed:',
+      "    got = 'RedactorFailed'",
+      'finally:',
+      '    H.os.set_blocking = _real',
+      '    left = [p.pid for p in H._REDACT_LIVE]',
+      '    for p in list(H._REDACT_LIVE):',
+      '        H._redact_kill(p)',
+      '    proc = H.SYS._rd_proc is not None',
+      '    H.SYS.reset_redactor()',
+      'try:',
+      '    os.killpg(seen[0], 0)',
+      "    group = 'stands'",
+      'except ProcessLookupError:',
+      "    group = 'gone'",
+      "out({'got': got, 'seen': len(seen), 'left': left, 'proc': proc, 'group': group})",
+    ].join('\n'));
+    expect(JSON.parse(r.stdout)).toEqual({ got: 'RedactorFailed', seen: 1, left: [], proc: false, group: 'gone' });
+  });
+
+  it('the differential row: over generated strings from a fixed seed, the core python loop and the CLI agree', () => {
+    const r = runDocsUnit(h.home, [
+      'import random',
+      'rng = random.Random(7077)',
+      "atoms = ['a', 'Z', '0', '_', '-', '.', '/', ':', '@', '?', '&', '=', ' ', '\\t', '\\n', '\\v', '\\r', '\\f', '\\u2028',",
+      "         '\\u00e9', '\\u6587', '\\U0001f600', '\\udc80', '\\udcff', 'gh', 'gho_', 'ghp_', 'ghx_', 'token', 'access_token',",
+      "         'https://', '://', 'u:p@', 'Authorization:', 'A1b2' * 6]",
+      "strings = [''.join(rng.choice(atoms) for _ in range(rng.randint(0, 24))) for _ in range(400)]",
+      'core = H.Sys.__mro__[-2]',
+      'out([s for s in strings if core.redact(H.SYS, s) != H.SYS.redact(s)])',
+    ].join('\n'));
+    expect(r.stderr).toBe('');
+    expect(JSON.parse(r.stdout)).toEqual([]);
+  });
+});
+
+describe('_docs_redact_cli hands python an absolute CLI path, whatever cwd ccd ran from (D-7125; design note §2)', () => {
+  it('from the repository root, `bash ccd/ccd docs-index` gives python an absolute first argument: the checkout\'s CLI', () => {
+    const rec = path.join(h.home, 'python3-argv2');
+    fs.writeFileSync(path.join(harnessBin(h.home), 'python3'), [
+      '#!/bin/sh',
+      `[ "$1" = /dev/fd/3 ] && printf '%s\\n%s\\n' "$2" "$3" > ${shWord(rec)}`,
+      `exec ${shWord(REAL_PYTHON3)} "$@"`,
+      '',
+    ].join('\n'), { mode: 0o755 });
+    const r = spawnSyncC7('bash', [path.relative(REPO_C7, CCD), 'docs-index', '--all'], { cwd: REPO_C7, encoding: 'utf8', timeout: 120_000,
+      env: ghContainedEnv(h.home, { ...process.env, HOME: h.home }, { systemd: true, tmux: true }) });
+    expect(r.status, r.stderr).toBe(0);
+    const [cli, pins] = fs.readFileSync(rec, 'utf8').split('\n');
+    expect(path.isAbsolute(cli!), `python's first argument is ${cli}`).toBe(true);
+    expect(path.resolve(cli!)).toBe(CCD_REDACT_CLI);
+    expect(pins).toBe('-');
+  });
+});

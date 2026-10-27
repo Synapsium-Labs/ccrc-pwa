@@ -40618,6 +40618,18 @@ _docs_max_bytes_ok() {   # N -> 0 iff [1-9][0-9]{0,7} (local LC_ALL=C)
   [[ "${1-}" =~ ^[1-9][0-9]{0,7}$ ]]
 }
 
+# THE DOCS REDACTOR (D-7077, OA-C11 (a); D-7125): `shared/redact-cli.mjs` runs `shared/redact.mjs`'s docs profile for the helper,
+# one node per verb. In a source checkout it is the repository's (`../shared/` from ccd/), checked against nothing; installed, it
+# is the copy beside the body, with its two pins. The directory comes from this file's location only, as the loader's does, and is
+# made absolute, so python is never handed a path to read against another cwd. One layout test, the loader's published answer.
+_docs_redact_cli() {   # path|pins -> the redactor CLI's absolute path, or its pins (`-` in a source checkout)
+  local self="${BASH_SOURCE[0]}" dir=. cli pins=-
+  [[ "$self" == */* ]] && dir="${self%/*}"
+  [[ "$dir" == /* ]] || dir="$PWD/$dir"
+  if [[ $__CCD_LAYOUT == source ]]; then cli="$dir/../shared/redact-cli.mjs"; else cli="$dir/shared/redact-cli.mjs" pins="$__CCD_REDACT_SHA256,$__CCD_REDACT_CLI_SHA256"; fi
+  [[ "${1-}" == pins ]] && printf '%s\n' "$pins" || printf '%s\n' "$cli"
+}
+
 _docs_front() {   # verb -> 0 when python3 >= 3.8 answers; else prints the one fixed line, returns 1
   # The python floor's ONE definition (spec §7.2). The probe's own exit 3 means
   # "older than 3.8"; any other non-zero (127 for command-not-found, a broken
@@ -40680,7 +40692,23 @@ _docs_py() {   # verb projects_root worktrees_root reg [verb argv...]; the Docs 
   # stdin stays the caller's (always /dev/null here). The roots arrive from
   # ccd's own constants; the helper never reads HOME. The opener and the
   # terminator below are each one whole line, and unique in this file:
-  # `server/test/docsHelperPy.ts` extracts the program between them.
+  # `server/test/docsHelperPy.ts` extracts the program between them. The program's first two words are the docs redactor's CLI
+  # path and its pins (D-7077, D-7127): python reads both files once, checks them against the pins (`-` checks nothing: a source
+  # checkout), and hands node those exact bytes, so node opens no file and nothing is checked and then swapped. A redactor that
+  # fails, or that is not the pinned one, answers the verb helper-failed / redactor-failed: the helper has no copy of the rules.
+  # In the program (its runner section): `Sys._redactor` is the one start seam, never `self.spawn` (a unit's git stub must never
+  # see node's argv). It reads both files through _rd_read (no link, a regular file, never blocking, at most REDACT_FILE_MAX
+  # bytes, the argv-size bound), requires the CLI to spell './redact.mjs' exactly once, rewrites it to a data: URL and refuses
+  # any `redact.mjs` or `import(` left, and starts node from cwd '/' with os.environ less every NODE_* key (a NODE_OPTIONS
+  # preload would run code nobody checked). It adds the process to _REDACT_LIVE before anything else can raise, and kills its
+  # group if making stdin non-blocking fails. `Sys.redact` writes one JSON line in PIPE_CHUNK pieces and reads one back, every
+  # step through _rd_io, which spends one per-verb budget (REDACT_BUDGET_MS, outside the verb's Deadline; docs-budget.test.ts
+  # holds it inside every runner margin). The clock is perf_counter, never time.monotonic: a unit plants a broken monotonic and
+  # the redactor must still answer, so nothing on its path calls Popen.wait(timeout) either (a poll loop reaps). Any failure is
+  # sticky RedactorFailed (neither a Fail nor an OSError, so no handler before run() swallows it); `helper_failed_line` never
+  # redacts again after one; run() resets the state at entry and closes the process in a finally; an atexit hook closes what a
+  # unit started outside run().
+  set -- "$(_docs_redact_cli path)" "$(_docs_redact_cli pins)" "$@"
   python3 /dev/fd/3 "$@" 3<<'DOCS_PY'
 # ===== docs: header =====
 # The Docs helper (spec 2026-10-01, section 2): one python process per docs
@@ -40991,11 +41019,14 @@ def read_args(verb, rest):
 # syscall and spawn through SYS, so a unit swaps H.SYS for a subclass of H.Sys
 # instead of reaching for a test flag. This section imports what it uses; the
 # header stays the core's.
+import atexit
+import base64
 import collections
 import errno
 import hashlib
 import os
 import re
+import select
 import selectors
 import signal
 import stat
@@ -41008,6 +41039,7 @@ import time
 HELPER_DEADLINE_S={'docs-index':12,'docs-tree':12,'docs-show':7,'docs-fetch':45}
 CALL_S={'ref':5,'list':8,'count':2,'show':5,'onref':2,'fetch':40,'index':5}
 KILL_GRACE_S=2
+REDACT_BUDGET_MS=900
 GIT_STDOUT_CAP=16777216
 STDERR_KEEP_BYTES = 65536
 STDERR_HEAD_BYTES = 512
@@ -41017,6 +41049,48 @@ GROUP_POLL_S = 0.05
 # One finished (or abandoned) call. rc is None only when nothing was spawned,
 # because the helper's deadline was already spent.
 Spawned = collections.namedtuple('Spawned', 'rc out err timed_out overflow')
+
+_REDACT_CLOCK = time.perf_counter
+_REDACT_LIVE = set()
+REDACT_ENV_DROP_PREFIX = 'NODE_'
+REDACT_FILE_MAX = 98304
+
+
+class RedactorFailed(Exception):
+    """No usable docs redactor: the verb answers helper-failed / redactor-failed."""
+
+
+def _rd_read(path):
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+        try:
+            data = os.read(fd, REDACT_FILE_MAX + 1) if stat.S_ISREG(os.fstat(fd).st_mode) else b''
+        finally:
+            os.close(fd)
+    except OSError:
+        data = b''
+    if not data or len(data) > REDACT_FILE_MAX:
+        raise RedactorFailed('not a readable regular file of at most REDACT_FILE_MAX bytes')
+    return data
+
+
+def _redact_poll(p, s):
+    end = _REDACT_CLOCK() + s
+    while p.poll() is None and _REDACT_CLOCK() < end:
+        time.sleep(0.01)
+
+
+def _redact_kill(p):
+    for step in (lambda: os.killpg(p.pid, signal.SIGKILL), lambda: _redact_poll(p, 0.2),
+                 lambda: os.waitpid(p.pid, os.WNOHANG), p.stdin.close, p.stdout.close):
+        try:
+            step()
+        except BaseException:
+            pass
+    _REDACT_LIVE.discard(p)
+
+
+atexit.register(lambda: [_redact_kill(p) for p in list(_REDACT_LIVE)])
 
 
 class Sys(Sys):
@@ -41173,6 +41247,88 @@ class Sys(Sys):
         except OSError as e:
             return e.errno != errno.ESRCH
         return True
+
+    redact_cli = redact_pins = _rd_proc = None
+    redact_budget_ms = REDACT_BUDGET_MS
+    _rd_failed, _rd_spent = False, 0.0
+
+    def _redactor(self):
+        """The verb's one redactor: both files read once and checked, node fed those bytes."""
+        t0 = _REDACT_CLOCK()
+        try:
+            if self.redact_cli is None or self.redact_pins is None:
+                raise RedactorFailed('no redactor')
+            cli, mjs = _rd_read(self.redact_cli), _rd_read(os.path.join(os.path.dirname(self.redact_cli), 'redact.mjs'))
+            if self.redact_pins not in ('-', '%s,%s' % (hashlib.sha256(mjs).hexdigest(), hashlib.sha256(cli).hexdigest())):
+                raise RedactorFailed('not the pinned redactor')
+            src = cli.decode('utf-8')
+            if src.count("'./redact.mjs'") != 1:
+                raise RedactorFailed('not one import of the rules')
+            src = src.replace("'./redact.mjs'", "'data:text/javascript;base64,%s'" % base64.b64encode(mjs).decode('ascii'))
+            if 'redact.mjs' in src or 'import(' in src:
+                raise RedactorFailed('a relative import is left')
+            env = dict((k, v) for k, v in os.environ.items() if not k.startswith(REDACT_ENV_DROP_PREFIX))
+            p = subprocess.Popen(['node', '--input-type=module', '-e', src, '--', self.redact_cli, '--profile', 'docs'],
+                                 stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                 close_fds=True, start_new_session=True, cwd='/', env=env)
+            _REDACT_LIVE.add(p)
+            try:
+                os.set_blocking(p.stdin.fileno(), False)
+            except BaseException:
+                _redact_kill(p)
+                raise
+            return p
+        finally:
+            self._rd_spent += _REDACT_CLOCK() - t0
+
+    def _rd_io(self, fd, write, op):
+        left = self.redact_budget_ms / 1000.0 - self._rd_spent
+        t0 = _REDACT_CLOCK()
+        try:
+            if left <= 0 or not select.select([] if write else [fd], [fd] if write else [], [], left)[1 if write else 0]:
+                raise RedactorFailed('the redactor budget is spent')
+            return op()
+        finally:
+            self._rd_spent += _REDACT_CLOCK() - t0
+
+    def redact(self, s):
+        """s through shared/redact.mjs's docs profile; any failure is a sticky RedactorFailed."""
+        if self._rd_failed:
+            raise RedactorFailed('the redactor failed')
+        try:
+            p = self._rd_proc = self._rd_proc or self._redactor()
+            data = memoryview((json.dumps(s) + '\n').encode('ascii'))
+            while data:
+                data = data[self._rd_io(p.stdin.fileno(), True, lambda d=data[:PIPE_CHUNK]: os.write(p.stdin.fileno(), d)):]
+            buf = b''
+            while not buf.endswith(b'\n'):
+                got = self._rd_io(p.stdout.fileno(), False, lambda: os.read(p.stdout.fileno(), PIPE_CHUNK))
+                if not got or b'\n' in buf:
+                    raise RedactorFailed('the redactor did not answer one line')
+                buf += got
+            out = json.loads(buf.decode('utf-8'))
+            if not isinstance(out, str) or buf.count(b'\n') != 1:
+                raise ValueError('not one JSON string')
+            return out
+        except (RedactorFailed, OSError, ValueError):
+            self._rd_failed = True
+            self.close_redactor()
+            raise RedactorFailed('redactor-failed')
+
+    def close_redactor(self):
+        """Close this verb's redactor: stdin, a wait inside the budget, the group kill. Never raises."""
+        p, self._rd_proc = self._rd_proc, None
+        if p is not None:
+            for step in (p.stdin.close, lambda: _redact_poll(p, max(0.0, min(0.2, self.redact_budget_ms / 1000.0 - self._rd_spent)))):
+                try:
+                    step()
+                except BaseException:
+                    pass
+            _redact_kill(p)
+
+    def reset_redactor(self):
+        self.close_redactor()
+        self._rd_failed, self._rd_spent = False, 0.0
 
 
 SYS = Sys()
@@ -44083,13 +44239,16 @@ def helper_failed_line(verb, t0, exc):
         last = type(exc).__name__
     obj = envelope(verb, t0, False)
     obj['failure'] = 'helper-failed'
-    obj['detail'] = clip_utf8(redact(last), HELPER_FAILED_DETAIL_MAX_BYTES)
+    try:
+        obj['detail'] = 'redactor-failed' if isinstance(exc, RedactorFailed) else clip_utf8(redact(last), HELPER_FAILED_DETAIL_MAX_BYTES)
+    except BaseException:
+        obj['detail'] = 'redactor-failed'
     return line_of(obj)
 
 
 def run(argv):
     """The whole answer for argv = [verb, projects_root, worktrees_root, reg,
-    then the verb's own tokens] (main() passes sys.argv[1:]), as the bytes
+    then the verb's own tokens] (main() passes sys.argv[3:], after the CLI path and the pins), as the bytes
     main() writes: one line WITH its newline. It never raises: a Fail is its
     own failure line and anything else is helper-failed. An argv naming no
     docs verb gets b'', which main() turns into rc 2 with nothing written; the
@@ -44103,6 +44262,14 @@ def run(argv):
     verb = argv[0] if len(argv) > 0 else None
     if not isinstance(verb, str) or verb not in VERBS:
         return b''
+    SYS.reset_redactor()
+    try:
+        return _run_verb(verb, argv)
+    finally:
+        SYS.close_redactor()
+
+
+def _run_verb(verb, argv):
     t0 = None
     try:
         t0 = SYS.monotonic()
@@ -44133,7 +44300,10 @@ def run(argv):
 def main():
     """The one write to stdout: rc 0 with exactly one line, or rc 2 with
     nothing when argv names no docs verb."""
-    out = run(sys.argv[1:])
+    if len(sys.argv) < 3:
+        sys.exit(2)
+    SYS.redact_cli, SYS.redact_pins = sys.argv[1], sys.argv[2]
+    out = run(sys.argv[3:])
     if not out:
         sys.exit(2)
     sys.stdout.buffer.write(out)

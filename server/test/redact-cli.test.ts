@@ -127,6 +127,13 @@ describe('shared/redact-cli.mjs: the shape the helper\'s read-once start relies 
     expect(src().split('redact.mjs').length - 1).toBe(1);
   });
 
+  it('the source node is given, the CLI with redact.mjs inlined as base64, stays under 98 304 bytes (3/4 of one argv string)', () => {
+    // On Linux one argv string holds at most 131 072 bytes (MAX_ARG_STRLEN). The helper refuses a file over 98 304 bytes
+    // (REDACT_FILE_MAX), so growth is seen here long before it fails a verb with E2BIG.
+    const mjs = fs.readFileSync(path.resolve(here, '..', '..', 'shared', 'redact.mjs'));
+    expect(Buffer.byteLength(src()) + mjs.toString('base64').length + 64).toBeLessThan(98_304);
+  });
+
   it('has one import statement, no dynamic import(, no import.meta and no read of process.argv[1]', () => {
     expect(src().split('\n').filter((l) => /^\s*import\b/.test(l))).toHaveLength(1);
     expect(src()).not.toContain('import(');
