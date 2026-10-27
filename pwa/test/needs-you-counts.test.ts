@@ -46,7 +46,7 @@ describe('the needs-you counts (T2d, D-6330)', () => {
 
   it('the runs line: active counts dispatched, working and unknown only; open when none is active', () => {
     expect(runsLineLabel(null)).toBe('—');
-    expect(runsLineLabel([...ACTIVE_RUN_STATES, 'planned', 'awaiting-review'].map(runIn))).toBe('3 active');
+    expect(runsLineLabel(([...ACTIVE_RUN_STATES, 'planned', 'awaiting-review'] as RunState[]).map(runIn))).toBe('3 active');
     expect(runsLineLabel(IDLE_RUN_STATES.filter((s) => s === 'planned' || s === 'merging').map(runIn))).toBe('2 open');
     expect(runsLineLabel(['done', 'failed'].map((s) => runIn(s as RunState)))).toBe('none active');
   });
