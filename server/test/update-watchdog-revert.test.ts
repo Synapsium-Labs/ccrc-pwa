@@ -264,6 +264,9 @@ function watchdogBox(prefix: string, o: { gateFails?: true } = {}): WatchdogBox 
   plant(join(home, 'bin', 'curl'), CURL);
   plant(join(home, 'bin', 'mv'), MV);
   plant(join(home, 'bin', 'node'), NODE);
+  // The node choice (`_ccrc_node_choose`, ccd/ccrc-node) takes this directory as the node's and refuses it without an
+  // executable npm and npx beside it. A rollback runs neither: poisoned and recording, like tmux and gh below.
+  for (const b of ['npm', 'npx']) plant(join(home, 'bin', b), `#!/bin/sh\nprintf '%s\\n' "$*" >> "$HOME/${b}-argv"\nexit 97\n`);
   plant(join(home, 'bin', 'df'), [
     '#!/bin/sh',
     '[ "$1" = "-Pk" ] && [ -n "$2" ] || { echo "fixture df: unexpected argv: $*" >&2; exit 90; }',
@@ -316,6 +319,7 @@ function expectContained(home: string): void {
   expect(existsSync(join(home, 'curl-unexpected')), 'an unmodelled curl call').toBe(false);
   expect(existsSync(join(home, 'tmux-argv')), 'a rollback reached tmux (poisoned, recording)').toBe(false);
   expect(existsSync(join(home, 'gh-argv')), 'a rollback reached gh (poisoned, recording)').toBe(false);
+  for (const b of ['npm', 'npx']) expect(existsSync(join(home, `${b}-argv`)), `a rollback ran ${b} (poisoned, recording)`).toBe(false);
 }
 
 // ── the server side, over a real CoordStore ────────────────────────────────────────────────────────────────────────
