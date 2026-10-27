@@ -1,0 +1,880 @@
+#!/usr/bin/env bash
+# ccd-land-probe — the read-only conflict radar (landing-order spec stage 3). A serialized oneshot, driven by
+# ccd-land-probe.timer every five minutes: one flock, one global pause file, every knob env-overridable for the
+# test harness, the way ccd-tmp-sweep is owned.
+#
+# WHAT IT MEASURES, for each project the operator opted in (one `~/.ccrc/landing/<project>.conf` per project):
+#   - which open PRs conflict with the base, and with each other (`probe`);
+#   - whether the base tip's required checks are green (`main-health`);
+#   - each workspace branch's lineage of clean base merges (`<id>.lineage`);
+#   - the opt-in mirror stage 4 reads, with its own time (`enabled`).
+# The files are JSON with "v": 1, written under `$REG/landing/<project>/`. The formats are the interface the next
+# waves read; the plan's Design section is their grammar.
+#
+# WHY A SIBLING AND NOT A `ccd` VERB. `ccd` makes no network call, and this probe makes two kinds (a fetch and the
+# read-only forge reads), exactly the argument `ccd-pool-sync`'s header makes for its curl. It also needs a deadline
+# on every child and a kill of the child's whole process group, which a bash function cannot give, so the work is one
+# embedded `python3 -I` program behind this bash head. The head owns the arguments, the knobs, the global pause, the
+# one lock and the tool check; fd 9, the lock, stays open across the exec, so the lock holds for the whole tick.
+#
+# READ-ONLY BY CODE, THROUGH THREE LAYERS. This tool never sends a ref anywhere, never lands a PR, and never updates
+# a PR's branch.
+#   1. Every git call goes through one function, `git_ro`. It owns a fixed hardening prefix (no hooks, no fsmonitor,
+#      no optional locks on the project), takes the repository from a variable it owns, never from the caller, and
+#      refuses any subcommand outside two literal allowlists and any caller option that could run code or re-point
+#      the repository. `git_check` is its validator.
+#   2. The forge is reached through exactly two call sites, `gh_get` (a GET) and `gh_pr_list`. Both name the
+#      repository explicitly, and the child's environment drops GH_REPO and GH_HOST.
+#   3. A literal source pin (server/test/ccd-land-probe-readonly.test.ts) holds the file to those shapes, and a
+#      validate-only self-test (CCD_LAND_PROBE_SELFTEST=git_ro) proves `git_ro`'s refusals without running git.
+#
+# THE PER-TICK SCRATCH. The project repository is only READ. A bare repository under $TMPDIR borrows the project's
+# object store as an alternate; it receives the fetch and every object a merge-tree writes. It holds the regular file
+# `.ccd-land-probe-scratch`, and it is removed on every exit path, a SIGTERM included: the one `finally` first kills
+# the process group of the child in flight and waits for it, and only then removes the directory, so no helper is
+# still writing into it. A crashed tick's scratch is cleared by the next tick, but only a real, owned directory
+# holding a regular sentinel file and older than one hour.
+#
+# PATHS
+#   ~/.ccrc/landing/<project>.conf        the operator, by hand: opts <project> in (base=, lineage=on|off)
+#   $REG/land-probe-paused                the operator, by hand: global pause, exit 0 before the lock
+#   $REG/landing/<project>/paused         the operator, by hand: this project is not measured
+#   ~/.ccrc/land-probe.lock               this probe: one tick at a time
+#   $REG/landing/<project>/probe          this probe: the radar
+#   $REG/landing/<project>/main-health    this probe: the base tip's required checks
+#   $REG/landing/<project>/<id>.lineage   this probe: one registry row's workspace-branch lineage
+#   $REG/landing/<project>/enabled        this probe: the mirror of lineage=on
+#   $TMPDIR/ccd-land-probe.<random>/      this probe: the per-tick scratch
+# Nothing in the tree writes the conf or either pause marker; they are the operator's, by hand. $REG is
+# $HOME/.cc-sessions.
+#
+# PORTABILITY. Linux-only by product shape (its runner is a systemd timer, which flock also assumes), written to pass
+# macos-platform.test.ts's GNU-spelling scan anyway: no bare deadline binary, no GNU stat, du or date spelling, no
+# template-less temp name. The Python renames with os.rename.
+set -uo pipefail
+
+REG="$HOME/.cc-sessions"
+PAUSE="$REG/land-probe-paused"
+LOCK="$HOME/.ccrc/land-probe.lock"
+
+_lp_die() { echo "land-probe: $*" >&2; exit 1; }
+
+# Any argument is a usage error.
+[ "$#" -eq 0 ] || { echo "usage: ccd-land-probe" >&2; exit 2; }
+
+_lp_knob() {   # NAME DEFAULT MIN MAX: a whole number in range, or the tick refuses and names the variable
+  local name=$1 def=$2 min=$3 max=$4 v
+  v="${!name-}"
+  [ -n "$v" ] || v=$def
+  [[ "$v" =~ ^[0-9]{1,5}$ ]] || _lp_die "invalid-knob: $name='$v' is not a whole number"
+  v=$((10#$v))
+  { [ "$v" -ge "$min" ] && [ "$v" -le "$max" ]; } || _lp_die "invalid-knob: $name=$v is outside $min..$max"
+  export "$name=$v"
+}
+_lp_knob CCD_LAND_PROBE_FETCH_TIMEOUT 120 1 3600
+_lp_knob CCD_LAND_PROBE_GIT_TIMEOUT 20 1 600
+_lp_knob CCD_LAND_PROBE_GH_TIMEOUT 15 1 600
+_lp_knob CCD_LAND_PROBE_BUDGET 240 10 3600
+_lp_knob CCD_LAND_PROBE_TICK_BUDGET 780 30 840
+_lp_knob CCD_LAND_PROBE_PAIR_HEADS 10 0 10
+_lp_knob CCD_LAND_PROBE_LINEAGE_STEPS 8 0 8
+export CCD_LAND_PROBE_GH="${CCD_LAND_PROBE_GH:-gh}"
+case "${CCD_LAND_PROBE_SELFTEST:-}" in
+  ''|git_ro) ;;
+  *) _lp_die "invalid-knob: CCD_LAND_PROBE_SELFTEST='${CCD_LAND_PROBE_SELFTEST}' is neither unset nor git_ro" ;;
+esac
+
+# The self-test reads no pause, takes no lock and creates no file: it skips this whole block and reaches the exec.
+if [ "${CCD_LAND_PROBE_SELFTEST:-}" != git_ro ]; then
+  [ -e "$PAUSE" ] && { echo "land-probe: paused ($PAUSE exists)"; exit 0; }
+  for _t in git python3 flock; do
+    command -v "$_t" >/dev/null 2>&1 || _lp_die "missing-tool: $_t is not on PATH"
+  done
+  mkdir -p "$HOME/.ccrc"
+  exec 9>"$LOCK" || exit 1
+  flock -n 9 || exit 0
+fi
+
+# The program rides fd 3, so stdin stays the self-test's own input; fd 9 stays open, so the lock holds.
+exec python3 -I /dev/fd/3 3<<'PY'
+import errno
+import json
+import os
+import re
+import shutil
+import signal
+import stat
+import subprocess
+import sys
+import tempfile
+import time
+from collections import namedtuple
+
+HOME = os.environ.get('HOME', '')
+REG = HOME + '/.cc-sessions'
+LANDING = REG + '/landing'
+CONF_DIR = HOME + '/.ccrc/landing'
+PROJECTS = HOME + '/projects'
+TMP_ROOT = os.path.abspath(os.environ.get('TMPDIR') or '/tmp')
+SENTINEL = '.ccd-land-probe-scratch'
+GH = os.environ.get('CCD_LAND_PROBE_GH') or 'gh'
+
+PROJECT_RE = re.compile(r'[A-Za-z0-9][A-Za-z0-9._-]*')
+BASE_RE = re.compile(r'[A-Za-z0-9._/-]+')
+HEX40 = re.compile(r'[0-9a-f]{40}')
+ID_RE = re.compile(r'[A-Za-z0-9._-]+')
+GH_PREFIXES = ('git@github.com:', 'ssh://git@github.com/', 'https://github.com/')
+GH_SLUG_RE = r'[A-Za-z0-9._-]+/[A-Za-z0-9._-]+'
+PR_FIELDS = 'number,headRefName,headRefOid,isCrossRepository'
+PR_LIMIT = 100
+PATHS_CAP = 20
+MIN_PROJECT_S = 10
+STALE_SCRATCH_S = 3600
+
+
+def knob(name, default):
+    try:
+        return int(os.environ.get(name) or default)
+    except ValueError:
+        return default
+
+
+FETCH_T = knob('CCD_LAND_PROBE_FETCH_TIMEOUT', 120)
+GIT_T = knob('CCD_LAND_PROBE_GIT_TIMEOUT', 20)
+GH_T = knob('CCD_LAND_PROBE_GH_TIMEOUT', 15)
+PROJECT_BUDGET = knob('CCD_LAND_PROBE_BUDGET', 240)
+TICK_BUDGET = knob('CCD_LAND_PROBE_TICK_BUDGET', 780)
+PAIR_HEADS = knob('CCD_LAND_PROBE_PAIR_HEADS', 10)
+
+# ---- the git door: the hardening prefix, the two allowlists, the option and key refusals -----------------------
+# git, then the prefix, then (project only) the lock option, then -C <dir>, then (the scratch's fetch only) the fetch
+# prefix, then the caller's arguments. A caller supplies neither the prefix nor the directory.
+GIT_PREFIX = ('--no-pager', '-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false')
+PROJECT_LOCKS = ('--no-optional-locks',)
+FETCH_PREFIX = ('-c', 'gc.auto=0', '-c', 'maintenance.auto=false', '-c', 'transfer.unpackLimit=1', '-c', 'fetch.writeCommitGraph=false')
+FETCH_KEEP = ('GIT_SSH', 'GIT_SSH_COMMAND', 'GIT_ASKPASS', 'GIT_SSL_CAINFO', 'GIT_SSL_CAPATH')
+PROJECT_ALLOW = ('rev-parse', 'rev-list', 'for-each-ref', 'cat-file', 'merge-base', 'count-objects', 'ls-remote', 'config')
+SCRATCH_ALLOW = ('init', 'fetch', 'merge-tree', 'merge-base', 'rev-parse', 'rev-list', 'cat-file')
+ALLOW = {'project': PROJECT_ALLOW, 'scratch': SCRATCH_ALLOW}
+FORMS = {
+    ('project', 'ls-remote'): ['--get-url', 'origin'],
+    ('project', 'config'): ['--get', 'remote.origin.url'],
+}
+OPTION_PREFIXES = ('-c', '--config-env', '-C', '--git-dir', '--work-tree', '--exec', '--upload-pack', '--receive-pack', '-u')
+PINNED_KEYS = ('core.hooksPath', 'core.fsmonitor')
+
+Result = namedtuple('Result', ['rc', 'out'])
+PROJECT_DIR = None   # the project repository: the one directory the 'project' calls name
+SCRATCH = None       # this tick's scratch repository: the one directory the 'scratch' calls name
+CUR = None           # the project budget in force
+TICK = None          # the whole tick's budget
+CHILD = None         # the child in flight, for the finally that kills it
+
+
+class ProbeRefused(Exception):
+    pass
+
+
+class Budget(object):
+    def __init__(self, seconds):
+        self.seconds = float(seconds)
+        self.start = time.monotonic()
+
+    def spent(self):
+        return time.monotonic() - self.start
+
+    def remaining(self):
+        return max(0.0, self.seconds - self.spent())
+
+
+def log(msg):
+    sys.stderr.write('land-probe: ' + msg + '\n')
+    sys.stderr.flush()
+
+
+def now_iso():
+    return time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
+
+
+def git_check(where, args):
+    """Validate one git call. The first rule that applies answers: subcommand, form, option, key."""
+    allow = ALLOW.get(where) if isinstance(where, str) else None
+    if allow is None:
+        raise ProbeRefused('where %s' % (where,))
+    if not isinstance(args, list) or not args or not all(isinstance(a, str) for a in args):
+        raise ProbeRefused('input')
+    sub = args[0]
+    if sub not in allow:
+        raise ProbeRefused('subcommand ' + sub)
+    want = FORMS.get((where, sub))
+    if where == 'scratch' and sub == 'init':
+        want = ['-q', '--bare', SCRATCH]
+    if want is not None and args[1:] != want:
+        raise ProbeRefused('form ' + sub)
+    for a in args[1:]:
+        for p in OPTION_PREFIXES:
+            if a.startswith(p):
+                raise ProbeRefused('option ' + p)
+    for k in PINNED_KEYS:
+        if any(k.lower() in a.lower() for a in args):
+            raise ProbeRefused('key ' + k)
+
+
+def child_env(keep=()):
+    env = dict((k, v) for k, v in os.environ.items() if not k.startswith('GIT_') or k in keep)
+    env['GIT_TERMINAL_PROMPT'] = '0'
+    env['LC_ALL'] = 'C'
+    return env
+
+
+def gh_env():
+    env = dict((k, v) for k, v in os.environ.items() if k not in ('GH_REPO', 'GH_HOST'))
+    env['GH_PROMPT_DISABLED'] = '1'
+    env['LC_ALL'] = 'C'
+    return env
+
+
+def kill_group(proc):
+    """SIGKILL the child's whole process group, reap the child, let go of its pipe."""
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except OSError:
+        pass
+    try:
+        proc.wait(timeout=5)
+    except Exception:
+        pass
+    try:
+        proc.stdout.close()
+    except Exception:
+        pass
+
+
+def kill_inflight():
+    global CHILD
+    proc, CHILD = CHILD, None
+    if proc is not None:
+        kill_group(proc)
+
+
+def run_child(argv, env, timeout):
+    """Run one child to its deadline, capped at the project budget that remains. rc None: a timeout, a spent budget
+    or a spawn failure. The child leads a session of its own, so its deadline kills every process it started."""
+    global CHILD
+    t = float(timeout)
+    if CUR is not None:
+        t = min(t, CUR.remaining())
+    if t <= 0:
+        return Result(None, '')
+    try:
+        proc = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                env=env, start_new_session=True, close_fds=True)
+    except OSError:
+        return Result(None, '')
+    CHILD = proc
+    try:
+        out, _ = proc.communicate(timeout=t)
+    except subprocess.TimeoutExpired:
+        kill_group(proc)
+        CHILD = None
+        return Result(None, '')
+    CHILD = None
+    return Result(proc.returncode, out.decode('utf-8', 'replace'))
+
+
+def git_ro(where, args, timeout):
+    git_check(where, args)
+    if where == 'project':
+        cwd = PROJECT_DIR
+    else:
+        cwd = SCRATCH
+    if cwd is None:
+        raise ProbeRefused('no repository for ' + where)
+    fetch = where == 'scratch' and args[0] == 'fetch'
+    argv = ['git'] + list(GIT_PREFIX)
+    if where == 'project':
+        argv += list(PROJECT_LOCKS)
+    argv += ['-C', cwd]
+    if fetch:
+        argv += list(FETCH_PREFIX)
+    argv += list(args)
+    return run_child(argv, child_env(FETCH_KEEP if fetch else ()), timeout)
+
+
+# ---- the forge door: exactly two read forms -----------------------------------------------------------------------
+def gh_get(path, paginate=False):
+    argv = [GH, 'api', '--method', 'GET', path]
+    if paginate:
+        argv = argv + ['--paginate']
+    return run_child(argv, gh_env(), GH_T)
+
+
+def gh_pr_list(slug, base):
+    argv = [GH, 'pr', 'list', '--repo', slug, '--state', 'open', '--base', base, '--limit', str(PR_LIMIT), '--json', PR_FIELDS]
+    return run_child(argv, gh_env(), GH_T)
+
+
+# ---- small pure helpers --------------------------------------------------------------------------------------------
+def repo_slug(url):
+    """_gh_repo_slug's rule, statement for statement: exactly one of the three GitHub prefixes, one trailing .git
+    stripped, exactly two ASCII segments, no dot segment, no owner that starts with a dot."""
+    if not url:
+        return None
+    u = url[:-len('.git')] if url.endswith('.git') else url
+    rest = None
+    for pre in GH_PREFIXES:
+        if u.startswith(pre):
+            rest = u[len(pre):]
+            break
+    if rest is None:
+        return None
+    if not re.fullmatch(GH_SLUG_RE, rest):
+        return None
+    owner, name = rest.split('/')
+    for seg in (owner, name):
+        if seg in ('.', '..'):
+            return None
+    if owner.startswith('.'):
+        return None
+    return rest
+
+
+def is_registry_id(s):
+    return len(s) <= 255 and ID_RE.fullmatch(s) is not None and not s.startswith('.') and not s.startswith('-')
+
+
+def merge_answer(a, b):
+    """One merge-tree of two commits in the scratch: clean, conflict with its paths, or unmeasured with a why."""
+    if CUR is not None and CUR.remaining() <= 0:
+        return {'state': 'unmeasured', 'why': 'budget'}
+    r = git_ro('scratch', ['merge-tree', '--write-tree', '--name-only', '--no-messages', a, b], GIT_T)
+    if r.rc is None:
+        return {'state': 'unmeasured', 'why': 'timeout'}
+    if r.rc not in (0, 1):
+        return {'state': 'unmeasured', 'why': 'rc-%d' % r.rc}
+    lines = r.out.split('\n')
+    if not HEX40.fullmatch(lines[0]):
+        return {'state': 'unmeasured', 'why': 'no-tree'}
+    if r.rc == 0:
+        return {'state': 'clean'}
+    paths = []
+    for ln in lines[1:]:
+        if ln and ln not in paths:
+            paths.append(ln)
+    return {'state': 'conflict', 'paths': paths[:PATHS_CAP], 'pathsCut': len(paths) > PATHS_CAP}
+
+
+# ---- files: real, owned directories only; tmp then rename; deletion of the probe's own names only ------------------
+def real_dir(path):
+    try:
+        st = os.lstat(path)
+    except OSError:
+        return False
+    return stat.S_ISDIR(st.st_mode) and st.st_uid == os.getuid()
+
+
+def ensure_dir(path, label):
+    """True when path is a real directory this user owns, created (0755) when absent. Anything else is skipped with
+    one log line, and nothing under it is touched."""
+    try:
+        st = os.lstat(path)
+    except FileNotFoundError:
+        try:
+            os.mkdir(path, 0o755)
+        except OSError as e:
+            log('skip %s: cannot create the directory (%s)' % (label, errno.errorcode.get(e.errno, 'error')))
+            return False
+        return real_dir(path)
+    except OSError as e:
+        log('skip %s: cannot read the directory (%s)' % (label, errno.errorcode.get(e.errno, 'error')))
+        return False
+    if not stat.S_ISDIR(st.st_mode) or st.st_uid != os.getuid():
+        log('skip %s: not a real directory owned by this user' % label)
+        return False
+    return True
+
+
+def write_json(dirpath, name, doc):
+    """Create a tmp file exclusively beside the final name, write it whole, fsync it, rename it into place."""
+    if '/' in name or not real_dir(dirpath):
+        log('skip write of %s: the directory is not a real, owned directory' % name)
+        return
+    tmp = None
+    try:
+        fd, tmp = tempfile.mkstemp(dir=dirpath, prefix='.lp.')
+        with os.fdopen(fd, 'w', encoding='utf-8') as f:
+            json.dump(doc, f, separators=(',', ':'))
+            f.write('\n')
+            f.flush()
+            os.fsync(f.fileno())
+        os.chmod(tmp, 0o644)
+        os.rename(tmp, dirpath + '/' + name)
+        tmp = None
+    except OSError as e:
+        log('write of %s failed (%s)' % (name, errno.errorcode.get(e.errno, 'error')))
+    finally:
+        if tmp is not None:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+
+
+def remove_own(dirpath, name):
+    """Delete a regular file named `enabled` or `*.lineage` in a real, owned directory, and nothing else."""
+    if '/' in name or not (name == 'enabled' or name.endswith('.lineage')):
+        return
+    if not real_dir(dirpath):
+        return
+    p = dirpath + '/' + name
+    try:
+        if stat.S_ISREG(os.lstat(p).st_mode):
+            os.unlink(p)
+    except OSError:
+        pass
+
+
+def read_small(path, cap=4096):
+    """The bytes of a regular file, opened without following a symlink; None when it is anything else."""
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except OSError:
+        return None
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            return None
+        return os.read(fd, cap + 1)
+    except OSError:
+        return None
+    finally:
+        os.close(fd)
+
+
+def reg_field(rid, field):
+    data = read_small(REG + '/' + rid + '.' + field)
+    if data is None or len(data) > 4096:
+        return None
+    try:
+        text = data.decode('utf-8')
+    except UnicodeDecodeError:
+        return None
+    text = text.rstrip('\n')
+    return None if '\n' in text else text
+
+
+def project_rows(project):
+    """Every registry row of the project: (id, branch), the branch None when it cannot be read."""
+    rows = []
+    try:
+        names = sorted(os.listdir(REG))
+    except OSError:
+        return rows
+    for n in names:
+        if not n.endswith('.project'):
+            continue
+        rid = n[:-len('.project')]
+        if not is_registry_id(rid) or reg_field(rid, 'project') != project:
+            continue
+        rows.append((rid, reg_field(rid, 'branch')))
+    return rows
+
+
+def qualifying(rows):
+    """(the rows that qualify for a lineage file, whether every row was decided). A row qualifies when its branch
+    starts with ws/ and refs/heads/<branch> resolves in the project repository."""
+    out = []
+    complete = True
+    for rid, branch in rows:
+        if branch is None or not branch.startswith('ws/'):
+            continue
+        r = git_ro('project', ['rev-parse', '--verify', '-q', 'refs/heads/' + branch], GIT_T)
+        if r.rc is None:
+            complete = False
+        elif r.rc == 0 and HEX40.fullmatch(r.out.strip()):
+            out.append((rid, branch, r.out.strip()))
+    return out, complete
+
+
+def parse_conf(path):
+    """(conf, None), or (None, a fixed reason word). Never the bytes."""
+    try:
+        if not stat.S_ISREG(os.lstat(path).st_mode):
+            return None, 'not-regular'
+    except OSError:
+        return None, 'unreadable'
+    data = read_small(path)
+    if data is None or len(data) > 4096:
+        return None, 'unreadable'
+    try:
+        text = data.decode('utf-8')
+    except UnicodeDecodeError:
+        return None, 'not-utf8'
+    conf = {'base': 'main', 'lineage': 'off'}
+    seen = set()
+    for line in text.split('\n'):
+        if line.strip() == '' or line.startswith('#'):
+            continue
+        key, eq, value = line.partition('=')
+        if not eq:
+            return None, 'malformed-line'
+        if key not in ('base', 'lineage'):
+            return None, 'unknown-key'
+        if key in seen:
+            return None, 'repeated-key'
+        seen.add(key)
+        if key == 'base':
+            if not BASE_RE.fullmatch(value) or value.startswith('-'):
+                return None, 'bad-value'
+        elif value not in ('on', 'off'):
+            return None, 'bad-value'
+        conf[key] = value
+    return conf, None
+
+
+# ---- the scratch ---------------------------------------------------------------------------------------------------
+def make_scratch():
+    d = tempfile.mkdtemp(prefix='ccd-land-probe.', dir=TMP_ROOT)
+    fd = os.open(d + '/' + SENTINEL, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    try:
+        os.write(fd, b'ccd-land-probe scratch\n')
+    finally:
+        os.close(fd)
+    return d
+
+
+def scratch_kib(path):
+    total = 0
+    for root, dirs, files in os.walk(path, followlinks=False):
+        for n in dirs + files:
+            try:
+                total += os.lstat(root + '/' + n).st_blocks * 512
+            except OSError:
+                pass
+    return total // 1024
+
+
+def remove_scratch(path):
+    try:
+        st = os.lstat(path)
+    except OSError:
+        return
+    if not stat.S_ISDIR(st.st_mode) or st.st_uid != os.getuid():
+        log('scratch is not a real directory owned by this user; left alone')
+        return
+    try:
+        shutil.rmtree(path)
+    except OSError:
+        log('scratch could not be removed; the next tick clears it')
+
+
+def clear_stale_scratch():
+    """Remove each $TMPDIR/ccd-land-probe.* that is a real, owned directory holding a regular sentinel file and is
+    older than one hour. A symlink, a directory without the sentinel, a symlinked sentinel: left alone."""
+    try:
+        names = os.listdir(TMP_ROOT)
+    except OSError:
+        return
+    cutoff = time.time() - STALE_SCRATCH_S
+    for n in names:
+        if not n.startswith('ccd-land-probe.'):
+            continue
+        p = TMP_ROOT + '/' + n
+        try:
+            st = os.lstat(p)
+            if not stat.S_ISDIR(st.st_mode) or st.st_uid != os.getuid() or st.st_mtime >= cutoff:
+                continue
+            if not stat.S_ISREG(os.lstat(p + '/' + SENTINEL).st_mode):
+                continue
+        except OSError:
+            continue
+        shutil.rmtree(p, ignore_errors=True)
+        log('cleared a stale scratch')
+
+
+# ---- one project ---------------------------------------------------------------------------------------------------
+def store_counts():
+    empty = {'count': None, 'size': None, 'inPack': None, 'packs': None}
+    r = git_ro('project', ['count-objects', '-v'], GIT_T)
+    if r.rc != 0:
+        return empty
+    vals = {}
+    for ln in r.out.splitlines():
+        k, _, v = ln.partition(': ')
+        if v.isdigit():
+            vals[k] = int(v)
+    return {'count': vals.get('count'), 'size': vals.get('size'), 'inPack': vals.get('in-pack'), 'packs': vals.get('packs')}
+
+
+def open_heads(slug, base):
+    """(heads, cut, ok): the open same-repository PRs of the base, newest PR number first."""
+    r = gh_pr_list(slug, base)
+    if r.rc != 0:
+        return [], False, False
+    try:
+        rows = json.loads(r.out)
+        if not isinstance(rows, list):
+            return [], False, False
+        heads = []
+        for row in rows:
+            n, name, oid, cross = row['number'], row['headRefName'], row['headRefOid'], row['isCrossRepository']
+            if type(n) is not int or n < 1 or not isinstance(name, str) or not isinstance(oid, str) \
+                    or not HEX40.fullmatch(oid) or not isinstance(cross, bool):
+                return [], False, False
+            if not cross:
+                heads.append({'pr': n, 'head': oid, 'branch': name})
+    except (ValueError, KeyError, TypeError):
+        return [], False, False
+    heads.sort(key=lambda h: -h['pr'])
+    return heads, len(rows) >= PR_LIMIT, True
+
+
+def fetch_into_scratch(base_ref, heads):
+    """Make the scratch, borrow the project's objects, and fetch the base and every head into it in one call.
+    (None, base sha) on success; (why, None) on a failure."""
+    global SCRATCH
+    SCRATCH = make_scratch()
+    if git_ro('scratch', ['init', '-q', '--bare', SCRATCH], GIT_T).rc != 0:
+        return 'fetch-failed', None
+    try:
+        info = SCRATCH + '/objects/info'
+        os.makedirs(info, exist_ok=True)
+        fd = os.open(info + '/alternates', os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        try:
+            os.write(fd, (PROJECT_DIR + '/.git/objects\n').encode('utf-8'))
+        finally:
+            os.close(fd)
+    except OSError:
+        return 'fetch-failed', None
+    u = git_ro('project', ['ls-remote', '--get-url', 'origin'], GIT_T)
+    url = u.out.strip() if u.rc == 0 else ''
+    if not url or url.startswith('-'):
+        return 'fetch-failed', None
+    specs = ['+refs/heads/%s:refs/probe/base' % base_ref]
+    specs += ['+refs/pull/%d/head:refs/probe/pull/%d' % (h['pr'], h['pr']) for h in heads]
+    f = git_ro('scratch', ['fetch', '--no-tags', '--no-write-fetch-head', '--no-recurse-submodules', '--', url] + specs, FETCH_T)
+    if f.rc is None:
+        return 'fetch-timeout', None
+    if f.rc != 0:
+        return 'fetch-failed', None
+    b = git_ro('scratch', ['rev-parse', '--verify', '-q', 'refs/probe/base^{commit}'], GIT_T)
+    if b.rc != 0 or not HEX40.fullmatch(b.out.strip()):
+        return 'fetch-failed', None
+    return None, b.out.strip()
+
+
+def probe_doc(project, base_ref, base_sha, state, why, heads, heads_cut, pairs, pair_heads, pairs_cut, store, kib):
+    doc = {'v': 1, 'project': project, 'at': now_iso(), 'state': state}
+    if why is not None:
+        doc['why'] = why
+    doc['base'] = {'ref': base_ref, 'sha': base_sha} if base_sha else None
+    doc['heads'] = heads
+    doc['headsCut'] = heads_cut
+    doc['pairs'] = pairs
+    doc['pairHeads'] = pair_heads
+    doc['pairsCut'] = pairs_cut
+    doc['store'] = store
+    doc['scratch'] = {'sizeKiB': kib}
+    doc['elapsedMs'] = int(CUR.spent() * 1000)
+    return doc
+
+
+def health_doc(project, sha, state, why):
+    return {'v': 1, 'project': project, 'at': now_iso(), 'sha': sha, 'state': state, 'why': why,
+            'required': [], 'failing': [], 'pending': []}
+
+
+def lineage_unmeasured(project, rid, branch, tip, why):
+    return {'v': 1, 'project': project, 'id': rid, 'at': now_iso(), 'state': 'unmeasured', 'why': why,
+            'branch': branch, 'tip': tip, 'base': None, 'chain': [], 'stop': None}
+
+
+def prune_lineage(ldir, keep):
+    """Remove each regular *.lineage file whose id no longer names a qualifying row."""
+    try:
+        names = os.listdir(ldir)
+    except OSError:
+        return
+    for n in names:
+        if n.endswith('.lineage') and n[:-len('.lineage')] not in keep:
+            remove_own(ldir, n)
+
+
+def measure(base_sha, heads, rows):
+    """Base x each head, then the bound heads pairwise. Returns (heads out, pairHeads, pairs, pairsCut)."""
+    bound = {}
+    for rid, branch in rows:
+        if branch is not None:
+            bound.setdefault(branch, []).append(rid)
+    out = []
+    for h in heads:
+        ids = bound.get(h['branch'], [])
+        out.append({'pr': h['pr'], 'head': h['head'], 'branch': h['branch'], 'id': ids[0] if len(ids) == 1 else None,
+                    'base': merge_answer(base_sha, h['head'])})
+    bound_heads = [h for h in out if h['id'] is not None]
+    chosen = bound_heads[:PAIR_HEADS]
+    pairs = []
+    for i in range(len(chosen)):
+        for j in range(i + 1, len(chosen)):
+            hi, lo = chosen[i], chosen[j]
+            a, b = (lo, hi) if lo['pr'] < hi['pr'] else (hi, lo)
+            ans = merge_answer(a['head'], b['head'])
+            pair = {'a': a['pr'], 'b': b['pr']}
+            pair.update(ans)
+            pairs.append(pair)
+    return out, [h['pr'] for h in chosen], pairs, len(bound_heads) > len(chosen)
+
+
+def probe_project(project, conf):
+    global PROJECT_DIR, SCRATCH, CUR
+    if not ensure_dir(LANDING, 'landing') or not ensure_dir(LANDING + '/' + project, project):
+        return
+    ldir = LANDING + '/' + project
+    PROJECT_DIR = PROJECTS + '/' + project
+    CUR = Budget(min(PROJECT_BUDGET, TICK.remaining()))
+    base_ref = conf['base']
+    SCRATCH = None
+    kib = None
+    try:
+        store_before = store_counts()
+        rows = project_rows(project)
+        r = git_ro('project', ['config', '--get', 'remote.origin.url'], GIT_T)
+        slug = repo_slug(r.out.rstrip('\n')) if r.rc == 0 else None
+        heads, heads_cut, gh_ok = [], False, False
+        base_sha = None
+        if slug is None:
+            fail = ('repo-unreadable', 'gh-failed', 'repo-unreadable')
+        else:
+            heads, heads_cut, gh_ok = open_heads(slug, base_ref)
+            why, base_sha = fetch_into_scratch(base_ref, heads if gh_ok else [])
+            fail = (why, 'fetch-failed', 'fetch-failed') if why else None
+        store = {'before': store_before, 'after': None}
+        if fail:
+            write_json(ldir, 'probe', probe_doc(project, base_ref, None, 'unmeasured', fail[0], [], False, [], [], False, store, None))
+            write_json(ldir, 'main-health', health_doc(project, None, 'unmeasured', fail[1]))
+            quals, complete = qualifying(rows)
+            for rid, branch, tip in quals:
+                write_json(ldir, rid + '.lineage', lineage_unmeasured(project, rid, branch, tip, fail[2]))
+            if complete:
+                prune_lineage(ldir, set(q[0] for q in quals))
+            doc = None
+        else:
+            if gh_ok:
+                hs, pair_heads, pairs, pairs_cut = measure(base_sha, heads, rows)
+                doc = probe_doc(project, base_ref, base_sha, 'measured', None, hs, heads_cut, pairs, pair_heads, pairs_cut, store, None)
+            else:
+                doc = probe_doc(project, base_ref, base_sha, 'unmeasured', 'gh-failed', [], False, [], [], False, store, None)
+            write_json(ldir, 'probe', doc)
+            if CUR.remaining() <= 0:
+                write_json(ldir, 'main-health', health_doc(project, base_sha, 'unmeasured', 'budget'))
+            else:
+                write_json(ldir, 'main-health', health_doc(project, base_sha, 'unmeasured', 'no-required-set'))
+            quals, complete = qualifying(rows)
+            if complete:
+                prune_lineage(ldir, set(q[0] for q in quals))
+        if conf['lineage'] == 'on':
+            write_json(ldir, 'enabled', {'v': 1, 'project': project, 'at': now_iso()})
+        else:
+            remove_own(ldir, 'enabled')
+        store['after'] = store_counts()
+        if SCRATCH is not None:
+            kib = scratch_kib(SCRATCH)
+        if doc is not None:
+            doc['store'] = store
+            doc['scratch'] = {'sizeKiB': kib}
+            doc['elapsedMs'] = int(CUR.spent() * 1000)
+            write_json(ldir, 'probe', doc)
+        else:
+            write_json(ldir, 'probe', probe_doc(project, base_ref, None, 'unmeasured', fail[0], [], False, [], [], False, store, kib))
+    finally:
+        kill_inflight()
+        if SCRATCH is not None:
+            remove_scratch(SCRATCH)
+            SCRATCH = None
+        PROJECT_DIR = None
+
+
+def handle_project(project):
+    conf_path = CONF_DIR + '/' + project + '.conf'
+    ldir = LANDING + '/' + project
+    conf, why = parse_conf(conf_path)
+    if conf is None:
+        log('conf-invalid %s: %s' % (project, why))
+        remove_own(ldir, 'enabled')
+        return
+    if real_dir(ldir) and os.path.lexists(ldir + '/paused'):
+        log('paused %s' % project)
+        remove_own(ldir, 'enabled')
+        return
+    if conf['lineage'] != 'on':
+        remove_own(ldir, 'enabled')
+    if TICK.remaining() < MIN_PROJECT_S:
+        log('tick-budget: %s not started' % project)
+        return
+    try:
+        if not stat.S_ISDIR(os.lstat(PROJECTS + '/' + project + '/.git').st_mode):
+            raise OSError(errno.ENOTDIR, 'not a directory')
+    except OSError:
+        log('not-a-checkout %s' % project)
+        remove_own(ldir, 'enabled')
+        return
+    try:
+        probe_project(project, conf)
+    except Exception as e:
+        log('project-error %s: %s' % (project, type(e).__name__))
+
+
+def sweep_unconfigured():
+    """Every directory under $REG/landing/ with no conf at all has its enabled removed."""
+    try:
+        names = sorted(os.listdir(LANDING))
+    except OSError:
+        return
+    for n in names:
+        if PROJECT_RE.fullmatch(n) and not os.path.lexists(CONF_DIR + '/' + n + '.conf'):
+            remove_own(LANDING + '/' + n, 'enabled')
+
+
+def on_signal(signum, frame):
+    raise SystemExit(128 + signum)
+
+
+def main():
+    global TICK
+    TICK = Budget(TICK_BUDGET)
+    signal.signal(signal.SIGTERM, on_signal)
+    signal.signal(signal.SIGINT, on_signal)
+    clear_stale_scratch()
+    try:
+        entries = sorted(os.listdir(CONF_DIR))
+    except OSError:
+        entries = []
+    for ent in entries:
+        if ent.endswith('.conf') and PROJECT_RE.fullmatch(ent[:-len('.conf')]):
+            handle_project(ent[:-len('.conf')])
+    sweep_unconfigured()
+    return 0
+
+
+def selftest():
+    """Read JSON lines [where, args] from stdin; print allowed, or refused <reason>, using git_check only."""
+    global SCRATCH
+    SCRATCH = '/scratch'
+    for line in sys.stdin:
+        if not line.strip():
+            continue
+        try:
+            where, args = json.loads(line)
+            git_check(where, args)
+            print('allowed')
+        except ProbeRefused as e:
+            print('refused ' + str(e))
+        except (ValueError, TypeError):
+            print('refused input')
+    return 0
+
+
+if __name__ == '__main__':
+    if os.environ.get('CCD_LAND_PROBE_SELFTEST') == 'git_ro':
+        sys.exit(selftest())
+    sys.exit(main())
+PY
