@@ -8,8 +8,8 @@ import type { AccountUsage } from '../../shared/api';
 import { CommandLayer } from '../src/command/CommandLayer';
 import { AccountsStrip } from '../src/fleet/AccountsStrip';
 import { ACCOUNTS_DOOR_LABEL } from '../src/fleet/laneWords';
-import { api } from '../src/lib/api';
 import { navigate } from '../src/lib/router';
+import { useFleetStore } from '../src/stores/fleet';
 import { declValue, ruleIn } from './cssRule';
 import { isSpecifier, parseTs } from './literalWalker';
 import { TEST_ROSTER } from './rosterFixture';
@@ -24,18 +24,18 @@ const acct = (over: Partial<AccountUsage>): AccountUsage => ({
   fiveRolledOver: false, sevenRolledOver: false, disabled: false, authDead: false, ...over,
 });
 
-/** Stubs GET /api/accounts the way every test in this file needs it stubbed —
- *  `projected` is a fixed, irrelevant fixture because AccountsStrip never
- *  reads it (see useProjectedHome for the component that does). */
+/** Puts an accounts answer in the fleet store, where the strip reads it: the store is the one `/api/accounts` reader
+ *  and the strip runs no poll (C8, D-6440). `act`, because a case may call it after the strip is mounted. */
 const stubAccounts = (accounts: AccountUsage[]): void => {
-  vi.spyOn(api, 'accounts').mockResolvedValue({
-    accounts,
-    projected: { wrapper: 'claude', score: 0 },
-    roster: TEST_ROSTER,
-  });
+  act(() => { useFleetStore.setState({ usage: accounts, roster: TEST_ROSTER }); });
 };
 
-afterEach(() => { cleanup(); vi.restoreAllMocks(); navigate('/'); });
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+  navigate('/');
+  useFleetStore.setState({ usage: null, roster: [] });
+});
 
 describe('AccountsStrip', () => {
   it('a rolled-over window reads 0% with its countdown', async () => {
@@ -44,15 +44,10 @@ describe('AccountsStrip', () => {
     // forces five to 0), so an inferred zero always comes with a past reset
     // stamp and a measured one with a window still running. Without the stamps
     // this test would assert on data no server could produce.
-    vi.spyOn(api, 'accounts').mockResolvedValue({
-      accounts: [
-        acct({ wrapper: 'claude', five: 0, fiveResetAt: nowSec - 60, fiveRolledOver: true, seven: 57, sevenRolledOver: false }),
-        acct({ wrapper: 'claude9', five: 0, fiveResetAt: nowSec + 9000, fiveRolledOver: false, seven: 93, sevenRolledOver: false }),
-      ],
-      // The strip ignores it; the route always sends it (see useProjectedHome).
-      projected: { wrapper: 'claude', score: 57 },
-      roster: TEST_ROSTER,
-    });
+    stubAccounts([
+      acct({ wrapper: 'claude', five: 0, fiveResetAt: nowSec - 60, fiveRolledOver: true, seven: 57, sevenRolledOver: false }),
+      acct({ wrapper: 'claude9', five: 0, fiveResetAt: nowSec + 9000, fiveRolledOver: false, seven: 93, sevenRolledOver: false }),
+    ]);
     render(<AccountsStrip />);
     // claude's 5h rolled over (R48: it reads 0%, its sr-only words say it reset and the 0% is inferred);
     // claude9's 5h was really measured at zero, which speaks no "inferred".
@@ -69,11 +64,7 @@ describe('AccountsStrip', () => {
   });
 
   it('a measured window prints its percentage once: no sr-only span and nothing aria-hidden beside it', async () => {
-    vi.spyOn(api, 'accounts').mockResolvedValue({
-      accounts: [acct({ wrapper: 'claude', five: 40, fiveResetAt: nowSec + 9000, fiveRolledOver: false, seven: 57, sevenRolledOver: false })],
-      projected: { wrapper: 'claude', score: 57 },
-      roster: TEST_ROSTER,
-    });
+    stubAccounts([acct({ wrapper: 'claude', five: 40, fiveResetAt: nowSec + 9000, fiveRolledOver: false, seven: 57, sevenRolledOver: false })]);
     render(<AccountsStrip />);
     const pct = (await screen.findByText('57%')).closest('.acct-pct') as HTMLElement;
     expect(pct.querySelector('.sr-only')).toBeNull();
@@ -231,54 +222,38 @@ describe('AccountsStrip', () => {
   });
 
   it('the stop follows its lane through a re-sort, and falls to the first card when that lane leaves', async () => {
-    // Fake timers from before the mount, so the strip's 20 s poll interval is the fake one.
-    vi.useFakeTimers({ shouldAdvanceTime: true });
-    try {
-      const first = [acct({ wrapper: 'lane-a', five: 10 }), acct({ wrapper: 'lane-b', five: 20 }), acct({ wrapper: 'lane-c', five: 30 })];
-      const reply = (accounts: AccountUsage[]) => ({ accounts, projected: { wrapper: 'lane-a', score: 0 }, roster: TEST_ROSTER });
-      const spy = vi.spyOn(api, 'accounts').mockResolvedValue(reply(first));
-      const { container } = render(<AccountsStrip />);
-      await screen.findByText('lane-a');
-      const stops = (): string[] => cardsOf(container).filter((c) => c.tabIndex === 0).map(nameOf);
-      const byName = (n: string): HTMLElement => cardsOf(container).find((c) => nameOf(c) === n)!;
-      act(() => { byName('lane-a').focus(); });
-      fireEvent.keyDown(byName('lane-a'), { key: 'ArrowRight' });   // lane-b holds the stop
-      expect(stops()).toEqual(['lane-b']);
-      // lane-b becomes the fullest on the next poll: it moves to the end, and the stop stays on it.
-      spy.mockResolvedValue(reply([first[0]!, acct({ wrapper: 'lane-b', five: 90 }), first[2]!]));
-      await act(async () => { await vi.advanceTimersByTimeAsync(20_100); });
-      expect(cardsOf(container).map(nameOf)).toEqual(['lane-a', 'lane-c', 'lane-b']);
-      expect(stops()).toEqual(['lane-b']);
-      // lane-b leaves: the stop falls to the first card.
-      spy.mockResolvedValue(reply([first[0]!, first[2]!]));
-      await act(async () => { await vi.advanceTimersByTimeAsync(20_100); });
-      expect(cardsOf(container).map(nameOf)).toEqual(['lane-a', 'lane-c']);
-      expect(stops()).toEqual(['lane-a']);
-    } finally {
-      vi.useRealTimers();
-    }
+    const first = [acct({ wrapper: 'lane-a', five: 10 }), acct({ wrapper: 'lane-b', five: 20 }), acct({ wrapper: 'lane-c', five: 30 })];
+    stubAccounts(first);
+    const { container } = render(<AccountsStrip />);
+    await screen.findByText('lane-a');
+    const stops = (): string[] => cardsOf(container).filter((c) => c.tabIndex === 0).map(nameOf);
+    const byName = (n: string): HTMLElement => cardsOf(container).find((c) => nameOf(c) === n)!;
+    act(() => { byName('lane-a').focus(); });
+    fireEvent.keyDown(byName('lane-a'), { key: 'ArrowRight' });   // lane-b holds the stop
+    expect(stops()).toEqual(['lane-b']);
+    // lane-b becomes the fullest on the next poll: it moves to the end, and the stop stays on it.
+    stubAccounts([first[0]!, acct({ wrapper: 'lane-b', five: 90 }), first[2]!]);
+    expect(cardsOf(container).map(nameOf)).toEqual(['lane-a', 'lane-c', 'lane-b']);
+    expect(stops()).toEqual(['lane-b']);
+    // lane-b leaves: the stop falls to the first card.
+    stubAccounts([first[0]!, first[2]!]);
+    expect(cardsOf(container).map(nameOf)).toEqual(['lane-a', 'lane-c']);
+    expect(stops()).toEqual(['lane-a']);
   });
 
   it('focus stays on the same lane\'s card through a re-sort, not only its tab stop', async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
-    try {
-      const first = [acct({ wrapper: 'lane-a', five: 10 }), acct({ wrapper: 'lane-b', five: 20 }), acct({ wrapper: 'lane-c', five: 30 })];
-      const reply = (accounts: AccountUsage[]) => ({ accounts, projected: { wrapper: 'lane-a', score: 0 }, roster: TEST_ROSTER });
-      const spy = vi.spyOn(api, 'accounts').mockResolvedValue(reply(first));
-      const { container } = render(<AccountsStrip />);
-      await screen.findByText('lane-a');
-      const byName = (n: string): HTMLElement => cardsOf(container).find((c) => nameOf(c) === n)!;
-      act(() => { byName('lane-b').focus(); });
-      expect(document.activeElement).toBe(byName('lane-b'));
-      // lane-b becomes the fullest on the next poll: it moves from the middle to last, and focus must go with it.
-      spy.mockResolvedValue(reply([first[0]!, acct({ wrapper: 'lane-b', five: 90 }), first[2]!]));
-      await act(async () => { await vi.advanceTimersByTimeAsync(20_100); });
-      expect(cardsOf(container).map(nameOf)).toEqual(['lane-a', 'lane-c', 'lane-b']);
-      expect(document.activeElement).toBe(byName('lane-b'));
-      expect(byName('lane-b').tabIndex).toBe(0);
-    } finally {
-      vi.useRealTimers();
-    }
+    const first = [acct({ wrapper: 'lane-a', five: 10 }), acct({ wrapper: 'lane-b', five: 20 }), acct({ wrapper: 'lane-c', five: 30 })];
+    stubAccounts(first);
+    const { container } = render(<AccountsStrip />);
+    await screen.findByText('lane-a');
+    const byName = (n: string): HTMLElement => cardsOf(container).find((c) => nameOf(c) === n)!;
+    act(() => { byName('lane-b').focus(); });
+    expect(document.activeElement).toBe(byName('lane-b'));
+    // lane-b becomes the fullest on the next poll: it moves from the middle to last, and focus must go with it.
+    stubAccounts([first[0]!, acct({ wrapper: 'lane-b', five: 90 }), first[2]!]);
+    expect(cardsOf(container).map(nameOf)).toEqual(['lane-a', 'lane-c', 'lane-b']);
+    expect(document.activeElement).toBe(byName('lane-b'));
+    expect(byName('lane-b').tabIndex).toBe(0);
   });
 
   it('arrow keys pressed on All accounts leave the cards\' tab stop where it was', async () => {
@@ -364,15 +339,12 @@ describe('AccountsStrip', () => {
     });
 
     it('stays a tappable link before the first poll has landed (and if it never does), naming that state distinctly from a landed-empty poll', () => {
-      // A promise that never resolves — the same shape a permanently-failing
-      // /api/accounts leaves the component in, since the poller's `.catch`
-      // never sets state either. Asserted synchronously, right after mount,
-      // with nothing awaited: this is the render BEFORE any microtask from
-      // the fetch could have run. This is a DIFFERENT fact from "the poll
-      // landed and reported zero accounts" (below) — collapsing the two into
-      // one string would erase the difference between "still waiting" and
-      // "asked, and got nothing back".
-      vi.spyOn(api, 'accounts').mockReturnValue(new Promise(() => {}));
+      // The store before any good answer (`usage: null`) — the same state a
+      // permanently-failing /api/accounts leaves it in, since a failed read
+      // writes nothing. This is a DIFFERENT fact from "the poll landed and
+      // reported zero accounts" (below) — collapsing the two into one string
+      // would erase the difference between "still waiting" and "asked, and
+      // got nothing back".
       render(<AccountsStrip />);
       expect(screen.getByRole('link', { name: 'account usage — open accounts' })).toBeInTheDocument();
       expect(screen.getByText(/checking accounts…/i)).toBeInTheDocument();
