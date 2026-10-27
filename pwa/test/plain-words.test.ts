@@ -124,10 +124,7 @@ export interface Visible {
 /** Every operator-visible string in `source`, by position (see the header). `only` limits the Record tables read to the
  *  named keys (refusalWords.ts's two `dialog-open` sentences). */
 export function visibleStrings(file: string, text?: string, only?: readonly string[]): Visible[] {
-  // The shared walker parses TSX for the UI files; api.ts has generic calls that TSX grammar cannot read.
-  const src = path.basename(file) === 'api.ts'
-    ? ts.createSourceFile(file, text ?? readFileSync(file, 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TS)
-    : parseTs(file, text);
+  const src = parseTs(file, text);
   const found: Visible[] = [];
   const seen = new Set<ts.Node>();
   const add = (n: ts.Node, position: string): void => {
