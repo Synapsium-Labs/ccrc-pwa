@@ -174,6 +174,8 @@ describe('AccountsStrip', () => {
   it('with lanes to show the strip is a group named over every live lane, no link and no tab stop; with none it is the go-accounts door', async () => {
     // The fullest lane is the last in sort order, so a name read over a subset would name another lane.
     const lanes = ['a', 'b', 'c', 'd', 'e', 'f'].map((x, i) => acct({ wrapper: `lane-${x}`, five: 5 + i * 10, seven: null }));
+    // Six lanes fold to four on a phone (S5b), and this case counts every card: it reads the stored choice, expanded.
+    window.localStorage.setItem('ccrc-accounts-strip', 'expanded');
     stubAccounts([...lanes, acct({ wrapper: 'lane-off', five: 99, seven: null, disabled: true })]);
     const { container } = render(<AccountsStrip />);
     const group = await screen.findByRole('group', { name: 'account usage, highest lane-f 55%' });
