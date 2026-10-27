@@ -366,8 +366,9 @@ export interface FrameCost {
 }
 
 /** What `frameCost` has measured so far, filled in place, one entry per COMPLETED window (the idle one first), so a
- *  caller still has it when the attempt fails: a window whose drain or reads fail is not in it. The caller creates it
- *  (`{ windows: [] }`). */
+ *  caller still has it when the attempt fails: a window whose drain or reads fail is not in it. When the attempt fails
+ *  with `window-overrun`, the last entry is the overrun window, whose `spanMs` is past `gapMs + SPAN_SLACK_MS`. The caller
+ *  creates it (`{ windows: [] }`). */
 export interface FrameCostRecord {
   readonly windows: {
     readonly cost: Cost; readonly spanMs: number; readonly deferred: number; readonly drainQuiet: boolean;
@@ -376,10 +377,11 @@ export interface FrameCostRecord {
   }[];
 }
 
-/** `frameCost`'s options. `during` runs inside each frame's window, after the frame is sent and before the wait, with
- *  the frame's index; `quiet: false` skips the drain's quiet wait. Both are the self-test's, never a gate case's.
- *  `record` is filled window by window (`FrameCostRecord`); a gate case passes one and keeps it whether the attempt
- *  passes or fails. */
+/** `frameCost`'s options. `during` runs inside each window, after the frame is sent (the idle window sends none) and
+ *  before the wait, with the frame's index, or -1 for the idle window; `quiet: false` skips the drain's quiet wait. Both
+ *  are the self-test's, never a gate case's. `record` is filled window by window (`FrameCostRecord`, whose last entry of
+ *  a `window-overrun` attempt is the overrun window); a gate case passes one and keeps it whether the attempt passes or
+ *  fails. */
 export interface FrameCostOptions {
   readonly during?: (index: number) => Promise<void>;
   readonly quiet?: boolean;
@@ -477,10 +479,8 @@ export async function frameCost(
       const a = await read();
       app.mark('readA');
       const from = app.events.length;
-      if (frame !== null) {
-        app.send(path, frame.frame);
-        await options.during?.(frame.index);
-      }
+      if (frame !== null) app.send(path, frame.frame);
+      await options.during?.(frame === null ? -1 : frame.index);
       await app.page.waitForTimeout(gapMs);
       const b = await read();
       const spanMs = performance.now() - began;

@@ -146,13 +146,17 @@ async function boot(view: AppView, route: string): Promise<{ app: OpenedApp; row
 }
 
 // ---- the harness self-test (R104) -----------------------------------------------------------------------------------
-// The gates below rest on `frameCost` deferring every fixture `/api` answer out of its measured windows, so these two
-// cases pin that, by the ORDER of the harness's own log (`OpenedApp.events`), never by elapsed time. The request is
+// The gates below rest on `frameCost` deferring every fixture `/api` answer out of its measured windows, so the first
+// two cases pin that, by the ORDER of the harness's own log (`OpenedApp.events`), never by elapsed time. The request is
 // started inside window 0 by the test and never awaited there (a held request awaited in its own window would
 // deadlock). Its fulfilment then waits on a gate the log releases: at the drain's in-flight wait (`drainWait`), or, so
 // the case cannot hang, at the next `readA`. The release is armed only once this request's `fulfil-start` is logged,
 // so the `readA`s before it cannot release it; the first case asserts that the released event comes after that
-// `fulfil-start`.
+// `fulfil-start`. The last two pin the `window-overrun` refusal (a frame window, then the idle one).
+//
+// `window-overrun` is a failure mode of EVERY case here, the two older ones too (gap 500 ms, so a window past 1500 ms):
+// that is the ruling, not an oversight. A window that spans that long on these cases names a host too starved to
+// measure on, and their gaps are not raised nor are they exempt.
 
 type Page$ = { selftest?: Promise<unknown>; stuck?: Promise<unknown>; parked?: Promise<unknown> };
 const SELFTEST = '/api/selftest';
@@ -305,6 +309,25 @@ describe('the deferred fixture answers (R104): the harness self-test', () => {
       await app.ctx.close();
     }
   }, 90_000);
+
+  it('the idle window that overruns its span fails the attempt with window-overrun, and the record keeps it', async () => {
+    const { app } = await boot({ skin: REFINED, theme: PHOSPHOR, width: 1920 }, '/');
+    try {
+      const record: FrameCostRecord = { windows: [] };
+      // `during` runs inside the idle window too, with index -1, so a wait there past the gap and the slack overruns it.
+      const attempt = frameCost(app, '/ws/fleet', changing().slice(0, 1), 500, {
+        quiet: false, record,
+        during: async (index) => { if (index === -1) await app.page.waitForTimeout(500 + SPAN_SLACK_MS + 500); },
+      });
+      await expect(attempt).rejects.toThrow(/window-overrun: window idle spanned \d+ ms/);
+      // The idle window is the first and only one: the attempt fails before window 0 starts.
+      expect(record.windows, 'the failed attempt kept the overrun idle window and nothing after it').toHaveLength(1);
+      expect(record.windows[0]!.spanMs, `the idle window spanned past its 500 ms gap + ${SPAN_SLACK_MS} ms slack: ${JSON.stringify(record.windows)}`)
+        .toBeGreaterThan(500 + SPAN_SLACK_MS);
+    } finally {
+      await app.ctx.close();
+    }
+  }, 90_000);
 });
 
 // ---- the gate ------------------------------------------------------------------------------------------------------
@@ -312,7 +335,11 @@ describe('the deferred fixture answers (R104): the harness self-test', () => {
 // step and the CDP reads) before its GAP_MS, so the budgets are set from that, not from a bare GAP_MS per window, with
 // 30 s for the visit and that slack: the ceiling case has 16 windows, the ratio case 21, a measurement case 17. A
 // window that spans past GAP_MS + SPAN_SLACK_MS fails its case at once (`window-overrun`), so the budgets only bound a
-// case that does not.
+// case that does not. A window that passes can still span up to GAP_MS + SPAN_SLACK_MS, SPAN_SLACK_MS more than the
+// GAP_MS in WINDOW_MAX_MS. So a case in which every window hit both drain caps and the full slack would run up to
+// SPAN_SLACK_MS (plus the quiet wait's last step and the CDP reads) per window past its budget: about 21 s of the 30 s
+// slack in the ratio case, which also has to cover the visit. That is not reachable in practice and is not measured; the
+// budgets are unchanged.
 const WINDOW_MAX_MS = INFLIGHT_CAP_MS + QUIET_CAP_MS + GAP_MS;
 const CEILING_CASE_MS = 30_000 + (1 + FRAMES) * WINDOW_MAX_MS;
 const RATIO_CASE_MS = 30_000 + (1 + FRAMES + IDENTICAL_FRAMES) * WINDOW_MAX_MS;
@@ -330,7 +357,9 @@ function keep(task: { meta: object }, record: FrameCostRecord): void {
 
 /** The self-test of the record's keeping. A case that outlives its own timeout is reported by vitest before its body's
  *  `finally` can run, so the first case below ends in vitest's timeout (`it.fails` makes that its expected outcome) with
- *  one window in its record, and the second reads what the first case's `meta` kept. It needs no browser. */
+ *  one window in its record, and the second reads what the first case's `meta` kept. It needs no browser. The second
+ *  case reads the first through `task.suite.tasks[0]`, so it needs both cases to run, in this order, with no retry,
+ *  shuffle or concurrency (the default config). */
 describe('a timed-out case keeps its record (advisory 1)', () => {
   it.fails('a case that outlives its own timeout', async (ctx) => {
     const record: FrameCostRecord = { windows: [] };
@@ -343,12 +372,16 @@ describe('a timed-out case keeps its record (advisory 1)', () => {
     const first = task.suite?.tasks[0];
     const kept = first?.meta as { frameCost?: { spans: number[] } } | undefined;
     expect(kept?.frameCost?.spans, 'the timed-out case kept the window it recorded').toHaveLength(1);
+    // `it.fails` passes on any throw, so check that the first case ran out its 1500 ms timeout and did not end otherwise.
+    expect(first?.result?.duration ?? 0, 'the first case ran at least its 1500 ms timeout').toBeGreaterThanOrEqual(1500);
   });
 });
 
 /** Register `keep` on the case's finish hook, which vitest runs when the case passes, fails or times out, before the case
- *  is reported; a `finally` in the body runs too late on a timeout, because the body is never resumed. The hook reads the
- *  record when it runs, so it keeps every window measured by then. */
+ *  is reported; a `finally` in the body runs too late on a timeout: vitest reports the case when its timeout fires, and
+ *  the body's `finally` runs only when the awaits it is waiting on settle (in a gate case, later, after the case is
+ *  reported; in the self-test below, never, because its promise never settles). The hook reads the record when it runs,
+ *  so it keeps every window measured by then. */
 function keepOnFinish(ctx: { task: { meta: object }; onTestFinished: (fn: () => void) => void }, record: FrameCostRecord): void {
   ctx.onTestFinished(() => { keep(ctx.task, record); });
 }
