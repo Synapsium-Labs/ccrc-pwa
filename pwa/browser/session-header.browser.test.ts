@@ -5,7 +5,8 @@
 // with EVERY chip (a long branch, a long model id, a coordinator) and a main checkout show no chip text ellipsized and
 // no chip text running out of its pill (below 900 on Refined inside the rail's own sideways scroll, on Instrument
 // wrapped); from 900 the header's three doors show their words beside the glyph, below 900 they stay glyphs at 44 px;
-// and Instrument's interim header (the shared `SessionHeader`) at 1280 is no taller than it was on the base.
+// and Instrument's interim header (the shared `SessionHeader`) at 1280 is no taller than it was on the base, and at
+// 900 no taller than the 188 px D-7163 accepts.
 //
 // Run: `( cd pwa && CCRC_CHROME=<a Chrome or Chromium binary> ./node_modules/.bin/vitest run --config vitest.browser.config.ts browser/session-header.browser.test.ts )`.
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -25,6 +26,10 @@ const named = (v: AppView): string => `${v.skin}, ${v.theme}, ${v.width}px`;
  *  (47b5704e2, 2026-10-27) before any T3c source edit, with `WS_DESK`: the `.chat-head` border box's height in CSS px, by palette.
  *  Never raise a number here: a taller header is fixed in the stylesheet. */
 const BASE_HEAD_PX: Readonly<Record<string, number>> = { [PHOSPHOR]: 108.25, light: 108.25 };
+/** The same header at exactly 900, where the detail pane is narrowest and the worded doors squeeze the chip column:
+ *  measured 187.63 px in both palettes at 2ca0659b5 (139.63 on the base). D-7163 accepts that growth; this bound stops
+ *  it creeping (review 1078 F2). Never raise it: a taller header is fixed in the stylesheet. */
+const HEAD_900_PX = 188;
 
 // ---- the fixture: neutral names -----------------------------------------------------------------------------------
 const NOW = 1_792_362_479;
@@ -180,17 +185,23 @@ describe('the doors carry words at the desk and stay glyphs on a phone', () => {
   }
 });
 
-describe("Instrument's interim header at 1280 is no taller than on the base", () => {
-  for (const theme of THEMES) {
-    it(`${theme}`, async () => {
-      const { ctx, page, errors } = await openSession({ skin: INSTRUMENT, theme, width: 1280 }, WS_DESK.id);
-      try {
-        const h = await page.evaluate(() => document.querySelector<HTMLElement>('.chat-head')!.getBoundingClientRect().height);
-        expect(h, `.chat-head height in ${theme} (base ${BASE_HEAD_PX[theme]})`).toBeLessThanOrEqual(BASE_HEAD_PX[theme]!);
-        expect(errors).toEqual([]);
-      } finally {
-        await ctx.close();
-      }
-    });
+describe("Instrument's interim header at 1280 is no taller than on the base, and at 900 no taller than D-7163 accepts", () => {
+  const ceilings: { width: number; px: (theme: string) => number; why: string }[] = [
+    { width: 1280, px: (theme) => BASE_HEAD_PX[theme]!, why: 'base' },
+    { width: 900, px: () => HEAD_900_PX, why: 'D-7163' },
+  ];
+  for (const { width, px, why } of ceilings) {
+    for (const theme of THEMES) {
+      it(`${width}px, ${theme}`, async () => {
+        const { ctx, page, errors } = await openSession({ skin: INSTRUMENT, theme, width }, WS_DESK.id);
+        try {
+          const h = await page.evaluate(() => document.querySelector<HTMLElement>('.chat-head')!.getBoundingClientRect().height);
+          expect(h, `.chat-head height at ${width} in ${theme} (${why} ${px(theme)})`).toBeLessThanOrEqual(px(theme));
+          expect(errors).toEqual([]);
+        } finally {
+          await ctx.close();
+        }
+      });
+    }
   }
 });
