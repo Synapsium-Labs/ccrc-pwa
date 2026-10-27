@@ -6179,7 +6179,8 @@ _exp_ddns_units() {
   # ── THE DARWIN ARM: one plist where systemd has a unit and a timer ───────
   # systemd splits "what to run" (.service) from "when" (.timer). launchd has
   # one job with a `StartInterval`, so the pair collapses into a single plist
-  # — and `OnCalendar=*:0/5` becomes 300 seconds, the same five minutes.
+  # — and its value is the period `_timer_period_s` reads from the shipped
+  # timer (D-7053), the same five minutes.
   #
   # `Persistent=true` HAS NO COUNTERPART, and this is the one place the two
   # differ in kind: systemd runs a missed timer as soon as the box is back,
@@ -6213,7 +6214,7 @@ _exp_ddns_units() {
     <string>set -a; . '$CCRC_EXPOSURE_FILE'; set +a; exec /usr/bin/curl -fsS --max-time 30 "https://www.duckdns.org/update?domains=\${CCRC_DDNS_DOMAIN}&amp;token=\${CCRC_DDNS_TOKEN}&amp;ip="</string>
   </array>
   <key>RunAtLoad</key><true/>
-  <key>StartInterval</key><integer>300</integer>
+  <key>StartInterval</key><integer>$period</integer>
   <key>ProcessType</key><string>Background</string>
 </dict>
 </plist>

@@ -130,10 +130,8 @@ describe('the cadence census, on a fixture tree', () => {
 });
 
 describe('the cadence census, on the real tree', () => {
-  it('launchdCadenceLiterals: the ddns job\'s literal 300, the one at the base', () => {
-    expect(launchdCadenceLiterals().map((s) => `${s.file} ${s.text.trim()}`)).toEqual([
-      'ccd/ccrc <key>StartInterval</key><integer>300</integer>',
-    ]);
+  it('launchdCadenceLiterals: none (1 at the base, the ddns job\'s literal 300)', () => {
+    expect(launchdCadenceLiterals().map((s) => `${s.file} ${s.text.trim()}`)).toEqual([]);
   });
 
   it('ddnsTranscriptCadences: three at the base, two Darwin and one Linux', () => {
