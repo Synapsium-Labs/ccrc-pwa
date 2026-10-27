@@ -74,6 +74,8 @@ function fixtureRoot(home: string, engines: string): string {
   mkdirSync(join(root, 'server'), { recursive: true });
   copyFileSync(INSTALL_SH, join(root, 'install.sh'));
   chmodSync(join(root, 'install.sh'), 0o755);
+  mkdirSync(join(root, 'ccd'), { recursive: true });
+  copyFileSync(join(REPO, 'ccd', 'ccrc-node'), join(root, 'ccd', 'ccrc-node'));
   writeFileSync(join(root, 'server', 'package.json'),
     JSON.stringify({ name: 'ccrc-server', engines: { node: engines } }));
   return root;
@@ -94,32 +96,14 @@ function fixtureBin(home: string): string {
 function plantNpmRecorder(home: string): void {
   writeFileSync(join(fixtureBin(home), 'npm'),
     '#!/bin/sh\nprintf \'%s\\n\' "$*" >> "$HOME/npm-argv"\nexit 0\n', { mode: 0o755 });
+  writeFileSync(join(fixtureBin(home), 'npx'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
 }
 
-/** A `node` whose `-e` scripts run for real EXCEPT the version-comparison one
- *  (install.sh's second `node -e`, matched on the `process.versions.node`
- *  substring it alone contains): that one is run under a `--require`d shim
- *  that overrides `process.versions.node` to `fakeVersion` first. The
- *  floor-reading `-e` (matched on `engines.node`, which only it contains) is
- *  passed straight to the real interpreter, so the floor it reports is the
- *  REAL one from the fixture's `package.json` — the thing under test is the
- *  COMPARISON, not the read. */
+/** A `node` stub whose `--version` answers `fakeVersion`: ccd/ccrc-node (which install.sh sources) asks the
+ *  node it finds for exactly that, beside the npm/npx the recorder plants. */
 function plantLowNode(home: string, fakeVersion: string): void {
-  const bin = fixtureBin(home);
-  const shim = join(home, 'fake-node-version.cjs');
-  writeFileSync(shim,
-    `Object.defineProperty(process.versions, 'node', `
-    + `{ value: ${JSON.stringify(fakeVersion)}, writable: true, configurable: true });\n`);
-  writeFileSync(join(bin, 'node'), [
-    '#!/bin/sh',
-    `REAL=${JSON.stringify(REAL_NODE)}`,
-    `SHIM=${JSON.stringify(shim)}`,
-    'case "$2" in',
-    '  *engines.node*) exec "$REAL" "$@" ;;',
-    '  *process.versions.node*) exec "$REAL" --require "$SHIM" "$@" ;;',
-    'esac',
-    'exec "$REAL" "$@"',
-  ].join('\n'), { mode: 0o755 });
+  writeFileSync(join(fixtureBin(home), 'node'),
+    `#!/bin/sh\n[ "$1" = --version ] && echo ${fakeVersion}\nexit 0\n`, { mode: 0o755 });
 }
 
 /** `opts.bareFromRoot` invokes as `bash install.sh …` with `cwd: root` and a
@@ -145,11 +129,11 @@ describe('install.sh: the node floor, before anything is built', () => {
     const home = mkTmp('install-sh-lowfloor-');
     const root = fixtureRoot(home, REAL_FLOOR_RANGE);
     plantNpmRecorder(home);
-    plantLowNode(home, '1.0.0');
+    plantLowNode(home, 'v1.0.0');
     const r = runInstallSh(root, [], home, fixtureBin(home));
     expect(r.code).toBe(1);
     expect(r.stderr).toMatch(
-      new RegExp(`^install\\.sh: node 1\\.0\\.0 is below the required ${REAL_FLOOR.replace(/\./g, '\\.')}$`, 'm'));
+      new RegExp(`^install\\.sh: node v1\\.0\\.0 at .* is below the floor \\(>=${REAL_FLOOR.replace(/\./g, '\\.')}\\)$`, 'm'));
     expect(existsSync(join(home, 'npm-argv')), 'npm ran before the refusal').toBe(false);
   });
 
@@ -162,8 +146,28 @@ describe('install.sh: the node floor, before anything is built', () => {
     const r = runInstallSh(root, [], home, fixtureBin(home));
     expect(r.code).toBe(1);
     expect(r.stderr).toMatch(
-      /^install\.sh: node is not installed — install Node \(nodesource or nvm\), then re-run$/m);
+      /^install\.sh: node is not installed \(floor >=.*\) and nvm was not found — install Node \(nodesource or nvm\), then re-run$/m);
     expect(existsSync(join(home, 'npm-argv')), 'npm ran before the refusal').toBe(false);
+  });
+
+  // The chosen node, not the first on PATH: no node on PATH at all, an nvm tree under NVM_DIR. The recording
+  // npm stub notes which node is first on PATH when the build starts, then fails to stop the run there.
+  it('builds with the nvm node when none is on PATH, and says which', () => {
+    const home = mkTmp('install-sh-nvm-');
+    const root = fixtureRoot(home, REAL_FLOOR_RANGE);
+    const bin = fixtureBin(home);
+    const nvm = join(home, 'nvm');
+    const vbin = join(nvm, 'versions', 'node', `v${REAL_FLOOR}`, 'bin');
+    mkdirSync(vbin, { recursive: true });
+    writeFileSync(join(nvm, 'nvm.sh'), `nvm() { [ "$1 $2" = "version default" ] && echo v${REAL_FLOOR}; return 0; }\n`);
+    writeFileSync(join(vbin, 'node'), `#!/bin/sh\n[ "$1" = --version ] && echo v${REAL_FLOOR}\nexit 0\n`, { mode: 0o755 });
+    writeFileSync(join(vbin, 'npx'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+    writeFileSync(join(vbin, 'npm'),
+      '#!/bin/sh\nprintf \'%s\\n\' "$0" >> "$HOME/npm-argv"\nexit 1\n', { mode: 0o755 });
+    expect(existsSync(join(bin, 'node'))).toBe(false);
+    const r = runInstallSh(root, [], home, bin, { env: { NVM_DIR: nvm } });
+    expect(r.code).not.toBe(0);
+    expect(readFileSync(join(home, 'npm-argv'), 'utf8').trim().split('\n')[0]).toBe(join(vbin, 'npm'));
   });
 
   it('-h/--help prints usage and exits 0 before touching node or npm', () => {
@@ -231,7 +235,7 @@ describe('install.sh: the node floor, before anything is built', () => {
     symlinkSync(REAL_NODE, join(bin, 'node'));
     const r = runInstallSh(root, [], home, bin);
     expect(r.code).toBe(1);
-    expect(r.stderr).toMatch(/^install\.sh: node [0-9.]+ is below the required 99\.0\.0$/m);
+    expect(r.stderr).toMatch(/^install\.sh: node v[0-9.]+ at .* is below the floor \(>=99\.0\.0\)$/m);
     expect(existsSync(join(home, 'npm-argv')), 'npm ran before the refusal').toBe(false);
   });
 });

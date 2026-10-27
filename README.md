@@ -211,12 +211,15 @@ Download it, or use `bash <(curl -fsSL …)`.
   last login. `ccrc install` runs `loginctl enable-linger` itself and, where that needs a
   privilege it lacks, prints the `sudo` command and carries on.
 - **Node on the user manager's `PATH`, not only your shell's.** `ccrc.service` and
-  `ccrc-agent.service` start `/usr/bin/env node` in the systemd user manager's
-  environment: a distro or NodeSource package (`/usr/bin`, `/usr/local/bin`) is found; a
-  Node installed only through nvm is not, until its `bin` directory is on the manager's
-  `PATH` (an `~/.config/environment.d/*.conf` fragment).
-  `systemctl --user show-environment` shows what the units see; an install whose service
-  cannot find `node` fails at the step that waits for it to stay up.
+  `ccrc-agent.service` start `node` by name in the systemd user manager's environment, which
+  does not see a Node that lives in nvm's version directory. So `ccrc install` (and `install.sh`,
+  `ccrc update` and `deploy/deploy.sh`) chooses the node, nvm-aware: nvm's `default` alias when
+  it meets `engines.node`, else the newest installed version that does, else (an interactive
+  install only) `nvm install --lts`; without nvm, the `node` on your `PATH` if it meets the
+  floor. It links that node into `~/.local/libexec/ccrc/node-bin` and writes
+  `~/.config/environment.d/50-ccrc-node.conf` so the manager finds it. `ccrc doctor`'s
+  `node-path` check measures this and `ccrc doctor --fix` re-chooses among installed versions.
+  `systemctl --user show-environment` shows what the units see.
 - **A C/C++ build toolchain and the npm registry.** An install that places a new tree,
   and so every update, runs `npm ci --omit=dev` on the box — release mode included — and
   `node-pty` ships no Linux prebuilt binary, so it compiles there through `node-gyp`
