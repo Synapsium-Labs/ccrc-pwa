@@ -693,6 +693,7 @@ describe('layer 4 — the update op is not an exec path, and its spawn port has 
     const end = /\ninterface PtyEntry/.exec(rest);
     expect(end, 'no end after makeUpdateSpawn').not.toBeNull();
     expect(code(rest.slice(0, end!.index))).not.toMatch(EXEC_PATH);
+    expect(code(readFileSync(path.join(SRC_DIR, '..', '..', 'shared', 'spawn.mjs'), 'utf8')), 'the update spawner (shared/spawn.mjs, D-7055) names no exec-surface symbol').not.toMatch(EXEC_PATH);
     expect(caseBody(handleReq, 'exec')).toMatch(/isExecAllowed\(/);
   });
 
