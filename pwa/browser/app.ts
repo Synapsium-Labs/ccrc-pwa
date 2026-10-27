@@ -9,6 +9,7 @@ import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { performance } from 'node:perf_hooks';
 import type { Browser, BrowserContext, Page, WebSocketRoute } from 'playwright-core';
 import { SKIN_STORAGE_KEY, THEME_STORAGE_KEY } from '@ccrc/ui';
 import type { FleetSession } from '../../shared/api';
@@ -346,9 +347,11 @@ export const backlogFrame = (events: readonly object[]): object => ({
 
 export interface Cost { readonly taskMs: number; readonly scriptMs: number }
 export interface FrameCost {
-  /** One window of `gapMs` with no frame sent: what the page costs doing nothing. */
+  /** One window with no frame sent: what the page costs doing nothing. A window runs from its first Chrome read to its
+   *  second (see `frameCost`), so it is at least `gapMs` long and has no upper bound. */
   readonly idle: Cost;
-  /** One entry per frame: the main thread's TaskDuration and ScriptDuration over the `gapMs` after it was sent. */
+  /** One entry per frame: the main thread's TaskDuration and ScriptDuration over that frame's window, which starts
+   *  just before the frame is sent and lasts at least `gapMs` (`spans` has the measured length). */
   readonly frames: readonly Cost[];
   readonly median: Cost;
   readonly mean: Cost;
@@ -356,13 +359,16 @@ export interface FrameCost {
   readonly deferred: readonly number[];
   /** Per window, the idle one first: whether the drain before it saw the main thread go quiet. */
   readonly drainQuiet: readonly boolean[];
+  /** Per window, the idle one first: its wall length in ms on the test side, from just before the first read to just
+   *  after the second. At least `gapMs`; under host load it has been measured at 10 to 17 s. */
+  readonly spans: readonly number[];
 }
 
 /** What `frameCost` has measured so far, filled in place, one entry per COMPLETED window (the idle one first), so a
  *  caller still has it when the attempt fails: a window whose drain or reads fail is not in it. The caller creates it
  *  (`{ windows: [] }`). */
 export interface FrameCostRecord {
-  readonly windows: { readonly cost: Cost; readonly deferred: number; readonly drainQuiet: boolean }[];
+  readonly windows: { readonly cost: Cost; readonly spanMs: number; readonly deferred: number; readonly drainQuiet: boolean }[];
 }
 
 /** `frameCost`'s options. `during` runs inside each frame's window, after the frame is sent and before the wait, with
@@ -399,10 +405,12 @@ const QUIET_STEPS = 3;
 const QUIET_TASK_MS = 1;
 
 /** Send each of `frames` to the newest socket on `path`, `gapMs` apart, and read Chrome's `TaskDuration` and
- *  `ScriptDuration` (`Performance.getMetrics`, seconds) before and after each window. One idle window of `gapMs` with
- *  no frame is measured first, on the page as it stands before `frames`: it is not matched to a page that has taken
- *  them (an identical frame re-sent after many changes is measured against this one idle window). Nothing runs in the
- *  page: the meter is a CDP session on the test side.
+ *  `ScriptDuration` (`Performance.getMetrics`, seconds) before and after each window. A window runs from its first
+ *  read to its second: the frame's send, `during`, the wait of `gapMs` and the second CDP round trip. That is at least
+ *  `gapMs` and has no upper bound (a loaded host stretches the waits and the reads), so `FrameCost.spans` records each
+ *  window's measured length. One idle window with no frame is measured first, on the page as it stands before
+ *  `frames`: it is not matched to a page that has taken them (an identical frame re-sent after many changes is
+ *  measured against this one idle window). Nothing runs in the page: the meter is a CDP session on the test side.
  *
  *  The fixture's `/api` answers are deferred out of the windows (the operator's R104 contract): every request is
  *  parked from the start, and a DRAIN before each window (the idle one too) answers the parked ones, waits for their
@@ -418,6 +426,7 @@ export async function frameCost(
   const cdp = await app.ctx.newCDPSession(app.page);
   const deferred: number[] = [];
   const drainQuiet: boolean[] = [];
+  const spans: number[] = [];
   app.holdApi();
   try {
     await cdp.send('Performance.enable');
@@ -448,6 +457,7 @@ export async function frameCost(
     const window = async (frame: { readonly frame: unknown; readonly index: number } | null): Promise<Cost> => {
       const wentQuiet = await drain();
       drainQuiet.push(wentQuiet);
+      const began = performance.now();
       const a = await read();
       app.mark('readA');
       const from = app.events.length;
@@ -457,17 +467,19 @@ export async function frameCost(
       }
       await app.page.waitForTimeout(gapMs);
       const b = await read();
+      const spanMs = performance.now() - began;
       app.mark('readB');
       const intercepted = app.events.slice(from).filter((e) => e.kind === 'intercept').length;
       deferred.push(intercepted);
+      spans.push(spanMs);
       const cost = { taskMs: b.taskMs - a.taskMs, scriptMs: b.scriptMs - a.scriptMs };
-      options.record?.windows.push({ cost, deferred: intercepted, drainQuiet: wentQuiet });
+      options.record?.windows.push({ cost, spanMs, deferred: intercepted, drainQuiet: wentQuiet });
       return cost;
     };
     const idle = await window(null);
     const costs: Cost[] = [];
     for (const [index, frame] of frames.entries()) costs.push(await window({ frame, index }));
-    return { idle, frames: costs, ...summarize(costs), deferred, drainQuiet };
+    return { idle, frames: costs, ...summarize(costs), deferred, drainQuiet, spans };
   } finally {
     app.releaseApi();
     await cdp.detach().catch(() => { /* the context closing first is fine */ });

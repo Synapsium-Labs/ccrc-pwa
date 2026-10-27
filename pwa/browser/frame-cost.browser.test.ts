@@ -1,7 +1,9 @@
 // What one `/ws/fleet` frame costs the page's main thread, in a real Chrome over the production build (D-6438; desktop
 // polish Task C6). The fleet socket sends the WHOLE session list on every change, and the app re-renders from it, so a
 // fleet of 80 rows with about nine changing per frame is the load this file puts on it, and `frameCost`
-// (`browser/app.ts`) reads Chrome's `TaskDuration` over the 2 s after each frame (CDP `Performance.getMetrics`).
+// (`browser/app.ts`) reads Chrome's `TaskDuration` over a window around each frame (CDP `Performance.getMetrics`). A
+// window runs from the first read to the second: the frame's send, the 2 s wait and the second read. That is at least
+// 2 s and has no upper bound under host load, so `FrameCost.spans` records each window's measured length.
 // Since the operator's R104 contract, `frameCost` defers the fixture's `/api` answers into an unmeasured drain before
 // each window, so the gates measure a window in which the harness fulfils no fixture answer. That changed what the
 // gates measure; it does not isolate the frame: the page's handling of an answer delivered in a drain, and its
@@ -24,8 +26,8 @@
 // passing test's console lines, and its `default` one otherwise, which prints them (`--silent=false` alone does not
 // change that). `--reporter=verbose` or `--reporter=default` prints them in both. Add
 // `CCRC_RENDERS=<a directory outside the work tree>` for the screenshots. Each gate case also writes its per-window
-// figures (script, task, deferred requests, whether the drain went quiet) into its `task.meta.frameCost`, which the
-// JSON reporter keeps.
+// figures (script, task, span, deferred requests, whether the drain went quiet) into its `task.meta.frameCost`, which
+// the JSON reporter keeps, whether the attempt passes or fails.
 import { mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -179,11 +181,15 @@ describe('the deferred fixture answers (R104): the harness self-test', () => {
         if (armed === null || released !== null) return;
         if ((e.kind === 'drainWait' && e.inFlight >= 1) || e.kind === 'readA') { released = e; release(); }
       });
-      await frameCost(app, '/ws/fleet', changing().slice(0, 2), 500, {
+      const cost = await frameCost(app, '/ws/fleet', changing().slice(0, 2), 500, {
         quiet: false,
         during: async (index) => { if (index === 0) await startFetch(app, 'selftest', SELFTEST); },
       });
       stop();
+      // A window runs from its readA to its readB (the send, `during`, the gap and the second read), so its span is at
+      // least the gap and has no upper bound; `spans` records it, the idle window first.
+      expect(cost.spans.length, 'one span per window: the idle one and the two frames').toBe(1 + 2);
+      expect(cost.spans.every((x) => x >= 500), `every window spans at least its 500 ms gap: ${cost.spans.map((x) => x.toFixed(1)).join(', ')}`).toBe(true);
       expect(ofPath(app, 'intercept', SELFTEST)).toHaveLength(1);
       expect(ofPath(app, 'fulfil-start', SELFTEST)).toHaveLength(1);
       const intercept = ofPath(app, 'intercept', SELFTEST)[0]!;
@@ -249,8 +255,8 @@ describe('the deferred fixture answers (R104): the harness self-test', () => {
       // The stuck request starts in window 0, so the drain before window 1 fails: the record keeps what was measured
       // before it, the idle window and window 0, though `frameCost` returned nothing.
       expect(record.windows, 'the failed attempt kept the idle window and window 0 (the drain before window 1 failed)').toHaveLength(2);
-      expect(record.windows.every((w) => Number.isFinite(w.cost.taskMs) && Number.isFinite(w.cost.scriptMs)),
-        `each kept window has a measured cost: ${JSON.stringify(record.windows)}`).toBe(true);
+      expect(record.windows.every((w) => Number.isFinite(w.cost.taskMs) && Number.isFinite(w.cost.scriptMs) && w.spanMs >= 500),
+        `each kept window has a measured cost and a span of at least the gap: ${JSON.stringify(record.windows)}`).toBe(true);
       // The parked request reached the harness while the drain waited, and the finally's release (the last flush, the
       // only one after it) answered it.
       const waited = asked as HarnessEvent | null;
@@ -276,7 +282,7 @@ describe('the deferred fixture answers (R104): the harness self-test', () => {
 
 // ---- the gate ------------------------------------------------------------------------------------------------------
 // Each window can now take a drain of up to INFLIGHT_CAP_MS + QUIET_CAP_MS (and a little more: the quiet wait's last
-// step and the CDP reads) before its GAP_MS, so the budgets are set from that, not from the old 2 s windows, with
+// step and the CDP reads) before its GAP_MS, so the budgets are set from that, not from a bare GAP_MS per window, with
 // 30 s for the visit and that slack: the ceiling case has 16 windows, the ratio case 21, a measurement case 17.
 const WINDOW_MAX_MS = INFLIGHT_CAP_MS + QUIET_CAP_MS + GAP_MS;
 const CEILING_CASE_MS = 30_000 + (1 + FRAMES) * WINDOW_MAX_MS;
@@ -288,7 +294,7 @@ const MEASURE_CASE_MS = 30_000 + (1 + FRAMES + 1) * WINDOW_MAX_MS;
 function keep(task: { meta: object }, record: FrameCostRecord): void {
   const { windows } = record;
   Object.assign(task.meta, { frameCost: {
-    idle: windows[0]?.cost, frames: windows.slice(1).map((w) => w.cost),
+    idle: windows[0]?.cost, frames: windows.slice(1).map((w) => w.cost), spans: windows.map((w) => w.spanMs),
     deferred: windows.map((w) => w.deferred), drainQuiet: windows.map((w) => w.drainQuiet),
   } });
 }
@@ -304,7 +310,8 @@ describe('frame cost (D-6438)', () => {
         const cost = await frameCost(app, '/ws/fleet', changing(), GAP_MS, { record });
         expect(cost.frames).toHaveLength(FRAMES);
         expect(app.errors).toEqual([]);
-        expect(cost.median.taskMs, `median TaskDuration per frame, ${skin}: ${cost.median.taskMs.toFixed(1)} ms`).toBeLessThan(FRAME_CEILING_MS);
+        expect(cost.median.taskMs, `median TaskDuration per frame, ${skin}: ${cost.median.taskMs.toFixed(1)} ms; `
+          + `spans ${cost.spans.map((x) => x.toFixed(1)).join(', ')} ms; deferred ${cost.deferred.join(' ')}`).toBeLessThan(FRAME_CEILING_MS);
       } finally {
         keep(task, record);
         await app.ctx.close();
@@ -331,7 +338,8 @@ describe('frame cost (D-6438)', () => {
         expect(changed, `median script per changing frame, ${skin}: ${changed.toFixed(1)} ms`).toBeGreaterThan(1);
         const ratio = identical / changed;
         expect(ratio, `median script per identical frame ${identical.toFixed(1)} ms / per changing frame ${changed.toFixed(1)} ms = ${ratio.toFixed(2)}, ${skin}; `
-          + `identical scripts ${cost.frames.slice(FRAMES).map((c) => c.scriptMs.toFixed(1)).join(', ')}; deferred ${cost.deferred.join(' ')}`)
+          + `identical scripts ${cost.frames.slice(FRAMES).map((c) => c.scriptMs.toFixed(1)).join(', ')}; deferred ${cost.deferred.join(' ')}; `
+          + `spans ${cost.spans.map((x) => x.toFixed(1)).join(', ')} ms`)
           .toBeLessThan(IDENTICAL_SCRIPT_RATIO);
       } finally {
         keep(task, record);
