@@ -267,6 +267,12 @@ export const FLOOR_GIB = 15;
 export const FLOOR_PCT = 10;
 export const EPOCH_CONFIRM_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 export const SCAN_INTERVAL_MS = 30 * 60 * 1000;
+/** CP-39d (D-7096). The most files a tick that runs no transcript scan lstats for a registered session's mid-turn growth
+ *  (sweep.mjs activeFiles): *chosen*, about three times the registered sessions that hold a live main file (79 on
+ *  2026-10-27, across 257 files), so every uuid's newest recorded copy is stat'ed before any older copy. It bounds lstats,
+ *  not reads: a file the pass takes is read by the tick's own budget, as a behind file is. A file past it waits for its
+ *  Stop hint or the scan, whose bound is unchanged. */
+export const ACTIVE_STAT_MAX = 256;
 export const SIDECAR_FTS_BYTES = 512 * 1024;
 /** How far past SIDECAR_FTS_BYTES a sidecar is decoded and redacted before it is cut (D-4312). */
 export const SIDECAR_REDACT_MARGIN = 65536;
@@ -3581,6 +3587,27 @@ export function lagOfTick({ tickStartMs, newEntries, minNewTsMs }) {
   if (newEntries === 0) return 0;
   if (minNewTsMs === null) return null;
   return Math.max(0, tickStartMs - minNewTsMs);
+}
+
+/** CP-39d (D-7096). Whether a tick that runs no scan should offer a registered session's live main-thread file to
+ *  ingest, from the row the sweep last recorded for it and one lstat of the path. 'skip', 'read' or 'same', in this order:
+ *  - 'skip': no stat (the path vanished or could not be measured) or not a regular file; lstat never follows a link, and
+ *    the hint and the scan own both cases, so nothing is counted for them;
+ *  - 'read': dev or ino differ from the row, so another file stands at the path (bindFile decides the retire);
+ *  - 'read': the size is below the cursor, so the file shrank (bindFile rescans and counts source_shrank);
+ *  - 'read': the mtime differs from the one recorded (a null recorded mtime differs);
+ *  - 'read': the size is above the recorded size (null reads 0) while the file is fresher than `tornStaleMs`: growth inside
+ *    one coarse mtime tick. A stale torn tail (examinedSize records it as read) is not re-read every tick;
+ *  - else 'same'.
+ *  `row` is `{ dev, ino, offset, size, mtimeNs }` as ingest_files holds them (dev, ino and mtimeNs as bigint); `stat` is
+ *  `{ isFile, dev, ino, size, mtimeNs }` from a bigint lstat, or null. Pure. */
+export function decideActiveRead({ row, stat, nowMs, tornStaleMs }) {
+  if (stat === null || stat.isFile !== true) return 'skip';
+  if (stat.dev !== row.dev || stat.ino !== row.ino) return 'read';
+  if (stat.size < row.offset) return 'read';
+  if (stat.mtimeNs !== row.mtimeNs) return 'read';
+  if (stat.size > (row.size ?? 0) && nowMs - Number(stat.mtimeNs / 1_000_000n) < tornStaleMs) return 'read';
+  return 'same';
 }
 
 /** The largest sidecar measured (§9.2 step 4). Of 103,068 sidecars on the reference box the

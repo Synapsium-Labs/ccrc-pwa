@@ -41,7 +41,7 @@ import { basename, dirname, join, resolve } from 'node:path';
 import { isatty } from 'node:tty';
 import { pathToFileURL } from 'node:url';
 import {
-  CARRIER_KILL_S, EXIT, SPOOL_FILE_MAX, OBS_FILE_MAX, CONTROL_FILE_MAX, observationOk, SCHEMA_ADDED, SCHEMA_VERSION, SCAN_INTERVAL_MS, STATFS_DEADLINE_MS, capOf, decideCandidate,
+  CARRIER_KILL_S, EXIT, SPOOL_FILE_MAX, OBS_FILE_MAX, CONTROL_FILE_MAX, observationOk, SCHEMA_ADDED, SCHEMA_VERSION, SCAN_INTERVAL_MS, ACTIVE_STAT_MAX, decideActiveRead, STATFS_DEADLINE_MS, capOf, decideCandidate,
   decideEpochLine, decideRekey, decideStoreOpen, floorThreshold, locationMatches,
   UUID_RE, WRITER_RE, drainingNameOk, drainingNameParts, drainingOrder, eventKey, historyPaths, idOk, spoolFileIdOf, joinGeneration, journalRecord, parseSpoolLine,
   heavyVersionsBetween, passOutcome, planFileRead, planMigration, planRun, storeVersionDamaged, readBoxEnvValue, sha256Bytes, sha256Hex, splitSpoolText, spoolLinesOverCap,
@@ -1802,18 +1802,27 @@ function indexedTranscripts(cache, homes, uuid) {
   return cache.index.get(uuid) ?? [];
 }
 
-/** The uuids the periodic scan resolves: every confirmed epoch's, and every `$REG/*.uuid` of the UUID grammar. An
- *  unconfirmed clear epoch and a candidate are not known: their files are never discovered for ingest (SE5). */
-export function knownUuids(db, home) {
-  const out = new Set(db.prepare('SELECT DISTINCT cc_session_uuid AS u FROM epochs WHERE confirmed_ms IS NOT NULL').all().map((r) => r.u));
+/** The uuids `$REG/<id>.uuid` names now: every file of the UUID grammar under an idOk name, read through readRegPresence
+ *  (one nonblocking, type-checked open each). No registry reads as none. CP-39d (D-7096): knownUuids' registry half,
+ *  factored out with its answer unchanged, so the between-scans pass (activeFiles) names the same uuids the scan does. */
+function registeredUuids(home) {
+  const out = new Set();
   const reg = historyPaths(home).reg;
   let names = [];
-  try { names = readdirSync(reg); } catch { /* no registry: only the store's epochs are known */ }
+  try { names = readdirSync(reg); } catch { /* no registry: no registered uuid */ }
   for (const n of names) {
     if (n.startsWith('.') || !n.endsWith('.uuid') || !idOk(n.slice(0, -'.uuid'.length))) continue;
     const v = readRegPresence(`${reg}/${n}`);
     if (v.state === 'value' && UUID_RE.test(v.value)) out.add(v.value);
   }
+  return out;
+}
+
+/** The uuids the periodic scan resolves: every confirmed epoch's, and every `$REG/*.uuid` of the UUID grammar. An
+ *  unconfirmed clear epoch and a candidate are not known: their files are never discovered for ingest (SE5). */
+export function knownUuids(db, home) {
+  const out = new Set(db.prepare('SELECT DISTINCT cc_session_uuid AS u FROM epochs WHERE confirmed_ms IS NOT NULL').all().map((r) => r.u));
+  for (const v of registeredUuids(home)) out.add(v);
   return out;
 }
 
@@ -3739,8 +3748,9 @@ export async function tick(db, ctx) {
   // §9.2 step 4 "Every verdict commits first"; D-4297).
   const scan = scanDue(db, ctx.now());
   if (scan) registryBackfill(db, ctx);
-  // Steps 2-3, discovery and the plan. The tick examines hinted confirmed sids, files left short of their end, and
-  // at the scan every known uuid, across the rostered homes; each admitted file is bound to its cursor row by
+  // Steps 2-3, discovery and the plan. The tick examines hinted confirmed sids, files left short of their end,
+  // between scans a registered session's files that changed since last examined (CP-39d, D-7096: a turn's growth with no
+  // Stop hint yet), and at the scan every known uuid, across the rostered homes; each admitted file is bound to its cursor row by
   // identity. An unreadable roster skips discovery and leaves the scan due for the next readable pass (§9.2 step 2).
   // Steps 2-5 (Task 19): discover, admit and bind (Task 18's admitFile and bindFile, inside ingestPath), then
   // stream and write in chunks, under the run's ONE budget. Discovery and binding happen ONCE per tick, here;
@@ -4961,13 +4971,14 @@ export function floorProbeFor(dir, statfs) {
 
 /** What every ingest step reads: this pass's home and rostered homes, the tick's start, the
  *  binding's ids, and the injected parts a test may replace in-process: the boundary test from
- *  compact-card.mjs, the history-off probe, the parser, the free-space floor probe. pairIdx is this tick's
+ *  compact-card.mjs, the history-off probe, the parser, the free-space floor probe, and (CP-39d, D-7096, as D-4247) the two
+ *  seams of the between-scans pass: `activeStat(path)`, its one lstat, and `activeStatMax`, its cap. pairIdx is this tick's
  *  redaction index; secretsStep's answer replaces the empty default. fts says whether this tick may index
  *  (ftsPrepare's tables). admitFile, budgetLeft and isBusy are this module's own, handed to derive.mjs, which imports nothing of the sweep (W1-B2 Task 8).
  *  readRegPresence is handed to card.mjs the same way: it names the sessions a card may be written for (W1-B3 Task 5). */
 export function makeIngestCtx(home, homes, nowMs, ids, floorProbe = FLOOR_ALWAYS_OK) {
   const off = historyPaths(home).off;
-  return { home, homes, nowMs, ids, isBoundaryLine, prepareLines, historyOff: () => existsSync(off), floorProbe, pairIdx: makePairIndex([]), fts: false, pendingReceiptState: { kind: 'measured', sessionUuids: new Set() }, admitFile, budgetLeft, isBusy, readRegPresence };
+  return { home, homes, nowMs, ids, isBoundaryLine, prepareLines, historyOff: () => existsSync(off), floorProbe, pairIdx: makePairIndex([]), fts: false, pendingReceiptState: { kind: 'measured', sessionUuids: new Set() }, admitFile, budgetLeft, isBusy, readRegPresence, activeStat: statActive, activeStatMax: ACTIVE_STAT_MAX };
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -5014,6 +5025,14 @@ function tickStmts(db) {
     behindRows: db.prepare(`SELECT f.file_id AS fileId, f.size - f.offset AS gap, p.path AS path FROM ingest_files f
       JOIN file_paths p ON p.file_id = f.file_id
       WHERE f.source_key = '' AND f.status = 'live' AND f.size > f.offset`),
+    // CP-39d (D-7096). A registered uuid's live main-thread rows, one row per path, each uuid's newest copy first: a uuid holds one
+    // live main copy per home its swaps carried it to, and ordered by recorded mtime alone the stale copies of other uuids would
+    // sit ahead of an idle-then-active session's only copy, so the cap would drop the very session the pass is for.
+    activeRows: (() => {
+      const st = db.prepare(`SELECT f.file_id AS fileId, f.dev AS dev, f.ino AS ino, f.offset AS offset, f.size AS size, f.mtime_ns AS mtimeNs, p.path AS path, t.cc_session_uuid AS uuid FROM transcripts t JOIN ingest_files f ON f.transcript_pk = t.transcript_pk JOIN file_paths p ON p.file_id = f.file_id WHERE t.cc_session_uuid IN (SELECT value FROM json_each(?)) AND t.agent_id = '' AND f.source_key = '' AND f.status = 'live' ORDER BY DENSE_RANK() OVER (PARTITION BY t.cc_session_uuid ORDER BY f.mtime_ns DESC, f.file_id), f.mtime_ns DESC, f.file_id, p.path`);
+      st.setReadBigInts(true);
+      return st;
+    })(),
     tickIns: db.prepare('INSERT INTO ticks (ts_ms, lag_ms, bytes, files_behind, bytes_behind) VALUES (?, ?, ?, ?, ?)'),
     factless: db.prepare(`SELECT e.cc_session_uuid AS uuid, min(p.path) AS path FROM epochs e
       JOIN transcripts t ON t.cc_session_uuid = e.cc_session_uuid AND t.agent_id = ''
@@ -5097,8 +5116,53 @@ function behindFiles(db, homes) {
   return out;
 }
 
+/** One bigint lstat of `path` in `decideActiveRead`'s `stat` shape (size as a number), or null when it throws (a vanished
+ *  path, an unlistable directory). lstat never follows a link: a link answers `isFile: false`. CP-39d (D-7096). */
+function statActive(path) {
+  let st;
+  try { st = lstatSync(path, { bigint: true }); } catch { return null; }
+  return { isFile: st.isFile(), dev: st.dev, ino: st.ino, size: Number(st.size), mtimeNs: st.mtimeNs };
+}
+
+/** CP-39d (D-7096). The between-scans pass: a registered session's live main-thread files that changed since the sweep last
+ *  examined them, so a transcript that grows mid-turn (no Stop hint yet, a recorded size that is stale) is read within a
+ *  tick. The registered uuids are `$REG/*.uuid`'s now; `activeRows` orders each uuid's newest recorded copy first. One
+ *  file per `fileId`: the first path under a rostered home's `projects/` (behindFiles' test); a file with none is passed
+ *  over. A path already taken this tick (`seen`: hinted or behind) is neither stat'ed nor counted. At most
+ *  `ctx.activeStatMax` (ACTIVE_STAT_MAX) lstats; before each lstat the budget is asked, and a spent one ends the pass with
+ *  `complete` false. lib's decideActiveRead rules each file: a vanished path or a link is skipped silently (the hint and
+ *  the scan own it), anything else changed is taken. */
+function activeFiles(db, ctx, seen, budget) {
+  const uuids = [...registeredUuids(ctx.home)];
+  const files = [];
+  const stat = ctx.activeStat ?? statActive;
+  const max = ctx.activeStatMax ?? ACTIVE_STAT_MAX;
+  const fileIds = new Set();
+  let statted = 0;
+  for (const row of tickStmts(db).activeRows.all(JSON.stringify(uuids))) {
+    if (fileIds.has(row.fileId)) continue;
+    const home = ctx.homes.find((h) => row.path.startsWith(`${h}/projects/`));
+    if (home === undefined) continue;
+    fileIds.add(row.fileId);
+    if (seen.has(row.path)) continue;
+    if (statted >= max) break;
+    if (budget !== null && !budgetLeft(budget)) return { files, complete: false };
+    statted += 1;
+    const verdict = decideActiveRead({
+      row: { dev: row.dev, ino: row.ino, offset: Number(row.offset), size: row.size === null ? null : Number(row.size), mtimeNs: row.mtimeNs },
+      stat: stat(row.path),
+      nowMs: ctx.nowMs,
+      tornStaleMs: TORN_STALE_MS,
+    });
+    if (verdict === 'read') files.push({ path: row.path, uuid: row.uuid, home });
+  }
+  return { files, complete: true };
+}
+
 /** This tick's candidate files, in order: hinted (fresh activity, so the lowest lag), then behind
- *  (the backlog), then, at the transcript scan, every known uuid's files; each path once. `uuids` is the sidecar half's
+ *  (the backlog), then, between scans (CP-39d, D-7096), a registered session's files that changed (activeFiles: at most
+ *  ACTIVE_STAT_MAX lstats, each uuid's newest recorded copy first; their uuids do not join the sidecar half's share, so a
+ *  mid-turn sidecar waits for its Stop hint or the scan), then, at the transcript scan, every known uuid's files; each path once. `uuids` is the sidecar half's
  *  given share (task 21 takes their sidecars): the uuids the hinted and the behind files came from. CP-39 (D-6933,
  *  D-6938): the scan's files add none, since the sidecar scan covers `known` from its own cursor; `known` is filled when
  *  either scan is due (`scan` the transcripts', `sideScan` the sidecars'). With `budget`, discovery checks it before each
@@ -5122,6 +5186,11 @@ export function candidateFiles(db, ctx, scan, sideScan = scan, budget = null) {
   take(h.files, true);
   if (!h.complete) complete = false;
   take(behindFiles(db, ctx.homes), true);
+  if (!scan && complete) {
+    const a = activeFiles(db, ctx, seen, budget);
+    take(a.files, false);
+    if (!a.complete) complete = false;
+  }
   const known = scan || sideScan ? knownUuids(db, ctx.home) : new Set();
   if (scan && complete) {
     const k = discover(known);

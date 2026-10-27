@@ -5771,3 +5771,338 @@ describe('CP-39 Task 4: the link walk charges its rows\' compressed bytes to the
     } finally { db.close(); }
   });
 });
+
+
+// ── CP-39d Task 2 (D-7096): the sweep reads a registered session's mid-turn growth within a tick ─────────────────────────
+// The hook spools only on Stop, PostCompact and SessionStart, and a transcript's recorded size is the size last
+// measured, so a transcript that grew mid-turn was seen at the turn's Stop line or at the 30-minute scan: the live W1-b
+// p95 was 22 minutes. On a tick whose scan is not due, the sweep lstats the live main-thread files of the uuids `$REG`
+// names, each uuid's newest recorded copy first, at most ACTIVE_STAT_MAX a tick, and reads each file lib's
+// decideActiveRead answers 'read'. Every case drives ingestTick in this process against a fixture HOME and a fixture
+// store (`IX.newBox`, `IX.openFixtureStore`); (k) is the one case through the real sweep.
+describe('CP-39d: a registered session\'s transcript that grew mid-turn is read within a tick (D-7096)', () => {
+  beforeEach((ctx) => { if (process.platform === 'darwin') ctx.skip(); });
+  let S: IxSweep;
+  let lib: typeof import('../../ccd/history/lib.mjs');
+  beforeAll(async () => { ({ sweep: S, lib } = await IX.api()); });
+  interface Fx { box: HistoryBox; db: DatabaseSync; ids: IxIds; t0: number; p: string }
+  /** A box whose registry names `claude-demo` on IX.U, with two rows planted, and a fixture store. `t0` is the first (scan) tick. */
+  const fixture = async (prefix: string, plant = true): Promise<Fx> => {
+    const box = IX.newBox(prefix);
+    const p = plant
+      ? IX.plantCopy(box.homes[0]!, IX.U, IX.jsonl([IX.user(IX.uuidN(1), null, 'one', 1), IX.user(IX.uuidN(2), IX.uuidN(1), 'two', 2)]))
+      : path.join(box.homes[0]!, 'projects', IX.SLUG, `${IX.U}.jsonl`);
+    const { db, ids } = await IX.openFixtureStore(box);
+    return { box, db, ids, t0: IX.tsMs(0) + 600_000, p };
+  };
+  /** One in-process tick at `ms` with its ticks row. `patch` edits the ingest context first (the seams). */
+  const tick = async (f: Fx, ms: number, patch?: (c: IxCtx) => void, budget?: IxBudget): Promise<IxTickResult> => {
+    const ctx = S.makeIngestCtx(f.box.home, f.box.homes, ms, f.ids);
+    if (patch !== undefined) patch(ctx);
+    const r = await S.ingestTick(f.db, ctx, budget ?? S.newBudget());
+    S.recordTick(f.db, ctx, r);
+    return r;
+  };
+  /** A counting stat: every path the pass lstats lands in `stats`; `max` replaces the cap. */
+  const counting = (stats: string[], max?: number) => (c: IxCtx): void => {
+    const real = c.activeStat as (p: string) => unknown;
+    c.activeStat = (p: string): unknown => { stats.push(p); return real(p); };
+    if (max !== undefined) c.activeStatMax = max;
+  };
+  /** D-4340's in-process Stop hint: an empty draining file named for `id`; the returned function removes it. */
+  const hint = (box: HistoryBox, id = IX.ID): (() => void) => {
+    const d = lib.historyPaths(box.home).draining;
+    fs.mkdirSync(d, { recursive: true });
+    const h = path.join(d, `${id}.${IX.tsMs(0)}.1.jsonl`);
+    fs.writeFileSync(h, '');
+    return () => fs.rmSync(h);
+  };
+  const append = (p: string, rows: IxRow[]): void => { fs.appendFileSync(p, IX.jsonl(rows)); };
+  const metaOf = (db: DatabaseSync, k: string): string | undefined => (db.prepare('SELECT v FROM meta WHERE k = ?').get(k) as { v: string } | undefined)?.v;
+  const counterOf = (db: DatabaseSync, name: string): number => (db.prepare('SELECT n FROM counters WHERE name = ?').get(name) as { n: number } | undefined)?.n ?? 0;
+  const entriesOf = (db: DatabaseSync, uuid: string): number =>
+    (db.prepare('SELECT count(*) AS n FROM entries e JOIN transcripts t ON t.transcript_pk = e.transcript_pk WHERE t.cc_session_uuid = ?').get(uuid) as { n: number }).n;
+  const stored = (db: DatabaseSync, n: number): boolean => IX.count(db, 'entries', `uuid = '${IX.uuidN(n)}'`) === 1;
+  const lastTick = (db: DatabaseSync): { lag_ms: number | null; files_behind: number } =>
+    db.prepare('SELECT lag_ms, files_behind FROM ticks ORDER BY tick_id DESC LIMIT 1').get() as { lag_ms: number | null; files_behind: number };
+  /** Sets a file's recorded mtime_ns through the writer, by one of its paths. */
+  const setRecorded = (db: DatabaseSync, p: string, ns: bigint): void => {
+    db.prepare('UPDATE ingest_files SET mtime_ns = ? WHERE file_id = (SELECT file_id FROM file_paths WHERE path = ?)').run(ns, p);
+  };
+  const rowsOf = (from: number, to: number, ts = 500): IxRow[] => {
+    const out: IxRow[] = [];
+    for (let k = from; k <= to; k += 1) out.push(IX.user(IX.uuidN(k), k === from ? IX.uuidN(2) : IX.uuidN(k - 1), `mid-turn ${k}`, ts + (k - from)));
+    return out;
+  };
+
+  it('(a) the production wiring: the ingest context carries ACTIVE_STAT_MAX and a stat function', async () => {
+    const f = await fixture('ccrc-hist-cp39d-a-', false);
+    try {
+      const ctx = S.makeIngestCtx(f.box.home, f.box.homes, f.t0, f.ids);
+      expect(ctx.activeStatMax).toBe(lib.ACTIVE_STAT_MAX);
+      expect(typeof ctx.activeStatMax, 'a number, not an unset pair of undefineds').toBe('number');
+      expect(typeof ctx.activeStat).toBe('function');
+    } finally { f.db.close(); }
+  });
+
+  it('(b) the defect: rows written mid-turn, with no hint, are stored by the next non-scan tick, and the lag is measured from the row', async () => {
+    const f = await fixture('ccrc-hist-cp39d-b-');
+    try {
+      await tick(f, f.t0);
+      append(f.p, rowsOf(500, 501));
+      const rec = f.db.prepare('SELECT size, offset FROM ingest_files').get() as { size: number; offset: number };
+      expect(rec.size, 'CONTROL: the recorded size is the cursor, short of the file').toBe(rec.offset);
+      expect(rec.size).toBeLessThan(fs.statSync(f.p).size);
+      expect(metaOf(f.db, 'scan_discover_ms'), 'CONTROL: the scan ran at t0').toBe(String(f.t0));
+      expect(stored(f.db, 500)).toBe(false);
+      await tick(f, f.t0 + 120_000);
+      expect(stored(f.db, 500), 'the first appended row is stored').toBe(true);
+      expect(stored(f.db, 501), 'the second appended row is stored').toBe(true);
+      expect(IX.cursorOf(f.db, 1), 'the cursor is at the file end').toBe(fs.statSync(f.p).size);
+      expect(lastTick(f.db)).toEqual({ lag_ms: f.t0 + 120_000 - IX.tsMs(500), files_behind: 0 });
+    } finally { f.db.close(); }
+  });
+
+  it('(c) an unregistered uuid is not stat\'ed between scans: its growth waits for the scan, and the next due scan reads it', async () => {
+    const f = await fixture('ccrc-hist-cp39d-c-');
+    try {
+      const p2 = IX.plantCopy(f.box.homes[0]!, IX.U2, IX.jsonl([IX.user(IX.uuidN(31), null, 'other session', 31)]));
+      // IX.U2 is known to the store through a confirmed epoch only; no $REG entry names it.
+      const pk = Number(f.db.prepare("INSERT INTO sessions (ccrc_id, generation, project, first_seen_ms, merged_into) VALUES ('claude-other', ?, 'demo', 1, NULL)").run(IX.G).lastInsertRowid);
+      f.db.prepare("INSERT INTO epochs (session_pk, seq, cc_session_uuid, cause, declared_by, confirmed_ms) VALUES (?, 1, ?, 'startup', 'hook', 1)").run(pk, IX.U2);
+      await tick(f, f.t0);
+      expect(entriesOf(f.db, IX.U2), 'CONTROL: the scan read the unregistered session\'s file').toBe(1);
+      append(p2, [IX.user(IX.uuidN(32), IX.uuidN(31), 'grew mid-turn', 500)]);
+      append(f.p, rowsOf(500, 500));
+      const stats: string[] = [];
+      await tick(f, f.t0 + 120_000, counting(stats));
+      expect(stored(f.db, 500), 'CONTROL: the registered session\'s row is stored').toBe(true);
+      expect(stats, 'only the registered session\'s file was stat\'ed').toEqual([f.p]);
+      expect(stored(f.db, 32), 'the unregistered session\'s new row is not stored').toBe(false);
+      await tick(f, f.t0 + lib.SCAN_INTERVAL_MS + 1_000);
+      expect(stored(f.db, 32), 'CONTROL: the next due scan stores it').toBe(true);
+    } finally { f.db.close(); }
+  });
+
+  it('(d) on a scan tick the pass stats nothing, and the scan stores the rows', async () => {
+    const f = await fixture('ccrc-hist-cp39d-d-');
+    try {
+      await tick(f, f.t0);
+      append(f.p, rowsOf(500, 500));
+      f.db.prepare("DELETE FROM meta WHERE k = 'scan_discover_ms'").run();
+      const stats: string[] = [];
+      await tick(f, f.t0 + 120_000, counting(stats));
+      expect(stats, 'a scan tick makes no active stat').toEqual([]);
+      expect(stored(f.db, 500), 'the scan stored the row').toBe(true);
+      expect(metaOf(f.db, 'scan_discover_ms'), 'CONTROL: the scan completed').toBe(String(f.t0 + 120_000));
+      append(f.p, rowsOf(510, 510, 510));
+      const control: string[] = [];
+      await tick(f, f.t0 + 240_000, counting(control));
+      expect(control, 'CONTROL: the same append on a non-scan tick pushes one stat').toEqual([f.p]);
+      expect(stored(f.db, 510)).toBe(true);
+    } finally { f.db.close(); }
+  });
+
+  it('(e) the cap: at most activeStatMax lstats a tick, each uuid\'s most recently recorded copy first; the rest wait for the scan', async () => {
+    const f = await fixture('ccrc-hist-cp39d-e-');
+    try {
+      plantSession(f.box, 'claude-demo2', { uuid: IX.U2, generation: IX.G, project: 'demo', workdir: '/home/u/tree' });
+      plantSession(f.box, 'claude-demo3', { uuid: IX.U3, generation: IX.G, project: 'demo', workdir: '/home/u/tree' });
+      const p2 = IX.plantCopy(f.box.homes[0]!, IX.U2, IX.jsonl([IX.user(IX.uuidN(41), null, 'second', 41)]));
+      const p3 = IX.plantCopy(f.box.homes[0]!, IX.U3, IX.jsonl([IX.user(IX.uuidN(51), null, 'third', 51)]));
+      await tick(f, f.t0);
+      expect(IX.count(f.db, 'ingest_files'), 'CONTROL: all three read at the scan').toBe(3);
+      setRecorded(f.db, f.p, 5_000_000_000_000_000_000n);
+      setRecorded(f.db, p2, 4_000_000_000_000_000_000n);
+      setRecorded(f.db, p3, 3_000_000_000_000_000_000n);
+      append(f.p, rowsOf(500, 500));
+      append(p2, [IX.user(IX.uuidN(42), IX.uuidN(41), 'second grew', 500)]);
+      append(p3, [IX.user(IX.uuidN(52), IX.uuidN(51), 'third grew', 500)]);
+      const stats: string[] = [];
+      await tick(f, f.t0 + 120_000, counting(stats, 2));
+      expect(stats, 'the two most recently recorded paths only').toEqual([f.p, p2]);
+      expect(stored(f.db, 500) && stored(f.db, 42)).toBe(true);
+      expect(stored(f.db, 52), 'the third\'s new row is not stored').toBe(false);
+      await tick(f, f.t0 + lib.SCAN_INTERVAL_MS + 1_000);
+      expect(stored(f.db, 52), 'CONTROL: the next due scan stores it').toBe(true);
+    } finally { f.db.close(); }
+  });
+
+  it('(f) a shrink: a file rewritten shorter than its cursor, same inode, is read from 0 and counted source_shrank', async () => {
+    const f = await fixture('ccrc-hist-cp39d-f-');
+    try {
+      await tick(f, f.t0);
+      const first = `${fs.readFileSync(f.p, 'utf8').split('\n')[0]}\n`;
+      const ino = fs.statSync(f.p).ino;
+      fs.writeFileSync(f.p, first);   // truncated in place: the same inode, the same first line
+      expect(fs.statSync(f.p).ino, 'CONTROL: the same inode').toBe(ino);
+      expect(counterOf(f.db, 'source_shrank')).toBe(0);
+      const r = await tick(f, f.t0 + 120_000);
+      expect(counterOf(f.db, 'source_shrank')).toBe(1);
+      expect(r.bytes, 'read from 0: the whole shorter file').toBe(Buffer.byteLength(first));
+      expect(IX.cursorOf(f.db, 1)).toBe(Buffer.byteLength(first));
+    } finally { f.db.close(); }
+  });
+
+  it('(g) a rename is read on the non-scan tick; a vanished path is skipped silently: nothing counted, the row stays live', async () => {
+    const f = await fixture('ccrc-hist-cp39d-g-');
+    try {
+      await tick(f, f.t0);
+      const fresh = `${f.p}.new`;
+      fs.writeFileSync(fresh, IX.jsonl([IX.user(IX.uuidN(1), null, 'one', 1), IX.user(IX.uuidN(2), IX.uuidN(1), 'two', 2), ...rowsOf(700, 700)]));
+      const oldIno = fs.statSync(f.p).ino;
+      fs.renameSync(fresh, f.p);
+      expect(fs.statSync(f.p).ino, 'CONTROL: another inode stands at the path').not.toBe(oldIno);
+      const stats: string[] = [];
+      await tick(f, f.t0 + 120_000, counting(stats));
+      expect(stats).toEqual([f.p]);
+      expect(stored(f.db, 700), 'the renamed-over file\'s new row is stored').toBe(true);
+      const missing = counterOf(f.db, 'file_missing');
+      fs.rmSync(f.p);
+      const gone: string[] = [];
+      await tick(f, f.t0 + 240_000, counting(gone));
+      expect(gone, 'the stat was made').toEqual([f.p]);
+      expect(counterOf(f.db, 'file_missing'), 'a vanished path is not counted').toBe(missing);
+      expect((f.db.prepare('SELECT f.status AS s FROM ingest_files f JOIN file_paths p ON p.file_id = f.file_id WHERE p.path = ?').get(f.p) as { s: string }).s).toBe('live');
+    } finally { f.db.close(); }
+  });
+
+  it('(h) a link at the path is not followed: nothing stored, nothing counted non_regular, but the path was stat\'ed', async () => {
+    const f = await fixture('ccrc-hist-cp39d-h-');
+    try {
+      await tick(f, f.t0);
+      const target = path.join(f.box.homes[0]!, 'elsewhere.jsonl');
+      fs.writeFileSync(target, IX.jsonl([IX.user(IX.uuidN(1), null, 'one', 1), IX.user(IX.uuidN(2), IX.uuidN(1), 'two', 2), ...rowsOf(700, 700)]));
+      fs.rmSync(f.p);
+      fs.symlinkSync(target, f.p);
+      const before = counterOf(f.db, 'non_regular');
+      const stats: string[] = [];
+      await tick(f, f.t0 + 120_000, counting(stats));
+      expect(stats, 'the counting stat saw the path').toEqual([f.p]);
+      expect(stored(f.db, 700), 'the link was not followed').toBe(false);
+      expect(counterOf(f.db, 'non_regular'), 'the link was never offered to admission').toBe(before);
+    } finally { f.db.close(); }
+  });
+
+  it('(i) a stale torn tail is not re-read every tick: the stat is made, no bind runs', async () => {
+    const f = await fixture('ccrc-hist-cp39d-i-', false);
+    try {
+      const rows = IX.jsonl([IX.user(IX.uuidN(1), null, 'one', 1), IX.user(IX.uuidN(2), IX.uuidN(1), 'two', 2)]);
+      IX.plantCopy(f.box.homes[0]!, IX.U, `${rows}{"pad":"x`);
+      const old = new Date(f.t0 - lib.SCAN_INTERVAL_MS - 1_000);   // stale at the scan tick, and so at the tick after it
+      fs.utimesSync(f.p, old, old);
+      await tick(f, f.t0);   // the scan: the torn tail is stale, so the recorded size is the cursor
+      const rec = f.db.prepare('SELECT size, offset FROM ingest_files').get() as { size: number; offset: number };
+      expect(rec.size, 'CONTROL: the stale torn tail counts as read').toBe(rec.offset);
+      expect(rec.size).toBeLessThan(fs.statSync(f.p).size);
+      const seen = (): number => (f.db.prepare('SELECT last_seen_ms AS n FROM file_paths').get() as { n: number }).n;
+      expect(seen(), 'CONTROL: the scan bound the path').toBe(f.t0);
+      const stats: string[] = [];
+      await tick(f, f.t0 + 120_000, counting(stats));
+      expect(stats, 'the stat was made').toEqual([f.p]);
+      expect(seen(), 'no bind ran: last_seen_ms still reads the scan tick').toBe(f.t0);
+      expect(IX.count(f.db, 'entries')).toBe(2);
+    } finally { f.db.close(); }
+  });
+
+  it('(j) a spent budget ends the pass before its first stat', async () => {
+    const f = await fixture('ccrc-hist-cp39d-j-');
+    try {
+      await tick(f, f.t0);
+      append(f.p, rowsOf(500, 500));
+      const stats: string[] = [];
+      await tick(f, f.t0 + 120_000, counting(stats), S.newBudget(Date.now, { maxBytes: 0 }));
+      expect(stats).toEqual([]);
+      expect(stored(f.db, 500), 'nothing was read').toBe(false);
+    } finally { f.db.close(); }
+  });
+
+  it('(k) through the real sweep: a row written a minute ago, with no spool line, is stored by the next pass with a lag under ten minutes', () => {
+    const box = IX.newBox('ccrc-hist-cp39d-k-');
+    const p = IX.plantCopy(box.homes[0]!, IX.U, IX.jsonl([IX.user(IX.uuidN(1), null, 'one', 1), IX.user(IX.uuidN(2), IX.uuidN(1), 'two', 2)]));
+    IX.sweepTwice(box);
+    fs.appendFileSync(p, IX.jsonl([{ ...IX.user(IX.uuidN(900), IX.uuidN(2), 'written mid-turn', 3), timestamp: new Date(Date.now() - 60_000).toISOString() }]));
+    const r = runSweep(box);
+    expect(r.code, `${r.stdout}\n${r.stderr}`).toBe(0);
+    const db = openStoreRO(box);
+    try {
+      expect(IX.count(db, 'entries', `uuid = '${IX.uuidN(900)}'`), 'the row is stored').toBe(1);
+      const t = db.prepare('SELECT lag_ms FROM ticks ORDER BY tick_id DESC LIMIT 1').get() as { lag_ms: number };
+      expect(t.lag_ms).toBeGreaterThan(0);
+      expect(t.lag_ms).toBeLessThanOrEqual(600_000);
+    } finally { db.close(); }
+  }, 120_000);
+
+  it('(l) a sidecar written mid-turn waits for its Stop hint or the scan: the transcript row is stored now, the sidecar at the next due scan', async () => {
+    const f = await fixture('ccrc-hist-cp39d-l-');
+    try {
+      await tick(f, f.t0);
+      expect(metaOf(f.db, 'scan_sidecars_ms'), 'CONTROL: the sidecar scan is not due').toBe(String(f.t0));
+      const id = 'toolu_zqmid';
+      append(f.p, [
+        IX.assistant(IX.uuidN(600), IX.uuidN(2), [{ type: 'tool_use', id, name: 'Bash', input: { command: 'make' } }], 600),
+        IX.user(IX.uuidN(601), IX.uuidN(600), [{ type: 'tool_result', tool_use_id: id, content: 'saved to: /home/u/x/tool-results/zqmid.txt' }], 601),
+      ]);
+      const dir = path.join(f.box.homes[0]!, 'projects', IX.SLUG, IX.U, 'tool-results');
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(path.join(dir, 'zqmid.txt'), 'a sidecar written mid-turn\n');
+      await tick(f, f.t0 + 120_000);
+      expect(stored(f.db, 601), 'the tool_result row is stored').toBe(true);
+      expect(IX.count(f.db, 'sidecars', "name = 'zqmid.txt'"), 'no sidecar yet').toBe(0);
+      await tick(f, f.t0 + lib.SCAN_INTERVAL_MS + 1_000);
+      expect(IX.count(f.db, 'sidecars', "name = 'zqmid.txt'"), 'CONTROL: the next due scan stores it').toBe(1);
+    } finally { f.db.close(); }
+  });
+
+  it('(p) a hinted file is neither stat\'ed nor counted against the cap', async () => {
+    const run = async (hinted: boolean): Promise<{ stats: string[]; pU: string; pV: string; f: Fx }> => {
+      const f = await fixture(hinted ? 'ccrc-hist-cp39d-p1-' : 'ccrc-hist-cp39d-p0-');
+      plantSession(f.box, 'claude-demo2', { uuid: IX.U2, generation: IX.G, project: 'demo', workdir: '/home/u/tree' });
+      const pV = IX.plantCopy(f.box.homes[0]!, IX.U2, IX.jsonl([IX.user(IX.uuidN(41), null, 'second', 41)]));
+      await tick(f, f.t0);
+      setRecorded(f.db, f.p, 5_000_000_000_000_000_000n);
+      setRecorded(f.db, pV, 4_000_000_000_000_000_000n);
+      append(f.p, rowsOf(500, 500));
+      append(pV, [IX.user(IX.uuidN(42), IX.uuidN(41), 'second grew', 500)]);
+      const rm = hinted ? hint(f.box) : null;
+      const stats: string[] = [];
+      try { await tick(f, f.t0 + 120_000, counting(stats, 1)); } finally { if (rm !== null) rm(); }
+      return { stats, pU: f.p, pV, f };
+    };
+    const h = await run(true);
+    try {
+      expect(h.stats, 'the hinted file is not stat\'ed and does not use the cap').toEqual([h.pV]);
+      expect(stored(h.f.db, 500), 'the hint reads IX.U\'s file').toBe(true);
+      expect(stored(h.f.db, 42), 'the pass reads V\'s').toBe(true);
+    } finally { h.f.db.close(); }
+    const c = await run(false);
+    try {
+      expect(c.stats[0], 'CONTROL: with no hint the first stat is IX.U\'s path').toBe(c.pU);
+      expect(c.stats).toHaveLength(1);
+    } finally { c.f.db.close(); }
+  });
+
+  it('(q) each uuid\'s newest copy comes first: the cap keeps IX.U\'s only copy ahead of another uuid\'s older copy', async () => {
+    const f = await fixture('ccrc-hist-cp39d-q-');
+    try {
+      plantSession(f.box, 'claude-demo2', { uuid: IX.U2, generation: IX.G, project: 'demo', workdir: '/home/u/tree' });
+      const text = IX.jsonl([IX.user(IX.uuidN(41), null, 'second', 41)]);
+      const vNew = IX.plantCopy(f.box.homes[0]!, IX.U2, text);
+      const vOld = IX.plantCopy(f.box.homes[1]!, IX.U2, text);
+      await tick(f, f.t0);
+      expect(IX.count(f.db, 'ingest_files'), 'CONTROL: IX.U holds one copy and V two').toBe(3);
+      setRecorded(f.db, f.p, 2_000_000_000_000_000_000n);
+      setRecorded(f.db, vNew, 5_000_000_000_000_000_000n);
+      setRecorded(f.db, vOld, 4_000_000_000_000_000_000n);
+      append(f.p, rowsOf(500, 500));
+      // CONTROL (read before the tick re-records the mtimes it examines): by recorded mtime alone the two newest rows are V's
+      const byMtime = f.db.prepare("SELECT p.path AS path FROM ingest_files f JOIN file_paths p ON p.file_id = f.file_id WHERE f.status = 'live' ORDER BY f.mtime_ns DESC LIMIT 2").all() as { path: string }[];
+      expect(byMtime.map((r) => r.path), 'CONTROL: ordered by recorded mtime alone the two newest rows are V\'s').toEqual([vNew, vOld]);
+      const stats: string[] = [];
+      await tick(f, f.t0 + 120_000, counting(stats, 2));
+      expect(stats, 'V\'s newer copy and IX.U\'s path').toEqual([vNew, f.p]);
+      expect(stats, 'CONTROL: V\'s older copy is not stat\'ed').not.toContain(vOld);
+      expect(stored(f.db, 500), 'IX.U\'s new row is stored').toBe(true);
+    } finally { f.db.close(); }
+  });
+});
