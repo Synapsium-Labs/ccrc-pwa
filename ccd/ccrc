@@ -7466,19 +7466,52 @@ _acct_mark_off() {   # <id> <what-still-stands> — the regular marker ccd reads
   # `_plat_mv_notdir` atomically replaces every non-directory name without opening
   # it. `-f && ! -L` is then the exact postcondition: ccd reads `-f`, and accepting
   # a link here would re-introduce the write-through path on the next converge.
-  local id="$1" stands="$2" marker="$_SVC_REG/$1-disabled" tmp="$_SVC_REG/.$1-disabled.tmp.$$"
-  _acct_own_temp "$tmp"
-  mkdir -p "$_SVC_REG" \
-    || _acct_refuse 1 disable-marker "cannot create $_SVC_REG, so this lane cannot be left switched off — and a lane nobody has measured must not be pickable. Create that directory, then: touch $_SVC_REG/$id-disabled. $stands"
-  rm -f -- "$tmp"
-  : > "$tmp" \
-    || _acct_refuse 1 disable-marker "cannot write the staged empty marker $tmp, so this lane cannot be left switched off. Fix $_SVC_REG, then: touch $marker. $stands"
-  _plat_mv_notdir "$tmp" "$marker" \
-    || { rm -f -- "$tmp"; _acct_refuse 1 disable-marker "cannot write $marker by replacing it with an empty regular marker, so this lane cannot be left switched off. Fix that path, then: touch $marker. $stands"; }
-  { [ -f "$marker" ] && [ ! -L "$marker" ]; } \
-    || _acct_refuse 1 disable-marker "$marker is not a regular marker after the write, so this lane cannot be proved switched off. Fix that path, then: touch $marker. $stands"
+  # Those steps are `_acct_switch_write`'s `off` (D-7050); this maps its class.
+  local id="$1" stands="$2" marker="$_SVC_REG/$1-disabled" tmp="$_SVC_REG/.$1-disabled.tmp.$$" rc=0
+  _acct_switch_write "$id" off || rc=$?
+  case "$rc" in
+    0) : ;;
+    1) _acct_refuse 1 disable-marker "cannot create $_SVC_REG, so this lane cannot be left switched off — and a lane nobody has measured must not be pickable. Create that directory, then: touch $_SVC_REG/$id-disabled. $stands" ;;
+    2) _acct_refuse 1 disable-marker "cannot write the staged empty marker $tmp, so this lane cannot be left switched off. Fix $_SVC_REG, then: touch $marker. $stands" ;;
+    3) _acct_refuse 1 disable-marker "cannot write $marker by replacing it with an empty regular marker, so this lane cannot be left switched off. Fix that path, then: touch $marker. $stands" ;;
+    *) _acct_refuse 1 disable-marker "$marker is not a regular marker after the write, so this lane cannot be proved switched off. Fix that path, then: touch $marker. $stands" ;;
+  esac
 }
 
+
+# THE ONE WRITER OF `$_SVC_REG/<id>-disabled` (D-7050; ARCH-72, spec K16, §2.2 C1).
+# It refuses nothing: it answers a class, and each caller maps it onto its own
+# envelope and sentence. The switch is an operator kill switch, never projected
+# from the roster's kind fields. Three strictnesses, because the callers refuse
+# different objects (pinned in `account-markers-pin.test.ts`):
+#   off     add, declare, disable: stage + rename (D-2470, `_acct_mark_off`).
+#           1 no `$_SVC_REG`, 2 the staged empty file, 3 the rename (temp
+#           removed), 4 not a regular marker after it.
+#   on      enable: marker or absent. 5 the object is neither a regular file nor
+#           a symlink (nothing removed), 6 `rm` failed, 7 it remains after.
+#   on-any  remove: 8 absent (not listed), 5 a directory that is not a symlink
+#           (nothing removed; a FIFO or socket is removed), 6 `rm` failed. No
+#           postcondition, as remove's artefact loop has none.
+_acct_switch_write() {   # <id> off|on|on-any -> rc, see above
+  local marker="$_SVC_REG/$1-disabled" tmp="$_SVC_REG/.$1-disabled.tmp.$$"
+  case "$2" in
+    off)
+      _acct_own_temp "$tmp"
+      mkdir -p "$_SVC_REG" || return 1
+      rm -f -- "$tmp"
+      : > "$tmp" || return 2
+      _plat_mv_notdir "$tmp" "$marker" || { rm -f -- "$tmp"; return 3; }
+      { [ -f "$marker" ] && [ ! -L "$marker" ]; } || return 4 ;;
+    on)
+      [ ! -e "$marker" ] || [ -f "$marker" ] || [ -L "$marker" ] || return 5
+      rm -f -- "$marker" || return 6
+      { [ ! -e "$marker" ] && [ ! -L "$marker" ]; } || return 7 ;;
+    on-any)
+      { [ -e "$marker" ] || [ -L "$marker" ]; } || return 8
+      { [ ! -d "$marker" ] || [ -L "$marker" ]; } || return 5
+      rm -f -- "$marker" || return 6 ;;
+  esac
+}
 
 # ── THE ORDERED WRITE ──────────────────────────────────────────────────────
 # Spec §5's order, and the two properties it buys.
@@ -8051,7 +8084,7 @@ _acct_marker_lock() {   # <what-still-stands> -> lock held on ACCT_MARKER_LOCK_F
 }
 
 _acct_enable() {   # [--id X]
-  local marker=""
+  local marker="" rc=0
   _acct_one_id enable "$@"
   _acct_id_or_refuse "$ACCT_ONE_ID"
   _acct_known_or_refuse "$ACCT_ONE_ID"
@@ -8062,12 +8095,14 @@ _acct_enable() {   # [--id X]
   marker="$_SVC_REG/$ACCT_ONE_ID-disabled"
   # A directory is not a disabled marker to ccd's `-f` predicate. Do not call it
   # switched off, and do not let `rm -f`'s directory refusal phrase that lie.
-  [ ! -e "$marker" ] || [ -f "$marker" ] || [ -L "$marker" ] \
-    || _acct_refuse 1 marker-conflict "$marker exists but is not a marker file, so its presence does not mean account $ACCT_ONE_ID is switched off. Move that object aside, then retry. Nothing was written."
-  rm -f -- "$marker" \
-    || _acct_refuse 1 marker-write "could not remove $marker, so the account's switch state was left unchanged. Nothing was written."
-  [ ! -e "$marker" ] && [ ! -L "$marker" ] \
-    || _acct_refuse 1 marker-write "$marker remains after removal, so the account's switch state was left unchanged. Nothing was written."
+  # `_acct_switch_write`'s `on` (D-7050) tests, removes and re-tests.
+  _acct_switch_write "$ACCT_ONE_ID" on || rc=$?
+  case "$rc" in
+    0) : ;;
+    5) _acct_refuse 1 marker-conflict "$marker exists but is not a marker file, so its presence does not mean account $ACCT_ONE_ID is switched off. Move that object aside, then retry. Nothing was written." ;;
+    6) _acct_refuse 1 marker-write "could not remove $marker, so the account's switch state was left unchanged. Nothing was written." ;;
+    *) _acct_refuse 1 marker-write "$marker remains after removal, so the account's switch state was left unchanged. Nothing was written." ;;
+  esac
   _acct_lane_state "$ACCT_ONE_ID"
   _acct_read_op "The marker for account $ACCT_ONE_ID was removed and the lane is switched on. Only this report failed." \
     switched --id "$ACCT_ONE_ID" --disabled false
@@ -9318,7 +9353,20 @@ _acct_remove() {
     esac
   fi
 
-  for f in "$CCRC_LIMITS_DIR/$id.json" "$_SVC_REG/$id-disabled" "$_SVC_REG/$id.hookstate.json" "$_SVC_REG/$id.turn.json"; do
+  # The second entry is the switch, removed by `_acct_switch_write`'s `on-any`
+  # (D-7050): this loop's test for it, a directory refused, anything else
+  # removed, no postcondition. `removed` keeps the loop's order.
+  for f in "$CCRC_LIMITS_DIR/$id.json" switch "$_SVC_REG/$id.hookstate.json" "$_SVC_REG/$id.turn.json"; do
+    if [ "$f" = switch ]; then
+      rc=0; _acct_switch_write "$id" on-any || rc=$?
+      case "$rc" in
+        0) removed+=("$_SVC_REG/$id-disabled") ;;
+        8) : ;;
+        5) _acct_refuse 1 artifact-conflict "$_SVC_REG/$id-disabled is a directory, not the ccrc-managed file its name denotes, so it was kept. The roster and projection no longer name $id; other removal effects remain. Move that directory aside or remove it by hand." ;;
+        *) _acct_refuse 1 artifact-remove "could not remove $_SVC_REG/$id-disabled. The roster and projection no longer name $id; other removal effects remain." ;;
+      esac
+      continue
+    fi
     { [ -e "$f" ] || [ -L "$f" ]; } || continue
     { [ ! -d "$f" ] || [ -L "$f" ]; } \
       || _acct_refuse 1 artifact-conflict "$f is a directory, not the ccrc-managed file its name denotes, so it was kept. The roster and projection no longer name $id; other removal effects remain. Move that directory aside or remove it by hand."

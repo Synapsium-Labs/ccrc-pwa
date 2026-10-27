@@ -764,6 +764,173 @@ describe('disabled, every writer (`_acct_mark_off` via add/declare/disable, `_ac
   });
 });
 
+// ── the disabled switch's one write primitive (ccd/ccrc) ──────────────────────────────────────────────────────────
+
+describe('disabled, the write primitive (`_acct_switch_write <id> off|on|on-any`; D-7050)', () => {
+  // C5c's direct rows: the function sourced from `ccd/ccrc` in a fixture HOME. It refuses nothing itself: it answers a
+  // class (its rc), and each caller maps that onto its own envelope. So every call prints exactly `rc=<n>` on stdout.
+  beforeEach((ctx) => { if (!HAVE_FLOCK) ctx.skip(); });
+
+  const reg = (home: string, ...p: string[]): string => path.join(home, '.cc-sessions', ...p);
+  const sw = (home: string): string => reg(home, 'lane-a-disabled');
+  const temps = (home: string): string[] => fs.readdirSync(reg(home)).filter((n) => n.includes('-disabled.tmp.'));
+  const isEmptyRegular = (p: string): boolean => { const s = fs.lstatSync(p); return s.isFile() && s.size === 0; };
+  const realBin = (name: string): string => spawnSync(BASH, ['-c', `command -v ${name}`], { encoding: 'utf8' }).stdout.trim();
+  /** A tool first on PATH that runs `body` when its argv names a `-disabled` path, and is the real tool otherwise. */
+  const onSwitch = (home: string, tool: string, body: string): void =>
+    fs.writeFileSync(path.join(home, '.local', 'bin', tool),
+      `#!/bin/sh\ncase "$*" in *-disabled*) ${body} ;; esac\nexec ${JSON.stringify(realBin(tool))} "$@"\n`, { mode: 0o755 });
+  /** `ccrc` sourced, `stub`, then one call; stdout is the answer. */
+  const call = (home: string, mode: string, stub = '', after = ''): string => {
+    const r = spawnSync(BASH, ['-c', `. "$1"; ${stub} _acct_switch_write lane-a ${mode}; echo "rc=$?"; ${after}`, '_', ccrcIn(home)],
+      { env: boxEnv(home), encoding: 'utf8' });
+    return r.stdout ?? '';
+  };
+  const fifo = (home: string): void => { spawnSync('mkfifo', [sw(home)]); expect(fs.lstatSync(sw(home)).isFIFO()).toBe(true); };
+  const link = (home: string, dir = false): string => {
+    const target = path.join(home, 'outside-the-registry');
+    if (dir) fs.mkdirSync(target); else fs.writeFileSync(target, 'untouched');
+    fs.symlinkSync(target, sw(home));
+    return target;
+  };
+
+  describe('off: stage an empty regular file, rename it onto the marker', () => {
+    it('rc 0: an empty regular marker, the staged temp registered with `_acct_own_temp` and gone after', () => {
+      const home = laneBox('ccrc-switch-off-');
+      const out = call(home, 'off', 'printf %s "$$" > "$HOME/pid";', 'printf "%s\\n" "${ACCT_OWN_TEMPS[@]}"');
+      const pid = fs.readFileSync(path.join(home, 'pid'), 'utf8');
+      expect(out).toBe(`rc=0\n${reg(home, `.lane-a-disabled.tmp.${pid}`)}\n`);
+      expect(isEmptyRegular(sw(home))).toBe(true);
+      expect(temps(home)).toEqual([]);
+    });
+
+    it('rc 0 over a standing marker: it is replaced by an empty regular file', () => {
+      const home = laneBox('ccrc-switch-off-stand-');
+      fs.writeFileSync(sw(home), 'stale bytes');
+      expect(call(home, 'off')).toBe('rc=0\n');
+      expect(isEmptyRegular(sw(home))).toBe(true);
+    });
+
+    it('a symlink is replaced, not followed: the target keeps its bytes', () => {
+      const home = laneBox('ccrc-switch-off-link-');
+      const target = link(home);
+      expect(call(home, 'off')).toBe('rc=0\n');
+      expect(isEmptyRegular(sw(home))).toBe(true);
+      expect(fs.readFileSync(target, 'utf8')).toBe('untouched');
+    });
+
+    it.each([
+      ['1', 'the registry cannot be created', 'mkdir() { return 1; };'],
+      ['2', 'the staged empty file cannot be written', 'command mkdir "$_SVC_REG/.lane-a-disabled.tmp.$$";'],
+      ['3', 'the rename fails (the temp removed)', '_plat_mv_notdir() { return 1; };'],
+      ['4', 'the result is not a regular marker', '_plat_mv_notdir() { rm -f -- "$1"; ln -s "$HOME/elsewhere" "$2"; };'],
+    ])('rc %s: %s, and nothing printed', (rc, _what, stub) => {
+      const home = laneBox('ccrc-switch-off-fail-');
+      expect(call(home, 'off', stub)).toBe(`rc=${rc}\n`);
+      if (rc === '3') { expect(temps(home)).toEqual([]); expect(fs.existsSync(sw(home))).toBe(false); }
+    });
+  });
+
+  describe('on: enable\'s strictness (marker or absent), with a postcondition', () => {
+    it('rc 0: a regular marker removed, and an absent one is rc 0 too', () => {
+      const home = laneBox('ccrc-switch-on-');
+      fs.writeFileSync(sw(home), '');
+      expect(call(home, 'on')).toBe('rc=0\n');
+      expect(fs.existsSync(sw(home))).toBe(false);
+      expect(call(home, 'on')).toBe('rc=0\n');
+    });
+
+    it('rc 0: a symlink removed, never its target', () => {
+      const home = laneBox('ccrc-switch-on-link-');
+      const target = link(home);
+      expect(call(home, 'on')).toBe('rc=0\n');
+      expect(fs.readdirSync(reg(home))).not.toContain('lane-a-disabled');
+      expect(fs.readFileSync(target, 'utf8')).toBe('untouched');
+    });
+
+    it('rc 5: a FIFO is refused before anything is removed', () => {
+      const home = laneBox('ccrc-switch-on-fifo-');
+      fifo(home);
+      expect(call(home, 'on')).toBe('rc=5\n');
+      expect(fs.lstatSync(sw(home)).isFIFO()).toBe(true);
+    });
+
+    it('rc 5: a directory is refused before anything is removed', () => {
+      const home = laneBox('ccrc-switch-on-dir-');
+      fs.mkdirSync(sw(home));
+      expect(call(home, 'on')).toBe('rc=5\n');
+      expect(fs.lstatSync(sw(home)).isDirectory()).toBe(true);
+    });
+
+    it('rc 6: a failed `rm`', () => {
+      const home = laneBox('ccrc-switch-on-rmfail-');
+      fs.writeFileSync(sw(home), '');
+      onSwitch(home, 'rm', 'exit 1');
+      expect(call(home, 'on')).toBe('rc=6\n');
+      expect(isEmptyRegular(sw(home))).toBe(true);
+    });
+
+    it('rc 7: a stubbed `rm` that exits 0 and removes nothing (the postcondition)', () => {
+      const home = laneBox('ccrc-switch-on-rmnoop-');
+      fs.writeFileSync(sw(home), '');
+      onSwitch(home, 'rm', 'exit 0');
+      expect(call(home, 'on')).toBe('rc=7\n');
+      expect(isEmptyRegular(sw(home))).toBe(true);
+    });
+  });
+
+  describe('on-any: remove\'s strictness (a directory only), no postcondition', () => {
+    it('rc 8: an absent path, nothing to remove', () => {
+      const home = laneBox('ccrc-switch-any-absent-');
+      expect(call(home, 'on-any')).toBe('rc=8\n');
+    });
+
+    it('rc 0: a regular marker removed', () => {
+      const home = laneBox('ccrc-switch-any-');
+      fs.writeFileSync(sw(home), 'x');
+      expect(call(home, 'on-any')).toBe('rc=0\n');
+      expect(fs.existsSync(sw(home))).toBe(false);
+    });
+
+    it.each([['a file', false], ['a directory', true]])('rc 0: a symlink to %s removed, never its target', (_what, dir) => {
+      const home = laneBox('ccrc-switch-any-link-');
+      const target = link(home, dir);
+      expect(call(home, 'on-any')).toBe('rc=0\n');
+      expect(fs.readdirSync(reg(home))).not.toContain('lane-a-disabled');
+      expect(fs.existsSync(target)).toBe(true);
+    });
+
+    it('rc 0: a FIFO removed (the loop\'s `! -d || -L` test admits it)', () => {
+      const home = laneBox('ccrc-switch-any-fifo-');
+      fifo(home);
+      expect(call(home, 'on-any')).toBe('rc=0\n');
+      expect(fs.readdirSync(reg(home))).not.toContain('lane-a-disabled');
+    });
+
+    it('rc 5: a directory is refused before anything is removed', () => {
+      const home = laneBox('ccrc-switch-any-dir-');
+      fs.mkdirSync(sw(home));
+      expect(call(home, 'on-any')).toBe('rc=5\n');
+      expect(fs.lstatSync(sw(home)).isDirectory()).toBe(true);
+    });
+
+    it('rc 6: a failed `rm`', () => {
+      const home = laneBox('ccrc-switch-any-rmfail-');
+      fs.writeFileSync(sw(home), '');
+      onSwitch(home, 'rm', 'exit 1');
+      expect(call(home, 'on-any')).toBe('rc=6\n');
+    });
+
+    it('rc 0: a stubbed `rm` that exits 0 and removes nothing (no postcondition, so rc 7 cannot arise)', () => {
+      const home = laneBox('ccrc-switch-any-rmnoop-');
+      fs.writeFileSync(sw(home), '');
+      onSwitch(home, 'rm', 'exit 0');
+      expect(call(home, 'on-any')).toBe('rc=0\n');
+      expect(isEmptyRegular(sw(home)), 'the marker is still there').toBe(true);
+    });
+  });
+});
+
 // ── no roster projection, behaviourally (spec K16; the static half is in single-definition/roster-bash.test.ts) ───
 
 describe('the disabled switch is never projected from the roster (D-7048)', () => {

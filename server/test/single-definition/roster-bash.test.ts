@@ -1392,3 +1392,15 @@ describe('the auth-dead marker has one write primitive (D-7049)', () => {
     ]);
   });
 });
+
+// ONE DISABLED-SWITCH WRITE PRIMITIVE (D-7050; ARCH-72, Task C5c; spec K16, §2.2 C1, §5.8). `$REG/<lane>-disabled` is
+// written and removed only by `ccd/ccrc#_acct_switch_write` (`off` for add, declare and disable through
+// `_acct_mark_off`; `on` for enable; `on-any` for remove's artefact step). At C5a's base 3 (`_acct_mark_off`,
+// `_acct_enable`, `_acct_remove`); here 1. MAY ONLY SHRINK: none is ever added, so a new `touch`, `rm`, `mv` or
+// redirection onto a lane's switch in any `ccrc account` verb, or anywhere in `ccd/`, reds here. The projection pin
+// above stays at 0.
+describe('the disabled switch has one write primitive (D-7050)', () => {
+  it('its writer bodies are exactly ccd/ccrc#_acct_switch_write: 1', () => {
+    expect(accountMarkerWriters('disabled').map((s) => s.name)).toEqual(['ccd/ccrc#_acct_switch_write']);
+  });
+});
