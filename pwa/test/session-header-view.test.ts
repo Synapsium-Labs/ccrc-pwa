@@ -6,7 +6,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { createElement } from 'react';
-import { UNCHECKED_PR, type FleetSession, type SessionStatus } from '../../shared/api';
+import { UNCHECKED_PR, type FleetSession, type RosterWire, type SessionStatus } from '../../shared/api';
 import type { Coordination } from '../src/fleet/fleetTree';
 import { sessionFacts } from '../src/fleet/sessionFacts';
 import { sessionMenu } from '../src/session/SessionFlows';
@@ -249,7 +249,7 @@ describe('the header names the session (desktop polish T3c, D-6333)', () => {
 
   it("a deep link's fallback title is the session's label", () => {
     // The title must not jump when the first fleet frame lands: before it, the id's own label; after it, the row's.
-    const roster = [{ id: 'lane-a', label: 'lane-a', hue: 'cyan', homeAble: true, hidden: false, pool: null }];
+    const roster: RosterWire[] = [{ id: 'lane-a', label: 'lane-a', hue: 'cyan', homeAble: true, hidden: false, pool: null }];
     const row = ws();
     const before = sessionHeaderView({
       session: null, status: 'idle', statusUpdatedAt: null, now: NOW, finePointer: false, roster,
