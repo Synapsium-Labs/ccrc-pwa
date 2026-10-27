@@ -8084,7 +8084,7 @@ _acct_marker_lock() {   # <what-still-stands> -> lock held on ACCT_MARKER_LOCK_F
 }
 
 _acct_enable() {   # [--id X]
-  local marker=""
+  local marker="" rc=0
   _acct_one_id enable "$@"
   _acct_id_or_refuse "$ACCT_ONE_ID"
   _acct_known_or_refuse "$ACCT_ONE_ID"
@@ -8095,12 +8095,14 @@ _acct_enable() {   # [--id X]
   marker="$_SVC_REG/$ACCT_ONE_ID-disabled"
   # A directory is not a disabled marker to ccd's `-f` predicate. Do not call it
   # switched off, and do not let `rm -f`'s directory refusal phrase that lie.
-  [ ! -e "$marker" ] || [ -f "$marker" ] || [ -L "$marker" ] \
-    || _acct_refuse 1 marker-conflict "$marker exists but is not a marker file, so its presence does not mean account $ACCT_ONE_ID is switched off. Move that object aside, then retry. Nothing was written."
-  rm -f -- "$marker" \
-    || _acct_refuse 1 marker-write "could not remove $marker, so the account's switch state was left unchanged. Nothing was written."
-  [ ! -e "$marker" ] && [ ! -L "$marker" ] \
-    || _acct_refuse 1 marker-write "$marker remains after removal, so the account's switch state was left unchanged. Nothing was written."
+  # `_acct_switch_write`'s `on` (D-7050) tests, removes and re-tests.
+  _acct_switch_write "$ACCT_ONE_ID" on || rc=$?
+  case "$rc" in
+    0) : ;;
+    5) _acct_refuse 1 marker-conflict "$marker exists but is not a marker file, so its presence does not mean account $ACCT_ONE_ID is switched off. Move that object aside, then retry. Nothing was written." ;;
+    6) _acct_refuse 1 marker-write "could not remove $marker, so the account's switch state was left unchanged. Nothing was written." ;;
+    *) _acct_refuse 1 marker-write "$marker remains after removal, so the account's switch state was left unchanged. Nothing was written." ;;
+  esac
   _acct_lane_state "$ACCT_ONE_ID"
   _acct_read_op "The marker for account $ACCT_ONE_ID was removed and the lane is switched on. Only this report failed." \
     switched --id "$ACCT_ONE_ID" --disabled false
