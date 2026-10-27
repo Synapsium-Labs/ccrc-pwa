@@ -822,10 +822,11 @@ if [ "$TARGET" = "agent" ]; then
   # on the node the units will; and it closes by publishing that node for the manager, after the last unit
   # and before AGENT_CMD's daemon-reload. `NODE_NO_INSTALL=1`: a deploy never installs node, even under a
   # pty. The two helpers are held byte-equal across lanes by deploy-verify.test.ts, `_unit_atomic`'s way.
+  # NOT inert to systemd: `_node_publish` runs its own `systemctl --user daemon-reload`, so the units placed above are loaded here, before the build stamp.
   AGENT_BUILD_CMD='_unit_atomic() { cp -- "$1" "$2.incoming.$$" || return 1; chmod 644 "$2.incoming.$$" || return 1; mv -f -- "$2.incoming.$$" "$2" || return 1; rm -f -- "$2.incoming."*; }
-_deploy_node_select() { . ~/ccrc/ccd/ccrc-node || { echo "deploy: FAILED — cannot source ~/ccrc/ccd/ccrc-node, which the rsync above ships" >&2; return 1; }; export NODE_NO_INSTALL=1; _node_floor "$1" || { echo "deploy: FAILED — $NODE_WHY" >&2; return 1; }; _node_select "$NODE_FLOOR" || { echo "deploy: FAILED — $NODE_WHY" >&2; return 1; }; echo "deploy: node $NODE_VERSION from $NODE_BIN_DIR" >&2; }
+_deploy_node_select() { . "$1" || { echo "deploy: FAILED — cannot source $1" >&2; return 1; }; export NODE_NO_INSTALL=1; _node_floor "$2" || { echo "deploy: FAILED — $NODE_WHY" >&2; return 1; }; _node_select "$NODE_FLOOR" || { echo "deploy: FAILED — $NODE_WHY" >&2; return 1; }; echo "deploy: node $NODE_VERSION from $NODE_BIN_DIR" >&2; }
 _deploy_node_publish() { _node_publish || { echo "deploy: FAILED — $NODE_WHY" >&2; return 1; }; [ -z "$NODE_WHY" ] || echo "deploy: note — $NODE_WHY" >&2; }
-_deploy_node_select ~/ccrc/agent/package.json \
+_deploy_node_select ~/ccrc/ccd/ccrc-node ~/ccrc/agent/package.json \
     && cd ~/ccrc/agent && npm ci && npm run build \
     && mkdir -p ~/.config/systemd/user \
     && _unit_atomic ~/ccrc/deploy/ccrc-agent.service ~/.config/systemd/user/ccrc-agent.service \
@@ -1264,9 +1265,18 @@ else
   "${SSH[@]}" "$BOX" "mkdir -p ~/ccrc-backups/$TS"
   "${SCP[@]}" deploy/backup-coord.mjs "$BOX":ccrc-backups/backup-coord.mjs
   "${SCP[@]}" deploy/coordination-snapshot.mjs "$BOX":ccrc-backups/coordination-snapshot.mjs
-  "${SSH[@]}" "$BOX" "{ [ ! -d ~/ccrc/server/dist-pwa ] || cp -a ~/ccrc/server/dist-pwa ~/ccrc-backups/$TS/dist-pwa; } \
+  # THE NODE these two steps run (spec 2026-10-26 decision 10): box-side `node` over non-interactive ssh, before the
+  # rsync and before either build half chooses one, so an nvm-only box answered "node: command not found". Each runs
+  # under bash after the same `_deploy_node_select` the build halves use (held byte-equal by deploy-verify), from the
+  # library and floor shipped fresh beside the helpers THIS run: the box's ~/ccrc is the outgoing build, or absent.
+  # Nothing is published here; publication stays the build half's last link, after the units.
+  "${SCP[@]}" ccd/ccrc-node "$BOX":ccrc-backups/ccrc-node
+  "${SCP[@]}" server/package.json "$BOX":ccrc-backups/server-package.json
+  BACKUP_NODE_SELECT='_deploy_node_select() { . "$1" || { echo "deploy: FAILED — cannot source $1" >&2; return 1; }; export NODE_NO_INSTALL=1; _node_floor "$2" || { echo "deploy: FAILED — $NODE_WHY" >&2; return 1; }; _node_select "$NODE_FLOOR" || { echo "deploy: FAILED — $NODE_WHY" >&2; return 1; }; echo "deploy: node $NODE_VERSION from $NODE_BIN_DIR" >&2; }
+_deploy_node_select ~/ccrc-backups/ccrc-node ~/ccrc-backups/server-package.json'
+  "${SSH[@]}" "$BOX" "bash -c '$BACKUP_NODE_SELECT && { [ ! -d ~/ccrc/server/dist-pwa ] || cp -a ~/ccrc/server/dist-pwa ~/ccrc-backups/$TS/dist-pwa; } \
     && { [ ! -f ~/.config/systemd/user/ccrc.service ] || cp -a ~/.config/systemd/user/ccrc.service ~/ccrc-backups/$TS/ccrc.service; } \
-    && { [ ! -f ~/.ccrc/coord.db ] || node --no-warnings ~/ccrc-backups/backup-coord.mjs ~/.ccrc/coord.db ~/ccrc-backups/$TS/coord.db; }"
+    && { [ ! -f ~/.ccrc/coord.db ] || node --no-warnings ~/ccrc-backups/backup-coord.mjs ~/.ccrc/coord.db ~/ccrc-backups/$TS/coord.db; }'"
   # The coordination snapshot (delegation broker wave 3, O3) is the LAST member of this set and is taken BEFORE the rsync below:
   # the delegation journal and checkpoint are authority a running server wrote, and the rsync is the first step that can touch
   # a box's tree. The helper (shipped fresh above, like backup-coord.mjs; it imports nothing from this tree) describes the SQLite
@@ -1274,7 +1284,7 @@ else
   # member is durable. A failure here aborts the deploy (`set -e` through ssh) before anything on the box has changed. A torn journal
   # tail (D-4655) is NOT a failure: the helper leaves it out, exits 0 and prints one warning line on its stderr, which ssh passes
   # through to this terminal (no redirect and no `-q` here, on purpose; a test pins both).
-  "${SSH[@]}" "$BOX" "node --no-warnings ~/ccrc-backups/coordination-snapshot.mjs capture --dir ~/ccrc-backups/$TS"
+  "${SSH[@]}" "$BOX" "bash -c '$BACKUP_NODE_SELECT && node --no-warnings ~/ccrc-backups/coordination-snapshot.mjs capture --dir ~/ccrc-backups/$TS'"
   # See the agent path's identical exclude, above, for why: this rsync also
   # ships `deploy/` whole, and without the exclude a stale, retired token left
   # in the checkout would ride along to the box, unhardened.
@@ -1301,9 +1311,9 @@ else
   # spellings of the helper are held byte-equal by `deploy-verify.test.ts` so
   # this copy cannot drift into being a second, weaker idea.
   REMOTE_BUILD_CMD='_unit_atomic() { cp -- "$1" "$2.incoming.$$" || return 1; chmod 644 "$2.incoming.$$" || return 1; mv -f -- "$2.incoming.$$" "$2" || return 1; rm -f -- "$2.incoming."*; }
-_deploy_node_select() { . ~/ccrc/ccd/ccrc-node || { echo "deploy: FAILED — cannot source ~/ccrc/ccd/ccrc-node, which the rsync above ships" >&2; return 1; }; export NODE_NO_INSTALL=1; _node_floor "$1" || { echo "deploy: FAILED — $NODE_WHY" >&2; return 1; }; _node_select "$NODE_FLOOR" || { echo "deploy: FAILED — $NODE_WHY" >&2; return 1; }; echo "deploy: node $NODE_VERSION from $NODE_BIN_DIR" >&2; }
+_deploy_node_select() { . "$1" || { echo "deploy: FAILED — cannot source $1" >&2; return 1; }; export NODE_NO_INSTALL=1; _node_floor "$2" || { echo "deploy: FAILED — $NODE_WHY" >&2; return 1; }; _node_select "$NODE_FLOOR" || { echo "deploy: FAILED — $NODE_WHY" >&2; return 1; }; echo "deploy: node $NODE_VERSION from $NODE_BIN_DIR" >&2; }
 _deploy_node_publish() { _node_publish || { echo "deploy: FAILED — $NODE_WHY" >&2; return 1; }; [ -z "$NODE_WHY" ] || echo "deploy: note — $NODE_WHY" >&2; }
-_deploy_node_select ~/ccrc/server/package.json \
+_deploy_node_select ~/ccrc/ccd/ccrc-node ~/ccrc/server/package.json \
     && cd ~/ccrc/server && npm ci && npm run build \
     && mkdir -p ~/.config/systemd/user \
     && _unit_atomic ~/ccrc/deploy/ccrc.service ~/.config/systemd/user/ccrc.service \

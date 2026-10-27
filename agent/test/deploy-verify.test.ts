@@ -1145,7 +1145,7 @@ describe('the verification is actually wired into the deploy, and can observe a 
       defs.push([sel!, pub!]);
       // 3. Order in the chain: select (on the lane's own package.json) before npm ci; publish the LAST link,
       //    after the last unit.
-      const selectAt = body!.indexOf(`\n_deploy_node_select ~/ccrc/${l.pkg}/package.json`);
+      const selectAt = body!.indexOf(`\n_deploy_node_select ~/ccrc/ccd/ccrc-node ~/ccrc/${l.pkg}/package.json`);
       expect(selectAt, `${l.name} never chooses node from ~/ccrc/${l.pkg}/package.json`).toBeGreaterThan(-1);
       expect(selectAt, `${l.name} chooses node after npm ci`).toBeLessThan(body!.indexOf('npm ci'));
       const links = body!.split('&&').map((x) => x.replace(/\\\s*$/, '').trim());
@@ -1160,9 +1160,9 @@ describe('the verification is actually wired into the deploy, and can observe a 
       expect(i, `_deploy_node_select lost: ${needle}`).toBeGreaterThan(-1);
       return i;
     };
-    const sourced = at('. ~/ccrc/ccd/ccrc-node ||');
+    const sourced = at('. "$1" ||');
     const noInstall = at('export NODE_NO_INSTALL=1;');
-    const floor = at('_node_floor "$1" ||');
+    const floor = at('_node_floor "$2" ||');
     const chosen = at('_node_select "$NODE_FLOOR" ||');
     expect(sourced).toBeLessThan(noInstall);
     expect(noInstall, 'NODE_NO_INSTALL is exported after the choice it must bind').toBeLessThan(chosen);
@@ -1224,6 +1224,78 @@ describe('the verification is actually wired into the deploy, and can observe a 
       expect(existsSync(join(blocked.home, 'built'))).toBe(true);
       for (const u of units) expect(existsSync(join(blocked.home, u)), `${u} was not placed before the publication`).toBe(true);
     }
+  });
+
+  it('the server lane\'s pre-rsync node calls (coord.db backup, coordination snapshot) run on the CHOSEN node, from a library and floor shipped fresh this run (D-TBD-node-runtime-under-nvm)', () => {
+    // Those two steps run box-side `node` BEFORE the rsync and before either build half chooses one. On an nvm-only
+    // server box a bare `node` is "command not found" over non-interactive ssh; below the floor it is an obscure
+    // node:sqlite error. So each runs in a bash shell that first makes the same choice, from the library and the
+    // server's package.json scp'd beside the helpers THIS run (the box's ~/ccrc is the outgoing build, or absent).
+    const elseAt = deploySh.indexOf('\nelse');
+    const rsyncAt = deploySh.indexOf('\n  rsync -az --delete', elseAt);
+    const segStart = deploySh.indexOf('"${SSH[@]}" "$BOX" "mkdir -p ~/ccrc-backups/$TS"', elseAt);
+    expect(segStart, 'the server lane no longer opens its backup set this way').toBeGreaterThan(elseAt);
+    expect(rsyncAt).toBeGreaterThan(segStart);
+    const preRsync = deploySh.slice(elseAt, rsyncAt).split('\n').filter((l) => !l.trim().startsWith('#')).join('\n');
+    // 1. Text: every box-side command before the rsync that names `node` runs under bash and selects first.
+    const sshCmds = preRsync.replace(/\\\n/g, ' ').split('\n').filter((l) => l.trim().startsWith('"${SSH[@]}"'));
+    const nodeCmds = sshCmds.filter((l) => /\bnode --no-warnings\b/.test(l));
+    expect(nodeCmds.length, 'the pre-rsync node calls moved — this reader no longer sees them').toBe(2);
+    for (const c of nodeCmds) {
+      expect(c, `a pre-rsync node call is not run under bash with the select first: ${c}`)
+        .toMatch(/^\s*"\$\{SSH\[@\]\}" "\$BOX" "bash -c '\$BACKUP_NODE_SELECT && /);
+    }
+    const sel = /^\s*BACKUP_NODE_SELECT='([\s\S]*?)'$/m.exec(preRsync)?.[1];
+    expect(sel, 'BACKUP_NODE_SELECT is not a single quoted block').toBeTruthy();
+    const def = /^_deploy_node_select\(\) \{.*\}$/m.exec(sel!)?.[0];
+    const buildDef = /^_deploy_node_select\(\) \{.*\}$/m.exec(/REMOTE_BUILD_CMD='([\s\S]*?)'\n/.exec(deploySh)![1]!)?.[0];
+    expect(def, 'the backup shell spells the select step differently from the build halves').toBe(buildDef);
+    expect(sel).toContain('\n_deploy_node_select ~/ccrc-backups/ccrc-node ~/ccrc-backups/server-package.json');
+    expect(sel, 'the backup shell publishes node; publication is the build half\'s last link').not.toContain('_node_publish');
+    const shipLib = preRsync.indexOf('"${SCP[@]}" ccd/ccrc-node "$BOX":ccrc-backups/ccrc-node');
+    const shipPkg = preRsync.indexOf('"${SCP[@]}" server/package.json "$BOX":ccrc-backups/server-package.json');
+    expect(shipLib, 'the library is not shipped fresh beside the helpers').toBeGreaterThan(-1);
+    expect(shipPkg, 'the floor is not shipped fresh beside the helpers').toBeGreaterThan(-1);
+    const firstNode = preRsync.indexOf('node --no-warnings');
+    expect(shipLib).toBeLessThan(firstNode);
+    expect(shipPkg).toBeLessThan(firstNode);
+
+    // 2. RUN the segment (mkdir through the snapshot) against a fixture HOME, with ssh and scp replaced by local
+    //    stand-ins: ssh hands its joined arguments to the login shell, scp copies into the fixture HOME.
+    const segment = deploySh.slice(segStart, rsyncAt);
+    const runBox = (floor?: string): { home: string; r: ReturnType<typeof spawnSync> } => {
+      const home = mkTmp('ccrc-server-backup-node-');
+      mkdirSync(join(home, '.ccrc'), { recursive: true });
+      const db = spawnSync(process.execPath, ['--no-warnings', '-e',
+        "const {DatabaseSync}=require('node:sqlite');const d=new DatabaseSync(process.argv[1]);d.exec('create table t(x)');d.close()",
+        join(home, '.ccrc', 'coord.db')]);
+      expect(db.status, String(db.stderr)).toBe(0);
+      const pkg = join(home, 'fixture-package.json');
+      if (floor !== undefined) writeFileSync(pkg, JSON.stringify({ name: 'server', engines: { node: `>=${floor}` } }));
+      const script = [
+        'set -euo pipefail',
+        'fake_ssh() { shift; sh -c "$*"; }',
+        `fake_scp() { local s="$1"; if [ "$s" = server/package.json ] && [ -n "\${FIXTURE_PKG:-}" ]; then s="$FIXTURE_PKG"; fi; cp -- "$s" "$HOME/\${2#*:}"; }`,
+        'SSH=(fake_ssh); SCP=(fake_scp); BOX=box; TS=t1',
+        segment,
+      ].join('\n');
+      const scriptPath = join(home, 'backup.sh');
+      writeFileSync(scriptPath, script);
+      const env = { ...nodeStepEnv(home), ...(floor !== undefined ? { FIXTURE_PKG: pkg } : {}) };
+      const r = spawnSync('bash', [scriptPath], { cwd: join(deployDir, '..'), env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+      return { home, r };
+    };
+    // a. No qualifying node on the box: the deploy stops with the selection's own line, and no backup is taken.
+    const low = runBox('999.0.0');
+    expect(low.r.status, 'the backup ran on a node below the floor').not.toBe(0);
+    expect(low.r.stderr).toMatch(/deploy: FAILED — node v\d+\.\d+\.\d+ at .* is below the floor \(>=999\.0\.0\)/);
+    expect(existsSync(join(low.home, 'ccrc-backups', 't1', 'coord.db')), 'coord.db was backed up on a refused node').toBe(false);
+    // b. A qualifying node: the choice is named, the SQLite snapshot lands, and nothing is published.
+    const ok = runBox();
+    expect(ok.r.status, `the backup set failed on a qualifying node: ${ok.r.stderr}`).toBe(0);
+    expect(ok.r.stderr).toMatch(/deploy: node v\d+\.\d+\.\d+ from /);
+    expect(existsSync(join(ok.home, 'ccrc-backups', 't1', 'coord.db')), `coord.db was not backed up: ${ok.r.stderr}`).toBe(true);
+    expect(existsSync(join(ok.home, '.local', 'libexec', 'ccrc', 'node-bin')), 'the backup shell published node').toBe(false);
   });
 
   it('R-8 (fix round F1): the graphify skill arm is PIN-GATED — a pinless box defers instead of aborting the agent lane', () => {
@@ -2521,7 +2593,7 @@ describe('the fallback deploy captures the coordination snapshot before rsync (W
 
   it('the helper is shipped fresh this run, beside backup-coord.mjs, and invoked with `capture` into THIS run\'s timestamp directory', () => {
     expect(code).toMatch(/"\$\{SCP\[@\]\}" deploy\/coordination-snapshot\.mjs "\$BOX":ccrc-backups\/coordination-snapshot\.mjs/);
-    expect(code).toMatch(/"\$\{SSH\[@\]\}" "\$BOX" "node --no-warnings ~\/ccrc-backups\/coordination-snapshot\.mjs capture --dir ~\/ccrc-backups\/\$TS"/);
+    expect(code).toMatch(/"\$\{SSH\[@\]\}" "\$BOX" "bash -c '\$BACKUP_NODE_SELECT && node --no-warnings ~\/ccrc-backups\/coordination-snapshot\.mjs capture --dir ~\/ccrc-backups\/\$TS'"/);
     expect(existsSync(join(deployDir, 'coordination-snapshot.mjs'))).toBe(true);
   });
 

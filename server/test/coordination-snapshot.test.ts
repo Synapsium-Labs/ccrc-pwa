@@ -2073,7 +2073,8 @@ describe('8C: capture of a torn tail (D-4655): the complete prefix, the checkpoi
     const deploy = readFileSync(path.join(HERE8B, '..', '..', 'deploy', 'deploy.sh'), 'utf8');
     const line = deploy.split('\n').find((l) => l.includes('coordination-snapshot.mjs capture --dir'));
     expect(line, 'deploy.sh no longer runs the capture').toBeDefined();
-    expect(line!.trim()).toBe('"${SSH[@]}" "$BOX" "node --no-warnings ~/ccrc-backups/coordination-snapshot.mjs capture --dir ~/ccrc-backups/$TS"');
+    // Under bash, after the box-side node choice (D-TBD-node-runtime-under-nvm; agent/test/deploy-verify.test.ts runs it).
+    expect(line!.trim()).toBe(`"\${SSH[@]}" "$BOX" "bash -c '$BACKUP_NODE_SELECT && node --no-warnings ~/ccrc-backups/coordination-snapshot.mjs capture --dir ~/ccrc-backups/$TS'"`);
     expect(deploy).toMatch(/^SSH=\(ssh -p "\$CCRC_SSH_PORT" -i "\$CCRC_SSH_KEY"\)$/m);
   });
 });
