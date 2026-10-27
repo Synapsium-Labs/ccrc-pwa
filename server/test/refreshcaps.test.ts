@@ -28,9 +28,10 @@ describe('makeRefreshCaps — the guard index.ts wires into Deps.refreshCaps', (
     expect(state.ccdVerbs).toEqual(['start', 'ws-audit']);
   });
 
-  // index.ts's local mode: its identity cell is never invalidated (epoch 0), and its one read answers null when
-  // `ccd caps` gave no evidence. That null keeps the null the boot path seeded; it is not turned into a list or [].
-  it('local mode\'s null keeps null (epoch 0, the never-invalidated cell)', async () => {
+  // makeRefreshCaps at epoch 0 (a never-invalidated cell): a null answer keeps a seeded null; it is not turned into a
+  // list or []. This is the refresh writer, not index.ts's local-mode read: that closure is driven for real by
+  // boot.test.ts, which boots the composition root in local mode against a stub ccd.
+  it('a null refresh at epoch 0 (the never-invalidated cell) keeps a seeded null', async () => {
     const state: FleetState = { connected: true, downSince: null, ccdVerbs: null, rosterFp: null, build: null };
     const cell = new FleetIdentityCell();
     expect(cell.epochNow()).toBe(0);
