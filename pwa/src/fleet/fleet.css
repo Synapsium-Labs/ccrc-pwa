@@ -1629,6 +1629,18 @@ button.sess-held {
   inset: calc((var(--sp-8) - 2px - var(--tap-min)) / 2);
 }
 
+/* D-6332: under a mouse the row's ⋯ is transparent until its row is hovered, holds focus (a keyboard reaches it
+   through the row) or is the selected row, so one ⋯ is visible at a time. OPACITY and nothing else: the button stays
+   mounted, focusable and in the accessibility tree, with its 44px ::before overlay and its `open-actions` door, and
+   no transition owes a reduced-motion entry. A coarse pointer has no hover, so the rule does not apply there: a
+   touch screen draws every row's ⋯. */
+@media (hover: hover) and (pointer: fine) {
+  .sess-actions { opacity: 0; }
+  .sess-line:hover .sess-actions,
+  .sess-line:focus-within .sess-actions,
+  .sess-line--active .sess-actions { opacity: 1; }
+}
+
 /* ── session actions sheet ────────────────────────────────────────── */
 .sess-sheet {
   display: flex;
@@ -3543,6 +3555,32 @@ button.proj-card-pool::before {
 @container sess-body (min-width: 320px) {
   .fit-full { display: inline; }
   .fit-short { display: none; }
+}
+
+/* D-6332, desk-rule-not-container-threshold: the container query above never fires at the desk, where the fleet
+   column's track (185px at 1280, Refined) is narrower than a phone's (226px at 360), so a width threshold cannot tell
+   the two apart. From the desk breakpoint the full form of every `Fit` pair draws, and the name and a branch may take
+   two lines, wrapping at their token breaks and cut where the second line ends (the browser's line clamp), so the
+   text fills the track rather than stopping at a fixed 28 characters. The full text stays in `title` and in the
+   `sr-only` accessible name. The programme slug and its wave tail are never clamped: the clamp is named for the
+   name's box and the branch cell alone, and neither can reach a `.sess-pw` descendant. Below 900px nothing changes. */
+@media (min-width: 900px) {
+  .sess-body .fit-full { display: inline; }
+  .sess-body .fit-short { display: none; }
+  .sess-label-fit {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    overflow: hidden;
+  }
+  .sess-context[data-context='branch'] {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    overflow: hidden;
+  }
 }
 
 /* The banner stack's slot (W2 Task S2c, BannerStack.tsx): no box of its own, so a sticky banner inside it stays
