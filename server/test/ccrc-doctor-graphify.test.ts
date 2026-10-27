@@ -403,7 +403,7 @@ describe('ccrc doctor: graphify', () => {
     writeShippedTimer(join(home, 'ccrc'), 'ccd-graph-sweep.timer', null);
     const r = runDoctor(home);
     expect(graphifyLines(r.stdout, home), r.stdout).toEqual(UNREAD(minutes));
-    expect(r.stderr).not.toMatch(/integer expression expected|syntax error/);
+    expect(r.stderr).not.toMatch(/integer (?:expression )?expected|syntax error|unbound variable/);
   });
   it('ccrc\'s timer reader not loaded: graphify FAILs naming the bug (C8b)', () => {
     const home = censusAged('ccrc-doctor-gfx-census-unloaded-', 2701);

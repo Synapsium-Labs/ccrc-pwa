@@ -1348,7 +1348,7 @@ describe('ccrc doctor: models', () => {
       `WARN models: ccrc-models.timer's cadence could not be read from the shipped unit file (<home>/ccrc/deploy/systemd/ccrc-models.timer), so the staleness of gpt's catalogue (${min} min old) is unmeasured`,
       '  remedy: the shipped tree at <home>/ccrc is incomplete or damaged — both deploy lanes place the whole tree there, so the next ccrc update (or deploy) restores it; then re-run ccrc doctor',
     ]);
-    expect(r.stderr).not.toMatch(/integer expression expected|syntax error/);
+    expect(r.stderr).not.toMatch(/integer (?:expression )?expected|syntax error|unbound variable/);
   });
   it('ccrc\'s timer reader not loaded: models FAILs naming the bug (C8b)', () => {
     const home = catalogueAged('ccrc-doctor-models-c8b-unloaded-', 3 * 3600 + 60);
