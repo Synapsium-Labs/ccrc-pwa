@@ -303,23 +303,44 @@ describe.skipIf(!PY)('the stats file (codex-bridge spec §2.7, §2.9 D3; D-6418)
 
   // Claude Code 2.1.310's nine `anthropic-beta` values, measured on the live lane's first traffic after the flip
   // (runbook step 4, 2026-10-27; D-7093). Seven gate shapes the bridge never sends, answers itself or already counts by
-  // their own family, and are explained; the two tool-change betas gate `tool_addition`/`tool_removal` blocks, which inbound drops
-  // (counting their types by name since D-7094), so they stay unexplained and the doctor keeps naming them until the bridge
-  // honours those blocks.
-  const EXPLAINED_BETAS = [
+  // their own family; the two tool-change betas gate `tool_addition`/`tool_removal` blocks in a system entry, which
+  // inbound honours since D-7143 (ccd/codexbridge/inbound.py#_fold_tool_changes). All nine are explained, so the
+  // doctor is quiet on them.
+  const MEASURED_BETAS = [
     'advanced-tool-use-2025-11-20', 'claude-code-20250219', 'context-management-2025-06-27',
-    'interleaved-thinking-2025-05-14', 'thinking-display-updates-2026-08-18', 'thinking-token-count-2026-05-13',
-    'token-counting-2024-11-01',
+    'inline-tools-2026-09-15', 'interleaved-thinking-2025-05-14', 'mid-conversation-tool-changes-2026-07-01',
+    'thinking-display-updates-2026-08-18', 'thinking-token-count-2026-05-13', 'token-counting-2024-11-01',
   ];
-  const OPEN_BETAS = ['inline-tools-2026-09-15', 'mid-conversation-tool-changes-2026-07-01'];
-  it("Claude Code's measured betas: seven are explained, and the two tool-change betas stay unexplained", async () => {
+  it("Claude Code's nine measured betas are explained, the two tool-change betas among them (D-7143)", async () => {
+    expect(MEASURED_BETAS).toHaveLength(9);
     const { home, file } = lane('cb-stats-betas-');
-    const all = [...EXPLAINED_BETAS, ...OPEN_BETAS, 'effort-2025-11-24'];
+    const all = [...MEASURED_BETAS, 'effort-2025-11-24'];
     const out = await run(home, [open(file), ...all.map((b) => call('name', ['betaValue', b])), { op: 'stats-snapshot' }]);
     const snap = out[out.length - 1];
-    // the control: every beta was counted, so the unexplained list is about KNOWN, not a call that missed
+    // the control: every beta was counted, so the empty unexplained list is about KNOWN, not a call that missed
     expect(Object.keys(snap.doc.names.betaValue).sort()).toEqual([...all].sort());
-    expect(snap.doc.unexplained.betaValue).toEqual([...OPEN_BETAS].sort());
+    expect(snap.doc.unexplained.betaValue).toBeUndefined();
+  });
+
+  // The block names inbound counts for a system entry (ccd/codexbridge/inbound.py#@system-entry-dropped-blocks): the
+  // four it honours since D-7143 are explained; a block or tool it cannot type (`unrecognised`), a tool type it does
+  // not know, and a by-reference addition of a name nothing offers stay unexplained, so the doctor names each the day
+  // it arrives.
+  const HONOURED_BLOCKS = [
+    'tool_addition-block', 'tool_addition-block.tool_definition', 'tool_addition-block.tool_reference', 'tool_removal-block',
+  ];
+  const OPEN_BLOCKS = [
+    'future_fx-block', 'tool_addition-block.future_kind', 'tool_addition-block.unknown-reference',
+    'tool_addition-block.unrecognised', 'unrecognised-block',
+  ];
+  it('the honoured tool-change block names are explained, and the shapes the bridge cannot handle are not (D-7143)', async () => {
+    const { home, file } = lane('cb-stats-blocks-');
+    const all = [...HONOURED_BLOCKS, ...OPEN_BLOCKS];
+    const out = await run(home, [open(file), ...all.map((n) => call('name', ['requestField', n])), { op: 'stats-snapshot' }]);
+    const snap = out[out.length - 1];
+    // the control: every name was counted, so the unexplained list is about KNOWN, not a call that missed
+    expect(Object.keys(snap.doc.names.requestField).sort()).toEqual([...all].sort());
+    expect(snap.doc.unexplained.requestField).toEqual([...OPEN_BLOCKS].sort());
   });
 
   it('KNOWN covers every family, and its errorCode family is errors.ALL_CODES', async () => {
