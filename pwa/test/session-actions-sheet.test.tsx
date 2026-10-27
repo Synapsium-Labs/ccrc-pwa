@@ -324,7 +324,7 @@ describe('hold and release', () => {
     // here: any other call (SwapSheet, mounted alongside every
     // SessionActionsSheet, once polled /api/accounts on its own; since C8,
     // D-6440, it reads the fleet store) must not read as a hold/release
-    // failure).
+    // failure.
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       const method = init?.method ?? 'GET';
