@@ -9,13 +9,14 @@
 // "the two families agree on every call", which holds at every step of the series. The rows C5e, C5f and C5g move
 // REPORT, as `accountMarkers.test.ts` (C5a) does (`reportRow.ts#expectReportRow`): helper definitions 2 at base (C5e
 // takes them to 1), token minters 2 (C5f: 1), reap-lock wrappers 4 (C5g: 1). Each prints its sites and holds only that
-// every name is a base site or the plan's target, that the count never grows past the base, and that the query still
-// finds one; the exact may-only-shrink pin lands in that task's ratchet commit.
+// every name is a base site or the plan's target, that each site appears once (so the count is at most those names: the
+// target may stand beside the base sites, as C5g Step 3's runner does), and that the query still finds one; the exact may-only-shrink pin lands in that task's ratchet commit.
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { ccdLauncherIn } from '../consolidationCensus.js';
+import { ccdSource } from '../ccdWsHelpers.js';
 import {
   functionSpan, markedSpan, reapLockWrappers, refuseCalls, refuseHelperDefs, refuseWords, regPurgeCallLines, tailCallers,
   tailStepHelpers, TAIL_FNS, TAIL_REAP_SIDE, TAIL_STEP_HELPERS, tokenMinters,
@@ -247,5 +248,50 @@ describe('the tail steps: named helpers the reap and reclaim tails share (D-7074
 
   it('REAL: `_reg_purge` is called only from `_reg_retire`', () => {
     expect(regPurgeCallLines()).toEqual([]);
+  });
+});
+
+describe('the REPORT rows\' bound, held by mutants of the real ccd text (D-7071; `reportRow.ts#expectReportRow`)', () => {
+  const WRAPPERS = ['cmd_ws_reap', 'cmd_ws_reclaim', 'cmd_ws_expire', 'cmd_ws_collect'];
+  const RUNNER = [
+    '_ws_reap_lock_run() {   # act id fn args... -> the fn\'s rc under the reap lock',
+    '  local act="$1" id="$2" lock="$REG/.reap-$id.lock" lfd rc=0; shift 2',
+    '  exec {lfd}>>"$lock" || _lc_refuse "$act" "$id" lock-unopenable "cannot open the reap lock at $lock"',
+    '  flock -n "$lfd" || {',
+    '    printf \'{"refused":"in-progress","detail":%s,"paths":[]}\\n\' "$(_json_str "busy")"',
+    '    exec {lfd}>&-',
+    '    return 0',
+    '  }',
+    '  "$@"; rc=$?',
+    '  exec {lfd}>&-',
+    '  return "$rc"',
+    '}',
+  ].join('\n');
+  const minter = (name: string): string => `${name}() {   # key=value...\n  printf '%s\\n' "$@" | _plat_sha256 | cut -d' ' -f1\n}`;
+
+  it('GREEN: C5g Step 3\'s tree, the runner beside the four wrappers (5), still reports', () => {
+    const r = reapLockWrappers(`${ccdSource()}\n${RUNNER}\n`);
+    expect([...r.wrappers].sort()).toEqual([...WRAPPERS, '_ws_reap_lock_run'].sort());
+    expectReportRow('reapLockWrappers', r.wrappers, WRAPPERS, ['_ws_reap_lock_run'], 1);
+  });
+
+  it('RED: a third minter under a new name', () => {
+    const m = tokenMinters(`${ccdSource()}\n${minter('_ws_resume_fingerprint')}\n`);
+    expect(m).toContain('_ws_resume_fingerprint');
+    expect(() => expectReportRow('tokenMinters', m, ['_ws_fingerprint', '_ws_reclaim_fingerprint'], ['_ws_reclaim_fingerprint'], 1))
+      .toThrow(/neither a base site nor the plan's target/);
+  });
+
+  it('RED: a third definition, a base helper defined a second time', () => {
+    const defs = refuseHelperDefs(`${ccdSource()}\n_reap_refuse() { REAP_VERDICT="$1"; REAP_DETAIL="$2"; return 1; }\n`);
+    expect(defs).toHaveLength(3);
+    expect(() => expectReportRow('refuseHelperDefs', defs.map((d) => d.name), ['_reap_refuse', '_ws_collect_refuse'], ['_ws_refuse'], 1))
+      .toThrow(/each site once/);
+  });
+
+  it('RED: a fifth wrapper under a new name, beside C5g Step 3\'s runner', () => {
+    const r = reapLockWrappers(`${ccdSource()}\n${RUNNER}\n${RUNNER.replace('_ws_reap_lock_run()', '_ws_reap_lock_run2()')}\n`);
+    expect(() => expectReportRow('reapLockWrappers', r.wrappers, WRAPPERS, ['_ws_reap_lock_run'], 1))
+      .toThrow(/neither a base site nor the plan's target/);
   });
 });

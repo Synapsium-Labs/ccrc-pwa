@@ -3,13 +3,15 @@
 // over what it must not (a read, a comparison, a type, an initialiser; a writer's own staged temp), and the REAL tree.
 // `ccdVerbsWriters()`'s writers REPORT, as `accountMarkers.test.ts` (C5a) does (`reportRow.ts#expectReportRow`): 3 at
 // base, C5j takes them to 1 (`fleetstate.ts#recordCcdVerbs`) and lands the exact may-only-shrink pin in its ratchet
-// commit; the row holds only that every name is a base site or that target and that the count never grows past the base.
+// commit; the row holds only that every name is a base site or that target, each once (C5j Step 3 adds the target beside
+// the three before the callers move, 4; a writer under any other name reds).
 // Its 2 initialisers, and `usageSidecarDeleters()` 2 (C5k pins them by name, may only shrink; OA-C13 ruled (b)), are
 // pinned by name now: nothing in the series moves them.
 import { afterEach, describe, expect, it } from 'vitest';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { ccdVerbsWriters, usageSidecarDeleters, type WriterSite } from './singleWriters.js';
 import { expectReportRow } from './reportRow.js';
 
@@ -58,6 +60,44 @@ describe('ccdVerbsWriters: assignments to FleetState.ccdVerbs under server/src (
     expectReportRow('ccdVerbsWriters', r.writers.map((s) => s.name),
       ['index.ts#(module)', 'refreshcaps.ts#makeRefreshCaps', 'remote/client.ts#onReady'], ['fleetstate.ts#recordCcdVerbs'], 1);
     expect(r.initialisers.map((s) => s.file).sort()).toEqual(['server/src/index.ts', 'server/src/remote/client.ts']);
+  });
+});
+
+describe('ccdVerbsWriters\' REPORT bound, held by mutants of the real server/src (D-7071; `reportRow.ts#expectReportRow`)', () => {
+  const BASE = ['index.ts#(module)', 'refreshcaps.ts#makeRefreshCaps', 'remote/client.ts#onReady'];
+  const TARGET = ['fleetstate.ts#recordCcdVerbs'];
+  const SRC = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../src');
+  /** A tree holding every real `server/src` file that names `ccdVerbs` (the query reads no other). */
+  const realTree = (): string => {
+    const files: Record<string, string> = {};
+    for (const rel of readdirSync(SRC, { recursive: true }) as string[]) {
+      if (!/\.tsx?$/.test(rel)) continue;
+      const text = readFileSync(path.join(SRC, rel), 'utf8');
+      if (text.includes('ccdVerbs')) files[path.join('server/src', rel)] = text;
+    }
+    return tree(files);
+  };
+  const SETTER = '\nexport function recordCcdVerbs(state: { ccdVerbs: string[] | null }, verbs: string[] | null): boolean {\n'
+    + '  state.ccdVerbs = verbs;\n  return true;\n}\n';
+
+  it('the copied tree measures the base', () => {
+    expect(ccdVerbsWriters(realTree()).writers.map((s) => s.name).sort()).toEqual(BASE);
+  });
+
+  it('GREEN: C5j Step 3\'s tree, `recordCcdVerbs` added before the callers move (4), still reports', () => {
+    const t = realTree();
+    appendFileSync(path.join(t, 'server/src/fleetstate.ts'), SETTER);
+    const names = ccdVerbsWriters(t).writers.map((s) => s.name);
+    expect([...names].sort()).toEqual([...TARGET, ...BASE].sort());
+    expectReportRow('ccdVerbsWriters', names, BASE, TARGET, 1);
+  });
+
+  it('RED: a fourth writer under a new name', () => {
+    const t = realTree();
+    writeFileSync(path.join(t, 'server/src/poke.ts'), 'export function poke(s: { ccdVerbs: string[] | null }): void {\n  s.ccdVerbs = [];\n}\n');
+    const names = ccdVerbsWriters(t).writers.map((s) => s.name);
+    expect(names).toContain('poke.ts#poke');
+    expect(() => expectReportRow('ccdVerbsWriters', names, BASE, TARGET, 1)).toThrow(/neither a base site nor the plan's target/);
   });
 });
 

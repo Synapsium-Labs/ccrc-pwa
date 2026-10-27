@@ -3,8 +3,8 @@
 // byte-equal copy), and the REAL tree. Two REAL rows REPORT, as `accountMarkers.test.ts` (C5a) does
 // (`reportRow.ts#expectReportRow`), because their tasks move them: `pythonRedactorTables()` 1 at base (C5h takes it to 0)
 // and `logLineRedactors()` 2 (C5i takes it to 1). Each prints its sites and holds only that every name is a base site or
-// the plan's target and that the count never grows past the base; the exact may-only-shrink pin lands in that task's
-// ratchet commit. `inlineUserinfoStrips()` 1 is at target, so it is pinned now by name with its reason and may only
+// the plan's target, each once, and that the query still finds one where the target keeps a site; the exact
+// may-only-shrink pin lands in that task's ratchet commit. `inlineUserinfoStrips()` 1 is at target, so it is pinned now by name with its reason and may only
 // shrink: `ccd/ccrc-doctor-checks#_check_box-settings` strips one setting's DISPLAYED value (CCRC_RELEASE_BASE_URL) before
 // `_upd_redact` runs over the whole doctor line, so it is not a log-line redactor (plan, item 10).
 import { afterEach, describe, expect, it } from 'vitest';
