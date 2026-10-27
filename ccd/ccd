@@ -40414,7 +40414,7 @@ _authdead_clear_on_spawn() {   # wrapper — `_spawn_settle`'s rc-0 half for the
   if [[ -f "$f" && ! -L "$f" ]]; then t=$(cat "$f" 2>/dev/null); t="${t%% *}"; fi
   _authdead_cred_changed "$1" "$t"
   [[ $? -eq 1 ]] && return 0
-  rm -f -- "$f"
+  _authdead_clear "$1"
 }
 
 # ── THE MERGE QUEUE, READ ONCE PER REPOSITORY PER SWEEP (landing-order wave 2) ──
