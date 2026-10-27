@@ -5,6 +5,10 @@
 // `setCollectLane`'s `failed` phases), its leniency (`LedgerLog.maxAllocated` parses per project and salvages, and is
 // NOT routed through `maxJournalEpoch`), its file format and its path. The delegation journal (authority, not a
 // projection; spec §3.19) never imports this file.
+// D-7059 (spec K17's first and second bullets): `splitJournalRecords` is the one NDJSON framer of the lifecycle mirror
+// (`coord/mirrorplan.ts#frameRead`) and the collect-lane journal (`collectLane.ts#parseCollectLaneJournal`). Framing is
+// the only step they share: the mirror's byte cursor, its `lifecycle_gaps` and its rotation-name generations, and the
+// collect-lane journal's whole-file read, its `mismatch` and its strictly rising integer generations, stay each its own.
 
 /**
  * The largest `"epoch":<digits>` over the non-empty lines of a journal's text: the one body `PoolEdgeLog.maxEpoch`
@@ -73,4 +77,26 @@ export function appendThenApply<D, R, S>(step: JournalStep<D, R, S>, phase?: { a
   const r = step.apply(d.go);
   if (phase !== undefined) phase.at = 'done';
   return r;
+}
+
+/** One NDJSON text, framed: `complete` is the text through its last `\n` (empty when it holds none), `records` the
+ *  lines of `complete` in order, BLANKS KEPT, and `tail` what follows the last `\n` (a partial line, or empty).
+ *  `complete + tail` is the text. */
+export interface JournalRecords {
+  readonly complete: string;
+  readonly records: readonly string[];
+  readonly tail: string;
+}
+
+/**
+ * Split NDJSON text into its complete records and the tail after the last newline. It decides nothing: `frameRead`
+ * drops a blank record and leaves the tail unconsumed for its next read, and `parseCollectLaneJournal` refuses a blank
+ * record and reads a non-empty tail as its last record. Characters, not bytes: a caller that keeps a byte cursor takes
+ * `Buffer.byteLength(complete, 'utf8')` itself.
+ */
+export function splitJournalRecords(text: string): JournalRecords {
+  const lastLf = text.lastIndexOf('\n');
+  if (lastLf < 0) return { complete: '', records: [], tail: text };
+  const complete = text.slice(0, lastLf + 1);
+  return { complete, records: complete.split('\n').slice(0, -1), tail: text.slice(lastLf + 1) };
 }
