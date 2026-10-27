@@ -23,8 +23,8 @@ import {
   HIBERNATE_SWEEP_MS, NO_HIBERNATE_SUFFIX,
   hibernateAfterMs, hibernateVerdict, type HibernateHold, type HibernateInput, type HibernateVerdict,
 } from '../src/coord/hibernate.js';
-import { heldKindOf, stopDonePass, type StopDoneMemory, type StopDoneSweepDeps } from '../src/stopDoneSweep.js';
-import { hibernatePass, type HibernateActPort, type HibernateSweepDeps, type HibernateSweepMemory } from '../src/hibernateSweep.js';
+import { heldKindOf, stopDonePass, type StopDoneMemory, type StopDoneSweepDeps } from '../src/sleepLane.js';
+import { hibernatePass, type HibernateActPort, type HibernateSweepDeps, type HibernateSweepMemory } from '../src/sleepLane.js';
 import { RECLAIM_PAUSE_MARKER } from '../src/coord/rundefs.js';
 import { ACTOR_FLAGS_CAP, HIBERNATE_HOLD_OK_CAP } from '../src/ccdargv.js';
 import { PRESENCE_OPEN_TTL_MS, type FleetSession } from '../../shared/api.js';
@@ -1273,8 +1273,8 @@ describe('C4d: decideSleep answers only its policy\'s words, and its turn fallba
 // passes act on them. The rows take the passes as an argument (`LanePasses`), so the same rows drive the one executor
 // once it exists; the move commits change none of them.
 
-import type { StopDoneOutcome } from '../src/stopDoneSweep.js';
-import type { HibernateSweepOutcome } from '../src/hibernateSweep.js';
+import type { StopDoneOutcome } from '../src/sleepLane.js';
+import type { HibernateSweepOutcome } from '../src/sleepLane.js';
 
 interface LanePasses {
   readonly runDone: (deps: StopDoneSweepDeps, mem: StopDoneMemory, sessions: readonly FleetSession[],
