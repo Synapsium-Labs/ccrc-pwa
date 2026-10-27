@@ -232,6 +232,9 @@ describe('ccrc install --role: the refusals and the default', () => {
         && !c.argv.includes('list-units'))
       .map((c) => c.argv);
     expect(calls).toEqual([
+      // `_inst_node`'s reload (the manager re-reads the node PATH fragment, node-runtime-under-nvm), then
+      // `_inst_units`' own.
+      '--user daemon-reload',
       '--user daemon-reload',
       '--user enable --now ccrc.service',
       '--user enable --now ccd-cap-scopes.timer',
