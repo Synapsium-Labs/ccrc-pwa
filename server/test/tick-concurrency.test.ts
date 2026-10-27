@@ -62,7 +62,7 @@ const paneOf = (i: number, dialogs: boolean): string => {
 const taskFile = (n: number, status: string, subject: string): string =>
   JSON.stringify({ id: String(n), subject, activeForm: `${subject}...`, description: '', status });
 
-/** The registry and every task file as one Map the fake serves. `listed` false models an unlistable registry. */
+/** The registry (12 rows, wrapper `claude`) and the task files of rows 4 and 6, as one Map the fake serves. */
 interface Fixture { reg: FakeRegistry; dir: string; addTask: (i: number, n: number, status: string, subject: string) => void }
 const fixture = (): Fixture => {
   const cfg = fixtureConfig();
@@ -176,7 +176,7 @@ const rig = (): Rig => {
   return { w, bus, gate, fx, counting, sent, setMono: (ms) => { mono = ms; }, mono: () => mono, unlist: (on) => { unlisted = on; }, tick, during };
 };
 
-/** The first tick, which primes (no push on it): no row shows a dialog, no task list is due again afterwards. */
+/** The first tick, which primes (no push on it): no row shows a dialog yet, and it runs the task lane once. */
 const primed = async (r: Rig): Promise<void> => {
   await r.tick();
   expect(r.sent, 'the priming tick pushes nothing').toEqual([]);
