@@ -577,7 +577,9 @@ describe('the lanes fold (S5b, D-6530)', () => {
     stubDesk(1248);
     stubSeventeen();
     const { container } = render(<AccountsStrip />);
-    await screen.findByText('lane-a');
+    // The control, not the first card: lane-a is on the page unfolded too, and the fold takes two more renders (the
+    // ref callback's state, then the observer effect's measure), which under load a bare card wait does not outlast.
+    await screen.findByRole('button', { name: /more/ });
     const group = container.querySelector('.accounts-strip')!;
     expect(cardsOf(container).map(nameOf)).toEqual(SHOWN.slice(0, 3));
     expect([...group.children].map((c) => c.className)).toEqual(['account-gauge', 'account-gauge', 'account-gauge', 'accounts-end']);
