@@ -22,4 +22,14 @@ describe('caps never cross a reconnect', () => {
     await steady();
     expect(state.ccdVerbs).toEqual(['start']);
   });
+
+  // D-7079 characterization: the epoch moving once (a close, with no fresh ready yet) is enough to drop the answer.
+  it('a refresh whose epoch moved writes nothing', async () => {
+    const state: FleetState = { connected: true, downSince: null, ccdVerbs: ['start', 'ws-audit'], rosterFp: null, build: null };
+    const cell = new FleetIdentityCell();
+    cell.invalidate('awaiting-inventory');
+    const moved = makeRefreshCaps({ caps: async () => { cell.invalidate('link-down'); return ['start', 'ws-rename']; } }, state, cell);
+    await moved();
+    expect(state.ccdVerbs).toEqual(['start', 'ws-audit']);
+  });
 });
