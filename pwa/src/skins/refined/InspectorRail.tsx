@@ -4,7 +4,8 @@
 // today's strips, chips and sheets carry the same content; at >=1600 the column does not render the task and mail
 // strips (`SessionScreen`), so each is mounted once at any width.
 //
-// The sections are the SHARED ones (`inspector/`), placed here in Refined's order: this file defines none.
+// The sections are the SHARED ones (`inspector/`), placed here in Refined's order: this file defines none. A section
+// with nothing to show renders nothing, so with no content the rail holds History alone (desktop polish T3d, D-6334).
 import type { ReactNode } from 'react';
 import { useMediaQuery } from '../../lib/useMediaQuery';
 import {

@@ -552,6 +552,43 @@ jobs:
         run: |
           ./node_modules/.bin/vitest run test/session-hook.test.ts --maxWorkers=1 --no-file-parallelism -t 'p95 of 40|costs no more than 4\.2x|costs no more than 4x the cheap|spool.s increment'
 
+  # SECRET-MASK'S SLICING ROW, ON A RUNNER OF ITS OWN (c1-secret-mask-wall-clock-to-perf-job). The row is `a 2 MB TUI pane history: after a warm-up
+  # pass`: the longest gap between two slices of a 2 MB pane history stays under BOUND / 5. The threshold is unchanged.
+  # It failed on a loaded runner for two measured causes: a cold first slice, and a major GC of about 100 ms landing inside
+  # one slice. Neither is a defect in the masker, and the principle is the one that moved the hook rows (D-6929): no
+  # wall-clock assertion in a required check. So the row is skipped unless CCRC_PERF=1 (`it.runIf`), this job sets it, and
+  # the required suite keeps a pin on the slices themselves (their size, the pause between two, the same answer as one string).
+  # NOT REQUIRED, and in no required summary or verdict: no other job lists it in `needs:`. It has NO promotion clock of its
+  # own (giving it one would need an operator ruling), and it is a job apart from `perf (server)` so that a flake here never
+  # counts against that job's two-week zero-flake clock, nor a red step here hides the hook budgets (c1-secret-mask-wall-clock-to-perf-job).
+  # Same gate as the server shards: it runs when a selection or a full run exists, and not for a docs-only change.
+  mask-perf:
+    name: perf (secret-mask)
+    needs: [select, deps]
+    if: ${{ !cancelled() && needs.select.outputs.count != '0' && (needs.select.outputs.tests == 'selected' || needs.select.outputs.tests == 'full') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: |
+            server/package-lock.json
+            agent/package-lock.json
+            pwa/package-lock.json
+      - uses: ./.github/actions/server-deps
+        with:
+          platform: linux
+      # `-t` picks the row by title, and CCRC_PERF=1 un-skips it. Local binary, never npx (see server-shard).
+      - name: Mask slices
+        working-directory: server
+        env:
+          CCRC_PERF: '1'
+        run: |
+          ./node_modules/.bin/vitest run test/secret-mask.test.ts --maxWorkers=1 --no-file-parallelism -t 'a 2 MB TUI pane history: after a warm-up pass'
+
   # THE REQUIRED `test (server)` CHECK (design 2026-09-23 §4.2). A summary,
   # because the server tests now run as a variable number of shards and a
   # required check needs one fixed name. `if: always()` because a job whose

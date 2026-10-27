@@ -29,6 +29,7 @@ import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import { Bus } from '../src/bus.js';
 import { FleetWatcher } from '../src/watch.js';
+import { questionsTestView } from '../src/coord/questions.js';
 import type { PushPayload } from '../src/push.js';
 import { hashLine, type ScryptParams } from '../src/auth/secret.js';
 import { okAsk } from './coordReadHelpers.js';
@@ -387,13 +388,11 @@ describe('POST /api/asks/:id/release', () => {
     return { app: built, coord, w };
   };
 
-  /** Reflection idiom `asks-sweep.test.ts`/`hold-gate.test.ts` already use to
-   *  reach the watcher's private, in-memory hold — `heldAsks` deliberately
-   *  has no public read; `releaseHeldAsk` is its only public WRITE. */
+  /** The watcher's in-memory hold, through its `Questions` instance's test-only view (W3 Q3d, D-7028, named
+   *  exception 1; it was a reflection read of the private `heldAsks`): per child, as that map held it. The hold still
+   *  has no public read; `releaseHeldAsk` is its only public WRITE, and `plantHeldAsk` seeds it as `hold()` would. */
   const heldMap = (w: FleetWatcher): Map<string, { until: number; askId: number;
-      ev: unknown; answeringSince: number | null }> =>
-    (w as unknown as { heldAsks: Map<string, { until: number; askId: number;
-      ev: unknown; answeringSince: number | null }> }).heldAsks;
+      ev: unknown; answeringSince: number | null }> => questionsTestView(w.questions).heldAsks();
 
   /** Registry (child + parent + a third, unrelated session), a held ask row,
    *  and the watcher's own in-memory hold seeded to match it — the shape
@@ -415,7 +414,7 @@ describe('POST /api/asks/:id/release', () => {
       askAt: now, dialogId: 'dlg-1', question: QUESTION.question,
       options: QUESTION.options.map((o) => o.label), now,
     });
-    heldMap(built.w).set(CHILD, {
+    questionsTestView(built.w.questions).plantHeldAsk(CHILD, {
       until: now + 180_000, askId: id, answeringSince: null,
       ev: { kind: 'ask', sessionId: CHILD, project: 'demo', title: 'question needs you',
         body: QUESTION.question, tag: `ask-${CHILD}` },
@@ -976,7 +975,7 @@ describe('late answer wins; declined (D-5289)', () => {
     });
     const ev = { kind: 'ask' as const, sessionId: KID, project: 'demo', title: '❓ Question',
       body: QUESTION.question };
-    (w as unknown as { heldAsks: Map<string, unknown> }).heldAsks.set(KID,
+    questionsTestView(w.questions).plantHeldAsk(KID,
       { until: now + 1, askId: id, ev, answeringSince: null });
     // `sweepAsks` runs only once the watcher has primed; set it the way the
     // sweep tests' first `tick()` would, without a tick's other lanes.

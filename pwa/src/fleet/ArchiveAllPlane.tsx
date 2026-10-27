@@ -13,7 +13,7 @@
 // consequence sentence travels with the count it describes, so the two can
 // never state different numbers.
 import type { ReactNode } from 'react';
-import { useRef, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import { QuickConfirm, toast } from '@ccrc/ui';
 import { boardHome, type FleetSession } from '../../../shared/api';
 import { api, apiErrorText } from '../lib/api';
@@ -39,7 +39,7 @@ export interface ArchiveAllPlane {
 export function useArchiveAll(store: FleetStore): ArchiveAllPlane {
   const [archiving, setArchiving] = useState<ReadonlySet<string>>(new Set());
   const archivingRef = useRef<Set<string>>(new Set());
-  const run = async (project: string): Promise<void> => {
+  const run = useCallback(async (project: string): Promise<void> => {
     if (archivingRef.current.has(project)) return;
     archivingRef.current.add(project);
     // EVERY folded row of this card, children included: the loop skips a child itself, so its summary counts the
@@ -69,8 +69,9 @@ export function useArchiveAll(store: FleetStore): ArchiveAllPlane {
         return next;
       });
     }
-  };
-  return { archiving, run };
+  }, [store]);
+  // Memoised (C6, D-6438), so the chrome's value holds still between changes of the in-flight set.
+  return useMemo(() => ({ archiving, run }), [archiving, run]);
 }
 
 export interface ArchiveAllConfirmProps {

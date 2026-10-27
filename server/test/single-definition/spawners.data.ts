@@ -3,8 +3,9 @@
  * `agent/src` and `shared/`, one row per `file#symbol`, each with why it is its own spawner and not a call of another.
  * `census-w8/spawn.ts#processSpawnSites` is the census; `kernel-tail-spawn.test.ts` holds its keys equal to this set
  * in both directions (a new spawner needs a row and a reason here; a row whose site is gone is red), and the set may
- * only shrink. Each spawner is audited one at a time: C8d audited `localcaps.ts`; C8e audits the account-op pair and
- * edits its two rows. The shape is the ring rules' `EntrySet` (`rings/exemptions.ts`).
+ * only shrink. Each spawner is audited one at a time: C8d audited `localcaps.ts`; C8e audited the account-op pair
+ * (kept against `exec.ts`, D-7057) and, by OA-C8a (a) (D-7060), folded its two rows into
+ * `shared/spawn.mjs#boundedStdinSpawn`'s one. The shape is the ring rules' `EntrySet` (`rings/exemptions.ts`).
  */
 import type { EntrySet } from '../rings/exemptions.js';
 
@@ -15,6 +16,10 @@ export const PROCESS_SPAWNERS: EntrySet = {
   },
   'shared/spawn.mjs#boundedSpawn': {
     reason: 'the one bounded update spawner (D-7055): its own group, stdin closed, SIGKILL at the bound, a drain deadline',
+    since: '2026-10-27',
+  },
+  'shared/spawn.mjs#boundedStdinSpawn': {
+    reason: 'the one account-op spawner (D-7057, OA-C8a (a)): the secret on stdin (D-5513), an explicit env, TERM to the group, KILL after the grace',
     since: '2026-10-27',
   },
   'server/src/pty.ts#attachPty': {
@@ -31,14 +36,6 @@ export const PROCESS_SPAWNERS: EntrySet = {
   },
   'agent/src/server.ts#runExec': {
     reason: "the agent's exec op: only whitelisted argv reaches it, bounded by execFile's own timeout",
-    since: '2026-10-27',
-  },
-  'server/src/accounts/ops.ts#localAccountOps.run': {
-    reason: "the local account-op arm (D-5513: the secret on stdin); audited in C8e with the agent's twin",
-    since: '2026-10-27',
-  },
-  'agent/src/accountop.ts#makeAccountOpSpawn': {
-    reason: "the agent's account-op arm, the local arm's twin; audited in C8e",
     since: '2026-10-27',
   },
   'server/src/localcaps.ts#execCapped': {

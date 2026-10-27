@@ -28,6 +28,7 @@
 import type { RosterWire } from '../../../shared/api';
 import { POOL_NAME_RE, type Hue } from '../../../shared/roster';
 import type { AccountPoolWire } from '../../../shared/poolrule';
+import { isProviderId, type ProviderId } from '../../../shared/providers';
 
 /** This account's roster entry, or `undefined` for a wrapper the roster does
  *  not (yet) have — an unarrived poll, or a genuinely unrostered wrapper (a
@@ -69,6 +70,15 @@ export function accountLabel(roster: readonly RosterWire[], wrapper: string): st
  *  hue, so it can't be misread as state). */
 export function accountHue(roster: readonly RosterWire[], wrapper: string): Hue | undefined {
   return entryFor(roster, wrapper)?.hue;
+}
+
+/** The provider this lane runs on — THE ONE READER of `RosterWire.provider` in this app. Absent (an older server, an
+ *  undeclared lane), a value this build does not know (`isProviderId` false: a newer server's provider), an unrostered
+ *  wrapper and a roster not yet arrived all answer `null`, which means NOT MEASURABLE — every caller treats those
+ *  alike, so one null is not an overloaded one. */
+export function accountProvider(roster: readonly RosterWire[], wrapper: string): ProviderId | null {
+  const p = entryFor(roster, wrapper)?.provider;
+  return isProviderId(p) ? p : null;
 }
 
 /** Ruling T9-R1 (2026-09-18, mid-Task-9): the PWA CANNOT fold the

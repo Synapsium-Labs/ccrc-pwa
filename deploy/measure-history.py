@@ -6,7 +6,7 @@ the database is opened `mode=ro`, and a missing store is refused rather than cre
 SQLite's, not this script's: opening a WAL database that no process holds open may create its `-shm` and
 `-wal` files, owned by whoever runs this, so run it as the store's own user, never under `sudo`.
 
-    python3 deploy/measure-history.py [--db PATH] [--now MS]
+    python3 deploy/measure-history.py [--db PATH] [--now MS] [--w1f-since MS]
                                       [--families FILE --window-start MS --window-end MS --row-cap N]
                                       [--census --as-of MS --since MS --row-cap N]
 
@@ -21,7 +21,9 @@ merged: two nodes' families with one ccrc id are two families (spec §6.9).
                           the word and never derives one, so the backend rule is spelled once (pin O32: no
                           model-name test lives in this file). W1-i's and W1-j's counters are rows here.
   w1b_lag_p95_ms          W1-b: the p95 of ticks.lag_ms over the 7 days up to --now, counting only ticks with
-                          files_behind = 0 and a measured lag (outside backfill and catch-up); null if none.
+                          files_behind = 0 whose predecessor by time also ended with files_behind = 0 (so not
+                          the tick that finishes a backlog) and a measured lag; the store's first tick has
+                          none (D-7098); null if none.
                           Both filters lean on rules the sweep keeps when it writes a ticks row: lag_ms is NULL
                           for a tick whose new rows all came from first reads or rescans (discovery, not
                           capture lag), and files_behind counts no gone or pathless row and no stale torn tail
@@ -37,7 +39,9 @@ merged: two nodes' families with one ccrc id are two families (spec §6.9).
                           denominator, and mismatch_share = mismatch / (served + mismatch) (target
                           <= 0.02), each null, never 0, when its denominator is 0. A reading whose
                           window holds a restore or rebuild is void; a served_share above 1 is its tell
-  w1f_grep_p95_ms         W1-f: the p95 of recall_calls.ms over verb = 'grep' rows with arm IS NULL; null if none
+  w1f_grep_p95_ms         W1-f: the p95 of recall_calls.ms over verb = 'grep' rows with arm IS NULL and rc in
+                          W1F_SEARCH_RCS (a search that ran to its answer; refusals and failures are not
+                          searches), ts_ms from --w1f-since (default 0) to --now (D-7097); null if none
   w2                      null without --families; else {row_cap, window_start_ms, window_end_ms, families,
                           recall_off}, the W2 raw rows, below; the two window fields echo --window-start and
                           --window-end
@@ -105,6 +109,17 @@ WEEK_MS = 7 * 86_400_000
 # The presence record's meta prefix: lib.mjs's RECALL_OFF_META, spelled here once because this file imports nothing
 # from lib (W2-D23). measure-history.test.ts holds the two equal, so a changed copy on either side goes red.
 RECALL_OFF_META = 'recall_off:'
+# W1-f counts a grep only when it ran to its answer: lib.mjs's EXIT.OK and EXIT.NOT_FOUND, spelled once here as
+# their twin because this file imports nothing from lib. measure-history.test.ts holds the two equal (D-7097).
+W1F_SEARCH_RCS = (0, 3)
+# W1-b (D-7098): a tick counts when it and its predecessor by (ts_ms, tick_id) both ended with files_behind = 0,
+# because files_behind is measured at a tick's end and the tick that finishes a backlog reads as caught up. The
+# predecessor is read over every tick, before the week's filter; the store's first tick has none and is left out.
+W1B_SQL = ('SELECT lag_ms FROM (SELECT ts_ms, lag_ms, files_behind, '
+           'LAG(files_behind) OVER (ORDER BY ts_ms, tick_id) AS prev_behind FROM ticks) '
+           'WHERE files_behind = 0 AND prev_behind = 0 AND lag_ms IS NOT NULL AND ts_ms > ? AND ts_ms <= ?')
+W1F_SQL = ("SELECT ms FROM recall_calls WHERE verb = 'grep' AND arm IS NULL "
+           'AND rc IN (' + ','.join('?' * len(W1F_SEARCH_RCS)) + ') AND ts_ms >= ? AND ts_ms <= ?')
 
 
 def fail(msg):
@@ -353,6 +368,7 @@ def main():
     ap.add_argument('--census', action='store_true', help='W2 open: every family of this store as of --as-of')
     ap.add_argument('--as-of', type=int, default=None, help='epoch ms: the census instant (W2 open, T0)')
     ap.add_argument('--since', type=int, default=None, help='epoch ms: where the census raw rows start')
+    ap.add_argument('--w1f-since', type=int, default=None, help='epoch ms: where the W1-f grep rows start; default 0')
     a = ap.parse_args()
     if a.census and a.families is not None:
         fail('--census and --families are exclusive')
@@ -375,14 +391,12 @@ def main():
             'user_version': db.execute('PRAGMA user_version').fetchone()[0],
             'script_sha256': script_sha256(),
             'counters': {name: n for name, n in db.execute('SELECT name, n FROM counters ORDER BY name').fetchall()},
-            'w1b_lag_p95_ms': p95([r[0] for r in db.execute(
-                'SELECT lag_ms FROM ticks WHERE files_behind = 0 AND lag_ms IS NOT NULL AND ts_ms > ? AND ts_ms <= ?',
-                (now - WEEK_MS, now)).fetchall()]),
+            'w1b_lag_p95_ms': p95([r[0] for r in db.execute(W1B_SQL, (now - WEEK_MS, now)).fetchall()]),
             'w1c_duplicate_entries': db.execute(
                 'SELECT count(*) FROM (SELECT uuid FROM entries GROUP BY uuid HAVING count(*) > 1)').fetchone()[0],
             'w1e': None,   # W1-e: filled from 'counters' below the literal, in this place in the key order
             'w1f_grep_p95_ms': p95([r[0] for r in db.execute(
-                "SELECT ms FROM recall_calls WHERE verb = 'grep' AND arm IS NULL").fetchall()]),
+                W1F_SQL, (*W1F_SEARCH_RCS, a.w1f_since if a.w1f_since is not None else 0, now)).fetchall()]),
             'w2': None,
             'census': None,   # W2-3 Task 4: filled below with --census
         }

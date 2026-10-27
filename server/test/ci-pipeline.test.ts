@@ -1144,7 +1144,7 @@ describe('ci.yml: dependencies are installed once per run, and handed to the job
     for (const st of saves) expect(st, 'a save that runs without save: true').toMatch(/if: .*inputs\.save == 'true'/);
     expect(a, 'actions/cache itself would save on every caller').not.toMatch(/uses: actions\/cache@/);
     const callers = [...jobs(read(CI))].filter(([, b]) => /^ {6}- uses: \.\/\.github\/actions\/server-deps$/m.test(b));
-    expect(callers.map(([id]) => id).sort()).toEqual(['deps', 'node-floor', 'pwa-shard', 'pwa-static', 'server-perf', 'server-shard', 'test-macos', 'trace-shard']);
+    expect(callers.map(([id]) => id).sort()).toEqual(['deps', 'mask-perf', 'node-floor', 'pwa-shard', 'pwa-static', 'server-perf', 'server-shard', 'test-macos', 'trace-shard']);
     for (const [id, b] of callers) {
       const saves = /save: 'true'/.test(b);
       expect(saves, `${id}: only deps may save`).toBe(id === 'deps');
@@ -1457,5 +1457,62 @@ describe('ci.yml: the session-hook budgets run in `perf (server)`, which is not 
     }
     // Every `Date.now() - t0` timing in the three p95 rows is under the gate: no ungated row reads times[37].
     expect((src.match(/expect\(times\[37\]\)\.toBeLessThan\(150\)/g) ?? []).length).toBe(3);
+  });
+});
+
+// ── c1-secret-mask-wall-clock-to-perf-job: secret-mask's 2 MB slicing wall clock runs in a non-required job of its own ──
+describe('ci.yml: the secret-mask slicing row runs in `perf (secret-mask)`, a job of its own that is not required and has no promotion clock (c1-secret-mask-wall-clock-to-perf-job)', () => {
+  const MASK_TEST = 'server/test/secret-mask.test.ts';
+
+  it('is one job, named `perf (secret-mask)`, gated like the server shards, with a deadline and no part in any required summary', () => {
+    const b = job('mask-perf');
+    expect(jobKey(b, 'name')).toBe('perf (secret-mask)');
+    expect(needs(b)).toEqual(['deps', 'select']);
+    expect(jobKey(b, 'if')).toBe(jobKey(job('server-shard'), 'if'));
+    expect(jobKey(b, 'timeout-minutes')).toBe('20');
+    expect(b, 'continue-on-error would hide a red').not.toMatch(/continue-on-error/);
+  });
+
+  it('is NOT REQUIRED: the required summaries and every other job leave it out of `needs`', () => {
+    for (const id of ['server', 'full-suite']) expect(needs(job(id)), `${id} must not wait on the mask perf job`).not.toContain('mask-perf');
+    for (const [id, b] of jobs(read(CI))) {
+      expect(needs(b), `${id} must not wait on the mask perf job`).not.toContain('mask-perf');
+    }
+  });
+
+  it('runs one step, `Mask slices`: the secret-mask file only, one worker, no file parallelism, CCRC_PERF=1, the row selected by title', () => {
+    const t = step(job('mask-perf'), 'Mask slices');
+    expect(t).toMatch(/^ {10}CCRC_PERF: '1'$/m);
+    expect(t).toMatch(/^ {8}working-directory: server$/m);
+    expect(runScript(t)).toBe(
+      "./node_modules/.bin/vitest run test/secret-mask.test.ts --maxWorkers=1 --no-file-parallelism -t 'a 2 MB TUI pane history: after a warm-up pass'\n");
+  });
+
+  it('`perf (server)` carries no part of it: no `Mask slices` step and no mention of secret-mask, so its promotion clock is the hook rows\' alone', () => {
+    const b = job('server-perf');
+    expect(steps(b).filter((st) => st.includes('name: Mask slices\n')), 'the mask step belongs to mask-perf').toHaveLength(0);
+    // Comment lines are left out: the job text runs on to the next job's header, so it carries mask-perf's own leading
+    // comment, which names this row by its slug.
+    const yamlLines = b.split('\n').filter((line) => !/^\s*#/.test(line)).join('\n');
+    expect(yamlLines, 'no step or script of perf (server) names secret-mask').not.toMatch(/secret-mask/);
+  });
+
+  it('the gated row keeps the bound, the required row pins the slices and reads no clock', () => {
+    const src = read(MASK_TEST);
+    const gatedHead = "it.runIf(process.env['CCRC_PERF'] === '1')('a 2 MB TUI pane history: after a warm-up pass";
+    const requiredHead = "it('a 2 MB TUI pane history is masked in slices of at most 64 Ki units with a pause between every two, with the same answer as one string, a key a slice cut splits included'";
+    // A row runs from its header to the next `it(` / `it.runIf(` header.
+    const rowAt = (head: string): string => {
+      const at = src.indexOf(head);
+      expect(at, `secret-mask.test.ts has no row headed ${head}`).toBeGreaterThan(-1);
+      const rest = src.slice(at + head.length);
+      const next = rest.search(/^ *it(?:\.runIf\([^\n]*?\))?\('/m);
+      return next === -1 ? rest : rest.slice(0, next);
+    };
+    expect(rowAt(gatedHead), 'the gated row keeps its threshold, unchanged').toContain('toBeLessThan(BOUND / 5)');
+    const required = rowAt(requiredHead);
+    for (const clock of ['performance.now', 'Date.now', 'process.hrtime']) {
+      expect(required, `the required slicing row must not read ${clock}: no wall-clock assertion in a required check`).not.toContain(clock);
+    }
   });
 });

@@ -11,7 +11,7 @@ import {
  * The server decides, because only it sees every fact the operator's ruling names — open runs, claims, outstanding
  * mail, a screen with the session open — and it already assembles the rest every tick. `ccd hibernate <id>` (plan
  * Task 16) acts, after re-measuring the box-local half at the act (and the one hold the server cannot see,
- * `attached`). Its sweep (`hibernateSweep.ts`) logs a shadow line for a `hibernate` answer, and acts only once the
+ * `attached`). Its sweep (`sleepLane.ts`) logs a shadow line for a `hibernate` answer, and acts only once the
  * operator arms it with `$REG/hibernate-live` (Task 17b, which brought every path that wakes a session with it).
  *
  * L1: decisions only, over what the sweep measured. It imports L0 alone.
