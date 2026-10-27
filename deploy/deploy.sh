@@ -815,8 +815,18 @@ if [ "$TARGET" = "agent" ]; then
   # it reaches every pane scope) and `ccrc-tmux-server.scope.d`, the same pair
   # `ccrc install`'s `_inst_units` places. Nothing ever deletes them on a
   # redeploy of an older tree; rolling back is removing them by hand.
+  #
+  # THE NODE (spec 2026-10-26-node-runtime-under-nvm, decision 10). The units start `node` by name on the
+  # user manager's PATH, which an nvm node is not on. So the chain opens by choosing node ON THE BOX through
+  # the shipped ccd/ccrc-node (the floor is this lane's own package.json), before `npm ci`, so the build runs
+  # on the node the units will; and it closes by publishing that node for the manager, after the last unit
+  # and before AGENT_CMD's daemon-reload. `NODE_NO_INSTALL=1`: a deploy never installs node, even under a
+  # pty. The two helpers are held byte-equal across lanes by deploy-verify.test.ts, `_unit_atomic`'s way.
   AGENT_BUILD_CMD='_unit_atomic() { cp -- "$1" "$2.incoming.$$" || return 1; chmod 644 "$2.incoming.$$" || return 1; mv -f -- "$2.incoming.$$" "$2" || return 1; rm -f -- "$2.incoming."*; }
-cd ~/ccrc/agent && npm ci && npm run build \
+_deploy_node_select() { . ~/ccrc/ccd/ccrc-node || { echo "deploy: FAILED — cannot source ~/ccrc/ccd/ccrc-node, which the rsync above ships" >&2; return 1; }; export NODE_NO_INSTALL=1; _node_floor "$1" || { echo "deploy: FAILED — $NODE_WHY" >&2; return 1; }; _node_select "$NODE_FLOOR" || { echo "deploy: FAILED — $NODE_WHY" >&2; return 1; }; echo "deploy: node $NODE_VERSION from $NODE_BIN_DIR" >&2; }
+_deploy_node_publish() { _node_publish || { echo "deploy: FAILED — $NODE_WHY" >&2; return 1; }; [ -z "$NODE_WHY" ] || echo "deploy: note — $NODE_WHY" >&2; }
+_deploy_node_select ~/ccrc/agent/package.json \
+    && cd ~/ccrc/agent && npm ci && npm run build \
     && mkdir -p ~/.config/systemd/user \
     && _unit_atomic ~/ccrc/deploy/ccrc-agent.service ~/.config/systemd/user/ccrc-agent.service \
     && _unit_atomic ~/ccrc/ccd/claude-session@.service ~/.config/systemd/user/claude-session@.service \
@@ -851,8 +861,11 @@ cd ~/ccrc/agent && npm ci && npm run build \
     && _unit_atomic ~/ccrc/deploy/systemd/ccd-scope-sweep.service ~/.config/systemd/user/ccd-scope-sweep.service \
     && _unit_atomic ~/ccrc/deploy/systemd/ccd-scope-sweep.timer ~/.config/systemd/user/ccd-scope-sweep.timer \
     && _unit_atomic ~/ccrc/deploy/systemd/ccrc-codex-usage@.service ~/.config/systemd/user/ccrc-codex-usage@.service \
-    && _unit_atomic ~/ccrc/deploy/systemd/ccrc-codex-usage@.timer ~/.config/systemd/user/ccrc-codex-usage@.timer'
-  "${SSH[@]}" "$BOX" "$AGENT_BUILD_CMD"
+    && _unit_atomic ~/ccrc/deploy/systemd/ccrc-codex-usage@.timer ~/.config/systemd/user/ccrc-codex-usage@.timer \
+    && _deploy_node_publish'
+  # Under bash BY NAME: ssh hands this string to the box user's LOGIN shell, and ccd/ccrc-node is bash.
+  # The body is a single-quoted literal above, so it holds no `'` and one pair of quotes around it is exact.
+  "${SSH[@]}" "$BOX" "bash -c '$AGENT_BUILD_CMD'"
   # Plan 2b-1 Task 7: the GPT-lane files. They sit HERE, not beside the
   # ccd-usage-sweep pair they belong with: a citation corpus this plan may not
   # edit cites this file's lines by number above this point, and an insert
@@ -1288,10 +1301,15 @@ else
   # spellings of the helper are held byte-equal by `deploy-verify.test.ts` so
   # this copy cannot drift into being a second, weaker idea.
   REMOTE_BUILD_CMD='_unit_atomic() { cp -- "$1" "$2.incoming.$$" || return 1; chmod 644 "$2.incoming.$$" || return 1; mv -f -- "$2.incoming.$$" "$2" || return 1; rm -f -- "$2.incoming."*; }
-cd ~/ccrc/server && npm ci && npm run build \
+_deploy_node_select() { . ~/ccrc/ccd/ccrc-node || { echo "deploy: FAILED — cannot source ~/ccrc/ccd/ccrc-node, which the rsync above ships" >&2; return 1; }; export NODE_NO_INSTALL=1; _node_floor "$1" || { echo "deploy: FAILED — $NODE_WHY" >&2; return 1; }; _node_select "$NODE_FLOOR" || { echo "deploy: FAILED — $NODE_WHY" >&2; return 1; }; echo "deploy: node $NODE_VERSION from $NODE_BIN_DIR" >&2; }
+_deploy_node_publish() { _node_publish || { echo "deploy: FAILED — $NODE_WHY" >&2; return 1; }; [ -z "$NODE_WHY" ] || echo "deploy: note — $NODE_WHY" >&2; }
+_deploy_node_select ~/ccrc/server/package.json \
+    && cd ~/ccrc/server && npm ci && npm run build \
     && mkdir -p ~/.config/systemd/user \
-    && _unit_atomic ~/ccrc/deploy/ccrc.service ~/.config/systemd/user/ccrc.service'
-  "${SSH[@]}" "$BOX" "$REMOTE_BUILD_CMD"
+    && _unit_atomic ~/ccrc/deploy/ccrc.service ~/.config/systemd/user/ccrc.service \
+    && _deploy_node_publish'
+  # Under bash by name, for the agent lane's reason (see its build ssh).
+  "${SSH[@]}" "$BOX" "bash -c '$REMOTE_BUILD_CMD'"
   # STAMP HERE — after the build that can fail, before the restart that makes
   # it live (I1, final review; see the agent chain's identical comment above
   # for the full failure mode). Stamping before a remote `npm ci && npm run
