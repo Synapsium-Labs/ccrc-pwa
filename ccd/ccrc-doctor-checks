@@ -6677,6 +6677,11 @@ _dr_codex_usage() {   # <id> -> WARN findings for this lane, recorded; rc 2 if a
   # bound of the lane's mode (above): a mode that cannot be read is no
   # `direct` lane, and keeps the litellm bound.
   if _codex_usage_enabled "$t" && ! _codex_usage_enabled "$f"; then
+    # Three of the usage timer's periods, read from the shipped unit file
+    # here, after the guards above (D-7054); a bound that cannot be read leaves
+    # each verdict that needs it unmeasured (OA-C8c (a), D-7062).
+    local cycles cycles_rc=0
+    cycles="$(_dr_cycles_s ccrc-codex-usage@.timer 3)" || cycles_rc=$?
     bound="$_DR_CODEX_USAGE_STALE_S"
     if mode="$(_codex_lane_mode "$id" 2>/dev/null)" && [ "$mode" = direct ]; then bound="$_DR_CODEX_USAGE_STALE_DIRECT_S"; else mode=''; fi
     row="$HOME/.cc-limits/$id.json"
@@ -6686,7 +6691,9 @@ _dr_codex_usage() {   # <id> -> WARN findings for this lane, recorded; rc 2 if a
       rc=2
     elif [ ! -e "$row" ] && [ ! -L "$row" ]; then
       en="$(_plat_mtime "$(_codex_usage_wants)/$t" 2>/dev/null)" || en=''
-      if [[ "$en" =~ ^[0-9]+$ ]] && [ $((now - en)) -le "$bound" ]; then
+      if [ "$cycles_rc" -ne 0 ]; then
+        _dr_codex_usage_unmeasured "$id" "$cycles_rc" "whether this lane's first usage row is overdue (none at $row yet)" || rc=$?
+      elif [[ "$en" =~ ^[0-9]+$ ]] && [ $((now - en)) -le "$bound" ]; then
         note+=("no usage row yet (enabled $((now - en))s ago; the first poll runs five minutes after enable)")
       else
         _dr_cx_warn "$id: $t has been enabled for longer than $((bound / 60)) min and this lane has never published a usage row ($row)" \
@@ -6705,7 +6712,9 @@ _dr_codex_usage() {   # <id> -> WARN findings for this lane, recorded; rc 2 if a
         rc=2
       else
         age=$((now - ts))
-        if [ "$age" -gt "$bound" ] && [ "$mode" = direct ]; then
+        if [ "$cycles_rc" -ne 0 ]; then
+          _dr_codex_usage_unmeasured "$id" "$cycles_rc" "whether this lane's usage row, ${age}s old, is stale" || rc=$?
+        elif [ "$age" -gt "$bound" ] && [ "$mode" = direct ]; then
           _dr_cx_warn "$id: its usage row was last measured $(((age + 59) / 60)) min ago — more than $((bound / 60)) min, so $t's recent polls have published nothing" \
             "read what the publisher says: $(_dr_log_hint "ccrc-codex-usage@$id.service")"
           rc=2
@@ -6724,6 +6733,18 @@ _dr_codex_usage() {   # <id> -> WARN findings for this lane, recorded; rc 2 if a
   # through models-op's `show`, and a second copy would print each twice.
   DR_CODEX_USAGE_NOTE="$(_dr_join ${note[@]+"${note[@]}"})"
   return "$rc"
+}
+
+# The finding for a lane whose usage-row verdict needs the usage timer's
+# cadence and could not read it (D-7054; OA-C8c (a), D-7062): rc 1 from
+# `_dr_cycles_s` is a WARN naming the unit, rc 3 a FAIL naming the bug.
+_dr_codex_usage_unmeasured() {   # <id> <rc> <what> -> recorded; returns 2 (WARN) or 1 (FAIL)
+  if [ "$2" -eq 3 ]; then
+    _dr_cx_fail "$1: $(_dr_cadence_unloaded_what "$3")" "$(_dr_cadence_unloaded_fix codex ccrc-codex-usage@.timer)"
+    return 1
+  fi
+  _dr_cx_warn "$1: $(_dr_cadence_unread_what ccrc-codex-usage@.timer "$3")" "$(_dr_cadence_unread_fix)"
+  return 2
 }
 
 # ── the usage timer ccrc left enabled for an id that is no longer a Codex lane ──

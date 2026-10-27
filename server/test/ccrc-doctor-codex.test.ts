@@ -4,7 +4,7 @@ import { describe, it, expect } from 'vitest';
 import { spawnSync, execFileSync } from 'node:child_process';
 import { writeFileSync, readFileSync, mkdirSync, symlinkSync, rmSync, chmodSync, existsSync, utimesSync, appendFileSync, readdirSync, lstatSync, readlinkSync, statSync, renameSync, truncateSync, lutimesSync } from 'node:fs';
 import { fixClock, fixedNow } from './fixedClock.js';
-import { plantShippedTimers } from './shippedTimers.js';
+import { plantShippedTimers, writeShippedTimer } from './shippedTimers.js';
 import path, { join } from 'node:path';
 import { mkTmp, removeTmpFixturesEachTest } from './tmpHelpers.js';
 import { describeLinux, itLinux, itDarwin, IS_DARWIN } from './platformFixtures.js';
@@ -1573,6 +1573,43 @@ describeLinux('ccrc doctor: codex — the usage rows, measured in isolation (Pla
       .toEqual(NOTE_ROWS(`ccrc-codex-usage@codex-a.timer enabled; no usage row yet (enabled ${bound}s ago; the first poll runs five minutes after enable)`));
     expect(rowsOf(clocked('c8b-usage-norow-past-', { linkAgeS: bound + 1 }, mode)))
       .toEqual(WARN_ROWS(`codex-a: ccrc-codex-usage@codex-a.timer has been enabled for longer than ${bound / 60} min and this lane has never published a usage row (<home>/.cc-limits/codex-a.json)`, LOG));
+  });
+
+  // C8b step 4 (OA-C8c (a), D-7062): an unreadable ccrc-codex-usage@.timer leaves the row's staleness unmeasured — a
+  // WARN naming the unit, never a comparison against a literal; ccrc's reader not loaded records a FAIL naming the bug.
+  const UNREAD_USAGE = (what: string): string[] => [
+    'rc=0,2', 'pair=present', 'box-note=', 'note=ccrc-codex-usage@codex-a.timer enabled',
+    `WARN codex: codex-a: ccrc-codex-usage@.timer's cadence could not be read from the shipped unit file (<home>/ccrc/deploy/systemd/ccrc-codex-usage@.timer), so ${what} is unmeasured`,
+    '  remedy: the shipped tree at <home>/ccrc is incomplete or damaged — both deploy lanes place the whole tree there, so the next ccrc update (or deploy) restores it; then re-run ccrc doctor',
+    '',
+  ];
+  const noUsageTimer = (home: string): string => { writeShippedTimer(join(home, 'ccrc'), 'ccrc-codex-usage@.timer', null); return home; };
+  it.each([[60, null], [2701, null], [2701, 'litellm'], [3601, 'direct']] as const)('C8b: an unreadable ccrc-codex-usage@.timer leaves a row %i s old on a %s lane unmeasured, never compared against a literal', (age, mode) => {
+    const home = noUsageTimer(clocked(`c8b-usage-unread-${age}-`, { ageS: age, linkAgeS: 9000 }, mode));
+    expect(rowsOf(home)).toEqual(UNREAD_USAGE(`whether this lane's usage row, ${age}s old, is stale`));
+  });
+  it('C8b: an unreadable ccrc-codex-usage@.timer leaves a missing row unmeasured, young or old', () => {
+    for (const link of [120, 9000]) {
+      const home = noUsageTimer(clocked(`c8b-usage-unread-norow-${link}-`, { linkAgeS: link }, null));
+      expect(rowsOf(home)).toEqual(UNREAD_USAGE('whether this lane\'s first usage row is overdue (none at <home>/.cc-limits/codex-a.json yet)'));
+    }
+  });
+  it('C8b: ccrc\'s timer reader not loaded: the row records a FAIL naming the bug', () => {
+    const home = clocked('c8b-usage-unloaded-', { ageS: 2701, linkAgeS: 9000 }, null);
+    const r = usageRows(home, false, [
+      'DRX_CLASS=(); DRX_WHAT=(); DRX_FIX=()',
+      'BOX_TREE_DIR=',
+      '_dr_codex_usage_box; b=$?',
+      '_dr_codex_usage codex-a; l=$?',
+      'printf "rc=%s,%s\\n" "$b" "$l"',
+      '_dr_cx_report "usage rows measured"; :',
+    ].join('\n'));
+    expect(r.stdout.split(home).join('<home>').split('\n')).toEqual([
+      'rc=0,1',
+      'FAIL codex: codex-a: ccrc\'s own timer reader is not loaded, so whether this lane\'s usage row, 2701s old, is stale was never measured',
+      '  remedy: this is a bug in ccrc, not a fact about your box — _check_codex reads ccrc-codex-usage@.timer\'s cadence through _timer_period_s and BOX_TREE_DIR, both declared once in ccrc itself, and this check table was sourced by something that is not ccrc',
+      '',
+    ]);
   });
 
   it('no row yet, the timer enabled moments ago: no WARN, and the note says why', () => {
