@@ -246,7 +246,6 @@ const realRow = (s: { check: string; kept: string | null; text: string }): strin
  *  checks, the scope-sweep default among them (kept: call-bound), plus the kept OnActiveSec note. Each move commit of
  *  C8b removes its own row from this list. */
 const REAL_BASE: string[] = [
-  'pool-sync local pool_sync_grace=$((2 * 60)) unit_mtime unit_age grace',
   'pool-sync _dr_warn pool-sync "pool-sync-not-yet-synced: ccd-pool-sync.',
   'pool-sync "wait for the timer to fire (up to ~60s) and re-run ccrc doc',
   'pool-sync local period cad_rc=0 every=" (every 60s)"',

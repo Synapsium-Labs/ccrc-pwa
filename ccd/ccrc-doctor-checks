@@ -4102,7 +4102,8 @@ _check_pool-sync() {
     # GRACE = two of the timer's own periods, not an invented constant: one
     # tick for `OnBootSec=45s`/`AccuracySec=10s` slack plus one more so a
     # doctor run landing mid-cycle is not itself the reason this goes red
-    # (both from deploy/systemd/ccd-pool-sync.timer).
+    # (both from deploy/systemd/ccd-pool-sync.timer). Read from that shipped
+    # file at run time, `_dr_cycles_s ccd-pool-sync.timer 2` (D-7054).
     #
     # COST, stated as the brief requires: an unrelated `ccrc install` that
     # ships new BYTES for this one unit (not a fresh install) also resets
@@ -4115,7 +4116,7 @@ _check_pool-sync() {
     # A `_plat_mtime` that cannot answer (stat missing, file raced away)
     # falls straight through to the FAIL below — the safe direction: no
     # evidence of a chance means no benefit of the doubt.
-    local pool_sync_grace=$((2 * 60)) unit_mtime unit_age grace period cad_rc=0
+    local unit_mtime unit_age grace period cad_rc=0
     unit_mtime="$(_plat_mtime "$unit_path" 2>/dev/null)"
     if [[ "$unit_mtime" =~ ^[0-9]+$ ]]; then
       unit_age=$(($(date +%s) - unit_mtime))
@@ -4128,7 +4129,7 @@ _check_pool-sync() {
         1) _dr_cadence_unread pool-sync ccd-pool-sync.timer "the not-yet-synced grace for $f (two of the timer's periods)"; return 2 ;;
         3) _dr_cadence_unloaded pool-sync ccd-pool-sync.timer "the not-yet-synced grace"; return 1 ;;
       esac
-      if [ "$unit_age" -ge 0 ] && [ "$unit_age" -lt "$pool_sync_grace" ]; then
+      if [ "$unit_age" -ge 0 ] && [ "$unit_age" -lt "$grace" ]; then
         _dr_warn pool-sync "pool-sync-not-yet-synced: ccd-pool-sync.timer was installed ${unit_age}s ago and $f has not been written yet — the timer fires every 60s (OnUnitActiveSec) and converges on its own; expected right after an install, not a fault" \
           "wait for the timer to fire (up to ~60s) and re-run ccrc doctor — still absent past that window is the real fault: read the oneshot's own log ($(_dr_log_hint ccd-pool-sync.service))"
         return 2
