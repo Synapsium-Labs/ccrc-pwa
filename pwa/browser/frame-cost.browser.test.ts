@@ -147,7 +147,8 @@ async function boot(view: AppView, route: string): Promise<{ app: OpenedApp; row
 // started inside window 0 by the test and never awaited there (a held request awaited in its own window would
 // deadlock). Its fulfilment then waits on a gate the log releases: at the drain's in-flight wait (`drainWait`), or, so
 // the case cannot hang, at the next `readA`. The release is armed only once this request's `fulfil-start` is logged,
-// so the `readA`s before it cannot release it.
+// so the `readA`s before it cannot release it; the first case asserts that the released event comes after that
+// `fulfil-start`.
 
 type Page$ = { selftest?: Promise<unknown>; stuck?: Promise<unknown>; parked?: Promise<unknown> };
 const SELFTEST = '/api/selftest';
@@ -198,10 +199,17 @@ describe('the deferred fixture answers (R104): the harness self-test', () => {
       });
       expect(order, 'on the harness log: the request, the window\'s end, the drain\'s flush, then its fulfilment')
         .toEqual(['intercept', 'readB', 'flush', 'fulfil-start']);
-      // H3 (the drain skips its in-flight wait) reaches the next readA with the answer still in flight, and only the
-      // fallback releases it.
+      // The listener arms only on this request's fulfil-start, so the two readAs before it (the idle window's and
+      // window 0's) cannot release the gate. The precondition keeps that non-vacuous: there were reads to release on.
+      // The oracle is the released event itself: it exists and comes after the fulfil-start, so an initial read did not
+      // release it. H3 (the drain skips its in-flight wait) reaches the next readA with the answer still in flight, and
+      // only the fallback releases it there.
       const before = app.events.filter((e) => e.kind === 'readA' && e.seq < start.seq);
-      expect(before.length, 'the readAs before the fulfil-start (the idle window and window 0) left the gate held').toBeGreaterThanOrEqual(2);
+      expect(before.length, 'the readAs before the fulfil-start (the idle window and window 0) are the reads an early arm could have released on')
+        .toBeGreaterThanOrEqual(2);
+      const gate = released as HarnessEvent | null;
+      expect(gate !== null && gate.seq > start.seq,
+        `the gate was released only after this request's fulfil-start (seq ${start.seq}), never by an earlier read: ${JSON.stringify(gate)}`).toBe(true);
       expect((released as HarnessEvent | null)?.kind, 'the drain released the gate while it waited for the answer').toBe('drainWait');
       const done = ofPath(app, 'fulfil-done', SELFTEST)[0]!;
       const next = app.events.find((e) => e.kind === 'readA' && e.seq > start.seq);
