@@ -77,11 +77,27 @@ _node_bin_ok() {
   return 0
 }
 
+# `_node_path_pick <floor>` — the `node` this shell finds, AS FOUND — never resolved: a version manager's shim
+# (mise, volta, asdf) resolves to the manager's own binary, not a node (decision 5). Sets NODE_BIN_DIR +
+# NODE_VERSION and rc 0 when it qualifies; else both empty, rc 1 and NODE_WHY says why. Called by the no-nvm arm
+# and, as the second choice, by the nvm arm (an nvm box on a system node must not lose its updates).
+_node_path_pick() {
+  NODE_BIN_DIR=; NODE_VERSION=
+  local floor="$1" p v
+  p=$(command -v node 2>/dev/null) || p=
+  if [ -z "$p" ] || [ ! -x "$p" ]; then NODE_WHY="node is not installed (floor >=$floor) and nvm was not found"; return 1; fi
+  _node_bin_ok "${p%/*}" || return 1
+  v=$("$p" --version 2>/dev/null) || v=
+  if ! _node_ver_ok "$v"; then NODE_WHY="'$p --version' printed '${v:-nothing}', not a version"; return 1; fi
+  if ! _node_ver_ge "$v" "$floor"; then NODE_WHY="node $v at ${p%/*} is below the floor (>=$floor)"; return 1; fi
+  NODE_VERSION="$v"; NODE_BIN_DIR="${p%/*}"
+}
+
 # `_node_select <floor>` — the IO step. Sets NODE_BIN_DIR + NODE_VERSION and puts NODE_BIN_DIR first on THIS
 # process's PATH, so the build that follows uses the node the units will. Each refusal has its own NODE_WHY.
 _node_select() {
   NODE_BIN_DIR=; NODE_VERSION=; NODE_WHY=
-  local floor="$1" nvm="${NVM_DIR:-$HOME/.nvm}" vers v d def out rc pick= ok= bad=
+  local floor="$1" nvm="${NVM_DIR:-$HOME/.nvm}" v d def out rc pick= ok= bad=
   if [ -s "$nvm/nvm.sh" ]; then
     local vd="$nvm/versions/node"
     if [ -e "$vd" ] && { [ ! -d "$vd" ] || [ ! -r "$vd" ] || [ ! -x "$vd" ]; }; then
@@ -113,39 +129,38 @@ _node_select() {
     # shellcheck disable=SC2086  # one version per word, none contains a space
     if ! pick=$(_node_pick "$floor" "$def" $ok); then
       pick=
-      if [ "${NODE_NO_INSTALL:-}" = 1 ]; then
-        NODE_WHY="no installed nvm node meets the floor (>=$floor) and installing is disabled for this run (NODE_NO_INSTALL=1); an interactive 'ccrc install' without it would install one"
-      elif ! _node_is_tty; then
-        NODE_WHY="no installed nvm node meets the floor (>=$floor); this run is not interactive, and an interactive 'ccrc install' would install one"
+      # Second choice: the node on PATH, when it qualifies (it cannot be an nvm version, those were judged above).
+      if _node_path_pick "$floor"; then
+        :
       else
-        # --lts never touches the `default` alias (decision 2).
-        rc=0
-        (NVM_DIR="$nvm"; . "$nvm/nvm.sh" >/dev/null 2>&1 && nvm install --lts) >&2 || rc=$?
-        if [ "$rc" -ne 0 ]; then
-          NODE_WHY="nvm install --lts failed (rc $rc); nothing was installed"
+        local pathwhy="$NODE_WHY"
+        if [ "${NODE_NO_INSTALL:-}" = 1 ]; then
+          NODE_WHY="no installed nvm node meets the floor (>=$floor) and installing is disabled for this run (NODE_NO_INSTALL=1); an interactive 'ccrc install' without it would install one"
+        elif ! _node_is_tty; then
+          NODE_WHY="no installed nvm node meets the floor (>=$floor); this run is not interactive, and an interactive 'ccrc install' would install one"
         else
-          _node_nvm_complete
-          # shellcheck disable=SC2086
-          pick=$(_node_pick "$floor" "" $ok) || pick=
-          if [ -z "$pick" ]; then NODE_WHY="nvm install --lts succeeded but no installed nvm node meets the floor (>=$floor)"; fi
+          # --lts never touches the `default` alias (decision 2).
+          rc=0
+          (NVM_DIR="$nvm"; . "$nvm/nvm.sh" >/dev/null 2>&1 && nvm install --lts) >&2 || rc=$?
+          if [ "$rc" -ne 0 ]; then
+            NODE_WHY="nvm install --lts failed (rc $rc); nothing was installed"
+          else
+            _node_nvm_complete
+            # shellcheck disable=SC2086
+            pick=$(_node_pick "$floor" "" $ok) || pick=
+            if [ -z "$pick" ]; then NODE_WHY="nvm install --lts succeeded but no installed nvm node meets the floor (>=$floor)"; fi
+          fi
         fi
+        if [ -z "$pick" ] && [ -n "$bad" ]; then NODE_WHY="$NODE_WHY; skipped (no npm/npx beside node):$bad"; fi
+        if [ -z "$pick" ]; then NODE_WHY="$NODE_WHY; the node on PATH: $pathwhy"; fi
       fi
-      if [ -z "$pick" ] && [ -n "$bad" ]; then NODE_WHY="$NODE_WHY; skipped (no npm/npx beside node):$bad"; fi
     fi
     unset -f _node_nvm_list _node_nvm_complete
-    if [ -z "$pick" ]; then return 1; fi
-    NODE_VERSION="$pick"; NODE_BIN_DIR="$vd/$pick/bin"
+    if [ -n "$NODE_BIN_DIR" ]; then :   # chosen from PATH above
+    elif [ -z "$pick" ]; then return 1
+    else NODE_VERSION="$pick"; NODE_BIN_DIR="$vd/$pick/bin"; fi
   else
-    # No nvm: the directory of the `node` this shell finds, AS FOUND — never resolved: a version manager's shim
-    # (mise, volta, asdf) resolves to the manager's own binary, not a node (decision 5).
-    local p
-    p=$(command -v node 2>/dev/null) || p=
-    if [ -z "$p" ] || [ ! -x "$p" ]; then NODE_WHY="node is not installed (floor >=$floor) and nvm was not found"; return 1; fi
-    _node_bin_ok "${p%/*}" || return 1
-    v=$("$p" --version 2>/dev/null) || v=
-    if ! _node_ver_ok "$v"; then NODE_WHY="'$p --version' printed '${v:-nothing}', not a version"; return 1; fi
-    if ! _node_ver_ge "$v" "$floor"; then NODE_WHY="node $v at ${p%/*} is below the floor (>=$floor)"; return 1; fi
-    NODE_VERSION="$v"; NODE_BIN_DIR="${p%/*}"
+    _node_path_pick "$floor" || return 1
   fi
   NODE_WHY=
   PATH="$NODE_BIN_DIR:$PATH"

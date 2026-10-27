@@ -214,9 +214,9 @@ Download it, or use `bash <(curl -fsSL …)`.
   `ccrc-agent.service` start `node` by name in the systemd user manager's environment, which
   does not see a Node that lives in nvm's version directory. So `ccrc install` (and `install.sh`,
   `ccrc update` and `deploy/deploy.sh`) chooses the node, nvm-aware: nvm's `default` alias when
-  it meets `engines.node`, else the newest installed version that does, else (an interactive
-  install only) `nvm install --lts`; without nvm, the `node` on your `PATH` if it meets the
-  floor. It links that node into `~/.local/libexec/ccrc/node-bin` and writes
+  it meets `engines.node`, else the newest installed version that does, else the `node` on
+  your `PATH` if it meets the floor (so an nvm box on a system node keeps updating), else
+  (an interactive install only) `nvm install --lts`; without nvm, the `node` on your `PATH`. It links that node into `~/.local/libexec/ccrc/node-bin` and writes
   `~/.config/environment.d/50-ccrc-node.conf` so the manager finds it. `ccrc doctor`'s
   `node-path` check measures this and `ccrc doctor --fix` re-chooses among installed versions.
   `systemctl --user show-environment` shows what the units see.

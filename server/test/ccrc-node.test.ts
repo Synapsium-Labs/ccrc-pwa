@@ -150,6 +150,31 @@ describe('_node_select under nvm', () => {
   });
 });
 
+describe('_node_select: nvm present, but a qualifying PATH node is the second choice', () => {
+  const sel = (fx: Fx, extra = ':', env: Record<string, string> = {}) =>
+    run(fx, `${extra}; _node_select 22.16.0; echo "rc=$? ver=$NODE_VERSION dir=$NODE_BIN_DIR why=$NODE_WHY"`, env);
+  const pathNode = (fx: Fx, v: string) => { for (const b of ['node', 'npm', 'npx']) exe(path.join(fx.bin, b), `echo ${v}`); };
+  it('no nvm versions + qualifying PATH node, unattended: the PATH dir, no install', () => {
+    const fx = fixture([], null);
+    pathNode(fx, 'v22.20.0');
+    expect(sel(fx, '_node_is_tty() { return 1; }').out).toBe(`rc=0 ver=v22.20.0 dir=${fx.bin} why=`);
+    expect(existsSync(fx.installLog)).toBe(false);
+  });
+  it('only below-floor versions + below-floor PATH node + TTY: installs', () => {
+    const fx = fixture(['v20.1.0'], 'v20.1.0');
+    pathNode(fx, 'v20.0.0');
+    expect(sel(fx, '_node_is_tty() { return 0; }').out).toContain('rc=0 ver=v99.0.0');
+    expect(readFileSync(fx.installLog, 'utf8').trim()).toBe('install --lts');
+  });
+  it('same with NODE_NO_INSTALL=1: refuses, naming the nvm versions and the PATH node', () => {
+    const fx = fixture(['v20.1.0'], 'v20.1.0');
+    pathNode(fx, 'v20.0.0');
+    const o = sel(fx, '_node_is_tty() { return 0; }', { NODE_NO_INSTALL: '1' }).out;
+    expect(o).toMatch(/rc=1 ver= dir= why=.*NODE_NO_INSTALL.*the node on PATH: node v20\.0\.0 .*below the floor/);
+    expect(existsSync(fx.installLog)).toBe(false);
+  });
+});
+
 describe('_node_select without nvm', () => {
   it('uses the directory of the PATH node as found, never resolving a shim', () => {
     const fx = fixture([], null, false);

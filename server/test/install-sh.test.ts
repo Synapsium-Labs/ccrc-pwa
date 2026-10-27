@@ -64,11 +64,12 @@ const REAL_FLOOR = REAL_FLOOR_RANGE.replace(/^>=/, '').trim();
 interface Result { code: number; stdout: string; stderr: string }
 
 /** `<home>/checkout/install.sh` — a copy, not a symlink, so a fixture that
- *  wants to see it refuse never has to touch the checked-in script. Sibling
- *  `server/package.json` is the ONE file install.sh reads before deciding
- *  anything; nothing else in the tree is needed for these three tests,
- *  because all three refuse before install.sh would look at `pwa/` or
- *  `ccd/`. */
+ *  wants to see it refuse never has to touch the checked-in script. Two
+ *  siblings are what install.sh reads before deciding anything: the real
+ *  `ccd/ccrc-node` (the node selection library it sources) and a fixture
+ *  `server/package.json` (the floor). Nothing else in the tree is needed for
+ *  these tests, because they refuse (or stop at a recording npm) before
+ *  install.sh would look at `pwa/`. */
 function fixtureRoot(home: string, engines: string): string {
   const root = join(home, 'checkout');
   mkdirSync(join(root, 'server'), { recursive: true });
@@ -168,6 +169,17 @@ describe('install.sh: the node floor, before anything is built', () => {
     const r = runInstallSh(root, [], home, bin, { env: { NVM_DIR: nvm } });
     expect(r.code).not.toBe(0);
     expect(readFileSync(join(home, 'npm-argv'), 'utf8').trim().split('\n')[0]).toBe(join(vbin, 'npm'));
+  });
+
+  it('refuses a checkout without the node selection library, saying the checkout is incomplete', () => {
+    const home = mkTmp('install-sh-nolib-');
+    const root = fixtureRoot(home, REAL_FLOOR_RANGE);
+    rmSync(join(root, 'ccd', 'ccrc-node'));
+    plantNpmRecorder(home);
+    const r = runInstallSh(root, [], home, fixtureBin(home));
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/complete checkout/);
+    expect(existsSync(join(home, 'npm-argv')), 'npm ran before the refusal').toBe(false);
   });
 
   it('-h/--help prints usage and exits 0 before touching node or npm', () => {
