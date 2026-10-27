@@ -44,12 +44,6 @@
     grid-column: 1 / -1;
     grid-row: 3;
   }
-  /* The fleet list's floating New session sits in the list column, clear of the rail (shell.css pins it to the
-     frame's left edge, which is the rail's here), and above the status bar. */
-  .ins-frame .fab {
-    left: calc(52px + var(--sp-4));
-    bottom: calc(var(--sp-4) + var(--tap-min));
-  }
 }
 
 /* W2 desk polish T2e (D-6335): the list column widens at 1600, and the 320px fourth track appears only with what fills

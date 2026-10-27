@@ -48,6 +48,12 @@
 //   the rail's Inbox door left on the unread count .... "the rail's Inbox door says 'waiting for you' with Refined's count"
 // T2e's rows 1 and 2 under "T2e review R32, F5" above are retired: `unreadMailCount` is gone, and no door here counts
 // unread mail. The F5 case and its two mutants now live in mail-screen.test.tsx, against the Inbox's own row mark.
+//
+// W2 Task T2b (desk-polish, D-6328): no floating + at the desk; Instrument's round + mounts below 900 only.
+// MUTATION TABLE (plan Task T2b Step 3; RUN, each mutant on the working tree, this suite alone, then reverted):
+//   `PhoneFab` mounted at every width .................. "exactly one [data-command=new-session] at 900, 1280 and 1920"
+//   `PhoneFab` with its own `onClick` that navigates ... "at 390 the round + dispatches the new-session door event"
+//   `PhoneFab` gated on a narrower width (min-width: 600px) "at 899 the round + is the one New session door"
 import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import type { ReactNode } from 'react';
@@ -595,5 +601,48 @@ describe('the desk (T2g): one count, in the status bar', () => {
     mount('/', []);
     expect(document.querySelector('.shell-nav section[aria-label="Fleet"]')).not.toBeNull();
     expect(document.querySelector('.shell-nav .fleet-head')).toBeNull();
+  });
+});
+
+// ---- Desk polish, T2b (D-6328) ----------------------------------------------------------------------------------
+
+describe('no floating + at the desk (T2b, D-6328)', () => {
+  it('exactly one [data-command=new-session] at 900, 1280 and 1920', () => {
+    for (const width of [900, 1280, 1920]) {
+      stubAt(width);
+      mount('/');
+      const doors = document.querySelectorAll('[data-command="new-session"]');
+      expect(doors, `${width}px: marked doors`).toHaveLength(1);
+      expect(topBar().contains(doors[0]!), `${width}px: inside the top bar`).toBe(true);
+      // By name, so the legacy unmarked `.fab` counts as a second door.
+      expect(screen.getAllByRole('button', { name: 'New session' }), `${width}px: buttons named New session`).toHaveLength(1);
+      expect(document.querySelector('.fab'), `${width}px: no floating +`).toBeNull();
+      cleanup();
+    }
+  });
+
+  it('at 390 the round + dispatches the new-session door event', async () => {
+    stubAt(390);
+    mount('/');
+    const { DOOR_EVENT } = await import('../src/command/door');
+    const seen: string[] = [];
+    const listen = (e: Event): void => { seen.push((e as CustomEvent<string>).detail); };
+    window.addEventListener(DOOR_EVENT, listen);
+    const buttons = screen.getAllByRole('button', { name: 'New session' });
+    expect(buttons).toHaveLength(1);
+    expect(buttons[0]).toHaveClass('fab');
+    expect(buttons[0]).toHaveAttribute('data-command', 'new-session');
+    fireEvent.click(buttons[0]!);
+    expect(seen).toEqual(['new-session']);
+    window.removeEventListener(DOOR_EVENT, listen);
+  });
+
+  it('at 899 the round + is the one New session door', () => {
+    stubAt(899);
+    mount('/');
+    const doors = document.querySelectorAll('[data-command="new-session"]');
+    expect(doors).toHaveLength(1);
+    expect(doors[0]).toHaveClass('fab');
+    expect(screen.getAllByRole('button', { name: 'New session' })).toHaveLength(1);
   });
 });

@@ -244,6 +244,7 @@ const CONTROLS: Record<string, string> = {
   'screens/AccountsScreen.tsx <button> accounts-session': 'TOKEN. A session row on the accounts screen.',
   'screens/AccountsScreen.tsx <button> proj-card-pool acct-pool-chip': "TOKEN. The card's pool tag, reused as a chip.",
   'screens/FleetScreen.tsx <button> fab': 'TOKEN by VALUE, not by name — see FLOOR_BY_VALUE.',
+  'skins/instrument/PhoneFab.tsx <button> fab': "TOKEN by VALUE, not by name — see FLOOR_BY_VALUE. Instrument's round + below 900 (T2b, D-6328).",
   'screens/FleetScreen.tsx <button> notice-x': 'TOKEN. The notice dismiss.',
   'screens/settings/SettingsIndex.tsx <a> settings-index-row text-ink-primary no-underline':
     'TOKEN. A Settings index row (settings Task R2b1, D-5504): the whole row is the link, at least 64px and never '
