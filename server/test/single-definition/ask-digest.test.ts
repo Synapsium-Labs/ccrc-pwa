@@ -1372,3 +1372,81 @@ describe('coord/questions.ts declares no module-scope state (D-7026)', () => {
     expect(moduleState(readFileSync(path.join(ccrcRoot, 'server/src/coord/questions.ts'), 'utf8'))).toBe(false);
   });
 });
+
+// W3 Task Q3c (D-7027). APPENDED, as the blocks above. One question sweep: `tick` calls exactly one method that reaches
+// a question lapse, release or prune (`census-w3/questions.ts#questionSweepEntries`), and it is `sweepQuestions`. The
+// pin is exact, never "at most": an at-most pin would pass on an empty list with nothing measured. `sweepQuestions` is
+// not `async` and contains no `await`, so neither half waits for the other, and `sweepApprovals` contains no `await`,
+// so its whole body runs inside `tick`'s synchronous turn (Review focus 7). On this tip the walk is
+// real, inside `watch.ts`: `sweepQuestions` -> `sweepAsks` -> `askPass` reaches `releaseAsk`, and `sweepQuestions` ->
+// `sweepApprovals` reaches `lapseApproval`. Q3d keeps the pin green by extending the walk. The census module and the
+// symbol reader are imported inside the tests, so this block only appends.
+describe('one question sweep (D-7027)', () => {
+  const WATCH = path.join(ccrcRoot, 'server/src/watch.ts');
+  const headAndCode = (src: string): { head: string; code: string } => {
+    const code = stallCodeText(src);
+    const open = code.indexOf('{');
+    return { head: code.slice(0, open), code };
+  };
+  const synchronous = (src: string): boolean => {
+    const { head, code } = headAndCode(src);
+    return !/\basync\b/.test(head) && !/\bawait\b/.test(code);
+  };
+
+  it('one question sweep: tick calls exactly sweepQuestions', async () => {
+    const { questionSweepEntries } = await import('../census-w3/questions.js');
+    expect(questionSweepEntries().map((s) => s.method)).toEqual(['sweepQuestions']);
+  });
+
+  it('sweepQuestions is not async and contains no await', async () => {
+    const { sourceOfSymbol } = await import('../scan/symbols.js');
+    expect(synchronous(sourceOfSymbol(WATCH, 'FleetWatcher.sweepQuestions'))).toBe(true);
+  });
+
+  it('sweepApprovals contains no await: its whole body runs inside tick\'s synchronous turn', async () => {
+    const { sourceOfSymbol } = await import('../scan/symbols.js');
+    expect(stallCodeText(sourceOfSymbol(WATCH, 'FleetWatcher.sweepApprovals'))).not.toMatch(/\bawait\b/);
+  });
+
+  it('the walk is real: sweepQuestions dispatches both halves, which reach releaseAsk and lapseApproval', async () => {
+    const { sourceOfSymbol } = await import('../scan/symbols.js');
+    const code = (name: string): string => stallCodeText(sourceOfSymbol(WATCH, `FleetWatcher.${name}`));
+    expect(code('sweepQuestions')).toMatch(/\bthis\.sweepAsks\(\s*registryRead\s*\)/);
+    expect(code('sweepQuestions')).toMatch(/\bthis\.sweepApprovals\(\s*\)/);
+    expect(code('sweepAsks')).toMatch(/\bthis\.askPass\(/);
+    expect(code('askPass')).toMatch(/\bstore\.releaseAsk\(/);
+    expect(code('sweepApprovals')).toMatch(/\bcoord\.lapseApproval\(/);
+  });
+
+  it('MUTATION: a second sweep tick calls is counted; an async or awaiting sweepQuestions is seen', async () => {
+    const { mkdtempSync, mkdirSync, writeFileSync, rmSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { questionSweepEntries } = await import('../census-w3/questions.js');
+    const watch = (tickBody: string): string => [
+      'export class FleetWatcher {',
+      `  async tick(): Promise<void> { ${tickBody} }`,
+      '  sweepQuestions(r: unknown): void { void this.sweepAsks(r); void this.sweepApprovals(); }',
+      '  async sweepAsks(r: unknown): Promise<void> { await this.askPass(r); }',
+      '  private async askPass(r: unknown): Promise<void> { this.deps.coord.releaseAsk(1, 2); }',
+      '  async sweepApprovals(): Promise<void> { this.deps.coord.lapseApproval(1); }',
+      '  sweepOther(): void { this.deps.coord.lapseApproval(2); }',
+      '}',
+    ].join('\n');
+    const entries = (tickBody: string): string[] => {
+      const t = mkdtempSync(path.join(tmpdir(), 'ccrc-one-sweep-'));
+      try {
+        mkdirSync(path.join(t, 'server/src'), { recursive: true });
+        writeFileSync(path.join(t, 'server/src/watch.ts'), watch(tickBody));
+        return questionSweepEntries(t).map((s) => s.method);
+      } finally { rmSync(t, { recursive: true, force: true }); }
+    };
+    expect(entries('this.sweepQuestions(x);')).toEqual(['sweepQuestions']);
+    expect(entries('this.sweepQuestions(x); this.sweepOther();')).not.toEqual(['sweepQuestions']);
+    expect(entries('void this.sweepAsks(x); void this.sweepApprovals();')).not.toEqual(['sweepQuestions']);
+    expect(entries('')).not.toEqual(['sweepQuestions']);
+    expect(synchronous('sweepQuestions(r: X): void {\n  void this.sweepAsks(r);\n  void this.sweepApprovals();\n}')).toBe(true);
+    expect(synchronous('async sweepQuestions(r: X): Promise<void> {\n  void this.sweepAsks(r);\n}')).toBe(false);
+    expect(synchronous('sweepQuestions(r: X): void {\n  void (async () => { await this.sweepAsks(r); })();\n}')).toBe(false);
+    expect(synchronous('sweepQuestions(r: X): void {\n  // no await here\n  void this.sweepAsks(r);\n}')).toBe(true);
+  });
+});
