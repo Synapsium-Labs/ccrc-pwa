@@ -30,7 +30,8 @@ export interface RouteView {
   readonly effortUnreadable: boolean;
   /** The field whose intended value the pane has not read back yet, measured
    *  from the WIRE. `null` when `route` itself is absent — the caller then owns
-   *  the answer from its local-write lane. */
+   *  the answer from its local-write lane. A class counts only where its readback is measurable on this lane
+   *  (`classReadbackMeasurable`). */
   readonly wireQueuedField: RouteField | null;
   /** The effort intended has not been read back yet — `wireQueuedField`'s effort arm, kept apart so a caller can say
    *  what is asked of each field. `false` when `route` is absent. */
