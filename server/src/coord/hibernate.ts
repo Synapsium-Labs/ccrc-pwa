@@ -1,6 +1,9 @@
 import { PRESENCE_OPEN_TTL_MS, type FleetSession } from '../../../shared/api.js';
 import { HIBERNATE_DISABLED_MARKER, HIBERNATE_LIVE_MARKER } from '../../../shared/switches.js';
-import { turnSays, turnWordOf } from '../sessionReading.js';
+import {
+  SLEEP_HELD_RULES, SLEEP_POLICY_NAMES, SLEEP_QUIET_BOUNDARIES, SLEEP_RUN_CLOCKS, decideSleep, type SleepInput,
+  type SleepPolicy,
+} from '../sleep.js';
 
 /**
  * HIBERNATE LONG-IDLE SESSIONS (D-5242, `hibernate-long-idle-sessions`, spec §5.11): the server's pure verdict.
@@ -180,44 +183,43 @@ export type HibernateVerdict =
   | { readonly act: 'measure' }
   | { readonly act: 'hold'; readonly reason: HibernateHold };
 
+/** The `idle-hours` policy row (D-7040; ARCH-43): hibernation's every difference from `run-done` that the one ladder
+ *  (`decideSleep`, `sleep.ts`) reads. Any session; bucket `archived` holds `archived` and a dead pane `pane`; any hold
+ *  holds; no run clock; no verb hold (the act asks it beside the argv); no turn verdict; quiet is measured up to and
+ *  including N. Its name and kebab values are `sleep.ts`'s constants, so this file spells no new kebab word. */
+export const IDLE_HOURS_POLICY: SleepPolicy<HibernateHold> = {
+  name: SLEEP_POLICY_NAMES[1],
+  holds: HIBERNATE_HOLDS,
+  entry: { child: false, archivedBucket: true, paneDead: true, stopped: false },
+  held: SLEEP_HELD_RULES.anyHolds,
+  runClock: { kind: SLEEP_RUN_CLOCKS.none },
+  verbBeforeMeasure: false,
+  turnVerdict: false,
+  liveWord: 'sleep',
+  quiet: { boundary: SLEEP_QUIET_BOUNDARIES.atMost, parkedMs: null },
+};
+
+/** The one ladder's facts, from hibernation's input. The dead-pane compare is this lane's (`paneDead`); the child
+ *  marker, the stop stamp, the verb and the turn are not read (`null`), the store carries no run, and no hold is
+ *  classified (`heldPasses: false`). `afterMs` is N. */
+export function hibernateSleepInput(i: HibernateInput, now: number, afterMs: number): SleepInput {
+  const r = i.row;
+  return {
+    row: r, child: null, paneDead: r.status === 'dead', stopped: null, heldPasses: false, optedOut: i.optedOut,
+    store: i.store.ok ? { ...i.store, last: null, parkedWorker: false } : i.store,
+    viewer: i.viewer, sinceStartMs: i.sinceStartMs, viewerOpenTtlMs: PRESENCE_OPEN_TTL_MS, verb: null,
+    live: i.live.kind === 'read' ? { ...i.live, turn: null } : i.live, now, quietMs: afterMs,
+  };
+}
+
 /**
  * Put this session to sleep? The holds run cheapest first and the live reads come last: `measure` asks the sweep to
  * read them for a row nothing else holds. Every read the verdict could not make HOLDS — never an unmeasured sleep.
  * `afterMs` is N; `idleMs` on a `hibernate` answer is how long ago the marker's clock last moved.
+ * D-7040 (ARCH-43): the ladder is the one `decideSleep` (`sleep.ts`) runs for both sleep policies, under this lane's row,
+ * `IDLE_HOURS_POLICY`; this function keeps its name, its signature and its answer.
  */
 export function hibernateVerdict(i: HibernateInput, now: number, afterMs: number): HibernateVerdict {
-  const hold = (reason: HibernateHold): HibernateVerdict => ({ act: 'hold', reason });
-  const r = i.row;
-  if (r.archivedAt !== null || r.bucket === 'archived') return hold('archived');
-  if (r.status === 'dead') return hold('pane');
-  if (r.unmeasured.length > 0 || r.statusUnmeasured) return hold('unmeasured');
-  if (i.optedOut) return hold('opted-out');
-  if (r.held !== null) return hold('held');
-  if (r.stranded !== null) return hold('stranded');
-  if (r.swapBlocked !== null) return hold('swap-blocked');
-  if (r.substrate !== null) return hold('substrate');
-  const s = i.store;
-  if (!s.ok) return hold('runs-unreadable');
-  if (s.openWorker) return hold('run-worker');
-  if (s.openClaimant) return hold('run-claimant');
-  if (s.claim) return hold('claim');
-  if (s.mail) return hold('mail');
-  if (i.viewer || i.sinceStartMs < PRESENCE_OPEN_TTL_MS) return hold('viewer');
-  if (r.dialogPending) return hold('menu');
-  if (r.bucket !== 'idle') return hold('bucket');
-  if (r.background !== null) return hold('background');
-  if (r.subagents !== null && r.subagents.length > 0) return hold('roster');
-  if (i.live.kind === 'unread') return { act: 'measure' };
-  const w = i.live.word;
-  if (!w.ok) return hold(w.reason === 'unmeasured' ? 'unmeasured' : 'pane');
-  if (turnSays('sleep', turnWordOf(w.word)) !== 'rest') return hold('live-word');
-  const m = i.live.mark;
-  if (!m.ok || m.state !== 'done') return hold('marker');
-  if (m.bg !== 0) return hold('marker-background');
-  if (m.crons !== 0) return hold('scheduled');
-  const stamps = [m.turnAt, m.stopAt, m.restartAt].filter((t): t is number => t !== null);
-  if (stamps.length === 0) return hold('recent');
-  const idleMs = now - Math.max(...stamps);
-  if (idleMs <= afterMs) return hold('recent');
-  return { act: 'hibernate', idleMs };
+  const v = decideSleep(hibernateSleepInput(i, now, afterMs), IDLE_HOURS_POLICY);
+  return v.act === 'hibernate' ? { act: 'hibernate', idleMs: v.idleMs } : v;
 }
