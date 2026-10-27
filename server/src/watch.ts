@@ -2864,9 +2864,9 @@ export class FleetWatcher {
    *  not serially after it, so this tick still costs no extra round trip. It
    *  prevents pool-marker cost from multiplying the remote client's
    *  15-second default by project population (D-2465/D-2478). It does NOT
-   *  restore a two-second whole-tick cadence: the serial `readRegistryMeasured`
-   *  above runs first and can still cost roughly one default timeout per
-   *  session (D-2479). Closing that older reader is outside this wave.
+   *  restore a two-second whole-tick cadence: `readRegistryMeasured` above runs
+   *  first, no longer serially (D-6388: `REGISTRY_ROW_CONCURRENCY` rows at once),
+   *  and can still cost roughly one default timeout per 8 sessions (D-2479).
    *
    *  Both FleetIO implementations fold read failures into measured return
    *  values, so no catch is needed here. `project-pools-read.test.ts` pins cost,
