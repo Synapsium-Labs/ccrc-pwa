@@ -2,14 +2,15 @@
 // polish Task C6). The fleet socket sends the WHOLE session list on every change, and the app re-renders from it, so a
 // fleet of 80 rows with about nine changing per frame is the load this file puts on it, and `frameCost`
 // (`browser/app.ts`) reads Chrome's `TaskDuration` over a window around each frame (CDP `Performance.getMetrics`). A
-// window runs from the first read to the second: the frame's send, the wait of `gapMs` (2 s in the gate cases) and the
-// second read. That is at least `gapMs`; a loaded host stretches it, so `FrameCost.spans` records each window's measured
-// length, and a window that spans more than `gapMs + SPAN_SLACK_MS` fails the attempt as `window-overrun`, never as a
-// cost: its figures would measure the host.
+// window runs from the first read to the second: the first read's round trip, the frame's send, `during` (the
+// self-tests' hook), the wait of `gapMs` (2 s in the gate cases) and the second read's round trip. That is at least
+// `gapMs`; a loaded host stretches it, so `FrameCost.spans` records each window's measured length, and a window that
+// spans more than `gapMs + SPAN_SLACK_MS` fails the attempt as `window-overrun`, never as a cost: its figures are not
+// taken as the frame's cost.
 // Since the operator's R104 contract, `frameCost` defers the fixture's `/api` answers into an unmeasured drain before
 // each window, so the gates measure a window in which the harness fulfils no fixture answer. That changed what the
 // gates measure; it does not isolate the frame: the page's handling of an answer delivered in a drain, and its
-// timers, can still run into a window. The two self-test cases pin the deferral by the order of the harness's log.
+// timers, can still run into a window. The first two self-test cases pin the deferral by the order of the harness's log.
 //
 // - Two gated cases, each in Refined and in Instrument at 1920 on `/`: the median cost of 15 changing frames stays under
 //   `FRAME_CEILING_MS` (a ceiling only), and the median script time of 5 identical frames sent after them stays under
@@ -19,7 +20,8 @@
 //   skins, at 1920 and 390), each 15 changing frames, one identical frame and one idle window, one console line each.
 //   When `CCRC_RENDERS` names a directory the same block also writes the viewport screenshots there (both pages, both
 //   skins, Phosphor and light, 360 / 390 / 1280 / 1920), with the page clock fixed, for a before/after comparison.
-//   No timing assertion in the block: the numbers go to the console and the PR body.
+//   No cost assertion in the block: the numbers go to the console and the PR body. It passes no `record`, so a
+//   `window-overrun` fails its case with no figures printed.
 //
 // Neutral names only (`project-a`, `lane-a`, `ws-<n>`); the fixture is deterministic (`fleetFixture`).
 // Run: `( cd pwa && CCRC_CHROME=<a Chrome or Chromium binary> ./node_modules/.bin/vitest run --config vitest.browser.config.ts browser/frame-cost.browser.test.ts )`.
@@ -28,8 +30,9 @@
 // passing test's console lines, and its `default` one otherwise, which prints them (`--silent=false` alone does not
 // change that). `--reporter=verbose` or `--reporter=default` prints them in both. Add
 // `CCRC_RENDERS=<a directory outside the work tree>` for the screenshots. Each gate case also writes its per-window
-// figures (script, task, span, deferred requests, whether the drain went quiet) into its `task.meta.frameCost`, which
-// the JSON reporter keeps, whether the attempt passes, fails or times out (`keepOnFinish`).
+// figures (script, task, span, deferred requests, whether the drain went quiet, and the window's wall-clock start,
+// `at`) into its `task.meta.frameCost`, which the JSON reporter keeps, whether the attempt passes, fails or times out
+// (`keepOnFinish`).
 import { mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -155,8 +158,8 @@ async function boot(view: AppView, route: string): Promise<{ app: OpenedApp; row
 // `fulfil-start`. The last two pin the `window-overrun` refusal (a frame window, then the idle one).
 //
 // `window-overrun` is a failure mode of EVERY case here, the two older ones too (gap 500 ms, so a window past 1500 ms):
-// that is the ruling, not an oversight. A window that spans that long on these cases names a host too starved to
-// measure on, and their gaps are not raised nor are they exempt.
+// that is the ruling, not an oversight. A window that spans that long on these cases is refused, and their gaps are not
+// raised nor are they exempt.
 
 type Page$ = { selftest?: Promise<unknown>; stuck?: Promise<unknown>; parked?: Promise<unknown> };
 const SELFTEST = '/api/selftest';
@@ -334,8 +337,9 @@ describe('the deferred fixture answers (R104): the harness self-test', () => {
 // Each window can now take a drain of up to INFLIGHT_CAP_MS + QUIET_CAP_MS (and a little more: the quiet wait's last
 // step and the CDP reads) before its GAP_MS, so the budgets are set from that, not from a bare GAP_MS per window, with
 // 30 s for the visit and that slack: the ceiling case has 16 windows, the ratio case 21, a measurement case 17. A
-// window that spans past GAP_MS + SPAN_SLACK_MS fails its case at once (`window-overrun`), so the budgets only bound a
-// case that does not. A window that passes can still span up to GAP_MS + SPAN_SLACK_MS, SPAN_SLACK_MS more than the
+// window that spans past GAP_MS + SPAN_SLACK_MS fails its case once that window's second read returns
+// (`window-overrun`). A window that stalls inside its wait or its reads never reaches that check and is bounded only by
+// the budget. A window that passes can still span up to GAP_MS + SPAN_SLACK_MS, SPAN_SLACK_MS more than the
 // GAP_MS in WINDOW_MAX_MS. So a case in which every window hit both drain caps and the full slack would run up to
 // SPAN_SLACK_MS (plus the quiet wait's last step and the CDP reads) per window past its budget: about 21 s of the 30 s
 // slack in the ratio case, which also has to cover the visit. That is not reachable in practice and is not measured; the

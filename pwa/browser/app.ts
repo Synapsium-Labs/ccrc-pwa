@@ -408,10 +408,11 @@ export function summarize(costs: readonly Cost[]): { readonly median: Cost; read
 export const INFLIGHT_CAP_MS = 5000;
 export const QUIET_CAP_MS = 3000;
 /** How far past its `gapMs` a window's measured span may run before the attempt fails (`window-overrun`). A window is
- *  `gapMs` of waiting plus the frame's send, `during` and two CDP reads: 4 to 56 ms over a 2 s gap in the 132 windows
- *  of two gate runs on a loaded box (C6, 2026-10-27). TaskDuration and ScriptDuration are wall-clock, so a window that
- *  stretches far past its gap carries the host's stalls as well as the frame's work; a gate run that timed out did so
- *  while the box's memory was at its limit. Past this slack the attempt fails rather than report such a figure. */
+ *  `gapMs` of waiting plus the first read's round trip, the frame's send, `during` and the second read. The 132 windows
+ *  of two gate runs on a loaded box (C6, 2026-10-27) ran 4 to 56 ms over a 2 s gap; one of those runs had a gate case
+ *  time out.
+ *  TaskDuration and ScriptDuration are wall-clock figures. A window that spans past this slack is refused: its figures
+ *  are not taken as the frame's cost, and the attempt fails with `window-overrun`. */
 export const SPAN_SLACK_MS = 1000;
 const QUIET_STEP_MS = 100;
 const QUIET_STEPS = 3;
@@ -419,7 +420,8 @@ const QUIET_TASK_MS = 1;
 
 /** Send each of `frames` to the newest socket on `path`, `gapMs` apart, and read Chrome's `TaskDuration` and
  *  `ScriptDuration` (`Performance.getMetrics`, seconds) before and after each window. A window runs from its first
- *  read to its second: the frame's send, `during`, the wait of `gapMs` and the second CDP round trip. That is at least
+ *  read to its second: the first read's round trip, the frame's send, `during`, the wait of `gapMs` and the second
+ *  read's round trip. That is at least
  *  `gapMs`, and a loaded host stretches the waits and the reads, so `FrameCost.spans` records each window's measured
  *  length and a window past `gapMs + SPAN_SLACK_MS` fails the attempt (below). One idle window with no frame is
  *  measured first, on the page as it stands before `frames`: it is not matched to a page that has taken them (an
@@ -437,7 +439,9 @@ const QUIET_TASK_MS = 1;
  *  The attempt has two named failures of the harness, and neither is a cost red. `drain-inflight-timeout`: a fulfilment
  *  did not settle within `INFLIGHT_CAP_MS`. `window-overrun`: a window's measured span passed `gapMs + SPAN_SLACK_MS`
  *  (the window is `idle` or the frame's index, and is in `options.record` before the attempt fails). The cost figures of
- *  a window that spanned that long belong to the host, so the attempt fails and returns none. */
+ *  a window that spanned that long are not taken as the frame's cost, so the attempt fails and returns none. A window
+ *  is checked once its second read returns: one that stalls inside its wait or its reads is bounded only by the
+ *  caller's own timeout. */
 export async function frameCost(
   app: OpenedApp, path: string, frames: readonly unknown[], gapMs: number, options: FrameCostOptions = {},
 ): Promise<FrameCost> {
@@ -491,8 +495,8 @@ export async function frameCost(
       spans.push(spanMs);
       const cost = { taskMs: b.taskMs - a.taskMs, scriptMs: b.scriptMs - a.scriptMs };
       options.record?.windows.push({ cost, spanMs, deferred: intercepted, drainQuiet: wentQuiet, atMs });
-      // The window stays in the record. Past the slack its figures are the host's, so the attempt fails here: no retry,
-      // no skip, no filter. The finally still releases whatever is parked.
+      // The window stays in the record. Past the slack its figures are not taken as the frame's cost, so the attempt
+      // fails here: no retry, no skip, no filter. The finally still releases whatever is parked.
       if (spanMs > gapMs + SPAN_SLACK_MS) {
         throw new Error(`window-overrun: window ${frame === null ? 'idle' : frame.index} spanned ${spanMs.toFixed(0)} ms, past ${gapMs} ms + ${SPAN_SLACK_MS} ms`);
       }
