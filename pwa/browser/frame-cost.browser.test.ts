@@ -400,6 +400,7 @@ describe('frame cost (D-6438)', () => {
         expect(app.errors).toEqual([]);
         expect(await sideScroll(app.page)).toBeLessThanOrEqual(0);
         const cost = await frameCost(app, '/ws/fleet', changing(), GAP_MS, { record });
+        expect(record.windows, 'the record holds the idle window and every frame window').toHaveLength(1 + FRAMES);
         expect(cost.frames).toHaveLength(FRAMES);
         expect(app.errors).toEqual([]);
         expect(cost.median.taskMs, `median TaskDuration per frame, ${skin}: ${cost.median.taskMs.toFixed(1)} ms; `
@@ -422,6 +423,7 @@ describe('frame cost (D-6438)', () => {
         const frames = changing();
         const last = frames.at(-1)!;
         const cost = await frameCost(app, '/ws/fleet', [...frames, ...Array.from({ length: IDENTICAL_FRAMES }, () => last)], GAP_MS, { record });
+        expect(record.windows, 'the record holds the idle window and every frame window').toHaveLength(1 + FRAMES + IDENTICAL_FRAMES);
         expect(cost.frames).toHaveLength(FRAMES + IDENTICAL_FRAMES);
         expect(app.errors).toEqual([]);
         const changed = summarize(cost.frames.slice(0, FRAMES)).median.scriptMs;
