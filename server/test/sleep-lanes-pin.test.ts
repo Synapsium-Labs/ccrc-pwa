@@ -1660,3 +1660,184 @@ describe('C4d: sleepPass equals the old pass on every observable, scenario by sc
     expect(await observed(setup, run(NEW_PASSES))).toEqual(await observed(setup, run(OLD_PASSES)));
   });
 });
+
+// ── C4e (D-7045; ARCH-43, fifth PR): the tick starts both sleep lanes, and neither waits on the other ──────────────────
+//
+// Characterization, green on the old code (two `void` calls on the tick, each lane behind its own guard field) and kept
+// unedited through C4e's one `sweepSleep` (Review focus 9). The rows drive the REAL tick over one fixture worker both
+// lanes would put to sleep: a dispatched child whose run closed past the grace, idle, its `done` marker 7 h old. Each
+// lane is seen through its own `SLEEP_LANES` row (its `quietMs`, asked once at the head of every pass), never through a
+// watcher method a refactor renames. The serialiser and the session queue are test-owned promises.
+
+import { writeFileSync } from 'node:fs';
+import { Viewers } from '../src/viewer.js';
+import type { Runner } from '../src/exec.js';
+
+describe('C4e: the tick starts both sleep lanes, and neither waits on the other (Review focus 9)', () => {
+  const WID = ID;
+  const WUUID = `u-${WID}`;
+  const WRAPPER = 'claude-a';
+  const PANE = 4242;
+
+  const gate = () => {
+    let open: () => void = () => undefined;
+    const shut = new Promise<void>((r) => { open = r; });
+    return { shut, open: () => open() };
+  };
+
+  /** The fixture: a registry, a real store and a pane the runner answers for; the watcher built a day in the past, so
+   *  neither lane's presence-after-start hold stands. `serial` and `queue` wrap the act's two locks. */
+  const tickRig = (o: { live: boolean; serial?: Promise<void>; queue?: Promise<void> }) => {
+    const home = mkTmp('ccrc-sleep-tick-');
+    seedRoster(home);
+    const reg = path.join(home, '.cc-sessions');
+    mkdirSync(reg, { recursive: true });
+    const cfg = loadConfig({ CCRC_HOME: home, CCRC_PROJECTS_ROOT: mkTmp('ccrc-projects-') } as never);
+    const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+    const opened = coord.openRun({ program: 'p', title: 't', project: 'project-a', wave: 1, waveOf: 1, claimedBy: 'c' });
+    if (!('id' in opened)) throw new Error(`fixture openRun refused: ${JSON.stringify(opened)}`);
+    coord.markDispatched(opened.id, WID, WID, `ws/${WID}`, false);
+    for (const to of ['dispatched', 'working'] as const) {
+      const a = coord.advance(opened.id, to, 'test');
+      if (!a.ok) throw new Error(`fixture advance to ${to} refused: ${JSON.stringify(a)}`);
+    }
+    const closed = coord.closeRun({ runId: opened.id, finalState: 'done', causedBy: 'test', handoffCommit: null, program: 'p', viaClosing: true });
+    if (!closed.ok) throw new Error(`fixture closeRun refused: ${JSON.stringify(closed)}`);
+    coord.db.prepare('UPDATE runs SET closedAt = ? WHERE id = ?').run(Date.now() - GRACE - MIN, opened.id);
+    const fields: Record<string, string> = {
+      wrapper: WRAPPER, project: 'project-a', workdir: `/w/${WID}`, uuid: WUUID, started: '1',
+      workspace: WID, branch: `ws/${WID}`, base: 'origin/main', child: String(opened.id),
+    };
+    for (const [k, v] of Object.entries(fields)) writeFileSync(path.join(reg, `${WID}.${k}`), v);
+    if (o.live) writeFileSync(path.join(reg, HIBERNATE_LIVE_MARKER), '');
+    const sessions = path.join(home, `.${WRAPPER}`, 'sessions');
+    mkdirSync(sessions, { recursive: true });
+    writeFileSync(path.join(sessions, `${PANE}.json`), JSON.stringify({
+      pid: PANE, sessionId: WUUID, status: 'idle', statusUpdatedAt: Date.now() - 20 * MIN, startedAt: Date.now() - 24 * HOUR }));
+    const at = Date.now() - 7 * HOUR;
+    writeFileSync(path.join(reg, `${WID}.turn.json`), `${JSON.stringify({
+      v: 1, sessionId: WUUID, state: 'done', event: 'Stop', at, turnAt: at - MIN, stopAt: at,
+      bg: 0, bgKinds: '', bgIds: '', err: null, restartAt: null, lostBg: 0, lostKinds: '', lostIds: '', crons: 0 })}\n`);
+    const calls: string[][] = [];
+    const run: Runner = async (_cmd, args) => {
+      calls.push([...args]);
+      if (args[0] === 'has-session') return { ran: true, code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: `${PANE}\n`, stderr: '' };
+      return { ran: true, code: 0, stdout: '', stderr: '' };
+    };
+    const deps = { ...testDeps(home, run), cfg, coord, fleetState: { ccdVerbs: ['hibernate'] }, viewers: new Viewers(() => Date.now()) };
+    // `queue` counts only the entries made inside the serialiser: an act's (other users of the queue are not counted).
+    const entered = { serial: 0, queue: 0 };
+    let inSerial = 0;
+    const queue = deps.queue as { run: <T>(id: string, fn: () => Promise<T>) => Promise<T> };
+    const queued = queue.run.bind(queue);
+    queue.run = async (id, fn) => {
+      if (inSerial === 0) return queued(id, fn);
+      entered.queue++;
+      if (o.queue) await o.queue;
+      return queued(id, fn);
+    };
+    const born = vi.spyOn(Date, 'now').mockReturnValue(Date.now() - 24 * HOUR);
+    const w = new FleetWatcher(deps as never, new Bus(), 10_000);
+    born.mockRestore();
+    w.useStopDoneSerialiser({ serial: async (fn: () => Promise<unknown>) => {
+      entered.serial++;
+      if (o.serial) await o.serial;
+      inSerial++;
+      try { return await fn(); } finally { inSerial--; }
+    } } as never);
+    const warns: string[] = [];
+    vi.spyOn(console, 'warn').mockImplementation((l: unknown) => { warns.push(String(l)); });
+    const started: string[] = [];
+    for (const lane of SLEEP_LANES) {
+      const ask = lane.quietMs.bind(lane);
+      vi.spyOn(lane, 'quietMs').mockImplementation(((d: never, n: readonly string[]) => { started.push(lane.policy.name); return ask(d, n); }) as never);
+    }
+    const sleeps = () => calls.filter((c) => c[0] === 'hibernate');
+    const lines = (s: string) => warns.filter((l) => l.includes(s));
+    return { w, coord, entered, warns, started, sleeps, lines };
+  };
+
+  it('the priming tick runs neither', async () => {
+    const r = tickRig({ live: false });
+    try {
+      await r.w.tick();
+      await new Promise((res) => setTimeout(res, 50));
+      expect(r.started).toEqual([]);
+      expect(r.sleeps()).toEqual([]);
+    } finally { r.coord.db.close(); }
+  });
+
+  it('both lanes run on the same tick in today\'s order', async () => {
+    const r = tickRig({ live: false });
+    try {
+      await r.w.tick();
+      await r.w.tick();
+      expect(r.started, 'run-done starts first, then idle-hours, on the one tick').toEqual(['run-done', 'idle-hours']);
+      await vi.waitFor(() => { expect(r.lines('stop-done: put')).toHaveLength(1); expect(r.lines('hibernate-shadow')).toHaveLength(1); });
+    } finally { r.coord.db.close(); }
+  });
+
+  it('a lane\'s catch sentence on a thrown pass, through the tick', async () => {
+    const r = tickRig({ live: false });
+    try {
+      for (const lane of SLEEP_LANES) vi.mocked(lane.quietMs).mockImplementation(() => { throw new Error('boom'); });
+      await r.w.tick();
+      await r.w.tick();
+      const caught = () => r.warns.filter((l) => /^ccrc-server: sweep(?:StopDone|Hibernate) failed/.test(l));
+      await vi.waitFor(() => { expect(caught()).toHaveLength(2); });
+      expect(caught()).toEqual([
+        'ccrc-server: sweepStopDone failed (boom) — no stops this pass',
+        'ccrc-server: sweepHibernate failed (boom) — no verdicts this pass',
+      ]);
+    } finally { r.coord.db.close(); }
+  });
+
+  it('a run-done pass blocked on the serialiser does not delay or stop the idle-hours pass', async () => {
+    const g = gate();
+    const r = tickRig({ live: false, serial: g.shut });
+    try {
+      await r.w.tick();
+      await r.w.tick();
+      await vi.waitFor(() => { expect(r.entered.serial, 'run-done holds at the serialiser').toBe(1); });
+      await vi.waitFor(() => { expect(r.lines('hibernate-shadow'), 'idle-hours finished its pass behind it').toEqual([`ccrc-server: hibernate-shadow ${WID} idle=7h`]); });
+      expect(r.sleeps(), 'nothing acted while the serialiser was held').toEqual([]);
+      g.open();
+      await vi.waitFor(() => { expect(r.sleeps()).toEqual([['hibernate', WID]]); expect(r.lines('stop-done: put')).toHaveLength(1); });
+    } finally { g.open(); r.coord.db.close(); }
+  });
+
+  it('a run-done pass blocked on the serialiser: armed, the idle-hours pass still measures every row and its act queues on the one shared serialiser', async () => {
+    const g = gate();
+    const r = tickRig({ live: true, serial: g.shut });
+    try {
+      await r.w.tick();
+      await r.w.tick();
+      await vi.waitFor(() => { expect(r.entered.serial, 'both acts wait on the one serialiser, neither behind the other lane\'s pass').toBe(2); });
+      expect(r.sleeps()).toEqual([]);
+      expect(r.lines('hibernate-shadow'), 'armed: no shadow line').toEqual([]);
+      g.open();
+      await vi.waitFor(() => { expect(r.entered.queue).toBe(2); });
+      await vi.waitFor(() => {
+        expect(r.sleeps(), 'released, each lane composes its own act').toEqual([['hibernate', WID], ['hibernate', WID]]);
+        expect([r.lines('stop-done: put').length, r.lines(`hibernated ${WID}`).length]).toEqual([1, 1]);
+      });
+    } finally { g.open(); r.coord.db.close(); }
+  });
+
+  it('the reverse: an idle-hours act blocked on a session\'s queue does not delay the run-done pass\'s measures', async () => {
+    const g = gate();
+    const r = tickRig({ live: true, queue: g.shut });
+    try {
+      await r.w.tick();
+      await r.w.tick();
+      await vi.waitFor(() => { expect(r.entered.queue, 'each lane measured its row and reached its act, the other\'s act held').toBe(2); });
+      expect(r.sleeps()).toEqual([]);
+      g.open();
+      await vi.waitFor(() => {
+        expect(r.sleeps(), 'released, each lane composes its own act').toEqual([['hibernate', WID], ['hibernate', WID]]);
+        expect([r.lines('stop-done: put').length, r.lines(`hibernated ${WID}`).length]).toEqual([1, 1]);
+      });
+    } finally { g.open(); r.coord.db.close(); }
+  });
+});
