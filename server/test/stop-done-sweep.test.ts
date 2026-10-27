@@ -765,7 +765,7 @@ describe('the watcher\'s own pass, its deps unmocked (D-5370)', () => {
       return { rows: [row], records: [r.record] };
     };
     const stops = () => calls.filter((c) => c[0] === 'hibernate' || c[0] === 'stop');
-    return { home, reg, coord, w, tick, stops, turnMark, startedAt };
+    return { home, reg, coord, w, tick, stops, turnMark, startedAt, deps };
   };
 
   it('control: an idle worker whose run is done, with a fresh `done` marker, is stopped', async () => {
@@ -858,6 +858,44 @@ describe('the watcher\'s own pass, its deps unmocked (D-5370)', () => {
       h.coord.db.close();
     }
   });
+
+  // C4g fix round (D-7047; the plain-readdir ratchet, D-5969): the act's listing, as the watcher wires it, reads
+  // `readdirMeasured`, and its failure holds the act. The run-done lane has no arming switch, so a listing that read a
+  // failure as "no switches raised" would simply clear it; these rows pin the real wiring. The plain listing is left
+  // answering the registry's names, so a wiring that read it would act; both failures, and a rejection, hold.
+  for (const failure of ['absent', 'unreadable', 'rejects'] as const) {
+    it(`the act's listing through readdirMeasured: a registry ${failure} at the act holds it (fail shut)`, async () => {
+      const h = await harness();
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      try {
+        const t = await h.tick();
+        const io = h.deps.io;
+        const regDir = h.deps.cfg.registryDir;
+        const reads: string[] = [];
+        h.deps.io = {
+          ...io,
+          readdir: async (p: string) => { if (p === regDir) reads.push('plain'); return io.readdir(p); },
+          readdirMeasured: async (p: string) => {
+            if (p !== regDir) return io.readdirMeasured(p);
+            reads.push('measured');
+            if (failure === 'rejects') throw new Error('EIO');
+            return { ok: false, reason: failure };
+          },
+        } as never;
+        // the plain listing would still answer the registry's names
+        expect(await io.readdir(regDir)).toContain(`${WID}.uuid`);
+        await h.w.sweepSleep(t.rows, t.records, [], 'run-done');
+        expect(h.stops()).toEqual([]);
+        // the act lists once, measured
+        expect(reads.filter((r) => r === 'measured')).toEqual(['measured']);
+        expect(warn.mock.calls.map((c) => String(c[0])).filter((l) => l.includes('stop-done')))
+          .toEqual([`ccrc-server: stop-done: ${WID} was not put to sleep: the registry was unlistable during the pass`]);
+      } finally {
+        warn.mockRestore();
+        h.coord.db.close();
+      }
+    });
+  }
 });
 
 // D-7041 (ARCH-43, the run-done funnel task), characterization: green on the lane before its feed pair moved onto the
