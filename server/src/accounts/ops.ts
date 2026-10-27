@@ -132,7 +132,11 @@ export function localAccountOps(opts: LocalAccountOpsOpts): AccountOps {
         ended = why;
         const signal = (s: NodeJS.Signals): void => {
           if (child.pid === undefined) return;
-          try { process.kill(-child.pid, s); } catch { /* the group is already gone */ }
+          try { process.kill(-child.pid, s); } catch (e) {
+            // ESRCH: the group is already gone. Anything else: the child alone rather than nothing, as the agent's
+            // port does (OA-C8a (a), D-7060).
+            if ((e as NodeJS.ErrnoException).code !== 'ESRCH') { try { child.kill(s); } catch { /* gone */ } }
+          }
         };
         signal('SIGTERM');
         setTimeout(() => {

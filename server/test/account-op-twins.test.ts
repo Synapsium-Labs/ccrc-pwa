@@ -38,10 +38,11 @@ const ARMS: ReadonlyArray<readonly [string, Arm]> = [
 ];
 
 /**
- * The one row the arms answer differently at the base: the group kill throws EPERM (not ESRCH). `true` is "the leader
- * was killed anyway" (the agent's fallback to `child.kill(s)`); `false` is "nothing was killed" (the local arm).
+ * The one row the arms answered differently at the base: the group kill throws EPERM (not ESRCH). `true` is "the
+ * leader was killed anyway" (the fallback to `child.kill(s)`). Before OA-C8a (a) (D-7060) the local arm answered
+ * `false` (nothing was killed); it now falls back to the child alone, as the agent always did.
  */
-const NON_ESRCH_LEADER_KILLED: Readonly<Record<string, boolean>> = { [LOCAL]: false, [AGENT]: true };
+const NON_ESRCH_LEADER_KILLED: Readonly<Record<string, boolean>> = { [LOCAL]: true, [AGENT]: true };
 
 const pids: number[] = [];
 const SECRET_VARS = ['CCRC_AGENT_TOKEN', 'CCRC_HETZNER_TOKEN', 'CCRC_VAPID_PRIVATE'] as const;
