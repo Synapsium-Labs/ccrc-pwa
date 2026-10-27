@@ -11256,7 +11256,7 @@ r7describe('W2-5a Task 7: the record subcommands', () => {
       return { path: p, sha: r7Sha('not json'), value: {} };
     };
     const rows3: Array<[string, (c: R7) => { argv: string[]; now?: number; want: [string, string] }]> = [
-      ['an unknown kind', (c) => ({ argv: argv3(c, ['--kind', 'version-bump']), want: ['args-invalid', 'kind "version-bump" is not one of version-move, freeze-exception, forced-act'] })],
+      ['an unknown kind', (c) => ({ argv: argv3(c, ['--kind', 'version-bump']), want: ['args-invalid', 'kind "version-bump" is not one of version-move, freeze-exception, forced-act, budget-raise'] })],
       ['another kind\'s detail flag', (c) => ({ argv: argv3(c, [...move3(repilot3(c.f)), '--surface', 's']), want: ['args-invalid', '--surface is not a version-move flag'] })],
       ['a re-pilot on a freeze exception', (c) => ({ argv: argv3(c, [...FREEZE3, ...inp('repilot', repilot3(c.f))]), want: ['args-invalid', '--repilot is not a freeze-exception flag'] })],
       ['a release tag on a forced act', (c) => ({ argv: argv3(c, [...FORCED3, '--release-tag', 'v9.9.9']), want: ['args-invalid', '--release-tag is not a forced-act flag'] })],
@@ -23532,7 +23532,7 @@ b2t1Describe.skipIf(process.platform === 'darwin')('W2-5b2 Task 1 fix round 2: t
       b2t1Expect(r.refusal, JSON.stringify(bad)).toEqual({ word: 'args-invalid', detail: 'HOME is unset or not absolute' });
       b2t1Expect(existsSync(fx.out as string), `${JSON.stringify(bad)}: no --out`).toBe(false);
     }
-    for (const suffix of ['.claude', '/etc/claude', '../up', 'a/../../b']) b2t1Expect(path.isAbsolute(join(path.resolve(home), suffix)), suffix).toBe(true);
+    const { json, roster } = readRoster(home); const launch = admitAccount(json, roster, fx.draft.account as string, home); b2t1Expect([launch.configDir, path.isAbsolute(launch.configDir)], 'the configDir step 0b hands persistenceMeasured is the driver\'s join of the absolute HOME and the roster suffix').toEqual([join(home, '.claude'), true]);
     b2t1PlantAll(home, 'restricted');
     const ok = await b2t1Run(home, fx.argv());
     b2t1Expect([ok.refusal, ok.code], `CONTROL: ${ok.stderr}`).toEqual([null, 0]);
@@ -23943,7 +23943,7 @@ b2t5Describe('W2-5b2 Task 5 fix round 2: nodeAnswersOf refuses an answer record 
 b2t5Describe('W2-5b2 Task 5 fix round 2: nodeAnswersOf refuses a question that is not settled in its answer records, term by term (W2-D80; review 998 F1)', () => {
   const s1 = B2T5_S1;
   const detail = (w: B2t5R): string => `arms-summary ${s1}: question ${fr2First(w)} is not settled in its answer records (W2-D80)`;
-  b2t5It('CONTROL: the unedited world, and one whose first question is run-failed in both arms, report', async () => {
+  b2t5It('CONTROL: the unedited world, and one whose node 2 question is run-failed (its control arm failed twice), report', async () => {
     b2t5Expect((await b2t5Report(b2t5World().argv())).refusal).toBeNull();
     const failed = b2t5World({ runFailed: (e) => e.store_id === B2T5_S2 });
     const r = await b2t5Report(failed.argv());
@@ -24031,7 +24031,7 @@ b2t5Describe('W2-5b2 Task 5 fix round 2: verifyAbOf refuses a family entry that 
     const w = b2t5World();
     const id = listed(w)[0]!.ccrc_id as string;
     b2t5Edit(w, s1, 'verifyAb', (v) => ({ ...v, families: [{ ...v.families[0], state: 'maybe' }, ...v.families.slice(1)] }));
-    b2t5Expect(await f4Refused(w)).toEqual({ word: 'input-invalid', detail: `verify-ab ${s1} lists ${JSON.stringify(id)} off the record's assignment` });
+    b2t5Expect(await f4Refused(w)).toEqual({ word: 'input-invalid', detail: `verify-ab ${s1} lists ${JSON.stringify(id)} in state "maybe", not one of AB_STATES` });
   });
 });
 
@@ -24334,4 +24334,338 @@ b2t2Describe('W2-5b2 Task 2 fix round 2: judgeSpentOf throws a RangeError naming
     b2t2Expect(B2.judgeSpentOf([{ name: 'quiz/judge/j0001-1', tokens: edge }]), 'CONTROL: the safe edge').toBe(edge);
     b2t2Expect(B2.judgeSpentOf([{ name: 'quiz/judge/j0001-1', tokens: edge }, { name: 'quiz/arms/q1/control.a1', tokens: 1 }]), 'CONTROL: an arm row is not added').toBe(edge);
   });
+});
+
+// ── W2-7 Task 1: open --amend --kind budget-raise (R-B1, D-7063) ──────────────────────────────────────────────────────
+// A raise of the spend budget is one more amendment: part 2 superseding the record, one entry appended, nothing that scores
+// moved. Reuses W2-5b1 Task 4's and W2-5b2 Task 3's module-scope fixtures (w5b4Quiz, b23Open, b23Amend). Every HOME is a
+// fixture; nothing spawns.
+import { describe as w27Describe, expect as w27Expect, it as w27It } from 'vitest';
+import { renameSync as w27Rename } from 'node:fs';
+
+const w27Raise = (fx: W5b4R, rec: W5b4Saved, pred: W5b4Saved | null, figure: string | null, extra: string[] = []): string[] =>
+  ['open', '--amend', '--kind', 'budget-raise', ...(figure === null ? [] : ['--spend-budget', figure]), ...extra,
+    ...w5b4Inp('record', rec), ...(pred === null ? [] : w5b4Inp('supersedes', pred)),
+    ...w5b4Inp('part1', fx.d as W5b4Saved), ...w5b4Inp('frozen', fx.fz as W5b4Saved)];
+
+w27Describe('W2-7 Task 1: open --amend --kind budget-raise appends one raise of the spend budget, and refuses one that does not raise (R-B1, D-7063)', () => {
+  const inForce = w5b4Gate.spendBudgetInForce as unknown as (r: W5b4R) => unknown;
+
+  w27It('R-SPEC: AMEND_DETAILS\' budget-raise requires --spend-budget alone and builds {spend_budget}', () => {
+    const spec = D4.AMEND_DETAILS['budget-raise'] as W5b4R;
+    w27Expect(spec.required).toEqual(['spend-budget']);
+    w27Expect(spec.optional).toEqual([]);
+    w27Expect(spec.detail({ 'spend-budget': 7 }, null)).toEqual({ spend_budget: 7 });
+    w27Expect((D4.AMEND_FLAGS as string[]).at(-1)).toBe('spend-budget');
+    w27Expect(D4.FLAG_SPECS['spend-budget']).toBe('int');
+  });
+
+  w27It('R-OK: a raise prints part 2 superseding the record, one budget-raise appended with no node, its sha on stderr; only supersedes, finalized_ms and amendments move, and the version preflight is unchanged', async () => {
+    const fx = w5b4Quiz(w5b4Home());
+    const r = await b23Open(w27Raise(fx, fx.f, null, '1500000'));
+    w27Expect([r.refusal, r.code], r.stderr).toEqual([null, 0]);
+    const rec = JSON.parse(r.stdout) as W5b4R;
+    w27Expect(r.stdout).toBe(`${w5b4Lib.canonicalJson(rec)}\n`);
+    w27Expect(r.stderr).toBe(`sha256 ${w5b4Gate.recordSha256(rec)}\n`);
+    w27Expect(rec.amendments).toEqual([{ kind: 'budget-raise', node_label_ref: null, at_ms: B23_NOW,
+      detail_sha256: w5b4Lib.sha256Hex(w5b4Lib.canonicalJson({ spend_budget: 1_500_000 })), detail: { spend_budget: 1_500_000 } }]);
+    w27Expect([rec.supersedes, rec.finalized_ms]).toEqual([fx.f.sha, B23_NOW]);
+    w27Expect(w5b4Lib.canonicalJson({ ...rec, supersedes: fx.final.supersedes, finalized_ms: fx.final.finalized_ms, amendments: fx.final.amendments }),
+      'R-ONLY: nothing else moved').toBe(w5b4Lib.canonicalJson(fx.final));
+    w27Expect(inForce(rec)).toBe(1_500_000);
+    w27Expect(rec.spend_budget).toBe(1_000_000);
+    w27Expect((D4.expectedForNode(rec, W5B4_STORE_A) as W5b4R).from).toBe('step0a');
+  }, 120_000);
+
+  w27It('R-PRE: before window start a raise is appended the same way (part 2 exists), and only supersedes, finalized_ms and amendments move', async () => {
+    const fx = w5b4Quiz(w5b4Home());
+    const r = await b23Open(w27Raise(fx, fx.f, null, '1500000'), W5B4_T0 + W5B4_DAY / 2);
+    w27Expect([r.refusal, r.code], r.stderr).toEqual([null, 0]);
+    const rec = JSON.parse(r.stdout) as W5b4R;
+    w27Expect(rec.amendments).toHaveLength(1);
+    w27Expect(rec.amendments[0].at_ms).toBe(W5B4_T0 + W5B4_DAY / 2);
+    w27Expect(w5b4Lib.canonicalJson({ ...rec, supersedes: fx.final.supersedes, finalized_ms: fx.final.finalized_ms, amendments: fx.final.amendments }),
+      'R-ONLY: nothing else moved, before window start').toBe(w5b4Lib.canonicalJson(fx.final));
+    w27Expect(inForce(rec)).toBe(1_500_000);
+    w27Expect(rec.spend_budget).toBe(1_000_000);
+  }, 120_000);
+
+  w27It('R-2ND: a second raise is read beside the first: equal to it refuses, above it appends after it byte for byte', async () => {
+    const fx = w5b4Quiz(w5b4Home());
+    const a1 = await b23Amend(fx, fx.f, null, ['--kind', 'budget-raise', '--spend-budget', '1500000']);
+    const same = await b23Open(w27Raise(fx, a1, fx.f, '1500000'), B23_NOW + 1000);
+    w27Expect(same.refusal).toEqual({ word: 'record-invalid', detail: 'amendments[1].detail.spend_budget budget-not-raised' });
+    w27Expect(same.stdout).toBe('');
+    const above = await b23Open(w27Raise(fx, a1, fx.f, '2000000'), B23_NOW + 1000);
+    w27Expect([above.refusal, above.code], above.stderr).toEqual([null, 0]);
+    const rec = JSON.parse(above.stdout) as W5b4R;
+    w27Expect(w5b4Lib.canonicalJson(rec.amendments[0])).toBe(w5b4Lib.canonicalJson(a1.value.amendments[0]));
+    w27Expect(rec.amendments).toHaveLength(2);
+    w27Expect(inForce(rec)).toBe(2_000_000);
+  }, 120_000);
+
+  type Row = [string, (fx: W5b4R) => string[], string, string];
+  const NOT_RAISED = 'amendments[0].detail.spend_budget budget-not-raised';
+  const rows: Row[] = [
+    ['R-EQ a raise equal to the signed budget', (fx) => w27Raise(fx, fx.f, null, '1000000'), 'record-invalid', NOT_RAISED],
+    ['R-LO a raise below it', (fx) => w27Raise(fx, fx.f, null, '999999'), 'record-invalid', NOT_RAISED],
+    ['no figure', (fx) => w27Raise(fx, fx.f, null, null), 'args-invalid', 'spend-budget-required'],
+    ['a zero', (fx) => w27Raise(fx, fx.f, null, '0'), 'args-invalid', '--spend-budget wants a positive integer, got "0"'],
+    ['a node', (fx) => w27Raise(fx, fx.f, null, '2000000', ['--node-label', 'node-0']), 'args-invalid', '--node-label is not a budget-raise flag'],
+    ['another kind\'s flag', (fx) => w27Raise(fx, fx.f, null, '2000000', ['--act', 'reparse']), 'args-invalid', '--act is not a budget-raise flag'],
+    ['a figure on another kind', (fx) => ['open', '--amend', '--kind', 'forced-act', '--act', 'reparse', '--act-ms', String(B23_NOW - 1), '--spend-budget', '2000000',
+      ...w5b4Inp('record', fx.f), ...w5b4Inp('part1', fx.d as W5b4Saved), ...w5b4Inp('frozen', fx.fz as W5b4Saved)], 'args-invalid', '--spend-budget is not a forced-act flag'],
+    ['R-PART1 part 1 given as the record', (fx) => ['open', '--amend', '--kind', 'budget-raise', '--spend-budget', '2000000',
+      ...w5b4Inp('record', fx.d as W5b4Saved), ...w5b4Inp('part1', fx.d as W5b4Saved), ...w5b4Inp('frozen', fx.fz as W5b4Saved)], 'record-invalid', 'record part "draft", wanted final'],
+    ['--allow-code-change', (fx) => w27Raise(fx, fx.f, null, '2000000', ['--allow-code-change']), 'args-invalid', '--allow-code-change is not a open --amend flag'],
+  ];
+  w27It.each(rows)('R-ROWS: open --amend --kind budget-raise refuses, printing nothing: %s', async (_why, argvOf, word, detail) => {
+    const fx = w5b4Quiz(w5b4Home());
+    const r = await b23Open(argvOf(fx));
+    w27Expect(r.refusal, r.stderr).toEqual({ word, detail });
+    w27Expect(r.stdout).toBe('');
+  }, 120_000);
+});
+
+// ── W2-7 Task 2: every reader spends under the budget in force (R-B1, D-7063) ─────────────────────────────────────────
+// armNodeOf reads the budget in force through the gate's one reader and carries it as spendBudget; armsCommand prints and
+// records that figure, so a node stopped for a spent budget resumes on its own --out under a raise, at the raised share.
+
+w27Describe('W2-7 Task 2: armNodeOf takes the budget in force through the one reader, and no other driver line reads the signed figure (R-B1, D-7063)', () => {
+  const fx = w5b4Quiz(w5b4Home());
+  const run = (rec: W5b4Saved): W5b4R => ({ section: 'quiz', record: rec.value, recordSha256: rec.sha, frozen: { sha256: fx.fz.sha, list: fx.fz.value },
+    settingsMode: 'restricted', allowCodeChange: false, codeStamps: [] });
+
+  w27It('T2-NODE: armNodeOf\'s quiz budget is this node\'s share of the budget in force, and spendBudget is that figure', async () => {
+    w27Expect(D4.armNodeOf(run(fx.f), W5B4_STORE_A), 'CONTROL: the unamended record').toMatchObject({ budget: 600_000, spendBudget: 1_000_000, nAll: 5 });
+    const a1 = await b23Amend(fx, fx.f, null, ['--kind', 'budget-raise', '--spend-budget', '1500000']);
+    w27Expect(D4.armNodeOf(run(a1), W5B4_STORE_A)).toMatchObject({ budget: 900_000, spendBudget: 1_500_000 });
+    const a2 = await b23Amend(fx, a1, fx.f, ['--kind', 'budget-raise', '--spend-budget', '2000000'], B23_NOW + 1000);
+    w27Expect(D4.armNodeOf(run(a2), W5B4_STORE_A)).toMatchObject({ budget: 1_200_000, spendBudget: 2_000_000 });
+    w27Expect(D4.armNodeOf(run(a1), W5B4_STORE_B), 'node B, two questions, under the first raise').toMatchObject({ budget: 600_000, spendBudget: 1_500_000 });
+  }, 120_000);
+
+  w27It('T2-PILOT: the pilot\'s spendBudget is null and its budget part 1\'s pilot_budget', () => {
+    const p = w5b4Pilot(w5b4Home());
+    w27Expect(D4.armNodeOf({ section: 'pilot', record: p.draft, recordSha256: p.d.sha, frozen: { sha256: p.fz.sha, list: p.fz.value },
+      settingsMode: 'restricted', allowCodeChange: false, codeStamps: [] }, W5B4_STORE_A)).toMatchObject({ budget: p.draft.pilot_budget, spendBudget: null });
+  });
+
+  w27It('T2-SCAN: the driver reads the signed spend_budget only in the two range checks, calls the one reader once, and spells the kind once', () => {
+    const lines = readFileSync(join(REPO, 'deploy', 'history-replay.mjs'), 'utf8').split('\n').filter((l) => !/^\s*(\*|\/\/|\/\*)/.test(l));
+    const reads = lines.filter((l) => /\.spend_budget\b/.test(l));
+    w27Expect(reads, 'the signed field is read in two lines').toHaveLength(2);
+    for (const l of reads) w27Expect(l.trim().startsWith('refuseOutOfRangeValues({ budget: '), l).toBe(true);
+    w27Expect(reads.filter((l) => l.includes('r.spend_budget'))).toHaveLength(1);
+    w27Expect(reads.filter((l) => l.includes('amended.spend_budget'))).toHaveLength(1);
+    const calls = lines.filter((l) => l.includes('spendBudgetInForce('));
+    w27Expect(calls, 'the one reader is called once').toHaveLength(1);
+    w27Expect(calls[0]).toContain('const spendBudget = ');
+    const kinds = lines.filter((l) => l.includes("'budget-raise'"));
+    w27Expect(kinds, 'the kind is spelled once').toHaveLength(1);
+    w27Expect(kinds[0].trim().startsWith("'budget-raise': Object.freeze(")).toBe(true);
+  });
+});
+
+w27Describe.skipIf(process.platform === 'darwin')('W2-7 Task 2: a budget-exhausted quiz node resumes on the same --out under a budget raise, at the raised share (R-B1, D-7063)', () => {
+  w27It('T2-RESUME: budget-exhausted at the signed share, still exhausted on a re-run under the same record, then resumed under a raise at the raised share, every question answered and the first run read back', async () => {
+    const home = w5b4Home();
+    const fx = w5b4Quiz(home, { spendBudget: 100, over: { limits: { concurrency: 1 } } });
+    const r1 = await w5b4Arms(home, fx.argv());
+    w27Expect(r1.refusal, r1.stderr).toEqual({ word: 'budget-exhausted', detail: 'spent 65 of 60' });
+    w27Expect(w5b4Runs(home)).toHaveLength(1);
+    const r1b = await w5b4Arms(home, fx.argv());
+    w27Expect(r1b.refusal, 'CONTROL: a re-run is no remedy').toEqual({ word: 'budget-exhausted', detail: 'spent 65 of 60' });
+    w27Expect(w5b4Runs(home), 'CONTROL: nothing respawned').toHaveLength(1);
+    const a1 = await b23Amend(fx, fx.f, null, ['--kind', 'budget-raise', '--spend-budget', '1000000']);
+    const r2 = await w5b4Arms(home, fx.argv(a1, w5b4Inp('supersedes', fx.f)));
+    w27Expect([r2.refusal, r2.code], r2.stderr).toEqual([null, 0]);
+    w27Expect(r2.stderr.startsWith('ccrc history-replay: spend share 600000 = ceil(1000000 x 3 / 5)\n'), r2.stderr).toBe(true);
+    w27Expect(w5b4Json(join(fx.out, 'quiz', 'arms', 'summary.json'))).toMatchObject({ record_sha256: a1.sha, stop: null,
+      budget: { in_force: 600_000, spend_budget: 1_000_000, n_node: 3, n_all: 5 }, counts: { questions: 3, answered: 3, not_run: 0 } });
+    w27Expect(w5b4Runs(home), 'three questions, two arms, the first run read back and never respawned (W2-D53)').toHaveLength(6);
+  }, 120_000);
+});
+
+// ── W2-7 Task 3: report's carried checks (CP-27 F1, A10, A13) ─────────────────────────────────────────────────────────
+
+/** Node 0's second question answered UNKNOWN by the treatment arm (so its record's state is not `value`), every other treatment
+ *  answer right and every control answer UNKNOWN: a world that reports. */
+const w27F1World = () => {
+  let n = 0;
+  return b2t5World({ answer: (e, arm) => (arm === B2T5_T && e.store_id === B2T5_S1 && ++n === 2 ? { text: 'ANSWER: UNKNOWN' } : { text: arm === B2T5_T ? `ANSWER: ${e.fact as string}` : 'ANSWER: UNKNOWN' }) });
+};
+
+w27Describe('W2-7 Task 3: nodeAnswersOf refuses a record marked correct whose answer state is not value, before --out and never INTERNAL (CP-27 F1)', () => {
+  w27It('F1-CONTROL: a world whose node-0 second question the treatment arm answers UNKNOWN reports', async () => {
+    const r = await b2t5Report(w27F1World().argv());
+    w27Expect(r.refusal, r.stderr).toBeNull();
+  });
+
+  w27It('F1-SWAP: two answer records of one arm and node with answer_field.state swapped under an untouched summary refuse input-invalid "is not a settled answer record", naming the record marked correct, before --out', async () => {
+    const w = w27F1World();
+    const [q1, q2] = w.nodes[B2T5_S1].mine.map((e: B2t5R) => e.qid as string) as [string, string];
+    const p = (q: string): string => join(w.nodes[B2T5_S1].root, 'quiz', 'answers', `${q}.${B2T5_T}.json`);
+    const r1 = JSON.parse(readFileSync(p(q1), 'utf8')) as B2t5R;
+    const r2 = JSON.parse(readFileSync(p(q2), 'utf8')) as B2t5R;
+    w27Expect([r1.answer_field.state, r1.correct, r2.answer_field.state, r2.correct], 'CONTROL: the records as the world wrote them').toEqual(['value', true, 'unknown', false]);
+    const s1 = r1.answer_field.state as string;
+    r1.answer_field = { ...r1.answer_field, state: r2.answer_field.state };
+    r2.answer_field = { ...r2.answer_field, state: s1 };
+    writeFileSync(p(q1), `${b2t5Lib.canonicalJson(r1) as string}\n`);
+    writeFileSync(p(q2), `${b2t5Lib.canonicalJson(r2) as string}\n`);
+    w27Expect(await f4Refused(w)).toEqual({ word: 'input-invalid', detail: `arms-summary ${B2T5_S1}: quiz/answers/${q1}.${B2T5_T}.json is not a settled answer record` });
+  });
+});
+
+w27Describe('W2-7 Task 3: verifyAbOf names each defect of a family entry by its own detail (CP-27 A10)', () => {
+  const s1 = B2T5_S1;
+  const fam = (w: B2t5R): B2t5R => w.nodes[s1].verifyAb.value.families[0] as B2t5R;
+  const other = (arm: string): string => (arm === B2T5_T ? B2T5_C : B2T5_T);
+  const edited = (edit: (f: B2t5R) => B2t5R | null): { w: B2t5R; f: B2t5R } => {
+    const w = b2t5World();
+    const f = structuredClone(fam(w)) as B2t5R;
+    b2t5Edit(w, s1, 'verifyAb', (v) => ({ ...v, families: [edit(structuredClone(f) as B2t5R), ...v.families.slice(1)] }));
+    return { w, f };
+  };
+  w27It('A10-CONTROL: the unedited world reports', async () => {
+    w27Expect((await b2t5Report(b2t5World().argv())).refusal).toBeNull();
+  });
+
+  w27It('A10-OBJ: a family entry that is null refuses "lists null off the record\'s assignment"', async () => {
+    const { w } = edited(() => null);
+    w27Expect(await f4Refused(w)).toEqual({ word: 'input-invalid', detail: `verify-ab ${s1} lists null off the record's assignment` });
+  });
+
+  w27It('A10-OFF: a family entry naming a family this store was not assigned refuses "lists \"live-not-assigned\" off the record\'s assignment"', async () => {
+    const { w } = edited((f) => ({ ...f, ccrc_id: 'live-not-assigned' }));
+    w27Expect(await f4Refused(w)).toEqual({ word: 'input-invalid', detail: `verify-ab ${s1} lists "live-not-assigned" off the record's assignment` });
+  });
+
+  w27It('A10-ARM: a family entry under the other arm refuses naming both arms', async () => {
+    const { w, f } = edited((e) => ({ ...e, arm: other(e.arm as string) }));
+    w27Expect(await f4Refused(w)).toEqual({ word: 'input-invalid',
+      detail: `verify-ab ${s1} lists ${JSON.stringify(f.ccrc_id)} under arm ${JSON.stringify(other(f.arm as string))}, not the record's ${JSON.stringify(f.arm)}` });
+  });
+
+  w27It('A10-NOARM: a family entry with no arm refuses "under arm null", naming the record\'s arm', async () => {
+    const { w, f } = edited((e) => { delete e.arm; return e; });
+    w27Expect(await f4Refused(w)).toEqual({ word: 'input-invalid',
+      detail: `verify-ab ${s1} lists ${JSON.stringify(f.ccrc_id)} under arm null, not the record's ${JSON.stringify(f.arm)}` });
+  });
+
+  w27It('A10-STATE: a family entry in a state off AB_STATES refuses "in state \"maybe\", not one of AB_STATES"', async () => {
+    const { w, f } = edited((e) => ({ ...e, state: 'maybe' }));
+    w27Expect(await f4Refused(w)).toEqual({ word: 'input-invalid', detail: `verify-ab ${s1} lists ${JSON.stringify(f.ccrc_id)} in state "maybe", not one of AB_STATES` });
+  });
+
+  w27It('A10-ORDER: an entry under the other arm and in a state off AB_STATES refuses by the arm (it is held first)', async () => {
+    const { w, f } = edited((e) => ({ ...e, arm: other(e.arm as string), state: 'maybe' }));
+    w27Expect(await f4Refused(w)).toEqual({ word: 'input-invalid',
+      detail: `verify-ab ${s1} lists ${JSON.stringify(f.ccrc_id)} under arm ${JSON.stringify(other(f.arm as string))}, not the record's ${JSON.stringify(f.arm)}` });
+  });
+});
+
+// ── W2-7 Task 4: the realpath colon check at W2-5b2's five call sites (CP-27 F2, A9; D-5813) ──────────────────────────
+
+/** A directory `a:b` under a fresh base, and a symlink `link` to it: `link/out` spells no colon, its realpath holds one. */
+function w27Colon(): { base: string; link: string; real: string } {
+  const base = mkTmp('ccrc-w27-colon-');
+  mkdirSync(join(base, 'a:b'));
+  symlinkSync(join(base, 'a:b'), join(base, 'link'));
+  return { base, link: join(base, 'link', 'out'), real: join(base, 'a:b', 'out') };
+}
+/** The CONTROL: the same with a directory named `ab`, so the colon is the only difference. */
+function w27Plain(): { link: string; real: string } {
+  const base = mkTmp('ccrc-w27-plain-');
+  mkdirSync(join(base, 'ab'));
+  symlinkSync(join(base, 'ab'), join(base, 'link'));
+  return { link: join(base, 'link', 'out'), real: join(base, 'ab', 'out') };
+}
+const w27Out = (argv: string[], out: string): string[] => argv.map((v, i) => (i > 0 && argv[i - 1] === '--out' ? out : v));
+const COLON = { word: 'args-invalid', detail: "out contains ':'" };
+
+w27Describe.skipIf(process.platform === 'darwin')('W2-7 Task 4: an --out whose realpath holds a colon is refused args-invalid at each of W2-5b2\'s five call sites, before any spawn and any result (CP-27 F2, D-5813)', () => {
+  w27It('C-STEP0B: step0b --section pilot', async () => {
+    const home = b2t1Home();
+    const fx = b2t1Pilot(home);
+    b2t1PlantAll(home, 'restricted');
+    const c = w27Colon();
+    const r = await b2t1Run(home, w27Out(fx.argv(), c.link));
+    w27Expect(r.refusal, r.stderr).toEqual(COLON);
+    w27Expect(stubLog(home), 'nothing was spawned before the check').toBeNull();
+    w27Expect(existsSync(join(c.real, 'pilot', 'step0b')), 'no result was written').toBe(false);
+  }, 120_000);
+
+  w27It('C-FID: fidelity --section pilot', async () => {
+    const home = b2t2Home();
+    b2t2PlantPass(home);
+    const fx = b2t2Fidelity(home);
+    const c = w27Colon();
+    const r = await b2t2Call(() => B2.fidelityCommand(b2t2Flags(w27Out(fx.argv, c.link)), B2T2_ENV(home), b2t2Deps()));
+    w27Expect(r.refusal, r.stderr).toEqual(COLON);
+    w27Expect(stubLog(home), 'nothing was spawned before the check').toBeNull();
+    w27Expect(existsSync(join(c.real, 'fidelity.json')), 'no result was written').toBe(false);
+  }, 120_000);
+
+  w27It('C-RESULT: pilot-result --section pilot, over a real passing --out moved under the colon directory', async () => {
+    const home = b2t2Home();
+    const p = b2t2PilotOut(home);
+    const c = w27Colon();
+    w27Rename(p.out, c.real);
+    const r = await b2t2Call(() => B2.pilotResultCommand(b2t2Flags(w27Out(p.argv(), c.link)), B2T2_ENV(home)));
+    w27Expect(r.refusal, r.stderr).toEqual(COLON);
+    w27Expect(existsSync(join(c.real, 'pilot-result.json')), 'no result was written').toBe(false);
+    w27Expect(r.stderr, 'nothing was printed').toBe('');
+  }, 120_000);
+
+  w27It('C-RESULT-PLAIN: CONTROL, the same --out moved under a directory with no colon is read and answered', async () => {
+    const home = b2t2Home();
+    const p = b2t2PilotOut(home);
+    const c = w27Plain();
+    w27Rename(p.out, c.real);
+    const r = await b2t2Call(() => B2.pilotResultCommand(b2t2Flags(w27Out(p.argv(), c.link)), B2T2_ENV(home)));
+    w27Expect(r.refusal, r.stderr).toBeNull();
+    w27Expect(existsSync(join(c.real, 'pilot-result.json')), 'the result was written').toBe(true);
+  }, 120_000);
+
+  w27It('C-REFID: fidelity --section quiz', async () => {
+    const fx = b23RepilotNode();
+    const c = w27Colon();
+    const r = await b23Fidelity(fx, c.link);
+    w27Expect(r.refusal, r.stderr).toEqual(COLON);
+    w27Expect(stubLog(fx.home as string), 'nothing was spawned before the check').toBeNull();
+    w27Expect(existsSync(join(c.real, 'quiz', 'fidelity.json')), 'no result was written').toBe(false);
+  }, 300_000);
+
+  /** The re-pilot's step 0b and fidelity written under a plain --out, their two inputs COPIED out (never saved in place: the
+   *  --out moves, and repilotResultCommand loads both inputs before it reaches the colon check). */
+  const w27Repilot = async (): Promise<{ fx: W5b4R; s0: W5b4Saved; fid: W5b4Saved; rout: string }> => {
+    const fx = b23RepilotNode();
+    const rout = w5b4Out();
+    w27Expect((await b23Step0b(fx, rout)).refusal, 'step 0b').toBeNull();
+    w27Expect((await b23Fidelity(fx, rout)).refusal, 'fidelity').toBeNull();
+    const s0 = w5b4SaveText(readFileSync(join(rout, 'quiz', 'step0b', 'restricted.json'), 'utf8'), 'restricted.json');
+    const fid = w5b4SaveText(readFileSync(join(rout, 'quiz', 'fidelity.json'), 'utf8'), 'fidelity.json');
+    return { fx, s0, fid, rout };
+  };
+
+  w27It('C-RERES: pilot-result --section quiz, over a real passing --out moved under the colon directory', async () => {
+    const { fx, s0, fid, rout } = await w27Repilot();
+    const c = w27Colon();
+    w27Rename(rout, c.real);
+    const r = await b23Result(fx, c.link, s0, fid);
+    w27Expect(r.refusal, r.stderr).toEqual(COLON);
+    w27Expect(existsSync(join(c.real, 'quiz', 'repilot-result.json')), 'no result was written').toBe(false);
+    w27Expect(r.stderr, 'nothing was printed').toBe('');
+  }, 300_000);
+
+  w27It('C-RERES-PLAIN: CONTROL, the same --out moved under a directory with no colon is read and answered', async () => {
+    const { fx, s0, fid, rout } = await w27Repilot();
+    const c = w27Plain();
+    w27Rename(rout, c.real);
+    const r = await b23Result(fx, c.link, s0, fid);
+    w27Expect(r.refusal, r.stderr).toBeNull();
+    w27Expect(existsSync(join(c.real, 'quiz', 'repilot-result.json')), 'the result was written').toBe(true);
+  }, 300_000);
 });

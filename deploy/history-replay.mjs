@@ -42,7 +42,7 @@ import { blobReadStmts, bodyOf, epochOfUuid, holdingCopyOf } from '../ccd/histor
 import { asOfCutOf, expandEntryBody, familiesOf as scopeFamiliesOf, transcriptsOf } from '../ccd/history/recall.mjs';
 import { pairIndexOf } from '../ccd/history/cli.mjs';
 import { admitFile, ftsTextOfBlob, readRegPresence } from '../ccd/history/sweep.mjs';
-import { AMENDMENT_KINDS, ANSWER_PROTOCOL, ANSWER_PROTOCOL_SHA256, ANSWER_STATES, ASSIGNMENT_ARMS, EXACT_MODEL_ID_RE, FACT_KINDS, GATE_CODE_FILES, LABELLER, LABELS, OPEN_RECORD_V1, OPUS_MODEL_RE, PILOT_SUBSTREAM, QUESTION_OUTCOMES, RUBRICS, RUBRIC_IDS, RUBRIC_SHA256, SHA_MIN_PREFIXES, WRITER_INPUTS, WRITER_PROMPT, WRITER_PROMPT_SHA256, activeFamilies, admitFact, applyHandcheck, assembleReports, assignArms, assignmentSha256, buildWindows, changedFamilies, checkGateCode, classifyRun, cmpFrac, collapseWs, decideGate, expectedWindows, familyKey, frac, handcheckAgreement, handcheckSample, labelCorrect, parseAnswerField, parseLabelLine, parseQuestionLine, q18Power, questionOutcome, randInt, recordSha256, splitAtFirstExit8, substream, validateOpenRecord, windowTotals } from './history-gate.mjs';
+import { AMENDMENT_KINDS, ANSWER_PROTOCOL, ANSWER_PROTOCOL_SHA256, ANSWER_STATES, ASSIGNMENT_ARMS, EXACT_MODEL_ID_RE, FACT_KINDS, GATE_CODE_FILES, LABELLER, LABELS, OPEN_RECORD_V1, OPUS_MODEL_RE, PILOT_SUBSTREAM, QUESTION_OUTCOMES, RUBRICS, RUBRIC_IDS, RUBRIC_SHA256, SHA_MIN_PREFIXES, WRITER_INPUTS, WRITER_PROMPT, WRITER_PROMPT_SHA256, activeFamilies, admitFact, applyHandcheck, assembleReports, assignArms, assignmentSha256, buildWindows, changedFamilies, checkGateCode, classifyRun, cmpFrac, collapseWs, decideGate, expectedWindows, familyKey, frac, handcheckAgreement, handcheckSample, labelCorrect, parseAnswerField, parseLabelLine, parseQuestionLine, q18Power, questionOutcome, randInt, recordSha256, spendBudgetInForce, splitAtFirstExit8, substream, validateOpenRecord, windowTotals } from './history-gate.mjs';
 import { rosterFromJson, RosterInvalid } from '../shared/roster-json.mjs';
 
 // ── the driver's words (W2-D59) ───────────────────────────────────────────
@@ -5204,7 +5204,7 @@ const PRED_INPUT = Object.freeze(['supersedes', 'supersedes-sha256']);
 const NODE_INPUTS = Object.freeze(['census', 'census-sha256', 'verify', 'verify-sha256']);
 /** W2-5b2 Task 3 (Q13, K6): every detail flag open --amend's form takes; AMEND_DETAILS decides which a kind requires, may
  *  take or refuses (its union is this list, pinned in history-replay.test.ts). Declared here because SUBCOMMAND_FLAGS reads it. */
-export const AMEND_FLAGS = Object.freeze(['node-label', 'claude-code-version', 'repilot', 'repilot-sha256', 'surface', 'ruling', 'release-tag', 'act', 'act-ms']);
+export const AMEND_FLAGS = Object.freeze(['node-label', 'claude-code-version', 'repilot', 'repilot-sha256', 'surface', 'ruling', 'release-tag', 'act', 'act-ms', 'spend-budget']);
 /** Each subcommand form's flags: a flag outside both lists is refused, a required one missing is refused. */
 const SUBCOMMAND_FLAGS = Object.freeze({
   'pilot-source': { required: ['out', 'account', 'budget', 'writer-model', 'step0a', 'step0a-sha256'], optional: ['sha-min-prefix', 'writer-input', 'n-fidelity', 'n-usage'] },
@@ -7034,16 +7034,18 @@ export function loadArmRun(flags, section, { nowMs }) {
 }
 
 /** This node's values for an arm run (R26; Q2, Q5, W2-D56): the node named in the record (W2-D84's rule), this node's
- *  questions in frozen qid order, the budget in force (part 1's pilot_budget, or this node's share of spend_budget, Q5),
+ *  questions in frozen qid order, the budget in force (part 1's pilot_budget, or this node's share of part 2's budget in
+ *  force, the gate's spendBudgetInForce, Q5, D-7063), and that part 2 figure as spendBudget (null for the pilot),
  *  W2-D56's expected values (expectedForNode), the account, the limits and the settings mode. Refuses before --out. */
 export function armNodeOf(run, storeId) {
   const r = run.record;
   requireNamedNode(r, storeId);
   const questions = nodeQuestions(run.section, run.frozen.list.entries, storeId);
   const nAll = run.frozen.list.entries.length;
-  const budget = run.section === 'pilot' ? r.pilot_budget : spendShareOf(r.spend_budget, questions.length, nAll);
+  const spendBudget = run.section === 'pilot' ? null : spendBudgetInForce(r);   // W2-7 (D-7063): the budget in force, the one reader
+  const budget = run.section === 'pilot' ? r.pilot_budget : spendShareOf(spendBudget, questions.length, nAll);
   const { expected } = expectedForNode(r, storeId);
-  return { questions, nAll, account: r.account, expected, budget, limits: r.limits, settingsMode: run.settingsMode };
+  return { questions, nAll, account: r.account, expected, budget, spendBudget, limits: r.limits, settingsMode: run.settingsMode };
 }
 /** One arm run (W2-D50): the family's id as CCRC_RECALL_SESSION, the arm, and boundary N as CCRC_RECALL_ASOF. */
 function armJob(ctx, q, arm, attempt, stdin, move = null) {
@@ -7404,7 +7406,7 @@ export async function armsCommand(flags, driverEnv, deps = { recheck: recheckBat
     refuseSpawnAdmission({ home, accountId: node.account, limits: node.limits, expected: node.expected, allowCodeChange: run.allowCodeChange });   // arms: W2-5a's R10, D-6307, D-6311
     requireListed(home, storeId, familiesOf(questions));
     refuseRecallOff(home, [...new Set(questions.map((q) => q.ccrc_id))]);
-    if (section === 'quiz') process.stderr.write(`ccrc history-replay: spend share ${budget} = ceil(${record.spend_budget} x ${questions.length} / ${nAll})\n`);
+    if (section === 'quiz') process.stderr.write(`ccrc history-replay: spend share ${budget} = ceil(${node.spendBudget} x ${questions.length} / ${nAll})\n`);
     const out = prepareOut(flags.out);
     refuseColonInRealOut(out);
     refusePilotSourceOut(out, 'arms run');   // Q25, one spelling (W2-5b2 Task 1's, K4)
@@ -7417,7 +7419,7 @@ export async function armsCommand(flags, driverEnv, deps = { recheck: recheckBat
         section, home, out, rs, storeId, launch, gate, expected: node.expected, allowCodeChange: run.allowCodeChange, deps,
         configDirs: rosterConfigDirs(roster, home), model: record.arm_model, settingsMode: node.settingsMode,
         lang: driverEnv.LANG, timeoutMs: deps.timeoutMs, recordSha256: run.recordSha256, shaMinPrefix: record.labeller.sha_min_prefix,
-        budget: { in_force: budget, spend_budget: section === 'quiz' ? record.spend_budget : null, n_node: questions.length, n_all: nAll },
+        budget: { in_force: budget, spend_budget: node.spendBudget, n_node: questions.length, n_all: nAll },
         stamps: new Set(run.codeStamps),
         // W2-5b2 Task 3 (W2-D56, Q14): this node's version moves, and each run's version from the manifests (armStatesOf)
         moves: nodeMovesOf(record, record.nodes.find((n) => n.store_id === storeId).label), runVersions: new Map(),
@@ -8770,7 +8772,8 @@ HANDLERS.set('pilot-result', (flags, env) => pilotResultCommand(flags, env));
 export const FREEZE_EXCEPTION_KIND = 'freeze-exception';
 /** Each amendment kind's detail flags and its detail (Q13, as K6 amends it): version-move `{claude_code_version,
  *  repilot_sha256}`, its node required (W2-D56, Q12); freeze-exception `{surface, ruling, release_tag?}` (W2-D6, K6),
- *  `release_tag` present only when given; forced-act `{act, at_ms}` (W2-D7); the node optional for the last two. Keyed by
+ *  `release_tag` present only when given; forced-act `{act, at_ms}` (W2-D7); the node optional for the last two;
+ *  budget-raise `{spend_budget}`, its node refused (W2-7, D-7063). Keyed by
  *  the gate's AMENDMENT_KINDS, whose words it holds as a set, and its flags are exactly AMEND_FLAGS (history-replay.test.ts
  *  pins both). */
 export const AMEND_DETAILS = Object.freeze({
@@ -8780,6 +8783,8 @@ export const AMEND_DETAILS = Object.freeze({
     detail: (flags) => ({ surface: flags.surface, ruling: flags.ruling, ...(flags['release-tag'] === undefined ? {} : { release_tag: flags['release-tag'] }) }) }),
   'forced-act': Object.freeze({ required: Object.freeze(['act', 'act-ms']), optional: Object.freeze(['node-label']),
     detail: (flags) => ({ act: flags.act, at_ms: flags['act-ms'] }) }),
+  'budget-raise': Object.freeze({ required: Object.freeze(['spend-budget']), optional: Object.freeze([]),
+    detail: (flags) => ({ spend_budget: flags['spend-budget'] }) }),
 });
 /** The detail texts that must say something: an empty one is refused. */
 const AMEND_TEXT_FLAGS = Object.freeze(['surface', 'ruling', 'release-tag', 'act']);
@@ -9164,8 +9169,9 @@ export async function repilotResultCommand(flags, driverEnv, deps = { now: () =>
  *  input; its ranges); the node, one of the record's; for a version move, the re-pilot result, its sha checked before its
  *  bytes are parsed, its shape, its record, its node, its version and its pass. Then the record with the amendment
  *  appended, the gate's validator against part 1, the frozen list and the record it supersedes (after window start, an
- *  append and nothing else), and the part 2 ranges (R30). Prints the record and its sha on stderr; reads no HOME, spawns
- *  nothing, writes nothing. */
+ *  append and nothing else), and the part 2 ranges (R30). A budget-raise is held above the budget in force by the
+ *  validator (budget-not-raised), never by a second comparison here. Prints the record and its sha on stderr; reads no
+ *  HOME, spawns nothing, writes nothing. */
 async function openAmend(flags, driverEnv, deps) {
   checkFlags('open --amend', flags);
   const kind = flags.kind;
@@ -9830,7 +9836,8 @@ function inputsByStore(name, inputs, want, record) {
  *  derives one sorted qid per reason-bearing record, and armsSummaryOf must reproduce that optional summary field byte for
  *  byte (W2-5b1's build departure; re-anchor at W2-5b1's merged code). A record's own record_sha256 is not compared: it is
  *  written once, under the record in force when its question settled, and amendments only append (W2-D90). Answers the
- *  records by qid, their files' shas and their stamps. */
+ *  records by qid, their files' shas and their stamps. A record marked correct whose answer state is not `value` is not settled
+ *  either: only a value is ever correct (W2-D63, W2-D64), and decideGate throws on one (CP-27 F1). */
 function nodeAnswersOf({ summary, storeId, recordSha256, entries }) {
   const s = summary.value;
   const at = `arms-summary ${storeId}`;
@@ -9858,7 +9865,7 @@ function nodeAnswersOf({ summary, storeId, recordSha256, entries }) {
       refuse('input-invalid', `${at}: ${rel} is not one of this node's frozen questions`);
     }
     if (!Array.isArray(r.stamps) || (r.run !== null && (!plainObject(r.answer_field) || !ANSWER_STATES.includes(r.answer_field.state)
-      || typeof r.correct !== 'boolean' || !plainObject(r.uptake)))) {
+      || typeof r.correct !== 'boolean' || !plainObject(r.uptake) || (r.correct === true && r.answer_field.state !== 'value')))) {
       refuse('input-invalid', `${at}: ${rel} is not a settled answer record`);
     }
     recs.set(judgePairKey(r.qid, r.arm), r);
@@ -9916,7 +9923,9 @@ function verifyQuizOf(v, storeId, recordSha256) {
 }
 
 /** One node's verify --section ab output (W2-D84, Q15, V1): this record's, listing exactly the record's assignment on this
- *  store, each family once with its arm and an AB_STATES word. Answers the states by familyKey. */
+ *  store, each family once with its arm and an AB_STATES word. An entry that is no object or names no assigned family of this
+ *  store, one under another arm, and one in a state off AB_STATES are refused apart, each by its own detail (CP-27 A10).
+ *  Answers the states by familyKey. */
 function verifyAbOf(v, storeId, recordSha256, assignment) {
   const at = `verify-ab ${storeId}`;
   if (!plainObject(v) || v.kind !== VERIFY_AB_KIND || v.v !== 1 || !Array.isArray(v.families)) refuse('input-invalid', `${at} is not a verify --section ab output`);
@@ -9925,7 +9934,9 @@ function verifyAbOf(v, storeId, recordSha256, assignment) {
   const states = new Map();
   for (const f of v.families) {
     const a = plainObject(f) ? want.find((x) => x.ccrc_id === f.ccrc_id && x.generation === f.generation) : undefined;
-    if (a === undefined || f.arm !== a.arm || !AB_STATES.includes(f.state)) refuse('input-invalid', `${at} lists ${JSON.stringify(f?.ccrc_id ?? null)} off the record's assignment`);
+    if (a === undefined) refuse('input-invalid', `${at} lists ${JSON.stringify(f?.ccrc_id ?? null)} off the record's assignment`);
+    if (f.arm !== a.arm) refuse('input-invalid', `${at} lists ${JSON.stringify(f.ccrc_id)} under arm ${JSON.stringify(f.arm ?? null)}, not the record's ${JSON.stringify(a.arm)}`);
+    if (!AB_STATES.includes(f.state)) refuse('input-invalid', `${at} lists ${JSON.stringify(f.ccrc_id)} in state ${JSON.stringify(f.state ?? null)}, not one of AB_STATES`);
     const key = familyKeyOf(a);
     if (states.has(key)) refuse('input-invalid', `${at} lists ${a.ccrc_id} twice`);
     states.set(key, f.state);
