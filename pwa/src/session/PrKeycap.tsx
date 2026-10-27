@@ -43,6 +43,19 @@ export function prLegend(pr: PrState): string {
   return pr.number === null ? 'PR' : `#${pr.number}`;
 }
 
+/** The word on the PR door at the desk (desktop polish T3c, D-6333): the number once we have one, otherwise what
+ *  tapping it does — a tap always opens the sheet, and the sheet is where a PR is opened, checked or retried. Below
+ *  900 the cap shows `prLegend` as it always did; the More sheet's PR row carries this word at every width. */
+export function prDoorWord(pr: PrState): string {
+  if (pr.number !== null) return `#${pr.number}`;
+  switch (pr.phase) {
+    case 'none': return 'Open PR';
+    case 'unchecked': return 'Check PR';
+    case 'unknown': return 'Retry PR';
+    default: return 'PR';
+  }
+}
+
 /** Status is never colour-only: this glyph rides beside the dot, and the sheet
  *  repeats it as a text line.
  *
@@ -252,11 +265,14 @@ export function PrKeycap(
       data-phase={state.phase}
       data-checks={state.checks ?? undefined}
       aria-label={prSentence(state)}
+      title={tooltipSentence(prSentence(state))}
       data-command={command}
       onClick={onOpen}
     >
       <span className="pr-dot" aria-hidden="true" />
+      {/* Two spans, one shown per width (chat.css): the legend below 900, the door's word from it. */}
       <span className="pr-legend">{prLegend(state)}</span>
+      <span className="keycap-word" aria-hidden="true">{prDoorWord(state)}</span>
       {glyph !== null && <span className="pr-glyph" aria-hidden="true">{glyph}</span>}
     </Keycap>
   );

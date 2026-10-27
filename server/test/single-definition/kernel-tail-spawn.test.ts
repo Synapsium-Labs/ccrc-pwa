@@ -1,12 +1,13 @@
 // ARCH-73's spawn ratchets (D-7055, W8 Task C8c; ARCH-73 (#808), its spawn half; spec K17 "Process spawn"): the
-// bounded update spawner is ONE body, `shared/spawn.mjs#boundedSpawn`. Each count below was measured at the base and
+// bounded update spawner is ONE body, `shared/spawn.mjs#boundedSpawn` (and, by C8e, the account-op spawner is ONE body,
+// `shared/spawn.mjs#boundedStdinSpawn`). Each count below was measured at the base and
 // may only shrink: update-spawn bodies outside the kernel 2 -> 0 (the implementations 2 -> 1), and
 // `UPDATE_SPAWN_MAX_BUFFER` definitions 2 -> 1. The wire constants the body reads stay single-defined in
 // `shared/agent-protocol.ts`, and the kernel defines neither. The spawn chain's own area file (C8c creates it; C8d
 // and C8e extend it); a repo-walking guard, so a `WALK_FLOOR` member (`.github/ci/testmap.mjs`).
 import { describe, expect, it } from 'vitest';
 import { REPO, sitesOf } from '../consolidationCensus.js';
-import { processSpawnSites, spawnKernelWireLiterals, updateSpawnBodies, updateSpawnCalls } from '../census-w8/spawn.js';
+import { accountSpawnBodies, processSpawnSites, spawnKernelWireLiterals, updateSpawnBodies, updateSpawnCalls } from '../census-w8/spawn.js';
 import { malformedEntries } from '../rings/exemptions.js';
 import { PROCESS_SPAWNERS } from './spawners.data.js';
 
@@ -38,8 +39,18 @@ describe('one bounded update spawner, shared/spawn.mjs (D-7055; ARCH-73)', () =>
 
 // D-7056 (W8 Task C8d; ARCH-73 (#808); spec K17 "Audited one at a time"): every process spawner has a row and a reason
 // in `spawners.data.ts`, and the set may only shrink. Measured: 10 spawners at ccba6f9b6, 9 once C8c folded the update
-// pair into `shared/spawn.mjs`. C8e folds the account-op pair and lowers the ceiling to its count.
-const PROCESS_SPAWNERS_CEILING = 9;
+// pair into `shared/spawn.mjs`, 8 once C8e folded the account-op pair into `shared/spawn.mjs#boundedStdinSpawn`
+// (D-7057, OA-C8a (a)).
+const PROCESS_SPAWNERS_CEILING = 8;
+
+// D-7057 (W8 Task C8e; OA-C8a (a), D-7060): the account-op spawner is ONE body too, `shared/spawn.mjs#boundedStdinSpawn`.
+// Measured: account-op spawn bodies outside the kernel 2 at the base (`accounts/ops.ts#localAccountOps`,
+// `agent/src/accountop.ts#makeAccountOpSpawn`), 0 at C8e's tip (the implementations 2 -> 1).
+describe('one account-op spawner, shared/spawn.mjs#boundedStdinSpawn (D-7057; ARCH-73)', () => {
+  it('one account-op spawner: no stdin-piped group spawn body outside shared/spawn.mjs', () => {
+    expect(accountSpawnBodies()).toEqual([]);
+  });
+});
 
 describe('every process spawner is audited, with its reason (D-7056; ARCH-73)', () => {
   const sites = (): string[] => [...new Set(processSpawnSites().map((s) => s.key))].sort();
@@ -61,5 +72,14 @@ describe('every process spawner is audited, with its reason (D-7056; ARCH-73)', 
 
   it('localcaps.ts#execCapped carries the audit\'s verdict: kept', () => {
     expect(PROCESS_SPAWNERS['server/src/localcaps.ts#execCapped']?.reason).toMatch(/^KEPT by the C8d audit \(D-7056\)/);
+  });
+
+  it('the account-op pair is one row, shared/spawn.mjs#boundedStdinSpawn: the secret on stdin and OA-C8a (a) (D-7057)', () => {
+    for (const k of ['server/src/accounts/ops.ts#localAccountOps.run', 'agent/src/accountop.ts#makeAccountOpSpawn']) {
+      expect(PROCESS_SPAWNERS[k], `${k} is a wrapper now; its row went with its spawn site`).toBeUndefined();
+    }
+    const reason = PROCESS_SPAWNERS['shared/spawn.mjs#boundedStdinSpawn']?.reason ?? '';
+    expect(reason).toMatch(/D-5513/);
+    expect(reason).toMatch(/OA-C8a \(a\)/);
   });
 });

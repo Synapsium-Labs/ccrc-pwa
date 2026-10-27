@@ -15,6 +15,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { REFINED } from '@ccrc/ui';
 import { declaredValues } from './cssRule';
+import { fleetSession } from './fleetFixture';
 import type { AccountUsage, NotifyEvent, RunSummary } from '../../shared/api';
 
 vi.mock('../src/lib/routes', async (importOriginal) => {
@@ -74,7 +75,7 @@ afterEach(() => {
   // The `api.accounts` spies the lanes-row cases add must not leak into the next case.
   vi.restoreAllMocks();
   act(() => { navigate('/'); });
-  act(() => useFleetStore.setState({ sessions: [], conn: 'connecting', notices: [], feed: [], runs: [], runsFrameSeen: false }));
+  act(() => useFleetStore.setState({ sessions: [], conn: 'connecting', notices: [], feed: [], runs: [], runsFrameSeen: false, fleetFrameSeen: false }));
 });
 
 const bar = (): HTMLElement => document.querySelector<HTMLElement>('header.shell-accounts')!;
@@ -133,48 +134,62 @@ describe('the app bar (W2 Task S4b)', () => {
     for (const t of tabs()) if (t.getAttribute('aria-current') !== 'page') expect(t).not.toHaveAttribute('aria-current');
   });
 
-  it("the Inbox badge counts what the fleet's unread count counts, and the tab's name carries it", () => {
+  it("no badge at zero; the Inbox door's name says 'waiting for you' with the count", () => {
+    // Unread mail is the Inbox's own rows' mark, never the door's count (T2d, D-6330): two records past the ack.
     const stamp = Date.now();
     act(() => { ack(FEED_ACK_KEY, stamp); });
-    const after = stamp + 60_000;
     const feed: NotifyEvent[] = [
-      { seq: 1, at: stamp - 60_000, kind: 'mail', sessionId: 'x', title: 'read already', body: '', runId: null },
-      { seq: 2, at: after, kind: 'mail', sessionId: 'x', title: 'unread', body: '', runId: null },
-      { seq: 3, at: after + 1, kind: 'interrupt', sessionId: 'x', title: 'interrupt · keycap', body: 'source=keycap outcome=sent', runId: null },
-      { seq: 4, at: after + 2, kind: 'coord', sessionId: '', title: 'caps changed', body: 'workers 3 → 5', runId: null },
+      { seq: 1, at: stamp + 60_000, kind: 'mail', sessionId: 'x', title: 'unread', body: '', runId: null },
+      { seq: 2, at: stamp + 60_001, kind: 'mail', sessionId: 'x', title: 'unread too', body: '', runId: null },
     ];
-    // The same feed through the phone header's Inbox door (W2 Task S5) and the desk's Inbox tab.
+    // Two sessions wait on the operator; a child whose question its coordinator holds reads `working` and is not counted.
+    const sessions = [
+      fleetSession({ id: 'ask-a', bucket: 'attention' }),
+      fleetSession({ id: 'ask-b', bucket: 'attention' }),
+      fleetSession({ id: 'held-child', bucket: 'working' }),
+    ];
+    // The same count through the phone header's Inbox door (W2 Task S5) and the desk's Inbox tab.
     atWidth(899);
     render(<App />);
-    act(() => useFleetStore.setState({ conn: 'open', feed }));
-    expect(screen.getByRole('button', { name: 'Inbox, 2 unread' })).toBeInTheDocument();
+    // The offline snapshot's rows before the first fleet frame are not a fact: no badge yet.
+    act(() => useFleetStore.setState({ conn: 'open', feed, sessions }));
+    expect(screen.getByRole('button', { name: 'Inbox' })).toBeInTheDocument();
+    act(() => useFleetStore.setState({ fleetFrameSeen: true }));
+    expect(screen.getByRole('button', { name: 'Inbox, 2 waiting for you' })).toHaveTextContent(/2$/);
     cleanup();
     vi.unstubAllGlobals();
     vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('offline'); }));
     atWidth(900);
     render(<App />);
-    expect(within(primary()).getByRole('button', { name: 'Inbox, 2 unread' })).toBeInTheDocument();
-    act(() => useFleetStore.setState({ feed: [] }));
-    expect(within(primary()).getByRole('button', { name: 'Inbox' })).toBeInTheDocument();
+    expect(within(primary()).getByRole('button', { name: 'Inbox, 2 waiting for you' })).toHaveTextContent(/2$/);
+    // At zero the tab is its word alone, with no badge printed.
+    act(() => useFleetStore.setState({ sessions: [fleetSession({ id: 'held-child', bucket: 'working' })] }));
+    expect(within(primary()).getByRole('button', { name: 'Inbox' })).toHaveTextContent(/^Inbox$/);
   });
 
-  it("the Runs badge counts the open runs only, and says nothing before the first runs frame", () => {
+  it("the Runs badge counts the open runs whose worker or coordinator needs you, and says nothing before the first runs frame", () => {
     atWidth(1280);
     render(<App />);
+    const sessions = [fleetSession({ id: 'ask', bucket: 'attention' }), fleetSession({ id: 'calm', bucket: 'idle' })];
+    act(() => useFleetStore.setState({ conn: 'open', sessions, fleetFrameSeen: true }));
     // Before any runs frame "no runs" is not yet known: the tab is plain.
     expect(within(primary()).getByRole('button', { name: 'Runs' })).toBeInTheDocument();
-    const open = { id: 1, program: 'p', state: 'working', closedAt: null } as unknown as RunSummary;
-    const closed = { id: 2, program: 'p', state: 'done', closedAt: 1 } as unknown as RunSummary;
-    act(() => useFleetStore.setState({ runs: [open, closed], runsFrameSeen: true }));
-    expect(within(primary()).getByRole('button', { name: 'Runs, 1 active' })).toBeInTheDocument();
+    const run = (id: number, state: string, sessionId: string, claimedBy: string): RunSummary =>
+      ({ id, program: 'p', state, closedAt: null, sessionId, claimedBy }) as unknown as RunSummary;
+    // Its worker waits on you; its coordinator does; neither does; closed, though its worker waits.
+    act(() => useFleetStore.setState({
+      runs: [run(1, 'working', 'ask', 'calm'), run(2, 'planned', 'calm', 'ask'), run(3, 'working', 'calm', 'calm'), run(4, 'done', 'ask', 'calm')],
+      runsFrameSeen: true,
+    }));
+    expect(within(primary()).getByRole('button', { name: 'Runs, 2 needs you' })).toBeInTheDocument();
   });
 
   it('a badge prints at most 99+, while the tab\'s name carries the real count', () => {
     atWidth(1280);
     render(<App />);
-    const runs = Array.from({ length: 120 }, (_, i) => ({ id: i + 1, program: 'p', state: 'working', closedAt: null }) as unknown as RunSummary);
-    act(() => useFleetStore.setState({ runs, runsFrameSeen: true }));
-    const tab = within(primary()).getByRole('button', { name: 'Runs, 120 active' });
+    const runs = Array.from({ length: 120 }, (_, i) => ({ id: i + 1, program: 'p', state: 'working', closedAt: null, sessionId: 'ask', claimedBy: null }) as unknown as RunSummary);
+    act(() => useFleetStore.setState({ sessions: [fleetSession({ id: 'ask', bucket: 'attention' })], fleetFrameSeen: true, runs, runsFrameSeen: true }));
+    const tab = within(primary()).getByRole('button', { name: 'Runs, 120 needs you' });
     expect(tab).toHaveTextContent(/99\+$/);
   });
 

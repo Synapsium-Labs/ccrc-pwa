@@ -20,13 +20,14 @@ import { navigate } from '../lib/router';
 import '../fleet/fleet.css';
 
 export function FleetHead(
-  { countLine, poolLag, unreadMail, chrome = true }: {
+  { countLine, poolLag, waiting, chrome = true }: {
     /** The "N sessions" readout, or `null` when the fleet is empty or the column's status bar prints the count (T2g).
      *  Both draw the same: nothing. */
     countLine: string | null;
     /** The account-pool projection's lag, when there is one to show. */
     poolLag: string | null;
-    unreadMail: number;
+    /** The sessions waiting on the operator (`waitingOnYou`); `null` before the first fleet frame, "not heard yet". */
+    waiting: number | null;
     /** The wordmark and the doors. False where the skin's bar holds them (Refined's `Sidebar` and Instrument's
      *  `ListColumn` at a desk, W2 Task S4b, T2e): the readouts stay here, and the identity mark is drawn once. With no
      *  chrome, no count line and no lag the head draws nothing (T2g, D-6715). */
@@ -103,7 +104,7 @@ export function FleetHead(
               >
                 Settings
               </Door>
-              <MailBadge unread={unreadMail} />
+              <MailBadge waiting={waiting} />
               <NotificationBell />
             </>
           )}

@@ -135,10 +135,19 @@ export function decideDeferredApprovalPush(
   return painted ? 'push' : 'drop';
 }
 
-/** Whether `tok` is one of this module's words (the three answer unions and the ask read's stages), for
- *  `mail-routes.test.ts`'s scan of quoted kebab tokens under `server/src/coord` (slug q3c-kebab-union): none is a mail
- *  rejection or a run refusal; they ride the sweep's decisions and never reach a route. Derived from the tables above. */
+/** The phases of an entry in the hold carrier (`coord/questions.ts#createQuestions`'s `questionHolds`, W3 Q3d, D-7028):
+ *  `held` (today's `heldAsks` and `heldApprovals`), `lapsed` (today's `lapsedAsks`) and `reseed-pending` (today's
+ *  `pendingReseed`, D-5925). Declared here, beside the sweep's other words, with its sibling map (slug
+ *  q3d-hold-phase-words). */
+export type QuestionHoldPhase = 'held' | 'lapsed' | 'reseed-pending';
+export const QUESTION_HOLD_PHASES: Readonly<Record<QuestionHoldPhase, true>> = { held: true, lapsed: true, 'reseed-pending': true };
+
+/** Whether `tok` is one of this module's words (the three answer unions, the ask read's stages and the carrier's
+ *  phases), for `mail-routes.test.ts`'s scan of quoted kebab tokens under `server/src/coord` (slug q3c-kebab-union):
+ *  none is a mail rejection or a run refusal; they ride the sweep's decisions and the carrier, and never reach a route.
+ *  Derived from the tables above. */
 export function isQuestionPolicyKebab(tok: string): boolean {
   return Object.hasOwn(ASK_LAPSE_ANSWERS, tok) || Object.hasOwn(ASK_LAPSE_READ_KINDS, tok)
-    || Object.hasOwn(APPROVAL_LAPSE_ANSWERS, tok) || Object.hasOwn(DEFERRED_APPROVAL_PUSH_ANSWERS, tok);
+    || Object.hasOwn(APPROVAL_LAPSE_ANSWERS, tok) || Object.hasOwn(DEFERRED_APPROVAL_PUSH_ANSWERS, tok)
+    || Object.hasOwn(QUESTION_HOLD_PHASES, tok);
 }

@@ -12,7 +12,7 @@ import { ATTENTION_DOT, Button, MailStrip, Skeleton, TaskStrip, WorkflowStrip, t
 import { staleFor } from '../session/taskStaleness';
 import { SwapSheet } from '../fleet/SwapSheet';
 import { ArchiveSheet, restoreSession } from '../fleet/ArchiveSheet';
-import { accountHue, accountLabel } from '../lib/accounts';
+import { accountHue, accountLabel, accountProvider } from '../lib/accounts';
 import { api, ApiError, failedTo, INTERRUPT_REFUSAL_TEXT, refusalText } from '../lib/api';
 import { backgroundTasksClause } from '../lib/refusalWords';
 import { useKeyboardInset } from '../lib/keyboard';
@@ -24,7 +24,7 @@ import { ChatList } from '../session/ChatList';
 import { Composer } from '../session/Composer';
 import { DialogSheet } from '../session/DialogSheet';
 import { heldAskLine } from '../session/askWords';
-import { heldCoordinatorWords } from '../session/sessionHeaderView';
+import { deepLinkFallback, heldCoordinatorWords } from '../session/sessionHeaderView';
 import { sessionLabel } from '../fleet/sessionLabel';
 import { PickSheet } from '../session/PickSheet';
 import { ReapSheet } from '../session/ReapSheet';
@@ -200,8 +200,16 @@ export function SessionScreen({
   const roster = useFleet((s) => s.roster);
   const projects = useFleet((s) => s.projects);
   // D-5527: the fleet tree's facts about who this session works for, read off
-  // the same sessions and active runs the fleet's rows are drawn from.
-  const fleetSessions = useFleet((s) => s.sessions);
+  // the same sessions and active runs the fleet's rows are drawn from. Only the
+  // PARENT's row is subscribed (C6, D-6438): `parentIdOf` and `coordinationOf`
+  // read no other row, so a fleet frame that changes another session's row must
+  // not re-render this screen, and a change to the coordinator's row must.
+  const parent = useFleet((s) => {
+    const self = s.sessions.find((x) => x.id === id);
+    if (self === undefined) return null;
+    const pid = parentIdOf(self, s.runs.filter((r) => !isRunClosed(r)));
+    return pid === null ? null : s.sessions.find((x) => x.id === pid) ?? null;
+  });
   const fleetRuns = useFleet((s) => s.runs);
   const fleetFrameSeen = useFleet((s) => s.fleetFrameSeen);
 
@@ -283,12 +291,12 @@ export function SessionScreen({
   // all three collapse deliberately at `repoLabel`, the one reader.
   const repo = repoLabel(projects?.find((r) => r.name === project)?.repo);
   const activeRuns = fleetRuns.filter((r) => !isRunClosed(r));
-  const coordination = live === null ? null : coordinationOf(live, fleetSessions, activeRuns);
+  const coordination = live === null ? null : coordinationOf(live, parent === null ? [] : [parent], activeRuns);
   // D-5545: the header's facts, from the model the fleet card reads, over the same inputs the card is given —
   // the active run and coordinator (`childRunContext`), whose code (`coordinationOf`), the project's pool
   // (`placementOfRow`, the cards' own spelling) and the coordinator's presence (`coordPresence`, the orphan
   // marker's) — so the header can never know less than the card.
-  const lookup = (sid: string): FleetSession | null => fleetSessions.find((x) => x.id === sid) ?? null;
+  const lookup = (sid: string): FleetSession | null => (parent !== null && parent.id === sid ? parent : null);
   const parentId = live === null ? null : parentIdOf(live, activeRuns);
   const factsNow = useNow(30_000);
   const presence = parentId === null ? null : coordPresence(parentId, lookup(parentId), fleetFrameSeen);
@@ -312,7 +320,7 @@ export function SessionScreen({
   // wire's own queued verdict. Pure, and ~95 lines of branch-by-branch
   // reasoning that had nothing to do with rendering.
   const routeInfo = live?.route ?? null;
-  const route = routeView(live, wrapper);
+  const route = routeView(live, wrapper, accountProvider(roster, wrapper));
   const { classIntended, effortIntended, classInert, effortInert,
           classUnreadable, effortUnreadable } = route;
   // Exclusively one source or the other, never both: with `route` present the
@@ -520,7 +528,7 @@ export function SessionScreen({
     onInterrupt: (source) => void interrupt(source),
     onBack: () => navigate('/'),
     queuedField,
-    fallback: { title: project, wrapper },
+    fallback: deepLinkFallback(id, roster, projects, { title: project, wrapper }),
   };
 
   return (

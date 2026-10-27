@@ -15,6 +15,7 @@ import { chromium, type Browser } from 'playwright-core';
 import { PHOSPHOR, REFINED } from '@ccrc/ui';
 import { resolveChrome } from './harness';
 import { buildDist, openApp, removeDist, serveDist, type AppFixture, type AppView, type DistServer } from './app';
+import { fleetSession } from '../test/fleetFixture';
 
 // Each width with a mouse and with a touch screen (a coarse pointer at a desk width: a tablet in landscape, a touch
 // laptop): the layout half runs under both, the doors' size under the touch screen.
@@ -41,11 +42,13 @@ const FIXTURE: AppFixture = {
     },
   },
   fleetFrames: [
-    { type: 'fleet', sessions: [] },
+    // Two-digit badges: twelve sessions wait on the operator, and twelve runs whose worker is one of them (T2d, D-6330).
+    { type: 'fleet', sessions: Array.from({ length: 12 }, (_, i) => fleetSession({ id: `s${i}`, project: `proj-${i % 3}`, bucket: 'attention' })) },
     {
       type: 'runs',
       runs: Array.from({ length: 12 }, (_, i) => ({
         id: i + 1, program: 'p', programTitle: 'P', wave: 1, waveOf: 1, project: 'x', homeProject: null, state: 'working', closedAt: null,
+        sessionId: 's0', claimedBy: null,
       })),
     },
   ],
@@ -76,8 +79,8 @@ describe("Refined's app bar shows nothing cut, and every door is a finger's squa
         await page.goto(server!.origin + '/');
         // The lanes and both badges have landed once the lanes row's cards and the two counted tab names are in place.
         await page.waitForFunction(() => document.querySelectorAll('header.shell-accounts .account-gauge').length === 6
-          && document.querySelector('.ref-bar [aria-label="Inbox, 12 unread"]') !== null
-          && document.querySelector('.ref-bar [aria-label="Runs, 12 active"]') !== null, undefined, { timeout: 20_000 });
+          && document.querySelector('.ref-bar [aria-label="Inbox, 12 waiting for you"]') !== null
+          && document.querySelector('.ref-bar [aria-label="Runs, 12 needs you"]') !== null, undefined, { timeout: 20_000 });
         const faults = await page.evaluate(() => {
           const out: string[] = [];
           // The bar's line holds no card; the lanes row (T2c, D-6329) sits under it, in the header, one card per lane, each

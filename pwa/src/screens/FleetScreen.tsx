@@ -22,12 +22,11 @@ import { PasskeyNotice, passkeyNoticeShows, usePasskeyStatus } from '../fleet/Pa
 import { BannerStack } from '../fleet/BannerStack';
 import { fleetSummary } from '../fleet/fleetSummary';
 import { poolLagText } from '../fleet/poolLag';
-import { unreadMailCount } from '../fleet/navBadges';
+import { runsLineLabel, waitingOnYou } from '../fleet/navBadges';
 import { HotFilesStrip } from '../fleet/HotFilesStrip';
 import { FleetCards } from '../fleet/FleetCards';
 import { BucketBar } from '../fleet/BucketBar';
 import { FleetHead } from '../fleet/FleetHead';
-import { isRunClosed } from '../fleet/runWords';
 import { useFleetChrome } from '../fleet/FleetChrome';
 import { useFleetFlows } from '../fleet/FleetFlows';
 import { navigate } from '../lib/router';
@@ -168,15 +167,11 @@ export function FleetScreen({
   // label included, while /runs one tap away could be showing three runs
   // this row had simply not heard about yet.
   const runsFrameSeen = useStore((s) => s.runsFrameSeen);
-  // ONE filtered list, two readers (Task 4): the footer's count and the
-  // programme tree the cards draw. The frame is active-only by construction
-  // anyway — `watch.ts`'s emitter calls `coord.runs()` with no options — so
-  // `isRunClosed` is the belt this row has always worn, and keeping one list
-  // means the number in the footer and the edges in the cards can never
-  // describe two different sets of runs.
-  const activeRuns = useStore((s) => s.runs).filter((r) => !isRunClosed(r));
-  const runsLabel =
-    !runsFrameSeen ? '—' : activeRuns.length > 0 ? `${activeRuns.length} active` : 'none active';
+  // The line says what it counts (T2d, D-6330): `runsLineLabel` (navBadges.ts) reads "N active" off
+  // `ACTIVE_RUN_STATES` and "N open" when none is active but some are open, so the bar's Runs badge (what needs you)
+  // and this line never show one number twice.
+  const runs = useStore((s) => s.runs);
+  const runsLabel = runsLineLabel(runsFrameSeen ? runs : null);
   // One poll of /api/fleet/health feeds both the banner and BuildLine below
   // (spec §6) — the chrome owns it (D-5468) so neither issues its own request.
   // The same for /api/updates (centralised-update §13): ONE 60 s poll, its
@@ -198,10 +193,11 @@ export function FleetScreen({
   // too. `null` runs: this head has never carried the runs part (the runs line below is their door).
   const countLine = fleetSummary(sessions, null).readout;
 
-  // The feed's unread count: `unreadMailCount` (navBadges.ts), the one function every door that shows it reads (the
-  // tabs of W2 Task S4b too). An `interrupt` record never counts (`raisesUnread`, D-5431).
-  const feed = useStore((s) => s.feed);
-  const unreadMail = unreadMailCount(feed, acks);
+  // The mail door's count: `waitingOnYou` (navBadges.ts), what every Inbox door counts (T2d, D-6330). Before the first
+  // fleet frame the rows are the offline snapshot's, not a fact, so the door says nothing. The feed's unread marks are
+  // the Inbox's own rows' (`raisesUnread`, D-5431).
+  const fleetFrameSeen = useStore((s) => s.fleetFrameSeen);
+  const waiting = waitingOnYou(fleetFrameSeen ? sessions : null);
 
   // The account-pool epoch/observed lag — a STALENESS signal, not a health
   // one (see the prop docs above). Rendered ONLY when both numbers are known
@@ -226,7 +222,7 @@ export function FleetScreen({
         <FleetHead
           countLine={headCount && sessions.length > 0 ? countLine : null}
           poolLag={poolLag}
-          unreadMail={unreadMail}
+          waiting={waiting}
           chrome={headChrome}
         />
       )}

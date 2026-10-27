@@ -3,7 +3,7 @@
 import { create, type StoreApi, type UseBoundStore } from 'zustand';
 import { FLEET_PROTO, isPoolsEnforcement, type AccountsResponse, type CoordStatus, type FleetMsg, type FleetSession, type NotifyEvent, type ProjectPoolsWire, type ProjectRow, type RosterWire, type RunSummary } from '../../../shared/api';
 import { api } from '../lib/api';
-import { loadFleetSnapshot, saveFleetSnapshot } from '../lib/offline';
+import { loadFleetSnapshot, saveFleetSnapshot, snapshotRefused } from '../lib/offline';
 import { applyCatchUp, loadMark } from '../lib/notifymark';
 import { mergeBySeq, reviveNotifyEvents } from '../lib/feed';
 import { requestUpdate } from '../lib/swupdate';
@@ -11,6 +11,7 @@ import { ReconnectingSocket, wsUrl } from '../lib/ws';
 import { isRecord } from '../lib/wire';
 import { warnNonArrayRoster } from '../lib/accounts';
 import type { DivergenceCensus } from '../fleet/integrityWords';
+import { keepRows } from '../fleet/keepRows';
 import type { AccountsConnect, AccountUsage, LaneWire } from '../../../shared/api';
 
 export interface FleetNotice {
@@ -314,16 +315,64 @@ export interface FleetStoreDeps {
 
 export type FleetStore = UseBoundStore<StoreApi<FleetState>>;
 
+/** The snapshot throttle's window (C6, D-6438): frames write the offline snapshot at most once in it, and the
+ *  lifecycle flushes beside the throttle are the exceptions. */
+const SNAPSHOT_WINDOW_MS = 30_000;
+
 export function createFleetStore(deps: FleetStoreDeps = {}): FleetStore {
   let socket: ReconnectingSocket | null = null;
   let noticeSeq = 0;
   let rosterTimer: ReturnType<typeof setInterval> | null = null;
+  // The snapshot throttle (C6, D-6438): a scheduler, so it lives here in the store (L4), never in `lib/offline.ts`.
+  // A frame is written at once when no 30 s window is open, and that write opens one; a frame inside an open window
+  // only replaces `pending`, and the window's end writes the newest and opens the next, so frames alone write at most
+  // once per window. The exceptions are three lifecycle flushes, which write `pending` whatever the window says: the
+  // page turning hidden (the `visibilitychange` to hidden), `pagehide` and `disconnect()`. So one window can hold
+  // more than one write. The scheduler never reads visibility, so a frame that arrives while the page is ALREADY
+  // hidden is treated like any other: written at once when no window is open, and only `pending` inside an open one,
+  // where it is written when the window's timer fires (which a hidden tab may throttle and a discarded tab never runs)
+  // or at the next lifecycle flush, so a background page closed or discarded without one of those can lose it. A
+  // frame the snapshot would refuse (an empty or degraded one, `snapshotRefused`) is never scheduled, so it neither
+  // opens a window nor displaces a pending frame.
+  let pending: FleetSession[] | null = null;
+  let snapshotTimer: ReturnType<typeof setTimeout> | null = null;
 
   return create<FleetState>()((set, get) => {
     const nudge = (): void => socket?.nudge();
+    // ONE writer of the snapshot. `get().roster`, not the bare sessions: the roster travels independently (the poll
+    // below, not this socket), so the snapshot's own roster is read off current state at WRITE time rather than out
+    // of the `fleet` frame, which carries none.
+    const writeSnapshot = (sessions: FleetSession[]): void => saveFleetSnapshot(sessions, get().roster);
+    const openWindow = (): void => {
+      snapshotTimer = setTimeout(() => {
+        snapshotTimer = null;
+        if (pending === null) return; // nothing arrived in the window: the next frame writes at once
+        const sessions = pending;
+        pending = null;
+        writeSnapshot(sessions);
+        openWindow();
+      }, SNAPSHOT_WINDOW_MS);
+    };
+    const scheduleSnapshot = (sessions: FleetSession[]): void => {
+      if (snapshotRefused(sessions)) return;
+      if (snapshotTimer === null) {
+        writeSnapshot(sessions);
+        openWindow();
+      } else {
+        pending = sessions; // the newest replaces any older one
+      }
+    };
+    const flushSnapshot = (): void => {
+      if (pending === null) return;
+      const sessions = pending;
+      pending = null;
+      writeSnapshot(sessions);
+    };
     const onVisible = (): void => {
       if (document.visibilityState === 'visible') nudge();
+      else if (document.visibilityState === 'hidden') flushSnapshot();
     };
+    const onPageHide = (): void => flushSnapshot();
 
     // One read, not two (`sessions` and `roster` below both come off it) —
     // fix round 1, finding 3. Before this, a cold offline start hydrated
@@ -480,13 +529,16 @@ export function createFleetStore(deps: FleetStoreDeps = {}): FleetStore {
             const msg = asFleetMsg(m);
             if (!msg) return; // unknown frame — ignore
             if (msg.type === 'fleet') {
-              // `get().roster`, not the bare sessions: the roster travels
-              // independently (the poll above, not this socket), so the
-              // snapshot's own roster has to be read off current state
-              // rather than out of `msg` — a `fleet` frame carries none.
-              saveFleetSnapshot(msg.sessions, get().roster); // keep the offline snapshot fresh
-              // ONE `set`, so the array and the flag can never disagree (D-1138).
-              set({ sessions: msg.sessions, fleetFrameSeen: true });
+              // Rows that did not change keep the objects they had (`keepRows`, C6), so an identical frame
+              // is the same array. The offline snapshot is kept fresh on the 30 s throttle above, whether or
+              // not the rows changed.
+              const sessions = keepRows(get().sessions, msg.sessions);
+              scheduleSnapshot(sessions);
+              // An identical array sets nothing once a frame has been seen; the FIRST frame still sets, even
+              // when it equals the hydrated snapshot, for the flag. ONE `set`, so the array and the flag can
+              // never disagree (D-1138).
+              if (sessions === get().sessions && get().fleetFrameSeen) return;
+              set({ sessions, fleetFrameSeen: true });
             } else if (msg.type === 'notice') {
               noticeSeq += 1;
               const notice: FleetNotice = { id: noticeSeq, message: msg.message };
@@ -536,14 +588,23 @@ export function createFleetStore(deps: FleetStoreDeps = {}): FleetStore {
         });
         socket.start();
         document.addEventListener('visibilitychange', onVisible);
+        window.addEventListener('pagehide', onPageHide);
         window.addEventListener('online', nudge);
       },
 
       disconnect() {
         document.removeEventListener('visibilitychange', onVisible);
+        window.removeEventListener('pagehide', onPageHide);
         window.removeEventListener('online', nudge);
         socket?.stop();
         socket = null;
+        // The newest pending frame is written, then the window is closed so nothing fires after this and a later
+        // connect's first frame writes at once.
+        flushSnapshot();
+        if (snapshotTimer !== null) {
+          clearTimeout(snapshotTimer);
+          snapshotTimer = null;
+        }
         if (rosterTimer !== null) {
           clearInterval(rosterTimer);
           rosterTimer = null;
