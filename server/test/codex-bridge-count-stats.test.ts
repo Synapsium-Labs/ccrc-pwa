@@ -288,7 +288,8 @@ describe.skipIf(!PY)('the stats file (codex-bridge spec §2.7, §2.9 D3; D-6418)
   // Claude Code 2.1.310's nine `anthropic-beta` values, measured on the live lane's first traffic after the flip
   // (runbook step 4, 2026-10-27; D-7093). Seven gate shapes the bridge never sends, answers itself or already counts by
   // their own family, and are explained; the two tool-change betas gate `tool_addition`/`tool_removal` blocks, which inbound drops
-  // uncounted, so they stay unexplained and the doctor keeps naming them until the bridge honours those blocks.
+  // (counting their types by name since D-7094), so they stay unexplained and the doctor keeps naming them until the bridge
+  // honours those blocks.
   const EXPLAINED_BETAS = [
     'advanced-tool-use-2025-11-20', 'claude-code-20250219', 'context-management-2025-06-27',
     'interleaved-thinking-2025-05-14', 'thinking-display-updates-2026-08-18', 'thinking-token-count-2026-05-13',

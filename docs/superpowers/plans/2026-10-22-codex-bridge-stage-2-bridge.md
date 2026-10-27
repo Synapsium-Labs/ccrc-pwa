@@ -1904,7 +1904,7 @@ follows only by the operator's ruling, and LiteLLM's removal is Stage 4.
 
 Every entry carries the number the controller issued (D-6410 to D-6431 at plan time, D-6804 to D-6839 for wave 1,
 D-6862 to D-6907 and D-6921 for wave 2, D-6944 to D-6963 for wave 3, D-6994 to D-6998 for the follow-up to the
-suite's macOS failures, D-7083 to D-7089 and D-7093 for what the first live step and the flip measured). A further
+suite's macOS failures, D-7083 to D-7089, D-7093 and D-7094 for what the first live step and the flip measured). A further
 departure found while executing is written `D-TBD-<slug>` and named in the task's report.
 
 ### D-6410 — `end_turn:false` is continued upstream, never `pause_turn`
@@ -3862,10 +3862,10 @@ departure found while executing is written `D-TBD-<slug>` and named in the task'
 
 - **Departs from:** Task 5's `KNOWN["betaValue"]`, which explained `effort-2025-11-24` only.
 - **What changed:** Seven of the nine `anthropic-beta` values Claude Code 2.1.310 sent lane-b after the flip join
-  `KNOWN["betaValue"]` (`ccd/codexbridge/known.py:100-133`), each with a comment saying what it gates and why the
-  bridge need not act; the two tool-change betas are named there as left out on purpose (:128-132). The bridge never
+  `KNOWN["betaValue"]` (`ccd/codexbridge/known.py:100-134`), each with a comment saying what it gates and why the
+  bridge need not act; the two tool-change betas are named there as left out on purpose (:128-133). The bridge never
   forwards a beta upstream (`backend.build_headers`, `ccd/codexbridge/backend.py:160-173`); inbound counts each value
-  as a name (`ccd/codexbridge/inbound.py:524-527`). Sources: Anthropic's documentation
+  as a name (`ccd/codexbridge/inbound.py:550-553`). Sources: Anthropic's documentation
   (platform.claude.com: beta headers, tool search, mid-conversation system messages, context editing, extended
   thinking), Claude Code 2.1.310's binary read with `strings` only (its beta table, built as `k(<feature>, <beta>)`,
   and the code that reads each), this tree's bridge, and lane-b's `bridge.stats.json` `names` (names and counts).
@@ -3873,16 +3873,16 @@ departure found while executing is written `D-TBD-<slug>` and named in the task'
   | beta | what it gates on the Messages API | seen on lane-b | the bridge today | class |
   |---|---|---|---|---|
   | `claude-code-20250219` | Claude Code's identity beta (`claude_code` in its table); no request field, block or response shape of its own | on every request | name only | explain |
-  | `interleaved-thinking-2025-05-14` | thinking blocks between tool calls in one assistant turn | the header on every request; no `thinking` field reaches the bridge and no `requestField:thinking-block` was counted | the effort hook pops `thinking` (`ccd/ccgpt-proxy.py:576`); the reducer emits no thinking block; a thinking block sent back is dropped and counted (`inbound.py:349`) | explain |
-  | `context-management-2025-06-27` | `context_management.edits` (`clear_thinking_20251015`, `clear_tool_uses_20250919`) and the response's `context_management.applied_edits` | `contextEdit:clear_thinking_20251015` on every request; no `clear_tool_uses` (Claude Code's tool-result clearing sits behind a client setting whose default is off) | each edit's type counted `contextEdit` (`inbound.py:519-523`), none applied (D-6417, which keeps `clear_tool_uses` unexplained in that family); Claude Code reads `applied_edits` as optional | explain |
-  | `advanced-tool-use-2025-11-20` | tool search (`tool_search` in Claude Code's table): `defer_loading` tools, `tool_reference` blocks, the server tool search tools | `requestField:defer_loading` (972 by 07:09:52Z, over 155 requests); no `unsupportedField` | `defer_loading` counted and the tool sent as an ordinary function (`inbound.py:400-401`); a `tool_reference` in a tool_result sent as `Tool loaded: <name>` (:224); a server tool type refused and counted (:396). Claude Code searches client-side; its binary carries no `input_examples` or `allowed_callers` | explain |
+  | `interleaved-thinking-2025-05-14` | thinking blocks between tool calls in one assistant turn | the header on every request; no `thinking` field reaches the bridge and no `requestField:thinking-block` was counted | the effort hook pops `thinking` (`ccd/ccgpt-proxy.py:576`); the reducer emits no thinking block; a thinking block sent back is dropped and counted (`inbound.py:375`) | explain |
+  | `context-management-2025-06-27` | `context_management.edits` (`clear_thinking_20251015`, `clear_tool_uses_20250919`) and the response's `context_management.applied_edits` | `contextEdit:clear_thinking_20251015` on every request; no `clear_tool_uses` (Claude Code's tool-result clearing sits behind a client setting whose default is off) | each edit's type counted `contextEdit` (`inbound.py:545-549`), none applied (D-6417, which keeps `clear_tool_uses` unexplained in that family); Claude Code reads `applied_edits` as optional | explain |
+  | `advanced-tool-use-2025-11-20` | tool search (`tool_search` in Claude Code's table): `defer_loading` tools, `tool_reference` blocks, the server tool search tools | `requestField:defer_loading` (972 by 07:09:52Z, over 155 requests); no `unsupportedField` | `defer_loading` counted and the tool sent as an ordinary function (`inbound.py:426-427`); a `tool_reference` in a tool_result sent as `Tool loaded: <name>` (:249); a server tool type refused and counted (:422). Claude Code searches client-side; its binary carries no `input_examples` or `allowed_callers` | explain |
   | `thinking-display-updates-2026-08-18` | `thinking.display: "updates"`: progress updates as thinking text, reasoning hidden | the header on every message request (not on `count_tokens`) | `thinking` is popped and no thinking block is emitted, so there is nothing to display | explain |
   | `thinking-token-count-2026-05-13` | a thinking token count in the usage: Claude Code's usage schema reads `output_tokens_details.thinking_tokens` as optional, and drops the beta when a server rejects it (the field is documented on the extended-thinking page, `usage.output_tokens_details.thinking_tokens`, which arrives on the final `message_delta` when streaming; the beta's name is on no public page) | the header on every message request (not on `count_tokens`) | the usage carries the four counts (`reducer.anthropic_usage`, `ccd/codexbridge/reducer.py:102`) and no thinking count | explain |
   | `mid-conversation-tool-changes-2026-07-01` | `tool_addition` and `tool_removal` blocks, by reference, in a `role: "system"` entry of `messages` | the header on every message request (not on `count_tokens`); the blocks unmeasured (below) | dropped uncounted (below) | **needs-code** |
   | `inline-tools-2026-09-15` | the same blocks, plus a tool defined by value (`tool_addition.tool = {type: "tool_definition", definition}`), the tool absent from `tools` | the header on 110 of the first 179 message requests (by 07:36Z); the blocks unmeasured | dropped uncounted (below) | **needs-code** |
   | `token-counting-2024-11-01` | the token-counting endpoint, `POST /v1/messages/count_tokens` | on the `count_tokens` requests only (5 of 184 by 07:36Z) | answered locally (Task 8, `outcomes.countTokens`); nothing is sent upstream | explain |
 
-  Pin: `server/test/codex-bridge-count-stats.test.ts:298` counts all nine and `effort-2025-11-24`, and expects
+  Pin: `server/test/codex-bridge-count-stats.test.ts:299` counts all nine and `effort-2025-11-24`, and expects
   every name counted and `unexplained.betaValue` to be exactly the two tool-change betas. Row:
   `"context-management-2025-06-27"` deleted from KNOWN, the case reds (`expected [ …(3) ] to deeply equal [
   'inline-tools-2026-09-15', …(1) ]`); restored from a copy, sha256 compared OK.
@@ -3896,8 +3896,9 @@ departure found while executing is written `D-TBD-<slug>` and named in the task'
     `[inline-tools]` paths): with `inline-tools`, a late tool is defined by value and NOT declared in `tools`. It
     falls back to declaring the tool in `tools` (or to its ToolSearch announcement) only when the server rejects the
     block or the beta, and the bridge rejects neither;
-  - the bridge today: `_Translation.walk` maps a system entry through `_texts` (`ccd/codexbridge/inbound.py:300-317`,
-    :159-166), which keeps text blocks only, so both blocks are dropped and no name is counted. Measured in process: a
+  - the bridge today: `_Translation.walk` maps a system entry through `_texts` (`ccd/codexbridge/inbound.py:325-343`,
+    :159-166), which keeps text blocks only, so both blocks are dropped; before D-7094 no name was counted, and since it
+    each dropped block's type is (`_count_dropped`, :169-191). Measured in process before D-7094: a
     system entry holding a text, a `tool_removal`, a by-value `tool_addition` and a by-reference `tool_addition` gave
     one developer item with the text, a `tools` list unchanged, and no count but `requestField:defer_loading`. An
     entry with no text gives no item at all;
@@ -3905,13 +3906,51 @@ departure found while executing is written `D-TBD-<slug>` and named in the task'
     believes it offered; a removed tool stays offered, so the model can still call a tool Claude Code withdrew;
     and nothing counts either, so neither the stats file nor the doctor shows it happening. A by-reference
     addition is harmless today only because the bridge already offers every `defer_loading` tool up front;
-  - seen on lane-b: unmeasured. by 07:36Z `mid-conversation-tool-changes` rode all 179 message requests and `inline-tools`
-    110 of them, but the bridge counts no system-entry block type, so whether any request carried one cannot be read
-    from the stats file;
-  - the remedy needs a ruling: count the block types first (a name, so the doctor can see them), then honour them (a
+  - seen on lane-b: unmeasured until D-7094 rolls out. By 07:36Z `mid-conversation-tool-changes` rode all 179 message
+    requests and `inline-tools` 110 of them, but the bridge on the box counts no system-entry block type, so whether
+    any request carried one cannot be read from its stats file. From the rollout on, D-7094 counts each block, and the
+    watch reads `names.requestField` and `unexplained.requestField` for `tool_addition-block`, `tool_removal-block`,
+    `tool_addition-block.tool_reference` and `tool_addition-block.tool_definition` (the by-value case, the one that
+    loses a tool), and the doctor's `codex` WARN names each the day it first arrives;
+  - the remedy needs a ruling: count the block types first (a name, so the doctor can see them; D-7094), then honour them (a
     definition joins the Responses `tools`, through `cut_name` and the name map; a removal leaves it), or refuse them
     with a 400 that sends Claude Code down its own fallback, which is unmeasured against the bridge.
 - **Cost if wrong:** Explaining a beta silences only its name: if one of the six starts to gate a shape Claude Code
   sends here, its own family (a request field, a content block or a context edit) still counts it. The two open
   betas keep the doctor's `codex` check at WARN after the rollout, on purpose, until the bridge honours their blocks
   or the operator rules them out.
+
+### D-7094 — the blocks a system entry drops are counted by name
+
+- **Departs from:** D-7093's "the bridge today": a `role: "system"` entry's non-text blocks were "dropped and no name is
+  counted". They are still dropped, and are now counted.
+- **What changed:** `_Translation.walk` passes each system entry's content to `_count_dropped`
+  (`ccd/codexbridge/inbound.py:334`; the function at :169-191, anchor `system-entry-dropped-blocks`), which counts
+  every block other than a `text` as `requestField:<type>-block`, the spelling of `requestField:thinking-block`
+  (:375), and a `tool_addition`'s `tool` type beside it as `requestField:tool_addition-block.<type>`:
+  `tool_reference` by reference, `tool_definition` by value. A block that is not an object, or a type that is not a
+  string, counts `unrecognised` in its place (`unrecognised-block`, `tool_addition-block.unrecognised`). Names only:
+  no tool name, description, schema or text of a block is counted. The names are NOT in `known.KNOWN`, on purpose,
+  so each stays in `unexplained.requestField` and the doctor's drift WARN names it the day it first arrives; the
+  function's docstring and the betas' comment (`ccd/codexbridge/known.py:128-133`) say so. What is sent is byte for
+  byte as before: `_texts` alone still builds the entry's item. Pins, in `server/test/codex-bridge-inbound.test.ts`:
+  - :136: an entry holding a text, a `tool_removal` by reference, a by-value `tool_addition` and a by-reference one
+    counts exactly `tool_removal-block`, `tool_addition-block`, `tool_addition-block.tool_definition`,
+    `tool_addition-block` and `tool_addition-block.tool_reference`; the control, the same entry with its text alone,
+    gives the same request in every field (`cache_key` aside, a fresh anonymous key per request), so the developer
+    item and `tools` are unchanged; no tool name, description, schema key or cache marker of a dropped block appears;
+    and the driver's `known` op shows none of the names explained, with no `requestField` prefix;
+  - :159: an entry with no text counts its blocks (an unknown type, a non-object and a `tool_addition` with no `tool`
+    among them) and still gives no item.
+
+  Row: the `_count_dropped` call deleted from `walk`, both cases red (`expected [] to deeply equal [
+  'tool_removal-block', …(4) ]`, and `…(6)`); restored from a copy, sha256 compared OK. Measured besides, in process
+  against the pre-change `inbound.py`: both entries give an equal NeutralRequest before and after, and only the
+  names differ.
+- **Why:** The watch cannot tell from the stats file whether lane-b ever carries one of these blocks (D-7093), and
+  whether to honour them or refuse them is a ruling that needs that count first. The by-value count separates the
+  case that loses a tool from the harmless by-reference one.
+- **Cost if wrong:** The names appear only after this change rolls out to the fleet box; until then the watch cannot
+  read them, and a request carrying the blocks is invisible exactly as D-7093 says. A block type Claude Code adds
+  later is counted under its own `<type>-block` name and named by the doctor as drift, which is the intent. Counting
+  adds names to `requestField`, bounded by `stats.NAMES_MAX` like every family, and changes no outcome.

@@ -127,9 +127,10 @@ KNOWN = {
         "token-counting-2024-11-01",
         # NOT HERE, ON PURPOSE (D-7093): `mid-conversation-tool-changes-2026-07-01` and `inline-tools-2026-09-15`.
         # They gate `tool_addition`/`tool_removal` blocks in a `role: system` message (by reference, and by value as
-        # a `tool_definition`), which inbound drops uncounted with every non-text system block: a tool added by
-        # value is never offered upstream, and a removed one stays offered. The doctor keeps naming both until the
-        # bridge honours those blocks.
+        # a `tool_definition`), which inbound drops with every non-text system block: a tool added by value is never
+        # offered upstream, and a removed one stays offered. The doctor keeps naming both until the bridge honours
+        # those blocks. Since D-7094 inbound counts each dropped block's type by name (`requestField:<type>-block`,
+        # inbound._count_dropped), and those names are not in this table either, so the doctor names them too.
     }),
     "contextEdit": frozenset({"clear_thinking_20251015"}),
 }  # type: Dict[str, FrozenSet[str]]
