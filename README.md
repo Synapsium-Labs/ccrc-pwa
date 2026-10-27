@@ -4993,7 +4993,7 @@ residual.
 **A finished run's worker is put to sleep once idle (D-5370, D-5427, D-6091, D-6092).** A wave that is not the programme's last
 leaves its child workspace in place — the reclaim sweep above waits for the programme — and, until this lane, its
 Claude Code process too, holding its memory for as long as the programme ran. The server's stop-done lane
-(`stopDoneSweep.ts`, its verdict the pure `stopDone.ts`; once a minute on the watcher's tick, never inside the run's
+(`sleepLane.ts`, its verdict the pure `stopDone.ts`; once a minute on the watcher's tick, never inside the run's
 transition) puts such a worker to sleep with `ccd hibernate <id>`, declared as the lane `sweep:stop-done`: only a
 dispatched child (a `.child` marker — never an operator's own session), whose newest placed run (a `planned` run, a
 wave not yet dispatched, does not count) is finished — `done` or `failed` and closed at least 10 minutes ago, or a
@@ -5029,7 +5029,7 @@ stays awake), no pane menu, background work or subagents, a turn marker that rea
 exactly 0) and nothing scheduled (`crons` exactly 0; an older hook's marker, with no `crons`, holds) whose latest main
 event is more than N ago (6 h; `$REG/hibernate-after-hours`, 1 to 168, overrides), no hold, no open run naming it as
 worker or claimant in any non-terminal state, no claim, no outstanding mail, nobody with it open, not stranded,
-swap-blocked, under a substrate fault or archived, and no `$REG/<id>.no-hibernate`. The sweep (`hibernateSweep.ts`,
+swap-blocked, under a substrate fault or archived, and no `$REG/<id>.no-hibernate`. The sweep (`sleepLane.ts`,
 every 5 minutes) logs a `ccrc-server: hibernate-shadow <id> idle=<h>h` line, at most once per session an hour, until the
 operator ARMS it with `$REG/hibernate-live`; armed, on a box whose `ccd caps` lists `hibernate`, it composes `ccd
 hibernate <id>` for at most three sessions a sweep, each on the coordination serialiser and the session's queue after
