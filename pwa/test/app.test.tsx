@@ -523,7 +523,8 @@ describe('the frame: landmarks and the skip link (W2 Task S2b)', () => {
           addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, dispatchEvent: () => false,
         }));
         vi.stubGlobal('ResizeObserver', class {
-          constructor(private readonly cb: ResizeObserverCallback) {}
+          private readonly cb: ResizeObserverCallback;
+          constructor(cb: ResizeObserverCallback) { this.cb = cb; }
           observe(target: Element): void {
             this.cb([{ target, contentRect: { width: 1248 } } as unknown as ResizeObserverEntry], this as unknown as ResizeObserver);
           }

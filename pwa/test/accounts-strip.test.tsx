@@ -494,7 +494,8 @@ describe('the lanes fold (S5b, D-6530)', () => {
       addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, dispatchEvent: () => false,
     }));
     vi.stubGlobal('ResizeObserver', class {
-      constructor(private readonly cb: ResizeObserverCallback) {}
+      private readonly cb: ResizeObserverCallback;
+      constructor(cb: ResizeObserverCallback) { this.cb = cb; }
       observe(target: Element): void {
         this.cb([{ target, contentRect: { width } } as unknown as ResizeObserverEntry], this as unknown as ResizeObserver);
       }
