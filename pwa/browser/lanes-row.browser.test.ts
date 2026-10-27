@@ -594,6 +594,9 @@ interface LineMeasure {
   control: { left: number; right: number; top: number; bottom: number; text: string; expanded: string | null; cut: boolean } | null;
   door: { left: number; right: number; top: number; bottom: number; cut: boolean } | null;
   row: { left: number; right: number };
+  /** Faults in the readings of each card of the line: every window, percentage and countdown has a box inside its card, is
+   *  not cut, and is the element at its own centre (the all-lanes case's check, for the folded line). */
+  readings: string[];
   sideways: string[];
 }
 
@@ -614,13 +617,28 @@ function measureLine(): LineMeasure {
   if (header.scrollWidth > header.clientWidth + 0.5) sideways.push('the header');
   if (strip.scrollWidth > strip.clientWidth + 0.5) sideways.push('the row');
   const sr = strip.getBoundingClientRect();
+  const readings: string[] = [];
+  for (const card of cards) {
+    const name = card.querySelector('.account-gauge-label')?.textContent ?? '?';
+    const cr = card.getBoundingClientRect();
+    if (card.scrollWidth > card.clientWidth + 0.5) readings.push(`${name}'s card holds more than it shows`);
+    for (const el of card.querySelectorAll<HTMLElement>('.acct-reset, .acct-pct, .acct-win')) {
+      const er = el.getBoundingClientRect();
+      const what = `${name}'s ${el.className.split(' ')[0]} "${el.textContent}"`;
+      if (el.getClientRects().length === 0 || er.width < 1 || er.height < 1) { readings.push(`${what} has no box`); continue; }
+      if (er.left < cr.left - 0.5 || er.right > cr.right + 0.5 || er.top < cr.top - 0.5 || er.bottom > cr.bottom + 0.5) readings.push(`${what} is outside its card`);
+      if (el.scrollWidth > el.clientWidth + 0.5) readings.push(`${what} is cut`);
+      const hit = document.elementFromPoint((er.left + er.right) / 2, (er.top + er.bottom) / 2);
+      if (hit === null || !el.contains(hit)) readings.push(`${what} is covered by ${hit?.className ?? 'nothing'}`);
+    }
+  }
   return {
     width: strip.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight), gap: parseFloat(cs.columnGap) || 0, vw: window.innerWidth,
     names: cards.map((c) => c.querySelector('.account-gauge-label')?.textContent ?? ''), mounted: document.querySelectorAll('.account-gauge').length,
     cards: cards.map(box), end: end === null ? null : box(end),
     control: control === null ? null : { ...box(control), text: control.textContent ?? '', expanded: control.getAttribute('aria-expanded'), cut: control.scrollWidth > control.clientWidth + 0.5 },
     door: door === null ? null : { ...box(door), cut: door.scrollWidth > door.clientWidth + 0.5 },
-    row: { left: sr.left, right: sr.right }, sideways,
+    row: { left: sr.left, right: sr.right }, readings, sideways,
   };
 }
 
@@ -653,6 +671,7 @@ async function foldedFaults(page: Page, width: number): Promise<string[]> {
   if (control.expanded !== 'false') out.push(`the control's aria-expanded is ${control.expanded}`);
   const words = `+${17 - m.names.length} more · 1 sign-in expired · 1 rate-limited`;
   if (control.text !== words) out.push(`the control reads "${control.text}", not "${words}"`);
+  out.push(...m.readings);
   if (m.sideways.length > 0) out.push(`${m.sideways.join(', ')} scrolls sideways`);
   return out;
 }
