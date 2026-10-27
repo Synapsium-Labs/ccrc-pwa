@@ -530,7 +530,7 @@ describe('D-6332: a session row shows its name whole where it has room', () => {
           expect(m.height, `${where} is no taller than two lines`).toBeLessThanOrEqual(2 * one.height + 1);
           if (name === NAME_104) expect(m.scrollHeight, `${where} is cut where its second line ends`).toBeGreaterThan(m.clientHeight);
           expect(Math.abs(m.width - m.track), `${where} fills the track (${m.width} of ${m.track}px)`).toBeLessThanOrEqual(1);
-          expect(m.title, `${where} keeps its full text in title`).toBe(name);
+          expect(m.openTitle, `${where} keeps its full text in the row button's title`).toBe(name);
         }
         const branch = await measureFit(page, NAME_BRANCH_ROW, 'branch');
         expect(branch.fullShown && !branch.shortShown, 'a long branch draws its full form').toBe(true);
