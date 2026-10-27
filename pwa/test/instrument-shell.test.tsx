@@ -120,6 +120,14 @@
 //   the `returningFocus` guard removed from `onGroupFocus`: no row. It was SURVIVED as a dead guard (the `relatedTarget` test above it already returns for the move the guard
 //                                                         covered), so the guard was removed from `AccountsStrip` in a fix round and the cases stay green
 //   the timers not cleared on unmount .................. accounts-strip "unmounting with the open delay pending, or the close grace pending, leaves no timer behind"  (a fix round: it was SURVIVED)
+//   `preventDefault` dropped from the flyout's Escape .. accounts-strip "an Escape that closes it is handled there: the key press is default-prevented, …", "an Escape while the open is still pending cancels the open"
+//                                                         (final review: an Escape that closes the flyout reached the desk's Escape interrupt and stopped a busy session's turn)
+//   the Escape not acting while the open is pending .... accounts-strip "an Escape while the open is still pending cancels the open"
+//   the flyout group named as the line's group is ...... accounts-strip "at the desk, folded, hovering the line opens the flyout after FLYOUT_OPEN_MS, …"
+// `useRowWidth` (final review: it had no row; each run against accounts-strip and strip-fold):
+//   the observer not disconnected on cleanup ........... accounts-strip "the desk row's observer is disconnected when the strip unmounts"  (it was SURVIVED: no case unmounted a measured strip)
+//   the column gap read without the `Number.isFinite` fallback
+//                                                       sixteen accounts-strip cases, the first "at the desk the row folds to the measured fit: three cards at 1248 px, …" (jsdom's gap is not a number)
 // R120 `lanes-tie-break-soonest-reset` (lane-order alone):
 //   drop the reset key ................................. "lanes that tie on binding use sort by the binding window's reset, soonest first", and four more
 //   reset latest first ................................. the same five

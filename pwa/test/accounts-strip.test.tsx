@@ -598,6 +598,25 @@ describe('the lanes fold (S5b, D-6530)', () => {
     expect(screen.queryByRole('button', { name: /more|Show fewer/ })).toBeNull();
   });
 
+  it('the desk row\'s observer is disconnected when the strip unmounts', async () => {
+    stubDesk(1248);
+    // The stub's own class, wrapped so every instance's `disconnect` is counted.
+    const Stub = globalThis.ResizeObserver;
+    const made: { disconnected: number }[] = [];
+    vi.stubGlobal('ResizeObserver', class extends Stub {
+      private readonly seen = { disconnected: 0 };
+      constructor(cb: ResizeObserverCallback) { super(cb); made.push(this.seen); }
+      override disconnect(): void { this.seen.disconnected += 1; super.disconnect(); }
+    });
+    stubSeventeen();
+    const { unmount } = render(<AccountsStrip />);
+    await screen.findByRole('button', { name: /more/ });
+    expect(made.length).toBeGreaterThan(0);
+    unmount();
+    // Every observer made has been let go: none is left watching a detached group.
+    expect(made.every((o) => o.disconnected >= 1)).toBe(true);
+  });
+
   it('folded, the group\'s name names the fullest lane, which is hidden', async () => {
     stubSeventeen();
     const { container } = render(<AccountsStrip />);
