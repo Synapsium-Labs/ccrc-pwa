@@ -14,7 +14,7 @@
 // is never read as a write; a `$(…)` inside double quotes is code.
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
-import { bashCodeOf, ccdLauncherIn, codeOf, esc, REPO, type CensusSite } from '../consolidationCensus.js';
+import { bashCodeOf, CCD_LIB_FILES, ccdLauncherIn, codeOf, esc, REPO, type CensusSite } from '../consolidationCensus.js';
 
 /** The two per-lane account markers ARCH-72 gives one write primitive each (spec K16). */
 export type AccountMarker = 'authdead' | 'disabled';
@@ -201,24 +201,43 @@ function firstWrite(body: BashBody, suffix: RegExp): { line: number; raw: string
   return null;
 }
 
-/** `ccd/ccd`'s function texts by name under `root` (the generated regions' source), first definition wins. */
+/** A body of a bash program, with the repo-relative file its lines are in. */
+export interface ProgramBody extends BashBody { readonly file: string }
+
+/** ccd's bodies under `root`, read as `ccdFunctionDefinitions` reads ccd (D-6913): `ccd/ccd`, then each library file of
+ *  `CCD_LIB_FILES` that exists, in load order, each split on its own (its functions, then its top level). A moved
+ *  function is still ccd's. A tree without a library file (a fixture) has no bodies from it. */
+export function ccdProgramBodies(root: string = REPO): ProgramBody[] {
+  const files: Array<[string, string]> = [['ccd/ccd', ccdLauncherIn(root)], ...CCD_LIB_FILES.map((r): [string, string] => [r, path.join(root, r)])];
+  return files.filter(([, abs]) => existsSync(abs))
+    .flatMap(([file, abs]) => bashBodies(readFileSync(abs, 'utf8')).map((b) => ({ ...b, file })));
+}
+
+/** ccd's function texts by name under `root` (the generated regions' source), `ccd/ccd` and its library, first
+ *  definition wins. */
 function ccdFunctionTexts(root: string): Map<string, string> {
-  const ccdPath = ccdLauncherIn(root);
   const out = new Map<string, string>();
-  if (existsSync(ccdPath)) for (const b of bashBodies(readFileSync(ccdPath, 'utf8'))) if (b.fn && !out.has(b.name)) out.set(b.name, b.text);
+  for (const b of ccdProgramBodies(root)) if (b.fn && !out.has(b.name)) out.set(b.name, b.text);
   return out;
 }
 
-/** The writer bodies of one bash file (`file` repo-relative), generated copies of `ccd/ccd` functions passed over. */
-function writerBodiesOf(file: string, src: string, marker: AccountMarker, ccdFns: ReadonlyMap<string, string>): AccountMarkerWriter[] {
+/** The writer bodies of one bash program named `program` (repo-relative), generated copies of ccd's functions passed
+ *  over. A function is `<program>#<function>`; a top level is `<file>#<top-level>`, its own file's (ccd's library has
+ *  one beside `ccd/ccd`'s). Each site's `file` and `line` are where the line is. */
+function writerBodiesOf(program: string, bodies: readonly ProgramBody[], marker: AccountMarker, ccdFns: ReadonlyMap<string, string>): AccountMarkerWriter[] {
   const suffix = markerSuffixRe(marker);
   const out: AccountMarkerWriter[] = [];
-  for (const body of bashBodies(src)) {
-    if (file !== 'ccd/ccd' && body.generated && ccdFns.get(body.name) === body.text) continue;
+  for (const body of bodies) {
+    if (program !== 'ccd/ccd' && body.generated && ccdFns.get(body.name) === body.text) continue;
     const w = firstWrite(body, suffix);
-    if (w) out.push({ name: `${file}#${body.name}`, file, line: w.line, text: w.raw });
+    if (w) out.push({ name: `${body.fn ? program : body.file}#${body.name}`, file: body.file, line: w.line, text: w.raw });
   }
   return out;
+}
+
+/** The bodies of one shipped bash program: ccd's whole program for `ccd/ccd`, else the file's own. */
+function programBodiesOf(file: string, src: string, root: string): ProgramBody[] {
+  return file === 'ccd/ccd' ? ccdProgramBodies(root) : bashBodies(src).map((b) => ({ ...b, file }));
 }
 
 /** ARCH-72's writer census (D-7048): every body of the shipped bash programs under `ccd/` that writes or removes a
@@ -228,7 +247,8 @@ function writerBodiesOf(file: string, src: string, marker: AccountMarker, ccdFns
  *  own, so a hand-written writer cannot hide in a region. At base: `authdead` 6, `disabled` 3 (plan, Task C5a). */
 export function accountMarkerWriters(marker: AccountMarker, root: string = REPO): AccountMarkerWriter[] {
   const ccdFns = ccdFunctionTexts(root);
-  return shippedBashPrograms(root).flatMap((file) => writerBodiesOf(file, readFileSync(path.join(root, file), 'utf8'), marker, ccdFns));
+  return shippedBashPrograms(root).flatMap((file) =>
+    writerBodiesOf(file, programBodiesOf(file, readFileSync(path.join(root, file), 'utf8'), root), marker, ccdFns));
 }
 
 /** The trees the "no roster projection" pin reads (spec K16): every shipped file that could derive a lane's switch. */
@@ -273,7 +293,9 @@ export function disabledProjectionWriters(root: string = REPO): AccountMarkerWri
     const first = src.split('\n', 1)[0] ?? '';
     const bash = base.endsWith('.sh') || (!base.includes('.') && /^#!\s*\S*(?:\/env\s+)?(?:\S*\/)?(?:ba)?sh\b/.test(first));
     if (bash) {
-      for (const w of writerBodiesOf(file, src, 'disabled', ccdFns)) if (!allowed.has(w.name)) out.push(w);
+      // ccd's library is read with `ccd/ccd`, as one program, by `accountMarkerWriters` (its writers are named there).
+      if (CCD_LIB_FILES.includes(file)) continue;
+      for (const w of writerBodiesOf(file, programBodiesOf(file, src, root), 'disabled', ccdFns)) if (!allowed.has(w.name)) out.push(w);
       continue;
     }
     const js = /\.(?:mjs|cjs|js|tsx?)$/.test(base) && !/\.d\.[mc]?ts$/.test(base);

@@ -8,10 +8,9 @@ import { describe, it, expect } from 'vitest';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { readFileSync } from 'node:fs';
-import { ccdFunctionDefinitions, CCD_FUNCTION_DEF, ccdLauncherIn } from '../consolidationCensus.js';
+import { ccdFunctionDefinitions, CCD_FUNCTION_DEF } from '../consolidationCensus.js';
 import {
-  accountMarkerWriters, bashBodies, disabledProjectionWriters, shippedBashPrograms, type AccountMarkerWriter,
+  accountMarkerWriters, bashBodies, ccdProgramBodies, disabledProjectionWriters, shippedBashPrograms, type AccountMarkerWriter,
 } from './accountMarkers.js';
 
 const show = (name: string, sites: readonly AccountMarkerWriter[]): void => {
@@ -157,9 +156,9 @@ describe('W5 account-marker census (D-7048)', () => {
     } finally { rmSync(t, { recursive: true, force: true }); }
   });
 
-  it('REAL: the body splitter finds every ccd/ccd function ccdFunctionDefinitions finds, in order', () => {
+  it('REAL: the body splitter finds every ccd function ccdFunctionDefinitions finds (ccd/ccd and its library), in order', () => {
     const want = ccdFunctionDefinitions().map((d) => CCD_FUNCTION_DEF.exec(d.text)![1]!);
-    const got = bashBodies(readFileSync(ccdLauncherIn(), 'utf8')).filter((b) => b.fn).map((b) => b.name);
+    const got = ccdProgramBodies().filter((b) => b.fn).map((b) => b.name);
     expect(got).toEqual(want);
   });
 
