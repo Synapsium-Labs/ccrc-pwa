@@ -206,7 +206,9 @@ describe('a section with nothing to show renders nothing (desktop polish T3d, D-
       id: BARE, wrapper: 'lane-a', home: 'lane-a', project: 'project-a', workspace: null, model: 'model-x',
       effort: 'high',
     });
-    for (const row of [workspaceNoPr, mainCheckout]) {
+    // A workspace row the PR sweep has not read at all carries no PR object (`FleetSession.pr` is nullable).
+    const workspaceNullPr = { ...workspaceNoPr, pr: null };
+    for (const row of [workspaceNoPr, workspaceNullPr, mainCheckout]) {
       act(() => useFleetStore.setState({ sessions: [row] }));
       const { container, unmount } = render(<InspectorSections />);
       for (const id of ['tasks', 'mail', 'pr']) {
