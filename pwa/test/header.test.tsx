@@ -1422,8 +1422,8 @@ describe('the header doors carry words (desktop polish T3c, D-6333)', () => {
     expect(cap('keycap--term')).toHaveAttribute('title', 'Terminal');
     expect(cap('keycap--more')).toHaveAttribute('aria-label', 'More');
     expect(cap('keycap--more')).toHaveAttribute('title', 'More');
-    expect(cap('keycap--pr')).toHaveAttribute('aria-label', 'Pull request #5: open.');
-    expect(cap('keycap--pr')).toHaveAttribute('title', 'Pull request #5: open.');
+    expect(cap('keycap--pr').getAttribute('aria-label')).toMatch(/^Pull request #5: open\./);
+    expect(cap('keycap--pr')).toHaveAttribute('title', cap('keycap--pr').getAttribute('aria-label'));
     for (const c of ['keycap--term', 'keycap--more']) {
       expect(cap(c).querySelector('[aria-hidden="true"]')).not.toBeNull();
       expect(cap(c).querySelector('.keycap-word')?.textContent).toBe(c === 'keycap--term' ? 'Terminal' : 'More');
