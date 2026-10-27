@@ -41,6 +41,7 @@ import {
 import type { SendResult } from '../inject/send.js';
 import type { LedgerLog } from './ledgerlog.js';
 import type { PoolEdgeLog } from './pooledgelog.js';
+import { appendThenApply, journalFloor } from '../journalKernel.js';
 import type { UpdateIntentLog } from './updateintentlog.js';
 // Delegation broker wave 3, Task 7: the projection's row shapes, codecs and guards are the PURE `delegation-model.ts`;
 // this file runs the SQL and nothing else.
@@ -8415,26 +8416,30 @@ export class CoordStore {
       return { ok: false, error: 'multi-pool-not-supported', pools: input.pools };
     }
     const now = input.now ?? Date.now();
-    return tx(this.db, () => {
-      const dbMax = (this.db.prepare('SELECT epoch AS e FROM pool_epoch WHERE id = 1')
-        .get() as { e: number }).e;
-      const fileMax = log.maxEpoch();
-      const epoch = (fileMax === null ? dbMax : Math.max(dbMax, fileMax)) + 1;
-      log.append([{ epoch, accountId: input.accountId, pools: input.pools,
-                    addedBy: input.addedBy, at: now }]);
-      this.db.prepare("DELETE FROM pool_edges WHERE subjectKind = 'account' AND subjectId = ?")
-        .run(input.accountId);
-      for (const p of input.pools) {
-        this.db.prepare(
-          'INSERT INTO pool_edges (subjectKind, subjectId, pool, addedAt, addedBy) ' +
-          "VALUES ('account', ?, ?, ?, ?)",
-        ).run(input.accountId, p, now, input.addedBy);
-      }
-      const digest = this.poolEdgeDigest();
-      this.db.prepare('UPDATE pool_epoch SET epoch = ?, issuedAt = ?, digest = ? WHERE id = 1')
-        .run(epoch, now, digest);
-      return { ok: true as const, epoch };
-    });
+    // D-7058: the floor is `journalFloor`, the journal-first order `appendThenApply`; a journal error propagates.
+    return tx(this.db, () => appendThenApply<number, SetAccountPoolsResult, never>({
+      decide: () => {
+        const dbMax = (this.db.prepare('SELECT epoch AS e FROM pool_epoch WHERE id = 1')
+          .get() as { e: number }).e;
+        return { go: journalFloor(dbMax, log.maxEpoch()) + 1 };
+      },
+      append: (epoch) => log.append([{ epoch, accountId: input.accountId, pools: input.pools,
+                                       addedBy: input.addedBy, at: now }]),
+      apply: (epoch) => {
+        this.db.prepare("DELETE FROM pool_edges WHERE subjectKind = 'account' AND subjectId = ?")
+          .run(input.accountId);
+        for (const p of input.pools) {
+          this.db.prepare(
+            'INSERT INTO pool_edges (subjectKind, subjectId, pool, addedAt, addedBy) ' +
+            "VALUES ('account', ?, ?, ?, ?)",
+          ).run(input.accountId, p, now, input.addedBy);
+        }
+        const digest = this.poolEdgeDigest();
+        this.db.prepare('UPDATE pool_epoch SET epoch = ?, issuedAt = ?, digest = ? WHERE id = 1')
+          .run(epoch, now, digest);
+        return { ok: true as const, epoch };
+      },
+    }));
   }
 
   accountPoolEdges(): Map<string, string[]> {
