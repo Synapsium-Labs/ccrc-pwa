@@ -247,8 +247,12 @@ export function AccountsStrip(): ReactNode {
     if (e.relatedTarget instanceof Node && e.currentTarget.contains(e.relatedTarget)) return;
     if (!pointerIn.current) scheduleClose();
   };
+  // An Escape that closes the flyout, or cancels its pending open, is handled here and prevented: the desk's Escape
+  // interrupt (`useEscapeInterrupt`) skips a default-prevented key, so closing the panel never stops a busy session's
+  // turn (the D-5235 rule for sheets). With nothing to close the key is not the strip's and goes on.
   const onGroupKey = (e: KeyboardEvent<HTMLElement>): void => {
-    if (e.key !== 'Escape' || !flyOpen) return;
+    if (e.key !== 'Escape' || !(flyOpen || openTimer.current !== null)) return;
+    e.preventDefault();
     closeFlyout();
   };
 

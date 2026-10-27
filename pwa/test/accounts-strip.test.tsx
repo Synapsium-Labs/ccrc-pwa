@@ -847,6 +847,26 @@ describe('the lanes fold (S5b, D-6530)', () => {
       expect(document.activeElement).toBe(fromLine);
     });
 
+    it('an Escape that closes it is handled there: the key press is default-prevented, so the desk\'s Escape interrupt skips it', async () => {
+      const container = await openByHover();
+      const card = flyCardsOf(container)[0]!;
+      act(() => { card.focus(); });
+      // `fireEvent` answers false when a listener prevented the default; the desk's `useEscapeInterrupt` stands down on that.
+      expect(fireEvent.keyDown(card, { key: 'Escape' })).toBe(false);
+      expect(flyoutOf(container)).toBeNull();
+      // With no flyout to close an Escape is not this strip's, and passes on.
+      expect(fireEvent.keyDown(lineCardsOf(container)[0]!, { key: 'Escape' })).toBe(true);
+    });
+
+    it('an Escape while the open is still pending cancels the open', async () => {
+      const container = await mountDesk();
+      act(() => { lineCardsOf(container)[0]!.focus(); });
+      advance(FLYOUT_OPEN_MS - 1);
+      expect(fireEvent.keyDown(lineCardsOf(container)[0]!, { key: 'Escape' })).toBe(false);
+      advance(FLYOUT_OPEN_MS * 4);
+      expect(flyoutOf(container)).toBeNull();
+    });
+
     it('Escape stays shut for a keyboard user: an arrow move between the line\'s cards does not open it again', async () => {
       const container = await mountDesk();
       const first = lineCardsOf(container)[0]!;
