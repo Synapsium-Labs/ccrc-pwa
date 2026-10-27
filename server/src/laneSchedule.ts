@@ -131,6 +131,14 @@ export const CHILD_RECLAIM_SWEEP_MS = 60_000;
  *  takes it as an argument (it imports no L4 constant). EXPORTED for its suite; `watch.ts` re-exports it. */
 export const COLLECT_OBSERVE_INTERVAL_MS = CHILD_RECLAIM_SWEEP_MS;
 
+/** The stop-done lane's cadence (D-5370), the `run-done` sleep policy's: declared here, the L0 table, which cannot import
+ *  an L1 file (the precedent of `CATALOGUE_POLL_INTERVAL_MS`); `stopDone.ts` re-exports it (D-7045). */
+export const STOP_DONE_SWEEP_MS = 60_000;
+
+/** Hibernation's cadence (D-5242), the `idle-hours` sleep policy's: declared here for the same reason; `coord/hibernate.ts`
+ *  re-exports it (D-7045). */
+export const HIBERNATE_SWEEP_MS = 5 * 60_000;
+
 /** The checks lane's beat (PR landing in ccrc, stage 1): the fastest a project's read cadence goes. */
 export const LANDING_CHECKS_BEAT_MS = 30_000;
 
