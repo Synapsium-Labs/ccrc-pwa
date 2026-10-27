@@ -136,3 +136,22 @@ describe('_timer_period_s: everything else is refused, rc 1, one line why, nothi
     expect(a.stderr).not.toContain('fixture-secret-7d1');
   });
 });
+
+describe('_timer_period_words: the period in the transcript\'s words', () => {
+  const rows: Array<[number, string, string]> = [
+    [300, '5 minutes', '5-minute'],
+    [60, '1 minute', '1-minute'],
+    [90, '90 seconds', '90-second'],
+    [3600, '60 minutes', '60-minute'],
+  ];
+  for (const [s, noun, adj] of rows) {
+    it(`${s} s is "${noun}" as a noun and "${adj}" as an adjective`, () => {
+      const n = call('_timer_period_words', String(s), 'noun');
+      expect(n.code, n.stderr).toBe(0);
+      expect(n.stdout).toBe(noun);
+      const a = call('_timer_period_words', String(s), 'adj');
+      expect(a.code, a.stderr).toBe(0);
+      expect(a.stdout).toBe(adj);
+    });
+  }
+});

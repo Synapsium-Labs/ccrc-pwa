@@ -941,9 +941,9 @@ describe('ccrc expose: the ddns job\'s cadence comes from its timer (D-7053; ARC
   });
 });
 
-/** A box whose tree ships `deploy/systemd/` as a real copy, with `ccrc-ddns.timer` broken one way: `absent`, or
- *  `no-cadence` (its `OnCalendar=` line gone, every other line kept). */
-function brokenTimerBox(prefix: string, how: 'absent' | 'no-cadence'): string {
+/** A box whose tree ships `deploy/systemd/` as a real copy, its `ccrc-ddns.timer` replaced by `text` (absent for
+ *  `null`). */
+function ddnsTimerBox(prefix: string, text: string | null): string {
   const home = mkTmp(prefix);
   const ccd = join(home, 'ccrc', 'ccd');
   mkdirSync(ccd, { recursive: true });
@@ -951,12 +951,19 @@ function brokenTimerBox(prefix: string, how: 'absent' | 'no-cadence'): string {
   const units = join(home, 'ccrc', 'deploy', 'systemd');
   cpSync(join(REPO, 'deploy', 'systemd'), units, { recursive: true });
   rmSync(join(units, 'ccrc-ddns.timer'));
-  if (how === 'no-cadence') {
-    writeFileSync(join(units, 'ccrc-ddns.timer'), readFileSync(join(REPO, 'deploy', 'systemd', 'ccrc-ddns.timer'), 'utf8')
-      .split('\n').filter((l) => !l.startsWith('OnCalendar=')).join('\n'));
-  }
+  if (text !== null) writeFileSync(join(units, 'ccrc-ddns.timer'), text);
   return home;
 }
+
+/** The shipped `ccrc-ddns.timer` with its cadence line replaced by `line` (dropped for `null`). */
+const ddnsTimerWith = (line: string | null): string =>
+  readFileSync(join(REPO, 'deploy', 'systemd', 'ccrc-ddns.timer'), 'utf8').split('\n')
+    .flatMap((l) => (l.startsWith('OnCalendar=') ? (line === null ? [] : [line]) : [l])).join('\n');
+
+/** A box whose `ccrc-ddns.timer` is broken one way: `absent`, or `no-cadence` (its `OnCalendar=` line gone, every
+ *  other line kept). */
+const brokenTimerBox = (prefix: string, how: 'absent' | 'no-cadence'): string =>
+  ddnsTimerBox(prefix, how === 'absent' ? null : ddnsTimerWith(null));
 
 /** `pathVar` with every directory holding `name` replaced by a farm of links to its other entries: the tool is gone,
  *  everything beside it still resolves. */
@@ -972,6 +979,20 @@ function pathWithout(home: string, name: string, pathVar: string): string {
     return farm;
   }).join(':');
 }
+
+describe('ccrc expose: the Darwin ddns job and its two sentences follow the timer (D-7053)', () => {
+  it('a 90-second timer writes StartInterval 90 and says "90-second tick" and "every 90 seconds"', async () => {
+    const home = ddnsTimerBox('ccrc-expose-c8a-90s-', ddnsTimerWith('OnUnitActiveSec=90s'));
+    quietSs(home);
+    recorder(home, 'plutil');
+    const r = await runExposeTty(home, ['duckdns'], [SUB, TOKEN, ''], { launchctlOk: true, extra: FORCE_DARWIN });
+    expect(r.code, r.stdout).toBe(0);
+    expect(normal(home, readFileSync(ddnsPlist(home), 'utf8')))
+      .toBe(DDNS_PLIST_BYTES.replace('<integer>300</integer>', '<integer>90</integer>'));
+    expect(r.stdout).toContain('a missed refresh waits for the next 90-second tick, where');
+    expect(r.stdout).toMatch(/^expose: app\.ccrc\.ccrc-ddns enabled — the DuckDNS record refreshes every 90 seconds\r?$/m);
+  });
+});
 
 describe('ccrc expose: an unreadable ddns timer refuses the Darwin job (OA-C8c (a), D-7062)', () => {
   for (const how of ['absent', 'no-cadence'] as const) {
