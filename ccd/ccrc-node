@@ -86,7 +86,7 @@ _node_path_pick() {
   NODE_BIN_DIR=; NODE_VERSION=
   local floor="$1" p v
   p=$(command -v node 2>/dev/null) || p=
-  if [ -z "$p" ] || [ ! -x "$p" ]; then NODE_WHY="node is not installed (floor >=$floor) and nvm was not found"; return 1; fi
+  if [ -z "$p" ] || [ ! -x "$p" ]; then NODE_WHY="node is not installed (floor >=$floor)"; return 1; fi
   _node_bin_ok "${p%/*}" || return 1
   v=$("$p" --version 2>/dev/null) || v=
   if ! _node_ver_ok "$v"; then NODE_WHY="'$p --version' printed '${v:-nothing}', not a version"; return 1; fi
@@ -161,7 +161,7 @@ _node_select() {
     elif [ -z "$pick" ]; then return 1
     else NODE_VERSION="$pick"; NODE_BIN_DIR="$vd/$pick/bin"; fi
   else
-    _node_path_pick "$floor" || return 1
+    _node_path_pick "$floor" || { NODE_WHY="$NODE_WHY and nvm was not found"; return 1; }
   fi
   NODE_WHY=
   PATH="$NODE_BIN_DIR:$PATH"

@@ -173,6 +173,11 @@ describe('_node_select: nvm present, but a qualifying PATH node is the second ch
     expect(o).toMatch(/rc=1 ver= dir= why=.*NODE_NO_INSTALL.*the node on PATH: node v20\.0\.0 .*below the floor/);
     expect(existsSync(fx.installLog)).toBe(false);
   });
+  it('nvm present, nothing qualifies, no PATH node: the refusal never says nvm was not found', () => {
+    const o = sel(fixture(['v20.1.0'], null), '_node_is_tty() { return 1; }').out;
+    expect(o).toMatch(/rc=1 ver= dir= why=.*the node on PATH: node is not installed \(floor >=22\.16\.0\)$/);
+    expect(o).not.toContain('nvm was not found');
+  });
 });
 
 describe('_node_select without nvm', () => {
@@ -189,11 +194,12 @@ describe('_node_select without nvm', () => {
   it('rc 1 when the PATH node is below the floor', () => {
     const fx = fixture([], null, false);
     exe(path.join(fx.bin, 'node'), 'echo v20.0.0');
-    expect(run(fx, '_node_select 22.16.0; echo "rc=$? why=$NODE_WHY"').out).toMatch(/^rc=1 why=.+/);
+    for (const b of ['npm', 'npx']) exe(path.join(fx.bin, b), 'true');
+    expect(run(fx, '_node_select 22.16.0; echo "rc=$? why=$NODE_WHY"').out).toMatch(/^rc=1 why=node v20\.0\.0 .*below the floor .* and nvm was not found$/);
   });
-  it('rc 1 when there is no node at all', () => {
+  it('rc 1 when there is no node at all, and says nvm was not found', () => {
     const fx = fixture([], null, false);
-    expect(run(fx, '_node_select 22.16.0; echo "rc=$? why=$NODE_WHY"').out).toMatch(/^rc=1 why=.+/);
+    expect(run(fx, '_node_select 22.16.0; echo "rc=$? why=$NODE_WHY"').out).toBe('rc=1 why=node is not installed (floor >=22.16.0) and nvm was not found');
   });
 });
 
