@@ -59,6 +59,9 @@ die	K
 _rc_enabled	C2
 _lane_enabled	C1
 _authdead	C1
+_authdead_mark	C1
+_authdead_clear	C1
+_authdead_sweep_staged	C1
 _pool_name_valid	C1
 _pool_untaggable	C1
 _project_pool_state	C1

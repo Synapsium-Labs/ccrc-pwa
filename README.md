@@ -7382,7 +7382,9 @@ These conventions carry more weight here than style:
   `ccd/session-hook.sh` carries a generated helpers region (`shared/hook-helpers.mjs`);
   after editing `ccd/ccd`'s epoch helper, or on a conflict in the region's stamp line, run
   `bash ccd/ccrc restamp ccd/session-hook.sh`; `hook-helpers-generated.test.ts` reds when the
-  region has gone stale.
+  region has gone stale. `ccd/ccd-account-health` carries the same module's second region, the
+  auth-dead writers copied from `ccd/ccd`: after editing `_authdead_mark`, `_authdead_clear` or
+  `_authdead_sweep_staged`, run `bash ccd/ccrc restamp ccd/ccd-account-health`.
 - **A feature pull request does not edit the shared ledgers.** An existing file under
   `docs/superpowers/programs/` or `docs/superpowers/plans/` changes only on a `ledger/<programme>` branch;
   add a new `docs/superpowers/plans/<plan>/<task-or-pr>.md` note instead, or put a `Ledger-Edit: <reason>`

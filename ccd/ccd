@@ -1935,6 +1935,20 @@ _authdead() {   # wrapper -> success iff a well-formed auth-dead marker stands f
   _file_read_to t "$f"; t="${t%% *}"
   [[ "$t" =~ ^[0-9]+$ ]] && ! _authdead_expired "$1" "$t"   # D-3524: a verdict about a credential no longer on disk is not one
 }
+# THE MARKER'S WRITERS, DEFINED ONCE (D-7049; ARCH-72, spec K16). The probe, the
+# rescue and the spawn's clear call these; `_authdead_expired`'s compare-and-remove
+# is the one other writer. Silent: each caller keeps its own words. The temp is
+# dotted and in $REG, so the rename never crosses a filesystem and a crashed pass
+# leaves only what the sweep removes. `ccd/ccd-account-health` carries a byte copy
+# (`shared/hook-helpers.mjs` generates it; `ccrc restamp` regenerates it).
+_authdead_mark() {   # lane reason [epoch] -> rc 0 written, 1 no temp made, 2 the write or rename failed (temp removed)
+  local t
+  t=$(mktemp "$REG/$1-authdead.tmp.XXXXXX") || return 1
+  printf '%s %s' "${3:-$(date +%s)}" "$2" > "$t" && mv -f "$t" "$REG/$1-authdead" && return 0
+  rm -f -- "$t"; return 2
+}
+_authdead_clear() { rm -f -- "$REG/$1-authdead"; }   # lane
+_authdead_sweep_staged() { rm -f -- "$REG"/*-authdead.tmp.* 2>/dev/null; }   # the staged temps a crashed pass left
 # THE GRAMMAR IS ASCII, AND `LC_ALL=C` IS WHAT MAKES IT SO (D-2522). `[a-z]`
 # in bash's `=~` is a COLLATION range, not a codepoint range: under
 # `en_US.UTF-8` it ACCEPTS U+00E9, U+00E5, U+00FC and U+00F1 — measured, not
@@ -19420,7 +19434,7 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
   #   stay on your home account; leave only when home is at the rate ceiling (no headroom); return
   #   home the instant it has room again. A hard-blocked session (limit/spend banner up, or auth
   #   lost) swaps immediately; any other move waits for a clean turn boundary.
-  local id="$1" wrapper home now last pane target hard_blocked="" blocked bts authf authtmp authborn
+  local id="$1" wrapper home now last pane target hard_blocked="" blocked bts authf authborn
   local project pps prc prjrc crossed="" ctrc wrc hrc strc stuck="" new aff_verb=auto-home
   # §6.3: a relocation is a restart that re-drives, and the only thing standing
   # between it and a running turn is the `esc to interrupt` match further down.
@@ -19948,9 +19962,7 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
     if _is_valid_wrapper "$wrapper" && ! _authdead "$wrapper" && authf=$(_transcript_path "$id") \
        && authborn=$(_pane_born "$id") && [[ "$(_transcript_limit_banner "$authf" stuck "$authborn" | cut -f3)" == authentication_failed ]] \
        && ! _authdead_cred_changed "$wrapper" "$authborn"; then
-      authtmp=$(mktemp "$REG/$wrapper-authdead.tmp.XXXXXX") \
-        && printf '%s %s' "$now" rescue-401 > "$authtmp" && mv -f "$authtmp" "$REG/$wrapper-authdead" \
-        || rm -f "$authtmp"
+      _authdead_mark "$wrapper" rescue-401 "$now" || :
     fi
     _reg_set "$id" lastswap "$now"
     # `via=` NAMES THE DETECTOR THAT ACTUALLY FIRED (D-3101) — read off the
@@ -40400,7 +40412,7 @@ _authdead_clear_on_spawn() {   # wrapper — `_spawn_settle`'s rc-0 half for the
   if [[ -f "$f" && ! -L "$f" ]]; then t=$(cat "$f" 2>/dev/null); t="${t%% *}"; fi
   _authdead_cred_changed "$1" "$t"
   [[ $? -eq 1 ]] && return 0
-  rm -f -- "$f"
+  _authdead_clear "$1"
 }
 
 # ── THE MERGE QUEUE, READ ONCE PER REPOSITORY PER SWEEP (landing-order wave 2) ──

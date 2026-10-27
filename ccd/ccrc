@@ -27059,6 +27059,15 @@ _uninst_purge() {
 # ARCH-74 (#809): the hook's generated region is rewritten by shared/hook-helpers.mjs --restamp.
 # Prints regenerated | current | refused-missing (BEGIN present, region damaged) | nothere.
 _restamp_hook_region() { node --no-warnings "$1" --restamp "$2" "$3" 2>/dev/null; }
+# The label of the generated region <file> carries (`hook helpers`, `auth-dead writers`), or nothing:
+# each row of <module> --regions is a BEGIN prefix and its label (D-7049).
+_restamp_region_of() {   # module file
+  local b l
+  [ -f "$1" ] || return 0
+  while IFS=$'\t' read -r b l; do
+    [ -n "$b" ] && grep -qF -- "$b" "$2" 2>/dev/null && { printf '%s' "$l"; return 0; }
+  done < <(node --no-warnings "$1" --regions 2>/dev/null)
+}
 
 # After restamping ccd/ccd, say whether the sibling hook's region has gone stale.
 _restamp_hook_note() {
@@ -27106,7 +27115,7 @@ _restamp_hook_note() {
 cmd_restamp() {
   case "${1:-}" in -h|--help) echo "usage: $PROG restamp <file>"; return 0 ;; esac
   [ $# -eq 1 ] || { echo "usage: $PROG restamp <file>" >&2; exit 2; }
-  local f="$1" mark="$CCRC_HERE/../shared/mark.mjs" verdict dir real d hooks ccdsrc
+  local f="$1" mark="$CCRC_HERE/../shared/mark.mjs" verdict dir real d hooks ccdsrc what
   { [ -f "$f" ] && [ ! -L "$f" ]; } || _ccrc_die "restamp: $f is not a regular file"
   # CDPATH= : `cd` consults an exported CDPATH for a relative operand, so the
   # directory resolved here could be a decoy while the write lands on $f itself.
@@ -27125,19 +27134,23 @@ cmd_restamp() {
   case "$(sed -n 2p -- "$f" 2>/dev/null)" in
     '# ccrc:stamp-at-install'*) _ccrc_die "restamp: $f is stamped at install time (ccd/ccd-entry-install.py writes its marker into the installed copy), so there is nothing to restamp; resolve its hunks as source and commit. Nothing was written." ;;
   esac
-  # A hook carrying the generated-helpers region (ARCH-74, #809) is regenerated
-  # from the TARGET'S OWN tree: its shared/hook-helpers.mjs and its sibling ccd,
-  # never this script's tree (the installed ccrc would otherwise regenerate a
-  # worktree's hook against the installed constants). Missing either is refused.
-  if grep -qF -- '# ── BEGIN GENERATED HOOK HELPERS' "$f" 2>/dev/null; then
+  # A file carrying a generated region (ARCH-74, #809: the hook's helpers; D-7049:
+  # the probe's auth-dead writers) is regenerated from the TARGET'S OWN tree: its
+  # shared/hook-helpers.mjs and its sibling ccd, never this script's tree (the
+  # installed ccrc would otherwise regenerate a worktree's hook against the
+  # installed constants). Missing either is refused. The regions' BEGIN prefixes
+  # come from the module (`--regions`): the target tree's, else this tree's.
+  hooks="$dir/../shared/hook-helpers.mjs"; [ -f "$hooks" ] || hooks="$CCRC_HERE/../shared/hook-helpers.mjs"
+  what="$(_restamp_region_of "$hooks" "$f")"
+  if [ -n "$what" ]; then
     hooks="$dir/../shared/hook-helpers.mjs"; ccdsrc="$dir/ccd"
     { [ -f "$hooks" ] && [ -f "$ccdsrc" ]; } \
-      || _ccrc_die "restamp: $f carries generated hook helpers, but its own tree lacks $hooks or $ccdsrc; restamp it from a full checkout (the tree holding both ccd/ and shared/). Nothing was written."
+      || _ccrc_die "restamp: $f carries generated $what, but its own tree lacks $hooks or $ccdsrc; restamp it from a full checkout (the tree holding both ccd/ and shared/). Nothing was written."
     verdict="$(_restamp_hook_region "$hooks" "$f" "$ccdsrc")" || _ccrc_die "restamp: $f could not be read or written; restore it from git (git checkout -- $f), re-apply your edit, restamp again"
     case "$verdict" in
-      regenerated) echo "restamp: $f: hook helpers regenerated"; return 0 ;;
-      current)     echo "restamp: $f: hook helpers already current"; return 0 ;;
-      refused-*)   _ccrc_die "restamp: $f: hook helpers refused (${verdict#refused-})" ;;
+      regenerated) echo "restamp: $f: $what regenerated"; return 0 ;;
+      current)     echo "restamp: $f: $what already current"; return 0 ;;
+      refused-*)   _ccrc_die "restamp: $f: $what refused (${verdict#refused-})" ;;
     esac
   fi
   verdict="$(node --no-warnings --input-type=module -e '
