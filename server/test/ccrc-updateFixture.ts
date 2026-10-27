@@ -596,8 +596,12 @@ export function updateEnv(home: string): NodeJS.ProcessEnv {
     'esac',
     'echo "fixture loginctl: unexpected argv: $*" >&2; exit 90',
   ].join('\n'));
+  // `$HOME/fixture-npm-override`, when a case plants it, REPLACES this recorder (exec'd first, with the same argv). A
+  // case that wants a failing or differently-recording npm uses it rather than a PATH prefix: `_node_select`
+  // (ccd/ccrc-node) puts the chosen node's directory — `.local/bin` here — ahead of anything a test prefixes.
   plant('npm',
-    '#!/bin/sh\nprintf \'%s\\n\' "$*" >> "$HOME/npm-argv"\n'
+    '#!/bin/sh\n[ -x "$HOME/fixture-npm-override" ] && exec "$HOME/fixture-npm-override" "$@"\n'
+    + 'printf \'%s\\n\' "$*" >> "$HOME/npm-argv"\n'
     + 'printf \'%s\\n\' "$PWD" >> "$HOME/npm-cwd"\nmkdir -p node_modules\nexit 0\n');
   plant('rsync', rsyncRecorder(RSYNC));
   // Task 1 (design §10, "update.json is written at every phase … by rename"):
@@ -700,12 +704,9 @@ export function updateEnv(home: string): NodeJS.ProcessEnv {
     `exec ${REAL_NODE} "$@"`,
   ].join('\n') + '\n');
   // `ccrc update` chooses its node before anything else (`_ccrc_node_choose`, ccd/ccrc-node) and requires npm and npx
-  // beside it — in the directory of THIS shim. Real ones, linked, so a case that runs the real install keeps the
-  // npm it always ran.
-  for (const n of ['npm', 'npx']) {
-    rmSync(join(home, '.local', 'bin', n), { force: true });
-    symlinkSync(realPath(n), join(home, '.local', 'bin', n));
-  }
+  // beside it — in the directory of THIS shim. npm is the recorder above; npx is the real one, linked.
+  rmSync(join(home, '.local', 'bin', 'npx'), { force: true });
+  symlinkSync(realPath('npx'), join(home, '.local', 'bin', 'npx'));
   for (const k of ['CCRC_ADDR', 'CCRC_HEALTH_TIMEOUT', 'CCRC_DOCTOR_GH_TIMEOUT', 'CCRC_DOCTOR_DOCS_TIMEOUT',
     'CCRC_RELEASE_BASE_URL', 'CCRC_BACKUP_KEEP', 'CCRC_BACKUP_DATA_KEEP', 'CCRC_VERSIONS_KEEP', 'CCRC_CODEX_PROBE_S', 'CCRC_CODEX_READY_S',
     'CCRC_UPDATE_DEADLINE_MS', 'CCRC_MODELS_ADVANCE_BUDGET_S']) delete env[k];
@@ -1462,6 +1463,8 @@ export const CCD_SENTINEL = "# fixture: v1.0.0's own ccd, as this box kept it\n"
 export const KEPT_SPINE = [
   '#!/bin/sh',
   'printf \'%s\\n\' "$0" "$@" > "$HOME/kept-spine-argv"',
+  // a rollback never installs node: `_ver_flip_back` hands its spine NODE_NO_INSTALL=1
+  'printf \'%s\\n\' "${NODE_NO_INSTALL:-unset}" > "$HOME/kept-spine-nodenoinstall"',
   'fd=unmeasured',
   'if [ -d "/proc/$$/fd" ]; then',
   '  fd=closed; lock="$(cd "$HOME/.ccrc" && pwd -P)/update.lock"',

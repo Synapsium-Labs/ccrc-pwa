@@ -170,6 +170,9 @@ describe('the killed-flip state: C27 admits the one rollback a killed update nee
     expect(localUrls(home)).toEqual([]);
     expectAgreesOnV1(home, v1);
     expect(existsSync(join(home, 'kept-spine-argv')), "the kept version's own spine did not run").toBe(true);
+    // the spine a rollback re-runs never installs node (spec 2026-10-26-node-runtime-under-nvm): even an operator's
+    // terminal rollback, which `ccd/ccrc-node` would otherwise let `nvm install` on a TTY
+    expect(fileText(join(home, 'kept-spine-nodenoinstall')).trim()).toBe('1');
     expect(existsSync(join(home, 'rsync-argv'))).toBe(false);
     expect(existsSync(join(home, 'npm-argv'))).toBe(false);
     expect(lastReport(home)).toMatchObject({ phase: 'done', detail: 'rolled back by flip to v1.0.0', from: 'watchdog' });
@@ -1364,6 +1367,12 @@ describe('ccrc backup and update: the coordination snapshot callers (delegation 
   const nodeShim = (home: string): string => {
     const bin = join(home, 'shim');
     mkdirSync(bin, { recursive: true });
+    // This directory is where `command -v node` lands, so `_node_select` (ccd/ccrc-node) wants npm and npx in it:
+    // the fixture's own two, linked (the recorder npm stays the one that runs).
+    for (const n of ['npm', 'npx']) {
+      rmSync(join(bin, n), { force: true });
+      symlinkSync(join(home, '.local', 'bin', n), join(bin, n));
+    }
     writeFileSync(join(bin, 'node'), [
       '#!/bin/sh',
       'case "$2" in',

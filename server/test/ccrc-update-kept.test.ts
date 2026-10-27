@@ -209,16 +209,15 @@ describe('ccrc update: restore arm 1 — a flip back to the kept previous versio
     packRelease(home, fullTree(home, { version: 'v2.0.0', sha: V2_SHA }), { tag: 'v2.0.0' });
     // `npm ci` refuses in v2.0.0's new directory only (a registry hiccup,
     // the placement's likeliest failure); every other npm call records and
-    // succeeds. Ahead of the recorder npm that `runUpdate` re-plants.
-    mkdirSync(join(home, 'fail-bin'), { recursive: true });
-    writeFileSync(join(home, 'fail-bin', 'npm'), [
+    // succeeds. Through the recorder npm's override file (a PATH prefix would be shadowed by the chosen node's directory).
+    writeFileSync(join(home, 'fixture-npm-override'), [
       '#!/bin/sh',
       'printf \'%s\\n\' "$PWD" >> "$HOME/npm-cwd"',
       `case "$PWD" in */ccrc-versions/v2.0.0/*) echo "fixture npm: registry unreachable" >&2; printf '%s\\n' '${marker}' > "$HOME/.ccrc/install-step"; exit 1 ;; esac`,
       'mkdir -p node_modules',
       'exit 0',
     ].join('\n') + '\n', { mode: 0o755 });
-    const r = runUpdate(home, [], { PATH: `${join(home, 'fail-bin')}:${updateEnv(home)['PATH'] ?? ''}` });
+    const r = runUpdate(home);
     expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(4);
     // The spine died in `_inst_tree`'s npm ci, before its flip: `~/ccrc` never moved.
     expect(r.stdout).toMatch(/^update: gate FAILED after \d+s — \/health at 127\.0\.0\.1:7788 answers v1\.0\.0, not v2\.0\.0$/m);
@@ -259,8 +258,7 @@ describe('ccrc update: restore arm 1 — a flip back to the kept previous versio
     const ccdBefore = treeDigest(join(v1, 'ccd'));
     const distBefore = treeDigest(join(v1, 'server', 'dist'));
     rmSync(join(home, 'npm-cwd'), { force: true });
-    mkdirSync(join(home, 'fail-bin'), { recursive: true });
-    writeFileSync(join(home, 'fail-bin', 'npm'), [
+    writeFileSync(join(home, 'fixture-npm-override'), [
       '#!/bin/sh', 'printf \'%s\\n\' "$PWD" >> "$HOME/npm-cwd"', 'mkdir -p node_modules', 'exit 0',
     ].join('\n') + '\n', { mode: 0o755 });
     // What a run to v2.0.0 leaves when its gate failed with `~/ccrc` never
@@ -274,7 +272,7 @@ describe('ccrc update: restore arm 1 — a flip back to the kept previous versio
     // stubs `runUpdate` re-plants before every run are re-planted by the script.
     const r = sourcedCcrc(home, [
       'cp "$HOME"/doctor-stubs/* "$HOME/.local/bin/"',
-      'export PATH="$HOME/fail-bin:$PATH" CCRC_UPDATE_HEALTH_S=0',
+      'export CCRC_UPDATE_HEALTH_S=0',
       'UPD_VERSION=v2.0.0; UPD_REPORT_TARGET=v2.0.0; UPD_GATE_WHY="the first gate"',
       'rc=0; _upd_restore_arm1 "" "spine died at _inst_tree" v1.0.0 1 || rc=$?',
       'echo "rc=$rc first=$UPD_GATE_WHY"',

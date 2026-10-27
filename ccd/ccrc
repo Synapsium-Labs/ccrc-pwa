@@ -23538,7 +23538,9 @@ _ver_flip_back() {   # <name> <role> <prefix>
   local stamp="$BOX_STAMP_FILE"
   local rec="$BOX_INSTALLED_FILE"
   local -a spine=(bash "$BOX_TREE_DIR/ccd/ccrc" install)
-  local -a spine_env=(env -u CCRC_UPDATE_LOCK_HELD -u CCRC_UPDATE_VERIFIED -u CCRC_UPDATE_SPINE)
+  # NODE_NO_INSTALL=1: a rollback (an operator's terminal included) never runs `nvm install` through the spine it
+  # re-runs — only an interactive `ccrc install` may (spec 2026-10-26-node-runtime-under-nvm, ccd/ccrc-node).
+  local -a spine_env=(env -u CCRC_UPDATE_LOCK_HELD -u CCRC_UPDATE_VERIFIED -u CCRC_UPDATE_SPINE NODE_NO_INSTALL=1)
   VER_SPINE_RC=0
   _ver_can_flip || return 1
   _ver_kept "$name" "$role" || krc=$?

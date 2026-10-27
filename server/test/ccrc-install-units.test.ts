@@ -1107,13 +1107,18 @@ describeLinux('ccrc install: the node the units run (nvm-aware selection, `_inst
     expect(reload, `no daemon-reload recorded; stderr: ${r.stderr}`).toBeGreaterThanOrEqual(0);
     // the FIRST reload is `_inst_node`'s: it saw the fragment already on disk
     expect(read(join(home, 'fixture-reload-saw-fragment')).split('\n')[0]).toBe('present');
-    // and it precedes every enable/restart; `_inst_units`' own reload comes after it
+    // and it precedes every enable and the restart, all of which must exist: an install that died before enabling
+    // would otherwise pass this vacuously
     for (const verb of ['enable', 'restart']) {
       const first = argv.findIndex((a) => a.startsWith(`--user ${verb} `));
-      if (first >= 0) expect(reload, `${verb} came before the node reload`).toBeLessThan(first);
+      expect(first, `no ${verb} recorded; stderr: ${r.stderr}`).toBeGreaterThanOrEqual(0);
+      expect(reload, `${verb} came before the node reload`).toBeLessThan(first);
     }
-    expect(r.stdout.indexOf('install: node:')).toBeGreaterThanOrEqual(0);
-    expect(r.stdout.indexOf('install: node:')).toBeLessThan(r.stdout.indexOf('install: units:') === -1 ? Infinity : r.stdout.indexOf('install: units:'));
+    const nodeAt = r.stdout.indexOf('install: node:');
+    const unitsAt = r.stdout.indexOf('install: units:');
+    expect(nodeAt, 'no node line').toBeGreaterThanOrEqual(0);
+    expect(unitsAt, `no units line; stderr: ${r.stderr}`).toBeGreaterThanOrEqual(0);
+    expect(nodeAt).toBeLessThan(unitsAt);
   });
 
   it('is idempotent: a second run leaves the same links and the same fragment, and no temp sibling', () => {
