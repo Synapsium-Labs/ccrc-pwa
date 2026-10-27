@@ -309,9 +309,11 @@ describe('the optional routing row (routing slice 4, Task 6)', () => {
     const classSelect = await screen.findByLabelText('Class') as HTMLSelectElement;
     const labels = Array.from(classSelect.options).map((o) => o.textContent);
     expect(labels).toEqual([
-      'Coordinator row', 'Default',
+      'Automatic', 'Default',
       'Fable 5 — fable', 'Opus 5.5 — opus', 'Sonnet 5 — sonnet', 'Haiku 4.5 — haiku',
     ]);
+    // The unset option's title says who picks (T3a, D-6331).
+    expect(classSelect.options[0]).toHaveAttribute('title', 'The routing matrix picks the class');
   });
 
   it('a gpt operator sees the class word on a label that otherwise carries none of its own', async () => {
