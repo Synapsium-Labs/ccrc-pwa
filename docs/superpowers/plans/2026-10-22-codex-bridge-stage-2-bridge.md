@@ -1904,7 +1904,7 @@ follows only by the operator's ruling, and LiteLLM's removal is Stage 4.
 
 Every entry carries the number the controller issued (D-6410 to D-6431 at plan time, D-6804 to D-6839 for wave 1,
 D-6862 to D-6907 and D-6921 for wave 2, D-6944 to D-6963 for wave 3, D-6994 to D-6998 for the follow-up to the
-suite's macOS failures, D-7083 to D-7089, D-7093 and D-7094 for what the first live step and the flip measured). A further
+suite's macOS failures, D-7083 to D-7089, D-7093, D-7094, D-7119 and D-7120 for what the first live step, the flip and the rollout measured). A further
 departure found while executing is written `D-TBD-<slug>` and named in the task's report.
 
 ### D-6410 — `end_turn:false` is continued upstream, never `pause_turn`
@@ -3955,3 +3955,62 @@ departure found while executing is written `D-TBD-<slug>` and named in the task'
   read them, and a request carrying the blocks is invisible exactly as D-7093 says. A block type Claude Code adds
   later is counted under its own `<type>-block` name and named by the doctor as drift, which is the intent. Counting
   adds names to `requestField`, bounded by `stats.NAMES_MAX` like every family, and changes no outcome.
+
+### D-7119 — the backend's `keepalive` event is explained
+
+- **Departs from:** `known.py`'s `KNOWN["eventType"]`, which held the reducer's ignored events and the two Codex skips
+  only, and D-7088's list of what the answers showed: step 2's five short requests carried no `keepalive`, which
+  appeared only on real traffic after the flip (4 in the first 471 message requests on lane-b, counted by name in
+  `bridge.stats.json`, and named by the doctor's `codex` WARN once #1673 rolled out, D-7120).
+- **What changed:** `keepalive` joins `KNOWN["eventType"]` through a set of its own, `_BACKEND_EVENTS`
+  (`ccd/codexbridge/known.py:55-62`, joined at :73), beside `_CODEX_SKIPPED_EVENTS`; its comment says what the event
+  is and why nothing needs to read it. Nothing else changes: the bridge already reads nothing from the event
+  (`reducer.Reducer.feed` reaches its last arm and only names it, `ccd/codexbridge/reducer.py:247-248`), and its
+  arrival already resets the bridge's idle bound like any parsed event (`server.py#_Request._reduce` sets
+  `last_event` for each, `ccd/codexbridge/server.py:821-822`, against `backend.IDLE_TIMEOUT_S` at :814 and :837).
+  Upstream, re-read at openai/codex `rust-v0.164.0` (`codex-rs/codex-api/src/sse/responses.rs`):
+  `process_responses_event` has no arm for `keepalive`, so it falls to the default arm, which only `debug!`-logs
+  "unhandled responses event" and returns nothing; and `process_sse_with_treatment` bounds every wait with
+  `timeout(idle_timeout, stream.next())`, so any event, a keepalive included, resets Codex's idle timeout too. A code
+  search of openai/codex for `keepalive` finds only websocket, relay and MCP keepalives, nothing on the Responses
+  route. Pins, in `server/test/codex-bridge-count-stats.test.ts`: :262 counts `keepalive` beside the fixture event
+  `response.fx_new_event` (the positive control) and expects both counted and `unexplained.eventType` to hold only the
+  fixture name; :335 pins `keepalive` in the `known` op's `eventType`. Row: `_BACKEND_EVENTS` emptied, the :262 case
+  reds (`expected [ Array(2) ] to deeply equal [ 'response.fx_new_event' ]`); restored from a copy, sha256 compared OK.
+- **Why:** The 7-day watch's last criterion is no unexplained name in the doctor's WARN beyond the two tool-change betas
+  (D-7093). `keepalive` is a heartbeat that neither Codex nor the bridge reads, so naming it as drift every day would
+  only hide a real new name behind it.
+- **Cost if wrong:** If a future backend gives `keepalive` a payload that matters, the bridge still reads nothing from
+  it and the doctor no longer names it. The name's count still moves in the stats file's `names.eventType`, so a
+  change in how often it arrives stays readable there.
+
+### D-7120 — the rollout of #1673, as measured
+
+- **Departs from:** D-7089's and D-7093's expectation that after the rollout the doctor's `codex` check names only the
+  two tool-change betas: it named a third, `eventType:keepalive`, which D-7119 explains. And it records what a rollout
+  that changes `ccd/codexbridge/` costs a busy direct lane, which no runbook step said: the update restarts the bridge
+  onto the new tree, and the restart's drain cut one in-flight request.
+- **What changed:** Nothing in the bridge. #1673 (D-7083 to D-7089, D-7093, D-7094) merged at 09:23:19Z on
+  2026-10-27, prerelease v0.0.754. The operator moved the fleet box from the PWA to v0.0.755, which contains it:
+  - the update: its report reads started 10:05:00Z, done 10:06:26Z. It read the bridge stale (the bridge's digest
+    covers every `ccd/codexbridge/*.py`), and lane-b's bridge unit restarted onto the new tree at 10:05:39Z, with no
+    restart since;
+  - the drain: the restart's drain cut ONE in-flight request, counted `drain-cut: 1` in `outcomes` (D-6835's count);
+  - the outcomes since the flip (06:26:05Z), at the stats file's write of 10:33:37Z: 468 `2xx`, 2 `5xx`, 8
+    `compactionRequests`, 35 `countTokens` and 1 `drain-cut`; auth `ok`, mode `direct`. Both 5xx came before the
+    rollout: one upstream `server_is_overloaded` near 08:22Z and one `idle-timeout` (the bridge's own idle bound) near
+    09:10Z. Neither is a credential failure, so neither is the watch's at-once flip trigger;
+  - the doctor: `ccrc doctor` exited 0 with no FAIL. Its `codex` check WARNs "the bridge met 3 name(s) it does not
+    know": `betaValue:inline-tools-2026-09-15` and `betaValue:mid-conversation-tool-changes-2026-07-01` (expected,
+    D-7093) and `eventType:keepalive`, seen 4 times (D-7119). The 13 header names and 7 betas D-7083 and D-7093
+    explain are gone from it;
+  - D-7094's first reading: by 10:33:37Z no `requestField:*-block` and no `*tool_addition-block.*` name was counted,
+    so no request since the restart carried a `tool_addition` or `tool_removal` block. Since the flip the
+    `inline-tools` beta rode 172 of the 471 message requests and `mid-conversation-tool-changes` all 471.
+- **Why:** The watch reads against the build the box runs. From 10:05:39Z that build explains the headers and seven
+  betas and counts the dropped system-entry blocks, so its drift row is the watch's reading from here on.
+- **Cost if wrong:** Zero blocks in the first window, about half an hour of traffic, is not evidence that Claude Code
+  never sends them: the watch keeps reading `names.requestField` for them to its end. One drain-cut is one request
+  on one restart; a busier lane or a longer response at the restart could cut more, each answered 503 or cut short
+  and left to Claude Code's retry. And the two 5xx are counts with their codes, not a rate: the watch compares the
+  week's 5xx rate against lane-b's `litellm` baseline, not these two.
