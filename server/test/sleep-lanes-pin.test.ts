@@ -1521,3 +1521,142 @@ function laneFieldRows(p: LanePasses): ReadonlyArray<readonly [string, () => Pro
 describe('C4d: one row per SLEEP_LANES field, through the old passes (stopDonePass, hibernatePass)', () => {
   it.each(laneFieldRows(OLD_PASSES))('%s', async (_n, run) => { await run(); });
 });
+
+// ── C4d: the one executor, sleepPass and sleepAct over SLEEP_LANES ───────────────────────────────────────────────────
+// APPENDED by C4d's red commit: the same field rows, the act-time rows and an old-against-new comparison, driving
+// `sleepPass` directly with each lane row. Every lane row value is C4a's measured one; no row merges with the other's.
+
+import { IDLE_HOURS_LANE, RUN_DONE_LANE, SLEEP_LANES, sleepPass } from '../src/sleepLane.js';
+
+const NEW_PASSES: LanePasses = {
+  runDone: (deps, mem, sessions, records, names) => sleepPass(RUN_DONE_LANE, deps, mem, sessions, records, names),
+  idleHours: (deps, mem, sessions, records, names) => sleepPass(IDLE_HOURS_LANE, deps, mem, sessions, records, names),
+};
+
+describe('C4d: one row per SLEEP_LANES field, through sleepPass', () => {
+  it.each(laneFieldRows(NEW_PASSES))('%s', async (_n, run) => { await run(); });
+
+  it('SLEEP_LANES holds one row per policy, in today\'s order, each carrying C4a\'s measured values', () => {
+    expect(SLEEP_LANES.map((l) => l.policy.name)).toEqual([...SLEEP_POLICY_NAMES]);
+    expect([RUN_DONE_LANE.policy, IDLE_HOURS_LANE.policy]).toEqual([RUN_DONE_POLICY, IDLE_HOURS_POLICY]);
+    const facts = (l: (typeof SLEEP_LANES)[number]) => ({
+      kill: l.kill, arming: l.arming, cadence: l.cadence, population: l.population, caps: l.caps, acts: l.acts,
+      retry: { ...l.retry, of: undefined }, store: l.store, unarmed: l.unarmed, verb: l.verb, holdOk: l.holdOk, actor: l.actor,
+      clock: l.clock,
+    });
+    expect(facts(RUN_DONE_LANE)).toEqual({
+      kill: [STOP_DONE_DISABLED_MARKER, RECLAIM_PAUSE_MARKER, HIBERNATE_DISABLED_MARKER], arming: null, cadence: 'sleepRunDone',
+      population: 'dispatched-children-by-id', caps: { acts: 3, measures: 6, past: 'stop' }, acts: 'after-the-loop',
+      retry: { kind: 'hold-off', ms: STOP_DONE_RETRY_MS, of: undefined }, store: 'needed', unarmed: 'nothing',
+      verb: 'holds-before-measure', holdOk: true, actor: STOP_DONE_ACTOR, clock: 'per-pass',
+    });
+    expect(facts(IDLE_HOURS_LANE)).toEqual({
+      kill: [HIBERNATE_DISABLED_MARKER], arming: HIBERNATE_LIVE_MARKER, cadence: 'sleepIdleHours',
+      population: 'recorded-rows-in-frame-order', caps: { acts: 3, measures: null, past: 'wait' }, acts: 'inline',
+      retry: { kind: 'ask-next-pass', lineMs: HIBERNATE_ACT_LINE_MS, shadowLineMs: HIBERNATE_SHADOW_LINE_MS, of: undefined },
+      store: 'optional', unarmed: 'shadow', verb: 'arms-and-asked-at-act', holdOk: false, actor: HIBERNATE_SWEEP_ACTOR,
+      clock: 'per-row',
+    });
+  });
+});
+
+describe('C4d: the act-time rows, through sleepPass', () => {
+  it.each(WINDOW)('run-done: %s between the pass and the act holds', async (_n, between, reason) => {
+    const w = world();
+    w.beforeAct = () => between(w);
+    expect(await NEW_PASSES.runDone(sdDeps(w), sdMem(), [row(ID)], [rec(ID)], [])).toEqual([{ id: ID, kind: 'held-at-act', verdict: { act: 'hold', reason } }]);
+    expect(w.argv).toEqual([]);
+  });
+
+  it.each(WINDOW)('idle-hours: %s between the pass and the act holds', async (_n, between, reason) => {
+    const w = world();
+    w.beforeAct = () => between(w);
+    expect(await NEW_PASSES.idleHours(hbDeps(w), hbMem(), [row(ID)], [rec(ID)], [HIBERNATE_LIVE_MARKER]))
+      .toEqual([{ id: ID, verdict: { act: 'hibernate', idleMs: 7 * HOUR }, act: { kind: 'held-at-act', verdict: { act: 'hold', reason } } }]);
+    expect(w.argv).toEqual([]);
+  });
+
+  it('the roster falls back to the tick\'s read only when the re-read row has none (both lanes)', async () => {
+    for (const [reread, expected] of [[undefined, 'roster'], [[], 'acted']] as const) {
+      const sdw = world();
+      const tick = row(ID);
+      if (reread !== undefined) sdw.atAct.set(ID, { subagents: reread });
+      sdw.beforeAct = () => { (tick as unknown as { subagents: unknown }).subagents = [{ id: 'agent-a' }]; };
+      const out = await NEW_PASSES.runDone(sdDeps(sdw), sdMem(), [tick], [rec(ID)], []);
+      expect(out[0]!.kind === 'held-at-act' ? word(out[0]!.verdict) : 'acted', `run-done ${String(reread)}`).toBe(expected);
+      const hbw = world();
+      const htick = row(ID);
+      if (reread !== undefined) hbw.atAct.set(ID, { subagents: reread });
+      hbw.beforeAct = () => { (htick as unknown as { subagents: unknown }).subagents = [{ id: 'agent-a' }]; };
+      const act = (await NEW_PASSES.idleHours(hbDeps(hbw), hbMem(), [htick], [rec(ID)], [HIBERNATE_LIVE_MARKER]))[0]!.act!;
+      expect(act.kind === 'held-at-act' ? word(act.verdict) : 'acted', `idle-hours ${String(reread)}`).toBe(expected);
+    }
+  });
+
+  it('the serialiser wraps the session\'s queue, and every re-read is inside them (both lanes)', async () => {
+    const sdw = world();
+    await NEW_PASSES.runDone(sdDeps(sdw), sdMem(), [row(ID)], [rec(ID)], []);
+    expect(sdw.events.slice(sdw.events.indexOf('serial'))).toEqual(['serial', `queue ${ID}`, `word ${ID}`, `turn ${ID}`, `mark ${ID}`, `ccd ${ID}`]);
+    const hbw = world();
+    await NEW_PASSES.idleHours(hbDeps(hbw), hbMem(), [row(ID)], [rec(ID)], [HIBERNATE_LIVE_MARKER]);
+    expect(hbw.events.slice(hbw.events.indexOf('serial'))).toEqual(['serial', `queue ${ID}`, `word ${ID}`, `mark ${ID}`, `ccd ${ID}`]);
+  });
+
+  it('a call that never ran is a failure, never a busy refusal read off its stderr (D-6840; both lanes)', async () => {
+    const never: CcdResult = { ran: false, ok: false, stdout: '', stderr: 'ccd: session-busy: attached', killed: false, signal: null } as CcdResult;
+    const sdw = world();
+    sdw.answer = () => never;
+    expect(await NEW_PASSES.runDone(sdDeps(sdw), sdMem(), [row(ID)], [rec(ID)], []))
+      .toEqual([{ id: ID, kind: 'failed', detail: 'ccd: session-busy: attached' }]);
+    const hbw = world();
+    hbw.answer = () => never;
+    expect((await NEW_PASSES.idleHours(hbDeps(hbw), hbMem(), [row(ID)], [rec(ID)], [HIBERNATE_LIVE_MARKER]))[0]!.act)
+      .toEqual({ kind: 'failed', detail: 'ccd: session-busy: attached' });
+  });
+});
+
+/** One scenario's every observable: the outcomes, the argv, the feed, the lines, the warnings and the event order. */
+async function observed<O>(setup: (w: World) => void, pass: (w: World) => Promise<O>) {
+  const w = world();
+  setup(w);
+  const warns: string[] = [];
+  const spy = vi.spyOn(console, 'warn').mockImplementation((l: unknown) => { warns.push(String(l)); });
+  try {
+    const out = await pass(w);
+    return { out, argv: w.argv, feed: w.feed, lines: w.lines, warns, events: w.events };
+  } finally {
+    spy.mockRestore();
+  }
+}
+
+const SCENARIOS: ReadonlyArray<readonly [string, (w: World) => void, string[], string[]]> = [
+  ['clear', () => undefined, [ID], []],
+  ['five candidates', () => undefined, ids(5), []],
+  ['eight busy turns and words', (w) => { for (const id of ids(8)) { w.turns.set(id, 'busy'); w.words.set(id, 'busy'); } }, ids(8), []],
+  ['busy refusal', (w) => { w.answer = () => BUSY; }, ids(2), []],
+  ['refusal', (w) => { w.answer = () => REFUSED; }, ids(2), []],
+  ['thrown runner', (w) => { w.answer = () => { throw new Error('boom'); }; }, ids(2), []],
+  ['mail on one', (w) => { w.mail.add(ids(3)[1]!); }, ids(3), []],
+  ['a viewer opened at the act', (w) => { w.beforeAct = () => { w.viewers.add(ID); }; }, [ID], []],
+  ['no serialiser', (w) => { w.serial = false; }, [ID], []],
+  ['no verb on the box', (w) => { w.verbs.splice(0, w.verbs.length, ACTOR_FLAGS_CAP); }, [ID], []],
+  ['reclaim-paused', () => undefined, [ID], [RECLAIM_PAUSE_MARKER]],
+  ['opted out', () => undefined, [ID], [`${ID}.${NO_HIBERNATE_SUFFIX}`]],
+];
+
+describe('C4d: sleepPass equals the old pass on every observable, scenario by scenario', () => {
+  it.each(SCENARIOS)('run-done: %s', async (_n, setup, list, names) => {
+    const run = (p: LanePasses) => (w: World) => p.runDone(sdDeps(w), sdMem(), list.map((id) => row(id)), list.map(rec), names);
+    expect(await observed(setup, run(NEW_PASSES))).toEqual(await observed(setup, run(OLD_PASSES)));
+  });
+
+  it.each(SCENARIOS)('idle-hours (armed): %s', async (_n, setup, list, names) => {
+    const run = (p: LanePasses) => (w: World) => p.idleHours(hbDeps(w), hbMem(), list.map((id) => row(id)), list.map(rec), [HIBERNATE_LIVE_MARKER, ...names]);
+    expect(await observed(setup, run(NEW_PASSES))).toEqual(await observed(setup, run(OLD_PASSES)));
+  });
+
+  it.each(SCENARIOS)('idle-hours (shadow): %s', async (_n, setup, list, names) => {
+    const run = (p: LanePasses) => (w: World) => p.idleHours(hbDeps(w), hbMem(), list.map((id) => row(id)), list.map(rec), names);
+    expect(await observed(setup, run(NEW_PASSES))).toEqual(await observed(setup, run(OLD_PASSES)));
+  });
+});
