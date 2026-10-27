@@ -123,6 +123,11 @@
      measures (`rowFit`) agree. auto-fill, not auto-fit, so the tracks keep a card's width when the last line holds
      fewer cards than the line. */
   .shell-accounts .accounts-strip {
+    /* `--lane-card-min` is declared here, with no value of its own (`initial`), and the strip's inline style always
+       outranks it with `LANE_CARD_MIN`: the figure stays written once, in stripFold.ts, and the token is still one
+       a stylesheet defines (css-vars.test.ts). Without the inline style the grid's columns are invalid and the cards
+       stack, a visible failure rather than a second figure. */
+    --lane-card-min: initial;
     position: relative;
     grid-template-columns: repeat(auto-fill, minmax(var(--lane-card-min), 1fr));
     gap: var(--sp-2);
