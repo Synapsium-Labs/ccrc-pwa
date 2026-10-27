@@ -6,9 +6,16 @@
 // line, the strip's lane cards sit in two columns, the `+ New` clears the last card once the list is scrolled to its
 // end and sits above the home indicator, a toast's host sits above it, and the page does not scroll sideways. At 900,
 // 1280 and 1920 no `+ New` is mounted (the bar's button is the door). Instrument's phone keeps today's head and round
-// `+` (S11). With seventeen lanes at 360 and 390 the cards run most free first, every countdown a card prints is seen
-// (a client rect inside the card, not covered), a long label stays inside its card with its whole name in the `title`,
-// and All accounts has a row of its own under the cards (T2c, D-6329; R18 F4, F5).
+// `+` (S11). With seventeen lanes at 360 and 390, strip expanded, the cards run most free first, every countdown a card
+// prints is seen (a client rect inside the card, not covered), a long label stays inside its card with its whole name in
+// the `title`, and All accounts has a row of its own under the cards (T2c, D-6329; R18 F4, F5).
+//
+// THE FOLD (desktop polish S5b, D-6530). The strip folds by default: with the same seventeen lanes (`test/seventeenLanes.ts`,
+// the fixture every strip suite shares) a phone shows its freest four and one control, the control and All accounts
+// share one row, nothing scrolls sideways, and the first session row sits at most 440 px down at 390x844 (it sat at 805
+// with the strip expanded, the figure the expanded case pins within 4 px). The four cards are two rows of two below 700
+// and one row of four from 700 (699, 700 and 899 are measured), and after "Show fewer" the control holds focus and is on
+// screen. A case that counts every lane seeds the stored choice expanded (`seedStripExpanded`).
 //
 // Run: `( cd pwa && CCRC_CHROME=<a Chrome or Chromium binary> ./node_modules/.bin/vitest run --config vitest.browser.config.ts browser/refined-phone.browser.test.ts )`.
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -199,7 +206,10 @@ function seventeen(): { fixture: AppFixture; cases: LaneCase[] } {
 }
 
 /** The lanes most free first, worked out here from the rule and not by the app's decider: by the fuller window, lowest
- *  first, ties in roster order; a lane never read and a lane signed out go last, in roster order. */
+ *  first; a lane never read and a lane signed out go last, in roster order. The shared fixture holds no exact tie on that
+ *  use, so the keys the app breaks one with (the binding window's reset, the other window's use, then the roster;
+ *  lanes-tie-break-soonest-reset) never decide here, and the roster order stands in for them. lanes-row.browser.test.ts's
+ *  fixture holds a tie and writes the keys out. */
 function mostFreeFirst(cases: readonly LaneCase[]): LaneCase[] {
   const used = (c: LaneCase): number | null => {
     const known = [c.acct.five, c.acct.seven].filter((p): p is number => typeof p === 'number');
@@ -284,5 +294,150 @@ describe("with 17 lanes the phone's strip keeps every card readable", () => {
         }
       }, 60_000);
     }
+  }
+});
+
+// The fold's words for the fixture: 13 lanes hidden, of which `w1` has a lapsed sign-in and `w16` sits at its 5h limit.
+const FOLDED_WORDS = '+13 more · 1 sign-in expired · 1 rate-limited';
+
+/** Open the app with the 17-lane fixture, folded unless `expanded`, and wait for the strip's cards (`cards` of them), its
+ *  control and a session row. */
+async function openFolded(view: AppView, cards: number, expanded = false): Promise<Awaited<ReturnType<typeof openApp>> & { order: string[] }> {
+  const { fixture, cases } = seventeen();
+  const opened = await openApp(browser!, view, fixture);
+  if (expanded) await seedStripExpanded(opened.ctx);
+  await opened.page.goto(server!.origin + '/');
+  await opened.page.waitForFunction((n) => document.querySelectorAll('.accounts-strip .account-gauge').length === n
+    && document.querySelector('.accounts-end [aria-expanded]') !== null && document.querySelector('.sess-line') !== null, cards, { timeout: 20_000 });
+  await opened.page.waitForTimeout(300);
+  return { ...opened, order: mostFreeFirst(cases).map((c) => c.label) };
+}
+
+const FOLDED_VIEWS: AppView[] = [
+  ...THEMES.flatMap((theme) => [360, 390].map((width) => ({ skin: REFINED, theme, width }))),
+  { skin: INSTRUMENT, theme: PHOSPHOR, width: 390 },
+];
+
+describe('the folded phone strip is four cards and one control', () => {
+  for (const view of FOLDED_VIEWS) {
+    it(`folded, with 17 lanes at 360 and 390, four cards and one control at least 44 px tall, nothing scrolls sideways, and the first session row sits at most 440 px down at 390×844: ${named(view)}`, async () => {
+      const { ctx, page, errors, order } = await openFolded(view, 4);
+      try {
+        const found = await page.evaluate(({ expected, expectedWords }) => {
+          const out: string[] = [];
+          const strip = document.querySelector<HTMLElement>('.accounts-strip')!;
+          const cards = [...strip.querySelectorAll<HTMLElement>('.account-gauge')];
+          const names = cards.map((c) => c.querySelector('.account-gauge-label')?.textContent ?? '');
+          if (names.join('|') !== expected.join('|')) out.push(`the cards read [${names}], not the freest four [${expected}]`);
+          // Mounted, never CSS-hidden: the whole document holds those four cards and no more.
+          const all = document.querySelectorAll('.account-gauge').length;
+          if (all !== 4) out.push(`${all} cards are mounted, not 4`);
+          const lefts = new Set(cards.map((c) => Math.round(c.getBoundingClientRect().left)));
+          if (lefts.size !== 2) out.push(`the cards sit in ${lefts.size} columns`);
+          const vw = window.innerWidth;
+          for (const [i, c] of cards.entries()) {
+            const r = c.getBoundingClientRect();
+            if (r.left < -0.5 || r.right > vw + 0.5) out.push(`${names[i]}'s card runs past the viewport`);
+          }
+          const end = strip.querySelector<HTMLElement>('.accounts-end')!;
+          const control = end.querySelector<HTMLElement>('[aria-expanded]');
+          const door = end.querySelector<HTMLElement>('[data-command="go-accounts"]');
+          if (control === null || door === null) return [...out, 'the end cell lacks the control or All accounts'];
+          const cr = control.getBoundingClientRect();
+          const dr = door.getBoundingClientRect();
+          const lowest = Math.max(...cards.map((c) => c.getBoundingClientRect().bottom));
+          if (control.getAttribute('aria-expanded') !== 'false') out.push(`aria-expanded is ${control.getAttribute('aria-expanded')}`);
+          if (control.getAttribute('aria-controls') !== strip.id || strip.id === '') out.push('aria-controls does not name the cards\' group');
+          if (control.hasAttribute('data-command') || control.hasAttribute('data-action')) out.push('the control is a door');
+          if (control.textContent !== expectedWords) out.push(`the control reads "${control.textContent}"`);
+          if (cr.height < 43.5) out.push(`the control is ${Math.round(cr.height)} tall`);
+          if (dr.height < 43.5) out.push(`All accounts is ${Math.round(dr.height)} tall`);
+          if (cr.top < lowest - 0.5) out.push(`the control (top ${cr.top}) is not under the cards (bottom ${lowest})`);
+          if (Math.abs(cr.top - dr.top) > 1) out.push(`the control (top ${cr.top}) and All accounts (top ${dr.top}) are not on one row`);
+          if (cr.left < -0.5 || dr.right > vw + 0.5 || cr.right > dr.left + 0.5) out.push(`the end row is cut or overlaps (${cr.left}..${cr.right}, ${dr.left}..${dr.right} in ${vw})`);
+          if (control.scrollWidth > control.clientWidth + 0.5) out.push("the control's words are cut");
+          if (document.documentElement.scrollWidth > vw + 0.5) out.push(`the page scrolls sideways (${document.documentElement.scrollWidth} > ${vw})`);
+          // The first session row, in document order, at Refined's 390×844 (Instrument's head is its own, so only its cards
+          // and control are held here).
+          const sess = document.querySelector('.sess-line')!.getBoundingClientRect().top;
+          if (strip.closest('.ref-phone-head') !== null && vw === 390 && sess > 440) out.push(`the first session row is ${Math.round(sess)} px down, not at most 440`);
+          return out;
+        }, { expected: order.slice(0, 4), expectedWords: FOLDED_WORDS });
+        expect(found).toEqual([]);
+        expect(errors).toEqual([]);
+      } finally {
+        await ctx.close();
+      }
+    }, 60_000);
+  }
+
+  it('expanded, with 17 lanes at 390×844 the first session row sits where the expanded strip put it (805, within 4 px)', async () => {
+    const { ctx, page, errors } = await openFolded({ skin: REFINED, theme: PHOSPHOR, width: 390 }, 17, true);
+    try {
+      const found = await page.evaluate(() => ({
+        top: document.querySelector('.sess-line')!.getBoundingClientRect().top,
+        words: document.querySelector('.accounts-end [aria-expanded]')?.textContent,
+        expanded: document.querySelector('.accounts-end [aria-expanded]')?.getAttribute('aria-expanded'),
+      }));
+      expect(found.words).toBe('Show fewer');
+      expect(found.expanded).toBe('true');
+      expect(Math.abs(found.top - 805), `the first session row is at ${found.top}`).toBeLessThanOrEqual(4);
+      expect(errors).toEqual([]);
+    } finally {
+      await ctx.close();
+    }
+  }, 60_000);
+
+  for (const theme of THEMES) {
+    for (const [width, rows] of [[699, 2], [700, 1], [899, 1]] as const) {
+      it(`at 699 the folded strip is two rows of two, and at 700 and 899 one row of four: ${theme}, ${width}px`, async () => {
+        const { ctx, page, errors } = await openFolded({ skin: REFINED, theme, width }, 4);
+        try {
+          const found = await page.evaluate(() => {
+            const cards = [...document.querySelectorAll<HTMLElement>('.accounts-strip .account-gauge')];
+            const distinct = (xs: number[]): number => new Set(xs.map((x) => Math.round(x))).size;
+            const boxes = cards.map((c) => c.getBoundingClientRect());
+            return { count: cards.length, rows: distinct(boxes.map((b) => b.top)), columns: distinct(boxes.map((b) => b.left)), sideways: document.documentElement.scrollWidth > innerWidth + 0.5 };
+          });
+          expect(found).toEqual({ count: 4, rows, columns: 4 / rows, sideways: false });
+          expect(errors).toEqual([]);
+        } finally {
+          await ctx.close();
+        }
+      }, 60_000);
+    }
+  }
+
+  for (const view of FOLDED_VIEWS.filter((v) => v.theme === PHOSPHOR)) {
+    it(`after Show fewer the control is focused and on screen: ${named(view)}`, async () => {
+      const { ctx, page, errors } = await openFolded(view, 17, true);
+      try {
+        // Scroll the page until the control sits near the top of the screen, as it does after a long look down the list,
+        // then fold with a real click.
+        await page.evaluate(() => {
+          const doc = document.scrollingElement!;
+          const top = document.querySelector('.accounts-end [aria-expanded]')!.getBoundingClientRect().top + doc.scrollTop;
+          doc.scrollTo(0, Math.max(0, top - 6));
+        });
+        await page.waitForTimeout(150);
+        await page.locator('.accounts-end [aria-expanded]').click();
+        await page.waitForFunction(() => document.querySelectorAll('.accounts-strip .account-gauge').length === 4, undefined, { timeout: 10_000 });
+        await page.waitForTimeout(400); // the scroll into view settles
+        const found = await page.evaluate(() => {
+          const control = document.querySelector<HTMLElement>('.accounts-end [aria-expanded]')!;
+          const r = control.getBoundingClientRect();
+          const hit = document.elementFromPoint((r.left + r.right) / 2, (r.top + r.bottom) / 2);
+          return {
+            expanded: control.getAttribute('aria-expanded'), focused: document.activeElement === control,
+            onScreen: r.top >= -0.5 && r.bottom <= window.innerHeight + 0.5 && r.left >= -0.5 && r.right <= window.innerWidth + 0.5,
+            uncovered: hit !== null && control.contains(hit),
+          };
+        });
+        expect(found).toEqual({ expanded: 'false', focused: true, onScreen: true, uncovered: true });
+        expect(errors).toEqual([]);
+      } finally {
+        await ctx.close();
+      }
+    }, 60_000);
   }
 });
