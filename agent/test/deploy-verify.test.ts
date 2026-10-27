@@ -37,7 +37,7 @@
 import { describe, it, expect } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { chmodSync, copyFileSync, cpSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, copyFileSync, cpSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { bodyDigest, markGenerated } from '../../shared/mark.mjs';
@@ -355,13 +355,33 @@ const plantNodeStep = (src: string, pkg: 'agent' | 'server', floor?: string): vo
   writeFileSync(join(src, pkg, 'package.json'),
     floor === undefined ? real : JSON.stringify({ name: pkg, engines: { node: `>=${floor}` } }));
 };
-/** A fixture HOME with no nvm of its own, so the choice is this runner's PATH node (which carries npm and npx), and
+/** A fixture HOME with no nvm of its own, so the choice is the fixture PATH node below (wrappers to this runner's node, npm and npx), and
  *  the contained `systemctl` from contain-path.setup.ts answers the publish step's manager probe with a refusal. */
 const nodeStepEnv = (home: string): NodeJS.ProcessEnv => {
-  const env: NodeJS.ProcessEnv = { ...process.env, HOME: home };
+  // The PATH node is a fixture directory of wrapper SCRIPTS (never symlinks) to this runner's node, npm and npx, put
+  // first; the runner's own node directory and any nvm directory are dropped from the inherited PATH, so the step
+  // can neither choose nor link the real ones.
+  const realDir = path.dirname(process.execPath);
+  const fixDir = join(home, '.fixture-node');
+  mkdirSync(fixDir, { recursive: true });
+  for (const b of ['node', 'npm', 'npx']) {
+    writeFileSync(join(fixDir, b), `#!/bin/sh\nexec '${join(realDir, b).replace(/'/g, `'\\''`)}' "$@"\n`);
+    chmodSync(join(fixDir, b), 0o755);
+  }
+  const inherited = (process.env.PATH ?? '').split(':').filter((d) => d && d !== realDir && !/(^|\/)\.nvm(\/|$)/.test(d));
+  const env: NodeJS.ProcessEnv = { ...process.env, HOME: home, PATH: [fixDir, ...inherited].join(':') };
   delete env.NVM_DIR;
   delete env.NODE_NO_INSTALL;
   return env;
+};
+/** Every published `node-bin/*` link resolves inside the fixture HOME: a link to the runner's real npm is the hazard
+ *  of 2026-10-26 (a fixture write through such a link overwrote the operator's real npm). */
+const expectNodeLinksContained = (home: string): void => {
+  const root = realpathSync(home) + path.sep;
+  for (const b of ['node', 'npm', 'npx']) {
+    const link = join(home, '.local', 'libexec', 'ccrc', 'node-bin', b);
+    expect(realpathSync(link).startsWith(root), `${link} resolves outside the fixture HOME: ${realpathSync(link)}`).toBe(true);
+  }
 };
 
 describe('the verification is actually wired into the deploy, and can observe a restart', () => {
@@ -1054,6 +1074,7 @@ describe('the verification is actually wired into the deploy, and can observe a 
     const run = (pre: string): { status: number | null } =>
       spawnSync('bash', ['-c', `${pre}exec bash "${scriptPath}"`], { env: nodeStepEnv(home) });
     expect(run('').status, 'the extracted unit-install chain did not succeed against a fixture HOME').toBe(0);
+    expectNodeLinksContained(home);
 
     const unitDir = join(home, '.config', 'systemd', 'user');
     // Every artifact the by-name list above claims, present on disk with the
@@ -1202,6 +1223,7 @@ describe('the verification is actually wired into the deploy, and can observe a 
       expect(r.status, `${l.name} did not succeed on a box whose PATH node qualifies: ${r.stderr}`).toBe(0);
       const link = join(ok.home, '.local', 'libexec', 'ccrc', 'node-bin', 'node');
       expect(lstatSync(link).isSymbolicLink(), `${l.name} never published node`).toBe(true);
+      expectNodeLinksContained(ok.home);
       expect(existsSync(join(ok.home, '.config', 'environment.d', '50-ccrc-node.conf'))).toBe(true);
       expect(r.stderr, `${l.name} swallowed the publish step's note`).toContain('deploy: note — no user manager answers');
 
