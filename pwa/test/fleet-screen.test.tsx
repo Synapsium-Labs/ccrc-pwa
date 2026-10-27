@@ -340,7 +340,7 @@ describe('FleetScreen', () => {
 
   // Fix round 1, Task 4, finding 5: MailBadge is D-2's ENTIRE remedy — the
   // only door to /mail — and nothing pinned it at its mount point. Deleting
-  // `<MailBadge unread={unreadMail} />` from `.fleet-head-right` (and its
+  // `<MailBadge waiting={waiting} />` from `.fleet-head-right` (and its
   // import) left the full 1253-test suite green, because the door is only
   // ever rendered standalone in mail-screen.test.tsx and tap-targets.test.tsx
   // — never inside the screen that hosts it. This is the AccountsStrip pair's
@@ -364,62 +364,52 @@ describe('FleetScreen', () => {
     expect(screen.getByRole('button', { name: /mail/i })).toHaveClass('mail-badge');
   });
 
-  // The `unreadMail` derivation (FleetScreen.tsx, beside `countLine`) was
-  // likewise untested: replacing it with a literal `0` (badge permanently
-  // silent) or with `feed.length` (badge ignores the watermark entirely)
-  // survived the full suite too. This seeds one record either side of a
-  // `FEED_ACK_KEY` ack and reads the count off the badge's own accessible
-  // name — the same `isUnseenAt` comparison the bucket chips use.
-  it("the mail door's count is the feed filtered through the SAME isUnseenAt comparison the bucket chips use", () => {
+  // The mail door's count (FleetScreen.tsx, beside `countLine`) says what waits on the operator, never the unread mail
+  // (T2d, D-6330): replacing `waitingOnYou` with the feed's unread count, or with a literal `0`, reds this. The rows'
+  // own unread mark, `raisesUnread` and the ack's strict `>`, is pinned on the rows in mail-screen.test.tsx.
+  it("the mail door counts the sessions waiting on the operator, never the unread mail", () => {
     const store = makeStore();
     renderFleet(<FleetScreen store={store} />);
     const stamp = Date.now();
     act(() => { ack(FEED_ACK_KEY, stamp); });
     seed(store, {
       conn: 'open',
-      sessions: [],
+      sessions: [
+        session({ id: 'claude:ask-a', bucket: 'attention' }),
+        session({ id: 'claude:ask-b', bucket: 'attention' }),
+        session({ id: 'claude:child', bucket: 'working', child: { kind: 'child', runId: 7 } }),
+      ],
       feed: [
-        { seq: 1, at: stamp - 60_000, kind: 'mail', sessionId: 'x', title: 'read already', body: '', runId: null },
-        { seq: 2, at: stamp + 60_000, kind: 'mail', sessionId: 'x', title: 'unread', body: '', runId: null },
+        { seq: 1, at: stamp + 60_000, kind: 'mail', sessionId: 'x', title: 'unread', body: '', runId: null },
+        { seq: 2, at: stamp + 60_001, kind: 'mail', sessionId: 'x', title: 'unread too', body: '', runId: null },
+        { seq: 3, at: stamp + 60_002, kind: 'mail', sessionId: 'x', title: 'unread as well', body: '', runId: null },
       ],
     });
-    expect(screen.getByRole('button', { name: /mail — 1 unread/i })).toBeInTheDocument();
+    // Before the first fleet frame the rows are the offline snapshot's, not a fact: the door says nothing waits.
+    expect(screen.getByRole('button', { name: /mail — nothing waiting for you/i })).toBeInTheDocument();
+    seed(store, { fleetFrameSeen: true });
+    expect(screen.getByRole('button', { name: /mail — 2 waiting for you/i })).toBeInTheDocument();
   });
 
-  // D-5431 (operator ruling 2026-10-18): an `interrupt` record stays in Mail but never raises the door's count, and
-  // ONLY that kind changes — the other record-only kinds (`coord`, `update`, `queue`, `nudge`) still count. The rows
-  // copy the server's own shape (`server/src/interruptlog.ts`: title `interrupt · <source>`, body
-  // `interruptEventBody`, no run), every one of them past the ack.
-  it("an interrupt record never raises the mail door's count; every other record-only kind still does (D-5431)", () => {
+  // The runs line says what it counts (T2d, D-6330): "N active" is the runs in `ACTIVE_RUN_STATES`, "N open" is what
+  // is left when none is active but some are open.
+  it('Runs · active counts dispatched, working and unknown only', () => {
     const store = makeStore();
     renderFleet(<FleetScreen store={store} />);
-    const stamp = Date.now();
-    act(() => { ack(FEED_ACK_KEY, stamp); });
-    const after = stamp + 60_000;
     seed(store, {
       conn: 'open',
-      sessions: [],
-      feed: [
-        { seq: 1, at: after, kind: 'interrupt', sessionId: 'proj-a-s1', title: 'interrupt · keycap', body: 'source=keycap outcome=sent', runId: null },
-        { seq: 2, at: after + 1, kind: 'interrupt', sessionId: 'proj-a-s1', title: 'interrupt · escape-key', body: 'source=escape-key outcome=not-busy', runId: null },
-        { seq: 3, at: after + 2, kind: 'interrupt', sessionId: 'proj-a-s1', title: 'interrupt · drawer-escape', body: 'source=drawer-escape outcome=sent', runId: null },
+      sessions: [session()],
+      runs: [
+        runRow({ id: 1, state: 'dispatched' }),
+        runRow({ id: 2, state: 'working' }),
+        runRow({ id: 3, state: 'unknown' }),
+        runRow({ id: 4, state: 'planned' }),
       ],
+      runsFrameSeen: true,
     });
-    expect(screen.getByRole('button', { name: /mail — nothing unread/i })).toBeInTheDocument();
-
-    seed(store, {
-      conn: 'open',
-      sessions: [],
-      feed: [
-        { seq: 1, at: after, kind: 'interrupt', sessionId: 'proj-a-s1', title: 'interrupt · keycap', body: 'source=keycap outcome=sent', runId: null },
-        { seq: 2, at: after + 1, kind: 'coord', sessionId: '', title: 'caps changed', body: 'workers 3 → 5, per day 12 → 12', runId: null },
-        { seq: 3, at: after + 2, kind: 'update', sessionId: '', title: 'update fleet: auto update to v0.0.10', body: 'auto update from v0.0.9 to v0.0.10', runId: null },
-        { seq: 4, at: after + 3, kind: 'queue', sessionId: 'proj-a-s1', title: 'dequeued proj-a-s1', body: 'PR #42 left the merge queue without landing', runId: null },
-        { seq: 5, at: after + 4, kind: 'nudge', sessionId: 'proj-a-s1', title: '↻ Nudging after idle compaction', body: 'Nudging with a "continue" prompt after an idle compaction left open tasks (compaction k1)', runId: null },
-        { seq: 6, at: after + 5, kind: 'mail', sessionId: 'proj-a-s1', title: 'unread', body: '', runId: null },
-      ],
-    });
-    expect(screen.getByRole('button', { name: /mail — 5 unread/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^Runs · 3 active$/ })).toHaveClass('fleet-runs-row');
+    seed(store, { runs: [runRow({ id: 4, state: 'planned' }), runRow({ id: 5, state: 'awaiting-review' })] });
+    expect(screen.getByRole('button', { name: /^Runs · 2 open$/ })).toHaveClass('fleet-runs-row');
   });
 
   it('renders notices as dismissible banners', () => {
