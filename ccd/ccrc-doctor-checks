@@ -6615,6 +6615,9 @@ _check_docs() {
 # `OnUnitActiveSec=`, and the direct one to ccgpt-usage.py's BRIDGE_FRESH_S.
 _DR_CODEX_USAGE_STALE_S=2700
 _DR_CODEX_USAGE_STALE_DIRECT_S=3600
+# The bridge's freshness window, ccgpt-usage.py's BRIDGE_FRESH_S: a bridge constant,
+# not a cadence, so it stays a literal (ccrc-doctor-codex.test.ts pins it there).
+_DR_CODEX_BRIDGE_FRESH_S=900
 
 _dr_codex_usage_box() {   # -> WARN findings, recorded; rc 2 if any, else 0; sets DR_CODEX_USAGE_PAIR and DR_CODEX_USAGE_BOX_NOTE
   local u rc=0
@@ -6686,7 +6689,9 @@ _dr_codex_usage() {   # <id> -> WARN findings for this lane, recorded; rc 2 if a
     local cycles cycles_rc=0
     cycles="$(_dr_cycles_s ccrc-codex-usage@.timer 3)" || cycles_rc=$?
     bound="$cycles"
-    if mode="$(_codex_lane_mode "$id" 2>/dev/null)" && [ "$mode" = direct ]; then bound="$_DR_CODEX_USAGE_STALE_DIRECT_S"; else mode=''; fi
+    if mode="$(_codex_lane_mode "$id" 2>/dev/null)" && [ "$mode" = direct ]; then
+      [ "$cycles_rc" -ne 0 ] || bound=$(( cycles + _DR_CODEX_BRIDGE_FRESH_S ))
+    else mode=''; fi
     row="$HOME/.cc-limits/$id.json"
     if ! now="$(date +%s 2>/dev/null)" || ! [[ "$now" =~ ^[0-9]+$ ]]; then
       _dr_cx_warn "$id: this box's \`date\` cannot answer +%s, so the age of this lane's usage row cannot be measured" \
