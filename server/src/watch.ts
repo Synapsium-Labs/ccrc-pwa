@@ -79,6 +79,8 @@ import { TmpCensusBeat } from './tmpSweepLane.js';
 import { DiskAlarmLane } from './diskAlarmLane.js';
 import type { DiskHealth } from '../../shared/disk.js';
 import { DelegationDurability, type DelegationDurableBatch } from './coord/delegation-checkpoint.js';
+import { DELEGATION_RETENTION_FLOOR_MS } from './coord/delegation-journal.js';
+import { delegationCompactionLine } from './coord/delegation-compaction.js';
 import {
   DelegationIngestError, delegationBucketDurabilityOf, delegationBucketUtcHour, ingestAndApplyDelegationBucket, readDelegationBucket,
   unreadableDelegationBucketResult, type DelegationBucketDurability, type DelegationBucketResult,
@@ -10060,12 +10062,13 @@ export const DELEGATION_PASS_SLOW_PREFIX = 'ccrc-server: delegation pass slow:';
 export const DELEGATION_PASS_SLOW_KEYS = [
   'block', 'cut', 'total', 'other',
   'blockCpu', 'stallMax', 'stallP99', 'cpuThread',
-  'noteSessions', 'open', 'recover', 'root', 'load', 'expire', 'owners', 'flush', 'upkeep', 'prune', 'reconcile',
+  'noteSessions', 'open', 'recover', 'root', 'load', 'expire', 'owners', 'flush', 'upkeep', 'prune', 'compact', 'reconcile',
   'pre', 'readMetas', 'prep', 'build', 'pairs', 'forced', 'lostForced', 'policy', 'effects',
   'attempts', 'leases', 'intervals', 'absence', 'repair',
   'rewrite', 'rewrites', 'rewriteEvents', 'projectDelta', 'projectFull', 'deltaRows',
   'trees', 'treesPastWait', 'win', 'winLost', 'winHeld', 'winHeldNull', 'evidence', 'activities', 'pointMetas',
   'cpSessions', 'cpAttempts', 'cpLeases', 'openLeases', 'cpLineage', 'cpIntervals', 'cpCursors', 'cpBytes', 'encodes', 'retired', 'pendingBash', 'cpCandidates',
+  'cutRecords', 'cutBytes', 'carried', 'carriedBytes', 'eventsCut', 'rowsRetired',
   'ownerCount', 'pendingOwners', 'staged', 'appended',
   'claimants', 'launches', 'pathMap', 'droppedKeys',
   'markPaths', 'markIds', 'lostProjects', 'lostPrefixes', 'lossy', 'droppedMeasured',
@@ -10113,7 +10116,7 @@ const LANE_CPU_KEYS = [
 ] as const satisfies readonly (readonly [DelegationPassSlowKey, DelegationPassSlowKey])[];
 /** D-5692, D-5832: the phases `block` sums (the lane's own work and writes). */
 const LANE_BLOCK_KEYS = [
-  'noteSessions', 'expire', 'flush', 'upkeep', 'prune', 'pre', 'prep', 'build', 'pairs', 'forced', 'lostForced', 'policy', 'effects',
+  'noteSessions', 'expire', 'flush', 'upkeep', 'prune', 'compact', 'pre', 'prep', 'build', 'pairs', 'forced', 'lostForced', 'policy', 'effects',
 ] as const satisfies readonly DelegationPassSlowKey[];
 /** D-5832: the three stretches of the pass the stall is read in, in order. */
 type LaneStretch = 'stallFlush' | 'stallMid' | 'stallRepair';
@@ -10599,8 +10602,8 @@ class DelegationLane {
   private droppedAdded = 0;
   private droppedPeak = 0;
   private seams: DelegationLaneSeams = {};
-  private lastPruneHour = -1;
-  private lastRetireHour = -1;
+  private lastUpkeepHour = -1;
+  private lastCompactDay = -1;
   private cursorsPruned = 0;
   private warnedUnparseableCursors = false;
   private evidenceLoaded = false;
@@ -10703,7 +10706,7 @@ class DelegationLane {
     this.stall().startPass();                                            // D-5832: a new pass-wide histogram; the sampler starts with the lane's first pass
     return t;
   }
-  /** D-5692: the applier's open options with the projection port's four calls timed (`rewritten`); the port itself is called as before. The
+  /** D-5692: the applier's open options with the projection port's six calls timed (`rewritten`); the port itself is called as before. The
    *  port is wrapped here, not where the lane names the store, because the lane's contact with the store is pinned to those lines. */
   private timedPort(deps: Parameters<typeof DelegationDurability.open>[0]): Parameters<typeof DelegationDurability.open>[0] {
     const port = deps.projection;
@@ -10713,9 +10716,11 @@ class DelegationLane {
       projectChanged: (prior, next) => this.rewritten(() => port.projectChanged(prior, next), 1, 0, (r) => r.mode === 'delta' ? r.rows : null),
       insertEvents: (rows) => this.rewritten(() => port.insertEvents(rows), 0, rows.length),
       eventStats: () => this.rewritten(() => port.eventStats(), 0, 0),
+      countEventsAtOrBelow: (s) => this.rewritten(() => port.countEventsAtOrBelow(s), 0, 0),
+      deleteEventsBetween: (a, b, n) => this.rewritten(() => port.deleteEventsBetween(a, b, n), 0, 0),
     } };
   }
-  /** D-5692: times one call of the coordination store's port (`project`, `projectChanged`, `insertEvents`, `eventStats`) as `rewrite`, in the CURRENT pass's
+  /** D-5692: times one call of the coordination store's port (projection, events and retention) as `rewrite`, in the CURRENT pass's
    *  record, and returns or throws exactly what `fn` does. `rewrite` OVERLAPS the phase that made the call (flush, repair, a lease, ...),
    *  which holds it too, so it is never summed into `block`. */
   private rewritten<T>(fn: () => T, projects: number, events: number, delta?: (result: T) => number | null): T {
@@ -10762,7 +10767,7 @@ class DelegationLane {
       const whole = stall.pass();
       f.stallMax = whole.max; f.stallP99 = whole.p99;
       f.block = block; f.cut = pass.signal.aborted ? 1 : 0; f.total = total;
-      f.other = Math.max(0, total - sum(['noteSessions', 'open', 'recover', 'root', 'load', 'expire', 'owners', 'flush', 'upkeep', 'prune', 'reconcile']) - (ms.get('yields') ?? 0));
+      f.other = Math.max(0, total - sum(['noteSessions', 'open', 'recover', 'root', 'load', 'expire', 'owners', 'flush', 'upkeep', 'prune', 'compact', 'reconcile']) - (ms.get('yields') ?? 0));
       f.blockCpu = LANE_BLOCK_KEYS.reduce((n, k) => n + (t.cpu.get(k) ?? 0), 0) / 1000;
       if (t.cpuThread !== null) f.cpuThread = t.cpuThread ? 1 : 0;
       for (const [k, name] of LANE_CPU_KEYS) { const us = t.cpu.get(k); if (us !== undefined) f[name] = us / 1000; }
@@ -11015,6 +11020,8 @@ class DelegationLane {
               projectChanged: (prior, next) => coord.projectDelegationCheckpointChanges(prior, next),
               insertEvents: (rows) => coord.insertDelegationEvents(rows),
               eventStats: () => coord.delegationEventStats(),
+              countEventsAtOrBelow: (s) => coord.countDelegationEventsAtOrBelow(s),
+              deleteEventsBetween: (a, b, n) => coord.deleteDelegationEventsBetween(a, b, n),
             },
             now: () => Date.now(), monotonicMs: () => this.mono(), randomUUID: () => randomUUID(), warn: (m) => console.warn(m),
           }));
@@ -11215,16 +11222,9 @@ class DelegationLane {
       await this.turn(pass, 'stallMid');
       if (pass.signal.aborted) return;
 
-      // The upkeep: retention, and the hour that was never closed. One checkpoint-only change over the INTERVALS, and only when there is
-      // something to do (the same array comes back otherwise). Cursors are never in it. It also collapses attempts that repeat one decision
-      // (D-6191: the earliest row of each key stays), by a second checkpoint-only change, and makes no change when none repeat.
+      // D-6191: collapse attempts that repeat one decision; interval, cursor and zero-delta retention share the prune door below.
       const endUpkeep = this.phase(pass, 'upkeep');
       try {
-        if (upkeepDelegationIntervals(durable.state().checkpoint.observationIntervals, pass.now).changed) {
-          try {
-            await durable.applyCheckpointChange((cp) => ({ ...cp, observationIntervals: upkeepDelegationIntervals(cp.observationIntervals, pass.now).intervals }));
-          } catch (err) { console.warn(`ccrc-server: delegation interval upkeep failed: ${err instanceof Error ? err.message : String(err)}`); }
-        }
         if (collapseDelegationAttempts(durable.state().checkpoint.attempts).removed > 0) {
           try {
             let removed = 0;
@@ -11239,7 +11239,10 @@ class DelegationLane {
       } finally { endUpkeep(); }
       if (pass.signal.aborted) return;
       const endPrune = this.phase(pass, 'prune');
-      try { await this.pruneCursors(pass, durable); await this.retireZeroDelta(pass, durable); } finally { endPrune(); }
+      try { await this.upkeep(pass, durable); } finally { endPrune(); }
+      if (pass.signal.aborted) return;
+      const endCompact = this.phase(pass, 'compact');
+      try { await this.compact(pass, durable); } finally { endCompact(); }
       await this.turn(pass, null);                                      // D-5835: turn 2, before the reconcile (which writes `reconciledAt` before its first check)
       if (pass.signal.aborted) return;
 
@@ -11252,6 +11255,21 @@ class DelegationLane {
       if (this.passTiming === t) this.passTiming = null;
       await this.passLine(pass, t);
     }
+  }
+
+  /** D-7022: armed on landing; spend the UTC day before the queued attempt, including one that rejects. */
+  private async compact(pass: LanePass, durable: DelegationDurability): Promise<void> {
+    const day = Math.floor(laneHourOf(pass.now) / (24 * DELEGATION_HOUR_MS));
+    if (pass.signal.aborted || !durable.pruningEnabled() || day === this.lastCompactDay) return;
+    this.lastCompactDay = day;
+    try {
+      const out = await durable.compactJournal(pass.now, DELEGATION_RETENTION_FLOOR_MS);
+      if (out.kind === 'compacted') {
+        for (const [k, n] of [['cutRecords', out.plan.cutRecords], ['cutBytes', out.plan.cutBytes], ['carried', out.plan.carried.length],
+          ['carriedBytes', out.plan.carriedBytes], ['eventsCut', out.eventsDeleted], ['rowsRetired', out.retired]] as const) this.size(pass, k, n);
+        console.warn(delegationCompactionLine(out.plan, out));
+      } else if (out.plan !== null && out.reason !== 'not-ready') console.warn(delegationCompactionLine(out.plan, out));
+    } catch (err) { console.warn(`ccrc-server: delegation compaction failed: ${err instanceof Error ? err.message : String(err)}`); }
   }
 
   /** M-1: the lane no longer vouches for its last counts: the breaker reads unmeasured and the counts read 0 until a reconcile. */
@@ -11274,37 +11292,27 @@ class DelegationLane {
     this.projectsRoot = resolved === null || resolved === '' ? DELEGATION_ROOT_UNMEASURED : resolved;
   }
 
-  /**
-   * Cursor retention (R58, D-4654): at most once per UTC hour, and only when the planner finds something to drop, ask the applier to
-   * retire the cursors past the retention. The plan made HERE is only the decision to ask; the applier decides again, under its lock, on
-   * its own rows, and a cursor whose hour is not on file is kept. Cursors are never touched through a checkpoint-only change.
-   */
-  private async pruneCursors(pass: LanePass, durable: DelegationDurability): Promise<void> {
+  /** D-4654, D-6268: one builder door for retention. Intervals are checked every pass; cursor and zero-delta work spends its hour before
+   *  the attempt (N6), even on failure. The applier decides again under its lock; idle passes never enter the door. */
+  private async upkeep(pass: LanePass, durable: DelegationDurability): Promise<void> {
     const hour = laneHourOf(pass.now);
-    if (hour === this.lastPruneHour) return;
+    const hourly = hour !== this.lastUpkeepHour;
     const cp = durable.state().checkpoint;
-    const plan = planDelegationCursorRetention(cp.bucketCursors, cp.observationIntervals, pass.now);
-    if (plan.unparseable.length > 0 && !this.warnedUnparseableCursors) {
-      this.warnedUnparseableCursors = true;
-      console.warn(`ccrc-server: ${plan.unparseable.length} delegation bucket cursor(s) name no hour and are kept: ${plan.unparseable.slice(0, 3).map((c) => JSON.stringify(c.bucket)).join(', ')}`);
+    const intervals = upkeepDelegationIntervals(cp.observationIntervals, pass.now).changed;
+    if (!hourly && !intervals) return;
+    if (hourly) {
+      this.lastUpkeepHour = hour;
+      const plan = planDelegationCursorRetention(cp.bucketCursors, cp.observationIntervals, pass.now);
+      if (plan.unparseable.length > 0 && !this.warnedUnparseableCursors) {
+        this.warnedUnparseableCursors = true;
+        console.warn(`ccrc-server: ${plan.unparseable.length} delegation bucket cursor(s) name no hour and are kept: ${plan.unparseable.slice(0, 3).map((c) => JSON.stringify(c.bucket)).join(', ')}`);
+      }
     }
-    // The hour is spent BEFORE the attempt (N6): a prune that failed is retried at most once per UTC hour, like one that succeeded, and
-    // not on every pass (each attempt is a planner run, a commit attempt and a warning line).
-    this.lastPruneHour = hour;
-    if (plan.drop.length > 0) {
-      try { this.cursorsPruned += (await durable.pruneBucketCursors(pass.now)).dropped; }
-      catch (err) { console.warn(`ccrc-server: the delegation cursor retention failed: ${err instanceof Error ? err.message : String(err)}`); }
-    }
-  }
-
-  /** D-6268: the zero-delta retirement, at most once per UTC hour. The applier decides, under its lock, on its own rows and facts; an idle
-   *  door writes nothing and encodes nothing. The hour is spent BEFORE the attempt (N6), so a failure is retried at most once an hour. */
-  private async retireZeroDelta(pass: LanePass, durable: DelegationDurability): Promise<void> {
-    const hour = laneHourOf(pass.now);
-    if (hour === this.lastRetireHour) return;
-    this.lastRetireHour = hour;
-    try { this.size(pass, 'retired', (await durable.retireZeroDeltaBashActivities()).retired); }
-    catch (err) { console.warn(`ccrc-server: the delegation zero-delta retirement failed: ${err instanceof Error ? err.message : String(err)}`); }
+    try {
+      const out = await durable.upkeep({ nowMs: pass.now, intervals, cursors: hourly, zeroDelta: hourly });
+      this.cursorsPruned += out.cursorsDropped;
+      if (hourly) this.size(pass, 'retired', out.retired);
+    } catch (err) { console.warn(`ccrc-server: delegation upkeep failed: ${err instanceof Error ? err.message : String(err)}`); }
   }
 
   /** Who died since the last pass, by what this process watched: a parent first seen DEAD is not a fresh death (a restart is not a mass-death

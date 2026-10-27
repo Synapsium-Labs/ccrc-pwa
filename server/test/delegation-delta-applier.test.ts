@@ -155,6 +155,8 @@ function makePort(store: CoordStore, calls: string[], modes: string[], ctl: Rig[
     },
     insertEvents: (rows: Parameters<CoordStore['insertDelegationEvents']>[0]) => { calls.push(`insertEvents:${rows.length}`); return store.insertDelegationEvents(rows); },
     eventStats: () => store.delegationEventStats(),
+    countEventsAtOrBelow: (s: number) => store.countDelegationEventsAtOrBelow(s),
+    deleteEventsBetween: (a: number, b: number, n: number) => store.deleteDelegationEventsBetween(a, b, n),
   };
   return port as unknown as DelegationProjectionPort;
 }

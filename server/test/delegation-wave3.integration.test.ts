@@ -1365,9 +1365,9 @@ describe('8. the closed scope census', () => {
     }
   });
 
-  it('no physical journal compaction or truncation, except the torn-tail heal: every production use of the journal path is on a closed list, by caller', () => {
+  it('only the torn-tail heal and compactJournal rewrite the retained set: every journal and carried path use and file-port act is on a closed list, by caller', () => {
     const SRC = filesUnder('server/src', /\.ts$/);
-    expect(SRC.filter((f) => /delegation-events\.log|DELEGATION_JOURNAL_FILE/.test(code(read(f)))), 'only the journal module and the applier name the file').toEqual(
+    expect(SRC.filter((f) => /delegation-(?:events|carried)\.log|DELEGATION_(?:JOURNAL|CARRIED)_FILE/.test(code(read(f)))), 'only the journal module and the applier name either file').toEqual(
       ['server/src/coord/delegation-checkpoint.ts', 'server/src/coord/delegation-journal.ts']);
 
     // 1. EVERY truncating call in the server, by spelling (`truncate`, `truncateSync`, `ftruncate`, `fsp.truncate`...). The delegation
@@ -1384,8 +1384,8 @@ describe('8. the closed scope census', () => {
       'server/src/coord/delegation-journal.ts: truncate(',
     ]);
 
-    // 2. EVERY use of the journal's path in the applier, by the method that makes it. A temp-and-rename over the journal, a second cut, an
-    //    alias or a write through the file would all need a line that is not on this list, whatever they are spelt.
+    // 2. EVERY journal/carried path use and file-port act in the applier, by its caller. This includes temps, their renames and removal,
+    //    so replacing a temp operand with a live file, or adding another writer, cannot hide behind an allowed method name.
     const lines = code(read('server/src/coord/delegation-checkpoint.ts')).split('\n');
     let method = '(file)';
     let inClass = false;
@@ -1394,23 +1394,56 @@ describe('8. the closed scope census', () => {
       if (/^(?:export )?class DelegationDurability\b/.test(l)) { inClass = true; method = '(class)'; }
       const top = /^(?:export )?(?:async )?function\*? ([A-Za-z_]\w*)/.exec(l);
       if (top !== null) { inClass = false; method = top[1]!; }
-      const m = inClass ? /^ {2}(?:(?:private|public|protected|static|async|readonly)\s+)*(constructor|[A-Za-z_]\w*)\(/.exec(l) : null;
+      const m = inClass ? /^ {2}(?:(?:private|public|protected|static|async|readonly)\s+)*\*?(constructor|[A-Za-z_]\w*)\(/.exec(l) : null;
       if (m !== null && !/^(?:if|for|while|switch|return|catch)$/.test(m[1]!)) method = m[1]!;
-      if (/journalPath|DELEGATION_JOURNAL_FILE|delegation-events\.log/.test(l)) hits.push({ method, text: l.trim() });
+      if (/journalPath|carriedPath|DELEGATION_(?:JOURNAL|CARRIED)_FILE|delegation-(?:events|carried)\.log|this\.port\.\w+\(|\bretainedRecords\(/.test(l)) hits.push({ method, text: l.trim() });
     }
-    const ALLOWED: ReadonlyArray<[string, RegExp]> = [
-      ['(file)', /^DELEGATION_JOURNAL_FILE,$/],                                                                       // the import
-      ['recoverDelegationFromFiles', /^for await \(const record of readDelegationJournalRecords\(port, path\.join\(dir, DELEGATION_JOURNAL_FILE\), undefined, /],   // recovery's read
+    const ALLOWED: ReadonlyArray<[string, RegExp, number?]> = [
+      ['(file)', /^DELEGATION_CARRIED_FILE,$/],
+      ['(file)', /^DELEGATION_JOURNAL_FILE,$/],
+      ['recoverDelegationFromFiles', /^for await \(const line of readDelegationRetainedRecords\(port, path\.join\(dir, DELEGATION_CARRIED_FILE\), path\.join\(dir, DELEGATION_JOURNAL_FILE\), \(t\) => \{ found\.tail = t; \}\)\) \{$/],
       ['(class)', /^private readonly journalPath: string;$/],
+      ['(class)', /^private readonly carriedPath: string;$/],
       ['constructor', /^this\.journalPath = path\.join\(deps\.dir, DELEGATION_JOURNAL_FILE\);$/],
-      ['constructor', /^this\.writer = new DelegationJournalWriter\(this\.port, this\.journalPath, deps\.dir\);$/],   // the appender
-      ['recover', /^this\.writer = new DelegationJournalWriter\(this\.port, this\.journalPath, this\.deps\.dir\);$/],  // the appender, again
-      ['healTailLocked', /^await this\.port\.truncate\(this\.journalPath, plan\.offset\);$/],                        // THE ONE CUT (D-4655)
+      ['constructor', /^this\.carriedPath = path\.join\(deps\.dir, DELEGATION_CARRIED_FILE\);$/],
+      ['constructor', /^this\.writer = new DelegationJournalWriter\(this\.port, this\.journalPath, deps\.dir\);$/],
+      ['recover', /^this\.writer = new DelegationJournalWriter\(this\.port, this\.journalPath, this\.deps\.dir\);$/],
+      ['healTailLocked', /^await this\.port\.mkdirp\(path\.dirname\(kept\)\);$/],
+      ['healTailLocked', /^const existing = await this\.port\.readFile\(kept\);$/],
+      ['healTailLocked', /^const handle = await this\.port\.createTemp\(temp\);$/],
+      ['healTailLocked', /^await this\.port\.rename\(temp, kept\);$/],
+      ['healTailLocked', /^await this\.port\.fsyncDir\(path\.dirname\(kept\)\);$/],
+      ['healTailLocked', /^await this\.port\.fsyncDir\(this\.deps\.dir\);$/, 2], // once before and once after the cut
+      ['healTailLocked', /^await this\.port\.truncate\(this\.journalPath, plan\.offset\);$/],
       ['healTailLocked', /^await this\.port\.fsyncFile\(this\.journalPath\);$/],
-      ['remeasureTail', /^const handle = await this\.port\.openRead\(this\.journalPath\);$/],                        // the heal's re-measure: a read
-      ['repairLocked', /^projection, checkpoint: this\.current\.checkpoint, journal: \(\) => readDelegationJournalRecords\(this\.port, this\.journalPath\), /],
-      ['visitRetainedRecords', /^for await \(const record of readDelegationJournalRecords\(this\.port, this\.journalPath\)\) visit\(record\);$/],
-      ['planPruning', /^if \(this\.pruningEnabled\(\)\) for await \(const r of readDelegationJournalRecords\(this\.port, this\.journalPath\)\) collector\.add\(r\);$/],
+      ['reportQuarantineLocked', /^try \{ names = await this\.port\.listDir\(dir\); \} catch \(err\) \{$/],
+      ['reportQuarantineLocked', /^try \{ st = await this\.port\.statFile\(kept\); \} catch \(err\) \{$/],
+      ['remeasureTail', /^const handle = await this\.port\.openRead\(this\.journalPath\);$/],
+      ['repairLocked', /^projection, checkpoint: this\.current\.checkpoint, journal: \(\) => this\.retainedRecords\(\), heal: \[\.\.\.this\.drifted\.values\(\)\], evidence: this\.evidence,$/],
+      ['visitRetainedRecords', /^for await \(const record of this\.retainedRecords\(\)\) visit\(record\);$/],
+      ['retainedRecords', /^private async \*retainedRecords\(\): AsyncGenerator<DelegationJournalRecordV1, void, undefined> \{$/],
+      ['retainedRecords', /^for await \(const line of readDelegationRetainedRecords\(this\.port, this\.carriedPath, this\.journalPath\)\) yield line\.record;$/],
+      ['planPruning', /^if \(this\.pruningEnabled\(\)\) for await \(const r of this\.retainedRecords\(\)\) collector\.add\(r\);$/],
+      ['compactJournal', /^const carriedTemp = `\$\{this\.carriedPath\}\.tmp`;$/],
+      ['compactJournal', /^const journalTemp = `\$\{this\.journalPath\}\.tmp`;$/],
+      ['compactJournal', /^await this\.edge\('carried-rename', \(\) => this\.port\.rename\(carriedTemp, this\.carriedPath\)\);$/],
+      ['compactJournal', /^await this\.edge\('carried-directory-fsync', \(\) => this\.port\.fsyncDir\(this\.deps\.dir\)\);$/],
+      ['compactJournal', /^await this\.port\.rename\(journalTemp, this\.journalPath\);$/],
+      ['compactJournal', /^await this\.edge\('journal-directory-fsync', \(\) => this\.port\.fsyncDir\(this\.deps\.dir\)\);$/],
+      ['compactJournal', /^await this\.edge\('writer-reopen', \(\) => \{ this\.writer = new DelegationJournalWriter\(this\.port, this\.journalPath, this\.deps\.dir\); \}\);$/],
+      ['compactJournal', /^await this\.port\.removeTemp\(carriedTemp\)\.catch\(\(\) => undefined\);$/],
+      ['compactJournal', /^await this\.port\.removeTemp\(journalTemp\)\.catch\(\(\) => undefined\);$/],
+      ['compactJournal', /^this\.writer = new DelegationJournalWriter\(this\.port, this\.journalPath, this\.deps\.dir\);$/],
+      ['planCompactionLocked', /^for await \(const line of readDelegationRetainedRecords\(this\.port, this\.carriedPath, this\.journalPath, undefined, \(bytes, lines\) => \{ currentCarriedBytes = bytes; currentCarriedLines = lines; \}\)\) \{$/],
+      ['writeCarriedLocked', /^held\.out = await this\.port\.createTemp\(temp\);$/],
+      ['writeCarriedLocked', /^\? \(held\.carried \?\?= await this\.port\.openRead\(this\.carriedPath\)\)$/],
+      ['writeCarriedLocked', /^: \(held\.journal \?\?= await this\.port\.openRead\(this\.journalPath\)\);$/],
+      ['copySuffixLocked', /^held\.src = await this\.port\.openRead\(this\.journalPath\);$/],
+      ['copySuffixLocked', /^held\.out = await this\.port\.createTemp\(temp\);$/],
+      ['replaceCheckpoint', /^await this\.port\.mkdirp\(this\.deps\.dir\);$/],
+      ['replaceCheckpoint', /^held\.handle = await this\.port\.createTemp\(this\.tempPath\);$/],
+      ['replaceCheckpoint', /^await this\.edge\('checkpoint-rename', \(\) => this\.port\.rename\(this\.tempPath, this\.checkpointPath\)\);$/],
+      ['replaceCheckpoint', /^await this\.edge\('directory-fsync', \(\) => this\.port\.fsyncDir\(this\.deps\.dir\)\);$/],
     ];
     const used = new Map<number, number>();
     const unlisted = hits.filter((h) => {
@@ -1419,8 +1452,8 @@ describe('8. the closed scope census', () => {
       used.set(k, (used.get(k) ?? 0) + 1);
       return false;
     }).map((h) => `${h.method}: ${h.text.slice(0, 110)}`);
-    expect(unlisted, 'a use of the journal path that is not on the closed list').toEqual([]);
-    expect([...used.entries()].filter(([, count]) => count !== 1), 'each listed use exists exactly once').toEqual([]);
+    expect(unlisted, 'a retained-set path or file-port act that is not on the closed list').toEqual([]);
+    expect([...used.entries()].filter(([k, count]) => count !== (ALLOWED[k]![2] ?? 1)), 'each listed use exists exactly as many times as declared').toEqual([]);
     expect(used.size).toBe(ALLOWED.length);
     // the heal is declared once and called once, from recovery, on the plan recovery made; the copy is durable before the cut
     const checkpoint = code(read('server/src/coord/delegation-checkpoint.ts'));
@@ -1442,8 +1475,8 @@ describe('8. the closed scope census', () => {
     expect(jr.match(/\bport\.\w+\(/g), 'every call the journal module makes on the port').toEqual(['port.openRead(', 'port.mkdirp(', 'port.openRead(', 'port.openAppend(', 'port.fsyncDir(']);
     // R80 N1: the file name's every use INSIDE the journal module: its one declaration, and nothing else (a function here that wrote,
     // created or truncated `${dir}/${DELEGATION_JOURNAL_FILE}` through `fsp` or the node port would need a second)
-    expect(jr.match(/^.*(?:DELEGATION_JOURNAL_FILE|delegation-events\.log).*$/gm)?.map((l) => l.trim()), 'the journal module names its file once').toEqual(
-      ["export const DELEGATION_JOURNAL_FILE = 'delegation-events.log';"]);
+    expect(jr.match(/^.*(?:DELEGATION_(?:JOURNAL|CARRIED)_FILE|delegation-(?:events|carried)\.log).*$/gm)?.map((l) => l.trim()), 'the journal module names each file once').toEqual(
+      ["export const DELEGATION_JOURNAL_FILE = 'delegation-events.log';", "export const DELEGATION_CARRIED_FILE = 'delegation-carried.log';"]);
     // every `fsp.` call of the module is inside the node port's own literal (the adapter), never a free function
     const portAt = jr.indexOf('export const nodeDelegationFilePort');
     const portEnd = jr.indexOf('\n};\n', portAt);
@@ -1631,8 +1664,8 @@ describe('8. the closed scope census', () => {
     const lane = code(watch.slice(watch.indexOf('class DelegationLane {')));
     expect(lane.length).toBeGreaterThan(10_000);
     expect(lane, 'every durable write goes through DelegationDurability').not.toMatch(/\b(writeFile|appendFile|mkdir|rename|unlink|rmSync|createWriteStream|truncate)\w*\(|\.prepare\(|\bdb\.exec\(|openCoordDb|new DatabaseSync/);
-    // the lane's whole contact with the coordination store: four calls, all through the applier's projection port (and the store's
-    // presence, tested once); a fifth (`coord.setSetting(...)` with the marks in it) would be a durable state the journal does not hold
+    // The lane's whole contact with the coordination store: six calls, all through the applier's projection port (and the store's
+    // presence, tested once); another (`coord.setSetting(...)` with the marks in it) would be a durable state the journal does not hold
     expect(lane.split('\n').filter((l) => /\bcoord\b/.test(l)).map((l) => l.replace(/\s*\/\/.*$/, '').trim()), 'every mention of the store in the lane').toEqual([
       'const coord = this.deps.coord;',
       'projection: coord === undefined ? null : {',
@@ -1640,6 +1673,8 @@ describe('8. the closed scope census', () => {
       'projectChanged: (prior, next) => coord.projectDelegationCheckpointChanges(prior, next),',
       'insertEvents: (rows) => coord.insertDelegationEvents(rows),',
       'eventStats: () => coord.delegationEventStats(),',
+      'countEventsAtOrBelow: (s) => coord.countDelegationEventsAtOrBelow(s),',
+      'deleteEventsBetween: (a, b, n) => coord.deleteDelegationEventsBetween(a, b, n),',
       'if (this.deps.coord === undefined) return;',
     ]);
     expect(lane).toMatch(/private readonly dropped = new Map/);

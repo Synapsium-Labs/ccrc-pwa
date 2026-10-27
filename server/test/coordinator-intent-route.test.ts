@@ -118,6 +118,8 @@ async function world(opts: WorldOptions = {}): Promise<World> {
     projectChanged: (prior, next) => coord.projectDelegationCheckpointChanges(prior, next),
     insertEvents: (rows) => coord.insertDelegationEvents(rows),
     eventStats: () => coord.delegationEventStats(),
+    countEventsAtOrBelow: (s) => coord.countDelegationEventsAtOrBelow(s),
+    deleteEventsBetween: (a, b, n) => coord.deleteDelegationEventsBetween(a, b, n),
   };
   const durable = await DelegationDurability.open({
     dir, projection: opts.faults.projection === undefined ? real : opts.faults.projection(real),
@@ -523,7 +525,7 @@ describe('POST /api/coordinators/:session/intent: durability', () => {
         projection: (real) => ({
           project: (cp) => { if (broken) throw new Error('the database is gone'); real.project(cp); },
           projectChanged: (prior, next) => { if (broken) throw new Error('the database is gone'); return real.projectChanged(prior, next); },
-          insertEvents: real.insertEvents, eventStats: real.eventStats,
+          insertEvents: real.insertEvents, eventStats: real.eventStats, countEventsAtOrBelow: real.countEventsAtOrBelow, deleteEventsBetween: real.deleteEventsBetween,
         }),
       },
     });
@@ -629,7 +631,7 @@ describe('POST /api/coordinators/:session/intent: the lane, the incarnation, the
         projection: (real) => ({
           project: (cp) => { if (broken) throw new Error('the database is gone'); real.project(cp); },
           projectChanged: (prior, next) => { if (broken) throw new Error('the database is gone'); return real.projectChanged(prior, next); },
-          insertEvents: real.insertEvents, eventStats: real.eventStats,
+          insertEvents: real.insertEvents, eventStats: real.eventStats, countEventsAtOrBelow: real.countEventsAtOrBelow, deleteEventsBetween: real.deleteEventsBetween,
         }),
       },
     });
@@ -657,7 +659,7 @@ describe('POST /api/coordinators/:session/intent: SQLite is repairable output', 
     expect(fresh.readDelegationProjection().sessions, 'the fresh database knows nothing').toEqual([]);
     const reopened = await DelegationDurability.open({
       dir: w.dir, now: () => Date.now(), randomUUID: () => randomUUID(),
-      projection: { project: (cp) => fresh.projectDelegationCheckpoint(cp), projectChanged: (prior, next) => fresh.projectDelegationCheckpointChanges(prior, next), insertEvents: (rows) => fresh.insertDelegationEvents(rows), eventStats: () => fresh.delegationEventStats() },
+      projection: { project: (cp) => fresh.projectDelegationCheckpoint(cp), projectChanged: (prior, next) => fresh.projectDelegationCheckpointChanges(prior, next), insertEvents: (rows) => fresh.insertDelegationEvents(rows), eventStats: () => fresh.delegationEventStats(), countEventsAtOrBelow: (s) => fresh.countDelegationEventsAtOrBelow(s), deleteEventsBetween: (a, b, n) => fresh.deleteDelegationEventsBetween(a, b, n) },
     });
     closers.push(() => reopened.close());
     expect(reopened.failure()).toBeNull();

@@ -1642,7 +1642,7 @@ export async function recoverDelegationFromFiles(port: DelegationFilePort, dir: 
 /**
  * What the applier needs of `coord.db`, as a port. Every call is the synchronous store; nothing is awaited inside one.
  *
- * The PRODUCTION port is four `CoordStore` methods, one per member (this module may not reach around the store for its handle:
+ * The PRODUCTION port is six `CoordStore` methods, one per member (this module may not reach around the store for its handle:
  * the coord ring, pinned by `single-definition.test.ts`, so the store is the only thing that holds it):
  *   - `project(cp)`        is `store.projectDelegationCheckpoint(cp)` (the five non-event tables, one transaction);
  *   - `projectChanged(prior, next)` is `store.projectDelegationCheckpointChanges(prior, next)`: the rows that changed between the two
@@ -1651,8 +1651,9 @@ export async function recoverDelegationFromFiles(port: DelegationFilePort, dir: 
  *                           The applier calls it only while its witness holds (see `projectLocked`); every repair keeps `project`;
  *   - `insertEvents(rows)` is `store.insertDelegationEvents(rows)` (ONE transaction; a conflict is reported, never thrown, and
  *                           does not stop the rows after it);
- *   - `eventStats()`       is `store.delegationEventStats()` (`COUNT(*)` and `MAX(journalSequence)` of `delegation_events`).
- * The wiring is four one-line adapters, which `delegation-recovery.test.ts` builds and runs against the real store.
+ *   - `eventStats()`       is `store.delegationEventStats()` (`COUNT(*)` and `MAX(journalSequence)` of `delegation_events`);
+ *   - `countEventsAtOrBelow` and `deleteEventsBetween` delegate to the store's indexed retention methods below.
+ * The wiring is six one-line adapters, which `delegation-recovery.test.ts` builds and runs against the real store.
  */
 export interface DelegationProjectionPort {
   project(checkpoint: DelegationCheckpointV1): void;
@@ -1663,12 +1664,11 @@ export interface DelegationProjectionPort {
   /** ONE transaction for the whole list. A conflict is reported, not thrown, and does not abort the others. */
   insertEvents(rows: readonly DelegationEventRow[]): DelegationInsertEventsResult;
   eventStats(): { count: number; maxSequence: number | null };
-  /** D-7021: `delegation_events` rows at or below a journal sequence (`CoordStore.countDelegationEventsAtOrBelow`). Absent on a port built
-   *  before the compaction: the repair then has no step 0, and the compaction marks the projection stale instead of deleting. */
-  countEventsAtOrBelow?(sequence: number): number;
+  /** D-7021: `delegation_events` rows at or below a journal sequence (`CoordStore.countDelegationEventsAtOrBelow`). Throws on a failed read. */
+  countEventsAtOrBelow(sequence: number): number;
   /** D-7021: deletes at most `limit` rows with `afterExclusive < journalSequence <= throughInclusive`, in one statement and one transaction,
-   *  and answers how many it deleted (`CoordStore.deleteDelegationEventsBetween`). */
-  deleteEventsBetween?(afterExclusive: number, throughInclusive: number, limit: number): number;
+   *  and answers how many it deleted (`CoordStore.deleteDelegationEventsBetween`). Throws on failure; that statement is rolled back. */
+  deleteEventsBetween(afterExclusive: number, throughInclusive: number, limit: number): number;
 }
 
 export interface DelegationProjectionRepairReport {
@@ -1711,7 +1711,6 @@ export const DELEGATION_EVENTS_DELETE_CHUNK = 5000;
  */
 async function deleteEventsInGaps(projection: DelegationProjectionPort, through: number, carried: readonly number[], chunk: number): Promise<number> {
   const remove = projection.deleteEventsBetween;
-  if (remove === undefined) throw new Error('the projection port cannot delete delegation events');
   let deleted = 0;
   let after = 0;
   for (const bound of [...carried.filter((c) => c <= through), through + 1]) {
@@ -1778,7 +1777,7 @@ export async function repairDelegationProjection(input: {
   // carried evidence, as the compaction would have; today's steps then run unchanged, and the wipe stays the last resort for a real conflict.
   let prunedBelow = 0;
   const retainedFrom = input.retainedFrom ?? null;
-  if (retainedFrom !== null && input.evidence !== undefined && projection.countEventsAtOrBelow !== undefined && projection.deleteEventsBetween !== undefined
+  if (retainedFrom !== null && input.evidence !== undefined
     && projection.countEventsAtOrBelow(retainedFrom - 1) !== input.evidence.countAtOrBelow(retainedFrom - 1)) {
     prunedBelow = await deleteEventsInGaps(projection, retainedFrom - 1, input.evidence.sequencesAtOrBelow(retainedFrom - 1), input.deleteChunk ?? DELEGATION_EVENTS_DELETE_CHUNK);
   }
@@ -2317,11 +2316,11 @@ export class DelegationDurability {
     for await (const line of readDelegationRetainedRecords(this.port, this.carriedPath, this.journalPath)) yield line.record;
   }
 
-  /** The pruning plan right now. Streams the journal once for the held records' positions; deletes and rewrites nothing. */
+  /** The pruning plan right now. Streams the retained set once for the held records' positions; deletes and rewrites nothing. */
   async planPruning(nowMs: number, retentionMs: number): Promise<DelegationPruningPlan> {
     return this.enqueue(async () => {
       const collector = new DelegationRetentionCollector(new Set(this.current.checkpoint.pruningHolds.map((h) => h.journalId)), nowMs - retentionMs);
-      if (this.pruningEnabled()) for await (const r of readDelegationJournalRecords(this.port, this.journalPath)) collector.add(r);
+      if (this.pruningEnabled()) for await (const r of this.retainedRecords()) collector.add(r);
       return planDelegationPruning({ state: this.current, view: collector.view() });
     });
   }
@@ -2616,12 +2615,14 @@ export class DelegationDurability {
   private async planCompactionLocked(nowMs: number, floorMs: number): Promise<DelegationCompactionPlan> {
     const planner = new DelegationCompactionPlanner({ checkpoint: this.current.checkpoint, ready: this.pruningEnabled(), nowMs, floorMs, naming: delegationRecordNaming });
     let journalBytes = 0;
-    for await (const line of readDelegationRetainedRecords(this.port, this.carriedPath, this.journalPath)) {
+    let currentCarriedBytes = 0;
+    let currentCarriedLines = 0;
+    for await (const line of readDelegationRetainedRecords(this.port, this.carriedPath, this.journalPath, undefined, (bytes, lines) => { currentCarriedBytes = bytes; currentCarriedLines = lines; })) {
       if (line.source === 'carried') { planner.addCarried(line.record, line); continue; }
       planner.add(line.record, line);
       journalBytes = line.offset + line.length;
     }
-    return planner.finish(journalBytes);
+    return planner.finish(journalBytes, { bytes: currentCarriedBytes, lines: currentCarriedLines });
   }
 
   /** Step 2: the carried lines, copied verbatim from their files by position (adjacent lines of one file in one read), into the temp. */

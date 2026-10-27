@@ -290,13 +290,13 @@ function rig(w: World, seams: Record<string, unknown> = {}): Rig {
 
 // ── the timing vocabulary (design: the phases, their enclosers, what `block` sums) ─────────────────────────────────────
 
-const TOP = ['noteSessions', 'open', 'recover', 'root', 'load', 'expire', 'owners', 'flush', 'upkeep', 'prune', 'reconcile'];
+const TOP = ['noteSessions', 'open', 'recover', 'root', 'load', 'expire', 'owners', 'flush', 'upkeep', 'prune', 'compact', 'reconcile'];
 const INNER = ['pre', 'readMetas', 'prep', 'build', 'pairs', 'forced', 'lostForced', 'policy', 'effects'];
 const PARTS = ['attempts', 'leases', 'intervals', 'absence', 'repair'];
 const TIME_KEYS = [...TOP, ...INNER, ...PARTS, 'rewrite'];
 /** What `block` sums: the BLOCKING phases. Never the reads (`open recover root load owners readMetas`), `rewrite` (it overlaps its
  *  callers), `reconcile` (its parts are) or the effect parts (inside `effects`). */
-const BLOCK = ['noteSessions', 'expire', 'flush', 'upkeep', 'prune', 'pre', 'prep', 'build', 'pairs', 'forced', 'lostForced', 'policy', 'effects'];
+const BLOCK = ['noteSessions', 'expire', 'flush', 'upkeep', 'prune', 'compact', 'pre', 'prep', 'build', 'pairs', 'forced', 'lostForced', 'policy', 'effects'];
 const ENCLOSERS: Record<string, string[]> = {
   ...Object.fromEntries(INNER.map((k) => [k, ['reconcile']])),
   ...Object.fromEntries(PARTS.map((k) => [k, ['effects', 'reconcile']])),
@@ -651,7 +651,7 @@ describe('D-5692 R1: a full pass writes one line whose keys are what ran and who
 
     // the key set is exactly what ran: the derived keys, the phases (no `recover`, `intervals`, `absence` or `repair`: they did not run),
     // and every size (the five `repair*` sizes are absent: no repair report came back)
-    const phases = ['noteSessions', 'open', 'root', 'load', 'expire', 'owners', 'flush', 'upkeep', 'prune', 'reconcile',
+    const phases = ['noteSessions', 'open', 'root', 'load', 'expire', 'owners', 'flush', 'upkeep', 'prune', 'compact', 'reconcile',
       'pre', 'readMetas', 'prep', 'build', 'pairs', 'forced', 'lostForced', 'policy', 'effects', 'attempts', 'leases', 'rewrite'];
     expect([...m.keys()].sort()).toEqual(['block', 'cut', 'total', 'other', ...phases, ...Object.keys(expected)].sort());
 
@@ -962,13 +962,14 @@ type SlowLine = (fields: Readonly<Record<string, number>>, bound?: number) => st
 const SLOW_KEYS = [
   'block', 'cut', 'total', 'other',
   'blockCpu', 'stallMax', 'stallP99', 'cpuThread',                  // D-5832: right after `other`, so the bound drops them last
-  'noteSessions', 'open', 'recover', 'root', 'load', 'expire', 'owners', 'flush', 'upkeep', 'prune', 'reconcile',
+  'noteSessions', 'open', 'recover', 'root', 'load', 'expire', 'owners', 'flush', 'upkeep', 'prune', 'compact', 'reconcile',
   'pre', 'readMetas', 'prep', 'build', 'pairs', 'forced', 'lostForced', 'policy', 'effects',
   'attempts', 'leases', 'intervals', 'absence', 'repair',
   'rewrite', 'rewrites', 'rewriteEvents', 'projectDelta', 'projectFull', 'deltaRows',
   'trees', 'treesPastWait', 'win', 'winLost', 'winHeld', 'winHeldNull', 'evidence', 'activities', 'pointMetas',
   'cpSessions', 'cpAttempts', 'cpLeases', 'openLeases', 'cpLineage', 'cpIntervals', 'cpCursors', 'cpBytes', 'encodes',
   'retired', 'pendingBash', 'cpCandidates',                         // D-6268, D-6271: right after `encodes`, before `censusAge`, so they drop late
+  'cutRecords', 'cutBytes', 'carried', 'carriedBytes', 'eventsCut', 'rowsRetired',
   'ownerCount', 'pendingOwners', 'staged', 'appended',
   'claimants', 'launches', 'pathMap', 'droppedKeys',
   'markPaths', 'markIds', 'lostProjects', 'lostPrefixes', 'lossy', 'droppedMeasured',
@@ -1203,7 +1204,7 @@ describe('D-5832 R1: the line carries the CPU per phase, the stall per stretch, 
   }, `2026-10-15T10:02:0${n}.000Z`)));
   /** CPU ms each phase's own hook adds to the virtual CPU clock (distinct primes). `effects` encloses the repair part, `reconcile` the stepped phases. */
   const CPU: Record<string, number> = {
-    noteSessions: 11, expire: 13, owners: 59, flush: 101, upkeep: 7, prune: 3, reconcile: 53,
+    noteSessions: 11, expire: 13, owners: 59, flush: 101, upkeep: 7, prune: 3, compact: 47, reconcile: 53,
     pre: 5, prep: 17, build: 19, pairs: 23, forced: 29, lostForced: 31, policy: 37, effects: 41, repair: 43,
   };
 
@@ -1231,7 +1232,7 @@ describe('D-5832 R1: the line carries the CPU per phase, the stall per stretch, 
     const effectsCpu = CPU['effects']! + CPU['repair']!;               // the repair part runs inside effects
     const reconcileCpu = CPU['reconcile']! + stepped.reduce((n, k) => n + (CPU[k] ?? 0), 0) + effectsCpu;
     const blockCpu = BLOCK.reduce((n, k) => n + (k === 'effects' ? effectsCpu : CPU[k] ?? 0), 0);
-    expect(blockCpu, 'the fixture: block\'s phases carry distinct CPU, owners (a read) is not among them').toBe(380);
+    expect(blockCpu, 'the fixture: block\'s phases carry distinct CPU, including compaction; owners (a read) is not among them').toBe(427);
     const expected: Record<string, number> = {
       blockCpu, cpuThread: 1,
       flushCpu: CPU['flush']!, upkeepCpu: CPU['upkeep']!, effectsCpu, repairCpu: CPU['repair']!, reconcileCpu, ownersCpu: CPU['owners']!,
@@ -1476,46 +1477,46 @@ describe('D-5832 R6 (review 677 F5): the production CPU clock: the runtime\'s th
 });
 
 describe('D-5832 (the bound): the new keys sit where the line\'s bound drops them last', () => {
-  it('RE2: (D-5832, D-6271) at realistic values (7 digits each) the whole line is 1,965 bytes and drops nothing; at the largest values (2,044 bytes, 77 of the 110 input keys kept, dropped=33) the keys that drop are a suffix of the list; `retired`, `pendingBash` and `cpCandidates` stay, in the order encodes < retired < pendingBash < cpCandidates < censusAge', () => {
+  it('RE2: (D-5832, D-6271, wave 4) the 117 input keys fill 2,038 bytes at seven digits (114 kept, dropped=3) and at the largest values (77 kept, dropped=40); compaction sizes survive and only a suffix drops', () => {
     const format = surface['delegationPassSlowLine'] as SlowLine | undefined;
     expect(typeof format, 'delegationPassSlowLine is exported').toBe('function');
     const keys = SLOW_KEYS.filter((k) => k !== 'dropped');
-    expect(keys, 'the list holds the 83 old input keys, the 19 of D-5832, the delta projection\'s five and the three of D-6271').toHaveLength(110);
-    // The exported list, not this file's copy: the three keys in their place, right after `encodes` and before `censusAge`.
+    expect(keys, 'the 110 preceding keys plus compact and its six sizes').toHaveLength(117);
     const exported = surface['DELEGATION_PASS_SLOW_KEYS'] as readonly string[] | undefined;
     expect(Array.isArray(exported), 'DELEGATION_PASS_SLOW_KEYS is exported').toBe(true);
     const idx = (k: string): number => exported!.indexOf(k);
     for (const k of ['retired', 'pendingBash', 'cpCandidates']) expect(idx(k), `${k} is in DELEGATION_PASS_SLOW_KEYS`).toBeGreaterThan(-1);
     expect([idx('encodes'), idx('retired'), idx('pendingBash'), idx('cpCandidates'), idx('censusAge')], 'encodes < retired < pendingBash < cpCandidates < censusAge')
       .toEqual([idx('encodes'), idx('encodes') + 1, idx('encodes') + 2, idx('encodes') + 3, idx('censusAge')]);
-    expect(idx('cpCandidates') < idx('censusAge'), 'the three sit before `censusAge`, so the keys after it drop first').toBe(true);
-    expect(exported!.filter((k) => k !== 'dropped'), 'the exported list holds exactly the 110 input keys').toHaveLength(110);
+    const compaction = ['cutRecords', 'cutBytes', 'carried', 'carriedBytes', 'eventsCut', 'rowsRetired'];
+    expect(exported!.slice(idx('cpCandidates') + 1, idx('cpCandidates') + 7), 'the six compaction sizes follow cpCandidates').toEqual(compaction);
+    expect(idx('rowsRetired') < idx('censusAge'), 'the new sizes sit before censusAge, so later keys drop first').toBe(true);
+    expect(exported!.filter((k) => k !== 'dropped'), 'the exported list holds exactly the 117 input keys').toHaveLength(117);
     const real = format!(Object.fromEntries(keys.map((k) => [k, 1234567])));
     const realPairs = parse(real);
-    expect(realPairs.size, 'every key is on the line (an unknown key is ignored by the formatter)').toBe(keys.length);
-    expect(realPairs.has('dropped'), 'nothing drops at realistic values').toBe(false);
-    expect(Buffer.byteLength(real)).toBe(1965);
+    expect(realPairs.size, '114 kept keys and the dropped pair').toBe(115);
+    expect(realPairs.get('dropped'), 'three trailing keys drop when all 117 values have seven digits').toBe(3);
+    expect(keys.filter((k) => realPairs.has(k))).toEqual(keys.slice(0, 114));
+    expect(keys.filter((k) => !realPairs.has(k))).toEqual(['cpMapping', 'repairSkipped', 'attemptsSkipped']);
+    expect(Buffer.byteLength(real)).toBe(2038);
 
     const MAX = Number.MAX_SAFE_INTEGER;
     const big = format!(Object.fromEntries(keys.map((k) => [k, MAX])));
     expect(Buffer.byteLength(big)).toBeLessThanOrEqual(2048);
-    expect(Buffer.byteLength(big), 'the greedy fill under the 2,048-byte bound ends at exactly this size').toBe(2044);
+    expect(Buffer.byteLength(big), 'the greedy fill under the 2,048-byte bound ends at exactly this size').toBe(2038);
     const bp = parse(big);
     const present = keys.filter((k) => bp.has(k));
-    expect(present, 'exactly 77 of the 110 input keys are kept').toHaveLength(77);
-    expect(bp.size, 'the 77 kept keys and the `dropped` pair are the line\'s pairs').toBe(78);
+    expect(present, 'exactly 77 of the 117 input keys are kept').toHaveLength(77);
+    expect(bp.size, 'the 77 kept keys and the dropped pair are the line\'s pairs').toBe(78);
     expect(present, 'with equal-width values the greedy fill keeps a prefix: the end of the list drops').toEqual(keys.slice(0, present.length));
     for (const k of ['blockCpu', 'stallMax', 'stallP99', 'cpuThread']) expect(bp.has(k), `${k} (right after other) is never the first to go`).toBe(true);
     for (const k of ['attemptsSkipped', 'repairSkipped', 'cpMapping', 'cpActivities', 'yields', 'repairRewrite', 'stallRepair', 'stallMid', 'stallFlush', 'ownersCpu']) {
       expect(bp.has(k), `${k} (after censusAge) drops at the largest values`).toBe(false);
     }
     expect(bp.get('dropped'), 'and the line counts them').toBe(keys.length - present.length);
-    expect(bp.get('dropped'), 'exactly 33 of them').toBe(33);
-    // The delta projection's five keys and D-6271's three sit before `censusAge`, so none of them drops at the largest value, and the dropped
-    // names are exactly the list's last 33.
-    for (const k of ['projectDelta', 'projectFull', 'deltaRows', 'cpBytes', 'encodes', 'retired', 'pendingBash', 'cpCandidates']) expect(bp.has(k), `${k} survives the largest values`).toBe(true);
-    // (The three new keys take 84 bytes at the largest values of the bound, so at the largest values three older keys, `lostCalls`, `vLinked` and `vRunChild`, now drop that were kept before; none of the three new keys does.)
-    for (const k of ['lostCalls', 'vLinked', 'vRunChild', 'vUnresolved', 'vConflicting', 'vUnmeasured', 'eLease', 'eRunChild']) expect(bp.has(k), `${k} (an older key the new keys push out) drops at the largest values`).toBe(false);
+    expect(bp.get('dropped'), 'exactly 40 of them').toBe(40);
+    for (const k of ['projectDelta', 'projectFull', 'deltaRows', 'cpBytes', 'encodes', 'retired', 'pendingBash', 'cpCandidates', ...compaction]) expect(bp.has(k), `${k} survives the largest values`).toBe(true);
+    for (const k of ['lostProjects', 'lostPrefixes', 'lossy', 'droppedMeasured', 'ladder', 'markCalls', 'windowCalls', 'lostCalls', 'vLinked', 'vRunChild', 'vUnresolved', 'vConflicting', 'vUnmeasured', 'eLease', 'eRunChild']) expect(bp.has(k), `${k} (an older key the new keys push out) drops at the largest values`).toBe(false);
     expect(keys.filter((k) => !bp.has(k)), 'the dropped keys, by name').toEqual(keys.slice(77));
   });
 });
@@ -1693,15 +1694,25 @@ describe('D-5835 R1: each turn gives the loop a macrotask turn, pinned by a real
   it('D-5835 R1 (ii): an immediate queued at the start of prune, in a pass whose prune and upkeep write nothing, has run by onPassPhase(reconcile)', async () => {
     const { w, r } = await turnWorld();
     const change = vi.spyOn(DelegationDurability.prototype, 'applyCheckpointChange');
-    const pruned = vi.spyOn(DelegationDurability.prototype, 'pruneBucketCursors');
+    const durable = laneOf(w)['durable'] as DelegationDurability;
+    const upkeep = vi.spyOn(durable, 'upkeep');
+    const reading = () => ({ ...durable.commitMeasures(), revision: durable.state().checkpoint.revision });
+    let before: ReturnType<typeof reading> | null = null;
+    let after: ReturnType<typeof reading> | null = null;
     r.arm({});
+    r.also('upkeep', () => { before = reading(); });
+    r.also('compact', () => { after = reading(); });
     let ran = false;
     let ranByReconcile: boolean | null = null;
     r.also('prune', () => { setImmediate(() => { ran = true; }); });
     r.also('reconcile', () => { ranByReconcile = ran; });
     await censusPass(w, at(0), { demo: [] });
     expect(r.fired, 'the pass reached its reconcile').toContain('reconcile');
-    expect([change.mock.calls.length, pruned.mock.calls.length], 'upkeep and prune wrote nothing').toEqual([0, 0]);
+    expect(change, 'attempt upkeep made no checkpoint change').not.toHaveBeenCalled();
+    expect(upkeep, 'the same-hour pass did not enter the upkeep door').not.toHaveBeenCalled();
+    expect(before, 'the upkeep started').not.toBeNull();
+    expect(after, 'the prune ended before compaction').not.toBeNull();
+    expect(after, 'upkeep and prune encoded and wrote nothing').toEqual(before);
     expect(ranByReconcile, 'the immediate ran before the reconcile began').toBe(true);
   });
 

@@ -116,6 +116,8 @@ function delegationProjectionPortOfStore(store: CoordStore): DelegationProjectio
     projectChanged: (prior, next) => store.projectDelegationCheckpointChanges(prior, next),
     insertEvents: (rows) => store.insertDelegationEvents(rows),
     eventStats: () => store.delegationEventStats(),
+    countEventsAtOrBelow: (s) => store.countDelegationEventsAtOrBelow(s),
+    deleteEventsBetween: (a, b, n) => store.deleteDelegationEventsBetween(a, b, n),
   };
 }
 
@@ -1052,6 +1054,8 @@ function harness(opts: { dir?: string; store?: CoordStore } = {}): Harness {
     projectChanged: (prior, next) => { log.push('projectChanged'); return real.projectChanged(prior, next); },
     insertEvents: (rows) => { log.push(`insertEvents:${rows.length}`); return real.insertEvents(rows); },
     eventStats: () => real.eventStats(),
+    countEventsAtOrBelow: (s) => real.countEventsAtOrBelow(s),
+    deleteEventsBetween: (a, b, n) => real.deleteEventsBetween(a, b, n),
   };
   const deps = (over: Partial<DelegationDurabilityDeps> = {}): DelegationDurabilityDeps => ({
     dir, projection, port: spyPort(log), now: () => clock.ms, randomUUID: () => { uuidCalls.n++; return uuids.shift() ?? `generated-${uuidCalls.n}`; }, ...over,
@@ -2664,7 +2668,7 @@ describe('SQLite is repaired from the checkpoint and the journal (ruling R20)', 
     expect(statsOf(rolledStore)).toEqual({ count: 3, maxSequence: 3 });
     const port = delegationProjectionPortOfStore(rolledStore);
     const inserted: number[] = [];
-    const spy: DelegationProjectionPort = { project: (cp) => port.project(cp), projectChanged: (prior, next) => port.projectChanged(prior, next), eventStats: () => port.eventStats(), insertEvents: (rows) => { inserted.push(rows.length); return port.insertEvents(rows); } };
+    const spy: DelegationProjectionPort = { project: (cp) => port.project(cp), projectChanged: (prior, next) => port.projectChanged(prior, next), eventStats: () => port.eventStats(), countEventsAtOrBelow: (s) => port.countEventsAtOrBelow(s), deleteEventsBetween: (a, b, n) => port.deleteEventsBetween(a, b, n), insertEvents: (rows) => { inserted.push(rows.length); return port.insertEvents(rows); } };
     const report = await repairDelegationProjection({
       projection: spy, checkpoint: (await harness({ dir: h.dir }).open()).state().checkpoint,
       journal: () => (async function* () { for (const r of parseDelegationJournal(new Uint8Array(readFileSync(path.join(h.dir, DELEGATION_JOURNAL_FILE))))) yield r; })(),
@@ -2685,7 +2689,7 @@ describe('SQLite is repaired from the checkpoint and the journal (ruling R20)', 
     let ticks = 0;
     const timer = setInterval(() => { ticks++; }, 0);
     await repairDelegationProjection({
-      projection: { project: (cp) => port.project(cp), projectChanged: (prior, next) => port.projectChanged(prior, next), eventStats: () => port.eventStats(), insertEvents: (rows) => { sizes.push(rows.length); return port.insertEvents(rows); } },
+      projection: { project: (cp) => port.project(cp), projectChanged: (prior, next) => port.projectChanged(prior, next), eventStats: () => port.eventStats(), countEventsAtOrBelow: (s) => port.countEventsAtOrBelow(s), deleteEventsBetween: (a, b, n) => port.deleteEventsBetween(a, b, n), insertEvents: (rows) => { sizes.push(rows.length); return port.insertEvents(rows); } },
       checkpoint: dur.state().checkpoint, chunkSize: 10,
       journal: () => (async function* () { for (const r of parseDelegationJournal(new Uint8Array(readFileSync(path.join(h.dir, DELEGATION_JOURNAL_FILE))))) yield r; })(),
     });
@@ -2794,6 +2798,12 @@ describe('the repair reads the journal as few times as it can (fix round 1, M3)'
         return { inserted, duplicate: rows.length - inserted, conflicts: [] };
       },
       eventStats: () => ({ count: held.size, maxSequence: held.size === 0 ? null : Math.max(...held) }),
+      countEventsAtOrBelow: (s) => [...held].filter((n) => n <= s).length,
+      deleteEventsBetween: (a, b, limit) => {
+        const cut = [...held].filter((s) => s > a && s <= b).sort((x, y) => x - y).slice(0, limit);
+        for (const s of cut) held.delete(s);
+        return cut.length;
+      },
     };
     return { port, calls, sequences: () => [...held].sort((a, b) => a - b) };
   }
@@ -3923,6 +3933,8 @@ describe('D-5836 R2: every case where the per-pass repair must still take the FU
       },
       insertEvents: (rows) => { h.log.push(`insertEvents:${rows.length}`); return real.insertEvents(rows); },
       eventStats: () => { if (ctl.failStats) throw new Error('eventStats failed (fixture)'); return real.eventStats(); },
+      countEventsAtOrBelow: (s) => real.countEventsAtOrBelow(s),
+      deleteEventsBetween: (a, b, n) => real.deleteEventsBetween(a, b, n),
     };
     const over = {
       projection, monotonicMs: () => vclock.ms,
@@ -4732,6 +4744,8 @@ describe('run 762: the zero-delta Bash retirement door, its lease guard and its 
       projectChanged: (prior, next) => { const r = real.projectChanged(prior, next); modes.push(`projectChanged:${r.mode}`); return r; },
       insertEvents: (rows) => real.insertEvents(rows),
       eventStats: () => real.eventStats(),
+      countEventsAtOrBelow: (s) => real.countEventsAtOrBelow(s),
+      deleteEventsBetween: (a, b, n) => real.deleteEventsBetween(a, b, n),
     };
     const dur = await h.open({ projection });
     expect(dur.failure()).toBeNull();
@@ -5172,6 +5186,8 @@ describe('run 762: workflow runs end on their task notification, start-less stop
       },
       insertEvents: (rows) => real.insertEvents(rows),
       eventStats: () => real.eventStats(),
+      countEventsAtOrBelow: (s) => real.countEventsAtOrBelow(s),
+      deleteEventsBetween: (a, b, n) => real.deleteEventsBetween(a, b, n),
     };
     return { projection, calls, restore: (): void => full.mockRestore() };
   }

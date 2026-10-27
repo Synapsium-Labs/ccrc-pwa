@@ -944,9 +944,11 @@ export interface DelegationRetainedLine extends DelegationJournalLine {
  * lines must increase (`carried-order`) and a torn tail refuses (`torn-tail`, never healed). A carried line at or above J is not yielded: it
  * exists only between a compaction's two renames, as a copy of a journal line, so the journal line at its sequence must equal it byte for
  * byte, and a mismatch, or a sequence the journal never reaches, refuses `carried-past-journal`. `onTail` is the journal's (recovery's).
+ * `onCarried` measures the physical file, including copies suppressed from the retained set in that crash window.
  */
 export async function* readDelegationRetainedRecords(
   port: DelegationFilePort, carriedPath: string, journalPath: string, onTail?: (tail: DelegationJournalTail) => void,
+  onCarried?: (bytes: number, lines: number) => void,
 ): AsyncGenerator<DelegationRetainedLine, void, undefined> {
   const journal = readDelegationJournalLines(port, journalPath, undefined, onTail);
   try {
@@ -956,7 +958,11 @@ export async function* readDelegationRetainedRecords(
     const firstLine = first.done === true ? null : { ...first.value, bytes: new Uint8Array(first.value.bytes) };
     const pending = new Map<number, Uint8Array>();
     let last: number | null = null;
+    let carriedBytes = 0;
+    let carriedLines = 0;
     for await (const line of readDelegationJournalLines(port, carriedPath)) {
+      carriedBytes += line.length;
+      carriedLines++;
       const seq = line.record.sequence;
       if (last !== null && seq <= last) refuse('carried-order', `carried sequence ${seq} follows ${last}`);
       last = seq;
@@ -977,6 +983,7 @@ export async function* readDelegationRetainedRecords(
       yield { ...next.value, source: 'journal' };
     }
     if (pending.size > 0) refuse('carried-past-journal', `${pending.size} carried line(s) at or above the journal's first sequence ${J ?? '(none)'} are not in the journal, first ${[...pending.keys()][0]}`);
+    onCarried?.(carriedBytes, carriedLines);
   } finally {
     await journal.return(undefined);
   }

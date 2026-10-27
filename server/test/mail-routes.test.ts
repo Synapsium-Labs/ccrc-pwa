@@ -35,6 +35,7 @@ import { isDelegationCorrelationKebab } from '../src/coord/delegation-correlatio
 import { isDelegationCensusKebab } from '../src/coord/gitref.js';
 import { isDriftKind, isRunSpendUnmeasuredReason } from '../../shared/api.js';
 import { isDelegationPolicyKebab } from '../src/coord/delegation-policy.js';
+import { isDelegationCompactionKebab } from '../src/coord/delegation-compaction.js';
 import { isCollectLaneKebab } from '../src/collectLane.js';
 import { isNoticeMode } from '../src/notice.js';
 import { isArchiveGateKebab } from '../src/coord/archiveAdmission.js';
@@ -919,18 +920,18 @@ describe('the rejection table is total, in both directions', () => {
         || isLandingKebab(tok)
         // DELEGATION BROKER, WAVE 3: the SEVENTEENTH union, checked together and never merged, on the standing rule
         // `enter-ignored` above states. The delegation modules (`delegation-model.ts`, `-journal.ts`, `-checkpoint.ts`,
-        // `-ingest.ts`, `-correlation.ts` and `-policy.ts`) spell, as literals, their refusal codes, the journal's entry kinds, the pruning
+        // `-ingest.ts`, `-correlation.ts`, `-policy.ts` and `-compaction.ts`) spell, as literals, their refusal codes, the journal's entry kinds, the pruning
         // hold reasons, the recovery phases and failure codes, the durability edges, the line rejections, the bucket
         // unreadable reasons, the verdict kinds and every correlation reason; `gitref.ts` spells the worktree census's
         // diagnostics; the policy spells its six report-effect tags and, as table keys, the correlation reasons it classifies; and
         // `schema.ts`'s delegation CHECK constraints and `store.ts`'s projection spell some of the same words, from the same vocabularies
         // (a source kind, a cleanup state, a model refusal). None is a mail rejection or a run refusal — no route answers with one; they ride the journal, the
-        // checkpoint, the cursor detail, a verdict and an effect. Admitted through seven exported guards, each derived from its own file's
+        // checkpoint, the cursor detail, a verdict, an effect and a compaction outcome. Admitted through eight exported guards, each derived from its own file's
         // typed tables (or from `shared/api.ts`'s delegation vocabularies, read and never re-spelled), never NOT_CODES, for the
         // reason every union above gives.
         || isDelegationModelKebab(tok) || isDelegationJournalKebab(tok) || isDelegationCheckpointKebab(tok)
         || isDelegationIngestKebab(tok) || isDelegationCorrelationKebab(tok) || isDelegationCensusKebab(tok)
-        || isDelegationPolicyKebab(tok)
+        || isDelegationPolicyKebab(tok) || isDelegationCompactionKebab(tok)
         // CHILD RECLAMATION, WAVE 10: the next union, re-counted on the merged tree, checked together and never merged,
         // on the standing rule `enter-ignored` above states. `coord/collectLaneJournal.ts` (the collector switch's
         // generation journal adapter) spells its read kinds as literals, and the switch's other coord-side code

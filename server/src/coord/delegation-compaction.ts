@@ -97,6 +97,22 @@ export interface DelegationCompactionPlan {
   worthwhile: boolean;
   /** Task 3.5: the activity IDs C1 may retire once the cut is durable, sorted. */
   retirable: readonly string[];
+  /** Diagnostic facts captured by the same stream that decides the cut; never inferred from evidence observedAt. */
+  firstJournalAcceptedAt: string | null;
+  firstRetainedAcceptedAt: string | null;
+  netShare: number;
+  /** Physical carried-file totals supplied by the retained reader after validation, including suppressed journal copies. */
+  currentCarriedBytes: number;
+  currentCarriedLines: number;
+}
+
+/** The daily diagnostic, from the planner's measured stream and the durable outcome, never from a second read. */
+export function delegationCompactionLine(plan: DelegationCompactionPlan, result: { reason: DelegationCompactionSkipReason } | { eventsDeleted: number; retired: number; ms: number }): string {
+  const prefix = 'ccrc-server: delegation compaction:';
+  if ('reason' in result) return `${prefix} skipped (${result.reason} ${Number((100 * plan.netShare).toFixed(2))}%); first record accepted ${plan.firstJournalAcceptedAt ?? '(none)'}; carried file ${plan.currentCarriedBytes} in ${plan.currentCarriedLines} lines`;
+  const reasons = DELEGATION_CARRY_REASONS.map((r) => [r, plan.carried.filter((l) => l.reasons.includes(r)).length] as const)
+    .filter(([, n]) => n > 0).map(([r, n]) => `${r}=${n}`).join(',');
+  return `${prefix} cut ${plan.cutRecords} records (${plan.cutBytes}) through ${plan.cutThrough}, limited by ${plan.limitedBy}; first retained ${plan.cutThrough + 1} accepted ${plan.firstRetainedAcceptedAt}; carried ${plan.carried.length} (${plan.carriedBytes}) by reason ${reasons || '(none)'}; carried file ${plan.carriedBytes} in ${plan.carried.length} lines; events deleted ${result.eventsDeleted}; activities retired ${result.retired}; ${result.ms} ms`;
 }
 
 const DISABLED_REASON = 'recovery has not completed: compaction stays disabled from reconstruction entry through validation (O2)';
@@ -217,6 +233,8 @@ export class DelegationCompactionPlanner {
   private journalStarted = false;
   private cutRecords = 0;
   private suffixOffset: number | null = null;
+  private firstJournalAcceptedAt: string | null = null;
+  private firstRetainedAcceptedAt: string | null = null;
 
   constructor(input: { checkpoint: DelegationCheckpointV1; ready: boolean; nowMs: number; floorMs: number; naming: DelegationRecordNaming }) {
     this.cp = input.checkpoint;
@@ -271,11 +289,12 @@ export class DelegationCompactionPlanner {
     this.journalStarted = true;
     if (!this.ready) return;
     this.journalFirst ??= record.sequence;
+    this.firstJournalAcceptedAt ??= record.acceptedAt;
     this.journalLast = record.sequence;
     if (this.floorAt === null && parseDelegationInstant(record.acceptedAt) > this.cutoffMs) this.floorAt = record.sequence;
     const below = this.floorAt === null && record.sequence <= this.anchor - 1;
     if (below) this.cutRecords++;
-    else this.suffixOffset ??= at.offset;
+    else { this.suffixOffset ??= at.offset; this.firstRetainedAcceptedAt ??= record.acceptedAt; }
     this.consider(record, at, 'journal', below);
   }
 
@@ -378,11 +397,13 @@ export class DelegationCompactionPlanner {
     if (closed !== null && this.callCarries(closed)) this.carryCall(closed);
   }
 
-  /** The plan, given the journal's size in bytes. */
-  finish(journalBytes: number): DelegationCompactionPlan {
+  /** The plan, given the file sizes measured by the retained reader (an omitted carried file is empty). */
+  finish(journalBytes: number, carriedFile: { bytes: number; lines: number } = { bytes: 0, lines: 0 }): DelegationCompactionPlan {
     const none = (enabled: boolean): DelegationCompactionPlan => ({
       enabled, disabledReason: enabled ? null : DISABLED_REASON, cutThrough: 0, limitedBy: 'empty', suffixOffset: 0, carried: [],
       carriedEvidenceSequences: [], cutEvidenceEventIds: [], cutRecords: 0, cutBytes: 0, carriedBytes: 0, worthwhile: false, retirable: [],
+      firstJournalAcceptedAt: this.firstJournalAcceptedAt, firstRetainedAcceptedAt: this.firstRetainedAcceptedAt, netShare: 0,
+      currentCarriedBytes: carriedFile.bytes, currentCarriedLines: carriedFile.lines,
     });
     if (!this.ready) return none(false);
     const floorTerm = this.floorAt === null ? (this.journalLast ?? 0) : this.floorAt - 1;
@@ -409,6 +430,9 @@ export class DelegationCompactionPlanner {
       cutRecords: this.cutRecords, cutBytes, carriedBytes,
       worthwhile: cutBytes - fromJournal >= DELEGATION_COMPACTION_MIN_SHARE * journalBytes,
       retirable: this.retirable(carriedSet),
+      firstJournalAcceptedAt: this.firstJournalAcceptedAt, firstRetainedAcceptedAt: this.firstRetainedAcceptedAt,
+      netShare: journalBytes === 0 ? 0 : (cutBytes - fromJournal) / journalBytes,
+      currentCarriedBytes: carriedFile.bytes, currentCarriedLines: carriedFile.lines,
     };
   }
 

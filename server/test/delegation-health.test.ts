@@ -330,7 +330,7 @@ describe('W3-M68 checkpoint-interval restart table: an unmeasured session-hour i
   afterEach(async () => { await Promise.all(live.splice(0).map((d) => d.close().catch(() => undefined))); });
 
   const portOf = (store: CoordStore): DelegationProjectionPort =>
-    ({ project: (cp) => store.projectDelegationCheckpoint(cp), projectChanged: (prior, next) => store.projectDelegationCheckpointChanges(prior, next), insertEvents: (rows) => store.insertDelegationEvents(rows), eventStats: () => store.delegationEventStats() });
+    ({ project: (cp) => store.projectDelegationCheckpoint(cp), projectChanged: (prior, next) => store.projectDelegationCheckpointChanges(prior, next), insertEvents: (rows) => store.insertDelegationEvents(rows), eventStats: () => store.delegationEventStats(), countEventsAtOrBelow: (s) => store.countDelegationEventsAtOrBelow(s), deleteEventsBetween: (a, b, n) => store.deleteDelegationEventsBetween(a, b, n) });
   async function open(dir: string, store: CoordStore | null, edge?: (edge: string, when: 'before' | 'after') => void): Promise<DelegationDurability> {
     const d = await DelegationDurability.open({
       dir, projection: store === null ? null : portOf(store), now: () => NOW, randomUUID: () => '5b0d9d9e-6d3c-4d2e-9f7a-0a1b2c3d4e5f',

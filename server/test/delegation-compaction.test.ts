@@ -389,19 +389,17 @@ describe('Task 3.2: the planner: the cut point S and the carried set (pure)', ()
 
 // ── the durable rig: an applier over a fixture directory and a real store ──────────────────────────────────────────────
 
-/** The projection port over the store, with the two members wave 4 adds as SQL over the fixture database (the store's own methods are
- *  phase B's: `CoordStore.countDelegationEventsAtOrBelow` and `deleteDelegationEventsBetween`). */
-function projectionOf(store: CoordStore, db: DatabaseSync, log: string[] = []): DelegationProjectionPort {
+/** The real store's projection port; the retention deletes are logged for the ordering pins. */
+function projectionOf(store: CoordStore, log: string[] = []): DelegationProjectionPort {
   return {
     project: (cp) => store.projectDelegationCheckpoint(cp),
     projectChanged: (prior, next) => store.projectDelegationCheckpointChanges(prior, next),
     insertEvents: (rows) => store.insertDelegationEvents(rows),
     eventStats: () => store.delegationEventStats(),
-    countEventsAtOrBelow: (sequence) => Number((db.prepare('SELECT COUNT(*) AS n FROM delegation_events WHERE journalSequence <= ?').get(sequence) as { n: number }).n),
+    countEventsAtOrBelow: (sequence) => store.countDelegationEventsAtOrBelow(sequence),
     deleteEventsBetween: (after, through, limit) => {
       log.push(`delete:${after}:${through}:${limit}`);
-      return Number(db.prepare('DELETE FROM delegation_events WHERE id IN (SELECT id FROM delegation_events WHERE journalSequence > ? AND journalSequence <= ? ORDER BY journalSequence LIMIT ?)')
-        .run(after, through, limit).changes);
+      return store.deleteDelegationEventsBetween(after, through, limit);
     },
   };
 }
@@ -447,7 +445,7 @@ function rig(opts: { dir?: string } = {}): Rig {
     if (ctl.fault === at) { ctl.fault = null; throw new InjectedFault(`injected at ${at}`); }
   };
   const deps = (over: Partial<DelegationDurabilityDeps> = {}): DelegationDurabilityDeps => ({
-    dir, projection: projectionOf(store, db, log), port: quickPort, now: () => clock.ms, randomUUID: () => `00000000-0000-4000-8000-${String(++n).padStart(12, '0')}`, onEdge, ...over,
+    dir, projection: projectionOf(store, log), port: quickPort, now: () => clock.ms, randomUUID: () => `00000000-0000-4000-8000-${String(++n).padStart(12, '0')}`, onEdge, ...over,
   });
   return { dir, db, store, clock, ctl, log, deps, open: async (over) => { const d = await DelegationDurability.open(deps(over)); opened.push(d); return d; } };
 }
@@ -641,6 +639,20 @@ describe('Task 3.3: compactJournal, the crash-safe rewrite inside the serial que
     expect(withoutRevision(report.state.checkpoint)).toBe(cp);
   });
 
+  it('W4-C29 crash window: a skipped plan counts every physical carried line, including copies at or above J', async () => {
+    const { r, dur } = await fixture();
+    r.ctl.fault = 'carried-directory-fsync:after';
+    await expect(dur.compactJournal(NOW, DELEGATION_RETENTION_FLOOR_MS)).rejects.toBeInstanceOf(InjectedFault);
+    const carried = carriedOf(r.dir)!;
+    const lines = linesOf(carried);
+    expect(lines.length).toBeGreaterThan(0);
+    expect(lines.every((line) => line.sequence >= recordsOf(journalOf(r.dir))[0]!.sequence)).toBe(true);
+    await dur.recover();
+    const out = await dur.compactJournal(NOW, 20 * DAY);
+    expect(out).toMatchObject({ kind: 'skipped', reason: 'nothing-to-cut', plan: { currentCarriedBytes: carried.length, currentCarriedLines: lines.length } });
+    expect(carriedOf(r.dir)).toEqual(carried);
+  });
+
   it('W4-C13b: the same crash in a second compaction: the re-carried old lines are accepted, the new ones matched; the repair prunes the dropped carried rows without a wipe', async () => {
     const { r, dur } = await compacted();
     // three more days: the active run ends (its launch and identity are no longer carried), and the floor moves on
@@ -663,7 +675,7 @@ describe('Task 3.3: compactJournal, the crash-safe rewrite inside the serial que
     expect(report.failure).toBeNull();
     expect(withoutRevision(report.state.checkpoint)).toBe(cp);
     const repaired = await repairDelegationProjection({
-      projection: projectionOf(r.store, r.db), checkpoint: report.state.checkpoint, journal: () => retainedOf(r.dir), evidence: report.facts!.evidence,
+      projection: projectionOf(r.store), checkpoint: report.state.checkpoint, journal: () => retainedOf(r.dir), evidence: report.facts!.evidence,
       retainedFrom: report.journal!.firstSequence,
     });
     expect(repaired).toMatchObject({ prunedBelow: droppedEvidence, wipedAll: false });
@@ -800,7 +812,7 @@ describe('Task 3.4: delegation_events retention, and a repair that deletes inste
   it('W4-C17 (the chunks): with a chunk of 2 and 7 rows in one gap, four deletes, and the loop gets a turn after each', async () => {
     const r = rig();
     const turns: string[] = [];
-    const base = projectionOf(r.store, r.db);
+    const base = projectionOf(r.store);
     const projection: DelegationProjectionPort = {
       ...base,
       deleteEventsBetween: (after, through, limit) => { turns.push('delete'); setImmediate(() => turns.push('turn')); return base.deleteEventsBetween!(after, through, limit); },
@@ -825,7 +837,7 @@ describe('Task 3.4: delegation_events retention, and a repair that deletes inste
     const cutEvidence = rowSequences(r.db).filter((seq) => seq < J).length - report.facts!.evidence.countAtOrBelow(J - 1);
     expect(cutEvidence).toBeGreaterThan(0);
     const repaired = await repairDelegationProjection({
-      projection: projectionOf(r.store, r.db), checkpoint: report.state.checkpoint, journal: () => retainedOf(r.dir), evidence: report.facts!.evidence, retainedFrom: J,
+      projection: projectionOf(r.store), checkpoint: report.state.checkpoint, journal: () => retainedOf(r.dir), evidence: report.facts!.evidence, retainedFrom: J,
     });
     expect(repaired).toMatchObject({ wipedAll: false, fullReplay: false, prunedBelow: cutEvidence });
     expect(repaired.journalPasses).toBeLessThanOrEqual(1);
@@ -834,6 +846,16 @@ describe('Task 3.4: delegation_events retention, and a repair that deletes inste
     const reopened = await r.open();
     expect(reopened.failure()).toBeNull();
     expect(countRows(r.db)).toBe(evidenceOf(reopened).evidence.total);
+  });
+
+  it('the pruning plan still locates carried holds after compaction', async () => {
+    const { dur } = await compacted();
+    const retained: DelegationJournalRecordV1[] = [];
+    await dur.visitRetainedRecords((r) => retained.push(r));
+    const held = new Set(dur.state().checkpoint.pruningHolds.map((h) => h.journalId));
+    const firstHeld = retained.find((r) => held.has(r.journalId))!;
+    expect(firstHeld.sequence).toBeLessThan(dur.state().checkpoint.appliedJournalSequence);
+    expect(await dur.planPruning(NOW, DELEGATION_RETENTION_FLOOR_MS)).toMatchObject({ enabled: true, prunableThroughSequence: firstHeld.sequence - 1 });
   });
 
   it('W4-C30: after a compaction a heal replays the carried evidence, and so does a wipe; a second full repair wipes nothing', async () => {
@@ -914,6 +936,25 @@ describe('Task 3.5: C1 retires ended activities behind the cut (D-7001, D-7024)'
     const report = await dur.recover();
     expect(report.failure).toBeNull();
     expect(canonicalDelegationJson(dur.state().checkpoint.activities)).toBe(activities);
+  });
+});
+
+describe('Task 3.4: indexed event retention through CoordStore', () => {
+  it('counts inclusively and deletes only the bounded gap, oldest first and at most the requested chunk', async () => {
+    const r = rig();
+    const d = await r.open();
+    await apply(d, Array.from({ length: 8 }, (_, i) => sessionStart(D0 + i * MIN)));
+    expect([0, 1, 5, 8, 99].map((s) => r.store.countDelegationEventsAtOrBelow(s))).toEqual([0, 1, 5, 8, 8]);
+    expect(r.store.deleteDelegationEventsBetween(2, 7, 2)).toBe(2);
+    expect(rowSequences(r.db)).toEqual([1, 2, 5, 6, 7, 8]);
+    expect(r.store.countDelegationEventsAtOrBelow(5)).toBe(3);
+    expect(r.store.deleteDelegationEventsBetween(2, 7, 2)).toBe(2);
+    expect(rowSequences(r.db)).toEqual([1, 2, 7, 8]);
+    expect(r.store.deleteDelegationEventsBetween(2, 7, 2)).toBe(1);
+    expect(r.store.deleteDelegationEventsBetween(2, 7, 2)).toBe(0);
+    expect(rowSequences(r.db)).toEqual([1, 2, 8]);
+    expect(r.store.deleteDelegationEventsBetween(0, 8, 0)).toBe(0);
+    expect(r.store.delegationEventStats()).toEqual({ count: 3, maxSequence: 8 });
   });
 });
 

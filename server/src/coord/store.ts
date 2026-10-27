@@ -9438,6 +9438,20 @@ export class CoordStore {
     return { count: r.n, maxSequence: r.m };
   }
 
+  /** The retained evidence below a cut; the unique journalSequence index bounds both retention statements. */
+  countDelegationEventsAtOrBelow(sequence: number): number {
+    const r = this.db.prepare('SELECT COUNT(*) AS n FROM delegation_events WHERE journalSequence <= ?').get(sequence) as { n: unknown };
+    if (typeof r.n !== 'number' || !Number.isSafeInteger(r.n)) throw new DelegationModelError('unreadable-row', 'delegation_events: COUNT(*) is not an integer');
+    return r.n;
+  }
+
+  /** One atomic, bounded delete; carried sequences sit outside the gap the caller supplies. */
+  deleteDelegationEventsBetween(afterExclusive: number, throughInclusive: number, limit: number): number {
+    return tx(this.db, () => Number(this.db.prepare(
+      'DELETE FROM delegation_events WHERE id IN (SELECT id FROM delegation_events WHERE journalSequence > ? AND journalSequence <= ? ORDER BY journalSequence LIMIT ?)',
+    ).run(afterExclusive, throughInclusive, limit).changes));
+  }
+
   /**
    * The projection as a checkpoint, for a DRIFT CHECK: what SQLite says, in the shape the checkpoint has. Every table is
    * read through its typed reader, so an unknown enum word, a malformed list or a wrong storage class throws an
