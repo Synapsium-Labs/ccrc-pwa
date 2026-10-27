@@ -19,13 +19,28 @@
 //  5. The meter's inset ring (D-6329) reaches the session screen: the Workflows strip draws a `Meter` per row, and each
 //     track wears the 1 px inset ring in the tertiary ink (review 940 O5).
 //
+// THE FOLD AND ITS FLYOUT (desktop polish S5b, D-6530; R120's `strip-hover-flyout`; `lanes-tie-break-soonest-reset`). The
+// strip folds by default, so the cases above that count or place all seventeen cards seed the stored choice expanded
+// (`seedStripExpanded`), and what the fold itself draws is held at the end of the file, with the shared seventeen-lane
+// fixture (`test/seventeenLanes.ts`): (6) folded, at 900, 1280 and 1920 in both skins and palettes, the row is one line,
+// `rowFit`'s tracks less one of cards (2, 3 and 6) in the freest-first order, then the end cell, one track wide, holding
+// the control and All accounts, every item at one top, nothing cut or sideways; (7) expanded, every lane wraps and the end
+// cell follows the last card; (8) from 1920 to 1280 the folded row re-fits, and back; (9) at 1280 and 1920 hovering the
+// folded line opens, after the flyout's delay, a panel below it, drawn over the content (positioned, the element at each
+// card's centre its own), holding every lane in order inside the viewport, pushing the first session row nowhere, and
+// closing after its grace once the pointer leaves. The expected order is worked out here from the rule, tie keys and all
+// (`orderOf`), never by the app's decider.
+//
 // Run: `( cd pwa && CCRC_CHROME=<a Chrome or Chromium binary> ./node_modules/.bin/vitest run --config vitest.browser.config.ts --maxWorkers=2 browser/lanes-row.browser.test.ts )`.
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import path from 'node:path';
 import { chromium, type Browser, type Page } from 'playwright-core';
 import { INSTRUMENT, PHOSPHOR, REFINED } from '@ccrc/ui';
 import { resolveChrome } from './harness';
 import { buildDist, openApp, removeDist, seedStripExpanded, serveDist, type AppFixture, type AppView, type DistServer } from './app';
 import { fleetSession } from '../test/fleetFixture';
+import { seventeenLanes } from '../test/seventeenLanes';
+import { FLYOUT_CLOSE_MS, FLYOUT_OPEN_MS, foldShown, LANE_CARD_MIN, rowFit } from '../src/fleet/stripFold';
 import type { WorkflowView } from '../../shared/workflows';
 
 const THEMES = [PHOSPHOR, 'light'];
@@ -527,6 +542,261 @@ describe("the meter's inset ring reaches WorkflowStrip on the session screen", (
         });
         expect(found.count, 'both workflow rows draw a meter').toBe(WORKFLOWS.length);
         expect(found.faults).toEqual([]);
+        expect(errors).toEqual([]);
+      } finally {
+        await ctx.close();
+      }
+    }, 90_000);
+  }
+});
+
+// THE FOLD AT THE DESK (desktop polish S5b, D-6530; R48) and its flyout (R120, strip-hover-flyout). The strip folds by
+// default: with the shared seventeen-lane fixture (`test/seventeenLanes.ts`, which is not this file's own `LANES`) the row
+// is ONE line, as many cards as `rowFit` says the line's tracks hold less the one the end cell takes, then the end cell with
+// the fold's control and All accounts. The cards' group measures 868, 1248 and 1888 px with an 8 px gap at 900, 1280 and
+// 1920 in both skins (measured, T2c's Step 0 and this leg), so a line holds 3, 4 and 7 tracks and a folded one shows 2, 3
+// and 6 cards.
+const FOLD = seventeenLanes(nowSec);
+const FOLD_LANES: readonly Lane[] = FOLD.cases.map((c) => ({ acct: { ...c.acct }, label: c.label }));
+const FOLD_ORDER = orderOf(FOLD_LANES);
+const FOLD_FIXTURE: AppFixture = {
+  api: { '/api/feed': { events: [] }, '/api/accounts': { accounts: FOLD.accounts, projected: null, roster: FOLD.roster } },
+  // Nine sessions, so the fleet list has a first session row to measure: the flyout must push nothing down.
+  fleetFrames: [{ type: 'fleet', sessions: Array.from({ length: 9 }, (_, i) => fleetSession({
+    id: `s${i}`, project: `project-${i % 3}`, bucket: i === 0 ? 'attention' : 'idle',
+  })) }],
+};
+/** The cards a folded line shows at each width, the same in both skins: asserted beside `rowFit`'s own answer. */
+const FOLDED_CARDS: Readonly<Record<number, number>> = { 900: 2, 1280: 3, 1920: 6 };
+
+/** Open the app with the fold's fixture: folded (the default) or, with `expanded`, seeded to show every lane. Waits for the
+ *  fold's control, which only renders once the row has been measured, and for the first session row. */
+async function openFoldedDesk(view: AppView, expanded = false): Promise<Awaited<ReturnType<typeof openApp>>> {
+  const opened = await openApp(browser!, view, FOLD_FIXTURE);
+  if (expanded) await seedStripExpanded(opened.ctx);
+  await opened.page.goto(server!.origin + '/');
+  await opened.page.waitForFunction((all) => document.querySelector('header.shell-accounts .accounts-end [aria-expanded]') !== null
+    && document.querySelector('.sess-line') !== null
+    && (!all || document.querySelectorAll('header.shell-accounts .account-gauge').length === 17), expanded, { timeout: 30_000 });
+  await opened.page.waitForTimeout(400); // layout settles
+  return opened;
+}
+
+/** What the strip's line measures at this moment: the cards' group's content width and column gap (what `useRowWidth`
+ *  reads), and every box the fold's line is made of. Plain numbers and words, so the case judges them in Node. */
+interface LineMeasure {
+  width: number; gap: number; vw: number;
+  names: string[]; mounted: number;
+  cards: Array<{ left: number; right: number; top: number; bottom: number }>;
+  end: { left: number; right: number; top: number; bottom: number } | null;
+  control: { left: number; right: number; top: number; bottom: number; text: string; expanded: string | null; cut: boolean } | null;
+  door: { left: number; right: number; top: number; bottom: number; cut: boolean } | null;
+  row: { left: number; right: number };
+  sideways: string[];
+}
+
+function measureLine(): LineMeasure {
+  const strip = document.querySelector<HTMLElement>('header.shell-accounts .accounts-strip')!;
+  const cs = getComputedStyle(strip);
+  const box = (el: Element): { left: number; right: number; top: number; bottom: number } => {
+    const r = el.getBoundingClientRect();
+    return { left: r.left, right: r.right, top: r.top, bottom: r.bottom };
+  };
+  const cards = [...strip.querySelectorAll<HTMLElement>(':scope > .account-gauge')];
+  const end = strip.querySelector<HTMLElement>(':scope > .accounts-end');
+  const control = end?.querySelector<HTMLElement>('[aria-expanded]') ?? null;
+  const door = end?.querySelector<HTMLElement>('[data-command="go-accounts"]') ?? null;
+  const header = document.querySelector<HTMLElement>('header.shell-accounts')!;
+  const sideways: string[] = [];
+  if (document.documentElement.scrollWidth > window.innerWidth + 0.5) sideways.push('the page');
+  if (header.scrollWidth > header.clientWidth + 0.5) sideways.push('the header');
+  if (strip.scrollWidth > strip.clientWidth + 0.5) sideways.push('the row');
+  const sr = strip.getBoundingClientRect();
+  return {
+    width: strip.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight), gap: parseFloat(cs.columnGap) || 0, vw: window.innerWidth,
+    names: cards.map((c) => c.querySelector('.account-gauge-label')?.textContent ?? ''), mounted: document.querySelectorAll('.account-gauge').length,
+    cards: cards.map(box), end: end === null ? null : box(end),
+    control: control === null ? null : { ...box(control), text: control.textContent ?? '', expanded: control.getAttribute('aria-expanded'), cut: control.scrollWidth > control.clientWidth + 0.5 },
+    door: door === null ? null : { ...box(door), cut: door.scrollWidth > door.clientWidth + 0.5 },
+    row: { left: sr.left, right: sr.right }, sideways,
+  };
+}
+
+/** The faults of a FOLDED line at `width`: `rowFit`'s tracks less one of cards, in the freest-first order, then the end
+ *  cell (one track) holding the control and All accounts, every item at one top, nothing cut or sideways. The count is
+ *  worked out from the measured width and gap by the L1 functions and held against the figure the width gives. */
+async function foldedFaults(page: Page, width: number): Promise<string[]> {
+  const m = await page.evaluate(measureLine);
+  const out: string[] = [];
+  const tracks = rowFit(m.width, LANE_CARD_MIN, m.gap);
+  const want = foldShown(true, tracks);
+  if (want !== FOLDED_CARDS[width]) out.push(`${m.width} px and a ${m.gap} px gap fit ${tracks} tracks and fold to ${want} cards, not ${FOLDED_CARDS[width]}`);
+  if (m.names.length !== want) out.push(`${m.names.length} cards, not ${want}`);
+  if (m.mounted !== m.names.length) out.push(`${m.mounted} cards are mounted, the line shows ${m.names.length}: a lane is mounted and hidden`);
+  if (m.names.join('|') !== FOLD_ORDER.slice(0, m.names.length).join('|')) out.push(`the cards read [${m.names}], not the freest first [${FOLD_ORDER.slice(0, m.names.length)}]`);
+  const { end, control, door } = m;
+  if (end === null || control === null || door === null) return [...out, 'the end cell lacks its control or All accounts'];
+  const tops = [...m.cards.map((c) => c.top), end.top, control.top];
+  if (Math.max(...tops) - Math.min(...tops) > 1) out.push(`the line's items are not at one top (${tops.map((t) => t.toFixed(1))})`);
+  const last = m.cards.at(-1)!;
+  for (let i = 1; i < m.cards.length; i++) if (m.cards[i]!.left < m.cards[i - 1]!.right - 0.5) out.push('the cards are not left to right');
+  if (end.left < last.right - 0.5) out.push(`the end cell (left ${end.left}) is not after the last card (right ${last.right})`);
+  if (Math.abs((end.right - end.left) - (last.right - last.left)) > 1.5) out.push(`the end cell is ${Math.round(end.right - end.left)} px wide, one track is ${Math.round(last.right - last.left)}`);
+  if (end.right > m.row.right + 0.5) out.push('the end cell runs past the row');
+  if (control.left < end.left - 0.5 || control.right > end.right + 0.5) out.push(`the control is not whole in the end cell (${control.left}..${control.right} in ${end.left}..${end.right})`);
+  if (door.left < end.left - 0.5 || door.right > end.right + 0.5 || door.top < end.top - 0.5 || door.bottom > end.bottom + 0.5) out.push('All accounts is not whole in the end cell');
+  if (door.left < control.right - 0.5 && door.top < control.bottom - 0.5 && door.bottom > control.top + 0.5) out.push('All accounts overlaps the control');
+  if (control.cut) out.push("the control's words are cut");
+  if (door.cut) out.push("All accounts' words are cut");
+  if (control.expanded !== 'false') out.push(`the control's aria-expanded is ${control.expanded}`);
+  const words = `+${17 - m.names.length} more · 1 sign-in expired · 1 rate-limited`;
+  if (control.text !== words) out.push(`the control reads "${control.text}", not "${words}"`);
+  if (m.sideways.length > 0) out.push(`${m.sideways.join(', ')} scrolls sideways`);
+  return out;
+}
+
+/** The folded line's views: both skins, both palettes, the three desk widths. */
+const FOLD_VIEWS: AppView[] = DESKS;
+
+describe('folded, the lanes row is one line of the freest cards and the end cell', () => {
+  for (const view of FOLD_VIEWS) {
+    it(`folded with 17 lanes at 900, 1280 and 1920 in both skins, the row is one line: rowFit's tracks less one of cards, then the end cell with the control and All accounts, every item at one top, and nothing scrolls sideways: ${named(view)}`, async () => {
+      const { ctx, page, errors } = await openFoldedDesk(view);
+      try {
+        expect(await foldedFaults(page, view.width)).toEqual([]);
+        expect(errors).toEqual([]);
+      } finally {
+        await ctx.close();
+      }
+    }, 90_000);
+  }
+});
+
+describe('expanded, every lane wraps and the end cell follows the last card', () => {
+  for (const view of FOLD_VIEWS) {
+    it(`expanded, every lane wraps and the end cell follows the last card: ${named(view)}`, async () => {
+      const { ctx, page, errors } = await openFoldedDesk(view, true);
+      try {
+        const m = await page.evaluate(measureLine);
+        const tracks = rowFit(m.width, LANE_CARD_MIN, m.gap)!;
+        const out: string[] = [];
+        if (m.names.join('|') !== FOLD_ORDER.join('|')) out.push(`the cards read [${m.names}], not every lane freest first [${FOLD_ORDER}]`);
+        const rows = new Set(m.cards.map((c) => Math.round(c.top))).size;
+        if (rows !== Math.ceil(17 / tracks)) out.push(`${rows} lines of cards, not ${Math.ceil(17 / tracks)} (${tracks} tracks hold 17)`);
+        const { end, control, door } = m;
+        if (end === null || control === null || door === null) out.push('the end cell lacks its control or All accounts');
+        else {
+          const last = m.cards.at(-1)!;
+          if (end.left < last.right - 0.5) out.push(`the end cell (left ${end.left}) is not after the last card (right ${last.right})`);
+          const mid = (end.top + end.bottom) / 2;
+          if (mid < last.top - 0.5 || mid > last.bottom + 0.5) out.push("the end cell is not on the last card's line");
+          if (control.text !== 'Show fewer' || control.expanded !== 'true') out.push(`the control reads "${control.text}", aria-expanded ${control.expanded}`);
+          if (control.cut || door.cut) out.push('the end cell\'s words are cut');
+          if (control.right > end.right + 0.5 || door.right > end.right + 0.5) out.push('the end cell holds more than it shows');
+        }
+        for (const [i, c] of m.cards.entries()) if (c.left < m.row.left - 0.5 || c.right > m.row.right + 0.5) out.push(`${m.names[i]} is not whole in the row`);
+        if (m.sideways.length > 0) out.push(`${m.sideways.join(', ')} scrolls sideways`);
+        expect(out).toEqual([]);
+        expect(errors).toEqual([]);
+      } finally {
+        await ctx.close();
+      }
+    }, 90_000);
+  }
+});
+
+describe('the folded row re-fits when the window changes', () => {
+  for (const skin of SKINS) {
+    for (const theme of THEMES) {
+      it(`from 1920 to 1280 the folded row re-fits: ${named({ skin, theme, width: 1920 })}`, async () => {
+        const { ctx, page, errors } = await openFoldedDesk({ skin, theme, width: 1920 });
+        try {
+          expect(await foldedFaults(page, 1920), 'at 1920').toEqual([]);
+          await page.setViewportSize({ width: 1280, height: 900 });
+          await page.waitForFunction(() => document.querySelectorAll('header.shell-accounts .accounts-strip > .account-gauge').length === 3, undefined, { timeout: 10_000 });
+          await page.waitForTimeout(300);
+          expect(await foldedFaults(page, 1280), 'at 1280').toEqual([]);
+          await page.setViewportSize({ width: 1920, height: 900 });
+          await page.waitForFunction(() => document.querySelectorAll('header.shell-accounts .accounts-strip > .account-gauge').length === 6, undefined, { timeout: 10_000 });
+          await page.waitForTimeout(300);
+          expect(await foldedFaults(page, 1920), 'back at 1920').toEqual([]);
+          expect(errors).toEqual([]);
+        } finally {
+          await ctx.close();
+        }
+      }, 90_000);
+    }
+  }
+});
+
+// The flyout: hovering the folded line opens a panel below it, drawn over the content, holding every lane in order. When
+// `CCRC_BROWSER_SHOTS` names a directory, each view's open flyout is screenshotted into it (never written otherwise).
+const FLYOUT_VIEWS: AppView[] = DESKS.filter((v) => v.width >= 1280);
+
+describe('hovering the folded line opens a flyout below it', () => {
+  for (const view of FLYOUT_VIEWS) {
+    it(`hovering the folded line opens a flyout below it, drawn over the content, holding every lane in order, and nothing scrolls sideways: ${named(view)}`, async () => {
+      const { ctx, page, errors } = await openFoldedDesk(view);
+      try {
+        const sessTop = (): Promise<number> => page.evaluate(() => document.querySelector('.sess-line')!.getBoundingClientRect().top);
+        const before = await sessTop();
+        expect(await page.locator('.accounts-flyout').count(), 'no flyout before the pointer comes').toBe(0);
+
+        const hoveredAt = Date.now();
+        await page.hover('header.shell-accounts .accounts-strip');
+        await page.waitForSelector('.accounts-flyout', { timeout: 5_000 });
+        const opened = Date.now() - hoveredAt;
+        expect(opened, `the flyout opened after ${opened} ms, before its ${FLYOUT_OPEN_MS} ms delay`).toBeGreaterThanOrEqual(FLYOUT_OPEN_MS - 20);
+        await page.waitForTimeout(100); // paint
+
+        const found = await page.evaluate(() => {
+          const strip = document.querySelector<HTMLElement>('header.shell-accounts .accounts-strip')!;
+          const fly = strip.querySelector<HTMLElement>('.accounts-flyout')!;
+          const cards = [...fly.querySelectorAll<HTMLElement>('.account-gauge')];
+          const line = [...strip.querySelectorAll<HTMLElement>(':scope > .account-gauge, :scope > .accounts-end')];
+          const fr = fly.getBoundingClientRect();
+          const header = document.querySelector<HTMLElement>('header.shell-accounts')!;
+          return {
+            names: cards.map((c) => c.querySelector('.account-gauge-label')?.textContent ?? ''),
+            flyTop: fr.top, flyBottom: fr.bottom, flyLeft: fr.left, flyRight: fr.right, lineBottom: Math.max(...line.map((e) => e.getBoundingClientRect().bottom)),
+            headerBottom: header.getBoundingClientRect().bottom, position: getComputedStyle(fly).position, vw: window.innerWidth, vh: window.innerHeight,
+            cards: cards.map((c) => {
+              const r = c.getBoundingClientRect();
+              const hit = document.elementFromPoint((r.left + r.right) / 2, (r.top + r.bottom) / 2);
+              return { right: r.right, left: r.left, top: r.top, bottom: r.bottom, ownHit: hit !== null && c.contains(hit) };
+            }),
+            sideways: [
+              document.documentElement.scrollWidth > window.innerWidth + 0.5 ? 'the page' : '',
+              header.scrollWidth > header.clientWidth + 0.5 ? 'the header' : '',
+              fly.scrollWidth > fly.clientWidth + 0.5 ? 'the flyout' : '',
+            ].filter((x) => x !== ''),
+          };
+        });
+        const out: string[] = [];
+        if (found.names.join('|') !== FOLD_ORDER.join('|')) out.push(`the flyout reads [${found.names}], not every lane freest first [${FOLD_ORDER}]`);
+        if (found.flyTop < found.lineBottom - 0.5) out.push(`the flyout (top ${found.flyTop}) is not below the line (bottom ${found.lineBottom})`);
+        if (found.position !== 'absolute') out.push(`the flyout is ${found.position}-positioned: it must be drawn over the content, not placed in it`);
+        if (found.flyBottom <= found.headerBottom) out.push(`the flyout (bottom ${found.flyBottom}) does not reach past the header (bottom ${found.headerBottom})`);
+        for (const [i, c] of found.cards.entries()) {
+          if (c.right > found.vw + 0.5 || c.left < -0.5) out.push(`${found.names[i]}'s card is outside the viewport horizontally (${c.left}..${c.right})`);
+          if (c.top < -0.5 || c.bottom > found.vh + 0.5) out.push(`${found.names[i]}'s card is outside the viewport vertically (${c.top}..${c.bottom})`);
+          if (!c.ownHit) out.push(`the element at the centre of ${found.names[i]}'s card is not the card: the flyout is drawn under something`);
+        }
+        if (found.sideways.length > 0) out.push(`${found.sideways.join(', ')} scrolls sideways`);
+        const after = await sessTop();
+        if (Math.abs(after - before) > 0.5) out.push(`the first session row moved from ${before} to ${after}: the flyout pushes the content`);
+        expect(out).toEqual([]);
+
+        const shots = process.env['CCRC_BROWSER_SHOTS'];
+        if (shots !== undefined && shots !== '') await page.screenshot({ path: path.join(shots, `flyout-${view.skin}-${view.theme}-${view.width}.png`) });
+
+        // The pointer leaves: the flyout stays for the grace, then closes.
+        const leftAt = Date.now();
+        await page.mouse.move(view.width / 2, 880);
+        await page.waitForSelector('.accounts-flyout', { state: 'detached', timeout: 5_000 });
+        const closed = Date.now() - leftAt;
+        expect(closed, `the flyout closed after ${closed} ms, before its ${FLYOUT_CLOSE_MS} ms grace`).toBeGreaterThanOrEqual(FLYOUT_CLOSE_MS - 20);
+        expect(await sessTop(), 'the first session row, once closed').toBeCloseTo(before, 0);
         expect(errors).toEqual([]);
       } finally {
         await ctx.close();
