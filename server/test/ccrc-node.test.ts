@@ -319,6 +319,19 @@ describe('errexit safety: a caller under set -euo pipefail calls bare', () => {
     mkdirSync(path.join(fx2.nvm, 'versions/node'), { recursive: true });
     expect(strict(fx2, 'rc=0; _node_select 22.16.0 || rc=$?; echo "rc=$rc"').out).toBe('rc=1\nsurvived');
   });
+  it('an nvm.sh that reads unset variables and fails internally still resolves the default and installs', () => {
+    // nvm is not written for nounset/errexit: both of its subshells must drop the caller's options first.
+    const wrap = (fx: Fx) => {
+      const p = path.join(fx.nvm, 'nvm.sh');
+      writeFileSync(p, `: "$NVM_UNSET_PROBE_A"; false; true\n${readFileSync(p, 'utf8').replace('nvm() {', 'nvm() {\n  : "$NVM_UNSET_PROBE_B"; false')}`);
+    };
+    const fx = fixture(['v22.16.0', 'v24.1.0'], 'v22.16.0');
+    wrap(fx);
+    expect(strict(fx, '_node_select 22.16.0; echo "ver=$NODE_VERSION"').out).toBe('ver=v22.16.0\nsurvived');
+    const fx2 = fixture(['v20.1.0'], null);
+    wrap(fx2);
+    expect(run(fx2, 'set -euo pipefail; _node_is_tty() { return 0; }; _node_select 22.16.0; echo "ver=$NODE_VERSION"').out).toBe('ver=v99.0.0');
+  });
   it('no user manager: bare publish survives with rc 0', () => {
     const fx = fixture(['v22.16.0'], null);
     exe(path.join(fx.bin, 'systemctl'), 'exit 1');

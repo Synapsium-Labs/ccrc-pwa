@@ -105,9 +105,10 @@ _node_select() {
       NODE_WHY="nvm's versions directory $vd is not readable"; return 1
     fi
     # The alias is resolved by nvm itself, in a subshell: sourcing nvm.sh here would change this shell.
+    # Both nvm subshells drop errexit/nounset/pipefail first: nvm is not written for a caller under set -euo pipefail.
     # 97 = nvm.sh did not source; an alias nvm cannot resolve (`N/A`, nonzero) is just "no default".
     rc=0
-    out=$( (NVM_DIR="$nvm"; . "$nvm/nvm.sh" >/dev/null 2>&1 || exit 97; nvm version default 2>/dev/null || true) ) || rc=$?
+    out=$( (set +eu +o pipefail; NVM_DIR="$nvm"; . "$nvm/nvm.sh" >/dev/null 2>&1 || exit 97; nvm version default 2>/dev/null || true) ) || rc=$?
     if [ "$rc" -eq 97 ]; then NODE_WHY="sourcing $nvm/nvm.sh failed, so nvm cannot be asked for its default"; return 1; fi
     def="${out##*$'\n'}"
     _node_ver_ok "$def" || def=
@@ -142,7 +143,7 @@ _node_select() {
         else
           # --lts never touches the `default` alias (decision 2).
           rc=0
-          (NVM_DIR="$nvm"; . "$nvm/nvm.sh" >/dev/null 2>&1 && nvm install --lts) >&2 || rc=$?
+          (set +eu +o pipefail; NVM_DIR="$nvm"; . "$nvm/nvm.sh" >/dev/null 2>&1 && nvm install --lts) >&2 || rc=$?
           if [ "$rc" -ne 0 ]; then
             NODE_WHY="nvm install --lts failed (rc $rc); nothing was installed"
           else
