@@ -835,3 +835,172 @@ describe('ccd-land-probe: a failed or partial measurement is never clean', () =>
     expect(new Set(rows.map((r) => r[0]))).toEqual(new Set(['project', 'scratch']));
   });
 });
+
+describe('ccd-land-probe: a required set read whole, or not at all (final review t2m1, t2m2, M3)', () => {
+  const GREEN_RUNS = [run(1, 'ci/ok', 'completed', 'success')];
+  const tick = (): any => { expect(fx.run().status).toBe(0); return fx.readJson('main-health'); };
+
+  it('bound_name survives a lone surrogate and holds a name to 120 bytes on a character boundary', () => {
+    const [lone, long, plain, empty, multi] = pyCall([
+      ['bound_name', ['ci/\ud800x']], ['bound_name', ['y'.repeat(130)]], ['bound_name', ['ci/test']], ['bound_name', ['']], ['bound_name', ['é'.repeat(100)]],
+    ]);
+    expect(lone).toBe('ci/?x');
+    expect(long).toBe('y'.repeat(120));
+    expect(plain).toBe('ci/test');
+    expect(empty).toBeNull();
+    expect(multi).toBe('é'.repeat(60));   // 2 bytes each: 120 bytes, never half a character
+  });
+
+  it('a required name with a lone surrogate is judged by its full name and does not stop the project', { timeout: 60_000 }, () => {
+    const name = 'ci/\ud800';
+    fx.addRow('lane-a-proj-a-alpha', 'ws/alpha');
+    fx.stubChecks({ rules: [REQ_RULE([{ context: name }, { context: 'ci/ok' }])], runs: [run(1, name, 'completed', 'success'), ...GREEN_RUNS] });
+    fx.conf(fx.project, 'lineage=on\n');
+    const r = fx.run();
+    expect(r.status).toBe(0);
+    expect(r.stderr).not.toContain('project-error');
+    expect(fx.readJson('main-health')).toMatchObject({ state: 'green', required: [{ name: 'ci/ok', app: null }, { name: 'ci/?', app: null }] });
+    expect(fx.exists('lane-a-proj-a-alpha.lineage')).toBe(true);
+    expect(fx.exists('enabled')).toBe(true);
+    expect(fx.readJson('probe').store.after).not.toBeNull();
+  });
+
+  it('a required entry the probe cannot read whole makes main-health unmeasured gh-failed, never a partial set that reads green', { timeout: 150_000 }, () => {
+    fx.conf(fx.project, '');
+    const shapes: Array<[string, unknown[], Record<string, unknown> | undefined]> = [
+      ['a rule context that is a number', [REQ_RULE([{ context: 'ci/ok' }, { context: 5 as unknown as string }])], undefined],
+      ['a rule context that is missing', [REQ_RULE([{ context: 'ci/ok' }, {} as unknown as { context: string }])], undefined],
+      ['a rule entry that is not an object', [REQ_RULE([{ context: 'ci/ok' }, 'ci/other' as unknown as { context: string }])], undefined],
+      ['a rule integration_id that is a string', [REQ_RULE([{ context: 'ci/ok' }, { context: 'ci/x', integration_id: '15368' as unknown as number }])], undefined],
+      ['a rule integration_id that is a boolean', [REQ_RULE([{ context: 'ci/ok' }, { context: 'ci/x', integration_id: true as unknown as number }])], undefined],
+      ['a rule integration_id that is a float', [REQ_RULE([{ context: 'ci/ok' }, { context: 'ci/x', integration_id: 1.5 as unknown as number }])], undefined],
+      ['a contexts[] item that is a number', [REQ_RULE([{ context: 'ci/ok' }])], { protection: { required_status_checks: { contexts: ['ci/lint', 7], checks: [] } } }],
+      ['a checks[] context that is null', [REQ_RULE([{ context: 'ci/ok' }])], { protection: { required_status_checks: { contexts: [], checks: [{ context: null, app_id: 1 }] } } }],
+      ['a checks[] app_id that is a string', [REQ_RULE([{ context: 'ci/ok' }])], { protection: { required_status_checks: { contexts: [], checks: [{ context: 'ci/x', app_id: 'one' }] } } }],
+    ];
+    for (const [what, rules, branch] of shapes) {
+      fx.stubChecks({ rules, ...(branch ? { branch } : {}), runs: GREEN_RUNS });
+      expect(tick(), what).toMatchObject({ state: 'unmeasured', why: 'gh-failed', required: [], failing: [], pending: [] });
+    }
+    // The same entries well formed (an absent, a null or an integer App) read green: the refusals above are the shape's, not the stub's.
+    fx.stubChecks({
+      rules: [REQ_RULE([{ context: 'ci/ok' }, { context: 'ci/x', integration_id: null as unknown as number }])],
+      branch: { protection: { required_status_checks: { contexts: ['ci/lint'], checks: [{ context: 'ci/y', app_id: -1 }] } } },
+      runs: [...GREEN_RUNS, run(2, 'ci/x', 'completed', 'success'), run(3, 'ci/lint', 'completed', 'success'), run(4, 'ci/y', 'completed', 'success')],
+    });
+    expect(tick()).toMatchObject({ state: 'green' });
+  });
+
+  it('a failing name is red beside an app-conflict name, and beside an app-unverifiable name', () => {
+    const conflict = judge(required(['ci/a', 1], ['ci/a', 2], ['ci/b', null]), [run(1, 'ci/a', 'completed', 'success', 1), run(2, 'ci/b', 'completed', 'failure')]);
+    expect(conflict).toMatchObject({ state: 'red', failing: ['ci/b'], pending: ['ci/a'] });
+    expect(conflict.why).toBeUndefined();
+    const unverifiable = judge(required(['ci/a', 15368], ['ci/b', null]), [run(2, 'ci/b', 'completed', 'failure')], [status(1, 'ci/a', 'success')]);
+    expect(unverifiable).toMatchObject({ state: 'red', failing: ['ci/b'], pending: ['ci/a'] });
+    expect(unverifiable.why).toBeUndefined();
+    // And without the failure each is the unmeasured it was: the red is what outranks, not a changed reading.
+    expect(judge(required(['ci/a', 1], ['ci/a', 2]), [])).toMatchObject({ state: 'unmeasured', why: 'app-conflict' });
+    expect(judge(required(['ci/a', 15368]), [], [status(1, 'ci/a', 'success')])).toMatchObject({ state: 'unmeasured', why: 'app-unverifiable' });
+  });
+
+  it('M3 a required name longer than 120 bytes matches its runs on the full name: a failing one is red, a passing one green, and the file holds 120 bytes', { timeout: 60_000 }, () => {
+    const long = 'z'.repeat(130);
+    fx.conf(fx.project, '');
+    fx.stubChecks({ rules: [REQ_RULE([{ context: long }, { context: 'ci/ok' }])], runs: [run(1, long, 'completed', 'failure'), ...GREEN_RUNS] });
+    expect(tick()).toMatchObject({ state: 'red', failing: ['z'.repeat(120)], pending: [] });
+    fx.stubChecks({ rules: [REQ_RULE([{ context: long }, { context: 'ci/ok' }])], runs: [run(1, long, 'completed', 'success'), ...GREEN_RUNS] });
+    const green = tick();
+    expect(green).toMatchObject({ state: 'green', failing: [], pending: [] });
+    expect(green.required.map((e: any) => e.name)).toEqual(['ci/ok', 'z'.repeat(120)]);
+  });
+});
+
+describe('ccd-land-probe: the journal names every unmeasured outcome (final review M2)', () => {
+  it('a failed list of open PRs leaves one line per file with the child\'s exit code, and never the child\'s output', () => {
+    fx.addHead(1, { 'a.txt': 'a\n' });
+    fx.stubGh({ prList: 'fail' });
+    fx.stubChecks({ rules: [REQ_RULE([{ context: 'ci/ok' }])], runs: [run(1, 'ci/ok', 'completed', 'success')] });
+    fx.conf(fx.project, '');
+    const r = fx.run();
+    expect(r.status).toBe(0);
+    expect(r.stderr).toMatch(/^land-probe: unmeasured proj-a probe gh-failed rc=1$/m);
+    expect(r.stderr, 'the stub prints "stub: pr list failed" on its stderr: none of it reaches the journal').not.toContain('stub:');
+    expect(r.stderr).not.toMatch(/^land-probe: unmeasured proj-a main-health /m);   // the PR list is not what main-health reads (R6)
+  });
+
+  it('a forge CLI that cannot be executed reads spawn-failed', () => {
+    fx.addHead(1, { 'a.txt': 'a\n' });
+    fx.conf(fx.project, '');
+    const r = fx.run({ CCD_LAND_PROBE_GH: path.join(h.home, 'no-such-gh') });
+    expect(r.status).toBe(0);
+    expect(r.stderr).toMatch(/^land-probe: unmeasured proj-a probe gh-failed spawn-failed$/m);
+    expect(r.stderr).toMatch(/^land-probe: unmeasured proj-a main-health gh-failed spawn-failed$/m);
+    expect(fx.readJson('probe')).toMatchObject({ state: 'unmeasured', why: 'gh-failed' });
+  });
+
+  it('a failed fetch names the probe, the main-health and each lineage, with the fetch\'s exit code', () => {
+    fx.addHead(1, { 'a.txt': 'a\n' });
+    fx.addRow('lane-a-proj-a-alpha', 'ws/alpha');
+    fx.conf(fx.project, '');
+    fs.rmSync(fx.origin, { recursive: true, force: true });
+    const r = fx.run();
+    expect(r.status).toBe(0);
+    expect(r.stderr).toMatch(/^land-probe: unmeasured proj-a probe fetch-failed rc=\d+$/m);
+    expect(r.stderr).toMatch(/^land-probe: unmeasured proj-a main-health fetch-failed rc=\d+$/m);
+    expect(r.stderr).toMatch(/^land-probe: unmeasured proj-a lane-a-proj-a-alpha\.lineage fetch-failed$/m);
+  });
+
+  it('a main-health that could not be read says which read, by its exit code', () => {
+    fx.stubChecks({ rules: 'fail', runs: [] });
+    fx.conf(fx.project, '');
+    const r = fx.run();
+    expect(r.stderr).toMatch(/^land-probe: unmeasured proj-a main-health gh-failed rc=1$/m);
+  });
+});
+
+describe('ccd-land-probe: the closing probe rewrite is unconditional (final review I1, ruling R7)', () => {
+  it('a failed tick still closes its store and scratch figures, and keeps its first write\'s time, why and shape', () => {
+    fx.addHead(1, { 'a.txt': 'a\n' });
+    fx.conf(fx.project, '');
+    fs.rmSync(fx.origin, { recursive: true, force: true });
+    expect(fx.run().status).toBe(0);
+    const p = fx.readJson('probe');
+    expect(p).toMatchObject({ state: 'unmeasured', why: 'fetch-failed', heads: [], pairs: [], base: null });
+    expect(p.store.after).not.toBeNull();
+    expect(p.store.after.count).toBe(p.store.before.count);
+    expect(p.scratch.sizeKiB).toEqual(expect.any(Number));
+    expect(p.at <= fx.readJson('main-health').at, 'the probe is stamped when its tick started, before the main-health beside it').toBe(true);
+  });
+
+  it('an exception after the first write is logged, closes the record with what was measured, and does not stop the next project', { timeout: 90_000 }, () => {
+    const b = makeLandFixture(h, { project: 'proj-b', slug: 'o/r2' });
+    fx.addHead(1, { 'a.txt': 'a\n' });
+    b.addHead(1, { 'b.txt': 'b\n' });
+    fx.conf('proj-a', 'lineage=on\n');
+    fx.conf('proj-b', '');
+    const r = fx.runPatched('def bad(slug, *a):\n    if slug == "o/r":\n        raise RuntimeError("planted")\n    return orig(slug, *a)\norig = ns["read_checks"]\nns["read_checks"] = bad');
+    expect(r.status).toBe(0);
+    expect(r.stderr).toContain('project-error proj-a: RuntimeError');
+    const p = fx.readJson('probe');
+    expect(p).toMatchObject({ state: 'measured' });
+    expect(p.heads).toHaveLength(1);
+    expect(p.store.after).not.toBeNull();
+    expect(p.scratch.sizeKiB).toBeGreaterThan(0);
+    expect(fx.exists('main-health')).toBe(false);   // the raise came before it
+    expect(b.readJson('main-health')).toMatchObject({ project: 'proj-b' });
+    expect(b.readJson('probe').store.after).not.toBeNull();
+    expect(tmpLeft()).toEqual([]);
+  });
+
+  it('a figure that cannot be measured stays null in a closed record', { timeout: 60_000 }, () => {
+    fx.addHead(1, { 'a.txt': 'a\n' });
+    fx.conf(fx.project, '');
+    // count-objects answers nothing: both store readings and nothing else are null.
+    fx.wrapGit('case " $* " in *" count-objects "*) exit 3;; esac');
+    expect(fx.run().status).toBe(0);
+    const p = fx.readJson('probe');
+    expect(p).toMatchObject({ state: 'measured' });
+    expect(p.store).toEqual({ before: { count: null, size: null, inPack: null, packs: null }, after: { count: null, size: null, inPack: null, packs: null } });
+    expect(p.scratch.sizeKiB).toBeGreaterThan(0);
+  });
+});

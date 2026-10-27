@@ -8207,15 +8207,24 @@ _check_scope-sweep() {
 # with every opted-in project paused (`$reg/landing/<project>/paused`), and while the operator has PAUSED the probe
 # (`$reg/land-probe-paused`: it then rewrites nothing, so its files age by design, never a stopped timer).
 #
-# FIVE WORDS, each a WARN with its own sentence (a measurement is a runtime fact, and `ccrc install` ends with doctor):
+# SIX WORDS, each a WARN with its own sentence (a measurement is a runtime fact, and `ccrc install` ends with doctor):
 #   land-probe-not-yet     no `probe` yet, but the timer unit file landed under ten minutes ago: the first tick has not had its
 #                          turn (the timer's first elapse is three minutes after it is armed). The fresh-install word.
-#   land-probe-never       no `probe` and the timer unit file is older than that, or absent: the radar has never run here.
+#   land-probe-never       no `probe` and the timer unit file is older than that, or absent: the radar has never run here. A conf
+#                          written under ten minutes ago reads land-probe-not-yet too (the operator just opted in).
 #   land-probe-unreadable  a file that is not a regular v1 record with a readable time, or `main-health` missing beside a `probe`.
 #   land-probe-stale       a file older than CCRC_LAND_PROBE_STALE_S (default 1200: four ticks): the radar has stopped.
-#   land-probe-unmeasured  the probe ran and could not measure (`state: unmeasured`, with its `why`), or the base's checks could not
-#                          be judged. A base whose checks are `pending` or that has no required set is the repository's fact, not the
-#                          probe's, and reads on the PASS line instead.
+#   land-probe-unmeasured  the probe ran and could not measure (`state: unmeasured`, with its `why`), every one of its heads came back
+#                          unmeasured, or the base's checks could not be judged. A base whose checks are `pending` or that has no
+#                          required set is the repository's fact, not the probe's, and reads on the PASS line instead.
+#   land-probe-incomplete  a finished probe (its store.after is written) beside a main-health OLDER than it: the tick wrote the probe
+#                          and stopped before the main-health (every tick path that finishes writes both: fetch-failed, gh-failed,
+#                          budget and measured), so the journal's project-error line names why.
+# THE PROBE'S OWN INTERIM AND PARTIAL RECORDS ARE NOT FAULTS (final review I1, ruling R7): the probe writes `probe` first without
+# its store.after and scratch.sizeKiB (nulls) and rewrites it whole in a finally, so a null store figure, null counts or a null
+# scratch size read as "not measured" on the PASS line, and an interim probe (store.after null) with no main-health beside it is a
+# first tick still running (a SKIP, or a note on the PASS line), never land-probe-unreadable. A PASS line also counts the heads that
+# came back unmeasured (", K unmeasured") when some but not all did.
 # A red base is likewise a fact about the repository, and the PASS line says "red". The PASS line per project reads
 # `<project>: N heads, M conflicting with <base>, <base> green; store +K objects, scratch S KiB this tick`: the store figure is
 # the change in the project's object count over its last tick (the probe's scratch is meant to keep it at +0, spec 12).
@@ -8259,6 +8268,15 @@ def fresh(name, doc, t):
     if age > stale:
         say("stale", name, age)
     return age
+def count(o):
+    # one store reading: the objects it counted, or None when it could not count (count-objects timed out, the budget ran out)
+    if o is None:
+        return None
+    c, p = o["count"], o["inPack"]
+    if c is None or p is None:
+        return None
+    assert isint(c) and isint(p)
+    return c + p
 k, probe, pt = load("probe")
 if k == "absent":
     say("absent")
@@ -8269,11 +8287,38 @@ if probe.get("state") == "unmeasured":
     say("unmeasured", "probe", why(probe))
 if probe.get("state") != "measured":
     say("unreadable", "probe", "shape")
+base = probe.get("base")
+heads = probe.get("heads")
+store = probe.get("store")
+scratch = probe.get("scratch")
+try:
+    ref = base["ref"]
+    assert isinstance(ref, str) and REF.match(ref)
+    assert isinstance(heads, list)
+    conflicts = 0
+    unmeasured = 0
+    for h in heads:
+        st = h["base"]["state"]
+        if st == "conflict":
+            conflicts += 1
+        elif st == "unmeasured":
+            unmeasured += 1
+    assert isinstance(store, dict)
+    tot = [count(store["before"]), count(store["after"])]
+    finished = store["after"] is not None
+    kib = scratch["sizeKiB"]
+    assert kib is None or isint(kib)
+except Exception:
+    say("unreadable", "probe", "shape")
 k, mh, mt = load("main-health")
 if k == "absent":
+    if not finished:
+        say("inprogress")
     say("unreadable", "main-health", "absent")
 if k != "ok":
     say("unreadable", "main-health", "shape")
+if finished and mt < pt:
+    say("incomplete", pt - mt)
 fresh("main-health", mh, mt)
 ms = mh.get("state")
 if ms == "unmeasured":
@@ -8285,32 +8330,14 @@ elif ms in ("green", "red"):
     main = ms
 else:
     say("unreadable", "main-health", "shape")
-base = probe.get("base")
-heads = probe.get("heads")
-store = probe.get("store")
-scratch = probe.get("scratch")
-try:
-    ref = base["ref"]
-    assert isinstance(ref, str) and REF.match(ref)
-    assert isinstance(heads, list)
-    conflicts = 0
-    for h in heads:
-        if h["base"]["state"] == "conflict":
-            conflicts += 1
-    tot = []
-    for side in ("before", "after"):
-        o = store[side]
-        assert isint(o["count"]) and isint(o["inPack"])
-        tot.append(o["count"] + o["inPack"])
-    kib = scratch["sizeKiB"]
-    assert isint(kib)
-except Exception:
-    say("unreadable", "probe", "shape")
-say("ok", len(heads), conflicts, ref, main, tot[1] - tot[0], kib)
+if heads and unmeasured == len(heads):
+    say("allunmeasured", len(heads))
+delta = "-" if tot[0] is None or tot[1] is None else tot[1] - tot[0]
+say("ok", len(heads), conflicts, ref, main, delta, "-" if kib is None else kib, unmeasured)
 '
 _check_land-probe() {
-  local _srv_role="" reg confdir conf proj stale now unit_path unit_mtime unit_age out kind a b what
-  local -a found=() okl=() projects=() words=()
+  local _srv_role="" reg confdir conf proj stale now unit_path unit_mtime unit_age conf_mtime conf_age out kind a b what
+  local -a found=() okl=() projects=() words=() running=()
   local PROJ_RE='^[A-Za-z0-9][A-Za-z0-9._-]*$' NUM='^(0|[1-9][0-9]{0,15})$'
   if [ "${CCD_OS:-linux}" = darwin ]; then
     _dr_skip land-probe "the conflict radar is a systemd timer's job - no probe runs on this box"; return 3
@@ -8353,10 +8380,15 @@ _check_land-probe() {
     case "$kind" in
       ok)
         local -a f=($out)
-        if [ "${#f[@]}" -eq 7 ] && [[ "${f[1]}" =~ $NUM ]] && [[ "${f[2]}" =~ $NUM ]] && [[ "${f[3]}" =~ ^[A-Za-z0-9._/-]+$ ]] \
-           && [[ "${f[4]}" =~ ^[a-z0-9-]+$ ]] && [[ "${f[5]}" =~ ^-?[0-9]+$ ]] && [[ "${f[6]}" =~ $NUM ]]; then
-          local sign="+"; [[ "${f[5]}" == -* ]] && sign=""
-          okl+=("$proj: ${f[1]} heads, ${f[2]} conflicting with ${f[3]}, ${f[3]} ${f[4]}; store ${sign}${f[5]} objects, scratch ${f[6]} KiB this tick")
+        if [ "${#f[@]}" -eq 8 ] && [[ "${f[1]}" =~ $NUM ]] && [[ "${f[2]}" =~ $NUM ]] && [[ "${f[3]}" =~ ^[A-Za-z0-9._/-]+$ ]] \
+           && [[ "${f[4]}" =~ ^[a-z0-9-]+$ ]] && [[ "${f[5]}" =~ ^(-?[0-9]+|-)$ ]] && [[ "${f[6]}" =~ ^([0-9]+|-)$ ]] && [[ "${f[7]}" =~ $NUM ]]; then
+          # a figure the probe could not measure arrives as "-" and reads as unmeasured, never as a fault (a null count is the probe saying so)
+          local sign="+" store_txt scratch_txt unm_txt=""
+          [[ "${f[5]}" == -* ]] && sign=""
+          if [ "${f[5]}" = "-" ]; then store_txt="store not measured"; else store_txt="store ${sign}${f[5]} objects"; fi
+          if [ "${f[6]}" = "-" ]; then scratch_txt="scratch not measured this tick"; else scratch_txt="scratch ${f[6]} KiB this tick"; fi
+          if [ "${f[7]}" -gt 0 ]; then unm_txt=", ${f[7]} unmeasured"; fi
+          okl+=("$proj: ${f[1]} heads, ${f[2]} conflicting with ${f[3]}${unm_txt}, ${f[3]} ${f[4]}; ${store_txt}, ${scratch_txt}")
         else
           found+=("land-probe-unreadable: $proj: the probe's answer could not be read back, so its record is not trusted"); words+=(unreadable)
         fi ;;
@@ -8366,8 +8398,13 @@ _check_land-probe() {
           unit_mtime="$(_plat_mtime "$unit_path" 2>/dev/null)"
           [[ "$unit_mtime" =~ ^[0-9]+$ ]] && unit_age=$((now - unit_mtime))
         fi
+        conf_age=-1
+        conf_mtime="$(_plat_mtime "$confdir/$proj.conf" 2>/dev/null)"
+        [[ "$conf_mtime" =~ ^[0-9]+$ ]] && conf_age=$((now - conf_mtime))
         if [ "$unit_age" -ge 0 ] && [ "$unit_age" -lt 600 ]; then
           found+=("land-probe-not-yet: $proj has no probe file yet and ccd-land-probe.timer was installed ${unit_age}s ago - its first tick is three minutes after it is armed, so this is expected right after an install, not a fault"); words+=(not-yet)
+        elif [ "$conf_age" -ge 0 ] && [ "$conf_age" -lt 600 ]; then
+          found+=("land-probe-not-yet: $proj has no probe file yet and its conf was written ${conf_age}s ago - the next tick (every five minutes) is the first to measure it, so this is expected right after opting in, not a fault"); words+=(not-yet)
         else
           found+=("land-probe-never: $proj is opted in but the radar has never written its probe, so no PR conflict is measured and coordinators send sync and order mail without one"); words+=(never)
         fi ;;
@@ -8386,10 +8423,29 @@ _check_land-probe() {
         fi ;;
       unmeasured)
         if [[ "$b" =~ ^[a-z0-9-]+$ ]]; then
-          found+=("land-probe-unmeasured: $proj: the probe ran and could not measure its $a (why: $b), so no conflict or base-health reading stands for this project"); words+=(unmeasured)
+          case "$a" in
+            probe) what="no conflict reading" ;;
+            main-health) what="no base-health reading" ;;
+            *) what="no reading of it" ;;
+          esac
+          found+=("land-probe-unmeasured: $proj: the probe ran and could not measure its $a (why: $b), so $what stands for this project"); words+=(unmeasured)
         else
           found+=("land-probe-unreadable: $proj: the reason the probe gave could not be read back"); words+=(unreadable)
         fi ;;
+      allunmeasured)
+        if [[ "$a" =~ $NUM ]]; then
+          found+=("land-probe-unmeasured: $proj: all $a of its open PR heads came back unmeasured against the base (budget, timeout or a git error), so no conflict reading stands for this project"); words+=(unmeasured)
+        else
+          found+=("land-probe-unreadable: $proj: the probe's answer could not be read back, so its record is not trusted"); words+=(unreadable)
+        fi ;;
+      incomplete)
+        if [[ "$a" =~ $NUM ]]; then
+          found+=("land-probe-incomplete: $proj: the main-health file is ${a}s older than the probe file, so the last tick wrote its probe and stopped before its main-health - the base's checks shown are from an earlier tick"); words+=(incomplete)
+        else
+          found+=("land-probe-unreadable: $proj: the probe's answer could not be read back, so its record is not trusted"); words+=(unreadable)
+        fi ;;
+      inprogress)
+        running+=("$proj") ;;
       *)
         found+=("land-probe-unreadable: $proj: the probe's files could not be read at all"); words+=(unreadable) ;;
     esac
@@ -8399,7 +8455,8 @@ _check_land-probe() {
     for w in "${found[@]}"; do joined="${joined:+$joined | }$w"; done
     case "${words[0]}" in
       not-yet) _dr_warn land-probe "$joined" "wait up to five minutes for the first tick, then re-run doctor; still absent past that is the real fault: systemctl --user status ccd-land-probe.timer ccd-land-probe.service" ;;
-      never|stale) _dr_warn land-probe "$joined" "systemctl --user status ccd-land-probe.timer ccd-land-probe.service; journalctl --user -u ccd-land-probe.service; a pause marker ($reg/land-probe-paused or $reg/landing/<project>/paused) stops the writes by design" ;;
+      never|stale) _dr_warn land-probe "$joined" "systemctl --user status ccd-land-probe.timer ccd-land-probe.service; journalctl --user -u ccd-land-probe.service; a pause marker ($reg/land-probe-paused or $reg/landing/<project>/paused) stops the writes by design; an invalid conf or a missing checkout under $HOME/projects also stops them, and the journal names it" ;;
+      incomplete) _dr_warn land-probe "$joined" "read why the tick stopped partway: journalctl --user -u ccd-land-probe.service (a project-error line names the exception); then let it re-measure: systemctl --user start ccd-land-probe.service; then re-run doctor" ;;
       unmeasured) _dr_warn land-probe "$joined" "read why the tick could not measure: journalctl --user -u ccd-land-probe.service; then let it re-measure: systemctl --user start ccd-land-probe.service; then re-run doctor" ;;
       *) _dr_warn land-probe "$joined" "let the probe rewrite its files: systemctl --user start ccd-land-probe.service; then re-run doctor" ;;
     esac
@@ -8407,6 +8464,10 @@ _check_land-probe() {
   fi
   local pl="" o
   for o in "${okl[@]}"; do pl="${pl:+$pl | }$o"; done
+  for o in ${running[@]+"${running[@]}"}; do pl="${pl:+$pl | }$o: a tick is running, so there is no reading yet"; done
+  if [ "${#okl[@]}" -eq 0 ]; then
+    _dr_skip land-probe "$pl"; return 3   # every opted-in project is mid-first-tick: nothing is measured YET, and nothing is wrong
+  fi
   _dr_pass land-probe "$pl"
   return 0
 }

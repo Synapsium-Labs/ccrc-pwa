@@ -63,6 +63,22 @@ describe('ccd-land-probe: the literal source pins', () => {
     expect(tuple('PINNED_KEYS')).toEqual(['core.hooksPath', 'core.fsmonitor']);
   });
 
+  it('R5b every child process is spawned in one place: one Popen, three callers of run_child, and no other way to start a process', () => {
+    // The pin above sees the ['git' spelling; this one closes a respelled third call site, for git and gh alike.
+    expect(src.match(/\bsubprocess\.Popen\b/g) ?? [], 'subprocess.Popen').toHaveLength(1);
+    // The def, git_ro, gh_get and gh_pr_list: a fifth is a new way to start a child, and is reviewed as one.
+    expect(src.match(/\brun_child\(/g) ?? [], 'run_child( sites').toHaveLength(4);
+    expect(src).toMatch(/^def run_child\(/m);
+    for (const fn of ['git_ro', 'gh_get', 'gh_pr_list']) {
+      const body = new RegExp(`^def ${fn}\\([\\s\\S]*?\\n\\n\\n`, 'm').exec(src);
+      expect(body?.[0], `${fn} is findable`).toBeDefined();
+      expect(body![0].match(/\brun_child\(/g) ?? [], `${fn} calls run_child once`).toHaveLength(1);
+    }
+    expect(src).not.toMatch(/\bsubprocess\.(run|call|check_output|check_call|getoutput|getstatusoutput)\b/);
+    expect(src).not.toMatch(/\bos\.(system|popen|exec\w*|spawn\w*|posix_spawn\w*|fork\w*|forkpty)\b/);
+    expect(src).not.toMatch(/^\s*from\s+(subprocess|os)\s+import\b/m);
+  });
+
   it('R6 never names update-branch', () => {
     expect(src).not.toMatch(/update[-_]branch|updatePullRequestBranch/i);
   });

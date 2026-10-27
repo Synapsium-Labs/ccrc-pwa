@@ -3976,9 +3976,12 @@ describeLinux('ccrc doctor: land-probe', () => {
     v: 1, project: 'proj-a', at: iso(agoS), sha: SHA, state: 'green', required: [{ name: 'build', app: null }], failing: [], pending: [], ...over,
   });
   /** One opted-in project: its conf, and (unless `null`) the two files, each as the object or the raw text given. */
-  const plant = (home: string, project = 'proj-a', files: { probe?: object | string | null; main?: object | string | null } = {}): string => {
+  const plant = (home: string, project = 'proj-a', files: { probe?: object | string | null; main?: object | string | null } = {}, confAgeS = 3600): string => {
     mkdirSync(join(home, '.ccrc', 'landing'), { recursive: true });
-    writeFileSync(join(home, '.ccrc', 'landing', `${project}.conf`), 'lineage=off\n');
+    const confFile = join(home, '.ccrc', 'landing', `${project}.conf`);
+    writeFileSync(confFile, 'lineage=off\n');
+    const confTime = new Date(Date.now() - confAgeS * 1000);
+    utimesSync(confFile, confTime, confTime);   // an opt-in older than ten minutes: a missing probe is then the radar's fault, not a fresh opt-in's
     const dir = join(home, '.cc-sessions', 'landing', project);
     mkdirSync(dir, { recursive: true });
     const put = (name: string, v: object | string | null | undefined, dflt: object): void => {
@@ -4120,11 +4123,58 @@ describeLinux('ccrc doctor: land-probe', () => {
     expect(verdict(home, { CCRC_LAND_PROBE_STALE_S: '3600' })).toMatch(/^PASS land-probe: /);
     expect(verdict(home, { CCRC_LAND_PROBE_STALE_S: 'abc' }), 'a non-number falls back to the default').toContain('land-probe-stale');
     const mh = healthy('ccrc-doctor-land-probe-stale-main-');
-    plant(mh, 'proj-a', { main: mainDoc(1500) });
+    // A tick in progress (its probe has no store.after yet) beside a main-health from long ago: the main-health is stale.
+    plant(mh, 'proj-a', { probe: probeDoc(60, { store: { before: store(0), after: null }, scratch: { sizeKiB: null } }), main: mainDoc(1500) });
     expect(verdict(mh)).toContain('land-probe-stale: proj-a: the main-health file is ');
+    // A FINISHED probe beside a main-health older than it is the sharper fact: the tick stopped before writing it.
+    const inc = healthy('ccrc-doctor-land-probe-incomplete-');
+    plant(inc, 'proj-a', { main: mainDoc(1500) });
+    expect(verdict(inc)).toMatch(/^WARN land-probe: land-probe-incomplete: proj-a: the main-health file is 14[0-9]{2}s older than the probe file, so the last tick wrote its probe and stopped before its main-health/);
     const edge = healthy('ccrc-doctor-land-probe-stale-edge-');
     plant(edge, 'proj-a', { probe: probeDoc(1100), main: mainDoc(1100) });
     expect(verdict(edge), 'inside the bound is fresh').toMatch(/^PASS land-probe: /);
+  });
+
+  it('F2 counts the heads that came back unmeasured on the PASS line, and WARNs land-probe-unmeasured when every head did', () => {
+    const heads = (states: Array<object>): object[] => states.map((base, n) => ({ pr: 20 + n, head: SHA, branch: `feature/${n}`, id: null, base }));
+    const some = healthy('ccrc-doctor-land-probe-some-unmeasured-');
+    plant(some, 'proj-a', { probe: probeDoc(60, { heads: heads([{ state: 'clean' }, { state: 'conflict', paths: ['x'], pathsCut: false }, { state: 'unmeasured', why: 'budget' }, { state: 'unmeasured', why: 'timeout' }]) }) });
+    expect(verdict(some)).toBe('PASS land-probe: proj-a: 4 heads, 1 conflicting with main, 2 unmeasured, main green; store +0 objects, scratch 12 KiB this tick');
+    const none = healthy('ccrc-doctor-land-probe-none-unmeasured-');
+    plant(none, 'proj-a', { probe: probeDoc(60, { heads: heads([{ state: 'clean' }, { state: 'conflict', paths: ['x'], pathsCut: false }]) }) });
+    expect(verdict(none), 'K = 0 leaves the PASS text as it was').toBe('PASS land-probe: proj-a: 2 heads, 1 conflicting with main, main green; store +0 objects, scratch 12 KiB this tick');
+    const all = healthy('ccrc-doctor-land-probe-all-unmeasured-');
+    plant(all, 'proj-a', { probe: probeDoc(60, { heads: heads([{ state: 'unmeasured', why: 'budget' }, { state: 'unmeasured', why: 'rc-128' }, { state: 'unmeasured', why: 'timeout' }]) }) });
+    const out = runDoctor(all).stdout.split('\n');
+    const i = out.findIndex((l) => l.startsWith('WARN land-probe: '));
+    expect(out[i], out.join('\n')).toContain('land-probe-unmeasured: proj-a: all 3 of its open PR heads came back unmeasured against the base');
+    expect(out.join('\n')).not.toMatch(/^PASS land-probe/m);
+    const zero = healthy('ccrc-doctor-land-probe-zero-heads-');
+    plant(zero, 'proj-a', { probe: probeDoc(60, { heads: [] }) });
+    expect(verdict(zero), 'no heads at all is nothing to measure, not an unmeasured radar').toMatch(/^PASS land-probe: proj-a: 0 heads, 0 conflicting with main, main green; /);
+  });
+
+  it('F3 reads a conf written under ten minutes ago as not-yet, never land-probe-never', () => {
+    const fresh = healthy('ccrc-doctor-land-probe-newconf-');
+    plant(fresh, 'proj-a', { probe: null, main: null }, 30);
+    ageUnit(fresh, 3 * 3600);   // the timer is old: only the conf is new
+    const out = runDoctor(fresh).stdout.split('\n');
+    const i = out.findIndex((l) => l.startsWith('WARN land-probe: '));
+    expect(out[i], out.join('\n')).toContain('land-probe-not-yet: proj-a has no probe file yet and its conf was written ');
+    expect(out[i]).not.toContain('land-probe-never');
+    expect(out[i + 1]).toMatch(/^ {2}remedy: wait up to five minutes for the first tick/);
+    const old = healthy('ccrc-doctor-land-probe-oldconf-');
+    plant(old, 'proj-a', { probe: null, main: null }, 601);
+    ageUnit(old, 3 * 3600);
+    expect(verdict(old), 'a conf past ten minutes with no probe is the radar\'s fault').toContain('land-probe-never: proj-a');
+  });
+
+  it('M5 the never and stale remedy names an invalid conf or a missing checkout as a reason the writes stop', () => {
+    const home = healthy('ccrc-doctor-land-probe-remedy-');
+    plant(home, 'proj-a', { probe: null, main: null });
+    const out = runDoctor(home).stdout.split('\n');
+    const i = out.findIndex((l) => l.startsWith('WARN land-probe: '));
+    expect(out[i + 1]).toMatch(/an invalid conf or a missing checkout under .*\/projects also stops them, and the journal names it$/);
   });
 
   it('WARNs land-probe-unmeasured when the probe ran and could not measure, with the why it gave', () => {
@@ -4132,13 +4182,15 @@ describeLinux('ccrc doctor: land-probe', () => {
     plant(home, 'proj-a', { probe: probeDoc(60, { state: 'unmeasured', why: 'fetch-failed', heads: [], pairs: [] }) });
     const out = runDoctor(home).stdout.split('\n');
     const i = out.findIndex((l) => l.startsWith('WARN land-probe: '));
-    expect(out[i], out.join('\n')).toContain('land-probe-unmeasured: proj-a: the probe ran and could not measure its probe (why: fetch-failed), so no conflict or base-health reading stands for this project');
+    expect(out[i], out.join('\n')).toContain('land-probe-unmeasured: proj-a: the probe ran and could not measure its probe (why: fetch-failed), so no conflict reading stands for this project');
+    expect(out[i], 'M4: the sentence is limited to what the file names').not.toContain('base-health');
     expect(out[i + 1]).toMatch(/^ {2}remedy: read why the tick could not measure: journalctl --user -u ccd-land-probe\.service/);
     expect(out.join('\n')).not.toMatch(/^PASS land-probe/m);
 
     const gh = healthy('ccrc-doctor-land-probe-unmeasured-main-');
     plant(gh, 'proj-a', { main: mainDoc(60, { state: 'unmeasured', why: 'gh-failed' }) });
-    expect(verdict(gh)).toContain('the probe ran and could not measure its main-health (why: gh-failed)');
+    expect(verdict(gh)).toContain('the probe ran and could not measure its main-health (why: gh-failed), so no base-health reading stands for this project');
+    expect(verdict(gh), 'M4: a main-health that could not be measured says nothing of the conflict reading').not.toContain('conflict reading');
 
     const odd = healthy('ccrc-doctor-land-probe-unmeasured-why-');
     plant(odd, 'proj-a', { probe: probeDoc(60, { state: 'unmeasured', why: 'x'.repeat(200) }) });

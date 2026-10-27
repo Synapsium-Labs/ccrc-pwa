@@ -371,6 +371,24 @@ export function makeLandFixture(h: CcdHarness, opts: LandOpts = {}) {
       const done = new Promise<RunResult>((resolve) => { child.on('close', (status) => resolve({ status, stdout, stderr })); });
       return { child, done };
     },
+    /** A whole tick with the embedded program IMPORTED (not run: __name__ is not __main__) and `patch` (Python, over the
+     *  namespace `ns`) applied before `main()` runs: how a case makes a function raise AFTER the first `probe` write, which
+     *  no stub answer can do. Same contained env, same fixture HOME, same stub forge. */
+    runPatched(patch: string, extra: NodeJS.ProcessEnv = {}): RunResult {
+      writeStub();
+      const text = fs.readFileSync(PROBE, 'utf8');
+      const program = text.slice(text.indexOf("<<'PY'\n") + "<<'PY'\n".length, text.lastIndexOf('\nPY'));
+      const progFile = path.join(land, 'program-patched.py');
+      fs.writeFileSync(progFile, program);
+      const driver = 'import sys\nns = {"__name__": "probe"}\nexec(compile(open(sys.argv[1]).read(), "probe", "exec"), ns)\n'
+        + `${patch}\nsys.exit(ns["main"]())\n`;
+      const r = spawnSync('python3', ['-I', '-c', driver, progFile], {
+        encoding: 'utf8', cwd: home, timeout: 150_000,
+        env: ghContainedEnv(home, { ...inheritedEnv(), HOME: home, TMPDIR: tmp, CCD_LAND_PROBE_GH: stubPath, PATH: pathEnv(), ...extra },
+          { systemd: true, tmux: true, net: true }),
+      });
+      return { status: r.status, stdout: r.stdout, stderr: r.stderr };
+    },
     /** The validate-only self-test: JSON lines in, one verdict per line out. */
     selftest(lines: unknown[], extra: NodeJS.ProcessEnv = {}): RunResult {
       const r = spawnSync('bash', [PROBE], {
