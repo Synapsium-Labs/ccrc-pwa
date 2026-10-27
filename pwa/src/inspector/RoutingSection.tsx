@@ -44,16 +44,26 @@ export function RoutingSection(): ReactNode {
       default: return p.text;
     }
   };
-  // A separator and the part after it share one nowrap span, so the line breaks before the " · " and never after it:
-  // a lone "·" would otherwise end a line while its pill starts the next. The text is unchanged, only grouped.
+  // A separator, the plain words after it and the door, ask or note they lead to share one nowrap tail, so the line
+  // breaks before the " · " and never after it: a lone "·" would otherwise end a line while its door or pill starts the
+  // next. Each tail opens on a <wbr>, the break before its " · ", which two tails in a row would not otherwise have.
+  // The text is unchanged, only grouped.
   const nodes: ReactNode[] = [];
+  let tail: ReactNode[] | null = null;
   line.parts.forEach((p, i) => {
-    if (p.kind === 'sep') return;
-    const before = line.parts[i - 1];
-    if (before?.kind === 'sep') {
-      nodes.push(<span key={`tail-${i}`} className="insp-routing-tail">{before.text}{part(p, i)}</span>);
-    } else {
+    if (p.kind === 'sep') {
+      nodes.push(<wbr key={`wbr-${i}`} />);
+      tail = [p.text];
+      return;
+    }
+    if (tail === null) {
       nodes.push(part(p, i));
+      return;
+    }
+    tail.push(part(p, i));
+    if (p.kind !== 'text') {
+      nodes.push(<span key={`tail-${i}`} className="insp-routing-tail">{tail}</span>);
+      tail = null;
     }
   });
   return (

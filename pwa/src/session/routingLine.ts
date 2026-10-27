@@ -26,8 +26,9 @@ const WORDS: Readonly<Record<'runs' | 'on' | 'effort' | 'sep' | 'asked' | 'asked
   | 'inertModel' | 'inertEffort' | 'unreadEffort' | 'unreadModel' | 'ultracode', string>> = {
   runs: 'Runs ',
   on: ' on ',
-  effort: ' · effort ',
-  // Its own plain-text part before each asked part and note, so the asked pill holds only the asked words.
+  effort: 'effort ',
+  // Its own part before the effort and before each asked part and note: every "·" is this part, so the markup can
+  // keep it with what follows, and the asked pill holds only the asked words.
   sep: ' · ',
   asked: 'asked ',
   // The asked effort is the departure `routing-line-says-pending-effort`: the header badges it, so the rail names it.
@@ -81,15 +82,16 @@ export function routingLine(row: FleetSession, view: RouteView, lane: string): R
     : null;
   const askedEffort = view.effortPending ? view.effortIntended : null;
   const unreadable = view.classUnreadable || view.effortUnreadable;
+  const sep: RoutingPart = { kind: 'sep', text: WORDS.sep };
   const parts: RoutingPart[] = [
     { kind: 'text', text: WORDS.runs },
     { kind: 'model', text: model ?? WORDS.unreadModel, tone: 'model' },
     { kind: 'text', text: WORDS.on },
     { kind: 'text', text: lane },
+    sep,
     { kind: 'text', text: WORDS.effort },
     { kind: 'effort', text: effort, tone: !view.effortInert && row.ultracode ? 'ultra' : 'plain' },
   ];
-  const sep: RoutingPart = { kind: 'sep', text: WORDS.sep };
   if (askedClass !== null) parts.push(sep, { kind: 'asked', text: `${WORDS.asked}${askedClass}` });
   if (askedEffort !== null) parts.push(sep, { kind: 'asked', text: `${WORDS.askedEffort}${askedEffort}` });
   if (view.classInert) parts.push(sep, { kind: 'note', text: WORDS.inertModel });

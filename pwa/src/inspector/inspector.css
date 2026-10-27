@@ -64,7 +64,8 @@
 .insp-routing-row .route-queued {
   white-space: nowrap;
 }
-/* A separator and the part after it stay on one line: the line may break before the " · ", never after it. */
+/* A separator, the words after it and the door, ask or note they lead to stay on one line: the line may break at
+   the <wbr> before the " · ", never after it. */
 .insp-routing-tail {
   white-space: nowrap;
 }

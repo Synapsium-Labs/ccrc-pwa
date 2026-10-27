@@ -333,11 +333,23 @@ describe('a section with nothing to show renders nothing (desktop polish T3d, D-
       // The shape really carries its part, and the component prints the sentence and nothing else.
       expect(sentence, name).toContain(expected);
       expect(el.textContent, name).toBe(sentence);
-      // The separator travels with what follows it, so a narrow rail never ends a line on a lone "·".
-      for (const piece of el.querySelectorAll('.route-queued, .insp-note')) {
+      // The separator travels with what follows it, so a narrow rail never ends a line on a lone "·": the effort door,
+      // each ask and each note sit in a tail that opens on " · ", and no "·" stands outside a tail.
+      const pieces = el.querySelectorAll("[data-command='session-effort'], .route-queued, .insp-note");
+      expect(pieces.length, name).toBeGreaterThan(0);
+      for (const piece of pieces) {
         const tail = piece.parentElement;
         expect(tail?.classList.contains('insp-routing-tail'), `${name}: ${piece.textContent}`).toBe(true);
         expect(tail?.textContent?.startsWith(' · '), `${name}: ${tail?.textContent}`).toBe(true);
+      }
+      const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+      for (let t = walker.nextNode(); t !== null; t = walker.nextNode()) {
+        if (!t.textContent?.includes('·')) continue;
+        expect(t.parentElement?.classList.contains('insp-routing-tail'), `${name}: lone '${t.textContent}'`).toBe(true);
+      }
+      // Two tails in a row would hold no break between them, so each tail opens on a break opportunity.
+      for (const tail of el.querySelectorAll('.insp-routing-tail')) {
+        expect(tail.previousSibling?.nodeName, `${name}: ${tail.textContent}`).toBe('WBR');
       }
       unmount();
     }

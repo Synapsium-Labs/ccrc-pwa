@@ -156,6 +156,27 @@ describe('the routing line says what runs and asks only what it can measure', ()
       .toEqual(['asked Opus 5.5', 'asked effort high']);
   });
 
+  it("every '·' is a sep part, and each sep leads, past plain words only, to a door, an ask or a note", () => {
+    const rows: [FleetSession, Parameters<typeof routeView>[2]][] = [
+      [fleetSession({ wrapper: 'lane-a', model: 'Sonnet 5', effort: 'low', route: route({ fields: { class: 'opus', effort: 'high' } }) }), 'anthropic'],
+      [fleetSession({ wrapper: 'lane-a', model: 'Sonnet 5', effort: 'low', route: route({ unreadable: ['class'] }) }), 'anthropic'],
+      [fleetSession({ wrapper: 'lane-a', route: route({ fields: { class: 'opus' }, inert: ['class', 'effort'] }) }), 'anthropic'],
+      [fleetSession({ wrapper: 'lane-a' }), 'anthropic'],
+    ];
+    for (const [row, provider] of rows) {
+      const out = line(row, provider);
+      expect(out.parts.filter((p) => p.kind !== 'sep' && p.text.includes('·')), out.sentence).toEqual([]);
+      out.parts.forEach((p, i) => {
+        if (p.kind !== 'sep') return;
+        const next = out.parts.slice(i + 1).find((q) => q.kind !== 'text');
+        expect(next && next.kind !== 'sep', `${out.sentence} @${i}`).toBe(true);
+      });
+      // The effort door is always reached through a separator.
+      const effortAt = out.parts.findIndex((p) => p.kind === 'effort');
+      expect(out.parts.slice(0, effortAt).some((p) => p.kind === 'sep'), out.sentence).toBe(true);
+    }
+  });
+
   it('the separator is its own sep part, so an asked part and the note hold only their words', () => {
     const both = line(fleetSession({
       wrapper: 'lane-a', model: 'Sonnet 5', effort: 'low',
