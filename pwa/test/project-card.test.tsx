@@ -75,7 +75,7 @@ describe('folding', () => {
       sessions: [sess({ dialogPending: true }), sess({ id: 'demo-still-cove', workspace: 'still-cove' })],
     });
     render(<ProjectCard group={g} collapsed onOpen={() => {}} onActions={() => {}} />);
-    expect(screen.getByText('2')).toBeInTheDocument();
+    expect(screen.getByText('2 sessions')).toBeInTheDocument();
     expect(screen.getByLabelText('waiting on you')).toBeInTheDocument();
   });
 
@@ -310,7 +310,7 @@ describe('session count', () => {
   it('renders from two upwards', () => {
     const g = grp({ sessions: [sess(), sess({ id: 'demo-still-cove', workspace: 'still-cove' })] });
     render(<ProjectCard group={g} onOpen={() => {}} onActions={() => {}} />);
-    expect(screen.getByText('2')).toBeInTheDocument();
+    expect(screen.getByText('2 sessions')).toBeInTheDocument();
   });
 });
 
