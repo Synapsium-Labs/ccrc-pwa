@@ -134,10 +134,8 @@ describe('the cadence census, on the real tree', () => {
     expect(launchdCadenceLiterals().map((s) => `${s.file} ${s.text.trim()}`)).toEqual([]);
   });
 
-  it('ddnsTranscriptCadences: three at the base, two Darwin and one Linux', () => {
+  it('ddnsTranscriptCadences: the Linux arm\'s enable sentence alone (3 at the base: two Darwin, one Linux)', () => {
     expect(ddnsTranscriptCadences().map((s) => [s.arm, s.text.trim()])).toEqual([
-      ['darwin', 'echo "expose: installed $lbl in \\$HOME/Library/LaunchAgents (the token stays in $CCRC_EXPOSURE_FILE — the job reads it, never carries it; a missed refresh waits for the next 5-minute tick, where systemd\'s Persistent=true would catch up immediately)"'],
-      ['darwin', 'echo "expose: $lbl enabled — the DuckDNS record refreshes every 5 minutes"'],
       ['linux', 'echo "expose: $CCRC_DDNS_UNIT.timer enabled — the DuckDNS record refreshes every 5 minutes"'],
     ]);
   });

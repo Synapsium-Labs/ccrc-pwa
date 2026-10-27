@@ -1383,6 +1383,19 @@ _timer_period_s() {   # <timer-file>
   fi
 }
 
+# `_timer_period_words <seconds> noun|adj` — that period in a transcript's
+# words: whole minutes as `<m> minutes` / `<m>-minute` (`1 minute` for 60),
+# anything else as `<s> seconds` / `<s>-second`.
+_timer_period_words() {   # <seconds> noun|adj
+  local n="$1" u=second
+  if [ $((n % 60)) -eq 0 ]; then n=$((n / 60)); u=minute; fi
+  case "$2" in
+    adj) printf '%s-%s' "$n" "$u" ;;
+    noun) if [ "$n" -eq 1 ]; then printf '1 %s' "$u"; else printf '%s %ss' "$n" "$u"; fi ;;
+    *) return 1 ;;
+  esac
+}
+
 # `deploy/models-op.mjs` is this design's node half — a NEW file, because
 # `main` has no node helper for account state to add ops to (`deploy/
 # account-op.mjs` is the account-connections branch's and is not here).
@@ -6225,7 +6238,7 @@ PL
     fi
     _inst_atomic "$gen" "$dir/$lbl.plist" 644
     rm -f -- "$gen"
-    echo "expose: installed $lbl in \$HOME/Library/LaunchAgents (the token stays in $CCRC_EXPOSURE_FILE — the job reads it, never carries it; a missed refresh waits for the next 5-minute tick, where systemd's Persistent=true would catch up immediately)"
+    echo "expose: installed $lbl in \$HOME/Library/LaunchAgents (the token stays in $CCRC_EXPOSURE_FILE — the job reads it, never carries it; a missed refresh waits for the next $(_timer_period_words "$period" adj) tick, where systemd's Persistent=true would catch up immediately)"
     # ── ARMED HERE, IN THE SAME ARM THAT INSTALLED IT ────────────────────
     # The first cut of this function wrote the plist and returned; a second
     # Darwin block forty lines down held the bootstrap — BELOW this arm's
@@ -6239,7 +6252,7 @@ PL
     _svc_launchctl bootout "$(_svc_domain)/$lbl" 2>/dev/null
     if _svc_launchctl enable "$(_svc_domain)/$lbl" 2>/dev/null \
        && _svc_launchctl bootstrap "$(_svc_domain)" "$dir/$lbl.plist" 2>/dev/null; then
-      echo "expose: $lbl enabled — the DuckDNS record refreshes every 5 minutes"
+      echo "expose: $lbl enabled — the DuckDNS record refreshes every $(_timer_period_words "$period" noun)"
     else
       echo "expose: DEGRADED — could not bootstrap $lbl. The job file is installed; when you can, run: launchctl bootstrap $(_svc_domain) $dir/$lbl.plist"
     fi
