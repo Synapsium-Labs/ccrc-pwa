@@ -263,7 +263,7 @@ describe("with 17 lanes the phone's strip keeps every card readable", () => {
             if (lefts.size !== 2) out.push(`the cards sit in ${lefts.size} columns`);
             // All accounts: a row of its own, under every card, whole and a finger's height.
             const end = document.querySelector<HTMLElement>('.ref-phone-head .accounts-end');
-            const door = end?.querySelector<HTMLElement>('button');
+            const door = end?.querySelector<HTMLElement>('[data-command="go-accounts"]'); // not 'button': the fold's control comes first
             if (end === null || door === null || door === undefined) out.push('no All accounts');
             else {
               const er = end.getBoundingClientRect();
