@@ -309,10 +309,10 @@ describe('StartProgramSheet', () => {
   });
 
   // The sheet reads the store's `projected`: a poll still pending or one that failed leaves it `undefined` (the
-  // store keeps the last good value, here none), the server's own "nothing is placeable" lands as `null`.
+  // store keeps the last good value, here none; stores.test.ts drives the failed read itself), the server's own
+  // "nothing is placeable" lands as `null`.
   it.each<readonly [string, ProjectedHome | null | undefined]>([
-    ['pending', undefined],
-    ['failed', undefined],
+    ['unanswered (a poll pending, or every poll failed)', undefined],
     ['measured null', null],
   ])('keeps present project placement authoritative while the global projection is %s', async (_state, answer) => {
     answerAccounts({ projected: answer });
