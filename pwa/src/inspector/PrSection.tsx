@@ -14,12 +14,16 @@ export function PrSection(): ReactNode {
   const session = useInspectorSession();
   if (session === null) return null;
   const row = session.row;
-  if (!hasPrCap(row) || row.pr === null || row.pr.number === null) return null;
+  // The row is not read yet before the first frame, and `pr` may be absent on a cast frame (the fleet wire is a cast);
+  // the header's cap tolerates both, so the number is read tolerantly once, here.
+  const pr = row?.pr ?? null;
+  const number = pr?.number ?? null;
+  if (!hasPrCap(row) || pr === null || number === null) return null;
   const door = commandDoor('session-pr');
   return (
     <InspectorSection id="pr" title="PR">
       <div className="insp-pr">
-        <PrKeycap pr={row.pr} onOpen={door.onClick} data-command={door['data-command']} />
+        <PrKeycap pr={pr} onOpen={door.onClick} data-command={door['data-command']} />
       </div>
     </InspectorSection>
   );

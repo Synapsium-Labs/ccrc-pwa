@@ -223,6 +223,17 @@ describe('a section with nothing to show renders nothing (desktop polish T3d, D-
     }
   });
 
+  it('a row whose pr is absent renders no PR section and does not throw', () => {
+    stubWidth(1920);
+    goTo(`/s/${BARE}`);
+    // The fleet wire is a cast, so a frame can omit `pr`; the header's cap tolerates that, and so must the rail.
+    const noPr = { ...ROW, id: BARE, pr: undefined } as unknown as FleetSession;
+    act(() => useFleetStore.setState({ sessions: [noPr] }));
+    const { container } = render(<InspectorSections />);
+    expect(container.querySelector("[data-section='pr']")).toBeNull();
+    expect(container.querySelector("[data-section='history']")).not.toBeNull();
+  });
+
   it('History renders alone when nothing else has content', () => {
     stubWidth(1920);
     goTo(`/s/${BARE}`);
