@@ -282,7 +282,9 @@ describe("with 17 lanes the phone's strip keeps every card readable", () => {
               if (er.top < lowest - 0.5) out.push(`All accounts (top ${er.top}) is not under the cards (bottom ${lowest})`);
               if (dr.left < -0.5 || dr.right > vw + 0.5) out.push('All accounts is outside the viewport');
               if (dr.height < 43.5) out.push(`All accounts is ${Math.round(dr.height)} tall`);
-              if (door.getAttribute('data-command') !== 'go-accounts') out.push('All accounts is not the go-accounts door');
+              // The tab order the plan states: the control, when there is one, comes before All accounts.
+              const control = end.querySelector<HTMLElement>('[aria-expanded]');
+              if (control === null || !(control.compareDocumentPosition(door) & Node.DOCUMENT_POSITION_FOLLOWING)) out.push('the fold control does not precede All accounts');
             }
             if (document.documentElement.scrollWidth > window.innerWidth + 0.5) out.push('the page scrolls sideways');
             return out;

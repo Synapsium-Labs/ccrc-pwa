@@ -258,7 +258,9 @@ describe("at 900, 1280 and 1920 the lanes row spans the header under the bar's l
           if (end === null || door === null || door === undefined) out.push('no All accounts cell');
           else {
             if (door.textContent?.trim() !== 'All accounts') out.push(`the end door reads "${door.textContent}"`);
-            if (door.getAttribute('data-command') !== 'go-accounts') out.push(`the end door's command is ${door.getAttribute('data-command')}`);
+            // The tab order the plan states: the control, when there is one, comes before All accounts.
+            const control = end!.querySelector<HTMLElement>('[aria-expanded]');
+            if (control === null || !(control.compareDocumentPosition(door) & Node.DOCUMENT_POSITION_FOLLOWING)) out.push('the fold control does not precede All accounts');
             if (cards.at(-1)!.compareDocumentPosition(end) !== Node.DOCUMENT_POSITION_FOLLOWING) out.push('All accounts does not follow the last card in the DOM');
             const er = end.getBoundingClientRect();
             const dr = door.getBoundingClientRect();
