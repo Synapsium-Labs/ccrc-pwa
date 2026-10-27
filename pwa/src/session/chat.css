@@ -143,16 +143,15 @@
   max-width: calc(100% - 8px - var(--sp-2)); /* the dot's 8 px box (StatusDot's min-w-2) and the row gap */
   line-height: 1.2;
 }
-/* D-5390: the name never breaks, but a long parent id (a `<wrapper>-<project>`
-   main-checkout coordinator keeps its whole id) must not run past the column
-   under the keycaps either: it ellipsises inside the status line, whose
-   `title` carries the full id. */
+/* D-5390, reversed by desktop polish T3c (D-6333): no chip text is ever cut. A long parent id (a
+   `<wrapper>-<project>` main-checkout coordinator keeps its whole id) used to ellipsise inside the status line; it now
+   shows whole and breaks inside only when it ALONE is wider than its row (`overflow-wrap`), the full id still on the
+   line's `title`. On Refined's phone rail (one sideways-scrolling row, `white-space: nowrap` inherited) it never
+   breaks at all and the rail scrolls to it. */
 .chat-meta .status-line-name {
   display: inline-block;
   max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
   vertical-align: top;
 }
 .chat .status-line--busy {
@@ -205,10 +204,11 @@ button.metachip:active {
   font-size: var(--fs-meta);
   line-height: 1;
 }
+/* Desktop polish T3c (D-6333): a chip's text is never cut. It used to be clipped with an ellipsis (and the branch's
+   to 22ch); now the row wraps to give each chip room, and a chip that alone is wider than its row breaks inside
+   (`overflow-wrap`). Refined's phone rail keeps its chips on one line (`white-space: nowrap`, inherited) and scrolls. */
 .metachip-text {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
 }
 .metachip--model {
   color: var(--ink-primary);
@@ -220,9 +220,6 @@ button.metachip:active {
 }
 .metachip--branch {
   color: var(--ink-tertiary);
-}
-.metachip--branch .metachip-text {
-  max-width: 22ch;
 }
 /* Routing spec §5.3, slice 4, Task 5: a small badge beside the model/effort
    text while a write is queued, waiting for the pane to read it back. Same
@@ -332,6 +329,26 @@ button.metachip:active {
 .keycap--pr[data-checks='pass'] .pr-dot { color: var(--status-busy); }
 .keycap--pr[data-checks='fail'] .pr-dot { color: var(--status-dead); }
 .keycap--pr[data-checks='pending'] .pr-dot { color: var(--status-attention); }
+
+/* The doors carry words from 900 (desktop polish T3c, D-6333): "Terminal", "More" and the PR door's word (`#123`, or
+   what a tap does) beside the glyph. Below 900 they stay glyphs at the 44px floor, each with a `title`, and the More
+   sheet lists every door with its word. The PR cap swaps two spans: the legend below 900, the door's word from it. */
+.chat-head .keycap-word { display: none; }
+@media (min-width: 900px) {
+  .chat-head .keycap-word {
+    display: inline;
+    white-space: nowrap;
+    font: var(--weight-medium) var(--fs-2xs) / 1 var(--family-mono);
+  }
+  .chat-head .keycap--term,
+  .chat-head .keycap--more,
+  .chat-head .keycap--pr {
+    grid-auto-flow: column;
+    gap: var(--sp-1);
+    padding-inline: var(--sp-2);
+  }
+  .chat-head .keycap--pr .pr-legend { display: none; }
+}
 
 .pr-sheet { display: grid; gap: var(--sp-3); }
 .pr-lede { color: var(--ink-primary); font-size: var(--fs-ui); line-height: var(--lh-normal); }

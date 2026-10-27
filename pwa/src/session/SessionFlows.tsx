@@ -22,7 +22,7 @@ import { sessionDocsHref } from '../docs/docsLinks';
 import { isPutAway, restoreReachesEnsure } from '../fleet/ArchiveSheet';
 import { substrateFaultText } from '../fleet/substrateWords';
 import { PrSheet } from './PrSheet';
-import { hasPrCap } from './PrKeycap';
+import { UNCHECKED_PR, hasPrCap, prDoorWord } from './PrKeycap';
 
 /** What the session screen does for each flow the menu or a door opens. */
 export interface SessionActions {
@@ -45,8 +45,8 @@ export interface SessionFlowDoors {
 
 /** One item of the ⋯ menu: its command, its words, and whether it is offered enabled. */
 export interface SessionMenuEntry {
-  id: 'session-model' | 'session-effort' | 'open-history' | 'session-docs' | 'session-swap' | 'session-archive'
-    | 'session-restore';
+  id: 'open-terminal' | 'session-pr' | 'session-model' | 'session-effort' | 'open-history' | 'session-docs'
+    | 'session-swap' | 'session-archive' | 'session-restore';
   label: string;
   enabled: boolean;
   /** The reason a gated item is disabled (the substrate chip's own words), on `title`. */
@@ -76,6 +76,12 @@ export function sessionMenu(session: FleetSession | null): SessionMenuEntry[] {
   if (docsLink !== null) {
     entries.push({ id: 'session-docs', label: 'Docs', enabled: true, docs: { href: docsLink.href, branch: docsLink.branch } });
   }
+  // The header's doors, each with its word (desktop polish T3c, D-6333): below 900 the header's doors are glyphs and this
+  // sheet is where a phone reads what each is. They run the same commands the header's doors do (`open-terminal` and
+  // `session-pr`, in the host's `run` below), at every width; at the desk they repeat a visible door. The PR door is a
+  // workspace's alone (`hasPrCap`), and its word is the cap's own (`prDoorWord`).
+  entries.push({ id: 'open-terminal', label: 'Terminal', enabled: true });
+  if (hasPrCap(session)) entries.push({ id: 'session-pr', label: prDoorWord(session.pr ?? UNCHECKED_PR), enabled: true });
   // Gated like Archive below (branch review): this item opens the SAME SwapSheet as the actions sheet's gated opener,
   // and SwapSheet's confirm fires api.swap with no substrate check of its own — so an ungated door here was a swap
   // reachable with no gate anywhere.
