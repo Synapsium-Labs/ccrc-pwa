@@ -360,7 +360,7 @@ export interface FrameCost {
   /** Per window, the idle one first: whether the drain before it saw the main thread go quiet. */
   readonly drainQuiet: readonly boolean[];
   /** Per window, the idle one first: its wall length in ms on the test side, from just before the first read to just
-   *  after the second. At least `gapMs`; under host load it has been measured at 10 to 17 s. */
+   *  after the second. At least `gapMs`, with no upper bound: a loaded host stretches it. */
   readonly spans: readonly number[];
 }
 
@@ -368,7 +368,11 @@ export interface FrameCost {
  *  caller still has it when the attempt fails: a window whose drain or reads fail is not in it. The caller creates it
  *  (`{ windows: [] }`). */
 export interface FrameCostRecord {
-  readonly windows: { readonly cost: Cost; readonly spanMs: number; readonly deferred: number; readonly drainQuiet: boolean }[];
+  readonly windows: {
+    readonly cost: Cost; readonly spanMs: number; readonly deferred: number; readonly drainQuiet: boolean;
+    /** The wall clock (epoch ms) at the window's start, to line a window up with what the host measured then. */
+    readonly atMs: number;
+  }[];
 }
 
 /** `frameCost`'s options. `during` runs inside each frame's window, after the frame is sent and before the wait, with
@@ -458,6 +462,7 @@ export async function frameCost(
       const wentQuiet = await drain();
       drainQuiet.push(wentQuiet);
       const began = performance.now();
+      const atMs = Date.now();
       const a = await read();
       app.mark('readA');
       const from = app.events.length;
@@ -473,7 +478,7 @@ export async function frameCost(
       deferred.push(intercepted);
       spans.push(spanMs);
       const cost = { taskMs: b.taskMs - a.taskMs, scriptMs: b.scriptMs - a.scriptMs };
-      options.record?.windows.push({ cost, spanMs, deferred: intercepted, drainQuiet: wentQuiet });
+      options.record?.windows.push({ cost, spanMs, deferred: intercepted, drainQuiet: wentQuiet, atMs });
       return cost;
     };
     const idle = await window(null);

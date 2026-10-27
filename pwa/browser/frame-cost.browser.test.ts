@@ -2,8 +2,9 @@
 // polish Task C6). The fleet socket sends the WHOLE session list on every change, and the app re-renders from it, so a
 // fleet of 80 rows with about nine changing per frame is the load this file puts on it, and `frameCost`
 // (`browser/app.ts`) reads Chrome's `TaskDuration` over a window around each frame (CDP `Performance.getMetrics`). A
-// window runs from the first read to the second: the frame's send, the 2 s wait and the second read. That is at least
-// 2 s and has no upper bound under host load, so `FrameCost.spans` records each window's measured length.
+// window runs from the first read to the second: the frame's send, the wait of `gapMs` (2 s in the gate cases) and the
+// second read. That is at least `gapMs` and has no upper bound under host load, so `FrameCost.spans` records each
+// window's measured length.
 // Since the operator's R104 contract, `frameCost` defers the fixture's `/api` answers into an unmeasured drain before
 // each window, so the gates measure a window in which the harness fulfils no fixture answer. That changed what the
 // gates measure; it does not isolate the frame: the page's handling of an answer delivered in a drain, and its
@@ -208,8 +209,8 @@ describe('the deferred fixture answers (R104): the harness self-test', () => {
       // The listener arms only on this request's fulfil-start, so the two readAs before it (the idle window's and
       // window 0's) cannot release the gate. The precondition keeps that non-vacuous: there were reads to release on.
       // The oracle is the released event itself: it exists and comes after the fulfil-start, so an initial read did not
-      // release it. H3 (the drain skips its in-flight wait) reaches the next readA with the answer still in flight, and
-      // only the fallback releases it there.
+      // release it. The kind check after it is H3's: a drain that skips its in-flight wait reaches the next readA with
+      // the answer still in flight, and only the fallback releases it there.
       const before = app.events.filter((e) => e.kind === 'readA' && e.seq < start.seq);
       expect(before.length, 'the readAs before the fulfil-start (the idle window and window 0) are the reads an early arm could have released on')
         .toBeGreaterThanOrEqual(2);
@@ -255,8 +256,11 @@ describe('the deferred fixture answers (R104): the harness self-test', () => {
       // The stuck request starts in window 0, so the drain before window 1 fails: the record keeps what was measured
       // before it, the idle window and window 0, though `frameCost` returned nothing.
       expect(record.windows, 'the failed attempt kept the idle window and window 0 (the drain before window 1 failed)').toHaveLength(2);
-      expect(record.windows.every((w) => Number.isFinite(w.cost.taskMs) && Number.isFinite(w.cost.scriptMs) && w.spanMs >= 500),
-        `each kept window has a measured cost and a span of at least the gap: ${JSON.stringify(record.windows)}`).toBe(true);
+      // Each start is a wall-clock time, and a window starts after the one before it has spanned its length (5 ms of
+      // slack, for the two clocks the start and the span are read from).
+      expect(record.windows.every((w, i) => Number.isFinite(w.cost.taskMs) && Number.isFinite(w.cost.scriptMs) && w.spanMs >= 500
+        && (i === 0 || w.atMs >= record.windows[i - 1]!.atMs + record.windows[i - 1]!.spanMs - 5)),
+        `each kept window has a measured cost, a span of at least the gap, and starts after the one before: ${JSON.stringify(record.windows)}`).toBe(true);
       // The parked request reached the harness while the drain waited, and the finally's release (the last flush, the
       // only one after it) answered it.
       const waited = asked as HarnessEvent | null;
@@ -295,7 +299,7 @@ function keep(task: { meta: object }, record: FrameCostRecord): void {
   const { windows } = record;
   Object.assign(task.meta, { frameCost: {
     idle: windows[0]?.cost, frames: windows.slice(1).map((w) => w.cost), spans: windows.map((w) => w.spanMs),
-    deferred: windows.map((w) => w.deferred), drainQuiet: windows.map((w) => w.drainQuiet),
+    deferred: windows.map((w) => w.deferred), drainQuiet: windows.map((w) => w.drainQuiet), at: windows.map((w) => w.atMs),
   } });
 }
 
@@ -313,8 +317,7 @@ describe('frame cost (D-6438)', () => {
         expect(cost.median.taskMs, `median TaskDuration per frame, ${skin}: ${cost.median.taskMs.toFixed(1)} ms; `
           + `spans ${cost.spans.map((x) => x.toFixed(1)).join(', ')} ms; deferred ${cost.deferred.join(' ')}`).toBeLessThan(FRAME_CEILING_MS);
       } finally {
-        keep(task, record);
-        await app.ctx.close();
+        try { keep(task, record); } finally { await app.ctx.close(); }
       }
     }, CEILING_CASE_MS);
 
@@ -342,8 +345,7 @@ describe('frame cost (D-6438)', () => {
           + `spans ${cost.spans.map((x) => x.toFixed(1)).join(', ')} ms`)
           .toBeLessThan(IDENTICAL_SCRIPT_RATIO);
       } finally {
-        keep(task, record);
-        await app.ctx.close();
+        try { keep(task, record); } finally { await app.ctx.close(); }
       }
     }, RATIO_CASE_MS);
   }
