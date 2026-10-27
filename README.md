@@ -506,6 +506,7 @@ way; the refusal on a missing `diff` comes from the skill installers it then run
 | `ccd-pool-sync.timer`, `ccd-update-sync.timer` | fleet | 60 s | pull the account-pool and update projections from the server | — |
 | `ccrc-update-watchdog.timer` | server, both | 60 s | re-measures a self-update that died with its updater ("Releases") | — |
 | `ccd-history-sweep.timer` | fleet, both | 2 min | copies every rostered home's transcripts verbatim, secrets a session printed included, into the store `ccrc history` reads ("Session history", below) | `~/.ccrc/history-off` |
+| `ccd-land-probe.timer` | fleet, both | 5 min | measures, for each project opted in by `~/.ccrc/landing/<project>.conf`, which open PRs conflict with the base and each other, the base's required checks, and each workspace branch's lineage of clean base merges, read-only ("Conflict radar", below) | `~/.cc-sessions/land-probe-paused`; per project `~/.cc-sessions/landing/<project>/paused` |
 | `ccd-graph-sweep.timer` | fleet, both | 15 min | refreshes per-tree code graphs | `~/.ccrc/graph-sweep-paused` |
 | `ccd-account-health.timer` | fleet, both | 15 min | probes each setup-token account's credential, spending no tokens | `~/.ccrc/account-health-paused` |
 | `ccd-telemetry-keepalive.timer` | fleet, both | 15 min | one minimal turn on an idle measured account (below) | `~/.ccrc/keepalive-paused` |
@@ -5965,6 +5966,62 @@ roughly 8 passes at the sweep's own budget (`CCRC_GRAPH_BUDGET=8` builds/pass). 
 shrink-refusal literal the build discriminator greps for (the comment at its check in
 `ccd/ccd-graph-sweep`) against the new version's installed `watch.py`/`export.py` before shipping —
 the message has already moved once between minor versions.
+
+### Conflict radar (ccd-land-probe)
+
+`ccd-land-probe` runs from `ccd-land-probe.timer` every five minutes on a `fleet` or `both` box (Linux). It measures
+each project the operator has opted in, and nothing else. A project is opted in by a hand-written
+`~/.ccrc/landing/<project>.conf`, and nothing in the tree writes one. Per opted-in project, each tick measures three
+things:
+
+- **Conflicts.** Which open pull requests conflict with the base, and which pairs of them conflict with each other.
+  This uses `git merge-tree` on the head shas gh reports. Only heads whose branch is a registered workspace's are
+  paired, at most ten of them, highest PR number first.
+- **Base health.** Whether the base tip's required checks are green. The required set is the union of the
+  branch's rulesets and its protection. Each name is judged by its newest check run, pinned to its App where the rule
+  names one. A combined status counts only for a name no App is pinned to.
+- **Lineage.** For each workspace branch in the registry, the chain of clean base merges from its tip: each step
+  is a two-parent merge whose second parent is on the base, and whose tree equals what `merge-tree` gives for its
+  parents. The walk stops at the first step that is not such a merge, after at most eight steps.
+
+It writes four JSON files, each `"v": 1`, under `~/.cc-sessions/landing/<project>/`:
+
+| file | what it holds |
+|---|---|
+| `probe` | the heads, the pairs and each one's verdict (`clean`, `conflict` with its paths, or `unmeasured` with a why) |
+| `main-health` | `green`, `red` or `unmeasured`, with the required names, the failing ones and those not yet proven |
+| `<id>.lineage` | one registry row's branch tip and its proven chain of clean base merges |
+| `enabled` | the mirror of the conf's `lineage=on`, with its own time |
+
+Anything the probe cannot measure, such as a failed fetch or gh call, a git child past its deadline, or a spent
+budget, is written as `unmeasured` with a why, and never as clean or green.
+
+**The conf.** UTF-8 `key=value` lines, with no spaces around `=`; blank lines and `#` lines are ignored. There are
+two keys: `base`, a branch name that defaults to `main`, and `lineage`, `on` or `off`, which defaults to `off`. An
+empty conf turns the radar on with lineage off. A repeated or unknown key, a bad value, or a conf that is not a
+regular UTF-8 file makes the project `conf-invalid`. That project is not measured, its `enabled` is removed, and the
+journal names the reason (never the bytes).
+
+**The pauses.** The operator writes both by hand, and the tree has no writer for either:
+- `~/.cc-sessions/land-probe-paused` stops the whole tick before its lock.
+- `~/.cc-sessions/landing/<project>/paused` stops one project.
+
+A paused project is not measured, and its `enabled` is removed, so a pause stops acceptance as well as measurement.
+`ccrc uninstall` removes the units, the binary and every `enabled` file.
+
+**Read-only, by code.** The probe never writes a project repository. The fetch and every `merge-tree` object go into
+a per-tick bare scratch repository under the temp root, which borrows the project's object store as an alternate and
+is removed on every exit. Three layers hold this, and `server/test/ccd-land-probe-readonly.test.ts` shows each one
+red by planting:
+1. Every git call goes through `git_ro`. `git_ro` owns a fixed hardening prefix, and refuses any subcommand outside
+   its two allowlists and any option that could run code or re-point the repository.
+2. gh is reached at exactly two call sites, a `GET` through `gh api` and `gh pr list`. Each names the repository.
+3. A literal source pin forbids `push`, a PR merge, `update-branch`, any gh method but `GET`, and any third call
+   site.
+
+`ccrc doctor`'s `land-probe` check reads these files, and so does a person. Nothing else reads them yet: wave 4 of
+the landing-order programme adds the lineage acceptance, which reads `enabled` and the `.lineage` files, and wave 4b
+adds the server's reader and the PWA chip.
 
 ### Temp-dir reaper (ccd-tmp-sweep)
 
