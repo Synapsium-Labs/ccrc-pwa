@@ -35,7 +35,7 @@ describe('epochFloorReaders', () => {
       'server/src/journalKernel.ts': '    const m = /"epoch":(\\d+)/.exec(line);\n',
       'server/src/d.ts': 'const n = /"n":(\\d+)/.exec(line);\n',
     });
-    expect(epochFloorReaders(t).map((s) => `${s.file}:${s.line}`)).toEqual(['server/src/a.ts:2', 'server/src/b/c.ts:1']);
+    expect(epochFloorReaders(t).map((s) => [s.file, s.line])).toEqual([['server/src/a.ts', 2], ['server/src/b/c.ts', 1]]);
   });
 });
 
