@@ -24,6 +24,7 @@ import {
   type HeightBucket, type Measures, type MeasuredRow, type RowRecord, type RowShape,
 } from './itemHeight';
 import { PendingBubble } from './PendingBubble';
+import { renderToolWell } from './ToolWellText';
 import { groupToolRun, type TranscriptItem } from './toolSummary';
 import { TranscriptRowContext } from './transcriptRow';
 import './chat.css';
@@ -74,7 +75,10 @@ function ChatItemBody({
       return <MessageBubble event={item.event} id={id} streaming={item.streaming} />;
     case 'tool':
       return (
-        <ToolCard use={item.use} result={item.result} askPending={askPending} askBelow={askBelow} answerLabel={answerLabel} onAnswer={onAnswer} />
+        <ToolCard
+          use={item.use} result={item.result} renderWell={renderToolWell(item.use)}
+          askPending={askPending} askBelow={askBelow} answerLabel={answerLabel} onAnswer={onAnswer}
+        />
       );
     case 'mail':
       return <MailCard envelope={item.envelope} />;
