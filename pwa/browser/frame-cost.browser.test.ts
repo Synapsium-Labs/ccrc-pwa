@@ -34,7 +34,7 @@ import { INSTRUMENT, PHOSPHOR, REFINED } from '@ccrc/ui';
 import { resolveChrome } from './harness';
 import {
   backlogFrame, buildDist, fleetApi, fleetFixture, fleetFrame, fleetFrameAt, FIXTURE_NOW_MS, frameCost, INFLIGHT_CAP_MS, longTranscript,
-  openApp, QUIET_CAP_MS, removeDist, serveDist, summarize, type AppFixture, type AppView, type DistServer, type FrameCost,
+  openApp, QUIET_CAP_MS, removeDist, serveDist, summarize, type AppFixture, type AppView, type DistServer, type FrameCostRecord,
   type HarnessEvent, type OpenedApp,
 } from './app';
 
@@ -239,12 +239,18 @@ describe('the deferred fixture answers (R104): the harness self-test', () => {
         asked = e;
         void app.page.evaluate((u) => { (window as unknown as Page$).parked = fetch(u).then((r) => r.json()); }, parked);
       });
+      const record: FrameCostRecord = { windows: [] };
       const attempt = frameCost(app, '/ws/fleet', changing().slice(0, 2), 500, {
-        quiet: false,
+        quiet: false, record,
         during: async (index) => { if (index === 0) await startFetch(app, 'stuck', stuck); },
       });
       await expect(attempt).rejects.toThrow(/drain-inflight-timeout: \/api\/selftest-stuck/);
       stop();
+      // The stuck request starts in window 0, so the drain before window 1 fails: the record keeps what was measured
+      // before it, the idle window and window 0, though `frameCost` returned nothing.
+      expect(record.windows, 'the failed attempt kept the idle window and window 0 (the drain before window 1 failed)').toHaveLength(2);
+      expect(record.windows.every((w) => Number.isFinite(w.cost.taskMs) && Number.isFinite(w.cost.scriptMs)),
+        `each kept window has a measured cost: ${JSON.stringify(record.windows)}`).toBe(true);
       // The parked request reached the harness while the drain waited, and the finally's release (the last flush, the
       // only one after it) answered it.
       const waited = asked as HarnessEvent | null;
@@ -277,24 +283,30 @@ const CEILING_CASE_MS = 30_000 + (1 + FRAMES) * WINDOW_MAX_MS;
 const RATIO_CASE_MS = 30_000 + (1 + FRAMES + IDENTICAL_FRAMES) * WINDOW_MAX_MS;
 const MEASURE_CASE_MS = 30_000 + (1 + FRAMES + 1) * WINDOW_MAX_MS;
 
-/** Keep `cost`'s per-window figures on the case, where the JSON reporter writes them, whether it passes or fails. */
-function keep(task: { meta: object }, cost: FrameCost): void {
-  Object.assign(task.meta, { frameCost: { idle: cost.idle, frames: cost.frames, deferred: cost.deferred, drainQuiet: cost.drainQuiet } });
+/** Keep what `frameCost` recorded, window by window, on the case, where the JSON reporter writes it. A gate case calls it
+ *  from a `finally`, so a case whose attempt failed keeps the windows measured before the failure. */
+function keep(task: { meta: object }, record: FrameCostRecord): void {
+  const { windows } = record;
+  Object.assign(task.meta, { frameCost: {
+    idle: windows[0]?.cost, frames: windows.slice(1).map((w) => w.cost),
+    deferred: windows.map((w) => w.deferred), drainQuiet: windows.map((w) => w.drainQuiet),
+  } });
 }
 
 describe('frame cost (D-6438)', () => {
   for (const skin of [REFINED, INSTRUMENT]) {
     it(`a fleet frame of ${ROWS} rows on / costs under the ceiling (${skin}, 1920)`, async ({ task }) => {
       const { app } = await boot({ skin, theme: PHOSPHOR, width: 1920 }, '/');
+      const record: FrameCostRecord = { windows: [] };
       try {
         expect(app.errors).toEqual([]);
         expect(await sideScroll(app.page)).toBeLessThanOrEqual(0);
-        const cost = await frameCost(app, '/ws/fleet', changing(), GAP_MS);
-        keep(task, cost);
+        const cost = await frameCost(app, '/ws/fleet', changing(), GAP_MS, { record });
         expect(cost.frames).toHaveLength(FRAMES);
         expect(app.errors).toEqual([]);
         expect(cost.median.taskMs, `median TaskDuration per frame, ${skin}: ${cost.median.taskMs.toFixed(1)} ms`).toBeLessThan(FRAME_CEILING_MS);
       } finally {
+        keep(task, record);
         await app.ctx.close();
       }
     }, CEILING_CASE_MS);
@@ -304,13 +316,13 @@ describe('frame cost (D-6438)', () => {
     // that has just rendered a changed list.
     it(`an identical fleet frame's script stays below 35% of a changing frame's (${skin}, 1920)`, async ({ task }) => {
       const { app } = await boot({ skin, theme: PHOSPHOR, width: 1920 }, '/');
+      const record: FrameCostRecord = { windows: [] };
       try {
         expect(app.errors).toEqual([]);
         expect(await sideScroll(app.page)).toBeLessThanOrEqual(0);
         const frames = changing();
         const last = frames.at(-1)!;
-        const cost = await frameCost(app, '/ws/fleet', [...frames, ...Array.from({ length: IDENTICAL_FRAMES }, () => last)], GAP_MS);
-        keep(task, cost);
+        const cost = await frameCost(app, '/ws/fleet', [...frames, ...Array.from({ length: IDENTICAL_FRAMES }, () => last)], GAP_MS, { record });
         expect(cost.frames).toHaveLength(FRAMES + IDENTICAL_FRAMES);
         expect(app.errors).toEqual([]);
         const changed = summarize(cost.frames.slice(0, FRAMES)).median.scriptMs;
@@ -322,6 +334,7 @@ describe('frame cost (D-6438)', () => {
           + `identical scripts ${cost.frames.slice(FRAMES).map((c) => c.scriptMs.toFixed(1)).join(', ')}; deferred ${cost.deferred.join(' ')}`)
           .toBeLessThan(IDENTICAL_SCRIPT_RATIO);
       } finally {
+        keep(task, record);
         await app.ctx.close();
       }
     }, RATIO_CASE_MS);

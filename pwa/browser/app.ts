@@ -358,11 +358,21 @@ export interface FrameCost {
   readonly drainQuiet: readonly boolean[];
 }
 
+/** What `frameCost` has measured so far, filled in place, one entry per COMPLETED window (the idle one first), so a
+ *  caller still has it when the attempt fails: a window whose drain or reads fail is not in it. The caller creates it
+ *  (`{ windows: [] }`). */
+export interface FrameCostRecord {
+  readonly windows: { readonly cost: Cost; readonly deferred: number; readonly drainQuiet: boolean }[];
+}
+
 /** `frameCost`'s options. `during` runs inside each frame's window, after the frame is sent and before the wait, with
- *  the frame's index; `quiet: false` skips the drain's quiet wait. Both are the self-test's, never a gate case's. */
+ *  the frame's index; `quiet: false` skips the drain's quiet wait. Both are the self-test's, never a gate case's.
+ *  `record` is filled window by window (`FrameCostRecord`); a gate case passes one and keeps it whether the attempt
+ *  passes or fails. */
 export interface FrameCostOptions {
   readonly during?: (index: number) => Promise<void>;
   readonly quiet?: boolean;
+  readonly record?: FrameCostRecord;
 }
 
 const medianOf = (xs: readonly number[]): number => {
@@ -436,7 +446,8 @@ export async function frameCost(
       return options.quiet === false ? false : quiet();
     };
     const window = async (frame: { readonly frame: unknown; readonly index: number } | null): Promise<Cost> => {
-      drainQuiet.push(await drain());
+      const wentQuiet = await drain();
+      drainQuiet.push(wentQuiet);
       const a = await read();
       app.mark('readA');
       const from = app.events.length;
@@ -447,8 +458,11 @@ export async function frameCost(
       await app.page.waitForTimeout(gapMs);
       const b = await read();
       app.mark('readB');
-      deferred.push(app.events.slice(from).filter((e) => e.kind === 'intercept').length);
-      return { taskMs: b.taskMs - a.taskMs, scriptMs: b.scriptMs - a.scriptMs };
+      const intercepted = app.events.slice(from).filter((e) => e.kind === 'intercept').length;
+      deferred.push(intercepted);
+      const cost = { taskMs: b.taskMs - a.taskMs, scriptMs: b.scriptMs - a.scriptMs };
+      options.record?.windows.push({ cost, deferred: intercepted, drainQuiet: wentQuiet });
+      return cost;
     };
     const idle = await window(null);
     const costs: Cost[] = [];
