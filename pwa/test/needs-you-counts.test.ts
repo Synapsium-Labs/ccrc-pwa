@@ -3,7 +3,29 @@
 // runs whose worker or coordinator session is waiting, a run counted once), `runsLineLabel` (the fleet's runs line) and
 // `badgePrint` (the one printed cap). `null` inputs answer `null`: "not heard yet" is not zero.
 //
-// MUTATION TABLE (plan Task T2d Step 3)
+// MUTATION TABLE (plan Task T2d Step 3; RUN at 3f0d1b78c, each mutant on the working tree, the named suites alone, then
+// restored from a saved copy; every row killed):
+//   the Inbox badge back to every unacked record (`useNavBadges` reads the feed's length)
+//                                                        refined-shell "no badge at zero; …", instrument-shell "the rail's
+//                                                        Inbox door says 'waiting for you' …" and "with nobody waiting …"
+//   `waitingOnYou` counts every session ................ "a session in the attention bucket is counted, a held child is not",
+//                                                        refined-shell "no badge at zero; …"
+//   a badge at 0 (AppBar `count >= 0 &&`) .............. refined-shell "no badge at zero; …" (and the bar's order case)
+//   "active" counting `planned` ........................ "the runs line: active counts …", fleet-screen "Runs · active counts
+//                                                        dispatched, working and unknown only"
+//   `0` before the runs frame .......................... "null before the fleet frame; null before the runs frame" (a door
+//                                                        hides 0 and null alike, so only this case can see it)
+//   the rail's Inbox door left on the unread count ..... instrument-shell "the rail's Inbox door says 'waiting for you' …"
+//                                                        and "with nobody waiting …"
+//   a second print-cap literal (AppBar's own PRINT_CAP)  "the badge's print cap has one definition"
+//   `runsNeedYou` ignores the coordinator .............. "a run counts only while …", refined-shell "the Runs badge counts …"
+//   `runsNeedYou` counts a closed run .................. "a run counts only while …", refined-shell "the Runs badge counts …"
+//   FleetScreen's mail door ungated on the fleet frame . fleet-screen "the mail door counts the sessions waiting on the
+//                                                        operator, never the unread mail"
+//   `useNavBadges` ungated on the fleet frame .......... refined-shell "no badge at zero; …", instrument-shell (three cases)
+// R32's F5, moved to the Inbox's own rows (mail-screen.test.tsx):
+//   MailScreen's row mark without `isUnseenAt(...)` .... "a row at the ack's own stamp, or before it, is not unseen; …"
+//   `isUnseenAt` as `>=` ............................... the same case
 import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -76,9 +98,9 @@ describe('the needs-you counts (T2d, D-6330)', () => {
     // (a) one file assigns a name ending in PRINT_CAP: the constant every door reads
     const defining = [...code].filter(([, text]) => /\b\w*PRINT_CAP\s*=/.test(text)).map(([f]) => f);
     expect(defining).toEqual(['fleet/navBadges.ts']);
-    // (b) no other file prints a cap of its own: a `${...CAP...}+` template or a literal '99+'
+    // (b) no other file prints a cap of its own: a `${...cap...}+` template (any case) or a literal '99+' in any quotes
     const printing = [...code]
-      .filter(([f, text]) => f !== 'fleet/navBadges.ts' && (/\$\{\w*CAP\w*\}\+/.test(text) || /['`]99\+['`]/.test(text)))
+      .filter(([f, text]) => f !== 'fleet/navBadges.ts' && (/\$\{\w*CAP\w*\}\+/i.test(text) || /['"`]99\+['"`]/.test(text)))
       .map(([f]) => f);
     expect(printing).toEqual([]);
   });
