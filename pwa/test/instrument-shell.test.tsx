@@ -128,6 +128,8 @@
 //   the observer not disconnected on cleanup ........... accounts-strip "the desk row's observer is disconnected when the strip unmounts"  (it was SURVIVED: no case unmounted a measured strip)
 //   the column gap read without the `Number.isFinite` fallback
 //                                                       sixteen accounts-strip cases, the first "at the desk the row folds to the measured fit: three cards at 1248 px, …" (jsdom's gap is not a number)
+//   the column gap ignored (`gap: 0` in `useRowWidth`) . accounts-strip "the desk's fit counts the column gap the group computes: 1050 px with an 8 px gap holds three tracks, …"
+//                                                         (fix round 1: it was SURVIVED, every jsdom case ran with a gap of 0 and the browser leg's three desk widths count alike with 8 px or 0)
 // R120 `lanes-tie-break-soonest-reset` (lane-order alone):
 //   drop the reset key ................................. "lanes that tie on binding use sort by the binding window's reset, soonest first", and four more
 //   reset latest first ................................. the same five

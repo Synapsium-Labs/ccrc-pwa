@@ -489,8 +489,14 @@ describe('the lanes fold (S5b, D-6530)', () => {
     vi.spyOn(api, 'accounts').mockResolvedValue({ accounts, projected: { wrapper: 'w0', score: 0 }, roster });
   };
   const stubSeventeen = (): void => stubLanes(seventeenLanes(nowSec).accounts);
-  /** A desk whose cards' group measures `width` px of content (jsdom has no stylesheet, so its column-gap is not a number). */
-  const stubDesk = (width: number): void => {
+  /** A desk whose cards' group measures `width` px of content (jsdom has no stylesheet, so its column-gap is not a number
+   *  unless `gap` gives the group one, in px, as the lanes row's stylesheet does). */
+  const stubDesk = (width: number, gap: number | null = null): void => {
+    if (gap !== null) {
+      const real = window.getComputedStyle.bind(window);
+      vi.spyOn(window, 'getComputedStyle').mockImplementation((el, pseudo) => (
+        el.classList.contains('accounts-strip') ? ({ columnGap: `${gap}px` } as CSSStyleDeclaration) : real(el, pseudo)));
+    }
     vi.stubGlobal('matchMedia', (q: string) => ({
       matches: q.includes('min-width: 900px'), media: q, onchange: null,
       addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, dispatchEvent: () => false,
@@ -587,6 +593,15 @@ describe('the lanes fold (S5b, D-6530)', () => {
     // 17 lanes less 3 shown.
     expect([...end.children]).toEqual([control('+14 more · 1 sign-in expired · 1 rate-limited'), screen.getByRole('button', { name: 'All accounts' })]);
     expect(group.getAttribute('style')).toContain('--lane-card-min: 260px');
+  });
+
+  it("the desk's fit counts the column gap the group computes: 1050 px with an 8 px gap holds three tracks, so two cards (a gap read as 0 would hold four, and show three)", async () => {
+    stubDesk(1050, 8);
+    stubSeventeen();
+    const { container } = render(<AccountsStrip />);
+    await screen.findByRole('button', { name: /more/ });
+    expect(cardsOf(container).map(nameOf)).toEqual(SHOWN.slice(0, 2));
+    expect(control()).toHaveTextContent(/^\+15 more/);
   });
 
   it('an unmeasured desk row folds nothing: every lane and no control', async () => {
