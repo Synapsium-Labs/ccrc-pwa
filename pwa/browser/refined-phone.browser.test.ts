@@ -15,7 +15,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { chromium, type Browser } from 'playwright-core';
 import { INSTRUMENT, PHOSPHOR, REFINED } from '@ccrc/ui';
 import { resolveChrome } from './harness';
-import { buildDist, openApp, removeDist, serveDist, type AppFixture, type AppView, type DistServer } from './app';
+import { buildDist, openApp, removeDist, seedStripExpanded, serveDist, type AppFixture, type AppView, type DistServer } from './app';
 import { fleetSession } from '../test/fleetFixture';
 import { seventeenLanes, type LaneCase } from '../test/seventeenLanes';
 
@@ -218,6 +218,7 @@ describe("with 17 lanes the phone's strip keeps every card readable", () => {
         const { fixture, cases } = seventeen();
         const { ctx, page, errors } = await openApp(browser!, { skin: REFINED, theme, width }, fixture);
         try {
+          await seedStripExpanded(ctx); // the strip folds by default; this case counts every lane
           await page.goto(server!.origin + '/');
           await page.waitForFunction(() => document.querySelectorAll('.ref-phone-head .account-gauge').length === 17, undefined, { timeout: 20_000 });
           await page.waitForTimeout(200);
