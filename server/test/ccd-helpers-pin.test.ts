@@ -160,7 +160,7 @@ describe('the token sets each scanner builds from the refusal helpers\' calls (D
 });
 
 // The helpers' names, read by every behaviour row. C5e changes this one line to `['_ws_refuse']`.
-const REFUSE_HELPERS = ['_reap_refuse', '_ws_collect_refuse'];
+const REFUSE_HELPERS = ['_reap_refuse', '_ws_collect_refuse', '_ws_refuse'];
 
 let h: PrHarness | undefined;
 afterEach(() => { h?.cleanup(); h = undefined; });
