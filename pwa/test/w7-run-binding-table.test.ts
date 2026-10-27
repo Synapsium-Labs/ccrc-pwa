@@ -45,7 +45,7 @@ vi.mock('../src/fleet/AbandonSheet', async (orig) => {
   const m = await orig<typeof import('../src/fleet/AbandonSheet')>();
   const { createElement: h } = await import('react');
   const Spy = (p: Parameters<typeof m.AbandonSheet>[0]) => {
-    if (p.run !== null) seen.abandon.push(p.workspaceChild);
+    if (p.run !== null) seen.abandon.push(p.workspaceChild ?? 'unknown');
     return h(m.AbandonSheet, p);
   };
   return { ...m, AbandonSheet: Spy };
@@ -54,12 +54,11 @@ const { RunsScreen } = await import('../src/screens/RunsScreen');
 
 const W = 'session-a';
 const C = 'coord-a';
-const NOW = 1_784_600_000_000;
 const NO_CAPS = (): Promise<CoordCapsView> => new Promise<CoordCapsView>(() => {});
 const NO_SPEND = (): Promise<RunSpend> => new Promise<RunSpend>(() => {});
 
 const run = (id: number, over: Partial<RunSummary> = {}): RunSummary => ({
-  id, program: `program-${id}`, programTitle: null, wave: 1, waveOf: 2, project: 'project-a', homeProject: null,
+  id, program: `program-${id}`, programTitle: `Program ${id}`, wave: 1, waveOf: 2, project: 'project-a', homeProject: null,
   sessionId: W, workspace: 'ws-a', branch: 'ws/ws-a', state: 'working', kind: 'work', reviews: null,
   claimedBy: C, resumed: false, clearedAt: null, openedAt: 1, dispatchStartedAt: null, dispatchedAt: 1, closedAt: null,
   handoffCommit: null, items: { done: 0, total: 1 }, unreadMail: 0,
@@ -204,7 +203,7 @@ async function rowFacts(sc: Scenario): Promise<Record<number, Record<string, unk
       resumeDoor: row.resume,
       abandonChild: b.abandon.get(id) ?? '-',
       runCard: runCard(r, cards),
-      paletteClaims: sessionEntries(sc.sessions, all, 'page').find((e) => e.id === `open-session-${C}`)!.terms.includes(r.program),
+      paletteClaims: (sessionEntries(sc.sessions, all, 'page').find((e) => e.id === `open-session-${C}`)!.terms ?? []).includes(r.program),
       treeRow: treeRow(w.id),
     };
   }

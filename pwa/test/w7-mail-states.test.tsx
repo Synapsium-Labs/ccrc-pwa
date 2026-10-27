@@ -54,7 +54,7 @@ describe('MailScreen: its three empty states, byte for byte', () => {
 
 describe('MailScreen: its request schedule (the default loaders, through the api)', () => {
   const coord = (doneAt: number): CoordStatus => ({ pause: 'clear', mail: 'clear', reclaim: 'clear', childReclaimAttention: [], childReclaimDoneAt: doneAt });
-  const run = (id: number): RunSummary => ({ id, program: 'program-a', programTitle: null, wave: 1, waveOf: 1, project: 'project-a', homeProject: null,
+  const run = (id: number): RunSummary => ({ id, program: 'program-a', programTitle: 'Program A', wave: 1, waveOf: 1, project: 'project-a', homeProject: null,
     sessionId: 'session-a', workspace: 'ws-a', branch: null, state: 'working', kind: 'work', reviews: null, claimedBy: 'coord-a', resumed: false, clearedAt: null,
     openedAt: 1, dispatchStartedAt: null, dispatchedAt: 1, closedAt: null, handoffCommit: null, items: { done: 0, total: 1 }, unreadMail: 0,
     health: { mailOutstanding: 0, mailParked: 0, mailReplayMax: 0, doneRejects: 0, lastRejectCode: null, briefQueued: true, clearError: null, coordKickoffPendingSince: null },

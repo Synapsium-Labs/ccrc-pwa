@@ -68,7 +68,7 @@ describe('each storage owner\'s keys (read and write), byte for byte', () => {
     expect(await keysTouched(() => { rememberTheme('system'); storedTheme(); })).toEqual(['ccrc-theme']);
   });
   it('session/TerminalDrawer.tsx (its view chip, through drawerView.ts\'s StorageLike over window.localStorage)', async () => {
-    expect(await keysTouched(() => { writeViewOverride(() => window.localStorage, 'wrap'); readViewOverride(() => window.localStorage); writeViewOverride(() => window.localStorage, null); }))
+    expect(await keysTouched(() => { writeViewOverride(() => window.localStorage, 'wrapped'); readViewOverride(() => window.localStorage); writeViewOverride(() => window.localStorage, null); }))
       .toEqual(['ccrc.drawer-view.v1']);
   });
   it('session/itemHeight.ts (its retired key is removed on a save)', async () => {

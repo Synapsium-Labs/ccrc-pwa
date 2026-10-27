@@ -81,4 +81,12 @@ describe('the review screen\'s dismissal key (CACHING_TRACING × cc300-ask-revie
     act(() => store.getState().apply({ type: 'dialog', dialog: q1() }));
     expect(screen.getByRole('dialog')).toBeInTheDocument();
   });
+
+  it('the other way round: dismissed on question 1, the review is another screen and re-shows it (it is keyed, not unplaced)', async () => {
+    const store = mount(CACHING_TRACING, q1());
+    await dismiss();
+    expect(screen.queryByRole('dialog')).toBeNull();
+    act(() => store.getState().apply({ type: 'dialog', dialog: review() }));
+    expect(screen.getByRole('button', { name: /^Submit answers/ })).toBeInTheDocument();
+  });
 });

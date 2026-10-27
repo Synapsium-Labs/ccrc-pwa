@@ -14,7 +14,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { createElement } from 'react';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
-import { isSessionIdShape, type AccountUsage, type FleetSession, type NotifyEvent, type RunSummary } from '../../shared/api';
+import { isSessionIdShape, type AccountUsage, type NotifyEvent, type RunSpend, type RunSummary } from '../../shared/api';
 import { fleetSession } from './fleetFixture';
 import { TEST_ROSTER } from './rosterFixture';
 import { navigate } from '../src/lib/router';
@@ -47,7 +47,7 @@ afterEach(() => {
 const landed = (): string => location.pathname;
 
 const run = (sessionId: string): RunSummary => ({
-  id: 7, program: 'program-a', programTitle: null, wave: 1, waveOf: 1, project: 'project-a', homeProject: null,
+  id: 7, program: 'program-a', programTitle: 'Program A', wave: 1, waveOf: 1, project: 'project-a', homeProject: null,
   sessionId, workspace: 'ws-a', branch: null, state: 'working', kind: 'work', reviews: null, claimedBy: 'coord-a', resumed: false, clearedAt: null,
   openedAt: 1, dispatchStartedAt: null, dispatchedAt: 1, closedAt: null, handoffCommit: null, items: { done: 0, total: 1 }, unreadMail: 0,
   health: { mailOutstanding: 0, mailParked: 0, mailReplayMax: 0, doneRejects: 0, lastRejectCode: null, briefQueued: true, clearError: null, coordKickoffPendingSince: null },
@@ -104,7 +104,7 @@ const SITES: Record<string, (id: string) => Promise<string>> = {
   'screens/RunRow.tsx': async (id) => {
     render(createElement('ul', null, createElement(RunRow, {
       run: run(id), nowMs: Date.now(), session: null, coordSession: null, frameSeen: true, programHasOpenRun: true,
-      onAbandon: () => {}, onResume: () => {}, loadSpend: () => new Promise(() => {}),
+      onAbandon: () => {}, onResume: () => {}, loadSpend: () => new Promise<RunSpend>(() => {}),
     })));
     fireEvent.click(document.querySelector<HTMLElement>('.run-open')!);
     return landed();

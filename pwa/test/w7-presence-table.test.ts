@@ -147,7 +147,7 @@ const SITES: readonly Site[] = [
     unlisted: () => orphanNote({ kind: 'session', depth: 0, session: WORKER() }, [RUN()], 'project-a', [], () => null, true)?.presence ?? 'no-note' },
   { name: 'RunRow.tsx (coordPresence caller: the Resume door)', build: (r) => sessionOf(r),
     verdict: (s) => resumeDoor(s, coordPresence(s.id, s, true)),
-    fromPresence: (s, p) => (coordWordOf(p) === 'dead' ? 'resume' : 'none'),
+    fromPresence: (_s, p) => (coordWordOf(p) === 'dead' ? 'resume' : 'none'),
     unlisted: () => resumeDoor(null, 'n/a') },
   // SessionScreen's call is `coordPresence(parentId, lookup(parentId), fleetFrameSeen)` (census-w7 holds its text), and
   // its header reads the answer through `sessionFacts`' `orphan`: the caller is read through that one fact.
