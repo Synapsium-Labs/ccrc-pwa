@@ -1612,6 +1612,27 @@ describeLinux('ccrc doctor: codex — the usage rows, measured in isolation (Pla
     ]);
   });
 
+  // The doctor's cadence pin went away (ARCH-69 (#804), W8 Task C8b, D-7054): the bounds are no longer constants held
+  // against the timer's text, they are read from the shipped timer, so this row MOVES the timer and watches both bounds
+  // move. At OnUnitActiveSec=20min a litellm lane's bound is three cycles, 3600 s, and a direct lane's that plus the
+  // bridge's freshness window, 4500 s: a direct row one missed poll old must not read stale.
+  it('the staleness bounds follow the shipped timer: at 20 min, 3600 s on a litellm lane and 4500 s on a direct one', () => {
+    const at20 = (prefix: string, ageS: number, mode: 'litellm' | 'direct'): string => {
+      const home = clocked(prefix, { ageS, linkAgeS: 9000 }, mode);
+      writeShippedTimer(join(home, 'ccrc'), 'ccrc-codex-usage@.timer',
+        readFileSync(join(REPO, 'deploy', 'systemd', 'ccrc-codex-usage@.timer'), 'utf8').replace(/^OnUnitActiveSec=15min$/m, 'OnUnitActiveSec=20min'));
+      return home;
+    };
+    expect(rowsOf(at20('c8b-usage-20m-litellm-3600-', 3600, 'litellm')))
+      .toEqual(NOTE_ROWS('ccrc-codex-usage@codex-a.timer enabled; usage row 3600s old'));
+    expect(rowsOf(at20('c8b-usage-20m-litellm-3601-', 3601, 'litellm')))
+      .toEqual(WARN_ROWS('codex-a: its usage row was last written 60 min ago — more than three of ccrc-codex-usage@codex-a.timer\'s polls', LOG));
+    expect(rowsOf(at20('c8b-usage-20m-direct-4500-', 4500, 'direct')), 'a direct row one missed poll old reads stale')
+      .toEqual(NOTE_ROWS('ccrc-codex-usage@codex-a.timer enabled; usage row 4500s old'));
+    expect(rowsOf(at20('c8b-usage-20m-direct-4501-', 4501, 'direct')))
+      .toEqual(WARN_ROWS('codex-a: its usage row was last measured 76 min ago — more than 75 min, so ccrc-codex-usage@codex-a.timer\'s recent polls have published nothing', LOG));
+  });
+
   it('no row yet, the timer enabled moments ago: no WARN, and the note says why', () => {
     const r = usageRows(usageBox('ccrc-doctor-usage-norow-fresh-', { row: false }));
     expect(warns(r.stdout)).toEqual([]);
@@ -1751,15 +1772,12 @@ describe('ccrc doctor: codex — the usage rows, on any host (Plan 3a Task 6)', 
   // Fix round 3 (FR2-2): a direct lane's row carries the bridge's stamp, up to BRIDGE_FRESH_S older than its poll, so
   // three cycles alone would read a direct lane's row stale after ONE missed poll. The whole-wave fix round (FR3-1):
   // that bound is a direct lane's alone, and a litellm lane (and one whose mode cannot be read) keeps three cycles.
-  it('the staleness thresholds: three of the shipped timer\'s cycles on a litellm lane, plus the bridge\'s freshness window on a direct one', () => {
-    const r = spawnSync(BASH, ['-c', `. ${shq(CHECKS_SRC)}; printf '%s %s' "$_DR_CODEX_USAGE_STALE_S" "$_DR_CODEX_USAGE_STALE_DIRECT_S"`], { encoding: 'utf8' });
-    const [litellm, direct] = r.stdout.split(' ').map(Number);
-    const m = /^OnUnitActiveSec=(\d+)min$/m.exec(readFileSync(join(REPO, 'deploy', 'systemd', 'ccrc-codex-usage@.timer'), 'utf8'));
-    expect(m, 'the usage timer\'s cadence is not spelled in minutes — this pin has gone stale').not.toBeNull();
+  it('the direct bound\'s bridge window is ccgpt-usage.py\'s BRIDGE_FRESH_S, and the two bounds are defined nowhere at file level', () => {
     const fresh = /^BRIDGE_FRESH_S = (\d+)$/m.exec(readFileSync(join(REPO, 'ccd', 'ccgpt-usage.py'), 'utf8'));
     expect(fresh, 'ccgpt-usage.py no longer spells BRIDGE_FRESH_S as a bare integer — this pin has gone stale').not.toBeNull();
-    expect(litellm, 'a litellm lane\'s bound is three polls, as before the bridge').toBe(3 * Number(m![1]) * 60);
-    expect(direct, 'a direct row one missed poll old would read as stale').toBeGreaterThanOrEqual(3 * Number(m![1]) * 60 + Number(fresh![1]));
+    const src = readFileSync(CHECKS_SRC, 'utf8');
+    expect(/^_DR_CODEX_BRIDGE_FRESH_S=(\d+)$/m.exec(src)?.[1]).toBe(fresh![1]);
+    expect(src).not.toMatch(/^_DR_CODEX_USAGE_STALE(?:_DIRECT)?_S=/m);
   });
 });
 

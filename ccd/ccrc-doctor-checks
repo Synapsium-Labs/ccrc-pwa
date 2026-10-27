@@ -6601,22 +6601,23 @@ _check_docs() {
 # THE STALENESS BOUND DEPENDS ON THE LANE'S MODE (the whole-wave fix round,
 # FR3-1): one missed poll is not a finding, on either kind of lane.
 #   - A `litellm` lane, and a lane whose mode cannot be read
-#     (`_codex_lane_mode` rc 1), keep THREE of the timer's 15-minute cycles,
-#     `_DR_CODEX_USAGE_STALE_S`, and their WARNs say what they said before the
-#     bridge: a litellm lane's row is stamped when its poll writes it.
-#   - A `direct` lane adds BRIDGE_FRESH_S, `_DR_CODEX_USAGE_STALE_DIRECT_S`. Its
+#     (`_codex_lane_mode` rc 1), keep THREE of the usage timer's cycles, and
+#     their WARNs say what they said before the bridge: a litellm lane's row is
+#     stamped when its poll writes it.
+#   - A `direct` lane adds BRIDGE_FRESH_S, `_DR_CODEX_BRIDGE_FRESH_S`. Its
 #     row's `ts` is when its figures were MEASURED, not when the poll wrote it:
 #     the poll publishes the bridge's own snapshot under the bridge's stamp
 #     (`_bridge_headers` in ccgpt-usage.py), up to its BRIDGE_FRESH_S (900 s)
-#     older than the poll, so three cycles alone (2700 s) would WARN there
-#     after ONE failed poll. At 3600 s it WARNs after two, and its WARN says
+#     older than the poll, so three cycles alone would WARN there after ONE
+#     failed poll. With the window it WARNs after two, and its WARN says
 #     "measured" and counts no polls (D-6898).
-# `ccrc-doctor-codex.test.ts` ties both to the shipped timer's
-# `OnUnitActiveSec=`, and the direct one to ccgpt-usage.py's BRIDGE_FRESH_S.
-_DR_CODEX_USAGE_STALE_S=2700
-_DR_CODEX_USAGE_STALE_DIRECT_S=3600
-# The bridge's freshness window, ccgpt-usage.py's BRIDGE_FRESH_S: a bridge constant,
-# not a cadence, so it stays a literal (ccrc-doctor-codex.test.ts pins it there).
+# BOTH BOUNDS ARE COMPUTED IN `_dr_codex_usage`, after its guards, from the
+# shipped `ccrc-codex-usage@.timer` (`_dr_cycles_s`, D-7054): nothing here runs
+# when the table is sourced, and an unreadable timer leaves each verdict that
+# needs a bound unmeasured (OA-C8c (a), D-7062). `ccrc-doctor-codex.test.ts`
+# moves the timer and watches both bounds move, and pins the bridge window to
+# ccgpt-usage.py's BRIDGE_FRESH_S. The window is a bridge constant, not a
+# cadence, so it stays a literal here.
 _DR_CODEX_BRIDGE_FRESH_S=900
 
 _dr_codex_usage_box() {   # -> WARN findings, recorded; rc 2 if any, else 0; sets DR_CODEX_USAGE_PAIR and DR_CODEX_USAGE_BOX_NOTE
