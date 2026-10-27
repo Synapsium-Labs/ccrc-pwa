@@ -2,7 +2,8 @@
 // here unchanged, and the fixtures they share are in `ccrc-doctorFixture.ts`.
 import { describe, it, expect } from 'vitest';
 import { spawnSync, execFileSync } from 'node:child_process';
-import { writeFileSync, readFileSync, mkdirSync, symlinkSync, rmSync, chmodSync, existsSync, utimesSync, appendFileSync, readdirSync, lstatSync, readlinkSync, statSync, renameSync, truncateSync } from 'node:fs';
+import { writeFileSync, readFileSync, mkdirSync, symlinkSync, rmSync, chmodSync, existsSync, utimesSync, appendFileSync, readdirSync, lstatSync, readlinkSync, statSync, renameSync, truncateSync, lutimesSync } from 'node:fs';
+import { fixClock, fixedNow } from './fixedClock.js';
 import path, { join } from 'node:path';
 import { mkTmp, removeTmpFixturesEachTest } from './tmpHelpers.js';
 import { describeLinux, itLinux, itDarwin, IS_DARWIN } from './platformFixtures.js';
@@ -1521,6 +1522,54 @@ describeLinux('ccrc doctor: codex — the usage rows, measured in isolation (Pla
     const r = usageRows(laneMode(usageBox('ccrc-doctor-usage-stale-direct-', { ageS: 3601 }), 'direct'));
     expect(warns(r.stdout)).toEqual([expect.stringMatching(/^WARN codex: codex-a: its usage row was last measured 61 min ago — more than 60 min, so ccrc-codex-usage@codex-a\.timer's recent polls have published nothing$/)]);
     expect(r.stdout).toMatch(/^ {2}remedy: read what the publisher says: journalctl --user -u ccrc-codex-usage@codex-a\.service -n 50$/m);
+  });
+
+  // W8 Task C8b's characterization pin (D-7054; ARCH-69 (#804)): each bound one second inside and one second past, on a
+  // fixed clock, the whole of what the rows print, byte for byte (the fixture HOME written as `<home>`): three of
+  // ccrc-codex-usage@.timer's 15-minute periods (2700 s) on a lane whose mode cannot be read and on a litellm lane, that
+  // plus the bridge's BRIDGE_FRESH_S (3600 s) on a direct lane, for a row's age and for a never-published row's link,
+  // and the first-poll note that restates the timer's OnActiveSec=5min (kept by name, D-7054). These run unchanged at
+  // every commit of the series.
+  const clocked = (prefix: string, o: { ageS?: number; linkAgeS: number }, mode: 'litellm' | 'direct' | null): string => {
+    const home = usageBox(prefix, o.ageS === undefined ? { row: false } : {});
+    const now = fixedNow();
+    fixClock(home, stubBin(home), now);
+    if (o.ageS !== undefined) {
+      writeFileSync(join(home, '.cc-limits', 'codex-a.json'),
+        JSON.stringify({ five: null, seven: 12, ts: now - o.ageS, fiveResetAt: null, sevenResetAt: null }));
+    }
+    lutimesSync(join(home, '.config', 'systemd', 'user', 'timers.target.wants', 'ccrc-codex-usage@codex-a.timer'),
+      now - o.linkAgeS, now - o.linkAgeS);
+    return mode === null ? home : laneMode(home, mode);
+  };
+  const rowsOf = (home: string): string[] => usageRows(home).stdout.split(home).join('<home>').split('\n');
+  const NOTE_ROWS = (note: string): string[] => [
+    'rc=0,0', 'pair=present', 'box-note=', `note=${note}`, `PASS codex: usage rows measured`, '',
+  ];
+  const WARN_ROWS = (what: string, fix: string): string[] => [
+    'rc=0,2', 'pair=present', 'box-note=', 'note=ccrc-codex-usage@codex-a.timer enabled', `WARN codex: ${what}`, `  remedy: ${fix}`, '',
+  ];
+  const LOG = 'read what the publisher says: journalctl --user -u ccrc-codex-usage@codex-a.service -n 50';
+  it.each(MODES)('C8b: a row 2700 s old on a lane %s is fresh, and 2701 s old WARNs, byte for byte', (_what, mode) => {
+    expect(rowsOf(clocked('c8b-usage-2700-', { ageS: 2700, linkAgeS: 9000 }, mode)))
+      .toEqual(NOTE_ROWS('ccrc-codex-usage@codex-a.timer enabled; usage row 2700s old'));
+    expect(rowsOf(clocked('c8b-usage-2701-', { ageS: 2701, linkAgeS: 9000 }, mode)))
+      .toEqual(WARN_ROWS('codex-a: its usage row was last written 45 min ago — more than three of ccrc-codex-usage@codex-a.timer\'s polls', LOG));
+  });
+  it('C8b: a direct lane\'s row 3600 s old is fresh, and 3601 s old WARNs, byte for byte', () => {
+    expect(rowsOf(clocked('c8b-usage-direct-3600-', { ageS: 3600, linkAgeS: 9000 }, 'direct')))
+      .toEqual(NOTE_ROWS('ccrc-codex-usage@codex-a.timer enabled; usage row 3600s old'));
+    expect(rowsOf(clocked('c8b-usage-direct-3601-', { ageS: 3601, linkAgeS: 9000 }, 'direct')))
+      .toEqual(WARN_ROWS('codex-a: its usage row was last measured 61 min ago — more than 60 min, so ccrc-codex-usage@codex-a.timer\'s recent polls have published nothing', LOG));
+  });
+  it.each([...MODES, ['in direct mode', 'direct'] as const])('C8b: no row on a lane %s — the first-poll note inside the bound, byte for byte, and the never-published WARN one second past it', (_what, mode) => {
+    const bound = mode === 'direct' ? 3600 : 2700;
+    expect(rowsOf(clocked('c8b-usage-norow-young-', { linkAgeS: 120 }, mode)))
+      .toEqual(NOTE_ROWS('ccrc-codex-usage@codex-a.timer enabled; no usage row yet (enabled 120s ago; the first poll runs five minutes after enable)'));
+    expect(rowsOf(clocked('c8b-usage-norow-bound-', { linkAgeS: bound }, mode)))
+      .toEqual(NOTE_ROWS(`ccrc-codex-usage@codex-a.timer enabled; no usage row yet (enabled ${bound}s ago; the first poll runs five minutes after enable)`));
+    expect(rowsOf(clocked('c8b-usage-norow-past-', { linkAgeS: bound + 1 }, mode)))
+      .toEqual(WARN_ROWS(`codex-a: ccrc-codex-usage@codex-a.timer has been enabled for longer than ${bound / 60} min and this lane has never published a usage row (<home>/.cc-limits/codex-a.json)`, LOG));
   });
 
   it('no row yet, the timer enabled moments ago: no WARN, and the note says why', () => {

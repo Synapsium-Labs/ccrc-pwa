@@ -37,6 +37,7 @@
 // is a scripted stub, same convention `ccrc-doctorFixture.ts`'s own `stubDf`
 // uses.
 import { describe, it, expect } from 'vitest';
+import { fixClock, fixedNow } from './fixedClock.js';
 import { spawnSync, execFileSync } from 'node:child_process';
 import {
   writeFileSync, mkdirSync, symlinkSync, rmSync, utimesSync, readFileSync } from 'node:fs';
@@ -358,6 +359,31 @@ describe('ccrc doctor: graphify', () => {
     utimesSync(census, oldSecs, oldSecs);
     const line = lineFor(runDoctor(home).stdout, 'graphify');
     expect(line).toMatch(/^WARN graphify:/);
+  });
+
+  // W8 Task C8b's characterization pin (D-7054; ARCH-69 (#804)): the census bound is three of ccd-graph-sweep.timer's
+  // 15-minute periods, 2700 s, held one second inside and one second past, byte for byte, on a fixed clock (a real
+  // one can tick between the fixture's write and the check's read). It runs unchanged at every commit of the series.
+  const censusAged = (prefix: string, ageS: number): string => {
+    const home = healthy(prefix); graphifyHealthy(home);
+    const now = fixedNow();
+    fixClock(home, stubBin(home), now);
+    utimesSync(join(home, '.ccrc', 'graph-sweep.json'), now - ageS, now - ageS);
+    return home;
+  };
+  it('a census 2700 s old is inside three of the timer\'s cycles: the PASS, byte for byte (C8b)', () => {
+    const out = runDoctor(censusAged('ccrc-doctor-gfx-census-2700-', 2700)).stdout;
+    expect(lineFor(out, 'graphify'), out).toBe('PASS graphify: engine 0.9.9, skills converged, census ok, gate on');
+  });
+  it('a census 2701 s old is past three of the timer\'s cycles: the WARN and its remedy, byte for byte (C8b)', () => {
+    const out = runDoctor(censusAged('ccrc-doctor-gfx-census-2701-', 2701)).stdout;
+    const lines = out.split('\n');
+    const i = lines.findIndex((l) => l.startsWith('WARN graphify: '));
+    expect(lines.slice(i, i + 2), out).toEqual([
+      'WARN graphify: the last graph-sweep pass finished 45 minutes ago — the timer may not be firing, gate on',
+      '  remedy: check the timer: systemctl --user status ccd-graph-sweep.timer (and journalctl --user -u ccd-graph-sweep.service -n 20)',
+    ]);
+    expect(lines.filter((l) => /^(WARN|FAIL) graphify: /.test(l)), out).toHaveLength(1);
   });
 
   // D-1454 — A REFUSED TREE IS A FINDING FOR AN OPERATOR, NOT A ROW NOBODY READS.
