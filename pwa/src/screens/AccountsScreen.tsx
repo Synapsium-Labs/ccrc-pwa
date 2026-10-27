@@ -201,8 +201,8 @@ export function AccountsScreen(): ReactNode {
 
   // `POST /api/pools/accounts/:id` (Task 7) does not echo the account's
   // resulting tag — only the epoch the write produced — so this toasts off
-  // the REQUEST, not a remeasurement, and leans on `useAccountsPoll`'s own
-  // 20s interval to bring the row's next `accountPoolState` read in line
+  // the REQUEST, not a remeasurement, and leans on the fleet store's 20s
+  // accounts poll (`useAccountsPoll`) to bring the row's next `accountPoolState` read in line
   // with what the fleet host actually converges to (ccd-pool-sync's pull,
   // `OnUnitActiveSec=60s` — the same lag the fleet head's epoch/observed
   // indicator exists to make visible elsewhere).
@@ -239,9 +239,9 @@ export function AccountsScreen(): ReactNode {
   // `homeAbleNames === ''` (fix round 1, finding 7): `projected` and `roster`
   // arrive on the same poll response in the steady state, but a first
   // response that lands with a valid `projected: null` and a malformed
-  // `roster` leaves `roster` at its `[]` default (`useAccountsPoll`
-  // preserves rather than clobbers on a malformed read — see its own
-  // comment) — same degenerate case ProjectCard's `addLabel` guards.
+  // `roster` leaves `roster` at its `[]` default (the store preserves rather
+  // than clobbers on a malformed read — see `useAccountsPoll`'s comment) —
+  // same degenerate case ProjectCard's `addLabel` guards.
   const homeAbleNames = homeAbleLabelList(roster);
   const projectionLine = projected === undefined
     ? null
