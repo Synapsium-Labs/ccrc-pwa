@@ -492,8 +492,8 @@ export async function assembleFleet(
    * straight off THIS call's own return value (`sessions[i].unmeasured`), not
    * off a separately-read set of `SessionRecord`s. If this function took its
    * OWN read instead of the rows `tick()` already has, that would be a
-   * SEPARATE whole-fleet sweep, 31 [registry-read-census:fields] field reads
-   * per session, a few hundred ms after the one `tick()` used for
+   * SEPARATE whole-fleet sweep, 4 [registry-read-census:fields] unconditional
+   * reads and one per other listed field per session, a few hundred ms after the one `tick()` used for
    * `sweepHookStates`/`detectDialogs` — and a
    * row that read clean in tick()'s sweep and degraded in THIS one would
    * still land in `sessions` with `unmeasured` empty (wrong), or vice versa.
