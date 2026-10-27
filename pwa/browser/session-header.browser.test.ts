@@ -1,11 +1,11 @@
 // The session header names the session, shows every chip whole, and its doors carry words (desktop polish T3c,
 // D-6333), in a real Chrome over the production build.
 //
-// What jsdom cannot hold: at 390, 1280 and 1920 in both skins and both palettes, a workspace session with EVERY chip
-// (a long branch, a long model id, a coordinator) shows no chip text ellipsized and no chip text running out of its
-// pill (at 390 on Refined inside the rail's own sideways scroll, on Instrument wrapped); at 1280 and 1920 the
-// header's three doors show their words beside the glyph, below 900 they stay glyphs at 44 px; and Instrument's
-// interim header (the shared `SessionHeader`) at 1280 is no taller than it was on the base.
+// What jsdom cannot hold: at 360, 390, 899, 900, 1280 and 1920 in both skins and both palettes, a workspace session
+// with EVERY chip (a long branch, a long model id, a coordinator) and a main checkout show no chip text ellipsized and
+// no chip text running out of its pill (below 900 on Refined inside the rail's own sideways scroll, on Instrument
+// wrapped); from 900 the header's three doors show their words beside the glyph, below 900 they stay glyphs at 44 px;
+// and Instrument's interim header (the shared `SessionHeader`) at 1280 is no taller than it was on the base.
 //
 // Run: `( cd pwa && CCRC_CHROME=<a Chrome or Chromium binary> ./node_modules/.bin/vitest run --config vitest.browser.config.ts browser/session-header.browser.test.ts )`.
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -86,7 +86,7 @@ async function openSession(view: AppView, id: string) {
 }
 
 describe('no chip text is ellipsized', () => {
-  for (const view of views([390, 1280, 1920])) {
+  for (const view of views([360, 390, 899, 900, 1280, 1920])) {
     for (const session of [WS, MAIN]) {
       it(`${named(view)}, ${session.workspace === null ? 'a main checkout' : 'a workspace'}`, async () => {
         const { ctx, page, errors } = await openSession(view, session.id);
@@ -127,7 +127,7 @@ describe('no chip text is ellipsized', () => {
 });
 
 describe('the doors carry words at the desk and stay glyphs on a phone', () => {
-  for (const view of views([1280, 1920])) {
+  for (const view of views([900, 1280, 1920])) {
     it(`Terminal, More and the PR door show their words (${named(view)})`, async () => {
       const { ctx, page, errors } = await openSession(view, WS.id);
       try {
@@ -154,7 +154,7 @@ describe('the doors carry words at the desk and stay glyphs on a phone', () => {
     });
   }
 
-  for (const view of views([390])) {
+  for (const view of views([360, 390, 899])) {
     it(`below 900 the doors are glyphs, each at least 44 px (${named(view)})`, async () => {
       const { ctx, page, errors } = await openSession(view, WS.id);
       try {
