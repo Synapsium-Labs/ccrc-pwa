@@ -241,7 +241,9 @@ describe('a section with nothing to show renders nothing (desktop polish T3d, D-
   it('the lane section renders only with a reading', () => {
     stubWidth(1920);
     goTo(`/s/${ID}`);
-    for (const usage of [null, [{ ...USAGE, wrapper: 'lane-b' }], []] as (AccountUsage[] | null)[]) {
+    // The last shape has a reading for this lane but no figure in either window, so no window binds (`bindingWindow`).
+    const unmeasured = [{ ...USAGE, five: null, seven: null }];
+    for (const usage of [null, [{ ...USAGE, wrapper: 'lane-b' }], [], unmeasured] as (AccountUsage[] | null)[]) {
       act(() => useFleetStore.setState({ usage }));
       const r = render(<LaneSection />);
       expect(r.container.querySelector("[data-section='lane']"), JSON.stringify(usage)).toBeNull();
