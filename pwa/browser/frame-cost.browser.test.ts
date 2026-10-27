@@ -3,8 +3,9 @@
 // fleet of 80 rows with about nine changing per frame is the load this file puts on it, and `frameCost`
 // (`browser/app.ts`) reads Chrome's `TaskDuration` over a window around each frame (CDP `Performance.getMetrics`). A
 // window runs from the first read to the second: the frame's send, the wait of `gapMs` (2 s in the gate cases) and the
-// second read. That is at least `gapMs` and has no upper bound under host load, so `FrameCost.spans` records each
-// window's measured length.
+// second read. That is at least `gapMs`; a loaded host stretches it, so `FrameCost.spans` records each window's measured
+// length, and a window that spans more than `gapMs + SPAN_SLACK_MS` fails the attempt as `window-overrun`, never as a
+// cost: its figures would measure the host.
 // Since the operator's R104 contract, `frameCost` defers the fixture's `/api` answers into an unmeasured drain before
 // each window, so the gates measure a window in which the harness fulfils no fixture answer. That changed what the
 // gates measure; it does not isolate the frame: the page's handling of an answer delivered in a drain, and its
@@ -37,7 +38,7 @@ import { INSTRUMENT, PHOSPHOR, REFINED } from '@ccrc/ui';
 import { resolveChrome } from './harness';
 import {
   backlogFrame, buildDist, fleetApi, fleetFixture, fleetFrame, fleetFrameAt, FIXTURE_NOW_MS, frameCost, INFLIGHT_CAP_MS, longTranscript,
-  openApp, QUIET_CAP_MS, removeDist, serveDist, summarize, type AppFixture, type AppView, type DistServer, type FrameCostRecord,
+  openApp, QUIET_CAP_MS, removeDist, serveDist, SPAN_SLACK_MS, summarize, type AppFixture, type AppView, type DistServer, type FrameCostRecord,
   type HarnessEvent, type OpenedApp,
 } from './app';
 
@@ -188,7 +189,7 @@ describe('the deferred fixture answers (R104): the harness self-test', () => {
       });
       stop();
       // A window runs from its readA to its readB (the send, `during`, the gap and the second read), so its span is at
-      // least the gap and has no upper bound; `spans` records it, the idle window first.
+      // least the gap; `spans` records it, the idle window first.
       expect(cost.spans.length, 'one span per window: the idle one and the two frames').toBe(1 + 2);
       expect(cost.spans.every((x) => x >= 500), `every window spans at least its 500 ms gap: ${cost.spans.map((x) => x.toFixed(1)).join(', ')}`).toBe(true);
       expect(ofPath(app, 'intercept', SELFTEST)).toHaveLength(1);
@@ -282,12 +283,36 @@ describe('the deferred fixture answers (R104): the harness self-test', () => {
       await app.ctx.close();
     }
   }, 90_000);
+
+  it('a window that overruns its span fails the attempt with window-overrun, and the record keeps it', async () => {
+    const { app } = await boot({ skin: REFINED, theme: PHOSPHOR, width: 1920 }, '/');
+    try {
+      const record: FrameCostRecord = { windows: [] };
+      // `during` runs inside window 0, so a wait there longer than the gap and the slack makes that window overrun.
+      const attempt = frameCost(app, '/ws/fleet', changing().slice(0, 2), 500, {
+        quiet: false, record,
+        during: async (index) => { if (index === 0) await app.page.waitForTimeout(500 + SPAN_SLACK_MS + 500); },
+      });
+      await expect(attempt).rejects.toThrow(/window-overrun: window 0 spanned \d+ ms/);
+      // The overrun window is pushed to the record before the attempt fails: the idle window and window 0, and nothing
+      // after (window 1 never starts).
+      expect(record.windows, 'the failed attempt kept the idle window and the overrun window 0').toHaveLength(2);
+      expect(record.windows[1]!.spanMs, `window 0 spanned past its 500 ms gap + ${SPAN_SLACK_MS} ms slack: ${JSON.stringify(record.windows)}`)
+        .toBeGreaterThan(500 + SPAN_SLACK_MS);
+      // Parking is off after the attempt: a new request is fulfilled with no flush.
+      expect(await app.page.evaluate(() => fetch('/api/selftest-overrun-after').then((r) => r.json()))).toEqual({});
+    } finally {
+      await app.ctx.close();
+    }
+  }, 90_000);
 });
 
 // ---- the gate ------------------------------------------------------------------------------------------------------
 // Each window can now take a drain of up to INFLIGHT_CAP_MS + QUIET_CAP_MS (and a little more: the quiet wait's last
 // step and the CDP reads) before its GAP_MS, so the budgets are set from that, not from a bare GAP_MS per window, with
-// 30 s for the visit and that slack: the ceiling case has 16 windows, the ratio case 21, a measurement case 17.
+// 30 s for the visit and that slack: the ceiling case has 16 windows, the ratio case 21, a measurement case 17. A
+// window that spans past GAP_MS + SPAN_SLACK_MS fails its case at once (`window-overrun`), so the budgets only bound a
+// case that does not.
 const WINDOW_MAX_MS = INFLIGHT_CAP_MS + QUIET_CAP_MS + GAP_MS;
 const CEILING_CASE_MS = 30_000 + (1 + FRAMES) * WINDOW_MAX_MS;
 const RATIO_CASE_MS = 30_000 + (1 + FRAMES + IDENTICAL_FRAMES) * WINDOW_MAX_MS;

@@ -348,7 +348,7 @@ export const backlogFrame = (events: readonly object[]): object => ({
 export interface Cost { readonly taskMs: number; readonly scriptMs: number }
 export interface FrameCost {
   /** One window with no frame sent: what the page costs doing nothing. A window runs from its first Chrome read to its
-   *  second (see `frameCost`), so it is at least `gapMs` long and has no upper bound. */
+   *  second (see `frameCost`), so it is at least `gapMs` long and, in a returned result, at most `gapMs + SPAN_SLACK_MS`. */
   readonly idle: Cost;
   /** One entry per frame: the main thread's TaskDuration and ScriptDuration over that frame's window, which starts
    *  just before the frame is sent and lasts at least `gapMs` (`spans` has the measured length). */
@@ -360,7 +360,8 @@ export interface FrameCost {
   /** Per window, the idle one first: whether the drain before it saw the main thread go quiet. */
   readonly drainQuiet: readonly boolean[];
   /** Per window, the idle one first: its wall length in ms on the test side, from just before the first read to just
-   *  after the second. At least `gapMs`, with no upper bound: a loaded host stretches it. */
+   *  after the second. At least `gapMs`, and at most `gapMs + SPAN_SLACK_MS` in a returned result: a longer window fails the
+   *  attempt (`window-overrun`), and is only in `FrameCostRecord`. */
   readonly spans: readonly number[];
 }
 
@@ -404,6 +405,11 @@ export function summarize(costs: readonly Cost[]): { readonly median: Cost; read
  *  `QUIET_CAP_MS` is only recorded (`FrameCost.drainQuiet`). */
 export const INFLIGHT_CAP_MS = 5000;
 export const QUIET_CAP_MS = 3000;
+/** How far past its `gapMs` a window's measured span may run before the attempt fails (`window-overrun`). A window is
+ *  `gapMs` of waiting plus the frame's send, `during` and two CDP reads; on a healthy host that is a few tens of ms over
+ *  `gapMs`. A host starved of memory stretches every wall-clock duration in the renderer, and TaskDuration and
+ *  ScriptDuration are wall-clock, so a window that spans more than this past its gap measures the host, not the frame. */
+export const SPAN_SLACK_MS = 1000;
 const QUIET_STEP_MS = 100;
 const QUIET_STEPS = 3;
 const QUIET_TASK_MS = 1;
@@ -411,10 +417,10 @@ const QUIET_TASK_MS = 1;
 /** Send each of `frames` to the newest socket on `path`, `gapMs` apart, and read Chrome's `TaskDuration` and
  *  `ScriptDuration` (`Performance.getMetrics`, seconds) before and after each window. A window runs from its first
  *  read to its second: the frame's send, `during`, the wait of `gapMs` and the second CDP round trip. That is at least
- *  `gapMs` and has no upper bound (a loaded host stretches the waits and the reads), so `FrameCost.spans` records each
- *  window's measured length. One idle window with no frame is measured first, on the page as it stands before
- *  `frames`: it is not matched to a page that has taken them (an identical frame re-sent after many changes is
- *  measured against this one idle window). Nothing runs in the page: the meter is a CDP session on the test side.
+ *  `gapMs`, and a loaded host stretches the waits and the reads, so `FrameCost.spans` records each window's measured
+ *  length and a window past `gapMs + SPAN_SLACK_MS` fails the attempt (below). One idle window with no frame is
+ *  measured first, on the page as it stands before `frames`: it is not matched to a page that has taken them (an
+ *  identical frame re-sent after many changes is measured against this one idle window). Nothing runs in the page: the meter is a CDP session on the test side.
  *
  *  The fixture's `/api` answers are deferred out of the windows (the operator's R104 contract): every request is
  *  parked from the start, and a DRAIN before each window (the idle one too) answers the parked ones, waits for their
@@ -423,7 +429,12 @@ const QUIET_TASK_MS = 1;
  *  itself answers outside it; the frame-cost gates add none). That is a mitigation, not an isolation: the page's
  *  parsing and rendering of an answer, and its timers, can still run into the next window, and the app's pollers keep
  *  their own times (a poll's `fetch` call itself lands in whichever window it falls in). The `finally` releases
- *  whatever is still parked and waits for nothing. */
+ *  whatever is still parked and waits for nothing.
+ *
+ *  The attempt has two named failures of the harness, and neither is a cost red. `drain-inflight-timeout`: a fulfilment
+ *  did not settle within `INFLIGHT_CAP_MS`. `window-overrun`: a window's measured span passed `gapMs + SPAN_SLACK_MS`
+ *  (the window is `idle` or the frame's index, and is in `options.record` before the attempt fails). The cost figures of
+ *  a window that spanned that long belong to the host, so the attempt fails and returns none. */
 export async function frameCost(
   app: OpenedApp, path: string, frames: readonly unknown[], gapMs: number, options: FrameCostOptions = {},
 ): Promise<FrameCost> {
@@ -479,6 +490,11 @@ export async function frameCost(
       spans.push(spanMs);
       const cost = { taskMs: b.taskMs - a.taskMs, scriptMs: b.scriptMs - a.scriptMs };
       options.record?.windows.push({ cost, spanMs, deferred: intercepted, drainQuiet: wentQuiet, atMs });
+      // The window stays in the record. Past the slack its figures are the host's, so the attempt fails here: no retry,
+      // no skip, no filter. The finally still releases whatever is parked.
+      if (spanMs > gapMs + SPAN_SLACK_MS) {
+        throw new Error(`window-overrun: window ${frame === null ? 'idle' : frame.index} spanned ${spanMs.toFixed(0)} ms, past ${gapMs} ms + ${SPAN_SLACK_MS} ms`);
+      }
       return cost;
     };
     const idle = await window(null);
