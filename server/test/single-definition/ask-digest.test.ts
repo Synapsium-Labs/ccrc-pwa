@@ -377,15 +377,25 @@ describe('the ask push body is built once, in server/src/askbody.ts (D-5302)', (
     expect(holders(DEFINES)).toEqual(['server/src/askbody.ts']);
   });
 
-  it("watch.ts's ask raise sites call askPushBody, and no body there reads dialog.title", () => {
+  it("the ask raise sites (watch.ts and coord/questions.ts) call askPushBody, and no body there reads dialog.title", async () => {
     const watch = stallCode(path.join(ccrcRoot, 'server/src/watch.ts'));
+    // W3 Q3d (D-7028, named exception 2): the hold, its payload builder and the re-seed moved into
+    // `coord/questions.ts`, so the sites are counted over the two files together; the totals are today's. The moved
+    // text is read by symbol (`askHoldPayload`, `createQuestions`) and the import from the parse, never as a literal
+    // pin over the file (the literal-pin ratchet, `advance-switches.test.ts`).
+    const { parsedFile, sourceOfSymbol } = await import('../scan/symbols.js');
+    const QUESTIONS = path.join(ccrcRoot, 'server/src/coord/questions.ts');
+    const questions = ['askHoldPayload', 'createQuestions'].map((n) => stallCodeText(sourceOfSymbol(QUESTIONS, n))).join('\n');
+    const both = `${watch}\n${questions}`;
     expect(watch).toMatch(/import\s*\{[^}]*\baskPushBody\b[^}]*\}\s*from\s*'\.\/askbody\.js'/);
-    // Two since D-5925: the first raise, and `askHoldPayload`, the one builder of a held push. `hold()`, the approval
-    // hold (`tryHoldApproval`, plan Task 16) and the restart re-seed all build through it.
-    expect(watch.match(/body:\s*askPushBody\(/g) ?? []).toHaveLength(2);
-    expect(watch.match(/\bev\s*=\s*askHoldPayload\(/g) ?? []).toHaveLength(2);
-    expect(watch.match(/\bev:\s*askHoldPayload\(/g) ?? []).toHaveLength(2);
+    expect(parsedFile(QUESTIONS).imports.some((e) => e.specifier === '../askbody.js' && e.names.includes('askPushBody') && !e.typeOnly)).toBe(true);
+    // Two since D-5925: the first raise (watch.ts), and `askHoldPayload` (coord/questions.ts), the one builder of a held
+    // push. `hold()`, the approval hold (`holdApproval`, plan Task 16) and the restart re-seed all build through it.
+    expect(both.match(/body:\s*askPushBody\(/g) ?? []).toHaveLength(2);
+    expect(both.match(/\bev\s*=\s*askHoldPayload\(/g) ?? []).toHaveLength(2);
+    expect(both.match(/\bev:\s*askHoldPayload\(/g) ?? []).toHaveLength(2);
     expect(watch).not.toMatch(/body:\s*dialog\.title/);
+    expect(questions).not.toMatch(/body:\s*dialog\.title/);
   });
 
   // D-5356 (coordinator ruling `approval-push-body-tool-only-until-redactor`): until the redactor is applied where
