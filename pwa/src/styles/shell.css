@@ -144,9 +144,9 @@
     border-radius: var(--r-md);
   }
   /* The end cell sits inline in the next track here, not on a row of its own as on a phone. It holds the fold's control
-     beside All accounts in that one track: the cell may shrink below its content (`min-width: 0`, so a long
-     "+13 more · 1 sign-in expired · 1 rate-limited" never widens the track) and its buttons wrap their words, or
-     drop to a second line of the cell, inside it. */
+     beside All accounts in that one track, on one row (fleet.css): the cell may shrink below its content
+     (`min-width: 0`, so a long "+13 more · 1 sign-in expired · 1 rate-limited" never widens the track) and the
+     control's words wrap inside it, so the cell stays one row and every item in the line keeps one top. */
   .shell-accounts .accounts-end {
     grid-column: auto;
     min-width: 0;
