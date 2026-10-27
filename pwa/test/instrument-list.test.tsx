@@ -287,6 +287,21 @@ describe('the counts once per screen', () => {
     expect(within(groupOf('attention')).getByRole('button', { name: 'Mark all Needs you seen' })).toBeInTheDocument();
   });
 
+  it('on a phone, Mark all seen in a tab acks its group, announces it and returns focus to the head', () => {
+    stubWidth(false, false);
+    mount(UNSEEN, []);
+    // The tabbed return renders the group heads too, and its own status region beside the panel.
+    fireEvent.click(screen.getByRole('tab', { name: /^Done/ }));
+    const panel = screen.getByRole('tabpanel');
+    const done = groupOf('done');
+    expect(panel.contains(done)).toBe(true);
+    expect(table().querySelector('.bucket-bar')).toBeNull();
+    fireEvent.click(within(done).getByRole('button', { name: 'Mark all Done seen' }));
+    expect(within(done).queryByLabelText(/new$/)).toBeNull();
+    expect(document.activeElement).toBe(head(done));
+    expect(within(table()).getByRole('status')).toHaveTextContent('Done: 2 marked seen');
+  });
+
   it('project mode renders the bucket chips', () => {
     mount(UNSEEN, []);
     pick('Project');
