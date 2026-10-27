@@ -66,7 +66,8 @@ describe('every process spawner is audited, with its reason (D-7056; ARCH-73)', 
   });
 
   it('the account-op pair carries the C8e audit\'s verdict: kept against exec.ts (D-7057)', () => {
-    for (const k of ['server/src/accounts/ops.ts#localAccountOps.run', 'agent/src/accountop.ts#makeAccountOpSpawn']) {
+    // The agent's row went when `makeAccountOpSpawn` became a wrapper over `shared/spawn.mjs#boundedStdinSpawn`.
+    for (const k of ['server/src/accounts/ops.ts#localAccountOps.run']) {
       expect(PROCESS_SPAWNERS[k]?.reason, k).toMatch(/^KEPT against exec\.ts by the C8e audit \(D-7057\)/);
     }
   });

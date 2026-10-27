@@ -41,10 +41,6 @@ export const PROCESS_SPAWNERS: EntrySet = {
     reason: "KEPT against exec.ts by the C8e audit (D-7057): the secret on stdin (D-5513), an explicit env, a bound, TERM to the group then KILL; the agent's twin",
     since: '2026-10-27',
   },
-  'agent/src/accountop.ts#makeAccountOpSpawn': {
-    reason: "KEPT against exec.ts by the C8e audit (D-7057): the local arm's twin, one difference (a non-ESRCH group kill falls back to the child)",
-    since: '2026-10-27',
-  },
   'server/src/localcaps.ts#execCapped': {
     reason: 'KEPT by the C8d audit (D-7056): SIGTERM then SIGKILL after a 2 s grace, stderr ignored, its own reason words',
     since: '2026-10-27',

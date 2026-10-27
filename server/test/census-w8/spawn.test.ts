@@ -132,7 +132,6 @@ describe('processSpawnSites — every process spawner in server/src, agent/src a
       'server/src/exec.ts#realRunner',
       'server/src/localcaps.ts#execCapped',
       'server/src/pty.ts#attachPty',
-      'agent/src/accountop.ts#makeAccountOpSpawn',
       'agent/src/pty.ts#spawnFleetPty',
       'agent/src/server.ts#runExec',
       'agent/src/tokensync.ts#makeTokenSyncSpawn',
