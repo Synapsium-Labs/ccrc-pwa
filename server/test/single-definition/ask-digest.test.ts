@@ -582,7 +582,7 @@ describe('D-5370: the stop-done lane’s kill switch has no writer, and its cons
     const WRITE = /\b(?:writeFile|appendFile|rename|symlink|copyFile|mkdir|truncate|unlink|rm)(?:Sync)?\s*\(|\.write\w*\s*\(/;
     expect(WRITE.test('await deps.io.writeFile(`${dir}/${m}`, "");'), 'CONTROL: the pattern sees a write').toBe(true);
     const holders = ALL.filter((f) => stallCode(f).includes('STOP_DONE_DISABLED_MARKER')).map(rel).sort();
-    expect(holders).toEqual([LANE_DEFINER, 'server/src/stopDoneSweep.ts', DEFINER]);
+    expect(holders).toEqual(['server/src/sleepLane.ts', LANE_DEFINER, DEFINER]);
     for (const f of holders) expect(stallCode(path.join(ccrcRoot, f)), `${f} reaches a write`).not.toMatch(WRITE);
   });
   it('each of its constants and its hold list is declared once: the kill switch in its row, the rest in the lane', () => {
