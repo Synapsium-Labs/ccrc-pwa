@@ -118,6 +118,35 @@ describe('W3 question census (slug question-census)', () => {
     } finally { rmSync(t, { recursive: true, force: true }); }
   });
 
+  it('FIXTURE (Q3d): a sweep act reached only through this.questions.<member>( counts, through the factory\'s own member calls too; a member that only reads does not', () => {
+    const t = tree({
+      'server/src/watch.ts': [
+        'export class FleetWatcher {',
+        '  async tick(): Promise<void> {',
+        '    this.sweepA();',
+        '    this.sweepB();',
+        '    this.sweepC();',
+        '  }',
+        '  sweepA(): void { this.questions.lapseAsks(1, () => {}); }',
+        '  sweepB(): void { this.questions.lapseApprovals(1); }',
+        '  sweepC(): void { this.questions.currentAskOf("x"); }',
+        '}',
+      ].join('\n'),
+      'server/src/coord/questions.ts': [
+        'export function createQuestions(deps: Deps) {',
+        '  const lapseAsks = (now: number, push: () => void): void => { deps.coord.releaseAsk(1, now); push(); };',
+        '  const prune = (now: number): void => { deps.coord.pruneAskQuestions(now); };',
+        '  const lapseApprovals = (now: number): void => { prune(now); };',
+        '  const currentAskOf = (id: string) => deps.coord.currentAskFor(id);',
+        '  return { lapseAsks, lapseApprovals, currentAskOf };',
+        '}',
+      ].join('\n'),
+    });
+    try {
+      expect(questionSweepEntries(t).map((s) => [s.method, s.line])).toEqual([['sweepA', 3], ['sweepB', 4]]);
+    } finally { rmSync(t, { recursive: true, force: true }); }
+  });
+
   it('FIXTURE: doors by shape and tag; a door-shaped path with no tag is `untagged`; the raise and a session release are not doors', () => {
     const t = tree({ 'server/src/coord/routes.ts': routes, 'server/src/server.ts': server });
     try {

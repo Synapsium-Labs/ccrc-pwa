@@ -80,7 +80,10 @@ export interface SweepEntrySite extends CensusSite { readonly method: string }
 /** W3's question sweep entry points: the `FleetWatcher` methods `tick`'s own body calls (`this.<m>(`) that reach a
  *  `QUESTION_SWEEP_ACTS` store call, directly or through the `this.` methods they call (arrows inside them included).
  *  At the base, `sweepAsks` (through `askPass`) and `sweepApprovals` (2). A public half that `tick` does not call itself is
- *  not an entry point. */
+ *  not an entry point. Since W3 Q3d (D-7028) the walk also follows a `this.questions.<member>(` call into that member's
+ *  body inside `coord/questions.ts#createQuestions` (a `const <member> = …` arrow there), and from it the bare
+ *  `<other>(` calls of the factory's other members, so an act behind the watcher's `Questions` instance still counts.
+ *  KNOWN WIDTH: a member written as an object-literal method, or reached through an alias, is not followed. */
 export function questionSweepEntries(root: string = REPO): SweepEntrySite[] {
   const abs = path.join(root, 'server/src/watch.ts');
   if (!existsSync(abs)) return [];
@@ -89,6 +92,19 @@ export function questionSweepEntries(root: string = REPO): SweepEntrySite[] {
   const method = (name: string) => parsed.symbols.find((s) => s.name === `FleetWatcher.${name}`);
   const callsOf = (s: { start: number; end: number }) => parsed.calls.filter((c) => c.start >= s.start && c.end <= s.end);
   const own = (callee: string): string | null => /^this\.(\w+)$/.exec(callee)?.[1] ?? null;
+  const viaQuestions = (callee: string): string | null => /^this\.questions\.(\w+)$/.exec(callee)?.[1] ?? null;
+  const qAbs = path.join(root, 'server/src/coord/questions.ts');
+  const q = existsSync(qAbs) ? parsedFile(qAbs) : null;
+  const member = (name: string) => q?.symbols.find((s) => s.name === `createQuestions.${name}`);
+  const memberReaches = (name: string, seen: Set<string>): boolean => {
+    if (q === null || seen.has(`q:${name}`)) return false;
+    seen.add(`q:${name}`);
+    const s = member(name);
+    if (s === undefined) return false;
+    const cs = q.calls.filter((c) => c.start >= s.start && c.end <= s.end);
+    if (cs.some((c) => c.name !== null && QUESTION_SWEEP_ACTS.includes(c.name) && c.callee !== c.name)) return true;
+    return cs.some((c) => c.name !== null && c.callee === c.name && memberReaches(c.name, seen));
+  };
   const reaches = (name: string, seen: Set<string>): boolean => {
     if (seen.has(name)) return false;
     seen.add(name);
@@ -96,6 +112,7 @@ export function questionSweepEntries(root: string = REPO): SweepEntrySite[] {
     if (s === undefined) return false;
     const cs = callsOf(s);
     if (cs.some((c) => c.name !== null && QUESTION_SWEEP_ACTS.includes(c.name) && own(c.callee) === null)) return true;
+    if (cs.some((c) => { const m = viaQuestions(c.callee); return m !== null && memberReaches(m, seen); })) return true;
     return cs.some((c) => { const m = own(c.callee); return m !== null && reaches(m, seen); });
   };
   const tick = method('tick');
