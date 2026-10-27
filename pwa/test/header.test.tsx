@@ -1460,6 +1460,17 @@ describe('the header doors carry words (desktop polish T3c, D-6333)', () => {
     expect(declValue(ruleIn(desk, '.chat-head .keycap--pr .pr-legend'), 'display')).toBe('none');
   });
 
+  // A closed PR's non-colour cue is the line through its legend; from 900 the word replaces the legend, so it wears it too.
+  it("a closed PR's word is struck through like its legend", async () => {
+    const { readFileSync } = await import('node:fs');
+    const path = await import('node:path');
+    const { ruleIn, selectorsOf, normSel, declValue, stripComments } = await import('./cssRule');
+    const css = stripComments(readFileSync(path.join(import.meta.dirname, '..', 'src', 'session', 'chat.css'), 'utf8'));
+    const legend = ".keycap--pr[data-phase='closed'] .pr-legend";
+    expect(selectorsOf(css, legend)).toContain(normSel(".keycap--pr[data-phase='closed'] .keycap-word"));
+    expect(declValue(ruleIn(css, legend), 'text-decoration')).toBe('line-through');
+  });
+
   it('the PR door says what tapping it does when there is no number, and a main checkout has no PR door', () => {
     stubPointer(false);
     const word = (s: FleetSession): string | undefined => {
