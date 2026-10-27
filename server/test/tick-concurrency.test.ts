@@ -15,7 +15,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import path from 'node:path';
 import { Bus } from '../src/bus.js';
 import type { Runner } from '../src/exec.js';
-import { FleetWatcher } from '../src/watch.js';
+import { DIALOG_CAPTURE_CONCURRENCY, FleetWatcher } from '../src/watch.js';
 import { TASK_SWEEP_MS } from '../src/laneSchedule.js';
 import { ASK_SETTLE_TICKS } from '../src/askwindow.js';
 import { tasksDir } from '../src/tasks/read.js';
@@ -28,8 +28,6 @@ import { mkTmp } from './tmpHelpers.js';
 
 /** 2026-10-01T12:00:00Z: the fixed wall clock of every case but the one that moves it. */
 const T0 = 1790856000000;
-/** The capture bound. The later code commit replaces this with an import of `DIALOG_CAPTURE_CONCURRENCY` from watch.ts. */
-const CAPTURE_BOUND = 8;
 /** A wait bound in REAL milliseconds (`performance.now`; the fake clock only fakes `Date`), well inside the cases' 60 s
  *  timeout, so a wait that outruns it fails by assertion or by a named error, never by vitest's timeout or a hang. */
 const WAIT_BUDGET_MS = 30_000;
@@ -352,9 +350,8 @@ describe('the capture pass of one tick (D-6435)', () => {
     const r = rig();
     await r.tick();
     expect(new Set(r.gate.issued).size, 'every row was captured, and there are more rows than the bound').toBe(N);
-    expect(N).toBeGreaterThan(CAPTURE_BOUND);
-    expect(r.gate.maxInFlight).toBeLessThanOrEqual(CAPTURE_BOUND);
-    expect(r.gate.maxInFlight).toBeGreaterThanOrEqual(1);
+    expect(N).toBeGreaterThan(DIALOG_CAPTURE_CONCURRENCY);
+    expect(r.gate.maxInFlight, 'the pool fills to the bound and never passes it').toBe(DIALOG_CAPTURE_CONCURRENCY);
   }, 60_000);
 
   it('dialog frames equal the recorded ones, in registry order', async () => {

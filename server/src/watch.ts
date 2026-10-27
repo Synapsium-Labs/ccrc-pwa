@@ -5,6 +5,7 @@ import { assembleFleet, lifecycleInputFor, registrySecondsToMs } from './fleet.j
 import { answeredByBody, approvalRuledBody, askPushBody, withCoordinatorBody } from './askbody.js';
 import { measuredIdentity, readRegistry, readRegistryMeasured, readSessionRecord } from './registry.js';
 import { buildFleetReadModel, type FleetReadModel } from './fleetReadModel.js';
+import { mapBounded } from './bounded.js';
 import {
   accountPoolsEnforcement, poolsEnforcement, poolsWire, readObservedEpochFromRegistry, readPoolEpoch,
   readProjectPools,
@@ -300,6 +301,11 @@ export type CollectSlot =
  *  answer; only the first tick waits, and the first tick's busy->idle pushes
  *  are already suppressed, so what this delays is one frame at boot. */
 export const HEADS_BOOT_WAIT_MS = 2_500;
+
+/** How many panes `detectDialogs` captures at once (desktop polish C3, D-6435). Its own bound, not
+ *  `REGISTRY_ROW_CONCURRENCY`: a capture spawns a tmux process on the fleet box, a registry row reads files.
+ *  EXPORTED for its suite. */
+export const DIALOG_CAPTURE_CONCURRENCY = 8;
 
 /** The mirror lane's cadence, the census's and the readiness lane's live in `laneSchedule.ts`; the suites and `index.ts`
  *  import the two exported ones from here. */
@@ -2367,9 +2373,9 @@ export class FleetWatcher {
       //
       // It NARROWS that window; it does not close it. The sweep reads a
       // session's hookstate at time s and `detectDialogs` captures its pane at
-      // time c, sequentially, each capture an agent round trip in remote mode —
-      // so for the last session of eight, c-s is a couple of hundred ms of a
-      // 2000 ms tick. A `session-hook.sh` write landing inside (s, c) still
+      // time c. The captures go out `DIALOG_CAPTURE_CONCURRENCY` at a time (D-6435),
+      // so for the last of N sessions c-s is about N/8 agent round trips in remote
+      // mode, not N. A `session-hook.sh` write landing inside (s, c) still
       // yields a menu with no envelope, and therefore an action-less ask push.
       // What covers the residue is `actionlessAsks` in `detectDialogs` below:
       // the latch remembers that push and amends it when the envelope turns up.
@@ -8756,13 +8762,20 @@ export class FleetWatcher {
     const recs = records ?? await readRegistry(this.deps.io, this.deps.cfg);
     // D-5925: the boot's snapshot of held rows, read before this tick's `sweepApprovals` can lapse any of them.
     if (!this.primed && !this.reseedLoaded) this.loadReseed();
-    for (const r of recs) {
-      const paneAt = Date.now();
-      const pane = await this.deps.tmux.capture(r.id);
+    // D-6435: every pane is captured first, at most DIALOG_CAPTURE_CONCURRENCY at once, then read in registry order.
+    // No loop body writes to a pane. A capture that rejects (no Runner does) is settled and rethrown at its own row.
+    const caps = await mapBounded(recs, DIALOG_CAPTURE_CONCURRENCY, async (r) => {
+      const at = Date.now();
+      try { return { at, pane: await this.deps.tmux.capture(r.id), doneAt: Date.now() }; } catch (err) { return { at, err }; }
+    });
+    for (const [i, r] of recs.entries()) {
+      const cap = caps[i]!;
+      if ('err' in cap) throw cap.err;
+      const { at: paneAt, pane } = cap;
       // The look is published once for the session's feed (ARCH-52): an open session's stream reads the pane from here,
       // not from a capture of its own. The `dialog` / `dialog_cleared` frames this sweep used to emit were dropped by
       // every stream (it frames its own reading), so they are gone with the second copy.
-      this.bus.emit(`pane:${r.id}`, { at: paneAt, doneAt: Date.now(), pane });
+      this.bus.emit(`pane:${r.id}`, { at: paneAt, doneAt: cap.doneAt, pane });
       // Same capture feeds the statusline read — no extra tmux call. FOUR
       // conditions, four outcomes (D-2012, corrected by Finding 3 of the
       // fix round below — the three-outcome version this replaced treated
