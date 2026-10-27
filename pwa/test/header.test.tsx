@@ -1334,6 +1334,26 @@ describe('the quiet "with coordinator" state (D-5296)', () => {
     expect(line?.className).not.toContain('status-line--coordinator');
   });
 
+  // Review 1078 F7 (desktop polish T3c, D-6333): the branch chip's text had a 22ch cap; it is gone at every width.
+  // `declaredValues` reads every rule whose subject is a chip's text, inside a media block or not, so a cap restored
+  // at the desk (or below 900) on either skin's header stylesheet reds.
+  it("no rule caps a chip's text width, the branch's included, at any width", async () => {
+    const { readFileSync } = await import('node:fs');
+    const path = await import('node:path');
+    const { declaredValues, stripComments } = await import('./cssRule');
+    const read = (...p: string[]): string => stripComments(readFileSync(path.join(import.meta.dirname, '..', 'src', ...p), 'utf8'));
+    const chat = read('session', 'chat.css');
+    // The chip's own text rule is still there, so the scan below reads something (a renamed class throws here).
+    expect(declaredValues(chat, '.metachip-text', 'overflow-wrap')).toEqual(['anywhere']);
+    for (const css of [chat, read('skins', 'refined', 'refined.css')]) {
+      for (const sel of ['.metachip-text', '.metachip--branch .metachip-text']) {
+        let values: string[] = [];
+        try { values = declaredValues(css, sel, 'max-width'); } catch { /* no rule targets it in this sheet */ }
+        expect(values.filter((v) => v !== 'none'), `${sel} max-width`).toEqual([]);
+      }
+    }
+  });
+
   // D-5390, reversed by desktop polish T3c (D-6333): a `<wrapper>-<project>` main-checkout parent keeps its whole id,
   // which at 360 and 390 px is wider than the column. The name no longer ellipsises: it shows whole (breaking inside
   // only when it alone is wider than its row), and the full id stays on `title`.
@@ -1478,7 +1498,10 @@ describe('the header doors carry words (desktop polish T3c, D-6333)', () => {
     expect(cap('keycap--pr').getAttribute('aria-label')).toMatch(/^Pull request #5: open\./);
     expect(cap('keycap--pr')).toHaveAttribute('title', cap('keycap--pr').getAttribute('aria-label'));
     for (const c of ['keycap--term', 'keycap--more']) {
-      expect(cap(c).querySelector('[aria-hidden="true"]')).not.toBeNull();
+      // The glyph itself (the door's one span that is not its word) is what must stay hidden (review 1078 F4).
+      const glyph = cap(c).querySelector(':scope > span:not(.keycap-word)');
+      expect(glyph?.textContent).toBe(c === 'keycap--term' ? '>_' : '⋯');
+      expect(glyph).toHaveAttribute('aria-hidden', 'true');
       expect(cap(c).querySelector('.keycap-word')?.textContent).toBe(c === 'keycap--term' ? 'Terminal' : 'More');
     }
     expect(cap('keycap--pr').querySelector('.keycap-word')?.textContent).toBe('#5');
@@ -1495,9 +1518,11 @@ describe('the header doors carry words (desktop polish T3c, D-6333)', () => {
     const byCommand = (id: string): Element | undefined => rows.find((r) => r.getAttribute('data-command') === id);
     expect(byCommand('open-terminal')?.querySelector('.menu-label')?.textContent).toBe('Terminal');
     expect(byCommand('session-pr')?.querySelector('.menu-label')?.textContent).toBe('#5');
-    // And they run: Terminal opens the drawer and closes the sheet.
+    // And they run: Terminal opens the drawer and closes the sheet (review 1078 F5).
+    expect(screen.getByTestId('sheet-overlay')).toBeInTheDocument();
     fireEvent.click(byCommand('open-terminal')!);
     expect(p.onOpenTerminal).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(screen.queryByTestId('sheet-overlay')).not.toBeInTheDocument());
   });
 
   // The cap is also drawn by the inspector's PR section, outside `.chat-head` (`PrSection`): there the word span must
