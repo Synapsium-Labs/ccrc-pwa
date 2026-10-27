@@ -388,6 +388,26 @@ export const VACUOUS_RUNTIME_PYTHON = [
   'exit 0',
 ].join('\n') + '\n';
 
+/** THE FIXTURE'S NODE DIRECTORY (see the call in `ccrcEnv`): `<home>/.fixture-node` holds node and npx (wrappers of
+ *  the real ones, never links) and npm as a link to the `<home>/.local/bin/npm` stub, and goes right after
+ *  `.local/bin` on `env.PATH` — so the directory `_node_select` puts first carries the stub, never the real npm.
+ *  Every install harness with an npm stub calls this; one written without it runs the real npm. */
+export function plantFixtureNodeDir(home: string, env: NodeJS.ProcessEnv): void {
+  const fixtureBin = join(home, '.local', 'bin');
+  const nodeDir = join(home, '.fixture-node');
+  mkdirSync(nodeDir, { recursive: true });
+  const onPath = (n: string): string | undefined => (env['PATH'] ?? '').split(':')
+    .map((d) => join(d, n)).find((f) => existsSync(f));
+  for (const n of ['node', 'npx']) {
+    const real = onPath(n);
+    if (real === undefined) continue;   // a box with no node: the verb's own probe says so
+    wrapRealTool(real, join(nodeDir, n));
+  }
+  rmSync(join(nodeDir, 'npm'), { force: true });
+  symlinkSync(join(fixtureBin, 'npm'), join(nodeDir, 'npm'));
+  env['PATH'] = [fixtureBin, nodeDir, ...(env['PATH'] ?? '').split(':').filter((p) => p !== fixtureBin)].join(':');
+}
+
 export function ccrcEnv(home: string, omit: string[] = []): NodeJS.ProcessEnv {
   // Wave 9 R10d (D-3818): a SPINE builder, so `managers: false` — it fronts its own systemctl/systemd-run below,
   // after `adoptPlantedSystemd`, which would rename an unmarked poison to a `.codex-*` delegate (`assertSpineFrontContained`
@@ -693,20 +713,7 @@ export function ccrcEnv(home: string, omit: string[] = []): NodeJS.ProcessEnv {
   // would then shadow the stub above. One fixture directory therefore holds all three names the library requires
   // — node and npx real, npm the stub — and sits right after `.local/bin`, so the chosen directory carries the
   // stub. (`pathWithout` builds its own PATH and its own npm link, for the same reason.)
-  {
-    const nodeDir = join(home, '.fixture-node');
-    mkdirSync(nodeDir, { recursive: true });
-    const onPath = (n: string): string | undefined => (env['PATH'] ?? '').split(':')
-      .map((d) => join(d, n)).find((f) => existsSync(f));
-    for (const n of ['node', 'npx']) {
-      const real = onPath(n);
-      if (real === undefined) continue;   // a box with no node: the verb's own probe says so
-      wrapRealTool(real, join(nodeDir, n));
-    }
-    rmSync(join(nodeDir, 'npm'), { force: true });
-    symlinkSync(join(fixtureBin, 'npm'), join(nodeDir, 'npm'));
-    env['PATH'] = [fixtureBin, nodeDir, ...(env['PATH'] ?? '').split(':').filter((p) => p !== fixtureBin)].join(':');
-  }
+  plantFixtureNodeDir(home, env);
   // `rsync` is a RECORDER, not a poison: it logs the argv of each call ccrc
   // makes and then EXECS THE REAL BINARY (`rsyncRecorder`, which skips only the
   // implementation's own `--server` re-exec — wave 9 M6). Both halves are
@@ -1866,7 +1873,9 @@ export const PROVISIONED_BOX_TOKEN =
  *  `filevault` and `secrets-backup-excluded` SKIP at every stage (darwin's), and `snapshot-posture` SKIPs on the fresh
  *  box (no lane secret) and PASSes on the provisioned one, whose `fleetFiles` state `none`.
  *  Wave 24 added `box-settings` (D-6599): PASS at every stage, re-measured from both box-token cases' own failing diff
- *  (a fresh box's ccrc.env sets none of ccrc's settings). */
+ *  (a fresh box's ccrc.env sets none of ccrc's settings). node-runtime-under-nvm added `node-path`: PASS at every
+ *  stage, re-measured from both box-token cases' own failing diff (the install published the node and the fixture
+ *  manager re-read the fragment at its reload). */
 export const FLEET_BOX_CLASSES: Readonly<Record<string, string>> = {
   "accounts": "PASS",
   "approval-digest-mismatch": "SKIP",
@@ -1906,6 +1915,7 @@ export const FLEET_BOX_CLASSES: Readonly<Record<string, string>> = {
   "models": "SKIP",
   "name": "SKIP",
   "node": "PASS",
+  "node-path": "PASS",
   "oom-policy": "PASS",
   "path": "PASS",
   "pool-sync": "WARN",
