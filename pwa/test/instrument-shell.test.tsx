@@ -108,10 +108,18 @@
 // R120 `strip-hover-flyout` (accounts-strip alone, plus lanes-row where named):
 //   open without the delay (`FLYOUT_OPEN_MS` -> 0) ..... "…hovering the line opens the flyout after FLYOUT_OPEN_MS, …", "a pointer passing by does not open it"
 //   close without the grace (`FLYOUT_CLOSE_MS` -> 0) ... "leaving the line and the flyout closes it after FLYOUT_CLOSE_MS; coming back within the grace keeps it", "focus leaving the strip closes it, …"
-//   close without handing focus back to the line ....... "Escape closes it and returns focus to the card it came from", "a pointer still inside keeps the flyout open when focus leaves it; …"
+//   close without handing focus back to the line ....... "Escape closes it and returns focus to the card it came from"
 //   the flyout while expanded .......................... "no flyout while expanded, and none below 900"
 //   the flyout below 900 ............................... "no flyout while expanded, and none below 900"
 //   the flyout reset removed when it is moot ........... "no flyout while expanded, and none below 900"
+//   a pointer leave with focus inside closing the flyout (the early return in `onLeave` removed)
+//                                                       accounts-strip "it stays open while either the pointer or focus is inside the line or the flyout, and closes when neither is",
+//                                                         "a pointer passing over the strip while the open delay that focus started is pending does not cancel the open"
+//                                                         (fix round 1: the ruled rule is "either"; the old case pinned a pointer leave closing the flyout with focus inside)
+//   the early return kept for an open flyout only (`&& flyOpen`): a pointer pass cancelling the open focus started
+//                                                       accounts-strip "a pointer passing over the strip while the open delay that focus started is pending does not cancel the open"
+//   the early return kept for a pending open only (`&& !flyOpen`): the pointer leaving closing an open flyout focus holds
+//                                                       accounts-strip "it stays open while either the pointer or focus is inside the line or the flyout, and closes when neither is"
 //   the moot flyout's focus hand-back removed ......... "a flyout made moot while a card of it holds focus hands the focus to the line's tab stop, never to the page: another tab expands the strip"
 //                                                         (fix round 1: the reset called `setFlyOpen(false)` directly, so a focused flyout card was unmounted and focus fell to the page)
 //   a second copy of the card markup ................... "the flyout's cards render through the line's own card code: one card markup in the component"

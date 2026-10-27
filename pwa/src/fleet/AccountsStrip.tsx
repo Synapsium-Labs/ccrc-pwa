@@ -28,13 +28,13 @@
 // the same `laneCard` function, and the same `open-lane` door; it is a group of its own, one tab stop with the arrows,
 // Home and End across it. It sits in the DOM inside the strip's group, after the line's cards and before the end cell,
 // so Tab goes line, flyout, control, All accounts, and focus moving between them never leaves the strip. It opens after
-// `FLYOUT_OPEN_MS` and closes after `FLYOUT_CLOSE_MS` once the pointer has left the strip, or focus has left it with the
-// pointer outside (a pointer passing by, or crossing the gap, flickers nothing), and at once on Escape, which is
-// default-prevented so the desk's Escape interrupt skips it; a close that finds focus in the flyout, and a
-// flyout made moot while it holds focus (another tab expands the strip, a poll leaves nothing to fold, the desk ends),
-// hand it back to the line's tab stop first. Only focus arriving from outside the strip opens it, so an Escape holds against the
-// arrow keys. Not foldable, expanded, or below the desk: it is not mounted and nothing about it runs. Presentation
-// state, per mount.
+// `FLYOUT_OPEN_MS`, and stays open while EITHER the pointer OR focus is inside the line or the flyout. It closes after
+// `FLYOUT_CLOSE_MS` once neither is: the pointer has left with focus outside, or focus has left with the pointer outside
+// (a pointer passing by, or crossing the gap, flickers nothing). It closes at once on Escape, which is default-prevented
+// so the desk's Escape interrupt skips it. A close that finds focus in the flyout, and a flyout made moot while it holds
+// focus (another tab expands the strip, a poll leaves nothing to fold, the desk ends), hand it back to the line's tab
+// stop first. Only focus arriving from outside the strip opens it, so an Escape holds against the arrow keys. Not
+// foldable, expanded, or below the desk: it is not mounted and nothing about it runs. Presentation state, per mount.
 //
 // THE PLACEHOLDER DOOR (D-161). With no lane to show the strip is exactly one `go-accounts` door and never renders
 // nothing. As a full-width readout of meters the strip read as DATA rather than navigation, so an operator hunting for
@@ -45,7 +45,7 @@
 // copy, see homeAbleLabelList in lib/accounts.ts). So the link stays mounted, with a quiet placeholder body, instead
 // of disappearing with the cards.
 import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
-import type { CSSProperties, FocusEvent, KeyboardEvent, ReactNode } from 'react';
+import type { CSSProperties, FocusEvent, KeyboardEvent, PointerEvent, ReactNode } from 'react';
 import type { AccountUsage, RosterWire } from '../../../shared/api';
 import { accountColorVar, accountLabel, warnNonArrayRoster } from '../lib/accounts';
 import { api } from '../lib/api';
@@ -246,7 +246,14 @@ export function AccountsStrip(): ReactNode {
     if (closeTimer.current !== null) { clearTimeout(closeTimer.current); closeTimer.current = null; }
   };
   const onEnter = (): void => { pointerIn.current = true; cancelClose(); scheduleOpen(); };
-  const onLeave = (): void => { pointerIn.current = false; scheduleClose(); };
+  // The flyout stays while either the pointer or focus is inside the line or the flyout, and closes when neither is. So a
+  // pointer leaving with focus inside the strip changes nothing: it neither starts the close grace of an open flyout nor
+  // cancels the open delay that focus started. The close then waits for focus to leave (`onGroupBlur`).
+  const onLeave = (e: PointerEvent<HTMLElement>): void => {
+    pointerIn.current = false;
+    if (e.currentTarget.contains(document.activeElement)) return;
+    scheduleClose();
+  };
   // `onFocus` and `onBlur` are React's focusin and focusout, so they fire for any element inside, the flyout's too. Only
   // focus ARRIVING from outside the strip opens the flyout: a move between its cards (an arrow key) is not an arrival,
   // so an Escape, or a close by the pointer leaving, stays shut until focus has left and come back. A pending close is

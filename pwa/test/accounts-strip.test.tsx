@@ -939,21 +939,45 @@ describe('the lanes fold (S5b, D-6530)', () => {
       expect(flyoutOf(container)).toBeNull();
     });
 
-    it('a pointer still inside keeps the flyout open when focus leaves it; a pointer leaving closes it even with focus inside, handing the focus to the line\'s card', async () => {
+    it('it stays open while either the pointer or focus is inside the line or the flyout, and closes when neither is', async () => {
       const container = await openByHover();
       const card = lineCardsOf(container)[1]!;
       act(() => { card.focus(); });
       act(() => { card.blur(); });
       advance(5000);
-      expect(flyoutOf(container)).not.toBeNull();             // the pointer is still on the strip
-      const inFlyout = flyCardsOf(container)[5]!;
-      act(() => { inFlyout.focus(); });
-      fireEvent.pointerLeave(groupOf(container));
-      advance(FLYOUT_CLOSE_MS);
+      expect(flyoutOf(container)).not.toBeNull();             // focus left, the pointer is still on the strip
+      // Focus inside, the pointer leaves: a card of the line, then a card of the flyout. Nothing is scheduled.
+      for (const inside of [lineCardsOf(container)[0]!, flyCardsOf(container)[5]!]) {
+        act(() => { inside.focus(); });
+        fireEvent.pointerLeave(groupOf(container));
+        advance(5000);
+        expect(flyoutOf(container)).not.toBeNull();
+        expect(vi.getTimerCount()).toBe(0);
+        // The pointer coming back changes nothing either.
+        fireEvent.pointerEnter(groupOf(container));
+        advance(5000);
+        expect(flyoutOf(container)).not.toBeNull();
+        fireEvent.pointerLeave(groupOf(container));
+      }
+      // Neither: focus leaves with the pointer outside, and the grace runs.
+      act(() => { (document.activeElement as HTMLElement).blur(); });
+      advance(FLYOUT_CLOSE_MS - 1);
+      expect(flyoutOf(container)).not.toBeNull();
+      advance(1);
       expect(flyoutOf(container)).toBeNull();
-      expect(document.activeElement).toBe(card);   // the line's tab stop (the card focused above): focus was not dropped with the panel
       advance(5000);
       expect(flyoutOf(container)).toBeNull();
+    });
+
+    it('a pointer passing over the strip while the open delay that focus started is pending does not cancel the open', async () => {
+      const container = await mountDesk();
+      act(() => { lineCardsOf(container)[0]!.focus(); });
+      advance(FLYOUT_OPEN_MS - 50);
+      expect(flyoutOf(container)).toBeNull();
+      fireEvent.pointerEnter(groupOf(container));
+      fireEvent.pointerLeave(groupOf(container));
+      advance(50);
+      expect(flyoutOf(container)).not.toBeNull();
     });
 
     it('the flyout\'s cards are one tab stop, and the arrow keys, Home and End step across all of them without wrapping', async () => {
