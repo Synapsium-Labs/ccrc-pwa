@@ -18,20 +18,19 @@ import type { ReactNode } from 'react';
 import type { FleetSession } from '../../../shared/api';
 import { CountBadge } from '@ccrc/ui';
 import { BUCKET_ORDER } from './sortFleet';
+import { STATUS_GROUPS } from './statusGroups';
 import { isUnseen, type Acks } from '../lib/seen';
 import './fleet.css';
 
-/** Section-header noun for each bucket — a heading register, not the row's
- *  own state-word adjective (SessionLine.tsx's private `WORD`, which says
- *  `waiting`/`merged`/`exited` where these say `Attention`/`Cleanup`/`Dead`).
- *  Deliberately a SEPARATE small vocabulary: this is presentational only (it
- *  names buckets, it does not decide which bucket a session is in), so it
- *  carries none of the "one writer" risk `bucket` itself does. Retitling a
- *  section here changes only these headings — no row's word moves with it. */
-const SECTION_LABEL: Record<(typeof BUCKET_ORDER)[number], string> = {
-  attention: 'Attention', working: 'Working', done: 'Done', idle: 'Idle',
-  cleanup: 'Cleanup', archived: 'Archived', dead: 'Dead',
-};
+/** The chip's word for each bucket — DERIVED from `STATUS_GROUPS`, the one table Instrument's group heads read too, so
+ *  the chips say `Needs you` and `Exited` exactly as the heads do (T3a, D-6331: one vocabulary). It used to be a
+ *  deliberately SEPARATE small vocabulary (`Attention`, `Dead`), on the argument that a heading register needs no
+ *  "one writer"; the cost was two words for one bucket on one screen, and a third beside it in the rows' own state
+ *  word (`exited`). A heading is still presentational: it names buckets, it does not decide which bucket a session
+ *  is in. Retitling a bucket is a change to `STATUS_GROUPS`'s `label`, and both surfaces follow it. */
+const SECTION_LABEL = Object.fromEntries(
+  BUCKET_ORDER.map((b) => [b, STATUS_GROUPS[b].label]),
+) as Record<(typeof BUCKET_ORDER)[number], string>;
 
 export function BucketBar(
   { sessions, acks, ackAll }: {
@@ -82,7 +81,7 @@ export function BucketBar(
 
               Two folds hold rows a chip counts. `Archived (n)` holds its
               chip's members and every STOPPED main checkout, whose bucket is
-              still `dead` (M10), so the Dead chip counts a row that fold holds
+              still `dead` (M10), so the Exited chip counts a row that fold holds
               — stated, not changed (spec §5.2). `Released (n)` (workspace lifecycle
               §5.1) holds rows that are still `idle`, `done` or `dead` and
               still counted under those chips: folded, never removed, so a
@@ -115,8 +114,11 @@ export function BucketBar(
                   <span className="bucket-head-count">{inBucket.length}</span>
                   {unseenCount > 0 && (
                     <>
-                      <CountBadge className="bucket-head-unseen" aria-label={`${unseenCount} unseen`}>
-                        {unseenCount}
+                      {/* "Done 5 · 4 new": the count says its word (T3a, D-6331). The middot is decoration; the
+                          group's own name carries the sentence. */}
+                      <span className="bucket-head-sep" aria-hidden="true">·</span>
+                      <CountBadge className="bucket-head-unseen" aria-label={`${unseenCount} new`}>
+                        {unseenCount} new
                       </CountBadge>
                       <button
                         type="button"

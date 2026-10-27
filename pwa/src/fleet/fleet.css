@@ -185,7 +185,8 @@
   padding: var(--sp-1) var(--sp-3);
   font: var(--weight-medium) var(--fs-xs) / 1 var(--family-ui);
 }
-.bucket-head .bucket-head-count {
+.bucket-head .bucket-head-count,
+.bucket-head .bucket-head-sep {
   font-family: var(--family-mono);
   font-variant-numeric: tabular-nums;
   color: var(--ink-tertiary);
