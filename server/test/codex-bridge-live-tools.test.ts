@@ -593,6 +593,41 @@ describe.skipIf(!PY)('the scrubber: a recording becomes a corpus stream (codex-b
     expect(done.usage.attribution.request_fields).toEqual({ tools: four(35, 0) });
     expect(done.usage.input_tokens).toBe(50);
   });
+
+  // The key rewrite is anchored on the `attribution` object inside `usage` (record.py#ID_KEYED; D-7086): a tool schema
+  // the backend echoes in `response.created`, with a property named `attribution` of array type, keeps its `items`'s
+  // keys, while the usage's `attribution.items` beside it is still keyed by its items' synthetic ids.
+  it('the scrubber leaves a tool schema property named attribution alone and still rewrites usage.attribution.items', async () => {
+    const home = mkTmp('cb-live-scrub-schema-attribution-');
+    const hex = (n: number): string => randomBytes(n).toString('hex');
+    const ids = { msg: `msg_a7${hex(24)}`, resp: `resp_a7${hex(24)}` };
+    const tool = {
+      type: 'function', name: 'probe_tag', strict: false,
+      parameters: { type: 'object', properties: { attribution: { type: 'array', items: { type: 'string' } } } },
+    };
+    const output = [msgItem(ids.msg, 'Tagged')];
+    const inFile = path.join(home, 'in.sse');
+    const outFile = path.join(home, 'out.sse');
+    writeFileSync(inFile, 'HTTP/1.1 200\ncontent-type: text/event-stream\n\n'
+      + ev('response.created', { response: { id: ids.resp, status: 'in_progress', output: [], tools: [tool] } })
+      + ev('response.output_item.done', { output_index: 0, item: output[0] })
+      + ev('response.completed', { response: { id: ids.resp, status: 'completed', output, tools: [tool],
+        usage: { input_tokens: 30, output_tokens: 2, attribution: { items: { [ids.msg]: { input_tokens: 0, output_tokens: 2 } } } } } }));
+    const r = await runCli(home, RECORD_PY, ['scrub', inFile, outFile]);
+    expect(r.status, r.stderr).toBe(0);
+    const out = readFileSync(outFile, 'utf8');
+    for (const v of Object.values(ids)) expect(out, 'an original id').not.toContain(v);
+    const data = out.split('\n').filter((l) => l.startsWith('data: ')).map((l) => JSON.parse(l.slice(6)) as Json);
+    const created = data.find((d) => d.type === 'response.created')!.response;
+    const done = data.find((d) => d.type === 'response.completed')!.response;
+    // the schema's `items` keeps its `type` key (and its kept structural value), in both echoes
+    for (const echoed of [created.tools[0], done.tools[0]]) {
+      expect(echoed.parameters.properties.attribution).toEqual({ type: 'array', items: { type: 'string' } });
+    }
+    // the usage keys still map to their items' synthetic ids, with the counts unchanged
+    expect(done.output[0].id).toBe('msg_fx1');
+    expect(done.usage.attribution.items).toEqual({ msg_fx1: { input_tokens: 0, output_tokens: 2 } });
+  });
 });
 
 /** A fixed base64url segment of `s`, for a token-shaped fixture value. */

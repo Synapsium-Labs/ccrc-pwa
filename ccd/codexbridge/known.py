@@ -13,6 +13,8 @@ explained here or fixed. The sources:
   request carries `model, messages, system, tools, metadata, max_tokens, thinking, context_management,
   output_config, stream`; `context_management` is always the one edit `clear_thinking_20251015`; tools carry
   `defer_loading`; `output_config.effort` rides the `effort-2025-11-24` beta (`ccd/ccgpt-proxy.py`'s effort hook).
+- Claude Code 2.1.310's `anthropic-beta` values, measured on the live lane's first traffic after the flip (runbook
+  step 4, 2026-10-27; D-7093), each read against the Messages API's documentation and the client's own beta table.
 - The fields inbound drops by rule (D-6426 and the plan's Task 2 table), and the names inbound counts for a shape
   it maps (a dropped `thinking` block, `is_error`, `output_config.format`, D-6425) or refuses by name (a `document`
   block, an `output_config.format` of another type, D-6414).
@@ -95,7 +97,37 @@ KNOWN = {
     }),
     "unsupportedField": frozenset({"document", "output_config.format"}),
     "modelSubstitution": frozenset(),
-    "betaValue": frozenset({"effort-2025-11-24"}),
+    "betaValue": frozenset({
+        "effort-2025-11-24",
+        # The values of Claude Code 2.1.310's `anthropic-beta` header, measured on the live lane's first traffic
+        # after the flip (runbook step 4, 2026-10-27; D-7093). The bridge forwards no beta upstream
+        # (backend.build_headers), so each is a name only; each line says what it gates on the Messages API and why
+        # the bridge need not act.
+        # Claude Code's own identity beta: it gates no request field, block or response shape of its own.
+        "claude-code-20250219",
+        # Thinking blocks between tool calls: the effort hook pops `thinking`, the reducer emits no thinking block,
+        # and an assistant thinking block sent back is dropped and counted `requestField:thinking-block`.
+        "interleaved-thinking-2025-05-14",
+        # `context_management.edits` and the response's `context_management.applied_edits`: each edit's type is
+        # counted `contextEdit` (`clear_tool_uses_20250919` stays unexplained there, D-6417), and Claude Code reads
+        # `applied_edits` as optional, so a reply without it is a reply where nothing was cleared.
+        "context-management-2025-06-27",
+        # Tool search: `defer_loading` tools (counted `requestField:defer_loading`, sent as ordinary tools) and a
+        # `tool_reference` in a tool_result (sent as `Tool loaded: <name>`). A server tool search tool would be
+        # refused and counted `unsupportedField`; Claude Code searches client-side.
+        "advanced-tool-use-2025-11-20",
+        # `thinking.display: "updates"`, status lines as thinking text: `thinking` is popped and no thinking block
+        # is emitted, so there is nothing to display.
+        "thinking-display-updates-2026-08-18",
+        # `usage.output_tokens_details.thinking_tokens`, which Claude Code reads as optional: the bridge's usage
+        # carries the four counts (reducer.anthropic_usage) and no thinking count.
+        "thinking-token-count-2026-05-13",
+        # NOT HERE, ON PURPOSE (D-7093): `mid-conversation-tool-changes-2026-07-01` and `inline-tools-2026-09-15`.
+        # They gate `tool_addition`/`tool_removal` blocks in a `role: system` message (by reference, and by value as
+        # a `tool_definition`), which inbound drops uncounted with every non-text system block: a tool added by
+        # value is never offered upstream, and a removed one stays offered. The doctor keeps naming both until the
+        # bridge honours those blocks.
+    }),
     "contextEdit": frozenset({"clear_thinking_20251015"}),
 }  # type: Dict[str, FrozenSet[str]]
 

@@ -285,6 +285,25 @@ describe.skipIf(!PY)('the stats file (codex-bridge spec §2.7, §2.9 D3; D-6418)
     expect(snap.doc.unexplained.responseHeader).toBeUndefined();
   });
 
+  // Claude Code 2.1.310's eight `anthropic-beta` values, measured on the live lane's first traffic after the flip
+  // (runbook step 4, 2026-10-27; D-7093). Six gate shapes the bridge never sends or already counts by their own family,
+  // and are explained; the two tool-change betas gate `tool_addition`/`tool_removal` blocks, which inbound drops
+  // uncounted, so they stay unexplained and the doctor keeps naming them until the bridge honours those blocks.
+  const EXPLAINED_BETAS = [
+    'advanced-tool-use-2025-11-20', 'claude-code-20250219', 'context-management-2025-06-27',
+    'interleaved-thinking-2025-05-14', 'thinking-display-updates-2026-08-18', 'thinking-token-count-2026-05-13',
+  ];
+  const OPEN_BETAS = ['inline-tools-2026-09-15', 'mid-conversation-tool-changes-2026-07-01'];
+  it("Claude Code's measured betas: six are explained, and the two tool-change betas stay unexplained", async () => {
+    const { home, file } = lane('cb-stats-betas-');
+    const all = [...EXPLAINED_BETAS, ...OPEN_BETAS, 'effort-2025-11-24'];
+    const out = await run(home, [open(file), ...all.map((b) => call('name', ['betaValue', b])), { op: 'stats-snapshot' }]);
+    const snap = out[out.length - 1];
+    // the control: every beta was counted, so the unexplained list is about KNOWN, not a call that missed
+    expect(Object.keys(snap.doc.names.betaValue).sort()).toEqual([...all].sort());
+    expect(snap.doc.unexplained.betaValue).toEqual([...OPEN_BETAS].sort());
+  });
+
   it('KNOWN covers every family, and its errorCode family is errors.ALL_CODES', async () => {
     const { home } = lane('cb-stats-known-');
     const [k, sets] = await run(home, [{ op: 'known' }, { op: 'sets' }]);

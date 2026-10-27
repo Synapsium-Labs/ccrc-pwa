@@ -27,11 +27,13 @@ parse as JSON keep their keys, numbers and shape, and only their strings are rew
 everywhere (an argument's or a schema property's name included), so a recording still needs a human read before it
 enters the corpus, with ONE exception: the backend's `usage.attribution.items` is keyed by item id (runbook step 2,
 2026-10-27; D-7086), so each key there becomes the `<prefix>_fx<n>` the same id gets as a value, and an output item's
-key still names that item. A `data:` line that is not JSON becomes a fixed malformed line. Then the output is checked against
-SCRUB_PATTERNS (an unscrubbed id, a JWT, an encrypted content that is not `ENC-<n>`, a key, a line that is not an
-`event:` or `data:` line), which a structural key's value can still match: any match refuses (rc 1) and writes
-nothing. Its expectation in `expect.json` is written by hand in the reviewed change that adds it (make_streams.py's
-rule).
+key still names that item. The rewrite is anchored on the `attribution` object under a `usage` key, so a tool
+schema's property named `attribution` keeps its keys, but one named `usage` that holds one named `attribution` does
+not: the scrubber sees only the parent's key, and the human read is what catches that. A `data:` line that is not
+JSON becomes a fixed malformed line. Then the output is checked against SCRUB_PATTERNS (an unscrubbed id, a JWT, an
+encrypted content that is not `ENC-<n>`, a key, a line that is not an `event:` or `data:` line), which a structural
+key's value can still match: any match refuses (rc 1) and writes nothing. Its expectation in `expect.json` is
+written by hand in the reviewed change that adds it (make_streams.py's rule).
 
 The module's CLI runs only under `__main__` (the block below), so importing it through `load_all()` does nothing.
 """
@@ -207,8 +209,12 @@ def split_head(data: bytes) -> Tuple[Optional[int], bytes]:
 
 # ── the scrubber ─────────────────────────────────────────────────────────────────────────────────────────────────
 ID_KEYS = frozenset({"id", "item_id", "call_id", "response_id", "previous_response_id", "tool_call_id"})
-# The one object whose KEYS are ids: `items` inside a response's `usage.attribution` (the module docstring).
-ID_KEYED = ("items", "attribution")  # (its key, the key of the object it sits in)
+# The one object whose KEYS are ids: `items` inside a response's `usage.attribution` (the module docstring). The
+# anchor is the `attribution` object inside `usage`, and only its `items` child's keys are rewritten: a tool schema's
+# property named `attribution` with an array's `items` (the backend echoes the tools in `response.created`) keeps
+# its keys (D-7086).
+ID_KEYED = ("attribution", "usage")  # (the anchor's key, the key of the object it sits in)
+ID_KEYED_CHILD = "items"  # the anchor's child whose keys are item ids
 ENCRYPTED_KEY = "encrypted_content"
 ARGUMENTS_KEY = "arguments"
 NAME_KEY = "name"  # a tool's or a function call's name: `tool_fx<n>`, one per distinct name
@@ -288,13 +294,18 @@ class _Scrubber:
             return {k: self.strings(v) for k, v in value.items()}
         return value
 
+    def id_keyed(self, items: Dict[str, object]) -> Dict[str, object]:
+        """`usage.attribution.items`: each key through the map the id values use; each child sits under `items`."""
+        return {self.id_of(k): self.value(k, v, ID_KEYED_CHILD) for k, v in items.items()}
+
     def value(self, key: Optional[str], value: object, within: Optional[str] = None) -> object:
         """`value`, found under `key` in an object that sits under `within` (None at an event's top level)."""
         if isinstance(value, dict):
             # an `error` event's own fields are its error object's (`errors._error_object`)
             here = key if key is not None else ("error" if value.get("type") == "error" else None)
-            if (key, within) == ID_KEYED:  # keyed by item id: each key through the map the id values use
-                return {self.id_of(k): self.value(k, v, here) for k, v in value.items()}
+            if (key, within) == ID_KEYED:  # usage.attribution: its `items` is keyed by item id
+                return {k: (self.id_keyed(v) if k == ID_KEYED_CHILD and isinstance(v, dict) else self.value(k, v, here))
+                        for k, v in value.items()}
             return {k: self.value(k, v, here) for k, v in value.items()}
         if isinstance(value, list):
             return [self.value(key, v, within) for v in value]
