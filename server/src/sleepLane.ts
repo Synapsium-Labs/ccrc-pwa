@@ -25,6 +25,16 @@ import {
   STOP_DONE_MAIL_ONLY_TITLE, heldKindOf, type StopDoneMemory, type StopDoneOutcome, type StopDoneSweepDeps,
 } from './stopDoneSweep.js';
 import type { HibernateSweepDeps, HibernateSweepMemory, HibernateSweepOutcome } from './hibernateSweep.js';
+// D-7046 (ARCH-43): the two lane files' names, exported from here while the callers re-point; the deletion commit moves
+// their definitions into this file.
+export {
+  STOP_DONE_MAIL_ONLY_TITLE, heldKindOf, stopDonePass,
+  type StopDoneMemory, type StopDoneOutcome, type StopDoneSweepDeps,
+} from './stopDoneSweep.js';
+export {
+  hibernatePass,
+  type HibernateActOutcome, type HibernateActPort, type HibernateSweepDeps, type HibernateSweepMemory, type HibernateSweepOutcome,
+} from './hibernateSweep.js';
 
 /**
  * PUT A SESSION TO SLEEP, THE ONE EXECUTOR (D-7042; ARCH-43, consolidation spec K1): L4, it reads, logs and acts; it
