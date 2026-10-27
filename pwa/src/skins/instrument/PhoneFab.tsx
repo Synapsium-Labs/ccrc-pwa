@@ -1,7 +1,9 @@
 // Instrument's round `+` on a phone (desk-polish T2b, D-6328): today's floating New session, built with
 // `commandDoor('new-session')` so a tap runs the one command the top bar's `+` and the palette run.
 //
-// MOUNTED BELOW 900 ONLY, NEVER CSS-HIDDEN (`skin-boundary.test.ts` (j)): at the desk the top bar's `+` is the one
+// MOUNTED BELOW 900 ONLY, NEVER CSS-HIDDEN (the rule of `skin-boundary.test.ts` (j); held in a real engine by
+// `browser/instrument-fab.browser.test.ts` and in jsdom by the case "at 899 the round + is the one New session door"
+// in `test/instrument-shell.test.tsx`): at the desk the top bar's `+` is the one
 // New session door, and a second one floating over the session rows is a duplicate that covers them. S11 later
 // replaces this with its phone top bar's `+`. It keeps the `fab` class: `fleet.css` styles it.
 import type { ReactNode } from 'react';
