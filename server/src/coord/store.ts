@@ -41,6 +41,7 @@ import {
 import type { SendResult } from '../inject/send.js';
 import type { LedgerLog } from './ledgerlog.js';
 import type { PoolEdgeLog } from './pooledgelog.js';
+import { appendThenApply, journalFloor, type JournalPhase } from '../journalKernel.js';
 import type { UpdateIntentLog } from './updateintentlog.js';
 // Delegation broker wave 3, Task 7: the projection's row shapes, codecs and guards are the PURE `delegation-model.ts`;
 // this file runs the SQL and nothing else.
@@ -7535,37 +7536,39 @@ export class CoordStore {
     runId: number | null; now?: number;
   }, log: LedgerLog): AllocateResult {
     const now = input.now ?? Date.now();
-    return tx(this.db, () => {
-      const floorRow = this.ledgerFloor(input.project);
-      const dbMax = (this.db.prepare(
-        'SELECT MAX(n) AS m FROM ledger_alloc WHERE project = ?',
-      ).get(input.project) as { m: number | null }).m;
-      const fileMax = log.maxAllocated(input.project);
-      // `decideAllocation` (L1) only compares — the store MEASURES maxIssued,
-      // and the file's half is what makes recovery MAX(file, db).
-      const maxIssued = dbMax === null ? fileMax
-        : fileMax === null ? dbMax : Math.max(dbMax, fileMax);
-      const d = decideAllocation(floorRow, maxIssued, input.count);
-      if (!('ok' in d)) return { ok: false as const, why: d.refused };
-      log.append(d.numbers.map((n) => ({
+    // D-7058: the floor is `journalFloor`, the journal-first order `appendThenApply`; a journal error propagates.
+    return tx(this.db, () => appendThenApply<{ readonly numbers: readonly number[]; readonly floor: number }, AllocateResult, AllocateResult>({
+      decide: () => {
+        const floorRow = this.ledgerFloor(input.project);
+        const dbMax = (this.db.prepare(
+          'SELECT MAX(n) AS m FROM ledger_alloc WHERE project = ?',
+        ).get(input.project) as { m: number | null }).m;
+        // `decideAllocation` (L1) only compares — the store MEASURES maxIssued,
+        // and the file's half is what makes recovery MAX(file, db).
+        const d = decideAllocation(floorRow, journalFloor(dbMax, log.maxAllocated(input.project)), input.count);
+        return 'ok' in d ? { go: d } : { stop: { ok: false as const, why: d.refused } };
+      },
+      append: (d) => log.append(d.numbers.map((n) => ({
         project: input.project, n, title: input.title,
         allocatedTo: input.allocatedTo, at: now,
-      })));
-      for (const n of d.numbers) {
-        this.db.prepare(
-          'INSERT INTO ledger_alloc (project, n, title, allocatedTo, runId, allocatedAt, state) ' +
-          "VALUES (?, ?, ?, ?, ?, ?, 'allocated')",
-        ).run(input.project, n, input.title, input.allocatedTo, input.runId, now);
-      }
-      return {
-        ok: true as const,
-        allocation: {
-          project: input.project, numbers: d.numbers, floor: d.floor,
-          title: input.title, allocatedTo: input.allocatedTo,
-          runId: input.runId, allocatedAt: now,
-        },
-      };
-    });
+      }))),
+      apply: (d) => {
+        for (const n of d.numbers) {
+          this.db.prepare(
+            'INSERT INTO ledger_alloc (project, n, title, allocatedTo, runId, allocatedAt, state) ' +
+            "VALUES (?, ?, ?, ?, ?, ?, 'allocated')",
+          ).run(input.project, n, input.title, input.allocatedTo, input.runId, now);
+        }
+        return {
+          ok: true as const,
+          allocation: {
+            project: input.project, numbers: d.numbers, floor: d.floor,
+            title: input.title, allocatedTo: input.allocatedTo,
+            runId: input.runId, allocatedAt: now,
+          },
+        };
+      },
+    }));
   }
 
   private static readonly LEDGER_COLS =
@@ -8415,26 +8418,30 @@ export class CoordStore {
       return { ok: false, error: 'multi-pool-not-supported', pools: input.pools };
     }
     const now = input.now ?? Date.now();
-    return tx(this.db, () => {
-      const dbMax = (this.db.prepare('SELECT epoch AS e FROM pool_epoch WHERE id = 1')
-        .get() as { e: number }).e;
-      const fileMax = log.maxEpoch();
-      const epoch = (fileMax === null ? dbMax : Math.max(dbMax, fileMax)) + 1;
-      log.append([{ epoch, accountId: input.accountId, pools: input.pools,
-                    addedBy: input.addedBy, at: now }]);
-      this.db.prepare("DELETE FROM pool_edges WHERE subjectKind = 'account' AND subjectId = ?")
-        .run(input.accountId);
-      for (const p of input.pools) {
-        this.db.prepare(
-          'INSERT INTO pool_edges (subjectKind, subjectId, pool, addedAt, addedBy) ' +
-          "VALUES ('account', ?, ?, ?, ?)",
-        ).run(input.accountId, p, now, input.addedBy);
-      }
-      const digest = this.poolEdgeDigest();
-      this.db.prepare('UPDATE pool_epoch SET epoch = ?, issuedAt = ?, digest = ? WHERE id = 1')
-        .run(epoch, now, digest);
-      return { ok: true as const, epoch };
-    });
+    // D-7058: the floor is `journalFloor`, the journal-first order `appendThenApply`; a journal error propagates.
+    return tx(this.db, () => appendThenApply<number, SetAccountPoolsResult, never>({
+      decide: () => {
+        const dbMax = (this.db.prepare('SELECT epoch AS e FROM pool_epoch WHERE id = 1')
+          .get() as { e: number }).e;
+        return { go: journalFloor(dbMax, log.maxEpoch()) + 1 };
+      },
+      append: (epoch) => log.append([{ epoch, accountId: input.accountId, pools: input.pools,
+                                       addedBy: input.addedBy, at: now }]),
+      apply: (epoch) => {
+        this.db.prepare("DELETE FROM pool_edges WHERE subjectKind = 'account' AND subjectId = ?")
+          .run(input.accountId);
+        for (const p of input.pools) {
+          this.db.prepare(
+            'INSERT INTO pool_edges (subjectKind, subjectId, pool, addedAt, addedBy) ' +
+            "VALUES ('account', ?, ?, ?, ?)",
+          ).run(input.accountId, p, now, input.addedBy);
+        }
+        const digest = this.poolEdgeDigest();
+        this.db.prepare('UPDATE pool_epoch SET epoch = ?, issuedAt = ?, digest = ? WHERE id = 1')
+          .run(epoch, now, digest);
+        return { ok: true as const, epoch };
+      },
+    }));
   }
 
   accountPoolEdges(): Map<string, string[]> {
@@ -9193,25 +9200,33 @@ export class CoordStore {
       setBy: INTENT_SET_BY,
     };
     try {
-      return tx(this.db, () => {
-        const dbMax = (this.db.prepare('SELECT epoch AS e FROM update_epoch WHERE id = 1')
-          .get() as { e: number }).e;
-        let fileMax: number | null;
-        try { fileMax = log.maxEpoch(); } catch (err) { throw new IntentJournalFault('journal-unreadable', err); }
-        const epoch = (fileMax === null ? dbMax : Math.max(dbMax, fileMax)) + 1;
-        try {
-          log.append({ epoch, scope, channel, pinnedTag: row.pinnedTag, auto: row.auto,
-                       notify: row.notify, setBy: row.setBy, at: now });
-        } catch (err) { throw new IntentJournalFault('journal-unwritable', err); }
-        this.db.prepare(
-          'INSERT INTO update_intent (scope, channel, pinnedTag, auto, notify, setAt, setBy) ' +
-          'VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT (scope) DO UPDATE SET channel = excluded.channel, ' +
-          'pinnedTag = excluded.pinnedTag, auto = excluded.auto, notify = excluded.notify, ' +
-          'setAt = excluded.setAt, setBy = excluded.setBy',
-        ).run(scope, channel, row.pinnedTag, row.auto, row.notify, now, row.setBy);
-        this.db.prepare('UPDATE update_epoch SET epoch = ?, issuedAt = ? WHERE id = 1').run(epoch, now);
-        return { ok: true as const, row, epoch };
-      });
+      // D-7058: the floor is `journalFloor`, the journal-first order `appendThenApply`; the journal faults keep this
+      // method's own mapping (`IntentJournalFault`, answered below), and any other error propagates as itself.
+      return tx(this.db, () => appendThenApply<number, SetIntentResult, never>({
+        decide: () => {
+          const dbMax = (this.db.prepare('SELECT epoch AS e FROM update_epoch WHERE id = 1')
+            .get() as { e: number }).e;
+          let fileMax: number | null;
+          try { fileMax = log.maxEpoch(); } catch (err) { throw new IntentJournalFault('journal-unreadable', err); }
+          return { go: journalFloor(dbMax, fileMax) + 1 };
+        },
+        append: (epoch) => {
+          try {
+            log.append({ epoch, scope, channel, pinnedTag: row.pinnedTag, auto: row.auto,
+                         notify: row.notify, setBy: row.setBy, at: now });
+          } catch (err) { throw new IntentJournalFault('journal-unwritable', err); }
+        },
+        apply: (epoch) => {
+          this.db.prepare(
+            'INSERT INTO update_intent (scope, channel, pinnedTag, auto, notify, setAt, setBy) ' +
+            'VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT (scope) DO UPDATE SET channel = excluded.channel, ' +
+            'pinnedTag = excluded.pinnedTag, auto = excluded.auto, notify = excluded.notify, ' +
+            'setAt = excluded.setAt, setBy = excluded.setBy',
+          ).run(scope, channel, row.pinnedTag, row.auto, row.notify, now, row.setBy);
+          this.db.prepare('UPDATE update_epoch SET epoch = ?, issuedAt = ? WHERE id = 1').run(epoch, now);
+          return { ok: true as const, row, epoch };
+        },
+      }));
     } catch (err) {
       if (!(err instanceof IntentJournalFault)) throw err;
       return err.why === 'journal-unreadable'
@@ -9516,28 +9531,32 @@ export class CoordStore {
    *    decision, or `BEGIN` itself) is a defect or a busy database, and propagates as itself.
    *  - Synchronous, and never called from inside another `tx()`: `BEGIN IMMEDIATE` is not re-entrant. */
   setCollectLane(req: CollectLaneWriteRequest, at: number, journal: CollectLaneJournal): CollectLaneWrite {
-    let phase = 'decide' as 'decide' | 'append' | 'update' | 'commit';
+    // D-7058: the journal-first order is `appendThenApply`, and `phase` is the kernel's, named in this answer's words by
+    // `COLLECT_LANE_FAILED_PHASE`.
+    const phase: { at: JournalPhase } = { at: 'decide' };
     let done: CollectLaneTxOutcome;
     try {
-      done = tx(this.db, (): CollectLaneTxOutcome => {
-        const before = this.collectLaneRow();
-        const journalBefore = journal.read();
-        const d = decideCollectLaneWrite(req, before, journalBefore, at);
-        if (d.kind === 'refuse') return { kind: 'refused', code: d.code, detail: d.detail };
-        if (d.kind === 'unchanged') return { kind: 'unchanged', before };
-        phase = 'append';
-        journal.appendGeneration(d.generation);
-        phase = 'update';
-        const r = this.db.prepare(
-          'UPDATE collect_lane_settings SET choice = ?, fleetNodeId = ?, markerRetiredAt = ?, generation = ?, updatedAt = ? WHERE id = 1',
-        ).run(d.next.choice, d.next.fleetNodeId, d.next.markerRetiredAt, d.generation, at);
-        if (Number(r.changes) !== 1) throw new Error('the switch row update changed no row');
-        phase = 'commit';
-        return { kind: 'appended', generation: d.generation, before, journalBefore };
-      });
+      done = tx(this.db, (): CollectLaneTxOutcome => appendThenApply<CollectLaneWriteGo, CollectLaneTxOutcome, CollectLaneTxOutcome>({
+        decide: () => {
+          const before = this.collectLaneRow();
+          const journalBefore = journal.read();
+          const d = decideCollectLaneWrite(req, before, journalBefore, at);
+          if (d.kind === 'refuse') return { stop: { kind: 'refused', code: d.code, detail: d.detail } };
+          if (d.kind === 'unchanged') return { stop: { kind: 'unchanged', before } };
+          return { go: { d, before, journalBefore } };
+        },
+        append: ({ d }) => journal.appendGeneration(d.generation),
+        apply: ({ d, before, journalBefore }) => {
+          const r = this.db.prepare(
+            'UPDATE collect_lane_settings SET choice = ?, fleetNodeId = ?, markerRetiredAt = ?, generation = ?, updatedAt = ? WHERE id = 1',
+          ).run(d.next.choice, d.next.fleetNodeId, d.next.markerRetiredAt, d.generation, at);
+          if (Number(r.changes) !== 1) throw new Error('the switch row update changed no row');
+          return { kind: 'appended', generation: d.generation, before, journalBefore };
+        },
+      }, phase));
     } catch (err) {
-      if (phase === 'decide') throw err;
-      return { kind: 'failed', phase, code: collectLaneFailCode(err) };
+      if (phase.at === 'decide') throw err;
+      return { kind: 'failed', phase: COLLECT_LANE_FAILED_PHASE[phase.at], code: collectLaneFailCode(err) };
     }
     if (done.kind !== 'appended') return done;
     return { kind: 'written', generation: done.generation, before: done.before, journalBefore: done.journalBefore,
@@ -9616,6 +9635,20 @@ type CollectLaneTxOutcome =
   | Extract<CollectLaneWrite, { kind: 'refused' | 'unchanged' }>
   | { readonly kind: 'appended'; readonly generation: number; readonly before: CollectLaneRowRead;
       readonly journalBefore: CollectLaneJournalRead };
+
+/** What `setCollectLane`'s decide step hands its append and its apply (D-7058): the write decision and the two reads it
+ *  was taken over. Module-private. */
+interface CollectLaneWriteGo {
+  readonly d: Extract<ReturnType<typeof decideCollectLaneWrite>, { kind: 'write' }>;
+  readonly before: CollectLaneRowRead;
+  readonly journalBefore: CollectLaneJournalRead;
+}
+
+/** `failed.phase` for each position `appendThenApply` can stop at past `decide` (D-7058): its `append` is `append`, its
+ *  `apply` (the `UPDATE`) is `update`, and its `done` (the callback returned, `COMMIT` not yet run) is `commit`. A
+ *  position the kernel gains is a compile error here, never a silent `commit`. */
+const COLLECT_LANE_FAILED_PHASE = { append: 'append', apply: 'update', done: 'commit' } as const satisfies
+  Record<Exclude<JournalPhase, 'decide'>, Extract<CollectLaneWrite, { kind: 'failed' }>['phase']>;
 
 /** `failed.code`: the thrown error's code word as Node or `node:sqlite` set it (`ENOSPC`, `EACCES`, `ERR_SQLITE_ERROR`),
  *  never its message, which for a filesystem error names the journal's path (spec §5.6). An error with no such word
