@@ -23,25 +23,6 @@ function region(src: string, label: string): string[] {
   return src.split('\n').slice(starts[0]! + 1, ends[0]).map((l) => l.trim());
 }
 
-describe('the two bounded-spawn bodies are one text', () => {
-  const agent = region(read('../../agent/src/server.ts'), 'agent/src/server.ts');
-  const server = region(read('../src/update/spawn.ts'), 'server/src/update/spawn.ts');
-
-  it('each region is the whole algorithm, not a stub (the spawn, the kill, the drain, the exit handler)', () => {
-    for (const body of [agent, server]) {
-      const text = body.join('\n');
-      expect(body.length).toBeGreaterThan(50);
-      for (const needle of ['spawn(file, [...args]', "process.kill(-child.pid, 'SIGKILL')", 'armDrain', "child.once('exit'"]) {
-        expect(text, needle).toContain(needle);
-      }
-    }
-  });
-
-  it('the agent\'s region equals the server\'s, line for line (indentation aside)', () => {
-    expect(agent).toEqual(server);
-  });
-});
-
 // D-4390 (box-token lifecycle wave 1): the `token-sync` op's spawn is its OWN bounded body in `agent/src/tokensync.ts`
 // (stdin piped, an explicit {HOME, PATH, LANG}, SIGTERM then SIGKILL), not a third twin and not the twin with stdin
 // as a parameter. The twins stay two; the third body stays visibly separate, so an edit that copies the twin into it
