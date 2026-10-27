@@ -427,7 +427,12 @@ describe('the update op', () => {
     it('the spawn port and the report read name no exec path either', () => {
       const spawnBody = slice(src, 'export function makeUpdateSpawn', /\ninterface PtyEntry/);
       expect(spawnBody).not.toMatch(EXEC_PATH);
-      expect(spawnBody).toMatch(/spawn\(file, \[\.\.\.args\], \{ detached: true, stdio: \['ignore', 'pipe', 'pipe'\], env \}\)/);
+      // D-7055: the body is shared/spawn.mjs#boundedSpawn's, `spawn` the one its host injects; makeUpdateSpawn calls it.
+      const kernel = slice(readFileSync(path.resolve(here, '..', '..', 'shared', 'spawn.mjs'), 'utf8'), 'export function boundedSpawn(', /\n\}\n/);
+      expect(kernel).toMatch(/const \{ spawn, signals \} = host;/);
+      expect(kernel).toMatch(/spawn\(file, \[\.\.\.args\], \{ detached: true, stdio: \['ignore', 'pipe', 'pipe'\], env \}\)/);
+      expect(spawnBody, 'makeUpdateSpawn calls boundedSpawn').toMatch(/\bboundedSpawn\(\{ spawn, signals: os\.constants\.signals \}, file, args, /);
+      expect(spawnBody, 'makeUpdateSpawn spawns nothing itself').not.toMatch(/(?<![\w.])spawn\(/);
       const readBody = slice(src, 'export function readUpdateReport(', /\n\}\n/);
       expect(readBody).not.toMatch(EXEC_PATH);
       expect(readBody).toMatch(/NODE_FILES\.report/);
