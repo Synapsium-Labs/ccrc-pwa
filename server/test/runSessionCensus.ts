@@ -191,7 +191,7 @@ export const NOT_BINDING_SITES: readonly NotBindingSite[] = [
     why: "a path claim's holder against the declaring session: the claims table, no run is read" },
   { file: 'server/src/hookstate.ts', text: 'sessionId === currentUuid',
     why: "a hook record's Claude Code session uuid against the pane's current uuid: pane identity, no run is read" },
-  { file: 'server/src/stopDoneSweep.ts', text: 'l.sessionId === id',
+  { file: 'server/src/sleepLane.ts', text: 'l.sessionId === id',
     why: 'indexes the batched answer of lastRunBySession by the session it was asked about (the store did the last-closed decision): a keyed row, no series is decided' },
   { file: 'server/src/tmpSweepLane.ts', text: 'read.id !== sessionId',
     why: 'excludes a self-claimed run from the coordinators to mail: a claimant against the session whose coordinator is asked, the run having been chosen by survivorOf' },
