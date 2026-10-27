@@ -5,7 +5,7 @@ import type { NotifyLog } from './notifylog.js';
 import type { SessionRecord } from './registry.js';
 import type { CoordStore } from './coord/store.js';
 import type { TurnVerdict } from './coord/archiveDoor.js';
-import { notify } from './notice.js';
+import { notify, type NoticeRecord } from './notice.js';
 import { CCD_ARGV, HIBERNATE_HOLD_OK_CAP, capSupported, sweepDec, verbSupported } from './ccdargv.js';
 import { HIBERNATE_DISABLED_MARKER, NO_HIBERNATE_SUFFIX } from './coord/hibernate.js';
 import { RECLAIM_PAUSE_MARKER } from './coord/rundefs.js';
@@ -189,18 +189,27 @@ function runStateWords(state: string): string {
   return STOP_DONE_PARKED_STATES.includes(state) ? `parked at ${state}` : state;
 }
 
+/** The pair's two records, each its own literal (D-7041): the asleep row names its worker's session and run, the
+ *  mail-only count is a `coord` record with no run and no session. Built here, not as a ternary inside `notify`'s
+ *  arguments, so `review-cap`'s census (D-6911) reads the one record `notify` is handed, never a `kind: 'run'` branch
+ *  beside the other branch's empty session. */
+function feedRecord(row: StopDoneFeedRow): NoticeRecord {
+  if (row.kind === 'asleep') {
+    return {
+      kind: 'run', sessionId: row.id, runId: row.runId, title: 'Worker asleep',
+      body: `${row.id} was put to sleep: its run ${row.runId} is ${runStateWords(row.state)} and it sat idle. Mail, a re-dispatch or a restart wakes it.`,
+    };
+  }
+  return {
+    kind: 'coord', sessionId: '', runId: null, title: `${STOP_DONE_MAIL_ONLY_TITLE}: ${row.count}`,
+    body: `${row.count} finished worker(s) stay awake for unread mail to them, with nothing in the coordination store or their workspace holding them besides; their panes are measured once it is read.`,
+  };
+}
+
 function recordFeed(deps: StopDoneSweepDeps, row: StopDoneFeedRow): void {
   // D-7041: through the funnel, record-only (recorded whatever the presence, never pushed), with the lane's own prefix
   // and sentence on a failed archive. `viewers` is not handed over: record-only consults no presence.
-  notify({ notifyLog: deps.notifyLog, coord: deps.coord }, row.kind === 'asleep'
-    ? {
-      kind: 'run', sessionId: row.id, runId: row.runId, title: 'Worker asleep',
-      body: `${row.id} was put to sleep: its run ${row.runId} is ${runStateWords(row.state)} and it sat idle. Mail, a re-dispatch or a restart wakes it.`,
-    }
-    : {
-      kind: 'coord', sessionId: '', runId: null, title: `${STOP_DONE_MAIL_ONLY_TITLE}: ${row.count}`,
-      body: `${row.count} finished worker(s) stay awake for unread mail to them, with nothing in the coordination store or their workspace holding them besides; their panes are measured once it is read.`,
-    }, 'record-only', {
+  notify({ notifyLog: deps.notifyLog, coord: deps.coord }, feedRecord(row), 'record-only', {
     lane: 'stop-done',
     degraded: row.kind === 'asleep' ? `${row.id}'s sleep has no feed row` : 'the mail-only count has no feed row',
   });
