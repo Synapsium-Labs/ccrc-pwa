@@ -9,7 +9,7 @@ import { CommandLayer } from '../src/command/CommandLayer';
 import { AccountsStrip } from '../src/fleet/AccountsStrip';
 import { ACCOUNTS_DOOR_LABEL } from '../src/fleet/laneWords';
 import { lanesByFree } from '../src/fleet/laneOrder';
-import { FLYOUT_CLOSE_MS, FLYOUT_LABEL, FLYOUT_OPEN_MS } from '../src/fleet/stripFold';
+import { FLYOUT_CLOSE_MS, FLYOUT_LABEL, FLYOUT_OPEN_MS, LANE_CARD_MIN } from '../src/fleet/stripFold';
 import { api } from '../src/lib/api';
 import { navigate } from '../src/lib/router';
 import { declValue, ruleIn } from './cssRule';
@@ -592,7 +592,7 @@ describe('the lanes fold (S5b, D-6530)', () => {
     const end = group.querySelector('.accounts-end')!;
     // 17 lanes less 3 shown.
     expect([...end.children]).toEqual([control('+14 more · 1 sign-in expired · 1 rate-limited'), screen.getByRole('button', { name: 'All accounts' })]);
-    expect(group.getAttribute('style')).toContain('--lane-card-min: 260px');
+    expect(group.getAttribute('style')).toContain(`--lane-card-min: ${LANE_CARD_MIN}px`);
   });
 
   it("the desk's fit counts the column gap the group computes: 1050 px with an 8 px gap holds three tracks, so two cards (a gap read as 0 would hold four, and show three)", async () => {

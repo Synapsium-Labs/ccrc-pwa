@@ -7,7 +7,7 @@ import path from 'node:path';
 import type { AccountUsage } from '../../shared/api';
 import { lanesByFree } from '../src/fleet/laneOrder';
 import { FOLD_SHOWN, LANE_CARD_MIN, foldLanes, foldShown, foldWords, rowFit } from '../src/fleet/stripFold';
-import { declaredValues } from './cssRule';
+import { declaredValues, norm, stripComments } from './cssRule';
 import { seventeenLanes } from './seventeenLanes';
 
 const NOW_S = 1_900_000_000;
@@ -182,15 +182,26 @@ describe('how many lanes a folded strip shows', () => {
 });
 
 describe('the fold reads no layout and the card floor is written once', () => {
-  it("the card's floor is LANE_CARD_MIN, once", () => {
-    const css = readFileSync(path.join(SRC, 'styles', 'shell.css'), 'utf8');
-    const grids = declaredValues(css, '.shell-accounts .accounts-strip', 'grid-template-columns');
-    expect(grids.length).toBeGreaterThan(0);
-    for (const grid of grids) {
-      expect(grid).not.toContain(`${LANE_CARD_MIN}px`);
-      expect(grid).not.toMatch(/minmax\(\s*[\d.]+px/);
-      expect(grid).toContain('var(--lane-card-min)');
+  it("the card's floor is LANE_CARD_MIN, once: every lanes-row rule in shell.css reads the token, and none writes the figure", () => {
+    // Comments out: the rules' own prose names the token and may name the constant.
+    const css = stripComments(readFileSync(path.join(SRC, 'styles', 'shell.css'), 'utf8'));
+    // The strip's grid and the flyout's grid, each a minmax over the token and no px length.
+    for (const sel of ['.shell-accounts .accounts-strip', '.shell-accounts .accounts-flyout']) {
+      const grids = declaredValues(css, sel, 'grid-template-columns');
+      expect(grids.length, sel).toBeGreaterThan(0);
+      for (const grid of grids) {
+        expect(grid, sel).not.toContain(`${LANE_CARD_MIN}px`);
+        expect(grid, sel).not.toMatch(/minmax\(\s*[\d.]+px/);
+        expect(grid, sel).toMatch(/minmax\(\s*var\(--lane-card-min\)\s*,/);
+      }
     }
+    // The token is declared (css-vars wants a definition) with no value of its own: the strip's inline style gives it
+    // `LANE_CARD_MIN`, so a declaration anywhere that wrote a length would be a second copy of the figure.
+    const declared = [...css.matchAll(/--lane-card-min\s*:\s*([^;}]*)/g)].map((m) => norm(m[1]!));
+    expect(declared.length).toBeGreaterThan(0);
+    expect(declared.every((v) => v === 'initial'), `--lane-card-min declared as ${declared.join(', ')}`).toBe(true);
+    // And the figure is in no rule of the file, whatever the property.
+    expect(css).not.toContain(`${LANE_CARD_MIN}px`);
   });
 
   it('stripFold.ts reads no layout', () => {

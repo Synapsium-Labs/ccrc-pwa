@@ -71,6 +71,8 @@
 //   `rowFit` without the gap added back ................ strip-fold "rowFit counts the tracks one line holds: …"
 //   an unmeasured row read as one card (width 0 -> 1) .. strip-fold "an unmeasured desk row folds nothing: every lane, no control"
 //   the floor's figure kept in `shell.css` ............. strip-fold "the card's floor is LANE_CARD_MIN, once"
+//   `--lane-card-min: 260px` in the strip's rule ....... strip-fold "the card's floor is LANE_CARD_MIN, once: every lanes-row rule in shell.css reads the token, and none writes the figure"
+//   `minmax(260px, 1fr)` in the flyout's rule .......... strip-fold, the same case (fix round 1: both were SURVIVED while the guard read only the strip's `grid-template-columns`)
 //   the fold applied below 900 only .................... app "one fold control per width, in both skins: refined, desk, …" and the instrument one; lanes-row "folded with 17
 //                                                         lanes at 900, 1280 and 1920 …" (RED on the one view run alone; the whole file outran its 580 s bound, twice, with every folded
 //                                                         desk case waiting out its own timeout, so no count is recorded for it)
