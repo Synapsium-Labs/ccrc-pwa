@@ -5735,7 +5735,8 @@ export async function ingestSidecar(db, ctx, s, budget, g) {
     if (!link.ready) return link.deferred === true ? { bytes: 0, deferred: true } : { bytes: 0, cut: true };
     const entryId = linkSidecar(s.name, link.candidates);
     let sha;
-    let make;   // the body to store, stored only when no live blob holds this sha (D-4589's one probe, below): the whole arm compresses then, and the streamed arm has already compressed it in compressFdRange
+    let make;   // the body to store, stored only when no live blob holds this sha (D-4589's one probe, below): the whole arm
+                // compresses then, and the streamed arm has already compressed it in compressFdRange
     let z = null;
     // The index text comes from the bytes hashed and stored, never from a second read of the file: a rewrite between two
     // reads would index text the blob does not hold, and D-4344's re-derivation recomputes the stored blob's own text
@@ -9228,9 +9229,9 @@ function exportSelect(db, ctx, nowMs, homeDays, boundBytes) {
   return sel;
 }
 
-/** Phase 2: the taken candidates into the segment, each row after what places it. Before every row it reads its slice of the run's
- *  budget clock and history-off; it stops at either, so what it wrote is whole rows. Answers the entry and blob ids written,
- *  the rows and bytes, and why it stopped early ('budget' | 'off' | null). */
+/** Phase 2: the taken candidates into the segment, each row after what places it. Before every row it reads the clock of
+ *  its slice of the run's budget and history-off; it stops at either, so what it wrote is whole rows. Answers the entry and
+ *  blob ids written, the rows and bytes, and why it stopped early ('budget' | 'off' | null). */
 function writeSegmentRows(db, ctx, seg, sel) {
   const s = exportStmts(db);
   const ins = segmentInserts(seg);

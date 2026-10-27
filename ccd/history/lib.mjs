@@ -238,9 +238,9 @@ export const EXPORT_CHECK_SLICE_BYTES = 128 * 1024 * 1024;
 /** CP-39 (D-6935, D-6939): the derivation's shares of the ONE run budget, per mille of its limits, in tick order (chosen).
  *  One set of numbers serves the ladder of ceilings (budgetRungs) and the floors (budgetFloors). Measured on the fleet box:
  *  every budget-gated derivation starved while ingest owned the whole budget, and under load the sweep unit (shipped at
- *  Nice=19 with idle I/O) got 0.1-0.17 of a core (measured with a local, unshipped CPU-weight drop-in present), so 90 s of wall clock was about 9-15 s of CPU. The FTS backfill takes
- *  the largest share, being the largest backlog by count (at most about 486,000 blobs owed) and the one every grep
- *  waits on; the leaves and the census 10% each (the census builds one
+ *  Nice=19 with idle I/O) got 0.1-0.17 of a core (measured with a local, unshipped CPU-weight drop-in present), so 90 s of
+ *  wall clock was about 9-15 s of CPU. The FTS backfill takes the largest share, being the largest backlog by count (at most
+ *  about 486,000 blobs owed) and the one every grep waits on; the leaves and the census 10% each (the census builds one
  *  file clock, a stat per recorded file, before its first chunk, over about 1.14 million blobs); the card step 5% (a few
  *  cards a tick in steady state). Ingest keeps 60%, which still drains a backlog over ticks (§9.2 step 7). */
 export const DERIVE_SHARES = Object.freeze({ fts: 150, nodes: 100, card: 50, census: 100 });
@@ -10437,7 +10437,7 @@ export function planSegment({ nowMs, homeRetentionDays, rows, boundBytes, reduce
   return { take, carry, stubs, bytes, leftDue, oldestLeftDueSinceMs };
 }
 
-/** Whether a pass the run's budget cut short is recorded as an attempt and reported (D-5394
+/** Whether a pass its slice of the run's budget cut short is recorded as an attempt and reported (D-5394
  *  (history-export-select-due-transcripts)): the sweep writes the attempt clock and one stderr line, and the next step
  *  waits its interval, not the next tick. Two shapes, both a pass that wrote no segment and so moved nothing:
  *  - nothing taken and the selection did not run to its end (`taken` 0, `selectionComplete` false). The bound cannot end a
