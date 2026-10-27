@@ -1999,8 +1999,9 @@ export class FleetWatcher {
 
   /** The child marks off the last LISTED registry read, for `GET /api/runs`'s
    *  reclaim chip (wave 5), or null when no tick has listed one. In memory, and
-   *  the reason is cost: a route-time `readRegistry` is ~721 agent-WS operations
-   *  per board load in remote mode. */
+   *  the reason is cost: a route-time `readRegistry` on a 24-session fleet is a
+   *  floor of 97 agent-WS operations [registry-read-census:fleet] per board load
+   *  in remote mode, before the other listed fields. */
   currentChildMarks(): ReadonlyMap<string, ChildMark> | null {
     return this.childMarks;
   }
