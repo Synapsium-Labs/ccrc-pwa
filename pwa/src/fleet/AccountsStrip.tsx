@@ -21,11 +21,10 @@
 // yet) is exactly the state the Accounts screen exists to explain (its bespoke "<home-able accounts>, all disabled"
 // copy, see homeAbleLabelList in lib/accounts.ts). So the link stays mounted, with a quiet placeholder body, instead
 // of disappearing with the cards.
-import { useEffect, useRef, useState } from 'react';
+import { useRef, useState } from 'react';
 import type { KeyboardEvent, ReactNode } from 'react';
-import type { AccountUsage, RosterWire } from '../../../shared/api';
-import { accountColorVar, accountLabel, warnNonArrayRoster } from '../lib/accounts';
-import { api } from '../lib/api';
+import { accountColorVar, accountLabel } from '../lib/accounts';
+import { useFleetStore, type FleetStore } from '../stores/fleet';
 import { Button, useNow } from '@ccrc/ui';
 import { actionDoor, commandDoor } from '../command/door';
 import { rovingStep } from '../lib/rovingStep';
@@ -36,49 +35,18 @@ import { ACCOUNTS_DOOR_LABEL, ALL_ACCOUNTS, laneDoorLabel, lanesRowLabel, NO_REA
 import { AccountMeterRow } from './AccountMeterRow';
 import './fleet.css';
 
-export function AccountsStrip(): ReactNode {
-  const [accounts, setAccounts] = useState<AccountUsage[] | null>(null);
-  // Same poll, same response — `roster` is read alongside `accounts` rather
-  // than through the fleet store, since this component already runs its own
-  // `/api/accounts` cadence (its own file comment on why: coupling to a
-  // shared store beats nothing, but a second GET against two small local
-  // JSON files beats coupling this component to whichever store instance a
-  // caller happens to be using). Defaults to `[]`, the same "unarrived
-  // roster" state `accountLabel`/`accountColorVar` already degrade for.
-  const [roster, setRoster] = useState<readonly RosterWire[]>([]);
+/** `store` defaults to the app-wide fleet store (`RunsScreen`'s idiom). The strip reads the store's `usage` and
+ *  `roster`, which its one `/api/accounts` poll writes (C8, D-6440); the strip runs no poll of its own, so its four
+ *  mounts (one per width) cost no request. `usage` is `null` until a good answer lands, and a malformed or failed
+ *  read keeps the last good rows, so the cards never fall back to the placeholder once they have drawn. */
+export function AccountsStrip({ store = useFleetStore }: { store?: FleetStore } = {}): ReactNode {
+  const accounts = store((s) => s.usage);
+  const roster = store((s) => s.roster);
   const now = useNow(30_000); // tick the reset countdown
   // The roving tab stop is tracked by lane id, not by index: a re-sort moves the cards, and the stop stays on the lane
   // it was on. `null` (nothing focused yet) and an id no longer in the list both read as the first card.
   const [stopId, setStopId] = useState<string | null>(null);
   const cardRefs = useRef(new Map<string, HTMLElement>());
-
-  useEffect(() => {
-    let live = true;
-    const load = (): void => {
-      void api.accounts().then((r) => {
-        if (!live) return;
-        setAccounts(r.accounts);
-        // `Array.isArray`, not a bare trust: a fetch stub answering an
-        // unmatched route with bare `{}` (several fixtures across this suite
-        // predate Task 7 and do exactly that) hands back `r.roster ===
-        // undefined`, and every `accountLabel`/`accountColorVar` call below
-        // does `roster.find(...)` unguarded — same reasoning as
-        // `stores/fleet.ts`'s own roster poll. Preserves the last good
-        // roster rather than clobbering it with `[]` on a malformed
-        // response (fix round 1, finding 5), and warns once so a genuine
-        // protocol break has some signal (finding 6) instead of silently
-        // reverting every label to a raw wrapper id.
-        if (Array.isArray(r.roster)) {
-          setRoster(r.roster);
-        } else {
-          warnNonArrayRoster(r);
-        }
-      }).catch(() => {});
-    };
-    load();
-    const t = setInterval(load, 20_000);
-    return () => { live = false; clearInterval(t); };
-  }, []);
 
   // `disabled` is optional on the wire in the sense that an older server omits
   // it — `a.disabled === true` treats that as enabled, so the PWA never needs
