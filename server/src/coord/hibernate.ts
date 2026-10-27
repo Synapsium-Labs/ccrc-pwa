@@ -81,8 +81,8 @@ export const HIBERNATE_AFTER_MS_DEFAULT = 6 * 60 * 60_000;
 export const HIBERNATE_AFTER_HOURS_MIN = 1;
 export const HIBERNATE_AFTER_HOURS_MAX = 168;
 
-/** The sweep's own cadence, off the watcher's tick. */
-export const HIBERNATE_SWEEP_MS = 5 * 60_000;
+/** The sweep's own cadence, off the watcher's tick: the `sleepIdleHours` row's, declared in the L0 table (D-7045). */
+export { HIBERNATE_SWEEP_MS } from '../laneSchedule.js';
 /** At most one shadow line per id this often, so a session that stays asleep-worthy is not logged every sweep. */
 export const HIBERNATE_SHADOW_LINE_MS = 60 * 60_000;
 /** ARMED (Task 17b): at most this many `ccd hibernate` acts a sweep, fleet-wide — a slower drain costs nothing, and a

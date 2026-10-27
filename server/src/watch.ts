@@ -218,11 +218,12 @@ import { CHILD_RECLAIM_SWEEP_MS, COLLECT_OBSERVE_INTERVAL_MS, DIVERGENCE_SWEEP_M
 import type { ChildReclaimCollectInput } from './childReclaimSweep.js';
 import { NO_FLEET_IDENTITY } from './fleetidentity.js';
 import { stopDonePass, type StopDoneMemory } from './stopDoneSweep.js';
-import { STOP_DONE_SWEEP_MS } from './stopDone.js';
 import { hibernatePass, type HibernateSweepMemory } from './hibernateSweep.js';
+import { SLEEP_LANES } from './sleepLane.js';
+import type { SleepPolicyName } from './sleep.js';
 import { StaleArchiveBeat } from './staleArchiveBeat.js';
 import { wakeAdmit, type WakeKind } from './coord/wakeBudget.js';
-import { HIBERNATE_AFTER_HOURS_FILE, HIBERNATE_SWEEP_MS } from './coord/hibernate.js';
+import { HIBERNATE_AFTER_HOURS_FILE } from './coord/hibernate.js';
 import { liveRowFor, liveWordFor, turnMarkFor, turnReadDeps, turnVerdictFor } from './turnverdict.js';
 import {
   COLLECT_AUDITS_PER_PASS, COLLECT_FEED_TITLE, collectAfterAct, collectFeedTitle, collectAfterAudit, collectAfterFoldFailed, collectAfterHold,
@@ -1313,22 +1314,18 @@ export class FleetWatcher {
    *  (normally asked every four hours) and a row backing off on the ladder are asked again within a few passes,
    *  SOONER; and it restarts the twice-observed sighting and the hour's runs, which DELAY an expiry. */
   private archivedExpiryState = new Map<string, ArchivedExpiryEntry>();
-  /** The stop-done lane (D-5370, `stopDoneSweep.ts`): its last pass, whether one runs, its one memory (a refused
-   *  stop's retry instant), the coordination serialiser `buildServer` hands it, and the process start it holds
-   *  `viewer` against (presence is never persisted). */
-  private lastStopDoneSweep = 0;
-  private stopDoneSweeping = false;
+  /** The stop-done lane (D-5370, `stopDoneSweep.ts`): its one memory (a refused stop's retry instant) and the
+   *  coordination serialiser `buildServer` hands it. Its clock and single flight are the `sleepRunDone` row (D-7045). */
   private readonly stopDoneMemory: StopDoneMemory = { retryAt: new Map() };
   private stopDoneSerial: (<T>(fn: () => Promise<T>) => Promise<T>) | null = null;
-  private readonly stopDoneStartedAt = Date.now();
-  /** Hibernation's sweep (D-5242, `hibernateSweep.ts`): its last pass, whether one runs, its memory (the last shadow
-   *  line, and the last skip or failure line, per id), and the process start it holds `viewer` against (presence is
-   *  never persisted). Its act uses the stop-done lane's serialiser below, the one `CoordMutex`. */
-  private lastHibernateSweep = 0;
-  private hibernateSweeping = false;
+  /** The process start both sleep lanes hold `viewer` against (presence is never persisted; D-7045: one field, set at
+   *  construction, where each lane had its own holding the same instant). */
+  private readonly sleepStartedAt = Date.now();
+  /** Hibernation's sweep (D-5242, `hibernateSweep.ts`): its memory (the last shadow line, and the last skip or failure
+   *  line, per id); it holds `viewer` against `sleepStartedAt`. Its act uses the stop-done lane's serialiser above, the
+   *  one `CoordMutex`. Its clock and single flight are the `sleepIdleHours` row (D-7045). */
   private readonly hibernateMemory: HibernateSweepMemory = { lastLine: new Map(), lastActLine: new Map() };
   private readonly staleArchive = new StaleArchiveBeat(() => this.deps, this, (a) => this.transcripts.resolve(a));
-  private readonly hibernateStartedAt = Date.now();
   /** `flock-unavailable`, once a box has answered it: the lane composes nothing more there (this process). */
   private archivedExpiryBoxRefused: string | null = null;
   /** THE DEAD-COORDINATOR LANE (workspace lifecycle wave 4): its clock and its single flight (the `deadCoordinator` row; the expiry lane's reason);
@@ -2087,19 +2084,25 @@ export class FleetWatcher {
     this.stopDoneSerial = (fn) => h.serial(fn);
   }
 
+  /** The stop-done lane (`run-done`) alone, through `sweepSleep` (C4f deletes this door). */
+  sweepStopDone(sessions: readonly FleetSession[], records: readonly SessionRecord[], names: readonly string[]): Promise<void> {
+    return this.sweepSleep(sessions, records, names, 'run-done');
+  }
+
+  /** Hibernation (`idle-hours`) alone, through `sweepSleep` (C4f deletes this door). */
+  sweepHibernate(sessions: readonly FleetSession[], records: readonly SessionRecord[], names: readonly string[]): Promise<void> {
+    return this.sweepSleep(sessions, records, names, 'idle-hours');
+  }
+
   /**
    * THE STOP-DONE LANE (D-5370): a finished run's dispatched worker is stopped once idle, and restarts on re-dispatch.
    * A sibling on the tick, at its own cadence, on THIS tick's assembled rows and registry listing (the listing carries
-   * the kill switch). Never awaited by the tick; one pass at a time. The rule is `stopDoneVerdict` (L1), the pass
-   * `stopDonePass` (L4).
+   * the kill switch). Never awaited by the tick; one pass at a time (the `sleepRunDone` row). The rule is
+   * `stopDoneVerdict` (L1), the pass `stopDonePass` (L4). Started by `sweepSleep`, which skips it with no store.
    */
-  async sweepStopDone(sessions: readonly FleetSession[], records: readonly SessionRecord[], names: readonly string[]): Promise<void> {
+  private async sleepRunDone(sessions: readonly FleetSession[], records: readonly SessionRecord[], names: readonly string[]): Promise<void> {
     const coord = this.deps.coord;
-    if (!coord || this.stopDoneSweeping) return;
-    const now = Date.now();
-    if (this.lastStopDoneSweep !== 0 && now - this.lastStopDoneSweep < STOP_DONE_SWEEP_MS) return;
-    this.lastStopDoneSweep = now;
-    this.stopDoneSweeping = true;
+    if (!coord) return;
     try {
       const reads = turnReadDeps(this.deps, this);
       await stopDonePass({
@@ -2109,12 +2112,10 @@ export class FleetWatcher {
         mark: (rec) => turnMarkFor(reads, rec),
         rowAtAct: (rec) => this.rowAtAct(rec),
         serial: this.stopDoneSerial, queueRun: (id, fn) => this.deps.queue.run(id, fn),
-        startedAt: this.stopDoneStartedAt, now: Date.now,
+        startedAt: this.sleepStartedAt, now: Date.now,
       }, this.stopDoneMemory, sessions, records, names);
     } catch (err) {
       console.warn(`ccrc-server: sweepStopDone failed (${err instanceof Error ? err.message : String(err)}) — no stops this pass`);
-    } finally {
-      this.stopDoneSweeping = false;
     }
   }
 
@@ -2123,14 +2124,10 @@ export class FleetWatcher {
    * registry listing (the listing carries the switches), `hibernatePass` asks `hibernateVerdict` about every row. Shadow
    * (a `hibernate-shadow` line) unless the operator armed it with `$REG/hibernate-live`; armed, it composes
    * `ccd hibernate` on the coordination serialiser (the stop-done lane's, handed over by `useStopDoneSerialiser`) and
-   * the session's queue, after re-reading everything there. Never awaited by the tick; one pass at a time.
+   * the session's queue, after re-reading everything there. Never awaited by the tick; one pass at a time (the
+   * `sleepIdleHours` row). Started by `sweepSleep`.
    */
-  async sweepHibernate(sessions: readonly FleetSession[], records: readonly SessionRecord[], names: readonly string[]): Promise<void> {
-    if (this.hibernateSweeping) return;
-    const now = Date.now();
-    if (this.lastHibernateSweep !== 0 && now - this.lastHibernateSweep < HIBERNATE_SWEEP_MS) return;
-    this.lastHibernateSweep = now;
-    this.hibernateSweeping = true;
+  private async sleepIdleHours(sessions: readonly FleetSession[], records: readonly SessionRecord[], names: readonly string[]): Promise<void> {
     try {
       const reads = turnReadDeps(this.deps, this);
       await hibernatePass({
@@ -2138,7 +2135,7 @@ export class FleetWatcher {
         liveWord: (rec) => liveWordFor(reads, rec), mark: (rec) => turnMarkFor(reads, rec),
         readAfterHours: () => this.deps.io.readFile(`${this.deps.cfg.registryDir}/${HIBERNATE_AFTER_HOURS_FILE}`),
         log: (line) => console.warn(line),
-        startedAt: this.hibernateStartedAt, now: Date.now,
+        startedAt: this.sleepStartedAt, now: Date.now,
         act: {
           runCcd: this.deps.runCcd, fleetState: this.deps.fleetState, serial: this.stopDoneSerial,
           queueRun: (id, fn) => this.deps.queue.run(id, fn), rowAtAct: (rec) => this.rowAtAct(rec),
@@ -2146,9 +2143,34 @@ export class FleetWatcher {
       }, this.hibernateMemory, sessions, records, names);
     } catch (err) {
       console.warn(`ccrc-server: sweepHibernate failed (${err instanceof Error ? err.message : String(err)}) — no verdicts this pass`);
-    } finally {
-      this.hibernateSweeping = false;
     }
+  }
+
+  /** Each sleep lane's own body, by its policy's name (D-7045): `sweepSleep` starts them in `SLEEP_LANES`' order. */
+  private readonly sleepRunners: Readonly<Record<SleepPolicyName,
+    (sessions: readonly FleetSession[], records: readonly SessionRecord[], names: readonly string[]) => Promise<void>>> = {
+    'run-done': (sessions, records, names) => this.sleepRunDone(sessions, records, names),
+    'idle-hours': (sessions, records, names) => this.sleepIdleHours(sessions, records, names),
+  };
+
+  /**
+   * THE SLEEP LANES (D-5370, D-5242; ARCH-43, D-7045): walks `SLEEP_LANES` in today's order (`run-done`, then
+   * `idle-hours`) and STARTS each lane's pass without awaiting the other, so a pass waiting on the coordination
+   * serialiser or a session's queue never delays, stops or re-times the other lane's (Review focus 9). The order is
+   * only the order the passes start in. Each lane's cadence and single flight are its own `LANE_SCHEDULE` row
+   * (`sleepRunDone`, `sleepIdleHours`; on the monotonic clock, OA-C4 (a), D-7052), run by `runLane`; a lane whose row
+   * needs the store is skipped, with no store, BEFORE its row, so its clock is not stamped. The promise settles once
+   * every pass it started has settled; the tick never awaits it. `lane` names one lane (the suites' door).
+   */
+  sweepSleep(sessions: readonly FleetSession[], records: readonly SessionRecord[], names: readonly string[], lane?: SleepPolicyName): Promise<void> {
+    const started: Promise<unknown>[] = [];
+    for (const row of SLEEP_LANES) {
+      if (lane !== undefined && row.policy.name !== lane) continue;
+      if (row.store === 'needed' && !this.deps.coord) continue;
+      const run = this.runLane(row.cadence, () => this.sleepRunners[row.policy.name](sessions, records, names));
+      if (run !== null) started.push(run);
+    }
+    return Promise.allSettled(started).then(() => undefined);
   }
 
   /** The STALE-ARCHIVE ARM (D-6643, fleet disk retention spec §2.7.5): `StaleArchiveBeat` holds the clock, the memory and the
@@ -2607,11 +2629,10 @@ export class FleetWatcher {
       // the claim pair's synchronous try-block. It gates itself on `primed`, which is set below, so the priming tick
       // never judges.
       void this.sweepStalls(sessions, registryRead.names, { panePids, records, refused: registryRead.refused }).catch(() => { /* one bad sweep must not kill the poll */ });
-      // NEVER awaited, the stall watch's reasons: the STOP-DONE lane (D-5370) on THIS tick's rows and listing. Gated on
-      // `primed` like the stall watch, so the priming tick never stops anything.
-      if (this.primed) void this.sweepStopDone(sessions, records, registryRead.names).catch(() => { /* one bad sweep must not kill the poll */ });
-      // D-5242: hibernation's SHADOW sweep, never awaited, gated on `primed` like the stop-done lane. It only logs.
-      if (this.primed) void this.sweepHibernate(sessions, records, registryRead.names).catch(() => { /* one bad sweep must not kill the poll */ });
+      // NEVER awaited, the stall watch's reasons: the two SLEEP lanes (D-7045), the stop-done lane (D-5370) and
+      // hibernation (D-5242), on THIS tick's rows and listing, each started without awaiting the other. Gated on
+      // `primed` like the stall watch, so the priming tick puts nothing to sleep.
+      if (this.primed) void this.sweepSleep(sessions, records, registryRead.names).catch(() => { /* one bad sweep must not kill the poll */ });
       if (this.primed) void this.sweepStaleArchive(records, registryRead.names).catch(() => { /* one bad sweep must not kill the poll */ });
       // D-5373: NEVER awaited, `sweepMail`'s reason — it can call `sendPrompt` through the per-session queue. Own clock.
       // A due beat that lands on a pass still running is skipped by the row and still spends its slot, as it always did.

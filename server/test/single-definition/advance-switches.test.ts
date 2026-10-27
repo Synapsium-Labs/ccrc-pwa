@@ -937,19 +937,18 @@ describe('one change latch (ARCH-76): changeLatch (D-5861)', () => {
 // `LANE_SCHEDULE` (`server/src/laneSchedule.ts`) and one `runLane` (`FleetWatcher`): no lane keeps a `last*` clock or a
 // guard field of its own. Named by `consolidationCensus.ts`'s `laneClockFields` and `singleFlightGuards`, and for a clock
 // nobody named by `laneClockShapes` (a numeric field compared as `now - this.X < CONST`). What stays is reported by name:
-// W4's two lanes (`stopDoneSweeping`/`lastStopDoneSweep`, `hibernateSweeping`/`lastHibernateSweep`), the tick's own guard,
-// `dispatchNow`'s run and its one follow-up (a trigger with no cadence). `DelegationLane#lastSweepAt` is the `delegation` row
+// the tick's own guard, `dispatchNow`'s run and its one follow-up (a trigger with no cadence). W4's two sleep lanes
+// (`stopDoneSweeping`/`lastStopDoneSweep`, `hibernateSweeping`/`lastHibernateSweep`) are the `sleepRunDone` and
+// `sleepIdleHours` rows since D-7045 (ARCH-43), so no lane clock field is left. `DelegationLane#lastSweepAt` is the `delegation` row
 // (the series that held that class has merged). Each counts only down. The census is loaded inside the rows, so this block adds no import line.
 describe('one lane schedule (ARCH-68): LANE_SCHEDULE and runLane (D-5862)', () => {
   const text = (xs: ReadonlyArray<{ text: string }>): string[] => xs.map((x) => x.text.trim());
 
-  it('only W4\'s two clocks remain as lane clock fields, and no unnamed clock is compared with a constant', async () => {
+  it('no lane clock field remains (W4\'s two are rows since D-7045), and no unnamed clock is compared with a constant', async () => {
     const { laneClockFields, laneClockShapes } = await import('../consolidationCensus.js');
-    expect(text(laneClockFields()), 'a lane clock is a row of LANE_SCHEDULE, not a field').toEqual([
-      'private lastStopDoneSweep = 0;', 'private lastHibernateSweep = 0;',
-    ]);
+    expect(text(laneClockFields()), 'a lane clock is a row of LANE_SCHEDULE, not a field').toEqual([]);
     const shapes = laneClockShapes().map((x) => x.text.trim());
-    expect(shapes.filter((t) => !/lastStopDoneSweep|lastHibernateSweep/.test(t)), 'no lane clock outside runLane').toEqual([
+    expect(shapes, 'no lane clock outside runLane').toEqual([
       // Nothing remains in `FleetWatcher`. Four lanes that landed on main while this ratchet was in review kept clocks of their
       // own, and the consolidation (GitHub #1279) moved them out: the orphan-worktree lane (D-6631) is the `orphanTrees` row now,
       // and the stale-archive arm (D-6643), the disk alarm (D-6615) and the tmp sweep census (D-6624) keep their wall-clock
@@ -979,11 +978,11 @@ describe('one lane schedule (ARCH-68): LANE_SCHEDULE and runLane (D-5862)', () =
     });
   });
 
-  it('only the tick\'s guard, dispatchNow\'s run and its follow-up, and W4\'s two guards remain as single-flight fields', async () => {
+  it('only the tick\'s guard, dispatchNow\'s run and its follow-up remain as single-flight fields (W4\'s two are rows since D-7045)', async () => {
     const { singleFlightGuards } = await import('../consolidationCensus.js');
     expect(text(singleFlightGuards()).sort(), 'a lane\'s single flight is its row\'s flight').toEqual([
       'private dispatchAgain = false;', 'private dispatchRun: Promise<DispatchRunResult> | null = null;',
-      'private hibernateSweeping = false;', 'private stopDoneSweeping = false;', 'private ticking = false;',
+      'private ticking = false;',
     ]);
   });
 

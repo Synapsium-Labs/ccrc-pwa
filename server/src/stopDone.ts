@@ -107,8 +107,8 @@ export const STOP_DONE_PER_PASS = 3;
 /** At most this many candidates have their live state read a pass (tmux and live-file reads each). */
 export const STOP_DONE_MEASURES_PER_PASS = 6;
 
-/** The lane's own cadence, off the watcher's tick. */
-export const STOP_DONE_SWEEP_MS = 60_000;
+/** The lane's own cadence, off the watcher's tick: the `sleepRunDone` row's, declared in the L0 table (D-7045). */
+export { STOP_DONE_SWEEP_MS } from './laneSchedule.js';
 
 /** After a stop the box refused, the lane does not ask again for this long. In memory only: a restart asks once more. */
 export const STOP_DONE_RETRY_MS = 60 * 60_000;

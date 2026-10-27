@@ -671,8 +671,8 @@ describe('watch.ts — emitCoord: the coord frame\'s switch bytes (the wire\'s M
 });
 
 describe('watch.ts — the tick hands the lanes ITS listing, and a null or rejecting one reaches none of them', () => {
-  // `sweepStopDone` runs only once the watcher is primed, so each row primes it first.
-  const lanes = ['sweepChildReclaim', 'sweepArchivedExpiry', 'sweepDeadCoordinators', 'sweepStopDone'] as const;
+  // `sweepSleep` runs only once the watcher is primed, so each row primes it first.
+  const lanes = ['sweepChildReclaim', 'sweepArchivedExpiry', 'sweepDeadCoordinators', 'sweepSleep'] as const;
   const prime = (w: FleetWatcher): void => { (w as unknown as { primed: boolean }).primed = true; };
   it.each<Listing>(['null', 'reject'])('%s → no lane is called', async (l) => {
     const f = watchRig({ io: (b, reg) => scripted(b, reg, () => l).io });
@@ -687,7 +687,7 @@ describe('watch.ts — the tick hands the lanes ITS listing, and a null or rejec
     prime(f.watcher);
     const spies = lanes.map((m) => vi.spyOn(f.watcher, m));
     await f.watcher.tick();
-    // The listing is each lane's last argument (`sweepStopDone` takes the rows first).
+    // The listing is each lane's last argument (`sweepSleep` takes the rows first).
     expect(spies.map((s) => (s.mock.calls[0]?.at(-1) as string[] | undefined)?.includes(RECLAIM_PAUSE_MARKER)))
       .toEqual(lanes.map(() => l === 'present'));
   });

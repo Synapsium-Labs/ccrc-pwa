@@ -308,7 +308,7 @@ describe('the watcher\'s own shadow pass, its deps unmocked', () => {
     // granted or not, lands in `calls` here.
     const deps = { ...testDeps(home, run), runCcd: ccdRunner(run, cfg), cfg, coord, viewers: new Viewers() };
     const w = new FleetWatcher(deps as never, new Bus(), 10_000);
-    (w as unknown as { hibernateStartedAt: number }).hibernateStartedAt = startedAt;
+    (w as unknown as { sleepStartedAt: number }).sleepStartedAt = startedAt;
     const tick = async () => {
       const r = await readSessionRecord(deps.io, cfg, WID);
       if (r.kind !== 'found') throw new Error('fixture record not found');
@@ -372,7 +372,7 @@ describe('the watcher\'s own shadow pass, its deps unmocked', () => {
   it('the tick runs the shadow pass, and not on the priming tick', async () => {
     const h = await harness();
     try {
-      const spy = vi.spyOn(h.w, 'sweepHibernate').mockResolvedValue(undefined);
+      const spy = vi.spyOn(h.w, 'sweepSleep').mockResolvedValue(undefined);
       await (h.w as unknown as { tick(): Promise<void> }).tick();
       expect(spy).not.toHaveBeenCalled();
       await (h.w as unknown as { tick(): Promise<void> }).tick();

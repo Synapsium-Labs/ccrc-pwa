@@ -9,6 +9,7 @@ import { LANE_SCHEDULE, laneRow, type LaneRow } from '../src/laneSchedule.js';
 import { LaneRunner } from '../src/laneRunner.js';
 import { callsIn, symbolOf } from './scan/symbols.js';
 import { CATALOGUE_POLL_INTERVAL_MS, SERVER_CAPS_WRITE_MS, CHILD_RECLAIM_SWEEP_MS } from '../src/laneSchedule.js';
+import { HIBERNATE_SWEEP_MS, STOP_DONE_SWEEP_MS } from '../src/laneSchedule.js';
 import { parsedFile, sourceOfSymbol } from './scan/symbols.js';
 
 const SRC = path.join(import.meta.dirname, '..', 'src');
@@ -484,9 +485,9 @@ describe('the four reclaim lanes (D-5862, PR 3)', () => {
 });
 
 describe('every throttle is on the monotonic clock (OA-C4, ruled (a) on #803)', () => {
-  it('no row of LANE_SCHEDULE is on the wall clock: 29 of 29 are monotonic', () => {
+  it('no row of LANE_SCHEDULE is on the wall clock: 31 of 31 are monotonic', () => {
     expect(LANE_SCHEDULE.filter((r) => r.clock === 'wall').map((r) => r.name), 'a throttle on Date.now()').toEqual([]);
-    expect(LANE_SCHEDULE.filter((r) => r.clock === 'mono')).toHaveLength(29);
+    expect(LANE_SCHEDULE.filter((r) => r.clock === 'mono')).toHaveLength(31);
   });
 
   it('the runner throttles a monotonic row on the monotonic reading: a wall step back runs it at its cadence, a step forward never early', () => {
@@ -508,5 +509,41 @@ describe('every throttle is on the monotonic clock (OA-C4, ruled (a) on #803)', 
     expect(runner.runSync('beat', fn), 'the wall clock moved a monotonic row').toBe(false);
     t.mono += 100;
     expect(runner.runSync('beat', fn)).toBe(true);
+  });
+});
+
+// D-7045 (ARCH-43, C4e): the two sleep lanes' clocks are rows, their own describe (the reclaim lanes' table asserts the
+// child census's cadence for every row it lists, so a 5-minute row there would red). Each keeps its own cadence, starts
+// due, refuses a second run while one is in flight, and catches its own failure with its own sentence (no warnKey).
+describe('the two sleep lanes (ARCH-43)', () => {
+  const SLEEP: Array<[string, number]> = [['sleepRunDone', STOP_DONE_SWEEP_MS], ['sleepIdleHours', HIBERNATE_SWEEP_MS]];
+
+  it.each(SLEEP)('%s is a row at its own cadence, on the monotonic clock, one run at a time, its catch its own', (name, ms) => {
+    const r = laneRow(name);
+    expect(r.cadenceMs, `${name}'s cadence`).toBe(ms);
+    expect(r.clock, `${name}'s clock`).toBe('mono');
+    expect(r.flight, `${name}'s flight`).toBe('skip');
+    expect(r.warnKey, `${name} keeps its own catch sentence`).toBeNull();
+    expect(r.derivedFrom).toBeNull();
+  });
+
+  it('the cadences are 60 s and 5 min, declared here and re-exported by their policies', () => {
+    expect([STOP_DONE_SWEEP_MS, HIBERNATE_SWEEP_MS]).toEqual([60_000, 5 * 60_000]);
+    expect(reExports('stopDone.ts', 'STOP_DONE_SWEEP_MS', './laneSchedule.js')).toBe(true);
+    expect(reExports('coord/hibernate.ts', 'HIBERNATE_SWEEP_MS', '../laneSchedule.js')).toBe(true);
+  });
+
+  it('each starts due, and each row is its own flight: one lane in flight never refuses the other', async () => {
+    const rows = SLEEP.map(([name]) => laneRow(name));
+    const { runner } = rig([...rows]);
+    expect(rows.map((r) => runner.due(r.name))).toEqual([true, true]);
+    const held = deferred();
+    const first = runner.run('sleepRunDone', () => held.promise);
+    expect(first).not.toBeNull();
+    const other = runner.run('sleepIdleHours', () => 'ran');
+    expect(other, 'the other lane runs while the first is in flight').not.toBeNull();
+    expect(await other).toBe('ran');
+    held.resolve();
+    await first;
   });
 });

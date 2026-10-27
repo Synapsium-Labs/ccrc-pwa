@@ -131,6 +131,14 @@ export const CHILD_RECLAIM_SWEEP_MS = 60_000;
  *  takes it as an argument (it imports no L4 constant). EXPORTED for its suite; `watch.ts` re-exports it. */
 export const COLLECT_OBSERVE_INTERVAL_MS = CHILD_RECLAIM_SWEEP_MS;
 
+/** The stop-done lane's cadence (D-5370), the `run-done` sleep policy's: declared here, the L0 table, which cannot import
+ *  an L1 file (the precedent of `CATALOGUE_POLL_INTERVAL_MS`); `stopDone.ts` re-exports it (D-7045). */
+export const STOP_DONE_SWEEP_MS = 60_000;
+
+/** Hibernation's cadence (D-5242), the `idle-hours` sleep policy's: declared here for the same reason; `coord/hibernate.ts`
+ *  re-exports it (D-7045). */
+export const HIBERNATE_SWEEP_MS = 5 * 60_000;
+
 /** The checks lane's beat (PR landing in ccrc, stage 1): the fastest a project's read cadence goes. */
 export const LANDING_CHECKS_BEAT_MS = 30_000;
 
@@ -146,7 +154,8 @@ export type LaneName =
   | 'caps' | 'catalogue' | 'inventory' | 'landingChecks' | 'serverCaps'
   | 'tasks' | 'usage' | 'pr' | 'names' | 'divergences' | 'lifecycle' | 'readiness' | 'ledgerReconcile' | 'ledgerFloor' | 'drift'
   | 'claimRenew' | 'claimLapse' | 'stalls' | 'idleNudge' | 'mail' | 'asks' | 'approvalPrune' | 'digestBeat'
-  | 'childReclaim' | 'collect' | 'archivedExpiry' | 'deadCoordinator' | 'orphanTrees' | 'delegation';
+  | 'childReclaim' | 'collect' | 'archivedExpiry' | 'deadCoordinator' | 'orphanTrees' | 'delegation'
+  | 'sleepRunDone' | 'sleepIdleHours';
 
 export interface LaneRow {
   readonly name: LaneName | (string & {});
@@ -247,6 +256,13 @@ export const LANE_SCHEDULE: readonly LaneRow[] = [
     name: 'delegation', cadenceMs: DIVERGENCE_SWEEP_MS, clock: 'mono', flight: 'skip', warnKey: null,
     derivedFrom: { name: 'DIVERGENCE_SWEEP_MS', reason: 'the lane reads each census pass once, so it follows the census\'s own beat' },
   },
+  // The two sleep lanes (ARCH-43, D-7045): `SLEEP_LANES`' rows name them (`run-done`, the stop-done lane, D-5370;
+  // `idle-hours`, hibernation, D-5242), and `FleetWatcher.sweepSleep` starts each through its own row, never awaiting
+  // the other. Each starts due, keeps one pass at a time (its own flight, never one shared by both) and catches its own
+  // failure with its own sentence, so no row warns. They moved here from `Date.now()` under OA-C4 (a) (#803), whose
+  // cover of these two lanes the operator ruled on 2026-10-26 (D-7052).
+  { name: 'sleepRunDone', cadenceMs: STOP_DONE_SWEEP_MS, derivedFrom: null, clock: 'mono', flight: 'skip', warnKey: null },
+  { name: 'sleepIdleHours', cadenceMs: HIBERNATE_SWEEP_MS, derivedFrom: null, clock: 'mono', flight: 'skip', warnKey: null },
 ];
 
 export function laneRow(name: string): LaneRow {

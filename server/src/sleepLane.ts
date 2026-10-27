@@ -20,6 +20,7 @@ import {
   type StopDoneVerdict,
 } from './stopDone.js';
 import type { SleepPolicy } from './sleep.js';
+import type { LaneName } from './laneSchedule.js';
 import {
   STOP_DONE_MAIL_ONLY_TITLE, heldKindOf, type StopDoneMemory, type StopDoneOutcome, type StopDoneSweepDeps,
 } from './stopDoneSweep.js';
@@ -155,8 +156,8 @@ export interface SleepLane<D extends SleepDepsBase, M, Row extends { readonly su
   readonly kill: readonly MarkerSwitchName[];
   /** The switch that arms the act; `null`: live, no switch. */
   readonly arming: MarkerSwitchName | null;
-  /** Its `LANE_SCHEDULE` row (wired by C4e). */
-  readonly cadence: string;
+  /** Its `LANE_SCHEDULE` row, which `FleetWatcher.sweepSleep` runs it through (D-7045). */
+  readonly cadence: LaneName;
   readonly population: SleepPopulation;
   readonly caps: SleepCaps;
   /** `after-the-loop`: in population order once every row is judged; `inline`: as each row is reached. */

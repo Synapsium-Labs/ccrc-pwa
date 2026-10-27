@@ -687,7 +687,7 @@ describe('run by the watcher\'s tick (D-5370)', () => {
     try {
       const deps = { ...testDeps(home, async () => ({ ran: true, code: 1, stdout: '', stderr: '' })), cfg, coord };
       const w = new FleetWatcher(deps as never, new Bus(), 10_000);
-      const spy = vi.spyOn(w, 'sweepStopDone').mockResolvedValue(undefined);
+      const spy = vi.spyOn(w, 'sweepSleep').mockResolvedValue(undefined);
       await w.tick();
       expect(spy, 'the priming tick judges nothing').not.toHaveBeenCalled();
       await w.tick();
@@ -753,7 +753,7 @@ describe('the watcher\'s own pass, its deps unmocked (D-5370)', () => {
     // buildServer always hands the watcher a Viewers; an absent port reads as a viewer (fail closed).
     const deps = { ...testDeps(home, run), cfg, coord, fleetState: { ccdVerbs: ['hibernate'] }, viewers: new Viewers(() => Date.now()) };
     const w = new FleetWatcher(deps as never, new Bus(), 10_000);
-    (w as unknown as { stopDoneStartedAt: number }).stopDoneStartedAt = startedAt;
+    (w as unknown as { sleepStartedAt: number }).sleepStartedAt = startedAt;
     w.useStopDoneSerialiser({ serial: async (fn: () => Promise<unknown>) => fn() } as never);
     // The tick's rows and records, assembled now — before anything a case writes afterwards.
     const tick = async () => {
