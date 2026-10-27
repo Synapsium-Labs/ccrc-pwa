@@ -302,8 +302,14 @@ const FOLDED_WORDS = '+13 more · 1 sign-in expired · 1 rate-limited';
 
 /** Open the app with the 17-lane fixture, folded unless `expanded`, and wait for the strip's cards (`cards` of them), its
  *  control and a session row. */
-async function openFolded(view: AppView, cards: number, expanded = false): Promise<Awaited<ReturnType<typeof openApp>> & { order: string[] }> {
-  const { fixture, cases } = seventeen();
+async function openFolded(view: AppView, cards: number, expanded = false, sessionRows?: number): Promise<Awaited<ReturnType<typeof openApp>> & { order: string[] }> {
+  const { fixture: base, cases } = seventeen();
+  // `sessionRows` swaps the fleet for that many sessions in one project (the first project card opens, so each is a
+  // session row, as the first fixture's attention session opens its card): a document tall enough that folding the strip cannot shorten it below the scrolled position.
+  const fixture: AppFixture = sessionRows === undefined ? base : {
+    ...base,
+    fleetFrames: [{ type: 'fleet', sessions: Array.from({ length: sessionRows }, (_, i) => fleetSession({ id: `s${i}`, project: 'proj-0', bucket: i === 0 ? 'attention' : 'idle' })) }],
+  };
   const opened = await openApp(browser!, view, fixture);
   if (expanded) await seedStripExpanded(opened.ctx);
   await opened.page.goto(server!.origin + '/');
@@ -408,32 +414,43 @@ describe('the folded phone strip is four cards and one control', () => {
     }
   }
 
-  for (const view of FOLDED_VIEWS.filter((v) => v.theme === PHOSPHOR)) {
+  // Refined only: Instrument's fleet list scrolls inside its own column, so its document never grows tall enough to hold the case.
+  for (const view of FOLDED_VIEWS.filter((v) => v.theme === PHOSPHOR && v.skin === REFINED)) {
     it(`after Show fewer the control is focused and on screen: ${named(view)}`, async () => {
-      const { ctx, page, errors } = await openFolded(view, 17, true);
+      // Thirty session rows: once the strip folds the document is still taller than the scrolled position plus the screen,
+      // so the browser's own scroll clamp cannot bring the control back and only the product's scroll-into-view can.
+      const { ctx, page, errors } = await openFolded(view, 17, true, 30);
       try {
+        // Chrome's scroll anchoring would hold the control where it is when the cards above it go away, which the browsers
+        // without it (Safari, so every iPhone) do not: switch it off, so the case sees what the product itself does.
+        await page.addStyleTag({ content: '*, *::before, *::after { overflow-anchor: none !important; }' });
         // Scroll the page until the control sits near the top of the screen, as it does after a long look down the list,
         // then fold with a real click.
-        await page.evaluate(() => {
+        const scrolled = await page.evaluate(() => {
           const doc = document.scrollingElement!;
           const top = document.querySelector('.accounts-end [aria-expanded]')!.getBoundingClientRect().top + doc.scrollTop;
           doc.scrollTo(0, Math.max(0, top - 6));
+          return doc.scrollTop;
         });
+        expect(scrolled, 'the page scrolled down to the control').toBeGreaterThan(300);
         await page.waitForTimeout(150);
         await page.locator('.accounts-end [aria-expanded]').click();
         await page.waitForFunction(() => document.querySelectorAll('.accounts-strip .account-gauge').length === 4, undefined, { timeout: 10_000 });
         await page.waitForTimeout(400); // the scroll into view settles
-        const found = await page.evaluate(() => {
+        const found = await page.evaluate((scrolledTo) => {
           const control = document.querySelector<HTMLElement>('.accounts-end [aria-expanded]')!;
           const r = control.getBoundingClientRect();
           const hit = document.elementFromPoint((r.left + r.right) / 2, (r.top + r.bottom) / 2);
+          const doc = document.scrollingElement!;
           return {
+            // The clamp cannot have moved the page: it is still where the case left it, with room to spare below.
+            roomToScroll: doc.scrollHeight >= scrolledTo + window.innerHeight,
             expanded: control.getAttribute('aria-expanded'), focused: document.activeElement === control,
             onScreen: r.top >= -0.5 && r.bottom <= window.innerHeight + 0.5 && r.left >= -0.5 && r.right <= window.innerWidth + 0.5,
             uncovered: hit !== null && control.contains(hit),
           };
-        });
-        expect(found).toEqual({ expanded: 'false', focused: true, onScreen: true, uncovered: true });
+        }, scrolled);
+        expect(found).toEqual({ roomToScroll: true, expanded: 'false', focused: true, onScreen: true, uncovered: true });
         expect(errors).toEqual([]);
       } finally {
         await ctx.close();
