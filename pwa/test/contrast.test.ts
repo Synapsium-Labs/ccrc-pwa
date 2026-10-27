@@ -278,19 +278,6 @@ const GRANDFATHERED_UNCOVERED = new Set([
   '.msg-assist .task-list-item:has(> input:checked, > p:first-child > input:checked)',
   '.msg-assist a',
   '.msg-assist .kbd-plus',
-  '.msg-assist .hljs-comment, .msg-assist .hljs-quote',
-  '.msg-assist .hljs-keyword, .msg-assist .hljs-selector-tag, .msg-assist .hljs-section, .msg-assist .hljs-literal',
-  '.msg-assist .hljs-string, .msg-assist .hljs-regexp',
-  '.msg-assist .hljs-number, .msg-assist .hljs-symbol, .msg-assist .hljs-bullet',
-  '.msg-assist .hljs-title, .msg-assist .hljs-title.function_, .msg-assist .hljs-function .hljs-title',
-  '.msg-assist .hljs-type, .msg-assist .hljs-built_in, .msg-assist .hljs-title.class_, .msg-assist .hljs-class .hljs-title',
-  '.msg-assist .hljs-attr, .msg-assist .hljs-attribute, .msg-assist .hljs-property, .msg-assist .hljs-variable, .msg-assist .hljs-template-variable, .msg-assist .hljs-selector-class, .msg-assist .hljs-selector-id',
-  '.msg-assist .hljs-tag',
-  '.msg-assist .hljs-tag .hljs-name, .msg-assist .hljs-name',
-  '.msg-assist .hljs-meta',
-  '.msg-assist .hljs-deletion',
-  '.msg-assist .hljs-addition',
-  '.msg-assist .hljs-link',
   '.compaction-glyph',
   '.compaction-hint',
   '.compaction-head:hover .compaction-hint',
@@ -2206,6 +2193,84 @@ describe("the Settings cards' when-line is measured on the card, not left in the
     for (const row of rows) {
       expect(row.detail, row.label).toContain('var(--ink-tertiary)');
       expect(row.ratio, row.label).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+});
+
+// ── the well hues (T4a, D-6387) ─────────────────────────────────────────────
+// Colour lives in the dark wells (spec §3.1): a code block, a tool box and its ANSI spans paint a code-palette hue on
+// --bg-well, the same in the chat transcript and the Docs reader (its body carries the prose hook class and renders the
+// same CodeBlock). Two halves. The token half is the gate's contract (a pair per hue per palette, in
+// design/contrast-check.mjs); the stylesheet half is the rules that use the hues, which left the grandfathered blind
+// spot for a registration on --bg-well in INHERITED_GROUNDS.
+describe('the well hues are gated', () => {
+  const HUES = ['comment', 'keyword', 'string', 'number', 'function', 'type', 'tag', 'attr', 'punct'] as const;
+  /** "PASS 5.24 (min 4.5) CATPPUCCIN-LATTE syn-comment / well #8b948c on #1e1e2e", keyed palette|hue. A palette's
+   *  label is its name upper-cased (DARK and LIGHT are padded in the printed column, so `\s+`). */
+  const synRows = new Map<string, { verdict: string; ratio: number; min: number }[]>();
+  for (const line of out.split('\n')) {
+    const m = /^(PASS|FAIL)\s+([\d.]+)\s+\(min ([\d.]+)\)\s+(\S+)\s+syn-(\w+) \/ well\s/.exec(line);
+    if (m === null) continue;
+    const key = `${m[4]}|${m[5]}`;
+    synRows.set(key, [...(synRows.get(key) ?? []), { verdict: m[1] as string, ratio: Number(m[2]), min: Number(m[3]) }]);
+  }
+
+  it('every --syn-* is a gated pair on the well in every palette', () => {
+    // DARK is :root; every other palette is a [data-theme] block, labelled by its upper-cased name.
+    const palettes = ['DARK', ...Object.keys(report.themes.byName).map((n) => n.toUpperCase())];
+    expect(palettes).toHaveLength(THEME_COUNT);
+    for (const palette of palettes) {
+      for (const hue of HUES) {
+        const rows = synRows.get(`${palette}|${hue}`);
+        expect(rows, `${palette} syn-${hue} / well`).toHaveLength(1);
+        const [row] = rows as { verdict: string; ratio: number; min: number }[];
+        expect(row?.min, `${palette} syn-${hue} / well`).toBe(4.5);
+        expect(row?.verdict, `${palette} syn-${hue} / well`).toBe('PASS');
+        expect(row?.ratio, `${palette} syn-${hue} / well`).toBeGreaterThanOrEqual(4.5);
+      }
+    }
+    // Nothing beyond the nine hues on the well rides this label (the two diff aliases are the --diff-* pairs).
+    expect(synRows.size).toBe(THEME_COUNT * HUES.length);
+  });
+
+  it("the transcript's well hues are measured, not left in the blind spot", () => {
+    const sheets = stylesheets(ROOT).filter((rel) => /(^|\/)(prose|tool-card)\.css$/.test(rel));
+    expect(sheets, 'the two sheets that carry the well hues').toHaveLength(2);
+    const keys = sheets
+      .flatMap((rel) => rulesOf(ROOT, rel))
+      .filter((r) => declOf(r.body, 'color') !== null && /\.(hljs|ansi)-/.test(r.selector))
+      .map(ruleKey);
+    // Not a vacuous pass: the thirteen combined hljs rules and the seven ANSI hues.
+    expect(keys.filter((k) => k.includes('.hljs-')).length).toBeGreaterThanOrEqual(13);
+    expect(keys.filter((k) => k.includes('.ansi-')).length).toBeGreaterThanOrEqual(7);
+    for (const key of keys) {
+      expect(report.uncovered, key).not.toContain(key);
+      expect(GRANDFATHERED_UNCOVERED.has(key), key).toBe(false);
+      expect(INHERITED_GROUNDS[key]?.under, key).toEqual(['var(--bg-well)']);
+      const rows = rowsFor(key);
+      expect(rows, key).toHaveLength(THEME_COUNT);
+      for (const row of rows) {
+        expect(row.detail, row.label).toMatch(/ on var\(--bg-well\)$/);
+        expect(row.ratio, row.label).toBeGreaterThanOrEqual(4.5);
+      }
+    }
+  });
+
+  it('measures the failed word on the card and the inline-code chip on the well, in every palette', () => {
+    // `.tool-fail` takes the dead text on the tool card's surface; `.msg-assist .md-code` paints its own well pair, so
+    // it is measured wherever the prose hook class is (the chat and the Docs reader alike), not by an ancestor.
+    for (const [key, pair] of [
+      ['.tool-fail', 'var(--status-dead-text) on var(--bg-surface)'],
+      ['.msg-assist .md-code', 'var(--ink-on-well) on var(--bg-well)'],
+    ] as const) {
+      expect(report.uncovered, key).not.toContain(key);
+      expect(GRANDFATHERED_UNCOVERED.has(key), key).toBe(false);
+      const rows = rowsFor(key);
+      expect(rows, key).toHaveLength(THEME_COUNT);
+      for (const row of rows) {
+        expect(row.detail, row.label).toBe(pair);
+        expect(row.ratio, row.label).toBeGreaterThanOrEqual(4.5);
+      }
     }
   });
 });
