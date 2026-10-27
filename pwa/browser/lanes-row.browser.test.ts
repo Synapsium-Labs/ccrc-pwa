@@ -761,7 +761,11 @@ describe('hovering the folded line opens a flyout below it', () => {
           return {
             names: cards.map((c) => c.querySelector('.account-gauge-label')?.textContent ?? ''),
             flyTop: fr.top, flyBottom: fr.bottom, flyLeft: fr.left, flyRight: fr.right, lineBottom: Math.max(...line.map((e) => e.getBoundingClientRect().bottom)),
-            headerBottom: header.getBoundingClientRect().bottom, position: getComputedStyle(fly).position, vw: window.innerWidth, vh: window.innerHeight,
+            headerBottom: header.getBoundingClientRect().bottom, position: getComputedStyle(fly).position, vw: window.innerWidth,
+            // Its stacking level and the content's, as computed (`auto` reads NaN, taken as 0): at 1920 the panel ends above the
+            // first session row, so hit-testing alone cannot tell it from a panel in flow.
+            z: Number.parseInt(getComputedStyle(fly).zIndex, 10) || 0,
+            contentZ: Math.max(...['main.shell-detail', '.shell-banners', '.sess-line'].map((sel) => Number.parseInt(getComputedStyle(document.querySelector(sel) ?? document.body).zIndex, 10) || 0)), vh: window.innerHeight,
             cards: cards.map((c) => {
               const r = c.getBoundingClientRect();
               const hit = document.elementFromPoint((r.left + r.right) / 2, (r.top + r.bottom) / 2);
@@ -777,7 +781,8 @@ describe('hovering the folded line opens a flyout below it', () => {
         const out: string[] = [];
         if (found.names.join('|') !== FOLD_ORDER.join('|')) out.push(`the flyout reads [${found.names}], not every lane freest first [${FOLD_ORDER}]`);
         if (found.flyTop < found.lineBottom - 0.5) out.push(`the flyout (top ${found.flyTop}) is not below the line (bottom ${found.lineBottom})`);
-        if (found.position !== 'absolute') out.push(`the flyout is ${found.position}-positioned: it must be drawn over the content, not placed in it`);
+        if (found.position !== 'absolute' && found.position !== 'fixed') out.push(`the flyout is ${found.position}-positioned: it must be drawn over the content, not placed in it`);
+        if (found.z <= found.contentZ || found.z <= 0) out.push(`the flyout's z-index (${found.z}) is not above the content's (${found.contentZ})`);
         if (found.flyBottom <= found.headerBottom) out.push(`the flyout (bottom ${found.flyBottom}) does not reach past the header (bottom ${found.headerBottom})`);
         for (const [i, c] of found.cards.entries()) {
           if (c.right > found.vw + 0.5 || c.left < -0.5) out.push(`${found.names[i]}'s card is outside the viewport horizontally (${c.left}..${c.right})`);
