@@ -198,7 +198,7 @@ import {
 } from './coord/endDeadCoordinator.js';
 import type { CoordRoutesHandle } from './coord/routes.js';
 import { createQuestions, type Questions } from './coord/questions.js';
-import { decideAskLapse, type AskLapse } from './coord/questionPolicy.js';
+import { decideApprovalLapse, decideAskLapse, decideDeferredApprovalPush, type AskLapse } from './coord/questionPolicy.js';
 import { isAskState } from '../../shared/api.js';
 import { localIO } from './io.js';
 import { measureFleetReadiness, type FleetReadiness } from './readiness.js';
@@ -9452,22 +9452,22 @@ export class FleetWatcher {
     if (!coord) return;
     const now = Date.now();
     try {
+      // The decisions are `coord/questionPolicy.ts`'s (W3 Q3c, D-7027); the store calls and the map edits stay here.
+      // Each pass asks of a row as the state its read selected: this read's rows are `held` rows.
       const held = coord.approvalsInState('held');
-      if (held.ok) for (const row of held.rows) if (now >= row.notifyAt) coord.lapseApproval(row.id);
+      if (held.ok) for (const row of held.rows) if (decideApprovalLapse({ ...row, state: 'held' }, now) === 'lapse') coord.lapseApproval(row.id);
       for (const st of ['held', 'released'] as const) {
         const rows = coord.approvalsInState(st);
-        if (rows.ok) for (const row of rows.rows) if (now >= row.askAt + APPROVAL_HOOK_WAIT_S * 1000) coord.staleApproval(row.id);
+        // The hook's ceiling, asked of each row as the `released` row it is or lapses to: the ceiling reads `askAt` alone,
+        // so a `held` row still due its lapse (the read above was refused) is marked `stale` all the same.
+        if (rows.ok) for (const row of rows.rows) if (decideApprovalLapse({ ...row, state: 'released' }, now) === 'stale') coord.staleApproval(row.id);
       }
       for (const [childId, entry] of this.heldApprovals) {
         const read = coord.approvalsForChild(childId, ['held', 'allowed', 'denied']);
-        if (!read.ok) continue;
-        const mine = read.rows.filter((x) => entry.rowIds.includes(x.id));
-        if (mine.some((x) => x.state === 'held' && now < x.notifyAt)) continue;
-        const ruledRecently = mine.length === entry.rowIds.length && mine.length > 0
-          && mine.every((x) => x.state !== 'held' && x.ruledAt !== null && now < x.ruledAt + APPROVAL_RULED_GRACE_MS);
-        if (ruledRecently) continue;
+        const answer = decideDeferredApprovalPush(entry, read, now, this.dialogIds.get(childId) === entry.dialogId, APPROVAL_RULED_GRACE_MS);
+        if (answer === 'wait') continue;
         this.heldApprovals.delete(childId);
-        if (this.dialogIds.get(childId) === entry.dialogId) this.pushOne(entry.ev, this.activeProjects);
+        if (answer === 'push') this.pushOne(entry.ev, this.activeProjects);
       }
       this.runLaneSync('approvalPrune', () => {
         coord.pruneApprovalInputs(now);
