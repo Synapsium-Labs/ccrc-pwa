@@ -1,14 +1,18 @@
 // W5's redactor census, held two ways (D-7071; ARCH-67, Task C5d; plan 2026-10-27-consolidation-w5-ccd-helpers.md): a
 // FIXTURE tree, so each query counts what it claims and passes over what it must not (a heredoc's body, a generated
-// byte-equal copy), and the REAL tree at its base counts: `pythonRedactorTables()` 1 (C5h takes it to 0),
-// `logLineRedactors()` 2 (C5i takes it to 1), and `inlineUserinfoStrips()` 1, pinned now by name with its reason and may
-// only shrink: `ccd/ccrc-doctor-checks#_check_box-settings` strips one setting's DISPLAYED value (CCRC_RELEASE_BASE_URL)
-// before `_upd_redact` runs over the whole doctor line, so it is not a log-line redactor (plan, item 10).
+// byte-equal copy), and the REAL tree. Two REAL rows REPORT, as `accountMarkers.test.ts` (C5a) does
+// (`reportRow.ts#expectReportRow`), because their tasks move them: `pythonRedactorTables()` 1 at base (C5h takes it to 0)
+// and `logLineRedactors()` 2 (C5i takes it to 1). Each prints its sites and holds only that every name is a base site or
+// the plan's target and that the count never grows past the base; the exact may-only-shrink pin lands in that task's
+// ratchet commit. `inlineUserinfoStrips()` 1 is at target, so it is pinned now by name with its reason and may only
+// shrink: `ccd/ccrc-doctor-checks#_check_box-settings` strips one setting's DISPLAYED value (CCRC_RELEASE_BASE_URL) before
+// `_upd_redact` runs over the whole doctor line, so it is not a log-line redactor (plan, item 10).
 import { afterEach, describe, expect, it } from 'vitest';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { inlineUserinfoStrips, logLineRedactors, pythonRedactorTables, type RedactorSite } from './redactors.js';
+import { expectReportRow } from './reportRow.js';
 
 const SH = '#!/usr/bin/env bash\n';
 const show = (name: string, sites: readonly RedactorSite[]): void => {
@@ -62,10 +66,10 @@ describe('logLineRedactors: bash functions that redact a line (D-7071)', () => {
     expect(logLineRedactors(edited).map((s) => s.name)).toEqual(['ccd/ccd#fx_redact', 'ccd/sibling#fx_redact']);
   });
 
-  it('REAL: 2, `ccd/ccrc#_upd_redact` and `ccd/ccd-update-sync#redact` (C5i takes it to 1)', () => {
+  it('REAL: reported by name (2 at base, `ccd/ccrc#_upd_redact` and `ccd/ccd-update-sync#redact`; C5i takes it to 1)', () => {
     const sites = logLineRedactors();
     show('logLineRedactors', sites);
-    expect(sites.map((s) => s.name).sort()).toEqual(['ccd/ccd-update-sync#redact', 'ccd/ccrc#_upd_redact']);
+    expectReportRow('logLineRedactors', sites.map((s) => s.name), ['ccd/ccd-update-sync#redact', 'ccd/ccrc#_upd_redact'], ['ccd/ccrc#_upd_redact'], 1);
   });
 });
 
@@ -109,9 +113,9 @@ describe('pythonRedactorTables: python (pattern, suffix) tables fed to re.compil
     expect(pythonRedactorTables(t).map((s) => s.name)).toEqual(['ccd/ccd#_fx_py:RULES', 'ccd/tool.py:TABLE']);
   });
 
-  it('REAL: 1, `ccd/ccd#_docs_py:REDACT_RULES` (C5h takes it to 0)', () => {
+  it('REAL: reported by name (1 at base, `ccd/ccd#_docs_py:REDACT_RULES`; C5h takes it to 0)', () => {
     const sites = pythonRedactorTables();
     show('pythonRedactorTables', sites);
-    expect(sites.map((s) => s.name)).toEqual(['ccd/ccd#_docs_py:REDACT_RULES']);
+    expectReportRow('pythonRedactorTables', sites.map((s) => s.name), ['ccd/ccd#_docs_py:REDACT_RULES'], [], 0);
   });
 });

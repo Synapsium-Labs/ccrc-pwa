@@ -2,13 +2,15 @@
 // 2026-10-27-consolidation-w5-ccd-helpers.md): against a FIXTURE text or tree, so each query counts what it claims and
 // passes over what it must not, and against the REAL tree, so it finds the sites the plan measured on its base.
 //
-// THE REAL ROWS. Three are pinned now, because their facts are already at target (spec §5.1 rule 3; D-7074): every
-// tail-step helper has two or more callers; each one's callers among the five tail functions are exactly its measured
-// set, holding a reap-side and a reclaim-side function; and `_reg_purge` is called only from `_reg_retire`. The other REAL
-// rows hold the base counts by name (refusal calls 158, 155 on code lines and 3 on comment lines; helper definitions 2;
-// token minters 2; reap-lock wrappers 4), each row rewritten by the task that moves its count (C5e: definitions 2 -> 1;
-// C5f: minters 2 -> 1; C5g: wrappers 4 -> 1), in the commit that reaches it. "The two families agree on every call" holds
-// at every step of the series.
+// THE REAL ROWS. Pinned now are the facts already at target (spec §5.1 rule 3; D-7074): every tail-step helper has two
+// or more callers; each one's callers among the five tail functions are exactly its measured set, holding a reap-side and
+// a reclaim-side function; `_reg_purge` is called only from `_reg_retire`; and the four lock shapes that are not wrappers,
+// which C5g does not touch. The refusal calls hold their base counts (158: 155 on code lines and 3 on comment lines) and
+// "the two families agree on every call", which holds at every step of the series. The rows C5e, C5f and C5g move
+// REPORT, as `accountMarkers.test.ts` (C5a) does (`reportRow.ts#expectReportRow`): helper definitions 2 at base (C5e
+// takes them to 1), token minters 2 (C5f: 1), reap-lock wrappers 4 (C5g: 1). Each prints its sites and holds only that
+// every name is a base site or the plan's target, that the count never grows past the base, and that the query still
+// finds one; the exact may-only-shrink pin lands in that task's ratchet commit.
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -18,6 +20,7 @@ import {
   functionSpan, markedSpan, reapLockWrappers, refuseCalls, refuseHelperDefs, refuseWords, regPurgeCallLines, tailCallers,
   tailStepHelpers, TAIL_FNS, TAIL_REAP_SIDE, TAIL_STEP_HELPERS, tokenMinters,
 } from './ccdHelpers.js';
+import { expectReportRow } from './reportRow.js';
 
 const SH = '#!/usr/bin/env bash\n';
 
@@ -107,10 +110,10 @@ describe('refuseHelperDefs: the helpers\' definitions (D-7071)', () => {
     ]);
   });
 
-  it('REAL: 2 definitions, `_reap_refuse` and `_ws_collect_refuse` (C5e takes it to 1)', () => {
+  it('REAL: definitions, reported by name (2 at base, `_reap_refuse` and `_ws_collect_refuse`; C5e takes it to 1, `_ws_refuse`)', () => {
     const defs = refuseHelperDefs();
     console.log(`census refuseHelperDefs: ${defs.length}\n${defs.map((d) => `  ${d.name}  (line ${d.line})  ${d.body}`).join('\n')}`);
-    expect(defs.map((d) => d.name)).toEqual(['_reap_refuse', '_ws_collect_refuse']);
+    expectReportRow('refuseHelperDefs', defs.map((d) => d.name), ['_reap_refuse', '_ws_collect_refuse'], ['_ws_refuse'], 1);
   });
 });
 
@@ -137,10 +140,10 @@ describe('tokenMinters: the functions whose stdout is the hash (D-7071)', () => 
     expect(tokenMinters(MINTERS.replace(/^last_command.*\n/m, ''))).toEqual(['mint_named', 'mint_args']);
   });
 
-  it('REAL: 2 minters, `_ws_fingerprint` and `_ws_reclaim_fingerprint` (C5f takes it to 1); the digests are not counted', () => {
+  it('REAL: minters, reported by name (2 at base, `_ws_fingerprint` and `_ws_reclaim_fingerprint`; C5f takes it to 1); the digests are not counted', () => {
     const m = tokenMinters();
     console.log(`census tokenMinters: ${m.length}\n${m.map((n) => `  ${n}`).join('\n')}`);
-    expect(m).toEqual(['_ws_fingerprint', '_ws_reclaim_fingerprint']);
+    expectReportRow('tokenMinters', m, ['_ws_fingerprint', '_ws_reclaim_fingerprint'], ['_ws_reclaim_fingerprint'], 1);
   });
 });
 
@@ -172,10 +175,10 @@ describe('reapLockWrappers: the shared reap lock\'s wrappers (D-7071)', () => {
     expect(reapLockWrappers(LOCKS)).toEqual({ wrappers: ['cmd_wrap'], others: ['cmd_restoreish', 'probe_listing'] });
   });
 
-  it('REAL: 4 wrappers (C5g takes it to 1), and the four other shapes reported by name', () => {
+  it('REAL: wrappers, reported by name (4 at base; C5g takes it to 1, `_ws_reap_lock_run`), and the four other shapes pinned by name', () => {
     const r = reapLockWrappers();
     console.log(`census reapLockWrappers: ${r.wrappers.length}\n${r.wrappers.map((n) => `  ${n}`).join('\n')}\n  other shapes, not counted:\n${r.others.map((n) => `    ${n}`).join('\n')}`);
-    expect(r.wrappers).toEqual(['cmd_ws_reap', 'cmd_ws_reclaim', 'cmd_ws_expire', 'cmd_ws_collect']);
+    expectReportRow('reapLockWrappers', r.wrappers, ['cmd_ws_reap', 'cmd_ws_reclaim', 'cmd_ws_expire', 'cmd_ws_collect'], ['_ws_reap_lock_run'], 1);
     expect([...r.others].sort()).toEqual(['_ws_collect_audit_contained', '_ws_collect_registered', '_ws_expire_spawn_gate', 'cmd_ws_restore']);
   });
 });

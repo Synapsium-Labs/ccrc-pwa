@@ -1,13 +1,17 @@
 // W5's non-account single-writer census, held two ways (D-7071; ARCH-72, Task C5d; plan
 // 2026-10-27-consolidation-w5-ccd-helpers.md; spec K16): a FIXTURE tree, so each query counts what it claims and passes
-// over what it must not (a read, a comparison, a type, an initialiser; a writer's own staged temp), and the REAL tree at its
-// base counts: `ccdVerbsWriters()` 3 writers and 2 initialisers (C5j takes the writers to 1), and
-// `usageSidecarDeleters()` 2 (C5k pins them by name, may only shrink; OA-C13 ruled (b)).
+// over what it must not (a read, a comparison, a type, an initialiser; a writer's own staged temp), and the REAL tree.
+// `ccdVerbsWriters()`'s writers REPORT, as `accountMarkers.test.ts` (C5a) does (`reportRow.ts#expectReportRow`): 3 at
+// base, C5j takes them to 1 (`fleetstate.ts#recordCcdVerbs`) and lands the exact may-only-shrink pin in its ratchet
+// commit; the row holds only that every name is a base site or that target and that the count never grows past the base.
+// Its 2 initialisers, and `usageSidecarDeleters()` 2 (C5k pins them by name, may only shrink; OA-C13 ruled (b)), are
+// pinned by name now: nothing in the series moves them.
 import { afterEach, describe, expect, it } from 'vitest';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { ccdVerbsWriters, usageSidecarDeleters, type WriterSite } from './singleWriters.js';
+import { expectReportRow } from './reportRow.js';
 
 const show = (name: string, sites: readonly WriterSite[]): void => {
   console.log(`census ${name}: ${sites.length}\n${sites.map((s) => `  ${s.name}  (${s.file}:${s.line}  ${s.text.trim()})`).join('\n')}`);
@@ -47,11 +51,12 @@ describe('ccdVerbsWriters: assignments to FleetState.ccdVerbs under server/src (
     expect(r.initialisers.map((s) => `${s.name}:${s.line}`)).toEqual(['a.ts#C:3']);
   });
 
-  it('REAL: 3 writers, `remote/client.ts#onReady`, `refreshcaps.ts#makeRefreshCaps` and the local-mode closure at index.ts\'s module level; 2 initialisers reported apart', () => {
+  it('REAL: writers, reported by name (3 at base, `remote/client.ts#onReady`, `refreshcaps.ts#makeRefreshCaps` and the local-mode closure at index.ts\'s module level; C5j takes them to 1); the 2 initialisers pinned apart', () => {
     const r = ccdVerbsWriters();
     show('ccdVerbsWriters', r.writers);
     show('ccdVerbsWriters (initialisers, not writers)', r.initialisers);
-    expect(r.writers.map((s) => s.name).sort()).toEqual(['index.ts#(module)', 'refreshcaps.ts#makeRefreshCaps', 'remote/client.ts#onReady']);
+    expectReportRow('ccdVerbsWriters', r.writers.map((s) => s.name),
+      ['index.ts#(module)', 'refreshcaps.ts#makeRefreshCaps', 'remote/client.ts#onReady'], ['fleetstate.ts#recordCcdVerbs'], 1);
     expect(r.initialisers.map((s) => s.file).sort()).toEqual(['server/src/index.ts', 'server/src/remote/client.ts']);
   });
 });
