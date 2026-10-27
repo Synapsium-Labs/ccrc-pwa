@@ -24,7 +24,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { chromium, type Browser, type Page } from 'playwright-core';
 import { INSTRUMENT, PHOSPHOR, REFINED } from '@ccrc/ui';
 import { resolveChrome } from './harness';
-import { buildDist, openApp, removeDist, serveDist, type AppFixture, type AppView, type DistServer } from './app';
+import { buildDist, openApp, removeDist, seedStripExpanded, serveDist, type AppFixture, type AppView, type DistServer } from './app';
 import { fleetSession } from '../test/fleetFixture';
 import type { WorkflowView } from '../../shared/workflows';
 
@@ -139,9 +139,11 @@ afterAll(async () => {
   removeDist(dist);
 });
 
-/** Open the app and wait until the desk bar, all seventeen cards and its New session door are in place. */
+/** Open the app and wait until the desk bar, all seventeen cards and its New session door are in place. The strip folds by
+ *  default (S5b, D-6530), so this opener seeds the stored choice expanded: it is the all-lanes opener. */
 async function openDesk(view: AppView, fixture: AppFixture = FIXTURE): Promise<Awaited<ReturnType<typeof openApp>>> {
   const opened = await openApp(browser!, view, fixture);
+  await seedStripExpanded(opened.ctx);
   await opened.page.goto(server!.origin + '/');
   await opened.page.waitForFunction(() => document.querySelectorAll('header.shell-accounts .account-gauge').length === 17
     && document.querySelector('.ref-bar-new, .ins-new') !== null, undefined, { timeout: 30_000 });
@@ -218,7 +220,7 @@ describe("at 900, 1280 and 1920 the lanes row spans the header under the bar's l
 
           // All accounts: the go-accounts door, in the track after the last card (same line, to its right).
           const end = row.querySelector<HTMLElement>('.accounts-end');
-          const door = end?.querySelector<HTMLElement>('button');
+          const door = end?.querySelector<HTMLElement>('[data-command="go-accounts"]'); // not 'button': the fold's control may come first
           if (end === null || door === null || door === undefined) out.push('no All accounts cell');
           else {
             if (door.textContent?.trim() !== 'All accounts') out.push(`the end door reads "${door.textContent}"`);
@@ -310,6 +312,7 @@ describe('in Refined with a release waiting the update row sits below the banner
       const waiting: AppFixture = { ...FIXTURE, api: { ...FIXTURE.api, '/api/updates': HALTED, '/api/fleet/health': HOST_DOWN } };
       const { ctx, page, errors } = await openApp(browser!, view, waiting);
       try {
+        await seedStripExpanded(ctx); // the row's cards are counted below: every lane
         const answers = await answerViewThenFail(page);
         await page.goto(server!.origin + '/');
         await page.waitForFunction(() => document.querySelectorAll('header.shell-accounts .account-gauge').length === 17
@@ -366,6 +369,7 @@ describe('under coarse emulation every card and All accounts is at least 44 px t
       const opened = await openApp(browser!, view, view.width < 900 ? PHONE_FIXTURE : FIXTURE);
       const { ctx, page, errors } = opened;
       try {
+        await seedStripExpanded(ctx); // every card is measured, not just the folded line's
         await page.goto(server!.origin + '/');
         await page.waitForFunction((n) => document.querySelectorAll('.accounts-strip .account-gauge').length === n, want, { timeout: 30_000 });
         await page.waitForTimeout(300);
@@ -373,10 +377,13 @@ describe('under coarse emulation every card and All accounts is at least 44 px t
           if (!matchMedia('(pointer: coarse)').matches) return ['the coarse pointer was not emulated'];
           const out: string[] = [];
           const cards = [...document.querySelectorAll<HTMLElement>('.accounts-strip .account-gauge')];
-          const end = document.querySelector<HTMLElement>('.accounts-strip .accounts-end button');
+          const end = document.querySelector<HTMLElement>('.accounts-strip .accounts-end [data-command="go-accounts"]');
+          // The fold's control (the strip is expanded here, so it reads "Show fewer") is a finger's height too.
+          const control = document.querySelector<HTMLElement>('.accounts-strip .accounts-end [aria-expanded]');
           if (cards.length !== count) out.push(`${cards.length} cards, not ${count}`);
           if (end === null) out.push('no All accounts');
-          for (const el of [...cards, ...(end === null ? [] : [end])]) {
+          if (control === null) out.push('no fold control');
+          for (const el of [...cards, ...(end === null ? [] : [end]), ...(control === null ? [] : [control])]) {
             const r = el.getBoundingClientRect();
             if (r.height < 43.5) out.push(`${el.querySelector('.account-gauge-label')?.textContent ?? el.textContent?.trim() ?? '?'} is ${Math.round(r.width)} x ${r.height.toFixed(1)}`);
           }
