@@ -37,8 +37,8 @@ export interface FleetState {
    * Threaded through the FLEET store, not a new one, because this store is
    * the one thing connected APP-WIDE (app.tsx), independent of which route
    * is mounted — SessionHeader, SessionLine, SessionActionsSheet and friends
-   * all need a roster on `/s/:id` deep links that never mount FleetScreen's
-   * own accounts poller. Default `[]`: the same "unarrived roster" state
+   * all need a roster on `/s/:id` deep links that never mount the fleet
+   * screen or its lanes row. Default `[]`: the same "unarrived roster" state
    * `accountLabel`/`accountHue` already degrade gracefully for (raw wrapper
    * name, `--ink-tertiary`) — never a guessed account.
    */
