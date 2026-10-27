@@ -4130,7 +4130,7 @@ _check_pool-sync() {
         3) _dr_cadence_unloaded pool-sync ccd-pool-sync.timer "the not-yet-synced grace"; return 1 ;;
       esac
       if [ "$unit_age" -ge 0 ] && [ "$unit_age" -lt "$grace" ]; then
-        _dr_warn pool-sync "pool-sync-not-yet-synced: ccd-pool-sync.timer was installed ${unit_age}s ago and $f has not been written yet — the timer fires every 60s (OnUnitActiveSec) and converges on its own; expected right after an install, not a fault" \
+        _dr_warn pool-sync "pool-sync-not-yet-synced: ccd-pool-sync.timer was installed ${unit_age}s ago and $f has not been written yet — the timer fires every ${period}s (OnUnitActiveSec) and converges on its own; expected right after an install, not a fault" \
           "wait for the timer to fire (up to ~60s) and re-run ccrc doctor — still absent past that window is the real fault: read the oneshot's own log ($(_dr_log_hint ccd-pool-sync.service))"
         return 2
       fi
