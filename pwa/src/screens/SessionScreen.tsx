@@ -12,7 +12,7 @@ import { ATTENTION_DOT, Button, MailStrip, Skeleton, TaskStrip, WorkflowStrip, t
 import { staleFor } from '../session/taskStaleness';
 import { SwapSheet } from '../fleet/SwapSheet';
 import { ArchiveSheet, restoreSession } from '../fleet/ArchiveSheet';
-import { accountHue, accountLabel } from '../lib/accounts';
+import { accountHue, accountLabel, accountProvider } from '../lib/accounts';
 import { api, ApiError, failedTo, INTERRUPT_REFUSAL_TEXT, refusalText } from '../lib/api';
 import { backgroundTasksClause } from '../lib/refusalWords';
 import { useKeyboardInset } from '../lib/keyboard';
@@ -320,7 +320,7 @@ export function SessionScreen({
   // wire's own queued verdict. Pure, and ~95 lines of branch-by-branch
   // reasoning that had nothing to do with rendering.
   const routeInfo = live?.route ?? null;
-  const route = routeView(live, wrapper);
+  const route = routeView(live, wrapper, accountProvider(roster, wrapper));
   const { classIntended, effortIntended, classInert, effortInert,
           classUnreadable, effortUnreadable } = route;
   // Exclusively one source or the other, never both: with `route` present the

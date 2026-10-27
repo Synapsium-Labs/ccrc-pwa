@@ -11,9 +11,12 @@
 //
 // The local-write lane is NOT here. `useQueuedRoute` owns it, it is a hook with
 // its own timers, and the two are mutually exclusive by design — see
-// `queuedField` below.
+// `queuedField` below. The stated residual: with no routing record (`route` absent) the header's badge comes from
+// that local-write lane for the tap's own moment (up to 60 seconds, then its toast), while the inspector's line reads
+// only the record and says nothing is asked.
 import type { FleetSession, RouteField } from '../../../shared/api';
-import { effortIsKnown, modelReadbackFor } from '../lib/models';
+import type { ProviderId } from '../../../shared/providers';
+import { classReadbackMeasurable, effortIsKnown, modelReadbackFor } from '../lib/models';
 
 export interface RouteView {
   /** The value the registry says was ASKED FOR, or `null` for a field that was
@@ -29,15 +32,24 @@ export interface RouteView {
   readonly effortUnreadable: boolean;
   /** The field whose intended value the pane has not read back yet, measured
    *  from the WIRE. `null` when `route` itself is absent — the caller then owns
-   *  the answer from its local-write lane. */
+   *  the answer from its local-write lane. A class counts only where its readback is measurable on this lane
+   *  (`classReadbackMeasurable`). */
   readonly wireQueuedField: RouteField | null;
+  /** The effort intended has not been read back yet — `wireQueuedField`'s effort arm, kept apart so a caller can say
+   *  what is asked of each field (departure `route-view-splits-pending`). `false` when `route` is absent. */
+  readonly effortPending: boolean;
+  /** The class intended has not been read back yet, AND its readback is measurable on this lane
+   *  (`classReadbackMeasurable`, D-6334; departure `route-view-splits-pending`). `false` when `route` is absent. */
+  readonly classPending: boolean;
 }
 
 /**
  * @param live     the fleet row, or `null` before the first frame.
  * @param wrapper  whose option lists decide what a value can read back as.
+ * @param provider the lane's provider from the roster (`accountProvider`), or `null` when it is not known: a class
+ *                 is then not measurable, so none is ever pending (D-6334).
  */
-export function routeView(live: FleetSession | null, wrapper: string): RouteView {
+export function routeView(live: FleetSession | null, wrapper: string, provider: ProviderId | null): RouteView {
   const routeInfo = live?.route ?? null;
   const classIntended = routeInfo?.fields.class ?? null;
   const effortIntended = routeInfo?.fields.effort ?? null;
@@ -91,7 +103,7 @@ export function routeView(live: FleetSession | null, wrapper: string): RouteView
   //     UNMEASURABLE, not queued forever: no picker row highlights it either
   //     (`activeFor`/`modelOptions`'s exact-match `active` finds no row),
   //     so a permanent badge next to no active row is doubly wrong.
-  const wireQueuedField: RouteField | null = routeInfo === null ? null : (() => {
+  const effortPending = routeInfo !== null && (() => {
     if (effortIntended !== null && !effortInert && effortIntended !== 'auto' && effortIsKnown(wrapper, effortIntended)) {
       // Fix wave #2: `xhigh` and `ultracode` share the SAME wire value —
       // `live.effort: 'xhigh'` — with `ultracode` distinguished only by the
@@ -105,8 +117,16 @@ export function routeView(live: FleetSession | null, wrapper: string): RouteView
         : effortIntended === 'xhigh'
           ? live?.effort === 'xhigh' && live?.ultracode !== true
           : live?.effort === effortIntended;
-      if (!agrees) return 'effort';
+      if (!agrees) return true;
     }
+    return false;
+  })();
+  // The class branch of the same decision, kept apart from the effort one so each field can be asked about by name.
+  // It also requires the readback to be MEASURABLE on this lane (D-6334): the readback words are the Anthropic
+  // family names, or the dedicated lane's tier names, and on a lane whose model ids carry neither (a compatible
+  // endpoint, a second OpenAI lane on the Anthropic list) no live model string could ever agree, so "pending"
+  // would be a claim forever and nothing here could check it.
+  const classPending = routeInfo !== null && classReadbackMeasurable(wrapper, provider) && (() => {
     if (classIntended !== null && !classInert && classIntended !== 'default') {
       const readback = modelReadbackFor(wrapper, classIntended);
       const liveModel = (live?.model ?? '').toLowerCase();
@@ -125,13 +145,15 @@ export function routeView(live: FleetSession | null, wrapper: string): RouteView
         liveModel.includes(readback)
         || (degradedReadback !== null && liveModel.includes(degradedReadback))
       );
-      if (readback !== null && !agrees) return 'class';
+      if (readback !== null && !agrees) return true;
     }
-    return null;
+    return false;
   })();
+  const wireQueuedField: RouteField | null = routeInfo === null ? null
+    : effortPending ? 'effort' : classPending ? 'class' : null;
 
   return {
     classIntended, effortIntended, classInert, effortInert,
-    classUnreadable, effortUnreadable, wireQueuedField,
+    classUnreadable, effortUnreadable, wireQueuedField, effortPending, classPending,
   };
 }
