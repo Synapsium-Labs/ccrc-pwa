@@ -19,6 +19,11 @@ before the LATEST block carrying it, because a store row under a repeated text h
 Codex sends its own history in the order it recorded it and moves no item (upstream openai/codex @ 092d3ac:
 codex-rs/core/src/session/turn.rs:1641-1650, codex-rs/core/src/context_manager/history.rs:600-613, 963-977).
 
+THE TOOLS (D-7143). The tools offered upstream are the ones Claude Code holds at the end of the conversation: the
+request's `tools`, then the `tool_addition`/`tool_removal` blocks of each `role: "system"` entry of `messages`, folded
+in message order by Claude Code's own rule (by name: a removal deletes the name, an addition adds it). A by-value
+addition (a `tool_definition`) is made a tool exactly as a `tools` entry is (`_tool`).
+
 THE COUNT. `countable_bytes` is the UTF-8 length of the compact JSON of {developer, items, tools} as sent, with the
 developer text counted once (not again as `items[0]`), each `input_image`'s `image_url` emptied, and the dropped
 blocks (thinking and its signature, `cache_control`, the billing line) absent because they are never sent. D24's
@@ -47,6 +52,11 @@ BETA_HEADER = "anthropic-beta"
 DEFERRED_PLACEHOLDER = "DeferredToolPlaceholder"
 OUTPUT_SCHEMA_NAME = "ccrc_output_schema"
 TOOL_LOADED = "Tool loaded: "
+
+# The `requestField` name a by-reference `tool_addition` of a name that neither `tools` nor an earlier by-value
+# addition holds is counted under (D-7143): there is nothing to offer, so the request is unchanged. Unexplained on
+# purpose (known.KNOWN), so the doctor names the first one.
+UNKNOWN_REFERENCE = "tool_addition-block.unknown-reference"
 
 # The top-level keys inbound reads. Every other key is dropped and its name counted `requestField:<name>`: the
 # sampling fields (`max_tokens`, `temperature`, `top_p`, `top_k`, `stop_sequences`), `metadata`, `service_tier`,
@@ -175,8 +185,9 @@ def _count_dropped(content: object, names: NameSink) -> None:
     unchanged, since `_texts` alone builds the entry's item (D-7094).
 
     Claude Code 2.1.310 sends `tool_addition` and `tool_removal` blocks here under its two tool-change betas
-    (D-7093). These names are NOT in `known.KNOWN`, on purpose (D-7094): they stay unexplained, so the doctor's drift
-    WARN names one the day it first arrives, until the bridge honours the blocks or the operator rules them out."""
+    (D-7093). The bridge honours them since D-7143 (`_tool_changes` reads them, `_fold_tool_changes` folds them into
+    the tools), so their names are explained in `known.KNOWN`; `unrecognised` and any other block or tool type stay
+    unexplained, so the doctor's drift WARN names one the day it first arrives."""
     if not isinstance(content, list):
         return
     for block in content:
@@ -189,6 +200,64 @@ def _count_dropped(content: object, names: NameSink) -> None:
             tool_kind = tool.get("type") if isinstance(tool, dict) else None
             names.name("requestField", "tool_addition-block." + (tool_kind if isinstance(tool_kind, str)
                                                                   else errors.UNRECOGNISED_CODE))
+
+
+class _ToolChange(NamedTuple):
+    """One tool-change block of a system entry (D-7143): `kind` is `add` or `remove`; `name` is the tool's name for a
+    reference (None for a by-value addition, whose name is its definition's); `definition` is a by-value addition's
+    tools-style definition, else None."""
+    kind: str
+    name: Optional[str]
+    definition: object
+    by_value: bool
+
+
+_TOOL_CHANGE_BLOCKS = {"tool_addition": "add", "tool_removal": "remove"}
+
+
+def _reference_name(tool: dict) -> Optional[str]:
+    """A `tool_reference`'s tool name: `name`, or `tool_name` in its place (Claude Code's name normaliser reads
+    both)."""
+    for key in ("name", "tool_name"):
+        value = tool.get(key)
+        if isinstance(value, str) and value:
+            return value
+    return None
+
+
+def _tool_changes(content: object) -> List[_ToolChange]:
+    """The `tool_addition` and `tool_removal` blocks of a system entry's content, in order (D-7143). Claude Code 2.1.310
+    sends an addition as `{tool: {type: "tool_reference", name}}` or `{tool: {type: "tool_definition", definition}}`
+    and a removal as `{tool: {type: "tool_reference", name}}`.
+
+    THE MALFORMED-BLOCK RULE. A tool-change block the bridge cannot read is refused (`_malformed`, a 400), as a
+    malformed `tools` entry is, EXCEPT where `_count_dropped` already counts it `unrecognised`: a `tool_addition` whose
+    `tool` is not an object or has no string type adds nothing and is passed over, its unexplained count left for the
+    doctor to name. (A block that is not an object or has no type is not a tool-change block: counted, passed over.)
+    A removal is never passed over, since a removal skipped would leave a removed tool offered."""
+    if not isinstance(content, list):
+        return []
+    out = []  # type: List[_ToolChange]
+    for block in content:
+        kind = _TOOL_CHANGE_BLOCKS.get(block.get("type")) if isinstance(block, dict) else None
+        if kind is None:
+            continue
+        tool = block.get("tool")
+        tool_kind = tool.get("type") if isinstance(tool, dict) else None
+        if kind == "add" and not isinstance(tool_kind, str):
+            continue
+        if tool_kind == "tool_reference":
+            name = _reference_name(tool)
+            if name is None:
+                raise _malformed("a tool_reference block has no tool name")
+            out.append(_ToolChange(kind, name, None, False))
+        elif kind == "add" and tool_kind == "tool_definition":
+            out.append(_ToolChange(kind, None, tool.get("definition"), True))
+        elif kind == "add":
+            raise _malformed("a tool_addition block has a tool that is not a tool_reference or a tool_definition")
+        else:
+            raise _malformed("a tool_removal block has a tool that is not a tool_reference")
+    return out
 
 
 def _drop_billing(text: str) -> str:
@@ -276,6 +345,7 @@ class _Translation:
         self.items = []  # type: List[dict]
         self.last_at = {}  # type: Dict[str, int]  (store key -> the index of the latest block carrying it)
         self.turns = {}  # type: Dict[str, Optional[dict]]
+        self.tool_changes = []  # type: List[_ToolChange]  (every system entry's, in message order; D-7143)
 
     def _stored(self, key: str) -> Optional[dict]:
         """The stored turn under `key`, asked of the store once per request."""
@@ -332,6 +402,7 @@ class _Translation:
             if role == "system":
                 texts = _texts(m.get("content"), "a system entry's content")
                 _count_dropped(m.get("content"), self.names)
+                self.tool_changes.extend(_tool_changes(m.get("content")))
                 if texts:
                     self.items.append({"type": "message", "role": "developer",
                                        "content": [{"type": "input_text", "text": t} for t in texts]})
@@ -406,6 +477,35 @@ class _Translation:
 
 
 # ── the request's other fields ───────────────────────────────────────────────────────────────────────────────────
+def _tool(tool: object, names: NameSink) -> Optional[Tuple[dict, str]]:
+    """One tools-style tool (a `tools` entry, or a by-value `tool_addition`'s definition, D-7143) as (the Responses
+    function, its full name), or None for the DeferredToolPlaceholder; a server tool or a malformed one is refused."""
+    if not isinstance(tool, dict):
+        raise _malformed("a tool is not an object")
+    kind = tool.get("type")
+    if kind not in _CUSTOM_TOOL_TYPES:
+        raise _unsupported("server tool", kind, names)
+    name = tool.get("name")
+    if not isinstance(name, str) or not name:
+        raise _malformed("a tool has no name")
+    if "defer_loading" in tool:
+        names.name("requestField", "defer_loading")
+    if name == DEFERRED_PLACEHOLDER:
+        return None
+    schema = tool.get("input_schema")
+    if not isinstance(schema, dict):
+        schema = {"type": "object", "properties": {}}
+    description = tool.get("description")
+    return ({"type": "function", "name": cut_name(name), "description": description if isinstance(description, str)
+             else "", "parameters": schema, "strict": False}, name)
+
+
+def _required(tools: List[dict]) -> FrozenSet[str]:
+    """The names of the tools whose schema has a non-empty `required` list."""
+    return frozenset(t["name"] for t in tools if isinstance(t["parameters"].get("required"), list)
+                     and t["parameters"]["required"])
+
+
 def _tools(tools: object, names: NameSink) -> Tuple[List[dict], Dict[str, str], FrozenSet[str]]:
     if tools is None:
         return [], {}, frozenset()
@@ -413,32 +513,50 @@ def _tools(tools: object, names: NameSink) -> Tuple[List[dict], Dict[str, str], 
         raise _malformed("tools is not a list")
     out = []  # type: List[dict]
     name_map = {}  # type: Dict[str, str]
-    required = set()
     for tool in tools:
-        if not isinstance(tool, dict):
-            raise _malformed("a tool is not an object")
-        kind = tool.get("type")
-        if kind not in _CUSTOM_TOOL_TYPES:
-            raise _unsupported("server tool", kind, names)
-        name = tool.get("name")
-        if not isinstance(name, str) or not name:
-            raise _malformed("a tool has no name")
-        if "defer_loading" in tool:
-            names.name("requestField", "defer_loading")
-        if name == DEFERRED_PLACEHOLDER:
+        made = _tool(tool, names)
+        if made is None:
             continue
-        schema = tool.get("input_schema")
-        if not isinstance(schema, dict):
-            schema = {"type": "object", "properties": {}}
-        description = tool.get("description")
-        cut = cut_name(name)
-        name_map[cut] = name
-        out.append({"type": "function", "name": cut, "description": description if isinstance(description, str)
-                    else "", "parameters": schema, "strict": False})
-        req = schema.get("required")
-        if isinstance(req, list) and req:
-            required.add(cut)
-    return out, name_map, frozenset(required)
+        name_map[made[0]["name"]] = made[1]
+        out.append(made[0])
+    return out, name_map, _required(out)
+
+
+def _fold_tool_changes(tools: List[dict], name_map: Dict[str, str], changes: List[_ToolChange],
+                       names: NameSink) -> Tuple[List[dict], FrozenSet[str]]:
+    """The tools Claude Code holds at the end of the conversation (D-7143): `tools`, then each change folded in order,
+    by (cut) name, as Claude Code folds them. A by-value addition is made a tool by `_tool`, replacing a tool of its
+    name in place or else appended; a by-reference addition of a name not offered re-offers the latest definition of
+    that name (from `tools` or an earlier by-value addition), or, with none, is counted UNKNOWN_REFERENCE; a removal
+    drops the name. `name_map` only gains names, so a call in the history to a removed tool still maps back. With no
+    change, the list and the required set are exactly what `_tools` gave."""
+    if not changes:
+        return tools, _required(tools)
+    offered = list(tools)
+    latest = {t["name"]: t for t in tools}  # type: Dict[str, dict]
+    for change in changes:
+        if change.by_value:
+            made = _tool(change.definition, names)
+            if made is None:
+                continue
+            tool, name = made
+            name_map[tool["name"]] = name
+            latest[tool["name"]] = tool
+            at = next((i for i, t in enumerate(offered) if t["name"] == tool["name"]), None)
+            if at is None:
+                offered.append(tool)
+            else:
+                offered[at] = tool
+            continue
+        cut = cut_name(change.name)
+        if change.kind == "remove":
+            offered = [t for t in offered if t["name"] != cut]
+        elif not any(t["name"] == cut for t in offered):
+            if cut in latest:
+                offered.append(latest[cut])
+            else:
+                names.name("requestField", UNKNOWN_REFERENCE)
+    return offered, _required(offered)
 
 
 def _tool_choice(choice: object, names: NameSink) -> Tuple[object, bool]:
@@ -563,6 +681,7 @@ def from_anthropic(body: dict, headers: Mapping[str, str], *, names: NameSink, o
 
     walk = _Translation(names, lookup, session_id)
     walk.walk(messages)
+    tools, tools_required = _fold_tool_changes(tools, name_map, walk.tool_changes, names)
     items = ([_developer_item(developer)] if developer is not None else []) + walk.items
 
     counted = json.dumps({"developer": developer, "items": _counted(walk.items), "tools": tools},
