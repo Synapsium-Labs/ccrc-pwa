@@ -26,9 +26,12 @@ explained here or fixed. The sources:
 
 NOT HERE, ON PURPOSE: `clear_tool_uses_20250919` (D-6417: the doctor names that edit the first day it arrives); a
 reasoning item with no encrypted content (`reducer.UNREADABLE_REASONING`: a reply whose reasoning cannot be replayed
-is drift); every model substitution (each is a Claude Code fallback worth seeing); the edge and cache headers of the
-backend's front end, which nothing in this repository or in Codex reads and nobody has measured yet (the runbook's
-first live step records the response header names).
+is drift); every model substitution (each is a Claude Code fallback worth seeing).
+
+MEASURED SINCE: the response headers of the backend's front end. The runbook's first live step (step 2, 2026-10-27)
+printed every answer's header names, and each name every answer carried is now in `responseHeader` below, with what
+it is (D-7083): the edge and security headers, the cookie, `x-oai-request-id` (D-7084) and a 2xx stream's absent
+content type. A name the front end adds later still WARNs once, as any new name does.
 """
 
 from typing import Dict, FrozenSet, Tuple
@@ -68,6 +71,27 @@ KNOWN = {
         "content-type", "content-length", "transfer-encoding", "connection", "date",
         # the media type, counted as a name (the plan's Global Constraints): a stream, and an error body
         "content-type:text/event-stream", "content-type:application/json",
+        # Every name below was measured on every answer of runbook step 2 (2026-10-27; D-7083). Only the name is
+        # counted: stats.Stats.header_names keeps no value, and stream.AnthropicStream writes its own head.
+        # The upstream request id: the backend's one, sent with no x-request-id and no request-id. errors.request_id_of
+        # reads it third, as Codex does (openai/codex codex-rs/codex-api/src/api_bridge.rs at rust-v0.164.0,
+        # extract_request_id; D-7084).
+        "x-oai-request-id",
+        # A backend 2xx stream carries no content type (server._media_type counts it so); it is reduced as a stream.
+        "content-type:absent",
+        # The CDN's edge: the server name, the ray id and the cache status. Codex reads cf-ray only, as a request
+        # tracking id when no request id came (openai/codex codex-rs/codex-api/src/api_bridge.rs at rust-v0.164.0,
+        # extract_request_tracking_id); nothing here reads one.
+        "server", "cf-ray", "cf-cache-status",
+        # The load-balancer and CDN cookies. Codex keeps only infrastructure cookies in its jar (openai/codex
+        # codex-rs/http-client/src/chatgpt_cloudflare_cookies.rs at rust-v0.164.0); the bridge keeps none and sends
+        # no Cookie (backend.build_headers).
+        "set-cookie",
+        # The browser policy and reporting headers of the origin's front end, read by nothing here or in Codex.
+        "nel", "report-to", "strict-transport-security", "x-content-type-options", "cross-origin-opener-policy",
+        "referrer-policy",
+        # The origin proxy's own marker, read by nothing here or in Codex.
+        "x-openai-proxy-wasm",
     }),
     "unsupportedField": frozenset({"document", "output_config.format"}),
     "modelSubstitution": frozenset(),

@@ -25,7 +25,9 @@ keeps its length, its whitespace and its punctuation, and the live deltas of a m
 image's revised prompt or a tool schema's enum, never reaches the public corpus). A function call's `arguments` that
 parse as JSON keep their keys, numbers and shape, and only their strings are rewritten. Object KEYS are kept
 everywhere (an argument's or a schema property's name included), so a recording still needs a human read before it
-enters the corpus. A `data:` line that is not JSON becomes a fixed malformed line. Then the output is checked against
+enters the corpus, with ONE exception: the backend's `usage.attribution.items` is keyed by item id (runbook step 2,
+2026-10-27; D-7086), so each key there becomes the `<prefix>_fx<n>` the same id gets as a value, and an output item's
+key still names that item. A `data:` line that is not JSON becomes a fixed malformed line. Then the output is checked against
 SCRUB_PATTERNS (an unscrubbed id, a JWT, an encrypted content that is not `ENC-<n>`, a key, a line that is not an
 `event:` or `data:` line), which a structural key's value can still match: any match refuses (rc 1) and writes
 nothing. Its expectation in `expect.json` is written by hand in the reviewed change that adds it (make_streams.py's
@@ -205,6 +207,8 @@ def split_head(data: bytes) -> Tuple[Optional[int], bytes]:
 
 # ── the scrubber ─────────────────────────────────────────────────────────────────────────────────────────────────
 ID_KEYS = frozenset({"id", "item_id", "call_id", "response_id", "previous_response_id", "tool_call_id"})
+# The one object whose KEYS are ids: `items` inside a response's `usage.attribution` (the module docstring).
+ID_KEYED = ("items", "attribution")  # (its key, the key of the object it sits in)
 ENCRYPTED_KEY = "encrypted_content"
 ARGUMENTS_KEY = "arguments"
 NAME_KEY = "name"  # a tool's or a function call's name: `tool_fx<n>`, one per distinct name
@@ -289,6 +293,8 @@ class _Scrubber:
         if isinstance(value, dict):
             # an `error` event's own fields are its error object's (`errors._error_object`)
             here = key if key is not None else ("error" if value.get("type") == "error" else None)
+            if (key, within) == ID_KEYED:  # keyed by item id: each key through the map the id values use
+                return {self.id_of(k): self.value(k, v, here) for k, v in value.items()}
             return {k: self.value(k, v, here) for k, v in value.items()}
         if isinstance(value, list):
             return [self.value(key, v, within) for v in value]
