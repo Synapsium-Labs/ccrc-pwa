@@ -16,6 +16,7 @@ import { diskBannerShows } from '../fleet/diskWords';
 import { PressureBanner } from '../fleet/PressureBanner';
 import { pressureBannerShows } from '../fleet/pressureWords';
 import { UpdateIndicator } from '../fleet/UpdateIndicator';
+import { AUTOMATIC_CLASS } from '../fleet/classWords';
 import { UPDATES_STALE_TEXT } from '../fleet/useUpdatesView';
 import { SubstrateBanner, substrateBannerShows } from '../fleet/SubstrateBanner';
 import { PasskeyNotice, passkeyNoticeShows, usePasskeyStatus } from '../fleet/PasskeyNotice';
@@ -305,7 +306,7 @@ export function FleetScreen({
           value={projects.classFilter}
           onChange={(e) => projects.chooseClass(e.target.value as '' | 'default' | ModelClass)}
         >
-          <option value="" title="The routing matrix picks the class">Automatic</option>
+          <option value="" title={AUTOMATIC_CLASS.title}>{AUTOMATIC_CLASS.word}</option>
           <option value="default">Default</option>
           {[...CLASSES].reverse().map((c) => (
             <option key={c} value={c}>{c.charAt(0).toUpperCase() + c.slice(1)}</option>

@@ -266,7 +266,7 @@ describe('the ask surfaces speak plainly (D-6325)', () => {
 // The bucket chips' files are read too (BucketBar.tsx, statusGroups.ts, markSeen.ts), and Instrument's FleetTable.tsx, whose group heads speak the same vocabulary.
 const SRC = path.join(import.meta.dirname, '..', 'src');
 const FLEET_LIST = [
-  ...['ProjectCardHead.tsx', 'HotFilesStrip.tsx', 'NewSessionSheet.tsx', 'BucketBar.tsx', 'statusGroups.ts', 'markSeen.ts'].map((f) => path.join(SRC, 'fleet', f)),
+  ...['ProjectCardHead.tsx', 'HotFilesStrip.tsx', 'NewSessionSheet.tsx', 'BucketBar.tsx', 'statusGroups.ts', 'markSeen.ts', 'classWords.ts'].map((f) => path.join(SRC, 'fleet', f)),
   path.join(SRC, 'screens', 'FleetScreen.tsx'),
   path.join(SRC, 'skins', 'instrument', 'FleetTable.tsx'),
 ];

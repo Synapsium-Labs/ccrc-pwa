@@ -42,6 +42,7 @@ import { NAME_FIELD_CLASS, WorkspaceNameField } from './WorkspaceNameField';
 import { useNamePreview } from './useNamePreview';
 import { addRefusalText, classifyAddError } from './workspaceAddWords';
 import { LINEAR_SETTINGS_PATH, confirmLabel, nameDoorReason } from './workspaceNameWords';
+import { AUTOMATIC_CLASS } from './classWords';
 import './fleet.css';
 
 /** The new-session door's own sentences for the name field (named workspaces S8, design §2.1). */
@@ -503,7 +504,7 @@ export function NewSessionSheet({
               row an ordinary start has always landed on. */}
           <div className="route-row">
             <RouteField label="Class" value={routeClass} onChange={setRouteClass}>
-              <option value="" title="The routing matrix picks the class">Automatic</option>
+              <option value="" title={AUTOMATIC_CLASS.title}>{AUTOMATIC_CLASS.word}</option>
               <option value="default">Default</option>
               {[...CLASSES].reverse().map((c) => (
                 <option key={c} value={c}>{classDisplayLabel(wrapper, c)}</option>
