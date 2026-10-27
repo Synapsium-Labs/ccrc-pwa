@@ -5,7 +5,7 @@ import { readFileSync, existsSync } from 'node:fs';
 import path from 'node:path';
 import { parsedFile, sourceOfSymbol } from '../scan/symbols.js';
 import { identifierReferences, parseSource, stringExpressions } from '../scan/parse.js';
-import { sleepVerdictLadders } from '../census-w4/sleep.js';
+import { hibernateActSites, sleepVerdictLadders } from '../census-w4/sleep.js';
 import { SLEEP_POLICY_NAMES } from '../../src/sleep.js';
 import { SWITCHES } from '../../../shared/switches.js';
 import { ALL, ALL_MJS, BASH, HISTORY_DIR, HISTORY_MJS, ccrcRoot, codeLines, here, holdersOf, mjsUnder, prose, rel, stallCode, stallCodeText } from './helpers.js';
@@ -664,5 +664,29 @@ describe('the sleep lanes share one ladder, which never asks which policy it run
     const reached = ladderSources(parsedFile(HOME).text);
     expect(reached[0], 'CONTROL: the walk starts at the ladder').toBe(sourceOfSymbol(HOME, 'decideSleep'));
     expect(reached.flatMap(nameReads)).toEqual([]);
+  });
+});
+
+// D-7042 (ARCH-43, consolidation plan 2026-10-26 Task C4d; spec K1). APPENDED. The two sleep lanes share ONE executor,
+// `sleepPass` and `sleepAct` in `server/src/sleepLane.ts`, over the per-policy `SLEEP_LANES` rows. `hibernateActSites`
+// (`census-w4/sleep.ts`: each top-level server/src function that hands `runCcd` a `CCD_ARGV.hibernate(` argv, inline
+// or bound first) read 2 at C4d's base (`stopDoneSweep.ts#stopDonePass` inline, `hibernateSweep.ts#actOn` bound) and is
+// pinned at 1 here; it may only shrink. Every verb question is `ccdCan`'s: no capability site carries the retired
+// `w4-held` tag, and the executor asks no verb through `verbSupported(`.
+describe('the sleep lanes share one executor (D-7042; ARCH-43)', () => {
+  const HOME = 'server/src/sleepLane.ts';
+
+  it('the ccd hibernate act sites are one, sleepAct in sleepLane.ts (2 -> 1 at C4d; may only shrink)', () => {
+    expect(hibernateActSites().map((s) => s.symbol)).toEqual([`${HOME}#sleepAct`]);
+  });
+
+  it('no capability site is held for W4, and sleepLane.ts asks no verb through verbSupported(', async () => {
+    const { capabilityChoiceSites, W4_HELD_FILES } = await import('../consolidationCensus.js');
+    const sites = await capabilityChoiceSites();
+    expect(W4_HELD_FILES).toEqual([]);
+    expect(sites.map((x): string => x.tag)).not.toContain('w4-held');
+    const mine = sites.filter((x) => x.file === HOME);
+    expect(mine.filter((x) => x.tag === 'verb' && x.form !== 'ccdCan').map((x) => `${x.line} ${x.text.trim()}`)).toEqual([]);
+    expect(mine.some((x) => x.form === 'ccdCan'), 'CONTROL: the census reads the executor').toBe(true);
   });
 });
