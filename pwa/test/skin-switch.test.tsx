@@ -461,4 +461,27 @@ describe("the session screen mounts the skin's chrome", () => {
     expect(document.querySelector('.chat-title-wrap')).not.toBeNull();
     expect(screen.getByRole('textbox', { name: 'Message' })).toBe(box);
   });
+
+  // Desktop polish T3c (D-6333): the header names the session in both skins, and the project is the crumb before it.
+  it('the session is the title and the project its crumb, in both skins', () => {
+    stubPointer(false);
+    openSession(WS);
+    const read = (): { title: string | undefined; crumb: string | undefined; order: number } => {
+      const head = document.querySelector('.chat-head')!;
+      const crumb = head.querySelector('.chat-crumb');
+      const title = head.querySelector('.chat-title-text');
+      return {
+        title: title?.textContent ?? undefined, crumb: crumb?.textContent ?? undefined,
+        order: crumb && title ? crumb.compareDocumentPosition(title) : 0,
+      };
+    };
+    for (const skin of ['Refined', 'Instrument']) {
+      const got = read();
+      expect(got.title, skin).toBe('quiet-basin');
+      expect(got.crumb, skin).toBe('project-a');
+      // The crumb comes before the title in the document.
+      expect(got.order & Node.DOCUMENT_POSITION_FOLLOWING, skin).toBeTruthy();
+      toInstrument();
+    }
+  });
 });
