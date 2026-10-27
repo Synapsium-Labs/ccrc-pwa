@@ -1210,9 +1210,9 @@ and the answer was bad, 2 a usage error — `update` adds 3 and 4, and `rollback
 | `account <subcommand>` | connect, check and remove account lanes: `add`, `candidates`, `check`, `credential`, `declare`, `disable`, `enable`, `remove`, `roster` |
 | `memory [--apply]` | census each project's memory, then converge it into one store ("One memory store per project", below) |
 | `models <id> <subcommand>`, `models refresh <id>\|--all`, `models litellm <id>` | a lane's model-class registry, and the provider catalogue it is classified against |
-| `codex start\|stop\|status\|login <id>` | a Codex lane's LiteLLM gateway and shim; refused on a server-role box |
+| `codex start\|stop\|status\|login <id>`, `codex switch <id> litellm\|direct` | a Codex lane's tiers: its LiteLLM gateway and shim in `litellm` mode, its bridge alone in `direct` mode; `switch` moves the lane between the two ("A ChatGPT/Codex lane", below); refused on a server-role box |
 | `token sync\|probe` | the box token's fleet side: `sync --from agent` is ccrc-agent's token-sync op (a one-time code on stdin, trade for the new value, write `~/.cc-secrets/ccrc-mail.token`, prove it with one call); `probe --file <path> [--url <base>]` presents a file's value once and prints only the HTTP status and accepted, refused or unmeasured |
-| `restamp <file>` | re-stamp a file carrying a `ccrc:generated` marker after its body changed; for `ccd/session-hook.sh`, regenerate its generated helpers region from `ccd/ccd` |
+| `restamp <file>` | re-stamp a file carrying a `ccrc:generated` marker after its body changed; for `ccd/session-hook.sh`, regenerate its generated helpers region from `ccd/ccd`; `ccd/ccd` itself is refused (its stamp is written at install time) |
 
 **The maintenance verbs.** `ccrc backup` runs update's backup step standalone (same set, same directory shape, pruned
 to the newest `CCRC_BACKUP_KEEP` (0 to 9999) timestamped dirs, default 10 — never the backup it just made, a dir named
@@ -1610,6 +1610,8 @@ roster `parseRoster` throws on is refused by the CLI too.
 | `exec.provider` | `isProviderId`, defaulted to `anthropic` on `generated` | `PROVIDER_IDS` | “an unknown exec.provider on a generated account” |
 | `exec.baseUrl` | `BASE_URL_OK`, and `base-url-required` where the provider ships no default | imported — `BASE_URL_OK` from `./base-url.mjs`, the one rule this file does not re-spell | “an unparseable exec.baseUrl” |
 | `exec.models` | `MODEL_ID_RE` over four required aliases, plus `selectable` containment | `MODEL_ID_RE` | “exec.models missing the subagent alias” |
+| `exec.bridge` | `CODEX_BRIDGE_MODES` on a `codex` lane, absent reading its first word, `litellm`; rendered into `lane.json` | `CODEX_BRIDGE_MODES` | “a codex lane with an unknown exec.bridge” |
+| `exec.upstream` | `CODEX_UPSTREAMS` on a `codex` lane, absent reading its first word, `backend`; rendered into `lane.json` | `CODEX_UPSTREAMS` | “a codex lane with an unknown exec.upstream” |
 
 Each row is resolved against the three files it names by
 `server/test/readme-roster-mirror.test.ts`, so a gate deleted from either
@@ -1943,12 +1945,33 @@ models. A windows file that cannot be read counts as no measured windows: refres
 carry on under the default rule (a measured key left in `settings.json` shows as drift until the next materialise
 replaces or removes it), `show` names the reason, and both verbs refuse until the file is fixed or deleted.
 `show` reports each measured window, the effective window, the rule that chose it and the models still unmeasured;
-`rm` reaps the file with the rest. A running session keeps its window until it restarts or swaps.
+`rm` reaps the file with the rest. A new window reaches sessions started after it; whether a session already running
+re-reads `settings.json` has not been measured.
 A rollback to a ccrc from before measured windows is safe on a lane whose catalogue is fresh: its next successful
 refresh materialises and writes the default. With a stale or absent catalogue a measured key stays until the next
 successful probe, so before rolling back across this change on a lane with windows set, run
 `ccrc models <id> clear-window <model>` for each measured model: each one re-materialises, and clearing the last
 puts the lane on the default rule.
+
+**A refusal lowers the window (`direct` Codex lanes).** On a lane in `direct` mode ("A `direct` lane: the bridge",
+below) the bridge records each context refusal in its stats file: the model, the prompt size it estimated, and when.
+The hourly `ccrc models refresh`, in a pass of its own before any probe (so a failed probe never skips it) and under
+the lane-files lock, lowers that model's measured window to 90% of the refused size, rounded down to 1,000, and
+re-materialises, so the new window reaches the lane's `settings.json` in the same run. It never raises a window: a
+model with no entry gets one capped at the lane's current window, and an entry is lowered only by a refusal later than
+its `setAt` and only to a smaller number, so a `set-window` made after a refusal is never undone. Because the refused
+size is an estimate, the new window is never below the largest prompt the model accepted on the lane, rounded up to
+1,000; a refusal that would set less than 1,000 is skipped. Only a refusal on the lane's own route (`exec.upstream`)
+counts, and only for a model a class names or the catalogue lists. Each refusal is read once: the windows file records
+it under `refusalsApplied`, whether it lowered the window or was skipped (a refusal entry the build cannot read, one
+that is not an object or has no positive integer `tokens`, no ISO `at`, or a key whose model part is not a model id, is
+skipped `refusal-invalid` and not recorded, so each pass reads it again). The entry it writes carries `source:
+"refusal"` and `refusedTokensEstimate`, the refused size; `show --json` lists its tokens and `setAt`, and those two
+fields when the entry carries them, and the
+refresh's JSON row for the lane carries `lowered` (each `model`, `from`, `to`, `refused`), or `lowerFailed` with the
+reason when the pass could not run. To undo a lowering, `ccrc models <id> clear-window <model>`: the same refusal
+never lowers it again, because `refusalsApplied` survives the clear, though a later refusal can. A lowered window
+reaches sessions started after it, like any new window (above).
 
 **Holds, revert and the advance file.** Each lane may carry `~/.ccrc/models/<id>.advance.json`, a sibling of the
 registry and never a key in it, so an older ccrc keeps reading the registry after a rollback. Per class it records
@@ -2028,6 +2051,16 @@ carries each class's recent moves, and `ccrc codex status <id>` shows each tier'
 unclassified, with no recent move, is the sign of a lane that keeps waiting. To keep a class where it is whatever
 arrives, hold it.
 
+**On a `direct` lane** the step asks the bridge instead of the two tiers: it moves a class only when the lane's bridge
+answers as the lane's own (its `direct`-shaped `/ccgpt/lane` answer and the pid its command line proves), and runs no
+LiteLLM check. The canary goes through the bridge on the same port and accepts only that answer naming this lane;
+anything else, a `litellm`-shaped answer included, is `unavailable` with no keyed request. A move is the registry and
+the lane's `settings.json` env block re-rendered, with no tier restart: the bridge reads no class and checks each
+request's model against the lane catalogue. The refresh still renders the lane's `litellm.yaml`, so a switch back to
+`litellm` finds it current, and on a `direct` lane that render never stops, restarts or starts a tier. The catalogue
+probe still runs on the LiteLLM runtime's interpreter, so a `direct` lane's auto-advance needs the runtime `ccrc
+install` builds, though the bridge itself does not.
+
 **Refusals, waits and a cut-short move.** A canary that the lane answers with an error (except the shim's 502 below), or
 with a 200 that ends, or passes its read cap, without text, is refused: the class stays where it is, the failure is
 recorded in the advance file, and one push says so, not one a run; the refresh unit stays green and the next run
@@ -2075,7 +2108,9 @@ after the move; this build has no such check.
 
 ### A ChatGPT/Codex lane: `exec.kind: "codex"` and `ccrc codex`
 
-**ccrc can run a ChatGPT/Codex subscription as a lane, end to end.** Claude Code talks to a loopback **shim**
+**ccrc can run a ChatGPT/Codex subscription as a lane, end to end, in one of two modes**, the roster's `exec.bridge`:
+`litellm`, the default and the mode a row without the key reads, and `direct` ("A `direct` lane: the bridge", below).
+In `litellm` mode Claude Code talks to a loopback **shim**
 (`ccgpt-proxy.py`) on the lane's `proxyPort`, which forwards to the lane's own **LiteLLM gateway** on
 `litellmPort`, which speaks to the Codex backend with the lane's OAuth. The shim exists because Codex refuses
 a mid-conversation `role: "system"` entry, which Claude Code sends: it turns each such entry into a user turn,
@@ -2113,18 +2148,19 @@ ccrc codex login <id>             # device-code sign-in through ccrc's auth libr
 ccrc models <id> init codex       # seed the class registry — the launcher refuses a lane with no model class
 ccrc codex status <id> [--json]   # each tier: running, starting, stopped, foreign or unknown
 ccrc codex start <id>             # optional: the lane's wrapper runs it on every session start
-ccrc codex stop <id>
+ccrc codex stop <id>              # every tier of the lane, in either mode
+ccrc codex switch <id> litellm|direct   # move the lane to the other mode (below)
 ```
 
 The wrapper `ccrc wrappers` writes for a `codex` row execs `ccrc-codex`, which runs `ccrc codex start`, refuses
 a lane whose `settings.json` names no model, and then execs the roster's upstream Claude Code against the shim.
 `start` is idempotent: it adopts a tier already answering as this lane, starts what is missing as a transient
 user service (under `nohup` on a box with no user manager), refuses a port or unit it cannot identify, and
-waits until both tiers answer; `stop` stops only what it proves is this lane's and names anything else it
-leaves running. The runtime is an isolated LiteLLM venv under `~/.ccrc/runtime/codex/`, built by
-`ccrc install` when the roster has a `codex` lane (`ccgpt-runtime build`, which needs `python3` with `venv`;
-pip installs the `litellm[proxy]` range `ccgpt-runtime` pins, which can take minutes) and made current only
-after a behaviour probe passes; a failed build keeps the previous generation. Each generation also carries
+waits until the lane's tiers answer (both in `litellm` mode, the bridge in `direct` mode); `stop` stops only what it
+proves is this lane's and names anything else it leaves running. The runtime is an isolated LiteLLM venv under
+`~/.ccrc/runtime/codex/`, built by `ccrc install` when the roster has a `codex` lane (`ccgpt-runtime build`, which needs
+`python3` with `venv`; pip installs the `litellm[proxy]` range `ccgpt-runtime` pins, which can take minutes) and made
+current only after a behaviour probe passes; a failed build keeps the previous generation. Each generation also carries
 ccrc's one patch to LiteLLM (`ccgpt-runtime patch-source` prints it): when Codex streams no delta events for a
 tool call or a reply, it hands the finished arguments or text on, so parallel tool calls keep their input. The
 probe is its acceptance test, and `ccgpt-runtime check` reads `mutated` for a generation that has lost it.
@@ -2137,8 +2173,9 @@ Per-lane state lives in
 **One library owns the credential.** Exactly one ccrc program reads and writes `auth.json` in `exec.authDir`:
 the auth library `ccgpt-auth.py`, placed beside the shim. `ccrc codex login` is its device-code sign-in and needs
 no Codex runtime; it writes nothing until the sign-in completes, so an abandoned one leaves the authDir as it was,
-and it never writes over another tool's credential file. The lane's LiteLLM tier is the one refresher, through
-the library's lock, and every other reader only reads. Beside the credential the library keeps `auth.json.lock`,
+and it never writes over another tool's credential file. The lane has one refresher, through the library's lock:
+its LiteLLM tier in `litellm` mode, its bridge in `direct` mode; every other reader only reads. Beside the
+credential the library keeps `auth.json.lock`,
 the checkpoint `auth.pending.json` and the non-secret `auth.status.json`, each 0600; a refresh token the token
 endpoint refuses is the state `needs-signin` there, which the tier answers with a 401 at once and `ccrc codex
 start` and doctor name with `ccrc codex login <id>` as the remedy. History's redaction loads the credential as a
@@ -2163,12 +2200,103 @@ through the auth library and never refreshes it or starts a
 sign-in: an expired token fails the poll `token-expired`, and nothing is published until the lane's tier refreshes
 it on its next request; a credential that needs a sign-in fails it naming `ccrc codex login <id>`, and one it
 cannot use (`credential-unusable`) names `ccrc doctor`, or `ccrc update` and then `ccrc codex login <id>` after a
-`config-error`; with a library it cannot load (`auth-library-absent`) it names `ccrc update`. The unit is bounded at 300 s. Doctor's `codex`
+`config-error`; with a library it cannot load (`auth-library-absent`) it names `ccrc update`. The unit is bounded at 300 s.
+On a `direct` lane the poll first reads the usage headers the bridge kept from its last upstream reply (the stats
+file's `usageHeaders`, below): when they are at most 15 minutes old and carry the primary figure, the row is built
+from them and published with no request and no credential read; otherwise the poll makes its one request, sending
+`originator: ccrc` (a `litellm` lane's sends `codex_cli_rs`, as before). Doctor's `codex`
 check WARNs when a lane's timer is not enabled, when another tool's is, and when the lane's row is missing or
-older than three polls. `ccrc account remove` disables the removed lane's instance and `ccrc uninstall` every
+stale: on a `litellm` lane (and on one whose mode cannot be read), older than three polls (45 minutes, the row's
+time being when its poll wrote it); on a `direct` lane, last measured more than an hour ago (three polls plus the
+bridge's 15-minute freshness window, because its row carries the time the bridge measured it). A timer enabled
+longer than that bound with no row published is a WARN too. `ccrc account remove` disables the removed lane's instance and `ccrc uninstall` every
 one, each found through systemd's own enablement links rather than the roster. Because the lane's `telemetry` is
 not `anthropic`, its sessions never get `--remote-control`, placement never sends it `fable`-class work, and
 the rescue never chain-waits it.
+
+**A `direct` lane: the bridge.** In `direct` mode one process answers Claude Code, the **bridge**: the same
+`ccgpt-proxy.py` started in its direct mode, which imports ccrc's standard-library package `ccd/codexbridge/` from the
+box's installed tree and speaks the ChatGPT backend's Responses route itself, with no LiteLLM gateway and no LiteLLM
+prompt. It listens on the lane's `proxyPort`, takes the lane's gateway key (read in its own process, never put in its
+environment) and runs under the shim's unit name, so the launcher and Claude Code's settings do not change and the shim
+and the bridge can never both serve the lane's port (the LiteLLM tier has its own port and unit, so it can still run
+beside a bridge, for example a LiteLLM tier started by hand; `start` then refuses the lane `retired-tier-running` and doctor FAILs
+it, below).
+It runs on the system `python3`, 3.9 or later (below that `ccrc codex start` refuses `python-too-old`), and its tier
+needs no LiteLLM runtime. It sends `originator: ccrc` and a ccrc user agent, never presenting itself as Codex. Claude
+Code's top-level system prompt travels as the first developer message, with no `instructions` field and no prompt of the
+bridge's own; a lane directory holding the marker file `bridge-instructions` (no ccrc code writes it) sends it as
+`instructions` instead. A
+mid-conversation `role: "system"` entry becomes a developer message in its place, and effort follows the shim's own rule
+(above). Each reply's blocks are built from the upstream's finished items, except that a message's first text part
+streams live as it arrives (so a long compaction summary shows as it is written), and each reply streams zero usage in
+`message_start` and the real figures in `message_delta`, where the three input fields Claude Code adds up sum to the
+upstream's `input_tokens`: so Claude Code's own proactive compaction fires at the lane's window less 33,000 tokens (the
+window less `min(max_tokens, 20000)` less 13,000, measured on Claude Code 2.1.308). A silent upstream gets a `ping`
+every 15 seconds, and the upstream idle bound is 300 seconds, as in Codex. A context overflow is answered as Claude
+Code's own `prompt is too long: N tokens > M maximum`, so it compacts; N is the bridge's estimate, because the backend's
+overflow message carries no counts. A usage limit is a 429 `billing_error` and a policy refusal a 400 `policy_blocked`,
+each with `x-should-retry: false`. Retries are Claude Code's: the bridge never retries an upstream request, except once
+after it refreshed a token the upstream answered 401 (a reply the upstream marks unfinished is continued inside the same
+message, at most three times). `count_tokens` is answered locally, from an estimate seeded at 3.5 bytes per token and
+calibrated on the lane's own replies, for any model. A `/v1/messages` request for a model the lane's catalogue does not
+list is answered 404 locally and never sent upstream.
+The credential's refresher is the bridge: it checks every minute and refreshes at about half the token's lifetime,
+through the library's lock.
+
+**Moving a lane: `ccrc codex switch <id> litellm|direct`.** The switch holds the lane's lock from start to end (and the
+roster writers' lock while it writes the roster). It stops the outgoing tiers (the shim, then LiteLLM; or the bridge),
+measures every tier of the lane down, records the mode in `~/.ccrc/accounts.json` (`exec.bridge: "direct"`; a switch
+back deletes the key, so the row reads as it did before), re-renders `lane.json`, reads the new mode back from it, and
+then starts the incoming tiers through `ccrc codex start`. Between the stop and the start nothing refreshes the
+credential, so it changes hands without a race. A lane already in that mode with its tiers up answers `already`. A tier
+that will not stop, or a port or unit the switch cannot identify, ends it with nothing written; a failure after the
+roster was written leaves the lane down and named, with the way back, `ccrc codex switch <id> <old mode>`, and nothing
+the switch stopped is restarted behind your back. A hand edit of `exec.bridge` is not a switch: the next render writes
+it into `lane.json`, and `ccrc codex start` then refuses `retired-tier-running` while the other mode's tiers run, as it
+does whenever they run beside the lane's own (two refreshers on one credential); `ccrc codex stop <id>` stops every
+tier of the lane, in either mode. `exec.upstream` names the route: `backend`, the default, is the only one this build
+runs, and `siwc` is refused `upstream-unsupported` by `start` on a `direct` lane and by a switch to `direct`. To cure
+it, set `exec.upstream` back to `backend` (or remove it) in `~/.ccrc/accounts.json`, then run `ccrc doctor --fix`
+(it re-renders `lane.json` from the roster: `start` reads the upstream from `lane.json`, which a roster edit alone
+does not change), then re-run.
+
+**What a `direct` lane writes.** Beside `lane.json`, whose `bridgeFiles` names them, the bridge keeps two files in the
+lane directory, each 0600: `bridge.stats.json`, its one non-secret output, and `reasoning.sqlite`, the reasoning store.
+The stats file holds counts, sizes, names and request ids: requests and the largest prompt accepted per route and
+model, each context refusal with the size it estimated and when, outcome counters, the protocol names it met (bounded,
+else `unrecognised`) and those it does not know, the upstream request id of its last error, and the `x-codex-` usage
+values of the last reply, kept only in the numeric shape the usage poll reads. It never holds a request or reply body,
+a token, any message content, or any other header value (the reply's media type is counted as a name,
+`content-type:<type>`). The store holds the upstream's encrypted reasoning items under
+hashed keys, nothing else, for 14 days and at most 256 MB, the oldest evicted first. `ccrc codex status <id> --json`
+adds `mode`, `upstream`, `tiers.bridge` and `bridge` (the stats file's time, last upstream request id, refusals,
+outcomes and unknown names; `null` when there is none). Doctor's `codex` check reads the lane by its mode: on a
+`direct` lane the bridge tier's running, stale (a WARN, cured by `ccrc update` (`--force` on a box already converged),
+which restarts a running, proven, stale bridge, or by `ccrc codex stop` then `start`; `ccrc doctor --fix` restarts it
+only when the same run re-placed the shim, the runtime or the auth library for another finding, and neither starts a
+stopped one), foreign and unmeasured
+rows; a FAIL, `runs a retired refresher`, when the lane's LiteLLM tier or shim runs beside it; a FAIL for the `siwc`
+route; no half-up row and no `litellm.yaml` row. On a lane in either mode, a stats file or store that is not a regular
+file of mode 0600 is a FAIL. Removing the lane reaps both files, the recordings directory and the marker files with the
+rest of its state.
+
+**A restart cuts long streams.** The bridge runs under the shim's unit, so a restart (a rollout's install restarts a
+running bridge whose bytes are stale; a switch stops it) is a stop, then a start. On the stop the bridge closes its
+listener, a stream that finishes within 5 seconds (`DRAIN_S`) ends normally, and every stream still open then gets one
+`api_error` event, so Claude Code sends it again. ccrc's stop waits 10 seconds before a KILL under `nohup`, and the
+user manager's stop timeout under systemd (90 seconds by systemd's default; a box that sets it below 10 cuts the drain
+short). Between the close and the new process's bind nothing listens: Claude Code retries a lane's request twice, at
+about 0.6 and 1.1 seconds (measured on a 429; a refused connection is assumed to follow the same schedule), so a
+request, or a cut stream's re-send, that lands more than about 1.7 seconds before the new bind fails its turn.
+
+**Switch a `direct` lane back before a rollback** to a build from before the bridge: `ccrc codex switch <id> litellm`
+for every `direct` lane first. An older build reads the bridge's lane answer, `{"lane": <id>, "mode": "direct"}`, as a
+listener it cannot identify, so its `ccrc codex start`, which every session launch on the lane runs, refuses and starts
+nothing, and its `stop` leaves the bridge running. The running bridge keeps serving the sessions already open, but no
+new session on the lane starts. An unattended rollback (the update watchdog's) lands there with nobody to switch first;
+the way out is `ccrc update --to <a build with the bridge>`, then `ccrc codex switch <id> litellm`. LiteLLM is never
+started beside the bridge, so the credential still has one refresher.
 
 ### Placement honors the disabled marker
 
@@ -2997,7 +3125,8 @@ menu) write one field each through `POST /api/sessions/:id/route`, which runs `c
 fleet `ccd` that does not advertise `route-apply-v1`); the chip wears `queued` until the pane reads the change
 back (on a session whose row carries no routing record yet, a toast says so after 60 s without a read-back). The
 new-session sheet seeds `class`, `effort` and `workflow` at creation. An operator spawn with nothing chosen gets
-the coordinator row, `class=opus effort=ultracode subagent=sonnet workflow=on`; a dispatched worker gets a record
+the coordinator row, `class=opus effort=high subagent=sonnet workflow=on` (workflows enabled for a short clause-19
+review, never standing `ultracode` orchestration, ruling 2026-10-25); a dispatched worker gets a record
 only when its run names one. **Fable runs only when the operator selects it** (D-6790, ruling 2026-10-24). Neither automatic ladder
 (`shared/routing-ladder.ts`) reaches it — both stop at `opus`, and a reversal of a demotion off `fable` answers `ceiling`
 rather than restoring it — and every box-token route write refuses it with `409 fable-operator-only`: a coordinator's
@@ -3588,7 +3717,7 @@ Build 4 dogfood runbook, cross-repo programmes, and workspace holds.
 
 **All four skills ship to every rostered account's config dir.** The
 coordinator's protocol is now a trio: its worker counterpart is the
-`ccrc-worker` skill (`ccd/worker-skill/SKILL.md`, eighteen clauses pinned by
+`ccrc-worker` skill (`ccd/worker-skill/SKILL.md`, nineteen clauses pinned by
 `server/test/worker-skill.test.ts`), and its reviewer counterpart is the
 `ccrc-reviewer` skill (`ccd/reviewer-skill/SKILL.md`, ten clauses pinned by
 `server/test/reviewer-skill.test.ts`), which reads a finished wave in its own
@@ -3750,10 +3879,11 @@ what it cannot.
    proceeds), `404 unknown-session` for an heir this box has no row for, and
    `409 heir-is-a-worker` (below).
 5. **The caps dial.** Beside the pause banner, `CapsControl` reads
-   `GET /api/coord/caps` and shows each cap beside its current use — running
-   workers, and dispatches in the rolling 24 h. A save (`POST /api/coord/caps`)
-   sends only the dial you moved, and afterwards the dial shows what the server
-   stored, not what you typed.
+   `GET /api/coord/caps` and shows the concurrency cap beside its current use,
+   the running workers. A save (`POST /api/coord/caps`) sends the dial only when
+   you moved it, and afterwards the dial shows what the server stored, not what
+   you typed. There is no daily dial: the daily dispatch brake is retired
+   (operator ruling 2026-10-26).
 6. **What a run warns about.** Under an open run's row, one line names trouble
    the server measured: mail to the run that gave up retrying (`N parked`), a
    delivery replayed many times (`replayed N×`), a dispatch that queued no brief
@@ -4092,10 +4222,11 @@ non-terminal ones, so a run parked IDLE at `awaiting-review`, `merging` or
 `closing` gives its slot back without closing; it does not count held
 workspaces. A terminal producer whose
 workspace remains retained uses no running-worker slot, and a planned,
-undispatched consumer uses no running-worker slot. Each actual producer or
-consumer dispatch still consumes the rolling daily dispatch budget. A
-`cap-concurrency` or `cap-daily` refusal remains authoritative when that measured
-counter is exhausted; it is not inferred from the number of live workspaces.
+undispatched consumer uses no running-worker slot. There is no daily dispatch
+count: each producer or consumer dispatch costs its running-worker slot and
+nothing more (the daily brake is retired, operator ruling 2026-10-26). A
+`cap-concurrency` refusal remains authoritative when that measured counter is
+exhausted; it is not inferred from the number of live workspaces.
 `$REG/coordinator-paused` is global but narrow: it refuses every dispatch on
 that box and stops nothing else — mail keeps flowing, and `$REG/mail-disabled`
 is the mail switch. The hold reason still names programme, wave and run id and
@@ -4206,10 +4337,10 @@ database is a server-side re-measurement of what they already say, never a
 replacement for them, and a lost `coord.db` reconstructs from them.
 
 **The skill's contract.** A coordinator is an ordinary fleet session running
-the `ccrc-coordinator` skill (`ccd/coordinator-skill/SKILL.md`), and its eighteen
+the `ccrc-coordinator` skill (`ccd/coordinator-skill/SKILL.md`), and its nineteen
 clauses are pinned verbatim by `server/test/coordinator-skill.test.ts` — a
 softened clause is a red suite, not a silent drift. **A worker is the same
-shape:** the `ccrc-worker` skill (`ccd/worker-skill/SKILL.md`), eighteen clauses,
+shape:** the `ccrc-worker` skill (`ccd/worker-skill/SKILL.md`), nineteen clauses,
 pinned the same way by `server/test/worker-skill.test.ts`, and it is what a
 dispatched session is told to run by the kickoff sentence dispatch composes
 onto every brief mail. That is why a wave brief is short: the standing
@@ -4413,8 +4544,8 @@ fourteen-rung ladder or mints a token, and `ccd ws-orphan --expect <token> --tre
 `git worktree remove`, never `--force`. A tree is removed only when it is clean, its HEAD is on a remote, no registry row
 names it or a path inside it, nothing holds it, and nothing in it has changed for 7 days. The server is the only
 composer of `ws-orphan`, and a child's deny list names the verb.
-The lane (`server/src/orphanTreeLane.ts`, `coord/collectOrphanTree.ts`, `orphanTreeSweep.ts`, the beat in
-`watch.ts`'s `sweepOrphanTrees`) takes a census every 6 hours (hourly in pressure mode), audits at most 2 trees per
+The lane (`server/src/orphanTreeLane.ts`, `coord/collectOrphanTree.ts`, `orphanTreeSweep.ts`, the wiring in
+`orphanTreeBeat.ts`, the cadence the `orphanTrees` row of `LANE_SCHEDULE`) takes a census every 6 hours (hourly in pressure mode), audits at most 2 trees per
 pass (4 under pressure) and acts at most once per pass fleet-wide, only on two audits of one unchanged token at least an
 hour apart. It needs `orphan-v1` from ccd and is stopped by `reclaim-paused`.
 
@@ -4652,6 +4783,10 @@ and `/:id/close`, with `/:id/items` and `/:id/route` beside them — one run row
    `childReclaimWhy` — `review-report-live` for a REVIEW child, which is not
    finished while the run it reviewed is open; the reclaim sweep reaches it
    once that run is terminal (**The reclaim sweep, and how to stop it**, below).
+   The sweep also reaches an EARLIER review child while that run is still open, once a LATER review of the same
+   run has itself closed `done` (its report replaces the older one); the newest review child is never taken this
+   way. It ships shadowed: until `$REG/child-superseded-reclaim-live` exists the lane only records "review report
+   would be reclaimed (superseded)" once per pair.
 
 **The mail bus and its token.** Sessions send each other mail — `finding |
 question | answer | status | artifact` — through `POST /api/mail`, attributed
@@ -4790,16 +4925,15 @@ ACTIVE state, `dispatched`, `working` or `unknown` (and any state token this bui
 cannot name — the safe direction for a cap, D-2803); a worker at `awaiting-review`,
 `merging` or `closing` is idle by contract and holds no slot — design
 2026-09-14 §7.1; the one edge back into `working` is cap-checked on
-`POST /api/runs/:id/advance`) and `maxSessionsPerDay` (default 12 —
-dispatches inside a rolling 24h window, not a calendar day), both checked at
-`POST /api/runs/:id/dispatch` before anything else is touched. **Review runs
-are dispatches**, so a programme that made N dispatches per wave now makes
-about 2N; the seed `maxSessionsPerDay` of 12 covers roughly 6 waves a day,
-not 12 — raise the dial through `POST /api/coord/caps` when a programme
-runs hot rather than discovering `cap-daily` mid-wave (§7.3). Both are an
-operator control: `GET`/`POST /api/coord/caps` reads them beside their current
-usage and writes either or both, bounds-checked, and the `/runs` board renders
-the dial. (For a stretch of this build's history there was no route at all and
+`POST /api/runs/:id/advance`), checked at `POST /api/runs/:id/dispatch` before
+anything else is touched. It is the only cap. The daily dispatch brake,
+`maxSessionsPerDay`, is retired (operator ruling 2026-10-26): it counted every
+dispatch alike, reviews and warm resumes included, refused a coordinator with
+nothing to wake it, and never measured memory. Its column stays in the row,
+unread, and a caps write that still carries the field is accepted and the field
+ignored. The cap is an operator control: `GET`/`POST /api/coord/caps` reads it
+beside its current usage and writes it, bounds-checked, and the `/runs` board
+renders the dial. (For a stretch of this build's history there was no route at all and
 an operator edited the row with `sqlite3` — hence `CoordStore.setCaps` having no
 caller in the server for as long as it did.) Like every other same-origin PWA
 write the caps route carries **no box token**; unlike the operator doors named
@@ -4925,10 +5059,10 @@ and left alone); or a `fix-round` mail from the coordinator names the PR ejected
 or next to land in a strict-protection repository. The first two license at most one absorption per
 PR. An absorption is `git merge` and nothing else — never a rebase, a force-push, or GitHub's branch
 update by any route (its button, `gh pr update-branch`, the API) — and a conflict in a
-`# ccrc:generated` stamp line (`ccd/ccd`'s line 2 is a digest of its own body) is never hand-resolved:
+`# ccrc:generated` stamp line (the session hook's generated region carries one; `ccd/ccd` does not) is never hand-resolved:
 take either side of that one line, resolve every other hunk as the source it is, then run
 `~/.local/bin/ccrc restamp <file>`. `ccrc restamp` re-stamps a stamped file and refuses, file
-untouched, one with no marker, a symlink, or a generator's own output (see Contributing). Coordinator
+untouched, one with no marker, a symlink, a generator's own output, or `ccd/ccd` (its stamp is written at install time; see Contributing). Coordinator
 clause 15 is the other half: the coordinator never calls `update-branch` by any route, never writes a
 repository's rulesets, branch protection, auto-merge setting or `allow_update_branch`, sends a
 rebase-check only on a conflict it has measured, and commits programme-ledger documents on its own
@@ -4939,6 +5073,21 @@ only place a session that loads no ccrc skill sees it: a `Bash` call that merges
 `additionalContext` — advice, never a deny; the call runs either way, and the pattern's known misses
 are listed in the hook's own header (`server/test/session-hook-sync-advisory.test.ts`).
 `python3 deploy/measure-landing.py <subcommand>` is the programme's read-only instrument.
+
+**Ledger documents are edited on a ledger branch only (D-6926).** Shared files under
+`docs/superpowers/programs/` and `docs/superpowers/plans/` were the largest single cause of sync
+conflicts, so `.github/ci/ledger-guard.mjs` (its own `ledger guard` job, so an error there never skips the
+test jobs; tested in
+`server/test/ci-ledger-guard.test.ts`) fails a pull request that MODIFIES, DELETES or RENAMES AWAY an existing
+file there unless its head branch is `ledger/<programme>` (the name is this guard's own convention: no earlier
+ledger-branch name existed). A pull request ADDS a per-task note instead,
+`docs/superpowers/plans/<plan>/<task-or-pr>.md`, and the coordinator folds the notes into the ledger in one
+ledger pull request per wave. There is no `merge=union` driver: it silently corrupts a row edited in place. The
+escape is a `Ledger-Edit: <D-TBD reason>` trailer on the pull request's HEAD commit (only the head commit's
+trailers count, read with `git log -1 --format=%(trailers:key=Ledger-Edit,valueonly)`; a trailer on an earlier
+commit does not), which passes and is written to the step summary. The
+guard skips with a notice on a shallow checkout and on a merge-queue run. It runs warn-only
+(`LEDGER_GUARD_MODE: warn` in `ci.yml`) until the open pull requests that edit a ledger have landed.
 
 **The native merge queue (landing-order wave 2).** On a project whose `main` ruleset requires
 GitHub's merge queue — measured before each landing, never remembered — a producer lands before its
@@ -5231,6 +5380,31 @@ in Settings, or on the fleet box touch `mail-gate-strict` (busy delivery) or
 `ccrc uninstall` leaves `stall-watch-w2-live`, `mail-gate-busy` and
 `mail-gate-busy-shadow` in place, as it leaves every other operator switch.
 
+**The stall watch, coordinator blocked.** The mail gate holds mail for a session
+that cannot take it now, so a held coordinator holds every child's question,
+status and done claim. A coordinator (a claimant of an active run with no child
+marker) with mail the server still holds for 30 min (a delivery still `queued`,
+timed from its queue time; a delivered mail's gated replay never counts),
+whatever word it reads, draws one `⚠ coordinator blocked` push per episode
+(D-6942). The push names the reason in
+plain words: waiting on you (an open question: a `waiting` word or a pending
+dialog), with the child mails queued behind it; held behind a background
+workflow (`busy` over a finished turn); its own long busy stretch (`busy` with a
+turn); busy with its turn state unreadable; or idle but not receiving mail
+(input text or an account limit). A word it cannot name still flags, worded as
+unreadable, so no word silences it. It names how many items are held, the oldest
+and its age, and which of its run workers sent them. A busy or waiting stretch
+of 60 min, or a held mail 2 h old, raises one `(escalated)` push in the same
+episode. An episode runs while any mail to the coordinator stays held, so once
+everything goes through, new held mail is a new episode. It is a wave-1 arm, so
+it follows the Stall watch level with no marker of its own: Alert and above
+push, Log only and Check record one run-less `stall-watch shadow` line. It only
+reports: it never types into the pane, interrupts, kills or reroutes. The
+episode and the push latch are in memory like the other run-less pushes, so a
+server restart while the episode stands pushes it once more. The thresholds and
+their measured basis are in `COORD_BLOCKED_HELD_MS`'s comment in
+`server/src/coord/stall.ts`.
+
 **The honest boundary.** The coordinator acts through this server's HTTP
 API — one recorded chokepoint for every irreversible act (dispatch, close,
 mail) — and that chokepoint is what makes the caps and the pause file real
@@ -5329,7 +5503,7 @@ is that the read side lives only where ccrc owns the file it is written in, and 
   `server/test/session-hook-sync-advisory.test.ts`, the merge deny by
   `server/test/session-hook-merge-deny.test.ts`, the role-skill deny by
   `server/test/session-hook-role-skill-deny.test.ts`.
-- **Worker clause 12 (R2).** `ccd/worker-skill/SKILL.md` now carries eighteen clauses (thirteen at R2; routing slice 2 added 14 and 15, landing-order wave 1 added 16, the stall watch added 17, the temp-root clause added 18), pinned verbatim: a
+- **Worker clause 12 (R2).** `ccd/worker-skill/SKILL.md` now carries nineteen clauses (thirteen at R2; routing slice 2 added 14 and 15, landing-order wave 1 added 16, the stall watch added 17, the temp-root clause added 18, the workflow rule added 19), pinned verbatim: a
   workspace with a `graphify-out/graph.json` takes a codebase question to `graphify query` before
   `grep`, **weighted by the card's freshness word** — only `fresh` licenses taking an answer as read,
   and every other word makes a query answer a lead to verify by opening the file it names — and never
@@ -5626,16 +5800,16 @@ things at that moment: it builds a SECOND card — the files this context was wo
 community and dependents read out of the same graph — and it MEASURES the compaction, writing one line to a
 per-session journal. Three arms of `ccd/session-hook.sh` do it, and **none of them opens a new output
 channel**: the card rides the one `additionalContext` envelope `SessionStart` already prints — the compact
-arm calls `_hook_emit_context "$CARD" "$CARD_COMPACT"` (`ccd/session-hook.sh:3198`), which appends the second
-subject under its own `COMPACT_CARD_MAX_CHARS` ceiling (`:97`) before the single `jq -cn` print (`:103-105`) — and `PreCompact` and
+arm calls `_hook_emit_context "$CARD" "$CARD_COMPACT"` (`ccd/session-hook.sh#@compact-arm-emit-call`), which appends the second
+subject under its own `COMPACT_CARD_MAX_CHARS` ceiling (`ccd/session-hook.sh#@emit-context-compact-ceiling`) before the single `jq -cn` print (`ccd/session-hook.sh#@emit-context-print`) — and `PreCompact` and
 `PostCompact` print nothing at all. `PreCompact` decides whose transcript is compacting and publishes the
 working set, `SessionStart(compact)` serves the card once beside the graph card in that one envelope, and
 `PostCompact` measures the summary and commits the journal line. No compaction MEASUREMENT reaches the server, the wire or
 the PWA: there is no compaction field on `FleetSession`, no chip, and no hookstate cache. The one thing that
 does cross is ccd's purge refusal vocabulary — `purge-refused`, `purge-incomplete` and
-`purge-mechanism-absent` (`shared/api.ts:8509-8511`), each with an operator sentence of its own at `:8561`,
-`:8569` and `:8582`, which the session History tab renders through `lcRefusalWord`
-(`pwa/src/session/HistoryTab.tsx:17`, rendered at `pwa/src/session/HistoryTab.tsx:61`). The journal is the whole deliverable, and reading it is a later
+`purge-mechanism-absent` (`shared/api.ts#@purge-refusal-union`), each with an operator sentence of its own at `shared/api.ts#@lc-word-purge-refused`,
+`shared/api.ts#@lc-word-purge-incomplete` and `shared/api.ts#@lc-word-purge-mechanism-absent`, which the session History tab renders through `lcRefusalWord`
+(`pwa/src/session/HistoryTab.tsx#@history-refusal-import`, rendered at `pwa/src/session/HistoryTab.tsx#@history-refusal-render`). The journal is the whole deliverable, and reading it is a later
 plan's job.
 
 - **What lands on the fleet box.** Four dot-free registry files per session id, beside the
@@ -5946,9 +6120,17 @@ killed and nothing logged.
 
 `deploy.sh agent` also lands `zz-no-memoryhigh.conf` (it sorts last, so neither a stale `limits.conf` nor a
 runtime `set-property` drop-in can reinstate one), checks the value systemd actually enforces with
-`deploy/assert-slice-policy.sh` after `daemon-reload`, and gives `ccrc-agent.service` `MemoryMin=192M`,
-`MemoryLow=384M`, `CPUWeight=5000` (`ccrc-agent.service.d/protect.conf`) so the control plane still
-answers under pressure; `ccrc install` and `ccrc update` place only the two `limits.conf` files (and the two
+`deploy/assert-slice-policy.sh` after `daemon-reload`, and gives `ccrc-agent.service` `MemoryMin=512M`,
+`MemoryLow=768M`, `MemorySwapMax=0`, `IOWeight=1000`, `CPUWeight=5000` (`ccrc-agent.service.d/protect.conf`) so
+the control plane still answers under pressure. `IOWeight` acts only with the io controller delegated (the root-owned
+`user@<uid>.service` drop-in adds `Delegate=… io`) and a device on io.cost or BFQ; the gate below reads the enforced
+`io.weight` and says `enforced` or `inert`. That protection holds only when every ancestor declares at least as
+much (#1170: under `memory_recursiveprot` a parent's protection caps its child's), so it also lands
+`app.slice.d/50-ccrc-agent-protect.conf`, and after the restart `deploy/assert-protect-chain.sh` reads the enforced
+`memory.min` along the agent's cgroup chain. The three ancestors above `app.slice` (`user.slice`,
+`user-<uid>.slice`, `user@<uid>.service`) are root-owned: their drop-ins ship in `deploy/systemd-root/`, the gate
+prints the exact root step to place them, and every agent deploy says `PENDING ROOT STEP` until it is done. The
+agent's `OOMScoreAdjust` stays at the user manager's (a user manager can only raise it). `ccrc install` and `ccrc update` place only the two `limits.conf` files (and the two
 victim-policy drop-ins below) — none of the three above. The numbers were sized for a 30 GB fleet host — tune them to yours with a drop-in of your
 own that sorts after `limits.conf` (an install or update rewrites `limits.conf` itself); leave the slice's
 `MemoryHigh` at `infinity`, which `deploy.sh agent` refuses to deploy over; the pane values are literals in
@@ -6032,6 +6214,26 @@ compaction. A subagent's compaction, `~/.ccrc/history-off` and a session whose r
 get no line. On a box with history the compaction card renders 513 characters shorter, to leave the
 line its room, and the sweep counts from each transcript whether the line arrived and named its leaf.
 
+**The W2 counters.** W2's replay eval decides its gate from its quiz and from live uptake alone. Beside
+them, `deploy/history-counters.mjs` reports six counters that never feed the gate: `compliance`,
+`echo_hits`, `lag`, `card_served`, `card_id_mismatch` and `rediscovery`. Each is counted per
+post-compaction window of a family on the eval's list, by arm and by the producer of the window's boundary,
+under the definitions part 1 of the open record signs (`counters_def` `v1`, the text frozen as
+`COUNTERS_DEF_V1` in `deploy/history-gate.mjs`). It builds each window with the gate's own turn and window
+rules over `measure-history.py`'s raw rows, reads the node's store only through `store.mjs`'s `openReader`,
+and never reads the node-wide `counters` table. A value it cannot measure is `unmeasured`, never 0. A gap
+between two measures, such as echo hits against the window's `recall_calls` count, is reported, never
+repaired. A control window (the `recall-off` arm, below) carries no card line, so its card figures are
+reported and never compared. A family whose recall-off file changed during the window, or whose state in
+its node's `verify --section ab` output is anything but `ok` (`control-absent`, `control-mismatch`,
+`treatment-named` or `unreadable`, each listed apart), is dropped from the arm comparison only and tallied
+apart by arm and by producer. That verify output must name the part 2 being counted and show that the
+presence record has seen the newest recall-off write, or the run is refused: when part 2 is amended during
+the window, the operator re-runs `verify --section ab` on each node before counting. The replay driver
+does not import the counter and the open record pins no hash of it, so each report names its own sha256.
+It ships in the release part 1 pins; the operator runs it on each named node after the window ends, then
+sums the nodes' reports into one comparison.
+
 **Box verbs and operator verbs.** `ccrc history status` reports the store, its lag, size, cap, free
 space and journal; doctor's `history` check reads it. Its `spool-planted` warning counts each node at
 `~/.ccrc/history/spool/<id>.jsonl` that is a FIFO, a link, a directory or any other non-regular node:
@@ -6083,11 +6285,60 @@ id, or the answer is `asof-invalid`; and a family whose generation the marker do
 `headless-unlisted`. The family and its generation come from that boundary, never from the registry or
 `CCRC_SESSION_GENERATION`. Then the family answers exit 8 when its recall is
 switched off, and `control` answers exit 8 too. Under `treatment` every verb reads the store as of the
-boundary: rows, nodes and epochs after it are absent; `--project`, `--workspace` and `--session` still
+boundary, by time and by position (D-5766): an entry is visible only when it is stamped at or before the
+boundary's instant and is not a row after the boundary in the boundary's own holding copy, or when it is the
+boundary, its summary or a kept member of it; every other entry is absent, an unstamped one included, and
+nodes and epochs follow their entries; `--project`, `--workspace` and `--session` still
 widen the scope, the cut applies to every family in it, and a family with nothing visible is left out;
 `--workspace` anchors on the working directory of the boundary's epoch; and a family whose stored
 project is not the session's answers exit 2 `cross-project`. A call is counted only once its family is
 admitted, and its counter line carries the arm; under `~/.ccrc/history-off` nothing is counted.
+
+**The replay driver (W2's eval).** `deploy/history-replay.mjs` runs W2's replay eval, and it is the operator's
+alone: nothing in ccrc runs it. Every act below is run by hand on a named node, from a shell outside tmux, once
+W2's final release is rolled onto every named node with its update intent off or pinned to that tag. Its
+shebang is `#!/usr/bin/env -S node --no-warnings`, because loading `node:sqlite` prints Node's
+experimental-feature warning before any module body runs: run the file itself, or `node --no-warnings` on it.
+Each subcommand writes only under its own `--out`, which it creates 0700 and refuses inside a git tree, prints
+`sha256 <hex>` of its output on stderr, and answers a refusal as `ccrc history-replay: <word>: <detail>` with
+exit 2. Every Claude Code run it spawns goes through the account's own launcher under one fixed contract, after
+the account's limits row and the token budget in force are read; a stop leaves the questions it did not run
+`not-run`, and the same command resumes them once the stop clears. Every subcommand that reads the signed open
+record (`--record` with `--record-sha256`) re-checks the record's `gate_code` hashes before anything else and
+refuses `code-changed`; after window start, `--allow-code-change` stamps every output and the verdict instead.
+The disclosed node exposure is approximately twice its signed share (the pilot uses `pilot_budget`), plus the token cost of soft-stop overshoot already in flight: at most `limits.concurrency` arm runs and `CONCURRENCY_MAX` judge runs may be in flight, but concurrency is not a per-run token cap. This is not a strict bound. The flow, in order: `probe`, a box-mode check of the taught spellings, may run first; `step0a` on each node,
+`pilot-source` on the one pilot node, then `open --draft`, which prints part 1 of the open record for the
+operator to save 0600 off-repo and post its sha; each node's census and `verify --registry`, then `power` and
+the Q18 decision. The pilot, on one fresh `--out`: `headless-on` written by hand from `marker --section pilot`,
+then `verify --section pilot`, `step0b`, `fidelity`, the usage pilot (`arms --section pilot`, then
+`judge --section pilot`) and `pilot-result`, and the marker removed. Every pilot act writes its file and prints
+its sha first, and a check that fails then refuses `pilot-failed`, which halts W2 for the operator.
+`fidelity` reads each boundary's original-side usage from its source transcript line, so the pilot must run while its boundaries' sources are on disk: a boundary whose source file has passed its home's retention, or was rewritten, answers unmeasured.
+A `step0b` that finds the skill missing under `--restricted` halts so: the operator re-runs it with
+`--settings-mode fallback`, then runs every later pilot act with `--step0b` and `--step0b-sha256` naming the
+result that passed, so each runs in that mode; if fidelity or the usage pilot already ran in part 1's mode,
+fidelity, the usage pilot and `pilot-result` all run again on a fresh `--out`, each with `--step0b`, because
+`pilot-result` reads them from one `--out`. `open --finalize` refuses a failed pilot unless
+`--accept-failed-pilot` records the ruling, and then prints the pilot's failures. Then `quiz-source`, `freeze`
+and `open --finalize`, which prints part 2 with a spend budget it derives from the pilot's extrapolation and
+refuses one given otherwise. Before window start:
+the `recall-off` lines `marker --section ab` prints, `headless-on` written from `marker --section quiz`, then
+`verify --section ab` and `verify --section quiz`. During the window, per node: `arms --section quiz`, then
+`judge --section quiz`, and `open --amend` after a version move, a freeze exception or a forced act, before
+the next batch. A version move is measured first: after a `claude-version-moved` stop the operator re-pilots
+that node on a fresh `--out` (`step0b --section quiz`, `fidelity --section quiz` and
+`pilot-result --section quiz`), passes the re-pilot result and its sha to `open --amend --kind version-move`
+as `--repilot` with its `--repilot-sha256`, and posts the printed record's sha; `arms` then re-runs both arms of every question left
+half-done on another version. A re-pilot that fails refuses `pilot-failed` and cannot be amended: no flag
+overrides it, and the operator rules whether that node's window stands. A freeze exception that installed a
+release names it with `--release-tag`, which the window's `--allow-code-change` admits on that node, stamped.
+After any amendment the operator
+re-runs `arms`, `judge` and both `verify` sections on each node under the new record; each resumes and spawns
+nothing already settled. Then `handcheck` writes the blinded sheet, which the operator alone labels, and
+after window end `report` reads every node's files, each with its sha, calls the gate and writes
+`verdict.json`; it decides nothing itself. Its report-only per-arm figures leave out every family whose
+`verify --section ab` state is not `ok`, each state listed apart: `control-absent`,
+`control-mismatch`, `treatment-named` and `unreadable`.
 
 ---
 
@@ -6147,7 +6398,9 @@ you need to reason about one.*
   the body at `~/.local/libexec/ccrc/ccd` and, at `~/.local/bin/ccd`, a
   standard-library Python launcher rendered from `ccd-entry.py` by
   `ccd-entry-install.py` (what it decides before Bash starts is "Only the
-  launcher starts a reclaim", under Fleet coordination); `ccrc`, the box
+  launcher starts a reclaim", under Fleet coordination), plus the library the
+  body pins and loads at its foot, `lib/disk-retention.sh` (the fleet
+  disk-retention verbs; installed first, at `~/.local/libexec/ccrc/lib/`, #1279); `ccrc`, the box
   lifecycle CLI, with the files it sources or execs (`ccrc-doctor-checks`,
   `ccrc-wrapper-shape`, `ccrc-adopt`); `session-hook.sh` (the Claude Code hook that reports each
   session's state), `install-session-hooks.sh` (the idempotent installer that
@@ -6811,6 +7064,7 @@ incomplete outright, so no flip ever returns to it:
 # `cp`'d onto it: a supervisor is executing `ccd`, and the hook runs on every tool call.
 # The ccd PAIR goes back together, body first (D-3696).
 restore() { cp -a "$1" "$2.restore" && mv -f "$2.restore" "$2"; }
+[ ! -f ~/ccrc-backups/<ts>/ccd-lib-disk-retention.sh ] || restore ~/ccrc-backups/<ts>/ccd-lib-disk-retention.sh ~/.local/libexec/ccrc/lib/disk-retention.sh   # the body's library, when the backup has one
 restore ~/ccrc-backups/<ts>/ccd-body ~/.local/libexec/ccrc/ccd
 restore ~/ccrc-backups/<ts>/ccd ~/.local/bin/ccd
 restore ~/ccrc-backups/<ts>/notify.sh ~/.cc-sessions/notify.sh
@@ -7103,23 +7357,38 @@ commands, the tools the suites need, and what CI runs. Run a single suite with
 `npx vitest` resolves a global copy with no jsdom and will falsely report that there are no
 tests.
 
-Three conventions carry more weight here than style:
+These conventions carry more weight here than style:
 
 - **A new guard ships with a test that goes red when the guard is deleted.** Measured before
   and after, not asserted in a comment. A comment is a request; a red suite is a mechanism.
 - **No overloaded null at a seam.** Two conditions a caller handles differently must not
   collapse to the same value — that is a defect, not a matter of taste.
-- **`ccd/ccd` carries a generated stamp.** Its line 2, `# ccrc:generated 1 sha256=…`, is a
-  digest of the rest of the file, and `server/test/ownership.test.ts` reds on a stale stamp or
-  a second marker line. After editing it, run `bash ccd/ccrc restamp ccd/ccd` (it needs
-  `node`). A merge in which both sides edited `ccd` conflicts on exactly that line: take
-  either side of it, resolve every other hunk as source, then restamp. `restamp` refuses a
-  file with no marker, a symlink, and any generator's output under `~/.local/bin` or
-  `~/.ccrc` — regenerate those with `ccrc wrappers` or `ccrc install`.
+- **`ccd/ccd` is stamped when it is installed, not in the repository.** Its line 2 is one fixed
+  placeholder, `# ccrc:stamp-at-install …`; `ccd/ccd-entry-install.py` swaps it, in place, for the
+  `# ccrc:generated 1 sha256=…` marker in the INSTALLED copy and renders the launcher with the
+  digest of those stamped bytes, so the chain is the one it was (the launcher refuses a body it
+  was not rendered for; the marker tells a hand edit from ccrc's own). Editing `ccd/ccd` needs no
+  restamp, and a merge in which both sides edited it has no stamp line to conflict on.
+  `server/test/ownership.test.ts` reds if the INSTALLED copy does not carry exactly one marker
+  that verifies; `ccrc restamp ccd/ccd` is refused. `restamp` also refuses a file with no
+  marker, a symlink, and any generator's output under `~/.local/bin` or `~/.ccrc` — regenerate
+  those with `ccrc wrappers` or `ccrc install`.
+  `ccd/ccd` also pins the SHA-256 of `ccd/lib/disk-retention.sh`, which it loads at its foot and
+  refuses to start without (D-6913). That pin gets the same install-time treatment: the committed
+  line is the fixed placeholder `__CCD_LIB_SHA256=stamp-at-install`, and `ccd-entry-install.py`
+  renders the digest of the library it publishes into the installed body BEFORE it stamps it, so
+  the stamp covers the pin. Editing the library needs no restamp. The library must end in exactly
+  one newline and carry no NUL byte (the body hashes it as bash reads it), or the install refuses.
   `ccd/session-hook.sh` carries a generated helpers region (`shared/hook-helpers.mjs`);
   after editing `ccd/ccd`'s epoch helper, or on a conflict in the region's stamp line, run
-  `bash ccd/ccrc restamp ccd/session-hook.sh`. Restamping `ccd/ccd` says when the hook's
-  region has gone stale.
+  `bash ccd/ccrc restamp ccd/session-hook.sh`; `hook-helpers-generated.test.ts` reds when the
+  region has gone stale. `ccd/ccd-account-health` carries the same module's second region, the
+  auth-dead writers copied from `ccd/ccd`: after editing `_authdead_mark`, `_authdead_clear` or
+  `_authdead_sweep_staged`, run `bash ccd/ccrc restamp ccd/ccd-account-health`.
+- **A feature pull request does not edit the shared ledgers.** An existing file under
+  `docs/superpowers/programs/` or `docs/superpowers/plans/` changes only on a `ledger/<programme>` branch;
+  add a new `docs/superpowers/plans/<plan>/<task-or-pr>.md` note instead, or put a `Ledger-Edit: <reason>`
+  trailer on the head commit. `.github/ci/ledger-guard.mjs` checks it (D-6926).
 
 Design records live in `docs/superpowers/specs/`; the architecture rules the code is held to
 are in `docs/superpowers/specs/2026-08-10-architecture-ddd-clean-solid.md`.

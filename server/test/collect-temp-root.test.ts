@@ -18,6 +18,8 @@ import { RECLAIM_PAUSE_MARKER } from '../src/coord/rundefs.js';
 import type { OpenSiblingsResult } from '../src/coord/store.js';
 import type { CollectToken } from '../../shared/api.js';
 import { FULL_CAPS, ID, INTERVAL, RIPE, T0, TOK, TOK2, auditDoc, rig } from './collectTempRootFixture.js';
+import { openRunsClaimedBy } from '../src/coord/bindingReads.js';
+import { withBindingsOf } from './bindingsFake.js';
 
 const job: CollectJob = { id: ID, epoch: 0 };   // the rig's cell starts at epoch 0 (`r.job()` builds the same); no case here moves it
 const AUDIT = ['ws-audit', '--session', ID, '--collect'];
@@ -219,9 +221,9 @@ describe('step 4 — the open-run hold, judged on observation 2’s document', (
   });
 
   it('an unreadable store holds it', async () => {
-    const r = rig({ coord: (real) => ({
+    const r = rig({ coord: (real) => withBindingsOf({
       run: (id: number) => real.run(id),
-      openRunsClaimedBy: (id: string) => real.openRunsClaimedBy(id),
+      openRunsClaimedBy: (id: string) => openRunsClaimedBy(real, id),
       openRunsForSession: (): OpenSiblingsResult => ({ ok: false, kind: 'run-unreadable', detail: 'the runs table could not be read' }),
     }) });
     expect(await collectTempRoot(r.deps, job)).toMatchObject({ kind: 'held', step: 4, hold: { why: 'store-unreadable' } });

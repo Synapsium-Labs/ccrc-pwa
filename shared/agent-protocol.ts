@@ -399,7 +399,7 @@ export interface AccountOpReq {
  *  A frame with any extra field is a malformed frame (`bad-request`), the same word an agent that predates the op
  *  answers. */
 export interface DiskReq { t: 'req'; id: number; op: 'disk' }
-export type AgentReq = ExecReq|ReadReq|ReadFromReq|ReadB64Req|ReaddirReq|StatReq|LstatReq|WriteB64Req|TailOpenReq|TailCloseReq|PtyOpenReq|CapsReq|UpdateReq|TokenSyncReq|AccountOpReq|DiskReq;
+export type AgentReq = ExecReq|ReadReq|ReadFromReq|ReadB64Req|ReaddirReq|StatReq|LstatReq|WriteB64Req|TailOpenReq|TailCloseReq|PtyOpenReq|CapsReq|UpdateReq|TokenSyncReq|AccountOpReq|DiskReq|PressureReq;
 export interface ResOk  { t: 'res'; id: number; ok: true;  [k: string]: unknown } // op-specific payload fields below
 /** `detail` is ADDITIVE (design 2026-09-20 §10, D-3373): what an
  *  agent can say beyond the word — the `--detach` parent's first stderr line,
@@ -901,3 +901,20 @@ export const DISK_STATFS_DEADLINE_MS = 5_000;
 
 /** The `disk` op's reply: exactly what the decider takes (`DiskMeasured`), in this one type. */
 export type DiskOpReply = DiskMeasured;
+
+// ── the `pressure` op (#1170) ─────────────────────────────────────────────────────────────────────────────────────
+// The agent reads the host's pressure stall information (/proc/pressure/memory and /proc/pressure/io) and answers
+// what it read (`HostPsi`, shared/pressure.ts); the server's decider (`server/src/pressure.ts`) holds the last reading
+// and classifies a stalled link by it. Declared at the file's foot so no line cited above moves. The op takes NO
+// argument, so no path crosses the link. ADDITIVE: no `FLEET_PROTO` bump; an agent that predates it answers
+// `bad-request` and is never sent the op (the server reads `ready.ops` first).
+
+/** ONE member of the `req` envelope. A frame with any extra field is a malformed frame (`bad-request`). */
+export interface PressureReq { t: 'req'; id: number; op: 'pressure' }
+
+/** The op's name, and the word an agent that answers it lists in `ready.ops`. */
+export const PRESSURE_OP = 'pressure';
+
+/** The `pressure` op's reply: exactly what the decider takes, in this one type. */
+export type PressureOpReply = HostPsi;
+import type { HostPsi } from './pressure.js';

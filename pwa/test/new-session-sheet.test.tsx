@@ -328,7 +328,7 @@ describe('the optional routing row (routing slice 4, Task 6)', () => {
   it('shows the coordinator-row note under the row', async () => {
     await openAtStepTwo([]);
     expect(await screen.findByText(
-      "Unset fields take the coordinator row (Opus · ultracode, Sonnet subagents, workflows on). "
+      "Unset fields take the coordinator row (Opus · high, Sonnet subagents, workflows on). "
       + "If the account can't serve the class today, ccd starts one rung down and restores it when it can.",
     )).toBeInTheDocument();
   });

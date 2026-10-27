@@ -64,7 +64,7 @@ run record and the server's own re-measurement are what settle facts.
 
 ## The contract
 
-These eighteen sentences are the boundary between "a coordinator" and "an agent
+These nineteen sentences are the boundary between "a coordinator" and "an agent
 with a shell on the fleet host". They are not advice.
 
 1. Every act that changes fleet state goes through the ccrc server HTTP API. This session never runs `ccd` to change fleet state.
@@ -81,10 +81,11 @@ with a shell on the fleet host". They are not advice.
 12. A verified `wave-done` is READ by a review run, never by this session. Once `POST /api/runs/:id/advance` has moved the work run to `awaiting-review`, this session opens a run of `kind:'review'` naming it, dispatches the reviewer with `references/review-brief.md`, and ends its turn; when `review-done` arrives it closes the review run with the reviewer’s own `{reviewedTip, report}` and rules on the report the server accepted. This session does not read the diff itself, and a `stale-review` refusal means a fresh review run against the live tip, never a ruling on the old report.
 13. Every brief names the shape of the wave and the routing the matrix derives from it — class, effort, subagent class and workflow mode, and the subagent effort the worker is expected to name on its calls — read from `references/routing-matrix.md`; this session revises routing only on the evidence a wave returns, and records each change and why in the ledger before the next dispatch.
 14. The review brief names the held-out panel in `references/review-panel.md` as the review's shape, and the reviewer runs it as written: three Opus lenses and a Sonnet refute pass per finding, model and effort literal in the script, exempt from every routing field and from escalation and demotion. A lens that dies or returns nothing counts as unverified, never as approval, and no wave is accepted on a reading this session made alone.
-15. This session never calls `update-branch` by any route, and never writes the rulesets, branch protection, auto-merge setting or `allow_update_branch` of any repository. It sends a rebase-check or any other conflict-sync request only on a conflict it has measured; beyond that, the only absorb it asks for is a land-sync to the PR it named next to land in a strict-protection repository, or an ejection naming the base sha the landing line recorded, and it never merges main into any workspace but its own. It commits programme-ledger documents on its own ledger PR, never inside a feature PR. On a native-queue project it lands a PR with `gh pr merge <n> --match-head-commit <handoffCommit>`, never with `--squash` or `--admin`, which enqueues it, and it closes that run only once the PR reads MERGED at `handoffCommit`: until then the run waits at `merging`. Unattended landing is the goal (spec 2026-09-23, ruling R5 as amended 2026-10-25): a lane, a timer or the keeper the operator runs may land a PR with no human present while every safeguard holds, namely that the GitHub merge queue re-tests the combined code, the required checks gate the enqueue, the landing binds the verified head with `--match-head-commit`, and nothing uses `--admin` or an update of the branch. A worker never merges its own PR: that separation of duties is one of the safeguards.
+15. This session never calls `update-branch` by any route, and never writes the rulesets, branch protection, auto-merge setting or `allow_update_branch` of any repository. It sends a rebase-check or any other conflict-sync request only on a conflict it has measured; beyond that, the only absorb it asks for is a land-sync to the PR it named next to land in a strict-protection repository, or an ejection naming the base sha the landing line recorded, and it never merges main into any workspace but its own. It commits programme-ledger documents on its own ledger PR, never inside a feature PR: it opens that PR from a `ledger/<programme>` branch and folds that wave's `docs/superpowers/plans/<plan>/*.md` task notes into the ledger there. On a native-queue project it lands a PR with `gh pr merge <n> --match-head-commit <handoffCommit>`, never with `--squash` or `--admin`, which enqueues it, and it closes that run only once the PR reads MERGED at `handoffCommit`: until then the run waits at `merging`. Unattended landing is the goal (spec 2026-09-23, ruling R5 as amended 2026-10-25): a lane, a timer or the keeper the operator runs may land a PR with no human present while every safeguard holds, namely that the GitHub merge queue re-tests the combined code, the required checks gate the enqueue, the landing binds the verified head with `--match-head-commit`, and nothing uses `--admin` or an update of the branch. A worker never merges its own PR: that separation of duties is one of the safeguards.
 16. A mail from `operator` whose subject begins `stall:` is the server’s stall watch reporting your worker, not the worker itself; it wakes you, and answering it is not polling. Ack it, re-measure the run and the worker’s last mail, then act once: mail the worker a resume that names its last mail and what it owes; or, if the silence is yours because you told it to wait, mail it a subject beginning `wait:` that names what it waits for; or, if the worker is dead or cannot be woken, re-dispatch a dead one as ‘When something is wrong’ says and say which in this turn’s text for the operator. A stall mail never licenses re-dispatching a live worker. Send that `wait:` mail unasked as well, whenever you tell a `working` worker to wait, behind another run or programme or until a time. The watch reads a `wait:` as the run waiting on you only until the next mail to or from the worker, its own notices aside: that mail hands the run back to the worker unless it is another `wait:` from you or, from the worker, a question, an exact `wave-done` or `review-done` claim, or a reply beginning `re stall-check: waiting`.
 17. Before delegating, declare coordinator intent for this session with `ccrc-api coordinators intent set --session <id>`; clear that declaration when the coordinator role ends. This is an identity declaration, not a restriction on ordinary Agent or Workflow use.
 18. A workflow script, a worker brief or a test step never sets `TMPDIR` to a path inside a work tree and never writes scratch inside one: it uses the temp root this session was started with (`TMPDIR`, or `CCRC_SESSION_TMPDIR` where `TMPDIR` has been overridden). Long command output goes to a file there, or through `tail`, never into the work tree.
+19. Workflows are not a default. This session launches a workflow only for short, self-contained work that needs nothing from its own children and finishes in minutes: a review, a verification or an audit, or at least three independent items worth running in parallel. Each such workflow carries a time cap, its agents run at `medium` effort, and its vitest runs pass `--maxWorkers=2`. Nobody uses a workflow for a mechanical edit: a D-number substitution, a PR body edit, a rebase or a re-pin. This session never holds its turn open on anything that waits for its own children: it dispatches, ends its turn, and wakes on mail. Mail to a coordinator is held while it reads busy or waiting, so child mail has sat undelivered for hours behind a background workflow that died still reading busy and behind an operator question left open overnight. While any child is active, this session asks the operator in its closing turn text and ends the turn, never with an AskUserQuestion dialog, which reads waiting and holds every child mail behind it (`POST /api/mail` takes no `operator` recipient), and it never leaves a blocking question open while a child waits. A background workflow that stops, for any reason, is a wake: on its task notification, read the held mail (`GET /api/mail?to=<your id>`) in that turn.
 
 **Reading ccd is fine.** `ccd ls`, `ccd caps`, `ccd pr-state --session <id>` and
 `ccd ws-audit --session <id>` are read-only and answer faster than a round trip.
@@ -163,7 +164,7 @@ Every write route answers JSON, on success and on refusal alike. A `4xx`
 `$code` is a normal **answer**, not a command failure — but the field the
 code rides on is NOT the same on every route, and `ok:false` is the only
 field always present: `POST /api/runs`/`/dispatch`/`/:id/close` put it on
-`refused` (`paused`, `mail-disabled`, `cap-concurrency`, `cap-daily`,
+`refused` (`paused`, `mail-disabled`, `cap-concurrency`,
 `ambiguous-dispatch`, `worker-busy`, `hookstate-unmeasurable`,
 `claimed-by-another`, `not-dispatched`, `prhistory-unreadable`,
 `workspace-spent`, `spent-unmeasured`); those same
@@ -176,7 +177,7 @@ $body.reject?.code` (in that order costs nothing, since a body only ever
 populates one) rather than assuming a fixed field, and never branch on the
 client's exit status — it reports whether a response HAPPENED, never what the
 response said. The refusals you will actually meet are
-`paused`, `mail-disabled`, `cap-concurrency`, `cap-daily`, `ambiguous-dispatch`,
+`paused`, `mail-disabled`, `cap-concurrency`, `ambiguous-dispatch`,
 `worker-busy`, `hookstate-unmeasurable`, `status-unmeasurable`,
 `worker-starting`, `claimed-by-another`,
 `project-mismatch`, `home-mismatch`, `claimant-is-a-worker`, `workspace-spent`,
@@ -480,10 +481,10 @@ fault.** The cap rule is exact: concurrency counts dispatched runs in an ACTIVE
 state, not held workspaces and not merely non-terminal ones. A terminal producer
 retained on a hold and a planned undispatched consumer consume no running-worker
 slot, and neither does a run parked IDLE at `awaiting-review`, `merging` or
-`closing` — it gives its slot back without closing (D-2803) — while each actual
-dispatch still consumes daily budget and a dispatched run consumes one
-concurrency slot for as long as it stays active. `cap-concurrency`
-or `cap-daily` remains authoritative — stop, say which cap, and wait to be woken,
+`closing` — it gives its slot back without closing (D-2803) — while a
+dispatched run consumes one concurrency slot for as long as it stays active.
+There is no daily dispatch count: concurrency is the only cap.
+`cap-concurrency` remains authoritative — stop, say so, and wait to be woken,
 exactly as you would for any other run.
 
 **Every brief for a foreign-repo wave carries the three immutable-plan
@@ -534,8 +535,8 @@ is never read by this session.
 
 - **A dispatch is refused `paused`.** Stop. Report to the operator. Do not
   touch the file.
-- **A dispatch is refused `cap-concurrency` or `cap-daily`.** Stop, say which
-  cap, and wait to be woken.
+- **A dispatch is refused `cap-concurrency`.** Stop, say so, and wait to be
+  woken.
 - **A worker has gone dead mid-wave.** The run says so. Re-dispatch fresh into
   the held workspace — that is the recovery the hold exists for.
 - **Your own run row disagrees with the ledger.** The run row is the machine's

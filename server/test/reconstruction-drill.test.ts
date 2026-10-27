@@ -284,6 +284,12 @@ describe('the reconstruction drill', () => {
                                          // board can draw, which is the honest answer and not a gap to
                                          // close: the facts are about the coordination lane's own
                                          // history, and that history lives only here.
+      'reviewCap',                       // D-6909: the review cap's ask and lift times live in `review_cap`
+                                         // alone, and the rounds count review runs, which the drill does
+                                         // not rebuild. So a DB loss resets the rounds to 0 and three more
+                                         // reviews open before the cap refuses again: the PERMISSIVE
+                                         // direction, not a safe one (review 951 F3). Not rebuilt because
+                                         // its inputs are not rebuilt, never because losing it is safe.
       'work item ids and their blockedBy DAG',
       'per-item doneFingerprint',
       'mail bodies and their delivery/ack state',
@@ -321,6 +327,8 @@ describe('the reconstruction drill', () => {
       closedAt: true, handoffCommit: true, items: true, unreadMail: true,
       health: true,
       childReclaim: true,
+      reviewCap: true,
+      childIds: true,
     };
     // Bumped 22 -> 24: `kind`/`reviews` (design 2026-09-14 §5.1, task 3).
     // Bumped 24 -> 25: `childReclaim` (child-reclamation wave 5). It is NOT in
@@ -336,13 +344,16 @@ describe('the reconstruction drill', () => {
     // fleet switch). With no such marker it shows no chip. Either way it says
     // only what the registry and the sweep show now, never a mirror answer for
     // an instant nobody can place.
-    expect(Object.keys(RUN_SUMMARY_KEYS).length).toBe(25);
+    // Bumped 25 -> 26: `reviewCap` (D-6909), named in UNRECOVERABLE above.
+    // Bumped 26 -> 27: `childIds` (ARCH-61, #796). Like `childReclaim` it is NOT in UNRECOVERABLE: nothing stores it, the
+    // live runs frame derives it on every tick (`childrenOf`, `coord/runWire.ts`) from the runs and the fleet's marks.
+    expect(Object.keys(RUN_SUMMARY_KEYS).length).toBe(27);
 
     const r = reconstruct(fx);
     for (const field of UNRECOVERABLE) {
       expect(Object.keys(r), `${field} was reconstructed after all`).not.toContain(field);
     }
-    expect(UNRECOVERABLE.length).toBe(17);
+    expect(UNRECOVERABLE.length).toBe(18);
   });
 
   it('refuses to invent a program when the ledger is missing', () => {

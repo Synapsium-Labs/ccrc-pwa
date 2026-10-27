@@ -57,7 +57,7 @@ import { randomBytes } from 'node:crypto';
 // an arbitrary list re-typed — which is why the rule "enumerated once and
 // derived" needs the import to be the easy path rather than the remembered one.
 import {
-  API_KEY_PROVIDERS, HUES, LABEL_UNSAFE_RE, MODEL_ALIASES, MODEL_ID_RE,
+  API_KEY_PROVIDERS, CODEX_BRIDGE_MODES, HUES, LABEL_UNSAFE_RE, MODEL_ALIASES, MODEL_ID_RE,
   RosterInvalid, rosterFromJson,
 } from '../shared/roster-json.mjs';
 import { BASE_URL_OK } from '../shared/base-url.mjs';
@@ -245,9 +245,17 @@ function rosterAdmits(candidate, opening) {
  *  rule is three chances for the next one to be written without it. `drop`
  *  inherited D-2052's mode carry only because someone remembered; a fourth
  *  writer would inherit nothing, and `single-definition.test.ts` cannot see
- *  this file at all (it filters `/\.tsx?$/`, D-1860). One function, three
- *  callers, and `ccrc-account.test.ts` counts the `renameSync` calls in this
- *  file so a fourth copy reds rather than drifts.
+ *  this file at all (it filters `/\.tsx?$/`, D-1860). One function, four
+ *  callers since `codex-mode` (codex bridge Stage 2, Task 12), and
+ *  `ccrc-account.test.ts` counts the `renameSync` calls in this file so a
+ *  second copy reds rather than drifts.
+ *
+ *  EVERY CALLER RUNS UNDER ONE LOCK, AND THIS FUNCTION TAKES NONE. Each is a
+ *  read-modify-write of the whole file, so two at once lose one's change. The
+ *  bash side serialises them on `$REG/.account-placement.lock`: `add-entry`,
+ *  `declare-entry` and `drop` under `_acct_marker_lock`, and `codex-mode` under
+ *  `_codex_cmd_switch`'s step 0, which takes the same file (Task 12 fix round
+ *  1, review F1/M2). A new caller takes it too.
  *
  *  TMP + RENAME, `_inst_accounts_sh`'s discipline: the file is USER-OWNED and
  *  must never be observable half-written.
@@ -269,7 +277,7 @@ function rosterAdmits(candidate, opening) {
  *  `wx` turns a collision into a refusal instead of a lost roster.
  *
  *  IT REFUSES, IT DOES NOT THROW: the caller's `failed` clause says what the
- *  box is left holding, because these three callers reach this line with very
+ *  box is left holding, because these four callers reach this line with very
  *  different things already on disk. */
 function writeRoster(file, next, failed) {
   const tmp = `${file}.tmp.${process.pid}.${randomBytes(8).toString('hex')}`;
@@ -711,6 +719,9 @@ const OPS = {
   'lane-state': {
     keys: ['id', 'mode', 'check-verdict', 'check-at', 'key-hash', 'retired-key-hash', 'clear'], repeat: [],
   },
+  // THE ROSTER HALF OF `ccrc codex switch` (codex-bridge Stage 2, Task 12; spec D20): a codex lane's mode, written
+  // through `writeRoster`, the one writer. Silent on success, like `drop`. Its arm says why the default is DELETED.
+  'codex-mode': { keys: ['file', 'id', 'bridge'], repeat: [] },
 };
 
 /** THE VERDICT TABLE, and the only copy of it in the tree. §8 puts the
@@ -2320,6 +2331,56 @@ function main(argv) {
       `removing "${a['id']}" would make ${a['file']} unparseable: `);
     if (admits !== 0) return admits;
     if (!writeRoster(a['file'], next, stands)) return 1;
+    return 0;
+  }
+
+  if (op === 'codex-mode') {
+    for (const k of ['file', 'id', 'bridge']) {
+      if (a[k] === undefined) { refuse('bad-argv', `codex-mode needs --${k}`); return 2; }
+    }
+    // THE WORD IS CHECKED BEFORE THE ROSTER IS READ, against the validators' own set (imported, never re-spelled):
+    // a mode this file would have to guess at is a usage error, and nothing is read or written for it.
+    if (!CODEX_BRIDGE_MODES.includes(a['bridge'])) {
+      refuse('unknown-mode',
+        `codex-mode needs --bridge ${CODEX_BRIDGE_MODES.join(' or ')}, and got ${JSON.stringify(a['bridge'])}; `
+        + `${a['file']} was unchanged`);
+      return 2;
+    }
+    const json = readRoster(a['file']);
+    if (json === null) return 1;
+    const acct = json['accounts'].find((x) => x !== null && typeof x === 'object' && x['id'] === a['id']);
+    if (acct === undefined) {
+      refuse('unknown-id', `no account "${a['id']}" in ${a['file']}, so no lane mode was written; the roster was unchanged`);
+      return 1;
+    }
+    const exec = (acct['exec'] !== null && typeof acct['exec'] === 'object') ? acct['exec'] : {};
+    if (exec['kind'] !== 'codex') {
+      refuse('not-codex',
+        `account "${a['id']}" is exec.kind ${JSON.stringify(exec['kind'] ?? null)}, not "codex", and only a codex lane `
+        + 'has a mode; the roster was unchanged');
+      return 1;
+    }
+    // A MODE ALREADY RECORDED IS NOT WRITTEN AGAIN (Task 12 fix round 2, review R1/R3): the roster is the operator's
+    // file and may be hand-edited, and a rewrite would put it back in this file's own spelling (indentation, key
+    // order, escapes) for no change. The row's mode is resolved as every reader resolves it, an absent key reading the
+    // first word of the set, and when it is the requested word nothing is written and the answer is ok. So a
+    // hand-written explicit default (`"bridge": "litellm"`) is KEPT on `--bridge litellm`: the delete below runs only
+    // on a change of mode (Task 12 fix round 3, review M1/M2, D-6886).
+    if ((exec['bridge'] ?? CODEX_BRIDGE_MODES[0]) === a['bridge']) return 0;
+    // THE DEFAULT IS DELETED, NEVER WRITTEN (spec D20, additive): an absent key reads the first word of the set, so a
+    // lane switched back to it reads byte for byte as it did before the bridge existed, and an older ccrc reading
+    // this roster meets no key it does not know. Only another word is written.
+    const nextExec = { ...exec };
+    delete nextExec['bridge'];
+    if (a['bridge'] !== CODEX_BRIDGE_MODES[0]) nextExec['bridge'] = a['bridge'];
+    const next = {
+      ...json,
+      accounts: json['accounts'].map((x) => (x === acct ? { ...acct, exec: nextExec } : x)),
+    };
+    const admits = rosterAdmits(next,
+      `recording lane "${a['id']}"'s mode as ${a['bridge']} would make ${a['file']} unparseable: `);
+    if (admits !== 0) return admits;
+    if (!writeRoster(a['file'], next, 'the roster was unchanged')) return 1;
     return 0;
   }
 

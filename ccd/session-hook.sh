@@ -94,7 +94,7 @@ _hook_emit_context() {   # <standing> [<compact>] [<roster>, D4 #757, after both
   # a third budget. A pathological GM_NODES (D-1899) still loses only the
   # standing tail; the compact card behind it is intact.
   if [ -n "${2:-}" ]; then
-    text="${text:+$text }${2:0:$COMPACT_CARD_MAX_CHARS}"
+    text="${text:+$text }${2:0:$COMPACT_CARD_MAX_CHARS}"  # @anchor emit-context-compact-ceiling
     text="${text:0:$CARD_TOTAL_MAX_CHARS}"
   fi; [ -z "${3:-}" ] || text="${text:+$text }${3:0:$ROSTER_CARD_MAX_CHARS}"
   # RETURNS 1 when the envelope could not be built — nothing was printed, and
@@ -102,7 +102,7 @@ _hook_emit_context() {   # <standing> [<compact>] [<roster>, D4 #757, after both
   # out. Every existing caller ignores the code, so nothing else changes.
   j=$(jq -cn --arg c "$text" \
     '{hookSpecificOutput:{hookEventName:"SessionStart", additionalContext:$c}}' 2>/dev/null) \
-    || return 1
+    || return 1  # @anchor emit-context-print
   printf '%s\n' "$j"
 }
 
@@ -3195,7 +3195,7 @@ ROSTER_PROGRAM='def s: tostring | gsub("[^A-Za-z0-9._:/-]"; "") | .[0:40]; def n
     # The stamp follows the PRINT, never the intent: only an emitter that
     # returned 0 with a compact subject in hand records `served`.
     if [ -n "$CARD$CARD_COMPACT$CARD_ROSTER" ]; then
-      if _hook_emit_context "$CARD" "$CARD_COMPACT" "$CARD_ROSTER" && [ -n "$CARD_COMPACT" ]; then _hook_compact_mark_served || true; fi
+      if _hook_emit_context "$CARD" "$CARD_COMPACT" "$CARD_ROSTER" && [ -n "$CARD_COMPACT" ]; then _hook_compact_mark_served || true; fi  # @anchor compact-arm-emit-call
     fi
     # THE RETAINED SERVE LOCK ENDS HERE, on every path through this arm — the
     # marker, when one was published, was the last act inside it.
@@ -3993,7 +3993,7 @@ if [[ "$event" == PreToolUse && -z "$pre_json" && "${tool:-}" == Bash ]] \
     lreason+=' (2) a required check on the PR is red while main passes the same tests: re-run its failing test files on a clean checkout of `origin/HEAD` in scratch, and a red there too is a red main also shows (report it once as main-red and leave main alone);'
     lreason+=" (3) the coordinator's fix-round mail names this PR ejected from the landing line with a base sha, or next to land in a strict-protection repository."
     lreason+=' Otherwise leave main alone: a clean branch lands as it is, and every needless sync restarts CI.'
-    lreason+=' When you do absorb: `git merge` only — never a rebase, a force-push or the Update branch of GitHub (its button, `gh pr` verb or API) — and on a conflict in a `# ccrc:generated` stamp line, take either side of that line only, resolve the rest of the file as source, then run `~/.local/bin/ccrc restamp <file>`.'
+    lreason+=' When you do absorb: `git merge` only — never a rebase, a force-push or the Update branch of GitHub (its button, `gh pr` verb or API) — and on a conflict in a `# ccrc:generated` stamp line, take either side of that line only, resolve the rest of the file as source, then run `~/.local/bin/ccrc restamp <file>` (`ccd/ccd` carries no committed stamp, so it never has one).'
     pre_json=$(_hook_nudge_json "$lreason") || pre_json=""
   fi
 fi

@@ -15,9 +15,9 @@ import {
 import { parseChildReclaimResult } from '../src/coord/childReclaim.js';
 import { parseExpireResult } from '../src/archivedExpiry.js';
 import { parseCollectResult } from '../src/collectLane.js';
-import { CCD, makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
+import { makeCcdHarness, type CcdHarness, ccdSource } from './ccdWsHelpers.js';
 
-const src = readFileSync(CCD, 'utf8');
+const src = ccdSource();
 const ID = 'demo-quiet-dune';
 const LOCK = `/h/.cc-sessions/.reap-${ID}.lock`;
 const BASH = `/h/ccd: line 9: ${LOCK}: Is a directory`;

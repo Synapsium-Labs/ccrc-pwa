@@ -23,6 +23,8 @@ import {
 } from './childReclaimSweep.js';
 import { COLLECT_LANE_LIVE_MARKER } from '../../shared/switches.js';
 import { CCD_LOCK_UNOPENABLE, readCcdRefusal, withoutCcdRefusal } from '../../shared/ccd-refusal.js';
+import { isWorkspaceRefusal, type WorkspaceRefusal } from '../../shared/workspaceTransitions.js';
+import { splitJournalRecords } from './journalKernel.js';
 
 const hasOwn = (o: object, k: string): boolean => Object.prototype.hasOwnProperty.call(o, k);
 /** A JSON object: never an array, never null. */
@@ -76,20 +78,22 @@ export type CollectRefusalClass = 'terminal' | 'retry';
 
 /** Every word `ws-collect` prints as `refused`: the collector's five journal words, declared in L0's `LcRefusalToken`,
  *  and the five shared tokens `wsaudit.ts` words. The audit's refusal verdicts are the same words, save `state-changed`.
- *  `collect-readers.test.ts` holds the keys equal to ccd's text, both ways. */
+ *  The words are the collect edges of `WORKSPACE_TRANSITIONS` (ARCH-41): the table below must name exactly those, or it
+ *  does not compile. `collect-readers.test.ts` holds the keys equal to ccd's text, both ways. */
 const COLLECT_REFUSAL_CLASS_TABLE = {
   'witness-mismatch': 'terminal', 'quarantine-kept': 'terminal', 'containment-unproven': 'terminal',
   'not-witnessed': 'retry', registered: 'retry', 'changed-recently': 'retry',
   'state-changed': 'retry', 'in-use': 'retry', 'in-progress': 'retry', paused: 'retry',
-} as const satisfies Readonly<Record<string, CollectRefusalClass>>;
-export type CollectRefusalWord = keyof typeof COLLECT_REFUSAL_CLASS_TABLE;
+} as const satisfies Readonly<Record<WorkspaceRefusal<'collect'>, CollectRefusalClass>>;
+export type CollectRefusalWord = WorkspaceRefusal<'collect'>;
 export const COLLECT_REFUSAL_CLASS: Readonly<Record<CollectRefusalWord, CollectRefusalClass>> = COLLECT_REFUSAL_CLASS_TABLE;
 export const COLLECT_REFUSAL_WORDS: readonly CollectRefusalWord[] =
   Object.keys(COLLECT_REFUSAL_CLASS_TABLE) as CollectRefusalWord[];
 
-/** A refusal word's class. An unknown word, a prototype member's name included, is a `retry`. */
+/** A refusal word's class, its membership answered from `WORKSPACE_TRANSITIONS`. An unknown word, a prototype member's
+ *  name included, is a `retry`. */
 export function collectRefusalClass(word: string): CollectRefusalClass {
-  return hasOwn(COLLECT_REFUSAL_CLASS, word) ? COLLECT_REFUSAL_CLASS[word as CollectRefusalWord] : 'retry';
+  return isWorkspaceRefusal('collect', word) ? COLLECT_REFUSAL_CLASS[word] : 'retry';
 }
 
 // ── the audit reader (spec §5.10) ───────────────────────────────────────────────────────────────────────────────
@@ -1980,14 +1984,15 @@ export const COLLECT_LANE_JOURNAL_KINDS: readonly CollectLaneJournalRead['kind']
 /** A record padded by whitespace at either end, or carrying a carriage return anywhere. */
 const COLLECT_JOURNAL_BLANK = /^\s|\s$|\r/;
 
-/** THE JOURNAL'S ONE PARSE (path-identity spec 2026-10-12 §5.2, §5.9). Total over every string; never throws. It splits
- *  on newlines and drops exactly one trailing empty string, so a final newline is allowed and never required. Every
- *  record is one JSON object whose own `generation` is a positive safe integer above the record before it; any other
- *  property is ignored. The first fault answers, at its 1-based record. */
+/** THE JOURNAL'S ONE PARSE (path-identity spec 2026-10-12 §5.2, §5.9). Total over every string; never throws. Its
+ *  records are the kernel's complete records (`journalKernel.ts#splitJournalRecords`, D-7059), blanks kept, and a
+ *  non-empty tail as the last record, so a final newline is allowed and never required. Every record is one JSON
+ *  object whose own `generation` is a positive safe integer above the record before it; any other property is ignored.
+ *  The first fault answers, at its 1-based record. */
 export function parseCollectLaneJournal(text: string): Extract<CollectLaneJournalRead, { kind: 'ok' | 'malformed' }> {
   if (text === '') return { kind: 'malformed', fault: 'empty', record: 1 };
-  const records = text.split('\n');
-  if (records[records.length - 1] === '') records.pop();
+  const framed = splitJournalRecords(text);
+  const records = framed.tail === '' ? framed.records : [...framed.records, framed.tail];
   let max = 0;
   for (let i = 0; i < records.length; i += 1) {
     const rec = records[i];

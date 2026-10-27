@@ -133,7 +133,7 @@ const EXPECTED_SITES: readonly string[] = [
   'coord/routes.ts | POST /api/mail | readRegistryMeasured | refuses',
   'coord/routes.ts | POST /api/mail/:id/ack | readRegistryMeasured | refuses',
   'coord/routes.ts | attributionVerdict | readRegistryMeasured | refuses',
-  'coord/routes.ts | POST /api/approvals | readRegistry | refuses',
+  'coord/questions.ts | raiseApproval | readRegistry | refuses',
   'coord/routes.ts | POST /api/approvals/:id/rule | readRegistry | refuses',
   'fleet.ts | assembleFleet | readRegistryMeasured | tests-only',
   'lifecycle.ts | listProjects | readRegistryMeasured | reports',
@@ -274,8 +274,15 @@ describe('tick hands its model to the lanes that would otherwise list the regist
       .toMatch(/\bthis\.sweepMail\(\s*registryRead\s*\)/);
   });
 
-  it('tick() passes registryRead to sweepAsks(', () => {
-    expect(body(), 'tick no longer hands the ask lane its model: that lane would list the registry itself')
+  // W3 Q3c (D-7027), named exception 2: tick hands the question sweep its model, and the sweep hands it to the ask
+  // half. The same fact, over the two bodies the hand-off now crosses.
+  it('tick() passes registryRead to sweepQuestions(', () => {
+    expect(body(), 'tick no longer hands the question sweep its model: the ask lane would list the registry itself')
+      .toMatch(/\bthis\.sweepQuestions\(\s*registryRead\s*\)/);
+  });
+
+  it('sweepQuestions passes registryRead to sweepAsks(', () => {
+    expect(tickCode(sourceOfSymbol(TICK_WATCH_TS, 'FleetWatcher.sweepQuestions')), 'the question sweep no longer hands the ask lane its model: that lane would list the registry itself')
       .toMatch(/\bthis\.sweepAsks\(\s*registryRead\s*\)/);
   });
 
@@ -402,7 +409,10 @@ describe('Task 7: the migrated readers and the six production assembleFleet call
     expect(sitesOf('fleet.ts', 'readRegistry').map(where)).toEqual([]);
     expect(sitesOf('lifecycle.ts', 'readRegistry').map(where)).toEqual([]);
     expect(sitesOf('server.ts', 'readRegistry').map(where), 'prTasks reads one row (D-6434)').toEqual([]);
-    expect(sitesOf('coord/routes.ts', 'readRegistry'), 'the two approval routes, placed refuses').toHaveLength(2);
+    // The two approval sites, placed refuses: the rule route's, and the raise's, which moved with its ladder into
+    // `coord/questions.ts#createQuestions`'s `raiseApproval` (D-7029; W3 Q3e, named exception 3).
+    expect(sitesOf('coord/routes.ts', 'readRegistry'), 'the rule route, placed refuses').toHaveLength(1);
+    expect(sitesOf('coord/questions.ts', 'readRegistry'), 'the raise, placed refuses').toHaveLength(1);
     const count = (reader: 'readRegistry' | 'readRegistryMeasured'): number =>
       allSites().filter((s) => s.reader === reader).length;
     expect(count('readRegistry'), 'readRegistry( call sites in server/src').toBe(3);

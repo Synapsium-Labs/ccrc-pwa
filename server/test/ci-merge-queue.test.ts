@@ -15,8 +15,11 @@
  *     a queue run too. The second half is the dangerous one: GitHub reports a
  *     job skipped by `if:` as passing, so a required leg that skipped the
  *     queue would let the queue merge a tree nobody tested.
- *  4. A queue run runs what a pull request runs (operator ruling 2026-09-28):
- *     the header's mode table says so, and `decideMode` agrees for every input.
+ *  4. A queue run runs the FULL server suite and a pull request runs the light
+ *     selection (operator ruling 2026-10-25, which replaced 2026-09-28's "a
+ *     queue run runs what a pull request runs"): the header's mode table says
+ *     so, `decideMode` agrees for every input, and the queue never answers
+ *     `selected`.
  *  5. The selector and the verdict agree on which triggers may never answer
  *     `tests: none` — derived from `on:`, so a trigger added to one module's
  *     pull-request arm and not the other's reds here.
@@ -167,17 +170,32 @@ describe('ci.yml and the merge queue (landing-order stage 2, on CI selection\'s 
     }
   });
 
-  it('runs what a pull request runs: the mode table has the row, and decideMode agrees for every input', () => {
+  it('runs the full suite where a pull request runs the light one: the mode table has the row, and decideMode agrees for every input', () => {
     const header = ci().split('\n').filter((l) => l.startsWith('#'));
     const row = (ev: string): string | undefined => header.map((l) => new RegExp(`^#   ${ev}\\s{2,}(\\w+)`).exec(l)?.[1]).find(Boolean);
-    expect(row('merge_group'), 'the header mode table has no merge_group row').toBeDefined();
-    expect(row('merge_group')).toBe(row('pull_request'));
+    expect(row('merge_group'), 'the header mode table has no merge_group row').toBe('full');
+    expect(row('pull_request'), 'the header mode table has no pull_request row').toBe('selected');
     expect(row('merge_group')).toBe(decideMode({ event: 'merge_group', fullGreen: false }).tests);
+    expect(row('pull_request')).toBe(decideMode({ event: 'pull_request', fullGreen: false }).tests);
     for (const inputMode of [undefined, 'full', 'rebuild']) {
       for (const fullGreen of [false, true]) {
-        expect(decideMode({ event: 'merge_group', inputMode, fullGreen }), `inputMode=${inputMode} fullGreen=${fullGreen}`)
-          .toEqual(decideMode({ event: 'pull_request', inputMode, fullGreen }));
+        expect(decideMode({ event: 'merge_group', inputMode, fullGreen }).tests, `inputMode=${inputMode} fullGreen=${fullGreen}: a queue run must be full`)
+          .toBe('full');
       }
+    }
+  });
+
+  it('keeps the full shard matrix on the queue path: server-shard is not narrowed by anything but select\'s own outputs, and a queue run is never skipped by the light rule', () => {
+    const all = jobs(ci());
+    const shard = (all.get('server-shard') ?? []).join('\n');
+    expect(shard, 'server-shard no longer takes its matrix from select').toContain('matrix: ${{ fromJSON(needs.select.outputs.server_matrix) }}');
+    expect(jobKeys(all.get('server-shard') ?? [], 'if')[0], 'server-shard\'s condition must not name an event')
+      .not.toMatch(/github\.event_name/);
+    // The light-pull-request rule (reach.mjs) is asked only of a pull request, in every job that asks it.
+    for (const id of ['test', 'pwa-shard', 'browser-pwa']) {
+      const b = (all.get(id) ?? []).join('\n');
+      expect(b, `${id}: the reach step must be a pull_request-only question`).toContain("github.event_name == 'pull_request'");
+      expect(b, `${id}: the reach step is missing`).toContain('.github/ci/reach.mjs');
     }
   });
 

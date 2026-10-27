@@ -14,3 +14,26 @@ export function extractHookRegion(hookSrc: string): string | null;
 export function applyHookRegion(hookSrc: string, ccdSrc: string): string;
 export type HookRegionStatus = 'current' | 'missing' | 'edited' | 'stale';
 export function checkHookRegion(hookSrc: string, ccdSrc: string): HookRegionStatus;
+/** D-7049: the second region, the auth-dead marker's writers copied from ccd for `ccd/ccd-account-health`. */
+export const AUTHDEAD_REGION_BEGIN: string;
+export const AUTHDEAD_REGION_END: string;
+export const AUTHDEAD_WRITERS: readonly string[];
+/** ccd's whole definition of `name` (its `name() {` line through its column-0 `}`, or a one-line definition), or null. */
+export function ccdFunctionDefinition(ccdSrc: string, name: string): string | null;
+export function renderAuthdeadBody(ccdSrc: string): string;
+/** One generated region: its BEGIN/END lines, the prefix it is recognised by, its report label and its renderer. */
+export interface GeneratedRegion {
+  readonly name: 'hook' | 'authdead';
+  readonly label: string;
+  readonly begin: string;
+  readonly end: string;
+  readonly detect: string;
+  readonly render: (ccdSrc: string) => string;
+}
+export const REGIONS: readonly GeneratedRegion[];
+/** The region row `src` carries (whole or damaged), or null. */
+export function regionOf(src: string): GeneratedRegion | null;
+export function renderRegion(row: GeneratedRegion, ccdSrc: string): string;
+export function extractRegion(row: GeneratedRegion, src: string): string | null;
+export function applyRegion(row: GeneratedRegion, src: string, ccdSrc: string): string;
+export function checkRegion(row: GeneratedRegion, src: string, ccdSrc: string): HookRegionStatus;

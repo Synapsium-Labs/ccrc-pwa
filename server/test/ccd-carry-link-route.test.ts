@@ -31,7 +31,7 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { makeCcdHarness, type CcdHarness, CCD, FIXTURE_MOUNTINFO } from './ccdWsHelpers.js';
+import { makeCcdHarness, type CcdHarness, CCD, FIXTURE_MOUNTINFO, ccdSource } from './ccdWsHelpers.js';
 import { bindFixture, FIXTURE_DEV, mountRow, plantFakeKernel, type BindOpts } from './fixtures/fakeMountKernel.js';
 import { IS_LINUX } from './platformFixtures.js';
 
@@ -54,7 +54,7 @@ const produced = new Set<string>();
 /** The words ccd's route may answer, read from the one place they are spelled
  *  (empty when ccd spells none, which the census cases then report). */
 const carryCauses = (): string[] => {
-  const m = /^CARRY_CAUSES = \(([^)]*)\)$/m.exec(fs.readFileSync(CCD, 'utf8'));
+  const m = /^CARRY_CAUSES = \(([^)]*)\)$/m.exec(ccdSource());
   return m ? [...m[1]!.matchAll(/'([a-z-]+)'/g)].map((x) => x[1]!) : [];
 };
 
@@ -185,7 +185,7 @@ describe('_carry_link_route: the geometry', () => {
     // `CARRY_CAUSES` is spelled once in the carry's Python (R10d pins that its
     // program names them only through the tuple); the bash side may set only
     // words from it (its `route-error` default, `root-failed`).
-    const words = [...fs.readFileSync(CCD, 'utf8').matchAll(/\bCARRY_ROUTE=([a-z][a-z-]*)/g)].map((m) => m[1]!);
+    const words = [...ccdSource().matchAll(/\bCARRY_ROUTE=([a-z][a-z-]*)/g)].map((m) => m[1]!);
     expect(words.length, 'the bash side sets at least its default').toBeGreaterThanOrEqual(1);
     const causes = carryCauses();
     expect(causes.length, 'ccd spells CARRY_CAUSES').toBeGreaterThan(0);
@@ -541,7 +541,7 @@ describe('CARRY_CAUSES is closed, spelled once, and every word in it is reachabl
   });
 
   it('R10d the carry program names a cause only through the tuple: no cause-shaped literal outside the CARRY_CAUSES line', () => {
-    const src = fs.readFileSync(CCD, 'utf8');
+    const src = ccdSource();
     const fn = src.indexOf('\n_carry_py() {');
     const open = src.indexOf("3<<'PY'\n", fn);
     const end = src.indexOf('\nPY\n', open);

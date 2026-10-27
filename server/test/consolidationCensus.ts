@@ -2,8 +2,8 @@
 // exit or a PR body quotes comes from one of these NAMED queries, run on the PR's tip, never typed. Each query returns
 // the sites it found (`{ file, line, text }`), so a count is the list's length and a PR body can print the list.
 // `consolidation-census.test.ts` holds each query against a fixture tree and finds its cited site on the real one.
-// No count is pinned here: a census reports until its series reaches its target, and the may-only-shrink pin lands in
-// the commit that reaches it (spec §5.1 rule 3, rev 2).
+// A count is pinned only once its series reaches its target: a census reports until then, and the may-only-shrink pin
+// lands in the commit that reaches it (spec §5.1 rule 3, rev 2).
 //
 // KNOWN WIDTH, every query: comments are dropped LINE by line. A line whose first token is `//`, `*` or `/*` is prose,
 // and a trailing `// …` on a code line is cut. A line inside a block comment that does not start with `*`, and a call
@@ -23,7 +23,7 @@ export interface CensusSite { readonly file: string; readonly line: number; read
 
 /** Every `.ts`/`.tsx`/`.mjs` file under `root/dir`, sorted; declaration files and `__`-prefixed transient mutants
  *  (the `boot.test.ts` precedent in `single-definition.test.ts`'s `sources`) are skipped. */
-function sourceFiles(root: string, dir: string): string[] {
+export function sourceFiles(root: string, dir: string): string[] {
   const out: string[] = [];
   const walk = (d: string): void => {
     if (!existsSync(d)) return;
@@ -46,7 +46,7 @@ export function codeOf(line: string): string {
 }
 
 /** Every match of `re` (global) on a code line of each file under `dirs`, one site per match. */
-function sitesOf(root: string, dirs: readonly string[], re: RegExp, skip: (rel: string) => boolean = () => false): CensusSite[] {
+export function sitesOf(root: string, dirs: readonly string[], re: RegExp, skip: (rel: string) => boolean = () => false): CensusSite[] {
   const out: CensusSite[] = [];
   for (const dir of dirs) {
     for (const f of sourceFiles(root, dir)) {
@@ -60,7 +60,7 @@ function sitesOf(root: string, dirs: readonly string[], re: RegExp, skip: (rel: 
   return out;
 }
 
-const esc = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+export const esc = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 /** `recordFeedEvent(` call expressions under `server/src`, outside `coord/store.ts` (which defines the door and may
  *  call itself). A method SIGNATURE (`recordFeedEvent(epoch: number, …)` opening a line) is a declaration, not a call.
@@ -105,16 +105,35 @@ export function ccdLauncherIn(root: string = REPO): string {
   return path.join(root, path.relative(REPO, CCD));
 }
 
+/** The library files `ccd/ccd` loads at its foot (D-6913), in load order. The census reads them AFTER `ccd/ccd`,
+ *  as one program: a moved function is still ccd's, with its row in `ccd/contexts.tsv`, its edges in the call graph and its
+ *  line in the heredoc check. A tree without one (a fixture) has no lines from it. */
+export const CCD_LIB_FILES: readonly string[] = ['ccd/lib/disk-retention.sh'];
+
+/** One line of ccd's shell source, with the repo-relative file it is in and its 1-based line there. */
+export interface CcdSourceLine { readonly file: string; readonly line: number; readonly text: string }
+
+/** `ccd/ccd`, then each library file that exists under `root`, as lines. */
+export function ccdSourceLines(root: string = REPO): CcdSourceLine[] {
+  const out: CcdSourceLine[] = [];
+  const add = (file: string, abs: string): void => {
+    if (!existsSync(abs)) return;
+    const lines = readFileSync(abs, 'utf8').split('\n');
+    // A file's final newline is not a line of its own: the library ends in one, and a phantom empty line would end nothing.
+    if (lines[lines.length - 1] === '' && file !== 'ccd/ccd') lines.pop();
+    lines.forEach((text, i) => out.push({ file, line: i + 1, text }));
+  };
+  add('ccd/ccd', ccdLauncherIn(root));
+  for (const rel of CCD_LIB_FILES) add(rel, path.join(root, rel));
+  return out;
+}
+
 /** A definition `ccd/ccd` writes: a function name at column 0, `()`, optional spaces, `{`. */
 export const CCD_FUNCTION_DEF = /^([A-Za-z_][A-Za-z0-9_]*)\(\) *\{/;
 
-/** ccd's function definitions, one site per `name() {` line of `ccd/ccd` (the site's `text` is the line). */
+/** ccd's function definitions, one site per `name() {` line of `ccd/ccd` and its library (the site's `text` is the line). */
 export function ccdFunctionDefinitions(root: string = REPO): CensusSite[] {
-  const out: CensusSite[] = [];
-  readFileSync(ccdLauncherIn(root), 'utf8').split('\n').forEach((text, i) => {
-    if (CCD_FUNCTION_DEF.test(text)) out.push({ file: 'ccd/ccd', line: i + 1, text });
-  });
-  return out;
+  return ccdSourceLines(root).filter((s) => CCD_FUNCTION_DEF.test(s.text));
 }
 
 /** The manifest's rows, one site per non-comment, non-blank line of `ccd/contexts.tsv` (`text` is the line). No
@@ -135,12 +154,13 @@ export function bashCodeOf(line: string): string {
   return line.replace(/\s#(?:\s.*)?$/, '');
 }
 
-/** One edge of ccd's call graph: `caller`'s region names `callee` first at `line` (1-based, in `ccd/ccd`). */
-export interface CcdCallEdge { readonly caller: string; readonly callee: string; readonly line: number }
+/** One edge of ccd's call graph: `caller`'s region names `callee` first at `line` (1-based, in `file`). */
+export interface CcdCallEdge { readonly caller: string; readonly callee: string; readonly line: number; readonly file: string }
 
 /** ccd's call graph: one edge per (caller, callee) pair, in definition order, then by first reference. */
 export function ccdCallGraph(root: string = REPO): CcdCallEdge[] {
-  const lines = readFileSync(ccdLauncherIn(root), 'utf8').split('\n');
+  const src = ccdSourceLines(root);
+  const lines = src.map((s) => s.text);
   const defs: { name: string; at: number }[] = [];
   lines.forEach((l, i) => { const m = CCD_FUNCTION_DEF.exec(l); if (m) defs.push({ name: m[1]!, at: i }); });
   const names = new Set(defs.map((d) => d.name));
@@ -157,7 +177,7 @@ export function ccdCallGraph(root: string = REPO): CcdCallEdge[] {
         const callee = m[2]!;
         if (m[1] !== undefined || m[3] !== undefined || callee === d.name || !names.has(callee) || seen.has(callee)) continue;
         seen.add(callee);
-        out.push({ caller: d.name, callee, line: j + 1 });
+        out.push({ caller: d.name, callee, line: src[j]!.line, file: src[j]!.file });
       }
     }
   });
@@ -169,7 +189,8 @@ export function ccdCallGraph(root: string = REPO): CcdCallEdge[] {
  *  line. A heredoc opens at `<<WORD`, `<<-WORD` or a quoted WORD on a code line (`<<<` is a here-string, not one) and
  *  closes at the line that is WORD (after leading tabs for `<<-`); one that never closes is a site too. */
 export function ccdHeredocBraces(root: string = REPO): CensusSite[] {
-  const lines = readFileSync(ccdLauncherIn(root), 'utf8').split('\n');
+  const src = ccdSourceLines(root);
+  const lines = src.map((s) => s.text);
   const open = /(?<!<)<<(-?)\s*(['"]?)([A-Za-z_][A-Za-z0-9_]*)\2/g;
   const out: CensusSite[] = [];
   let inFn = false;
@@ -178,16 +199,16 @@ export function ccdHeredocBraces(root: string = REPO): CensusSite[] {
     if (pending.length > 0) {
       const h = pending[0]!;
       if ((h.tabs ? text.replace(/^\t+/, '') : text) === h.word) pending.shift();
-      else if (inFn && text.startsWith('}')) out.push({ file: 'ccd/ccd', line: i + 1, text });
+      else if (inFn && text.startsWith('}')) out.push({ file: src[i]!.file, line: src[i]!.line, text });
       return;
     }
     if (CCD_FUNCTION_DEF.test(text)) inFn = true;
     else if (text.startsWith('}')) inFn = false;
     if (!inFn) return;
-    for (const m of bashCodeOf(text).matchAll(open)) pending.push({ word: m[3]!, tabs: m[1] === '-', at: i + 1 });
+    for (const m of bashCodeOf(text).matchAll(open)) pending.push({ word: m[3]!, tabs: m[1] === '-', at: i });
   });
   // A heredoc that never closes means this reader misparsed one; say so rather than read nothing after it.
-  for (const h of pending) out.push({ file: 'ccd/ccd', line: h.at, text: `<<${h.word} never closes` });
+  for (const h of pending) out.push({ file: src[h.at]!.file, line: src[h.at]!.line, text: `<<${h.word} never closes` });
   return out;
 }
 
@@ -199,7 +220,7 @@ export function ccdCrossContextCalls(root: string = REPO): CensusSite[] {
   return ccdCallGraph(root).flatMap((e) => {
     const a = ctx.get(e.caller); const b = ctx.get(e.callee);
     if (a === undefined || b === undefined || a === b || b === 'K') return [];
-    return [{ file: 'ccd/ccd', line: e.line, text: `${e.caller} (${a}) -> ${e.callee} (${b})` }];
+    return [{ file: e.file, line: e.line, text: `${e.caller} (${a}) -> ${e.callee} (${b})` }];
   });
 }
 
@@ -352,15 +373,16 @@ export function runCcdOldFoldSites(root: string = REPO, table: readonly RanTable
   return runCcdSiteArms(root, table).filter((s) => s.arm === null).map(({ file, line, text }) => ({ file, line, text }));
 }
 
-/** D-5866 (Task C1k; ARCH-71 #806): the W4 files W1b never edits. Their capability sites are reported, tagged
- *  `w4-held`, and W4 moves them. */
-export const W4_HELD_FILES: readonly string[] = ['server/src/hibernateSweep.ts', 'server/src/stopDoneSweep.ts'];
+/** D-5866 (Task C1k; ARCH-71 #806): the W4 files W1b never edits. Their capability sites were reported, tagged
+ *  `w4-held`, and W4 moved them: since D-7042 (ARCH-43 C4d) both sleep lanes ask `ccdCan` in the one executor
+ *  (`sleepLane.ts`), and no file is held. */
+export const W4_HELD_FILES: readonly string[] = [];
 
 /** What a capability site asks. `verb`: whether this box's ccd can run a `CCD_ARGV` row (every `ccdCan(` and every
  *  `verbSupported(`, and a `capSupported(` of some `CCD_CAN` row's token). `verb-precondition`: a `capSupported(` on
  *  a line that also asks `ccdCan(` of another row (the pause marker the collector needs beside its own token). `flag`:
- *  any other token, which an existing verb parses. `w4-held`: any site in `W4_HELD_FILES`. */
-export type CapabilityTag = 'verb' | 'verb-precondition' | 'flag' | 'w4-held';
+ *  any other token, which an existing verb parses. (`w4-held`, a site in `W4_HELD_FILES`, was retired by D-7042.) */
+export type CapabilityTag = 'verb' | 'verb-precondition' | 'flag';
 
 /** One capability site: where, in which form, the token it names (`null` for `verbSupported`, or an expression this
  *  census does not resolve), and its tag. */
@@ -390,7 +412,7 @@ function secondArg(code: string, open: number): string | null {
  * `server/src`, outside `ccdargv.ts` (which defines them), each tagged. THE TAG IS READ FROM `CCD_CAN`, never from a
  * list: a `capSupported(` token is resolved through `ccdargv.ts`'s own exports (an exported constant's value, or a
  * quoted literal), and is `verb` when it is some row's token. Exit target: no `verb`-tagged `verbSupported(` or
- * `capSupported(` outside `W4_HELD_FILES` (every verb question goes through `ccdCan`).
+ * `capSupported(` anywhere (every verb question goes through `ccdCan`; `W4_HELD_FILES` is empty since D-7042).
  * KNOWN WIDTH: "beside" is the same code line; a call whose arguments wrap onto the next line resolves no token, and
  * its tag is `flag` unless its form says otherwise.
  */
@@ -416,8 +438,7 @@ export async function capabilityChoiceSites(root: string = REPO): Promise<Capabi
         const form = m[1] as CapabilitySite['form'];
         const token = form === 'capSupported' ? tokenOf(secondArg(code, m.index! + m[0].length)) : null;
         const beside = form === 'capSupported' && /\bccdCan\s*\(/.test(code);
-        const tag: CapabilityTag = W4_HELD_FILES.includes(file) ? 'w4-held'
-          : form !== 'capSupported' ? 'verb'
+        const tag: CapabilityTag = form !== 'capSupported' ? 'verb'
             : beside ? 'verb-precondition'
               : token !== null && rowTokens.has(token) ? 'verb' : 'flag';
         out.push({ file, line: i + 1, text, form, token, tag });
@@ -518,8 +539,8 @@ export function redactRuleTables(root: string = REPO): string[] {
 /**
  * D-5862 (Task C1h; ARCH-68 #803; spec K11, §2.3's clock row): the watcher's lane schedule, four queries over
  * `server/src/watch.ts`, read from its syntax tree (`scan/parse.ts`'s `scheduleFacts`, the one parser importer), never from a
- * count typed by hand. Exit targets (C1h): `laneClockFields` and `laneClockShapes` list only W4's two clocks (and
- * `DelegationLane#lastSweepAt`, reported, while another series holds that class); `singleFlightGuards` lists only
+ * count typed by hand. Exit targets (C1h): `laneClockFields` and `laneClockShapes` list only W4's two clocks
+ * (`DelegationLane#lastSweepAt` became the `delegation` row, so `laneClockReported` lists nothing); `singleFlightGuards` lists only
  * `ticking`, `dispatchRun` and `dispatchAgain`, and W4's two; `cadenceLiterals` is empty.
  * KNOWN WIDTH: a clock or guard reached through a computed name, a field of another class and a literal assembled from
  * pieces (`60 * 1000`, which is read, but `MINUTE * 5` is not a literal) are other shapes; a cadence compared through
@@ -547,14 +568,14 @@ export const SINGLE_FLIGHT_NAMES: readonly string[] = [
 ];
 
 /** The facts of `server/src/watch.ts` (or a fixture's), with the file's lines; `null` when the tree has none. */
-function watcherFacts(root: string, rel = 'server/src/watch.ts'): { facts: ScheduleFacts; lines: string[]; file: string } | null {
+export function watcherFacts(root: string, rel = 'server/src/watch.ts'): { facts: ScheduleFacts; lines: string[]; file: string } | null {
   const abs = path.join(root, rel);
   if (!existsSync(abs)) return null;
   const parsed = parsedFile(abs);
   return { facts: scheduleFacts(parsed), lines: parsed.text.split('\n'), file: rel };
 }
 
-const siteAt = (w: { lines: string[]; file: string }, line: number): CensusSite => ({ file: w.file, line, text: w.lines[line - 1] ?? '' });
+export const siteAt = (w: { lines: string[]; file: string }, line: number): CensusSite => ({ file: w.file, line, text: w.lines[line - 1] ?? '' });
 
 /** The named lane clocks (`LANE_CLOCK_NAMES`) still declared as fields of `FleetWatcher`. */
 export function laneClockFields(root: string = REPO): CensusSite[] {
@@ -562,7 +583,7 @@ export function laneClockFields(root: string = REPO): CensusSite[] {
   return w === null ? [] : w.facts.fields.filter((f) => f.cls === 'FleetWatcher' && LANE_CLOCK_NAMES.includes(f.name)).map((f) => siteAt(w, f.line));
 }
 
-/** `DelegationLane#lastSweepAt`, a cadence clock in a class another series holds: reported by name, never ratcheted. */
+/** `DelegationLane#lastSweepAt`, a cadence clock in a class another series held: reported by name, and empty since it became the `delegation` row (D-5862). */
 export function laneClockReported(root: string = REPO): CensusSite[] {
   const w = watcherFacts(root);
   return w === null ? [] : w.facts.fields.filter((f) => f.cls === 'DelegationLane' && f.name === 'lastSweepAt').map((f) => siteAt(w, f.line));
@@ -655,3 +676,45 @@ export function registryListingSites(root: string = REPO): RegistryListingSite[]
   }
   return out;
 }
+
+// ARCH-52 (#787; spec 2026-10-19 §5.5 exit "SessionStream polls: 4 -> 0, dialog frames per change per socket: 2 -> 1"; D-6977).
+// The two counts below are the exit's PIN: unlike the series above they have reached their target, so
+// `consolidation-census.test.ts` holds them to it and they may only stay there.
+
+/** The per-session reads `SessionStream` made every 2 s before ARCH-52: the pane (`tmux.capture`, `parseDialog` and the
+ *  transcript's ask, `readPendingAsk` / `alignAsk`), the plan (`readTasks`), the hookstate (`readHookStateRaw`,
+ *  `readHookStateRawMeasured`) and the mail (`outstandingMailFor`). Call expressions in `server/src/sessionws.ts`; an
+ *  import, a comment and a method NAMED in prose are not calls. 0 on `ba36d7420`: they live in `sessionFeed.ts`, once
+ *  per open session.
+ *  KNOWN WIDTH: only `server/src/sessionws.ts` is read, and only these call names; a poll moved to another file, or made
+ *  through a renamed or aliased reader, is not seen. */
+export function sessionStreamPollSites(root: string = REPO): CensusSite[] {
+  const re = /(?:\btmux\.capture|\bparseDialog|\breadPendingAsk|\balignAsk|\breadTasks|\breadHookStateRaw(?:Measured)?|\boutstandingMailFor)\s*\(/g;
+  return sitesOf(root, ['server/src'], re, (f) => f !== 'server/src/sessionws.ts');
+}
+
+/** The files under `server/src` that build a `{ type: 'dialog' }` or `{ type: 'dialog_cleared' }` wire frame: one site
+ *  per file (its first literal). 1 on `ba36d7420` (`sessionws.ts`'s `nextDialogFrame`, which a poll's reading and an
+ *  answer both go through); the watcher's own copy, the second producer, is gone. */
+export function dialogFrameProducers(root: string = REPO): CensusSite[] {
+  const seen = new Set<string>();
+  return sitesOf(root, ['server/src'], /\btype:\s*'dialog(?:_cleared)?'/g).filter((s) => !seen.has(s.file) && seen.add(s.file));
+}
+
+/**
+ * ARCH-76 (#811) follow-up (D-6991): the definitions of a `warn…Once` helper under `server/src` and
+ * `shared/`, outside `server/src/changeLatch.ts`. A definition is a code line that declares the name with `function`,
+ * `const` or `let`; a call, an import or a comment naming it is not one. "Warn once until it changes" is `changeLatch`; a
+ * helper that is something else stays only as a row of `ONCE_WARN_ALLOWED`, with its reason, so the ratchet counts it on
+ * purpose. KNOWN WIDTH: a once-latch with another name (a bare `Set` check before a `console.warn`) is not seen.
+ */
+export function onceWarnDefinitions(root: string = REPO): CensusSite[] {
+  return sitesOf(root, ['server/src', 'shared'], /\b(?:function\s*\*?|const|let)\s+warn\w*Once\b/g,
+    (f) => f === 'server/src/changeLatch.ts');
+}
+
+/** The `warn…Once` definitions kept on purpose, by file, each with why it is not a change latch. This list only shrinks. */
+export const ONCE_WARN_ALLOWED: ReadonlyArray<{ readonly file: string; readonly reason: string }> = [
+  // tmp-sweep-mail.test.ts's characterization: a key that comes back after another key or a clean pass stays silent.
+  { file: 'server/src/tmpSweepLane.ts', reason: 'once-ever, not a change latch, D-6991' },
+];

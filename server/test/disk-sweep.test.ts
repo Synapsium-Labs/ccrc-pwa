@@ -14,6 +14,7 @@ import { DISK_OP } from '../../shared/agent-protocol.js';
 import type { DiskFilesystem, DiskMeasured } from '../../shared/disk.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
+import { IS_DARWIN } from './platformFixtures.js';
 import { bootAgent, connectToAgent, makeFixture, type RemoteFixture } from './remoteHelpers.js';
 
 const fixtureHome = (): string => mkTmp('ccrc-diskhome-');
@@ -34,7 +35,7 @@ function watcherWith(answers: MeasuredDisk[]): { watcher: FleetWatcher; calls: (
 }
 
 /** `sweepDisk` has a 60 s clock; rewind it so the next call measures. */
-const rewind = (w: FleetWatcher): void => { (w as unknown as { lastDiskSweep: number }).lastDiskSweep = 1; };
+const rewind = (w: FleetWatcher): void => { (w as unknown as { diskAlarm: { lastSweep: number } }).diskAlarm.lastSweep = 1; };
 
 describe('sweepDisk — the watcher holds the verdict', () => {
   it('the block is absent before the first sweep', () => {
@@ -140,11 +141,20 @@ describe('statfsMeasured — the two adapters', () => {
     expect(remote.ok).toBe(true);
     expect(local.ok).toBe(true);
     if (!remote.ok || !local.ok) return;
+    // Darwin: APFS has no fixed inode table, so statfs's total file count (`files`) is derived from the volume's free
+    // space and moves whenever anything on the volume writes (measured: two reads moments apart differed by 437).
+    // There the two adapters are held to agree on every other field, and each to report a positive count; on Linux
+    // the count is fixed at mkfs, so it stays in the comparison.
     const stable = (m: DiskMeasured) => ({
-      fs: m.filesystems.map((f) => [f.dev, f.mount, f.fsType, f.roots, f.sizeBytes, f.files, f.readOnly]),
+      fs: m.filesystems.map((f) => [f.dev, f.mount, f.fsType, f.roots, f.sizeBytes, ...(IS_DARWIN ? [] : [f.files]), f.readOnly]),
       expectedMounts: m.expectedMounts, missing: m.missing,
     });
     expect(stable(remote.measured)).toEqual(stable(local.measured));
+    if (IS_DARWIN) {
+      for (const m of [remote.measured, local.measured]) {
+        for (const f of m.filesystems) expect(f.files, f.mount).toBeGreaterThan(0);
+      }
+    }
     expect(remote.measured.filesystems.length).toBeGreaterThan(0);
   });
 

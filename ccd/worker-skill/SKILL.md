@@ -49,10 +49,10 @@ infer your own id from the brief's text. The pane is the source.
 
 ## The contract
 
-These eighteen clauses are the boundary between "a wave worker" and "an agent with
+These nineteen clauses are the boundary between "a wave worker" and "an agent with
 a shell on the fleet host". They are not advice.
 
-**Editing note (D-104):** these eighteen lines are pinned verbatim by
+**Editing note (D-104):** these nineteen lines are pinned verbatim by
 `server/test/worker-skill.test.ts`, whose clause literals are double-quoted.
 Keep every apostrophe STRAIGHT — a curly one is a different byte and reds the
 pin without looking like an edit — and keep double-quote characters out of a
@@ -72,11 +72,12 @@ clause, where they would have to be escaped on the other side, except the
 11. Claim before you edit: `POST /api/claims` with every path this wave touches, all-or-nothing. A 409 is an answer, not an obstacle — it names the holder, and the holder IS the address: mail them through the response's own `mailHint` instead of editing anyway. Discovery is `GET /api/peers?of=<your id>`, history is `GET /api/lifecycle`, and each row's own lifecycle is what to read — never its archive stamp, which is silently false on some live rows. Peer mail is human-timescale: a busy peer answers when it next idles, so send once and work what is uncontested. Never invent a deviation number — the coordinator allocated this program's block at run-open, and a number you cannot get is `D-TBD-<slug>` plus a report, never a guess.
 12. When your workspace carries `graphify-out/graph.json`, a question about the codebase goes to `graphify query` before `grep` or a file read, and to `graphify path` / `graphify explain` for relationships and concepts — but weigh that answer by your SessionStart card: only `fresh` licenses taking it as read, while `N commits behind HEAD`, `not an ancestor of HEAD` (the graph was built on a tree yours cannot reach, so it describes code you do not have), `freshness unmeasured`, or no freshness clause at all makes every query answer a LEAD to verify by opening the file it names. Never run `graphify update` or any graphify build in the workspace: the sweep owns the write side, and a session-side build holds you at `working` for minutes and wedges the next dispatch as `worker-busy`.
 13. When a child of yours asks a question, you may answer it — POST /api/asks/:id/answer is the one route that does, and this session never types into another session's pane by any other means. Rule only from what you can read: the spec, the plan, the ledger, the branch, and your own prior rulings. You cannot see the child's reasoning — only its question and its options, and that is the entire evidence surface: no rationale, no chat history, no transcript. If answering would require guessing rather than reading, decline. Anything that would be a NEW decision — product intent, scope, a tradeoff nobody ruled on, anything irreversible — is the operator's; decline it with POST /api/asks/:id/release so their notification fires at once rather than waiting out the window.
-14. Route your own subagents by the shape of their task, from `../ccrc-coordinator/references/routing-matrix.md`, and never let one inherit your model: name the class on every Agent or Workflow call and the effort on every Workflow `agent()` call (an Agent-tool subagent runs at your own effort) — implementation from a spec'd plan on Sonnet at high, the per-task reviewer of a spec'd task on Sonnet at high (the held-out panel is the gate), review with judgement and adversarial verification on Opus at high, scouts and transcription-grade edits on Haiku, and Fable never as a fan-out worker. A subagent effort the brief names governs over that default.
+14. Route your own subagents by the shape of their task, from `../ccrc-coordinator/references/routing-matrix.md`, and never let one inherit your model: name the class on every Agent call (an Agent-tool subagent runs at your own effort) — implementation from a spec'd plan on Sonnet at high, the per-task reviewer of a spec'd task on Sonnet at high (the held-out panel is the gate), review with judgement and adversarial verification on Opus at high, scouts and transcription-grade edits on Haiku, and Fable never as a fan-out worker. A subagent effort the brief names governs over that default.
 15. Your wave-done body opens with two signal lines the server parses, before any prose and before the fingerprint: `suite: green|red|unrun` says whether the whole suite passed on its FIRST full run after this wave's implementation was complete (red stays red however many fix rounds followed; unrun when no full run happened), and, only when a check failed, `failure: shallow|ceiling|unclear` names the kind — shallow for tests missed or a plan half-followed, ceiling for an ambiguity you could not resolve, a design flaw or a debug that survived two attempts, unclear otherwise. The suite line is never omitted.
-16. Absorb `origin/main` into this branch only on one of three triggers, each read after one `git fetch origin`: your own probe `git merge-tree --write-tree --name-only --no-messages HEAD origin/HEAD` exits 1 with a tree id on its first line (the branch conflicts; exit 0 is clean, and any other answer is unmeasured and licenses nothing); a required check on your PR is red while main passes the same tests, measured by re-running its failing test files on a clean checkout of `origin/HEAD` in scratch; or a `fix-round` mail from the coordinator names this PR ejected from the landing line with a base sha, or next to land in a strict-protection repository. The first two license at most one absorption per PR — a second occurrence before the first absorption lands is not a second license — and the third arrives on the `merging → working` edge, after which you absorb, re-gate and send a fresh `wave-done`. Absorb with `git merge` only: never a rebase, a force-push or `update-branch` by any route, including `gh api -X PUT`. Never write any repository's rulesets, branch protection, auto-merge setting or `allow_update_branch`. Never hand-resolve a generated stamp: on a conflict in a `# ccrc:generated` line such as `ccd/ccd`'s line 2, take either side of that line only, resolve every other hunk of the file as the source it is, then run `~/.local/bin/ccrc restamp <file>`. A red that main also shows is reported once as `main-red` and left alone. Keep no local `main`: read `origin/HEAD`, fetched once. The operator's keeper is the operator's own tool and may rebase or force-push a PR branch on its own authority; this clause binds your own absorbs only, so a fixer the keeper spawns is not caught between the two. If the keeper rewrote your branch, take its tip (`git fetch origin`, then `git reset --hard origin/<branch>`) before you commit; never rebase or force-push it yourself. You never merge your own PR.
-17. End a turn only on a wake you can name: a mail you sent that asks for an answer, a background agent or workflow you launched from your main thread yourself that has not yet reported, or a structured ask. A background shell or Monitor is never that wake: it has no deadline and may never report. A task a subagent started reports to that subagent, so an agent whose completion says it may resume on its own has reported, and is not that wake either. A restart kills every background task. When none of those holds, mail the coordinator what you did and what wakes you next before the turn ends.
+16. Absorb `origin/main` into this branch only on one of three triggers, each read after one `git fetch origin`: your own probe `git merge-tree --write-tree --name-only --no-messages HEAD origin/HEAD` exits 1 with a tree id on its first line (the branch conflicts; exit 0 is clean, and any other answer is unmeasured and licenses nothing); a required check on your PR is red while main passes the same tests, measured by re-running its failing test files on a clean checkout of `origin/HEAD` in scratch; or a `fix-round` mail from the coordinator names this PR ejected from the landing line with a base sha, or next to land in a strict-protection repository. The first two license at most one absorption per PR — a second occurrence before the first absorption lands is not a second license — and the third arrives on the `merging → working` edge, after which you absorb, re-gate and send a fresh `wave-done`. Absorb with `git merge` only: never a rebase, a force-push or `update-branch` by any route, including `gh api -X PUT`. Never write any repository's rulesets, branch protection, auto-merge setting or `allow_update_branch`. Never hand-resolve a generated stamp: on a conflict in a `# ccrc:generated` line such as the one in the session hook's generated region, take either side of that line only, resolve every other hunk of the file as the source it is, then run `~/.local/bin/ccrc restamp <file>`; `ccd/ccd` carries no committed stamp (its marker is written when it is installed), so it never conflicts on one and `restamp` refuses it. A red that main also shows is reported once as `main-red` and left alone. Keep no local `main`: read `origin/HEAD`, fetched once. The operator's keeper is the operator's own tool and may rebase or force-push a PR branch on its own authority; this clause binds your own absorbs only, so a fixer the keeper spawns is not caught between the two. If the keeper rewrote your branch, take its tip (`git fetch origin`, then `git reset --hard origin/<branch>`) before you commit; never rebase or force-push it yourself. You never merge your own PR.
+17. End a turn only on a wake you can name: a mail you sent that asks for an answer, a background agent you launched from your main thread yourself that has not yet reported, or a structured ask. A background shell or Monitor is never that wake: it has no deadline and may never report. A task a subagent started reports to that subagent, so an agent whose completion says it may resume on its own has reported, and is not that wake either. A restart kills every background task. When none of those holds, mail the coordinator what you did and what wakes you next before the turn ends.
 18. A workflow script, a subagent brief or a test step never sets `TMPDIR` to a path inside a work tree and never writes scratch inside one: it uses the temp root this session was started with (`TMPDIR`, or `CCRC_SESSION_TMPDIR` where `TMPDIR` has been overridden). Long command output goes to a file there, or through `tail`, never into the work tree.
+19. Never launch a workflow. A worker is the fan-out unit: work that wants a wider fan-out is more workers, which the coordinator dispatches, and your wave's review is a separate review run, never a workflow of yours. A mechanical edit, such as a D-number substitution, a PR body edit or a re-pin, is done in your own main thread.
 
 **Clause 2 is the one that decides whether this wave can close at all.** The
 ordinary per-PR convention elsewhere in this codebase — "cut a fresh
@@ -139,6 +140,16 @@ in your `wave-done` mail so the ledger gets it. A deviation you find is still
 never a number you invent (clause 11): report it, and the coordinator mints it
 against the programme's home project.
 
+**Task notes go in a new file, never in the ledger.** Do not edit or delete a file under
+`docs/superpowers/programs/` or an existing file under `docs/superpowers/plans/` in your pull
+request: every in-flight pull request of a wave edits the same rows, and each absorption conflicts
+there. Write what the ledger should learn (a deviation you found, a status, a measurement) into a
+NEW note, `docs/superpowers/plans/<plan>/<task-or-pr>.md`, and say so in your `wave-done` mail; the
+coordinator folds the notes into the ledger on its own `ledger/<programme>` pull request. A
+`ledger-guard` step fails a pull request that edits a ledger from any other branch. If the edit is
+genuinely your change's own, put a `Ledger-Edit: <D-TBD reason>` trailer on your pull request's head
+commit (a trailer on an earlier commit does not count); the guard passes it and reports it.
+
 A reply may arrive addressed to the ROLE `worker` rather than to your session id.
 Nothing changes on your side: the role resolves to whichever session this run names,
 which is you, the envelope's `to:` is still your own id, you ack the DELIVERY id as
@@ -147,12 +158,19 @@ always (clause 3), and you answer `toId:'coordinator'` as always.
 ## Routing your subagents
 
 The strategy is `../ccrc-coordinator/references/routing-matrix.md`, installed beside this skill
-(clause 14). Name the class on every Agent or Workflow call — a subagent that inherits your model
-is the one thing the matrix forbids outright — and the effort on every Workflow `agent()` call,
-where it can be set; the Agent tool runs a subagent at your own effort. The brief may name the
-subagent effort the coordinator expects for this wave; that governs. A Workflow script on this
-fleet passes `model:` and `effort:` on every `agent()` call, and its agents run on Opus or Sonnet
-(Haiku for scouts) — never on the class your own main loop runs on if that is above Opus.
+(clause 14). Name the class on every Agent call — a subagent that inherits your model is the one
+thing the matrix forbids outright — and every subagent runs on Opus or Sonnet (Haiku for scouts), never
+on the class your own main loop runs on if that is above Opus. The Agent tool runs a subagent at
+your own effort. The brief may name the subagent effort the coordinator expects for this wave;
+that governs. You launch no workflow (clause 19): where a matrix row says workflow mode is on, its
+fan-out is more workers the coordinator dispatches, and its review is a review run.
+
+## Mutation testing
+
+Prove a new guard with `../ccrc-coordinator/references/mutation-run.py`, not hand-rolled
+mutant files: it builds mutants in memory, runs each in a temp directory it removes, and re-runs
+only what a change touched (`--help`). Never leave a per-run temp tree behind. A heavy round,
+hundreds of mutants or a slow suite, runs in a child workspace, not in a coordinator's scratch.
 
 ## How to call the API
 

@@ -12,7 +12,7 @@ import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { mkTmp } from './tmpHelpers.js';
-import { CCD } from './ccdWsHelpers.js';
+import { ccdSource } from './ccdWsHelpers.js';
 import { NON_DELEGATING_TASK_KINDS, sessionBucket, type FleetSession } from '../../shared/api.js';
 import { HOOKSTATE_FRESH_MS } from '../src/hookstate.js';
 import { liveStatusCoversDelegation } from '../src/livestate.js';
@@ -205,7 +205,7 @@ describe('measure-working-state.py: its second spellings are bound to their home
   });
 
   it('END_RE matches the line ccd writes, and the stall words are stall.ts’s', () => {
-    expect(fs.readFileSync(CCD, 'utf8')).toContain('echo "session $id ended; exiting for systemd restart" >&2');
+    expect(ccdSource()).toContain('echo "session $id ended; exiting for systemd restart" >&2');
     expect(src()).toContain('END_RE = re.compile(r"^session (\\S+) ended; exiting for systemd restart$")');
     expect(src()).toContain(`STALL_CHECK_PREFIX = '${STALL_CHECK_PREFIX}'`);
     expect(src()).toContain(`STALL_REPORT_PREFIX = '${STALL_REPORT_PREFIX}'`);
@@ -590,7 +590,7 @@ describe('measure-working-state.py --section swaps', () => {
   });
 
   it('each refusal word reads a sentence ccd’s _swap_refuse is actually called with', () => {
-    const ccd = fs.readFileSync(CCD, 'utf8');
+    const ccd = ccdSource();
     expect(ccd).toContain('echo "$(date \'+%F %T\') swap-refused $id: $cur -> $target ($reason)" >> "$REG/swap.log"');
     for (const [word, tpl] of REFUSALS) expect(ccd, word).toContain(tpl);
     const src = fs.readFileSync(SCRIPT, 'utf8');

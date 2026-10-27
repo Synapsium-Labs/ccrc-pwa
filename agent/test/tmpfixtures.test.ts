@@ -110,6 +110,10 @@ describe('mkTmp (agent suite)', () => {
       // teardown it returns. It cannot route through `mkTmp` either: `mkTmp`'s
       // `afterAll` needs a suite, and the main process has none.
       ['contain-path.globalsetup.ts', 'globalSetup in the main process; removes its own root in its teardown'],
+      // The per-run temp parent's pin. Its socket bases must be SHORT, under
+      // `/tmp` (a `mkTmp` path inside the run is too long for `sun_path` on
+      // macOS), so it makes them itself and removes each in an `afterEach`.
+      ['run-tmp.test.ts', 'short /tmp socket bases for nested runs, removed in afterEach'],
     ]);
 
     const files = readdirSync(here).filter((f) => f.endsWith('.ts')).sort();

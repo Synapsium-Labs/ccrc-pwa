@@ -42,6 +42,7 @@ import { configDirFor } from '../src/config.js';
 import type { Runner } from '../src/exec.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
+import { callsIn, parsedFile, symbolOf } from './scan/symbols.js';
 
 const srcRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../src');
 const NEW = { ccdVerbs: [ACTOR_FLAGS_CAP] };
@@ -433,25 +434,38 @@ describe('refuseSpentChild is called with the hoisted dispatchDec, not a fresh a
 describe('the hibernation lanes name themselves (D-5242, D-5427)', () => {
   const src = (rel: string): string => readFileSync(path.join(srcRoot, rel), 'utf8');
 
+  // D-7042 (ARCH-43 C4d): both lanes act through the one sleep executor's `sleepAct` (`sleepLane.ts`), which declares
+  // the lane's own actor through `sweepDec` (`lane.actor`), read through scan/symbols.ts, never a literal pin; each
+  // lane row carries its actor by value, the L1 definer's constant.
+  const ACT = 'server/src/sleepLane.ts';
+  const actCalls = (name: string): string[][] => callsIn(symbolOf(ACT, 'sleepAct')).filter((c) => c.name === name)
+    .map((c) => c.args.map((a) => a.text));
+
   it('the armed hibernation sweep declares `sweep:hibernate`', async () => {
-    expect(src('hibernateSweep.ts')).toMatch(/const argv = CCD_ARGV\.hibernate\(id, sweepDec\(port\.fleetState, HIBERNATE_SWEEP_ACTOR\)\);[\s\S]{0,200}const res = await port\.runCcd\(argv\);/);
+    expect(actCalls('sweepDec')).toEqual([['port.fleetState', 'lane.actor']]);
+    expect(actCalls('runCcd')).toEqual([['CCD_ARGV.hibernate(id, sweepDec(port.fleetState, lane.actor), holdOkOf(v))']]);
+    const { IDLE_HOURS_LANE } = await import('../src/sleepLane.js');
     const { HIBERNATE_SWEEP_ACTOR } = await import('../src/coord/hibernate.js');
+    expect(IDLE_HOURS_LANE.actor).toBe(HIBERNATE_SWEEP_ACTOR);
     expect(HIBERNATE_SWEEP_ACTOR).toBe('sweep:hibernate');
   });
 
   it('the stop-done lane declares `sweep:stop-done`', async () => {
     // D-6091: a third argument, the programme hold the verdict passed (`--hold-ok`), or null.
-    expect(src('stopDoneSweep.ts')).toMatch(/CCD_ARGV\.hibernate\(row\.id, sweepDec\(deps\.fleetState, STOP_DONE_ACTOR\), v\.holdOk \?\? null\)/);
+    expect(actCalls('holdOkOf')).toEqual([['v']]);
+    const { RUN_DONE_LANE } = await import('../src/sleepLane.js');
     const { STOP_DONE_ACTOR } = await import('../src/stopDone.js');
+    expect(RUN_DONE_LANE.actor).toBe(STOP_DONE_ACTOR);
     expect(STOP_DONE_ACTOR).toBe('sweep:stop-done');
   });
 
-  it('every hibernate the lanes RUN is declared: one act site per lane, carrying `sweepDec`', () => {
-    const hib = src('hibernateSweep.ts');
-    expect((hib.match(/port\.runCcd\(/g) ?? []).length, 'hibernateSweep.ts runs ccd once').toBe(1);
-    const stop = src('stopDoneSweep.ts');
-    expect((stop.match(/deps\.runCcd\(/g) ?? []).length, 'stopDoneSweep.ts runs ccd once').toBe(1);
-    expect(stop).toMatch(/deps\.runCcd\(CCD_ARGV\.hibernate\(row\.id, sweepDec\(/);
+  it('every hibernate the lanes RUN is declared: one act site for both lanes, carrying `sweepDec`', () => {
+    expect(actCalls('runCcd').length, 'sleepAct runs ccd once').toBe(1);
+    expect(actCalls('runCcd')[0]![0]).toMatch(/^CCD_ARGV\.hibernate\(id, sweepDec\(/);
+    for (const f of ['server/src/hibernateSweep.ts', 'server/src/stopDoneSweep.ts']) {
+      expect(parsedFile(f).calls.filter((c) => c.name === 'runCcd').map((c) => c.line), `${f} runs no ccd of its own`).toEqual([]);
+    }
+    expect(parsedFile(ACT).calls.filter((c) => c.name === 'runCcd').length, 'sleepLane.ts runs ccd once').toBe(1);
   });
 
   it('the mail lane\'s wake is the watcher\'s ONE automatic `ccd ensure`, inside the hibernated rung', () => {

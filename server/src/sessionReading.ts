@@ -10,7 +10,7 @@
 // (it runs without the server); the table records, row by row, whether it protects the session's temp directory, and
 // names the rows where that differs from `presence` (it protects any row with a `.hibernated` file, whatever its
 // lifecycle, and it knows no heartbeat or tmux). The other readers of
-// the old ladders (`liveStatus`, the fleet frame, `liveRowFor`, `resolve`, `claimProbe`, the dead-coordinator
+// the old ladders (the deleted `liveStatus`, the fleet frame, `liveRowFor`, `resolve`, `claimProbe`, the dead-coordinator
 // predicate) are pinned on the same rows in `test/session-ladders-characterization.test.ts`.
 //
 // THE SHAPE IS THE SPEC'S (consolidation spec C1, SessionReading): five parts, not one word. `substrate` is whether the
@@ -26,7 +26,7 @@
 // `unmeasurable` with the pane gone is `unknown` too, `why: 'lifecycleDoubt'`. The destructive door answers that one
 // doubt `alive` (D-1140, in `measureClaimant`'s switch on `why`): fail-shut is that caller's policy, not the reading's,
 // so a display reader of `presence` sees the doubt as a doubt.
-import { DEAD_CAUSES, lifecycleIsDead, type DeadCause, type SessionLifecycle } from '../../shared/api.js';
+import { DEAD_CAUSES, lifecycleIsDead, type DeadCause, type Presence, type SessionLifecycle } from '../../shared/api.js';
 
 /** What the registry said about the one id: `SingleRead`'s kinds, with `found` spelled `present`. */
 export type RowFact = 'present' | 'absent' | 'unmeasurable' | 'unlistable' | 'bad-id';
@@ -49,7 +49,8 @@ export interface SessionFacts {
   readonly viewer?: ViewerWord;
 }
 
-export type Presence = 'alive' | 'asleep' | 'dead' | 'unknown';
+/** The wire word (`Presence` lives in L0 beside `FleetSession.presence`; re-exported for this module's readers). */
+export type { Presence };
 export type Turn = 'busy' | 'idle' | 'shell' | 'unknown';
 /** Which death (`DEAD_CAUSES` and `DeadCause` live in L0, `shared/api.ts`, beside `DEAD_LIFECYCLES`; re-exported here
  *  for this module's readers). */

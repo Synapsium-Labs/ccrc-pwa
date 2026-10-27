@@ -20,6 +20,7 @@ import { fileURLToPath } from 'node:url';
 import { CLASSES } from '../../shared/models.mjs';
 import { ROUTE_DEFAULT_BY_KIND, routeDefaultFor } from '../../shared/route-defaults.js';
 import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
+import { ccdSource } from './ccdWsHelpers.js';
 
 afterEach(removeTmpFixtures);
 
@@ -32,7 +33,7 @@ const panel = readFileSync(path.join(refs, 'review-panel.md'), 'utf8');
  *  idiom: the validator WRITES this list, and a doc naming a level the
  *  validator refuses is a rule that can never fire. */
 const ROUTE_EFFORTS = ((): string[] => {
-  const ccd = readFileSync(path.join(root, 'ccd/ccd'), 'utf8');
+  const ccd = ccdSource();
   const m = /^ROUTE_EFFORTS="([^"]+)"$/m.exec(ccd);
   if (!m) throw new Error('ccd/ccd declares no ROUTE_EFFORTS — the record vocabulary moved');
   return m[1]!.split(' ');
@@ -117,6 +118,72 @@ describe('routing-matrix.md — spec §3, pinned to the vocabularies the mechani
     expect(ROUTE_DEFAULT_BY_KIND.work).toEqual(rowFields("| Worker executing a spec'd plan"));
     expect(ROUTE_DEFAULT_BY_KIND.review).toEqual(rowFields('| Review session main loop'));
     expect(routeDefaultFor('unknown')).toBeNull();
+  });
+
+  it('workflows are enabled only where clause 19 can launch one, every worker-facing row is off, and no row names ultracode', () => {
+    // `Workflow mode` is the `enableWorkflows` setting the route's `workflow` field composes, so `Off` would make a
+    // clause-19 workflow impossible to launch at all. Enabled is therefore the review run (its held-out panel), the
+    // coordinator and the brainstorm row (a short, self-contained, time-capped workflow under coordinator clause 19);
+    // a worker never launches one (worker clause 19), so the worker, bulk and whole-branch rows are off. `ultracode`
+    // is xhigh plus STANDING workflow orchestration, the default clause 19 abolishes, so no row may name it.
+    const wf = (r: string): string => r.split('|').slice(1, -1).map((c) => c.trim())[3]!;
+    const enabled = ['| Coordinator: opens the program', '| Brainstorm, spec, architecture', '| Review session main loop'];
+    const on = rows.filter((r) => /^On\b/.test(wf(r)));
+    expect(on.map((r) => enabled.find((e) => r.startsWith(e)) ?? r.slice(0, 40)), 'the rows with workflows enabled')
+      .toEqual(enabled);
+    for (const start of ["| Worker executing a spec'd plan", '| Bulk independent work', '| Whole-branch review pass']) {
+      const row = rows.find((r) => r.startsWith(start));
+      expect(row, `the matrix lost its row: ${start}`).toBeDefined();
+      expect(wf(row!), `${start} must run with workflows off (worker clause 19)`).toMatch(/^Off\b/);
+    }
+    for (const start of ['| Coordinator: opens the program', '| Brainstorm, spec, architecture']) {
+      const cell = wf(rows.find((r) => r.startsWith(start))!);
+      expect(cell, `${start}: enabled only for a clause-19 workflow`).toContain('clause 19');
+      expect(cell).toContain('never standing orchestration');
+    }
+    for (const r of rows) expect(r, `a row still routes to ultracode: ${r.slice(0, 60)}`).not.toContain('ultracode');
+    const bulk = rows.find((r) => r.startsWith('| Bulk independent work'))!;
+    expect(bulk).toContain('more worker waves the coordinator dispatches');
+    const branch = rows.find((r) => r.startsWith('| Whole-branch review pass'))!;
+    expect(branch).toContain('a review run');
+  });
+
+  it('ccd\'s ROUTE_COORDINATOR_ROW, the default every operator spawn gets, IS the matrix\'s coordinator row', () => {
+    // One row, two homes, like `shared/route-defaults.ts` above: the matrix is what the coordinator reads, and
+    // `ROUTE_COORDINATOR_ROW` in `ccd/ccd` is what `_route_seed_default` writes onto an operator spawn. A matrix row
+    // saying `high` over a spawn that still types `ultracode` is the gap this pins shut (coordinator clause 19).
+    const ccd = readFileSync(path.join(root, 'ccd/ccd'), 'utf8');
+    const m = /^ROUTE_COORDINATOR_ROW="([^"]+)"/m.exec(ccd);
+    expect(m, 'ccd/ccd declares no ROUTE_COORDINATOR_ROW').not.toBeNull();
+    const spawned = Object.fromEntries(m![1]!.split(' ').map((kv) => kv.split('=') as [string, string]));
+    const row = rows.find((r) => r.startsWith('| Coordinator: opens the program'));
+    expect(row, 'the matrix lost its coordinator row').toBeDefined();
+    const cells = row!.split('|').slice(1, -1).map((c) => c.trim());
+    const main = /^([A-Z][a-z]+) · (\w+)/.exec(cells[1]!)!;
+    // The cell opens with the bare class (its Agent-tool subagents run at the session's effort, so it names none).
+    const sub = /^([A-Z][a-z]+)\b/.exec(cells[2]!);
+    expect(sub, 'the coordinator row\'s Subagents cell must open with its subagent class').not.toBeNull();
+    expect(CLASSES.map(cap), `${sub![1]} is not a model class`).toContain(sub![1]!);
+    expect(spawned).toEqual({
+      class: main[1]!.toLowerCase(), effort: main[2]!, subagent: sub![1]!.toLowerCase(),
+      workflow: /^On\b/.test(cells[3]!) ? 'on' : 'off',
+    });
+  });
+
+  it('a session with no routing record is typed the coordinator row\'s effort, never ultracode (SPAWN_EFFORT)', () => {
+    const ccd = readFileSync(path.join(root, 'ccd/ccd'), 'utf8');
+    const spawnEffort = /^SPAWN_EFFORT="([^"]*)"/m.exec(ccd)?.[1];
+    const coordEffort = /^ROUTE_COORDINATOR_ROW="[^"]*\beffort=(\w+)/m.exec(ccd)?.[1];
+    expect(spawnEffort, 'ccd/ccd declares no SPAWN_EFFORT').toBeDefined();
+    expect(spawnEffort).not.toBe('ultracode');
+    expect(spawnEffort).toBe(coordEffort);
+  });
+
+  it('reaches a subagent effort below the main loop through more workers, never a worker\'s Workflow', () => {
+    const flat = matrix.replace(/\s+/g, ' ');
+    expect(flat).not.toContain('is reached through a Workflow call, or accepts the session\'s effort');
+    expect(flat).toContain('never through a worker\'s Workflow');
+    expect(flat).toContain('more workers dispatched at that effort');
   });
 
   it('states the floors the mechanism relies on, in the spec\'s words', () => {

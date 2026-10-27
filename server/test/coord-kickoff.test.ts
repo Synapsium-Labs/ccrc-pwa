@@ -75,7 +75,7 @@ describe('queueProgramKickoff — the kickoff is MAIL, and it says which kind of
   it('is FROM the operator, not from the coordinator it is addressed to', () => {
     // D-1040. The recipient IS the coordinator-to-be; a `from: coordinator`
     // line would be a false statement on the face of the envelope, and would
-    // send `tellSender` through `resolveCoordinator(null)`.
+    // send `tellSender` through `soleActiveCoordinator()`.
     const s = store();
     queueProgramKickoff({ coord: s }, ID, PROGRAM);
     const envelope = due(s)[0]!.envelope;

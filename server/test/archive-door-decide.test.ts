@@ -22,16 +22,18 @@ const port = (o: { worker?: OpenSiblingsResult; claimed?: OpenSiblingsResult;
   throws?: { worker?: boolean; claimed?: boolean; blocked?: number; abandon?: number } } = {}) => {
   const seen: string[] = [];
   const p: ArchiveCoordPort = {
-    openRunsForSession: (id) => {
-      seen.push(`worker:${id}`);
-      if (o.throws?.worker === true) throw new Error('database is not open');
-      return o.worker ?? { ok: true, siblings: [] };
-    },
-    openRunsClaimedBy: (id) => {
-      seen.push(`claimant:${id}`);
-      if (o.throws?.claimed === true) throw new Error('database is not open');
-      return o.claimed ?? { ok: true, siblings: [] };
-    },
+    bindingsOf: (id) => ({
+      worker: () => {
+        seen.push(`worker:${id}`);
+        if (o.throws?.worker === true) throw new Error('database is not open');
+        return o.worker ?? { ok: true, siblings: [] };
+      },
+      claimant: () => {
+        seen.push(`claimant:${id}`);
+        if (o.throws?.claimed === true) throw new Error('database is not open');
+        return o.claimed ?? { ok: true, siblings: [] };
+      },
+    }),
     abandonRefusal: (runId) => {
       seen.push(`can:${runId}`);
       if (o.throws?.blocked === runId) throw new TypeError('transitions undefined');

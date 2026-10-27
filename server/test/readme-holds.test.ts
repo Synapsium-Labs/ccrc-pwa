@@ -17,12 +17,12 @@ import { fileURLToPath } from 'node:url';
 // The path to the ccd script is spelled in exactly ONE file in this tree and
 // `single-definition.test.ts` enforces it — import the constant, never re-spell
 // it here (this file's first draft did, and that guard caught it).
-import { CCD } from './ccdWsHelpers.js';
+import { ccdSource } from './ccdWsHelpers.js';
 import { CAPS_REFRESH_MS } from '../src/laneSchedule.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const readme = readFileSync(path.join(root, 'README.md'), 'utf8');
-const ccd = readFileSync(CCD, 'utf8');
+const ccd = ccdSource();
 
 /** The lifecycle list alone. The ordering assertion below is deliberately
  * scoped here: the README also discusses historical close/open mistakes, and

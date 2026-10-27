@@ -13,12 +13,12 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { CCD, makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
+import { CCD, makeCcdHarness, type CcdHarness, ccdSource } from './ccdWsHelpers.js';
 import { DASH_IDS, wideLetterLocale } from './dashIdFixture.js';
 
 /** The definition line's shape, with or without the `function` keyword. A call never carries the parentheses. */
 const REG_ID_OK_DEF = /^\s*(?:function\s+)?_reg_id_ok\s*\(\s*\)/;
-const ccdLines = (): string[] => fs.readFileSync(CCD, 'utf8').split('\n');
+const ccdLines = (): string[] => ccdSource().split('\n');
 /** One shell word, single-quoted. */
 const sq = (s: string): string => `'${s.replaceAll("'", `'\\''`)}'`;
 

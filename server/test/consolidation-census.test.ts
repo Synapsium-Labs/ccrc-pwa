@@ -3,8 +3,8 @@
 // claims and to pass over what it must not (a comment, an import, a bare word). Against the REAL tree, so it finds
 // the one site the spec cites: a query that silently matched nothing would be red here, not quietly zero.
 //
-// NO COUNT IS PINNED (spec §5.1 rule 3, rev 2): a census reports until its series reaches its target, and the
-// may-only-shrink pin lands in the commit that reaches it. Each real-tree row prints its list instead, so a PR body
+// A COUNT IS PINNED ONLY ONCE ITS SERIES REACHES ITS TARGET (spec §5.1 rule 3, rev 2): a census reports until then,
+// and the may-only-shrink pin lands in the commit that reaches it. Each real-tree row prints its list instead, so a PR body
 // can quote it, measured on the PR's tip.
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
@@ -15,8 +15,9 @@ import {
   REPO, runCcdOldFoldSites, runCcdSiteArms, RAN_NARROW_WINDOW, RAN_TABLE, type CensusSite, type RanTableRow,
 } from './consolidationCensus.js';
 import { capabilityChoiceSites, W4_HELD_FILES } from './consolidationCensus.js';
-import { changeLatchSites, changeLatchReported } from './consolidationCensus.js';
+import { changeLatchSites, changeLatchReported, onceWarnDefinitions } from './consolidationCensus.js';
 import { registryListingSites } from './consolidationCensus.js';
+import { dialogFrameProducers, sessionStreamPollSites } from './consolidationCensus.js';
 import { cadenceLiterals, declaredDerivations, laneClockFields, laneClockReported, laneClockShapes, singleFlightGuards } from './consolidationCensus.js';
 
 const show = (name: string, sites: readonly CensusSite[]): void => {
@@ -100,18 +101,23 @@ describe('reclaimPauseParseSites: includes(RECLAIM_PAUSE_MARKER) expressions und
       ['server/src/coord/rundefs.ts', 'server/src/lane.ts', 'server/src/watch.ts']);
   });
 
-  // D-5856: the real-tree anchor is the stop-done lane's read, the one parse W1a's C1b leaves (W4 moves it); C1b folds
-  // childReclaim's, the anchor until then, onto `readSwitches`.
-  it("REAL: it finds stopDoneSweep's read, and fewer files parse the marker than name it", () => {
+  // D-5856: the real-tree anchor was the stop-done lane's read, the one parse W1a's C1b left. D-7041 (ARCH-43) folds it
+  // onto `readSwitches`, so no real parse site is left; the "it can see one" half reads the FIXTURE tree, which plants
+  // two.
+  it("REAL: no private parse is left once stopDoneSweep's read folds; FIXTURE: it sees one, and fewer files parse the marker than name it", () => {
     const sites = reclaimPauseParseSites();
     show('reclaimPauseParseSites', sites);
-    expect(sites.some((s) => s.file === 'server/src/stopDoneSweep.ts'), "stopDoneSweep's read is not found").toBe(true);
-    for (const s of sites) expect(s.text, `${s.file}:${s.line}`).toMatch(/\bincludes\(\s*RECLAIM_PAUSE_MARKER\s*\)/);
-    const naming = filesNaming(['reclaim-paused', 'RECLAIM_PAUSE_MARKER']);
-    console.log(`census files naming reclaim-paused: ${naming.length}\n  ${naming.join('\n  ')}`);
+    expect(sites.map((s) => `${s.file}:${s.line}`), 'a private includes(RECLAIM_PAUSE_MARKER): read it through readSwitches').toEqual([]);
+    const planted = reclaimPauseParseSites(root);
+    expect(planted.some((s) => s.file === 'server/src/lane.ts'), "the fixture's planted read is not found").toBe(true);
+    for (const s of planted) expect(s.text, `${s.file}:${s.line}`).toMatch(/\bincludes\(\s*RECLAIM_PAUSE_MARKER\s*\)/);
+    const real = filesNaming(['reclaim-paused', 'RECLAIM_PAUSE_MARKER']);
+    console.log(`census files naming reclaim-paused: ${real.length}\n  ${real.join('\n  ')}`);
+    expect(real.length, 'the real tree still names the marker (readSwitches\' readers)').toBeGreaterThan(0);
+    const naming = filesNaming(['reclaim-paused', 'RECLAIM_PAUSE_MARKER'], root);
     // Every parse site's file names the marker; a query matching the bare word would make the two sets equal.
-    for (const f of files(sites)) expect(naming).toContain(f);
-    expect(files(sites).length).toBeLessThan(naming.length);
+    for (const f of files(planted)) expect(naming).toContain(f);
+    expect(files(planted).length).toBeLessThan(naming.length);
   });
 });
 
@@ -264,6 +270,7 @@ describe('capabilityChoiceSites: verbSupported(, capSupported( and ccdCan( calls
       '  const m = { verbSupported: true };',                                       // 11: a key, not a call
       '}',
     ].join('\n'));
+    // D-7042: a former W4 file is held to the one verb question like any other (W4_HELD_FILES is empty).
     at('server/src/hibernateSweep.ts', 'export const p = (a: A) => verbSupported(a.fleetState, argv);\n');
   });
   afterAll(() => { if (tree) rmSync(tree, { recursive: true, force: true }); });
@@ -271,7 +278,7 @@ describe('capabilityChoiceSites: verbSupported(, capSupported( and ccdCan( calls
   it('FIXTURE: each form and tag, and never a comment, a key or the defining file', async () => {
     expect((await capabilityChoiceSites(tree)).map((x) => [x.file.replace('server/src/', ''), x.line, x.form, x.token, x.tag]))
       .toEqual([
-        ['hibernateSweep.ts', 1, 'verbSupported', null, 'w4-held'],
+        ['hibernateSweep.ts', 1, 'verbSupported', null, 'verb'],
         ['lane.ts', 2, 'ccdCan', null, 'verb'],
         ['lane.ts', 3, 'verbSupported', null, 'verb'],
         ['lane.ts', 4, 'capSupported', 'expire-v1', 'verb'],
@@ -284,13 +291,15 @@ describe('capabilityChoiceSites: verbSupported(, capSupported( and ccdCan( calls
       ]);
   });
 
-  it('REAL: every tag is seen, and the W4 files hold the only verbSupported( calls outside the deferred watch.ts', async () => {
+  // D-7042 (ARCH-43 C4d): W4 moved its sites into the one sleep executor, and the `w4-held` tag is retired.
+  it('REAL: every tag is seen, and no verbSupported( call is left (W4 held the last ones)', async () => {
     const sites = await capabilityChoiceSites();
-    for (const tag of ['verb', 'verb-precondition', 'flag', 'w4-held'] as const) {
+    for (const tag of ['verb', 'verb-precondition', 'flag'] as const) {
       show(`capabilityChoiceSites ${tag}`, sites.filter((x) => x.tag === tag));
       expect(sites.some((x) => x.tag === tag), `no ${tag} site found`).toBe(true);
     }
-    expect(sites.filter((x) => x.tag === 'w4-held').every((x) => W4_HELD_FILES.includes(x.file))).toBe(true);
+    expect(W4_HELD_FILES).toEqual([]);
+    expect(sites.filter((x) => x.form === 'verbSupported').map((x) => `${x.file}:${x.line}`)).toEqual([]);
     expect(sites.some((x) => x.form === 'ccdCan'), 'no ccdCan( site found').toBe(true);
   });
 });
@@ -459,11 +468,11 @@ describe('the lane schedule census (D-5862)', () => {
     ]);
   });
 
-  it('REAL: the census runs on the tree, and W4\'s two clocks and the delegation lane\'s are the ones left', async () => {
+  it('REAL: the census runs on the tree, and no lane clock is left (W4\'s two are rows since D-7045, the delegation lane\'s since D-5862)', async () => {
     const fields = laneClockFields();
     show('laneClockFields', fields);
-    expect(fields.map((x) => x.text).join('\n')).toContain('lastStopDoneSweep');
-    expect(laneClockReported().map((x) => x.text).join('\n')).toContain('lastSweepAt');
+    expect(fields).toEqual([]);
+    expect(laneClockReported(), 'DelegationLane#lastSweepAt is the `delegation` row of LANE_SCHEDULE').toEqual([]);
     expect(declaredDerivations()).toHaveLength(3);
   });
 });
@@ -510,5 +519,92 @@ describe('registryListingSites: where watch.ts lists the registry, tagged select
     const sites = registryListingSites();
     console.log(`census registryListingSites: ${sites.length}\n${sites.map((s) => `  ${s.line} ${s.method} ${s.tag}  ${s.text.trim()}`).join('\n')}`);
     expect(sites.filter((s) => s.method === 'FleetWatcher.tick').length, 'the tick lists the registry').toBeGreaterThan(0);
+  });
+});
+
+// ARCH-52 (#787; spec §5.5 exit): ARCH-52's pin: both series reached their target, so the counts are held there
+// (D-6977), against a fixture first and the real tree second.
+describe('ARCH-52: SessionStream polls and dialog frame producers', () => {
+  const stream = [
+    "import { readTasks } from './tasks/read.js';",
+    '// await readTasks(io, cfgDir, uuid) named in a comment is not a call',
+    'class SessionStream {',
+    '  async tick() {',
+    '    const pane = await this.deps.tmux.capture(this.id);',
+    '    const d = parseDialog(pane);',
+    '    const t = await readTasks(io, cfgDir, uuid);',
+    '    const h = await readHookStateRawMeasured(io, dir, id, uuid);',
+    '    const m = this.deps.coord.outstandingMailFor(this.id, 500);',
+    '  }',
+    '}',
+  ].join('\n');
+
+  it('FIXTURE: the pane, plan, hookstate and mail reads in sessionws.ts are polls; an import, a comment and another file are not', () => {
+    const tree = mkdtempSync(path.join(tmpdir(), 'arch52-census-'));
+    try {
+      mkdirSync(path.join(tree, 'server/src'), { recursive: true });
+      writeFileSync(path.join(tree, 'server/src/sessionws.ts'), stream);
+      writeFileSync(path.join(tree, 'server/src/sessionFeed.ts'), stream);
+      expect(sessionStreamPollSites(tree).map((s) => s.line)).toEqual([5, 6, 7, 8, 9]);
+      expect(new Set(sessionStreamPollSites(tree).map((s) => s.file))).toEqual(new Set(['server/src/sessionws.ts']));
+    } finally {
+      rmSync(tree, { recursive: true, force: true });
+    }
+  });
+
+  it('FIXTURE: a dialog frame producer is one site per file, a comment and a comparison are nothing', () => {
+    const tree = mkdtempSync(path.join(tmpdir(), 'arch52-census-'));
+    try {
+      mkdirSync(path.join(tree, 'server/src'), { recursive: true });
+      writeFileSync(path.join(tree, 'server/src/a.ts'), "bus.emit('session:x', { type: 'dialog', dialog });\nsend({ type: 'dialog_cleared' });\n");
+      writeFileSync(path.join(tree, 'server/src/b.ts'), "// { type: 'dialog' } in prose\nif (m.type === 'dialog') return;\n");
+      expect(dialogFrameProducers(tree).map((s) => ({ file: s.file, line: s.line }))).toEqual([{ file: 'server/src/a.ts', line: 1 }]);
+    } finally {
+      rmSync(tree, { recursive: true, force: true });
+    }
+  });
+
+  it('REAL TREE: SessionStream polls 4 -> 0, and dialog frame producers 2 -> 1 (sessionws.ts alone)', () => {
+    const polls = sessionStreamPollSites();
+    const producers = dialogFrameProducers();
+    show('sessionStreamPollSites', polls);
+    show('dialogFrameProducers', producers);
+    expect(polls, 'a SessionStream read comes from its session\'s feed (sessionFeed.ts), never from a poll of its own').toEqual([]);
+    expect(producers.map((s) => s.file), 'every dialog frame is built by the stream\'s one gate').toEqual(['server/src/sessionws.ts']);
+  });
+});
+
+// ARCH-76 (#811) follow-up (D-6991). The once-warn census: a `warn…Once` helper defined outside
+// `server/src/changeLatch.ts`. The ratchet in `single-definition/advance-switches.test.ts` holds it to `ONCE_WARN_ALLOWED`.
+describe('onceWarnDefinitions: `warn…Once` helpers defined outside changeLatch.ts (D-6991)', () => {
+  it('FIXTURE: a function, a const and a let are definitions; a call, an import, a comment and changeLatch.ts are not', () => {
+    const tree = mkdtempSync(path.join(tmpdir(), 'consolidation-census-oncewarn-'));
+    try {
+      const at = (rel: string, body: string): void => {
+        const p = path.join(tree, rel);
+        mkdirSync(path.dirname(p), { recursive: true });
+        writeFileSync(p, body);
+      };
+      at('server/src/a.ts', [
+        'const warnOnce = (k: string): void => {};',          // 1: a definition
+        'warnOnce("x");',                                      // 2: a call
+        '// const warnOnce = 1;',                              // 3: a comment
+        'export function warnDiskOnce(k: string): void {}',    // 4: a definition
+      ].join('\n'));
+      at('server/src/b.ts', ['import { warnOnce } from "./a.js";', 'let warnReadOnce = () => {};'].join('\n'));   // 2
+      at('shared/c.ts', 'function warnOnce(): void {}');                                                           // 1
+      at('server/src/changeLatch.ts', 'const warnOnce = 1;');
+      expect(onceWarnDefinitions(tree).map((s) => [s.file, s.line])).toEqual([
+        ['server/src/a.ts', 1], ['server/src/a.ts', 4], ['server/src/b.ts', 2], ['shared/c.ts', 1],
+      ]);
+    } finally {
+      rmSync(tree, { recursive: true, force: true });
+    }
+  });
+
+  it('REAL: finds tmpSweepLane.ts\'s helper, and prints the list for the PR body', () => {
+    const sites = onceWarnDefinitions();
+    show('onceWarnDefinitions', sites);
+    expect(files(sites)).toContain('server/src/tmpSweepLane.ts');
   });
 });

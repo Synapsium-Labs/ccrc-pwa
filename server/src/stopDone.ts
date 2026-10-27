@@ -1,4 +1,8 @@
-import { IDLE_RUN_STATES, TERMINAL_RUN_STATES, type FleetSession } from '../../shared/api.js';
+import { IDLE_RUN_STATES, type FleetSession } from '../../shared/api.js';
+import {
+  SLEEP_HELD_RULES, SLEEP_POLICY_NAMES, SLEEP_QUIET_BOUNDARIES, SLEEP_RUN_CLOCKS, decideSleep, type SleepInput,
+  type SleepPolicy,
+} from './sleep.js';
 
 /**
  * STOP A FINISHED RUN'S WORKER (D-5370, `stop-worker-at-run-done`): the pure verdict.
@@ -103,8 +107,8 @@ export const STOP_DONE_PER_PASS = 3;
 /** At most this many candidates have their live state read a pass (tmux and live-file reads each). */
 export const STOP_DONE_MEASURES_PER_PASS = 6;
 
-/** The lane's own cadence, off the watcher's tick. */
-export const STOP_DONE_SWEEP_MS = 60_000;
+/** The lane's own cadence, off the watcher's tick: the `sleepRunDone` row's, declared in the L0 table (D-7045). */
+export { STOP_DONE_SWEEP_MS } from './laneSchedule.js';
 
 /** After a stop the box refused, the lane does not ask again for this long. In memory only: a restart asks once more. */
 export const STOP_DONE_RETRY_MS = 60 * 60_000;
@@ -200,68 +204,48 @@ export type StopDoneVerdict =
   | { readonly act: 'measure' }
   | { readonly act: 'hold'; readonly reason: StopDoneHold };
 
+/** The `run-done` policy row (D-7040; ARCH-43): this lane's every difference from `idle-hours` that the one ladder
+ *  (`decideSleep`, `sleep.ts`) reads. Only dispatched children, a stop stamp holds; a workspace hold passes with
+ *  `hibernate-hold-ok`; the run's close is the clock (with the parked states' own); `no-verb` before `measure`; the
+ *  turn verdict is read; quiet is measured strictly below the grace, or `STOP_DONE_PARKED_IDLE_MS` for a parked run. */
+export const RUN_DONE_POLICY: SleepPolicy<StopDoneHold> = {
+  name: SLEEP_POLICY_NAMES[0],
+  holds: STOP_DONE_HOLDS,
+  entry: { child: true, archivedBucket: false, paneDead: false, stopped: true },
+  held: SLEEP_HELD_RULES.workspacePasses,
+  runClock: { kind: SLEEP_RUN_CLOCKS.runClose, parkedStates: STOP_DONE_PARKED_STATES },
+  verbBeforeMeasure: true,
+  turnVerdict: true,
+  liveWord: 'sleep',
+  quiet: { boundary: SLEEP_QUIET_BOUNDARIES.below, parkedMs: STOP_DONE_PARKED_IDLE_MS },
+};
+
+/** The one ladder's facts, from this lane's input. The pane's death is not read (`paneDead: null`; the row does not
+ *  count it). D-6091: a programme hold, or one naming a terminal run, guards the workspace, not its sleep — it passes
+ *  only where ccd can pass it too; every other kind, a kind the sweep did not classify included, holds. */
+export function stopDoneSleepInput(i: StopDoneInput): SleepInput {
+  return {
+    row: i.row, child: i.row.child, paneDead: null, stopped: i.row.stoppedBy !== null,
+    heldPasses: i.holdOkVerb && (i.heldKind === 'programme' || i.heldKind === 'run-terminal'),
+    optedOut: i.optedOut, store: i.store, viewer: i.viewer, sinceStartMs: i.sinceStartMs,
+    viewerOpenTtlMs: i.viewerOpenTtlMs, verb: i.verb, live: i.live, now: i.now, quietMs: i.graceMs,
+  };
+}
+
 /**
  * Put this worker to sleep? The holds run cheapest first, and the live reads come last: `measure` asks the sweep to read
  * them for a session nothing else holds. Every read the verdict could not make HOLDS — never an unmeasured act.
+ * D-7040 (ARCH-43): the ladder is the one `decideSleep` (`sleep.ts`) runs for both sleep policies, under this lane's row,
+ * `RUN_DONE_POLICY`; this function keeps its name, its input and its answer.
  */
 export function stopDoneVerdict(i: StopDoneInput): StopDoneVerdict {
-  const hold = (reason: StopDoneHold): StopDoneVerdict => ({ act: 'hold', reason });
-  const r = i.row;
-  if (r.child.kind === 'none') return hold('not-a-child');
-  if (r.child.kind === 'unreadable') return hold('child-unreadable');
-  if (r.archivedAt !== null) return hold('archived');
-  if (r.stoppedBy !== null) return hold('stopped');
-  if (r.unmeasured.length > 0 || r.statusUnmeasured) return hold('unmeasured');
-  if (i.optedOut) return hold('opted-out');
-  // D-6091: a programme hold, or one naming a terminal run, guards the workspace, not its sleep — passed only where ccd
-  // can pass it too. Every other kind, a kind the sweep did not classify included, holds.
-  const holdPasses = i.holdOkVerb && (i.heldKind === 'programme' || i.heldKind === 'run-terminal');
-  if (r.held !== null && !holdPasses) return hold('held');
-  if (r.stranded !== null) return hold('stranded');
-  if (r.swapBlocked !== null) return hold('swap-blocked');
-  if (r.substrate !== null) return hold('substrate');
-  const s = i.store;
-  if (!s.ok) return hold('runs-unreadable');
-  if (s.last === null) return hold('no-run');
-  // D-6092 (F5 (b)): finished is terminal (`done` or `failed`) and closed, or parked at review, merge or close — whose clock is
-  // the marker's quiet alone (below), since a parked run has no close.
-  const parked = STOP_DONE_PARKED_STATES.includes(s.last.state);
-  if (!parked) {
-    if (!(TERMINAL_RUN_STATES as readonly string[]).includes(s.last.state)) return hold('not-done');
-    if (s.last.closedAt === null) return hold('close-unplaced');
-    if (i.now - s.last.closedAt < i.graceMs) return hold('grace');
-  }
-  if (s.openWorker) return hold('run-worker');
-  if (s.openClaimant) return hold('run-claimant');
-  if (s.claim) return hold('claim');
-  if (s.mail) return hold('mail');
-  if (i.viewer || i.sinceStartMs < i.viewerOpenTtlMs) return hold('viewer');
-  if (r.dialogPending) return hold('menu');
-  if (r.bucket !== 'idle') return hold('bucket');
-  if (r.background !== null) return hold('background');
-  if (r.subagents !== null && r.subagents.length > 0) return hold('roster');
-  if (!i.verb) return hold('no-verb');
-  if (i.live.kind === 'unread') return { act: 'measure' };
-  const w = i.live.word;
-  if (!w.ok) return hold(w.reason === 'unmeasured' ? 'unmeasured' : 'pane');
-  if (w.word !== 'idle') return hold('live-word');
-  if (i.live.turn !== 'idle') return hold(i.live.turn === 'unmeasured' ? 'unmeasured' : 'turn');
-  // Hibernation's two marker holds (§5.11), in its words: a row's `background` is null whenever its hookstate aged out,
-  // so a shell or a Monitor left running after the last Stop is visible only here — and it would die with the pane.
-  const m = i.live.mark;
-  if (!m.ok || m.state !== 'done') return hold('marker');
-  if (m.bg !== 0) return hold('marker-background');
-  // Hibernation's last two, in its words and its order (`hibernateVerdict`): nothing scheduled, and quiet long enough —
-  // here the grace, not N (D-6091): the run's close is this policy's clock, and the marker only proves the pane quiet.
-  if (m.crons !== 0) return hold('scheduled');
-  const stamps = [m.turnAt, m.stopAt, m.restartAt].filter((t): t is number => t !== null);
-  if (stamps.length === 0) return hold('recent');
-  const idleMs = i.now - Math.max(...stamps);
-  // sibling-parked-run-takes-parked-clock: an older parked run beside a newer done one keeps the parked clock.
-  if (idleMs < (parked || s.parkedWorker ? STOP_DONE_PARKED_IDLE_MS : i.graceMs)) return hold('recent');
-  return r.held === null
-    ? { act: 'hibernate', runId: s.last.runId, idleMs }
-    : { act: 'hibernate', runId: s.last.runId, idleMs, holdOk: r.held };
+  const v = decideSleep(stopDoneSleepInput(i), RUN_DONE_POLICY);
+  if (v.act !== 'hibernate') return v;
+  // The run-close clock always names its run: a `hibernate` answer under this row carries it.
+  const runId = v.runId as number;
+  return v.holdOk === undefined
+    ? { act: 'hibernate', runId, idleMs: v.idleMs }
+    : { act: 'hibernate', runId, idleMs: v.idleMs, holdOk: v.holdOk };
 }
 
 /** Is unread mail the ONE thing keeping this finished worker awake (D-6091)? The verdict asked twice — as measured,

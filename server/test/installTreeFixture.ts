@@ -154,6 +154,9 @@ export const TREE_FILES = [
   // template through the real publisher.
   'ccd/ccd-entry.py',
   'ccd/ccd-entry-install.py',
+  // The library the body pins and loads (D-6913): the publisher reads it from the tree and refuses a tree
+  // without it, or with one the body does not pin, so it is COPIED beside the body it belongs to.
+  'ccd/lib/disk-retention.sh',
   'ccd/ccd-cap-scopes',
   // graphify Task 10: the sweep executable `_inst_bins` ships alongside the
   // other two, unconditionally (mirrors the `ccd-cap-scopes` line — only the
@@ -215,6 +218,8 @@ export const TREE_FILES = [
   'ccd/compact-card.mjs',
   // The transcript reader ccd and the doctor load with `jq -L` (ARCH-65); `_inst_files` places it under `.cc-sessions/lib`.
   'ccd/lib/transcript.jq',
+  // `ccd carry-dedupe`'s program (#317); `_inst_files` places it beside the reader above.
+  'ccd/lib/carry-dedupe.py',
   // The approval verifier (coordinator-first routing, plan Task 14, D-5297): `_inst_files` places it beside the hook
   // and before it, as the card's helper above, so a tree without it dies the same way.
   'ccd/approval-verify.mjs',

@@ -36,14 +36,14 @@ import { fileURLToPath } from 'node:url';
 // this file twice: first for joining the path itself, then for quoting that
 // join in this very comment, because the scan is textual and does not care
 // whether a spelling is code.
-import { CCD } from './ccdWsHelpers.js';
+import { CCD, ccdSource } from './ccdWsHelpers.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(here, '..', '..');
 
 /** A bare `NAME=<seconds>` assignment in ccd, in seconds. */
 function ccdSeconds(name: string): number {
-  const src = readFileSync(CCD, 'utf8');
+  const src = ccdSource();
   const m = new RegExp(`^${name}=(\\d+)`, 'm').exec(src);
   expect(m, `ccd no longer defines ${name} as a bare integer assignment — this gate went blind`).not.toBeNull();
   return Number(m![1]);
@@ -119,7 +119,7 @@ describe('pr-landing fits inside the bound that kills it (D-6784)', () => {
   });
 
   it('the pin names every timeout cmd_pr_landing reads', () => {
-    const src = readFileSync(CCD, 'utf8');
+    const src = ccdSource();
     const start = src.indexOf('\ncmd_pr_landing()');
     expect(start, 'cmd_pr_landing moved').toBeGreaterThan(0);
     // The REST reads live in the helper the verb calls; scan the verb and its helpers' timeout reads together.
@@ -130,7 +130,7 @@ describe('pr-landing fits inside the bound that kills it (D-6784)', () => {
   });
 
   it('the rules loop hands the REST budget to one base only', () => {
-    const src = readFileSync(CCD, 'utf8');
+    const src = ccdSource();
     const loop = src.slice(src.indexOf('\ncmd_pr_landing()'));
     expect(loop).toMatch(/_pr_landing_rules "\$project" "\$repo" "\$rb" "\$rest"/);
     expect(loop).toMatch(/\(\( hit == 1 \)\) \|\| rest=0/);

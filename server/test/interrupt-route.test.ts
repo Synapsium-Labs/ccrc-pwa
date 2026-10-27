@@ -112,7 +112,7 @@ const box = async (b: Box) => {
   const url = `/api/sessions/${ID}/interrupt`;
   const res = b.bare ? await app.inject({ method: 'POST', url }) : await app.inject({ method: 'POST', url, payload: b.payload ?? {} });
   const recorded = notifyLog.catchUp(notifyLog.epoch, 0).events.map((e) => ({ kind: e.kind, sessionId: e.sessionId, body: e.body }));
-  // D-6116: the envelope the session stream ships for this file — `sessionws.ts`'s `checkHookAsk` makes this same read.
+  // D-6116: the envelope the session stream ships for this file — the session's feed (`sessionFeed.ts`) makes this same read and `sessionws.ts`'s `applyHook` frames it.
   const envelope = (await readHookState(localIO, reg, ID, UUID, Date.now()))?.ask ?? null;
   return { res, keys: calls.filter((c) => c[0] === 'send-keys'), recorded, pushes: notify.mock.calls.length, envelope };
 };

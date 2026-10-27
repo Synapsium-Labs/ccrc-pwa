@@ -208,7 +208,7 @@ describe('canonical positive-safe decimal parser', () => {
 });
 
 describe('canonical coordination id route census', () => {
-  it('keeps all twenty textual resource-id seams on the shared parser', () => {
+  it('keeps all twenty-one textual resource-id seams on the shared parser', () => {
     expect(canonicalCoordIdRoutes()).toEqual([
       { method: 'POST', routePath: '/api/mail/:id/ack' },
       { method: 'GET', routePath: '/api/mail/:id' },
@@ -221,6 +221,8 @@ describe('canonical coordination id route census', () => {
       // registered right after `advance` in coord/routes.ts.
       { method: 'POST', routePath: '/api/runs/:id/route' },
       { method: 'POST', routePath: '/api/runs/:id/items' },
+      // D-6910: the operator's read of a review cap's ask, registered beside the lift.
+      { method: 'GET', routePath: '/api/coord/review-cap/:id' },
       { method: 'GET', routePath: '/api/runs/:id/signals' },
       // D-6799: the run plus its spend.
       { method: 'GET', routePath: '/api/runs/:id' },

@@ -58,7 +58,7 @@ the fact passes for whatever the code happens to do; one that has never been red
 been shown to measure anything.
 
 **A value with one meaning is spelled once.** Runtime lists derive from the type that
-defines them rather than being re-typed beside it, and `server/test/single-definition.test.ts`
+defines them rather than being re-typed beside it, and `server/test/single-definition/*.test.ts`
 text-scans four roots and fails the build when a second copy appears. If you find yourself
 keeping two lists in agreement by hand, that is the defect.
 
@@ -70,6 +70,12 @@ one that asks whether the tool would actually do the thing does not.
 tried, what would break. That is deliberate, and it is why there are no per-file licence
 headers: boilerplate on top would compete with the thing the reader came for. Match the
 density of the file you are editing.
+
+**Do not edit the shared ledgers in a feature pull request.** Existing files under
+`docs/superpowers/programs/` and `docs/superpowers/plans/` belong to the coordinator's `ledger/<programme>`
+pull request. Add a new note, `docs/superpowers/plans/<plan>/<task-or-pr>.md`, and the coordinator folds it in.
+`.github/ci/ledger-guard.mjs` checks it; a `Ledger-Edit: <D-TBD reason>` trailer on the head commit is the escape
+(a trailer on an earlier commit does not count).
 
 **`D-N` markers in comments are the deviation ledger** — a global, monotonic record of
 decisions and the measurements behind them. Read them as history; don't delete them. If

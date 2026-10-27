@@ -16,9 +16,9 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { readFileSync, existsSync, mkdirSync, statSync, readdirSync } from 'node:fs';
 import path from 'node:path';
-import { CCD, makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
+import { makeCcdHarness, type CcdHarness, ccdSource } from './ccdWsHelpers.js';
 
-const ccd = readFileSync(CCD, 'utf8');
+const ccd = ccdSource();
 
 let h: CcdHarness;
 beforeEach(() => { h = makeCcdHarness('ccrc-ccd-regset-'); });

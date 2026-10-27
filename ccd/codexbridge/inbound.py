@@ -166,6 +166,31 @@ def _texts(content: object, what: str) -> List[str]:
             and isinstance(b.get("text"), str) and b["text"]]
 
 
+# @anchor system-entry-dropped-blocks
+def _count_dropped(content: object, names: NameSink) -> None:
+    """The NAME of every non-text block a `role: "system"` entry of `messages` drops, counted `requestField:<type>-block`
+    (the spelling of `thinking-block`), and a `tool_addition`'s `tool` type beside it as
+    `requestField:tool_addition-block.<type>` (`tool_reference` by reference, `tool_definition` by value: the case
+    that offers a tool absent from `tools`). Names only, never a block's names, schema or text; what is sent is
+    unchanged, since `_texts` alone builds the entry's item (D-7094).
+
+    Claude Code 2.1.310 sends `tool_addition` and `tool_removal` blocks here under its two tool-change betas
+    (D-7093). These names are NOT in `known.KNOWN`, on purpose (D-7094): they stay unexplained, so the doctor's drift
+    WARN names one the day it first arrives, until the bridge honours the blocks or the operator rules them out."""
+    if not isinstance(content, list):
+        return
+    for block in content:
+        kind = block.get("type") if isinstance(block, dict) else None
+        if kind == "text":
+            continue
+        names.name("requestField", (kind if isinstance(kind, str) else errors.UNRECOGNISED_CODE) + "-block")
+        if kind == "tool_addition":
+            tool = block.get("tool")
+            tool_kind = tool.get("type") if isinstance(tool, dict) else None
+            names.name("requestField", "tool_addition-block." + (tool_kind if isinstance(tool_kind, str)
+                                                                  else errors.UNRECOGNISED_CODE))
+
+
 def _drop_billing(text: str) -> str:
     """A text without its billing line: Claude Code's first system block is `x-anthropic-billing-header: …;`, whose
     suffix varies between requests and would break the prefix cache. Only the block's FIRST line is removed: the
@@ -306,6 +331,7 @@ class _Translation:
             role = m.get("role")
             if role == "system":
                 texts = _texts(m.get("content"), "a system entry's content")
+                _count_dropped(m.get("content"), self.names)
                 if texts:
                     self.items.append({"type": "message", "role": "developer",
                                        "content": [{"type": "input_text", "text": t} for t in texts]})

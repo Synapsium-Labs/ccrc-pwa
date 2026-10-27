@@ -4,21 +4,28 @@
 // fail (each mutation of the hook or of ccd reads as something other than 'current').
 // `_launchd_class` lives inside the platform block that `macos-platform.test.ts` holds byte-identical in ccd and ccrc.
 import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { copyFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
-import path from 'node:path';
+import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   HOOK_CONSTANTS, HOOK_REGION_BEGIN, HOOK_REGION_END, applyHookRegion, checkHookRegion, ccdEpochBody,
   extractHookRegion, renderHookRegion,
 } from '../../shared/hook-helpers.mjs';
+import {
+  AUTHDEAD_REGION_BEGIN, AUTHDEAD_REGION_END, AUTHDEAD_WRITERS, REGIONS, applyRegion, ccdFunctionDefinition, checkRegion, extractRegion,
+  regionOf, renderRegion,
+} from '../../shared/hook-helpers.mjs';
 import { verifyMarker } from '../../shared/mark.mjs';
+import { mkTmp } from './tmpHelpers.js';
+import { ghContainedEnv } from './ccdWsHelpers.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const read = (f: string): string => readFileSync(path.join(root, f), 'utf8');
 const hook = read('ccd/session-hook.sh');
 const ccd = read('ccd/ccd');
 const ccrc = read('ccd/ccrc');
+const probe = read('ccd/ccd-account-health');
 const block = (src: string): string => {
   const s = src.indexOf('# ── THE PLATFORM LAYER');
   const e = src.indexOf('# ── END PLATFORM LAYER');
@@ -87,6 +94,99 @@ describe('the drift check can fail', () => {
   it('regenerates a stale region back to current', () => {
     const drifted = hook.replace(region(), region().replace('CCRC_ID_MAX=128', 'CCRC_ID_MAX=129'));
     expect(checkHookRegion(applyHookRegion(drifted, ccd), ccd)).toBe('current');
+  });
+});
+
+// D-7049 (ARCH-72, spec K16): the second region, the auth-dead marker's writers, byte copies of ccd's definitions for
+// `ccd/ccd-account-health` (a sibling executable that sources nothing). One engine, one more row in REGIONS.
+describe('the auth-dead writers region (D-7049)', () => {
+  const AD = REGIONS.find((r) => r.name === 'authdead')!;
+  const defOf = (src: string, name: string): string | null => ccdFunctionDefinition(src, name);
+
+  it('is a row of the one engine, beside the hook\'s, and the module names both', () => {
+    expect(REGIONS.map((r) => r.name)).toEqual(['hook', 'authdead']);
+    expect(AD.begin).toBe(AUTHDEAD_REGION_BEGIN);
+    expect(AD.end).toBe(AUTHDEAD_REGION_END);
+    expect(regionOf(hook)).toBe(REGIONS[0]);
+  });
+
+  it('renders exactly ccd\'s three writer definitions, byte for byte, in order, stamped', () => {
+    const r = renderRegion(AD, ccd);
+    const inner = r.slice(AUTHDEAD_REGION_BEGIN.length + 1, r.length - AUTHDEAD_REGION_END.length - 1);
+    expect(inner.split('\n')[0]).toMatch(/^# ccrc:generated 1 sha256=[0-9a-f]{64}$/);
+    expect(verifyMarker(inner)).toBe('ccrc-unmodified');
+    const defs = AUTHDEAD_WRITERS.map((n) => defOf(ccd, n));
+    for (const [i, d] of defs.entries()) expect(d, AUTHDEAD_WRITERS[i]).not.toBeNull();
+    expect(inner.split('\n').slice(1).join('\n')).toBe(`${defs.join('\n')}\n`);
+  });
+
+  it('ccd-account-health carries it, current, and holds no hand-written copy of the three outside it', () => {
+    expect(regionOf(probe)).toBe(AD);
+    expect(checkRegion(AD, probe, ccd)).toBe('current');
+    const rest = probe.replace(extractRegion(AD, probe)!, '');
+    for (const n of AUTHDEAD_WRITERS) expect(rest).not.toMatch(new RegExp(`^${n}\\(\\)`, 'm'));
+    const r = spawnSync('node', [path.join(root, 'shared/hook-helpers.mjs'), '--check', path.join(root, 'ccd/ccd-account-health'), path.join(root, 'ccd/ccd')], { encoding: 'utf8' });
+    expect(r.stdout.trim()).toBe('hook-helpers: current');
+    expect(r.status).toBe(0);
+  });
+
+  it('reads a hand edit inside the probe\'s region as edited, and ccd\'s drift as stale', () => {
+    const region = extractRegion(AD, probe)!;
+    expect(checkRegion(AD, probe.replace(region, region.replace('rm -f -- "$t"; return 2', 'return 2')), ccd)).toBe('edited');
+    expect(checkRegion(AD, probe, ccd.replace('_authdead_clear() { rm -f -- "$REG/$1-authdead"; }', '_authdead_clear() { rm -f "$REG/$1-authdead"; }'))).toBe('stale');
+  });
+
+  it('reads drift from ccd/ccd as stale, a hand edit as edited, and regenerates back to current', () => {
+    const target = `#!/usr/bin/env bash\necho before\n${renderRegion(AD, ccd)}echo after\n`;
+    expect(regionOf(target)).toBe(AD);
+    expect(checkRegion(AD, target, ccd)).toBe('current');
+    const moved = ccd.replace('t=$(mktemp "$REG/$1-authdead.tmp.XXXXXX") || return 1', 't=$(mktemp "$REG/$1-authdead.tmp.XXXXXX") || return 3');
+    expect(moved).not.toBe(ccd);
+    expect(checkRegion(AD, target, moved)).toBe('stale');
+    const edited = target.replace('rm -f -- "$t"; return 2', 'rm -f -- "$t"; return 0');
+    expect(edited).not.toBe(target);
+    expect(checkRegion(AD, edited, ccd)).toBe('edited');
+    expect(checkRegion(AD, applyRegion(AD, edited, ccd), ccd)).toBe('current');
+    expect(applyRegion(AD, edited, ccd)).toBe(target);
+  });
+});
+
+describe('`ccrc restamp ccd/ccd-account-health` regenerates the auth-dead region (D-7049)', () => {
+  // A fixture tree holding the target's own ccd/ and shared/, as `ccrc-restamp.test.ts` builds one for the hook; a
+  // throwaway HOME. Nothing here runs the probe.
+  const tree = (): string => {
+    const t = mkTmp('ccrc-restamp-probe-');
+    mkdirSync(join(t, 'ccd')); mkdirSync(join(t, 'shared'));
+    for (const f of ['ccd/ccd', 'shared/mark.mjs', 'shared/hook-helpers.mjs']) copyFileSync(join(root, f), join(t, f));
+    return t;
+  };
+  const restamp = (f: string): { code: number; stdout: string; stderr: string } => {
+    const home = mkTmp('ccrc-restamp-probe-home-');
+    const r = spawnSync('bash', [join(root, 'ccd', 'ccrc'), 'restamp', f], { env: ghContainedEnv(home, { ...process.env, HOME: home }), encoding: 'utf8' });
+    return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
+  };
+
+  it('regenerates a hand-edited region, then answers current, leaving every other byte', () => {
+    const f = join(tree(), 'ccd', 'ccd-account-health');
+    writeFileSync(f, probe.replace(/^# ccrc:generated 1 sha256=\S+$/m, '# ccrc:generated 1 sha256=0000').replace('rm -f -- "$t"; return 2', 'return 2'));
+    const r = restamp(f);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toContain('auth-dead writers regenerated');
+    expect(readFileSync(f, 'utf8')).toBe(probe);
+    const again = restamp(f);
+    expect(again.code, again.stderr).toBe(0);
+    expect(again.stdout).toContain('auth-dead writers already current');
+    expect(readFileSync(f, 'utf8')).toBe(probe);
+  });
+
+  it('refuses, writing nothing, a probe whose own tree lacks the module or ccd', () => {
+    const f = join(mkTmp('ccrc-restamp-probe-'), 'ccd-account-health');
+    writeFileSync(f, probe);
+    const r = restamp(f);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain('carries generated auth-dead writers, but its own tree lacks');
+    expect(r.stderr).toContain('Nothing was written');
+    expect(readFileSync(f, 'utf8')).toBe(probe);
   });
 });
 

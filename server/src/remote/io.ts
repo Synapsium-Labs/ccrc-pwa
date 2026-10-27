@@ -1,5 +1,6 @@
-import { DISK_OP, isReadFromRange, type TailData, type TailReset } from '../../../shared/agent-protocol.js';
+import { DISK_OP, PRESSURE_OP, isReadFromRange, type TailData, type TailReset } from '../../../shared/agent-protocol.js';
 import { readDiskMeasured } from '../../../shared/disk.js';
+import { readHostPsi } from '../../../shared/pressure.js';
 import type { FleetIO, ReadFailure } from '../io.js';
 import type { FleetClient } from './client.js';
 
@@ -237,6 +238,19 @@ export function createIo(client: FleetClient): FleetIO {
         return measured === null ? { ok: false, reason: 'unmeasured' } : { ok: true, measured };
       } catch {
         return { ok: false, reason: 'unmeasured' };
+      }
+    },
+
+    /** The agent's `pressure` op (#1170). An agent whose `ready.ops` does not name it is never sent it: `unsupported`,
+     *  never a stall. Anything the link or the agent failed, or a reply in no shape `readHostPsi` knows, is
+     *  `unanswered`: the evidence the decider classifies a stall by. */
+    async pressureMeasured() {
+      if (!(client.state.agentOps ?? []).includes(PRESSURE_OP)) return { ok: false, reason: 'unsupported' };
+      try {
+        const psi = readHostPsi(await client.request({ t: 'req', op: PRESSURE_OP }));
+        return psi === null ? { ok: false, reason: 'unanswered' } : { ok: true, psi };
+      } catch {
+        return { ok: false, reason: 'unanswered' };
       }
     },
   };

@@ -1,4 +1,5 @@
 import type { ReadFailure } from '../../../shared/agent-protocol.js';
+import { REVIEW_FINDINGS_NONE_OPEN, REVIEW_FINDINGS_WORDS, type LastReviewReport, type ReviewCapAsk, type ReviewCapStatus, type ReviewFindings, type RunKind } from '../../../shared/api.js';
 import { redactCommand } from './redact.js';
 
 /**
@@ -16,22 +17,20 @@ export const REVIEW_ROUND_CAP = 3;
 /** Whether opening one more review run is over the cap. A lifted run is never over it. */
 export const reviewCapRefuses = (rounds: number, lifted: boolean): boolean => !lifted && rounds >= REVIEW_ROUND_CAP;
 
-/** The last review's report as the store reads it from its `review-done` mail; both fields are null when no review
- *  has reported. `summary` is the mail body after its fingerprint line. */
-export interface LastReviewReport { reviewRunId: number | null; summary: string | null; report: string | null }
+/** D-6909: the cap's state a run row carries. Only a work run has one; a review run, or a run of unknown kind, is null.
+ *  `row` is the run's `review_cap` row, absent until the ask is raised or the cap lifted. */
+export const reviewCapStatus = (kind: RunKind, rounds: number,
+  row: { askedAt: number | null; liftedAt: number | null } | undefined): ReviewCapStatus | null =>
+  kind !== 'work' ? null
+    : { rounds, cap: REVIEW_ROUND_CAP, askedAt: row?.askedAt ?? null, liftedAt: row?.liftedAt ?? null };
 
-/** What reading the last review's report gave; four answers, never three. `read` carries the open findings (possibly
- *  none); `unnamed` is no report path on file; `absent` and `unreadable` are the two read failures `readFileMeasured`
- *  keeps apart, and the notice falls back to the summary for all three. */
-export type ReviewFindings =
-  | { state: 'read'; lines: string[] }
-  | { state: 'unnamed' }
-  | { state: ReadFailure };
-
-/** The structured ask the refusal answers with and the notice words. */
-export interface ReviewCapAsk {
-  run: number; rounds: number; cap: number;
-  lastReview: LastReviewReport & { findings: ReviewFindings };
+/** `text` cut to at most `max` characters, never inside a token (review 960 F1). The egress mask matches a key only
+ *  whole, so a cut that falls inside a run of non-whitespace drops that whole run rather than send its prefix unmasked;
+ *  a text with no whitespace before the limit comes out empty, failing toward hiding. Nothing is appended. */
+export function cutWhole(text: string, max: number): string {
+  if (text.length <= max) return text;
+  const cut = text.slice(0, max);
+  return /\S$/.test(cut) && /\S/.test(text[max]!) ? cut.replace(/\S+$/, '').trimEnd() : cut;
 }
 
 /** At most this many finding lines ride the ask, each at most `REVIEW_FINDING_MAX` characters. */
@@ -53,7 +52,8 @@ export function extractOpenFindings(report: string): string[] {
     picked = lines.filter((l) => l.includes('needs a ruling:'));
   }
   return picked.slice(0, REVIEW_FINDINGS_MAX)
-    .map((l) => redactCommand(l.trim().replace(/^[-*]\s+/, '')).slice(0, REVIEW_FINDING_MAX));
+    .map((l) => cutWhole(redactCommand(l.trim().replace(/^[-*]\s+/, '')), REVIEW_FINDING_MAX))
+    .filter((l) => l !== '');
 }
 
 /** Words the read of a report as a `ReviewFindings`. */
@@ -77,9 +77,8 @@ export function reviewCapNotice(a: ReviewCapAsk): { title: string; body: string 
   const f = a.lastReview.findings;
   const findings = f.state === 'read' && f.lines.length > 0
     ? ` Open findings: ${f.lines.join(' | ')}`
-    : f.state === 'read' ? ' The report lists no open findings.'
-      : f.state === 'absent' ? ' The report file is gone.'
-        : f.state === 'unreadable' ? ' The report file could not be read.' : '';
+    : f.state === 'read' ? ` ${REVIEW_FINDINGS_NONE_OPEN}`
+      : f.state === 'unnamed' ? '' : ` ${REVIEW_FINDINGS_WORDS[f.state]}`;
   return {
     title: `Review cap reached on run ${a.run}`,
     body: `Run ${a.run} has had ${a.rounds} review rounds (cap ${a.cap}), so a further review was refused. ${open}${where}${findings} `

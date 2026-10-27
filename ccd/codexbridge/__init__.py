@@ -15,7 +15,8 @@ THE RULES EVERY MODULE HERE KEEPS (the plan's Global Constraints):
   PYTHONDONTWRITEBYTECODE is ignored and an import would write `__pycache__` into the tree.
 
 `load_all()` runs at import and imports every module in MODULES, so an update that rewrites the tree under a running
-bridge changes nothing that bridge runs.
+bridge changes nothing that bridge runs. Two modules are also CLIs the operator runs as files (`record.py scrub`,
+`liveprobe.py`, Task 18); each CLI runs only under `__main__`, so `load_all()` importing them runs neither.
 """
 
 import importlib.util
@@ -24,7 +25,8 @@ from typing import List, Protocol, Tuple
 VERSION = "1"
 
 # Every module of the package, in import order: a module imports only modules before it.
-MODULES = ("sse", "errors", "inbound", "reducer", "store", "count", "known", "stats", "backend", "stream", "server")
+MODULES = ("sse", "errors", "inbound", "reducer", "store", "count", "known", "stats", "backend", "record", "stream",
+           "server", "liveprobe")
 
 
 class NameSink(Protocol):

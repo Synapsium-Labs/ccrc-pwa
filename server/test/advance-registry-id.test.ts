@@ -86,7 +86,7 @@ describe('advance re-checks the stored session id before it re-measures (spec §
     const r = await rig('awaiting-review');
     // Room for one active run, so that only the gate could refuse this retreat
     // (the re-entry into `working` from an idle state takes the cap check).
-    r.coord.setCaps({ maxConcurrentWorkers: 4, maxSessionsPerDay: 12 });
+    r.coord.setCaps({ maxConcurrentWorkers: 4 });
     const res = await postAdvance(r.app, r.id, 'working');
     expect(res.statusCode).toBe(200);
     expect((res.json() as { run: { state: string } }).run.state).toBe('working');

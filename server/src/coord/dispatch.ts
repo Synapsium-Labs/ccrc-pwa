@@ -178,9 +178,9 @@ export type DispatchOutcome =
   | { ok: false; kind: 'oversize'; limit: number; detail: string }
   | Extract<HoldReasonVerdict, { ok: false }>
   | { ok: false; kind: 'refused';
-      code: Extract<RunRefuseCode, 'paused' | 'mail-disabled' | 'cap-concurrency' | 'cap-daily' |
+      code: Extract<RunRefuseCode, 'paused' | 'mail-disabled' | 'cap-concurrency' |
         'ambiguous-dispatch' | 'worker-busy' | 'hookstate-unmeasurable' | 'project-mismatch' | 'status-unmeasurable'>;
-      limit?: number; running?: number; used?: number; candidates?: number;
+      limit?: number; running?: number; candidates?: number;
       /** WHICH project the measured party belongs to — `project-mismatch`'s
        *  own field, and the only refusal on this union that carries a string.
        *  PRESENT EXACTLY WHEN `.project` was MEASURED with a non-empty name
@@ -319,7 +319,7 @@ async function refuseSpentChild(
   const pr = gate.pr;
   const keep = (detail: string): ChildSpentOutcome =>
     ({ ok: false, kind: 'childSpent', code: 'workspace-spent', pr, detail, unbound: false });
-  const sibRead = deps.coord.openRunsForSession(run.sessionId, run.id);
+  const sibRead = deps.coord.bindingsOf(run.sessionId).worker({ excludeRunId: run.id });
   if (!sibRead.ok) return keep(`the other runs naming this workspace could not be read: ${sibRead.detail}`);
   const survivor = survivorOf(sibRead.siblings);
   let handoff: HoldReasonVerdict | null = null;

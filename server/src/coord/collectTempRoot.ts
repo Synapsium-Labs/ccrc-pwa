@@ -151,7 +151,7 @@ export interface CollectControlDeps {
  *  `observeIntervalMs` is the lane's `COLLECT_OBSERVE_INTERVAL_MS`, passed in, as the L1 licence takes it. `runCcd` is
  *  the lane's stamping wrapper (Task 7), which reads `argv[0]` to tell this job's audit from its act. */
 export interface CollectTempRootDeps {
-  coord: Pick<CoordStore, 'run' | 'openRunsForSession' | 'openRunsClaimedBy'>;
+  coord: Pick<CoordStore, 'run' | 'bindingsOf'>;
   io: Pick<FleetIO, 'readdirMeasured'>;
   cfg: Pick<CcrcConfig, 'registryDir'>;
   runCcd: RunCcd;
@@ -687,9 +687,10 @@ export function collectOpenRunHold(
           + 'run ids restart after a database loss');
       }
     }
-    const worker = coord.openRunsForSession(id);
+    const bound = coord.bindingsOf(id);
+    const worker = bound.worker();
     if (!worker.ok) return held('store-unreadable', `which open runs name ${id} as their session could not be read (${worker.detail})`);
-    const claims = coord.openRunsClaimedBy(id);
+    const claims = bound.claimant();
     if (!claims.ok) return held('store-unreadable', `which open runs ${id} coordinates could not be read (${claims.detail})`);
     const naming = [...new Set([...worker.siblings, ...claims.siblings].map((r) => r.id))].sort((a, b) => a - b);
     if (naming.length > 0) {

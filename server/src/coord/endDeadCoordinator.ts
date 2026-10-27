@@ -31,7 +31,7 @@ import { notifyEach } from '../notice.js';
  *   1. ONE registry listing, nearest the act: `reclaim-paused` — the fleet's one cleanup switch — stops it, and so does
  *      a listing that could not be taken; `dead-coordinator-lane-live` decides SHADOW or LIVE here, whatever the lane's
  *      pass read;
- *   2. the runs the claimant holds NOW (`openRunsClaimedBy`), grouped by programme; a store that cannot say ends it;
+ *   2. the runs the claimant holds NOW (`bindingsOf(id).claimant()`, `openRunsClaimedBy`), grouped by programme; a store that cannot say ends it;
  *   3. shadow stops here: "would end programme <slug> (<n> runs)", and `abandon` is never called;
  *   4. live, for each run: `abandon(run, crashedId, stillCrashed)`. Inside the arm the switches are read again (a pause
  *      raised, or the lane disarmed, mid-act stops it), then the claimant is re-measured — the reclaim door's own
@@ -207,7 +207,7 @@ export async function endDeadCoordinator(
   // 2 — the runs it holds NOW.
   let runs: { id: number; program: string }[];
   try {
-    const read = deps.coord.openRunsClaimedBy(claimantId);
+    const read = deps.coord.bindingsOf(claimantId).claimant();
     if (!read.ok) return { kind: 'store-unreadable', detail: read.detail };
     runs = read.siblings;
   } catch (err) {

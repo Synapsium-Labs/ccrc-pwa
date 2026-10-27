@@ -10,7 +10,7 @@ import {
   COLLECT_POPULATION_MAX, COLLECT_RECORD_NAME_RE, collectForgets, collectPopulation, parseCollectRecordName,
   type CollectListing, type CollectPopulation,
 } from '../src/collectLane.js';
-import { CCD } from './ccdWsHelpers.js';
+import { ccdSource } from './ccdWsHelpers.js';
 
 const listed = (...names: string[]): CollectListing => ({ kind: 'listed', names });
 const ABSENT: CollectListing = { kind: 'absent' };
@@ -22,7 +22,7 @@ const many = (n: number, prefix = 'id-'): string[] => Array.from({ length: n }, 
 
 /** The ONE `re='…'` inside ccd's `_ws_collect_rec_id`, as written there. */
 const ccdRecordGrammar = (): string => {
-  const src = readFileSync(CCD, 'utf8');
+  const src = ccdSource();
   const at = src.indexOf('\n_ws_collect_rec_id() {');
   if (at < 0) throw new Error('_ws_collect_rec_id not found in ccd/ccd');
   const end = src.indexOf('\n}\n', at);

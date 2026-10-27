@@ -59,6 +59,7 @@ import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DOCS_PAGE_PREFIX } from '../../shared/docs.js';
+import { ccdSource } from './ccdWsHelpers.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(here, '..', '..');
@@ -81,7 +82,7 @@ const GATE_SRC = read('server/src/auth/gate.ts');
 const README = read('README.md');
 const CLAUDE_MD = read('CLAUDE.md');
 const AUTH_GATE_TEST = read('server/test/auth-gate.test.ts');
-const CCD_SRC = read('ccd/ccd');
+const CCD_SRC = ccdSource();
 
 /** The two mechanisms that count as "this handler consulted the box token" —
  *  the same pair `coord-pause-route.test.ts` and `auth-gate.test.ts` already

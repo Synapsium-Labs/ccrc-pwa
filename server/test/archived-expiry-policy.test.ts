@@ -7,7 +7,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { leafKeptWord } from '../../shared/api.js';
-import { CCD } from './ccdWsHelpers.js';
+import { CCD, ccdSource } from './ccdWsHelpers.js';
 import { makePrHarness, type PrHarness } from './ccdPrHelpers.js';
 import { EXP_ID, expireVerb, makeArchived } from './wsExpireFixture.js';
 import {
@@ -24,7 +24,7 @@ const ID = 'demo-quiet-dune';
 const TOK = 'a'.repeat(64);
 const PASS = 60_000;
 const NOW = 1_790_000_000_000;
-const ccd = readFileSync(CCD, 'utf8');
+const ccd = ccdSource();
 const nonComment = (t: string): string => t.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
 const words = (t: string): Set<string> => new Set([
   ...[...t.matchAll(/_reap_refuse ([a-z][a-z-]*)/g)].map((m) => m[1]!),
@@ -1151,6 +1151,8 @@ describe('L1', () => {
     const froms = [...src.matchAll(/from\s+'([^']+)'/g)].map((m) => m[1]);
     // D-5855: the live switch is re-exported from its row in the L0 switchboard.
     // ARCH-14 (#560): the machine token's reader is L0 too (`shared/ccd-refusal.ts`).
-    expect(froms).toEqual(['../../shared/nestedRescue.js', '../../shared/api.js', '../../shared/ccd-refusal.js', '../../shared/switches.js']);
+    // ARCH-41 (#776): the expiry words are typed and narrowed from L0's `WORKSPACE_TRANSITIONS`.
+    expect(froms).toEqual(['../../shared/nestedRescue.js', '../../shared/api.js', '../../shared/ccd-refusal.js',
+      '../../shared/workspaceTransitions.js', '../../shared/switches.js']);
   });
 });

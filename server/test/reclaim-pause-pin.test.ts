@@ -38,6 +38,7 @@ import { DEAD_COORDINATOR_JOURNAL_TRUSTED, DEAD_COORDINATOR_LANE_LIVE_MARKER } f
 import { COLLECT_LANE_LIVE_MARKER } from '../src/collectLane.js';
 import { NotifyLog } from '../src/notifylog.js';
 import type { FleetIO } from '../src/io.js';
+import { CHILD_RECLAIM_DISABLED_MARKER } from '../../shared/switches.js';
 import type { FleetState } from '../src/fleetstate.js';
 import type { Runner } from '../src/exec.js';
 import type { SessionRecord } from '../src/registry.js';
@@ -124,7 +125,7 @@ const PINNED_SITES: Readonly<Record<string, number>> = {
   'server/src/coord/collectTempRoot.ts': 0,     // folded onto readSwitches (D-5856)
   'server/src/coord/endDeadCoordinator.ts': 0,  // folded onto readSwitches (D-5856)
   'server/src/coord/expireArchived.ts': 0,      // folded onto readSwitches (D-5856)
-  'server/src/stopDoneSweep.ts': 1,             // stopDonePass's switches
+  'server/src/stopDoneSweep.ts': 0,             // folded onto readSwitches (D-7041)
   'server/src/watch.ts': 0,                     // folded onto readSwitches (D-5856)
 };
 
@@ -284,6 +285,15 @@ describe('childReclaim.ts — releaseRetiredChildHold step 6: the reclaim switch
     // Every listing before step 6 is clean; the marker stands from step 6 on.
     const s = scripted(f.base.io, f.reg, (n) => (n < f.step6 ? 'absent' : 'present'));
     expect(await releaseRetiredChildHold(f.deps(s.io), f.req)).toBe('changed');
+    expect(f.ccd).toEqual([]);
+  });
+});
+
+describe('childReclaim.ts — releaseRetiredChildHold step 6: child-reclaim-disabled, beside the reclaim switch', () => {
+  it('set answers changed and composes no ws-release', async () => {
+    const f = await releaseRig();
+    writeFileSync(path.join(f.reg, CHILD_RECLAIM_DISABLED_MARKER), '');
+    expect(await releaseRetiredChildHold(f.deps(f.base.io), f.req)).toBe('changed');
     expect(f.ccd).toEqual([]);
   });
 });
@@ -661,8 +671,8 @@ describe('watch.ts — emitCoord: the coord frame\'s switch bytes (the wire\'s M
 });
 
 describe('watch.ts — the tick hands the lanes ITS listing, and a null or rejecting one reaches none of them', () => {
-  // `sweepStopDone` runs only once the watcher is primed, so each row primes it first.
-  const lanes = ['sweepChildReclaim', 'sweepArchivedExpiry', 'sweepDeadCoordinators', 'sweepStopDone'] as const;
+  // `sweepSleep` runs only once the watcher is primed, so each row primes it first.
+  const lanes = ['sweepChildReclaim', 'sweepArchivedExpiry', 'sweepDeadCoordinators', 'sweepSleep'] as const;
   const prime = (w: FleetWatcher): void => { (w as unknown as { primed: boolean }).primed = true; };
   it.each<Listing>(['null', 'reject'])('%s → no lane is called', async (l) => {
     const f = watchRig({ io: (b, reg) => scripted(b, reg, () => l).io });
@@ -677,7 +687,7 @@ describe('watch.ts — the tick hands the lanes ITS listing, and a null or rejec
     prime(f.watcher);
     const spies = lanes.map((m) => vi.spyOn(f.watcher, m));
     await f.watcher.tick();
-    // The listing is each lane's last argument (`sweepStopDone` takes the rows first).
+    // The listing is each lane's last argument (`sweepSleep` takes the rows first).
     expect(spies.map((s) => (s.mock.calls[0]?.at(-1) as string[] | undefined)?.includes(RECLAIM_PAUSE_MARKER)))
       .toEqual(lanes.map(() => l === 'present'));
   });

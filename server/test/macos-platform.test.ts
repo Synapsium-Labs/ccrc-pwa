@@ -24,12 +24,12 @@ import { execFileSync, spawnSync } from 'node:child_process'; import { randomByt
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, linkSync, symlinkSync, chmodSync, readdirSync, lstatSync, existsSync, readlinkSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { CCD } from './ccdWsHelpers.js'; import { mkTmp } from './tmpHelpers.js';
+import { CCD, ccdSource } from './ccdWsHelpers.js'; import { mkTmp } from './tmpHelpers.js';
 import { itLinux } from './platformFixtures.js';
 
 const IS_DARWIN = process.platform === 'darwin';
 const ccdRoot = path.dirname(CCD);
-const ccd = readFileSync(CCD, 'utf8');
+const ccd = ccdSource();
 const ccrc = readFileSync(path.join(ccdRoot, 'ccrc'), 'utf8');
 /** The launcher TEMPLATE — rendered into `~/.local/bin/ccd` on the box. Python,
  *  not Bash: the platform block is Bash and has no business here. */
@@ -303,13 +303,30 @@ describe('no call site outside the platform block runs a GNU-only command bare',
    *  (The audit also answers unmeasured `platform` on Darwin before any of these.) */
   const COLLECT_MV = /^_ws_collect_mv\(\) \{[^\n]*\n[\s\S]*?\n\}\n/m;
 
+  /** `ccd`'s SECOND exemption outside the platform block: the library loader's
+   *  hashing-tool fallback (D-6913). `_ccd_lib_load` checks
+   *  ccd/lib/disk-retention.sh by digest before evaluating it, and when the tool
+   *  `_plat_sha256` selects is not on PATH it falls back to fixed ABSOLUTE
+   *  locations (`__CCD_HASH_TOOLS`), never to the environment: that is the
+   *  library's integrity model (#1525), so the fallback cannot route through the
+   *  shim, which resolves its tool from PATH. Every `sha256sum` it spells is a
+   *  tool NAME in a platform dispatch, not a bare GNU call: `tool=sha256sum` is
+   *  the Linux arm of a `command -v` probe (Darwin overrides it to `shasum`), and
+   *  the table's case arm pairs each basename with its own flags (GNU, perl's
+   *  shasum, BSD sha256). Cut as `_ws_collect_mv` is — ONE function plus its ONE
+   *  table line, pinned below to exactly those three spellings — so a new GNU
+   *  call in the loader surfaces as a hit, never a silently wider exemption. */
+  const LIB_LOAD = /^_ccd_lib_load\(\) \{[^\n]*\n[\s\S]*?\n\}\n/m;
+  const LIB_HASH_TOOLS = /^__CCD_HASH_TOOLS=\([^\n]*\)\n/m;
+
   /** One file's scanned text: the platform block cut where the file carries
    *  one, the pinned epoch copy cut out of the hook, and the pinned rename cut
    *  out of ccd. */
   function scannedText(name: string): string {
-    const src = readFileSync(path.join(ccdRoot, name), 'utf8');
+    // `ccd` is scanned WITH its library (D-6913): the moved disk-retention code is still ccd's.
+    const src = name === 'ccd' ? ccdSource() : readFileSync(path.join(ccdRoot, name), 'utf8');
     if (name === HOOK) return executableText(src.replace(HOOK_EPOCH_COPY, ''));
-    return executableText(name === 'ccd' ? src.replace(COLLECT_MV, '') : src);
+    return executableText(name === 'ccd' ? src.replace(COLLECT_MV, '').replace(LIB_LOAD, '').replace(LIB_HASH_TOOLS, '') : src);
   }
 
   function gnuHits(text: string): string[] {
@@ -378,7 +395,7 @@ describe('no call site outside the platform block runs a GNU-only command bare',
   it('ccd/ccd’s exemption is the collector’s rename, and nothing else', () => {
     // The anti-widening half, as the hook's: ONE function, ONE spelling, and
     // its first executable line refuses Darwin before `mv` is reached.
-    const src = readFileSync(path.join(ccdRoot, 'ccd'), 'utf8');
+    const src = ccdSource();
     const m = COLLECT_MV.exec(src);
     expect(m, '_ws_collect_mv must be findable — the exemption is meant to be exact').not.toBeNull();
     const cut = m![0]!;
@@ -391,6 +408,33 @@ describe('no call site outside the platform block runs a GNU-only command bare',
     // … and the rest of ccd really is scanned: the cut ends at the function.
     const text = scannedText('ccd');
     for (const anchor of ['_ws_collect_mv_ok() {', '_ws_collect_move() {']) {
+      expect(text, `the cut swallowed ccd around \`${anchor}\``).toContain(anchor);
+    }
+  });
+
+  it('ccd/ccd’s other exemption is the library loader’s hashing-tool fallback, and nothing else (D-6913)', () => {
+    // The anti-widening half, as the rename's: ONE function and ONE table line,
+    // and the only spellings they buy are the three tool names of the fallback.
+    const src = ccdSource();
+    const fn = LIB_LOAD.exec(src);
+    const table = LIB_HASH_TOOLS.exec(src);
+    expect(fn, '_ccd_lib_load must be findable — the exemption is meant to be exact').not.toBeNull();
+    expect(table, '__CCD_HASH_TOOLS must be findable — the exemption is meant to be exact').not.toBeNull();
+    expect(fn![0]!.match(/^[A-Za-z_][A-Za-z0-9_]*\(\) \{/gm),
+      'the exemption must be ONE function, not a region that grew').toEqual(['_ccd_lib_load() {']);
+    expect(src.match(new RegExp(LIB_HASH_TOOLS.source, 'gm'))?.length, 'ONE table line').toBe(1);
+    expect(gnuHits(executableText(table![0]! + fn![0]!)),
+      'the exemption buys exactly the fallback\'s tool names: the absolute table, the Linux probe name, the GNU case arm')
+      .toEqual([
+        'sha256sum: __CCD_HASH_TOOLS=(/usr/bin/sha256sum /bin/sha256sum /usr/local/bin/sha256sum /usr/bin/shasum /bin/shasum /usr/local/bin/shasum /sbin/sha256 /usr/bin/sha256)',
+        'sha256sum: local tool=sha256sum t',
+        'sha256sum: sha256sum) hash=("$t") ;;',
+      ]);
+    expect(fn![0]!, 'the probe name is overridden on Darwin').toContain('[ "$CCD_OS" = darwin ] && tool=shasum');
+    expect(fn![0]!, 'on PATH, the load hashes through the shim').toContain('hash=(_plat_sha256)');
+    // … and the rest of ccd really is scanned: the cut ends at the function.
+    const text = scannedText('ccd');
+    for (const anchor of ['__CCD_LIB_SHA256=', '_ccd_lib_load ||']) {
       expect(text, `the cut swallowed ccd around \`${anchor}\``).toContain(anchor);
     }
   });

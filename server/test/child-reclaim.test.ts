@@ -23,12 +23,13 @@ import {
 import type { ChildReclaimFeedQuiet } from '../src/childReclaimSweep.js';
 import { NotifyLog } from '../src/notifylog.js';
 import { readSessionRecord } from '../src/registry.js';
+import { readChildSiblings } from '../src/coord/siblingRead.js';
 import type { FleetState } from '../src/fleetstate.js';
 import type { Runner } from '../src/exec.js';
 import { SENTENCES } from '../src/wsaudit.js';
 import { LC_REASON_MAX_BYTES, LC_REFUSAL_TOKENS, holdReason } from '../../shared/api.js';
 import { testDeps } from './helpers.js';
-import { CCD } from './ccdWsHelpers.js';
+import { ccdSource } from './ccdWsHelpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import { makePrHarness, type PrHarness } from './ccdPrHelpers.js';
 import { CHILD_ID, childReclaimVerb, evalOf, makeChild } from './childReclaimFixture.js';
@@ -126,7 +127,7 @@ const PIN_WORDS = (region: string): string[] => [...new Set([...region.matchAll(
 
 describe('the fifteen words', () => {
   it('are exactly the words ccd’s RECLAIM region refuses with — harvested, both directions', () => {
-    const ccd = readFileSync(CCD, 'utf8');
+    const ccd = ccdSource();
     const begin = ccd.indexOf('RECLAIM-BEGIN');
     const end = ccd.indexOf('RECLAIM-END');
     expect(begin, 'the RECLAIM region is missing its BEGIN marker').toBeGreaterThan(0);
@@ -157,7 +158,7 @@ describe('the fifteen words', () => {
     // SECOND copy silently become the one compared, since `.exec` takes only
     // the first match) is what this asserts instead: `matchAll` over the
     // WHOLE file, and an exact count of one.
-    const ccd = readFileSync(CCD, 'utf8');
+    const ccd = ccdSource();
     const matches = [...ccd.matchAll(
       /case "\$REAP_VERDICT" in\n\s+([a-z|-]+)\)\n\s+_lc_emit reclaim refused "\$id" "" verb ws-audit/g,
     )];
@@ -327,7 +328,7 @@ describe('parseChildReclaimResult', () => {
   // alone, which made it vacuous. So this reads only the code lines of the
   // RECLAIM region.
   it("the special-cased word is ccd's own — the RECLAIM region's `_ws_reclaim_fail … probe-unmeasured`", () => {
-    const ccd = readFileSync(CCD, 'utf8');
+    const ccd = ccdSource();
     const begin = ccd.indexOf('RECLAIM-BEGIN');
     const end = ccd.indexOf('RECLAIM-END');
     expect(begin, 'the RECLAIM region is missing its BEGIN marker').toBeGreaterThan(0);
@@ -344,7 +345,7 @@ describe('parseChildReclaimResult', () => {
   // above `_ws_reclaim_locked`), so a reworded die reds this case rather than
   // silently drifting back to `resume: 'resumable'`.
   describe('a pre-lock die of cmd_ws_reclaim', () => {
-    const ccdSrc = readFileSync(CCD, 'utf8');
+    const ccdSrc = ccdSource();
     const region = ccdSrc.slice(ccdSrc.indexOf('\ncmd_ws_reclaim() {'), ccdSrc.indexOf('\n_ws_reclaim_fork() {'));
     // Extract the exact literal a ccd `die "..."` (or `_lc_refuse`'s trailing
     // message argument) prints — ANCHORED to the call itself (review 170 fr-I
@@ -787,6 +788,41 @@ describe('reclaimChild — the one executor', () => {
     const deps: ChildReclaimDeps = { ...s.deps, io: { ...s.deps.io, readdir: async () => null } };
     expect(await reclaimChild(deps, s.req())).toMatchObject({ kind: 'deferred', why: 'marker-unreadable' });
     expect(s.deliveryState().state).toBe('queued');
+  });
+
+  it('a STALE sibling (planned, undispatched, 15 days old, its coordinator gone) does not defer; a live coordinator\'s still does', async () => {
+    const s = await rig();
+    const next = s.coord.openRun({ program: 'p', title: 't', project: 'demo', wave: 2, waveOf: 2, claimedBy: 'demo-coordinator' });
+    if (!('id' in next)) throw new Error('openRun refused');
+    s.coord.setSession(next.id, ID);
+    const later = { ...s.deps, now: () => Date.now() + 15 * 24 * 3_600_000 };
+    const live = await rig();
+    const n2 = live.coord.openRun({ program: 'p', title: 't', project: 'demo', wave: 2, waveOf: 2, claimedBy: 'demo-coordinator' });
+    if (!('id' in n2)) throw new Error('openRun refused');
+    live.coord.setSession(n2.id, ID);
+    for (const [k, v] of Object.entries({ wrapper: 'claude', project: 'demo', workdir: '/w/c', uuid: 'u-c', started: '1' })) {
+      writeFileSync(path.join(live.reg, `demo-coordinator.${k}`), v);
+    }
+    expect(await reclaimChild({ ...live.deps, now: later.now }, live.req())).toMatchObject({ kind: 'deferred', why: 'siblings-open' });
+    expect(await reclaimChild(later, s.req())).not.toMatchObject({ kind: 'deferred', why: 'siblings-open' });
+    expect(s.coord.run(next.id)).toMatchObject({ ok: true, run: { state: 'planned' } });
+  });
+
+  it('a planned sibling older than fourteen days whose claimant read REJECTS or is UNLISTABLE keeps the child (fail-closed)', async () => {
+    const DAY = 24 * 3_600_000;
+    for (const readdir of [
+      async (): Promise<string[] | null> => { throw new Error('registry read failed'); },
+      async (): Promise<string[] | null> => null,
+    ]) {
+      const s = await rig();
+      const next = s.coord.openRun({ program: 'p', title: 't', project: 'demo', wave: 2, waveOf: 2, claimedBy: 'demo-coordinator' });
+      if (!('id' in next)) throw new Error('openRun refused');
+      s.coord.setSession(next.id, ID);
+      const io = { ...s.deps.io, readdir };
+      const read = await readChildSiblings({ coord: s.coord, io, cfg: s.deps.cfg }, ID, Date.now() + 15 * DAY);
+      expect(read).toMatchObject({ ok: true, open: 1, stale: [] });
+      expect(read.ok ? (read.blocking ?? []).map((b) => b.id) : null).toEqual([next.id]);
+    }
   });
 
   it('an open sibling defers, and an UNREADABLE sibling list defers — never read as "none"', async () => {

@@ -5,7 +5,7 @@
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { CCD, ghContainedEnv } from './ccdWsHelpers.js';
+import { ghContainedEnv, ccdSource } from './ccdWsHelpers.js';
 import { REAL_PYTHON3, type DocsRun } from './ccdDocsHelpers.js';
 
 /** The heredoc opener, a whole line of ccd/ccd: the program is on fd 3, so stdin stays the caller's. */
@@ -13,7 +13,7 @@ export const DOCS_PY_OPEN = `  python3 /dev/fd/3 "$@" 3<<'DOCS_PY'`;
 /** The heredoc terminator, a whole line of ccd/ccd. */
 export const DOCS_PY_CLOSE = 'DOCS_PY';
 
-const shippedCcd = (): string => fs.readFileSync(CCD, 'utf8');
+const shippedCcd = (): string => ccdSource();
 
 /**
  * The helper's python source: the lines strictly between the opener and the terminator, with a final newline.

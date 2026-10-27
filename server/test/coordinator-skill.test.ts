@@ -94,7 +94,7 @@ const serverSources = (): string => {
   return out.join('\n');
 };
 
-// The eighteen clauses, verbatim. Kept as a literal array rather than a regex per
+// The nineteen clauses, verbatim. Kept as a literal array rather than a regex per
 // clause: the point is that the SENTENCE is the contract, so a paraphrase must
 // fail exactly as a deletion does.
 //
@@ -123,7 +123,7 @@ const CONTRACT = [
   "The review brief names the held-out panel in `references/review-panel.md` as the review's shape, and the reviewer runs it as written: three Opus lenses and a Sonnet refute pass per finding, model and effort literal in the script, exempt from every routing field and from escalation and demotion. A lens that dies or returns nothing counts as unverified, never as approval, and no wave is accepted on a reading this session made alone.",
   // Landing-order wave 1 (spec 2026-09-23 §5.1). Written with no apostrophe at
   // all, so neither the straight nor the curly spelling can drift.
-  'This session never calls `update-branch` by any route, and never writes the rulesets, branch protection, auto-merge setting or `allow_update_branch` of any repository. It sends a rebase-check or any other conflict-sync request only on a conflict it has measured; beyond that, the only absorb it asks for is a land-sync to the PR it named next to land in a strict-protection repository, or an ejection naming the base sha the landing line recorded, and it never merges main into any workspace but its own. It commits programme-ledger documents on its own ledger PR, never inside a feature PR. On a native-queue project it lands a PR with `gh pr merge <n> --match-head-commit <handoffCommit>`, never with `--squash` or `--admin`, which enqueues it, and it closes that run only once the PR reads MERGED at `handoffCommit`: until then the run waits at `merging`. Unattended landing is the goal (spec 2026-09-23, ruling R5 as amended 2026-10-25): a lane, a timer or the keeper the operator runs may land a PR with no human present while every safeguard holds, namely that the GitHub merge queue re-tests the combined code, the required checks gate the enqueue, the landing binds the verified head with `--match-head-commit`, and nothing uses `--admin` or an update of the branch. A worker never merges its own PR: that separation of duties is one of the safeguards.',
+  'This session never calls `update-branch` by any route, and never writes the rulesets, branch protection, auto-merge setting or `allow_update_branch` of any repository. It sends a rebase-check or any other conflict-sync request only on a conflict it has measured; beyond that, the only absorb it asks for is a land-sync to the PR it named next to land in a strict-protection repository, or an ejection naming the base sha the landing line recorded, and it never merges main into any workspace but its own. It commits programme-ledger documents on its own ledger PR, never inside a feature PR: it opens that PR from a `ledger/<programme>` branch and folds that wave\'s `docs/superpowers/plans/<plan>/*.md` task notes into the ledger there. On a native-queue project it lands a PR with `gh pr merge <n> --match-head-commit <handoffCommit>`, never with `--squash` or `--admin`, which enqueues it, and it closes that run only once the PR reads MERGED at `handoffCommit`: until then the run waits at `merging`. Unattended landing is the goal (spec 2026-09-23, ruling R5 as amended 2026-10-25): a lane, a timer or the keeper the operator runs may land a PR with no human present while every safeguard holds, namely that the GitHub merge queue re-tests the combined code, the required checks gate the enqueue, the landing binds the verified head with `--match-head-commit`, and nothing uses `--admin` or an update of the branch. A worker never merges its own PR: that separation of duties is one of the safeguards.',
   // Worker stall watch, wave 3 (spec 2026-09-29 §6.1), amended by wave 7 (D-3805). Typographic apostrophes
   // and quotes, as clauses 3–12 are typed; no straight apostrophe at all.
   'A mail from `operator` whose subject begins `stall:` is the server’s stall watch reporting your worker, not the worker itself; it wakes you, and answering it is not polling. Ack it, re-measure the run and the worker’s last mail, then act once: mail the worker a resume that names its last mail and what it owes; or, if the silence is yours because you told it to wait, mail it a subject beginning `wait:` that names what it waits for; or, if the worker is dead or cannot be woken, re-dispatch a dead one as ‘When something is wrong’ says and say which in this turn’s text for the operator. A stall mail never licenses re-dispatching a live worker. Send that `wait:` mail unasked as well, whenever you tell a `working` worker to wait, behind another run or programme or until a time. The watch reads a `wait:` as the run waiting on you only until the next mail to or from the worker, its own notices aside: that mail hands the run back to the worker unless it is another `wait:` from you or, from the worker, a question, an exact `wave-done` or `review-done` claim, or a reply beginning `re stall-check: waiting`.',
@@ -132,10 +132,12 @@ const CONTRACT = [
   'Before delegating, declare coordinator intent for this session with `ccrc-api coordinators intent set --session <id>`; clear that declaration when the coordinator role ends. This is an identity declaration, not a restriction on ordinary Agent or Workflow use.',
   // Fleet disk retention, DR-25 (spec 2026-10-23 §2.7.2, §10). ASCII only, no apostrophe, no quote.
   'A workflow script, a worker brief or a test step never sets `TMPDIR` to a path inside a work tree and never writes scratch inside one: it uses the temp root this session was started with (`TMPDIR`, or `CCRC_SESSION_TMPDIR` where `TMPDIR` has been overridden). Long command output goes to a file there, or through `tail`, never into the work tree.',
+  // Workflow rule, operator ruling 2026-10-25. ASCII only, no apostrophe, no quote.
+  'Workflows are not a default. This session launches a workflow only for short, self-contained work that needs nothing from its own children and finishes in minutes: a review, a verification or an audit, or at least three independent items worth running in parallel. Each such workflow carries a time cap, its agents run at `medium` effort, and its vitest runs pass `--maxWorkers=2`. Nobody uses a workflow for a mechanical edit: a D-number substitution, a PR body edit, a rebase or a re-pin. This session never holds its turn open on anything that waits for its own children: it dispatches, ends its turn, and wakes on mail. Mail to a coordinator is held while it reads busy or waiting, so child mail has sat undelivered for hours behind a background workflow that died still reading busy and behind an operator question left open overnight. While any child is active, this session asks the operator in its closing turn text and ends the turn, never with an AskUserQuestion dialog, which reads waiting and holds every child mail behind it (`POST /api/mail` takes no `operator` recipient), and it never leaves a blocking question open while a child waits. A background workflow that stops, for any reason, is a wake: on its task notification, read the held mail (`GET /api/mail?to=<your id>`) in that turn.',
 ];
 
 describe('the coordinator skill: its contract', () => {
-  it('carries all eighteen clauses verbatim', () => {
+  it('carries all nineteen clauses verbatim', () => {
     for (const clause of CONTRACT) {
       expect(skill, `missing contract clause: ${clause.slice(0, 48)}…`).toContain(clause);
     }
@@ -165,7 +167,7 @@ describe('the coordinator skill: its contract', () => {
   // "pinned verbatim" exists to prevent. `worker-skill.test.ts` already
   // carries this guard; this ports it, with two adaptations the worker's
   // version does not need. First, the coordinator states its count in prose as
-  // "These eighteen sentences" (SKILL.md:67), not "clauses"/"lines" as the
+  // "These nineteen sentences" (SKILL.md:67), not "clauses"/"lines" as the
   // worker skill says, so the in-file harvest is widened to accept all three.
   // Second, README.md's own mention line-wraps the count word onto the line
   // after "clauses" (measured — CLAUDE.md's does not), so the cross-file
@@ -200,7 +202,7 @@ describe('the coordinator skill: its contract', () => {
   it('spells that same count, as one derived word, everywhere prose states it', () => {
     expect(COUNT_WORD, `${CONTRACT.length} clauses is past the end of WORDS — extend the array`)
       .toBeTruthy();
-    // SKILL.md states it once in its own words ("These eighteen sentences").
+    // SKILL.md states it once in its own words ("These nineteen sentences").
     // HARVESTED, never matched literally, so a revert to "ten" fails with the
     // wrong word named rather than with a missing string. The filter against
     // WORDS is what keeps a stray "protocol sentences" (SKILL.md's own clause
@@ -473,11 +475,52 @@ describe('the coordinator skill: clause 18, temp and long output', () => {
   });
 });
 
+describe('the coordinator skill: clause 19, workflows are not a default (operator ruling 2026-10-25)', () => {
+  const CLAUSE_19 = CONTRACT[18]!;
+
+  it('is the nineteenth clause, and SKILL.md numbers it so', () => {
+    expect(CLAUSE_19.startsWith('Workflows are not a default. ')).toBe(true);
+    expect(skill).toContain(`\n19. ${CLAUSE_19}\n`);
+  });
+
+  it('allows a workflow only for short, self-contained work that needs nothing from the children', () => {
+    expect(CLAUSE_19).toContain('only for short, self-contained work that needs nothing from its own children and finishes in minutes');
+    expect(CLAUSE_19).toContain('a review, a verification or an audit, or at least three independent items worth running in parallel');
+  });
+
+  it('caps each allowed workflow: a time cap, medium-effort agents, vitest at two workers', () => {
+    expect(CLAUSE_19).toContain('Each such workflow carries a time cap');
+    expect(CLAUSE_19).toContain('its agents run at `medium` effort');
+    expect(CLAUSE_19).toContain('`--maxWorkers=2`');
+  });
+
+  it('names the four mechanical edits no workflow is used for', () => {
+    for (const edit of ['a D-number substitution', 'a PR body edit', 'a rebase', 'a re-pin']) {
+      expect(CLAUSE_19).toContain(edit);
+    }
+  });
+
+  it('never holds the turn open on its own children, and cites the hold mechanism in one sentence', () => {
+    expect(CLAUSE_19).toContain('never holds its turn open on anything that waits for its own children: it dispatches, ends its turn, and wakes on mail');
+    expect(CLAUSE_19).toContain('Mail to a coordinator is held while it reads busy or waiting');
+    // The public repo carries the mechanism, never a session, host or account name.
+    expect(CLAUSE_19).not.toMatch(/ccrc-pwa-|quiet-|calm-|clear-mesa|bright-delta/);
+  });
+
+  it('asks the operator without a blocking dialog while children are active, and wakes on a stopped workflow', () => {
+    // Measured 2026-10-22: one AskUserQuestion open overnight held every child mail behind it (the gate refuses `waiting`).
+    expect(CLAUSE_19).toContain('While any child is active, this session asks the operator in its closing turn text and ends the turn, never with an AskUserQuestion dialog');
+    expect(CLAUSE_19).toContain('it never leaves a blocking question open while a child waits');
+    expect(CLAUSE_19).toContain('A background workflow that stops, for any reason, is a wake');
+    expect(CLAUSE_19).toContain('read the held mail (`GET /api/mail?to=<your id>`) in that turn');
+  });
+});
+
 describe('the coordinator skill: clause 17, coordinator intent', () => {
   const CLAUSE_17 = CONTRACT[16]!;
 
   it('is the seventeenth clause, and SKILL.md numbers it so', () => {
-    expect(CONTRACT).toHaveLength(18);
+    expect(CONTRACT).toHaveLength(19);
     expect(CLAUSE_17.startsWith('Before delegating, declare coordinator intent for this session with ')).toBe(true);
     expect(skill).toContain(`\n17. ${CLAUSE_17}\n`);
   });
@@ -500,12 +543,35 @@ describe('the coordinator skill: clause 17, coordinator intent', () => {
     expect(allSkillText).not.toMatch(/without (?:a |the )?(?:coordinator )?intent[^.\n]{0,40}(?:refus|forbid|block)/i);
   });
 
-  it('leaves the routing matrix\'s workflow mode alone: a coordinator still orchestrates with workflows on', () => {
+  it('the routing matrix\'s coordinator row carries clause 19: Opus high, workflows enabled for clause 19 only, clause-19 agents at medium', () => {
+    // Clause 13 takes every route from the matrix, so a coordinator row still saying ultracode (xhigh plus
+    // standing workflow orchestration) would hand the coordinator the very default clause 19 abolishes.
     const matrix = refs('routing-matrix.md');
-    expect(matrix).toContain('| On while orchestrating |');
-    expect(matrix).toContain('Opus · ultracode while orchestrating');
+    const row = matrix.split('\n').find((l) => l.startsWith('| Coordinator: '));
+    expect(row, 'the coordinator row is gone from the matrix').toBeDefined();
+    const cells = row!.split('|').slice(1, -1).map((c) => c.trim());
+    expect(cells[1]).toMatch(/^Opus · high\b/);
+    // `Workflow mode` is the `enableWorkflows` switch: Off would make even a clause-19 review impossible to launch,
+    // so the cell is enabled and says what may launch, never standing orchestration (verifier finding, this PR).
+    expect(cells[3]).toMatch(/^On \(enabled\), launched only under clause 19\b/);
+    expect(cells[3]).toContain('short, self-contained, time-capped');
+    expect(cells[3]).toContain('never standing orchestration');
+    expect(cells[2]).toContain('· medium');
+    expect(cells[2]).not.toMatch(/· (high|xhigh|max)\b/);
+    expect(row).not.toMatch(/ultracode|On while orchestrating|while orchestrating/);
+    expect(cells[4]).toContain('clause 19');
     // Clause 17 names neither the mode nor the effort, so it cannot contradict the row.
     expect(CLAUSE_17).not.toMatch(/workflow mode|ultracode|effort/i);
+  });
+
+  it('the routing matrix\'s brainstorm row agrees with clause 19: a short, time-capped workflow whose agents run at medium', () => {
+    const row = refs('routing-matrix.md').split('\n').find((l) => l.startsWith('| Brainstorm, spec, architecture'));
+    expect(row, 'the brainstorm row is gone from the matrix').toBeDefined();
+    const cells = row!.split('|').slice(1, -1).map((c) => c.trim());
+    expect(cells[2]).toContain('short, time-capped clause-19 workflow');
+    expect(cells[2]).toContain('· medium');
+    expect(cells[2]).not.toMatch(/· (high|xhigh|max)\b/);
+    expect(cells[3]).toContain('a short, time-capped judge panel');
   });
 
   it('names no later-wave lease or cleanup verb anywhere in the corpus', () => {
@@ -641,6 +707,12 @@ describe('the coordinator skill: linkage', () => {
       // would be told how to lift the review-round cap on its own run, which is the cap's own defeat. The
       // forbid-mention case below is what turns this permission-to-omit into a prohibition.
       'POST /api/coord/review-cap',
+      // D-6910: the operator's read of that cap's ask, unnamed for the caps reason: the read is the first half of the
+      // invitation. The same forbid-mention case covers it, since it names `review-cap` at all.
+      'GET /api/coord/review-cap/:id',
+      // DISK RETENTION shadow journal (D-6861) — a read-only view for the operator (and the agent that
+      // reviews a disk lane before the operator arms it), not a coordination door: no session decides or acts through it.
+      'GET /api/coord/shadow-journal',
     ]);
     const named = skillRoutes();
     for (const r of registeredCoordRoutes()) {
@@ -2142,8 +2214,10 @@ describe('the coordinator learns the project boundary (cross-repo wave 2, spec �
     // caught it and this one did not.
     ['the running-worker cap counts dispatched ACTIVE runs, not merely non-terminal ones',
       'concurrency counts dispatched runs in an ACTIVE state'],
-    ['the daily cap counts each actual dispatch',
-      'each actual dispatch still consumes daily budget'],
+    // The daily brake is retired (D-7068): the pin that it counted every dispatch became the pin
+    // that there is no such count.
+    ['concurrency is the only cap; no daily dispatch count',
+      'There is no daily dispatch count: concurrency is the only cap.'],
     ['homeProject on every open',
       'Every `POST /api/runs` for this programme carries `homeProject`'],
     ['the brief carries the immutable-plan source tuple',
@@ -2346,9 +2420,10 @@ describe('the coordinator learns the project boundary (cross-repo wave 2, spec �
     }
     // And the caps it warns about are the real ones, spelled as the codes the
     // dispatch actually answers with.
-    for (const cap of ['cap-concurrency', 'cap-daily']) {
-      expect(section, `the crossing section never names ${cap}`).toContain(cap);
-    }
+    expect(section, 'the crossing section never names cap-concurrency').toContain('cap-concurrency');
+    // The daily brake is retired (D-7068): the section may not warn about a refusal the server
+    // no longer sends.
+    expect(section, 'the crossing section still names the retired cap-daily').not.toContain('cap-daily');
   });
 
   // D-5523 (#601; the operator's ruling of 2026-10-18): a coordinator may sit
@@ -2393,22 +2468,21 @@ describe('the coordinator learns the project boundary (cross-repo wave 2, spec �
     for (const text of [section, lane]) expect(text).not.toMatch(/parent-project-mismatch/);
   });
 
-  // D-2686's caps paragraph tells a refused coordinator which numbers to read.
-  // It named `running` for BOTH codes for one round, and only `cap-concurrency`
-  // carries one — so the sentence sent a `cap-daily` reader after a field its
-  // frame does not have. HARVESTED from the two refusal frames rather than
-  // typed, so renaming a field, or adding a third cap, reds here.
-  const capRefusalFields = (code: string): string[] => {
+  // D-2686's caps paragraph tells a refused coordinator which numbers to read. It once had to tell two refusal
+  // frames apart (`cap-daily` carried `used`, never `running`); the daily brake is retired
+  // (D-7068), so one frame is left. HARVESTED from the refusal frame rather than typed, so
+  // renaming a field, or adding a cap, reds here.
+  const capRefusalFields = (code: string): string[] | null => {
     // ARCH-22 (#553): the refusal frames moved with the admit step into the decider (`refused({ ... })`).
     const src = readFileSync(path.join(root, 'server/src/coord/dispatchDecide.ts'), 'utf8');
     const at = src.indexOf(`code: '${code}',`);
-    if (at < 0) throw new Error(`dispatchDecide.ts sends no ${code} refusal — this harvest is stale`);
+    if (at < 0) return null;
     const frame = src.slice(at, src.indexOf('});', at));
     return [...new Set([...frame.matchAll(/(\w+):/g)].map((m) => m[1]!))]
       .filter((f) => f !== 'code').sort();
   };
 
-  it('tells a refused coordinator the fields its OWN cap frame carries', () => {
+  it('tells a refused coordinator the fields its cap frame carries, and names no retired cap', () => {
     const caps = refs('wave-lifecycle.md');
     // Anchor follows the heading D-2803 corrected: the paragraph is no longer
     // "runs, not holds" but "ACTIVE runs, not holds and not merely non-terminal".
@@ -2418,28 +2492,16 @@ describe('the coordinator learns the project boundary (cross-repo wave 2, spec �
     const para = flat(caps.slice(start, caps.indexOf('\n\n**', start + 1)));
 
     const concurrency = capRefusalFields('cap-concurrency');
-    const daily = capRefusalFields('cap-daily');
     expect(concurrency, 'cap-concurrency no longer carries limit and running')
       .toEqual(['limit', 'running']);
-    expect(daily, 'cap-daily no longer carries limit and used').toEqual(['limit', 'used']);
-
-    for (const field of concurrency) {
+    for (const field of concurrency!) {
       expect(para, `the caps paragraph never names cap-concurrency's \`${field}\``)
         .toContain(`\`${field}\``);
     }
-    for (const field of daily) {
-      expect(para, `the caps paragraph never names cap-daily's \`${field}\``)
-        .toContain(`\`${field}\``);
-    }
-    // The whole point: the field `cap-daily` does NOT carry must be said to be
-    // absent from it, not left for the reader to discover on a live refusal.
-    const missing = concurrency.filter((f) => !daily.includes(f));
-    expect(missing, 'the two cap frames no longer differ, so this pin is moot')
-      .not.toEqual([]);
-    for (const field of missing) {
-      expect(para, `the paragraph does not say cap-daily never carries \`${field}\``)
-        .toMatch(new RegExp(`cap-daily[^.]{0,160}never carries \`${field}\``));
-    }
+    expect(capRefusalFields('cap-daily'), 'dispatchDecide.ts sends the retired cap-daily refusal again').toBeNull();
+    expect(para, 'the caps paragraph still teaches the retired cap-daily').not.toContain('cap-daily');
+    expect(para, 'the caps paragraph does not say there is no daily dispatch count')
+      .toMatch(/there is no daily\s+dispatch count/i);
   });
 
   it('does not let the crossing section teach a second /clear writer or a reap', () => {

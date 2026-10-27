@@ -221,8 +221,9 @@ describe('README: cross-repo programmes', () => {
     expect([...IDLE_RUN_STATES, ...TERMINAL_RUN_STATES].slice().sort(),
       'the states excluded from the running cap are no longer idle ∪ terminal')
       .toEqual(['awaiting-review', 'closing', 'done', 'failed', 'merging', 'planned']);
-    expect(STORE, 'the daily cap no longer counts rows dispatched inside its rolling window')
-      .toContain('dispatchedAt IS NOT NULL AND dispatchedAt > ?');
+    // The daily brake is retired (D-7068): its rolling-window count is gone from the store.
+    expect(STORE, 'the store counts rows dispatched inside a rolling window again — the retired daily brake')
+      .not.toContain('dispatchedAt IS NOT NULL AND dispatchedAt > ?');
     expect(s, 'the section still equates two held workspaces with two running-worker slots')
       .not.toMatch(/two concurrency slots/i);
     expect(s, 'the section does not say concurrency counts dispatched runs in an ACTIVE state')
@@ -233,13 +234,14 @@ describe('README: cross-repo programmes', () => {
       .toMatch(/planned[\s\S]{0,80}?undispatched[\s\S]{0,100}?no running-worker slot/i);
     expect(s, 'the section does not say a terminal retained producer uses no running slot')
       .toMatch(/terminal[\s\S]{0,80}?producer[\s\S]{0,100}?no running-worker slot/i);
-    expect(s, 'the section does not state that every accepted dispatch consumes daily budget')
-      .toMatch(/each[\s\S]{0,60}?dispatch[\s\S]{0,80}?daily/i);
-    for (const code of ['cap-concurrency', 'cap-daily']) {
-      expect(RUN_REFUSE_CODES as readonly string[],
-        `${code} is not a declared RunRefuseCode — this claim is over nothing`).toContain(code);
-      expect(s, `the section does not keep \`${code}\` authoritative`).toContain(code);
-    }
+    expect(s, 'the section does not say there is no daily dispatch count')
+      .toMatch(/There is no daily dispatch\s+count/);
+    expect(RUN_REFUSE_CODES as readonly string[],
+      'cap-concurrency is not a declared RunRefuseCode — this claim is over nothing').toContain('cap-concurrency');
+    expect(s, 'the section does not keep `cap-concurrency` authoritative').toContain('cap-concurrency');
+    expect(RUN_REFUSE_CODES as readonly string[], 'the retired cap-daily is a RunRefuseCode again')
+      .not.toContain('cap-daily');
+    expect(s, 'the section still names the retired cap-daily').not.toContain('cap-daily');
     // README's caps paragraph stays count-free; the cross-repo subsection names
     // predicates rather than preserving the now-refuted hand-kept count.
     const caps = passage('README, the caps paragraph', README, '**Caps and pause.**', 'Pause is a');

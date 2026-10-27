@@ -18,6 +18,7 @@ import type { FleetIO } from '../src/io.js';
 import type { RunState } from '../../shared/api.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
+import { sourceOfSymbol } from './scan/symbols.js';
 import { okRun } from './coordReadHelpers.js';
 
 const ID = 'demo-quiet-basin';
@@ -589,9 +590,14 @@ describe('the two seams a runtime case cannot see', () => {
     // `POST /workspace/reap` of the same workspace; the timing a runtime case
     // would need to show that is not deterministic, so the seam is pinned by
     // its text: the executor is reached through `deps.queue.run(sessionId, …)`
-    // and nowhere else in the file.
+    // and nowhere else in the file. ARCH-77 (#812): the child-reclaim-disabled gate runs inside that queued job, so queueing stays synchronous.
     const src = coordSrc('routes.ts');
-    expect(src).toContain('void deps.queue.run(req.sessionId, () => reclaimChild({');
+    expect(src).toContain('deps.queue.run(req.sessionId, () => childReclaimUnlessDisabled(');
+    // The gate is read off the port's own symbol, not a second literal pin: the port queues only through it.
+    const port = sourceOfSymbol('server/src/coord/routes.ts', 'childReclaimPort');
+    // The queue is entered synchronously at close time; the gate sits INSIDE the queued job.
+    expect(port.indexOf('deps.queue.run(')).toBeGreaterThanOrEqual(0);
+    expect(port.indexOf('deps.queue.run(')).toBeLessThan(port.indexOf('childReclaimUnlessDisabled('));
     expect(src.match(/reclaimChild\(/g) ?? []).toHaveLength(1);
   });
 });

@@ -13,7 +13,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { CCD, makeCcdHarness, plantPoolEpoch, plantPoolSyncTimer, seedAccountsSh, type CcdHarness, WIDE_PANE }
+import { ccdSource, makeCcdHarness, plantPoolEpoch, plantPoolSyncTimer, seedAccountsSh, type CcdHarness, WIDE_PANE }
   from './ccdWsHelpers.js';
 import { POOLED_TEST_ROSTER, POOL_BY_ID } from './fixtures/poolRule.js';
 import { eventsOf, measOf, decOf } from './lifecycleHelpers.js';
@@ -768,7 +768,7 @@ describe('_reg_purge`s dot-free inventory', () => {
     // The comment now scopes itself to the `$REG/<id>.<field>` SHAPE — which
     // is what it always measured — and discloses the one file outside it, so
     // this anchor tracks the corrected words rather than the wrong ones.
-    const src = fs.readFileSync(CCD, 'utf8');
+    const src = ccdSource();
     const from = src.indexOf('The dot-free claim, measured against every `$REG/<id>.<field>` file');
     expect(from, 'the inventory comment could not be found').toBeGreaterThan(-1);
     // The window ends at the inventory list's own last field, not at a byte
@@ -812,7 +812,7 @@ describe('the candidate-walk count in `ccd/ccd` stays honest', () => {
     // exact for `ccd/ccd` today. A code line carrying the pattern inside a
     // trailing comment would be miscounted, and this pin would then need a real
     // tokenizer rather than a looser regex.
-    const src = fs.readFileSync(CCD, 'utf8');
+    const src = ccdSource();
     const at = src.indexOf('CANDIDATE WALKS DO NOT AGREE');
     expect(at, "#61's candidate-walk block could not be found").toBeGreaterThan(-1);
     // Start BEFORE the heading numeral, and flatten: the claim and the cited

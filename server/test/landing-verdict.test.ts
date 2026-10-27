@@ -120,6 +120,11 @@ describe('landingVerdict — a dequeue', () => {
       .toMatchObject({ step: 'deliver', mail: null, record: { runId: 7 } });
   });
 
+  it('a coordinator read that FAILED is not "no coordinator": it defers, never the feed-only "nobody to tell" record', () => {
+    expect(step(ask(), { runs: { ok: true, run: { id: 7 } }, coordinator: { ok: false, detail: 'c' } }))
+      .toEqual({ step: 'defer', detail: 'c' });
+  });
+
   it('a notice a durable read found is latched and says nothing — by mail and by feed', () => {
     expect(step(ask(), { runs: { ok: true, run: { id: 7 } }, coordinator: COORD, told: true })).toEqual({ step: 'latch' });
     expect(step(ask(), { runs: { ok: true, run: null }, told: true })).toEqual({ step: 'latch' });
@@ -145,6 +150,10 @@ describe('landingVerdict — a merge', () => {
     expect(step(merged(), { runs: { ok: false, detail: 'a' } })).toEqual({ step: 'defer', detail: 'a' });
     expect(step(merged(), { runs, coordinator: COORD, runState: { ok: false, detail: 'b' } }))
       .toEqual({ step: 'defer', detail: 'b' });
+  });
+
+  it('a coordinator read that FAILED defers a merge — it is not "a run with no coordinator", which latches', () => {
+    expect(step(merged(), { runs, coordinator: { ok: false, detail: 'c' } })).toEqual({ step: 'defer', detail: 'c' });
   });
 
   it('asks the run state of the survivor once it has a coordinator', () => {

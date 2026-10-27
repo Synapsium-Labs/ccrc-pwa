@@ -2,15 +2,16 @@ import type { CcrcConfig } from './config.js';
 import { configDirFor } from './configDir.js'; // D-5896: the pure join, not the config reader
 import type { Tmux } from './exec.js';
 import type { FleetIO } from './io.js';
-import { readRegistryMeasured, readSessionRecord } from './registry.js';
+import { readRegistryMeasured } from './registry.js';
 import type { SessionRecord } from './registry.js';
 import { readLimits } from './limits.js';
-import { liveSessionStatus, liveStatusCoversDelegation, readLiveState, readLiveStateMeasured } from './livestate.js';
+import { liveSessionStatus, liveStatusCoversDelegation, readLiveStateMeasured } from './livestate.js';
 import type { Statusline } from './pane/statusline.js';
 import type { HookState } from './hookstate.js';
 import type { FleetSession, HookAsk, LifecycleInput, PrState, SessionStatus, SessionUsage, TaskProgress } from '../../shared/api.js';
 // The ladder lives in `shared/` because `reviveFleetSession` is its second
 // producer and the two must not be able to disagree — see its own docstring.
+import { readSession } from './sessionReading.js';
 import { sessionBucket, sessionLifecycle, sessionRoleOf, spawnVerdict } from '../../shared/api.js';
 import type { Roster } from '../../shared/roster.js';
 // Task 19: the chip's own read. No cycle — `coord/store.ts` imports nothing
@@ -23,11 +24,14 @@ import type { ApprovalRow, AskRow, CoordStore } from './coord/store.js';
 // in L3 is what let the two halves disagree about what the hop is keyed on.
 import { boardPlacement, foldCoordPlacements, type StampLookup } from './coord/placement.js';
 import { foldLastRuns, releasedFrom, type ReleasedLookup } from './coord/released.js';
+import { incarnationOfMark, type SessionRunRead } from './coord/runWire.js';
 // F2(b): the `held` chip's ceiling, DERIVED from the lane's own two
 // windows. It lives in `askwindow.ts` because `watch.ts` (their first
 // reader) imports this module, so the constants could not stay there.
 import { ASK_HELD_CHIP_MAX_MS, askNotifyAt } from './askwindow.js';
 import { redactCommand } from './coord/redact.js';
+// D-7026: the question tables are read through `coord/questions.ts`; the guard and the warn stay here.
+import { currentFor } from './coord/questions.js';
 
 /** `FleetSession.askSummary`'s ceiling — a fleet card row, not a transcript; an ask push's too (D-5356). */
 export const ASK_SUMMARY_MAX_LEN = 80;
@@ -200,7 +204,7 @@ function fleetWithCoordinator(row: AskRow | null, nowMs: number, approval: Appro
 function readHeldApprovals(coord: CoordStore | undefined, childIds: readonly string[]): Map<string, ApprovalRow> {
   if (!coord || childIds.length === 0) return new Map();
   try {
-    const read = coord.heldApprovalsFor(childIds);
+    const read = currentFor(coord, childIds, 'approval');
     if (!read.ok) {
       console.warn(`ccrc-server: heldApprovalsFor refused — ${read.detail} — one bad read must not kill the poll`);
       return new Map();
@@ -230,7 +234,7 @@ function readHeldApprovals(coord: CoordStore | undefined, childIds: readonly str
 function readCurrentAsks(coord: CoordStore | undefined, childIds: readonly string[]): Map<string, AskRow> {
   if (!coord || childIds.length === 0) return new Map();
   try {
-    const read = coord.currentAsksFor(childIds);
+    const read = currentFor(coord, childIds, 'ask');
     // D-2545. An unreadable ask row degrades the WHOLE frame's ask chips to
     // absent, exactly as a throw already did — the fail-safe direction this
     // function was written for, reached by a typed result instead of an
@@ -332,6 +336,26 @@ function readReleased(coord: CoordStore | undefined, sessionIds: readonly string
 }
 
 /**
+ * `FleetSession.run` and `.openRun`'s guarded read (ARCH-61, #796): each row's binding, decided by `bindingOf` over the
+ * session's series, one read per row in this assembly. `coord` absent (a dark box, every older test) answers no run for every
+ * row, as `readReleased` does. A series this process cannot represent, or a throw from `node:sqlite`, is caught and warned
+ * once per row's read, never thrown out of `assembleFleet`, and answers null for that row this tick (`SessionRun`'s contract:
+ * doubt leaves the row where it was).
+ */
+function readSessionRun(coord: CoordStore | undefined, r: { id: string; child: SessionRecord['child'] }): SessionRunRead {
+  const none: SessionRunRead = { ok: true, run: null, openRun: null };
+  if (!coord) return none;
+  try {
+    const read = coord.bindingsOf(r.id).card(incarnationOfMark(coord, r.id, r.child));
+    if (!read.ok) console.warn(`ccrc-server: session run refused for ${r.id} — ${read.detail} — run reads null this tick`);
+    return read;
+  } catch (err) {
+    console.warn(`ccrc-server: session run failed for ${r.id} — ${err instanceof Error ? err.message : String(err)} — run reads null this tick`);
+    return { ok: false, detail: 'threw' };
+  }
+}
+
+/**
  * Which account a session id belongs to, from the id alone — the fallback
  * `assembleFleet` uses when the registry has no explicit `home` written
  * (older sessions; ccd only started writing `home` recently).
@@ -368,71 +392,6 @@ function readReleased(coord: CoordStore | undefined, sessionIds: readonly string
 export function idHomeWrapper(roster: Roster, id: string): string {
   for (const a of roster.byIdLengthDesc) if (id.startsWith(`${a.id}-`)) return a.id;
   return roster.upstreamId;
-}
-
-/**
- * Authoritative live status for one session — the same signal the fleet uses:
- * dead if no tmux session, else busy/idle from the live status file. No route reads it since D-5236
- * (the interrupt route takes the RAW word, `turnverdict.ts`'s `liveWordFor`); its D-115 pins stay.
- * Why the file: a --remote-control pane never renders the busy marker at all, and an RC-off pane
- * does render it, but the same pane can ALSO be showing a dialog painted right alongside it —
- * either way busy-ness has to come from the live status file, which also sees subagents the pane
- * never shows.
- */
-export async function liveStatus(io: FleetIO, cfg: CcrcConfig, tmux: Tmux, id: string): Promise<SessionStatus> {
-  // C0.3: this only ever asks about ONE id — no uniqueness or subtraction
-  // over the rest of the fleet — so it reads just that id's row rather than
-  // the whole registry (a 24-session fleet's floor is 97 agent-WS
-  // operations [registry-read-census:fleet] per `readRegistry` call, before
-  // its other listed fields and conditional reconfirmation, for a question about one
-  // session).
-  const read = await readSessionRecord(io, cfg, id);
-  // A degraded row must never answer 'dead' — the interrupt route's own
-  // "not busy" refusal reads THIS, and reporting dead-by-drop on a session
-  // this read simply could not measure would let it refuse an interrupt on a
-  // plainly busy one. `absent` and `unlistable` (genuinely absent, or the
-  // whole directory unlistable) are still 'dead': there is no pane to ask
-  // about either way, the same answer this gave before the ladder existed.
-  // D-309 (was D-B8-13): `hasSession` here deliberately collapses `unknown` into 'dead' —
-  // which this route turns into a REFUSED interrupt, the safe direction this
-  // function's own comment above already argues for. Splitting the pair for
-  // the operator's view is the substrate-unreachable spec's job (a state word
-  // through shared/server/pwa), not a guard's.
-  switch (read.kind) {
-    case 'found': break;
-    case 'absent': case 'unmeasurable': case 'unlistable': return 'dead';
-    // Masked by `knownId` (spec §2.3): `POST /api/sessions/:id/interrupt`,
-    // this function's one consumer, refuses an id `isRegistryId` refuses
-    // before it calls here. 'dead' all the same: it refuses the interrupt.
-    case 'bad-id': return 'dead';
-    default: {
-      const _x: never = read;
-      return _x;
-    }
-  }
-  if (!(await tmux.hasSession(id))) return 'dead';
-  const rec = read.record;
-  const pid = await tmux.panePid(id);
-  // Unmeasured wrapper => 'idle', via the EXISTING `!cfgDir` fallback: a
-  // degraded `rec.wrapper` is `''`, which `configDirFor` (an unknown wrapper
-  // string) already answers `undefined` for — honest-but-blind, and it fails
-  // TOWARD refusing an interrupt rather than granting one on a guess.
-  const cfgDir = configDirFor(cfg, rec.wrapper);
-  if (!pid || !cfgDir) return 'idle';
-  // THE FOLDED READ, KEPT ON PURPOSE — do not "finish" D-115 here.
-  // `assembleFleet` below takes `readLiveStateMeasured` and paints an
-  // unreadable live file `busy`; this function must keep answering `'idle'`
-  // for it, and the two are not drift. A card DISPLAYS, so its reassuring
-  // word is the dangerous one; this function's consumer was the interrupt
-  // route's `… === 'busy'` check (D-5236 keeps the same answer in `interruptVerdict`),
-  // which REFUSES on anything else — so `'idle'` is what withholds the keystroke, and
-  // "fail toward busy" would GRANT an interrupt on a read that measured
-  // nothing, inverting D-115's own intent one line from its remedy. Same
-  // direction the `!cfgDir` fallback above already argues for, on the same
-  // grounds. `fleet.test.ts` pins this answer beside `assembleFleet`'s
-  // opposite one, on ONE fixture, so the asymmetry reads as a decision.
-  const live = await readLiveState(io, cfgDir, pid);
-  return live ? liveSessionStatus(live.status) : 'idle';
 }
 
 /** The PR state a session has WITHOUT a live sweep: whatever `ccd pr-state`
@@ -600,7 +559,9 @@ export async function assembleFleet(
     // to the substrate-unreachable spec: what the fleet view shows for
     // cannot-ask is a product judgement (a new SessionStatus crosses the wire
     // and every render seam), not a guard this assembly may improvise.
-    const alive = await tmux.hasSession(r.id);
+    const sessionRun = readSessionRun(coord, r);
+    const verdict = await tmux.sessionVerdict(r.id);
+    const alive = verdict.verdict === 'live';
     let status: SessionStatus = 'dead';
     let name: string | null = null, statusUpdatedAt: number | null = null, version: string | null = null;
     // D-76. Claude Code's own "I am blocked on the human" verdict, hoisted out
@@ -668,14 +629,12 @@ export async function assembleFleet(
         } else if (read.reason === 'unmeasured') {
           // `busy` is this SURFACE's fail-shut direction, and only this
           // surface's: a card is read as permission to walk away, so the
-          // reassuring word is the dangerous one here. `liveStatus` two
-          // functions up answers `'idle'` on this identical failure ON
-          // PURPOSE, as the interrupt route's verdict does (D-5236): it
-          // REFUSES on an unread word, so "fail toward busy"
-          // there would GRANT interrupts on a read that measured nothing.
-          // Both are failing away from the act that cannot be taken back;
-          // `fleet.test.ts` pins the pair together on ONE fixture so the
-          // asymmetry cannot be mistaken for drift and quietly "fixed".
+          // reassuring word is the dangerous one here. The interrupt route's
+          // verdict answers an unread word the other way ON PURPOSE (D-5236):
+          // it REFUSES on one, so "fail toward busy" there would GRANT
+          // interrupts on a read that measured nothing. Both fail away from
+          // the act that cannot be taken back; `turnverdict.ts` holds that
+          // side, so the asymmetry cannot be mistaken for drift and "fixed".
           //
           // `status` ALONE moves. `name`, `statusUpdatedAt`, `version`,
           // `liveWaiting` and `liveWaitingFor` stay at their defaults,
@@ -760,6 +719,12 @@ export async function assembleFleet(
     // specifically to render this field — it is not a permanent argument, only
     // this task's.
     const lifecycleInput: LifecycleInput = lifecycleInputFor(r, alive, now * 1000);
+    const lifecycle = sessionLifecycle(lifecycleInput);
+    // ARCH-48 (#783): the wire's `presence` and `deadSince`, from `readSession` over the facts THIS assembly measured —
+    // the row (listed, so present), tmux's verdict, the lifecycle just derived and the registry's `.hibernated` stamp.
+    // The reading is computed here once; a reader renders it (doubt is `unknown`, never `dead`).
+    const reading = readSession({ row: 'present', pane: verdict.verdict, lifecycle, hibernatedAt: r.hibernatedAt,
+      turn: alive && status !== 'dead' ? status : null });
     const session: FleetSession = {
       id: r.id, wrapper: r.wrapper, home: r.home ?? idHomeWrapper(cfg.roster, r.id),
       project: r.project, workdir: r.workdir, workspace: r.workspace, name, title: r.title, status, statusUpdatedAt,
@@ -885,7 +850,11 @@ export async function assembleFleet(
       // archived row it is redundant but true. `pwa/test/session-lifecycle
       // .test.tsx` pins both, so this paragraph cannot silently go stale the
       // way its predecessor did.
-      lifecycle: sessionLifecycle(lifecycleInput),
+      lifecycle,
+      presence: reading.presence,
+      // The narrow reading (`FleetSession.deadSince`): only a `stopped` death, dated by the stop stamp's own instant.
+      // An `orphan` reads null (its last heartbeat dates supervision, not the death); `never-started` has no date.
+      deadSince: reading.deadCause === 'stopped' && r.stopped !== null ? r.stopped.at * 1000 : null,
       // Epoch MS on the wire — the timebase `statusUpdatedAt`/`bucketSince`
       // already use and the PWA's relative-time helpers already read.
       // `archivedAt` is the one exception, in seconds, because it shipped that
@@ -935,6 +904,9 @@ export async function assembleFleet(
           archived: r.archivedAt !== null, child: r.child.kind !== 'none',
         })
         : null,
+      // ARCH-61 (#796): the two named queries over the row's binding, decided once, here.
+      run: sessionRun.ok ? sessionRun.run : null,
+      openRun: sessionRun.ok ? sessionRun.openRun : null,
       bucket: 'idle', bucketSince: null,   // replaced immediately below
     };
     // Computed FROM the assembled session, never from a second copy of the

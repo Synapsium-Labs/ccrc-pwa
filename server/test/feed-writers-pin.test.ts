@@ -567,7 +567,8 @@ describe("coord/routes.ts POST /api/coord/caps: recorded always, never pushed (D
     expect(withoutFlush(calls)).toEqual(['record', 'archive']);
     expect(flushedAfterRecord(calls)).toBe(true);
     expect(rec.archived.map((e) => [e.kind, e.sessionId, e.runId, e.title, e.body]))
-      .toEqual([['coord', '', null, 'caps changed', 'workers 3 → 5, per day 12 → 12']]);
+      // The body no longer names the retired daily dial (D-7068).
+      .toEqual([['coord', '', null, 'caps changed', 'workers 3 → 5']]);
     expect(rec.pushes).toEqual([]);
     catchUpMatchesRing(rec);
   });
@@ -576,7 +577,7 @@ describe("coord/routes.ts POST /api/coord/caps: recorded always, never pushed (D
     async () => {
       const { rec, res, calls } = await posted(true);
       expect(res.statusCode).toBe(200);
-      expect(rec.coord.caps(), 'the act\'s own result is unchanged').toEqual({ maxConcurrentWorkers: 5, maxSessionsPerDay: 12 });
+      expect(rec.coord.caps(), 'the act\'s own result is unchanged').toEqual({ maxConcurrentWorkers: 5 });
       expect(withoutFlush(calls)).toEqual(['record', 'archive']);
       expect(flushedAfterRecord(calls)).toBe(true);
       expect(rec.archived).toEqual([]);

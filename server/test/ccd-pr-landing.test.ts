@@ -11,7 +11,7 @@ import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { readFileSync } from 'node:fs';
-import { CCD, WS_ADD } from './ccdWsHelpers.js';
+import { WS_ADD, ccdSource } from './ccdWsHelpers.js';
 import { makePrHarness, type PrHarness } from './ccdPrHelpers.js';
 
 let h: PrHarness;
@@ -19,7 +19,7 @@ beforeEach(() => { h = makePrHarness('ccrc-ccd-prlanding-'); });
 afterEach(() => { h.cleanup(); });
 
 const ccdSeconds = (name: string): number => {
-  const m = new RegExp(`^${name}=(\\d+)`, 'm').exec(readFileSync(CCD, 'utf8'));
+  const m = new RegExp(`^${name}=(\\d+)`, 'm').exec(ccdSource());
   if (!m) throw new Error(`ccd no longer defines ${name} as a bare integer assignment`);
   return Number(m[1]);
 };
@@ -611,7 +611,7 @@ describe('read-only censuses', () => {
   it('is dispatched, advertised in caps and named in the usage line', () => {
     expect(h.sh('cmd_caps').split('\n')).toContain('pr-landing');
     expect(h.sh('cmd_caps').split('\n')).toContain('pr-landing-v1');
-    const src = readFileSync(CCD, 'utf8');
+    const src = ccdSource();
     expect(src).toContain('pr-landing) shift; cmd_pr_landing "$@" ;;');
   });
 });

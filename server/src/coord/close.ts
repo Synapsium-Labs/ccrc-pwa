@@ -328,7 +328,7 @@ async function abandonRun(
     const halt = await sweepGateOf(deps, id, sweep) ?? commitAbandon(deps, id, plan, causedBy, sweep, false);
     return halt ?? { ok: true, id, state: 'failed', released: false, ...handOffChildReclaim(deps, NO_CHILD_GATE) };
   }
-  const sibRead = deps.coord.openRunsForSession(sessionId, id);
+  const sibRead = deps.coord.bindingsOf(sessionId).worker({ excludeRunId: id });
   // An abandon never runs `verifyDone`, so there is no measured line to reuse: `null` is what "it did not run" IS.
   const act = await decideClose({ step: 'abandon', run, siblings: sibRead,
     gate: () => childGateAtClose(deps, run, sessionId, sibRead, false, 'failed', null) });
@@ -368,7 +368,7 @@ async function closeWorkRun(
     line = verdict.plan.line;
   }
   // Decide and validate the hold before any close-path write: `foldPrLineage` persists measured history.
-  const sibRead = coord.openRunsForSession(sessionId, id);
+  const sibRead = coord.bindingsOf(sessionId).worker({ excludeRunId: id });
   const act = await decideClose({ step: 'close', run, siblings: sibRead, final, state, archive: plan.archive,
     gate: () => childGateAtClose(deps, run, sessionId, sibRead, final, state, line) });
   if (act.kind !== 'go') return stopped(deps, act);
@@ -401,7 +401,7 @@ async function closeReviewRun(
   const coord = deps.coord;
   /** The OTHER open runs on this workspace, read fresh at the decision point and never cached; the closing run
    *  excludes itself. Returns the RESULT, not the list (D-2545): "unreadable" must never arrive as `[]`. */
-  const siblingsOf = (sessionId: string): OpenSiblingsResult => coord.openRunsForSession(sessionId, run.id);
+  const siblingsOf = (sessionId: string): OpenSiblingsResult => coord.bindingsOf(sessionId).worker({ excludeRunId: run.id });
   if (b.final !== undefined || b.archive !== undefined ||
       (b.state !== undefined && b.state !== 'done' && b.state !== 'failed')) {
     return { ok: false, kind: 'bad-request' };

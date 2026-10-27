@@ -155,7 +155,7 @@ real values: `deploy/reference-fleet.md` (gitignored).
 - **In tests, use FIXTURE HOMEs only — never run `ccd` against the live `$HOME`.** `HOME` is the single isolation
   boundary the whole ccd suite relies on. Harness: `makeCcdHarness(prefix)` (`server/test/ccdWsHelpers.ts`);
   cleanup in `tmpHelpers.ts`, inside one per-run `$TMPDIR/ccrc-testrun-*` parent that teardown or a signal removes at once and a later run under
-  the same TMPDIR removes, once quiet, after a SIGKILL (`server/test/run-tmp.globalsetup.mjs`, #316). Second boundary: `ghContainedEnv()` plants
+  the same TMPDIR removes, once quiet, after a SIGKILL (`server/test/run-tmp.globalsetup.mjs`, #316; the agent suite wires the same module). Second boundary: `ghContainedEnv()` plants
   a poisoned `gh` on PATH so a stray real `gh` (which carries a `gho_` repo-WRITE token) can't fire — containment is per-test, not structural.
 - **NEVER print secret file CONTENTS.** The box/mail token is one shared secret per box
   (`~/.cc-secrets/ccrc-mail.token` on fleet host, `~/.ccrc/mail.token` on server), minted and rotated by
@@ -267,14 +267,20 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   full run's shard, on the case that makes a branch between the in-lock recompute and the pin, and green alone); any
   other red is a real break, so re-run the file alone first.
 - **What CI runs** (design `docs/superpowers/specs/2026-09-23-ci-test-selection-design.md`; one pipeline,
-  `ci.yml`, whose trigger picks a mode). **A pull request** runs the server tests its change can affect, chosen
+  `ci.yml`, whose trigger picks a mode). **A pull request** is the LIGHT run (operator ruling 2026-10-25): it runs the server tests its change can affect, chosen
   from a traced dependency map (`.github/ci/select-tests.mjs`) and sharded across runners behind the required
-  summary `test (server)`; `test (agent)`, `test (pwa)`, `build-pwa`, `node-floor` (on exactly the floor's version) and `probe-macos` run in full, and
-  `test-macos` runs the same selection, advisory. A change under `.github/` or `server/scripts/`, to any
-  `package.json` or lockfile, `vitest.config.*`, `tsconfig*.json`, `.gitattributes` or `.npmrc`, or a missing
-  map, runs the full suite instead. `CCRC_SELECTION` in `ci.yml` reads `enforce` since 2026-09-29 (#211); set back to
-  `shadow`, the selection is only reported and every server test runs. **A merge-queue run** (`merge_group`) runs what a pull request runs, its pipeline check included, in a
-  concurrency group of its own, and never the macOS legs or `full-suite` (operator ruling 2026-09-28). **A merge
+  summary `test (server)`. The agent, pwa and browser TESTS run only when the change can reach them
+  (`.github/ci/reach.mjs`: a package skips only when every changed file is under a directory it never reads, so `agent`
+  skips for `pwa/` and `ui/` only, `pwa` and `browser` for `agent/`, `server/`, `ccd/` and `deploy/` only); every typecheck,
+  `build-pwa`, the static checks, `node-floor` (on exactly the floor's version) and `probe-macos` always run, and every
+  required check name still reports, a skipped test step reading green. `test-macos` runs the same selection, advisory.
+  A change under `.github/` or `server/scripts/`, to any
+  `package.json` or lockfile, `vitest.config.*`, `tsconfig*.json`, `.gitattributes` or `.npmrc`, a missing
+  map, or the **`full-ci` label** on the pull request runs the full suite instead (a label starts no run: add it, then push or close and reopen; GitHub's "Re-run jobs" replays the run with the label set it started with, so it does not pick up `full-ci`). On a `pwa` change that is only `.ts`/`.tsx` the pwa shards run what vitest relates to it plus every pwa test that reads the tree from disk (derived in `reach.mjs`); any other change under `pwa/src` or `ui/src` (CSS, JSON, assets) runs them all. Server tests the map has no entry for, or whose record is older than a change to what it read, are selected only when the pull request touches them; the rest are left to the merge queue, and the select summary counts them. `CCRC_SELECTION` in `ci.yml` reads `enforce` since 2026-09-29 (#211); set back to
+  `shadow`, the selection is only reported and every server test runs. **A merge-queue run** (`merge_group`) is the FULL run (operator ruling 2026-10-25, replacing 2026-09-28's "what a pull
+  request runs"): every server shard, the agent, pwa and browser tests, in a concurrency group of its own, and never the
+  macOS legs or `full-suite`. The queue is the safety net for everything the light run leaves out, so nobody bypasses
+  it: an admin merge that skips the queue lands on the light run only. **A merge
   to `main`** starts no CI run: an **hourly** `refresh` run (cron plus `workflow_dispatch -f mode=refresh`, one concurrency
   group so runs coalesce) re-traces the tests every merge since the last refresh affected and updates the map, running
   no test legs and reporting newly failing or timed-out tests as a warning and a job summary, never a red job (D-6769).
@@ -282,7 +288,7 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   head already has a green `full-suite` job from a trusted run (a daily or manual full run on `main`, or a stable
   gate; never a pull request's). **A promotion to `stable`** needs such a green `full-suite` on the commit:
   `release-stable.yml`'s `gate` finds one or runs `ci.yml` in full mode first. So a green PR proves its
-  selection, not the whole suite; the daily run and the stable gate are where a miss is caught.
+  selection, not the whole suite; the merge queue runs the whole server suite before a merge, and the daily run and the stable gate catch the rest.
 - **Node floor `>=22.16.0`, identical across the three engines**, pinned by `server/test/node-floor.test.ts`
   (server-only; CI's `node-floor` job runs it on exactly 22.16.0). Two reasons: `server/src/coord/db.ts` imports
   `node:sqlite` unconditionally (below 22.13 the server fails to boot), and below 22.16 that `node:sqlite` has no
@@ -367,7 +373,7 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   context" rules and table. No account-name list in ANY shipped source file. **No overloaded null at a seam** — two conditions a caller handles differently must not
   collapse to the same value; that's a defect, not style. The server runs `Fastify({ logger: false })`, so `req.log.*` is a silent no-op — a server log line is `console.warn('ccrc-server: …')`, never `req.log`.
 - **Single-source-of-truth values are enumerated once and derived:** runtime lists come from the type
-  (`PR_REASONS = Object.keys(PR_REASON_MAP)`), not hand-maintained. `server/test/single-definition.test.ts`
+  (`PR_REASONS = Object.keys(PR_REASON_MAP)`), not hand-maintained. `server/test/single-definition/*.test.ts`
   text-scans four roots and fails the build on a 2nd copy. **The account roster is runtime DATA** since Stage 2a
   (`b1f54fe`): `~/.ccrc/accounts.json`, parsed by `shared/roster.ts`'s `parseRoster`, carried on
   `CcrcConfig.roster`, shipped as `RosterWire[]`, generated into `~/.ccrc/accounts.sh` for `ccd`. Adding an
@@ -401,6 +407,12 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   orphan warning reports and nothing refuses. Source files carry `D-N` refs in comments; **read them
   as authoritative history, don't delete them.** Anchors in plans are snapshots — trust shipped source's own
   comments over a plan document.
+- **Cite code by anchor, not by line:** a `file.ts:123` citation conflicts whenever any PR touches the lines above it, though
+  the cited code did not change. Put `// @anchor name` (or `# @anchor name`) on the cited line, or on its own line above it, and
+  cite `ccd/session-hook.sh#@emit-context-print` (that form: a path, `#@`, the name); `server/test/anchors.test.ts` fails on a citation whose anchor does not exist and on an anchor
+  defined twice in one file. A symbol that already has a name is cited as `file.ts#symbol` (D-5893's ratchet in
+  `citations.test.ts` still lets numeric citations only get fewer). New guards go in the area file of
+  `server/test/single-definition/`, and a new derived list in `shared/api.ts` goes beside its type, not at the end of the file.
 - **Wire discipline — additive-only, absence-permits:** frames are ADDITIVE; do NOT bump `FLEET_PROTO`
   (=1, `FLEET_PROTO_MIN`=1, defined once in `shared/api.ts`) for a new field. A newer peer must tolerate an older
   peer omitting a field, through a SINGLE reader per field. Reading a persisted `FleetSession[]` from an older
@@ -519,7 +531,7 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   record shadow only until `stall-watch-w2-live` exists, and while `mail-disabled` stands every
   rung that would send mail holds. `stall-watch-disabled`, `stall-watch-live`, `stall-watch-escalate`,
   `stall-watch-w2-live`, `mail-gate-busy-shadow` and `mail-gate-busy` arm them (no `stall-watch-live`: shadow only) and,
-  like `mail-gate-strict`, have **no writer in the tree** — `single-definition.test.ts` pins that. A level chosen in
+  like `mail-gate-strict`, have **no writer in the tree** — `single-definition/*.test.ts` pins that. A level chosen in
   Settings (`/api/coord/stall-watch`, the operator's control) overrides the arming markers, but never
   `stall-watch-disabled`, `mail-disabled` or `mail-gate-strict`; the markers still have no writer.
 - **Done-fingerprint re-measures the WORKSPACE BRANCH** (`handoffCommit === branchTip`). A worker commits on its
@@ -531,13 +543,13 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   (`resolveCoordinator(runId)` reads that run's `claimedBy`, no program-state predicate) — which is the
   documented recovery for an already-retired program.
 - The coordinator is an ordinary fleet session running the `ccrc-coordinator` skill
-  (`ccd/coordinator-skill/SKILL.md`); its eighteen clauses are pinned VERBATIM by
+  (`ccd/coordinator-skill/SKILL.md`); its nineteen clauses are pinned VERBATIM by
   `server/test/coordinator-skill.test.ts` — a softened clause is a red suite. Pause kill-switches are FILES
   (`$REG/coordinator-paused`, `$REG/mail-disabled`). `mail-disabled` has **no writer in the tree** — touch/rm by
   hand only. `coordinator-paused` does: Build 4's whitelisted `ccd coord-pause --state on|off`, driven by
   `POST /api/coord/pause`, both raises and lowers it, so it is reachable from a phone — `routes.ts` calls the
   boundary what it now is, "convention with a speed bump".
-- **The worker has a skill too** (`ccd/worker-skill/SKILL.md`, `ccrc-worker`, eighteen clauses pinned by
+- **The worker has a skill too** (`ccd/worker-skill/SKILL.md`, `ccrc-worker`, nineteen clauses pinned by
   `server/test/worker-skill.test.ts`; it ships no `references/` and points at the coordinator's).
   `WORKER_KICKOFF_PREFIX` (`server/src/coord/dispatch.ts`) prefixes EVERY brief mail with the sentence that
   invokes it, so a wave brief carries WAVE SPECIFICS — plan path, task range, interfaces, deviations — never the
@@ -559,8 +571,8 @@ built by `.join` from L0 (`TERMINAL_DELIVERY_STATES` and its derived complement 
 (`DeliveryWrite`), `{changed}` for a scoped bulk write (D-5998) — so no delivery-row writer returns `void`, and
 `watch.ts`'s `sweepMail` consumes each answer: a refused write is logged and the step that assumed it skipped.
 Pinned by `mail-hardening.test.ts`'s one-writer census, `mail-deliveries-writer.test.ts`, and two scans in
-`single-definition.test.ts`. STILL OPEN, and do not assume otherwise: an out-of-vocabulary `state` token (the
-column is `schema.ts:138-139`; the deploy-rollback that can reach it is argued at `schema.ts:41-45`) is LIVE to every negative-form guard and to `markAcked`,
+`single-definition/*.test.ts`. STILL OPEN, and do not assume otherwise: an out-of-vocabulary `state` token (the
+column is described at `server/src/coord/schema.ts#@mailDeliveriesStateVocabulary`; the deploy-rollback that can reach it is argued at `server/src/coord/schema.ts#@deployRollbackOlderServer`) is LIVE to every negative-form guard and to `markAcked`,
 while `dueDeliveries` and the positive-form writers treat it as not-outstanding — an asymmetry nothing has
 ruled on. D-114's measured read is **LANDED, not open** — corrected 2026-09-04 (D-1441), because the paragraph
 this replaces was falsified by wave 8's own commits and still read as live guidance. What is true now:
@@ -574,7 +586,7 @@ The agent's wire no longer lies either: `absent` is a separate positive marker s
 ENOENT (`statPayload`, `agent/src/server.ts`), so EACCES answers a bare `{missing: true}` and a newer
 server reads that as UNMEASURED rather than as absence (D-1396) — the sentence here previously said the
 opposite. And `ReadFailure` lives in **`shared/agent-protocol.ts`**, not `server/src/io.ts`: D-1438 moved
-it there so both sides declare the vocabulary once, and `single-definition.test.ts` pins that home
+it there so both sides declare the vocabulary once, and `single-definition/*.test.ts` pins that home
 (`expect(holders).toEqual(['shared/agent-protocol.ts'])`). Read the interface, not this paragraph
 (D-114, `docs/superpowers/plans/2026-08-20-fleetio-measured-read.md`). **Live build/roadmap state is NOT tracked here** — it lives in the orchestrator
 task list and `docs/superpowers/plans/`, so this file never goes stale on it.

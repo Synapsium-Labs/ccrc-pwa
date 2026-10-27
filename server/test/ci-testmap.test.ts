@@ -66,8 +66,8 @@ describe('buildMap', () => {
       sha: SHA_A,
       baseline: { read: ['server/vitest.config.ts'], probed: [], listed: [], subtree: [], git: false },
       tests: {
-        'server/test/a.test.ts': { read: ['ccd/ccd', 'server/src/a.ts'], probed: [], listed: [], subtree: ['deploy', 'shared'], git: false, unknown: false },
-        'server/test/b.test.ts': { ...emptyDep(), unknown: true, why: 'timeout' },
+        'server/test/a.test.ts': { read: ['ccd/ccd', 'server/src/a.ts'], probed: [], listed: [], subtree: ['deploy', 'shared'], git: false, unknown: false, tracedAt: SHA_A },
+        'server/test/b.test.ts': { ...emptyDep(), unknown: true, why: 'timeout', tracedAt: SHA_A },
       },
     });
   });
@@ -124,8 +124,9 @@ describe('refreshMap', () => {
     const map = refreshMap(old, SHA_B, r, liveTests, ['server/test/retraced.test.ts']);
     expect(map.sha).toBe(SHA_B);
     expect(map.tests).toEqual({
-      'server/test/kept.test.ts': old.tests['server/test/kept.test.ts'],
-      'server/test/retraced.test.ts': { read: ['server/src/new.ts'], probed: [], listed: [], subtree: [], git: false, unknown: false },
+      // A carried record from before stamping was traced at the map it came from; a retraced one at this refresh.
+      'server/test/kept.test.ts': { ...old.tests['server/test/kept.test.ts'], tracedAt: SHA_A },
+      'server/test/retraced.test.ts': { read: ['server/src/new.ts'], probed: [], listed: [], subtree: [], git: false, unknown: false, tracedAt: SHA_B },
     });
     // gone.test.ts dropped — not in liveTests
     expect(map.tests).not.toHaveProperty('server/test/gone.test.ts');
@@ -138,7 +139,7 @@ describe('refreshMap', () => {
     const r = records({}, { 'server/test/retraced.test.ts': split({ read: ['server/src/new.ts'] }) });
     const liveTests = ['server/test/kept.test.ts', 'server/test/retraced.test.ts'];
     const map = refreshMap(old, SHA_B, r, liveTests, ['server/test/kept.test.ts', 'server/test/retraced.test.ts']);
-    expect(map.tests['server/test/kept.test.ts']).toEqual({ ...emptyDep(), unknown: true, why: TRACE_MISSING });
+    expect(map.tests['server/test/kept.test.ts']).toEqual({ ...emptyDep(), unknown: true, why: TRACE_MISSING, tracedAt: SHA_B });
     expect(map.tests['server/test/retraced.test.ts'].unknown).toBe(false);
   });
 
@@ -335,7 +336,7 @@ describe('the refresh CLI (what ci.yml\'s map-build runs)', () => {
     expect(r.status).toBe(0);
     const out = readMap(path.join(r.dir, 'new.json'));
     if (!out.ok) throw new Error(out.reason);
-    expect(out.map.tests['server/test/kept.test.ts']).toEqual({ ...emptyDep(), unknown: true, why: TRACE_MISSING });
+    expect(out.map.tests['server/test/kept.test.ts']).toEqual({ ...emptyDep(), unknown: true, why: TRACE_MISSING, tracedAt: SHA_B });
   });
 });
 
@@ -440,7 +441,8 @@ describe('the floor: repo-wide guards must come out repo-wide (spec §5.2)', () 
   it('names the floor exactly as the spec does', () => {
     expect(GIT_FLOOR).toEqual(['source-bytes', 'topology-clean', 'deviation-refs', 'dtbd', 'providers',
       'modelenv-single-writer', 'install-census', 'gitignore-secrets'].map((n) => `server/test/${n}.test.ts`));
-    expect(WALK_FLOOR).toEqual(['single-definition', 'typecheck-tests'].map((n) => `server/test/${n}.test.ts`));
+    expect(WALK_FLOOR).toEqual([...['advance-switches', 'ask-digest', 'child-reclaim', 'core-vocab', 'docs-l0', 'docs-ring', 'kernel-tail-cadence', 'kernel-tail-journal', 'kernel-tail-spawn', 'late-census', 'roster-bash', 'switches-history', 'update-stall', 'vocabularies'].map((n) => `server/test/single-definition/${n}.test.ts`),
+      'server/test/typecheck-tests.test.ts']);
   });
 
   it('a build writes a git-floor test with git false as unknown, why FLOOR_GIT, and keeps its record and every other entry', () => {
@@ -450,8 +452,8 @@ describe('the floor: repo-wide guards must come out repo-wide (spec §5.2)', () 
     });
     const map = buildMap(SHA_A, r);
     expect(FLOOR_GIT).toBe('floor: git is false');
-    expect(map.tests['server/test/dtbd.test.ts']).toEqual({ ...emptyDep(), read: ['x'], unknown: true, why: FLOOR_GIT });
-    expect(map.tests['server/test/plain.test.ts']).toEqual({ ...emptyDep(), read: ['y'], unknown: false });
+    expect(map.tests['server/test/dtbd.test.ts']).toEqual({ ...emptyDep(), read: ['x'], unknown: true, why: FLOOR_GIT, tracedAt: SHA_A });
+    expect(map.tests['server/test/plain.test.ts']).toEqual({ ...emptyDep(), read: ['y'], unknown: false, tracedAt: SHA_A });
   });
 
   it('a build accepts git true, or unknown', () => {
@@ -460,20 +462,20 @@ describe('the floor: repo-wide guards must come out repo-wide (spec §5.2)', () 
       'server/test/providers.test.ts': split({}, {}, { unknown: true, why: 'vitest exited 1' }),
     });
     const map = buildMap(SHA_A, r);
-    expect(map.tests['server/test/dtbd.test.ts']).toEqual({ ...emptyDep(), git: true, unknown: false });
+    expect(map.tests['server/test/dtbd.test.ts']).toEqual({ ...emptyDep(), git: true, unknown: false, tracedAt: SHA_A });
     expect(map.tests['server/test/providers.test.ts'].why).toBe('vitest exited 1');
   });
 
   it('a build writes a walk-floor test that lists nothing (once the baseline is subtracted) as unknown, why FLOOR_WALK', () => {
     const r = records({ root: { listed: ['server/test'] } }, {
-      'server/test/single-definition.test.ts': split({ listed: ['server/test'] }, {}),
+      'server/test/single-definition/core-vocab.test.ts': split({ listed: ['server/test'] }, {}),
     });
     expect(FLOOR_WALK).toBe('floor: lists nothing');
-    expect(buildMap(SHA_A, r).tests['server/test/single-definition.test.ts']).toMatchObject({ unknown: true, why: FLOOR_WALK });
+    expect(buildMap(SHA_A, r).tests['server/test/single-definition/core-vocab.test.ts']).toMatchObject({ unknown: true, why: FLOOR_WALK });
     const ok = records({ root: { listed: ['server/test'] } }, {
-      'server/test/single-definition.test.ts': split({ listed: ['server/test'] }, { listed: ['server/test'] }),
+      'server/test/single-definition/core-vocab.test.ts': split({ listed: ['server/test'] }, { listed: ['server/test'] }),
     });
-    expect(buildMap(SHA_A, ok).tests['server/test/single-definition.test.ts'].listed).toEqual(['server/test']);
+    expect(buildMap(SHA_A, ok).tests['server/test/single-definition/core-vocab.test.ts'].listed).toEqual(['server/test']);
   });
 
   it('a refresh marks a freshly traced floor violation unknown, and does not re-judge a carried entry', () => {
@@ -484,10 +486,10 @@ describe('the floor: repo-wide guards must come out repo-wide (spec §5.2)', () 
     const bad = records({}, { 'server/test/dtbd.test.ts': split() });
     const marked = refreshMap(old, SHA_B, bad, ['server/test/dtbd.test.ts', 'server/test/install-census.test.ts'], ['server/test/dtbd.test.ts']);
     expect(marked.tests['server/test/dtbd.test.ts']).toMatchObject({ unknown: true, why: FLOOR_GIT });
-    expect(marked.tests['server/test/install-census.test.ts']).toEqual(old.tests['server/test/install-census.test.ts']);
+    expect(marked.tests['server/test/install-census.test.ts']).toEqual({ ...old.tests['server/test/install-census.test.ts'], tracedAt: SHA_A });
     const good = records({}, { 'server/test/dtbd.test.ts': split({}, { git: true }) });
     const map = refreshMap(old, SHA_B, good, ['server/test/dtbd.test.ts', 'server/test/install-census.test.ts'], ['server/test/dtbd.test.ts']);
-    expect(map.tests['server/test/install-census.test.ts']).toEqual(old.tests['server/test/install-census.test.ts']);
+    expect(map.tests['server/test/install-census.test.ts']).toEqual({ ...old.tests['server/test/install-census.test.ts'], tracedAt: SHA_A });
   });
 });
 

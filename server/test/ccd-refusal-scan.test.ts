@@ -12,9 +12,9 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { LC_REFUSAL_TOKENS } from '../../shared/api.js';
 import { SENTENCES } from '../src/wsaudit.js';
-import { CCD } from './ccdWsHelpers.js';
+import { ccdSource } from './ccdWsHelpers.js';
 
-const src = readFileSync(CCD, 'utf8');
+const src = ccdSource();
 
 /** The body of `name`, from its opening line to `until`'s. */
 const bodyOf = (name: string, until: string): string => {

@@ -37,7 +37,7 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import { spawnSync, type SpawnSyncReturns } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { makeCcdHarness, harnessBin, ghContainedEnv, CCD, type CcdHarness } from './ccdWsHelpers.js';
+import { makeCcdHarness, harnessBin, ghContainedEnv, type CcdHarness, ccdSource } from './ccdWsHelpers.js';
 import { tmuxName, tmuxTarget } from '../../shared/tmux-target.js';
 import { Tmux, type Runner } from '../src/exec.js';
 import { mkTmp } from './tmpHelpers.js';
@@ -436,7 +436,7 @@ describe('wave 9 M8 — ccd creates the NAME already sanitised, so the target ma
 // site USES it. Per D-2781 it scans the CALL: a literal `-t cc-` appears only
 // in comments, so a scan for that string proves nothing.
 
-const CCD_SRC = fs.readFileSync(CCD, 'utf8');
+const CCD_SRC = ccdSource();
 const KA_SRC = fs.readFileSync(KEEPALIVE, 'utf8');
 
 /** Whole-line comments dropped (the cut `ccd-account-pane.test.ts` makes). */

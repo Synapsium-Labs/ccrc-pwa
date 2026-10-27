@@ -17,7 +17,7 @@ import {
   type CollectProbeClass,
 } from '../src/collectLane.js';
 import { SENTENCES } from '../src/wsaudit.js';
-import { CCD } from './ccdWsHelpers.js';
+import { ccdSource } from './ccdWsHelpers.js';
 import { codeOnly } from './sourceScan.js';
 import { makePrHarness, type PrHarness } from './ccdPrHelpers.js';
 import { COL_ID, COL_RUN, WRONG_TOKEN, collectAudit, collectVerb, makeOrphan, regOf } from './wsCollectFixture.js';
@@ -27,7 +27,7 @@ const rel = (p: string): string => path.relative(ccrcRoot, p);
 const LINUX = process.platform === 'linux';
 
 // ── ccd's text, read at test time ───────────────────────────────────────────────────────────────────────────────
-const ccdSrc = readFileSync(CCD, 'utf8');
+const ccdSrc = ccdSource();
 /** Whole-line `#` comments dropped, so prose that names a word is never read as a call. */
 const bashCode = (t: string): string => t.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
 /** ccd's text from `from` to the first `to` after it. Both anchors are asserted, so a lost one reds rather than
@@ -439,7 +439,11 @@ describe('the collect readers are their own (spec §5.10)', () => {
     expect(specs).toContain('../../shared/api.js');
     // `shared/switches.js` is L0 too: the lane's live marker is spelled once there (D-5855).
     // ARCH-14 (#560): `shared/ccd-refusal.js` is L0 as well: the machine token's reader and the one spelling of the lock word.
-    const ALLOWED = new Set(['../../shared/api.js', '../../shared/ccd-refusal.js', '../../shared/switches.js', './childReclaimSweep.js']);
+    // ARCH-41 (#776): `shared/workspaceTransitions.js` is L0: the refusal words are typed and narrowed from its table.
+    // D-7059 (ARCH-73 #808): `./journalKernel.js` is L1 and imports nothing: the journal's NDJSON framing is its
+    // `splitJournalRecords`, and the parse's strictness stays here.
+    const ALLOWED = new Set(['../../shared/api.js', '../../shared/ccd-refusal.js', '../../shared/switches.js',
+      '../../shared/workspaceTransitions.js', './childReclaimSweep.js', './journalKernel.js']);
     expect(specs.filter((s) => !ALLOWED.has(s)), 'a specifier outside that pair')
       .toEqual([]);
     expect(code).not.toMatch(/\bimport\s*\(|\brequire\s*\(/);

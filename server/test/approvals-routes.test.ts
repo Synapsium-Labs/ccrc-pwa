@@ -7,8 +7,11 @@ import { describe, it, expect, afterEach, vi } from 'vitest';
 import { appendFileSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { verdictFor } from '../../ccd/approval-verify.mjs';
-import { APPROVAL_CWD_TRUSTED, APPROVAL_REFUSALS_LOG, SECRET_MASK } from '../../shared/api.js';
+import { APPROVAL_CWD_TRUSTED, APPROVAL_REFUSALS_LOG, APPROVAL_SIGNING_KEY_FILE, SECRET_MASK } from '../../shared/api.js';
 import { SecretMasker, fingerprintGeneration, fingerprintRow } from '../src/accounts/mask.js';
+import { Bus } from '../src/bus.js';
+import { buildServer } from '../src/server.js';
+import { FleetWatcher } from '../src/watch.js';
 import {
   approvalCount, CHILD, CHILD2, DENY_DIGEST, DUNE, FAR, FAR_C, hookInput, PARENT, requestBody, sha256, standardFixture,
   TOK, uuidOf, workdirOf, approvalsFixture, type Approvals,
@@ -501,5 +504,102 @@ describe('redaction on the wire (spec §6.7)', () => {
     } finally {
       (masker as SecretMasker | null)?.close();
     }
+  });
+});
+
+// W3 Task Q3e's characterization rows (D-7029; ARCH-56 (#791), fourth PR; plan
+// 2026-10-26-consolidation-w3-questions.md, Task Q3e Step 1). Green against the inline ladder in `coord/routes.ts`, and
+// unedited through the move into `coord/questions.ts#createQuestions`'s `raiseApproval`. `question-doors-pin.test.ts`
+// holds every refusal's bytes (one row per ladder position, the pair rows, the two cross rows); these rows add what a
+// move could lose: the input map's lifetime (one per server composition, memory-only, spec §6.7), and that every refusal
+// above the mint mints nothing and mails nothing, in ladder order.
+describe('POST /api/approvals — the raise ladder and its input map (W3 Q3e characterization, D-7029)', () => {
+  it('every refusal above the mint, cheapest first, mints nothing and mails nothing', async () => {
+    const words: string[] = [];
+    const run = async (setup: (fx: Approvals & { runId?: number }) => Promise<Record<string, unknown>> | Record<string, unknown>, o: { role?: 'server' | 'both' } = {}) => {
+      const fx = await standardFixture(o);
+      try {
+        const body = await setup(fx);
+        const res = await fx.request(body);
+        words.push(`${res.statusCode} ${(res.json() as { error?: string }).error ?? ''}`);
+        expect(approvalCount(fx.coord), JSON.stringify(res.json())).toBe(0);
+        expect(mailsTo(fx, PARENT)).toEqual([]);
+      } finally { await fx.close(); }
+    };
+    await run(() => { const { nonce: _n, ...b } = requestBody(ORDINARY); return b; });
+    await run((fx) => { writeFileSync(path.join(fx.home, '.cc-sessions', 'approvals-disabled'), ''); return requestBody(ORDINARY); });
+    await run(() => ({ ...requestBody(ORDINARY), sessionUuid: 'stale' }));
+    await run(() => requestBody(ORDINARY), { role: 'both' });
+    await run(async (fx) => {
+      writeFileSync(path.join(fx.home, '.ccrc', APPROVAL_SIGNING_KEY_FILE), 'not a key\n', { mode: 0o600 });
+      await fx.restart();
+      return requestBody(ORDINARY);
+    });
+    await run(() => requestBody(ORDINARY, DUNE));
+    await run((fx) => { fx.child(CHILD, fx.runId as number, { deny: null }); return requestBody(ORDINARY); });
+    await run((fx) => { fx.seed(CHILD, 'project-a', '2.1.299'); return requestBody(ORDINARY); });
+    await run(() => ({ ...requestBody(ORDINARY), digest: 'a'.repeat(64) }));
+    await run((fx) => {
+      vi.spyOn(fx.coord, 'run').mockReturnValue({ ok: false, detail: 'fixture: the runs table is unreadable' } as never);
+      return requestBody(ORDINARY);
+    });
+    await run((fx) => { fx.child(CHILD2, 999); return requestBody(ORDINARY, CHILD2); });
+    expect(words).toEqual([
+      '400 bad-request', '409 approvals-disabled', '403 stale-uuid', '409 single-box', '500 internal', '409 not-a-child',
+      '409 deny-not-engaged', '409 version-unverified', '409 digest-mismatch', '503 run-unreadable', '409 not-a-child',
+    ]);
+  });
+
+  it('a digest mismatch journals one line naming the session, and mints nothing', async () => {
+    f = await standardFixture();
+    const res = await f.request({ ...requestBody(ORDINARY), digest: 'a'.repeat(64) });
+    expect(res.json()).toMatchObject({ error: 'digest-mismatch' });
+    const lines = readFileSync(path.join(f.home, '.ccrc', APPROVAL_REFUSALS_LOG), 'utf8').split('\n').filter(Boolean);
+    expect(lines.map((l) => l.replace(/^\d+ /, '<now> '))).toEqual([`<now> digest-mismatch ${CHILD}`]);
+    expect(approvalCount(f.coord)).toBe(0);
+  });
+
+  it('a released mint answers its id and reason, and a forbidden-class request is minted released and never mailed', async () => {
+    f = await standardFixture();
+    const { canonical: _c, ...b } = requestBody(ORDINARY);
+    const t = await f.request({ ...b, truncated: true });
+    expect(t.json()).toMatchObject({ error: 'approval-released', id: 1, releaseReason: 'truncated' });
+    const forb = await ask(f, hookInput({ command: 'ccd ws-rm project-a-still-cove' }));
+    expect(forb.res.json()).toMatchObject({ error: 'approval-released', releaseReason: 'forbidden' });
+    expect(rowOf(f, forb.id)).toMatchObject({ class: 'forbidden', releaseReason: 'forbidden' });
+    expect(mailsTo(f, PARENT)).toEqual([]);
+    // A released row holds no input: its allow is the operator's, never re-classified (`approval-released`).
+    expect((await f.rule(forb.id, PARENT, 'allow')).json()).toMatchObject({ error: 'approval-released' });
+  });
+
+  it('a fresh buildServer over the same store holds no input: an allow on a row the first server minted is guard-escalate, a deny lands', async () => {
+    f = await standardFixture();
+    const { id } = await ask(f);
+    const second = (await ask(f, hookInput({ command: 'rm -rf dist' }))).id;
+    // A second composition over the SAME deps (store, registry, key), with its own watcher, as a new process has.
+    const other = await buildServer(f.deps, new Bus(), new FleetWatcher(f.deps, new Bus(), 10_000));
+    try {
+      const rule = (rid: number, verdict: 'allow' | 'deny') => other.inject({
+        method: 'POST', url: `/api/approvals/${rid}/rule`, headers: TOK,
+        payload: { fromId: PARENT, fromUuid: uuidOf(PARENT), verdict, reason: `${verdict} by the fixture` },
+      });
+      expect((await rule(id, 'allow')).json()).toMatchObject({ error: 'guard-escalate' });
+      expect((await rule(second, 'deny')).json()).toEqual({ ok: true, state: 'denied' });
+    } finally { await other.close(); }
+    // The first server still holds its own input: its allow is ruled.
+    expect((await f.rule(id, PARENT, 'allow')).json()).toEqual({ ok: true, state: 'allowed' });
+  });
+
+  it('a fresh buildServer with no watcher holds no input either', async () => {
+    f = await standardFixture();
+    const { id } = await ask(f);
+    const other = await buildServer(f.deps, new Bus());
+    try {
+      const res = await other.inject({
+        method: 'POST', url: `/api/approvals/${id}/rule`, headers: TOK,
+        payload: { fromId: PARENT, fromUuid: uuidOf(PARENT), verdict: 'allow', reason: 'allow by the fixture' },
+      });
+      expect(res.json()).toMatchObject({ error: 'guard-escalate' });
+    } finally { await other.close(); }
   });
 });

@@ -12,7 +12,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { CCD, ghContainedEnv, makeCcdHarness, WS_ADD_REAL_SPAWN, type CcdHarness } from './ccdWsHelpers.js';
+import { CCD, ghContainedEnv, makeCcdHarness, WS_ADD_REAL_SPAWN, type CcdHarness, ccdSource } from './ccdWsHelpers.js';
 import { mkTmp } from './tmpHelpers.js';
 
 let h: CcdHarness;
@@ -138,7 +138,7 @@ describe('the run-id grammar is ASCII in every locale (D-2522\'s shape)', () => 
     // A second spelling would be a second grammar free to drift — and the
     // first place it would drift is the `LC_ALL=C` shadow above.
     // What passes it: a differently spelled grammar (a literal-absence pin; wave 3's review checks its parses by reading).
-    const code = fs.readFileSync(CCD, 'utf8').split('\n').filter((l) => !/^\s*#/.test(l));
+    const code = ccdSource().split('\n').filter((l) => !/^\s*#/.test(l));
     const spelled = code.filter((l) => l.includes('[0-9]{0,9}'));
     expect(spelled, 'the run-id pattern must be spelled exactly once — in _child_runid_valid').toHaveLength(1);
     expect(spelled[0]).toMatch(/^_child_runid_valid\(\) \{/);

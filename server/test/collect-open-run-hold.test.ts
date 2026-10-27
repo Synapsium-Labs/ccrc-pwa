@@ -16,10 +16,12 @@ import { collectOpenRunHold } from '../src/coord/collectTempRoot.js';
 import { parseCollectAudit } from '../src/collectLane.js';
 import { ID, auditDoc } from './collectTempRootFixture.js';
 import { mkTmp } from './tmpHelpers.js';
+import { withBindingsOf } from './bindingsFake.js';
 
 const AT = 1_789_000_000_000;
 type Doc = Parameters<typeof collectOpenRunHold>[2];
 type HoldCoord = Parameters<typeof collectOpenRunHold>[0];
+type HoldReaders = Pick<CoordStore, 'run' | 'openRunsForSession'>;
 const fresh = (witnessRun: number | null, witnessAt: number | null): Doc => ({ resume: null, witnessRun, witnessAt });
 const resumed = (witnessRun: number | null, witnessAt: number | null): Doc => ({ resume: 'moved', witnessRun, witnessAt });
 
@@ -138,22 +140,26 @@ describe('collectOpenRunHold — clear only when no run could still need the tem
   });
 
   describe('(f) a read that fails holds, at the job as at the pass', () => {
-    const failing = (over: Partial<HoldCoord>) => {
+    type Store = ReturnType<typeof store>;
+    // The claimant read is `openRunsForSession`'s second role: replace that role's answer, leave the worker's real.
+    const claimantOnly = (answer: () => OpenSiblingsResult) => (s: Store): Partial<HoldReaders> => ({
+      openRunsForSession: (id, e, i, role) => (role === 'claimant' ? answer() : s.coord.openRunsForSession(id, e, i, role)),
+    });
+    const failing = (over: (s: Store) => Partial<HoldReaders>) => {
       const s = store();
       const run = s.minting();
-      const coord: HoldCoord = {
+      const coord: HoldCoord = withBindingsOf({
         run: (id: number) => s.coord.run(id),
-        openRunsForSession: (id: string) => s.coord.openRunsForSession(id),
-        openRunsClaimedBy: (id: string) => s.coord.openRunsClaimedBy(id),
-        ...over,
-      };
+        openRunsForSession: (...a: Parameters<CoordStore['openRunsForSession']>) => s.coord.openRunsForSession(...a),
+        ...over(s),
+      });
       return collectOpenRunHold(coord, ID, fresh(run, AT));
     };
-    it.each<[string, Partial<HoldCoord>]>([
-      ['the witness run’s read', { run: (): RunReadResult => ({ ok: false, kind: 'run-unreadable', detail: 'id out of range' }) }],
-      ['the session read', { openRunsForSession: (): OpenSiblingsResult => ({ ok: false, kind: 'run-unreadable', detail: 'x' }) }],
-      ['the coordinator read', { openRunsClaimedBy: (): OpenSiblingsResult => ({ ok: false, kind: 'run-unreadable', detail: 'x' }) }],
-      ['a read that throws', { openRunsClaimedBy: () => { throw new Error('database is locked'); } }],
+    it.each<[string, (s: Store) => Partial<HoldReaders>]>([
+      ['the witness run’s read', () => ({ run: (): RunReadResult => ({ ok: false, kind: 'run-unreadable', detail: 'id out of range' }) })],
+      ['the session read', () => ({ openRunsForSession: (): OpenSiblingsResult => ({ ok: false, kind: 'run-unreadable', detail: 'x' }) })],
+      ['the coordinator read', claimantOnly((): OpenSiblingsResult => ({ ok: false, kind: 'run-unreadable', detail: 'x' }))],
+      ['a read that throws', claimantOnly(() => { throw new Error('database is locked'); })],
     ])('%s failing holds', (_what, over) => {
       expect(failing(over)).toMatchObject({ kind: 'held', why: 'store-unreadable' });
     });
