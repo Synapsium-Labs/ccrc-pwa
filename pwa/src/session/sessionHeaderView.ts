@@ -25,7 +25,7 @@ export interface SessionHeaderViewInput {
   status: SessionStatus | null;
   statusUpdatedAt: number | null;
   queuedField?: RouteField | null;
-  fallback?: { title: string; wrapper: string };
+  fallback?: { title: string; crumb?: string | null; wrapper: string };
   roster?: readonly RosterWire[];
   repo?: string | null;
   coordination?: Coordination | null;
@@ -117,6 +117,28 @@ export function heldCoordinatorWords(
   return wc === null || session == null ? null : withCoordinatorWords(wc, session.project);
 }
 
+/** What a deep link's header shows before the first fleet frame names the session (desktop polish T3c, D-6333): the
+ *  same words the row will give, so the title does not jump when the frame lands. Ids carry no colon: a workspace is
+ *  `<project>-<slug>` (ccd's `$project-$slug`) and a main checkout `<lane>-<project>`, so the id is split only by a
+ *  name the fleet KNOWS, never guessed.
+ *   1. The longest roster id that prefixes the id is the lane of a main checkout: titled by its project, no crumb.
+ *   2. Else the longest known project that prefixes it makes the id a workspace: `ws/<slug>` (the label a born
+ *      workspace's branch gives, `sessionLabel`) under that project.
+ *   3. Else `today`: what the screen showed before this, unchanged. */
+export function deepLinkFallback(
+  id: string, roster: readonly Pick<RosterWire, 'id'>[], projects: readonly { name: string }[] | null,
+  today: { title: string; wrapper: string },
+): { title: string; crumb: string | null; wrapper: string } {
+  const longest = (names: readonly string[]): string | null => names
+    .filter((n) => n !== '' && id.startsWith(`${n}-`) && id.length > n.length + 1)
+    .reduce<string | null>((best, n) => (best === null || n.length > best.length ? n : best), null);
+  const lane = longest(roster.map((a) => a.id));
+  if (lane !== null) return { title: id.slice(lane.length + 1), crumb: null, wrapper: lane };
+  const project = longest((projects ?? []).map((p) => p.name));
+  if (project !== null) return { title: `ws/${id.slice(project.length + 1)}`, crumb: project, wrapper: today.wrapper };
+  return { title: today.title, crumb: null, wrapper: today.wrapper };
+}
+
 export function sessionHeaderView({
   session, status, statusUpdatedAt, queuedField = null, fallback, roster = [], repo = null, coordination = null,
   facts = null, now, finePointer,
@@ -154,10 +176,12 @@ export function sessionHeaderView({
   const variant: StatusVariant =
     bucket === 'attention' ? 'attention' : wcWords !== null || asleepAt !== null ? 'idle' : working ? 'busy' : bucket === 'dead' ? 'dead' : 'idle';
 
-  // The project is the ground; the second crumb is this particular workspace. Without it, two workspaces of one
-  // project produce two identical headers.
-  const title = session ? session.project : (fallback?.title ?? '…');
-  const crumb = session && session.workspace !== null ? sessionLabel(session) : null;
+  // The session is the title (desktop polish T3c, D-6333): a workspace is named by its row's label, `sessionLabel`, the
+  // same words its fleet row shows, and the project is the crumb before it, so two workspaces of one project read
+  // apart. A main checkout IS the project's checkout: its title stays the project and there is no crumb.
+  const workspace = session !== null && session.workspace !== null;
+  const title = session === null ? (fallback?.title ?? '…') : workspace ? sessionLabel(session) : session.project;
+  const crumb = session === null ? (fallback?.crumb ?? null) : workspace ? session.project : null;
   const wrapper = session?.wrapper ?? fallback?.wrapper ?? '';
 
   // Model / effort / ultracode / branch — read from the pane statusline the server already parses.
@@ -166,10 +190,11 @@ export function sessionHeaderView({
   const ultracode = session?.ultracode ?? false;
   const branch = session?.branch ?? null;
   const hasMeta = st !== 'dead' && (model !== null || branch !== null || effort !== null || ultracode);
-  // With no chosen `name`, sessionLabel()'s fallback chain lands on `branch` — so the crumb above and this chip would
-  // print the identical string a few pixels apart. Compare the actual rendered text (crumb vs branch), not the fields
-  // that produced them, so the two can never disagree about what "duplicate" means.
-  const branchDuplicatesCrumb = crumb !== null && branch === crumb;
+  // With no chosen `name`, sessionLabel()'s fallback chain lands on `branch` — so the title above and this chip would
+  // print the identical string a few pixels apart. Compare the actual rendered text (title vs branch), not the fields
+  // that produced them, so the two can never disagree about what "duplicate" means. A workspace's only: a main
+  // checkout's title is its project, which says nothing about its branch.
+  const branchDuplicatesTitle = workspace && branch === title;
 
   const chips: HeaderChip[] = [];
   if (facts !== null) chips.push({ kind: 'coordination', facts, coordination });
@@ -193,7 +218,7 @@ export function sessionHeaderView({
     // pane yet) still shows its `queued` badge, alone, in the chip's place.
     if (model !== null || queuedField === 'class') chips.push({ kind: 'model', text: model, queued: queuedField === 'class' });
     chips.push({ kind: 'effort', text: ultracode ? 'ultracode' : (effort ?? 'set effort'), ultra: ultracode, queued: queuedField === 'effort' });
-    if (branch !== null && !branchDuplicatesCrumb) chips.push({ kind: 'branch', text: branch });
+    if (branch !== null && !branchDuplicatesTitle) chips.push({ kind: 'branch', text: branch });
   }
   if (facts !== null) chips.push({ kind: 'details', facts, coordination });
   if (hasPrCap(session)) chips.push({ kind: 'pr', pr: session.pr });

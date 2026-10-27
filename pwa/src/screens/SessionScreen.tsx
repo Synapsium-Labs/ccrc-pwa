@@ -23,7 +23,7 @@ import { ChatList } from '../session/ChatList';
 import { Composer } from '../session/Composer';
 import { DialogSheet } from '../session/DialogSheet';
 import { heldAskLine } from '../session/askWords';
-import { heldCoordinatorWords } from '../session/sessionHeaderView';
+import { deepLinkFallback, heldCoordinatorWords } from '../session/sessionHeaderView';
 import { sessionLabel } from '../fleet/sessionLabel';
 import { PickSheet } from '../session/PickSheet';
 import { ReapSheet } from '../session/ReapSheet';
@@ -514,7 +514,7 @@ export function SessionScreen({
     onInterrupt: (source) => void interrupt(source),
     onBack: () => navigate('/'),
     queuedField,
-    fallback: { title: project, wrapper },
+    fallback: deepLinkFallback(id, roster, projects, { title: project, wrapper }),
   };
 
   return (
