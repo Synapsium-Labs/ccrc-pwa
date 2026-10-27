@@ -4,10 +4,14 @@
 // `badgePrint` (the one printed cap). `null` inputs answer `null`: "not heard yet" is not zero.
 //
 // MUTATION TABLE (plan Task T2d Step 3)
+import { readdirSync, readFileSync } from 'node:fs';
+import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { ACTIVE_RUN_STATES, IDLE_RUN_STATES, type RunState, type RunSummary } from '../../shared/api';
 import { BADGE_PRINT_CAP, badgePrint, runsLineLabel, runsNeedYou, waitingOnYou } from '../src/fleet/navBadges';
 import { fleetSession } from './fleetFixture';
+
+const SRC_DIR = path.join(import.meta.dirname, '..', 'src');
 
 const attention = (id: string) => fleetSession({ id, bucket: 'attention' });
 const idle = (id: string) => fleetSession({ id, bucket: 'idle' });
@@ -60,5 +64,22 @@ describe('the needs-you counts (T2d, D-6330)', () => {
     expect(badgePrint(1)).toBe('1');
     expect(badgePrint(BADGE_PRINT_CAP)).toBe('99');
     expect(badgePrint(BADGE_PRINT_CAP + 1)).toBe('99+');
+  });
+
+  it("the badge's print cap has one definition", () => {
+    const files = (dir: string): string[] => readdirSync(dir, { withFileTypes: true })
+      .flatMap((e) => (e.isDirectory() ? files(path.join(dir, e.name)) : /\.tsx?$/.test(e.name) ? [path.join(dir, e.name)] : []));
+    const code = new Map(files(SRC_DIR).map((f) => [
+      path.relative(SRC_DIR, f).split(path.sep).join('/'),
+      readFileSync(f, 'utf8').replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, ''),
+    ]));
+    // (a) one file assigns a name ending in PRINT_CAP: the constant every door reads
+    const defining = [...code].filter(([, text]) => /\b\w*PRINT_CAP\s*=/.test(text)).map(([f]) => f);
+    expect(defining).toEqual(['fleet/navBadges.ts']);
+    // (b) no other file prints a cap of its own: a `${...CAP...}+` template or a literal '99+'
+    const printing = [...code]
+      .filter(([f, text]) => f !== 'fleet/navBadges.ts' && (/\$\{\w*CAP\w*\}\+/.test(text) || /['`]99\+['`]/.test(text)))
+      .map(([f]) => f);
+    expect(printing).toEqual([]);
   });
 });
