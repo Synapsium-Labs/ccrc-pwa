@@ -6,7 +6,9 @@ import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { mkTmp } from '../tmpHelpers.js';
 import { REPO } from '../consolidationCensus.js';
-import { SPAWN_KERNEL_FILE, processSpawnSites, spawnKernelWireLiterals, updateSpawnBodies, updateSpawnCalls } from './spawn.js';
+import {
+  SPAWN_KERNEL_FILE, accountSpawnBodies, processSpawnSites, spawnKernelWireLiterals, updateSpawnBodies, updateSpawnCalls,
+} from './spawn.js';
 
 const roots: string[] = [];
 afterEach(() => { for (const r of roots.splice(0)) rmSync(r, { recursive: true, force: true }); });
@@ -22,7 +24,11 @@ function tree(files: Record<string, string>): string {
 
 /** The kernel's real body, so the fixture's "wrapper with the body" is the base's shape, not a paraphrase of it. */
 const KERNEL_TEXT = readFileSync(path.join(REPO, SPAWN_KERNEL_FILE), 'utf8');
-const BODY = KERNEL_TEXT.slice(KERNEL_TEXT.indexOf('  return new Promise((resolve) => {'), KERNEL_TEXT.lastIndexOf('\n}'));
+const BODY_FROM = KERNEL_TEXT.indexOf('  return new Promise((resolve) => {');
+const BODY = KERNEL_TEXT.slice(BODY_FROM, KERNEL_TEXT.indexOf('\n}\n', BODY_FROM));
+/** `boundedStdinSpawn`'s real body (D-7057), so the account-op fixture's "wrapper with the body" is the base's shape. */
+const STDIN_FROM = KERNEL_TEXT.indexOf('export function boundedStdinSpawn(');
+const STDIN_BODY = KERNEL_TEXT.slice(KERNEL_TEXT.indexOf('  return new Promise((resolve) => {', STDIN_FROM), KERNEL_TEXT.lastIndexOf('\n}'));
 
 describe('updateSpawnBodies — every update-spawn body outside shared/spawn.mjs (D-7055)', () => {
   it('fixture: a wrapper with the body is one site; a thin wrapper, the kernel itself and a near miss are none', () => {
@@ -53,6 +59,38 @@ describe('updateSpawnBodies — every update-spawn body outside shared/spawn.mjs
   it('real tree: none — both wrappers call boundedSpawn (2 at the base, measured in the PR body)', () => {
     expect(updateSpawnBodies()).toEqual([]);
     expect(updateSpawnCalls()).toEqual([]);
+  });
+});
+
+describe('accountSpawnBodies — every account-op spawn body outside shared/spawn.mjs (D-7057, OA-C8a (a))', () => {
+  it('fixture: the body in both arms is two sites (the base\'s count); thin wrappers, the kernel and the near misses are none', () => {
+    const wrapper = (name: string): string =>
+      `export function ${name}(file, argv, stdin, opts, signals) {\n  const { spawn } = { spawn: null };\n  const { env, timeoutMs, killGraceMs, maxOutputBytes, drainMs } = opts;\n${STDIN_BODY}\n}\n`;
+    const base = tree({ 'server/src/accounts/ops.ts': wrapper('localAccountOps'), 'agent/src/accountop.ts': wrapper('makeAccountOpSpawn') });
+    expect(accountSpawnBodies(base).map((s) => s.file)).toEqual(['agent/src/accountop.ts', 'server/src/accounts/ops.ts']);
+    expect(accountSpawnBodies(base)[0]!.text).toContain("spawn(file, [...argv], { detached: true, stdio: ['pipe', 'pipe', 'pipe'], env })");
+    const tip = tree({
+      // The tip's shape: thin wrappers.
+      'agent/src/accountop.ts': "export function makeAccountOpSpawn(env) {\n  return (file, argv, stdin, b) => boundedStdinSpawn({ spawn, signals: osConstants.signals }, file, argv, stdin, { env, ...b, drainMs: ACCOUNT_OP_DRAIN_MS });\n}\n",
+      // The kernel is the one place the body may live.
+      [SPAWN_KERNEL_FILE]: KERNEL_TEXT,
+      // The token-sync port is its own body by D-4390.
+      'agent/src/tokensync.ts': wrapper('makeTokenSyncSpawn'),
+      // Near misses: a piped-stdin group spawn with no group signal; the update spawner's shape (stdin ignored).
+      'server/src/other.ts': "export function a(file) { return spawn(file, [], { detached: true, stdio: ['pipe', 'pipe', 'pipe'] }); }\n"
+        + "export function b(file) { const child = spawn(file, [], { detached: true, stdio: ['ignore', 'pipe', 'pipe'] }); process.kill(-child.pid, 'SIGTERM'); }\n",
+    });
+    expect(accountSpawnBodies(tip)).toEqual([]);
+  });
+
+  it('fixture: a second stdin-piped group spawner in server/src is a site', () => {
+    const root = tree({ 'server/src/second.ts': "export function second(file) {\n  const child = spawn(file, [], { detached: true, stdio: ['pipe', 'pipe', 'pipe'], env: {} });\n  process.kill(-child.pid, 'SIGTERM');\n}\n" });
+    expect(accountSpawnBodies(root).map((s) => `${s.file}:${s.line}`)).toEqual(['server/src/second.ts:2']);
+  });
+
+  it('real tree: none outside the kernel (2 at the base, measured in the PR body); the kernel holds the one body', () => {
+    expect(accountSpawnBodies()).toEqual([]);
+    expect(STDIN_BODY).toContain("spawn(file, [...argv], { detached: true, stdio: ['pipe', 'pipe', 'pipe'], env })");
   });
 });
 

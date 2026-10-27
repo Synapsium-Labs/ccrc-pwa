@@ -87,6 +87,45 @@ export function updateSpawnBodies(root: string = REPO, dirs: readonly string[] =
   return out;
 }
 
+/** The options text of a `spawn(…)` call carries the account-op spawner's shape: its own group, stdin piped. */
+const ACCOUNT_SPAWN_OPTIONS = (text: string): boolean =>
+  /\bdetached:\s*true\b/.test(text) && /\bstdio:\s*\[\s*'pipe'\s*,/.test(text);
+
+/** `process.kill(-child.pid, …)`: a signal to the whole group, any signal. */
+const isGroupSignal = (c: CallSite): boolean => c.callee === 'process.kill' && c.args[0]?.text === '-child.pid';
+
+/** The stdin-piped group spawners that are their OWN body by a ruling, never an account-op body:
+ *  `agent/src/tokensync.ts` by D-4390 (`spawn-kernel.test.ts`'s "the token-sync spawn is not a third twin" holds it). */
+export const ACCOUNT_SPAWN_OWN_BODIES: ReadonlyMap<string, string> = new Map([
+  ['agent/src/tokensync.ts', 'D-4390: the token-sync port keeps its own bounded body'],
+]);
+
+/** Every account-op spawn BODY outside `shared/spawn.mjs` (D-7057, OA-C8a (a)): a `spawn(` call whose options carry
+ *  `detached: true` and a piped stdin, inside a symbol whose body also sends `process.kill(-child.pid, …)`, in a file
+ *  not in `ACCOUNT_SPAWN_OWN_BODIES`. One site per such `spawn(` call. 2 at the base
+ *  (`server/src/accounts/ops.ts#localAccountOps`, `agent/src/accountop.ts#makeAccountOpSpawn`); 0 once both call
+ *  `boundedStdinSpawn`, whose body in the kernel is the 1 (C8e). */
+export function accountSpawnBodies(root: string = REPO, dirs: readonly string[] = SPAWN_CENSUS_DIRS): CensusSite[] {
+  const out: CensusSite[] = [];
+  for (const dir of dirs) {
+    for (const abs of sourceFiles(root, dir)) {
+      const file = rel(root, abs);
+      if (file === SPAWN_KERNEL_FILE || ACCOUNT_SPAWN_OWN_BODIES.has(file)) continue;
+      const text = readFileSync(abs, 'utf8');
+      if (!text.includes('spawn(')) continue;
+      const p = parseSource(text, abs);
+      for (const c of p.calls) {
+        if (c.name !== 'spawn' || !ACCOUNT_SPAWN_OPTIONS(c.args[2]?.text ?? '')) continue;
+        const owner = enclosing(p, c.start);
+        const span = owner ?? { start: 0, end: text.length };
+        if (!p.calls.some((k) => k.start >= span.start && k.end <= span.end && isGroupSignal(k))) continue;
+        out.push(siteOf(p, file, c.line));
+      }
+    }
+  }
+  return out;
+}
+
 /** A name that reads as a wire deadline or bound: `DRAIN`, `TIMEOUT`, `GRACE` or `MAX_BYTES`, upper case (so
  *  `drainTimer`, `killGraceMs` and `maxOutputBytes` are not one). `GRACE` and `MAX_BYTES` joined with C8e's
  *  `boundedStdinSpawn` (D-7057): `ACCOUNT_OP_KILL_GRACE_MS` and `ACCOUNT_OP_OUTPUT_MAX_BYTES` are defined once, in
