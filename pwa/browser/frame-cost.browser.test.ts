@@ -380,7 +380,7 @@ describe('a timed-out case keeps its record (advisory 1)', () => {
 /** Register `keep` on the case's finish hook, which vitest runs when the case passes, fails or times out, before the case
  *  is reported; a `finally` in the body runs too late on a timeout: vitest reports the case when its timeout fires, and
  *  the body's `finally` runs only when the awaits it is waiting on settle (in a gate case, later, after the case is
- *  reported; in the self-test below, never, because its promise never settles). The hook reads the record when it runs,
+ *  reported; in the self-test above, never, because its promise never settles). The hook reads the record when it runs,
  *  so it keeps every window measured by then. */
 function keepOnFinish(ctx: { task: { meta: object }; onTestFinished: (fn: () => void) => void }, record: FrameCostRecord): void {
   ctx.onTestFinished(() => { keep(ctx.task, record); });

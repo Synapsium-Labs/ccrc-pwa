@@ -408,9 +408,10 @@ export function summarize(costs: readonly Cost[]): { readonly median: Cost; read
 export const INFLIGHT_CAP_MS = 5000;
 export const QUIET_CAP_MS = 3000;
 /** How far past its `gapMs` a window's measured span may run before the attempt fails (`window-overrun`). A window is
- *  `gapMs` of waiting plus the frame's send, `during` and two CDP reads; on a healthy host that is a few tens of ms over
- *  `gapMs`. A host starved of memory stretches every wall-clock duration in the renderer, and TaskDuration and
- *  ScriptDuration are wall-clock, so a window that spans more than this past its gap measures the host, not the frame. */
+ *  `gapMs` of waiting plus the frame's send, `during` and two CDP reads: 4 to 56 ms over a 2 s gap in the 132 windows
+ *  of two gate runs on a loaded box (C6, 2026-10-27). TaskDuration and ScriptDuration are wall-clock, so a window that
+ *  stretches far past its gap carries the host's stalls as well as the frame's work; a gate run that timed out did so
+ *  while the box's memory was at its limit. Past this slack the attempt fails rather than report such a figure. */
 export const SPAN_SLACK_MS = 1000;
 const QUIET_STEP_MS = 100;
 const QUIET_STEPS = 3;
