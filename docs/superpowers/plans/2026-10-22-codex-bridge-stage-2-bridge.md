@@ -4031,35 +4031,43 @@ departure found while executing is written `D-TBD-<slug>` and named in the task'
   Claude Code holds at the end of the conversation: the request's `tools`, then each system entry's blocks folded in
   message order (`ccd/codexbridge/inbound.py:22-25`, the module docstring's THE TOOLS).
   - The shapes, read from Claude Code 2.1.310's binary with `strings` only. Its system-entry builder emits a `text`
-    block, then each removal as `{type: "tool_removal", tool: {type: "tool_reference", name}}`, then each addition as
-    `{type: "tool_addition", tool: {type: "tool_reference", name}}` or, under `inline-tools`, as `{type:
-    "tool_addition", tool: {type: "tool_definition", definition}}`, with `cache_control` on the last block; the SDK's
+    block when it has one, then each removal as `{type: "tool_removal", tool: {type: "tool_reference", name}}`, then
+    each addition as `{type: "tool_addition", tool: {type: "tool_reference", name}}` or, under `inline-tools`, as
+    `{type: "tool_addition", tool: {type: "tool_definition", definition}}`, with `cache_control` on the last of those
+    blocks, and a suffix text (its `ephemeralSuffix`) can follow them; `_texts` reads every text in order. The SDK's
     tool runner builds the same blocks, a definition being the tool object with its `run`, `parse` and `close` keys
     stripped. Its fold reads each block's name (a reference's `name`, a definition's `definition.name`) and, in order,
-    deletes it for a removal and adds it for an addition. Its name normaliser treats `name` and `tool_name` on a
-    `tool_reference` alike, so the bridge reads `name`, then `tool_name`.
-  - One per-tool helper: `_tool` (`inbound.py:480-500`) is `_tools`'s former loop body (the `_CUSTOM_TOOL_TYPES`
+    deletes it for a removal and adds it for an addition. It reads a reference's `name` only: `tool_name` is the
+    field of a tool_result's reference (its ToolSearch result), never written in a system entry, so the bridge reads
+    `name` only too.
+  - One per-tool helper: `_tool` (`inbound.py:490-510`) is `_tools`'s former loop body (the `_CUSTOM_TOOL_TYPES`
     check and `_unsupported` for a server tool, the `_malformed` refusals, `defer_loading` counted,
-    `DeferredToolPlaceholder` skipped, `cut_name`, the `strict: False` function shape), and `_tools` (:509-522) and the
-    fold both call it; `_required` (:503-506) computes `tools_required` from a final list for both.
+    `DeferredToolPlaceholder` skipped, `cut_name`, the `strict: False` function shape), and `_tools` (:519-532) and the
+    fold both call it; `_required` (:513-516) computes `tools_required` from a final list for both.
   - The record: `_Translation.walk` keeps a system entry's text handling and `_count_dropped`'s counts as they were,
-    and adds `_tool_changes`'s reading of the entry to `self.tool_changes` (:405; the list at :348). `_tool_changes`
-    (:228-260) returns each block in order as a `_ToolChange` (:205-212): an addition by reference or by value, or a
+    and adds `_tool_changes`'s reading of the entry to `self.tool_changes` (:415; the list at :358). `_tool_changes`
+    (:236-270) returns each block in order as a `_ToolChange` (:208-215): an addition by reference or by value, or a
     removal by reference.
-  - The fold: `from_anthropic` calls `_fold_tool_changes` (:525-559) after the walk (:684). A by-value addition goes
+  - The fold: `from_anthropic` calls `_fold_tool_changes` (:535-573) after the walk (:698). A by-value addition goes
     through `_tool`, and its tool replaces one of the same cut name in place, or is appended; a by-reference addition
     of a name not offered re-offers the latest definition of that name (from `tools` or an earlier by-value addition),
     and of a name neither holds is counted `requestField:tool_addition-block.unknown-reference`
     (`UNKNOWN_REFERENCE`, :59) and changes nothing; a name already offered changes nothing; a removal drops the name.
     `name_map` only gains names, so a `function_call` in the history to a removed tool still maps back, and replay of
     earlier turns is unchanged. With no block the fold returns `_tools`'s list and required set as they were.
-  - The malformed-block rule: a tool-change block the bridge cannot read is refused with `_malformed` (a 400), as a
-    malformed `tools` entry is, EXCEPT where `_count_dropped` already counts it `unrecognised`: a `tool_addition`
-    whose `tool` is not an object or has no string type adds nothing and is passed over, its
+  - The malformed-block rule: a tool-change block the bridge cannot read is refused (`_tool_change_refused`,
+    :228-233, a 400 whose text begins `a tool_addition/tool_removal block:`), EXCEPT where `_count_dropped` already
+    counts it `unrecognised`: a `tool_addition` whose `tool` is not an object or has no string type adds nothing and
+    is passed over, its
     `tool_addition-block.unrecognised` count left unexplained for the doctor. So a `tool_addition` whose tool has an
     unknown type, a `tool_reference` with no name, and a `tool_removal` with no tool or a tool other than a reference
-    are each a 400, and a by-value definition fails exactly as a `tools` entry would (no name, not an object, or a
-    server tool's `_unsupported`). A removal is never passed over: skipped, it would leave a removed tool offered.
+    are each a 400, and a by-value definition fails the checks a `tools` entry does (no name, not an object, or a
+    server tool's `_unsupported`, still counted `unsupportedField`), its refusal re-worded the same way. Every such
+    refusal names `tool_addition` on purpose: Claude Code 2.1.310's retry handler reads a 400 naming it, under its
+    tool-change betas, as the server rejecting the blocks, and sends the conversation again without them and with
+    both betas off until `/clear` or `/compact` (read from the binary; not yet measured against the bridge). A
+    refusal without the word gets no such recovery, and the same history is refused again. A removal is never passed
+    over: skipped, it would leave a removed tool offered.
     A block that is not an object or has no type is no tool-change block, counted `unrecognised-block` and passed
     over as before.
   - The names: `KNOWN["requestField"]` explains `tool_removal-block`, `tool_addition-block`,
@@ -4073,20 +4081,24 @@ departure found while executing is written `D-TBD-<slug>` and named in the task'
     of 471 and no block was counted.
 
   Pins, in `server/test/codex-bridge-inbound.test.ts`, each request in Claude Code's shape with synthetic tool names:
-  :416 a by-value addition offered with its schema, cut name and name-map entry, and `countable_bytes` over the
-  folded list; :437 a by-value addition replacing a same-named `tools` entry in place; :449 a by-reference addition
-  of an offered tool, deferred or not, giving the same request as none; :460 a by-reference addition of an unknown
-  name counted and changing nothing; :472 a removal dropping the tool and its required entry, the history's call to
-  it unchanged and still mapped; :492 a removal then a re-addition (by reference, by value, and by `tool_name`)
-  bringing it back; :506 an addition then a removal leaving it gone; :522 the malformed-block rule, case by case;
-  :558 the control, a request with no block, pinned field by field. D-7094's two cases (:141, :167) keep their
+  :417 a by-value addition offered with its schema, cut name and name-map entry, and `countable_bytes` over the
+  folded list; :438 a by-value addition replacing a same-named `tools` entry in place; :450 a by-reference addition
+  of an offered tool, deferred or not, giving the same request as none; :461 a by-reference addition of an unknown
+  name counted and changing nothing; :473 a removal dropping the tool and its required entry, the history's call to
+  it unchanged and still mapped; :493 a removal then a re-addition (by reference and by value) bringing it back;
+  :506 a tool named over the cut limit, removed and re-added by its full name (the match is by cut name); :532 a
+  suffix text after the tool blocks, kept in the developer item in order; :540 an addition then a removal leaving it
+  gone; :558 the malformed-block rule, case by case, every refusal's text pinned to name `tool_addition` (a
+  `tool_name`-only reference among them);
+  :603 the control, a request with no block, pinned field by field. D-7094's two cases (:141, :167) keep their
   counts, followed by the new unknown-reference count for their by-reference `ToolFx3`, which nothing offers; their
   assertion that what is sent is unchanged now reads the by-value `ToolFx2` offered. In
   `server/test/codex-bridge-count-stats.test.ts`, :314 counts the nine betas and expects `unexplained.betaValue`
   absent, and :336 counts the four honoured names beside five open ones and expects only the five unexplained.
   Rows, each restored from a saved copy with sha256 compared: the fold call deleted, codex-bridge-inbound 9 red, the
   by-value case among them (`expected [ { …(5) } ] to deeply equal [ { type: 'function', …(4) }, …(2) ]`); the
-  removal arm made a no-op, the three removal cases red; `inline-tools-2026-09-15` deleted from KNOWN, the beta case
+  removal arm made a no-op, the three removal cases red; the fold's match by full rather than cut name
+  (`cut = change.name`), the over-the-limit case red; `inline-tools-2026-09-15` deleted from KNOWN, the beta case
   red (`expected [ 'inline-tools-2026-09-15' ] to be undefined`).
 - **Why:** The model is told, through the ToolSearch result's `Tool loaded: <name>` text, that a tool is loaded; a tool
   added by value but never offered cannot then be called, and a withdrawn tool can. Folding by Claude Code's own rule
@@ -4095,9 +4107,11 @@ departure found while executing is written `D-TBD-<slug>` and named in the task'
 - **Cost if wrong:** A backend that refuses a `function_call` in the input whose tool is no longer offered would turn
   every request after a removal into an error; the bridge keeps the history as sent, so that would show as a new
   upstream 4xx after the first removal, not as a silent loss. A definition shape Claude Code changes (a new tool type,
-  a renamed key) is refused as a 400 under the rule above, and a retry sends the same block, so a client update
-  could break a session until the bridge reads the new shape; the doctor names such a type the day it is counted. A tool removed and then called by the model regardless is the model's error, answered by Claude Code
-  as an unknown tool.
+  a renamed key) is refused as a 400 under the rule above, which Claude Code answers by dropping the blocks and both
+  betas for the rest of the conversation: the session keeps working, its late tools no longer added mid-conversation,
+  and the doctor names the new type the day it is counted. If a later Claude Code stops matching `tool_addition` in
+  a refusal, that recovery is lost and the same history is refused again. A tool removed and then called by the
+  model regardless is the model's error, answered by Claude Code as an unknown tool.
 
 ### D-7144 — lane-a switched to `direct`, as measured
 
@@ -4116,8 +4130,9 @@ departure found while executing is written `D-TBD-<slug>` and named in the task'
   - the first outcomes: 45 `2xx`, 2 compaction requests and 5 `countTokens` by 12:50Z, with no `4xx` or `5xx`;
   - the unexplained names in lane-a's stats file by 12:36Z: the two tool-change betas and the two by-value block names
     (`requestField:tool_addition-block` and `tool_addition-block.tool_definition`), which D-7143 now explains.
-- **Why:** The operator's ruling, on lane-b's first hours of direct traffic. Lane-a's credential would have expired
-  that evening under LiteLLM, which had never renewed it; the bridge renews it.
+- **Why:** The operator's ruling (about 12:25Z). What was measured around it: lane-a's credential had not been
+  renewed while it ran on LiteLLM (`lastRefreshAt` null) and was due to expire at 18:46Z; the bridge renewed it at
+  12:33:22Z.
 - **Cost if wrong:** This does not show that lane-a is as healthy as lane-b: its watch is hours, not a week, and its
   first window carried a by-value tool addition the bridge then dropped (D-7143). The unserved gap grows with the
   box's load, and Claude Code meets it with `CLAUDE_CODE_MAX_RETRIES=2`: a longer gap under heavier load could exhaust

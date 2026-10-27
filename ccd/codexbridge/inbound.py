@@ -133,8 +133,11 @@ def _shown(value: object) -> str:
     return errors.UNRECOGNISED_CODE
 
 
+_MALFORMED = "malformed request: "
+
+
 def _malformed(what: str) -> errors.BridgeError:
-    return errors.BridgeError(400, errors.INVALID_REQUEST, "malformed request: " + what, kind="refused")
+    return errors.BridgeError(400, errors.INVALID_REQUEST, _MALFORMED + what, kind="refused")
 
 
 def _unsupported(what: str, value: object, names: NameSink) -> errors.BridgeError:
@@ -216,25 +219,32 @@ _TOOL_CHANGE_BLOCKS = {"tool_addition": "add", "tool_removal": "remove"}
 
 
 def _reference_name(tool: dict) -> Optional[str]:
-    """A `tool_reference`'s tool name: `name`, or `tool_name` in its place (Claude Code's name normaliser reads
-    both)."""
-    for key in ("name", "tool_name"):
-        value = tool.get(key)
-        if isinstance(value, str) and value:
-            return value
-    return None
+    """A `tool_reference`'s tool name, its `name`: the one field Claude Code's own fold reads from a system entry's
+    reference. Claude Code 2.1.310 writes `tool_name` only on a tool_result's reference (`_input_part`), never here."""
+    value = tool.get("name")
+    return value if isinstance(value, str) and value else None
+
+
+def _tool_change_refused(what: str) -> errors.BridgeError:
+    """A tool-change block the bridge cannot read: a 400 whose text names `tool_addition` (D-7143). Under its
+    tool-change betas Claude Code 2.1.310 reads a 400 naming `tool_addition` as the server rejecting the blocks, and
+    sends the conversation again without them and with both betas off, until `/clear` or `/compact`. A refusal without
+    the word gets no such recovery: the same history is sent again and refused again."""
+    return _malformed("a tool_addition/tool_removal block: " + what)
 
 
 def _tool_changes(content: object) -> List[_ToolChange]:
     """The `tool_addition` and `tool_removal` blocks of a system entry's content, in order (D-7143). Claude Code 2.1.310
     sends an addition as `{tool: {type: "tool_reference", name}}` or `{tool: {type: "tool_definition", definition}}`
-    and a removal as `{tool: {type: "tool_reference", name}}`.
+    and a removal as `{tool: {type: "tool_reference", name}}`. The entry may also carry text blocks before or after
+    them, which `_texts` reads; their position does not matter here.
 
-    THE MALFORMED-BLOCK RULE. A tool-change block the bridge cannot read is refused (`_malformed`, a 400), as a
-    malformed `tools` entry is, EXCEPT where `_count_dropped` already counts it `unrecognised`: a `tool_addition` whose
-    `tool` is not an object or has no string type adds nothing and is passed over, its unexplained count left for the
-    doctor to name. (A block that is not an object or has no type is not a tool-change block: counted, passed over.)
-    A removal is never passed over, since a removal skipped would leave a removed tool offered."""
+    THE MALFORMED-BLOCK RULE. A tool-change block the bridge cannot read is refused (`_tool_change_refused`, a 400
+    Claude Code recovers from by dropping the blocks), EXCEPT where `_count_dropped` already counts it `unrecognised`:
+    a `tool_addition` whose `tool` is not an object or has no string type adds nothing and is passed over, its
+    unexplained count left for the doctor to name. (A block that is not an object or has no type is not a tool-change
+    block: counted, passed over.) A removal is never passed over, since a removal skipped would leave a removed tool
+    offered."""
     if not isinstance(content, list):
         return []
     out = []  # type: List[_ToolChange]
@@ -249,14 +259,14 @@ def _tool_changes(content: object) -> List[_ToolChange]:
         if tool_kind == "tool_reference":
             name = _reference_name(tool)
             if name is None:
-                raise _malformed("a tool_reference block has no tool name")
+                raise _tool_change_refused("its tool_reference has no name")
             out.append(_ToolChange(kind, name, None, False))
         elif kind == "add" and tool_kind == "tool_definition":
             out.append(_ToolChange(kind, None, tool.get("definition"), True))
         elif kind == "add":
-            raise _malformed("a tool_addition block has a tool that is not a tool_reference or a tool_definition")
+            raise _tool_change_refused("a tool_addition's tool is not a tool_reference or a tool_definition")
         else:
-            raise _malformed("a tool_removal block has a tool that is not a tool_reference")
+            raise _tool_change_refused("a tool_removal's tool is not a tool_reference")
     return out
 
 
@@ -536,7 +546,11 @@ def _fold_tool_changes(tools: List[dict], name_map: Dict[str, str], changes: Lis
     latest = {t["name"]: t for t in tools}  # type: Dict[str, dict]
     for change in changes:
         if change.by_value:
-            made = _tool(change.definition, names)
+            try:
+                made = _tool(change.definition, names)
+            except errors.BridgeError as e:  # a refusal Claude Code recovers from: see `_tool_change_refused`
+                said = e.message[len(_MALFORMED):] if e.message.startswith(_MALFORMED) else e.message
+                raise _tool_change_refused("its tool_definition: " + said) from None
             if made is None:
                 continue
             tool, name = made
