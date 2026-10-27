@@ -205,7 +205,7 @@ export function decideSleep<W extends string>(i: SleepInput, policy: SleepPolicy
   const w = i.live.word;
   if (!w.ok) return hold(w.reason === 'unmeasured' ? 'unmeasured' : 'pane');
   if (turnSays(policy.liveWord, turnWordOf(w.word)) !== 'rest') return hold('live-word');
-  if (policy.turnVerdict && i.live.turn !== 'idle') return hold(i.live.turn === 'busy' ? 'turn' : 'unmeasured');
+  if (policy.turnVerdict && i.live.turn !== 'idle') return hold(i.live.turn === 'unmeasured' ? 'unmeasured' : 'turn');
   // Hibernation's two marker holds (§5.11): a row's `background` is null once its hookstate aged out, so a shell or a
   // Monitor left running after the last Stop is visible only here — and it would die with the pane.
   const m = i.live.mark;

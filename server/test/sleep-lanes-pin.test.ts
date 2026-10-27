@@ -1240,4 +1240,16 @@ describe('C4d: decideSleep answers only its policy\'s words, and its turn fallba
     expect(RD_MATRIX.filter(([, i]) => { try { rd(i); return false; } catch { return true; } }).map(([n]) => n)).toEqual([]);
     expect(IH_MATRIX.filter(([, i]) => { try { ih(i); return false; } catch { return true; } }).map(([n]) => n)).toEqual([]);
   });
+
+  it('the turn verdict\'s fallback is the base\'s: unmeasured holds unmeasured, and every other non-idle turn holds turn', () => {
+    const at = (turn: 'busy' | 'unmeasured' | null): SleepInput => {
+      const i = stopDoneSleepInput(SD);
+      return i.live.kind === 'read' ? { ...i, live: { ...i.live, turn } } : i;
+    };
+    expect(dword(decideSleep(at('busy'), RUN_DONE_POLICY))).toBe('turn');
+    expect(dword(decideSleep(at('unmeasured'), RUN_DONE_POLICY))).toBe('unmeasured');
+    // A turn the lane did not read (`null`, typeable in SleepLive) under a row that reads it: neither busy nor unmeasured,
+    // so `turn`, as the base's `=== 'unmeasured' ? 'unmeasured' : 'turn'` answered it.
+    expect(dword(decideSleep(at(null), RUN_DONE_POLICY))).toBe('turn');
+  });
 });
