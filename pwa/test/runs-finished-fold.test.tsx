@@ -255,8 +255,9 @@ describe('measurement — Step 0 of C10 (D-6442)', () => {
   // --silent=false --reporter=verbose test/runs-finished-fold.test.tsx -t measurement`.
   // Name a reporter: with none, vitest 4.1.10 picks its `agent` reporter when `CLAUDECODE`, `CLAUDE_CODE` or
   // `AI_AGENT` is set, and no `[C10 step 0]` line prints (with or without `--silent=false`), and its `default`
-  // reporter otherwise, which prints it. Measured in an agent session and with those three unset (review 944):
-  // `--reporter=verbose` and `--reporter=default` print it in both.
+  // reporter otherwise, which prints it. `--reporter=verbose` and `--reporter=default` print it in both: measured
+  // on 4.1.10 in an agent session and with those three unset (C6, 2026-10-27). Review 944 measured no flag and
+  // `--silent=false` in both, and `--reporter=verbose` in an agent session only.
   // No timing assertion: the numbers go to the console and the PR body. Real
   // `performance.now` is left alone (only timers and Date are faked), because a
   // faked clock would report every Profiler duration as zero.
