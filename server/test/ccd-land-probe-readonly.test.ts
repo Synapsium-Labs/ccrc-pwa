@@ -4,10 +4,11 @@
 // The pins read ccd/ccd-land-probe's whole text. A pin is a request until a planted violation turns it red; the
 // plan's mutation table plants each one.
 import { describe, it, expect, afterEach } from 'vitest';
+import { spawn, execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { makeCcdHarness, ghPoisonAt, type CcdHarness } from './ccdWsHelpers.js';
-import { makeLandFixture, PROBE } from './ccdLandProbeFixture.js';
+import { makeLandFixture, until, PROBE } from './ccdLandProbeFixture.js';
 
 const src = fs.readFileSync(PROBE, 'utf8');
 const MARK = "<<'PY'";
@@ -85,6 +86,7 @@ describe('ccd-land-probe: the git_ro self-test', () => {
     fx.addHead(2, { 'README.md': 'two\n' }, { branch: 'ws/beta' });
     fx.addRow('lane-a-proj-a-alpha', 'ws/alpha');
     fx.addRow('lane-a-proj-a-beta', 'ws/beta');
+    fx.mergeBase('ws/alpha');   // a real merge, so the lineage walk makes every call it can
     fx.conf(fx.project, 'lineage=on\n');
     const log = path.join(h.home, 'git-argv.log');
     fx.wrapGit(`printf '%s\\t' "$@" >> '${log}'; printf '\\n' >> '${log}'`);
@@ -106,7 +108,7 @@ describe('ccd-land-probe: the git_ro self-test', () => {
       calls.push([where, argv]);
     }
     const subs = new Set(calls.map(([w, a]) => `${w} ${a[0]}`));
-    for (const want of ['project config', 'project count-objects', 'project ls-remote', 'project rev-parse', 'scratch init', 'scratch fetch', 'scratch rev-parse', 'scratch merge-tree']) {
+    for (const want of ['project config', 'project count-objects', 'project ls-remote', 'project rev-parse', 'scratch init', 'scratch fetch', 'scratch rev-parse', 'scratch merge-tree', 'scratch rev-list', 'scratch merge-base']) {
       expect(subs, want).toContain(want);
     }
     const mine = fx.selftest(calls);
@@ -134,19 +136,30 @@ describe('ccd-land-probe: the git_ro self-test', () => {
     expect(fx.selftest([['project', ['config', '--get', 'remote.origin.url']], ['project', ['ls-remote', '--get-url', 'origin']]]).stdout.split('\n').filter(Boolean)).toEqual(['allowed', 'allowed']);
   });
 
-  it('S1 reads no pause, takes no lock, and creates no file', () => {
+  it('S1 reads no pause, takes no lock, and creates no file', async () => {
     h = makeCcdHarness('land-probe-ro');
     const fx = makeLandFixture(h);
     fx.pause('global');
     const home = h.home;
     const lock = path.join(home, '.ccrc', 'land-probe.lock');
-    const snap = (): string => [fx.tmp, fx.reg, path.join(home, '.ccrc')].map((d) => fs.readdirSync(d).sort().join(',')).join('|');
-    expect(fs.existsSync(lock)).toBe(false);
-    const before = snap();
-    const r = fx.selftest([['project', ['rev-parse', 'HEAD']], ['project', ['push']]]);
-    expect(r.status).toBe(0);
-    expect(r.stdout.split('\n').filter(Boolean)).toEqual(['allowed', 'refused subcommand push']);
-    expect(fs.existsSync(lock)).toBe(false);
-    expect(snap()).toBe(before);
+    // The lock is HELD while the self-test prints every verdict: a self-test that took it (flock -n) would exit 0
+    // without printing, and one that read the pause marker would stop at "paused".
+    fs.mkdirSync(path.join(home, '.ccrc'), { recursive: true });
+    const holder = spawn('flock', ['--no-fork', lock, 'sleep', '30'], { stdio: 'ignore' });
+    try {
+      const held = (): boolean => {
+        try { execFileSync('flock', ['-n', lock, 'true']); return false; } catch { return true; }
+      };
+      expect(await until(held, 5000), 'the test never took the lock').toBe(true);
+      const snap = (): string => [fx.tmp, fx.reg, path.join(home, '.ccrc')].map((d) => fs.readdirSync(d).sort().join(',')).join('|');
+      const before = snap();
+      const r = fx.selftest([['project', ['rev-parse', 'HEAD']], ['project', ['push']]]);
+      expect(r.status).toBe(0);
+      expect(r.stdout.split('\n').filter(Boolean)).toEqual(['allowed', 'refused subcommand push']);
+      expect(held(), 'the lock is still the holder\'s').toBe(true);
+      expect(snap()).toBe(before);
+    } finally {
+      holder.kill('SIGKILL');
+    }
   });
 });

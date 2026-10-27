@@ -128,6 +128,10 @@ GH_SLUG_RE = r'[A-Za-z0-9._-]+/[A-Za-z0-9._-]+'
 PR_FIELDS = 'number,headRefName,headRefOid,isCrossRepository'
 PR_LIMIT = 100
 PATHS_CAP = 20
+NAME_CAP = 120
+RUN_PASS = ('success', 'neutral', 'skipped')
+RUN_FAIL = ('failure', 'timed_out', 'cancelled', 'action_required', 'startup_failure', 'stale')
+STATUS_FAIL = ('failure', 'error')
 MIN_PROJECT_S = 10
 STALE_SCRATCH_S = 3600
 
@@ -145,6 +149,7 @@ GH_T = knob('CCD_LAND_PROBE_GH_TIMEOUT', 15)
 PROJECT_BUDGET = knob('CCD_LAND_PROBE_BUDGET', 240)
 TICK_BUDGET = knob('CCD_LAND_PROBE_TICK_BUDGET', 780)
 PAIR_HEADS = knob('CCD_LAND_PROBE_PAIR_HEADS', 10)
+LINEAGE_STEPS = knob('CCD_LAND_PROBE_LINEAGE_STEPS', 8)
 
 # ---- the git door: the hardening prefix, the two allowlists, the option and key refusals -----------------------
 # git, then the prefix, then (project only) the lock option, then -C <dir>, then (the scratch's fetch only) the fetch
@@ -220,8 +225,14 @@ def git_check(where, args):
             raise ProbeRefused('key ' + k)
 
 
-def child_env(keep=()):
+def child_env(keep=(), cwd=None):
+    """Every GIT_* variable dropped but the keep set, then the read runner's own (ccd's read_env): no lazy fetch into
+    a partial clone, no replace objects, discovery stopped at the repository's parent."""
     env = dict((k, v) for k, v in os.environ.items() if not k.startswith('GIT_') or k in keep)
+    env['GIT_NO_LAZY_FETCH'] = '1'
+    env['GIT_NO_REPLACE_OBJECTS'] = '1'
+    if cwd is not None:
+        env['GIT_CEILING_DIRECTORIES'] = os.path.realpath(os.path.dirname(os.path.abspath(cwd)))
     env['GIT_TERMINAL_PROMPT'] = '0'
     env['LC_ALL'] = 'C'
     return env
@@ -298,7 +309,7 @@ def git_ro(where, args, timeout):
     if fetch:
         argv += list(FETCH_PREFIX)
     argv += list(args)
-    return run_child(argv, child_env(FETCH_KEEP if fetch else ()), timeout)
+    return run_child(argv, child_env(FETCH_KEEP if fetch else (), cwd), timeout)
 
 
 # ---- the forge door: exactly two read forms -----------------------------------------------------------------------
@@ -343,8 +354,9 @@ def is_registry_id(s):
     return len(s) <= 255 and ID_RE.fullmatch(s) is not None and not s.startswith('.') and not s.startswith('-')
 
 
-def merge_answer(a, b):
-    """One merge-tree of two commits in the scratch: clean, conflict with its paths, or unmeasured with a why."""
+def merge_answer(a, b, tree=False):
+    """One merge-tree of two commits in the scratch: clean, conflict with its paths, or unmeasured with a why. With
+    tree=True a clean answer also carries the clean tree id (the lineage walk compares a merge's own tree with it)."""
     if CUR is not None and CUR.remaining() <= 0:
         return {'state': 'unmeasured', 'why': 'budget'}
     r = git_ro('scratch', ['merge-tree', '--write-tree', '--name-only', '--no-messages', a, b], GIT_T)
@@ -356,12 +368,239 @@ def merge_answer(a, b):
     if not HEX40.fullmatch(lines[0]):
         return {'state': 'unmeasured', 'why': 'no-tree'}
     if r.rc == 0:
-        return {'state': 'clean'}
+        return {'state': 'clean', 'tree': lines[0]} if tree else {'state': 'clean'}
     paths = []
     for ln in lines[1:]:
         if ln and ln not in paths:
             paths.append(ln)
     return {'state': 'conflict', 'paths': paths[:PATHS_CAP], 'pathsCut': len(paths) > PATHS_CAP}
+
+
+def why_of(r):
+    """The why of a child that gave no answer: the project budget spent, a deadline, or an exit code."""
+    if r.rc is None:
+        return 'budget' if CUR is not None and CUR.remaining() <= 0 else 'timeout'
+    return 'rc-%d' % r.rc
+
+
+def walk_lineage(tip, base, steps, budget):
+    """A workspace branch's chain of clean merges of the fetched base, newest first. A step is accepted only when the
+    commit has exactly two parents, its second parent is on the base, and its tree is the clean merge-tree of the two
+    parents. Anything else stops the chain. state is measured unless a git call failed, timed out or ran out of
+    budget; chain then holds what was proven first."""
+    chain = []
+    c = tip
+
+    def done(stop, state='measured', why=None):
+        doc = {'state': state, 'chain': chain, 'stop': stop}
+        if why is not None:
+            doc['why'] = why
+        return doc
+
+    while len(chain) < steps:
+        if budget.remaining() <= 0:
+            return done('unmeasured', 'unmeasured', 'budget')
+        r = git_ro('scratch', ['rev-list', '--parents', '-n', '1', c], GIT_T)
+        if r.rc != 0:
+            return done('unmeasured', 'unmeasured', why_of(r))
+        fields = r.out.split()
+        if not fields or fields[0] != c or not all(HEX40.fullmatch(f) for f in fields):
+            return done('unmeasured', 'unmeasured', 'no-parents')
+        if len(fields) != 3:
+            return done('not-a-merge')
+        p1, p2 = fields[1], fields[2]
+        r = git_ro('scratch', ['merge-base', '--is-ancestor', p2, base], GIT_T)
+        if r.rc == 1:
+            return done('second-parent-not-on-base')
+        if r.rc != 0:
+            return done('unmeasured', 'unmeasured', why_of(r))
+        ans = merge_answer(p1, p2, True)
+        if ans['state'] == 'conflict':
+            return done('conflict')
+        if ans['state'] != 'clean':
+            return done('unmeasured', 'unmeasured', ans['why'])
+        r = git_ro('scratch', ['rev-parse', '--verify', '-q', c + '^{tree}'], GIT_T)
+        if r.rc != 0 or not HEX40.fullmatch(r.out.strip()):
+            return done('unmeasured', 'unmeasured', why_of(r) if r.rc != 0 else 'no-tree')
+        if r.out.strip() != ans['tree']:
+            return done('tree-differs')
+        chain.append({'merge': c, 'p1': p1, 'p2': p2})
+        c = p1
+    return done('limit')
+
+
+def bound_name(v):
+    """A forge-sourced name, held to NAME_CAP bytes on a character boundary. Untrusted: it is only ever JSON-encoded."""
+    if not isinstance(v, str) or v == '':
+        return None
+    return v.encode('utf-8')[:NAME_CAP].decode('utf-8', 'ignore') or None
+
+
+def app_pin(v):
+    """The App a required name is pinned to: a positive integer. None, -1, 0 and anything else mean no App."""
+    return v if type(v) is int and v > 0 else None
+
+
+def required_set(rules, branch):
+    """The required checks: every required_status_checks rule of the branch rules, unioned with the branch view's
+    protection (checks[] with their App, contexts[] with none). [{name, app}], app None or a positive integer. A name
+    with a pin drops its unpinned twin; a name pinned to two Apps keeps both entries, which the judge reads as a
+    conflict."""
+    seen = {}
+
+    def add(name, app):
+        n = bound_name(name)
+        if n is not None:
+            seen.setdefault(n, set()).add(app_pin(app))
+
+    for rule in rules if isinstance(rules, list) else []:
+        if not isinstance(rule, dict) or rule.get('type') != 'required_status_checks':
+            continue
+        p = rule.get('parameters')
+        rs = p.get('required_status_checks') if isinstance(p, dict) else None
+        for c in rs if isinstance(rs, list) else []:
+            if isinstance(c, dict):
+                add(c.get('context'), c.get('integration_id'))
+    prot = branch.get('protection') if isinstance(branch, dict) else None
+    sc = prot.get('required_status_checks') if isinstance(prot, dict) else None
+    if isinstance(sc, dict):
+        for c in sc.get('checks') if isinstance(sc.get('checks'), list) else []:
+            if isinstance(c, dict):
+                add(c.get('context'), c.get('app_id'))
+        for n in sc.get('contexts') if isinstance(sc.get('contexts'), list) else []:
+            add(n, None)
+    out = []
+    for n in sorted(seen):
+        pins = sorted(a for a in seen[n] if a is not None)
+        if not pins:
+            out.append({'name': n, 'app': None})
+        for a in pins:
+            out.append({'name': n, 'app': a})
+    return out
+
+
+def judge_name(pins, runs, statuses, name):
+    """One required name: pass, fail, pending, app-unverifiable or app-conflict."""
+    if len(pins) > 1:
+        return 'app-conflict'
+    pin = pins[0] if pins else None
+    mine = [r for r in runs if isinstance(r, dict) and r.get('name') == name and type(r.get('id')) is int]
+    if pin is not None:
+        mine = [r for r in mine if isinstance(r.get('app'), dict) and r['app'].get('id') == pin]
+    if mine:
+        run = max(mine, key=lambda r: r['id'])
+        if run.get('status') == 'completed' and run.get('conclusion') in RUN_PASS:
+            return 'pass'
+        if run.get('status') == 'completed' and run.get('conclusion') in RUN_FAIL:
+            return 'fail'
+        return 'pending'
+    seen = [s for s in statuses if isinstance(s, dict) and s.get('context') == name]
+    if not seen:
+        return 'pending'
+    if pin is not None:
+        return 'app-unverifiable'
+    newest = max(seen, key=lambda s: s['id'] if type(s.get('id')) is int else -1)
+    if newest.get('state') == 'success':
+        return 'pass'
+    if newest.get('state') in STATUS_FAIL:
+        return 'fail'
+    return 'pending'
+
+
+def judge_required(required, runs, statuses):
+    """The base tip's verdict on its required set: red when any name fails, green when the set is non-empty and every
+    name passes, otherwise unmeasured with a why. A check run counts only when it is completed with a passing
+    conclusion; a pinned name counts only on a run of that App, never on a status."""
+    names = sorted(set(e['name'] for e in required))
+    if not names:
+        return {'state': 'unmeasured', 'why': 'no-required-set', 'required': [], 'failing': [], 'pending': []}
+    verdicts = {}
+    for n in names:
+        pins = sorted(set(e['app'] for e in required if e['name'] == n and e['app'] is not None))
+        verdicts[n] = judge_name(pins, runs, statuses, n)
+    doc = {'required': required,
+           'failing': [n for n in names if verdicts[n] == 'fail'],
+           'pending': [n for n in names if verdicts[n] not in ('pass', 'fail')]}
+    vs = set(verdicts.values())
+    if 'fail' in vs:
+        doc['state'] = 'red'
+    elif 'app-conflict' in vs:
+        doc.update(state='unmeasured', why='app-conflict')
+    elif 'app-unverifiable' in vs:
+        doc.update(state='unmeasured', why='app-unverifiable')
+    elif 'pending' in vs:
+        doc.update(state='unmeasured', why='pending')
+    else:
+        doc['state'] = 'green'
+    return doc
+
+
+def json_values(text):
+    """Every JSON value in text, in order: a paginated forge answer is one value per page, run together. None when
+    anything in it is not JSON."""
+    dec = json.JSONDecoder()
+    out = []
+    i, n = 0, len(text)
+    while True:
+        while i < n and text[i] in ' \t\r\n':
+            i += 1
+        if i >= n:
+            return out
+        try:
+            v, i = dec.raw_decode(text, i)
+        except ValueError:
+            return None
+        out.append(v)
+
+
+def read_checks(slug, base_ref, sha):
+    """The base tip's verdict from the forge: the rules and the branch view for the required set, then the check runs
+    and the commit status on the fetched base sha. Any read that fails makes the whole verdict unmeasured: a set read
+    in part could miss a name, and a miss reads green."""
+    def unmeasured(why):
+        return {'state': 'unmeasured', 'why': why, 'required': [], 'failing': [], 'pending': []}
+
+    def get(path, paginate=False):
+        if CUR is not None and CUR.remaining() <= 0:
+            return None, 'budget'
+        r = gh_get(path, paginate)
+        if r.rc != 0:
+            spent = r.rc is None and CUR is not None and CUR.remaining() <= 0
+            return None, 'budget' if spent else 'gh-failed'
+        vals = json_values(r.out)
+        if not vals:
+            return None, 'gh-failed'
+        return vals, None
+
+    enc = base_ref.replace('/', '%2F')
+    rules, why = get('repos/%s/rules/branches/%s' % (slug, enc))
+    if why:
+        return unmeasured(why)
+    view, why = get('repos/%s/branches/%s' % (slug, enc))
+    if why:
+        return unmeasured(why)
+    if len(rules) != 1 or not isinstance(rules[0], list) or len(view) != 1 or not isinstance(view[0], dict):
+        return unmeasured('gh-failed')
+    required = required_set(rules[0], view[0])
+    if not required:
+        return judge_required(required, [], [])
+    pages, why = get('repos/%s/commits/%s/check-runs?per_page=100' % (slug, sha), True)
+    if why:
+        return unmeasured(why)
+    runs = []
+    for pg in pages:
+        if not isinstance(pg, dict) or not isinstance(pg.get('check_runs'), list):
+            return unmeasured('gh-failed')
+        runs += pg['check_runs']
+    stat_pages, why = get('repos/%s/commits/%s/status' % (slug, sha))
+    if why:
+        return unmeasured(why)
+    statuses = []
+    for pg in stat_pages:
+        if not isinstance(pg, dict) or not isinstance(pg.get('statuses'), list):
+            return unmeasured('gh-failed')
+        statuses += pg['statuses']
+    return judge_required(required, runs, statuses)
 
 
 # ---- files: real, owned directories only; tmp then rename; deletion of the probe's own names only ------------------
@@ -480,19 +719,25 @@ def project_rows(project):
 
 
 def qualifying(rows):
-    """(the rows that qualify for a lineage file, whether every row was decided). A row qualifies when its branch
-    starts with ws/ and refs/heads/<branch> resolves in the project repository."""
+    """(the rows that qualify for a lineage file, the ids of rows left undecided). A row qualifies when its branch
+    starts with ws/ and refs/heads/<branch> resolves in the project repository. Each row is read on its own: a branch
+    the git door refuses cannot qualify (decided, logged once); a read that timed out or ran past the budget leaves
+    the row undecided, and its previous file stays."""
     out = []
-    complete = True
+    undecided = set()
     for rid, branch in rows:
         if branch is None or not branch.startswith('ws/'):
             continue
-        r = git_ro('project', ['rev-parse', '--verify', '-q', 'refs/heads/' + branch], GIT_T)
+        try:
+            r = git_ro('project', ['rev-parse', '--verify', '-q', 'refs/heads/' + branch], GIT_T)
+        except ProbeRefused:
+            log('lineage-skip: a registry row names a branch the git door refuses')
+            continue
         if r.rc is None:
-            complete = False
+            undecided.add(rid)
         elif r.rc == 0 and HEX40.fullmatch(r.out.strip()):
             out.append((rid, branch, r.out.strip()))
-    return out, complete
+    return out, undecided
 
 
 def parse_conf(path):
@@ -678,9 +923,19 @@ def probe_doc(project, base_ref, base_sha, state, why, heads, heads_cut, pairs, 
     return doc
 
 
-def health_doc(project, sha, state, why):
-    return {'v': 1, 'project': project, 'at': now_iso(), 'sha': sha, 'state': state, 'why': why,
-            'required': [], 'failing': [], 'pending': []}
+def health_doc(project, sha, verdict):
+    """The main-health file: the verdict of read_checks (or an unmeasured shape) with its project, time and sha."""
+    doc = {'v': 1, 'project': project, 'at': now_iso(), 'sha': sha, 'state': verdict['state']}
+    if verdict.get('why') is not None:
+        doc['why'] = verdict['why']
+    doc['required'] = verdict['required']
+    doc['failing'] = verdict['failing']
+    doc['pending'] = verdict['pending']
+    return doc
+
+
+def unmeasured_health(project, sha, why):
+    return health_doc(project, sha, {'state': 'unmeasured', 'why': why, 'required': [], 'failing': [], 'pending': []})
 
 
 def lineage_unmeasured(project, rid, branch, tip, why):
@@ -697,6 +952,35 @@ def prune_lineage(ldir, keep):
     for n in names:
         if n.endswith('.lineage') and n[:-len('.lineage')] not in keep:
             remove_own(ldir, n)
+
+
+def lineage_pass(project, ldir, rows, base_sha, fail_why):
+    """Write each qualifying row's lineage, and remove the stale files. base_sha None is a failed fetch: every
+    qualifying row gets the unmeasured shape. One row never costs another: a failure inside a row is that row's alone."""
+    quals, undecided = qualifying(rows)
+    for rid, branch, tip in quals:
+        try:
+            if base_sha is None:
+                doc = lineage_unmeasured(project, rid, branch, tip, fail_why)
+            else:
+                walk = walk_lineage(tip, base_sha, LINEAGE_STEPS, CUR)
+                doc = {'v': 1, 'project': project, 'id': rid, 'at': now_iso(), 'state': walk['state']}
+                if walk.get('why') is not None:
+                    doc['why'] = walk['why']
+                doc['branch'], doc['tip'], doc['base'] = branch, tip, base_sha
+                doc['chain'], doc['stop'] = walk['chain'], walk['stop']
+            write_json(ldir, rid + '.lineage', doc)
+        except Exception as e:
+            log('lineage-error: one registry row was not measured (%s)' % type(e).__name__)
+    prune_lineage(ldir, set(q[0] for q in quals) | undecided)
+
+
+def guarded_lineage(project, ldir, rows, base_sha, fail_why):
+    """The lineage pass must never stop the enabled mirror or the final probe rewrite behind it."""
+    try:
+        lineage_pass(project, ldir, rows, base_sha, fail_why)
+    except Exception as e:
+        log('lineage-error: the lineage pass stopped (%s)' % type(e).__name__)
 
 
 def measure(base_sha, heads, rows):
@@ -750,12 +1034,8 @@ def probe_project(project, conf):
         store = {'before': store_before, 'after': None}
         if fail:
             write_json(ldir, 'probe', probe_doc(project, base_ref, None, 'unmeasured', fail[0], [], False, [], [], False, store, None))
-            write_json(ldir, 'main-health', health_doc(project, None, 'unmeasured', fail[1]))
-            quals, complete = qualifying(rows)
-            for rid, branch, tip in quals:
-                write_json(ldir, rid + '.lineage', lineage_unmeasured(project, rid, branch, tip, fail[2]))
-            if complete:
-                prune_lineage(ldir, set(q[0] for q in quals))
+            write_json(ldir, 'main-health', unmeasured_health(project, None, fail[1]))
+            guarded_lineage(project, ldir, rows, None, fail[2])
             doc = None
         else:
             if gh_ok:
@@ -764,13 +1044,8 @@ def probe_project(project, conf):
             else:
                 doc = probe_doc(project, base_ref, base_sha, 'unmeasured', 'gh-failed', [], False, [], [], False, store, None)
             write_json(ldir, 'probe', doc)
-            if CUR.remaining() <= 0:
-                write_json(ldir, 'main-health', health_doc(project, base_sha, 'unmeasured', 'budget'))
-            else:
-                write_json(ldir, 'main-health', health_doc(project, base_sha, 'unmeasured', 'no-required-set'))
-            quals, complete = qualifying(rows)
-            if complete:
-                prune_lineage(ldir, set(q[0] for q in quals))
+            write_json(ldir, 'main-health', health_doc(project, base_sha, read_checks(slug, base_ref, base_sha)))
+            guarded_lineage(project, ldir, rows, base_sha, None)
         if conf['lineage'] == 'on':
             write_json(ldir, 'enabled', {'v': 1, 'project': project, 'at': now_iso()})
         else:

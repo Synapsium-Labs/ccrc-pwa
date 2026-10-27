@@ -9,7 +9,7 @@ import { execFileSync, spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { makeCcdHarness, ghPoisonAt, type CcdHarness } from './ccdWsHelpers.js';
-import { makeLandFixture, pidGone, until, PROBE, type LandFixture } from './ccdLandProbeFixture.js';
+import { makeLandFixture, pidGone, until, PROBE, type LandFixture, type CheckRun } from './ccdLandProbeFixture.js';
 
 let h: CcdHarness;
 let fx: LandFixture;
@@ -22,6 +22,12 @@ afterEach(() => {
 
 const tmpLeft = (): string[] => fs.readdirSync(fx.tmp).filter((n) => n.startsWith('ccd-land-probe.'));
 const ls = (dir: string): string[] => (fs.existsSync(dir) ? fs.readdirSync(dir).sort() : []);
+
+const run = (id: number, name: string, status: string, conclusion: string | null, app?: number): CheckRun =>
+  ({ id, name, status, conclusion, ...(app === undefined ? {} : { app: { id: app } }) });
+/** A required_status_checks rule of the branch rules, one entry per {context, integration_id?}. */
+const REQ_RULE = (checks: Array<{ context: string; integration_id?: number }>): unknown =>
+  ({ type: 'required_status_checks', parameters: { required_status_checks: checks } });
 
 /** One head per entry, newest PR last added: files are disjoint unless a case makes them collide. */
 function threeHeads(): void {
@@ -59,7 +65,8 @@ describe('ccd-land-probe: the radar', () => {
     expect(p.store.before.count).toEqual(expect.any(Number));
     expect(p.store.after.count).toBe(p.store.before.count);
     expect(p.scratch.sizeKiB).toBeGreaterThan(0);
-    expect(fx.readJson('main-health')).toMatchObject({ v: 1, project: 'proj-a', sha: fx.originMain(), state: 'unmeasured', why: 'no-required-set', required: [], failing: [], pending: [] });
+    // No REST answers are stubbed here: the base's required checks cannot be read, which is unmeasured, never green.
+    expect(fx.readJson('main-health')).toMatchObject({ v: 1, project: 'proj-a', sha: fx.originMain(), state: 'unmeasured', why: 'gh-failed', required: [], failing: [], pending: [] });
     expect(tmpLeft()).toEqual([]);
     expect(ls(fx.landDir).filter((n) => n.startsWith('.lp.'))).toEqual([]);
   });
@@ -114,12 +121,16 @@ describe('ccd-land-probe: the radar', () => {
   it('a failed list of open PRs is unmeasured gh-failed, and the base is still fetched alone', () => {
     threeHeads();
     fx.stubGh({ prList: 'fail' });
+    fx.stubChecks({ rules: [REQ_RULE([{ context: 'ci/test' }])], runs: [run(1, 'ci/test', 'completed', 'success')] });
+    fx.addRow('lane-a-proj-a-alpha', 'ws/alpha');
     fx.conf(fx.project, '');
     expect(fx.run().status).toBe(0);
     const p = fx.readJson('probe');
     expect(p).toMatchObject({ state: 'unmeasured', why: 'gh-failed', heads: [], pairs: [] });
     expect(p.base).toEqual({ ref: 'main', sha: fx.originMain() });
-    expect(fx.readJson('main-health')).toMatchObject({ sha: fx.originMain(), state: 'unmeasured', why: 'no-required-set' });
+    // The PR list is not what main-health and the lineage read: both go on against the base alone (R6).
+    expect(fx.readJson('main-health')).toMatchObject({ sha: fx.originMain(), state: 'green', required: [{ name: 'ci/test', app: null }] });
+    expect(fx.readJson('lane-a-proj-a-alpha.lineage')).toMatchObject({ state: 'measured', base: fx.originMain(), chain: [], stop: 'not-a-merge' });
   });
 
   it('a merge-tree past its deadline is unmeasured, and its process group is gone', { timeout: 60_000 }, async () => {
@@ -272,7 +283,8 @@ describe('ccd-land-probe: the radar', () => {
     fx.conf(fx.project, '');
     fs.mkdirSync(path.join(h.home, '.ccrc'), { recursive: true });
     const lock = path.join(h.home, '.ccrc', 'land-probe.lock');
-    const holder = spawn('flock', [lock, 'sleep', '30'], { stdio: 'ignore' });
+    // --no-fork: flock execs the sleep itself, so the SIGKILL below ends the holder and leaves no orphan behind.
+    const holder = spawn('flock', ['--no-fork', lock, 'sleep', '30'], { stdio: 'ignore' });
     try {
       const held = (): boolean => {
         try { execFileSync('flock', ['-n', lock, 'true']); return false; } catch { return true; }
@@ -427,5 +439,399 @@ describe('ccd-land-probe: the slug rule', () => {
     fs.writeFileSync(progFile, program);
     const out = execFileSync('python3', ['-I', '-c', driver, progFile, JSON.stringify(CORPUS.map((c) => c[0]))], { encoding: 'utf8' });
     expect(JSON.parse(out)).toEqual(CORPUS.map((c) => c[1]));
+  });
+});
+
+/** The embedded program, imported (not run: __name__ is not __main__) in a python3 -I child, and the named pure
+ *  functions called with JSON arguments: one process per batch, no git, no forge. */
+function pyCall(calls: Array<[string, unknown[]]>): any[] {
+  const src = fs.readFileSync(PROBE, 'utf8');
+  const program = src.slice(src.indexOf("<<'PY'\n") + "<<'PY'\n".length, src.lastIndexOf('\nPY'));
+  const progFile = path.join(h.home, 'program-pure.py');
+  fs.writeFileSync(progFile, program);
+  const driver = 'import json, sys\nns = {"__name__": "probe"}\nexec(compile(open(sys.argv[1]).read(), "probe", "exec"), ns)\n'
+    + 'print(json.dumps([ns[f](*a) for f, a in json.loads(sys.argv[2])]))\n';
+  return JSON.parse(execFileSync('python3', ['-I', '-c', driver, progFile, JSON.stringify(calls)], { encoding: 'utf8' }));
+}
+const required = (...e: Array<[string, number | null]>): Array<{ name: string; app: number | null }> => e.map(([name, app]) => ({ name, app }));
+const judge = (req: unknown, runs: unknown[] = [], statuses: unknown[] = []): any => pyCall([['judge_required', [req, runs, statuses]]])[0];
+const status = (id: number, context: string, state: string): unknown => ({ id, context, state });
+
+describe('ccd-land-probe: the lineage walk', () => {
+  const ALPHA = 'lane-a-proj-a-alpha';
+  const lineage = (id = ALPHA): any => fx.readJson(`${id}.lineage`);
+  const lineageFiles = (): string[] => ls(fx.landDir).filter((n) => n.endsWith('.lineage'));
+  function alpha(): string {
+    fx.addRow(ALPHA, 'ws/alpha');
+    const own = fx.commitOn('ws/alpha', { 'alpha.txt': 'a\n' });
+    fx.conf(fx.project, '');
+    return own;
+  }
+
+  it('a clean merge of the fetched base is one chain step, and the old tip is its p1', { timeout: 90_000 }, () => {
+    const own = alpha();
+    const tip = fx.mergeBase('ws/alpha');
+    expect(fx.run().status).toBe(0);
+    expect(lineage()).toMatchObject({
+      v: 1, project: 'proj-a', id: ALPHA, state: 'measured', branch: 'ws/alpha', tip, base: fx.originMain(),
+      chain: [{ merge: tip, p1: own, p2: fx.originMain() }], stop: 'not-a-merge',
+    });
+    expect(lineage().at).toMatch(/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$/);
+    expect(lineage().why).toBeUndefined();
+  });
+
+  it('a hand-edited merge stops at tree-differs', { timeout: 90_000 }, () => {
+    alpha();
+    const tip = fx.handMerge('ws/alpha', { 'hand.txt': 'slipped in\n' });
+    expect(fx.run().status).toBe(0);
+    expect(lineage()).toMatchObject({ state: 'measured', tip, chain: [], stop: 'tree-differs' });
+  });
+
+  it('a resolved conflict stops at conflict', { timeout: 90_000 }, () => {
+    fx.addRow(ALPHA, 'ws/alpha');
+    fx.conf(fx.project, '');
+    const tip = fx.conflictMerge('ws/alpha');
+    expect(fx.run().status).toBe(0);
+    expect(lineage()).toMatchObject({ state: 'measured', tip, chain: [], stop: 'conflict' });
+  });
+
+  it('a merge of another workspace branch stops at second-parent-not-on-base', { timeout: 90_000 }, () => {
+    alpha();
+    fx.addRow('lane-a-proj-a-other', 'ws/other');
+    fx.commitOn('ws/other', { 'other.txt': 'o\n' });
+    const tip = fx.mergeOther('ws/alpha', 'ws/other');
+    expect(fx.run().status).toBe(0);
+    expect(lineage()).toMatchObject({ state: 'measured', tip, chain: [], stop: 'second-parent-not-on-base' });
+    // Its own tip is a plain commit: no merge to walk.
+    expect(lineage('lane-a-proj-a-other')).toMatchObject({ state: 'measured', chain: [], stop: 'not-a-merge' });
+  });
+
+  it('a rebase leaves a single-parent tip: not-a-merge, empty chain', { timeout: 90_000 }, () => {
+    alpha();
+    const tip = fx.rebaseOnto('ws/alpha');
+    expect(fx.gitIn(fx.repo, 'rev-list', '--parents', '-n', '1', tip).split(' ')).toHaveLength(2);
+    expect(fx.run().status).toBe(0);
+    expect(lineage()).toMatchObject({ state: 'measured', tip, chain: [], stop: 'not-a-merge' });
+  });
+
+  it('nine clean base merges stop at limit after eight', { timeout: 120_000 }, () => {
+    alpha();
+    let tip = '';
+    for (let i = 0; i < 9; i++) tip = fx.mergeBase('ws/alpha');
+    expect(fx.run().status).toBe(0);
+    const l = lineage();
+    expect(l).toMatchObject({ state: 'measured', tip, stop: 'limit' });
+    expect(l.chain).toHaveLength(8);
+    expect(l.chain[0].merge).toBe(tip);
+    for (let i = 0; i < 7; i++) expect(l.chain[i].p1).toBe(l.chain[i + 1].merge);
+  });
+
+  it('CCD_LAND_PROBE_LINEAGE_STEPS=0 writes an empty chain with stop limit', { timeout: 90_000 }, () => {
+    alpha();
+    const tip = fx.mergeBase('ws/alpha');
+    expect(fx.run({ CCD_LAND_PROBE_LINEAGE_STEPS: '0' }).status).toBe(0);
+    expect(lineage()).toMatchObject({ state: 'measured', tip, chain: [], stop: 'limit' });
+  });
+
+  it('a git failure inside the walk is unmeasured, and the chain keeps what was proven first', { timeout: 90_000 }, () => {
+    alpha();
+    fx.mergeBase('ws/alpha');
+    const tip = fx.mergeBase('ws/alpha');
+    const cnt = path.join(h.home, 'ancestor.count');
+    fx.wrapGit(`case " $* " in *" merge-base --is-ancestor "*) n=$(cat '${cnt}' 2>/dev/null || echo 0); n=$((n+1)); echo $n > '${cnt}'; [ $n -ge 2 ] && exit 128;; esac`);
+    expect(fx.run().status).toBe(0);
+    const l = lineage();
+    expect(l).toMatchObject({ state: 'unmeasured', why: 'rc-128', tip, stop: 'unmeasured' });
+    expect(l.chain).toHaveLength(1);
+    expect(l.chain[0].merge).toBe(tip);
+  });
+
+  it('a row of another project, a branch outside ws/, an id isRegistryId refuses, or a missing ref, writes no lineage', { timeout: 90_000 }, () => {
+    alpha();
+    // Another project's row: its own project file, a branch that exists here.
+    fs.writeFileSync(path.join(fx.reg, 'lane-a-other-x.project'), 'proj-b\n');
+    fs.writeFileSync(path.join(fx.reg, 'lane-a-other-x.branch'), 'ws/alpha\n');
+    fx.addRow('lane-a-proj-a-feat', 'feature/f');
+    fx.addRow('lane-a-proj-a-ghost', 'ws/ghost', { local: false });
+    // Ids isRegistryId refuses: a leading dot, a leading dash, a space.
+    for (const bad of ['.hidden-row', '-dash-row', 'has space']) {
+      fs.writeFileSync(path.join(fx.reg, `${bad}.project`), 'proj-a\n');
+      fs.writeFileSync(path.join(fx.reg, `${bad}.branch`), 'ws/alpha\n');
+    }
+    expect(fx.run().status).toBe(0);
+    expect(lineageFiles()).toEqual([`${ALPHA}.lineage`]);
+  });
+
+  it('a 247-character id, the longest a registry row can carry, gets a lineage', { timeout: 90_000 }, () => {
+    const id = 'lane-a-proj-a-' + 'x'.repeat(247 - 'lane-a-proj-a-'.length);
+    expect(id).toHaveLength(247);
+    fx.addRow(id, 'ws/long');
+    fx.conf(fx.project, '');
+    const tip = fx.gitIn(fx.repo, 'rev-parse', 'refs/heads/ws/long');
+    expect(fx.run().status).toBe(0);
+    expect(lineageFiles()).toEqual([`${id}.lineage`]);
+    expect(lineage(id)).toMatchObject({ id, state: 'measured', tip, stop: 'not-a-merge' });
+    expect(ls(fx.landDir).filter((n) => n.startsWith('.lp.'))).toEqual([]);
+  });
+
+  it('a lineage file whose row is gone is removed; a symlink named x.lineage and a file not named *.lineage are not touched', { timeout: 90_000 }, () => {
+    alpha();
+    expect(fx.run().status).toBe(0);
+    expect(lineageFiles()).toEqual([`${ALPHA}.lineage`]);
+    const outside = path.join(h.home, 'outside.txt');
+    fs.writeFileSync(outside, 'keep\n');
+    fs.writeFileSync(path.join(fx.landDir, 'gone.lineage'), '{}\n');
+    fs.symlinkSync(outside, path.join(fx.landDir, 'x.lineage'));
+    fs.writeFileSync(path.join(fx.landDir, 'notes.txt'), 'n\n');
+    fs.writeFileSync(path.join(fx.landDir, 'gone.lineage.bak'), 'b\n');
+    fs.mkdirSync(path.join(fx.landDir, 'dir.lineage'));
+    // And the row itself goes: its registry files are removed.
+    fs.rmSync(path.join(fx.reg, `${ALPHA}.project`));
+    fs.rmSync(path.join(fx.reg, `${ALPHA}.branch`));
+    expect(fx.run().status).toBe(0);
+    expect(lineageFiles()).toEqual(['dir.lineage', 'x.lineage']);
+    expect(fs.lstatSync(path.join(fx.landDir, 'x.lineage')).isSymbolicLink()).toBe(true);
+    expect(fs.readFileSync(outside, 'utf8')).toBe('keep\n');
+    expect(fs.lstatSync(path.join(fx.landDir, 'dir.lineage')).isDirectory()).toBe(true);
+    expect(fs.existsSync(path.join(fx.landDir, 'notes.txt'))).toBe(true);
+    expect(fs.existsSync(path.join(fx.landDir, 'gone.lineage.bak'))).toBe(true);
+  });
+
+  it('one bad registry row costs only its own lineage, never the others, enabled or the final probe', { timeout: 90_000 }, () => {
+    alpha();
+    const tip = fx.mergeBase('ws/alpha');
+    // A branch the git door refuses to name: it cannot qualify, and it must not stop the project.
+    fx.addRow('lane-a-proj-a-bad', 'ws/core.hooksPath');
+    fx.conf(fx.project, 'lineage=on\n');
+    const r = fx.run();
+    expect(r.status).toBe(0);
+    expect(r.stderr).toContain('lineage-skip');
+    expect(r.stderr).not.toContain('project-error');
+    expect(lineage()).toMatchObject({ state: 'measured', tip, stop: 'not-a-merge' });
+    expect(lineage().chain).toHaveLength(1);
+    expect(lineageFiles()).toEqual([`${ALPHA}.lineage`]);
+    expect(fx.exists('enabled')).toBe(true);
+    const p = fx.readJson('probe');
+    expect(p.store.after.count).toEqual(expect.any(Number));
+    expect(p.scratch.sizeKiB).toBeGreaterThan(0);
+  });
+
+  it('a row whose read times out keeps its previous file, and the other rows are measured', { timeout: 90_000 }, () => {
+    alpha();
+    fx.addRow('lane-a-proj-a-slow', 'ws/slow');
+    fs.mkdirSync(fx.landDir, { recursive: true });
+    const seeded = path.join(fx.landDir, 'lane-a-proj-a-slow.lineage');
+    fs.writeFileSync(seeded, '{"v":1,"seeded":true}\n');
+    fx.wrapGit('case " $* " in *"refs/heads/ws/slow"*) sleep 30;; esac');
+    const r = fx.run({ CCD_LAND_PROBE_GIT_TIMEOUT: '3' });
+    expect(r.status).toBe(0);
+    expect(fs.readFileSync(seeded, 'utf8')).toBe('{"v":1,"seeded":true}\n');
+    expect(lineage()).toMatchObject({ state: 'measured', stop: 'not-a-merge' });
+    expect(fx.readJson('probe').state).toBe('measured');
+  });
+});
+
+describe('ccd-land-probe: main-health, the required set and its judge', () => {
+  it('the required set is the union of the rules and the branch view, with each name\'s App', () => {
+    const rules = [
+      REQ_RULE([{ context: 'ci/test', integration_id: 15368 }, { context: 'ci/build' }]),
+      { type: 'pull_request', parameters: {} },
+    ];
+    const branch = {
+      protection: {
+        required_status_checks: {
+          contexts: ['ci/lint', 'ci/build', 'ci/test'],
+          checks: [{ context: 'ci/lint', app_id: -1 }, { context: 'ci/e2e', app_id: 77 }],
+        },
+      },
+    };
+    const [union, rulesOnly, garbage] = pyCall([['required_set', [rules, branch]], ['required_set', [rules, {}]], ['required_set', [{}, 'x']]]);
+    // ci/test: the rule's pin wins over the branch view's pin-less twin; ci/lint: -1 is no App.
+    expect(union).toEqual(required(['ci/build', null], ['ci/e2e', 77], ['ci/lint', null], ['ci/test', 15368]));
+    expect(rulesOnly).toEqual(required(['ci/build', null], ['ci/test', 15368]));
+    expect(garbage).toEqual([]);
+  });
+
+  it('every required name passing on a completed run is green', () => {
+    const v = judge(required(['ci/a', null], ['ci/b', 15368], ['ci/c', null]), [
+      run(1, 'ci/a', 'completed', 'success'), run(2, 'ci/b', 'completed', 'neutral', 15368), run(3, 'ci/c', 'completed', 'skipped'),
+      run(4, 'ci/unrelated', 'completed', 'failure'),
+    ]);
+    expect(v).toMatchObject({ state: 'green', failing: [], pending: [] });
+    expect(v.why).toBeUndefined();
+    expect(v.required).toHaveLength(3);
+  });
+
+  it('a failing completed run is red, and names it', () => {
+    for (const conclusion of ['failure', 'timed_out', 'cancelled', 'action_required', 'startup_failure', 'stale']) {
+      const v = judge(required(['ci/a', null], ['ci/b', null]), [run(1, 'ci/a', 'completed', 'success'), run(2, 'ci/b', 'completed', conclusion)]);
+      expect(v, conclusion).toMatchObject({ state: 'red', failing: ['ci/b'], pending: [] });
+    }
+    // A failure is a verdict even beside a name that is still pending.
+    expect(judge(required(['ci/a', null], ['ci/b', null]), [run(1, 'ci/a', 'completed', 'failure')])).toMatchObject({ state: 'red', failing: ['ci/a'], pending: ['ci/b'] });
+  });
+
+  it('a queued, in-progress or completed-without-conclusion required run is unmeasured pending, never green', () => {
+    for (const [st, concl] of [['queued', null], ['in_progress', null], ['completed', null], ['waiting', null], ['completed', 'something-new']] as const) {
+      const v = judge(required(['ci/a', null]), [run(1, 'ci/a', st, concl)]);
+      expect(v, `${st}/${concl}`).toMatchObject({ state: 'unmeasured', why: 'pending', failing: [], pending: ['ci/a'] });
+    }
+  });
+
+  it('a run that reports success before it completes is pending', () => {
+    const v = judge(required(['ci/early', null], ['ci/queued', null]), [run(1, 'ci/early', 'in_progress', 'success'), run(2, 'ci/queued', 'queued', 'success')]);
+    expect(v.state).toBe('unmeasured');
+    expect(v).toMatchObject({ why: 'pending', pending: ['ci/early', 'ci/queued'], failing: [] });
+  });
+
+  it('an App-pinned name passes only on that App\'s run', () => {
+    const req = required(['ci/test', 15368]);
+    // The same name from another App, newer and green, leaves the pinned name pending.
+    expect(judge(req, [run(9, 'ci/test', 'completed', 'success', 999)])).toMatchObject({ state: 'unmeasured', why: 'pending', pending: ['ci/test'] });
+    expect(judge(req, [run(9, 'ci/test', 'completed', 'success')])).toMatchObject({ state: 'unmeasured', why: 'pending' });
+    // And a failure from another App is not this name's failure.
+    expect(judge(req, [run(9, 'ci/test', 'completed', 'failure', 999)])).toMatchObject({ state: 'unmeasured', why: 'pending', failing: [] });
+    // The pinned App's run counts, however many newer runs another App has.
+    expect(judge(req, [run(3, 'ci/test', 'completed', 'success', 15368), run(9, 'ci/test', 'completed', 'failure', 999)])).toMatchObject({ state: 'green' });
+  });
+
+  it('an App-pinned name seen only as a status is unmeasured app-unverifiable', () => {
+    const v = judge(required(['ci/test', 15368]), [], [status(1, 'ci/test', 'success')]);
+    expect(v).toMatchObject({ state: 'unmeasured', why: 'app-unverifiable', pending: ['ci/test'], failing: [] });
+  });
+
+  it('an unpinned name seen only as a status counts; a failing status is red', () => {
+    const req = required(['ci/legacy', null]);
+    expect(judge(req, [], [status(1, 'ci/legacy', 'success')])).toMatchObject({ state: 'green' });
+    expect(judge(req, [], [status(1, 'ci/legacy', 'failure')])).toMatchObject({ state: 'red', failing: ['ci/legacy'] });
+    expect(judge(req, [], [status(1, 'ci/legacy', 'error')])).toMatchObject({ state: 'red', failing: ['ci/legacy'] });
+    expect(judge(req, [], [status(1, 'ci/legacy', 'pending')])).toMatchObject({ state: 'unmeasured', why: 'pending' });
+    // A name with neither a run nor a status is pending.
+    expect(judge(req, [run(1, 'ci/other', 'completed', 'success')], [status(2, 'ci/other2', 'success')])).toMatchObject({ state: 'unmeasured', why: 'pending', pending: ['ci/legacy'] });
+  });
+
+  it('a name pinned to two Apps is unmeasured app-conflict', () => {
+    const v = judge(required(['ci/test', 1], ['ci/test', 2]), [run(1, 'ci/test', 'completed', 'success', 1), run(2, 'ci/test', 'completed', 'success', 2)]);
+    expect(v).toMatchObject({ state: 'unmeasured', why: 'app-conflict', pending: ['ci/test'] });
+    expect(v.required).toEqual(required(['ci/test', 1], ['ci/test', 2]));
+  });
+
+  it('an empty required set is unmeasured no-required-set', () => {
+    const v = judge([], [run(1, 'ci/a', 'completed', 'success')], [status(1, 'ci/a', 'success')]);
+    expect(v).toEqual({ state: 'unmeasured', why: 'no-required-set', required: [], failing: [], pending: [] });
+  });
+
+  it('the newest run of a name wins', () => {
+    const req = required(['ci/a', null]);
+    const older = run(1, 'ci/a', 'completed', 'success');
+    const newer = run(2, 'ci/a', 'completed', 'failure');
+    expect(judge(req, [older, newer])).toMatchObject({ state: 'red' });
+    expect(judge(req, [newer, older])).toMatchObject({ state: 'red' });
+    const re = run(3, 'ci/a', 'completed', 'success');
+    expect(judge(req, [newer, re])).toMatchObject({ state: 'green' });
+    expect(judge(req, [re, newer])).toMatchObject({ state: 'green' });
+    // A re-run still in progress is the newest, and the name is pending until it ends.
+    expect(judge(req, [re, run(4, 'ci/a', 'in_progress', null)])).toMatchObject({ state: 'unmeasured', why: 'pending' });
+  });
+});
+
+describe('ccd-land-probe: main-health, from the forge', () => {
+  const RULES = [REQ_RULE([{ context: 'ci/test', integration_id: 15368 }, { context: 'ci/build' }])];
+  const BRANCH = { protection: { required_status_checks: { contexts: ['ci/lint'], checks: [] } } };
+
+  it('reads the rules, the branch view, the check runs (paginated) and the status of the fetched base, and judges them', { timeout: 60_000 }, () => {
+    const runs = [
+      run(1, 'ci/test', 'completed', 'success', 15368), run(2, 'ci/build', 'completed', 'success', 5), run(3, 'ci/noise', 'completed', 'failure'),
+      run(4, 'ci/other', 'completed', 'success'), run(5, 'ci/more', 'completed', 'success'),
+    ];
+    fx.stubChecks({ rules: RULES, branch: BRANCH, runs, statuses: [status(1, 'ci/lint', 'success')] });
+    fx.addHead(1, { 'a.txt': 'a\n' });
+    fx.conf(fx.project, '');
+    expect(fx.run().status).toBe(0);
+    const sha = fx.originMain();
+    expect(fx.readJson('main-health')).toMatchObject({
+      v: 1, project: 'proj-a', sha, state: 'green', failing: [], pending: [],
+      required: [{ name: 'ci/build', app: null }, { name: 'ci/lint', app: null }, { name: 'ci/test', app: 15368 }],
+    });
+    expect(fx.readJson('main-health').why).toBeUndefined();
+    const api = fx.ghCalls().filter((c) => c.startsWith('api '));
+    expect(api).toEqual([
+      'api --method GET repos/o/r/rules/branches/main',
+      'api --method GET repos/o/r/branches/main',
+      `api --method GET repos/o/r/commits/${sha}/check-runs?per_page=100 --paginate`,
+      `api --method GET repos/o/r/commits/${sha}/status`,
+    ]);
+  });
+
+  it('a failing required run on the base is red and named in the file', { timeout: 60_000 }, () => {
+    fx.stubChecks({ rules: RULES, runs: [run(1, 'ci/test', 'completed', 'failure', 15368), run(2, 'ci/build', 'queued', null)] });
+    fx.conf(fx.project, '');
+    expect(fx.run().status).toBe(0);
+    expect(fx.readJson('main-health')).toMatchObject({ state: 'red', failing: ['ci/test'], pending: ['ci/build'], sha: fx.originMain() });
+  });
+
+  it('a gh failure is unmeasured gh-failed, whichever read it was', { timeout: 120_000 }, () => {
+    fx.conf(fx.project, '');
+    for (const bad of [{ rules: 'fail' }, { branch: 'fail' }, { runs: 'fail' }, { statuses: 'fail' }] as const) {
+      fx.stubChecks({ rules: RULES, branch: BRANCH, runs: [], statuses: [], ...bad });
+      expect(fx.run().status).toBe(0);
+      expect(fx.readJson('main-health'), JSON.stringify(bad)).toMatchObject({ state: 'unmeasured', why: 'gh-failed', sha: fx.originMain(), required: [], failing: [], pending: [] });
+    }
+  });
+
+  it('a base with a slash is %2F-encoded in both REST paths', { timeout: 60_000 }, () => {
+    fx.gitIn(fx.origin, 'branch', 'release/1.0', 'main');
+    fx.stubChecks({ rules: [REQ_RULE([{ context: 'ci/build' }])], runs: [run(1, 'ci/build', 'completed', 'success')] });
+    fx.conf(fx.project, 'base=release/1.0\n');
+    expect(fx.run().status).toBe(0);
+    expect(fx.readJson('probe').base.ref).toBe('release/1.0');
+    expect(fx.readJson('main-health')).toMatchObject({ state: 'green' });
+    const api = fx.ghCalls().filter((c) => c.startsWith('api '));
+    expect(api.slice(0, 2)).toEqual(['api --method GET repos/o/r/rules/branches/release%2F1.0', 'api --method GET repos/o/r/branches/release%2F1.0']);
+    for (const c of api) expect(c, c).not.toContain('release/1.0');
+  });
+});
+
+describe('ccd-land-probe: a failed or partial measurement is never clean', () => {
+  it('a merge-tree that exits 128 is unmeasured rc-128, and one that prints no tree is unmeasured no-tree', { timeout: 90_000 }, () => {
+    fx.addHead(1, { 'a.txt': 'a\n' });
+    fx.conf(fx.project, '');
+    fx.wrapGit('case " $* " in *" merge-tree "*) exit 128;; esac');
+    expect(fx.run().status).toBe(0);
+    expect(fx.readJson('probe').heads[0].base).toEqual({ state: 'unmeasured', why: 'rc-128' });
+    fx.wrapGit('case " $* " in *" merge-tree "*) echo "not a tree"; exit 0;; esac');
+    expect(fx.run().status).toBe(0);
+    expect(fx.readJson('probe').heads[0].base).toEqual({ state: 'unmeasured', why: 'no-tree' });
+  });
+
+  it('a fetch past its deadline is fetch-timeout for the probe and fetch-failed for the lineage', { timeout: 60_000 }, () => {
+    fx.addHead(1, { 'a.txt': 'a\n' });
+    fx.addRow('lane-a-proj-a-alpha', 'ws/alpha');
+    fx.conf(fx.project, '');
+    fx.wrapGit('case " $* " in *" fetch "*) sleep 30;; esac');
+    expect(fx.run({ CCD_LAND_PROBE_FETCH_TIMEOUT: '1' }).status).toBe(0);
+    expect(fx.readJson('probe')).toMatchObject({ state: 'unmeasured', why: 'fetch-timeout', heads: [], pairs: [] });
+    expect(fx.readJson('main-health')).toMatchObject({ state: 'unmeasured', why: 'fetch-failed' });
+    expect(fx.readJson('lane-a-proj-a-alpha.lineage')).toMatchObject({ state: 'unmeasured', why: 'fetch-failed', chain: [] });
+  });
+
+  it('every git child runs with no lazy fetch, no replace objects and a ceiling at its repository\'s parent', { timeout: 60_000 }, () => {
+    fx.addHead(1, { 'a.txt': 'a\n' });
+    fx.addRow('lane-a-proj-a-alpha', 'ws/alpha');
+    fx.conf(fx.project, '');
+    const log = path.join(h.home, 'git-env.log');
+    fx.wrapGit([
+      'case " $* " in *" --no-optional-locks "*) k=project;; *) k=scratch;; esac',
+      `printf '%s|%s|%s|%s\\n' "$k" "\${GIT_NO_LAZY_FETCH-unset}" "\${GIT_NO_REPLACE_OBJECTS-unset}" "\${GIT_CEILING_DIRECTORIES-unset}" >> '${log}'`,
+    ].join('\n'));
+    expect(fx.run().status).toBe(0);
+    const rows = fs.readFileSync(log, 'utf8').split('\n').filter(Boolean).map((l) => l.split('|'));
+    expect(rows.length).toBeGreaterThan(5);
+    const ceiling = { project: fs.realpathSync(path.join(h.home, 'projects')), scratch: fs.realpathSync(fx.tmp) };
+    for (const [k, lazy, replace, ceil] of rows) {
+      expect([lazy, replace]).toEqual(['1', '1']);
+      expect(ceil, `${k} ceiling`).toBe(ceiling[k as 'project' | 'scratch']);
+    }
+    expect(new Set(rows.map((r) => r[0]))).toEqual(new Set(['project', 'scratch']));
   });
 });

@@ -18,6 +18,9 @@ export const PROBE = path.resolve(__dirname, '../../ccd/ccd-land-probe');
 export interface PrRow { number: number; headRefName: string; headRefOid: string; isCrossRepository: boolean }
 export interface RunResult { status: number | null; stdout: string; stderr: string }
 export interface StubAnswers { prList?: PrRow[] | 'fail'; sleepS?: number }
+/** What the stub forge answers to the four REST reads, per repository; 'fail' makes that read exit 1. */
+export interface StubChecks { rules?: unknown[] | 'fail'; branch?: Record<string, unknown> | 'fail'; runs?: unknown[] | 'fail'; statuses?: unknown[] | 'fail' }
+export interface CheckRun { id: number; name: string; status: string; conclusion: string | null; app?: { id: number } }
 export interface LandOpts { project?: string; slug?: string; originUrl?: string }
 
 /** A pid that is gone, or a zombie awaiting its reaper (kill 0 answers for a zombie). */
@@ -64,6 +67,38 @@ if args[:2] == ['pr', 'list']:
         sys.exit(1)
     print(json.dumps(rows))
     sys.exit(0)
+if args[:3] == ['api', '--method', 'GET']:
+    path = args[3]
+    parts = path.split('?')[0].split('/')
+    repo = '/'.join(parts[1:3]) if parts[0] == 'repos' else ''
+    rest = parts[3:]
+    ck = a.get('checks', {}).get(repo)
+    if ck is None:
+        sys.stderr.write('stub: no checks for ' + repo + '\\n')
+        sys.exit(1)
+    if rest[:2] == ['rules', 'branches']:
+        kind, body = 'rules', ck.get('rules', [])
+    elif rest[:1] == ['branches'] and len(rest) == 2:
+        kind, body = 'branch', ck.get('branch', {})
+    elif rest[:1] == ['commits'] and rest[2:] == ['check-runs']:
+        kind, body = 'runs', ck.get('runs', [])
+    elif rest[:1] == ['commits'] and rest[2:] == ['status']:
+        kind, body = 'statuses', ck.get('statuses', [])
+    else:
+        sys.stderr.write('stub: no answer\\n')
+        sys.exit(2)
+    if body == 'fail':
+        sys.stderr.write('stub: ' + kind + ' failed\\n')
+        sys.exit(1)
+    if kind == 'runs':
+        # gh api --paginate prints one object per page, run together: pages of two here
+        pages = [body[i:i + 2] for i in range(0, len(body), 2)] or [[]]
+        sys.stdout.write(''.join(json.dumps({'total_count': len(body), 'check_runs': pg}) for pg in pages))
+    elif kind == 'statuses':
+        print(json.dumps({'state': 'pending', 'statuses': body}))
+    else:
+        print(json.dumps(body))
+    sys.exit(0)
 sys.stderr.write('stub: no answer\\n')
 sys.exit(2)
 `;
@@ -84,6 +119,8 @@ export function makeLandFixture(h: CcdHarness, opts: LandOpts = {}) {
   const heads: Array<{ n: number; branch: string; sha: string }> = [];
   let explicit: StubAnswers | undefined;
   let explicitSleep = 0;
+  let checksNow: StubChecks | undefined;
+  let mainSeq = 0;
 
   const gitEnv = (): NodeJS.ProcessEnv => ({
     ...inheritedEnv(), HOME: home, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1',
@@ -91,7 +128,7 @@ export function makeLandFixture(h: CcdHarness, opts: LandOpts = {}) {
     GIT_TERMINAL_PROMPT: '0',
   });
   const git = (cwd: string, ...args: string[]): string =>
-    execFileSync('git', ['-C', cwd, ...args], { encoding: 'utf8', env: gitEnv() }).trim();
+    execFileSync('git', ['-C', cwd, ...args], { encoding: 'utf8', env: gitEnv(), stdio: ['ignore', 'pipe', 'pipe'] }).trim();
   const gitconfig = path.join(home, '.gitconfig');
   const insteadOf = (from: string): void => {
     fs.appendFileSync(gitconfig, `[url "file://${origin}"]\n\tinsteadOf = ${from}\n`);
@@ -115,7 +152,8 @@ export function makeLandFixture(h: CcdHarness, opts: LandOpts = {}) {
   fs.chmodSync(stubPath, 0o755);
 
   const answersFile = path.join(stubDir, 'gh-answers.json');
-  const readAnswers = (): { repos: Record<string, PrRow[] | null>; sleepS?: number } =>
+  type Answers = { repos: Record<string, PrRow[] | null>; checks?: Record<string, StubChecks>; sleepS?: number };
+  const readAnswers = (): Answers =>
     fs.existsSync(answersFile) ? JSON.parse(fs.readFileSync(answersFile, 'utf8')) : { repos: {} };
   /** Write this fixture's rows into the shared stub: the explicit answer, else every head added so far. */
   const writeStub = (): void => {
@@ -124,6 +162,7 @@ export function makeLandFixture(h: CcdHarness, opts: LandOpts = {}) {
     a.repos[slug] = want === 'fail' ? null
       : want ?? heads.map((x) => ({ number: x.n, headRefName: x.branch, headRefOid: x.sha, isCrossRepository: false }));
     a.sleepS = explicitSleep;
+    if (checksNow) a.checks = { ...(a.checks ?? {}), [slug]: checksNow };
     fs.writeFileSync(answersFile, JSON.stringify(a));
   };
   writeStub();
@@ -136,6 +175,27 @@ export function makeLandFixture(h: CcdHarness, opts: LandOpts = {}) {
   };
 
   const pathEnv = (): string => (fs.existsSync(path.join(wrapDir, 'git')) ? `${wrapDir}:` : '') + (process.env['PATH'] ?? '');
+
+  /** Bring a project-checkout branch into the work clone, on a branch of the same name. */
+  const intoWork = (branch: string): void => {
+    git(work, 'fetch', '-q', repo, `+refs/heads/${branch}:refs/fx/${branch}`);
+    git(work, 'checkout', '-q', '-B', branch, `refs/fx/${branch}`);
+  };
+  /** And back: the work clone's branch becomes the project checkout's (main stays what it was). */
+  const fromWork = (branch: string): string => {
+    git(repo, 'fetch', '-q', work, `+refs/heads/${branch}:refs/heads/${branch}`);
+    return git(repo, 'rev-parse', `refs/heads/${branch}`);
+  };
+  /** A new commit on origin's main, by a file no other helper touches; the project checkout stays behind. */
+  const moveMain = (files?: Record<string, string>): void => {
+    mainSeq += 1;
+    git(work, 'fetch', '-q', 'origin');
+    git(work, 'checkout', '-q', '-B', 'main', 'origin/main');
+    writeFiles(work, files ?? { [`main-move-${mainSeq}.txt`]: `${mainSeq}\n` });
+    git(work, 'add', '-A');
+    git(work, 'commit', '-q', '-m', `main moves ${mainSeq}`);
+    git(work, 'push', '-q', 'origin', 'main');
+  };
 
   const fx = {
     project, slug, origin, repo, reg, tmp, home, stubPath,
@@ -170,6 +230,63 @@ export function makeLandFixture(h: CcdHarness, opts: LandOpts = {}) {
       return git(work, 'rev-parse', 'HEAD');
     },
     originMain: (): string => git(origin, 'rev-parse', 'main'),
+    /** A commit on a project-checkout branch (the lineage tests' own work). */
+    commitOn(branch: string, files: Record<string, string>): string {
+      intoWork(branch);
+      writeFiles(work, files);
+      git(work, 'add', '-A');
+      git(work, 'commit', '-q', '-m', `work on ${branch}`);
+      return fromWork(branch);
+    },
+    /** Origin's main moves by one commit, then main is merged into the branch: always a real two-parent merge. */
+    mergeBase(branch: string): string {
+      moveMain();
+      intoWork(branch);
+      git(work, 'merge', '-q', '--no-ff', '-m', `merge main into ${branch}`, 'origin/main');
+      return fromWork(branch);
+    },
+    /** The same merge, then a hand edit folded into the merge commit: its tree is not the clean merge's. */
+    handMerge(branch: string, edit: Record<string, string>): string {
+      moveMain();
+      intoWork(branch);
+      git(work, 'merge', '-q', '--no-ff', '--no-commit', 'origin/main');
+      writeFiles(work, edit);
+      git(work, 'add', '-A');
+      git(work, 'commit', '-q', '-m', `hand-edited merge into ${branch}`);
+      return fromWork(branch);
+    },
+    /** Main and the branch both change README.md; the merge conflicts and is resolved by hand. */
+    conflictMerge(branch: string): string {
+      moveMain({ 'README.md': 'main side\n' });
+      intoWork(branch);
+      writeFiles(work, { 'README.md': 'branch side\n' });
+      git(work, 'add', '-A');
+      git(work, 'commit', '-q', '-m', `${branch} edits README`);
+      try { git(work, 'merge', '-q', '--no-ff', '--no-commit', 'origin/main'); } catch { /* the conflict is the point */ }
+      writeFiles(work, { 'README.md': 'resolved\n' });
+      git(work, 'add', '-A');
+      git(work, 'commit', '-q', '-m', `resolved merge into ${branch}`);
+      return fromWork(branch);
+    },
+    /** A clean merge of another workspace branch (not main) into the branch. */
+    mergeOther(branch: string, other: string): string {
+      intoWork(other);
+      intoWork(branch);
+      git(work, 'merge', '-q', '--no-ff', '-m', `merge ${other} into ${branch}`, other);
+      return fromWork(branch);
+    },
+    /** Origin's main moves, and the branch is rebased onto it: a single-parent tip. */
+    rebaseOnto(branch: string): string {
+      moveMain();
+      intoWork(branch);
+      git(work, 'rebase', '-q', 'origin/main');
+      return fromWork(branch);
+    },
+    /** The four REST reads the stub forge answers for this repository (a read omitted answers empty). */
+    stubChecks(c: StubChecks): void {
+      checksNow = c;
+      writeStub();
+    },
     /** A registry row of this project; a ws/ branch also gets its local branch in the project checkout. */
     addRow(id: string, branch: string, o: { local?: boolean } = {}): void {
       fs.mkdirSync(reg, { recursive: true });
