@@ -40,10 +40,16 @@ describe('uniform shape', () => {
     expect(screen.getByText('still-cove')).toBeInTheDocument();
   });
 
-  it('shows the live session count', () => {
+  it('shows the live session count, as a number with its noun (T3a, D-6331)', () => {
     const g = grp({ sessions: [sess(), sess({ id: 'b', workspace: 'still-cove' })] });
     render(<ProjectCard group={g} onOpen={() => {}} onActions={() => {}} />);
-    expect(screen.getByText('2')).toBeInTheDocument();
+    expect(screen.getByText('2 sessions')).toBeInTheDocument();
+    expect(screen.queryByText('2')).not.toBeInTheDocument();
+  });
+
+  it('shows no count for a project holding one session', () => {
+    const { container } = render(<ProjectCard group={grp()} onOpen={() => {}} onActions={() => {}} />);
+    expect(container.querySelector('.proj-card-count')).toBeNull();
   });
 
   it('renders NO pin chip on an empty card — nothing is pinned and nothing disagrees', () => {
@@ -123,9 +129,15 @@ describe('pinned account', () => {
     expect(screen.getByText('team·b')).toBeInTheDocument();
   });
 
-  it('says "mixed" when the sessions disagree rather than picking one', () => {
+  it('says "several accounts" when the sessions disagree rather than picking one (T3a, D-6331)', () => {
     render(<ProjectCard group={grp({ pin: { state: 'mixed' } })} onOpen={() => {}} onActions={() => {}} />);
-    expect(screen.getByText('mixed')).toBeInTheDocument();
+    const chip = screen.getByText('several accounts');
+    expect(chip).toBeInTheDocument();
+    // The chip measures each session's PINNED account (ccd `home`), not where it runs, so its title says "pinned".
+    expect(chip).toHaveAttribute('title', 'The sessions here are pinned to different accounts');
+    expect(chip).toHaveAttribute('aria-label', 'pinned accounts differ');
+    expect(chip).toHaveAttribute('data-mixed');
+    expect(screen.queryByText('mixed')).not.toBeInTheDocument();
   });
 
   it('names the pin for assistive tech — a bare label reads as decoration', () => {
@@ -611,6 +623,7 @@ describe('the pool chip', () => {
     render(<ProjectCard group={grp()} onOpen={() => {}} onActions={() => {}} roster={TEST_ROSTER} />);
     expect(screen.queryByText(/pool/i)).not.toBeInTheDocument();
     expect(screen.queryByText('no pool')).not.toBeInTheDocument();
+    expect(screen.queryByText('Set pool')).not.toBeInTheDocument();
   });
 
   it('names the pool a tagged project is in', () => {
@@ -621,10 +634,39 @@ describe('the pool chip', () => {
   });
 
   it('flags a MEASURED untagged project — ruling 3\'s worklist', () => {
+    // No handler: nowhere to go, so the chip is a span and keeps the state's own words — a word that names an action
+    // must not appear where there is no door to take it (T3a, D-6331).
     render(<ProjectCard group={grp()} onOpen={() => {}} onActions={() => {}} roster={TEST_ROSTER}
                         placement={measured({ state: 'untagged' })} pools={listed({})} />);
     const chip = screen.getByText('no pool');
     expect(chip).toHaveAttribute('data-pool', 'untagged');
+    expect(chip.tagName).toBe('SPAN');
+    expect(screen.queryByText('Set pool')).not.toBeInTheDocument();
+  });
+
+  it("an untagged project's chip reads 'Set pool' and is still the button that opens the pool sheet", () => {
+    const onPool = vi.fn();
+    render(<ProjectCard group={grp()} onOpen={() => {}} onActions={() => {}} roster={TEST_ROSTER}
+                        placement={measured({ state: 'untagged' })} pools={listed({})} onPool={onPool} />);
+    const chip = screen.getByText('Set pool');
+    expect(chip.tagName).toBe('BUTTON');
+    // Ruling 3's attention ink keys on this attribute (`fleet.css`), so the new word keeps it.
+    expect(chip).toHaveAttribute('data-pool', 'untagged');
+    // The accessible name is the state's sentence, unchanged by the visible word.
+    expect(chip).toHaveAccessibleName('no project pool — any account may serve this project');
+    expect(chip).toHaveAttribute('title', 'no project pool — any account may serve this project');
+    expect(screen.queryByText('no pool')).not.toBeInTheDocument();
+    fireEvent.click(chip);
+    expect(onPool).toHaveBeenCalledTimes(1);
+    expect(onPool).toHaveBeenCalledWith('demo');
+  });
+
+  it('a dim untagged chip (the fleet ccd predates pools) keeps its state word, not the action word', () => {
+    render(<ProjectCard group={grp()} onOpen={() => {}} onActions={() => {}} roster={TEST_ROSTER}
+                        placement={measured({ state: 'untagged' })}
+                        pools={listed({}, 'unavailable')} onPool={() => {}} />);
+    expect(screen.queryByText('Set pool')).not.toBeInTheDocument();
+    expect(screen.getByText('no pool').tagName).toBe('SPAN');
   });
 
   it('tells malformed from unreadable, in two aria-labels that each carry the full path', () => {
@@ -665,7 +707,7 @@ describe('the pool chip', () => {
     const chip = screen.getByText(/app older than fleet; reload/i);
     expect(chip).toHaveAttribute('data-pool', 'unrecognised');
     expect(chip).toHaveAccessibleName(/app bundle is older than the fleet; reload/i);
-    for (const absent of ['pool-z', 'pool unreadable', 'pool malformed', 'no pool']) {
+    for (const absent of ['pool-z', 'pool unreadable', 'pool malformed', 'no pool', 'Set pool']) {
       expect(screen.queryByText(absent)).not.toBeInTheDocument();
     }
   });
