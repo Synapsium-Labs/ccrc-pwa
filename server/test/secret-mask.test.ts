@@ -1253,9 +1253,12 @@ describe('the round-2 review: the drawer, the cost and every write answer (D-599
   it('a 2 MB TUI pane history is masked in slices of at most 64 Ki units with a pause between every two, with the same answer as one string, a key a slice cut splits included', async () => {
     const { m, text } = slicingFixture();
     const events: ('pause' | number)[] = [];
+    const overlaps: number[] = [];
     const inner = (m as unknown as { maskWithCarry: (t: string, o?: unknown) => unknown }).maskWithCarry.bind(m);
     (m as unknown as { maskWithCarry: (t: string, o?: unknown) => unknown }).maskWithCarry = (t: string, o?: unknown): unknown => {
       events.push(t.length);
+      const { context, lookahead } = (o ?? {}) as { context?: string; lookahead?: string };
+      overlaps.push((context ?? '').length, (lookahead ?? '').length);
       return inner(t, o);
     };
     const pause = async (): Promise<void> => { events.push('pause'); await new Promise((r) => setImmediate(r)); };
@@ -1268,6 +1271,11 @@ describe('the round-2 review: the drawer, the cost and every write answer (D-599
     const slices = events.filter((e): e is number => e !== 'pause');
     expect(slices.length).toBeGreaterThan(30);
     expect(Math.max(...slices)).toBeLessThanOrEqual(64 * 1024);
+    // The overlap a slice carries (its context and its lookahead) is a few KiB: one held run plus slack. This bound pins
+    // that it does not grow with the text, the load-independent part of the per-slice cost the old wall-clock row bounded
+    // (a quadratic regression such as `context: text.slice(0, at)` would otherwise pass).
+    expect(overlaps.length).toBe(slices.length * 2);
+    expect(Math.max(...overlaps)).toBeLessThanOrEqual(16 * 1024);
     // slice, pause, slice, ..., slice: never two slices or two pauses adjacent
     expect(events.map((e) => (e === 'pause' ? 'p' : 's')).join('')).toBe(Array.from({ length: slices.length * 2 - 1 }, (_, i) => (i % 2 === 0 ? 's' : 'p')).join(''));
     expect(leaksNone(sliced, CMP)).toBe(true);
@@ -1284,7 +1292,7 @@ describe('the round-2 review: the drawer, the cost and every write answer (D-599
     await m.maskTextSliced(text, { rows: true }, pause);
     gaps.push(performance.now() - last);
     expect(gaps.length).toBeGreaterThan(30);
-    expect(Math.max(...gaps)).toBeLessThan(BOUND / 5);
+    expect(Math.max(...gaps), `gaps (ms): ${gaps.map((g) => Math.round(g)).join(', ')}`).toBeLessThan(BOUND / 5);
     m.close();
   });
 
