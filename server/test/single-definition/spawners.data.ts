@@ -34,11 +34,11 @@ export const PROCESS_SPAWNERS: EntrySet = {
     since: '2026-10-27',
   },
   'server/src/accounts/ops.ts#localAccountOps.run': {
-    reason: "the local account-op arm (D-5513: the secret on stdin); audited in C8e with the agent's twin",
+    reason: "KEPT against exec.ts by the C8e audit (D-7057): the secret on stdin (D-5513), an explicit env, a bound, TERM to the group then KILL; the agent's twin",
     since: '2026-10-27',
   },
   'agent/src/accountop.ts#makeAccountOpSpawn': {
-    reason: "the agent's account-op arm, the local arm's twin; audited in C8e",
+    reason: "KEPT against exec.ts by the C8e audit (D-7057): the local arm's twin, one difference (a non-ESRCH group kill falls back to the child)",
     since: '2026-10-27',
   },
   'server/src/localcaps.ts#execCapped': {

@@ -62,4 +62,10 @@ describe('every process spawner is audited, with its reason (D-7056; ARCH-73)', 
   it('localcaps.ts#execCapped carries the audit\'s verdict: kept', () => {
     expect(PROCESS_SPAWNERS['server/src/localcaps.ts#execCapped']?.reason).toMatch(/^KEPT by the C8d audit \(D-7056\)/);
   });
+
+  it('the account-op pair carries the C8e audit\'s verdict: kept against exec.ts (D-7057)', () => {
+    for (const k of ['server/src/accounts/ops.ts#localAccountOps.run', 'agent/src/accountop.ts#makeAccountOpSpawn']) {
+      expect(PROCESS_SPAWNERS[k]?.reason, k).toMatch(/^KEPT against exec\.ts by the C8e audit \(D-7057\)/);
+    }
+  });
 });
