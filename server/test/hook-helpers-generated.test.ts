@@ -12,6 +12,10 @@ import {
   HOOK_CONSTANTS, HOOK_REGION_BEGIN, HOOK_REGION_END, applyHookRegion, checkHookRegion, ccdEpochBody,
   extractHookRegion, renderHookRegion,
 } from '../../shared/hook-helpers.mjs';
+import {
+  AUTHDEAD_REGION_BEGIN, AUTHDEAD_REGION_END, AUTHDEAD_WRITERS, REGIONS, applyRegion, ccdFunctionDefinition, checkRegion,
+  regionOf, renderRegion,
+} from '../../shared/hook-helpers.mjs';
 import { verifyMarker } from '../../shared/mark.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -87,6 +91,44 @@ describe('the drift check can fail', () => {
   it('regenerates a stale region back to current', () => {
     const drifted = hook.replace(region(), region().replace('CCRC_ID_MAX=128', 'CCRC_ID_MAX=129'));
     expect(checkHookRegion(applyHookRegion(drifted, ccd), ccd)).toBe('current');
+  });
+});
+
+// D-7049 (ARCH-72, spec K16): the second region, the auth-dead marker's writers, byte copies of ccd's definitions for
+// `ccd/ccd-account-health` (a sibling executable that sources nothing). One engine, one more row in REGIONS.
+describe('the auth-dead writers region (D-7049)', () => {
+  const AD = REGIONS.find((r) => r.name === 'authdead')!;
+  const defOf = (src: string, name: string): string | null => ccdFunctionDefinition(src, name);
+
+  it('is a row of the one engine, beside the hook\'s, and the module names both', () => {
+    expect(REGIONS.map((r) => r.name)).toEqual(['hook', 'authdead']);
+    expect(AD.begin).toBe(AUTHDEAD_REGION_BEGIN);
+    expect(AD.end).toBe(AUTHDEAD_REGION_END);
+    expect(regionOf(hook)).toBe(REGIONS[0]);
+  });
+
+  it('renders exactly ccd\'s three writer definitions, byte for byte, in order, stamped', () => {
+    const r = renderRegion(AD, ccd);
+    const inner = r.slice(AUTHDEAD_REGION_BEGIN.length + 1, r.length - AUTHDEAD_REGION_END.length - 1);
+    expect(inner.split('\n')[0]).toMatch(/^# ccrc:generated 1 sha256=[0-9a-f]{64}$/);
+    expect(verifyMarker(inner)).toBe('ccrc-unmodified');
+    const defs = AUTHDEAD_WRITERS.map((n) => defOf(ccd, n));
+    for (const [i, d] of defs.entries()) expect(d, AUTHDEAD_WRITERS[i]).not.toBeNull();
+    expect(inner.split('\n').slice(1).join('\n')).toBe(`${defs.join('\n')}\n`);
+  });
+
+  it('reads drift from ccd/ccd as stale, a hand edit as edited, and regenerates back to current', () => {
+    const target = `#!/usr/bin/env bash\necho before\n${renderRegion(AD, ccd)}echo after\n`;
+    expect(regionOf(target)).toBe(AD);
+    expect(checkRegion(AD, target, ccd)).toBe('current');
+    const moved = ccd.replace('t=$(mktemp "$REG/$1-authdead.tmp.XXXXXX") || return 1', 't=$(mktemp "$REG/$1-authdead.tmp.XXXXXX") || return 3');
+    expect(moved).not.toBe(ccd);
+    expect(checkRegion(AD, target, moved)).toBe('stale');
+    const edited = target.replace('rm -f -- "$t"; return 2', 'rm -f -- "$t"; return 0');
+    expect(edited).not.toBe(target);
+    expect(checkRegion(AD, edited, ccd)).toBe('edited');
+    expect(checkRegion(AD, applyRegion(AD, edited, ccd), ccd)).toBe('current');
+    expect(applyRegion(AD, edited, ccd)).toBe(target);
   });
 });
 
