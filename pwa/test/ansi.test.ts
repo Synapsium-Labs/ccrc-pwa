@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { ANSI_HUE_TOKEN, ansiClass, ansiRuns, hasSgr, type AnsiHue } from '../src/lib/ansi';
+import * as ansi from '../src/lib/ansi';
 import { GLASS_ANSI } from '../src/session/drawerModel';
 import { declValue, rootBody } from './cssRule';
 
@@ -18,6 +19,41 @@ const hueOf = (codes: string): AnsiHue | null => {
   expect(runs[0]!.text).toBe('x');
   return runs[0]!.hue;
 };
+
+describe('ANSI detection and display helpers', () => {
+  it('detects SGR including empty and colon parameters', () => {
+    expect(hasSgr(`a${ESC}[31mb`)).toBe(true);
+    expect(hasSgr(`${ESC}[m`)).toBe(true);
+    expect(hasSgr(`${ESC}[38:5:1m`)).toBe(true);
+  });
+  it('does not detect SGR in non-SGR CSI', () => {
+    expect(hasSgr(`${ESC}[2K${ESC}[?25l`)).toBe(false);
+  });
+  it('does not detect SGR in plain text', () => {
+    expect(hasSgr('plain [31m')).toBe(false);
+  });
+  it('detects only SGR encountered by the transcript scanner', () => {
+    const text = `${ESC}]title${ESC}[31mred`;
+    expect(hasSgr(text)).toBe(true);
+    expect(ansiRuns(text)).toEqual([{ text: 'red', hue: 'red' }]);
+  });
+  it('detects any escape, not just SGR', () => {
+    const fn = (ansi as Record<string, unknown>).hasEscape;
+    expect(typeof fn).toBe('function');
+    if (typeof fn !== 'function') return;
+    expect(fn(`a${ESC}[2Kb`)).toBe(true);
+    expect(fn('plain')).toBe(false);
+  });
+  it('escapes a reversible single-line header', () => {
+    const fn = (ansi as Record<string, unknown>).escapeHeader;
+    expect(typeof fn).toBe('function');
+    if (typeof fn !== 'function') return;
+    const value = '"\\\n\u007f\u0085\u009f  ';
+    const escaped = fn(value) as string;
+    expect(escaped).toBe('\\"\\\\\\n\\u007f\\u0085\\u009f\\u2028\\u2029');
+    expect(JSON.parse(`"${escaped}"`)).toBe(value);
+  });
+});
 
 describe('ansiRuns', () => {
   it('a run with no escape is one plain run, byte for byte', () => {

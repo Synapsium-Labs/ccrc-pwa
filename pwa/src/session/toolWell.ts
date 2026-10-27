@@ -4,12 +4,15 @@
 // carries terminal escapes (`lib/ansi.ts`), and `plain` is today's text node, unchanged. The renderer draws the plan; this
 // module only decides it.
 //
-// Pure and L1: it imports nothing. Whether a grammar is registered is the caller's to say
+// Pure and L1: its imports are pure helpers. Whether a grammar is registered is the caller's to say
 // (`lib/markdown.tsx#isRegisteredGrammar`, handed in as `isRegistered`), because an L1 module may not load a `.tsx`.
 //
 // The input is the call's compact JSON as the server cut it (4000 characters, so a long input arrives TRUNCATED and
 // does not parse). A text that does not parse is `plain`: it is never repaired and no prefix is retried, because a
 // guessed closing would draw words the tool never took.
+
+import { escapeHeader, hasEscape } from '../lib/ansi';
+import { isRecord } from '../lib/wire';
 
 export type ToolWellPart = 'input' | 'result';
 
@@ -23,7 +26,6 @@ const PLAIN: ToolWellPlan = { kind: 'plain' };
 
 type Fields = Record<string, unknown>;
 
-const isObject = (v: unknown): v is Fields => typeof v === 'object' && v !== null && !Array.isArray(v);
 const isString = (v: unknown): v is string => typeof v === 'string';
 const shown = (v: unknown): string => (isString(v) ? v : JSON.stringify(v));
 
@@ -49,7 +51,7 @@ function bashPlan(o: Fields): ToolWellPlan | null {
 
 /** One hunk: the header, every old line as `-`, every new line as `+`. */
 const hunk = (header: string, oldS: string, newS: string): string =>
-  [`@@ ${JSON.stringify(header).slice(1, -1).replace(/[\u007f-\u009f\u2028\u2029]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`)} @@`, ...oldS.split('\n').map((l) => `-${l}`), ...newS.split('\n').map((l) => `+${l}`)].join('\n');
+  [`@@ ${escapeHeader(header)} @@`, ...oldS.split('\n').map((l) => `-${l}`), ...newS.split('\n').map((l) => `+${l}`)].join('\n');
 
 function editPlan(o: Fields): ToolWellPlan | null {
   if (!isString(o.file_path) || !isString(o.old_string) || !isString(o.new_string)) return null;
@@ -62,7 +64,7 @@ function multiEditPlan(o: Fields): ToolWellPlan | null {
   const hunks: string[] = [];
   for (let i = 0; i < n; i++) {
     const e: unknown = o.edits[i];
-    if (!isObject(e) || !isString(e.old_string) || !isString(e.new_string)) return null;
+    if (!isRecord(e) || !isString(e.old_string) || !isString(e.new_string)) return null;
     const top = i === 0 ? extras(o, ['file_path', 'edits']) : '';
     hunks.push(hunk(`${o.file_path} (edit ${i + 1}/${n})${top}${extras(e, ['old_string', 'new_string'])}`, e.old_string, e.new_string));
   }
@@ -91,7 +93,7 @@ function inputPlan(use: { name: string }, text: string, isRegistered: (lang: str
     return PLAIN;
   }
   let plan: ToolWellPlan | null = null;
-  if (isObject(parsed)) {
+  if (isRecord(parsed)) {
     if (use.name === 'Bash') plan = bashPlan(parsed);
     else if (use.name === 'Edit') plan = editPlan(parsed);
     else if (use.name === 'MultiEdit') plan = multiEditPlan(parsed);
@@ -120,6 +122,7 @@ export function toolWellPlan(
   isRegistered: (lang: string) => boolean,
 ): ToolWellPlan {
   if (part === 'input') return inputPlan(use, text, isRegistered);
-  if (text.includes('\x1b')) return { kind: 'ansi' };
+  // Every escape, not only SGR, needs the static reader's sanitization before diff detection.
+  if (hasEscape(text)) return { kind: 'ansi' };
   return diffHeaded(text) ? { kind: 'diff', text } : PLAIN;
 }

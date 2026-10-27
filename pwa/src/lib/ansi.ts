@@ -32,9 +32,16 @@ export const ANSI_HUE_TOKEN: Readonly<Record<AnsiHue, string>> = {
 
 export const ansiClass = (hue: AnsiHue): string => `ansi-${hue}`;
 
-/** Whether the text holds at least one SGR sequence, `ESC [ <params> m` (the tool-well plan's `ansi` test). */
+/** Any escape needs the static transcript reader, including non-SGR controls. */
+export const hasEscape = (text: string): boolean => text.includes('\x1b');
+
+/** Reversible, single-line display text for a synthetic diff header. */
+export const escapeHeader = (text: string): string =>
+  JSON.stringify(text).slice(1, -1).replace(/[\u007f-\u009f\u2028\u2029]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`);
+
+/** Whether the shared transcript scanner encounters an SGR sequence. */
 export function hasSgr(text: string): boolean {
-  return /\x1b\[[0-9;:]*m/.test(text);
+  return scanAnsi(text).sgr;
 }
 
 const ESC = 0x1b;
@@ -99,9 +106,14 @@ function applySgr(pen: Pen, params: string): void {
  * other two-byte escapes, a lone or trailing ESC), and an unterminated one is removed to the end of the text.
  */
 export function ansiRuns(text: string): AnsiRun[] {
-  if (text === '') return [];
-  if (text.indexOf('\x1b') < 0) return [{ text, hue: null }];
+  return scanAnsi(text).runs;
+}
+
+function scanAnsi(text: string): { runs: AnsiRun[]; sgr: boolean } {
+  if (text === '') return { runs: [], sgr: false };
+  if (!hasEscape(text)) return { runs: [{ text, hue: null }], sgr: false };
   const runs: AnsiRun[] = [];
+  let sgr = false;
   const pen: Pen = { fg: null, dim: false };
   const hue = (): AnsiHue | null => pen.fg ?? (pen.dim ? 'muted' : null);
   const push = (s: string): void => {
@@ -131,7 +143,10 @@ export function ansiRuns(text: string): AnsiRun[] {
       if (j < n && text.charCodeAt(j) >= 0x40 && text.charCodeAt(j) <= 0x7e) {
         if (j === p1 && text.charCodeAt(j) === 0x6d) {
           const params = text.slice(p0, p1);
-          if (/^[0-9;:]*$/.test(params)) applySgr(pen, params);
+          if (/^[0-9;:]*$/.test(params)) {
+            sgr = true;
+            applySgr(pen, params);
+          }
         }
         j += 1;
       }
@@ -162,5 +177,5 @@ export function ansiRuns(text: string): AnsiRun[] {
     from = j;
   }
   push(text.slice(from));
-  return runs;
+  return { runs, sgr };
 }
