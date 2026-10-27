@@ -451,3 +451,42 @@ describeLinux('C8b step 4: update-sync, its unit file unreadable or its reader u
     expect(r.code).toBe(1);
   });
 });
+
+describeLinux('C8b step 4: scope-sweep\'s "every minute" sentence, its unit file unreadable or its reader unloaded', () => {
+  const record = (home: string, tick: number): void => {
+    writeFileSync(join(home, 'fixture-scope-sweep.state'), `# ccd-scope-sweep v1 tick=${tick} up=1000 mode=shadow\n`);
+  };
+  const STALE = [
+    'WARN scope-sweep: the verdict record is 301s old — the sweep has stopped, and its dead-scope report is stale',
+    '  remedy: systemctl --user status ccd-scope-sweep.timer ccd-scope-sweep.service; journalctl --user -u ccd-scope-sweep.service',
+  ];
+
+  it('stale, an unreadable ccd-scope-sweep.timer: the WARN drops its cadence clause, and the check WARNs naming the unit', () => {
+    const now = fixedNow();
+    const home = box('c8b-scope-sweep-unread-', now);
+    record(home, now - 301);
+    noTimer(home, 'ccd-scope-sweep.timer');
+    const r = runChecks(home, 'CCD_OS=linux; _check_scope-sweep');
+    expect(r.stdout.split('\n')).toEqual([...STALE, ...warnUnread('scope-sweep', 'ccd-scope-sweep.timer', 'the period that sentence names'), '']);
+    expect(r.stderr).toBe('');
+    expect(r.code).toBe(2);
+  });
+
+  it('fresh, an unreadable ccd-scope-sweep.timer: the PASS needs no period and is unchanged', () => {
+    const now = fixedNow();
+    const home = box('c8b-scope-sweep-unread-fresh-', now);
+    record(home, now - 300);
+    noTimer(home, 'ccd-scope-sweep.timer');
+    const r = runChecks(home, 'CCD_OS=linux; _check_scope-sweep');
+    expect(r.stdout, r.stderr).toMatch(/^PASS scope-sweep: .*300s old, mode shadow\)\n$/);
+  });
+
+  it('stale, BOX_TREE_DIR not loaded: the WARN drops its cadence clause, and a FAIL names the bug', () => {
+    const now = fixedNow();
+    const home = box('c8b-scope-sweep-unloaded-', now);
+    record(home, now - 301);
+    const r = runChecks(home, 'CCD_OS=linux; BOX_TREE_DIR=; _check_scope-sweep');
+    expect(r.stdout.split('\n')).toEqual([...STALE, ...unloaded('scope-sweep', 'ccd-scope-sweep.timer', 'the period that sentence names'), '']);
+    expect(r.code).toBe(1);
+  });
+});

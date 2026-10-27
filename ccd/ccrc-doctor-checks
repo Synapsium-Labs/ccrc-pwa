@@ -8273,8 +8273,17 @@ _check_scope-sweep() {
     return 2
   fi
   if (( age > stale )); then
-    _dr_warn scope-sweep "the verdict record is ${age}s old — the sweep runs every minute, so it has stopped, and its dead-scope report is stale" \
+    # The sentence names the sweep's period, read from the shipped unit file
+    # (D-7054); one that cannot be read drops the clause and says why on a line
+    # of its own, never a literal (OA-C8c (a), D-7062).
+    local period cad_rc=0 runs="the sweep runs every minute, so it has stopped"
+    period="$(_dr_cycles_s ccd-scope-sweep.timer 1)" || { cad_rc=$?; runs="the sweep has stopped"; }
+    _dr_warn scope-sweep "the verdict record is ${age}s old — $runs, and its dead-scope report is stale" \
       "systemctl --user status ccd-scope-sweep.timer ccd-scope-sweep.service; journalctl --user -u ccd-scope-sweep.service"
+    case "$cad_rc" in
+      1) _dr_cadence_unread scope-sweep ccd-scope-sweep.timer "the period that sentence names" ;;
+      3) _dr_cadence_unloaded scope-sweep ccd-scope-sweep.timer "the period that sentence names"; return 1 ;;
+    esac
     return 2
   fi
   while IFS= read -r line; do
