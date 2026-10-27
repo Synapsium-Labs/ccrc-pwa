@@ -522,7 +522,7 @@ export function NewSessionSheet({
             </RouteField>
           </div>
           <p className="sheet-copy route-note">
-            Unset fields take the coordinator row (Opus · high, Sonnet subagents, workflows on).
+            Unset fields take the routing matrix's default (Opus · high, Sonnet subagents, workflows on).
             If the account can't serve the class today, ccd starts one rung down and restores it when it can.
           </p>
         </fieldset>
