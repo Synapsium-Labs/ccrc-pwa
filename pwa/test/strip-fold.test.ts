@@ -177,9 +177,6 @@ describe('how many lanes a folded strip shows', () => {
     expect(rowFit(1888, LANE_CARD_MIN, 8)).toBe(7);
     expect(rowFit(1064, LANE_CARD_MIN, 8)).toBe(4);
     expect(rowFit(528, LANE_CARD_MIN, 8)).toBe(2);
-    // The same widths without the gap added back would count one fewer; that is the mistake the figures pin.
-    expect(Math.floor(1064 / (LANE_CARD_MIN + 8))).toBe(3);
-    expect(Math.floor(528 / (LANE_CARD_MIN + 8))).toBe(1);
     for (const width of [1, 100, 259, 0.5]) expect(rowFit(width, LANE_CARD_MIN, 8)).toBe(1);
   });
 });

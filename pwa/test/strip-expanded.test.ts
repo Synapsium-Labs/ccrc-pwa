@@ -10,8 +10,8 @@ const KEY = 'ccrc-accounts-strip';
 // A spy on jsdom's `localStorage.setItem` does not intercept (the Storage object keeps methods on its prototype and
 // treats an own-property write as an item), so the refusing storage is a stand-in swapped in for the window's own.
 const realStorage = Object.getOwnPropertyDescriptor(window, 'localStorage');
-function refuseStorage(refuse: 'read' | 'write'): void {
-  const backing = new Map<string, string>();
+function refuseStorage(refuse: 'read' | 'write', seed: Record<string, string> = {}): void {
+  const backing = new Map<string, string>(Object.entries(seed));
   const stub = {
     getItem: (k: string): string | null => {
       if (refuse === 'read') throw new Error('storage denied');
@@ -65,6 +65,37 @@ describe('what storage may say', () => {
     expect(result.current).toBe(true);
     expect(window.localStorage.getItem(KEY)).toBeNull();
     expect(renderHook(() => useStripExpanded()).result.current).toBe(true);
+  });
+});
+
+describe('a refused write', () => {
+  it("makes this page's choice authoritative over a value storage still holds, until another tab writes the key", () => {
+    // Reads work and writes are refused (a quota or policy error), with 'expanded' already stored.
+    refuseStorage('write', { [KEY]: 'expanded' });
+    const { result } = renderHook(() => useStripExpanded());
+    expect(result.current).toBe(true);
+    act(() => setStripExpanded(false));
+    expect(result.current).toBe(false);
+    expect(renderHook(() => useStripExpanded()).result.current).toBe(false);
+    act(() => setStripExpanded(true));
+    expect(result.current).toBe(true);
+    act(() => setStripExpanded(false));
+    expect(result.current).toBe(false);
+    // Another tab's write to the key is storage speaking again: the page's refused choice no longer overrides it.
+    act(() => {
+      window.dispatchEvent(new StorageEvent('storage', { key: KEY, newValue: 'expanded' }));
+    });
+    expect(result.current).toBe(true);
+  });
+
+  it('unreadable storage reads folded until this page chooses, and then the page choice holds', () => {
+    refuseStorage('read');
+    const { result } = renderHook(() => useStripExpanded());
+    expect(result.current).toBe(false);
+    act(() => setStripExpanded(true));
+    expect(result.current).toBe(true);
+    act(() => setStripExpanded(false));
+    expect(result.current).toBe(false);
   });
 });
 
