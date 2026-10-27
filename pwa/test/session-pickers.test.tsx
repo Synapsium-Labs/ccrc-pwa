@@ -12,7 +12,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
-import type { FleetSession } from '../../shared/api';
+import type { FleetSession, RosterWire } from '../../shared/api';
 import { fleetSession as baseSession } from './fleetFixture';
 import { SessionScreen } from '../src/screens/SessionScreen';
 // W2 Task S2d: the session menu's items and the model/effort chips are command doors, run by the one layer
@@ -21,7 +21,11 @@ import { CommandLayer } from '../src/command/CommandLayer';
 import { ToastHost } from '@ccrc/ui';
 import { createSessionStore, type SessionStore } from '../src/stores/session';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
-import { TEST_ROSTER } from './rosterFixture';
+import { TEST_ROSTER as BASE_ROSTER } from './rosterFixture';
+
+// The routed cases below read a class back only on a lane whose provider the roster NAMES (D-6334): the shared
+// fixture carries none, so an Anthropic lane's `queued` would read not-measurable. These cases name theirs.
+const TEST_ROSTER: RosterWire[] = BASE_ROSTER.map((a) => ({ ...a, provider: a.id === 'gpt' ? 'openai' : 'anthropic' }));
 
 vi.mock('react-virtuoso', async () => {
   const React = await import('react');
