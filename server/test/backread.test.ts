@@ -73,7 +73,7 @@ describe('walkBack', () => {
     expect(short.more()).toBe(false);
   });
 
-  it('reads each chunk with max(1, end - start) bytes from max(0, end - size)', async () => {
+  it('reads each chunk from max(0, end - size) up to the previous chunk\'s start', async () => {
     const data = enc.encode('a\nb\nc\nd\n');
     const io = memIO(data);
     await drain(io, data.length, [6, 6]);
