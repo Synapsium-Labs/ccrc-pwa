@@ -317,7 +317,7 @@ describe('the watcher\'s own shadow pass, its deps unmocked', () => {
       return { rows: [row], records: [r.record] };
     };
     const ccdCalls = () => calls.filter((c) => !c.cmd.endsWith('tmux'));
-    return { reg, coord, w, tick, ccdCalls, calls };
+    return { reg, coord, w, tick, ccdCalls, calls, deps };
   };
 
   it('an idle row 7 h past its Stop logs one shadow line, and no command but tmux reads ran — whatever the markers', async () => {
@@ -343,6 +343,8 @@ describe('the watcher\'s own shadow pass, its deps unmocked', () => {
     try {
       const order: string[] = [];
       h.w.useStopDoneSerialiser({ serial: async <T>(fn: () => Promise<T>): Promise<T> => { order.push('serial'); return fn(); } } as never);
+      // The registry the pass's listing names: the act lists it again (C4g, D-7047).
+      writeFileSync(path.join(h.reg, HIBERNATE_LIVE_MARKER), '');
       const t = await h.tick();
       await h.w.sweepSleep(t.rows, t.records, [HIBERNATE_LIVE_MARKER], 'idle-hours');
       expect(h.ccdCalls().map((c) => c.args.slice(-2))).toEqual([['hibernate', WID]]);
@@ -353,6 +355,45 @@ describe('the watcher\'s own shadow pass, its deps unmocked', () => {
       h.coord.db.close();
     }
   });
+
+  // C4g fix round (D-7047; the plain-readdir ratchet, D-5969): the act's listing is a read whose failure decides
+  // something (it holds the act), so it reads `readdirMeasured`, never the collapsing `readdir`. The plain listing is
+  // left answering the registry's names, so a wiring that read it would act; both failures, and a rejection, hold.
+  for (const failure of ['absent', 'unreadable', 'rejects'] as const) {
+    it(`armed, the act's listing through readdirMeasured: a registry ${failure} at the act holds it (fail shut)`, async () => {
+      const h = await harness();
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      try {
+        h.w.useStopDoneSerialiser({ serial: async <T>(fn: () => Promise<T>): Promise<T> => fn() } as never);
+        writeFileSync(path.join(h.reg, HIBERNATE_LIVE_MARKER), '');
+        const t = await h.tick();
+        const io = h.deps.io;
+        const regDir = h.deps.cfg.registryDir;
+        const reads: string[] = [];
+        h.deps.io = {
+          ...io,
+          readdir: async (p: string) => { if (p === regDir) reads.push('plain'); return io.readdir(p); },
+          readdirMeasured: async (p: string) => {
+            if (p !== regDir) return io.readdirMeasured(p);
+            reads.push('measured');
+            if (failure === 'rejects') throw new Error('EIO');
+            return { ok: false, reason: failure };
+          },
+        } as never;
+        // the plain listing would still answer the registry's names
+        expect(await io.readdir(regDir)).toContain(HIBERNATE_LIVE_MARKER);
+        await h.w.sweepSleep(t.rows, t.records, [HIBERNATE_LIVE_MARKER], 'idle-hours');
+        expect(h.ccdCalls()).toEqual([]);
+        // the act lists once, measured; the plain reads the pass's other readers make are not the act's
+        expect(reads.filter((r) => r === 'measured')).toEqual(['measured']);
+        expect(warn.mock.calls.map((c) => String(c[0])).filter((l) => l.includes('hibernat')))
+          .toEqual([`ccrc-server: hibernate-skip ${WID}: the registry was unlistable during the pass — asked again next sweep`]);
+      } finally {
+        warn.mockRestore();
+        h.coord.db.close();
+      }
+    });
+  }
 
   it('runs on its own clock: a second call inside HIBERNATE_SWEEP_MS reads nothing more', async () => {
     const h = await harness();
@@ -440,6 +481,7 @@ describe('hibernatePass: the live act', () => {
       serial: o.serial === 'none' ? null : (o.serial ?? (async (fn) => { order.push('serial'); return fn(); })),
       queueRun: async (_id, fn) => { order.push('queue'); return fn(); },
       rowAtAct: o.rowAtAct ?? (async (r) => ({ ok: true, row: row(r.id) })),
+      listing: async () => [HIBERNATE_LIVE_MARKER],
     };
     return { f: { ...f, deps: { ...f.deps, act: port } }, argvs, order, port };
   };

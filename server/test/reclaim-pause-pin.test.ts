@@ -580,6 +580,7 @@ describe('stopDoneSweep.ts — stopDonePass reads reclaim-paused off the tick\'s
       rowAtAct: async (r) => ({ ok: true, row: { ...row, id: r.id } }),
       serial: async (fn) => fn(),
       queueRun: async (_id, fn) => fn(),
+      listing: async () => [],
       startedAt: NOW - PRESENCE_OPEN_TTL_MS - 60_000,
       now: () => NOW,
     };

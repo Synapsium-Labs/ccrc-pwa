@@ -2040,6 +2040,11 @@ export class FleetWatcher {
         mark: (rec) => turnMarkFor(reads, rec),
         rowAtAct: (rec) => this.rowAtAct(rec),
         serial: this.stopDoneSerial, queueRun: (id, fn) => this.deps.queue.run(id, fn),
+        // D-7047: a listing whose failure decides (it holds the act) reads `readdirMeasured` (D-5969); absent,
+        // unreadable and a rejection all answer null, which holds.
+        listing: async () => {
+          try { const r = await this.deps.io.readdirMeasured(this.deps.cfg.registryDir); return r.ok ? r.entries : null; } catch { return null; }
+        },
         startedAt: this.sleepStartedAt, now: Date.now,
       }, this.stopDoneMemory, sessions, records, names);
     } catch (err) {
@@ -2067,6 +2072,10 @@ export class FleetWatcher {
         act: {
           runCcd: this.deps.runCcd, fleetState: this.deps.fleetState, serial: this.stopDoneSerial,
           queueRun: (id, fn) => this.deps.queue.run(id, fn), rowAtAct: (rec) => this.rowAtAct(rec),
+          // D-7047: measured, as in the run-done lane above; every failure answers null, which holds.
+          listing: async () => {
+            try { const r = await this.deps.io.readdirMeasured(this.deps.cfg.registryDir); return r.ok ? r.entries : null; } catch { return null; }
+          },
         },
       }, this.hibernateMemory, sessions, records, names);
     } catch (err) {

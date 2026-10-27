@@ -6,8 +6,9 @@
 //
 // What it holds, in order: the decision matrix (every hold word each policy answers, alone and in every pair, so the
 // ladder's order is measured, not read off the source); the boundary rows; the live-word rows; the difference table,
-// one `it` per fact; the act-time rows, including today's gap (a kill switch raised between the pass and the act does
-// not hold the act); two policies on one session in one tick; and the cadence rows, through the watcher's real sweeps.
+// one `it` per fact; the act-time rows, including the gap C4g closed (a kill switch raised between the pass and the act
+// did not hold the act; since C4g, D-7047, it does); two policies on one session in one tick; and the cadence rows,
+// through the watcher's real sweeps.
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { withBindingsOf } from './bindingsFake.js';
 import path from 'node:path';
@@ -375,12 +376,23 @@ interface World {
   /** Runs on entering the coordination serialiser: the window between the pass and the act. */
   beforeAct: () => void;
   serial: boolean;
+  /** C4g (D-7047): the registry listing the act reads again. Unset: the listing the pass was handed (`passNames`), else
+   *  the lane's default; null: unlistable. `listedAt`: `events.length` at each act-time listing. */
+  reg?: string[] | null;
+  passNames?: string[];
+  readonly listedAt: number[];
 }
 const world = (): World => ({
   now: NOW, verbs: ['hibernate', ACTOR_FLAGS_CAP, HIBERNATE_HOLD_OK_CAP], runState: new Map(), openWorker: new Set(),
   mail: new Set(), viewers: new Set(), words: new Map(), turns: new Map(), atAct: new Map(), vanished: new Set(),
   stopped: new Set(), argv: [], events: [], lines: [], feed: [], answer: () => OK, beforeAct: () => undefined, serial: true,
+  listedAt: [],
 });
+const listingOf = (w: World, dflt: readonly string[]) => async (): Promise<string[] | null> => {
+  w.listedAt.push(w.events.length);
+  const l = w.reg !== undefined ? w.reg : w.passNames ?? dflt;
+  return l === null ? null : [...l];
+};
 const idOf = (argv: readonly string[]): string => argv[argv.indexOf('--surface') - 1]!;
 
 const runCcdOf = (w: World): StopDoneSweepDeps['runCcd'] => async (a) => {
@@ -433,6 +445,7 @@ function sdDeps(w: World): StopDoneSweepDeps {
     rowAtAct: rowAtActOf(w),
     serial: serialOf(w),
     queueRun: queueOf(w),
+    listing: listingOf(w, []),
     startedAt: STARTED,
     now: () => w.now,
   };
@@ -442,7 +455,7 @@ function sdDeps(w: World): StopDoneSweepDeps {
 function hbDeps(w: World, o: { act?: boolean } = {}): HibernateSweepDeps {
   const port: HibernateActPort = {
     runCcd: runCcdOf(w), fleetState: { ccdVerbs: w.verbs } as unknown as FleetState, serial: serialOf(w),
-    queueRun: queueOf(w), rowAtAct: rowAtActOf(w),
+    queueRun: queueOf(w), rowAtAct: rowAtActOf(w), listing: listingOf(w, [HIBERNATE_LIVE_MARKER]),
   };
   return {
     coord: withBindingsOf({
@@ -465,10 +478,14 @@ function hbDeps(w: World, o: { act?: boolean } = {}): HibernateSweepDeps {
 const sdMem = (): StopDoneMemory => ({ retryAt: new Map() });
 const hbMem = (): HibernateSweepMemory => ({ lastLine: new Map(), lastActLine: new Map() });
 const ids = (n: number): string[] => Array.from({ length: n }, (_, k) => `project-a-basin-${k}`);
-const sdPass = (w: World, names: string[] = [], list = [ID], m = sdMem()) =>
-  stopDonePass(sdDeps(w), m, list.map((id) => row(id)), list.map(rec), names);
-const hbPass = (w: World, names: string[] = [HIBERNATE_LIVE_MARKER], list = [ID], m = hbMem()) =>
-  hibernatePass(hbDeps(w), m, list.map((id) => row(id)), list.map(rec), names);
+const sdPass = (w: World, names: string[] = [], list = [ID], m = sdMem()) => {
+  w.passNames = names;
+  return stopDonePass(sdDeps(w), m, list.map((id) => row(id)), list.map(rec), names);
+};
+const hbPass = (w: World, names: string[] = [HIBERNATE_LIVE_MARKER], list = [ID], m = hbMem()) => {
+  w.passNames = names;
+  return hibernatePass(hbDeps(w), m, list.map((id) => row(id)), list.map(rec), names);
+};
 const HIB_SD = (id: string, ...holdOk: string[]): string[] => ['hibernate', ...holdOk, id, '--surface', 'agent', '--actor', 'sweep:stop-done'];
 const HIB_HB = (id: string): string[] => ['hibernate', id, '--surface', 'agent', '--actor', 'sweep:hibernate'];
 
@@ -891,17 +908,181 @@ describe('the act-time rows: everything is read again inside the serialiser and 
     expect(hb.events.filter((e) => e === 'serial' || e.startsWith('queue'))).toEqual(['serial', `queue ${ID}`]);
   });
 
-  it('today\'s gap: a kill switch raised between the pass\'s listing and the act does NOT hold the act (neither lane re-reads the listing; C4g flips this row only once its ruling is made)', async () => {
+  // C4g (D-7047; OA-C9 (a), ruled 2026-10-26, D-7051): C4a's gap row, flipped. Before: a kill switch raised between
+  // the pass's listing and the act did NOT hold the act (neither lane re-read the listing). After: it holds.
+  it('the gap closed: a kill switch raised between the pass\'s listing and the act holds the act (both lanes re-read the listing at the act)', async () => {
     const sd = world();
     const names: string[] = [];
     sd.beforeAct = () => { names.push(STOP_DONE_DISABLED_MARKER, RECLAIM_PAUSE_MARKER, HIBERNATE_DISABLED_MARKER); };
-    expect(await sdPass(sd, names)).toEqual([{ id: ID, kind: 'hibernated', runId: 10 }]);
-    expect(sd.argv).toEqual([HIB_SD(ID)]);
+    expect(await sdPass(sd, names)).toEqual([{ id: ID, kind: 'switched-off', detail: STOP_DONE_DISABLED_MARKER }]);
+    expect(sd.argv).toEqual([]);
     const hb = world();
     const hnames: string[] = [HIBERNATE_LIVE_MARKER];
     hb.beforeAct = () => { hnames.push(HIBERNATE_DISABLED_MARKER); };
-    expect((await hbPass(hb, hnames))[0]!.act).toEqual({ kind: 'hibernated' });
-    expect(hb.argv).toEqual([HIB_HB(ID)]);
+    expect((await hbPass(hb, hnames))[0]!.act).toEqual({ kind: 'switched-off', detail: HIBERNATE_DISABLED_MARKER });
+    expect(hb.argv).toEqual([]);
+  });
+
+  // C4g's characterization rows (D-7047), one switch at a time, flipped with the gap row: before, each act went ahead.
+  it.each([STOP_DONE_DISABLED_MARKER, RECLAIM_PAUSE_MARKER, HIBERNATE_DISABLED_MARKER])('the gap closed (run-done): %s raised between the pass and the act holds the act', async (k) => {
+    const w = world();
+    const names: string[] = [];
+    w.beforeAct = () => { names.push(k); };
+    expect(await sdPass(w, names)).toEqual([{ id: ID, kind: 'switched-off', detail: k }]);
+    expect(w.argv).toEqual([]);
+  });
+
+  it('the gap closed (idle-hours): hibernate-disabled raised, or hibernate-live removed, between the pass and the act holds the act', async () => {
+    const raised = world();
+    const rnames: string[] = [HIBERNATE_LIVE_MARKER];
+    raised.beforeAct = () => { rnames.push(HIBERNATE_DISABLED_MARKER); };
+    expect((await hbPass(raised, rnames))[0]!.act).toEqual({ kind: 'switched-off', detail: HIBERNATE_DISABLED_MARKER });
+    expect(raised.argv).toEqual([]);
+    const removed = world();
+    const lnames: string[] = [HIBERNATE_LIVE_MARKER];
+    removed.beforeAct = () => { lnames.splice(0, lnames.length); };
+    expect((await hbPass(removed, lnames))[0]!.act).toEqual({ kind: 'switched-off', detail: HIBERNATE_LIVE_MARKER });
+    expect(removed.argv).toEqual([]);
+  });
+});
+
+// ── C4g (D-7047; ARCH-43, seventh PR): the act re-reads its switches over a fresh listing, nearest the argv ──────────
+// OA-C9 (a), ruled 2026-10-26 (D-7051). The window writes the REGISTRY (`w.reg`), never the listing the pass was
+// handed, so an act that reuses the pass's names cannot pass these rows.
+
+const RD_LINE = (id: string, cause: string): string => `ccrc-server: stop-done: ${id} was not put to sleep: ${cause} during the pass`;
+const HB_LINE = (id: string, cause: string): string => `ccrc-server: hibernate-skip ${id}: ${cause} during the pass — asked again next sweep`;
+const warned = (): string[] => {
+  const out: string[] = [];
+  vi.spyOn(console, 'warn').mockImplementation((l: unknown) => { out.push(String(l)); });
+  return out;
+};
+
+describe('C4g: the sleep act re-reads its kill and arming switches over a fresh listing, nearest the argv', () => {
+  it.each([STOP_DONE_DISABLED_MARKER, RECLAIM_PAUSE_MARKER, HIBERNATE_DISABLED_MARKER])('run-done: a switch raised between pass and act holds: %s, switched-off, with its line', async (k) => {
+    const w = world();
+    const lines = warned();
+    w.reg = [];
+    w.beforeAct = () => { w.reg = [k]; };
+    expect(await sdPass(w)).toEqual([{ id: ID, kind: 'switched-off', detail: k }]);
+    expect(w.argv).toEqual([]);
+    expect(lines).toEqual([RD_LINE(ID, `${k} was raised`)]);
+  });
+
+  it.each([STOP_DONE_DISABLED_MARKER, RECLAIM_PAUSE_MARKER, HIBERNATE_DISABLED_MARKER])('run-done: a switched-off hold leaves no retry memory (%s): the next pass asks again', async (k) => {
+    const w = world();
+    warned();
+    const m = sdMem();
+    w.reg = [];
+    w.beforeAct = () => { w.reg = [k]; };
+    await sdPass(w, [], [ID], m);
+    expect(m.retryAt.has(ID)).toBe(false);
+    w.beforeAct = () => { w.reg = []; };
+    expect(await sdPass(w, [], [ID], m)).toEqual([{ id: ID, kind: 'hibernated', runId: 10 }]);
+    expect(w.argv).toEqual([HIB_SD(ID)]);
+  });
+
+  it('idle-hours: a switch raised between pass and act holds: hibernate-disabled, with its throttled hibernate-skip line', async () => {
+    const w = world();
+    const m = hbMem();
+    w.reg = [HIBERNATE_LIVE_MARKER];
+    w.beforeAct = () => { w.reg = [HIBERNATE_LIVE_MARKER, HIBERNATE_DISABLED_MARKER]; };
+    const out = await hbPass(w, [HIBERNATE_LIVE_MARKER], [ID], m);
+    expect(out).toEqual([{ id: ID, verdict: { act: 'hibernate', idleMs: 7 * HOUR }, act: { kind: 'switched-off', detail: HIBERNATE_DISABLED_MARKER } }]);
+    expect(w.argv).toEqual([]);
+    expect(w.lines).toEqual([HB_LINE(ID, `${HIBERNATE_DISABLED_MARKER} was raised`)]);
+    w.reg = [HIBERNATE_LIVE_MARKER];
+    await hbPass(w, [HIBERNATE_LIVE_MARKER], [ID], m);
+    expect(w.lines, 'one line an hour per id').toHaveLength(1);
+    w.now = NOW + HIBERNATE_ACT_LINE_MS;
+    w.reg = [HIBERNATE_LIVE_MARKER];
+    await hbPass(w, [HIBERNATE_LIVE_MARKER], [ID], m);
+    expect(w.lines).toEqual([HB_LINE(ID, `${HIBERNATE_DISABLED_MARKER} was raised`), HB_LINE(ID, `${HIBERNATE_DISABLED_MARKER} was raised`)]);
+    expect(w.argv, 'asked again next sweep: no retry memory').toEqual([]);
+  });
+
+  it('idle-hours: a switch raised between pass and act holds: hibernate-live removed, the line naming hibernate-live', async () => {
+    const w = world();
+    w.reg = [HIBERNATE_LIVE_MARKER];
+    w.beforeAct = () => { w.reg = []; };
+    expect((await hbPass(w))[0]!.act).toEqual({ kind: 'switched-off', detail: HIBERNATE_LIVE_MARKER });
+    expect(w.argv).toEqual([]);
+    expect(w.lines).toEqual([HB_LINE(ID, `${HIBERNATE_LIVE_MARKER} was raised`)]);
+    w.beforeAct = () => undefined;
+    w.reg = [HIBERNATE_LIVE_MARKER];
+    expect((await hbPass(w))[0]!.act, 'asked again next sweep').toEqual({ kind: 'hibernated' });
+  });
+
+  it('reclaim-paused raised between pass and act does not hold idle-hours (nor stop-done-disabled)', async () => {
+    for (const k of [RECLAIM_PAUSE_MARKER, STOP_DONE_DISABLED_MARKER]) {
+      const w = world();
+      w.reg = [HIBERNATE_LIVE_MARKER];
+      w.beforeAct = () => { w.reg = [HIBERNATE_LIVE_MARKER, k]; };
+      expect((await hbPass(w))[0]!.act, k).toEqual({ kind: 'hibernated' });
+      expect(w.argv, k).toEqual([HIB_HB(ID)]);
+      expect(w.lines, k).toEqual([`ccrc-server: hibernated ${ID} idle=7h (D-5242)`]);
+    }
+  });
+
+  it('an unlistable registry at the act holds both lanes (fail shut), with no retry memory', async () => {
+    const sd = world();
+    const lines = warned();
+    const m = sdMem();
+    sd.reg = [];
+    sd.beforeAct = () => { sd.reg = null; };
+    expect(await sdPass(sd, [], [ID], m)).toEqual([{ id: ID, kind: 'switched-off', detail: 'registry-unlistable' }]);
+    expect(sd.argv).toEqual([]);
+    expect(lines).toEqual([RD_LINE(ID, 'the registry was unlistable')]);
+    expect(m.retryAt.has(ID)).toBe(false);
+    const hb = world();
+    hb.reg = [HIBERNATE_LIVE_MARKER];
+    hb.beforeAct = () => { hb.reg = null; };
+    expect((await hbPass(hb))[0]!.act).toEqual({ kind: 'switched-off', detail: 'registry-unlistable' });
+    expect(hb.argv).toEqual([]);
+    expect(hb.lines).toEqual([HB_LINE(ID, 'the registry was unlistable')]);
+  });
+
+  it('a switch lowered between pass and act does not resurrect an act the pass did not choose', async () => {
+    for (const k of [STOP_DONE_DISABLED_MARKER, RECLAIM_PAUSE_MARKER, HIBERNATE_DISABLED_MARKER]) {
+      const w = world();
+      w.reg = [];
+      expect(await sdPass(w, [k]), k).toEqual([]);
+      expect(w.events, k).toEqual([]);
+      expect(w.listedAt, k).toEqual([]);
+    }
+    const off = world();
+    off.reg = [HIBERNATE_LIVE_MARKER];
+    expect(await hbPass(off, [HIBERNATE_LIVE_MARKER, HIBERNATE_DISABLED_MARKER])).toEqual([]);
+    expect(off.argv).toEqual([]);
+    const shadow = world();
+    shadow.reg = [HIBERNATE_LIVE_MARKER];
+    expect(await hbPass(shadow, [])).toEqual([{ id: ID, verdict: { act: 'hibernate', idleMs: 7 * HOUR } }]);
+    expect(shadow.argv, 'unarmed at the pass: armed at the act changes nothing').toEqual([]);
+    expect(shadow.listedAt).toEqual([]);
+  });
+
+  it('the listing is read inside the serialiser and the queue, after the verdict is asked again and nearest the argv (both lanes)', async () => {
+    const sd = world();
+    await sdPass(sd);
+    expect(sd.listedAt).toHaveLength(1);
+    expect(sd.events.slice(0, sd.listedAt[0])).toEqual([`word ${ID}`, `turn ${ID}`, `mark ${ID}`, 'serial', `queue ${ID}`, `word ${ID}`, `turn ${ID}`, `mark ${ID}`]);
+    expect(sd.events[sd.listedAt[0]!]).toBe(`ccd ${ID}`);
+    const hb = world();
+    await hbPass(hb);
+    expect(hb.listedAt).toHaveLength(1);
+    expect(hb.events.slice(0, hb.listedAt[0])).toEqual([`word ${ID}`, `mark ${ID}`, 'serial', `queue ${ID}`, `word ${ID}`, `mark ${ID}`]);
+    expect(hb.events[hb.listedAt[0]!]).toBe(`ccd ${ID}`);
+  });
+
+  it('a held or refused act reads no listing (the read is the last before the argv)', async () => {
+    const w = world();
+    w.vanished.add(ID);
+    expect(await sdPass(w)).toEqual([{ id: ID, kind: 'held-at-act', verdict: { act: 'hold', reason: 'unmeasured' } }]);
+    expect(w.listedAt).toEqual([]);
+    const nv = world();
+    nv.beforeAct = () => { nv.verbs.splice(0, nv.verbs.length); };
+    expect((await hbPass(nv))[0]!.act).toEqual({ kind: 'skipped', detail: 'no-verb' });
+    expect(nv.listedAt).toEqual([]);
   });
 });
 
