@@ -17,7 +17,7 @@ import { AccountsStrip } from '../src/fleet/AccountsStrip';
 import { ToastHost } from '@ccrc/ui';
 import { ICONS } from '../../ui/src/icons/lucide';
 import { TEST_ROSTER } from './rosterFixture';
-import { activity, frame } from './delegationFixture';
+import { TOOL_USE_ID, activity, frame, lease, unowned } from './delegationFixture';
 
 // foldState.ts persists to localStorage — clear it so one test's fold can
 // never leak into the next's initial (expanded) expectation. `resetAcks` for
@@ -3358,6 +3358,54 @@ describe('the predicted-conflict chip renders after the claimed-files strip (lan
 // Delegation broker wave 4, PR2 Task 2.7: the `delegation` frame's two marks on `.fleet-list`. W4-U27, the older
 // server's screen against the base's own render, is `older-server-render.test.tsx` (review 1029's F1).
 describe('the fleet list\'s delegation marks (delegation broker wave 4)', () => {
+  // Review 1029's F2, end to end: the frame as the socket carries it, through the store and the real `fleetTree` (no
+  // reader mock, nothing normalized first) to the card's rows. Each row is read as its cells, the words the page shows.
+  it('W4-U7c: a frame of future words reaches the cards re-filed: every member drawn once, unmeasured, never running', () => {
+    const store = makeLiveStore();
+    renderFleet(<FleetScreen store={store} />);
+    act(() => {
+      const s = latestFleetSocket();
+      s.open();
+      s.message({ type: 'fleet', sessions: [session({ id: 'coord-a', project: 'project-a', workdir: '/work/project-a', status: 'busy', bucket: 'working' })] });
+      s.message({ type: 'delegation', delegation: {
+        asOf: '2026-10-26T10:10:00.000Z',
+        activities: [
+          { ...activity({ activityId: 'a-group', displayName: 'regroup' }), group: 'future-group', futureField: 1 },
+          { ...activity({ activityId: 'a-words', displayName: 'reword' }), placement: 'future-placement', liveness: 'future-liveness' },
+        ],
+        leases: [
+          { ...lease({ leaseId: 'l-raw', sourceKind: 'raw' }), group: 'future-group', liveness: 'future-liveness', workspace: 'future-workspace' },
+          { ...lease({ leaseId: 'l-agent', adminRecord: 'agent-a2', canonicalPath: '/work/project-a/.claude/worktrees/agent-a2' }),
+            workspace: 'future-workspace' },
+        ],
+        unowned: [{ ...unowned({ adminRecord: 'u-future' }), workspace: 'future-workspace' }],
+      } });
+    });
+    const card = (): HTMLElement => {
+      const c = [...document.querySelectorAll<HTMLElement>('.proj-card')].find((el) => el.querySelector('.proj-card-name')?.textContent === 'project-a');
+      if (c === undefined) throw new Error('no project-a card');
+      return c;
+    };
+    // coord-a's two children fold into its one summary line (D-6088's W/D rule, W4-U31); open it and both groups.
+    const line = card().querySelector('.proj-children-toggle');
+    expect(line?.textContent).toContain('1 delegated · 1 worktree');
+    fireEvent.click(line!);
+    fireEvent.click(within(card()).getByRole('button', { name: /Offline coordinator \(2\)/ }));
+    fireEvent.click(within(card()).getByRole('button', { name: /Unowned work \(1\)/ }));
+    const cells = [...card().querySelectorAll('.proj-work')].map((r) => [...r.querySelectorAll('.proj-work-part')].map((p) => p.textContent));
+    const chips = [...card().querySelectorAll('.proj-work')].map((r) => [...r.querySelectorAll('.proj-work-chip')].map((c) => c.textContent));
+    // Under coord-a, activities first; then the offline group (worktrees, then activities); then the unowned group.
+    expect(cells).toEqual([
+      ['agent', 'reword', 'unmeasured'],
+      ['agent worktree', 'agent-a2', 'running', 'unmeasured'],
+      ['worktree', 'agent-a1', 'unmeasured', 'unmeasured'],
+      ['agent', 'regroup', 'running'],
+      ['u-future', 'no owner found', 'unmeasured'],
+    ]);
+    expect(chips).toEqual([[], [], ['inferred', `Bash call …${TOOL_USE_ID.slice(-8)}`], [], []]);
+    expect(card().textContent).not.toContain('unrecognised');
+  });
+
   it('a measured frame marks the list measured, and counts an activity no card can draw', () => {
     const store = makeLiveStore();
     renderFleet(<FleetScreen store={store} />);

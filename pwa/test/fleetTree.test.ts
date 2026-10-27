@@ -1,14 +1,15 @@
 // The fleet tree (D-5527): ONE pure model decides each row's CARD and its
 // PARENT, for both skins. Neutral fixture names only (public repo).
 import { describe, expect, it } from 'vitest';
-import type { FleetSession, RunSummary } from '../../shared/api';
+import type { DelegationProjectionWire, FleetSession, RunSummary } from '../../shared/api';
 import { fleetSession, DEAD_LIFECYCLE } from './fleetFixture';
 import { cardsOf, coordinationLine, coordinationOf as coordinationOfTree, fleetTree as fleetTreeOf, unplacedActivities, workingOn } from '../src/fleet/fleetTree';
 import { withRunBinding } from './runBindingFixture';
 import { fingerprint, recording, type Recorded } from './characterise';
 import { STATE_WORD } from '../src/fleet/sessionFacts';
 import { childOfRunLabel } from '../src/fleet/runWords';
-import { activity, frame, lease, unowned } from './delegationFixture';
+import { TOOL_USE_ID, activity, frame, lease, unowned } from './delegationFixture';
+import { creatorChip, inferredChip } from '../src/fleet/delegationWords';
 
 /** W4-U0: every `fleetTree` call this file's cases make, recorded (see `characterise.ts`). */
 const treeCalls: Recorded<Parameters<typeof fleetTreeOf>>[] = [];
@@ -321,6 +322,49 @@ describe('fleetTree — delegation rows land on their parent\'s card (delegation
     expect(unplacedActivities([coordA, mainB], w)).toBe(1);
     expect(unplacedActivities([coordA, mainB], null)).toBe(0);
     expect(unplacedActivities([coordA], frame({ activities: [activity({ parentId: 'coord-a' })] }))).toBe(0);
+  });
+
+  // Review 1029's F2: the reader at the tree's own seam. The members arrive as the socket parses them, objects with
+  // words this build has never heard of and a field it does not know, never normalized before `fleetTree`.
+  it('W4-U7b: the tree reads the frame through readDelegation: future words re-filed, every member kept, none running', () => {
+    const future = {
+      asOf: '2026-10-26T10:10:00.000Z',
+      activities: [
+        { ...activity({ activityId: 'a-group' }), group: 'future-group', futureField: 1 },
+        { ...activity({ activityId: 'a-words' }), placement: 'future-placement', liveness: 'future-liveness' },
+      ],
+      leases: [
+        { ...lease({ leaseId: 'l-raw', sourceKind: 'raw' }), group: 'future-group', liveness: 'future-liveness', workspace: 'future-workspace' },
+        { ...lease({ leaseId: 'l-agent', adminRecord: 'agent-a2', canonicalPath: '/work/project-a/.claude/worktrees/agent-a2' }),
+          workspace: 'future-workspace' },
+      ],
+      unowned: [{ ...unowned({ adminRecord: 'u-future' }), workspace: 'future-workspace' }],
+    } as unknown as DelegationProjectionWire;
+    const groups = fleetTreeOf([coordA, mainB], [], [], {}, future);
+    expect(ids(groups)).toEqual([
+      ['project-a', ['coord-a', 'activity:a-words', 'lease:l-agent',
+        'group:offline-coordinator', 'lease:l-raw', 'activity:a-group', 'group:unowned', 'unowned:u-future']],
+      ['project-b', ['main-b']],
+    ]);
+    const rows = groups.flatMap((g) => g.rows);
+    expect(rows.flatMap((r) => (r.kind === 'delegation-group' ? [[r.group, r.count]] : []))).toEqual([['offline-coordinator', 2], ['unowned', 1]]);
+    const acts = new Map(rows.flatMap((r) => (r.kind === 'activity' ? [[r.activity.activityId, r.activity] as const] : [])));
+    const trees = new Map(rows.flatMap((r) => (r.kind === 'lease' ? [[r.lease.leaseId, r.lease] as const] : [])));
+    const items = rows.flatMap((r) => (r.kind === 'unowned' ? [r.item] : []));
+    expect([acts.size, trees.size, items.length], 'every member is kept, once').toEqual([2, 2, 1]);
+    expect(acts.get('a-group')).toMatchObject({ group: 'offline-coordinator', liveness: 'live', futureField: 1 });
+    expect(acts.get('a-words')).toMatchObject({ group: 'parent', placement: 'row', liveness: 'unmeasured' });
+    expect(trees.get('l-raw')).toMatchObject({ group: 'offline-coordinator', liveness: 'unmeasured', workspace: 'unmeasured' });
+    expect(trees.get('l-agent')).toMatchObject({ group: 'parent', liveness: 'live', workspace: 'unmeasured' });
+    expect(items).toMatchObject([{ adminRecord: 'u-future', workspace: 'unmeasured' }]);
+    // Only what the server measured live reads live: no future word becomes "running".
+    const live = [...acts.values(), ...trees.values()].filter((m) => m.liveness === 'live');
+    expect(live.map((m) => ('activityId' in m ? m.activityId : m.leaseId))).toEqual(['a-group', 'l-agent']);
+    // The raw tree keeps both of its chips, whatever its other words; the agent one wears neither.
+    const raw = trees.get('l-raw')!;
+    expect(inferredChip(raw)?.text).toBe('inferred');
+    expect(creatorChip(raw)?.title).toContain(TOOL_USE_ID);
+    expect(inferredChip(trees.get('l-agent')!)).toBeNull();
   });
 });
 
