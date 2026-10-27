@@ -627,7 +627,10 @@ describe('selection is tint plus rail, status is hue (D-5101)', () => {
     // Was: the ··· re-grounded to --bg-page so it did not punch a bright chip
     // into the slab. Gone: on the tint its own --bg-raised chip is the one it
     // wears everywhere, and its ink on that is `ink-secondary / raised`.
-    expect(() => ruleFor('.sess-line--active .sess-actions')).toThrow();
+    // D-6332: the selected row's ⋯ has a rule again, but only to SHOW it under a mouse (opacity 1, inside the
+    // fine-pointer query): it re-grounds nothing, so the chip is the same one on the tint.
+    const fine = atBlock(css, '@media (hover: hover) and (pointer: fine)');
+    expect(stripComments(ruleIn(fine, '.sess-line--active .sess-actions')).match(/[\w-]+(?=\s*:)/g)).toEqual(['opacity']);
     expect(declValue(ruleFor('.sess-actions'), 'background')).toBe('var(--bg-raised)');
   });
 
