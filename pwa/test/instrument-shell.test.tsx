@@ -86,12 +86,12 @@
 //   the control keyed on its state (remounts) .......... accounts-strip "focus stays on the control across Show fewer and +n more"
 //   the control rendered iff `hidden.length > 0` ....... accounts-strip "focus stays on the control across Show fewer and +n more", "a tap on the control folds and unfolds …"
 //   the control rendered when `expanded` regardless of `foldable`
-//                                                       SURVIVED (accounts-strip 55/55): a control with no words has no accessible name, and "five lanes, folded or expanded"
-//                                                         looks for one by name, so a nameless "Show fewer" button passes it
+//                                                       accounts-strip "five lanes render no fold control at all, folded or expanded: the only button in the strip is All accounts"
+//                                                         (a fix round: it was SURVIVED while the one case looked for the control by name, which a control with no words does not have)
 //   the component compares `live.length` with `FOLD_SHOWN`
 //                                                       accounts-strip "the control renders from foldLanes alone: …"
-//   the scroll run on mount ............................ SURVIVED (accounts-strip 55/55): the effect runs once, at mount, while the strip is still its placeholder and the
-//                                                         control not yet mounted, so nothing is there to scroll; no case lets another tab's choice arrive after the load
+//   the scroll run on mount ............................ accounts-strip "another tab's choice to fold, arriving after the load, scrolls nothing: only this page's own Show fewer does"
+//                                                         (a fix round: it was SURVIVED while no case let a choice arrive after the load, the effect running only at mount)
 //   the sentence built inline in `AccountsStrip` ....... accounts-strip "the control's words are foldWords': the component builds no sentence of its own", and six more
 //   Show fewer's scroll call removed ................... accounts-strip "Show fewer scrolls the control into view with block nearest; …"; refined-phone browser (2 of 31)
 //                                                         "after Show fewer the control is focused and on screen: refined, phosphor, 360px" and 390px
@@ -117,10 +117,9 @@
 //   focus between the strip's own cards opening it again "Escape stays shut for a keyboard user: an arrow move between the line's cards does not open it again"
 //   the flyout `position: absolute` -> `static` ........ lanes-row (8 of 88) "hovering the folded line opens a flyout below it, drawn over the content, …"
 //   the flyout's `z-index` removed ..................... lanes-row (8 of 88) "hovering the folded line opens a flyout below it, drawn over the content, …"
-//   the `returningFocus` guard removed from `onGroupFocus`
-//                                                       SURVIVED (accounts-strip 55/55): a dead guard, since the focus it hands back moves inside the strip and the
-//                                                         `relatedTarget` test above it already returns
-//   the timers not cleared on unmount .................. SURVIVED (accounts-strip 55/55): a state set after unmount is a no-op, so only a leaked timer is left, which no case reads
+//   the `returningFocus` guard removed from `onGroupFocus`: no row. It was SURVIVED as a dead guard (the `relatedTarget` test above it already returns for the move the guard
+//                                                         covered), so the guard was removed from `AccountsStrip` in a fix round and the cases stay green
+//   the timers not cleared on unmount .................. accounts-strip "unmounting with the open delay pending, or the close grace pending, leaves no timer behind"  (a fix round: it was SURVIVED)
 // R120 `lanes-tie-break-soonest-reset` (lane-order alone):
 //   drop the reset key ................................. "lanes that tie on binding use sort by the binding window's reset, soonest first", and four more
 //   reset latest first ................................. the same five
