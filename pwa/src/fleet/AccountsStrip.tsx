@@ -205,8 +205,8 @@ export function AccountsStrip(): ReactNode {
     setStripExpanded(!fold.expanded);
   };
 
-  const stop = shown.some((a) => a.wrapper === stopId) ? stopId : shown[0]!.wrapper;
-  const flyStop = live.some((a) => a.wrapper === flyStopId) ? flyStopId : live[0]!.wrapper;
+  const stop = shown.find((a) => a.wrapper === stopId)?.wrapper ?? shown[0]!.wrapper;
+  const flyStop = live.find((a) => a.wrapper === flyStopId)?.wrapper ?? live[0]!.wrapper;
   const flyShown = flyoutOn && flyOpen;
 
   // The flyout's delays and its closing. Closing a flyout that holds focus would drop focus to the page, so focus goes
