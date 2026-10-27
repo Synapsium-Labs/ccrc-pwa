@@ -305,3 +305,85 @@ describe('the library is found from ccd\'s own location and nowhere else', () =>
     expect(fs.existsSync(MARK())).toBe(false);
   });
 });
+
+// ---- C5h: the loader publishes what it decided (D-7125; ARCH-67; design note §2) ----
+// `_ccd_lib_load` already decides the layout (a source checkout, or an installed body whose digest it checked) and the
+// hashing command; it publishes both, `__CCD_LAYOUT` and `__CCD_HASH_CMD`, so the docs front and `_docs_redact_cli` read
+// one decision instead of making a second. A read of a variable is no call-graph edge, so the coupling is pinned here as a
+// single-writer fact, over every file the body evaluates (the library is evaluated in the loader's scope AFTER it
+// publishes, so a library line could rewrite the layout).
+import { loaderGlobals, type GlobalSite } from './census-w5/redactors.js';
+
+/** Every write form design note §2 lists, for the global `n`, one line each, inside a fixture function. */
+const writeForms = (n: string): string[] => [
+  `${n}=x`, `${n}+=x`, `${n}[0]=x`, `: "\${${n}:=x}"`, `local ${n}=x`, `local -r a ${n}`, `declare -g ${n}`, `typeset ${n}=x`,
+  `readonly ${n}`, `export ${n}`, `declare -n ref=${n}`, `printf -v ${n} '%s' x`, `read -r a ${n} <<<x`, `mapfile -t ${n} <f`,
+  `readarray ${n} <f`, `unset -v ${n}`, `eval "${n}=x"`, `source <(echo ${n}=x)`, `. <(echo ${n}=x)`, `x=${n}; printf -v "\${!x}" y`,
+];
+const site = (s: GlobalSite): string => `${s.file}#${s.fn ?? '<top>'}: ${s.text.trim()}`;
+
+describe('loaderGlobals: every write and read of the loader\'s globals, over ccd/ccd and ccd/lib/*.sh (D-7125)', () => {
+  const tmpTree = (files: Record<string, string>): string => {
+    const t = fs.mkdtempSync(path.join(h.home, 'c5h-census-'));
+    for (const [rel, body] of Object.entries(files)) {
+      fs.mkdirSync(path.dirname(path.join(t, rel)), { recursive: true });
+      fs.writeFileSync(path.join(t, rel), body);
+    }
+    return t;
+  };
+
+  it('FIXTURE: one line of every write form is reported, a library line included; a test, a comment and a heredoc are not writes', () => {
+    const names = ['__CCD_LAYOUT', '__CCD_HASH_CMD'];
+    const planted = names.flatMap(writeForms);
+    const t = tmpTree({
+      'ccd/ccd': [
+        '#!/usr/bin/env bash',
+        '_fx() {',
+        ...planted.map((l) => `  ${l}`),
+        '  [[ $__CCD_LAYOUT == source ]] && echo "${__CCD_HASH_CMD[@]}"',
+        '  # __CCD_LAYOUT=commented',
+        "  cat <<'EOF'",
+        '__CCD_LAYOUT=in-a-heredoc',
+        'EOF',
+        '}',
+        '',
+      ].join('\n'),
+      'ccd/lib/extra.sh': '__CCD_LAYOUT=source\n',
+    });
+    const got = loaderGlobals(t);
+    expect(got.writes.filter((s) => s.file === 'ccd/ccd').map((s) => s.text.trim())).toEqual(planted);
+    expect(got.writes.filter((s) => s.file === 'ccd/ccd').every((s) => s.fn === '_fx')).toBe(true);
+    expect(got.writes.filter((s) => s.file === 'ccd/lib/extra.sh').map(site)).toEqual(['ccd/lib/extra.sh#<top>: __CCD_LAYOUT=source']);
+    expect(got.reads.map((s) => `${s.global} ${s.text.trim()}`)).toEqual(expect.arrayContaining([
+      '__CCD_LAYOUT [[ $__CCD_LAYOUT == source ]] && echo "${__CCD_HASH_CMD[@]}"',
+      '__CCD_HASH_CMD [[ $__CCD_LAYOUT == source ]] && echo "${__CCD_HASH_CMD[@]}"',
+    ]));
+  });
+
+  it('REAL: __CCD_LAYOUT and __CCD_HASH_CMD are written only by their declaration lines and by _ccd_lib_load', () => {
+    const w = loaderGlobals().writes.filter((s) => s.global === '__CCD_LAYOUT' || s.global === '__CCD_HASH_CMD');
+    expect(w.map(site)).toEqual([
+      'ccd/ccd#<top>: __CCD_LAYOUT=',
+      'ccd/ccd#<top>: __CCD_HASH_CMD=()',
+      'ccd/ccd#_ccd_lib_load: __CCD_LAYOUT=source',
+      'ccd/ccd#_ccd_lib_load: __CCD_LAYOUT=installed',
+      'ccd/ccd#_ccd_lib_load: __CCD_HASH_CMD=("${hash[@]}")',
+    ]);
+  });
+
+  const PUBLISHED = 'source "$1" || exit 9; printf \'%s|%s\\n\' "$__CCD_LAYOUT" "${__CCD_HASH_CMD[*]}"';
+  const published = (ccd: string): { out: string; err: string } => {
+    const r = spawnSync('bash', [driver('published.sh', PUBLISHED), ccd],
+      { encoding: 'utf8', cwd: h.home, env: ghContainedEnv(h.home, h.env(), { systemd: true, tmux: true, net: true }) });
+    return { out: r.stdout, err: r.stderr };
+  };
+
+  it('REAL: the source checkout publishes `source` and no hashing command', () => {
+    expect(published(CCD)).toEqual({ out: 'source|\n', err: '' });
+  });
+
+  it('REAL: an installed body publishes `installed` and the hashing command its digest check used', () => {
+    const { body } = installDirectEntry(h.home);
+    expect(published(body)).toEqual({ out: 'installed|_plat_sha256\n', err: '' });
+  });
+});

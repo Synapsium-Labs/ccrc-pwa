@@ -44257,6 +44257,12 @@ cmd_ws_title() {   # ccd ws-title --session <id> (--title <text> | --clear) — 
 # from the environment: these are the platforms' standard locations (GNU coreutils, perl's shasum, BSD/macOS sha256).
 __CCD_HASH_TOOLS=(/usr/bin/sha256sum /bin/sha256sum /usr/local/bin/sha256sum /usr/bin/shasum /bin/shasum /usr/local/bin/shasum /sbin/sha256 /usr/bin/sha256)
 __CCD_LIB_SHA256=stamp-at-install
+# WHAT THE LOAD DECIDED, PUBLISHED (D-7125). `_ccd_lib_load` is the one writer of these two: `__CCD_LAYOUT` is `source` (the
+# source checkout's arm) or `installed` (the digest checked), and `__CCD_HASH_CMD` the hashing command it chose. The docs front
+# and `_docs_redact_cli` read them; the front reads the layout only as `[[ $__CCD_LAYOUT == source ]]`, so anything else is the
+# installed layout. A census in ccd-lib-load.test.ts pins the single writer over ccd/ccd and ccd/lib/*.sh.
+__CCD_LAYOUT=
+__CCD_HASH_CMD=()
 _ccd_lib_load() {   # -> 0 with ccd/lib/disk-retention.sh's functions defined; else the refusal line on stderr and rc 1, nothing evaluated
   local self="${BASH_SOURCE[0]}" dir=. f src sum
   [[ "$self" == */* ]] && dir="${self%/*}"
@@ -44273,6 +44279,7 @@ _ccd_lib_load() {   # -> 0 with ccd/lib/disk-retention.sh's functions defined; e
     local l1='' l2=''
     { IFS= read -r l1 && IFS= read -r l2; } < "$self" 2>/dev/null || :
     if [[ "$l2" == '# ccrc:stamp-at-install'* ]]; then
+      __CCD_LAYOUT=source
       eval "$src"
       return
     fi
@@ -44315,6 +44322,8 @@ _ccd_lib_load() {   # -> 0 with ccd/lib/disk-retention.sh's functions defined; e
     printf 'ccd: refused (lib-digest): %s is not the library this ccd pins (%s) — a half-published install or an edited file (re-run: ccrc update); nothing was run\n' "$f" "$__CCD_LIB_SHA256" >&2
     return 1
   fi
+  __CCD_LAYOUT=installed
+  __CCD_HASH_CMD=("${hash[@]}")
   eval "$src"
 }
 _ccd_lib_load || { [[ "${BASH_SOURCE[0]}" == "${0}" ]] && exit 125; return 125; }

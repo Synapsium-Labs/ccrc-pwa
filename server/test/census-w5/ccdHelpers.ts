@@ -70,7 +70,7 @@ export function functionSpan(src: string, name: string): [number, number] {
 }
 
 /** Each 1-based line's enclosing function (column-0 definitions only), or `null` at the top level. */
-function enclosingFunctions(src: string): (string | null)[] {
+export function enclosingFunctions(src: string): (string | null)[] {
   const n = src.split('\n').length;
   const out: (string | null)[] = new Array<string | null>(n + 1).fill(null);
   for (const b of bashBodies(src)) {

@@ -100,6 +100,8 @@ const TEST_LOCAL_HELPERS: Readonly<Record<string, readonly string[]>> = {
   'ccd-collect-race-forge.test.ts': ['_race_swap'],
   'ccd-die-containment.test.ts': ['_c', '_f', '_g', '_leaf', '_middle', '_top', '_v'],
   'ccd-leaf-root-newline.test.ts': ['_fp', '_fpp'],
+  // The loader-globals census's fixture function: it plants every write form of the loader's globals in a tmp ccd/ccd.
+  'ccd-lib-load.test.ts': ['_fx'],
   'ccd-lifecycle-emit.test.ts': ['_lc_obs_probe'],
   'ccd-limit-banner.test.ts': ['_leaky'],
   'ccd-orphan-audit.test.ts': ['_fpp'],
