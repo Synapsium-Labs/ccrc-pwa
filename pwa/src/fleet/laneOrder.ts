@@ -46,7 +46,8 @@ export function lanesByFree<T extends AccountUsage>(lanes: readonly T[]): T[] {
     const otherUse = binding.label === '5h' ? lane.seven : lane.five;
     ranked.push({ lane, pct: binding.pct, reset: binding.resetAt ?? Infinity, other: otherUse ?? Infinity, i });
   });
-  // Infinity - Infinity is NaN, so the keys compare with < and > (a NaN would read as a tie and skip the later keys).
+  // The keys compare with < and >, not by subtraction: Infinity - Infinity is NaN, and the chain should not lean on a
+  // NaN being falsy to reach the next key.
   const byKey = (a: number, b: number): number => (a < b ? -1 : a > b ? 1 : 0);
   ranked.sort((x, y) => byKey(x.pct, y.pct) || byKey(x.reset, y.reset) || byKey(x.other, y.other) || x.i - y.i);
   return [...ranked.map((e) => e.lane), ...last];

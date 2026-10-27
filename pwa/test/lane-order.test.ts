@@ -80,6 +80,16 @@ describe('lanesByFree', () => {
     expect(names(sevens)).toEqual(['lane-b', 'lane-d', 'lane-a', 'lane-c']);
   });
 
+  it("the reset outranks the other window's use, and the other window's use outranks the roster", () => {
+    // Both bind at 30 on 5h. lane-b is later in the roster, resets sooner and has the HIGHER other-window use: the
+    // reset decides, so b leads.
+    const byReset = [lane('lane-a', 30, 5, { fiveResetAt: 9000 }), lane('lane-b', 30, 25, { fiveResetAt: 3000 })];
+    expect(names(byReset)).toEqual(['lane-b', 'lane-a']);
+    // Same reset: the later-roster lane with the LOWER other-window use leads.
+    const byOther = [lane('lane-a', 30, 25), lane('lane-b', 30, 5)];
+    expect(names(byOther)).toEqual(['lane-b', 'lane-a']);
+  });
+
   it('only then in roster order', () => {
     const lanes = [lane('lane-a', 30, 10), lane('lane-b', 30, 10), lane('lane-c', 30, 10)];
     expect(names(lanes)).toEqual(['lane-a', 'lane-b', 'lane-c']);
@@ -97,10 +107,11 @@ describe('lanesByFree', () => {
 
   it('never-read and expired lanes still go last, in roster order, whatever their resets', () => {
     const lanes = [
-      lane('lane-a', null, null, { fiveResetAt: 1, sevenResetAt: 1 }), lane('lane-b', 30, 10, { fiveResetAt: 8000 }),
+      lane('lane-a', null, null, { fiveResetAt: 3, sevenResetAt: 3 }), lane('lane-b', 30, 10, { fiveResetAt: 8000 }),
       lane('lane-c', 5, 5, { authDead: true, fiveResetAt: 2, sevenResetAt: 2 }), lane('lane-d', 30, 10, { fiveResetAt: 7000 }),
-      lane('lane-e', null, null, { authDead: true, fiveResetAt: 3, sevenResetAt: 3 }),
+      lane('lane-e', null, null, { authDead: true, fiveResetAt: 1, sevenResetAt: 1 }),
     ];
+    // The last group's resets (a 3, c 2, e 1) descend in roster order, so sorting it by reset would show.
     expect(names(lanes)).toEqual(['lane-d', 'lane-b', 'lane-a', 'lane-c', 'lane-e']);
   });
 
