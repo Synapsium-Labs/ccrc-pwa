@@ -7536,37 +7536,39 @@ export class CoordStore {
     runId: number | null; now?: number;
   }, log: LedgerLog): AllocateResult {
     const now = input.now ?? Date.now();
-    return tx(this.db, () => {
-      const floorRow = this.ledgerFloor(input.project);
-      const dbMax = (this.db.prepare(
-        'SELECT MAX(n) AS m FROM ledger_alloc WHERE project = ?',
-      ).get(input.project) as { m: number | null }).m;
-      const fileMax = log.maxAllocated(input.project);
-      // `decideAllocation` (L1) only compares — the store MEASURES maxIssued,
-      // and the file's half is what makes recovery MAX(file, db).
-      const maxIssued = dbMax === null ? fileMax
-        : fileMax === null ? dbMax : Math.max(dbMax, fileMax);
-      const d = decideAllocation(floorRow, maxIssued, input.count);
-      if (!('ok' in d)) return { ok: false as const, why: d.refused };
-      log.append(d.numbers.map((n) => ({
+    // D-7058: the floor is `journalFloor`, the journal-first order `appendThenApply`; a journal error propagates.
+    return tx(this.db, () => appendThenApply<{ readonly numbers: readonly number[]; readonly floor: number }, AllocateResult, AllocateResult>({
+      decide: () => {
+        const floorRow = this.ledgerFloor(input.project);
+        const dbMax = (this.db.prepare(
+          'SELECT MAX(n) AS m FROM ledger_alloc WHERE project = ?',
+        ).get(input.project) as { m: number | null }).m;
+        // `decideAllocation` (L1) only compares — the store MEASURES maxIssued,
+        // and the file's half is what makes recovery MAX(file, db).
+        const d = decideAllocation(floorRow, journalFloor(dbMax, log.maxAllocated(input.project)), input.count);
+        return 'ok' in d ? { go: d } : { stop: { ok: false as const, why: d.refused } };
+      },
+      append: (d) => log.append(d.numbers.map((n) => ({
         project: input.project, n, title: input.title,
         allocatedTo: input.allocatedTo, at: now,
-      })));
-      for (const n of d.numbers) {
-        this.db.prepare(
-          'INSERT INTO ledger_alloc (project, n, title, allocatedTo, runId, allocatedAt, state) ' +
-          "VALUES (?, ?, ?, ?, ?, ?, 'allocated')",
-        ).run(input.project, n, input.title, input.allocatedTo, input.runId, now);
-      }
-      return {
-        ok: true as const,
-        allocation: {
-          project: input.project, numbers: d.numbers, floor: d.floor,
-          title: input.title, allocatedTo: input.allocatedTo,
-          runId: input.runId, allocatedAt: now,
-        },
-      };
-    });
+      }))),
+      apply: (d) => {
+        for (const n of d.numbers) {
+          this.db.prepare(
+            'INSERT INTO ledger_alloc (project, n, title, allocatedTo, runId, allocatedAt, state) ' +
+            "VALUES (?, ?, ?, ?, ?, ?, 'allocated')",
+          ).run(input.project, n, input.title, input.allocatedTo, input.runId, now);
+        }
+        return {
+          ok: true as const,
+          allocation: {
+            project: input.project, numbers: d.numbers, floor: d.floor,
+            title: input.title, allocatedTo: input.allocatedTo,
+            runId: input.runId, allocatedAt: now,
+          },
+        };
+      },
+    }));
   }
 
   private static readonly LEDGER_COLS =
