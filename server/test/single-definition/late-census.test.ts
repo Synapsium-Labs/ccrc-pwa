@@ -529,7 +529,7 @@ describe('ARCH-77: child reclaim’s off switch has no writer in the tree, and o
   });
 
   it('no other cleanup lane names it: expiry, collect, the dead-coordinator lane and stop-done are stopped by reclaim-paused alone', () => {
-    const LANES = ['server/src/archivedExpiry.ts', 'server/src/stopDoneSweep.ts', 'server/src/sleepLane.ts', 'server/src/deadCoordinator.ts',
+    const LANES = ['server/src/archivedExpiry.ts', 'server/src/sleepLane.ts', 'server/src/deadCoordinator.ts',
       'server/src/coord/expireArchived.ts', 'server/src/coord/endDeadCoordinator.ts', 'server/src/coord/collectTempRoot.ts',
       'server/src/coord/collectOrphanTree.ts', 'server/src/coord/staleArchive.ts'];
     for (const f of LANES) {

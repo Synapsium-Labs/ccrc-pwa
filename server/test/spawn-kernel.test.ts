@@ -12,7 +12,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
-import { boundedSpawn } from '../../shared/spawn.mjs';
+import { boundedSpawn, boundedStdinSpawn } from '../../shared/spawn.mjs';
 import { callsIn, parsedFile, sourceOfSymbol, symbolOf } from './scan/symbols.js';
 import { codeOf } from './consolidationCensus.js';
 
@@ -146,6 +146,130 @@ describe('shared/spawn.mjs#boundedSpawn against a stub host', () => {
     child.emit('exit', 0, null);
     await vi.runAllTimersAsync();
     expect(await p).toMatchObject({ code: 0, stdout: null });
+  });
+});
+
+// D-7057, OA-C8a (a) (D-7060; W8 Task C8e): the account-op spawner is ONE body too, `shared/spawn.mjs#boundedStdinSpawn`,
+// which the local arm (`server/src/accounts/ops.ts#localAccountOps`) and the agent's port
+// (`agent/src/accountop.ts#makeAccountOpSpawn`) wrap. Its own rows: a stub host whose child has a stdin, fake timers,
+// `process.kill` spied. Every bound reaches it as an option (`drainMs: 50`, `killGraceMs: 200` here); the real-process
+// rows over both arms are `account-op-twins.test.ts`.
+class FakeStdinChild extends EventEmitter {
+  pid: number | undefined = FAKE_PID;
+  stdin = new PassThrough();
+  stdout = new PassThrough();
+  stderr = new PassThrough();
+  kill = vi.fn(() => true);
+}
+describe('shared/spawn.mjs#boundedStdinSpawn against a stub host (D-7057)', () => {
+  let child: FakeStdinChild;
+  let killSpy: ReturnType<typeof vi.spyOn>;
+  let spawnCalls: unknown[][];
+  let spawnThrows = false;
+  const host = () => ({
+    spawn: (...a: unknown[]) => { spawnCalls.push(a); if (spawnThrows) throw new Error('EAGAIN'); return child as never; },
+    signals: { SIGTERM: 15, SIGFAKE: 40 },
+  });
+  const ENV = { HOME: '/fixture-home', PATH: '/usr/bin:/bin', LANG: 'C' };
+  const OPTS = { env: ENV, timeoutMs: 1000, killGraceMs: 200, maxOutputBytes: 16, drainMs: 50 };
+  const run = (stdin: Buffer | null = null, opts = OPTS) => boundedStdinSpawn(host() as never, 'launcher', ['account', 'roster'], stdin, opts);
+  const stdinBytes = (): Promise<Buffer> => new Promise((r) => { const got: Buffer[] = []; child.stdin.on('data', (b: Buffer) => got.push(b)); child.stdin.on('end', () => r(Buffer.concat(got))); });
+  beforeEach(() => {
+    vi.useFakeTimers();
+    child = new FakeStdinChild();
+    spawnCalls = [];
+    spawnThrows = false;
+    killSpy = vi.spyOn(process, 'kill').mockImplementation(() => true);
+  });
+  afterEach(() => { vi.useRealTimers(); killSpy.mockRestore(); });
+
+  it('the kernel holds the body: spawn read from the injected host, stdin piped, TERM to the group', () => {
+    const body = sourceOfSymbol(KERNEL, 'boundedStdinSpawn');
+    expect(body).toMatch(/const \{ spawn, signals \} = host;/);
+    expect(body).toContain("spawn(file, [...argv], { detached: true, stdio: ['pipe', 'pipe', 'pipe'], env })");
+    expect(body).toContain('process.kill(-child.pid, s)');
+  });
+
+  it('spawns through the host: its own group, three pipes, the env it was given; stdin is the bytes exactly, then EOF', async () => {
+    const got = stdinBytes();
+    const p = run(Buffer.from('CANARY-kernel'));
+    expect(spawnCalls).toEqual([['launcher', ['account', 'roster'], { detached: true, stdio: ['pipe', 'pipe', 'pipe'], env: ENV }]]);
+    expect(await got).toEqual(Buffer.from('CANARY-kernel'));
+    child.stdout.write('{"ok":true}');
+    child.emit('close', 0, null);
+    expect(await p).toEqual({ kind: 'exited', code: 0, stdout: '{"ok":true}' });
+  });
+
+  it('no stdin is an empty stdin, then EOF', async () => {
+    const got = stdinBytes();
+    const p = run(null);
+    expect(await got).toEqual(Buffer.alloc(0));
+    child.emit('close', 0, null);
+    expect(await p).toMatchObject({ kind: 'exited', code: 0 });
+  });
+
+  it('at timeoutMs the group gets SIGTERM, SIGKILL killGraceMs later, and the answer comes drainMs after that', async () => {
+    let answered = false;
+    const p = run();
+    void p.then(() => { answered = true; });
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(killSpy.mock.calls).toEqual([[-FAKE_PID, 'SIGTERM']]);
+    await vi.advanceTimersByTimeAsync(200);
+    expect(killSpy.mock.calls).toEqual([[-FAKE_PID, 'SIGTERM'], [-FAKE_PID, 'SIGKILL']]);
+    await vi.advanceTimersByTimeAsync(49);
+    expect(answered).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(await p).toEqual({ kind: 'timeout' });
+  });
+
+  it('the KILL is never cancelled: a close after the TERM answers timeout, and the group still gets SIGKILL', async () => {
+    const p = run();
+    await vi.advanceTimersByTimeAsync(1000);
+    child.emit('close', null, 'SIGTERM');
+    expect(await p).toEqual({ kind: 'timeout' });
+    await vi.advanceTimersByTimeAsync(200);
+    expect(killSpy).toHaveBeenCalledWith(-FAKE_PID, 'SIGKILL');
+  });
+
+  it('one byte past maxOutputBytes answers too-large, the group TERMed then KILLed', async () => {
+    const p = run();
+    child.stdout.write(Buffer.alloc(17, 0x61));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(killSpy).toHaveBeenCalledWith(-FAKE_PID, 'SIGTERM');
+    await vi.advanceTimersByTimeAsync(250);
+    expect(killSpy).toHaveBeenCalledWith(-FAKE_PID, 'SIGKILL');
+    expect(await p).toEqual({ kind: 'too-large' });
+  });
+
+  it('a group kill that throws other than ESRCH falls back to the child alone; ESRCH does not', async () => {
+    killSpy.mockImplementation(() => { throw Object.assign(new Error('kill'), { code: 'EPERM' }); });
+    const p = run();
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(child.kill).toHaveBeenCalledWith('SIGTERM');
+    await vi.advanceTimersByTimeAsync(250);
+    expect(child.kill).toHaveBeenCalledWith('SIGKILL');
+    expect(await p).toEqual({ kind: 'timeout' });
+    const esrch = new FakeStdinChild();
+    child = esrch;
+    killSpy.mockImplementation(() => { throw Object.assign(new Error('kill'), { code: 'ESRCH' }); });
+    const q = run();
+    await vi.advanceTimersByTimeAsync(1250);
+    expect(esrch.kill).not.toHaveBeenCalled();
+    expect(await q).toEqual({ kind: 'timeout' });
+  });
+
+  it('a signal not ours answers 128 + signo, the signo read from the host\'s table', async () => {
+    const p = run();
+    child.emit('close', null, 'SIGFAKE');
+    expect(await p).toEqual({ kind: 'exited', code: 168, stdout: '' });
+  });
+
+  it('a child that errors, or a spawn that throws, answers not-started', async () => {
+    const p = run();
+    child.emit('error', Object.assign(new Error('nope'), { code: 'ENOENT' }));
+    expect(await p).toEqual({ kind: 'not-started' });
+    spawnThrows = true;
+    expect(await run()).toEqual({ kind: 'not-started' });
   });
 });
 

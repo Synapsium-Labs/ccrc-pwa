@@ -4,6 +4,7 @@
 // Every sheet is a portalled layer, so where this mounts in the tree moves no pixel.
 //
 // `useFleetFlows()` is how a part opens one. It never holds state of its own; the state is the chrome's.
+import { useMemo } from 'react';
 import type { ReactNode } from 'react';
 import { AddWorkspaceSheet } from './AddWorkspaceSheet';
 import { NewSessionSheet } from './NewSessionSheet';
@@ -26,19 +27,24 @@ export interface FleetFlowDoors {
 }
 
 export function useFleetFlows(): FleetFlowDoors {
-  const chrome = useFleetChrome();
-  const sessions = chrome.store((s) => s.sessions);
-  return {
-    openNewSession: () => chrome.setNewOpen(true),
-    openAddWorkspace: (project) => chrome.setAddWorkspaceFor(project),
+  const { store, setNewOpen, setAddWorkspaceFor, setArchiveAllFor, setReapId, actions, projects } = useFleetChrome();
+  const { openFor } = actions;
+  const { openPool } = projects;
+  // Stable doors (C6, D-6438): a part that holds them (the command layer, a list row) is not handed new ones by a
+  // fleet frame. `openActions` reads the NEWEST row from the store at call time, so no subscription to `sessions`
+  // is needed to keep it current. The dependencies are the chrome's setters and openers, named one by one, and none
+  // changes on a fleet frame; `openPool` does change when `/api/projects` answers (it reads that answer's placement).
+  return useMemo<FleetFlowDoors>(() => ({
+    openNewSession: () => setNewOpen(true),
+    openAddWorkspace: (project) => setAddWorkspaceFor(project),
     openActions: (id) => {
-      const session = sessions.find((s) => s.id === id);
-      if (session !== undefined) chrome.actions.openFor(session);
+      const session = store.getState().sessions.find((s) => s.id === id);
+      if (session !== undefined) openFor(session);
     },
-    openPool: chrome.projects.openPool,
-    openArchiveAll: (project) => chrome.setArchiveAllFor(project),
-    openReap: (id) => chrome.setReapId(id),
-  };
+    openPool,
+    openArchiveAll: (project) => setArchiveAllFor(project),
+    openReap: (id) => setReapId(id),
+  }), [store, setNewOpen, setAddWorkspaceFor, setArchiveAllFor, setReapId, openFor, openPool]);
 }
 
 export function FleetFlows(): ReactNode {

@@ -12016,3 +12016,51 @@ describe('CP-39 Task 4: the ladder of ceilings and the floors, from one set of s
     }
   });
 });
+
+describe('CP-39d: decideActiveRead (D-7096)', () => {
+  type ActiveStat = { isFile: boolean; dev: bigint; ino: bigint; size: number; mtimeNs: bigint };
+  type ActiveRow = { dev: bigint; ino: bigint; offset: number; size: number | null; mtimeNs: bigint | null };
+  const NOW = 1_800_000_000_000;
+  const FRESH_NS = BigInt(NOW - 60_000) * 1_000_000n;
+  const row = (over: Partial<ActiveRow> = {}): ActiveRow => ({ dev: 7n, ino: 9n, offset: 100, size: 100, mtimeNs: FRESH_NS, ...over });
+  const stat = (over: Partial<ActiveStat> = {}): ActiveStat => ({ isFile: true, dev: 7n, ino: 9n, size: 100, mtimeNs: FRESH_NS, ...over });
+
+  it('(a) ACTIVE_STAT_MAX is 256', async () => {
+    const lib = await import('../../ccd/history/lib.mjs');
+    expect(lib.ACTIVE_STAT_MAX).toBe(256);
+  });
+
+  it('(a) the table: each rule answers its word, and each read flips to same with its one changed input restored', async () => {
+    const lib = await import('../../ccd/history/lib.mjs');
+    const decide = (r: ActiveRow, s: ActiveStat | null, nowMs = NOW): string =>
+      lib.decideActiveRead({ row: r, stat: s, nowMs, tornStaleMs: lib.SCAN_INTERVAL_MS });
+    // the base: an equal stat is the same
+    expect(decide(row(), stat()), 'an equal stat').toBe('same');
+    // skip: no stat, or not a regular file
+    expect(decide(row(), null), 'a null stat').toBe('skip');
+    expect(decide(row(), stat({ isFile: false })), 'a link, a directory').toBe('skip');
+    // read, each with CONTROL: the one input restored answers same
+    const cases: Array<[string, ActiveRow, ActiveStat, ActiveRow, ActiveStat]> = [
+      ['another ino', row(), stat({ ino: 10n }), row(), stat()],
+      ['another dev', row(), stat({ dev: 8n }), row(), stat()],
+      ['a size below the offset', row({ offset: 100, size: 100 }), stat({ size: 99 }), row(), stat()],
+      ['another mtime', row(), stat({ mtimeNs: FRESH_NS + 1n }), row(), stat()],
+      ['a null recorded mtime', row({ mtimeNs: null }), stat(), row(), stat()],
+      ['growth over the recorded size, fresh', row({ offset: 100, size: 100 }), stat({ size: 150 }), row({ size: 150 }), stat({ size: 150 })],
+    ];
+    for (const [name, r, s, cr, cs] of cases) {
+      expect(decide(r, s), name).toBe('read');
+      expect(decide(cr, cs), `${name}: restored`).toBe('same');
+    }
+    // a null recorded size reads 0
+    expect(decide(row({ size: null, offset: 0 }), stat({ size: 5 })), 'a null recorded size is 0').toBe('read');
+    // a stale torn tail: the size is above the recorded size, but the mtime is older than tornStaleMs and equals the recorded one
+    const stale = BigInt(NOW - lib.SCAN_INTERVAL_MS - 1) * 1_000_000n;
+    expect(decide(row({ mtimeNs: stale, offset: 100, size: 100 }), stat({ mtimeNs: stale, size: 150 })), 'a stale torn tail').toBe('same');
+    // CONTROL: the same growth with a fresh mtime (equal on both sides) is read
+    expect(decide(row({ mtimeNs: FRESH_NS, offset: 100, size: 100 }), stat({ mtimeNs: FRESH_NS, size: 150 })), 'the same growth, fresh').toBe('read');
+    // the boundary: exactly tornStaleMs old is stale (the examinedSize rule is `>=`)
+    const edge = BigInt(NOW - lib.SCAN_INTERVAL_MS) * 1_000_000n;
+    expect(decide(row({ mtimeNs: edge }), stat({ mtimeNs: edge, size: 150 })), 'exactly tornStaleMs old').toBe('same');
+  });
+});

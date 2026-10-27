@@ -18,7 +18,7 @@
 // markup of its own: the screen still renders every card, chip and sheet.
 // Nothing here reaches the DOM, so this file is `.ts` and the contrast gate
 // has nothing to re-key.
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type {
   ProjectPoolsWire, ProjectPoolWire, ProjectRepoWire, ProjectRow,
 } from '../../../shared/api';
@@ -286,7 +286,9 @@ export function useProjectRows(
     });
   }, [poolOpen, placementFor]);
 
-  const addWorkspace = async (project: string, opts: { name?: string } = {}): Promise<AddOutcome> => {
+  // A callback over the two values it reads (`adding`, `classFilter`) and the stable refresh: its identity moves
+  // when one of them does, never on a render that changed neither (C6, D-6438).
+  const addWorkspace = useCallback(async (project: string, opts: { name?: string } = {}): Promise<AddOutcome> => {
     if (adding.has(project)) return { kind: 'busy' };
     setAdding((s) => new Set(s).add(project));
     try {
@@ -310,20 +312,36 @@ export function useProjectRows(
         return next;
       });
     }
-  };
+  }, [adding, classFilter, refreshProjects]);
 
-  return {
+  const chooseClass = useCallback((next: '' | 'default' | ModelClass): void => {
+    setClassFilter(next);
+    // Synchronously, beside the state: `refreshProjects` reads the ref and
+    // its identity is deliberately stable, so a class set only in state
+    // would be fetched with the PREVIOUS one.
+    classFilterRef.current = next;
+    void refreshProjects();
+  }, [refreshProjects]);
+  const openPool = useCallback((project: string): void => {
+    setPoolSelection(poolSelectionFor(project, placementFor(project), poolWrite.current));
+    setPoolOpen(true);
+  }, [placementFor]);
+  const closePool = useCallback((): void => setPoolOpen(false), []);
+  const notePoolWrite = useCallback((project: string, pool: NonNullable<ProjectRow['pool']>): void => {
+    const write = { project, pool };
+    poolWrite.current = write;
+    setPoolSelection((selected) => selected?.project === project ? { project, pool } : selected);
+    void refreshProjects(undefined, write);
+  }, [refreshProjects]);
+
+  // The plane is memoised (C6, D-6438): the chrome's value is built from it, so a plane rebuilt on every render
+  // (a fleet frame re-renders the provider) would hand every reader of the chrome a new value. `knownProjects` is
+  // derived INSIDE the memo for the same reason: out here it would be a new array on each render.
+  return useMemo(() => ({
     rows: projectRows,
     knownProjects: projectRows.kind === 'ready' ? projectRows.rows.map((r) => r.name) : [],
     classFilter,
-    chooseClass: (next) => {
-      setClassFilter(next);
-      // Synchronously, beside the state: `refreshProjects` reads the ref and
-      // its identity is deliberately stable, so a class set only in state
-      // would be fetched with the PREVIOUS one.
-      classFilterRef.current = next;
-      void refreshProjects();
-    },
+    chooseClass,
     placementFor,
     poolFor,
     repoFor,
@@ -331,16 +349,11 @@ export function useProjectRows(
     addWorkspace,
     poolSelection,
     poolOpen,
-    openPool: (project) => {
-      setPoolSelection(poolSelectionFor(project, placementFor(project), poolWrite.current));
-      setPoolOpen(true);
-    },
-    closePool: () => setPoolOpen(false),
-    notePoolWrite: (project, pool) => {
-      const write = { project, pool };
-      poolWrite.current = write;
-      setPoolSelection((selected) => selected?.project === project ? { project, pool } : selected);
-      void refreshProjects(undefined, write);
-    },
-  };
+    openPool,
+    closePool,
+    notePoolWrite,
+  }), [
+    projectRows, classFilter, chooseClass, placementFor, poolFor, repoFor, adding, addWorkspace,
+    poolSelection, poolOpen, openPool, closePool, notePoolWrite,
+  ]);
 }

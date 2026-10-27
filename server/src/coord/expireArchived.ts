@@ -182,7 +182,7 @@ export const expireLaneLive = (names: readonly string[]): boolean => names.inclu
 
 /** THE REVIEW CONJUNCT for one row (spec §5.3, #166 R16): is `id` the `sessionId` of a REVIEW run whose reviewed
  *  run is not terminal? An unreadable or absent reviewed run is doubt, and doubt keeps (`reviewKeeps`). Shared by the
- *  lane's pass and the act's re-read, and by the stop-done lane's (D-5370, `stopDoneSweep.ts`). */
+ *  lane's pass and the act's re-read, and by the stop-done lane's (D-5370, `sleepLane.ts`). */
 export function expiryReviewing(coord: Pick<CoordStore, 'runsNamingSession' | 'run'>, id: string): { ok: true; reviewing: boolean } | { ok: false; detail: string } {
   try {
     const naming = coord.runsNamingSession(id);

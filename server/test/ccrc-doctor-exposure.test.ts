@@ -9,8 +9,10 @@ import { seedAccountsSh } from './ccdWsHelpers.js';
 import { ccrcContainedEnv } from './ccrcContainment.js';
 import { SCRATCH_SLUGS, PERSISTENT_SLUGS } from './scratchSlugs.js';
 import { describeLinux, itLinux, itDarwin, IS_DARWIN } from './platformFixtures.js';
+import { fixClock, fixedNow } from './fixedClock.js';
+import { writeShippedTimer } from './shippedTimers.js';
 import { DOCS_INDEX_READY, DOCS_INDEX_UNREADABLE, DOCS_HELPER_UNAVAILABLE_MISSING_LINE, docsIndexStubScript } from './docsIndexFixtures.js';
-import { installDoctorHooks, here, REPO, CCRC_SRC, CHECKS_SRC, BASH, Result, installCcrc, stub, unstub, linkReal, stubNodeModelsExit, stubNodeModelsWeirdStatus, RosterEntry, writeRoster, entry, writeWrapper, shq, HEALTHY_SHA, curlCalls, writeCcrcEnv, unitDirOf, unitFileOf, writeUnitFile, removeUnitFile, EXPOSED_HOST, writeExposureEnv, containedPath, doctorEnv, plantScope, sysCaddyfile, DOCTOR_DEADLINE_BIN, runDoctorBounded, runDoctor, registrationHooks, plantHookRegistration, plantSpoolDir, healthy, healthyCodexBox, broken, tableNames, lineFor, anyVerdictFor, HEALTHY_SKIPS, expectUndecided, skipLineFor, remedyFor, noRunnerBugLine, plantSession } from './ccrc-doctorFixture.js';
+import { installDoctorHooks, here, REPO, CCRC_SRC, CHECKS_SRC, BASH, Result, installCcrc, stub, stubBin, unstub, linkReal, stubNodeModelsExit, stubNodeModelsWeirdStatus, RosterEntry, writeRoster, entry, writeWrapper, shq, HEALTHY_SHA, curlCalls, writeCcrcEnv, unitDirOf, unitFileOf, writeUnitFile, removeUnitFile, EXPOSED_HOST, writeExposureEnv, containedPath, doctorEnv, plantScope, sysCaddyfile, DOCTOR_DEADLINE_BIN, runDoctorBounded, runDoctor, registrationHooks, plantHookRegistration, plantSpoolDir, healthy, healthyCodexBox, broken, tableNames, lineFor, anyVerdictFor, HEALTHY_SKIPS, expectUndecided, skipLineFor, remedyFor, noRunnerBugLine, plantSession } from './ccrc-doctorFixture.js';
 
 // Each case's homes go when the case ends, not in a file-wide end sweep (R100, review 518's S1): that sweep overran vitest's 20 s
 // hook timeout on the one file this family was split from. Registered before `installDoctorHooks()`'s root `afterEach` (the codex
@@ -1306,6 +1308,57 @@ describe('ccrc doctor: models', () => {
     writeModelCatalogue(home, 'gpt', { stale: false, fetchedAt: nowS() - (3 * 3600 - 60) });
     const out = runDoctor(home).stdout;
     expect(lineFor(out, 'models'), out).toMatch(/^PASS models: /);
+  });
+
+  // W8 Task C8b's characterization pin (D-7054; ARCH-69 (#804)): the silent-timer bound is three of ccrc-models.timer's
+  // 60-minute periods, 10800 s, held 60 s inside and 60 s past, byte for byte, on a fixed clock. It runs unchanged at
+  // every commit of the series.
+  const catalogueAged = (prefix: string, ageS: number): string => {
+    const home = healthy(prefix);
+    const now = fixedNow();
+    fixClock(home, stubBin(home), now);
+    writeRoster(home, [{ id: 'gpt', exec: { kind: 'external' } }]);
+    writeModelRegistry(home, 'gpt');
+    writeModelCatalogue(home, 'gpt', { stale: false, fetchedAt: now - ageS });
+    return home;
+  };
+  it('a catalogue 3 h - 60 s old: the PASS, byte for byte (C8b)', () => {
+    const out = runDoctor(catalogueAged('ccrc-doctor-models-c8b-inside-', 3 * 3600 - 60)).stdout;
+    expect(lineFor(out, 'models'), out).toBe('PASS models: 1 lane, gpt catalogue 179 min old');
+  });
+  it('a catalogue 3 h + 60 s old: the silent-timer WARN and its remedy, byte for byte (C8b)', () => {
+    const out = runDoctor(catalogueAged('ccrc-doctor-models-c8b-past-', 3 * 3600 + 60)).stdout;
+    const lines = out.split('\n');
+    const i = lines.findIndex((l) => l.startsWith('WARN models: '));
+    expect(lines.slice(i, i + 2), out).toEqual([
+      'WARN models: gpt\'s catalogue is 181 min old and not marked stale — the ccrc-models timer is not reaching this lane (an active timer that has quietly stopped writing is invisible to the \'services\' check above, which measures whether the unit is active, not whether it is producing anything — that check catches a STOPPED timer, not this one); run: systemctl --user status ccrc-models.timer, then: ccrc models refresh gpt',
+      '  remedy: systemctl --user status ccrc-models.timer ; ccrc models refresh <id> for one named lane',
+    ]);
+  });
+  // C8b step 4 (OA-C8c (a), D-7062): an unreadable ccrc-models.timer leaves each OK catalogue's staleness unmeasured:
+  // one WARN naming the unit, never a PASS or a comparison against a literal; ccrc's reader not loaded FAILs naming the bug.
+  const modelsLines = (out: string, home: string): string[] =>
+    out.split(home).join('<home>').split('\n').filter((l, i, all) => /^(PASS|WARN|FAIL) models: /.test(l)
+      || (/^ {2}remedy: /.test(l) && /^(WARN|FAIL) models: /.test(all[i - 1] ?? '')));
+  it.each([[3 * 3600 - 60, 179], [3 * 3600 + 60, 181]])('an unreadable ccrc-models.timer makes models WARN unmeasured over a catalogue %i s old (C8b)', (age, min) => {
+    const home = catalogueAged(`ccrc-doctor-models-c8b-unread-${age}-`, age);
+    writeShippedTimer(join(home, 'ccrc'), 'ccrc-models.timer', null);
+    const r = runDoctor(home);
+    expect(modelsLines(r.stdout, home), r.stdout).toEqual([
+      `WARN models: ccrc-models.timer's cadence could not be read from the shipped unit file (<home>/ccrc/deploy/systemd/ccrc-models.timer), so the staleness of gpt's catalogue (${min} min old) is unmeasured`,
+      '  remedy: the shipped tree at <home>/ccrc is incomplete or damaged — both deploy lanes place the whole tree there, so the next ccrc update (or deploy) restores it; then re-run ccrc doctor',
+    ]);
+    expect(r.stderr).not.toMatch(/integer (?:expression )?expected|syntax error|unbound variable/);
+  });
+  it('ccrc\'s timer reader not loaded: models FAILs naming the bug (C8b)', () => {
+    const home = catalogueAged('ccrc-doctor-models-c8b-unloaded-', 3 * 3600 + 60);
+    const r = spawnSync(BASH, ['-c', `set -uo pipefail; . ${shq(CCRC_SRC)}; . ${shq(CHECKS_SRC)}; BOX_TREE_DIR=; _check_models`],
+      { env: doctorEnv(home), encoding: 'utf8' });
+    expect(modelsLines(r.stdout ?? '', home), r.stdout + (r.stderr ?? '')).toEqual([
+      'FAIL models: ccrc\'s own timer reader is not loaded, so the staleness of gpt\'s catalogue (181 min old) was never measured',
+      '  remedy: this is a bug in ccrc, not a fact about your box — _check_models reads ccrc-models.timer\'s cadence through _timer_period_s and BOX_TREE_DIR, both declared once in ccrc itself, and this check table was sourced by something that is not ccrc',
+    ]);
+    expect(r.status).toBe(1);
   });
 
   it('WARNS — the stale-provider arm — regardless of age, quoting lastError and the age', () => {

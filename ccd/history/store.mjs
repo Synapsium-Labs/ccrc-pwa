@@ -1051,7 +1051,7 @@ const RANGE_PIECE = 1 << 20;
  *  (D-6973): each write is awaited through its callback, which fires only once the compressor has consumed the
  *  piece, so the next read may overwrite it, and a write error rejects instead of writing on into a destroyed
  *  stream; a compressor or read error rejects the call (each piece's race and the final await observe `finished`, and the encoder
- *  is destroyed on any throw out of the loop). Returns null when the file ends before `end`, because it shrank under the read: the caller holds its
+ *  is destroyed on any throw once it exists, the piece's allocation inside the try too). Returns null when the file ends before `end`, because it shrank under the read: the caller holds its
  *  cursor and tries again next tick. */
 export async function compressFdRange(fd, start, end) {
   const hash = newSha256();
@@ -1061,8 +1061,8 @@ export async function compressFdRange(fd, start, end) {
   const out = [];
   enc.on('data', (c) => { out.push(c); });
   const finished = new Promise((resolve, reject) => { enc.once('end', resolve); enc.once('error', reject); });
-  const piece = Buffer.allocUnsafe(Math.min(RANGE_PIECE, end - start));
   try {
+    const piece = Buffer.allocUnsafe(Math.min(RANGE_PIECE, end - start));
     for (let pos = start; pos < end;) {
       const want = Math.min(RANGE_PIECE, end - pos);
       const n = readSync(fd, piece, 0, want, pos);

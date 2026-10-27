@@ -1,4 +1,5 @@
-// The bounded update spawner — ONE body (D-7055; ARCH-73 (#808), its spawn half; spec K17 "Process spawn"). The
+// The bounded spawners — each ONE body. `boundedSpawn` is the update spawner (D-7055; ARCH-73 (#808), its spawn half;
+// spec K17 "Process spawn"); `boundedStdinSpawn` below is the account-op spawner (D-7057, OA-C8a (a) / D-7060). The
 // server role's `boundedUpdateSpawn` (`server/src/update/spawn.ts`) and the agent's `makeUpdateSpawn`
 // (`agent/src/server.ts`) are thin wrappers over it, so the two roles answer the same shape (`UpdateSpawnResult`,
 // `shared/agent-protocol.ts`) under one rule, and a fix lands once.
@@ -112,5 +113,84 @@ export function boundedSpawn(host, file, args, opts) {
       // A parent that will not die (an uninterruptible wait) must not stop the answer past the drain bound.
       armDrain();
     }, timeoutMs);
+  });
+}
+
+/**
+ * The account-op spawner — ONE body (D-7057; OA-C8a (a), D-7060). The server's local arm
+ * (`server/src/accounts/ops.ts#localAccountOps`) and the agent's port (`agent/src/accountop.ts#makeAccountOpSpawn`)
+ * are thin wrappers over it. Its own body, never `boundedSpawn`'s: stdin, the env, the TERM grace and the output cap
+ * differ (D-4390's reason; `agent/src/tokensync.ts` keeps its own body by that same reason).
+ *
+ * Run `file argv` as its own PROCESS GROUP (`detached`, no shell) with `stdin` (a secret or a code, D-5513: never
+ * argv) written exactly, no newline added, then EOF (`null` is an empty stdin). `env` is the child's WHOLE environment,
+ * as the wrapper built it. stdout is kept up to `maxOutputBytes`; one byte more answers `too-large`. stderr is drained
+ * and dropped. At `timeoutMs` the whole group gets SIGTERM, then SIGKILL `killGraceMs` later, then one `drainMs`
+ * deadline: the KILL is never cancelled once the TERM went (a member that ignores TERM and closed its stdio is still
+ * running, D-5621). A group kill that throws ESRCH is a group already gone; anything else falls back to the child
+ * alone. A child a signal not ours ended answers `128 + signo`; a launcher that cannot start answers `not-started`.
+ * Answers once.
+ *
+ * `host` is `{ spawn, signals }`, as `boundedSpawn`'s. Every option is required: the wrappers pass
+ * `ACCOUNT_OP_DRAIN_MS` (`shared/agent-protocol.ts`), `ACCOUNT_OP_KILL_GRACE_MS` and `ACCOUNT_OP_OUTPUT_MAX_BYTES`
+ * (`shared/api.ts`) and the sub's `ACCOUNT_SUB_TIMEOUT_MS` bound from their one definitions; this file defines none.
+ */
+export function boundedStdinSpawn(host, file, argv, stdin, opts) {
+  const { spawn, signals } = host;
+  const { env, timeoutMs, killGraceMs, maxOutputBytes, drainMs } = opts;
+  return new Promise((resolve) => {
+    let settled = false;
+    let stopped = null;
+    const chunks = [];
+    let bytes = 0;
+    let child;
+    const settle = (r) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(bound);
+      resolve(r);
+    };
+    const signalGroup = (s) => {
+      if (child.pid === undefined) return;
+      try { process.kill(-child.pid, s); } catch (e) {
+        // ESRCH: the group is already gone. Anything else: the child alone rather than nothing.
+        if (e.code !== 'ESRCH') { try { child.kill(s); } catch { /* gone */ } }
+      }
+    };
+    /** SIGTERM to the whole group, SIGKILL after the grace, then one drain deadline: the answer is `why`. */
+    const stop = (why) => {
+      if (stopped !== null) return;
+      stopped = why;
+      signalGroup('SIGTERM');
+      setTimeout(() => {
+        signalGroup('SIGKILL');
+        setTimeout(() => settle(why), drainMs).unref();
+      }, killGraceMs).unref();
+    };
+    try {
+      child = spawn(file, [...argv], { detached: true, stdio: ['pipe', 'pipe', 'pipe'], env });
+    } catch {
+      resolve({ kind: 'not-started' });
+      return;
+    }
+    const bound = setTimeout(() => stop({ kind: 'timeout' }), timeoutMs);
+    child.on('error', () => settle({ kind: 'not-started' }));
+    child.stdout.on('data', (b) => {
+      if (stopped !== null) return;
+      bytes += b.length;
+      if (bytes > maxOutputBytes) { chunks.length = 0; stop({ kind: 'too-large' }); return; }
+      chunks.push(b);
+    });
+    // Drained so a chatty verb cannot block on a full pipe; never kept, never logged.
+    child.stderr.on('data', () => {});
+    // A child that exits before reading its stdin makes the write fail with EPIPE; the exit is what answers.
+    child.stdin.on('error', () => {});
+    child.on('close', (code, signal) => {
+      if (stopped !== null) { settle(stopped); return; }
+      // A signal that was not ours reads as the shell's `128 + signo`, as the token-sync port does.
+      const exit = code ?? (signal === null ? 1 : 128 + (signals[signal] ?? 0));
+      settle({ kind: 'exited', code: exit, stdout: Buffer.concat(chunks).toString('utf8') });
+    });
+    child.stdin.end(stdin ?? Buffer.alloc(0));
   });
 }

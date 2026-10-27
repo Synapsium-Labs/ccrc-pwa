@@ -3,13 +3,21 @@
 // this account take. Same disclosure, same rule, same wire flag.
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import type { ProjectRow, RosterWire } from '../../shared/api';
+import { ToastHost } from '@ccrc/ui';
+import type { FleetSession, ProjectRow, RosterWire } from '../../shared/api';
 import { NewSessionSheet } from '../src/fleet/NewSessionSheet';
+import { NAME_FIELD_TEXT } from '../src/fleet/WorkspaceNameField';
 import { api } from '../src/lib/api';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
+import { fleetSession } from './fleetFixture';
 import { TEST_ROSTER } from './rosterFixture';
 
-afterEach(() => { cleanup(); vi.restoreAllMocks(); });
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+  vi.useRealTimers();
+  window.history.replaceState(null, '', '/');
+});
 
 const fakeSocket = () => ({ close: () => {}, send: () => {} }) as never;
 
@@ -38,12 +46,14 @@ const UNKNOWN_POOL_NOTE =
   'One or more project pools are not known from here, so pool matching does not hide those projects.';
 
 /** Open the sheet, land the project list, and pick claude (pool-a) at step 1. */
-const openAtStepTwo = async (projects: ProjectRow[]): Promise<void> => {
+const openAtStepTwo = async (projects: ProjectRow[]): Promise<FleetStore> => {
   const roster = pooled(POOLS);
+  const store = storeWith(roster);
   vi.spyOn(api, 'projects').mockResolvedValue({ roots: ['/w'], projects });
   vi.spyOn(api, 'accounts').mockResolvedValue({ accounts: [], projected: null, roster });
-  render(<NewSessionSheet open onClose={vi.fn()} fleet={storeWith(roster)} />);
+  render(<NewSessionSheet open onClose={vi.fn()} fleet={store} />);
   fireEvent.click(await screen.findByRole('button', { name: /team·max/ }));
+  return store;
 };
 
 describe('NewSessionSheet step 2 and the pool line', () => {
@@ -89,7 +99,7 @@ describe('NewSessionSheet step 2 and the pool line', () => {
 
   it('sends crossPool only for a project behind the disclosure', async () => {
     const create = vi.spyOn(api, 'createSession').mockResolvedValue(undefined);
-    await openAtStepTwo([
+    const store = await openAtStepTwo([
       proj('demo', { state: 'tagged', name: 'pool-a' }),
       proj('quiet-basin', { state: 'tagged', name: 'pool-b' }),
     ]);
@@ -99,6 +109,8 @@ describe('NewSessionSheet step 2 and the pool line', () => {
     await waitFor(() => expect(create).toHaveBeenCalledWith({
       wrapper: 'claude', project: 'demo', workdir: '/w/demo',
     }));
+    // The create answers no id: the sheet holds in its starting state until the fleet frame lists the new session.
+    act(() => { store.setState({ sessions: [fleetSession({ id: 'claude-demo', wrapper: 'claude', project: 'demo' })] }); });
     await waitFor(() => expect(screen.getByRole('button', { name: /^Start demo/ })).toBeEnabled());
 
     fireEvent.click(screen.getByRole('button', { name: 'show other pools (1)' }));
@@ -356,6 +368,29 @@ describe('NewSessionSheet — the project list that could not be read', () => {
   });
 });
 
+describe('NewSessionSheet — a project list the server answered without a projects array', () => {
+  it('an /api/projects answer without a projects array shows the sheet\'s error line', async () => {
+    // Through the REAL adapter: only fetch is stubbed, so the adapter's check is what turns a 200 `{}` into the error line.
+    // The store's cache is empty (`projects: null`), so the error line is what shows.
+    const roster = pooled(POOLS);
+    const store = storeWith(roster);
+    expect(store.getState().projects).toBeNull();
+    vi.spyOn(api, 'accounts').mockResolvedValue({ accounts: [], projected: null, roster });
+    vi.stubGlobal('fetch', vi.fn().mockImplementation(async () => new Response('{}', {
+      status: 200, headers: { 'content-type': 'application/json' },
+    })));
+    try {
+      render(<NewSessionSheet open onClose={vi.fn()} fleet={store} />);
+      fireEvent.click(await screen.findByRole('button', { name: /team·max/ }));
+      const said = await screen.findByText(/Couldn't load the project list/);
+      expect(said).toHaveAttribute('role', 'alert');
+      expect(said).toHaveTextContent("Couldn't load the project list — The server's project list could not be read.");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});
+
 describe('NewSessionSheet — the routing fields ride the start, and only when set', () => {
   const startCall = async (projects: ProjectRow[]): Promise<ReturnType<typeof vi.fn>> => {
     const createSession = vi.fn().mockResolvedValue(undefined);
@@ -446,5 +481,467 @@ describe('the routing row’s third select, and the project order', () => {
     fireEvent.click(await screen.findByRole('button', { name: /other pool/i }));
     expect(await screen.findByText('theirs')).toBeInTheDocument();
     expect(screen.getByTitle(/pool-b/)).toBeInTheDocument();
+  });
+});
+
+// ── THE SHEET OPENS THE NEW SESSION AT ONCE (desktop polish B5, D-6370) ──
+describe('NewSessionSheet — success opens the new session', () => {
+  /** The row `createSession` makes for `demo` on claude: a main checkout, absent from the store until a fleet frame lists it. */
+  const NEW_ROW: FleetSession = fleetSession({ id: 'claude-demo', wrapper: 'claude', project: 'demo', workspace: null });
+  const NEW_WS_ROW: FleetSession = fleetSession({ id: 'claude-demo-ws-a', wrapper: 'claude', project: 'demo', workspace: 'ws-a' });
+
+  /** Render the sheet over a store of its own and drain microtasks only, so it works under fake timers too. */
+  const mount = async (opts: { cached?: ProjectRow[]; projects?: Promise<{ roots: string[]; projects: ProjectRow[] }> } = {}) => {
+    const roster = pooled(POOLS);
+    const store = storeWith(roster);
+    if (opts.cached !== undefined) act(() => { store.setState({ projects: opts.cached }); });
+    vi.spyOn(api, 'projects').mockImplementation(() => opts.projects ?? Promise.resolve({ roots: ['/w'], projects: [proj('demo')] }));
+    vi.spyOn(api, 'accounts').mockResolvedValue({ accounts: [], projected: null, roster });
+    vi.spyOn(api, 'linearResolve').mockResolvedValue({ title: 'Login cleanup', source: 'linear', note: null });
+    const onClose = vi.fn();
+    const ui = (open: boolean) => <><ToastHost /><NewSessionSheet open={open} onClose={onClose} fleet={store} /></>;
+    // The live listeners on the store, counted through its public `subscribe`, installed before the first render.
+    // The count holds only the listeners taken through `fleet.subscribe`, which is what the wait uses; React's own store
+    // subscriptions do not pass through it, so a test compares against its baseline of 0).
+    let liveListeners = 0;
+    const realSubscribe = store.subscribe;
+    vi.spyOn(store, 'subscribe').mockImplementation((listener) => {
+      const release = realSubscribe(listener);
+      let released = false;
+      liveListeners += 1;
+      return () => {
+        if (!released) { released = true; liveListeners -= 1; }
+        release();
+      };
+    });
+    const view = render(ui(true));
+    const flush = async (): Promise<void> => { await act(async () => {}); };
+    await flush();
+    return {
+      store, onClose, flush,
+      listeners: () => liveListeners,
+      close: () => view.rerender(ui(false)),
+      reopen: () => view.rerender(ui(true)),
+      unmount: () => view.unmount(),
+    };
+  };
+  const pickDemo = async (flush: () => Promise<void>): Promise<void> => {
+    fireEvent.click(screen.getByRole('button', { name: /team·max/ }));
+    await flush();
+    fireEvent.click(screen.getByText('demo'));
+  };
+  const showFrame = (store: FleetStore, sessions: FleetSession[]): void => {
+    act(() => { store.setState({ sessions }); });
+  };
+  const startUnnamed = () => fireEvent.click(screen.getByRole('button', { name: /^Start demo/ }));
+  const startNamed = () => {
+    fireEvent.change(screen.getByLabelText(NAME_FIELD_TEXT.label), { target: { value: 'Login cleanup' } });
+    fireEvent.click(screen.getByRole('button', { name: /^Start Login cleanup/ }));
+  };
+
+  it('a named create answered with an id navigates to it', async () => {
+    vi.spyOn(api, 'workspaceAdd').mockResolvedValue({ named: true, id: 'ws a/1', slug: 'login-cleanup', title: 'Login cleanup' });
+    const { onClose, flush } = await mount();
+    await pickDemo(flush);
+    startNamed();
+    await waitFor(() => expect(window.location.pathname).toBe('/s/ws%20a%2F1'));
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText(/^Starting/)).toBeNull(); // a navigating success shows no toast
+  });
+
+  it('a named answer this build cannot read keeps the toast and the close, and goes nowhere', async () => {
+    vi.spyOn(api, 'workspaceAdd').mockResolvedValue({ named: false });
+    const { onClose, flush } = await mount();
+    await pickDemo(flush);
+    startNamed();
+    expect(await screen.findByText('Starting demo on team·max…')).toBeInTheDocument();
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(window.location.pathname).toBe('/');
+  });
+
+  it('an unnamed create navigates when the fleet frame lists the new session', async () => {
+    const create = vi.spyOn(api, 'createSession').mockResolvedValue(undefined);
+    const { store, onClose, flush } = await mount();
+    await pickDemo(flush);
+    startUnnamed();
+    await waitFor(() => expect(create).toHaveBeenCalledTimes(1));
+    await flush();
+    // The create answered, the frame has not: the sheet holds in its starting state and goes nowhere.
+    expect(screen.getByRole('button', { name: 'Starting…' })).toBeDisabled();
+    expect(onClose).not.toHaveBeenCalled();
+    expect(window.location.pathname).toBe('/');
+
+    showFrame(store, [NEW_ROW]);
+    await waitFor(() => expect(window.location.pathname).toBe('/s/claude-demo'));
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText(/^Starting demo/)).toBeNull();
+  });
+
+  it('an unnamed create whose frame came BEFORE the answer still navigates once it resolves', async () => {
+    let answer!: () => void;
+    vi.spyOn(api, 'createSession').mockImplementation(() => new Promise<void>((resolve) => { answer = resolve; }));
+    const { store, onClose, flush } = await mount();
+    await pickDemo(flush);
+    startUnnamed();
+    await flush();
+    showFrame(store, [NEW_ROW]);
+    expect(window.location.pathname).toBe('/');
+    await act(async () => { answer(); });
+    await waitFor(() => expect(window.location.pathname).toBe('/s/claude-demo'));
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('a workspace row, alive before the create or appearing during the wait, is not the new session: it is not a main checkout', async () => {
+    vi.spyOn(api, 'createSession').mockResolvedValue(undefined);
+    const { store, onClose, flush } = await mount();
+    showFrame(store, [NEW_WS_ROW]); // alive BEFORE the create, and not a main checkout
+    await pickDemo(flush);
+    startUnnamed();
+    await flush();
+    showFrame(store, [NEW_WS_ROW, { ...NEW_WS_ROW, id: 'claude-demo-ws-b', workspace: 'ws-b' }]); // nor is a second one
+    await flush();
+    expect(window.location.pathname).toBe('/');
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('an already-live main checkout on the same wrapper closes at once with today\'s toast, and waits for nothing', async () => {
+    vi.useFakeTimers();
+    const create = vi.spyOn(api, 'createSession').mockResolvedValue(undefined);
+    const { store, onClose, flush, listeners } = await mount();
+    showFrame(store, [NEW_ROW]); // alive BEFORE the create: `ccd start` prints "already running" and the create succeeds
+    await pickDemo(flush);
+    await act(async () => { await vi.advanceTimersByTimeAsync(2_000); }); // the sheet's own debounces have fired
+    const listenersBefore = listeners();
+    const timersBefore = vi.getTimerCount(); // only repeating polls remain
+    startUnnamed();
+    await flush();
+    expect(create).toHaveBeenCalledTimes(1);
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(screen.getByText('Starting demo on team·max…')).toBeInTheDocument();
+    expect(window.location.pathname).toBe('/');
+    expect(listeners()).toBe(listenersBefore); // no fleet subscription was taken
+    await act(async () => { await vi.advanceTimersByTimeAsync(55_000); }); // the toast has expired; a wait's 60 s clock would not have
+    expect(vi.getTimerCount()).toBe(timersBefore);
+    await act(async () => { await vi.advanceTimersByTimeAsync(6_000); });
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('a live row id-matched to the picked account but reporting another lane (a swap) closes at once the same way', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(api, 'createSession').mockResolvedValue(undefined);
+    const { store, onClose, flush, listeners } = await mount();
+    // `cmd_swap` rewrites the registry's wrapper and keeps the id: the row's id says claude, its wrapper another lane.
+    showFrame(store, [fleetSession({ id: 'claude-demo', wrapper: 'claude9', project: 'demo', workspace: null })]);
+    await pickDemo(flush);
+    const listenersBefore = listeners();
+    startUnnamed();
+    await flush();
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(screen.getByText('Starting demo on team·max…')).toBeInTheDocument();
+    expect(window.location.pathname).toBe('/');
+    expect(listeners()).toBe(listenersBefore);
+  });
+
+  it('a create answered after the sheet was dismissed navigates nowhere', async () => {
+    let answer!: () => void;
+    vi.spyOn(api, 'createSession').mockImplementation(() => new Promise<void>((resolve) => { answer = resolve; }));
+    const { store, onClose, flush, close } = await mount();
+    await pickDemo(flush);
+    startUnnamed();
+    await flush();
+    close();
+    await act(async () => { answer(); });
+    showFrame(store, [NEW_ROW]);
+    await flush();
+    expect(window.location.pathname).toBe('/');
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('a dismissed create answering later does not re-enable the reopened sheet\'s own start in flight', async () => {
+    let answerA!: () => void;
+    vi.spyOn(api, 'createSession')
+      .mockImplementationOnce(() => new Promise<void>((resolve) => { answerA = resolve; }))
+      .mockImplementationOnce(() => new Promise<void>(() => {})); // the reopened sheet's start never answers
+    const { flush, close, reopen } = await mount();
+    await pickDemo(flush);
+    startUnnamed();
+    await flush();
+    close();
+    reopen();
+    await flush();
+    await pickDemo(flush);
+    startUnnamed();
+    await flush();
+    expect(screen.getByRole('button', { name: 'Starting…' })).toBeDisabled();
+    await act(async () => { answerA(); }); // the dismissed create answers: its sheet is gone, this one's start is not done
+    await flush();
+    expect(screen.getByRole('button', { name: 'Starting…' })).toBeDisabled();
+  });
+
+  it('an unnamed create for an already-live project, answered after a dismissal and a reopening, toasts once and leaves the reopened sheet open', async () => {
+    // The already-live arm closes the sheet at once, so after the create it is the post-create generation check alone
+    // that keeps a dismissed sheet's answer from shutting the operator's reopened sheet (the parent's close).
+    let answer!: () => void;
+    vi.spyOn(api, 'createSession').mockImplementation(() => new Promise<void>((resolve) => { answer = resolve; }));
+    const { store, onClose, flush, close, reopen } = await mount();
+    showFrame(store, [NEW_ROW]); // alive BEFORE the create: this create would take the already-live arm
+    await pickDemo(flush);
+    startUnnamed();
+    await flush();
+    expect(screen.getByRole('button', { name: 'Starting…' })).toBeDisabled();
+    close();
+    reopen();
+    await flush();
+    await act(async () => { answer(); }); // the dismissed create answers successfully, into the reopened sheet
+    await flush();
+    expect(screen.getAllByText('Starting demo on team·max…')).toHaveLength(1); // said once, by the dismissed start
+    expect(onClose).not.toHaveBeenCalled(); // the parent's close would shut the operator's reopened sheet
+    expect(window.location.pathname).toBe('/');
+    // The reopened sheet is a fresh one at step 1, not closed and not left in the old create's starting state.
+    expect(screen.getByRole('button', { name: /team·max/ })).toBeEnabled();
+    expect(screen.queryByRole('button', { name: /^(Starting…|Still starting)/ })).toBeNull();
+    await pickDemo(flush);
+    expect(screen.getByRole('button', { name: /^Start demo/ })).toBeEnabled();
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('a named create answered after the sheet was dismissed says it started, with the server\'s title, and navigates nowhere', async () => {
+    let answer!: (a: { named: true; id: string; slug: string; title: string }) => void;
+    vi.spyOn(api, 'workspaceAdd').mockImplementation(() => new Promise((resolve) => { answer = resolve; }));
+    const { onClose, flush, close } = await mount();
+    await pickDemo(flush);
+    startNamed();
+    await flush();
+    close();
+    // The server resolved the ticket again at create: its title is not what was typed, and the toast says the server's.
+    await act(async () => { answer({ named: true, id: 'claude-demo-ws-a', slug: 'login-cleanup', title: 'Login cleanup (renamed)' }); });
+    await flush();
+    expect(await screen.findByText('Starting Login cleanup (renamed) on team·max…')).toBeInTheDocument();
+    expect(window.location.pathname).toBe('/');
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('a named answer this build cannot read, arriving after a dismissal and a reopening, toasts once and leaves the reopened sheet open', async () => {
+    let answer!: (a: { named: false }) => void;
+    vi.spyOn(api, 'workspaceAdd').mockImplementation(() => new Promise((resolve) => { answer = resolve; }));
+    const { onClose, flush, close, reopen } = await mount();
+    await pickDemo(flush);
+    startNamed();
+    await flush();
+    close();
+    reopen();
+    await flush();
+    await act(async () => { answer({ named: false }); });
+    await flush();
+    expect(screen.getAllByText('Starting demo on team·max…')).toHaveLength(1);
+    expect(onClose).not.toHaveBeenCalled(); // the parent's close would shut the operator's reopened sheet
+    expect(window.location.pathname).toBe('/');
+  });
+
+  it('a sheet dismissed during the wait says it started once, and navigates nowhere', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(api, 'createSession').mockResolvedValue(undefined);
+    const { store, onClose, flush, close } = await mount();
+    await pickDemo(flush);
+    startUnnamed();
+    await flush();
+    expect(screen.queryByText(/^Starting demo/)).toBeNull(); // still waiting: nothing said yet
+    close();
+    await flush();
+    // The create had succeeded: the dismissal says so once, as the in-flight dismissal does.
+    expect(screen.getAllByText('Starting demo on team·max…')).toHaveLength(1);
+    await act(async () => { await vi.advanceTimersByTimeAsync(55_000); }); // that toast has expired by now
+    expect(screen.queryByText('Starting demo on team·max…')).toBeNull();
+    await act(async () => { await vi.advanceTimersByTimeAsync(6_000); }); // past the wait's old 60 s bound
+    showFrame(store, [NEW_ROW]);
+    await flush();
+    expect(window.location.pathname).toBe('/');
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.queryByText('Starting demo on team·max…')).toBeNull(); // the bound says nothing a second time
+  });
+
+  it('a dismissal during the wait releases that wait\'s fleet listener and its 60 s clock', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(api, 'createSession').mockResolvedValue(undefined);
+    const { flush, close, listeners } = await mount();
+    await pickDemo(flush);
+    await act(async () => { await vi.advanceTimersByTimeAsync(2_000); }); // the sheet's own debounces have fired
+    const listenersBefore = listeners();
+    startUnnamed();
+    await flush();
+    expect(listeners()).toBe(listenersBefore + 1); // the wait is running: it listens to the fleet store
+    close();
+    await flush();
+    expect(listeners()).toBe(listenersBefore); // the dismissal released the listener...
+    await act(async () => { await vi.advanceTimersByTimeAsync(55_000); }); // (the dismissal's toast has expired by now)
+    expect(vi.getTimerCount()).toBe(0); // ...and the wait's 60 s clock (a closed sheet polls nothing, and the toast has gone)
+  });
+
+  it('a sheet reopened after a dismissal during the wait gets a wait of its own that the previous clock cannot end', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(api, 'createSession').mockResolvedValue(undefined); // both starts are answered, then wait for their rows
+    const { flush, close, reopen, listeners } = await mount();
+    await pickDemo(flush);
+    await act(async () => { await vi.advanceTimersByTimeAsync(2_000); });
+    const listenersBefore = listeners();
+    startUnnamed(); // the FIRST wait begins at about 2 s
+    await flush();
+    close();
+    await act(async () => { await vi.advanceTimersByTimeAsync(10_000); });
+    reopen();
+    await flush();
+    await pickDemo(flush);
+    startUnnamed(); // the reopened sheet's own wait begins at about 12 s
+    await flush();
+    expect(listeners()).toBe(listenersBefore + 1);
+    await act(async () => { await vi.advanceTimersByTimeAsync(54_000); }); // 66 s: past the FIRST wait's 60 s, inside the new one's
+    expect(screen.getByRole('button', { name: /^(Starting…|Still starting)/ })).toBeDisabled(); // (past 20 s the label is the slow one)
+    expect(listeners()).toBe(listenersBefore + 1); // the new wait still holds its listener
+    close(); // dismissing it must reach ITS handle: the old clock's late settle must not have orphaned it
+    await flush();
+    expect(listeners()).toBe(listenersBefore);
+  });
+
+  it('an unmount during the wait ends it: a later row navigates nowhere, and no listener or clock is kept', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(api, 'createSession').mockResolvedValue(undefined);
+    const { store, onClose, flush, unmount, listeners } = await mount();
+    await pickDemo(flush);
+    await act(async () => { await vi.advanceTimersByTimeAsync(2_000); });
+    const listenersBefore = listeners();
+    startUnnamed();
+    await flush();
+    expect(listeners()).toBe(listenersBefore + 1); // the wait is running
+    unmount(); // the route left the fleet: the sheet is gone, not merely closed
+    await act(async () => {});
+    expect(listeners()).toBe(listenersBefore); // the wait's listener is released: none retained
+    await act(async () => { await vi.advanceTimersByTimeAsync(55_000); }); // before the wait's 60 s: a leaked clock is still pending
+    expect(vi.getTimerCount()).toBe(0);
+    showFrame(store, [NEW_ROW]);
+    await flush();
+    expect(window.location.pathname).toBe('/');
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('past 60 s without a frame it toasts and closes, as before, and navigates nowhere', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(api, 'createSession').mockResolvedValue(undefined);
+    const { onClose, flush } = await mount();
+    await pickDemo(flush);
+    startUnnamed();
+    await flush();
+    await act(async () => { await vi.advanceTimersByTimeAsync(59_000); });
+    expect(onClose).not.toHaveBeenCalled();
+    await act(async () => { await vi.advanceTimersByTimeAsync(2_000); });
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(screen.getByText('Starting demo on team·max…')).toBeInTheDocument();
+    expect(window.location.pathname).toBe('/');
+  });
+});
+
+describe('NewSessionSheet — step 2 shows the cached project list at once', () => {
+  const open = (cached: ProjectRow[] | null, projects: Promise<{ roots: string[]; projects: ProjectRow[] }>) => {
+    const roster = pooled(POOLS);
+    const store = storeWith(roster);
+    if (cached !== null) act(() => { store.setState({ projects: cached }); });
+    vi.spyOn(api, 'projects').mockImplementation(() => projects);
+    vi.spyOn(api, 'accounts').mockResolvedValue({ accounts: [], projected: null, roster });
+    render(<NewSessionSheet open onClose={vi.fn()} fleet={store} />);
+    return store;
+  };
+
+  it('step 2 renders cached projects before /api/projects answers', async () => {
+    const store = open([proj('cached-a'), proj('cached-b')], new Promise(() => {}));
+    fireEvent.click(await screen.findByRole('button', { name: /team·max/ }));
+    expect(await screen.findByText('cached-a')).toBeInTheDocument();
+    expect(screen.getByText('cached-b')).toBeInTheDocument();
+    expect(document.querySelector('.proj-skel')).toBeNull();
+    expect(store.getState().projects).toHaveLength(2); // the sheet reads the store's list, it never writes it
+  });
+
+  it('the fetched list replaces the cached one when it answers, and the store is left alone', async () => {
+    let answer!: (r: { roots: string[]; projects: ProjectRow[] }) => void;
+    const cached = [proj('cached-a')];
+    const store = open(cached, new Promise((resolve) => { answer = resolve; }));
+    fireEvent.click(await screen.findByRole('button', { name: /team·max/ }));
+    await screen.findByText('cached-a');
+    await act(async () => { answer({ roots: ['/w'], projects: [proj('fresh-a')] }); });
+    expect(await screen.findByText('fresh-a')).toBeInTheDocument();
+    expect(screen.queryByText('cached-a')).toBeNull();
+    expect(store.getState().projects).toBe(cached);
+  });
+
+  it('a project picked from the cache is withdrawn when the fetch makes it a crossing one', async () => {
+    let answer!: (r: { roots: string[]; projects: ProjectRow[] }) => void;
+    open([proj('demo')], new Promise((resolve) => { answer = resolve; }));
+    fireEvent.click(await screen.findByRole('button', { name: /team·max/ }));
+    fireEvent.click(await screen.findByText('demo'));
+    expect(screen.getByRole('button', { name: /^Start demo/ })).toBeEnabled();
+    // The fresh read tags the project for another pool than the picked account's: a crossing project is not a plain pick.
+    await act(async () => { answer({ roots: ['/w'], projects: [proj('demo', { state: 'tagged', name: 'pool-b' })] }); });
+    expect(await screen.findByRole('button', { name: 'Choose a project' })).toBeDisabled();
+  });
+
+  it('a project picked from the cache is withdrawn when the fetch no longer lists it', async () => {
+    let answer!: (r: { roots: string[]; projects: ProjectRow[] }) => void;
+    open([proj('demo')], new Promise((resolve) => { answer = resolve; }));
+    fireEvent.click(await screen.findByRole('button', { name: /team·max/ }));
+    fireEvent.click(await screen.findByText('demo'));
+    expect(screen.getByRole('button', { name: /^Start demo/ })).toBeEnabled();
+    await act(async () => { answer({ roots: ['/w'], projects: [proj('other')] }); });
+    expect(await screen.findByText('other')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Choose a project' })).toBeDisabled();
+  });
+
+  /** Pick `quiet-basin` (tagged for another pool than claude's) from the cached list, through the disclosure: a deliberate crossing. */
+  const pickCrossingFromCache = async (answerWith: Promise<{ roots: string[]; projects: ProjectRow[] }>): Promise<ReturnType<typeof vi.fn>> => {
+    const create = vi.fn().mockResolvedValue(undefined);
+    vi.spyOn(api, 'createSession').mockImplementation(create);
+    open([proj('quiet-basin', { state: 'tagged', name: 'pool-b' })], answerWith);
+    fireEvent.click(await screen.findByRole('button', { name: /team·max/ }));
+    fireEvent.click(await screen.findByRole('button', { name: 'show other pools (1)' }));
+    fireEvent.click(screen.getByText('quiet-basin'));
+    expect(screen.getByRole('button', { name: /^Start quiet-basin/ })).toBeEnabled();
+    return create;
+  };
+
+  it('a deliberate crossing pick from the cache survives a fetch whose changed row is still crossing, and Start sends crossPool', async () => {
+    let answer!: (r: { roots: string[]; projects: ProjectRow[] }) => void;
+    const create = await pickCrossingFromCache(new Promise((resolve) => { answer = resolve; }));
+    // The selected project survives the changed row, and Start keeps the deliberate crossing with crossPool: true.
+    const changed = proj('quiet-basin', { state: 'tagged', name: 'pool-b' }, { kind: 'unmeasurable' });
+    await act(async () => { answer({ roots: ['/w'], projects: [changed] }); });
+    expect(await screen.findByRole('button', { name: /^Start quiet-basin/ })).toBeEnabled();
+    fireEvent.click(screen.getByRole('button', { name: /^Start quiet-basin/ }));
+    await waitFor(() => expect(create).toHaveBeenCalledTimes(1));
+    expect(create.mock.calls[0]?.[0]).toEqual({
+      wrapper: 'claude', project: 'quiet-basin', workdir: '/w/quiet-basin', crossPool: true,
+    });
+  });
+
+  it('a deliberate crossing pick from the cache survives a fetch that makes the row eligible, and Start sends no crossPool', async () => {
+    let answer!: (r: { roots: string[]; projects: ProjectRow[] }) => void;
+    const create = await pickCrossingFromCache(new Promise((resolve) => { answer = resolve; }));
+    // The fresh read tags the project for the picked account's own pool: the current row is no longer a crossing one.
+    await act(async () => { answer({ roots: ['/w'], projects: [proj('quiet-basin', { state: 'tagged', name: 'pool-a' })] }); });
+    expect(await screen.findByRole('button', { name: /^Start quiet-basin/ })).toBeEnabled();
+    fireEvent.click(screen.getByRole('button', { name: /^Start quiet-basin/ }));
+    await waitFor(() => expect(create).toHaveBeenCalledTimes(1));
+    expect(create.mock.calls[0]?.[0]).toEqual({ wrapper: 'claude', project: 'quiet-basin', workdir: '/w/quiet-basin' });
+    expect(create.mock.calls[0]?.[0]).not.toHaveProperty('crossPool');
+  });
+
+  it('a failed fetch shows the error line only when there is no cached list to show', async () => {
+    open([proj('cached-a')], Promise.reject(new Error('agent link is down')));
+    fireEvent.click(await screen.findByRole('button', { name: /team·max/ }));
+    expect(await screen.findByText('cached-a')).toBeInTheDocument();
+    expect(screen.queryByText(/Couldn't load the project list/)).toBeNull();
+  });
+
+  it('with neither a fetched nor a cached list the skeleton shows', async () => {
+    open(null, new Promise(() => {}));
+    fireEvent.click(await screen.findByRole('button', { name: /team·max/ }));
+    await act(async () => {});
+    expect(document.querySelector('.proj-skel')).not.toBeNull();
   });
 });

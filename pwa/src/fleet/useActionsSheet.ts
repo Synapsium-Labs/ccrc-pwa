@@ -6,7 +6,7 @@
 // do while the thing it is about changes underneath it? Both of its findings
 // are about that and about nothing else, so the argument reads better next to
 // its own state than buried a third of the way down a screen.
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { FleetSession } from '../../../shared/api';
 
 export interface ActionsSheet {
@@ -45,14 +45,14 @@ export function useActionsSheet(sessions: readonly FleetSession[]): ActionsSheet
     }
   }, [sessions, id, open]);
 
-  return {
-    session,
-    open,
-    openFor: (tapped) => {
-      setId(tapped.id);
-      setSession(tapped);
-      setOpen(true);
-    },
-    close: () => setOpen(false),
-  };
+  // Stable openers and a memoised plane (C6, D-6438): the chrome's value is built from this object, so a new one per
+  // render would hand every reader of the chrome a new value on each fleet frame. The openers read no render-scoped
+  // value (only state setters), so their dependency list is honestly empty.
+  const openFor = useCallback((tapped: FleetSession): void => {
+    setId(tapped.id);
+    setSession(tapped);
+    setOpen(true);
+  }, []);
+  const close = useCallback((): void => setOpen(false), []);
+  return useMemo(() => ({ session, open, openFor, close }), [session, open, openFor, close]);
 }

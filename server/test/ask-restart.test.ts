@@ -16,6 +16,7 @@ import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import { localIO } from '../src/io.js';
 import { okAsk, okAsks } from './coordReadHelpers.js';
+import { questionsTestView } from '../src/coord/questions.js';
 
 afterEach(() => { vi.restoreAllMocks(); });
 
@@ -43,12 +44,12 @@ const PERMISSION_PANE = ['  ⎿  $ rm -rf build', RULE, ' Bash command', '   rm 
   ' Esc to cancel · Tab to amend'].join('\n');
 const APPROVAL_ASK = { approval: { tool: 'Bash', summary: 'rm -rf build' } };
 
+// W3 Q3d (D-7028, named exception 1): the carriers are the watcher's `Questions` instance's; read through its
+// test-only view, per child, as the watcher's private `heldAsks` and `heldApprovals` maps held them.
 type Held = { until: number; askId: number; answeringSince: number | null; ev: unknown };
-const heldMap = (w: FleetWatcher): Map<string, Held> =>
-  (w as unknown as { heldAsks: Map<string, Held> }).heldAsks;
+const heldMap = (w: FleetWatcher): Map<string, Held> => questionsTestView(w.questions).heldAsks();
 type HeldApproval = { until: number; dialogId: string; rowIds: number[]; ev: unknown };
-const heldApprovalMap = (w: FleetWatcher): Map<string, HeldApproval> =>
-  (w as unknown as { heldApprovals: Map<string, HeldApproval> }).heldApprovals;
+const heldApprovalMap = (w: FleetWatcher): Map<string, HeldApproval> => questionsTestView(w.questions).heldApprovals();
 
 function fixture() {
   const home = mkTmp('ccrc-');
