@@ -44,20 +44,20 @@
 .insp-note {
   font-size: var(--fs-meta);
 }
-/* The routing line (T3d): one wrapping line whose model and effort words are the two chooser doors. */
+/* The routing line (T3d): one wrapping line whose model and effort words are the two chooser doors. It stays INLINE
+   flow, not a flex row: the line's spaces are real text between the pieces, which a flex container would collapse
+   (each text run becomes an item) and a copy of the line would come out broken across lines. */
 .insp-routing-row {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--sp-1);
   margin: 0;
   min-width: 0;
   font-size: var(--fs-meta);
 }
-/* The doors reach the tap floor here: the rail has the room the header's chip row does not. */
+/* The doors reach the tap floor here: the rail has the room the header's chip row does not. They are inline chips
+   (`.metachip` is inline-flex), set on the line's middle. */
 .insp-routing-row button {
   min-height: var(--tap-min);
   border-radius: var(--r-md);
+  vertical-align: middle;
 }
 /* The whole value, wrapped: the header's row shows the full model id, so the rail (a superset) never cuts it. */
 .insp-routing-row .metachip-text {
