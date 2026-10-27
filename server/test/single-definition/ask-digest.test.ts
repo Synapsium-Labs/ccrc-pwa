@@ -1452,14 +1452,20 @@ describe('one question sweep (D-7027)', () => {
     expect(stallCodeText(sourceOfSymbol(WATCH, 'FleetWatcher.sweepApprovals'))).not.toMatch(/\bawait\b/);
   });
 
+  // W3 Q3d (D-7028; named exception 2, slug q3d-walk-pin): the acts moved behind the watcher's `Questions` instance, so
+  // the walk's last step is the member `askPass` and `sweepApprovals` call (`coord/questions.ts#createQuestions`'s
+  // `lapseAsks` and `lapseApprovals`), whose bodies hold the store calls.
   it('the walk is real: sweepQuestions dispatches both halves, which reach releaseAsk and lapseApproval', async () => {
     const { sourceOfSymbol } = await import('../scan/symbols.js');
     const code = (name: string): string => stallCodeText(sourceOfSymbol(WATCH, `FleetWatcher.${name}`));
+    const member = (name: string): string => stallCodeText(sourceOfSymbol(path.join(ccrcRoot, 'server/src/coord/questions.ts'), `createQuestions.${name}`));
     expect(code('sweepQuestions')).toMatch(/\bthis\.sweepAsks\(\s*registryRead\s*\)/);
     expect(code('sweepQuestions')).toMatch(/\bthis\.sweepApprovals\(\s*\)/);
     expect(code('sweepAsks')).toMatch(/\bthis\.askPass\(/);
-    expect(code('askPass')).toMatch(/\bstore\.releaseAsk\(/);
-    expect(code('sweepApprovals')).toMatch(/\bcoord\.lapseApproval\(/);
+    expect(code('askPass')).toMatch(/\bthis\.questions\.lapseAsks\(/);
+    expect(member('lapseAsks')).toMatch(/\bstore\.releaseAsk\(/);
+    expect(code('sweepApprovals')).toMatch(/\bthis\.questions\.lapseApprovals\(/);
+    expect(member('lapseApprovals')).toMatch(/\bcoord\.lapseApproval\(/);
   });
 
   it('MUTATION: a second sweep tick calls is counted; an async or awaiting sweepQuestions is seen', async () => {
