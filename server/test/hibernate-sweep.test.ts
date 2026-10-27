@@ -343,6 +343,8 @@ describe('the watcher\'s own shadow pass, its deps unmocked', () => {
     try {
       const order: string[] = [];
       h.w.useStopDoneSerialiser({ serial: async <T>(fn: () => Promise<T>): Promise<T> => { order.push('serial'); return fn(); } } as never);
+      // The registry the pass's listing names: the act lists it again (C4g, D-7047).
+      writeFileSync(path.join(h.reg, HIBERNATE_LIVE_MARKER), '');
       const t = await h.tick();
       await h.w.sweepSleep(t.rows, t.records, [HIBERNATE_LIVE_MARKER], 'idle-hours');
       expect(h.ccdCalls().map((c) => c.args.slice(-2))).toEqual([['hibernate', WID]]);
@@ -440,6 +442,7 @@ describe('hibernatePass: the live act', () => {
       serial: o.serial === 'none' ? null : (o.serial ?? (async (fn) => { order.push('serial'); return fn(); })),
       queueRun: async (_id, fn) => { order.push('queue'); return fn(); },
       rowAtAct: o.rowAtAct ?? (async (r) => ({ ok: true, row: row(r.id) })),
+      listing: async () => [HIBERNATE_LIVE_MARKER],
     };
     return { f: { ...f, deps: { ...f.deps, act: port } }, argvs, order, port };
   };

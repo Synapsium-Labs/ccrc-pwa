@@ -2040,6 +2040,7 @@ export class FleetWatcher {
         mark: (rec) => turnMarkFor(reads, rec),
         rowAtAct: (rec) => this.rowAtAct(rec),
         serial: this.stopDoneSerial, queueRun: (id, fn) => this.deps.queue.run(id, fn),
+        listing: () => this.deps.io.readdir(this.deps.cfg.registryDir),
         startedAt: this.sleepStartedAt, now: Date.now,
       }, this.stopDoneMemory, sessions, records, names);
     } catch (err) {
@@ -2067,6 +2068,7 @@ export class FleetWatcher {
         act: {
           runCcd: this.deps.runCcd, fleetState: this.deps.fleetState, serial: this.stopDoneSerial,
           queueRun: (id, fn) => this.deps.queue.run(id, fn), rowAtAct: (rec) => this.rowAtAct(rec),
+          listing: () => this.deps.io.readdir(this.deps.cfg.registryDir),
         },
       }, this.hibernateMemory, sessions, records, names);
     } catch (err) {

@@ -640,8 +640,9 @@ export function declaredDerivations(root: string = REPO): Array<{ name: string; 
  * - `selection`: it chooses rows for a lane. Exit target (C1j): exactly one, in `FleetWatcher.tick`; the lanes take the
  *   tick's `FleetReadModel`.
  * - `act`: it is read at the act and stays fresh, by name (`ACT_LISTING_METHODS`): the mail lane's last switch read
- *   before it delivers, and the divergence census's listing, taken after git's records on purpose; and the tick's own bare
- *   `readdir`, the snapshot write's re-confirmation when the fleet shrank.
+ *   before it delivers, and the divergence census's listing, taken after git's records on purpose; each sleep lane's
+ *   thunk for its act's switch read, nearest the argv (D-7047, C4g; it lists only when an act is about to compose); and
+ *   the tick's own bare `readdir`, the snapshot write's re-confirmation when the fleet shrank.
  * - `tests-only`: a lane's own read when called with no model, reached by tests alone (`TESTS_ONLY_LISTING_METHODS`);
  *   the registry-refused census pins that `tick()` hands each lane its model.
  * A method not named in either list is `selection`, so a new lane that lists for itself is counted as one.
@@ -649,7 +650,9 @@ export function declaredDerivations(root: string = REPO): Array<{ name: string; 
  * and left to the request-time readers' work (ARCH-52, W2); a listing reached through an alias, a helper or a `readdir`
  * whose argument is a local that holds `registryDir` is not seen.
  */
-export const ACT_LISTING_METHODS: readonly string[] = ['FleetWatcher.mailPass', 'FleetWatcher.divergencesPass'];
+export const ACT_LISTING_METHODS: readonly string[] = [
+  'FleetWatcher.mailPass', 'FleetWatcher.divergencesPass', 'FleetWatcher.sleepRunDone', 'FleetWatcher.sleepIdleHours',
+];
 export const TESTS_ONLY_LISTING_METHODS: readonly string[] = ['FleetWatcher.fleetFor', 'FleetWatcher.sweepHookStates', 'FleetWatcher.detectDialogs'];
 export const SELECTION_LISTING_METHOD = 'FleetWatcher.tick';
 

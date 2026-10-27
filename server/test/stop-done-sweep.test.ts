@@ -120,6 +120,7 @@ function fake(ids: readonly string[], o: { verb?: boolean; serial?: boolean; hol
     },
     serial: o.serial === false ? null : async (fn) => { f.serialCalls++; return fn(); },
     queueRun: async (_id, fn) => fn(),
+    listing: async () => [],
     startedAt: STARTED,
     now: () => NOW,
   };
