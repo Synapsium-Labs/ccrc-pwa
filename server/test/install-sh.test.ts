@@ -135,7 +135,7 @@ describe('install.sh: the node floor, before anything is built', () => {
     const r = runInstallSh(root, [], home, fixtureBin(home));
     expect(r.code).toBe(1);
     expect(r.stderr).toMatch(
-      new RegExp(`^install\\.sh: node v1\\.0\\.0 at .* is below the floor \\(>=${REAL_FLOOR.replace(/\./g, '\\.')}\\)$`, 'm'));
+      new RegExp(`^install\\.sh: node v1\\.0\\.0 at .* is below the floor \\(>=${REAL_FLOOR.replace(/\./g, '\\.')}\\) and nvm was not found$`, 'm'));
     expect(existsSync(join(home, 'npm-argv')), 'npm ran before the refusal').toBe(false);
   });
 
@@ -248,7 +248,7 @@ describe('install.sh: the node floor, before anything is built', () => {
     wrapRealTool(REAL_NODE, join(bin, 'node'));
     const r = runInstallSh(root, [], home, bin);
     expect(r.code).toBe(1);
-    expect(r.stderr).toMatch(/^install\.sh: node v[0-9.]+ at .* is below the floor \(>=99\.0\.0\)$/m);
+    expect(r.stderr).toMatch(/^install\.sh: node v[0-9.]+ at .* is below the floor \(>=99\.0\.0\) and nvm was not found$/m);
     expect(existsSync(join(home, 'npm-argv')), 'npm ran before the refusal').toBe(false);
   });
 });
