@@ -64,6 +64,10 @@
 .insp-routing-row .route-queued {
   white-space: nowrap;
 }
+/* A separator and the part after it stay on one line: the line may break before the " · ", never after it. */
+.insp-routing-tail {
+  white-space: nowrap;
+}
 /* The whole value, wrapped: the header's row shows the full model id, so the rail (a superset) never cuts it. */
 .insp-routing-row .metachip-text {
   white-space: normal;

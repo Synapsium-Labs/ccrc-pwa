@@ -43,7 +43,7 @@ const WORDS: Readonly<Record<'runs' | 'on' | 'effort' | 'sep' | 'asked' | 'asked
 /** One piece of the line, in reading order: plain text, the model door, the effort door, a pending ask (in the
  *  header's pending style) or a note on the read. */
 export interface RoutingPart {
-  readonly kind: 'text' | 'model' | 'effort' | 'asked' | 'note';
+  readonly kind: 'text' | 'sep' | 'model' | 'effort' | 'asked' | 'note';
   readonly text: string;
   /** A door's chip tone, decided here and not by the markup: 'model' for the model door, and for the effort door
    *  'ultra' only on a live ultracode pane whose effort is not set by the lane, else 'plain'. Absent on the rest. */
@@ -89,7 +89,7 @@ export function routingLine(row: FleetSession, view: RouteView, lane: string): R
     { kind: 'text', text: WORDS.effort },
     { kind: 'effort', text: effort, tone: !view.effortInert && row.ultracode ? 'ultra' : 'plain' },
   ];
-  const sep: RoutingPart = { kind: 'text', text: WORDS.sep };
+  const sep: RoutingPart = { kind: 'sep', text: WORDS.sep };
   if (askedClass !== null) parts.push(sep, { kind: 'asked', text: `${WORDS.asked}${askedClass}` });
   if (askedEffort !== null) parts.push(sep, { kind: 'asked', text: `${WORDS.askedEffort}${askedEffort}` });
   if (view.classInert) parts.push(sep, { kind: 'note', text: WORDS.inertModel });

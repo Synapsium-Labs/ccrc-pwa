@@ -156,20 +156,20 @@ describe('the routing line says what runs and asks only what it can measure', ()
       .toEqual(['asked Opus 5.5', 'asked effort high']);
   });
 
-  it('the separator is its own text part, so an asked part and the note hold only their words', () => {
+  it('the separator is its own sep part, so an asked part and the note hold only their words', () => {
     const both = line(fleetSession({
       wrapper: 'lane-a', model: 'Sonnet 5', effort: 'low',
       route: route({ fields: { class: 'opus', effort: 'high' }, unreadable: [] }),
     }), 'anthropic');
     const kinds = both.parts.map((p) => `${p.kind}:${p.text}`);
     expect(kinds.slice(-5)).toEqual([
-      'effort:low', 'text: · ', 'asked:asked Opus 5.5', 'text: · ', 'asked:asked effort high',
+      'effort:low', 'sep: · ', 'asked:asked Opus 5.5', 'sep: · ', 'asked:asked effort high',
     ]);
     const note = line(fleetSession({
       wrapper: 'lane-a', model: 'Sonnet 5', effort: 'medium', route: route({ unreadable: ['effort'] }),
     }), 'anthropic');
     expect(note.parts.slice(-2).map((p) => `${p.kind}:${p.text}`))
-      .toEqual(['text: · ', 'note:routing could not be read']);
+      .toEqual(['sep: · ', 'note:routing could not be read']);
   });
 
   it("an inert effort on an ultracode pane is a plain door", () => {
@@ -196,7 +196,7 @@ describe('the routing line says what runs and asks only what it can measure', ()
     const out = routingLine(row, view, 'Lane A');
     expect(out.askedClass).toBeNull();
     expect(out.sentence).toBe('Runs Sonnet 5 on Lane A · effort medium · model set by the lane');
-    expect(out.parts.slice(-2).map((p) => `${p.kind}:${p.text}`)).toEqual(['text: · ', 'note:model set by the lane']);
+    expect(out.parts.slice(-2).map((p) => `${p.kind}:${p.text}`)).toEqual(['sep: · ', 'note:model set by the lane']);
   });
 
   it('a failed read says routing could not be read', () => {

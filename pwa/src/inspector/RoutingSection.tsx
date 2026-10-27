@@ -44,9 +44,21 @@ export function RoutingSection(): ReactNode {
       default: return p.text;
     }
   };
+  // A separator and the part after it share one nowrap span, so the line breaks before the " · " and never after it:
+  // a lone "·" would otherwise end a line while its pill starts the next. The text is unchanged, only grouped.
+  const nodes: ReactNode[] = [];
+  line.parts.forEach((p, i) => {
+    if (p.kind === 'sep') return;
+    const before = line.parts[i - 1];
+    if (before?.kind === 'sep') {
+      nodes.push(<span key={`tail-${i}`} className="insp-routing-tail">{before.text}{part(p, i)}</span>);
+    } else {
+      nodes.push(part(p, i));
+    }
+  });
   return (
     <InspectorSection id="routing" title="Routing">
-      <p className="insp-routing-row">{line.parts.map(part)}</p>
+      <p className="insp-routing-row">{nodes}</p>
     </InspectorSection>
   );
 }

@@ -333,6 +333,12 @@ describe('a section with nothing to show renders nothing (desktop polish T3d, D-
       // The shape really carries its part, and the component prints the sentence and nothing else.
       expect(sentence, name).toContain(expected);
       expect(el.textContent, name).toBe(sentence);
+      // The separator travels with what follows it, so a narrow rail never ends a line on a lone "·".
+      for (const piece of el.querySelectorAll('.route-queued, .insp-note')) {
+        const tail = piece.parentElement;
+        expect(tail?.classList.contains('insp-routing-tail'), `${name}: ${piece.textContent}`).toBe(true);
+        expect(tail?.textContent?.startsWith(' · '), `${name}: ${tail?.textContent}`).toBe(true);
+      }
       unmount();
     }
 
