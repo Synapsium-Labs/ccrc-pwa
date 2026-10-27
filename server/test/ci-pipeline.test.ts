@@ -1458,4 +1458,27 @@ describe('ci.yml: the session-hook budgets run in `perf (server)`, which is not 
     // Every `Date.now() - t0` timing in the three p95 rows is under the gate: no ungated row reads times[37].
     expect((src.match(/expect\(times\[37\]\)\.toBeLessThan\(150\)/g) ?? []).length).toBe(3);
   });
+
+  it('the secret-mask 2 MB slicing row runs its wall clock in `perf (server)` too: the gated row keeps the bound, the required row pins the slices and reads no clock', () => {
+    const t = step(job('server-perf'), 'Mask slices');
+    expect(t).toMatch(/^ {10}CCRC_PERF: '1'$/m);
+    expect(runScript(t)).toBe(
+      "./node_modules/.bin/vitest run test/secret-mask.test.ts --maxWorkers=1 --no-file-parallelism -t 'a 2 MB TUI pane history: after a warm-up pass'\n");
+    const src = read('server/test/secret-mask.test.ts');
+    const gatedHead = "it.runIf(process.env['CCRC_PERF'] === '1')('a 2 MB TUI pane history: after a warm-up pass";
+    const requiredHead = "it('a 2 MB TUI pane history is masked in slices of at most 64 Ki units with a pause between every two, with the same answer as one string, a key a slice cut splits included'";
+    // A row runs from its header to the next `it(` / `it.runIf(` header.
+    const rowAt = (head: string): string => {
+      const at = src.indexOf(head);
+      expect(at, `secret-mask.test.ts has no row headed ${head}`).toBeGreaterThan(-1);
+      const rest = src.slice(at + head.length);
+      const next = rest.search(/^ *it(?:\.runIf\([^\n]*?\))?\('/m);
+      return next === -1 ? rest : rest.slice(0, next);
+    };
+    expect(rowAt(gatedHead), 'the gated row keeps its threshold, unchanged').toContain('toBeLessThan(BOUND / 5)');
+    const required = rowAt(requiredHead);
+    for (const clock of ['performance.now', 'Date.now', 'process.hrtime']) {
+      expect(required, `the required slicing row must not read ${clock}: no wall-clock assertion in a required check`).not.toContain(clock);
+    }
+  });
 });
