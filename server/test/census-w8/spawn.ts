@@ -87,13 +87,16 @@ export function updateSpawnBodies(root: string = REPO, dirs: readonly string[] =
   return out;
 }
 
-/** A name that reads as a wire deadline or bound: `DRAIN` or `TIMEOUT`, upper case (so `drainTimer` is not one). */
-const WIRE_NAME = /DRAIN|TIMEOUT/;
+/** A name that reads as a wire deadline or bound: `DRAIN`, `TIMEOUT`, `GRACE` or `MAX_BYTES`, upper case (so
+ *  `drainTimer`, `killGraceMs` and `maxOutputBytes` are not one). `GRACE` and `MAX_BYTES` joined with C8e's
+ *  `boundedStdinSpawn` (D-7057): `ACCOUNT_OP_KILL_GRACE_MS` and `ACCOUNT_OP_OUTPUT_MAX_BYTES` are defined once, in
+ *  `shared/api.ts`. */
+const WIRE_NAME = /DRAIN|TIMEOUT|GRACE|MAX_BYTES/;
 /** A plain numeric literal (`2000`, `2_000`, `0.5`). */
 const NUMERIC = /^\d[\d_]*(?:\.\d+)?$/;
 
-/** Every wire-constant copy in the kernel: each definition in `shared/spawn.mjs` of a name containing `DRAIN` or
- *  `TIMEOUT` (a binding or a named symbol), and each numeric literal passed as `setTimeout`'s delay there. A drain or
+/** Every wire-constant copy in the kernel: each definition in `shared/spawn.mjs` of a name containing `DRAIN`,
+ *  `TIMEOUT`, `GRACE` or `MAX_BYTES` (a binding or a named symbol), and each numeric literal passed as `setTimeout`'s delay there. A drain or
  *  a bound written into the `.mjs` is a second definition of `UPDATE_SPAWN_DRAIN_MS` or `UPDATE_SPAWN_TIMEOUT_MS`,
  *  whose one home is `shared/agent-protocol.ts`. 0 at C8c's tip (an absent kernel answers none). */
 export function spawnKernelWireLiterals(root: string = REPO): CensusSite[] {

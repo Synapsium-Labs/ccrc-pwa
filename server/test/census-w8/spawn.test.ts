@@ -67,6 +67,11 @@ describe('spawnKernelWireLiterals — a drain or a bound written into shared/spa
     expect(spawnKernelWireLiterals(root).map((s) => s.line)).toEqual([2]);
   });
 
+  it('fixture: const KILL_GRACE_MS = 5_000 and const OUTPUT_MAX_BYTES = 1024 are definitions (D-7057)', () => {
+    const root = tree({ [SPAWN_KERNEL_FILE]: 'const KILL_GRACE_MS = 5_000;\nconst OUTPUT_MAX_BYTES = 1024;\nexport function boundedStdinSpawn() { return KILL_GRACE_MS + OUTPUT_MAX_BYTES; }\n' });
+    expect(spawnKernelWireLiterals(root).map((s) => s.text)).toEqual(['const KILL_GRACE_MS = 5_000;', 'const OUTPUT_MAX_BYTES = 1024;']);
+  });
+
   it('fixture: setTimeout(f, drainMs) is none, and neither is a lower-case drainTimer', () => {
     const root = tree({ [SPAWN_KERNEL_FILE]: 'export function boundedSpawn(f, { drainMs }) {\n  let drainTimer = null;\n  drainTimer = setTimeout(f, drainMs);\n}\n' });
     expect(spawnKernelWireLiterals(root)).toEqual([]);
