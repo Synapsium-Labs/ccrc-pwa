@@ -217,9 +217,7 @@ import { CHILD_RECLAIM_SWEEP_MS, COLLECT_OBSERVE_INTERVAL_MS, DIVERGENCE_SWEEP_M
 // changes: `ccdargv.js` and `childReclaimSweep.js` are imported a second time here, by name.
 import type { ChildReclaimCollectInput } from './childReclaimSweep.js';
 import { NO_FLEET_IDENTITY } from './fleetidentity.js';
-import { stopDonePass, type StopDoneMemory } from './stopDoneSweep.js';
-import { hibernatePass, type HibernateSweepMemory } from './hibernateSweep.js';
-import { SLEEP_LANES } from './sleepLane.js';
+import { SLEEP_LANES, hibernatePass, stopDonePass, type HibernateSweepMemory, type StopDoneMemory } from './sleepLane.js';
 import type { SleepPolicyName } from './sleep.js';
 import { StaleArchiveBeat } from './staleArchiveBeat.js';
 import { wakeAdmit, type WakeKind } from './coord/wakeBudget.js';
@@ -1314,16 +1312,17 @@ export class FleetWatcher {
    *  (normally asked every four hours) and a row backing off on the ladder are asked again within a few passes,
    *  SOONER; and it restarts the twice-observed sighting and the hour's runs, which DELAY an expiry. */
   private archivedExpiryState = new Map<string, ArchivedExpiryEntry>();
-  /** The stop-done lane (D-5370, `stopDoneSweep.ts`): its one memory (a refused stop's retry instant) and the
-   *  coordination serialiser `buildServer` hands it. Its clock and single flight are the `sleepRunDone` row (D-7045). */
+  /** The stop-done lane (D-5370, `sleepLane.ts`'s `run-done` row): its one memory (a refused stop's retry instant)
+   *  and the coordination serialiser `buildServer` hands it. Its clock and single flight are the `sleepRunDone` row
+   *  (D-7045). */
   private readonly stopDoneMemory: StopDoneMemory = { retryAt: new Map() };
   private stopDoneSerial: (<T>(fn: () => Promise<T>) => Promise<T>) | null = null;
   /** The process start both sleep lanes hold `viewer` against (presence is never persisted; D-7045: one field, set at
    *  construction, where each lane had its own holding the same instant). */
   private readonly sleepStartedAt = Date.now();
-  /** Hibernation's sweep (D-5242, `hibernateSweep.ts`): its memory (the last shadow line, and the last skip or failure
-   *  line, per id); it holds `viewer` against `sleepStartedAt`. Its act uses the stop-done lane's serialiser above, the
-   *  one `CoordMutex`. Its clock and single flight are the `sleepIdleHours` row (D-7045). */
+  /** Hibernation's sweep (D-5242, `sleepLane.ts`'s `idle-hours` row): its memory (the last shadow line, and the last
+   *  skip or failure line, per id); it holds `viewer` against `sleepStartedAt`. Its act uses the stop-done lane's
+   *  serialiser above, the one `CoordMutex`. Its clock and single flight are the `sleepIdleHours` row (D-7045). */
   private readonly hibernateMemory: HibernateSweepMemory = { lastLine: new Map(), lastActLine: new Map() };
   private readonly staleArchive = new StaleArchiveBeat(() => this.deps, this, (a) => this.transcripts.resolve(a));
   /** `flock-unavailable`, once a box has answered it: the lane composes nothing more there (this process). */
@@ -2082,16 +2081,6 @@ export class FleetWatcher {
    *  inside it. Until then the lane stops nothing. */
   useStopDoneSerialiser(h: Pick<CoordRoutesHandle, 'serial'>): void {
     this.stopDoneSerial = (fn) => h.serial(fn);
-  }
-
-  /** The stop-done lane (`run-done`) alone, through `sweepSleep` (C4f deletes this door). */
-  sweepStopDone(sessions: readonly FleetSession[], records: readonly SessionRecord[], names: readonly string[]): Promise<void> {
-    return this.sweepSleep(sessions, records, names, 'run-done');
-  }
-
-  /** Hibernation (`idle-hours`) alone, through `sweepSleep` (C4f deletes this door). */
-  sweepHibernate(sessions: readonly FleetSession[], records: readonly SessionRecord[], names: readonly string[]): Promise<void> {
-    return this.sweepSleep(sessions, records, names, 'idle-hours');
   }
 
   /**
