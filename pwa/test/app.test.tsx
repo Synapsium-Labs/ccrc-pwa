@@ -536,7 +536,9 @@ describe('the frame: landmarks and the skip link (W2 Task S2b)', () => {
           navigate('/');
           render(<App />);
           const strip = await screen.findByRole('group', { name: /^account usage/ });
-          await within(strip).findByText('lane-a');
+          // The fold's control, not a card: `lane-a` shows before the fold does (the row is measured a render or two after
+          // the poll lands), so a wait on it can read the strip at 17 cards with no control.
+          await within(strip).findByRole('button', { name: /more/ });
           const controls = [...document.querySelectorAll('[aria-expanded][aria-controls]')]
             .filter((el) => /^(\+\d+ more|Show fewer)/.test(el.textContent ?? ''));
           expect(controls).toHaveLength(1);
