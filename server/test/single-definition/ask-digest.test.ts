@@ -411,43 +411,58 @@ describe('the ask push body is built once, in server/src/askbody.ts (D-5302)', (
 
 
 // D-5290 (plan docs/superpowers/plans/2026-10-17-coordinator-first-routing.md, Task 5; spec §5.2). APPENDED. ONE
-// `tryHold` decides every ask hold: it is defined once, in `server/src/watch.ts`; it is the only caller of `hold` (the
-// mint) and the watcher's only reader of `parentOfSession`, so no raise site can hold on its own checks; and the
-// first sighting, the deferred first raise and the amendment branch all call it. Its parent-live check reads the
-// dead-coordinator sweep's own predicate, `claimantMeasuredDead`, defined once in `server/src/coord/reclaim.ts` and
-// read by both. Code lines only (`stallCode`).
-describe('one tryHold decides every ask hold (D-5290)', () => {
+// `raise` decides every ask hold (it was `watch.ts#tryHold` until W3 Q3d, D-7028, moved it into the watcher's
+// `Questions` instance; named exception 2): it is defined once, in `server/src/coord/questions.ts`, inside
+// `createQuestions`; it is the only caller of `hold` (the mint) and the only reader of the claimant rule there, so no
+// raise site can hold on its own checks; and `watch.ts`'s first sighting, deferred first raise and amendment branch all
+// call it. Its parent-live check reads the dead-coordinator sweep's own predicate, `claimantMeasuredDead`, defined once
+// in `server/src/coord/reclaim.ts` and read by both. Code lines only (`stallCode`).
+describe('one raise decides every ask hold (D-5290)', () => {
   const holders = (re: RegExp): string[] => ALL.filter((f) => re.test(stallCode(f))).map(rel).sort();
-  const DEFINES_TRY = /\basync\s+tryHold\s*\(|\bfunction\s+tryHold\b|\btryHold\s*=\s*(?:async\s*)?\(/;
+  // The hold's `raise` is async (it awaits the claimant rule); `notice.ts`'s synchronous `function raise` is the notice
+  // funnel's own step, a different function, and the pattern passes over it.
+  const DEFINES_RAISE = /\bconst\s+raise\s*=\s*async\s*\(|\basync\s+raise\s*\(|\basync\s+function\s+raise\b/;
   const DEFINES_DEAD = /\bfunction\s+claimantMeasuredDead\b|\bclaimantMeasuredDead\s*=\s*\(/;
+  const MINT = /(?<![.\w])hold\(/g;
+  const QUESTIONS = path.join(ccrcRoot, 'server/src/coord/questions.ts');
 
-  it('CONTROL: the patterns see a definition and pass over a call and a comment line', () => {
-    expect(DEFINES_TRY.test('  private async tryHold(')).toBe(true);
-    expect(DEFINES_TRY.test('await this.tryHold(r, dialog, actions, recs)')).toBe(false);
+  it('CONTROL: the patterns see a definition and pass over a call, the immediate raise and a comment line', () => {
+    expect(DEFINES_RAISE.test('  const raise = async (')).toBe(true);
+    expect(DEFINES_RAISE.test('await this.questions.raise(r, dialog, hs, actions, recs)')).toBe(false);
+    expect(DEFINES_RAISE.test('const raise = (): void => {')).toBe(false);
+    expect(DEFINES_RAISE.test('async function raise(r) {')).toBe(true);
+    expect(DEFINES_RAISE.test('function raise(deps: NoticeDeps, event: NoticeRecord): NoticeOutcome {')).toBe(false);
     expect(DEFINES_DEAD.test('export function claimantMeasuredDead(v: ClaimantVerdict): boolean {')).toBe(true);
-    expect(stallCodeText('// private async tryHold(\nconst x = 1;')).not.toMatch(DEFINES_TRY);
+    expect(stallCodeText('// const raise = async (\nconst x = 1;')).not.toMatch(DEFINES_RAISE);
+    expect('const mint = hold(r, dialog);'.match(MINT) ?? []).toHaveLength(1);
+    expect('this.hold(r); holdApproval(r); const hold = (r) => r;'.match(MINT) ?? []).toHaveLength(0);
   });
 
-  it('tryHold is defined in server/src/watch.ts and nowhere else', () => {
-    expect(holders(DEFINES_TRY)).toEqual(['server/src/watch.ts']);
+  it('raise is defined in server/src/coord/questions.ts, inside createQuestions, and nowhere else', async () => {
+    expect(holders(DEFINES_RAISE)).toEqual(['server/src/coord/questions.ts']);
+    const { symbolOf } = await import('../scan/symbols.js');
+    expect(symbolOf(QUESTIONS, 'createQuestions.raise').kind).toBe('variable-function');
   });
 
-  it("watch.ts mints only inside tryHold, reads the child's run series only there, and calls it from all three raise paths", () => {
+  it("the mint runs only inside raise, which reads the claimant rule; no run-series read elsewhere; watch.ts calls it from all three raise paths", async () => {
+    // By symbol, never as a literal pin over the file (the literal-pin ratchet, `advance-switches.test.ts`).
+    const { parsedFile, symbolOf } = await import('../scan/symbols.js');
+    const raw = parsedFile(QUESTIONS).text;
+    const raise = symbolOf(QUESTIONS, 'createQuestions.raise');
+    const body = stallCodeText(raw.slice(raise.start, raise.end));
+    const rest = stallCodeText(raw.slice(0, raise.start) + raw.slice(raise.end));
     const watch = stallCode(path.join(ccrcRoot, 'server/src/watch.ts'));
-    const start = watch.search(/\basync\s+tryHold\s*\(/);
-    const end = watch.indexOf('\n  }\n', start);
-    expect(start).toBeGreaterThan(-1);
-    const body = watch.slice(start, end);
-    const rest = watch.slice(0, start) + watch.slice(end);
-    expect(body.match(/\bthis\.hold\(/g) ?? []).toHaveLength(1);
-    expect(rest).not.toMatch(/\bthis\.hold\(/);
+    expect(body.match(MINT) ?? []).toHaveLength(1);
+    expect(rest.match(MINT) ?? []).toHaveLength(0);
+    expect(watch).not.toMatch(/\bthis\.hold\(/);
     // D-5530 (plan Task 16): the claimant decision moved, whole, into `coord/heldFor.ts`, which the approvals mint
-    // reads too: `tryHold` calls it, and the watcher reads the child's run series (`bindingRunsOf`, which replaced
-    // `parentOfSession`: ARCH-62 slice 2) nowhere else. heldFor reads it through `bindingsOf(id).parent` (ARCH-42:
+    // reads too: `raise` calls it, and neither file reads the child's run series (`bindingRunsOf`, which replaced
+    // `parentOfSession`: ARCH-62 slice 2) anywhere else. heldFor reads it through `bindingsOf(id).parent` (ARCH-42:
     // `childParentRead`, bindingReads.ts, through the store's one query), the one parent read it shares with the drift lane.
     expect(body).toMatch(/\bheldFor\(/);
     expect(rest).not.toMatch(/\.bindingRunsOf\(/);
-    expect(rest.match(/\bthis\.tryHold\(/g) ?? []).toHaveLength(3);
+    expect(watch).not.toMatch(/\.bindingRunsOf\(/);
+    expect(watch.match(/\bthis\.questions\.raise\(/g) ?? []).toHaveLength(3);
     const heldForSrc = stallCode(path.join(ccrcRoot, 'server/src/coord/heldFor.ts'));
     expect(heldForSrc).toMatch(/\.bindingsOf\(childId\)\.parent\(/);
     expect(heldForSrc).toMatch(/\bclaimantMeasuredDead\(/);
