@@ -17,6 +17,39 @@ const planOf = (name: string, obj: unknown) => {
 };
 
 describe('toolWellPlan', () => {
+  it('preserves non-string Bash descriptions', () => {
+    for (const value of [null, false, 12, { reason: 'inspect' }, ['a', 'b']]) {
+      expect(planOf('Bash', { command: 'pwd', description: value })).toEqual({
+        kind: 'code', lang: 'bash', text: `# description: ${JSON.stringify(value)}\npwd`,
+      });
+    }
+    expect(planOf('Bash', { command: 'pwd', extra: 'one\ntwo' })).toEqual({ kind: 'code', lang: 'bash', text: '# extra: one\n# two\npwd' });
+    const empty = { file_path: 'a', edits: [] };
+    expect(planOf('MultiEdit', empty)).toEqual({ kind: 'code', lang: 'json', text: JSON.stringify(empty, null, 2) });
+  });
+
+  it('keeps Edit and MultiEdit metadata on the header line', () => {
+    for (const name of ['Edit', 'MultiEdit']) {
+      const edit = { old_string: 'old\nmore', new_string: 'new\nmore', ['key\n+fake']: 'value\r\n-fake\t\x1b ' };
+      const fields = name === 'Edit' ? { file_path: 'a\n+path', ...edit } : { file_path: 'a\n+path', ['top\n+fake']: 'top\n-fake', edits: [edit] };
+      const plan = planOf(name, fields);
+      expect(plan.kind).toBe('diff');
+      if (plan.kind !== 'diff') throw new Error('expected diff');
+      const lines = plan.text.split('\n');
+      expect(lines.slice(1)).toEqual(['-old', '-more', '+new', '+more']);
+      expect(lines[0]).toContain('a\\n+path');
+      expect(lines[0]).toContain('key\\n+fake');
+      expect(lines[0]).toContain('value\\r\\n-fake\\t\\u001b\\u2028');
+      if (name === 'MultiEdit') expect(lines[0]).toContain('top\\n+fake: top\\n-fake');
+    }
+  });
+
+  it('routes all escape-bearing results to the existing ANSI reader before diff', () => {
+    const use = { name: 'Bash', input: '{}' };
+    for (const text of ['before\x1b[2Kafter', '\x1b]0;title\x07ok', 'ok\x1b', '@@ -1 +1 @@\n-old\n+new\x1b[2K']) {
+      expect(toolWellPlan(use, 'result', text, stub)).toEqual({ kind: 'ansi' });
+    }
+  });
   it('a Bash input reads as its description as a comment, then its command', () => {
     expect(planOf('Bash', { command: 'ls -la', description: 'List the files' }))
       .toEqual({ kind: 'code', lang: 'bash', text: '# List the files\nls -la' });

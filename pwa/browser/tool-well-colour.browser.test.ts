@@ -1,5 +1,5 @@
 // Chrome measures the transcript's tool-well palette, stripped controls and fit over the production build (D-6387).
-// Run: `( cd pwa && CCRC_CHROME=<Chrome> ./node_modules/.bin/vitest run --config vitest.browser.config.ts browser/tool-well-colour.browser.test.ts )`.
+// Run: `( cd pwa && CCRC_CHROME=<Chrome> ./node_modules/.bin/vitest run --config vitest.browser.config.ts --maxWorkers=2 --no-file-parallelism browser/tool-well-colour.browser.test.ts )`.
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { chromium, type Browser } from 'playwright-core';
 import { INSTRUMENT, PHOSPHOR, REFINED } from '@ccrc/ui';

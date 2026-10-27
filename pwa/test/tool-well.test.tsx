@@ -4,7 +4,10 @@
 // CodeBlock's bound renders plain, and that inline code is a well chip.
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import * as planner from '../src/session/toolWell';
+import * as markdown from '../src/lib/markdown';
+import { ToolWellText } from '../src/session/ToolWellText';
 import { cleanup, fireEvent, render } from '@testing-library/react';
 import { ToolCard, type ToolResultEvent, type ToolUseEvent } from '@ccrc/ui';
 import { renderToolWell } from '../src/session/ToolWellText';
@@ -29,6 +32,38 @@ function expanded(u: ToolUseEvent, r?: ToolResultEvent): HTMLElement[] {
 const textNodes = (el: Element): ChildNode[] => Array.from(el.childNodes);
 
 describe('tool well', () => {
+  it('strips control-only and escape-bearing diff results', () => {
+    const cases = [['before\x1b[2Kafter', 'beforeafter'], ['\x1b]0;title\x07ok', 'ok'], ['ok\x1b', 'ok'], ['@@ -1 +1 @@\n-old\n+new\x1b[2K', '@@ -1 +1 @@\n-old\n+new']];
+    for (const [raw, expected] of cases) {
+      const [, well] = expanded(use('Bash', '{}'), result(raw!));
+      expect(well!.textContent).toBe(expected);
+      expect(well!.querySelector('code.hljs')).toBeNull();
+      cleanup();
+    }
+  });
+
+  it('memoizes mounted well work by scalar inputs', () => {
+    const plans = vi.spyOn(planner, 'toolWellPlan');
+    const highlights = vi.spyOn(markdown, 'boundedHighlight');
+    const text = '{"command":"pwd"}';
+    const view = render(<ToolWellText use={{ name: 'Bash', input: text }} part="input" text={text} />);
+    expect(plans).toHaveBeenCalledTimes(1);
+    expect(highlights).toHaveBeenCalledTimes(1);
+    view.rerender(<ToolWellText use={{ name: 'Bash', input: text }} part="input" text={text} />);
+    expect(plans).toHaveBeenCalledTimes(1);
+    expect(highlights).toHaveBeenCalledTimes(1);
+    view.rerender(<ToolWellText use={{ name: 'Read', input: text }} part="input" text={text} />);
+    expect(plans).toHaveBeenCalledTimes(2);
+    expect(view.container.textContent).toBe(JSON.stringify({ command: 'pwd' }, null, 2));
+    view.rerender(<ToolWellText use={{ name: 'Read', input: text }} part="result" text={text} />);
+    expect(plans).toHaveBeenCalledTimes(3);
+    expect(view.container.textContent).toBe(text);
+    view.rerender(<ToolWellText use={{ name: 'Read', input: text }} part="result" text="changed" />);
+    expect(plans).toHaveBeenCalledTimes(4);
+    expect(view.container.textContent).toBe('changed');
+    plans.mockRestore();
+    highlights.mockRestore();
+  });
   it("a plain result renders today's DOM: one text node in the well", () => {
     const [, resultWell] = expanded(use('Read', '{"file_path":"/a/b.txt"}'), result('line one\nline two'));
     expect(textNodes(resultWell!)).toHaveLength(1);

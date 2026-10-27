@@ -7,7 +7,7 @@
 // Colour lives only in the wells, which are dark in every palette (spec section 3.1): every hue is a class that paints a
 // palette token, and no run writes a `style` attribute. A block that is over a highlight bound (`html` null) renders as the
 // original text, exactly as a fenced block over its bound renders plain.
-import type { ReactNode } from 'react';
+import { useMemo, type ReactNode } from 'react';
 import { ansiClass, ansiRuns } from '../lib/ansi';
 import { boundedHighlight, isRegisteredGrammar } from '../lib/markdown';
 import { toolWellPlan, type ToolWellPart } from './toolWell';
@@ -26,25 +26,28 @@ function HighlightedWell({ html, head }: { html: string; head?: string }): React
 /** The well's content: `text` for a plain well (and for one over a highlight bound), a highlighted code element for
  *  code or a diff, hue spans for ANSI. */
 export function ToolWellText({ use, part, text }: { use: { name: string; input: string }; part: ToolWellPart; text: string }): ReactNode {
-  const plan = toolWellPlan(use, part, text, isRegisteredGrammar);
-  switch (plan.kind) {
-    case 'plain':
-      return text;
-    case 'code':
-    case 'diff': {
-      const { html } = boundedHighlight(plan.text, plan.kind === 'diff' ? 'diff' : plan.lang);
-      if (html === null) return text;
-      return <HighlightedWell html={html} head={plan.kind === 'code' ? plan.head : undefined} />;
+  const { name } = use;
+  return useMemo(() => {
+    const plan = toolWellPlan({ name, input: text }, part, text, isRegisteredGrammar);
+    switch (plan.kind) {
+      case 'plain':
+        return text;
+      case 'code':
+      case 'diff': {
+        const { html } = boundedHighlight(plan.text, plan.kind === 'diff' ? 'diff' : plan.lang);
+        if (html === null) return text;
+        return <HighlightedWell html={html} head={plan.kind === 'code' ? plan.head : undefined} />;
+      }
+      case 'ansi':
+        return (
+          <>
+            {ansiRuns(text).map((run, i) =>
+              run.hue === null ? run.text : <span key={i} className={ansiClass(run.hue)}>{run.text}</span>,
+            )}
+          </>
+        );
     }
-    case 'ansi':
-      return (
-        <>
-          {ansiRuns(text).map((run, i) =>
-            run.hue === null ? run.text : <span key={i} className={ansiClass(run.hue)}>{run.text}</span>,
-          )}
-        </>
-      );
-  }
+  }, [name, part, text]);
 }
 
 /** The `renderWell` for one call: what `ToolCard` draws in its input and result wells. */

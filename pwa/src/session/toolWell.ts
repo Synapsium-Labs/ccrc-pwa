@@ -1,16 +1,15 @@
 // How a tool box's wells are read (T4a, D-6387): the PLAN for one well of a tool call, input or result, as one of
 // four kinds. `code` is text in a highlight.js grammar (a Bash command, a Write's content, any other tool's input as
 // JSON), `diff` is unified-diff text (an Edit's hunk, a result that starts like `git diff`), `ansi` is a result that
-// carries SGR colour (`lib/ansi.ts`), and `plain` is today's text node, unchanged. The renderer draws the plan; this
+// carries terminal escapes (`lib/ansi.ts`), and `plain` is today's text node, unchanged. The renderer draws the plan; this
 // module only decides it.
 //
-// Pure and L1: it imports `lib/ansi` and nothing else. Whether a grammar is registered is the caller's to say
+// Pure and L1: it imports nothing. Whether a grammar is registered is the caller's to say
 // (`lib/markdown.tsx#isRegisteredGrammar`, handed in as `isRegistered`), because an L1 module may not load a `.tsx`.
 //
 // The input is the call's compact JSON as the server cut it (4000 characters, so a long input arrives TRUNCATED and
 // does not parse). A text that does not parse is `plain`: it is never repaired and no prefix is retried, because a
 // guessed closing would draw words the tool never took.
-import { hasSgr } from '../lib/ansi';
 
 export type ToolWellPart = 'input' | 'result';
 
@@ -41,7 +40,7 @@ function bashPlan(o: Fields): ToolWellPlan | null {
   const lines: string[] = [];
   if (isString(o.description)) lines.push(...commentLines(o.description));
   for (const k of Object.keys(o)) {
-    if (k === 'command' || k === 'description') continue;
+    if (k === 'command' || (k === 'description' && isString(o.description))) continue;
     lines.push(...commentLines(`${k}: ${shown(o[k])}`));
   }
   lines.push(o.command);
@@ -50,7 +49,7 @@ function bashPlan(o: Fields): ToolWellPlan | null {
 
 /** One hunk: the header, every old line as `-`, every new line as `+`. */
 const hunk = (header: string, oldS: string, newS: string): string =>
-  [`@@ ${header} @@`, ...oldS.split('\n').map((l) => `-${l}`), ...newS.split('\n').map((l) => `+${l}`)].join('\n');
+  [`@@ ${JSON.stringify(header).slice(1, -1).replace(/[\u007f-\u009f\u2028\u2029]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`)} @@`, ...oldS.split('\n').map((l) => `-${l}`), ...newS.split('\n').map((l) => `+${l}`)].join('\n');
 
 function editPlan(o: Fields): ToolWellPlan | null {
   if (!isString(o.file_path) || !isString(o.old_string) || !isString(o.new_string)) return null;
@@ -121,6 +120,6 @@ export function toolWellPlan(
   isRegistered: (lang: string) => boolean,
 ): ToolWellPlan {
   if (part === 'input') return inputPlan(use, text, isRegistered);
-  if (hasSgr(text)) return { kind: 'ansi' };
+  if (text.includes('\x1b')) return { kind: 'ansi' };
   return diffHeaded(text) ? { kind: 'diff', text } : PLAIN;
 }
