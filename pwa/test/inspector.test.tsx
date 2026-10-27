@@ -187,6 +187,109 @@ describe('the inspector sections', () => {
   });
 });
 
+/** A session id the `seed()` never fills: its store holds no tasks and no mail. */
+const BARE = 'lane-a-project-a-calm-ridge';
+const sectionIds = (container: HTMLElement): string[] =>
+  [...container.querySelectorAll('[data-section]')].map((e) => e.getAttribute('data-section')!);
+
+describe('a section with nothing to show renders nothing (desktop polish T3d, D-6334)', () => {
+  it('an empty Tasks, Mail or PR section does not render', () => {
+    stubWidth(1920);
+    goTo(`/s/${BARE}`);
+    const workspaceNoPr = fleetSession({
+      id: BARE, wrapper: 'lane-a', home: 'lane-a', project: 'project-a', workspace: 'calm-ridge', model: 'model-x',
+      effort: 'high',
+      pr: { phase: 'none', number: null, url: null, title: null, checks: 'none', checkNames: null, ahead: 0,
+        reason: null, checkedAt: null, mergedAt: null, retryAt: null } as never,
+    });
+    const mainCheckout = fleetSession({
+      id: BARE, wrapper: 'lane-a', home: 'lane-a', project: 'project-a', workspace: null, model: 'model-x',
+      effort: 'high',
+    });
+    for (const row of [workspaceNoPr, mainCheckout]) {
+      act(() => useFleetStore.setState({ sessions: [row] }));
+      const { container, unmount } = render(<InspectorSections />);
+      for (const id of ['tasks', 'mail', 'pr']) {
+        expect(container.querySelector(`[data-section='${id}']`), `${row.workspace} ${id}`).toBeNull();
+      }
+      for (const words of ['No plan', 'No mail', 'Not read yet', 'No PR']) {
+        expect(container.textContent, words).not.toContain(words);
+      }
+      unmount();
+    }
+  });
+
+  it('History renders alone when nothing else has content', () => {
+    stubWidth(1920);
+    goTo(`/s/${BARE}`);
+    // No fleet row yet (a deep link), no tasks, no mail, no usage reading.
+    act(() => useFleetStore.setState({ sessions: [], usage: null }));
+    let r = render(<Rail />);
+    expect(sectionIds(r.container)).toEqual(['history']);
+    r.unmount();
+
+    // A main checkout with a row: what runs is content, so Routing joins History and nothing else does.
+    act(() => useFleetStore.setState({
+      sessions: [fleetSession({ id: BARE, wrapper: 'lane-a', home: 'lane-a', project: 'project-a', model: 'model-x', effort: 'high' })],
+      usage: [],
+    }));
+    r = render(<Rail />);
+    expect(sectionIds(r.container)).toEqual(['routing', 'history']);
+    r.unmount();
+  });
+
+  it('the lane section renders only with a reading', () => {
+    stubWidth(1920);
+    goTo(`/s/${ID}`);
+    for (const usage of [null, [{ ...USAGE, wrapper: 'lane-b' }], []] as (AccountUsage[] | null)[]) {
+      act(() => useFleetStore.setState({ usage }));
+      const r = render(<LaneSection />);
+      expect(r.container.querySelector("[data-section='lane']"), JSON.stringify(usage)).toBeNull();
+      expect(r.container.textContent).not.toMatch(/not read yet|No usage/i);
+      r.unmount();
+    }
+    // A session whose row is not read yet has no lane to name.
+    act(() => useFleetStore.setState({ sessions: [], usage: [USAGE] }));
+    const r = render(<LaneSection />);
+    expect(r.container.innerHTML).toBe('');
+    r.unmount();
+  });
+
+  it('the routing section is one line that says what runs', () => {
+    stubWidth(1920);
+    goTo(`/s/${ID}`);
+    const routed = (live: string, fields: NonNullable<FleetSession['route']>['fields']): FleetSession => ({
+      ...ROW, model: live, route: { fields, degraded: null, inert: [], unreadable: [] },
+    });
+    const line = (): HTMLElement => {
+      const { container } = render(<RoutingSection />);
+      const el = container.querySelector<HTMLElement>('.insp-routing-row');
+      expect(el).not.toBeNull();
+      return el!;
+    };
+
+    let el = line();
+    expect(el.textContent).toBe('Runs model-x on Lane A · effort high');
+    expect(el.querySelector("[data-command='session-model']")).not.toBeNull();
+    expect(el.querySelector("[data-command='session-effort']")).not.toBeNull();
+    cleanup();
+
+    // A class asked for, and the roster entry carries no provider: not measurable, so nothing is asked or queued.
+    act(() => useFleetStore.setState({ sessions: [routed('Sonnet 5', { class: 'opus' })] }));
+    el = line();
+    expect(el.textContent).not.toMatch(/asked|queued/);
+    cleanup();
+
+    // The same ask on a lane known to be Anthropic's: asked, in the header's pending style.
+    act(() => useFleetStore.setState({
+      roster: [{ id: 'lane-a', label: 'Lane A', hue: 'acct-1', homeAble: true, provider: 'anthropic' } as never],
+    }));
+    el = line();
+    expect(el.textContent).toMatch(/ · asked Opus 5\.5$/);
+    expect(el.querySelector('.route-queued')?.textContent).toBe(' · asked Opus 5.5');
+  });
+});
+
 function Rail(): ReactNode {
   const R = REFINED_SET.Inspector;
   if (R === null) throw new Error("Refined's set places no Inspector");
