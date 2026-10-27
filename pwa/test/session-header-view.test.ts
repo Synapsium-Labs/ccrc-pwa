@@ -280,6 +280,21 @@ describe('the header names the session (desktop polish T3c, D-6333)', () => {
     expect(deepLinkFallback('project-z-unlisted-basin', [], [], today)).toEqual(same);
   });
 
+  it("a deep link's fallback: an empty name never matches, and an id that is only a name has no slug to split", () => {
+    const lane = (id: string): { id: string; label: string; hue: 'cyan'; homeAble: boolean; hidden: boolean; pool: null } => (
+      { id, label: id, hue: 'cyan', homeAble: true, hidden: false, pool: null });
+    const today = { title: 'today-title', wrapper: 'lane-z' };
+    const same = { title: 'today-title', crumb: null, wrapper: 'lane-z' };
+    // An empty roster id or project name is no prefix: `-` would otherwise match any id that starts with one.
+    expect(deepLinkFallback('-quiet-basin', [lane('')], [{ name: '' }], today)).toEqual(same);
+    expect(deepLinkFallback('project-a-quiet-basin', [lane('')], [{ name: '' }], today)).toEqual(same);
+    // An id equal to a name has no slug after it, and one that ends at the separator has an empty one: neither is split.
+    expect(deepLinkFallback('project-a', [lane('lane-a')], [{ name: 'project-a' }], today)).toEqual(same);
+    expect(deepLinkFallback('lane-a', [lane('lane-a')], [], today)).toEqual(same);
+    expect(deepLinkFallback('lane-a-', [lane('lane-a')], [], today)).toEqual(same);
+    expect(deepLinkFallback('project-a-', [], [{ name: 'project-a' }], today)).toEqual(same);
+  });
+
   it('a deep link\'s fallback: a lane-prefixed id is a main checkout titled by its project', () => {
     const roster = [
       { id: 'lane', label: 'lane', hue: 'cyan', homeAble: true, hidden: false, pool: null },
