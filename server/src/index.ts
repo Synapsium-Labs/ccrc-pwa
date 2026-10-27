@@ -14,6 +14,7 @@ import { FleetWatcher } from './watch.js';
 import { installShutdownSeal } from './shutdownseal.js';
 import { connectFleet, type FleetClient } from './remote/client.js';
 import { makeRefreshCaps } from './refreshcaps.js';
+import { recordCcdVerbs } from './fleetstate.js';
 import { FleetIdentityCell } from './fleetidentity.js';
 import { PushService } from './push.js';
 import { NotifyLog } from './notifylog.js';
@@ -165,7 +166,7 @@ if (cfg.fleetMode === 'remote') {
     updateRunner: localUpdateSpawnFor(cfg.home),
     sendUpdateOp: (tag, kind) => fleet.client.request({ t: 'req', op: 'update', tag, kind }, UPDATE_OP_TIMEOUT_MS),
     fleetIdentity: fleet.identity,
-    refreshCaps: makeRefreshCaps(fleet.client, fleet.state, fleet.identity),
+    refreshCaps: makeRefreshCaps(fleet.client, fleet.state, fleet.identity, recordCcdVerbs),
   };
 } else {
   // Fix round 3 (task 14, Important #3): real evidence, not an absent

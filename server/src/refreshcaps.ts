@@ -1,4 +1,5 @@
 import type { FleetIdentityCell } from './fleetidentity.js';
+import type { recordCcdVerbs } from './fleetstate.js';
 import type { FleetClient, FleetState } from './remote/client.js';
 
 /** Composition-root factory: binds `fleet.client`/`fleet.state` into the
@@ -13,12 +14,18 @@ import type { FleetClient, FleetState } from './remote/client.js';
 // connection and landing after a close (and perhaps a fresh ready) would describe another connection's agent to
 // every reader of this one. It is written only when the connection epoch is the one it was asked under. Otherwise
 // it is dropped: the next ready's frame and the next minute's refresh measure the current agent.
+//
+// THE WRITER (D-7079; D-7232). `fleetstate.ts#recordCcdVerbs` is the one writer of `ccdVerbs`, and its measured
+// rule is the guard above (a non-null list, under the epoch asked). It comes in as `record`, passed by the composition
+// root, and is imported here only as a type: a runtime import of `fleetstate.ts` (L3) from this file (L1) would be an
+// outward ring edge.
 export function makeRefreshCaps(
   client: Pick<FleetClient, 'caps'>, state: FleetState, identity: Pick<FleetIdentityCell, 'epochNow'>,
+  record: typeof recordCcdVerbs,
 ): () => Promise<void> {
   return async () => {
     const asked = identity.epochNow();
     const verbs = await client.caps();
-    if (verbs !== null && identity.epochNow() === asked) state.ccdVerbs = verbs;
+    record(state, { from: 'measured', verbs, askedEpoch: asked, epochNow: () => identity.epochNow() });
   };
 }

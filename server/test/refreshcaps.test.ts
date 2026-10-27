@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { FleetIdentityCell } from '../src/fleetidentity.js';
+import { recordCcdVerbs } from '../src/fleetstate.js';
 import { makeRefreshCaps } from '../src/refreshcaps.js';
 import type { FleetState } from '../src/remote/client.js';
 
@@ -12,7 +13,7 @@ import type { FleetState } from '../src/remote/client.js';
 describe('makeRefreshCaps — the guard index.ts wires into Deps.refreshCaps', () => {
   it('null is no evidence — leaves a working list untouched', async () => {
     const state: FleetState = { connected: true, downSince: null, ccdVerbs: ['start', 'stop'], rosterFp: null, build: null };
-    const refreshCaps = makeRefreshCaps({ caps: async () => null }, state, new FleetIdentityCell());
+    const refreshCaps = makeRefreshCaps({ caps: async () => null }, state, new FleetIdentityCell(), recordCcdVerbs);
 
     await refreshCaps();
 
@@ -23,7 +24,7 @@ describe('makeRefreshCaps — the guard index.ts wires into Deps.refreshCaps', (
     const state: FleetState = { connected: true, downSince: null, ccdVerbs: ['start', 'ws-audit'], rosterFp: null, build: null };
     const cell = new FleetIdentityCell();
     cell.invalidate('awaiting-inventory');
-    await makeRefreshCaps({ caps: async () => null }, state, cell)();
+    await makeRefreshCaps({ caps: async () => null }, state, cell, recordCcdVerbs)();
     expect(state.ccdVerbs).toEqual(['start', 'ws-audit']);
   });
 
@@ -33,13 +34,13 @@ describe('makeRefreshCaps — the guard index.ts wires into Deps.refreshCaps', (
     const state: FleetState = { connected: true, downSince: null, ccdVerbs: null, rosterFp: null, build: null };
     const cell = new FleetIdentityCell();
     expect(cell.epochNow()).toBe(0);
-    await makeRefreshCaps({ caps: async () => null }, state, cell)();
+    await makeRefreshCaps({ caps: async () => null }, state, cell, recordCcdVerbs)();
     expect(state.ccdVerbs).toBeNull();
   });
 
   it('a real list replaces whatever was there, including an empty one', async () => {
     const state: FleetState = { connected: true, downSince: null, ccdVerbs: ['start'], rosterFp: null, build: null };
-    const refreshCaps = makeRefreshCaps({ caps: async () => ['start', 'ws-rename'] }, state, new FleetIdentityCell());
+    const refreshCaps = makeRefreshCaps({ caps: async () => ['start', 'ws-rename'] }, state, new FleetIdentityCell(), recordCcdVerbs);
 
     await refreshCaps();
 
