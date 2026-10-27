@@ -714,6 +714,20 @@ describe('breadcrumb', () => {
     expect(container.querySelector('.chat-title')?.textContent).toBe('demo');
   });
 
+  it("a main checkout's title is plain text; only a workspace's title, which a rename changes, types in", () => {
+    // TypedLabel streams a CHANGED label in; a main checkout's title is its project, which no rename changes, so the
+    // header mounts no TypedLabel (and no motion listener) for it: the same mounts as before the title was the label.
+    const { container, unmount } = render(<SessionHeaderHost {...props({ session: fleetSession({
+      project: 'demo', workspace: null, name: null, branch: null, id: 'demo' }) })} />);
+    const plain = container.querySelector('.chat-title-text');
+    expect(plain).toHaveTextContent('demo');
+    expect(plain).not.toHaveAttribute('role');
+    unmount();
+    const { container: ws } = render(<SessionHeaderHost {...props({ session: fleetSession({
+      project: 'project-d', workspace: 'quiet-basin', name: null, branch: 'ws/quiet-basin' }) })} />);
+    expect(ws.querySelector('.chat-title-text')).toHaveAttribute('aria-label', 'ws/quiet-basin');
+  });
+
   it('prefers a chosen name over the branch, as the fleet line does', () => {
     render(<SessionHeaderHost {...props({ session: fleetSession({
       project: 'demo', workspace: 'quiet-basin', name: 'refactor-auth', branch: 'ws/quiet-basin' }) })} />);
