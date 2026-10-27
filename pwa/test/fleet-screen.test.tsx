@@ -9,6 +9,8 @@ import { ack, FEED_ACK_KEY, loadAcks, resetAcks } from '../src/lib/seen';
 import { navigate } from '../src/lib/router';
 import { FleetScreen } from '../src/screens/FleetScreen';
 import { renderFleet } from './fleetHost';
+import { SkinSetProvider } from '../src/skins/frame';
+import { REFINED_SET } from '../src/skins/refined/parts';
 import { AccountsStrip } from '../src/fleet/AccountsStrip';
 import { ToastHost } from '@ccrc/ui';
 import { ICONS } from '../../ui/src/icons/lucide';
@@ -1946,6 +1948,38 @@ describe('bucket sections', () => {
     expect(within(exited).queryByRole('button', { name: /mark all/i })).not.toBeInTheDocument();
     expect(screen.queryByText('Attention')).not.toBeInTheDocument();
     expect(screen.queryByText('Dead')).not.toBeInTheDocument();
+  });
+
+  // T3a (D-6331): the counts once per screen. A skin whose `FleetList` part draws its own groups carries the counts
+  // itself (Instrument's group heads), so the screen draws no chips above it; a set with no such part (Refined, or no
+  // frame at all) keeps the chips as today. A part fact, never a skin name: this stub is a set, not a skin.
+  it("with a skin's FleetList part, the screen draws no bucket chips; without one it does", () => {
+    const StubList = (): JSX.Element => <div data-testid="stub-list" />;
+    const sessions = [session({ id: 'a', project: 'alpha', bucket: 'attention', bucketSince: Date.now() })];
+
+    const store = makeStore();
+    const withPart = renderFleet(
+      <SkinSetProvider set={{ ...REFINED_SET, FleetList: StubList }}>
+        <FleetScreen store={store} />
+      </SkinSetProvider>,
+      store,
+    );
+    seed(store, { conn: 'open', sessions });
+    expect(screen.getByTestId('stub-list')).toBeInTheDocument();
+    expect(withPart.container.querySelector('.bucket-bar')).toBeNull();
+    expect(screen.queryByRole('button', { name: /^mark all .+ seen$/i })).not.toBeInTheDocument();
+    withPart.unmount();
+
+    const bare = makeStore();
+    const without = renderFleet(
+      <SkinSetProvider set={REFINED_SET}>
+        <FleetScreen store={bare} />
+      </SkinSetProvider>,
+      bare,
+    );
+    seed(bare, { conn: 'open', sessions });
+    expect(without.container.querySelector('.bucket-bar')).not.toBeNull();
+    expect(screen.getByRole('button', { name: 'Mark all Needs you seen' })).toBeInTheDocument();
   });
 
   it('clicking Mark all seen acks every session in THAT bucket, and only that bucket', () => {
