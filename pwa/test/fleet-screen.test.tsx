@@ -49,12 +49,16 @@ const MIN = 60_000;
  *  failed lifecycle route (`{ ok: false, stderr }`, no `error` key).
  *
  *  Unlike the sibling helper in session-card.test.tsx, this mounts the full
- *  FleetScreen tree — AccountsStrip and FleetHostBanner also call fetch on
- *  mount (api.accounts / api.fleetHealth), and a Response body can only be
- *  read once. A single shared `mockResolvedValue(response)` would let the
- *  first of those consume the body, leaving later callers (our click) with
- *  an empty, already-read stream — so this hands back a fresh Response
- *  per call instead. */
+ *  FleetScreen tree, where other reads call fetch on mount too: the fleet
+ *  store's `connect()` reads /api/accounts, the test host's
+ *  `FleetChromeProvider` polls /api/fleet/health and /api/updates,
+ *  `HotFilesStrip` reads /api/claims and `PasskeyNotice` reads
+ *  /api/auth/status. (`AccountsStrip` reads the store and `FleetHostBanner`
+ *  takes its health as a prop, so neither fetches; C8, D-6440.) A Response
+ *  body can only be read once. A single shared `mockResolvedValue(response)`
+ *  would let the first of those consume the body, leaving later callers
+ *  (our click) with an empty, already-read stream — so this hands back a
+ *  fresh Response per call instead. */
 const stubFetch502 = (stderr: string): void => {
   vi.stubGlobal(
     'fetch',
@@ -71,9 +75,10 @@ const stubFetch502 = (stderr: string): void => {
 /** A real `AccountsResponse` for `GET /api/accounts` — the reap-flow fetch
  *  stubs below used to fall through to a bare `new Response('{}')` for it
  *  (a wire shape the server never sends, since `accounts`/`projected`/
- *  `roster` are none of them optional). AccountsStrip and the fleet store's
- *  own roster poll both hit this route on every FleetScreen mount, so those
- *  guards were load-bearing for this suite rather than a production-only
+ *  `roster` are none of them optional). The fleet store's one accounts poll
+ *  hits this route on every FleetScreen mount (its `connect()` reads it at
+ *  once; AccountsStrip reads the store and fetches nothing, C8, D-6440), so
+ *  those guards were load-bearing for this suite rather than a production-only
  *  boundary check (fix round 1). */
 const accountsRoute = (): Response =>
   new Response(JSON.stringify({ accounts: [], projected: null, roster: TEST_ROSTER }), {
@@ -2483,14 +2488,15 @@ describe('the programme tree on the fleet screen', () => {
    *  in ms.
    *
    *  THE ADAPTATION against the runs-screen twin, which asserts on the whole
-   *  recorded array: that tree is single-interval, and this one is not.
-   *  The fleet store's one /api/accounts poll (20_000, which this screen's
-   *  `connect()` starts), `AccountsStrip` (30_000 for its own `useNow`),
-   *  `FleetHostBanner` (15_000 + 30_000),
-   *  `useUpdatesView` (60_000 — the screen's one /api/updates poll, read by
-   *  UpdateIndicator) and `HotFilesStrip` (30_000) all start polling from this
-   *  screen's mount, and
-   *  none of them is what this gate decides — so the instrument is the
+   *  recorded array: that tree is single-interval, and this one is not. One
+   *  mount records seven, measured: the fleet store's one /api/accounts poll
+   *  (20_000, which this screen's `connect()` starts); the test host's
+   *  `FleetChromeProvider`, whose `useFleetHealth` (15_000, the one
+   *  /api/fleet/health poll) and `useUpdatesView` (60_000, the one
+   *  /api/updates poll, read by UpdateIndicator) the screen reads; a
+   *  `useNow(30_000)` each in `AccountsStrip`, `FleetHostBanner` and
+   *  `HotFilesStrip`; and `HotFilesStrip`'s own /api/claims poll (30_000).
+   *  None of them is what this gate decides — so the instrument is the
    *  PRESENCE of `1_000` among the recorded intervals, not their sequence.
    *  Measured across `pwa/src`: no other timer in this tree has a 1_000 ms
    *  period (the nearest neighbour is `TypedLabel`'s 28 ms typing timer), so a
