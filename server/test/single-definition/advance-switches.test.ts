@@ -674,7 +674,7 @@ describe('one writer per fact (ARCH-40): the switches whose writer set is alread
   it('literal source pins over W1a\'s files may only shrink (D-5854; ARCH-06\'s counting rule)', () => {
     // Measured on merge day. Lower a row when a pin moves onto scan/symbols.ts; never raise one.
     const CEILING: Record<string, number> = {
-      'server/src/watch.ts': 79,
+      'server/src/watch.ts': 69,   // W3 Q3d (D-7028): 79 - 10, the pins whose text moved to coord/questions.ts, re-keyed on scan/symbols.ts
       'server/src/server.ts': 23,
       'server/src/interruptlog.ts': 0,
       'server/src/coord/routes.ts': 38,
@@ -715,7 +715,7 @@ describe('one writer per fact (ARCH-40): the switches whose writer set is alread
   // onto scan/symbols.ts ahead of W1b lowers a row here. Measured on this slice's tip; may only shrink.
   it('literal source pins over W1b\'s files may only shrink (D-6114; ARCH-06\'s counting rule)', () => {
     const CEILING: Record<string, number> = {
-      'server/src/watch.ts': 79,
+      'server/src/watch.ts': 69,   // W3 Q3d (D-7028): 79 - 10, the pins whose text moved to coord/questions.ts, re-keyed on scan/symbols.ts
       'server/src/coord/routes.ts': 38,
       'server/src/ccdargv.ts': 6,
       'server/src/registry.ts': 2,
