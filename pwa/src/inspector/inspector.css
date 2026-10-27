@@ -56,6 +56,7 @@
    (`.metachip` is inline-flex), set on the line's middle. */
 .insp-routing-row button {
   min-height: var(--tap-min);
+  min-width: var(--tap-min);
   border-radius: var(--r-md);
   vertical-align: middle;
 }
