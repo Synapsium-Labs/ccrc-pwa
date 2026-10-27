@@ -1,7 +1,8 @@
 // Child-reclamation wave 5, Task 4: the registry answer GET /api/runs reads to
 // compose a run's reclaim chip. It is IN MEMORY, off the registry listing the
-// 2 s tick already made. A route-time `readRegistry` would cost ~721 agent-WS
-// operations per board load in remote mode.
+// 2 s tick already made. A route-time `readRegistry` on a 24-session fleet is a
+// floor of 97 agent-WS operations [registry-read-census:fleet] per board load
+// in remote mode, before the other listed fields.
 import { describe, it, expect } from 'vitest';
 import { mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';

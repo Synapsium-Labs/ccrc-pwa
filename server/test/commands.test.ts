@@ -399,7 +399,7 @@ describe('GET /api/sessions/:id/commands reads a bounded tail (D-6434)', () => {
     expect(r.skills[0]!.desc).toBe(desc);
   });
 
-  it('no full listing in four chunks: the head\'s first answers', async () => {
+  it('no full listing in four chunks: the head\'s last full listing answers', async () => {
     // Head: two full listings and a delta; a DIFFERENT full listing sits in the fifth chunk back; the window is filler.
     const S = CHUNK * 6;
     const head = bytes(full('- h1: first head'), full('- h2: second head'), delta('- hd: head delta'));

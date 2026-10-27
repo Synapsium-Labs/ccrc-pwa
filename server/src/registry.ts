@@ -1269,10 +1269,12 @@ export type RegistryRead =
  * fleet was one agent round trip per row: 92 serial rounds on the fleet box at a live round of 55 to 85 ms (measured:
  * `peers list` took 4.9 to 8.4 s). Step 0 measured it again: 102 listed rows, a whole-registry read route at 5.9 to
  * 9.9 s, median 7.0 s (about 69 ms per row); on the 80-row counting fixture 81 gated rounds became 11 and 2512
- * requests became 849. At 8 rows in flight the same read is about 12 rounds, about 1 s (derived, not
- * measured). 8 is the plan's figure, not a tuned one. The agent link is one WebSocket and a row puts only its listed
- * fields on it together, so the requests in flight are bounded by 8 rows x the 37 fields a row can read (296 at the
- * very most, typically about a hundred), not by 8. The row count is the lever: it cuts the rounds by a factor of 8,
+ * requests became 849. At 8 rows in flight the same 102 rows are 14 rounds (the listing, then
+ * ceil(102 / 8) = 13 row rounds), about 1.0 s at the measured median of about 69 ms a round: derived, not
+ * measured, and it assumes a round of 8 rows costs what one serial row's round did. 8 is the plan's figure, not a
+ * tuned one. The agent link is one WebSocket and a row puts only its listed fields on it together, so the requests
+ * in flight are bounded by 8 rows x the 37 fields a row can read (296 at the very most, typically about a hundred),
+ * not by 8. The row count is the lever: it cuts the rounds by a factor of 8,
  * while one row's field reads stay together in one round.
  *
  * Only ROWS are under this bound; a row's own field reads are NOT. Every `mapBounded` call builds its own limiter, so
