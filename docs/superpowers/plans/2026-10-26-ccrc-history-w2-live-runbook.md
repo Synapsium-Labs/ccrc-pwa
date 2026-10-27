@@ -3,10 +3,11 @@
 The operator's runbook for W2's live evaluation, with the coordinator's checkpoints (CP-40 of the ccrc-history completion plan). One named node: **the fleet box** (operator ruling, 2026-10-25). Every
 command is cited to the decisions document (`docs/superpowers/plans/2026-10-19-ccrc-history-w2-decisions.md`, "§5 act N",
 "W2-Dn") or to the plan task that ships it (W2-3, W2-4, W2-5a, W2-5b1, W2-5b2, W2-6, W2-7). Every verb, flag,
-refusal word and output path below was checked against the code of `v0.0.740`. By the operator's ruling of 2026-10-26 (R-B1), the
-final W2 release is `v0.0.740`, cut from the merge of the budget-amendment wave, W2-7 (#1641, `c1770fbf4`), not
-`v0.0.730` (see "Before act 7"). On that tag, re-read each verb's usage before running it. Plan text is never ground
-truth; the merged code is.
+refusal word and output path below was checked against the code of `v0.0.740`. By the operator's ruling of 2026-10-26
+(R-B1), the final W2 release carries the budget-amendment wave, W2-7 (#1641, `c1770fbf4`, first released as
+`v0.0.740`), not `v0.0.730`: it is the fleet box's release at act 6, `v0.0.740` or a later one with the same history
+code (see "Before act 7"). On that tag, re-read each verb's usage before running it. Plan text is never ground truth;
+the merged code is.
 
 ## In short
 
@@ -136,9 +137,12 @@ Every line must be measured and recorded before step 0a.
 - [ ] **Every W2 PR merged.** On `main` today: 5h-1 (#737), 5h-2 (#1010), W2-1 (#1105), W2-2a (#1126), W2-2b (#1154), W2-3
   (#856), W2-4 (#826) and W2-5a (#1134). Since merged: W2-5b1 (#1497), W2-6 (#1547) and W2-5b2 with the coordinator's K25 to
   K27 amendment (#1560) (W2-D6, §5 act 5). Last: W2-7, the budget-amendment wave (#1641), which adds the amendment kind
-  `budget-raise` (the operator's ruling of 2026-10-26, R-B1; D-7063). The final W2 release is `v0.0.740`, cut from
-  #1641's merge (`c1770fbf4`), not `v0.0.730`. `<tag>` below is `v0.0.740`. Acts 5 and 6 roll it, and acts 7 onward
-  run only on it: part 1 refuses a step 0a or pilot-source record stamped with another release (`release-mismatch`).
+  `budget-raise` (the operator's ruling of 2026-10-26, R-B1; D-7063). The final W2 release is the release on the
+  fleet box at act 6: `v0.0.740` (#1641's merge, `c1770fbf4`) or a later release whose history code (the four
+  `gate_code` files and `ccd/history/`) is byte-identical to `v0.0.740`'s, never `v0.0.730`. Before act 5 the
+  coordinator measures that diff and posts the tag; on 2026-10-27 the fleet box was on `v0.0.745`, whose history code
+  is `v0.0.740`'s. `<tag>` below is that tag. Act 6 pins it (rolling it first only if the box is not on it), and
+  acts 7 onward run only on it: part 1 refuses a step 0a or pilot-source record stamped with another release (`release-mismatch`).
 - [ ] **That release is on the fleet box (§5 act 6).** Rolled out through the release lane (`ccrc rollout --to <tag>`, or
   `ccrc update --to <tag>` on the box). `ccrc version` names `<tag>` with a complete, signed `install:` line. Step 0a
   reads only `version` in `~/.ccrc/build.json`: an untagged build (no `version`), or a stamp that is absent, unreadable
@@ -858,15 +862,16 @@ and the ledger records the halt (the operator's ruling of 2026-10-26, R-B4).
 **Agreed**
 - One named node, the fleet box (ruling 2026-10-25). Acts 7 to 29 run there in §5's order.
 - Every W2 PR is merged; W2-5b1 (#1497), W2-6 (#1547), W2-5b2 with K25 to K27 (#1560) and W2-7 (#1641) were the last.
-  Every verb, flag, refusal word and output path here was checked against `v0.0.740`'s code.
+  Every verb, flag, refusal word and output path here was checked against `v0.0.740`'s code, which `v0.0.745` carries
+  unchanged.
 - The two-part record, saved 0600 off-repo, with only shas, counts and aggregates public (W2-D25).
 - Stops resume and refusals need a changed input (`DRIVER_STOPS` and `DRIVER_REFUSALS`). `pilot-failed` halts (K3).
 - A quiz-floor superseding draft cannot reuse the pilot result: `open --finalize` refuses one written under another
   part 1 (K21), so acts 12 to 17 re-run.
 - A spent budget after part 2 (the operator's ruling of 2026-10-26, R-B1): built by W2-7 (#1641, D-7063) as the
   amendment kind `budget-raise`, which only raises the budget in force and moves nothing that scores. The final W2
-  release is `v0.0.740`, cut from its merge (`c1770fbf4`). Acts 5 and 6 roll it, not `v0.0.730`, and acts 7 onward
-  run only on it.
+  release carries its merge (`c1770fbf4`, first released as `v0.0.740`): the fleet box's release at act 6 with the
+  same history code (`v0.0.745` on 2026-10-27), not `v0.0.730`, and acts 7 onward run only on it.
 - No release install and no change to the account's wrapper from act 6 to act 28 (R-B2). There is no freeze exception.
   If either is forced, W2 halts and closes with no verdict (acts 26 to 29). `tree-moved`, `code-changed` and
   `wrapper-moved` are halts. This settles both freeze-exception questions: no release is installed in the window, so
@@ -878,8 +883,9 @@ and the ledger records the halt (the operator's ruling of 2026-10-26, R-B4).
 
 **Waiting on you**
 - Act 1's account and the three exact model ids (arm, writer, judge).
-- Acts 5 and 6: roll `v0.0.740` onto the fleet box through the release lane, then pin its update intent to that tag
-  (or set it off) and record the time. The rest of "Before act 7" follows.
+- Acts 5 and 6: the coordinator posts the final W2 release's tag (`v0.0.745` as measured on 2026-10-27); roll it onto
+  the fleet box only if the box is not on it, then pin its update intent to that tag (or set it off) and record the
+  time. The rest of "Before act 7" follows.
 - Rulings this runbook cannot make: none left. The operator's ruling of 2026-10-26 settled all six.
 
 **Later**

@@ -353,7 +353,7 @@ build · no · coordinator · PS12; X10/F8; deviation-refs.test.ts (a number def
 spec-decides · no · W2-4 · PS10; ci-pipeline.test.ts:1010-1016.
 
 **W2-D6. The build freeze: everything installed before part 1, then nothing moves.**
-- Every W2 PR (W2-1 to W2-6) merges before the final W2 release is cut. The operator rolls that release onto every named node before part 1. **Amended (the operator's ruling R-B1, 2026-10-26; W2-7, D-7063):** W2-7, the budget raise, is a W2 PR too, so the final W2 release is the tag cut from its merge, v0.0.740.
+- Every W2 PR (W2-1 to W2-6) merges before the final W2 release is cut. The operator rolls that release onto every named node before part 1. **Amended (the operator's ruling R-B1, 2026-10-26; W2-7, D-7063):** W2-7, the budget raise, is a W2 PR too, so the final W2 release carries its merge (first released as v0.0.740): it is the release on the fleet box at act 6, v0.0.740 or a later one whose history code (the four `gate_code` files and `ccd/history/`) is byte-identical to v0.0.740's (v0.0.745 when measured on 2026-10-27).
 - **From that rollout to close:**
   - each named node's update intent is off, or pinned to that tag;
   - the driver refuses any spawning or scoring subcommand with `tree-moved` when the node's installed release stamp differs from part 1's `gate_code.release_tag` (W2-D56).
@@ -1837,7 +1837,7 @@ Public: shas, counts, K, X, k_unit, the method, the window times, the Q18 figure
 
 **Rollout and the build freeze**
 
-5. *The coordinator merges W2-1 to W2-6. The final W2 release is cut and its tag is posted.* Amended (the operator's ruling R-B1, 2026-10-26): W2-7, the budget raise (D-7063), merges too, and the final W2 release is the tag cut from its merge, v0.0.740 (merged c1770fbf4, 2026-10-27 01:06Z).
+5. *The coordinator merges W2-1 to W2-6. The final W2 release is cut and its tag is posted.* Amended (the operator's ruling R-B1, 2026-10-26): W2-7, the budget raise (D-7063), merges too (c1770fbf4, 2026-10-27 01:06Z, first released as v0.0.740), and the final W2 release is the release on the fleet box at act 6 whose history code is v0.0.740's (v0.0.745 when measured on 2026-10-27); the coordinator posts its tag.
 6. Roll that release onto every named node. **Set each named node's update intent to off, or pinned to that tag, and record it.** It stays that way until close.
 
 **Step 0a, pilot sourcing, part 1**
