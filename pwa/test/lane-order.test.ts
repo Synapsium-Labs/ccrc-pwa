@@ -38,7 +38,9 @@ describe('lanesByFree', () => {
   const names = (lanes: readonly AccountUsage[]): string[] => lanesByFree(lanes).map((l) => l.wrapper);
 
   it('lanes sort by binding use, lowest first, ties in roster order', () => {
-    const lanes = [lane('lane-a', 70, 10), lane('lane-b', 5, 40), lane('lane-c', 40, 20), lane('lane-d', 40, 40), lane('lane-e', 0, 0)];
+    // c and d tie on everything but the name (binding use, its reset, the other window's use): only then the roster decides.
+    // b binds at 35, off the tie, so the reset cannot reorder it past c and d.
+    const lanes = [lane('lane-a', 70, 10), lane('lane-b', 5, 35), lane('lane-c', 40, 20), lane('lane-d', 40, 20), lane('lane-e', 0, 0)];
     expect(names(lanes)).toEqual(['lane-e', 'lane-b', 'lane-c', 'lane-d', 'lane-a']);
     // Ties (c, d at 40) keep the input order whichever way it runs.
     expect(names([lanes[3]!, lanes[2]!])).toEqual(['lane-d', 'lane-c']);
