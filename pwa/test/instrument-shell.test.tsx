@@ -112,6 +112,8 @@
 //   the flyout while expanded .......................... "no flyout while expanded, and none below 900"
 //   the flyout below 900 ............................... "no flyout while expanded, and none below 900"
 //   the flyout reset removed when it is moot ........... "no flyout while expanded, and none below 900"
+//   the moot flyout's focus hand-back removed ......... "a flyout made moot while a card of it holds focus hands the focus to the line's tab stop, never to the page: another tab expands the strip"
+//                                                         (fix round 1: the reset called `setFlyOpen(false)` directly, so a focused flyout card was unmounted and focus fell to the page)
 //   a second copy of the card markup ................... "the flyout's cards render through the line's own card code: one card markup in the component"
 //   the flyout's cards from `shown`, not `live` ........ seven accounts-strip cases ("…holding every lane in lanesByFree's order", …); lanes-row (8 of 88) "hovering the folded line opens a flyout below it, …"
 //   focusout ignoring `relatedTarget` .................. "focus leaving the strip closes it, and focus moving between the line and the flyout does not"

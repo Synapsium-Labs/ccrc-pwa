@@ -1029,6 +1029,26 @@ describe('the lanes fold (S5b, D-6530)', () => {
       expect(flyoutOf(phone.container)).toBeNull();
     });
 
+    it("a flyout made moot while a card of it holds focus hands the focus to the line's tab stop, never to the page: another tab expands the strip", async () => {
+      const container = await openByHover();
+      const stopCard = lineCardsOf(container)[0]!;
+      const held = flyCardsOf(container)[5]!;
+      act(() => { held.focus(); });
+      expect(document.activeElement).toBe(held);
+      // The other tab expands the strip: its write reaches this page as a storage event, and the flyout goes with it.
+      act(() => {
+        window.localStorage.setItem('ccrc-accounts-strip', 'expanded');
+        window.dispatchEvent(new StorageEvent('storage', { key: 'ccrc-accounts-strip', newValue: 'expanded' }));
+      });
+      expect(flyoutOf(container)).toBeNull();
+      expect(cardsOf(container)).toHaveLength(17);
+      expect(document.activeElement).not.toBe(document.body);
+      expect(document.activeElement).toBe(stopCard);
+      // The hand-back is a move inside the strip, not an arrival: nothing opens (there is no flyout while expanded).
+      advance(5000);
+      expect(flyoutOf(container)).toBeNull();
+    });
+
     it('unmounting with the open delay pending, or the close grace pending, leaves no timer behind', async () => {
       for (const pending of ['open', 'close']) {
         const container = await mountDesk();

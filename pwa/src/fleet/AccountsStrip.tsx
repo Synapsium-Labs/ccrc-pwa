@@ -30,8 +30,9 @@
 // so Tab goes line, flyout, control, All accounts, and focus moving between them never leaves the strip. It opens after
 // `FLYOUT_OPEN_MS` and closes after `FLYOUT_CLOSE_MS` once the pointer has left the strip, or focus has left it with the
 // pointer outside (a pointer passing by, or crossing the gap, flickers nothing), and at once on Escape, which is
-// default-prevented so the desk's Escape interrupt skips it; a close that finds focus in the flyout hands it
-// back to the line's tab stop first. Only focus arriving from outside the strip opens it, so an Escape holds against the
+// default-prevented so the desk's Escape interrupt skips it; a close that finds focus in the flyout, and a
+// flyout made moot while it holds focus (another tab expands the strip, a poll leaves nothing to fold, the desk ends),
+// hand it back to the line's tab stop first. Only focus arriving from outside the strip opens it, so an Escape holds against the
 // arrow keys. Not foldable, expanded, or below the desk: it is not mounted and nothing about it runs. Presentation
 // state, per mount.
 //
@@ -43,7 +44,7 @@
 // yet) is exactly the state the Accounts screen exists to explain (its bespoke "<home-able accounts>, all disabled"
 // copy, see homeAbleLabelList in lib/accounts.ts). So the link stays mounted, with a quiet placeholder body, instead
 // of disappearing with the cards.
-import { useEffect, useId, useRef, useState } from 'react';
+import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import type { CSSProperties, FocusEvent, KeyboardEvent, ReactNode } from 'react';
 import type { AccountUsage, RosterWire } from '../../../shared/api';
 import { accountColorVar, accountLabel, warnNonArrayRoster } from '../lib/accounts';
@@ -169,11 +170,27 @@ export function AccountsStrip(): ReactNode {
   const fold = foldLanes(live, expanded, count);
   // The flyout exists only at the desk, on a folded strip with lanes folded away.
   const flyoutOn = desk && fold.foldable && !fold.expanded;
+  // The line's tab stop: the card last focused, or the first shown when that lane is gone (a stop on a lane that folded
+  // away falls to the first shown card).
+  const lineStop = fold.shown.find((a) => a.wrapper === stopId)?.wrapper ?? fold.shown[0]?.wrapper;
+  // Whether focus is on a card of the flyout, tracked by the flyout's own focus and blur: a flyout made moot by something
+  // outside the strip leaves its DOM in the very commit that notices, so the DOM cannot be asked then.
+  const flyHeld = useRef(false);
+  // Closing a flyout that holds focus would drop focus to the page, so focus goes first to the line's tab stop, the card
+  // the operator came from. That move starts inside the strip, so `onGroupFocus` reads it as a move and not as focus
+  // arriving. The one hand-back: the flyout's close and the flyout becoming moot both go through it.
+  const handFocusBack = (): void => {
+    if (!flyHeld.current) return;
+    flyHeld.current = false;
+    if (lineStop !== undefined) cardRefs.current.get(lineStop)?.focus();
+  };
   // The timers die with the component, and with whatever makes the flyout moot: the strip expanding, the desk ending.
+  // A layout effect, so a focus held by the flyout that has just left the DOM is handed back before the browser paints.
   useEffect(() => stopTimers, []);
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (flyoutOn) return;
     stopTimers();
+    handFocusBack();
     setFlyOpen(false);
     setFlyStopId(null);
   }, [flyoutOn]);
@@ -205,17 +222,14 @@ export function AccountsStrip(): ReactNode {
     setStripExpanded(!fold.expanded);
   };
 
-  const stop = shown.find((a) => a.wrapper === stopId)?.wrapper ?? shown[0]!.wrapper;
+  const stop = lineStop!;
   const flyStop = live.find((a) => a.wrapper === flyStopId)?.wrapper ?? live[0]!.wrapper;
   const flyShown = flyoutOn && flyOpen;
 
-  // The flyout's delays and its closing. Closing a flyout that holds focus would drop focus to the page, so focus goes
-  // back first to the line's tab stop, the card the operator came from. That move starts inside the strip, so
-  // `onGroupFocus` reads it as a move and not as focus arriving.
+  // The flyout's delays and its closing (focus handed back first, by `handFocusBack`).
   const closeFlyout = (): void => {
     stopTimers();
-    const held = [...flyRefs.current.values()].some((c) => c.contains(document.activeElement));
-    if (held) cardRefs.current.get(stop)?.focus();
+    handFocusBack();
     setFlyOpen(false);
     setFlyStopId(null);
   };
@@ -328,7 +342,13 @@ export function AccountsStrip(): ReactNode {
       {shown.map((a, i) => laneCard(a, i, shown, stop, cardRefs.current, setStopId))}
       {flyShown && (
         // Not a dialog and it takes no focus: it is a second group of the same lanes, named for what it holds.
-        <div className="accounts-flyout" role="group" aria-label={FLYOUT_LABEL}>
+        <div
+          className="accounts-flyout"
+          role="group"
+          aria-label={FLYOUT_LABEL}
+          onFocus={() => { flyHeld.current = true; }}
+          onBlur={() => { flyHeld.current = false; }}
+        >
           {live.map((a, i) => laneCard(a, i, live, flyStop, flyRefs.current, setFlyStopId))}
         </div>
       )}
