@@ -1224,7 +1224,7 @@ describe('the verification is actually wired into the deploy, and can observe a 
       const link = join(ok.home, '.local', 'libexec', 'ccrc', 'node-bin', 'node');
       expect(lstatSync(link).isSymbolicLink(), `${l.name} never published node`).toBe(true);
       expectNodeLinksContained(ok.home);
-      expect(existsSync(join(ok.home, '.config', 'environment.d', '50-ccrc-node.conf'))).toBe(true);
+      expect(existsSync(join(ok.home, '.config', 'environment.d', '999-ccrc-node.conf'))).toBe(true);
       expect(r.stderr, `${l.name} swallowed the publish step's note`).toContain('deploy: note — no user manager answers');
 
       // b. A box with no qualifying node: the lane fails with the selection's own line, BEFORE the build and

@@ -17061,7 +17061,7 @@ _inst_node() {
   if [ "$CCD_OS" = darwin ]; then
     echo "install: node: $NODE_VERSION at $NODE_BIN_DIR (launchd bakes PATH into the plist; nothing to publish)"
   else
-    echo "install: node: $NODE_VERSION at $NODE_BIN_DIR (links in $HOME/.local/libexec/ccrc/node-bin; manager PATH via ~/.config/environment.d/50-ccrc-node.conf)"
+    echo "install: node: $NODE_VERSION at $NODE_BIN_DIR (links in $HOME/.local/libexec/ccrc/node-bin; manager PATH via ~/.config/environment.d/999-ccrc-node.conf)"
     [ -z "$NODE_WHY" ] || echo "install: node: note: $NODE_WHY"
   fi
 }
@@ -26284,12 +26284,12 @@ _uninst_units() {
     || _ccrc_die "removing the scope drop-ins under $dir failed"
   rmdir -- "$dir/tmux-spawn-.scope.d" "$dir/ccrc-tmux-server.scope.d" 2>/dev/null || :
   # The node `_inst_node` published for the user manager (spec 2026-10-26-node-runtime-under-nvm): the link
-  # directory and the ONE environment.d fragment ccrc wrote, nothing else under ~/.config/environment.d. Before
+  # directory and the environment.d fragment ccrc writes (and the 50- name its first release wrote), nothing else under ~/.config/environment.d. Before
   # the reload below, so that reload re-reads a manager environment without them (no second reload).
   rm -rf -- "$HOME/.local/libexec/ccrc/node-bin" \
     || _ccrc_die "removing the published node links under $HOME/.local/libexec/ccrc failed"
-  rm -f -- "$HOME/.config/environment.d/50-ccrc-node.conf" \
-    || _ccrc_die "removing the node environment fragment $HOME/.config/environment.d/50-ccrc-node.conf failed"
+  rm -f -- "$HOME/.config/environment.d/999-ccrc-node.conf" "$HOME/.config/environment.d/50-ccrc-node.conf" \
+    || _ccrc_die "removing the node environment fragment $HOME/.config/environment.d/999-ccrc-node.conf failed"
   if command -v systemctl >/dev/null 2>&1; then
     systemctl --user daemon-reload \
       || echo "uninstall: units: daemon-reload failed — systemd may still list units whose files are gone until the next reload" >&2

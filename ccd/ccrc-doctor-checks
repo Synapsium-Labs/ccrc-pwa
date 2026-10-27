@@ -426,7 +426,7 @@ _check_node() {
 # No user manager (no systemctl, or `show-environment` unanswered): the manager arm alone is unmeasured and the PASS
 # says so — a whole-check SKIP would drop the three arms that need no manager.
 _node_path_dir() { printf '%s' "$HOME/.local/libexec/ccrc/node-bin"; }
-_node_path_frag() { printf '%s' "$HOME/.config/environment.d/50-ccrc-node.conf"; }
+_node_path_frag() { printf '%s' "$HOME/.config/environment.d/999-ccrc-node.conf"; }
 # `_node_path_floor` -> NODE_FLOOR (library); rc 1 with NODE_WHY. Sources the library when it is not loaded.
 _node_path_floor() {
   local lib="$CCRC_HERE/ccrc-node" cand pkg=""
@@ -515,8 +515,8 @@ _check_node-path() {
     fi
     case ":$mpath:" in
       *":$dir:"*) mgr="the user manager's PATH includes it" ;;
-      *) _dr_fail node-path "the user manager's PATH ($mpath) lacks $dir although the fragment names it — the manager has not re-read environment.d" \
-           "run: systemctl --user daemon-reload (or ccrc doctor --fix), then check: systemctl --user show-environment"
+      *) _dr_fail node-path "the user manager's PATH ($mpath) lacks $dir although the fragment names it — the manager has not re-read environment.d, or a fragment sorting after it sets PATH outright" \
+           "run: systemctl --user daemon-reload (or ccrc doctor --fix), then check: systemctl --user show-environment; still missing, look for a later PATH= in ~/.config/environment.d, /etc/environment.d and /usr/lib/environment.d"
          return 1 ;;
     esac
   fi

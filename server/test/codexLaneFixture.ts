@@ -591,7 +591,7 @@ export const MANAGER_STANDIN_MARK = '# ccrc-manager-standin (Plan 2b-2 final rev
  *  {@link MANAGER_RELOAD_LINE} runs on a `daemon-reload` (it exits nothing); {@link MANAGER_PATH_LINE} prints the
  *  `PATH=` line of a `show-environment` answer. Doctor's `node-path` reads that line (ccd/ccrc-doctor-checks). */
 export const MANAGER_SYSTEM_PATH = '/usr/local/bin:/usr/bin:/bin';
-export const MANAGER_RELOAD_LINE = 'if [ -e "$HOME/.config/environment.d/50-ccrc-node.conf" ]; then : > "$HOME/fixture-mgr-reloaded-with-fragment"; else rm -f "$HOME/fixture-mgr-reloaded-with-fragment"; fi';
+export const MANAGER_RELOAD_LINE = 'if [ -e "$HOME/.config/environment.d/999-ccrc-node.conf" ]; then : > "$HOME/fixture-mgr-reloaded-with-fragment"; else rm -f "$HOME/fixture-mgr-reloaded-with-fragment"; fi';
 export const MANAGER_PATH_LINE = `if [ -e "$HOME/fixture-mgr-reloaded-with-fragment" ]; then echo "PATH=$HOME/.local/libexec/ccrc/node-bin:${MANAGER_SYSTEM_PATH}"; else echo "PATH=${MANAGER_SYSTEM_PATH}"; fi`;
 
 const FAKE_SYSTEMCTL = `#!/usr/bin/env bash

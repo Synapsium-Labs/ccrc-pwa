@@ -6,7 +6,7 @@
 // case that needs a terminal redefines that function after sourcing. Chosen over
 // `script -qc` because `script`'s flags differ between util-linux and BSD.
 import { spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { mkTmp } from './tmpHelpers.js';
@@ -206,7 +206,22 @@ describe('_node_select without nvm', () => {
 describe('_node_publish', () => {
   const publish = (fx: Fx, dir: string) => run(fx, `NODE_BIN_DIR="${dir}"; _node_publish; echo "rc=$?"`);
   const links = (fx: Fx) => path.join(fx.home, '.local/libexec/ccrc/node-bin');
-  const frag = (fx: Fx) => path.join(fx.home, '.config/environment.d/50-ccrc-node.conf');
+  const frag = (fx: Fx) => path.join(fx.home, '.config/environment.d/999-ccrc-node.conf');
+
+  it('the fragment sorts after the distro fragments that set PATH outright, and the legacy 50- name is removed', () => {
+    // environment.d applies every directory's fragments in one filename order. Debian/Ubuntu ship
+    // /usr/lib/environment.d/99-environment.conf -> /etc/environment, whose `PATH="..."` replaces PATH, and snapd ships
+    // 990-snapd.conf; a fragment sorting before them is overwritten (measured: exit 127 crash loop under nvm).
+    const fx = fixture(['v22.16.0'], null);
+    const envd = path.dirname(frag(fx));
+    mkdirSync(envd, { recursive: true });
+    writeFileSync(path.join(envd, '50-ccrc-node.conf'), 'PATH=/old:${PATH}\n');
+    expect(publish(fx, path.join(fx.nvm, 'versions/node/v22.16.0/bin')).out).toBe('rc=0');
+    const names = readdirSync(envd);
+    expect(names).toEqual(['999-ccrc-node.conf']);
+    const order = [...names, '99-environment.conf', '990-snapd.conf'].sort();
+    expect(order[order.length - 1]).toBe('999-ccrc-node.conf');
+  });
 
   it('publishes three links, the fragment and a reload; idempotent; re-points', () => {
     const fx = fixture(['v22.16.0', 'v24.1.0'], null);

@@ -1079,7 +1079,7 @@ describeLinux('ccrc install: the units, and the one this box must not be given',
 // not the exit code: they are about the step, and a box short of an unrelated tool (jq) must not hide it.
 describeLinux('ccrc install: the node the units run (nvm-aware selection, `_inst_node`)', () => {
   const nodeBin = (home: string): string => join(home, '.local', 'libexec', 'ccrc', 'node-bin');
-  const fragment = (home: string): string => join(home, '.config', 'environment.d', '50-ccrc-node.conf');
+  const fragment = (home: string): string => join(home, '.config', 'environment.d', '999-ccrc-node.conf');
   const FRAGMENT = (home: string): string => [
     '# Written by ccrc (ccd/ccrc-node): systemd user units run node by name, and the user manager\'s PATH',
     '# lacks the directory a version manager keeps it in. Do not edit; ccrc re-writes it on install/update.',
@@ -1096,7 +1096,7 @@ describeLinux('ccrc install: the node the units run (nvm-aware selection, `_inst
     }
     expect(read(fragment(home))).toBe(FRAGMENT(home));
     expect(statSync(fragment(home)).mode & 0o777).toBe(0o644);
-    expect(r.stdout).toMatch(new RegExp(`^install: node: v\\d+\\.\\d+\\.\\d+ at ${home.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}/\\.fixture-node \\(links in ${nodeBin(home).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}; manager PATH via ~/\\.config/environment\\.d/50-ccrc-node\\.conf\\)$`, 'm'));
+    expect(r.stdout).toMatch(new RegExp(`^install: node: v\\d+\\.\\d+\\.\\d+ at ${home.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}/\\.fixture-node \\(links in ${nodeBin(home).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}; manager PATH via ~/\\.config/environment\\.d/999-ccrc-node\\.conf\\)$`, 'm'));
   });
 
   it('reloads the manager AFTER the fragment is written and BEFORE the first restart', () => {
@@ -1129,7 +1129,7 @@ describeLinux('ccrc install: the node the units run (nvm-aware selection, `_inst
     expect(['node', 'npm', 'npx'].map((b) => readlinkSync(join(nodeBin(home), b)))).toEqual(before);
     expect(read(fragment(home))).toBe(FRAGMENT(home));
     expect(readdirSync(nodeBin(home)).sort()).toEqual(['node', 'npm', 'npx']);
-    expect(readdirSync(join(home, '.config', 'environment.d'))).toEqual(['50-ccrc-node.conf']);
+    expect(readdirSync(join(home, '.config', 'environment.d'))).toEqual(['999-ccrc-node.conf']);
   });
 
   it('a box whose shell PATH has NO node but has an nvm tree installs, and runs gen-accounts on the chosen node', () => {

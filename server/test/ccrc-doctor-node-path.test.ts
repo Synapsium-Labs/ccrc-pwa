@@ -20,7 +20,7 @@ const bashPath = spawnSync('bash', ['-c', 'command -v bash'], { encoding: 'utf8'
 
 const FLOOR = '22.16.0';
 const dirOf = (home: string): string => join(home, '.local', 'libexec', 'ccrc', 'node-bin');
-const fragOf = (home: string): string => join(home, '.config', 'environment.d', '50-ccrc-node.conf');
+const fragOf = (home: string): string => join(home, '.config', 'environment.d', '999-ccrc-node.conf');
 
 function nodeBin(home: string, name: string, version: string): string {
   const d = join(home, 'nodes', name, 'bin');

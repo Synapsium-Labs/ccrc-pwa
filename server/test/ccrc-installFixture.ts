@@ -585,7 +585,7 @@ export function ccrcEnv(home: string, omit: string[] = []): NodeJS.ProcessEnv {
     // Records whether the manager-PATH fragment was ALREADY on disk at each reload — "written before the reload" is
     // read here, at the moment of the call, never off the final tree.
     '  daemon-reload)',
-    '    if [ -e "$HOME/.config/environment.d/50-ccrc-node.conf" ]; then echo present >> "$HOME/fixture-reload-saw-fragment"; else echo absent >> "$HOME/fixture-reload-saw-fragment"; fi',
+    '    if [ -e "$HOME/.config/environment.d/999-ccrc-node.conf" ]; then echo present >> "$HOME/fixture-reload-saw-fragment"; else echo absent >> "$HOME/fixture-reload-saw-fragment"; fi',
     '    exit 0 ;;',
     // `_node_publish`'s probe for a user manager (ccd/ccrc-node): this box has one.
     '  show-environment) exit 0 ;;',

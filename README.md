@@ -217,7 +217,7 @@ Download it, or use `bash <(curl -fsSL …)`.
   it meets `engines.node`, else the newest installed version that does, else the `node` on
   your `PATH` if it meets the floor (so an nvm box on a system node keeps updating), else
   (an interactive install only) `nvm install --lts`; without nvm, the `node` on your `PATH`. It links that node into `~/.local/libexec/ccrc/node-bin` and writes
-  `~/.config/environment.d/50-ccrc-node.conf` so the manager finds it. `ccrc doctor`'s
+  `~/.config/environment.d/999-ccrc-node.conf` so the manager finds it (`999-` so it applies after Debian/Ubuntu's `99-environment.conf`, which sets `PATH` from `/etc/environment`). `ccrc doctor`'s
   `node-path` check measures this and `ccrc doctor --fix` re-chooses among installed versions.
   `systemctl --user show-environment` shows what the units see. Processes already running (the
   tmux server, session panes, supervisors) see the new `PATH` only after their next restart or a

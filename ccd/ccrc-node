@@ -195,12 +195,16 @@ _node_publish() {
     if [ -L "$dir/$b" ] && [ -d "$dir/$b" ]; then rm -f -- "$dir/$b" || { NODE_WHY="cannot publish $dir/$b"; return 1; }; fi
     { ln -s "$NODE_BIN_DIR/$b" "$tmp" && mv -f -- "$tmp" "$dir/$b"; } || { rm -f "$tmp"; NODE_WHY="cannot publish $dir/$b"; return 1; }
   done
-  tmp="$envd/50-ccrc-node.conf.tmp.$$"
+  # 999-: environment.d applies all directories' fragments in one filename order, and Debian/Ubuntu's
+  # /usr/lib/environment.d/99-environment.conf (-> /etc/environment) sets PATH outright, so a fragment sorting before
+  # it is overwritten (snapd's 990- only appends). The first release wrote 50-, which that file erased; remove it.
+  tmp="$envd/999-ccrc-node.conf.tmp.$$"
   {
     printf '%s\n' "# Written by ccrc (ccd/ccrc-node): systemd user units run node by name, and the user manager's PATH"
     printf '%s\n' "# lacks the directory a version manager keeps it in. Do not edit; ccrc re-writes it on install/update."
     printf 'PATH=%s:${PATH}\n' "$dir"
-  } > "$tmp" && chmod 644 "$tmp" && mv -f -- "$tmp" "$envd/50-ccrc-node.conf" || { rm -f "$tmp"; NODE_WHY="cannot write $envd/50-ccrc-node.conf"; return 1; }
+  } > "$tmp" && chmod 644 "$tmp" && mv -f -- "$tmp" "$envd/999-ccrc-node.conf" || { rm -f "$tmp"; NODE_WHY="cannot write $envd/999-ccrc-node.conf"; return 1; }
+  rm -f -- "$envd/50-ccrc-node.conf" || { NODE_WHY="cannot remove the legacy $envd/50-ccrc-node.conf"; return 1; }
   # daemon-reload re-runs the environment generators. A box with no user manager (a container, no lingering)
   # has nothing to reload — ccd/ccrc's `_svc_have_user_manager` probe, with the bus defaults it exports first.
   command -v systemctl >/dev/null 2>&1 || { NODE_WHY="no systemctl; the manager reads the fragment when it starts"; return 0; }

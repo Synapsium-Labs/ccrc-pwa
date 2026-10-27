@@ -1202,7 +1202,7 @@ export function plantNodePublication(home: string): void {
   for (const b of ['npm', 'npx']) stub(home, b, 'exit 0');
   for (const b of ['node', 'npm', 'npx']) symlinkSync(join(stubBin(home), b), join(dir, b));
   mkdirSync(join(home, '.config', 'environment.d'), { recursive: true });
-  writeFileSync(join(home, '.config', 'environment.d', '50-ccrc-node.conf'), `PATH=${dir}:\${PATH}\n`);
+  writeFileSync(join(home, '.config', 'environment.d', '999-ccrc-node.conf'), `PATH=${dir}:\${PATH}\n`);
   writeFileSync(join(home, 'fixture-mgr-env'), `PATH=${dir}:/usr/bin\n`);
 }
 
