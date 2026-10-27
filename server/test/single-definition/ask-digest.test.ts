@@ -569,13 +569,19 @@ describe('the ask window, its deadline and the untrusted-data fence are each def
   });
 
   // D-5925: the restart re-seed is the second reader, and it reads the deadline from the row's own mint time.
-  it('askNotifyAt is defined in server/src/askwindow.ts alone; the hold reads it once for both uses, the restart re-seed once from the row', () => {
+  // W3 Q3d (D-7028, named exception 2): the hold and the re-seed are `coord/questions.ts#createQuestions`'s members, so
+  // the two reads are counted in that factory's body; the file's read side (`askQuestion`, W3 Q3b) lifts a row with a
+  // third, outside it (slug q3d-notify-at-count). `watch.ts` reads it nowhere.
+  it('askNotifyAt is defined in server/src/askwindow.ts alone; the hold reads it once for both uses, the restart re-seed once from the row', async () => {
     expect(holders(defines('askNotifyAt'))).toEqual(['server/src/askwindow.ts']);
+    const { sourceOfSymbol } = await import('../scan/symbols.js');
+    const questions = stallCodeText(sourceOfSymbol(path.join(ccrcRoot, 'server/src/coord/questions.ts'), 'createQuestions'));
     const watch = stallCode(path.join(ccrcRoot, 'server/src/watch.ts'));
-    expect(watch.match(/\baskNotifyAt\(/g) ?? []).toHaveLength(2);
-    expect(watch).toMatch(/renderAskBrief\([^)]*\buntil\)/);
-    expect(watch).toMatch(/return \{ until, askId,/);
-    expect(watch).toMatch(/until: askNotifyAt\(row\.at\)/);
+    expect(questions.match(/\baskNotifyAt\(/g) ?? []).toHaveLength(2);
+    expect(watch).not.toMatch(/\baskNotifyAt\(/);
+    expect(questions).toMatch(/renderAskBrief\([^)]*\buntil\)/);
+    expect(questions).toMatch(/return \{ until, askId,/);
+    expect(questions).toMatch(/until: askNotifyAt\(row\.at\)/);
   });
 
   it('untrustedBlock and its preface live in server/src/coord/untrusted.ts alone, and the brief calls it', () => {
