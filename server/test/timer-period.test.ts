@@ -26,10 +26,16 @@ const BASH = spawnSync('bash', ['-c', 'command -v bash'], { encoding: 'utf8' }).
 
 interface Answer { code: number; stdout: string; stderr: string }
 
+/** The fixed driver, run as `bash <file> <ccrc> <fn> <args...>`: no `-c` string, so no path or name of this run is ever
+ *  spliced into shell text; each reaches the script only as an argument. */
+const DRIVER = '. "$1"; shift; fn=$1; shift; "$fn" "$@"\n';
+
 /** `ccd/ccrc` sourced, then one call: `fn` with `args`. */
 function call(fn: string, ...args: string[]): Answer {
   const home = mkTmp('ccrc-timer-period-');
-  const r = spawnSync(BASH, ['-c', `. "$1"; shift; ${fn} "$@"`, 'bash', CCRC, ...args],
+  const driver = join(home, 'driver.sh');
+  writeFileSync(driver, DRIVER, { mode: 0o644 });
+  const r = spawnSync(BASH, [driver, CCRC, fn, ...args],
     { env: ccrcContainedEnv(home, process.env, { managers: true, curl: 'poison' }), encoding: 'utf8', input: '' });
   return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
 }

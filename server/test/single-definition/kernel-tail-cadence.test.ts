@@ -33,10 +33,13 @@ describe('ARCH-69, the launchd half (D-7053): the ddns job\'s cadence comes from
     const spellings = timerSpellings();
     expect(spellings.length, 'no shipped timer was found: the scan reads nothing').toBeGreaterThan(0);
     const dir = mkTmp('kernel-tail-cadence-');
+    // A fixed driver run as `bash <file> <ccrc> <timer>`: no `-c` string, so no path of this run is spliced into shell text.
+    const driver = join(dir, 'driver.sh');
+    writeFileSync(driver, '. "$1"; _timer_period_s "$2"\n', { mode: 0o644 });
     for (const [i, line] of spellings.entries()) {
       const f = join(dir, `spelling-${i}.timer`);
       writeFileSync(f, `[Timer]\n${line}\n`);
-      const r = spawnSync('bash', ['-c', '. "$1"; _timer_period_s "$2"', 'bash', join(ccrcRoot, 'ccd', 'ccrc'), f],
+      const r = spawnSync('bash', [driver, join(ccrcRoot, 'ccd', 'ccrc'), f],
         { env: ccrcContainedEnv(dir, process.env, { managers: true, curl: 'poison' }), encoding: 'utf8', input: '' });
       expect(r.status, `${line}: ${r.stderr}`).toBe(0);
       expect(r.stdout).toMatch(/^[1-9]\d*\n$/);
