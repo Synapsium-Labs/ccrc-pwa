@@ -4839,7 +4839,8 @@ _check_graphify() {
         ;;
       *)
         # 3x the timer's own interval (deploy/systemd/ccd-graph-sweep.timer,
-        # OnUnitActiveSec=15min) — one missed run is ordinary jitter under
+        # OnUnitActiveSec=15min, read from that shipped file through
+        # `_dr_cycles_s`, D-7054) — one missed run is ordinary jitter under
         # load, three in a row means the timer itself has stopped firing.
         # The census is rewritten atomically at the end of EVERY pass, so the
         # FILE's mtime is the last pass's finish — measured through the
@@ -4853,7 +4854,7 @@ _check_graphify() {
           gfx_bound="$(_dr_cycles_s ccd-graph-sweep.timer 3)" || gfx_cadence_rc=$?
           if [ "$gfx_cadence_rc" -ne 0 ]; then
             gfx_cadence_what="whether the last graph-sweep pass, finished $((age / 60)) minutes ago, is stale"
-          elif [ "$age" -gt 2700 ]; then
+          elif [ "$age" -gt "$gfx_bound" ]; then
             gfx_census_warn+=("the last graph-sweep pass finished $((age / 60)) minutes ago — the timer may not be firing")
           fi
         fi
