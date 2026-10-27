@@ -866,18 +866,22 @@ _dr_log_hint() {   # <unit> -> the command that shows its recent log
 # table was sourced by something that is not ccrc: the check FAILs naming the
 # bug through `_dr_cadence_unloaded`). Neither nonzero answer prints anything.
 #
-# Each answer is cached in the shell that asked (`_DR_TIMER_PERIOD_<unit>`), so
-# later calls in that shell read no file. A `$( … )` call is its own shell, and
-# what it caches goes with it. Nothing here runs at source time.
+# Each answer is cached in the shell that asked (`_DR_TIMER_PERIODS`, one
+# `|<unit>=<seconds>` entry per unit read; no indirection, which
+# ccrc-settings-census.test.ts keeps to `_ccrc_knob`), so later calls in that
+# shell read no file. A `$( … )` call is its own shell, and what it caches goes
+# with it. Nothing here runs at source time.
 _dr_timer_period_s() {   # <unit> -> its period in seconds; rc 0, 1 unreadable, 3 not loaded; sets _DR_TIMER_PERIOD
-  local key="_DR_TIMER_PERIOD_${1//[^A-Za-z0-9]/_}" v
+  local v
   _DR_TIMER_PERIOD=''
   if [ -z "${BOX_TREE_DIR:-}" ] || ! declare -F _timer_period_s >/dev/null 2>&1; then return 3; fi
-  if [ -z "${!key:-}" ]; then
-    v="$(_timer_period_s "$BOX_TREE_DIR/deploy/systemd/$1" 2>/dev/null)" && [[ "$v" =~ ^[1-9][0-9]*$ ]] || return 1
-    printf -v "$key" '%s' "$v"
-  fi
-  _DR_TIMER_PERIOD="${!key}"
+  case "${_DR_TIMER_PERIODS:-}" in
+    *"|$1="*) v="${_DR_TIMER_PERIODS#*"|$1="}"; v="${v%%|*}" ;;
+    *)
+      v="$(_timer_period_s "$BOX_TREE_DIR/deploy/systemd/$1" 2>/dev/null)" && [[ "$v" =~ ^[1-9][0-9]*$ ]] || return 1
+      _DR_TIMER_PERIODS="${_DR_TIMER_PERIODS:-}|$1=$v" ;;
+  esac
+  _DR_TIMER_PERIOD="$v"
   printf '%s\n' "$_DR_TIMER_PERIOD"
 }
 _dr_cycles_s() {   # <unit> <k> -> k of its periods, in seconds; rc and silence as _dr_timer_period_s
