@@ -1344,6 +1344,45 @@ _launchd_class() {
 # sits inside the sentinels, so an appended-below helper is a red suite, not
 # a quiet gap.
 
+# ── _timer_period_s — a shipped .timer's period, in whole seconds (D-7053) ─
+# ARCH-69's one reader: a launchd job, or a doctor bound, that runs "as often
+# as the timer" takes the number from the shipped `deploy/systemd/<x>.timer`,
+# never from a second spelling of it. Outside the platform layer, and not named
+# `_svc_*`/`_plat_*`, because it is no platform verb: both userlands read the
+# same file the same way (`macos-platform.test.ts` refuses such a name here).
+#
+# A CADENCE LINE is exactly `OnUnitActiveSec=<n>s|min|h` or `OnCalendar=*:0/<n>`
+# (every <n> minutes, <n> dividing the hour, so the gap between firings is one
+# number). Every other key (`OnBootSec=`, `OnActiveSec=`, `AccuracySec=`,
+# `Persistent=`, `RandomizedDelaySec=`, `Unit=` and the `[Unit]`/`[Install]`
+# keys), each comment and each blank is IGNORED, never refused: they sit beside
+# the period in 13 of the 14 shipped files. Anything else is refused, rc 1 with
+# one line on stderr and nothing on stdout: no readable file, no cadence line,
+# two, or a spelling the shipped files do not use. It never guesses a unit and
+# never prints the file's contents (`timer-period.test.ts`).
+_timer_period_s() {   # <timer-file>
+  local f="$1" line hit="" n=0
+  if [ -d "$f" ] || [ ! -r "$f" ]; then
+    printf '%s\n' "$PROG: cannot read a timer period from $f: not a readable file" >&2; return 1
+  fi
+  while IFS= read -r line || [ -n "$line" ]; do
+    line="${line#"${line%%[![:space:]]*}"}"
+    case "$line" in OnUnitActiveSec=*|OnCalendar=*) hit="$line"; n=$((n + 1)) ;; esac
+  done < "$f"
+  if [ "$n" -ne 1 ]; then
+    printf '%s\n' "$PROG: cannot read a timer period from $f: $n cadence lines (OnUnitActiveSec= or OnCalendar=), not one" >&2; return 1
+  fi
+  if [[ "$hit" =~ ^OnUnitActiveSec=([1-9][0-9]{0,5})(s|min|h)$ ]]; then
+    case "${BASH_REMATCH[2]}" in
+      s) echo "${BASH_REMATCH[1]}" ;; min) echo $((BASH_REMATCH[1] * 60)) ;; h) echo $((BASH_REMATCH[1] * 3600)) ;;
+    esac
+  elif [[ "$hit" =~ ^OnCalendar=\*:0/([1-9][0-9]?)$ ]] && [ $((60 % BASH_REMATCH[1])) -eq 0 ]; then
+    echo $((BASH_REMATCH[1] * 60))
+  else
+    printf '%s\n' "$PROG: cannot read a timer period from $f: its cadence line is not OnUnitActiveSec=<n>s|min|h or OnCalendar=*:0/<n>" >&2; return 1
+  fi
+}
+
 # `deploy/models-op.mjs` is this design's node half — a NEW file, because
 # `main` has no node helper for account state to add ops to (`deploy/
 # account-op.mjs` is the account-connections branch's and is not here).
