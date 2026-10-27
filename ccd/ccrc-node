@@ -1,0 +1,146 @@
+# shellcheck shell=bash
+# ccrc-node — choose the node ccrc's units run, and publish it for systemd.
+#
+# WHY (spec 2026-10-26-node-runtime-under-nvm): every systemd user unit ccrc installs reaches `node` BY NAME, on
+# the user manager's PATH. A node that lives in nvm's version directory is on the operator's shell PATH only, so
+# the units crash-loop (exit 127). This library picks one node at install/update time and makes the manager see it
+# through a ccrc-owned directory of three symlinks. Unit files are never edited.
+#
+# A SOURCED LIBRARY OF FUNCTIONS: no top-level side effects, no `exit`, no shell options changed, no `_ccrc_die` or
+# any ccrc-only helper (install.sh and deploy.sh's remote bash source it with none of ccrc's globals). Outcomes
+# are a return code plus the globals below; callers print and die.
+#   NODE_FLOOR     _node_floor     the minimum version, x.y.z
+#   NODE_BIN_DIR   _node_select    absolute directory holding the chosen node, npm, npx
+#   NODE_VERSION   _node_select    the chosen version, vX.Y.Z
+#   NODE_WHY       any failing fn  one line saying why (also a note on a skipped step)
+# NODE_NO_INSTALL=1 (env): never run `nvm install`, even on a terminal.
+#
+# It must work with NO node on PATH — it runs before one is chosen — so the floor is read by bash alone.
+
+# Seam: a test redefines this to stand in for a terminal. Only an interactive run installs node (decision 4).
+_node_is_tty() { [ -t 0 ]; }
+
+# `_node_floor <package.json>` -> NODE_FLOOR=x.y.z. The floor is written once, in engines.node of the shipped
+# package.json; a regexp over the text (multi-line engines blocks included) keeps node out of the loop.
+_node_floor() {
+  NODE_FLOOR=; NODE_WHY=
+  local f="$1" txt
+  txt=$(tr '\n\r\t' '   ' < "$f" 2>/dev/null) || txt=
+  if [ -z "$txt" ]; then NODE_WHY="cannot read $f to find the node floor (engines.node)"; return 1; fi
+  if [[ $txt =~ \"engines\"[[:space:]]*:[[:space:]]*\{[^}]*\"node\"[[:space:]]*:[[:space:]]*\"([^\"]*)\" ]]; then
+    local spec="${BASH_REMATCH[1]}"
+    if [[ $spec =~ ^\>=([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then NODE_FLOOR="${BASH_REMATCH[1]}"; return 0; fi
+    NODE_WHY="engines.node in $f is '$spec', not a single '>=x.y.z'"; return 1
+  fi
+  NODE_WHY="$f has no engines.node"; return 1
+}
+
+# `_node_ver_ge <a> <b>` -> 0 iff a >= b; x.y.z with an optional leading v. Numeric per field (v9 < v22).
+_node_ver_ge() {
+  local a="${1#v}" b="${2#v}" a1 a2 a3 b1 b2 b3
+  IFS=. read -r a1 a2 a3 <<< "$a"
+  IFS=. read -r b1 b2 b3 <<< "$b"
+  a1=$((10#${a1:-0})) a2=$((10#${a2:-0})) a3=$((10#${a3:-0}))
+  b1=$((10#${b1:-0})) b2=$((10#${b2:-0})) b3=$((10#${b3:-0}))
+  if [ "$a1" -ne "$b1" ]; then [ "$a1" -gt "$b1" ]; return; fi
+  if [ "$a2" -ne "$b2" ]; then [ "$a2" -gt "$b2" ]; return; fi
+  [ "$a3" -ge "$b3" ]
+}
+
+# `_node_pick <floor> <default-or-empty> <ver>...` — pure. Prints the default if it qualifies, else the highest
+# qualifying version; rc 1 when none does.
+_node_pick() {
+  local floor="$1" def="$2" v best=
+  shift 2
+  if [ -n "$def" ] && _node_ver_ge "$def" "$floor"; then printf '%s\n' "$def"; return 0; fi
+  for v in "$@"; do
+    [ -n "$v" ] || continue
+    _node_ver_ge "$v" "$floor" || continue
+    if [ -z "$best" ] || ! _node_ver_ge "$best" "$v"; then best="$v"; fi
+  done
+  [ -n "$best" ] || return 1
+  printf '%s\n' "$best"
+}
+
+# `_node_select <floor>` — the IO step. Sets NODE_BIN_DIR + NODE_VERSION and puts NODE_BIN_DIR first on THIS
+# process's PATH, so the build that follows uses the node the units will.
+_node_select() {
+  NODE_BIN_DIR=; NODE_VERSION=; NODE_WHY=
+  local floor="$1" nvm="${NVM_DIR:-$HOME/.nvm}" vers v d def pick
+  if [ -s "$nvm/nvm.sh" ]; then
+    _node_nvm_list() {   # installed nvm versions with a runnable node, one per line
+      for d in "$nvm"/versions/node/v*/; do
+        [ -x "${d}bin/node" ] && { d="${d%/}"; printf '%s\n' "${d##*/}"; }
+      done
+    }
+    vers=$(_node_nvm_list)
+    # The alias is resolved by nvm itself, in a subshell: sourcing nvm.sh here would change this shell.
+    def=$( (NVM_DIR="$nvm"; . "$nvm/nvm.sh" >/dev/null 2>&1; nvm version default 2>/dev/null) | tail -n 1)
+    [[ $def =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || def=
+    # shellcheck disable=SC2086  # one version per word, none contains a space
+    if ! pick=$(_node_pick "$floor" "$def" $vers); then
+      if [ "${NODE_NO_INSTALL:-}" != 1 ] && _node_is_tty; then
+        # --lts never touches the `default` alias (decision 2).
+        (NVM_DIR="$nvm"; . "$nvm/nvm.sh" >/dev/null 2>&1; nvm install --lts) >&2 || true
+        vers=$(_node_nvm_list)
+        # shellcheck disable=SC2086
+        pick=$(_node_pick "$floor" "" $vers) || pick=
+      fi
+    fi
+    unset -f _node_nvm_list
+    if [ -z "$pick" ]; then
+      NODE_WHY="no installed nvm node meets the floor (>=$floor); run an interactive 'ccrc install' to install one"
+      return 1
+    fi
+    NODE_VERSION="$pick"; NODE_BIN_DIR="$nvm/versions/node/$pick/bin"
+  else
+    # No nvm: whatever `node` this shell finds (fnm, volta, asdf, mise and a system node alike), if it qualifies.
+    local p
+    p=$(command -v node 2>/dev/null) || p=
+    if [ -z "$p" ]; then NODE_WHY="node is not installed (floor >=$floor) and nvm was not found"; return 1; fi
+    p=$(readlink -f "$p" 2>/dev/null || realpath "$p" 2>/dev/null) || p=
+    if [ -z "$p" ]; then NODE_WHY="cannot resolve the node on PATH"; return 1; fi
+    v=$("$p" --version 2>/dev/null) || v=
+    if [ -z "$v" ] || ! _node_ver_ge "$v" "$floor"; then
+      NODE_WHY="node ${v:-?} at ${p%/*} is below the floor (>=$floor)"; return 1
+    fi
+    NODE_VERSION="$v"; NODE_BIN_DIR="${p%/*}"
+  fi
+  PATH="$NODE_BIN_DIR:$PATH"
+}
+
+# `_node_publish` — the ONE writer of the box-side artefacts (spec decision 6); `_inst_node`, `_fix_node-path` and
+# deploy.sh all call it. Three symlinks and the environment.d fragment, each written to a temp name and renamed, so
+# a reader never sees a half-written one; then a manager reload. Idempotent. darwin: nothing (launchd bakes PATH).
+_node_publish() {
+  NODE_WHY=
+  case "$(uname -s 2>/dev/null)" in Darwin) return 0 ;; esac
+  if [ ! -d "${NODE_BIN_DIR:-}" ]; then NODE_WHY="no node directory selected to publish"; return 1; fi
+  local dir="$HOME/.local/libexec/ccrc/node-bin" envd="$HOME/.config/environment.d" b tmp
+  mkdir -p "$dir" "$envd" || { NODE_WHY="cannot create $dir or $envd"; return 1; }
+  for b in node npm npx; do
+    tmp="$dir/$b.tmp.$$"
+    # `mv -fT` renames over an existing link in one rename(2) (the flip's idiom, ccd/ccrc `_plat_mv_notdir`).
+    { ln -s "$NODE_BIN_DIR/$b" "$tmp" && mv -fT -- "$tmp" "$dir/$b"; } || { rm -f "$tmp"; NODE_WHY="cannot publish $dir/$b"; return 1; }
+  done
+  tmp="$envd/50-ccrc-node.conf.tmp.$$"
+  {
+    printf '%s\n' "# Written by ccrc (ccd/ccrc-node): systemd user units run node by name, and the user manager's PATH"
+    printf '%s\n' "# lacks the directory a version manager keeps it in. Do not edit; ccrc re-writes it on install/update."
+    printf 'PATH=%s:$PATH\n' "$dir"
+  } > "$tmp" && chmod 644 "$tmp" && mv -f -- "$tmp" "$envd/50-ccrc-node.conf" || { rm -f "$tmp"; NODE_WHY="cannot write $envd/50-ccrc-node.conf"; return 1; }
+  # daemon-reload re-runs the environment generators. A box with no user manager (a container, no lingering)
+  # has nothing to reload — ccd/ccrc's `_svc_have_user_manager` probe, with the bus defaults it exports first.
+  command -v systemctl >/dev/null 2>&1 || { NODE_WHY="no systemctl; the manager reads the fragment when it starts"; return 0; }
+  (
+    export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+    export DBUS_SESSION_BUS_ADDRESS="${DBUS_SESSION_BUS_ADDRESS:-unix:path=$XDG_RUNTIME_DIR/bus}"
+    systemctl --user show-environment >/dev/null 2>&1 || exit 7
+    systemctl --user daemon-reload >/dev/null 2>&1
+  )
+  case $? in
+    0) return 0 ;;
+    7) NODE_WHY="no user manager answers; the manager reads the fragment when it starts"; return 0 ;;
+    *) NODE_WHY="systemctl --user daemon-reload failed"; return 1 ;;
+  esac
+}
