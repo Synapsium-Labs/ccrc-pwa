@@ -28,7 +28,7 @@
 // change that). `--reporter=verbose` or `--reporter=default` prints them in both. Add
 // `CCRC_RENDERS=<a directory outside the work tree>` for the screenshots. Each gate case also writes its per-window
 // figures (script, task, span, deferred requests, whether the drain went quiet) into its `task.meta.frameCost`, which
-// the JSON reporter keeps, whether the attempt passes or fails.
+// the JSON reporter keeps, whether the attempt passes, fails or times out (`keepOnFinish`).
 import { mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -293,8 +293,8 @@ const CEILING_CASE_MS = 30_000 + (1 + FRAMES) * WINDOW_MAX_MS;
 const RATIO_CASE_MS = 30_000 + (1 + FRAMES + IDENTICAL_FRAMES) * WINDOW_MAX_MS;
 const MEASURE_CASE_MS = 30_000 + (1 + FRAMES + 1) * WINDOW_MAX_MS;
 
-/** Keep what `frameCost` recorded, window by window, on the case, where the JSON reporter writes it. A gate case calls it
- *  from a `finally`, so a case whose attempt failed keeps the windows measured before the failure. */
+/** Keep what `frameCost` recorded, window by window, on the case, where the JSON reporter writes it. It reads `record`
+ *  when it is called, so call it through `keepOnFinish`. */
 function keep(task: { meta: object }, record: FrameCostRecord): void {
   const { windows } = record;
   Object.assign(task.meta, { frameCost: {
@@ -303,11 +303,37 @@ function keep(task: { meta: object }, record: FrameCostRecord): void {
   } });
 }
 
+/** The self-test of the record's keeping. A case that outlives its own timeout is reported by vitest before its body's
+ *  `finally` can run, so the first case below ends in vitest's timeout (`it.fails` makes that its expected outcome) with
+ *  one window in its record, and the second reads what the first case's `meta` kept. It needs no browser. */
+describe('a timed-out case keeps its record (advisory 1)', () => {
+  it.fails('a case that outlives its own timeout', async (ctx) => {
+    const record: FrameCostRecord = { windows: [] };
+    keepOnFinish(ctx, record);
+    record.windows.push({ cost: { taskMs: 0, scriptMs: 0 }, spanMs: 0, deferred: 0, drainQuiet: false, atMs: Date.now() });
+    await new Promise<never>(() => undefined);
+  }, 1500);
+
+  it('the timed-out case kept the window it recorded', ({ task }) => {
+    const first = task.suite?.tasks[0];
+    const kept = first?.meta as { frameCost?: { spans: number[] } } | undefined;
+    expect(kept?.frameCost?.spans, 'the timed-out case kept the window it recorded').toHaveLength(1);
+  });
+});
+
+/** Register `keep` on the case's finish hook, which vitest runs when the case passes, fails or times out, before the case
+ *  is reported; a `finally` in the body runs too late on a timeout, because the body is never resumed. The hook reads the
+ *  record when it runs, so it keeps every window measured by then. */
+function keepOnFinish(ctx: { task: { meta: object }; onTestFinished: (fn: () => void) => void }, record: FrameCostRecord): void {
+  ctx.onTestFinished(() => { keep(ctx.task, record); });
+}
+
 describe('frame cost (D-6438)', () => {
   for (const skin of [REFINED, INSTRUMENT]) {
-    it(`a fleet frame of ${ROWS} rows on / costs under the ceiling (${skin}, 1920)`, async ({ task }) => {
+    it(`a fleet frame of ${ROWS} rows on / costs under the ceiling (${skin}, 1920)`, async (ctx) => {
       const { app } = await boot({ skin, theme: PHOSPHOR, width: 1920 }, '/');
       const record: FrameCostRecord = { windows: [] };
+      keepOnFinish(ctx, record);
       try {
         expect(app.errors).toEqual([]);
         expect(await sideScroll(app.page)).toBeLessThanOrEqual(0);
@@ -317,16 +343,17 @@ describe('frame cost (D-6438)', () => {
         expect(cost.median.taskMs, `median TaskDuration per frame, ${skin}: ${cost.median.taskMs.toFixed(1)} ms; `
           + `spans ${cost.spans.map((x) => x.toFixed(1)).join(', ')} ms; deferred ${cost.deferred.join(' ')}`).toBeLessThan(FRAME_CEILING_MS);
       } finally {
-        try { keep(task, record); } finally { await app.ctx.close(); }
+        await app.ctx.close();
       }
     }, CEILING_CASE_MS);
 
     // Its own page visit, not shared with the ceiling case: each case then reads on its own, and a failure of one does
     // not hide the other. The changing frames come first, as in the ceiling case, so the identical ones follow a page
     // that has just rendered a changed list.
-    it(`an identical fleet frame's script stays below 35% of a changing frame's (${skin}, 1920)`, async ({ task }) => {
+    it(`an identical fleet frame's script stays below 35% of a changing frame's (${skin}, 1920)`, async (ctx) => {
       const { app } = await boot({ skin, theme: PHOSPHOR, width: 1920 }, '/');
       const record: FrameCostRecord = { windows: [] };
+      keepOnFinish(ctx, record);
       try {
         expect(app.errors).toEqual([]);
         expect(await sideScroll(app.page)).toBeLessThanOrEqual(0);
@@ -345,7 +372,7 @@ describe('frame cost (D-6438)', () => {
           + `spans ${cost.spans.map((x) => x.toFixed(1)).join(', ')} ms`)
           .toBeLessThan(IDENTICAL_SCRIPT_RATIO);
       } finally {
-        try { keep(task, record); } finally { await app.ctx.close(); }
+        await app.ctx.close();
       }
     }, RATIO_CASE_MS);
   }
