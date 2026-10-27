@@ -6128,4 +6128,37 @@ describe('CP-39d: W1-f counts searches only, and W1-b leaves out the tick that e
       NOW - 7 * DAY, NOW);
     expect(nearestRank95(inWindow), 'CONTROL: a predecessor read inside the week only').toBe(2000);
   });
+
+  it('(b2) --w1f-since and --now are inclusive: a row at exactly either bound counts', () => {
+    const f = cp39dStore((ins) => {
+      grep(ins, 'b2-low', 1000, 0, 9000);            // exactly --w1f-since: the largest
+      for (let i = 1; i <= 19; i += 1) grep(ins, `b2-m${i}`, 1000 + i, 0, 100 * i);
+      grep(ins, 'b2-high', NOW, 0, 8000);            // exactly --now: the second largest
+    });
+    // 21 rows 100..1900, 8000, 9000: rank ceil(0.95 * 21) = 20 is 8000.
+    expect(report(nowArgs(f, '--w1f-since', '1000')).w1f_grep_p95_ms).toBe(8000);
+    // CONTROL: without the row at --w1f-since, or without the row at --now, 20 rows read rank 19: 1900.
+    const all = rowsOf(f.db, BASE_W1F + ' AND ts_ms >= 1000 AND ts_ms <= ' + String(NOW));
+    expect(all.length).toBe(21);
+    expect(nearestRank95(all)).toBe(8000);
+    expect(nearestRank95(rowsOf(f.db, BASE_W1F + ' AND ts_ms > 1000 AND ts_ms <= ' + String(NOW))), 'CONTROL: an exclusive lower bound').toBe(1900);
+    expect(nearestRank95(rowsOf(f.db, BASE_W1F + ' AND ts_ms >= 1000 AND ts_ms < ' + String(NOW))), 'CONTROL: an exclusive upper bound').toBe(1900);
+  });
+
+  it('(d2) ticks at one ts_ms are ordered by tick_id: the later insertion is the later tick', () => {
+    const f = cp39dStore((ins) => {
+      tick(ins, NOW - 3 * HOUR, 0, 100);          // Ta: the store's first tick
+      tick(ins, NOW - 2 * HOUR, 3, 2000);         // P: tick_id 2, a catch-up
+      tick(ins, NOW - 2 * HOUR, 0, 3000);         // Q: tick_id 3, the same ts_ms; its predecessor by tick_id is P
+      tick(ins, NOW - 1 * HOUR, 0, 4000);         // R: its predecessor is Q
+    });
+    // By (ts_ms, tick_id): Ta, P, Q, R. Q follows P (behind 3), so only R counts: {4000}.
+    expect(report(nowArgs(f)).w1b_lag_p95_ms).toBe(4000);
+    // CONTROL: the tie broken the other way (Ta, Q, P, R) counts Q (after Ta) and not R (after P): {3000}.
+    const reversed = rowsOf(f.db,
+      'SELECT lag_ms AS v FROM (SELECT ts_ms, lag_ms, files_behind, LAG(files_behind) OVER (ORDER BY ts_ms, tick_id DESC) AS prev_behind '
+      + 'FROM ticks) WHERE files_behind = 0 AND prev_behind = 0 AND lag_ms IS NOT NULL AND ts_ms > ? AND ts_ms <= ?',
+      NOW - 7 * DAY, NOW);
+    expect(nearestRank95(reversed), 'CONTROL: the opposite tiebreak reads a different tick').toBe(3000);
+  });
 });
