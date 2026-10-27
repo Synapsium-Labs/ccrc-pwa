@@ -102,8 +102,6 @@ export function AccountsStrip(): ReactNode {
   const openTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pointerIn = useRef(false);
-  // Set while Escape hands focus back to the line's card, so the focus it moves is not read as focus arriving.
-  const returningFocus = useRef(false);
   const stopTimers = (): void => {
     if (openTimer.current !== null) clearTimeout(openTimer.current);
     if (closeTimer.current !== null) clearTimeout(closeTimer.current);
@@ -211,16 +209,12 @@ export function AccountsStrip(): ReactNode {
   const flyShown = flyoutOn && flyOpen;
 
   // The flyout's delays and its closing. Closing a flyout that holds focus would drop focus to the page, so focus goes
-  // back first to the line's tab stop, the card the operator came from; `returningFocus` keeps that move from reading
-  // as focus arriving.
+  // back first to the line's tab stop, the card the operator came from. That move starts inside the strip, so
+  // `onGroupFocus` reads it as a move and not as focus arriving.
   const closeFlyout = (): void => {
     stopTimers();
     const held = [...flyRefs.current.values()].some((c) => c.contains(document.activeElement));
-    if (held) {
-      returningFocus.current = true;
-      cardRefs.current.get(stop)?.focus();
-      returningFocus.current = false;
-    }
+    if (held) cardRefs.current.get(stop)?.focus();
     setFlyOpen(false);
     setFlyStopId(null);
   };
@@ -245,7 +239,7 @@ export function AccountsStrip(): ReactNode {
   const onGroupFocus = (e: FocusEvent<HTMLElement>): void => {
     cancelClose();
     if (e.relatedTarget instanceof Node && e.currentTarget.contains(e.relatedTarget)) return;
-    if (!returningFocus.current) scheduleOpen();
+    scheduleOpen();
   };
   // A focusout whose destination is inside the strip is a move between the line and the flyout, not a leave; one with no
   // destination (focus left the page, or went to nothing) is a leave.
