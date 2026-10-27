@@ -41,7 +41,7 @@ import {
 import type { SendResult } from '../inject/send.js';
 import type { LedgerLog } from './ledgerlog.js';
 import type { PoolEdgeLog } from './pooledgelog.js';
-import { appendThenApply, journalFloor } from '../journalKernel.js';
+import { appendThenApply, journalFloor, type JournalPhase } from '../journalKernel.js';
 import type { UpdateIntentLog } from './updateintentlog.js';
 // Delegation broker wave 3, Task 7: the projection's row shapes, codecs and guards are the PURE `delegation-model.ts`;
 // this file runs the SQL and nothing else.
@@ -9531,28 +9531,33 @@ export class CoordStore {
    *    decision, or `BEGIN` itself) is a defect or a busy database, and propagates as itself.
    *  - Synchronous, and never called from inside another `tx()`: `BEGIN IMMEDIATE` is not re-entrant. */
   setCollectLane(req: CollectLaneWriteRequest, at: number, journal: CollectLaneJournal): CollectLaneWrite {
-    let phase = 'decide' as 'decide' | 'append' | 'update' | 'commit';
+    // D-7058: the journal-first order is `appendThenApply`, and `phase` is the kernel's: `apply` is this answer's
+    // `update` and `done` (the callback returned, `COMMIT` not yet run) its `commit`.
+    const phase: { at: JournalPhase } = { at: 'decide' };
     let done: CollectLaneTxOutcome;
     try {
-      done = tx(this.db, (): CollectLaneTxOutcome => {
-        const before = this.collectLaneRow();
-        const journalBefore = journal.read();
-        const d = decideCollectLaneWrite(req, before, journalBefore, at);
-        if (d.kind === 'refuse') return { kind: 'refused', code: d.code, detail: d.detail };
-        if (d.kind === 'unchanged') return { kind: 'unchanged', before };
-        phase = 'append';
-        journal.appendGeneration(d.generation);
-        phase = 'update';
-        const r = this.db.prepare(
-          'UPDATE collect_lane_settings SET choice = ?, fleetNodeId = ?, markerRetiredAt = ?, generation = ?, updatedAt = ? WHERE id = 1',
-        ).run(d.next.choice, d.next.fleetNodeId, d.next.markerRetiredAt, d.generation, at);
-        if (Number(r.changes) !== 1) throw new Error('the switch row update changed no row');
-        phase = 'commit';
-        return { kind: 'appended', generation: d.generation, before, journalBefore };
-      });
+      done = tx(this.db, (): CollectLaneTxOutcome => appendThenApply<CollectLaneWriteGo, CollectLaneTxOutcome, CollectLaneTxOutcome>({
+        decide: () => {
+          const before = this.collectLaneRow();
+          const journalBefore = journal.read();
+          const d = decideCollectLaneWrite(req, before, journalBefore, at);
+          if (d.kind === 'refuse') return { stop: { kind: 'refused', code: d.code, detail: d.detail } };
+          if (d.kind === 'unchanged') return { stop: { kind: 'unchanged', before } };
+          return { go: { d, before, journalBefore } };
+        },
+        append: ({ d }) => journal.appendGeneration(d.generation),
+        apply: ({ d, before, journalBefore }) => {
+          const r = this.db.prepare(
+            'UPDATE collect_lane_settings SET choice = ?, fleetNodeId = ?, markerRetiredAt = ?, generation = ?, updatedAt = ? WHERE id = 1',
+          ).run(d.next.choice, d.next.fleetNodeId, d.next.markerRetiredAt, d.generation, at);
+          if (Number(r.changes) !== 1) throw new Error('the switch row update changed no row');
+          return { kind: 'appended', generation: d.generation, before, journalBefore };
+        },
+      }, phase));
     } catch (err) {
-      if (phase === 'decide') throw err;
-      return { kind: 'failed', phase, code: collectLaneFailCode(err) };
+      if (phase.at === 'decide') throw err;
+      return { kind: 'failed', phase: phase.at === 'append' ? 'append' : phase.at === 'apply' ? 'update' : 'commit',
+        code: collectLaneFailCode(err) };
     }
     if (done.kind !== 'appended') return done;
     return { kind: 'written', generation: done.generation, before: done.before, journalBefore: done.journalBefore,
@@ -9631,6 +9636,14 @@ type CollectLaneTxOutcome =
   | Extract<CollectLaneWrite, { kind: 'refused' | 'unchanged' }>
   | { readonly kind: 'appended'; readonly generation: number; readonly before: CollectLaneRowRead;
       readonly journalBefore: CollectLaneJournalRead };
+
+/** What `setCollectLane`'s decide step hands its append and its apply (D-7058): the write decision and the two reads it
+ *  was taken over. Module-private. */
+interface CollectLaneWriteGo {
+  readonly d: Extract<ReturnType<typeof decideCollectLaneWrite>, { kind: 'write' }>;
+  readonly before: CollectLaneRowRead;
+  readonly journalBefore: CollectLaneJournalRead;
+}
 
 /** `failed.code`: the thrown error's code word as Node or `node:sqlite` set it (`ENOSPC`, `EACCES`, `ERR_SQLITE_ERROR`),
  *  never its message, which for a filesystem error names the journal's path (spec §5.6). An error with no such word
