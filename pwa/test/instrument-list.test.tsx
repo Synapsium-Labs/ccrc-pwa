@@ -589,8 +589,10 @@ describe('dense rows at the desk (T2e, D-6335)', () => {
     expect(table().querySelector('.ins-row .sess-line')!.firstElementChild, 'the first cell is the lamp').toHaveClass('sess-lamp');
     expect(declsOf('.ins-row .sess-actions', DENSE)).toMatch(/margin-top:\s*0/);
     expect(declsOf('.ins-row .sess-actions', DENSE)).toMatch(/align-self:\s*center/);
-    // The group heads and the toggle sit at --row-h.
+    // The group heads, the Mark all seen door beside them (a ghost Button, whose base `min-h-tap` would otherwise make a
+    // badged head 44px among 32px ones) and the toggle sit at --row-h.
     expect(declsOf('.ins-group-head', DENSE)).toMatch(/min-height:\s*var\(--row-h\)/);
+    expect(declsOf('.ins-group-seen', DENSE)).toMatch(/min-height:\s*var\(--row-h\)/);
     expect(declsOf('.ins-toggle-option', DENSE)).toMatch(/min-height:\s*var\(--row-h\)/);
     // Every dense value is a token or a keyword: the pattern bars a px literal and a colour literal (hex, rgb, hsl), in
     // every rule of the block (T2e review R32, F6), not in a list of selectors that a new rule would be left out of.
@@ -604,7 +606,7 @@ describe('dense rows at the desk (T2e, D-6335)', () => {
     for (const sel of ['.ins-row .sess-body', '.ins-row .sess-body > .sess-open', '.ins-row .sess-body > .sess-meta:not(.sess-meta--context)',
       '.ins-row .sess-line > :first-child', '.ins-row .sess-line:not(:has(.sess-meta--context)) > :first-child',
       '.ins-row .sess-line:not(:has(.sess-meta--context)) .sess-body > .sess-open', '.ins-row .sess-actions',
-      '.ins-row .sess-meta--context', '.ins-group-head', '.ins-toggle-option']) {
+      '.ins-row .sess-meta--context', '.ins-group-head', '.ins-group-seen', '.ins-toggle-option']) {
       expect(declsOf(sel), sel).not.toMatch(/min-height|margin-top|margin-inline|flex|display:\s*(grid|flex)|align-self/);
       for (const media of ['(min-width: 900px)', '(pointer: fine)']) expect(declsOf(sel, media), `${sel} in ${media}`).toBe('');
     }
