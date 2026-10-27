@@ -1,6 +1,7 @@
 import { appendFileSync, mkdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import type { AutoMode, NotifyMode, UpdateChannel } from '../../../shared/api.js';
+import { maxJournalEpoch } from '../journalKernel.js';
 
 /**
  * The flat-file floor under `update_epoch` (design 2026-09-20 §6 "Journal"):
@@ -78,21 +79,7 @@ export class UpdateIntentLog {
       if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
       throw err;
     }
-    let max: number | null = null;
-    for (const line of text.split('\n')) {
-      if (line === '') continue;
-      const m = /"epoch":(\d+)/.exec(line);
-      if (m === null) continue;
-      const n = Number(m[1]);
-      if (max === null || n > max) max = n;
-    }
-    if (max === null) {
-      throw new Error(
-        `update-intent journal exists at ${this.logPath} but yields no epoch — ` +
-        'zero-length or unparseable is not the same as absent; answering ' +
-        'null here would be the reissue this file exists to prevent',
-      );
-    }
-    return max;
+    // D-7058: the regex walk and its throw are `journalKernel.ts#maxJournalEpoch`'s; the read and `ENOENT` stay here.
+    return maxJournalEpoch(text, 'update-intent', this.logPath);
   }
 }
