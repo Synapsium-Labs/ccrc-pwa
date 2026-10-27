@@ -3716,9 +3716,11 @@ export const SIDECAR_WALK_META = 'sidecar_walk:';
 /** CP-39 (D-6931). The most UTF-16 units of names one walk state holds, done and in progress together (chosen): twice the
  *  largest backlog measured on the fleet box (about 6,270 unlinked names, most near 40 units). It bounds the automaton's
  *  states (about 517,000 at the cap, 49 MiB of heap, measured in scratch) and the persisted state, so a walk's memory stays
- *  inside O20's RSS bound (pinned by the RSS case, P22). It is a soft bound (review 964): one name is admitted past it (walkNames
- *  always takes the name that asked), and a walk's `done` grows by the names taken in the same call, whose room startSidecarWalk
- *  measured against `done` as the call began. */
+ *  inside O20's RSS bound (pinned by the RSS case, P22). It is a soft bound (review 964, review 1065): walkNames admits `first`,
+ *  the name that asked, on every call whatever the room, and startSidecarWalk measures that room against `done` as the call
+ *  began, so a call takes at most the larger of the room and `first` itself. Once `done` holds the cap, each later call admits
+ *  `first` alone, and the overshoot grows by one name per call, until the unseen names run out (measured in scratch: 14,000
+ *  unseen names of 39 units, the overshoot grew by 39 units a call once the cap was held). */
 export const SIDECAR_WALK_CHARS_MAX = 524_288;
 
 /** The most characters a persisted walk state may hold and still be parsed (D-6931): beyond it the state is read as absent. */
@@ -10083,8 +10085,8 @@ export function nextSegmentSeq({ onDisk, recorded }) {
  *  (D-4756 (history-export-cadence-clock-backwards)). No clock at all waits: the tick that asks has recorded its own
  *  ticks row, so the next tick has one. `intervalMs` is exportPassIntervalMs' answer: an hour, or longer after
  *  passes that published and could not mark (D-4757 (history-export-mark-failure-backs-off)).
- *  `lastAttemptMs` is the clock of a pass that failed with a caught error, or that the run's budget held before it wrote
- *  a segment (budgetHeldPass; D-5394 (history-export-select-due-transcripts)): it counts as a pass for the wait, so such a pass
+ *  `lastAttemptMs` is the clock of a pass that failed with a caught error, or that its slice of the run's budget held before it wrote
+ *  a segment (budgetHeldPass; D-6974; D-5394 (history-export-select-due-transcripts)): it counts as a pass for the wait, so such a pass
  *  retries hourly, never every tick, while `lastPassMs` (doctor's last-pass clock) does not move. A completed pass deletes it. Which of the two clocks governs
  *  is this function's decision (RD2): the later one, a null being absent, so an attempt after the last pass keeps the wait
  *  running from the attempt, and a pass after the last attempt from the pass. Omitted, it is null, and the answers are exactly
@@ -10629,7 +10631,7 @@ export const EXPORT_BIND_BATCH = 50_000;
 /** How long a check's escalating stop (MARK_CHECK_STALL_WORDS) may stand before doctor fails it (export-marks-stalled;
  *  read by deriveHealth). */
 export const EXPORT_MARKS_STALL_MS = 24 * 60 * 60 * 1000;
-/** Why a check after a bind stopped short. `budget`: the run's budget was spent before a batch (it resumes each tick);
+/** Why a check after a bind stopped short. `budget`: its slice of the run's budget was spent before a batch (D-6975; it resumes each tick);
  *  `off`: history-off was planted; `wal-held`: a checkpoint answered busy and the WAL stands past EXPORT_BIND_WAL_CEILING;
  *  `unlistable`: export/<store_id>/ could not be listed; `failed`: another caught error. */
 export const MARK_CHECK_WORDS = Object.freeze(['budget', 'off', 'wal-held', 'unlistable', 'failed']);

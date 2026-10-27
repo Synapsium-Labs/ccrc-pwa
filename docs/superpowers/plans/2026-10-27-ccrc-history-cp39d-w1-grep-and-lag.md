@@ -5,7 +5,7 @@
 Programme ccrc-history, run 1039. This file is `docs/superpowers/plans/2026-10-27-ccrc-history-cp39d-w1-grep-and-lag.md`; the worker's first commit adds it byte for byte.
 
 **Goal:** Two W1 acceptance rows read outside target for a real cause, and this wave fixes both before W2's act 6.
-- **W1-f:** a family grep costs what its scope holds, not what the whole box holds. Every referrer arm is driven from the scope's transcripts. BM25 is read only by a sort that orders by it. The true count rides in the ranked statement, so the global match runs once.
+- **W1-f:** a family grep costs what its scope holds, not what the whole box holds. Every referrer arm is driven from the scope's transcripts. BM25 is read only by a sort that orders by it. The true count rides in the ranked statement, so one prepared statement carries the match, apart from one scan of the match per arm (6-62 ms over 96,708 matches, Measured before dispatch).
 - **W1-b:** the sweep sees a registered session's transcript grow mid-turn within about one tick. It does this at a bounded cost per tick, with no new hook line and no full scan per tick.
 
 The wave also fixes the two measures behind those rows, and takes the sweep's owed review carries.
@@ -119,7 +119,7 @@ The coordinator's investigation measured these on 2026-10-27, read-only (`mode=r
   3. Run `timeout -k 10 900 ./node_modules/.bin/vitest run test/<suite> -t "<select>"` from `server/`, in the foreground, in a shell under `ulimit -u 4096`.
   4. Record the first failing assertion's message. It must name what `red` names, and it must come from the named case, never from a describe's `beforeAll` or hook.
   5. Restore with `cp <scratch>/<id>.orig <file>`. Then `cmp` must be silent and the sha must equal the one recorded. Never restore with `git checkout`.
-  6. A mutant that stays green is a stop: mail the coordinator with the run's output. The one exception is T1-M4b and T1-M4c (Task 1 Step 5).
+  6. A mutant that stays green is a stop: mail the coordinator with the run's output. There is no exception: the one this step named for T1-M4b and T1-M4c was withdrawn by the coordinator in fix round 1 (review 1065), and both go red.
 - **Peers.** Wave 5h's hot files are `ccd/history/*.mjs` and the history tests (the ledger's "Peers"). Re-anchor every line citation by content on your base. Citations are `origin/main`'s at `5d3c6d25a`.
 
 ## Decisions
@@ -135,7 +135,7 @@ Each decision names its pin and its CONTROL.
    - `GREP_FILTER` loses its transcript term. Its other terms stay as they are, outside the arms, before the ORDER BY and the LIMIT (C27 kept).
    - Pins:
      - case (b) is an equivalence against the shipped statement over every sort, four scopes (one empty), filters and every LIMIT boundary;
-     - case (f) is the plan pin: `entries_ts (transcript_pk=?)` appears at least twice (measured: the entry arm and the variant arm), and no blob-led index does. Its CONTROL is the shipped statement's plan, which names `entries_blob` or `entries_blob_prov`. It is pinned as built and again, on a fresh reader, after `ANALYZE`.
+     - case (f) is the plan pin: `entries_ts (transcript_pk=?)` appears at least twice (measured: the entry arm and the variant arm), and no blob-led index does. Since fix round 1 (review 1065) it also requires the variant arm's row `SEARCH entry_variants USING INDEX sqlite_autoindex_entry_variants_1 (entry_id=?)` and refuses any row naming `(entry_id=? AND blob_id=?)`, which pins the variant arm's `+`. Its CONTROL is the shipped statement's plan, which names `entries_blob` or `entries_blob_prov`. It is pinned as built and again, on a fresh reader, after `ANALYZE`.
 2. **Rank only where it is read (Task 1).** `rankedSql` joins `rk` only when `/\brank\b/` matches `ftsOrderBy(sort, 'r.ts_ms')`. Its form is the cheapest of three that Step 3c measured (the global rank CTE won, with a worst figure of 18.9 ms):
    - the global rank CTE, `rk(blob_id, rank) AS (SELECT rowid, rank FROM blobs_fts WHERE blobs_fts MATCH :q)`, joined `JOIN rk ON rk.blob_id = r.blob_id` (Step 3b's default form, and the review's measured cheapest; Step 3c measured it cheapest again, so the code did not change);
    - the in-scope form, the same CTE with `AND rowid IN (SELECT blob_id FROM refs)`;
@@ -143,7 +143,7 @@ Each decision names its pin and its CONTROL.
    - BM25 depends on the row and the table's own statistics, never on which other rows are read, so every form's rank equals the global match's. The equivalence pins that for relevance and hybrid.
    - `rank` is never a column of a pooled row: the pool keeps exactly the shipped nine columns.
    - Pin: case (e). The recency statement holds no `rank`. CONTROL: the relevance and hybrid statements hold it.
-3. **The count rides in the ranked statement (Task 1).** `count(*) OVER () AS total` counts every in-scope, filtered referrer before ORDER BY and LIMIT. `rankedAndCounted` reads it from the first row, as 0 when there is no row, and strips it from each pooled row. `countSql` is deleted.
+3. **The count rides in the ranked statement (Task 1).** `count(*) OVER () AS total` counts every in-scope, filtered referrer before ORDER BY and LIMIT. `rankedAndCounted` reads it from the first row, as 0 when there is no row, and strips it from each pooled row. `countSql` is deleted. One prepared statement carries the match; the match is not evaluated once (fix round 1, review 1065): `m` is a plain CTE that SQLite does not materialize, so each arm's `IN (SELECT blob_id FROM m)` scans `blobs_fts` itself, and `rk` adds one more scan (Residuals, "The match is scanned per arm").
    - Pins: case (d) (one prepared statement carries `blobs_fts MATCH` per grep), and case (b) at every pool size from 1 to the total plus 1. CONTROL: at a pool below the total, the oracle's total exceeds the pool's length.
 4. **Test seams (Task 1).** `rankedAndCounted`, `FTS_MATCH` and `REGEX_MATCH` are exported, each documented as a test seam (the `leafHeads` precedent). Nothing else of `recall.mjs` is exported.
 5. **Which files a tick stats mid-turn (Task 2).**
@@ -195,7 +195,7 @@ Each decision names its pin and its CONTROL.
    - Its cut splices come from lib's own `asOfEntrySql`.
    - It is never a second implementation. **Task 1, Step 1.**
 2. **Every arm is scoped.** An out-of-scope transcript holds a matching entry, a variant and a sidecar that shares an in-scope blob, and none of them reaches a family's pool. **Task 1 (b); mutants T1-M5 and T1-M6.**
-3. **The plan, as built and after `ANALYZE`.** **Task 1 (f); mutants T1-M4, T1-M4b and T1-M4c (measured: M4 and M4c red, M4b equivalent).**
+3. **The plan, as built and after `ANALYZE`.** **Task 1 (f); mutants T1-M4, T1-M4b and T1-M4c (measured: all three red since fix round 1, review 1065, which withdrew the ruling that called M4b equivalent).**
 4. **The scan tick is untouched, and the cap is a cap.** **Task 2 (a), (d), (e) and (q); mutants T2-M2, T2-M3, T2-M14 and T2-M15.**
 5. **A stale torn tail and a link are not re-read.** **Task 2 (h) and (i); mutants T2-M5 and T2-M8.**
 6. **`w2` and `census` are byte-identical.** **Task 3 (e), Step 5's base-against-new run, and its hunk census.**
@@ -292,7 +292,8 @@ Each decision names its pin and its CONTROL.
       - capture the ranked statement with `GRX.spyDb`;
       - run `EXPLAIN QUERY PLAN` on it with the same binds;
       - at least two `detail` rows match `/USING (?:COVERING )?INDEX entries_ts \(transcript_pk=\?/` (measured: the entry arm and the variant arm; "some `detail`" would stay green if the variant arm fell back to a scan);
-      - no `detail` matches `/\b(?:entries_blob|entries_blob_prov|entry_variants_blob|sidecars_blob)\b/`.
+      - no `detail` matches `/\b(?:entries_blob|entries_blob_prov|entry_variants_blob|sidecars_blob)\b/`;
+      - (fix round 1, review 1065) some `detail` matches `/^SEARCH entry_variants USING (?:COVERING )?INDEX sqlite_autoindex_entry_variants_1 \(entry_id=\?\)/`, and no `detail` matches `/\(entry_id=\? AND blob_id=\?\)/`. Without the variant arm's `+` the probe is an IN-loop on `(entry_id=? AND blob_id=?)`, one seek per box-wide match per in-scope entry.
     - CONTROL: the oracle's ranked statement's plan matches `/\bentries_blob(?:_prov)?\b/`.
     - Then run `ANALYZE` through `store.openWriter` on the fixture store and close the writer. SQLite loads `sqlite_stat1` into a connection only when its schema cookie changes, so open a fresh reader (`GRX.rc(box, GRX.idA)`) and re-capture the ranked statement on it. CONTROL on that reader: `SELECT count(*) FROM sqlite_stat1 WHERE tbl = 'entries' AND idx = 'entries_ts'` is 1. Then repeat the pin and the oracle CONTROL on it.
   - (g) Nested at the end of the W2-D36 describe, titled `CP-39d (g) …`, through its `both`. For each sort, with the cut and without it, over the queries `zqcutpool`, `zqcutsidevis`, `zqcutsidehid`, `zqcutsideorphan`, `zqcutvarvis` and `zqcutvarhid`, at pools `RANK_POOL`, 1 and 2, `rankedAndCounted` deep-equals the oracle with the matching `cut`. The same holds for the regex form over every blob id.
@@ -304,7 +305,7 @@ Each decision names its pin and its CONTROL.
     - (a1): `expected 'undefined' to be 'function'`;
     - (a2): `expected undefined to be 'SELECT rowid FROM blobs_fts WHERE blo...'`;
     - (b) and (c): `TypeError: mod.rankedAndCounted is not a function`;
-    - (d): `recency: the global match runs once: expected [ ...(2) ] to have a length of 1 but got 2`;
+    - (d): `recency: one prepared statement carries the match: expected [ ...(2) ] to have a length of 1 but got 2` (first measured, before fix round 1, as `recency: the global match runs once: …`);
     - (e): `recency's statement reads rank: expected 'WITH m(blob_id, rank) AS ...' not to match /\brank\b/`.
     Green, as the fixture's CONTROLs and the CLI half: (a0), (a3) and (h).
   - `-t "C27"`: 1 failed ((f)), 4 passed, 0 skipped. (f)'s setup CONTROLs passed, and it went red at its first pin: `as built/recency: no entries_ts (transcript_pk=?) in the plan`, the plan reading `SEARCH entries USING INDEX entries_blob_prov (blob_id=? AND provenance=?)`.
@@ -359,7 +360,7 @@ Each decision names its pin and its CONTROL.
   {"id": "T1-M2", "file": "ccd/history/recall.mjs", "suite": "history-recall.test.ts", "select": "CP-39d: grep drives.*\\(d\\)",
    "anchor": "const total = rows.length === 0 ? 0 : Number(rows[0].total);",
    "repl": "const total = rows.length === 0 ? 0 : Number(rows[0].total); rc.db.prepare(rs).all(bindFor(rs, all));",
-   "red": "(d) recency: the global match runs once: expected [ ...(2) ] to have a length of 1 but got 2"},
+   "red": "(d) recency: one prepared statement carries the match: expected [ ...(2) ] to have a length of 1 but got 2"},
   {"id": "T1-M3", "file": "ccd/history/recall.mjs", "suite": "history-recall.test.ts", "select": "CP-39d: grep drives.*\\(e\\)",
    "anchor": "const readsRank = /\\brank\\b/.test(order);", "repl": "const readsRank = true;",
    "red": "(e) recency's statement reads rank: expected 'WITH m(blob_id) AS (SELECT rowid FROM...' not to match /\\brank\\b/"},
@@ -368,7 +369,7 @@ Each decision names its pin and its CONTROL.
    "red": "(f) as built/recency: fewer than two entries_ts (transcript_pk=?) rows in the plan: (before the review fix: no entries_ts (transcript_pk=?) in the plan:)"},
   {"id": "T1-M4b", "file": "ccd/history/recall.mjs", "suite": "history-recall.test.ts", "select": "CP-39d.*\\(f\\)",
    "anchor": "AND +v.blob_id IN (SELECT blob_id FROM m)", "repl": "AND v.blob_id IN (SELECT blob_id FROM m)",
-   "red": "green in both halves, all three sorts: equivalent (the Step 5 ruling); its plan rows are in D-7095"},
+   "red": "(f) as built/recency: the variant arm is not probed by (entry_id=?) alone: …SEARCH entry_variants USING INDEX sqlite_autoindex_entry_variants_1 (entry_id=? AND blob_id=?)…: expected false to be true"},
   {"id": "T1-M4c", "file": "ccd/history/recall.mjs", "suite": "history-recall.test.ts", "select": "CP-39d.*\\(f\\)",
    "anchor": "AND +s.blob_id IN (SELECT blob_id FROM m)", "repl": "AND s.blob_id IN (SELECT blob_id FROM m)",
    "red": "(f) as built/recency: a blob-led index in the plan: expected [ Array(1) ] to deeply equal [], the row `SEARCH sidecars USING INDEX sidecars_blob (blob_id=?)`"},
@@ -385,12 +386,9 @@ Each decision names its pin and its CONTROL.
 ]
 ```
 
-  Measured: T1-M4 and T1-M4c went red in (f)'s as-built half, so none is held by the after-`ANALYZE` half alone. T1-M4b stayed green in both halves, the ruled equivalence below. (T1-M4 green in both halves would have been a stop.)
-  T1-M4b and T1-M4c green in both halves is **not** a stop (the coordinator's ruling, 2026-10-27). The plan check found T1-M4b probably equivalent: with `INDEXED BY entries_ts`, the variant arm planned `entries_ts`, then `entry_variants`' primary key on `(entry_id=? AND blob_id=?)`, with or without the `+`, before and after `ANALYZE`. The sidecar arm may behave the same way. For either mutant green in both halves:
-  - keep the `+`. It removes the blob-led index from any plan the live statistics might choose, and case (f) still pins that none drives the arm;
-  - paste that arm's plan rows from both halves into D-7095, and call the mutant equivalent there;
-  - go on to the next mutant.
-  Measured: T1-M4b is equivalent, and D-7095 holds its plan rows. T1-M4c is not: it went red as built.
+  Measured: T1-M4 and T1-M4c went red in (f)'s as-built half, so none is held by the after-`ANALYZE` half alone. (T1-M4 green in both halves would have been a stop.)
+  T1-M4b was first measured green in both halves, and the Step 5 ruling of 2026-10-27 called it equivalent and not a stop. **The coordinator withdrew that ruling in fix round 1 (review 1065).** The call was wrong about cost: with `INDEXED BY entries_ts`, the variant arm without the `+` plans `entries_ts` and then `entry_variants`' primary key on `(entry_id=? AND blob_id=?)`, an IN-loop with one seek per box-wide match per in-scope entry. Rows and totals are identical; the cost is not. Review 1065 measured, for 2,000 in-scope entries over 20,000 matches, 19 ms with the `+` against 1,905 ms without it after `ANALYZE` (2,579 ms with no statistics); its refute pass measured 4 ms against 5,520 ms with no statistics. Case (f) now requires the variant arm's `(entry_id=?)` probe and refuses `(entry_id=? AND blob_id=?)`, and T1-M4b goes red on it (Measured, "Fix round 1").
+  For the sidecar arm, T1-M4c is red as built. Any mutant green in both halves is a stop.
 
 - [ ] **Step 6: Commit.** `perf(history): grep drives each referrer arm from its scope (CP-39d Task 1; D-7095)`. Measured: a review-fix commit followed, `test(history): CP-39d Task 1 review fixes (CP-39d Task 1; D-7095)` (the sidecar comment made conditional, (f)'s variant CONTROL and its two-row `entries_ts` pin, (c)'s decoded blob list, the oracle's doc).
 
@@ -417,10 +415,10 @@ Each decision names its pin and its CONTROL.
 - **(f)'s plan**, as built and after `ANALYZE`, every sort: `entries_ts (transcript_pk=?)` for the entry and the variant arm, no blob-led index. The shipped statement's plan leads with `entries_blob_prov (blob_id=? AND provenance=?)` and `entry_variants_blob (blob_id=?)`.
 - **Mutants** (run one at a time on the Task 1 commit's tree; T1-M4 re-run after the review fix, which is the message shown; each restored with `cp`, `cmp` silent and the sha256 equal):
   - `T1-M1`: (b) recency/family/none/pool 1: expected { ...(2) } to deeply equal { ...(2) }, the diff `"total": 19` expected, `1` received
-  - `T1-M2`: (d) recency: the global match runs once: expected [ ...(2) ] to have a length of 1 but got 2
+  - `T1-M2`: (d) recency: one prepared statement carries the match: expected [ ...(2) ] to have a length of 1 but got 2 (re-measured in fix round 1 under the new message)
   - `T1-M3`: (e) recency's statement reads rank: expected 'WITH m(blob_id) AS (SELECT rowid FROM...' not to match /\brank\b/
   - `T1-M4`: (f) as built/recency: fewer than two entries_ts (transcript_pk=?) rows in the plan: (before the review fix: no entries_ts (transcript_pk=?) in the plan:)
-  - `T1-M4b`: green in both halves, all three sorts: equivalent (the Step 5 ruling); its plan rows are in D-7095
+  - `T1-M4b`: first green in both halves (the withdrawn Step 5 ruling); red since fix round 1: (f) as built/recency: the variant arm is not probed by (entry_id=?) alone, the plan rows in the message, `SEARCH entry_variants USING INDEX sqlite_autoindex_entry_variants_1 (entry_id=? AND blob_id=?)`: expected false to be true
   - `T1-M4c`: (f) as built/recency: a blob-led index in the plan: expected [ Array(1) ] to deeply equal [], the row `SEARCH sidecars USING INDEX sidecars_blob (blob_id=?)`
   - `T1-M5`: (b) recency/family/none/pool 2000: expected { Object (pool, total) } to deeply equal ...; the extra rows are the sidecar referrers of B and O on the shared blob
   - `T1-M6`: (b) recency/family/none/pool 2000: ...; the extra rows are the variant referrers of B and O
@@ -428,7 +426,8 @@ Each decision names its pin and its CONTROL.
 - **Departures from the plan's text** (no D-number; each strengthens a pin or settles a contradiction):
   - (f) re-runs `t16scan` where the plan said "the describe's two sweeps";
   - the fixture's O holds a copy and a sidecar, because the plan's CONTROL requires A, B and O to hold them;
-  - the added cases (a0) and (a3), and the review fixes listed at Step 6.
+  - the added cases (a0) and (a3), and the review fixes listed at Step 6;
+  - fix round 1 (review 1065): the Step 5 ruling that called T1-M4b equivalent is withdrawn by the coordinator, and case (f) pins the variant arm's probe, so T1-M4b is red (Measured, "Fix round 1").
 
 ### Task 2: the sweep reads a registered session's mid-turn growth within a tick (D-7096)
 
@@ -794,10 +793,10 @@ Each carry names its review, and the item's test where the carry asks for one.
   - **987 F2**, in `ingestSidecar`: the `let make;` comment becomes "the body to store, stored only when no live blob holds this sha (D-4589's one probe, below): the whole arm compresses then, and the streamed arm has already compressed it in compressFdRange".
   - **999 F4**, wherever the pass's slice now governs:
     - in `sweep.mjs`: `exportSelect`'s doc ("the run's budget ended the scan"), `decide`'s doc ("the run's budget ends the selection") and comment ("each page under the run's budget"), the W1-B4 overview ("what the run's byte budget has left") and `writeSegmentRows`' doc (about :9162, where the phrase wraps: "it reads the run's" ends one line and " *  clock and history-off" begins the next, so search for "reads the run's" alone);
-    - in `lib.mjs`: `budgetHeldPass`' doc ("the budget is all that is left", "the budget already spent as the pass started"). `exportPassIntervalMs`' doc never names the run's budget and is not changed.
+    - in `lib.mjs`: `budgetHeldPass`' doc ("the budget is all that is left", "the budget already spent as the pass started"). `exportPassIntervalMs`' doc never names the run's budget and is not changed. (Fix round 1, review 1065: `decideExportPass`'s doc, which documents `lastAttemptMs`, and `MARK_CHECK_WORDS`' `budget` line did name it, and were changed, D-6974 and D-6975.)
     Each says "its slice of the run's budget" (D-6974).
   - **964**, in `lib.mjs`:
-    - `SIDECAR_WALK_CHARS_MAX`'s doc says it is a soft bound: one name is admitted past it, and a walk's `done` grows by the names taken in the same call;
+    - `SIDECAR_WALK_CHARS_MAX`'s doc says it is a soft bound: one name is admitted past it, and a walk's `done` grows by the names taken in the same call (fix round 1, review 1065: reworded to what `startSidecarWalk` does, `first` is admitted on every call, so the overshoot grows by one name per call);
     - the `DERIVE_SHARES` comment (about :241) says that its 0.1-0.17 of a core was measured with a local, unshipped CPU-weight drop-in present.
   - Check: `git grep -n -e "or the run's budget ended the scan" -e "or the run's budget ends the selection" -e "each page under the run's budget" -e "what the run's byte budget has left" HEAD -- ccd/history/sweep.mjs` prints nothing after the commit. Each pattern keeps the word before the phrase, so a corrected "or its slice of the run's budget ended the scan" does not match it. Measured: it printed nothing (rc 1) after the commit, and again after the review-fix commit.
 
@@ -857,6 +856,28 @@ Each carry names its review, and the item's test where the carry asks for one.
 - The predictions of Tasks 1 to 4 are replaced above, and each task ends in its own Measured section. The sections use a level-4 heading so that they stay inside their task.
 - The final-tree runs of every history suite, the measure-history suite, the test typecheck and `test/single-definition` are in the PR body's "Tests run".
 
+#### Fix round 1 (review 1065)
+
+Run 1039's fix round 1, after review 1065 at `1beb0d631`. It changes `history-recall.test.ts` (case (f), and case (d)'s assertion message), three comments in `lib.mjs` and this plan. `recall.mjs` is untouched.
+
+- **Case (f)**, as built and after `ANALYZE`, for every sort: it now requires the row `SEARCH entry_variants USING INDEX sqlite_autoindex_entry_variants_1 (entry_id=?)` and refuses any row naming `(entry_id=? AND blob_id=?)`. Green on the as-built code: `-t "CP-39d.*\(f\)"` 1 passed, 267 skipped.
+- **Mutants** (the one-mutant procedure; each anchor occurred once; saved copy and sha256 of `recall.mjs` before, `cp` back after, `cmp` silent and the sha256 equal each time; `git status` clean of `recall.mjs` after):
+  - `T1-M4b`: now **red**: (f) as built/recency: the variant arm is not probed by (entry_id=?) alone: the plan rows follow in the message, among them `BLOOM FILTER ON entry_variants (entry_id=? AND blob_id=?)` and `SEARCH entry_variants USING INDEX sqlite_autoindex_entry_variants_1 (entry_id=? AND blob_id=?)`: expected false to be true. The first assertion that fires is the `SEARCH … (entry_id=?)` one; the refusal of `(entry_id=? AND blob_id=?)` comes next and is not reached on this mutant.
+  - `T1-M4`: (f) as built/recency: fewer than two entries_ts (transcript_pk=?) rows in the plan: expected 0 to be greater than or equal to 2 (same assertion as before).
+  - `T1-M4c`: (f) as built/recency: a blob-led index in the plan: expected [ Array(1) ] to deeply equal [], the row `SEARCH sidecars USING INDEX sidecars_blob (blob_id=?)` (same as before).
+  - `T1-M2`: (d) recency: one prepared statement carries the match: expected [ …(2) ] to have a length of 1 but got 2 (the new message; the `select` is unchanged).
+- **The scan counts** (case (f)'s fixture, `EXPLAIN QUERY PLAN`, as built and after `ANALYZE`, identical in both): the ranked statement plans 3 `SCAN blobs_fts VIRTUAL TABLE INDEX 0:M1` rows for recency and 4 for relevance and hybrid. Main's ranked statement plans 3 and its count statement 3. Review 1065 counted 4 for main's two statements together; this round measured 6. Residuals, "The match is scanned per arm".
+- **`startSidecarWalk`** (read, then run in scratch over `lib.mjs`'s own functions, 14,000 unseen names of 39 units): `walkNames` admits `first` on every call whatever the room, so once `done` holds the cap each call adds that one name: `done` stood at 525,018 units after 20 calls and 526,578 after 60, 39 units a call.
+- **W1-e** (read, `deploy/measure-history.py`): `w1e_statistic` sums `card_served:*` and `card_id_mismatch:*` from the counters. `deploy/history-replay.mjs` reads `card_consumed:main` from them, and neither of the two. `deploy/history-gate.mjs` reads no store counters.
+- **Runs** (server/, foreground or one at a time, under a box load of 40 to 210 and about 4 GB of memory available, so several vitest workers were SIGKILLed by the box; the runs that finished):
+  - `history-recall.test.ts` whole: 267 passed, 0 failed, 1 skipped (the darwin-only C36 case), with `--testTimeout=120000`; an earlier run without it was cut by its 900 s bound at load 75;
+  - `test/citations.test.ts`: 4 passed, 0 failed, 0 skipped; `test/anchors.test.ts`: 9 passed, 0 failed, 0 skipped on its third run (the first two, under load, each showed 1 failed of 9; the failure was not captured);
+  - `history-lib`, `test/single-definition`, `tsc -p test/tsconfig.tests.json` and `deviation-refs` were SIGKILLed by the box or cut by their bound there; `lib.mjs`'s diff is comment lines only. They were re-run on the final tree once the load fell, one at a time, foreground, after `npm ci` in `ui/` and `pwa/` and `git fetch origin main` (`c332aca73`):
+  - `deviation-refs`: a first run at a load of about 110 took 2,242 s and showed 8 failed, 23 passed (its failure text was not kept); re-run alone with `--testTimeout=120000`, 31 passed, 0 failed, in 38 s;
+  - `history-lib.test.ts`: 1,375 passed, 0 failed; `test/single-definition`: 14 files, 944 passed, 0 failed; `typecheck-tests.test.ts`: 12 passed, 0 failed;
+  - `history-recall.test.ts` whole, without the timeout flag: 267 passed, 0 failed, 1 skipped; `-t "CP-39d: grep drives"`: 9 passed, 259 skipped; `-t "C27"`: 5 passed, 263 skipped;
+  - `test/anchors.test.ts`: 9 passed; `test/citations.test.ts`: 4 passed (both after the re-review's plan edits).
+
 ## The PR
 
 Commits, in order (measured: Task 3 landed before Task 2, and three review-fix commits were added, so the list differs from the plan's original six):
@@ -868,7 +889,9 @@ Commits, in order (measured: Task 3 landed before Task 2, and three review-fix c
 6. `fix(history): the sweep reads a registered session's mid-turn growth within a tick (CP-39d Task 2; D-7096)`;
 7. `fix(history): the sweep's carried review items (CP-39d Task 4; D-7099)`;
 8. `docs(history): CP-39d Task 4 review fixes, the carried comments (CP-39d Task 4; D-7099)`;
-9. `docs(plan): CP-39d, the measured reds (CP-39d)`.
+9. `docs(plan): CP-39d, the measured reds (CP-39d)`;
+10. `test(history): CP-39d fix round 1, the variant arm's probe is pinned (CP-39d fix round 1; D-7095)`;
+11. `docs(history): CP-39d fix round 1, the carried comments and the plan's claims (CP-39d fix round 1; D-7095, D-7099)`.
 
 Open it against `main`, ready for review, titled "ccrc history CP-39d: grep searches its scope, and capture sees a turn while it runs". Its body has these sections:
 - Summary;
@@ -890,7 +913,7 @@ Then read the threads with `gh api graphql`, and confirm CI ran at the head and 
 - **The registry read.** Each non-scan tick reads `$REG/*.uuid` once: one listing and one bounded, nonblocking read per name, as `knownUuids` does at the scan. Its cost is the registry's size, tens of ids on the fleet, and one SQL read (`activeRows`) over `ingest_files` and `file_paths`, whose join columns (`transcript_pk`, `file_id`) carry no index: the shape `behindPaths` and `behindRows` already read every tick. The lstats are capped and these reads are not.
 - **Past the cap.** A file past the first `ACTIVE_STAT_MAX` (256) in `activeRows`' order, each uuid's newest copy first, waits for its Stop hint or the 30-minute scan, as before this wave. Today's 79 newest copies all fall inside the cap. A newest copy would wait only once the registry held more than 256 uuids with a live main file.
 - **A cut scan suspends the pass.** A due scan that its budget cuts leaves `scan_discover_ms` unset, so the scan stays due and the pass does not run until a scan completes. The investigation's 9 ticks of 32-44 min are consistent with cut scans.
-- **A failing registered file is retried every tick.** A regular file whose open or read fails records no examined row, so the pass offers it on every non-scan tick: it is counted each tick (`file_unreadable` or an admission word) and its uuid's card prediction is withdrawn each tick (D-5061, arm `copy`), as a failing behind file already is. D-4340's "until its next hint or the next due scan" no longer bounds a registered uuid's file.
+- **A failing registered file is retried every tick.** A regular file whose open or read fails records no examined row, so the pass offers it on every non-scan tick: it is counted each tick (`file_unreadable` or an admission word) and its uuid's card prediction is withdrawn each tick (D-5061, arm `copy`), as a failing behind file already is. D-4340's "until its next hint or the next due scan" no longer bounds a registered uuid's file. It also moves W1-e: `w1e_statistic` (`deploy/measure-history.py`) sums `card_served:*` and `card_id_mismatch:*` from the counters (read in the code, fix round 1), so those retries change its served and mismatch shares. No W2-scored input reads either: `deploy/history-replay.mjs` reads `card_consumed:main` from the report's counters and neither of the two, and `deploy/history-gate.mjs` reads no store counters (review 1065, Q8 b).
 - **A mid-turn sidecar waits.** The pass's files do not join the sidecar half's share, so a sidecar written mid-turn is read at its Stop hint or the scan (Decision 7). W1-b reads transcript rows only.
 - **W2's non-gating counters move.** `deploy/history-counters.mjs`'s per-window lag, `card_served` and `card_id_mismatch` read this release's capture, so they cannot be compared with readings taken before it. None feeds the gate.
 - **W3's receipt hold.** Derivation's hold (`derive.mjs`, about :393, `pendingReceiptState.sessionUuids`) holds only uuids with a draining spool file. A compaction boundary that the pass ingests between the boundary's write and its SessionStart(compact) spool line derives its leaf with no hold, as one the scan or a behind file ingests already does. Steer receipts are written only from W3, so W2 is unaffected; the W3 wave owns it.
@@ -899,11 +922,16 @@ Then read the threads with `gh api graphql`, and confirm CI ran at the head and 
   - `recall_calls.ms` starts at `readVerb`'s entry, so node's own start is not counted.
   - The spool line carries no arguments, so W1-f's organic rows mix scopes and `--regex`. The deliberate run is the reading.
   - A `--regex` that ran past its budget (rc 2) is left out of W1-f.
-- **The plan pin.** It relies on `INDEXED BY entries_ts` for the entry and variant arms, and on SQLite's documented rule that a unary `+` disqualifies a term from driving an index for every arm's blob term. Measured: without the `+`, the sidecar arm plans `sidecars_blob` (T1-M4c red), and the variant arm changes only its probe's key width on the primary key (T1-M4b, equivalent, D-7095).
+- **The plan pin.** It relies on `INDEXED BY entries_ts` for the entry and variant arms, and on SQLite's documented rule that a unary `+` disqualifies a term from driving an index for every arm's blob term. Measured: without the `+`, the sidecar arm plans `sidecars_blob` (T1-M4c red), and the variant arm probes its primary key on `(entry_id=? AND blob_id=?)`, an IN-loop that review 1065 measured at 1,905 ms after `ANALYZE` (2,579 ms with no statistics) against 19 ms with the `+` (2,000 in-scope entries over 20,000 matches; its refute pass 5,520 ms against 4 ms, with no statistics). Case (f) pins the `(entry_id=?)` probe, and T1-M4b is red (fix round 1; D-7095). The coordinator withdrew the earlier "equivalent" ruling there.
 - **The sidecar arm's plan.** With no statistics, or with statistics that spread sidecars across transcripts, the sidecar arm plans on `sqlite_autoindex_sidecars_1 (transcript_pk=?)`; with statistics that put a large share of the table on one transcript, as case (f)'s fixture does, it plans `SCAN sidecars`. No blob-led index drives it either way, and it ships as built, with no `INDEXED BY` (the coordinator's ruling of 2026-10-27). Synthetic, warm, the recency statement: 6,300 sidecars cost 2.97 ms by the index and 3.36 ms by the scan; 60,000 sidecars cost 18.8 ms by the index and 23.3 ms by the scan.
 - **Scope-first on a rare term.** Over a large scope a rare term costs the scope's size (33-39 ms over 200k entries, synthetic and warm) where blob-first cost about 0 ms. Cold-cache cost over a large scope is not measured.
-- **The rank lookup.** On relevance and hybrid, `rk` evaluates the match a second time, beside `m`, in the form Task 1 Step 3c measured cheapest, the global rank CTE. Its nine medians (warm, five runs, 200,000 `blobs_fts` rows, 20,000 matching, ms at 20, 200 and 2,000 in-scope matches): the global form 6.6, 10.9 and 18.9; the in-scope form 17.8, 165.2 and 1,915.6; the correlated form 18.1, 132.1 and 1,377.2. The in-scope and correlated forms cost about 0.7 ms per in-scope blob (bm25's IDF is recomputed on every xFilter); the global form costs the box's whole match, as the shipped statement did. Step 3c's figures are warm. Cold, relevance and hybrid may still cost what the shipped statement cost on every sort: the rank over 23,766 matches took 692 ms cold, so over 96,708 it may take near 2.8 s. This wave makes no sort slower. Recency, the default, reads no rank. The coordinator rules this a residual (2026-10-27), and the post-rollout relevance and hybrid runs report it apart from recency.
-- **The window count.** A project scope with many in-scope matches materializes them all for the window count, as `countSql` read them all.
+- **The match is scanned per arm.** One prepared statement carries the match, but `m` is a plain CTE used by three `IN (SELECT blob_id FROM m)` subqueries, which SQLite does not materialize. Measured in fix round 1 with `EXPLAIN QUERY PLAN` on the ranked statement of case (f)'s fixture, as built and after `ANALYZE`: recency plans 3 `SCAN blobs_fts` rows (the entry, variant and sidecar arms), and relevance and hybrid 4 (`rk` adds one). Main's ranked statement plans 3 and its count statement 3, so 6 together; review 1065 counted 4 for main's two statements, and this round's count is the one measured (the recount disagrees with the review on main's figure only). This wave still scans the match fewer times than main on every sort. `AS MATERIALIZED` would give one scan, but review 1065 measured it slower at 100k matches (it materializes them), so it is not taken. `recall.mjs` has two doc comments (the section header comment near "with the global match run once", and `rankedAndCounted`'s doc, "the global match runs once") that keep the older wording. `recall.mjs` is out of this round; those comments mean one prepared statement.
+- **A compressor error stops the tick.** A brotli error rejects the whole tick, as on main: `ingestTick` rethrows non-OS errors and `runPass` rethrows them. The pass adds no route, because the file is already in `seen`. Brotli encode errors do not depend on the data (review 1065, Q8 a).
+- **A file whose first path vanished.** `activeFiles` marks a file taken before it lstats the file's first path. If that path is gone while a second lives, the file waits for its Stop hint or the scan. No ccd path removes one name of a hard-linked pair; it takes an out-of-band delete or a renamed project directory (review 1065, F4).
+- **`activeRows` with no registered uuid.** It runs on every non-scan tick even when no uuid is registered (2.7 ms live; review 1065, F10).
+- **SQLite floor.** W1-b's `LAG() OVER` needs SQLite 3.25 or later. `measure-history.py` runs every key in one `try`, so an older SQLite would lose `w2` and `census` too, not only `w1b`. The session-hosting node's Python SQLite is 3.45.1 (the coordinator, 2026-10-27; review 1065, F9).
+- **The rank lookup.** On relevance and hybrid, `rk` scans the match once more, beside each arm's scan of `m` (Residuals, "The match is scanned per arm"), in the form Task 1 Step 3c measured cheapest, the global rank CTE. Its nine medians (warm, five runs, 200,000 `blobs_fts` rows, 20,000 matching, ms at 20, 200 and 2,000 in-scope matches): the global form 6.6, 10.9 and 18.9; the in-scope form 17.8, 165.2 and 1,915.6; the correlated form 18.1, 132.1 and 1,377.2. The in-scope and correlated forms cost about 0.7 ms per in-scope blob (bm25's IDF is recomputed on every xFilter); the global form costs the box's whole match, as the shipped statement did. Step 3c's figures are warm. Cold, relevance and hybrid may still cost what the shipped statement cost on every sort: the rank over 23,766 matches took 692 ms cold, so over 96,708 it may take near 2.8 s. This wave makes no sort slower. Recency, the default, reads no rank. The coordinator rules this a residual (2026-10-27), and the post-rollout relevance and hybrid runs report it apart from recency.
+- **The window count.** A project scope with many in-scope matches materializes them all for the window count, as `countSql` read them all. `count(*) OVER ()` holds every in-scope, filtered referrer row in temp storage before ORDER BY and LIMIT, where `countSql` read them all and held none. Review 1065 measured about 92 bytes per row on the default temp_store (20 MB at 220k rows, 101 MB at 1.1M rows) with the reader's RSS flat (+5 to +9 MB). Temp-file space grows linearly with in-scope referrers; that is not a risk at today's sizes.
 - **`examineUuids`.** Its doc still lists the tick's old sources. It is not on the tick's path.
 - **Every figure.** Each count and red in this plan is the measured one, since Task 5 replaced the predictions. The figures under "Measured before dispatch" are the coordinator's, read-only on a live store; Step 3c's, the sidecar arm's and the runs' are the worker's, on fixtures and in-memory stores.
 
@@ -913,10 +941,10 @@ Then read the threads with `gh api graphql`, and confirm CI ran at the head and 
   - each arm carries its own `transcript_pk IN :tpks` term;
   - the entry and variant arms read `entries` through `INDEXED BY entries_ts` (`versioned`'s new optional argument), because with an `entries_ts` row in `sqlite_stat1`, which the writer's `PRAGMA optimize` writes, the planner otherwise plans `SCAN entries`;
   - each arm tests its blob against the match with a unary `+`, so no blob-led index can drive it.
-  - Plan pin, measured: case (f) holds, as built and after `ANALYZE`, for every sort: `entries_ts (transcript_pk=?)` appears for the entry and the variant arm, and no blob-led index does. The shipped statement's plan leads with `entries_blob_prov (blob_id=? AND provenance=?)` and `entry_variants_blob (blob_id=?)`. T1-M4 and T1-M4c are red as built. T1-M4b is **equivalent** (the Step 5 ruling), and the `+` is kept. The plan rows, identical across the three sorts and both halves:
+  - Plan pin, measured: case (f) holds, as built and after `ANALYZE`, for every sort: `entries_ts (transcript_pk=?)` appears for the entry and the variant arm, and no blob-led index does. The shipped statement's plan leads with `entries_blob_prov (blob_id=? AND provenance=?)` and `entry_variants_blob (blob_id=?)`. T1-M4 and T1-M4c are red as built. T1-M4b is red since fix round 1 (review 1065), which also made case (f) require the variant arm's `(entry_id=?)` probe and refuse `(entry_id=? AND blob_id=?)`: the `+` is a guard, not cosmetic. The coordinator withdrew the Step 5 "equivalent" ruling. The plan rows, identical across the three sorts and both halves:
     - entry arm: `SEARCH entries USING INDEX entries_ts (transcript_pk=?)`;
     - variant arm, with the `+` (as shipped): `BLOOM FILTER ON entry_variants (entry_id=?)`, then `SEARCH entry_variants USING INDEX sqlite_autoindex_entry_variants_1 (entry_id=?)`;
-    - variant arm, T1-M4b (no `+`): `BLOOM FILTER ON entry_variants (entry_id=? AND blob_id=?)`, then `SEARCH entry_variants USING INDEX sqlite_autoindex_entry_variants_1 (entry_id=? AND blob_id=?)`. Only the probe's key width differs, and no blob-led index appears;
+    - variant arm, T1-M4b (no `+`): `BLOOM FILTER ON entry_variants (entry_id=? AND blob_id=?)`, then `SEARCH entry_variants USING INDEX sqlite_autoindex_entry_variants_1 (entry_id=? AND blob_id=?)`. This is the IN-loop probe the pin refuses: one seek per box-wide match per in-scope entry, which review 1065 measured at 1,905 ms after `ANALYZE` (2,579 ms with no statistics) against 19 ms with the `+`, for 2,000 in-scope entries over 20,000 matches (its refute pass 5,520 ms against 4 ms, with no statistics);
     - sidecar arm: `SCAN sidecars` in (f)'s fixture, and `SEARCH sidecars USING INDEX sidecars_blob (blob_id=?)` without the `+` (T1-M4c).
   - The sidecar arm's plan depends on the statistics: with no statistics, or statistics that spread sidecars across transcripts, it plans `sqlite_autoindex_sidecars_1 (transcript_pk=?)`; with statistics that put a large share of the table on one transcript, as (f)'s fixture does, it plans `SCAN sidecars`. No blob-led index drives it either way. It ships as built, with no `INDEXED BY` and no further departure (the coordinator's ruling of 2026-10-27). Figures: Residuals, "The sidecar arm's plan".
   - A sort whose ORDER BY reads `rank` joins `rk`, the match's BM25 as the global rank CTE, the form Task 1 Step 3c measured cheapest. Recency reads no rank. The nine medians (warm, five runs, 200,000 `blobs_fts` rows, 20,000 matching, ms at 20, 200 and 2,000 in-scope matches):
@@ -924,7 +952,7 @@ Then read the threads with `gh api graphql`, and confirm CI ran at the head and 
     - the in-scope form: 17.8, 165.2 and 1,915.6;
     - the correlated form: 18.1, 132.1 and 1,377.2.
   - F7's name list in `history-recall.test.ts` is edited in place: `countSql` out, `SCOPE_IN` and `REGEX_MATCH` in.
-  - The true count is `count(*) OVER ()` on the same rows, read from the first row, and `countSql` is gone, so the global match runs once.
+  - The true count is `count(*) OVER ()` on the same rows, read from the first row, and `countSql` is gone, so one prepared statement carries the match. The match is still scanned once per arm, and `rk` adds a scan (fix round 1, review 1065; Residuals, "The match is scanned per arm").
   - `rankedAndCounted`, `FTS_MATCH` and `REGEX_MATCH` are exported as test seams.
   - Rows, order, snippets and counts equal the shipped statement's over every sort, four scopes (one empty), the filters, every LIMIT boundary and the as-of cut. The scope still sits inside the ranking statement, before its LIMIT (C27).
   - Measured cause: the shipped shape matched the whole box first, at 1.3-5.4 s cold, against 64-146 ms for the scope-first entries arm. The live post-merge p95 was 2,567 ms against W1-f's target of under 2 s.
@@ -951,4 +979,5 @@ Then read the threads with `gh api graphql`, and confirm CI ran at the head and 
   - new cases pin the short-read destroy (987 F1), the over-long line's null arm, its OS-error arm (counted and skipped) and its compressor-error arm (leaves the tick, never hangs it) (987 F6), and a paused export step makes no pass slice (999 F5);
   - DM47's 64 MiB case is edited in place: its file is `stream64.txt`, and each blob is decoded and compared (987 F3);
   - E2's comment's first line is edited in place (999 F4);
-  - doc comments are corrected (987 F2, 999 F4, and review 964's two `lib.mjs` items).
+  - doc comments are corrected (987 F2, 999 F4, and review 964's two `lib.mjs` items);
+  - fix round 1 (review 1065) closes 999 F4 whole: `decideExportPass`'s doc (D-6974) and `MARK_CHECK_WORDS`' `budget` line (D-6975) each say "its slice of the run's budget", and `SIDECAR_WALK_CHARS_MAX`'s soft-bound comment says what `startSidecarWalk` does: `first` is admitted on every walk call, so the overshoot grows by one name per call.
