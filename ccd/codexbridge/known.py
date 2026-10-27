@@ -122,6 +122,9 @@ KNOWN = {
         # `usage.output_tokens_details.thinking_tokens`, which Claude Code reads as optional: the bridge's usage
         # carries the four counts (reducer.anthropic_usage) and no thinking count.
         "thinking-token-count-2026-05-13",
+        # The token-counting endpoint (`POST /v1/messages/count_tokens`), which rides only that request: the bridge
+        # answers it locally (Task 8, `outcomes.countTokens`) and sends nothing upstream for it.
+        "token-counting-2024-11-01",
         # NOT HERE, ON PURPOSE (D-7093): `mid-conversation-tool-changes-2026-07-01` and `inline-tools-2026-09-15`.
         # They gate `tool_addition`/`tool_removal` blocks in a `role: system` message (by reference, and by value as
         # a `tool_definition`), which inbound drops uncounted with every non-text system block: a tool added by

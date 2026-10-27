@@ -28,8 +28,10 @@ everywhere (an argument's or a schema property's name included), so a recording 
 enters the corpus, with ONE exception: the backend's `usage.attribution.items` is keyed by item id (runbook step 2,
 2026-10-27; D-7086), so each key there becomes the `<prefix>_fx<n>` the same id gets as a value, and an output item's
 key still names that item. The rewrite is anchored on the `attribution` object under a `usage` key, so a tool
-schema's property named `attribution` keeps its keys, but one named `usage` that holds one named `attribution` does
-not: the scrubber sees only the parent's key, and the human read is what catches that. A `data:` line that is not
+schema's property named `attribution` keeps its keys, and so does one named `usage` (a sub-property sits under
+`properties`); an object literally keyed `usage`, then `attribution`, then `items` elsewhere, such as a schema's
+`default` or `examples` value, still has its `items` keys rewritten: the scrubber sees only the parent's key, and the
+human read is what catches that. A `data:` line that is not
 JSON becomes a fixed malformed line. Then the output is checked against SCRUB_PATTERNS (an unscrubbed id, a JWT, an
 encrypted content that is not `ENC-<n>`, a key, a line that is not an `event:` or `data:` line), which a structural
 key's value can still match: any match refuses (rc 1) and writes nothing. Its expectation in `expect.json` is
