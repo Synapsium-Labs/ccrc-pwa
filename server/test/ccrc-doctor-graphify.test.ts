@@ -38,6 +38,7 @@
 // uses.
 import { describe, it, expect } from 'vitest';
 import { fixClock, fixedNow } from './fixedClock.js';
+import { plantShippedTimers } from './shippedTimers.js';
 import { spawnSync, execFileSync } from 'node:child_process';
 import {
   writeFileSync, mkdirSync, symlinkSync, rmSync, utimesSync, readFileSync } from 'node:fs';
@@ -78,6 +79,8 @@ function installCcrc(home: string): void {
   symlinkSync(CCRC_SRC, join(ccd, 'ccrc'));
   symlinkSync(CHECKS_SRC, join(ccd, 'ccrc-doctor-checks'));
   symlinkSync(LIB_SRC, join(ccd, 'ccrc-wrapper-shape'));
+  // The shipped timers the doctor reads each cadence from (W8 Task C8b, D-7054), as `ccrc-doctorFixture.ts` plants them.
+  plantShippedTimers(join(home, 'ccrc'));
 }
 
 const ccrcIn = (home: string): string => join(home, 'ccrc', 'ccd', 'ccrc');

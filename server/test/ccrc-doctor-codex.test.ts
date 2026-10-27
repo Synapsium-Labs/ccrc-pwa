@@ -4,6 +4,7 @@ import { describe, it, expect } from 'vitest';
 import { spawnSync, execFileSync } from 'node:child_process';
 import { writeFileSync, readFileSync, mkdirSync, symlinkSync, rmSync, chmodSync, existsSync, utimesSync, appendFileSync, readdirSync, lstatSync, readlinkSync, statSync, renameSync, truncateSync, lutimesSync } from 'node:fs';
 import { fixClock, fixedNow } from './fixedClock.js';
+import { plantShippedTimers } from './shippedTimers.js';
 import path, { join } from 'node:path';
 import { mkTmp, removeTmpFixturesEachTest } from './tmpHelpers.js';
 import { describeLinux, itLinux, itDarwin, IS_DARWIN } from './platformFixtures.js';
@@ -163,6 +164,8 @@ function usageBox(prefix: string, o: Parameters<typeof plantCodexUsage>[2] = {})
   for (const b of ['jq', 'date', 'stat']) linkReal(home, b);
   codexRoster(home, [{ id: 'codex-a', proxyPort: 45010, litellmPort: 45011 }]);
   plantCodexUsage(home, 'codex-a', o);
+  // The shipped tree's timers: the rows read the usage timer's cadence from there (W8 Task C8b, D-7054).
+  plantShippedTimers(join(home, 'ccrc'));
   return home;
 }
 
