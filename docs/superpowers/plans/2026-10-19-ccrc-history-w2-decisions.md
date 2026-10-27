@@ -353,7 +353,7 @@ build · no · coordinator · PS12; X10/F8; deviation-refs.test.ts (a number def
 spec-decides · no · W2-4 · PS10; ci-pipeline.test.ts:1010-1016.
 
 **W2-D6. The build freeze: everything installed before part 1, then nothing moves.**
-- Every W2 PR (W2-1 to W2-6) merges before the final W2 release is cut. The operator rolls that release onto every named node before part 1.
+- Every W2 PR (W2-1 to W2-6) merges before the final W2 release is cut. The operator rolls that release onto every named node before part 1. **Amended (the operator's ruling R-B1, 2026-10-26; W2-7, D-7063):** W2-7, the budget raise, is a W2 PR too, so the final W2 release is the tag cut from its merge, v0.0.740.
 - **From that rollout to close:**
   - each named node's update intent is off, or pinned to that tag;
   - the driver refuses any spawning or scoring subcommand with `tree-moved` when the node's installed release stamp differs from part 1's `gate_code.release_tag` (W2-D56).
@@ -364,6 +364,7 @@ spec-decides · no · W2-4 · PS10; ci-pipeline.test.ts:1010-1016.
   - ccd/ccd's `CCRC_SESSION_GENERATION` export and `.generation` writer, diffed as blocks;
   - `shared/wrapper.mjs`, `deploy/systemd/ccd-history-sweep.{service,timer}`, `deploy/history-*.mjs`, `deploy/measure-history.py`.
 - After an exception, before window start the remedy is a re-pilot and a superseding draft. After window start, outputs are stamped `code-changed` and the operator rules whether the window stands.
+- **Amended (the operator's ruling R-B2, 2026-10-26, "Bar both; a forced one halts"):** from act 6 to act 28 no release is installed and no generated account's wrapper changes. There is no freeze exception in that span, so the two bullets above are not used. A forced install or wrapper change (a security fix, an account outage) halts W2 at its `tree-moved`, `code-changed` or `wrapper-moved` stop, and W2 closes with acts 26 to 29 (26 only if act 18 ran) and no verdict, never a roll back and resume. A frozen act forced by a cap or disk emergency (W2-D7) is not a release install.
 - The live sessions' Claude Code version is not frozen. It is recorded per named node at window start and at window end, and reported.
 
 open-record-default · no · W2-4 (preflight), W2-5b (wiring); the update intent is the operator's · C-I (scoring frozen before part 1; "P7 lands during the window" struck); W2-DQ11 with checker CHK1-F3, CHK1-F10 and DRV-5; §10.2:2723.
@@ -633,6 +634,7 @@ build · no · W2-3 (function), W2-1 (emission, the rewire, the twin pin) · C-K
 - Spawns before part 1 (step 0a, `pilot-source`) record `codeShas()` and the release stamp instead, and the validator checks them against part 1's `gate_code` (W2-D25).
 - On a mismatch the consumer refuses with `code-changed`. The only exception is `--allow-code-change`, which stamps every output and the verdict `code-changed`; whether that verdict stands is the operator's ruling.
 - **Amended (coordinator, 2026-10-19, W2-3/W2-4 plan review):** `--allow-code-change` covers a measured mismatch only. It never covers an unmeasured code file, which refuses with `code-unmeasured` whether or not the flag is given (W2-D56).
+- **Amended (the operator's ruling R-B2, 2026-10-26):** from act 6 to act 28 no release is installed and there is no freeze exception (W2-D6), so `--allow-code-change` is never passed and no output or verdict carries a `code-changed` stamp. A `code-changed` refusal in that span halts W2, which closes with no verdict.
 - Pure scoring decisions live in history-gate.mjs (W2-D60 to W2-D64, W2-D72, W2-D79 to W2-D81, W2-D89). The impure scoring path (spawn, composer, admission) is pinned by history-replay.mjs's hash. Its imports (recall.mjs, derive.mjs, cli.mjs, store.mjs) are not hashed: they are covered by the `release_tag` comparison and the `tree-moved` preflight (W2-D56).
 
 build · no · W2-3 (validator), W2-4 (helper), W2-5a and W2-5b (each its own consumers) · G10 with the gate checkers' fixes (lib, script hash); split checkers F3/X4; the quiz checker's code-freeze coverage finding (both of its options taken); the consumer-list and consumer-owner findings.
@@ -1111,7 +1113,7 @@ Before each batch, the driver reads `~/.cc-limits/<account id>.json` read-only, 
 **The budget in force:**
 - **Before part 1** (step 0a, `pilot-source`): a required `--budget N`, with no default; a missing flag is refused before any spawn. Each subcommand records its budget and its measured spend in its output, and part 1 carries them (step 0a entries, the pilot section).
 - **From part 1 to part 2:** part 1's `pilot_budget` (default 3,000,000 token-equivalents, *chosen*).
-- **From part 2:** part 2's `spend_budget`, which is the pilot's extrapolation for the frozen list × 1.25.
+- **From part 2:** part 2's `spend_budget`, which is the pilot's extrapolation for the frozen list × 1.25. **Amended (the operator's ruling R-B1, 2026-10-26, "Build a budget amendment"; W2-7, D-7063):** from part 2 the budget in force is the newest `budget-raise` amendment's `detail.spend_budget`, in array order, else part 2's signed `spend_budget`, which is never edited (W2-D90). One pure reader in the gate, `spendBudgetInForce`, computes it (W2-D12): the validator holds each raise above it, and the driver's `armNodeOf` spends under it, so arms, judge, step 0b and the quiz fidelity re-pilot each take their node's share of it, and the arms summary records it. After a raise, a `budget-exhausted` arms or judge batch resumes on its own `--out` under the amended record. A quiz re-pilot (step 0b and fidelity, `--section quiz`) does not: its version pin holds the old record's sha, so it is refused `out-refused` before any spawn, and it re-runs whole, step 0b and fidelity under one record, on a fresh `--out` under the raised record. Its earlier spend does not carry into the fresh spend ledger, so the operator sizes the raise knowing that (review 1030, F1).
 
 Before part 1, the limits values used are the driver's defaults, which part 1 then records in `limits`. A batch is at most 10 spawns. A stop exits non-zero, and the batch can be resumed.
 
@@ -1120,7 +1122,7 @@ Before part 1, the limits values used are the driver's defaults, which part 1 th
 - **One driver per `--out`.** The driver takes an exclusive lock under `--out` before it reads the ledger. A live holder, or one whose liveness cannot be measured, is refused with `out-in-use`.
 - **No unseen child.** Each child runs in its own process group. A signal to the driver stops admission, kills the groups and refuses with `interrupted`. A leftover run whose recorded child is alive, or cannot be measured, is never charged, removed or re-spawned: it refuses with `run-live`. Every subcommand that spawns goes through one claim step (the lock, then every leftover under `--out`), which the batch runner requires. **Amended (coordinator, 2026-10-20, W2-4 review 696, F5 (d); the coordinator's ruling, under the operator's directive of 2026-10-19 to proceed through the build waves):** a signal that arrives after the batch's last stop check, when every child has closed, is not handled. The driver exits 0 with the result written (measured by review 696), or, after `main` has removed its listeners, ends by that signal. Every run had closed and been charged before it (section 7).
 
-open-record-default (the values) plus build · no · W2-4 · W2-DQ9 with CHK1-F2 and DRV-4; §10.2:2697; both checkers' pre-record-spend findings.
+open-record-default (the values) plus build · no · W2-4, W2-7 (the budget in force, D-7063) · W2-DQ9 with CHK1-F2 and DRV-4; §10.2:2697; both checkers' pre-record-spend findings; R-B1.
 
 **W2-D56. Preflights before every batch.**
 
@@ -1153,6 +1155,7 @@ build · no · W2-4 (mechanism), W2-5b (wiring, the amendment) · W2-DQ8b; CHK1-
   - `--no-session-persistence`: no transcript is named by the init event's session_id, and no projects subdirectory is keyed by the arm's mktemp cwd;
   - the arm's init event.
   A failure halts W2 for an operator ruling.
+- **Amended (the operator's ruling R-B3, 2026-10-26, "No: halt and re-pilot"):** that ruling is given. A failed step 0b halts W2; the cause is fixed, and the pilot runs again on a superseding draft (§5 act 14). Nothing is accepted past a failed step 0b, and after one no later pilot step runs without `--step0b`. If the fix needs a release install, R-B2 applies: W2 halts and closes with no verdict (W2-D6).
 - **Amended (coordinator, 2026-10-19, W2-3/W2-4 plan review): reading the turn bound.** It reads held only when the result event shows the max-turns stop (stream-json's `error_max_turns` result subtype) and the run shows at most 12 assistant turns. A run showing more than 12 turns reads false (the bound did not hold); every other reading is unmeasured, never held. The `error_max_turns` value is unmeasured until step 0b's turn-bound run first reaches the bound: W2-5b's step 0b verifies it, and a different spelling is a coordinator ruling before the pilot proceeds.
 - **Amended (coordinator, 2026-10-19, W2-3/W2-4 plan review):** every spawn argv carries `--verbose`, which print mode needs for `--output-format stream-json`; step 0a's accepted-flags check covers it (section 6, E26).
 - A node added after the draft (W2-D8) runs step 0a before the draft is superseded.
@@ -1620,6 +1623,7 @@ open-record-default (the rubric id) · **yes** (`D-5778`) · W2-3 (RUBRICS, pars
 - **Model-level non-answers are answers:** max turns reached, permission denials, empty text, or no ANSWER line. They are judged.
 - **Infrastructure failures are not answers:** a **spawned** run with no result event, a non-zero exit with no result, or an authentication error. Each is re-run once in a later batch. A second failure makes the question `run-failed`, and it is **excluded from both arms**.
 - **A stop is not a failure.** A question not spawned, or cut off, because of a `limits-*`, `budget-exhausted`, `claude-version-moved`, `tree-moved`, `wrapper-moved` or `code-changed` stop is `not-run`: it never consumes its re-run and is resumed after the stop clears. Budget stops therefore never shrink the quiz quietly.
+  - **Amended (the operator's ruling R-B2, 2026-10-26):** from act 6 to act 28 a `tree-moved`, `wrapper-moved` or `code-changed` stop never clears: a release was installed or the wrapper changed, so W2 halts and closes with no verdict (W2-D6). Its questions are never resumed.
   - **Note (coordinator, 2026-10-19):** the four unmeasured words W2-4 adds (W2-D56, W2-D59) are not in that list yet; W2-5b's plan classifies them as stops beside the `moved`/`changed` ones (section 7). **Amended (coordinator, 2026-10-20, W2-4 review 696, F5 (c); the coordinator's ruling, under the operator's directive of 2026-10-19 to proceed through the build waves):** nor are the driver's four other stop words, which W2-5b classifies the same way: `run-live`, `out-in-use` and `interrupted` (W2-D59), and `out-refused`, which can land mid-batch (section 7). So the note covers `code-unmeasured`, `version-unmeasured`, `tree-unmeasured`, `wrapper-unmeasured`, `run-live`, `out-in-use`, `interrupted` and `out-refused`.
 - If more than 5% of questions are run-failed, criteria 1 and 2 are not computed and W2 halts (W2-D89).
 
@@ -1700,13 +1704,24 @@ build · no · W2-5b · PS8; §10.2 Scoring and The gate; §10.7 W2 row.
 - The validator (W2-3) refuses any other change once `finalized_ms` is at or after the predecessor's `window.start_ms` (W2-D25), and refuses a `version-move` without a re-pilot sha.
 - The operator saves each amendment 0600 off-repo and posts its sha256 before the next arm batch. The version preflight then reads the newest amendment's version for the node.
 - Before window start, a pre-window amendment may still supersede part 2 wholesale (§4 step 5), keeping the seed and W2-D25's window-length rule.
+- **Amended (the operator's ruling R-B1, 2026-10-26, "Build a budget amendment"; W2-7, D-7063):** the chosen set gains a fourth kind, `'budget-raise'`, appended last to `AMENDMENT_KINDS`. It raises the spend budget in force (W2-D55) and does nothing else.
+  - **Its detail is exactly `{spend_budget}`, and it names no node.** `open --amend --kind budget-raise --spend-budget N` appends it and prints the superseding part 2; `--spend-budget` is its only flag, and `--node-label` is refused.
+  - **It only raises.** The validator refuses, each at its own path: a `node_label_ref` other than null (`value-outside-set`); any other detail key (`field-unknown`); an absent or null `spend_budget` (`field-missing`); one that is no safe integer (`field-malformed`); and one not strictly above the budget in force before it, the newest earlier raise's figure or else the signed `spend_budget`, with one new `GATE_REASONS` word, `budget-not-raised`. It compares only with a figure before it that is itself a safe integer, so an earlier raise already refused for its own defect answers one word, not two.
+  - **From part 2 on, before window start and during the window.** Before part 2 there is nothing to amend: `open --amend` refuses a part 1 as `--record`, and a part 1 carrying `amendments` is `field-unknown`. `pilot_budget` keeps the superseding-draft rules.
+  - **It changes nothing that scores.** The record `open --amend` prints differs from its predecessor only in `supersedes`, `finalized_ms` and `amendments`, before and after window start; after window start the signed `spend_budget` itself still cannot move (`post-start-change`); `decideGate` and `assembleReports` read no budget and no amendment; the version preflight reads `version-move` amendments only.
+  - **One reader.** The budget in force is read only through the gate's `spendBudgetInForce` (W2-D12, W2-D55).
+  - **It is recorded like every amendment:** saved 0600 off-repo, its sha256 posted before the next arm batch, and each use recorded in the ledger.
+  - **It changes the record's sha, as every amendment does.** So a pending version-move is written before a raise: a raise appended between a re-pilot and its version-move makes `open --amend --kind version-move` refuse `input-invalid` `repilot record-mismatch`, and that re-pilot must run again. A raise owed before any re-pilot runs is written first, and the re-pilot then runs under the raised record. After a raise, every node's arms summary, `judged.json` and verify outputs written under the old record refuse `input-invalid` `record-mismatch` at `report`; each affected node re-runs arms (a settled run spawns nothing), judge and verify under the new record.
+  - **A pre-window re-finalize drops raises.** `open --finalize --prior-final` supersedes part 2 wholesale with `amendments: []` and the budget re-derived from the pilot, so a raise made before it does not survive it; the operator raises again after it if needed.
+- **Amended (the operator's ruling R-B2, 2026-10-26, "Bar both; a forced one halts"):** `'freeze-exception'` stays in the chosen set, and the validator still accepts it, but it is not used. A part 2 exists only from act 17 to close, inside the span from act 6 to act 28, where no release is installed and there is no freeze exception (W2-D6). A forced install halts W2 and closes it with no verdict, and is never recorded as an amendment. A forced frozen act (`'forced-act'`, W2-D7) is not a release install and is recorded as before.
 
-build · no · W2-3 (validator rule), W2-5b (subcommand) · checker 1's version-move-record finding; §10.2:2723.
+build · no · W2-3 (validator rule), W2-5b (subcommand), W2-7 (`budget-raise`, D-7063) · checker 1's version-move-record finding; §10.2:2723; R-B1, R-B2.
 
 ### I. The counters (W2-6)
 
 **W2-D86. Re-discovery is required.**
 - It is report-only. W2 does not close without the counter report, and this overrules "optional" in PS1, PS19 and the consistency report's §4.
+- **Amended (the operator's ruling R-B4, 2026-10-26, "Yes, close without it"):** a halt before window start closes W2 without the counter report: no window has run, so there is nothing to count. The close acts 26 to 29 run (26 only if act 18 ran), and the ledger records the halt.
 - **Per window of a listed family:** windows and turns come from W2-3's `turnsOf` and window builder, over `measure-history.py`'s raw rows. Entry bodies are read through `store.mjs openReader` and W2-1's exports. Python never decodes blobs.
 - **A re-discovery** is a Read tool_use in turns 1–10 whose `file_path`, made absolute, is the `file_path` of a Read, Edit, MultiEdit, Write or NotebookEdit tool_use in leaf N's span.
 - **Reported:** an indicator and the distinct-path count, by arm and by producer. Changed families are dropped from the arm comparison only.
@@ -1802,11 +1817,11 @@ The pilot always precedes part 2 and the window. The earlier option to move it a
 | `registry_drops` | `[{store_id, ccrc_id, generation, reason}]`, from `verify --registry` | measured |
 | `q18` | the headline and 80% figures, rho 0 and rho_hat, per-node and per-family n_f, coverage, pre-window uptake, `power_output_sha256`, `decision` | measured plus operator |
 | `pilot_result` | pass or fail per fidelity boundary, the usage extrapolation, step 0b results' sha, `settings_mode` used, absent rate | measured |
-| `spend_budget` | the extrapolation for the frozen list × 1.25 | derived; the operator approves |
+| `spend_budget` | the extrapolation for the frozen list × 1.25; never edited by an amendment. The budget in force from part 2 is the newest `budget-raise` amendment's figure, else this one, read by `spendBudgetInForce` (amended: the operator's ruling R-B1, 2026-10-26, W2-D55, D-7063) | derived; the operator approves |
 | `assignment`, `assignment_sha256` | `[{store_id, ccrc_id, generation, arm}]` | derived from the seed and the census inputs; re-derived by `open --finalize` |
 | `quiz` | `{sha256, n_questions, n_families, families}` | measured |
 | `window` | `{start_ms, end_ms}`, half-open, `planned_days` long (up to one day more) | operator |
-| `amendments` | `[]` at finalize; appended only by `open --amend` (W2-D90) | measured plus operator |
+| `amendments` | `[]` at finalize; appended only by `open --amend` (W2-D90), of the kinds `version-move`, `freeze-exception`, `forced-act` and `budget-raise` (`budget-raise` amended: the operator's ruling R-B1, 2026-10-26, W2-D90, D-7063); `freeze-exception` is not used, since there is no freeze exception from act 6 to act 28 (amended: the operator's ruling R-B2, 2026-10-26, W2-D6) | measured plus operator |
 
 Public: shas, counts, K, X, k_unit, the method, the window times, the Q18 figures, the tolerance, the model ids. Private: everything else. The seed may be published after close.
 
@@ -1822,7 +1837,7 @@ Public: shas, counts, K, X, k_unit, the method, the window times, the Q18 figure
 
 **Rollout and the build freeze**
 
-5. *The coordinator merges W2-1 to W2-6. The final W2 release is cut and its tag is posted.*
+5. *The coordinator merges W2-1 to W2-6. The final W2 release is cut and its tag is posted.* Amended (the operator's ruling R-B1, 2026-10-26): W2-7, the budget raise (D-7063), merges too, and the final W2 release is the tag cut from its merge, v0.0.740 (merged c1770fbf4, 2026-10-27 01:06Z).
 6. Roll that release onto every named node. **Set each named node's update intent to off, or pinned to that tag, and record it.** It stays that way until close.
 
 **Step 0a, pilot sourcing, part 1**
@@ -1840,7 +1855,7 @@ Public: shas, counts, K, X, k_unit, the method, the window times, the Q18 figure
 **Pilot**
 
 13. Write `~/.ccrc/history/headless-on` by hand on each pilot node from `marker --section pilot`. Run `verify --section pilot`.
-14. Run step 0b: the turn bound, persistence, the arm init, and the treatment-arm assertions. Then run the fidelity pilot (5 boundaries) and the usage pilot (5+5), within `pilot_budget` and the limits stop. A failure of any of them halts W2 for your ruling.
+14. Run step 0b: the turn bound, persistence, the arm init, and the treatment-arm assertions. Then run the fidelity pilot (5 boundaries) and the usage pilot (5+5), within `pilot_budget` and the limits stop. A failure of any of them halts W2 for your ruling. Amended (the operator's ruling R-B3, 2026-10-26, "No: halt and re-pilot"): a failed step 0b needs no further ruling. Fix the cause, then re-pilot on a superseding draft (act 10 again, then acts 12 to 17, with all of act 14 on a fresh `--out`). Nothing is accepted past a failed step 0b. If the fix needs a release install, R-B2 applies: W2 halts and closes with no verdict (W2-D6).
 15. `rm` headless-on on each pilot node.
 
 **Flip, quiz, part 2**
@@ -1856,7 +1871,7 @@ Public: shas, counts, K, X, k_unit, the method, the window times, the Q18 figure
 
 **During the window**
 
-21. Run the arm batches (both arms of each question), and then the judge batches. They resume after a `limits-*` or `budget-exhausted` stop once the account recovers; stopped questions are `not-run`, not failed. Refresh the limits row by an interactive statusline render when told `limits-stale`. After a `claude-version-moved` stop, re-pilot, run `open --amend` (`version-move`), and post its sha256 before the next batch. Any forced frozen act or freeze exception is recorded with `open --amend`, and the next batch's re-check must pass.
+21. Run the arm batches (both arms of each question), and then the judge batches. They resume after a `limits-*` or `budget-exhausted` stop once the account recovers; stopped questions are `not-run`, not failed. Refresh the limits row by an interactive statusline render when told `limits-stale`. After a `claude-version-moved` stop, re-pilot, run `open --amend` (`version-move`), and post its sha256 before the next batch. Any forced frozen act or freeze exception is recorded with `open --amend`, and the next batch's re-check must pass. Amended (the operator's ruling R-B1, 2026-10-26; W2-7, D-7063): from part 2, a `budget-exhausted` stop clears only by a raise the operator rules, `open --amend --kind budget-raise --spend-budget <N>`, its sha256 posted before the next batch; the batches then resume under the new record (a quiz re-pilot re-runs whole on a fresh `--out`, W2-D55), and every node with outputs under the old record re-runs arms, judge and verify under the new one before `report`. A pending version-move is written before a raise, and a raise owed before a re-pilot runs is written first (W2-D90). Amended (the operator's ruling R-B2, 2026-10-26): there is no freeze exception, so of the two, only a forced frozen act is recorded with `open --amend`. A forced release install or wrapper change (`tree-moved`, `code-changed`, `wrapper-moved`) halts W2, which closes with acts 26 to 29 and no verdict (W2-D6).
 22. Label the hand-check sheet, including every `judge-failed` item, under `--out`.
 
 **Window end, verdict, decision**
@@ -1904,6 +1919,8 @@ Each erratum is amended **in place** by the "Amended by" PR, the one that holds 
 | E24 | §10.6 item 4 | the backfill and 5h-2 before pilot sourcing (and on added nodes); the build and maintenance freezes; close steps unchanged (headless-on removed by hand) | coordinator (W2-D6 to D8) | W2-5b | — |
 | E25 | §10.2:2729-2730 counters | the re-discovery unit (turns, Read and write tools); echo hits, compliance, lag, `card_served` and `card_id_mismatch` defined per window, by arm and producer | W2-6 | W2-6 | — (signed defaults) |
 | E26 | §10.2 Flags (the spawn flag list) | add `--verbose`, which every spawn argv carries (print mode needs it for `--output-format stream-json`). Amended (coordinator, 2026-10-19, W2-3/W2-4 plan review) | coordinator (W2-D57) | W2-1 | — (additive) |
+| E27 | §10.2 The account ("then part 2's `spend_budget`") and Pre-registration's amendment kinds | from part 2, the budget in force is the newest `budget-raise` amendment's figure, else the signed `spend_budget`; the kinds gain the budget raise, which only raises, names no node and changes nothing that scores | the operator (R-B1, 2026-10-26; W2-D55, W2-D90) | the coordinator's docs PR after W2-7 (W2-7 holds no spec path) | history-w2-budget-raise-amendment (W2-7), D-7063 |
+| E28 | §10.6 item 4 ("an exception is an operator ruling, an amendment once part 2 exists") | from act 6 to act 28 there is no freeze exception: no release is installed and no wrapper changes, and a forced install or wrapper change halts W2 with no verdict | the operator (R-B2, 2026-10-26; W2-D6) | the coordinator's docs PR after W2-7 | — (a ruling) |
 
 Not spec text, but owed: the programme ledger's sentence "only the quiz waits on the backfill" is superseded by W2-D8. The coordinator corrects it at the ledger's next edit.
 
