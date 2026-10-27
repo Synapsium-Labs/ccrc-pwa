@@ -257,6 +257,21 @@ describe.skipIf(!PY)('the stats file (codex-bridge spec §2.7, §2.9 D3; D-6418)
     expect(snap.doc.names.eventType).toEqual({ 'response.fx_new_event': 1, 'response.metadata': 1 });
   });
 
+  // The backend's heartbeat event, measured on the live lane's direct traffic (2026-10-27; D-7119): neither Codex nor
+  // the bridge reads anything from it (known.py#_BACKEND_EVENTS), so it is explained and the doctor stops naming it.
+  it("the backend's keepalive event is explained, and an unknown event beside it is not", async () => {
+    const { home, file } = lane('cb-stats-keepalive-');
+    const [, , , snap] = await run(home, [
+      open(file),
+      call('name', ['eventType', 'keepalive']),
+      call('name', ['eventType', 'response.fx_new_event']),
+      { op: 'stats-snapshot' },
+    ]);
+    // the control: both names were counted, so the unexplained list is about KNOWN, not a call that missed
+    expect(snap.doc.names.eventType).toEqual({ keepalive: 1, 'response.fx_new_event': 1 });
+    expect(snap.doc.unexplained.eventType).toEqual(['response.fx_new_event']);
+  });
+
   // The 33 response header names every answer of runbook step 2 carried (2026-10-27, measured on the live probe's
   // first step; D-7083), in the order the probe printed them, and the media-type name a 2xx stream with no content
   // type counts. Unlike this file's other x-codex- names these are the backend's own: the case pins that the
@@ -317,6 +332,7 @@ describe.skipIf(!PY)('the stats file (codex-bridge spec §2.7, §2.9 D3; D-6418)
     expect(k.known.errorCode).toEqual(sets.ALL_CODES);
     expect(k.known.contextEdit).toEqual(['clear_thinking_20251015']);
     expect(k.known.eventType).toContain('response.metadata');
+    expect(k.known.eventType).toContain('keepalive');
     expect(k.prefixes).toEqual({ responseHeader: ['x-codex-'] });
   });
 

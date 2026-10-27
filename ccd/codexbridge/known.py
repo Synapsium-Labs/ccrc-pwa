@@ -52,6 +52,15 @@ CODEX_HEADER_PREFIX = "x-codex-"
 # reducer's IGNORED_EVENTS does not hold.
 _CODEX_SKIPPED_EVENTS = frozenset({"codex.response.metadata", "response.metadata"})
 
+# The event types the backend sends that the Codex CLI does not name at all (D-7119). `keepalive` is a heartbeat
+# event the backend sends on a long response, measured on lane-b's direct traffic (2026-10-27: 4 in the first 471
+# message requests after the flip). Upstream Codex at rust-v0.164.0 has no arm for it and reads nothing from it: it
+# falls to the default arm of process_responses_event (codex-api/src/sse/responses.rs), which only logs it. The bridge
+# reads nothing from it either (reducer.Reducer.feed names it, and nothing else), and its arrival resets the idle bound
+# like any parsed event (server.py#_Request._reduce sets last_event for each), as each event resets Codex's per-event
+# idle timeout (process_sse_with_treatment).
+_BACKEND_EVENTS = frozenset({"keepalive"})
+
 KNOWN = {
     "requestField": frozenset({
         # measured on every Claude Code 2.1.308 message request
@@ -61,7 +70,7 @@ KNOWN = {
         # the names inbound counts for a shape it maps
         "thinking-block", "is_error", "defer_loading", "output_config.format",
     }),
-    "eventType": reducer.IGNORED_EVENTS | _CODEX_SKIPPED_EVENTS,
+    "eventType": reducer.IGNORED_EVENTS | _CODEX_SKIPPED_EVENTS | _BACKEND_EVENTS,
     # R12's unmapped items, skipped and counted (plan Task 3)
     "itemType": frozenset({"web_search_call", "image_generation_call", "compaction"}),
     "errorCode": errors.ALL_CODES,
