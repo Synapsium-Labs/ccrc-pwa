@@ -252,3 +252,32 @@ describe('shouldSweep', () => {
     for (const s of ['ok', 'stale', 'unknown'] as const) expect(shouldSweep(s)).toBe(true);
   });
 });
+
+// D-7059 (W8 Task C8g; ARCH-73 #808): the rows `frameRead` must keep, byte for byte, while its framing moves onto
+// `journalKernel.ts#splitJournalRecords`. Each pins the whole `FramedRead`, not one field of it.
+describe('frameRead: the framing it keeps through the move to the kernel (D-7059)', () => {
+  it('a partial line is not consumed: a payload ending without a newline stops the cursor at the last complete line', () => {
+    expect(frameRead(7, '{"a":1}\n{"b":2}\n{"c":', 30, 7))
+      .toEqual({ lines: ['{"a":1}', '{"b":2}'], nextCursor: 7 + 16, shrank: false });
+    expect(frameRead(7, '{"c":', 12, 7)).toEqual({ lines: [], nextCursor: 7, shrank: false });
+  });
+
+  it('a blank line is dropped and its bytes stepped over', () => {
+    expect(frameRead(3, '\na\n\n\nb\n\n', 11, 3)).toEqual({ lines: ['a', 'b'], nextCursor: 3 + 8, shrank: false });
+    expect(frameRead(3, '\n\n', 5, 3)).toEqual({ lines: [], nextCursor: 5, shrank: false });
+  });
+
+  it('the cursor is in bytes: a multibyte line advances it by its UTF-8 length, not its character count', () => {
+    const line = '{"reason":"ü€😀"}';
+    const data = `${line}\n{"t":"é`;
+    const r = frameRead(10, data, 10 + Buffer.byteLength(data, 'utf8'), 10);
+    expect(r).toEqual({ lines: [line], nextCursor: 10 + Buffer.byteLength(`${line}\n`, 'utf8'), shrank: false });
+    expect(Buffer.byteLength(`${line}\n`, 'utf8')).not.toBe(`${line}\n`.length);
+  });
+
+  it('a shrink below the cursor and one above it (size < lastSize) both answer shrank, nothing framed', () => {
+    expect(frameRead(500, 'a\nb\n', 100, 500)).toEqual({ lines: [], nextCursor: 0, shrank: true });
+    expect(frameRead(50, 'a\nb\n', 300, 4000)).toEqual({ lines: [], nextCursor: 0, shrank: true });
+    expect(frameRead(50, 'a\nb\n', 4000, 4000)).toEqual({ lines: ['a', 'b'], nextCursor: 54, shrank: false });
+  });
+});

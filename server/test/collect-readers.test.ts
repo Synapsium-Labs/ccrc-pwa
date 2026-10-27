@@ -440,8 +440,10 @@ describe('the collect readers are their own (spec §5.10)', () => {
     // `shared/switches.js` is L0 too: the lane's live marker is spelled once there (D-5855).
     // ARCH-14 (#560): `shared/ccd-refusal.js` is L0 as well: the machine token's reader and the one spelling of the lock word.
     // ARCH-41 (#776): `shared/workspaceTransitions.js` is L0: the refusal words are typed and narrowed from its table.
+    // D-7059 (ARCH-73 #808): `./journalKernel.js` is L1 and imports nothing: the journal's NDJSON framing is its
+    // `splitJournalRecords`, and the parse's strictness stays here.
     const ALLOWED = new Set(['../../shared/api.js', '../../shared/ccd-refusal.js', '../../shared/switches.js',
-      '../../shared/workspaceTransitions.js', './childReclaimSweep.js']);
+      '../../shared/workspaceTransitions.js', './childReclaimSweep.js', './journalKernel.js']);
     expect(specs.filter((s) => !ALLOWED.has(s)), 'a specifier outside that pair')
       .toEqual([]);
     expect(code).not.toMatch(/\bimport\s*\(|\brequire\s*\(/);

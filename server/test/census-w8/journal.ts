@@ -14,6 +14,12 @@
 // line): a regex or a MAX assembled from pieces, or spelled with other names, is not seen. `appendBeforeApplySites` and
 // `appendThenApplyBreaks` read the syntax tree: a journal reached through an alias, a write not spelled
 // `this.db.prepare(…)`, or a transaction not spelled `tx(…)`, is not seen.
+//
+// C8g (D-7059; ARCH-73 #808, spec K17's first and second bullets) adds two: `journalFramers` and
+// `delegationKernelImports`, both over the syntax tree. KNOWN WIDTH: a framer spelled other than a `split` or
+// `lastIndexOf` call whose first argument is a newline (a `'\n'` string or a regex naming `\n`), a separator held in a
+// variable, or framing in a file outside the four the query names, is not seen.
+import { readdirSync } from 'node:fs';
 import path from 'node:path';
 import { parsedFile } from '../scan/symbols.js';
 import type { CallSite, ParsedFile } from '../scan/parse.js';
@@ -130,6 +136,70 @@ export function appendThenApplyBreaks(root: string = REPO): AppendThenApplyBreak
     const append = inside.find((c) => f.isAppend(c));
     if (append === undefined) { out.push({ ...site, why: 'no-append' }); continue; }
     if (inside.some((w) => f.isWrite(w) && w.start < append.start)) out.push({ ...site, why: 'write-before-append' });
+  }
+  return out;
+}
+
+/** The files the lifecycle mirror and the collect-lane journal frame NDJSON in, and (for `collectLane.ts`) the one
+ *  function there whose text is journal text: the rest of that file splits other strings (a refusal's stderr). */
+const FRAMER_SCOPES: readonly { readonly file: string; readonly fn?: string }[] = [
+  { file: 'server/src/coord/mirrorplan.ts' },
+  { file: 'server/src/coord/journalparse.ts' },
+  { file: 'server/src/collectLane.ts', fn: 'parseCollectLaneJournal' },
+  { file: 'server/src/coord/collectLaneJournal.ts' },
+];
+
+/** A call that frames on a newline: `split(…)` or `lastIndexOf(…)` whose first argument is the string `\n` or a regex
+ *  literal naming `\n`. */
+const isNewlineFrame = (c: CallSite): boolean => {
+  if (c.name !== 'split' && c.name !== 'lastIndexOf') return false;
+  const a = c.args[0];
+  return a !== undefined && ((a.kind === 'string' && a.text === '\n') || (a.kind === 'regex' && a.text.includes('\\n')));
+};
+
+/** One hand-rolled framing call, with the function it is in. */
+export type JournalFramerSite = StoreJournalSite;
+
+/** The hand-rolled NDJSON framers of the two journals: a `split('\n')` or `lastIndexOf('\n')` call (see
+ *  `isNewlineFrame`) in `coord/mirrorplan.ts`, `coord/journalparse.ts`, `collectLane.ts#parseCollectLaneJournal` or
+ *  `coord/collectLaneJournal.ts`, outside `journalKernel.ts` (which is none of them). 3 sites in 2 framers at the base
+ *  (`frameRead`'s `lastIndexOf` and `split`, `parseCollectLaneJournal`'s `split`); 0 once both call
+ *  `splitJournalRecords`. A file the tree lacks is passed over. */
+export function journalFramers(root: string = REPO): JournalFramerSite[] {
+  const out: JournalFramerSite[] = [];
+  for (const scope of FRAMER_SCOPES) {
+    let parsed: ParsedFile;
+    try { parsed = parsedFile(path.join(root, scope.file)); } catch { continue; }
+    const fns = parsed.symbols.filter((x) => x.kind === 'function' || x.kind === 'method' || x.kind === 'arrow-property')
+      .sort((a, b) => (a.end - a.start) - (b.end - b.start));
+    const span = scope.fn === undefined ? null : parsed.symbols.find((x) => x.name === scope.fn) ?? null;
+    if (scope.fn !== undefined && span === null) continue;
+    const lines = parsed.text.split('\n');
+    for (const c of parsed.calls) {
+      if (!isNewlineFrame(c)) continue;
+      if (span !== null && !(c.start >= span.start && c.end <= span.end)) continue;
+      const method = fns.find((m) => c.start >= m.start && c.start < m.end)?.name ?? '(top level)';
+      out.push({ file: scope.file, line: c.line, text: lines[c.line - 1] ?? '', method });
+    }
+  }
+  return out;
+}
+
+/** The imports of `journalKernel.ts` from a `server/src/coord/delegation-*.ts` file: the delegation journal is an
+ *  authority, not a projection (spec §3.19), and shares nothing with the kernel. One row per import edge. */
+export function delegationKernelImports(root: string = REPO): CensusSite[] {
+  const dir = path.join(root, 'server/src/coord');
+  let names: string[];
+  try { names = readdirSync(dir); } catch { return []; }
+  const out: CensusSite[] = [];
+  for (const name of names.filter((n) => /^delegation-.*\.ts$/.test(n)).sort()) {
+    const file = `server/src/coord/${name}`;
+    const parsed = parsedFile(path.join(root, file));
+    const lines = parsed.text.split('\n');
+    for (const e of parsed.imports) {
+      if (!/(?:^|\/)journalKernel(?:\.[cm]?[jt]s)?$/.test(e.specifier)) continue;
+      out.push({ file, line: e.line, text: lines[e.line - 1] ?? '' });
+    }
   }
   return out;
 }

@@ -4,7 +4,7 @@
 // writers keep inside their own `tx()`: decide, then append, then apply, the original error rethrown and the phase it
 // reached left readable. The callers' own rows are `journal-log-first.test.ts` and `collect-lane-store.test.ts`.
 import { describe, it, expect } from 'vitest';
-import { appendThenApply, journalFloor, maxJournalEpoch, type JournalPhase } from '../src/journalKernel.js';
+import { appendThenApply, journalFloor, maxJournalEpoch, splitJournalRecords, type JournalPhase } from '../src/journalKernel.js';
 
 const NO_EPOCH = (journal: string, p: string): string =>
   `${journal} exists at ${p} but yields no epoch — zero-length or unparseable is not the same as absent; ` +
@@ -105,5 +105,34 @@ describe('appendThenApply', () => {
     const { calls, step } = recorded();
     expect(appendThenApply(step)).toBe('applied:5');
     expect(calls).toEqual(['decide', 'append:5', 'apply:5']);
+  });
+});
+
+// D-7059 (W8 Task C8g): the one NDJSON framer of the lifecycle mirror and the collect-lane journal. It keeps every
+// blank record and reports the tail after the last newline; each caller decides what a blank and a tail mean.
+describe('splitJournalRecords', () => {
+  it('empty text: nothing complete, no records, no tail', () => {
+    expect(splitJournalRecords('')).toEqual({ complete: '', records: [], tail: '' });
+  });
+
+  it('keeps a blank record and reports the tail after the last newline', () => {
+    expect(splitJournalRecords('a\n\nb')).toEqual({ complete: 'a\n\n', records: ['a', ''], tail: 'b' });
+    expect(splitJournalRecords('\n')).toEqual({ complete: '\n', records: [''], tail: '' });
+  });
+
+  it('a final newline leaves an empty tail', () => {
+    expect(splitJournalRecords('a\n')).toEqual({ complete: 'a\n', records: ['a'], tail: '' });
+  });
+
+  it('no newline at all: the whole text is the tail', () => {
+    expect(splitJournalRecords('{"c":')).toEqual({ complete: '', records: [], tail: '{"c":' });
+  });
+
+  it('a multibyte complete round-trips: complete + tail is the text, and complete is the records each with its newline', () => {
+    const text = '{"r":"ü€"}\n\n{"r":"😀"}\n{"t":"é';
+    const r = splitJournalRecords(text);
+    expect(r.complete + r.tail).toBe(text);
+    expect(r.records.map((l) => `${l}\n`).join('')).toBe(r.complete);
+    expect(r).toEqual({ complete: '{"r":"ü€"}\n\n{"r":"😀"}\n', records: ['{"r":"ü€"}', '', '{"r":"😀"}'], tail: '{"t":"é' });
   });
 });
