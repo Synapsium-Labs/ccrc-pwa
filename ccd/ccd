@@ -19434,7 +19434,7 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
   #   stay on your home account; leave only when home is at the rate ceiling (no headroom); return
   #   home the instant it has room again. A hard-blocked session (limit/spend banner up, or auth
   #   lost) swaps immediately; any other move waits for a clean turn boundary.
-  local id="$1" wrapper home now last pane target hard_blocked="" blocked bts authf authtmp authborn
+  local id="$1" wrapper home now last pane target hard_blocked="" blocked bts authf authborn
   local project pps prc prjrc crossed="" ctrc wrc hrc strc stuck="" new aff_verb=auto-home
   # §6.3: a relocation is a restart that re-drives, and the only thing standing
   # between it and a running turn is the `esc to interrupt` match further down.
@@ -19962,9 +19962,7 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
     if _is_valid_wrapper "$wrapper" && ! _authdead "$wrapper" && authf=$(_transcript_path "$id") \
        && authborn=$(_pane_born "$id") && [[ "$(_transcript_limit_banner "$authf" stuck "$authborn" | cut -f3)" == authentication_failed ]] \
        && ! _authdead_cred_changed "$wrapper" "$authborn"; then
-      authtmp=$(mktemp "$REG/$wrapper-authdead.tmp.XXXXXX") \
-        && printf '%s %s' "$now" rescue-401 > "$authtmp" && mv -f "$authtmp" "$REG/$wrapper-authdead" \
-        || rm -f "$authtmp"
+      _authdead_mark "$wrapper" rescue-401 "$now" || :
     fi
     _reg_set "$id" lastswap "$now"
     # `via=` NAMES THE DETECTOR THAT ACTUALLY FIRED (D-3101) — read off the
