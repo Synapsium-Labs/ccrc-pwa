@@ -257,8 +257,9 @@ describe.skipIf(!PY)('the stats file (codex-bridge spec §2.7, §2.9 D3; D-6418)
     expect(snap.doc.names.eventType).toEqual({ 'response.fx_new_event': 1, 'response.metadata': 1 });
   });
 
-  // The backend's heartbeat event, measured on the live lane's direct traffic (2026-10-27; D-7119): neither Codex nor
-  // the bridge reads anything from it (known.py#_BACKEND_EVENTS), so it is explained and the doctor stops naming it.
+  // The backend's `keepalive` event, counted on the live lane's direct traffic (2026-10-27; D-7119): Codex yields no
+  // event for it and the bridge only names it (known.py#_BACKEND_EVENTS), so it is explained and the doctor stops
+  // naming it.
   it("the backend's keepalive event is explained, and an unknown event beside it is not", async () => {
     const { home, file } = lane('cb-stats-keepalive-');
     const [, , , snap] = await run(home, [

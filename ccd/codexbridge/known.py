@@ -52,13 +52,15 @@ CODEX_HEADER_PREFIX = "x-codex-"
 # reducer's IGNORED_EVENTS does not hold.
 _CODEX_SKIPPED_EVENTS = frozenset({"codex.response.metadata", "response.metadata"})
 
-# The event types the backend sends that the Codex CLI does not name at all (D-7119). `keepalive` is a heartbeat
-# event the backend sends on a long response, measured on lane-b's direct traffic (2026-10-27: 4 in the first 471
-# message requests after the flip). Upstream Codex at rust-v0.164.0 has no arm for it and reads nothing from it: it
-# falls to the default arm of process_responses_event (codex-api/src/sse/responses.rs), which only logs it. The bridge
-# reads nothing from it either (reducer.Reducer.feed names it, and nothing else), and its arrival resets the idle bound
-# like any parsed event (server.py#_Request._reduce sets last_event for each), as each event resets Codex's per-event
-# idle timeout (process_sse_with_treatment).
+# The event types the backend sends that the Codex CLI does not name at all (D-7119). `keepalive` (by its name a
+# heartbeat; its payload, timing and which responses carry it were not recorded) was counted by name on lane-b's
+# direct traffic (2026-10-27: 4 events in the first 471 message requests after the flip). Upstream Codex at
+# rust-v0.164.0 yields no event for it (codex-api/src/sse/responses.rs): process_responses_event has no arm for it and
+# its default arm only logs, and a frame without a `type` fails Codex's parse and is skipped; only that file's
+# kind-independent readers (the served model in `headers`, `safety_buffering`) could act on it, and only on fields
+# nothing measured it carrying. The bridge names it and reads nothing else (reducer.Reducer.feed), and its arrival
+# resets the idle bound like any parsed event (server.py#_Request._reduce sets last_event for each), as each frame
+# restarts Codex's per-event idle timeout (process_sse_with_treatment).
 _BACKEND_EVENTS = frozenset({"keepalive"})
 
 KNOWN = {

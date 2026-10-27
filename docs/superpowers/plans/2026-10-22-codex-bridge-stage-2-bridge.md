@@ -3862,7 +3862,7 @@ departure found while executing is written `D-TBD-<slug>` and named in the task'
 
 - **Departs from:** Task 5's `KNOWN["betaValue"]`, which explained `effort-2025-11-24` only.
 - **What changed:** Seven of the nine `anthropic-beta` values Claude Code 2.1.310 sent lane-b after the flip join
-  `KNOWN["betaValue"]` (`ccd/codexbridge/known.py:100-134`), each with a comment saying what it gates and why the
+  `KNOWN["betaValue"]` (`ccd/codexbridge/known.py:111-145`), each with a comment saying what it gates and why the
   bridge need not act; the two tool-change betas are named there as left out on purpose (:128-133). The bridge never
   forwards a beta upstream (`backend.build_headers`, `ccd/codexbridge/backend.py:160-173`); inbound counts each value
   as a name (`ccd/codexbridge/inbound.py:550-553`). Sources: Anthropic's documentation
@@ -3933,7 +3933,7 @@ departure found while executing is written `D-TBD-<slug>` and named in the task'
   string, counts `unrecognised` in its place (`unrecognised-block`, `tool_addition-block.unrecognised`). Names only:
   no tool name, description, schema or text of a block is counted. The names are NOT in `known.KNOWN`, on purpose,
   so each stays in `unexplained.requestField` and the doctor's drift WARN names it the day it first arrives; the
-  function's docstring and the betas' comment (`ccd/codexbridge/known.py:128-133`) say so. What is sent is byte for
+  function's docstring and the betas' comment (`ccd/codexbridge/known.py:139-144`) say so. What is sent is byte for
   byte as before: `_texts` alone still builds the entry's item. Pins, in `server/test/codex-bridge-inbound.test.ts`:
   - :136: an entry holding a text, a `tool_removal` by reference, a by-value `tool_addition` and a by-reference one
     counts exactly `tool_removal-block`, `tool_addition-block`, `tool_addition-block.tool_definition`,
@@ -3960,25 +3960,31 @@ departure found while executing is written `D-TBD-<slug>` and named in the task'
 
 - **Departs from:** `known.py`'s `KNOWN["eventType"]`, which held the reducer's ignored events and the two Codex skips
   only, and D-7088's list of what the answers showed: step 2's five short requests carried no `keepalive`, which
-  appeared only on real traffic after the flip (4 in the first 471 message requests on lane-b, counted by name in
-  `bridge.stats.json`, and named by the doctor's `codex` WARN once #1673 rolled out, D-7120).
+  appeared only on real traffic after the flip (4 events in the first 471 message requests on lane-b, counted by name
+  in `bridge.stats.json`, and named by the doctor's `codex` WARN once #1673 rolled out, D-7120).
 - **What changed:** `keepalive` joins `KNOWN["eventType"]` through a set of its own, `_BACKEND_EVENTS`
-  (`ccd/codexbridge/known.py:55-62`, joined at :73), beside `_CODEX_SKIPPED_EVENTS`; its comment says what the event
-  is and why nothing needs to read it. Nothing else changes: the bridge already reads nothing from the event
-  (`reducer.Reducer.feed` reaches its last arm and only names it, `ccd/codexbridge/reducer.py:247-248`), and its
-  arrival already resets the bridge's idle bound like any parsed event (`server.py#_Request._reduce` sets
+  (`ccd/codexbridge/known.py:55-64`, joined at :75), beside `_CODEX_SKIPPED_EVENTS`; its comment says what was
+  measured of the event (its name and count only) and why the bridge need not read it. Nothing else changes: the
+  bridge already reads nothing from the event (`reducer.Reducer.feed` reaches its last arm and only names it,
+  `ccd/codexbridge/reducer.py:247-248`), and its arrival already resets the bridge's idle bound like any parsed
+  event (`server.py#_Request._reduce` sets
   `last_event` for each, `ccd/codexbridge/server.py:821-822`, against `backend.IDLE_TIMEOUT_S` at :814 and :837).
   Upstream, re-read at openai/codex `rust-v0.164.0` (`codex-rs/codex-api/src/sse/responses.rs`):
-  `process_responses_event` has no arm for `keepalive`, so it falls to the default arm, which only `debug!`-logs
-  "unhandled responses event" and returns nothing; and `process_sse_with_treatment` bounds every wait with
+  `process_responses_event` has no arm for `keepalive`: an event whose data carries `type: "keepalive"` reaches its
+  default arm, which only `debug!`-logs "unhandled responses event" and returns nothing, and a frame named `keepalive`
+  whose data has no `type` fails Codex's parse into `ResponsesStreamEvent` and is skipped. The bridge cannot tell the
+  two shapes apart: it takes an event's type from its data and, failing that, from the SSE `event:` name
+  (`ccd/codexbridge/sse.py:144-146`), and it keeps no payload. Only that file's kind-independent readers
+  (`response_model()` from `headers`, `safety_buffering()`) run on every event, and they would act on a keepalive
+  only through fields nothing has measured it carrying. And `process_sse_with_treatment` bounds every wait with
   `timeout(idle_timeout, stream.next())`, so any event, a keepalive included, resets Codex's idle timeout too. A code
   search of openai/codex for `keepalive` finds only websocket, relay and MCP keepalives, nothing on the Responses
-  route. Pins, in `server/test/codex-bridge-count-stats.test.ts`: :262 counts `keepalive` beside the fixture event
+  route. Pins, in `server/test/codex-bridge-count-stats.test.ts`: :263 counts `keepalive` beside the fixture event
   `response.fx_new_event` (the positive control) and expects both counted and `unexplained.eventType` to hold only the
-  fixture name; :335 pins `keepalive` in the `known` op's `eventType`. Row: `_BACKEND_EVENTS` emptied, the :262 case
+  fixture name; :336 pins `keepalive` in the `known` op's `eventType`. Row: `_BACKEND_EVENTS` emptied, the :263 case
   reds (`expected [ Array(2) ] to deeply equal [ 'response.fx_new_event' ]`); restored from a copy, sha256 compared OK.
 - **Why:** The 7-day watch's last criterion is no unexplained name in the doctor's WARN beyond the two tool-change betas
-  (D-7093). `keepalive` is a heartbeat that neither Codex nor the bridge reads, so naming it as drift every day would
+  (D-7093). `keepalive` yields no event in Codex and is only named by the bridge, so naming it as drift every day would
   only hide a real new name behind it.
 - **Cost if wrong:** If a future backend gives `keepalive` a payload that matters, the bridge still reads nothing from
   it and the doctor no longer names it. The name's count still moves in the stats file's `names.eventType`, so a
