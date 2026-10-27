@@ -83,6 +83,33 @@ describe('W3 question census (slug question-census)', () => {
     } finally { rmSync(t, { recursive: true, force: true }); }
   });
 
+  it('FIXTURE (Q3d): the two flags are carriers when they are FleetWatcher fields, and the one carrier is found inside createQuestions', () => {
+    const t = tree({
+      'server/src/watch.ts': [
+        'export class FleetWatcher {',
+        '  private reseedLoaded = false;',
+        '  private asksDisabled = false;',
+        '  private otherFlag = false;',
+        '}',
+      ].join('\n'),
+      'server/src/coord/questions.ts': [
+        'export function createQuestions() {',
+        '  const questionHolds = new Map<string, number>();',
+        '  let reseedLoaded = false;',
+        '  let asksDisabled = false;',
+        '  const otherLocal = new Map();',
+        '  return {};',
+        '}',
+      ].join('\n'),
+    });
+    try {
+      expect(questionHoldCarriers(t).map((s) => [s.name, s.owner, s.line])).toEqual([
+        ['reseedLoaded', 'FleetWatcher', 2], ['asksDisabled', 'FleetWatcher', 3],
+        ['questionHolds', 'createQuestions', 2], ['reseedLoaded', 'createQuestions', 3], ['asksDisabled', 'createQuestions', 4],
+      ]);
+    } finally { rmSync(t, { recursive: true, force: true }); }
+  });
+
   it('FIXTURE: a sweep entry is a method tick calls that reaches a lapse, release or prune; a public half tick does not call is not one', () => {
     const t = tree({ 'server/src/watch.ts': watch });
     try {

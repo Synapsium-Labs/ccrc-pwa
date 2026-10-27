@@ -14,23 +14,30 @@ import { codeOf, esc, REPO, siteAt, sitesOf, sourceFiles, watcherFacts, type Cen
 // KNOWN WIDTH, every query below: a member reached through a computed name, an alias or a destructured binding is not
 // seen, and a route is only an `app.<verb>('<literal path>', …)` registration.
 
-/** The `FleetWatcher` fields that carry a held question, by name (a closed list, checked against the class's fields:
- *  a name that is no longer a field leaves the census). */
-export const QUESTION_HOLD_CARRIER_NAMES: readonly string[] = ['heldAsks', 'heldApprovals', 'lapsedAsks', 'pendingReseed'];
+/** The `FleetWatcher` fields that carry question state, by name (a closed list, checked against the class's fields:
+ *  a name that is no longer a field leaves the census). The four hold maps, and (W3 Q3d, D-7028) the two flags the hold
+ *  reads beside them: `reseedLoaded` (the boot's re-seed snapshot read) and `asksDisabled` (the ask hold's kill switch as
+ *  the last ask pass read it). 6 at Q3d's base. */
+export const QUESTION_HOLD_CARRIER_NAMES: readonly string[] = ['heldAsks', 'heldApprovals', 'lapsedAsks', 'pendingReseed', 'reseedLoaded', 'asksDisabled'];
 
 /** The question state `registerCoordRoutes` holds in a closure local, made once per server (never module scope). */
 export const ROUTE_QUESTION_STATE_NAMES: readonly string[] = ['approvalInputs'];
 
+/** The one hold carrier `coord/questions.ts#createQuestions` holds as a closure local (W3 Q3d, D-7028): the four
+ *  watcher maps folded into one, keyed by question. Looked for, with every name above, inside `createQuestions`. */
+export const MODULE_QUESTION_STATE_NAMES: readonly string[] = ['questionHolds'];
+
 /** One carrier of question state: where it is declared, and its owner (the class, or the function whose local it is). */
 export interface QuestionCarrierSite extends CensusSite { readonly name: string; readonly owner: string }
 
-/** W3's question hold carriers: `FleetWatcher`'s fields in `QUESTION_HOLD_CARRIER_NAMES` (4 at the base), then each
- *  `ROUTE_QUESTION_STATE_NAMES` binding declared inside `registerCoordRoutes` (`approvalInputs`, 1). 5 at the base. After
- *  Q3d and Q3e the same names are looked for in `coord/questions.ts`'s `createQuestions`, so the owner column says where
+/** W3's question hold carriers: `FleetWatcher`'s fields in `QUESTION_HOLD_CARRIER_NAMES` (4 at Q3a's base, 6 once Q3d
+ *  named the two flags), then each `QUESTION_HOLD_CARRIER_NAMES`, `ROUTE_QUESTION_STATE_NAMES` or
+ *  `MODULE_QUESTION_STATE_NAMES` binding declared inside `registerCoordRoutes` or `coord/questions.ts`'s `createQuestions`
+ *  (`approvalInputs`, 1, since Q3e inside `createQuestions`). 5 at Q3a's base, 7 at Q3d's. The owner column says where
  *  each carrier lives, and a module-scope binding of one of them reports the owner `module scope`. */
 export function questionHoldCarriers(root: string = REPO): QuestionCarrierSite[] {
   const out: QuestionCarrierSite[] = [];
-  const names = [...QUESTION_HOLD_CARRIER_NAMES, ...ROUTE_QUESTION_STATE_NAMES];
+  const names = [...QUESTION_HOLD_CARRIER_NAMES, ...ROUTE_QUESTION_STATE_NAMES, ...MODULE_QUESTION_STATE_NAMES];
   const w = watcherFacts(root);
   if (w !== null) {
     for (const f of w.facts.fields) {
