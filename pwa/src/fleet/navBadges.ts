@@ -9,7 +9,7 @@ import { raisesUnread } from '../lib/feed';
 import { acksSnapshot, FEED_ACK_KEY, isUnseenAt, subscribeAcks, type Acks } from '../lib/seen';
 import { useFleetChrome } from './FleetChrome';
 import { operatorAsk } from './rollup';
-import { isRunClosed } from './runWords';
+import { isRunClosed, runState } from './runWords';
 
 /** A badge's printed cap, the one definition every badge reads (R32's F1): the accessible name carries the real number. */
 export const BADGE_PRINT_CAP = 99;
@@ -45,7 +45,7 @@ export function runsNeedYou(runs: readonly RunSummary[] | null, sessions: readon
  *  (`!isRunClosed`), and "none active" when none is open. */
 export function runsLineLabel(runs: readonly Pick<RunSummary, 'state'>[] | null): string {
   if (runs === null) return '—';
-  const active = runs.filter((r) => (ACTIVE_RUN_STATES as readonly string[]).includes(r.state)).length;
+  const active = runs.filter((r) => (ACTIVE_RUN_STATES as readonly string[]).includes(runState(r))).length;
   if (active > 0) return `${active} active`;
   const open = runs.filter((r) => !isRunClosed(r)).length;
   return open > 0 ? `${open} open` : 'none active';

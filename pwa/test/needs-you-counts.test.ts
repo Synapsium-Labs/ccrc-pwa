@@ -17,7 +17,10 @@ const runIn = (state: RunState): RunSummary => run(1, state, null, null);
 
 describe('the needs-you counts (T2d, D-6330)', () => {
   it('a session in the attention bucket is counted, a held child is not', () => {
-    const held = fleetSession({ id: 'child-held', bucket: 'working', child: { kind: 'none' } });
+    const held = fleetSession({
+      id: 'child-held', bucket: 'working', hookState: 'waiting', child: { kind: 'child', runId: 7 },
+      withCoordinator: { kind: 'question', parentId: 'coordinator-a', since: 4000, notifyAt: 184_000 },
+    });
     expect(waitingOnYou([attention('a'), attention('b'), held, idle('c')])).toBe(2);
   });
 
@@ -48,6 +51,8 @@ describe('the needs-you counts (T2d, D-6330)', () => {
     expect(runsLineLabel(null)).toBe('—');
     expect(runsLineLabel(([...ACTIVE_RUN_STATES, 'planned', 'awaiting-review'] as RunState[]).map(runIn))).toBe('3 active');
     expect(runsLineLabel(IDLE_RUN_STATES.filter((s) => s === 'planned' || s === 'merging').map(runIn))).toBe('2 open');
+    // a state this build does not know reads `unknown` (runState), which is active
+    expect(runsLineLabel([runIn('from-a-newer-server' as RunState)])).toBe('1 active');
     expect(runsLineLabel(['done', 'failed'].map((s) => runIn(s as RunState)))).toBe('none active');
   });
 
