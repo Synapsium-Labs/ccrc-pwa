@@ -314,6 +314,27 @@ describe('the mail feed', () => {
     expect(screen.getByText('from a newer build')).toBeInTheDocument();
   });
 
+  // R32's F5, moved here from the rail (T2d, D-6330): the Inbox's rows hold the feed's unread mark now, so the strict `>`
+  // of `isUnseenAt` is pinned on them. The ack is the watermark: a row AT it was seen, and so was an earlier one.
+  it("a row at the ack's own stamp, or before it, is not unseen; one millisecond past it is", () => {
+    const store = makeStore();
+    const stamp = Date.now();
+    const mail = (seq: number, at: number, title: string): NotifyEvent => e({ seq, at, kind: 'mail', title });
+    act(() => {
+      store.setState({ feed: [mail(1, stamp, 'at the stamp'), mail(2, stamp - 1_000, 'before the stamp'), mail(3, stamp + 1, 'past the stamp')] });
+    });
+    const { container } = render(<MailScreen store={store} loadFeed={async () => ({ events: [] })} />);
+    // The mount effect floors the ack to the newest row, so the watermark is set after mount (the case above has the argument).
+    act(() => { ack(FEED_ACK_KEY, stamp); });
+    const rows = [...container.querySelectorAll('.mail-row')];
+    const unseenOf = (text: string): string | null =>
+      rows.find((r) => r.textContent?.includes(text))?.getAttribute('data-unseen') ?? null;
+    expect(rows).toHaveLength(3);
+    expect(unseenOf('at the stamp')).toBe('false');
+    expect(unseenOf('before the stamp')).toBe('false');
+    expect(unseenOf('past the stamp')).toBe('true');
+  });
+
   it('an interrupt row is never marked unseen; mail and every other record-only kind still are (D-5431)', () => {
     const store = makeStore();
     const now = Date.now();
@@ -344,15 +365,22 @@ describe('the door', () => {
     // AccountsStrip.tsx:9-15's rule, inherited: the ONLY door to a screen may
     // never render nothing, or the screen is unreachable in exactly the state
     // it exists to explain.
-    const { rerender } = render(<MailBadge unread={0} />);
-    expect(screen.getByRole('button', { name: /mail — nothing unread/i })).toBeInTheDocument();
-    rerender(<MailBadge unread={3} />);
-    expect(screen.getByRole('button', { name: /mail — 3 unread/i })).toBeInTheDocument();
+    const { rerender } = render(<MailBadge waiting={0} />);
+    expect(screen.getByRole('button', { name: /mail — nothing waiting for you/i })).toBeInTheDocument();
+    rerender(<MailBadge waiting={3} />);
+    expect(screen.getByRole('button', { name: /mail — 3 waiting for you/i })).toBeInTheDocument();
     expect(screen.getByText('3')).toBeInTheDocument();
   });
 
+  it('before anything is heard (`null`) is named plainly, with no count and no "nothing waiting"', () => {
+    render(<MailBadge waiting={null} />);
+    const door = screen.getByRole('button', { name: /^Mail$/ });
+    expect(door).toHaveAttribute('data-unread', 'false');
+    expect(door.querySelector('.mail-badge-count')).toBeNull();
+  });
+
   it('navigates rather than toggling anything', () => {
-    render(<MailBadge unread={1} />);
+    render(<MailBadge waiting={1} />);
     fireEvent.click(screen.getByRole('button', { name: /mail/i }));
     expect(location.pathname).toBe('/mail');
   });
@@ -360,19 +388,19 @@ describe('the door', () => {
   it('nests no control inside another', () => {
     // The standing rule (commit ce313de). The bell is a separate button beside
     // this one, never inside it.
-    render(<MailBadge unread={1} />);
+    render(<MailBadge waiting={1} />);
     const btn = screen.getByRole('button', { name: /mail/i });
     expect(btn.querySelector('button')).toBeNull();
   });
 
   it('caps the printed count so a three-digit number cannot blow the head open', () => {
-    render(<MailBadge unread={412} />);
+    render(<MailBadge waiting={412} />);
     expect(screen.getByText('99+')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /mail — 412 unread/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /mail — 412 waiting for you/i })).toBeInTheDocument();
   });
 
   it('draws Icon mail in its glyph span, stroked in the door\'s ink (D-5100)', () => {
-    render(<MailBadge unread={0} />);
+    render(<MailBadge waiting={0} />);
     const glyph = document.querySelector('.mail-badge-glyph')!;
     expect(glyph).toHaveAttribute('aria-hidden', 'true');
     expect(glyph.textContent).toBe('');
