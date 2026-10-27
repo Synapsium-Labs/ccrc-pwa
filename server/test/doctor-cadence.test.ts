@@ -490,3 +490,60 @@ describeLinux('C8b step 4: scope-sweep\'s "every minute" sentence, its unit file
     expect(r.code).toBe(1);
   });
 });
+
+describeLinux('C8b step 4: server-caps\' fleet writer sentence, ccd-update-sync.timer unreadable or its reader unloaded', () => {
+  const caps = (home: string): string => join(home, '.ccrc', 'server-caps');
+  const fleet = (prefix: string, now: number, unitAgeS = 240): string => {
+    const home = box(prefix, now);
+    writeCcrcEnv(home, 'CCRC_ROLE=fleet\n');
+    unitAged(home, 'ccd-update-sync.timer', now, unitAgeS);
+    noTimer(home, 'ccd-update-sync.timer');
+    return home;
+  };
+  const CAD = warnUnread('server-caps', 'ccd-update-sync.timer', 'the period of the writer named below');
+
+  it('a current file: the PASS names the writer without its period, after a WARN naming the unit', () => {
+    const now = fixedNow();
+    const home = fleet('c8b-caps-unread-pass-', now);
+    writeFileSync(caps(home), `at ${now - 5}\ncaps word-a\nend\n`);
+    const r = runChecks(home, '_check_server-caps');
+    expect(r.stdout.split('\n')).toEqual([...CAD,
+      'PASS server-caps: ~/.ccrc/server-caps is current (written 5s ago by ccd-update-sync) and lists: word-a', '']);
+    expect(r.stderr).toBe('');
+    expect(r.code).toBe(2);
+  });
+
+  it('a stale file: the WARN names the writer without its period, after a WARN naming the unit', () => {
+    const now = fixedNow();
+    const home = fleet('c8b-caps-unread-stale-', now);
+    writeFileSync(caps(home), `at ${now - 181}\ncaps word-a\nend\n`);
+    const r = runChecks(home, '_check_server-caps');
+    expect(r.stdout.split('\n')).toEqual([...CAD,
+      'WARN server-caps: ~/.ccrc/server-caps is stale (written 181s ago, past its 180s lease), so the session hook\'s gated arms are off on this box (it writes what it always wrote, which is safe) until ccd-update-sync rewrites it',
+      '  remedy: run systemctl --user start ccd-update-sync.service and read its log (journalctl --user -u ccd-update-sync.service -n 50); the server CCRC_SERVER_URL names in ~/.ccrc/agent.env must answer /health',
+      '']);
+    expect(r.code).toBe(2);
+  });
+
+  it('absent inside one lease: the first-write-pending PASS, after a WARN naming the unit', () => {
+    const now = fixedNow();
+    const home = fleet('c8b-caps-unread-pending-', now, 30);
+    const r = runChecks(home, '_check_server-caps');
+    expect(r.stdout.split('\n')).toEqual([...CAD,
+      'PASS server-caps: first-write-pending: ccd-update-sync.timer was installed 30s ago and ~/.ccrc/server-caps has not been written yet, so the session hook\'s gated arms are off (the safe state) until ccd-update-sync writes it, within 180s',
+      '']);
+    expect(r.code).toBe(2);
+  });
+
+  it('BOX_TREE_DIR not loaded: a FAIL names the bug, and the check returns it', () => {
+    const now = fixedNow();
+    const home = box('c8b-caps-unloaded-', now);
+    writeCcrcEnv(home, 'CCRC_ROLE=fleet\n');
+    unitAged(home, 'ccd-update-sync.timer', now, 240);
+    writeFileSync(caps(home), `at ${now - 5}\ncaps word-a\nend\n`);
+    const r = runChecks(home, 'BOX_TREE_DIR=; _check_server-caps');
+    expect(r.stdout.split('\n')).toEqual([...unloaded('server-caps', 'ccd-update-sync.timer', 'the period of the writer named below'),
+      'PASS server-caps: ~/.ccrc/server-caps is current (written 5s ago by ccd-update-sync) and lists: word-a', '']);
+    expect(r.code).toBe(1);
+  });
+});

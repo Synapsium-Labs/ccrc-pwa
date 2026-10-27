@@ -9349,6 +9349,10 @@ _check_docs-sw() {
 _check_server-caps() {
   local LC_ALL=C
   local role="" f="$HOME/.ccrc/server-caps" writer remedy why="" lease=180 writer_unit=""
+  # The fleet writer's sentence names ccd-update-sync.timer's period, read from the shipped unit file (D-7054); one that
+  # cannot be read drops it and says why on a line of its own, never a literal (OA-C8c (a), D-7062). `cad_ret` is the
+  # class that line adds to whatever the check answers.
+  local period cad_rc=0 cad_ret=0
   [ -f "${BOX_ENV_FILE:-}" ] && [ -r "${BOX_ENV_FILE:-}" ] && role="$(_box_env_value "$BOX_ENV_FILE" CCRC_ROLE)"
   case "$role" in
     server)
@@ -9360,7 +9364,9 @@ _check_server-caps() {
         _dr_skip server-caps "ccd-update-sync.timer is not installed on this box, so nothing here records the server's words and the session hook's gated arms stay off (only a --role fleet install places it, and macOS ships no systemd timer)"
         return 3
       fi
+      period="$(_dr_cycles_s ccd-update-sync.timer 1)" || cad_rc=$?
       writer="ccd-update-sync (it asks the server's /health every minute)"
+      [ "$cad_rc" -eq 0 ] || writer="ccd-update-sync"
       remedy="run systemctl --user start ccd-update-sync.service and read its log ($(_dr_log_hint ccd-update-sync.service)); the server CCRC_SERVER_URL names in ~/.ccrc/agent.env must answer /health" ;;
     both)
       writer_unit=ccrc.service
@@ -9376,6 +9382,10 @@ _check_server-caps() {
       fi
       writer="this box's own ccrc server (role derived both), if one runs here"
       remedy="record CCRC_ROLE in the box env file; if this box runs the ccrc server, $(_dr_restart_hint ccrc.service) and read its log for 'could not write ~/.ccrc/server-caps'" ;;
+  esac
+  case "$cad_rc" in
+    1) _dr_cadence_unread server-caps ccd-update-sync.timer "the period of the writer named below"; cad_ret=2 ;;
+    3) _dr_cadence_unloaded server-caps ccd-update-sync.timer "the period of the writer named below"; cad_ret=1 ;;
   esac
   local -a lines=()
   local ln="" at="" words="" now
@@ -9393,7 +9403,7 @@ _check_server-caps() {
         unit_age=$(($(date +%s) - unit_mtime))
         if [ "$unit_age" -ge 0 ] && [ "$unit_age" -lt "$lease" ]; then
           _dr_pass server-caps "first-write-pending: $writer_unit was installed ${unit_age}s ago and ~/.ccrc/server-caps has not been written yet, so the session hook's gated arms are off (the safe state) until $writer writes it, within ${lease}s"
-          return 0
+          return "$cad_ret"
         fi
       fi
     fi
@@ -9427,6 +9437,7 @@ _check_server-caps() {
   if [ -n "$why" ]; then
     _dr_warn server-caps "~/.ccrc/server-caps is $why, so the session hook's gated arms are off on this box (it writes what it always wrote, which is safe) until $writer rewrites it" \
       "$remedy"
+    [ "$cad_ret" -eq 1 ] && return 1
     return 2
   fi
   if [ -n "$words" ]; then
@@ -9434,7 +9445,7 @@ _check_server-caps() {
   else
     _dr_pass server-caps "~/.ccrc/server-caps is current (written $((now - at))s ago by $writer) and lists no words, so the server advertises nothing and the hook's gated arms stay off"
   fi
-  return 0
+  return "$cad_ret"
 }
 
 # ── oom-policy: the victim policy's two scope drop-ins (D-5241) ───────────
