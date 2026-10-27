@@ -24,7 +24,7 @@
 import { describe, it, expect } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import {
-  existsSync, mkdirSync, readFileSync, readdirSync, symlinkSync, writeFileSync, statSync,
+  cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync, statSync,
 } from 'node:fs';
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -939,6 +939,65 @@ describe('ccrc expose: the ddns job\'s cadence comes from its timer (D-7053; ARC
       ...transcriptTail('systemctl --user restart ccrc.service'),
     ]));
   });
+});
+
+/** A box whose tree ships `deploy/systemd/` as a real copy, with `ccrc-ddns.timer` broken one way: `absent`, or
+ *  `no-cadence` (its `OnCalendar=` line gone, every other line kept). */
+function brokenTimerBox(prefix: string, how: 'absent' | 'no-cadence'): string {
+  const home = mkTmp(prefix);
+  const ccd = join(home, 'ccrc', 'ccd');
+  mkdirSync(ccd, { recursive: true });
+  symlinkSync(CCRC_SRC, join(ccd, 'ccrc'));
+  const units = join(home, 'ccrc', 'deploy', 'systemd');
+  cpSync(join(REPO, 'deploy', 'systemd'), units, { recursive: true });
+  rmSync(join(units, 'ccrc-ddns.timer'));
+  if (how === 'no-cadence') {
+    writeFileSync(join(units, 'ccrc-ddns.timer'), readFileSync(join(REPO, 'deploy', 'systemd', 'ccrc-ddns.timer'), 'utf8')
+      .split('\n').filter((l) => !l.startsWith('OnCalendar=')).join('\n'));
+  }
+  return home;
+}
+
+/** `pathVar` with every directory holding `name` replaced by a farm of links to its other entries: the tool is gone,
+ *  everything beside it still resolves. */
+function pathWithout(home: string, name: string, pathVar: string): string {
+  return pathVar.split(':').map((d, i) => {
+    if (d === '' || !existsSync(join(d, name))) return d;
+    const farm = join(home, `path-without-${name}-${i}`);
+    mkdirSync(farm, { recursive: true });
+    for (const e of readdirSync(d)) {
+      if (e === name) continue;
+      try { symlinkSync(join(d, e), join(farm, e)); } catch { /* an entry already linked */ }
+    }
+    return farm;
+  }).join(':');
+}
+
+describe('ccrc expose: an unreadable ddns timer refuses the Darwin job (OA-C8c (a), D-7062)', () => {
+  for (const how of ['absent', 'no-cadence'] as const) {
+    for (const plutil of [true, false]) {
+      it(`an unreadable ccrc-ddns.timer places no job, writes no plist and says why (${how}, plutil ${plutil ? 'on' : 'off'} PATH)`, async () => {
+        const home = brokenTimerBox(`ccrc-expose-c8a-refuse-${how}-`, how);
+        quietSs(home);
+        const extra: Record<string, string> = { ...FORCE_DARWIN };
+        if (plutil) recorder(home, 'plutil');
+        else {
+          extra['PATH'] = pathWithout(home, 'plutil', env(home, { launchctlOk: true })['PATH'] ?? '');
+          expect(spawnSync('/bin/sh', ['-c', 'command -v plutil'], { env: { PATH: extra['PATH'] } }).status,
+            'the fixture PATH still holds a plutil').not.toBe(0);
+        }
+        const r = await runExposeTty(home, ['duckdns'], [SUB, TOKEN, ''], { launchctlOk: true, extra });
+        expect(r.code, r.stdout).toBe(1);
+        const agents = join(home, 'Library', 'LaunchAgents');
+        expect(existsSync(agents) ? readdirSync(agents) : [], 'a job file, or its temp file, was written').toEqual([]);
+        expect(existsSync(join(home, 'launchctl-argv')), 'launchctl was asked to place a job').toBe(false);
+        expect(existsSync(join(home, 'plutil-argv')), 'a plist was generated and linted').toBe(false);
+        expect(normal(home, r.stdout)).toMatch(
+          /^ccrc: cannot place the app\.ccrc\.ccrc-ddns job: the period of ccrc-ddns\.timer cannot be read from the shipped tree\. Nothing was placed\.\r?$/m);
+        expect(r.stdout).not.toMatch(/enabled — the DuckDNS record refreshes/);
+      });
+    }
+  }
 });
 
 // ── the bind address, and the class of loss it stands for ─────────────────
