@@ -175,7 +175,11 @@
    number (`control-census.test.ts`). Growing them — to 24px, then to
    `--tap-min` — added up to 53px to the session header at phone width (the
    meta row wraps, and every wrapped chooser line grew with it); the operator
-   ruled the header stays at main's size (2026-10-15). An overlay is still not
+   ruled the header keeps main's chip HEIGHT (2026-10-15). Desktop polish T3c
+   (D-6333) changed the WIDTH rule: no chip's text is cut any more, so at phone
+   width a long branch or model id wraps onto more lines than main's capped
+   chip did. What stays pinned is Instrument's header at 1280, no taller than
+   the base (`browser/session-header.browser.test.ts`). An overlay is still not
    the way to reach the floor here: a `::before` on either chip would overhang
    the OTHER, and both are live controls. */
 .metachip {
