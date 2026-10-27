@@ -585,13 +585,16 @@ describe('D-5370: the stop-done lane’s kill switch has no writer, and its cons
     expect(holders).toEqual(['server/src/sleepLane.ts', LANE_DEFINER, DEFINER]);
     for (const f of holders) expect(stallCode(path.join(ccrcRoot, f)), `${f} reaches a write`).not.toMatch(WRITE);
   });
-  it('each of its constants and its hold list is declared once: the kill switch in its row, the rest in the lane', () => {
+  it('each of its constants and its hold list is declared once: the kill switch in its row, the rest in the lane', async () => {
     for (const c of ['STOP_DONE_GRACE_MS', 'STOP_DONE_PER_PASS', 'STOP_DONE_MEASURES_PER_PASS', 'STOP_DONE_SWEEP_MS',
       'STOP_DONE_RETRY_MS', 'STOP_DONE_DISABLED_MARKER', 'STOP_DONE_HOLDS', 'STOP_DONE_HOLD_MAP']) {
       const decl = new RegExp(`\\b(?:const|let|var)\\s+${c}\\b`);
+      // The cadence is the `sleepRunDone` row's, declared in the L0 lane table and re-exported by the definer (D-7045).
       expect(ALL.filter((f) => decl.test(stallCode(f))).map(rel), c)
-        .toEqual([c === 'STOP_DONE_DISABLED_MARKER' ? DEFINER : LANE_DEFINER]);
+        .toEqual([c === 'STOP_DONE_DISABLED_MARKER' ? DEFINER : c === 'STOP_DONE_SWEEP_MS' ? 'server/src/laneSchedule.ts' : LANE_DEFINER]);
     }
+    const [lane, table] = await Promise.all([import('../../src/stopDone.js'), import('../../src/laneSchedule.js')]);
+    expect(lane.STOP_DONE_SWEEP_MS, 'the definer re-exports the table\'s constant').toBe(table.STOP_DONE_SWEEP_MS);
   });
 });
 
@@ -869,14 +872,18 @@ describe('D-5242: hibernation’s markers have no writer, and its holds one home
     expect(holders, `${constant}: nobody names it`).toContain(definerOf(name));
     for (const f of holders) expect(stallCode(path.join(ccrcRoot, f)), `${f} reaches a write`).not.toMatch(TS_WRITE);
   });
-  it('HIBERNATE_HOLDS, its map and its constants are declared once, in the definer', () => {
+  it('HIBERNATE_HOLDS, its map and its constants are declared once, in the definer', async () => {
     for (const c of ['HIBERNATE_HOLDS', 'HIBERNATE_HOLD_MAP', 'HIBERNATE_AFTER_MS_DEFAULT', 'HIBERNATE_SWEEP_MS',
       'HIBERNATE_SHADOW_LINE_MS', 'HIBERNATE_AFTER_HOURS_MIN', 'HIBERNATE_AFTER_HOURS_MAX',
       ...MARKERS.map(([, k]) => k)]) {
       const decl = new RegExp(`\\b(?:const|let|var)\\s+${c}\\b`);
       const home = MARKERS.find(([, k]) => k === c)?.[0];
-      expect(ALL.filter((f) => decl.test(stallCode(f))).map(rel), c).toEqual([home === undefined ? DEFINER : definerOf(home)]);
+      // The cadence is the `sleepIdleHours` row's, declared in the L0 lane table and re-exported by the definer (D-7045).
+      expect(ALL.filter((f) => decl.test(stallCode(f))).map(rel), c)
+        .toEqual([c === 'HIBERNATE_SWEEP_MS' ? 'server/src/laneSchedule.ts' : home === undefined ? DEFINER : definerOf(home)]);
     }
+    const [lane, table] = await Promise.all([import('../../src/coord/hibernate.js'), import('../../src/laneSchedule.js')]);
+    expect(lane.HIBERNATE_SWEEP_MS, 'the definer re-exports the table\'s constant').toBe(table.HIBERNATE_SWEEP_MS);
   });
   it('PRESENCE_OPEN_TTL_MS is declared once, in shared/api.ts beside PRESENCE_TTL_MS', () => {
     const decl = /\b(?:const|let|var)\s+PRESENCE_OPEN_TTL_MS\b/;
