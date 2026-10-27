@@ -38,6 +38,9 @@ function entryFor(roster: readonly RosterWire[], wrapper: string): RosterWire | 
   return roster.find((a) => a.id === wrapper);
 }
 
+/** The phrase every PWA surface prints for a lane whose sign-in lapsed (the state word `signed-out`'s plain form). */
+export const SIGN_IN_EXPIRED = 'sign-in expired';
+
 /** The one warning for a roster route that answered the wrong SHAPE.
  *
  *  THREE POLLERS, ONE SENTENCE. `AccountsStrip`, `AccountsScreen` and the
