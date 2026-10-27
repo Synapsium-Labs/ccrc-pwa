@@ -187,6 +187,26 @@ describe('the inspector sections', () => {
     expect(screen.getByRole('button', { name: 'Model: model-x, change' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Effort: high, change' })).toBeInTheDocument();
   });
+
+  it("an unread or inert door keeps its old name, and shows a word its name says", () => {
+    stubWidth(1920);
+    goTo(`/s/${ID}`);
+    const named = (name: string): void => {
+      const door = screen.getByRole('button', { name });
+      expect(name, door.textContent ?? '').toContain(door.textContent ?? '\u0000');
+    };
+    act(() => useFleetStore.setState({ sessions: [{ ...ROW, model: null, effort: null }] }));
+    let r = render(<RoutingSection />);
+    named('Model: not read yet, change');
+    named('Effort: set effort, change');
+    r.unmount();
+    act(() => useFleetStore.setState({
+      sessions: [{ ...ROW, route: { fields: { effort: 'max' }, degraded: null, inert: ['effort'], unreadable: [] } }],
+    }));
+    r = render(<RoutingSection />);
+    named('Effort: set by the lane, change');
+    r.unmount();
+  });
 });
 
 /** A session id the `seed()` never fills: its store holds no tasks and no mail. */
@@ -321,6 +341,7 @@ describe('a section with nothing to show renders nothing (desktop polish T3d, D-
       ['an inert class', { route: route({ fields: { class: 'opus' }, inert: ['class'] }) }, ' · model set by the lane'],
       ['an unreadable field', { route: route({ unreadable: ['effort'] }) }, ' · routing could not be read'],
       ['no model yet', { model: null }, 'Runs a model not read yet on Lane A'],
+      ['no effort yet', { effort: null }, ' · set effort'],
       ['ultracode', { effort: 'xhigh', ultracode: true }, ' · effort ultracode'],
       ['an inert effort', { route: route({ fields: { effort: 'max' }, inert: ['effort'] }) }, ' · effort set by the lane'],
     ];

@@ -1,6 +1,7 @@
 // The inspector's ONE routing line: it says what runs, and asks only what it can measure (desktop polish T3d,
 // D-6334). "Runs <model> on <lane> · effort <x>", then "· asked <class>" or "· asked effort <x>" only for a field the
-// routing record asks for and the pane has not read back yet.
+// routing record asks for and the pane has not read back yet. A field not read yet says the header chip's own words
+// ("a model not read yet", "set effort"), so each door shows a word its accessible name speaks.
 //
 // PURE. The provider does not come in here: it reaches the line through `routeView`, which already holds the
 // measurability rule, so the session header's model chip and this line share one decision about what is pending and
@@ -23,7 +24,7 @@ import type { RouteView } from './routeView';
 
 /** Every word the line says, apart from the live values it is made around. */
 const WORDS: Readonly<Record<'runs' | 'on' | 'effort' | 'sep' | 'asked' | 'askedEffort' | 'unreadable'
-  | 'inertModel' | 'inertEffort' | 'unreadEffort' | 'unreadModel' | 'ultracode', string>> = {
+  | 'inertModel' | 'inertEffort' | 'unreadEffort' | 'aModel' | 'unreadModel' | 'ultracode', string>> = {
   runs: 'Runs ',
   on: ' on ',
   effort: 'effort ',
@@ -36,8 +37,10 @@ const WORDS: Readonly<Record<'runs' | 'on' | 'effort' | 'sep' | 'asked' | 'asked
   unreadable: 'routing could not be read',
   inertModel: 'model set by the lane',
   inertEffort: 'set by the lane',
-  unreadEffort: 'not read yet',
-  unreadModel: 'a model not read yet',
+  // The header chip's word for an effort not read yet; the door says it alone, with no "effort " before it.
+  unreadEffort: 'set effort',
+  aModel: 'a model ',
+  unreadModel: 'not read yet',
   ultracode: 'ultracode',
 };
 
@@ -57,7 +60,7 @@ export interface RoutingLine {
   /** The lane's human label (the caller passes `accountLabel(roster, wrapper)`). */
   readonly lane: string;
   /** What the effort door says: the live level, 'ultracode', 'set by the lane' (ccd stamped effort inert), or
-   *  'not read yet'. */
+   *  'set effort' before the pane reports one. */
   readonly effort: string;
   /** The asked class's label from this lane's own option list (`modelOptions(row.wrapper, null)`), only when
    *  `view.classPending`; else null. */
@@ -74,6 +77,7 @@ export interface RoutingLine {
 
 export function routingLine(row: FleetSession, view: RouteView, lane: string): RoutingLine {
   const model = row.model;
+  const effortUnread = !view.effortInert && !row.ultracode && row.effort === null;
   const effort = view.effortInert ? WORDS.inertEffort : row.ultracode ? WORDS.ultracode : (row.effort ?? WORDS.unreadEffort);
   // Unreachable today: `classPending` already found this label on the same list. Kept so a miss shows the raw word
   // rather than nothing, and the type stays total.
@@ -85,11 +89,12 @@ export function routingLine(row: FleetSession, view: RouteView, lane: string): R
   const sep: RoutingPart = { kind: 'sep', text: WORDS.sep };
   const parts: RoutingPart[] = [
     { kind: 'text', text: WORDS.runs },
+    ...(model === null ? [{ kind: 'text', text: WORDS.aModel } as const] : []),
     { kind: 'model', text: model ?? WORDS.unreadModel, tone: 'model' },
     { kind: 'text', text: WORDS.on },
     { kind: 'text', text: lane },
     sep,
-    { kind: 'text', text: WORDS.effort },
+    ...(effortUnread ? [] : [{ kind: 'text', text: WORDS.effort } as const]),
     { kind: 'effort', text: effort, tone: !view.effortInert && row.ultracode ? 'ultra' : 'plain' },
   ];
   if (askedClass !== null) parts.push(sep, { kind: 'asked', text: `${WORDS.asked}${askedClass}` });

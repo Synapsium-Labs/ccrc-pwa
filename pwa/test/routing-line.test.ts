@@ -231,8 +231,11 @@ describe('the routing line says what runs and asks only what it can measure', ()
   });
 
   it('a row with no model or effort yet says so, and ultracode is its own word', () => {
-    expect(line(fleetSession({ wrapper: 'lane-a' }), 'anthropic').sentence)
-      .toBe('Runs a model not read yet on Lane A · effort not read yet');
+    const unread = line(fleetSession({ wrapper: 'lane-a' }), 'anthropic');
+    expect(unread.sentence).toBe('Runs a model not read yet on Lane A · set effort');
+    // Each door says the word its accessible name speaks, the header chip's own words for an unread field.
+    expect(unread.parts.filter((p) => p.kind === 'model' || p.kind === 'effort').map((p) => `${p.kind}:${p.text}`))
+      .toEqual(['model:not read yet', 'effort:set effort']);
     expect(line(fleetSession({ wrapper: 'lane-a', model: 'Opus 5', effort: 'xhigh', ultracode: true }), null).effort)
       .toBe('ultracode');
   });
