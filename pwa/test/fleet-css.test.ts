@@ -177,20 +177,24 @@ describe('fleet density and alignment', () => {
     for (const sel of ['.sess-line:hover .sess-actions', '.sess-line:focus-within .sess-actions', '.sess-line--active .sess-actions']) {
       expect(declValue(ruleIn(fine, sel), 'opacity'), `${sel} shows the button`).toBe('1');
     }
+    // One ⋯ at a time (the plan's acceptance): while any row of the fleet is hovered, every other row's ⋯ goes dark,
+    // the selected row's and a focused row's included, unless that ⋯ itself holds the keyboard's focus.
+    const elsewhere = '.fleet:has(.sess-line:hover) .sess-line:not(:hover) .sess-actions:not(:focus-visible)';
+    expect(declValue(ruleIn(fine, elsewhere), 'opacity'), 'a hover elsewhere darkens the other rows\' ⋯').toBe('0');
   });
 
   it('clamps only a name and a branch to two lines, never a programme or its wave (desk-rule-not-container-threshold)', () => {
-    // The desk draws the full form of a name, a branch and a programme (`Fit`) and lets the name and the branch
-    // wrap on two lines, cut at the second. The programme slug and its wave tail (D-5528) are never clamped: no
-    // rule in the stylesheet may declare a line clamp on anything but those two, and none outside the desk block,
-    // or a phone's short form would be clamped too.
+    // The desk draws the full form of a name, a branch and a programme (`Fit`) and lets the name, plain or paired,
+    // and the branch wrap on two lines, cut at the second. The programme slug and its wave tail (D-5528) are never
+    // clamped: no rule in the stylesheet may declare a line clamp on anything but those, and none outside the desk
+    // block, or a phone's short form would be clamped too.
     const desk = atBlock(css, '@media (min-width: 900px)');
     expect(desk).toContain('.fit-full');
     const clampSelectors = (text: string): string[] => [...stripComments(text).matchAll(/([^{}]+)\{([^{}]*line-clamp[^{}]*)\}/g)]
       .flatMap((m) => m[1]!.split(',').map((sel) => normSel(sel)));
-    expect(clampSelectors(css).sort()).toEqual([".sess-context[data-context=branch]", '.sess-label-fit'].sort());
+    expect(clampSelectors(css).sort()).toEqual([".sess-context[data-context=branch]", '.sess-label-fit', '.sess-open > .sess-label'].sort());
     expect(clampSelectors(css.replace(desk, '')), 'no line clamp is declared outside the desk block').toEqual([]);
-    for (const sel of ['.sess-label-fit', ".sess-context[data-context='branch']"]) {
+    for (const sel of ['.sess-label-fit', '.sess-open > .sess-label', ".sess-context[data-context='branch']"]) {
       const rule = ruleIn(desk, sel);
       expect(declValue(rule, '-webkit-line-clamp'), `${sel} clamps to two lines at the desk`).toBe('2');
       // A name with no CSS break point (`_`- or `.`-joined) wraps inside the box instead of running out of it

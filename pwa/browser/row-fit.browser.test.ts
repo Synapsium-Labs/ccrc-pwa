@@ -388,20 +388,43 @@ const NAME_104 = `${NAME_60}-${NAME_30}-${NAME_12}`;
 /** 60 characters joined by underscores: `shortenByToken` splits at `_`, CSS does not, so the name has a short form (it is a
  *  `Fit` pair) and no break point of its own in the full form. */
 const NAME_SNAKE = 'alpha_beta_gamma_delta_epsilon_zeta_theta_iota_kappa_lambdas';
+/** Two names at or under the 28-character budget's reach that `shortenByToken` leaves whole, so each draws as ONE plain
+ *  `.sess-label` (no `Fit` pair): 40 characters with no separator at all, and 26 joined by `_`, which CSS does not break
+ *  at. Each is wider than the desk's narrowest track. */
+const NAME_UNBROKEN = 'quietriverbridgelampgardenstoneharborsea';
+const NAME_SNAKE_26 = 'alpha_beta_gamma_delta_eps';
 const NAME_BRANCH_ROW = 'branch-row';
 const NAME_SELECTED = 'short-select';
 const BRANCH_120 = `ws/${'garden-stone-silver-harbor-morning/'.repeat(3)}quiet-rivers`;
 const FIT_PROJECT = 'project-d';
+/** Two rows held by two open runs, so their context cell is the programme and its wave (`ProgrammeWave`): slugs longer
+ *  than `PROGRAMME_BUDGET` (16), so each draws a `Fit` pair, hyphen-joined so the full form wraps where CSS breaks it. */
+const PROG_A = 'harbor-lights-desk-programme-for-rows';
+const PROG_B = 'garden-stone-polish-of-the-fleet';
+const PROG_A_SHORT = 'harbor-lights…';
+const PROG_B_SHORT = 'garden-stone…';
+const NAME_PROG_A = 'prog-row-a';
+const NAME_PROG_B = 'prog-row-b';
 
-const fitRow = (slug: string, name: string, branch: string | null): object =>
-  session(FIT_PROJECT, slug, { name, branch, status: 'busy', bucket: 'working' });
+const fitRow = (slug: string, name: string, branch: string | null, extra: object = {}): object =>
+  session(FIT_PROJECT, slug, { name, branch, status: 'busy', bucket: 'working', ...extra });
+const fitRun = (id: number, program: string, slug: string): object => ({
+  id, program, programTitle: program, wave: 1, waveOf: 2, project: FIT_PROJECT, homeProject: null,
+  sessionId: `${FIT_PROJECT}-${slug}`, workspace: slug, branch: null, state: 'working', closedAt: null, kind: 'work',
+  reviews: null,
+});
+const FIT_RUNS = [fitRun(501, PROG_A, 'rproga'), fitRun(502, PROG_B, 'rprogb')];
 const FIT_SESSIONS = [
   fitRow('r12', NAME_12, null),
   fitRow('r30', NAME_30, null),
   fitRow('r60', NAME_60, null),
   fitRow('r104', NAME_104, null),
   fitRow('rsnake', NAME_SNAKE, null),
+  fitRow('runbroken', NAME_UNBROKEN, null),
+  fitRow('rsnake26', NAME_SNAKE_26, null),
   fitRow('rbranch', NAME_BRANCH_ROW, BRANCH_120),
+  fitRow('rproga', NAME_PROG_A, null, { held: `program:${PROG_A} wave:1/2 run:501` }),
+  fitRow('rprogb', NAME_PROG_B, null, { held: `program:${PROG_B} wave:1/2 run:502` }),
   fitRow('rsel', NAME_SELECTED, null),
 ];
 const FIT_SELECTED = `${FIT_PROJECT}-rsel`;
@@ -409,10 +432,10 @@ const FIT_FIXTURE: AppFixture = {
   api: {
     '/api/accounts': { accounts: [usage('lane-a', 40, 50)], projected: null, roster: ROSTER },
     '/api/projects': { roots: ['/w'], projects: [{ name: FIT_PROJECT, workdir: `/w/${FIT_PROJECT}` }] },
-    '/api/runs': [],
+    '/api/runs': FIT_RUNS,
     '/api/claims': [],
   },
-  fleetFrames: [{ type: 'fleet', sessions: FIT_SESSIONS }],
+  fleetFrames: [{ type: 'fleet', sessions: FIT_SESSIONS }, { type: 'runs', runs: FIT_RUNS }],
 };
 
 /** The three ways a row list is drawn: Refined's project cards, and Instrument's status mode (its default: the mode
@@ -464,8 +487,6 @@ interface FitBox {
   readonly scrollWidth: number;
   readonly clientWidth: number;
   readonly clientHeight: number;
-  /** The `.sess-body` content box the box sits in. */
-  readonly track: number;
   readonly title: string | null;
   readonly openTitle: string | null;
 }
@@ -478,7 +499,6 @@ function measureFit(page: Page, name: string, part: 'name' | 'branch'): Promise<
       return (open?.querySelector('.sr-only') ?? open?.querySelector('.sess-label'))?.textContent === want;
     });
     if (line === undefined) throw new Error(`no row named ${want}`);
-    const body = line.querySelector<HTMLElement>('.sess-body')!;
     const open = line.querySelector<HTMLElement>('.sess-open')!;
     const box = which === 'name'
       ? (line.querySelector<HTMLElement>('.sess-label-fit') ?? line.querySelector<HTMLElement>('.sess-label')!)
@@ -489,7 +509,6 @@ function measureFit(page: Page, name: string, part: 'name' | 'branch'): Promise<
     const shown = (el: HTMLElement | null): boolean => el !== null && getComputedStyle(el).display !== 'none';
     const r = box.getBoundingClientRect();
     const cs = getComputedStyle(box);
-    const bs = getComputedStyle(body);
     return {
       paired: full !== null && short !== null,
       fullShown: full === null ? true : shown(full),
@@ -502,16 +521,60 @@ function measureFit(page: Page, name: string, part: 'name' | 'branch'): Promise<
       scrollWidth: box.scrollWidth,
       clientWidth: box.clientWidth,
       clientHeight: box.clientHeight,
-      track: body.clientWidth - parseFloat(bs.paddingLeft) - parseFloat(bs.paddingRight),
       title: box.getAttribute('title'),
       openTitle: open.getAttribute('title'),
     };
   }, [name, part] as const);
 }
 
+interface ProgrammeBox {
+  readonly fullShown: boolean;
+  readonly shortShown: boolean;
+  /** The text of the programme form that is drawn, and the wave tail beside it. */
+  readonly drawn: string;
+  readonly wave: string;
+  /** How far the programme's right edge runs past the `.sess-body` content box, in px (zero or less is inside). */
+  readonly overhang: number;
+}
+
+/** Measure the programme cell (`ProgrammeWave`) of the row whose name is `name`. */
+function measureProgramme(page: Page, name: string): Promise<ProgrammeBox> {
+  return page.evaluate((want) => {
+    const line = [...document.querySelectorAll<HTMLElement>('.sess-line')]
+      .find((l) => l.querySelector('.sess-open .sess-label')?.textContent === want);
+    if (line === undefined) throw new Error(`no row named ${want}`);
+    const prog = line.querySelector<HTMLElement>('.sess-pw-prog');
+    if (prog === null) throw new Error(`no programme on the row named ${want}`);
+    const full = prog.querySelector<HTMLElement>('.fit-full');
+    const short = prog.querySelector<HTMLElement>('.fit-short');
+    const shown = (el: HTMLElement | null): boolean => el !== null && getComputedStyle(el).display !== 'none';
+    const body = line.querySelector<HTMLElement>('.sess-body')!;
+    const bs = getComputedStyle(body);
+    const edge = body.getBoundingClientRect().right - parseFloat(bs.paddingRight);
+    return {
+      fullShown: shown(full),
+      shortShown: shown(short),
+      drawn: (shown(short) ? short : full)?.textContent ?? '',
+      wave: line.querySelector('.sess-pw-wave')?.textContent ?? '',
+      overhang: prog.getBoundingClientRect().right - edge,
+    };
+  }, name);
+}
+
+/** The names of the rows whose ⋯ is drawn (computed opacity 1), in list order. */
+function litActions(page: Page): Promise<string[]> {
+  return page.evaluate(() => [...document.querySelectorAll<HTMLElement>('.sess-line')].flatMap((l) => {
+    const actions = l.querySelector<HTMLElement>('.sess-actions');
+    if (actions === null || getComputedStyle(actions).opacity !== '1') return [];
+    const open = l.querySelector('.sess-open');
+    return [(open?.querySelector('.sr-only') ?? open?.querySelector('.sess-label'))?.textContent ?? ''];
+  }));
+}
+
 describe('D-6332: a session row shows its name whole where it has room', () => {
   it('the fixture names are exactly 12, 30, 60, 104 and 60 (underscored) characters, and the branch is 120', () => {
     expect([NAME_12, NAME_30, NAME_60, NAME_104, NAME_SNAKE, BRANCH_120].map((n) => n.length)).toEqual([12, 30, 60, 104, 60, 120]);
+    expect([NAME_UNBROKEN, NAME_SNAKE_26].map((n) => n.length)).toEqual([40, 26]);
   });
 
   for (const { view, mode } of fitViews([1280, 1920])) {
@@ -547,7 +610,7 @@ describe('D-6332: a session row shows its name whole where it has room', () => {
           expect(m.height, `${where} is exactly two lines tall`).toBeGreaterThanOrEqual(2 * one.height - 1);
           expect(m.height, `${where} is no taller than two lines`).toBeLessThanOrEqual(2 * one.height + 1);
           if (name === NAME_104) expect(m.scrollHeight, `${where} is cut where its second line ends`).toBeGreaterThan(m.clientHeight);
-          expect(Math.abs(m.width - m.track), `${where} fills the track (${m.width} of ${m.track}px)`).toBeLessThanOrEqual(1);
+          expect(m.scrollWidth, `${where} stays inside its box sideways (${m.scrollWidth} of ${m.clientWidth}px)`).toBeLessThanOrEqual(m.clientWidth + 1);
           expect(m.openTitle, `${where} keeps its full text in the row button's title`).toBe(name);
         }
         const branch = await measureFit(page, NAME_BRANCH_ROW, 'branch');
@@ -583,6 +646,64 @@ describe('D-6332: a session row shows its name whole where it has room', () => {
     });
   }
 
+  for (const { view, mode } of fitViews([1280])) {
+    it(`a plain name with no break point wraps inside its box on at most two lines (${named(view)}, ${mode})`, async () => {
+      const { page, errors, close } = await bootFit(view, mode, `/s/${FIT_SELECTED}`);
+      try {
+        await expectSelectedRow(page);
+        const one = await measureFit(page, NAME_12, 'name');
+        for (const name of [NAME_UNBROKEN, NAME_SNAKE_26]) {
+          const m = await measureFit(page, name, 'name');
+          const where = `the ${name.length}-character plain name`;
+          expect(m.paired, `${where} has no shortened form`).toBe(false);
+          expect(m.drawn).toBe(name);
+          expect(m.scrollWidth, `${where} stays inside its box sideways (${m.scrollWidth} of ${m.clientWidth}px)`).toBeLessThanOrEqual(m.clientWidth + 1);
+          expect(m.height, `${where} is at most two lines tall`).toBeLessThanOrEqual(2 * one.height + 1);
+        }
+        expect(await sideScroll(page)).toBe(0);
+        expect(errors).toEqual([]);
+      } finally {
+        await close();
+      }
+    });
+  }
+
+  for (const { view, mode } of fitViews([1280, 1920])) {
+    it(`the programme slug renders whole at the desk (${named(view)}, ${mode})`, async () => {
+      const { page, errors, close } = await bootFit(view, mode, `/s/${FIT_SELECTED}`);
+      try {
+        await expectSelectedRow(page);
+        for (const [name, prog] of [[NAME_PROG_A, PROG_A], [NAME_PROG_B, PROG_B]] as const) {
+          const m = await measureProgramme(page, name);
+          expect(m.fullShown && !m.shortShown, `the programme of ${name} draws its full form`).toBe(true);
+          expect(m.drawn).toBe(prog);
+          expect(m.wave, 'its wave tail is whole').toBe(' · wave 1 of 2');
+          expect(m.overhang, `the programme of ${name} stays inside the row's body (${m.overhang}px past it)`).toBeLessThanOrEqual(1);
+        }
+        expect(await sideScroll(page)).toBe(0);
+        expect(errors).toEqual([]);
+      } finally {
+        await close();
+      }
+    });
+
+    it(`under a mouse one row shows its ⋯ at a time (${named(view)}, ${mode})`, async () => {
+      const { page, errors, close } = await bootFit(view, mode, `/s/${FIT_SELECTED}`);
+      try {
+        await expectSelectedRow(page);
+        // At rest, away from the list, the selected row alone shows its ⋯.
+        await page.mouse.move(view.width - 4, 896);
+        expect(await litActions(page), 'at rest only the selected row shows ⋯').toEqual([NAME_SELECTED]);
+        // A hovered row shows its own, and the selected row's goes dark while it is hovered: never two.
+        await page.locator('.sess-line').filter({ has: page.locator(`.sess-label[aria-label="${NAME_12}"]`) }).hover();
+        expect(await litActions(page), 'hovering another row shows that row\'s ⋯ and no other').toEqual([NAME_12]);
+        expect(errors).toEqual([]);
+      } finally {
+        await close();
+      }
+    });
+  }
+
   for (const { view, mode } of fitViews([360, 390])) {
     it(`on a phone a 30-character name keeps its token-shortened form (${named(view)}, ${mode})`, async () => {
       const { page, errors, close } = await bootFit(view, mode, '/');
@@ -592,6 +713,11 @@ describe('D-6332: a session row shows its name whole where it has room', () => {
         expect(m.shortShown, 'the shortened form is drawn').toBe(true);
         expect(m.fullShown, 'the full form is not').toBe(false);
         expect(m.drawn).toBe('quiet-river-gentle-bridge…');
+        for (const [name, short] of [[NAME_PROG_A, PROG_A_SHORT], [NAME_PROG_B, PROG_B_SHORT]] as const) {
+          const p = await measureProgramme(page, name);
+          expect(p.shortShown && !p.fullShown, `the programme of ${name} keeps its token-shortened form`).toBe(true);
+          expect(p.drawn).toBe(short);
+        }
         expect(await sideScroll(page)).toBe(0);
         expect(errors).toEqual([]);
       } finally {
