@@ -36,7 +36,7 @@ function expectControlRowIsATarget(): void {
 }
 import { POOL_NAME_RE } from '../../shared/roster';
 import {
-  atBlock, declValue, declaredValues, norm, normSel, rootBody, ruleIn, selectorsOf, stripComments,
+  atBlock, declValue, declaredValues, norm, normSel, rootBody, ruleIn, rulesFor, selectorsOf, stripComments,
 } from './cssRule';
 
 const css = readFileSync(
@@ -149,6 +149,50 @@ describe('fleet density and alignment', () => {
     expect(css).toMatch(/\.sess-body \{ container: sess-body \/ inline-size; \}/);
     expect(css).not.toContain('container-type');
     expect(css).not.toContain('container-name');
+  });
+
+  it("the ⋯'s reveal sits inside the fine-pointer media query, and uses opacity only", () => {
+    // D-6332: under a mouse the row's ⋯ is transparent until its row is hovered, holds focus or is the selected row.
+    // The hiding is OPACITY and nothing else: it stays mounted, focusable, in the accessibility tree, with its 44px
+    // ::before overlay. A coarse pointer has no hover, so the transparent rule lives only inside the media query.
+    const fine = atBlock(css, '@media (hover: hover) and (pointer: fine)');
+    expect(declValue(ruleIn(fine, '.sess-actions'), 'opacity')).toBe('0');
+    const outside = css.replace(fine, '');
+    expect(declaredValues(outside, '.sess-actions', 'opacity'), 'no rule outside the query sets an opacity on ⋯').toEqual([]);
+    expect(declValue(ruleIn(css, '.sess-actions'), 'opacity'), 'the unconditional .sess-actions rule sets none').toBeNull();
+    // Every rule inside the query that targets ⋯ declares opacity and nothing else.
+    for (const rule of rulesFor(fine, '.sess-actions')) {
+      expect(stripComments(rule.body).match(/[\w-]+(?=\s*:)/g), `${rule.selectors.join(', ')} declares opacity only`).toEqual(['opacity']);
+    }
+    // And no rule anywhere hides it another way.
+    expect(declaredValues(css, '.sess-actions', 'display')).not.toContain('none');
+    expect(declaredValues(css, '.sess-actions', 'visibility')).not.toContain('hidden');
+    for (const prop of ['width', 'height', 'pointer-events']) {
+      expect(declaredValues(css, '.sess-actions', prop).filter((v) => /^(0(px)?|none)$/.test(v)), `${prop} never shrinks or disables ⋯`).toEqual([]);
+    }
+  });
+
+  it('a hovered, focused or selected row shows ⋯', () => {
+    const fine = atBlock(css, '@media (hover: hover) and (pointer: fine)');
+    for (const sel of ['.sess-line:hover .sess-actions', '.sess-line:focus-within .sess-actions', '.sess-line--active .sess-actions']) {
+      expect(declValue(ruleIn(fine, sel), 'opacity'), `${sel} shows the button`).toBe('1');
+    }
+  });
+
+  it('clamps only a name and a branch to two lines, never a programme or its wave (desk-rule-not-container-threshold)', () => {
+    // The desk draws the full form of a name, a branch and a programme (`Fit`) and lets the name and the branch
+    // wrap on two lines, cut at the second. The programme slug and its wave tail (D-5528) are never clamped: no
+    // rule in the stylesheet may declare a line clamp on anything but those two.
+    const desk = atBlock(css, '@media (min-width: 900px)');
+    expect(desk).toContain('.fit-full');
+    const clamped = [...stripComments(css).matchAll(/([^{}]+)\{([^{}]*line-clamp[^{}]*)\}/g)]
+      .flatMap((m) => m[1]!.split(',').map((sel) => normSel(sel)));
+    expect(clamped.sort()).toEqual([".sess-context[data-context=branch]", '.sess-label-fit'].sort());
+    for (const sel of ['.sess-pw', '.sess-pw-prog', '.sess-pw-wave', '.sess-held', '.sess-child', '.sess-meta--context']) {
+      let values: string[] = [];
+      try { values = [...declaredValues(css, sel, '-webkit-line-clamp'), ...declaredValues(css, sel, 'line-clamp')]; } catch { /* no rule: nothing clamps it */ }
+      expect(values, `${sel} is never clamped`).toEqual([]);
+    }
   });
 
   it('tightens the card padding and closes the header/body gap', () => {

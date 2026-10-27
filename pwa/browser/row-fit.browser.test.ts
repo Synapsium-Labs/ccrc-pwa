@@ -13,6 +13,11 @@
 //   chevron's line and the meta wraps inside the toggle; a name longer than the line is cut only at its cap, still on
 //   the chevron's line.
 //
+// - D-6332: at the desk (900 and up) a session row draws its name, its branch and its programme whole, the name and the
+//   branch on at most two lines, and a name or branch longer than that is cut at its second line's end, filling the
+//   `.sess-body` track; below 900 a long name keeps its token-shortened form. Measured in the Refined cards, in
+//   Instrument's status mode (its default) and in its project mode.
+//
 // Each case runs both skins and both Phosphor palettes, and also asserts no horizontal overflow and no page error.
 // `test/account-row-fit.test.tsx` and `test/folded-card-floor.test.ts` keep the CSS and markup pins that produce this
 // geometry; this file is where the geometry itself is held.
@@ -362,6 +367,194 @@ describe('D-5576: every project card keeps its name, open and folded', () => {
           const folded = await measureCard(page, project);
           check(folded, `${project}, folded`);
         }
+        expect(await sideScroll(page)).toBe(0);
+        expect(errors).toEqual([]);
+      } finally {
+        await close();
+      }
+    });
+  }
+});
+
+// ---- D-6332 --------------------------------------------------------------------------------------------------------
+// One project card of rows whose names are 12, 30, 60 and 104 characters long, made of hyphenated tokens (so the name
+// breaks where the card breaks it), a row with a short name and a very long branch, and a short row the desk opens.
+// Every row is busy: a card of idle rows renders folded, with no rows at all.
+
+const NAME_12 = 'north-to-sea';
+const NAME_30 = 'quiet-river-gentle-bridge-lamp';
+const NAME_60 = 'amber-field-narrow-garden-stone-silver-harbor-morning-cedars';
+const NAME_104 = `${NAME_60}-${NAME_30}-${NAME_12}`;
+const NAME_BRANCH_ROW = 'branch-row';
+const NAME_SELECTED = 'short-select';
+const BRANCH_120 = `ws/${'garden-stone-silver-harbor-morning/'.repeat(3)}quiet-rivers`;
+const FIT_PROJECT = 'project-d';
+
+const fitRow = (slug: string, name: string, branch: string | null): object =>
+  session(FIT_PROJECT, slug, { name, branch, status: 'busy', bucket: 'working' });
+const FIT_SESSIONS = [
+  fitRow('r12', NAME_12, null),
+  fitRow('r30', NAME_30, null),
+  fitRow('r60', NAME_60, null),
+  fitRow('r104', NAME_104, null),
+  fitRow('rbranch', NAME_BRANCH_ROW, BRANCH_120),
+  fitRow('rsel', NAME_SELECTED, null),
+];
+const FIT_SELECTED = `${FIT_PROJECT}-rsel`;
+const FIT_FIXTURE: AppFixture = {
+  api: {
+    '/api/accounts': { accounts: [usage('lane-a', 40, 50)], projected: null, roster: ROSTER },
+    '/api/projects': { roots: ['/w'], projects: [{ name: FIT_PROJECT, workdir: `/w/${FIT_PROJECT}` }] },
+    '/api/runs': [],
+    '/api/claims': [],
+  },
+  fleetFrames: [{ type: 'fleet', sessions: FIT_SESSIONS }],
+};
+
+/** The three ways a row list is drawn: Refined's project cards, and Instrument's status mode (its default: the mode
+ *  key is NOT seeded) and project mode. */
+const FIT_MODES = [
+  { skin: REFINED, mode: 'cards' },
+  { skin: INSTRUMENT, mode: 'status' },
+  { skin: INSTRUMENT, mode: 'project' },
+] as const;
+const FIT_THEMES = THEMES;
+const fitViews = (widths: readonly number[]): { view: AppView; mode: string }[] =>
+  FIT_MODES.flatMap(({ skin, mode }) => FIT_THEMES.flatMap((theme) => widths.map((width) => ({ view: { skin, theme, width }, mode }))));
+
+async function bootFit(view: AppView, mode: string, route: string): Promise<{ page: Page; errors: string[]; close: () => Promise<void> }> {
+  const { ctx, page, errors } = await openApp(browser!, view, FIT_FIXTURE);
+  if (mode === 'project') {
+    await ctx.addInitScript((key) => {
+      try { localStorage.setItem(key, 'project'); } catch { /* no storage: Instrument opens on status */ }
+    }, GROUP_MODE_KEY);
+  }
+  await page.goto(server!.origin + route);
+  await page.waitForFunction(([skin, theme]) => {
+    const root = document.documentElement;
+    return root.getAttribute('data-skin') === skin && (root.getAttribute('data-theme') ?? 'phosphor') === theme;
+  }, [view.skin, view.theme] as const, { timeout: 20_000 });
+  await page.locator('.sess-line').first().waitFor();
+  return { page, errors, close: () => ctx.close() };
+}
+
+interface FitBox {
+  /** The name or the context cell drew a pair of forms (`Fit`), or only plain text. */
+  readonly paired: boolean;
+  readonly fullShown: boolean;
+  readonly shortShown: boolean;
+  /** The text of the form that is drawn. */
+  readonly drawn: string;
+  readonly height: number;
+  readonly width: number;
+  readonly lineHeight: number;
+  readonly scrollHeight: number;
+  readonly clientHeight: number;
+  /** The `.sess-body` content box the box sits in. */
+  readonly track: number;
+  readonly title: string | null;
+  readonly openTitle: string | null;
+}
+
+/** Measure the name (`part: 'name'`) or the branch (`'branch'`) of the row whose name is `name`. */
+function measureFit(page: Page, name: string, part: 'name' | 'branch'): Promise<FitBox> {
+  return page.evaluate(([want, which]) => {
+    const line = [...document.querySelectorAll<HTMLElement>('.sess-line')].find((l) => {
+      const open = l.querySelector('.sess-open');
+      return (open?.querySelector('.sr-only') ?? open?.querySelector('.sess-label'))?.textContent === want;
+    });
+    if (line === undefined) throw new Error(`no row named ${want}`);
+    const body = line.querySelector<HTMLElement>('.sess-body')!;
+    const open = line.querySelector<HTMLElement>('.sess-open')!;
+    const box = which === 'name'
+      ? (line.querySelector<HTMLElement>('.sess-label-fit') ?? line.querySelector<HTMLElement>('.sess-label')!)
+      : line.querySelector<HTMLElement>('.sess-context[data-context="branch"]');
+    if (box === null) throw new Error(`no ${which} on the row named ${want}`);
+    const full = box.querySelector<HTMLElement>('.fit-full');
+    const short = box.querySelector<HTMLElement>('.fit-short');
+    const shown = (el: HTMLElement | null): boolean => el !== null && getComputedStyle(el).display !== 'none';
+    const r = box.getBoundingClientRect();
+    const cs = getComputedStyle(box);
+    const bs = getComputedStyle(body);
+    return {
+      paired: full !== null && short !== null,
+      fullShown: full === null ? true : shown(full),
+      shortShown: shown(short),
+      drawn: (shown(short) ? short : full ?? box)?.textContent ?? '',
+      height: r.height,
+      width: r.width,
+      lineHeight: parseFloat(cs.lineHeight),
+      scrollHeight: box.scrollHeight,
+      clientHeight: box.clientHeight,
+      track: body.clientWidth - parseFloat(bs.paddingLeft) - parseFloat(bs.paddingRight),
+      title: box.getAttribute('title'),
+      openTitle: open.getAttribute('title'),
+    };
+  }, [name, part] as const);
+}
+
+describe('D-6332: a session row shows its name whole where it has room', () => {
+  it('the fixture names are exactly 12, 30, 60 and 104 characters, and the branch is 120', () => {
+    expect([NAME_12, NAME_30, NAME_60, NAME_104, BRANCH_120].map((n) => n.length)).toEqual([12, 30, 60, 104, 120]);
+  });
+
+  for (const { view, mode } of fitViews([1280, 1920])) {
+    it(`at 1280 and 1920, a 30-character name renders whole in both skins (${named(view)}, ${mode})`, async () => {
+      const { page, errors, close } = await bootFit(view, mode, `/s/${FIT_SELECTED}`);
+      try {
+        const twelve = await measureFit(page, NAME_12, 'name');
+        expect(twelve.paired, 'a 12-character name has no shortened form').toBe(false);
+        const m = await measureFit(page, NAME_30, 'name');
+        expect(m.paired, 'the 30-character name draws both forms').toBe(true);
+        expect(m.fullShown, 'the full form is drawn').toBe(true);
+        expect(m.shortShown, 'the shortened form is not').toBe(false);
+        expect(m.drawn).toBe(NAME_30);
+        expect(m.scrollHeight, 'nothing of the name is clipped').toBeLessThanOrEqual(m.clientHeight + 0.5);
+        expect(m.height, 'at most two lines').toBeLessThanOrEqual(2 * twelve.height + 1);
+        expect(await sideScroll(page)).toBe(0);
+        expect(errors).toEqual([]);
+      } finally {
+        await close();
+      }
+    });
+
+    it(`a name longer than the track is shortened to fill it (${named(view)}, ${mode})`, async () => {
+      const { page, errors, close } = await bootFit(view, mode, `/s/${FIT_SELECTED}`);
+      try {
+        const one = await measureFit(page, NAME_12, 'name');
+        for (const name of [NAME_60, NAME_104]) {
+          const m = await measureFit(page, name, 'name');
+          const where = `the ${name.length}-character name`;
+          expect(m.fullShown && !m.shortShown, `${where} draws its full form`).toBe(true);
+          expect(m.height, `${where} is exactly two lines tall`).toBeGreaterThanOrEqual(2 * one.height - 1);
+          expect(m.height, `${where} is no taller than two lines`).toBeLessThanOrEqual(2 * one.height + 1);
+          if (name === NAME_104) expect(m.scrollHeight, `${where} is cut where its second line ends`).toBeGreaterThan(m.clientHeight);
+          expect(Math.abs(m.width - m.track), `${where} fills the track (${m.width} of ${m.track}px)`).toBeLessThanOrEqual(1);
+          expect(m.title, `${where} keeps its full text in title`).toBe(name);
+        }
+        const branch = await measureFit(page, NAME_BRANCH_ROW, 'branch');
+        expect(branch.fullShown && !branch.shortShown, 'a long branch draws its full form').toBe(true);
+        expect(branch.height, 'a long branch is exactly two lines tall').toBeGreaterThanOrEqual(2 * branch.lineHeight - 1);
+        expect(branch.height, 'a long branch is no taller than two lines').toBeLessThanOrEqual(2 * branch.lineHeight + 1);
+        expect(branch.scrollHeight, 'a long branch is cut where its second line ends').toBeGreaterThan(branch.clientHeight);
+        expect(branch.title, 'a long branch keeps its full text in title').toBe(BRANCH_120);
+        expect(await sideScroll(page)).toBe(0);
+        expect(errors).toEqual([]);
+      } finally {
+        await close();
+      }
+    });
+  }
+
+  for (const { view, mode } of fitViews([360, 390])) {
+    it(`on a phone a 30-character name keeps its token-shortened form (${named(view)}, ${mode})`, async () => {
+      const { page, errors, close } = await bootFit(view, mode, '/');
+      try {
+        const m = await measureFit(page, NAME_30, 'name');
+        expect(m.paired).toBe(true);
+        expect(m.shortShown, 'the shortened form is drawn').toBe(true);
+        expect(m.fullShown, 'the full form is not').toBe(false);
+        expect(m.drawn).toBe('quiet-river-gentle-bridge…');
         expect(await sideScroll(page)).toBe(0);
         expect(errors).toEqual([]);
       } finally {
