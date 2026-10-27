@@ -699,6 +699,13 @@ export function updateEnv(home: string): NodeJS.ProcessEnv {
     'esac',
     `exec ${REAL_NODE} "$@"`,
   ].join('\n') + '\n');
+  // `ccrc update` chooses its node before anything else (`_ccrc_node_choose`, ccd/ccrc-node) and requires npm and npx
+  // beside it — in the directory of THIS shim. Real ones, linked, so a case that runs the real install keeps the
+  // npm it always ran.
+  for (const n of ['npm', 'npx']) {
+    rmSync(join(home, '.local', 'bin', n), { force: true });
+    symlinkSync(realPath(n), join(home, '.local', 'bin', n));
+  }
   for (const k of ['CCRC_ADDR', 'CCRC_HEALTH_TIMEOUT', 'CCRC_DOCTOR_GH_TIMEOUT', 'CCRC_DOCTOR_DOCS_TIMEOUT',
     'CCRC_RELEASE_BASE_URL', 'CCRC_BACKUP_KEEP', 'CCRC_BACKUP_DATA_KEEP', 'CCRC_VERSIONS_KEEP', 'CCRC_CODEX_PROBE_S', 'CCRC_CODEX_READY_S',
     'CCRC_UPDATE_DEADLINE_MS', 'CCRC_MODELS_ADVANCE_BUDGET_S']) delete env[k];
@@ -909,6 +916,8 @@ export function stubTree(home: string, opts: { version: string; installExit?: nu
     // the run does; any OTHER descriptor it was handed — a lock fd — it keeps
     // for 30 s.
     + 'printf \'%s\\n\' "${CCRC_UPDATE_LOCK_HELD:-unset}" > "$HOME/staged-ccrc-lockenv"\n'
+    // An update never installs node, and the staged spine inherits that (`cmd_update` exports it).
+    + 'printf \'%s\\n\' "${NODE_NO_INSTALL:-unset}" > "$HOME/staged-ccrc-nodenoinstall"\n'
     + 'if [ -f "$HOME/fixture-spine-linger" ]; then sleep 30 >/dev/null 2>&1 </dev/null & echo $! > "$HOME/spine-linger-pid"; fi\n'
     // Task 3 (§16's parent-kill fixture): a spine that records its argv and
     // then WAITS, at most 20 s, for the test's go file. The run is parked

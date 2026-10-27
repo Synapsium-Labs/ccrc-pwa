@@ -13,6 +13,7 @@ import { mkTmp, removeTmpFixturesEachTest } from './tmpHelpers.js';
 import { ccrcContainedEnv } from './ccrcContainment.js';
 import { assertNoRealTool } from './containedTools.js';
 import { itLinux, itDarwin, platformContrast } from './platformFixtures.js';
+import { plantNvm } from './ccrc-installFixture.js';
 import { installVersionedTree } from './installTreeFixture.js';
 import { assertSpineFrontContained } from './codexLaneFixture.js';
 import { IN_FLIGHT_UPDATE_PHASES, UPDATE_PHASES } from '../../shared/api.js';
@@ -1776,6 +1777,26 @@ describe('ccrc update: one update at a time (the lock)', () => {
     expect(second.code).toBe(1);
     expect(second.stderr).not.toMatch(/another update holds/);
     expect(second.stderr).toMatch(/^ccrc: jq is required by 'ccrc update' but is not on PATH/m);
+  });
+
+  // spec 2026-10-26-node-runtime-under-nvm: an update chooses its node like an install does (so a box whose manager
+  // PATH lacks node can still update) but NEVER installs one — it is unattended, even when stdin is a terminal.
+  it('an update with no qualifying nvm node refuses with the library\'s reason, installs nothing, and changes nothing', () => {
+    const home = stubBox('ccrc-update-node-refuse-');
+    plantNvm(home, ['v18.0.0'], 'v18.0.0');
+    const r = runUpdate(home);
+    expect(r.code, `stdout: ${r.stdout}`).toBe(1);
+    expect(r.stderr).toMatch(/^ccrc: no usable node: no installed nvm node meets the floor \(>=\d+\.\d+\.\d+\)/m);
+    expect(r.stderr).toMatch(/installing is disabled for this run \(NODE_NO_INSTALL=1\).* Nothing on this box was changed\.$/m);
+    expect(existsSync(join(home, 'nvm-install-calls')), 'an update ran `nvm install`').toBe(false);
+    expect(existsSync(join(home, 'staged-ccrc-argv')), 'the spine ran past the refusal').toBe(false);
+  });
+
+  it('the staged spine inherits NODE_NO_INSTALL=1, so the install it runs never installs node either', () => {
+    const home = stubBox('ccrc-update-node-noinstall-');
+    const r = runUpdate(home, [], { NODE_NO_INSTALL: '' });
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(readFileSync(join(home, 'staged-ccrc-nodenoinstall'), 'utf8').trim()).toBe('1');
   });
 });
 

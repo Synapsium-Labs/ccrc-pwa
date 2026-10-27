@@ -14776,6 +14776,7 @@ CCRC_INST_SPINE=(
   _inst_files
   _inst_stamp
   _inst_caps
+  _inst_node
   _inst_units
   _inst_codex_runtime
   _inst_enable
@@ -14813,6 +14814,26 @@ _inst_step() {   # <fn>
     _ccrc_die "could not record the install step marker ~/.ccrc/install-step before $fn — nothing of $fn ran"
   fi
   "$fn"
+}
+
+# `_ccrc_node_choose` — pick the node this run (and, through `_inst_node`, the units) will use, and put it first on
+# PATH. The one caller-side wrapper of `ccd/ccrc-node` (spec 2026-10-26-node-runtime-under-nvm): the library
+# decides and sets globals; THIS dies, because only ccrc has `_ccrc_die`. Sourced lazily — as `cmd_doctor` sources
+# its check table — so a verb that never needs node never loads it. A box with NO node and no nvm falls through
+# silently: each caller's own `command -v node` probe then speaks, in the words an operator already knows.
+_ccrc_node_choose() {   # <what-was-not-changed>
+  local tree="${CCRC_HERE%/*}" lib="$CCRC_HERE/ccrc-node" pj
+  [[ -f "$lib" ]] || _ccrc_die "the node selection library is missing: $lib — is this a complete ccrc install?"
+  # shellcheck source=ccrc-node
+  . "$lib" || _ccrc_die "the node selection library failed to load: $lib"
+  pj="$tree/server/package.json"
+  [[ -f "$pj" ]] || pj="$tree/agent/package.json"
+  _node_floor "$pj" || _ccrc_die "$NODE_WHY. $1"
+  if ! _node_select "$NODE_FLOOR"; then
+    command -v node >/dev/null 2>&1 || [ -s "${NVM_DIR:-$HOME/.nvm}/nvm.sh" ] \
+      || return 0
+    _ccrc_die "no usable node: $NODE_WHY. $1"
+  fi
 }
 
 cmd_install() {
@@ -14868,6 +14889,9 @@ cmd_install() {
   # differently — and `install` is the ONE verb here that runs on a box which
   # may legitimately not have node yet. (Round-1 review, Important 1; measured
   # on a PATH holding every coreutil and no node.)
+  # The node this run uses is CHOSEN first (nvm-aware, floor-checked), so the probe below sees it; a refusal
+  # dies here, before any step wrote anything.
+  _ccrc_node_choose "Nothing on this box was written or changed."
   command -v node >/dev/null 2>&1 \
     || _ccrc_die "node is required by 'ccrc install' — it runs ${CCRC_HERE%/*}/deploy/gen-accounts.mjs to write \$HOME/.ccrc/accounts.sh — but is not on PATH. Install Node (this repo's floor is in server/package.json's \"engines\") or put it on PATH, then re-run. Nothing on this box was written or changed."
 
@@ -17026,6 +17050,20 @@ _inst_caps() {   # what THIS install's ccrc can do (design 2026-09-20 §9, decis
   # `$BOX_ENV_FILE`, and `_inst_node_id`'s `install: node-id:` line, which names
   # `$BOX_NODE_ID_FILE`.
   echo "install: caps: ${cw[*]} (os $CCD_OS; $(_upd_redact "$BOX_CAPS_FILE") — what this install's ccrc can do, read by the server)"
+}
+
+# ── _inst_node — publish the chosen node for the systemd user manager ─────
+# `cmd_install` chose it (`_ccrc_node_choose`: NODE_BIN_DIR/NODE_VERSION); `_node_publish` (ccd/ccrc-node) is the
+# one writer of the links and the environment.d fragment and reloads the manager, and it runs BEFORE `_inst_units`
+# and `_inst_enable` so the first restart already sees the PATH. This step never re-implements it.
+_inst_node() {
+  _node_publish || _ccrc_die "could not publish node for the user manager: $NODE_WHY"
+  if [ "$(uname -s 2>/dev/null)" = Darwin ]; then
+    echo "install: node: $NODE_VERSION at $NODE_BIN_DIR (launchd bakes PATH into the plist; nothing to publish)"
+  else
+    echo "install: node: $NODE_VERSION at $NODE_BIN_DIR (links in $HOME/.local/libexec/ccrc/node-bin; manager PATH via ~/.config/environment.d/50-ccrc-node.conf)"
+    [ -z "$NODE_WHY" ] || echo "install: node: note: $NODE_WHY"
+  fi
 }
 
 # ── _inst_units — the unit files, and the one this box's ROLE decides ─────
@@ -19494,6 +19532,10 @@ cmd_update() {
   # staged install probes it again, because `_upd_backup` runs it FIRST
   # (backup-coord.mjs) and a backup that failed for a missing interpreter
   # must not read as a broken coord.db.
+  # The manager's PATH may lack node on an nvm box: choose it as install does, so such a box can still
+  # update. NEVER installs one (an update is unattended, even on a terminal); the spine below inherits the same.
+  export NODE_NO_INSTALL=1
+  _ccrc_node_choose "Nothing on this box was changed."
   local t
   # awk: _upd_sweep's unit enumeration rides it — absent, the per-unit
   # preflight would silently narrow to the template probe (branch review).

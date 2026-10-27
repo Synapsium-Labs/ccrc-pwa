@@ -561,7 +561,13 @@ export function ccrcEnv(home: string, omit: string[] = []): NodeJS.ProcessEnv {
     // rostered codex lane as a FOREIGN tier (m-platform §3.3).
     ...spineSystemctlArms(),
     'case "$1" in',
-    '  daemon-reload) exit 0 ;;',
+    // Records whether the manager-PATH fragment was ALREADY on disk at each reload — "written before the reload" is
+    // read here, at the moment of the call, never off the final tree.
+    '  daemon-reload)',
+    '    if [ -e "$HOME/.config/environment.d/50-ccrc-node.conf" ]; then echo present >> "$HOME/fixture-reload-saw-fragment"; else echo absent >> "$HOME/fixture-reload-saw-fragment"; fi',
+    '    exit 0 ;;',
+    // `_node_publish`'s probe for a user manager (ccd/ccrc-node): this box has one.
+    '  show-environment) exit 0 ;;',
     '  enable)',
     '    [ "$2" = "--now" ] && [ -n "$3" ] || { echo "fixture systemctl: unexpected argv: $*" >&2; exit 90; }',
     // A named unit whose `enable --now` refuses — the shape of a unit file
@@ -681,6 +687,26 @@ export function ccrcEnv(home: string, omit: string[] = []): NodeJS.ProcessEnv {
   plant('npm',
     '#!/bin/sh\nprintf \'%s\\n\' "$*" >> "$HOME/npm-argv"\n'
     + 'printf \'%s\\n\' "$PWD" >> "$HOME/npm-cwd"\nmkdir -p node_modules\nexit 0\n');
+  // THE FIXTURE'S NODE DIRECTORY. `_node_select` (ccd/ccrc-node) puts the DIRECTORY of the node it chose first on
+  // PATH, so the build runs on the node the units will; the real node's own directory holds the real `npm`, which
+  // would then shadow the stub above. One fixture directory therefore holds all three names the library requires
+  // — node and npx real, npm the stub — and sits right after `.local/bin`, so the chosen directory carries the
+  // stub. (`pathWithout` builds its own PATH and its own npm link, for the same reason.)
+  {
+    const nodeDir = join(home, '.fixture-node');
+    mkdirSync(nodeDir, { recursive: true });
+    const onPath = (n: string): string | undefined => (env['PATH'] ?? '').split(':')
+      .map((d) => join(d, n)).find((f) => existsSync(f));
+    for (const n of ['node', 'npx']) {
+      const real = onPath(n);
+      if (real === undefined) continue;   // a box with no node: the verb's own probe says so
+      rmSync(join(nodeDir, n), { force: true });
+      symlinkSync(real, join(nodeDir, n));
+    }
+    rmSync(join(nodeDir, 'npm'), { force: true });
+    symlinkSync(join(fixtureBin, 'npm'), join(nodeDir, 'npm'));
+    env['PATH'] = [fixtureBin, nodeDir, ...(env['PATH'] ?? '').split(':').filter((p) => p !== fixtureBin)].join(':');
+  }
   // `rsync` is a RECORDER, not a poison: it logs the argv of each call ccrc
   // makes and then EXECS THE REAL BINARY (`rsyncRecorder`, which skips only the
   // implementation's own `--server` re-exec — wave 9 M6). Both halves are
@@ -896,6 +922,9 @@ export function checkedEnv(env: NodeJS.ProcessEnv, home: string): NodeJS.Process
   return env;
 }
 
+/** The farm tools the runner plants a stub for in `.local/bin` (`ccrcEnv`): see `pathWithout`. */
+const FARM_STUBBED = ['npm', 'rsync', 'python3'];
+
 /** A PATH with everything this verb shells out to EXCEPT one named tool: the
  *  poison directory at the head (so `gh`/`curl`/`systemctl`/`loginctl` stay
  *  contained) then a directory of symlinks to the real binaries the steps use.
@@ -968,7 +997,7 @@ export function pathWithout(home: string, missing: string): string {
   // The absence that IS the subject has its own case (`pathWithout(home,
   // SHA256_TOOL)`): the digest is uncomputable, so the version is not kept.
   for (const b of ['mkdir', 'cp', 'mv', 'rm', 'cat', 'chmod', 'cmp', 'date',
-    'node', 'git', 'npm', 'rsync', 'bash', 'sleep', 'jq', 'mktemp', 'basename',
+    'node', 'npx', 'git', 'npm', 'rsync', 'bash', 'sleep', 'jq', 'mktemp', 'basename',
     'diff', 'tmux', 'python3', 'flock', 'timeout', 'stat', 'grep', 'awk', 'realpath',
     'ln', 'readlink', SHA256_TOOL,
     // `head` (wave 17 R8f, D-5317): `_inst_stamp` reads the release tag as
@@ -995,10 +1024,41 @@ export function pathWithout(home: string, missing: string): string {
     // to print its refusal. The verb itself is correct there — it names its
     // cause and changes nothing — so the gap is this PATH, not the spine.
     ...(process.platform === 'darwin' ? ['launchctl', 'plutil', 'uname', 'uuidgen', 'tr'] : [])]) {
+    const stubbed = FARM_STUBBED.includes(b);
+    if (stubbed) rmSync(join(d, b), { force: true });   // a dangling link reads as absent to existsSync
     if (b === missing || existsSync(join(d, b))) continue;
-    symlinkSync(realPath(b), join(d, b));
+    // `_node_select` puts the directory of the node it chose — THIS farm — first on PATH, so a real tool linked here
+    // would shadow the stub the runner plants in `.local/bin`. The stubbed names link to the stub instead (dangling
+    // until the runner plants it; an `omit` removes it, which reads as absent, as it should).
+    symlinkSync(stubbed ? join(home, '.local', 'bin', b) : realPath(b), join(d, b));
   }
   return `${join(home, '.local', 'bin')}:${d}`;
+}
+
+/** A stand-in nvm under `<home>/.nvm` (the library's no-env default): `nvm.sh` answers `nvm version default` with
+ *  `def` (or `N/A`, rc 3) and RECORDS any `nvm install` to `<home>/nvm-install-calls` (then fails it, so nothing is
+ *  ever installed). Each version has a node that prints its own version and otherwise runs the real node, an npm that
+ *  runs the fixture's `.local/bin/npm`, and the real npx. Returns a function from a version to its bin directory. */
+export function plantNvm(home: string, versions: string[], def?: string): (v: string) => string {
+  const nvm = join(home, '.nvm');
+  mkdirSync(nvm, { recursive: true });
+  writeFileSync(join(nvm, 'nvm.sh'), [
+    'nvm() {',
+    '  case "$1" in',
+    `    version) ${def ? `echo ${def}; return 0` : 'echo N/A; return 3'} ;;`,
+    '    install) printf \'%s\\n\' "$*" >> "$HOME/nvm-install-calls"; return 1 ;;',
+    '  esac',
+    '}',
+  ].join('\n') + '\n');
+  const binOf = (v: string): string => join(nvm, 'versions', 'node', v, 'bin');
+  for (const v of versions) {
+    const d = binOf(v);
+    mkdirSync(d, { recursive: true });
+    writeFileSync(join(d, 'node'), `#!/bin/sh\n[ "$1" = --version ] && { echo ${v}; exit 0; }\nexec ${realPath('node')} "$@"\n`, { mode: 0o755 });
+    writeFileSync(join(d, 'npm'), '#!/bin/sh\nexec "$HOME/.local/bin/npm" "$@"\n', { mode: 0o755 });
+    symlinkSync(realPath('npx'), join(d, 'npx'));
+  }
+  return binOf;
 }
 
 export const read = (p: string): string => readFileSync(p, 'utf8');
@@ -1030,6 +1090,8 @@ export const STRAY_DIRS = ['', '.ccrc', '.local/bin', '.cc-sessions', '.claude',
   // D-5241: the two scope drop-in directories `_inst_units` stages into.
   '.config/systemd/user/tmux-spawn-.scope.d',
   '.config/systemd/user/ccrc-tmux-server.scope.d',
+  // `_inst_node` (via `_node_publish`) stages its links and the manager's PATH fragment through temp siblings.
+  '.local/libexec/ccrc/node-bin', '.config/environment.d',
   // Worker-skill Task 4: `_inst_tree_copy` stages a whole DIRECTORY beside its
   // target under `.cc-sessions` (already listed above), and each skill
   // installer stages one beside ITS target, inside the account config dir's

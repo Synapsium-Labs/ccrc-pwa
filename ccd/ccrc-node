@@ -25,7 +25,9 @@ _node_is_tty() { [ -t 0 ]; }
 _node_floor() {
   NODE_FLOOR=; NODE_WHY=
   local f="$1" txt
-  txt=$(tr '\n\r\t' '   ' < "$f" 2>/dev/null) || txt=
+  # bash alone (`$(<file)` is a builtin read): no `tr` or `cat`, which a trimmed PATH may lack.
+  txt=$(<"$f") 2>/dev/null || txt=
+  txt=${txt//[$'\n\r\t']/ }
   if [ -z "$txt" ]; then NODE_WHY="cannot read $f to find the node floor (engines.node)"; return 1; fi
   if [[ $txt =~ \"engines\"[[:space:]]*:[[:space:]]*\{[^}]*\"node\"[[:space:]]*:[[:space:]]*\"([^\"]*)\" ]]; then
     local spec="${BASH_REMATCH[1]}"

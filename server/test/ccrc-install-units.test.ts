@@ -10,7 +10,7 @@ import { mkTmp, removeTmpFixturesEachTest } from './tmpHelpers.js';
 import { describeLinux, describeDarwin, itLinux } from './platformFixtures.js';
 import { installFixtureTree, installVersionedTree } from './installTreeFixture.js';
 import { plantFakeRuntime } from './codexLaneFixture.js';
-import { here, REPO, realPath, BASH, treeRoot, ccrcIn, treeFile, placed, freshBox, ccrcEnv, runInstall, runLauncherVersion, pathWithout, read, dotCcrc, preexisting, gitInit, unitDir, SLICE_DIR, UNIT_FILES, systemctlCalls, FLEET_URL, FLEET_TOKEN, runInstallTty, type Result } from './ccrc-installFixture.js';
+import { plantNvm, here, REPO, realPath, BASH, treeRoot, ccrcIn, treeFile, placed, freshBox, ccrcEnv, runInstall, runLauncherVersion, pathWithout, read, dotCcrc, preexisting, gitInit, unitDir, SLICE_DIR, UNIT_FILES, systemctlCalls, FLEET_URL, FLEET_TOKEN, runInstallTty, type Result } from './ccrc-installFixture.js';
 
 removeTmpFixturesEachTest();
 
@@ -876,6 +876,9 @@ describeLinux('ccrc install: the units, and the one this box must not be given',
     const calls = systemctlCalls(home).filter((c) => !c.argv.includes('is-active')
       && !c.argv.includes('show') && !c.argv.includes('list-units'));
     expect(calls.map((c) => c.argv)).toEqual([
+      // `_inst_node`'s reload (the manager-PATH fragment), BEFORE any unit file: it is not about units.
+      '--user daemon-reload',
+      // `_inst_enable`'s reload, the one this test is about.
       '--user daemon-reload',
       '--user enable --now ccrc.service',
       '--user enable --now ccd-cap-scopes.timer',
@@ -927,7 +930,7 @@ describeLinux('ccrc install: the units, and the one this box must not be given',
       // previous one's.
       '--user restart ccrc.service',
     ]);
-    for (const c of calls) {
+    for (const c of calls.slice(1)) {   // all but the node reload (above)
       expect(c.onDisk, `${c.argv} ran before the unit files landed`)
         .toEqual(expect.arrayContaining(UNIT_FILES.map(([dest]) => dest)));
     }
@@ -1068,6 +1071,101 @@ describeLinux('ccrc install: the units, and the one this box must not be given',
     expect(units.r.stdout).toMatch(/^verified: ccrc\.service active, MainPID 4242 stable across 0s$/m);
   });
 
+});
+
+// spec 2026-10-26-node-runtime-under-nvm: every unit reaches `node` by NAME on the systemd user manager's PATH, and
+// an nvm node is on the operator's shell PATH only. `_inst_node` publishes the chosen node through three links and a
+// manager PATH fragment, BEFORE `_inst_units` and `_inst_enable`. These cases assert the artefacts and the order,
+// not the exit code: they are about the step, and a box short of an unrelated tool (jq) must not hide it.
+describeLinux('ccrc install: the node the units run (nvm-aware selection, `_inst_node`)', () => {
+  const nodeBin = (home: string): string => join(home, '.local', 'libexec', 'ccrc', 'node-bin');
+  const fragment = (home: string): string => join(home, '.config', 'environment.d', '50-ccrc-node.conf');
+  const FRAGMENT = (home: string): string => [
+    '# Written by ccrc (ccd/ccrc-node): systemd user units run node by name, and the user manager\'s PATH',
+    '# lacks the directory a version manager keeps it in. Do not edit; ccrc re-writes it on install/update.',
+    `PATH=${nodeBin(home)}:\${PATH}`,
+    '',
+  ].join('\n');
+
+  it('publishes node, npm and npx as links to the chosen directory, and the fragment says so exactly', () => {
+    const home = freshBox('ccrc-install-node-publish-');
+    const r = runInstall(home);
+    for (const b of ['node', 'npm', 'npx']) {
+      expect(lstatSync(join(nodeBin(home), b)).isSymbolicLink(), `${b} is not a link`).toBe(true);
+      expect(readlinkSync(join(nodeBin(home), b)), r.stderr).toBe(join(home, '.fixture-node', b));
+    }
+    expect(read(fragment(home))).toBe(FRAGMENT(home));
+    expect(statSync(fragment(home)).mode & 0o777).toBe(0o644);
+    expect(r.stdout).toMatch(new RegExp(`^install: node: v\\d+\\.\\d+\\.\\d+ at ${home.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}/\\.fixture-node \\(links in ${nodeBin(home).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}; manager PATH via ~/\\.config/environment\\.d/50-ccrc-node\\.conf\\)$`, 'm'));
+  });
+
+  it('reloads the manager AFTER the fragment is written and BEFORE the first restart', () => {
+    const home = freshBox('ccrc-install-node-reload-order-');
+    const r = runInstall(home);
+    const argv = systemctlCalls(home).map((c) => c.argv);
+    const reload = argv.indexOf('--user daemon-reload');
+    expect(reload, `no daemon-reload recorded; stderr: ${r.stderr}`).toBeGreaterThanOrEqual(0);
+    // the FIRST reload is `_inst_node`'s: it saw the fragment already on disk
+    expect(read(join(home, 'fixture-reload-saw-fragment')).split('\n')[0]).toBe('present');
+    // and it precedes every enable/restart; `_inst_units`' own reload comes after it
+    for (const verb of ['enable', 'restart']) {
+      const first = argv.findIndex((a) => a.startsWith(`--user ${verb} `));
+      if (first >= 0) expect(reload, `${verb} came before the node reload`).toBeLessThan(first);
+    }
+    expect(r.stdout.indexOf('install: node:')).toBeGreaterThanOrEqual(0);
+    expect(r.stdout.indexOf('install: node:')).toBeLessThan(r.stdout.indexOf('install: units:') === -1 ? Infinity : r.stdout.indexOf('install: units:'));
+  });
+
+  it('is idempotent: a second run leaves the same links and the same fragment, and no temp sibling', () => {
+    const home = freshBox('ccrc-install-node-idempotent-');
+    runInstall(home);
+    const before = ['node', 'npm', 'npx'].map((b) => readlinkSync(join(nodeBin(home), b)));
+    runInstall(home);
+    expect(['node', 'npm', 'npx'].map((b) => readlinkSync(join(nodeBin(home), b)))).toEqual(before);
+    expect(read(fragment(home))).toBe(FRAGMENT(home));
+    expect(readdirSync(nodeBin(home)).sort()).toEqual(['node', 'npm', 'npx']);
+    expect(readdirSync(join(home, '.config', 'environment.d'))).toEqual(['50-ccrc-node.conf']);
+  });
+
+  it('a box whose shell PATH has NO node but has an nvm tree installs, and runs gen-accounts on the chosen node', () => {
+    const home = freshBox('ccrc-install-node-nvm-');
+    const binOf = plantNvm(home, ['v22.99.0'], 'v22.99.0');
+    const r = runInstall(home, ['install'], { PATH: pathWithout(home, 'node') });
+    const dir = binOf('v22.99.0');
+    expect(r.stdout, r.stderr).toContain(`install: node: v22.99.0 at ${dir} (links in ${nodeBin(home)};`);
+    for (const b of ['node', 'npm', 'npx']) expect(readlinkSync(join(nodeBin(home), b))).toBe(join(dir, b));
+    // the roster generator ran (its output exists) — and it could only have run on the chosen node: there is no
+    // other on this PATH
+    expect(existsSync(join(home, '.ccrc', 'accounts.sh'))).toBe(true);
+    expect(existsSync(join(home, 'nvm-install-calls'))).toBe(false);
+  });
+
+  it('an nvm box whose only node is below the floor refuses BEFORE anything is written, and never runs `nvm install`', () => {
+    const home = freshBox('ccrc-install-node-below-floor-');
+    plantNvm(home, ['v18.0.0'], 'v18.0.0');
+    const r = runInstall(home, ['install'], { PATH: pathWithout(home, 'node') });
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/^ccrc: no usable node: no installed nvm node meets the floor \(>=\d+\.\d+\.\d+\); this run is not interactive.* Nothing on this box was written or changed\.$/m);
+    expect(existsSync(join(home, 'nvm-install-calls'))).toBe(false);
+    expect(existsSync(join(home, '.ccrc'))).toBe(false);
+    expect(existsSync(nodeBin(home))).toBe(false);
+    expect(existsSync(fragment(home))).toBe(false);
+  });
+
+  it('a box with no node and no nvm still gets the probe\'s own sentence', () => {
+    const home = freshBox('ccrc-install-node-none-');
+    const r = runInstall(home, ['install'], { PATH: pathWithout(home, 'node') });
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/^ccrc: node is required by 'ccrc install' — .* Nothing on this box was written or changed\.$/m);
+  });
+
+  it('ccrc-models.service puts the node links directory first on its PATH, in the shipped file and the placed one', () => {
+    const line = 'Environment=PATH=%h/.local/libexec/ccrc/node-bin:%h/.local/bin:/usr/local/bin:/usr/bin:/bin';
+    expect(read(join(REPO, 'deploy', 'systemd', 'ccrc-models.service'))).toContain(`\n${line}\n`);
+    const home = freshBox('ccrc-install-node-models-unit-');
+    runInstall(home);
+    expect(read(unitDir(home, 'ccrc-models.service'))).toContain(`\n${line}\n`);
+  });
 });
 
 // PLATFORM-NEUTRAL, so it lives outside the Linux-only describe above: the

@@ -1277,6 +1277,9 @@ describe('ccrc update: provenance (design §5; the verifier is the INSTALLED one
     mkdirSync(realBin, { recursive: true });
     writeFileSync(join(realBin, 'node'), `#!/bin/sh\nexec '${REAL_NODE}' "$@"\n`);
     chmodSync(join(realBin, 'node'), 0o755);
+    // The update chooses its node first and wants npm and npx beside it (`ccd/ccrc-node`): this directory is now the
+    // chosen one, so it carries the fixture's own two.
+    for (const n of ['npm', 'npx']) symlinkSync(join(home, '.local', 'bin', n), join(realBin, n));
     const r = runUpdate(home, [], { PATH: `${realBin}:${updateEnv(home)['PATH']}` });
     expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(1);
     expect(existsSync(join(home, 'verify-argv')), 'the shim answered, not the real verifier').toBe(false);
