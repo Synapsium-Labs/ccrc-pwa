@@ -1511,7 +1511,7 @@ describe('fleet store', () => {
       const store = createFleetStore({ makeSocket, fetchAccounts });
       await store.getState().refreshAccounts();
       const before = store.getState();
-      for (const f of ACCOUNT_FIELDS) expect(before[f], f).not.toBeNull();
+      for (const f of ACCOUNT_FIELDS) { expect(before[f], f).toBeDefined(); expect(before[f], f).not.toBeNull(); }
       let writes = 0;
       const unsubscribe = store.subscribe(() => { writes += 1; });
       await store.getState().refreshAccounts();
