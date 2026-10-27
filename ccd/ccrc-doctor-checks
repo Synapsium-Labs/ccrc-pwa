@@ -6300,8 +6300,12 @@ _check_models() {
     return 2
   fi
 
-  local -a ok=() warn=()
+  local -a ok=() warn=() unmeasured=()
   local lid status fa stale lastError age age_min
+  # The silent-timer bound, read from the shipped unit file the first time an
+  # OK catalogue needs it (D-7054); an rc other than 0 leaves that catalogue's
+  # staleness unmeasured, never compared against a literal (OA-C8c (a), D-7062).
+  local bound="" bound_rc=""
   while IFS="$US" read -r lid status fa stale lastError; do
     [ -n "$lid" ] || continue
     case "$status" in
@@ -6335,6 +6339,9 @@ _check_models() {
           continue
         fi
         age=$(( now_s - fa )); age_min=$(( age / 60 ))
+        if [ "$stale" != 1 ] && [ "$age" -ge 0 ] && [ -z "$bound_rc" ]; then
+          bound_rc=0; bound="$(_dr_cycles_s ccrc-models.timer 3)" || bound_rc=$?
+        fi
         if [ "$stale" = 1 ]; then
           # ARM 2 (C4): the timer ran, the provider refused it. Warned
           # REGARDLESS of age — quote lastError and the age.
@@ -6345,6 +6352,8 @@ _check_models() {
           # for the same reason the empty population gets its own SKIP rather
           # than a confident answer over nothing.
           warn+=("$lid's catalogue claims a fetchedAt $((-age)) s in the future — its age is unmeasurable, not fresh; run: ccrc models refresh $lid")
+        elif [ "$bound_rc" -ne 0 ]; then
+          unmeasured+=("$lid's catalogue ($age_min min old)")
         elif [ "$age" -gt 10800 ]; then
           # ARM 1 (C4): stale:false but old — the silent case `services`'
           # `known` unit list cannot see (see this function's header comment).
@@ -6369,10 +6378,18 @@ _check_models() {
     esac
   done <<<"$out"
 
-  if [ "${#warn[@]}" -gt 0 ]; then
-    _dr_warn models "$(_dr_join "${warn[@]}")" \
-      "systemctl --user status ccrc-models.timer ; ccrc models refresh <id> for one named lane"
-    return 2
+  if [ "${#warn[@]}" -gt 0 ] || [ "${#unmeasured[@]}" -gt 0 ]; then
+    local ret=2
+    if [ "${#warn[@]}" -gt 0 ]; then
+      _dr_warn models "$(_dr_join "${warn[@]}")" \
+        "systemctl --user status ccrc-models.timer ; ccrc models refresh <id> for one named lane"
+    fi
+    if [ "${#unmeasured[@]}" -gt 0 ] && [ "$bound_rc" -eq 3 ]; then
+      _dr_cadence_unloaded models ccrc-models.timer "the staleness of $(_dr_join "${unmeasured[@]}")"; ret=1
+    elif [ "${#unmeasured[@]}" -gt 0 ]; then
+      _dr_cadence_unread models ccrc-models.timer "the staleness of $(_dr_join "${unmeasured[@]}")"
+    fi
+    return "$ret"
   fi
   # THE PASS NAMES EVERY LANE AND ITS AGE (C5): the population is what this
   # PASS is really asserting, so a box that answers PASS here cannot be a box
