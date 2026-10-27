@@ -258,6 +258,10 @@ describe('the header names the session (desktop polish T3c, D-6333)', () => {
     const after = viewFor(row);
     expect(before.title).toBe(after.title);
     expect(before.crumb).toBe(after.crumb);
+    // Review 1078 F1: only a present workspace row's title is a rename's, so the swap from the fallback draws plainly.
+    expect(before.renames).toBe(false);
+    expect(after.renames).toBe(true);
+    expect(viewFor(fleetSession({ id: 'lane-a-project-a', project: 'project-a', workspace: null })).renames).toBe(false);
   });
 
   it("a deep link's fallback: a known project's workspace id reads ws/<slug> under its project", () => {

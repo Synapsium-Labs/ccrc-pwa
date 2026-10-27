@@ -982,6 +982,45 @@ describe('the header before the first fleet frame lands', () => {
     renderHeader({ session: null, fallback: undefined });
     expect(screen.getByText('…')).toBeInTheDocument();
   });
+
+  // Review 1078 F1 (desktop polish T3c, D-6333): the fallback exists so the title does not jump when the first frame
+  // lands. A fallback title that typed in as a rename when its row arrived, or when the row left, would be that jump:
+  // only a rename of a row that is present types in.
+  const wsRow = (over: Partial<FleetSession> = {}): FleetSession => fleetSession({
+    id: 'project-a-quiet-basin', project: 'project-a', workspace: 'quiet-basin', name: 'tidy-up', branch: 'ws/quiet-basin', ...over,
+  });
+  const wsFallback = { title: 'ws/quiet-basin', crumb: 'project-a', wrapper: 'claude' };
+  const caret = (c: HTMLElement): Element | null => c.querySelector('.chat-head .typed-caret');
+
+  it('the row landing over the fallback draws its title plainly, even where the words differ', () => {
+    vi.useFakeTimers();
+    try {
+      const { container, rerender } = render(<SessionHeaderHost {...props({ session: null, fallback: wsFallback })} />);
+      rerender(<SessionHeaderHost {...props({ session: wsRow(), fallback: wsFallback })} />);
+      expect(caret(container), 'no rename typed in').toBeNull();
+      expect(container.querySelector('.chat-title-text')).toHaveTextContent('tidy-up');
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('the row leaving draws the fallback plainly', () => {
+    vi.useFakeTimers();
+    try {
+      const { container, rerender } = render(<SessionHeaderHost {...props({ session: wsRow(), fallback: wsFallback })} />);
+      rerender(<SessionHeaderHost {...props({ session: null, fallback: wsFallback })} />);
+      expect(caret(container), 'no rename typed in').toBeNull();
+      expect(container.querySelector('.chat-title-text')).toHaveTextContent('ws/quiet-basin');
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('a present row renamed still types its new name in', () => {
+    vi.useFakeTimers();
+    try {
+      const { container, rerender } = render(<SessionHeaderHost {...props({ session: wsRow({ name: null }) })} />);
+      rerender(<SessionHeaderHost {...props({ session: wsRow() })} />);
+      expect(caret(container), 'the rename types in').not.toBeNull();
+      expect(container.querySelector('.chat-title-text')).toHaveAttribute('aria-label', 'tidy-up');
+    } finally { vi.useRealTimers(); }
+  });
 });
 
 describe('a turn that has been running for over an hour', () => {
