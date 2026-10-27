@@ -7,8 +7,9 @@
 // last line), an append that throws, a row write that throws after the append (the journal one ahead: skipped, never
 // reissued), a floor read that throws, and each method's own answer for each. `setCollectLane`'s rows (its refusals,
 // `unchanged`, each `failed` phase, the decide-phase rethrow and the post-commit re-reads) are
-// `collect-lane-store.test.ts`'s, run unchanged. Fixture HOMEs only (mkTmp); never a live coord.db.
-import { describe, it, expect, afterEach } from 'vitest';
+// `collect-lane-store.test.ts`'s, run unchanged; the one row added here (a stop whose COMMIT throws) is the second
+// review's. Fixture HOMEs only (mkTmp); never a live coord.db.
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import type { DatabaseSync, StatementSync } from 'node:sqlite';
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
@@ -18,6 +19,8 @@ import { CoordStore } from '../src/coord/store.js';
 import { LedgerLog, type LedgerLogEntry } from '../src/coord/ledgerlog.js';
 import { PoolEdgeLog, type PoolEdgeLogEntry } from '../src/coord/pooledgelog.js';
 import { UpdateIntentLog, type UpdateIntentLogEntry } from '../src/coord/updateintentlog.js';
+import { collectLaneJournalAt, defaultCollectLaneJournalPath } from '../src/coord/collectLaneJournal.js';
+import type { CollectLaneWriteRequest } from '../src/collectLane.js';
 import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
 
 afterEach(removeTmpFixtures);
@@ -394,5 +397,38 @@ describe('the readers, byte for byte', () => {
     const h = home();
     writeFileSync(h.ledger, '');
     expect(new LedgerLog(h.ledger).maxAllocated('project-a')).toBeNull();
+  });
+});
+
+describe('setCollectLane: a stop whose COMMIT throws is the defect it is, never a failed write', () => {
+  // The kernel leaves `phase.at` at 'decide' on a stop, so a COMMIT that throws after a refusal or a no-op propagates
+  // as itself (the decide-phase rule), never `{ kind: 'failed', phase: 'commit' }`: no append was made to fail after.
+  const NODE_A = '0f1e2d3c-4b5a-4968-8778-695a4b3c2d1e';
+  const commitThrows = (h: ReturnType<typeof home>, req: (j: ReturnType<typeof collectLaneJournalAt>) => CollectLaneWriteRequest) => {
+    const j = collectLaneJournalAt(defaultCollectLaneJournalPath(path.dirname(h.pool)));
+    const err = Object.assign(new Error('fixture: disk I/O error'), { code: 'ERR_SQLITE_ERROR' });
+    const realExec = h.db.exec.bind(h.db);
+    const spy = vi.spyOn(h.db, 'exec').mockImplementation((sql: string) => {
+      if (sql === 'COMMIT') throw err;
+      realExec(sql);
+    });
+    let thrown: unknown = null;
+    try { h.plain.setCollectLane(req(j), NOW, j); } catch (e) { thrown = e; } finally { spy.mockRestore(); }
+    return { thrown, err, j };
+  };
+
+  it('a refusal (conflict)', () => {
+    const h = home();
+    const { thrown, err, j } = commitThrows(h, (jj) =>
+      ({ kind: 'live', fleetNodeId: NODE_A, expected: { kind: 'absent' }, expectedJournal: jj.read() }));
+    expect(thrown).toBe(err);
+    expect(j.read()).toEqual({ kind: 'missing' });
+  });
+
+  it('a true no-op (Off over the seed)', () => {
+    const h = home();
+    const { thrown, err, j } = commitThrows(h, () => ({ kind: 'off' }));
+    expect(thrown).toBe(err);
+    expect(j.read()).toEqual({ kind: 'missing' });
   });
 });
