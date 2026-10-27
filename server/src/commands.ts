@@ -108,8 +108,10 @@ async function transcriptSkills(io: FleetIO, file: string): Promise<SlashCommand
   // partial JSON line never parses, so listingsIn would skip it anyway.
   const end = head.bytes.length < READ_FROM_MAX_BYTES ? head.bytes.length : head.bytes.lastIndexOf(10) + 1;
   const lines = wholeLines({ bytes: head.bytes.subarray(0, end), cut: 0, start: 0 });
-  // The window holds no full listing, only deltas, and all of them are newer than the head (the head is the first
-  // chunk, wholly before the window): they follow the head's answer. Window deltas alone never answer.
+  // The window holds no full listing, only deltas, none older than the head's listings, so they follow the head's
+  // answer. In a file of four to five chunks the head can overlap the window's oldest chunk, so a delta there is
+  // replayed twice, which is idempotent (answerOf: a repeated name keeps its place and takes the same description).
+  // Window deltas alone never answer.
   return answerOf([...listingsIn(lines), ...seen]) ?? [];
 }
 
