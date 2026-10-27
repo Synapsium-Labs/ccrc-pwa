@@ -71,9 +71,8 @@ beforeAll(async () => {
   const executablePath = resolveChrome(); // throws on a box with no Chrome: red, never skipped
   dist = buildDist();
   server = await serveDist(dist);
-  // A loaded box can take minutes to start Chrome (playwright's own launch bound is 180 s): bound the hook, not the box.
-  browser = await chromium.launch({ executablePath, headless: true, timeout: 540_000 });
-}, 600_000);
+  browser = await chromium.launch({ executablePath, headless: true });
+}, 180_000);
 
 afterAll(async () => {
   await browser?.close();
