@@ -1344,6 +1344,58 @@ _launchd_class() {
 # sits inside the sentinels, so an appended-below helper is a red suite, not
 # a quiet gap.
 
+# ── _timer_period_s — a shipped .timer's period, in whole seconds (D-7053) ─
+# ARCH-69's one reader: a launchd job, or a doctor bound, that runs "as often
+# as the timer" takes the number from the shipped `deploy/systemd/<x>.timer`,
+# never from a second spelling of it. Outside the platform layer, and not named
+# `_svc_*`/`_plat_*`, because it is no platform verb: both userlands read the
+# same file the same way (`macos-platform.test.ts` refuses such a name here).
+#
+# A CADENCE LINE is exactly `OnUnitActiveSec=<n>s|min|h` or `OnCalendar=*:0/<n>`
+# (every <n> minutes, <n> dividing the hour, so the gap between firings is one
+# number). Every other key (`OnBootSec=`, `OnActiveSec=`, `AccuracySec=`,
+# `Persistent=`, `RandomizedDelaySec=`, `Unit=` and the `[Unit]`/`[Install]`
+# keys), each comment and each blank is IGNORED, never refused: they sit beside
+# the period in 13 of the 14 shipped files. Anything else is refused, rc 1 with
+# one line on stderr and nothing on stdout: no readable file, no cadence line,
+# two, or a spelling the shipped files do not use. It never guesses a unit and
+# never prints the file's contents (`timer-period.test.ts`).
+_timer_period_s() {   # <timer-file>
+  local f="$1" line hit="" n=0
+  if [ -d "$f" ] || [ ! -r "$f" ]; then
+    printf '%s\n' "$PROG: cannot read a timer period from $f: not a readable file" >&2; return 1
+  fi
+  while IFS= read -r line || [ -n "$line" ]; do
+    line="${line#"${line%%[![:space:]]*}"}"
+    case "$line" in OnUnitActiveSec=*|OnCalendar=*) hit="$line"; n=$((n + 1)) ;; esac
+  done < "$f"
+  if [ "$n" -ne 1 ]; then
+    printf '%s\n' "$PROG: cannot read a timer period from $f: $n cadence lines (OnUnitActiveSec= or OnCalendar=), not one" >&2; return 1
+  fi
+  if [[ "$hit" =~ ^OnUnitActiveSec=([1-9][0-9]{0,5})(s|min|h)$ ]]; then
+    case "${BASH_REMATCH[2]}" in
+      s) echo "${BASH_REMATCH[1]}" ;; min) echo $((BASH_REMATCH[1] * 60)) ;; h) echo $((BASH_REMATCH[1] * 3600)) ;;
+    esac
+  elif [[ "$hit" =~ ^OnCalendar=\*:0/([1-9][0-9]?)$ ]] && [ $((60 % BASH_REMATCH[1])) -eq 0 ]; then
+    echo $((BASH_REMATCH[1] * 60))
+  else
+    printf '%s\n' "$PROG: cannot read a timer period from $f: its cadence line is not OnUnitActiveSec=<n>s|min|h or OnCalendar=*:0/<n>" >&2; return 1
+  fi
+}
+
+# `_timer_period_words <seconds> noun|adj` — that period in a transcript's
+# words: whole minutes as `<m> minutes` / `<m>-minute` (`1 minute` for 60),
+# anything else as `<s> seconds` / `<s>-second`.
+_timer_period_words() {   # <seconds> noun|adj
+  local n="$1" u=second
+  if [ $((n % 60)) -eq 0 ]; then n=$((n / 60)); u=minute; fi
+  case "$2" in
+    adj) printf '%s-%s' "$n" "$u" ;;
+    noun) if [ "$n" -eq 1 ]; then printf '1 %s' "$u"; else printf '%s %ss' "$n" "$u"; fi ;;
+    *) return 1 ;;
+  esac
+}
+
 # `deploy/models-op.mjs` is this design's node half — a NEW file, because
 # `main` has no node helper for account state to add ops to (`deploy/
 # account-op.mjs` is the account-connections branch's and is not here).
@@ -6140,7 +6192,8 @@ _exp_ddns_units() {
   # ── THE DARWIN ARM: one plist where systemd has a unit and a timer ───────
   # systemd splits "what to run" (.service) from "when" (.timer). launchd has
   # one job with a `StartInterval`, so the pair collapses into a single plist
-  # — and `OnCalendar=*:0/5` becomes 300 seconds, the same five minutes.
+  # — and its value is the period `_timer_period_s` reads from the shipped
+  # timer (D-7053), the same five minutes.
   #
   # `Persistent=true` HAS NO COUNTERPART, and this is the one place the two
   # differ in kind: systemd runs a missed timer as soon as the box is back,
@@ -6154,7 +6207,11 @@ _exp_ddns_units() {
   # a shell that sources it, exactly as the server's plist does, and the
   # secret still never lands in this 0644 file.
   if [ "$CCD_OS" = darwin ]; then
-    local dir="$BOX_UNIT_DIR" lbl="app.ccrc.$CCRC_DDNS_UNIT" gen
+    local tree="$CCRC_HERE/.." dir="$BOX_UNIT_DIR" lbl="app.ccrc.$CCRC_DDNS_UNIT" gen period
+    # THE PERIOD BEFORE ANY WRITE (OA-C8c (a), D-7062): a tree whose timer
+    # cannot be read places no job, with no literal to fall back on.
+    period="$(_timer_period_s "$tree/deploy/systemd/$CCRC_DDNS_UNIT.timer")" \
+      || _ccrc_die "cannot place the $lbl job: the period of $CCRC_DDNS_UNIT.timer cannot be read from the shipped tree. Nothing was placed."
     mkdir -p "$dir" || _ccrc_die "cannot create $dir"
     gen="$dir/$lbl.plist.tmp.$$.new"
     cat > "$gen" <<PL || { rm -f -- "$gen"; _ccrc_die "could not generate the $lbl job"; }
@@ -6170,7 +6227,7 @@ _exp_ddns_units() {
     <string>set -a; . '$CCRC_EXPOSURE_FILE'; set +a; exec /usr/bin/curl -fsS --max-time 30 "https://www.duckdns.org/update?domains=\${CCRC_DDNS_DOMAIN}&amp;token=\${CCRC_DDNS_TOKEN}&amp;ip="</string>
   </array>
   <key>RunAtLoad</key><true/>
-  <key>StartInterval</key><integer>300</integer>
+  <key>StartInterval</key><integer>$period</integer>
   <key>ProcessType</key><string>Background</string>
 </dict>
 </plist>
@@ -6181,7 +6238,7 @@ PL
     fi
     _inst_atomic "$gen" "$dir/$lbl.plist" 644
     rm -f -- "$gen"
-    echo "expose: installed $lbl in \$HOME/Library/LaunchAgents (the token stays in $CCRC_EXPOSURE_FILE — the job reads it, never carries it; a missed refresh waits for the next 5-minute tick, where systemd's Persistent=true would catch up immediately)"
+    echo "expose: installed $lbl in \$HOME/Library/LaunchAgents (the token stays in $CCRC_EXPOSURE_FILE — the job reads it, never carries it; a missed refresh waits for the next $(_timer_period_words "$period" adj) tick, where systemd's Persistent=true would catch up immediately)"
     # ── ARMED HERE, IN THE SAME ARM THAT INSTALLED IT ────────────────────
     # The first cut of this function wrote the plist and returned; a second
     # Darwin block forty lines down held the bootstrap — BELOW this arm's
@@ -6195,7 +6252,7 @@ PL
     _svc_launchctl bootout "$(_svc_domain)/$lbl" 2>/dev/null
     if _svc_launchctl enable "$(_svc_domain)/$lbl" 2>/dev/null \
        && _svc_launchctl bootstrap "$(_svc_domain)" "$dir/$lbl.plist" 2>/dev/null; then
-      echo "expose: $lbl enabled — the DuckDNS record refreshes every 5 minutes"
+      echo "expose: $lbl enabled — the DuckDNS record refreshes every $(_timer_period_words "$period" noun)"
     else
       echo "expose: DEGRADED — could not bootstrap $lbl. The job file is installed; when you can, run: launchctl bootstrap $(_svc_domain) $dir/$lbl.plist"
     fi
