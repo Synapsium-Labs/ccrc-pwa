@@ -6,7 +6,7 @@
 import { describe, it, expect } from 'vitest';
 import path from 'node:path';
 import { REPO } from '../consolidationCensus.js';
-import { appendBeforeApplySites, epochFloorReaders, journalFloorSites } from '../census-w8/journal.js';
+import { appendBeforeApplySites, appendThenApplyBreaks, epochFloorReaders, journalFloorSites } from '../census-w8/journal.js';
 import { parsedFile } from '../scan/symbols.js';
 
 describe('the journal kernel: one epoch reader, one floor, one append-then-apply (D-7058)', () => {
@@ -20,6 +20,16 @@ describe('the journal kernel: one epoch reader, one floor, one append-then-apply
 
   it('no hand-written journal-then-row ordering in store.ts outside appendThenApply (4 -> 0, setCollectLane moved)', () => {
     expect(appendBeforeApplySites(), 'a tx() appends a journal and then writes a row by hand: use appendThenApply').toEqual([]);
+  });
+
+  it('every appendThenApply call in store.ts is inside a tx() and appends before it writes', () => {
+    expect(appendThenApplyBreaks(), 'a kernel call outside tx(), or one whose write precedes its journal append').toEqual([]);
+  });
+
+  it('the two store queries are not over nothing: store.ts parses, opens transactions and calls the kernel four times', () => {
+    const calls = parsedFile(path.join(REPO, 'server/src/coord/store.ts')).calls;
+    expect(calls.filter((c) => c.callee === 'tx').length).toBeGreaterThan(4);
+    expect(calls.filter((c) => c.name === 'appendThenApply').map((c) => c.line)).toHaveLength(4);
   });
 
   it('the kernel imports nothing (ring L1, no I/O)', () => {

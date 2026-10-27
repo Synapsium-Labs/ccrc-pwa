@@ -8,7 +8,7 @@ import path from 'node:path';
 import { REPO } from '../consolidationCensus.js';
 import { mkTmp, removeTmpFixtures } from '../tmpHelpers.js';
 import { parsedFile } from '../scan/symbols.js';
-import { appendBeforeApplySites, epochFloorReaders, journalFloorSites } from './journal.js';
+import { appendBeforeApplySites, appendThenApplyBreaks, epochFloorReaders, journalFloorSites } from './journal.js';
 
 afterEach(removeTmpFixtures);
 
@@ -78,16 +78,22 @@ describe('appendBeforeApplySites', () => {
       '      ).run(2);',
       '    });',
       '  }',
-      '  intent(ledger: LedgerLog): void {',
+      '  intent(input: { project: string }, ledger: LedgerLog): void {',
       '    tx(this.db, () => {',
       '      ledger.append([]);',
       "      this.db.prepare('INSERT INTO ledger_alloc (n) VALUES (?)').run(3);",
       '    });',
       '  }',
+      '  dollar($log: PoolEdgeLog): void {',
+      '    tx(this.db, () => {',
+      '      $log.append([]);',
+      "      this.db.prepare('DELETE FROM pool_edges').run();",
+      '    });',
+      '  }',
       '}',
     ].join('\n'));
     expect(appendBeforeApplySites(t).map((s) => [s.line, s.method])).toEqual([
-      [4, 'CoordStore.pools'], [11, 'CoordStore.lane'], [20, 'CoordStore.intent'],
+      [4, 'CoordStore.pools'], [11, 'CoordStore.lane'], [20, 'CoordStore.intent'], [26, 'CoordStore.dollar'],
     ]);
   });
 
@@ -133,6 +139,67 @@ describe('appendBeforeApplySites', () => {
   });
 });
 
+describe('appendThenApplyBreaks', () => {
+  const store = (body: string): string => tree({ 'server/src/coord/store.ts': body });
+
+  it('names a kernel call outside tx(), a write before the append, an append after a write, and no append', () => {
+    const t = store([
+      'export class CoordStore {',
+      '  bare(log: PoolEdgeLog): number {',
+      '    return appendThenApply({',
+      '      decide: () => ({ go: 1 }),',
+      '      append: (e) => log.append([{ epoch: e }]),',
+      "      apply: (e) => { this.db.prepare('UPDATE pool_epoch SET epoch = ?').run(e); return e; },",
+      '    });',
+      '  }',
+      '  rowInDecide(log: PoolEdgeLog): number {',
+      '    return tx(this.db, () => appendThenApply({',
+      "      decide: () => { this.db.prepare('INSERT INTO pool_edges (pool) VALUES (?)').run('p'); return { go: 1 }; },",
+      '      append: (e) => log.append([{ epoch: e }]),',
+      '      apply: (e) => e,',
+      '    }));',
+      '  }',
+      '  appendLate(log: PoolEdgeLog): number {',
+      '    return tx(this.db, () => appendThenApply({',
+      '      decide: () => ({ go: 1 }),',
+      '      append: () => undefined,',
+      "      apply: (e) => { this.db.prepare('UPDATE pool_epoch SET epoch = ?').run(e); log.append([{ epoch: e }]); return e; },",
+      '    }));',
+      '  }',
+      '  unseen(sink: Writer): number {',
+      '    return tx(this.db, () => appendThenApply({',
+      '      decide: () => ({ go: 1 }),',
+      '      append: (e) => sink.append(e),',
+      '      apply: (e) => e,',
+      '    }));',
+      '  }',
+      '}',
+    ].join('\n'));
+    expect(appendThenApplyBreaks(t).map((s) => [s.line, s.method, s.why])).toEqual([
+      [3, 'CoordStore.bare', 'outside-tx'],
+      [10, 'CoordStore.rowInDecide', 'write-before-append'],
+      [17, 'CoordStore.appendLate', 'write-before-append'],
+      [24, 'CoordStore.unseen', 'no-append'],
+    ]);
+  });
+
+  it('passes a kernel call inside tx() whose append precedes every write, and a tree with no store', () => {
+    const t = store([
+      'export class CoordStore {',
+      '  good(input: { a: string }, journal: CollectLaneJournal): number {',
+      '    return tx(this.db, () => appendThenApply({',
+      "      decide: () => ({ go: (this.db.prepare('SELECT generation FROM collect_lane_settings').get() as { g: number }).g + 1 }),",
+      '      append: (g) => journal.appendGeneration(g),',
+      "      apply: (g) => { this.db.prepare('UPDATE collect_lane_settings SET generation = ?').run(g); return g; },",
+      '    }));',
+      '  }',
+      '}',
+    ].join('\n'));
+    expect(appendThenApplyBreaks(t)).toEqual([]);
+    expect(appendThenApplyBreaks(tree({ 'server/src/a.ts': 'export {};\n' }))).toEqual([]);
+  });
+});
+
 describe('the real tree (C8f\'s tip)', () => {
   it('every byte-twin epoch reader hands its text to the kernel: none left (2 at the base)', () => {
     expect(epochFloorReaders()).toEqual([]);
@@ -144,6 +211,10 @@ describe('the real tree (C8f\'s tip)', () => {
 
   it('every journal-then-row ordering in store.ts is appendThenApply: none hand-written (4 at the base, setCollectLane moved)', () => {
     expect(appendBeforeApplySites()).toEqual([]);
+  });
+
+  it('every appendThenApply call in store.ts sits inside a tx() and appends before it writes', () => {
+    expect(appendThenApplyBreaks()).toEqual([]);
   });
 
   it('the queries are not over nothing: the kernel defines the pieces, and the four writers call appendThenApply', () => {

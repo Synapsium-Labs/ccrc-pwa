@@ -9531,8 +9531,8 @@ export class CoordStore {
    *    decision, or `BEGIN` itself) is a defect or a busy database, and propagates as itself.
    *  - Synchronous, and never called from inside another `tx()`: `BEGIN IMMEDIATE` is not re-entrant. */
   setCollectLane(req: CollectLaneWriteRequest, at: number, journal: CollectLaneJournal): CollectLaneWrite {
-    // D-7058: the journal-first order is `appendThenApply`, and `phase` is the kernel's: `apply` is this answer's
-    // `update` and `done` (the callback returned, `COMMIT` not yet run) its `commit`.
+    // D-7058: the journal-first order is `appendThenApply`, and `phase` is the kernel's, named in this answer's words by
+    // `COLLECT_LANE_FAILED_PHASE`.
     const phase: { at: JournalPhase } = { at: 'decide' };
     let done: CollectLaneTxOutcome;
     try {
@@ -9556,8 +9556,7 @@ export class CoordStore {
       }, phase));
     } catch (err) {
       if (phase.at === 'decide') throw err;
-      return { kind: 'failed', phase: phase.at === 'append' ? 'append' : phase.at === 'apply' ? 'update' : 'commit',
-        code: collectLaneFailCode(err) };
+      return { kind: 'failed', phase: COLLECT_LANE_FAILED_PHASE[phase.at], code: collectLaneFailCode(err) };
     }
     if (done.kind !== 'appended') return done;
     return { kind: 'written', generation: done.generation, before: done.before, journalBefore: done.journalBefore,
@@ -9644,6 +9643,12 @@ interface CollectLaneWriteGo {
   readonly before: CollectLaneRowRead;
   readonly journalBefore: CollectLaneJournalRead;
 }
+
+/** `failed.phase` for each position `appendThenApply` can stop at past `decide` (D-7058): its `append` is `append`, its
+ *  `apply` (the `UPDATE`) is `update`, and its `done` (the callback returned, `COMMIT` not yet run) is `commit`. A
+ *  position the kernel gains is a compile error here, never a silent `commit`. */
+const COLLECT_LANE_FAILED_PHASE = { append: 'append', apply: 'update', done: 'commit' } as const satisfies
+  Record<Exclude<JournalPhase, 'decide'>, Extract<CollectLaneWrite, { kind: 'failed' }>['phase']>;
 
 /** `failed.code`: the thrown error's code word as Node or `node:sqlite` set it (`ENOSPC`, `EACCES`, `ERR_SQLITE_ERROR`),
  *  never its message, which for a filesystem error names the journal's path (spec §5.6). An error with no such word
