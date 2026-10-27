@@ -218,13 +218,12 @@ import { CHILD_RECLAIM_SWEEP_MS, COLLECT_OBSERVE_INTERVAL_MS, DIVERGENCE_SWEEP_M
 import type { ChildReclaimCollectInput } from './childReclaimSweep.js';
 import { NO_FLEET_IDENTITY } from './fleetidentity.js';
 import { stopDonePass, type StopDoneMemory } from './stopDoneSweep.js';
-import { STOP_DONE_SWEEP_MS } from './stopDone.js';
 import { hibernatePass, type HibernateSweepMemory } from './hibernateSweep.js';
 import { SLEEP_LANES } from './sleepLane.js';
 import type { SleepPolicyName } from './sleep.js';
 import { StaleArchiveBeat } from './staleArchiveBeat.js';
 import { wakeAdmit, type WakeKind } from './coord/wakeBudget.js';
-import { HIBERNATE_AFTER_HOURS_FILE, HIBERNATE_SWEEP_MS } from './coord/hibernate.js';
+import { HIBERNATE_AFTER_HOURS_FILE } from './coord/hibernate.js';
 import { liveRowFor, liveWordFor, turnMarkFor, turnReadDeps, turnVerdictFor } from './turnverdict.js';
 import {
   COLLECT_AUDITS_PER_PASS, COLLECT_FEED_TITLE, collectAfterAct, collectFeedTitle, collectAfterAudit, collectAfterFoldFailed, collectAfterHold,
@@ -1315,20 +1314,16 @@ export class FleetWatcher {
    *  (normally asked every four hours) and a row backing off on the ladder are asked again within a few passes,
    *  SOONER; and it restarts the twice-observed sighting and the hour's runs, which DELAY an expiry. */
   private archivedExpiryState = new Map<string, ArchivedExpiryEntry>();
-  /** The stop-done lane (D-5370, `stopDoneSweep.ts`): its last pass, whether one runs, its one memory (a refused
-   *  stop's retry instant) and the coordination serialiser `buildServer` hands it. */
-  private lastStopDoneSweep = 0;
-  private stopDoneSweeping = false;
+  /** The stop-done lane (D-5370, `stopDoneSweep.ts`): its one memory (a refused stop's retry instant) and the
+   *  coordination serialiser `buildServer` hands it. Its clock and single flight are the `sleepRunDone` row (D-7045). */
   private readonly stopDoneMemory: StopDoneMemory = { retryAt: new Map() };
   private stopDoneSerial: (<T>(fn: () => Promise<T>) => Promise<T>) | null = null;
   /** The process start both sleep lanes hold `viewer` against (presence is never persisted; D-7045: one field, set at
    *  construction, where each lane had its own holding the same instant). */
   private readonly sleepStartedAt = Date.now();
-  /** Hibernation's sweep (D-5242, `hibernateSweep.ts`): its last pass, whether one runs, and its memory (the last
-   *  shadow line, and the last skip or failure line, per id); it holds `viewer` against `sleepStartedAt`. Its act uses
-   *  the stop-done lane's serialiser above, the one `CoordMutex`. */
-  private lastHibernateSweep = 0;
-  private hibernateSweeping = false;
+  /** Hibernation's sweep (D-5242, `hibernateSweep.ts`): its memory (the last shadow line, and the last skip or failure
+   *  line, per id); it holds `viewer` against `sleepStartedAt`. Its act uses the stop-done lane's serialiser above, the
+   *  one `CoordMutex`. Its clock and single flight are the `sleepIdleHours` row (D-7045). */
   private readonly hibernateMemory: HibernateSweepMemory = { lastLine: new Map(), lastActLine: new Map() };
   private readonly staleArchive = new StaleArchiveBeat(() => this.deps, this, (a) => this.transcripts.resolve(a));
   /** `flock-unavailable`, once a box has answered it: the lane composes nothing more there (this process). */
@@ -2102,16 +2097,12 @@ export class FleetWatcher {
   /**
    * THE STOP-DONE LANE (D-5370): a finished run's dispatched worker is stopped once idle, and restarts on re-dispatch.
    * A sibling on the tick, at its own cadence, on THIS tick's assembled rows and registry listing (the listing carries
-   * the kill switch). Never awaited by the tick; one pass at a time. The rule is `stopDoneVerdict` (L1), the pass
-   * `stopDonePass` (L4). Started by `sweepSleep`.
+   * the kill switch). Never awaited by the tick; one pass at a time (the `sleepRunDone` row). The rule is
+   * `stopDoneVerdict` (L1), the pass `stopDonePass` (L4). Started by `sweepSleep`, which skips it with no store.
    */
   private async sleepRunDone(sessions: readonly FleetSession[], records: readonly SessionRecord[], names: readonly string[]): Promise<void> {
     const coord = this.deps.coord;
-    if (!coord || this.stopDoneSweeping) return;
-    const now = Date.now();
-    if (this.lastStopDoneSweep !== 0 && now - this.lastStopDoneSweep < STOP_DONE_SWEEP_MS) return;
-    this.lastStopDoneSweep = now;
-    this.stopDoneSweeping = true;
+    if (!coord) return;
     try {
       const reads = turnReadDeps(this.deps, this);
       await stopDonePass({
@@ -2125,8 +2116,6 @@ export class FleetWatcher {
       }, this.stopDoneMemory, sessions, records, names);
     } catch (err) {
       console.warn(`ccrc-server: sweepStopDone failed (${err instanceof Error ? err.message : String(err)}) — no stops this pass`);
-    } finally {
-      this.stopDoneSweeping = false;
     }
   }
 
@@ -2135,15 +2124,10 @@ export class FleetWatcher {
    * registry listing (the listing carries the switches), `hibernatePass` asks `hibernateVerdict` about every row. Shadow
    * (a `hibernate-shadow` line) unless the operator armed it with `$REG/hibernate-live`; armed, it composes
    * `ccd hibernate` on the coordination serialiser (the stop-done lane's, handed over by `useStopDoneSerialiser`) and
-   * the session's queue, after re-reading everything there. Never awaited by the tick; one pass at a time. Started by
-   * `sweepSleep`.
+   * the session's queue, after re-reading everything there. Never awaited by the tick; one pass at a time (the
+   * `sleepIdleHours` row). Started by `sweepSleep`.
    */
   private async sleepIdleHours(sessions: readonly FleetSession[], records: readonly SessionRecord[], names: readonly string[]): Promise<void> {
-    if (this.hibernateSweeping) return;
-    const now = Date.now();
-    if (this.lastHibernateSweep !== 0 && now - this.lastHibernateSweep < HIBERNATE_SWEEP_MS) return;
-    this.lastHibernateSweep = now;
-    this.hibernateSweeping = true;
     try {
       const reads = turnReadDeps(this.deps, this);
       await hibernatePass({
@@ -2159,8 +2143,6 @@ export class FleetWatcher {
       }, this.hibernateMemory, sessions, records, names);
     } catch (err) {
       console.warn(`ccrc-server: sweepHibernate failed (${err instanceof Error ? err.message : String(err)}) — no verdicts this pass`);
-    } finally {
-      this.hibernateSweeping = false;
     }
   }
 
@@ -2175,14 +2157,18 @@ export class FleetWatcher {
    * THE SLEEP LANES (D-5370, D-5242; ARCH-43, D-7045): walks `SLEEP_LANES` in today's order (`run-done`, then
    * `idle-hours`) and STARTS each lane's pass without awaiting the other, so a pass waiting on the coordination
    * serialiser or a session's queue never delays, stops or re-times the other lane's (Review focus 9). The order is
-   * only the order the passes start in. The promise settles once every pass it started has settled; the tick never
-   * awaits it. `lane` names one lane (the suites' door).
+   * only the order the passes start in. Each lane's cadence and single flight are its own `LANE_SCHEDULE` row
+   * (`sleepRunDone`, `sleepIdleHours`; on the monotonic clock, OA-C4 (a), D-7052), run by `runLane`; a lane whose row
+   * needs the store is skipped, with no store, BEFORE its row, so its clock is not stamped. The promise settles once
+   * every pass it started has settled; the tick never awaits it. `lane` names one lane (the suites' door).
    */
   sweepSleep(sessions: readonly FleetSession[], records: readonly SessionRecord[], names: readonly string[], lane?: SleepPolicyName): Promise<void> {
-    const started: Promise<void>[] = [];
+    const started: Promise<unknown>[] = [];
     for (const row of SLEEP_LANES) {
       if (lane !== undefined && row.policy.name !== lane) continue;
-      started.push(this.sleepRunners[row.policy.name](sessions, records, names));
+      if (row.store === 'needed' && !this.deps.coord) continue;
+      const run = this.runLane(row.cadence, () => this.sleepRunners[row.policy.name](sessions, records, names));
+      if (run !== null) started.push(run);
     }
     return Promise.allSettled(started).then(() => undefined);
   }

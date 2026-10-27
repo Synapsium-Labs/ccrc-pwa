@@ -154,7 +154,8 @@ export type LaneName =
   | 'caps' | 'catalogue' | 'inventory' | 'landingChecks' | 'serverCaps'
   | 'tasks' | 'usage' | 'pr' | 'names' | 'divergences' | 'lifecycle' | 'readiness' | 'ledgerReconcile' | 'ledgerFloor' | 'drift'
   | 'claimRenew' | 'claimLapse' | 'stalls' | 'idleNudge' | 'mail' | 'asks' | 'approvalPrune' | 'digestBeat'
-  | 'childReclaim' | 'collect' | 'archivedExpiry' | 'deadCoordinator' | 'orphanTrees' | 'delegation';
+  | 'childReclaim' | 'collect' | 'archivedExpiry' | 'deadCoordinator' | 'orphanTrees' | 'delegation'
+  | 'sleepRunDone' | 'sleepIdleHours';
 
 export interface LaneRow {
   readonly name: LaneName | (string & {});
@@ -255,6 +256,13 @@ export const LANE_SCHEDULE: readonly LaneRow[] = [
     name: 'delegation', cadenceMs: DIVERGENCE_SWEEP_MS, clock: 'mono', flight: 'skip', warnKey: null,
     derivedFrom: { name: 'DIVERGENCE_SWEEP_MS', reason: 'the lane reads each census pass once, so it follows the census\'s own beat' },
   },
+  // The two sleep lanes (ARCH-43, D-7045): `SLEEP_LANES`' rows name them (`run-done`, the stop-done lane, D-5370;
+  // `idle-hours`, hibernation, D-5242), and `FleetWatcher.sweepSleep` starts each through its own row, never awaiting
+  // the other. Each starts due, keeps one pass at a time (its own flight, never one shared by both) and catches its own
+  // failure with its own sentence, so no row warns. They moved here from `Date.now()` under OA-C4 (a) (#803), whose
+  // cover of these two lanes the operator ruled on 2026-10-26 (D-7052).
+  { name: 'sleepRunDone', cadenceMs: STOP_DONE_SWEEP_MS, derivedFrom: null, clock: 'mono', flight: 'skip', warnKey: null },
+  { name: 'sleepIdleHours', cadenceMs: HIBERNATE_SWEEP_MS, derivedFrom: null, clock: 'mono', flight: 'skip', warnKey: null },
 ];
 
 export function laneRow(name: string): LaneRow {

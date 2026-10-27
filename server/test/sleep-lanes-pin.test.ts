@@ -832,7 +832,7 @@ describe('the difference table (run-done | idle-hours), one row each', () => {
     ]);
   });
 
-  it('differs: the cadence — 60 s | 5 min, both on the wall clock, both due at start (the watcher rows below)', () => {
+  it('differs: the cadence — 60 s | 5 min, both on the monotonic clock, both due at start (the watcher rows below)', () => {
     expect([STOP_DONE_SWEEP_MS, HIBERNATE_SWEEP_MS]).toEqual([60_000, 5 * 60_000]);
   });
 });
@@ -928,7 +928,7 @@ describe('two policies, one session, one tick', () => {
   });
 });
 
-// ── The cadence rows, through the watcher's real sweeps (the wall clock today; C4e's behaviour commit changes them) ──
+// ── The cadence rows, through the watcher's real sweeps (the monotonic clock since C4e's behaviour commit, OA-C4 (a)) ──
 
 describe('the cadence rows (FleetWatcher.sweepStopDone / sweepHibernate)', () => {
   const lanes = [
@@ -936,40 +936,48 @@ describe('the cadence rows (FleetWatcher.sweepStopDone / sweepHibernate)', () =>
     ['sweepHibernate', HIBERNATE_SWEEP_MS],
   ] as const;
 
+  // The lanes' throttle reads `Deps.monotonicMs` (OA-C4 (a), D-7052), so these rows drive it where they drove the wall clock.
+  const mono = { t: 0 };
+  const atMono = (t: number): void => { mono.t = t; };
+
   it.each(lanes)('%s: due at start, then a second call inside its cadence reads nothing, and at the cadence it runs again', async (lane, ms) => {
-    const { w } = watcherWith({ coord: {} });
+    const { w } = watcherWith({ coord: {}, monotonicMs: () => mono.t });
     const sweep = (names: string[]) => w[lane]([], [], names);
-    atClock(NOW);
+    atMono(NOW);
     const first = probe();
     await sweep(first);
     expect(first.includes, 'due at start').toHaveBeenCalled();
-    atClock(NOW + ms - 1);
+    atMono(NOW + ms - 1);
     const inside = probe();
     await sweep(inside);
     expect(inside.includes).not.toHaveBeenCalled();
-    atClock(NOW + ms);
+    atMono(NOW + ms);
     const due = probe();
     await sweep(due);
     expect(due.includes).toHaveBeenCalled();
   });
 
-  it.each(lanes)('%s reads the wall clock: stepped back, the lane waits a whole cadence from the stamp', async (lane, ms) => {
-    const { w } = watcherWith({ coord: {} });
+  it.each(lanes)('%s reads the monotonic clock: a wall clock stepped back an hour runs it at its cadence, one stepped forward never early', async (lane, ms) => {
+    const { w } = watcherWith({ coord: {}, monotonicMs: () => mono.t });
+    atMono(NOW);
     atClock(NOW);
     await w[lane]([], [], probe());
     atClock(NOW - HOUR);
+    atMono(NOW + ms);
     const back = probe();
     await w[lane]([], [], back);
-    expect(back.includes).not.toHaveBeenCalled();
-    atClock(NOW + ms);
-    const due = probe();
-    await w[lane]([], [], due);
-    expect(due.includes).toHaveBeenCalled();
+    expect(back.includes, 'a wall clock stepped back an hour held the lane').toHaveBeenCalled();
+    atClock(NOW + HOUR);
+    atMono(NOW + 2 * ms - 1);
+    const forward = probe();
+    await w[lane]([], [], forward);
+    expect(forward.includes, 'a wall clock stepped forward an hour ran the lane early').not.toHaveBeenCalled();
   });
 
   it('sweepStopDone with no coord stamps no clock', async () => {
-    const { w, deps } = watcherWith({ coord: undefined });
+    const { w, deps } = watcherWith({ coord: undefined, monotonicMs: () => mono.t });
     atClock(NOW);
+    atMono(NOW);
     await w.sweepStopDone([], [], probe());
     deps.coord = {};
     const again = probe();
@@ -985,13 +993,16 @@ describe('the cadence rows (FleetWatcher.sweepStopDone / sweepHibernate)', () =>
     const w0 = world();
     const { w } = watcherWith({
       coord: sdDeps(w0).coord, tmux, fleetState: { ccdVerbs: ['hibernate'] }, viewers: { isOpen: () => false },
+      monotonicMs: () => mono.t,
     });
     (w as unknown as { sleepStartedAt: number }).sleepStartedAt = NOW - 24 * HOUR;
     w.useStopDoneSerialiser({ serial: async (fn: () => Promise<unknown>) => fn() } as never);
     atClock(NOW);
+    atMono(NOW);
     const first = w.sweepStopDone([row(ID)], [rec(ID)], []);
     await vi.waitFor(() => { expect(reads).toBe(1); });
     atClock(NOW + 2 * STOP_DONE_SWEEP_MS);
+    atMono(NOW + 2 * STOP_DONE_SWEEP_MS);
     const second = probe();
     await w.sweepStopDone([row(ID)], [rec(ID)], second);
     expect(second.includes, 'the second call returned at once').not.toHaveBeenCalled();
@@ -1003,13 +1014,15 @@ describe('the cadence rows (FleetWatcher.sweepStopDone / sweepHibernate)', () =>
   it('sweepHibernate: a call while one runs returns at once', async () => {
     let release: (v: string | null) => void = () => undefined;
     const gate = new Promise<string | null>((r) => { release = r; });
-    const { w, deps } = watcherWith({ coord: {} });
+    const { w, deps } = watcherWith({ coord: {}, monotonicMs: () => mono.t });
     let reads = 0;
     (deps.io as { readFile: unknown }).readFile = async () => { reads++; return gate; };
     atClock(NOW);
+    atMono(NOW);
     const first = w.sweepHibernate([], [], [HIBERNATE_AFTER_HOURS_FILE]);
     await vi.waitFor(() => { expect(reads).toBe(1); });
     atClock(NOW + 2 * HIBERNATE_SWEEP_MS);
+    atMono(NOW + 2 * HIBERNATE_SWEEP_MS);
     const second = probe();
     await w.sweepHibernate([], [], second);
     expect(second.includes, 'the second call returned at once').not.toHaveBeenCalled();
