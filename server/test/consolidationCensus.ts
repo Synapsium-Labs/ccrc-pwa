@@ -105,16 +105,35 @@ export function ccdLauncherIn(root: string = REPO): string {
   return path.join(root, path.relative(REPO, CCD));
 }
 
+/** The library files `ccd/ccd` loads at its foot (D-6913), in load order. The census reads them AFTER `ccd/ccd`,
+ *  as one program: a moved function is still ccd's, with its row in `ccd/contexts.tsv`, its edges in the call graph and its
+ *  line in the heredoc check. A tree without one (a fixture) has no lines from it. */
+export const CCD_LIB_FILES: readonly string[] = ['ccd/lib/disk-retention.sh'];
+
+/** One line of ccd's shell source, with the repo-relative file it is in and its 1-based line there. */
+export interface CcdSourceLine { readonly file: string; readonly line: number; readonly text: string }
+
+/** `ccd/ccd`, then each library file that exists under `root`, as lines. */
+export function ccdSourceLines(root: string = REPO): CcdSourceLine[] {
+  const out: CcdSourceLine[] = [];
+  const add = (file: string, abs: string): void => {
+    if (!existsSync(abs)) return;
+    const lines = readFileSync(abs, 'utf8').split('\n');
+    // A file's final newline is not a line of its own: the library ends in one, and a phantom empty line would end nothing.
+    if (lines[lines.length - 1] === '' && file !== 'ccd/ccd') lines.pop();
+    lines.forEach((text, i) => out.push({ file, line: i + 1, text }));
+  };
+  add('ccd/ccd', ccdLauncherIn(root));
+  for (const rel of CCD_LIB_FILES) add(rel, path.join(root, rel));
+  return out;
+}
+
 /** A definition `ccd/ccd` writes: a function name at column 0, `()`, optional spaces, `{`. */
 export const CCD_FUNCTION_DEF = /^([A-Za-z_][A-Za-z0-9_]*)\(\) *\{/;
 
-/** ccd's function definitions, one site per `name() {` line of `ccd/ccd` (the site's `text` is the line). */
+/** ccd's function definitions, one site per `name() {` line of `ccd/ccd` and its library (the site's `text` is the line). */
 export function ccdFunctionDefinitions(root: string = REPO): CensusSite[] {
-  const out: CensusSite[] = [];
-  readFileSync(ccdLauncherIn(root), 'utf8').split('\n').forEach((text, i) => {
-    if (CCD_FUNCTION_DEF.test(text)) out.push({ file: 'ccd/ccd', line: i + 1, text });
-  });
-  return out;
+  return ccdSourceLines(root).filter((s) => CCD_FUNCTION_DEF.test(s.text));
 }
 
 /** The manifest's rows, one site per non-comment, non-blank line of `ccd/contexts.tsv` (`text` is the line). No
@@ -135,12 +154,13 @@ export function bashCodeOf(line: string): string {
   return line.replace(/\s#(?:\s.*)?$/, '');
 }
 
-/** One edge of ccd's call graph: `caller`'s region names `callee` first at `line` (1-based, in `ccd/ccd`). */
-export interface CcdCallEdge { readonly caller: string; readonly callee: string; readonly line: number }
+/** One edge of ccd's call graph: `caller`'s region names `callee` first at `line` (1-based, in `file`). */
+export interface CcdCallEdge { readonly caller: string; readonly callee: string; readonly line: number; readonly file: string }
 
 /** ccd's call graph: one edge per (caller, callee) pair, in definition order, then by first reference. */
 export function ccdCallGraph(root: string = REPO): CcdCallEdge[] {
-  const lines = readFileSync(ccdLauncherIn(root), 'utf8').split('\n');
+  const src = ccdSourceLines(root);
+  const lines = src.map((s) => s.text);
   const defs: { name: string; at: number }[] = [];
   lines.forEach((l, i) => { const m = CCD_FUNCTION_DEF.exec(l); if (m) defs.push({ name: m[1]!, at: i }); });
   const names = new Set(defs.map((d) => d.name));
@@ -157,7 +177,7 @@ export function ccdCallGraph(root: string = REPO): CcdCallEdge[] {
         const callee = m[2]!;
         if (m[1] !== undefined || m[3] !== undefined || callee === d.name || !names.has(callee) || seen.has(callee)) continue;
         seen.add(callee);
-        out.push({ caller: d.name, callee, line: j + 1 });
+        out.push({ caller: d.name, callee, line: src[j]!.line, file: src[j]!.file });
       }
     }
   });
@@ -169,7 +189,8 @@ export function ccdCallGraph(root: string = REPO): CcdCallEdge[] {
  *  line. A heredoc opens at `<<WORD`, `<<-WORD` or a quoted WORD on a code line (`<<<` is a here-string, not one) and
  *  closes at the line that is WORD (after leading tabs for `<<-`); one that never closes is a site too. */
 export function ccdHeredocBraces(root: string = REPO): CensusSite[] {
-  const lines = readFileSync(ccdLauncherIn(root), 'utf8').split('\n');
+  const src = ccdSourceLines(root);
+  const lines = src.map((s) => s.text);
   const open = /(?<!<)<<(-?)\s*(['"]?)([A-Za-z_][A-Za-z0-9_]*)\2/g;
   const out: CensusSite[] = [];
   let inFn = false;
@@ -178,16 +199,16 @@ export function ccdHeredocBraces(root: string = REPO): CensusSite[] {
     if (pending.length > 0) {
       const h = pending[0]!;
       if ((h.tabs ? text.replace(/^\t+/, '') : text) === h.word) pending.shift();
-      else if (inFn && text.startsWith('}')) out.push({ file: 'ccd/ccd', line: i + 1, text });
+      else if (inFn && text.startsWith('}')) out.push({ file: src[i]!.file, line: src[i]!.line, text });
       return;
     }
     if (CCD_FUNCTION_DEF.test(text)) inFn = true;
     else if (text.startsWith('}')) inFn = false;
     if (!inFn) return;
-    for (const m of bashCodeOf(text).matchAll(open)) pending.push({ word: m[3]!, tabs: m[1] === '-', at: i + 1 });
+    for (const m of bashCodeOf(text).matchAll(open)) pending.push({ word: m[3]!, tabs: m[1] === '-', at: i });
   });
   // A heredoc that never closes means this reader misparsed one; say so rather than read nothing after it.
-  for (const h of pending) out.push({ file: 'ccd/ccd', line: h.at, text: `<<${h.word} never closes` });
+  for (const h of pending) out.push({ file: src[h.at]!.file, line: src[h.at]!.line, text: `<<${h.word} never closes` });
   return out;
 }
 
@@ -199,7 +220,7 @@ export function ccdCrossContextCalls(root: string = REPO): CensusSite[] {
   return ccdCallGraph(root).flatMap((e) => {
     const a = ctx.get(e.caller); const b = ctx.get(e.callee);
     if (a === undefined || b === undefined || a === b || b === 'K') return [];
-    return [{ file: 'ccd/ccd', line: e.line, text: `${e.caller} (${a}) -> ${e.callee} (${b})` }];
+    return [{ file: e.file, line: e.line, text: `${e.caller} (${a}) -> ${e.callee} (${b})` }];
   });
 }
 

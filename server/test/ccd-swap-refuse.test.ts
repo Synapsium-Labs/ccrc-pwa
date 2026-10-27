@@ -13,7 +13,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { CCD, makeCcdHarness, type CcdHarness, WIDE_PANE, DEAD_PANE } from './ccdWsHelpers.js';
+import { makeCcdHarness, type CcdHarness, WIDE_PANE, DEAD_PANE, ccdSource } from './ccdWsHelpers.js';
 import { asManagerCalls, itLinux, itDarwin } from './platformFixtures.js';
 
 let h: CcdHarness;
@@ -471,7 +471,7 @@ describe('the refusal vocabulary', () => {
     // codebase is one of those four shapes, and reaching for it here would
     // fail wsaudit.test.ts for a reason its author would not expect — so the
     // choice is PINNED here rather than remembered.
-    const src = fs.readFileSync(CCD, 'utf8');
+    const src = ccdSource();
     const from = src.indexOf('_swap_refuse() {');
     const to = src.indexOf('cmd_swap_self() {');
     expect(from, '_swap_refuse was not found in ccd').toBeGreaterThan(-1);

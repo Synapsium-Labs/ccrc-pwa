@@ -154,6 +154,9 @@ export const TREE_FILES = [
   // template through the real publisher.
   'ccd/ccd-entry.py',
   'ccd/ccd-entry-install.py',
+  // The library the body pins and loads (D-6913): the publisher reads it from the tree and refuses a tree
+  // without it, or with one the body does not pin, so it is COPIED beside the body it belongs to.
+  'ccd/lib/disk-retention.sh',
   'ccd/ccd-cap-scopes',
   // graphify Task 10: the sweep executable `_inst_bins` ships alongside the
   // other two, unconditionally (mirrors the `ccd-cap-scopes` line — only the

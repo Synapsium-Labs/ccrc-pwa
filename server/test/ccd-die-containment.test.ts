@@ -24,7 +24,7 @@
 //      controls go red whatever `ccd/ccd` happens to contain.
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
-import { CCD } from './ccdWsHelpers.js';
+import { ccdSource } from './ccdWsHelpers.js';
 
 /** A `#` comment starts only where a `#` sits at the start of a word and
  *  outside quotes — `"$REG/$id.hold"` and `'#'` are not comments. `ccd/ccd`
@@ -308,7 +308,7 @@ PY
 // Only now, the real file.
 // ---------------------------------------------------------------------------
 describe('ccd/ccd', () => {
-  const src = readFileSync(CCD, 'utf8');
+  const src = ccdSource();
 
   it('kept its place — the substitution nesting balances at end of file', () => {
     // `_pr_py` alone is ~390 lines of embedded Python; read as shell it

@@ -17,7 +17,7 @@ import {
   type CollectProbeClass,
 } from '../src/collectLane.js';
 import { SENTENCES } from '../src/wsaudit.js';
-import { CCD } from './ccdWsHelpers.js';
+import { ccdSource } from './ccdWsHelpers.js';
 import { codeOnly } from './sourceScan.js';
 import { makePrHarness, type PrHarness } from './ccdPrHelpers.js';
 import { COL_ID, COL_RUN, WRONG_TOKEN, collectAudit, collectVerb, makeOrphan, regOf } from './wsCollectFixture.js';
@@ -27,7 +27,7 @@ const rel = (p: string): string => path.relative(ccrcRoot, p);
 const LINUX = process.platform === 'linux';
 
 // ── ccd's text, read at test time ───────────────────────────────────────────────────────────────────────────────
-const ccdSrc = readFileSync(CCD, 'utf8');
+const ccdSrc = ccdSource();
 /** Whole-line `#` comments dropped, so prose that names a word is never read as a call. */
 const bashCode = (t: string): string => t.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
 /** ccd's text from `from` to the first `to` after it. Both anchors are asserted, so a lost one reds rather than

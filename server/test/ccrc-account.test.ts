@@ -37,7 +37,7 @@ import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
 import { spawnSyncGroup } from './spawnGroup.js';
-import { CCD, ghContainedEnv } from './ccdWsHelpers.js';
+import { CCD, ghContainedEnv, ccdSource } from './ccdWsHelpers.js';
 import { PROVIDERS, PROVIDER_IDS } from '../../shared/providers.js';
 import { markGenerated } from '../../shared/mark.mjs';
 import { generateWrapperBody } from '../../shared/wrapper.mjs';
@@ -3265,7 +3265,7 @@ describe('ccrc account add: the lane is off, and the verb says what it did not d
     // "is spelled in exactly one file, and that file is ccdWsHelpers.ts" went
     // red on this file. Measured, not remembered — and apt, given this case is
     // itself about two spellings of one name drifting apart.
-    const ccd = readFileSync(CCD, 'utf8');
+    const ccd = ccdSource();
     expect(ccd).toContain('_lane_enabled() { [[ ! -f "$REG/$1-disabled" ]]; }');
     expect(ccd).toContain('_account_ok() { [[ -x "$WRAPPER_DIR/$1" ]] && _lane_enabled "$1"; }');
   });
@@ -7244,7 +7244,7 @@ describe('ccrc account remove', () => {
   });
 
   it('names registry destinations exactly the way ccd does', () => {
-    const ccd = readFileSync(CCD, 'utf8');
+    const ccd = ccdSource();
     const ccrc = readFileSync(CCRC_SRC, 'utf8');
     expect(ccd).toContain('_plat_mv_notdir "$tmp" "$REG/$1.$2"');
     expect(ccrc).toContain('_plat_mv_notdir "$tmp" "$_SVC_REG/$1.$2"');
@@ -10657,7 +10657,7 @@ describe('ccrc account check: the probe', () => {
     // `ccdWsHelpers.ts` alone; building it here from REPO and two segments reds
     // it — measured, D-2132's defect in the task that cites it. And the scan
     // reads comments too, so this sentence must not spell the shape either.
-    const ccd = readFileSync(CCD, 'utf8');
+    const ccd = ccdSource();
     const ccrc = readFileSync(join(REPO, 'ccd', 'ccrc'), 'utf8');
     const a = /^LIMITS_DIR="([^"]+)"/m.exec(ccd)?.[1];
     const b = /^CCRC_LIMITS_DIR="([^"]+)"/m.exec(ccrc)?.[1];
@@ -11052,6 +11052,11 @@ describe('ccrc account check: the probe', () => {
       if (!src.startsWith('#!')) continue;
       const n = [...src.matchAll(CALLS)].length;
       if (n > 0) sites.set(f.name, n);
+    }
+    // ccd's library, loaded at ccd's foot (D-6913), has no shebang and is ccd's code all the same.
+    for (const f of readdirSync(join(ccdDir, 'lib')).filter((n) => n.endsWith('.sh'))) {
+      const n = [...readFileSync(join(ccdDir, 'lib', f), 'utf8').matchAll(CALLS)].length;
+      if (n > 0) sites.set(`lib/${f}`, n);
     }
     const census = [...sites].map(([f, n]) => `${f}=${n}`).join(' ');
     const total = [...sites.values()].reduce((a, b) => a + b, 0);

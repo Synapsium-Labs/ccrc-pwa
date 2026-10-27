@@ -34,14 +34,14 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { parseCcdCaps } from '../../shared/agent-protocol.js';
 import { COLLECT_CAP, EXPIRE_CAP, RECLAIM_PAUSE_CAP } from '../src/ccdargv.js';
-import { CCD } from './ccdWsHelpers.js';
+import { CCD, ccdSource } from './ccdWsHelpers.js';
 
 /** The literal tokens `cmd_caps` prints unconditionally, read from ccd itself.
  *  Only `echo <token>` statements inside the function body — a line may carry several, split on `;`, with a trailing
  *  `# …` comment stripped; anything interpolated or conditional is a runtime question this static read cannot
  *  answer, and pretending otherwise would be a worse lie than omitting it. */
 function emittedCapsTokens(): string[] {
-  const src = readFileSync(CCD, 'utf8').split('\n');
+  const src = ccdSource().split('\n');
   const start = src.findIndex((l) => /^cmd_caps\(\)/.test(l));
   if (start < 0) throw new Error('ccd/ccd no longer defines cmd_caps() at column 0 — re-anchor this test');
   const end = src.findIndex((l, i) => i > start && /^\}/.test(l));

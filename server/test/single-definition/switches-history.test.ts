@@ -43,9 +43,10 @@ describe('the pane-scope sweep: its arming file has no writer in the tree', () =
 describe('the nested rescue: its arming file has no writer in the tree', () => {
   // DR-21 (D-6633) gives it its one TS holder, its switchboard row in `shared/switches.ts` (L0, no `node:` module, so it
   // cannot write the marker); the server only shows what the arm would do.
-  it('nested-rescue-live: one shell holder, ccd/ccd, whose one line is a read; one TS holder, its definer, which reaches no write', () => {
-    expect(holdersOf('nested-rescue-live'), 'a line of shell other than ccd/ccd names it — a writer in waiting').toEqual(['ccd/ccd']);
-    expect(codeLines(BASH.find((f) => rel(f) === 'ccd/ccd') ?? '').filter((l) => l.includes('nested-rescue-live')))
+  it('nested-rescue-live: one shell holder, the ccd library, whose one line is a read; one TS holder, its definer, which reaches no write', () => {
+    // The nested rescue moved with its helpers to ccd's loaded library (D-6913): ccd/lib/disk-retention.sh is the holder.
+    expect(holdersOf('nested-rescue-live'), 'a line of shell other than the ccd library names it — a writer in waiting').toEqual(['ccd/lib/disk-retention.sh']);
+    expect(codeLines(BASH.find((f) => rel(f) === 'ccd/lib/disk-retention.sh') ?? '').filter((l) => l.includes('nested-rescue-live')))
       .toEqual(['_ws_nested_rescue_live() { [[ -e "$REG/nested-rescue-live" ]]; }']);
     expect(ALL.filter((f) => stallCode(f).includes('nested-rescue-live')).map(rel), 'spelled on a code line outside shared/switches.ts')
       .toEqual(['shared/switches.ts']);

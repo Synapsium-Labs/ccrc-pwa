@@ -6,9 +6,8 @@ import { spawnSync } from 'node:child_process';
 import { mkdirSync, readFileSync, writeFileSync, existsSync, statSync, chmodSync, readdirSync, rmSync, symlinkSync, utimesSync, lstatSync, readlinkSync, realpathSync } from 'node:fs';
 import path, { join } from 'node:path';
 import { createHash } from 'node:crypto';
-import { markGenerated } from '../../shared/mark.mjs';
 import { mkTmp, removeTmpFixturesEachTest } from './tmpHelpers.js';
-import { renderCcdEntry } from './ccdWsHelpers.js';
+import { installedCcdBody, renderCcdEntry } from './ccdWsHelpers.js';
 import { CONTAINED_TOOLS, assertNoRealTool, plantPoison } from './containedTools.js';
 import { describeLinux, describeDarwin, itLinux, itDarwin } from './platformFixtures.js';
 import { TREE_STUBS, installFixtureTree, rsyncRecorder } from './installTreeFixture.js';
@@ -1054,9 +1053,8 @@ describe('ccrc install: the executables and files it installs', () => {
     // spelling arriving here later.
     // Install-time stamping: the body is the placed tree's ccd with its line-2 placeholder swapped, in place, for the
     // marker (ccd-entry-install.py; ccd-install-stamp.test.ts owns the rule) - so the bytes are the stamped copy.
-    const placedLines = readFileSync(placed(home, 'ccd/ccd'), 'utf8').split('\n');
-    if ((placedLines[1] ?? '').startsWith('# ccrc:stamp-at-install')) placedLines.splice(1, 1);
-    expect(readFileSync(bin, 'utf8')).toBe(markGenerated(placedLines.join('\n')));
+    // The library pin is rendered from the placed library first (D-6913), under that stamp.
+    expect(readFileSync(bin, 'utf8')).toBe(installedCcdBody(readFileSync(placed(home, 'ccd/ccd'), 'utf8'), readFileSync(placed(home, 'ccd/lib/disk-retention.sh'))));
     expect(mode(bin)).toBe(0o644);
     // The launcher: the placed template rendered for the canonical python3 its
     // own shebang names and the body's digest — nothing else, byte for byte.

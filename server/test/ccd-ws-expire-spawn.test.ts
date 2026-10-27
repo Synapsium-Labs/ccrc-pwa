@@ -17,7 +17,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { makeCcdHarness, WS_ADD, CCD, type CcdHarness } from './ccdWsHelpers.js';
+import { makeCcdHarness, WS_ADD, type CcdHarness, ccdSource } from './ccdWsHelpers.js';
 import { eventsOf, refusalsOf } from './lifecycleHelpers.js';
 
 let h: CcdHarness;
@@ -195,7 +195,7 @@ describe('during the act: a spawn that would clear the archive takes the reap lo
 });
 
 describe('the census holds — no session pane is made outside the gated function', () => {
-  const src = fs.readFileSync(CCD, 'utf8');
+  const src = ccdSource();
   /** The function each non-comment line belongs to (top-level `name() {` openers). */
   const owners = (re: RegExp): string[] => {
     let fn = '-';

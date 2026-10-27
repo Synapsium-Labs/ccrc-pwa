@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import fs from 'node:fs';
 import path from 'node:path';
-import { CCD, WS_ADD, ghContainedEnv } from './ccdWsHelpers.js';
+import { CCD, WS_ADD, ghContainedEnv, ccdSource } from './ccdWsHelpers.js';
 import { GH_STUB, makePrHarness, mergedRow, type PrHarness } from './ccdPrHelpers.js';
 import { isFullLine, parsePrLines, phaseFor } from '../src/prstate.js';
 import { plantGitRecorder, type RecordedGitCall } from './ccdDocsHelpers.js';
@@ -218,7 +218,7 @@ describe('the per-session call asks about one branch', () => {
  *  actually ships). A literal here re-pins the number in a third place and reds
  *  the next resize for no reason. */
 const ccdSeconds = (name: string): number => {
-  const src = readFileSync(CCD, 'utf8');
+  const src = ccdSource();
   const m = new RegExp(`^${name}=(\\d+)`, 'm').exec(src);
   if (!m) throw new Error(`ccd no longer defines ${name} as a bare integer assignment`);
   return Number(m[1]);
@@ -1678,7 +1678,7 @@ describe('ccd and prstate.ts agree about phase, always', () => {
 
 describe('pr-state persists its fields atomically (registry-durability wave 2)', () => {
   it('put() renames rather than truncating, with the same invisible tmp shape as _reg_set', () => {
-    const src = readFileSync(CCD, 'utf8');
+    const src = ccdSource();
     const put = /def put\(field, value\):([\s\S]*?)\n\n/.exec(src)?.[1] ?? '';
     expect(put, 'put() must no longer open the destination for writing').not.toMatch(/open\(os\.path\.join\(reg, id_ \+ '\.' \+ field\), 'w'\)/);
     expect(put).toMatch(/os\.replace\(/);
@@ -1692,7 +1692,7 @@ describe('pr-state persists its fields atomically (registry-durability wave 2)',
     // rewrite would lock two different inodes and BOTH enter the
     // compare-and-set — the duplicate prhistory append and the lost update
     // this lock exists to prevent. A dedicated file is never replaced.
-    const src = readFileSync(CCD, 'utf8');
+    const src = ccdSource();
     expect(src).not.toMatch(/lock_f = open\(os\.path\.join\(reg, id_ \+ '\.uuid'\)\)/);
     expect(src).toMatch(/\.prstate-'/);
   });

@@ -21,7 +21,7 @@ import { spawnSync } from 'node:child_process';
 import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { turnRunning } from '../src/pane/dialog.js';
-import { CCD } from './ccdWsHelpers.js';
+import { ccdSource as wholeCcdSource } from './ccdWsHelpers.js';
 
 const DIR = path.resolve(__dirname, 'fixtures/panes/busy');
 const SGR = /\x1b\[[0-9;]*m/g;
@@ -39,7 +39,7 @@ const READINESS: readonly string[] = ['ccd-tui-up'];
 type Caller = 'ts-mail-hold' | keyof typeof CCD_SITES;
 interface Verdicts { captures: Record<string, Partial<Record<Caller, boolean>> & { divergence?: string }> }
 const verdicts = JSON.parse(readFileSync(path.join(DIR, 'verdicts.json'), 'utf8')) as Verdicts;
-const ccdSource = readFileSync(CCD, 'utf8');
+const ccdSource = wholeCcdSource();
 
 /** The last 8 rows, the window the TS caller and most ccd callers capture (`| tail -8`). */
 const tail8 = (plain: string): string => plain.replace(/\n$/, '').split('\n').slice(-8).join('\n');

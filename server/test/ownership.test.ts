@@ -138,6 +138,9 @@ describe('the INSTALLED ccd carries a marker that matches its own bytes', () => 
   mkdirSync(path.join(tree, 'ccd'), { recursive: true });
   writeFileSync(path.join(tree, 'ccd', path.basename(CCD)), readFileSync(CCD, 'utf8'), { mode: 0o755 });
   for (const f of ['ccd-entry.py', 'ccd-entry-install.py']) copyFileSync(path.join(REPO, 'ccd', f), path.join(tree, 'ccd', f));
+  // The library the body pins (D-6913): the installer renders its digest into the body, then stamps it.
+  mkdirSync(path.join(tree, 'ccd', 'lib'), { recursive: true });
+  copyFileSync(path.join(REPO, 'ccd', 'lib', 'disk-retention.sh'), path.join(tree, 'ccd', 'lib', 'disk-retention.sh'));
   const r = spawnSync(canonicalPython3(), ['-IS', path.join(tree, 'ccd', 'ccd-entry-install.py'), 'install', tree, home],
     { encoding: 'utf8', cwd: home, env: { HOME: home, PATH: process.env['PATH'] ?? '/usr/bin:/bin' } });
   const ccd = r.status === 0 ? readFileSync(path.join(home, '.local', 'libexec', 'ccrc', path.basename(CCD)), 'utf8') : '';

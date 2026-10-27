@@ -14,6 +14,7 @@ import { asManagerCalls } from './platformFixtures.js';
 import { inheritedEnv } from './gitEnvStrip.js';
 import { CONTAINED_TOOLS, busUnder, plantPoison } from './containedTools.js';
 import { CLOSED_AUTH_BASE } from './codexAuthFixture.js';
+import { markGenerated } from '../../shared/mark.mjs';
 
 /** The home-able ids of the test roster — the set ccd reads as `CCRC_HOME_ABLE`
  *  out of the roster `seedAccountsSh` writes below. Derived, not hand-typed,
@@ -24,6 +25,40 @@ const HOME_ABLE_WRAPPERS: readonly string[] =
   DEFAULT_TEST_ROSTER.accounts.filter((a) => a.homeAble).map((a) => a.id);
 
 export const CCD = path.resolve(__dirname, '../../ccd/ccd');
+
+/** The library `CCD` loads at its foot (D-6913): the fleet disk-retention code, a separate file in
+ *  `ccd/lib/` that the body finds beside itself, in the repository and in the installed layout alike. */
+export const CCD_LIB = path.resolve(__dirname, '../../ccd/lib/disk-retention.sh');
+
+/** The committed placeholder for the library pin (D-6913): like line 2's stamp, the digest is written at install time. */
+export const CCD_LIB_PIN_PLACEHOLDER = '__CCD_LIB_SHA256=stamp-at-install';
+
+/** What `ccd/ccd-entry-install.py` publishes for a ccd source beside library bytes `lib`: the pin placeholder rendered to the
+ *  library's SHA-256 FIRST, then the line-2 placeholder swapped, in place, for the marker `markGenerated` writes, so the stamp
+ *  covers the pin. A mirror for fixtures; `ccd-entry-install.test.ts` holds it equal to the installer's real output. */
+export function installedCcdBody(source: string, lib: string | Buffer): string {
+  const digest = createHash('sha256').update(lib).digest('hex');
+  const lines = source.replace(/^__CCD_LIB_SHA256=stamp-at-install$/m, `__CCD_LIB_SHA256=${digest}`).split('\n');
+  if ((lines[1] ?? '').startsWith('# ccrc:stamp-at-install')) lines.splice(1, 1);
+  return markGenerated(lines.join('\n'));
+}
+
+let ccdSourceMemo: string | undefined;
+/** ccd's whole shell source as ONE text (D-6913): `ccd/ccd` with each `# @ccd-lib:<id>` pointer line replaced
+ *  by that region of the library, back where the code sat before it moved. Every test that SCANS ccd's text reads it through
+ *  here, so a moved region stays under the same scanner, the same marker pair and the same ordering; a bare
+ *  `readFileSync(CCD, 'utf8')` would read ccd without the moved code, and a scan would pass over less than it did.
+ *  `ccd-lib-load.test.ts` holds that no test reads it bare. Tests about the FILES (the stamp, the digest, the install)
+ *  read the real bytes of `CCD` and `CCD_LIB` themselves. Only the pointer lines differ from the pre-move text. */
+export function ccdSource(): string {
+  if (ccdSourceMemo !== undefined) return ccdSourceMemo;
+  const main = fs.readFileSync(CCD, 'utf8');
+  if (!fs.existsSync(CCD_LIB)) return (ccdSourceMemo = main);
+  const parts = fs.readFileSync(CCD_LIB, 'utf8').split(/^# @ccd-lib:(\w+)\n/m);
+  const regions = new Map<string, string>();
+  for (let i = 1; i + 1 < parts.length; i += 2) regions.set(parts[i]!, parts[i + 1]!.replace(/\n+$/, ''));
+  return (ccdSourceMemo = main.replace(/^# @ccd-lib:(\w+)\b.*$/gm, (line, id: string) => regions.get(id) ?? line));
+}
 
 /** The coordination client, beside `ccd` and installed the same way. Spelled
  *  here rather than joined at each call site for the reason
@@ -92,12 +127,20 @@ export function installDirectEntry(home: string, opts: { body?: string | Buffer 
   const libexec = path.join(home, '.local', 'libexec', 'ccrc');
   fs.mkdirSync(bin, { recursive: true });
   fs.mkdirSync(libexec, { recursive: true });
-  const bodyBytes = opts.body === undefined ? fs.readFileSync(CCD) : Buffer.from(opts.body);
+  // The shipped body goes in as the installer publishes it (its library pin rendered, then stamped); a fixture body as given.
+  const bodyBytes = opts.body === undefined
+    ? Buffer.from(installedCcdBody(fs.readFileSync(CCD, 'utf8'), fs.readFileSync(CCD_LIB)))
+    : Buffer.from(opts.body);
   const body = path.join(libexec, 'ccd');
   const entry = path.join(bin, 'ccd');
   fs.rmSync(body, { force: true });
   fs.writeFileSync(body, bodyBytes, { mode: 0o644 });
   fs.chmodSync(body, 0o644);
+  // The library the body loads (D-6913), where the installer puts it: `lib/` beside the body.
+  if (fs.existsSync(CCD_LIB)) {
+    fs.mkdirSync(path.join(libexec, 'lib'), { recursive: true });
+    fs.copyFileSync(CCD_LIB, path.join(libexec, 'lib', 'disk-retention.sh'));
+  }
   fs.rmSync(entry, { force: true });
   if (!fs.existsSync(CCD_ENTRY)) {
     fs.writeFileSync(entry, bodyBytes, { mode: 0o755 });

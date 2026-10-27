@@ -21,7 +21,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   CCD_CONTEXTS, bashCodeOf, ccdLauncherIn, ccdCallGraph, ccdContextRows, ccdCrossContextCalls, ccdFunctionDefinitions,
-  ccdHeredocBraces,
+  ccdHeredocBraces, ccdSourceLines,
 } from './consolidationCensus.js';
 
 /** The allowed cross-context edges (D-6925): one `caller -> callee` per line, sorted. */
@@ -47,9 +47,9 @@ describe('ccd/contexts.tsv: coverage (D-6054)', () => {
     // would be a function with no row that coverage could not see. awk's `function f(s) {` takes arguments, so
     // it is not bash's, and is not matched.
     const loose = /^\s*(?:function\s+[A-Za-z_][A-Za-z0-9_]*\s*(?:\(\s*\))?\s*\{|[A-Za-z_][A-Za-z0-9_]*\s*\(\s*\)\s*\{)/;
-    const strict = new Set(ccdFunctionDefinitions().map((s) => s.line));
-    const other = readFileSync(ccdLauncherIn(), 'utf8').split('\n')
-      .flatMap((t, i) => (loose.test(bashCodeOf(t)) && !strict.has(i + 1) ? [`line ${i + 1}: ${t.trim()}`] : []));
+    const strict = new Set(ccdFunctionDefinitions().map((s) => `${s.file}:${s.line}`));
+    const other = ccdSourceLines()
+      .flatMap((s) => (loose.test(bashCodeOf(s.text)) && !strict.has(`${s.file}:${s.line}`) ? [`${s.file} line ${s.line}: ${s.text.trim()}`] : []));
     expect(other, 'definitions in a shape the manifest census does not read; write them as `name() {` at column 0')
       .toEqual([]);
     expect(strict.size, 'the definition census found too few functions: its pattern has gone stale').toBeGreaterThan(500);

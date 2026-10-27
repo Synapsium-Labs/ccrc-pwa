@@ -29,7 +29,7 @@ import type { Runner } from '../src/exec.js';
 import { SENTENCES } from '../src/wsaudit.js';
 import { LC_REASON_MAX_BYTES, LC_REFUSAL_TOKENS, holdReason } from '../../shared/api.js';
 import { testDeps } from './helpers.js';
-import { CCD } from './ccdWsHelpers.js';
+import { ccdSource } from './ccdWsHelpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import { makePrHarness, type PrHarness } from './ccdPrHelpers.js';
 import { CHILD_ID, childReclaimVerb, evalOf, makeChild } from './childReclaimFixture.js';
@@ -127,7 +127,7 @@ const PIN_WORDS = (region: string): string[] => [...new Set([...region.matchAll(
 
 describe('the fifteen words', () => {
   it('are exactly the words ccd’s RECLAIM region refuses with — harvested, both directions', () => {
-    const ccd = readFileSync(CCD, 'utf8');
+    const ccd = ccdSource();
     const begin = ccd.indexOf('RECLAIM-BEGIN');
     const end = ccd.indexOf('RECLAIM-END');
     expect(begin, 'the RECLAIM region is missing its BEGIN marker').toBeGreaterThan(0);
@@ -158,7 +158,7 @@ describe('the fifteen words', () => {
     // SECOND copy silently become the one compared, since `.exec` takes only
     // the first match) is what this asserts instead: `matchAll` over the
     // WHOLE file, and an exact count of one.
-    const ccd = readFileSync(CCD, 'utf8');
+    const ccd = ccdSource();
     const matches = [...ccd.matchAll(
       /case "\$REAP_VERDICT" in\n\s+([a-z|-]+)\)\n\s+_lc_emit reclaim refused "\$id" "" verb ws-audit/g,
     )];
@@ -328,7 +328,7 @@ describe('parseChildReclaimResult', () => {
   // alone, which made it vacuous. So this reads only the code lines of the
   // RECLAIM region.
   it("the special-cased word is ccd's own — the RECLAIM region's `_ws_reclaim_fail … probe-unmeasured`", () => {
-    const ccd = readFileSync(CCD, 'utf8');
+    const ccd = ccdSource();
     const begin = ccd.indexOf('RECLAIM-BEGIN');
     const end = ccd.indexOf('RECLAIM-END');
     expect(begin, 'the RECLAIM region is missing its BEGIN marker').toBeGreaterThan(0);
@@ -345,7 +345,7 @@ describe('parseChildReclaimResult', () => {
   // above `_ws_reclaim_locked`), so a reworded die reds this case rather than
   // silently drifting back to `resume: 'resumable'`.
   describe('a pre-lock die of cmd_ws_reclaim', () => {
-    const ccdSrc = readFileSync(CCD, 'utf8');
+    const ccdSrc = ccdSource();
     const region = ccdSrc.slice(ccdSrc.indexOf('\ncmd_ws_reclaim() {'), ccdSrc.indexOf('\n_ws_reclaim_fork() {'));
     // Extract the exact literal a ccd `die "..."` (or `_lc_refuse`'s trailing
     // message argument) prints — ANCHORED to the call itself (review 170 fr-I

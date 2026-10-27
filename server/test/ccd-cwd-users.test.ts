@@ -17,7 +17,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { makePrHarness, type PrHarness } from './ccdPrHelpers.js';
-import { CCD } from './ccdWsHelpers.js';
+import { ccdSource } from './ccdWsHelpers.js';
 import { holdProc, type Held } from './pathUsersFixture.js';
 import { expireAudit, makeArchived } from './wsExpireFixture.js';
 import { DARWIN_LSOF_STUB, FAKE_PROC_SELF } from './worktreeIdentityFixture.js';
@@ -29,7 +29,7 @@ afterEach(() => { for (const p of held) p.stop(); h.cleanup(); });
 
 const LINUX = process.platform === 'linux';
 const ROOT_USER = process.getuid?.() === 0;
-const src = fs.readFileSync(CCD, 'utf8');
+const src = ccdSource();
 /** `WS_CWD_USERS_SCAN_S` as ccd defines it, or a marker no answer holds while it is undefined. */
 const SCAN_S = /^WS_CWD_USERS_SCAN_S=(\d+)\b/m.exec(src)?.[1] ?? '<undefined>';
 const real = (p: string): string => fs.realpathSync(p);

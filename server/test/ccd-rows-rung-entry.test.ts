@@ -23,7 +23,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { GH_STUB, makePrHarness, type PrHarness } from './ccdPrHelpers.js';
-import { CCD, WS_ADD } from './ccdWsHelpers.js';
+import { WS_ADD, ccdSource } from './ccdWsHelpers.js';
 import {
   CHILD_ENV, CHILD_ID, CHILD_RUN, CHILD_STUBS, childReclaimVerb, evalOf, makeChild, type Child, type LadderAnswer,
 } from './childReclaimFixture.js';
@@ -649,7 +649,7 @@ describe('the legacy count (path-identity spec §4.4)', () => {
 });
 
 describe('the source', () => {
-  const src = fs.readFileSync(CCD, 'utf8');
+  const src = ccdSource();
   /** `name`'s body, from its head line to its first closing brace at column 0, or '' when it is not defined. */
   const bodyOf = (name: string): string => {
     const a = src.indexOf(`\n${name}() {`);

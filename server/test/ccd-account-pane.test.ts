@@ -12,7 +12,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { makeCcdHarness, ghContainedEnv, harnessBin, CCD, type CcdHarness } from './ccdWsHelpers.js';
+import { makeCcdHarness, ghContainedEnv, harnessBin, CCD, type CcdHarness, ccdSource } from './ccdWsHelpers.js';
 
 let h: CcdHarness;
 beforeEach(() => { h = makeCcdHarness('ccrc-ccd-pane-'); });
@@ -144,7 +144,7 @@ describe('ccd account-pane — the pane', () => {
 });
 
 describe('ccd account-pane — the structural guards', () => {
-  const src = fs.readFileSync(CCD, 'utf8');
+  const src = ccdSource();
 
   /** The function's EXECUTABLE text: whole-line comments dropped, exactly the
    *  cut `macos-platform.test.ts`'s `executableText` makes. Without it the

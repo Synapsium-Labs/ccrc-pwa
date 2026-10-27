@@ -26,7 +26,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { makeCcdHarness, type CcdHarness, CCD } from './ccdWsHelpers.js';
+import { makeCcdHarness, type CcdHarness, CCD, ccdSource } from './ccdWsHelpers.js';
 import { bindFixture, plantFakeKernel } from './fixtures/fakeMountKernel.js';
 
 let h: CcdHarness;
@@ -451,7 +451,7 @@ describe('ccd carry-dedupe: the vocabulary, and the program ships', () => {
 
   it('DEDUPE_REFUSALS is spelled once, and every word the cases above saw is in it', () => {
     expect(fs.readFileSync(LIB, 'utf8').match(/^DEDUPE_REFUSALS = /gm)).toHaveLength(1);
-    expect(fs.readFileSync(CCD, 'utf8')).not.toMatch(/^DEDUPE_REFUSALS = /m);
+    expect(ccdSource()).not.toMatch(/^DEDUPE_REFUSALS = /m);
     const v = vocabulary();
     expect(v).toEqual(['tie', 'diverged', 'recent', 'locked', 'keeperless', 'error']);
     expect(produced.size, 'the cases above ran first, in this file').toBeGreaterThanOrEqual(5);
@@ -462,7 +462,7 @@ describe('ccd carry-dedupe: the vocabulary, and the program ships', () => {
     const src = fs.readFileSync(LIB, 'utf8');
     const rest = src.split('\n').filter((l) => !l.startsWith('DEDUPE_REFUSALS = (')).join('\n');
     for (const w of vocabulary()) expect(rest.includes(`'${w}'`), w).toBe(false);
-    const m = /^CARRY_CAUSES = \(([^)]*)\)$/m.exec(fs.readFileSync(CCD, 'utf8'));
+    const m = /^CARRY_CAUSES = \(([^)]*)\)$/m.exec(ccdSource());
     const causes = [...m![1]!.matchAll(/'([a-z-]+)'/g)].map((x) => x[1]!);
     const own = /^LINK_FAILED, ROOT_FAILED, ROUTE_ERROR = (.*)$/m.exec(src);
     expect(own, 'the program spells its three cause words on one line').not.toBeNull();
@@ -479,7 +479,7 @@ describe('ccd carry-dedupe: the vocabulary, and the program ships', () => {
     expect(ccrc).toContain(`_inst_atomic "$tree/ccd/lib/carry-dedupe.py" "$HOME/${DEST}" 644`);
     expect(ccrc).toContain(`_upd_backup_copy "$HOME/${DEST}" carry-dedupe.py`);
     expect(ccrc).toContain('"$reg/lib/carry-dedupe.py"');
-    expect(fs.readFileSync(CCD, 'utf8')).toContain('lib="$HOME/.cc-sessions/lib/carry-dedupe.py"');
+    expect(ccdSource()).toContain('lib="$HOME/.cc-sessions/lib/carry-dedupe.py"');
   });
 
   it('an installed ccd with no tree beside it finds the program under ~/.cc-sessions/lib', () => {

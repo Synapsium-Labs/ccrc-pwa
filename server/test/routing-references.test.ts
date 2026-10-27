@@ -20,6 +20,7 @@ import { fileURLToPath } from 'node:url';
 import { CLASSES } from '../../shared/models.mjs';
 import { ROUTE_DEFAULT_BY_KIND, routeDefaultFor } from '../../shared/route-defaults.js';
 import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
+import { ccdSource } from './ccdWsHelpers.js';
 
 afterEach(removeTmpFixtures);
 
@@ -32,7 +33,7 @@ const panel = readFileSync(path.join(refs, 'review-panel.md'), 'utf8');
  *  idiom: the validator WRITES this list, and a doc naming a level the
  *  validator refuses is a rule that can never fire. */
 const ROUTE_EFFORTS = ((): string[] => {
-  const ccd = readFileSync(path.join(root, 'ccd/ccd'), 'utf8');
+  const ccd = ccdSource();
   const m = /^ROUTE_EFFORTS="([^"]+)"$/m.exec(ccd);
   if (!m) throw new Error('ccd/ccd declares no ROUTE_EFFORTS — the record vocabulary moved');
   return m[1]!.split(' ');
