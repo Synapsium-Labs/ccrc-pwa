@@ -13,7 +13,7 @@ import {
   extractHookRegion, renderHookRegion,
 } from '../../shared/hook-helpers.mjs';
 import {
-  AUTHDEAD_REGION_BEGIN, AUTHDEAD_REGION_END, AUTHDEAD_WRITERS, REGIONS, applyRegion, ccdFunctionDefinition, checkRegion,
+  AUTHDEAD_REGION_BEGIN, AUTHDEAD_REGION_END, AUTHDEAD_WRITERS, REGIONS, applyRegion, ccdFunctionDefinition, checkRegion, extractRegion,
   regionOf, renderRegion,
 } from '../../shared/hook-helpers.mjs';
 import { verifyMarker } from '../../shared/mark.mjs';
@@ -23,6 +23,7 @@ const read = (f: string): string => readFileSync(path.join(root, f), 'utf8');
 const hook = read('ccd/session-hook.sh');
 const ccd = read('ccd/ccd');
 const ccrc = read('ccd/ccrc');
+const probe = read('ccd/ccd-account-health');
 const block = (src: string): string => {
   const s = src.indexOf('# ── THE PLATFORM LAYER');
   const e = src.indexOf('# ── END PLATFORM LAYER');
@@ -115,6 +116,22 @@ describe('the auth-dead writers region (D-7049)', () => {
     const defs = AUTHDEAD_WRITERS.map((n) => defOf(ccd, n));
     for (const [i, d] of defs.entries()) expect(d, AUTHDEAD_WRITERS[i]).not.toBeNull();
     expect(inner.split('\n').slice(1).join('\n')).toBe(`${defs.join('\n')}\n`);
+  });
+
+  it('ccd-account-health carries it, current, and holds no hand-written copy of the three outside it', () => {
+    expect(regionOf(probe)).toBe(AD);
+    expect(checkRegion(AD, probe, ccd)).toBe('current');
+    const rest = probe.replace(extractRegion(AD, probe)!, '');
+    for (const n of AUTHDEAD_WRITERS) expect(rest).not.toMatch(new RegExp(`^${n}\\(\\)`, 'm'));
+    const r = spawnSync('node', [path.join(root, 'shared/hook-helpers.mjs'), '--check', path.join(root, 'ccd/ccd-account-health'), path.join(root, 'ccd/ccd')], { encoding: 'utf8' });
+    expect(r.stdout.trim()).toBe('hook-helpers: current');
+    expect(r.status).toBe(0);
+  });
+
+  it('reads a hand edit inside the probe\'s region as edited, and ccd\'s drift as stale', () => {
+    const region = extractRegion(AD, probe)!;
+    expect(checkRegion(AD, probe.replace(region, region.replace('rm -f -- "$t"; return 2', 'return 2')), ccd)).toBe('edited');
+    expect(checkRegion(AD, probe, ccd.replace('_authdead_clear() { rm -f -- "$REG/$1-authdead"; }', '_authdead_clear() { rm -f "$REG/$1-authdead"; }'))).toBe('stale');
   });
 
   it('reads drift from ccd/ccd as stale, a hand edit as edited, and regenerates back to current', () => {
