@@ -699,7 +699,8 @@ export type CollectHoldWhy = keyof typeof COLLECT_HOLD_WHY_TABLE;
 export const COLLECT_HOLD_WHYS: readonly CollectHoldWhy[] = Object.keys(COLLECT_HOLD_WHY_TABLE) as CollectHoldWhy[];
 
 /** The pacing row of each word the collector's audit answers with besides `collectable` and `unmeasured` (spec
- *  §5.10, pacing): ccd's `_ws_collect_refuse` words, held set-equal to them in both directions by a test.
+ *  §5.10, pacing): the words ccd's collector refuses with (`_ws_refuse` inside the `COLLECT` and `LOOSE` regions), held
+ *  set-equal to them in both directions by a test.
  *  - `defer`: a deferral, neutral to every run; `listedAfterMs` is how long it must answer without a break before the
  *    id is listed (`0`: at once), or null for never by its own continuity.
  *  - `schedule`: `changed-recently`, re-asked from ccd's `idleAt`, and listed after `listedAfterMs` without a break.

@@ -1,9 +1,9 @@
 // ccd's refusal-helper, token and lock pins (D-7071; ARCH-45, Task C5d; plan 2026-10-27-consolidation-w5-ccd-helpers.md;
 // spec K2, §5.1 rule 1): the characterization C5e, C5f and C5g move code under. Green on the old code, and kept
 // byte-identical through the series except where a task names the line it changes:
-//   - THE TOKEN SETS. Every set the fifteen scanner files harvest from the two refusal helpers' calls, as a literal sorted
-//     list, computed twice: by the scanner's own regex over its own slice (the `BASE_HARVESTS` table, base-only), and by
-//     `census-w5/ccdHelpers.ts#refuseWords` over the same scope. C5e deletes `BASE_HARVESTS` and its one use per row.
+//   - THE TOKEN SETS. Every set the fifteen scanner files harvest from the refusal helper's calls, as a literal sorted
+//     list, computed by `census-w5/ccdHelpers.ts#refuseWords` over the scanner's scope. C5e (D-7072) deleted the
+//     `BASE_HARVESTS` table that also computed each by the scanner's old regex, and its one use per row.
 //   - THE BEHAVIOUR ROWS read their helper names from `REFUSE_HELPERS`; C5e changes that one line to `['_ws_refuse']`.
 //   - "the two helper bodies are byte-identical" cannot hold at one definition, and C5e replaces it in its rename commit.
 //   - THE TOKEN ROW: a literal token over fixed facts, through both minters (C5f makes them one encoding).
@@ -29,7 +29,6 @@ const span = (from: string, to: string): [number, number] => {
   expect(b, `ccd: ${JSON.stringify(to)} does not follow ${JSON.stringify(from)}`).toBeGreaterThan(a);
   return [a, b];
 };
-const nonComment = (t: string): string => t.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
 const marker = (m: string): number => { const i = src.indexOf(m); expect(i, `ccd: the ${m} marker`).toBeGreaterThan(0); return i; };
 /** `ccd-wsaudit-nonpoison.test.ts`'s cut: the RECLAIM, MIRROR, EXPIRE and COLLECT blocks, whole lines. */
 const NONPOISON_BLOCKS = (): [number, number][] =>
@@ -48,23 +47,6 @@ const otherShapes = (t: string): string[] => [
 ];
 const sorted = (xs: Iterable<string>): string[] => [...new Set(xs)].sort();
 
-// BASE-ONLY: C5e (D-7072) deletes this table and its one use in each set row; the literal lists stay byte-identical.
-const BASE_HARVESTS: Record<string, { file: string; re: RegExp; slice: () => string }> = {
-  reapWhole: { file: 'wsaudit.test.ts', re: /_reap_refuse\s+([a-zA-Z][a-zA-Z0-9_-]*)\b/g, slice: () => src },
-  reapEval: { file: 'workspace-refusal-census.test.ts', re: /_reap_refuse ([a-z][a-z-]*)/g, slice: () => nonComment(src.slice(...functionSpan(src, '_ws_reap_eval'))) },
-  reclaim: { file: 'child-reclaim.test.ts', re: /_reap_refuse ([a-z][a-z-]*)/g, slice: () => nonComment(src.slice(marker('RECLAIM-BEGIN'), marker('RECLAIM-END'))) },
-  expire: { file: 'archived-expiry-policy.test.ts', re: /_reap_refuse ([a-z][a-z-]*)/g, slice: () => nonComment(src.slice(marker('EXPIRE-BEGIN'), marker('EXPIRE-END'))) },
-  ladder: { file: 'archived-expiry-policy.test.ts', re: /_reap_refuse ([a-z][a-z-]*)/g, slice: () => nonComment(src.slice(...functionSpan(src, '_ws_reclaim_ladder'))) },
-  collectWhole: { file: 'collect-pacing.test.ts', re: /\b_ws_collect_refuse ([a-z-]+) /g, slice: () => src },
-  collectMarked: { file: 'ccd-refusal-scan.test.ts', re: /_ws_collect_refuse\s+([a-z][a-z0-9-]*)/g, slice: () => src.slice(marker('COLLECT-BEGIN'), marker('COLLECT-END')) },
-  collectRegion: { file: 'collect-readers.test.ts', re: /_ws_collect_refuse ([a-z][a-z-]*)/g, slice: () => nonComment(src.slice(...span('\n_ws_collect_enc() {', '\n# COLLECT-V1.'))) },
-  nonpoison: { file: 'ccd-wsaudit-nonpoison.test.ts', re: /_reap_refuse\s+([a-zA-Z][a-zA-Z0-9_-]*)\b/g, slice: withoutBlocks },
-};
-const harvest = (key: string): string[] => {
-  const h = BASE_HARVESTS[key]!;
-  return sorted([...h.slice().matchAll(h.re)].map((m) => m[1]!));
-};
-
 describe('the token sets each scanner builds from the refusal helpers\' calls (D-7071): literal, both ways', () => {
   it('wsaudit.test.ts, ccd-swap-refuse.test.ts and ccd-actor-flags.test.ts: the reap family over the whole source, 49 words', () => {
     const WORDS = ['attached', 'base-missing', 'branch-elsewhere', 'branch-missing', 'child', 'child-branch-elsewhere', 'child-busy',
@@ -75,7 +57,6 @@ describe('the token sets each scanner builds from the refusal helpers\' calls (D
       'reap-in-progress', 'reclaim-in-progress', 'sensitive-ignored', 'session-busy', 'stash-unreadable', 'stashes-present',
       'state-changed', 'status-unknown', 'tree-busy', 'tree-differs', 'tree-unreadable', 'unpushed-commits', 'worktree-missing'];
     expect(WORDS).toHaveLength(49);
-    expect(harvest('reapWhole')).toEqual(WORDS);
     expect(refuseWords('reap')).toEqual(WORDS);
   });
 
@@ -87,7 +68,6 @@ describe('the token sets each scanner builds from the refusal helpers\' calls (D
       'pr-head-not-ours', 'sensitive-ignored', 'session-busy', 'stash-unreadable', 'stashes-present', 'status-unknown', 'tree-differs',
       'tree-unreadable', 'unpushed-commits', 'worktree-missing'];
     expect(WORDS).toHaveLength(35);
-    expect(harvest('reapEval')).toEqual(WORDS);
     const [from, to] = functionSpan(src, '_ws_reap_eval');
     expect(refuseWords('reap', { from, to, codeOnly: true })).toEqual(WORDS);
   });
@@ -96,7 +76,6 @@ describe('the token sets each scanner builds from the refusal helpers\' calls (D
     const WORDS = ['attached', 'branch-elsewhere', 'containment-unproven', 'held', 'no-such-session', 'no-worktree-record', 'not-a-child',
       'not-a-workspace', 'not-idle', 'paused', 'reap-in-progress', 'state-changed', 'tree-busy', 'tree-unreadable'];
     expect(WORDS).toHaveLength(14);
-    expect(harvest('reclaim')).toEqual(WORDS);
     expect(refuseWords('reap', { from: marker('RECLAIM-BEGIN'), to: marker('RECLAIM-END'), codeOnly: true })).toEqual(WORDS);
   });
 
@@ -104,7 +83,6 @@ describe('the token sets each scanner builds from the refusal helpers\' calls (D
     const WORDS = ['child', 'held', 'in-use', 'live', 'no-such-session', 'not-a-workspace', 'not-archived', 'not-expired', 'paused',
       'reap-in-progress', 'reclaim-in-progress', 'state-changed'];
     expect(WORDS).toHaveLength(12);
-    expect(harvest('expire')).toEqual(WORDS);
     expect(refuseWords('reap', { from: marker('EXPIRE-BEGIN'), to: marker('EXPIRE-END'), codeOnly: true })).toEqual(WORDS);
   });
 
@@ -112,7 +90,6 @@ describe('the token sets each scanner builds from the refusal helpers\' calls (D
     const WORDS = ['attached', 'branch-elsewhere', 'containment-unproven', 'held', 'no-worktree-record', 'not-a-workspace', 'paused',
       'tree-busy', 'tree-unreadable'];
     expect(WORDS).toHaveLength(9);
-    expect(harvest('ladder')).toEqual(WORDS);
     const [from, to] = functionSpan(src, '_ws_reclaim_ladder');
     expect(refuseWords('reap', { from, to, codeOnly: true })).toEqual(WORDS);
   });
@@ -121,7 +98,6 @@ describe('the token sets each scanner builds from the refusal helpers\' calls (D
     const WORDS = ['changed-recently', 'containment-unproven', 'in-progress', 'in-use', 'not-loose', 'not-witnessed', 'paused',
       'quarantine-kept', 'registered', 'witness-mismatch'];
     expect(WORDS).toHaveLength(10);
-    expect(harvest('collectWhole')).toEqual(WORDS);
     expect(refuseWords('collect')).toEqual(WORDS);
   });
 
@@ -129,7 +105,6 @@ describe('the token sets each scanner builds from the refusal helpers\' calls (D
     const WORDS = ['changed-recently', 'containment-unproven', 'in-progress', 'in-use', 'not-witnessed', 'paused', 'quarantine-kept',
       'registered', 'witness-mismatch'];
     expect(WORDS).toHaveLength(9);
-    expect(harvest('collectMarked')).toEqual(WORDS);
     expect(refuseWords('collect', { from: marker('COLLECT-BEGIN'), to: marker('COLLECT-END') })).toEqual(WORDS);
   });
 
@@ -137,7 +112,6 @@ describe('the token sets each scanner builds from the refusal helpers\' calls (D
     const WORDS = ['changed-recently', 'containment-unproven', 'in-progress', 'in-use', 'not-witnessed', 'paused', 'quarantine-kept',
       'registered', 'witness-mismatch'];
     expect(WORDS).toHaveLength(9);
-    expect(harvest('collectRegion')).toEqual(WORDS);
     const [from, to] = span('\n_ws_collect_enc() {', '\n# COLLECT-V1.');
     expect(refuseWords('collect', { from, to, codeOnly: true })).toEqual(WORDS);
   });
@@ -154,13 +128,12 @@ describe('the token sets each scanner builds from the refusal helpers\' calls (D
       'worktree-remove-failed', 'worktree-unregistered'];
     expect(WORDS).toHaveLength(55);
     const others = otherShapes(withoutBlocks());
-    expect(sorted([...harvest('nonpoison'), ...others])).toEqual(WORDS);
     expect(sorted([...refuseWords('reap', { exclude: NONPOISON_BLOCKS() }), ...others])).toEqual(WORDS);
   });
 });
 
 // The helpers' names, read by every behaviour row. C5e changes this one line to `['_ws_refuse']`.
-const REFUSE_HELPERS = ['_reap_refuse', '_ws_collect_refuse', '_ws_refuse'];
+const REFUSE_HELPERS = ['_ws_refuse'];
 
 let h: PrHarness | undefined;
 afterEach(() => { h?.cleanup(); h = undefined; });
@@ -184,12 +157,11 @@ describe('the refusal helpers\' behaviour (D-7071): set the verdict, return 1, p
 });
 
 describe('the refusal helpers\' definitions (D-7071)', () => {
-  // C5e replaces this row in its rename commit: it cannot hold at one definition.
-  it('the two helper bodies are byte-identical', () => {
+  // C5e's ratchet (D-7072), in place of "the two helper bodies are byte-identical", which cannot hold at one definition.
+  it('one verdict-setting refusal helper is defined, `_ws_refuse`, and no byte-identical pair stands (D-7072; may only shrink)', () => {
     const defs = refuseHelperDefs();
-    expect(defs.map((d) => d.name)).toEqual(['_reap_refuse', '_ws_collect_refuse']);
+    expect(defs.map((d) => `ccd/ccd#${d.name}`)).toEqual(['ccd/ccd#_ws_refuse']);
     expect(defs[0]!.body).toBe('REAP_VERDICT="$1"; REAP_DETAIL="$2"; return 1;');
-    expect(defs[1]!.body).toBe(defs[0]!.body);
   });
 });
 

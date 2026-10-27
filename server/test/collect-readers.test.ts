@@ -18,6 +18,7 @@ import {
 } from '../src/collectLane.js';
 import { SENTENCES } from '../src/wsaudit.js';
 import { ccdSource } from './ccdWsHelpers.js';
+import { refuseWords } from './census-w5/ccdHelpers.js';
 import { codeOnly } from './sourceScan.js';
 import { makePrHarness, type PrHarness } from './ccdPrHelpers.js';
 import { COL_ID, COL_RUN, WRONG_TOKEN, collectAudit, collectVerb, makeOrphan, regOf } from './wsCollectFixture.js';
@@ -32,13 +33,15 @@ const ccdSrc = ccdSource();
 const bashCode = (t: string): string => t.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
 /** ccd's text from `from` to the first `to` after it. Both anchors are asserted, so a lost one reds rather than
  *  widening the slice to the rest of the file. */
-const between = (from: string, to: string): string => {
+const between = (from: string, to: string): string => ccdSrc.slice(...offsetsOf(from, to));
+/** `between`'s `[from, to)` offsets of ccd's text, both anchors asserted. */
+function offsetsOf(from: string, to: string): [number, number] {
   const a = ccdSrc.indexOf(from);
   expect(a, `ccd/ccd: ${JSON.stringify(from)} is gone`).toBeGreaterThan(-1);
   const b = ccdSrc.indexOf(to, a + from.length);
   expect(b, `ccd/ccd: ${JSON.stringify(to)} does not follow ${JSON.stringify(from)}`).toBeGreaterThan(a);
-  return ccdSrc.slice(a, b);
-};
+  return [a, b];
+}
 const uniq = (xs: readonly string[]): string[] => [...new Set(xs)].sort();
 
 /** Every probe word ccd's collector answers `unmeasured` with: the literal first argument of each
@@ -58,6 +61,11 @@ const probesFromCcd = (): string[] => {
 
 /** The collector's whole region, from its first helper to the capability's marker. */
 const collectRegion = (): string => bashCode(between('\n_ws_collect_enc() {', '\n# COLLECT-V1.'));
+/** The collector family's words within that region's offsets, comment lines dropped: the census harvest (D-7072). */
+const collectRefuseWords = (): string[] => {
+  const [from, to] = offsetsOf('\n_ws_collect_enc() {', '\n# COLLECT-V1.');
+  return refuseWords('collect', { from, to, codeOnly: true });
+};
 /** Every word `ws-collect` can print as `refused`, by the five routes a word reaches `_ws_collect_refused` or a
  *  literal refusal document. `collectable` and `unmeasured` are verdicts, not refusals. */
 const verbRefusalsFromCcd = (): string[] => {
@@ -65,14 +73,14 @@ const verbRefusalsFromCcd = (): string[] => {
   return uniq([
     ...[...r.matchAll(/_ws_collect_refused "\$id" "[^"]*" ([a-z][a-z-]*)/g)].map((m) => m[1]!),
     ...[...r.matchAll(/_WS_REPROVE_WORD=([a-z][a-z-]*)/g)].map((m) => m[1]!),
-    ...[...r.matchAll(/_ws_collect_refuse ([a-z][a-z-]*)/g)].map((m) => m[1]!),
+    ...collectRefuseWords(),
     ...[...r.matchAll(/REAP_VERDICT=([a-z][a-z-]*)/g)].map((m) => m[1]!),
     ...[...r.matchAll(/"refused":"([a-z-]+)"/g)].map((m) => m[1]!),
   ].filter((w) => w !== 'collectable' && w !== 'unmeasured'));
 };
 /** The audit's own refusal words: the ones `_ws_collect_eval`, its resume and the audit's own rungs set. */
 const auditRefusalsFromCcd = (): string[] =>
-  uniq([...collectRegion().matchAll(/_ws_collect_refuse ([a-z][a-z-]*)/g)].map((m) => m[1]!));
+  uniq(collectRefuseWords());
 /** The words the audit JOURNALS, its terminal ones: `_ws_collect_audit_doc`'s case. */
 const auditJournaledFromCcd = (): string[] => {
   const doc = between('\n_ws_collect_audit_doc() {', '\n# ── end ws-audit --collect');

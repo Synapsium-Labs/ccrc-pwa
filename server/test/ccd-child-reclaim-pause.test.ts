@@ -210,7 +210,7 @@ describe('ccd reclaim-pause', () => {
     expect(outside.length, "ws-reclaim's reader (wave 3) — a switch no deleting verb reads is wired to nothing")
       .toBeGreaterThanOrEqual(1);
     // The scan above is satisfied by a REFUSAL MESSAGE
-    // (`_reap_refuse paused "… ($REG/reclaim-paused)"`), not by a reader — a
+    // (`_ws_refuse paused "… ($REG/reclaim-paused)"`), not by a reader — a
     // mistyped TEST expression with its message left alone still names the
     // path once outside the writer, so `outside` stays >= 1. Pin the reader
     // side separately: the exact expression both readers use,
