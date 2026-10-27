@@ -262,4 +262,22 @@ describe('the real composition root — local mode records its own ccd caps', ()
     expect(await timeToHealth(home, indexTs, port, 8_000)).not.toBeNull();
     expect(await projectPoolsWithin(port, 'unavailable', 5_000)).toBe('unavailable');
   }, 20_000);
+
+  // The measured rule writes only a non-null list (D-7079): a failed read is "no evidence", so the field stays
+  // unwritten and `projectPools` stays 'unknown'. Recording it as `[]` would answer 'unavailable', a false fact.
+  // The stub touches a marker when asked `caps` (it inherits the server's env, so the path comes from
+  // `CCRC_HOME`, not from this file), so the row waits until the read has demonstrably run, then holds a grace
+  // window in which an 'unavailable' answer would end the poll early and fail the assertion.
+  it('a ccd whose caps fails is not recorded: projectPools stays unknown after the read ran', async () => {
+    const home = mkTmp('ccrc-boot-');
+    writeRoster(home);
+    writeStubCcd(home, 'if [ "$1" = caps ]; then touch "$CCRC_HOME/.caps-asked"; fi\nexit 1');
+    const port = freshPort();
+    expect(await timeToHealth(home, indexTs, port, 8_000)).not.toBeNull();
+    const marker = path.join(home, '.caps-asked');
+    const askedBy = Date.now() + 5_000;
+    while (!existsSync(marker) && Date.now() < askedBy) await new Promise((r) => setTimeout(r, 50));
+    expect(existsSync(marker), 'the local-mode caps read must have run').toBe(true);
+    expect(await projectPoolsWithin(port, 'unavailable', 1_500)).toBe('unknown');
+  }, 20_000);
 });
