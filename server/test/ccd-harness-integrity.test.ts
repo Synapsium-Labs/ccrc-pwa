@@ -106,6 +106,9 @@ const TEST_LOCAL_HELPERS: Readonly<Record<string, readonly string[]>> = {
   'ccd-path-users-esrch.test.ts': ['_fpp'],
   'ccd-path-users-many.test.ts': ['_fpp'],
   'ccd-path-users.test.ts': ['_fpp'],
+  // Each retire-verdict cell's own driver: `__cell` takes the lock and seeds a verb's locals, `__inner` is the body it
+  // runs under `_ws_reclaim_contained`.
+  'ccd-retire-verdicts.test.ts': ['__cell', '__inner'],
   'ccd-route-apply.test.ts': ['_tmux_recording'],
   'ccd-route-tick.test.ts': ['_advance'],
   'ccd-tick-diet-clock-seam.test.ts': ['_advance'],
@@ -124,6 +127,8 @@ const TEST_LOCAL_HELPERS: Readonly<Record<string, readonly string[]>> = {
   'ccrc-doctor-fleet.test.ts': ['_check_alpha', '_check_beta', '_check_boom', '_check_dual', '_check_gamma', '_check_liar',
     '_check_mute', '_check_nothing', '_check_omega', '_check_sneak', '_check_weird'],
   'ccrc-models.test.ts': ['_fk_cfg', '_fk_log', '_fk_probe', '_fk_rc', '_fk_ret'],
+  // The redactor census's fixture function: a python table in a bash heredoc, which the scanner must name.
+  'census-w5/redactors.test.ts': ['_fx_py'],
   'collectFixture.ts': ['_t'],
   'pool-name-parity.test.ts': ['_doctor_omits'],
   'pools-existence-pairing.test.ts': ['_fixture_latest', '_fixture_message', '_fixture_mixed', '_fixture_reader',
