@@ -219,7 +219,9 @@ Download it, or use `bash <(curl -fsSL …)`.
   (an interactive install only) `nvm install --lts`; without nvm, the `node` on your `PATH`. It links that node into `~/.local/libexec/ccrc/node-bin` and writes
   `~/.config/environment.d/50-ccrc-node.conf` so the manager finds it. `ccrc doctor`'s
   `node-path` check measures this and `ccrc doctor --fix` re-chooses among installed versions.
-  `systemctl --user show-environment` shows what the units see.
+  `systemctl --user show-environment` shows what the units see. Processes already running (the
+  tmux server, session panes, supervisors) see the new `PATH` only after their next restart or a
+  re-login.
 - **A C/C++ build toolchain and the npm registry.** An install that places a new tree,
   and so every update, runs `npm ci --omit=dev` on the box — release mode included — and
   `node-pty` ships no Linux prebuilt binary, so it compiles there through `node-gyp`
