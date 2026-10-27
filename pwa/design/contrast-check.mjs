@@ -274,13 +274,20 @@ const pairs = (T, name) => [
   [`${name} limit ok / track (UI 3:1)`, T.lOk, T.track, 3],
   [`${name} limit warn / track (UI 3:1)`, T.lWarn, T.track, 3],
   [`${name} limit crit / track (UI 3:1)`, T.lCrit, T.track, 3],
-  // THE FOURTH BAND IS DELIBERATELY ABSENT FROM THIS CONTRACT. `off` measures
-  // 1.02-1.10 against the track in all twelve palettes — it is not a quiet
-  // fill, it is an invisible one. That is a PRESERVED defect, not an accepted
-  // floor: stating it here as a pair would red the gate for a pixel this
-  // branch is not allowed to change. It is pinned instead by
-  // `pwa/test/limit-off-band.test.ts`, which measures the same numbers and
-  // reds if they move in either direction.
+  // THE FOURTH BAND IS ABSENT FROM THIS CONTRACT, BY DESIGN. `off` paints
+  // `bg-ink-tertiary` (meter.tsx, D-5494), which measures 3.99-5.04 on the
+  // track and is gated as text on the card grounds above; it is not a
+  // fill-on-track pair here, and `pwa/test/limit-off-band.test.ts` pins the
+  // numbers in both directions.
+  // THE EMPTY METER'S OUTLINE (T2c, D-6329). `Meter`'s track carries a 1px
+  // inset ring in --ink-tertiary: over the twelve palettes and both card
+  // grounds the track itself (--limit-track) measures 1.07-1.56, --edge-subtle
+  // 1.12-1.71 and --edge-strong 1.43-2.15, so no edge token clears 3:1
+  // everywhere and a 0% meter could be a blank. The ring is a non-text mark
+  // (3:1) on the desk card's ground (--bg-raised) and the phone card's
+  // (--bg-surface).
+  [`${name} meter track outline / raised (UI 3:1)`, T.inkT, T.raised, 3],
+  [`${name} meter track outline / surface (UI 3:1)`, T.inkT, T.surface, 3],
   // The ask sheet's two accent-on-quiet-ground texts. Both are 11px
   // (--fs-2xs), so both are body text at 4.5 — not the 3:1 UI threshold.
   [`${name} ask header chip / accent-tint`, T.accent, T.accentTint, 4.5],

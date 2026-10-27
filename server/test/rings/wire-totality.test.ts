@@ -26,6 +26,7 @@ import { WIRE_TOTALITY_EXEMPTIONS as EXEMPT } from './wire-totality.data.js';
 import {
   POOLS_ENFORCEMENTS, SESSION_BUCKETS, SESSION_STATUSES, isPoolsEnforcement,
 } from '../../../shared/api.js';
+import { WORKSPACE_STATES, WORKSPACE_VERBS, isWorkspaceState, isWorkspaceVerb } from '../../../shared/workspaceTransitions.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const SHARED = path.join(ROOT, 'shared');
@@ -102,6 +103,20 @@ describe('wire totality: every exported literal union in shared/*.ts has a deriv
     expect([...POOLS_ENFORCEMENTS]).toEqual(members('PoolsEnforcement'));
     expect([...SESSION_STATUSES]).toEqual(members('SessionStatus'));
     expect([...SESSION_BUCKETS]).toEqual(members('SessionBucket'));
+  });
+
+  // ARCH-41 (#776): the workspace transition table's two closed sets carry exactly their unions' members.
+  it('WORKSPACE_VERBS and WORKSPACE_STATES carry exactly their unions\' members, and their guards accept only those', () => {
+    const members = (name: string): string[] =>
+      PARSED.get('workspaceTransitions.ts')!.exportedTypeAliases.find((a) => a.name === name)!.literals!;
+    expect([...WORKSPACE_VERBS]).toEqual(members('WorkspaceVerb'));
+    expect([...WORKSPACE_STATES]).toEqual(members('WorkspaceState'));
+    for (const v of WORKSPACE_VERBS) expect(isWorkspaceVerb(v), v).toBe(true);
+    for (const v of WORKSPACE_STATES) expect(isWorkspaceState(v), v).toBe(true);
+    for (const v of [undefined, null, '', 'Archive', 0, {}]) {
+      expect(isWorkspaceVerb(v), String(v)).toBe(false);
+      expect(isWorkspaceState(v), String(v)).toBe(false);
+    }
   });
 
   it('isPoolsEnforcement accepts exactly the members and nothing else', () => {

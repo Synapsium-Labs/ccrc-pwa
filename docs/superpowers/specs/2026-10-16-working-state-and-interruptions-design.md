@@ -611,7 +611,7 @@ hold has a name):
   (`coord/store.ts` ≈:3185 and ≈:3228; the archive door's `coordinator-has-open-runs` refusal reads the first), and the
   population the dead-coordinator lane sweeps, so a coordinator whose runs wait at `awaiting-review` or `merging` is never
   put to sleep. A run read that fails holds (`runs-unreadable`); no claim it holds; no queued mail to it;
-- nobody has it open (hold `viewer`), under this **presence contract**. `Presence` (`server/src/presence.ts`) keeps,
+- nobody has it open (hold `viewer`), under this **presence contract**. `Viewers` (`server/src/viewer.ts`) keeps,
   beside today's visible claim, an *open* claim per `/ws/session/:id` connection: stamped when the socket connects
   (`server.ts` ≈:1734) and re-stamped by every frame the client sends, visible or not, dropped when the socket closes,
   and believed for `PRESENCE_OPEN_TTL_MS` (10 minutes, beside `PRESENCE_TTL_MS` in `shared/api.ts` ≈:4166) after its last
@@ -622,7 +622,7 @@ hold has a name):
   notifications). A browser throttles a hidden tab's timers to about once a minute at the most [I, browser documentation],
   inside the 10-minute TTL, so **a hidden but open tab holds its session**. A page the browser has frozen or the OS has
   suspended runs no timer and sends nothing; its claim lapses after the TTL, and that is the case the wake trigger below
-  covers when the operator returns. Presence is never persisted (`presence.ts`: "a server that just restarted
+  covers when the operator returns. Presence is never persisted (`viewer.ts`: "a server that just restarted
   correctly believes nobody is watching"), so for `PRESENCE_OPEN_TTL_MS` after the server starts every candidate holds
   as `viewer`: a hidden tab that has not yet reconnected after a deploy is not taken for an empty screen;
 - not stranded, swap-blocked, under a substrate fault, archived or expiring; no opt-out marker `$REG/<id>.no-hibernate`.

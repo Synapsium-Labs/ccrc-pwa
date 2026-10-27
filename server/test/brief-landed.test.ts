@@ -20,7 +20,7 @@ import { queueSystemMail } from '../src/coord/rundefsTx.js';
 import type { PushPayload } from '../src/push.js';
 import { MAIL_SUBJECT_MAX_BYTES } from '../../shared/api.js';
 import { briefNotTakenSubject } from '../src/coord/briefwatch.js';
-import { testDeps } from './helpers.js';
+import { testDeps, withFakeClock } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 
 const WORKER = 'project-a-quiet-basin';
@@ -45,15 +45,15 @@ const liveHarness = (st: Box): Harness => {
   const calls: string[][] = [];
   const run: Runner = async (_cmd, args) => {
     calls.push([...args]);
-    if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
-    if (args[0] === 'list-panes') return { code: 0, stdout: `${PID}\n`, stderr: '' };
-    if (args[0] === 'capture-pane') return { code: 0, stdout: `❯ ${st.box}\n`, stderr: '' };
+    if (args[0] === 'has-session') return { ran: true, code: 0, stdout: '', stderr: '' };
+    if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: `${PID}\n`, stderr: '' };
+    if (args[0] === 'capture-pane') return { ran: true, code: 0, stdout: `❯ ${st.box}\n`, stderr: '' };
     if (args[0] === 'send-keys') {
       if (args[3] === '-l') st.box += args[5]!;
       else if (args[3] === 'Enter' && st.enterWorks) st.box = '';
-      return { code: 0, stdout: '', stderr: '' };
+      return { ran: true, code: 0, stdout: '', stderr: '' };
     }
-    return { code: 1, stdout: '', stderr: '' };
+    return { ran: true, code: 1, stdout: '', stderr: '' };
   };
   return { home, calls, run };
 };
@@ -93,7 +93,7 @@ const dispatched = (coord: CoordStore): { runId: number; deliveryId: number } =>
 
 const primed = async (h: Harness, coord: CoordStore, push: unknown): Promise<FleetWatcher> => {
   const deps: Deps = { ...testDeps(h.home, h.run), coord, push: push as never };
-  const w = new FleetWatcher(deps, new Bus(), 2000);
+  const w = new FleetWatcher(withFakeClock(deps), new Bus(), 2000);
   await w.tick();
   return w;
 };
@@ -309,6 +309,34 @@ describe('the wave brief is confirmed taken (D-5841)', () => {
     expect(notices(coord)).toEqual([]);
     expect(sent.filter((p) => p.tag === `brief-not-taken-${runId}`)).toHaveLength(1);
     expect(literalSends(h.calls)).toEqual([]);
+  }, 30_000);
+
+  it('a run whose row cannot be read at the notice is retried, never the row alone: the claimant is mailed once it reads', async () => {
+    const st = { box: 'a human line', enterWorks: false };
+    const h = liveHarness(st);
+    const coord = store(h.home);
+    const { push } = pushSpy();
+    const w = await primed(h, coord, push);
+    seedWorker(h.home);
+    const { runId } = dispatched(coord);
+    const realRun = coord.run.bind(coord);
+    let broken = false;
+    vi.spyOn(coord, 'run').mockImplementation((id) => (broken && id === runId
+      ? { ok: false as const, kind: 'run-unreadable' as const, detail: 'fixture' } : realRun(id)));
+    for (let t = 0; t < BRIEF_NOTICE_MS; t += 60_000) { await w.sweepMail(); advance(60_000); }
+    expect(notices(coord)).toEqual([]);
+    broken = true;
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    await w.sweepMail();
+    expect(briefRows(coord, runId, 'brief-not-taken'), 'an unreadable run was recorded as "nobody to mail"').toBe(0);
+    expect(notices(coord)).toEqual([]);
+    broken = false;
+    advance(60_000);
+    await w.sweepMail();
+    const n = notices(coord);
+    expect(n).toHaveLength(1);
+    expect(n[0]!.toId).toBe(COORD);
+    warn.mockRestore();
   }, 30_000);
 
   it('a parked brief noticed at 10 minutes absorbs the lane\'s own park escalation: one brief push over 30 minutes, no park push', async () => {

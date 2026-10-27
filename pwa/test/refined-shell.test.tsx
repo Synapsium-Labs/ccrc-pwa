@@ -15,7 +15,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { REFINED } from '@ccrc/ui';
 import { declaredValues } from './cssRule';
-import type { NotifyEvent, RunSummary } from '../../shared/api';
+import type { AccountUsage, NotifyEvent, RunSummary } from '../../shared/api';
 
 vi.mock('../src/lib/routes', async (importOriginal) => {
   const real = await importOriginal<typeof import('../src/lib/routes')>();
@@ -39,6 +39,7 @@ vi.mock('../src/lib/push', () => ({
 }));
 
 const { App } = await import('../src/app');
+const { api } = await import('../src/lib/api');
 const { navigate } = await import('../src/lib/router');
 const { ROUTES } = await import('../src/lib/routes');
 const { setSkin } = await import('../src/lib/skin');
@@ -70,6 +71,8 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
+  // The `api.accounts` spies the lanes-row cases add must not leak into the next case.
+  vi.restoreAllMocks();
   act(() => { navigate('/'); });
   act(() => useFleetStore.setState({ sessions: [], conn: 'connecting', notices: [], feed: [], runs: [], runsFrameSeen: false }));
 });
@@ -79,7 +82,7 @@ const primary = (): HTMLElement => within(bar()).getByRole('navigation', { name:
 const tabs = (): HTMLElement[] => [...primary().querySelectorAll<HTMLElement>('[data-command^="go-"]')];
 
 describe('the app bar (W2 Task S4b)', () => {
-  it('the app bar renders the wordmark, the five tabs from ROUTES, the gauges door, the bell, search, settings and New session, in that order', () => {
+  it('the app bar renders the wordmark, the five tabs from ROUTES, the bell, search, settings and New session, in that order', () => {
     atWidth(1280);
     render(<App />);
     const b = bar();
@@ -89,7 +92,6 @@ describe('the app bar (W2 Task S4b)', () => {
     const order = [
       b.querySelector('[data-wordmark]'),
       ...tabs(),
-      b.querySelector('.accounts-compact'),
       within(b).getByRole('button', { name: /^Notifications/ }),
       within(b).getByRole('button', { name: 'Search and commands' }),
       within(b).getByRole('button', { name: /^Settings/ }),
@@ -102,12 +104,11 @@ describe('the app bar (W2 Task S4b)', () => {
     }
   });
 
-  it('every tab, the gauges door, search, settings and New session carry their data-command', () => {
+  it('every tab, search, settings and New session carry their data-command', () => {
     atWidth(1280);
     render(<App />);
     expect(tabs().map((t) => t.getAttribute('data-command'))).toEqual(TAB_IDS.map((id) => `go-${id}`));
     const b = bar();
-    expect(b.querySelector('.accounts-compact')).toHaveAttribute('data-command', 'go-accounts');
     expect(within(b).getByRole('button', { name: 'Search and commands' })).toHaveAttribute('data-command', 'open-palette');
     expect(within(b).getByRole('button', { name: /^Settings/ })).toHaveAttribute('data-command', 'go-settings');
     expect(within(b).getByRole('button', { name: /New session/ })).toHaveAttribute('data-command', 'new-session');
@@ -207,12 +208,30 @@ describe('the app bar (W2 Task S4b)', () => {
     expect(palette()).not.toBeNull();
   });
 
+  it("at ≥900 the bar's line holds no gauges, and the header's second line is the lanes row, every lane's card", async () => {
+    const lane = (wrapper: string, five: number): AccountUsage => ({
+      wrapper, five, seven: five, ts: 1, fiveResetAt: null, sevenResetAt: null, fiveRolledOver: false, sevenRolledOver: false,
+      disabled: false, authDead: false,
+    });
+    const lanes = ['lane-a', 'lane-b', 'lane-c', 'lane-d', 'lane-e', 'lane-f', 'lane-g'].map((w, i) => lane(w, 10 + i));
+    vi.spyOn(api, 'accounts').mockResolvedValue({ accounts: lanes, projected: { wrapper: 'lane-a', score: 0 }, roster: [] });
+    atWidth(1280);
+    render(<App />);
+    const line = bar().querySelector<HTMLElement>('.ref-bar')!;
+    await within(bar()).findByText('lane-g');
+    expect(line.querySelector('.accounts-strip, .account-gauge, .meter')).toBeNull();
+    // The header holds two lines, in order: the bar's, then the lanes row, with a card for every lane.
+    expect([...bar().children]).toEqual([line, bar().querySelector('.accounts-strip')]);
+    expect(bar().querySelectorAll('.accounts-strip > .account-gauge')).toHaveLength(lanes.length);
+  });
+
   for (const width of [899, 900]) {
     it(`one accounts strip and one banner stack at any width (${width})`, () => {
       atWidth(width);
       render(<App />);
       const fleet = screen.getByRole('region', { name: 'Fleet' });
-      const readouts = document.querySelectorAll('.accounts-strip, .accounts-compact');
+      // The full strip at every width: at the desk it sits in the header under the bar's line, below 900 in the column.
+      const readouts = document.querySelectorAll('.accounts-strip');
       expect(readouts).toHaveLength(1);
       // Every banner keeps a slot while it is mounted, shown or not, so one slot per id is one stack.
       for (const id of ['fleet-host', 'halt', 'substrate', 'offline', 'connecting', 'passkey']) {
@@ -220,7 +239,8 @@ describe('the app bar (W2 Task S4b)', () => {
       }
       const slot = document.querySelector('.banner-slot[data-banner="fleet-host"]')!;
       if (width >= 900) {
-        expect(bar().contains(readouts[0]!), 'the gauges are the bar\'s').toBe(true);
+        expect(bar().contains(readouts[0]!), 'the lanes row is the header\'s').toBe(true);
+        expect(bar().querySelector('.ref-bar')!.contains(readouts[0]!), 'and not the bar line\'s').toBe(false);
         expect(fleet.contains(slot), 'the banners span the frame, not the sidebar').toBe(false);
         expect(slot.closest('.shell-banners')).not.toBeNull();
         // The sidebar's head keeps its readouts and gives its wordmark and doors to the bar: one identity mark.
@@ -257,12 +277,18 @@ describe("Refined's frame (refined.css)", () => {
 
   it('the sidebar is clamp(320px, 24vw, 400px), and 400 at ≥1600', () => {
     expect(block('(min-width: 900px)')).toMatch(/grid-template-columns:\s*clamp\(320px, 24vw, 400px\) minmax\(0, 1fr\);/);
-    expect(block('(min-width: 900px)')).toMatch(/grid-template-rows:\s*56px auto minmax\(0, 1fr\);/);
+    expect(block('(min-width: 900px)')).toMatch(/grid-template-rows:\s*auto auto minmax\(0, 1fr\);/);
     expect(block('(min-width: 1600px)')).toMatch(/grid-template-columns:\s*400px minmax\(0, 1fr\);/);
   });
   // The tab is the bar's full height, so a ring drawn OUTSIDE it (Door's FOCUS_RING, offset 2px) loses its top edge
   // off the top of the page and its bottom edge under the banners and the sidebar row: a keyboard user sees two side
   // lines and no box. The ring is drawn inside the tab instead (the inset-ring precedent in fleet.css).
+  it("the frame's first row is auto, and the bar's line keeps 56 px", () => {
+    expect(declaredValues(block('(min-width: 900px)'), '.app-shell.ref-frame', 'grid-template-rows')).toEqual(['auto auto minmax(0,1fr)']);
+    expect(declaredValues(css, '.ref-bar', 'height')).toEqual(['56px']);
+    // Two lines in the header, the bar's over the lanes row.
+    expect(declaredValues(block('(min-width: 900px)'), '.ref-frame > .shell-accounts', 'flex-direction')).toEqual(['column']);
+  });
   it("the banner stack spans the frame in the row under the bar; the sidebar and the detail sit below it", () => {
     const desk = block('(min-width: 900px)');
     expect(declaredValues(desk, '.ref-frame > .shell-banners', 'grid-row')).toEqual(['2']);

@@ -19,7 +19,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { makePrHarness, type PrHarness } from './ccdPrHelpers.js';
-import { CCD } from './ccdWsHelpers.js';
+import { CCD, ccdSource } from './ccdWsHelpers.js';
 import { realMounts } from './wsCollectFixture.js';
 import { spawnSyncGroup } from './spawnGroup.js';
 import { DARWIN_IDENT_SHIMS } from './worktreeIdentityFixture.js';
@@ -129,7 +129,7 @@ const devrelOf = (phys: string): string => {
 /** One function's code lines in ccd: from its `name() {` line to the first line that opens with `}`, with whole-line
  *  comments dropped. This is the call graph's own region rule. */
 const codeOf = (name: string): string => {
-  const ls = fs.readFileSync(CCD, 'utf8').split('\n');
+  const ls = ccdSource().split('\n');
   const at0 = ls.findIndex((l) => l.startsWith(`${name}() {`));
   expect(at0, `the CONTROL: ccd defines ${name}`).toBeGreaterThanOrEqual(0);
   const end = ls.findIndex((l, i) => i > at0 && l.startsWith('}'));
@@ -575,7 +575,7 @@ describe('the walk and the identity helpers, by their source', () => {
   });
 
   it('WS_RECLAIM_WALK_S is defined once, at 5 s', () => {
-    expect([...fs.readFileSync(CCD, 'utf8').matchAll(/^WS_RECLAIM_WALK_S=(\d+)\b/gm)].map((m) => m[1])).toEqual(['5']);
+    expect([...ccdSource().matchAll(/^WS_RECLAIM_WALK_S=(\d+)\b/gm)].map((m) => m[1])).toEqual(['5']);
   });
 
   it('the walk reads only the table its caller names: no /proc/self/mountinfo, no _ws_collect_mountinfo', () => {

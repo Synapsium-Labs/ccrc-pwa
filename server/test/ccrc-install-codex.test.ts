@@ -484,6 +484,40 @@ describe('ccrc install: the codex tier restart step, measured in isolation (_ins
     expect(r.degraded).toEqual([]);
     expect(r.lockAfter).toBe('');
   });
+
+  // ── codex bridge Stage 2, Task 11: the lane's mode decides the tiers ──
+  const A_B = '_codex_tier_ours codex-a bridge';
+  it('a direct lane walks its bridge tier only: a running stale bridge is stopped, then started, then re-measured', () => {
+    const r = runTiersStep({
+      modes: { 'codex-a': 'direct' }, ours: { 'codex-a bridge': [0, 1, 0] }, stale: { 'codex-a bridge': 0 }, readyS: '5',
+    });
+    expect(r.calls).toEqual([LOCK_A, A_B, '_codex_tier_stale codex-a bridge', '_codex_stop_tier codex-a bridge', A_B,
+      '_codex_start_tier codex-a bridge', A_B, UNLOCK_A]);
+    expect(r.stdout).toMatch(/^install: codex tiers: codex-a bridge: restarted — it was running code this install replaced$/m);
+    expect(r.stdout).toMatch(/— 1 restarted, 0 left as they were, 0 not restarted$/m);
+    expect(r.degraded).toEqual([]);
+  });
+
+  it('a direct lane\'s stale bridge is restarted with no LiteLLM runtime resolving: the bridge runs none', () => {
+    const r = runTiersStep({
+      runtime: false, modes: { 'codex-a': 'direct' }, ours: { 'codex-a bridge': [0, 1, 0] }, stale: { 'codex-a bridge': 0 },
+    });
+    expect(r.calls).toContain('_codex_start_tier codex-a bridge');
+    expect(r.stderr).not.toMatch(/no codex runtime resolves/);
+    expect(r.degraded).toEqual([]);
+  });
+
+  // The whole-wave fix round (LB-1): the mode is read under the lane lock, so this lane's lock is taken, and released
+  // through `_codex_unlock` before the next lane's.
+  it('a lane whose mode cannot be read is one NOT measured line, its tiers skipped and counted, read under its lock and the lock released', () => {
+    const r = runTiersStep({ lanes: ['codex-a', 'codex-b'], modes: { 'codex-a': null } });
+    expect(r.calls).toEqual([LOCK_A, UNLOCK_A, LOCK_B, B_L, B_S, UNLOCK_B]);
+    expect(r.lockAfter).toBe('');
+    expect(r.stderr).toMatch(/^install: codex tiers: codex-a: NOT measured — its lane\.json names no mode this ccrc can read/m);
+    expect(r.stdout).toMatch(/^install: codex tiers: 2 codex lane\(s\) — 0 restarted, 0 left as they were, 3 not restarted$/m);
+    expect(r.degraded).toEqual(['codex-tiers']);
+  });
+
 });
 
 describe('ccrc install: the codex usage converge, measured in isolation (_inst_codex_usage, Plan 3a Task 6)', () => {
@@ -940,6 +974,58 @@ describeLinux('ccrc install: the codex tier restart step on a real spine (Plan 2
     expect(r.code).toBe(doctorCode(home));
     expect(await laneAnswer(lane.proxyPort)).toBeNull();
   }, 180_000);
+});
+
+// Codex bridge Stage 2, Task 11: `_inst_codex_lanes`, on a real spine. A lane.json rendered before the bridge has no
+// `bridge`, `upstream` or `bridgeFiles`; the doctor reads it stale and FAILs it, so an update onto this tree would exit
+// 3 unless the spine re-renders it first, through the one writer.
+describeLinux('ccrc install: the codex lanes step on a real spine (codex bridge Stage 2, Task 11)', () => {
+  const homes: string[] = [];
+  afterEach(async () => {
+    for (const h of homes.splice(0)) await killLaneProcesses(h);
+  });
+  const codexRows = (out: string): string => out.split('\n').filter((l) => /^(PASS|WARN|FAIL|SKIP) codex: /.test(l)).join('\n');
+
+  it('ccrc install over a lane.json from before this plan gives a clean codex check', async () => {
+    const [lane] = await freeLanes(['codex-a']);
+    const home = codexBox('ccrc-codex-lanes-old-', [lane!]);
+    homes.push(home);
+    // A lane as the flip leaves one (the rehearsal's own steps): wrappers, a registry and a probed catalogue, its
+    // LiteLLM config, its credential. So the doctor's codex check has nothing to FAIL but the lane.json under test.
+    const w = runInstall(home, ['wrappers'], READY);
+    expect(w.code, `ccrc wrappers:\n${w.stdout}\n${w.stderr}`).toBe(0);
+    plantFlippedLaneModels(home, 'codex-a');
+    const lit = runInstall(home, ['models', 'litellm', 'codex-a'], READY, { from: REPO_CCRC });
+    expect(lit.code, `ccrc models litellm codex-a:\n${lit.stdout}\n${lit.stderr}`).toBe(0);
+    plantLaneAuth(home, 'codex-a');
+    const lj = join(laneDir(home, 'codex-a'), 'lane.json');
+    expect(existsSync(lj), 'the flip\'s steps rendered no lane.json').toBe(true);
+    // The box installed once on this tree, its codex check clean: the state an update starts from.
+    const first = runInstall(home, ['install'], READY);
+    expect(existsSync(dotCcrc(home, 'installed')), `${first.stdout}\n${first.stderr}`).toBe(true);
+    expect(codexRows(first.stdout), first.stdout).not.toMatch(/^FAIL codex: /m);
+    const rendered = JSON.parse(read(lj)) as Record<string, unknown>;
+    const old = Object.fromEntries(Object.entries(rendered).filter(([k]) => !['bridge', 'upstream', 'bridgeFiles'].includes(k)));
+    writeFileSync(lj, `${JSON.stringify(old, null, 2)}\n`);
+    // The instrument first: this lane.json is one the doctor FAILs, and it is the only codex FAIL.
+    const before = runInstall(home, ['doctor'], READY);
+    const fails = codexRows(before.stdout).split('\n').filter((l) => l.startsWith('FAIL '));
+    expect(fails.length, before.stdout).toBeGreaterThan(0);
+    for (const l of fails) expect(l).toMatch(/lane\.json/);
+    const r = runInstall(home, ['install'], READY);
+    expect(existsSync(dotCcrc(home, 'installed')), `${r.stdout}\n${r.stderr}`).toBe(true);
+    expect(r.stdout).toMatch(/^install: codex lanes: codex-a: lane\.json re-rendered from the roster$/m);
+    expect(r.stdout).toMatch(/^install: codex lanes: 1 codex lane\(s\) — 1 re-rendered, 0 left as they were, 0 failed$/m);
+    const out = r.stdout.split('\n');
+    expect(out.findIndex((l) => l.startsWith('install: codex lanes: 1 ')))
+      .toBeLessThan(out.findIndex((l) => l.startsWith('install: codex tiers: 1 ')));
+    expect(JSON.parse(read(lj))).toEqual(rendered);
+    expect(codexRows(r.stdout), r.stdout).not.toMatch(/^FAIL codex: /m);
+    const d = runInstall(home, ['doctor'], READY);
+    expect(codexRows(d.stdout), d.stdout).not.toMatch(/^FAIL codex: /m);
+    // The first install found it current and rendered nothing.
+    expect(first.stdout).toMatch(/^install: codex lanes: 1 codex lane\(s\) — 0 re-rendered, 1 left as they were, 0 failed$/m);
+  }, 300_000);
 });
 
 describeLinux('ccrc install: the codex usage converge on a real spine (Plan 3a Task 6)', () => {

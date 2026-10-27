@@ -11,7 +11,8 @@ at plan time through the allocator; this spec defines none.
 ccrc today decides nothing about which model class, effort level, subagent class or workflow mode
 a supervised session runs. Every Anthropic session is typed `/effort ultracode` at spawn and again
 at every resume and swap (`ccd/ccd`: `SPAWN_EFFORT`, `_inject_spawn_effort`, fired from
-`_spawn_settle`), the lane's `settings.json` picks the model, subagents inherit the session model
+`_spawn_settle`; that was the starting state — since the 2026-10-25 ruling in §10 a session with no
+routing record is typed `/effort high`, the coordinator row's effort), the lane's `settings.json` picks the model, subagents inherit the session model
 on Anthropic lanes, and a swap erases whatever the session had chosen. The 30-day measurement
 behind this design found output tokens at 7% of API-equivalent spend, context re-read at 64%,
 context growth at 29%, and Opus subagents alone at 44%.
@@ -100,11 +101,12 @@ vocabulary §5.1 validates against.
 
 | Work shape | Main loop | Subagents | Workflow mode | Why |
 |---|---|---|---|---|
-| Coordinator: opens the program, dispatches waves, re-measures wave-done, reviews handoffs, rules on deviations; every operator-started session | Opus · ultracode while orchestrating; drops itself to Opus · high with workflows off while idle on mail | Opus · high review lenses (3–5, scaled to the diff); Sonnet · high refute pass per finding; Haiku scouts | On while orchestrating | Operator instruction 2026-09-22 supersedes the class in the 2026-09-14 ruling: operator-started sessions still decide routing for everything below them, but they start on Opus, because Fable is reached only by an explicit human choice and may therefore not be anybody's default. Effort still runs above the Anthropic default of `high` (higher effort over-deliberates on routine work), which is why the idle drop is part of the row. |
-| Brainstorm, spec, architecture with cross-cutting blast radius; multi-day plan | Opus · high; ultracode at the decision itself | Opus · high refuters and design lenses; Sonnet fact checks | On as a judge panel only when the solution space is wide | Design and long horizons are what Fable's launch guidance names, and this row used to route there on that guidance alone — never independently measured. Operator instruction 2026-09-22 ends the automatic hop: the shape runs on Opus, and a human who wants Fable for a particular decision selects it on the picker. A panel pays only when there is a real space of designs (design choice). |
+| Coordinator: opens the program, dispatches waves, re-measures wave-done, reviews handoffs, rules on deviations; every operator-started session | Opus · high | Sonnet Agent-tool subagents (the route's subagent class, at the session's effort); in a clause-19 workflow, Opus · medium review, verification or audit lenses (3–5, scaled to the diff), Sonnet · medium refute pass per finding; Haiku scouts | On (enabled), launched only under clause 19: a short, self-contained, time-capped review, verification or audit; never standing orchestration | Operator instruction 2026-09-22 supersedes the class in the 2026-09-14 ruling: operator-started sessions still decide routing for everything below them, but they start on Opus, because Fable is reached only by an explicit human choice and may therefore not be anybody's default. Operator ruling 2026-10-25 (coordinator clause 19) ends the standing workflow orchestration this row used to carry (standing workflows at xhigh, dropping to high when idle on mail): workflows are not a default, a coordinator never holds its turn open on anything that waits for its own children, and mail to a coordinator is held while it reads busy, so a long workflow is what kept child mail undelivered. Child work runs in child sessions; the coordinator dispatches, ends its turn and wakes on mail. Workflows stay enabled (`enableWorkflows`, the route's `workflow on`) because with them off even a clause-19 review could not launch; what the ruling removes is the effort level that made orchestration standing, so the spawn default (`ROUTE_COORDINATOR_ROW` in `ccd/ccd`) is this row field for field. |
+| Brainstorm, spec, architecture with cross-cutting blast radius; multi-day plan | Opus · high; xhigh at the decision itself | In a short, time-capped clause-19 workflow, Opus · medium refuters and design lenses; Sonnet · medium fact checks | On (enabled), launched only under clause 19 as a short, time-capped judge panel when the solution space is wide; never standing orchestration | Design and long horizons are what Fable's launch guidance names, and this row used to route there on that guidance alone — never independently measured. Operator instruction 2026-09-22 ends the automatic hop: the shape runs on Opus, and a human who wants Fable for a particular decision selects it on the picker. A panel pays only when there is a real space of designs (design choice); since operator ruling 2026-10-25 (coordinator clause 19) it is a short, time-capped workflow, never standing orchestration. |
 | Worker executing a spec'd plan: a dependent chain that fits one context | Opus · high | Sonnet · high implementers; Sonnet · high per-task reviewer (the held-out panel is the gate, so a wave's own reviewer takes the cheaper rung; the panel's judgement lenses stay on Opus · high); Haiku scouts | Off | Measured by Anthropic, not on this fleet: a single model on a dependent chain that fits one context beat orchestration in every case, at lower effort; Opus 5 matched Fable 5 on coding at 60% of its cost. Measured here: this fleet's Opus turns average 155k of context, so a wave that outgrows one context falls under the bulk row; the coordinator names the row in the brief. The wave's `route` carries `compact 40` (the worker's lower threshold, S6-R9): a dependent chain that fills one context compacts earlier than the box default, so the wave's later tasks start lean. |
-| Bulk independent work: mechanical sweeps, transforms, many files with checkable output; a wave larger than one context | Opus · ultracode orchestrating | Sonnet · medium or high workers; Haiku for transcription-grade | On | Measured by Anthropic, not on this fleet: orchestrator with cheaper workers cost 55% less at 3–7 points below the frontier model solo, only when bulk exceeds one context. The 3–7 points is the largest measured quality cost in this matrix; the held-out panel runs on this row's output from the first wave. |
-| Whole-branch review pass, large program | Opus · ultracode | Opus · high lenses | On | This was the last row that sent work to Fable on its own, on one second-hand data point (a 2026-07-22 Anthropic webinar): Fable orchestrating Sonnet workers reached 96% of Fable-solo's score at 46% of cost on bulk reading, and on an easier subset the same mix added 60% cost for no gain. The bet that a whole-branch pass is the hard subset is now a human's to place per branch, not the table's (operator instruction 2026-09-22). |
+| Review session main loop: the session a `review` run dispatches, reading a work run's branch and running the held-out panel | Sonnet · high | Sonnet · high refuters | On, for the panel only | The review session reads and routes; the held-out panel (`references/review-panel.md`) is the gate and sets its own model and effort literally, so the main loop does not need the worker's Opus. Workflows are on only so the session can run that panel script; it fans out nothing else. The route carries `compact 40`, as the worker row does. This is the `review` row of the table the server fills when a dispatch carries no `route` (`shared/route-defaults.ts`), pinned equal to this row by `server/test/routing-references.test.ts` (design choice, D-6794). |
+| Bulk independent work: mechanical sweeps, transforms, many files with checkable output; a wave larger than one context | Opus · high per worker; a wave larger than one context is split into more worker waves the coordinator dispatches | Sonnet · medium or high workers, each a worker session dispatched at that effort; Haiku for transcription-grade | Off | Measured by Anthropic, not on this fleet: orchestrator with cheaper workers cost 55% less at 3–7 points below the frontier model solo, only when bulk exceeds one context. The 3–7 points is the largest measured quality cost in this matrix; the held-out panel runs on this row's output from the first wave. Operator ruling 2026-10-25 (worker clause 19): a worker never launches a workflow, so the orchestrator here is the coordinator dispatching more workers, not a workflow inside one session. |
+| Whole-branch review pass, large program | Sonnet · high, as a review run (the review session row) | Opus · high review lenses, the held-out panel's own | Off; the pass is a review run, whose session runs the panel | This was the last row that sent work to Fable on its own, on one second-hand data point (a 2026-07-22 Anthropic webinar): Fable orchestrating Sonnet workers reached 96% of Fable-solo's score at 46% of cost on bulk reading, and on an easier subset the same mix added 60% cost for no gain. The bet that a whole-branch pass is the hard subset is now a human's to place per branch, not the table's (operator instruction 2026-09-22). Operator ruling 2026-10-25 (coordinator clause 19): the pass is dispatched as a review run rather than orchestrated by the coordinator, so the coordinator's turn never waits on it. |
 | Debugging | Opus · xhigh | Sonnet · high refuters | Off | The operator's 2026-09-14 standing rule sent a debug that survived two Opus attempts to Fable automatically; instruction 2026-09-22 withdraws that, and the third attempt is a rung a human chooses — the session reports the ceiling and stops. `max` is reachable only by the mechanical rule below. |
 | Tests from a spec; refute a concrete claim; mutation checks | Sonnet · high | none, or Haiku | Off | Anthropic's guidance: Sonnet 5 respects effort strictly and under-thinks at low; high is its floor here. |
 | Scout, grep, status probe, file listing | Haiku (no effort level) | none | Off | Zero judgment; the caller checks the answer. |
@@ -131,8 +133,11 @@ per-session class floor (§5.1, `subagent`), agent frontmatter `model:`, and the
 on an Agent or Workflow call, all measured on this fleet. Subagent effort has two: the Workflow
 tool's `effort:` option on an `agent()` call, and agent frontmatter `effort:` (no agent
 definitions exist on this fleet today). An Agent-tool subagent runs at the session's effort. So
-every Subagents cell whose effort differs from its row's main loop is reached through a Workflow
-call, or accepts the session's effort; the held-out panel is a Workflow for that reason. The
+a Subagents cell whose effort differs from its row's main loop is reached through a Workflow call
+only where clause 19 allows one (a coordinator's short review, verification or audit, or a review
+run's held-out panel); anywhere else it is reached by more workers dispatched at that effort, or
+accepts the session's effort, and never through a worker's Workflow, because a worker launches
+none (worker clause 19). The held-out panel is a Workflow for that reason. The
 coordinator's brief states the subagent effort it expects and the worker skill's clause applies
 it on the surface that carries it.
 
@@ -513,8 +518,10 @@ Each is measured red before and green after, not asserted in a comment.
 - Subagent contexts average 150k today; routing them to Sonnet cuts the rate, not the size; the
   bounded-answer clause is convention with no mechanism.
 - Fable's own bucket may be unreachable; then the share is an estimate and the design says so.
-- Coordinators on Fable · ultracode are few but expensive per turn; the idle drop is what keeps
-  that bounded, and it depends on the coordinator using it.
+- Coordinators were few but expensive per turn on Fable · ultracode, and the idle drop was what
+  kept that bounded, depending on the coordinator using it. The 2026-10-25 ruling in §10 retires
+  both: the coordinator row is Opus · high with no standing orchestration, so there is nothing to
+  drop from.
 - The effort cost indices and `per_turn_effort` are compiled-seed rows in the 2.1.270 binary, not
   binary behaviour and not served-catalogue rows: the served catalogue
   (`downloads.claude.ai/model-catalog/v1/catalog.json`, version 346 read 2026-09-14) carries
@@ -544,6 +551,14 @@ Each is measured red before and green after, not asserted in a comment.
   after a serviceability degrade, are both a human's own choice being kept, not a reach for it.
   The §7 rollout table above is left as the ledger of what each slice shipped, so its slice-4 row
   still reads `Fable · ultracode` — that is history, not the current default.
+- 2026-10-25: **workflows are not a default** (coordinator clause 19, worker clause 19). A worker
+  never launches a workflow; a coordinator launches one only for short, self-contained work that
+  needs nothing from its own children (a review, a verification, an audit), time-capped, and never
+  holds its turn open on anything that waits for its children, because mail to a busy session is
+  held. The coordinator row, and with it the operator-spawn default `ROUTE_COORDINATOR_ROW` and the
+  no-record `SPAWN_EFFORT`, moves from `ultracode` to `high`; `workflow on` stays so a clause-19
+  workflow can still launch. The bulk row is more workers dispatched by the coordinator, and the
+  whole-branch pass is a review run.
 
 Closed 2026-09-14: the operator confirmed "Fable does NOT use usage credits. We're on the max
 plan", and the Fable sentences in `~/.claude/fable-orchestration-policy.md` were rewritten to the

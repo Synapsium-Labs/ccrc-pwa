@@ -29,8 +29,9 @@ import {
   WORK_ITEM_MAX,
   WORK_ITEM_TITLE_MAX,
   isSkillState,
+  type RunSummary,
 } from '../../shared/api.js';
-import { okRun, okRuns } from './coordReadHelpers.js';
+import { okRun, okRuns, parentOfSession } from './coordReadHelpers.js';
 import { KeyedQueue } from '../src/inject/queue.js';
 import { NotifyLog } from '../src/notifylog.js';
 
@@ -112,7 +113,7 @@ interface RunnerConfig {
   wsAddCreatesPerCall?: string[][];
   /** Verbs that fail (`code: 1`) rather than succeed. */
   fail?: ReadonlySet<string>;
-  prState?: { code: number; stdout: string; stderr: string };
+  prState?: { ran: true, code: number; stdout: string; stderr: string };
   panes?: string[];
 }
 
@@ -130,13 +131,13 @@ function makeRunner(home: string, cfg: RunnerConfig = {}): { run: Runner; calls:
   const run: Runner = async (_cmd, args) => {
     calls.push(args);
     const verb = args[0] ?? '';
-    if (cfg.fail?.has(verb)) return { code: 1, stdout: '', stderr: `${verb} failed` };
+    if (cfg.fail?.has(verb)) return { ran: true as const, code: 1, stdout: '', stderr: `${verb} failed` };
     if (verb === 'ws-add') {
       const ids = cfg.wsAddCreatesPerCall?.[wsAddCalls++] ?? cfg.wsAddCreates ?? [`${PROJECT}-fresh`];
       for (const id of ids) seed(home, id);
       // A DECOY sentence, deliberately wrong: proves the route learns the id
       // from the registry diff, never from parsing this text.
-      return { code: 0, stdout: 'workspace demo-decoy-sentence on claude — /w/x (branch ws/decoy)', stderr: '' };
+      return { ran: true as const, code: 0, stdout: 'workspace demo-decoy-sentence on claude — /w/x (branch ws/decoy)', stderr: '' };
     }
     if (verb === 'pr-state') {
       if (cfg.prState) return cfg.prState;
@@ -144,19 +145,19 @@ function makeRunner(home: string, cfg: RunnerConfig = {}): { run: Runner; calls:
       // child here has had no PR. Anything else answers as before.
       const id = args[1] === '--session' ? args[2] ?? '' : '';
       const child = id !== '' && existsSync(path.join(home, '.cc-sessions', `${id}.child`));
-      return { code: 0, stdout: child ? `${noPrLine(id)}\n` : '', stderr: '' };
+      return { ran: true as const, code: 0, stdout: child ? `${noPrLine(id)}\n` : '', stderr: '' };
     }
     if (verb === 'capture-pane') {
       const p = panes[Math.min(capIdx, panes.length - 1)]!;
       capIdx++;
-      return { code: 0, stdout: p, stderr: '' };
+      return { ran: true as const, code: 0, stdout: p, stderr: '' };
     }
     // D-5238: the resume arm's live `/clear` gate reads the pane. `ensure` finds it already alive (`cmd_ensure`'s
     // `alive: <id>`), and its pid names the idle live file `openApp` writes — the measured-idle pane every resume
     // case below assumes. A case about the gate itself lives in `dispatch-live-gate.test.ts`.
-    if (verb === 'ensure') return { code: 0, stdout: `alive: ${args[1] ?? ''}\n`, stderr: '' };
-    if (verb === 'list-panes' && args.includes('#{pane_pid}')) return { code: 0, stdout: `${LIVE_PANE}\n`, stderr: '' };
-    return { code: 0, stdout: '', stderr: '' };   // ws-hold, ws-release, ws-archive, send-keys, has-session…
+    if (verb === 'ensure') return { ran: true as const, code: 0, stdout: `alive: ${args[1] ?? ''}\n`, stderr: '' };
+    if (verb === 'list-panes' && args.includes('#{pane_pid}')) return { ran: true as const, code: 0, stdout: `${LIVE_PANE}\n`, stderr: '' };
+    return { ran: true as const, code: 0, stdout: '', stderr: '' };   // ws-hold, ws-release, ws-archive, send-keys, has-session…
   };
   return { run, calls };
 }
@@ -438,6 +439,23 @@ describe('POST /api/runs', () => {
     expect(res.statusCode).toBe(200);
   });
 
+  // ARCH-62 slice 2, ruling (a): the gate reads the worker rows as `openClaimantsOf` did, proving no integers, so a done
+  // worker run beyond 2^53 is no reason to answer 500 there. Red on b05c06373 (500 from claimantsOfSession). Past the
+  // gate, minting an id after that row is refused on its own terms, which is not this pin's business.
+  it('a coordinator that is the worker of a done run beyond 2^53 gets past the worker gate, never a 500', async () => {
+    const home = mkTmp('ccrc-runs-');
+    seed(home, 'demo-existing');
+    const { run } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    const first = await postOpen(app, { ...OPEN_BODY, sessionId: 'demo-existing' });
+    tx(w.coord.db, () => {
+      w.coord.db.prepare("UPDATE runs SET state = 'done', id = ? WHERE id = ?").run(2n ** 53n + 1n, first.json().id);
+    });
+    const res = await postOpen(app, { ...OPEN_BODY, program: 'build5', title: 'Later', claimedBy: 'demo-existing' });
+    expect(res.statusCode).not.toBe(500);
+    expect(JSON.stringify(res.json())).not.toContain('claimantsOfSession');
+  });
+
   it('admits a SELF-claimed run\'s session — it is its own worker, not somebody\'s', async () => {
     const home = mkTmp('ccrc-runs-');
     seed(home, 'demo-self');
@@ -480,7 +498,7 @@ describe('POST /api/runs', () => {
     // this door used to make answers the session's OWN id here, which the
     // self-claim admission then waves through — `demo-existing` is still
     // `other-coordinator`'s worker on the older open run the whole time.
-    expect(w.coord.parentOfSession('demo-existing')).toBe('demo-existing');
+    expect(parentOfSession(w.coord, 'demo-existing')).toBe('demo-existing');
     const res = await postOpen(app, { ...OPEN_BODY, program: 'build5-third', title: 'A worker coordinating',
       claimedBy: 'demo-existing' });
     expect(res.statusCode).toBe(409);
@@ -686,7 +704,7 @@ describe('POST /api/runs', () => {
     let holds = 0;
     // The second `ws-hold` fails, the way `:656`'s runner fails a verb.
     const failSecondHold: Runner = async (cmd, argv) => {
-      if (argv[0] === 'ws-hold' && ++holds === 2) return { code: 1, stdout: '', stderr: 'ws-hold failed' };
+      if (argv[0] === 'ws-hold' && ++holds === 2) return { ran: true as const, code: 1, stdout: '', stderr: 'ws-hold failed' };
       return run(cmd, argv);
     };
     const w = await openApp(home, failSecondHold); app = w.app;
@@ -1036,7 +1054,7 @@ describe('POST /api/runs/:id/dispatch', () => {
     const home = mkTmp('ccrc-runs-');
     const { run, calls } = makeRunner(home);
     const w = await openApp(home, run); app = w.app;
-    w.coord.setCaps({ maxConcurrentWorkers: 0, maxSessionsPerDay: 0 });
+    w.coord.setCaps({ maxConcurrentWorkers: 0 });
     const opened = (await postOpen(app)).json() as { id: number };
     writeFileSync(path.join(home, '.cc-sessions', 'coordinator-paused'), '');
     const res = await postDispatch(app, opened.id);
@@ -1073,7 +1091,7 @@ describe('POST /api/runs/:id/dispatch', () => {
       wave: 1, waveOf: 1, claimedBy: 'ccrc-pwa-other' }) as { id: number };
     w.coord.markDispatched(blocker.id, 'demo-blocker', 'blocker', 'ws/blocker', false);
     expect(w.coord.advance(blocker.id, 'dispatched', 'coordinator').ok).toBe(true);
-    w.coord.setCaps({ maxConcurrentWorkers: 1, maxSessionsPerDay: 12 });
+    w.coord.setCaps({ maxConcurrentWorkers: 1 });
 
     const opened = (await postOpen(app)).json() as { id: number };
     const res = await postDispatch(app, opened.id);
@@ -1082,38 +1100,8 @@ describe('POST /api/runs/:id/dispatch', () => {
     expect(calls).toEqual([]);
   });
 
-  it('refuses at maxSessionsPerDay over a rolling 24h, not a calendar day', async () => {
-    // D-59 (Task 11 review): the original fixture used a bare `Date.now() -
-    // 23h` — a calendar-day count agrees with the rolling-24h answer
-    // whenever the real wall clock is within the last hour of the local
-    // day, so the mutant this case exists to kill only died 23 hours out of
-    // every 24. Fake timers pin `now` at a fixed local NOON, so `now - 23h`
-    // lands on the PREVIOUS calendar date deterministically, regardless of
-    // when this suite actually runs (assumes a UTC/UTC-like test host, the
-    // same assumption `mail-sweep.test.ts`/`pr-sweep.test.ts` already make
-    // with their own fixed `vi.setSystemTime` epochs).
-    const NOW = new Date('2024-06-15T12:00:00.000Z').getTime();
-    vi.useFakeTimers({ toFake: ['Date'] });
-    vi.setSystemTime(NOW);
-    try {
-      const home = mkTmp('ccrc-runs-');
-      const { run } = makeRunner(home);
-      const w = await openApp(home, run); app = w.app;
-      const blocker = w.coord.openRun({ program: 'other', title: 'Other', project: PROJECT,
-        wave: 1, waveOf: 1, claimedBy: 'ccrc-pwa-other' }) as { id: number };
-      // Dispatched 23h ago — inside the rolling 24h window (counts), but on
-      // the PREVIOUS calendar date (a calendar-day count would not).
-      w.coord.markDispatched(blocker.id, 'demo-blocker', 'blocker', 'ws/blocker', false, NOW - 23 * 3600_000);
-      w.coord.setCaps({ maxConcurrentWorkers: 12, maxSessionsPerDay: 1 });
-
-      const opened = (await postOpen(app)).json() as { id: number };
-      const res = await postDispatch(app, opened.id);
-      expect(res.statusCode).toBe(409);
-      expect(res.json()).toMatchObject({ ok: false, refused: 'cap-daily', limit: 1, used: 1 });
-    } finally {
-      vi.useRealTimers();
-    }
-  });
+  // The daily brake's rolling-24h case lived here; the brake is retired (D-7068) and
+  // `retire-daily-brake.test.ts` pins that a dispatch past the old count is admitted.
 
   it('runs ws-add for wave 1 and learns the id from the registry, not from ccd\'s sentence', async () => {
     const home = mkTmp('ccrc-runs-');
@@ -1388,9 +1376,9 @@ describe('POST /api/runs/:id/dispatch', () => {
           // cut-short shape, which is why this arm is reachable at all.
           seed(home, 'demo-fresh1');
           spawned = true;
-          return { code: 1, stdout: '', stderr: 'ccd: no wrapper has capacity', killed: true };
+          return { ran: true as const, code: 1, stdout: '', stderr: 'ccd: no wrapper has capacity', killed: true };
         }
-        return { code: 0, stdout: '', stderr: '' };
+        return { ran: true as const, code: 0, stdout: '', stderr: '' };
       };
       const io: FleetIO = { ...localIO, readdir: async (p) => (spawned ? null : localIO.readdir(p)) };
       const w = await openApp(home, run, { io }); app = w.app;
@@ -1874,12 +1862,19 @@ describe('POST /api/runs/:id/dispatch', () => {
     const opened = (await postOpen(app, { ...OPEN_BODY, homeProject: 'demo' })).json() as { id: number };
     await postDispatch(app, opened.id);
     expect(w.coord.runEvents(opened.id)).toEqual([
+      // D-6794: no route passed, so the work row is filled in and journaled; this fixture's fleet advertises no
+      // `route-argv-v1`, so the fresh spawn omits `--route` and says so.
+      { at: expect.any(Number), fromState: 'planned', toState: 'planned', causedBy: 'coordinator',
+        detail: 'route-omitted:no-route-argv-cap' },
       // Child-workspace reclamation wave 1: this fixture's fleet advertises no
       // `child-argv-v1`, so the fresh spawn omits `--child` and says so on the
       // run, BEFORE the transition — recorded while the run still rests at
       // `planned`, which is why both states read `planned`.
       { at: expect.any(Number), fromState: 'planned', toState: 'planned', causedBy: 'coordinator',
         detail: 'child-omitted:no-child-argv-cap' },
+      // ...and the default row, journaled once the spawn has not refused.
+      { at: expect.any(Number), fromState: 'planned', toState: 'planned', causedBy: 'coordinator',
+        detail: 'route-defaulted:work' },
       { at: expect.any(Number), fromState: 'planned', toState: 'dispatched', causedBy: 'coordinator', detail: null },
       // wave 2, F2: every successful dispatch also records its skill preflight,
       // after the commit — so the row rests in the state the transition just
@@ -1909,10 +1904,10 @@ describe('POST /api/runs/:id/dispatch', () => {
     // Nothing ran on the retry — no second `ws-add`/`ensure`/`ws-hold`, and
     // no second `run_events` row (still exactly the first dispatch's).
     expect(calls.length).toBe(callsAfterFirst);
-    // Three rows from the FIRST dispatch (its `child-omitted` row — this
-    // fixture advertises no `child-argv-v1` — its transition, and its skill
-    // preflight, wave 2 F2), and none from the refused second.
-    expect(w.coord.runEvents(opened.id).length).toBe(3);
+    // Five rows from the FIRST dispatch (its `route-defaulted` row, D-6794, and the `route-omitted` row this
+    // fixture's missing `route-argv-v1` earns it; its `child-omitted` row — no `child-argv-v1` either — its
+    // transition, and its skill preflight, wave 2 F2), and none from the refused second.
+    expect(w.coord.runEvents(opened.id).length).toBe(5);
   });
 
   it('refuses to dispatch a run whose kind this build cannot name — before any fleet act (D-2795)', async () => {
@@ -2024,7 +2019,7 @@ describe('POST /api/runs/:id/close', () => {
    *  tests build their delivery through a real send rather than poking rows
    *  in directly. */
   const dispatchedRun = async (
-    sessionId: string, projectsRoot: string, prState: { code: number; stdout: string; stderr: string },
+    sessionId: string, projectsRoot: string, prState: { ran: true, code: number; stdout: string; stderr: string },
     over: Partial<Deps> = {},
   ) => {
     const home = mkTmp('ccrc-runs-');
@@ -2042,7 +2037,7 @@ describe('POST /api/runs/:id/close', () => {
     const sessionId = `${PROJECT}-close1`;
     const root = gitRoot(PROJECT, `ws/${sessionId}`, OTHER_TIP);   // the REAL tip has moved
     const { id, coord } = await dispatchedRun(sessionId, root,
-      { code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'OPEN')])}\n`, stderr: '' });
+      { ran: true as const, code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'OPEN')])}\n`, stderr: '' });
     const before = okRun(coord.run(id))!.state;
     const res = await postClose(app!, id, { fingerprint: GOOD_CLAIM, final: true });
     expect(res.statusCode).toBe(409);
@@ -2073,7 +2068,7 @@ describe('POST /api/runs/:id/close', () => {
     writeFileSync(path.join(home, '.cc-sessions', `${sessionId}.prhistory`), '');
     const unreadablePrhistory = degradedReadIO((p) => p.endsWith('.prhistory'));
     const { run } = makeRunner(home, { wsAddCreates: [sessionId],
-      prState: { code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'OPEN')])}\n`, stderr: '' } });
+      prState: { ran: true as const, code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'OPEN')])}\n`, stderr: '' } });
     const base = testDeps(home, run);
     const w = await openApp(home, run, { io: unreadablePrhistory, cfg: { ...base.cfg, projectsRoot: root } });
     app = w.app;
@@ -2089,7 +2084,7 @@ describe('POST /api/runs/:id/close', () => {
     const sessionId = `${PROJECT}-close3`;
     const root = gitRoot(PROJECT, `ws/${sessionId}`, TIP);
     const { id, coord } = await dispatchedRun(sessionId, root,
-      { code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'OPEN')])}\n`, stderr: '' });
+      { ran: true as const, code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'OPEN')])}\n`, stderr: '' });
     // No `.prhistory` file at all: ABSENT is a MEASURED [].
     const res = await postClose(app!, id, { fingerprint: GOOD_CLAIM, final: true });
     expect(res.statusCode).toBe(200);
@@ -2100,7 +2095,7 @@ describe('POST /api/runs/:id/close', () => {
     const sessionId = `${PROJECT}-close4`;
     const root = gitRoot(PROJECT, `ws/${sessionId}`, TIP);
     const { id, coord, calls } = await dispatchedRun(sessionId, root,
-      { code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'MERGED')])}\n`, stderr: '' });
+      { ran: true as const, code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'MERGED')])}\n`, stderr: '' });
     const res = await postClose(app!, id, { fingerprint: GOOD_CLAIM, final: true });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toMatchObject({ released: true });
@@ -2114,7 +2109,7 @@ describe('POST /api/runs/:id/close', () => {
     const sessionId = `${PROJECT}-close5`;
     const root = gitRoot(PROJECT, `ws/${sessionId}`, TIP);
     const { id, coord, calls } = await dispatchedRun(sessionId, root,
-      { code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'OPEN')])}\n`, stderr: '' });
+      { ran: true as const, code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'OPEN')])}\n`, stderr: '' });
     const res = await postClose(app!, id, { fingerprint: GOOD_CLAIM, final: false });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toMatchObject({ released: false });
@@ -2135,7 +2130,7 @@ describe('POST /api/runs/:id/close', () => {
    *  for the queued reclaim and read its one feed row back. `testDeps`' box
    *  advertises no capability, so the executor always ends at `unsupported`:
    *  that row is the proof the hand-off reached it, on this session's queue. */
-  const dispatchedChild = async (sessionId: string, prState: { code: number; stdout: string; stderr: string },
+  const dispatchedChild = async (sessionId: string, prState: { ran: true, code: number; stdout: string; stderr: string },
     over: Partial<Deps> = {}) => {
     const home = mkTmp('ccrc-runs-');
     const root = gitRoot(PROJECT, `ws/${sessionId}`, TIP);
@@ -2174,10 +2169,10 @@ describe('POST /api/runs/:id/close', () => {
    *  it swallows every real-world test-execution delay this suite has ever
    *  measured, so it is declared rather than forced onto a fixed clock. */
   const PR_OPEN = (s: string) =>
-    ({ code: 0, stdout: `${ccdLine(s, `ws/${s}`,
+    ({ ran: true as const, code: 0, stdout: `${ccdLine(s, `ws/${s}`,
       [prRow(`ws/${s}`, 'OPEN', { createdAt: new Date(Date.now() + 3_600_000).toISOString() })])}\n`, stderr: '' });
   const PR_NONE = (s: string) =>
-    ({ code: 0, stdout: `${ccdLine(s, `ws/${s}`, [], TIP)}\n`, stderr: '' });
+    ({ ran: true as const, code: 0, stdout: `${ccdLine(s, `ws/${s}`, [], TIP)}\n`, stderr: '' });
   const NONE_CLAIM = { branchTip: TIP, prNumber: null, prPhase: 'none', handoffCommit: TIP };
   const fleetActs = (calls: string[][]) => calls.map((c) => c[0]).filter((v) => v === 'ws-hold' || v === 'ws-release'
     || v === 'ws-archive' || v === 'ws-audit' || v === 'ws-reclaim');
@@ -2247,15 +2242,15 @@ describe('POST /api/runs/:id/close', () => {
   });
 
   it('the reclaim port wires every port reclaimChild declares — presence included (Task 8 review)', async () => {
-    // A route-level proof, not merely a type check: `ChildReclaimDeps.presence`
+    // A route-level proof, not merely a type check: `ChildReclaimDeps.viewers`
     // is OPTIONAL, so an omission at the route's wiring is not a compile
-    // error. If `childReclaimPort` (`routes.ts`) failed to pass `presence`
+    // error. If `childReclaimPort` (`routes.ts`) failed to pass `viewers`
     // through, `isVisible` below would never be called and the executor would
     // run straight past step 3 to `unsupported` — this proves it does not.
     const sessionId = `${PROJECT}-child7`;
     const seen: string[] = [];
-    const presence = { isVisible: (id: string): boolean => { seen.push(id); return id === sessionId; } };
-    const c = await dispatchedChild(sessionId, PR_OPEN(sessionId), { presence: presence as Deps['presence'] });
+    const viewers = { isVisible: (id: string): boolean => { seen.push(id); return id === sessionId; } };
+    const c = await dispatchedChild(sessionId, PR_OPEN(sessionId), { viewers: viewers as Deps['viewers'] });
     c.calls.length = 0;
     const res = await postClose(app!, c.id, { fingerprint: GOOD_CLAIM, final: true });
     expect(res.json()).toEqual({ ok: true, id: c.id, state: 'done', released: true, childReclaim: 'queued' });
@@ -2285,12 +2280,12 @@ describe('POST /api/runs/:id/close', () => {
       const verb = args[0] ?? '';
       if (verb === 'ws-audit' && args.includes('--reclaim')) {
         seenVerbs.push('ws-audit --reclaim');
-        return { code: 0, stdout: `${JSON.stringify({ id: sessionId, mode: 'reclaim', verdict: 'reclaimable',
+        return { ran: true as const, code: 0, stdout: `${JSON.stringify({ id: sessionId, mode: 'reclaim', verdict: 'reclaimable',
           token: 'a'.repeat(64), childOf: childRunId })}\n`, stderr: '' };
       }
       if (verb === 'ws-reclaim') {
         seenVerbs.push('ws-reclaim');
-        return { code: 0, stdout: `${JSON.stringify({ reclaimed: sessionId, wip: null })}\n`, stderr: '' };
+        return { ran: true as const, code: 0, stdout: `${JSON.stringify({ reclaimed: sessionId, wip: null })}\n`, stderr: '' };
       }
       return baseRun(cmd, args);
     };
@@ -2388,7 +2383,7 @@ describe('POST /api/runs/:id/close', () => {
     const sessionId = `${PROJECT}-close-sib`;
     const root = gitRoot(PROJECT, `ws/${sessionId}`, TIP);
     const { id, coord, calls } = await dispatchedRun(sessionId, root,
-      { code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'MERGED')])}\n`, stderr: '' });
+      { ran: true as const, code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'MERGED')])}\n`, stderr: '' });
     const next = coord.openRun({ program: 'build4', title: 'T', project: PROJECT, wave: 2, waveOf: 3,
       claimedBy: CLAIMED_BY });
     if (!('id' in next)) throw new Error('fixture openRun refused');
@@ -2407,7 +2402,7 @@ describe('POST /api/runs/:id/close', () => {
     const sessionId = `${PROJECT}-close-invalid-sib`;
     const root = gitRoot(PROJECT, `ws/${sessionId}`, TIP);
     const { id, coord, calls } = await dispatchedRun(sessionId, root,
-      { code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'MERGED')])}\n`, stderr: '' });
+      { ran: true as const, code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'MERGED')])}\n`, stderr: '' });
     const [survivor] = coord.reconstruct({
       ledger: { slug: 'bad program', title: 'Recovered', waves: [
         { wave: 2, of: 3, handoffCommit: null },
@@ -2436,7 +2431,7 @@ describe('POST /api/runs/:id/close', () => {
     const sessionId = `${PROJECT}-close-oversize-sib`;
     const root = gitRoot(PROJECT, `ws/${sessionId}`, TIP);
     const { id, coord, calls } = await dispatchedRun(sessionId, root,
-      { code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'MERGED')])}\n`, stderr: '' });
+      { ran: true as const, code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'MERGED')])}\n`, stderr: '' });
     const overhead = holdReason('', 22, 333, 1).length;
     const program = 'x'.repeat(HOLD_REASON_MAX_CHARS + 1 - overhead);
     const [survivor] = coord.reconstruct({
@@ -2472,7 +2467,7 @@ describe('POST /api/runs/:id/close', () => {
     const sessionId = `${PROJECT}-close-nonfinal-sib`;
     const root = gitRoot(PROJECT, `ws/${sessionId}`, TIP);
     const { id, coord, calls } = await dispatchedRun(sessionId, root,
-      { code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'OPEN')])}\n`, stderr: '' });
+      { ran: true as const, code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'OPEN')])}\n`, stderr: '' });
     const next = coord.openRun({ program: 'build4', title: 'T', project: PROJECT, wave: 4, waveOf: 3,
       claimedBy: CLAIMED_BY });
     if (!('id' in next)) throw new Error('fixture openRun refused');
@@ -2491,7 +2486,7 @@ describe('POST /api/runs/:id/close', () => {
     const sessionId = `${PROJECT}-close6`;
     const root = gitRoot(PROJECT, `ws/${sessionId}`, TIP);
     const { id, coord, calls } = await dispatchedRun(sessionId, root,
-      { code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'OPEN')])}\n`, stderr: '' });
+      { ran: true as const, code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'OPEN')])}\n`, stderr: '' });
     const res = await postClose(app!, id, { fingerprint: GOOD_CLAIM, final: true, state: 'failed', archive: true });
     expect(res.statusCode).toBe(200);
     expect(okRun(coord.run(id))!.state).toBe('failed');
@@ -2507,7 +2502,7 @@ describe('POST /api/runs/:id/close', () => {
     const sessionId = `${PROJECT}-close-arch-sib`;
     const root = gitRoot(PROJECT, `ws/${sessionId}`, TIP);
     const { id, coord, calls } = await dispatchedRun(sessionId, root,
-      { code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'OPEN')])}\n`, stderr: '' });
+      { ran: true as const, code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'OPEN')])}\n`, stderr: '' });
     const next = coord.openRun({ program: 'build4', title: 'T', project: PROJECT, wave: 2, waveOf: 3,
       claimedBy: CLAIMED_BY });
     if (!('id' in next)) throw new Error('fixture openRun refused');
@@ -2529,7 +2524,7 @@ describe('POST /api/runs/:id/close', () => {
     const sessionId = `${PROJECT}-close-arch-lone`;
     const root = gitRoot(PROJECT, `ws/${sessionId}`, TIP);
     const { id, calls } = await dispatchedRun(sessionId, root,
-      { code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'OPEN')])}\n`, stderr: '' });
+      { ran: true as const, code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'OPEN')])}\n`, stderr: '' });
     const res = await postClose(app!, id,
       { fingerprint: GOOD_CLAIM, final: true, state: 'failed', archive: true });
     expect(res.statusCode).toBe(200);
@@ -2541,7 +2536,7 @@ describe('POST /api/runs/:id/close', () => {
     const sessionId = `${PROJECT}-close7`;
     const root = gitRoot(PROJECT, `ws/${sessionId}`, TIP);
     const { id, coord } = await dispatchedRun(sessionId, root,
-      { code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'OPEN')])}\n`, stderr: '' },
+      { ran: true as const, code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'OPEN')])}\n`, stderr: '' },
       // `pr-state` stays supported — `verifyDone` has its OWN `verbSupported`
       // gate (`fingerprint.ts`) and must succeed here, so the 501 this test
       // proves is close's own fleet-act gate, not a verifyDone side effect.
@@ -2560,7 +2555,7 @@ describe('POST /api/runs/:id/close', () => {
     const sessionId = `${PROJECT}-close8`;
     const root = gitRoot(PROJECT, `ws/${sessionId}`, TIP);
     const { id, coord, calls } = await dispatchedRun(sessionId, root,
-      { code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'MERGED')])}\n`, stderr: '' });
+      { ran: true as const, code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'MERGED')])}\n`, stderr: '' });
     const first = await postClose(app!, id, { fingerprint: GOOD_CLAIM, final: true });
     expect(first.statusCode).toBe(200);
     const releasesAfterFirst = calls.filter((c) => c[0] === 'ws-release').length;
@@ -2581,7 +2576,7 @@ describe('POST /api/runs/:id/close', () => {
     // doneness here to re-measure.
     const root = gitRoot(PROJECT, `ws/${sessionId}`, OTHER_TIP);
     const { id, coord } = await dispatchedRun(sessionId, root,
-      { code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'OPEN')])}\n`, stderr: '' });
+      { ran: true as const, code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'OPEN')])}\n`, stderr: '' });
     const res = await postClose(app!, id, { fingerprint: GOOD_CLAIM, final: true, state: 'failed' });
     expect(res.statusCode).toBe(200);
     expect(okRun(coord.run(id))!.state).toBe('failed');
@@ -2600,7 +2595,7 @@ describe('POST /api/runs/:id/close', () => {
     const sessionId = `${PROJECT}-close12`;
     const root = gitRoot(PROJECT, `ws/${sessionId}`, TIP);
     const { id, coord } = await dispatchedRun(sessionId, root,
-      { code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'OPEN')])}\n`, stderr: '' });
+      { ran: true as const, code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'OPEN')])}\n`, stderr: '' });
     await postAdvance(app!, id,
       { to: 'working', fingerprint: { branchTip: '', prNumber: null, prPhase: 'none', handoffCommit: '' } });
     const toReview = await postAdvance(app!, id,
@@ -2622,7 +2617,7 @@ describe('POST /api/runs/:id/close', () => {
     const line = JSON.stringify({ pr: 42, branch: `ws/${sessionId}`, phase: 'merged', recordedAt: 12345 });
     writeFileSync(path.join(home, '.cc-sessions', `${sessionId}.prhistory`), `${line}\n`);
     const { run } = makeRunner(home, { wsAddCreates: [sessionId],
-      prState: { code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'OPEN')])}\n`, stderr: '' } });
+      prState: { ran: true as const, code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'OPEN')])}\n`, stderr: '' } });
     const base = testDeps(home, run);
     const w = await openApp(home, run, { cfg: { ...base.cfg, projectsRoot: root } });
     app = w.app;
@@ -2644,7 +2639,7 @@ describe('POST /api/runs/:id/close', () => {
     const sessionA = `${PROJECT}-close11`;
     const root = gitRoot(PROJECT, `ws/${sessionA}`, TIP);
     const { id: idA, coord } = await dispatchedRun(sessionA, root,
-      { code: 0, stdout: `${ccdLine(sessionA, `ws/${sessionA}`, [prRow(`ws/${sessionA}`, 'MERGED')])}\n`, stderr: '' });
+      { ran: true as const, code: 0, stdout: `${ccdLine(sessionA, `ws/${sessionA}`, [prRow(`ws/${sessionA}`, 'MERGED')])}\n`, stderr: '' });
 
     // A sibling run under the SAME program, seeded directly at the store
     // level — the identical bypass `maxConcurrentWorkers`'s own fixture
@@ -2718,7 +2713,7 @@ describe('GET /api/runs', () => {
     const sessionId = 'demo-list2';
     const root = gitRoot(PROJECT, `ws/${sessionId}`, TIP);
     const { run } = makeRunner(home, { wsAddCreates: [sessionId],
-      prState: { code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'OPEN')])}\n`, stderr: '' } });
+      prState: { ran: true as const, code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'OPEN')])}\n`, stderr: '' } });
     const base = testDeps(home, run);
     const w = await openApp(home, run, { cfg: { ...base.cfg, projectsRoot: root } });
     app = w.app;
@@ -3084,12 +3079,12 @@ describe('dispatch/close serialise concurrent requests for the same run (review 
       calls.push(args);
       if (args[0] === 'ws-add') {
         seed(home, ids[spawnIdx]!); spawnIdx++;
-        return { code: 0, stdout: '', stderr: '' };
+        return { ran: true as const, code: 0, stdout: '', stderr: '' };
       }
-      return { code: 0, stdout: '', stderr: '' };
+      return { ran: true as const, code: 0, stdout: '', stderr: '' };
     };
     const w = await openApp(home, run); app = w.app;
-    w.coord.setCaps({ maxConcurrentWorkers: 1, maxSessionsPerDay: 12 });
+    w.coord.setCaps({ maxConcurrentWorkers: 1 });
     const a = (await postOpen(app, OPEN_BODY)).json() as { id: number };
     const b = (await postOpen(app, { ...OPEN_BODY, wave: 2 })).json() as { id: number };
 
@@ -3109,7 +3104,7 @@ describe('close cancels the run\'s own outstanding mail (review findings 8/14/26
     const root = gitRoot(PROJECT, `ws/${sessionId}`, TIP);
     const home = mkTmp('ccrc-runs-');
     const { run } = makeRunner(home, { wsAddCreates: [sessionId],
-      prState: { code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'MERGED')])}\n`, stderr: '' } });
+      prState: { ran: true as const, code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'MERGED')])}\n`, stderr: '' } });
     const base = testDeps(home, run);
     const w = await openApp(home, run, { cfg: { ...base.cfg, projectsRoot: root } });
     app = w.app;
@@ -3179,7 +3174,7 @@ describe('a retried close does not spam wave-done-rejected mail (review finding 
     const root = gitRoot(PROJECT, `ws/${sessionId}`, OTHER_TIP);   // the REAL tip has moved
     const home = mkTmp('ccrc-runs-');
     const { run } = makeRunner(home, { wsAddCreates: [sessionId],
-      prState: { code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'OPEN')])}\n`, stderr: '' } });
+      prState: { ran: true as const, code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'OPEN')])}\n`, stderr: '' } });
     const base = testDeps(home, run);
     const w = await openApp(home, run, { cfg: { ...base.cfg, projectsRoot: root } });
     app = w.app;
@@ -3248,7 +3243,7 @@ describe('POST /api/runs/:id/advance (review findings 1/15)', () => {
     const home = mkTmp('ccrc-runs-');
     const { run } = makeRunner(home, { wsAddCreates: ['demo-reentry'] });
     const w = await openApp(home, run); app = w.app;
-    w.coord.setCaps({ maxConcurrentWorkers: 1, maxSessionsPerDay: 12 });
+    w.coord.setCaps({ maxConcurrentWorkers: 1 });
     const opened = (await postOpen(app)).json() as { id: number };
     await postDispatch(app, opened.id);                       // running = 1 (dispatched)
     expect(w.coord.advance(opened.id, 'working', 'test').ok).toBe(true);
@@ -3273,7 +3268,7 @@ describe('POST /api/runs/:id/advance (review findings 1/15)', () => {
     const home = mkTmp('ccrc-runs-');
     const { run } = makeRunner(home, { wsAddCreates: ['demo-start'] });
     const w = await openApp(home, run); app = w.app;
-    w.coord.setCaps({ maxConcurrentWorkers: 1, maxSessionsPerDay: 12 });
+    w.coord.setCaps({ maxConcurrentWorkers: 1 });
     const opened = (await postOpen(app)).json() as { id: number };
     await postDispatch(app, opened.id);                       // running = 1 = the cap, and it is THIS run
     const res = await postAdvance(app, opened.id,
@@ -3302,7 +3297,7 @@ describe('POST /api/runs/:id/advance (review findings 1/15)', () => {
     const root = gitRoot(PROJECT, `ws/${sessionId}`, OTHER_TIP);
     const home = mkTmp('ccrc-runs-');
     const { run } = makeRunner(home, { wsAddCreates: [sessionId],
-      prState: { code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'OPEN')])}\n`, stderr: '' } });
+      prState: { ran: true as const, code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'OPEN')])}\n`, stderr: '' } });
     const base = testDeps(home, run);
     const w = await openApp(home, run, { cfg: { ...base.cfg, projectsRoot: root } });
     app = w.app;
@@ -4075,6 +4070,20 @@ describe('the run routes refuse an unreadable run rather than acting on it (D-25
     expect(res.statusCode).toBe(503);
     expect(res.json()).toMatchObject({ ok: false, error: 'run-unreadable' });
   });
+
+  // D-6912: the review cap's read says a failed store read as 503, never the 404 that would say "not a work run".
+  it('GET /api/coord/review-cap/:id answers 503, and the absent run still answers 404', async () => {
+    const home = mkTmp('ccrc-runs-');
+    const { run } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    const id = plantWideWave(w.coord, 13);
+    const res = await app.inject({ method: 'GET', url: `/api/coord/review-cap/${id}` });
+    expect(res.statusCode).toBe(503);
+    expect(res.json()).toMatchObject({ ok: false, error: 'run-unreadable' });
+    const absent = await app.inject({ method: 'GET', url: '/api/coord/review-cap/4242' });
+    expect(absent.statusCode).toBe(404);
+    expect(absent.json()).toMatchObject({ ok: false, error: 'not-found' });
+  });
 });
 
 describe('POST /api/runs kind:review (design 2026-09-14 §5.1)', () => {
@@ -4254,6 +4263,32 @@ describe('POST /api/runs kind:review (design 2026-09-14 §5.1)', () => {
       expect(w.coord.reviewRounds(workId)).toBe(4);
     });
 
+    // Review 960 F1: the refusal's `ask` takes the same cut as the GET, so a key the summary's cut falls inside goes
+    // out as no part of itself (the cut drops the whole token), even with no masker that knows the key.
+    it("the 409's ask sends no part of a key that the summary's 600-character cut falls inside", async () => {
+      const home = mkTmp('ccrc-runs-');
+      const { w, workId } = await capApp(home);
+      const ids = [await round(w, workId, 1), await round(w, workId, 2), await round(w, workId, 3)];
+      const key = ['cmp', '0a1b2c3d4e', '5f6a7b8c9d', 'e0f1a2b3c4'].join('.');
+      const words = 'word '.repeat(118); // 590 characters, so the key spans character 600
+      w.coord.insertMail({ fromId: 'demo-r1', fromUuid: 'a'.repeat(36), toId: 'coordinator', runId: ids[2]!,
+        kind: 'status', subject: 'review-done', body: `{"reviewedTip":"x"}\n${words}${key} tail`, artifacts: [] });
+      const refused = await postOpen(app, REVIEW(workId, { title: 'R4' }));
+      expect(refused.statusCode).toBe(409);
+      for (let i = 0; i + 8 <= key.length; i++) expect(refused.body, key.slice(i, i + 8)).not.toContain(key.slice(i, i + 8));
+      expect((refused.json() as { ask: { lastReview: { summary: string } } }).ask.lastReview.summary).toBe(words.trimEnd());
+    });
+
+    // Review 960 V1: `REVIEW_CAP_REFUSAL_TEXT`'s `not-configured` word has a route row behind it, one per cap route.
+    it.each([['GET', '/api/coord/review-cap/7'], ['POST', '/api/coord/review-cap']] as const)(
+      '%s %s answers 501 not-configured without a coordination store', async (method, url) => {
+        const home = mkTmp('ccrc-runs-');
+        app = await buildServer(testDeps(home));   // no `coord` key at all
+        const res = await app.inject({ method, url, ...(method === 'POST' ? { payload: { run: 7 } } : {}) });
+        expect(res.statusCode).toBe(501);
+        expect(res.json()).toMatchObject({ ok: false, error: 'not-configured' });
+      });
+
     it('the lift refuses a body with no run, and an id that is not a work run', async () => {
       const home = mkTmp('ccrc-runs-');
       const { w, workId } = await capApp(home);
@@ -4261,6 +4296,105 @@ describe('POST /api/runs kind:review (design 2026-09-14 §5.1)', () => {
       expect((await app.inject({ method: 'POST', url: '/api/coord/review-cap', payload: {} })).statusCode).toBe(400);
       expect((await app.inject({ method: 'POST', url: '/api/coord/review-cap', payload: { run: r1 } })).statusCode).toBe(404);
       expect((await app.inject({ method: 'POST', url: '/api/coord/review-cap', payload: { run: 9999 } })).statusCode).toBe(404);
+    });
+
+    // D-6909: every run row carries the cap's state, so the console can show it without a second read.
+    it("GET /api/runs carries the cap's state: rounds, the cap, and when its ask was raised and lifted", async () => {
+      const home = mkTmp('ccrc-runs-');
+      const { w, workId } = await capApp(home);
+      const ids = [await round(w, workId, 1), await round(w, workId, 2), await round(w, workId, 3)];
+      const capOf = async (id: number) => {
+        // `closed=1`: the three rounds are failed, so only the archive half lists them.
+        const res = await app.inject({ method: 'GET', url: '/api/runs?closed=1', headers: tokenHeaders(TOKEN) });
+        expect(res.statusCode).toBe(200);
+        return ((res.json() as { runs: RunSummary[] }).runs.find((r) => r.id === id))!.reviewCap;
+      };
+      expect(await capOf(workId)).toEqual({ rounds: 3, cap: 3, askedAt: null, liftedAt: null });
+      for (const id of ids) expect(await capOf(id)).toBeNull();
+      const refused = await postOpen(app, REVIEW(workId, { title: 'R4' }));
+      expect(refused.statusCode).toBe(409);
+      // One round predicate (D-6909): the refusal's `by` is the row's `reviewCap.rounds` for the same run.
+      expect((refused.json() as { by: string }).by).toBe(String((await capOf(workId))!.rounds));
+      const asked = await capOf(workId);
+      expect(asked).toMatchObject({ rounds: 3, cap: 3, liftedAt: null });
+      expect(typeof asked!.askedAt).toBe('number');
+      expect((await app.inject({ method: 'POST', url: '/api/coord/review-cap', payload: { run: workId } })).statusCode).toBe(200);
+      const lifted = await capOf(workId);
+      expect(lifted!.askedAt).toBe(asked!.askedAt);
+      expect(typeof lifted!.liftedAt).toBe('number');
+      // `coord.runs()` is what the live `runs` frame ships, and `coord.run()` the advance echo: the same object.
+      expect(okRuns(w.coord.runs()).find((r) => r.id === workId)!.reviewCap).toEqual(lifted);
+      expect(okRun(w.coord.run(workId))!.reviewCap).toEqual(lifted);
+    });
+
+    // D-6910: the operator's sheet reads the refusal's own ask, through the one helper both compose it with.
+    it("GET /api/coord/review-cap/:id answers the refusal's own ask, with when it was raised and lifted", async () => {
+      const home = mkTmp('ccrc-runs-');
+      const { w, workId } = await capApp(home);
+      const ids = [await round(w, workId, 1), await round(w, workId, 2), await round(w, workId, 3)];
+      const reportPath = path.join(home, 'review-3.md');
+      writeFileSync(reportPath, '# Review\n\n## Findings\n- **F1 (tests, minor)** `b.ts#case` — no case.\n');
+      w.coord.insertMail({ fromId: 'demo-r1', fromUuid: 'a'.repeat(36), toId: 'coordinator', runId: ids[2]!,
+        kind: 'status', subject: 'review-done', body: '{"reviewedTip":"x"}\n1 finding', artifacts: [reportPath] });
+      const refused = await postOpen(app, REVIEW(workId, { title: 'R4' }));
+      expect(refused.statusCode).toBe(409);
+      const { ask } = refused.json() as { ask: unknown };
+      const read = async () => app.inject({ method: 'GET', url: `/api/coord/review-cap/${workId}` });
+      const before = await read();
+      expect(before.statusCode).toBe(200);
+      const view = before.json() as { ok: boolean; ask: unknown; askedAt: unknown; liftedAt: unknown };
+      expect(view.ok).toBe(true);
+      expect(view.ask).toEqual(ask);
+      expect((view.ask as { lastReview: { findings: unknown } }).lastReview.findings)
+        .toEqual({ state: 'read', lines: ['**F1 (tests, minor)** `b.ts#case` — no case.'] });
+      expect(typeof view.askedAt).toBe('number');
+      expect(view.liftedAt).toBeNull();
+      expect((await app.inject({ method: 'POST', url: '/api/coord/review-cap', payload: { run: workId } })).statusCode).toBe(200);
+      const after = (await read()).json() as { askedAt: unknown; liftedAt: unknown };
+      expect(after.askedAt).toBe(view.askedAt);
+      expect(typeof after.liftedAt).toBe('number');
+      // The report deleted: the same read says so, in the findings' own word.
+      rmSync(reportPath);
+      expect(((await read()).json() as { ask: { lastReview: { findings: unknown } } }).ask.lastReview.findings)
+        .toEqual({ state: 'absent' });
+    });
+
+    it('GET /api/coord/review-cap/:id says unnamed when no review has reported, and nulls before any ask', async () => {
+      const home = mkTmp('ccrc-runs-');
+      const { workId } = await capApp(home);
+      const res = await app.inject({ method: 'GET', url: `/api/coord/review-cap/${workId}` });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({ ok: true, askedAt: null, liftedAt: null, ask: {
+        run: workId, rounds: 0, cap: 3,
+        lastReview: { reviewRunId: null, summary: null, report: null, findings: { state: 'unnamed' } } } });
+    });
+
+    it('GET /api/coord/review-cap/:id says unnamed for a review that reported with no report artifact on its mail', async () => {
+      const home = mkTmp('ccrc-runs-');
+      const { w, workId } = await capApp(home);
+      const r1 = await round(w, workId, 1);
+      w.coord.insertMail({ fromId: 'demo-r1', fromUuid: 'a'.repeat(36), toId: 'coordinator', runId: r1,
+        kind: 'status', subject: 'review-done', body: '{"reviewedTip":"x"}\nno findings', artifacts: [] });
+      const res = await app.inject({ method: 'GET', url: `/api/coord/review-cap/${workId}` });
+      expect(res.statusCode).toBe(200);
+      expect((res.json() as { ask: unknown }).ask).toEqual({ run: workId, rounds: 1, cap: 3,
+        lastReview: { reviewRunId: r1, summary: 'no findings', report: null, findings: { state: 'unnamed' } } });
+    });
+
+    it('GET /api/coord/review-cap/:id answers 404 for a review run or no run, and 400 for a bad id', async () => {
+      const home = mkTmp('ccrc-runs-');
+      const { w, workId } = await capApp(home);
+      const r1 = await round(w, workId, 1);
+      for (const id of [String(r1), '999999']) {
+        const res = await app.inject({ method: 'GET', url: `/api/coord/review-cap/${id}` });
+        expect(res.statusCode, id).toBe(404);
+        expect(res.json()).toMatchObject({ ok: false, error: 'not-found' });
+      }
+      for (const id of ['0', '01', 'abc']) {
+        const res = await app.inject({ method: 'GET', url: `/api/coord/review-cap/${id}` });
+        expect(res.statusCode, id).toBe(400);
+        expect(res.json()).toMatchObject({ ok: false, error: 'bad-request' });
+      }
     });
 
     it('counts every state: a failed or abandoned round still spent one', async () => {

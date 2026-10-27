@@ -254,7 +254,7 @@ describe('the executor\'s step 2a hands the birth the row it read', () => {
    *  the generation re-read and any argv. */
   const exec = async (purgeUuid: string): Promise<ChildReclaimOutcome> => {
     const home = mkTmp('ccrc-birth-rm-exec-');
-    const base = testDeps(home, async () => ({ code: 1, stdout: '', stderr: '' }));
+    const base = testDeps(home, async () => ({ ran: true, code: 1, stdout: '', stderr: '' }));
     const reg = base.cfg.registryDir;
     mkdirSync(reg, { recursive: true });
     const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
@@ -285,7 +285,7 @@ describe('the hold-release job\'s step 5 hands the birth the row its step 1 read
     const calls: string[][] = [];
     const base = testDeps(home, async (_cmd, args) => {
       calls.push(args);
-      return args[0] === 'ws-release' ? { code: 0, stdout: `released ${ID}\n`, stderr: '' } : { code: 1, stdout: '', stderr: '' };
+      return args[0] === 'ws-release' ? { ran: true, code: 0, stdout: `released ${ID}\n`, stderr: '' } : { ran: true, code: 1, stdout: '', stderr: '' };
     });
     const reg = base.cfg.registryDir;
     mkdirSync(reg, { recursive: true });
@@ -317,7 +317,7 @@ describe('the hold-release job\'s step 5 hands the birth the row its step 1 read
 describe('close hands the birth the row its mark read read', () => {
   const close = async (purgeUuid: string) => {
     const home = mkTmp('ccrc-birth-rm-close-');
-    const base = testDeps(home, async () => ({ code: 0, stdout: '', stderr: '' }));
+    const base = testDeps(home, async () => ({ ran: true, code: 0, stdout: '', stderr: '' }));
     const reg = base.cfg.registryDir;
     mkdirSync(reg, { recursive: true });
     const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));

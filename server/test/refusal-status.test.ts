@@ -13,6 +13,7 @@ import type { FastifyReply } from 'fastify';
 import { GENERIC_REFUSALS, REFUSAL_STATUS, ROUTE_REFUSALS, type RouteRefusal } from '../../shared/refusal.js';
 import { CLAIM_REFUSALS } from '../../shared/box-token.js';
 import { refuseRoute } from '../src/refuse.js';
+import { addedLines, mergeBaseDiff, mergeBaseText, removedLines } from './mergeBase.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const SRC = path.resolve(here, '..', 'src');
@@ -93,23 +94,37 @@ const HELPER_WORD = /\brefuseRoute\(\s*reply\s*,\s*'([^']+)'/g;
 /** A word a pure decider answers as `refused('<word>'` (`coord/route.ts`): the route sends it through `refuseRoute(reply, decision.refused, …)`. */
 const DECIDER_WORD = /\brefused\('([^']+)'/g;
 
-/** Measured on landing day (D-5381). MAY ONLY SHRINK: a file whose count
- *  falls lowers its pin in the same change; a new inline send is red — answer
- *  it with `refuseRoute` (or a file's typed helper) instead. Counts every
- *  literal-status refusal send, whatever its body's key order or headers. */
+/** CEILINGS (D-5381), measured on landing day. A file's count may not rise
+ *  above its ceiling; a count that falls prints "can lower to N" (a lowering
+ *  is optional, so two PRs that each remove a send never race a baseline).
+ *  What slack cannot absorb is caught on the change itself: the lines a
+ *  branch ADDS may hold no literal-status refusal send (see the added-lines
+ *  rule below). Counts every literal-status refusal send, whatever its
+ *  body's key order or headers. */
 const INLINE_SEND_PINS: Readonly<Record<string, number>> = {
-  'archiveAct.ts': 2,     // ARCH-36 (#559): the archive door's two 502 `{stderr}` sends, MOVED from server.ts with the act (server.ts fell by five: those two, and the door's gate sends, now `refuseRoute` calls)
+  // ARCH-36 (#559): the archive door's two 502 `{stderr}` sends, MOVED from server.ts with the act (server.ts fell by five: those two, and the door's gate sends, now `refuseRoute` calls)
+  'archiveAct.ts': 2,
   'auth/gate.ts': 2,
-  'coord/routes.ts': 119,  // ARCH-20 (#546): the route door's 18 inline sends answer through `decideRoute`'s typed refusal and `refuseRoute`; ARCH-33 (D-6733): the advance route's gate refusals answer through refuseAdvance, so only its verifyDone and advance rejects stay inline; D-5384: the open route's 24 precondition, child-gate, openRun-conflict and hold-verb sends answer through refuseRoute/refuseRun; D-5298: requireAttribution's 5 through refuseRoute; path identity W1a's stored-id reject is a `refuseAdvance` row since ARCH-33
-  'server.ts': 118,       // ARCH-36 (#559): the archive door's gate and plan refusals answer through refuseRoute, its two 502 `{stderr}` sends moved to archiveAct.ts; // D-5971 (#549, ARCH-11b): the eight 503 `registry-unmeasurable` sends answer through refuseRoute; D-5242: the swap route's three 409s (session-busy, status-unknown and the new hibernated) answer through refuseRoute; path identity W1a: its `readSessionRecord` `kind` switches' four literal 503s are refuseRoute calls since D-5971
-  'token/routes.ts': 2,   // the rotate route's 501, a `RotateAnswer`; the claim door's oversized-body 413
+  // ARCH-20 (#546): the route door's 18 inline sends answer through `decideRoute`'s typed refusal and `refuseRoute`
+  // ARCH-33 (D-6733): the advance route's gate refusals answer through refuseAdvance, so only its verifyDone and advance rejects stay inline
+  // D-5384: the open route's 24 precondition, child-gate, openRun-conflict and hold-verb sends answer through refuseRoute/refuseRun
+  // D-5298: requireAttribution's 5 through refuseRoute; path identity W1a's stored-id reject is a `refuseAdvance` row since ARCH-33
+  'coord/routes.ts': 119,
+  // ARCH-36 (#559): the archive door's gate and plan refusals answer through refuseRoute, its two 502 `{stderr}` sends moved to archiveAct.ts
+  // D-5971 (#549, ARCH-11b): the eight 503 `registry-unmeasurable` sends answer through refuseRoute
+  // D-5242: the swap route's three 409s (session-busy, status-unknown and the new hibernated) answer through refuseRoute
+  // path identity W1a: its `readSessionRecord` `kind` switches' four literal 503s are refuseRoute calls since D-5971
+  'server.ts': 118,
+  // the rotate route's 501, a `RotateAnswer`; the claim door's oversized-body 413
+  'token/routes.ts': 2,
 };
 
-/** Refusal sends whose status is computed and is not the table. MAY ONLY
- *  SHRINK, like the literal pins: a ternary status is no escape hatch. */
+/** Refusal sends whose status is computed and is not the table: ceilings
+ *  like the literal ones, so a ternary status is no escape hatch. */
 const COMPUTED_SEND_PINS: Readonly<Record<string, number>> = {
   'coord/routes.ts': 2,
-  'server.ts': 2,         // path identity W1a: the four 503/404 ternaries became `kind` switches
+  // path identity W1a: the four 503/404 ternaries became `kind` switches
+  'server.ts': 2,
 };
 
 /** The measured disagreements with the table, each counted (D-5381).
@@ -277,23 +292,123 @@ describe('refuseRoute (D-5381)', () => {
   });
 });
 
-describe('the inline-send ratchet (D-5381) — may only shrink', () => {
-  it('each file\'s count of inline refusal sends equals its pin', () => {
+/** Ceiling check: every file's count is at most its ceiling (none: zero). Returns the
+ *  files over, and the files whose count fell below (the "can lower to N" notes). */
+function againstCeilings(counts: Record<string, number>, ceilings: Readonly<Record<string, number>>):
+  { over: string[]; lower: string[] } {
+  const over: string[] = []; const lower: string[] = [];
+  for (const [rel, n] of Object.entries(counts)) {
+    const cap = ceilings[rel] ?? 0;
+    if (n > cap) over.push(`${rel}: ${n} sends, ceiling ${cap}`);
+  }
+  for (const [rel, cap] of Object.entries(ceilings)) {
+    const n = counts[rel] ?? 0;
+    if (n < cap) lower.push(`${rel} can lower to ${n}`);
+  }
+  return { over, lower };
+}
+
+/** An inline send that bypasses the typed helpers: literal status, or a computed one that is not the table. */
+const isInline = (s: Send): boolean => s.status !== null || !TABLE_STATUS.test(s.arg);
+/** A send's identity for cancelling: its status argument and its word, so a body edit still matches its old self. */
+const sendKey = (s: Send): string => `.code(${s.arg}) ${s.word ?? '?'}`;
+
+/** Inline refusal sends the diff NETS in: each send starting on an added line is cancelled against one
+ *  starting on a removed line with the same status and word (any file), so an edit, a re-indent, a
+ *  move between files or a wrap in a helper passes, and only a send with no removed twin is named. */
+function addedInlineSends(diff: string, textOf: (rel: string) => string | null, baseTextOf: (rel: string) => string | null): string[] {
+  const sendsOn = (text: string | null, lines: Set<number>): Send[] =>
+    text === null ? [] : refusalSends(text).filter((s) => isInline(s) && lines.has(s.line));
+  const inSrc = (f: string): boolean => f.startsWith('server/src/') && f.endsWith('.ts');
+  const removedPool = new Map<string, number>();
+  for (const [file, lines] of removedLines(diff)) {
+    if (!inSrc(file)) continue;
+    for (const s of sendsOn(baseTextOf(file), lines)) removedPool.set(sendKey(s), (removedPool.get(sendKey(s)) ?? 0) + 1);
+  }
+  const out: string[] = [];
+  for (const [file, lines] of addedLines(diff)) {
+    if (!inSrc(file)) continue;
+    for (const s of sendsOn(textOf(file), lines)) {
+      const k = sendKey(s); const left = removedPool.get(k) ?? 0;
+      if (left > 0) { removedPool.set(k, left - 1); continue; }
+      out.push(`${file} line ${s.line}: .code(${s.arg})`);
+    }
+  }
+  return out;
+}
+
+describe('the inline-send ratchet (D-5381) — ceilings, and none added', () => {
+  it('each file\'s count of inline refusal sends is at most its ceiling', () => {
     const counts: Record<string, number> = {};
     for (const { rel, text } of sources()) {
       const n = refusalSends(text).filter((s) => s.status !== null).length;
       if (n > 0) counts[rel] = n;
     }
-    expect(counts, 'a count that FELL lowers its pin here; one that ROSE is a new inline send — use refuseRoute').toEqual(INLINE_SEND_PINS);
+    const { over, lower } = againstCeilings(counts, INLINE_SEND_PINS);
+    for (const l of lower) console.warn(`refusal-status: ${l}`);
+    expect(over, 'a count over its ceiling is a new inline send — use refuseRoute').toEqual([]);
   });
 
-  it('each file\'s count of computed-status refusal sends (the table\'s own excepted) equals its pin', () => {
+  it('each file\'s count of computed-status refusal sends (the table\'s own excepted) is at most its ceiling', () => {
     const counts: Record<string, number> = {};
     for (const { rel, text } of sources()) {
       const n = refusalSends(text).filter((s) => s.status === null && !TABLE_STATUS.test(s.arg)).length;
       if (n > 0) counts[rel] = n;
     }
-    expect(counts, 'a computed status is still an inline send — use refuseRoute').toEqual(COMPUTED_SEND_PINS);
+    const { over, lower } = againstCeilings(counts, COMPUTED_SEND_PINS);
+    for (const l of lower) console.warn(`refusal-status: ${l}`);
+    expect(over, 'a computed status is still an inline send — use refuseRoute').toEqual([]);
+  });
+
+  it('the ceiling check fails a rise and a send in a file with no ceiling, and names a fall', () => {
+    expect(againstCeilings({ 'a.ts': 3, 'b.ts': 1 }, { 'a.ts': 2 }).over).toEqual(['a.ts: 3 sends, ceiling 2', 'b.ts: 1 sends, ceiling 0']);
+    expect(againstCeilings({ 'a.ts': 1 }, { 'a.ts': 2, 'c.ts': 1 }).lower).toEqual(['a.ts can lower to 1', 'c.ts can lower to 0']);
+    expect(againstCeilings({ 'a.ts': 2 }, { 'a.ts': 2 })).toEqual({ over: [], lower: [] });
+  });
+
+  it('the added-lines rule fails a net-new send, literal or computed, and passes an edit, a re-indent, a move or a wrap', () => {
+    const hdr = (f: string, g = f): string[] => [`--- a/${f}`, `+++ b/${g}`];
+    const lit = (w: string, extra = ''): string => `reply.code(409).send({ ok: false, error: '${w}'${extra} });`;
+    const none = (): null => null;
+    // One literal-status send added.
+    const text = ['const a = 1;', lit('gone'), 'const b = 2;'].join('\n');
+    const add = [...hdr('server/src/x.ts'), '@@ -1,0 +2 @@', `+${lit('gone')}`].join('\n');
+    expect(addedInlineSends(add, () => text, none)).toEqual(['server/src/x.ts line 2: .code(409)']);
+    // The same send already on the base side (the diff touches another line) is slack, not an addition.
+    const other = [...hdr('server/src/x.ts'), '@@ -3 +3 @@', '+const b = 2;'].join('\n');
+    expect(addedInlineSends(other, () => text, none)).toEqual([]);
+    // A computed status that is not the table is an addition too; a refuseRoute call and a table send are not.
+    const comp = "reply.code(x ? 409 : 404).send({ ok: false, error: 'gone' });";
+    const addComp = [...hdr('server/src/x.ts'), '@@ -0,0 +1 @@', `+${comp}`].join('\n');
+    expect(addedInlineSends(addComp, () => comp, none)).toEqual(['server/src/x.ts line 1: .code(x ? 409 : 404)']);
+    const ok = ["refuseRoute(reply, 'gone');", 'reply.code(REFUSAL_STATUS[e]).send({ ok: false, error: e });'].join('\n');
+    const diff2 = [...hdr('server/src/y.ts'), '@@ -0,0 +1,2 @@'].join('\n');
+    expect(addedInlineSends(diff2, () => ok, none)).toEqual([]);
+    // An edited send (a body field added), a re-indented one and a wrapped one cancel against their removed selves.
+    const before = ['function f() {', lit('gone'), '}'].join('\n');
+    const edited = ['function f() {', lit('gone', ', detail: 1'), '}'].join('\n');
+    const editDiff = [...hdr('server/src/x.ts'), '@@ -2 +2 @@', `-${lit('gone')}`, `+${lit('gone', ', detail: 1')}`].join('\n');
+    expect(addedInlineSends(editDiff, () => edited, () => before)).toEqual([]);
+    const wrapped = ['function f() {', '  if (c) {', '    ' + lit('gone'), '  }', '}'].join('\n');
+    const wrapDiff = [...hdr('server/src/x.ts'), '@@ -2 +2,3 @@', `-${lit('gone')}`, '+  if (c) {', `+    ${lit('gone')}`, '+  }'].join('\n');
+    expect(addedInlineSends(wrapDiff, () => wrapped, () => before)).toEqual([]);
+    // A send moved between files cancels; a second copy of it does not.
+    const moveDiff = [...hdr('server/src/a.ts'), '@@ -2 +1,0 @@', `-${lit('gone')}`, ...hdr('server/src/b.ts'), '@@ -0,0 +1 @@', `+${lit('gone')}`].join('\n');
+    expect(addedInlineSends(moveDiff, () => lit('gone'), () => before)).toEqual([]);
+    const copyDiff = [moveDiff, ...hdr('server/src/c.ts'), '@@ -0,0 +1 @@', `+${lit('gone')}`].join('\n');
+    expect(addedInlineSends(copyDiff, () => lit('gone'), () => before)).toEqual(['server/src/c.ts line 1: .code(409)']);
+  });
+
+  it('the lines this branch adds hold no net-new inline refusal send', (ctx) => {
+    const root = path.resolve(SRC, '..', '..');
+    const diff = mergeBaseDiff(root, ['server/src']);
+    if (diff === null) {
+      console.warn('refusal-status: skipped the added-lines rule, no origin/main or merge-base in this checkout');
+      ctx.skip();
+      return;
+    }
+    const added = addedInlineSends(diff, (f) => { try { return readFileSync(path.join(root, f), 'utf8'); } catch { return null; } }, (f) => mergeBaseText(root, f));
+    expect(added, 'an inline refusal send was added without a removed twin; answer it with refuseRoute (or the file\'s typed helper)').toEqual([]);
   });
 
   it('the predicate is live — it counts a send split across lines', () => {

@@ -2,8 +2,8 @@
 // exit or a PR body quotes comes from one of these NAMED queries, run on the PR's tip, never typed. Each query returns
 // the sites it found (`{ file, line, text }`), so a count is the list's length and a PR body can print the list.
 // `consolidation-census.test.ts` holds each query against a fixture tree and finds its cited site on the real one.
-// No count is pinned here: a census reports until its series reaches its target, and the may-only-shrink pin lands in
-// the commit that reaches it (spec §5.1 rule 3, rev 2).
+// A count is pinned only once its series reaches its target: a census reports until then, and the may-only-shrink pin
+// lands in the commit that reaches it (spec §5.1 rule 3, rev 2).
 //
 // KNOWN WIDTH, every query: comments are dropped LINE by line. A line whose first token is `//`, `*` or `/*` is prose,
 // and a trailing `// …` on a code line is cut. A line inside a block comment that does not start with `*`, and a call
@@ -13,6 +13,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { CCD } from './ccdWsHelpers.js';
 import { parsedFile } from './scan/symbols.js';
+import { scheduleFacts, type ScheduleFacts } from './scan/parse.js';
 
 /** The repository root: every query's default tree. A fixture tree passes its own root in its place. */
 export const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -22,7 +23,7 @@ export interface CensusSite { readonly file: string; readonly line: number; read
 
 /** Every `.ts`/`.tsx`/`.mjs` file under `root/dir`, sorted; declaration files and `__`-prefixed transient mutants
  *  (the `boot.test.ts` precedent in `single-definition.test.ts`'s `sources`) are skipped. */
-function sourceFiles(root: string, dir: string): string[] {
+export function sourceFiles(root: string, dir: string): string[] {
   const out: string[] = [];
   const walk = (d: string): void => {
     if (!existsSync(d)) return;
@@ -45,7 +46,7 @@ export function codeOf(line: string): string {
 }
 
 /** Every match of `re` (global) on a code line of each file under `dirs`, one site per match. */
-function sitesOf(root: string, dirs: readonly string[], re: RegExp, skip: (rel: string) => boolean = () => false): CensusSite[] {
+export function sitesOf(root: string, dirs: readonly string[], re: RegExp, skip: (rel: string) => boolean = () => false): CensusSite[] {
   const out: CensusSite[] = [];
   for (const dir of dirs) {
     for (const f of sourceFiles(root, dir)) {
@@ -59,7 +60,7 @@ function sitesOf(root: string, dirs: readonly string[], re: RegExp, skip: (rel: 
   return out;
 }
 
-const esc = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+export const esc = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 /** `recordFeedEvent(` call expressions under `server/src`, outside `coord/store.ts` (which defines the door and may
  *  call itself). A method SIGNATURE (`recordFeedEvent(epoch: number, …)` opening a line) is a declaration, not a call.
@@ -104,16 +105,35 @@ export function ccdLauncherIn(root: string = REPO): string {
   return path.join(root, path.relative(REPO, CCD));
 }
 
+/** The library files `ccd/ccd` loads at its foot (D-6913), in load order. The census reads them AFTER `ccd/ccd`,
+ *  as one program: a moved function is still ccd's, with its row in `ccd/contexts.tsv`, its edges in the call graph and its
+ *  line in the heredoc check. A tree without one (a fixture) has no lines from it. */
+export const CCD_LIB_FILES: readonly string[] = ['ccd/lib/disk-retention.sh'];
+
+/** One line of ccd's shell source, with the repo-relative file it is in and its 1-based line there. */
+export interface CcdSourceLine { readonly file: string; readonly line: number; readonly text: string }
+
+/** `ccd/ccd`, then each library file that exists under `root`, as lines. */
+export function ccdSourceLines(root: string = REPO): CcdSourceLine[] {
+  const out: CcdSourceLine[] = [];
+  const add = (file: string, abs: string): void => {
+    if (!existsSync(abs)) return;
+    const lines = readFileSync(abs, 'utf8').split('\n');
+    // A file's final newline is not a line of its own: the library ends in one, and a phantom empty line would end nothing.
+    if (lines[lines.length - 1] === '' && file !== 'ccd/ccd') lines.pop();
+    lines.forEach((text, i) => out.push({ file, line: i + 1, text }));
+  };
+  add('ccd/ccd', ccdLauncherIn(root));
+  for (const rel of CCD_LIB_FILES) add(rel, path.join(root, rel));
+  return out;
+}
+
 /** A definition `ccd/ccd` writes: a function name at column 0, `()`, optional spaces, `{`. */
 export const CCD_FUNCTION_DEF = /^([A-Za-z_][A-Za-z0-9_]*)\(\) *\{/;
 
-/** ccd's function definitions, one site per `name() {` line of `ccd/ccd` (the site's `text` is the line). */
+/** ccd's function definitions, one site per `name() {` line of `ccd/ccd` and its library (the site's `text` is the line). */
 export function ccdFunctionDefinitions(root: string = REPO): CensusSite[] {
-  const out: CensusSite[] = [];
-  readFileSync(ccdLauncherIn(root), 'utf8').split('\n').forEach((text, i) => {
-    if (CCD_FUNCTION_DEF.test(text)) out.push({ file: 'ccd/ccd', line: i + 1, text });
-  });
-  return out;
+  return ccdSourceLines(root).filter((s) => CCD_FUNCTION_DEF.test(s.text));
 }
 
 /** The manifest's rows, one site per non-comment, non-blank line of `ccd/contexts.tsv` (`text` is the line). No
@@ -134,12 +154,13 @@ export function bashCodeOf(line: string): string {
   return line.replace(/\s#(?:\s.*)?$/, '');
 }
 
-/** One edge of ccd's call graph: `caller`'s region names `callee` first at `line` (1-based, in `ccd/ccd`). */
-export interface CcdCallEdge { readonly caller: string; readonly callee: string; readonly line: number }
+/** One edge of ccd's call graph: `caller`'s region names `callee` first at `line` (1-based, in `file`). */
+export interface CcdCallEdge { readonly caller: string; readonly callee: string; readonly line: number; readonly file: string }
 
 /** ccd's call graph: one edge per (caller, callee) pair, in definition order, then by first reference. */
 export function ccdCallGraph(root: string = REPO): CcdCallEdge[] {
-  const lines = readFileSync(ccdLauncherIn(root), 'utf8').split('\n');
+  const src = ccdSourceLines(root);
+  const lines = src.map((s) => s.text);
   const defs: { name: string; at: number }[] = [];
   lines.forEach((l, i) => { const m = CCD_FUNCTION_DEF.exec(l); if (m) defs.push({ name: m[1]!, at: i }); });
   const names = new Set(defs.map((d) => d.name));
@@ -156,7 +177,7 @@ export function ccdCallGraph(root: string = REPO): CcdCallEdge[] {
         const callee = m[2]!;
         if (m[1] !== undefined || m[3] !== undefined || callee === d.name || !names.has(callee) || seen.has(callee)) continue;
         seen.add(callee);
-        out.push({ caller: d.name, callee, line: j + 1 });
+        out.push({ caller: d.name, callee, line: src[j]!.line, file: src[j]!.file });
       }
     }
   });
@@ -168,7 +189,8 @@ export function ccdCallGraph(root: string = REPO): CcdCallEdge[] {
  *  line. A heredoc opens at `<<WORD`, `<<-WORD` or a quoted WORD on a code line (`<<<` is a here-string, not one) and
  *  closes at the line that is WORD (after leading tabs for `<<-`); one that never closes is a site too. */
 export function ccdHeredocBraces(root: string = REPO): CensusSite[] {
-  const lines = readFileSync(ccdLauncherIn(root), 'utf8').split('\n');
+  const src = ccdSourceLines(root);
+  const lines = src.map((s) => s.text);
   const open = /(?<!<)<<(-?)\s*(['"]?)([A-Za-z_][A-Za-z0-9_]*)\2/g;
   const out: CensusSite[] = [];
   let inFn = false;
@@ -177,16 +199,16 @@ export function ccdHeredocBraces(root: string = REPO): CensusSite[] {
     if (pending.length > 0) {
       const h = pending[0]!;
       if ((h.tabs ? text.replace(/^\t+/, '') : text) === h.word) pending.shift();
-      else if (inFn && text.startsWith('}')) out.push({ file: 'ccd/ccd', line: i + 1, text });
+      else if (inFn && text.startsWith('}')) out.push({ file: src[i]!.file, line: src[i]!.line, text });
       return;
     }
     if (CCD_FUNCTION_DEF.test(text)) inFn = true;
     else if (text.startsWith('}')) inFn = false;
     if (!inFn) return;
-    for (const m of bashCodeOf(text).matchAll(open)) pending.push({ word: m[3]!, tabs: m[1] === '-', at: i + 1 });
+    for (const m of bashCodeOf(text).matchAll(open)) pending.push({ word: m[3]!, tabs: m[1] === '-', at: i });
   });
   // A heredoc that never closes means this reader misparsed one; say so rather than read nothing after it.
-  for (const h of pending) out.push({ file: 'ccd/ccd', line: h.at, text: `<<${h.word} never closes` });
+  for (const h of pending) out.push({ file: src[h.at]!.file, line: src[h.at]!.line, text: `<<${h.word} never closes` });
   return out;
 }
 
@@ -198,7 +220,7 @@ export function ccdCrossContextCalls(root: string = REPO): CensusSite[] {
   return ccdCallGraph(root).flatMap((e) => {
     const a = ctx.get(e.caller); const b = ctx.get(e.callee);
     if (a === undefined || b === undefined || a === b || b === 'K') return [];
-    return [{ file: 'ccd/ccd', line: e.line, text: `${e.caller} (${a}) -> ${e.callee} (${b})` }];
+    return [{ file: e.file, line: e.line, text: `${e.caller} (${a}) -> ${e.callee} (${b})` }];
   });
 }
 
@@ -238,45 +260,129 @@ export function filesNaming(needles: readonly string[], root: string = REPO): st
 /** How many code lines after a `runCcd(` call `runCcdOldFoldSites` reads for the call's `ran` narrowing. */
 export const RAN_NARROW_WINDOW = 12;
 
-/** D-6034 (ARCH-10, #543): `runCcd(` call expressions under `server/src` still on the OLD fold, which reads `ok` or a
- *  runner's forged code without first asking whether the command ran. A site is on the new fold when the variable it
- *  assigns (`res = await deps.runCcd(…)`, with or without `const`/`let`) is read as `<name>.ran === false` within the
- *  next `RAN_NARROW_WINDOW` code lines, and before a line that opens with `}` at column 0 (the end of the top-level
- *  declaration the call sits in). A line that RETURNS the call's bare result (`return await …runCcd(`, a pass-through
- *  wrapper) folds nothing, and is not a site. Step 2 drives this to 0, and its may-only-shrink pin lands then (spec
- *  §5.1 rule 3). KNOWN WIDTH: a narrowing further down, or in a function the result is handed to, is not seen, and the
- *  site is counted; so is a call whose result is not assigned to a name. */
-export function runCcdOldFoldSites(root: string = REPO): CensusSite[] {
-  const out: CensusSite[] = [];
+/** The readers a `runCcd(` result may be handed to whole, each of which reads `ran` FIRST (D-6034, D-6840). */
+export const RAN_CARRY_READERS: readonly string[] = [
+  'cutShort', 'sweepFailureReason', 'failureDetail', 'classifyAddFailure', 'classifyTitleFailure', 'archiveOutcome',
+];
+
+/** `classify` is a generic name: it counts as a carry reader only in the file that defines the one that reads `ran` first. */
+export const RAN_CARRY_READERS_BY_FILE: Readonly<Record<string, readonly string[]>> = {
+  'server/src/docs/ccdsource.ts': ['classify'],
+};
+
+/** How a `runCcd(` site answers the not-ran arm (ARCH-10, #543; the PR lists each site's chosen arm):
+ *  - `explicit`: the site reads `ran === false` itself, before any reader of the runner's words;
+ *  - `carried`: the site hands the whole result to a reader in `RAN_CARRY_READERS`, which reads `ran` first;
+ *  - `ok-only`: the site reads only `ok` (and the stdout of an ok answer, or the runner's `stderr` as a plain failure
+ *    sentence). The not-ran arm carries `ok: false`, so `tsc` narrows the ran arm by `ok` itself and the site's failure
+ *    path is the one the arm always took: no refusal, box word, die or composition error is read off it. Pinned by
+ *    `RAN_TABLE`, never by this file's regexes. */
+export type RanArm = 'explicit' | 'carried' | 'ok-only';
+
+/** A `runCcd(` site the census cannot classify by reading the code around it, pinned by its file, its trimmed text and
+ *  which of the identical lines in that file it is (`nth`, from 1), so a moved line keeps its row. */
+export interface RanTableRow { readonly file: string; readonly text: string; readonly nth: number; readonly arm: RanArm }
+
+/** The reviewed arm of every `runCcd(` site the code around it does not show: an unassigned result, a result handed
+ *  to a `queue.run` callback, and every site that reads `ok` only. A site that appears in no row, and shows no narrowing
+ *  or carry in the next `RAN_NARROW_WINDOW` code lines, is unaccounted, and the census test fails. */
+export const RAN_TABLE: readonly RanTableRow[] = [
+  { file: 'server/src/archiveAct.ts', text: 'const res = await ports.runCcd(ports.stopArgv());', nth: 1, arm: 'ok-only' },
+  { file: 'server/src/archiveAct.ts', text: 'const archived = await ports.runCcd(archiveArgv);', nth: 1, arm: 'carried' },
+  { file: 'server/src/archiveAct.ts', text: 'const res = await ports.runCcd(ports.stopArgv());', nth: 2, arm: 'ok-only' },
+  { file: 'server/src/coord/childReclaim.ts', text: 'const res = await deps.runCcd(argv);', nth: 3, arm: 'ok-only' },
+  { file: 'server/src/coord/childSpent.ts', text: 'const res = await deps.runCcd(argv);', nth: 1, arm: 'ok-only' },
+  { file: 'server/src/coord/close.ts', text: "const done = decideClose({ step: 'fleet', res: await deps.runCcd(verb.argv) });", nth: 1, arm: 'ok-only' },
+  { file: 'server/src/coord/close.ts', text: 'const res = await deps.runCcd(argv);', nth: 1, arm: 'ok-only' },
+  { file: 'server/src/coord/collectOrphanTree.ts', text: 'try { return parseOrphanCensus((await deps.runCcd(CCD_ARGV.wsOrphanCensus())).stdout); } catch { return { kind: \'unreadable\' }; }', nth: 1, arm: 'ok-only' },
+  { file: 'server/src/coord/collectOrphanTree.ts', text: 'try { return parseOrphanAudit((await deps.runCcd(CCD_ARGV.wsOrphanAudit(hex))).stdout, hex); }', nth: 1, arm: 'ok-only' },
+  { file: 'server/src/coord/collectOrphanTree.ts', text: 'const r = await deps.runCcd(CCD_ARGV.wsOrphan(spend.token, hex, spend.rescue, sweepDec(deps.fleetState, \'orphan-tree sweep\')));', nth: 1, arm: 'ok-only' },
+  { file: 'server/src/coord/dispatch.ts', text: 'const res = await deps.runCcd(argv);', nth: 1, arm: 'ok-only' },
+  { file: 'server/src/coord/dispatch.ts', text: 'const res = await deps.runCcd(CCD_ARGV.ensure(sessionId));', nth: 1, arm: 'ok-only' },
+  { file: 'server/src/coord/dispatch.ts', text: 'const holdRes = await deps.runCcd(holdArgv);', nth: 1, arm: 'ok-only' },
+  { file: 'server/src/coord/dispatch.ts', text: 'const routeRes = await deps.runCcd(', nth: 1, arm: 'ok-only' },
+  { file: 'server/src/coord/fingerprint.ts', text: 'const res = await deps.runCcd(argv);', nth: 1, arm: 'ok-only' },
+  { file: 'server/src/coord/routes.ts', text: 'const res = await deps.runCcd(argv);', nth: 1, arm: 'ok-only' },
+  { file: 'server/src/coord/routes.ts', text: 'const res = await deps.runCcd(argv);', nth: 2, arm: 'ok-only' },
+  { file: 'server/src/coord/routes.ts', text: 'const res = await deps.runCcd(argv);', nth: 3, arm: 'ok-only' },
+  { file: 'server/src/coord/routes.ts', text: 'const res = await deps.runCcd(CCD_ARGV.reclaimPause(body.state));', nth: 1, arm: 'ok-only' },
+  { file: 'server/src/docs/ccdsource.ts', text: 'return { ok: true, res: await deps.runCcd(CCD_ARGV.docsIndex()) };', nth: 1, arm: 'carried' },
+  { file: 'server/src/docs/ccdsource.ts', text: 'res: await deps.runCcd(CCD_ARGV.docsTree(call.project, call.ref === null ? null : docsRefText(call.ref))),', nth: 1, arm: 'carried' },
+  { file: 'server/src/docs/ccdsource.ts', text: 'res: await deps.runCcd(call.pin.kind === \'committed\'', nth: 1, arm: 'carried' },
+  { file: 'server/src/docs/ccdsource.ts', text: 'return { ok: true, res: await deps.runCcd(CCD_ARGV.docsFetch(project, branch)) };', nth: 1, arm: 'carried' },
+  { file: 'server/src/server.ts', text: 'const res = await deps.runCcd(argv);', nth: 1, arm: 'ok-only' },
+  { file: 'server/src/server.ts', text: 'const res = await deps.runCcd(argv);', nth: 2, arm: 'ok-only' },
+  { file: 'server/src/server.ts', text: 'return late !== null ? { refused: late } : { ran: await deps.runCcd(argv) };', nth: 1, arm: 'explicit' },
+  { file: 'server/src/server.ts', text: 'const r = await sendDeps.queue.run(id, () => deps.runCcd(argv));', nth: 1, arm: 'ok-only' },
+  { file: 'server/src/server.ts', text: 'const r = await sendDeps.queue.run(id, () => deps.runCcd(argv));', nth: 2, arm: 'ok-only' },
+  { file: 'server/src/server.ts', text: 'const res = await sendDeps.queue.run(id, () => deps.runCcd(argv));', nth: 1, arm: 'carried' },
+  { file: 'server/src/server.ts', text: 'const res = await deps.runCcd(argv);', nth: 4, arm: 'ok-only' },
+  { file: 'server/src/server.ts', text: 'const res = await sendDeps.queue.run(id, () => deps.runCcd(argv));', nth: 2, arm: 'explicit' },
+  { file: 'server/src/watch.ts', text: 'const res = await this.deps.queue.run(r.id, () => this.deps.runCcd(', nth: 1, arm: 'ok-only' },
+  { file: 'server/src/watch.ts', text: 'const res = await this.deps.runCcd(CCD_ARGV.ensure(d.toId));', nth: 1, arm: 'ok-only' },
+];
+
+/** One `runCcd(` site and how it answers the not-ran arm; `null` when nothing accounts for it. */
+export interface RanSite extends CensusSite { readonly arm: RanArm | null }
+
+/** D-6034, D-6840 (ARCH-10, #543): every `runCcd(` call expression under `server/src`, with how it answers
+ *  the not-ran arm. A site is `explicit` when the variable it assigns (`res = await deps.runCcd(...)`, with or without
+ *  `const`/`let`) is read as `<name>.ran === false` within the next `RAN_NARROW_WINDOW` code lines, and before a line
+ *  that opens with `}` at column 0 (the end of the declaration the call sits in); `carried` when that name is an
+ *  argument of a `RAN_CARRY_READERS` call in the same window; otherwise the site's row in `RAN_TABLE`, else `null`.
+ *  A line that RETURNS the call's bare result (`return await ...runCcd(`, a pass-through wrapper) folds nothing and is
+ *  not a site, nor is a method signature (`runCcd(argv: CcdArgv): ...`). */
+export function runCcdSiteArms(root: string = REPO, table: readonly RanTableRow[] = RAN_TABLE): RanSite[] {
+  const out: RanSite[] = [];
   for (const f of sourceFiles(root, 'server/src')) {
     const file = path.relative(root, f).split(path.sep).join('/');
     const lines = readFileSync(f, 'utf8').split('\n');
+    const seen = new Map<string, number>();
     lines.forEach((text, i) => {
       const code = codeOf(text);
       if (!/\brunCcd\s*\(/.test(code) || /^\s*return\s+(?:await\s+)?[\w.]*\brunCcd\s*\(/.test(code)) return;
+      if (/\brunCcd\s*\(\s*\w+\s*:/.test(code)) return;
+      const key = text.trim();
+      const nth = (seen.get(key) ?? 0) + 1;
+      seen.set(key, nth);
       const name = /(?:^|[^\w$.])([A-Za-z_$][\w$]*)\s*(?::[^=]+)?=\s*await\s+[\w.]*\brunCcd\s*\(/.exec(code)?.[1];
+      let arm: RanArm | null = null;
       if (name !== undefined) {
         const narrow = new RegExp(`\\b${name}\\.ran\\s*===\\s*false\\b`);
+        const carry = new RegExp(`\\b(?:${[...RAN_CARRY_READERS, ...(RAN_CARRY_READERS_BY_FILE[file] ?? [])].join('|')})\\(\\s*${name}\\b`);
+        const stderrRead = new RegExp(`\\b${name}\\.stderr\\b`);
+        let readStderr = false;
         for (const l of lines.slice(i + 1, i + 1 + RAN_NARROW_WINDOW)) {
           if (/^\}/.test(l)) break;
-          if (narrow.test(codeOf(l))) return;
+          const c = codeOf(l);
+          // The narrowing must come BEFORE the first read of the runner's words: a `ran === false` after a `.stderr` read is late.
+          if (narrow.test(c)) { if (!readStderr) arm = 'explicit'; break; }
+          if (stderrRead.test(c)) readStderr = true;
+          if (carry.test(c)) { arm = 'carried'; break; }
         }
       }
-      out.push({ file, line: i + 1, text });
+      arm ??= table.find((r) => r.file === file && r.text === key && r.nth === nth)?.arm ?? null;
+      out.push({ file, line: i + 1, text, arm });
     });
   }
   return out;
 }
 
-/** D-5866 (Task C1k; ARCH-71 #806): the W4 files W1b never edits. Their capability sites are reported, tagged
- *  `w4-held`, and W4 moves them. */
-export const W4_HELD_FILES: readonly string[] = ['server/src/hibernateSweep.ts', 'server/src/stopDoneSweep.ts'];
+/** The sites nothing accounts for. Step 2 drove this to 0, and `consolidation-census.test.ts` pins it there. */
+export function runCcdOldFoldSites(root: string = REPO, table: readonly RanTableRow[] = RAN_TABLE): CensusSite[] {
+  return runCcdSiteArms(root, table).filter((s) => s.arm === null).map(({ file, line, text }) => ({ file, line, text }));
+}
+
+/** D-5866 (Task C1k; ARCH-71 #806): the W4 files W1b never edits. Their capability sites were reported, tagged
+ *  `w4-held`, and W4 moved them: since D-7042 (ARCH-43 C4d) both sleep lanes ask `ccdCan` in the one executor
+ *  (`sleepLane.ts`), and no file is held. */
+export const W4_HELD_FILES: readonly string[] = [];
 
 /** What a capability site asks. `verb`: whether this box's ccd can run a `CCD_ARGV` row (every `ccdCan(` and every
  *  `verbSupported(`, and a `capSupported(` of some `CCD_CAN` row's token). `verb-precondition`: a `capSupported(` on
  *  a line that also asks `ccdCan(` of another row (the pause marker the collector needs beside its own token). `flag`:
- *  any other token, which an existing verb parses. `w4-held`: any site in `W4_HELD_FILES`. */
-export type CapabilityTag = 'verb' | 'verb-precondition' | 'flag' | 'w4-held';
+ *  any other token, which an existing verb parses. (`w4-held`, a site in `W4_HELD_FILES`, was retired by D-7042.) */
+export type CapabilityTag = 'verb' | 'verb-precondition' | 'flag';
 
 /** One capability site: where, in which form, the token it names (`null` for `verbSupported`, or an expression this
  *  census does not resolve), and its tag. */
@@ -306,7 +412,7 @@ function secondArg(code: string, open: number): string | null {
  * `server/src`, outside `ccdargv.ts` (which defines them), each tagged. THE TAG IS READ FROM `CCD_CAN`, never from a
  * list: a `capSupported(` token is resolved through `ccdargv.ts`'s own exports (an exported constant's value, or a
  * quoted literal), and is `verb` when it is some row's token. Exit target: no `verb`-tagged `verbSupported(` or
- * `capSupported(` outside `W4_HELD_FILES` (every verb question goes through `ccdCan`).
+ * `capSupported(` anywhere (every verb question goes through `ccdCan`; `W4_HELD_FILES` is empty since D-7042).
  * KNOWN WIDTH: "beside" is the same code line; a call whose arguments wrap onto the next line resolves no token, and
  * its tag is `flag` unless its form says otherwise.
  */
@@ -332,8 +438,7 @@ export async function capabilityChoiceSites(root: string = REPO): Promise<Capabi
         const form = m[1] as CapabilitySite['form'];
         const token = form === 'capSupported' ? tokenOf(secondArg(code, m.index! + m[0].length)) : null;
         const beside = form === 'capSupported' && /\bccdCan\s*\(/.test(code);
-        const tag: CapabilityTag = W4_HELD_FILES.includes(file) ? 'w4-held'
-          : form !== 'capSupported' ? 'verb'
+        const tag: CapabilityTag = form !== 'capSupported' ? 'verb'
             : beside ? 'verb-precondition'
               : token !== null && rowTokens.has(token) ? 'verb' : 'flag';
         out.push({ file, line: i + 1, text, form, token, tag });
@@ -430,3 +535,186 @@ export function redactRuleTables(root: string = REPO): string[] {
   }
   return out.sort();
 }
+
+/**
+ * D-5862 (Task C1h; ARCH-68 #803; spec K11, §2.3's clock row): the watcher's lane schedule, four queries over
+ * `server/src/watch.ts`, read from its syntax tree (`scan/parse.ts`'s `scheduleFacts`, the one parser importer), never from a
+ * count typed by hand. Exit targets (C1h): `laneClockFields` and `laneClockShapes` list only W4's two clocks
+ * (`DelegationLane#lastSweepAt` became the `delegation` row, so `laneClockReported` lists nothing); `singleFlightGuards` lists only
+ * `ticking`, `dispatchRun` and `dispatchAgain`, and W4's two; `cadenceLiterals` is empty.
+ * KNOWN WIDTH: a clock or guard reached through a computed name, a field of another class and a literal assembled from
+ * pieces (`60 * 1000`, which is read, but `MINUTE * 5` is not a literal) are other shapes; a cadence compared through
+ * a local alias (`const gap = now - this.lastX; if (gap < 5000)`) is not seen.
+ */
+
+/** The fields that were a lane's throttle clock on `a8a5b9f56`, by name: 25 in `FleetWatcher` (23 on `Date.now()`, 2 on
+ *  the monotonic clock) and W4's two, which a later series moves. */
+export const LANE_CLOCK_NAMES: readonly string[] = [
+  'lastCapsAt', 'lastCatalogueAt', 'lastInventoryAt', 'lastServerCapsAt',
+  'lastTaskSweep', 'lastUsageSweep', 'lastPrSweep', 'lastNameSweep', 'lastDivergenceSweep', 'lastLifecycleSweep',
+  'lastReadinessSweep', 'lastLedgerReconcile', 'lastLedgerFloor',
+  'lastClaimRenew', 'lastClaimLapse', 'lastStallSweep', 'lastIdleNudgeAt', 'lastMailSweep', 'lastAskSweep',
+  'lastApprovalPrune', 'lastDigestBeat',
+  'lastChildReclaimSweep', 'lastCollectSweep', 'lastArchivedExpirySweep', 'lastDeadCoordinatorSweep',
+  'lastStopDoneSweep', 'lastHibernateSweep',
+];
+
+/** The fields that were a lane's single-flight guard on `a8a5b9f56` (the stuck-run stamp, the booleans, the promises and
+ *  the one queued rerun), by name. */
+export const SINGLE_FLIGHT_NAMES: readonly string[] = [
+  'ticking', 'collectSweeping', 'stallSweepRunning', 'idleNudgeRunning', 'archivedExpirySweeping', 'stopDoneSweeping',
+  'hibernateSweeping', 'deadCoordinatorSweeping', 'serverCapsRun', 'deadCoordinatorPassRun', 'inventoryRun',
+  'inventoryRerunPending', 'dispatchRun', 'dispatchAgain', 'prSweepStartedAt',
+];
+
+/** The facts of `server/src/watch.ts` (or a fixture's), with the file's lines; `null` when the tree has none. */
+export function watcherFacts(root: string, rel = 'server/src/watch.ts'): { facts: ScheduleFacts; lines: string[]; file: string } | null {
+  const abs = path.join(root, rel);
+  if (!existsSync(abs)) return null;
+  const parsed = parsedFile(abs);
+  return { facts: scheduleFacts(parsed), lines: parsed.text.split('\n'), file: rel };
+}
+
+export const siteAt = (w: { lines: string[]; file: string }, line: number): CensusSite => ({ file: w.file, line, text: w.lines[line - 1] ?? '' });
+
+/** The named lane clocks (`LANE_CLOCK_NAMES`) still declared as fields of `FleetWatcher`. */
+export function laneClockFields(root: string = REPO): CensusSite[] {
+  const w = watcherFacts(root);
+  return w === null ? [] : w.facts.fields.filter((f) => f.cls === 'FleetWatcher' && LANE_CLOCK_NAMES.includes(f.name)).map((f) => siteAt(w, f.line));
+}
+
+/** `DelegationLane#lastSweepAt`, a cadence clock in a class another series held: reported by name, and empty since it became the `delegation` row (D-5862). */
+export function laneClockReported(root: string = REPO): CensusSite[] {
+  const w = watcherFacts(root);
+  return w === null ? [] : w.facts.fields.filter((f) => f.cls === 'DelegationLane' && f.name === 'lastSweepAt').map((f) => siteAt(w, f.line));
+}
+
+/** Numeric fields of `FleetWatcher` that are compared with a constant and are NOT a lane's throttle: `lastStallJudgedAt` is
+ *  the stall watch's gap rule (slug `stall-clocks-drop-on-an-unobserved-gap`, D-3750), a state test on how long the watch
+ *  went unobserved, which decides whether to drop its clocks and does not decide whether a lane runs. */
+export const LANE_CLOCK_SHAPE_EXEMPT: readonly string[] = ['lastStallJudgedAt'];
+
+/** The structural query: a numeric field of `FleetWatcher` (bar `LANE_CLOCK_SHAPE_EXEMPT`) compared as
+ *  `<now> - this.X <op> CONST` (`<`, `<=`, `>`, `>=`), CONST an UPPER_CASE name, a numeric literal or a product of those. So a
+ *  new, unnamed clock is caught. */
+export function laneClockShapes(root: string = REPO): CensusSite[] {
+  const w = watcherFacts(root);
+  if (w === null) return [];
+  const numeric = new Set(w.facts.fields.filter((f) => f.cls === 'FleetWatcher' && f.numeric && !LANE_CLOCK_SHAPE_EXEMPT.includes(f.name)).map((f) => f.name));
+  return w.facts.comparisons.filter((c) => c.cls === 'FleetWatcher' && numeric.has(c.field) && c.other !== 'other').map((c) => siteAt(w, c.line));
+}
+
+/** The single-flight guards (`SINGLE_FLIGHT_NAMES`) still declared as fields of `FleetWatcher`. */
+export function singleFlightGuards(root: string = REPO): CensusSite[] {
+  const w = watcherFacts(root);
+  return w === null ? [] : w.facts.fields.filter((f) => f.cls === 'FleetWatcher' && SINGLE_FLIGHT_NAMES.includes(f.name)).map((f) => siteAt(w, f.line));
+}
+
+/** A bare millisecond literal (a numeric literal of 1000 or more, `60_000`, or a product with one, `60 * 1000`) compared
+ *  against a `last…` clock: `<now> - this.last… <op> LITERAL`. A cadence is a row of `LANE_SCHEDULE`. */
+export function cadenceLiterals(root: string = REPO): CensusSite[] {
+  const w = watcherFacts(root);
+  return w === null ? [] : w.facts.comparisons.filter((c) => c.field.startsWith('last') && c.literalMs).map((c) => siteAt(w, c.line));
+}
+
+/** The three cadences the spec declares as derivations, each `export const NAME = OTHER;` where it lives (`laneSchedule.ts`
+ *  or `watch.ts`): `reference` is true when the declaration's initializer is a bare name, false when it is a literal or an
+ *  expression, and `file` is null when no declaration is found. A derivation is a reference, never a second literal. */
+export const DECLARED_DERIVATIONS: readonly string[] = ['COLLECT_OBSERVE_INTERVAL_MS', 'STALL_SWEEP_MS', 'DELEGATION_SWEEP_MS'];
+
+export function declaredDerivations(root: string = REPO): Array<{ name: string; file: string | null; reference: boolean }> {
+  const found = new Map<string, { file: string; reference: boolean }>();
+  for (const rel of ['server/src/laneSchedule.ts', 'server/src/watch.ts']) {
+    const w = watcherFacts(root, rel);
+    if (w === null) continue;
+    for (const c of w.facts.constants) if (DECLARED_DERIVATIONS.includes(c.name)) found.set(c.name, { file: rel, reference: c.reference });
+  }
+  return DECLARED_DERIVATIONS.map((name) => ({ name, file: found.get(name)?.file ?? null, reference: found.get(name)?.reference ?? false }));
+}
+
+/**
+ * D-5864 (Task C1j; ARCH-51 #786; spec K13's listing half): every place `server/src/watch.ts` lists the registry, from its
+ * syntax tree (`scan/symbols.ts`, over `scan/parse.ts`), never from a count typed by hand. A site is a call of `readRegistry(`
+ * or `readRegistryMeasured(`, or of a `readdir(` whose first argument names `registryDir`, inside a method of the class.
+ * Each is tagged by the method it sits in:
+ * - `selection`: it chooses rows for a lane. Exit target (C1j): exactly one, in `FleetWatcher.tick`; the lanes take the
+ *   tick's `FleetReadModel`.
+ * - `act`: it is read at the act and stays fresh, by name (`ACT_LISTING_METHODS`): the mail lane's last switch read
+ *   before it delivers, and the divergence census's listing, taken after git's records on purpose; and the tick's own bare
+ *   `readdir`, the snapshot write's re-confirmation when the fleet shrank.
+ * - `tests-only`: a lane's own read when called with no model, reached by tests alone (`TESTS_ONLY_LISTING_METHODS`);
+ *   the registry-refused census pins that `tick()` hands each lane its model.
+ * A method not named in either list is `selection`, so a new lane that lists for itself is counted as one.
+ * KNOWN WIDTH: `assembleFleet`'s marker listing inside `readLimits` (`limits.ts`) is another file's, reported in the PR body
+ * and left to the request-time readers' work (ARCH-52, W2); a listing reached through an alias, a helper or a `readdir`
+ * whose argument is a local that holds `registryDir` is not seen.
+ */
+export const ACT_LISTING_METHODS: readonly string[] = ['FleetWatcher.mailPass', 'FleetWatcher.divergencesPass'];
+export const TESTS_ONLY_LISTING_METHODS: readonly string[] = ['FleetWatcher.fleetFor', 'FleetWatcher.sweepHookStates', 'FleetWatcher.detectDialogs'];
+export const SELECTION_LISTING_METHOD = 'FleetWatcher.tick';
+
+export type ListingTag = 'selection' | 'act' | 'tests-only';
+export interface RegistryListingSite extends CensusSite { readonly method: string; readonly tag: ListingTag }
+
+export function registryListingSites(root: string = REPO): RegistryListingSite[] {
+  const file = path.join(root, 'server/src/watch.ts');
+  if (!existsSync(file)) return [];
+  const parsed = parsedFile(file);
+  const lines = parsed.text.split('\n');
+  const out: RegistryListingSite[] = [];
+  for (const c of parsed.calls) {
+    const isReader = c.name === 'readRegistry' || c.name === 'readRegistryMeasured';
+    const isListing = c.name === 'readdir' && (c.args[0]?.text ?? '').includes('registryDir');
+    if (!isReader && !isListing) continue;
+    const inner = parsed.symbols.filter((s) => s.kind === 'method' && s.name.startsWith('FleetWatcher.') && s.start <= c.start && c.end <= s.end)
+      .sort((a, b) => b.start - a.start)[0];
+    if (inner === undefined) continue;
+    // The tick's own bare `readdir(registryDir)` is the snapshot write's shrink re-confirmation, taken only when the fleet shrank.
+    const tag: ListingTag = ACT_LISTING_METHODS.includes(inner.name) || (inner.name === SELECTION_LISTING_METHOD && isListing) ? 'act'
+      : TESTS_ONLY_LISTING_METHODS.includes(inner.name) ? 'tests-only' : 'selection';
+    out.push({ file: 'server/src/watch.ts', line: c.line, text: lines[c.line - 1]!, method: inner.name, tag });
+  }
+  return out;
+}
+
+// ARCH-52 (#787; spec 2026-10-19 §5.5 exit "SessionStream polls: 4 -> 0, dialog frames per change per socket: 2 -> 1"; D-6977).
+// The two counts below are the exit's PIN: unlike the series above they have reached their target, so
+// `consolidation-census.test.ts` holds them to it and they may only stay there.
+
+/** The per-session reads `SessionStream` made every 2 s before ARCH-52: the pane (`tmux.capture`, `parseDialog` and the
+ *  transcript's ask, `readPendingAsk` / `alignAsk`), the plan (`readTasks`), the hookstate (`readHookStateRaw`,
+ *  `readHookStateRawMeasured`) and the mail (`outstandingMailFor`). Call expressions in `server/src/sessionws.ts`; an
+ *  import, a comment and a method NAMED in prose are not calls. 0 on `ba36d7420`: they live in `sessionFeed.ts`, once
+ *  per open session.
+ *  KNOWN WIDTH: only `server/src/sessionws.ts` is read, and only these call names; a poll moved to another file, or made
+ *  through a renamed or aliased reader, is not seen. */
+export function sessionStreamPollSites(root: string = REPO): CensusSite[] {
+  const re = /(?:\btmux\.capture|\bparseDialog|\breadPendingAsk|\balignAsk|\breadTasks|\breadHookStateRaw(?:Measured)?|\boutstandingMailFor)\s*\(/g;
+  return sitesOf(root, ['server/src'], re, (f) => f !== 'server/src/sessionws.ts');
+}
+
+/** The files under `server/src` that build a `{ type: 'dialog' }` or `{ type: 'dialog_cleared' }` wire frame: one site
+ *  per file (its first literal). 1 on `ba36d7420` (`sessionws.ts`'s `nextDialogFrame`, which a poll's reading and an
+ *  answer both go through); the watcher's own copy, the second producer, is gone. */
+export function dialogFrameProducers(root: string = REPO): CensusSite[] {
+  const seen = new Set<string>();
+  return sitesOf(root, ['server/src'], /\btype:\s*'dialog(?:_cleared)?'/g).filter((s) => !seen.has(s.file) && seen.add(s.file));
+}
+
+/**
+ * ARCH-76 (#811) follow-up (D-6991): the definitions of a `warn…Once` helper under `server/src` and
+ * `shared/`, outside `server/src/changeLatch.ts`. A definition is a code line that declares the name with `function`,
+ * `const` or `let`; a call, an import or a comment naming it is not one. "Warn once until it changes" is `changeLatch`; a
+ * helper that is something else stays only as a row of `ONCE_WARN_ALLOWED`, with its reason, so the ratchet counts it on
+ * purpose. KNOWN WIDTH: a once-latch with another name (a bare `Set` check before a `console.warn`) is not seen.
+ */
+export function onceWarnDefinitions(root: string = REPO): CensusSite[] {
+  return sitesOf(root, ['server/src', 'shared'], /\b(?:function\s*\*?|const|let)\s+warn\w*Once\b/g,
+    (f) => f === 'server/src/changeLatch.ts');
+}
+
+/** The `warn…Once` definitions kept on purpose, by file, each with why it is not a change latch. This list only shrinks. */
+export const ONCE_WARN_ALLOWED: ReadonlyArray<{ readonly file: string; readonly reason: string }> = [
+  // tmp-sweep-mail.test.ts's characterization: a key that comes back after another key or a clean pass stays silent.
+  { file: 'server/src/tmpSweepLane.ts', reason: 'once-ever, not a change latch, D-6991' },
+];

@@ -7,8 +7,10 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { LANE_SCHEDULE, laneRow, type LaneRow } from '../src/laneSchedule.js';
 import { LaneRunner } from '../src/laneRunner.js';
-import { CATALOGUE_POLL_INTERVAL_MS, SERVER_CAPS_WRITE_MS } from '../src/laneSchedule.js';
-import { parsedFile } from './scan/symbols.js';
+import { callsIn, symbolOf } from './scan/symbols.js';
+import { CATALOGUE_POLL_INTERVAL_MS, SERVER_CAPS_WRITE_MS, CHILD_RECLAIM_SWEEP_MS } from '../src/laneSchedule.js';
+import { HIBERNATE_SWEEP_MS, STOP_DONE_SWEEP_MS } from '../src/laneSchedule.js';
+import { parsedFile, sourceOfSymbol } from './scan/symbols.js';
 
 const SRC = path.join(import.meta.dirname, '..', 'src');
 const text = (rel: string): string => readFileSync(path.join(SRC, rel), 'utf8');
@@ -316,10 +318,10 @@ describe('the nine sweep lanes outside coordination (D-5862, PR 1b)', () => {
     ['lifecycle', 5_000], ['readiness', 600_000], ['ledgerReconcile', 900_000], ['ledgerFloor', 3_600_000],
   ];
 
-  it.each(NINE)('the %s row exists, on the wall clock as it is today, at %i ms', (name, cadenceMs) => {
+  it.each(NINE)('the %s row exists, on the monotonic clock (OA-C4), at %i ms', (name, cadenceMs) => {
     const r = laneRow(name);
     expect(r.cadenceMs).toBe(cadenceMs);
-    expect(r.clock).toBe('wall');
+    expect(r.clock).toBe('mono');
     expect(r.derivedFrom).toBeNull();
   });
 
@@ -370,5 +372,178 @@ describe('the nine sweep lanes outside coordination (D-5862, PR 1b)', () => {
     await runner.run('pr', fn);
     expect(fn, 'did not abandon a run at the ceiling').toHaveBeenCalledTimes(1);
     first.resolve();
+  });
+});
+
+describe('the eight coordination lanes (D-5862, PR 2)', () => {
+  const ROWS: Array<[string, string, string]> = [
+    ['claimRenew', 'mono', 'none'], ['claimLapse', 'mono', 'none'], ['stalls', 'mono', 'skip'], ['idleNudge', 'mono', 'skip'],
+    ['mail', 'mono', 'none'], ['asks', 'mono', 'none'], ['approvalPrune', 'mono', 'none'], ['digestBeat', 'mono', 'none'],
+  ];
+
+  it('each lane is a row on the monotonic clock (OA-C4), with the flight it has today', () => {
+    for (const [name, clock, flight] of ROWS) {
+      expect(laneRow(name).clock, `${name}'s clock`).toBe(clock);
+      expect(laneRow(name).flight, `${name}'s flight`).toBe(flight);
+    }
+  });
+
+  it('runSync runs the body once the cadence has elapsed on the injected reading, stamps that reading, and answers whether it ran', () => {
+    const { runner } = rig([row({ name: 'beat', cadenceMs: 100 })]);
+    const fn = vi.fn();
+    expect(runner.runSync('beat', fn, 1_000), 'a first beat').toBe(true);
+    expect(runner.runSync('beat', fn, 1_099), 'a beat inside the cadence').toBe(false);
+    expect(runner.runSync('beat', fn, 1_100), 'a beat at the cadence').toBe(true);
+    expect(fn).toHaveBeenCalledTimes(2);
+  });
+
+  it('runSync with no reading takes the row\'s clock; a throw spends the slot and reaches the caller', () => {
+    const { t, runner } = rig([row({ name: 'beat', cadenceMs: 100 })]);
+    const boom = vi.fn(() => { throw new Error('body failed'); });
+    expect(() => runner.runSync('beat', boom)).toThrow('body failed');
+    expect(runner.runSync('beat', boom), 'a failed beat did not spend its slot').toBe(false);
+    t.wall += 100;
+    expect(() => runner.runSync('beat', boom)).toThrow('body failed');
+    expect(boom).toHaveBeenCalledTimes(2);
+  });
+
+  it('a startsDue row is due at an injected reading of 0, and a plain wall row (stamp 0) is not due before its cadence', () => {
+    const { runner } = rig([row({ name: 'due', cadenceMs: 100, startsDue: true }), row({ name: 'plain', cadenceMs: 100 })]);
+    expect(runner.runSync('due', () => {}, 0)).toBe(true);
+    expect(runner.runSync('plain', () => {}, 50)).toBe(false);
+  });
+
+  it('kick returns a startsDue row to due at any reading', () => {
+    const { runner } = rig([row({ name: 'due', cadenceMs: 100, startsDue: true })]);
+    expect(runner.runSync('due', () => {}, 10_000)).toBe(true);
+    runner.kick('due');
+    expect(runner.runSync('due', () => {}, 0)).toBe(true);
+  });
+});
+
+describe('the declared derivations are references, never a second literal', () => {
+  it('the stall watch\'s cadence is the claim lanes\' constant, by reference', () => {
+    expect(initOf('laneSchedule.ts', 'STALL_SWEEP_MS')).toBe('CLAIM_SWEEP_MS');
+    expect(laneRow('stalls').derivedFrom?.name).toBe('CLAIM_SWEEP_MS');
+    expect(laneRow('stalls').cadenceMs).toBe(laneRow('claimRenew').cadenceMs);
+  });
+
+  it('the digest beat and the approval prune are named rows, not bare literals in the watcher', () => {
+    const digest = sourceOfSymbol(path.join(SRC, 'watch.ts'), 'FleetWatcher.sweepDigest')
+      + sourceOfSymbol(path.join(SRC, 'watch.ts'), 'FleetWatcher.digestBeat');
+    expect(digest).not.toMatch(/-\s*this\.lastDigestBeat/);
+    expect(sourceOfSymbol(path.join(SRC, 'watch.ts'), 'FleetWatcher.sweepApprovals')).not.toMatch(/86_400_000/);
+    expect(laneRow('digestBeat').cadenceMs).toBe(60_000);
+    expect(laneRow('approvalPrune').cadenceMs).toBe(86_400_000);
+  });
+});
+
+describe('the four reclaim lanes (D-5862, PR 3)', () => {
+  const ROWS: Array<[string, string, string]> = [
+    ['childReclaim', 'mono', 'none'], ['collect', 'mono', 'skip'], ['archivedExpiry', 'mono', 'skip'], ['deadCoordinator', 'mono', 'join'],
+  ];
+
+  it('each lane is a row at the census\'s cadence, on the clock it throttles on today, with the flight it has today', () => {
+    for (const [name, clock, flight] of ROWS) {
+      expect(laneRow(name).cadenceMs, `${name}'s cadence`).toBe(CHILD_RECLAIM_SWEEP_MS);
+      expect(laneRow(name).clock, `${name}'s clock`).toBe(clock);
+      expect(laneRow(name).flight, `${name}'s flight`).toBe(flight);
+      expect(laneRow(name).warnKey, `${name} hands its rejection to tick's own catch`).toBeNull();
+    }
+  });
+
+  it('the census\'s cadence has one home, here, and the watcher re-exports it; the three siblings follow it by reference', () => {
+    expect(initOf('laneSchedule.ts', 'CHILD_RECLAIM_SWEEP_MS')).toBe('60_000');
+    // A second declaration in the watcher would clash with its import of this one (tsc), so only the re-export is read here.
+    for (const name of ['collect', 'archivedExpiry', 'deadCoordinator']) expect(laneRow(name).derivedFrom?.name, name).toBe('childReclaim');
+    expect(laneRow('childReclaim').derivedFrom).toBeNull();
+  });
+
+  it('the collector\'s observation interval is the census cadence, by reference, in this module', () => {
+    expect(initOf('laneSchedule.ts', 'COLLECT_OBSERVE_INTERVAL_MS')).toBe('CHILD_RECLAIM_SWEEP_MS');
+  });
+
+  it('the seal and the collector\'s and child reclaim\'s restamp go through the runner (the fields are gone: the ratchet in single-definition counts them)', () => {
+    const watch = path.join(SRC, 'watch.ts');
+    const called = (sym: string): string[] => callsIn(symbolOf(watch, sym)).flatMap((c) => (c.name === null ? [] : [c.name]));
+    expect(called('FleetWatcher.sealDeadCoordinatorBreakerNow')).toContain('inFlight');
+    expect(called('FleetWatcher.sealDeadCoordinatorBreaker')).toContain('inFlight');
+    expect(called('FleetWatcher.collectPass')).toContain('restamp');
+    expect(called('FleetWatcher.childReclaimPass')).toContain('restamp');
+  });
+
+  it('restamp takes the decision clock\'s own reading when handed one', () => {
+    const { t, runner } = rig([row({ name: 'x', clock: 'mono', cadenceMs: 100 })]);
+    runner.stamp('x');
+    t.mono += 50;
+    runner.restamp('x', 5_040);
+    t.mono = 5_139;
+    expect(runner.due('x'), 'the stamp was not the handed reading').toBe(false);
+    t.mono = 5_140;
+    expect(runner.due('x')).toBe(true);
+  });
+});
+
+describe('every throttle is on the monotonic clock (OA-C4, ruled (a) on #803)', () => {
+  it('no row of LANE_SCHEDULE is on the wall clock: 31 of 31 are monotonic', () => {
+    expect(LANE_SCHEDULE.filter((r) => r.clock === 'wall').map((r) => r.name), 'a throttle on Date.now()').toEqual([]);
+    expect(LANE_SCHEDULE.filter((r) => r.clock === 'mono')).toHaveLength(31);
+  });
+
+  it('the runner throttles a monotonic row on the monotonic reading: a wall step back runs it at its cadence, a step forward never early', () => {
+    const { t, runner } = rig([row({ name: 'lane', cadenceMs: 100, clock: 'mono' })]);
+    expect(runner.due('lane'), 'a first run').toBe(true);
+    runner.stamp('lane');
+    t.wall -= 3_600_000; t.mono += 100;
+    expect(runner.due('lane'), 'a wall step back held a monotonic row').toBe(true);
+    runner.stamp('lane');
+    t.wall += 3_600_000;
+    expect(runner.due('lane'), 'a wall step forward ran a monotonic row early').toBe(false);
+  });
+
+  it('runSync on a monotonic row throttles on the monotonic reading', () => {
+    const { t, runner } = rig([row({ name: 'beat', cadenceMs: 100, clock: 'mono' })]);
+    const fn = vi.fn();
+    expect(runner.runSync('beat', fn)).toBe(true);
+    t.wall += 1_000_000;
+    expect(runner.runSync('beat', fn), 'the wall clock moved a monotonic row').toBe(false);
+    t.mono += 100;
+    expect(runner.runSync('beat', fn)).toBe(true);
+  });
+});
+
+// D-7045 (ARCH-43, C4e): the two sleep lanes' clocks are rows, their own describe (the reclaim lanes' table asserts the
+// child census's cadence for every row it lists, so a 5-minute row there would red). Each keeps its own cadence, starts
+// due, refuses a second run while one is in flight, and catches its own failure with its own sentence (no warnKey).
+describe('the two sleep lanes (ARCH-43)', () => {
+  const SLEEP: Array<[string, number]> = [['sleepRunDone', STOP_DONE_SWEEP_MS], ['sleepIdleHours', HIBERNATE_SWEEP_MS]];
+
+  it.each(SLEEP)('%s is a row at its own cadence, on the monotonic clock, one run at a time, its catch its own', (name, ms) => {
+    const r = laneRow(name);
+    expect(r.cadenceMs, `${name}'s cadence`).toBe(ms);
+    expect(r.clock, `${name}'s clock`).toBe('mono');
+    expect(r.flight, `${name}'s flight`).toBe('skip');
+    expect(r.warnKey, `${name} keeps its own catch sentence`).toBeNull();
+    expect(r.derivedFrom).toBeNull();
+  });
+
+  it('the cadences are 60 s and 5 min, declared here and re-exported by their policies', () => {
+    expect([STOP_DONE_SWEEP_MS, HIBERNATE_SWEEP_MS]).toEqual([60_000, 5 * 60_000]);
+    expect(reExports('stopDone.ts', 'STOP_DONE_SWEEP_MS', './laneSchedule.js')).toBe(true);
+    expect(reExports('coord/hibernate.ts', 'HIBERNATE_SWEEP_MS', '../laneSchedule.js')).toBe(true);
+  });
+
+  it('each starts due, and each row is its own flight: one lane in flight never refuses the other', async () => {
+    const rows = SLEEP.map(([name]) => laneRow(name));
+    const { runner } = rig([...rows]);
+    expect(rows.map((r) => runner.due(r.name))).toEqual([true, true]);
+    const held = deferred();
+    const first = runner.run('sleepRunDone', () => held.promise);
+    expect(first).not.toBeNull();
+    const other = runner.run('sleepIdleHours', () => 'ran');
+    expect(other, 'the other lane runs while the first is in flight').not.toBeNull();
+    expect(await other).toBe('ran');
+    held.resolve();
+    await first;
   });
 });

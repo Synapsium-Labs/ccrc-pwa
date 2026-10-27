@@ -1,5 +1,5 @@
 // Child reclamation, wave 3 — the server's half (spec 2026-09-22 §5.5–§5.7,
-// §5.9): the fourteen box words and what each means, the two ccd documents
+// §5.9): the fifteen box words and what each means, the two ccd documents
 // read, the pure close decision, and THE ONE EXECUTOR `reclaimChild`, driven
 // end to end against a fixture registry, a real CoordStore and a scripted ccd.
 //
@@ -23,12 +23,13 @@ import {
 import type { ChildReclaimFeedQuiet } from '../src/childReclaimSweep.js';
 import { NotifyLog } from '../src/notifylog.js';
 import { readSessionRecord } from '../src/registry.js';
+import { readChildSiblings } from '../src/coord/siblingRead.js';
 import type { FleetState } from '../src/fleetstate.js';
 import type { Runner } from '../src/exec.js';
 import { SENTENCES } from '../src/wsaudit.js';
 import { LC_REASON_MAX_BYTES, LC_REFUSAL_TOKENS, holdReason } from '../../shared/api.js';
 import { testDeps } from './helpers.js';
-import { CCD } from './ccdWsHelpers.js';
+import { ccdSource } from './ccdWsHelpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import { makePrHarness, type PrHarness } from './ccdPrHelpers.js';
 import { CHILD_ID, childReclaimVerb, evalOf, makeChild } from './childReclaimFixture.js';
@@ -47,7 +48,7 @@ const auditDoc = (childOf: number, verdict: string, extra: Record<string, unknow
 const reclaimedDoc = (childOf: number, wip: string | null = null, secretsDropped: unknown = 0): string =>
   JSON.stringify({ reclaimed: ID, childOf, wip, attic: 2, residueBytes: null, secretsDropped });
 
-interface Script { audit?: { code: number; stdout: string; stderr?: string }; verb?: { code: number; stdout: string; stderr?: string } }
+interface Script { audit?: { ran: true, code: number; stdout: string; stderr?: string }; verb?: { ran: true, code: number; stdout: string; stderr?: string } }
 
 /** A child workspace on disk (registry fields + `.child`), its minting run
  *  CLOSED in a real CoordStore, one outstanding delivery addressed to it, and
@@ -84,14 +85,14 @@ const rig = async (over: { mark?: string | null; markSymlink?: 'dangling' | 'liv
   const m = coord.insertMail({ fromId: 'demo-coordinator', fromUuid: 'u', toId: ID, runId: null,
     kind: 'status', subject: 's', body: 'b', artifacts: [] });
   const delivery = coord.queueDelivery(m.id, ID, '<mail/>').id;
-  const script = over.script?.(runId) ?? { audit: { code: 0, stdout: auditDoc(runId, 'reclaimable', { token: TOK }) },
-                                          verb: { code: 0, stdout: reclaimedDoc(runId) } };
+  const script = over.script?.(runId) ?? { audit: { ran: true as const, code: 0, stdout: auditDoc(runId, 'reclaimable', { token: TOK }) },
+                                          verb: { ran: true as const, code: 0, stdout: reclaimedDoc(runId) } };
   const calls: string[][] = [];
   const run: Runner = async (_cmd, args) => {
     calls.push(args);
     const r = args[0] === 'ws-audit' ? script.audit : args[0] === 'ws-reclaim' ? script.verb : undefined;
-    return r === undefined ? { code: 1, stdout: '', stderr: `unscripted ${args[0]}` }
-      : { code: r.code, stdout: r.stdout, stderr: r.stderr ?? '' };
+    return r === undefined ? { ran: true as const, code: 1, stdout: '', stderr: `unscripted ${args[0]}` }
+      : { ran: true as const, code: r.code, stdout: r.stdout, stderr: r.stderr ?? '' };
   };
   const base = testDeps(home, run);
   const notifyLog = new NotifyLog(path.join(home, '.ccrc', 'notify.json'));
@@ -99,7 +100,7 @@ const rig = async (over: { mark?: string | null; markSymlink?: 'dangling' | 'liv
   const deps: ChildReclaimDeps = {
     coord, io: base.io, cfg: base.cfg, runCcd: base.runCcd,
     fleetState: over.fleetState ?? CAPS,
-    presence: { isVisible: (id: string) => over.visible === true && id === ID },
+    viewers: { isVisible: (id: string) => over.visible === true && id === ID },
     notifyLog,
     ...(over.now === undefined ? {} : { now: () => over.now! }),
   };
@@ -119,9 +120,14 @@ const rig = async (over: { mark?: string | null; markSymlink?: 'dangling' | 'liv
                 deferExpired, deferredSinceMs, feedQuiet, licenceGeneration: deferredSinceMs === null ? { kind: 'none' } : { kind: 'absent' } }) };
 };
 
-describe('the fourteen words', () => {
+// D-6633: rung 9's two rescue words ride the act's `failed` document (the pin names them in `RECLAIM_PIN_WORD=<word>`), so
+// the harvest below finds them there and the audit's journal list, which only a refusal reaches, does not carry them.
+const NESTED_RESCUE_WORDS = ['nested-rescue-failed', 'nested-rescue-too-large'];
+const PIN_WORDS = (region: string): string[] => [...new Set([...region.matchAll(/RECLAIM_PIN_WORD=(nested-rescue-[a-z-]+)/g)].map((m) => m[1]!))];
+
+describe('the fifteen words', () => {
   it('are exactly the words ccd’s RECLAIM region refuses with — harvested, both directions', () => {
-    const ccd = readFileSync(CCD, 'utf8');
+    const ccd = ccdSource();
     const begin = ccd.indexOf('RECLAIM-BEGIN');
     const end = ccd.indexOf('RECLAIM-END');
     expect(begin, 'the RECLAIM region is missing its BEGIN marker').toBeGreaterThan(0);
@@ -130,7 +136,9 @@ describe('the fourteen words', () => {
     const harvested = new Set([
       ...[...region.matchAll(/_reap_refuse ([a-z][a-z-]*)/g)].map((m) => m[1]!),
       ...[...region.matchAll(/"refused":"([a-z][a-z-]*)"/g)].map((m) => m[1]!),
+      ...PIN_WORDS(region),
     ]);
+    expect(PIN_WORDS(region).sort(), 'guards the guard: the pin names both rescue words').toEqual(NESTED_RESCUE_WORDS);
     expect([...harvested].sort()).toEqual(Object.keys(CHILD_RECLAIM_TOKEN_KIND).sort());
   });
 
@@ -150,14 +158,14 @@ describe('the fourteen words', () => {
     // SECOND copy silently become the one compared, since `.exec` takes only
     // the first match) is what this asserts instead: `matchAll` over the
     // WHOLE file, and an exact count of one.
-    const ccd = readFileSync(CCD, 'utf8');
+    const ccd = ccdSource();
     const matches = [...ccd.matchAll(
       /case "\$REAP_VERDICT" in\n\s+([a-z|-]+)\)\n\s+_lc_emit reclaim refused "\$id" "" verb ws-audit/g,
     )];
     expect(matches, 'cmd_ws_audit no longer journals a terminal reclaim refusal, or a second site appeared')
       .toHaveLength(1);
     const terminal = Object.entries(CHILD_RECLAIM_TOKEN_KIND)
-      .filter(([, kind]) => kind === 'terminal').map(([token]) => token).sort();
+      .filter(([token, kind]) => kind === 'terminal' && !NESTED_RESCUE_WORDS.includes(token)).map(([token]) => token).sort();
     expect(terminal.length, 'guards the guard: an empty arm would equal an empty list').toBeGreaterThan(0);
     expect(matches[0]![1]!.split('|').sort()).toEqual(terminal);
   });
@@ -320,7 +328,7 @@ describe('parseChildReclaimResult', () => {
   // alone, which made it vacuous. So this reads only the code lines of the
   // RECLAIM region.
   it("the special-cased word is ccd's own — the RECLAIM region's `_ws_reclaim_fail … probe-unmeasured`", () => {
-    const ccd = readFileSync(CCD, 'utf8');
+    const ccd = ccdSource();
     const begin = ccd.indexOf('RECLAIM-BEGIN');
     const end = ccd.indexOf('RECLAIM-END');
     expect(begin, 'the RECLAIM region is missing its BEGIN marker').toBeGreaterThan(0);
@@ -337,7 +345,7 @@ describe('parseChildReclaimResult', () => {
   // above `_ws_reclaim_locked`), so a reworded die reds this case rather than
   // silently drifting back to `resume: 'resumable'`.
   describe('a pre-lock die of cmd_ws_reclaim', () => {
-    const ccdSrc = readFileSync(CCD, 'utf8');
+    const ccdSrc = ccdSource();
     const region = ccdSrc.slice(ccdSrc.indexOf('\ncmd_ws_reclaim() {'), ccdSrc.indexOf('\n_ws_reclaim_fork() {'));
     // Extract the exact literal a ccd `die "..."` (or `_lc_refuse`'s trailing
     // message argument) prints — ANCHORED to the call itself (review 170 fr-I
@@ -403,8 +411,8 @@ describe('parseChildReclaimResult', () => {
     });
     it('reclaimChild renders the recur sentence, not "retried from the start" or "resumes where it stopped"', async () => {
       const msg = dieMessage('bad token');
-      const s = await rig({ script: (runId) => ({ audit: { code: 0, stdout: auditDoc(runId, 'reclaimable', { token: TOK }) },
-        verb: { code: 1, stdout: '', stderr: `ccd: ${msg}` } }) });
+      const s = await rig({ script: (runId) => ({ audit: { ran: true as const, code: 0, stdout: auditDoc(runId, 'reclaimable', { token: TOK }) },
+        verb: { ran: true as const, code: 1, stdout: '', stderr: `ccd: ${msg}` } }) });
       const out = await reclaimChild(s.deps, s.req());
       expect(out).toMatchObject({ kind: 'failed', resume: 'pre-lock-die', detail: msg });
       // Review 170 fr-I rereview-r1 m2: the sentence must be true of the
@@ -447,8 +455,8 @@ describe('parseChildReclaimResult', () => {
         // must be the same cause-neutral sentence as every other pre-lock
         // die, and must not name "ccd, python3 or flock" (none of which
         // caused this one: a lock/registry-directory state did).
-        const s = await rig({ script: (runId) => ({ audit: { code: 0, stdout: auditDoc(runId, 'reclaimable', { token: TOK }) },
-          verb: { code: r.code, stdout: r.stdout, stderr: r.stderr } }) });
+        const s = await rig({ script: (runId) => ({ audit: { ran: true as const, code: 0, stdout: auditDoc(runId, 'reclaimable', { token: TOK }) },
+          verb: { ran: true as const, code: r.code, stdout: r.stdout, stderr: r.stderr } }) });
         const feedOut = await reclaimChild(s.deps, s.req());
         expect(feedOut).toMatchObject({ kind: 'failed', resume: 'pre-lock-die' });
         expect(s.bodies()[0]).toContain('ccd refused the call before anything started');
@@ -639,8 +647,8 @@ describe('reclaimChild — the one executor', () => {
   // Fix round 1, review Minor #2, at the feed row: a malformed WIP does not
   // silently claim nothing was left.
   it('a malformed WIP commit renders as unreadable in the feed, not as nothing left', async () => {
-    const s = await rig({ script: (runId) => ({ audit: { code: 0, stdout: auditDoc(runId, 'reclaimable', { token: TOK }) },
-      verb: { code: 0, stdout: JSON.stringify({ reclaimed: ID, childOf: runId, wip: 'not-a-real-sha', attic: 2, residueBytes: null }) } }) });
+    const s = await rig({ script: (runId) => ({ audit: { ran: true as const, code: 0, stdout: auditDoc(runId, 'reclaimable', { token: TOK }) },
+      verb: { ran: true as const, code: 0, stdout: JSON.stringify({ reclaimed: ID, childOf: runId, wip: 'not-a-real-sha', attic: 2, residueBytes: null }) } }) });
     const out = await reclaimChild(s.deps, s.req());
     expect(out).toMatchObject({ kind: 'reclaimed', wip: { kind: 'unreadable' } });
     expect(s.bodies()[0]).toContain('its commit id could not be read');
@@ -655,8 +663,8 @@ describe('reclaimChild — the one executor', () => {
     ['nothing committed, the count unreadable', null, 'unreadable', 'Whether a secret-shaped path was dropped could not be read.', 'Nothing uncommitted was left'],
     ['a WIP, and two secrets dropped', WIP, 2, `Uncommitted work was pinned as ${WIP}. 2 secret-shaped paths were dropped, never committed — the record names them.`, 'Nothing uncommitted'],
   ] as const)('the feed row says what was left: %s', async (_what, wip, dropped, says, never) => {
-    const s = await rig({ script: (runId) => ({ audit: { code: 0, stdout: auditDoc(runId, 'reclaimable', { token: TOK }) },
-      verb: { code: 0, stdout: reclaimedDoc(runId, wip, dropped === 'unreadable' ? null : dropped) } }) });
+    const s = await rig({ script: (runId) => ({ audit: { ran: true as const, code: 0, stdout: auditDoc(runId, 'reclaimable', { token: TOK }) },
+      verb: { ran: true as const, code: 0, stdout: reclaimedDoc(runId, wip, dropped === 'unreadable' ? null : dropped) } }) });
     const out = await reclaimChild(s.deps, s.req());
     const wipShape = wip === null ? { kind: 'none' } : { kind: 'commit', sha: wip };
     expect(out).toMatchObject({ kind: 'reclaimed', wip: wipShape, secretsDropped: dropped });
@@ -703,7 +711,7 @@ describe('reclaimChild — the one executor', () => {
   // this one shape, and disagreeing safely is the point.
   it('a LIVE symlink to a file holding the run id reads as child — the audit then answers not-a-child (terminal, safe)', async () => {
     const s = await rig({ markSymlink: 'live',
-      script: (runId) => ({ audit: { code: 0, stdout: auditDoc(runId, 'not-a-child', { detail: 'the marker is a symlink' }) } }) });
+      script: (runId) => ({ audit: { ran: true as const, code: 0, stdout: auditDoc(runId, 'not-a-child', { detail: 'the marker is a symlink' }) } }) });
     const out = await reclaimChild(s.deps, s.req());
     expect(out).toMatchObject({ kind: 'refused', token: 'not-a-child' });
     expect(out.kind === 'refused' ? out.sentence : '').toBe(SENTENCES['not-a-child']);
@@ -729,7 +737,7 @@ describe('reclaimChild — the one executor', () => {
     const s = await rig();
     writeFileSync(path.join(s.reg, `${ID}.workdir`), '');
     const probe = await readSessionRecord(s.deps.io, s.deps.cfg, ID);
-    expect(probe, 'the fixture really is the DROPPED population').toEqual({ kind: 'absent' });
+    expect(probe, 'the fixture really is the DROPPED population').toEqual({ kind: 'unmeasurable' });
     expect(await reclaimChild(s.deps, s.req())).toMatchObject({ kind: 'deferred', why: 'marker-unreadable' });
     expect(s.calls).toEqual([]);
     expect(s.deliveryState().state).toBe('queued');
@@ -782,6 +790,41 @@ describe('reclaimChild — the one executor', () => {
     expect(s.deliveryState().state).toBe('queued');
   });
 
+  it('a STALE sibling (planned, undispatched, 15 days old, its coordinator gone) does not defer; a live coordinator\'s still does', async () => {
+    const s = await rig();
+    const next = s.coord.openRun({ program: 'p', title: 't', project: 'demo', wave: 2, waveOf: 2, claimedBy: 'demo-coordinator' });
+    if (!('id' in next)) throw new Error('openRun refused');
+    s.coord.setSession(next.id, ID);
+    const later = { ...s.deps, now: () => Date.now() + 15 * 24 * 3_600_000 };
+    const live = await rig();
+    const n2 = live.coord.openRun({ program: 'p', title: 't', project: 'demo', wave: 2, waveOf: 2, claimedBy: 'demo-coordinator' });
+    if (!('id' in n2)) throw new Error('openRun refused');
+    live.coord.setSession(n2.id, ID);
+    for (const [k, v] of Object.entries({ wrapper: 'claude', project: 'demo', workdir: '/w/c', uuid: 'u-c', started: '1' })) {
+      writeFileSync(path.join(live.reg, `demo-coordinator.${k}`), v);
+    }
+    expect(await reclaimChild({ ...live.deps, now: later.now }, live.req())).toMatchObject({ kind: 'deferred', why: 'siblings-open' });
+    expect(await reclaimChild(later, s.req())).not.toMatchObject({ kind: 'deferred', why: 'siblings-open' });
+    expect(s.coord.run(next.id)).toMatchObject({ ok: true, run: { state: 'planned' } });
+  });
+
+  it('a planned sibling older than fourteen days whose claimant read REJECTS or is UNLISTABLE keeps the child (fail-closed)', async () => {
+    const DAY = 24 * 3_600_000;
+    for (const readdir of [
+      async (): Promise<string[] | null> => { throw new Error('registry read failed'); },
+      async (): Promise<string[] | null> => null,
+    ]) {
+      const s = await rig();
+      const next = s.coord.openRun({ program: 'p', title: 't', project: 'demo', wave: 2, waveOf: 2, claimedBy: 'demo-coordinator' });
+      if (!('id' in next)) throw new Error('openRun refused');
+      s.coord.setSession(next.id, ID);
+      const io = { ...s.deps.io, readdir };
+      const read = await readChildSiblings({ coord: s.coord, io, cfg: s.deps.cfg }, ID, Date.now() + 15 * DAY);
+      expect(read).toMatchObject({ ok: true, open: 1, stale: [] });
+      expect(read.ok ? (read.blocking ?? []).map((b) => b.id) : null).toEqual([next.id]);
+    }
+  });
+
   it('an open sibling defers, and an UNREADABLE sibling list defers — never read as "none"', async () => {
     const s = await rig();
     const next = s.coord.openRun({ program: 'p', title: 't', project: 'demo', wave: 2, waveOf: 2, claimedBy: 'demo-coordinator' });
@@ -822,8 +865,8 @@ describe('reclaimChild — the one executor', () => {
 
   it('a CEILING-EXPIRED reclaim states the wait it ended and why it went ahead', async () => {
     const s = await rig({ visible: true, now: T0 + 16 * 60_000, script: (runId) => ({
-      audit: { code: 0, stdout: auditDoc(runId, 'reclaimable', { token: TOK, generation: GEN_W8 }) },
-      verb: { code: 0, stdout: reclaimedDoc(runId) } }) });
+      audit: { ran: true as const, code: 0, stdout: auditDoc(runId, 'reclaimable', { token: TOK, generation: GEN_W8 }) },
+      verb: { ran: true as const, code: 0, stdout: reclaimedDoc(runId) } }) });
     writeFileSync(path.join(s.reg, `${ID}.generation`), GEN_W8);
     expect((await reclaimChild(s.deps, { ...s.req(true, T0), licenceGeneration: { kind: 'value', v: GEN_W8 } })).kind)
       .toBe('reclaimed');
@@ -840,7 +883,7 @@ describe('reclaimChild — the one executor', () => {
     ['containment-unproven', 'refused'], ['not-a-child', 'refused'], ['no-worktree-record', 'refused'],
     ['attached', 'deferred'], ['reap-in-progress', 'deferred'], ['no-such-session', 'gone'],
   ])('an AUDIT refusal %s is %s, and the verb is never called', async (token, kind) => {
-    const s = await rig({ script: (runId) => ({ audit: { code: 0, stdout: auditDoc(runId, token, { detail: 'd' }) } }) });
+    const s = await rig({ script: (runId) => ({ audit: { ran: true as const, code: 0, stdout: auditDoc(runId, token, { detail: 'd' }) } }) });
     const out = await reclaimChild(s.deps, s.req());
     expect(out.kind).toBe(kind);
     if (out.kind === 'refused') expect(out.sentence).toBe(SENTENCES[token]);
@@ -849,18 +892,18 @@ describe('reclaimChild — the one executor', () => {
   });
 
   it('a token minted for ANOTHER run is not spent', async () => {
-    const s = await rig({ script: (runId) => ({ audit: { code: 0, stdout: auditDoc(runId + 1, 'reclaimable', { token: TOK }) } }) });
+    const s = await rig({ script: (runId) => ({ audit: { ran: true as const, code: 0, stdout: auditDoc(runId + 1, 'reclaimable', { token: TOK }) } }) });
     expect(await reclaimChild(s.deps, s.req())).toMatchObject({ kind: 'deferred', why: 'marker-mismatch' });
     expect(s.calls.map((c) => c[0])).toEqual(['ws-audit']);
   });
 
   it('a VERB refusal or failure leaves the mail alone — the child is still there', async () => {
-    const refused = await rig({ script: (runId) => ({ audit: { code: 0, stdout: auditDoc(runId, 'reclaimable', { token: TOK }) },
-      verb: { code: 0, stdout: JSON.stringify({ refused: 'state-changed', detail: 'the tree moved', paths: [] }) } }) });
+    const refused = await rig({ script: (runId) => ({ audit: { ran: true as const, code: 0, stdout: auditDoc(runId, 'reclaimable', { token: TOK }) },
+      verb: { ran: true as const, code: 0, stdout: JSON.stringify({ refused: 'state-changed', detail: 'the tree moved', paths: [] }) } }) });
     expect(await reclaimChild(refused.deps, refused.req())).toMatchObject({ kind: 'deferred', why: 'state-changed' });
     expect(refused.deliveryState().state).toBe('queued');
-    const failed = await rig({ script: (runId) => ({ audit: { code: 0, stdout: auditDoc(runId, 'reclaimable', { token: TOK }) },
-      verb: { code: 1, stdout: JSON.stringify({ failed: 'worktree-remove-failed', detail: 'busy' }) } }) });
+    const failed = await rig({ script: (runId) => ({ audit: { ran: true as const, code: 0, stdout: auditDoc(runId, 'reclaimable', { token: TOK }) },
+      verb: { ran: true as const, code: 1, stdout: JSON.stringify({ failed: 'worktree-remove-failed', detail: 'busy' }) } }) });
     const out = await reclaimChild(failed.deps, failed.req());
     // Fix round 1, review Minor #4 (corrected fix round 2 minor C): a
     // `{failed:…}` document genuinely started ccd's tail, so it IS
@@ -877,8 +920,8 @@ describe('reclaimChild — the one executor', () => {
   // this session's state — so neither is resumable, and neither may promise
   // "the box resumes where it stopped".
   it('a verb reclaimed document naming ANOTHER id is a failure, not a success — mail stays, never resumable', async () => {
-    const s = await rig({ script: (runId) => ({ audit: { code: 0, stdout: auditDoc(runId, 'reclaimable', { token: TOK }) },
-      verb: { code: 0, stdout: JSON.stringify({ reclaimed: 'demo-other', childOf: runId, wip: null, attic: 2, residueBytes: null }) } }) });
+    const s = await rig({ script: (runId) => ({ audit: { ran: true as const, code: 0, stdout: auditDoc(runId, 'reclaimable', { token: TOK }) },
+      verb: { ran: true as const, code: 0, stdout: JSON.stringify({ reclaimed: 'demo-other', childOf: runId, wip: null, attic: 2, residueBytes: null }) } }) });
     const out = await reclaimChild(s.deps, s.req());
     expect(out).toMatchObject({ kind: 'failed', resume: 'not-resumable' });
     expect(out.kind === 'failed' ? out.detail : '').toContain('demo-other');
@@ -889,8 +932,8 @@ describe('reclaimChild — the one executor', () => {
   });
 
   it('an unrecognised verb refusal word is not resumable — nothing on the box advanced', async () => {
-    const s = await rig({ script: (runId) => ({ audit: { code: 0, stdout: auditDoc(runId, 'reclaimable', { token: TOK }) },
-      verb: { code: 0, stdout: JSON.stringify({ refused: 'a-word-this-build-does-not-know', detail: 'd', paths: [] }) } }) });
+    const s = await rig({ script: (runId) => ({ audit: { ran: true as const, code: 0, stdout: auditDoc(runId, 'reclaimable', { token: TOK }) },
+      verb: { ran: true as const, code: 0, stdout: JSON.stringify({ refused: 'a-word-this-build-does-not-know', detail: 'd', paths: [] }) } }) });
     const out = await reclaimChild(s.deps, s.req());
     expect(out).toMatchObject({ kind: 'failed', resume: 'not-resumable' });
     expect(s.bodies()[0]).toContain('It is retried from the start.');
@@ -898,15 +941,15 @@ describe('reclaimChild — the one executor', () => {
   });
 
   it('a verb-level refused: no-such-session is gone, with no cancel and no feed row', async () => {
-    const s = await rig({ script: (runId) => ({ audit: { code: 0, stdout: auditDoc(runId, 'reclaimable', { token: TOK }) },
-      verb: { code: 0, stdout: JSON.stringify({ refused: 'no-such-session', detail: 'raced with a purge', paths: [] }) } }) });
+    const s = await rig({ script: (runId) => ({ audit: { ran: true as const, code: 0, stdout: auditDoc(runId, 'reclaimable', { token: TOK }) },
+      verb: { ran: true as const, code: 0, stdout: JSON.stringify({ refused: 'no-such-session', detail: 'raced with a purge', paths: [] }) } }) });
     expect(await reclaimChild(s.deps, s.req())).toEqual({ kind: 'gone', sessionId: ID });
     expect(s.deliveryState().state).toBe('queued');
     expect(s.feed()).toEqual([]);
   });
 
   it('an audit the box could not answer is a failure, never resumable', async () => {
-    const s = await rig({ script: () => ({ audit: { code: 1, stdout: '', stderr: 'ccd: python3 unavailable' } }) });
+    const s = await rig({ script: () => ({ audit: { ran: true as const, code: 1, stdout: '', stderr: 'ccd: python3 unavailable' } }) });
     const out = await reclaimChild(s.deps, s.req());
     expect(out).toMatchObject({ kind: 'failed', resume: 'not-resumable' });
     // Fix round 1, review Minor #4: nothing on the box's destructive path
@@ -916,7 +959,7 @@ describe('reclaimChild — the one executor', () => {
   });
 
   it('the failed feed text never doubles the final punctuation', async () => {
-    const s = await rig({ script: () => ({ audit: { code: 1, stdout: '', stderr: 'ccd: something failed.' } }) });
+    const s = await rig({ script: () => ({ audit: { ran: true as const, code: 1, stdout: '', stderr: 'ccd: something failed.' } }) });
     await reclaimChild(s.deps, s.req());
     expect(s.bodies()[0]).not.toContain('..');
   });
@@ -924,8 +967,8 @@ describe('reclaimChild — the one executor', () => {
   // Fix round 2, review minor C: an empty `detail` on a `{failed:…}` document
   // must not render "…failed: ." — the separator is dropped, not left dangling.
   it('a failed document with an EMPTY detail never renders "failed: ."', async () => {
-    const s = await rig({ script: (runId) => ({ audit: { code: 0, stdout: auditDoc(runId, 'reclaimable', { token: TOK }) },
-      verb: { code: 1, stdout: JSON.stringify({ failed: 'worktree-remove-failed', detail: '' }) } }) });
+    const s = await rig({ script: (runId) => ({ audit: { ran: true as const, code: 0, stdout: auditDoc(runId, 'reclaimable', { token: TOK }) },
+      verb: { ran: true as const, code: 1, stdout: JSON.stringify({ failed: 'worktree-remove-failed', detail: '' }) } }) });
     const out = await reclaimChild(s.deps, s.req());
     expect(out.kind === 'failed' ? out.detail : '').toBe('worktree-remove-failed');
     expect(s.bodies()[0]).not.toContain('failed: .');
@@ -936,14 +979,14 @@ describe('reclaimChild — the one executor', () => {
     // `"verdict":"unmeasured"` at exit 1 (Task 5). The exit status is read
     // BEFORE a byte is parsed, so no exit-1 document — a token-bearing one
     // included — is ever spent.
-    const u = await rig({ script: (runId) => ({ audit: { code: 1,
+    const u = await rig({ script: (runId) => ({ audit: { ran: true as const, code: 1,
       stdout: auditDoc(runId, 'unmeasured', { detail: 'could not read the stash list' }),
       stderr: 'ccd: ws-audit --reclaim measured nothing: could not read the stash list — retry' } }) });
     const out = await reclaimChild(u.deps, u.req());
     expect(out).toMatchObject({ kind: 'failed', resume: 'not-resumable' });
     expect(out.kind === 'failed' ? out.detail : '').toContain('measured nothing');
     expect(u.feed()).toEqual(['child reclaim failed']);
-    const t = await rig({ script: (runId) => ({ audit: { code: 1, stdout: auditDoc(runId, 'reclaimable', { token: TOK }) } }) });
+    const t = await rig({ script: (runId) => ({ audit: { ran: true as const, code: 1, stdout: auditDoc(runId, 'reclaimable', { token: TOK }) } }) });
     expect(await reclaimChild(t.deps, t.req())).toMatchObject({ kind: 'failed', resume: 'not-resumable' });
     expect(t.calls.map((c) => c[0]), 'the verb was never called on an exit-1 token').toEqual(['ws-audit']);
     expect(t.deliveryState().state).toBe('queued');
@@ -974,7 +1017,7 @@ describe('releaseRetiredChildHold — the hold-release job', () => {
    *  "the row is gone" case). */
   const rrig = async (over: {
     fleetState?: FleetState;
-    script?: (id: string) => { code: number; stdout: string; stderr?: string };
+    script?: (id: string) => { ran: true, code: number; stdout: string; stderr?: string };
     row?: false;
   } = {}) => {
     const home = mkTmp('ccrc-child-release-');
@@ -984,9 +1027,9 @@ describe('releaseRetiredChildHold — the hold-release job', () => {
     const calls: string[][] = [];
     const run: Runner = async (_cmd, args) => {
       calls.push(args);
-      if (args[0] !== 'ws-release') return { code: 1, stdout: '', stderr: `unscripted ${args[0]}` };
-      const s = over.script?.(RID) ?? { code: 0, stdout: `released ${RID}\n` };
-      return { code: s.code, stdout: s.stdout, stderr: s.stderr ?? '' };
+      if (args[0] !== 'ws-release') return { ran: true as const, code: 1, stdout: '', stderr: `unscripted ${args[0]}` };
+      const s = over.script?.(RID) ?? { ran: true as const, code: 0, stdout: `released ${RID}\n` };
+      return { ran: true as const, code: s.code, stdout: s.stdout, stderr: s.stderr ?? '' };
     };
     const base = testDeps(home, run);
     const deps: ChildReclaimDeps = { coord, io: base.io, cfg: base.cfg, runCcd: base.runCcd,
@@ -1049,7 +1092,7 @@ describe('releaseRetiredChildHold — the hold-release job', () => {
   });
 
   it('ccd\'s own idempotent no-op — the hold was already gone on the box — answers not-held', async () => {
-    const f = await rrig({ script: () => ({ code: 0, stdout: `not held ${RID}\n` }) });
+    const f = await rrig({ script: () => ({ ran: true as const, code: 0, stdout: `not held ${RID}\n` }) });
     const runId = terminalRun(f.coord, 'demo');
     const reason = holdReason('demo', 2, null, null);
     f.writeRow({ child: String(runId), hold: reason });
@@ -1058,7 +1101,7 @@ describe('releaseRetiredChildHold — the hold-release job', () => {
   });
 
   it('a non-zero ccd exit answers failed, never changed', async () => {
-    const f = await rrig({ script: () => ({ code: 1, stdout: '', stderr: 'boom' }) });
+    const f = await rrig({ script: () => ({ ran: true as const, code: 1, stdout: '', stderr: 'boom' }) });
     const runId = terminalRun(f.coord, 'demo');
     const reason = holdReason('demo', 2, null, null);
     f.writeRow({ child: String(runId), hold: reason });
@@ -1372,8 +1415,8 @@ describe('feed rows de-duplicated (spec §5.9) — childReclaimFeedSkips, reclai
   });
 
   it('reclaimChild writes no row for a deferral episode the request names, and one with the none value', async () => {
-    const refusedState = (runId: number) => ({ audit: { code: 0, stdout: auditDoc(runId, 'reclaimable', { token: TOK }) },
-      verb: { code: 0, stdout: JSON.stringify({ refused: 'state-changed', detail: 'the tree moved', paths: [] }) } });
+    const refusedState = (runId: number) => ({ audit: { ran: true as const, code: 0, stdout: auditDoc(runId, 'reclaimable', { token: TOK }) },
+      verb: { ran: true as const, code: 0, stdout: JSON.stringify({ refused: 'state-changed', detail: 'the tree moved', paths: [] }) } });
     const s = await rig({ script: refusedState });
     const out = await reclaimChild(s.deps, s.req(false, 1, { deferWhy: 'state-changed', failureToken: null }));
     expect(out).toMatchObject({ kind: 'deferred', why: 'state-changed' });
@@ -1387,14 +1430,14 @@ describe('feed rows de-duplicated (spec §5.9) — childReclaimFeedSkips, reclai
   });
 
   it('reclaimChild writes no row for a failure the list shows, but still writes a ceiling-expired one', async () => {
-    const pinFailed = (runId: number) => ({ audit: { code: 0, stdout: auditDoc(runId, 'reclaimable', { token: TOK }) },
-      verb: { code: 1, stdout: JSON.stringify({ failed: 'pin-failed', detail: 'branch gone' }) } });
+    const pinFailed = (runId: number) => ({ audit: { ran: true as const, code: 0, stdout: auditDoc(runId, 'reclaimable', { token: TOK }) },
+      verb: { ran: true as const, code: 1, stdout: JSON.stringify({ failed: 'pin-failed', detail: 'branch gone' }) } });
     const listed: ChildReclaimFeedQuiet = { deferWhy: null, failureToken: 'pin-failed' };
     const s = await rig({ script: pinFailed });
     expect(await reclaimChild(s.deps, s.req(false, 1, listed))).toMatchObject({ kind: 'failed', token: 'pin-failed' });
     expect(s.feed(), 'the attention list already says it').toEqual([]);
     const expired = await rig({ script: (runId) => ({ ...pinFailed(runId),
-      audit: { code: 0, stdout: auditDoc(runId, 'reclaimable', { token: TOK, generation: GEN_W8 }) } }) });
+      audit: { ran: true as const, code: 0, stdout: auditDoc(runId, 'reclaimable', { token: TOK, generation: GEN_W8 }) } }) });
     writeFileSync(path.join(expired.reg, `${ID}.generation`), GEN_W8);
     await reclaimChild(expired.deps, { ...expired.req(true, 1, listed), licenceGeneration: { kind: 'value', v: GEN_W8 } });
     expect(expired.feed(), 'the row that ends a wait').toEqual(['child reclaim failed']);
@@ -1431,19 +1474,19 @@ describe('feed rows de-duplicated (spec §5.9) — childReclaimFeedSkips, reclai
   });
 
   it('the failure carries ccd\'s own word out of the executor, and none where ccd gave none', async () => {
-    const viaVerb = await rig({ script: (runId) => ({ audit: { code: 0, stdout: auditDoc(runId, 'reclaimable', { token: TOK }) },
-      verb: { code: 1, stdout: JSON.stringify({ failed: 'worktree-remove-failed', detail: 'busy' }) } }) });
+    const viaVerb = await rig({ script: (runId) => ({ audit: { ran: true as const, code: 0, stdout: auditDoc(runId, 'reclaimable', { token: TOK }) },
+      verb: { ran: true as const, code: 1, stdout: JSON.stringify({ failed: 'worktree-remove-failed', detail: 'busy' }) } }) });
     expect(await reclaimChild(viaVerb.deps, viaVerb.req())).toMatchObject({ kind: 'failed', token: 'worktree-remove-failed' });
-    const probe = await rig({ script: (runId) => ({ audit: { code: 0, stdout: auditDoc(runId, 'reclaimable', { token: TOK }) },
-      verb: { code: 1, stdout: JSON.stringify({ failed: 'probe-unmeasured', detail: 'tmux unreachable' }) } }) });
+    const probe = await rig({ script: (runId) => ({ audit: { ran: true as const, code: 0, stdout: auditDoc(runId, 'reclaimable', { token: TOK }) },
+      verb: { ran: true as const, code: 1, stdout: JSON.stringify({ failed: 'probe-unmeasured', detail: 'tmux unreachable' }) } }) });
     expect(await reclaimChild(probe.deps, probe.req())).toMatchObject({ kind: 'failed', token: 'probe-unmeasured' });
-    const flock = await rig({ script: (runId) => ({ audit: { code: 0, stdout: auditDoc(runId, 'reclaimable', { token: TOK }) },
-      verb: { code: 1, stdout: '', stderr: 'ccd: flock (util-linux) is unavailable — refusing to run the destructive verb unserialised' } }) });
+    const flock = await rig({ script: (runId) => ({ audit: { ran: true as const, code: 0, stdout: auditDoc(runId, 'reclaimable', { token: TOK }) },
+      verb: { ran: true as const, code: 1, stdout: '', stderr: 'ccd: flock (util-linux) is unavailable — refusing to run the destructive verb unserialised' } }) });
     expect(await reclaimChild(flock.deps, flock.req())).toMatchObject({ kind: 'failed', resume: 'pre-lock-die', token: 'flock-unavailable' });
-    const unreadableAudit = await rig({ script: () => ({ audit: { code: 1, stdout: '', stderr: 'audit broke' } }) });
+    const unreadableAudit = await rig({ script: () => ({ audit: { ran: true as const, code: 1, stdout: '', stderr: 'audit broke' } }) });
     expect(await reclaimChild(unreadableAudit.deps, unreadableAudit.req())).toMatchObject({ kind: 'failed', token: null });
-    const otherId = await rig({ script: (runId) => ({ audit: { code: 0, stdout: auditDoc(runId, 'reclaimable', { token: TOK }) },
-      verb: { code: 0, stdout: JSON.stringify({ reclaimed: 'demo-other', childOf: runId, wip: null, attic: 2, residueBytes: null }) } }) });
+    const otherId = await rig({ script: (runId) => ({ audit: { ran: true as const, code: 0, stdout: auditDoc(runId, 'reclaimable', { token: TOK }) },
+      verb: { ran: true as const, code: 0, stdout: JSON.stringify({ reclaimed: 'demo-other', childOf: runId, wip: null, attic: 2, residueBytes: null }) } }) });
     expect(await reclaimChild(otherId.deps, otherId.req())).toMatchObject({ kind: 'failed', token: null });
   });
 

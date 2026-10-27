@@ -34,12 +34,14 @@
 // what PR I actually shipped, not the plan's historical sample.
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import { type CoordCapsView, type RunSummary } from '../../../shared/api';
+import { type CoordCapsView, type RunSpend, type RunSummary } from '../../../shared/api';
 import {
   FINISHED_FOLD, anyDispatchPending, finishedClock, finishedMoreLabel, isRunClosed, programWave, programsWithOpenRun, runClosedAt,
   programmeTitle, runsByProgram, waveLabel,
 } from '../fleet/runWords';
 import { AbandonSheet, abandonChildOf } from '../fleet/AbandonSheet';
+import { LiftCapSheet } from '../fleet/LiftCapSheet';
+import { ReviewCapBand } from '../fleet/ReviewCapBand';
 import { CoordBanner } from '../fleet/CoordBanner';
 import { ChildReclaimBanner } from '../fleet/ChildReclaimBanner';
 import { CapsControl } from '../fleet/CapsControl';
@@ -76,6 +78,8 @@ const loadRunsDefault = (): Promise<{ runs: RunSummary[] }> => api.runs(true);
  *  render, so the control's own effect does not re-fire on every parent
  *  re-render. */
 const loadCapsDefault = (): Promise<CoordCapsView> => api.coordCaps();
+/** D-6799: one run's spend. Module-level so its identity is stable across renders. */
+const loadSpendDefault = (id: number): Promise<RunSpend> => api.run(id).then((r) => r.spend);
 
 import { RunRow } from './RunRow';
 import { useColdRuns } from './useColdRuns';
@@ -85,6 +89,7 @@ export function RunsScreen({
   store = useFleetStore,
   loadRuns = loadRunsDefault,
   loadCaps = loadCapsDefault,
+  loadSpend = loadSpendDefault,
 }: {
   store?: FleetStore;
   loadRuns?: () => Promise<{ runs: RunSummary[] }>;
@@ -96,6 +101,8 @@ export function RunsScreen({
    *  resume-door test's `expect(fetchImpl).not.toHaveBeenCalled()`, which is a
    *  guard worth keeping exactly as strict as it was. */
   loadCaps?: () => Promise<CoordCapsView>;
+  /** Each row's spend read (D-6799), injected like `loadCaps`. */
+  loadSpend?: (id: number) => Promise<RunSpend>;
 }): ReactNode {
   const live = store((s) => s.runs);
   const runsFrameSeen = store((s) => s.runsFrameSeen);
@@ -111,6 +118,10 @@ export function RunsScreen({
   // Spec §7.3: which run's ResumeSheet is open, or `null`. ONE sheet at screen
   // level, reused across rows — `abandonTarget`'s own shape, one line up.
   const [resumeTarget, setResumeTarget] = useState<RunSummary | null>(null);
+
+  // D-6911: which run's LiftCapSheet is open, or `null`. ONE sheet at screen level, on `abandonTarget`'s idiom; the
+  // "Waiting on you" band opens it.
+  const [liftTarget, setLiftTarget] = useState<RunSummary | null>(null);
 
   // Task 13, spec §4.4: the run board's own door onto a new program. ONE
   // door, rendered unconditionally below — including at zero runs, the same
@@ -281,6 +292,7 @@ export function RunsScreen({
       programHasOpenRun={programsOpen.has(run.program)}
       onAbandon={setAbandonTarget}
       onResume={setResumeTarget}
+      loadSpend={loadSpend}
     />
   );
 
@@ -330,6 +342,10 @@ export function RunsScreen({
       <Button variant="quiet" size="fit" className="program-start-door text-xs leading-none" onClick={() => setStartOpen(true)}>
         Start a program
       </Button>
+
+      {/* D-6911: every open work run whose review cap waits on the operator, above the groups. Reads `active`, so a
+          closed run never waits; renders nothing when no run does. */}
+      <ReviewCapBand runs={active} nowMs={now} onLift={setLiftTarget} />
 
       {noSignalYet ? (
         // Review finding 19: neither source has answered yet, so this is not
@@ -430,6 +446,9 @@ export function RunsScreen({
           the program, terminal ones included (contract R1), and the finished
           half of this board has no source but the cold read. */}
       <ResumeSheet run={resumeTarget} onClose={() => setResumeTarget(null)} onDone={() => { void loadCold(); }} />
+      {/* D-6911: the live `runs` frame carries the lift on the watcher's next tick; `loadCold()` re-reads the board
+          for a session with no frame yet. */}
+      <LiftCapSheet run={liftTarget} onClose={() => setLiftTarget(null)} onDone={() => { void loadCold(); }} />
       <StartProgramSheet open={startOpen} onClose={() => setStartOpen(false)} fleet={store}
         openRunProjects={openRunProjects} />
     </PageScaffold>

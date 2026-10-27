@@ -66,7 +66,7 @@ interface FixtureOpts {
   /** Reuse a coordination database (the restart case). */
   coord?: CoordStore;
   home?: string;
-  /** Wired into `deps.presence` — the ports-composition case. */
+  /** Wired into `deps.viewers` — the ports-composition case. */
   visible?: (id: string) => boolean;
   /** Wired into `deps.notifyLog` — the ports-composition case. */
   notifyLog?: NotifyLog;
@@ -78,7 +78,7 @@ interface FixtureOpts {
    *  there, `not held <id>` if it was not (the box's own idempotent design),
    *  never at ccd's exit 1. Override to simulate a box refusal. */
   release?: (regDir: string, id: string) =>
-    { code: number; stdout: string; stderr: string } | Promise<{ code: number; stdout: string; stderr: string }>;
+    { ran: true, code: number; stdout: string; stderr: string } | Promise<{ ran: true, code: number; stdout: string; stderr: string }>;
   /** The monotonic clock's first reading. Default 5 000 — deliberately not
    *  `T0`, so a decision clock read as an epoch cannot pass by coincidence. */
   mono0?: number;
@@ -106,8 +106,8 @@ const fixture = (opts: FixtureOpts = {}) => {
   const calls: string[][] = [];
   const releaseAnswer = opts.release ?? ((regDir: string, id: string) => {
     const p = path.join(regDir, `${id}.hold`);
-    try { rmSync(p); return { code: 0, stdout: `released ${id}\n`, stderr: '' }; }
-    catch { return { code: 0, stdout: `not held ${id}\n`, stderr: '' }; }
+    try { rmSync(p); return { ran: true as const, code: 0, stdout: `released ${id}\n`, stderr: '' }; }
+    catch { return { ran: true as const, code: 0, stdout: `not held ${id}\n`, stderr: '' }; }
   });
   const run = async (_cmd: string, args: string[]) => {
     calls.push(args);
@@ -115,7 +115,7 @@ const fixture = (opts: FixtureOpts = {}) => {
       const i = args.indexOf('--session');
       return releaseAnswer(reg, args[i + 1] ?? '');
     }
-    return { code: 1, stdout: '', stderr: '' };
+    return { ran: true as const, code: 1, stdout: '', stderr: '' };
   };
   const coord = opts.coord ?? new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
   const requests: ChildReclaimRequest[] = [];
@@ -139,7 +139,7 @@ const fixture = (opts: FixtureOpts = {}) => {
         ...(opts.releaseCap === false ? [] : ['ws-release']),
         ACTOR_FLAGS_CAP,
       ] },
-    presence: { isVisible: (id: string) => opts.visible?.(id) === true },
+    viewers: { isVisible: (id: string) => opts.visible?.(id) === true },
     ...(opts.notifyLog === undefined ? {} : { notifyLog: opts.notifyLog }),
     ...(opts.exec === 'real' ? {} : {
       childReclaimExec: async (req: ChildReclaimRequest) => { requests.push(req); return answer(req); },
@@ -522,7 +522,7 @@ describe('sweepChildReclaim — what reaches the executor', () => {
   });
 
   it('a release answered after the NEXT pass began still needs two FRESH unheld passes — the in-flight guard covers the release job too', async () => {
-    let resolveRelease!: (v: { code: number; stdout: string; stderr: string }) => void;
+    let resolveRelease!: (v: { ran: true, code: number; stdout: string; stderr: string }) => void;
     const f = fixture({
       release: (regDir, id) => new Promise((resolve) => {
         resolveRelease = (v) => {
@@ -545,7 +545,7 @@ describe('sweepChildReclaim — what reaches the executor', () => {
     await vi.waitFor(() => expect(f.calls.some((c) => c[0] === 'ws-release')).toBe(true));
     f.next(); await f.pass();                                 // a pass while the release is still in flight
     expect(f.requests, 'no re-queue while the release is in flight').toEqual([]);
-    resolveRelease({ code: 0, stdout: 'released demo-a\n', stderr: '' });
+    resolveRelease({ ran: true as const, code: 0, stdout: 'released demo-a\n', stderr: '' });
     await second;                                              // the release settles, after the next pass began
     f.next(); await f.pass();                                  // eligible, but the answer's mark is consumed: no sighting
     expect(f.requests).toEqual([]);
@@ -569,7 +569,7 @@ describe('sweepChildReclaim — what reaches the executor', () => {
     // unheld passes once the answer lands, never one. The answer's mark then
     // makes the first eligible verdict after it seed nothing too, so the
     // sighting count starts on the pass after that.
-    let resolveRelease!: (v: { code: number; stdout: string; stderr: string }) => void;
+    let resolveRelease!: (v: { ran: true, code: number; stdout: string; stderr: string }) => void;
     const f = fixture({ release: () => new Promise((resolve) => { resolveRelease = resolve; }) });
     const r1 = f.openRun(); f.abandon(r1);
     const reason = holdReason(r1.program, 2, null, null);
@@ -583,7 +583,7 @@ describe('sweepChildReclaim — what reaches the executor', () => {
                                                                  // branch's own first sighting lands HERE
     expect(f.requests, 'only the first eligible sighting so far').toEqual([]);
     expect(f.entryOf('demo-a'), 'the in-flight pass did record a sighting').toBeDefined();
-    resolveRelease({ code: 0, stdout: 'released demo-a\n', stderr: '' });   // the answer, matching what already happened
+    resolveRelease({ ran: true as const, code: 0, stdout: 'released demo-a\n', stderr: '' });   // the answer, matching what already happened
     await second;
     expect(f.entryOf('demo-a'), 'the answer deleted the entry').toBeUndefined();
     f.next(); await f.pass();                                   // the FIRST pass after the answer — the mark is consumed
@@ -602,7 +602,7 @@ describe('sweepChildReclaim — what reaches the executor', () => {
     // pass's own loop runs. The answer deletes the entry, but a loop running
     // on the older listing would seed a first sighting from it, and the very
     // next pass would dispatch. The answer's mark makes that loop seed nothing.
-    let resolveRelease!: (v: { code: number; stdout: string; stderr: string }) => void;
+    let resolveRelease!: (v: { ran: true, code: number; stdout: string; stderr: string }) => void;
     const f = fixture({ release: () => new Promise((resolve) => { resolveRelease = resolve; }) });
     const r1 = f.openRun(); f.abandon(r1);
     f.plant('demo-a', { child: String(r1.id), hold: holdReason(r1.program, 2, null, null) });
@@ -613,7 +613,7 @@ describe('sweepChildReclaim — what reaches the executor', () => {
     rmSync(path.join(f.reg, 'demo-a.hold'));                    // ccd's own unlink, already done on the box
     f.next();
     const stale = await f.listing();                           // the next pass's registry read — BEFORE the answer
-    resolveRelease({ code: 0, stdout: 'released demo-a\n', stderr: '' });
+    resolveRelease({ ran: true as const, code: 0, stdout: 'released demo-a\n', stderr: '' });
     await second;                                              // the answer lands between that read and its loop
     await f.sweepOn(stale);                                    // the pass's loop, on the listing older than the answer
     expect(f.entryOf('demo-a'), 'a listing older than the answer seeded nothing').toBeUndefined();
@@ -626,7 +626,7 @@ describe('sweepChildReclaim — what reaches the executor', () => {
   });
 
   it('a release that FAILS after being in flight across TWO passes is not retried the very next pass, only the one after — and never double-queues while in flight', async () => {
-    let resolveFirst!: (v: { code: number; stdout: string; stderr: string }) => void;
+    let resolveFirst!: (v: { ran: true, code: number; stdout: string; stderr: string }) => void;
     let releaseCalls = 0;
     const f = fixture({
       release: () => {
@@ -636,7 +636,7 @@ describe('sweepChildReclaim — what reaches the executor', () => {
         // immediately; it is not this case's own subject and must not hang
         // the test waiting on a resolver nothing ever calls.
         if (releaseCalls === 1) return new Promise((resolve) => { resolveFirst = resolve; });
-        return { code: 1, stdout: '', stderr: 'boom again' };
+        return { ran: true as const, code: 1, stdout: '', stderr: 'boom again' };
       },
     });
     // `ws-release` only fires once the release job actually RUNS, so while
@@ -672,7 +672,7 @@ describe('sweepChildReclaim — what reaches the executor', () => {
     const fourth = await f.passDispatched();
     expect(queueRuns.filter((k) => k === 'demo-a'), 'never re-enqueues demo-a while the first release is still in flight')
       .toHaveLength(1);
-    resolveFirst({ code: 1, stdout: '', stderr: 'boom' });      // the release finally fails
+    resolveFirst({ ran: true as const, code: 1, stdout: '', stderr: 'boom' });      // the release finally fails
     await fourth.settle;
     await second;
     f.next(); await f.pass();                                  // the very NEXT pass — must NOT retry yet
@@ -1626,7 +1626,7 @@ describe('the production path', () => {
 
   it('composes the SAME ports the close route does — presence blocks it before any argv is composed', async () => {
     // `presence: true` must reach the executor and defer BEFORE `ws-audit`
-    // is ever called — proof the production path wires `deps.presence`
+    // is ever called — proof the production path wires `deps.viewers`
     // through, exactly as `execChildReclaim`'s docstring says.
     const f = fixture({ exec: 'real', visible: (id) => id === 'demo-a' });
     finishedChild(f);
@@ -2890,5 +2890,155 @@ describe('sweepChildReclaim — what each request says the feed already carries 
     expect(attentionLabels(f)).toEqual(['failing:demo-a']);
     expect(f.requests).toHaveLength(1);
     expect(f.requests[0]!.feedQuiet.failureToken, 'a token-less failure item says nothing the executor could match').toBeNull();
+  });
+});
+
+// ARCH-77 (#812). APPENDED. The sweep with `child-reclaim-disabled` ABSENT is today's sweep, whatever else the registry lists.
+describe('the sweep with child-reclaim-disabled absent (characterization)', () => {
+  it('queues the reclaim on the second pass, with the neighbouring switches that are not its own listed', async () => {
+    const f = fixture();
+    finishedChild(f);
+    for (const m of ['coordinator-paused', 'mail-disabled', 'stop-done-disabled']) writeFileSync(path.join(f.reg, m), '');
+    await f.pass(); f.next(); await f.pass();
+    expect(f.requests.map((q) => q.sessionId)).toEqual(['demo-a']);
+  });
+});
+
+describe('the sweep with child-reclaim-disabled set', () => {
+  it('queues nothing while set, says so on the feed once, and needs two FRESH passes once it is lowered', async () => {
+    const home = mkTmp('ccrc-cr-dis-nl-');
+    const notifyLog = new NotifyLog(path.join(home, 'notify.json'));
+    await notifyLog.load();
+    const f = fixture({ notifyLog });
+    finishedChild(f);
+    await f.pass();                                           // first sighting
+    writeFileSync(path.join(f.reg, 'child-reclaim-disabled'), '');
+    for (let i = 0; i < 3; i += 1) { f.next(); await f.pass(); }
+    expect(f.requests).toEqual([]);
+    expect(f.coord.feedEvents(20).filter((e) => e.title === 'child reclaim switched off')).toHaveLength(1);
+    rmSync(path.join(f.reg, 'child-reclaim-disabled'));
+    f.next(); await f.pass();
+    expect(f.requests).toEqual([]);
+    f.next(); await f.pass();
+    expect(f.requests).toHaveLength(1);
+  });
+});
+
+// The kept reason and the stale sibling (D-6923). `review-report-live` and `siblings-open`
+// are `ordinary` skip words, so no surface named the run that kept a child; the feed now does, once per child per day.
+// And a sibling run that is provably abandoned (planned, never dispatched, fourteen days old, its coordinator archived
+// or gone) no longer keeps the child: it is reported as a stale sibling, and never closed.
+describe('the kept reason and the stale sibling — named in the feed, ignored when abandoned', () => {
+  const DAY = 24 * 3_600_000;
+  const TITLE = 'child reclaim kept';
+  const feedFixture = async (opts: FixtureOpts = {}) => {
+    const home = mkTmp('ccrc-child-reclaim-sweep-reason-');
+    const notifyLog = new NotifyLog(path.join(home, '.ccrc', 'notify.json'));
+    await notifyLog.load();
+    return fixture({ ...opts, home, notifyLog });
+  };
+  const rows = (f: ReturnType<typeof fixture>) =>
+    f.coord.feedEvents(50).filter((e) => e.title === TITLE && e.sessionId === 'demo-a');
+  /** A registry row for a coordinator, live unless `archived`. */
+  const plantCoordinator = (f: ReturnType<typeof fixture>, id: string, archived = false): void => {
+    const fields: Record<string, string> = { uuid: `u-${id}`, wrapper: 'claude', project: 'demo', workdir: `/w/${id}`,
+      started: '1', ...(archived ? { archived: '1790000000' } : {}) };
+    for (const [k, v] of Object.entries(fields)) writeFileSync(path.join(f.reg, `${id}.${k}`), v);
+  };
+  /** A finished child with a second run, planned now by `demo-coord`, naming the same session. */
+  const siblingChild = (f: ReturnType<typeof fixture>): { runId: number; siblingId: number } => {
+    const runId = finishedChild(f);
+    const sibling = f.openRun();
+    f.coord.setSession(sibling.id, 'demo-a');
+    return { runId, siblingId: sibling.id };
+  };
+
+  it('a sibling run kept by a LIVE coordinator is named in the feed by id and age, and the child is not asked', async () => {
+    const f = await feedFixture();
+    const { siblingId } = siblingChild(f);
+    plantCoordinator(f, 'demo-coord');
+    f.advance(15 * DAY);
+    await f.pass(); f.next(); await f.pass();
+    expect(f.requests).toEqual([]);
+    expect(rows(f)).toHaveLength(1);
+    expect(rows(f)[0]!.body).toContain(`run #${siblingId} (open 15 days)`);
+    expect(rows(f)[0]!.body).not.toContain('stale sibling');
+  });
+
+  it('a stale sibling (claimant gone, planned, 15 days) does not keep the child, and is reported, not closed', async () => {
+    const f = await feedFixture();
+    const { siblingId } = siblingChild(f);
+    f.advance(15 * DAY);
+    await f.pass(); f.next(); await f.pass();
+    expect(f.requests.map((q) => q.sessionId), 'the child reaches the executor').toEqual(['demo-a']);
+    expect(rows(f)).toHaveLength(1);
+    expect(rows(f)[0]!.body).toContain(`stale sibling run #${siblingId}`);
+    expect(rows(f)[0]!.body).toContain('ccrc does not close it');
+    const after = f.coord.run(siblingId);
+    expect(after.ok && after.run?.state, 'the stale sibling is left open').toBe('planned');
+  });
+
+  it('a stale sibling whose claimant is ARCHIVED is ignored too', async () => {
+    const f = await feedFixture();
+    siblingChild(f);
+    plantCoordinator(f, 'demo-coord', true);
+    f.advance(15 * DAY);
+    await f.pass(); f.next(); await f.pass();
+    expect(f.requests).toHaveLength(1);
+  });
+
+  it('a 13-day-old sibling of a gone coordinator still keeps the child', async () => {
+    const f = await feedFixture();
+    const { siblingId } = siblingChild(f);
+    f.advance(13 * DAY);
+    await f.pass(); f.next(); await f.pass();
+    expect(f.requests).toEqual([]);
+    expect(rows(f)[0]!.body).toContain(`run #${siblingId}`);
+  });
+
+  it('a DISPATCHED sibling of a gone coordinator still keeps the child', async () => {
+    const f = await feedFixture();
+    finishedChild(f);
+    const sibling = f.openRun();
+    f.coord.markDispatched(sibling.id, 'demo-a', 'demo-a', 'ws/a', false);
+    f.advance(15 * DAY);
+    await f.pass(); f.next(); await f.pass();
+    expect(f.requests).toEqual([]);
+  });
+
+  it('the row is written once per child per day, then again after a day', async () => {
+    const f = await feedFixture();
+    siblingChild(f);
+    plantCoordinator(f, 'demo-coord');
+    await f.pass(); f.next(); await f.pass(); f.next(); await f.pass();
+    expect(rows(f)).toHaveLength(1);
+    f.advance(DAY);
+    await f.pass();
+    expect(rows(f)).toHaveLength(2);
+  });
+
+  it('review-report-live names the reviewed run and its age', async () => {
+    const f = await feedFixture();
+    const work = f.openRun();
+    const review = f.openReview(work);
+    f.abandon(review);
+    f.plant('demo-a', { child: String(review.id) });
+    f.advance(3 * DAY);
+    await f.pass();
+    expect(f.requests).toEqual([]);
+    expect(rows(f)).toHaveLength(1);
+    expect(rows(f)[0]!.body).toContain(`run #${work.id} (open 3 days) is not closed`);
+  });
+
+  it('an unreadable sibling run keeps the child and is named without an age', async () => {
+    const f = await feedFixture();
+    const { siblingId } = siblingChild(f);
+    f.advance(15 * DAY);
+    const real = f.coord.run.bind(f.coord);
+    vi.spyOn(f.coord, 'run').mockImplementation((id: number) =>
+      (id === siblingId ? { ok: false as const, kind: 'run-unreadable' as const, detail: 'unreadable' } : real(id)));
+    await f.pass(); f.next(); await f.pass();
+    expect(f.requests).toEqual([]);
+    expect(rows(f)[0]!.body).toContain(`run #${siblingId} `);
   });
 });

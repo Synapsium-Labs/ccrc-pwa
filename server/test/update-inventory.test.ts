@@ -28,7 +28,7 @@ import {
 import { RESOLVE_DETAIL, resolveNodeIntent } from '../src/update/resolve.js';
 import { resolveInputFor } from '../src/update/project.js';
 import { FleetWatcher } from '../src/watch.js';
-import { testDeps } from './helpers.js';
+import { testDeps, withFakeClock } from './helpers.js';
 import { bootAgent, connectToAgent, makeFixture } from './remoteHelpers.js';
 import { mkTmp } from './tmpHelpers.js';
 
@@ -1112,7 +1112,7 @@ describe('the inventory lane in FleetWatcher (§18 "measurement is a sweep")', (
     const base = testDeps(home);   // no .cc-sessions: tick() fails shut on the registry read
     const coord = new CoordStore(openCoordDb(base.cfg.coordDbPath));
     plant(base.cfg.ccrcDir, FULL);
-    const w = new FleetWatcher({ ...base, coord }, new Bus(), 2000, path.join(home, 'state-cache.json'));
+    const w = new FleetWatcher(withFakeClock({ ...base, coord }), new Bus(), 2000, path.join(home, 'state-cache.json'));
     const spy = vi.spyOn(w, 'inventoryNow');
     vi.useFakeTimers();
     await w.tick();
@@ -1137,7 +1137,7 @@ describe('the inventory lane in FleetWatcher (§18 "measurement is a sweep")', (
       ...base, coord, cfg: { ...base.cfg, fleetMode: 'remote' },
       fleetState: fleetState({ connected: false, downSince: Date.now() }),
     };
-    const w = new FleetWatcher(deps, new Bus(), 2000, path.join(home, 'state-cache.json'));
+    const w = new FleetWatcher(withFakeClock(deps), new Bus(), 2000, path.join(home, 'state-cache.json'));
     const spy = vi.spyOn(w, 'inventoryNow');
     await w.tick();
     expect(spy).toHaveBeenCalledTimes(1);
@@ -1150,7 +1150,7 @@ describe('the inventory lane in FleetWatcher (§18 "measurement is a sweep")', (
     const base = testDeps(home);
     const coord = new CoordStore(openCoordDb(base.cfg.coordDbPath));
     plant(base.cfg.ccrcDir, FULL);
-    const w = new FleetWatcher({ ...base, coord }, new Bus(), 60_000, path.join(home, 'state-cache.json'));
+    const w = new FleetWatcher(withFakeClock({ ...base, coord }), new Bus(), 60_000, path.join(home, 'state-cache.json'));
     const a = w.inventoryNow();
     const b = w.inventoryNow();
     expect(b).toBe(a);
@@ -1162,13 +1162,13 @@ describe('the inventory lane in FleetWatcher (§18 "measurement is a sweep")', (
 
   it('a server with no coord store sweeps nothing and does not throw', async () => {
     const home = mkTmp('ccrc-inv-nocoord-');
-    const w = new FleetWatcher(testDeps(home), new Bus(), 60_000, path.join(home, 'state-cache.json'));
+    const w = new FleetWatcher(withFakeClock(testDeps(home)), new Bus(), 60_000, path.join(home, 'state-cache.json'));
     await expect(w.inventoryNow()).resolves.toEqual([]);
   });
 
   it('C2: a rejected sweep is warned ONCE per distinct message, quiet on a repeat, re-armed after a clean settle', async () => {
     const home = mkTmp('ccrc-inv-reject-warn-');
-    const w = new FleetWatcher(testDeps(home), new Bus(), 60_000, path.join(home, 'state-cache.json'));
+    const w = new FleetWatcher(withFakeClock(testDeps(home)), new Bus(), 60_000, path.join(home, 'state-cache.json'));
     const runInventorySpy = vi.spyOn(
       w as unknown as { runInventory(): Promise<SweepOutcome[]> }, 'runInventory',
     );
@@ -1203,7 +1203,7 @@ describe('the inventory lane in FleetWatcher (§18 "measurement is a sweep")', (
     const coord = new CoordStore(openCoordDb(base.cfg.coordDbPath));
     plant(base.cfg.ccrcDir, FULL);
     const deps: Deps = { ...base, coord, cfg: { ...base.cfg, fleetMode: 'remote' }, fleetState: fleetState() };
-    const w = new FleetWatcher(deps, new Bus(), 60_000, path.join(home, 'state-cache.json'));
+    const w = new FleetWatcher(withFakeClock(deps), new Bus(), 60_000, path.join(home, 'state-cache.json'));
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     try {
       await w.inventoryNow();   // both connections read node-id U1 -> a collision
@@ -1225,7 +1225,7 @@ describe('the inventory lane in FleetWatcher (§18 "measurement is a sweep")', (
     const base = testDeps(home);
     const coord = new CoordStore(openCoordDb(base.cfg.coordDbPath));
     plant(base.cfg.ccrcDir, FULL);
-    const w = new FleetWatcher({ ...base, coord }, new Bus(), 60_000, path.join(home, 'state-cache.json'));
+    const w = new FleetWatcher(withFakeClock({ ...base, coord }), new Bus(), 60_000, path.join(home, 'state-cache.json'));
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     const errorWarns = () => warn.mock.calls.filter((c) => String(c[0]).includes('inventory row') && String(c[0]).includes('boom'));
     const original = coord.upsertNodeMeasurement.bind(coord);
@@ -1251,7 +1251,7 @@ describe('the inventory lane in FleetWatcher (§18 "measurement is a sweep")', (
 
   it('C4: a ready that joins an in-flight sweep is not swallowed — exactly one rerun fires after it settles', async () => {
     const home = mkTmp('ccrc-inv-rerun-');
-    const w = new FleetWatcher(testDeps(home), new Bus(), 60_000, path.join(home, 'state-cache.json'));
+    const w = new FleetWatcher(withFakeClock(testDeps(home)), new Bus(), 60_000, path.join(home, 'state-cache.json'));
     let calls = 0;
     const deferred: { resolve: (v: SweepOutcome[]) => void }[] = [];
     vi.spyOn(w as unknown as { runInventory(): Promise<SweepOutcome[]> }, 'runInventory').mockImplementation(() => {
@@ -1294,7 +1294,7 @@ describe('the fleet node over a real agent (the exact-basename read set, and the
     const deps: Deps = {
       ...base, coord, io: fleet.io, fleetState: fleet.state, cfg: { ...base.cfg, fleetMode: 'remote', ccrcDir },
     };
-    const w = new FleetWatcher(deps, new Bus(), 60_000, path.join(serverHome, 'state-cache.json'));
+    const w = new FleetWatcher(withFakeClock(deps), new Bus(), 60_000, path.join(serverHome, 'state-cache.json'));
     // index.ts's own line. The composition root is never imported by a test
     // (`refreshcaps.test.ts` says why); this is the seam it wires. That the
     // REAL line exists in index.ts is the text pin in the describe below.
@@ -1304,10 +1304,10 @@ describe('the fleet node over a real agent (the exact-basename read set, and the
     expect(Date.now() - t0).toBeLessThan(1000);
     const row = coord.node(FLEET_LABEL)!;
     expect(buildInfoOfRow(row)).toEqual(parseBuildInfo(stampJson()));
-    // `agentOps: ['update', 'token-sync', 'account', 'disk']`: the real agent advertises the update op (programme wave 5 Task
-    // 2), the token-sync op (box-token lifecycle wave 1), the account op (accounts plan A8) and the disk op (D-6614), and the inventory stores what the one reader, `readReadyOps`,
+    // `agentOps: ['update', 'token-sync', 'account', 'disk', 'pressure']`: the real agent advertises the update op (programme wave 5 Task
+    // 2), the token-sync op (box-token lifecycle wave 1), the account op (accounts plan A8), the disk op (D-6614) and the pressure op (#1170), and the inventory stores what the one reader, `readReadyOps`,
     // read off its ready frame.
-    expect(row).toMatchObject({ role: 'fleet', caps: ['verify', 'node-id', 'floor'], os: 'linux', highestVersion: 'v0.0.12', agentOps: ['update', 'token-sync', 'account', 'disk'], reachable: true });
+    expect(row).toMatchObject({ role: 'fleet', caps: ['verify', 'node-id', 'floor'], os: 'linux', highestVersion: 'v0.0.12', agentOps: ['update', 'token-sync', 'account', 'disk', 'pressure'], reachable: true });
   });
 
   it('a build.json symlinked onto a secret file is unreadable across the wire, and nothing of the secret arrives', async () => {

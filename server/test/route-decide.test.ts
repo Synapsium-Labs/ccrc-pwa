@@ -22,7 +22,7 @@ const ev = (detail: string | null, at = 1, runId = 1, runSessionId: string | nul
 
 interface Spy { facts: RouteFacts; reads: string[]; trails: string[] }
 function facts(ask: RouteAsk, over: {
-  run?: RouteFacts['run']; can?: boolean; trail?: readonly RouteTrailEvent[];
+  run?: RouteFacts['run']; can?: boolean; trail?: readonly RouteTrailEvent[]; trailRead?: ReturnType<RouteFacts['trail']>;
   reg?: Partial<Record<'class' | 'effort' | 'degraded', RegistryRead>>;
 } = {}): Spy {
   const reads: string[] = []; const trails: string[] = [];
@@ -33,7 +33,7 @@ function facts(ask: RouteAsk, over: {
       ask,
       run: over.run ?? { ok: true, run: { state: 'working', sessionId: SID, claimedBy: 'coord-1' } },
       ccdCanRoute: over.can ?? true,
-      trail: (sid) => { trails.push(sid); return over.trail ?? []; },
+      trail: (sid) => { trails.push(sid); return over.trailRead ?? { ok: true, events: over.trail ?? [] }; },
       measure: async (_sid, field) => { reads.push(field); return reg[field]; },
     },
   };
@@ -257,6 +257,10 @@ describe('decideRoute: the ladder, S5-R17 and the ceiling', () => {
     const m = await moveOf(facts(kind(), { reg: { effort: ok('low') }, trail: [esc, demoteEv('effort', 'high', 'medium', 2)] }));
     expect(m.mode).toBe('escalate');
     expect(m).toMatchObject({ from: 'low' });
+  });
+  it('an unreadable trail refuses runs-unreadable, decided here and not in the handler (ARCH-62, #797)', async () => {
+    const s = facts(kind(), { trailRead: { ok: false, detail: 'runsTouching: id out of range' } });
+    expect(await decideRoute(s.facts)).toEqual({ ok: false, refused: 'runs-unreadable', extra: { detail: 'runsTouching: id out of range' } });
   });
   it('the trail is read for a ladder ask and for no other', async () => {
     const s = facts(kind()); await decideRoute(s.facts);

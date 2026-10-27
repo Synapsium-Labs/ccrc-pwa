@@ -18,7 +18,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { makePrHarness, type PrHarness } from './ccdPrHelpers.js';
-import { CCD } from './ccdWsHelpers.js';
+import { ccdSource } from './ccdWsHelpers.js';
 import { eventsOf } from './lifecycleHelpers.js';
 import { CHILD_BRANCH, CHILD_ID, childReclaimVerb, evalOf, makeChild, type Child } from './childReclaimFixture.js';
 import { verbHelpers } from './childReclaimVerbHelpers.js';
@@ -667,7 +667,7 @@ describe('`_ws_reclaim_reask` itself, and the identity `_ws_reclaim_nested_prove
 });
 
 describe('the re-asks, read from the source (path-identity spec §4.7)', () => {
-  const src = (): string => fs.readFileSync(CCD, 'utf8');
+  const src = (): string => ccdSource();
   /** Code lines: whole-line comments dropped, `\`-continuations joined (the six-calls census's reading), blanks dropped. */
   const codeOf = (body: string): string[] => body.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n')
     .replace(/\s*\\\n\s*/g, ' ').split('\n').filter((l) => l.trim() !== '');

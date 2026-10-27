@@ -1,5 +1,5 @@
 import type { Tmux } from '../exec.js';
-import { autoContinueArmed, editHintShown, freeTextRow, hasMenu, parseDialog, startsWithPromptGlyph, turnRunning } from '../pane/dialog.js';
+import { autoContinueArmed, editHintShown, freeTextRow, hasMenu, parseDialog, startsWithPromptGlyph, stripSgr, turnRunning } from '../pane/dialog.js';
 import type { KeyedQueue } from './queue.js';
 import {
   composePrompt, isDialogMultiIndexes, isDialogTab, isDialogText, MAIL_ENVELOPE_FENCE,
@@ -193,7 +193,6 @@ function echoPoller(d: SendDeps, sleep: (ms: number) => Promise<void>): () => Pr
  *  visual line, so a wrapped message can't split it across a line break. */
 const ECHO_NEEDLE = 24;
 
-const SGR = /\x1b\[[0-9;]*m/g;                 // any ANSI colour/attr code
 // A dim `\e[2m…\e[0m` run = ghost/placeholder text. Real captures interleave
 // OTHER SGR codes inside the run (e.g. Claude Code's queue hint renders as
 // `\e[2m\e[39mPress up to edit queued messages\e[0m` — a colour reset sits
@@ -271,9 +270,9 @@ export type BoxRead =
  * `box-unreadable`.
  */
 export const draftOfMeasured = (ansiPane: string): BoxRead => {
-  const boxLine = ansiPane.split('\n').filter((l) => startsWithPromptGlyph(l.replace(SGR, ''))).at(-1);
+  const boxLine = ansiPane.split('\n').filter((l) => startsWithPromptGlyph(stripSgr(l))).at(-1);
   if (boxLine === undefined) return { box: 'absent' };
-  return { box: 'present', draft: undim(boxLine).replace(SGR, '').slice(1).trim() };
+  return { box: 'present', draft: stripSgr(undim(boxLine)).slice(1).trim() };
 };
 
 /**
@@ -419,9 +418,9 @@ async function submitOverHeldStash(
     const { seen, pane, unseenAfterRead } = await watchSubmit(d, id, sleep, classify);
     if (seen === 'gone') return { ok: true };
     if (seen === 'maybe-restored') {
-      const window = (pane ?? '').replace(SGR, '').replace(/\n$/, '').split('\n').slice(-8).join('\n');
+      const window = stripSgr((pane ?? '')).replace(/\n$/, '').split('\n').slice(-8).join('\n');
       if (!turnWasRunning && turnRunning(window)) return { ok: true };
-      return { ok: false, error: 'enter-ignored', pane: (pane ?? '').replace(SGR, '').slice(-PANE_TAIL) };
+      return { ok: false, error: 'enter-ignored', pane: stripSgr((pane ?? '')).slice(-PANE_TAIL) };
     }
     // D-6366: a watch with a failed or box-less capture after its last box read buys no retry Enter: the first may have
     // landed, and Claude Code gives the human's stashed draft back at submit, so a second would submit it. The final
@@ -543,7 +542,7 @@ const REPLACE_MAX_PRESSES = 24;
  * from under-counting rows on a genuinely wide pane.
  */
 const paneWidth = (pane: string): number =>
-  Math.min(400, Math.max(80, ...pane.split('\n').map((l) => l.replace(SGR, '').length)));
+  Math.min(400, Math.max(80, ...pane.split('\n').map((l) => stripSgr(l).length)));
 
 /**
  * How many VISUAL rows `lines` occupies in a box `width` columns wide.
@@ -641,7 +640,7 @@ async function clearBox(
     // that row as a draft, it never empties, and we would spend the entire cap
     // hammering C-u into a live menu and then report the user their own
     // "1. Yes" as leftover text. Bail and let the caller say so.
-    if (hasMenu(ansi.replace(SGR, ''))) return { state: 'menu' };
+    if (hasMenu(stripSgr(ansi))) return { state: 'menu' };
     // THE BOX IS NOT IN THIS CAPTURE. Every terminator below reads the box, so
     // continuing would hammer C-u into a pane whose content we cannot see and
     // then report `cleared` off a scan that found nothing — destroying an
@@ -857,11 +856,11 @@ const squash = (s: string): string => s.replace(/\s+/g, '');
 function boxRows(ansiPane: string): string[] | null {
   const lines = ansiPane.split('\n');
   let marker = -1;
-  for (let i = 0; i < lines.length; i++) if (startsWithPromptGlyph(lines[i]!.replace(SGR, ''))) marker = i;
+  for (let i = 0; i < lines.length; i++) if (startsWithPromptGlyph(stripSgr(lines[i]!))) marker = i;
   if (marker === -1) return null;
-  const rows = [undim(lines[marker]!).replace(SGR, '').slice(1).trim()];
+  const rows = [stripSgr(undim(lines[marker]!)).slice(1).trim()];
   for (let i = marker + 1; i < lines.length; i++) {
-    const row = undim(lines[i]!).replace(SGR, '');
+    const row = stripSgr(undim(lines[i]!));
     if (isRuleRow(row)) return rows;
     rows.push(row.trim());
   }
@@ -1017,7 +1016,7 @@ export const STASH_TRIES = 12;
 const STASH_HELD_RE = /(?:^|\s)›\s+stashed(?:\s+·|\s*$)/;
 const RULE_ROW = /^─+$/;
 function stashHeld(ansiPane: string): boolean {
-  const lines = ansiPane.split('\n').map((l) => l.replace(SGR, ''));
+  const lines = ansiPane.split('\n').map((l) => stripSgr(l));
   let marker = -1;
   for (let i = 0; i < lines.length; i++) if (startsWithPromptGlyph(lines[i]!)) marker = i;
   if (marker < 2 || !RULE_ROW.test(lines[marker - 1]!.trim())) return false;
@@ -1027,14 +1026,14 @@ function stashHeld(ansiPane: string): boolean {
 /** The box is in the capture, no menu owns the keyboard, and it holds nothing: no marker-row text (a placeholder
  *  reads empty, D-5910) and no row below it. */
 const boxEmptyAndFree = (ansiPane: string): boolean => {
-  if (hasMenu(ansiPane.replace(SGR, ''))) return false;
+  if (hasMenu(stripSgr(ansiPane))) return false;
   const read = draftOfMeasured(ansiPane);
   return read.box === 'present' && read.draft === '' && !hasContentBelowMarker(ansiPane);
 };
 
 /** The box reads back exactly `text` (`boxText`, so a chip compares as the chip row it rendered as) with no menu up. */
 const boxHolds = (ansiPane: string, text: string): boolean =>
-  !hasMenu(ansiPane.replace(SGR, '')) && draftOfMeasured(ansiPane).box === 'present' && boxText(ansiPane) === text;
+  !hasMenu(stripSgr(ansiPane)) && draftOfMeasured(ansiPane).box === 'present' && boxText(ansiPane) === text;
 
 /** What the stash path carries from the stash to the submit: the box text it stashed, and whether a turn was
  *  already running before this call pressed anything (so a running turn afterwards proves nothing of ours). */
@@ -1056,7 +1055,7 @@ async function stashDraft(
   turnWasRunning: boolean,
   carry: StashCarry,
 ): Promise<{ stash: HeldStash } | { refused: SendResult }> {
-  const tail = () => pane.replace(SGR, '').slice(-PANE_TAIL);
+  const tail = () => stripSgr(pane).slice(-PANE_TAIL);
   // Step 2. `stash()` REPLACES a held stash, so a `C-s` here would destroy the earlier text.
   if (stashHeld(pane)) return { refused: { ok: false, error: 'stash-occupied', pane: tail() } };
   const text = boxText(pane);
@@ -1112,11 +1111,11 @@ async function submitAroundStash(
     const { seen, pane, unseenAfterRead } = await watchSubmit(d, id, sleep, stashAwareStill);
     if (seen === 'gone') return verifyRestore(d, id, sleep, stash);
     if (seen === 'maybe-restored') {
-      const window = (pane ?? '').replace(SGR, '').replace(/\n$/, '').split('\n').slice(-8).join('\n');
+      const window = stripSgr((pane ?? '')).replace(/\n$/, '').split('\n').slice(-8).join('\n');
       // D-6010: a turn started, so our text was taken; the restore check below decides, and pops a stash still
       // held on an empty box rather than answering `restore-unverified` over it.
       if (!stash.turnWasRunning && turnRunning(window)) return verifyRestore(d, id, sleep, stash);
-      return { ok: false, error: 'enter-ignored', pane: (pane ?? '').replace(SGR, '').slice(-PANE_TAIL) };
+      return { ok: false, error: 'enter-ignored', pane: stripSgr((pane ?? '')).slice(-PANE_TAIL) };
     }
     if (unseenAfterRead) break; // D-6366: no retry Enter after a watch with a failed or box-less capture after its last box read (see `submitOverHeldStash`)
   }
@@ -1218,7 +1217,7 @@ async function giveBackStash(
   const fresh = await d.tmux.captureAnsi(id);
   if (fresh === null) return strand('the pane could not be read');
   if (!stashHeld(fresh)) return res;
-  if (hasMenu(fresh.replace(SGR, ''))) return strand('a dialog is open');
+  if (hasMenu(stripSgr(fresh))) return strand('a dialog is open');
   if (draftOfMeasured(fresh).box === 'absent') return strand('the box is not in the capture');
   const now = boxText(fresh);
   if (now !== '' || hasContentBelowMarker(fresh)) {
@@ -1352,7 +1351,7 @@ export function sendPrompt(
     const pane = await d.tmux.captureAnsi(id);
     if (pane === null) return { ok: false, error: 'not-alive' };
 
-    const plain = pane.replace(SGR, '');
+    const plain = stripSgr(pane);
     // D-2368: before the menu check — on an armed screen the limit is the reason
     // nothing may be typed, whatever else is drawn.
     //
@@ -1855,12 +1854,12 @@ function continuationRows(ansiPane: string): string[] {
   const lines = ansiPane.split('\n');
   let markerIdx = -1;
   for (let i = 0; i < lines.length; i++) {
-    if (startsWithPromptGlyph(lines[i]!.replace(SGR, ''))) markerIdx = i;   // last ❯ line, same as draftOf
+    if (startsWithPromptGlyph(stripSgr(lines[i]!))) markerIdx = i;   // last ❯ line, same as draftOf
   }
   if (markerIdx === -1) return [];
   const rows: string[] = [];
   for (let i = markerIdx + 1; i < lines.length; i++) {
-    const stripped = undim(lines[i]!).replace(SGR, '');
+    const stripped = stripSgr(undim(lines[i]!));
     if (isRuleRow(stripped)) break;
     if (stripped.trim() !== '') rows.push(stripped.trim());
   }
@@ -1910,7 +1909,7 @@ export function readBoxText(d: SendDeps, id: string): Promise<string | null> {
   return d.queue.run(id, async (): Promise<string | null> => {
     const pane = await d.tmux.captureAnsi(id);
     if (pane === null) return null;
-    if (hasMenu(pane.replace(SGR, ''))) return null;
+    if (hasMenu(stripSgr(pane))) return null;
     if (draftOfMeasured(pane).box === 'absent') return null;
     return boxText(pane);
   });
@@ -1959,7 +1958,7 @@ export function submitEnter(
     // Same reasoning as sendPrompt's own guard: with a menu up the only `❯` on
     // screen is the cursor on the selected OPTION, so draftOf would read a menu
     // row as a draft and this would press Enter on somebody's question.
-    if (hasMenu(pane.replace(SGR, ''))) return { ok: false, error: 'dialog-open' as const };
+    if (hasMenu(stripSgr(pane))) return { ok: false, error: 'dialog-open' as const };
     // No box in the capture: `nothing-to-submit` and `blank-first-row` are both
     // claims about a box that is there, and the correspondence gate below would
     // compare the operator's `expect` against a reading of nothing. Pressing
@@ -2015,9 +2014,9 @@ const SETTLE_POLL_MS = 100;
 const SETTLE_BUDGET_MS = 1500;
 
 /** What a capture shows, as the session stream would frame it: the menu `parseDialog` reads, or null for no menu
- *  (the same `hasMenu` gate as `sessionws.ts`'s `checkDialog`, SGR stripped). */
+ *  (`parseDialog` opens with the `hasMenu` gate, SGR stripped). */
 function screenOf(pane: string): Dialog | null {
-  return hasMenu(pane.replace(SGR, '')) ? parseDialog(pane) : null;
+  return parseDialog(pane);
 }
 
 /**
@@ -2466,7 +2465,7 @@ export type InterruptVerdict =
   | { kind: 'idle' };
 
 /** D-5236: the reads `interruptVerdict` decides on — the session's RAW live word and its stamp (`liveWordFor`, never
- *  `liveStatus()`'s collapse, which reads `shell` and `waiting` busy), the frame's row for it (`liveRowFor`: the
+ *  `liveSessionStatus()`'s collapse, which reads `shell` and `waiting` busy), the frame's row for it (`liveRowFor`: the
  *  watcher's pane menu, the hook state, D-5231's `background`) and the hook state's own stamp and event, which the row
  *  does not carry. `row` null is a row that could not be assembled. */
 export interface InterruptReading {
@@ -2483,7 +2482,7 @@ export interface InterruptReading {
  * ended and only delegated work runs; "newer" is load-bearing, because a turn begun after that Stop with no hook event
  * re-stamps the live file, and Escape must then interrupt it; or (b) the live word is `shell`, which Claude Code writes
  * only for an idle main loop over a background shell or monitor (no count). An unreadable word, or `idle`, is `idle`:
- * the answer `liveStatus()` gave, so an unread word still withholds the key (D-115). `waiting` and every other word
+ * the answer the old interrupt reader gave, so an unread word still withholds the key (D-115). `waiting` and every other word
  * are a `turn`. Arm (a) needs the hook event to be `Stop`, narrower than D-5272's carriers: the hook re-stamps
  * `updatedAt` when a SubagentStart or SubagentStop carries the `done`, so a carried stamp can be newer than a main turn
  * begun after that Stop, and only a Stop's stamp proves the main turn ended. A carried `done` is a `turn` (Escape).

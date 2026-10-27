@@ -11,7 +11,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { makePrHarness, type PrHarness } from './ccdPrHelpers.js';
-import { CCD } from './ccdWsHelpers.js';
+import { ccdSource } from './ccdWsHelpers.js';
 import {
   CHILD_BRANCH, CHILD_ID, CHILD_STUBS, childReclaimVerb, hookRuns, makeChild, plantRepoPrograms, type Child,
 } from './childReclaimFixture.js';
@@ -168,7 +168,7 @@ describe('the tail spells every destructive git call contained', () => {
   });
 
   it('six calls, each `_ws_reclaim_contained git -C "$main" …`, and no uncontained one', () => {
-    const src = fs.readFileSync(CCD, 'utf8');
+    const src = ccdSource();
     const tail = src.slice(src.indexOf('\n_ws_reclaim_tail() {'), src.indexOf('\ncmd_ws_reclaim() {'));
     expect(tail.length, 'the CONTROL: the tail was found').toBeGreaterThan(1000);
     const destructive = codeOf(tail).filter((l) => DESTRUCTIVE.test(l));

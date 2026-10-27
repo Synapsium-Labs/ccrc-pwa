@@ -23,7 +23,7 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { makePrHarness, type PrHarness } from './ccdPrHelpers.js';
-import { CCD, ghContainedEnv, installDirectEntry, type DirectEntry } from './ccdWsHelpers.js';
+import { CCD, ghContainedEnv, installDirectEntry, type DirectEntry, ccdSource } from './ccdWsHelpers.js';
 import { itLinux } from './platformFixtures.js';
 import {
   CHILD_BRANCH, CHILD_ENV, CHILD_ID, CHILD_RUN, CHILD_STUBS, evalOf, makeChild, type Child,
@@ -481,6 +481,13 @@ const GRAMMAR: ReadonlyArray<readonly [string, readonly string[], boolean, RegEx
   ['valid audit --reclaim', ['ws-audit', '--session', 'x', '--reclaim'], true, null],
   ['valid audit --reclaim --defer-expired', ['ws-audit', '--session', 'x', '--reclaim', '--defer-expired'], true, null],
   ['plain audit', ['ws-audit', '--session', 'x'], false, null],
+  // The stale arm's audit (fleet disk retention DR-26): the same protected skeleton with the stale flags in its tail.
+  ['valid audit --reclaim --stale terminal', ['ws-audit', '--session', 'x', '--reclaim', '--stale', 'terminal'], true, null],
+  ['valid audit --reclaim --stale held --hold-digest', ['ws-audit', '--session', 'x', '--reclaim', '--stale', 'held', '--hold-digest', 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'], true, null],
+  ['valid audit --reclaim, the stale flags in the other order with --defer-expired', ['ws-audit', '--session', 'x', '--reclaim', '--hold-digest', 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', '--defer-expired', '--stale', 'held'], true, null],
+  ['audit, a stale flag with no value (the body’s parser owns that)', ['ws-audit', '--session', 'x', '--reclaim', '--stale'], true, null],
+  ['audit, an extra token after the stale flags', ['ws-audit', '--session', 'x', '--reclaim', '--stale', 'held', 'extra'], false, USAGE],
+  ['audit, the stale flags without --reclaim', ['ws-audit', '--session', 'x', '--stale', 'held'], false, USAGE],
   ['audit, --defer-expired alone', ['ws-audit', '--session', 'x', '--defer-expired'], false, USAGE],
   ['valid audit skeleton with a session value the body will reject', ['ws-audit', '--session', '../../etc/passwd', '--reclaim'], true, null],
   // Not malformed for the BODY: `--reclaim` lands in the id position and is a well-formed
@@ -502,6 +509,12 @@ const GRAMMAR: ReadonlyArray<readonly [string, readonly string[], boolean, RegEx
   ['ws-expire with a malformed tail (the body’s parser owns that)', ['ws-expire', '--defer-expired'], true, null],
   ['valid audit --expire', ['ws-audit', '--session', 'x', '--expire'], true, null],
   ['audit, --expire --defer-expired (no such mode)', ['ws-audit', '--session', 'x', '--expire', '--defer-expired'], false, USAGE],
+  // `--child-of` (expire-child-v1): the one 6-token audit shape, protected exactly as the plain `--expire` is.
+  ['valid audit --expire --child-of', ['ws-audit', '--session', 'x', '--expire', '--child-of', '7'], true, null],
+  ['audit, --expire --child-of with no run', ['ws-audit', '--session', 'x', '--expire', '--child-of'], false, USAGE],
+  ['audit, --child-of before --expire', ['ws-audit', '--session', 'x', '--child-of', '7', '--expire'], false, USAGE],
+  ['audit, --reclaim --child-of (no such mode)', ['ws-audit', '--session', 'x', '--reclaim', '--child-of', '7'], false, USAGE],
+  ['audit, --expire --child-of and an extra token', ['ws-audit', '--session', 'x', '--expire', '--child-of', '7', 'extra'], false, USAGE],
   ['audit, a later duplicate --expire', ['ws-audit', '--session', 'x', '--expire', '--expire'], false, USAGE],
   ['a verb merely CONTAINING ws-expire later', ['caps', 'ws-expire'], false, null],
   // the loose arm (fleet disk retention D-6625): its audit mints the token the loose verb trusts, so it starts protected;
@@ -563,6 +576,7 @@ const CASE_VARIANTS: ReadonlyArray<readonly [string, readonly string[]]> = [
   [`ws-exp${DOTTED_I}re (a non-ASCII fold)`, [`ws-exp${DOTTED_I}re`]],
   ['WS-AUDIT --SESSION x --EXPIRE', ['WS-AUDIT', '--SESSION', 'x', '--EXPIRE']],
   ['WS-AUDIT --LOOSE-HEX x --COLLECT', ['WS-AUDIT', '--LOOSE-HEX', 'x', '--COLLECT']],
+  ['WS-AUDIT --SESSION x --EXPIRE --CHILD-OF 7', ['WS-AUDIT', '--SESSION', 'x', '--EXPIRE', '--CHILD-OF', '7']],
 ];
 /** Protected at the launcher although no locale measured here folds them —
  *  the superset's other half, harmless by design. A non-ASCII character stands
@@ -1083,7 +1097,7 @@ describe('every supported production entry crosses the installed launcher', () =
   it('the launchd job’s ProgramArguments (ccd/ccd’s plist) exec the launcher — an ordinary start', () => {
     const out = path.join(h.home, 'plist-out');
     de = installDirectEntry(h.home, { body: outBody(out) });
-    const src = fs.readFileSync(CCD, 'utf8');
+    const src = ccdSource();
     const block = /<key>ProgramArguments<\/key>\s*<array>([\s\S]*?)<\/array>/.exec(src)?.[1] ?? '';
     const argv = [...block.matchAll(/<string>([^<]*)<\/string>/g)].map((m) => m[1]!.replace('${HOME}', h.home).replace('${id}', 'demo-x'));
     expect(argv[0], 'the job does not exec the installed entry').toBe(de.entry);

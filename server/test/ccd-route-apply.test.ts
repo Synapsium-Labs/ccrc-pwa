@@ -31,7 +31,7 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { CCD, ghContainedEnv, harnessBin, makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
+import { CCD, ghContainedEnv, harnessBin, makeCcdHarness, type CcdHarness, ccdSource } from './ccdWsHelpers.js';
 import { USAGE_FRESH_S } from '../src/usage.js';
 
 let h: CcdHarness;
@@ -150,7 +150,7 @@ const install = (w: string): void => {
  *  `ccd-route-tick.test.ts` slices `_auto_compact_check`'s body: this suite imports nothing
  *  from bash. */
 const STOPS: string[] = (() => {
-  const m = /^ROUTE_EFFORT_STOPS="([^"]*)"$/m.exec(fs.readFileSync(CCD, 'utf8'));
+  const m = /^ROUTE_EFFORT_STOPS="([^"]*)"$/m.exec(ccdSource());
   if (!m) throw new Error('ccd/ccd no longer defines ROUTE_EFFORT_STOPS= at column 0 — re-anchor this test');
   return m[1]!.split(' ');
 })();
@@ -611,6 +611,33 @@ describe('the final review\'s three writer/typer defects, each pinned where it h
     h.sh(`${TMUX_STUB} _route_apply_now ${ID}`);
     expect(keys()).toEqual(['-l /model', 'Enter', 'Up', 'Up', '-l s']);
     expect(h.reg(ID, 'routeapplied')).toContain('class=default');
+  });
+
+  describe('D-6793: the picker\'s Default row that names Fable', () => {
+    const FABLE_PICKER = (desc: string): string => `${IDLE_PANE}${PICKER(`❯ 1. Default (recommended) ✔  ${desc}\n  2. Sonnet\n  3. Opus\n  4. Haiku`)}`;
+    const toDefault = (pane: string, ackName: string): void => {
+      h.sh(`_reg_set ${ID} class default; _reg_set ${ID} routeapplied "class=opus"`);
+      after('model', pane); after('s', ACK_MODEL(ackName));
+    };
+    for (const [name, desc] of [['the (currently X) form', 'Use the default model (currently Fable 5)'], ['the subscription form', 'Fable 5 · Most capable for complex work']] as const) {
+      it(`class=default types the Opus row (Down, Down) when the Default row says Fable: ${name}`, () => {
+        toDefault(FABLE_PICKER(desc), 'Opus 5');
+        h.sh(`${TMUX_STUB} _route_apply_now ${ID}`);
+        expect(keys()).toEqual(['-l /model', 'Enter', 'Down', 'Down', '-l s']);
+      });
+    }
+    it('the journal says what was typed: a `model default` row AND a `model opus` row', () => {
+      toDefault(FABLE_PICKER('Use the default model (currently Fable 5)'), 'Opus 5');
+      h.sh(`${TMUX_STUB} _route_apply_now ${ID}`);
+      const rows = (h.reg(ID, 'typed') ?? '').split('\n').filter((l) => / model /.test(l)).map((l) => l.replace(/^\d+ /, ''));
+      expect(rows).toEqual(['model default', 'model opus']);
+    });
+    it('a Default row that names Opus still types the Default row', () => {
+      toDefault(FABLE_PICKER('Use the default model (currently Opus 5)'), 'Opus 5');
+      after('s', ACK_MODEL('Opus 5 (default)'));
+      h.sh(`${TMUX_STUB} _route_apply_now ${ID}`);
+      expect(keys()).toEqual(['-l /model', 'Enter', '-l s']);
+    });
   });
 
   it('(4) a class write VOIDS a standing degraded stamp — the tap is not silently a no-op', () => {
@@ -1244,7 +1271,7 @@ describe('the read-back — a class the pane already runs is recorded, never typ
   });
 
   it('ROUTE_READBACK_FRESH is USAGE_FRESH_S — the age the fleet row calls stale', () => {
-    const m = /^ROUTE_READBACK_FRESH=(\d+)\b/m.exec(fs.readFileSync(CCD, 'utf8'));
+    const m = /^ROUTE_READBACK_FRESH=(\d+)\b/m.exec(ccdSource());
     expect(m, 'ccd/ccd no longer defines ROUTE_READBACK_FRESH= at column 0').not.toBeNull();
     expect(Number(m![1])).toBe(USAGE_FRESH_S);
   });

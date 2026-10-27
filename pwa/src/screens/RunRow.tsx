@@ -14,7 +14,7 @@
 import { memo } from 'react';
 import type { ReactNode } from 'react';
 import {
-  type FleetSession, type RunSummary, graphReadCount, unmeasuredFields,
+  type FleetSession, type RunSpend, type RunSummary, graphReadCount, unmeasuredFields,
 } from '../../../shared/api';
 import {
   DISPATCH_GLYPH, RUN_GLYPH, RUN_WORD, childReclaimChip, childReclaimGone,
@@ -24,6 +24,8 @@ import {
 import { spawnVerdictChip } from '../fleet/spawnWords';
 import { GraphChip, LastSpawnChip, UnmeasuredChip } from '../fleet/chips';
 import { coordPresence } from '../fleet/coordWords';
+import { runSpendLine } from '../fleet/runSpendWords';
+import { useRunSpend } from './useRunSpend';
 import { formatAge, formatElapsed } from '../fleet/formatReset';
 import { navigate } from '../lib/router';
 import '../fleet/fleet.css';
@@ -52,6 +54,7 @@ export const RunRow = memo(function RunRow({
   programHasOpenRun,
   onAbandon,
   onResume,
+  loadSpend,
 }: {
   run: RunSummary;
   /** The shared tick, in MILLISECONDS (Task 3). The row derives its own
@@ -87,6 +90,8 @@ export const RunRow = memo(function RunRow({
   onAbandon: (run: RunSummary) => void;
   /** Opens the ResumeSheet for this row (spec §7.3). */
   onResume: (run: RunSummary) => void;
+  /** `GET /api/runs/:id`'s `spend` (D-6799), injected by the screen for the reason `loadCaps` is. */
+  loadSpend: (id: number) => Promise<RunSpend>;
 }): ReactNode {
   // The registry ladder's degrade note, same idiom as `SessionLine.tsx`'s own
   // (`.sess-unmeasured`, reused verbatim rather than a second `.run-…` class
@@ -148,6 +153,7 @@ export const RunRow = memo(function RunRow({
   // workspace. `childReclaimChip` is the one reader. The word and the sentence
   // are the server's, and this component picks neither.
   const reclaim = childReclaimChip(run);
+  const spendWords = runSpendLine(useRunSpend(run, loadSpend));
   const body = (
     <>
       <span className="run-glyph" aria-hidden="true">{RUN_GLYPH[state]}</span>
@@ -240,6 +246,15 @@ export const RunRow = memo(function RunRow({
         <span className="run-child-reclaim-sentence">{reclaim.line}</span>
       )}
       <UnmeasuredChip fields={degradedFields} />
+      {/* D-6799: what the run's sessions have spent. ONE line on its own wrapped
+          row (`.run-warn`'s idiom), at every width: the short half always, the
+          long half from 480px up (fleet.css). A measurement, never a warning. */}
+      {spendWords !== null && (
+        <span className="run-spend" data-testid="run-spend" data-measured={String(spendWords.measured)} title={spendWords.title}>
+          <span className="run-spend-short">{spendWords.short}</span>
+          {spendWords.long !== '' && <span className="run-spend-long">{spendWords.long}</span>}
+        </span>
+      )}
       {warnings.length > 0 && (
         // Its own wrapped LINE, not another inline cell: `.run-row` is
         // `flex-wrap: wrap`, so a `flex-basis: 100%` child becomes a sub-row

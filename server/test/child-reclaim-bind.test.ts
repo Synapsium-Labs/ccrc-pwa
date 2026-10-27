@@ -62,7 +62,7 @@ const harness = (io: FleetIO = localIO, prStateOut = `${noPrLine}\n`, birth = mi
   const verbs: string[] = [];
   const run: Runner = async (_cmd, args) => {
     verbs.push(args[0] ?? '');
-    return args[0] === 'pr-state' ? { code: 0, stdout: prStateOut, stderr: '' } : { code: 0, stdout: '', stderr: '' };
+    return args[0] === 'pr-state' ? { ran: true, code: 0, stdout: prStateOut, stderr: '' } : { ran: true, code: 0, stdout: '', stderr: '' };
   };
   const base = testDeps(home, run);
   const deps: ChildSpentDeps = { io, cfg: base.cfg, runCcd: base.runCcd };

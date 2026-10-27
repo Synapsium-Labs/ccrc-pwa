@@ -32,7 +32,7 @@ import type { Runner } from '../src/exec.js';
 import type { BuildInfo } from '../../shared/buildinfo.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
-import { okRuns } from './coordReadHelpers.js';
+import { okRuns, parentOfSession } from './coordReadHelpers.js';
 
 const TOKEN = 'f'.repeat(64);
 const headers = { 'x-ccrc-mail-token': TOKEN };
@@ -69,7 +69,7 @@ const seedFleet = (home: string): void => {
 const noPrLine = (id: string): string =>
   JSON.stringify({ id, rows: [], baseShort: 'main', branch: `ws/${id}`, ahead: 1, tip: 'f'.repeat(40), checkedAt: 1 });
 const runner: Runner = async (_cmd, args) =>
-  (args[0] === 'pr-state' ? { code: 0, stdout: `${noPrLine(CHILD)}\n`, stderr: '' } : { code: 0, stdout: '', stderr: '' });
+  (args[0] === 'pr-state' ? { ran: true, code: 0, stdout: `${noPrLine(CHILD)}\n`, stderr: '' } : { ran: true, code: 0, stdout: '', stderr: '' });
 const stamp = (sha: string, version?: string): BuildInfo => ({
   sha, ref: 'main', builtAt: '2026-10-18T00:00:00Z', dirty: false, ...(version !== undefined ? { version } : {}),
 });
@@ -135,7 +135,7 @@ describe('POST /api/runs — the fleet carries the client (D-5298)', () => {
     const w = await openApp(home); app = w.app;
     const res = await post(app, { ...OPEN, ...attributed(PARENT), sessionId: CHILD });
     expect(res.statusCode).toBe(200);
-    expect(w.coord.parentOfSession(CHILD)).toBe(PARENT);
+    expect(parentOfSession(w.coord, CHILD)).toBe(PARENT);
     expect(unattributedCount(w.coord)).toBe(0);
   });
 
@@ -152,7 +152,7 @@ describe('POST /api/runs — the fleet carries the client (D-5298)', () => {
     expect(res.statusCode).toBe(502);
     expect(res.json()).toMatchObject({ ok: false, error: 'registry-unmeasurable' });
     expect(okRuns(w.coord.runs()), 'a refused open left a planned orphan').toHaveLength(0);
-    expect(w.coord.parentOfSession(half)).toBeNull();
+    expect(parentOfSession(w.coord, half)).toBeNull();
   });
 
   it('not a child: naming an existing row with no `.child` is 409 not-a-child, and that root stays unbound', async () => {
@@ -165,7 +165,7 @@ describe('POST /api/runs — the fleet carries the client (D-5298)', () => {
     expect(okRuns(w.coord.runs())).toHaveLength(0);
     // Its next question still reaches the operator: no run names it, so no
     // parent answers for it.
-    expect(w.coord.parentOfSession(ROOT_TWO)).toBeNull();
+    expect(parentOfSession(w.coord, ROOT_TWO)).toBeNull();
   });
 
   it('a run naming a not-yet-registered id is accepted (a dispatch opens its run before ws-add makes the row)', async () => {
@@ -185,7 +185,7 @@ describe('POST /api/runs — the fleet carries the client (D-5298)', () => {
     const res = await post(app, { ...OPEN, program: 'program-b', wave: 1, waveOf: 1, ...attributed(FOREIGN), sessionId: CHILD });
     expect(res.statusCode).toBe(409);
     expect(res.json()).toMatchObject({ ok: false, refused: 'project-mismatch', by: 'project-b' });
-    expect(w.coord.parentOfSession(CHILD)).toBe(PARENT);
+    expect(parentOfSession(w.coord, CHILD)).toBe(PARENT);
   });
 });
 

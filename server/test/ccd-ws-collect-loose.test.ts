@@ -9,7 +9,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { makePrHarness, type PrHarness } from './ccdPrHelpers.js';
-import { CCD } from './ccdWsHelpers.js';
+import { CCD, ccdSource } from './ccdWsHelpers.js';
 import { eventsOf } from './lifecycleHelpers.js';
 import { GAP_LOG, WRONG_TOKEN, crashAt, docOf, gapAt, gaps, holderAt, inoAt, killHolder, type Run } from './wsCollectFixture.js';
 
@@ -130,7 +130,7 @@ describe.skipIf(!LINUX)('the census', () => {
   }, 60_000);
 
   it('is bounded: past COLLECT-POPULATION-MAX it is truncated, and the bound is 1,024', () => {
-    expect(fs.readFileSync(CCD, 'utf8')).toContain('WS_LOOSE_CENSUS_MAX=1024');
+    expect(ccdSource()).toContain('WS_LOOSE_CENSUS_MAX=1024');
     for (const n of ['e1', 'e2', 'e3', 'e4', 'e5']) mkLoose(n, 'file');
     const c = census('WS_LOOSE_CENSUS_MAX=3;');
     expect(c['truncated']).toBe(true);
@@ -232,6 +232,21 @@ describe.skipIf(!LINUX)('the audit: ws-audit --loose-hex <hex> --collect', () =>
     expect(verdictOf('stray-dir', clockAfter(p, 49))).toBe('containment-unproven');
   }, 60_000);
 
+  it('a loose directory of many fixture clones is collectable; more `.git` files than the cap (lowered to 64 here) is unmeasured `checkouts-cap`', () => {
+    const p = mkLoose('stray-dir');
+    for (let i = 0; i < 70; i++) fs.mkdirSync(path.join(p, `repo-${i}`, '.git'), { recursive: true });
+    expect(verdictOf('stray-dir', `${clockAfter(p, 49)} WS_LEAF_CHECKOUTS_CAP=64;`), 'clones are not counted against the cap')
+      .toBe('collectable');
+    fs.mkdirSync(path.join(p, 'inner'));
+    for (let i = 0; i < 65; i++) {
+      fs.mkdirSync(path.join(p, `w${i}`));
+      fs.writeFileSync(path.join(p, `w${i}`, '.git'), `gitdir: ${path.join(p, 'inner')}\n`);
+    }
+    const d = docFor(audit('stray-dir', `${clockAfter(p, 49)} WS_LEAF_CHECKOUTS_CAP=64;`));
+    expect(d['verdict']).toBe('unmeasured');
+    expect(d['collect']).toMatchObject({ unmeasured: 'checkouts-cap' });
+  }, 60_000);
+
   it('pause answers paused, last', () => {
     const p = mkLoose('stray-dir');
     fs.writeFileSync(path.join(regDir(), 'reclaim-paused'), '');
@@ -291,7 +306,7 @@ describe.skipIf(!LINUX)('pressure and the floor', () => {
   }, 60_000);
 
   it('_disk_pressure reads df: bytes or inodes at 92 percent or more, nothing else', () => {
-    expect(fs.readFileSync(CCD, 'utf8')).toContain('_DISK_CRITICAL_PCT=92');
+    expect(ccdSource()).toContain('_DISK_CRITICAL_PCT=92');
     const bin = path.join(h.home, 'fakebin'); fs.mkdirSync(bin);
     const df = (bytes: number, inodes: number): void => {
       fs.writeFileSync(path.join(bin, 'df'), `#!/bin/sh\nif [ "$1" = -Pk ]; then printf 'Filesystem 1024-blocks Used Available Capacity Mounted\\nx 1000 ${bytes * 10} ${1000 - bytes * 10} ${bytes}%% /\\n'; else printf 'Filesystem Inodes IUsed IFree IUse%% Mounted\\nx 1000 ${inodes * 10} ${1000 - inodes * 10} ${inodes}%% /\\n'; fi\n`, { mode: 0o755 });
@@ -497,7 +512,7 @@ describe('the surface it rides', () => {
   }, 60_000);
 
   it('the launcher protects ws-audit --loose-hex <v> --collect and nothing wider (the body’s guard matches)', () => {
-    const src = fs.readFileSync(CCD, 'utf8');
+    const src = ccdSource();
     expect(src).toContain('"${2-}" == --loose-hex && "${4-}" == --collect');
     const entry = fs.readFileSync(path.join(path.dirname(CCD), 'ccd-entry.py'), 'utf8');
     expect(entry).toContain("folds_to(argv[1], '--loose-hex') and folds_to(argv[3], '--collect')");

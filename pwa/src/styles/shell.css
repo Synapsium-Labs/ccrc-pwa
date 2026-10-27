@@ -104,7 +104,10 @@
      so hiding what was then its only door there was the bug, not a feature.
      AccountsStrip now always renders a non-empty `.accounts-strip`, with a quiet
      placeholder body in that state, so this bar is never `:empty` and the old
-     auto-hide rule is gone. */
+     auto-hide rule is gone.
+
+     Both skins mount that strip here, as the lanes row: under the bar's line,
+     inside this header, every lane a card (T2c, D-6329). */
   .shell-accounts {
     grid-column: 1 / -1;
     grid-row: 1;
@@ -112,12 +115,13 @@
     border-bottom: 1px solid var(--edge-subtle);
     background: var(--bg-surface);
   }
-  /* One gauge per account across the width. 260px is all a gauge needs now that
-     the name sits beside its windows rather than above them, so all four stay
-     side by side down to ~1100px of viewport; below that auto-fit drops to fewer
-     columns and the strip grows a row rather than truncating a readout. */
+  /* One card per lane across the width, as many to a line as the width holds, and the end cell, All accounts, in the
+     track after the last card. A card's floor is only what its name and two windows need now that the name sits beside
+     them rather than above them; below that floor the tracks drop to fewer to a line and the row wraps onto another
+     line rather than truncating a readout. auto-fill, not auto-fit, so the tracks keep a card's width when the last
+     line holds fewer cards than the line. */
   .shell-accounts .accounts-strip {
-    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
     gap: var(--sp-2);
     margin: 0;
   }
@@ -137,13 +141,25 @@
     border: 1px solid var(--edge-subtle);
     border-radius: var(--r-md);
   }
+  /* The end cell sits inline in the next track here, not on a row of its own as on a phone. */
+  .shell-accounts .accounts-end {
+    grid-column: auto;
+  }
+  /* The lane's name gives first: a long one is cut with an ellipsis (its full name is the label's `title`) so the
+     windows keep their countdowns inside the card. */
   .shell-accounts .account-gauge-label {
-    flex: none;
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
     font-size: var(--fs-meta);
   }
+  /* The windows never shrink below what they draw, so only the name gives. `min-width: min-content` did not hold them:
+     a grid of rows with a 1fr track measures narrower than its rows draw, so a long name's card shrank them and the
+     countdowns spilled out of the card (lanes-row.browser.test.ts). */
   .shell-accounts .acct-rows {
-    flex: 1;
-    min-width: 0;
+    flex: 1 0 auto;
     gap: 1px;
   }
   /* The meter is the only elastic column, so it — never a number — is what gives
@@ -161,6 +177,7 @@
   }
   .shell-accounts .acct-win {
     color: var(--ink-secondary);
+    font-size: var(--fs-meta);
   }
   /* The percentage leads: primary ink, medium, one step up in size. */
   .shell-accounts .acct-pct {
@@ -170,6 +187,10 @@
   }
   .shell-accounts .acct-reset {
     color: var(--ink-secondary);
+    font-size: var(--fs-meta);
+  }
+  .shell-accounts .acct-unread {
+    font-size: var(--fs-meta);
   }
   /* No height for the meter: it is `Meter`'s, from `--meter-h` (D-5098), so
      the strip's meters take the skin's shape like every other. */

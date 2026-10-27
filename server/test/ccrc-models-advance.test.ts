@@ -143,7 +143,7 @@ function installTree(h: string, roster: unknown, o: TreeOpts = {}): void {
 function env(h: string, extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
   const inherited: NodeJS.ProcessEnv = { ...process.env };
   for (const k of ['CCRC_CODEX_PROBE_S', 'CCRC_CODEX_READY_S', 'CCGPT_CONFIG', 'CCRC_MODELS_CANARY_S',
-    'CCRC_MODELS_ADVANCE_BUDGET_S', 'CCRC_MODELS_LOCK_S', 'CCRC_MODELS_NOW', 'CCRC_MODELS_PROBE_FIXTURE',
+    'CCRC_MODELS_ADVANCE_BUDGET_S', 'CCRC_BACKUP_KEEP', 'CCRC_BACKUP_DATA_KEEP', 'CCRC_VERSIONS_KEEP', 'CCRC_UPDATE_HEALTH_S', 'CCRC_UPDATE_DEADLINE_MS', 'CCRC_RELEASE_BASE_URL', 'CCRC_MODELS_LOCK_S', 'CCRC_MODELS_NOW', 'CCRC_MODELS_PROBE_FIXTURE',
     'CCD_TIMEOUT_KILL_AFTER', 'MODELS_AUTO_DEADLINE', 'MODELS_AUTO_TAIL_S', 'CCD_TIMEOUT_CAPABILITY',
     '_CCD_TIMEOUT_PROVED_PATH', 'OP_HANG', 'OP_GARBAGE', 'OP_REFUSE', 'OP_PLAN_RAW', 'OP_PLAN_EXTRA', 'OP_PLAN_PREPEND', 'OP_PLAN_WHY', 'OP_FAIL_ADVANCE_WRITE', 'BASH_ENV', 'ENV',
     'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'http_proxy', 'https_proxy', 'all_proxy', 'NODE_USE_ENV_PROXY']) {
@@ -571,6 +571,34 @@ describe.skipIf(PY === null || !HAS_FLOCK)('the advance step in the hourly refre
     expect(laneProxyRequests(proxy)).toEqual([]);
     expect(notifyCalls()).toEqual([]);
     expect(r.stderr.split('\n').filter((l) => l.includes('CCRC_MODELS_ADVANCE_BUDGET_S'))).toEqual([BUDGET_OFF_LINE]);
+  }, T);
+
+  it('W24-M1: the advance budget from ccrc.env turns the step off; the environment wins', async () => {
+    // D-6595: the budget is a setting, read through `_ccrc_knob`, so the models timer, which runs with no shell, honours the box's file.
+    await setup();
+    tier(0);
+    fs.rmSync(models('lane-a.advance.json'));
+    fs.writeFileSync(join(home, '.ccrc', 'ccrc.env'), 'CCRC_MODELS_ADVANCE_BUDGET_S=0\n');
+    let r = refresh({}, spy('_models_advance_lane', 'adv-calls', '"$2"'));
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(lines('adv-calls'), 'a lane was entered with the file\'s budget of 0').toEqual([]);
+    expect(r.stderr).not.toContain('CCRC_MODELS_ADVANCE_BUDGET_S');
+    r = refresh({ CCRC_MODELS_ADVANCE_BUDGET_S: '250' }, spy('_models_advance_lane', 'adv-calls', '"$2"'));
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(lines('adv-calls'), 'the environment\'s 250 enters the lane, as the default does').toHaveLength(1);
+  }, T);
+
+  it('W24-M2: a budget line ccrc cannot read turns the step off and says why', async () => {
+    await setup();
+    tier(0);
+    fs.rmSync(models('lane-a.advance.json'));
+    fs.writeFileSync(join(home, '.ccrc', 'ccrc.env'), 'export CCRC_MODELS_ADVANCE_BUDGET_S=250\n');
+    const r = refresh({}, spy('_models_advance_lane', 'adv-calls', '"$2"'));
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(lines('adv-calls'), 'a lane was entered with the budget unread').toEqual([]);
+    expect(r.stderr.split('\n').filter((l) => l.includes('CCRC_MODELS_ADVANCE_BUDGET_S'))).toEqual(['ccrc: CCRC_MODELS_ADVANCE_BUDGET_S cannot be '
+      + 'measured: ~/.ccrc/ccrc.env names it on a line this reader does not take (it reads only a plain KEY=value line), so the advance '
+      + 'step is off for this run']);
   }, T);
 
   it("the advance step runs after every lane's refresh, so a canary never delays another lane's LiteLLM render", async () => {
@@ -2201,4 +2229,123 @@ describe.skipIf(PY === null || !HAS_FLOCK)('the plan read\'s why, and the gramma
       expect(laneProxyRequests(proxy).map((q) => q.model)).toEqual(['model-6.1-gamma']);
     }, T);
   });
+});
+
+// ══ CODEX BRIDGE STAGE 2, TASK 11b: the hourly auto-advance on a `direct` lane ════════════════════════════════════════
+// A `direct` lane runs the bridge tier alone, on the shim's port, and answers its lane probe in the bridge's shape,
+// `{"lane": <id>, "mode": "direct"}`. The step's readiness is the lane's own mode tiers (`_codex_mode_tiers`), the
+// bridge alone here, with no check-only LiteLLM comparison; the canary probes the direct shape; and the refresh's render
+// keeps `litellm.yaml` current but asks no tier and so never stops, restarts or starts one. The lane turns `direct`
+// through its roster row (`exec.bridge`), which the next refresh's materialise renders into `lane.json`.
+describe.skipIf(PY === null || !HAS_FLOCK)('the advance step on a direct lane (codex bridge Stage 2, Task 11b)', () => {
+  /** `setup`, then lane-a's roster row made `direct` and one more hour with the step off, so `lane.json` reads `direct`
+   *  before the case begins; the logs that hour wrote are cleared. */
+  async function setupDirect(o: Parameters<typeof setup>[0] = {}): Promise<void> {
+    await setup(o);
+    const p = join(home, '.ccrc', 'accounts.json');
+    const roster = JSON.parse(fs.readFileSync(p, 'utf8')) as { accounts: { id: string; exec: Record<string, unknown> }[] };
+    roster.accounts.find((a) => a.id === 'lane-a')!.exec['bridge'] = 'direct';
+    fs.writeFileSync(p, `${JSON.stringify(roster, null, 2)}\n`);
+    const again = refresh({ CCRC_MODELS_ADVANCE_BUDGET_S: '0' });
+    expect(again.code, again.stdout + again.stderr).toBe(0);
+    const laneJson = JSON.parse(fs.readFileSync(join(home, '.ccrc', 'codex', 'lane-a', 'lane.json'), 'utf8')) as Record<string, unknown>;
+    expect(laneJson['bridge'], 'the refresh did not render the direct mode into lane.json').toBe('direct');
+    for (const f of ['lane-calls', 'op-calls']) fs.rmSync(join(home, f), { force: true });
+  }
+  /** The tier stub's answer for one tier of lane-a, whatever the shared default says. */
+  const tierOf = (which: 'litellm' | 'shim' | 'bridge', rc: number): void => {
+    fs.mkdirSync(join(home, 'fake'), { recursive: true });
+    fs.writeFileSync(join(home, 'fake', `tier-lane-a-${which}`), `${rc}\n`);
+  };
+  const yamlPath = (): string => join(home, '.ccrc', 'codex', 'lane-a', 'litellm.yaml');
+
+  it('the advance step moves a class on a direct lane, canary first', async () => {
+    await setupDirect({ opStub: OP_STUB });
+    tierOf('bridge', 0);
+    laneProxyAnswersAs(proxy, 'lane-a', 'direct');
+    const r = refresh();
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(rowOf(r)).toEqual({ ...QUIET_ROW, advance: [MOVED] });
+    expect(classes()['opus']).toBe('model-6.1-gamma');
+    // The real canary probed the direct shape and sent its one keyed request, and the commit carries its result: the
+    // canary ran before the commit.
+    expect(laneProxyGets(proxy).map((g) => g.path)).toEqual(['/ccgpt/lane']);
+    expect(laneProxyRequests(proxy).map((q) => q.model)).toEqual(['model-6.1-gamma']);
+    const ops = opCalls().map((l) => l.split(' ')[0]!);
+    const commit = opCalls().find((l) => l.startsWith('advance-commit'));
+    expect(commit, `no commit: ${opCalls().join(' | ')}`).toContain('--canary passed');
+    // One `litellm` op only, the render's own compare in the first pass (the catalogue is unchanged, so it writes
+    // nothing): the step's check-only comparison, a second `litellm` op after the plan, is not asked on a direct lane.
+    expect(ops.filter((n) => n === 'litellm'), ops.join(' ')).toHaveLength(1);
+    expect(ops.indexOf('litellm')).toBeLessThan(ops.indexOf('advance-plan'));
+    // The bridge alone is asked, and nothing is stopped, restarted or started.
+    expect(laneCalls()).toEqual(['ours lane-a bridge']);
+    expect(notifyCalls()).toEqual(['--push\tlane-a: opus model-5.6-gamma → model-6.1-gamma']);
+  }, T);
+
+  it('the hourly refresh on a direct lane renders litellm.yaml and starts no tier', async () => {
+    await setupDirect();
+    tierOf('bridge', 0);
+    tierOf('litellm', 0);
+    const before = fs.readFileSync(yamlPath(), 'utf8');
+    expect(before).not.toContain('model-6-epsilon');
+    fs.writeFileSync(rawPath(), JSON.stringify(stepRaw({ models: [...STEP_CATALOGUE.models, stepRow('model-6-epsilon')] })));
+    const r = refresh();
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(rowOf(r)).toMatchObject({ id: 'lane-a', ok: true, litellm: 'rendered' });
+    expect(fs.readFileSync(yamlPath(), 'utf8')).toContain('model-6-epsilon');
+    // The render asked no tier: a LiteLLM tier that answers "ours, running" would have been stopped and started again.
+    expect(laneCalls().filter((l) => /^(stop|start) /.test(l)), laneCalls().join(' | ')).toEqual([]);
+    expect(laneCalls()).not.toContain('ours lane-a litellm');
+  }, T);
+
+  it('a direct lane whose bridge is down waits silently: no canary, no move', async () => {
+    await setupDirect();
+    tierOf('litellm', 0);
+    tierOf('shim', 0);
+    laneProxyAnswersAs(proxy, 'lane-a', 'direct');
+    const r = refresh();
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(rowOf(r)).toEqual(QUIET_ROW);
+    expect(classes()['opus']).toBe('model-5.6-gamma');
+    expect(laneProxyRequests(proxy)).toEqual([]);
+    expect(laneCalls()).toEqual(['ours lane-a bridge']);
+  }, T);
+
+  it('a lane.json whose mode cannot be read ends the step with no event and asks no tier', async () => {
+    await setup();
+    tier(0);
+    const p = join(home, '.ccrc', 'codex', 'lane-a', 'lane.json');
+    const j = JSON.parse(fs.readFileSync(p, 'utf8')) as Record<string, unknown>;
+    delete j['bridge'];
+    fs.writeFileSync(p, `${JSON.stringify(j, null, 2)}\n`);
+    const r = sourced(lane(250));
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(JSON.parse(r.stdout)).toEqual([]);
+    expect(laneCalls()).toEqual([]);
+    expect(laneProxyRequests(proxy)).toEqual([]);
+    expect(r.stderr, 'the unreadable mode is silent, as an unmeasured tier is').toBe('');
+  }, T);
+
+  // The render's rc-1 arm (Task 11b fix round 1, I1): a lane.json with no `bridge` (one written before Task 10) reads
+  // rc 1 from the mode reader, and the hand verb `ccrc models litellm <id>` renders with no materialise before it, so
+  // the render meets that rc there. It is today's render: the LiteLLM tier is asked and, running the previous list,
+  // stopped and started on the new one. The stop stand-in leaves the tier down, as a real stop does, so the re-check
+  // right before the restart reads 1.
+  it('a lane.json whose mode cannot be read leaves the hand render as it was: it asks the LiteLLM tier and restarts it', async () => {
+    await setup();
+    tierOf('litellm', 0);
+    const p = join(home, '.ccrc', 'codex', 'lane-a', 'lane.json');
+    const j = JSON.parse(fs.readFileSync(p, 'utf8')) as Record<string, unknown>;
+    delete j['bridge'];
+    fs.writeFileSync(p, `${JSON.stringify(j, null, 2)}\n`);
+    fs.appendFileSync(yamlPath(), '# the previous rendering\n');
+    const stopDown = '_codex_stop_tier() { printf \'stop %s %s\\n\' "$1" "$2" >> "$HOME/lane-calls"; '
+      + 'printf \'1\\n\' > "$HOME/fake/tier-$1-$2"; printf \'stopped\\n\'; }';
+    const r = sourced('cmd_models litellm lane-a', {}, stopDown);
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(oneObject(r)).toMatchObject({ changed: true, restarted: true });
+    expect(fs.readFileSync(yamlPath(), 'utf8')).not.toContain('# the previous rendering');
+    expect(laneCalls()).toEqual(['ours lane-a litellm', 'stop lane-a litellm', 'ours lane-a litellm', 'start lane-a litellm']);
+  }, T);
 });

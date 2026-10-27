@@ -48,12 +48,12 @@
 // left as plain `expect` — there is nothing for a hard failure to hide there.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { readFileSync } from 'node:fs';
-import { CCD, makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
+import { makeCcdHarness, type CcdHarness, ccdSource } from './ccdWsHelpers.js';
 import {
   LIFECYCLE_ACTS, LC_ACT_UNKNOWN, LIFECYCLE_OUTCOMES, LC_OUTCOME_UNKNOWN, LC_DIR_NAME,
 } from '../../shared/api.js';
 
-const ccdSrc = readFileSync(CCD, 'utf8');
+const ccdSrc = ccdSource();
 
 let h: CcdHarness;
 beforeEach(() => { h = makeCcdHarness('ccrc-lc-vocab-'); });

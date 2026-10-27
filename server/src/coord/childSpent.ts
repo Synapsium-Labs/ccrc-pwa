@@ -8,6 +8,7 @@ import { isFullLine, parsePrLines, phaseFor, type CcdPrLine, type CcdPrRow } fro
 import { readPrHistory } from './prhistory.js';
 import type { PrLineageEntry } from './store.js';
 import type { PrPhase } from '../../../shared/api.js';
+import { runNamesSession } from './runBinding.js';
 
 /**
  * Whether a CHILD is SPENT — its branch has ever had a PR, in any phase
@@ -147,7 +148,7 @@ export function childBirthOf(read: ChildBirthRunRead, sessionId: string): ChildB
   if (read.run.sessionBornAt === null) {
     return { kind: 'unplaceable', detail: 'the minting run recorded no birth for this session' };
   }
-  if (read.run.sessionId !== sessionId) {
+  if (!runNamesSession(read.run, sessionId)) {
     return { kind: 'unplaceable', detail: 'the minting run is bound to another session' };
   }
   if (read.run.sessionBornFor !== read.run.sessionId) {

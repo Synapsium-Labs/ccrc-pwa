@@ -43,6 +43,15 @@ export const guardRunner = (inner: Runner): Runner => async (cmd, args) => {
   return inner(cmd, args);
 };
 
+/** Puts a suite's fake wall clock on `Deps.monotonicMs`, in place. Since OA-C4 (#803) every lane throttles on the monotonic
+ *  clock, so a suite that moves time with `vi.setSystemTime` or a mocked `Date.now` must hand the watcher a monotonic clock that
+ *  moves with it, or the throttle never elapses. A suite that already injects its own `monotonicMs` keeps it. */
+export function withFakeClock<T extends object>(deps: T): T {
+  const d = deps as { monotonicMs?: () => number };
+  d.monotonicMs ??= () => Date.now();
+  return deps;
+}
+
 /** Deps against a throwaway fixture home; default runner fails every exec (all sessions dead).
  *
  *  Both capabilities `Deps` carries are built from the SAME guarded runner:
@@ -52,7 +61,7 @@ export const guardRunner = (inner: Runner): Runner => async (cmd, args) => {
  *  pin each use site independently. */
 export function testDeps(
   home: string = mkTmp('ccrc-'),
-  run: Runner = async () => ({ code: 1, stdout: '', stderr: '' }),
+  run: Runner = async () => ({ ran: true, code: 1, stdout: '', stderr: '' }),
 ): Deps {
   const guarded = guardRunner(run);
   seedRoster(home);

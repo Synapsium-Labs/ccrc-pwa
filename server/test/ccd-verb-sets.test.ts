@@ -14,7 +14,7 @@
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import fs from 'node:fs';
-import { makeCcdHarness, CCD, type CcdHarness } from './ccdWsHelpers.js';
+import { makeCcdHarness, CCD, type CcdHarness, ccdSource } from './ccdWsHelpers.js';
 import { CCD_ARGV } from '../src/ccdargv.js';
 import { CCD_ARGV_SAMPLES } from './ccdArgvSamples.js';
 import { CCD_CAPABILITY_TOKENS } from './ccdCapTokens.js';
@@ -98,12 +98,14 @@ const SERVER_NEVER_SENDS: Readonly<Record<string, string>> = {
   'account-pane': 'the account-connection pane `ccrc`\'s account lanes name; no server route builds it on this tree',
   attach: 'a terminal attach to a tmux session',
   caps: 'the agent runs it itself at start and reports the list in its ready frame',
+  'carry-dedupe': 'the operator\'s backlog collector at a terminal (#317); its `--apply` deletes, so no route builds it',
   clip: 'a terminal clipboard helper',
   list: 'the listing alias of `ls`, at a terminal',
   ls: 'the operator\'s listing at a terminal',
   menu: 'the interactive picker at a terminal',
   pick: 'the picker\'s alias, at a terminal',
   'path-users': 'the read-only probe entry for ccd-tmp-sweep and operators; the server does not send it yet',
+  'scratch-rescue': 'the temp sweep\'s box-local act (D-6632), never a server route',
   prefer: 'the operator sets a session\'s home account at a terminal',
   'swap-self': 'run from inside the session\'s own pane, never from outside it',
   supervise: 'the systemd unit\'s own entry point, never a remote verb',
@@ -125,7 +127,7 @@ describe('ccd\'s four verb lists are one set (D-6051, ARCH-23)', () => {
 
   beforeAll(() => {
     h = makeCcdHarness('ccrc-ccd-verb-sets-');
-    block = dispatcherBlock(fs.readFileSync(CCD, 'utf8'));
+    block = dispatcherBlock(ccdSource());
     labels = armLabels(block);
     caps = h.sh('cmd_caps').split('\n').filter(Boolean);
     usage = usageVerbs(h);

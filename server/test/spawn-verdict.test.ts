@@ -4,14 +4,14 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { SPAWN_VERDICTS, isSpawnVerdict, spawnVerdict } from '../../shared/api.js';
-import { CCD } from './ccdWsHelpers.js';
+import { ccdSource } from './ccdWsHelpers.js';
 
 /** The rcs ccd's OWN spawn table names: the numeric arms of `_spawn_settle`'s
  *  `case "$prompt_rc" in … esac`, read off the shipped file. A hand-kept list
  *  here is how rc 6 reached the fleet as `unknown`: ccd gained the arm, the
  *  list did not, and every suite stayed green. */
 const ccdSpawnArms = (): number[] => {
-  const src = readFileSync(CCD, 'utf8');
+  const src = ccdSource();
   const opener = 'case "$prompt_rc" in';
   expect(src.split(opener).length - 1, `ccd must hold exactly one \`${opener}\``).toBe(1);
   const at = src.indexOf(opener);

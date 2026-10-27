@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { editHintShown, freeTextRow, hasMenu, parseDialog, paneOptionRows, paneState, turnRunning } from '../src/pane/dialog.js';
 import { reviewQuestions, reviewRows } from '../../shared/ask-menu.js';
 import { FleetWatcher } from '../src/watch.js';
-import { Bus } from '../src/bus.js';
+import { Bus, type HookReading, type PaneReading } from '../src/bus.js';
 import { Tmux, type Runner } from '../src/exec.js';
 import { configDirFor, loadConfig } from '../src/config.js';
 import { localIO, type FleetIO } from '../src/io.js';
@@ -233,41 +233,51 @@ const seedSession = (home: string, id: string, wrapper: string) => {
 };
 
 describe('FleetWatcher dialog detection', () => {
-  it('emits dialog once, marks dialogPending, then clears', async () => {
+  it('publishes each tick\'s pane once for the session\'s feed, sends no dialog frame of its own, marks dialogPending, then clears', async () => {
     const home = mkTmp('ccrc-');
     seedRoster(home);
     seedSession(home, 'claude-a-project-f', 'claude-a');
     let pane = fixture('ask-user-question.txt');
+    let capturedAt = 0;   // when the (slow) capture returned
     const run: Runner = async (_cmd, args) => {
-      if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
-      if (args[0] === 'list-panes') return { code: 0, stdout: '40613\n', stderr: '' };
-      if (args[0] === 'capture-pane') return { code: 0, stdout: pane, stderr: '' };
-      return { code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'has-session') return { ran: true, code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: '40613\n', stderr: '' };
+      if (args[0] === 'capture-pane') {
+        await new Promise((r) => setTimeout(r, 30));
+        capturedAt = Date.now();
+        return { ran: true, code: 0, stdout: pane, stderr: '' };
+      }
+      return { ran: true, code: 0, stdout: '', stderr: '' };
     };
     const cfg = loadConfig({ CCRC_HOME: home });
     const deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue() };
     const bus = new Bus();
     const msgs: SessionStreamMsg[] = [];
     const fleets: FleetSession[][] = [];
+    const panes: Array<string | null> = [];
+    const looks: PaneReading[] = [];
     bus.on('session:claude-a-project-f', (m) => msgs.push(m));
+    bus.on('pane:claude-a-project-f', (p) => { panes.push(p.pane); looks.push(p); });
     bus.on('fleet', (s) => fleets.push(s));
     const watcher = new FleetWatcher(deps, bus);
 
     await watcher.tick();
-    expect(msgs).toHaveLength(1);
-    expect(msgs[0]!.type).toBe('dialog');
-    const dialog = (msgs[0] as { type: 'dialog'; dialog: Dialog }).dialog;
-    expect(dialog.parsed).toBe(true);
-    expect(dialog.options).toHaveLength(4);
+    expect(panes).toEqual([pane]);
+    // `at` is when the capture began (the answer gate), `doneAt` when it returned (the feed's freshness): a slow capture
+    // stamped only with its start would reach the feed already aged by its own duration.
+    expect(looks[0]!.at).toBeLessThan(capturedAt);
+    expect(looks[0]!.doneAt).toBeGreaterThanOrEqual(capturedAt);
+    expect(parseDialog(pane)!.options).toHaveLength(4);
     expect(fleets.at(-1)![0]!.dialogPending).toBe(true);
 
-    await watcher.tick(); // same dialog still up -> not re-emitted
-    expect(msgs).toHaveLength(1);
+    await watcher.tick(); // same dialog still up -> still published (the feed frames it), nothing sent here
+    expect(panes).toHaveLength(2);
 
-    pane = 'done\n❯ \n'; // dialog gone -> cleared + dialogPending false
+    pane = 'done\n❯ \n'; // dialog gone -> dialogPending false
     await watcher.tick();
-    expect(msgs).toHaveLength(2);
-    expect(msgs[1]).toEqual({ type: 'dialog_cleared' });
+    expect(panes).toHaveLength(3);
+    expect(panes[2]).toBe('done\n❯ \n');
+    expect(msgs).toEqual([]);   // the watcher's own dialog / dialog_cleared frames are gone: every stream dropped them
     expect(fleets.at(-1)![0]!.dialogPending).toBe(false);
   });
 });
@@ -287,12 +297,12 @@ describe('FleetWatcher hookstate wiring', () => {
     const uuid = '1'.repeat(36);
     seedSession(home, 'claude-a-project-f', 'claude-a'); // writes this same uuid
     const run: Runner = async (_cmd, args) => {
-      if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
-      if (args[0] === 'list-panes') return { code: 0, stdout: '40613\n', stderr: '' };
+      if (args[0] === 'has-session') return { ran: true, code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: '40613\n', stderr: '' };
       // A plain prompt, never a menu — dialogPending below is earned SOLELY
       // by the hookstate file, not by the pane detector.
-      if (args[0] === 'capture-pane') return { code: 0, stdout: 'done\n❯ \n', stderr: '' };
-      return { code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'capture-pane') return { ran: true, code: 0, stdout: 'done\n❯ \n', stderr: '' };
+      return { ran: true, code: 0, stdout: '', stderr: '' };
     };
     const cfg = loadConfig({ CCRC_HOME: home });
     writeFileSync(path.join(cfg.registryDir, 'claude-a-project-f.hookstate.json'), JSON.stringify({
@@ -301,13 +311,31 @@ describe('FleetWatcher hookstate wiring', () => {
       ask: { questions: [{ question: 'Full text nobody should see on a card', header: 'Pick one', options: [{ label: 'A' }, { label: 'B' }] }] },
       subagents: [{ name: 'reviewer', startedAt: Date.now() - 5000 }],
     }));
-    const deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue() };
+    let hookReadAt = 0;   // when the (slow) hookstate read returned
+    const io: FleetIO = {
+      ...localIO,
+      readFileMeasured: async (p) => {
+        const read = await localIO.readFileMeasured(p);
+        if (p.endsWith('.hookstate.json')) { await new Promise((r) => setTimeout(r, 30)); hookReadAt = Date.now(); }
+        return read;
+      },
+    };
+    const deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io, queue: new KeyedQueue() };
     const bus = new Bus();
     const fleets: FleetSession[][] = [];
+    const hooks: HookReading[] = [];
     bus.on('fleet', (s) => fleets.push(s));
+    bus.on('hook:claude-a-project-f', (h) => hooks.push(h));
     const watcher = new FleetWatcher(deps, bus);
 
     await watcher.tick();
+
+    // ARCH-52 (#787): the same raw read is published once for the session's feed. Without it the feed falls back to a
+    // hookstate read of its own on every reading, and the session pays two reads a tick again.
+    expect(hooks).toHaveLength(1);
+    expect(hooks[0]!.uuid).toBe(uuid);
+    expect(hooks[0]!.raw).toMatchObject({ ok: true, sessionId: uuid, identity: 'current' });
+    expect(hooks[0]!.at).toBeGreaterThanOrEqual(hookReadAt);   // stamped when the read returned, not at the sweep's start
 
     const s = fleets.at(-1)!.find((x) => x.id === 'claude-a-project-f')!;
     expect(s.hookState).toBe('waiting');
@@ -340,9 +368,9 @@ describe('FleetWatcher retain-don\'t-erase (Task 2, the heal side)', () => {
     let degrade = false;
     const io = degradedReadIO((p) => degrade && p.endsWith(`${id}.uuid`));
     const run: Runner = async (_cmd, args) => {
-      if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
-      if (args[0] === 'list-panes') return { code: 0, stdout: '40613\n', stderr: '' };
-      return { code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'has-session') return { ran: true, code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: '40613\n', stderr: '' };
+      return { ran: true, code: 0, stdout: '', stderr: '' };
     };
     const cfg = loadConfig({ CCRC_HOME: home });
     const deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io, queue: new KeyedQueue() };
@@ -385,7 +413,7 @@ describe('FleetWatcher retain-don\'t-erase (Task 2, the heal side)', () => {
 
     let degrade = false;
     const io = degradedReadIO((p) => degrade && p.endsWith(`${id}.wrapper`));
-    const run: Runner = async () => ({ code: 0, stdout: '', stderr: '' });
+    const run: Runner = async () => ({ ran: true, code: 0, stdout: '', stderr: '' });
     const deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io, queue: new KeyedQueue() };
     const watcher = new FleetWatcher(deps, new Bus());
     // `sweepTasks` throttles itself to once per TASK_SWEEP_MS — reset the
@@ -446,7 +474,7 @@ describe('FleetWatcher retain-don\'t-erase (Task 2, the heal side)', () => {
       ...localIO,
       readdir: async (p) => (blind && p === dir ? null : localIO.readdir(p)),
     };
-    const run: Runner = async () => ({ code: 0, stdout: '', stderr: '' });
+    const run: Runner = async () => ({ ran: true, code: 0, stdout: '', stderr: '' });
     const deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io, queue: new KeyedQueue() };
     const watcher = new FleetWatcher(deps, new Bus());
     const forceSweep = async (): Promise<void> => {
@@ -504,9 +532,9 @@ describe('FleetWatcher whole-fleet collapse (readdir -> null) fails shut (blocki
     let listable = true;
     const io: FleetIO = { ...localIO, readdir: async (p) => (listable ? localIO.readdir(p) : null) };
     const run: Runner = async (_cmd, args) => {
-      if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
-      if (args[0] === 'list-panes') return { code: 0, stdout: '40613\n', stderr: '' };
-      return { code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'has-session') return { ran: true, code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: '40613\n', stderr: '' };
+      return { ran: true, code: 0, stdout: '', stderr: '' };
     };
     const cfg = loadConfig({ CCRC_HOME: home });
     const deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io, queue: new KeyedQueue() };
@@ -557,9 +585,9 @@ describe('FleetWatcher whole-fleet collapse (readdir -> null) fails shut (blocki
     let listable = true;
     const io: FleetIO = { ...localIO, readdir: async (p) => (listable ? localIO.readdir(p) : null) };
     const run: Runner = async (_cmd, args) => {
-      if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
-      if (args[0] === 'list-panes') return { code: 0, stdout: '40613\n', stderr: '' };
-      return { code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'has-session') return { ran: true, code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: '40613\n', stderr: '' };
+      return { ran: true, code: 0, stdout: '', stderr: '' };
     };
     const cfg = loadConfig({ CCRC_HOME: home });
     const deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io, queue: new KeyedQueue() };
@@ -598,7 +626,7 @@ describe('FleetWatcher whole-fleet collapse (readdir -> null) fails shut (blocki
 
     let listable = true;
     const io: FleetIO = { ...localIO, readdir: async (p) => (listable ? localIO.readdir(p) : null) };
-    const run: Runner = async () => ({ code: 0, stdout: '', stderr: '' });
+    const run: Runner = async () => ({ ran: true, code: 0, stdout: '', stderr: '' });
     const deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io, queue: new KeyedQueue() };
     const watcher = new FleetWatcher(deps, new Bus());
     // `sweepTasks` throttles itself to once per TASK_SWEEP_MS — reset the

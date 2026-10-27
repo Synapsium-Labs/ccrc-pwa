@@ -16,6 +16,7 @@ import path from 'node:path';
 import { makeCcdHarness, CCD, type CcdHarness } from './ccdWsHelpers.js';
 import { holdProc, type Held } from './pathUsersFixture.js';
 import { fakeDf } from './tmpSweepHelpers.js';
+import { parseTmpSweepCensus } from '../src/tmpSweep.js';
 
 beforeEach((ctx) => { if (process.platform !== 'linux') ctx.skip(); });
 
@@ -97,6 +98,16 @@ describe('the test-run arm', () => {
     expect(moved()).toMatchObject([{ name: 'ccrc-testrun-aB3dE9', kind: 'test-run', shadow: false, quarantine: null }]);
     expect(moved()[0]!.bytes).toBeGreaterThan(0);
     expect(r.out).toMatch(/moved test-run \.\/ccrc-testrun-aB3dE9/);
+  }, 120_000);
+
+  it('the census it writes is one the server\'s reader parses: the row names no session (D-6854)', () => {
+    arm();
+    mkRun(base());
+    const r = sweep(7 * HOUR);
+    expect(r.code, r.err).toBe(0);
+    const got = parseTmpSweepCensus(fs.readFileSync(censusPath(), 'utf8'));
+    expect(got, 'the writer\'s own census reads as measured').not.toBeNull();
+    expect(got!.moved.filter((m) => m.kind === 'test-run')).toMatchObject([{ name: 'ccrc-testrun-aB3dE9', kind: 'test-run', id: null, uuid: null, shadow: false }]);
   }, 120_000);
 
   it('in shadow it lists the root as would-move and touches nothing', () => {

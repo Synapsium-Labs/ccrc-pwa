@@ -18,6 +18,8 @@ import { RECLAIM_PAUSE_MARKER } from '../src/coord/rundefs.js';
 import type { OpenSiblingsResult } from '../src/coord/store.js';
 import type { CollectToken } from '../../shared/api.js';
 import { FULL_CAPS, ID, INTERVAL, RIPE, T0, TOK, TOK2, auditDoc, rig } from './collectTempRootFixture.js';
+import { openRunsClaimedBy } from '../src/coord/bindingReads.js';
+import { withBindingsOf } from './bindingsFake.js';
 
 const job: CollectJob = { id: ID, epoch: 0 };   // the rig's cell starts at epoch 0 (`r.job()` builds the same); no case here moves it
 const AUDIT = ['ws-audit', '--session', ID, '--collect'];
@@ -37,7 +39,7 @@ describe('the live act, end to end: the control every stop below is measured aga
   it('the token on the argv is the one observation 2’s document carries', async () => {
     const T = 'e'.repeat(64) as CollectToken;
     const r = rig({ obs1: { token: T, arrivedMono: T0 - INTERVAL } });
-    r.answerAudit(() => ({ code: 0, stdout: auditDoc({ witness: r.witness, token: T }), stderr: '' }));
+    r.answerAudit(() => ({ ran: true, code: 0, stdout: auditDoc({ witness: r.witness, token: T }), stderr: '' }));
     await collectTempRoot(r.deps, job);
     expect(r.attempts[1]).toEqual(actOf(T));
   });
@@ -53,7 +55,7 @@ describe('the live act, end to end: the control every stop below is measured aga
     r.hooks.act = () => { r.lane.advance(9); };
     r.answerAct(() => {
       if (how === 'reject') throw new Error('the agent link closed');
-      return { code: 1, stdout: '', stderr: '' };
+      return { ran: true, code: 1, stdout: '', stderr: '' };
     });
     expect(await collectTempRoot(r.deps, job))
       .toMatchObject({ kind: 'acted', composedMono: T0, result: { kind: 'no-document' }, arrived: { mono: T0 + 9 } });
@@ -126,7 +128,7 @@ describe('step 4 — observation 2 against observation 1', () => {
     ['an unmeasured probe', 'unmeasured', 1, { verdict: 'unmeasured', unmeasured: 'checkouts' }],
   ] as const)('%s is reported for the lane to fold, and nothing is composed', async (_what, kind, code, over) => {
     const r = rig();
-    r.answerAudit(() => ({ code, stdout: auditDoc({ witness: r.witness, ...over }), stderr: '' }));
+    r.answerAudit(() => ({ ran: true, code, stdout: auditDoc({ witness: r.witness, ...over }), stderr: '' }));
     expect(await collectTempRoot(r.deps, job))
       .toMatchObject({ kind: 'answered', step: 4, why: 'not-collectable', audit: { value: { kind } } });
     expect(r.attempts).toEqual([AUDIT]);
@@ -136,7 +138,7 @@ describe('step 4 — observation 2 against observation 1', () => {
     const r = rig();
     r.answerAudit(() => {
       if (how === 'reject') throw new Error('the runner was killed');
-      return { code: 1, stdout: '', stderr: '' };
+      return { ran: true, code: 1, stdout: '', stderr: '' };
     });
     expect(await collectTempRoot(r.deps, job))
       .toMatchObject({ kind: 'answered', step: 4, why: 'not-collectable', audit: { value: { kind: 'no-document' } } });
@@ -219,9 +221,9 @@ describe('step 4 — the open-run hold, judged on observation 2’s document', (
   });
 
   it('an unreadable store holds it', async () => {
-    const r = rig({ coord: (real) => ({
+    const r = rig({ coord: (real) => withBindingsOf({
       run: (id: number) => real.run(id),
-      openRunsClaimedBy: (id: string) => real.openRunsClaimedBy(id),
+      openRunsClaimedBy: (id: string) => openRunsClaimedBy(real, id),
       openRunsForSession: (): OpenSiblingsResult => ({ ok: false, kind: 'run-unreadable', detail: 'the runs table could not be read' }),
     }) });
     expect(await collectTempRoot(r.deps, job)).toMatchObject({ kind: 'held', step: 4, hold: { why: 'store-unreadable' } });

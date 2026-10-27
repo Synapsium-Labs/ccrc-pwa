@@ -161,13 +161,23 @@
     background: var(--accent-tint);
     color: var(--ink-primary);
     font: var(--weight-regular) var(--fs-sm) / var(--lh-mono) var(--family-mono);
+    /* A whole-pixel line (line height: D-6852, whole-pixel-mono-line;
+       containment: D-6437): 13px x 1.55 = 20.15px makes a tall chip's scroll
+       range fractional, and at some page offsets Chrome then latches the
+       first wheel at its end to the chip, which cannot move. After the
+       `font` shorthand, which resets it. Declares the same value as
+       `.msg-assist pre` in prose.css, which also notes the round()
+       dependency. */
+    line-height: round(down, calc(var(--fs-sm) * var(--lh-mono)), 1px);
     overflow-wrap: anywhere;
     /* Only the reader's own words land here now (the longest real one is 480
        chars of typed reply), but the chip caps and scrolls like a well rather
        than growing without limit. */
     max-height: var(--well-max);
     overflow-y: auto;
-    overscroll-behavior: contain;
+    /* No overscroll containment: the chip wraps, so it never scrolls sideways,
+       and a y-axis one would stop a wheel it has nothing left to scroll from
+       reaching the transcript (D-6437). */
   }
   /* No answer came back — declined, interrupted, timed out. The result text is
      the harness briefing the model (the decline preamble alone runs past 1 kB,

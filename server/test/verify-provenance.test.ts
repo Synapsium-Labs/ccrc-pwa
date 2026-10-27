@@ -65,7 +65,7 @@ describe('verify-provenance.mjs: the sigstore backend, offline, against real bun
   it('offered for a DIFFERENT tag it refuses on the subject name (§5 refusal 3; §18 "the verifier asserts the subject name")', () => {
     const r = verify(mainArgs({ tag: 'v9.9.9' }));
     expect(r.code).toBe(1);
-    expect(r.stderr).toMatch(/subject is ccrc-v[0-9.]+\.tar\.gz, not ccrc-v9\.9\.9\.tar\.gz — a tarball attested under another tag/);
+    expect(r.stderr).toMatch(/subject is ccrc-v[0-9.]+\.tar\.gz, not ccrc-v9\.9\.9\.tar\.gz - a tarball attested under another tag/);
   });
 
   it('a different --owner refuses — the identity set is built from owner/repo', () => {
@@ -77,7 +77,7 @@ describe('verify-provenance.mjs: the sigstore backend, offline, against real bun
   it('one flipped digit in the blob\'s digest refuses — the bytes are bound', () => {
     const r = verify(mainArgs({ digest: flip(mainMeta.sha256) }));
     expect(r.code).toBe(1);
-    expect(r.stderr).toMatch(/but the blob's is [0-9a-f]{64} — not the bytes the workflow built/);
+    expect(r.stderr).toMatch(/but the blob's is [0-9a-f]{64} - not the bytes the workflow built/);
   });
 
   it('--blob with a file that is not the tarball refuses the same way', () => {
@@ -153,6 +153,115 @@ describe('verify-provenance.mjs: the sigstore backend, offline, against real bun
     expect(foreign.code, foreign.stdout).toBe(1);
     expect(foreign.stderr).toMatch(new RegExp(`^verify-provenance: no bundle verified against the trusted root for either release workflow of ${OWNER}/${REPO_NAME} `));
     expect(foreign.stdout).toBe('');
+  });
+});
+
+// The library's own refusals, each pinned on the real bundle with ONE thing
+// changed, so a dependency bump (or a verifier edit) that stops checking any
+// of them reds here rather than in the field: a bad signature, a tampered
+// statement retargeted at the tag being asked for, a certificate lifted from
+// another bundle, a moved log timestamp, a CA the root does not trust, and a
+// CA whose validity window closed before the signing time. Every case has
+// the same shape: exit 1, nothing on stdout, the one refusal line.
+describe('verify-provenance.mjs: the sigstore backend refuses a tampered bundle or an untrusted certificate', () => {
+  interface Bundle {
+    verificationMaterial: { certificate: { rawBytes: string }; tlogEntries: { integratedTime: string }[] };
+    dsseEnvelope: { payload: string; signatures: { sig: string }[] };
+  }
+  const goodBundle = (): Bundle => JSON.parse(readFileSync(join(FIX, 'release-main.sigstore.json'), 'utf8')) as Bundle;
+  const writeBundle = (b: Bundle): string => {
+    const file = join(mkTmp('ccrc-verify-tamper-'), 'bundle.json');
+    writeFileSync(file, JSON.stringify(b));
+    return file;
+  };
+  /** One byte flipped in the middle of a base64 field, re-encoded. */
+  const flipByte = (b64: string): string => {
+    const buf = Buffer.from(b64, 'base64');
+    const i = Math.floor(buf.length / 2);
+    buf[i] = buf[i]! ^ 0x01;
+    return buf.toString('base64');
+  };
+  /** Refused, in one line, with the library's own reason. The reason is the
+   *  LAST failure the verifier saw, so every case runs against ONE root (the
+   *  vendored public-good root alone): with both roots, the GitHub root's
+   *  chain failure would always be the one reported, whatever was tampered. */
+  const refused = (r: Result, reason: RegExp): void => {
+    expect(r.code, `stdout: ${r.stdout}`).toBe(1);
+    expect(r.stdout).toBe('');
+    expect(r.stderr).toMatch(new RegExp(`^verify-provenance: no bundle verified against the trusted root for either release workflow of ${OWNER}/${REPO_NAME} `));
+    expect(r.stderr.split('\n').filter((l) => l !== '')).toHaveLength(1);
+    expect(r.stderr).toMatch(reason);
+  };
+  const ROOT_LINES = readFileSync(join(REPO, 'deploy', 'sigstore-trusted-root.jsonl'), 'utf8').split('\n').filter((l) => l.trim() !== '');
+  interface Root { certificateAuthorities: { uri: string; validFor: { start: string; end?: string } }[] }
+  /** The public-good root alone (line 1 of the vendored file), transformed. */
+  const writeRoot = (edit: (r: Root) => void = () => {}): string => {
+    const r = JSON.parse(ROOT_LINES[0]!) as Root;
+    edit(r);
+    const file = join(mkTmp('ccrc-verify-rootedit-'), 'root.jsonl');
+    writeFileSync(file, `${JSON.stringify(r)}\n`);
+    return file;
+  };
+  const PG_ROOT = writeRoot();
+  const verifyPG = (bundle: string, tag = mainMeta.tag): Result => verify([...mainArgs({ bundle, tag }), '--trusted-root', PG_ROOT]);
+
+  it('control: the unmodified bundle, rewritten through the same harness, verifies against the public-good root alone', () => {
+    const r = verifyPG(writeBundle(goodBundle()));
+    expect(r.code, r.stderr).toBe(0);
+  });
+
+  it('a bad signature refuses — one byte flipped in the DSSE signature', () => {
+    const b = goodBundle();
+    b.dsseEnvelope.signatures[0]!.sig = flipByte(b.dsseEnvelope.signatures[0]!.sig);
+    // The log entry commits to the signature, so the library refuses at that
+    // comparison before it reaches the signature check itself.
+    refused(verifyPG(writeBundle(b)), /last reason: tlog entry signature mismatch\)$/m);
+  });
+
+  it('a tampered statement refuses — the signed payload rewritten to name the tag being asked for', () => {
+    const b = goodBundle();
+    const stmt = Buffer.from(b.dsseEnvelope.payload, 'base64').toString('utf8');
+    const forged = stmt.replaceAll(`ccrc-${mainMeta.tag}.tar.gz`, 'ccrc-v9.9.9.tar.gz');
+    expect(forged, 'non-vacuity: the subject name was in the payload').not.toBe(stmt);
+    b.dsseEnvelope.payload = Buffer.from(forged, 'utf8').toString('base64');
+    refused(verifyPG(writeBundle(b), 'v9.9.9'), /last reason: DSSE payload hash mismatch\)$/m);
+  });
+
+  it('a certificate lifted from another bundle refuses — it does not chain at this bundle\'s signing time', () => {
+    const third = readFileSync(join(FIX, 'third-workflow.sigstore.jsonl'), 'utf8').split('\n').filter((l) => l.trim() !== '')
+      .map((l) => JSON.parse(l) as Bundle).find((x) => x.verificationMaterial?.certificate?.rawBytes !== undefined);
+    expect(third, 'the third-workflow fixture carries a certificate').toBeDefined();
+    const b = goodBundle();
+    b.verificationMaterial.certificate.rawBytes = third!.verificationMaterial.certificate.rawBytes;
+    refused(verifyPG(writeBundle(b)), /last reason: Failed to verify certificate chain\)$/m);
+  });
+
+  it('an expired certificate refuses — the signing time moved an hour on, past the leaf\'s ten-minute window', () => {
+    const b = goodBundle();
+    const t = b.verificationMaterial.tlogEntries[0]!;
+    t.integratedTime = String(Number(t.integratedTime) + 3600);
+    refused(verifyPG(writeBundle(b)), /last reason: Failed to verify certificate chain\)$/m);
+  });
+
+  it('a signing time moved one second, still inside the leaf\'s window, refuses — the log\'s signed promise covers it', () => {
+    const b = goodBundle();
+    const t = b.verificationMaterial.tlogEntries[0]!;
+    t.integratedTime = String(Number(t.integratedTime) + 1);
+    refused(verifyPG(writeBundle(b)), /last reason: inclusion promise could not be verified\)$/m);
+  });
+
+  it('an untrusted certificate refuses — the root\'s certificate authorities swapped for another issuer\'s', () => {
+    const other = JSON.parse(ROOT_LINES[1]!) as Root;
+    expect(other.certificateAuthorities.length).toBeGreaterThan(0);
+    refused(verify([...mainArgs(), '--trusted-root', writeRoot((r) => { r.certificateAuthorities = other.certificateAuthorities; })]), /last reason: Failed to verify certificate chain\)$/m);
+  });
+
+  it('an expired certificate authority refuses — every CA window closed before the signing time', () => {
+    const signed = new Date(Number(goodBundle().verificationMaterial.tlogEntries[0]!.integratedTime) * 1000);
+    const closed = new Date(signed.getTime() - 86_400_000).toISOString();
+    refused(verify([...mainArgs(), '--trusted-root', writeRoot((r) => {
+      for (const ca of r.certificateAuthorities) if (ca.validFor.end === undefined || ca.validFor.end > closed) ca.validFor.end = closed;
+    })]), /last reason: Failed to verify certificate chain\)$/m);
   });
 });
 
@@ -296,7 +405,7 @@ describe('verify-provenance.mjs: the gh backend under a recording stub', () => {
     writeVerified(home, [{ name: `ccrc-${mainMeta.tag}.tar.gz`, sha256: '1'.repeat(64) }]);
     const r = verify(['--backend', 'gh', '--bundle', join(FIX, 'release-main.sigstore.json'), '--blob', blobFile(home), '--tag', mainMeta.tag, '--owner', OWNER, '--repo', REPO_NAME], { HOME: home }, bin);
     expect(r.code).toBe(1);
-    expect(r.stderr).toMatch(/but the blob's is [0-9a-f]{64} — not the bytes the workflow built/);
+    expect(r.stderr).toMatch(/but the blob's is [0-9a-f]{64} - not the bytes the workflow built/);
   });
 
   it('unparseable --format json output is refused (D-3133)', () => {

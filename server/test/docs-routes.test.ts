@@ -939,7 +939,7 @@ describe("T7: an agent that grants no docs verb: every route carries the adapter
   /** The agent's refusal of an argv its whitelist lacks, as the link carries it (both halves unmeasured): the word
    *  `docs-source.test.ts`'s `agentRefusalWord()` reads from `agent/src/server.ts`. */
   const refusal = (): CcdResult =>
-    ({ ok: false, stdout: '', stderr: 'forbidden', killed: UNMEASURED, signal: UNMEASURED });
+    ({ ran: false, reason: 'spawn', detail: 'forbidden', ok: false, stdout: '', stderr: 'forbidden', killed: UNMEASURED, signal: UNMEASURED });
 
   it.each([
     ['projects', '/api/docs/projects'],
@@ -1071,7 +1071,7 @@ function readyFleet(): FleetState {
 
 /** A measured, clean exit of the runner (`ExecResult`), so the adapter's check 1 reads both halves as measured. */
 function realOk(stdout: string): ExecResult {
-  return { code: 0, stdout, stderr: '', killed: false, signal: null };
+  return { ran: true, code: 0, stdout, stderr: '', killed: false, signal: null };
 }
 
 /** The fixture fleet: ok answers for the four docs verbs (a show answers the pin its argv names); any other ccd argv
@@ -1081,7 +1081,7 @@ function realAnswer(args: string[]): ExecResult {
   if (args[0] === 'docs-tree') return realOk(line(treeOk()));
   if (args[0] === 'docs-show') return realOk(showLine(args.includes('--commit') ? REAL_COMMITTED : REAL_DRAFT, REAL_MD));
   if (args[0] === 'docs-fetch') return realOk(line(fetchOk()));
-  return { code: 1, stdout: '', stderr: 'usage', killed: false, signal: null };
+  return { ran: true, code: 1, stdout: '', stderr: 'usage', killed: false, signal: null };
 }
 
 /**

@@ -19,7 +19,9 @@ export const Default: Story = {};
 
 /** The three bands, then `off` (a lane whose readings stopped: same 91%, no
  *  longer claiming live pressure), then the two zeros that are not the same
- *  fact: a measured 0% (a zero-width fill) and never measured (no fill). */
+ *  fact: a measured 0% (a zero-width fill) and never measured (no fill). The
+ *  track's 1px inset ring in the tertiary ink keeps those two empty meters
+ *  visible (3:1 on a card, D-6329). */
 export const States: Story = {
   render: () => (
     <div className="grid gap-4">

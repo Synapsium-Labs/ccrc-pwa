@@ -19,7 +19,7 @@ import {
  *    `CCRC_AGENT_TOKEN` into the environ of the verb and of its `curl`.
  *  - the bound sends SIGTERM to the child's process group first and SIGKILL `TOKEN_SYNC_KILL_GRACE_MS` later, so the
  *    verb's trap can remove its temps; SIGKILL runs no trap.
- * `server/test/update-spawn-twin-bodies.test.ts` holds that this file carries no twin sentinel.
+ * `server/test/spawn-kernel.test.ts` holds that this file carries no bounded-spawn sentinel and calls no `boundedSpawn`.
  *
  * Production is the port `startAgent` builds from `makeTokenSyncSpawn(tokenSyncEnv(home))`; tests inject a recorder
  * through `AgentOpts.spawnTokenSync`.

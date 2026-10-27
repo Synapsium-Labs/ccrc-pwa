@@ -64,7 +64,7 @@ describe('measure-landing: it reads GitHub and never writes it', () => {
   it('runs gh from exactly one argv, and that argv is a GET', () => {
     const argv = [...src.matchAll(/subprocess\.run\(\[\s*'gh'[^\]]*\]/g)].map((m) => m[0]);
     expect(argv, 'gh is run from more or fewer than one place').toHaveLength(1);
-    expect(argv[0]).toBe("subprocess.run(['gh', 'api', '-X', 'GET', path]");
+    expect(argv[0]).toBe("subprocess.run(['gh', 'api', '-X', 'GET', '--allow-escape-sequences', path]");
     expect(src, 'a second method is spelled somewhere').not.toMatch(/'(POST|PUT|PATCH|DELETE)'|--method|--field|'-f'|'-F'/);
   });
 
@@ -110,8 +110,8 @@ describe('measure-landing: it reads GitHub and never writes it', () => {
     expect(r.status, r.stderr).toBe(0);
     expect(JSON.parse(r.stdout).required).toEqual(['build-pwa', 'test (server)']);
     expect(calls(h.home, 'gh-calls')).toEqual([
-      'api -X GET repos/o/r/rules/branches/main',
-      'api -X GET repos/o/r/branches/main/protection/required_status_checks',
+      'api -X GET --allow-escape-sequences repos/o/r/rules/branches/main',
+      'api -X GET --allow-escape-sequences repos/o/r/branches/main/protection/required_status_checks',
     ]);
   });
 
@@ -359,5 +359,137 @@ describe('measure-landing: the decisions every baseline is derived from', () => 
     expect(py('m.episode_class(a)', { conflict: true, edits: 0, agents: 0 })).toBe('conflict');
     expect(py('m.episode_class(a)', { conflict: false, edits: 0, agents: 0 })).toBe('ritual');
     expect(py('m.episode_class(a)', { conflict: false, edits: 2, agents: 0 })).toBe('mixed');
+  });
+});
+
+describe('measure-landing: queue-ejections — a merge_group run that failed, by cause', () => {
+  const cause = (lines: string[], steps: string[] = ['Test']): string => py('m.failure_cause(a[0], a[1])', [lines, steps]);
+
+  it('queue_pr: the PR number comes from the queue branch name, and from nothing else', () => {
+    expect(py('m.queue_pr(a)', 'gh-readonly-queue/main/pr-1379-b09311272c67a746ce9972ff3b0cdbdabc1ab1e1')).toBe(1379);
+    expect(py('m.queue_pr(a)', 'main')).toBeNull();
+    expect(py('m.queue_pr(a)', 'feature/pr-12-abcdef0')).toBeNull();
+  });
+
+  it('failure_cause: the vitest teardown race and a held port are flakes, named', () => {
+    expect(cause(['EnvironmentTeardownError: [vitest-worker]: Closing rpc while "onUserConsoleLog" was pending'])).toBe('flake:vitest-teardown');
+    expect(cause(['OSError: [Errno 98] Address already in use', 'FAIL test/ccrc-codex.test.ts'])).toBe('flake:port-in-use');
+    expect(cause(['FAIL codex: lane port held by another process'])).toBe('unclassified');
+    expect(cause(['Error: listen EADDRINUSE: address already in use 127.0.0.1:7788'])).toBe('flake:port-in-use');
+    expect(cause(['Error: write EPIPE'])).toBe('flake:broken-pipe');
+  });
+
+  it('failure_cause: a wall-clock or throughput assertion is a flake, a content assertion is real', () => {
+    expect(cause(['FAIL test/update-spawn.test.ts', 'AssertionError: expected 1883 to be greater than or equal to 1900'])).toBe('flake:timing');
+    expect(cause(['AssertionError: sent 0 bytes in 2081ms: expected 0 to be greater than 1500'])).toBe('flake:timing');
+    expect(cause(['curl: (28) Operation too slow. Less than 1024 bytes/sec transferred'])).toBe('flake:timing');
+    expect(cause(['FAIL test/rings/totality.test.ts', 'AssertionError: no row reaches these: add a file row'])).toBe('real:test');
+  });
+
+  it('failure_cause: KNOWN LIMIT — a bare count comparison has no unit, so it reads as timing (the ledger states it)', () => {
+    // pinned so a change to TIMING is deliberate: the ledger's caveat on the flake/real split names this form
+    expect(cause(['FAIL test/rows.test.ts', 'AssertionError: expected 0 to be greater than 0'])).toBe('flake:timing');
+    expect(py('m.TIMING.pattern', null)).toContain('expected \\d+(\\.\\d+)? to be (less than|greater than)');
+  });
+
+  it('collapse_failures: overlapping build-2 runs that fail seconds apart on a shared test are one event', () => {
+    const row = (at: string, pr: number, cause: string, tests: string[]) => ({ run: pr, at, pr, cause, tests });
+    const groups = (rows: object[]): number[][] =>
+      py('[[r["pr"] for r in g] for g in m.collapse_failures(a)]', rows);
+    // same test, 2 s apart: one event, oldest first
+    expect(groups([row('2026-10-24T09:11:29Z', 1195, 'real:test', ['t/a.test.ts', 't/b.test.ts']),
+      row('2026-10-24T09:11:27Z', 1200, 'real:test', ['t/a.test.ts'])])).toEqual([[1200, 1195]]);
+    // 1 s apart but no shared test: two events
+    expect(groups([row('2026-10-25T10:41:53Z', 1357, 'flake:vitest-teardown', []),
+      row('2026-10-25T10:41:54Z', 1367, 'real:test', ['t/c.test.ts'])])).toEqual([[1357], [1367]]);
+    // shared test, but minutes apart: two events
+    expect(groups([row('2026-10-24T08:51:50Z', 1200, 'real:test', ['t/a.test.ts']),
+      row('2026-10-24T09:11:27Z', 1195, 'real:test', ['t/a.test.ts'])])).toEqual([[1200], [1195]]);
+    // no test on either side: the same cause joins, a different one does not
+    expect(groups([row('2026-10-25T10:00:00Z', 1, 'flake:broken-pipe', []), row('2026-10-25T10:00:03Z', 2, 'flake:broken-pipe', [])]))
+      .toEqual([[1, 2]]);
+    expect(groups([row('2026-10-25T10:00:00Z', 1, 'flake:broken-pipe', []), row('2026-10-25T10:00:03Z', 2, 'unclassified', [])]))
+      .toEqual([[1], [2]]);
+  });
+
+  it('failure_cause: a compile error is real, a failed setup step is infra, nothing readable is unclassified', () => {
+    expect(cause(['test/x.test.ts(35,53): error TS2345: Argument of type'], ['Test'])).toBe('real:typecheck');
+    expect(cause([], ['Run ./.github/actions/server-deps'])).toBe('infra:setup-step');
+    expect(cause([], ['Test'])).toBe('unclassified');
+  });
+
+  it('failure_cause: a teardown error beside a real failing test does not hide the failure', () => {
+    expect(cause(['FAIL test/a.test.ts', 'AssertionError: expected 1 to be 2', 'EnvironmentTeardownError: Closing rpc'])).toBe('real:test');
+  });
+
+  it('root_job: a "Refuse a prerequisite" job is a consequence, not a cause', () => {
+    expect(py('m.root_job(a)', ['Refuse a prerequisite that did not succeed (no script involved)'])).toBe(false);
+    expect(py('m.root_job(a)', ['Test'])).toBe(true);
+    expect(py('m.root_job(a)', [])).toBe(true);
+  });
+
+  it('read-only through a recording stub: counts, causes per run, and a PR that landed after its ejection', () => {
+    const run = (id: number, concl: string | null, pr: number) => JSON.stringify({ id, created_at: '2026-10-22T00:00:00Z', conclusion: concl,
+      head_branch: `gh-readonly-queue/main/pr-${pr}-aaaaaaa` });
+    const h = stubHome([
+      `  *actions/runs?event=merge_group*) echo '{"workflow_runs":[${run(1, 'failure', 7)},${run(2, 'success', 7)},${run(3, 'success', 8)},${run(4, 'cancelled', 9)},${run(5, 'failure', 8)}]}' ;;`,
+      '  *actions/runs/1/jobs*) echo \'{"jobs":[{"id":11,"name":"test (server)","conclusion":"failure","steps":[{"name":"Refuse a prerequisite that did not succeed (no script involved)","conclusion":"failure"}]},{"id":12,"name":"server 2/12","conclusion":"failure","steps":[{"name":"Test","conclusion":"failure"}]}]}\' ;;',
+      // run 5 is the same group's second run, failing at the same second on the same job log: one event, two rows
+      '  *actions/runs/5/jobs*) echo \'{"jobs":[{"id":12,"name":"server 2/12","conclusion":"failure","steps":[{"name":"Test","conclusion":"failure"}]}]}\' ;;',
+      '  *actions/jobs/12/logs*) printf \'Vitest caught 1 unhandled error\\nEnvironmentTeardownError: Closing rpc\\n\' ;;',
+      '  *pulls?state=all*) echo \'[{"number":7,"created_at":"2026-10-21T00:00:00Z","updated_at":"2026-10-22T00:00:00Z","merged_at":"2026-10-22T01:00:00Z"}]\' ;;',
+    ]);
+    const r = tool(h, ['queue-ejections', 'o/r', '--since', '2026-10-21', '--until', '2026-10-25']);
+    expect(r.status, r.stderr).toBe(0);
+    const rep = JSON.parse(r.stdout);
+    expect(rep.runs).toEqual({ total: 5, success: 2, failure: 2, cancelled: 1, other: 0 });
+    expect(rep.ejections).toBe(2);
+    expect(rep.byCause).toEqual({ 'flake:vitest-teardown': 2 });
+    expect(rep.distinctPrsEjected).toBe(2);
+    expect(rep.ejectedThenMerged).toBe(1); // #7 merged; #8 did not in the stub
+    expect(rep.failureEvents).toBe(1);
+    expect(rep.failureEventsByCause).toEqual({ 'flake:vitest-teardown': 1 });
+    const gh = calls(h.home, 'gh-calls')!;
+    expect(gh.every((c) => c.startsWith('api -X GET --allow-escape-sequences '))).toBe(true);
+  });
+});
+
+describe('measure-landing: queue-waits — where the green-to-merge wait went', () => {
+  const split = (green: string, merged: string, ev: [string, string][]) => py('m.queue_wait_split(a[0], a[1], a[2])', [green, merged, ev]);
+  const add = (t: string): [string, string] => ['added_to_merge_queue', t];
+  const rem = (t: string): [string, string] => ['removed_from_merge_queue', t];
+
+  it('queue_wait_split: first entry after green, last entry before merge, an ejection between them', () => {
+    expect(split('2026-10-22T00:00:00Z', '2026-10-22T01:00:00Z',
+      [add('2026-10-22T00:10:00Z'), rem('2026-10-22T00:20:00Z'), add('2026-10-22T00:40:00Z')])).toEqual([10, 20, 60]);
+  });
+  it('queue_wait_split: an add before green is not the first entry, and a PR never queued is None', () => {
+    expect(split('2026-10-22T00:30:00Z', '2026-10-22T01:00:00Z',
+      [add('2026-10-22T00:10:00Z'), add('2026-10-22T00:40:00Z')])).toEqual([10, 20, 30]);
+    expect(split('2026-10-22T00:00:00Z', '2026-10-22T01:00:00Z', [])).toBeNull();
+  });
+  it('read-only through a recording stub: the split per PR, from the timeline, GET only', () => {
+    const pr = (n: number, sha: string) => JSON.stringify({ number: n, created_at: '2026-10-21T00:00:00Z', updated_at: '2026-10-22T00:00:00Z',
+      merged_at: '2026-10-22T01:00:00Z', head: { sha } });
+    const ev = (e: string, t: string) => ({ event: e, created_at: t });
+    const h = stubHome([
+      `  *pulls?state=all*) echo '[${pr(7, 'abc')},${pr(8, 'def')},${pr(9, 'ghi')}]' ;;`,
+      '  *commits/*/check-runs*) echo \'{"check_runs":[{"name":"a","conclusion":"success","completed_at":"2026-10-22T00:00:00Z"}]}\' ;;',
+      `  *issues/7/timeline*) echo '${JSON.stringify([ev('added_to_merge_queue', '2026-10-22T00:10:00Z'), ev('labeled', '2026-10-22T00:11:00Z'),
+        ev('removed_from_merge_queue', '2026-10-22T00:20:00Z'), ev('added_to_merge_queue', '2026-10-22T00:40:00Z')])}' ;;`,
+      "  *issues/8/timeline*) echo '[]' ;;",
+      `  *issues/9/timeline*) echo '${JSON.stringify([ev('added_to_merge_queue', '2026-10-22T00:10:00Z'), ev('removed_from_merge_queue', '2026-10-22T01:00:00Z')])}' ;;`,
+    ]);
+    const r = tool(h, ['queue-waits', 'o/r', '--required', 'a', '--since', '2026-10-21', '--until', '2026-10-25']);
+    expect(r.status, r.stderr).toBe(0);
+    const rep = JSON.parse(r.stdout);
+    expect(rep.prs).toBe(2); // 9 merged with the removal GitHub logs at the merge itself: not an ejection
+    expect(rep.mergedWithoutQueueEntry).toBe(1);
+    expect(rep.prsReQueued).toBe(1);
+    expect(rep.greenToFirstEntryMin.n).toBe(2);
+    expect(rep.greenToFirstEntryMin.median).toBe(10);
+    expect(rep.lastEntryToMergeMin.median).toBe(35);
+    expect(rep.greenToMergeMin.median).toBe(60);
+    expect(calls(h.home, 'gh-calls')!.every((c) => c.startsWith('api -X GET --allow-escape-sequences '))).toBe(true);
   });
 });

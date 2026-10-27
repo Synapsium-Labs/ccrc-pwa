@@ -27,8 +27,11 @@
 #     collector of a witnessed child temp root whose workspace is gone)
 #   ws-orphan <any tail>                          — likewise (fleet disk retention: the server's removal of an
 #     orphaned worktree, behind a token the box re-proves)
-#   ws-audit --session <value> --reclaim [--defer-expired] — the token skeleton;
+#   scratch-rescue <any tail>                     — likewise (disk retention: keeps a session's scratch
+#     repository in its project's attic; called only by the temp sweep)
+#   ws-audit --session <value> --reclaim [--defer-expired] [--stale <word>] [--hold-digest <digest>] — the token skeleton;
 #   ws-audit --session <value> --expire           — the expiry's token skeleton;
+#   ws-audit --session <value> --expire --child-of <value> — the same, for an archived child (expire-child-v1);
 #   ws-audit --session <value> --collect          — the collector's token skeleton;
 #   ws-audit --loose-hex <value> --collect        — the loose arm's token skeleton (D-6625);
 #     <value> is any string here, and the body still validates it as a session id
@@ -55,6 +58,13 @@
 # launcher/body pair; a same-user writer that replaces both files is not
 # stopped by it, and the window between hashing the body and Bash opening it
 # is not closed.
+#
+# THE BODY'S LIBRARY (#1279). The body loads one more file, `lib/disk-retention.sh` beside it, and pins that
+# file's SHA-256 in its own text, which THIS digest covers: the launcher pins the body, the body pins the library.
+# The body reads the library once, hashes what it read and evaluates what it hashed; a missing, linked or changed
+# file refuses the start with status 125 before any verb runs. The path comes from the body's own location, so no
+# environment variable and no argument names it. It is the same trust surface as the body: PATH, and the hashing
+# tool it selects, are trusted prerequisites.
 #
 # STANDARD LIBRARY ONLY, and the shebang's `-IS` is load-bearing: isolated mode
 # ignores every PYTHON* variable, user site-packages and the current directory,
@@ -148,7 +158,7 @@ def folds_to(token, word):
 
 def is_protected(argv):
     # CASE-INSENSITIVE, A SUPERSET ON PURPOSE — see WHAT IS PROTECTED above.
-    if argv[:1] and any(folds_to(argv[0], verb) for verb in ('ws-reclaim', 'ws-expire', 'ws-collect', 'ws-orphan')):
+    if argv[:1] and any(folds_to(argv[0], verb) for verb in ('ws-reclaim', 'ws-expire', 'ws-collect', 'ws-orphan', 'scratch-rescue')):
         return True
     if len(argv) == 4 and folds_to(argv[0], 'ws-audit') and folds_to(argv[1], '--session') \
             and (folds_to(argv[3], '--expire') or folds_to(argv[3], '--collect')):
@@ -156,8 +166,23 @@ def is_protected(argv):
     # the loose arm's audit (D-6625): `ws-audit --loose-hex <value> --collect` mints the token the loose `ws-collect` trusts
     if len(argv) == 4 and folds_to(argv[0], 'ws-audit') and folds_to(argv[1], '--loose-hex') and folds_to(argv[3], '--collect'):
         return True
-    return (len(argv) in (4, 5) and folds_to(argv[0], 'ws-audit') and folds_to(argv[1], '--session')
-            and folds_to(argv[3], '--reclaim') and (len(argv) == 4 or folds_to(argv[4], '--defer-expired')))
+    if len(argv) == 6 and folds_to(argv[0], 'ws-audit') and folds_to(argv[1], '--session') \
+            and folds_to(argv[3], '--expire') and folds_to(argv[4], '--child-of'):
+        return True
+    if not (len(argv) >= 4 and folds_to(argv[0], 'ws-audit') and folds_to(argv[1], '--session')
+            and folds_to(argv[3], '--reclaim')):
+        return False
+    # the tail of the reclaim audit: [--defer-expired] [--stale <word>] [--hold-digest <digest>], any order (DR-26).
+    # Same walk as the body's guard: a flag that wants a value skips one token, even past the end.
+    i = 4
+    while i < len(argv):
+        if folds_to(argv[i], '--defer-expired'):
+            i += 1
+        elif folds_to(argv[i], '--stale') or folds_to(argv[i], '--hold-digest'):
+            i += 2
+        else:
+            return False
+    return True
 
 
 def body_path():

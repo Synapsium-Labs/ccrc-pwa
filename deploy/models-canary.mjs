@@ -10,6 +10,13 @@
 // sends the keyed request only when the listener answers as THIS lane. Another
 // lane's leftover shim, a stray listener or a foreign process on that port gets
 // nothing: the answer is `unavailable`, and no request carrying the key is made.
+// The answer's shape is the lane's mode, `lane.json`'s `bridge` (codex bridge
+// Stage 2, Task 11b): a `litellm` lane's shim answers `{"lane": <id>}`, a
+// `direct` lane's bridge `{"lane": <id>, "mode": "direct"}` on the same port,
+// and each mode accepts its own shape only. A `bridge` that is absent or not
+// one of the two words is `unavailable` before any probe, as `ccd/ccrc`'s
+// `_codex_lane_mode` refuses it. The request and its reader are the same for
+// both modes.
 //
 // WHAT IT SENDS. `POST http://127.0.0.1:<proxyPort>/v1/messages`, the path a
 // session's requests take: a "reply OK" prompt, `max_tokens` 512, streamed, and
@@ -119,17 +126,28 @@ function readSmall(p, max) {
   }
 }
 
-/** The lane's proxy port and key, or `{why}`. A `why` never quotes a file. */
+/** The lane modes `lane.json`'s `bridge` may name, and the tier that answers
+ *  the lane probe in each (its name in a reason). A copy of `ccd/ccrc`'s
+ *  `_codex_lane_mode` words, which `shared/roster.ts`'s CODEX_BRIDGE_MODES
+ *  spells; `models-canary.test.ts` holds the keys equal to it. */
+const PROBE_TIER = { litellm: 'shim', direct: 'bridge' };
+
+/** The lane's proxy port, mode and key, or `{why}`. A `why` never quotes a file. */
 function laneInputs(id) {
   const dir = path.join(HOME, '.ccrc', 'codex', id);
   let port;
+  let mode;
   try {
     const j = JSON.parse(readSmall(path.join(dir, 'lane.json'), LANE_JSON_MAX));
     port = j !== null && typeof j === 'object' ? j.proxyPort : undefined;
+    mode = j !== null && typeof j === 'object' ? j.bridge : undefined;
   } catch (e) {
     return { why: `lane.json could not be read (${typeof e.code === 'string' ? e.code : 'not JSON'})` };
   }
   if (!Number.isInteger(port) || port < 1 || port > 65535) return { why: 'lane.json names no proxyPort from 1 to 65535' };
+  if (typeof mode !== 'string' || !Object.hasOwn(PROBE_TIER, mode)) {
+    return { why: `lane.json names no bridge mode this canary knows (${Object.keys(PROBE_TIER).join(' or ')})` };
+  }
   let text;
   try {
     text = readSmall(path.join(dir, 'runtime.env'), RUNTIME_ENV_MAX);
@@ -138,7 +156,7 @@ function laneInputs(id) {
   }
   const m = KEY_LINE.exec(text);
   if (m === null) return { why: 'runtime.env is not one LITELLM_MASTER_KEY line' };
-  return { port, key: m[1] };
+  return { port, mode, key: m[1] };
 }
 
 /** `{error: "…"}` (the shim's one refusal shape) or `{error: {message}}`
@@ -155,21 +173,25 @@ function errorText(text) {
 }
 
 /** The lane a `GET /ccgpt/lane` answer names, or null: a 200, `application/json`,
- *  and an object whose only key is a string `lane` (`ccd/ccrc`'s
- *  `_codex_lane_answer` reads the same shape). */
-function laneOf(status, type, text) {
+ *  and an object in the shape of the lane's `mode`: on `litellm` its only key
+ *  is a string `lane` (the shim's); on `direct` its keys are exactly a string
+ *  `lane` and `mode` equal to `"direct"` (the bridge's). `ccd/ccrc`'s
+ *  `_codex_lane_answer` reads the same two shapes. */
+function laneOf(status, type, text, mode) {
   if (status !== 200 || !/^\s*application\/json\s*(;.*)?$/i.test(type)) return null;
   try {
     const j = JSON.parse(text);
-    if (j === null || typeof j !== 'object' || Array.isArray(j)) return null;
-    const keys = Object.keys(j);
-    return keys.length === 1 && keys[0] === 'lane' && typeof j.lane === 'string' ? j.lane : null;
+    if (j === null || typeof j !== 'object' || Array.isArray(j) || typeof j.lane !== 'string') return null;
+    const keys = Object.keys(j).sort().join(',');
+    if (mode === 'litellm') return keys === 'lane' ? j.lane : null;
+    if (mode === 'direct') return keys === 'lane,mode' && j.mode === 'direct' ? j.lane : null;
+    return null;
   } catch {
     return null;
   }
 }
 
-function send(port, key, id, model, effort, timeoutS) {
+function send(port, mode, key, id, model, effort, timeoutS) {
   const agent = new Agent({ keepAlive: false, maxSockets: 1 });
   const body = JSON.stringify({
     model, max_tokens: 512, stream: true,
@@ -220,8 +242,8 @@ function send(port, key, id, model, effort, timeoutS) {
     res.on('end', () => {
       if (answered) return;
       probeFinished = true;
-      if (laneOf(status, type, text) !== id) {
-        finish('unavailable', null, `127.0.0.1:${port} does not answer as ${id}'s shim, so the key was not sent`);
+      if (laneOf(status, type, text, mode) !== id) {
+        finish('unavailable', null, `127.0.0.1:${port} does not answer as ${id}'s ${PROBE_TIER[mode]}, so the key was not sent`);
         return;
       }
       post();
@@ -322,7 +344,7 @@ function main(argv) {
   if (lane.why !== undefined) {
     return answer({ ok: true, op: 'canary', result: 'unavailable', status: null, reason: lane.why }, 0);
   }
-  return send(lane.port, lane.key, id, model, effort === 'none' ? null : effort, timeoutS);
+  return send(lane.port, lane.mode, lane.key, id, model, effort === 'none' ? null : effort, timeoutS);
 }
 
 main(process.argv);

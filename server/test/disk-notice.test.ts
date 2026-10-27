@@ -147,10 +147,10 @@ async function rig(home: string, answers: MeasuredDisk[], now: () => number) {
   const push = { notify: vi.fn(async (_p: PushPayload) => undefined) };
   let n = 0;
   const io: FleetIO = { ...localIO, statfsMeasured: async () => answers[Math.min(n++, answers.length - 1)]! };
-  const deps = { ...testDeps(home), io, coord, notifyLog, push, presence: { isVisible: () => false } };
+  const deps = { ...testDeps(home), io, coord, notifyLog, push, viewers: { isVisible: () => false } };
   vi.spyOn(Date, 'now').mockImplementation(now);
   const watcher = new FleetWatcher(deps as never, new Bus());
-  const rewind = (): void => { (watcher as unknown as { lastDiskSweep: number }).lastDiskSweep = 1; };
+  const rewind = (): void => { (watcher as unknown as { diskAlarm: { lastSweep: number } }).diskAlarm.lastSweep = 1; };
   const sweep = async (): Promise<void> => { rewind(); await watcher.sweepDisk(); };
   return { watcher, coord, push, sweep };
 }

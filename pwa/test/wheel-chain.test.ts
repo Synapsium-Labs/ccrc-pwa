@@ -1,0 +1,104 @@
+// A wheel over a code block or a tool well must reach the transcript (D-6437, desktop polish Task C5). The whole-pixel
+// line height that keeps a tall box's first wheel at its end chaining is D-6852 (`whole-pixel-mono-line`, R68), under
+// D-6437.
+//
+// A code block is a scroll container (`max-height: var(--well-max)`, `overflow: auto`). An `overscroll-behavior:
+// contain` on it stops scroll chaining on BOTH axes even when it has nothing to scroll, so a wheel over any block
+// never reached `.chat-scroller`: measured in Chrome at 1920 in both skins, 0 px over a block, 600 px over prose.
+// The rule is one: a box inside the transcript never keeps a y-axis containment, and keeps an x-axis one only if it
+// can scroll sideways. `.msg-assist pre` (white-space: pre) can, so it takes `overscroll-behavior-x: contain`, as
+// `.md-table-wrap` does; `WELL` (pre-wrap) and `.tool-ask-a` (overflow-wrap: anywhere) cannot, so they carry none.
+//
+// vitest runs with `css: false`, so this reads the two stylesheets and the class string as text (`cssRule.ts`).
+// The behaviour itself — a wheel moving the scroller — is the three `browser/wheel-chain*.browser.test.ts` files', in a
+// real Chrome.
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import { describe, expect, it } from 'vitest';
+import { WELL } from '@ccrc/ui';
+import { declValue, norm, ruleIn, stripComments } from './cssRule';
+
+const UI = path.join(import.meta.dirname, '..', '..', 'ui', 'src', 'components');
+const prose = readFileSync(path.join(UI, 'prose.css'), 'utf8');
+const toolCard = readFileSync(path.join(UI, 'tool-card.css'), 'utf8');
+
+// A mono box wraps its text in whole pixels: 13px x 1.55 = 20.15px makes a tall box's scroll range fractional, and at
+// some page offsets Chrome then latches the first wheel at the box's end to the box, which cannot move (the browser leg
+// sweeps eight offsets per box). R68 permits a local whole-pixel fix only in this derived form, so the pin is exact:
+// the round() over the two tokens, in whatever spacing. A blanket `20px` (or any other integer) would drift from the
+// tokens and is refused.
+const WHOLE_PIXEL = 'round(down,calc(var(--fs-sm)*var(--lh-mono)),1px)';
+
+/** A rule's declaration names in source order, comments stripped, so a declaration can be placed AFTER another. */
+const declNames = (rule: string): string[] =>
+  stripComments(rule).split(';').map((d) => norm(d.slice(0, Math.max(d.indexOf(':'), 0))));
+
+describe('a wheel over a transcript box chains to the transcript (D-6437)', () => {
+  it('each transcript box carries exactly its containment', () => {
+    // `.msg-assist pre` — the rule for the block itself; `ruleIn` matches a whole selector, so `.msg-assist pre code`
+    // (a different rule, which sets no containment) cannot stand in for it.
+    const pre = ruleIn(prose, '.msg-assist pre');
+    expect(declValue(pre, 'max-height'), 'the block rule is the one that sets the block\'s scrolling').toBe('var(--well-max)');
+    expect(declValue(pre, 'overscroll-behavior-x'), 'a block scrolls sideways, so it contains that axis').toBe('contain');
+    expect(declValue(pre, 'overscroll-behavior'), 'the shorthand would contain y as well').toBeNull();
+    expect(declValue(pre, 'overscroll-behavior-y'), 'no y-axis containment inside the transcript').toBeNull();
+
+    // `WELL` wraps its lines, so it never scrolls sideways: no token of its own begins `overscroll`, so it carries
+    // neither Tailwind's both-axes overscroll utility nor its x-only one.
+    const overscrollTokens = WELL.split(/\s+/).filter((t) => t.startsWith('overscroll'));
+    expect(overscrollTokens, 'WELL carries no overscroll token').toEqual([]);
+
+    // `.tool-ask-a` wraps anywhere, so it carries no overscroll declaration of any spelling.
+    const chip = ruleIn(toolCard, '.tool-ask-a');
+    expect(declValue(chip, 'max-height'), 'the chip rule is the one that caps and scrolls the answer').toBe('var(--well-max)');
+    for (const prop of ['overscroll-behavior', 'overscroll-behavior-x', 'overscroll-behavior-y']) {
+      expect(declValue(chip, prop), `.tool-ask-a declares ${prop}`).toBeNull();
+    }
+    expect(stripComments(chip), 'no spelling of overscroll-behavior at all').not.toMatch(/overscroll-behavior/);
+  });
+});
+
+const LINE_TITLE = 'a mono box in the transcript declares a whole-pixel line height '
+  + '(D-6852, whole-pixel-mono-line, under D-6437)';
+
+describe(LINE_TITLE, () => {
+  it('.msg-assist pre declares a whole-pixel line height', () => {
+    // Declared AFTER the `font` shorthand, which resets it, and exactly the round() form over the tokens.
+    const pre = ruleIn(prose, '.msg-assist pre');
+    const names = declNames(pre);
+    const fontAt = names.lastIndexOf('font');
+    const lineAt = names.lastIndexOf('line-height');
+    expect(fontAt, 'the block sets its font through the shorthand').toBeGreaterThanOrEqual(0);
+    expect(lineAt, 'the block declares a line-height after the font shorthand').toBeGreaterThan(fontAt);
+    const line = (declValue(pre, 'line-height') ?? '').replace(/\s+/g, '');
+    expect(line, 'a whole-pixel line height, derived from the tokens').toBe(WHOLE_PIXEL);
+  });
+
+  it('WELL declares a whole-pixel line height', () => {
+    // Tailwind spells it as one arbitrary-value `leading` class (spaces as underscores), or as an arbitrary
+    // `line-height` property class; either must read as the derived form. `leading-mono` is the token's unitless 1.55,
+    // which is the defect.
+    const lineTokens = WELL.split(/\s+/).filter((t) => /^leading-|^\[line-height:/.test(t));
+    expect(lineTokens, 'WELL carries exactly one line-height class').toHaveLength(1);
+    const m = /^(?:leading-\[(.*)\]|\[line-height:(.*)\])$/.exec(lineTokens[0]!);
+    expect(
+      m,
+      `WELL's line-height class ${lineTokens[0]} must be an arbitrary whole-pixel value (a bracketed leading class), `
+      + 'not the unitless token',
+    ).not.toBeNull();
+    const value = (m![1] ?? m![2] ?? '').replace(/_/g, '').replace(/\s+/g, '');
+    expect(value, 'a whole-pixel line height, derived from the tokens').toBe(WHOLE_PIXEL);
+  });
+
+  it('.tool-ask-a declares a whole-pixel line height', () => {
+    // After the `font` shorthand, which resets it.
+    const chip = ruleIn(toolCard, '.tool-ask-a');
+    const names = declNames(chip);
+    const fontAt = names.lastIndexOf('font');
+    const lineAt = names.lastIndexOf('line-height');
+    expect(fontAt, 'the chip sets its font through the shorthand').toBeGreaterThanOrEqual(0);
+    expect(lineAt, 'the chip declares a line-height after the font shorthand').toBeGreaterThan(fontAt);
+    const line = (declValue(chip, 'line-height') ?? '').replace(/\s+/g, '');
+    expect(line, 'a whole-pixel line height, derived from the tokens').toBe(WHOLE_PIXEL);
+  });
+});

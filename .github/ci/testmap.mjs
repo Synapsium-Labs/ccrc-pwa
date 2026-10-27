@@ -19,11 +19,15 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 /** @typedef {import('./trace-to-deps.mjs').DepRecord} DepRecord */
-/** @typedef {DepRecord & { unknown: boolean, why?: string }} TestRecord */
+/** `tracedAt` is the commit the record was traced at. A refresh that retraces only a batch carries the rest with
+ *  their own stamp, so the map's one `sha` no longer says how old a record is; select asks the record. A map from
+ *  before stamping has none, and every record in it was traced at the map's `sha`.
+ *  @typedef {DepRecord & { unknown: boolean, why?: string, tracedAt?: string }} TestRecord */
 /** @typedef {{ root: DepRecord, rest: DepRecord }} SplitDeps */
 /** @typedef {SplitDeps & { unknown: boolean, why?: string }} SplitTestRecord */
 /** @typedef {{ format: 2, baseline: SplitDeps, tests: Record<string, SplitTestRecord> }} Records */
-/** @typedef {{ format: 1, sha: string, baseline: DepRecord, tests: Record<string, TestRecord> }} TestMap */
+/** `builtAt` is when the map was written (ISO time), for select's stale-map warning; a map without one is aged by its commit.
+ *  @typedef {{ format: 1, sha: string, baseline: DepRecord, tests: Record<string, TestRecord>, builtAt?: string }} TestMap */
 
 export const MAP_FORMAT = 1;
 export const RECORDS_FORMAT = 2;
@@ -42,7 +46,10 @@ export const TRACE_MISSING = 'trace missing (shard failed or cancelled)';
 // strace-side regression as well as a parser one.
 export const GIT_FLOOR = ['source-bytes', 'topology-clean', 'deviation-refs', 'dtbd', 'providers',
   'modelenv-single-writer', 'install-census', 'gitignore-secrets'].map((n) => `server/test/${n}.test.ts`);
-export const WALK_FLOOR = ['single-definition', 'typecheck-tests'].map((n) => `server/test/${n}.test.ts`);
+// The single-definition guard is split by area (`server/test/single-definition/<area>.test.ts`); each area file
+// imports the helpers that walk the four source roots, so each one lists, and each is a floor member.
+export const WALK_FLOOR = [...['advance-switches', 'ask-digest', 'child-reclaim', 'core-vocab', 'docs-l0', 'docs-ring', 'kernel-tail-cadence', 'kernel-tail-journal', 'kernel-tail-spawn', 'late-census', 'roster-bash', 'switches-history', 'update-stall', 'vocabularies'].map((n) => `server/test/single-definition/${n}.test.ts`),
+  'server/test/typecheck-tests.test.ts'];
 export const FLOOR_GIT = 'floor: git is false';
 export const FLOOR_WALK = 'floor: lists nothing';
 
@@ -118,15 +125,27 @@ function flattenTestRecord(rec, baseline) {
   return out;
 }
 
-/** @param {string} sha @param {Records} records @returns {TestMap} */
-export function buildMap(sha, records) {
+/** Stamps every record in `tests` with the commit it was traced at.
+ *  @param {Record<string, TestRecord>} tests @param {string} sha */
+function stampAll(tests, sha) {
+  for (const name of Object.keys(tests)) tests[name] = { ...tests[name], tracedAt: sha };
+}
+
+/** @param {string} sha @param {Records} records @param {string} [builtAt] @returns {TestMap} */
+export function buildMap(sha, records, builtAt) {
   /** @type {Record<string, TestRecord>} */
   const tests = {};
   for (const name of Object.keys(records.tests)) {
     tests[name] = flattenTestRecord(records.tests[name], records.baseline);
   }
   markFloor(tests);
-  return { format: MAP_FORMAT, sha, baseline: unionDeps(records.baseline.root, records.baseline.rest), tests };
+  stampAll(tests, sha);
+  return withBuiltAt({ format: MAP_FORMAT, sha, baseline: unionDeps(records.baseline.root, records.baseline.rest), tests }, builtAt);
+}
+
+/** @param {TestMap} map @param {string} [builtAt] @returns {TestMap} */
+function withBuiltAt(map, builtAt) {
+  return builtAt ? { ...map, builtAt } : map;
 }
 
 /**
@@ -135,10 +154,13 @@ export function buildMap(sha, records) {
  * @param {Records} records fresh traces for the tests this refresh retraced
  * @param {string[]} liveTests every test file that still exists in the tree
  * @param {string[]} traced every test this refresh MEANT to re-trace (select's
- *   trace list, not what arrived)
+ *   trace list, not what arrived). A refresh is BOUNDED: select hands over a batch that fits the trace shards'
+ *   time, and the tests it deferred are not in it. They are carried with the stamp they had, so the map says
+ *   they are older than this one; select treats a carried record older than a change to what it read as uncertain.
+ * @param {string} [builtAt] ISO time the map is written
  * @returns {TestMap}
  */
-export function refreshMap(old, sha, records, liveTests, traced) {
+export function refreshMap(old, sha, records, liveTests, traced, builtAt) {
   const live = new Set(liveTests);
   /** @type {Record<string, TestRecord>} */
   const tests = {};
@@ -148,13 +170,14 @@ export function refreshMap(old, sha, records, liveTests, traced) {
   }
   // Only the freshly traced entries are judged; a carried entry was judged when it was traced.
   markFloor(tests);
+  stampAll(tests, sha);
   for (const name of traced) {
     if (!live.has(name) || name in tests) continue;
     // Meant to be re-traced, and no record arrived (a trace shard crashed or
     // was cancelled). These are exactly the tests whose dependencies this
     // merge changed, so their old entries are the one thing that must NOT be
     // carried: unknown selects them (rule 2) until a clean trace replaces it.
-    tests[name] = { read: [], probed: [], listed: [], subtree: [], git: false, unknown: true, why: TRACE_MISSING };
+    tests[name] = { read: [], probed: [], listed: [], subtree: [], git: false, unknown: true, why: TRACE_MISSING, tracedAt: sha };
   }
   for (const name of liveTests) {
     if (name in tests) continue;
@@ -162,10 +185,11 @@ export function refreshMap(old, sha, records, liveTests, traced) {
     // §5.4 — sound because a test that read none of the changed paths
     // executed identically, so its record is unchanged).
     if (old && old.tests && Object.prototype.hasOwnProperty.call(old.tests, name)) {
-      tests[name] = old.tests[name];
+      // A record from before stamping was traced at the map it came from.
+      tests[name] = { ...old.tests[name], tracedAt: old.tests[name].tracedAt ?? old.sha };
     }
   }
-  return { format: MAP_FORMAT, sha, baseline: unionDeps(records.baseline.root, records.baseline.rest), tests };
+  return withBuiltAt({ format: MAP_FORMAT, sha, baseline: unionDeps(records.baseline.root, records.baseline.rest), tests }, builtAt);
 }
 
 /** @param {unknown} v @returns {v is string[]} */
@@ -189,6 +213,7 @@ function isTestRecordShape(v) {
   const t = /** @type {any} */ (v);
   if (typeof t.unknown !== 'boolean') return false;
   if ('why' in t && typeof t.why !== 'string') return false;
+  if ('tracedAt' in t && (typeof t.tracedAt !== 'string' || !SHA_RE.test(t.tracedAt))) return false;
   return true;
 }
 
@@ -225,6 +250,9 @@ export function readMap(file) {
   if (!isDepRecordShape(parsed.baseline)) {
     return { ok: false, reason: 'malformed baseline record' };
   }
+  if ('builtAt' in parsed && (typeof parsed.builtAt !== 'string' || Number.isNaN(Date.parse(parsed.builtAt)))) {
+    return { ok: false, reason: 'malformed builtAt' };
+  }
   if (!parsed.tests || typeof parsed.tests !== 'object' || Array.isArray(parsed.tests)) {
     return { ok: false, reason: 'malformed tests map' };
   }
@@ -246,6 +274,7 @@ function sortedDepRecord(rec) {
   };
   if ('unknown' in rec) out.unknown = !!rec.unknown;
   if (rec.why !== undefined) out.why = rec.why;
+  if (rec.tracedAt !== undefined) out.tracedAt = rec.tracedAt;
   return out;
 }
 
@@ -265,6 +294,7 @@ export function writeMap(file, map) {
     baseline: sortedDepRecord(map.baseline),
     tests,
   };
+  if (map.builtAt !== undefined) canonical.builtAt = map.builtAt;
   writeFileSync(file, JSON.stringify(canonical));
 }
 
@@ -373,7 +403,7 @@ function main() {
       else process.stdout.write(`::warning::testmap: cannot read --old (${oldResult.reason}); every failure counts as new\n`);
     }
     const records = readRecordsDir(args.records);
-    const map = buildMap(args.sha, records);
+    const map = buildMap(args.sha, records, args.now ?? new Date().toISOString());
     writeMap(args.out, map);
     process.exitCode = report(map, traceVerdict(map, records, old));
     return;
@@ -389,7 +419,7 @@ function main() {
     const records = readRecordsDir(args.records);
     const liveTests = readLines(args.live);
     const traced = readLines(args.traced);
-    const map = refreshMap(oldResult.map, args.sha, records, liveTests, traced);
+    const map = refreshMap(oldResult.map, args.sha, records, liveTests, traced, args.now ?? new Date().toISOString());
     writeMap(args.out, map);
     process.exitCode = report(map, traceVerdict(map, records, oldResult.map));
     return;

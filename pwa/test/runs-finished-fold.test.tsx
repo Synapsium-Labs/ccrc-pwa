@@ -38,7 +38,7 @@ const run = (over: Partial<RunSummary> = {}): RunSummary => ({
   handoffCommit: null, items: { done: 3, total: 3 }, unreadMail: 0,
   health: { mailOutstanding: 0, mailParked: 0, mailReplayMax: 0, doneRejects: 0,
             lastRejectCode: null, briefQueued: true, clearError: null,
-            coordKickoffPendingSince: null }, childReclaim: null, ...over,
+            coordKickoffPendingSince: null }, childReclaim: null, reviewCap: null, ...over,
 });
 
 /** `n` closed runs, ids 1..n, run `i` closed at `T0 + i * 60 s`, handed over in
@@ -55,12 +55,14 @@ const makeStore = (): FleetStore => createFleetStore({
   makeSocket: () => ({ onopen: null, onmessage: null, onclose: null, onerror: null, close(): void {} }) as unknown as WebSocket,
 });
 const NO_CAPS = (): Promise<CoordCapsView> => new Promise<CoordCapsView>(() => {});
+/** A held spend read: the board's default would send GET /api/runs/:id through the global fetch. */
+const NO_SPEND = (): Promise<import('../../shared/api').RunSpend> => new Promise(() => {});
 
 /** Mounts the board with `active` on the live frame and `archive` as the cold read. */
 const mount = async (archive: RunSummary[], active: RunSummary[] = []): Promise<void> => {
   const store = makeStore();
   act(() => { store.setState({ runs: active, runsFrameSeen: true, fleetFrameSeen: true }); });
-  render(<RunsScreen store={store} loadCaps={NO_CAPS} loadRuns={async () => ({ runs: [...active, ...archive] })} />);
+  render(<RunsScreen store={store} loadCaps={NO_CAPS} loadSpend={NO_SPEND} loadRuns={async () => ({ runs: [...active, ...archive] })} />);
   await act(async () => { await Promise.resolve(); });
 };
 
@@ -155,7 +157,7 @@ describe('the Finished group folds (D-6442)', () => {
     const reads = [closedRuns(45), closedRuns(30)];
     const store = makeStore();
     act(() => { store.setState({ runs: [active], runsFrameSeen: true, fleetFrameSeen: true }); });
-    render(<RunsScreen store={store} loadCaps={NO_CAPS}
+    render(<RunsScreen store={store} loadCaps={NO_CAPS} loadSpend={NO_SPEND}
       loadRuns={async () => ({ runs: [active, ...(reads.shift() ?? [])] })} />);
     await act(async () => { await Promise.resolve(); });
     const d = door()!;
@@ -280,7 +282,7 @@ describe('measurement — Step 0 of C10 (D-6442)', () => {
     const commits: number[] = [];
     render(
       <Profiler id="runs" onRender={(_id, _phase, actual) => { commits.push(actual); }}>
-        <RunsScreen store={store} loadCaps={NO_CAPS} loadRuns={async () => ({ runs: [pending, ...archive] })} />
+        <RunsScreen store={store} loadCaps={NO_CAPS} loadSpend={NO_SPEND} loadRuns={async () => ({ runs: [pending, ...archive] })} />
       </Profiler>,
     );
     commits.length = 0;

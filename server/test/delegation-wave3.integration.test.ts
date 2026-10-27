@@ -107,7 +107,7 @@ function world(opts: WorldOptions = {}): World {
   const faults: Faults = { range: new Set() };
   const calls = { listings: [] as string[], ranges: [] as string[] };
   const writes: string[] = [];
-  const run = vi.fn(async () => ({ code: 1, stdout: '', stderr: '' }));
+  const run = vi.fn(async () => ({ ran: true as const, code: 1, stdout: '', stderr: '' }));
   const spoolOwner = (p: string): string | null => (p.includes('/delegation/spool/') ? path.basename(p.endsWith('.spool') ? path.dirname(p) : p) : null);
   const bytes = opts.bytes ?? localIO.readFileFromBytesMeasured.bind(localIO);
   const io: FleetIO = {
@@ -129,7 +129,7 @@ function world(opts: WorldOptions = {}): World {
   };
   const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
   const ccdVerbs = opts.ccdVerbs === undefined ? ['caps', DELEGATION_EVENTS_CAP] : opts.ccdVerbs;
-  const deps = { ...testDeps(home, run), cfg, io, coord, fleetState: { connected: true, downSince: null, ccdVerbs } };
+  const deps = { ...testDeps(home, run), monotonicMs: () => Date.now(), cfg, io, coord, fleetState: { connected: true, downSince: null, ccdVerbs } };
   const made: World = { home, reg: cfg.registryDir, ccrcDir: cfg.ccrcDir, watcher: new FleetWatcher(deps as never, new Bus(), 10_000), coord, faults, calls, writes, run, cfg, deps };
   worlds.push(made);
   return made;
@@ -1306,7 +1306,12 @@ describe('8. the closed scope census', () => {
       expect(routes.split('\n').filter((l) => /(^|[/:\-\s])leases?\b|adopt|promot|retain|resolve|carrier|cleanup/i.test(l) && !OTHER_SENSE.includes(l)), 'no later wave\'s route').toEqual([]);
       expect(routes.split('\n').filter((l) => OTHER_SENSE.includes(l)), 'the exemption names a route that exists').toEqual(OTHER_SENSE);
       expect(routes.split('\n').filter((l) => /coordinators/.test(l))).toEqual(['├── /api/coordinators/:session/intent (POST)']);
-      expect(routes.split('\n').filter((l) => /delegation|journal|checkpoint|spool/i.test(l))).toEqual([]);
+      // A journal in another sense: D-6861's `GET /api/coord/shadow-journal` reads what the unarmed disk lanes would have done.
+      // It touches no lease, checkpoint or delegation journal, and it is listed by its exact printed line, so a second
+      // `journal` route, or this one under another verb, is still red.
+      const OTHER_JOURNAL = ['├── /api/coord/shadow-journal (GET, HEAD)'];
+      expect(routes.split('\n').filter((l) => /delegation|journal|checkpoint|spool/i.test(l) && !OTHER_JOURNAL.includes(l))).toEqual([]);
+      expect(routes.split('\n').filter((l) => OTHER_JOURNAL.includes(l)), 'the exemption names a route that exists').toEqual(OTHER_JOURNAL);
     } finally { await app.close(); }
     // `POST /api/runs` takes no lease to promote, and no source names the verb a promotion would call
     expect(filesUnder('server/src', /\.ts$/).filter((f) => /promotesLease|operator-retain|leases\/:id/.test(code(read(f))))).toEqual([]);
@@ -1481,14 +1486,14 @@ describe('8. the closed scope census', () => {
   it('no new agent request operation, capability word or protocol bump: `readFrom` is the same op with one optional field', () => {
     expect([FLEET_PROTO, FLEET_PROTO_MIN]).toEqual([1, 1]);
     const proto = read('shared/agent-protocol.ts');
-    // the request ops are a small closed set: main's sixteen (the sixteenth, `disk`, is fleet disk retention's DR-2, D-6614; the fifteenth, `account`, is the accounts plan's A8, not
+    // the request ops are a small closed set: main's seventeen (the seventeenth, `pressure`, is the host-pressure read of #1170; the sixteenth, `disk`, is fleet disk retention's DR-2, D-6614; the fifteenth, `account`, is the accounts plan's A8, not
     // delegation's), whatever form a new one is declared in (an interface, or a `type X = { ...; op: 'x' }` alias, which an
-    // interface-shaped parse cannot see), and exactly main's sixteen members of the union
+    // interface-shaped parse cannot see), and exactly main's seventeen members of the union
     const ops = [...proto.matchAll(/\bop:\s*'([\w-]+)'/g)].map((m) => m[1]!);
     expect(ops, 'every request op the protocol declares').toEqual(['exec', 'read', 'readFrom', 'readB64', 'readdir', 'stat', 'lstat', 'caps', 'writeB64', 'tailOpen',
-      'tailClose', 'ptyOpen', 'update', 'token-sync', 'account', 'disk']);
+      'tailClose', 'ptyOpen', 'update', 'token-sync', 'account', 'disk', 'pressure']);
     expect(/export type AgentReq = ([^;]+);/.exec(proto)![1]!.split('|').map((m) => m.trim()), 'the union of requests').toEqual(['ExecReq', 'ReadReq', 'ReadFromReq',
-      'ReadB64Req', 'ReaddirReq', 'StatReq', 'LstatReq', 'WriteB64Req', 'TailOpenReq', 'TailCloseReq', 'PtyOpenReq', 'CapsReq', 'UpdateReq', 'TokenSyncReq', 'AccountOpReq', 'DiskReq']);
+      'ReadB64Req', 'ReaddirReq', 'StatReq', 'LstatReq', 'WriteB64Req', 'TailOpenReq', 'TailCloseReq', 'PtyOpenReq', 'CapsReq', 'UpdateReq', 'TokenSyncReq', 'AccountOpReq', 'DiskReq', 'PressureReq']);
     expect(proto).toMatch(/export interface ReadFromReq \{ t: 'req'; id: number; op: 'readFrom'; path: string; offset: number; maxBytes\?: number \}/);
     expect(proto.match(/\bmaxBytes\b/g)!.length).toBeGreaterThan(0);
     // the ready frame, the advertised words and the agent's op switch carry nothing of the broker's

@@ -3,7 +3,7 @@ import type { FleetIO, MeasuredDirectoryRead, MeasuredPathKind, MeasuredStat, Re
 import type { CcrcConfig } from '../config.js';
 import type { FleetState } from '../fleetstate.js';
 import type { RunCcd } from './ports.js';
-import type { Presence } from '../presence.js';
+import type { Viewers } from '../viewer.js';
 import type { CcdResult } from '../lifecycle.js';
 import {
   CCD_ARGV, COLLECT_CAP, COLLECT_LOOSE_CAP, RECLAIM_PAUSE_CAP, capSupported, ccdCan, sweepDec,
@@ -151,12 +151,12 @@ export interface CollectControlDeps {
  *  `observeIntervalMs` is the lane's `COLLECT_OBSERVE_INTERVAL_MS`, passed in, as the L1 licence takes it. `runCcd` is
  *  the lane's stamping wrapper (Task 7), which reads `argv[0]` to tell this job's audit from its act. */
 export interface CollectTempRootDeps {
-  coord: Pick<CoordStore, 'run' | 'openRunsForSession' | 'openRunsClaimedBy'>;
+  coord: Pick<CoordStore, 'run' | 'bindingsOf'>;
   io: Pick<FleetIO, 'readdirMeasured'>;
   cfg: Pick<CcrcConfig, 'registryDir'>;
   runCcd: RunCcd;
   fleetState?: FleetState;
-  presence?: Pick<Presence, 'isVisible'>;
+  viewers?: Pick<Viewers, 'isVisible'>;
   lane: CollectLanePort;
   observeIntervalMs: number;
   control: CollectControlDeps;
@@ -541,7 +541,7 @@ export async function collectTempRoot(deps: CollectTempRootDeps, job: CollectJob
     return { kind: 'not-asked', step: 2, why: 'paused', detail: COLLECT_PAUSED[first.why] };
   }
   // 3 — a person at the session. No ceiling, and no licence past it.
-  if (deps.presence?.isVisible(job.id) === true) return { kind: 'not-asked', step: 3, why: 'presence', detail: COLLECT_SEEN };
+  if (deps.viewers?.isVisible(job.id) === true) return { kind: 'not-asked', step: 3, why: 'presence', detail: COLLECT_SEEN };
   // 4 — OBSERVATION 2, through the one audit site. It is stale if a clear landed while it was in flight. Then the
   // licence against observation 1, read from the lane's memory and never carried. Then the open-run hold, judged on
   // THIS document, licensed or not.
@@ -605,7 +605,7 @@ export async function collectTempRoot(deps: CollectTempRootDeps, job: CollectJob
   if (!collectLicenceStands(obs1, audit.composed, deps.lane.generations(job.id), deps.lane.observation(job.id))) {
     return answered(6, 'pair-cleared', COLLECT_PAIR_CLEARED);
   }
-  if (deps.presence?.isVisible(job.id) === true) return answered(6, 'presence', COLLECT_SEEN);
+  if (deps.viewers?.isVisible(job.id) === true) return answered(6, 'presence', COLLECT_SEEN);
   const holdAtAct = collectOpenRunHold(deps.coord, job.id, obs2);
   if (holdAtAct.kind === 'held') return { kind: 'held', step: 6, hold: holdAtAct, audit: observed };
   if (!collectLaneLive(lane)) return { kind: 'would-collect', audit: observed };
@@ -687,9 +687,10 @@ export function collectOpenRunHold(
           + 'run ids restart after a database loss');
       }
     }
-    const worker = coord.openRunsForSession(id);
+    const bound = coord.bindingsOf(id);
+    const worker = bound.worker();
     if (!worker.ok) return held('store-unreadable', `which open runs name ${id} as their session could not be read (${worker.detail})`);
-    const claims = coord.openRunsClaimedBy(id);
+    const claims = bound.claimant();
     if (!claims.ok) return held('store-unreadable', `which open runs ${id} coordinates could not be read (${claims.detail})`);
     const naming = [...new Set([...worker.siblings, ...claims.siblings].map((r) => r.id))].sort((a, b) => a - b);
     if (naming.length > 0) {

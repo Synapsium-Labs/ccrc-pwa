@@ -736,8 +736,9 @@ describe('M17 and M17b: stallNoticeCounts tallies by role, live and shadow apart
   const ROLE: Record<StallArm, readonly (keyof typeof STALL_NOTICE_TEXT)[]> = {
     quiet: ['checks', 'reports', 'pushes'],
     'limit-cap': ['pushes'], 'dialog-cap': ['pushes'], 'coord-ball': ['pushes'],
-    'coord-deaf': ['pushes'], 'mail-stuck': ['pushes'], 'marker-unreadable': ['pushes'],
+    'coord-deaf': ['pushes'], 'mail-stuck': ['pushes'], 'marker-unreadable': ['pushes'], 'coord-blocked': ['pushes', 'pushes'],
     'orphan-d': ['wakes', 'pushes'],
+    restarted: ['wakes', 'reports'],
     'orphan-e': ['wakes'],
     failed: ['wakes', 'reports'],
     frozen: ['reports'], dead: ['reports'],

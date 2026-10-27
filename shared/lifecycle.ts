@@ -73,6 +73,15 @@ export const LIFECYCLE: readonly LifecycleClass[] = [
     collector: 'ws-collect loose arm (server-composed; a regular file or directory of this uid, quiet for 48 hours (24 under disk pressure), unheld, no registry row at, inside or through it, bound by a token over its own identity)',
     bound: '48 hours untouched (24 under disk pressure), then taken on a server-minted audit token; links and special files stay the operator\'s',
     tier: '18 directories and 105 loose files, about 6.7 GiB, measured 2026-10-06', ruling: null },
+  // D-6639 (fleet disk retention DR-27, spec 2026-10-23 §2.7.3): a `--child` workspace itself, whose collectors the
+  // retention design names. Collected on its run's close; by the sweep once the run is done; by the stale arm after
+  // seven idle days when a hold, an absent run, a review report or a terminal refusal kept it; and by expiry seven
+  // days after an archive. A child that coordinated is never taken automatically.
+  { name: 'child-workspaces', root: '<worktrees-root>/<project>/<slug> (a --child workspace)', pattern: 'W',
+    creators: ['ccd (ws-add --child, minted for a coordinated run)'],
+    collector: 'ws-reclaim on the run\'s close and by the sweep; its stale arm at 7 idle days (behind its live switch in shared/switches.ts); ws-expire once archived',
+    bound: 'the run\'s close, or 7 idle days when kept, or 7 days after an archive; never while it coordinated',
+    tier: 'a worktree plus its pinned attic refs; the work is kept under refs/ccrc/attic/<id>/ before the tree goes', ruling: null },
   // Session-continuity wave 4: the pane-scope sweep's verdict record. Rolling (R):
   // rewritten whole by rename every tick, so it holds only the scopes dead NOW;
   // it lives in the runtime dir, so a reboot empties it — the safe direction for
@@ -151,12 +160,19 @@ export const LIFECYCLE: readonly LifecycleClass[] = [
     creators: ['ccd/history/sweep.mjs (--op recall-off)'],
     collector: 'ccrc history recall-off <id> --clear, and recall-off --clear-all at W2 close (operator verbs through the shim, spec §10.6), or rm for an entry --clear-all skips; a stale ~tmp.<pid> is removed by the next recall-off pass',
     bound: 'until cleared; every file by W2 close', tier: 'one generation per file: at most 37 B (a UUID and one LF), empty for a legacy family', ruling: null },
-  // #316: the server suite's one temp parent per vitest run, every fixture inside it. Ephemeral (E): its creator
+  // #316: the server suite's one temp parent per vitest run, every fixture inside it; the agent suite runs the same
+  // module, so its runs are rows of this class too. Ephemeral (E): its creator
   // collects it, and a later run collects one whose owner was SIGKILLed, once its socket refuses and it is quiet.
   // The window is named, not numbered: RUN_QUIET_S lives once, in the .mjs, which L0 cannot import.
   { name: 'server-test-run-dirs', root: '${TMPDIR:-/tmp}/ccrc-testrun-<6>/ (+ .dead mid-removal)', pattern: 'E',
-    creators: ['server vitest globalSetup (server/test/run-tmp.globalsetup.mjs)'],
+    creators: ['server vitest globalSetup (server/test/run-tmp.globalsetup.mjs)', 'agent vitest globalSetup (the same module, wired by agent/vitest.config.ts)'],
     collector: 'server/test/run-tmp.globalsetup.mjs (teardown; SIGTERM/SIGINT/SIGHUP/exit arm; a later run\'s reap at setup and teardown: owner socket refuses AND ctime-quiet for RUN_QUIET_S); ccd/ccd-tmp-sweep\'s test-run arm (DR-10, D-6622) for a root no later run visits: no socket bound at live.sock, ctime-quiet 6 h (1 h under pressure), unheld, in the box\'s TMPDIR and each witnessed child leaf with a row; shadow unless the live arm\'s marker exists',
     bound: 'one test run; after a SIGKILL, until a later run under the same TMPDIR finds it quiet, or the sweep\'s test-run arm does (6 h quiet)',
     tier: '1,551 dirs / 5.74 GiB from five timed-out shards in one morning (#316, 2026-10-07)', ruling: null },
+  // Fleet disk retention, DR-29 (spec 2026-10-23 §Docs and registry): an archived workspace nobody claims, children
+  // included (a child only under its own marker, in shadow until armed). ccd's ws-expire removes it; the server asks.
+  { name: 'archived-workspaces', root: '<workdir> of an archived registry row (worktree, clips, tmp root)', pattern: 'W',
+    creators: ['ccd ws-archive'],
+    collector: 'ccd ws-expire, asked by the server\'s expiry lane (children included, a child only under its own capability and marker)',
+    bound: '7 days after the archive', tier: 'one worktree per archived row', ruling: null },
 ];

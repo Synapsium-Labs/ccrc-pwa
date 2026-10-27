@@ -16,6 +16,7 @@ import {
 } from './codexLaneFixture.js';
 import { pythonOrSkip } from './ccgptHarness.js';
 import { REASON_MAX } from '../../shared/model-advance.mjs';
+import { CODEX_BRIDGE_MODES } from '../../shared/roster.js';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const CANARY = path.join(REPO, 'deploy', 'models-canary.mjs');
@@ -28,9 +29,10 @@ let key = '';
 const laneDir = (): string => path.join(home, '.ccrc', 'codex', 'lane-a');
 const envPath = (): string => path.join(laneDir(), 'runtime.env');
 const lanePath = (): string => path.join(laneDir(), 'lane.json');
-const plantLane = (port: number): void => {
+/** lane-a's `lane.json` and `runtime.env`; `bridge` is the lane's mode (codex bridge Stage 2, Task 11b). */
+const plantLane = (port: number, bridge: string = 'litellm'): void => {
   fs.mkdirSync(laneDir(), { recursive: true, mode: 0o700 });
-  fs.writeFileSync(lanePath(), `${JSON.stringify({ id: 'lane-a', proxyPort: port }, null, 2)}\n`, { mode: 0o600 });
+  fs.writeFileSync(lanePath(), `${JSON.stringify({ id: 'lane-a', proxyPort: port, bridge }, null, 2)}\n`, { mode: 0o600 });
   fs.writeFileSync(envPath(), `LITELLM_MASTER_KEY=${key}\n`, { mode: 0o600 });
 };
 
@@ -71,8 +73,8 @@ function readStage(stage: ReadStage): { canary: Canary; evidence: { opens: numbe
   const hook = path.join(home, 'canary-read-hook.cjs');
   const evidencePath = path.join(home, 'canary-read-evidence.json');
   const max = 64 * 1024;
-  const base = JSON.stringify({ id: 'lane-a', proxyPort: proxy.port, pad: '' });
-  const growthText = JSON.stringify({ id: 'lane-a', proxyPort: proxy.port, pad: 'x'.repeat(max + 1 - Buffer.byteLength(base)) });
+  const base = JSON.stringify({ id: 'lane-a', proxyPort: proxy.port, bridge: 'litellm', pad: '' });
+  const growthText = JSON.stringify({ id: 'lane-a', proxyPort: proxy.port, bridge: 'litellm', pad: 'x'.repeat(max + 1 - Buffer.byteLength(base)) });
   expect(Buffer.byteLength(growthText)).toBe(max + 1);
   fs.writeFileSync(hook, `
 const fs = require('node:fs');
@@ -197,6 +199,53 @@ describe.skipIf(PY === null)('deploy/models-canary.mjs (auto-advance spec §2.3 
     const gets = laneProxyGets(proxy);
     expectCleanProbe(gets);
     expect(gets.map((g) => g.authorization)).toEqual([null]);
+  });
+
+  // ── codex bridge Stage 2, Task 11b: the lane's mode decides the probe's shape ──
+  // A `litellm` lane's shim answers `{"lane": <id>}`; a `direct` lane's bridge answers `{"lane": <id>, "mode":
+  // "direct"}` on the same port. Each mode accepts its own shape only, and only when it names this lane.
+  it("a direct lane's canary passes through the direct shape", () => {
+    plantLane(proxy.port, 'direct');
+    laneProxyAnswersAs(proxy, 'lane-a', 'direct');
+    const c = canary();
+    expect(c.body).toEqual({ ok: true, op: 'canary', result: 'passed', status: 200, reason: null });
+    expectCleanProbe(laneProxyGets(proxy));
+    const [q] = laneProxyRequests(proxy);
+    expect(q!.authorization === `Bearer ${key}`, 'the keyed request carries the lane key').toBe(true);
+    expect(laneProxyRequests(proxy)).toHaveLength(1);
+  });
+
+  it('the canary refuses a listener that answers as another lane in direct shape', () => {
+    plantLane(proxy.port, 'direct');
+    laneProxyAnswersAs(proxy, 'lane-b', 'direct');
+    const c = canary();
+    expect(c.body).toEqual({ ok: true, op: 'canary', result: 'unavailable', status: null,
+      reason: `127.0.0.1:${proxy.port} does not answer as lane-a's bridge, so the key was not sent` });
+    expect(laneProxyRequests(proxy)).toEqual([]);
+    expectCleanProbe(laneProxyGets(proxy));
+  });
+
+  it.each([
+    ['a litellm lane, a direct-shaped answer for this lane', 'litellm', 'direct', "lane-a's shim"],
+    ['a direct lane, a shim-shaped answer for this lane', 'direct', 'shim', "lane-a's bridge"],
+  ] as [string, string, 'shim' | 'direct', string][])('%s is unavailable, and nothing keyed is sent', (_w, bridge, shape, who) => {
+    plantLane(proxy.port, bridge);
+    laneProxyAnswersAs(proxy, 'lane-a', shape);
+    expect(canary().body).toEqual({ ok: true, op: 'canary', result: 'unavailable', status: null,
+      reason: `127.0.0.1:${proxy.port} does not answer as ${who}, so the key was not sent` });
+    expect(laneProxyRequests(proxy)).toEqual([]);
+  });
+
+  it.each([
+    ['no bridge', (): void => fs.writeFileSync(lanePath(), JSON.stringify({ id: 'lane-a', proxyPort: proxy.port }))],
+    ['an unknown bridge', (): void => fs.writeFileSync(lanePath(), JSON.stringify({ id: 'lane-a', proxyPort: proxy.port, bridge: 'siwc' }))],
+    ['a bridge that is not a string', (): void => fs.writeFileSync(lanePath(), JSON.stringify({ id: 'lane-a', proxyPort: proxy.port, bridge: ['direct'] }))],
+  ] as [string, () => void][])('a lane.json with %s is unavailable before any probe', (_w, spoil) => {
+    spoil();
+    expect(canary().body).toEqual({ ok: true, op: 'canary', result: 'unavailable', status: null,
+      reason: 'lane.json names no bridge mode this canary knows (litellm or direct)' });
+    expect(laneProxyGets(proxy)).toEqual([]);
+    expect(laneProxyRequests(proxy)).toEqual([]);
   });
 
   it.each(['GET', 'POST'] as const)('uses no global agent for the %s request', (method) => {
@@ -483,6 +532,12 @@ describe('deploy/models-canary.mjs in source (plan W2 Task 10)', () => {
     expect(reader![1]).toContain('const bytes = Buffer.allocUnsafe(max + 1);');
     expect(reader![1]).toContain('readSync(fd, bytes, 0, bytes.length, 0);');
     expect(reader![1]).toContain('if (fd !== null) closeSync(fd);');
+  });
+
+  it("the lane modes the probe knows are the roster's CODEX_BRIDGE_MODES, in order (codex bridge Stage 2, Task 11b)", () => {
+    const m = /^const PROBE_TIER = \{ ([^}]*) \};$/m.exec(src());
+    expect(m, 'the canary has no PROBE_TIER table').not.toBeNull();
+    expect(m![1]!.split(', ').map((e) => e.split(':')[0])).toEqual([...CODEX_BRIDGE_MODES]);
   });
 
   it("the D-4933 prefix is ccd/ccgpt-proxy.py's own text", () => {

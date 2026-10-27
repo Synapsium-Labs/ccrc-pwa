@@ -7,7 +7,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { makePrHarness, type PrHarness } from './ccdPrHelpers.js';
-import { CCD } from './ccdWsHelpers.js';
+import { ccdSource } from './ccdWsHelpers.js';
 import { decOf, eventsOf } from './lifecycleHelpers.js';
 import { LC_REFUSAL_WORD, isLcRefusalToken } from '../../shared/api.js';
 import {
@@ -388,7 +388,7 @@ describe.skipIf(!LINUX)('the pause, the lock, and never a lock for a foreign nam
   });
 
   it('the locked body runs CONTAINED: every git call beneath it is hook-free and reads only the repository it names', () => {
-    expect(fs.readFileSync(CCD, 'utf8')).toMatch(/\n  _ws_reclaim_contained _ws_collect_locked "\$token" "\$id" /);
+    expect(ccdSource()).toMatch(/\n  _ws_reclaim_contained _ws_collect_locked "\$token" "\$id" /);
   });
 
   it('an id with neither a witness nor a record: refused not-witnessed BEFORE any lock — none is created', () => {

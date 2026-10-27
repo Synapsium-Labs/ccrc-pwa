@@ -19,7 +19,7 @@ import { configDirFor } from '../src/config.js';
 import { transcriptPath } from '../src/transcript/resolve.js';
 import { IDLE_NUDGE_DISABLED_MARKER, idleNudgeFeedBody, idleNudgeRefusedBody } from '../src/idlenudge.js';
 import { IDLE_COMPACT_NUDGE_PROMPT, type FleetSession } from '../../shared/api.js';
-import { testDeps } from './helpers.js';
+import { testDeps, withFakeClock } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import { IDLE_TAIL, ROW, T_NOTICE, T_STOP, jsonl } from './idleNudgeFixtures.js';
 
@@ -45,14 +45,14 @@ const harness = (fixed?: string): Harness => {
   let box = '';
   const run: Runner = async (_cmd, args) => {
     calls.push([...args]);
-    if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
-    if (args[0] === 'list-panes') return { code: 0, stdout: `${PID}\n`, stderr: '' };
-    if (args[0] === 'capture-pane') return { code: 0, stdout: fixed ?? `❯ ${box}\n`, stderr: '' };
+    if (args[0] === 'has-session') return { ran: true, code: 0, stdout: '', stderr: '' };
+    if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: `${PID}\n`, stderr: '' };
+    if (args[0] === 'capture-pane') return { ran: true, code: 0, stdout: fixed ?? `❯ ${box}\n`, stderr: '' };
     if (args[0] === 'send-keys') {
       box = args[3] === '-l' ? box + args[5]! : '';
-      return { code: 0, stdout: '', stderr: '' };
+      return { ran: true, code: 0, stdout: '', stderr: '' };
     }
-    return { code: 1, stdout: '', stderr: '' };
+    return { ran: true, code: 1, stdout: '', stderr: '' };
   };
   return { home, calls, run };
 };
@@ -137,9 +137,9 @@ const rig = async (o: { fixed?: string; notifyLog?: boolean; coord?: CoordStore;
   // `presence` is the visibility half alone (archived-expiry-lane.test.ts's idiom): the lane reads nothing else of it.
   const deps = {
     ...testDeps(h.home, h.run), coord, ...(o.notifyLog === false ? {} : { notifyLog: log }),
-    presence: { isVisible: () => false },
+    viewers: { isVisible: () => false },
   } as unknown as Deps;
-  const w = new FleetWatcher(deps, new Bus(), 2000, path.join(h.home, 'state-cache.json'));
+  const w = new FleetWatcher(withFakeClock(deps), new Bus(), 2000, path.join(h.home, 'state-cache.json'));
   at(PRIME_AT);
   await w.tick();
   seedRegistry(h.home);
@@ -224,10 +224,10 @@ describe('sweepIdleCompactNudge: at most once per compaction (D-5373)', () => {
     const rule = '─'.repeat(80);
     const run: Runner = async (_cmd, args) => {
       calls.push([...args]);
-      if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
-      if (args[0] === 'list-panes') return { code: 0, stdout: `${PID}\n`, stderr: '' };
+      if (args[0] === 'has-session') return { ran: true, code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: `${PID}\n`, stderr: '' };
       if (args[0] === 'capture-pane') {
-        return { code: 0, stdout: ['⏺ done', '', st.stash !== null ? ' › stashed ·' : '', rule, `❯ ${st.box}`, rule, ''].join('\n'), stderr: '' };
+        return { ran: true, code: 0, stdout: ['⏺ done', '', st.stash !== null ? ' › stashed ·' : '', rule, `❯ ${st.box}`, rule, ''].join('\n'), stderr: '' };
       }
       if (args[0] === 'send-keys') {
         if (args[3] === '-l') st.box += args[5]!;
@@ -235,9 +235,9 @@ describe('sweepIdleCompactNudge: at most once per compaction (D-5373)', () => {
         else if (args[3] === 'Enter' && st.box !== '') {
           st.sent.push(st.box); st.box = st.stash ?? ''; st.stash = null;
         }
-        return { code: 0, stdout: '', stderr: '' };
+        return { ran: true, code: 0, stdout: '', stderr: '' };
       }
-      return { code: 1, stdout: '', stderr: '' };
+      return { ran: true, code: 1, stdout: '', stderr: '' };
     };
     const { w } = await rig({ home: { home, calls, run } });
     await w.sweepIdleCompactNudge([fleetRow()], [], TICK);

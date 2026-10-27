@@ -71,8 +71,8 @@ const rrig = async (o: { readonly generation?: string | null | 'dir'; readonly p
   const log: string[] = [];
   const run: Runner = async (_cmd, args) => {
     log.push(`ccd:${args[0]}`);
-    return args[0] === 'ws-release' ? { code: 0, stdout: `released ${RID}\n`, stderr: '' }
-      : { code: 1, stdout: '', stderr: `unscripted ${args[0]}` };
+    return args[0] === 'ws-release' ? { ran: true, code: 0, stdout: `released ${RID}\n`, stderr: '' }
+      : { ran: true, code: 1, stdout: '', stderr: `unscripted ${args[0]}` };
   };
   const base = testDeps(home, run);
   const logged: FleetIO = {
@@ -216,5 +216,28 @@ describe('the hold-retired memory at the lane: keyed by generation (spec §5.7)'
     expect(src.match(/this\.childReclaimHoldRetiredSeen\.delete\(/g) ?? []).toHaveLength(4);
     expect(src.match(/this\.childReclaimHoldRetiredSeen\.clear\(\)/g) ?? []).toHaveLength(2);
     expect(src).toMatch(/for \(const id of \[\.\.\.this\.childReclaimHoldRetiredSeen\.keys\(\)\]\) \{/);
+  });
+});
+
+describe('releaseRetiredChildHold — step 4, the child\'s open runs, ignores a stale sibling (D-6923)', () => {
+  const sibling = (f: Awaited<ReturnType<typeof rrig>>): number => {
+    const r = f.deps.coord.openRun({ program: 'other', title: 'other', project: 'demo', wave: 1, waveOf: null, claimedBy: 'demo-gone' });
+    if (!('id' in r)) throw new Error(`openRun refused: ${JSON.stringify(r)}`);
+    f.deps.coord.setSession(r.id, RID);
+    return r.id;
+  };
+
+  it('a planned, undispatched sibling of a gone coordinator, fifteen days old, no longer answers changed', async () => {
+    const f = await rrig();
+    sibling(f);
+    const later = { ...f.deps, now: () => Date.now() + 15 * 24 * 3_600_000 };
+    expect(await releaseRetiredChildHold(later, f.req(value(G1)))).toBe('released');
+  });
+
+  it('the same sibling inside fourteen days still answers changed', async () => {
+    const f = await rrig();
+    sibling(f);
+    expect(await releaseRetiredChildHold(f.deps, f.req(value(G1)))).toBe('changed');
+    expect(f.releases()).toEqual([]);
   });
 });

@@ -72,17 +72,17 @@ const fixture = async (opts: {
   const calls: string[][] = [];
   const run: Runner = async (cmd, args) => {
     if (path.basename(cmd) === 'tmux') {
-      if (args[0] !== 'has-session') return { code: 1, stdout: '', stderr: '' };
+      if (args[0] !== 'has-session') return { ran: true, code: 1, stdout: '', stderr: '' };
       const id = (args[2] ?? '').replace(/^=cc-/, '').replace(/:$/, '');
       tmuxAsked.push(id);
       opts.onHasSession?.(id);
       if (gate !== null) await gate;
-      if (tmuxDown) return { code: 1, stdout: '', stderr: 'no server running on /tmp/tmux-1000/default' };
-      return live.has(id) ? { code: 0, stdout: '', stderr: '' } : { code: 1, stdout: '', stderr: `can't find session: cc-${id}` };
+      if (tmuxDown) return { ran: true, code: 1, stdout: '', stderr: 'no server running on /tmp/tmux-1000/default' };
+      return live.has(id) ? { ran: true, code: 0, stdout: '', stderr: '' } : { ran: true, code: 1, stdout: '', stderr: `can't find session: cc-${id}` };
     }
     calls.push(args);
     opts.onCcd?.(args);
-    return { code: 0, stdout: '', stderr: '' };
+    return { ran: true, code: 0, stdout: '', stderr: '' };
   };
   const dbPath = path.join(home, '.ccrc', 'coord.db');
   const coord = new CoordStore(openCoordDb(dbPath));
@@ -96,7 +96,8 @@ const fixture = async (opts: {
   const notifyLog = new NotifyLog(path.join(home, '.ccrc', 'notify.json'));
   await notifyLog.load();
   const base = testDeps(home, run);
-  const deps = { ...base, cfg, coord, notifyLog, tmux: new Tmux(run), presence: { isVisible: () => false },
+  // The lane's cadence reads the monotonic clock (D-5862): the fixture's one fake clock stands for both.
+  const deps = { ...base, monotonicMs: () => clock, cfg, coord, notifyLog, tmux: new Tmux(run), viewers: { isVisible: () => false },
     ...(opts.ccdVerbs === undefined ? {} : { fleetState: { ccdVerbs: opts.ccdVerbs } }) };
   let acts = 0;
   const newWatcher = (): FleetWatcher => {
@@ -300,6 +301,19 @@ describe('the lane SHIPS SHADOWED', () => {
     f.working(A);
     await anHourDead(f);
     expect(pushed).not.toHaveBeenCalled();
+  });
+});
+
+describe('`child-reclaim-disabled` (ARCH-77, #812) does NOT touch this lane', () => {
+  it('set, with `reclaim-paused` absent, the live lane still ends the programme after the hour', async () => {
+    const f = await fixture();
+    f.touch(DEAD_COORDINATOR_LANE_LIVE_MARKER);
+    f.touch('child-reclaim-disabled');
+    f.plant(A);
+    const r1 = f.working(A, 'alpha');
+    await f.pass(); await walk(f, HOUR - 60_000);
+    f.next(); await f.pass();
+    expect(f.stateOf(r1)).toBe('failed');
   });
 });
 

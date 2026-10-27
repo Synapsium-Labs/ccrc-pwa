@@ -161,8 +161,12 @@ def _header(headers: object, name: str) -> Optional[str]:
 
 
 def request_id_of(headers: object) -> Optional[str]:
-    """The upstream request id (`x-request-id`, else `request-id`), kept only under REQUEST_ID_RE; else None."""
-    for name in ("x-request-id", "request-id"):
+    """The upstream request id (`x-request-id`, else `request-id`, else `x-oai-request-id`), kept only under
+    REQUEST_ID_RE; else None. The first of the three names PRESENT decides, so a malformed value under it is None
+    whatever a later name holds. The backend sends only `x-oai-request-id` (runbook step 2, 2026-10-27; D-7084), the
+    name Codex reads after `x-request-id` (openai/codex codex-rs/codex-api/src/api_bridge.rs at rust-v0.164.0,
+    extract_request_id)."""
+    for name in ("x-request-id", "request-id", "x-oai-request-id"):
         value = _header(headers, name)
         if value is not None:
             return value if REQUEST_ID_RE.fullmatch(value) else None

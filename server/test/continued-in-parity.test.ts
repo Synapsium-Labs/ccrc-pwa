@@ -1,9 +1,10 @@
-// THREE READERS, ONE MARKER. `continuationInTail` (TypeScript,
-// `server/src/transcript/parse.ts`), `_continued_in_of` (`ccd/ccd`) and
+// TWO SPELLINGS, ONE MARKER (D-4940; ARCH-65 made it two). `continuationInTail`
+// (TypeScript, `server/src/transcript/parse.ts`) and the jq module
+// `ccd/lib/transcript.jq` decide what a `continued-in` marker is, and bash cannot
+// import TypeScript. The module is loaded by `_continued_in_of` (`ccd/ccd`) and
 // `_dr_continued_in` (`ccd/ccrc-doctor-checks`, `ccrc doctor`'s `transcripts`
-// check) each decide what a `continued-in` marker is, and bash cannot import
-// TypeScript. So this file RUNS all three over one fixture table and requires
-// one answer from each (D-4940) — the same shape `pool-name-parity.test.ts`
+// check). So this file RUNS the server and both bash callers over one fixture
+// table and requires one answer from each — the same shape `pool-name-parity.test.ts`
 // uses for the pools directory name, and for the same reason: a drift in one
 // of three spellings is a reader that disagrees with the thing it exists to
 // agree with.
@@ -32,14 +33,15 @@ import { localIO } from '../src/io.js';
 // and that scan matches on sight — even inside a comment naming the literal
 // it hunts for, which is why this note uses no quotes around the path at
 // all) — imported rather than re-derived here with a second copy of it.
-import { CCD, makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
+import { CCD, makeCcdHarness, type CcdHarness, ccdSource } from './ccdWsHelpers.js';
 import { mkTmp } from './tmpHelpers.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const ccrcRoot = path.resolve(here, '..', '..');
 const DOCTOR = path.join(ccrcRoot, 'ccd', 'ccrc-doctor-checks');
 
-const ccd = readFileSync(CCD, 'utf8');
+const MODULE = path.join(ccrcRoot, 'ccd', 'lib', 'transcript.jq');
+const ccd = ccdSource();
 const doctor = readFileSync(DOCTOR, 'utf8');
 const BASH = spawnSync('bash', ['-c', 'command -v bash'], { encoding: 'utf8' }).stdout.trim();
 
@@ -59,15 +61,16 @@ describe('continued-in parity', () => {
     expect(m?.[1]).toBe(String(CONTINUATION_TAIL_BYTES));
   });
 
-  it('the two bash readers run the same jq program, byte for byte (D-4940)', () => {
-    // One rule, two spellings, because neither file may source the other. The
-    // fixture table below proves the RULE agrees; this proves the TEXT does,
-    // so a fix landed in one file and forgotten in the other is red even for
-    // an input the table does not happen to cover.
+  it('both bash readers run the ONE module, not a program of their own (ARCH-65)', () => {
+    // The rule used to be spelled in both files and held byte-equal here. It is one file now, so the
+    // test is that neither caller carries a spelling of it, and each loads the module the same way.
     const prog = (src: string): string | undefined => /^CONTINUED_IN_JQ='([^']*)'$/m.exec(src)?.[1];
-    expect(prog(ccd), 'ccd/ccd carries CONTINUED_IN_JQ').toBeDefined();
-    expect(prog(doctor), 'ccd/ccrc-doctor-checks carries CONTINUED_IN_JQ').toBeDefined();
-    expect(prog(doctor)).toBe(prog(ccd));
+    expect(prog(ccd), 'ccd/ccd loads the module').toBe('include "transcript"; continued_in($u)');
+    expect(prog(doctor), 'ccd/ccrc-doctor-checks loads the module').toBe(prog(ccd));
+    expect(ccd).not.toMatch(/^def prompt\b/m);
+    expect(doctor, 'the doctor holds no copy of `def prompt`').not.toMatch(/^def prompt\b/m);
+    expect(ccd).toContain('jq -L "$TRANSCRIPT_JQ_LIB"');
+    expect(doctor).toContain('jq -L "$TRANSCRIPT_JQ_LIB"');
   });
 
   it('the jq program uses no builtin that jq 1.6 builds on label/break (D-4940)', () => {
@@ -83,9 +86,9 @@ describe('continued-in parity', () => {
     // other is each parse's `try` sitting inside its own array constructor,
     // where no break can cross it. Either alone holds on jq 1.6 (measured);
     // with both gone, the every-jq run below goes red on a jq 1.6.
-    const prog = /^CONTINUED_IN_JQ='([^']*)'$/m.exec(ccd)?.[1] ?? '';
+    const prog = readFileSync(MODULE, 'utf8');
     expect(prog).not.toBe('');
-    const code = prog.replace(/"(?:[^"\\]|\\.)*"/g, '""');
+    const code = prog.replace(/^\s*#.*$/gm, '').replace(/"(?:[^"\\]|\\.)*"/g, '""');
     expect(code.match(/\b(?:first|limit|isempty|any|all|IN|nth|label)\b/g) ?? []).toEqual([]);
   });
 
@@ -103,7 +106,7 @@ describe('continued-in parity', () => {
     expect(doctor).not.toMatch(/[^_a-zA-Z]_continued_in_of\s+["$]/);
   });
 
-  // ── exactly three readers exist ───────────────────────────────────────
+  // ── exactly two readers exist ───────────────────────────────────────
   // The mutation this guards: a fourth copy of the marker's literals landing
   // anywhere in tracked, non-test source — a plausible slip, since the
   // record shape is three short string literals that are easy to retype
@@ -128,7 +131,7 @@ describe('continued-in parity', () => {
     return out;
   }
 
-  it('exactly three readers exist: no fourth copy of the marker literal in tracked TypeScript source', () => {
+  it('exactly two readers exist: no third copy of the marker literal in tracked TypeScript source', () => {
     const hits: string[] = [];
     for (const root of SOURCE_ROOTS) {
       for (const f of tsSources(root)) {
@@ -155,14 +158,14 @@ describe('continued-in parity', () => {
     return out.split('\n').filter(Boolean).map((f) => path.join(ccrcRoot, f));
   }
 
-  it('exactly three readers exist: ccd/ccd and ccd/ccrc-doctor-checks are the only tracked files under ccd/ carrying it', () => {
+  it('exactly two readers exist: the jq module is the only tracked file under ccd/ carrying it (ARCH-65)', () => {
     const hits: string[] = [];
     for (const f of trackedFiles('ccd')) {
       let text: string;
       try { text = readFileSync(f, 'utf8'); } catch { continue; }
       if (text.includes('continuedInSessionId')) hits.push(path.relative(ccrcRoot, f));
     }
-    expect(hits.sort()).toEqual(['ccd/ccd', 'ccd/ccrc-doctor-checks']);
+    expect(hits.sort()).toEqual(['ccd/lib/transcript.jq']);
   });
 });
 
@@ -342,7 +345,7 @@ const ROWS: Row[] = [
   { name: 'an empty file', body: '', want: null },
 ];
 
-describe('continued-in parity: one rule, run by all three readers (D-4940)', () => {
+describe('continued-in parity: one rule, run by the server and both bash callers (D-4940)', () => {
   let h: CcdHarness;
   const files: string[] = [];
   let ccdAnswers: string[] = [];
@@ -419,6 +422,7 @@ function jqBinaries(): string[] {
 
 describe('continued-in parity: the jq program, on every jq found (D-4940)', () => {
   const prog = /^CONTINUED_IN_JQ='([^']*)'$/m.exec(ccd)?.[1] ?? '';
+  const lib = path.dirname(MODULE);
   const dir = mkTmp('ci-parity-jq-');
   const files = ROWS.map((r, i) => {
     const f = path.join(dir, `${i}-${A}.jsonl`);
@@ -429,8 +433,8 @@ describe('continued-in parity: the jq program, on every jq found (D-4940)', () =
     const version = spawnSync(jq, ['--version'], { encoding: 'utf8' }).stdout.trim() || 'unknown';
     it(`${version} (${jq}) answers every row`, () => {
       const r = spawnSync(BASH, ['-c',
-        'jq="$1"; u="$2"; n="$3"; shift 3; for f in "$@"; do printf "[%s]\\n" "$(tail -c "$n" -- "$f" | "$jq" -rRs --arg u "$u" "$P")"; done',
-        '_', jq, A, String(CONTINUATION_TAIL_BYTES), ...files], { encoding: 'utf8', env: { ...process.env, P: prog } });
+        'jq="$1"; u="$2"; n="$3"; shift 3; for f in "$@"; do printf "[%s]\\n" "$(tail -c "$n" -- "$f" | "$jq" -L "$L" -rRs --arg u "$u" "$P")"; done',
+        '_', jq, A, String(CONTINUATION_TAIL_BYTES), ...files], { encoding: 'utf8', env: { ...process.env, P: prog, L: lib } });
       const got = r.stdout.split('\n').filter((l) => l !== '').map((l) => l.replace(/^\[(.*)\]$/, '$1'));
       expect(ROWS.map((row, i) => ({ row: row.name, answer: got[i] === '' ? null : got[i] ?? 'unanswered' })))
         .toEqual(ROWS.map((row) => ({ row: row.name, answer: row.want })));

@@ -1084,7 +1084,7 @@ describe('W2-3 Task 2: the gate module is pure and its words are its own', () =>
       WINDOW_STATES: ['measured', 'unmeasured'],
       ASSIGNMENT_ARMS: ['treatment', 'control'],
       ACTIVE_EXCLUSIONS: ['merged', 'legacy', 'not-newest', 'no-recent-entry'],
-      AMENDMENT_KINDS: ['version-move', 'freeze-exception', 'forced-act'],
+      AMENDMENT_KINDS: ['version-move', 'freeze-exception', 'forced-act', 'budget-raise'],
       GATE_CODE_FILES: ['deploy/history-gate.mjs', 'deploy/measure-history.py', 'deploy/history-replay.mjs', 'ccd/history/lib.mjs'],
       GATE_REASONS: [
         'store-id-null', 'store-id-duplicate', 'store-id-unlisted', 'family-unassigned', 'row-cap-mismatch', 'window-mismatch', 'code-changed', 'code-unmeasured',
@@ -1093,7 +1093,7 @@ describe('W2-3 Task 2: the gate module is pure and its words are its own', () =>
         'field-missing', 'field-unknown', 'field-malformed', 'constant-mismatch', 'value-outside-set', 'model-alias', 'model-forbidden',
         'signed-text-mismatch', 'release-mismatch', 'flag-rejected', 'seed-changed', 'pilot-drift', 'quiz-mismatch', 'quiz-holds-control',
         'pilot-quiz-overlap', 'window-length', 'assignment-mismatch', 'draft-mismatch', 'chain-mismatch', 'post-start-change',
-        'amendment-kind', 'amendment-detail-mismatch', 'version-move-unpiloted',
+        'amendment-kind', 'amendment-detail-mismatch', 'version-move-unpiloted', 'budget-not-raised',
       ],
     };
     const mod = g as unknown as Record<string, unknown>;
@@ -5807,6 +5807,125 @@ describe('W2-3 Task 9: the counter definitions and the open record', () => {
         expect(verdict(d), 'and nothing else is refused').toEqual([]);
         expect(verdict(final(d), chainOf(d)), 'the final carries it unchanged').toEqual([]);
       });
+    });
+  });
+
+  // ── W2-7 Task 1 ──────────────────────────────────────────────────────────────────────────────────────────────
+  describe('W2-7 Task 1: the budget-raise amendment and the budget in force (R-B1, D-7063)', () => {
+    const f1 = (): Rec => final();
+    const raise = (n: unknown, node: string | null = null, at = T0 + DAY): Rec => amendment('budget-raise', node, at, { spend_budget: n });
+    const raiseWith = (detail: Rec): Rec => amendment('budget-raise', null, T0 + DAY, detail);
+    const amendOver = (pred: Rec, added: Rec[], at = T0 + 2 * DAY): Rec =>
+      ({ ...structuredClone(pred), supersedes: gate9.recordSha256(pred), finalized_ms: at, amendments: [...pred.amendments, ...added] });
+    const ctxOver = (pred: Rec): Ctx => ({ draft: draft(), predecessor: pred, frozen: FROZEN });
+    const at = (i: number, tail: string, word: string): Err => ({ path: `amendments[${i}].${tail}`, word });
+    const inForce = gate9.spendBudgetInForce as unknown as (r: Rec) => unknown;
+
+    it('G-READ: spendBudgetInForce answers the newest budget-raise in array order, read past every other kind, else the signed spend_budget', () => {
+      expect(inForce({ spend_budget: 5, amendments: [] })).toBe(5);
+      expect(inForce({ spend_budget: 5 })).toBe(5);
+      expect(inForce({ spend_budget: 5, amendments: [raise(7)] })).toBe(7);
+      expect(inForce({ spend_budget: 5, amendments: [raise(7), amendment('forced-act', null, T0, { act: 'reparse', at_ms: T0 }), raise(9)] })).toBe(9);
+      expect(inForce({ spend_budget: 5, amendments: [raise(9), raise(7)] }), 'the last, not the largest').toBe(7);
+      expect(inForce({
+        spend_budget: 5,
+        amendments: [amendment('version-move', 'node-a', T0, { claude_code_version: '9.2.0', repilot_sha256: hex('rp'), spend_budget: 99 })],
+      }), "another kind's detail is never read").toBe(5);
+    });
+
+    it('G-OK: a raise above the budget in force is appended, after window start and before it', () => {
+      const after = amendOver(f1(), [raise(30_000_001)]);
+      expect(verdict(after, ctxOver(f1()))).toEqual([]);
+      expect(verdict(amendOver(f1(), [raise(30_000_001, null, T0 - DAY / 2)], T0 - DAY / 2), ctxOver(f1())), 'before window start').toEqual([]);
+      expect(inForce(after)).toBe(30_000_001);
+      expect(after.spend_budget).toBe(30_000_000);
+    });
+
+    it('G-EQ: a raise equal to the budget in force is budget-not-raised', () => {
+      expect(verdict(amendOver(f1(), [raise(30_000_000)]), ctxOver(f1()))).toEqual([at(0, 'detail.spend_budget', 'budget-not-raised')]);
+    });
+
+    it('G-LO: a raise below it is budget-not-raised', () => {
+      for (const n of [29_999_999, 1]) {
+        expect(verdict(amendOver(f1(), [raise(n)]), ctxOver(f1())), String(n)).toEqual([at(0, 'detail.spend_budget', 'budget-not-raised')]);
+      }
+    });
+
+    it('G-2ND: a second raise is held above the first, not above the signed budget', () => {
+      const p = amendOver(f1(), [raise(40_000_000)]);
+      expect(verdict(amendOver(p, [raise(35_000_000)], T0 + 3 * DAY), ctxOver(p))).toEqual([at(1, 'detail.spend_budget', 'budget-not-raised')]);
+      expect(verdict(amendOver(p, [raise(40_000_000)], T0 + 3 * DAY), ctxOver(p))).toEqual([at(1, 'detail.spend_budget', 'budget-not-raised')]);
+      expect(verdict(amendOver(p, [raise(40_000_001)], T0 + 3 * DAY), ctxOver(p))).toEqual([]);
+    });
+
+    it('G-PAST: a raise after a forced act is read past it', () => {
+      const added = [amendment('forced-act', 'node-a', T0 + DAY, { act: 'reparse' }), raise(30_000_001)];
+      expect(verdict(amendOver(f1(), added), ctxOver(f1()))).toEqual([]);
+    });
+
+    const detailRows: Array<[Rec, Err[]]> = [
+      [{ spend_budget: 40_000_000, quiz: 1 }, [at(0, 'detail.quiz', 'field-unknown')]],
+      [{}, [at(0, 'detail.spend_budget', 'field-missing')]],
+      [{ spend_budget: null }, [at(0, 'detail.spend_budget', 'field-missing')]],
+      [{ spend_budget: '40000000' }, [at(0, 'detail.spend_budget', 'field-malformed')]],
+      [{ spend_budget: 40_000_000.5 }, [at(0, 'detail.spend_budget', 'field-malformed')]],
+      [{ spend_budget: 2 ** 53 }, [at(0, 'detail.spend_budget', 'field-malformed')]],
+      [{ spend_budget: -1 }, [at(0, 'detail.spend_budget', 'budget-not-raised')]],
+    ];
+    it.each(detailRows)('G-DETAIL: the detail carries the figure and nothing else: %j', (detail, want) => {
+      expect(verdict(amendOver(f1(), [raiseWith(detail)]), ctxOver(f1()))).toEqual(want);
+    });
+
+    it('G-VALID: a raise is compared only with a valid earlier figure: an earlier raise refused for its own defect answers one word, not a second budget-not-raised', () => {
+      for (const added of [
+        [raise('40000000'), raise(40_000_001)],
+        [raise(2 ** 53), raise(40_000_000)],
+        [raise('abc'), raise(40_000_000)],
+      ]) {
+        expect(verdict(amendOver(f1(), added), ctxOver(f1())), JSON.stringify(added.map((a) => a.detail))).toEqual([at(0, 'detail.spend_budget', 'field-malformed')]);
+      }
+    });
+
+    it('G-NODE: a raise names no node: the budget is the record\'s', () => {
+      expect(verdict(amendOver(f1(), [raise(40_000_000, 'node-a')]), ctxOver(f1()))).toEqual([at(0, 'node_label_ref', 'value-outside-set')]);
+    });
+
+    it('G-POST: after window start the signed spend_budget cannot move: only an appended raise moves the budget in force', () => {
+      const moved = { ...amendOver(f1(), [raise(50_000_000)]), spend_budget: 40_000_000 };
+      expect(verdict(moved, ctxOver(f1()))).toEqual([{ path: 'spend_budget', word: 'post-start-change' }]);
+    });
+
+    it('G-PRE: part 1 carries no amendments, so no raise exists before part 2', () => {
+      expect(verdict({ ...draft(), amendments: [] })).toEqual([{ path: 'amendments', word: 'field-unknown' }]);
+    });
+
+    it('G-SCAN: decideGate and assembleReports read no budget and no amendment', () => {
+      const src = readFileSync(path.join(ROOT, 'deploy', 'history-gate.mjs'), 'utf8');
+      const body = (head: string): string => {
+        const from = src.indexOf(head);
+        expect(from, head).toBeGreaterThanOrEqual(0);
+        return src.slice(from, src.indexOf('\n}\n', from));
+      };
+      const words = ['spend_budget', 'amendments', 'budget-raise'];
+      for (const head of ['export function decideGate(inputs) {', 'export function assembleReports(reports, record, opts = {}) {']) {
+        const b = body(head);
+        for (const w of words) expect(b.includes(w), `${head} spells ${w}`).toBe(false);
+      }
+      const control = body('function recValidate(record, ctx, checkLink) {');
+      for (const w of words) expect(control.includes(w), `CONTROL: recValidate spells ${w}`).toBe(true);
+    });
+
+    it('G-ONE: the gate walks the chain for the budget once: the validator compares through spendBudgetInForce, and no other gate line selects a raise', () => {
+      const lines = readFileSync(path.join(ROOT, 'deploy', 'history-gate.mjs'), 'utf8').split('\n').filter((l) => !/^\s*(\*|\/\/|\/\*)/.test(l));
+      const calls = lines.filter((l) => l.includes('spendBudgetInForce('));
+      expect(calls).toHaveLength(2);
+      expect(calls[0]).toContain('export function spendBudgetInForce(record) {');
+      expect(calls[1]).toContain('const before = spendBudgetInForce(');
+      const raises = lines.filter((l) => l.includes("'budget-raise'"));
+      expect(raises).toHaveLength(3);
+      expect(raises[0]).toContain('export const AMENDMENT_KINDS = ');
+      expect(raises[1]).toContain('for (const a of record.amendments ?? [])');
+      expect(raises[2]).toContain("else if (a.kind === 'budget-raise') {");
     });
   });
 });

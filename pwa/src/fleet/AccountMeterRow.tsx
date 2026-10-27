@@ -1,4 +1,4 @@
-// One account/window meter row: label, banded meter, %, reset countdown.
+// One account/window meter row: label, banded meter, %, reset countdown (the % is `windowReading`'s, R48).
 //
 // ONE implementation. AccountsStrip and AccountsScreen each carried a private
 // copy of this JSX (`LimitRow` and `Bar`) that had drifted to byte-identical —
@@ -19,11 +19,27 @@
 import type { ReactNode } from 'react';
 import { Meter, limitBand } from '@ccrc/ui';
 import { formatReset } from './formatReset';
+import { windowReading } from './laneWords';
 import './fleet.css';
 
 /** Band for the meter, with the one state `limitBand` has no word for. */
 function band(pct: number | null): ReturnType<typeof limitBand> | 'none' {
   return pct === null ? 'none' : limitBand(pct);
+}
+
+/** The percentage cell: `shown` once, plus the spoken words only where they differ. */
+function Reading({ reading }: { reading: ReturnType<typeof windowReading> }): ReactNode {
+  const { shown, spoken } = reading;
+  return (
+    <span className="acct-pct">
+      {spoken === shown ? shown : (
+        <>
+          <span aria-hidden="true">{shown}</span>
+          <span className="sr-only">{spoken}</span>
+        </>
+      )}
+    </span>
+  );
 }
 
 export function AccountMeterRow({ label, pct, resetAt, nowSec, rolledOver, off = false }: {
@@ -42,13 +58,13 @@ export function AccountMeterRow({ label, pct, resetAt, nowSec, rolledOver, off =
       {/* An unmeasured window draws no fill at all: "never measured" stays a
           different picture from a measured 0%. */}
       <Meter pct={pct} band={band(pct)} off={off} trackClassName="acct-meter" fillClassName="acct-fill" />
-      {/* A three-way, never collapsed: "reset" (the window ended and nothing has
-          measured the new one yet, so the zero is INFERRED from the reset
-          timestamp) ≠ a measured "0%" (something ran, the account really is
-          empty) ≠ "—" (never measured at all). Callers differ on whether a row
-          renders at all — the strip drops a window an account does not have,
-          the screen always renders both — but not on what the three mean. */}
-      <span className="acct-pct">{rolledOver ? 'reset' : pct === null ? '—' : `${pct}%`}</span>
+      {/* R48: EVERY window prints a percentage, through `windowReading`, the one function that says how (the picker's
+          `AccountRow` Gauge and the lanes' accessible names call it too). A rolled-over window (the window ended and
+          nothing has measured the new one yet, so the zero is INFERRED from the reset timestamp) prints "0%" beside
+          its countdown; a window never measured prints "—". The three stay three in what a screen reader hears:
+          where `spoken` differs from `shown` the printed glyphs are `aria-hidden` and the words sit beside them in
+          an `sr-only` span. A measured window speaks what it shows, so it prints once, in one node. */}
+      <Reading reading={windowReading(pct, rolledOver)} />
       <span className="acct-reset" title="time until this window resets">↻ {formatReset(resetAt, nowSec)}</span>
     </div>
   );

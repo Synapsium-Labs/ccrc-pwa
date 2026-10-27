@@ -21,7 +21,7 @@ let home: string;
 let projectsRoot: string;
 let app: FastifyInstance | undefined;
 
-const dead: Runner = async () => ({ code: 1, stdout: '', stderr: '' });
+const dead: Runner = async () => ({ ran: true, code: 1, stdout: '', stderr: '' });
 
 const open = async (io: FleetIO = localIO): Promise<FastifyInstance> => {
   const cfg = loadConfig({ CCRC_HOME: home, CCRC_PROJECTS_ROOT: projectsRoot });

@@ -45,7 +45,7 @@ export interface DriftReviewRow {
 }
 /** A `held` or `answering` asks row. */
 export interface DriftAskRow { readonly id: number; readonly at: number; readonly childId: string; readonly state: string }
-/** A worker's child mark beside `parentOfSession`'s answer and the marked run's `claimedBy`. */
+/** A worker's child mark beside the series' parent (`childParentOf`) and the marked run's `claimedBy`. */
 export interface DriftWorkerRow {
   readonly sessionId: string; readonly markRunId: number; readonly parentId: string | null;
   readonly runClaimedBy: string | null;
@@ -63,6 +63,17 @@ export interface DriftInput {
   readonly asks: readonly DriftAskRow[];
   readonly workers: readonly DriftWorkerRow[];
   readonly approvals: readonly DriftApprovalRow[];
+}
+
+/** One stored `drift_findings` row (D-5922): the finding plus the passes that saw it and the push's once-only stamps.
+ *  `clearedAt` null: open. `pushedAt`/`pushedVia` are both null or both set; `shadowAt` is the unarmed lane's own. */
+export interface DriftFindingRow extends DriftFinding {
+  readonly firstSeenAt: number;
+  readonly lastSeenAt: number;
+  readonly clearedAt: number | null;
+  readonly pushedAt: number | null;
+  readonly pushedVia: 'item' | 'summary' | null;
+  readonly shadowAt: number | null;
 }
 
 // ── the decider ──────────────────────────────────────────────────────────────────────────────────────────────

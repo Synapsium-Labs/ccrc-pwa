@@ -47,10 +47,10 @@ const seed = (home: string, id: string, uuid: string, over: Record<string, strin
 
 /** tmux answers every pane alive, with a pid and an empty capture; every other exec fails. */
 const aliveTmux: Runner = async (_cmd, args) => {
-  if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
-  if (args[0] === 'list-panes') return { code: 0, stdout: '4061\n', stderr: '' };
-  if (args[0] === 'capture-pane') return { code: 0, stdout: '', stderr: '' };
-  return { code: 1, stdout: '', stderr: '' };
+  if (args[0] === 'has-session') return { ran: true, code: 0, stdout: '', stderr: '' };
+  if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: '4061\n', stderr: '' };
+  if (args[0] === 'capture-pane') return { ran: true, code: 0, stdout: '', stderr: '' };
+  return { ran: true, code: 1, stdout: '', stderr: '' };
 };
 
 /** `localIO`, except that each listing of the registry directory is COUNTED and can be failed: while `blind` is set

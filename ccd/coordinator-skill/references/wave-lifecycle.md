@@ -106,7 +106,6 @@ with the run now `dispatched`, or a refusal:
 | `paused` | `$REG/coordinator-paused` exists | stop, report, touch nothing |
 | `mail-disabled` | `$REG/mail-disabled` exists | stop, report, touch nothing |
 | `cap-concurrency` | `maxConcurrentWorkers` is full | stop, name the cap, wait |
-| `cap-daily` | `maxSessionsPerDay` is used up | stop, name the cap, wait |
 | `ambiguous-dispatch` | wave 1's spawn found 0 or >1 candidate workspaces | stop and report; the operator resolves it |
 | `worker-busy` | wave ≥ 2's session is observably mid-turn — at the gate, or at the act: the server reads the live file again just before the `/clear`, and a refusal there can leave this run's own hold and route arming in place, which the next dispatch rewrites (D-5238) | wait and retry; do not force it |
 | `hookstate-unmeasurable` | wave ≥ 2's session has a hookstate file the server could not READ — so whether it is mid-turn was never measured at all | retry once: nothing was spawned, the run is untouched and still `planned`, and the workspace was only resumed. If it repeats, stop and report — a file on the fleet host needs a human, and this refusal will stand until it is readable |
@@ -123,13 +122,11 @@ undispatched consumer, and a run parked IDLE at `awaiting-review`, `merging` or
 `closing` all consume no running-worker slot. **An idle run gives its slot back
 WITHOUT closing** (D-2803); before wave 6 of review-runs it held one until it
 reached a terminal state, and prose written against that older rule is wrong
-rather than merely imprecise. Each actual dispatch still consumes daily budget,
-and a dispatched run consumes one concurrency slot for as long as it stays
-active. Each refusal's own numbers are the authority, and the two
-carry DIFFERENT ones: `cap-concurrency` carries `limit` and `running`, while
-`cap-daily` carries `limit` and `used` — it never carries `running`, so a
-coordinator refused `cap-daily` that goes looking for one is reading a field
-the frame does not have.
+rather than merely imprecise. A dispatched run consumes one concurrency slot
+for as long as it stays active, and that is the only cap: there is no daily
+dispatch count, so a review or a warm resume costs nothing beyond its slot.
+The refusal's own numbers are the authority: `cap-concurrency` carries `limit`
+and `running`.
 
 **`worker-busy` and `hookstate-unmeasurable` are not two words for one
 answer.** `worker-busy` is a MEASUREMENT: the server read the session's
@@ -228,8 +225,17 @@ take it is never blocked on: the server journals the omission instead and
 moves on, as `route-omitted:no-route-argv-cap` (wave 1's argv path) or
 `route-omitted:no-route-v1-cap` (wave N ≥ 2's verb path) — two DIFFERENT
 run events because the two are different parse paths that can ship one
-without the other. Omitting `route` sends the identical bare argv it
-always has. The brief still names the routing in prose (clause 13) — this
+without the other. Omitting `route` on a fresh spawn fills the run
+kind's default row from `shared/route-defaults.ts` (the matrix's spec'd-worker
+row for `work`, the review-session row for `review`) and journals
+`route-defaulted:<kind>`. The default's class is a PREFERENCE, never a
+requirement: the server sends it with `--route-default`, so ccd places by it
+like the coordinator row's own default, and a project whose in-pool lanes are all
+at the seven-day ceiling still places a defaulted dispatch (a class YOU pass is
+strict and is refused at the ceiling, `no account available for placement`). A
+ccd without `route-default-v1` gets no default route at all and the server
+journals `route-omitted:no-route-default-cap`; a resumed wave with no `route` keeps its session's
+record; an empty `{}` is a passed route and is sent bare. The brief still names the routing in prose (clause 13) — this
 object is what carries that placement to the fleet, never a replacement
 for saying so.
 
@@ -478,6 +484,12 @@ For each outstanding row, with `:id` below filled in from its `deliveryId`
    signal to ack (or act on) it now, not a promise it will keep arriving
    indefinitely.
 3. Then act.
+
+The server also answers `GET /api/mail/inbox?fromId=<your id>&fromUuid=<your uuid>`:
+every delivery you can still ack, oldest first, each rendered and masked under its
+delivery id, in pages of at most 20 KiB (`remaining` counts what the page left out).
+It writes nothing and acks nothing. Until your `ccrc-api` carries `mail inbox`, steps
+1 and 2 above stay the way to read and act.
 
 **Sending mail of your own** — a rejection (§4), a question, a status
 update — is `POST /api/mail`, body:
@@ -756,9 +768,11 @@ whole time, which is the only prevention this ordering rule buys.
    read, the exact SHA is the producer run's own verified `handoffCommit`:
    prove the merge with `gh pr view <pr> --json state,headRefOid`, answering
    MERGED with `headRefOid` equal to it — the coordinator merges with
-   `gh pr merge <pr> --squash --match-head-commit <handoffCommit>` (plus
-   `--admin` where the repository's ruleset requires it) for exactly this
-   reason — and on a native-queue project it lands with the same binding, as
+   `gh pr merge <pr> --squash --match-head-commit <handoffCommit>` for
+   exactly this reason (`--admin` and GitHub API merge or enqueue calls are
+   governed by the repository's external policy authority; until that
+   authority answers (wave 2b), a coordinator never uses them) — and on a
+   native-queue project it lands with the same binding, as
    "Landing on a native-queue project" below says. An UNMARKED producer —
    every workspace minted without a marker: by a box whose ccd did not yet
    mark children, or by a dispatch that journaled `child-omitted` (§2) — is
@@ -795,7 +809,11 @@ whole time, which is the only prevention this ordering rule buys.
    this PR's own, one `gh run rerun <run id> --failed` and the same wait.
    Then, from your own session, enqueue its PR with
    `gh pr merge <pr> --match-head-commit <handoffCommit>`: no `--squash`,
-   because the queue's merge method applies, and never `--admin`. Prove it
+   because the queue's merge method applies, and never `--admin`. The same
+   enqueue is what an unattended lander does (ruling R5 as amended
+   2026-10-25: the queue re-tests the combined code, the required checks gate
+   the enqueue, the head is bound): it needs no human present, and a worker
+   still never enqueues its own PR. Prove it
    is IN the queue before you rely on the server:
    `gh api graphql -F o='{owner}' -F n='{repo}' -F p=<pr> -f query='query($o: String!, $n: String!, $p: Int!) { repository(owner: $o, name: $n) { pullRequest(number: $p) { state autoMergeRequest { enabledAt } mergeQueueEntry { state } } } }'`
    gives one of four answers. A queued PR answers a non-null
@@ -967,6 +985,11 @@ was destroyed. When the first two disagree the census raises it as a divergence;
 winner. A `null` in `meas` means it was not measured, never that it was empty.
 
 ## The run's own signals — a measurement, never a dial
+
+`GET /api/runs/:id` — one run, plus its spend: the tokens its bound sessions have used and their proxy
+cost, read from the usage sweep (`spend` is `{measured:true, tokens, proxyUsd, measuredAt}`, or
+`{measured:false, reason}` when nothing could be added up, never a zero). It takes a session cookie or the box
+token. It measures only; no route refuses on it.
 
 `GET /api/runs/:id/signals` — speed and quality signals re-measured off this run's own rows: the
 worker's paired holds, a swap COUNT (swap TIME is unpairable in today's journal, and the wire says
@@ -1187,3 +1210,18 @@ operator has the prompt. Any other caller is `403 not-parent`, wherever it sits.
 three routes of the lane are the child's hook's and the install's, never yours:
 `POST /api/approvals` (the hook's request), `GET /api/approvals/:id/ruling` (the hook's wait,
 by its nonce) and `GET /api/approvals/key` (the public key a fleet box pins).
+
+## Mutation testing — through the helper, never by hand
+
+`references/mutation-run.py` (stdlib-only Python 3; `--help` shows the rest) is the way a
+guard's test is proven to go red. It compiles each mutant in memory, so no mutant file exists;
+runs the tests in a per-mutant temp directory under a RAM-backed root that it removes after
+every mutant, even on failure or interrupt; runs only the tests that execute the mutated lines
+(from one traced baseline); and, given the previous round's `--out` file and a `--diff`,
+re-runs only mutants on changed lines. Output is one line per mutant and a summary.
+
+- Never write a mutant to disk and never leave a per-run temp tree behind: a round of
+  thousands of mutants once filled most of a fleet volume's inodes with directories nobody
+  removed.
+- A heavy round (hundreds of mutants, or a slow suite) belongs in a child workspace, not in
+  this session's scratch: dispatch it as a wave, and take its result line, not its files.

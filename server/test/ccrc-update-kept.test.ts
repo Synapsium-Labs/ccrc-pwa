@@ -6,11 +6,12 @@
 import { describe, it, expect, beforeAll } from 'vitest';
 import { spawn, spawnSync } from 'node:child_process';
 import { mkdirSync, readFileSync, writeFileSync, existsSync, statSync, lstatSync, chmodSync, readdirSync, appendFileSync, renameSync, rmSync, symlinkSync, readlinkSync, utimesSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { mkTmp, removeTmpFixturesEachTest } from './tmpHelpers.js';
 import { ccrcContainedEnv } from './ccrcContainment.js';
 import { assertNoRealTool } from './containedTools.js';
 import { itLinux } from './platformFixtures.js';
+import { installedCcdBody } from './ccdWsHelpers.js';
 import { installVersionedTree, keepDigest } from './installTreeFixture.js';
 import {
   REPO,
@@ -55,6 +56,11 @@ import {
   onKeptV1,
   verKeptAnswer,
 } from './ccrc-updateFixture.js';
+
+/** The installed body for a tree's ccd source: ccd-entry-install.py renders the library pin from the tree's library,
+ *  then swaps the source's line-2 placeholder, in place, for the marker (ccd-install-stamp.test.ts owns the rule). */
+const installedBodyOf = (src: string): string =>
+  installedCcdBody(readFileSync(src, 'utf8'), readFileSync(join(dirname(src), 'lib', 'disk-retention.sh')));
 
 describe('ccrc update: restore arm 1 — a flip back to the kept previous version (W6 Task 4)', () => {
   const GATE_DENIED = 'gate: GET http://127.0.0.1:7788/health got no answer (curl exited 7)';
@@ -103,7 +109,7 @@ describe('ccrc update: restore arm 1 — a flip back to the kept previous versio
     expect(fileText(join(home, '.ccrc', 'installed'))).toBe(keptRec);
     expect(fileText(join(v1, '.ccrc-stamp.json')), 'the kept stamp was rewritten').toBe(keptStamp);
     expect(fileText(join(v1, '.ccrc-installed')), 'the kept record was rewritten').toBe(keptRec);
-    expect(fileText(join(home, '.local', 'libexec', 'ccrc', 'ccd'))).toBe(fileText(join(v1, 'ccd/ccd')));
+    expect(fileText(join(home, '.local', 'libexec', 'ccrc', 'ccd'))).toBe(installedBodyOf(join(v1, 'ccd/ccd')));
     expect(fileText(join(home, '.local', 'libexec', 'ccrc', 'ccd'))).toContain(CCD_SENTINEL);
     // A return is not a new baseline, and the floor never lowers.
     expect(fileText(join(home, '.ccrc', 'previous'))).toBe(`v1.0.0\n${V1_SHA}\n`);
@@ -537,7 +543,7 @@ describe('ccrc rollback: by flip when the version is kept (W6 Task 4)', () => {
     expect(r.stdout).toMatch(/^update: gate: server answers on v1\.0\.0 /m);
     expect(r.stdout).toContain('rollback: this box runs v1.0.0 again — flipped back to $HOME/ccrc-versions/v1.0.0, no download');
     // No resolving, fetching, verifying or backing-up: nothing was downloaded.
-    expect(phasesOf(home)).toEqual(['installing', 'checking', 'restarting', 'done']);
+    expect(phasesOf(home)).toEqual(['installing', 'checking', 'restarting', 'restarting', 'done']);
     expect(lastReport(home)).toMatchObject({
       phase: 'done', detail: 'rolled back by flip to v1.0.0', target: 'v1.0.0', from: 'rollback',
     });
@@ -554,6 +560,17 @@ describe('ccrc rollback: by flip when the version is kept (W6 Task 4)', () => {
       }
       expect(r.stdout).not.toMatch(/DEGRADED/);
     }
+  });
+
+  // Wave 24 (D-6601): a completed flip re-stamps its report before it prunes, so its keep-set runs inside the deadline the
+  // console's lease measures from that write. The text half (after the sweep, directly before the prune) is W24-K5's.
+  it('W24-K5: a rollback by flip, run from the console, writes a restarting report, pruning ~/ccrc-backups, after its sweep and before done', () => {
+    const { home } = flipBox('ccrc-rollback-flip-w24-k5-');
+    withSweep(home);
+    const r = rollbackRun(home, ['--to', 'v1.0.0', '--from', 'pwa']);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(reportWrites(home).map((w) => `${String(w['phase'])} ${String(w['detail'])}`).slice(-3))
+      .toEqual(['restarting null', 'restarting pruning ~/ccrc-backups', 'done rolled back by flip to v1.0.0']);
   });
 
   // Review 179 fix round 1, item 5: a rollback by flip reaches `_upd_sweep`
@@ -610,7 +627,7 @@ describe('ccrc rollback: by flip when the version is kept (W6 Task 4)', () => {
     expect(lastReport(home)).toMatchObject({
       phase: 'done', detail: "doctor exited 1 - the box moved; its health is ccrc doctor's", target: 'v1.0.0', from: 'rollback',
     });
-    expect(phasesOf(home)).toEqual(['installing', 'checking', 'restarting', 'done']);
+    expect(phasesOf(home)).toEqual(['installing', 'checking', 'restarting', 'restarting', 'done']);
     if (process.platform === 'linux') {
       expect(calls(home), 'a moved box is swept, exit 3 or not').toContain('--user try-restart claude-session@*');
     }
@@ -850,7 +867,7 @@ describe('ccrc rollback: by flip when the version is kept (W6 Task 4)', () => {
     expect(r.stdout).toContain('rollback: v1.0.0 is kept at $HOME/ccrc-versions/v1.0.0 — no release-host question and no download');
     expect(localUrls(home)).toEqual([]);
     expect(linkOf(home)).toBe(v1);
-    expect(fileText(join(home, '.local', 'libexec', 'ccrc', 'ccd'))).toBe(fileText(join(v1, 'ccd/ccd')));
+    expect(fileText(join(home, '.local', 'libexec', 'ccrc', 'ccd'))).toBe(installedBodyOf(join(v1, 'ccd/ccd')));
     expect(fileText(join(home, '.local', 'libexec', 'ccrc', 'ccd'))).toContain(CCD_SENTINEL);
     expect(fileText(join(home, '.ccrc', 'build.json'))).toBe(keptStamp);
     expect(fileText(join(home, '.ccrc', 'installed'))).toBe(keptRec);
@@ -1473,15 +1490,15 @@ describe('ccrc versions, and the GC that never removes a needed version (W6 Task
     expect(r.stderr).toMatch(/^ccrc: unknown argument: --bogus/m);
     r = runVersions(home, ['--prune'], { CCRC_VERSIONS_KEEP: 'three' });
     expect(r.code).toBe(1);
-    expect(r.stderr).toMatch(/^ccrc: versions: CCRC_VERSIONS_KEEP='three' is not a whole number from 0 to 9999 — nothing was pruned$/m);
+    expect(r.stderr).toMatch(/^ccrc: versions: CCRC_VERSIONS_KEEP='three' is not a whole number from 0 to 9999, as set in the environment — nothing was pruned$/m);
     expect(versionDirs(home)).toEqual(['v1.0.0', 'v1.0.1']);
     expect(existsSync(join(home, '.ccrc', 'update.lock'))).toBe(false);
     // F8: listing is exit 0 by the exit table — a bad knob WARNs and lists, verdicts unmeasured.
     r = runVersions(home, [], { CCRC_VERSIONS_KEEP: 'three' });
     expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
-    expect(r.stdout).toMatch(/^versions: WARN: CCRC_VERSIONS_KEEP='three' is not a whole number from 0 to 9999 — listing only; nothing would be pruned$/m);
-    expect(r.stdout).toMatch(/^ {2}\* v1\.0\.1 {2}complete {2}kept: CCRC_VERSIONS_KEEP is not a whole number from 0 to 9999$/m);
-    expect(r.stdout).toMatch(/^ {2}  v1\.0\.0 {2}complete {2}kept: CCRC_VERSIONS_KEEP is not a whole number from 0 to 9999$/m);
+    expect(r.stdout).toMatch(/^versions: WARN: CCRC_VERSIONS_KEEP='three' is not a whole number from 0 to 9999, as set in the environment — listing only; nothing would be pruned$/m);
+    expect(r.stdout).toMatch(/^ {2}\* v1\.0\.1 {2}complete {2}kept: CCRC_VERSIONS_KEEP could not be used \(the WARN above says why\)$/m);
+    expect(r.stdout).toMatch(/^ {2}  v1\.0\.0 {2}complete {2}kept: CCRC_VERSIONS_KEEP could not be used \(the WARN above says why\)$/m);
     expect(versionDirs(home)).toEqual(['v1.0.0', 'v1.0.1']);
   });
 
@@ -1493,7 +1510,7 @@ describe('ccrc versions, and the GC that never removes a needed version (W6 Task
   // the plain listing called every one of them `prunable`.
   describe('the KEEP knob is ONE bounded number: a whole number from 0 to 9999, or nothing is pruned and nothing is called prunable (F6)', () => {
     const NAMES = ['v1.0.4', 'v1.0.3', 'v1.0.2', 'v1.0.1', 'v1.0.0'];
-    const WHY = (v: string): string => `CCRC_VERSIONS_KEEP='${v}' is not a whole number from 0 to 9999`;
+    const WHY = (v: string): string => `CCRC_VERSIONS_KEEP='${v}' is not a whole number from 0 to 9999, as set in the environment`;
     const HUGE = '99999999999999999999';
 
     it("the report's value is refused by the prune, the plain listing and the automatic GC — every version stays, none is called prunable", () => {
@@ -1510,8 +1527,8 @@ describe('ccrc versions, and the GC that never removes a needed version (W6 Task
       expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
       expect(r.stdout).toContain(`versions: WARN: ${WHY(HUGE)} — listing only; nothing would be pruned`);
       expect(r.stdout, 'a version was listed as prunable').not.toMatch(/^ {2}[ *] \S+ {2}(?:in)?complete {2}prunable/m);
-      expect(r.stdout).toMatch(/^ {4}v1\.0\.0 {2}complete {2}kept: CCRC_VERSIONS_KEEP is not a whole number from 0 to 9999$/m);
-      expect(r.stdout).toContain('CCRC_VERSIONS_KEEP=(not a whole number from 0 to 9999)');
+      expect(r.stdout).toMatch(/^ {4}v1\.0\.0 {2}complete {2}kept: CCRC_VERSIONS_KEEP could not be used \(the WARN above says why\)$/m);
+      expect(r.stdout).toContain('CCRC_VERSIONS_KEEP=(could not be used)');
       // The automatic GC keeps its contract: a WARN, rc 1 (its callers ignore it), nothing removed.
       const a = sourcedCcrc(home, `CCRC_VERSIONS_KEEP=${HUGE}; _ver_gc update auto; echo "rc=$?"`);
       expect(a.stdout, a.stderr).toBe(`update: versions: WARN: ${WHY(HUGE)} — nothing pruned\nrc=1\n`);

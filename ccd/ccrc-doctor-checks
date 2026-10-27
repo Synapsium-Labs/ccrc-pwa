@@ -195,7 +195,7 @@ CCRC_DOCTOR_CHECKS=(
   caddyfile
   cert
   name
-  disk
+  disk box-settings   # one line, as `flock timeout`: _check_box-settings is at the END of this file
   wrappers
   skills
   accounts
@@ -4126,82 +4126,18 @@ CONTINUED_IN_TAIL_BYTES=8192   # held equal to CONTINUATION_TAIL_BYTES
 # (server/src/transcript/parse.ts) and ccd/ccd's own CONTINUED_IN_TAIL_BYTES
 # by server/test/continued-in-parity.test.ts — three readers, one window.
 
-# THE RULE, NOT A COPY OF ITS LITERALS (D-4940). This is the jq program
-# ccd/ccd's `_continued_in_of` runs, byte for byte — `continued-in-parity.test.ts`
-# holds the two spellings equal and runs this reader, ccd's and the server's
-# over one table of transcripts — and the TypeScript twin (`tailRecordOf`,
-# server/src/transcript/parse.ts) is where the rule is written out in full:
-# the window's lines are read NEWEST FIRST; a top-level `continued-in` record
-# decides (a successor, or none when it is not this file's valid marker), a
-# top-level user/assistant record that Claude Code's own reader calls a
-# finished turn decides "none", and every other line — metadata Claude Code
-# re-stamps after the marker, an interruption notice, a tool result, a line
-# that does not parse, the window's cut first line — is stepped over. The old
-# reader here matched substrings anywhere on the LAST line, so a tool call
-# whose input held a marker-shaped object read as superseded while the server
-# refused it, and a real marker with a `last-prompt` line after it read as live
-# (review findings F1 and ccd-last-line-only-marker). Why the program is
-# spelled the way it is — no `first`/`any`/`all` (jq 1.6), JavaScript's
-# whitespace in code points, the surrogate rewrite — is said once, above the
-# same text in ccd/ccd. jq is already this file's JSON reader (the `build`
-# check reads the stamp with it), and `_check_jq` FAILs a box without one — on
-# which ccd's chain follow reads nothing either.
-CONTINUED_IN_JQ='def jsws: . == 9 or . == 10 or . == 11 or . == 12 or . == 13 or . == 32 or . == 160 or . == 5760
-  or (. >= 8192 and . <= 8202) or . == 8232 or . == 8233 or . == 8239 or . == 8287 or . == 12288 or . == 65279;
-def jstrim: explode as $c
-  | [range(0; $c | length) | select($c[.] | jsws | not)] as $k
-  | if $k == [] then "" else $c[$k[0]:$k[-1] + 1] | implode end;
-def tagled: explode as $c
-  | ($c | length) > 2 and $c[0] == 60 and $c[1] >= 97 and $c[1] <= 122
-  and ([range(2; $c | length) | select($c[.] as $x
-         | ($x >= 48 and $x <= 57) or ($x >= 65 and $x <= 90) or ($x >= 97 and $x <= 122) or $x == 95 or $x == 45 | not)] as $k
-       | $k != [] and ($c[$k[0]] as $x | $x == 62 or ($x | jsws)));
-def cmdname: split("<command-name>") as $s
-  | [range(1; $s | length) | $s[.:] | join("<command-name>")
-     | split("\r")[0] | split("\u2028")[0] | split("\u2029")[0] | select(contains("</command-name>"))] != [];
-def prompttext:
-  if contains("<pasted_content id=\"") then true
-  else jstrim as $n
-  | if $n == "" then false
-    elif ($n | cmdname) then false
-    elif ($n | split("<bash-input>") | length > 1 and (.[1:] | join("<bash-input>") | contains("</bash-input>"))) then true
-    elif ($n | startswith("[Request interrupted by user")) and ($n | ltrimstr("[Request interrupted by user") | contains("]")) then false
-    elif ($n | tagled) then false
-    else true end
-  end;
-def prompt: .isMeta != true and .isCompactSummary != true and (.message | type) == "object"
-  and (.message.content as $x
-       | if ($x | type) == "string" then ($x | prompttext)
-         elif ($x | type) == "array" then
-           [$x[] | select(type == "object" and .type == "tool_result")] == []
-           and [$x[] | select(type == "object" and .type == "text" and (.text | type) == "string") | select(.text | prompttext)] != []
-         else false end);
-def complete: ((has("isApiErrorMessage") | not) or .isApiErrorMessage == false)
-  and (.message | type) == "object" and (.message.stop_reason | type) == "string";
-def unsurrogate: reduce ("d", "D") as $d (.; reduce ("8", "9", "a", "b", "c", "d", "e", "f", "A", "B", "C", "D", "E", "F") as $h
-  (.; split("\\u" + $d + $h) | join("\\uff")));
-def tailrec($l):
-  ($l | contains("\"type\":\"continued-in\"")) as $m
-  | ($l | (contains("\"type\":\"user\"") or contains("\"type\":\"assistant\""))) as $t
-  | if ($m or $t) | not then "skip"
-    else [$l | try fromjson catch ($l | unsurrogate | try fromjson catch empty)]
-    | if . == [] or (.[0] | type) != "object" then "skip"
-      else .[0]
-      | if $m and .type == "continued-in" and (.continuedInSessionId | type) == "string" then
-          .continuedInSessionId as $to
-          | if ((has("sessionId") | not) or .sessionId == $u)
-               and ($to | length) == 36
-               and ([$to | explode[] | select((. == 45 or (. >= 48 and . <= 57) or (. >= 97 and . <= 102)) | not)] == [])
-               and $to != $u
-            then "+" + $to else "stop" end
-        elif $t and .type == "assistant" then (if complete then "stop" else "skip" end)
-        elif $t and .type == "user" then (if prompt then "stop" else "skip" end)
-        else "skip" end
-      end
-    end;
-[(split("\n") | reverse[]) as $l | tailrec($l) | select(. != "skip")] | (.[0] // "stop")
-| select(startswith("+")) | .[1:]
-'
+# THE RULE, NOT A COPY OF ITS LITERALS (D-4940; ARCH-65). The jq program is
+# `ccd/lib/transcript.jq`, the one file ccd/ccd's `_continued_in_of` loads too
+# (this file cannot source ccd, so both load the module with `jq -L`);
+# `continued-in-parity.test.ts` runs this reader, ccd's and the server's over
+# one table of transcripts, and the TypeScript twin (`tailRecordOf`,
+# server/src/transcript/parse.ts) is where the rule is written out in full.
+# The file sits beside this script in a tree, else under
+# `$HOME/.cc-sessions/lib` where the installers put it; a missing file is a jq
+# that fails to load, which `_dr_continued_in` answers as NOT MEASURED (rc 2).
+TRANSCRIPT_JQ_LIB="${BASH_SOURCE[0]%/*}/lib"
+[ -f "$TRANSCRIPT_JQ_LIB/transcript.jq" ] || TRANSCRIPT_JQ_LIB="$HOME/.cc-sessions"/lib   # the bare directory on a code line: pool-name-parity.test.ts pins `.cc-sessions/<name>` literals
+CONTINUED_IN_JQ='include "transcript"; continued_in($u)'
 
 _DR_CI_NEXT=""   # `_dr_continued_in`'s out-parameter: the successor, on rc 0
 
@@ -4227,7 +4163,7 @@ _dr_continued_in() {   # file uuid -> 0 superseded (successor in _DR_CI_NEXT), 1
   _DR_CI_NEXT=""
   out=$(set -o pipefail
         tail -c "$CONTINUED_IN_TAIL_BYTES" -- "$f" 2>/dev/null \
-          | jq -rRs --arg u "$uuid" "$CONTINUED_IN_JQ" 2>/dev/null) || return 2
+          | jq -L "$TRANSCRIPT_JQ_LIB" -rRs --arg u "$uuid" "$CONTINUED_IN_JQ" 2>/dev/null) || return 2
   [ -n "$out" ] || return 1
   _DR_CI_NEXT="$out"
   return 0
@@ -4379,7 +4315,7 @@ _check_transcripts() {
     cfg=$(_ccrc_cfg_dir "$wrapper" 2>/dev/null) || cfg=""
     [ -n "$cfg" ] || { rowbad=$((rowbad + 1)); continue; }
     # BOTH SPELLINGS, RESOLVED FIRST — a cross-task hazard Task 6's own review
-    # caught: `ccd`'s readers (`_transcript_path`, `_ci_transcript_path`) try
+    # caught: `ccd`'s readers (`_transcript_path`, `_ci_addrs`/`_ci_extant`) try
     # the REALPATH-resolved munge before the raw one, because Claude Code
     # munges its PHYSICAL cwd (node's `process.cwd()` resolves symlinks)
     # while the registry keeps the path `ccd` wrote — and on a box where
@@ -6541,9 +6477,23 @@ _check_docs() {
 # The usage row is read only after a regular-file test (a FIFO at that path
 # blocks a read — F2's class, `_check_models`), and nothing here opens an OAuth
 # file.
-# THREE of the timer's 15-minute cycles: one missed poll is not a finding.
-# `ccrc-doctor.test.ts` ties this to the shipped timer's `OnUnitActiveSec=`.
+# THE STALENESS BOUND DEPENDS ON THE LANE'S MODE (the whole-wave fix round,
+# FR3-1): one missed poll is not a finding, on either kind of lane.
+#   - A `litellm` lane, and a lane whose mode cannot be read
+#     (`_codex_lane_mode` rc 1), keep THREE of the timer's 15-minute cycles,
+#     `_DR_CODEX_USAGE_STALE_S`, and their WARNs say what they said before the
+#     bridge: a litellm lane's row is stamped when its poll writes it.
+#   - A `direct` lane adds BRIDGE_FRESH_S, `_DR_CODEX_USAGE_STALE_DIRECT_S`. Its
+#     row's `ts` is when its figures were MEASURED, not when the poll wrote it:
+#     the poll publishes the bridge's own snapshot under the bridge's stamp
+#     (`_bridge_headers` in ccgpt-usage.py), up to its BRIDGE_FRESH_S (900 s)
+#     older than the poll, so three cycles alone (2700 s) would WARN there
+#     after ONE failed poll. At 3600 s it WARNs after two, and its WARN says
+#     "measured" and counts no polls (D-6898).
+# `ccrc-doctor-codex.test.ts` ties both to the shipped timer's
+# `OnUnitActiveSec=`, and the direct one to ccgpt-usage.py's BRIDGE_FRESH_S.
 _DR_CODEX_USAGE_STALE_S=2700
+_DR_CODEX_USAGE_STALE_DIRECT_S=3600
 
 _dr_codex_usage_box() {   # -> WARN findings, recorded; rc 2 if any, else 0; sets DR_CODEX_USAGE_PAIR and DR_CODEX_USAGE_BOX_NOTE
   local u rc=0
@@ -6576,7 +6526,7 @@ _dr_codex_usage_box() {   # -> WARN findings, recorded; rc 2 if any, else 0; set
 }
 
 _dr_codex_usage() {   # <id> -> WARN findings for this lane, recorded; rc 2 if any, else 0; sets DR_CODEX_USAGE_NOTE
-  local id="$1" rc=0 t f row now en ts age
+  local id="$1" rc=0 t f row now en ts age bound mode
   local -a note=()
   DR_CODEX_USAGE_NOTE=''
   if [ "${CCD_OS:-linux}" = darwin ]; then
@@ -6605,8 +6555,12 @@ _dr_codex_usage() {   # <id> -> WARN findings for this lane, recorded; rc 2 if a
       "ccrc install — its converge enables one usage timer per codex lane"
     rc=2
   fi
-  # (2) THE ROW, judged only when ccrc's timer is its writer.
+  # (2) THE ROW, judged only when ccrc's timer is its writer, against the
+  # bound of the lane's mode (above): a mode that cannot be read is no
+  # `direct` lane, and keeps the litellm bound.
   if _codex_usage_enabled "$t" && ! _codex_usage_enabled "$f"; then
+    bound="$_DR_CODEX_USAGE_STALE_S"
+    if mode="$(_codex_lane_mode "$id" 2>/dev/null)" && [ "$mode" = direct ]; then bound="$_DR_CODEX_USAGE_STALE_DIRECT_S"; else mode=''; fi
     row="$HOME/.cc-limits/$id.json"
     if ! now="$(date +%s 2>/dev/null)" || ! [[ "$now" =~ ^[0-9]+$ ]]; then
       _dr_cx_warn "$id: this box's \`date\` cannot answer +%s, so the age of this lane's usage row cannot be measured" \
@@ -6614,10 +6568,10 @@ _dr_codex_usage() {   # <id> -> WARN findings for this lane, recorded; rc 2 if a
       rc=2
     elif [ ! -e "$row" ] && [ ! -L "$row" ]; then
       en="$(_plat_mtime "$(_codex_usage_wants)/$t" 2>/dev/null)" || en=''
-      if [[ "$en" =~ ^[0-9]+$ ]] && [ $((now - en)) -le "$_DR_CODEX_USAGE_STALE_S" ]; then
+      if [[ "$en" =~ ^[0-9]+$ ]] && [ $((now - en)) -le "$bound" ]; then
         note+=("no usage row yet (enabled $((now - en))s ago; the first poll runs five minutes after enable)")
       else
-        _dr_cx_warn "$id: $t has been enabled for longer than $((_DR_CODEX_USAGE_STALE_S / 60)) min and this lane has never published a usage row ($row)" \
+        _dr_cx_warn "$id: $t has been enabled for longer than $((bound / 60)) min and this lane has never published a usage row ($row)" \
           "read what the publisher says: $(_dr_log_hint "ccrc-codex-usage@$id.service")"
         rc=2
       fi
@@ -6633,7 +6587,11 @@ _dr_codex_usage() {   # <id> -> WARN findings for this lane, recorded; rc 2 if a
         rc=2
       else
         age=$((now - ts))
-        if [ "$age" -gt "$_DR_CODEX_USAGE_STALE_S" ]; then
+        if [ "$age" -gt "$bound" ] && [ "$mode" = direct ]; then
+          _dr_cx_warn "$id: its usage row was last measured $(((age + 59) / 60)) min ago — more than $((bound / 60)) min, so $t's recent polls have published nothing" \
+            "read what the publisher says: $(_dr_log_hint "ccrc-codex-usage@$id.service")"
+          rc=2
+        elif [ "$age" -gt "$bound" ]; then
           _dr_cx_warn "$id: its usage row was last written $((age / 60)) min ago — more than three of $t's polls" \
             "read what the publisher says: $(_dr_log_hint "ccrc-codex-usage@$id.service")"
           rc=2
@@ -6757,6 +6715,7 @@ _check_codex() {
   for fn in _box_env_value _codex_lanes _codex_row _codex_lane_json_state _codex_lane_dir \
             _codex_litellm_yaml _codex_runtime_cli _models_node _models_roster_path _models_litellm_template \
             _codex_tier_ours _codex_tier_stale _codex_foreign_what _codex_tier_is_our_handle \
+            _codex_lane_mode _codex_lane_upstream _codex_mode_tiers _codex_other_tiers _codex_tier_is_other_mode _plat_mode \
             _codex_auth_status _codex_auth \
             _svc_is_active _svc_status_hint \
             _codex_usage_enabled _codex_usage_enabled_ids _codex_usage_timer _codex_usage_foreign _codex_usage_wants _codex_usage_flat_foreign \
@@ -6929,16 +6888,22 @@ _check_codex() {
 #      mode-only fix or a compare that could not run) of one of the three
 #      files a running tier's identity is computed from — the shim
 #      (`_codex_shim_file`), the runtime CLI (`_codex_runtime_cli`) or the
-#      auth library the litellm tier loads (`_codex_auth_lib`, codex-bridge
-#      Stage 1, Task 6), per `_codex_started_json` — or step 2 rebuilt the
-#      runtime:
+#      auth library the litellm tier and a direct lane's bridge load
+#      (`_codex_auth_lib`, codex-bridge Stage 1, Task 6; the bridge's record
+#      hashes it since the whole-wave fix round of Stage 2), per
+#      `_codex_started_json` — or step 2 rebuilt the runtime:
 #      `_inst_codex_tiers`, the install step `ccrc install` and `ccrc update`
 #      run. ccgpt-usage.py and ccrc-codex are code no tier runs, so they
-#      never ask it. That step restarts a tier only when it is ccrc's own,
-#      running and measures stale, and it asks EVERY codex lane: so once it
-#      runs, a ccrc-owned tier on any lane that measures stale for any other
-#      reason is restarted too — exactly what `ccrc update` would do (the
-#      residue D-3721's entry names; ruled, not cured).
+#      never ask it. The placed shim and the auth library are also files a
+#      direct lane's bridge runs (its record names both, codex-bridge Stage 2,
+#      Task 13 and the whole-wave fix round), so a shim or a library this run
+#      restored restarts a running stale bridge through that same step, which
+#      starts no tier that was not running. That step restarts
+#      a tier only when it is ccrc's own, running and measures stale, and it
+#      asks EVERY codex lane: so once it runs, a ccrc-owned tier on any lane
+#      that measures stale for any other reason is restarted too — exactly
+#      what `ccrc update` would do (the residue D-3721's entry names; ruled,
+#      not cured).
 # WHAT IT NEVER DOES: edit the roster or choose a port (a row that does not
 # validate is named and left); run OAuth (`ccrc codex login <id>` is the
 # remedy the check prints); write anything under an authDir (the check reads
@@ -7023,9 +6988,10 @@ _fix_codex() {
           1)
             echo "FIX codex: restored \$HOME/.local/bin/$n from the shipped tree"
             # The three files a running tier's identity is computed from
-            # (`_codex_started_json`): the shim a shim tier runs, the
-            # runtime CLI that names every tier's generation, and the auth
-            # library a litellm tier loads.
+            # (`_codex_started_json`): the shim a shim tier and a bridge
+            # run, the runtime CLI that names every runtime tier's
+            # generation, and the auth library a litellm tier and a bridge
+            # load.
             if [ "$dst" = "$(_codex_shim_file)" ] || [ "$dst" = "$(_codex_runtime_cli)" ] \
                 || [ "$dst" = "$(_codex_auth_lib)" ]; then
               replaced=1
@@ -7299,11 +7265,17 @@ _dr_cx_auth() {   # <id> <authDir> — records at most one credential finding, o
 # One lane's static rows. Its row already read in `_check_codex`'s row pass;
 # it is read again HERE so this shell's CX_* are this lane's.
 _dr_cx_lane() {   # <id> <models: 1 = its model state is measurable> <roster> — sets DRX_LANE_WORDS
-  local id="$1" models="$2" roster="$3" auth st ans lc yaml
+  local id="$1" models="$2" roster="$3" auth st ans lc yaml mode up
   local -a f=()
   DRX_LANE_WORDS=''
   _codex_row "$id" 2>/dev/null || return 0
   DRX_LANE_WORDS="ports $CX_PROXY/$CX_LITELLM"
+  # THE LANE'S MODE (codex-bridge Stage 2, Task 13), read from the rendered
+  # lane.json by its one reader and captured first. A lane.json that names no
+  # mode this ccrc knows leaves it empty, read as neither mode: the lane.json
+  # rows below say what is wrong with that file.
+  mode="$(_codex_lane_mode "$id" 2>/dev/null)" || mode=''
+  [ "$mode" != direct ] || DRX_LANE_WORDS+=", direct mode"
   # authDir: the directory by `[ ]` tests, then the credential through the
   # auth library's non-secret status (codex-bridge Stage 1, Task 9). The
   # library is the one ccrc code that opens a credential; this row reads its
@@ -7326,12 +7298,21 @@ _dr_cx_lane() {   # <id> <models: 1 = its model state is measurable> <roster> �
       _dr_cx_fail "$id has no lane.json ($(_codex_lane_dir "$id")/lane.json), which the launcher, the shim and the usage publisher all read" \
         "render it: ccrc codex start $id renders lane.json from the roster before it starts the lane (every session launch runs the same start)" ;;
     stale)
-      _dr_cx_fail "$id's lane.json disagrees with its roster row (its id, configDir, authDir, a port or its unit names), so the shim and the usage publisher read the lane's old shape" \
+      _dr_cx_fail "$id's lane.json disagrees with its roster row (its id, configDir, authDir, a port, its unit names, or no mode, upstream or bridge file names at all), so the shim and the usage publisher read the lane's old shape" \
         "re-render it: ccrc codex start $id renders lane.json from the roster before it starts the lane" ;;
     *)
       _dr_cx_fail "whether $id's lane.json matches its roster row could not be measured" \
         "run: ccrc codex status $id — it reads the same file and says what it could see" ;;
   esac
+  # A direct lane runs on the backend route only: `ccrc codex start` refuses
+  # any other upstream (`upstream-unsupported`), read by the same one reader.
+  # A litellm lane never reads its upstream, so naming one there is no finding.
+  if [ "$mode" = direct ] && up="$(_codex_lane_upstream "$id" 2>/dev/null)" && [ "$up" != backend ]; then
+    _dr_cx_fail "$id is a direct lane whose upstream is \"$up\", and the $up route arrives in Stage 3: 'ccrc codex start $id' refuses it (upstream-unsupported), so the lane cannot serve" \
+      "set the lane's upstream back to \"backend\" (or remove it) in \$HOME/.ccrc/accounts.json by hand, then run 'ccrc doctor --fix' (it re-renders lane.json from the roster), then: ccrc codex start $id — ccrc never edits a roster row for you"
+  fi
+  _dr_cx_bridge_files "$id"
+  [ "$mode" != direct ] || _dr_cx_drift "$id"
   if [ "$models" -ne 1 ]; then DRX_LANE_WORDS+=", model state unread"; return 0; fi
   # The lane's model state, ONLY through models-op's `show`.
   ans="$(_models_node show --file "$roster" --id "$id" 2>/dev/null)"
@@ -7384,7 +7365,7 @@ _dr_cx_lane() {   # <id> <models: 1 = its model state is measurable> <roster> �
     case "$lc" in
       false) DRX_LANE_WORDS+=", lane.json current" ;;
       true)
-        _dr_cx_fail "$id's lane.json is stale against its class registry: the registry has moved (its haiku class, which is the lane's probe model, or another field lane.json carries) since the file was written" \
+        _dr_cx_fail "$id's lane.json disagrees with what its roster row and class registry render: one of them has moved (the row's mode or upstream, the registry's haiku class, which is the lane's probe model, or another field lane.json carries) since the file was written" \
           "re-render it: ccrc models $id set-subagent ${sub:-sonnet} (any models mutation re-renders the lane's files, lane.json among them)" ;;
       *)
         _dr_cx_fail "whether $id's lane.json matches its class registry could not be measured ('ccrc models' answered ${lc:-nothing})" \
@@ -7393,6 +7374,13 @@ _dr_cx_lane() {   # <id> <models: 1 = its model state is measurable> <roster> �
   fi
   # The rendered LiteLLM config against the CATALOGUE: models-op's `litellm`
   # without `--commit` is check-only — it answers `changed` and writes nothing.
+  # A direct lane runs no LiteLLM (codex-bridge Stage 2, Task 13): the hourly
+  # refresh keeps its config rendered for a switch back, and nothing it runs
+  # reads it, so the row is not asked there.
+  if [ "$mode" = direct ]; then
+    DRX_LANE_WORDS+=", LiteLLM config not asked (a direct lane runs no LiteLLM)"
+    return 0
+  fi
   yaml="$(_codex_litellm_yaml "$id")"
   lc="$(_models_node litellm --file "$roster" --id "$id" --template "$(_models_litellm_template)" --out "$yaml" 2>/dev/null \
         | jq -r 'if .ok == true then "changed:\(.changed)" else "refused:\(.error // ""):\(.detail // "" | gsub("[\n\t]"; " "))" end' 2>/dev/null)"
@@ -7445,25 +7433,71 @@ _dr_cx_lane() {   # <id> <models: 1 = its model state is measurable> <roster> �
 #   - a LiteLLM tier down under a live session is a WARN (2b-2's hazard: a
 #     tier that died after a start that wrote stays down until the next
 #     start, D-3716).
+# THE LANE'S MODE (codex-bridge Stage 2, Task 11): the walk is the lane's own
+# mode's tiers (`_codex_mode_tiers` of `_codex_lane_mode`), never
+# `$CODEX_TIERS`; a lane.json naming no readable mode is walked mode-blind,
+# `bridge shim litellm`, and its own row (the lane.json check) says why. The
+# other mode's tier reading rc 2 on a healthy lane is `not running`
+# (`_codex_tier_is_other_mode`), never foreign.
+# THE PER-MODE ROWS (codex-bridge Stage 2, Task 13). On a direct lane the walk
+# is the bridge alone, and its running / stale / foreign / unmeasured rows are
+# the generic ones above (stale a WARN, the shim-stale WARN's twin, worded for
+# the bridge's record). Then the other mode's tiers, `_codex_other_tiers`, are
+# asked: one that reads this lane's (0 or 4, as `ccrc codex start` counts them,
+# and ALSO the 2 `_codex_tier_is_our_handle` reads as this lane's own process,
+# which start's other-tiers loop does not yet count, D-6892)
+# is a RETIRED REFRESHER, a FAIL, because the litellm mode's tiers on a direct
+# lane mean two processes refresh one credential (Review Focus 5; resolves
+# Stage 1's D-6380). The shim is this lane's only by its `shim`-shaped answer
+# (`_codex_tier_ours`' per-tier identity): a healthy bridge on the shared port
+# makes the shim tier read rc 2 `listener-other-mode`, which is not a retired
+# shim. When the bridge itself reads `listener-other-mode` or `unit-unproven`,
+# its mate is measured on the spot (`_codex_tier_is_other_mode --mate-now`,
+# start's own measure): a 0 or 4 there is that retired shim, named once, by the
+# retired row, never also as a foreign listener. The half-up FAILs and the
+# LiteLLM-down WARN are a litellm lane's: a direct lane runs no LiteLLM, so
+# neither is asked there (a lane.json naming no readable mode keeps them, as
+# its mode-blind walk always did).
 _dr_cx_tiers() {   # <id> — sets DRX_TIER_WORDS
-  local id="$1" tier q word own lq=3 sq=3 unread='' refix=''
-  local -a words=()
-  for tier in $CODEX_TIERS; do
+  local id="$1" tier q word own lq=3 sq=3 unread='' refix='' mode walk mate up=0
+  local -a words=() retired=()
+  if mode="$(_codex_lane_mode "$id" 2>/dev/null)"; then walk="$(_codex_mode_tiers "$mode")"; else mode=''; walk='bridge shim litellm'; fi
+  for tier in $walk; do
     CX_LISTEN_WHY=''
     _codex_tier_ours "$id" "$tier" 2>/dev/null; q=$?
+    if _codex_tier_is_other_mode "$id" "$tier" "$q"; then q=1; fi
+    # The other mode's front tier holding the shared port of a direct lane: the
+    # retired row below names it, so it is not named again as a foreign one.
+    if [ "$mode" = direct ] && [ "$q" -eq 2 ] \
+       && { [ "${CX_TIER_WHY:-}" = listener-other-mode ] || [ "${CX_TIER_WHY:-}" = unit-unproven ]; } \
+       && mate="$(_codex_tier_is_other_mode --mate-now "$id" "$tier" 2>/dev/null)"; then
+      retired+=("${mate%% *}")
+      words+=("$tier not running (its port is held by its ${mate%% *} tier)")
+      up=1
+      continue
+    fi
+    [ "$q" -eq 1 ] || up=1
     case "$q" in
       0|4)
         word="$tier running"; [ "$q" -eq 4 ] && word="$tier starting"
         # CX_TIER_* read NOW: the next question overwrites them.
         words+=("$word${CX_TIER_VIA:+ ($CX_TIER_VIA${CX_TIER_PID:+, pid $CX_TIER_PID})}")
         _codex_tier_stale "$id" "$tier"
-        case $? in
-          1) ;;
+        case "$?:$tier" in
+          1:*) ;;
           # `_codex_tier_stale`'s 0 is "the record differs from what a start
           # would write now", and an absent, unreadable or unparseable record
           # differs too, so the sentence names every cause it cannot tell apart.
-          0) _dr_cx_warn "$id's $tier tier is running, and is not proven to run the installed bytes: its start record ($(_codex_lane_dir "$id")/$tier.started) is absent, unreadable or unparseable, or it names another runtime generation, or another placed shim, than a start would use now" \
+          # The bridge's record names its interpreter, the placed shim and the
+          # auth library (one hash, its `code`) and the package
+          # (`_codex_started_json bridge`), never a runtime generation; its
+          # interpreter is not compared (`_codex_tier_stale`).
+          0:bridge) _dr_cx_warn "$id's $tier tier is running, and is not proven to run the installed bytes: its start record ($(_codex_lane_dir "$id")/$tier.started) is absent, unreadable or unparseable, or it names another placed shim, another auth library or another bridge package than a start would use now" \
                "restart it onto the installed bytes: 'ccrc update' restarts a running, proven, stale ccrc tier; by hand, 'ccrc codex stop $id' then 'ccrc codex start $id'" ;;
+          0:*) _dr_cx_warn "$id's $tier tier is running, and is not proven to run the installed bytes: its start record ($(_codex_lane_dir "$id")/$tier.started) is absent, unreadable or unparseable, or it names another runtime generation, or another placed shim, than a start would use now" \
+               "restart it onto the installed bytes: 'ccrc update' restarts a running, proven, stale ccrc tier; by hand, 'ccrc codex stop $id' then 'ccrc codex start $id'" ;;
+          *:bridge) _dr_cx_warn "$id's $tier tier is running, and whether it runs the installed bytes cannot be told (no python3 3.9 or later on PATH, or the placed shim, the auth library or the bridge package cannot be hashed) — unmeasured, not current" \
+               "make python3 3.9 or later the one on PATH, and let 'ccrc update' place the shim, the auth library and the bridge package, then re-run doctor" ;;
           *) _dr_cx_warn "$id's $tier tier is running, and whether it runs the installed bytes cannot be told (no current runtime generation, or the tier's code file cannot be hashed) — unmeasured, not current" \
                "make the runtime current (the runtime finding, if any, names how), then re-run doctor" ;;
         esac ;;
@@ -7482,35 +7516,284 @@ _dr_cx_tiers() {   # <id> — sets DRX_TIER_WORDS
         fi ;;
       *)
         words+=("$tier unmeasured")
-        _dr_cx_warn "$id's $tier tier could not be measured${CX_LISTEN_WHY:+ ($CX_LISTEN_WHY)} — unmeasured, never read as running or as stopped" \
-          "run: ccrc codex status $id — it asks the same question and says what it could see" ;;
+        _dr_cx_tier_unmeasured "$id" "$tier" ;;
     esac
-    if [ "$tier" = litellm ]; then lq="$q"; else sq="$q"; fi
+    case "$tier" in litellm) lq="$q" ;; shim) sq="$q" ;; esac
   done
-  case "$lq:$sq" in
-    [04]:1)
-      _dr_cx_fail "$id is half up: its LiteLLM tier is running and its shim is not, so every request a session sends this lane fails before it reaches LiteLLM" \
-        "start the tier that is down: ccrc codex start $id (idempotent: it starts only what is not running)" ;;
-    1:[04])
-      _dr_cx_fail "$id is half up: its shim is running and its LiteLLM tier is not, so every request the shim forwards fails" \
-        "start the tier that is down: ccrc codex start $id (idempotent: it starts only what is not running)" ;;
-  esac
-  if [ "$lq" = 1 ]; then
-    _dr_cx_sessions "$id"
-    if [ "$DRX_LIVE" -gt 0 ]; then
-      _dr_cx_warn "$id's LiteLLM tier is not running while $DRX_LIVE live session(s) run on this lane, so every turn they send fails at the gateway — a tier that died after its start stays down until the next start" \
-        "start it: ccrc codex start $id (every session launch runs the same start)"
-    elif [ "$DRX_UNASKED" -gt 0 ]; then
-      [ "$DRX_UNREADABLE" -eq 0 ] || { unread="; $DRX_UNREADABLE of them: \$HOME/.cc-sessions/$DRX_UNREADABLE_SID.wrapper cannot be read by this user, so which lane that session runs on is unknown"; refix="read or fix that file's mode (ccd writes it), and "; }
-      _dr_cx_warn "$id's LiteLLM tier is not running, and whether any of this lane's registered sessions is live could not be asked ($DRX_UNASKED unanswered) — unmeasured, not idle$unread" \
-        "${refix}ask by hand${DRX_UNASKED_SID:+ ($(_svc_status_hint "claude-session@$DRX_UNASKED_SID.service"))}; if one is live, start the lane: ccrc codex start $id"
+  # THE RETIRED REFRESHER, a direct lane's (Task 13): the other mode's tiers.
+  # This lane's own (0 or 4) is the finding, as it is start's. The doctor ALSO
+  # counts the one 2 that is this lane's own process, `listener-other-process`
+  # (`_codex_tier_is_our_handle`, asked directly after the question, as its
+  # contract says), which start's other-tiers loop does not yet count
+  # (D-6892): a tier of this lane's alive by its command
+  # line while another process holds its port is still running, and
+  # `ccrc codex stop` ends it through that handle. A 1 is the healthy answer,
+  # and every other 2 (the bridge's `listener-other-mode` on the shim, or a
+  # stranger on a port this mode does not use) is not this mode's business,
+  # as it is not start's. A 3 is the walk's unmeasured row, asked here too, so
+  # the retired check never reads a tier it could not measure as not running
+  # (start refuses on it).
+  if [ "$mode" = direct ]; then
+    for tier in $(_codex_other_tiers "$mode"); do
+      CX_LISTEN_WHY=''
+      _codex_tier_ours "$id" "$tier" 2>/dev/null; q=$?
+      own=1; _codex_tier_is_our_handle "$q" && own=0
+      case "$q" in
+        3)
+          up=1
+          words+=("$tier unmeasured")
+          _dr_cx_tier_unmeasured "$id" "$tier" ;;
+        *) if [ "$own" -eq 0 ]; then _dr_cx_member "$tier" ${retired[@]+"${retired[@]}"} || retired+=("$tier"); fi ;;
+      esac
+    done
+    for tier in $(_codex_other_tiers "$mode"); do
+      _dr_cx_member "$tier" ${retired[@]+"${retired[@]}"} || continue
+      up=1
+      words+=("$tier running (retired)")
+      _dr_cx_fail "$id runs a retired refresher: its $tier tier is running in direct mode, so two processes refresh one credential" \
+        "stop every tier of the lane, in either mode: ccrc codex stop $id, then ccrc codex start $id (a direct lane starts its bridge alone); to run the lane through LiteLLM again instead: ccrc codex switch $id litellm"
+    done
+  fi
+  if [ "$mode" != direct ]; then
+    case "$lq:$sq" in
+      [04]:1)
+        _dr_cx_fail "$id is half up: its LiteLLM tier is running and its shim is not, so every request a session sends this lane fails before it reaches LiteLLM" \
+          "start the tier that is down: ccrc codex start $id (idempotent: it starts only what is not running)" ;;
+      1:[04])
+        _dr_cx_fail "$id is half up: its shim is running and its LiteLLM tier is not, so every request the shim forwards fails" \
+          "start the tier that is down: ccrc codex start $id (idempotent: it starts only what is not running)" ;;
+    esac
+    if [ "$lq" = 1 ]; then
+      _dr_cx_sessions "$id"
+      if [ "$DRX_LIVE" -gt 0 ]; then
+        _dr_cx_warn "$id's LiteLLM tier is not running while $DRX_LIVE live session(s) run on this lane, so every turn they send fails at the gateway — a tier that died after its start stays down until the next start" \
+          "start it: ccrc codex start $id (every session launch runs the same start)"
+      elif [ "$DRX_UNASKED" -gt 0 ]; then
+        [ "$DRX_UNREADABLE" -eq 0 ] || { unread="; $DRX_UNREADABLE of them: \$HOME/.cc-sessions/$DRX_UNREADABLE_SID.wrapper cannot be read by this user, so which lane that session runs on is unknown"; refix="read or fix that file's mode (ccd writes it), and "; }
+        _dr_cx_warn "$id's LiteLLM tier is not running, and whether any of this lane's registered sessions is live could not be asked ($DRX_UNASKED unanswered) — unmeasured, not idle$unread" \
+          "${refix}ask by hand${DRX_UNASKED_SID:+ ($(_svc_status_hint "claude-session@$DRX_UNASKED_SID.service"))}; if one is live, start the lane: ccrc codex start $id"
+      fi
     fi
   fi
-  if [ "$lq:$sq" = 1:1 ]; then
+  if [ "$mode" = direct ]; then
+    if [ "$up" -eq 0 ]; then DRX_TIER_WORDS="tiers: none running (a lane is lazy)"; else DRX_TIER_WORDS="tiers: $(_dr_cx_join ', ' "${words[@]}")"; fi
+  elif [ "$lq:$sq" = 1:1 ]; then
     DRX_TIER_WORDS="tiers: none running (a lane is lazy)"
   else
     DRX_TIER_WORDS="tiers: $(_dr_cx_join ', ' "${words[@]}")"
   fi
+}
+
+# `_dr_cx_tiers`' one unmeasured row, asked by the walk and by the retired
+# pass alike, so the sentence and its remedy are spelled once. CX_LISTEN_WHY
+# is the question's own, read here as `_codex_tier_ours` left it.
+_dr_cx_tier_unmeasured() {   # <id> <tier>
+  _dr_cx_warn "$1's $2 tier could not be measured${CX_LISTEN_WHY:+ ($CX_LISTEN_WHY)} — unmeasured, never read as running or as stopped" \
+    "run: ccrc codex status $1 — it asks the same question and says what it could see"
+}
+
+# A lane's two bridge files (codex-bridge Stage 2, Task 13), named by
+# lane.json's `bridgeFiles` (whose one spelling is `laneManifest`'s, read here
+# as `_codex_reap_files` reads it, a bare file name only): the stats file,
+# which names the lane's upstream request ids and its usage, and the reasoning
+# store, which holds its encrypted reasoning. The bridge creates each 0600, so
+# one that is not a regular file (a symlink included: `-L` first, the
+# exposure row's rule), or whose mode is not 600, is a FAIL. An absent one is
+# no finding (no bridge has served on this lane yet), and the rows are asked in
+# either mode: a lane switched back to litellm keeps its files. A lane.json that
+# names no `bridgeFiles` is the lane.json rows' finding, not this one's.
+_dr_cx_bridge_files() {   # <id>
+  local id="$1" dir lj i p what why mode
+  local -a bf=()
+  dir="$(_codex_lane_dir "$id")"; lj="$dir/lane.json"
+  [ -f "$lj" ] || return 0
+  mapfile -t bf < <(jq -r 'if type == "object" and (.bridgeFiles | type) == "object"
+      then (.bridgeFiles.stats, .bridgeFiles.store) | if type == "string" then . else "" end
+      else empty end' "$lj" 2>/dev/null)
+  [ "${#bf[@]}" -eq 2 ] || return 0
+  for i in 0 1; do
+    [[ "${bf[$i]}" =~ ^[A-Za-z0-9._-]+$ ]] && [ "${bf[$i]}" != . ] && [ "${bf[$i]}" != .. ] || continue
+    p="$dir/${bf[$i]}"
+    if [ "$i" -eq 0 ]; then
+      what='stats file'; why="it names the lane's upstream request ids and its usage"
+    else
+      what='reasoning store'; why="it holds the lane's encrypted reasoning"
+    fi
+    { [ -e "$p" ] || [ -L "$p" ]; } || continue
+    if [ -L "$p" ] || [ ! -f "$p" ]; then
+      _dr_cx_fail "$id's bridge $what $p is not a regular file (a symlink, a directory or another kind of file), and the bridge keeps it owner-only (0600) only as a regular file it creates itself" \
+        "stop the lane (ccrc codex stop $id), move $p aside by hand, then start it again: the bridge creates a new one, mode 0600 — ccrc never removes it for you"
+      continue
+    fi
+    # A mode that cannot be measured, no `stat` on PATH included, is this
+    # FAIL's `unreadable`, never a pass: a false FAIL costs a sentence, a
+    # false pass the file's owner-only protection. Its remedy is its own:
+    # `chmod` cannot cure a mode nobody could read. It names both causes, a
+    # `stat` missing from PATH and one that runs but fails on the file, and
+    # both platforms: `_plat_mode`'s darwin arm runs the base system's BSD
+    # `stat`, not coreutils.
+    mode="$(_plat_mode -- "$p" 2>/dev/null)" || mode=''
+    [ "$mode" = 600 ] && continue
+    if [ -z "$mode" ]; then
+      _dr_cx_fail "$id's bridge $what $p has mode unreadable, and the bridge keeps it owner-only (0600): $why" \
+        "check that stat runs on PATH (coreutils on a GNU box, the base system on macOS) and can read $p (the file still in place, its directory searchable), then re-run doctor; the file must be a regular file of mode 0600"
+    else
+      _dr_cx_fail "$id's bridge $what $p has mode $mode, and the bridge keeps it owner-only (0600): $why" \
+        "chmod 600 $p"
+    fi
+  done
+  return 0
+}
+
+# THE DRIFT ROW (codex-bridge Stage 2, Task 17; spec §2.9 D3, D-6418), a
+# direct lane's only: a litellm lane runs no bridge, and the stats file a lane
+# switched back keeps is no drift of its. The bridge lists every name
+# `ccd/codexbridge/known.py` does not explain in its stats file's
+# `unexplained` (Task 5), and drops one a reviewed change explains when it
+# next starts, so the list is the whole question: a name is explained only in
+# code, and this row never asks known.py itself. The file is lane.json's
+# `bridgeFiles.stats`, read as `_dr_cx_bridge_files` reads it, and only a
+# regular file is opened (a symlink or another kind of file is that row's
+# FAIL; a FIFO is never opened). NAMES ONLY, NEVER CONTENT: jq hands over each
+# family and name on a line of its own, or an empty line for a non-string or
+# a string holding a control character (so no name spans two lines), and each
+# is printed only when it matches `name_re`, else `unrecognised`. `name_re` is
+# stats.py's NAME_RE, the bound the bridge writes every name under, in the same
+# pattern text (ccrc-doctor-codex.test.ts pins the two equal), matched under
+# LC_ALL=C so a range never reaches past ASCII (under a UTF-8 locale bash's
+# `[A-Za-z]` accepts letters such as `ë`, measured). The line prints the first
+# `shown` names and counts the rest, so one file cannot make it unbounded.
+# WHAT THIS ROW READS: names only from one JSON document of version 1 and of
+# THIS lane (`.lane`) whose `unexplained` is an object, no larger than
+# stats.py's READ_MAX and listing at most `families` times `names_max` + 1
+# names (known.KNOWN's families, each NAMES_MAX names and `overflow`; READ_MAX,
+# NAMES_MAX and the family count are pinned equal to the doctor's own by
+# ccrc-doctor-codex.test.ts), which is every file a real `Stats` writes. It is
+# not stats.py's `_load`, and the known differences are all files no `Stats`
+# writes, only a hand-edited or foreign one. Stricter than the bridge: a file
+# of this lane with no `unexplained` object, or with more names than a bridge
+# writes, is one the bridge carries (as no names, or filtered to its families
+# and bounded names) and this row calls unmeasured. Looser: jq's
+# `.version == 1` is true of `1.0`, which stats.py's `_is_int` resets (jq 1.6
+# cannot tell the two apart at all); jq reads invalid UTF-8 as U+FFFD where
+# stats.py's strict decode resets the file (such a name prints
+# `unrecognised`); an entry that is not a string or fails NAME_RE, which
+# `_load` drops, prints `unrecognised` here, at most once per family in <n>,
+# and counts toward the names bound; and a family outside known.KNOWN, which the bridge drops, is listed here. An absent file
+# has no drift row (no bridge has served yet). A regular file this row cannot
+# read so (its size unmeasured, unreadable by this user, too large, too many
+# names, unparseable, another version or another lane's, no `unexplained`
+# object) is never read as "no unexplained name": it is this
+# row's unmeasured WARN, a form of the drift row as the bridge tier's "cannot
+# be told" WARN is a form of its stale row, so it is printed whatever else the
+# codex check finds. `unrecognised` and `overflow` (more names in a family
+# than the bridge counts) are markers, not names, and the remedy says so
+# whenever the list holds one (`_dr_cx_drift_marker`): neither is ever
+# explained in known.py, and the bridge's restart clears both (stats.py's
+# `_load`, the Stage 2 wave 3 whole-wave fix round's Z1).
+_dr_cx_drift() {   # <id>
+  local id="$1" dir lj sf p i fam name sz list fix why='' LC_ALL=C unrec='' over='' kind
+  local name_re='^[A-Za-z0-9_.:/-]{1,64}$'
+  local read_max=$(( 16 * 2**20 )) names_max=256 families=10 shown=32
+  local -a got=() listed=()
+  local -A seen=()
+  dir="$(_codex_lane_dir "$id")"; lj="$dir/lane.json"
+  [ -f "$lj" ] || return 0
+  sf="$(jq -r 'if type == "object" and (.bridgeFiles | type) == "object" and (.bridgeFiles.stats | type) == "string"
+      then .bridgeFiles.stats else "" end' "$lj" 2>/dev/null)" || return 0
+  [[ "$sf" =~ ^[A-Za-z0-9._-]+$ ]] && [ "$sf" != . ] && [ "$sf" != .. ] || return 0
+  p="$dir/$sf"
+  [ -f "$p" ] && [ ! -L "$p" ] || return 0
+  sz="$(_plat_size -- "$p" 2>/dev/null)" || sz=''
+  if [[ ! "$sz" =~ ^[0-9]+$ ]]; then
+    why='its size could not be measured'
+  elif [ "$sz" -gt "$read_max" ]; then
+    why='it is larger than the bridge reads, READ_MAX in ccd/codexbridge/stats.py'
+  elif [ ! -r "$p" ]; then
+    why='it could not be opened for reading'
+  else
+    mapfile -t got < <(jq -rs --arg id "$id" --argjson max "$(( families * (names_max + 1) ))" 'def line: if type == "string" and (explode | all(. >= 32 and . != 127)) then . else "" end;
+        if length == 1 and (.[0] | type == "object" and .version == 1 and .lane == $id and (.unexplained | type) == "object")
+        then if ([.[0].unexplained[] | arrays | length] | add // 0) > $max then "many"
+          else "v1", (.[0].unexplained | to_entries[] | (.key | line) as $f
+            | (.value | if type == "array" then .[] else empty end) | $f, line) end
+        else "other" end' "$p" 2>/dev/null)
+    case "${got[0]:-}" in
+      v1) ;;
+      many) why='it lists more names than the bridge writes, NAMES_MAX names and overflow in each of the families of ccd/codexbridge/known.py' ;;
+      *) why='it is not one version-1 JSON document of this lane with an unexplained object' ;;
+    esac
+  fi
+  if [ -n "$why" ]; then
+    if [ "$why" = 'its size could not be measured' ]; then
+      fix="check that stat runs on PATH (coreutils on a GNU box, the base system on macOS) and can read $p, then re-run doctor"
+    elif [ "$why" = 'it could not be opened for reading' ]; then
+      fix="make $p readable by the user the bridge and doctor run as: if another user owns it, chown it to that user; then chmod 600 $p (the mode the bridge keeps it at), and re-run doctor"
+    else
+      fix="stop the lane (ccrc codex stop $id), move $p aside by hand, then start it again: the bridge starts a new stats file, which this line reads, and lists again any name it meets — ccrc never removes it for you"
+    fi
+    _dr_cx_warn "$id: whether the bridge met a name it does not know cannot be told: its stats file $p cannot be read as the bridge's ($why) — unmeasured, never read as no unexplained name" "$fix"
+    return 0
+  fi
+  for (( i = 1; i + 1 < ${#got[@]}; i += 2 )); do
+    fam="${got[$i]}"; name="${got[$((i + 1))]}"
+    [[ "$fam" =~ $name_re ]] || fam=unrecognised
+    [[ "$name" =~ $name_re ]] || name=unrecognised
+    case "$fam" in
+      eventType|itemType|errorCode|incompleteReason) kind=s ;;
+      responseHeader) kind=h ;;
+      *) kind=r ;;
+    esac
+    [ "$fam" != unrecognised ] && [ "$name" != unrecognised ] || unrec+="$kind"
+    [ "$name" != overflow ] || over+="$kind"
+    [ -z "${seen[$fam:$name]:-}" ] || continue
+    seen[$fam:$name]=1
+    listed+=("$fam:$name")
+  done
+  [ "${#listed[@]}" -gt 0 ] || return 0
+  list="$(_dr_cx_join ', ' "${listed[@]:0:$shown}")"
+  [ "${#listed[@]}" -le "$shown" ] || list+=", … and $(( ${#listed[@]} - shown )) more"
+  fix="read what each name is in the upstream Codex source (openai/codex), then explain it by adding it to ccd/codexbridge/known.py in a reviewed change; the rollout of that change restarts the bridge, whose start drops an explained name from the list, and this line clears — ccrc never explains a name for you"
+  [ -z "$unrec" ] || fix+="$(_dr_cx_drift_marker unrecognised "$unrec" "$dir")"
+  [ -z "$over" ] || fix+="$(_dr_cx_drift_marker overflow "$over" "$dir")"
+  _dr_cx_warn "$id: the bridge met ${#listed[@]} name(s) it does not know: $list (names only, never content). Each is a protocol change to read; it is explained by adding it to ccd/codexbridge/known.py in a reviewed change." "$fix"
+  return 0
+}
+
+# A MARKER'S CLAUSE in the drift row's remedy (the Stage 2 wave 3 whole-wave
+# fix round, Z2): what can show the name behind `unrecognised` or `overflow`
+# depends on the family it was listed in, so the clause says it for each kind
+# of family the marker was met in (<kinds>, from `_dr_cx_drift`'s walk). `s`:
+# an event, item, error-code or incomplete-reason family, which the bridge
+# reads from a 2xx stream, so a recording holds it, made only while the
+# operator's `record-streams` marker is in the lane directory. `h`:
+# responseHeader, counted on every answer but recorded only on a 2xx one
+# (server.py counts `header_names` before its 2xx branch records). `r`: every
+# other family, the request side (inbound.py names requestField,
+# unsupportedField, betaValue and contextEdit, and server.py's catalogue
+# check modelSubstitution, all from Claude Code's request, which nothing the
+# bridge writes holds) and any family no bridge writes, so that clause never
+# sends the operator to `record-streams`. Each clause ends by saying that the
+# bridge's restart clears the marker (stats.py's `_load`, Z1) and that it
+# comes back when the bridge meets such a name again.
+_dr_cx_drift_marker() {   # <unrecognised|overflow> <kinds> <lane dir>
+  local m="$1" kinds="$2" dir="$3" what them out
+  if [ "$m" = overflow ]; then
+    what='the names past it'; them=them
+    out="; overflow is not a name: it stands for more distinct names in that family than the bridge counts (NAMES_MAX in ccd/codexbridge/stats.py)"
+  else
+    what='that name'; them=it
+    out="; unrecognised is not a name: it stands for one outside the bound the bridge writes every name under (NAME_RE in ccd/codexbridge/stats.py)"
+  fi
+  [[ "$kinds" != *s* ]] || out+="; for an event, item, error-code or incomplete-reason name, put the operator's record-streams marker in $dir (the bridge records the lane's stream only while it is there) and read $what in the recording when the bridge meets $them again"
+  [[ "$kinds" != *h* ]] || out+="; for a responseHeader name, put the operator's record-streams marker in $dir and read $what in the recording when the bridge meets $them again on a 2xx answer: only a 2xx answer's head is recorded"
+  [[ "$kinds" != *r* ]] || out+="; for a requestField, unsupportedField, betaValue, contextEdit, modelSubstitution or other name, no recording holds $what: those families' names come from Claude Code's request, and the bridge records only the upstream's answers, so read $what from the client's request, for example from Claude Code's release notes or a reviewed diagnostic"
+  if [ "$m" = overflow ]; then
+    out+="; the bridge's restart clears overflow from the list but keeps that family's counted names, so the next name in it that the bridge has not counted is overflow again, which is new drift; never add overflow to known.py"
+  else
+    out+="; the bridge's restart clears unrecognised from the list, and it comes back when the bridge meets such a name again; never add unrecognised to known.py"
+  fi
+  printf '%s' "$out"
 }
 
 # The lane's LIVE sessions: `~/.cc-sessions/<sid>.wrapper` names the account a
@@ -9910,4 +10193,47 @@ _check_snapshot-posture() {
   fi
   seen="$(_dr_trim "$seen")"
   _dr_pass snapshot-posture "stated: ${seen// /, }; every such image taken while a lane secret existed holds it, and the compromise steps apply to a leaked or restored one"
+}
+
+# `box-settings` (wave 24, D-6599): what the box's ccrc.env ALONE says of each of ccrc's settings (`CCRC_SETTINGS`), read
+# through ccrc's one reader in `file` mode (`_ccrc_knob <KEY> "" file`), so a line the environment hides today is seen
+# before the environment goes: once it does, the file is what every run reads. It reports what the reader reads, never
+# whether a value is valid (each act validates its own). It prints values for those names only, never another line of
+# the file, and through `_upd_redact`; a mirror base's userinfo is masked first, with a scheme or without one (curl
+# reads `user:password@host/...` as http; `_upd_redact` now masks it either way too, D-6748, and this check's own mask
+# runs first), so it never prints. A line
+# the reader refuses, or a file it cannot read at all, WARNs with each reason; until it is rewritten, the act that reads
+# that setting refuses or falls back, as its own line says. No role skip: every role reads its own settings.
+# A refusal whose cause is MODEL-WIDE (F15) — a line the model of the file (`_box_unit_env`, which the reader asks in this
+# shell) cannot decide, so every setting it is asked for refuses, the setting's own line plain: on Linux the rc-3 arms
+# that set BEW_CAUSE (a CR inside a line, a non-ASCII NAME=value line), on macOS every arm, since there the model refuses
+# the whole file — gives the model's own remedy, BUE_FIX (the file and line numbers, never its bytes), once however many
+# settings it refused; the plain-line clause stays for any other refusal. Both are reset per setting: the reader sets
+# them only when it asks the model, so a stale one would pin a cause on a setting it never reached.
+_check_box-settings() {
+  local k v pre set="" unset="" why="" fix="" other=0 none="none of ccrc's settings"   # a `'` inside "${set:-…}" would open a quote in bash
+  local plain="rewrite each named line in the box's ccrc.env as a plain KEY=value line (deploy/ccrc.env.example shows each), or make the file itself readable when it cannot be read or scanned"
+  for k in "${CCRC_SETTINGS[@]}"; do
+    BUE_FIX=""; BEW_CAUSE=""
+    if ! _ccrc_knob "$k" "" file; then why+="${why:+; }$KNOB_WHY"
+      if [ -n "$BUE_FIX" ] && { [ "${CCD_OS:-linux}" = darwin ] || [ -n "$BEW_CAUSE" ]; }; then
+        case "$fix" in *"$BUE_FIX"*) ;; *) fix+="${fix:+; }$BUE_FIX" ;; esac
+      else other=1; fi
+    elif [ "$KNOB_FROM" = file ]; then
+      v="$KNOB"
+      if [ "$k" = CCRC_RELEASE_BASE_URL ]; then   # each `[^/@[:space:]]*@` before the authority's first `/` goes
+        pre=""; [[ ! "$v" =~ ^[A-Za-z][A-Za-z0-9+.-]*:/+ ]] || pre="${BASH_REMATCH[0]}"
+        v="${v#"$pre"}"; [[ ! "$v" =~ ^([^/@[:space:]]*@)+ ]] || v="${v#"${BASH_REMATCH[0]}"}"; v="$pre$v"
+      fi
+      set+="${set:+, }$k=$v"
+    elif [ "$KNOB_FROM" = empty ]; then set+="${set:+, }$k= (empty: the default)"
+    else unset+="${unset:+,} $k"
+    fi
+  done
+  if [ -n "$why" ]; then
+    if [ -n "$fix" ] && [ "$other" -eq 0 ]; then plain="$fix"; elif [ -n "$fix" ]; then plain="$fix; for each other refusal, $plain"; fi
+    _dr_warn box-settings "$(_upd_redact "$why")" "$(_upd_redact "$plain; until then the act that reads it refuses, or falls back as its line says")"
+    return 2
+  fi
+  _dr_pass box-settings "$(_upd_redact "the box's ccrc.env sets ${set:-$none}${unset:+; not set there, so the default applies unless the environment sets it:$unset}")"
 }

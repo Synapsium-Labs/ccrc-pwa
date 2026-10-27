@@ -77,7 +77,10 @@ afterEach(async () => {
   fs.rmSync(home, { recursive: true, force: true });
 });
 
-type Run = { stdout: string; stderr: string; status: number };
+/** `stdinEpipe`: the child left before it read all of its stdin (a refusal that
+ *  never reads it). That is the child's answer, not a harness failure, so it is
+ *  recorded here and every other stdin error still throws. */
+type Run = { stdout: string; stderr: string; status: number; stdinEpipe: boolean };
 
 /** Runs the client. ASYNC, and that is not a style choice: the fake server above
  *  listens in THIS process, so a synchronous `execFileSync` would block the event
@@ -100,14 +103,18 @@ function run(args: string[], input?: string,
   }
   return new Promise<Run>((resolve) => {
     const child = spawn(CCRC_API, args, { env });
-    let stdout = '', stderr = '';
+    let stdout = '', stderr = '', stdinEpipe = false;
     child.stdout.on('data', (c) => { stdout += c; });
     child.stderr.on('data', (c) => { stderr += c; });
+    child.stdin.on('error', (e: NodeJS.ErrnoException) => {
+      if (e.code !== 'EPIPE') throw e;
+      stdinEpipe = true;
+    });
     // stdin is CLOSED unless a test supplies input. Left open, `--json -` would
     // block in `cat` forever — the client is right to wait, so the harness must
     // be explicit about there being nothing to read.
     if (input !== undefined) child.stdin.end(input); else child.stdin.end();
-    child.on('close', (code) => resolve({ stdout, stderr, status: code ?? -1 }));
+    child.on('close', (code) => resolve({ stdout, stderr, status: code ?? -1, stdinEpipe }));
   });
 }
 
@@ -174,6 +181,7 @@ const sh = (script: string, input: string): Promise<string> =>
     const child = spawn('bash', ['-c', script]);
     let out = '';
     child.stdout.on('data', (c) => { out += c; });
+    child.stdin.on('error', (e: NodeJS.ErrnoException) => { if (e.code !== 'EPIPE') throw e; });
     child.stdin.end(input);
     child.on('close', () => resolve(out));
   });
@@ -449,6 +457,7 @@ describe('the body ends in exactly one newline, and the status line stays', () =
         { env: { ...ghContainedEnv(home, { ...process.env, HOME: home }, { systemd: true, tmux: true }), CCRC_API_UNDER_TEST: CCRC_API } });
       let out = '';
       child.stdout.on('data', (c) => { out += c; });
+      child.stdin.on('error', (e: NodeJS.ErrnoException) => { if (e.code !== 'EPIPE') throw e; });
       child.stdin.end();
       child.on('close', () => resolve(out));
     });
@@ -489,6 +498,14 @@ describe('the token', () => {
     expect(r.status).not.toBe(0);
     expect(r.stdout + r.stderr).toMatch(/token/i);
     expect(seen).toHaveLength(0);
+  });
+
+  it('resolves with status and stderr when a refusal never reads a large stdin (EPIPE is the child leaving, not a failure)', async () => {
+    fs.rmSync(path.join(home, '.cc-secrets', 'ccrc-mail.token'));
+    const r = await run(['runs', 'list'], 'x'.repeat(1024 * 1024));
+    expect(r.status).not.toBe(0);
+    expect(r.stderr).toMatch(/token/i);
+    expect(typeof r.stdinEpipe).toBe('boolean');
   });
 
   it('refuses when the token file is all preamble and no value', async () => {

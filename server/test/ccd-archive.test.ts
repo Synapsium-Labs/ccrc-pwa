@@ -7,10 +7,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { makeCcdHarness, ghContainedEnv, harnessBin, CCD, WS_ADD, type CcdHarness } from './ccdWsHelpers.js';
+import { makeCcdHarness, ghContainedEnv, harnessBin, CCD, WS_ADD, type CcdHarness, ccdSource } from './ccdWsHelpers.js';
 import { mungePath } from '../src/munge.js';
 import { CCD_CAPABILITY_TOKENS } from './ccdCapTokens.js';
-import { ACCOUNT_POOLS_CAP, ACTOR_FLAGS_CAP, CHILD_ARGV_CAP, COLLECT_CAP, DOCS_CAP, EXPIRE_CAP, POOLS_CAP, RECLAIM_CAP, RECLAIM_PAUSE_CAP, ROUTE_APPLY_CAP, ROUTE_ARGV_CAP, ROUTE_CAP, SWAP_BUSY_CAP, WIN_SIZE_CAP, WS_TITLE_CAP, WS_WRAPPER_CAP } from '../src/ccdargv.js';
+import { ACCOUNT_POOLS_CAP, ACTOR_FLAGS_CAP, CHILD_ARGV_CAP, COLLECT_CAP, DOCS_CAP, EXPIRE_CAP, POOLS_CAP, RECLAIM_CAP, RECLAIM_PAUSE_CAP, ROUTE_APPLY_CAP, ROUTE_ARGV_CAP, ROUTE_CAP, ROUTE_DEFAULT_CAP, SWAP_BUSY_CAP, WIN_SIZE_CAP, WS_TITLE_CAP, WS_WRAPPER_CAP } from '../src/ccdargv.js';
 
 /** sha256 of the empty string — what a failed read used to be indistinguishable
  *  from, and what a genuinely empty ignored set still legitimately hashes to. */
@@ -198,6 +198,8 @@ describe('ccd caps', () => {
     // Child reclamation wave 7's token: the third spelling of `collect-v1`, held equal to the constant the collector's
     // lane will gate on (`capSupported`) and to ccd's own `echo collect-v1`.
     expect(KNOWN_CAPABILITY_TOKENS).toContain(COLLECT_CAP);
+    // D-6794: the default-route flag's token, held equal to ccd's own `echo route-default-v1`.
+    expect(KNOWN_CAPABILITY_TOKENS).toContain(ROUTE_DEFAULT_CAP);
     // The native Docs reader's token (docs W2): the third spelling of `docs-v1`, held equal to the constant the docs
     // adapter's gate reads (`capSupported`) and to ccd's own `echo docs-v1` (W1).
     expect(KNOWN_CAPABILITY_TOKENS).toContain(DOCS_CAP);
@@ -209,7 +211,7 @@ describe('ccd caps', () => {
     // verb can pass the agent whitelist and still not exist on the box. This
     // list is what the agent reports; a list that drifts from the dispatcher
     // is worse than none, because the server would trust it.
-    const src = fs.readFileSync(CCD, 'utf8');
+    const src = ccdSource();
     // Anchored on the dispatcher's own preamble, and the anchor's uniqueness is
     // asserted. `case "${1:-}" in` occurs TWICE — cmd_ws_gc's option parser
     // (ccd:10575) comes first — so slicing from indexOf landed inside ws-gc, and
@@ -1544,7 +1546,7 @@ describe('the archive manifest is written atomically (registry-durability wave 2
     // and would not notice either way — which is exactly why the bytes are
     // preserved deliberately rather than by luck: a migration that also
     // changes what is on disk is two changes wearing one commit.
-    const src = fs.readFileSync(CCD, 'utf8');
+    const src = ccdSource();
     expect(src).not.toMatch(/>\s*"\$REG\/\$id\.archivemanifest"/);
     expect(src).toMatch(/_reg_set "\$id" archivemanifest "\$manifest"\$'\\n'/);
   });

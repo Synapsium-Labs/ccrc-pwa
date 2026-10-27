@@ -38,6 +38,7 @@ import { DEAD_COORDINATOR_JOURNAL_TRUSTED, DEAD_COORDINATOR_LANE_LIVE_MARKER } f
 import { COLLECT_LANE_LIVE_MARKER } from '../src/collectLane.js';
 import { NotifyLog } from '../src/notifylog.js';
 import type { FleetIO } from '../src/io.js';
+import { CHILD_RECLAIM_DISABLED_MARKER } from '../../shared/switches.js';
 import type { FleetState } from '../src/fleetstate.js';
 import type { Runner } from '../src/exec.js';
 import type { SessionRecord } from '../src/registry.js';
@@ -124,7 +125,7 @@ const PINNED_SITES: Readonly<Record<string, number>> = {
   'server/src/coord/collectTempRoot.ts': 0,     // folded onto readSwitches (D-5856)
   'server/src/coord/endDeadCoordinator.ts': 0,  // folded onto readSwitches (D-5856)
   'server/src/coord/expireArchived.ts': 0,      // folded onto readSwitches (D-5856)
-  'server/src/stopDoneSweep.ts': 1,             // stopDonePass's switches
+  'server/src/stopDoneSweep.ts': 0,             // folded onto readSwitches (D-7041)
   'server/src/watch.ts': 0,                     // folded onto readSwitches (D-5856)
 };
 
@@ -162,7 +163,7 @@ describe('childReclaim.ts — childReclaimPauseRead, the server\'s read of the r
 const childRig = async () => {
   const home = mkTmp('ccrc-pause-pin-child-');
   const calls: string[][] = [];
-  const base = testDeps(home, async (_cmd, args) => { calls.push(args); return { code: 1, stdout: '', stderr: '' }; });
+  const base = testDeps(home, async (_cmd, args) => { calls.push(args); return { ran: true as const, code: 1, stdout: '', stderr: '' }; });
   const reg = base.cfg.registryDir;
   mkdirSync(reg, { recursive: true });
   const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
@@ -181,7 +182,7 @@ const childRig = async () => {
     coord, io, cfg: base.cfg, runCcd: base.runCcd,
     fleetState: { connected: true, downSince: null, rosterFp: null, build: null,
       ccdVerbs: ['ws-audit', 'ws-reclaim', RECLAIM_CAP, ACTOR_FLAGS_CAP] },
-    presence: { isVisible: () => false }, notifyLog,
+    viewers: { isVisible: () => false }, notifyLog,
   });
   const req: ChildReclaimRequest = { sessionId: 'demo-a', runId: opened.id, trigger: 'close', deferExpired: false,
     deferredSinceMs: null, feedQuiet: CHILD_RECLAIM_FEED_QUIET_NONE, licenceGeneration: { kind: 'none' } };
@@ -241,8 +242,8 @@ const releaseRig = async () => {
   const ccd: string[] = [];
   const run: Runner = async (_cmd, args) => {
     ccd.push(args[0] ?? '');
-    return args[0] === 'ws-release' ? { code: 0, stdout: `released ${RID}\n`, stderr: '' }
-      : { code: 1, stdout: '', stderr: `unscripted ${args[0]}` };
+    return args[0] === 'ws-release' ? { ran: true as const, code: 0, stdout: `released ${RID}\n`, stderr: '' }
+      : { ran: true as const, code: 1, stdout: '', stderr: `unscripted ${args[0]}` };
   };
   const base = testDeps(home, run);
   const r = coord.openRun({ program: 'demo', title: 'demo', project: 'demo', wave: 1, waveOf: null, claimedBy: 'demo-coord' });
@@ -284,6 +285,15 @@ describe('childReclaim.ts — releaseRetiredChildHold step 6: the reclaim switch
     // Every listing before step 6 is clean; the marker stands from step 6 on.
     const s = scripted(f.base.io, f.reg, (n) => (n < f.step6 ? 'absent' : 'present'));
     expect(await releaseRetiredChildHold(f.deps(s.io), f.req)).toBe('changed');
+    expect(f.ccd).toEqual([]);
+  });
+});
+
+describe('childReclaim.ts — releaseRetiredChildHold step 6: child-reclaim-disabled, beside the reclaim switch', () => {
+  it('set answers changed and composes no ws-release', async () => {
+    const f = await releaseRig();
+    writeFileSync(path.join(f.reg, CHILD_RECLAIM_DISABLED_MARKER), '');
+    expect(await releaseRetiredChildHold(f.deps(f.base.io), f.req)).toBe('changed');
     expect(f.ccd).toEqual([]);
   });
 });
@@ -380,7 +390,7 @@ const deadRig = async () => {
     started: '1', supervised: String(DEAD_NOW / 1000 - 7200) })) writeFileSync(path.join(reg, `${CRASHED}.${k}`), v);
   writeFileSync(path.join(reg, DEAD_COORDINATOR_LANE_LIVE_MARKER), '');
   const calls: string[][] = [];
-  const base = testDeps(home, async (_cmd, args) => { calls.push(args); return { code: 0, stdout: '', stderr: '' }; });
+  const base = testDeps(home, async (_cmd, args) => { calls.push(args); return { ran: true as const, code: 0, stdout: '', stderr: '' }; });
   const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
   const abandoned: number[] = [];
   const deps = (io: FleetIO): EndDeadCoordinatorDeps => ({
@@ -467,19 +477,19 @@ const expireRig = async () => {
     verbs.push(args[0] ?? '');
     if (args[0] === 'ws-audit') {
       duringAudit?.();
-      return { code: 0, stdout: JSON.stringify({ session: XID, mode: 'expire', archivedAt: XARCH, expiresAt: XDUE, alive: false,
+      return { ran: true as const, code: 0, stdout: JSON.stringify({ session: XID, mode: 'expire', archivedAt: XARCH, expiresAt: XDUE, alive: false,
         exists: true, reaping: null, sensitive: [], verdict: 'expirable', detail: '', token: XTOK }), stderr: '' };
     }
     if (args[0] === 'ws-expire') {
-      return { code: 0, stdout: JSON.stringify({ expired: XID, archivedAt: XARCH, wip: null, attic: 3, residueBytes: 0, secretsDropped: 0 }), stderr: '' };
+      return { ran: true as const, code: 0, stdout: JSON.stringify({ expired: XID, archivedAt: XARCH, wip: null, attic: 3, residueBytes: 0, secretsDropped: 0 }), stderr: '' };
     }
-    return { code: 1, stdout: '', stderr: `unscripted ${args[0]}` };
+    return { ran: true as const, code: 1, stdout: '', stderr: `unscripted ${args[0]}` };
   };
   const base = testDeps(home, run);
   const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
   const deps = (io: FleetIO): ExpireArchivedDeps => ({ coord, io, cfg: base.cfg, runCcd: base.runCcd,
     fleetState: { connected: true, downSince: null, rosterFp: null, build: null, ccdVerbs: ['ws-audit', 'ws-expire', EXPIRE_CAP, ACTOR_FLAGS_CAP] },
-    presence: { isVisible: () => false } });
+    viewers: { isVisible: () => false } });
   return { base, reg, deps, verbs, req: { sessionId: XID, archivedAt: XARCH, expiresAt: XDUE },
     onAudit: (fn: () => void): void => { duringAudit = fn; } };
 };
@@ -560,9 +570,9 @@ describe('stopDoneSweep.ts — stopDonePass reads reclaim-paused off the tick\'s
         runsNamingSession: () => ({ ok: true as const, runs: [] }) as never,
         run: () => ({ ok: true as const, run: { state: 'working', reviews: null } }) as never,
       } as unknown as StopDoneSweepDeps['coord'],
-      runCcd: async (a) => { argv.push([...a]); return { ok: true, stdout: '', stderr: '', killed: false, signal: null }; },
+      runCcd: async (a) => { argv.push([...a]); return { ran: true as const, ok: true, stdout: '', stderr: '', killed: false, signal: null }; },
       fleetState: { ccdVerbs: ['hibernate', ACTOR_FLAGS_CAP] } as unknown as FleetState,
-      presence: { isOpen: () => false },
+      viewers: { isOpen: () => false },
       notifyLog: { epoch: 'e', record: (e: object) => ({ ...e, seq: 1, at: NOW }), flush: async () => undefined } as unknown as StopDoneSweepDeps['notifyLog'],
       liveWord: async () => ({ ok: true, word: 'idle', since: null }),
       turnVerdict: async () => 'idle',
@@ -605,9 +615,9 @@ const watchRig = (o: { io?: (base: FleetIO, reg: string) => FleetIO } = {}) => {
   const cfg = loadConfig({ CCRC_HOME: home, CCRC_PROJECTS_ROOT: mkTmp('ccrc-projects-') } as never);
   const calls: string[][] = [];
   const run = async (cmd: string, args: string[]) => {
-    if (path.basename(cmd) === 'tmux') return { code: 1, stdout: '', stderr: '' };
+    if (path.basename(cmd) === 'tmux') return { ran: true as const, code: 1, stdout: '', stderr: '' };
     calls.push(args);
-    return { code: 1, stdout: '', stderr: '' };
+    return { ran: true as const, code: 1, stdout: '', stderr: '' };
   };
   const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
   const requests: ChildReclaimRequest[] = [];
@@ -616,7 +626,7 @@ const watchRig = (o: { io?: (base: FleetIO, reg: string) => FleetIO } = {}) => {
     ...base, cfg, coord, io: o.io?.(base.io, reg) ?? base.io,
     fleetState: { connected: true, downSince: null, rosterFp: null, build: null,
       ccdVerbs: ['ws-audit', 'ws-reclaim', 'ws-expire', RECLAIM_CAP, RECLAIM_PAUSE_CAP, EXPIRE_CAP, ACTOR_FLAGS_CAP] },
-    presence: { isVisible: () => false },
+    viewers: { isVisible: () => false },
     childReclaimExec: async (req: ChildReclaimRequest): Promise<ChildReclaimOutcome> => {
       requests.push(req);
       return { kind: 'reclaimed', sessionId: req.sessionId, runId: req.runId, wip: { kind: 'none' }, secretsDropped: 0 };
@@ -661,8 +671,8 @@ describe('watch.ts — emitCoord: the coord frame\'s switch bytes (the wire\'s M
 });
 
 describe('watch.ts — the tick hands the lanes ITS listing, and a null or rejecting one reaches none of them', () => {
-  // `sweepStopDone` runs only once the watcher is primed, so each row primes it first.
-  const lanes = ['sweepChildReclaim', 'sweepArchivedExpiry', 'sweepDeadCoordinators', 'sweepStopDone'] as const;
+  // `sweepSleep` runs only once the watcher is primed, so each row primes it first.
+  const lanes = ['sweepChildReclaim', 'sweepArchivedExpiry', 'sweepDeadCoordinators', 'sweepSleep'] as const;
   const prime = (w: FleetWatcher): void => { (w as unknown as { primed: boolean }).primed = true; };
   it.each<Listing>(['null', 'reject'])('%s → no lane is called', async (l) => {
     const f = watchRig({ io: (b, reg) => scripted(b, reg, () => l).io });
@@ -677,7 +687,7 @@ describe('watch.ts — the tick hands the lanes ITS listing, and a null or rejec
     prime(f.watcher);
     const spies = lanes.map((m) => vi.spyOn(f.watcher, m));
     await f.watcher.tick();
-    // The listing is each lane's last argument (`sweepStopDone` takes the rows first).
+    // The listing is each lane's last argument (`sweepSleep` takes the rows first).
     expect(spies.map((s) => (s.mock.calls[0]?.at(-1) as string[] | undefined)?.includes(RECLAIM_PAUSE_MARKER)))
       .toEqual(lanes.map(() => l === 'present'));
   });

@@ -527,6 +527,7 @@
   gap: 5px;
 }
 .acct-gauge {
+  position: relative;
   display: grid;
   grid-template-columns: 18px 1fr 34px;
   align-items: center;
@@ -750,26 +751,39 @@
 
 
 
-/* Accounts strip — usage shown once per account, with reset countdowns. Also
-   the nav affordance onto /accounts (Task 6, Build 3 PR G): role="link" in
-   AccountsStrip.tsx, so the whole grid is one tap target — min-height off the
-   shared token rather than trusting the gauges inside it to always clear the
-   floor on their own. */
+/* Accounts strip, the lanes row (T2c, D-6329): a card per lane, most free first, two columns on a phone and four from
+   700px, each card the door to its lane (role="link" in AccountsStrip.tsx, so it declares the tap floor itself:
+   `.account-gauge` below) and All accounts after the last card, a row of its own on a phone. The strip is a plain group
+   while it has cards. Only the placeholder, no lane to show, is itself one door to /accounts (D-161), and so only
+   `.accounts-strip[role="link"]` takes the floor and the pointer. */
 .accounts-strip {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 6px;
   margin-bottom: var(--sp-2);
+}
+.accounts-strip[role="link"] {
   min-height: var(--tap-min);
   cursor: pointer;
 }
 @media (min-width: 700px) {
   .accounts-strip { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 }
+/* The end cell: All accounts. Its own row under the cards on a phone (and wherever the cards wrap to two columns);
+   the desk's frame header puts it in the row's next track (shell.css). The button brings its own tap floor. */
+.accounts-end {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+}
 .account-gauge {
   display: grid;
+  align-content: center;
   gap: 1px;
   padding: 3px var(--sp-2) 4px;
+  /* A card is a control: the floor at every width, since a weekly-only or no-reading card is otherwise 20 to 36px. */
+  min-height: var(--tap-min);
+  cursor: pointer;
   background: var(--bg-surface);
   border: 1px solid var(--edge-subtle);
   border-radius: var(--r-md);
@@ -791,13 +805,22 @@
   display: grid;
   gap: 1px;
 }
+/* What a lane never read says in place of its windows (laneWords' NO_READING): no meter beside it. It sets no colour of
+   its own: it reads in the card's ink, which the contrast gate already measures on the card. */
+.acct-unread {
+  font-family: var(--family-mono);
+  font-size: var(--fs-2xs);
+}
 .account-gauge-label {
   font-family: var(--family-mono);
   font-size: var(--fs-2xs);
   font-weight: var(--weight-semibold);
   line-height: 1.25;
 }
+/* `position: relative` on both the strip's row and the picker's gauge: the percentage's `sr-only` span is absolutely
+   positioned, and with no positioned ancestor it escaped the detail pane (the scroller) and stretched the document. */
 .acct-row {
+  position: relative;
   display: grid;
   grid-template-columns: 1.5em minmax(0, 1fr) auto auto;
   align-items: center;
@@ -893,6 +916,13 @@
    that survives. */
 @media (forced-colors: active) {
   .sess-line--active {
+    outline: 2px solid CanvasText;
+    outline-offset: -2px;
+  }
+  /* The arrived lane's row (AccountsScreen): its accent edge is an inset box-shadow, dropped here, and its focus ring
+     is removed by the script-focus rule (`:focus`, so the second selector outranks it), so the same inset outline marks it. */
+  .accounts-row[data-arrived],
+  .accounts-row[data-arrived][tabindex="-1"]:focus {
     outline: 2px solid CanvasText;
     outline-offset: -2px;
   }
@@ -2235,6 +2265,11 @@ button.proj-card-pool::before {
   border: 1px solid var(--edge-subtle);
   border-radius: var(--r-md);
 }
+/* A lane arrived at from a card (`/accounts?lane=<id>`): the screen scrolls it into view and focuses it by script, so
+   the row is a focus target with no ring of its own (tabindex -1, never a tab stop), and the one quiet edge says which
+   row the card meant. An inset shadow on the row's own ground, not a border: it moves no layout and adds no ink. */
+.accounts-row[tabindex="-1"]:focus { outline: none; }
+.accounts-row[data-arrived] { box-shadow: inset 2px 0 0 var(--accent); }
 .accounts-row-head { display: flex; align-items: center; gap: var(--sp-2); }
 /* A sentence ("disabled on the fleet host"), so the UI face — see
    `.accounts-projection`. */
@@ -2384,6 +2419,8 @@ button.proj-card-pool::before {
   font-variant-numeric: tabular-nums; color: var(--ink-tertiary);
 }
 .mail-row .mail-body { grid-column: 1 / -1; font-size: var(--fs-meta); color: var(--ink-secondary); }
+/* D-6911: the review cap's Lift cap door, on its own line under the record's body. */
+.mail-row .mail-cap-door { grid-column: 1 / -1; justify-self: start; }
 
 /* The programme filter and its headers. Chips take the same ground and the same
    inks the rest of this screen does — `--ink-secondary` for a chip that is off,
@@ -2524,6 +2561,27 @@ button.proj-card-pool::before {
    is `--status-attention-text`, already declared and already priced by
    contrast-check.mjs — the amber warn register `.pr-warn` and
    `.program-start-warn` use, not a new pair. */
+/* D-6799: the run's spend, ONE line on its own wrapped row at every width. The
+   short half (dollars, output) always shows; the long half (input, cache) only
+   from 480px, where the row has the room - a 320px phone keeps a single line. */
+.run-row .run-spend {
+  flex: 1 0 100%;
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: baseline;
+  gap: var(--sp-2);
+  min-width: 0;
+  padding-bottom: var(--sp-1);
+  font-size: var(--fs-2xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-secondary);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+@media (max-width: 479px) {
+  .run-row .run-spend-long { display: none; }
+}
 .run-row .run-warn {
   flex: 1 0 100%;
   display: flex;
@@ -2775,9 +2833,15 @@ button.proj-card-pool::before {
    grounded rule and one copy that drifts. */
 /* `.update-move-sheet` is the third body with these six (programme wave 5's
    move sheet), grouped here for the reason the first two already were. */
+/* `.lift-cap-sheet` is the fourth (D-6911, the review cap's lift), and renders
+   the same measured `.abandon-error` descendant for a refused lift. The run
+   board's `.review-cap-band` is the fifth: the same decision, waiting on the
+   board before the sheet opens. */
 .abandon-sheet,
 .archive-conflict-sheet,
-.update-move-sheet {
+.update-move-sheet,
+.lift-cap-sheet,
+.review-cap-band {
   display: grid;
   gap: var(--sp-3);
   color: var(--ink-primary);
@@ -2790,10 +2854,52 @@ button.proj-card-pool::before {
    tokens.css's own comment), reused rather than a third rule re-deriving
    the same ratio. */
 .abandon-sheet .abandon-error,
-.archive-conflict-sheet .abandon-error {
+.archive-conflict-sheet .abandon-error,
+.lift-cap-sheet .abandon-error {
   margin: 0;
   font-size: var(--fs-sm);
   color: var(--status-dead-text);
+}
+/* The ask's lines take the sheet's own ground and ink: no colour of their own. */
+.lift-cap-sheet .lift-cap-note,
+.lift-cap-sheet .lift-cap-findings {
+  margin: 0;
+  font-size: var(--fs-sm);
+}
+.lift-cap-sheet .lift-cap-findings {
+  padding-left: var(--sp-4);
+  display: grid;
+  gap: var(--sp-1);
+}
+.lift-cap-sheet .lift-cap-report {
+  overflow-wrap: anywhere;
+}
+
+/* The run board's "Waiting on you" band (D-6911): the review cap's ask, above
+   the programme groups. Its ground is the sheet bodies' rule (grouped there,
+   not copied); a decision waiting, not a living pane, so no --glow, no
+   animation and no box-shadow. */
+.review-cap-band .review-cap-band-head {
+  margin: 0;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+.review-cap-band .review-cap-band-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: var(--sp-2);
+}
+.review-cap-band .review-cap-band-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  font-size: var(--fs-sm);
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 /* ------------------------------------------------------------------ *
@@ -3451,60 +3557,3 @@ button.proj-card-pool::before {
   justify-content: flex-end;
   margin-bottom: var(--sp-2);
 }
-
-/* The compact gauges (W2 Task S2c, CompactGauges.tsx): one group, one door to /accounts, on the tap floor like the
-   full strip. Layout only: the name's ink is its lane hue, the meter paints itself (meter.tsx). In `bar` and `led`
-   the lanes are one row, one line tall, that wraps and clips: a gauge that does not fit whole wraps out of sight (the
-   door counts it into "+n"), so no gauge shrinks under its floor or paints over its neighbour. */
-.accounts-compact {
-  display: flex;
-  align-items: center;
-  gap: var(--sp-3);
-  min-width: 0;
-  min-height: var(--tap-min);
-  overflow: hidden;
-  cursor: pointer;
-}
-.accounts-compact-lanes {
-  display: flex;
-  flex: 1 1 auto;
-  flex-wrap: wrap;
-  align-items: center;
-  column-gap: var(--sp-3);
-  min-width: 0;
-  height: 1.5em;
-  overflow: hidden;
-  font-size: var(--fs-2xs);
-  line-height: 1.5;
-}
-.accounts-compact[data-compact='grid'] .accounts-compact-lanes {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: var(--sp-1) var(--sp-3);
-  height: auto;
-}
-.accounts-compact-gauge {
-  display: inline-flex;
-  flex: 0 1 auto;
-  align-items: center;
-  gap: var(--sp-1);
-  height: 1.5em;
-  min-width: 0;
-}
-/* The floor in `bar` and `led`: a 6ch name, the 40px meter, a 5ch reading ("reset"). A name past 12ch truncates, so
-   a gauge's natural width is bounded and one long name never wraps the rest out. */
-.accounts-compact:not([data-compact='grid']) .accounts-compact-gauge {
-  min-width: calc(6ch + 40px + 5ch + 2 * var(--sp-1));
-}
-.accounts-compact-name { max-width: 12ch; }
-.accounts-compact-pct,
-.accounts-compact-more {
-  flex: none;
-  font-size: var(--fs-2xs);
-  font-variant-numeric: tabular-nums;
-}
-.accounts-compact-pct { min-width: 5ch; }
-/* A gauge the measure hid (`hiddenGauges`: wrapped, or cut at the row's edge) is not drawn, and moves nothing, so
-   the measure stays true; its lane is in the "+n". With every placed gauge hidden the "+n" leads (W2 Task S4b). */
-.accounts-compact-gauge[data-clipped] { visibility: hidden; }
-.accounts-compact[data-lanes-hidden] > .accounts-compact-more { order: -1; }

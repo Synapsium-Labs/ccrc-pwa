@@ -209,6 +209,13 @@ describe('readDiskHealth: the one reader', () => {
     neg['filesystems'] = [{ ...fsAt(88), level: 'warn', sizeBytes: -1 }];
     expect(readDiskHealth({ disk: neg })).toBeNull();
   });
+  it('a holder\'s inodes (#1411) are read through, partial or not; a malformed count makes the block unmeasured', () => {
+    const g = good();
+    g['holders'] = [{ label: 'a', bytes: 1, inodes: 7 }, { label: 'b', bytes: 2, inodes: 9, inodesPartial: true }];
+    expect(readDiskHealth({ disk: g })?.holders).toEqual([{ label: 'a', bytes: 1, inodes: 7 }, { label: 'b', bytes: 2, inodes: 9, inodesPartial: true }]);
+    g['holders'] = [{ label: 'a', bytes: 1, inodes: -3 }];
+    expect(readDiskHealth({ disk: g })).toBeNull();
+  });
   it('an older block without holders reads with none', () => {
     const g = good();
     delete g['holders'];

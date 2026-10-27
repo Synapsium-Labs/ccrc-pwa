@@ -159,7 +159,7 @@ export function loopbackCurlFront(realCurl: string): string {
     '      -d|--data-binary) [ $# -gt 0 ] || refuse; case "$1" in @*) refuse ;; esac; shift ;;',
     '      -K) [ $# -gt 0 ] && [ "$1" = - ] || refuse',
     '          if [ "$mode" = check ]; then [ -z "$have_cfg" ] || refuse; cfg=$(cat); have_cfg=1; cfg_ok || refuse; fi; shift ;;',
-    '      -[sSfL]*) case "${a#-}" in *[!sSfL]*) refuse ;; esac ;;',
+    '      -[gsSfL]*) case "${a#-}" in *[!gsSfL]*) refuse ;; esac ;;',
     '      -*) refuse ;;',
     '      *) url_ok "$a" ;;',
     '    esac',

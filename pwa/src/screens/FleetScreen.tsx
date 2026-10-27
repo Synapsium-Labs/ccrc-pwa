@@ -13,6 +13,8 @@ import { FleetHostBanner, fleetHostBannerShows } from '../fleet/FleetHostBanner'
 import { HaltBanner, haltBannerShows } from '../fleet/HaltBanner';
 import { DiskBanner } from '../fleet/DiskBanner';
 import { diskBannerShows } from '../fleet/diskWords';
+import { PressureBanner } from '../fleet/PressureBanner';
+import { pressureBannerShows } from '../fleet/pressureWords';
 import { UpdateIndicator } from '../fleet/UpdateIndicator';
 import { UPDATES_STALE_TEXT } from '../fleet/useUpdatesView';
 import { SubstrateBanner, substrateBannerShows } from '../fleet/SubstrateBanner';
@@ -144,8 +146,9 @@ export function FleetScreen({
   // The skin's own fleet list, when it has one (Instrument's table, W2 Task S10); none outside a frame or in Refined.
   const set = useFrameSet();
   const FleetList = set?.FleetList ?? null;
-  // The skin's own head where this column holds the chrome (Refined's phone header, W2 Task S5), with the lane gauges
-  // under it, so the strip below steps aside: one readout of the lanes at any width. And its own New session door.
+  // The skin's own head where this column holds the chrome (Refined's phone header, W2 Task S5), with the lanes strip
+  // under it (a group of lane cards, each a door to its lane on the Accounts screen, All accounts at the end), so the
+  // strip below steps aside: one readout of the lanes at any width. And its own New session door.
   const Head = headChrome ? set?.Head ?? null : null;
   const desk = useDesk();
   const Fab = set?.Fab ?? null;
@@ -408,6 +411,8 @@ export function FleetBanners(): ReactNode {
           shows: fleetHostBannerShows(fleetHealth),
           node: <FleetHostBanner health={fleetHealth} nodes={updates.view?.nodes ?? null} intent={updates.view?.intent ?? null} stale={stale} />,
         },
+        // The host's pressure (#1170), from the same health poll.
+        { id: 'pressure', shows: pressureBannerShows(fleetHealth), node: <PressureBanner health={fleetHealth} /> },
         // The disk alarm (D-6617), from the same health poll as the fleet-host banner above.
         { id: 'disk', shows: diskBannerShows(fleetHealth), node: <DiskBanner health={fleetHealth} /> },
         // The halt, with each halting node's Ack in place (programme wave 14, R15(a)). Re-polls on every Ack. The

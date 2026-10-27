@@ -64,7 +64,7 @@ const rig = async (o: Opts = {}) => {
   if (o.live !== false) writeFileSync(path.join(reg, DEAD_COORDINATOR_LANE_LIVE_MARKER), '');
   if (o.paused === true) writeFileSync(path.join(reg, 'reclaim-paused'), '');
   const calls: string[][] = [];
-  const run: Runner = async (_cmd, args) => { calls.push(args); o.onVerb?.(args[0] ?? ''); return { code: 0, stdout: '', stderr: '' }; };
+  const run: Runner = async (_cmd, args) => { calls.push(args); o.onVerb?.(args[0] ?? ''); return { ran: true, code: 0, stdout: '', stderr: '' }; };
   const base = testDeps(home, run);
   const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
   const notifyLog = new NotifyLog(path.join(home, '.ccrc', 'notify.json'));
@@ -164,7 +164,11 @@ describe('the one executor — shadow, the switch, and the store', () => {
   it('a store that cannot say which runs the claimant holds ends nothing', async () => {
     const r = await rig();
     r.working('alpha', 'demo-w1');
-    r.deps.coord.openRunsClaimedBy = () => { throw new Error('database is not open'); };
+    const real = r.deps.coord.openRunsForSession.bind(r.deps.coord);
+    r.deps.coord.openRunsForSession = (id, e, i, role) => {
+      if (role === 'claimant') throw new Error('database is not open');
+      return real(id, e, i, role);
+    };
     expect(await endDeadCoordinator(r.deps, CRASHED, NOW)).toMatchObject({ kind: 'store-unreadable' });
     expect(r.abandoned).toEqual([]);
   });

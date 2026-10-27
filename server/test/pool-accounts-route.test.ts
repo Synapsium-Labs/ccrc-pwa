@@ -28,7 +28,7 @@ import { ACCOUNT_ID_RE } from '../../shared/roster.js';
 import { seedRoster } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import { execFileSync } from 'node:child_process';
-import { CCD, ghContainedEnv, makeCcdHarness, stubContainedTool, type CcdHarness } from './ccdWsHelpers.js';
+import { CCD, ghContainedEnv, makeCcdHarness, stubContainedTool, type CcdHarness, ccdSource } from './ccdWsHelpers.js';
 import { POOLS_DIR_NAME } from '../src/pools.js';
 
 const TOKEN = 'f'.repeat(64);
@@ -52,7 +52,7 @@ const ROSTER = {
   }],
 };
 
-const failingRunner: Runner = async () => ({ code: 1, stdout: '', stderr: '' });
+const failingRunner: Runner = async () => ({ ran: true, code: 1, stdout: '', stderr: '' });
 
 let home: string;
 let app: FastifyInstance | undefined;
@@ -355,7 +355,7 @@ describe('ACCOUNT_ID_RE parity — the one TypeScript spelling against the two f
   it('equals ccd/ccd\'s bash account-id check', () => {
     // `CCD` (`ccdWsHelpers.js`) — the ONE path to `ccd/ccd`,
     // `single-definition.test.ts`'s own canonical holder, not re-derived here.
-    const src = readFileSync(CCD, 'utf8');
+    const src = ccdSource();
     const m = /\[\[ "\$v" =~ (\^\[A-Za-z0-9\._-\]\{1,64\}\$) \]\]/.exec(src);
     expect(m, 'ccd\'s bash account-id literal moved or was not found — this parity check is over nothing')
       .not.toBeNull();

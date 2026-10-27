@@ -31,7 +31,7 @@ const base = (o: Partial<StopDoneInput> = {}): StopDoneInput => ({
     ok: true, last: { runId: 7, state: 'done', closedAt: NOW - STOP_DONE_GRACE_MS - 1 },
     openWorker: false, parkedWorker: false, openClaimant: false, claim: false, mail: false,
   },
-  viewer: false, sinceStartMs: PRESENCE_TTL_MS + 1, presenceTtlMs: PRESENCE_TTL_MS, verb: true, optedOut: false,
+  viewer: false, sinceStartMs: PRESENCE_TTL_MS + 1, viewerOpenTtlMs: PRESENCE_TTL_MS, verb: true, optedOut: false,
   live: { kind: 'read', word: { ok: true, word: 'idle' }, turn: 'idle', mark: MARK_DONE },
   now: NOW, graceMs: STOP_DONE_GRACE_MS, ...o,
 });

@@ -1,0 +1,7 @@
+{
+  "file": "ccd/ccd",
+  "maxDelta": 87,
+  "d": "D-6180",
+  "reason": "auto-swap reliability W1: a stand-down line for every held limit, a re-logged tick-undecidable after the compact-note floor, and lane= on every decision line, all log-only bash in ccd/ccd's swap arm (measured +87 net code lines against the merge-base)",
+  "added": "2026-10-21"
+}

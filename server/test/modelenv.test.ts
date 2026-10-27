@@ -815,3 +815,33 @@ describe('effortFile', () => {
     expect(effortFile(noEffort, CODEX)).toEqual({ byModel: {} });
   });
 });
+
+describe('the compaction chain: no lane env block disables or moves proactive compaction (codex-bridge D25, Stage 2 Task 15)', () => {
+  // Claude Code compacts proactively at window − 33k on a GPT model id only while it enforces the window: with the
+  // enforcement switch set it compacts at no size, and the auto-compact window lowers the threshold below the measured
+  // one (a value above the window is clamped). So neither may ever reach a lane's env block, whatever the layout.
+  const FORBIDDEN = ['CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT', 'CLAUDE_CODE_AUTO_COMPACT_WINDOW'];
+  it('no lane env block names the enforcement switch or the auto-compact window', () => {
+    const regs: Registry[] = [SEEDED, NEUTRAL, withClasses({ fable: DELTA }), withClasses({ haiku: BETA }),
+      ...modelCases.map((c) => c.reg).filter((r): r is Registry => r !== null)];
+    const cats: (Catalogue | null)[] = [CODEX, CODEX_STALE, NEUTRAL_CAT, null];
+    let built = 0;
+    for (const reg of regs) {
+      const ids = [...new Set(CLASSES.map((c) => reg.classes[c]).filter((v): v is string => v !== null))];
+      const readings: (ModelWindows | null)[] = [null, measured({}),
+        measured(Object.fromEntries(ids.slice(1).map((id) => [id, 511000]))),
+        measured(Object.fromEntries(ids.map((id) => [id, 342000])))];
+      for (const cat of cats) {
+        for (const w of readings) {
+          let block: Record<string, string>;
+          try { block = modelEnvBlock(reg, cat, w); } catch { continue; } // unroutable: no block at all
+          for (const k of FORBIDDEN) expect(Object.keys(block), `${k} in ${JSON.stringify(reg.classes)}`).not.toContain(k);
+          built += 1;
+        }
+      }
+    }
+    for (const k of FORBIDDEN) expect([...MODEL_ENV_KEYS]).not.toContain(k);
+    // Guards the guard: every routable layout, under every catalogue and every windows reading.
+    expect(built).toBeGreaterThanOrEqual(100);
+  });
+});

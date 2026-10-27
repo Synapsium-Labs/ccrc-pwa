@@ -166,15 +166,21 @@ export const POOL_EPOCH_FILE_NAME = 'pool-epoch';
  * reason it may join this object. The server's token driver reads it on its
  * own tick (D-4389), so the inventory sweep's `MEASURED_FILE_KEYS` leaves it
  * out, as it leaves out `projection`.
+ *
+ * `tmpSweep` (`tmp-sweep.json`, fleet disk retention DR-12, D-6624) is the tenth: the tmp sweep's census, which
+ * `ccd/ccd-tmp-sweep` replaces whole each pass. The server's census lane reads it on its own tick
+ * (`server/src/tmpSweep.ts` parses it), so the inventory sweep's `MEASURED_FILE_KEYS` leaves it out too: it has its own
+ * reader, and its size (a thousand `moved` rows) is past the inventory's 64 KiB file cap.
  */
 export const CCRC_DIR_NAME = '.ccrc';
 export const NODE_FILES = {
   stamp: 'build.json', installed: 'installed', caps: 'ccrc-caps', floor: 'floor', previous: 'previous',
   nodeId: 'node-id', report: 'update.json', projection: 'update-intent',
   tokenGeneration: 'box-token-generation',
+  tmpSweep: 'tmp-sweep.json',
 } as const;
 export type NodeFileKey = keyof typeof NODE_FILES;
-/** The nine names as one list, DERIVED — the agent's admission set and every
+/** The ten names as one list, DERIVED — the agent's admission set and every
  *  scan over it read this, never a restatement. */
 export const NODE_FILE_BASENAMES: readonly string[] = Object.values(NODE_FILES);
 
@@ -393,7 +399,7 @@ export interface AccountOpReq {
  *  A frame with any extra field is a malformed frame (`bad-request`), the same word an agent that predates the op
  *  answers. */
 export interface DiskReq { t: 'req'; id: number; op: 'disk' }
-export type AgentReq = ExecReq|ReadReq|ReadFromReq|ReadB64Req|ReaddirReq|StatReq|LstatReq|WriteB64Req|TailOpenReq|TailCloseReq|PtyOpenReq|CapsReq|UpdateReq|TokenSyncReq|AccountOpReq|DiskReq;
+export type AgentReq = ExecReq|ReadReq|ReadFromReq|ReadB64Req|ReaddirReq|StatReq|LstatReq|WriteB64Req|TailOpenReq|TailCloseReq|PtyOpenReq|CapsReq|UpdateReq|TokenSyncReq|AccountOpReq|DiskReq|PressureReq;
 export interface ResOk  { t: 'res'; id: number; ok: true;  [k: string]: unknown } // op-specific payload fields below
 /** `detail` is ADDITIVE (design 2026-09-20 §10, D-3373): what an
  *  agent can say beyond the word — the `--detach` parent's first stderr line,
@@ -895,3 +901,20 @@ export const DISK_STATFS_DEADLINE_MS = 5_000;
 
 /** The `disk` op's reply: exactly what the decider takes (`DiskMeasured`), in this one type. */
 export type DiskOpReply = DiskMeasured;
+
+// ── the `pressure` op (#1170) ─────────────────────────────────────────────────────────────────────────────────────
+// The agent reads the host's pressure stall information (/proc/pressure/memory and /proc/pressure/io) and answers
+// what it read (`HostPsi`, shared/pressure.ts); the server's decider (`server/src/pressure.ts`) holds the last reading
+// and classifies a stalled link by it. Declared at the file's foot so no line cited above moves. The op takes NO
+// argument, so no path crosses the link. ADDITIVE: no `FLEET_PROTO` bump; an agent that predates it answers
+// `bad-request` and is never sent the op (the server reads `ready.ops` first).
+
+/** ONE member of the `req` envelope. A frame with any extra field is a malformed frame (`bad-request`). */
+export interface PressureReq { t: 'req'; id: number; op: 'pressure' }
+
+/** The op's name, and the word an agent that answers it lists in `ready.ops`. */
+export const PRESSURE_OP = 'pressure';
+
+/** The `pressure` op's reply: exactly what the decider takes, in this one type. */
+export type PressureOpReply = HostPsi;
+import type { HostPsi } from './pressure.js';

@@ -6,7 +6,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { readFileSync } from 'node:fs';
 import fs from 'node:fs';
 import path from 'node:path';
-import { CCD, WS_ADD, makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
+import { CCD, WS_ADD, makeCcdHarness, type CcdHarness, ccdSource } from './ccdWsHelpers.js';
 import { actsOf, readJournal, eventsOf, measOf, decOf, lcDir } from './lifecycleHelpers.js';
 
 // The bound's own tool, in the platform's spelling: bare `timeout` is GNU and
@@ -163,7 +163,7 @@ describe('session call sites', () => {
 });
 
 describe('the two sites that must NEVER emit', () => {
-  const src = readFileSync(CCD, 'utf8');
+  const src = ccdSource();
 
   it('_reg_set contains no _lc_ call — thousands an hour, no forensic value', () => {
     const from = src.indexOf('_reg_set() {');

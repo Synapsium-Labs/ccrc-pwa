@@ -33,13 +33,22 @@
 // fixtures are bundles + digests, not 3 MB tarballs); `ccrc update` always
 // passes --blob.
 //
-// Dependency majors (D-3131): @sigstore/verify@^3.1, @sigstore/bundle@^4.0
-// and @sigstore/protobuf-specs@^0.5 — not the newest majors the plan
-// originally named — because the v4/v5 majors declare
-// `engines.node ^22.22.2 || ^24.15.0` and the fleet (and this box) run node
-// 24.14.1. Export names (`Verifier`, `toSignedEntity`, `toTrustMaterial`,
-// `bundleFromJSON`, `TrustedRoot`) were re-measured on the installed v3/v4
-// modules and match the spike's v4.1.2/v5.0.0 names verbatim.
+// Dependency majors: @sigstore/verify@^4.1, @sigstore/bundle@^5.0 and
+// @sigstore/protobuf-specs@^0.5. D-3131 first held these one major back
+// (v3/v4) because the v4/v5 majors declare `engines.node ^22.22.2 ||
+// ^24.15.0 || >=26`, and some boxes run node 24.14.1, which that range
+// leaves out. Per their changelogs the majors' one breaking change is
+// dropping Node 20; v4 also carries later hardening (tlog entries
+// de-duplicated before the threshold count, stricter checkpoint parsing) and
+// accepts DSSE bundles with a Rekor v2 `hashedrekord` entry. Re-measured at
+// the bump: every case in server/test/verify-provenance.test.ts, the
+// bad-signature, tamper, wrong-identity, untrusted-CA and expired-certificate
+// refusals among them, passes on node 22.16.0 (the repo floor), 24.14.1 and
+// 26.5.0, and `npm ci --omit=dev` on 24.14.1 installs with an EBADENGINE
+// warning, not an error. A box below the declared range runs the library
+// outside what its authors test; if the library fails to load there, that is
+// exit 3, never a verdict. The export names (`Verifier`, `toSignedEntity`,
+// `toTrustMaterial`, `bundleFromJSON`, `TrustedRoot`) are unchanged.
 //
 // exit 0 verified (one stdout line naming the identity); 1 refused (one
 // stderr line saying why); 2 usage; 3 the verifier could not RUN at all —
@@ -65,7 +74,13 @@ function usage(code) {
   process.stderr.write('usage: node verify-provenance.mjs --bundle <file> (--blob <file> | --blob-sha256 <hex>) --tag vX.Y.Z --owner <owner> --repo <repo> [--backend sigstore|gh] [--trusted-root <file>]\n');
   process.exit(code);
 }
+// D-6842: `why` can carry bytes a release host chose (node's JSON.parse error
+// quotes the bad bundle line), so every byte of its UTF-8 outside printable
+// ASCII, newlines included, is written as `?`: one line, no escape sequence.
+// The verifier's own sentences are spelled in ASCII, so the rule costs them
+// nothing (D-6843).
 function refuse(why) {
+  why = Buffer.from(String(why), 'utf8').toString('latin1').replace(/[^\x20-\x7e]/g, '?');
   process.stderr.write(`verify-provenance: ${why}\n`);
   process.exit(1);
 }
@@ -131,13 +146,13 @@ function statementOf(json) {
 /** The subject NAME, and — when the caller supplied it — the digest.
  *  Returns the refusal reason, or null when the statement passes. */
 function subjectFailure(st, digest) {
-  if (st === null) return 'the bundle carries no in-toto statement — not an attestation';
+  if (st === null) return 'the bundle carries no in-toto statement - not an attestation';
   const named = st.subject.filter((s) => s && s.name === expectSubject);
   if (named.length === 0) {
-    return `the attestation's subject is ${st.subject.map((s) => s?.name ?? '?').join(', ')}, not ${expectSubject} — a tarball attested under another tag`;
+    return `the attestation's subject is ${st.subject.map((s) => s?.name ?? '?').join(', ')}, not ${expectSubject} - a tarball attested under another tag`;
   }
   if (digest !== null && !named.some((s) => s.digest && s.digest.sha256 === digest)) {
-    return `the attestation names ${expectSubject} with sha256 ${named[0].digest?.sha256 ?? '?'}, but the blob's is ${digest} — not the bytes the workflow built`;
+    return `the attestation names ${expectSubject} with sha256 ${named[0].digest?.sha256 ?? '?'}, but the blob's is ${digest} - not the bytes the workflow built`;
   }
   return null;
 }
@@ -253,7 +268,7 @@ try {
     const r = spawnSync('gh', ['attestation', 'verify', opt.blob, '--bundle', opt.bundle, '--repo', `${opt.owner}/${opt.repo}`,
       '--cert-identity', san, '--cert-oidc-issuer', ISSUER, '--custom-trusted-root', rootPath, '--deny-self-hosted-runners', '--format', 'json'],
     { encoding: 'utf8' });
-    if (r.error) refuse(`gh could not be run (${r.error.message}) — the gh backend needs gh >= 2.49 on PATH`);
+    if (r.error) refuse(`gh could not be run (${r.error.message}) - the gh backend needs gh >= 2.49 on PATH`);
     if (r.status === 0) { acceptedSan = san; acceptedStatements = ghStatements(r.stdout ?? ''); break; }
     lastErr = `${r.stderr ?? ''}${r.stdout ?? ''}`.trim().split('\n').pop() ?? '';
   }

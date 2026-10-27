@@ -20,7 +20,7 @@ structural difference between them.
 | transition table | `RUN_TRANSITIONS`, one place | none |
 | writers | one (`advanceInner`) | nine, across eight methods |
 | defects | D-9, D-64 — both about the table's *content*, both one-line fixes, neither able to recur silently | the same terminality guard forgotten and re-added **four times**: finding 22 → D-62 → D-66 → D-67 |
-| status | closed | **one gap left** (ARCH-15, #532) |
+| status | closed | closed (ARCH-15, #532) |
 
 When this was written (2026-08-10), `bumpReplayCount` and `markIngested` wrote with a bare
 `WHERE id = ?` while `markDelivered`/`rejectDelivery`/`backOff` carried
@@ -33,11 +33,14 @@ Re-verified on `main` for ARCH-02a (D-6000), cited by symbol:
   `markDelivered`, `rejectDelivery`, `backOff`) carry `state NOT IN ${TERMINAL_DELIVERY_SQL}`,
   built from L0's `TERMINAL_DELIVERY_STATES` (`shared/api.ts`). `bumpReplayCount` answers
   `{ state: 'counted'; replayCount } | { state: 'terminal' }`, and its one caller,
-  `FleetWatcher.sweepMail` (`watch.ts`), consumes it: it rejects at the ceiling only when
+  the mail lane (`FleetWatcher.mailPass`, `watch.ts`; `sweepMail` when this was written), consumes it: it rejects at the ceiling only when
   `bumped.state === 'counted'`, so a row a park closed is no longer counted.
-- **Still open:** `markDelivered` still returns `void`, so its caller in `sweepMail` cannot
-  see that its write was refused. One guarded writer primitive whose outcome reaches every
-  caller is ARCH-15 (#532).
+- **Closed since, by ARCH-15 (#532; D-5997):** every one-row delivery writer
+  (`markDelivered`, `markIngested`, `backOff`, `rejectDelivery`) goes through one private
+  guarded primitive, `CoordStore`'s `writeDelivery`, and answers `DeliveryWrite`
+  (`{ changed, state }`, `coord/store.ts`). `FleetWatcher.mailPass` reads each answer through
+  `FleetWatcher.landed`, so a write the guard refused is seen, not assumed. Held by
+  `mail-deliveries-writer.test.ts` (refreshed for ARCH-02a, D-6992).
 
 The invariant with a home costs one line to fix and cannot regress. The identical
 invariant with no home cost four review rounds and was still not finished when this was
@@ -236,16 +239,16 @@ never name one file. Paths are relative to the package's `src/`.
 <!-- ring-context-map:start -->
 | Context | `server/src` | `pwa/src` |
 |---|---|---|
-| C1 Fleet Registry & Accounts | `accounts/**`, `registry.ts`, `config.ts`, `fleet.ts`, `fleetidentity.ts`, `fleetstate.ts`, `divergence.ts`, `limits.ts`, `usage.ts`, `pools.ts`, `poolrule.ts`, `shares.ts`, `swapguard.ts`, `hookstate.ts`, `livestate.ts`, `coord/placement.ts`, `coord/pooledgelog.ts`, `configDir.ts` | `fleet/**`, `stores/fleet.ts`, `lib/accounts.ts`, `lib/pools.ts`, `screens/AccountsScreen.tsx`, `screens/FleetScreen.tsx`, `screens/FleetColumn.tsx` |
+| C1 Fleet Registry & Accounts | `accounts/**`, `registry.ts`, `config.ts`, `fleet.ts`, `fleetidentity.ts`, `fleetstate.ts`, `fleetReadModel.ts`, `sessionReading.ts`, `divergence.ts`, `limits.ts`, `usage.ts`, `pools.ts`, `poolrule.ts`, `shares.ts`, `swapguard.ts`, `hookstate.ts`, `livestate.ts`, `coord/placement.ts`, `coord/pooledgelog.ts`, `configDir.ts` | `fleet/**`, `stores/fleet.ts`, `lib/accounts.ts`, `lib/pools.ts`, `screens/AccountsScreen.tsx`, `screens/FleetScreen.tsx`, `screens/FleetColumn.tsx` |
 | C2 Fleet Mutation | `ccdargv.ts`, `exec.ts`, `lifecycle.ts`, `pty.ts`, `localcaps.ts`, `refreshcaps.ts`, `remote/runner.ts`, `remote/pty.ts` | (none) |
-| C3 Session Conversation | `inject/**`, `transcript/**`, `pane/**`, `tasks/**`, `workflows/**`, `sessionws.ts`, `munge.ts`, `commands.ts`, `clip.ts`, `askkey.ts`, `bus.ts`, `turnverdict.ts`, `turnmark.ts`, `turnidle.ts`, `skillstate.ts`, `idlenudge.ts`, `backread.ts` | `session/**`, `stores/session.ts`, `lib/models.ts`, `screens/SessionScreen.tsx`, `inspector/**` |
-| C4 Workspace Lifecycle | `archivedExpiry.ts`, `childReclaimSweep.ts`, `collectLane.ts`, `hibernateSweep.ts`, `orphanTreeLane.ts`, `orphanTreeSweep.ts`, `stopDone.ts`, `stopDoneSweep.ts`, `naming.ts`, `prstate.ts`, `wsaudit.ts`, `archiveAct.ts`, `coord/archiveAdmission.ts`, `coord/archiveDoor.ts`, `coord/childReclaim.ts`, `coord/childSpent.ts`, `coord/collectLaneJournal.ts`, `coord/collectTempRoot.ts`, `coord/collectOrphanTree.ts`, `coord/expireArchived.ts`, `coord/hibernate.ts`, `coord/landing.ts`, `coord/prhistory.ts`, `coord/released.ts`, `coord/wakeBudget.ts`, `workspaceCreate.ts`, `workspaceTitle.ts`, `linear/**` | `fleet/Archive*.tsx`, `fleet/archiveReleased.ts`, `fleet/ChildReclaimBanner.tsx`, `fleet/childReclaimWords.ts`, `fleet/CollectLaneSection.tsx`, `fleet/collectLaneWords.ts`, `fleet/useCollectLaneView.ts`, `fleet/ExpiryAttention.tsx`, `fleet/expiryWords.ts`, `fleet/hibernated.ts`, `fleet/HoldControl.tsx`, `fleet/lifecycleWords.ts`, `fleet/orphanWords.ts`, `session/Pr*.tsx`, `session/Reap*.tsx`, `session/reapWords.ts`, `screens/ArchiveScreen.tsx`, `inspector/PrSection.tsx`, `screens/LinearSection.tsx` |
-| C5 Coordination | `coord/**`, `deadCoordinator.ts`, `readiness.ts` | `fleet/AbandonSheet.tsx`, `fleet/ResumeSheet.tsx`, `fleet/CapsControl.tsx`, `fleet/CoordBanner.tsx`, `fleet/coordWords.ts`, `fleet/DeadCoordinatorAttention.tsx`, `fleet/deadCoordinatorWords.ts`, `fleet/HotFilesStrip.tsx`, `fleet/KickoffRecovery.tsx`, `fleet/MailBadge.tsx`, `fleet/readinessWords.ts`, `fleet/runGroups.ts`, `fleet/runWords.ts`, `fleet/StartProgramSheet.tsx`, `fleet/startProgramPolicy.ts`, `fleet/useProgramAttempt.ts`, `fleet/useStallWatchView.ts`, `screens/MailScreen.tsx`, `screens/Run*.tsx`, `screens/useColdRuns.ts`, `screens/StallWatchSection.tsx`, `inspector/MailSection.tsx` |
-| C6 Attention & Notification | `push.ts`, `notifylog.ts`, `interruptlog.ts`, `presence.ts`, `askbody.ts`, `askwindow.ts`, `coord/approval*.ts`, `coord/heldFor.ts`, `coord/digest.ts`, `coord/redact.ts`, `notice.ts` | `fleet/AttentionList.tsx`, `fleet/BucketBar.tsx`, `fleet/NotificationBell.tsx`, `fleet/inboxTarget.ts`, `session/AskParts.tsx`, `session/DialogSheet.tsx`, `session/EnvelopeSheet.tsx`, `session/ask*.ts`, `session/useAskKeys.ts`, `lib/push.ts`, `lib/notifymark.ts`, `lib/seen.ts`, `lib/feed.ts`, `lib/restart.ts`, `screens/Digest*.tsx`, `screens/digest.css`, `screens/settings/NotificationsSection.tsx` |
+| C3 Session Conversation | `inject/**`, `transcript/**`, `pane/**`, `tasks/**`, `workflows/**`, `sessionws.ts`, `sessionFeed.ts`, `munge.ts`, `commands.ts`, `clip.ts`, `askkey.ts`, `bus.ts`, `turnverdict.ts`, `turnmark.ts`, `turnidle.ts`, `skillstate.ts`, `idlenudge.ts`, `backread.ts` | `session/**`, `stores/session.ts`, `lib/models.ts`, `screens/SessionScreen.tsx`, `inspector/**` |
+| C4 Workspace Lifecycle | `archivedExpiry.ts`, `childReclaimSweep.ts`, `collectLane.ts`, `hibernateSweep.ts`, `orphanTreeBeat.ts`, `orphanTreeLane.ts`, `orphanTreeSweep.ts`, `staleArchiveBeat.ts`, `stopDone.ts`, `stopDoneSweep.ts`, `sleep.ts`, `sleepLane.ts`, `naming.ts`, `prstate.ts`, `wsaudit.ts`, `archiveAct.ts`, `coord/archiveAdmission.ts`, `coord/archiveDoor.ts`, `coord/childReclaim.ts`, `coord/childSpent.ts`, `coord/collectLaneJournal.ts`, `coord/collectTempRoot.ts`, `coord/collectOrphanTree.ts`, `coord/expireArchived.ts`, `coord/hibernate.ts`, `coord/landing.ts`, `coord/nestedRescueShadow.ts`, `coord/prhistory.ts`, `coord/released.ts`, `coord/staleArchive.ts`, `coord/wakeBudget.ts`, `workspaceCreate.ts`, `workspaceTitle.ts`, `linear/**` | `fleet/Archive*.tsx`, `fleet/archiveReleased.ts`, `fleet/ChildReclaimBanner.tsx`, `fleet/childReclaimWords.ts`, `fleet/CollectLaneSection.tsx`, `fleet/collectLaneWords.ts`, `fleet/useCollectLaneView.ts`, `fleet/ExpiryAttention.tsx`, `fleet/expiryWords.ts`, `fleet/hibernated.ts`, `fleet/HoldControl.tsx`, `fleet/lifecycleWords.ts`, `fleet/orphanWords.ts`, `session/Pr*.tsx`, `session/Reap*.tsx`, `session/reapWords.ts`, `screens/ArchiveScreen.tsx`, `inspector/PrSection.tsx`, `screens/LinearSection.tsx` |
+| C5 Coordination | `coord/**`, `deadCoordinator.ts`, `readiness.ts` | `fleet/AbandonSheet.tsx`, `fleet/LiftCapSheet.tsx`, `fleet/ReviewCapBand.tsx`, `fleet/reviewCapWords.ts`, `fleet/ResumeSheet.tsx`, `fleet/CapsControl.tsx`, `fleet/CoordBanner.tsx`, `fleet/coordWords.ts`, `fleet/DeadCoordinatorAttention.tsx`, `fleet/deadCoordinatorWords.ts`, `fleet/HotFilesStrip.tsx`, `fleet/KickoffRecovery.tsx`, `fleet/MailBadge.tsx`, `fleet/readinessWords.ts`, `fleet/runGroups.ts`, `fleet/runWords.ts`, `fleet/StartProgramSheet.tsx`, `fleet/startProgramPolicy.ts`, `fleet/useProgramAttempt.ts`, `fleet/useStallWatchView.ts`, `screens/MailScreen.tsx`, `screens/Run*.tsx`, `screens/useColdRuns.ts`, `screens/useRunSpend.ts`, `screens/StallWatchSection.tsx`, `inspector/MailSection.tsx` |
+| C6 Attention & Notification | `push.ts`, `notifylog.ts`, `interruptlog.ts`, `viewer.ts`, `askbody.ts`, `askwindow.ts`, `coord/approval*.ts`, `coord/question*.ts`, `coord/heldFor.ts`, `coord/digest.ts`, `coord/redact.ts`, `notice.ts` | `fleet/AttentionList.tsx`, `fleet/BucketBar.tsx`, `fleet/NotificationBell.tsx`, `fleet/inboxTarget.ts`, `session/AskParts.tsx`, `session/DialogSheet.tsx`, `session/EnvelopeSheet.tsx`, `session/ask*.ts`, `session/useAskKeys.ts`, `lib/push.ts`, `lib/notifymark.ts`, `lib/seen.ts`, `lib/feed.ts`, `lib/restart.ts`, `screens/Digest*.tsx`, `screens/digest.css`, `screens/settings/NotificationsSection.tsx` |
 | C7 Update control plane | `update/**`, `buildinfo.ts`, `coord/updateintentlog.ts` | `fleet/Update*.tsx`, `fleet/WhatsNewSheet.tsx`, `fleet/ReleaseNotes.tsx`, `fleet/HaltBanner.tsx`, `fleet/FleetHostBanner.tsx`, `fleet/movePlan.ts`, `fleet/updateAck.ts`, `fleet/updateHalt.ts`, `fleet/useUpdatesView.ts`, `screens/updates.tsx`, `screens/settings/UpdatesSection.tsx` |
 | C8 Auth & box token | `auth/**`, `token/**` | `accounts/**`, `components/LoginScreen.tsx`, `fleet/PasskeyNotice.tsx`, `lib/auth.ts`, `lib/passkey.ts`, `screens/settings/SecuritySection.tsx`, `screens/settings/SignInGateCard.tsx`, `screens/settings/YourSignInCard.tsx`, `screens/settings/ThisSessionCard.tsx`, `screens/settings/signInGate.ts` |
 | C9 Docs | `docs/**` | `docs/**`, `screens/DocsScreen.tsx` |
-| K Kernels and platform | `index.ts`, `server.ts`, `deps.ts`, `watch.ts`, `io.ts`, `refuse.ts`, `pwaStatic.ts`, `shutdownseal.ts`, `remote/client.ts`, `remote/io.ts`, `changeLatch.ts`, `laneRunner.ts`, `laneSchedule.ts`, `disk.ts`, `diskepisode.ts`, `unmeasured.ts` | `main.tsx`, `app.tsx`, `command/**`, `components/**`, `styles/**`, `lib/**`, `screens/AppearanceRow.tsx`, `screens/SkinFieldset.tsx`, `skins/**`, `screens/settings/**`, `fleet/DiskBanner.tsx`, `fleet/diskWords.ts` |
+| K Kernels and platform | `index.ts`, `server.ts`, `deps.ts`, `watch.ts`, `io.ts`, `refuse.ts`, `pwaStatic.ts`, `shutdownseal.ts`, `remote/client.ts`, `remote/io.ts`, `changeLatch.ts`, `laneRunner.ts`, `laneSchedule.ts`, `disk.ts`, `diskAlarmLane.ts`, `diskepisode.ts`, `pressure.ts`, `pressureLane.ts`, `tmpSweep.ts`, `tmpSweepLane.ts`, `unmeasured.ts`, `journalKernel.ts` | `main.tsx`, `app.tsx`, `command/**`, `components/**`, `styles/**`, `lib/**`, `screens/AppearanceRow.tsx`, `screens/SkinFieldset.tsx`, `skins/**`, `screens/settings/**`, `fleet/DiskBanner.tsx`, `fleet/diskWords.ts`, `fleet/PressureBanner.tsx`, `fleet/pressureWords.ts` |
 <!-- ring-context-map:end -->
 
 A new file takes its directory's row, or needs a file row in the same PR when its
@@ -255,6 +258,11 @@ reads this block and gives every non-test file of the two packages one ring and 
 reaches and a row that names no file are both red.
 
 ## Increments — each rides queued work, none is a standalone refactor PR
+
+**Amended by the operator on 2026-10-19 (ARCH-02b, #537):** a series may land standalone when its
+first commit is a characterization pin and its exit criteria are counted; everything else still rides
+queued work. The ruling and the series it names are recorded under "Rejected, so nobody relitigates it"
+below.
 
 1. **"An account" becomes a type with one home**, and the registry read stops answering
    `null` for four different facts. → rides the in-flight `fix/registry-read-storm`.
@@ -270,18 +278,18 @@ reaches and a row that names no file are both red.
    result-returning read alongside `readFile`. → rides Build 5/6 remote work.
 7. **The watcher gets a narrow guarded store port.** → rides Build 6, which adds lane six.
 
-**Status per increment** (measured on `main` for ARCH-02a, D-6000; a row names the test that
-holds it, or the ARCH ticket that finishes it):
+**Status per increment** (measured on `main` for ARCH-02a, D-6000, and refreshed for ARCH-02a,
+D-6992; a row names the test that holds it, or the ARCH ticket that finishes it):
 
 | # | Status | Held by, or finished by |
 |---|---|---|
 | 1 | done | the roster is runtime data (`shared/roster.ts`'s `parseRoster`): `roster.test.ts` and single-definition's "the account roster — runtime data, no compile-time copies"; the registry read tells its facts apart through `readRegistryMeasured`: `registry-refused.test.ts` |
 | 2 | done | `install-session-hooks.test.ts`, "install-session-hooks.sh default homes are the roster, behaviourally" |
 | 3 | done | `RunRefuseCode` with its derived `RUN_REFUSE_CODES` (`shared/api.ts`): `mail-routes.test.ts`, "every declared RunRefuseCode (run-route refusals) is emitted somewhere in server/src/coord"; statuses from ARCH-11a's `REFUSAL_STATUS`: `refusal-status.test.ts` |
-| 4 | partly | `openRun`'s preconditions are L1 (`coord/openRun.ts`, ARCH-21, `open-run-preconditions.test.ts`); `dispatchRun` decides through `decideDispatch` (`coord/dispatchDecide.ts`, ARCH-22 (#553), `dispatch-decide.test.ts`) and acts through its deps, `sendClear` included; `closeRun` decides through `decideClose` (`coord/closeDecide.ts`, ARCH-35 (#556), `close-decide.test.ts`) and acts in `abandonRun` and `closeWorkRun` |
-| 5 | partly | every writer carries the terminal guard and the pair is spelled once (single-definition's "spells the delivery terminal pair ONCE"); `markDelivered`'s `void` is finished by ARCH-15 (#532) |
-| 6 | done, migrating | `FleetIO`'s `readFileMeasured`, `readdirMeasured`, `statMeasured` and kin (`io.test.ts`); the remaining catch-to-null folds move with ARCH-08b (#534) |
-| 7 | open | the watcher still takes the whole `CoordStore`; consumer-side ports are ARCH-03 (#541) |
+| 4 | done | `openRun`'s preconditions are L1 (`coord/openRun.ts`, ARCH-21, `open-run-preconditions.test.ts`); `dispatchRun` decides through `decideDispatch` (`coord/dispatchDecide.ts`, ARCH-22 (#553), `dispatch-decide.test.ts`) and acts through its deps, `sendClear` included; `closeRun` decides through `decideClose` (`coord/closeDecide.ts`, ARCH-35 (#556), `close-decide.test.ts`) and acts in `abandonRun` and `closeWorkRun` |
+| 5 | done | every writer carries the terminal guard and the pair is spelled once (single-definition's "spells the delivery terminal pair ONCE"); one guarded primitive answers `DeliveryWrite` to every caller (ARCH-15, #532, closed): `mail-deliveries-writer.test.ts` |
+| 6 | done | `FleetIO`'s `readFileMeasured`, `readdirMeasured`, `statMeasured` and kin (`io.test.ts`); the catch-to-null folds moved with ARCH-08b (#534, closed) |
+| 7 | partly | consumer-side ports landed with ARCH-03 (#541, closed): `coord/ports.ts` and the type-only `deps.ts`, held by `rings/host-imports.test.ts`; that ticket moved declarations and narrowed nothing, so the watcher still takes the whole `CoordStore` (`Deps.coord`, `deps.ts`), and no open ARCH ticket narrows it |
 
 ## Enforcement — mechanisms, not intentions
 
@@ -293,19 +301,20 @@ that goes red when it is deleted *and* when it is reordered); **ratchet budgets*
 `watch.ts` and `coord/routes.ts` at current line counts, may-only-shrink; scanner-coverage
 pins asserting each walk visited a non-zero minimum; docstring-claim rule.
 
-**Status per enforcement item** (measured on `main` for ARCH-02a, D-6000):
+**Status per enforcement item** (measured on `main` for ARCH-02a, D-6000, and refreshed for ARCH-02a,
+D-6992):
 
 | Item | Status | Held by, or finished by |
 |---|---|---|
-| Import-direction test | partly | per-ring pins in `single-definition.test.ts` ("the coord ring …", "the update ring …", "the docs ring …"); the repo-wide scanner over the rules above is ARCH-04 (#545), stages 1 to 4, one rule per file under `server/test/rings/` (stage 1, D-6045: `shared-imports.test.ts` holds L0's `shared/*.ts` to `./` imports and `mjs-node.test.ts` the `.mjs` carve-out; stage 2, D-6045: `outward-edges.test.ts` holds every `server/src` runtime edge inward of the rules above, `ring.ts` deciding each file's ring, with the outward edges on the tree in an exemption set that may only shrink, and `exemption-age.test.ts` reds an exemption set unchanged for more than 60 days without a re-dated reason, deviation-refs' `GRANDFATHERED` included; stage 3, D-6118: `pwa-rings.test.ts` holds a `pwa/src` L1 module's runtime edges off `.tsx` files, stores and `lib/api.ts`, each file's ring decided by `ring.ts`'s `pwaRing` from the PWA rules above, with the edges on the tree in an exemption set that may only shrink, and holds `ui/src` to no import of `pwa/` in any form; stage 4, D-6734: `totality.test.ts` gives every non-test `server/src` and `pwa/src` file one ring and one context from the table above, over a walk of at least 400 files), and its exemptions drain in ARCH-05 (#551); no file below L4 imports `server.ts` or `watch.ts`, even for a type: `rings/host-imports.test.ts` (D-6003, folded onto the ring classifier by D-6045; none pending since `Deps` moved to `deps.ts`) |
+| Import-direction test | partly | per-ring pins in `single-definition.test.ts` ("the coord ring …", "the update ring …", "the docs ring …"); the repo-wide scanner over the rules above is ARCH-04 (#545), stages 1 to 4, one rule per file under `server/test/rings/` (stage 1, D-6045: `shared-imports.test.ts` holds L0's `shared/*.ts` to `./` imports and `mjs-node.test.ts` the `.mjs` carve-out; stage 2, D-6045: `outward-edges.test.ts` holds every `server/src` runtime edge inward of the rules above, `ring.ts` deciding each file's ring, with the outward edges on the tree in an exemption set that may only shrink, and `exemption-age.test.ts` reds an exemption set unchanged for more than 60 days without a re-dated reason, deviation-refs' `GRANDFATHERED` included; stage 3, D-6118: `pwa-rings.test.ts` holds a `pwa/src` L1 module's runtime edges off `.tsx` files, stores and `lib/api.ts`, each file's ring decided by `ring.ts`'s `pwaRing` from the PWA rules above, with the edges on the tree in an exemption set that may only shrink, and holds `ui/src` to no import of `pwa/` in any form; stage 4, D-6734: `totality.test.ts` gives every non-test `server/src` and `pwa/src` file one ring and one context from the table above, over a walk of at least 400 files); ARCH-04 and ARCH-05 (#551), which drained the first exemptions, are closed, and the entries left in `OUTWARD_EDGE_EXEMPTIONS` and `PWA_L1_EXEMPTIONS` (`server/test/rings/`) may only shrink; no file below L4 imports `server.ts` or `watch.ts`, even for a type: `rings/host-imports.test.ts` (D-6003, folded onto the ring classifier by D-6045; none pending since `Deps` moved to `deps.ts`) |
 | No `reply` below L4 | done | `server/test/rings/fastify-l4.test.ts` (ARCH-04 stage 1, D-6045): `fastify` and every `Fastify*` name only in an exact L4 allowlist |
 | `single-definition` over the account roster | done | single-definition's "the account roster — runtime data, no compile-time copies" and "the account roster — config dir is data, joined in one place" |
 | Cross-language fixture test (ccd's bash copies against the roster) | done | `wrapper-roster-fixture.test.ts`, `roster-exec-parity.test.ts` |
-| Totality test for every wire union | open | ARCH-12 (#552) |
+| Totality test for every wire union | done | `rings/wire-totality.test.ts` (ARCH-12, #552; D-6048): every exported literal union in `shared/*.ts` has a sibling `Record<X, true>` map or an `is X` guard |
 | Mutant duty in `coord/` | review rule | CLAUDE.md's mutation-table discipline; every PR body carries its table. No test can see a missing mutant |
 | Ratchet budgets on `watch.ts` and `coord/routes.ts` | done | `growth-check.test.ts` (ARCH-01, #526; D-5848): net growth against the merge-base, not an absolute line count; armed by the operator on 2026-10-21 (OA-C2, D-6178), so growth past the limit fails CI |
 | Scanner-coverage pins | done, per walk | each walk's own "visits the whole directory" or "covers the directory" row in `single-definition.test.ts` |
-| Docstring-claim rule | partly | single-definition's "store.ts docstrings that describe their own callers"; doc-coupling pins are ARCH-07 (#558) |
+| Docstring-claim rule | done | single-definition's "store.ts docstrings that describe their own callers"; the doc-coupling pins landed with ARCH-07 (#558, closed): `citations.test.ts` refuses new numeric line citations, and `readmeSizeClaim.ts` keeps CLAUDE.md free of a README size |
 
 ## Rejected, so nobody relitigates it
 
@@ -331,4 +340,29 @@ pins asserting each walk visited a non-zero minimum; docstring-claim rule.
   `Deps` literals across 7 test files.
 - **Splitting `CCD_ARGV` per context** — `whitelist-subset.test.ts` depends on one flat
   table with exhaustive `Object.keys`.
-- **Decomposing `FleetWatcher` into a lane interface.**
+- **Decomposing `FleetWatcher` into a lane interface.** Re-affirmed by the operator on
+  2026-10-19 (ARCH-02b, #537), when it had grown to about 20 lanes: the lanes stay methods driven by
+  one `LANE_SCHEDULE` table and a `runLane` helper on the same class, and the deciders leave for L1
+  modules (DECIDE, #521). A per-context scheduler class would reopen this item.
+
+**Rulings recorded for ARCH-02b (#537).** The operator ruled the first three on 2026-10-19 ("answers
+locked", in the consolidation-wave spec, `2026-10-19-ccrc-consolidation-wave-design.md`, decisions O2,
+O4 and O9) and confirmed the two proposed rejections on 2026-10-26. Each is settled; reopening one
+needs a new operator ruling, not a PR.
+
+- **Kept: one lane schedule table, not lane classes** (operator, 2026-10-19, O4 (a)). The entry
+  above; one table and one helper keep "no lane interface" and still let the deciders move to L1.
+- **Allowed: standalone PRs for a series that starts with a characterization pin** (operator,
+  2026-10-19, O9 (a)). The pin proves the move changed no behaviour, so the series needs no feature
+  to ride; its exit criteria must be counted, and everything else still rides queued work. It extends
+  the enforcement-only allowance this ticket proposed for ARCH-00, ARCH-01, ARCH-04 stage 1, ARCH-06,
+  ARCH-12, ARCH-23 and the defect fixes ARCH-08 and ARCH-13a.
+- **Rejected: compiling policy across languages** (operator, 2026-10-19, O2 (b)). One rule set is
+  written once and called, never generated into a second language; a single `.mjs` that bash calls is
+  one implementation, not a compiled one, so the docs redactor's move to `redact.mjs` is not this.
+- **Rejected: runtime-sourced ccd siblings** (operator, 2026-10-26). ccd never loads sibling scripts
+  chosen at run time; it loads only fixed, digest-checked libraries (the #1404 model), so what runs on
+  the box stays auditable. Splitting `ccd/ccd` waits on ARCH-34's manifest (#536).
+- **Rejected: moving ccd's rotation and reap decisions to the server** (operator, 2026-10-26). They
+  stay in ccd on the box, next to the files they touch, so they still work when the server is down;
+  the server only shows and arms them (CCD, #522).

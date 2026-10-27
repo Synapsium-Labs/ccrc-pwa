@@ -125,22 +125,25 @@
   }
 }
 
-/* W2 Task S4b (D-5471; spec §5.3, Shell, laptop and wide rows): Refined's frame at a desk. Three rows: the 56px bar,
-   the banner stack spanning the frame under it, then the sidebar and the detail. The sidebar is
+/* W2 Task S4b (D-5471; spec §5.3, Shell, laptop and wide rows): Refined's frame at a desk. Three rows: the header (the
+   56px bar's line, and under it the lanes row, T2c D-6329, so the row is `auto`), the banner stack spanning the frame
+   under it, then the sidebar and the detail. The sidebar is
    clamp(320px, 24vw, 400px), and 400 from 1600. Below 900 nothing here applies: the phone swap is `shell.css`'s,
    shared. Layout only: the bar's ground and edge are the frame header's own (`shell.css`'s `.shell-accounts`), and its
    inks are the primitives' utilities, so the one colour declared here is the current tab's underline. */
 @media (min-width: 900px) {
   .app-shell.ref-frame {
     grid-template-columns: clamp(320px, 24vw, 400px) minmax(0, 1fr);
-    grid-template-rows: 56px auto minmax(0, 1fr);
+    grid-template-rows: auto auto minmax(0, 1fr);
   }
-  /* The frame's `<header>`, still named for the strip Instrument places there until S9. */
+  /* The frame's `<header>`, named for the strip it was built to hold: two lines, the bar's, then the lanes row
+     (`shell.css` lays the row's cards out). */
   .ref-frame > .shell-accounts {
     display: flex;
+    flex-direction: column;
     align-items: stretch;
     min-width: 0;
-    padding: 0 var(--sp-4);
+    padding: 0 var(--sp-4) var(--sp-2);
   }
   .ref-frame > .shell-banners {
     grid-column: 1 / -1;
@@ -166,12 +169,13 @@
   }
 }
 
-/* The app bar (AppBar.tsx): one row that never wraps. The wordmark, the tabs, the doors and New session keep their
-   width; the gauges take what is left and give it up first (their row wraps out of sight and says "+n",
-   CompactGauges.tsx), so at 900 nothing is clipped and nothing scrolls sideways. */
+/* The app bar's line (AppBar.tsx): one row that never wraps, 56px tall itself since the frame's first row is `auto`
+   now (the lanes row sits under it). The wordmark, the tabs, the doors and New session keep their width, and the
+   doors take the room left over, so New session stays at the line's right edge. */
 .ref-bar {
   display: flex;
-  flex: 1;
+  flex: none;
+  height: 56px;
   align-items: center;
   gap: var(--sp-4);
   min-width: 0;
@@ -206,23 +210,11 @@
 .ref-tab > [aria-hidden='true']:empty {
   display: none;
 }
-.ref-bar-gauges {
-  display: flex;
-  flex: 1 1 0;
-  min-width: 0;
-}
-.ref-bar-gauges > .accounts-compact {
-  flex: 1 1 auto;
-}
-/* The lanes take their own width and give it up as the bar narrows, so the "+n" sits after the last gauge shown,
-   not at the far edge of the room left over. */
-.ref-bar-gauges .accounts-compact-lanes {
-  flex-grow: 0;
-}
 .ref-bar-doors {
   display: flex;
   flex: none;
   align-items: center;
+  margin-left: auto;
   gap: var(--sp-1);
 }
 .ref-bar-door {

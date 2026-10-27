@@ -17,7 +17,7 @@ async function appWithCcdSpy(ccdVerbs?: string[]): Promise<{ app: FastifyInstanc
   const calls: string[][] = [];
   const run: Runner = async (_cmd, args) => {
     calls.push(args);
-    return { code: 0, stdout: '', stderr: '' };
+    return { ran: true, code: 0, stdout: '', stderr: '' };
   };
   const deps = testDeps(undefined, run);
   const app = await buildServer(ccdVerbs === undefined ? deps : {
@@ -97,7 +97,7 @@ describe('workspace routes', () => {
   });
 
   it('a failing ccd ws-add maps to 502 with stderr', async () => {
-    const run: Runner = async () => ({ code: 1, stdout: '', stderr: 'boom' });
+    const run: Runner = async () => ({ ran: true, code: 1, stdout: '', stderr: 'boom' });
     const app = await buildServer(testDeps(undefined, run));
     const res = await app.inject({ method: 'POST', url: '/api/projects/demo/workspaces' });
     expect(res.statusCode).toBe(502);

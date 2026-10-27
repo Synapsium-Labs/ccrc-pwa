@@ -36,14 +36,14 @@ import { fileURLToPath } from 'node:url';
 // this file twice: first for joining the path itself, then for quoting that
 // join in this very comment, because the scan is textual and does not care
 // whether a spelling is code.
-import { CCD } from './ccdWsHelpers.js';
+import { CCD, ccdSource } from './ccdWsHelpers.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(here, '..', '..');
 
 /** A bare `NAME=<seconds>` assignment in ccd, in seconds. */
 function ccdSeconds(name: string): number {
-  const src = readFileSync(CCD, 'utf8');
+  const src = ccdSource();
   const m = new RegExp(`^${name}=(\\d+)`, 'm').exec(src);
   expect(m, `ccd no longer defines ${name} as a bare integer assignment — this gate went blind`).not.toBeNull();
   return Number(m![1]);
@@ -58,13 +58,15 @@ function verbTimeoutMs(verb: string): number {
   return Number(m![1].replace(/_/g, ''));
 }
 
+// ONE reserve for both describes, so the two budgets cannot drift apart.
+// 30% is not a round number for its own sake: `_pr_state_one` runs AFTER both
+// network calls, once per workspace of the project, and each pass shells out
+// roughly a dozen times (`_reg_get` x4, two `rev-parse`s, `rev-list --count`,
+// `_ws_wt_branch`, `_ws_common_dir`) plus one python3 start. On a project
+// with eight workspaces that is seconds, not milliseconds.
+const LOCAL_LOOP_RESERVE = 0.3;
+
 describe('pr-state fits inside the bound that kills it', () => {
-  // 30% is not a round number for its own sake: `_pr_state_one` runs AFTER both
-  // network calls, once per workspace of the project, and each pass shells out
-  // roughly a dozen times (`_reg_get` x4, two `rev-parse`s, `rev-list --count`,
-  // `_ws_wt_branch`, `_ws_common_dir`) plus one python3 start. On a project
-  // with eight workspaces that is seconds, not milliseconds.
-  const LOCAL_LOOP_RESERVE = 0.3;
 
   // THREE calls since landing-order wave 2: the merge-queue read
   // (`PR_GH_QUEUE_TIMEOUT`, `_gh_pr_queue`) runs after the local loop and adds
@@ -97,5 +99,44 @@ describe('pr-state fits inside the bound that kills it', () => {
     // still be satisfiable by making the OTHERS tiny.
     const outerS = verbTimeoutMs('pr-state') / 1000;
     for (const c of CALLS) expect(ccdSeconds(c), c).toBeLessThan(outerS);
+  });
+});
+
+describe('pr-landing fits inside the bound that kills it (D-6784)', () => {
+  // `cmd_pr_landing` makes one GraphQL call and, at most, two REST reads (the base's rules and its protection) for
+  // ONE uncached base: the loop over bases spends a single REST budget, and `ccd-pr-landing.test.ts` pins the cap with
+  // a fixture call naming sessions on two uncached bases (at most 3 gh calls).
+  // Each is counted: a call left out of this list is a call the bound no longer covers.
+  const CALLS = ['PR_LANDING_GQL_TIMEOUT', 'PR_LANDING_REST_TIMEOUT', 'PR_LANDING_REST_TIMEOUT'] as const;
+
+  it('the pr-landing budget pin holds, every call counted', () => {
+    const secs = CALLS.map((c) => ccdSeconds(c));
+    const budgetS = verbTimeoutMs('pr-landing') / 1000;
+    secs.forEach((s, i) => expect(s, `${CALLS[i]} read as zero`).toBeGreaterThan(0));
+    expect(budgetS, 'the outer bound read as zero').toBeGreaterThan(0);
+    const sum = secs.reduce((a, b) => a + b, 0);
+    expect(sum, `${secs.join('s + ')}s against ${budgetS}s`).toBeLessThanOrEqual(budgetS * (1 - LOCAL_LOOP_RESERVE));
+  });
+
+  it('the pin names every timeout cmd_pr_landing reads', () => {
+    const src = ccdSource();
+    const start = src.indexOf('\ncmd_pr_landing()');
+    expect(start, 'cmd_pr_landing moved').toBeGreaterThan(0);
+    // The REST reads live in the helper the verb calls; scan the verb and its helpers' timeout reads together.
+    const reads = new Set([...src.matchAll(/\$PR_LANDING_([A-Z]+)_TIMEOUT/g)].map((m) => `PR_LANDING_${m[1]}_TIMEOUT`));
+    expect([...reads].sort()).toEqual([...new Set(CALLS)].sort());
+    const gh = [...src.matchAll(/_plat_timeout "\$PR_LANDING_[A-Z]+_TIMEOUT" gh /g)].length;
+    expect(gh, 'a gh call this pin does not count').toBe(CALLS.length);
+  });
+
+  it('the rules loop hands the REST budget to one base only', () => {
+    const src = ccdSource();
+    const loop = src.slice(src.indexOf('\ncmd_pr_landing()'));
+    expect(loop).toMatch(/_pr_landing_rules "\$project" "\$repo" "\$rb" "\$rest"/);
+    expect(loop).toMatch(/\(\( hit == 1 \)\) \|\| rest=0/);
+  });
+
+  it('each call alone is under the bound', () => {
+    for (const c of new Set(CALLS)) expect(ccdSeconds(c), c).toBeLessThan(verbTimeoutMs('pr-landing') / 1000);
   });
 });

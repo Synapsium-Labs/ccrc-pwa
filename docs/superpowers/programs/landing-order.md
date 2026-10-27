@@ -10,7 +10,7 @@ Companion programme: `docs/superpowers/programs/session-continuity.md`
 **What this program is.** The fleet manufactures main churn — ritual syncs, `update-branch`, repeat absorptions —
 and lands in whatever order merges happen to arrive, testing no composition. This programme stops the churn,
 makes landing order a recorded fact, and lets the coordinator land a tested composition. **The coordinator
-merges, workers never do, and nothing merges unattended** (spec §3, R5). The operator's rulings are the spec's §3
+merges, workers never do, and an unattended landing is the goal when every safeguard holds** (spec §3, R5 as amended 2026-10-25). The operator's rulings are the spec's §3
 (R1–R10); every §11 decision was ruled on 2026-09-23.
 
 ## Waves
@@ -19,14 +19,15 @@ merges, workers never do, and nothing merges unattended** (spec §3, R5). The op
 |---|---|---|---|---|---|---|
 | 1 | 1 | worker clause 16 and coordinator clause 15 with their pins and count words; the PreToolUse advisory on syncs of `main`; `ccrc restamp`; `update-branch` pinned absent from executable source and counted in the skills | skills, hook (fleet box) | — | #231 | merged 2026-10-02 (`10f32755`); run 218 closed; deploy AGENT-FIRST by the update mechanism |
 | 2 | 2, repository code | `ci.yml` gains `merge_group`, the macOS skip and a `pull_request` concurrency group; `pr-state`'s `queue` field; the dequeue feed event and coordinator mail; the hook denies `gh pr merge` to workers; clause 15's native-queue sentence | ccd, hook, server | wave 1; child-reclamation wave 3 | #234 | merged 2026-10-03 (`0087a045`); run 238 closed; deploy via ccrc's updater (fleet-first measured safe); Task 7's proof run 2026-10-20 stopped by stop rule 3 (Decisions, 2026-10-20 13:00); its re-run on 2026-10-21 turned the queue on, and it stays on by the operator's ruling after stop rule 6 (Decisions, 2026-10-21 12:15) |
-| 2b | 2, the bypass deny | the hook denies `--admin` and a `gh api` merge call in every fleet session | hook | the operator's queue ruleset, approvals at 0, and the proof run; wave 3d | — | to plan, after wave 3e's plan (spec §11, item 12) |
+| 2b | 2, the bypass deny | the hook denies `--admin` and a `gh api` merge call in every fleet session | hook | the operator's queue ruleset, approvals at 0, and the proof run; wave 3d; wave 3e | plan #1678 | planned 2026-10-27 (`docs/superpowers/plans/2026-10-27-landing-order-wave2b-bypass-deny.md`, D-7111 to D-7116); dispatches after wave 3e merges and the operator confirms its fleet-wide reach |
 | 3 | — | Task 7's preconditions (the payload cap, the quote-dense timing pin), wave 2's residue, Task 7's runbook text | hook, ccd, doctor | wave 2 | #248 | merged 2026-10-07 (`9a255a74`); run 250 closed; deploy AGENT-FIRST via ccrc's updater, then Task 7; run 250 (`ccrc-pwa-still-delta`); block 3906–3915 + 3916–3920 |
-| 3b | 3 | `ccd-land-probe`, the read-only conflict radar, and its opt-in mirror | ccd, deploy | wave 3 | — | run 310 open (planned; the run's wave 4), block 4326–4335; to plan |
+| 3b | 3 | `ccd-land-probe`, the read-only conflict radar, and its opt-in mirror | ccd, deploy | wave 3 | plan #1678 | planned 2026-10-27 (`docs/superpowers/plans/2026-10-27-landing-order-wave3b-conflict-radar.md`); run 310 (the run's wave 4) dispatched 2026-10-27 on `ccrc-pwa-clear-ridge`, block 4326–4335 |
 | 3c | — | Task 7's re-run preconditions: `pr-state`'s per-workspace git cost, a sweep failure the server reports, the two suite flakes the queue turned into removals, the runbook's re-run changes | ccd, server, tests, plan text | wave 2's proof run | plan #974; #1046 | merged 2026-10-21 (`4ce282f8`) after reviews 718, 724 and 726 and two fix rounds; run 710 (the run's wave 5) closed; its block of 10 defined in the plan; deployed 2026-10-21 by ccrc's updater, fleet box first (v0.0.508); Task 7's re-run followed (Decisions, 2026-10-21 12:15) |
 | 3d | 2, the lane | the dequeue lane treats the removal GitHub records at a successful queue merge as no dequeue: `pr-state` reads the removal's `reason`, and a removal whose reason is `merged` reads `landed`, never `dequeued`; any other reason, or none, is still announced on its first read; no two-sweep wait, no new wire field, no reason allowlist; and the `merged` feed record is kept once per workspace and PR across a server restart (stop rule 6; Decisions, 2026-10-21 14:49) | server, ccd | Task 7's re-run | plan #1088; #1096 | merged 2026-10-21 (`e173c1aa`) through the merge queue after review 759, with no fix round; run 751 (the run's wave 6) closed; three numbers of its block of 10 defined in the plan; deploy via ccrc's updater (either box first, the fleet box by default), then the live proof (Decisions, 2026-10-21 19:17) |
-| 3e | 2, the landing route | the coordinator reads the repository's own rules before each landing: the merge method from every effective `pull_request` rule and the merge settings, the required checks from the rulesets and classic protection (confirmed absence apart from an unreadable read), three routes (the native queue, a gated direct merge, an ungated direct merge), a merge-commits-only repository landing with `--merge` at the reviewed head, and every conflict a stop (spec §5.7) | skills, tests | wave 3d | plan #1121 | §5.7's text approved 2026-10-22; planned 2026-10-22 in `docs/superpowers/plans/2026-10-22-landing-order-wave3e-landing-route.md` (Decisions, 2026-10-22 07:13); its run and block open at dispatch |
+| 3e | 2, the landing route | the coordinator reads the repository's own rules before each landing: the merge method from every effective `pull_request` rule and the merge settings, the required checks from the rulesets and classic protection (confirmed absence apart from an unreadable read), three routes (the native queue, a gated direct merge, an ungated direct merge), a merge-commits-only repository landing with `--merge` at the reviewed head, and every conflict a stop (spec §5.7) | skills, tests | wave 3d | plan #1121 | §5.7's text approved 2026-10-22; planned 2026-10-22 in `docs/superpowers/plans/2026-10-22-landing-order-wave3e-landing-route.md` (Decisions, 2026-10-22 07:13); run 774 (the run's wave 7), PR #1127; fix rounds 1–5; at `awaiting-review` on `04745c73`, its fresh review held by the review-round cap (Decisions, 2026-10-27 08:20) |
 | 3f | — | the server's checks word reads a queued or running check run as `pending`, not `pass`; the cost of the 30 s sweep cadence is measured in its plan (spec §5.7.8) | server | wave 3e | — | ruled 2026-10-21; to plan |
-| 4 | 4 | the opted-in lineage table; `lineage-unmeasured` | server | wave 3 | — | to plan |
+| 4 | 4 | the opted-in lineage table; `lineage-unmeasured` | server | waves 3b and 3e | plan #1678 | planned 2026-10-27 (`docs/superpowers/plans/2026-10-27-landing-order-wave4-lineage-acceptance.md`, D-7102 to D-7110); dispatches after waves 3b and 3e merge; arming it is the operator's |
+| 4b | 3, the console half | the radar's server reader, its wire fields and the PWA conflict chip (moved out of wave 3b, D-4329) | server, pwa | wave 4 | — | to plan |
 | 5 | 5 | the landing line: entries, intents, holds, `land-candidate`, the coordinator's pinned merge, the PWA doors | server, ccd, skills, pwa | waves 2–4; session-continuity wave 1 | — | to plan |
 
 **A fresh workspace per wave (R4) is child-reclamation's.** The spec first drew it as step 6 of the wave lifecycle,
@@ -635,6 +636,66 @@ carries it (spec §5.1, amended 2026-09-24).
     - (d) is read before each run's final close, because the close reclaims the child workspace.
     - (e)'s feed body may not read "No open run names a coordinator to tell", because D's workspace belongs to an
       open run (at `awaiting-review`, not `merging`). It is recorded as found.
+- **2026-10-07 01:39 — Task 7 Steps 1, 2 and 4 done: the merge queue is ON for `main` (ruleset write 01:38:37 UTC).**
+  - **Deploy.** Wave 3 has been on both boxes since 2026-10-07 00:51 UTC. Both boxes run v0.0.112 (`543777fb`, which
+    contains `9a255a74`), applied from the console: the fleet box finished at 00:51:18 and the server box at 00:51:42.
+    Each box's `update.json` reads phase `done`, and `ccrc version` reads `install: complete` on both.
+  - **Step 1.**
+    - `merge_group` is on `main`'s `ci.yml` (`1`).
+    - The trusted full run is 37552120108 (`workflow_dispatch` on `9a255a74`, five server shards). `typecheck (server)`,
+      `server 1/5`–`5/5`, `test (server)`, `test (agent)`, `test (pwa)` and `build-pwa` all read `success`. The macOS
+      legs are not read; one failed.
+    - `MERGE_PARSE_CAP=2048` is in the installed hook (`1`). Doctor reads `PASS jq_regex`, with no FAIL line.
+    - THE CANARY printed `deny` on the fleet box's `/usr/bin/jq`, jq-1.7.
+    - The census read `census-done: 11 coordinator(s) checked`, with no MARKED or HELD line.
+    - **Substitution:** both boxes were measured with `ccrc version` and `update.json` instead of
+      `ccrc rollout --check --to v0.0.112`, because the operator's 2026-09-30 ruling forbids running `ccrc rollout`
+      by hand.
+  - **Step 2** matched the runbook's 2026-09-23 values:
+    - Two rulesets: main's is 22520257, and stable's is 23740920.
+    - Main's one rule was `pull_request` with 1 approval, and its bypass actors were roles 2 (maintain) and 5 (admin),
+      both in `pull_request` mode.
+    - Classic protection: `strict` false, the four required contexts, `enforce_admins` true, 0 approvals.
+    - Repository settings: `allow_squash_merge` true, `allow_auto_merge` false, `allow_update_branch` false and
+      `delete_branch_on_merge` true.
+    - The only new reading is three parameters GitHub now reports on the rule, a schema addition:
+      `allowed_merge_methods`, `dismissal_restriction` and `require_extra_approval_for_unattributed_changes` (true).
+  - **Step 3 and Step 4.** Step 4a's diff showed exactly the three changes:
+    - the maintain bypass (role 2) removed, as R9 ruled;
+    - approvals 1 → 0;
+    - the `merge_queue` rule added: SQUASH, build concurrency 1, group size 1–1, wait 0, ALLGREEN, timeout 60 minutes.
+
+    Step 4b's PUT answered `rules: ["pull_request","merge_queue"]` with the one bypass actor (role 5), and a re-read
+    shows the same. The ruleset's name still says "Admin and Maintain bypass", because the runbook's transform keeps the
+    name. `ruleset-before.json`, `ruleset-rollback.json`, `ruleset-after.json` and `ruleset-written.json` are kept in
+    the coordinator's evidence folder. The rollback is a PUT of `ruleset-rollback.json` to ruleset 22520257.
+  - **Next: (a0) on this ledger PR (slot C)** once its own CI is green, then the proof dispatches.
+- **2026-10-07 01:53 — (a0) hit STOP RULE 4. The proof halts, the ruleset is ROLLED BACK, and the operator decides.**
+  - **(a0)** ran at 01:52:12 on this ledger PR (#311, slot C), with every required check green at `907cb649`.
+    `gh pr merge 311 --match-head-commit 0000…` answered `GraphQL: Auto merge is not allowed for this repository
+    (enablePullRequestAutoMerge)`, rc 1. The read-back showed `mergeQueueEntry: null` and `autoMergeRequest: null`:
+    nothing was queued and nothing was armed. gh 2.45 reaches a required queue through the auto-merge mutation
+    (Pre-flight finding 16), and the repository's `allow_auto_merge` is false (Step 2). The refusal names auto-merge,
+    not the head, so it is stop rule 4, not (a0)'s pass. Under the operator's 2026-09-29 ruling the proof halts here.
+    The coordinator does not change that setting (clause 15).
+  - **The rollback, at 01:52:56.** This revises the sequence entry's "the queue stays on meanwhile", for this reason.
+    On a native-queue project, clause 15 tells every coordinator to land with
+    `gh pr merge <n> --match-head-commit <sha>`, never with `--admin`. With auto-merge off, that spelling can land
+    nothing. So any ccrc-pwa coordinator following its clause literally could not land until the operator rules,
+    while the proof can make no progress either way. `ruleset-rollback.json` was PUT back. A re-read is identical to
+    it: the `pull_request` rule with 1 approval, and the maintain and admin bypasses. The queue was on from 01:38:37
+    to 01:52:56. Nothing merged to `main` in that window (the last merge was #310, at 00:47).
+  - **For the operator: three ways on.**
+    1. **Enable "Allow auto-merge"** (Settings → General → Pull Requests). The coordinator then re-applies Step 4 from
+       the saved `ruleset-after.json` and re-runs the proof from (a0). This is the path the runbook assumes: (a1)
+       expects an armed auto-merge request. Held and child sessions are already denied every `gh pr merge`, `--auto`
+       included, and wave 2b closes the `gh api graphql` mutations. **Recommended.**
+    2. **Keep auto-merge off,** and land through the queue with a direct GraphQL `enqueuePullRequest` call that
+       carries `expectedHeadOid`. That is not clause 15's spelling, so clause 15, the runbook and the hook's deny
+       need a wave first.
+    3. **Park Task 7,** and keep landing with `--admin` as now.
+  - **Slot C (#311)** stays open, unmerged, until the operator rules. The proof programme `landing-order-proof` is NOT
+    opened, and no dispatch was spent.
 - **2026-10-20 13:00 — Task 7's proof run, stopped by stop rule 3; the queue is off.** This is Step 7's record.
   - **Arming.** The operator chose "Run Task 7 now" on 2026-10-20. Step 1 was clean: a trusted full run on `main`
     (daily run 39364571048), both boxes on one release, the payload cap in the installed hook, doctor's
@@ -915,11 +976,225 @@ carries it (spec §5.1, amended 2026-09-24).
   - **Review.** Three Opus lenses (spec fidelity, executability, safety) with a Sonnet refute pass per finding:
     18 findings confirmed and folded, 2 refuted. Every mutation count in the plan is the prototype's, and the
     worker re-measures each one.
+- **2026-10-25 — R5 overturned: unattended landing is the goal (D-6857).** The operator ruled "WE WANT UNATTENDED MERGES ... maximise autonomy with safeguards". A lane, a timer or the operator's keeper may land a PR unattended when the native queue re-tests the combined code, the required checks gate the enqueue, the landing binds the verified head with `--match-head-commit`, and there is no `--admin` and no `update-branch`. Orchestrator call, open to overturn: a worker never merges its own PR. The coordinator skill (clause 15 and the wave lifecycle) and the worker skill (clause 16) match; the wave lifecycle's allowance of `--admin` where the ruleset requires it is withdrawn. Stages 3 to 5 are not touched here; where their text says a landing never comes from a timer, R5 as amended governs.
+- **2026-10-25 — rulings 2, 3 and 5 (D-6857).** Ruling 5: governance of merges (who may merge, `--admin`, GitHub API merges, bypass) belongs to the repository's external policy authority, not to ccrc text; ccrc provides the enforcement points. It supersedes the narrow approval-licence pointer: in the wave lifecycle, `--admin` and GitHub API merge or enqueue calls are governed by that authority, and until it answers (wave 2b) a coordinator never uses them. Ruling 2: the live queue's grouping (build 2, merge 3) is accepted; one release may cover several commits. Ruling 3: the two private repositories should drop strict protection; the native queue is not available on their plan, so how they land is open.
+- **2026-10-27 08:20 — wave 3e: fix round 5 handed off; its fresh review waits on the review-round cap.**
+  - **The run.** Wave 3e is run 774 (the run's wave 7) on `ws/warm-summit`, PR #1127. Reviews 780, 827 and 863 each
+    ruled a fix round (1, 2 and 3). The fourth review run, 903, was abandoned; the operator authorised one local
+    independent review in its place, which ruled CHANGES REQUIRED at `1ba4d1f0` (four important source-boundary
+    findings at reads 1, 3 and 6, and one minor), and fix round 4 answered them.
+  - **Fix round 5**, approved by the operator on 2026-10-26, made one more ordinary merge of a pinned `main`
+    (`ba36d742`) into the PR and reconciled clause 15 and the wave lifecycle's route paragraph with ruling 5: the narrow
+    approval licence is retired, the route prints `admin=never`, and a direct route whose required approval is missing
+    stops. Its wave-done was verified at `04745c73`: the workspace branch and the PR head agree, the exact-head CI run
+    passed with both owning test files in its selection, and run 774 moved to `awaiting-review`.
+  - **Held.** Opening the fresh review was refused `cap-review-rounds` (4 rounds against a cap of 3) on 2026-10-26 at
+    15:27 UTC and again on 2026-10-27 at 08:08. The ask is the operator's: the console lifts a run's cap. The worker
+    keeps the branch frozen, and nothing lands until a fresh independent review is accepted.
+- **2026-10-27 11:06 — waves 3b, 4 and 2b planned and approved; wave 3b dispatched.**
+  - **The plans** landed together in #1678 (`89472477`):
+    - wave 3b, the conflict radar, `docs/superpowers/plans/2026-10-27-landing-order-wave3b-conflict-radar.md`, on run 310's
+      block (4326 to 4334 defined, 4335 spare). The radar's console half, its server reader, wire fields and PWA chip,
+      moves to a new wave 4b (D-4329);
+    - wave 4, lineage acceptance, `docs/superpowers/plans/2026-10-27-landing-order-wave4-lineage-acceptance.md`, D-7102 to
+      D-7110;
+    - wave 2b, the bypass deny, `docs/superpowers/plans/2026-10-27-landing-order-wave2b-bypass-deny.md`, D-7111 to D-7116.
+  - **Their numbers.** Waves 4 and 2b have no run yet, so their blocks were minted when their plans landed, not at a
+    run's open: `dtbd.test.ts` refuses a plan that carries a `D-TBD` placeholder. A departure found while executing
+    either plan is numbered when it is ruled.
+  - **Review.** Each plan had three Opus lenses with a Sonnet refuter per finding, then an Opus recheck after each
+    revision until a pass found nothing important. The operator approved all three on 2026-10-27.
+  - **Wave 3b dispatched** as run 310 on a fresh child, `ccrc-pwa-clear-ridge`. Its Task 4 edits `README.md`, which
+    wave 3e's worker holds, so that task waits for the claim or for its holder's consent.
+  - **What waits.** Wave 4 dispatches after waves 3b and 3e merge; arming it is the operator's (`lineage=on` in the
+    project's landing conf). Wave 2b dispatches after wave 3e, once the operator confirms its fleet-wide reach: the
+    coordinator measured that reach privately on 2026-10-27, and the findings stay out of this file. Wave 3b's live
+    proof needs the operator to write the project's landing conf with `lineage=off`.
+  - **Noted for wave 2b's brief:** the deny refuses `--admin=false` with the other spellings, with a reason that says
+    to drop the flag. Refusing a harmless spelling is the safe direction.
+  - **Wave 3e is still held.** The operator reported lifting run 774's review-round cap, but at 11:05 the server still
+    read it as not lifted, so the fresh review was not opened.
+  - **#311**, the old ledger branch, was closed unmerged and its branch deleted. Its records landed through #1674,
+    #1675 and #1676.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
   this file until a plan on the same ref defines it (`deviation-refs.test.ts`).
 
+## Measurement — 2026-10-25
+
+Spec §10, run for the first time, nine days after its two-week check was due (stage 1 rolled out 2026-10-02; the
+native merge queue was switched on 2026-10-21). Read-only: `deploy/measure-landing.py` through `gh api -X GET`, plus
+`gh api` GETs for the queue metric it did not have. Repository `Synapsium-Labs/ccrc-pwa`, `main`. Required contexts
+(read by the tool from the ruleset and classic protection): `build-pwa`, `test (agent)`, `test (pwa)`, `test (server)`.
+The measuring tool gained a `queue-ejections` subcommand with this section (tests in
+`server/test/measure-landing.test.ts`; its one `gh` door now also passes `--allow-escape-sequences`, because a
+job log carries colour codes that `gh` refuses to print, and it still sends only a GET).
+
+**Windows.** Baseline 2026-09-08..09-22 (re-run, to check the tool against the frozen figures); stage 1 before the
+queue 2026-10-02..10-20; the queue era 2026-10-21..10-25 (the run ends 2026-10-25 midday); and 2026-10-22..10-25,
+the days after the last `update-branch` commit. The re-run of the baseline window reproduces the spec's frozen
+figures where the spec's definitions match: green-to-merge median 32.0 min (spec 33), 14 fleet-on-fleet
+inversions (spec 14). It reads 2 fleet `update-branch` commits where the spec says 8, and 9.0 h of required-only
+red where the spec says "prerequisite"; the spec's 8 is the archived scan's figure, and the committed tool is the
+baseline from here on (§10).
+
+### Against each §10 target
+
+| Metric | Baseline | Target | 10-02..10-16 (two-week mark) | 10-02..10-20 | 10-21..10-25 | 10-22..10-25 | Verdict |
+|---|---|---|---|---|---|---|---|
+| fleet `update-branch` commits | 8 (tool: 2) | 0 | 0 | 10, all on 10-20 | 12, all on 10-21 | 0 | met at the two-week mark (0 on 10-02..10-16); the 10-20/10-21 burst was legacy PRs; 0 since 10-21 22:20 UTC |
+| repeat absorptions, per merge | 0.58 (41 of 71) | under 1/3 | 0.45 (70 of 157) | 0.51 (270 of 527) | 0.33 (20 of 61) | 0.24 (7 of 29) | over 10-02..10-16 it fell 0.58 to 0.45 (moved; rule does not fire), target still missed; met after the queue |
+| merges per PR (fleet local merges of `main`) | 2.4 (71, 30) | n/a | 1.80 (157 merges, 87 PRs) | 2.05 (527 merges, 257 PRs) | 1.49 (61, 41) | 1.32 (29, 22) | context for the row above |
+| ritual syncs per week | about 76 (episodes) | halved | not computable here | not computable here; proxy below | not computable here; proxy below | n/a | proxy only |
+| green-to-merge median | 33 min (tool: 32.0) | under 10 min | not read | 1.0 min | 77.7 min (p90 310) | 99.6 min (p90 276) | missed, and the wrong way |
+| fleet-on-fleet inversions | 14 | 0 | not read | 125 (153 all actors) | 54 (58) | 36 (36) | missed; the scan's meaning under a queue is doubtful (below) |
+| required-leg red hours on `main` | 9.0 h | halved | not read | 47.5 h | 0 h | not run | see the note |
+| queue-group ejections (new) | n/a | none set | n/a | n/a | 47 failed runs of 241 completed (19.5%); 45 failure events | n/a | new; see below |
+
+Notes on the rows.
+- **update-branch.** Every one of the 22 commits since 10-02 is on 10-20 or 10-21, on PRs opened before the rollout
+  (#956, #960, #983, #984, #985, #987, #1069, #1075). There were none from 10-02 to 10-19 (so none at the two-week mark, 10-16) and none after 10-21 22:20 UTC. The
+  repository setting that removes the button (`allow_update_branch=false`) came with the queue on 10-21.
+- **Repeat absorptions.** The baseline is measured over the ruled two-identity fleet set (the gh login plus the
+  placeholder identity that made 37 of the window's 75 merges of `main`): 41 repeats in 71 merges of 30 PRs, 0.58.
+  Over 10-02..10-16 (the two-week mark) the share fell to 0.45, which is movement but still misses the one-third target; over 10-02..10-20 it is 0.51, context only, as that window takes in the 10-20 legacy-PR burst. The volume
+  fell with the queue: 527 fleet merges of `main` in 19 days (about 28 a day) against 29 in the last 4 days (about 7
+  a day). Clause 16 and the queue arrived together, so this run cannot say which earned the drop.
+- **Ritual syncs.** The metric is the transcript episode scan, which reads Claude Code transcripts on the fleet box.
+  This run was on the build machine, where `episodes --project ccrc-pwa` finds none, so the figure is not
+  measured here. Proxy by `remerge`: a merge of `main` whose `--remerge-diff` is empty needed no hand edit. Clean
+  merges per measured merge: 10-02..10-20, 301 of 489 (62%, about 111 a week); 10-21..10-25, 43 of 72 (60%);
+  10-22..10-25, 11 of 26 (42%, about 19 a week). The proxy halves from about 111 to about 19 a week after the
+  queue. The baseline window has too few of its commits in the local clone to compare (66 of 75 unmeasured).
+- **Green-to-merge** (a merged PR's final head going green on every required context, to its merge). Before the
+  queue the wait was one minute because a coordinator merged at once, with no test of the composition. In the
+  queue era it is split by `queue-waits` (PRs merged 10-21..10-25 with a green head and a queue entry in each PR's
+  timeline: 194 PRs, 14 merged with no entry, 3 with a head not green): green to the first queue entry **0.5 min
+  median** (p90 107.6), last queue entry to merge **38.4 min median** (p90 135.3), green to merge 82.4 min (p90
+  318.9). For 10-22..10-25 (164 PRs): 0.4, 54.5 and 99.6 min. A "first entry" is the earliest
+  `added_to_merge_queue` event at or after the green time; the "last entry" is the latest such event before the
+  merge, so an entry that was ejected and re-added counts from its last add. The wait is therefore NOT before the
+  queue: PRs are enqueued within a minute of going green at the median (the p90 of about 107 min is the tail
+  that waited for something else). It is inside the queue: one merge_group run is 16.7 min median (p90 29.8, from
+  the merge_group runs list), and the remainder is time behind other entries and re-runs. 54 of the 194 PRs were
+  added again after a removal. **A median under 10 minutes cannot be reached while one successful entry takes
+  17.** An earlier draft of this section put the split at 43 min before enqueue and 17 min inside; that split is
+  withdrawn, because its enqueue times cannot be reproduced from the commands below. The `green-to-merge`
+  row in the table (77.7 min) is the older subcommand's PR set (PRs created, merged or closed in the window) and
+  differs a little from the 82.4 above (PRs merged in the window).
+- **Inversions.** The scan dates a PR as ready from its first sync, and counts any PR open then that merged before
+  it. A queue lands in queue order by design, so a non-zero count no longer separates a landing-order fault from the
+  queue's own ordering. The figures are stated for completeness; the metric needs a redefinition before it can
+  gate anything.
+- **Required-leg red on `main`.** 0 h in the queue era is real: a queue merge is tested before it lands. The
+  10-02..10-20 figure (47.5 h in 6 intervals) is a floor: 198 of 455 pushes ran no test legs after CI test selection
+  (#183) and read as unmeasured, as the tool's docstring warns. It is not comparable with the baseline.
+
+### Queue-group ejections (added)
+
+The tool could not compute this, so `queue-ejections` does: every `merge_group` run in the window, a failed one read
+down to the failing job's log, the aggregator's "Refuse a prerequisite" job set aside as a consequence, and each
+ejected PR checked for a later merge. A cancelled run (2) is the queue dropping an entry behind an ejected one, and is
+not counted. 244 runs read (194 success, 47 failure, 2 cancelled, 1 still running); a re-run later the same day read
+248 (199 success) and the same 47 failures. The live queue settings are build 2, merge 3, minimum 1, grouping ALLGREEN.
+
+**What a row counts.** A row is one failed merge_group run, named for the PR in its queue branch. Under build-2
+grouping the runs of one group overlap, so one breaking change can fail two runs seconds apart, and a failed run is
+not always the named PR's own ejection: that PR may only have ridden behind the culprit. The tool therefore also
+reports `failureEvents`, which collapses failed runs created within 10 s of each other that share a failing test
+(or name no test and the same cause): 45 events, two pairs collapsed (10-24 09:11:27/29, `lane-beats`; 10-25
+00:26:37/38, `single-definition`), both real. The pair at 10-25 10:41:53/54 has different causes and stays two. The
+per-PR count from the timelines is `queue-waits`' re-queued figure: 54 PRs were added again after a removal.
+
+| Cause (log signature) | Ejections |
+|---|---|
+| flake: timing or throughput assertion (`sent 0 bytes in`, `Operation too slow`, `expected N to be less than/greater than`) | 18 |
+| flake: vitest `EnvironmentTeardownError` on `onUserConsoleLog` (no failed test beside it) | 3 |
+| flake: port held (`EADDRINUSE`, `Address already in use`) | 1 |
+| flake: `EPIPE` | 1 |
+| real: a test assertion on content (totality, single-definition, growth-check, lane characterizations, others) | 20 |
+| real: test-tree typecheck (`error TS`) | 3 |
+| unclassified (the job died before a test ran) | 1 |
+
+23 flake, 23 real, 1 unclassified by run (by event: 23 flake, 21 real, 1 unclassified). The split is by signature,
+so the real count is an upper bound for what the PR itself broke: a content assertion can still be load-dependent.
+The timing signature has one known limit the other way: its bare `expected N to be less than/greater than M` form
+carries no unit, so a content assertion on a count (`expected 0 to be greater than 0`) would land in the flake
+bucket too; this run's 8 timing rows that match only that form were read by hand, and each is a latency, clock, peak-RSS or
+slice-size bound, not a count. 35 distinct PRs were ejected at least once and 34
+of them merged afterwards: an ejection cost a retry, and no PR was lost. One PR (#1200) was ejected 5 times; 8 others
+were ejected twice.
+- **One test is 13 of the 47 ejections.** `ccrc-update.test.ts` (the curl-based fetch test, "sent 0 bytes in 2 s")
+  failed 13 queue runs on 11 PRs between 2026-10-23 21:06 and 10-24 03:28 UTC and not again in the window. 11 of
+  the 13 are in the timing-flake bucket (11 of its 18 rows); the other 2 (#1197, #1203) are classed `real:test`,
+  because another test failed beside it.
+- **The flakes being fixed.** The vitest teardown race (lane tests leaving a lane running) is fixed by #1379, merged
+  2026-10-25; the held port in the codex tests is fixed by #1382 (open when this was written). Together they are 4
+  of the 23 flake rows, and all of 10-25's flakes but one; the curl flake above stopped recurring on its own.
+- **By day** (flake / real / other): 10-21 2/1/0; 10-22 2/0/1; 10-23 5/3/0; 10-24 9/12/0; 10-25 5/7/0. The queue
+  grouping changed to build 2 / merge 3 on 10-24, the day the count peaks. The same day had the curl flake, and
+  this run cannot separate the two.
+- **A teardown error** names the test file that was running (`collect-*`, `child-reclaim-*`), not the cause; it is
+  vitest closing its worker while a console log is pending.
+
+### Kill-rule verdict (spec §10: a stage whose metric has not moved two weeks after rollout is retired or redesigned)
+
+- **Stage 1, prose parts (clauses 15 and 16, the sync advisory): the rule does not fire at the two-week mark.** The
+  rule retires a stage only when its metric has not moved two weeks after rollout. Every figure below uses the same
+  window, 10-02..10-16. `update-branch` count was 0, so that target was met (the 22 commits on 10-20 and 10-21 were
+  on PRs opened before the rollout). The repeat share moved from 0.58 to 0.45, so it moved, though it is still above the
+  target of one third and that target was missed. The ritual-sync rate was not measured (it needs the fleet box's
+  transcripts). For context only, 10-02..10-20 gives a repeat share of 0.51, a window that takes in the 10-20
+  legacy-PR burst. The open question is the missed repeat-share target, not a failed rollout, and the queue
+  (10-21) confounds it: what moved the numbers after 10-21 was the queue, and the drop in fleet merges of `main`
+  with it. This section does not retire the clauses: with `allow_update_branch` off and the queue in place,
+  clause 16's three triggers cover what remains. Whether to retire the advisory or keep it is the operator's call.
+- **Stage 2 (the queue), due about 2026-11-04: not yet due, and heading the wrong way on green-to-merge.** The
+  median is 77.7 min against the target 10, almost all of it inside the queue: PRs enqueue within a minute of green at the median, then spend 38 min
+  from last entry to merge (one run is 17 min of CI; the rest is time behind other entries) and pay for a 19.5% ejection rate. The target as written is not reachable with a 17-minute
+  merge_group run. Redesign candidates, measured here: shorten the queue entry's CI; remove the flakes behind 23 of
+  the 47 ejections (starting with the one test that made 13); re-define the target as "enqueue to merge" or as the
+  wait the queue adds over the PR's own CI, since the queue's job is the composition test that 10-02..10-20 never had.
+- **Stages 3 to 5** were not built, so they have nothing to measure.
+
+### Re-running this
+
+The tool writes a cache and one JSON report per subcommand under `--out`; read-only, no `gh` token scope beyond
+read. `<fleet-login>` is the fleet's gh login. For a window before 2026-09-23 append the placeholder git identity with a
+comma (the baseline needs it; the `absorptions` census lists the actors to choose from); later windows have none. Run from the repository root (`T` is a path relative to it); `<clone>` is a local clone of the repository.
+
+```
+T=deploy/measure-landing.py; R=Synapsium-Labs/ccrc-pwa
+python3 -I $T required $R --out out
+for W in "2026-09-08 2026-09-22" "2026-10-02 2026-10-16" "2026-10-02 2026-10-20" "2026-10-21 2026-10-25" "2026-10-22 2026-10-25"; do
+  set -- $W
+  python3 -I $T absorptions    $R --fleet-login <fleet-login> --since $1 --until $2 --out out
+  python3 -I $T inversions     $R --fleet-login <fleet-login> --since $1 --until $2 --out out
+  python3 -I $T green-to-merge $R --since $1 --until $2 --out out
+  python3 -I $T main-red       $R --since $1 --until $2 --out out
+  python3 -I $T remerge        $R --clone <clone> --since $1 --until $2 --out out
+done
+python3 -I $T queue-ejections $R --since 2026-10-21 --until 2026-10-25 --out out
+# the queue wait split: green -> first entry -> last entry -> merge (reads each PR's issue timeline,
+# filtered to added_to_merge_queue and removed_from_merge_queue; GET only)
+python3 -I $T queue-waits $R --since 2026-10-21 --until 2026-10-25 --out out
+python3 -I $T queue-waits $R --since 2026-10-22 --until 2026-10-25 --out out
+# ritual syncs: on the fleet box, where the transcripts are
+python3 -I $T episodes --project ccrc-pwa --since 2026-10-02 --until 2026-10-25 --out out
+# the queue's entry-to-merge time and the live queue settings
+gh api -X GET "repos/$R/actions/runs?event=merge_group&per_page=100&created=2026-10-21..2026-10-25" --paginate
+gh api -X GET "repos/$R/rules/branches/main"
+```
+
+(Run the loop in bash: zsh does not split `$W` at the space.) The window 10-21..10-25 and the queue-era splits
+above were read on 2026-10-25 and end at that day's midday; a later run of the same commands will include more days.
+
 ## Carried constraints
 
+- **A run the dead-coordinator lane closes is an operator abandon here** (workspace-lifecycle spec §6, the Landing-order
+  bullet; recorded 2026-10-07, where the spec said it already was). Workspace lifecycle's wave 4 (run 314) adds
+  `causedBy: 'sweep'` to `closeRun`'s abandon arm. Every landing reading keyed on an abandon treats a `sweep` close
+  exactly as an `operator` one. Wave 4's plan measures what landing code keys on `causedBy` today and pins the
+  equivalence with a test. A landing plan written after it inherits the rule.
 - **CI test selection landed first (#183, `814fc53d`).** Wave 2's re-plan derives its `ci.yml` edits against that shape
   rather than overwriting it: a `merge_group` run keeps a run-unique concurrency group (never the shared push-to-main
   refresh group, which may drop runs), the mode table gains a `merge_group` row, the macOS legs and `full-suite` skip a

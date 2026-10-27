@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { parseAudit, parseReap, refusalSentence, SENTENCES } from '../src/wsaudit.js';
 import { reviveWsAudit } from '../../shared/api.js';
-import { CCD } from './ccdWsHelpers.js';
+import { CCD, ccdSource } from './ccdWsHelpers.js';
 
 /**
  * The refusal-token <-> copy linkage, required by Task 13. `ccd` answers
@@ -51,12 +51,14 @@ import { CCD } from './ccdWsHelpers.js';
  * reason `wsaudit.ts` never sees them.
  */
 describe('refusal-token <-> sentence linkage (ccd source <-> wsaudit.ts SENTENCES)', () => {
-  const ccdSrc = readFileSync(CCD, 'utf8');
+  const ccdSrc = ccdSource();
 
   const tokens = new Set<string>();
   for (const m of ccdSrc.matchAll(/_reap_refuse\s+([a-zA-Z][a-zA-Z0-9_-]*)\b/g)) tokens.add(m[1]!);
   for (const m of ccdSrc.matchAll(/"refused":"([a-zA-Z0-9-]+)"/g)) tokens.add(m[1]!);
   for (const m of ccdSrc.matchAll(/'!([a-zA-Z0-9-]+)/g)) tokens.add(m[1]!);
+  // D-6633: rung 9's rescue words ride a `failed` document, not a refusal: the pin names them in `RECLAIM_PIN_WORD=<word>`.
+  for (const m of ccdSrc.matchAll(/^[^#\n]*RECLAIM_PIN_WORD=(nested-rescue-[a-z-]+)/gm)) tokens.add(m[1]!);
   for (const m of ccdSrc.matchAll(/"verdict":"([a-zA-Z0-9-]+)"/g)) {
     // `reapable` and `reclaimable` are the two SUCCESS verdicts — each means "a
     // token follows" — not refusals, so neither has (or may have) a sentence.

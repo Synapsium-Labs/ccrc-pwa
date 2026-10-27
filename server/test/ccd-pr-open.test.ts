@@ -2,13 +2,13 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { CCD, WS_ADD, ghContainedEnv } from './ccdWsHelpers.js';
+import { CCD, WS_ADD, ghContainedEnv, ccdSource } from './ccdWsHelpers.js';
 import { GH_STUB, makePrHarness, type PrHarness } from './ccdPrHelpers.js';
 
 /** The seconds ccd assigns to a bare `NAME=<n>` constant — read, never
  *  hardcoded. Same reader, same reason, as `ccd-pr-state.test.ts`'s. */
 const ccdSeconds = (name: string): number => {
-  const src = fs.readFileSync(CCD, 'utf8');
+  const src = ccdSource();
   const m = new RegExp(`^${name}=(\\d+)`, 'm').exec(src);
   if (!m) throw new Error(`ccd no longer defines ${name} as a bare integer assignment`);
   return Number(m[1]);
@@ -138,7 +138,7 @@ describe('argv discipline', () => {
     // `\ncmd_` was the second half of the same problem: that is `cmd_ws_gc` 277
     // lines further down, so the ban silently covered every `_ws_gc_*` helper —
     // dilutable, and a false positive waiting for an unrelated task.
-    const src = fs.readFileSync(CCD, 'utf8');
+    const src = ccdSource();
     const head = 'cmd_pr_open() {';
     expect(src.split(head).length - 1, 'exactly one cmd_pr_open definition').toBe(1);
     const start = src.indexOf(head);

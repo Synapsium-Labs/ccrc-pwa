@@ -1,12 +1,13 @@
 // Refined's app bar at a desk (W2 Task S4b, D-5471), in a real Chrome over the production build.
 //
 // The bar is at its tightest just above the phone break: six lanes with short names, and the Inbox and Runs tabs each
-// carrying a two-digit badge, leave the gauges about 84px at 900 (the plan's Step 0 fixture). There the first gauge,
-// which opens its line and cannot wrap, used to be cut at the row's edge: a meter with no reading. This file holds
-// what jsdom cannot: at 900, 930, 960 and 1280 in both palettes, every gauge that shows is whole inside its row with
-// its reading whole inside it, the "+n" is whole inside the door, and the page does not scroll sideways. Under a coarse
-// pointer every door in the bar is at least 44 x 44. The coarse pointer is a touch screen: headless Chrome ignores the
-// DevTools protocol's pointer media feature (measured), so `openApp` takes `touch`.
+// carrying a two-digit badge (the plan's Step 0 fixture). The bar's line holds no gauges; the lanes row under it, in
+// the same header (T2c, D-6329), holds every lane's card (lanes-row.browser.test.ts holds the row at length, with
+// seventeen lanes). This file holds the bar itself with its row: at 900, 930, 960 and 1280 in both palettes, the bar's
+// line is whole and holds no card, the row sits under it, every card is whole inside the row with its readings whole
+// inside it, and the page does not scroll sideways. Under a coarse pointer every door in the bar is at least 44 x 44.
+// The coarse pointer is a touch screen: headless Chrome ignores the DevTools protocol's pointer media feature
+// (measured), so `openApp` takes `touch`.
 //
 // Run: `( cd pwa && CCRC_CHROME=<a Chrome or Chromium binary> ./node_modules/.bin/vitest run --config vitest.browser.config.ts browser/refined-bar.browser.test.ts )`.
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -73,32 +74,32 @@ describe("Refined's app bar shows nothing cut, and every door is a finger's squa
       const { ctx, page, errors } = await openApp(browser!, view, FIXTURE);
       try {
         await page.goto(server!.origin + '/');
-        // The lanes and both badges have landed once the gauges and the two counted tab names are in the bar.
-        await page.waitForFunction(() => document.querySelectorAll('.ref-bar .accounts-compact-gauge').length > 0
+        // The lanes and both badges have landed once the lanes row's cards and the two counted tab names are in place.
+        await page.waitForFunction(() => document.querySelectorAll('header.shell-accounts .account-gauge').length === 6
           && document.querySelector('.ref-bar [aria-label="Inbox, 12 unread"]') !== null
           && document.querySelector('.ref-bar [aria-label="Runs, 12 active"]') !== null, undefined, { timeout: 20_000 });
-        await page.waitForTimeout(200); // the measure's ResizeObserver settles
         const faults = await page.evaluate(() => {
           const out: string[] = [];
-          const door = document.querySelector<HTMLElement>('.ref-bar .accounts-compact')!;
-          const row = door.querySelector<HTMLElement>('.accounts-compact-lanes')!;
+          // The bar's line holds no card; the lanes row (T2c, D-6329) sits under it, in the header, one card per lane, each
+          // whole inside the row.
+          const line = document.querySelector<HTMLElement>('header.shell-accounts .ref-bar')!;
+          const lineBox = line.getBoundingClientRect();
+          if (line.querySelector('.account-gauge, .accounts-strip') !== null) out.push("the bar's line holds lane cards");
+          const row = document.querySelector<HTMLElement>('header.shell-accounts .accounts-strip')!;
           const r = row.getBoundingClientRect();
-          const d = door.getBoundingClientRect();
-          const shown = [...row.querySelectorAll<HTMLElement>('.accounts-compact-gauge')]
-            .filter((g) => getComputedStyle(g).visibility !== 'hidden' && g.getBoundingClientRect().top < r.bottom - 1);
-          for (const g of shown) {
+          if (r.top < lineBox.bottom - 0.5) out.push(`the row (top ${r.top}) is not under the bar's line (bottom ${lineBox.bottom})`);
+          const cardCount = row.querySelectorAll('.account-gauge').length;
+          if (cardCount !== 6) out.push(`${cardCount} cards, not 6`);
+          const fresh = line.querySelector<HTMLElement>('.ref-bar-new')!.getBoundingClientRect();
+          if (fresh.right > lineBox.right + 0.5 || fresh.right > window.innerWidth + 0.5) out.push('New session is cut');
+          for (const g of row.querySelectorAll<HTMLElement>('.account-gauge')) {
             const gr = g.getBoundingClientRect();
-            const pct = g.querySelector<HTMLElement>('.accounts-compact-pct')!;
-            const pr = pct.getBoundingClientRect();
-            const name = g.querySelector<HTMLElement>('.accounts-compact-name')!.textContent;
-            if (gr.right > r.right + 0.5) out.push(`${name} sticks out of the row (${gr.right} > ${r.right})`);
-            if (pr.right > r.right + 0.5 || pr.right > d.right + 0.5) out.push(`${name}'s ${pct.textContent} is cut`);
-            if (pct.scrollWidth > pct.clientWidth + 0.5) out.push(`${name}'s reading overflows its box`);
+            const name = g.querySelector<HTMLElement>('.account-gauge-label')!.textContent;
+            if (gr.left < r.left - 0.5 || gr.right > r.right + 0.5) out.push(`${name} sticks out of the row (${gr.left}..${gr.right} in ${r.left}..${r.right})`);
+            for (const pct of g.querySelectorAll<HTMLElement>('.acct-pct')) {
+              if (pct.getBoundingClientRect().right > gr.right + 0.5 || pct.scrollWidth > pct.clientWidth + 0.5) out.push(`${name}'s ${pct.textContent} is cut`);
+            }
           }
-          const more = door.querySelector<HTMLElement>('.accounts-compact-more');
-          if (more === null) out.push('six lanes and no +n');
-          else if (more.getBoundingClientRect().right > d.right + 0.5) out.push('+n is cut');
-          else if (shown.length === 0 && more.getBoundingClientRect().left > r.left + 0.5) out.push('no gauge shows, and +n does not lead');
           if (document.documentElement.scrollWidth > window.innerWidth + 0.5) out.push('the page scrolls sideways');
           return out;
         });

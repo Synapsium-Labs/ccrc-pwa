@@ -87,7 +87,7 @@ describe("the catch-up response's bytes, filled through each moved writer (D-585
 
 // ─── PART 2: the funnel ──────────────────────────────────────────────────────────────────────────────────────────────
 
-const sinks = (rec: FeedRecorder) => ({ notifyLog: rec.notifyLog, coord: rec.coord, push: rec.push, presence: rec.presence });
+const sinks = (rec: FeedRecorder) => ({ notifyLog: rec.notifyLog, coord: rec.coord, push: rec.push, viewers: rec.viewers });
 const EVENT: NoticeRecord = { kind: 'done', sessionId: A, title: 'done › project-a', body: 'finished', runId: null };
 
 describe('notify: each mode over visible ∈ {true, false} equals pushOne\'s matching row (D-5857)', () => {
@@ -155,7 +155,7 @@ describe("notify: the caller's record reaches the ring unchanged (D-5857)", () =
 describe('notify: the sinks are independently optional (D-5857)', () => {
   it('no ring, no archive row: with no notify log nothing is archived, and the push still goes', async () => {
     const rec = await feedRecorder(mkTmp('ccrc-notice-nolog-unit-'));
-    const out = notify({ coord: rec.coord, push: rec.push, presence: rec.presence }, EVENT, 'push');
+    const out = notify({ coord: rec.coord, push: rec.push, viewers: rec.viewers }, EVENT, 'push');
     expect(rec.calls).toEqual(['push']);
     expect(rec.archived).toEqual([]);
     expect(out).toEqual({ recorded: false, archived: 'none' });
@@ -169,10 +169,10 @@ describe('notify: the sinks are independently optional (D-5857)', () => {
     expect(out).toEqual({ recorded: true, archived: 'none' });
   });
 
-  it("'record-only' does not consult presence: it decides nothing there", async () => {
+  it("'record-only' does not consult viewers: it decides nothing there", async () => {
     const rec = await feedRecorder(mkTmp('ccrc-notice-presence-'));
     const isVisible = vi.fn(() => true);
-    notify({ ...sinks(rec), presence: { isVisible } }, EVENT, 'record-only');
+    notify({ ...sinks(rec), viewers: { isVisible } }, EVENT, 'record-only');
     expect(isVisible).not.toHaveBeenCalled();
     expect(withoutFlush(rec.calls)).toEqual(['record', 'archive']);
   });
@@ -314,5 +314,36 @@ describe('noticeBanner: the notify.sh banner\'s bus frames (D-6732; ARCH-59 #794
 
   it('a line that only mentions a swap mid-text is not routed to a session', () => {
     expect(frames('note: cc swap: s1 moved a -> b')).toHaveLength(1);
+  });
+});
+
+// D-7041 (ARCH-43, the run-done funnel task; departure `notice-lane-prefix`). A writer that names its lane keeps the
+// lane's prefix in the archive-failure warning (stop-done's `stop-done: `); a writer that names none prints today's
+// line byte for byte, whether it names its own sentence or takes the default. The bytes are spelled here, not built
+// from `degradeLine`, so a change to either spelling is red.
+describe('notify: the lane prefix on the archive-failure warning (D-7041)', () => {
+  const failing = async (): Promise<FeedRecorder> => {
+    const rec = await feedRecorder(mkTmp('ccrc-notice-lane-'));
+    rec.archiveThrowsOn('every');
+    return rec;
+  };
+
+  it('lane set: the warning carries the lane after `ccrc-server: `, then the writer\'s sentence', async () => {
+    const rec = await failing();
+    const out = notify(sinks(rec), EVENT, 'record-only', { lane: 'stop-done', degraded: 'the mail-only count has no feed row' });
+    expect(out).toEqual({ recorded: true, archived: 'failed' });
+    expect(rec.warned()).toEqual(['ccrc-server: stop-done: recordFeedEvent failed (disk full) — the mail-only count has no feed row']);
+  });
+
+  it('lane absent, no sentence named: today\'s default line', async () => {
+    const rec = await failing();
+    notify(sinks(rec), EVENT, 'record-only');
+    expect(rec.warned()).toEqual(['ccrc-server: recordFeedEvent failed (disk full) — feed archive degraded, ring/push unaffected']);
+  });
+
+  it('lane absent, its own sentence named: today\'s line with that sentence', async () => {
+    const rec = await failing();
+    notify(sinks(rec), EVENT, 'push', { degraded: 'the writer\'s own sentence' });
+    expect(rec.warned()).toEqual(['ccrc-server: recordFeedEvent failed (disk full) — the writer\'s own sentence']);
   });
 });

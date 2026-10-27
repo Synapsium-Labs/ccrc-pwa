@@ -84,6 +84,64 @@ export const PR_BACKOFF_MAX_MS = 900_000;
  *  longer than any real sweep, short enough that wedged is not permanent. A safety interval, never a cadence. */
 export const PR_SWEEP_STUCK_MS = PR_BACKOFF_MAX_MS;
 
+/** Build 9 wave 7 (D12): the claim lease's lanes. 60 s: a 45-minute lease does not need the 2 s tick, and the divergence
+ *  census already argues this cadence. Renew and lapse each keep their own row so neither starves the other's first run. */
+export const CLAIM_SWEEP_MS = 60_000;
+
+/** The stall watch's lane (spec 2026-09-29 §4.2, §10). It runs at `CLAIM_SWEEP_MS`'s cadence, for that constant's reason:
+ *  a threshold of the quiet time (2 h built-in, 30 min at the least, stall watch settings §7) does not need the 2 s tick.
+ *  A DECLARED REFERENCE (the row's `derivedFrom`), never a second literal. EXPORTED for its suite; `watch.ts` re-exports it. */
+export const STALL_SWEEP_MS = CLAIM_SWEEP_MS;
+
+/** `idle-compact-nudge` (D-5373): the lane's own clock. A nudge waits out `IDLE_NUDGE_SETTLE_MS` (30 s) anyway, so a 10 s
+ *  beat costs at most one beat of extra delay; the transcript tail is re-read only when the file changed. */
+export const IDLE_NUDGE_SWEEP_MS = 10_000;
+
+/** The mail lane (the seventh; spec:159 fixes the cadence). Ten seconds is not how fast mail should arrive, it is how
+ *  often the lane is allowed to ASK: delivery is bounded below by `MAIL_QUIET_MS`, so mail lands at a turn boundary. */
+export const MAIL_SWEEP_MS = 10_000;
+
+/** The ask-release lane's own self-throttle (RULING F4, task-7-brief): not how fast a lapsed hold fires (that ceiling is
+ *  `ASK_GRACE_MS`, measured in minutes) but how often the lane is allowed to ASK, as `MAIL_SWEEP_MS` is for mail. */
+export const ASK_SWEEP_MS = 10_000;
+
+/** The approvals lane's daily prune of the approval inputs and the asks' question text (D-5298). The lane itself
+ *  (`sweepApprovals`: lapse, ceiling, deferred pushes) has NO throttle and runs on every tick; only this block is a row. */
+export const APPROVAL_PRUNE_MS = 86_400_000;
+
+/** The drift reconciler's beat (D-5922, spec §4.1): fifteen minutes, the ledger reconcile's own, a read-and-record pass. */
+export const DRIFT_SWEEP_MS = 900_000;
+
+/** The daily digest's beat (D-5300): once a minute at most it looks for a settled day. */
+export const DIGEST_BEAT_MS = 60_000;
+
+/** The child-reclaim lane (child-reclamation wave 4, spec §5.7). The
+ *  census's cadence, for the census's reason — a child's eligibility moves on
+ *  human timescales (a run closes, a re-dispatch binds) — and the
+ *  TWICE-OBSERVED rule is measured in these intervals: a child must read
+ *  eligible on two passes at least this far apart before anything is
+ *  composed. It is also the base of the failure backoff (spec §5.9: "retries
+ *  back off in between"). The collector, the expiry lane and the dead-coordinator lane run at the same cadence, as
+ *  siblings on the same tick. EXPORTED so its suite advances by the real constant; `watch.ts` re-exports it. */
+export const CHILD_RECLAIM_SWEEP_MS = 60_000;
+
+/** The temp-root collector's observation interval (spec §5.10): the lane spends a token only when its executor's own
+ *  audit ARRIVED at least this long after an earlier audit of the id answered that same token, on this process's
+ *  monotonic clock. The child lane's cadence, for that lane's reason, and DERIVED from it, never a second literal; L1
+ *  takes it as an argument (it imports no L4 constant). EXPORTED for its suite; `watch.ts` re-exports it. */
+export const COLLECT_OBSERVE_INTERVAL_MS = CHILD_RECLAIM_SWEEP_MS;
+
+/** The stop-done lane's cadence (D-5370), the `run-done` sleep policy's: declared here, the L0 table, which cannot import
+ *  an L1 file (the precedent of `CATALOGUE_POLL_INTERVAL_MS`); `stopDone.ts` re-exports it (D-7045). */
+export const STOP_DONE_SWEEP_MS = 60_000;
+
+/** Hibernation's cadence (D-5242), the `idle-hours` sleep policy's: declared here for the same reason; `coord/hibernate.ts`
+ *  re-exports it (D-7045). */
+export const HIBERNATE_SWEEP_MS = 5 * 60_000;
+
+/** The checks lane's beat (PR landing in ccrc, stage 1): the fastest a project's read cadence goes. */
+export const LANDING_CHECKS_BEAT_MS = 30_000;
+
 /** Which clock a throttle reads: the watcher's monotonic clock (`Deps.monotonicMs`) or the wall clock (`Date.now()`). */
 export type LaneClock = 'mono' | 'wall';
 
@@ -93,8 +151,11 @@ export type LaneClock = 'mono' | 'wall';
 export type LaneFlight = 'skip' | 'join' | 'join-rerun' | 'none';
 
 export type LaneName =
-  | 'caps' | 'catalogue' | 'inventory' | 'serverCaps'
-  | 'tasks' | 'usage' | 'pr' | 'names' | 'divergences' | 'lifecycle' | 'readiness' | 'ledgerReconcile' | 'ledgerFloor';
+  | 'caps' | 'catalogue' | 'inventory' | 'landingChecks' | 'serverCaps'
+  | 'tasks' | 'usage' | 'pr' | 'names' | 'divergences' | 'lifecycle' | 'readiness' | 'ledgerReconcile' | 'ledgerFloor' | 'drift'
+  | 'claimRenew' | 'claimLapse' | 'stalls' | 'idleNudge' | 'mail' | 'asks' | 'approvalPrune' | 'digestBeat'
+  | 'childReclaim' | 'collect' | 'archivedExpiry' | 'deadCoordinator' | 'orphanTrees' | 'delegation'
+  | 'sleepRunDone' | 'sleepIdleHours';
 
 export interface LaneRow {
   readonly name: LaneName | (string & {});
@@ -111,28 +172,97 @@ export interface LaneRow {
   /** The lane's catch sentence (`ccrc-server: …`), to which the failure's detail is appended; null when the caller
    *  keeps its own catch or the lane has its own latch. */
   readonly warnKey: string | null;
+  /** True when the lane's old field started at `-Infinity`, not `0`: it is due at ANY reading of its clock, a reading
+   *  injected by a caller (`sweepDigest(now)`) included. */
+  readonly startsDue?: true;
 }
 
+// Every row throttles on the monotonic clock: the operator ruled OA-C4 (a) on 2026-10-24 (#803), so the 21 rows that
+// throttled on `Date.now()` moved after the expiry and dead-coordinator pair (spec K11, §5.1 rule 1b). A cadence is real
+// time: a wall clock stepped back runs a lane at its cadence, and one stepped forward never runs it early. Verdicts keep
+// reading the wall clock (an `expiresAt`, a `closedAt`, a digest day); `LaneClock` keeps its 'wall' member for a row that
+// might ask for it, and none does.
 export const LANE_SCHEDULE: readonly LaneRow[] = [
-  { name: 'caps', cadenceMs: CAPS_REFRESH_MS, derivedFrom: null, clock: 'wall', flight: 'none', warnKey: null },
+  { name: 'caps', cadenceMs: CAPS_REFRESH_MS, derivedFrom: null, clock: 'mono', flight: 'none', warnKey: null },
   {
-    name: 'catalogue', cadenceMs: CATALOGUE_POLL_INTERVAL_MS, derivedFrom: null, clock: 'wall', flight: 'none',
+    name: 'catalogue', cadenceMs: CATALOGUE_POLL_INTERVAL_MS, derivedFrom: null, clock: 'mono', flight: 'none',
     warnKey: 'ccrc-server: the catalogue poller rejected — this is a bug, poll() should never reject',
   },
-  { name: 'inventory', cadenceMs: UPDATE_INVENTORY_MS, derivedFrom: null, clock: 'wall', flight: 'join-rerun', warnKey: null },
-  { name: 'serverCaps', cadenceMs: SERVER_CAPS_WRITE_MS, derivedFrom: null, clock: 'wall', flight: 'join', warnKey: null },
-  { name: 'tasks', cadenceMs: TASK_SWEEP_MS, derivedFrom: null, clock: 'wall', flight: 'none', warnKey: null },
-  { name: 'usage', cadenceMs: USAGE_SWEEP_MS, derivedFrom: null, clock: 'wall', flight: 'none', warnKey: null },
+  { name: 'inventory', cadenceMs: UPDATE_INVENTORY_MS, derivedFrom: null, clock: 'mono', flight: 'join-rerun', warnKey: null },
+  // PR landing in ccrc, stage 1 (spec §3.5): the checks lane looks every 30 s; each project's own read cadence (30 s
+  // while an episode is unsettled or red, 120 s otherwise) is the lane's own memory. A pass still running after five
+  // minutes (a hung ccd call is bounded by its own timeout) is abandoned, never allowed to hold the lane shut.
   {
-    name: 'pr', cadenceMs: PR_SWEEP_MS, activeCadenceMs: PR_SWEEP_ACTIVE_MS, derivedFrom: null, clock: 'wall',
+    name: 'landingChecks', cadenceMs: LANDING_CHECKS_BEAT_MS, derivedFrom: null, clock: 'mono', flight: 'skip',
+    staleAfterMs: 5 * 60_000, warnKey: 'ccrc-server: the landing checks lane failed',
+  },
+  { name: 'serverCaps', cadenceMs: SERVER_CAPS_WRITE_MS, derivedFrom: null, clock: 'mono', flight: 'join', warnKey: null },
+  { name: 'tasks', cadenceMs: TASK_SWEEP_MS, derivedFrom: null, clock: 'mono', flight: 'none', warnKey: null },
+  { name: 'usage', cadenceMs: USAGE_SWEEP_MS, derivedFrom: null, clock: 'mono', flight: 'none', warnKey: null },
+  {
+    name: 'pr', cadenceMs: PR_SWEEP_MS, activeCadenceMs: PR_SWEEP_ACTIVE_MS, derivedFrom: null, clock: 'mono',
     flight: 'skip', staleAfterMs: PR_SWEEP_STUCK_MS, warnKey: null,
   },
-  { name: 'names', cadenceMs: NAME_SWEEP_MS, derivedFrom: null, clock: 'wall', flight: 'none', warnKey: null },
-  { name: 'divergences', cadenceMs: DIVERGENCE_SWEEP_MS, derivedFrom: null, clock: 'wall', flight: 'none', warnKey: null },
-  { name: 'lifecycle', cadenceMs: LC_SWEEP_MS, derivedFrom: null, clock: 'wall', flight: 'none', warnKey: null },
-  { name: 'readiness', cadenceMs: READINESS_SWEEP_MS, derivedFrom: null, clock: 'wall', flight: 'none', warnKey: null },
-  { name: 'ledgerReconcile', cadenceMs: LEDGER_RECONCILE_SWEEP_MS, derivedFrom: null, clock: 'wall', flight: 'none', warnKey: null },
-  { name: 'ledgerFloor', cadenceMs: LEDGER_FLOOR_SWEEP_MS, derivedFrom: null, clock: 'wall', flight: 'none', warnKey: null },
+  { name: 'names', cadenceMs: NAME_SWEEP_MS, derivedFrom: null, clock: 'mono', flight: 'none', warnKey: null },
+  { name: 'divergences', cadenceMs: DIVERGENCE_SWEEP_MS, derivedFrom: null, clock: 'mono', flight: 'none', warnKey: null },
+  { name: 'lifecycle', cadenceMs: LC_SWEEP_MS, derivedFrom: null, clock: 'mono', flight: 'none', warnKey: null },
+  { name: 'readiness', cadenceMs: READINESS_SWEEP_MS, derivedFrom: null, clock: 'mono', flight: 'none', warnKey: null },
+  { name: 'ledgerReconcile', cadenceMs: LEDGER_RECONCILE_SWEEP_MS, derivedFrom: null, clock: 'mono', flight: 'none', warnKey: null },
+  { name: 'drift', cadenceMs: DRIFT_SWEEP_MS, derivedFrom: null, clock: 'mono', flight: 'skip', warnKey: null },
+  { name: 'ledgerFloor', cadenceMs: LEDGER_FLOOR_SWEEP_MS, derivedFrom: null, clock: 'mono', flight: 'none', warnKey: null },
+  { name: 'claimRenew', cadenceMs: CLAIM_SWEEP_MS, derivedFrom: null, clock: 'mono', flight: 'none', warnKey: null },
+  { name: 'claimLapse', cadenceMs: CLAIM_SWEEP_MS, derivedFrom: null, clock: 'mono', flight: 'none', warnKey: null },
+  {
+    name: 'stalls', cadenceMs: STALL_SWEEP_MS, clock: 'mono', flight: 'skip', warnKey: null,
+    derivedFrom: { name: 'CLAIM_SWEEP_MS', reason: 'the stall watch needs no finer beat than the claim lanes it runs after' },
+  },
+  { name: 'idleNudge', cadenceMs: IDLE_NUDGE_SWEEP_MS, derivedFrom: null, clock: 'mono', flight: 'skip', warnKey: null },
+  { name: 'mail', cadenceMs: MAIL_SWEEP_MS, derivedFrom: null, clock: 'mono', flight: 'none', warnKey: null },
+  { name: 'asks', cadenceMs: ASK_SWEEP_MS, derivedFrom: null, clock: 'mono', flight: 'none', warnKey: null },
+  // The prune's failure is caught by `sweepApprovals`' own try (its sentence names the whole sweep), so no warnKey.
+  { name: 'approvalPrune', cadenceMs: APPROVAL_PRUNE_MS, derivedFrom: null, clock: 'mono', flight: 'none', warnKey: null },
+  { name: 'digestBeat', cadenceMs: DIGEST_BEAT_MS, derivedFrom: null, clock: 'mono', flight: 'none', warnKey: null, startsDue: true },
+  // The four lanes that select destructive acts. Child reclaim is the census's own cadence; the other three are its siblings on
+  // the same tick, at the same cadence, and follow it by reference. All four throttle on the monotonic clock (spec K11, §5.1
+  // rule 1b: a cadence is real time, so a wall clock stepped back must not hold a lane for the step, nor one stepped forward
+  // run it early); the expiry and dead-coordinator lanes moved there from `Date.now()` in a commit of their own, and their
+  // verdicts keep reading the wall clock. Child reclaim has no guard (a pass overtaken while it gathers
+  // is dropped by its own pass counter), the collector keeps one pass at a time, and the dead-coordinator lane hands its pass to
+  // the shutdown seal (`inFlight`). Their failures reach `tick`'s own catch, so no row warns.
+  { name: 'childReclaim', cadenceMs: CHILD_RECLAIM_SWEEP_MS, derivedFrom: null, clock: 'mono', flight: 'none', warnKey: null },
+  {
+    name: 'collect', cadenceMs: CHILD_RECLAIM_SWEEP_MS, clock: 'mono', flight: 'skip', warnKey: null,
+    derivedFrom: { name: 'childReclaim', reason: 'a sibling of the child lane on the same tick; its observation interval is the same real time' },
+  },
+  {
+    name: 'archivedExpiry', cadenceMs: CHILD_RECLAIM_SWEEP_MS, clock: 'mono', flight: 'skip', warnKey: null,
+    derivedFrom: { name: 'childReclaim', reason: 'a sibling of the child lane on the same tick, under the same switch' },
+  },
+  {
+    name: 'deadCoordinator', cadenceMs: CHILD_RECLAIM_SWEEP_MS, clock: 'mono', flight: 'join', warnKey: null,
+    derivedFrom: { name: 'childReclaim', reason: 'a sibling of the child lane on the same tick, under the same switch' },
+  },
+  // The orphan-worktree lane (fleet disk retention, D-6631): the fifth of the same-tick siblings, its beat moved here from a
+  // `lastOrphanTreeSweep` field of the watcher (GitHub #1279) with the clock, cadence and flight it had: monotonic, one pass a
+  // cadence, passes may overlap (`OrphanTreeSweep` refuses its own second), and its failure reaches `tick`'s own catch.
+  {
+    name: 'orphanTrees', cadenceMs: CHILD_RECLAIM_SWEEP_MS, clock: 'mono', flight: 'none', warnKey: null,
+    derivedFrom: { name: 'childReclaim', reason: 'a sibling of the child lane on the same tick, shadow until its own switch' },
+  },
+  // The delegation lane (wave 3): the census's cadence, followed by reference. One pass at a time (a call beside a running pass
+  // is refused); the lane catches its own failures with sentences of its own, so no row warns. It spends the cadence only once
+  // it has a census to read (`kick` hands it back otherwise), which is why the lane, not `run`, decides what a throttled call is.
+  {
+    name: 'delegation', cadenceMs: DIVERGENCE_SWEEP_MS, clock: 'mono', flight: 'skip', warnKey: null,
+    derivedFrom: { name: 'DIVERGENCE_SWEEP_MS', reason: 'the lane reads each census pass once, so it follows the census\'s own beat' },
+  },
+  // The two sleep lanes (ARCH-43, D-7045): `SLEEP_LANES`' rows name them (`run-done`, the stop-done lane, D-5370;
+  // `idle-hours`, hibernation, D-5242), and `FleetWatcher.sweepSleep` starts each through its own row, never awaiting
+  // the other. Each starts due, keeps one pass at a time (its own flight, never one shared by both) and catches its own
+  // failure with its own sentence, so no row warns. They moved here from `Date.now()` under OA-C4 (a) (#803), whose
+  // cover of these two lanes the operator ruled on 2026-10-26 (D-7052).
+  { name: 'sleepRunDone', cadenceMs: STOP_DONE_SWEEP_MS, derivedFrom: null, clock: 'mono', flight: 'skip', warnKey: null },
+  { name: 'sleepIdleHours', cadenceMs: HIBERNATE_SWEEP_MS, derivedFrom: null, clock: 'mono', flight: 'skip', warnKey: null },
 ];
 
 export function laneRow(name: string): LaneRow {

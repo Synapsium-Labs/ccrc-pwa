@@ -283,13 +283,13 @@ const CONTROLS: Record<string, string> = {
 
   // ── not buttons: the seventeen the first spelling of this census missed ──
   'fleet/AccountsStrip.tsx <div> accounts-strip':
-    'TOKEN. A `role="link"` div with `tabIndex={0}` and a keydown handler — '
-    + 'the strip D-161 calls the only door to /accounts. `.accounts-strip` '
-    + 'declares the floor.',
-  'fleet/CompactGauges.tsx <div> accounts-compact':
-    'TOKEN. The compact arrangement of the strip (W2 Task S2c), the gauges '
-    + 'both shells place: the same `role="link"` door to /accounts, one group. '
-    + '`.accounts-compact` declares the floor.',
+    'TOKEN. The PLACEHOLDER strip only (T2c, D-6329): with no lane to show it is a `role="link"` div with '
+    + '`tabIndex={0}` and a keydown handler, the door D-161 calls the only door to /accounts. With lanes to show the '
+    + 'same div is a plain `role="group"` and no control. `.accounts-strip[role="link"]` declares the floor.',
+  'fleet/AccountsStrip.tsx <div> account-gauge':
+    'TOKEN. A lane\'s card: a `role="link"` div, one roving tab stop across the cards, the door to its lane '
+    + '(`actionDoor(\'open-lane\', …)`). `.account-gauge` declares the floor at every width, since a weekly-only or '
+    + 'no-reading card is otherwise 20 to 36px tall.',
   // THE TWO DROPDOWNS LEFT THIS CENSUS, and the right way round: they are
   // `<Select>` (@ccrc/ui) now, so the app draws no dropdown by hand and there
   // is nothing here to classify — the same reason no `<Button>` call site

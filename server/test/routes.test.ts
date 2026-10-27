@@ -60,10 +60,10 @@ async function makeApp(
     if (args[0] === 'capture-pane') {
       const pane = resolvedPanes[Math.min(capIdx, resolvedPanes.length - 1)] ?? null;
       capIdx++;
-      return pane === null ? { code: 1, stdout: '', stderr: '' } : { code: 0, stdout: pane, stderr: '' };
+      return pane === null ? { ran: true, code: 1, stdout: '', stderr: '' } : { ran: true, code: 0, stdout: pane, stderr: '' };
     }
-    if (args[0] === 'list-panes') return { code: 0, stdout: `${PANE_PID}\n`, stderr: '' };
-    return { code: 0, stdout: '', stderr: '' };
+    if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: `${PANE_PID}\n`, stderr: '' };
+    return { ran: true, code: 0, stdout: '', stderr: '' };
   };
   const bus = new Bus();
   const cfg = loadConfig({ CCRC_HOME: home });
@@ -208,7 +208,7 @@ describe('canonical positive-safe decimal parser', () => {
 });
 
 describe('canonical coordination id route census', () => {
-  it('keeps all nineteen textual resource-id seams on the shared parser', () => {
+  it('keeps all twenty-one textual resource-id seams on the shared parser', () => {
     expect(canonicalCoordIdRoutes()).toEqual([
       { method: 'POST', routePath: '/api/mail/:id/ack' },
       { method: 'GET', routePath: '/api/mail/:id' },
@@ -221,7 +221,11 @@ describe('canonical coordination id route census', () => {
       // registered right after `advance` in coord/routes.ts.
       { method: 'POST', routePath: '/api/runs/:id/route' },
       { method: 'POST', routePath: '/api/runs/:id/items' },
+      // D-6910: the operator's read of a review cap's ask, registered beside the lift.
+      { method: 'GET', routePath: '/api/coord/review-cap/:id' },
       { method: 'GET', routePath: '/api/runs/:id/signals' },
+      // D-6799: the run plus its spend.
+      { method: 'GET', routePath: '/api/runs/:id' },
       { method: 'GET', routePath: '/api/runs/:id/items' },
       { method: 'POST', routePath: '/api/claims/:id/release' },
       { method: 'POST', routePath: '/api/claims/:id/break' },
@@ -444,10 +448,10 @@ describe('write routes', () => {
       if (args[0] === 'capture-pane') {
         const pane = panes[Math.min(capIdx, panes.length - 1)];
         capIdx++;
-        return { code: 0, stdout: pane!, stderr: '' };
+        return { ran: true, code: 0, stdout: pane!, stderr: '' };
       }
-      if (args[0] === 'list-panes') return { code: 0, stdout: `${PANE_PID}\n`, stderr: '' };
-      return { code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: `${PANE_PID}\n`, stderr: '' };
+      return { ran: true, code: 0, stdout: '', stderr: '' };
     };
     // The shape `remote/io.ts` produces when one of the 31
     // [registry-read-census:fields] field reads a session's `readRegistry` fires
@@ -475,7 +479,7 @@ describe('write routes', () => {
     seedSession(home, ID, 'claude-a');
     const workdirUnreadableIO = unreadableField(ID, 'workdir');
     const cfg = loadConfig({ CCRC_HOME: home });
-    const run: Runner = async () => ({ code: 1, stdout: '', stderr: '' });
+    const run: Runner = async () => ({ ran: true, code: 1, stdout: '', stderr: '' });
     const app = await buildServer(
       { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: workdirUnreadableIO, queue: new KeyedQueue() },
       new Bus(),
@@ -1320,7 +1324,7 @@ describe('POST /api/sessions/:id/stop', () => {
     seedRoster(home);
     seedWellFormed(home, 'demo-a-demo');
     const calls: string[][] = [];
-    const run: Runner = async (_c, args) => { calls.push(args); return { code: 0, stdout: '', stderr: '' }; };
+    const run: Runner = async (_c, args) => { calls.push(args); return { ran: true, code: 0, stdout: '', stderr: '' }; };
     const cfg = loadConfig({ CCRC_HOME: home });
     const app = await buildServer(
       { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: unreadableField('demo-a-demo', 'wrapper'),
@@ -1339,7 +1343,7 @@ describe('POST /api/sessions/:id/stop', () => {
     seedRoster(home);
     seedWellFormed(home, 'demo-a-demo');
     const calls: string[][] = [];
-    const run: Runner = async (_c, args) => { calls.push(args); return { code: 0, stdout: '', stderr: '' }; };
+    const run: Runner = async (_c, args) => { calls.push(args); return { ran: true, code: 0, stdout: '', stderr: '' }; };
     const cfg = loadConfig({ CCRC_HOME: home });
     const app = await buildServer(
       { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: unreadableField('demo-a-demo', 'wrapper'),
@@ -1364,7 +1368,7 @@ describe('POST /api/sessions/:id/stop', () => {
     // the directory present but no `<ID>.uuid` file in it, the listing
     // genuinely names this id absent.
     mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
-    const run: Runner = async () => ({ code: 0, stdout: '', stderr: '' });
+    const run: Runner = async () => ({ ran: true, code: 0, stdout: '', stderr: '' });
     const cfg = loadConfig({ CCRC_HOME: home });
     const app = await buildServer(
       { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue() }, new Bus(),
@@ -1388,7 +1392,7 @@ describe('POST /api/sessions/:id/stop', () => {
     const home = mkTmp('ccrc-');
     seedRoster(home);
     seedSession(home, ID, 'claude-a');
-    const run: Runner = async () => ({ code: 0, stdout: '', stderr: '' });
+    const run: Runner = async () => ({ ran: true, code: 0, stdout: '', stderr: '' });
     const cfg = loadConfig({ CCRC_HOME: home });
     const unlistable: FleetIO = { ...localIO, readdir: async () => null };
     const app = await buildServer(
@@ -1407,7 +1411,7 @@ describe('POST /api/sessions/:id/stop', () => {
     const id = 'demo-a-demo';
     seedWellFormed(home, id);
     const calls: string[][] = [];
-    const run: Runner = async (_c, args) => { calls.push([...args]); return { code: 0, stdout: '', stderr: '' }; };
+    const run: Runner = async (_c, args) => { calls.push([...args]); return { ran: true, code: 0, stdout: '', stderr: '' }; };
     const cfg = loadConfig({ CCRC_HOME: home });
     const app = await buildServer(
       { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue() }, new Bus(),
@@ -1448,7 +1452,7 @@ describe('POST /api/sessions/:id/hold and /release', () => {
     seedRoster(home);
     seedSession(home, ID, 'claude-a');
     const calls: string[][] = [];
-    const run: Runner = async (cmd, args) => { calls.push([cmd, ...args]); return { code: 0, stdout: '', stderr: '' }; };
+    const run: Runner = async (cmd, args) => { calls.push([cmd, ...args]); return { ran: true, code: 0, stdout: '', stderr: '' }; };
     const deps = { ...testDeps(home, run), fleetState: { connected: true, downSince: null, ccdVerbs: ['start'], rosterFp: null, build: null } };
     const app = await buildServer(deps);
     const resHold = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/hold`, payload: { reason: 'w' } });
@@ -1468,9 +1472,9 @@ describe('POST /api/sessions/:id/hold and /release', () => {
     const calls: string[][] = [];
     const run: Runner = async (cmd, args) => {
       calls.push([cmd, ...args]);
-      if (args[0] === 'ws-hold') return { code: 0, stdout: `held ${ID}`, stderr: '' };
-      if (args[0] === 'ws-release') return { code: 0, stdout: `released ${ID}`, stderr: '' };
-      return { code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'ws-hold') return { ran: true, code: 0, stdout: `held ${ID}`, stderr: '' };
+      if (args[0] === 'ws-release') return { ran: true, code: 0, stdout: `released ${ID}`, stderr: '' };
+      return { ran: true, code: 0, stdout: '', stderr: '' };
     };
     const app = await buildServer(testDeps(home, run));
 
@@ -1499,7 +1503,7 @@ describe('POST /api/sessions/:id/hold and /release', () => {
     seedRoster(home);
     seedSession(home, ID, 'claude-a');
     const calls: string[][] = [];
-    const run: Runner = async (cmd, args) => { calls.push([cmd, ...args]); return { code: 0, stdout: '', stderr: '' }; };
+    const run: Runner = async (cmd, args) => { calls.push([cmd, ...args]); return { ran: true, code: 0, stdout: '', stderr: '' }; };
     const app = await buildServer(testDeps(home, run));
     const reason = 'x'.repeat(HOLD_ROUTE_REASON_MAX_BYTES);
     const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/hold`, payload: { reason } });
@@ -1610,16 +1614,16 @@ describe('layer 1 — the guard runner', () => {
     // Free on every existing route test: testDeps wraps its runner, so a route
     // that starts emitting a non-whitelisted argv fails HERE rather than on
     // the fleet.
-    const inner: Runner = async () => ({ code: 0, stdout: '', stderr: '' });
+    const inner: Runner = async () => ({ ran: true, code: 0, stdout: '', stderr: '' });
     await expect(guardRunner(inner)('/home/u/.local/bin/ccd', ['ws-rm', 'x']))
       .rejects.toThrow(/argv not in the agent EXEC_WHITELIST: ccd ws-rm x/);
   });
 
   it('lets a whitelisted argv through untouched — the guard is not a blanket refusal', async () => {
     // Without this, "rejects everything" would satisfy the test above.
-    const inner: Runner = async () => ({ code: 0, stdout: 'ok', stderr: '' });
+    const inner: Runner = async () => ({ ran: true, code: 0, stdout: 'ok', stderr: '' });
     await expect(guardRunner(inner)('/home/u/.local/bin/ccd', ['ensure', 'demo-quiet-basin']))
-      .resolves.toEqual({ code: 0, stdout: 'ok', stderr: '' });
+      .resolves.toEqual({ ran: true, code: 0, stdout: 'ok', stderr: '' });
   });
 
   // MUTATION-SWEEP FINDING (Task 11): replacing `ccdRunner(guarded, cfg)` with
@@ -1633,7 +1637,7 @@ describe('layer 1 — the guard runner', () => {
   // there is no raw runner on Deps any more) to `deps.runCcd`; it observes the
   // same composition, one link further down the same chain.
   it('testDeps wires the guard onto deps.runCcd, not just reachable via a direct guardRunner call', async () => {
-    const deps = testDeps(undefined, async () => ({ code: 0, stdout: '', stderr: '' }));
+    const deps = testDeps(undefined, async () => ({ ran: true, code: 0, stdout: '', stderr: '' }));
     // The cast is deliberate and is the point: since task 13S no route CAN
     // build this argv — that half is the brand, pinned in
     // ccdargv-brand.test.ts. This half is that a whitelist check still stands
@@ -1653,7 +1657,7 @@ describe('layer 1 — the guard runner', () => {
   // guard is actually load-bearing on this path rather than one refactor away
   // from being deleted as dead code.
   it('testDeps wires the guard onto deps.tmux as well, not just onto deps.runCcd', async () => {
-    const deps = testDeps(undefined, async () => ({ code: 0, stdout: '', stderr: '' }));
+    const deps = testDeps(undefined, async () => ({ ran: true, code: 0, stdout: '', stderr: '' }));
     const tmuxRunner = (deps.tmux as unknown as { run: Runner }).run;
     await expect(tmuxRunner('tmux', ['kill-session', '-t', '=cc-x:']))
       .rejects.toThrow(/argv not in the agent EXEC_WHITELIST/);
@@ -1703,8 +1707,8 @@ describe('POST /api/sessions/:id/archive — and an open run', () => {
   // UNMEASURED row (`status-unknown`, D-5274), and these tests are about the coordination checks behind it.
   const recording = (calls: string[][]): Runner => async (_cmd, args) => {
     calls.push(args);
-    if (args[0] === 'list-panes') return { code: 0, stdout: '4242\n', stderr: '' };
-    return { code: 0, stdout: '', stderr: '' };
+    if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: '4242\n', stderr: '' };
+    return { ran: true, code: 0, stdout: '', stderr: '' };
   };
 
   // D-2545 REGRESSION PIN, and the reason it is called out by name: the

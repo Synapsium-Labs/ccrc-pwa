@@ -30,7 +30,7 @@ export function isArchiveGateKebab(token: string): boolean {
 /** What reading the session's registry row answered, keyed by what it could not do (`readSessionRecord`'s arms). */
 export type AdmissionRecordRead<R> =
   | { readonly kind: 'found'; readonly record: R }
-  | { readonly kind: 'unlistable' | 'absent' | 'bad-id' };
+  | { readonly kind: 'unlistable' | 'absent' | 'unmeasurable' | 'bad-id' };
 
 /** What the route can read. Each probe is asked at most once, and only when every earlier gate passed. */
 export interface ArchiveAdmissionProbes<R, I> {
@@ -52,8 +52,8 @@ export type ArchiveAdmission<R, I> =
 
 /** The word each unreadable row arm answers. An arm masked by `known-id` (`bad-id`, `absent` between two reads) answers
  *  its request-shape word all the same. */
-const RECORD_WORD: Readonly<Record<'unlistable' | 'absent' | 'bad-id', RouteRefusal>> = {
-  unlistable: 'registry-unmeasurable', absent: 'unknown-session', 'bad-id': 'bad-session-id',
+const RECORD_WORD: Readonly<Record<'unlistable' | 'absent' | 'unmeasurable' | 'bad-id', RouteRefusal>> = {
+  unlistable: 'registry-unmeasurable', absent: 'unknown-session', unmeasurable: 'unknown-session', 'bad-id': 'bad-session-id',
 };
 
 const refused = (gate: ArchiveGate, word: RouteRefusal): { ok: false; gate: ArchiveGate; word: RouteRefusal } =>

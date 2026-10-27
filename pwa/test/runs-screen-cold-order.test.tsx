@@ -27,7 +27,7 @@ const run = (over: Partial<RunSummary> = {}): RunSummary => ({
   handoffCommit: null, items: { done: 3, total: 7 }, unreadMail: 0,
   health: { mailOutstanding: 0, mailParked: 0, mailReplayMax: 0, doneRejects: 0,
             lastRejectCode: null, briefQueued: true, clearError: null,
-            coordKickoffPendingSince: null }, childReclaim: null, ...over,
+            coordKickoffPendingSince: null }, childReclaim: null, reviewCap: null, ...over,
 });
 const finished = (word: ChildReclaimStatus['word']): RunSummary =>
   run({ id: 7, state: 'done', closedAt: Date.now() - 60_000, childReclaim: { word, sentence: null, at: null } });
@@ -36,6 +36,8 @@ const makeStore = (): FleetStore => createFleetStore({
   makeSocket: () => ({ onopen: null, onmessage: null, onclose: null, onerror: null, close(): void {} }) as unknown as WebSocket,
 });
 const NO_CAPS = (): Promise<CoordCapsView> => new Promise<CoordCapsView>(() => {});
+/** A held spend read: the board's default would send GET /api/runs/:id through the global fetch. */
+const NO_SPEND = (): Promise<import('../../shared/api').RunSpend> => new Promise(() => {});
 
 const T = 1_758_500_000_000;
 const coordAt = (doneAt: number): CoordStatus =>
@@ -58,7 +60,7 @@ const boardWithTwoReadsInFlight = async () => {
       reject: async () => { await act(async () => { rej(new Error('network')); }); },
     });
   }));
-  render(<RunsScreen store={store} loadRuns={loadRuns} loadCaps={NO_CAPS} />);
+  render(<RunsScreen store={store} loadRuns={loadRuns} loadCaps={NO_CAPS} loadSpend={NO_SPEND} />);
   await waitFor(() => expect(loadRuns).toHaveBeenCalledTimes(1));
   await reads[0]!.resolve([finished('pending')]);
   await screen.findByRole('group', { name: /finished/i });
@@ -123,7 +125,7 @@ describe('RunsScreen: the archive read is a high-water mark (spec §5.9)', () =>
     // the board on "Loading…" for good.
     const store = makeStore();
     const loadRuns = vi.fn(async () => null as unknown as { runs: RunSummary[] });
-    render(<RunsScreen store={store} loadRuns={loadRuns} loadCaps={NO_CAPS} />);
+    render(<RunsScreen store={store} loadRuns={loadRuns} loadCaps={NO_CAPS} loadSpend={NO_SPEND} />);
     await waitFor(() => expect(document.querySelector('[data-empty-state]')?.getAttribute('data-state')).toBe('error'));
   });
 });

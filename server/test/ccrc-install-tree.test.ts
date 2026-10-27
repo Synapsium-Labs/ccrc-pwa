@@ -7,7 +7,7 @@ import { mkdirSync, readFileSync, writeFileSync, existsSync, statSync, chmodSync
 import path, { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { mkTmp, removeTmpFixturesEachTest } from './tmpHelpers.js';
-import { renderCcdEntry } from './ccdWsHelpers.js';
+import { installedCcdBody, renderCcdEntry } from './ccdWsHelpers.js';
 import { CONTAINED_TOOLS, assertNoRealTool, plantPoison } from './containedTools.js';
 import { describeLinux, describeDarwin, itLinux, itDarwin } from './platformFixtures.js';
 import { TREE_STUBS, installFixtureTree, rsyncRecorder } from './installTreeFixture.js';
@@ -1031,7 +1031,7 @@ describe('ccrc install: the executables and files it installs', () => {
     expect(installed.r.stdout).toMatch(/^install: files: /m);
   });
 
-  it('ccd reaches PATH as an executable byte copy of the tree it was placed from', () => {
+  it('ccd reaches PATH as an executable, stamped copy of the tree it was placed from', () => {
     // FROM THE PLACED TREE, not from the checkout. After `_inst_tree` the two
     // are identical, so the assertion cannot tell them apart — but the box's
     // own invariant can: the `ccd` on PATH and the `ccd` inside the tree the
@@ -1051,7 +1051,10 @@ describe('ccrc install: the executables and files it installs', () => {
     // box's `~/ccrc` — so the answer is to not wear that shape, rather than to
     // add this file to the guard's exclusion list and blind it to a real second
     // spelling arriving here later.
-    expect(readFileSync(bin)).toEqual(readFileSync(placed(home, 'ccd/ccd')));
+    // Install-time stamping: the body is the placed tree's ccd with its line-2 placeholder swapped, in place, for the
+    // marker (ccd-entry-install.py; ccd-install-stamp.test.ts owns the rule) - so the bytes are the stamped copy.
+    // The library pin is rendered from the placed library first (D-6913), under that stamp.
+    expect(readFileSync(bin, 'utf8')).toBe(installedCcdBody(readFileSync(placed(home, 'ccd/ccd'), 'utf8'), readFileSync(placed(home, 'ccd/lib/disk-retention.sh'))));
     expect(mode(bin)).toBe(0o644);
     // The launcher: the placed template rendered for the canonical python3 its
     // own shebang names and the body's digest — nothing else, byte for byte.

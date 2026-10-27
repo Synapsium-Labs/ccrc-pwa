@@ -15,7 +15,7 @@ import fs from 'node:fs';
 import { COLLECT_LEAF_END_WORDS, LIFECYCLE_MEAS_KEYS, isCollectLeafEndWord } from '../../shared/api.js';
 import { parseJournalLine, reviveMeas } from '../src/coord/journalparse.js';
 import { makePrHarness, type PrHarness } from './ccdPrHelpers.js';
-import { CCD, makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
+import { makeCcdHarness, type CcdHarness, ccdSource } from './ccdWsHelpers.js';
 import { NO_TMUX, eventsOf, readJournal } from './lifecycleHelpers.js';
 import {
   COL_ID, LINUX, NO_COPY, collectVerb, crashAt, crashedAt, docOf, leafOf, orphanLeaf, recordsOf, tokenOf,
@@ -121,7 +121,7 @@ describe('the encoder keeps leaf through its truncation ladder (path-identity sp
 
 describe('the leaf words ccd writes are L0s, both directions (path-identity spec §3.4)', () => {
   it('case 7: every meas.leaf word in ccd is in COLLECT_LEAF_END_WORDS, and every one of them is written', () => {
-    const src = fs.readFileSync(CCD, 'utf8');
+    const src = ccdSource();
     const written = [...src.matchAll(/\bmeas\.leaf\s+([a-z-]+)/g)].map((m) => m[1]!);
     expect(written, 'the two `_lc_done collect` lines of the witnessed arm and the loose arm\'s done line').toHaveLength(3);
     expect(COLLECT_LEAF_END_WORDS, 'the CONTROL: L0 declares two words').toHaveLength(2);

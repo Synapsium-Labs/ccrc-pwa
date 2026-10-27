@@ -407,8 +407,10 @@ const fixture = (name: string): string =>
 /** One poll of a live stream. `tick` is private only to keep it off the class's
  *  public surface; the harness wants exactly what the 2 s interval does, awaited,
  *  so these tests never sleep. */
-const pollOnce = (s: SessionStream): Promise<void> =>
-  (s as unknown as { tick: () => Promise<void> }).tick();
+const pollOnce = async (s: SessionStream): Promise<void> => {
+  await (s as unknown as { tick: () => Promise<void> }).tick();
+  await (s as unknown as { feed: { poll(): Promise<void> } | null }).feed?.poll();   // the session feed's own tick (ARCH-52)
+};
 
 /**
  * Run a SessionStream against a scripted sequence of pane captures and transcript
@@ -457,14 +459,14 @@ const streamWith = async (opts: {
   let step = 0; // which poll we are on: 0 is start(), then one per tick
   const at = <T,>(xs: readonly T[], i: number): T => xs[Math.min(i, xs.length - 1)]!;
   const run: Runner = async (_cmd, args) => {
-    if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
-    if (args[0] === 'list-panes') return { code: 0, stdout: `${PID}\n`, stderr: '' };
+    if (args[0] === 'has-session') return { ran: true, code: 0, stdout: '', stderr: '' };
+    if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: `${PID}\n`, stderr: '' };
     if (args[0] === 'capture-pane') {
       const pane = at(panes, step);
       for (const a of opts.answeredDuringCapture ?? []) if (a.step === step) bus.emit(`answered:${ID}`, a.next);
-      return pane === null ? { code: 1, stdout: '', stderr: '' } : { code: 0, stdout: pane, stderr: '' };
+      return pane === null ? { ran: true, code: 1, stdout: '', stderr: '' } : { ran: true, code: 0, stdout: pane, stderr: '' };
     }
-    return { code: 0, stdout: '', stderr: '' };
+    return { ran: true, code: 0, stdout: '', stderr: '' };
   };
   // The tailer reads through io.tailFile, and `since` skips the backlog, so a
   // readFileFrom on the transcript is an ask read and nothing else — save the
@@ -999,7 +1001,7 @@ describe('dialog enrichment', () => {
 
   // Stage 2e Task 3 (D-102). With RC off, a genuinely busy pane renders "esc
   // to interrupt" WHILE a permission/AskUserQuestion dialog is painted below
-  // it — a real, expected combined screen (fleet.ts's liveStatus doc: an
+  // it — a real, expected combined screen (the deleted liveStatus's doc said so: an
   // RC-off pane DOES render the busy marker, unlike a --remote-control one).
   // `checkDialog`'s own gate asks `hasMenu`, not `paneState() === 'menu'` —
   // the send.ts:320 idiom, independent of the busy check for exactly this
@@ -1035,9 +1037,9 @@ describe('session WS', () => {
     fileB = path.join(home, '.claude-a', 'projects', MUNGED, `${UUID_B}.jsonl`);
 
     const run: Runner = async (_cmd, args) => {
-      if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
-      if (args[0] === 'list-panes') return { code: 0, stdout: `${PID}\n`, stderr: '' };
-      return { code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'has-session') return { ran: true, code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: `${PID}\n`, stderr: '' };
+      return { ran: true, code: 0, stdout: '', stderr: '' };
     };
     const cfg = loadConfig({ CCRC_HOME: home });
     const deps: Deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue() };
@@ -1181,10 +1183,10 @@ describe('session WS', () => {
       '  3. Chat about this\n' +
       '\nEnter to select · ↑/↓ to navigate · Esc to cancel\n';
     const menuRun: Runner = async (_cmd, args) => {
-      if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
-      if (args[0] === 'list-panes') return { code: 0, stdout: `${PID}\n`, stderr: '' };
-      if (args[0] === 'capture-pane') return { code: 0, stdout: menuPane, stderr: '' };
-      return { code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'has-session') return { ran: true, code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: `${PID}\n`, stderr: '' };
+      if (args[0] === 'capture-pane') return { ran: true, code: 0, stdout: menuPane, stderr: '' };
+      return { ran: true, code: 0, stdout: '', stderr: '' };
     };
     const menuCfg = loadConfig({ CCRC_HOME: home });
     const menuApp = await buildServer({ cfg: menuCfg, runCcd: ccdRunner(menuRun, menuCfg), tmux: new Tmux(menuRun), io: localIO, queue: new KeyedQueue() }, new Bus());
@@ -1245,9 +1247,9 @@ const unlistableIO: FleetIO = { ...localIO, readdir: async () => null };
 
 const mkLadderDeps = (home: string, io: FleetIO): Deps => {
   const run: Runner = async (_cmd, args) => {
-    if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
-    if (args[0] === 'list-panes') return { code: 0, stdout: `${PID}\n`, stderr: '' };
-    return { code: 0, stdout: '', stderr: '' };
+    if (args[0] === 'has-session') return { ran: true, code: 0, stdout: '', stderr: '' };
+    if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: `${PID}\n`, stderr: '' };
+    return { ran: true, code: 0, stdout: '', stderr: '' };
   };
   const cfg = loadConfig({ CCRC_HOME: home });
   return { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io, queue: new KeyedQueue() };
@@ -2905,11 +2907,11 @@ describe('chat header: an unmeasured live status file is not a session at rest (
     seed(home);   // the live file says status: 'idle'
     let pidFails = true;
     const run: Runner = async (_cmd, args) => {
-      if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'has-session') return { ran: true, code: 0, stdout: '', stderr: '' };
       if (args[0] === 'list-panes') {
-        return pidFails ? { code: 1, stdout: '', stderr: 'tmux: timeout' } : { code: 0, stdout: `${PID}\n`, stderr: '' };
+        return pidFails ? { ran: true, code: 1, stdout: '', stderr: 'tmux: timeout' } : { ran: true, code: 0, stdout: `${PID}\n`, stderr: '' };
       }
-      return { code: 0, stdout: '', stderr: '' };
+      return { ran: true, code: 0, stdout: '', stderr: '' };
     };
     const deps: Deps = { ...mkLadderDeps(home, localIO), tmux: new Tmux(run) };
     const frames: { type: string; status?: string; statusUpdatedAt?: number | null }[] = [];
@@ -3096,9 +3098,9 @@ describe('registry ladder: a mid-stream degrade never interrupts the open tail (
     let degrade = false;
     const io = degradedReadIO((p) => degrade && p.endsWith(`${ID}.uuid`));
     const run: Runner = async (_cmd, args) => {
-      if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
-      if (args[0] === 'list-panes') return { code: 0, stdout: `${PID}\n`, stderr: '' };
-      return { code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'has-session') return { ran: true, code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: `${PID}\n`, stderr: '' };
+      return { ran: true, code: 0, stdout: '', stderr: '' };
     };
     const cfg = loadConfig({ CCRC_HOME: home });
     const deps: Deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io, queue: new KeyedQueue() };
@@ -3160,7 +3162,7 @@ describe('session WS — dead session behind a symlinked workdir', () => {
 
     // DEAD is the point: has-session answers 1, so no live cwd can rescue the
     // resolution the way it always rescued running sessions.
-    const run: Runner = async () => ({ code: 1, stdout: '', stderr: '' });
+    const run: Runner = async () => ({ ran: true, code: 1, stdout: '', stderr: '' });
     const cfg = loadConfig({ CCRC_HOME: home });
     const deps: Deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue() };
     const deadApp = await buildServer(deps, new Bus());
@@ -3193,20 +3195,22 @@ describe('outstanding mail push (Build 7 Task 6)', () => {
   let app: FastifyInstance | undefined;
   let port: number;
   let coord: CoordStore;
+  let bus: Bus;
 
   beforeEach(async () => {
     home = mkTmp('ccrc-sws-mail-');
     seedRoster(home);
     seed(home);
     const run: Runner = async (_cmd, args) => {
-      if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
-      if (args[0] === 'list-panes') return { code: 0, stdout: `${PID}\n`, stderr: '' };
-      return { code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'has-session') return { ran: true, code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: `${PID}\n`, stderr: '' };
+      return { ran: true, code: 0, stdout: '', stderr: '' };
     };
     const cfg = loadConfig({ CCRC_HOME: home });
     coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
     const deps: Deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(), coord };
-    app = await buildServer(deps, new Bus());
+    bus = new Bus();
+    app = await buildServer(deps, bus);
     await app.listen({ host: '127.0.0.1', port: 0 });
     const addr = app.server.address();
     port = typeof addr === 'object' && addr !== null ? addr.port : 0;
@@ -3259,9 +3263,9 @@ describe('outstanding mail push (Build 7 Task 6)', () => {
   it("start()'s own checkMail call puts mail on the wire before any poll tick could", async () => {
     queueTo(ID, 'on connect, not on a tick');
     const run: Runner = async (_cmd, args) => {
-      if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
-      if (args[0] === 'list-panes') return { code: 0, stdout: `${PID}\n`, stderr: '' };
-      return { code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'has-session') return { ran: true, code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: `${PID}\n`, stderr: '' };
+      return { ran: true, code: 0, stdout: '', stderr: '' };
     };
     const cfg = loadConfig({ CCRC_HOME: home });
     const deps: Deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(), coord };
@@ -3420,6 +3424,8 @@ describe('outstanding mail push (Build 7 Task 6)', () => {
     expect(initialMail?.mail).toEqual([]);
 
     queueTo(ID, 'fresh mail after connect');
+    // The tick is the watcher's (ARCH-52): a session's feed has no clock, a published pane is what wakes it.
+    bus.emit(`pane:${ID}`, { at: Date.now(), doneAt: Date.now(), pane: 'idle\n❯ \n' });
     let mailFrame: { type: string; mail: { subject: string }[] } | undefined;
     for (let i = 0; i < 6 && !mailFrame; i++) {
       const m = await next(6000);
@@ -3476,9 +3482,9 @@ describe('outstanding mail push (Build 7 Task 6)', () => {
 
   it('sends no mail frame at all with no coord configured — the same absent-store silence every coord route answers', async () => {
     const run: Runner = async (_cmd, args) => {
-      if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
-      if (args[0] === 'list-panes') return { code: 0, stdout: `${PID}\n`, stderr: '' };
-      return { code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'has-session') return { ran: true, code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: `${PID}\n`, stderr: '' };
+      return { ran: true, code: 0, stdout: '', stderr: '' };
     };
     const cfg = loadConfig({ CCRC_HOME: home });
     const deps: Deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue() };
@@ -3654,9 +3660,9 @@ describe('the tasks frame carries touchedAt (D-5372)', () => {
 
   const startFrames = async (): Promise<SessionStreamMsg[]> => {
     const run: Runner = async (_cmd, args) => {
-      if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
-      if (args[0] === 'list-panes') return { code: 0, stdout: `${PID}\n`, stderr: '' };
-      return { code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'has-session') return { ran: true, code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: `${PID}\n`, stderr: '' };
+      return { ran: true, code: 0, stdout: '', stderr: '' };
     };
     const cfg = loadConfig({ CCRC_HOME: home });
     const deps: Deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue() };
@@ -3685,9 +3691,9 @@ describe('the tasks frame carries touchedAt (D-5372)', () => {
     const at = new Date('2026-10-14T11:53:34Z');
     seedTasks(['in_progress'], at);
     const run: Runner = async (_cmd, args) => {
-      if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
-      if (args[0] === 'list-panes') return { code: 0, stdout: `${PID}\n`, stderr: '' };
-      return { code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'has-session') return { ran: true, code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: `${PID}\n`, stderr: '' };
+      return { ran: true, code: 0, stdout: '', stderr: '' };
     };
     const cfg = loadConfig({ CCRC_HOME: home });
     const deps: Deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue() };
@@ -3697,7 +3703,7 @@ describe('the tasks frame carries touchedAt (D-5372)', () => {
       await stream.start();
       const later = new Date('2026-10-17T18:00:00Z');
       utimesSync(path.join(home, '.claude-a', 'tasks', UUID_A, '1.json'), later, later);
-      await (stream as unknown as { checkTasks(c: string, u: string): Promise<void> }).checkTasks(path.join(home, '.claude-a'), UUID_A);
+      await (stream as unknown as { feed: { poll(): Promise<void> } }).feed.poll();   // the next reading of the plan
     } finally {
       stream.stop();
     }

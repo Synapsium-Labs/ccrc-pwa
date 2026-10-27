@@ -29,7 +29,7 @@ const WEEK = 604_800;
 const T0 = 1_790_000_000_000;
 const OLD = T0 / 1000 - 8 * 86_400;
 const tokOf = (id: string): string => (id.length.toString(16) + 'f'.repeat(64)).slice(0, 64);
-type Answer = { code: number; stdout: string; stderr: string };
+type Answer = { ran: true, code: number; stdout: string; stderr: string };
 
 interface Opts {
   cap?: boolean;
@@ -56,7 +56,7 @@ const fixture = async (opts: Opts = {}) => {
   const archivedOf = (id: string): number => Number(readdirSync(reg).includes(`${id}.archived`)
     ? readFileSync(path.join(reg, `${id}.archived`), 'utf8').trim() : 0);
   const run = async (cmd: string, args: string[]): Promise<Answer> => {
-    if (path.basename(cmd) === 'tmux') return { code: 1, stdout: '', stderr: '' };   // the tick's pane reads, not ccd
+    if (path.basename(cmd) === 'tmux') return { ran: true, code: 1, stdout: '', stderr: '' };   // the tick's pane reads, not ccd
     calls.push(args);
     const id = args[args.indexOf('--session') + 1] ?? '';
     if (args[0] === 'ws-audit') {
@@ -64,27 +64,29 @@ const fixture = async (opts: Opts = {}) => {
       const at = archivedOf(id);
       const doc = opts.audit?.(id, at) ?? { verdict: 'expirable', token: tokOf(id) };
       if (doc === 'old-ccd') {
-        return { code: 0, stdout: JSON.stringify({ session: id, mode: 'expire', archivedAt: at, alive: false, exists: true,
+        return { ran: true, code: 0, stdout: JSON.stringify({ session: id, mode: 'expire', archivedAt: at, alive: false, exists: true,
           reaping: null, sensitive: [], verdict: 'expirable', detail: '', token: tokOf(id) }), stderr: '' };
       }
-      return { code: 0, stdout: JSON.stringify({ session: id, mode: 'expire', archivedAt: at, expiresAt: at + WEEK,
+      return { ran: true, code: 0, stdout: JSON.stringify({ session: id, mode: 'expire', archivedAt: at, expiresAt: at + WEEK,
         alive: false, exists: true, reaping: null, sensitive: [], detail: '', ...doc }), stderr: '' };
     }
     if (args[0] === 'ws-expire') {
       if (hold !== undefined) { const h = hold; hold = undefined; await h; }
-      return opts.expire?.(id) ?? { code: 0, stdout: JSON.stringify({ expired: id, archivedAt: archivedOf(id), wip: null,
+      return opts.expire?.(id) ?? { ran: true, code: 0, stdout: JSON.stringify({ expired: id, archivedAt: archivedOf(id), wip: null,
         attic: 2, residueBytes: 0, secretsDropped: 0 }), stderr: '' };
     }
-    return { code: 1, stdout: '', stderr: '' };
+    return { ran: true, code: 1, stdout: '', stderr: '' };
   };
   const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
   const notifyLog = new NotifyLog(path.join(home, '.ccrc', 'notify.json'));
   await notifyLog.load();
   const deps = {
     ...testDeps(home, run), cfg, coord, notifyLog,
+    // The lane's cadence reads the monotonic clock (D-5862): the fixture's one fake clock stands for both.
+    monotonicMs: () => clock,
     fleetState: { connected: true, downSince: null, rosterFp: null, build: null,
       ccdVerbs: ['ws-audit', 'ws-expire', ...(opts.cap === false ? [] : [EXPIRE_CAP]), ACTOR_FLAGS_CAP] },
-    presence: { isVisible: () => false },
+    viewers: { isVisible: () => false },
   };
   const watcher = new FleetWatcher(deps as never, new Bus(), 10_000);
   /** An archived workspace, as `ws-archive` leaves it: the epoch in `.archived`. */
@@ -148,8 +150,8 @@ describe('a failed state-changed is audited afresh (wave 5)', () => {
   it('the lane forgets what it learned, audits again, and composes again only once seen eligible twice — no attention entry; the feed row says why', async () => {
     let n = 0;
     const f = await fixture({ expire: (id) => (n += 1) === 1
-      ? { code: 1, stdout: JSON.stringify({ failed: 'state-changed', detail: `ws/${id} read present when the token was checked inside the lock, but absent when the pin read it again` }), stderr: '' }
-      : { code: 0, stdout: JSON.stringify({ expired: id, archivedAt: OLD, wip: null, attic: 2, residueBytes: 0, secretsDropped: 0, clipsKept: null, tmpRootKept: null }), stderr: '' } });
+      ? { ran: true, code: 1, stdout: JSON.stringify({ failed: 'state-changed', detail: `ws/${id} read present when the token was checked inside the lock, but absent when the pin read it again` }), stderr: '' }
+      : { ran: true, code: 0, stdout: JSON.stringify({ expired: id, archivedAt: OLD, wip: null, attic: 2, residueBytes: 0, secretsDropped: 0, clipsKept: null, tmpRootKept: null }), stderr: '' } });
     f.touch(EXPIRE_LANE_LIVE_MARKER);
     f.plant('demo-a');
     await threePasses(f);
@@ -175,7 +177,7 @@ describe('a failed state-changed is audited afresh (wave 5)', () => {
 
 describe('a RECURRING restart is counted (wave 6, ruling C)', () => {
   it('it backs off as any failure does and is listed after the hour — where today it composed every third pass, unlisted, for ever', async () => {
-    const f = await fixture({ expire: () => ({ code: 1, stdout: JSON.stringify({ failed: 'state-changed', detail: 'moved' }), stderr: '' }) });
+    const f = await fixture({ expire: () => ({ ran: true, code: 1, stdout: JSON.stringify({ failed: 'state-changed', detail: 'moved' }), stderr: '' }) });
     f.touch(EXPIRE_LANE_LIVE_MARKER);
     f.plant('demo-a');
     const acts: number[] = [];
@@ -203,7 +205,7 @@ describe('a RECURRING restart is counted (wave 6, ruling C)', () => {
 
 describe('`crumb` decides a failed document (wave 6, question (k))', () => {
   it('a RESUMED expiry’s probe-unmeasured (crumb true) is retried on the backoff and listed past the hour — never stopped for good', async () => {
-    const f = await fixture({ expire: () => ({ code: 1, stdout: JSON.stringify({ failed: 'probe-unmeasured',
+    const f = await fixture({ expire: () => ({ ran: true, code: 1, stdout: JSON.stringify({ failed: 'probe-unmeasured',
       detail: 'whether cc-demo-a is up could not be asked — tmux answered: nothing', crumb: true }), stderr: '' }) });
     f.touch(EXPIRE_LANE_LIVE_MARKER);
     f.plant('demo-a');
@@ -219,8 +221,8 @@ describe('`crumb` decides a failed document (wave 6, question (k))', () => {
   it('a FRESH expiry’s pin-failed (crumb false) is audited afresh — nothing was deleted, nothing is listed', async () => {
     let n = 0;
     const f = await fixture({ expire: (id) => (n += 1) === 1
-      ? { code: 1, stdout: JSON.stringify({ failed: 'pin-failed', detail: 'the disk is full', crumb: false }), stderr: '' }
-      : { code: 0, stdout: JSON.stringify({ expired: id, archivedAt: OLD, wip: null, attic: 2, residueBytes: 0, secretsDropped: 0, clipsKept: null, tmpRootKept: null }), stderr: '' } });
+      ? { ran: true, code: 1, stdout: JSON.stringify({ failed: 'pin-failed', detail: 'the disk is full', crumb: false }), stderr: '' }
+      : { ran: true, code: 0, stdout: JSON.stringify({ expired: id, archivedAt: OLD, wip: null, attic: 2, residueBytes: 0, secretsDropped: 0, clipsKept: null, tmpRootKept: null }), stderr: '' } });
     f.touch(EXPIRE_LANE_LIVE_MARKER);
     f.plant('demo-a');
     await threePasses(f);
@@ -235,8 +237,8 @@ describe('containment-refuted is STUCK (wave 6, ruling B)', () => {
   it('listed AT ONCE, asked again every four hours, never stopping, one feed row — and an attempt that completes ends it', async () => {
     let stuck = true;
     const f = await fixture({ expire: (id) => stuck
-      ? { code: 1, stdout: JSON.stringify({ failed: 'containment-refuted', detail: 'demo-other’s registry row lies inside /w/demo-a', crumb: true }), stderr: '' }
-      : { code: 0, stdout: JSON.stringify({ expired: id, archivedAt: OLD, wip: null, attic: 2, residueBytes: 0, secretsDropped: 0, clipsKept: null, tmpRootKept: null }), stderr: '' } });
+      ? { ran: true, code: 1, stdout: JSON.stringify({ failed: 'containment-refuted', detail: 'demo-other’s registry row lies inside /w/demo-a', crumb: true }), stderr: '' }
+      : { ran: true, code: 0, stdout: JSON.stringify({ expired: id, archivedAt: OLD, wip: null, attic: 2, residueBytes: 0, secretsDropped: 0, clipsKept: null, tmpRootKept: null }), stderr: '' } });
     f.touch(EXPIRE_LANE_LIVE_MARKER);
     f.plant('demo-a');
     await threePasses(f);
@@ -263,7 +265,7 @@ describe('containment-refuted is STUCK (wave 6, ruling B)', () => {
 
 describe('a failure that will not resume (review 313, parked item 4)', () => {
   it('a wrong-row `expired` is reported at once and never asked again for this archive — not after an hour', async () => {
-    const f = await fixture({ expire: () => ({ code: 0, stdout: JSON.stringify({ expired: 'demo-other', archivedAt: OLD, wip: null }), stderr: '' }) });
+    const f = await fixture({ expire: () => ({ ran: true, code: 0, stdout: JSON.stringify({ expired: 'demo-other', archivedAt: OLD, wip: null }), stderr: '' }) });
     f.touch(EXPIRE_LANE_LIVE_MARKER);
     f.plant('demo-a');
     await threePasses(f);
@@ -277,7 +279,7 @@ describe('a failure that will not resume (review 313, parked item 4)', () => {
 
 describe('a failure that keeps resuming (wave 5)', () => {
   it('a day of resumable failures on one archive: then the persistent tier — asked every four hours, never stopping, and listed with the first failure, the attempts and the last', async () => {
-    const f = await fixture({ expire: () => ({ code: 1, stdout: JSON.stringify({ failed: 'worktree-remove-failed', detail: 'the tree is busy' }), stderr: '' }) });
+    const f = await fixture({ expire: () => ({ ran: true, code: 1, stdout: JSON.stringify({ failed: 'worktree-remove-failed', detail: 'the tree is busy' }), stderr: '' }) });
     f.touch(EXPIRE_LANE_LIVE_MARKER);
     f.plant('demo-a');
     await threePasses(f);
@@ -421,7 +423,7 @@ describe('the lane SHIPS SHADOWED', () => {
   it('an expiry that KEPT a leaf is listed after its row is gone — the only trace of what stays on disk (wave 5)', async () => {
     const f: Fixture = await fixture({ expire: (id) => {
       for (const n of readdirSync(f.reg).filter((x) => x.startsWith(`${id}.`))) rmSync(path.join(f.reg, n));   // ccd purges the row
-      return { code: 0, stdout: JSON.stringify({ expired: id, archivedAt: OLD, wip: null, attic: 2, residueBytes: 0, secretsDropped: 0,
+      return { ran: true, code: 0, stdout: JSON.stringify({ expired: id, archivedAt: OLD, wip: null, attic: 2, residueBytes: 0, secretsDropped: 0,
         clipsKept: 'refused', tmpRootKept: null }), stderr: '' };
     } });
     f.touch(EXPIRE_LANE_LIVE_MARKER);
@@ -524,6 +526,18 @@ describe('`reclaim-paused` — the one cleanup switch — stops the lane ENTIREL
     expect(f.verbsFor('ws-expire'), 'one fresh sighting since the pause — not yet').toEqual([]);
     f.next(); await f.pass();
     expect(f.verbsFor('ws-expire'), 'the second fresh one').toEqual(['demo-a']);
+  });
+});
+
+describe('`child-reclaim-disabled` (ARCH-77, #812) does NOT touch this lane', () => {
+  it('set, with `reclaim-paused` absent, the live lane still audits and asks ws-expire as it does without it', async () => {
+    const f = await fixture();
+    f.touch(EXPIRE_LANE_LIVE_MARKER);
+    f.touch('child-reclaim-disabled');
+    f.plant('demo-a');
+    await threePasses(f);
+    expect(f.verbsFor('ws-expire')).toEqual(['demo-a']);
+    expect(f.feed()).toContainEqual(['demo-a', 'archived workspace cleaned up']);
   });
 });
 
@@ -678,7 +692,7 @@ describe('the act re-reads what the pass read — a run bound meanwhile is never
 
 describe('the box words', () => {
   it('flock-unavailable stops the lane on that box: nothing more is composed there', async () => {
-    const f = await fixture({ expire: () => ({ code: 1, stdout: '',
+    const f = await fixture({ expire: () => ({ ran: true, code: 1, stdout: '',
       stderr: 'ccd: flock (util-linux) is unavailable — refusing to run the destructive verb unserialised' }) });
     f.touch(EXPIRE_LANE_LIVE_MARKER);
     f.plant('demo-a'); f.plant('demo-b');
@@ -693,8 +707,8 @@ describe('the box words', () => {
 describe('the halt is on EVERY standing row (review 381, F3)', () => {
   it('a stuck entry, and a flock-unavailable answer for another row: the stuck row’s attention sentence says the lane composes nothing until a restart', async () => {
     const f = await fixture({ expire: (id) => id === 'demo-a'
-      ? { code: 1, stdout: JSON.stringify({ failed: 'containment-refuted', detail: 'demo-other’s registry row lies inside /w/demo-a', crumb: true }), stderr: '' }
-      : { code: 1, stdout: '', stderr: 'ccd: flock (util-linux) is unavailable — refusing to run the destructive verb unserialised' } });
+      ? { ran: true, code: 1, stdout: JSON.stringify({ failed: 'containment-refuted', detail: 'demo-other’s registry row lies inside /w/demo-a', crumb: true }), stderr: '' }
+      : { ran: true, code: 1, stdout: '', stderr: 'ccd: flock (util-linux) is unavailable — refusing to run the destructive verb unserialised' } });
     f.touch(EXPIRE_LANE_LIVE_MARKER);
     f.plant('demo-a');
     await threePasses(f);
@@ -760,7 +774,7 @@ describe('the ranked held bytes ride the pass (D-5943)', () => {
   });
 
   it('armed, a row the act finds GONE leaves the block at once — never listed as `not-yet-audited` on its way out', async () => {
-    const f = await fixture({ expire: (id) => ({ code: 1, stdout: JSON.stringify({ refused: 'no-such-session', detail: id }), stderr: '' }) });
+    const f = await fixture({ expire: (id) => ({ ran: true, code: 1, stdout: JSON.stringify({ refused: 'no-such-session', detail: id }), stderr: '' }) });
     f.touch(EXPIRE_LANE_LIVE_MARKER);
     f.plant('demo-a');
     f.plant('demo-b', OLD + 1);

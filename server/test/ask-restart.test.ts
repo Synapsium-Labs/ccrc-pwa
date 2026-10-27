@@ -9,7 +9,7 @@ import path from 'node:path';
 import { Bus } from '../src/bus.js';
 import type { Runner } from '../src/exec.js';
 import { FleetWatcher } from '../src/watch.js';
-import { testDeps } from './helpers.js';
+import { testDeps, withFakeClock } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import type { PushPayload } from '../src/push.js';
 import { openCoordDb } from '../src/coord/db.js';
@@ -72,24 +72,24 @@ function fixture() {
   const panes = new Map<string, string>();
   const unmeasured = new Set<string>();
   const runner: Runner = async (_cmd, args) => {
-    if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
+    if (args[0] === 'has-session') return { ran: true, code: 0, stdout: '', stderr: '' };
     const id = /^=cc-(.*):$/.exec(args[2] ?? '')?.[1] ?? '';
     if (args[0] === 'list-panes') {
       const p = pids.get(id);
-      return { code: 0, stdout: p ? `${p}\n` : '', stderr: '' };
+      return { ran: true, code: 0, stdout: p ? `${p}\n` : '', stderr: '' };
     }
     if (args[0] === 'capture-pane') {
-      if (unmeasured.has(id)) return { code: 1, stdout: '', stderr: 'capture failed' };
-      return { code: 0, stdout: panes.get(id) ?? BARE_PROMPT, stderr: '' };
+      if (unmeasured.has(id)) return { ran: true, code: 1, stdout: '', stderr: 'capture failed' };
+      return { ran: true, code: 0, stdout: panes.get(id) ?? BARE_PROMPT, stderr: '' };
     }
-    return { code: 0, stdout: '', stderr: '' };
+    return { ran: true, code: 0, stdout: '', stderr: '' };
   };
   const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
   const sent: PushPayload[] = [];
   const push = { notify: async (p: PushPayload) => { sent.push(p); } };
   const deps = { ...testDeps(home, runner), push: push as never, coord, io: localIO };
   const watcher = (withCoord = true): FleetWatcher =>
-    new FleetWatcher(withCoord ? deps : { ...deps, coord: undefined }, new Bus(), 10_000);
+    new FleetWatcher(withFakeClock(withCoord ? deps : { ...deps, coord: undefined }), new Bus(), 10_000);
   const writeHook = (ask: unknown, state = 'waiting'): void => {
     writeFileSync(path.join(reg, `${CHILD}.hookstate.json`), JSON.stringify({
       v: 1, state, sessionId: `u-${CHILD}`, pid: 1, updatedAt: Date.now(), ask, subagents: [],

@@ -323,7 +323,10 @@ describe('FleetScreen', () => {
     seed(store, { conn: 'open', sessions: [] });
 
     expect(screen.getByText('No sessions yet')).toBeInTheDocument();
-    expect(await screen.findByRole('link', { name: 'account usage — open accounts' })).toBeInTheDocument();
+    // With a lane to show, the strip is a group of lane doors and the strip's door to /accounts is its All accounts
+    // button at the end (T2c, D-6329).
+    const all = await screen.findByRole('button', { name: 'All accounts' });
+    expect(all).toHaveAttribute('data-command', 'go-accounts');
   });
 
   it('renders the accounts strip during the initial skeleton load, not just once sessions are known', () => {
@@ -2378,7 +2381,7 @@ const runRow = (over: Partial<RunSummary> = {}): RunSummary => ({
   // predates the warn row and must keep rendering exactly as it did.
   health: { mailOutstanding: 0, mailParked: 0, mailReplayMax: 0, doneRejects: 0,
             lastRejectCode: null, briefQueued: true, clearError: null,
-            coordKickoffPendingSince: null }, childReclaim: null, ...over,
+            coordKickoffPendingSince: null }, childReclaim: null, reviewCap: null, ...over,
 });
 
 describe('the programme tree on the fleet screen', () => {

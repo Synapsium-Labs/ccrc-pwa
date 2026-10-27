@@ -47,6 +47,7 @@ import { groupByStatus, STATUS_GROUPS, type StatusGroup } from '../../fleet/stat
 import { acksSnapshot, subscribeAcks } from '../../lib/seen';
 import { matchRoute } from '../../lib/routes';
 import { navigate, useLocation } from '../../lib/router';
+import { rovingStep } from '../../lib/rovingStep';
 import { DESK_QUERY, useMediaQuery } from '../../lib/useMediaQuery';
 
 /** The toggle's per-device memory. */
@@ -81,12 +82,10 @@ type PhoneTab = 'attention' | 'done' | 'working' | 'all';
 const PHONE_TABS: readonly PhoneTab[] = ['attention', 'done', 'working', 'all'];
 const tabLabel = (t: PhoneTab): string => (t === 'all' ? 'All' : STATUS_GROUPS[t].label);
 
-const STEP: Readonly<Record<string, number>> = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 };
-
-/** Roving choice over a radiogroup or tablist: an arrow, Home or End picks its target and moves focus there. */
+/** Roving choice over a radiogroup or tablist: an arrow, Home or End picks its target and moves focus there. The step
+ *  is `rovingStep`'s (wrapping, a choice that cycles); this is its event half. */
 function rovingKey(e: KeyboardEvent<HTMLElement>, at: number, n: number, role: string, pick: (i: number) => void): void {
-  const next = e.key === 'Home' ? 0 : e.key === 'End' ? n - 1
-    : STEP[e.key] === undefined ? null : (at + STEP[e.key]! + n) % n;
+  const next = rovingStep(e.key, at, n, { wrap: true });
   if (next === null) return;
   e.preventDefault();
   pick(next);

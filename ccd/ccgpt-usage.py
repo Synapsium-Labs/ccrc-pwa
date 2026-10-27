@@ -113,9 +113,30 @@ refusal line, remedy first, and nothing is published (`_require_logged_in`):
   - an expired access token: `token-expired`, none needed, because the
     lane's tier refreshes it on its next request;
   - a library that cannot be loaded: `auth-library-absent`, `ccrc update`.
+
+**The direct arm (codex-bridge Stage 2, Task 14; spec 2026-10-15 §2.6's
+table: "in `direct` mode reads the usage the bridge saw on real traffic and
+asks upstream only when the lane is idle; sends the account id and
+`originator: ccrc`").** On a lane whose `lane.json` names `bridge: "direct"`,
+the bridge keeps the `x-codex-` values of its last upstream response in its
+stats file (`usageHeaders`, `ccd/codexbridge/stats.py`), the file named by
+`lane.json`'s `bridgeFiles.stats`. When that snapshot is at most
+`BRIDGE_FRESH_S` old and carries the primary figure, this poll builds the row
+from it (`_build_row`, the same five names) and publishes it with NO request,
+no probe model and no credential read: the measurement is the bridge's, made on
+the lane's own traffic. Any other stats file (absent, unreadable, another lane's
+or version's, a stamp it cannot read or one in the future, no primary figure) is
+no measurement, and the poll makes today's request instead, with
+`originator: ccrc` (`_bridge_headers`). Only the exact word `direct` is the
+direct arm: a `litellm` lane, and a lane.json from before the bridge (no
+`bridge` key), poll exactly as before, `originator: codex_cli_rs` (D-6373).
+This file stays the only writer of `~/.cc-limits/<id>.json`.
 """
+import datetime
 import json
 import os
+import re
+import stat
 import sys
 import time
 import urllib.error
@@ -151,6 +172,23 @@ DEFAULT_USAGE_ENDPOINT = "https://chatgpt.com/backend-api/codex/responses"
 # task-10 fix-round-1 C-1 paragraph and `_fetch_headers`'s docstring for what closes
 # the gap a hostname check alone cannot.
 _LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
+
+# The direct arm (module docstring): the bridge's `usageHeaders` snapshot is a
+# measurement for this long after its stamp; past it, the lane is idle and this
+# poll asks upstream itself. One poll period (the timer's 15 minutes).
+BRIDGE_FRESH_S = 900
+# A stats file larger than this is not read (the bridge's own load bound,
+# `ccd/codexbridge/stats.py`'s READ_MAX, is the same 16 MiB).
+_STATS_READ_MAX = 16 * 2**20
+# The bridge's stamp, `_iso` in `ccd/codexbridge/stats.py`: ISO-8601 UTC with
+# milliseconds.
+_STATS_STAMP = "%Y-%m-%dT%H:%M:%S.%fZ"
+# A file name `lane.json`'s `bridgeFiles` may carry, as the bridge itself
+# checks it (`ccd/codexbridge/server.py`'s FILE_NAME_RE): never a path.
+_FILE_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+# The originator each mode's request sends: D-6373 for a litellm lane, D27 for
+# a direct one (the bridge's own, `ccd/codexbridge/backend.py`'s ORIGINATOR).
+_ORIGINATOR = {"litellm": "codex_cli_rs", "direct": "ccrc"}
 
 
 def _required_env(name: str) -> str:
@@ -442,6 +480,13 @@ def _num(headers, name: str, default: int = 0) -> int:
         return default
 
 
+def _measured(headers) -> bool:
+    """Whether `headers` (a response's, or the bridge's snapshot) carry the
+    primary usage figure, without which nothing they say is a measurement: the
+    one test both sources pass before `_build_row` reads them."""
+    return headers.get("x-codex-primary-used-percent") is not None
+
+
 class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
     """Refuses every redirect outright (task-10-fix-rulings.md C-1, commit 4893935a):
     `redirect_request` returning `None` makes CPython's own
@@ -480,7 +525,7 @@ _OPENER = urllib.request.build_opener(_NoRedirectHandler)
 _REDIRECT_STATUSES = {301, 302, 303, 307, 308}
 
 
-def _fetch_headers(model: str, token: str, account_id=None):
+def _fetch_headers(model: str, token: str, account_id=None, originator: str = _ORIGINATOR["litellm"]):
     """Make one minimal probe request and return the response headers —
     from a normal 200, or from a 429 that still carries the usage headers
     (task-10 property 4).
@@ -512,8 +557,9 @@ def _fetch_headers(model: str, token: str, account_id=None):
     token, then of the access token). So the header is sent now, when the
     reading has one (`account_id`), as LiteLLM's own tier sends it, which
     disambiguates a token valid across several workspaces; with none it is
-    omitted, as before. `originator` stays `codex_cli_rs` (D-6373): ccrc's own
-    `originator: ccrc` waits for the bridge, which owns the request identity.
+    omitted, as before. `originator` is the caller's: `codex_cli_rs` on a
+    `litellm` lane (D-6373), and ccrc's own `ccrc` on a `direct` lane, whose
+    bridge owns the request identity (codex-bridge D27, Stage 2 Task 14).
 
     Any OTHER failure — no usage header at all (auth failure, a 5xx, a
     malformed response), or any redirect status regardless of its headers
@@ -536,7 +582,10 @@ def _fetch_headers(model: str, token: str, account_id=None):
         "Authorization": f"Bearer {token}",
         "content-type": "application/json",
         "accept": "text/event-stream",
-        "originator": "codex_cli_rs",
+        "originator": originator,
+        # The same on both modes: a direct lane's poll pairs `originator: ccrc` with this user-agent, not the
+        # bridge's ccrc one (`ccd/codexbridge/backend.py`'s `user_agent`, which needs a version this file does not
+        # know); `server/test/ccgpt-usage.test.ts` pins the pair, so a first live check of D27 measures it too.
         "user-agent": "codex_cli_rs/0.0.0 (Unknown 0; unknown) unknown",
         "session_id": "00000000-0000-0000-0000-000000000000",
     }
@@ -549,14 +598,90 @@ def _fetch_headers(model: str, token: str, account_id=None):
         resp.close()
     except urllib.error.HTTPError as e:
         h = e.headers
-        if e.code in _REDIRECT_STATUSES or h.get("x-codex-primary-used-percent") is None:
+        if e.code in _REDIRECT_STATUSES or not _measured(h):
             raise
         e.close()
     return h
 
 
-def _build_row(headers) -> dict:
+def _lane_mode(lane: dict) -> str:
+    """`direct` when `lane.json` names exactly that mode, else `litellm`.
+
+    Not `_codex_lane_mode`'s refusal (`ccd/ccrc`): that reader chooses tiers and
+    must not guess. This poll only chooses where a measurement comes from, and
+    every value but the exact word `direct` (`litellm`, a lane.json from before
+    the bridge with no `bridge` key, a word this build does not know) keeps
+    today's poll exactly, so no reading of this key can stop a lane publishing.
+    """
+    return "direct" if lane.get("bridge") == "direct" else "litellm"
+
+
+def _bridge_headers(lane: dict):
+    """The `x-codex-` values the lane's bridge last saw, as a dict of lower-cased
+    header names to their string values, with the epoch second the bridge saw
+    them, as `(values, stamp)`, when its stats file holds a usable snapshot at
+    most `BRIDGE_FRESH_S` old; else None, and the caller asks upstream.
+
+    The file is `lane.json`'s `bridgeFiles.stats`, a plain file name in the lane
+    directory (never a path, as the bridge checks it). It is read without
+    following a symlink, without blocking on a FIFO, only when it is a regular
+    file, and at most `_STATS_READ_MAX` bytes. A usable snapshot is the
+    bridge's version-1 document for THIS lane whose `usageHeaders` has a stamp
+    in `_STATS_STAMP`'s form that is not in the future and a `values` object of
+    string values that carries the primary figure (`_measured`): as
+    `_fetch_headers` refuses a response without it, a snapshot without it is no
+    measurement, and `_build_row` would publish a `seven` of 0 nobody measured.
+    Never raises: every other file is None.
+    """
+    files = lane.get("bridgeFiles")
+    name = files.get("stats") if isinstance(files, dict) else None
+    if not isinstance(name, str) or not _FILE_NAME_RE.fullmatch(name):
+        return None
+    path = os.path.join(os.path.dirname(LANE_MANIFEST_PATH), name)
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+    except OSError:
+        return None
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            return None
+        with os.fdopen(fd, "rb", closefd=False) as f:
+            raw = f.read(_STATS_READ_MAX + 1)
+        if len(raw) > _STATS_READ_MAX:
+            return None
+        doc = json.loads(raw.decode("utf-8"))
+    except (OSError, ValueError, RecursionError):  # UnicodeDecodeError and JSONDecodeError are ValueErrors
+        return None
+    finally:
+        os.close(fd)
+    if not isinstance(doc, dict) or doc.get("version") != 1 or doc.get("lane") != ACCOUNT_ID:
+        return None
+    snap = doc.get("usageHeaders")
+    if not isinstance(snap, dict):
+        return None
+    at, values = snap.get("at"), snap.get("values")
+    if not isinstance(at, str) or not isinstance(values, dict):
+        return None
+    try:
+        stamp = datetime.datetime.strptime(at, _STATS_STAMP).replace(tzinfo=datetime.timezone.utc).timestamp()
+    except ValueError:  # `_STATS_STAMP` bounds the year to 1-9999, so an aware `.timestamp()` cannot overflow
+        return None
+    age = time.time() - stamp
+    if not 0 <= age <= BRIDGE_FRESH_S:
+        return None
+    if not all(isinstance(v, str) for v in values.values()):  # a JSON object's keys are always strings
+        return None
+    if not _measured(values):
+        return None
+    return values, int(stamp)
+
+
+def _build_row(headers, ts=None) -> dict:
     """Turn the probe's response headers into the row this file publishes.
+
+    `ts` is when the headers were measured: now for a response (the default),
+    and the bridge's own stamp for its snapshot, so a row from a snapshot is
+    never younger than its measurement.
 
     `seven` is always the primary (weekly, 10080min) figure. `five` mirrors
     the secondary figure only when the secondary window is genuinely active
@@ -603,7 +728,7 @@ def _build_row(headers) -> dict:
     out = {
         "five": five,
         "seven": seven,
-        "ts": int(time.time()),
+        "ts": int(time.time()) if ts is None else ts,
         "fiveResetAt": five_reset,
         "sevenResetAt": seven_reset,
     }
@@ -645,12 +770,23 @@ def _publish(out: dict) -> None:
 
 def main() -> None:
     lane = _read_lane()
+    mode = _lane_mode(lane)
+    if mode == "direct":
+        # The direct arm (module docstring): the bridge's own measurement, with no request, no probe model and no
+        # credential read, when it is fresh.
+        seen = _bridge_headers(lane)
+        if seen is not None:
+            values, stamp = seen
+            out = _build_row(values, ts=stamp)
+            _publish(out)
+            print(f"ccgpt-usage: {ACCOUNT_ID} {out['five']}%/5h {out['seven']}%/7d (from the bridge's headers)")
+            return
     model = _probe_model(lane)
     token_dir = _token_dir(lane)
     # Read, never refreshed (codex-bridge Stage 1, Task 7): see `_require_logged_in`. The token is a fixture's
     # synthetic one in every test. This file never stores or logs a credential, and no refusal formats one.
     reading = _require_logged_in(_load_auth_library(), token_dir)
-    headers = _fetch_headers(model, reading.access_token, reading.account_id)
+    headers = _fetch_headers(model, reading.access_token, reading.account_id, _ORIGINATOR[mode])
     out = _build_row(headers)
     _publish(out)
     print(f"ccgpt-usage: {ACCOUNT_ID} {out['five']}%/5h {out['seven']}%/7d")

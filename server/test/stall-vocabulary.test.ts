@@ -59,10 +59,11 @@ describe('REVIEW_DONE_SUBJECT', () => {
 });
 
 describe('the arms, holds and markers are derived from their Records', () => {
-  it('waves 1 and 2 have twelve arms, wave 1 first', () => {
+  it('waves 1 and 2 have fourteen arms, in the Record\'s order (coord-blocked, a wave-1 arm, last)', () => {
     expect(STALL_ARMS).toEqual([
       'quiet', 'limit-cap', 'dialog-cap', 'coord-ball',
-      'orphan-d', 'orphan-e', 'failed', 'frozen', 'dead', 'coord-deaf', 'mail-stuck', 'marker-unreadable',
+      'orphan-d', 'restarted', 'orphan-e', 'failed', 'frozen', 'dead', 'coord-deaf', 'mail-stuck', 'marker-unreadable',
+      'coord-blocked',
     ]);
   });
   it('waves 1 and 2 have fifteen holds, wave 1 first', () => {
@@ -296,14 +297,18 @@ describe('stall.ts is the pure L1 module its docstring says it is', () => {
     expect(code(), 'stall.ts answers HTTP').not.toMatch(/\breply\s*\.|\bFastify|\bapp\s*\./);
     expect(code(), 'stall.ts reaches the store').not.toMatch(/CoordStore|\bcoord\s*\.|\bstore\s*\.|\bdb\s*\.|\.prepare\s*\(/);
   });
-  it('imports values only from shared/api.ts (L0); anything else is a type import', () => {
+  it('imports values only from shared/api.ts (L0) and stallWatchSays from sessionReading (L1, which imports only L0); anything else is a type import', () => {
     const c = code();
     expect(c, 'a side-effect import').not.toMatch(SIDE_EFFECT_IMPORT);
     expect(c, 'a dynamic import').not.toMatch(/\bimport\s*\(/);
     expect(c, 'a re-export').not.toMatch(RE_EXPORT);
     for (const spec of valueImportSpecifiers(c)) {
-      expect(spec, `stall.ts takes a value import from ${spec}`).toBe('../../../shared/api.js');
+      expect(['../../../shared/api.js', '../sessionReading.js'], `stall.ts takes a value import from ${spec}`).toContain(spec);
     }
+    // From sessionReading, `stallWatchSays` ALONE, and on exactly this one line: a second name, or a second import
+    // from the module, would let the lane reach the policy table or `turnSays` and spell a policy name of its own.
+    const fromReading = [...c.matchAll(/^\s*import\s[^'"]*?\bfrom\s*(['"])\.\.\/sessionReading\.js\1;?$/gm)].map((m) => m[0].trim());
+    expect(fromReading, 'the one import from sessionReading').toEqual([`import { stallWatchSays } from '../sessionReading.js';`]);
   });
 });
 
@@ -347,11 +352,11 @@ describe('the turn marker port: its state words, staleness and restart grace (wo
 // ── Wave 2's vocabulary (plan Task 10; design 2026-09-29 §5.1, §5.2, §10) ─────────────────────────────────────
 const W2_H = 3_600_000;
 const W2_MIN = 60_000;
-const WAVE2_ARMS: readonly StallArm[] = ['orphan-d', 'orphan-e', 'failed', 'frozen', 'dead', 'coord-deaf', 'mail-stuck', 'marker-unreadable'];
+const WAVE2_ARMS: readonly StallArm[] = ['orphan-d', 'restarted', 'orphan-e', 'failed', 'frozen', 'dead', 'coord-deaf', 'mail-stuck', 'marker-unreadable'];
 
 describe('wave 2: stallNotifyDelivery (planning departure w2-arms-ship-dark (D-3605))', () => {
   const FULL: StallArming = { disabled: false, live: true, escalate: true };
-  it('STALL_ARM_WAVE is total: fully armed without w2Live, exactly the eight wave-2 arms stay shadow', () => {
+  it('STALL_ARM_WAVE is total: fully armed without w2Live, exactly the nine wave-2 arms stay shadow', () => {
     expect(STALL_ARMS.filter((arm) => stallNotifyDelivery(arm, 'operator', FULL) === 'shadow')).toEqual(WAVE2_ARMS);
     expect(STALL_ARMS.filter((arm) => stallNotifyDelivery(arm, 'operator', { ...FULL, w2Live: true }) === 'shadow')).toEqual([]);
   });
@@ -380,9 +385,10 @@ describe('wave 2: rungRecipient is one total per-arm table (planning departure r
   const TABLE: Record<StallArm, readonly StallRecipient[]> = {
     quiet: ['worker', 'coordinator', 'operator'],
     'limit-cap': ['operator'], 'dialog-cap': ['operator'], 'coord-ball': ['operator'],
-    'orphan-d': ['worker', 'operator'], 'orphan-e': ['worker'], failed: ['worker', 'coordinator'],
+    'orphan-d': ['worker', 'operator'], restarted: ['worker', 'coordinator'], 'orphan-e': ['worker'], failed: ['worker', 'coordinator'],
     frozen: ['coordinator'], dead: ['coordinator'],
     'coord-deaf': ['operator'], 'mail-stuck': ['operator'], 'marker-unreadable': ['operator'],
+    'coord-blocked': ['operator', 'operator'],
   };
   it.each(STALL_ARMS)('%s: each rung it has goes to its recipient, and a rung it lacks throws', (arm) => {
     for (const rung of [1, 2, 3] as const) {
@@ -561,6 +567,7 @@ describe('wave 2: every new kebab word is declared through isStallKebab', () => 
   it.each([
     'orphan-d', 'orphan-e', 'coord-deaf', 'mail-stuck', 'marker-unreadable', 'restart-grace', 'lifecycle-stopped',
     'mail-disabled', 'failed-account', 'failed-unknown', 'stall-watch-w2-live', 'self-wake', 'registry-unmeasurable',
+    'coord-blocked',
   ])('isStallKebab(%j)', (w) => {
     expect(isStallKebab(w)).toBe(true);
   });

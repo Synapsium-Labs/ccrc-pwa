@@ -28,8 +28,9 @@ import { COLLECT_CAP, RECLAIM_PAUSE_CAP } from '../src/ccdargv.js';
 import { COLLECT_BOX_LABELS } from '../../shared/api.js';
 import { collectRig, type CcdAnswer, type CollectRig } from './collectLaneFixture.js';
 import { FULL_CAPS } from './collectTempRootFixture.js';
+import { drainTick } from './laneQuiet.js';
 import { codeOnly } from './sourceScan.js';
-import { sourceOfSymbol } from './scan/symbols.js';
+import { parsedFile, sourceOfSymbol } from './scan/symbols.js';
 
 afterEach(() => { vi.restoreAllMocks(); });
 
@@ -47,7 +48,8 @@ const flipRows = (f: CollectRig, live: boolean) => f.feed().filter((e) => e.titl
 describe('the lane’s constants are derived, and the tick dispatches it (spec §5.10)', () => {
   it('the observation interval IS the sweep interval, spelled from it, never a second literal', () => {
     expect(COLLECT_OBSERVE_INTERVAL_MS).toBe(CHILD_RECLAIM_SWEEP_MS);
-    expect(watchSrc()).toContain('export const COLLECT_OBSERVE_INTERVAL_MS = CHILD_RECLAIM_SWEEP_MS;');
+    // D-5862: the constant lives in the lane table (`laneSchedule.ts`), which the watcher re-exports.
+    expect(parsedFile('server/src/laneSchedule.ts').bindings.filter((b) => b.name === 'COLLECT_OBSERVE_INTERVAL_MS').map((b) => b.init)).toEqual(['CHILD_RECLAIM_SWEEP_MS']);
   });
 
   it('a learning audit’s unsettled bound is twice ws-audit’s remote runner row', () => {
@@ -70,7 +72,7 @@ describe('the lane’s constants are derived, and the tick dispatches it (spec �
     const src = methodOf('tick');
     const dead = src.indexOf('void this.sweepDeadCoordinators(records, registryRead.names)');
     const mine = src.indexOf('void this.sweepTempRootCollect(records, registryRead.names)');
-    const mail = src.indexOf('void this.sweepMail()');
+    const mail = src.indexOf('void this.sweepMail(registryRead)');
     expect([dead, mine, mail].every((i) => i > -1), 'an anchor is gone').toBe(true);
     expect(dead).toBeLessThan(mine);
     expect(mine).toBeLessThan(mail);
@@ -79,7 +81,8 @@ describe('the lane’s constants are derived, and the tick dispatches it (spec �
   it('and a tick reaches the lane: a witnessed id is audited', async () => {
     const f = await collectRig();
     f.witness('demo-a');
-    await f.watcher.tick();
+    // tick() fires lanes it never awaits (the `delegation` row among them since D-5862): none may outlive the case.
+    await drainTick(f.watcher);
     await vi.waitFor(() => expect(f.audits('demo-a')).toHaveLength(1));
   });
 });
@@ -87,16 +90,15 @@ describe('the lane’s constants are derived, and the tick dispatches it (spec �
 describe('one gather, one pass at a time, a monotonic throttle (spec §5.10)', () => {
   it('the pass awaits ONE thing — the gather, after the throttle — never a call it queued, reads the pause, and hands its listing to the latch alone', () => {
     const outer = methodOf('sweepTempRootCollect');
-    const stamp = outer.indexOf('this.lastCollectSweep = gate;');
-    const guard = outer.indexOf('this.collectSweeping = true;');
-    expect(stamp > -1 && guard > stamp, 'the throttle is stamped, then the guard raised').toBe(true);
-    expect([...outer.matchAll(/\bawait\b/g)], 'the pass awaits its gather alone').toHaveLength(1);
+    // D-5862: the throttle and the one-pass-at-a-time guard are the `collect` row; the entry hands the pass to `runLane`.
+    expect(outer).toContain("await this.runLane('collect', () => this.collectPass(coord, names));");
+    expect([...outer.matchAll(/\bawait\b/g)], 'the entry awaits the lane alone').toHaveLength(1);
     const pass = methodOf('collectPass');
     const gather = pass.indexOf('await Promise.all([');
     expect([...pass.matchAll(/\bawait\b/g)].map((m) => m.index)).toEqual([gather]);
     expect(pass.indexOf('readCollectPopulation(this.deps.io, this.deps.cfg.registryDir)')).toBeGreaterThan(gather);
     expect(pass.indexOf('collectSwitches(this.deps.io, this.deps.cfg.registryDir)')).toBeGreaterThan(gather);
-    expect(pass.indexOf('this.lastCollectSweep = mono;')).toBeGreaterThan(gather);
+    expect(pass.indexOf("this.restamp('collect', mono);")).toBeGreaterThan(gather);
     expect(pass, 'the marker is the executor’s and the latch helper’s to read, never the pass’s').not.toMatch(/\.marker\b/);
     // The listing's one other reader is the latch helper (path-identity spec 2026-10-12 §5.4): every code line naming
     // `switches`, its `.paused` reads aside, is its binding or the one `collectRetireLatch(` call.

@@ -1,8 +1,9 @@
 // Refined's app bar at laptop and wide (W2 Task S4b, D-5471; spec §5.3, Shell, laptop and wide rows), inside the
-// frame's `<header>`. Left to right: the wordmark; the five tabs; the compact lane gauges; the bell, search and
-// Settings; `+ New session`.
+// frame's `<header>`. Left to right on its line: the wordmark; the five tabs; the bell, search and Settings (pushed to
+// the line's right edge); `+ New session`. Under the line the header holds the lanes row, the full accounts strip
+// (T2c, D-6329): every lane's card, one instance, since the bar mounts only at the desk.
 //
-// EVERY CONTROL IS A DOOR (the plan's door table): each tab, the gauges, search, Settings and New session is built
+// EVERY CONTROL IS A DOOR (the plan's door table): each tab, search, Settings and New session is built
 // with `commandDoor(id)`, so the bar and the palette run the same command with the same context. A tab's place comes
 // from `ROUTES` (its title, and whether it is current), never from a path written here. Its badge comes from the one
 // function the fleet's own door reads (`useNavBadges`), and a badged tab says its count in its name ("Inbox, 3
@@ -46,28 +47,28 @@ export function AppBar(): ReactNode {
   const badge = (id: TabId): { count: number; word: string } =>
     id === 'inbox' ? { count: unreadMail, word: 'unread' } : id === 'runs' ? { count: openRuns ?? 0, word: 'active' } : { count: 0, word: '' };
   return (
-    <div className="ref-bar">
-      <Wordmark className="ref-bar-mark" />
-      <nav aria-label="Primary" className="ref-tabs">
-        {TAB_IDS.map((id) => (
-          <Tab key={id} id={id} here={here === id} {...badge(id)} />
-        ))}
-      </nav>
-      <div className="ref-bar-gauges">
-        <AccountsStrip compact="bar" />
+    <>
+      <div className="ref-bar">
+        <Wordmark className="ref-bar-mark" />
+        <nav aria-label="Primary" className="ref-tabs">
+          {TAB_IDS.map((id) => (
+            <Tab key={id} id={id} here={here === id} {...badge(id)} />
+          ))}
+        </nav>
+        <div className="ref-bar-doors">
+          <NotificationBell />
+          <Door {...commandDoor('open-palette')} glyph={<Icon name="search" />} aria-label="Search and commands" className="ref-bar-door">
+            <kbd className="ref-bar-key font-mono">⌘K</kbd>
+          </Door>
+          <Door {...commandDoor('go-settings')} glyph={<Icon name="settings" />} aria-label="Settings" className="ref-bar-door">
+            <span className="sr-only">Settings</span>
+          </Door>
+          <Button {...commandDoor('new-session')} variant="primary" size="fit" className="ref-bar-new gap-1">
+            <span aria-hidden="true">+</span>New session
+          </Button>
+        </div>
       </div>
-      <div className="ref-bar-doors">
-        <NotificationBell />
-        <Door {...commandDoor('open-palette')} glyph={<Icon name="search" />} aria-label="Search and commands" className="ref-bar-door">
-          <kbd className="ref-bar-key font-mono">⌘K</kbd>
-        </Door>
-        <Door {...commandDoor('go-settings')} glyph={<Icon name="settings" />} aria-label="Settings" className="ref-bar-door">
-          <span className="sr-only">Settings</span>
-        </Door>
-        <Button {...commandDoor('new-session')} variant="primary" size="fit" className="ref-bar-new gap-1">
-          <span aria-hidden="true">+</span>New session
-        </Button>
-      </div>
-    </div>
+      <AccountsStrip />
+    </>
   );
 }

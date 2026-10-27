@@ -17,7 +17,7 @@ import type { NotifyEvent } from '../../shared/api.js';
 import type { NotifyLog } from './notifylog.js';
 import type { CoordStore } from './coord/store.js';
 import type { PushPayload, PushService } from './push.js';
-import type { Presence } from './presence.js';
+import type { Viewers } from './viewer.js';
 import type { Bus } from './bus.js';
 
 /** The record gate and the push: the three combinations a writer can reach (there is no record-unless-visible-and-never-
@@ -44,6 +44,9 @@ export interface NoticeOpts {
   readonly url?: string;
   /** The writer's degrade sentence: the text after `— ` in the archive-failure warning. */
   readonly degraded?: string;
+  /** D-7041 (departure `notice-lane-prefix`): the writer's lane, printed after `ccrc-server: ` in the archive-failure
+   *  warning (`ccrc-server: stop-done: recordFeedEvent failed (…) — …`). Absent, the line is the funnel's own. */
+  readonly lane?: string;
   /** D-5860: the notice's once-only key, archived beside its row (`CoordStore.hasNotice` reads it). Passed through to
    *  the archive and nothing else: the funnel never suppresses the ring or the push on it, and the archive refuses
    *  nothing; whether to raise the notice at all is the caller's read, made before the write. */
@@ -62,7 +65,7 @@ export interface NoticeDeps {
   readonly notifyLog?: NotifyLog | undefined;
   readonly coord?: Pick<CoordStore, 'recordFeedEvent'> | undefined;
   readonly push?: Pick<PushService, 'notify'> | undefined;
-  readonly presence?: Pick<Presence, 'isVisible'> | undefined;
+  readonly viewers?: Pick<Viewers, 'isVisible'> | undefined;
 }
 
 /** The port a writer outside `watch.ts` receives: `notify` bound to the composition root's sinks. */
@@ -106,7 +109,7 @@ export function notifyEach(
  *  push for one notice. */
 function raise(deps: NoticeDeps, event: NoticeRecord, mode: NoticeMode, opts: NoticeOpts, flush: boolean): NoticeOutcome {
   // `'record-only'` never pushes, so presence decides nothing for it and is not consulted.
-  const visible = mode !== 'record-only' && deps.presence?.isVisible(event.sessionId) === true;
+  const visible = mode !== 'record-only' && deps.viewers?.isVisible(event.sessionId) === true;
   if (visible && mode === 'push') return { recorded: false, archived: 'none' };
   const log = deps.notifyLog;
   let recorded = false;
@@ -122,8 +125,8 @@ function raise(deps: NoticeDeps, event: NoticeRecord, mode: NoticeMode, opts: No
         archived = 'landed';
       } catch (err) {
         archived = 'failed';
-        console.warn(`ccrc-server: recordFeedEvent failed (${err instanceof Error ? err.message : String(err)}) — `
-          + (opts.degraded ?? NOTICE_DEGRADED_DEFAULT));
+        console.warn(`ccrc-server: ${opts.lane === undefined ? '' : `${opts.lane}: `}recordFeedEvent failed (${
+          err instanceof Error ? err.message : String(err)}) — ` + (opts.degraded ?? NOTICE_DEGRADED_DEFAULT));
       }
     }
   }

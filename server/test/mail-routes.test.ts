@@ -17,9 +17,11 @@ import { mkTmp } from './tmpHelpers.js';
 import { unreadableField as withUnreadableField } from './ioDoubles.js';
 import { okRun } from './coordReadHelpers.js';
 import { isChildReclaimKebab } from '../src/coord/childReclaim.js';
+import { isClaimantState } from '../src/coord/staleSibling.js';
 import { isApprovalKebab } from '../src/coord/approvalsign.js';
 import { isDigestKebab } from '../src/coord/digest.js';
-import { isStallKebab } from '../src/coord/stall.js';
+import { isStallKebab, isStallCoordGate } from '../src/coord/stall.js';
+import { isQuestionPolicyKebab } from '../src/coord/questionPolicy.js';
 import { isHibernateKebab } from '../src/coord/hibernate.js';
 import { isArchivedExpiryKebab } from '../src/archivedExpiry.js';
 import { isStallSettingsKebab } from '../src/coord/stallsettings.js';
@@ -32,11 +34,13 @@ import { isDelegationCheckpointKebab } from '../src/coord/delegation-checkpoint.
 import { isDelegationIngestKebab } from '../src/coord/delegation-ingest.js';
 import { isDelegationCorrelationKebab } from '../src/coord/delegation-correlation.js';
 import { isDelegationCensusKebab } from '../src/coord/gitref.js';
-import { isDriftKind } from '../../shared/api.js';
+import { isDriftKind, isRunSpendUnmeasuredReason } from '../../shared/api.js';
 import { isDelegationPolicyKebab } from '../src/coord/delegation-policy.js';
 import { isCollectLaneKebab } from '../src/collectLane.js';
 import { isNoticeMode } from '../src/notice.js';
 import { isArchiveGateKebab } from '../src/coord/archiveAdmission.js';
+import { isStaleArchiveKebab } from '../src/coord/staleArchive.js';
+import { isDriftLaneTag } from '../src/coord/driftLane.js';
 
 const TOKEN = 'f'.repeat(64);
 const UUID = 'a'.repeat(36);
@@ -771,6 +775,15 @@ describe('the rejection table is total, in both directions', () => {
                                   // field ever carries it. Each caller maps it to
                                   // a word of its own (`bad-session`,
                                   // `spent-unmeasured`, `marker-unreadable`).
+      // ARCH-19 (#539): `coord/delivery.ts` decides what the sweep does with a refused send, so it now names the
+      // send's own refusal words (`inject/send.ts`'s `SendPromptResult` errors). They are the SEND's vocabulary, set on
+      // a delivery's `lastError` and `lastGate` as free text; none is a `MailRejectCode`, and none reaches the wire as
+      // a refusal.
+      'auto-continue-armed',
+      'turn-running',
+      'stash-failed',
+      'stash-occupied',
+      'enter-ignored',
     ]);
     for (const m of sources().matchAll(/'([a-z]+(?:-[a-z]+)+)'/g)) {
       const tok = m[1]!;
@@ -957,8 +970,33 @@ describe('the rejection table is total, in both directions', () => {
         // THE ARCHIVE ADMISSION (ARCH-36): `coord/archiveAdmission.ts` names its gates as literals. A gate names which
         // precondition refused, never a `refused` or `reject.code` (the route answers the gate's word). Admitted through
         // the exported guard, derived from `ARCHIVE_GATES`, never NOT_CODES.
-        || isArchiveGateKebab(tok),
-        `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode, SessionLifecycle, ReclaimRefuseCode, AskRefuseCode, RunRouteRefuseCode, SetAccountPoolsRefuseCode, UpdateStoreRefuseCode, child-reclaim word, stall-watch word, expiry word, stall-watch settings word, dead-coordinator word, temp-root collector word, delegation word, collector switch word, collector-switch route refusal, hibernation word, drift kind, notice mode or archive gate`).toBe(true);
+        || isArchiveGateKebab(tok)
+        // THE RUN SPEND READ (D-6799): `coord/runSpend.ts` names why a run's spend could not be measured as literals. A
+        // reason rides the `spend` block of `GET /api/runs/:id`, never a `refused` or `reject.code`. Admitted through
+        // `shared/api.ts`'s exported guard, derived from `RUN_SPEND_UNMEASURED_REASON_MAP`, never NOT_CODES.
+        || isRunSpendUnmeasuredReason(tok)
+        // THE STALE-ARCHIVE ARM (D-6643): the next union, checked together and never merged, on the standing rule
+        // `enter-ignored` above states. `coord/staleArchive.ts` names its outcome kinds and defer reasons as literals. They ride
+        // the feed and the log, never a `refused` or `reject.code`. Admitted through the exported guard, derived from
+        // `STALE_ARCHIVE_OUTCOME_KINDS` and `STALE_ARCHIVE_DEFER_WHYS`, never NOT_CODES.
+        || isStaleArchiveKebab(tok)
+        // THE DRIFT RECONCILER'S LANE (D-5922): `coord/driftLane.ts` tags its summary push and its shadow notice with two
+        // fixed literals. A tag names a ring row, never a `refused` or `reject.code`. Admitted through the exported guard,
+        // derived from `DRIFT_LANE_TAGS`, never NOT_CODES.
+        || isDriftLaneTag(tok)
+        // THE STALE SIBLING (D-6923): `coord/staleSibling.ts` names a run claimant's state as literals. A state decides
+        // whether a sibling run keeps a child, never a `refused` or `reject.code`. Admitted through the exported guard,
+        // derived from `CLAIMANT_STATES`, never NOT_CODES.
+        || isClaimantState(tok)
+        // THE COORD-BLOCKED ARM (D-6942): `coord/stall.ts` names why a coordinator's mail is held as literals
+        // (`'busy-unread'`). A gate reason words the operator push, never a `refused` or `reject.code`. Admitted through
+        // the exported guard, derived from `STALL_COORD_GATES`, never NOT_CODES.
+        || isStallCoordGate(tok)
+        // THE QUESTION SWEEP'S DECIDERS (W3 Q3c, D-7027): `coord/questionPolicy.ts` names its answer words and the ask
+        // read's stages as literals (`'push-and-drop'`, `'row-refused'`). A word decides the sweep's act, never a `refused`
+        // or `reject.code`. Admitted through the exported guard, derived from that file's tables, never NOT_CODES.
+        || isQuestionPolicyKebab(tok),
+        `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode, SessionLifecycle, ReclaimRefuseCode, AskRefuseCode, RunRouteRefuseCode, SetAccountPoolsRefuseCode, UpdateStoreRefuseCode, child-reclaim word, stall-watch word, expiry word, stall-watch settings word, dead-coordinator word, temp-root collector word, delegation word, collector switch word, collector-switch route refusal, hibernation word, drift kind, notice mode, archive gate, stale-archive outcome, drift lane tag, stale-sibling claimant state, coord-blocked gate reason or question-sweep word`).toBe(true);
     }
   });
 });
@@ -998,7 +1036,7 @@ describe('resolving the \'coordinator\' role (fix-round finding 4/6)', () => {
     const home = mkTmp('ccrc-mail-');
     seed(home, 'demo-quiet-mesa');
     const w = await withMail(home); app = w.app;
-    // No program opened at all: resolveCoordinator(null) sees zero active
+    // No program opened at all: soleActiveCoordinator() sees zero active
     // programs — absent, not ambiguous, but the same refusal either way.
     const res = await send(app, GOOD);   // toId: 'coordinator', no runId
     expect(res.statusCode).toBe(404);
@@ -1014,7 +1052,7 @@ describe('resolving the \'coordinator\' role (fix-round finding 4/6)', () => {
     const w = await withMail(home); app = w.app;
     w.coord.openRun({ program: 'pA', title: 'A', project: 'demo', wave: 1, waveOf: 1, claimedBy: 'demo-coord-a' });
     w.coord.openRun({ program: 'pB', title: 'B', project: 'demo', wave: 1, waveOf: 1, claimedBy: 'demo-coord-b' });
-    const res = await send(app, GOOD);   // toId: 'coordinator', no runId -> resolveCoordinator(null)
+    const res = await send(app, GOOD);   // toId: 'coordinator', no runId -> soleActiveCoordinator()
     expect(res.statusCode).toBe(404);
     expect(res.json()).toMatchObject({ ok: false, error: 'unknown-recipient' });
     expect(w.coord.dueDeliveries(Date.now(), 60_000)).toEqual([]);

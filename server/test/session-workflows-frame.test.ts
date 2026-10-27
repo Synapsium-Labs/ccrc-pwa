@@ -64,10 +64,10 @@ const seedRunning = (): void => {
 
 const runner = (opts: { gone?: boolean } = {}): Runner => async (_cmd, args) => {
   if (args[0] === 'has-session') {
-    return opts.gone ? { code: 1, stdout: '', stderr: `can't find session: ${ID}` } : { code: 0, stdout: '', stderr: '' };
+    return opts.gone ? { ran: true, code: 1, stdout: '', stderr: `can't find session: ${ID}` } : { ran: true, code: 0, stdout: '', stderr: '' };
   }
-  if (args[0] === 'list-panes') return { code: 0, stdout: `${PID}\n`, stderr: '' };
-  return { code: 0, stdout: '', stderr: '' };
+  if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: `${PID}\n`, stderr: '' };
+  return { ran: true, code: 0, stdout: '', stderr: '' };
 };
 
 const open = (opts: { gone?: boolean } = {}): { stream: SessionStream; frames: SessionStreamMsg[] } => {

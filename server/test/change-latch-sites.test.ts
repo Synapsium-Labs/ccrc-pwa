@@ -14,7 +14,7 @@ import type { NodeRole } from '../../shared/api.js';
 import { LedgerLog } from '../src/coord/ledgerlog.js';
 import { loadConfig } from '../src/config.js';
 import { localIO } from '../src/io.js';
-import { seedRoster, testDeps } from './helpers.js';
+import { seedRoster, testDeps, withFakeClock } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 
 const mocks = vi.hoisted(() => ({
@@ -43,7 +43,7 @@ const fixture = (role: NodeRole = 'server', push = false) => {
     coord,
     ...(push ? { push: { notify: async (p: unknown) => { sent.push(p); } } as never } : {}),
   };
-  const w = new FleetWatcher(deps as never, new Bus(), 10_000, path.join(home, 'state-cache.json'));
+  const w = new FleetWatcher(withFakeClock(deps as never), new Bus(), 10_000, path.join(home, 'state-cache.json'));
   const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
   const said = (needle: string): string[] => warn.mock.calls.map((c) => String(c[0])).filter((m) => m.includes(needle));
   return { w, coord, warn, said, sent };
@@ -175,7 +175,7 @@ describe('lastStaleReport and lastOrphanReport — sweepLedgerReconcile', () => 
     const cfg = loadConfig({ CCRC_HOME: home, CCRC_PROJECTS_ROOT: projectsRoot } as never);
     const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
     const log = new LedgerLog(path.join(home, '.ccrc', 'ledger-alloc.log'));
-    const w = new FleetWatcher({ ...testDeps(home), cfg, io: localIO, coord } as never, new Bus(), 10_000);
+    const w = new FleetWatcher(withFakeClock({ ...testDeps(home), cfg, io: localIO, coord } as never), new Bus(), 10_000);
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const allocate = (project: string): void => {
       coord.raiseLedgerFloor(project, 261, 'seeded by test', NOW);

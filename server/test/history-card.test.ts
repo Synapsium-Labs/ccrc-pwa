@@ -1249,7 +1249,7 @@ describe('the sweep writes and consumes card/<id>/<uuid>.txt at end-of-file (spe
     expect(cardOf(box, ID, U), 'the next plain pass at end-of-file writes it again').toBe(before);
   }, 240_000);
 
-  it('a budget spent before the card step: the consume and delete still run, nothing is written, and the predictions left are withdrawn, counted card_withdrawn:budget', () => {
+  it('the card step\'s own floor spent (a one-byte run gives every derivation step a byte floor of 0): the consume and delete still run, nothing is written, and the predictions left are withdrawn, counted card_withdrawn:budget', () => {
     const box = makeHistoryBox('ccrc-hist-card-withdraw-budget-');
     const [A, UA] = ['card-budget-a', sidC(0xf0b)];
     const [B, UB] = ['card-budget-b', sidC(0xf0c)];
@@ -1266,8 +1266,8 @@ describe('the sweep writes and consumes card/<id>/<uuid>.txt at end-of-file (spe
     expect(boundariesOf(UA)).toBe(1);
     appendRows(pa, sa.rows.slice(cutBefore(sa, 1)));
     spoolLine(box, A, { v: 1, ev: 'Stop', id: A });
-    // One byte of budget: the ingest checks the budget before each chunk, so A's one chunk of new rows is read, and
-    // the run's budget is spent long before the card step.
+    // One byte of budget (D-6935, D-6939): ingest's ceiling admits one unit, so A's one chunk of new rows is read; every
+    // derivation step's floor is floor(1 x share / 1000) = 0 bytes, so the card step's own slice is spent when it starts.
     const r = runDriver(box, { budgetBytes: 1 });
     expect(r.code, `${r.stderr}${r.stdout}`).toBe(0);
     expect(boundariesOf(UA), "CONTROL: A's second boundary was ingested within the budget").toBe(2);

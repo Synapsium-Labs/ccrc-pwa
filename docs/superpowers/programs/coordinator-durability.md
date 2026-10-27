@@ -25,7 +25,7 @@ cluster K10), not standalone builds (decision D-5920).
 | 2 | D3 dispatch: confirm the wave brief was taken within 5 min, retry, then tell the coordinator | #755 | D1 (its retry rides D1's parked path) | to spec |
 | 3 | D2 mail: surface pending mail inside a running turn (hook); the `busy` gate | #756 | D1; arming is OA-D2 | to spec |
 | 4 | D4 coordinator: re-inject its run roster on compaction, resume, clear and wake | #757 | none (ordered after D2) | to spec |
-| 5 | D5 worker restart: re-attach notice and a coordinator heads-up | #759 | none (ordered after D4) | to spec |
+| 5 | D5 worker restart: re-attach notice and a coordinator heads-up | #759 | none (ordered after D4) | built, dark: the stall watch's wave-2 `restarted` arm (D-6853); armed by the existing `stall-watch-w2-live` marker, no new one |
 | 6 | D7 drift reconciler, digest section, held questions across a restart | #760 | #853 for DT1; the consolidation's W1a C1c and W1b for DT2; skins P7 for DT4 (P4a merged, #701); DT5 none | specced and planned (tail spec rev 2, Tasks DT1 to DT5); DT5 built (D-5925: held questions and approvals re-seeded from their rows after a restart); DT1, the drift decider (D-5921), in review |
 | W6 input | D6 parent derivation checks the worker's birth; runs released when their coordinator is archived | #758 | the consolidation's W6 | input to W6's `bindingOf`; its listing half is D7's `claimant-gone` |
 | W6 input | D8 the coordinator's uuid on the claim; an attributed reclaim offered after an id-changing revive | #761 | the consolidation's W6 | specced and planned (Tasks DT6, DT7); DT7 (`openRun` only) conditional on the 30-day rule, which starts once 5 open programmes carry a stored uuid and is recorded with its denominator |
@@ -44,6 +44,10 @@ cluster K10), not standalone builds (decision D-5920).
 - **R2**, D6 and D8 feed W6 rather than racing it: the consolidation's K10 makes `RunBinding` the one
   coordinator↔worker link with four writers, and says W6 waits for this investigation. A standalone patch to
   `parentOfSession` or `openRun` first would be a second rule W6 must merge (D-5920).
+- **D6 folded into W6's first ticket (ARCH-60, #795).** `coord/runBinding.ts` derives the parent from the runs that bind
+  the worker's incarnation (its session id plus the birth the server stamped), so a reused workspace name no longer
+  inherits an earlier occupant's run. The readers `parentOfSession` and `openClaimantsOf` move onto it in ARCH-62; the
+  release-on-archive half of D6 stays with D7's `claimant-gone`.
 
 ## Carried constraints
 

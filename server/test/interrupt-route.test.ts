@@ -91,10 +91,10 @@ const box = async (b: Box) => {
   const run: Runner = async (_cmd, args) => {
     calls.push(args);
     const verb = args[0] ?? '';
-    if (verb === 'has-session') return { code: b.gone ? 1 : 0, stdout: '', stderr: '' };
-    if (verb === 'list-panes') return b.gone ? { code: 1, stdout: '', stderr: '' } : { code: 0, stdout: `${PANE}\n`, stderr: '' };
-    if (verb === 'capture-pane') return b.gone ? { code: 1, stdout: '', stderr: '' } : { code: 0, stdout: 'scrollback\n❯ \n', stderr: '' };
-    return { code: 0, stdout: '', stderr: '' };
+    if (verb === 'has-session') return { ran: true, code: b.gone ? 1 : 0, stdout: '', stderr: '' };
+    if (verb === 'list-panes') return b.gone ? { ran: true, code: 1, stdout: '', stderr: '' } : { ran: true, code: 0, stdout: `${PANE}\n`, stderr: '' };
+    if (verb === 'capture-pane') return b.gone ? { ran: true, code: 1, stdout: '', stderr: '' } : { ran: true, code: 0, stdout: 'scrollback\n❯ \n', stderr: '' };
+    return { ran: true, code: 0, stdout: '', stderr: '' };
   };
   const guarded = guardRunner(run);
   const cfg = loadConfig({ CCRC_HOME: home });
@@ -112,7 +112,7 @@ const box = async (b: Box) => {
   const url = `/api/sessions/${ID}/interrupt`;
   const res = b.bare ? await app.inject({ method: 'POST', url }) : await app.inject({ method: 'POST', url, payload: b.payload ?? {} });
   const recorded = notifyLog.catchUp(notifyLog.epoch, 0).events.map((e) => ({ kind: e.kind, sessionId: e.sessionId, body: e.body }));
-  // D-6116: the envelope the session stream ships for this file — `sessionws.ts`'s `checkHookAsk` makes this same read.
+  // D-6116: the envelope the session stream ships for this file — the session's feed (`sessionFeed.ts`) makes this same read and `sessionws.ts`'s `applyHook` frames it.
   const envelope = (await readHookState(localIO, reg, ID, UUID, Date.now()))?.ask ?? null;
   return { res, keys: calls.filter((c) => c[0] === 'send-keys'), recorded, pushes: notify.mock.calls.length, envelope };
 };

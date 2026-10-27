@@ -12,7 +12,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { readFileSync } from 'node:fs';
 import fs from 'node:fs';
 import path from 'node:path';
-import { CCD, WS_ADD } from './ccdWsHelpers.js';
+import { WS_ADD, ccdSource } from './ccdWsHelpers.js';
 import { makePrHarness, mergedRow, type PrHarness } from './ccdPrHelpers.js';
 
 let h: PrHarness;
@@ -23,7 +23,7 @@ afterEach(() => { h.cleanup(); });
  *  hardcoded, for `ccd-pr-state.test.ts`'s reason: these assertions are about
  *  WHICH timeout wraps WHICH call. */
 const ccdSeconds = (name: string): number => {
-  const m = new RegExp(`^${name}=(\\d+)`, 'm').exec(readFileSync(CCD, 'utf8'));
+  const m = new RegExp(`^${name}=(\\d+)`, 'm').exec(ccdSource());
   if (!m) throw new Error(`ccd no longer defines ${name} as a bare integer assignment`);
   return Number(m[1]);
 };

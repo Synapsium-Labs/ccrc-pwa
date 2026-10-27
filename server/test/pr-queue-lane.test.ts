@@ -69,9 +69,9 @@ const mergedLine = (extra: Record<string, unknown> = {}, number = 42): string =>
 });
 
 const runnerFor = (out: () => string): Runner => async (_cmd, args) => {
-  if (args[0] === 'pr-state') return { code: 0, stdout: out(), stderr: '' };
-  if (args[0] === 'list-panes') return { code: 0, stdout: '4242\n', stderr: '' };
-  return { code: 0, stdout: '', stderr: '' };
+  if (args[0] === 'pr-state') return { ran: true, code: 0, stdout: out(), stderr: '' };
+  if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: '4242\n', stderr: '' };
+  return { ran: true, code: 0, stdout: '', stderr: '' };
 };
 
 /** Walk a run through the ONE path `RUN_TRANSITIONS` allows to `to`. */
@@ -84,7 +84,7 @@ const walk = (coord: CoordStore, id: number, to: RunState): void => {
 };
 
 /** `run`: whose workspace the ONE open programme's run names — this one
- *  (`mine`), or ANOTHER (`other`), so `resolveCoordinator(null)` would answer
+ *  (`mine`), or ANOTHER (`other`), so `soleActiveCoordinator()` would answer
  *  a real session and the lane must not take that guess. `state`: where the
  *  run waits (default `merging` — the coordinator is landing). `second`: a
  *  SECOND open run naming this workspace (wave N+1 on the same workspace).
@@ -113,7 +113,7 @@ async function harness(first: string, opts: { run?: 'mine' | 'other'; state?: Ru
   let out = first;
   const deps = { ...testDeps(home, runnerFor(() => out)), coord, notifyLog: log,
     push: { notify: async (p: PushPayload) => { sent.push(p); } } as never,
-    presence: { isVisible: () => opts.visible === true } as never };
+    viewers: { isVisible: () => opts.visible === true } as never };
   let w = new FleetWatcher(deps, new Bus(), 10_000);
   const sweep = async (next?: string): Promise<void> => {
     if (next !== undefined) out = next;
@@ -337,6 +337,8 @@ describe('the landing lane latches only what it told', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const f = await harness(mergedLine());
     const realRun = f.coord.run.bind(f.coord);
+    // The FIRST run read fails: since ARCH-62 slice 4 that is the coordinator's (`readCoordinatorOfRun`), and its failure
+    // defers exactly as the state read's does (the next case) — never "nobody to tell", which would latch the merge.
     let n = 0;
     vi.spyOn(f.coord, 'run').mockImplementation((id) => (n++ === 0
       ? { ok: false as const, kind: 'run-unreadable' as const, detail: 'fixture' } : realRun(id)));
@@ -359,6 +361,42 @@ describe('the landing lane latches only what it told', () => {
     expect(g.mail(), 'the thrown merged notice was never retried').toHaveLength(1);
     warn.mockRestore();
     g.stop();
+  });
+
+  it('a merge whose run STATE cannot be read (after the coordinator read answered) defers too, and mails once it reads', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const f = await harness(mergedLine());
+    const realRun = f.coord.run.bind(f.coord);
+    // The second run read is the state read (`runState`), after the coordinator read answered.
+    let n = 0;
+    vi.spyOn(f.coord, 'run').mockImplementation((id) => (n++ === 1
+      ? { ok: false as const, kind: 'run-unreadable' as const, detail: 'fixture' } : realRun(id)));
+    await f.sweep();
+    expect(f.mail(), 'an unreadable run state was read as "not at merging"').toEqual([]);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('deferred (run rows unreadable: fixture)'));
+    await f.sweep();
+    expect(f.mail(), 'the deferred merged notice was never sent').toHaveLength(1);
+    warn.mockRestore();
+    f.stop();
+  });
+
+  it('a dequeue whose coordinator read fails defers: no "nobody to tell" record, and the coordinator is mailed once it reads', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const f = await harness(openLine({ queue: 'dequeued', queueAt: T1 }));
+    const realRun = f.coord.run.bind(f.coord);
+    let n = 0;
+    vi.spyOn(f.coord, 'run').mockImplementation((id) => (n++ === 0
+      ? { ok: false as const, kind: 'run-unreadable' as const, detail: 'fixture' } : realRun(id)));
+    await f.sweep();
+    expect(f.queueFeed(), 'an unreadable coordinator was recorded as "no open run names a coordinator"').toEqual([]);
+    expect(f.mail()).toEqual([]);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('deferred (run rows unreadable: fixture)'));
+    await f.sweep();
+    expect(f.mail(), 'the deferred dequeue was never mailed').toHaveLength(1);
+    expect(f.queueFeed()).toHaveLength(1);
+    expect(f.queueFeed()[0]!.body).toContain(`Mailed coordinator ${COORDINATOR}`);
+    warn.mockRestore();
+    f.stop();
   });
 
   it('a restart re-mails no merge it already told — acked', async () => {

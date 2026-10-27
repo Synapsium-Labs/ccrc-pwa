@@ -10,6 +10,7 @@
  * newer build lands somewhere honest instead of being switched on and
  * rendered as nothing — `PrPhase`'s `'unchecked'` is the precedent
  * (`server/src/registry.ts:135-142`). Deviation D-8 found that this plan's
+ * @anchor mailDeliveriesStateVocabulary
  * own draft left two of the five — `programs.state` and
  * `mail_deliveries.state` — uncovered on the wire (`programs()` returning a
  * raw `string`; `MailSummary.state` a closed union with no `unknown` arm).
@@ -38,6 +39,7 @@
  * server itself already typed", and likened that to `mail_rejections.code`
  * below; both halves were wrong, the second more so, since that column's own
  * docstring in `store.ts` states the OPPOSITE stance in so many words). The
+ * @anchor deployRollbackOlderServer
  * exemption's premise fails on a rollback: `deploy.sh` keeps per-timestamp
  * backups, and `shared/api.ts`'s own rollback paragraph (`:567-571`) is
  * exactly the "older, same, or newer" span that makes "this server itself
@@ -1797,6 +1799,64 @@ export const MIGRATIONS: readonly string[] = [
     askedAt   INTEGER,
     liftedAt  INTEGER
   );
+  `,
+  // ── 31: user_version 30 -> 31 ─────────────────────────────────────────────
+  // D-5922 (coordinator-durability tail spec 2026-10-20 §4.3, plan Task DT2; #760): `drift_findings`, the reconciler's
+  // standing state: one row per thing found out of step, keyed by the subject so the same drift is the same row on
+  // every pass. `kind` is a DriftKind (read back through `isDriftKind`, never cast), `subject` the JSON of the ids it
+  // names, `detail` one redacted line. `factAt` is the fact's own time where it has one; `firstSeenAt`/`lastSeenAt`
+  // bracket the passes that found it; `clearedAt` is set ONLY by a later pass that measured the fact gone. `pushedAt`
+  // and `pushedVia` are the once-only authority for the operator push (`item`: its own push, `summary`: folded into the
+  // first-pass summary); `shadowAt` is the same once-only for the unarmed lane's record of what it would have pushed.
+  // Its writers are `CoordStore.recordDriftPass`, `markDriftPushed` and `markDriftShadowed`, nothing else.
+  //
+  // A NEW TABLE AND NOTHING ELSE: an older build opening a file at `user_version 31` takes rule 3 (it warns, reads
+  // as-is and migrates nothing) and never names it. Every earlier entry is frozen. RE-MEASURE the slot immediately
+  // before the PR and before merge:
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE drift_findings (
+    key         TEXT    PRIMARY KEY,
+    kind        TEXT    NOT NULL,
+    subject     TEXT    NOT NULL,
+    detail      TEXT    NOT NULL,
+    factAt      INTEGER,
+    runId       INTEGER,
+    sessionId   TEXT,
+    firstSeenAt INTEGER NOT NULL,
+    lastSeenAt  INTEGER NOT NULL,
+    clearedAt   INTEGER,
+    pushedAt    INTEGER,
+    pushedVia   TEXT CHECK (pushedVia IN ('item', 'summary')),
+    shadowAt    INTEGER
+  );
+  CREATE INDEX drift_findings_pushed ON drift_findings(pushedAt);
+  CREATE INDEX drift_findings_open ON drift_findings(clearedAt, kind);
+  `,
+  // ── 32: user_version 31 -> 32 ─────────────────────────────────────────────
+  // D-6861 (disk retention): `shadow_journal`, the durable record of what an UNARMED disk
+  // lane (`expire-child`, `stale-archive`, `nested-rescue`) would have done, so a lane can be reviewed before it is armed
+  // after the 2000-row feed archive has rolled over. `key` is the once-only key (lane, subject, path, epoch), so a verdict
+  // asked again after a restart is the same row; `at` is the first write; `bytes`/`inodes` are NULL where the lane does
+  // not measure them. Its one writer is `CoordStore.recordShadowVerdict`, which also prunes by age and by row count.
+  //
+  // A NEW TABLE AND NOTHING ELSE: an older build opening a file at `user_version 32` takes rule 3 (it warns, reads as-is
+  // and migrates nothing) and never names it. Every earlier entry is frozen. RE-MEASURE the slot before the PR and
+  // before merge (the count above).
+  `
+  CREATE TABLE shadow_journal (
+    key     TEXT    PRIMARY KEY,
+    lane    TEXT    NOT NULL,
+    subject TEXT    NOT NULL,
+    path    TEXT,
+    rung    TEXT    NOT NULL,
+    bytes   INTEGER,
+    inodes  INTEGER,
+    detail  TEXT    NOT NULL,
+    at      INTEGER NOT NULL
+  );
+  CREATE INDEX shadow_journal_at ON shadow_journal(at);
   `,
 ];
 

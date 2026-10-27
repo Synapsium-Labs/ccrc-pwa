@@ -5,7 +5,7 @@ import { SESSION_COOKIE, expireCookie, parseCookies } from './cookie.js';
 import type { SessionStore } from './sessions.js';
 
 /**
- * THE GATE. One `onRequest` hook stands in front of all 118 routes, the static
+ * THE GATE. One `onRequest` hook stands in front of all 122 routes, the static
  * wildcard, the SPA fallback and all three websocket upgrades.
  *
  * ONE HOOK, NOT A PER-ROUTE CHECK, and that is the whole design: a route added
@@ -72,12 +72,12 @@ import type { SessionStore } from './sessions.js';
  *     the moment the operator arms the flag. It publishes an `ok` and a build
  *     stamp and nothing about the fleet.
  *
- *  2. The thirty-one box-token machine lanes plus `/api/notify`, `/api/pools/epoch`
+ *  2. The thirty-three box-token machine lanes plus `/api/notify`, `/api/pools/epoch`
  *     and `/api/updates/intent/:nodeId` — the fleet host's ingress. These callers
  *     are `curl` inside a Claude Code session, ccd's `notify.sh`, `ccd-pool-sync.timer`
  *     (account-pool-membership wave 1, T7, D-3084) and, from update-management W4,
  *     `ccd-update-sync.timer`; none of them has a cookie jar and never
- *     will. All thirty-four CHECK the box token (`checkMailToken`), and the mail pair
+ *     will. All thirty-six CHECK the box token (`checkMailToken`), and the mail pair
  *     records every refusal — but "checks" is not "requires", and the difference is
  *     worth stating rather than rounding off, in BOTH directions rather than only
  *     one (D-1242: this paragraph used to say it in one, and was wrong in kind
@@ -223,6 +223,8 @@ export const EXEMPT: ReadonlyMap<string, string> = new Map([
     "a session's own outstanding mail — box-token gated (requireMailToken)"],
   ['GET /api/mail/:id',
     'the envelope body channel the nudge points a worker at — box-token gated'],
+  ['GET /api/mail/inbox',
+    'a session reading its own mail before it acks it: box-token gated and attribution-checked'],
   ['POST /api/runs',
     'the coordinator opens a run — box-token gated'],
   ['GET /api/runs',
@@ -261,6 +263,13 @@ export const EXEMPT: ReadonlyMap<string, string> = new Map([
     'a coordinator can declare a ledger it can never settle, which is exactly the state one live ' +
     'programme reached. The handler requires a live session OR a valid box token ' +
     '(coord/routes.ts), so nothing is published to the tailnet that was not before'],
+  ['GET /api/runs/:id',
+    "EXEMPT-BUT-AUTHENTICATED (D-149's pattern, D-6799), the same shape as `GET /api/runs` and " +
+    'its siblings below and for the same callers: the PWA reads a run and what its sessions have ' +
+    'spent with a session, the coordinator skill reads the same cookieless from the fleet host. ' +
+    'The handler requires a live session OR a valid box token (coord/routes.ts), so nothing is ' +
+    'published to the tailnet that was not before, and nothing here is written - the route only ' +
+    'measures'],
   ['GET /api/runs/:id/signals',
     "EXEMPT-BUT-AUTHENTICATED (D-149's pattern, routing slice 0 Task 5), the same shape as " +
     '`GET /api/runs` above and for the same caller: the coordinator skill reads a run\'s ' +
@@ -785,8 +794,8 @@ export function originVerdict(origin: unknown, expected: string): OriginVerdict 
  * clause. Checking reads would additionally refuse `<img>`/`<link>` style
  * same-site loads of the SPA shell for no gain.
  *
- * EXEMPT ROUTES ARE SKIPPED, and it costs nothing: the thirty-one box-token machine
- * lanes plus `/api/notify`, `/api/pools/epoch` and `/api/updates/intent/:nodeId` — thirty-four in all — are `curl` inside a Claude Code session (no `Origin`
+ * EXEMPT ROUTES ARE SKIPPED, and it costs nothing: the thirty-three box-token machine
+ * lanes plus `/api/notify`, `/api/pools/epoch` and `/api/updates/intent/:nodeId` — thirty-six in all — are `curl` inside a Claude Code session (no `Origin`
  * at all, hence `'absent'`, hence permitted even if they were checked), and
  * their real guard is a header a cross-site page cannot add without triggering a
  * preflight it will fail. (ORDER-PINNED, like reason 2 above and for the same

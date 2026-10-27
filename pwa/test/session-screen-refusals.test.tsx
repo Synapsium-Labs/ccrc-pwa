@@ -161,6 +161,18 @@ describe('Stop — two sentences, because 409 is not a failure', () => {
     expect(said.closest('[role="status"]'), 'an idle pane is a status, not an alert').not.toBeNull();
   });
 
+  // ARCH-13b: the stop toast reads a table now; every 409 body must still say this one sentence, byte for byte.
+  it.each([
+    [{ ok: false, error: 'not-busy' }], [{ ok: false, error: 'not-alive' }],
+    [{ ok: false, error: 'background-only' }], [{ ok: false, error: 'a-code-nobody-knows' }],
+  ])('a 409 %j toasts exactly the one nothing-to-stop sentence', async (body) => {
+    vi.spyOn(apiModule.api, 'interrupt').mockRejectedValue(new ApiError(409, body));
+    renderScreen();
+    act(() => { stores.store.setState({ status: 'busy' }); });
+    fireEvent.click(await headerStop());
+    expect(await screen.findByText("Claude isn't working right now — nothing to stop")).toBeTruthy();
+  });
+
   // D-5236: an idle main loop over background work is refused with zero keys,
   // and the toast says why — Escape there would stop none of it.
   it('a 409 background-only names the count and kinds still running, quietly', async () => {
@@ -172,6 +184,16 @@ describe('Stop — two sentences, because 409 is not a failure', () => {
     const said = await screen.findByText(
       'The main turn has finished; 2 background tasks (workflow) are still running. Escape would not stop them.');
     expect(said.closest('[role="status"]')).not.toBeNull();
+  });
+
+  it('a 409 background-only with one task agrees in number', async () => {
+    vi.spyOn(apiModule.api, 'interrupt').mockRejectedValue(
+      new ApiError(409, { ok: false, error: 'background-only', count: 1, kinds: [] }));
+    renderScreen();
+    act(() => { stores.store.setState({ status: 'busy' }); });
+    fireEvent.click(await headerStop());
+    await screen.findByText(
+      'The main turn has finished; 1 background task is still running. Escape would not stop it.');
   });
 
   it('a 409 background-only with no count says a background shell or monitor runs', async () => {
