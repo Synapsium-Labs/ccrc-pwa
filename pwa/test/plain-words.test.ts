@@ -296,3 +296,20 @@ describe('the scanner reads positions, not shapes', () => {
     expect(scan(code)).toHaveLength(1);
   });
 });
+
+// The inspector's words (D-6334, T3d): the six sections' words.
+describe('the inspector speaks plainly (D-6334)', () => {
+  const SRC_ROOT = path.join(import.meta.dirname, '..', 'src');
+  // `session/routingLine.ts` is not listed: it builds its sentence in a local of a function and returns an object, a
+  // position the scan does not read (0 strings), so listing it would only assert a scan that sees nothing.
+  const INSPECTOR = ['TasksSection', 'MailSection', 'PrSection', 'RoutingSection', 'LaneSection', 'HistorySection']
+    .map((f) => path.join(SRC_ROOT, 'inspector', `${f}.tsx`));
+  it.each(INSPECTOR.map((f) => [path.relative(SRC_ROOT, f), f] as const))(
+    '%s (the inspector) says none of the forbidden words where an operator reads',
+    (_name, file) => {
+      const strings = visibleStrings(file);
+      expect(strings.length, 'the scan reads its sentences').toBeGreaterThan(0);
+      expect(offences(file, strings), 'rewrite the sentence; the table above says what to say').toEqual([]);
+    },
+  );
+});
