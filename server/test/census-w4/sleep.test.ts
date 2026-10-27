@@ -92,7 +92,7 @@ describe('the sleep lanes\' censuses (ARCH-43)', () => {
     console.log(sites.map((s) => `  ${s.symbol}`).join('\n'));
   });
 
-  it('REAL hibernateActSites: reports the act sites by name and shape (2 -> 1 at C4d; not yet pinned)', () => {
+  it('REAL hibernateActSites: reports the act sites by name and shape (2 -> 1 at C4d; pinned at 1 by late-census since C4d)', () => {
     const sites = hibernateActSites();
     show('hibernateActSites', sites);
     console.log(sites.map((s) => `  ${s.symbol} (${s.shape})`).join('\n'));
