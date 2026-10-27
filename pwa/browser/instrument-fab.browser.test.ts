@@ -5,9 +5,10 @@
 // `data-command="new-session"` and not inside the top bar; at 900 and 1280 there is no `.fab` and ONE visible door,
 // the top bar's `+`, inside `header.shell-accounts`. What jsdom cannot hold: a real engine's media query at the 899/900
 // boundary, and what the engine calls visible. A door counts only when it has a laid-out box (a non-zero client rect)
-// AND the browser's own `checkVisibility` (with `visibility` and `opacity`) says it is visible, so a second door that
-// is mounted but hidden (`visibility: hidden` or `opacity: 0`) or laid out off-screen is not counted: a hidden round `+`
-// at 899 reds (the one door is gone), and so does a duplicate door at the desk.
+// AND the browser's own `checkVisibility` (with `visibility` and `opacity`) says it is visible, so a door that is
+// mounted but hidden (`visibility: hidden`, `opacity: 0`, `display: none` or a zero-size box) is not counted: a hidden
+// round `+` at 899 reds (the one door is gone), and so does a second visible door at the desk. A door laid out
+// off-screen still counts; this file does not measure position.
 //
 // MUTATION TABLE (each mutant is transient; the file it touches is restored from a saved copy and `git diff` is empty after):
 //   V   `@media (max-width: 899.98px) { .fab { visibility: hidden } }` appended to fleet.css: the round + is mounted at 899
