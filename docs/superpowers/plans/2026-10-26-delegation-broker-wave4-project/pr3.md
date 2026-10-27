@@ -11,8 +11,8 @@ plan and the programme ledger; this PR edits neither.
   builder door (`upkeepIntervals`, `DelegationDurability.upkeep`, `rowsChanged`).
 - **Phase B** (released by coordinator mail 10575): Task 3.1's unified lane call, Task 3.4's two store methods and required
   projection-port members, Task 3.7's daily trigger and diagnostics, the kebab arm W4-K2 in `mail-routes.test.ts`, and the closed
-  retained-set census in `delegation-wave3.integration.test.ts` are implemented. Verification is in progress, not a final handoff.
-  Task 3.6 still waits for the coordinator's explicit release after #1578; neither snapshot file is edited.
+  retained-set census in `delegation-wave3.integration.test.ts` are committed at `15a4d0246`. Phase-B verification is recorded below;
+  this is not a final handoff. Task 3.6 still waits for the coordinator's explicit release after #1578; neither snapshot file is edited.
 - The lane rows the plan places in `delegation-watch.test.ts` go into a NEW file, `server/test/delegation-compaction-lane.test.ts`,
   because PR4 holds the old one (the coordinator's brief).
 
@@ -65,7 +65,7 @@ plan and the programme ledger; this PR edits neither.
 - **D-7015** — `unused`
 - **D-7016** — `unused`
 
-## Phase B verification (in progress)
+## Phase B verification
 
 All measurements below are fixture-only. Scratch mutations run sequentially in one root-disk source copy, with a measured process
 cap, `timeout -k`, saved-copy restoration and SHA checks; tracked production source is never mutated.
@@ -95,12 +95,14 @@ cap, `timeout -k`, saved-copy restoration and SHA checks; tracked production sou
 | Untouched PWA suite | 10,242 passed, 1 skipped across 314 files; no type errors; jsdom printed its canvas `getContext` not-implemented notices |
 | Untouched PR4-held watch suite | 8 failed, 272 passed; exact re-points below, not a green-suite claim |
 | Tests-inclusive TypeScript | Passed after installing the declared agent dependencies; the earlier missing-`ws` failure was environmental |
-| Full server suite | Unrun so far; no final suite claim |
+| Armed growth check (`GROWTH_CHECK=1`) | 47 passed on committed implementation `15a4d0246` |
+| Full server suite | Unrun while Task 3.6 and the complete deliverable are pending; no final suite claim |
 
 The final pre-commit recheck on 2026-10-27 passed tests-inclusive TypeScript and, each alone, compaction (64), pass timing (88),
 wave-3 integration (34) and real-lane compaction/upkeep (12). The complete PR3 deliverable is not done: Task 3.6 remains blocked,
-the held watch suite remains red, the full server suite is unrun, and the HEAD-based growth check follows the phase-B commit.
-The diff from the branch base touches no reserved #1558 watch hunk.
+the held watch suite remains red and the full server suite is unrun. The HEAD-based growth check passed all 47 rows after the
+phase-B implementation commit. The diff from the branch base touches no reserved #1558 watch hunk. No PR or final wave-done
+is issued; the next implementation wake is the coordinator's explicit Task 3.6 release.
 
 The dependency installs reported audit findings: agent 6 (3 moderate, 3 high), UI 9 (5 moderate, 3 high, 1 critical), and PWA 12
 (1 low, 4 moderate, 7 high). No dependency versions or lockfiles were changed; no audit repair was attempted in this work.
