@@ -9,6 +9,7 @@
 // (`single-definition/kernel-tail-spawn.test.ts` holds that half). The kernel's own rows below drive it against a stub
 // host under fake timers; the real-process rows over both wrappers are `update-spawn-wrappers.test.ts`.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import { boundedSpawn } from '../../shared/spawn.mjs';
@@ -145,5 +146,39 @@ describe('shared/spawn.mjs#boundedSpawn against a stub host', () => {
     child.emit('exit', 0, null);
     await vi.runAllTimersAsync();
     expect(await p).toMatchObject({ code: 0, stdout: null });
+  });
+});
+
+// D-4390 (box-token lifecycle wave 1): the `token-sync` op's spawn is its OWN bounded body in `agent/src/tokensync.ts`
+// (stdin piped, an explicit {HOME, PATH, LANG}, SIGTERM then SIGKILL), not a third twin and not the twin with stdin
+// as a parameter. The update spawner is one body, `shared/spawn.mjs`; the third body stays visibly separate, so an
+// edit that copies the kernel into it (or folds it into the kernel) is a red here rather than a silent second update
+// spawner. (Moved here from `update-spawn-twin-bodies.test.ts`, which D-7055 removes; the tokensync rows are byte-equal.)
+const BEGIN = '// ── BEGIN bounded-spawn body';
+const END = '// ── END bounded-spawn body';
+const read = (rel: string): string => readFileSync(new URL(rel, import.meta.url), 'utf8');
+describe('the token-sync spawn is not a third twin (D-4390)', () => {
+  const tokensync = read('../../agent/src/tokensync.ts');
+  const count = (src: string, sentinel: string): number => src.split('\n').filter((l) => l.trim().startsWith(sentinel)).length;
+
+  it('agent/src/tokensync.ts, agent/src/server.ts, server/src/update/spawn.ts and shared/spawn.mjs carry 0 bounded-spawn sentinels', () => {
+    for (const rel of ['../../agent/src/tokensync.ts', '../../agent/src/server.ts', '../src/update/spawn.ts', '../../shared/spawn.mjs']) {
+      const src = read(rel);
+      expect(count(src, BEGIN), `a bounded-spawn sentinel in ${rel}`).toBe(0);
+      expect(count(src, END), `a bounded-spawn sentinel in ${rel}`).toBe(0);
+    }
+  });
+
+  it('agent/src/tokensync.ts calls no boundedSpawn and imports nothing from the kernel', () => {
+    expect(parsedFile('agent/src/tokensync.ts').calls.filter((c) => c.name === 'boundedSpawn')).toEqual([]);
+    expect(parsedFile('agent/src/tokensync.ts').imports.filter((e) => /\/spawn\.mjs$/.test(e.specifier))).toEqual([]);
+  });
+
+  it('its body is its own: stdin piped, an explicit env, SIGTERM before SIGKILL; the update spawner pipes no stdin', () => {
+    expect(tokensync).toContain("stdio: ['pipe', 'pipe', 'pipe'], env: childEnv");
+    expect(tokensync).toContain("signalGroup('SIGTERM')");
+    expect(tokensync).toContain("signalGroup('SIGKILL')");
+    expect(tokensync.indexOf("signalGroup('SIGTERM')")).toBeLessThan(tokensync.indexOf("signalGroup('SIGKILL')"));
+    expect(sourceOfSymbol(KERNEL, 'boundedSpawn')).toContain("stdio: ['ignore', 'pipe', 'pipe']");
   });
 });
