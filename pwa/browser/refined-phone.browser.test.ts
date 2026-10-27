@@ -218,6 +218,8 @@ function mostFreeFirst(cases: readonly LaneCase[]): LaneCase[] {
   const ranked = cases.map((c, i) => ({ c, i, pct: used(c) })).filter((e) => e.pct !== null && e.c.acct.authDead !== true);
   const last = cases.filter((c) => used(c) === null || c.acct.authDead === true);
   ranked.sort((x, y) => x.pct! - y.pct! || x.i - y.i);
+  // The tie keys are not written out here (see above): an exact tie in the shared fixture must be noticed, not ordered by guess.
+  for (let i = 1; i < ranked.length; i++) if (ranked[i]!.pct === ranked[i - 1]!.pct) throw new Error(`the shared fixture now ties on binding use (${ranked[i]!.c.label}): write the tie keys into mostFreeFirst, as lanes-row's orderOf does`);
   return [...ranked.map((e) => e.c), ...last];
 }
 
