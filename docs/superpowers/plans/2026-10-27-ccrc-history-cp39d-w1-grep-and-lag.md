@@ -981,3 +981,13 @@ Then read the threads with `gh api graphql`, and confirm CI ran at the head and 
   - E2's comment's first line is edited in place (999 F4);
   - doc comments are corrected (987 F2, 999 F4, and review 964's two `lib.mjs` items);
   - fix round 1 (review 1065) closes 999 F4 whole: `decideExportPass`'s doc (D-6974) and `MARK_CHECK_WORDS`' `budget` line (D-6975) each say "its slice of the run's budget", and `SIDECAR_WALK_CHARS_MAX`'s soft-bound comment says what `startSidecarWalk` does: `first` is admitted on every walk call, so the overshoot grows by one name per call.
+
+## Errata (the coordinator's docs PR, after review 1088)
+
+Review 1088 accepted this wave at `a8e707cff` with no fix round. These correct the text above; the body is left as merged.
+
+- **999 F4 is not closed whole (review 1088 F2).** D-7099's last bullet says fix round 1 closes it whole. `MARK_CHECK_GLOSS.budget` in `lib.mjs` ("the run budget was spent before its next batch, ingest first") and its block comment ("starvation behind ingest is accepted") predate D-6975 and were not changed. The gloss is a runtime string pinned in `history-lib.test.ts`, so it is carried, with its pin, to the next wave that edits `lib.mjs` after W2 closes.
+- **The entry arm's `+e` (review 1088 F3).** Dropping it is an equivalent mutant while `INDEXED BY entries_ts` stands: the plan rows are identical, because the index hint already keeps a blob-led index off that arm. With both removed, T1-M4 is red. It is not pinned, by design.
+- **"Fewer times than main on every sort" (review 1088 F4).** Residuals, "The match is scanned per arm", holds after `ANALYZE`, which is the live case. On an unanalyzed store main's entry arm probes the match by rowid, and main read the match 4 times, so relevance and hybrid (4) are not fewer there. `recall.mjs`'s comments at about :414 and :547 overstate the match's cost too, and join the carry with :418 and :694.
+- **The SQLite floor (review 1088 F7).** Residuals, "SQLite floor": on an SQLite older than 3.25, `measure-history.py` loses the whole report, not only `w2` and `census`: `fail()` exits 2 with nothing on stdout. The session-hosting node's Python SQLite is 3.45.1.
+- **The refute pass's sizes (review 1088 F8, a nit).** Residuals, "The plan pin", D-7095 and Task 1 Step 5 put the refute pass's 4 ms against 5,520 ms beside 2,000 in-scope entries over 20,000 matches, which are review 1065's lens figures. Review 1065 gives no size for the refute pass.
