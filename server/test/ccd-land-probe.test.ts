@@ -375,7 +375,10 @@ describe('ccd-land-probe: the radar', () => {
     const d4 = path.join(fx.tmp, 'ccd-land-probe.linkdir'); fs.symlinkSync(target, d4);
     for (const d of [d1, d2, d3]) fs.utimesSync(d, old, old);
     fs.lutimesSync(d4, old, old);
-    expect(fx.run().status).toBe(0);
+    const r = fx.run();
+    expect(r.status).toBe(0);
+    // The lstat check, not rmtree's own refusal of a symlink, decides: only d1 is cleared.
+    expect(r.stderr.split('\n').filter((l) => l.includes('cleared a stale scratch'))).toHaveLength(1);
     expect(fs.existsSync(d1)).toBe(false);
     expect(fs.existsSync(d2)).toBe(true);
     expect(fs.lstatSync(d3).isDirectory()).toBe(true);
