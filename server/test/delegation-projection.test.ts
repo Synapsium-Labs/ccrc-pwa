@@ -202,12 +202,19 @@ describe('projectDelegation: R9, one level, bound to the run live at the instant
     ]);
   });
 
-  it('W4-P19: several runs of one session cover the instant: the greatest run id answers', () => {
-    const out = projectDelegation(input({
-      leases: [lease({ leaseId: 'l1', adminRecord: 't1', parentId: 'w', firstObservedAt: at(12) })],
-      sessions: [alive('w'), alive('c1'), alive('c2')], runs: [run(5, 'w', 'c2', 0, null), run(3, 'w', 'c1', 0, null)],
-    }));
-    expect(out.leases.map((l) => [l.parentId, l.via])).toEqual([['c2', 'w']]);
+  it('W4-P19: several runs of one session cover the instant: the greatest run id answers, in either input order', () => {
+    // Ascending first: `delegationRunStamps` answers `ORDER BY id`, so a first-match tie-break would pick the LEAST id in production.
+    const orders: Array<[string, DelegationProjectionRun[]]> = [
+      ['ascending (the store read\'s order)', [run(3, 'w', 'c1', 0, null), run(5, 'w', 'c2', 0, null)]],
+      ['descending', [run(5, 'w', 'c2', 0, null), run(3, 'w', 'c1', 0, null)]],
+    ];
+    for (const [order, runs] of orders) {
+      const out = projectDelegation(input({
+        leases: [lease({ leaseId: 'l1', adminRecord: 't1', parentId: 'w', firstObservedAt: at(12) })],
+        sessions: [alive('w'), alive('c1'), alive('c2')], runs,
+      }));
+      expect(out.leases.map((l) => [l.parentId, l.via]), order).toEqual([['c2', 'w']]);
+    }
   });
 
   it('W4-P20: the interval is inclusive at both ends: an instant equal to openedAt or to closedAt answers that run', () => {
