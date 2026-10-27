@@ -61,17 +61,36 @@ const LANES: readonly Lane[] = Array.from({ length: 17 }, (_, i) => {
 });
 
 /** The lanes most free first, worked out here from the rule and not by the app's decider: by the fuller window, lowest
- *  first, ties in roster order; a lane never read and a lane signed out go last, in roster order. */
-function expectedOrder(): string[] {
+ *  first; lanes that tie on it by that window's reset, soonest first (a lane with no reset after one with a reset), then by
+ *  the other window's use, lowest first (an unmeasured one after a measured one), then in roster order
+ *  (lanes-tie-break-soonest-reset). The fuller window is the weekly one on a tie between the windows. A lane never read
+ *  and a lane signed out go last, in roster order. */
+function orderOf(lanes: readonly Lane[]): string[] {
+  const num = (l: Lane, k: string): number | null => (typeof l.acct[k] === 'number' ? (l.acct[k] as number) : null);
   const used = (l: Lane): number | null => {
-    const known = [l.acct['five'], l.acct['seven']].filter((p): p is number => typeof p === 'number');
+    const known = [num(l, 'five'), num(l, 'seven')].filter((p): p is number => p !== null);
     return known.length === 0 ? null : Math.max(...known);
   };
-  const ranked = LANES.map((l, i) => ({ l, i, pct: used(l) })).filter((e) => e.pct !== null && e.l.acct['authDead'] !== true);
-  const last = LANES.filter((l) => used(l) === null || l.acct['authDead'] === true);
-  ranked.sort((x, y) => x.pct! - y.pct! || x.i - y.i);
+  // The binding window's reset and the other window's use, Infinity where nothing is known so unknown sorts after known.
+  const keys = (l: Lane): { reset: number; other: number } => {
+    const five = num(l, 'five');
+    const seven = num(l, 'seven');
+    const sevenBinds = seven !== null && seven === used(l);
+    return {
+      reset: (sevenBinds ? num(l, 'sevenResetAt') : num(l, 'fiveResetAt')) ?? Infinity,
+      other: (sevenBinds ? five : seven) ?? Infinity,
+    };
+  };
+  const ranked = lanes.map((l, i) => ({ l, i, pct: used(l), ...keys(l) })).filter((e) => e.pct !== null && e.l.acct['authDead'] !== true);
+  const last = lanes.filter((l) => used(l) === null || l.acct['authDead'] === true);
+  const cmp = (a: number, b: number): number => (a < b ? -1 : a > b ? 1 : 0);
+  ranked.sort((x, y) => cmp(x.pct!, y.pct!) || cmp(x.reset, y.reset) || cmp(x.other, y.other) || x.i - y.i);
   return [...ranked.map((e) => e.l.label), ...last.map((l) => l.label)];
 }
+
+/** The order of this file's own seventeen lanes. The long-named lane (index 7) and `lane-q` tie at 64% (the weekly window
+ *  of one, the 5h of the other), so the soonest reset puts `lane-q` first; the roster alone would put the long name. */
+const expectedOrder = (): string[] => orderOf(LANES);
 
 /** Per lane, the windows its card must show, and for each whether a countdown must print (a reset ahead, not rolled over). */
 function expectedWindows(): Record<string, Array<{ win: string; counted: boolean }>> {
