@@ -85,7 +85,7 @@ describe('accountSpawnBodies — every account-op spawn body outside shared/spaw
 
   it('fixture: a second stdin-piped group spawner in server/src is a site', () => {
     const root = tree({ 'server/src/second.ts': "export function second(file) {\n  const child = spawn(file, [], { detached: true, stdio: ['pipe', 'pipe', 'pipe'], env: {} });\n  process.kill(-child.pid, 'SIGTERM');\n}\n" });
-    expect(accountSpawnBodies(root).map((s) => `${s.file}:${s.line}`)).toEqual(['server/src/second.ts:2']);
+    expect(accountSpawnBodies(root).map((s) => ({ file: s.file, line: s.line }))).toEqual([{ file: 'server/src/second.ts', line: 2 }]);
   });
 
   it('real tree: none outside the kernel (2 at the base, measured in the PR body); the kernel holds the one body', () => {
