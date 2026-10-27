@@ -274,8 +274,15 @@ describe('tick hands its model to the lanes that would otherwise list the regist
       .toMatch(/\bthis\.sweepMail\(\s*registryRead\s*\)/);
   });
 
-  it('tick() passes registryRead to sweepAsks(', () => {
-    expect(body(), 'tick no longer hands the ask lane its model: that lane would list the registry itself')
+  // W3 Q3c (D-7027), named exception 2: tick hands the question sweep its model, and the sweep hands it to the ask
+  // half. The same fact, over the two bodies the hand-off now crosses.
+  it('tick() passes registryRead to sweepQuestions(', () => {
+    expect(body(), 'tick no longer hands the question sweep its model: the ask lane would list the registry itself')
+      .toMatch(/\bthis\.sweepQuestions\(\s*registryRead\s*\)/);
+  });
+
+  it('sweepQuestions passes registryRead to sweepAsks(', () => {
+    expect(tickCode(sourceOfSymbol(TICK_WATCH_TS, 'FleetWatcher.sweepQuestions')), 'the question sweep no longer hands the ask lane its model: that lane would list the registry itself')
       .toMatch(/\bthis\.sweepAsks\(\s*registryRead\s*\)/);
   });
 
