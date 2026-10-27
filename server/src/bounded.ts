@@ -5,7 +5,9 @@
  *
  * DEADLOCK RULE: a call under a bound never awaits another call under the same bound. A limited call that waited
  * on a sibling could hold every slot while the sibling queued for one, and the pool would never drain. Limit the
- * LEAF call (the one io round trip), never a caller that fans out beneath it.
+ * LEAF call (the one io round trip), never a caller that fans out beneath it under the SAME limiter. A caller may sit
+ * under one bound while its own calls run unbounded or under another limiter (as `readRegistryMeasured` does: rows
+ * under `mapBounded`, each row's field reads unbounded).
  */
 
 /** Runs a call once a slot is free: at most `max` in flight, the rest waiting in arrival order. */
