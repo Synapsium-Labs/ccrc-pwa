@@ -70,10 +70,13 @@
 //     R115: a change of the ask's identity this client did not send (an external screen change, a different ask) ends the
 //     engagement the same way and raises the same fence, when focus is in the card at that commit, or the keyboard was
 //     engaged and an inline card still shows an ask (a clear, or a crossing to the Sheet, leaves no fence behind).
-//     RESIDUALS, not waived: an externally driven, BYTE-IDENTICAL replacement (no identity change this client can see)
-//     still continues an engagement made by non-answer keys; a request already issued can still land on a byte-identical
-//     replacement (the desktop route compares content-derived ids; no client fence revokes an issued request); and a
-//     deliberate re-entry acts on whatever the card then shows.
+//     KNOWN LIMIT (R119, the operator's ruling of 2026-10-27): two stale-answer cases come from how every answer is sent,
+//     as keys typed into a terminal pane, and main has them for the phone's Sheet too, so no client fence closes them. An
+//     externally driven, BYTE-IDENTICAL replacement (no identity change this client can see) still continues an engagement
+//     made by non-answer keys. An answer still in flight when the question changes can still land on the new one: the
+//     desktop route checks a content-derived dialog id before it walks the cursor, not again before Enter, and no client
+//     fence revokes an issued request. A server re-check before Enter (T1h, after T1c) narrows the second; nothing makes
+//     keys into a pane atomic. A deliberate re-entry acts on whatever the card then shows.
 // - A held-down digit or arrow across tabs is no key at all (`askKeyAction` reads `repeat`), and a send the sheet
 //   already has in flight refuses another at the ONE gate every send passes, its `claim` (a box's toggle reads the
 //   same `sending`), so this hook keeps no second gate of its own.

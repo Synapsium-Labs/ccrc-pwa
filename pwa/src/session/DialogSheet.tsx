@@ -407,8 +407,10 @@ export function DialogSheet({ id, store, onOpenTerminal, raise, asker = null, on
   // inside the card (a row node the next screen reuses can keep focus with no event). Only a pointer press in the card, or
   // Go to question (`raise`), lifts the fence, and only if input was eligible at the act: the press reads `eligibleNow` at the
   // event, and the raise's eligibility is captured in render (`raiseMark`), so one made during a flight or in the gap is spent
-  // and nothing replays it after the reply. Tab moves focus and never unlocks. RESIDUALS, unchanged and unwaived: an identical
-  // replacement driven externally, a request already issued (landing on an identical replacement), and acting on what is shown.
+  // and nothing replays it after the reply. Tab moves focus and never unlocks. KNOWN LIMIT (R119; `useAskKeys`' header says
+  // it in full): an identical replacement driven externally, and an answer still in flight when the question changes, come
+  // from sending answers as keys into a pane, which main's phone Sheet shares; the server re-check before Enter is T1h, after
+  // T1c. A deliberate re-entry acts on whatever the card then shows.
   // KNOWN GAP, kept plain: at the desk two DIFFERENT aged asks back to back with no clear between them are told apart by their
   // pane dialog ids (R115), but two BYTE-IDENTICAL screens (the same dialog id) are still one identity. The transcript's events
   // do hold the AskUserQuestion call's `toolId`, which would tell even those apart; this controller deliberately does not read
