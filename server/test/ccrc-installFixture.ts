@@ -1150,6 +1150,9 @@ export const UNIT_FILES: Array<[string, string]> = [
   // The pane-scope sweep: ROLE-GATED on the reaper's terms — a server box runs no pane scopes.
   ['ccd-scope-sweep.service', 'deploy/systemd/ccd-scope-sweep.service'],
   ['ccd-scope-sweep.timer', 'deploy/systemd/ccd-scope-sweep.timer'],
+  // The read-only conflict radar (landing order wave 3b): ROLE-GATED `!= server` - a server box checks out no project to measure.
+  ['ccd-land-probe.service', 'deploy/systemd/ccd-land-probe.service'],
+  ['ccd-land-probe.timer', 'deploy/systemd/ccd-land-probe.timer'],
   // W4a Task 9 (design §11): the server-role watchdog's pair — ROLE-GATED the
   // OTHER way round from the pairs above: `_inst_units` places it on `server`
   // and `both` (this list's role) and never on `fleet`, whose node the
@@ -1803,7 +1806,8 @@ export const PROVISIONED_BOX_TOKEN =
  *  `filevault` and `secrets-backup-excluded` SKIP at every stage (darwin's), and `snapshot-posture` SKIPs on the fresh
  *  box (no lane secret) and PASSes on the provisioned one, whose `fleetFiles` state `none`.
  *  Wave 24 added `box-settings` (D-6599): PASS at every stage, re-measured from both box-token cases' own failing diff
- *  (a fresh box's ccrc.env sets none of ccrc's settings). */
+ *  (a fresh box's ccrc.env sets none of ccrc's settings). Landing order wave 3b added `land-probe`: SKIP at every stage
+ *  (no landing conf is opted in on a fresh box), re-measured from both box-token cases' own failing diff. */
 export const FLEET_BOX_CLASSES: Readonly<Record<string, string>> = {
   "accounts": "PASS",
   "approval-digest-mismatch": "SKIP",
@@ -1837,6 +1841,7 @@ export const FLEET_BOX_CLASSES: Readonly<Record<string, string>> = {
   "history": "PASS",
   "jq": "PASS",
   "jq_regex": "PASS",
+  "land-probe": "SKIP",
   "linger": "PASS",
   "memory": "PASS",
   "model-default": "PASS",

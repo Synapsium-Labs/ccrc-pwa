@@ -205,6 +205,8 @@ function plantInstalledBox(home: string, opts: { versioned?: string[] } = {}): v
   writeFileSync(join(bin, 'ccd-tmp-sweep'), '#!/bin/sh\n# tmp sweep\n', { mode: 0o755 });
   // The pane-scope sweep, placed by `_inst_bins` on the same non-Darwin arm.
   writeFileSync(join(bin, 'ccd-scope-sweep'), '#!/bin/sh\n# scope sweep\n', { mode: 0o755 });
+  // The read-only conflict radar (landing order wave 3b), placed by `_inst_bins` on the same non-Darwin arm.
+  writeFileSync(join(bin, 'ccd-land-probe'), '#!/bin/sh\n# land probe\n', { mode: 0o755 });
   // D-5241: the tool-child priority's shell prefix, placed by `_inst_bins` on the same non-Darwin arm.
   writeFileSync(join(bin, 'ccd-tool-adj'), '#!/bin/sh\n# tool adj\n', { mode: 0o755 });
   // history spec §9.5: the history sweep's shim, placed by `_inst_bins` off
@@ -280,6 +282,8 @@ function plantInstalledBox(home: string, opts: { versioned?: string[] } = {}): v
     // The temp-dir reaper's pair, on the same role-gated terms.
     'ccd-tmp-sweep.service', 'ccd-tmp-sweep.timer',
     'ccd-scope-sweep.service', 'ccd-scope-sweep.timer',
+    // landing order wave 3b: the conflict radar's pair, on the same role-gated terms.
+    'ccd-land-probe.service', 'ccd-land-probe.timer',
     // history spec §9.5: the history sweep's pair, on the same role-gated terms.
     'ccd-history-sweep.service', 'ccd-history-sweep.timer',
     'ccd-account-health.service', 'ccd-account-health.timer',
@@ -595,6 +599,9 @@ describe('ccrc uninstall: the remove set (spec §7)', () => {
     expect(calls).toContain('--user disable --now ccd-usage-sweep.timer');
     expect(calls).toContain('--user disable --now ccd-tmp-sweep.timer');
     expect(calls).toContain('--user disable --now ccd-scope-sweep.timer');
+    // landing order wave 3b: the radar's timer AND service are disabled, and both unit files go (the unit-file census above).
+    expect(calls).toContain('--user disable --now ccd-land-probe.timer');
+    expect(calls).toContain('--user disable --now ccd-land-probe.service');
     expect(calls).toContain('--user disable --now ccd-history-sweep.timer');
     expect(calls).toContain('--user disable --now ccd-account-health.timer');
     expect(calls).toContain('--user disable --now ccd-telemetry-keepalive.timer');
@@ -751,6 +758,53 @@ describe('ccrc uninstall: the remove set (spec §7)', () => {
     }
   });
 
+  it('~/.cc-sessions: the conflict radar\'s opt-in mirrors go, and ONLY regular files named enabled one level under a real landing directory (landing order wave 3b)', () => {
+    const home = mkTmp('ccrc-uninst-landing-');
+    plantInstalledBox(home);
+    const land = join(home, '.cc-sessions', 'landing');
+    const keep = (rel: string): string => join(land, rel);
+    for (const d of ['proj-a', 'proj-b', 'proj-d']) mkdirSync(keep(d), { recursive: true });
+    // proj-a: the mirror (goes), the measurements and a lineage file (stay: the operator may still read them).
+    writeFileSync(keep('proj-a/enabled'), '{"v":1,"project":"proj-a","at":"2026-10-27T09:00:00Z"}\n');
+    for (const f of ['probe', 'main-health', 'lane-a-proj-a-alpha.lineage']) writeFileSync(keep(`proj-a/${f}`), '{"v":1}\n');
+    // two levels down is not one level under landing.
+    mkdirSync(keep('proj-a/sub'), { recursive: true });
+    writeFileSync(keep('proj-a/sub/enabled'), 'deeper\n');
+    // proj-b: a SYMLINK named enabled, whose target lives outside the tree: neither is removed.
+    mkdirSync(join(home, 'elsewhere'), { recursive: true });
+    writeFileSync(join(home, 'elsewhere', 'target'), 'not ours\n');
+    symlinkSync(join(home, 'elsewhere', 'target'), keep('proj-b/enabled'));
+    writeFileSync(keep('proj-b/probe'), '{"v":1}\n');
+    // proj-c: a project DIRECTORY that is a symlink out of the tree holds a regular enabled file: not ours to follow.
+    mkdirSync(join(home, 'elsewhere', 'proj-c'), { recursive: true });
+    writeFileSync(join(home, 'elsewhere', 'proj-c', 'enabled'), 'not ours either\n');
+    symlinkSync(join(home, 'elsewhere', 'proj-c'), keep('proj-c'));
+    // proj-d: a DIRECTORY named enabled is not a regular file.
+    mkdirSync(keep('proj-d/enabled'), { recursive: true });
+    // a regular file named enabled directly under landing is not under a project directory.
+    writeFileSync(keep('enabled'), 'stray\n');
+    const r = runVerb(home, 'uninstall', ['--force']);
+    expect(r.code, r.stderr).toBe(0);
+    expect(existsSync(keep('proj-a/enabled')), 'the opt-in mirror survived').toBe(false);
+    for (const rel of ['proj-a/probe', 'proj-a/main-health', 'proj-a/lane-a-proj-a-alpha.lineage', 'proj-a/sub/enabled', 'proj-b/probe', 'proj-d/enabled', 'enabled']) {
+      expect(existsSync(keep(rel)), `${rel} was removed`).toBe(true);
+    }
+    expect(lstatSync(keep('proj-b/enabled')).isSymbolicLink(), 'the symlink named enabled was removed').toBe(true);
+    expect(readFileSync(join(home, 'elsewhere', 'target'), 'utf8'), 'the symlink was followed').toBe('not ours\n');
+    expect(existsSync(join(home, 'elsewhere', 'proj-c', 'enabled')), 'a symlinked project directory was followed').toBe(true);
+  });
+
+  it('~/.cc-sessions: a landing directory that is itself a symlink is not followed (landing order wave 3b)', () => {
+    const home = mkTmp('ccrc-uninst-landing-link-');
+    plantInstalledBox(home);
+    mkdirSync(join(home, 'elsewhere', 'proj-a'), { recursive: true });
+    writeFileSync(join(home, 'elsewhere', 'proj-a', 'enabled'), 'not ours\n');
+    symlinkSync(join(home, 'elsewhere'), join(home, '.cc-sessions', 'landing'));
+    const r = runVerb(home, 'uninstall', ['--force']);
+    expect(r.code, r.stderr).toBe(0);
+    expect(existsSync(join(home, 'elsewhere', 'proj-a', 'enabled')), 'a symlinked landing directory was followed').toBe(true);
+  });
+
   it('~/.cc-sessions: the children\'s deny file goes even with no roster projection, where the hooks sweep is skipped (D-5392)', () => {
     const home = mkTmp('ccrc-uninst-deny-noroster-');
     plantInstalledBox(home);
@@ -812,7 +866,7 @@ describe('ccrc uninstall: the remove set (spec §7)', () => {
     // `_inst_bins` places them, so an uninstall that left them strands them on
     // PATH for ever.
     for (const b of ['ccd', 'ccrc', 'ccd-cap-scopes', 'ccd-graph-sweep', 'ccd-usage-sweep',
-      'ccd-usage-sweep.py', 'ccd-account-health', 'ccd-tmp-sweep', 'ccd-scope-sweep', 'ccd-tool-adj', 'ccd-history-sweep',
+      'ccd-usage-sweep.py', 'ccd-account-health', 'ccd-tmp-sweep', 'ccd-scope-sweep', 'ccd-land-probe', 'ccd-tool-adj', 'ccd-history-sweep',
       'ccd-telemetry-keepalive', 'ccd-account-auth', 'ccd-pool-sync', 'ccd-update-sync', 'ccrc-api',
       ...GPT_LANE_BINS, 'graphify']) {
       expect(existsSync(join(home, '.local', 'bin', b)), `${b} survived`).toBe(false);

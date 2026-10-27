@@ -1164,7 +1164,7 @@ export function plantSpoolDir(home: string, id: string): string {
 }
 
 /** `python3 -I -c <program>` for the two programs `_check_box-token` runs (`_BT_PY_STATE`, `_BT_PY_FLEET` in
- *  `ccd/ccrc-doctor-checks`), handed to the real interpreter; the text is read from the shipped file so a third or an
+ *  `ccd/ccrc-doctor-checks`) and the one `_check_land-probe` runs (`_LP_PY`, landing order wave 3b), handed to the real interpreter; the text is read from the shipped file so a third or an
  *  edited program still reaches the stub's bare `exit 0`. Empty when this box has no python3 (the check then says so).
  *  Its second arm (codex-bridge Stage 1, Task 9) hands `python3 -IS $HOME/.local/bin/ccgpt-auth.py …` to the real
  *  interpreter too: `_codex_auth`'s exact argv, so the doctor's `codex` check reads the placed library's own `status`
@@ -1173,7 +1173,7 @@ export const BT_PY_ARM = ((): string => {
   const real = spawnSync('bash', ['-c', 'command -v python3'], { encoding: 'utf8' }).stdout.trim();
   if (real === '') return '';
   const src = readFileSync(join(REPO, 'ccd', 'ccrc-doctor-checks'), 'utf8');
-  const progs = ['_BT_PY_STATE', '_BT_PY_FLEET'].map((n) => {
+  const progs = ['_BT_PY_STATE', '_BT_PY_FLEET', '_LP_PY'].map((n) => {
     const m = new RegExp(`^${n}='([^']*)'$`, 'm').exec(src);
     if (!m) throw new Error(`ccd/ccrc-doctor-checks no longer holds ${n}='…' in the shape this stub reads`);
     return `'${m[1]}'`;
@@ -1677,8 +1677,16 @@ export const anyVerdictFor = (out: string, name: string): string | undefined =>
  *  `approval-key-colocated` SKIPs - `healthy()` writes no server signing key
  *  (`~/.ccrc/approval-signing.key`), which only a server that started with
  *  coordination creates. Its sibling `approval-digest-mismatch` PASSes there (no
- *  refusals journal), so it moves no count. */
-export const HEALTHY_SKIPS = (process.platform === 'darwin' ? 2 : 0) + 12;
+ *  refusals journal), so it moves no count.
+ *
+ *  RAISED BY ONE AGAIN, on every platform (landing order wave 3b, Task 3): `land-probe`
+ *  SKIPs - `healthy()` writes no `~/.ccrc/landing/<project>.conf`, so no project is
+ *  opted in to the conflict radar and there is nothing to measure (it SKIPs on macOS
+ *  and on a server-role box too). The `land-probe` describe in `ccrc-doctor-core.test.ts`
+ *  plants a conf and its files where the check answers. Measured the same way: with the
+ *  check in the table and this `+ 1` absent, every `(N skipped)` pin that reads this
+ *  constant reds. */
+export const HEALTHY_SKIPS = (process.platform === 'darwin' ? 2 : 0) + 13;
 
 // ── the session gate: the flag, and the passphrase it needs ───────────────
 // Stage 3a, Task 9. TWO FACTS, ONE VERDICT — `CCRC_AUTH` (out of `ccrc.env`,

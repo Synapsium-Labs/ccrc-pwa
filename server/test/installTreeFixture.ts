@@ -193,6 +193,8 @@ export const TREE_FILES = [
   // The pane-scope sweep (session-continuity wave 4), shipped by `_inst_bins` on
   // the same non-Darwin, every-ROLE arm as the reaper above.
   'ccd/ccd-scope-sweep',
+  // The read-only conflict radar (landing order wave 3b), placed by `_inst_bins` on the same non-Darwin, every-ROLE arm.
+  'ccd/ccd-land-probe',
   // D-5241: the tool-child priority's shell prefix, placed by `_inst_bins` on
   // the same non-Darwin, every-ROLE arm as the sweep above.
   'ccd/ccd-tool-adj',

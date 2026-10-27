@@ -1,0 +1,23 @@
+# ccd-land-probe.service - the read-only conflict radar's tick (landing-order spec stage 3). One oneshot, fired
+# by ccd-land-probe.timer: it measures, for each project the operator opted in, which open PRs conflict with the
+# base and with each other, whether the base's required checks are green, and each workspace branch's lineage of
+# clean base merges. It writes only under ~/.cc-sessions/landing/ and its own scratch, and never changes a repository.
+[Unit]
+Description=Measure which open PRs conflict with the base, the base's required checks and each workspace branch's lineage (read-only)
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/ccd-land-probe
+# The tick's own budget is CCD_LAND_PROBE_TICK_BUDGET (780 s at most), so a tick
+# that outlives this is wedged, not slow: it is killed, the next one starts
+# clean, and every file the probe writes lands by rename, so a killed tick
+# leaves the last complete ones. The margin below this value is deliberate.
+TimeoutStartSec=900
+# One git fetch and a few merge-trees into a scratch repository, driven by a
+# single python3: the working set is a handful of packfiles. Capped for
+# ccd-cap-scopes' own reason - a measurement must never be the thing that OOMs
+# the fleet host.
+MemoryMax=1G
+# Idle CPU and idle IO: the fetch and the merge-trees share a disk with every
+# live session, and a conflict reading five minutes late costs nothing.
+Nice=10
+IOSchedulingClass=idle

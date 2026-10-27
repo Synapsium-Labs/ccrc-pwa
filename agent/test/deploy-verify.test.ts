@@ -679,6 +679,9 @@ describe('the verification is actually wired into the deploy, and can observe a 
       // The pane-scope sweep's pair (session-continuity wave 4), shipped the same way.
       'systemd/ccd-scope-sweep.service',
       'systemd/ccd-scope-sweep.timer',
+      // The read-only conflict radar's pair (landing order wave 3b), shipped the same way.
+      'systemd/ccd-land-probe.service',
+      'systemd/ccd-land-probe.timer',
       // D-5241: the victim policy's two OOMPolicy=continue scope drop-ins.
       'systemd/tmux-spawn-.scope.d/50-oom-continue.conf',
       'systemd/ccrc-tmux-server.scope.d/50-oom-continue.conf',
@@ -701,6 +704,8 @@ describe('the verification is actually wired into the deploy, and can observe a 
       'the history sweep shim is not in the repo').toBe(true);
     expect(existsSync(path.join(deployDir, '..', 'ccd', 'ccd-scope-sweep')),
       'the pane-scope sweep is not in the repo').toBe(true);
+    expect(existsSync(path.join(deployDir, '..', 'ccd', 'ccd-land-probe')),
+      'the conflict radar is not in the repo').toBe(true);
     expect(existsSync(path.join(deployDir, '..', 'ccd', 'ccd-tool-adj')),
       'the tool-child priority prefix is not in the repo').toBe(true);
     expect(deploySh.split('\n').filter((l) => l.trim() === 'install_atomic ccd/ccd-tool-adj .local/bin/ccd-tool-adj 755'),
@@ -770,6 +775,9 @@ describe('the verification is actually wired into the deploy, and can observe a 
       // The pane-scope sweep's pair, installed the same way.
       '_unit_atomic ~/ccrc/deploy/systemd/ccd-scope-sweep.service ~/.config/systemd/user/ccd-scope-sweep.service',
       '_unit_atomic ~/ccrc/deploy/systemd/ccd-scope-sweep.timer ~/.config/systemd/user/ccd-scope-sweep.timer',
+      // The conflict radar's pair (landing order wave 3b), installed the same way.
+      '_unit_atomic ~/ccrc/deploy/systemd/ccd-land-probe.service ~/.config/systemd/user/ccd-land-probe.service',
+      '_unit_atomic ~/ccrc/deploy/systemd/ccd-land-probe.timer ~/.config/systemd/user/ccd-land-probe.timer',
       // D-5241: the two scope drop-ins, the pane one in systemd's PREFIX form (trailing hyphen).
       'mkdir -p ~/.config/systemd/user/tmux-spawn-.scope.d ~/.config/systemd/user/ccrc-tmux-server.scope.d',
       '_unit_atomic ~/ccrc/deploy/systemd/tmux-spawn-.scope.d/50-oom-continue.conf ~/.config/systemd/user/tmux-spawn-.scope.d/50-oom-continue.conf',
@@ -828,6 +836,11 @@ describe('the verification is actually wired into the deploy, and can observe a 
     // The pane-scope sweep's timer, on the same daemon-reload.
     const scopeSweepTimerAt = restartLinks.findIndex((l) => l.includes('enable --now ccd-scope-sweep.timer'));
     expect(scopeSweepTimerAt, 'the scope-sweep timer is never enabled').toBeGreaterThan(reloadAt);
+    // The conflict radar's timer (landing order wave 3b), on the same daemon-reload and before the agent restart.
+    const landProbeTimerAt = restartLinks.findIndex((l) => l.includes('enable --now ccd-land-probe.timer'));
+    expect(landProbeTimerAt, 'the land-probe timer is never enabled').toBeGreaterThan(reloadAt);
+    expect(landProbeTimerAt, 'the land-probe timer is enabled after the agent restart')
+      .toBeLessThan(restartLinks.findIndex((l) => l.includes('restart ccrc-agent.service')));
 
     // And structurally: the build ssh runs, THEN stamp_build, THEN the
     // restart ssh — three sequential top-level statements under
@@ -858,6 +871,7 @@ describe('the verification is actually wired into the deploy, and can observe a 
     expect(deploySh).toContain('install_atomic ccd/ccd-tmp-sweep .local/bin/ccd-tmp-sweep 755');
     expect(deploySh).toContain('install_atomic ccd/ccd-history-sweep .local/bin/ccd-history-sweep 755');
     expect(deploySh).toContain('install_atomic ccd/ccd-scope-sweep .local/bin/ccd-scope-sweep 755');
+    expect(deploySh).toContain('install_atomic ccd/ccd-land-probe .local/bin/ccd-land-probe 755');
     expect(deploySh).toContain('install_atomic ccd/tmux.conf .tmux.conf 644');
     expect(deploySh).toContain('install_atomic ccd/statusline-command.sh .claude/statusline-command.sh 755');
   });
