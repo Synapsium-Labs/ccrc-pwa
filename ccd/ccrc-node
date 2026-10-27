@@ -171,10 +171,13 @@ _node_select() {
 
 # `_node_publish` — the ONE writer of the box-side artefacts (spec decision 6); `_inst_node`, `_fix_node-path` and
 # deploy.sh all call it. Three symlinks and the environment.d fragment, each written to a temp name and renamed, so
-# a reader never sees a half-written one; then a manager reload. Idempotent. darwin: nothing (launchd bakes PATH).
+# a reader never sees a half-written one; then a manager reload. Idempotent. darwin: nothing (launchd bakes PATH), and NODE_WHY says so.
 _node_publish() {
   NODE_WHY=
-  case "$(uname -s 2>/dev/null)" in Darwin) return 0 ;; esac
+  # OSTYPE first (bash sets it), uname only as the fallback: ccd/ccrc's CCD_OS idiom, safe on a PATH with no uname.
+  local os=linux
+  case "${OSTYPE:-}" in darwin*) os=darwin ;; linux*) ;; *) case "$(uname -s 2>/dev/null)" in Darwin) os=darwin ;; esac ;; esac
+  if [ "$os" = darwin ]; then NODE_WHY="darwin: launchd bakes PATH into the plist; nothing to publish"; return 0; fi
   if [ ! -d "${NODE_BIN_DIR:-}" ]; then NODE_WHY="no node directory selected to publish"; return 1; fi
   local dir="$HOME/.local/libexec/ccrc/node-bin" envd="$HOME/.config/environment.d" b tmp
   mkdir -p "$dir" "$envd" || { NODE_WHY="cannot create $dir or $envd"; return 1; }

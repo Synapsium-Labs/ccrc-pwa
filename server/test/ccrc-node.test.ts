@@ -241,11 +241,11 @@ describe('_node_publish', () => {
     expect(existsSync(frag(fx))).toBe(true);
     expect(readFileSync(fx.sysctlLog, 'utf8')).not.toContain('daemon-reload');
   });
-  it('darwin: publishes nothing, rc 0', () => {
+  it('darwin (OSTYPE, read before any uname): publishes nothing, rc 0, and says so in one line', () => {
     const fx = fixture(['v22.16.0'], null);
-    exe(path.join(fx.bin, 'uname'), 'echo Darwin');
-    const r = publish(fx, path.join(fx.nvm, 'versions/node/v22.16.0/bin'));
-    expect(r.out).toBe('rc=0');
+    const r = run(fx, `NODE_BIN_DIR="${fx.nvm}/versions/node/v22.16.0/bin"; _node_publish; echo "rc=$? why=$NODE_WHY"`, { OSTYPE: 'darwin23' });
+    expect(r.out).toMatch(/^rc=0 why=darwin: [^\n]*nothing to publish$/);
+    expect(existsSync(fx.sysctlLog)).toBe(false);
     expect(existsSync(links(fx))).toBe(false);
     expect(existsSync(frag(fx))).toBe(false);
   });

@@ -17058,7 +17058,7 @@ _inst_caps() {   # what THIS install's ccrc can do (design 2026-09-20 §9, decis
 # and `_inst_enable` so the first restart already sees the PATH. This step never re-implements it.
 _inst_node() {
   _node_publish || _ccrc_die "could not publish node for the user manager: $NODE_WHY"
-  if [ "$(uname -s 2>/dev/null)" = Darwin ]; then
+  if [ "$CCD_OS" = darwin ]; then
     echo "install: node: $NODE_VERSION at $NODE_BIN_DIR (launchd bakes PATH into the plist; nothing to publish)"
   else
     echo "install: node: $NODE_VERSION at $NODE_BIN_DIR (links in $HOME/.local/libexec/ccrc/node-bin; manager PATH via ~/.config/environment.d/50-ccrc-node.conf)"
