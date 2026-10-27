@@ -7466,17 +7466,16 @@ _acct_mark_off() {   # <id> <what-still-stands> — the regular marker ccd reads
   # `_plat_mv_notdir` atomically replaces every non-directory name without opening
   # it. `-f && ! -L` is then the exact postcondition: ccd reads `-f`, and accepting
   # a link here would re-introduce the write-through path on the next converge.
-  local id="$1" stands="$2" marker="$_SVC_REG/$1-disabled" tmp="$_SVC_REG/.$1-disabled.tmp.$$"
-  _acct_own_temp "$tmp"
-  mkdir -p "$_SVC_REG" \
-    || _acct_refuse 1 disable-marker "cannot create $_SVC_REG, so this lane cannot be left switched off — and a lane nobody has measured must not be pickable. Create that directory, then: touch $_SVC_REG/$id-disabled. $stands"
-  rm -f -- "$tmp"
-  : > "$tmp" \
-    || _acct_refuse 1 disable-marker "cannot write the staged empty marker $tmp, so this lane cannot be left switched off. Fix $_SVC_REG, then: touch $marker. $stands"
-  _plat_mv_notdir "$tmp" "$marker" \
-    || { rm -f -- "$tmp"; _acct_refuse 1 disable-marker "cannot write $marker by replacing it with an empty regular marker, so this lane cannot be left switched off. Fix that path, then: touch $marker. $stands"; }
-  { [ -f "$marker" ] && [ ! -L "$marker" ]; } \
-    || _acct_refuse 1 disable-marker "$marker is not a regular marker after the write, so this lane cannot be proved switched off. Fix that path, then: touch $marker. $stands"
+  # Those steps are `_acct_switch_write`'s `off` (D-7050); this maps its class.
+  local id="$1" stands="$2" marker="$_SVC_REG/$1-disabled" tmp="$_SVC_REG/.$1-disabled.tmp.$$" rc=0
+  _acct_switch_write "$id" off || rc=$?
+  case "$rc" in
+    0) : ;;
+    1) _acct_refuse 1 disable-marker "cannot create $_SVC_REG, so this lane cannot be left switched off — and a lane nobody has measured must not be pickable. Create that directory, then: touch $_SVC_REG/$id-disabled. $stands" ;;
+    2) _acct_refuse 1 disable-marker "cannot write the staged empty marker $tmp, so this lane cannot be left switched off. Fix $_SVC_REG, then: touch $marker. $stands" ;;
+    3) _acct_refuse 1 disable-marker "cannot write $marker by replacing it with an empty regular marker, so this lane cannot be left switched off. Fix that path, then: touch $marker. $stands" ;;
+    *) _acct_refuse 1 disable-marker "$marker is not a regular marker after the write, so this lane cannot be proved switched off. Fix that path, then: touch $marker. $stands" ;;
+  esac
 }
 
 
