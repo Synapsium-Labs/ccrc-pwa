@@ -6,7 +6,7 @@
 // bar itself, because the cards carry none.
 //
 // STATUS MODE reads `groupByStatus` (statusGroups.ts): the groups, their order, their labels and which fold are that
-// model's, never this file's. Needs you, Done and Working are open; Idle, Cleanup, Archived and Dead fold. A fold is
+// model's, never this file's. Needs you, Done and Working are open; Idle, Cleanup, Archived and Exited fold. A fold is
 // `useFolded`'s, under `status::<bucket>`, and the key means "not as it starts": for a folding group its presence
 // opens it (the archived fold's inversion, `FleetScreen`'s comment), for an open one its presence closes it. So a
 // device that never touched a fold sees the defaults. Needs you, while it holds a row, is HELD open whatever is stored:
