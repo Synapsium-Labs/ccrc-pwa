@@ -1378,3 +1378,17 @@ describe('the disabled switch is never projected from the roster (D-7048)', () =
     expect(extra.map((s) => `${s.name}  ${s.text.trim()}`), `named writers: ${named.join(', ')}`).toEqual([]);
   });
 });
+
+// ONE AUTH-DEAD WRITE PRIMITIVE (D-7049; ARCH-72, Task C5b; spec K16). `$REG/<lane>-authdead` is written and removed
+// by `_authdead_mark`, `_authdead_clear` and `_authdead_sweep_staged`, defined once in `ccd/ccd`, and by
+// `_authdead_expired`'s compare-and-remove, the named exception (frozen in the tick diet's E0c closure). The probe's
+// byte copies in `ccd/ccd-account-health`'s generated region count zero sites by the census's own rule (a differing
+// copy counts as its own). At C5a's base 6; here 4. MAY ONLY SHRINK: a name leaves this list in the commit that
+// removes its writer; none is ever added, so a new inline `mv -f … "$REG/$x-authdead"` anywhere in `ccd/` reds here.
+describe('the auth-dead marker has one write primitive (D-7049)', () => {
+  it('its writer bodies are exactly the three primitive functions in ccd/ccd and _authdead_expired: 4', () => {
+    expect(accountMarkerWriters('authdead').map((s) => s.name)).toEqual([
+      'ccd/ccd#_authdead_mark', 'ccd/ccd#_authdead_clear', 'ccd/ccd#_authdead_sweep_staged', 'ccd/ccd#_authdead_expired',
+    ]);
+  });
+});
