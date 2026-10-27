@@ -1706,6 +1706,9 @@ describe("C27 and DM46: the scope join runs before the LIMIT; another project's 
         // Both the entry arm and the variant arm read entries through entries_ts, so at least two plan rows name it.
         expect(built.filter((d) => /USING (?:COVERING )?INDEX entries_ts \(transcript_pk=\?/.test(d)).length, `${half}/${sort}: fewer than two entries_ts (transcript_pk=?) rows in the plan:\n${built.join('\n')}`).toBeGreaterThanOrEqual(2);
         expect(built.filter((d) => /\b(?:entries_blob|entries_blob_prov|entry_variants_blob|sidecars_blob)\b/.test(d)), `${half}/${sort}: a blob-led index in the plan`).toEqual([]);
+        // The variant arm's unary + on its blob term is a guard: without it the probe becomes an IN-loop on (entry_id=? AND blob_id=?), one seek per box-wide match per in-scope entry.
+        expect(built.some((d) => /^SEARCH entry_variants USING (?:COVERING )?INDEX sqlite_autoindex_entry_variants_1 \(entry_id=\?\)/.test(d)), `${half}/${sort}: the variant arm is not probed by (entry_id=?) alone:\n${built.join('\n')}`).toBe(true);
+        expect(built.filter((d) => /\(entry_id=\? AND blob_id=\?\)/.test(d)), `${half}/${sort}: the variant arm is probed on (entry_id=? AND blob_id=?)`).toEqual([]);
         const shipped = plan(SHIPPED_SQL.ranked(SHIPPED_SQL.ftsMatch, sort, false));
         expect(shipped.some((d) => /\bentries_blob(?:_prov)?\b/.test(d)), `${half}/${sort}: CONTROL the shipped statement's plan is blob-led:\n${shipped.join('\n')}`).toBe(true);
       }
@@ -1907,7 +1910,7 @@ describe.skipIf(process.platform === 'darwin')('CP-39d: grep drives each referre
       const r = mod.runGrep({ ...rc0, db: GRX.spyDb(rc0.db, calls) }, await GRX.grepArgs(['zqeq', '--sort', sort]));
       expect(r.exit, sort).toBe(0);
       const matching = calls.filter((s) => s.includes('blobs_fts MATCH'));
-      expect(matching, `${sort}: the global match runs once`).toHaveLength(1);
+      expect(matching, `${sort}: one prepared statement carries the match`).toHaveLength(1);
       expect(matching[0], sort).toContain('LIMIT :pool');
     }
   });
