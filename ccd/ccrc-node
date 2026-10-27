@@ -32,6 +32,8 @@ _node_floor() {
   if [ -z "$txt" ]; then NODE_WHY="cannot read $f to find the node floor (engines.node)"; return 1; fi
   if [[ $txt =~ \"engines\"[[:space:]]*:[[:space:]]*\{[^}]*\"node\"[[:space:]]*:[[:space:]]*\"([^\"]*)\" ]]; then
     local spec="${BASH_REMATCH[1]}"
+    # shellcheck disable=SC2034
+    # NODE_FLOOR is an output global, read by the caller that sourced this library.
     if [[ $spec =~ ^\>=([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then NODE_FLOOR="${BASH_REMATCH[1]}"; return 0; fi
     NODE_WHY="engines.node in $f is '$spec', not a single '>=x.y.z'"; return 1
   fi
@@ -98,7 +100,7 @@ _node_path_pick() {
 # process's PATH, so the build that follows uses the node the units will. Each refusal has its own NODE_WHY.
 _node_select() {
   NODE_BIN_DIR=; NODE_VERSION=; NODE_WHY=
-  local floor="$1" nvm="${NVM_DIR:-$HOME/.nvm}" v d def out rc pick= ok= bad=
+  local floor="$1" nvm="${NVM_DIR:-$HOME/.nvm}" v d def out rc pick='' ok='' bad=''
   if [ -s "$nvm/nvm.sh" ]; then
     local vd="$nvm/versions/node"
     if [ -e "$vd" ] && { [ ! -d "$vd" ] || [ ! -r "$vd" ] || [ ! -x "$vd" ]; }; then
@@ -158,6 +160,8 @@ _node_select() {
       fi
     fi
     unset -f _node_nvm_list _node_nvm_complete
+    # shellcheck disable=SC2034
+    # NODE_VERSION is an output global, read by the caller that sourced this library.
     if [ -n "$NODE_BIN_DIR" ]; then :   # chosen from PATH above
     elif [ -z "$pick" ]; then return 1
     else NODE_VERSION="$pick"; NODE_BIN_DIR="$vd/$pick/bin"; fi
