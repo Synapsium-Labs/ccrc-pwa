@@ -263,11 +263,12 @@ describe('the ask surfaces speak plainly (D-6325)', () => {
 });
 
 // The fleet list's words (D-6331, T3a): the card head, the claims strip and the class chooser, in both places it lives.
-// The bucket chips' files are read too (BucketBar.tsx, statusGroups.ts, markSeen.ts); Task C of T3a adds FleetTable.tsx.
+// The bucket chips' files are read too (BucketBar.tsx, statusGroups.ts, markSeen.ts), and Instrument's FleetTable.tsx, whose group heads speak the same vocabulary.
 const SRC = path.join(import.meta.dirname, '..', 'src');
 const FLEET_LIST = [
   ...['ProjectCardHead.tsx', 'HotFilesStrip.tsx', 'NewSessionSheet.tsx', 'BucketBar.tsx', 'statusGroups.ts', 'markSeen.ts'].map((f) => path.join(SRC, 'fleet', f)),
   path.join(SRC, 'screens', 'FleetScreen.tsx'),
+  path.join(SRC, 'skins', 'instrument', 'FleetTable.tsx'),
 ];
 
 describe('the fleet list speaks plainly (D-6331)', () => {
