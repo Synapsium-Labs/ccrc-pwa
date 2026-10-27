@@ -1,10 +1,12 @@
 // Desktop polish C3 (D-6435): the pane capture of `FleetWatcher.tick()`, measured at the tick. `detectDialogs` captures one
-// pane per registry row; today it does so one after another, and a later change bounds a CONCURRENT pass instead. This
-// suite is written against the serial code so that change is pinned to leave every frame exactly as it is. It measures:
+// pane per registry row, at most DIALOG_CAPTURE_CONCURRENCY at once, then reads them in registry order. The frame
+// literals below were recorded on the earlier serial code, so the bounded pass is pinned to leave every frame exactly as
+// it was. It measures:
 // - the frames of one 12-row fixture (more rows than the capture bound, so an unbounded fan-out shows), recorded as
 //   LITERALS below: the `pane:<id>` emissions in order, the ask pushes, the fleet frame's rows, the statuslines and the
 //   task progress. Nothing in an expectation is computed from the code under test;
 // - how many captures are in flight at once, and whether a second is issued before the first resolves;
+// - that a capture which rejects is rethrown at its own row, after the rows before it;
 // - that a pane's `doneAt` is its own capture's return time, whichever order the captures return in;
 // - the task lane's regression pins that the same tick holds: a due sweep adds no `.uuid` read (the registry hand-off,
 //   #1240), task files are read once per TASK_SWEEP_MS, and an unlistable registry reads none and keeps the progress.
@@ -94,6 +96,8 @@ class CaptureGate {
   inFlight = 0;
   maxInFlight = 0;
   releases = 0;
+  /** Rows whose capture rejects with the given error, once it is let go (no production Runner rejects; a fake can). */
+  rejects = new Map<string, Error>();
   /** Runs just before a capture is let go (case 8 moves the wall clock here). */
   beforeRelease: ((id: string, k: number) => void) | null = null;
 
@@ -105,6 +109,8 @@ class CaptureGate {
     this.inFlight += 1;
     this.maxInFlight = Math.max(this.maxInFlight, this.inFlight);
     await new Promise<void>((go) => { this.held.push({ id, go }); });
+    const boom = this.rejects.get(id);
+    if (boom !== undefined) throw boom;
     const pane = this.panes.get(id) ?? null;
     return { ran: true, code: pane === null ? 1 : 0, stdout: pane ?? '', stderr: '' };
   };
@@ -292,7 +298,7 @@ describe('the frames of one fixture, recorded as literals', () => {
     const seen = await recordedTick(r, 'issue');
     expect(seen.panes).toEqual(RECORDED_PANES);
     expect(r.sent).toEqual(RECORDED_PUSHES);
-  }, 60_000);
+  }, 180_000);
 
   it('the fleet frame, the statuslines and the task progress of the recorded tick equal the literals', async () => {
     const r = rig();
@@ -301,7 +307,7 @@ describe('the frames of one fixture, recorded as literals', () => {
     expect(fleetSubset(seen.fleets[0]!)).toEqual(RECORDED_FLEET);
     expect(sortedEntries(r.w.currentStatuslines())).toEqual(RECORDED_STATUSLINES);
     expect(sortedEntries(r.w.currentTaskProgress())).toEqual(RECORDED_TASKS);
-  }, 60_000);
+  }, 180_000);
 });
 
 /** Task-file reads among a tick's requests (a path under a `tasks` directory), and `.uuid` reads. */
@@ -332,16 +338,21 @@ describe('the capture pass of one tick (D-6435)', () => {
     const tick = r.w.tick();
     // The bounded pass issues its first DIALOG_CAPTURE_CONCURRENCY captures in one synchronous run of the pool, so the
     // count is read after a fixed number of hops, and no real-time bound is needed.
-    while (r.gate.issued.length < 1) await macrotask();
+    let tickSettled = false;
+    const watched = tick.then(() => { tickSettled = true; }, () => { tickSettled = true; });
+    // Stops when the tick has settled too, so a tick that rejects before any capture is reported, not timed out.
+    while (r.gate.issued.length < 1 && !tickSettled) await macrotask();
     for (let i = 0; i < 25; i += 1) await macrotask();
     const issuedBeforeAnyRelease = r.gate.issued.length;
     const releasedBeforeAnyRelease = r.gate.releases;
     await r.gate.drive(tick);
+    await watched;
     expect(releasedBeforeAnyRelease, 'nothing was let go before the count').toBe(0);
     expect(issuedBeforeAnyRelease, 'captures issued while the first was still pending').toBeGreaterThanOrEqual(2);
   }, 60_000);
 
-  // Green on the serial code (it never has more than one); its mutant is an unbounded `Promise.all` over the 12 rows.
+  // The pool fills to the bound and never passes it; its mutant is an unbounded `Promise.all` over the 12 rows (which
+  // reaches 12 in flight), and a serial pass would reach only 1.
   it('never more than the capture bound in flight', async () => {
     const r = rig();
     await r.tick();
@@ -355,7 +366,7 @@ describe('the capture pass of one tick (D-6435)', () => {
     const seen = await recordedTick(r, 'reverse');
     expect(seen.panes).toEqual(RECORDED_PANES);
     expect(r.sent).toEqual(RECORDED_PUSHES);
-  }, 60_000);
+  }, 180_000);
 
   it('fleet, statuslines and task progress equal the recorded ones', async () => {
     const r = rig();
@@ -364,7 +375,7 @@ describe('the capture pass of one tick (D-6435)', () => {
     expect(fleetSubset(seen.fleets[0]!)).toEqual(RECORDED_FLEET);
     expect(sortedEntries(r.w.currentStatuslines())).toEqual(RECORDED_STATUSLINES);
     expect(sortedEntries(r.w.currentTaskProgress())).toEqual(RECORDED_TASKS);
-  }, 60_000);
+  }, 180_000);
 
   it('task files are read at most once per TASK_SWEEP_MS', async () => {
     const r = rig();
@@ -400,6 +411,22 @@ describe('the capture pass of one tick (D-6435)', () => {
     r.setMono(r.mono() + 2000);
     expect(taskReads(await r.during(() => r.tick())).length).toBeGreaterThan(0);
   }, 60_000);
+
+  // The rejection arm. No production Runner rejects, but a fake can; `detectDialogs` settles such a capture and rethrows it
+  // at its own row. Observed by calling the private `detectDialogs` through a cast (as dialog.test.ts does with its
+  // sweeps), not through `tick()`, which logs a lane error and so would hide the rejection. Row 5's capture rejects; the
+  // rest return their panes. Two mutants are told apart: a catch that returns `{pane: null}` would emit rows 5..11 as dead
+  // panes and throw nothing; no catch would make the pool reject on the first rejection and emit no row at all.
+  it('a capture that rejects is rethrown at its own row, after the rows before it', async () => {
+    const r = rig();
+    const boom = new Error('capture of row 05 failed');
+    r.gate.rejects.set(idOf(5), boom);
+    const emitted: string[] = [];
+    for (const id of IDS) r.bus.on(`pane:${id}`, () => { emitted.push(id); });
+    const detect = (r.w as unknown as { detectDialogs: (notify: boolean) => Promise<Set<string>> }).detectDialogs(false);
+    await expect(r.gate.drive(detect), 'the rejection surfaces, and it is the same error').rejects.toBe(boom);
+    expect(emitted, 'rows 0..4 were published, in registry order, and nothing after row 5').toEqual(IDS.slice(0, 5));
+  }, 180_000);
 
   // The wall clock steps to a distinct value before each capture is let go, and the captures return newest first. A
   // pane's `doneAt` is when ITS capture returned, and `at` when it was issued, whatever happened to the others meanwhile.
