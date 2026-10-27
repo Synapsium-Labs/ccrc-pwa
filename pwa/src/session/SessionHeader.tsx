@@ -50,8 +50,8 @@ export interface SessionHeaderProps {
    *  satisfy without a cast). Defaults to `null` so a caller that never wires
    *  the picker's queue state renders exactly as it always did. */
   queuedField?: RouteField | null;
-  /** Pre-snapshot identity derived from the session id (`wrapper:project`) —
-   *  keeps the header instant on deep links before `/ws/fleet` lands. */
+  /** Pre-snapshot identity derived from the session id (`deepLinkFallback`: its title, crumb and lane, the words the
+   *  row will give) — keeps the header instant on deep links before `/ws/fleet` lands. */
   fallback?: { title: string; crumb?: string | null; wrapper: string };
   /** The account roster (`stores/fleet.ts`'s `roster`) — defaults to `[]` so
    *  a header rendered before the first poll lands degrades to

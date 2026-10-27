@@ -122,9 +122,11 @@ export function heldCoordinatorWords(
 }
 
 /** What a deep link's header shows before the first fleet frame names the session (desktop polish T3c, D-6333): the
- *  same words the row will give, so the title does not jump when the frame lands. Ids carry no colon: a workspace is
- *  `<project>-<slug>` (ccd's `$project-$slug`) and a main checkout `<lane>-<project>`, so the id is split only by a
- *  name the fleet KNOWS, never guessed.
+ *  words the row will most likely give, so the title does not jump when the frame lands. Ids carry no colon: a
+ *  workspace is `<project>-<slug>` (ccd's `$project-$slug`) and a main checkout `<lane>-<project>`, so the id is split
+ *  at the longest name the fleet knows that prefixes it. That is a longest-prefix rule, not a proof: an id the rule
+ *  reads wrongly (a project whose name begins with a lane id, say) shows the wrong split until the first frame
+ *  corrects it, and that correction draws plainly (`renames`).
  *   1. The longest roster id that prefixes the id is the lane of a main checkout: titled by its project, no crumb.
  *   2. Else the longest known project that prefixes it makes the id a workspace: `ws/<slug>` (the label a born
  *      workspace's branch gives, `sessionLabel`) under that project.

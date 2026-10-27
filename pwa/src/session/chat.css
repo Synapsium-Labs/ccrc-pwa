@@ -45,8 +45,8 @@
      navigation. */
   view-transition-name: session-title;
 }
-/* The workspace crumb is secondary to the project: same line, lighter ink,
-   and it truncates first when the header is tight. */
+/* The crumb is the project, drawn before the session's title (desktop polish
+   T3c, D-6333) and secondary to it: same line, lighter ink. */
 .chat-crumb-sep { margin: 0 var(--sp-1); color: var(--ink-tertiary); }
 .chat-crumb {
   color: var(--ink-secondary);
