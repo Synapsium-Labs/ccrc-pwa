@@ -1253,3 +1253,271 @@ describe('C4d: decideSleep answers only its policy\'s words, and its turn fallba
     expect(dword(decideSleep(at(null), RUN_DONE_POLICY))).toBe('turn');
   });
 });
+
+// ── C4d (D-7042; ARCH-43, fourth PR): one row per field of a SLEEP_LANES row, through a lane's pass ─────────────────
+// APPENDED by C4d's characterization commit, green on the two old passes before `sleepLane.ts` exists. Each row names
+// one field of the lane row `server/src/sleepLane.ts` declares, and shows run-done's value and idle-hours' as the two
+// passes act on them. The rows take the passes as an argument (`LanePasses`), so the same rows drive the one executor
+// once it exists; the move commits change none of them.
+
+import type { StopDoneOutcome } from '../src/stopDoneSweep.js';
+import type { HibernateSweepOutcome } from '../src/hibernateSweep.js';
+
+interface LanePasses {
+  readonly runDone: (deps: StopDoneSweepDeps, mem: StopDoneMemory, sessions: readonly FleetSession[],
+    records: readonly SessionRecord[], names: readonly string[]) => Promise<StopDoneOutcome[]>;
+  readonly idleHours: (deps: HibernateSweepDeps, mem: HibernateSweepMemory, sessions: readonly FleetSession[],
+    records: readonly SessionRecord[], names: readonly string[]) => Promise<HibernateSweepOutcome[]>;
+}
+const OLD_PASSES: LanePasses = { runDone: stopDonePass, idleHours: hibernatePass };
+
+/** The field rows, over `p`'s two passes. Each is `[field, row]`. */
+function laneFieldRows(p: LanePasses): ReadonlyArray<readonly [string, () => Promise<void>]> {
+  const sd = (w: World, names: string[] = [], list = [ID], m = sdMem()) =>
+    p.runDone(sdDeps(w), m, list.map((id) => row(id)), list.map(rec), names);
+  const hb = (w: World, names: string[] = [HIBERNATE_LIVE_MARKER], list = [ID], m = hbMem(), o: { act?: boolean } = {}) =>
+    p.idleHours(hbDeps(w, o), m, list.map((id) => row(id)), list.map(rec), names);
+  return [
+    ['policy: each lane asks its own policy row (run-done holds a non-child, idle-hours a dead pane)', async () => {
+      const own = world();
+      expect(await p.runDone(sdDeps(own), sdMem(), [row(ID, { child: { kind: 'none' } })], [rec(ID)], [])).toEqual([]);
+      expect(own.events, 'held before any read').toEqual([]);
+      const dead = await p.idleHours(hbDeps(world()), hbMem(), [row(ID, { status: 'dead' })], [rec(ID)], [HIBERNATE_LIVE_MARKER]);
+      expect(dead).toEqual([{ id: ID, verdict: { act: 'hold', reason: 'pane' } }]);
+      const child = await p.idleHours(hbDeps(world()), hbMem(), [row(ID, { child: { kind: 'none' } })], [rec(ID)], [HIBERNATE_LIVE_MARKER]);
+      expect(child[0]!.act, 'idle-hours puts a non-child to sleep').toEqual({ kind: 'hibernated' });
+    }],
+    ['kill switches: run-done stops for stop-done-disabled, reclaim-paused or hibernate-disabled; idle-hours for hibernate-disabled alone', async () => {
+      for (const k of [STOP_DONE_DISABLED_MARKER, RECLAIM_PAUSE_MARKER, HIBERNATE_DISABLED_MARKER]) {
+        const w = world();
+        expect(await sd(w, [k]), k).toEqual([]);
+        expect(w.events, k).toEqual([]);
+      }
+      const off = world();
+      expect(await hb(off, [HIBERNATE_LIVE_MARKER, HIBERNATE_DISABLED_MARKER])).toEqual([]);
+      expect(off.events).toEqual([]);
+      for (const k of [STOP_DONE_DISABLED_MARKER, RECLAIM_PAUSE_MARKER]) {
+        const w = world();
+        expect((await hb(w, [HIBERNATE_LIVE_MARKER, k]))[0]!.act, k).toEqual({ kind: 'hibernated' });
+      }
+    }],
+    ['arming: run-done has none (live); idle-hours acts only with hibernate-live, else its shadow line', async () => {
+      const sdw = world();
+      expect(await sd(sdw, [])).toEqual([{ id: ID, kind: 'hibernated', runId: 10 }]);
+      const shadow = world();
+      expect(await hb(shadow, [])).toEqual([{ id: ID, verdict: { act: 'hibernate', idleMs: 7 * HOUR } }]);
+      expect(shadow.argv).toEqual([]);
+      expect(shadow.lines).toEqual([`ccrc-server: hibernate-shadow ${ID} idle=7h`]);
+      const portless = world();
+      expect(await hb(portless, [HIBERNATE_LIVE_MARKER], [ID], hbMem(), { act: false }), 'no act port: shadow')
+        .toEqual([{ id: ID, verdict: { act: 'hibernate', idleMs: 7 * HOUR } }]);
+      expect(portless.argv).toEqual([]);
+    }],
+    ['cadence: run-done 60 s, idle-hours 5 min (the rows C4e wires)', async () => {
+      expect([STOP_DONE_SWEEP_MS, HIBERNATE_SWEEP_MS]).toEqual([60_000, 5 * 60_000]);
+    }],
+    ['population: run-done the dispatched children not stopped, archived or in retry, with a record, by id; idle-hours every row with a record, in frame order', async () => {
+      const rows = [row('c-child'), row('a-child'), row('b-stopped', { stoppedBy: { at: NOW, surface: 'agent' } }),
+        row('d-archived', { archivedAt: NOW - HOUR }), row('e-own', { child: { kind: 'none' } }), row('f-no-record'), row('g-retry')];
+      const recs = ['c-child', 'a-child', 'b-stopped', 'd-archived', 'e-own', 'g-retry'].map(rec);
+      const sdw = world();
+      const m = sdMem();
+      m.retryAt.set('g-retry', NOW + HOUR);
+      await p.runDone(sdDeps(sdw), m, rows, recs, []);
+      expect(sdw.events.slice(0, sdw.events.indexOf('serial')).filter((e) => e.startsWith('word'))).toEqual(['word a-child', 'word c-child']);
+      expect(sdw.argv.map(idOf)).toEqual(['a-child', 'c-child']);
+      const hbw = world();
+      const out = await p.idleHours(hbDeps(hbw), hbMem(), rows, recs, []);
+      expect(out.map((o) => o.id)).toEqual(['c-child', 'a-child', 'b-stopped', 'd-archived', 'e-own', 'g-retry']);
+    }],
+    ['per-pass caps: run-done at most 3 acts and 6 measures, stopping at either; idle-hours at most 3 acts, measures unbounded', async () => {
+      const acts = world();
+      await sd(acts, [], ids(5));
+      expect(acts.argv.map(idOf)).toEqual(ids(3));
+      const measures = world();
+      for (const id of ids(8)) measures.turns.set(id, 'busy');
+      await sd(measures, [], ids(8));
+      expect(measures.events.filter((e) => e.startsWith('word'))).toHaveLength(6);
+      const hacts = world();
+      const out = await hb(hacts, [HIBERNATE_LIVE_MARKER], ids(5));
+      expect(hacts.argv.map(idOf)).toEqual(ids(3));
+      expect(out.map((o) => o.act?.kind ?? null)).toEqual(['hibernated', 'hibernated', 'hibernated', null, null]);
+      const hmeasures = world();
+      for (const id of ids(8)) hmeasures.words.set(id, 'busy');
+      await hb(hmeasures, [HIBERNATE_LIVE_MARKER], ids(8));
+      expect(hmeasures.events.filter((e) => e.startsWith('word'))).toHaveLength(8);
+    }],
+    ['per-pass caps are each lane\'s own: 4 run-done and 4 idle-hours candidates on one tick put 3 and 3 to sleep', async () => {
+      const w = world();
+      const runDone = ids(4);
+      const idle = Array.from({ length: 4 }, (_, k) => `project-a-idle-${k}`);
+      const [a, b] = await Promise.all([
+        p.runDone(sdDeps(w), sdMem(), runDone.map((id) => row(id)), runDone.map(rec), [HIBERNATE_LIVE_MARKER]),
+        p.idleHours(hbDeps(w), hbMem(), idle.map((id) => row(id, { child: { kind: 'none' } })), idle.map(rec), [HIBERNATE_LIVE_MARKER]),
+      ]);
+      expect(a.filter((o) => o.kind === 'hibernated').map((o) => o.id)).toEqual(runDone.slice(0, 3));
+      expect(b.filter((o) => o.act?.kind === 'hibernated').map((o) => o.id)).toEqual(idle.slice(0, 3));
+      expect(w.argv.map(idOf).sort()).toEqual([...runDone.slice(0, 3), ...idle.slice(0, 3)].sort());
+    }],
+    ['when it acts: run-done after the loop, in id order; idle-hours inline', async () => {
+      const sdw = world();
+      await sd(sdw, [], ['b-row', 'a-row']);
+      expect(sdw.events.slice(0, 7)).toEqual(['word a-row', 'turn a-row', 'mark a-row', 'word b-row', 'turn b-row', 'mark b-row', 'serial']);
+      const hbw = world();
+      await hb(hbw, [HIBERNATE_LIVE_MARKER], ['b-row', 'a-row']);
+      expect(hbw.events.slice(0, 7)).toEqual(['word b-row', 'mark b-row', 'serial', 'queue b-row', 'word b-row', 'mark b-row', 'ccd b-row']);
+    }],
+    ['retry memory: run-done holds off an hour after a refused, busy or thrown act; idle-hours asks again next pass, its lines throttled hourly and pruned', async () => {
+      for (const answer of [() => BUSY, () => REFUSED, () => { throw new Error('boom'); }]) {
+        const w = world();
+        w.answer = answer;
+        const m = sdMem();
+        await sd(w, [], [ID], m);
+        expect(m.retryAt.get(ID)).toBe(NOW + STOP_DONE_RETRY_MS);
+        await sd(w, [], [ID], m);
+        expect(w.argv, 'not asked again inside the hour').toHaveLength(1);
+      }
+      const hbw = world();
+      hbw.answer = () => BUSY;
+      const m = hbMem();
+      await hb(hbw, [HIBERNATE_LIVE_MARKER], [ID], m);
+      await hb(hbw, [HIBERNATE_LIVE_MARKER], [ID], m);
+      expect(hbw.argv, 'asked again next pass').toHaveLength(2);
+      expect(hbw.lines, 'one line inside the hour').toHaveLength(1);
+      await hb(hbw, [HIBERNATE_LIVE_MARKER], [], m);
+      expect(m.lastActLine.has(ID), 'pruned').toBe(false);
+    }],
+    ['store: run-done\'s deps carry the store; idle-hours without one holds runs-unreadable', async () => {
+      const out = await p.idleHours({ ...hbDeps(world()), coord: undefined }, hbMem(), [row(ID)], [rec(ID)], [HIBERNATE_LIVE_MARKER]);
+      expect(out).toEqual([{ id: ID, verdict: { act: 'hold', reason: 'runs-unreadable' } }]);
+    }],
+    ['serialiser not handed over: run-done measures and acts on nothing; idle-hours stays in shadow', async () => {
+      const sdw = world();
+      sdw.serial = false;
+      expect(await sd(sdw)).toEqual([]);
+      expect(sdw.events).toEqual([]);
+      const hbw = world();
+      hbw.serial = false;
+      expect(await hb(hbw)).toEqual([{ id: ID, verdict: { act: 'hibernate', idleMs: 7 * HOUR } }]);
+      expect(hbw.lines).toEqual([`ccrc-server: hibernate-shadow ${ID} idle=7h`]);
+    }],
+    ['binding read: run-done reads the placed runs once a pass for every candidate and once at the act; idle-hours the live claims once a pass and its bindings per ask', async () => {
+      const w = world();
+      const asked: string[][] = [];
+      const base = sdDeps(w);
+      const coord = { ...base.coord, lastRunBySession: (ids0: readonly string[]) => { asked.push([...ids0]); return base.coord.lastRunBySession(ids0); } };
+      await p.runDone({ ...base, coord: coord as StopDoneSweepDeps['coord'] }, sdMem(), ['b-row', 'a-row'].map((id) => row(id)), ['b-row', 'a-row'].map(rec), []);
+      expect(asked).toEqual([['a-row', 'b-row'], ['a-row'], ['b-row']]);
+      const hw = world();
+      const hbase = hbDeps(hw);
+      let claims = 0;
+      const bound: string[] = [];
+      const hcoord = {
+        ...hbase.coord!,
+        activeClaims: () => { claims++; return hbase.coord!.activeClaims(); },
+        bindingsOf: (id: string) => { bound.push(id); return hbase.coord!.bindingsOf(id); },
+      };
+      await p.idleHours({ ...hbase, coord: hcoord as HibernateSweepDeps['coord'] }, hbMem(), [row(ID)], [rec(ID)], [HIBERNATE_LIVE_MARKER]);
+      expect(claims, 'once a pass, once at the act').toBe(2);
+      expect(bound, 'the unread ask, the measured ask, the act').toEqual([ID, ID, ID]);
+    }],
+    ['live reads and order: run-done the word, the turn verdict, the marker; idle-hours the word and the marker', async () => {
+      const sdw = world();
+      sdw.turns.set(ID, 'busy');
+      await sd(sdw);
+      expect(sdw.events).toEqual([`word ${ID}`, `turn ${ID}`, `mark ${ID}`]);
+      const hbw = world();
+      await hb(hbw, []);
+      expect(hbw.events).toEqual([`word ${ID}`, `mark ${ID}`]);
+    }],
+    ['notices: run-done records the mail-only count and Worker asleep; idle-hours records none', async () => {
+      const w = world();
+      w.mail.add('a-row');
+      const m = sdMem();
+      await sd(w, [], ['a-row', ID], m);
+      expect(w.feed.map((f) => f.title)).toEqual(['Workers kept awake by unread mail: 1', 'Worker asleep']);
+      const empty = world();
+      await sd(empty, [], [], sdMem());
+      expect(empty.feed.map((f) => f.title), 'an empty population counts 0').toEqual(['Workers kept awake by unread mail: 0']);
+      const hbw = world();
+      await hb(hbw);
+      expect(hbw.feed).toEqual([]);
+    }],
+    ['log sentences: run-done\'s three after the loop; idle-hours\' shadow, slept, skip and failure lines', async () => {
+      const warns: string[] = [];
+      const spy = vi.spyOn(console, 'warn').mockImplementation((l: unknown) => { warns.push(String(l)); });
+      try {
+        for (const [answer, line] of [
+          [() => OK, `ccrc-server: stop-done: put ${ID} to sleep (run 10 done, idle; D-5370, D-5427, D-6091, D-6092)`],
+          [() => BUSY, `ccrc-server: stop-done: ccd re-measured ${ID} as attached — not asked again for an hour`],
+          [() => REFUSED, `ccrc-server: stop-done: the hibernate of ${ID} failed (refused) — not asked again for an hour`],
+          [() => { throw new Error('boom'); }, `ccrc-server: stop-done: the hibernate of ${ID} failed (boom) — not asked again for an hour`],
+        ] as const) {
+          warns.length = 0;
+          const w = world();
+          w.answer = answer;
+          await sd(w);
+          expect(warns).toEqual([line]);
+        }
+      } finally {
+        spy.mockRestore();
+      }
+      const blank: CcdResult = { ...REFUSED, stderr: '  ' };
+      for (const [names, answer, line] of [
+        [[], () => OK, `ccrc-server: hibernate-shadow ${ID} idle=7h`],
+        [[HIBERNATE_LIVE_MARKER], () => OK, `ccrc-server: hibernated ${ID} idle=7h (D-5242)`],
+        [[HIBERNATE_LIVE_MARKER], () => BUSY, `ccrc-server: hibernate-skip ${ID}: ccd re-measured it as attached — asked again next sweep`],
+        [[HIBERNATE_LIVE_MARKER], () => REFUSED, `ccrc-server: hibernate of ${ID} failed (refused) — asked again next sweep`],
+        [[HIBERNATE_LIVE_MARKER], () => blank, `ccrc-server: hibernate of ${ID} failed (no stderr) — asked again next sweep`],
+        [[HIBERNATE_LIVE_MARKER], () => { throw new Error(' boom '); }, `ccrc-server: hibernate of ${ID} failed ( boom ) — asked again next sweep`],
+      ] as const) {
+        const w = world();
+        w.answer = answer;
+        await hb(w, [...names]);
+        expect(w.lines).toEqual([line]);
+      }
+    }],
+    ['actor: sweep:stop-done, with --hold-ok and the exact text when a hold passed; sweep:hibernate', async () => {
+      const sdw = world();
+      await sd(sdw);
+      expect(sdw.argv).toEqual([HIB_SD(ID)]);
+      const held = world();
+      held.atAct.set(ID, { held: PROGRAMME_HOLD });
+      await p.runDone(sdDeps(held), sdMem(), [row(ID, { held: PROGRAMME_HOLD })], [rec(ID)], []);
+      expect(held.argv).toEqual([HIB_SD(ID, '--hold-ok', PROGRAMME_HOLD)]);
+      const noToken = world();
+      noToken.verbs.splice(noToken.verbs.indexOf(HIBERNATE_HOLD_OK_CAP), 1);
+      noToken.atAct.set(ID, { held: PROGRAMME_HOLD });
+      expect(await p.runDone(sdDeps(noToken), sdMem(), [row(ID, { held: PROGRAMME_HOLD })], [rec(ID)], []), 'no hold-ok token: held')
+        .toEqual([]);
+      const hbw = world();
+      await hb(hbw);
+      expect(hbw.argv).toEqual([HIB_HB(ID)]);
+    }],
+    ['verb: run-done asks it once a pass (dropped before the act, the act still runs); idle-hours asks again beside the argv', async () => {
+      const sdw = world();
+      sdw.beforeAct = () => { sdw.verbs.splice(sdw.verbs.indexOf('hibernate'), 1); };
+      expect(await sd(sdw)).toEqual([{ id: ID, kind: 'hibernated', runId: 10 }]);
+      const hbw = world();
+      hbw.beforeAct = () => { hbw.verbs.splice(hbw.verbs.indexOf('hibernate'), 1); };
+      expect(await hb(hbw)).toEqual([{ id: ID, verdict: { act: 'hibernate', idleMs: 7 * HOUR }, act: { kind: 'skipped', detail: 'no-verb' } }]);
+      expect(hbw.argv).toEqual([]);
+      expect(hbw.lines, 'a verb skip logs nothing').toEqual([]);
+    }],
+    ['the act never throws: a serialiser that throws is a failed act, remembered by run-done, logged by idle-hours', async () => {
+      const sdw = world();
+      sdw.beforeAct = () => { throw new Error('serial gone'); };
+      const m = sdMem();
+      expect(await sd(sdw, [], [ID], m)).toEqual([{ id: ID, kind: 'failed', detail: 'serial gone' }]);
+      expect(m.retryAt.get(ID)).toBe(NOW + STOP_DONE_RETRY_MS);
+      const hbw = world();
+      hbw.beforeAct = () => { throw new Error('serial gone'); };
+      expect(await hb(hbw)).toEqual([{ id: ID, verdict: { act: 'hibernate', idleMs: 7 * HOUR }, act: { kind: 'failed', detail: 'serial gone' } }]);
+      expect(hbw.lines).toEqual([`ccrc-server: hibernate of ${ID} failed (serial gone) — asked again next sweep`]);
+    }],
+  ];
+}
+
+describe('C4d: one row per SLEEP_LANES field, through the old passes (stopDonePass, hibernatePass)', () => {
+  it.each(laneFieldRows(OLD_PASSES))('%s', async (_n, run) => { await run(); });
+});
