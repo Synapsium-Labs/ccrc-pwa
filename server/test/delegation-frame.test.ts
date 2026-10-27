@@ -276,6 +276,8 @@ describe('the delegation frame: projected after a pass that ran, broadcast on a 
     expect(w.watcher.currentDelegation()!.leases.map((l) => l.adminRecord)).toEqual(['raw-tree']);
     await censusPass(w, at(3), [sessionOf('demo-a'), sessionOf('demo-raw-tree')], { demo: [OLD, ccdTree] });
     expect(w.watcher.currentDelegation()!.leases).toEqual([]);
+    // listing the workspace makes the policy file a `conflicting` attempt for the tree, so the unowned arm is load-bearing here too
+    expect(w.watcher.currentDelegation()!.unowned).toEqual([]);
     expect(w.coord.readDelegationProjection().leases).toHaveLength(1);
   });
 });
