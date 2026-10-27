@@ -1893,7 +1893,7 @@ describe('bucket sections', () => {
     });
 
     const head = screen.getByText('Idle').closest('.bucket-head') as HTMLElement;
-    expect(within(head).queryByRole('button', { name: /^mark all .+ seen$/i })).not.toBeInTheDocument();
+    expect(within(head).queryByRole('button', { name: /^mark all seen, .+$/i })).not.toBeInTheDocument();
   });
 
   it('badges an unseen session in a badged bucket, with a Mark all seen control', () => {
@@ -1906,7 +1906,7 @@ describe('bucket sections', () => {
 
     const head = screen.getByText('Needs you').closest('.bucket-head') as HTMLElement;
     expect(within(head).getByLabelText('1 new')).toBeInTheDocument();
-    expect(within(head).getByRole('button', { name: /^mark all .+ seen$/i })).toBeInTheDocument();
+    expect(within(head).getByRole('button', { name: /^mark all seen, .+$/i })).toBeInTheDocument();
   });
 
   // `working`/`idle` are never badged, even with a fresh bucketSince — only
@@ -1920,7 +1920,7 @@ describe('bucket sections', () => {
     });
 
     const head = screen.getByText('Working').closest('.bucket-head') as HTMLElement;
-    expect(within(head).queryByRole('button', { name: /^mark all .+ seen$/i })).not.toBeInTheDocument();
+    expect(within(head).queryByRole('button', { name: /^mark all seen, .+$/i })).not.toBeInTheDocument();
   });
 
   // T3a (D-6331): one bucket vocabulary, and the Exited chip is quiet. A session that has exited asks nothing of the
@@ -1968,7 +1968,7 @@ describe('bucket sections', () => {
     seed(store, { conn: 'open', sessions });
     expect(screen.getByTestId('stub-list')).toBeInTheDocument();
     expect(withPart.container.querySelector('.bucket-bar')).toBeNull();
-    expect(screen.queryByRole('button', { name: /^mark all .+ seen$/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^mark all seen, .+$/i })).not.toBeInTheDocument();
     withPart.unmount();
 
     const bare = makeStore();
@@ -1980,7 +1980,7 @@ describe('bucket sections', () => {
     );
     seed(bare, { conn: 'open', sessions });
     expect(without.container.querySelector('.bucket-bar')).not.toBeNull();
-    expect(screen.getByRole('button', { name: 'Mark all Needs you seen' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Mark all seen, Needs you' })).toBeInTheDocument();
   });
 
   it('clicking Mark all seen acks every session in THAT bucket, and only that bucket', () => {
@@ -1995,7 +1995,7 @@ describe('bucket sections', () => {
     });
 
     const attnHead = screen.getByText('Needs you').closest('.bucket-head') as HTMLElement;
-    fireEvent.click(within(attnHead).getByRole('button', { name: /^mark all .+ seen$/i }));
+    fireEvent.click(within(attnHead).getByRole('button', { name: /^mark all seen, .+$/i }));
 
     // The acked bucket's badge is gone…
     expect(within(attnHead).queryByLabelText(/^\d+ new$/)).not.toBeInTheDocument();
@@ -2012,7 +2012,7 @@ describe('bucket sections', () => {
       conn: 'open',
       sessions: [session({ id: 'a', project: 'alpha', bucket: 'attention', bucketSince })],
     });
-    fireEvent.click(screen.getByRole('button', { name: /^mark all .+ seen$/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^mark all seen, .+$/i }));
     first.unmount();
 
     // Same session, same bucketSince — a stale in-memory `acks` (never
@@ -2023,7 +2023,7 @@ describe('bucket sections', () => {
       conn: 'open',
       sessions: [session({ id: 'a', project: 'alpha', bucket: 'attention', bucketSince })],
     });
-    expect(screen.queryByRole('button', { name: /^mark all .+ seen$/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^mark all seen, .+$/i })).not.toBeInTheDocument();
   });
 
   it('prunes an acked session that has since left the fleet — the map does not grow unbounded', () => {
@@ -2033,7 +2033,7 @@ describe('bucket sections', () => {
       conn: 'open',
       sessions: [session({ id: 'gone', project: 'alpha', bucket: 'attention', bucketSince: Date.now() })],
     });
-    fireEvent.click(screen.getByRole('button', { name: /^mark all .+ seen$/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^mark all seen, .+$/i }));
     expect(loadAcks()).toHaveProperty('gone');
 
     // A fresh snapshot that no longer includes 'gone' — the effect prunes it.
@@ -2235,7 +2235,7 @@ describe('an ack written by another screen', () => {
     });
 
     expect(within(head()).queryByLabelText(/^\d+ new$/)).not.toBeInTheDocument();
-    expect(within(head()).queryByRole('button', { name: /^mark all .+ seen$/i })).not.toBeInTheDocument();
+    expect(within(head()).queryByRole('button', { name: /^mark all seen, .+$/i })).not.toBeInTheDocument();
     // The section itself stays: the session is still in the cleanup bucket,
     // it is only no longer NEW.
     expect(within(head()).getByText('1')).toBeInTheDocument();
@@ -2345,7 +2345,7 @@ describe('a chip never names rows that are not on the screen', () => {
     expect(names).toHaveLength(3);
     expect(new Set(names).size).toBe(3);
     expect(names).toEqual(expect.arrayContaining([
-      'Mark all Needs you seen', 'Mark all Done seen', 'Mark all Cleanup seen',
+      'Mark all seen, Needs you', 'Mark all seen, Done', 'Mark all seen, Cleanup',
     ]));
   });
 
@@ -2385,7 +2385,7 @@ describe('a chip never names rows that are not on the screen', () => {
     });
 
     const chip = screen.getByText('Needs you').closest('.bucket-head') as HTMLElement;
-    const btn = within(chip).getByRole('button', { name: /^mark all .+ seen$/i });
+    const btn = within(chip).getByRole('button', { name: /^mark all seen, .+$/i });
     // fireEvent.click never establishes focus, which is why the suite never
     // exercised this path — focus it the way a keyboard user's Tab would.
     btn.focus();
@@ -2413,7 +2413,7 @@ describe('a chip never names rows that are not on the screen', () => {
       sessions: [session({ id: 'a', project: 'alpha', bucket: 'attention', bucketSince: serverNow })],
     });
 
-    fireEvent.click(screen.getByRole('button', { name: /^mark all .+ seen$/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^mark all seen, .+$/i }));
 
     const chip = screen.getByText('Needs you').closest('.bucket-head') as HTMLElement;
     expect(within(chip).queryByLabelText(/^\d+ new$/)).not.toBeInTheDocument();
