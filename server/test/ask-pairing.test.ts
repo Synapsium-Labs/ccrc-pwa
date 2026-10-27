@@ -97,6 +97,31 @@ describe('the session stream sends the pairing on the frames it already sends (T
       if (frame.type === 'dialog') expect('pairing' in frame.dialog, `${at}: never inside dialog`).toBe(false);
     });
   }, 30_000);
+
+  // One side cleared while the other is still present, then a frame on the side that is left: the stream must have
+  // forgotten the cleared side, so that frame carries no `pairing` (it would otherwise pair against a menu, or an
+  // envelope, that is no longer there). `dialog_cleared` resets the dialog side, `ask_cleared` the envelope side.
+  it.each([
+    ['dialog cleared, then the envelope changes', 'ask', [
+      { pane: 'cc300-ask-1q-open', envelope: 'COLOUR_ONE' },
+      { pane: null, envelope: 'COLOUR_ONE' },
+      { pane: null, envelope: 'FRUIT_DRINK' },
+    ]],
+    ['envelope cleared, then the dialog repaints', 'dialog', [
+      { pane: 'cc300-ask-multiselect-next-open', envelope: 'COLOUR_FEATURES' },
+      { pane: 'cc300-ask-multiselect-next-open', envelope: null },
+      { pane: 'cc300-ask-multiselect-digit1', envelope: null },
+    ]],
+  ] as const)('%s: the last %s frame carries no pairing', async (name, type, steps) => {
+    const frames = await runScenario({ name, steps: [...steps] });
+    const cleared = type === 'ask' ? 'dialog_cleared' : 'ask_cleared';
+    const at = frames.findIndex(({ frame }) => frame.type === cleared);
+    expect(at, `${name}: a ${cleared} frame is sent`).toBeGreaterThanOrEqual(0);
+    const after = frames.slice(at + 1).filter(({ frame }) => frame.type === type);
+    expect(after.length, `${name}: a ${type} frame follows the ${cleared}`).toBeGreaterThan(0);
+    const last = after[after.length - 1]!.frame;
+    expect('pairing' in last, `${name}: the last ${type} frame`).toBe(false);
+  }, 30_000);
 });
 
 describe('the cap word W7 gates on (Task Q3g)', () => {
