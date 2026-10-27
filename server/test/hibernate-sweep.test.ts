@@ -10,7 +10,7 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import {
   hibernatePass, type HibernateSweepMemory, type HibernateSweepDeps,
-} from '../src/hibernateSweep.js';
+} from '../src/sleepLane.js';
 import {
   HIBERNATE_AFTER_HOURS_FILE, HIBERNATE_DISABLED_MARKER, HIBERNATE_LIVE_MARKER, HIBERNATE_SWEEP_MS,
   NO_HIBERNATE_SUFFIX, type HibernateMark,
@@ -30,7 +30,7 @@ import { seedRoster, testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import type { Runner } from '../src/exec.js';
 import { ACTOR_FLAGS_CAP } from '../src/ccdargv.js';
-import type { HibernateActPort } from '../src/hibernateSweep.js';
+import type { HibernateActPort } from '../src/sleepLane.js';
 import type { CcdResult } from '../src/lifecycle.js';
 
 const NOW = 1_800_000_000_000;
@@ -269,7 +269,7 @@ describe('hibernatePass: the viewer is Viewers.isOpen', () => {
   });
 });
 
-// The pass above is handed stubs; this one runs the watcher's REAL `sweepHibernate`, so the closures it wires
+// The pass above is handed stubs; this one runs the watcher's REAL `sweepSleep` (`idle-hours`), so the closures it wires
 // (the registry listing, `turnMarkFor` judged against the live process, the store) decide, and one runner that
 // answers tmux and ccd alike records every command: the shadow arm reaches ccd for nothing.
 describe('the watcher\'s own shadow pass, its deps unmocked', () => {
@@ -326,7 +326,7 @@ describe('the watcher\'s own shadow pass, its deps unmocked', () => {
     try {
       const t = await h.tick();
       expect(t.rows[0]).toMatchObject({ bucket: 'idle', status: 'idle' });
-      await h.w.sweepHibernate(t.rows, t.records, [HIBERNATE_LIVE_MARKER]);
+      await h.w.sweepSleep(t.rows, t.records, [HIBERNATE_LIVE_MARKER], 'idle-hours');
       const shadow = warn.mock.calls.map((c) => String(c[0])).filter((l) => l.includes('hibernate-shadow'));
       expect(shadow).toEqual([`ccrc-server: hibernate-shadow ${WID} idle=7h`]);
       expect(h.ccdCalls()).toEqual([]);
@@ -344,7 +344,7 @@ describe('the watcher\'s own shadow pass, its deps unmocked', () => {
       const order: string[] = [];
       h.w.useStopDoneSerialiser({ serial: async <T>(fn: () => Promise<T>): Promise<T> => { order.push('serial'); return fn(); } } as never);
       const t = await h.tick();
-      await h.w.sweepHibernate(t.rows, t.records, [HIBERNATE_LIVE_MARKER]);
+      await h.w.sweepSleep(t.rows, t.records, [HIBERNATE_LIVE_MARKER], 'idle-hours');
       expect(h.ccdCalls().map((c) => c.args.slice(-2))).toEqual([['hibernate', WID]]);
       expect(order).toEqual(['serial']);
       expect(warn.mock.calls.map((c) => String(c[0])).filter((l) => l.includes('hibernat'))).toEqual([`ccrc-server: hibernated ${WID} idle=7h (D-5242)`]);
@@ -359,9 +359,9 @@ describe('the watcher\'s own shadow pass, its deps unmocked', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     try {
       const t = await h.tick();
-      await h.w.sweepHibernate(t.rows, t.records, []);
+      await h.w.sweepSleep(t.rows, t.records, [], 'idle-hours');
       const n = h.calls.length;
-      await h.w.sweepHibernate(t.rows, t.records, []);
+      await h.w.sweepSleep(t.rows, t.records, [], 'idle-hours');
       expect(h.calls.length).toBe(n);
     } finally {
       warn.mockRestore();

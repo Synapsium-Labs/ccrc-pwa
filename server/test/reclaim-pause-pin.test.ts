@@ -31,7 +31,7 @@ import { endDeadCoordinator, stillCrashed, type EndDeadCoordinatorDeps } from '.
 import { expireArchived, type ExpireArchivedDeps } from '../src/coord/expireArchived.js';
 import { dispatchRun, type DispatchRunDeps } from '../src/coord/dispatch.js';
 import { MAIL_DISABLED_MARKER, RECLAIM_PAUSE_MARKER } from '../src/coord/rundefs.js';
-import { stopDonePass, type StopDoneSweepDeps } from '../src/stopDoneSweep.js';
+import { stopDonePass, type StopDoneSweepDeps } from '../src/sleepLane.js';
 import { STOP_DONE_GRACE_MS } from '../src/stopDone.js';
 import { EXPIRE_LANE_LIVE_MARKER } from '../src/archivedExpiry.js';
 import { DEAD_COORDINATOR_JOURNAL_TRUSTED, DEAD_COORDINATOR_LANE_LIVE_MARKER } from '../src/deadCoordinator.js';

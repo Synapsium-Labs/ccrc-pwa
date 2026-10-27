@@ -462,9 +462,8 @@ describe('the hibernation lanes name themselves (D-5242, D-5427)', () => {
   it('every hibernate the lanes RUN is declared: one act site for both lanes, carrying `sweepDec`', () => {
     expect(actCalls('runCcd').length, 'sleepAct runs ccd once').toBe(1);
     expect(actCalls('runCcd')[0]![0]).toMatch(/^CCD_ARGV\.hibernate\(id, sweepDec\(/);
-    for (const f of ['server/src/hibernateSweep.ts', 'server/src/stopDoneSweep.ts']) {
-      expect(parsedFile(f).calls.filter((c) => c.name === 'runCcd').map((c) => c.line), `${f} runs no ccd of its own`).toEqual([]);
-    }
+    // D-7046: the two lane files this row also read (`hibernateSweep.ts`, `stopDoneSweep.ts`) are deleted; their code
+    // is `sleepLane.ts`'s, which the next line reads whole.
     expect(parsedFile(ACT).calls.filter((c) => c.name === 'runCcd').length, 'sleepLane.ts runs ccd once').toBe(1);
   });
 

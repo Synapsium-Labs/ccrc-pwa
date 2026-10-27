@@ -52,7 +52,7 @@ import type { ChildReclaimKeptAttention, ChildReclaimLeafKept } from '../src/chi
 import { expireArchived, recordExpireFeed, type ExpireArchivedDeps } from '../src/coord/expireArchived.js';
 import { recordDeadCoordinatorFeed } from '../src/coord/endDeadCoordinator.js';
 import type { DeadCoordinatorActOutcome } from '../src/deadCoordinator.js';
-import { stopDonePass, type StopDoneSweepDeps } from '../src/stopDoneSweep.js';
+import { stopDonePass, type StopDoneSweepDeps } from '../src/sleepLane.js';
 import { STOP_DONE_GRACE_MS } from '../src/stopDone.js';
 import { CHILD, PARENT, hookInput, requestBody, standardFixture, type Approvals } from './approvalsHarness.js';
 import {

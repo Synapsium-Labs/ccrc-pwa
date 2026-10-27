@@ -15,7 +15,7 @@ import {
  * finished run's worker is stopped once idle, and restarts on re-dispatch — the dispatch resume arm already calls
  * `ccd ensure` (`coord/dispatch.ts`), which re-supervises and resumes a stopped session.
  *
- * L1: decisions only, over what the sweep (`stopDoneSweep.ts`, L4) measured. It imports L0 alone.
+ * L1: decisions only, over what the sweep (`sleepLane.ts`, L4) measured. It imports L0 alone.
  *
  * ABSORBED BY HIBERNATION (D-5242, spec §5.11; stop-done-composes-hibernate (D-5427), plan Task 17b): the lane
  * composes `ccd hibernate`, never `ccd stop`, so a finished worker it puts down wakes like any sleeping session — mail
