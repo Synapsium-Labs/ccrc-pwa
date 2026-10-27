@@ -28,9 +28,6 @@ import { mkTmp } from './tmpHelpers.js';
 
 /** 2026-10-01T12:00:00Z: the fixed wall clock of every case but the one that moves it. */
 const T0 = 1790856000000;
-/** A wait bound in REAL milliseconds (`performance.now`; the fake clock only fakes `Date`), well inside the cases' 60 s
- *  timeout, so a wait that outruns it fails by assertion or by a named error, never by vitest's timeout or a hang. */
-const WAIT_BUDGET_MS = 30_000;
 
 const N = 12;
 const pad = (i: number): string => String(i).padStart(2, '0');
@@ -128,9 +125,7 @@ class CaptureGate {
     let done = false;
     let failed: unknown = null;
     const settled = p.then(() => { done = true; }, (e: unknown) => { done = true; failed = e ?? new Error('rejected'); });
-    const until = performance.now() + WAIT_BUDGET_MS;
     while (!done) {
-      if (performance.now() > until) throw new Error(`drive: the tick never finished (issued ${this.issued.length}, held ${this.held.length})`);
       await macrotask();
       const batch = this.held.splice(0);
       if (order === 'reverse') batch.reverse();
@@ -330,13 +325,14 @@ describe('the capture pass of one tick (D-6435)', () => {
     expect(uuidReads(kicked).length - uuidReads(plain).length).toBe(0);
   }, 60_000);
 
-  // RED on the serial code: the second capture waits for the first. The waits are bounded, so it fails by assertion, then
-  // every held capture is let go so the tick finishes.
+  // RED on the serial code: the second capture waits for the first. The waits wait on events, with no real-time bound
+  // (vitest's case timeout bounds a hang), so it fails by assertion, then every held capture is let go so the tick finishes.
   it('a second capture is issued before the first resolves', async () => {
     const r = rig();
     const tick = r.w.tick();
-    const until = performance.now() + WAIT_BUDGET_MS;
-    while (r.gate.issued.length < 1 && performance.now() < until) await macrotask();
+    // The bounded pass issues its first DIALOG_CAPTURE_CONCURRENCY captures in one synchronous run of the pool, so the
+    // count is read after a fixed number of hops, and no real-time bound is needed.
+    while (r.gate.issued.length < 1) await macrotask();
     for (let i = 0; i < 25; i += 1) await macrotask();
     const issuedBeforeAnyRelease = r.gate.issued.length;
     const releasedBeforeAnyRelease = r.gate.releases;
