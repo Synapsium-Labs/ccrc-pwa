@@ -1203,10 +1203,12 @@ const GRX = {
 // ── CP-39d (D-7095): the shipped ranked and count statements, as the oracle ──────────────────────────────────────────
 /** The statements grep ran before CP-39d, copied from ccd/history/recall.mjs as of commit 5d3c6d25a (unchanged through
  *  this wave's base): `referrerSql` with its `WITH m(blob_id, rank)` match joined to every arm and the scope filtered after
- *  the join, `rankedSql`, and `countSql`. It is the shipped TEXT, never a second implementation of the rule. Two
+ *  the join, `rankedSql`, and `countSql`. It is the shipped TEXT, never a second implementation of the rule. Three
  *  substitutions only: `versioned(rc, T, A, cols)` becomes `(SELECT <cols> FROM T) AS A`, the form selectColumns gives at
- *  the current schema version (case a3 asserts that against lib), and `cutAnd`/`cutTerm` become lib's asOfEntrySql
- *  when `cut` is set and '' otherwise. Its match texts are the shipped `FTS_MATCH` and `REGEX_MATCH`, rank included. */
+ *  the current schema version (case a3 asserts that against lib); `cutAnd`/`cutTerm` become lib's asOfEntrySql
+ *  when `cut` is set and '' otherwise; and the statements' binds go through `shippedBindFor`, a copy of `bindFor`'s rule.
+ *  Its match texts are the shipped `FTS_MATCH` and `REGEX_MATCH`, rank included. One addition that changes no compared text:
+ *  `ranked`'s `probe` flag appends the sort key and `ref_key` to the select list, for the tie CONTROLs only. */
 const SHIPPED_SQL = {
   ftsMatch: 'SELECT rowid, rank FROM blobs_fts WHERE blobs_fts MATCH :q',
   regexMatch: 'SELECT value, 0 FROM json_each(:blobs)',
@@ -1680,7 +1682,7 @@ describe("C27 and DM46: the scope join runs before the LIMIT; another project's 
       try {
         const bpk = (db.prepare('SELECT transcript_pk AS p FROM transcripts WHERE cc_session_uuid = ?').get(GRX.file(TB)) as { p: number }).p;
         return {
-          variants: Number((db.prepare('SELECT count(*) AS n FROM entry_variants v JOIN entries e ON e.entry_id = v.entry_id WHERE e.transcript_pk = ?').get(bpk) as { n: number }).n),
+          variants: Number((db.prepare("SELECT count(*) AS n FROM entry_variants v JOIN entries e ON e.entry_id = v.entry_id WHERE e.transcript_pk = ? AND v.blob_id <> e.blob_id AND v.blob_id IN (SELECT rowid FROM blobs_fts WHERE blobs_fts MATCH 'zqneedle')").get(bpk) as { n: number }).n),
           sidecars: Number((db.prepare("SELECT count(*) AS n FROM sidecars WHERE transcript_pk = ? AND blob_id IN (SELECT rowid FROM blobs_fts WHERE blobs_fts MATCH 'zqneedle')").get(bpk) as { n: number }).n),
         };
       } finally { db.close(); }
@@ -1701,7 +1703,8 @@ describe("C27 and DM46: the scope join runs before the LIMIT; another project's 
         const all = cp39dAll(rc, { q: libRead.sanitizeFtsQuery('zqneedle') });
         const plan = (sql: string): string[] => (rc.db.prepare(`EXPLAIN QUERY PLAN ${sql}`).all(shippedBindFor(sql, all)) as unknown as Array<{ detail: string }>).map((x) => x.detail);
         const built = plan(ranked[0]!);
-        expect(built.some((d) => /USING (?:COVERING )?INDEX entries_ts \(transcript_pk=\?/.test(d)), `${half}/${sort}: no entries_ts (transcript_pk=?) in the plan:\n${built.join('\n')}`).toBe(true);
+        // Both the entry arm and the variant arm read entries through entries_ts, so at least two plan rows name it.
+        expect(built.filter((d) => /USING (?:COVERING )?INDEX entries_ts \(transcript_pk=\?/.test(d)).length, `${half}/${sort}: fewer than two entries_ts (transcript_pk=?) rows in the plan:\n${built.join('\n')}`).toBeGreaterThanOrEqual(2);
         expect(built.filter((d) => /\b(?:entries_blob|entries_blob_prov|entry_variants_blob|sidecars_blob)\b/.test(d)), `${half}/${sort}: a blob-led index in the plan`).toEqual([]);
         const shipped = plan(SHIPPED_SQL.ranked(SHIPPED_SQL.ftsMatch, sort, false));
         expect(shipped.some((d) => /\bentries_blob(?:_prov)?\b/.test(d)), `${half}/${sort}: CONTROL the shipped statement's plan is blob-led:\n${shipped.join('\n')}`).toBe(true);
@@ -1876,9 +1879,15 @@ describe.skipIf(process.platform === 'darwin')('CP-39d: grep drives each referre
     }
   }, 600_000);
 
-  it('(c) the regex arm: rankedAndCounted over the child\'s blob list deep-equals the shipped statement on every scope and pool size', () => {
-    const blobs = (rc0.db.prepare("SELECT rowid AS b FROM blobs_fts WHERE blobs_fts MATCH 'zqeq' ORDER BY rowid").all() as unknown as Array<{ b: number }>).map((r) => Number(r.b));
-    expect(blobs.length, 'CONTROL: the child would match every blob of the word').toBeGreaterThan(20);
+  it('(c) the regex arm: rankedAndCounted over the child\'s blob list deep-equals the shipped statement on every scope and pool size', async () => {
+    // The child's list: every blob whose decoded plain text holds the word (store.mjs's blobPlainText, the decode grep itself uses).
+    const store = await import('../../ccd/history/store.mjs');
+    const sidecarBlobs = new Set((rc0.db.prepare('SELECT DISTINCT blob_id AS b FROM sidecars').all() as unknown as Array<{ b: number }>).map((r) => Number(r.b)));
+    const all0 = rc0.db.prepare('SELECT blob_id AS b, z, raw_len AS n FROM blobs ORDER BY blob_id').all() as unknown as Array<{ b: number; z: Uint8Array | null; n: number }>;
+    const blobs = all0.filter((r) => store.blobPlainText(r.z, sidecarBlobs.has(Number(r.b)), libRead.makePairIndex([]), Number(r.n)).includes('zqeq')).map((r) => Number(r.b));
+    expect(blobs.length, 'CONTROL: the decoded-text set is not empty').toBeGreaterThan(20);
+    const fts = (rc0.db.prepare("SELECT rowid AS b FROM blobs_fts WHERE blobs_fts MATCH 'zqeq' ORDER BY rowid").all() as unknown as Array<{ b: number }>).map((r) => Number(r.b));
+    expect(blobs, 'CONTROL: on this fixture the decoded-text set is the FTS match').toEqual(fts);
     for (const scope of SCOPES) {
       const rc = inScope(scope);
       const base = cp39dAll(rc, { blobs: JSON.stringify(blobs) });

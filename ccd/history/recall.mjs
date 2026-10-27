@@ -544,9 +544,11 @@ export function asOfCutOf(rc, asof) {
  *  `entries` through `INDEXED BY entries_ts` (with an `entries_ts` row in sqlite_stat1, which the writer's `PRAGMA optimize`
  *  writes, the planner would otherwise plan `SCAN entries`), and each tests its blob against the match with a unary `+`, which
  *  takes the blob-led indexes (entries_blob, entries_blob_prov, entry_variants_blob, sidecars_blob) out of the planner's
- *  choices. So a family's grep costs what its scope holds, never what the box's match holds. The sidecar arm names no index:
- *  measured, it plans on sqlite_autoindex_sidecars_1 (transcript_pk=?) while sqlite_stat1 has no sidecars row, and scans the
- *  table once it has one (a small table: about 0.4 ms more at 6,300 sidecars, warm), so no blob-led index drives it either way.
+ *  choices. So a family's grep costs what its scope holds, never what the box's match holds. The sidecar arm names no index.
+ *  Measured, with no statistics, or statistics that spread the sidecars across transcripts, it plans on
+ *  sqlite_autoindex_sidecars_1 (transcript_pk=?); with statistics that put a large share of the table on one transcript
+ *  (as the plan-pin case's fixture does) it plans SCAN sidecars. No blob-led index drives it either way (shipped as built:
+ *  the coordinator ruled no INDEXED BY on this arm).
  *  Under an as-of cut each arm keeps only the referrers whose entry is visible, inside the CTE, so before the scope
  *  filter, the ranking, the LIMIT and the count (W2-D35, W2-D36; C27). A variant follows its entry, and a sidecar the
  *  entry it is linked to. A sidecar linked to none is absent: lib's predicate is never true over the LEFT JOIN's NULL row. */
