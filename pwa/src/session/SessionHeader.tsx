@@ -115,13 +115,22 @@ export function HeaderBack({ onBack }: { onBack: () => void }): ReactNode {
   );
 }
 
-/** The title's own node, both skins'. A workspace's title is its row's label, which a rename changes, so it types in
- *  (`TypedLabel`); a main checkout's (no crumb) is its project, which nothing renames, so it is plain text and mounts
- *  no TypedLabel, as before the title was the label (desktop polish T3c, D-6333). */
+/** The title's own node, both skins'. Only a present workspace row's title types in (`TypedLabel`), because only a
+ *  change to it is a rename (`view.renames`). The fallback and a main checkout's title are plain text: a swap between
+ *  the fallback and the row then draws plainly (a TypedLabel mounted afresh never animates), and a main checkout
+ *  mounts no TypedLabel, as before the title was the label (desktop polish T3c, D-6333). */
 export function HeaderTitleText({ view }: { view: SessionHeaderView }): ReactNode {
-  return view.crumb !== null
+  return view.renames
     ? <TypedLabel className="chat-title-text" text={view.title} />
     : <span className="chat-title-text">{view.title}</span>;
+}
+
+/** The crumb's own node, both skins' (Refined adds its class): typed in on the rule the title follows. */
+export function HeaderCrumbText({ view, className = 'chat-crumb' }: { view: SessionHeaderView; className?: string }): ReactNode {
+  if (view.crumb === null) return null;
+  return view.renames
+    ? <TypedLabel className={className} text={view.crumb} />
+    : <span className={className}>{view.crumb}</span>;
 }
 
 /** The session's title, the project before it as its crumb ("project-a › ws-a"; desktop polish T3c, D-6333). The title
@@ -131,7 +140,7 @@ export function HeaderTitle({ view }: { view: SessionHeaderView }): ReactNode {
     <h1 className="chat-title">
       {view.crumb !== null && (
         <>
-          <TypedLabel className="chat-crumb" text={view.crumb} />
+          <HeaderCrumbText view={view} />
           <span className="chat-crumb-sep" aria-hidden="true">
             ›
           </span>

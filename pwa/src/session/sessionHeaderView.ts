@@ -68,6 +68,10 @@ export type HeaderChipKind = HeaderChip['kind'];
 export interface SessionHeaderView {
   title: string;
   crumb: string | null;
+  /** The title and crumb are a present workspace row's, so a change to them is a rename, which types in. False before
+   *  the first fleet frame (the fallback) and for a main checkout, so a swap between the fallback and the row draws
+   *  plainly rather than typing in as a rename that never happened (desktop polish T3c, D-6333). */
+  renames: boolean;
   chips: HeaderChip[];
   /** The ⋯ menu's items, each with its command id: `sessionMenu`, the one reader the menu sheet renders. */
   menu: SessionMenuEntry[];
@@ -223,5 +227,5 @@ export function sessionHeaderView({
   if (facts !== null) chips.push({ kind: 'details', facts, coordination });
   if (hasPrCap(session)) chips.push({ kind: 'pr', pr: session.pr });
 
-  return { title, crumb, chips, menu: sessionMenu(session), stop: { shown: !finePointer, enabled: busy } };
+  return { title, crumb, renames: workspace, chips, menu: sessionMenu(session), stop: { shown: !finePointer, enabled: busy } };
 }

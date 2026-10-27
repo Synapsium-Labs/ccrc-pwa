@@ -10,9 +10,9 @@
 // PR sheet are `SessionFlows`', opened through `useSessionFlows()`), and any Escape binding (the session screen's
 // `useEscapeInterrupt`). So a skin switch that replaces this part loses nothing that is open.
 import type { ReactNode } from 'react';
-import { TypedLabel } from '@ccrc/ui';
 import {
-  HeaderBack, HeaderChips, HeaderCoordination, HeaderDoors, HeaderTitleText, useSessionChromeInputs, useSessionHeaderView,
+  HeaderBack, HeaderChips, HeaderCoordination, HeaderCrumbText, HeaderDoors, HeaderTitleText, useSessionChromeInputs,
+  useSessionHeaderView,
 } from '../../session/SessionHeader';
 import { useSessionFlows } from '../../session/SessionFlows';
 
@@ -26,7 +26,7 @@ export function SessionChrome(): ReactNode {
       {/* The title row holds the session's name beside the doors, so it stays one line; the project is a small crumb
           above it (desktop polish T3c, D-6333), where the shared header draws it before the title. */}
       <div className="ref-session-title">
-        {view.crumb !== null && <TypedLabel className="chat-crumb ref-session-crumb" text={view.crumb} />}
+        <HeaderCrumbText view={view} className="chat-crumb ref-session-crumb" />
         <h1 className="chat-title">
           <HeaderTitleText view={view} />
         </h1>
