@@ -1904,7 +1904,7 @@ follows only by the operator's ruling, and LiteLLM's removal is Stage 4.
 
 Every entry carries the number the controller issued (D-6410 to D-6431 at plan time, D-6804 to D-6839 for wave 1,
 D-6862 to D-6907 and D-6921 for wave 2, D-6944 to D-6963 for wave 3, D-6994 to D-6998 for the follow-up to the
-suite's macOS failures). A further departure found while executing is written `D-TBD-<slug>` and named in the task's
+suite's macOS failures, D-7083 to D-7088 for what the first live step measured). A further departure found while executing is written `D-TBD-<slug>` and named in the task's
 report.
 
 ### D-6410 — `end_turn:false` is continued upstream, never `pause_turn`
@@ -3613,3 +3613,176 @@ report.
   rule, and needs a ruling.
 - **Cost if wrong:** The 7-day watch could read a count short. It reads its counters after a request, or after a
   restart's drain, and a killed bridge's last `FLUSH_S` of counts is lost.
+
+### D-7083 — the response headers every live answer carried are explained
+
+- **Departs from:** Task 5's `KNOWN["responseHeader"]` and `ccd/codexbridge/known.py`'s docstring, which left out
+  "the edge and cache headers of the backend's front end, which nothing in this repository or in Codex reads and
+  nobody has measured yet (the runbook's first live step records the response header names)".
+- **What changed:** Thirteen names join `KNOWN["responseHeader"]` (`ccd/codexbridge/known.py:74-94`), in commented
+  groups, each said to be measured on every answer of runbook step 2 (2026-10-27): `x-oai-request-id` (D-7084);
+  `content-type:absent`, the media-type name a backend 2xx stream with no content type counts
+  (`server.py#_media_type`, :370-373); the CDN's `server`, `cf-ray` and `cf-cache-status`; `set-cookie`; the policy and
+  reporting headers `nel`, `report-to`, `strict-transport-security`, `x-content-type-options`,
+  `cross-origin-opener-policy` and `referrer-policy`; and `x-openai-proxy-wasm`. Upstream is cited as
+  `openai/codex <path> at rust-v0.164.0` where the headers analysis found a reader: `cf-ray` as a tracking id
+  (`codex-rs/codex-api/src/api_bridge.rs`, `extract_request_tracking_id`) and the cookie jar
+  (`codex-rs/http-client/src/chatgpt_cloudflare_cookies.rs`). The docstring's "not here, on purpose" sentence is now a
+  "measured since" paragraph (:31-34). Pin: `server/test/codex-bridge-count-stats.test.ts:274`, which feeds
+  `header_names` the 33 names step 1 printed, plus `name("responseHeader", "content-type:absent")`, and expects every
+  name counted and no `unexplained.responseHeader`. Row: `"cf-ray"` deleted from the group, the case reds
+  (`expected [ 'cf-ray' ] to be undefined`); restored from a copy, sha256 compared OK.
+- **Why:** Measured: all five answers carried the same 33 header names, and the set difference against `KNOWN` and the
+  `x-codex-` prefix was those twelve headers plus the media-type name. `stats.Stats.name` lists each in `unexplained`,
+  so the doctor's drift row (Task 17) would WARN from the first request served on the direct lane, and runbook step 4
+  asks that "`ccrc doctor` keeps the `codex` check green". Only the name is ever counted: `Stats.header_names` keeps
+  no value, and the bridge writes its own downstream head.
+- **Cost if wrong:** A name the front end adds later still WARNs once, as any new name does. If one of these names
+  starts to matter (a challenge page's `cf-ray`, say), explaining it here hides nothing: its counter still moves in
+  `names.responseHeader`.
+
+### D-7084 — the upstream request id is also read from `x-oai-request-id`
+
+- **Departs from:** Task 1's error table ("the upstream request id kept in the status file", spec §2.4), whose
+  `request_id_of` read `x-request-id`, else `request-id`.
+- **What changed:** `errors.request_id_of` (`ccd/codexbridge/errors.py:163-173`) reads `x-request-id`, then
+  `request-id`, then `x-oai-request-id` (:169), Codex's order (`openai/codex codex-rs/codex-api/src/api_bridge.rs at
+  rust-v0.164.0`, `extract_request_id`, which reads `x-request-id`, else `x-oai-request-id`). The first name PRESENT
+  still decides, so a malformed value under it is None whatever a later name holds; the docstring says both. Pins:
+  `server/test/codex-bridge-errors.test.ts:260` (the fallback, `x-request-id` and `request-id` winning over it, and a
+  malformed first name or third name giving None); `server/test/codex-bridge-server.test.ts:984` (an upstream 500
+  carrying only `x-oai-request-id` keeps that id in the status file's `lastRequestId` and in the stats file's
+  `lastUpstreamRequestId`); `server/test/codex-bridge-live-tools.test.ts:742` (the probe prints the id from
+  `x-oai-request-id`). Row: the tuple without its third name, all three cases red (`expected null to be
+  'oai-req-fx1'`, `expected null to be 'oai-req-fx-500'`, and the probe's `request-id none`); restored OK.
+- **Why:** Measured: every answer of runbook step 2 carried `x-oai-request-id` (UUID-shaped, under `REQUEST_ID_RE`)
+  and neither of the other two names, so the probe printed `request-id none` five times. On the live lane every
+  upstream failure would have reached the status file and the stats file with no id, and the first credential or
+  limit incident of the watch would have had no id to quote. `record_upstream`'s bound (`_bounded_upstream`) already
+  takes an id of this shape, so nothing else changes.
+- **Cost if wrong:** If the backend ever sends `x-request-id` too, that one wins, as it does upstream. The comment on
+  the server's call (`ccd/codexbridge/server.py:775`) still names the two older headers; that file was outside this
+  change, so the comment is left for the next change to `server.py`. `cf-ray`, upstream's last fallback, is not read.
+
+### D-7085 — the live probe prints an attribution item key as its kind, never the id
+
+- **Departs from:** Task 18's live probe, whose module docstring promises "never a header value, a text, an id or an
+  encrypted content", and whose usage report printed every key path through `_name`.
+- **What changed:** `liveprobe._usage_lines` (`ccd/codexbridge/liveprobe.py:314-324`) names each key through
+  `liveprobe._usage_key` (:304-311): a key under `attribution.items` prints as its kind in brackets (`<msg>`, `<fc>`,
+  `<rs>`, the id's prefix when it is 1 to 8 lower-case letters, else `<item>`), and so does a key in the scrubber's id
+  shape anywhere else (`record.SCRUB_PATTERNS`' `id`, read by name at :301, so the shape is spelled once); every other
+  key prints as before. Every count still prints, one line per item: `usage attribution.items.<msg>.input_tokens 15`.
+  The docstring names the placeholder. Pin: `server/test/codex-bridge-live-tools.test.ts:759`, a synthetic answer whose
+  usage carries `attribution.items` keyed by `msg_fx1`, an id-shaped synthetic `fc_` key and `rs_fx3`: no key appears
+  in the output, every usage line matches the grammar with bracketed kinds, and the twelve item counts and the
+  request-field counts print. Row: `_usage_key(key, path)` back to `_name(key)`, the case reds (`not to contain
+  'msg_fx1'`); restored OK.
+- **Why:** Measured: the backend's `usage.attribution.items` is keyed by item ids (a `msg_`/`fc_` prefix and about 50
+  characters), which pass `stats.NAME_RE`, so `step1.out` to `step5.out` carry the ids in their usage lines. The bridge
+  never calls `_usage_lines`, so traffic was never affected. Those five files stay out of every write-up: they are
+  described here by shape only.
+- **Cost if wrong:** Two items of one kind print lines with the same name, so a reader tells them apart by their order
+  only. The per-part `content[]` lists inside each item are still not walked (lists never were).
+
+### D-7086 — the scrubber rewrites the attribution keys through the id map
+
+- **Departs from:** Task 18's scrubber (`ccd/codexbridge/record.py`'s docstring: "Object KEYS are kept everywhere").
+- **What changed:** One object's keys are rewritten: `items` inside a response's `usage.attribution`
+  (`record.ID_KEYED`, `ccd/codexbridge/record.py:211`), whose keys go through `_Scrubber.id_of`, the map the id values
+  use (:296-297). An output item's key therefore becomes the same `<prefix>_fx<n>` its `id` becomes, a reasoning
+  item's (`rs_`) included, and an input item's key, which appears nowhere else, gets a number of its own. Every other
+  key is kept as before, so `SCRUB_PATTERNS`' `id` still refuses an id-shaped key anywhere else. The docstring names
+  the one exception (:26-30). Pin: `server/test/codex-bridge-live-tools.test.ts:548`, a synthetic stream in the
+  measured shape (a reasoning item, a message, two function calls, and an input-only message, with
+  `attribution.items` keyed by their id-shaped synthetic ids): the scrub exits 0 with no residue, the keys read
+  `msg_fx2, rs_fx1, msg_fx1, fc_fx1, fc_fx2` against output ids `rs_fx1, msg_fx1, fc_fx1, fc_fx2`, and every count,
+  the request fields and `input_tokens` are unchanged. Row: the key rewrite dropped (keys kept), the case reds on
+  residue (`record: refused: the output still matches id; nothing written`); restored OK.
+- **Why:** Measured: `record.py scrub` refused all five live recordings (residue `id`, 21 matches, every one in key
+  position under `attribution.items`), so runbook step 2's "Scrub the recordings into the corpus" could not be done,
+  nor D-6430's replacement of the synthetic streams, nor any `record-streams` recording of the watch. With the
+  change, an in-process scrub of the five recordings (read only, nothing written) leaves no residue on any of them,
+  and each output item's key equals its scrubbed id.
+- **Cost if wrong:** An id-shaped key inside a function call's `arguments` JSON is still kept, so such a recording
+  still fails closed. The scrubbed corpus streams themselves are not added here: that stays the reviewed change with a
+  human read the docstring requires (a real session's tool schema property names survive the scrub).
+
+### D-7087 — runbook step 0, the offline rehearsal, as run
+
+- **Departs from:** nothing; the record of runbook step 0 (2026-10-26).
+- **What changed:** Nothing in the bridge. Claude Code 2.1.310 (its versioned binary, under `env -i`, with the lane's
+  settings env block) ran against this tree's bridge (`3a0bd0ad1`) and a fake Responses backend on loopback, with the
+  fake also set as the proxy. Every scenario recorded zero proxy requests, and a positive control (a non-loopback base
+  URL that does not resolve) showed Claude Code does use the proxy and the recorder does see it. Of the 12 scenarios,
+  10 were as expected: the tool round trip; proactive compaction; the prompt-too-long 400 after one exchange starting
+  a compaction; the 429 `billing_error` ending the turn with one request; the `policy_blocked` 400 with one request;
+  pings through a 60 s silence; the overflow `response.failed` after `HOLD_S` committed the head (the `stream:false`
+  re-send, a real 400, then a compaction, after one exchange; on a turn's first exchange Claude Code refuses to compact
+  a conversation that small, as it does for a pre-stream 400); the 15 s held head; the lane-shape refusal; and the
+  byte-for-byte replay. Two differ, from one Claude Code behaviour: an `error` after a content block was released
+  makes Claude Code keep the partial text and send a NEW `stream:true` request carrying it and a synthetic resume note
+  ("Your response above was cut off mid-stream …"), never a `stream:false` re-send, while an error before any block
+  still falls back to `stream:false`. That is the mid-stream error case's after-block shape, and the 310 s silence,
+  where the turn did not end on the bridge's idle error but went on with one resume request.
+- **Why:** The open questions it settled: a ping resets Claude Code's 300 s stream watchdog (20 pings in 300 s, and
+  the stream lasted 320 s); proactive compaction fires at window − 33k (between 366k and 367k on a 400k window); a
+  15 s first byte is waited out (with the launcher's `API_TIMEOUT_MS`); a refusal is continued once with a note, then
+  `model_refusal_no_fallback` ends the turn; an assistant text with trailing whitespace and non-ASCII characters is
+  sent back byte for byte, and the text-keyed reasoning replay matched it. Open question 3 is answered for the
+  launcher's timeout, not for Claude Code's default.
+- **Cost if wrong:** The verifiers' caveats. `x-should-retry: false` was not captured on the wire: the one request of
+  the 429 and the 400 rests on the bridge's source and Claude Code's behaviour. The held-head case measured an
+  upstream that withheld its head, so the bridge's own commit at `HOLD_S` was exercised only by the overflow case. No
+  non-catalogue model was sent (the lane has no fallback model), so the local 404 for one is unmeasured. Zero proxy
+  requests proves no proxy-honouring traffic, not zero packets. After the flip, the resume request means a long
+  silence costs one more upstream request, which can wait up to 300 s again.
+
+### D-7088 — runbook steps 2 and 3, the first live step and its reading, as run
+
+- **Departs from:** nothing; the record of runbook steps 2 and 3 (2026-10-27).
+- **What changed:** Five requests on lane-b, one at a time, all 200, with the spare sixth unused. Accepted:
+  `originator: ccrc` and the bridge's User-Agent; developer-first input with no `instructions`; two parallel calls of
+  one top-level tool with `parallel_tool_calls: true`; their round trip under `toolu_`-shaped call ids with a result
+  for each; a trailing developer item after the user item; and step 1 repeated with the same `session-id` and
+  `prompt_cache_key`. What the answers showed that this plan did not predict, and what the bridge does with each:
+  - the request id comes as `x-oai-request-id`, with no `x-request-id` (D-7084);
+  - no `openai-model` on any answer; `response.model` equalled the requested model on all five, and the bridge has no
+    served-model check (its `modelSubstitution` counts the client's model only);
+  - one `response.metadata` per answer, holding moderation flags: explained (`known._CODEX_SKIPPED_EVENTS`), counted
+    by name only, never read;
+  - function-call arguments arrive only as `response.function_call_arguments.done`, with no deltas: both are ignored
+    and the call is built from `response.output_item.done` (`reducer.IGNORED_EVENTS`; replay fixture
+    `probe-no-deltas.sse`);
+  - no `end_turn` on `response.completed`: the reducer reads an absent key as None
+    (`ccd/codexbridge/reducer.py:469-470`) and so as a finished turn, and only `False` continues (:492-494), so
+    D-6410's continuation is dormant on ordinary answers;
+  - a usage `attribution` block, a per-item partition of `input_tokens` and `output_tokens` keyed by item id: the
+    bridge reads only its four usage fields, so nothing reaches the stats file, but the probe printed the ids (D-7085)
+    and the scrubber refused the recordings (D-7086);
+  - `x-codex-turn-state`, a fresh token on every answer: kept out of the stats file as a token header
+    (`stats.TOKEN_HEADERS`, `ccd/codexbridge/stats.py:81`); Codex echoes it on every request of one turn for sticky
+    routing, and the bridge does not echo it;
+  - three load-balancer and CDN cookies, which the bridge neither keeps nor sends back (`backend.build_headers`);
+  - the edge and policy headers (D-7083).
+- **Why:** Open questions this answered. Tools at top level, `toolu_` ids in the round trip and the trailing developer
+  item: accepted. The cache headers: there are none (`cf-cache-status` is the CDN's); the cache is reported only in
+  the usage body, which the bridge maps. Still open, each with how the 7-day watch observes it and what flips lane-b
+  back:
+  - the `rs_` reasoning id's replay: effort low gave no reasoning, so steps 3 and 6 could replay none. Observed on the
+    first lane-b tool turns at Claude Code's effort: `outcomes.4xx`, the status file's upstream code (now with its
+    request id, D-7084), and the doctor's `itemType` drift; a 4xx on a round trip that names an input or item error
+    flips the lane back;
+  - the order of a mixed turn (reasoning, message, reasoning, call): step 2's reply had no text before its calls.
+    Observed and flipped back exactly as the reasoning id;
+  - a cache hit: step 5's prompt was 28 tokens, below the backend's documented minimum for caching, so both cache
+    fields were 0 and nothing was shown either way. Observed from lane-b's transcripts (`cache_read_input_tokens`,
+    `cache_creation_input_tokens`; the stats file keeps no cache figure). Not a criterion: a persistent zero on long
+    sessions is recorded as drift, not a flip;
+  - the turn-state echo, and keeping the cookies: whether either raises `cached_tokens` is a Stage 3 A/B; the backend
+    served the tool round trip and the same-session repeat without them. No flip trigger;
+  - Cloudflare challenges at volume without the cookies: they would show as a rising `outcomes.4xx` or `5xx` (an HTML
+    or 403 answer). A 5xx rate worse than the baseline's flips the lane back, as step 5 says.
+- **Cost if wrong:** Five tiny requests on one lane say nothing about volume, long prompts or a moderation block. The
+  printed step outputs carry item ids (D-7085), so they are described here by shape and never quoted. The recordings
+  stay on the box, 0600, until the reviewed corpus change scrubs them (D-7086).
