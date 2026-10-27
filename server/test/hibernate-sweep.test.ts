@@ -10,7 +10,7 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import {
   hibernatePass, type HibernateSweepMemory, type HibernateSweepDeps,
-} from '../src/hibernateSweep.js';
+} from '../src/sleepLane.js';
 import {
   HIBERNATE_AFTER_HOURS_FILE, HIBERNATE_DISABLED_MARKER, HIBERNATE_LIVE_MARKER, HIBERNATE_SWEEP_MS,
   NO_HIBERNATE_SUFFIX, type HibernateMark,
@@ -30,7 +30,7 @@ import { seedRoster, testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import type { Runner } from '../src/exec.js';
 import { ACTOR_FLAGS_CAP } from '../src/ccdargv.js';
-import type { HibernateActPort } from '../src/hibernateSweep.js';
+import type { HibernateActPort } from '../src/sleepLane.js';
 import type { CcdResult } from '../src/lifecycle.js';
 
 const NOW = 1_800_000_000_000;
