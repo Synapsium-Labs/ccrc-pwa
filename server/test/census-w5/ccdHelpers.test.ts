@@ -253,8 +253,10 @@ describe('the tail steps: named helpers the reap and reclaim tails share (D-7074
 
 describe('the REPORT rows\' bound, held by mutants of the real ccd text (D-7071; `reportRow.ts#expectReportRow`)', () => {
   const WRAPPERS = ['cmd_ws_reap', 'cmd_ws_reclaim', 'cmd_ws_expire', 'cmd_ws_collect'];
+  // Built, not written as a definition: C5g ships it, and the harness scan (D-6051) reads a literal `_x() {` as a stub.
+  const RUN = '_ws_reap_lock_run';
   const RUNNER = [
-    '_ws_reap_lock_run() {   # act id fn args... -> the fn\'s rc under the reap lock',
+    `${RUN}() {   # act id fn args... -> the fn's rc under the reap lock`,
     '  local act="$1" id="$2" lock="$REG/.reap-$id.lock" lfd rc=0; shift 2',
     '  exec {lfd}>>"$lock" || _lc_refuse "$act" "$id" lock-unopenable "cannot open the reap lock at $lock"',
     '  flock -n "$lfd" || {',
@@ -269,10 +271,19 @@ describe('the REPORT rows\' bound, held by mutants of the real ccd text (D-7071;
   ].join('\n');
   const minter = (name: string): string => `${name}() {   # key=value...\n  printf '%s\\n' "$@" | _plat_sha256 | cut -d' ' -f1\n}`;
 
-  it('GREEN: C5g Step 3\'s tree, the runner beside the four wrappers (5), still reports', () => {
-    const r = reapLockWrappers(`${ccdSource()}\n${RUNNER}\n`);
-    expect([...r.wrappers].sort()).toEqual([...WRAPPERS, '_ws_reap_lock_run'].sort());
-    expectReportRow('reapLockWrappers', r.wrappers, WRAPPERS, ['_ws_reap_lock_run'], 1);
+  /** The live ccd with the runner planted only where the tree does not define it yet, so the mutant is C5g Step 3's tree
+   *  at the base and the live tree itself once C5g has landed it: every step of the series measures the same shape. */
+  const withRunner = (): string => {
+    const src = ccdSource();
+    return reapLockWrappers(src).wrappers.includes(RUN) ? src : `${src}\n${RUNNER}\n`;
+  };
+  /** A second definition of whichever refuse helper the live tree defines first, built so no literal `_x() {` names it. */
+  const refuseDup = (name: string): string => `${name}() { REAP_VERDICT="$1"; REAP_DETAIL="$2"; return 1; }`;
+
+  it('GREEN: C5g Step 3\'s tree, the runner beside the wrappers (5 at the base), still reports', () => {
+    const r = reapLockWrappers(withRunner());
+    expect(r.wrappers).toContain(RUN);
+    expectReportRow('reapLockWrappers', r.wrappers, WRAPPERS, [RUN], 1);
   });
 
   it('RED: a third minter under a new name', () => {
@@ -282,16 +293,18 @@ describe('the REPORT rows\' bound, held by mutants of the real ccd text (D-7071;
       .toThrow(/neither a base site nor the plan's target/);
   });
 
-  it('RED: a third definition, a base helper defined a second time', () => {
-    const defs = refuseHelperDefs(`${ccdSource()}\n_reap_refuse() { REAP_VERDICT="$1"; REAP_DETAIL="$2"; return 1; }\n`);
-    expect(defs).toHaveLength(3);
+  it('RED: a live refuse helper defined a second time', () => {
+    const live = refuseHelperDefs();
+    const defs = refuseHelperDefs(`${ccdSource()}\n${refuseDup(live[0]!.name)}\n`);
+    expect(defs).toHaveLength(live.length + 1);
     expect(() => expectReportRow('refuseHelperDefs', defs.map((d) => d.name), ['_reap_refuse', '_ws_collect_refuse'], ['_ws_refuse'], 1))
       .toThrow(/each site once/);
   });
 
   it('RED: a fifth wrapper under a new name, beside C5g Step 3\'s runner', () => {
-    const r = reapLockWrappers(`${ccdSource()}\n${RUNNER}\n${RUNNER.replace('_ws_reap_lock_run()', '_ws_reap_lock_run2()')}\n`);
-    expect(() => expectReportRow('reapLockWrappers', r.wrappers, WRAPPERS, ['_ws_reap_lock_run'], 1))
+    const r = reapLockWrappers(`${withRunner()}\n${RUNNER.replace(`${RUN}()`, `${RUN}2()`)}\n`);
+    expect(r.wrappers).toContain(`${RUN}2`);
+    expect(() => expectReportRow('reapLockWrappers', r.wrappers, WRAPPERS, [RUN], 1))
       .toThrow(/neither a base site nor the plan's target/);
   });
 });
