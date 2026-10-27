@@ -676,6 +676,23 @@ describe('the lanes fold (S5b, D-6530)', () => {
     expect(spy).not.toHaveBeenCalled();
   });
 
+  it("another tab's choice to fold, arriving after the load, scrolls nothing: only this page's own Show fewer does", async () => {
+    stubSeventeen();
+    window.localStorage.setItem('ccrc-accounts-strip', 'expanded');
+    const spy = vi.spyOn(HTMLElement.prototype, 'scrollIntoView');
+    render(<AccountsStrip />);
+    await screen.findByText('lane-a');
+    await screen.findByText('Show fewer');
+    expect(spy).not.toHaveBeenCalled();
+    // The other tab folds the strip: its write reaches this page as a storage event for the key the hook listens on.
+    act(() => {
+      window.localStorage.setItem('ccrc-accounts-strip', 'folded');
+      window.dispatchEvent(new StorageEvent('storage', { key: 'ccrc-accounts-strip', newValue: 'folded' }));
+    });
+    expect(control()).toHaveTextContent(/^\+13 more/);
+    expect(spy).not.toHaveBeenCalled();
+  });
+
   it('five lanes, folded or expanded: every card and no control', async () => {
     stubLanes(seventeenLanes(nowSec).accounts.slice(0, 5));
     const { container } = render(<AccountsStrip />);
