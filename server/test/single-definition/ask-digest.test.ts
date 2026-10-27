@@ -1500,3 +1500,46 @@ describe('one question sweep (D-7027)', () => {
     expect(synchronous('sweepQuestions(r: X): void {\n  // no await here\n  void this.sweepAsks(r);\n}')).toBe(true);
   });
 });
+
+// W3 Task Q3d (D-7028; OA-C6 ruled (a), 2026-10-26). APPENDED, as the blocks above. watch.ts holds no question state:
+// `census-w3/questions.ts#questionHoldCarriers` reports no carrier whose owner is `FleetWatcher` (4 maps and 2 flags at
+// Q3d's base) and none at module scope, and `questionDoorIns` reaches no watcher map (4 door-ins at the base, thin
+// forwards now). Both may only shrink, and both are at 0. The module's one carrier is found where it lives. A MUTATION
+// row plants each shape back so the pins are seen to red.
+describe('watch.ts holds no question state (D-7028)', () => {
+  it('watch.ts holds no question state: no hold carrier is a FleetWatcher field or module scope; the one carrier is createQuestions\'s', async () => {
+    const { questionHoldCarriers } = await import('../census-w3/questions.js');
+    const carriers = questionHoldCarriers();
+    expect(carriers.filter((c) => c.owner === 'FleetWatcher').map((c) => c.name), 'a question carrier in FleetWatcher').toEqual([]);
+    expect(carriers.filter((c) => c.owner === 'module scope').map((c) => c.name), 'a question carrier at module scope').toEqual([]);
+    expect(carriers.filter((c) => c.owner === 'createQuestions').map((c) => c.name)).toContain('questionHolds');
+  });
+
+  it('no watcher door-in touches question state: the four are forwards', async () => {
+    const { questionDoorIns } = await import('../census-w3/questions.js');
+    expect(questionDoorIns().map((d) => d.method)).toEqual([]);
+  });
+
+  it('MUTATION: a question Map field back in FleetWatcher, a carrier at the module\'s top, and a door-in reading a watcher map are seen', async () => {
+    const { mkdtempSync, mkdirSync, writeFileSync, rmSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { questionDoorIns, questionHoldCarriers } = await import('../census-w3/questions.js');
+    const t = mkdtempSync(path.join(tmpdir(), 'ccrc-no-watcher-state-'));
+    try {
+      mkdirSync(path.join(t, 'server/src/coord'), { recursive: true });
+      writeFileSync(path.join(t, 'server/src/watch.ts'), [
+        'export class FleetWatcher {',
+        '  private heldAsks = new Map<string, number>();',
+        '  releaseHeldAsk(id: string): void { this.heldAsks.delete(id); }',
+        '}',
+      ].join('\n'));
+      writeFileSync(path.join(t, 'server/src/coord/questions.ts'), 'const questionHolds = new Map();\nexport function createQuestions() { return {}; }\n');
+      writeFileSync(path.join(t, 'server/src/coord/routes.ts'),
+        "export function registerCoordRoutes(app: App, deps: Deps): void {\n  app.post('/api/asks/:id/release', async () => { deps.watcher?.releaseHeldAsk('x'); });\n}\n");
+      const carriers = questionHoldCarriers(t);
+      expect(carriers.filter((c) => c.owner === 'FleetWatcher').map((c) => c.name)).toEqual(['heldAsks']);
+      expect(carriers.filter((c) => c.owner === 'module scope').map((c) => c.name)).toEqual(['questionHolds']);
+      expect(questionDoorIns(t).map((d) => d.method)).toEqual(['releaseHeldAsk']);
+    } finally { rmSync(t, { recursive: true, force: true }); }
+  });
+});
