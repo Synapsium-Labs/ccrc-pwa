@@ -2435,12 +2435,9 @@ export class FleetWatcher {
       // (`inject/send.ts:30-40,115,126`). Awaiting it would put the dialog
       // detector and the busy->idle push behind a mail delivery.
       void this.sweepMail(registryRead).catch(() => { /* one bad sweep must not kill the poll */ });
-      // NEVER awaited, same reasoning as `sweepMail` immediately above — the
-      // release CAS and its own registry listing must not sit in front of the
-      // dialog detector either. Own clock (`ASK_SWEEP_MS`).
-      void this.sweepAsks(registryRead).catch(() => { /* one bad sweep must not kill the poll */ });
-      // D-5298 (plan Task 16): the approvals lane's lapse, ceiling and retention, never awaited for the same reason.
-      void this.sweepApprovals().catch(() => { /* one bad sweep must not kill the poll */ });
+      // The question sweep (W3 Q3c, D-7027): its two halves, each NEVER awaited, same reasoning as `sweepMail`
+      // immediately above — the release CAS and its own registry listing must not sit in front of the dialog detector.
+      this.sweepQuestions(registryRead);
       // D-5300 (plan Task 17): the daily digest's beat. Synchronous, guarded inside, and throttled to once a minute.
       this.sweepDigest();
       // NEVER awaited, same reasoning as `sweepDivergences` above: in remote
@@ -9253,6 +9250,21 @@ export class FleetWatcher {
     const store = this.deps.coord;
     if (!store) return;
     await this.runLane('asks', () => this.askPass(store, fleet));
+  }
+
+  /** THE QUESTION SWEEP (W3 Q3c, D-7027): the one entry point `tick` calls for both question lanes. SYNCHRONOUS, and
+   *  its body is today's two dispatches in today's order, neither awaited and neither chained to the other, so the
+   *  timing is today's exactly (Review focus 7, two clocks never merged):
+   *  - the ask half, `sweepAsks`, on its own clock (the `asks` row of `LANE_SCHEDULE`, `ASK_SWEEP_MS`) behind the
+   *    `primed` gate, awaiting its fleet read; nothing waits on it;
+   *  - the approval half, `sweepApprovals`: the lapse, the hook's ceiling, the deferred pushes and (under the
+   *    `approvalPrune` row) the retention, every tick, ungated, with no await, so its whole body runs inside `tick`'s
+   *    synchronous turn.
+   *  Both halves stay public, for the tests that await them. */
+  sweepQuestions(registryRead: FleetReadModel): void {
+    void this.sweepAsks(registryRead).catch(() => { /* one bad sweep must not kill the poll */ });
+    // D-5298 (plan Task 16): the approvals lane's lapse, ceiling and retention, never awaited for the same reason.
+    void this.sweepApprovals().catch(() => { /* one bad sweep must not kill the poll */ });
   }
 
   private async askPass(store: CoordStore, fleet?: FleetReadModel): Promise<void> {
