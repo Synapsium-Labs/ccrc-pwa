@@ -607,10 +607,10 @@ describe('stopDonePass: the mail-only feed row (D-6091)', () => {
   // D-7041: the pair is raised through the funnel, so the lane writes neither the archive nor the ring itself. Read
   // through scan/symbols.ts, not a literal pin: no `.recordFeedEvent(` and no `.record(` call anywhere in the files, and
   // `recordFeed` calls `notify` once, record-only. D-7042: the pair's code is the one sleep executor's (`sleepLane.ts`),
-  // so both files are read, and `recordFeed` is read where it now lives.
+  // and `recordFeed` is read where it now lives. D-7046: `stopDoneSweep.ts` is gone, so `sleepLane.ts` is the one file.
   it('the feed archive keeps one writer site', () => {
     const SRC = 'server/src/sleepLane.ts';
-    for (const file of ['server/src/stopDoneSweep.ts', SRC]) {
+    for (const file of [SRC]) {
       const calls = parsedFile(file).calls;
       expect(calls.filter((c) => c.name === 'recordFeedEvent').map((c) => c.line), `${file}: a hand-written archive write`).toEqual([]);
       expect(calls.filter((c) => c.name === 'record' && c.callee !== 'record').map((c) => c.line), `${file}: a hand-written ring record`).toEqual([]);
