@@ -986,7 +986,7 @@ describe('the cadence rows (FleetWatcher.sweepStopDone / sweepHibernate)', () =>
     const { w } = watcherWith({
       coord: sdDeps(w0).coord, tmux, fleetState: { ccdVerbs: ['hibernate'] }, viewers: { isOpen: () => false },
     });
-    (w as unknown as { stopDoneStartedAt: number }).stopDoneStartedAt = NOW - 24 * HOUR;
+    (w as unknown as { sleepStartedAt: number }).sleepStartedAt = NOW - 24 * HOUR;
     w.useStopDoneSerialiser({ serial: async (fn: () => Promise<unknown>) => fn() } as never);
     atClock(NOW);
     const first = w.sweepStopDone([row(ID)], [rec(ID)], []);

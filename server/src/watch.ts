@@ -1316,21 +1316,21 @@ export class FleetWatcher {
    *  SOONER; and it restarts the twice-observed sighting and the hour's runs, which DELAY an expiry. */
   private archivedExpiryState = new Map<string, ArchivedExpiryEntry>();
   /** The stop-done lane (D-5370, `stopDoneSweep.ts`): its last pass, whether one runs, its one memory (a refused
-   *  stop's retry instant), the coordination serialiser `buildServer` hands it, and the process start it holds
-   *  `viewer` against (presence is never persisted). */
+   *  stop's retry instant) and the coordination serialiser `buildServer` hands it. */
   private lastStopDoneSweep = 0;
   private stopDoneSweeping = false;
   private readonly stopDoneMemory: StopDoneMemory = { retryAt: new Map() };
   private stopDoneSerial: (<T>(fn: () => Promise<T>) => Promise<T>) | null = null;
-  private readonly stopDoneStartedAt = Date.now();
-  /** Hibernation's sweep (D-5242, `hibernateSweep.ts`): its last pass, whether one runs, its memory (the last shadow
-   *  line, and the last skip or failure line, per id), and the process start it holds `viewer` against (presence is
-   *  never persisted). Its act uses the stop-done lane's serialiser below, the one `CoordMutex`. */
+  /** The process start both sleep lanes hold `viewer` against (presence is never persisted; D-7045: one field, set at
+   *  construction, where each lane had its own holding the same instant). */
+  private readonly sleepStartedAt = Date.now();
+  /** Hibernation's sweep (D-5242, `hibernateSweep.ts`): its last pass, whether one runs, and its memory (the last
+   *  shadow line, and the last skip or failure line, per id); it holds `viewer` against `sleepStartedAt`. Its act uses
+   *  the stop-done lane's serialiser above, the one `CoordMutex`. */
   private lastHibernateSweep = 0;
   private hibernateSweeping = false;
   private readonly hibernateMemory: HibernateSweepMemory = { lastLine: new Map(), lastActLine: new Map() };
   private readonly staleArchive = new StaleArchiveBeat(() => this.deps, this, (a) => this.transcripts.resolve(a));
-  private readonly hibernateStartedAt = Date.now();
   /** `flock-unavailable`, once a box has answered it: the lane composes nothing more there (this process). */
   private archivedExpiryBoxRefused: string | null = null;
   /** THE DEAD-COORDINATOR LANE (workspace lifecycle wave 4): its clock and its single flight (the `deadCoordinator` row; the expiry lane's reason);
@@ -2121,7 +2121,7 @@ export class FleetWatcher {
         mark: (rec) => turnMarkFor(reads, rec),
         rowAtAct: (rec) => this.rowAtAct(rec),
         serial: this.stopDoneSerial, queueRun: (id, fn) => this.deps.queue.run(id, fn),
-        startedAt: this.stopDoneStartedAt, now: Date.now,
+        startedAt: this.sleepStartedAt, now: Date.now,
       }, this.stopDoneMemory, sessions, records, names);
     } catch (err) {
       console.warn(`ccrc-server: sweepStopDone failed (${err instanceof Error ? err.message : String(err)}) — no stops this pass`);
@@ -2151,7 +2151,7 @@ export class FleetWatcher {
         liveWord: (rec) => liveWordFor(reads, rec), mark: (rec) => turnMarkFor(reads, rec),
         readAfterHours: () => this.deps.io.readFile(`${this.deps.cfg.registryDir}/${HIBERNATE_AFTER_HOURS_FILE}`),
         log: (line) => console.warn(line),
-        startedAt: this.hibernateStartedAt, now: Date.now,
+        startedAt: this.sleepStartedAt, now: Date.now,
         act: {
           runCcd: this.deps.runCcd, fleetState: this.deps.fleetState, serial: this.stopDoneSerial,
           queueRun: (id, fn) => this.deps.queue.run(id, fn), rowAtAct: (rec) => this.rowAtAct(rec),

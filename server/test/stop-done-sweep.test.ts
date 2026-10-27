@@ -753,7 +753,7 @@ describe('the watcher\'s own pass, its deps unmocked (D-5370)', () => {
     // buildServer always hands the watcher a Viewers; an absent port reads as a viewer (fail closed).
     const deps = { ...testDeps(home, run), cfg, coord, fleetState: { ccdVerbs: ['hibernate'] }, viewers: new Viewers(() => Date.now()) };
     const w = new FleetWatcher(deps as never, new Bus(), 10_000);
-    (w as unknown as { stopDoneStartedAt: number }).stopDoneStartedAt = startedAt;
+    (w as unknown as { sleepStartedAt: number }).sleepStartedAt = startedAt;
     w.useStopDoneSerialiser({ serial: async (fn: () => Promise<unknown>) => fn() } as never);
     // The tick's rows and records, assembled now — before anything a case writes afterwards.
     const tick = async () => {
