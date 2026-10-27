@@ -96,6 +96,41 @@ describe('the bounded pool (the limiter)', () => {
     await Promise.all([a, b, w, late]);
     expect(inFlight).toBe(0);
   });
+
+  it('a late call issued synchronously right after a call resolves finds the bound still full', async () => {
+    const limit = limiter(2);
+    let inFlight = 0;
+    const call = (gt: ReturnType<typeof gate>) => limit(async () => {
+      inFlight += 1;
+      await gt.promise;
+      inFlight -= 1;
+    });
+    const ga = gate();
+    const gb = gate();
+    const gw = gate();
+    const a = call(ga);
+    const b = call(gb);
+    const w = call(gw);
+    await settle();
+    expect(inFlight).toBe(2);
+    ga.resolve();
+    await a;   // a has fully returned: its slot is released, and handed to w
+    // SYNCHRONOUSLY, before any further await: a late call arrives right after a's resolution
+    let lateStarted = false;
+    const lateGate = gate();
+    const late = limit(async () => { lateStarted = true; await lateGate.promise; });
+    expect(lateStarted).toBe(false);
+    expect(inFlight).toBe(2);   // w took a's slot: b and w, never one
+    await settle();
+    expect(inFlight).toBe(2);
+    expect(lateStarted).toBe(false);
+    gb.resolve();
+    gw.resolve();
+    lateGate.resolve();
+    await Promise.all([b, w, late]);
+    expect(lateStarted).toBe(true);
+    expect(inFlight).toBe(0);
+  });
 });
 
 describe('mapBounded', () => {
