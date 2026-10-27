@@ -1,9 +1,9 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { SPAWN_STALL_MS, type FleetSession, type NodeWire, type ProjectPoolsWire, type ProjectRow, type RunSummary, type UpdatesView } from '../../shared/api';
 import { fleetSession } from './fleetFixture';
-import { createFleetStore, type FleetStore } from '../src/stores/fleet';
+import { createFleetStore, useFleetStore, type FleetStore } from '../src/stores/fleet';
 import { ApiError, api } from '../src/lib/api';
 import { ack, FEED_ACK_KEY, loadAcks, resetAcks } from '../src/lib/seen';
 import { navigate } from '../src/lib/router';
@@ -313,11 +313,13 @@ describe('FleetScreen', () => {
   // at all. Same gap in the loading branch: a fleet mid-first-connect also
   // rendered no strip.
   it('renders the accounts strip in the first-run block, not just the populated fleet', async () => {
-    vi.spyOn(api, 'accounts').mockResolvedValue({
-      accounts: [{ wrapper: 'claude', five: 0, seven: 0, ts: null, fiveResetAt: null, sevenResetAt: null, fiveRolledOver: false, sevenRolledOver: false, disabled: false, authDead: false }],
-      projected: { wrapper: 'claude', score: 0 },
-      roster: [],
+    // The strip reads the app-wide fleet store's accounts answer, which that store's one poll writes (C8, D-6440).
+    act(() => {
+      useFleetStore.setState({
+        usage: [{ wrapper: 'claude', five: 0, seven: 0, ts: null, fiveResetAt: null, sevenResetAt: null, fiveRolledOver: false, sevenRolledOver: false, disabled: false, authDead: false }],
+      });
     });
+    onTestFinished(() => { useFleetStore.setState({ usage: null }); });
     const store = makeStore();
     renderFleet(<FleetScreen store={store} />);
     seed(store, { conn: 'open', sessions: [] });
@@ -2106,7 +2108,8 @@ describe('archived footer row', () => {
 describe('AccountsStrip', () => {
   it('renders account usage from /api/accounts with a reset countdown, independent of sessions', async () => {
     const nowSec = Math.floor(Date.now() / 1000);
-    vi.spyOn(api, 'accounts').mockResolvedValue({
+    // The strip reads a fleet store's accounts answer (C8, D-6440): this one's read, made once before the mount.
+    const store = createFleetStore({ fetchAccounts: async () => ({
       accounts: [
         // gpt has NO active session, yet still shows — telemetry-driven.
         { wrapper: 'gpt', five: 8, seven: 8, ts: nowSec, fiveResetAt: nowSec + 2 * 3600, sevenResetAt: nowSec + 3 * 86400, fiveRolledOver: false, sevenRolledOver: false, disabled: false, authDead: false },
@@ -2116,8 +2119,9 @@ describe('AccountsStrip', () => {
       // which filters `roster.homeAble`.
       projected: { wrapper: 'claude', score: 0 },
       roster: [],
-    });
-    render(<AccountsStrip />);
+    }) });
+    await act(() => store.getState().refreshAccounts());
+    render(<AccountsStrip store={store} />);
     // one account gauge → two meters (5h + 7d)
     await screen.findByText('gpt');
     expect(document.querySelectorAll('.acct-fill')).toHaveLength(2);
