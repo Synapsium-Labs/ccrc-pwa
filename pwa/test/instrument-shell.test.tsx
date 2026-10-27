@@ -44,9 +44,11 @@
 // Rows 1, 4 and 7 also run in browser/instrument-desk.browser.test.ts (its own table).
 //
 // Desk polish S5b (D-6530): the lanes fold.
-// MUTATION TABLE (plan Task S5b Step 3; RUN against the branch's final head, each mutant applied to the working tree as one
-// exact-once replacement and restored from a saved copy with its sha256 checked; the named jsdom suite(s) alone, and
-// browser/lanes-row.browser.test.ts too where a row names it; then reverted):
+// MUTATION TABLE (plan Task S5b Step 3; RUN at 182d2ac58, every row, bounded and hash-checked; the log is kept outside the repo.
+// Each mutant was applied to the working tree as one exact-once replacement and restored from a saved copy with its sha256
+// checked; the named jsdom suite(s) alone, and browser/lanes-row.browser.test.ts or browser/refined-phone.browser.test.ts too
+// where a row names one; then reverted. 75 mutants run: 75 red, none survived, none invalid. The counts "of 70" and "of 26"
+// are the browser files' sizes at that head):
 //   fold when it would hide one lane (`count + 1`; at the desk, the line folding when one lane would overflow)
 //                                                       strip-fold "it never folds to hide a single lane: five lanes show all five", "foldable is false at five lanes
 //                                                         and true at six, folded or expanded", "one rule at every width: …"
@@ -63,10 +65,10 @@
 //   "sign-in expired" retyped in `stripFold.ts` ........ strip-fold "the words take SIGN_IN_EXPIRED and the state word"
 //   the limit re-tested inline instead of `stateWordFor` strip-fold "the words take SIGN_IN_EXPIRED and the state word"
 //   `FOLD_SHOWN` used at the desk too .................. strip-fold "a desk folds to one card fewer than rowFit's tracks, the last track the end cell's", "one rule at every width: …";
-//                                                         lanes-row (16 of 88) "folded with 17 lanes at 900, 1280 and 1920 in both skins, the row is one line: …"
+//                                                         lanes-row (8 of 70) "folded with 17 lanes at 900, 1280 and 1920 in both skins, the row is one line: …", "from 1920 to 1280 the folded row re-fits: …"
 //   the end cell's track not left (`foldShown(true, t)` is `t`)
 //                                                       strip-fold "a desk folds to one card fewer than rowFit's tracks, …", "one rule at every width: …";
-//                                                         lanes-row (16 of 88) "folded with 17 lanes at 900, 1280 and 1920 in both skins, the row is one line: …"
+//                                                         lanes-row (8 of 70) "folded with 17 lanes at 900, 1280 and 1920 in both skins, the row is one line: …", "from 1920 to 1280 the folded row re-fits: …"
 //   a width query in `stripFold.ts` .................... strip-fold "stripFold.ts reads no layout"
 //   `rowFit` without the gap added back ................ strip-fold "rowFit counts the tracks one line holds: …"
 //   an unmeasured row read as one card (width 0 -> 1) .. strip-fold "an unmeasured desk row folds nothing: every lane, no control"
@@ -74,9 +76,9 @@
 //   `--lane-card-min: 260px` in the strip's rule ....... strip-fold "the card's floor is LANE_CARD_MIN, once: every lanes-row rule in shell.css reads the token, and none writes the figure"
 //   `minmax(260px, 1fr)` in the flyout's rule .......... strip-fold, the same case (fix round 1: both were SURVIVED while the guard read only the strip's `grid-template-columns`)
 //   the fold applied below 900 only .................... app "one fold control per width, in both skins: refined, desk, …" and the instrument one; lanes-row "folded with 17
-//                                                         lanes at 900, 1280 and 1920 …" (RED on the one view run alone; the whole file outran its 580 s bound, twice, with every folded
-//                                                         desk case waiting out its own timeout, so no count is recorded for it)
-//   hidden cards rendered and hidden by CSS ............ accounts-strip "the folded strip mounts only the shown cards", and five more
+//                                                         lanes at 900, 1280 and 1920 …" (RED, run filtered to the one view refined, phosphor, 1280px; the whole file is not run for this row:
+//                                                         it outran its 580 s bound, twice, in an earlier run, with every folded desk case waiting out its own timeout)
+//   hidden cards rendered and hidden by CSS ............ accounts-strip "the folded strip mounts only the shown cards", and six more
 //   the control rendered outside the end cell .......... accounts-strip "the control sits in the end cell, after the last shown card and before All accounts, …"
 //   the control rendered after All accounts ............ accounts-strip "the control sits in the end cell, after the last shown card and before All accounts, …"
 //   the tab stop left on a card that folds away ........ accounts-strip "…a stop on a card that folds away goes to the first shown card"
@@ -84,7 +86,7 @@
 //   the control spreads `commandDoor('go-accounts')` before its own `onClick`
 //                                                       accounts-strip "a tap on the control folds and unfolds and never navigates, and the control carries no data-command …"
 //   the same spread after its own `onClick` ............ accounts-strip "a tap on the control folds and unfolds and never navigates, …", and five more
-//   an `aria-label` on the control ..................... accounts-strip "the control's name is its words (no aria-label), …", and 18 more
+//   an `aria-label` on the control ..................... accounts-strip "the control's name is its words (no aria-label), …", and 26 more
 //   the control keyed on its state (remounts) .......... accounts-strip "focus stays on the control across Show fewer and +n more"
 //   the control rendered iff `hidden.length > 0` ....... accounts-strip "focus stays on the control across Show fewer and +n more", "a tap on the control folds and unfolds …"
 //   the control rendered when `expanded` regardless of `foldable`
@@ -95,7 +97,7 @@
 //   the scroll run on mount ............................ accounts-strip "another tab's choice to fold, arriving after the load, scrolls nothing: only this page's own Show fewer does"
 //                                                         (a fix round: it was SURVIVED while no case let a choice arrive after the load, the effect running only at mount)
 //   the sentence built inline in `AccountsStrip` ....... accounts-strip "the control's words are foldWords': the component builds no sentence of its own", and six more
-//   Show fewer's scroll call removed ................... accounts-strip "Show fewer scrolls the control into view with block nearest; …"; refined-phone browser (2 of 31)
+//   Show fewer's scroll call removed ................... accounts-strip "Show fewer scrolls the control into view with block nearest; …"; refined-phone browser (2 of 26)
 //                                                         "after Show fewer the control is focused and on screen: refined, phosphor, 360px" and 390px
 //   the choice kept in component state ................. strip-expanded "the choice survives a remount and a reload", and four more; refined-phone "the choice to expand is remembered across a remount"
 //   a malformed value read as expanded ................. strip-expanded "absent, malformed or unreadable storage reads folded"
@@ -105,17 +107,17 @@
 //   the `storage` listener removed ..................... strip-expanded "a storage event for ccrc-accounts-strip updates a mounted hook", and one more
 //   the fold applied in `PhoneHeader` only (the fleet column's mount given an unfolded prop)
 //                                                       instrument-shell "Instrument's phone fleet column folds the same strip"
-//   Instrument's first-row bound lowered below its measured 533.8 px (540 -> 530) ... refined-phone browser (1 of 31) "folded, with 17 lanes, four cards and one control …, and the first session row sits at most
+//   Instrument's first-row bound lowered below its measured 533.8 px (540 -> 530) ... refined-phone browser (1 of 26) "folded, with 17 lanes, four cards and one control …, and the first session row sits at most
 //                                                         540 px down at 390×844: instrument, phosphor, 390px" (fix round 1, `instrument-first-row-is-its-chrome`: the 440 check was gated on Refined's head, so Instrument ran none)
 // Fix round 1 trimmed the browser leg's geometry matrices to one palette (lanes-row 88 -> 70 cases, refined-phone 31 -> 26);
-// the "(16 of 88)" and "(8 of 88)" counts above are the earlier figures, and the whole-table re-run at the round's final head replaces them.
+// the counts above are of the trimmed files, from the run at 182d2ac58.
 // R120 `strip-hover-flyout` (accounts-strip alone, plus lanes-row where named):
 //   open without the delay (`FLYOUT_OPEN_MS` -> 0) ..... "…hovering the line opens the flyout after FLYOUT_OPEN_MS, …", "a pointer passing by does not open it"
 //   close without the grace (`FLYOUT_CLOSE_MS` -> 0) ... "leaving the line and the flyout closes it after FLYOUT_CLOSE_MS; coming back within the grace keeps it", "focus leaving the strip closes it, …"
 //   close without handing focus back to the line ....... "Escape closes it and returns focus to the card it came from"
-//   the flyout while expanded .......................... "no flyout while expanded, and none below 900"
+//   the flyout while expanded .......................... "no flyout while expanded, and none below 900", and the moot-focus case below
 //   the flyout below 900 ............................... "no flyout while expanded, and none below 900"
-//   the flyout reset removed when it is moot ........... "no flyout while expanded, and none below 900"
+//   the flyout reset removed when it is moot ........... "no flyout while expanded, and none below 900", and the moot-focus case below
 //   a pointer leave with focus inside closing the flyout (the early return in `onLeave` removed)
 //                                                       accounts-strip "it stays open while either the pointer or focus is inside the line or the flyout, and closes when neither is",
 //                                                         "a pointer passing over the strip while the open delay that focus started is pending does not cancel the open"
@@ -127,12 +129,12 @@
 //   the moot flyout's focus hand-back removed ......... "a flyout made moot while a card of it holds focus hands the focus to the line's tab stop, never to the page: another tab expands the strip"
 //                                                         (fix round 1: the reset called `setFlyOpen(false)` directly, so a focused flyout card was unmounted and focus fell to the page)
 //   a second copy of the card markup ................... "the flyout's cards render through the line's own card code: one card markup in the component"
-//   the flyout's cards from `shown`, not `live` ........ seven accounts-strip cases ("…holding every lane in lanesByFree's order", …); lanes-row (8 of 88) "hovering the folded line opens a flyout below it, …"
+//   the flyout's cards from `shown`, not `live` ........ eight accounts-strip cases ("…holding every lane in lanesByFree's order", …); lanes-row (4 of 70) "hovering the folded line opens a flyout below it, …"
 //   focusout ignoring `relatedTarget` .................. "focus leaving the strip closes it, and focus moving between the line and the flyout does not"
 //   pointer enter not cancelling a pending close ....... "leaving the line and the flyout closes it after FLYOUT_CLOSE_MS; coming back within the grace keeps it"
 //   focus between the strip's own cards opening it again "Escape stays shut for a keyboard user: an arrow move between the line's cards does not open it again"
-//   the flyout `position: absolute` -> `static` ........ lanes-row (8 of 88) "hovering the folded line opens a flyout below it, drawn over the content, …"
-//   the flyout's `z-index` removed ..................... lanes-row (8 of 88) "hovering the folded line opens a flyout below it, drawn over the content, …"
+//   the flyout `position: absolute` -> `static` ........ lanes-row (4 of 70) "hovering the folded line opens a flyout below it, drawn over the content, …"
+//   the flyout's `z-index` removed ..................... lanes-row (4 of 70) "hovering the folded line opens a flyout below it, drawn over the content, …"
 //   the `returningFocus` guard removed from `onGroupFocus`: no row. It was SURVIVED as a dead guard (the `relatedTarget` test above it already returns for the move the guard
 //                                                         covered), so the guard was removed from `AccountsStrip` in a fix round and the cases stay green
 //   the timers not cleared on unmount .................. accounts-strip "unmounting with the open delay pending, or the close grace pending, leaves no timer behind"  (a fix round: it was SURVIVED)
@@ -143,7 +145,7 @@
 // `useRowWidth` (final review: it had no row; each run against accounts-strip and strip-fold):
 //   the observer not disconnected on cleanup ........... accounts-strip "the desk row's observer is disconnected when the strip unmounts"  (it was SURVIVED: no case unmounted a measured strip)
 //   the column gap read without the `Number.isFinite` fallback
-//                                                       sixteen accounts-strip cases, the first "at the desk the row folds to the measured fit: three cards at 1248 px, …" (jsdom's gap is not a number)
+//                                                       nineteen accounts-strip cases, the first "at the desk the row folds to the measured fit: three cards at 1248 px, …" (jsdom's gap is not a number)
 //   the column gap ignored (`gap: 0` in `useRowWidth`) . accounts-strip "the desk's fit counts the column gap the group computes: 1050 px with an 8 px gap holds three tracks, …"
 //                                                         (fix round 1: it was SURVIVED, every jsdom case ran with a gap of 0 and the browser leg's three desk widths count alike with 8 px or 0)
 // R120 `lanes-tie-break-soonest-reset` (lane-order alone):
