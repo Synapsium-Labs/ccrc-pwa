@@ -16,6 +16,8 @@ import { join } from 'node:path';
 import { describeLinux } from './platformFixtures.js';
 import { BASH, CCRC_SRC, CHECKS_SRC, REPO, Result, doctorEnv, healthy, shq, stubBin, unitDirOf, unitFileOf, writeCcrcEnv, writeUnitFile } from './ccrc-doctorFixture.js';
 import { fixClock, fixedNow } from './fixedClock.js';
+import { plantShippedTimers, writeShippedTimer } from './shippedTimers.js';
+import { mkTmp } from './tmpHelpers.js';
 
 /** `body` run after ccd/ccrc and the check table are sourced, under `home`'s doctor environment. */
 function runChecks(home: string, body: string): Result {
@@ -262,4 +264,97 @@ describe('C8b characterization: the table sourced without ccrc', () => {
     ]);
     expect(r.stderr).toBe('');
   });
+});
+
+// STEP 2: the doctor's cadence helpers (D-7054), red before they exist. `_dr_timer_period_s <unit>` answers the
+// SHIPPED tree's `$BOX_TREE_DIR/deploy/systemd/<unit>` through ccrc's one reader, `_timer_period_s` (C8a, D-7053),
+// never the installed copy (Review focus 2); `_dr_cycles_s <unit> <k>` is k of those periods. rc 0 prints the number;
+// rc 1 (the file cannot be read: OA-C8c (a), D-7062) and rc 3 (ccrc's reader or BOX_TREE_DIR not loaded: a bug in
+// ccrc) print nothing, so no caller can reach `$(( ))` or `-gt` with an empty operand.
+describe('C8b: the doctor\'s cadence helpers', () => {
+  const tree = (): string => {
+    const home = mkTmp('c8b-helpers-');
+    plantShippedTimers(join(home, 'ccrc'));
+    return home;
+  };
+  const sh = (home: string, body: string, withCcrc = true): Result => {
+    const src = `set -uo pipefail\n${withCcrc ? `. ${shq(CCRC_SRC)}\n` : ''}. ${shq(CHECKS_SRC)}\n${body}`;
+    const r = spawnSync(BASH, ['-c', src], { env: { HOME: home, PATH: '/usr/bin:/bin', LC_ALL: 'C' }, encoding: 'utf8', timeout: 30_000 });
+    return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
+  };
+
+  it.each([
+    ['ccd-graph-sweep.timer', 3, '2700'],
+    ['ccrc-models.timer', 3, '10800'],
+    ['ccd-pool-sync.timer', 2, '120'],
+    ['ccrc-codex-usage@.timer', 3, '2700'],
+    ['ccd-scope-sweep.timer', 1, '60'],
+  ])('_dr_cycles_s %s %i answers %s from the shipped tree', (unit, k, want) => {
+    const r = sh(tree(), `_dr_cycles_s ${unit} ${k}; echo "rc=$?"`);
+    expect(r.stdout, r.stderr).toBe(`${want}\nrc=0\n`);
+  });
+
+  it('_dr_timer_period_s answers the shipped file, not the installed copy', () => {
+    const home = tree();
+    writeShippedTimer(join(home, 'ccrc'), 'ccd-pool-sync.timer', '[Timer]\nOnUnitActiveSec=90s\n');
+    mkdirSync(join(home, '.config', 'systemd', 'user'), { recursive: true });
+    writeFileSync(join(home, '.config', 'systemd', 'user', 'ccd-pool-sync.timer'), '[Timer]\nOnUnitActiveSec=60s\n');
+    const r = sh(home, '_dr_timer_period_s ccd-pool-sync.timer; echo "rc=$?"');
+    expect(r.stdout, r.stderr).toBe('90\nrc=0\n');
+  });
+
+  it('a run reads each unit file once: later calls in the same shell answer from the cache', () => {
+    const home = tree();
+    const r = sh(home, [
+      'eval "c8b_real_$(declare -f _timer_period_s)"',
+      '_timer_period_s() { echo "$1" >> "$HOME/reads"; c8b_real__timer_period_s "$@"; }',
+      '_dr_timer_period_s ccd-pool-sync.timer; _dr_cycles_s ccd-pool-sync.timer 2; _dr_cycles_s ccd-pool-sync.timer 3',
+      '_dr_cycles_s ccd-graph-sweep.timer 3; _dr_timer_period_s ccd-graph-sweep.timer',
+      'echo "reads=$(wc -l < "$HOME/reads")"',
+    ].join('\n'));
+    expect(r.stdout.replace(/reads= +/, 'reads='), r.stderr).toBe('60\n120\n180\n2700\n900\nreads=2\n');
+  });
+
+  it('a unit file that cannot be read: rc 1 and nothing on stdout, from either helper', () => {
+    const home = tree();
+    writeShippedTimer(join(home, 'ccrc'), 'ccd-graph-sweep.timer', null);
+    writeShippedTimer(join(home, 'ccrc'), 'ccrc-models.timer', '[Timer]\nOnBootSec=5min\n');
+    const r = sh(home, [
+      '_dr_timer_period_s ccd-graph-sweep.timer; echo "rc=$?"',
+      '_dr_cycles_s ccd-graph-sweep.timer 3; echo "rc=$?"',
+      '_dr_cycles_s ccrc-models.timer 3; echo "rc=$?"',
+    ].join('\n'));
+    expect(r.stdout).toBe('rc=1\nrc=1\nrc=1\n');
+  });
+
+  it('BOX_TREE_DIR unset, or ccrc\'s reader undeclared (the table sourced alone): rc 3 and nothing on stdout', () => {
+    const home = tree();
+    expect(sh(home, 'unset BOX_TREE_DIR; _dr_cycles_s ccd-pool-sync.timer 2; echo "rc=$?"').stdout).toBe('rc=3\n');
+    expect(sh(home, 'BOX_TREE_DIR=; _dr_timer_period_s ccd-pool-sync.timer; echo "rc=$?"').stdout).toBe('rc=3\n');
+    expect(sh(home, 'unset -f _timer_period_s; _dr_cycles_s ccd-pool-sync.timer 2; echo "rc=$?"').stdout).toBe('rc=3\n');
+    const alone = sh(home, '_dr_cycles_s ccd-pool-sync.timer 2; echo "rc=$?"', false);
+    expect(alone.stdout, alone.stderr).toBe('rc=3\n');
+  });
+
+  it('rc 3: the calling check\'s FAIL names the bug, in the file\'s existing shape', () => {
+    const r = sh(tree(), '_dr_cadence_unloaded graphify ccd-graph-sweep.timer "the census\'s staleness"; echo "rc=$?"', false);
+    expect(r.stdout.split('\n'), r.stderr).toEqual([
+      'FAIL graphify: ccrc\'s own timer reader is not loaded, so the census\'s staleness was never measured',
+      '  remedy: this is a bug in ccrc, not a fact about your box — _check_graphify reads ccd-graph-sweep.timer\'s cadence through _timer_period_s and BOX_TREE_DIR, both declared once in ccrc itself, and this check table was sourced by something that is not ccrc',
+      'rc=1',
+      '',
+    ]);
+  });
+
+  it('rc 1: the check\'s WARN names the unit and says the bound is unmeasured (OA-C8c (a), D-7062)', () => {
+    const r = sh(tree(), '_dr_cadence_unread graphify ccd-graph-sweep.timer "the census\'s staleness"; echo "rc=$?"');
+    expect(r.stdout, r.stderr).toMatch(
+      /^WARN graphify: ccd-graph-sweep\.timer's cadence could not be read from the shipped unit file \(\S+\/ccrc\/deploy\/systemd\/ccd-graph-sweep\.timer\), so the census's staleness is unmeasured\n {2}remedy: \S/);
+    expect(r.stdout).toMatch(/\nrc=2\n$/);
+  });
+
+  it.each([[60, 'every minute'], [120, 'every 2 minutes'], [900, 'every 15 minutes'], [90, 'every 90s'], [45, 'every 45s']])(
+    '_dr_every_words %i prints "%s"', (s, want) => {
+      expect(sh(tree(), `_dr_every_words ${s}; echo`).stdout).toBe(`${want}\n`);
+    });
 });
