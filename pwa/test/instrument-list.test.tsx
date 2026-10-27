@@ -269,7 +269,9 @@ describe('the counts once per screen', () => {
     expect(within(groupOf('dead')).queryByRole('button', { name: /^Mark all/ })).toBeNull();
 
     // The door is a SIBLING of the fold row, named for its group, never a button inside the fold row's button.
-    const door = within(done).getByRole('button', { name: 'Mark all Done seen' });
+    const door = within(done).getByRole('button', { name: 'Mark all seen, Done' });
+    // Its visible words come first in its name (WCAG 2.5.3, label in name), the group after them (F8).
+    expect(door.getAttribute('aria-label')!.startsWith(door.textContent!)).toBe(true);
     expect(doneHead.contains(door)).toBe(false);
     expect(door.closest('.ins-group-head')).toBeNull();
     expect(done.contains(door)).toBe(true);
@@ -287,7 +289,7 @@ describe('the counts once per screen', () => {
     expect(document.activeElement).toBe(doneHead);
     expect(within(table()).getByRole('status')).toHaveTextContent('Done: 2 marked seen');
     // The held-open Needs you head still folds nothing and keeps its door.
-    expect(within(groupOf('attention')).getByRole('button', { name: 'Mark all Needs you seen' })).toBeInTheDocument();
+    expect(within(groupOf('attention')).getByRole('button', { name: 'Mark all seen, Needs you' })).toBeInTheDocument();
   });
 
   it("a head's fold row is named by its visible words, in order: the count and the badge never run together", () => {
@@ -310,7 +312,7 @@ describe('the counts once per screen', () => {
     const done = groupOf('done');
     expect(panel.contains(done)).toBe(true);
     expect(table().querySelector('.bucket-bar')).toBeNull();
-    fireEvent.click(within(done).getByRole('button', { name: 'Mark all Done seen' }));
+    fireEvent.click(within(done).getByRole('button', { name: 'Mark all seen, Done' }));
     expect(within(done).queryByLabelText(/new$/)).toBeNull();
     expect(document.activeElement).toBe(head(done));
     expect(within(table()).getByRole('status')).toHaveTextContent('Done: 2 marked seen');
@@ -328,7 +330,9 @@ describe('the counts once per screen', () => {
       & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     // The door is the chips' own and works here: it acks that bucket, announces it and keeps focus on the chip's label.
     const chip = within(bar).getByRole('group', { name: 'Needs you' });
-    fireEvent.click(within(chip).getByRole('button', { name: 'Mark all Needs you seen' }));
+    const chipDoor = within(chip).getByRole('button', { name: 'Mark all seen, Needs you' });
+    expect(chipDoor.getAttribute('aria-label')!.startsWith(chipDoor.textContent!)).toBe(true);
+    fireEvent.click(within(chip).getByRole('button', { name: 'Mark all seen, Needs you' }));
     expect(within(chip).queryByLabelText(/new$/)).toBeNull();
     expect(document.activeElement).toBe(chip.querySelector('.bucket-head-label'));
     expect(within(table()).getByRole('status')).toHaveTextContent('Needs you: 1 marked seen');

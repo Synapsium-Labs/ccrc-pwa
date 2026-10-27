@@ -26,10 +26,11 @@ export interface MarkSeen {
 export const markedSeenNote = (bucket: SessionBucket, unseenCount: number): string =>
   `${STATUS_GROUPS[bucket].label}: ${unseenCount} marked seen`;
 
-/** The door's accessible name, the bucket IN it by its chip's word (`BucketBar`'s comment argues why). One builder for
- *  both doors, and outside the skins: the skin boundary reads a skin file's string literals for colour words, and
- *  "Mark" is a CSS system colour. */
-export const markAllSeenLabel = (bucket: SessionBucket): string => `Mark all ${STATUS_GROUPS[bucket].label} seen`;
+/** The door's accessible name: its visible words first, then the bucket IN it by its chip's word, `Mark all seen, Needs
+ *  you` (WCAG 2.5.3, label in name: a voice-control user says what they read). `BucketBar`'s comment argues why the
+ *  bucket is in it. One builder for both doors, and outside the skins: the skin boundary reads a skin file's string
+ *  literals for colour words, and "Mark" is a CSS system colour. */
+export const markAllSeenLabel = (bucket: SessionBucket): string => `Mark all seen, ${STATUS_GROUPS[bucket].label}`;
 
 export function useMarkSeen(ackAll: (sessions: readonly FleetSession[], at: number) => void): MarkSeen {
   // "Mark all seen" unmounts itself. Both halves of the repair live here.

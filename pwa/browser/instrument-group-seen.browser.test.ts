@@ -171,7 +171,7 @@ describe('on a phone, Mark all seen keeps its word on one line and the tap floor
               sideScroll: document.documentElement.scrollWidth - document.documentElement.clientWidth,
             };
           });
-          expect(m.doors.map((d) => d.label).sort(), 'the doors on the page').toEqual(['Mark all Done seen', 'Mark all Needs you seen']);
+          expect(m.doors.map((d) => d.label).sort(), 'the doors on the page').toEqual(['Mark all seen, Done', 'Mark all seen, Needs you']);
           for (const d of m.doors) {
             expect(d.text, d.label ?? '').toBe('Mark all seen');
             expect(d.lines, `${d.label}: the word's lines`).toBe(1);
