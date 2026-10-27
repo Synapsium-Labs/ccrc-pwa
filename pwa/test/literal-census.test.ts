@@ -86,10 +86,12 @@ const MIN_CHARS = 25;
  *  point, so no real string can contain it. */
 const HOLE = '';
 
+/** Every file, parsed ONCE, at module load (see `LITERALS`). */
+const PARSED: readonly (readonly [string, ts.SourceFile])[] = FILES.map(([name, file]) => [name, parseTs(file)] as const);
+
 function literals(): Map<string, string[]> {
   const found = new Map<string, string[]>();
-  for (const [name, file] of FILES) {
-    const src = parseTs(file);
+  for (const [name, src] of PARSED) {
     const visit = (n: ts.Node): void => {
       let text: string | null = null;
       if ((ts.isStringLiteral(n) || ts.isNoSubstitutionTemplateLiteral(n)) && !isSpecifier(n)) {
@@ -164,6 +166,15 @@ describe('literal census', () => {
 
   it('gives every entry a reason long enough to be one', () => {
     for (const [k, why] of Object.entries(REGISTERED)) expect(why.length, k).toBeGreaterThan(60);
+  });
+
+  it('parses every file it reads without a syntax error, so no file is read only in part', () => {
+    // A `.ts` file read with the TSX grammar takes a generic arrow `async <T>(…)` for a JSX tag, and every literal
+    // after it is lost to the census: `lib/api.ts` was read only in part that way.
+    const misparsed = PARSED
+      .filter(([, src]) => (src as unknown as { parseDiagnostics: readonly ts.Diagnostic[] }).parseDiagnostics.length > 0)
+      .map(([name]) => name);
+    expect(misparsed).toEqual([]);
   });
 
   it('reads strings at all, and still excludes specifiers', () => {
