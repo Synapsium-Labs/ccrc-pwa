@@ -1447,6 +1447,19 @@ describe('the header doors carry words (desktop polish T3c, D-6333)', () => {
     expect(p.onOpenTerminal).toHaveBeenCalledTimes(1);
   });
 
+  // The cap is also drawn by the inspector's PR section, outside `.chat-head` (`PrSection`): there the word span must
+  // stay hidden, or the legend and the word both show ("#5#5"). The hide is the cap's own; only the SHOW is the header's.
+  it("the PR cap's word is hidden wherever the cap is drawn, and shown only in the header from 900", async () => {
+    const { readFileSync } = await import('node:fs');
+    const path = await import('node:path');
+    const { ruleIn, atBlock, declValue, stripComments } = await import('./cssRule');
+    const css = stripComments(readFileSync(path.join(import.meta.dirname, '..', 'src', 'session', 'chat.css'), 'utf8'));
+    expect(declValue(ruleIn(css, '.keycap--pr .keycap-word'), 'display')).toBe('none');
+    const desk = atBlock(css, '@media (min-width: 900px)');
+    expect(declValue(ruleIn(desk, '.chat-head .keycap-word'), 'display')).toBe('inline');
+    expect(declValue(ruleIn(desk, '.chat-head .keycap--pr .pr-legend'), 'display')).toBe('none');
+  });
+
   it('the PR door says what tapping it does when there is no number, and a main checkout has no PR door', () => {
     stubPointer(false);
     const word = (s: FleetSession): string | undefined => {
