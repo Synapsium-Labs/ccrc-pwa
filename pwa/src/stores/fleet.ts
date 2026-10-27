@@ -12,7 +12,8 @@ import { isRecord } from '../lib/wire';
 import { warnNonArrayRoster } from '../lib/accounts';
 import type { DivergenceCensus } from '../fleet/integrityWords';
 import { keepRows } from '../fleet/keepRows';
-import type { AccountsConnect, AccountUsage, LaneWire } from '../../../shared/api';
+import type { AccountsConnect, AccountUsage, LaneWire, ProjectedHome } from '../../../shared/api';
+import { sameJson } from '../lib/sameJson';
 
 export interface FleetNotice {
   id: number;
@@ -28,9 +29,10 @@ export interface FleetState {
    * homeAble only (never the server-only config `RosterWire` deliberately
    * omits). `pwa/src/lib/accounts.ts`'s `accountLabel`/`accountHue`/
    * `homeAbleLabelList` are pure projections over whatever array a caller
-   * hands them; THIS is where every consumer but the three screens running
-   * their own `/api/accounts` poll (AccountsStrip, AccountsScreen,
-   * useProjectedHome) gets that array from.
+   * hands them; THIS is where every consumer gets that array from. The store
+   * is the one reader of `GET /api/accounts` (C8, D-6440): the lanes row, the
+   * Accounts screen, `useProjectedHome` and `useAccountUsage` subscribe to
+   * what its read wrote, and none of them polls.
    *
    * Threaded through the FLEET store, not a new one, because this store is
    * the one thing connected APP-WIDE (app.tsx), independent of which route
@@ -52,8 +54,13 @@ export interface FleetState {
    *  meter reads a session's lane here, so a session route needs no poll of its own). `null` until an answer carries
    *  an array; a malformed answer keeps the last good one, as `roster` does. Never in the offline snapshot. */
   usage: readonly AccountUsage[] | null;
+  /** `GET /api/accounts`'s `projected`, where ccd would land the next workspace (C8, D-6440). Three states that never
+   *  fold: `undefined` until an answer carries an object or `null`; the server's `null` ("nothing is placeable") once
+   *  one does; and a malformed or failed read keeps the last good value, as `roster` and `usage` do. Never in the
+   *  offline snapshot. */
+  projected: ProjectedHome | null | undefined;
   /** Reads `GET /api/accounts` now, outside the 20 s cadence (after an account act), and resolves once its answer has
-   *  landed in `roster`, `lanes` and `accountsConnect`. Silent on failure, as the poll is. */
+   *  landed in `roster`, `usage`, `lanes`, `accountsConnect` and `projected`. Silent on failure, as the poll is. */
   refreshAccounts(): Promise<void>;
   /** The dormant protocol handshake (shared/api.ts's FLEET_PROTO_MIN): set on
    *  a `hello` this build cannot satisfy, CLEARED on a later compatible one —
@@ -384,26 +391,40 @@ export function createFleetStore(deps: FleetStoreDeps = {}): FleetStore {
     // state to begin with.
     const snapshot = loadFleetSnapshot();
 
-    // ONE reader of `GET /api/accounts` for the store: the 20 s poll below and `refreshAccounts()` both call it.
-    // `lanes` and `connect` are taken only as objects and cleared by an answer without them; neither ever reaches
-    // `saveFleetSnapshot`, whose roster argument is `get().roster` alone (G15).
+    // THE ONE reader of `GET /api/accounts` in the app (C8, D-6440): the 20 s poll below and `refreshAccounts()` both
+    // call it, and every surface that shows an account subscribes to what it writes. `lanes` and `connect` are taken
+    // only as objects and cleared by an answer without them; neither ever reaches `saveFleetSnapshot`, whose roster
+    // argument is `get().roster` alone (G15).
+    //
+    // A field is written only when the answer differs from what the store holds (`sameJson`). Every poll's body is new
+    // objects, so writing them all would hand every subscriber a new reference every 20 s and re-render it for an
+    // unchanged fleet. An equal answer therefore writes nothing at all.
     const fetchAccounts = deps.fetchAccounts ?? (() => api.accounts());
     const readAccounts = (): Promise<void> => fetchAccounts().then((r) => {
-      set({
-        lanes: isRecord(r.lanes) ? r.lanes! : null,
-        accountsConnect: isRecord(r.connect) ? r.connect! : null,
-      });
-      if (Array.isArray(r.accounts)) set({ usage: r.accounts });
+      const held = get();
+      const next: Partial<FleetState> = {};
+      const lanes = isRecord(r.lanes) ? r.lanes! : null;
+      if (!sameJson(lanes, held.lanes)) next.lanes = lanes;
+      const connect = isRecord(r.connect) ? r.connect! : null;
+      if (!sameJson(connect, held.accountsConnect)) next.accountsConnect = connect;
+      // `usage` and `projected` keep the last good value on a malformed answer, as `roster` does below. `projected`
+      // takes an object or the server's `null`; anything else (absent included) is not an answer about placement.
+      if (Array.isArray(r.accounts) && !sameJson(r.accounts, held.usage)) next.usage = r.accounts;
+      if ((r.projected === null || isRecord(r.projected)) && !sameJson(r.projected, held.projected)) next.projected = r.projected;
       // Preserves the last good roster on a malformed response — never
       // clobbers it with `[]` (fix round 1, finding 5): a transient bad
       // read must not un-teach every consumer the account labels it
       // already had.
-      if (Array.isArray(r.roster)) { set({ roster: r.roster }); return; }
-      // A genuine protocol break (a route answering the wrong shape) has
-      // no other signal anywhere — every consumer just silently reverts
-      // to raw wrapper ids, which reads as "nothing is wrong" (fix
-      // round 1, finding 6).
-      warnNonArrayRoster(r);
+      if (Array.isArray(r.roster)) {
+        if (!sameJson(r.roster, held.roster)) next.roster = r.roster;
+      } else {
+        // A genuine protocol break (a route answering the wrong shape) has
+        // no other signal anywhere — every consumer just silently reverts
+        // to raw wrapper ids, which reads as "nothing is wrong" (fix
+        // round 1, finding 6).
+        warnNonArrayRoster(r);
+      }
+      if (Object.keys(next).length > 0) set(next);
     }).catch(() => {});
 
     return {
@@ -433,21 +454,20 @@ export function createFleetStore(deps: FleetStoreDeps = {}): FleetStore {
       lanes: null,
       accountsConnect: null,
       usage: null,
+      projected: undefined,
       refreshAccounts: readAccounts,
 
       connect() {
         if (socket) return;
 
-        // The roster poll — independent of the `/ws/fleet` socket entirely
-        // (it is a plain `GET /api/accounts` read, same endpoint
-        // AccountsStrip/AccountsScreen/useProjectedHome already poll on
-        // their own 20s cadence for `accounts`/`projected`). Duplicate
-        // polling against a local endpoint reading two small JSON files
-        // beats coupling every roster consumer to one mounted screen — the
-        // same trade those hooks' own comments already make. Silent on
-        // failure, and no state change on failure: an unarrived roster
-        // degrades to `accountLabel`/`accountHue`'s own raw-name/neutral-ink
-        // fallback rather than erroring.
+        // The accounts poll — independent of the `/ws/fleet` socket entirely
+        // (it is a plain `GET /api/accounts` read). It is the app's ONLY poll
+        // of that route (C8, D-6440): the lanes row, the Accounts screen and
+        // the sheets' pickers used to run one each, and every one of them now
+        // reads this store, which is connected app-wide whichever route is
+        // mounted. Silent on failure, and no state change on failure: an
+        // unarrived roster degrades to `accountLabel`/`accountHue`'s own
+        // raw-name/neutral-ink fallback rather than erroring.
         //
         // `Array.isArray`, not a bare `r.roster` trust: every `accountLabel`/
         // `accountHue` call site below does `roster.find(...)` unguarded, on
