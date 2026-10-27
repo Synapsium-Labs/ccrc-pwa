@@ -1,3 +1,4 @@
+#!/usr/bin/env bash
 # shellcheck shell=bash
 # ccrc-node — choose the node ccrc's units run, and publish it for systemd.
 #
