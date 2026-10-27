@@ -22,7 +22,8 @@
 // THE FOLD AND ITS FLYOUT (desktop polish S5b, D-6530; R120's `strip-hover-flyout`; `lanes-tie-break-soonest-reset`). The
 // strip folds by default, so the cases above that count or place all seventeen cards seed the stored choice expanded
 // (`seedStripExpanded`), and what the fold itself draws is held at the end of the file, with the shared seventeen-lane
-// fixture (`test/seventeenLanes.ts`): (6) folded, at 900, 1280 and 1920 in both skins and palettes, the row is one line,
+// fixture (`test/seventeenLanes.ts`), these geometry cases under one palette (`GEOMETRY_THEME`): (6) folded, at 900, 1280
+// and 1920 in both skins, the row is one line,
 // `rowFit`'s tracks less one of cards (2, 3 and 6) in the freest-first order, then the end cell, one track wide, holding
 // the control and All accounts, every item at one top, nothing cut or sideways; (7) expanded, every lane wraps and the end
 // cell follows the last card; (8) from 1920 to 1280 the folded row re-fits, and back; (9) at 1280 and 1920 hovering the
@@ -676,8 +677,11 @@ async function foldedFaults(page: Page, width: number): Promise<string[]> {
   return out;
 }
 
-/** The folded line's views: both skins, both palettes, the three desk widths. */
-const FOLD_VIEWS: AppView[] = DESKS;
+/** The folded line's views: both skins and the three desk widths, under one palette. The fold's cases measure geometry
+ *  (card counts, tops, lefts, overlap, scroll width), which a palette does not change, so a second palette would only
+ *  repeat the measure (the browser leg runs against a time cap); the cases that read a colour keep both palettes. */
+const GEOMETRY_THEME = PHOSPHOR;
+const FOLD_VIEWS: AppView[] = DESKS.filter((v) => v.theme === GEOMETRY_THEME);
 
 describe('folded, the lanes row is one line of the freest cards and the end cell', () => {
   for (const view of FOLD_VIEWS) {
@@ -728,7 +732,7 @@ describe('expanded, every lane wraps and the end cell follows the last card', ()
 
 describe('the folded row re-fits when the window changes', () => {
   for (const skin of SKINS) {
-    for (const theme of THEMES) {
+    for (const theme of [GEOMETRY_THEME]) {
       it(`from 1920 to 1280 the folded row re-fits: ${named({ skin, theme, width: 1920 })}`, async () => {
         const { ctx, page, errors } = await openFoldedDesk({ skin, theme, width: 1920 });
         try {
@@ -752,7 +756,7 @@ describe('the folded row re-fits when the window changes', () => {
 
 // The flyout: hovering the folded line opens a panel below it, drawn over the content, holding every lane in order. When
 // `CCRC_BROWSER_SHOTS` names a directory, each view's open flyout is screenshotted into it (never written otherwise).
-const FLYOUT_VIEWS: AppView[] = DESKS.filter((v) => v.width >= 1280);
+const FLYOUT_VIEWS: AppView[] = FOLD_VIEWS.filter((v) => v.width >= 1280);
 
 describe('hovering the folded line opens a flyout below it', () => {
   for (const view of FLYOUT_VIEWS) {

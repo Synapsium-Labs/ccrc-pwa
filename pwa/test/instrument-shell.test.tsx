@@ -107,6 +107,8 @@
 //                                                       instrument-shell "Instrument's phone fleet column folds the same strip"
 //   Instrument's first-row bound lowered below its measured 533.8 px (540 -> 530) ... refined-phone browser (1 of 31) "folded, with 17 lanes, four cards and one control …, and the first session row sits at most
 //                                                         540 px down at 390×844: instrument, phosphor, 390px" (fix round 1, `instrument-first-row-is-its-chrome`: the 440 check was gated on Refined's head, so Instrument ran none)
+// Fix round 1 trimmed the browser leg's geometry matrices to one palette (lanes-row 88 -> 70 cases, refined-phone 31 -> 26);
+// the "(16 of 88)" and "(8 of 88)" counts above are the earlier figures, and the whole-table re-run at the round's final head replaces them.
 // R120 `strip-hover-flyout` (accounts-strip alone, plus lanes-row where named):
 //   open without the delay (`FLYOUT_OPEN_MS` -> 0) ..... "…hovering the line opens the flyout after FLYOUT_OPEN_MS, …", "a pointer passing by does not open it"
 //   close without the grace (`FLYOUT_CLOSE_MS` -> 0) ... "leaving the line and the flyout closes it after FLYOUT_CLOSE_MS; coming back within the grace keeps it", "focus leaving the strip closes it, …"

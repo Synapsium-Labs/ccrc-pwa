@@ -333,8 +333,9 @@ async function openFolded(view: AppView, cards: number, expanded = false, sessio
  *  instrument-first-row-is-its-chrome ruling. */
 const FIRST_ROW_MAX: Record<string, number> = { [REFINED]: 440, [INSTRUMENT]: 540 };
 
+// One palette: these cases measure geometry (card counts, columns, tops, scroll width), which a palette does not change.
 const FOLDED_VIEWS: AppView[] = [
-  ...THEMES.flatMap((theme) => [360, 390].map((width) => ({ skin: REFINED, theme, width }))),
+  ...[PHOSPHOR].flatMap((theme) => [360, 390].map((width) => ({ skin: REFINED, theme, width }))),
   { skin: INSTRUMENT, theme: PHOSPHOR, width: 390 },
 ];
 
@@ -408,7 +409,7 @@ describe('the folded phone strip is four cards and one control', () => {
     }
   }, 60_000);
 
-  for (const theme of THEMES) {
+  for (const theme of [PHOSPHOR]) {
     for (const [width, rows] of [[699, 2], [700, 1], [899, 1]] as const) {
       it(`at 699 the folded strip is two rows of two, and at 700 and 899 one row of four: ${theme}, ${width}px`, async () => {
         const { ctx, page, errors } = await openFolded({ skin: REFINED, theme, width }, 4);
