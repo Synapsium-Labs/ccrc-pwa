@@ -153,6 +153,19 @@ describe('raiseApproval: each fixture request maps to its verdict arm (W3 Q3e, D
     expect(q.approvalInput(1, NOW)).toBeUndefined();
   });
 
+  it('spec §6.7: the row holds the masked text only, and no column of it holds the raw input; the raw input is in memory', async () => {
+    f = await standardFixture();
+    const q = createQuestions({ coord: f.coord });
+    const raw = 'rm -rf build-0123456789abcdef';
+    const masker = { maskText: (t: string) => t.replace('0123456789abcdef', '[MASKED]') };
+    const v = await q.raiseApproval(req(hookInput({ command: raw })), raiseDeps(f, { masker }), NOW);
+    expect(v.kind).toBe('minted');
+    const row = f.coord.db.prepare('SELECT * FROM approvals WHERE id = 1').get() as Record<string, unknown>;
+    expect(row['inputRedacted']).toBe('rm -rf build-[MASKED]');
+    expect(Object.entries(row).filter(([, c]) => typeof c === 'string' && c.includes('0123456789abcdef')).map(([k]) => k)).toEqual([]);
+    expect(q.approvalInput(1, NOW)?.input).toMatchObject({ command: raw });
+  });
+
   it('an input held past its window is forgotten on the next read', async () => {
     f = await standardFixture();
     const q = createQuestions({ coord: f.coord });
