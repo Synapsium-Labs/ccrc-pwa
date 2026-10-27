@@ -12,8 +12,9 @@
 //       -> RED at 900 and 1280 in both palettes (four cases; `-t "(900|1280)px"`): received { doors: 2, fabs: 1, fabIsDoor: false,
 //          inTopBar: false } for { doors: 1, fabs: 0, fabIsDoor: false, inTopBar: true }.
 //   F2  PhoneFab gated on `useMediaQuery('(min-width: 600px)')` in place of `useDesk()`
-//       -> RED at 899 in both palettes (two cases; `-t "899px"`): the round + never mounts, so the wait for a visible New
-//          session door times out (`page.waitForFunction: Timeout 20000ms exceeded`) and the case fails there.
+//       -> RED at 899 in both palettes (two cases; `-t "899px"`): the round + never mounts and the top bar's + is not
+//          visible below 900, so the page measures { doors: 0, fabs: 0, fabIsDoor: false, inTopBar: false } for
+//          { doors: 1, fabs: 1, fabIsDoor: true, inTopBar: false }, reported by the `toEqual`, not by a timeout.
 //
 // Run: `( cd pwa && CCRC_CHROME=<a Chrome or Chromium binary> ./node_modules/.bin/vitest run --config vitest.browser.config.ts --maxWorkers=2 browser/instrument-fab.browser.test.ts )`.
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -63,9 +64,8 @@ describe("Instrument's round + is the one New session door below 900, and absent
       const { ctx, page, errors } = await openApp(browser!, view, FIXTURE);
       try {
         await page.goto(server!.origin + '/');
-        await page.waitForFunction(() => document.body.innerText.includes('9 sessions')
-          && [...document.querySelectorAll<HTMLElement>('[data-command="new-session"]')].some((el) => el.getClientRects().length > 0),
-        undefined, { timeout: 20_000 });
+        // Wait on the fleet alone, never on a door: a missing door is MEASURED below (doors: 0), not hidden behind a timeout.
+        await page.waitForFunction(() => document.body.innerText.includes('9 sessions'), undefined, { timeout: 20_000 });
         const seen = await page.evaluate(() => {
           const visible = (el: Element): boolean => {
             const r = el.getBoundingClientRect();
