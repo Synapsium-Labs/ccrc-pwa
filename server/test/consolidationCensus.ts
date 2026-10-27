@@ -635,7 +635,8 @@ export function declaredDerivations(root: string = REPO): Array<{ name: string; 
 /**
  * D-5864 (Task C1j; ARCH-51 #786; spec K13's listing half): every place `server/src/watch.ts` lists the registry, from its
  * syntax tree (`scan/symbols.ts`, over `scan/parse.ts`), never from a count typed by hand. A site is a call of `readRegistry(`
- * or `readRegistryMeasured(`, or of a `readdir(` whose first argument names `registryDir`, inside a method of the class.
+ * or `readRegistryMeasured(`, or of a `readdir(` or `readdirMeasured(` whose first argument names `registryDir`, inside a
+ * method of the class.
  * Each is tagged by the method it sits in:
  * - `selection`: it chooses rows for a lane. Exit target (C1j): exactly one, in `FleetWatcher.tick`; the lanes take the
  *   tick's `FleetReadModel`.
@@ -667,7 +668,7 @@ export function registryListingSites(root: string = REPO): RegistryListingSite[]
   const out: RegistryListingSite[] = [];
   for (const c of parsed.calls) {
     const isReader = c.name === 'readRegistry' || c.name === 'readRegistryMeasured';
-    const isListing = c.name === 'readdir' && (c.args[0]?.text ?? '').includes('registryDir');
+    const isListing = (c.name === 'readdir' || c.name === 'readdirMeasured') && (c.args[0]?.text ?? '').includes('registryDir');
     if (!isReader && !isListing) continue;
     const inner = parsed.symbols.filter((s) => s.kind === 'method' && s.name.startsWith('FleetWatcher.') && s.start <= c.start && c.end <= s.end)
       .sort((a, b) => b.start - a.start)[0];
