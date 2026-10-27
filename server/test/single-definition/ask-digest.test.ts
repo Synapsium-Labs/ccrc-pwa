@@ -584,11 +584,14 @@ describe('the ask window, its deadline and the untrusted-data fence are each def
     expect(questions).toMatch(/until: askNotifyAt\(row\.at\)/);
   });
 
-  it('untrustedBlock and its preface live in server/src/coord/untrusted.ts alone, and the brief calls it', () => {
+  it('untrustedBlock and its preface live in server/src/coord/untrusted.ts alone, and the brief calls it', async () => {
     expect(holders(defines('untrustedBlock'))).toEqual(['server/src/coord/untrusted.ts']);
     expect(holders(/untrusted data written by a model/)).toEqual(['server/src/coord/untrusted.ts']);
-    const watch = stallCode(path.join(ccrcRoot, 'server/src/watch.ts'));
-    expect(watch).toMatch(/\buntrustedBlock\(asked, UNTRUSTED_CAP_BYTES,/);
+    // W3 Q3d (D-7028, named exception 2): the ask brief (`renderAskBrief`) moved with the hold into coord/questions.ts,
+    // read here by symbol (the literal-pin ratchet, `advance-switches.test.ts`).
+    const { sourceOfSymbol } = await import('../scan/symbols.js');
+    const brief = stallCodeText(sourceOfSymbol(path.join(ccrcRoot, 'server/src/coord/questions.ts'), 'renderAskBrief'));
+    expect(brief).toMatch(/\buntrustedBlock\(asked, UNTRUSTED_CAP_BYTES,/);
   });
 });
 
