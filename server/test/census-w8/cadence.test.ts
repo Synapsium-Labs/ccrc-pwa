@@ -253,7 +253,7 @@ const REAL_BASE: string[] = [
   'update-sync local update_sync_grace=$((2 * 60)) unit_mtime unit_age grac',
   'update-sync _dr_warn update-sync "update-sync-not-yet-synced: ccd-update',
   'update-sync "wait for the timer to fire (up to ~60s) and re-run ccrc doc',
-  'graphify if [ "$age" -gt 2700 ]; then',
+  'graphify elif [ "$age" -gt 2700 ]; then',
   'models elif [ "$age" -gt 10800 ]; then',
   'codex _DR_CODEX_USAGE_STALE_S=2700',
   'codex _DR_CODEX_USAGE_STALE_DIRECT_S=3600',

@@ -4694,6 +4694,8 @@ _check_graphify() {
   local -a gfx_install_fail=() gfx_excludes_warn=()
   local -a gfx_census_fail=() gfx_census_warn=() gfx_disk_fail=() gfx_disk_warn=() gfx_disk_unread_warn=()
   local -a gfx_rows_warn=()
+  # The census bound's cadence, when it could not be read (D-7054; OA-C8c (a), D-7062): its rc and the bound it left unmeasured.
+  local gfx_cadence_rc=0 gfx_cadence_what=""
 
   # ── (2) engine: the venv's own `graphify --version` against the pin ──────
   # Parsed by parameter expansion, not awk — the same rule `_check_disk`'s own
@@ -4845,8 +4847,11 @@ _check_graphify() {
         local now_s fin_s
         if [ -n "$finished" ] && now_s="$(date +%s 2>/dev/null)" \
            && fin_s="$(_plat_mtime "$census" 2>/dev/null)"; then
-          local age=$(( now_s - fin_s ))
-          if [ "$age" -gt 2700 ]; then
+          local age=$(( now_s - fin_s )) gfx_bound
+          gfx_bound="$(_dr_cycles_s ccd-graph-sweep.timer 3)" || gfx_cadence_rc=$?
+          if [ "$gfx_cadence_rc" -ne 0 ]; then
+            gfx_cadence_what="whether the last graph-sweep pass, finished $((age / 60)) minutes ago, is stale"
+          elif [ "$age" -gt 2700 ]; then
             gfx_census_warn+=("the last graph-sweep pass finished $((age / 60)) minutes ago — the timer may not be firing")
           fi
         fi
@@ -4954,6 +4959,10 @@ _check_graphify() {
       "read \$HOME/.ccrc/graph-sweep.log for what the pass hit, and check the timer: systemctl --user status ccd-graph-sweep.timer"
     rc=1
   fi
+  if [ "$gfx_cadence_rc" -eq 3 ]; then
+    _dr_fail graphify "$(_dr_cadence_unloaded_what "$gfx_cadence_what")$gfx_gate" "$(_dr_cadence_unloaded_fix graphify ccd-graph-sweep.timer)"
+    rc=1
+  fi
   if [ "${#gfx_disk_fail[@]}" -gt 0 ]; then
     _dr_fail graphify "$(_dr_join "${gfx_disk_fail[@]}")$gfx_gate" \
       "free space on that filesystem before the next sweep pass — under 2 GiB a graph build fails the same way a ccd clone does"
@@ -4967,6 +4976,10 @@ _check_graphify() {
   if [ "${#gfx_census_warn[@]}" -gt 0 ]; then
     _dr_warn graphify "$(_dr_join "${gfx_census_warn[@]}")$gfx_gate" \
       "check the timer: systemctl --user status ccd-graph-sweep.timer (and journalctl --user -u ccd-graph-sweep.service -n 20)"
+    [ "$rc" -eq 1 ] || rc=2
+  fi
+  if [ "$gfx_cadence_rc" -eq 1 ]; then
+    _dr_warn graphify "$(_dr_cadence_unread_what ccd-graph-sweep.timer "$gfx_cadence_what")$gfx_gate" "$(_dr_cadence_unread_fix)"
     [ "$rc" -eq 1 ] || rc=2
   fi
   if [ "${#gfx_rows_warn[@]}" -gt 0 ]; then
