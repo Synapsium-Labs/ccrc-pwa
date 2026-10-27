@@ -30,8 +30,9 @@
 // so Tab goes line, flyout, control, All accounts, and focus moving between them never leaves the strip. It opens after
 // `FLYOUT_OPEN_MS` and closes after `FLYOUT_CLOSE_MS` once the pointer has left the strip or focus has (a pointer passing
 // by, or crossing the gap, flickers nothing), and at once on Escape; a close that finds focus in the flyout hands it
-// back to the line's tab stop first. Not
-// foldable, expanded, or below the desk: it is not mounted and nothing about it runs. Presentation state, per mount.
+// back to the line's tab stop first. Only focus arriving from outside the strip opens it, so an Escape holds against the
+// arrow keys. Not foldable, expanded, or below the desk: it is not mounted and nothing about it runs. Presentation
+// state, per mount.
 //
 // THE PLACEHOLDER DOOR (D-161). With no lane to show the strip is exactly one `go-accounts` door and never renders
 // nothing. As a full-width readout of meters the strip read as DATA rather than navigation, so an operator hunting for
@@ -237,9 +238,13 @@ export function AccountsStrip(): ReactNode {
   };
   const onEnter = (): void => { pointerIn.current = true; cancelClose(); scheduleOpen(); };
   const onLeave = (): void => { pointerIn.current = false; scheduleClose(); };
-  // `onFocus` and `onBlur` are React's focusin and focusout, so they fire for any element inside, the flyout's too.
-  const onGroupFocus = (): void => {
+  // `onFocus` and `onBlur` are React's focusin and focusout, so they fire for any element inside, the flyout's too. Only
+  // focus ARRIVING from outside the strip opens the flyout: a move between its cards (an arrow key) is not an arrival,
+  // so an Escape, or a close by the pointer leaving, stays shut until focus has left and come back. A pending close is
+  // cancelled by any focus inside.
+  const onGroupFocus = (e: FocusEvent<HTMLElement>): void => {
     cancelClose();
+    if (e.relatedTarget instanceof Node && e.currentTarget.contains(e.relatedTarget)) return;
     if (!returningFocus.current) scheduleOpen();
   };
   // A focusout whose destination is inside the strip is a move between the line and the flyout, not a leave; one with no

@@ -814,6 +814,25 @@ describe('the lanes fold (S5b, D-6530)', () => {
       expect(document.activeElement).toBe(fromLine);
     });
 
+    it('Escape stays shut for a keyboard user: an arrow move between the line\'s cards does not open it again', async () => {
+      const container = await mountDesk();
+      const first = lineCardsOf(container)[0]!;
+      act(() => { first.focus(); });
+      advance(FLYOUT_OPEN_MS);
+      expect(flyoutOf(container)).not.toBeNull();
+      fireEvent.keyDown(first, { key: 'Escape' });
+      expect(flyoutOf(container)).toBeNull();
+      fireEvent.keyDown(first, { key: 'ArrowRight' });         // focus moves to the next card, inside the strip
+      expect(document.activeElement).toBe(lineCardsOf(container)[1]);
+      advance(5000);
+      expect(flyoutOf(container)).toBeNull();
+      // Focus arriving from outside the strip is still an opening.
+      act(() => { lineCardsOf(container)[1]!.blur(); });
+      act(() => { lineCardsOf(container)[1]!.focus(); });
+      advance(FLYOUT_OPEN_MS);
+      expect(flyoutOf(container)).not.toBeNull();
+    });
+
     it('focus leaving the strip closes it, and focus moving between the line and the flyout does not', async () => {
       const container = await mountDesk();
       const fromLine = lineCardsOf(container)[0]!;
