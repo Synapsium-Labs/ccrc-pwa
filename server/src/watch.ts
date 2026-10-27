@@ -45,7 +45,7 @@ import type {
   SessionStatus, SessionUsage, TaskProgress,
 } from '../../shared/api.js';
 import { APPROVAL_HOOK_WAIT_S } from '../../shared/api.js';
-import type { AskMintReleaseReason, DelegationEventEnvelopeV1, DelegationHealthInput, DelegationObservationHealth } from '../../shared/api.js';
+import type { AskMintReleaseReason, DelegationEventEnvelopeV1, DelegationHealthInput, DelegationObservationHealth, DelegationProjectionWire } from '../../shared/api.js';
 // ONE LINE, deliberately: `single-definition.test.ts` scans for `UNCHECKED_PR`
 // arriving from shared/api on a single import line, and a prettier multi-line
 // form is invisible to it.
@@ -100,6 +100,7 @@ import type { WorktreeRead } from './coord/gitref.js';
 import type { DelegationCensusDiagnostic } from './coord/gitref.js';
 import { delegationCircuitBreaker, planDelegationReconciliation, type DelegationReportEffect } from './coord/delegation-policy.js';
 import { isUnownedWorkReason } from './coord/delegation-policy.js';
+import { DELEGATION_PROJECTION_CLOSED_RUNS, projectDelegation, type DelegationProjectionRun, type DelegationProjectionSession } from './coord/delegation-projection.js';
 import { delegationBucketHourMs, delegationBucketReadable, planDelegationCursorRetention } from './coord/delegation-model.js';
 import { DELEGATION_HOUR_NO_CAPABILITY, DELEGATION_HOUR_NO_SPOOL, isDelegationHourCarveOut } from './coord/delegation-model.js';
 import {
@@ -1900,7 +1901,41 @@ export class FleetWatcher {
   /** One pass of the delegation lane. PUBLIC for the reason `sweepNames` is: `tick()` dispatches it with `void`, so a test that awaits
    *  `tick()` has not awaited it. A no-op without a coordination database, inside the census cadence, or while a pass is running. */
   sweepDelegation(sessions: readonly LaneSession[], records: readonly LaneRecord[]): Promise<void> {
-    return this.delegationLane().sweep(sessions, records);
+    return this.delegationLane().sweep(sessions, records).then((ran) => { if (ran) this.emitDelegation(sessions); });
+  }
+
+  private lastDelegationJson: string | null = null;
+  private delegationNow: DelegationProjectionWire | null = null;
+  /** Wave 4: the last `delegation` broadcast, or null before one or after a withdrawal: null sends nothing on a cold start (`currentCoord()`'s rule). */
+  currentDelegation(): DelegationProjectionWire | null { return this.delegationNow; }
+
+  /** After a pass that ran: project, and broadcast on a CHANGE of content (`asOf` excluded, so an unchanged projection is not
+   *  re-sent each minute). A refused or throwing runs read skips the frame and leaves the last one standing (`emitRuns`, D-2545).
+   *  A null projection after a frame WITHDRAWS it, once: a lane that cannot project must not leave old liveness on screen. */
+  private emitDelegation(sessions: readonly LaneSession[]): void {
+    const coord = this.deps.coord;
+    if (!coord) return;
+    let wire: DelegationProjectionWire | null;
+    try {
+      const read = coord.delegationRunStamps(DELEGATION_PROJECTION_CLOSED_RUNS);
+      if (!read.ok) { console.warn(`ccrc-server: the delegation frame skipped a pass: runs refused (${read.detail})`); return; }
+      wire = this.delegationLane().projection(sessions, read.runs);
+    } catch (err) { console.warn(`ccrc-server: the delegation frame skipped a pass (${err instanceof Error ? err.message : String(err)})`); return; }
+    if (wire === null) { this.withdrawDelegation(); return; }
+    const json = JSON.stringify({ ...wire, asOf: '' });
+    if (json === this.lastDelegationJson) return;
+    this.lastDelegationJson = json;
+    this.delegationNow = wire;
+    this.bus.emit('delegation', wire);
+  }
+
+  /** WITHDRAWS a sent frame, once (`delegation: null`): after a pass that cannot project, and from `tick()` on an unlistable
+   *  registry, which returns before any lane runs. Nothing sent, nothing to withdraw. */
+  private withdrawDelegation(): void {
+    if (this.delegationNow === null) return;
+    this.delegationNow = null;
+    this.lastDelegationJson = null;
+    this.bus.emit('delegation', null);
   }
 
   /** The seven-day observation health, as of now, from the checkpoint's own intervals. `undefined` until the lane has tried to open its
@@ -2300,6 +2335,7 @@ export class FleetWatcher {
         ?.catch(() => { /* one bad sweep must not kill the poll */ });
       this.noteDelegationRegistry(registryRead.listed);
       if (!registryRead.listed) {
+        this.withdrawDelegation();                                      // wave 4: no lane runs below, so the frame is withdrawn here
         // Retain, don't erase, at fleet scale: `this.hookStates`/
         // `this.taskProgress`/`this.prevStatus`/`this.lastJson` are all left
         // exactly as the prior successful tick set them. Nothing is broadcast
@@ -11089,12 +11125,29 @@ class DelegationLane {
     return { ...health, ...(healed === null ? {} : { lastTailHeal: healed }), ...(unlisted ? { tailQuarantineUnmeasured: true as const } : {}) };
   }
 
+  /** Wave 4: the projection as of the last pass, decided in L1 (`projectDelegation`); null while there is nothing measured to
+   *  project: no applier, recovery not ready, the registry unlisted this tick, or fewer than two reconciles in this process
+   *  (a measured absence needs two successful censuses). Not stored; never a durable write. It projects the census the last pass
+   *  read (`passCensus`), never a second read: a census read is a pass's own (`delegation-sweep-clock.test.ts` counts them). */
+  private passCensus: DelegationCensusPass | null = null;
+  projection(sessions: readonly DelegationProjectionSession[], runs: readonly DelegationProjectionRun[]): DelegationProjectionWire | null {
+    const census = this.passCensus;
+    if (this.durable === null || census === null || !this.registryListed || !this.reconciled || this.reconciliations < 2) return null;
+    const state = this.durable.state();
+    if (state.phase !== 'ready') return null;
+    return projectDelegation({ checkpoint: state.checkpoint, census, absences: [...this.absences.values()], sessions, runs });
+  }
+
   // ── a pass ────────────────────────────────────────────────────────────────────────────────────────────────────────────
 
-  async sweep(sessions: readonly LaneSession[], records: readonly LaneRecord[]): Promise<void> {
-    if (this.deps.coord === undefined) return;                           // no coordination database, no lane
+  /** True iff a pass ran (wave 4: the watcher projects only after one). */
+  async sweep(sessions: readonly LaneSession[], records: readonly LaneRecord[]): Promise<boolean> {
+    if (this.deps.coord === undefined) return false;                     // no coordination database, no lane
     // SINGLE FLIGHT (M5/M6) and the cadence are the `delegation` row's: a call beside a pass, or inside the cadence, is refused.
-    await this.lanes.run('delegation', () => this.pass(records, sessions));
+    const run = this.lanes.run('delegation', () => this.pass(records, sessions));
+    if (run === null) return false;
+    await run;
+    return true;
   }
 
   private async pass(records: readonly LaneRecord[], sessions: readonly LaneSession[]): Promise<void> {
@@ -11105,6 +11158,7 @@ class DelegationLane {
       this.notReady = true;                                              // R88: nothing is listed, so nothing is read
       return;
     }
+    this.passCensus = census;                                            // wave 4: what `projection()` projects
     const ac = new AbortController();
     const cut = new Promise<'cut'>((resolve) => { ac.signal.addEventListener('abort', () => resolve('cut'), { once: true }); });
     const timer = setTimeout(() => ac.abort(), DELEGATION_PASS_BUDGET_MS);

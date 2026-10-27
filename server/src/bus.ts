@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events';
 import type { HookStateRawRead } from './hookstate.js';
-import type { CoordStatus, Dialog, Divergence, FleetSession, RunSummary, SessionStreamMsg, ProjectPoolsWire } from '../../shared/api.js';
+import type { CoordStatus, DelegationProjectionWire, Dialog, Divergence, FleetSession, RunSummary, SessionStreamMsg, ProjectPoolsWire } from '../../shared/api.js';
 
 export interface Notice { message: string }
 
@@ -52,6 +52,8 @@ export class Bus extends EventEmitter {
   override emit(event: 'coord', coord: CoordStatus): boolean;
   override emit(event: 'divergence', divergences: Divergence[]): boolean;
   override emit(event: 'pools', pools: ProjectPoolsWire): boolean;
+  /** Wave 4 (delegation broker): `null` WITHDRAWS the frame (the lane can no longer project). */
+  override emit(event: 'delegation', delegation: DelegationProjectionWire | null): boolean;
   override emit(event: SessionEventName, msg: SessionStreamMsg): boolean;
   override emit(event: AnsweredEventName, next: Dialog | null): boolean;
   override emit(event: PaneEventName, reading: PaneReading): boolean;
@@ -66,6 +68,7 @@ export class Bus extends EventEmitter {
   override on(event: 'coord', listener: (coord: CoordStatus) => void): this;
   override on(event: 'divergence', listener: (divergences: Divergence[]) => void): this;
   override on(event: 'pools', listener: (pools: ProjectPoolsWire) => void): this;
+  override on(event: 'delegation', listener: (delegation: DelegationProjectionWire | null) => void): this;
   override on(event: SessionEventName, listener: (msg: SessionStreamMsg) => void): this;
   override on(event: AnsweredEventName, listener: (next: Dialog | null) => void): this;
   override on(event: PaneEventName, listener: (reading: PaneReading) => void): this;
@@ -80,6 +83,7 @@ export class Bus extends EventEmitter {
   override off(event: 'coord', listener: (coord: CoordStatus) => void): this;
   override off(event: 'divergence', listener: (divergences: Divergence[]) => void): this;
   override off(event: 'pools', listener: (pools: ProjectPoolsWire) => void): this;
+  override off(event: 'delegation', listener: (delegation: DelegationProjectionWire | null) => void): this;
   override off(event: SessionEventName, listener: (msg: SessionStreamMsg) => void): this;
   override off(event: AnsweredEventName, listener: (next: Dialog | null) => void): this;
   override off(event: PaneEventName, listener: (reading: PaneReading) => void): this;

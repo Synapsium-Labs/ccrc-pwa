@@ -12,6 +12,7 @@ import { decideAllocation } from './ledger.js';
 // policy — the house port pattern. This read exists to feed that policy and
 // nothing else, so the shape it returns is the policy's to define.
 import type { CoordPlacementStamp } from './placement.js';
+import type { DelegationProjectionRun } from './delegation-projection.js';
 import type { LastRun } from './released.js';
 import type { BindingRun, Incarnation } from './runBinding.js';
 import { boundRows, openRows, type SeriesRow } from './bindingRows.js';
@@ -847,6 +848,11 @@ export type StallObservation =
  *  (a run not idle and not terminal); `episode` is the checks lane's (a run waiting at `merging` whose current episode
  *  is `episode`, PR landing in ccrc stage 1). */
 export type ObservationPredicate = { readonly kind: 'active' } | { readonly kind: 'episode'; readonly episode: number };
+
+/** `delegationRunStamps`' answer: every stamp, or the one reason none is given (all-or-failure). */
+export type DelegationRunStampsResult =
+  | { ok: true; runs: DelegationProjectionRun[] }
+  | { ok: false; kind: 'run-unreadable'; detail: string };
 
 export type CoordPlacementStampsResult =
   | { ok: true; stamps: CoordPlacementStamp[] }
@@ -3445,6 +3451,31 @@ export class CoordStore {
       stamps.push({ id: id.value, sessionId: r.sessionId, claimedBy: r.claimedBy, coordProject: r.coordProject });
     }
     return { ok: true, stamps };
+  }
+
+  /**
+   * Delegation broker wave 4 (PR1): the `delegation` frame's R9 read, `coordPlacementStamps`' narrow sibling and legitimately
+   * different from it: R9 asks whose run was live at an instant, so it needs each run's interval (`openedAt`, `closedAt`) and every
+   * claimed run, stamped or not. Five columns over the open runs and the newest `closedLimit` closed ones; never `runs()`' per-row
+   * hydration (a periodic lane must not pay it). Same clamp, same `persistedInt` proof and the same ALL-OR-FAILURE rule.
+   */
+  delegationRunStamps(closedLimit?: number): DelegationRunStampsResult {
+    const rows = this.db.prepare(
+      'SELECT CAST(id AS TEXT) AS idText, sessionId, claimedBy, CAST(openedAt AS TEXT) AS openedText, CAST(closedAt AS TEXT) AS closedText ' +
+      `FROM runs WHERE state NOT IN ${TERMINAL_RUN_STATES_SQL} OR id IN ` +
+      `(SELECT id FROM runs WHERE state IN ${TERMINAL_RUN_STATES_SQL} ORDER BY id DESC LIMIT ?) ORDER BY id`,
+    ).all(clampMailLimit(closedLimit ?? 500)) as unknown as { idText: string; sessionId: string | null; claimedBy: string | null; openedText: string; closedText: string | null }[];
+    const runs: DelegationProjectionRun[] = [];
+    for (const r of rows) {
+      const id = persistedInt(r.idText, 'run id');
+      const opened = persistedInt(r.openedText, 'openedAt');
+      const closed = r.closedText === null ? null : persistedInt(r.closedText, 'closedAt');
+      if (!id.ok || !opened.ok || (closed !== null && !closed.ok)) {
+        return { ok: false, kind: 'run-unreadable', detail: [id, opened, closed].flatMap((x) => (x !== null && !x.ok ? [x.detail] : [])).join('; ') };
+      }
+      runs.push({ id: id.value, sessionId: r.sessionId, claimedBy: r.claimedBy, openedAt: opened.value, closedAt: closed === null ? null : closed.value });
+    }
+    return { ok: true, runs };
   }
 
   /**

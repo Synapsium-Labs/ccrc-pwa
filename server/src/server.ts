@@ -100,7 +100,7 @@ import {
   type PasskeyAssertStart, type PasskeyListResponse, type PasskeyRegisterStart,
   type RunSummary,
   type SessionClientMsg, type SessionStreamMsg, type TaskItem,
-  type FloorState, type ProjectRow, type ProjectPoolsWire, type ProjectPoolWire, type ProjectRepoWire,
+  type DelegationProjectionWire, type FloorState, type ProjectRow, type ProjectPoolsWire, type ProjectPoolWire, type ProjectRepoWire,
   isRegistryId, parseRouteFields, programKickoffVerdict, routeFieldsOrNull, routeParseDetail, type RouteFields,
 } from '../../shared/api.js';
 import { ARCHIVE_REFUSALS, PTY_EXIT_CLOSE, SERVER_CAPS, SWAP_REFUSALS, interruptRouteSource, type SwapRefusal } from '../../shared/api.js';
@@ -1534,6 +1534,11 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       socket.send(maskedFrame(coord, (mk) => mk.maskDeep({ type: 'coord', coord } satisfies FleetMsg)));
     const onPools = (pools: ProjectPoolsWire) =>
       socket.send(JSON.stringify({ type: 'pools', pools } satisfies FleetMsg));
+    // Delegation broker wave 4: masked like the session-derived frames (a display name is the session's own text); `null` withdraws it.
+    const onDelegation = (delegation: DelegationProjectionWire | null) =>
+      socket.send(delegation === null
+        ? JSON.stringify({ type: 'delegation', delegation: null } satisfies FleetMsg)   // nothing to mask; the cache keys on an object
+        : maskedFrame(delegation, (mk) => mk.maskDeep({ type: 'delegation', delegation } satisfies FleetMsg)));
     // §1.6's census. NO COLD START, deliberately: the sweep's own byte-equality
     // guard re-broadcasts to every connected client the next time the census
     // changes, and there is no `currentDivergences()` to serve — a fabricated
@@ -1619,6 +1624,9 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       // the phone that nothing on the fleet is tagged.
       const poolsNow = watcher?.currentPools();
       if (poolsNow) onPools(poolsNow);
+      // Chained after `pools`: hello, fleet, runs, coord, pools, delegation; a null value sends NOTHING, `coord`'s rule.
+      const delegationNow = watcher?.currentDelegation();
+      if (delegationNow) onDelegation(delegationNow);
     });
     bus.on('fleet', onFleet);
     bus.on('notice', onNotice);
@@ -1626,6 +1634,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     bus.on('coord', onCoord);
     bus.on('divergence', onDivergence);
     bus.on('pools', onPools);
+    bus.on('delegation', onDelegation);
     socket.on('close', () => {
       bus.off('fleet', onFleet);
       bus.off('notice', onNotice);
@@ -1633,6 +1642,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       bus.off('coord', onCoord);
       bus.off('divergence', onDivergence);
       bus.off('pools', onPools);
+      bus.off('delegation', onDelegation);
     });
   });
 
