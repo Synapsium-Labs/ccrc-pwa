@@ -7,7 +7,8 @@
 // Every case runs the package through `runBridgeDriver`'s `count`, `known` and `stats-*` ops in a mkTmp HOME, with the
 // stats file in a lane directory this file makes 0700 (as the tier's start does), and both endpoint variables at a
 // closed loopback URL: nothing here makes a request. Model ids are neutral, lanes are `lane-a`/`lane-b`, and the
-// `x-codex-` headers used here are fixture names under that prefix, never the usage poller's own names.
+// `x-codex-` headers used here are fixture names under that prefix, never the usage poller's own names, except in the
+// one case that lists the header names the live probe measured (D-7083): names only, never their values.
 import { describe, it, expect } from 'vitest';
 import {
   mkdirSync, readFileSync, readdirSync, statSync, writeFileSync, existsSync, lstatSync, symlinkSync,
@@ -254,6 +255,55 @@ describe.skipIf(!PY)('the stats file (codex-bridge spec §2.7, §2.9 D3; D-6418)
     ]);
     expect(snap.doc.unexplained).toEqual({ eventType: ['response.fx_new_event'], errorCode: ['fx_new_code'] });
     expect(snap.doc.names.eventType).toEqual({ 'response.fx_new_event': 1, 'response.metadata': 1 });
+  });
+
+  // The 33 response header names every answer of runbook step 2 carried (2026-10-27, measured on the live probe's
+  // first step; D-7083), in the order the probe printed them, and the media-type name a 2xx stream with no content
+  // type counts. Unlike this file's other x-codex- names these are the backend's own: the case pins that the
+  // measured set is explained, so the doctor's drift row stays quiet on the backend's ordinary answers.
+  const MEASURED_HEADERS = [
+    'date', 'transfer-encoding', 'connection', 'server', 'x-codex-active-limit', 'x-codex-plan-type',
+    'x-codex-primary-used-percent', 'x-codex-secondary-used-percent', 'x-codex-primary-window-minutes',
+    'x-codex-primary-over-secondary-limit-percent', 'x-codex-secondary-window-minutes',
+    'x-codex-primary-reset-after-seconds', 'x-codex-secondary-reset-after-seconds', 'x-codex-primary-reset-at',
+    'x-codex-secondary-reset-at', 'x-codex-credits-has-credits', 'x-codex-credits-balance', 'x-codex-credits-unlimited',
+    'x-models-etag', 'x-codex-turn-state', 'x-codex-safety-buffering-enabled', 'x-codex-safety-buffering-faster-model',
+    'x-oai-request-id', 'x-openai-proxy-wasm', 'x-content-type-options', 'cf-cache-status', 'cross-origin-opener-policy',
+    'strict-transport-security', 'nel', 'report-to', 'set-cookie', 'referrer-policy', 'cf-ray',
+  ];
+  it('every response header name the live probe measured (runbook step 2) is explained', async () => {
+    expect(MEASURED_HEADERS).toHaveLength(33);
+    const { home, file } = lane('cb-stats-measured-');
+    const [, , , snap] = await run(home, [
+      open(file),
+      call('header_names', [Object.fromEntries(MEASURED_HEADERS.map((n) => [n, 'fx']))]),
+      call('name', ['responseHeader', 'content-type:absent']),
+      { op: 'stats-snapshot' },
+    ]);
+    // the control: every name was counted, so the empty unexplained list is about KNOWN, not a call that missed
+    expect(Object.keys(snap.doc.names.responseHeader).sort()).toEqual([...MEASURED_HEADERS, 'content-type:absent'].sort());
+    expect(snap.doc.unexplained.responseHeader).toBeUndefined();
+  });
+
+  // Claude Code 2.1.310's nine `anthropic-beta` values, measured on the live lane's first traffic after the flip
+  // (runbook step 4, 2026-10-27; D-7093). Seven gate shapes the bridge never sends, answers itself or already counts by
+  // their own family, and are explained; the two tool-change betas gate `tool_addition`/`tool_removal` blocks, which inbound drops
+  // (counting their types by name since D-7094), so they stay unexplained and the doctor keeps naming them until the bridge
+  // honours those blocks.
+  const EXPLAINED_BETAS = [
+    'advanced-tool-use-2025-11-20', 'claude-code-20250219', 'context-management-2025-06-27',
+    'interleaved-thinking-2025-05-14', 'thinking-display-updates-2026-08-18', 'thinking-token-count-2026-05-13',
+    'token-counting-2024-11-01',
+  ];
+  const OPEN_BETAS = ['inline-tools-2026-09-15', 'mid-conversation-tool-changes-2026-07-01'];
+  it("Claude Code's measured betas: seven are explained, and the two tool-change betas stay unexplained", async () => {
+    const { home, file } = lane('cb-stats-betas-');
+    const all = [...EXPLAINED_BETAS, ...OPEN_BETAS, 'effort-2025-11-24'];
+    const out = await run(home, [open(file), ...all.map((b) => call('name', ['betaValue', b])), { op: 'stats-snapshot' }]);
+    const snap = out[out.length - 1];
+    // the control: every beta was counted, so the unexplained list is about KNOWN, not a call that missed
+    expect(Object.keys(snap.doc.names.betaValue).sort()).toEqual([...all].sort());
+    expect(snap.doc.unexplained.betaValue).toEqual([...OPEN_BETAS].sort());
   });
 
   it('KNOWN covers every family, and its errorCode family is errors.ALL_CODES', async () => {

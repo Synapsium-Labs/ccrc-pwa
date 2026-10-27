@@ -13,6 +13,8 @@ explained here or fixed. The sources:
   request carries `model, messages, system, tools, metadata, max_tokens, thinking, context_management,
   output_config, stream`; `context_management` is always the one edit `clear_thinking_20251015`; tools carry
   `defer_loading`; `output_config.effort` rides the `effort-2025-11-24` beta (`ccd/ccgpt-proxy.py`'s effort hook).
+- Claude Code 2.1.310's `anthropic-beta` values, measured on the live lane's first traffic after the flip (runbook
+  step 4, 2026-10-27; D-7093), each read against the Messages API's documentation and the client's own beta table.
 - The fields inbound drops by rule (D-6426 and the plan's Task 2 table), and the names inbound counts for a shape
   it maps (a dropped `thinking` block, `is_error`, `output_config.format`, D-6425) or refuses by name (a `document`
   block, an `output_config.format` of another type, D-6414).
@@ -26,9 +28,12 @@ explained here or fixed. The sources:
 
 NOT HERE, ON PURPOSE: `clear_tool_uses_20250919` (D-6417: the doctor names that edit the first day it arrives); a
 reasoning item with no encrypted content (`reducer.UNREADABLE_REASONING`: a reply whose reasoning cannot be replayed
-is drift); every model substitution (each is a Claude Code fallback worth seeing); the edge and cache headers of the
-backend's front end, which nothing in this repository or in Codex reads and nobody has measured yet (the runbook's
-first live step records the response header names).
+is drift); every model substitution (each is a Claude Code fallback worth seeing).
+
+MEASURED SINCE: the response headers of the backend's front end. The runbook's first live step (step 2, 2026-10-27)
+printed every answer's header names, and each name every answer carried is now in `responseHeader` below, with what
+it is (D-7083): the edge and security headers, the cookie, `x-oai-request-id` (D-7084) and a 2xx stream's absent
+content type. A name the front end adds later still WARNs once, as any new name does.
 """
 
 from typing import Dict, FrozenSet, Tuple
@@ -68,10 +73,65 @@ KNOWN = {
         "content-type", "content-length", "transfer-encoding", "connection", "date",
         # the media type, counted as a name (the plan's Global Constraints): a stream, and an error body
         "content-type:text/event-stream", "content-type:application/json",
+        # Every name below was measured on every answer of runbook step 2 (2026-10-27; D-7083). Only the name is
+        # counted: stats.Stats.header_names keeps no value, and stream.AnthropicStream writes its own head.
+        # The upstream request id: the backend's one, sent with no x-request-id and no request-id. errors.request_id_of
+        # reads it third, as Codex does (openai/codex codex-rs/codex-api/src/api_bridge.rs at rust-v0.164.0,
+        # extract_request_id; D-7084).
+        "x-oai-request-id",
+        # A backend 2xx stream carries no content type (server._media_type counts it so); it is reduced as a stream.
+        "content-type:absent",
+        # The CDN's edge: the server name, the ray id and the cache status. Codex reads cf-ray only, as a request
+        # tracking id when no request id came (openai/codex codex-rs/codex-api/src/api_bridge.rs at rust-v0.164.0,
+        # extract_request_tracking_id); nothing here reads one.
+        "server", "cf-ray", "cf-cache-status",
+        # The load-balancer and CDN cookies. Codex keeps only infrastructure cookies in its jar (openai/codex
+        # codex-rs/http-client/src/chatgpt_cloudflare_cookies.rs at rust-v0.164.0); the bridge keeps none and sends
+        # no Cookie (backend.build_headers).
+        "set-cookie",
+        # The browser policy and reporting headers of the origin's front end, read by nothing here or in Codex.
+        "nel", "report-to", "strict-transport-security", "x-content-type-options", "cross-origin-opener-policy",
+        "referrer-policy",
+        # The origin proxy's own marker, read by nothing here or in Codex.
+        "x-openai-proxy-wasm",
     }),
     "unsupportedField": frozenset({"document", "output_config.format"}),
     "modelSubstitution": frozenset(),
-    "betaValue": frozenset({"effort-2025-11-24"}),
+    "betaValue": frozenset({
+        "effort-2025-11-24",
+        # The values of Claude Code 2.1.310's `anthropic-beta` header, measured on the live lane's first traffic
+        # after the flip (runbook step 4, 2026-10-27; D-7093). The bridge forwards no beta upstream
+        # (backend.build_headers), so each is a name only; each line says what it gates on the Messages API and why
+        # the bridge need not act.
+        # Claude Code's own identity beta: it gates no request field, block or response shape of its own.
+        "claude-code-20250219",
+        # Thinking blocks between tool calls: the effort hook pops `thinking`, the reducer emits no thinking block,
+        # and an assistant thinking block sent back is dropped and counted `requestField:thinking-block`.
+        "interleaved-thinking-2025-05-14",
+        # `context_management.edits` and the response's `context_management.applied_edits`: each edit's type is
+        # counted `contextEdit` (`clear_tool_uses_20250919` stays unexplained there, D-6417), and Claude Code reads
+        # `applied_edits` as optional, so a reply without it is a reply where nothing was cleared.
+        "context-management-2025-06-27",
+        # Tool search: `defer_loading` tools (counted `requestField:defer_loading`, sent as ordinary tools) and a
+        # `tool_reference` in a tool_result (sent as `Tool loaded: <name>`). A server tool search tool would be
+        # refused and counted `unsupportedField`; Claude Code searches client-side.
+        "advanced-tool-use-2025-11-20",
+        # `thinking.display: "updates"`, status lines as thinking text: `thinking` is popped and no thinking block
+        # is emitted, so there is nothing to display.
+        "thinking-display-updates-2026-08-18",
+        # `usage.output_tokens_details.thinking_tokens`, which Claude Code reads as optional: the bridge's usage
+        # carries the four counts (reducer.anthropic_usage) and no thinking count.
+        "thinking-token-count-2026-05-13",
+        # The token-counting endpoint (`POST /v1/messages/count_tokens`), which rides only that request: the bridge
+        # answers it locally (Task 8, `outcomes.countTokens`) and sends nothing upstream for it.
+        "token-counting-2024-11-01",
+        # NOT HERE, ON PURPOSE (D-7093): `mid-conversation-tool-changes-2026-07-01` and `inline-tools-2026-09-15`.
+        # They gate `tool_addition`/`tool_removal` blocks in a `role: system` message (by reference, and by value as
+        # a `tool_definition`), which inbound drops with every non-text system block: a tool added by value is never
+        # offered upstream, and a removed one stays offered. The doctor keeps naming both until the bridge honours
+        # those blocks. Since D-7094 inbound counts each dropped block's type by name (`requestField:<type>-block`,
+        # inbound._count_dropped), and those names are not in this table either, so the doctor names them too.
+    }),
     "contextEdit": frozenset({"clear_thinking_20251015"}),
 }  # type: Dict[str, FrozenSet[str]]
 
