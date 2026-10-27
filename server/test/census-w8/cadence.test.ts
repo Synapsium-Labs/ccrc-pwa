@@ -250,7 +250,6 @@ const REAL_BASE: string[] = [
   'codex _DR_CODEX_USAGE_STALE_DIRECT_S=3600',
   'codex (kept) note+=("no usage row yet (enabled $((now - en))s ago; the fi',
   'scope-sweep (kept) stale=${CCRC_SCOPE_SWEEP_STALE_S:-300}; [[ "$stale" =~ ^[1-9',
-  'scope-sweep local period cad_rc=0 runs="the sweep runs every minute, so',
   'server-caps writer="ccd-update-sync (it asks the server\'s /health every',
 ];
 
