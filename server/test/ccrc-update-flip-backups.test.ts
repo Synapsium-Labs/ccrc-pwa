@@ -170,13 +170,26 @@ describe('the killed-flip state: C27 admits the one rollback a killed update nee
     expect(localUrls(home)).toEqual([]);
     expectAgreesOnV1(home, v1);
     expect(existsSync(join(home, 'kept-spine-argv')), "the kept version's own spine did not run").toBe(true);
-    // the spine a rollback re-runs never installs node (spec 2026-10-26-node-runtime-under-nvm): even an operator's
+    // (the SIGNED arm: `killedFlipBox`'s record is one line) the spine a rollback re-runs never installs node
+    // (spec 2026-10-26-node-runtime-under-nvm): even an operator's
     // terminal rollback, which `ccd/ccrc-node` would otherwise let `nvm install` on a TTY
     expect(fileText(join(home, 'kept-spine-nodenoinstall')).trim()).toBe('1');
     expect(existsSync(join(home, 'rsync-argv'))).toBe(false);
     expect(existsSync(join(home, 'npm-argv'))).toBe(false);
     expect(lastReport(home)).toMatchObject({ phase: 'done', detail: 'rolled back by flip to v1.0.0', from: 'watchdog' });
     expect(phasesOf(home)).toEqual(['installing', 'checking', 'restarting', 'restarting', 'done']);
+  });
+
+  // `killedFlipBox`'s kept record is the one-line SIGNED form, so the case above exercises `_ver_flip_back`'s signed
+  // arm; this one plants the unsigned two-line form for the other. Both arms must hand the spine NODE_NO_INSTALL=1.
+  it('the UNSIGNED arm of the flip hands its spine NODE_NO_INSTALL=1 too — no rollback installs node, whichever way the kept version was installed', () => {
+    const { home, v1 } = killedFlipBox('ccrc-fx-b-killed-flip-unsigned-');
+    writeFileSync(join(v1, '.ccrc-installed'), `${V1_SHA}\nunsigned\n`);
+    keepDigest(v1, home);
+    const r = rollbackRun(home, ['--from', 'watchdog']);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(existsSync(join(home, 'kept-spine-argv')), "the kept version's own spine did not run").toBe(true);
+    expect(fileText(join(home, 'kept-spine-nodenoinstall')).trim()).toBe('1');
   });
 
   it('the same shape produced by a REAL killed update — the staged spine and its updater SIGKILLed at `_inst_stamp`, after `_inst_tree`\'s flip — then the watchdog\'s bare rollback: the state the real code leaves is the state the rule admits', () => {

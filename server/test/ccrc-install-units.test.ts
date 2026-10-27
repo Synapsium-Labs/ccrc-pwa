@@ -1157,6 +1157,16 @@ describeLinux('ccrc install: the node the units run (nvm-aware selection, `_inst
     expect(existsSync(fragment(home))).toBe(false);
   });
 
+  it('a tree that lacks ccd/ccrc-node refuses by name before anything is written, never as "command not found"', () => {
+    const home = freshBox('ccrc-install-node-lib-missing-');
+    rmSync(join(treeRoot(home), 'ccd', 'ccrc-node'));
+    const r = runInstall(home);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/^ccrc: the node selection library is missing: \S+\/ccd\/ccrc-node — is this a complete ccrc install\?$/m);
+    expect(r.stderr).not.toMatch(/command not found/);
+    expect(existsSync(join(home, '.ccrc'))).toBe(false);
+  });
+
   it('a box with no node and no nvm still gets the probe\'s own sentence', () => {
     const home = freshBox('ccrc-install-node-none-');
     const r = runInstall(home, ['install'], { PATH: pathWithout(home, 'node') });

@@ -23540,7 +23540,7 @@ _ver_flip_back() {   # <name> <role> <prefix>
   local -a spine=(bash "$BOX_TREE_DIR/ccd/ccrc" install)
   # NODE_NO_INSTALL=1: a rollback (an operator's terminal included) never runs `nvm install` through the spine it
   # re-runs — only an interactive `ccrc install` may (spec 2026-10-26-node-runtime-under-nvm, ccd/ccrc-node).
-  local -a spine_env=(env -u CCRC_UPDATE_LOCK_HELD -u CCRC_UPDATE_VERIFIED -u CCRC_UPDATE_SPINE NODE_NO_INSTALL=1)
+  local -a spine_env=(env -u CCRC_UPDATE_LOCK_HELD -u CCRC_UPDATE_VERIFIED -u CCRC_UPDATE_SPINE)
   VER_SPINE_RC=0
   _ver_can_flip || return 1
   _ver_kept "$name" "$role" || krc=$?
@@ -23552,6 +23552,8 @@ _ver_flip_back() {   # <name> <role> <prefix>
   esac
   { IFS= read -r m1; IFS= read -r m2; } < "$vdir/$VER_RECORD_COPY" 2>/dev/null || :
   [ "$m2" = unsigned ] || spine_env=(env -u CCRC_UPDATE_LOCK_HELD CCRC_UPDATE_VERIFIED=1 CCRC_UPDATE_SPINE=$$)
+  # Appended AFTER the signed/unsigned choice, so it rides both arms (the signed arm used to rebuild the array).
+  spine_env+=(NODE_NO_INSTALL=1)
   [ -n "$role" ] && spine+=(--role "$role")
   if ! _plat_ln_swap "$vdir" "$BOX_TREE_DIR"; then
     VER_WHY="the one rename that points \$HOME/ccrc at \$HOME/ccrc-versions/$name failed"
