@@ -42,6 +42,9 @@
 //                                                         "at 900, 1280 and 1920 Instrument's list column draws no count line, …"
 // Row 8 (Step 0's `flex: none` removed) does not apply: Step 0 found the count whole at 900, so T2g adds no `flex: none`.
 // Rows 1, 4 and 7 also run in browser/instrument-desk.browser.test.ts (its own table).
+//
+// Desk polish S5b (D-6530): the lanes fold.
+// MUTATION TABLE (plan Task S5b Step 3): filled in when run.
 import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import type { ReactNode } from 'react';
@@ -52,6 +55,7 @@ import type { AccountUsage, FleetSession, NotifyEvent, RunSummary } from '../../
 import { api } from '../src/lib/api';
 import { poolLagText } from '../src/fleet/poolLag';
 import { fleetSession } from './fleetFixture';
+import { seventeenLanes } from './seventeenLanes';
 
 // The bell renders only where the browser can push; this one can, so the doors' census counts it (T2e).
 vi.mock('../src/lib/push', () => ({
@@ -345,6 +349,21 @@ describe('the lanes row (T2c, D-6329)', () => {
     expect(line.querySelector('.accounts-strip, .account-gauge, .meter')).toBeNull();
     expect([...topBar().children]).toEqual([line, topBar().querySelector('.accounts-strip')]);
     expect(topBar().querySelectorAll('.accounts-strip > .account-gauge')).toHaveLength(lanes.length);
+  });
+});
+
+describe('the lanes fold (S5b, D-6530)', () => {
+  it("Instrument's phone fleet column folds the same strip", async () => {
+    const f = seventeenLanes(Math.floor(Date.now() / 1000));
+    vi.spyOn(api, 'accounts').mockResolvedValue({ accounts: f.accounts, projected: { wrapper: 'w0', score: 0 }, roster: f.roster });
+    stubWidth(false);
+    mount('/');
+    const fleet = screen.getByRole('region', { name: 'Fleet' });
+    const strip = await within(fleet).findByRole('group', { name: /^account usage, highest lane-q 100%/ });
+    await within(strip).findByText('lane-a');
+    expect(strip.querySelectorAll('.account-gauge')).toHaveLength(4);
+    expect(within(strip).getByRole('button', { name: '+13 more · 1 sign-in expired · 1 rate-limited' })).toHaveAttribute('aria-expanded', 'false');
+    expect(document.querySelectorAll('.accounts-strip')).toHaveLength(1);
   });
 });
 

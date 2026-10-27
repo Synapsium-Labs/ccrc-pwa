@@ -769,12 +769,16 @@
 @media (min-width: 700px) {
   .accounts-strip { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 }
-/* The end cell: All accounts. Its own row under the cards on a phone (and wherever the cards wrap to two columns);
-   the desk's frame header puts it in the row's next track (shell.css). The button brings its own tap floor. */
+/* The end cell: the fold's control (when the strip folds) and then All accounts, a gap between them. Its own row under
+   the cards on a phone (and wherever the cards wrap to two columns); the desk's frame header puts it in the row's
+   next track (shell.css). It wraps, so a narrow cell puts All accounts on a line of its own rather than clipping a
+   word. Each button brings its own tap floor. */
 .accounts-end {
   grid-column: 1 / -1;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
+  gap: var(--sp-2);
 }
 .account-gauge {
   display: grid;

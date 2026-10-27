@@ -3,13 +3,22 @@
 // ~/.cc-limits) so it survives restarts, respawns and swaps whichever sessions are running, and drawn most free first
 // (`lanesByFree`).
 //
+// THE FOLD (desktop polish S5b, D-6530). The strip folds at every width, and `foldLanes` (stripFold.ts) decides it all:
+// a phone shows its four freest lanes, and the desk one line of the freest lanes that fit beside the end cell (the
+// width is `useRowWidth`'s measure, the count `rowFit`'s and `foldShown`'s). The lanes left out are not mounted at all,
+// never hidden by CSS. A folded strip never hides fewer than two lanes, so a short one shows every lane and no
+// control. When it folds, the end cell holds one control before All accounts, worded by `foldWords` alone ("+13 more"
+// and a count of the hidden lanes that need the operator, or "Show fewer"). The choice is kept on the device
+// (`useStripExpanded`). This component only renders what the fold answers and reads no lane count of its own.
+//
 // WHERE IT MOUNTS. One component at every width. At the desk both bars mount it under their line, inside the frame's
 // header; on a phone it sits in Refined's phone header and in Instrument's phone fleet column.
 //
 // WHAT IT OPENS. Each card is a link to its own lane, /accounts?lane=<id> (`accountsLaneHref` builds it): a per-row
 // `actionDoor('open-lane', …)` that navigates by itself, and Enter activates it as it does an anchor. The cards are
 // ONE tab stop, a roving `tabIndex` (the card last focused, the first at mount), and the arrow keys, Home and End move
-// across them without wrapping (`rovingStep`). After the last card the end cell holds All accounts, the `go-accounts`
+// across the SHOWN cards without wrapping (`rovingStep`); a stop on a lane that folded away falls to the first shown
+// card. After the last card the end cell holds the fold's control, if any, then All accounts, the `go-accounts`
 // command door, the next tab stop; so a phone, where a card is a small target, still has the whole screen one tap
 // away. The row itself is a group, not a door.
 //
@@ -21,17 +30,21 @@
 // yet) is exactly the state the Accounts screen exists to explain (its bespoke "<home-able accounts>, all disabled"
 // copy, see homeAbleLabelList in lib/accounts.ts). So the link stays mounted, with a quiet placeholder body, instead
 // of disappearing with the cards.
-import { useEffect, useRef, useState } from 'react';
-import type { KeyboardEvent, ReactNode } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
+import type { CSSProperties, KeyboardEvent, ReactNode } from 'react';
 import type { AccountUsage, RosterWire } from '../../../shared/api';
 import { accountColorVar, accountLabel, warnNonArrayRoster } from '../lib/accounts';
 import { api } from '../lib/api';
 import { Button, useNow } from '@ccrc/ui';
 import { actionDoor, commandDoor } from '../command/door';
+import { useDesk } from '../lib/useMediaQuery';
 import { rovingStep } from '../lib/rovingStep';
 import { accountsLaneHref } from '../lib/routes';
 import { navigate } from '../lib/router';
 import { lanesByFree } from './laneOrder';
+import { foldLanes, foldShown, foldWords, LANE_CARD_MIN, rowFit } from './stripFold';
+import { setStripExpanded, useStripExpanded } from './stripExpanded';
+import { useRowWidth } from './useRowWidth';
 import { ACCOUNTS_DOOR_LABEL, ALL_ACCOUNTS, laneDoorLabel, lanesRowLabel, NO_READING } from './laneWords';
 import { AccountMeterRow } from './AccountMeterRow';
 import './fleet.css';
@@ -51,6 +64,21 @@ export function AccountsStrip(): ReactNode {
   // it was on. `null` (nothing focused yet) and an id no longer in the list both read as the first card.
   const [stopId, setStopId] = useState<string | null>(null);
   const cardRefs = useRef(new Map<string, HTMLElement>());
+  // The fold: the stored choice, the width class, and (at the desk only) the cards' group measured. The group's id is
+  // what the control's `aria-controls` names.
+  const expanded = useStripExpanded();
+  const desk = useDesk();
+  const { ref: groupRef, row } = useRowWidth(desk);
+  const groupId = useId();
+  const controlRef = useRef<HTMLButtonElement>(null);
+  // Set by a user's "Show fewer" click and read once the strip has folded: the control scrolls itself into view then,
+  // never on mount and never when another tab's choice arrives.
+  const scrollAfterFold = useRef(false);
+  useEffect(() => {
+    if (expanded || !scrollAfterFold.current) return;
+    scrollAfterFold.current = false;
+    controlRef.current?.scrollIntoView({ block: 'nearest' });
+  }, [expanded]);
 
   useEffect(() => {
     let live = true;
@@ -125,9 +153,20 @@ export function AccountsStrip(): ReactNode {
     );
   }
 
-  const stop = live.some((a) => a.wrapper === stopId) ? stopId : live[0]!.wrapper;
-  // Enter opens the lane (a link, so Space does not); the arrow keys, Home and End step across the cards, none
-  // wrapping, and moving focus moves the stop (`onFocus` records it). `live` is never empty here, so `rovingStep` has
+  // An unmeasured desk row answers a null count, which folds nothing (`foldLanes`).
+  const count = foldShown(desk, desk ? rowFit(row?.width ?? null, LANE_CARD_MIN, row?.gap ?? 0) : null);
+  const fold = foldLanes(live, expanded, count);
+  const { shown } = fold;
+  const words = foldWords(fold, now);
+  const toggle = (): void => {
+    // "Show fewer" is the click that folds: remember to scroll once the cards are gone.
+    scrollAfterFold.current = fold.expanded;
+    setStripExpanded(!fold.expanded);
+  };
+
+  const stop = shown.some((a) => a.wrapper === stopId) ? stopId : shown[0]!.wrapper;
+  // Enter opens the lane (a link, so Space does not); the arrow keys, Home and End step across the shown cards, none
+  // wrapping, and moving focus moves the stop (`onFocus` records it). `shown` is never empty here, so `rovingStep` has
   // at least one card to land on.
   const onCardKey = (e: KeyboardEvent<HTMLElement>, i: number, open: () => void): void => {
     if (e.key === 'Enter') {
@@ -135,15 +174,22 @@ export function AccountsStrip(): ReactNode {
       open();
       return;
     }
-    const to = rovingStep(e.key, i, live.length, { wrap: false });
+    const to = rovingStep(e.key, i, shown.length, { wrap: false });
     if (to === null) return;
     e.preventDefault();
-    cardRefs.current.get(live[to]!.wrapper)?.focus();
+    cardRefs.current.get(shown[to]!.wrapper)?.focus();
   };
 
   return (
-    <div className="accounts-strip" role="group" aria-label={lanesRowLabel(live, roster)}>
-      {live.map((a, i) => {
+    <div
+      className="accounts-strip"
+      role="group"
+      id={groupId}
+      ref={groupRef}
+      aria-label={lanesRowLabel(live, roster)}
+      style={{ '--lane-card-min': `${LANE_CARD_MIN}px` } as CSSProperties}
+    >
+      {shown.map((a, i) => {
         // `off` as the Accounts screen computes it (D-5494). The filter above
         // already dropped a switched-off lane, so here it is a sign-in-expired
         // one: its numbers are frozen, so its fills grey while each meter keeps
@@ -179,6 +225,13 @@ export function AccountsStrip(): ReactNode {
         );
       })}
       <div className="accounts-end">
+        {/* Rendered iff the fold folds, the same element folded and expanded (never keyed on state), so focus stays on it
+            across a toggle. Its words are its name; it is no door (no data-command, no data-action). */}
+        {fold.foldable && (
+          <Button ref={controlRef} variant="quiet" size="fit" aria-expanded={fold.expanded} aria-controls={groupId} onClick={toggle}>
+            {words}
+          </Button>
+        )}
         <Button variant="ghost" size="fit" {...commandDoor('go-accounts')}>{ALL_ACCOUNTS}</Button>
       </div>
     </div>

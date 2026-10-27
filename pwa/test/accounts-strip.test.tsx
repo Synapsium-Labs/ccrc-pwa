@@ -13,6 +13,7 @@ import { navigate } from '../src/lib/router';
 import { declValue, ruleIn } from './cssRule';
 import { isSpecifier, parseTs } from './literalWalker';
 import { TEST_ROSTER } from './rosterFixture';
+import { seventeenLanes } from './seventeenLanes';
 
 const fleetCss = readFileSync(path.join(import.meta.dirname, '..', 'src', 'fleet', 'fleet.css'), 'utf8');
 
@@ -35,7 +36,7 @@ const stubAccounts = (accounts: AccountUsage[]): void => {
   });
 };
 
-afterEach(() => { cleanup(); vi.restoreAllMocks(); navigate('/'); });
+afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); navigate('/'); });
 
 describe('AccountsStrip', () => {
   it('a rolled-over window reads 0% with its countdown', async () => {
@@ -471,5 +472,258 @@ describe('AccountsStrip', () => {
     expect(expired.querySelector('.acct-meter')).toHaveAttribute('data-band', 'crit');
     expect(fills(live).map((f) => f.classList.contains('limit-fill--off'))).toEqual([false, false]);
     expect(fills(live)[0]).toHaveClass('limit-fill--crit');
+  });
+});
+
+// ── the fold (desktop polish S5b, D-6530): four lanes on a phone, one measured line at the desk, "+n more" ──
+// jsdom lays nothing out and applies no media query, so a phone is the default `matchMedia` (nothing matches) and a
+// desk is a stub for `(min-width: 900px)` plus a `ResizeObserver` that answers one content width at once.
+describe('the lanes fold (S5b, D-6530)', () => {
+  const WORDS = '+13 more · 1 sign-in expired · 1 rate-limited';
+  const SHOWN = ['lane-a', 'lane-f', 'lane-with-a-very-long-name-q', 'lane-e'];
+  const cardsOf = (container: HTMLElement): HTMLElement[] => [...container.querySelectorAll<HTMLElement>('.account-gauge')];
+  const nameOf = (card: HTMLElement): string => card.querySelector('.account-gauge-label')?.textContent ?? '';
+  const stubLanes = (accounts: AccountUsage[], roster = seventeenLanes(nowSec).roster): void => {
+    vi.spyOn(api, 'accounts').mockResolvedValue({ accounts, projected: { wrapper: 'w0', score: 0 }, roster });
+  };
+  const stubSeventeen = (): void => stubLanes(seventeenLanes(nowSec).accounts);
+  /** A desk whose cards' group measures `width` px of content (jsdom has no stylesheet, so its column-gap is not a number). */
+  const stubDesk = (width: number): void => {
+    vi.stubGlobal('matchMedia', (q: string) => ({
+      matches: q.includes('min-width: 900px'), media: q, onchange: null,
+      addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, dispatchEvent: () => false,
+    }));
+    vi.stubGlobal('ResizeObserver', class {
+      constructor(private readonly cb: ResizeObserverCallback) {}
+      observe(target: Element): void {
+        this.cb([{ target, contentRect: { width } } as unknown as ResizeObserverEntry], this as unknown as ResizeObserver);
+      }
+      unobserve(): void {}
+      disconnect(): void {}
+    });
+  };
+  const control = (name: string | RegExp = /more|Show fewer/): HTMLElement => screen.getByRole('button', { name });
+  const stops = (container: HTMLElement): string[] => cardsOf(container).filter((c) => c.tabIndex === 0).map(nameOf);
+
+  it('the folded strip mounts only the shown cards', async () => {
+    stubSeventeen();
+    const { container } = render(<AccountsStrip />);
+    await screen.findByText('lane-a');
+    // Counted in the DOM, rendered or not: a hidden card must not be mounted and hidden by CSS.
+    expect(container.querySelectorAll('.account-gauge')).toHaveLength(4);
+    expect(cardsOf(container).map(nameOf)).toEqual(SHOWN);
+  });
+
+  it('the control sits in the end cell, after the last shown card and before All accounts, and follows the cards\' one tab stop in tab order', async () => {
+    stubSeventeen();
+    const user = userEvent.setup();
+    const { container } = render(<AccountsStrip />);
+    await screen.findByText('lane-a');
+    const more = control(WORDS);
+    const all = screen.getByRole('button', { name: 'All accounts' });
+    const end = more.closest('.accounts-end')!;
+    expect(end).not.toBeNull();
+    expect(all.closest('.accounts-end')).toBe(end);
+    expect(end.parentElement).toBe(container.querySelector('.accounts-strip'));
+    expect([...end.children]).toEqual([more, all]);
+    expect(cardsOf(container).at(-1)!.compareDocumentPosition(more) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    await user.tab();
+    expect(document.activeElement).toBe(cardsOf(container)[0]);
+    await user.tab();
+    expect(document.activeElement).toBe(more);
+    await user.tab();
+    expect(document.activeElement).toBe(all);
+  });
+
+  it('each shown card stays its lane\'s open-lane door: a tap and Enter open /accounts?lane=<id>', async () => {
+    stubSeventeen();
+    const { container } = render(<AccountsStrip />);
+    await screen.findByText('lane-a');
+    for (const card of cardsOf(container)) {
+      expect(card).toHaveAttribute('role', 'link');
+      expect(card).toHaveAttribute('data-action', 'open-lane');
+    }
+    fireEvent.click(cardsOf(container).find((c) => nameOf(c) === 'lane-f')!);
+    expect(location.pathname + location.search).toBe('/accounts?lane=w5');
+    navigate('/');
+    fireEvent.keyDown(cardsOf(container).find((c) => nameOf(c) === 'lane-e')!, { key: 'Enter' });
+    expect(location.pathname + location.search).toBe('/accounts?lane=w4');
+  });
+
+  it('the arrow keys move across the shown cards only, and a stop on a card that folds away goes to the first shown card', async () => {
+    stubSeventeen();
+    const user = userEvent.setup();
+    const { container } = render(<AccountsStrip />);
+    await screen.findByText('lane-a');
+    await user.tab();
+    await user.keyboard('{End}');
+    expect(nameOf(document.activeElement as HTMLElement)).toBe('lane-e');
+    await user.keyboard('{ArrowRight}');          // the fifth lane is folded away: End and the arrow stop at the fourth card
+    expect(nameOf(document.activeElement as HTMLElement)).toBe('lane-e');
+    // Expanded, the stop can sit on the last lane; folding again takes the stop to the first shown card.
+    fireEvent.click(control());
+    expect(cardsOf(container)).toHaveLength(17);
+    act(() => { cardsOf(container).find((c) => nameOf(c) === 'lane-q')!.focus(); });
+    expect(stops(container)).toEqual(['lane-q']);
+    fireEvent.click(control('Show fewer'));
+    expect(cardsOf(container)).toHaveLength(4);
+    expect(stops(container)).toEqual(['lane-a']);
+  });
+
+  it('at the desk the row folds to the measured fit: three cards at 1248 px, then the end cell with the control and All accounts', async () => {
+    stubDesk(1248);
+    stubSeventeen();
+    const { container } = render(<AccountsStrip />);
+    await screen.findByText('lane-a');
+    const group = container.querySelector('.accounts-strip')!;
+    expect(cardsOf(container).map(nameOf)).toEqual(SHOWN.slice(0, 3));
+    expect([...group.children].map((c) => c.className)).toEqual(['account-gauge', 'account-gauge', 'account-gauge', 'accounts-end']);
+    const end = group.querySelector('.accounts-end')!;
+    // 17 lanes less 3 shown.
+    expect([...end.children]).toEqual([control('+14 more · 1 sign-in expired · 1 rate-limited'), screen.getByRole('button', { name: 'All accounts' })]);
+    expect(group.getAttribute('style')).toContain('--lane-card-min: 260px');
+  });
+
+  it('an unmeasured desk row folds nothing: every lane and no control', async () => {
+    stubDesk(0);
+    stubSeventeen();
+    const { container } = render(<AccountsStrip />);
+    await screen.findByText('lane-a');
+    expect(cardsOf(container)).toHaveLength(17);
+    expect(screen.queryByRole('button', { name: /more|Show fewer/ })).toBeNull();
+  });
+
+  it('folded, the group\'s name names the fullest lane, which is hidden', async () => {
+    stubSeventeen();
+    const { container } = render(<AccountsStrip />);
+    await screen.findByText('lane-a');
+    // lane-q (w16, at its 5h limit) is the fullest, and sorts last: it is not among the four cards.
+    expect(screen.getByRole('group', { name: /^account usage, highest lane-q 100%/ })).toBeInTheDocument();
+    expect(cardsOf(container).map(nameOf)).not.toContain('lane-q');
+  });
+
+  it('a tap on the control folds and unfolds and never navigates, and the control carries no data-command and no data-action', async () => {
+    stubSeventeen();
+    const { container } = render(<AccountsStrip />);
+    await screen.findByText('lane-a');
+    const more = control(WORDS);
+    expect(more).not.toHaveAttribute('data-command');
+    expect(more).not.toHaveAttribute('data-action');
+    fireEvent.click(more);
+    expect(cardsOf(container)).toHaveLength(17);
+    expect(more).toHaveTextContent('Show fewer');
+    fireEvent.click(more);
+    expect(cardsOf(container)).toHaveLength(4);
+    expect(more).toHaveTextContent(WORDS);
+    expect(location.pathname).toBe('/');
+    expect(more).not.toHaveAttribute('data-command');
+    expect(more).not.toHaveAttribute('data-action');
+  });
+
+  it('the control\'s name is its words (no aria-label), with aria-expanded and aria-controls naming the cards\' element', async () => {
+    stubSeventeen();
+    const { container } = render(<AccountsStrip />);
+    await screen.findByText('lane-a');
+    const more = control(WORDS);
+    expect(more).not.toHaveAttribute('aria-label');
+    expect(more).toHaveAttribute('aria-expanded', 'false');
+    const group = container.querySelector('.accounts-strip')!;
+    expect(group.id).not.toBe('');
+    expect(more).toHaveAttribute('aria-controls', group.id);
+    fireEvent.click(more);
+    expect(more).toHaveAttribute('aria-expanded', 'true');
+    expect(more).toHaveAccessibleName('Show fewer');
+    expect(more).toHaveAttribute('aria-controls', group.id);
+  });
+
+  it('focus stays on the control across Show fewer and +n more', async () => {
+    stubSeventeen();
+    render(<AccountsStrip />);
+    await screen.findByText('lane-a');
+    const more = control(WORDS);
+    act(() => more.focus());
+    fireEvent.click(more);
+    expect(document.activeElement).toBe(more);
+    expect(more).toHaveTextContent('Show fewer');
+    fireEvent.click(more);
+    expect(document.activeElement).toBe(more);
+    expect(more).toHaveTextContent(/^\+13 more/);
+  });
+
+  it('Show fewer scrolls the control into view with block nearest; mounting expanded or folded scrolls nothing', async () => {
+    stubSeventeen();
+    const spy = vi.spyOn(HTMLElement.prototype, 'scrollIntoView');
+    render(<AccountsStrip />);
+    await screen.findByText('lane-a');
+    expect(spy).not.toHaveBeenCalled();
+    fireEvent.click(control());                   // +n more: no scroll
+    expect(spy).not.toHaveBeenCalled();
+    fireEvent.click(control('Show fewer'));
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(spy).toHaveBeenCalledWith({ block: 'nearest' });
+    expect(spy.mock.contexts[0]).toBe(control());
+    cleanup();
+    spy.mockClear();
+    window.localStorage.setItem('ccrc-accounts-strip', 'expanded');
+    render(<AccountsStrip />);
+    await screen.findByText('lane-a');
+    await screen.findByText('Show fewer');
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it('five lanes, folded or expanded: every card and no control', async () => {
+    stubLanes(seventeenLanes(nowSec).accounts.slice(0, 5));
+    const { container } = render(<AccountsStrip />);
+    await screen.findByText('lane-a');
+    expect(cardsOf(container)).toHaveLength(5);
+    expect(screen.queryByRole('button', { name: /more|Show fewer/ })).toBeNull();
+    cleanup();
+    window.localStorage.setItem('ccrc-accounts-strip', 'expanded');
+    const again = render(<AccountsStrip />);
+    await screen.findByText('lane-a');
+    expect(cardsOf(again.container)).toHaveLength(5);
+    expect(screen.queryByRole('button', { name: /more|Show fewer/ })).toBeNull();
+  });
+
+  it('no control in the placeholder states', async () => {
+    vi.spyOn(api, 'accounts').mockReturnValue(new Promise(() => {}));
+    render(<AccountsStrip />);
+    expect(screen.queryByRole('button')).toBeNull();
+    cleanup();
+    stubLanes([]);
+    render(<AccountsStrip />);
+    await screen.findByText(/no accounts reporting/);
+    expect(screen.queryByRole('button')).toBeNull();
+    cleanup();
+    stubLanes([acct({ wrapper: 'lane-a', disabled: true })]);
+    render(<AccountsStrip />);
+    await screen.findByText(/all lanes disabled/);
+    expect(screen.queryByRole('button')).toBeNull();
+  });
+
+  // The two source scans read the component's CODE, comments out, so its own header may name what it must not do.
+  const stripSrc = (): string => readFileSync(path.join(import.meta.dirname, '..', 'src', 'fleet', 'AccountsStrip.tsx'), 'utf8');
+  // Whole-line comments first: one of them names `~/.cc-limits/*.json`, whose `/*` is no block comment's start.
+  const codeOf = (src: string): string => src.replace(/^\s*\/\/.*$/gm, '').replace(/\/\*[\s\S]*?\*\//g, '');
+
+  it('the control renders from foldLanes alone: the component imports foldLanes and foldWords, no FOLD_SHOWN, and compares no lane count', () => {
+    const code = codeOf(stripSrc());
+    expect(code).toMatch(/import \{[^}]*\bfoldLanes\b[^}]*\} from '\.\/stripFold'/);
+    expect(code).toMatch(/import \{[^}]*\bfoldWords\b[^}]*\} from '\.\/stripFold'/);
+    expect(code).not.toContain('FOLD_SHOWN');
+    expect(code).not.toMatch(/\.length\s*(>=?|<=?)/);
+  });
+
+  it('the control\'s words are foldWords\': the component builds no sentence of its own', () => {
+    const src = parseTs(path.join(import.meta.dirname, '..', 'src', 'fleet', 'AccountsStrip.tsx'));
+    const literals: string[] = [];
+    const visit = (n: ts.Node): void => {
+      if ((ts.isStringLiteral(n) || ts.isNoSubstitutionTemplateLiteral(n) || ts.isJsxText(n)) && !isSpecifier(n)) literals.push(n.text);
+      if (ts.isTemplateHead(n) || ts.isTemplateMiddle(n) || ts.isTemplateTail(n)) literals.push(n.text);
+      ts.forEachChild(n, visit);
+    };
+    visit(src);
+    expect(literals.filter((l) => /more|Show fewer|sign-in expired|rate-limited/.test(l))).toEqual([]);
+    expect(codeOf(stripSrc())).toMatch(/foldWords\(/);
   });
 });

@@ -13,6 +13,7 @@ import path from 'node:path';
 import { INSTRUMENT, REFINED, toast } from '@ccrc/ui';
 import type { AccountUsage, NotifyEvent, RunSummary } from '../../shared/api';
 import { fleetSession } from './fleetFixture';
+import { seventeenLanes } from './seventeenLanes';
 import { pageAt, treeOk, treeResponse } from './docsFixtures';
 import type { DocsVisit } from '../src/docs/useDocsVisit';
 
@@ -214,6 +215,45 @@ describe("Refined's phone header (W2 Task S5)", () => {
     fireEvent.click(all);
     expect(location.pathname).toBe('/accounts');
     expect(location.search).toBe('');
+  });
+
+  // The strip folds at every width (S5b, D-6530): four cards on a phone, whatever its width, and the control's words say
+  // what the fold hides that needs the operator.
+  const stubSeventeen = (): void => {
+    const f = seventeenLanes(nowSec);
+    vi.spyOn(api, 'accounts').mockResolvedValue({ accounts: f.accounts, projected: { wrapper: 'w0', score: 0 }, roster: f.roster });
+  };
+  const cardNames = (strip: HTMLElement): string[] =>
+    [...strip.querySelectorAll<HTMLElement>('.account-gauge')].map((c) => c.querySelector('.account-gauge-label')?.textContent ?? '');
+
+  it("at 390 with 17 lanes the phone header shows four cards and '+13 more · 1 sign-in expired · 1 rate-limited'", async () => {
+    stubSeventeen();
+    atWidth(390);
+    render(<App />);
+    const strip = await within(head()).findByRole('group', { name: /^account usage, highest lane-q 100%/ });
+    await within(strip).findByText('lane-a');
+    expect(cardNames(strip)).toEqual(['lane-a', 'lane-f', 'lane-with-a-very-long-name-q', 'lane-e']);
+    const more = within(strip).getByRole('button', { name: '+13 more · 1 sign-in expired · 1 rate-limited' });
+    expect(more).toHaveAttribute('aria-expanded', 'false');
+    // The end cell holds the control, then All accounts: still one strip on the page.
+    expect(more.closest('.accounts-end')!.lastElementChild).toBe(within(strip).getByRole('button', { name: 'All accounts' }));
+    expect(document.querySelectorAll('.accounts-strip')).toHaveLength(1);
+  });
+
+  it('the choice to expand is remembered across a remount', async () => {
+    stubSeventeen();
+    atWidth(390);
+    const first = render(<App />);
+    const strip = await within(head()).findByRole('group', { name: /^account usage/ });
+    await within(strip).findByText('lane-a');
+    fireEvent.click(within(strip).getByRole('button', { name: /^\+13 more/ }));
+    expect(cardNames(strip)).toHaveLength(17);
+    first.unmount();
+    render(<App />);
+    const again = await within(head()).findByRole('group', { name: /^account usage/ });
+    await within(again).findByText('lane-a');
+    expect(cardNames(again)).toHaveLength(17);
+    expect(within(again).getByRole('button', { name: 'Show fewer' })).toHaveAttribute('aria-expanded', 'true');
   });
 
   it('Refined renders neither FleetHead nor `.fab`; Instrument still renders both', () => {

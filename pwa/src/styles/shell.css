@@ -115,13 +115,15 @@
     border-bottom: 1px solid var(--edge-subtle);
     background: var(--bg-surface);
   }
-  /* One card per lane across the width, as many to a line as the width holds, and the end cell, All accounts, in the
-     track after the last card. A card's floor is only what its name and two windows need now that the name sits beside
-     them rather than above them; below that floor the tracks drop to fewer to a line and the row wraps onto another
-     line rather than truncating a readout. auto-fill, not auto-fit, so the tracks keep a card's width when the last
-     line holds fewer cards than the line. */
+  /* One card per lane across the width, as many to a line as the width holds, and the end cell, the fold's control and
+     All accounts, in the track after the last card. A card's floor is only what its name and two windows need now
+     that the name sits beside them rather than above them; below that floor the tracks drop to fewer to a line and the
+     row wraps onto another line rather than truncating a readout. The floor is `LANE_CARD_MIN` (stripFold.ts), written
+     once there and handed to this rule by the strip as `--lane-card-min`, so the tracks drawn and the count the fold
+     measures (`rowFit`) agree. auto-fill, not auto-fit, so the tracks keep a card's width when the last line holds
+     fewer cards than the line. */
   .shell-accounts .accounts-strip {
-    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(var(--lane-card-min), 1fr));
     gap: var(--sp-2);
     margin: 0;
   }
@@ -141,9 +143,13 @@
     border: 1px solid var(--edge-subtle);
     border-radius: var(--r-md);
   }
-  /* The end cell sits inline in the next track here, not on a row of its own as on a phone. */
+  /* The end cell sits inline in the next track here, not on a row of its own as on a phone. It holds the fold's control
+     beside All accounts in that one track: the cell may shrink below its content (`min-width: 0`, so a long
+     "+13 more · 1 sign-in expired · 1 rate-limited" never widens the track) and its buttons wrap their words, or
+     drop to a second line of the cell, inside it. */
   .shell-accounts .accounts-end {
     grid-column: auto;
+    min-width: 0;
   }
   /* The lane's name gives first: a long one is cut with an ellipsis (its full name is the label's `title`) so the
      windows keep their countdowns inside the card. */
