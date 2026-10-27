@@ -11,10 +11,11 @@
  * and `UpdateIntentLog.maxEpoch` shared byte for byte. Regex-only: a torn final append still counts when an epoch can
  * be read out of the fragment (over-counting is the safe direction). An EXISTING journal that yields no epoch
  * (zero-length, the ext4 delayed-allocation crash shape, or no epoch anywhere) THROWS, with the caller's own words
- * and path: reading it as "nothing issued" would be the reissue the journal exists to prevent. A MISSING file never
- * reaches here: `ENOENT` is the adapter's `null`.
+ * and path: reading it as "nothing issued" would be the reissue the journal exists to prevent. `journal` is the
+ * caller's name for its file as the sentence opens (`pool-edges journal`, `update-intent journal`). A MISSING file
+ * never reaches here: `ENOENT` is the adapter's `null`.
  */
-export function maxJournalEpoch(text: string, what: string, path: string): number {
+export function maxJournalEpoch(text: string, journal: string, path: string): number {
   let max: number | null = null;
   for (const line of text.split('\n')) {
     if (line === '') continue;
@@ -25,7 +26,7 @@ export function maxJournalEpoch(text: string, what: string, path: string): numbe
   }
   if (max === null) {
     throw new Error(
-      `${what} journal exists at ${path} but yields no epoch — ` +
+      `${journal} exists at ${path} but yields no epoch — ` +
       'zero-length or unparseable is not the same as absent; answering ' +
       'null here would be the reissue this file exists to prevent',
     );

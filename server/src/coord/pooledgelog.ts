@@ -111,6 +111,6 @@ export class PoolEdgeLog {
       throw err;
     }
     // D-7058: the regex walk and its throw are `journalKernel.ts#maxJournalEpoch`'s; the read and `ENOENT` stay here.
-    return maxJournalEpoch(text, 'pool-edges', this.logPath);
+    return maxJournalEpoch(text, 'pool-edges journal', this.logPath);
   }
 }

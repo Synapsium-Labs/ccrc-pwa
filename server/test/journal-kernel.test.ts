@@ -6,26 +6,26 @@
 import { describe, it, expect } from 'vitest';
 import { appendThenApply, journalFloor, maxJournalEpoch, type JournalPhase } from '../src/journalKernel.js';
 
-const NO_EPOCH = (what: string, p: string): string =>
-  `${what} journal exists at ${p} but yields no epoch — zero-length or unparseable is not the same as absent; ` +
+const NO_EPOCH = (journal: string, p: string): string =>
+  `${journal} exists at ${p} but yields no epoch — zero-length or unparseable is not the same as absent; ` +
   'answering null here would be the reissue this file exists to prevent';
 
 describe('maxJournalEpoch', () => {
   it('empty text throws the caller\'s sentence, byte for byte', () => {
-    expect(() => maxJournalEpoch('', 'pool-edges', '/x/pool-edges.log')).toThrow(NO_EPOCH('pool-edges', '/x/pool-edges.log'));
+    expect(() => maxJournalEpoch('', 'pool-edges journal', '/x/pool-edges.log')).toThrow(NO_EPOCH('pool-edges journal', '/x/pool-edges.log'));
     let msg = '';
-    try { maxJournalEpoch('', 'update-intent', '/y/u.log'); } catch (e) { msg = (e as Error).message; }
-    expect(msg).toBe(NO_EPOCH('update-intent', '/y/u.log'));
+    try { maxJournalEpoch('', 'update-intent journal', '/y/u.log'); } catch (e) { msg = (e as Error).message; }
+    expect(msg).toBe(NO_EPOCH('update-intent journal', '/y/u.log'));
   });
 
   it('a file that yields no epoch throws (blank lines and other keys are not epochs)', () => {
-    expect(() => maxJournalEpoch('\n\n{"n":4}\n', 'pool-edges', '/p')).toThrow(NO_EPOCH('pool-edges', '/p'));
+    expect(() => maxJournalEpoch('\n\n{"n":4}\n', 'pool-edges journal', '/p')).toThrow(NO_EPOCH('pool-edges journal', '/p'));
   });
 
   it('answers the largest epoch over every line, and a torn tail counts', () => {
-    expect(maxJournalEpoch('{"epoch":3}\n{"epoch":7', 'pool-edges', '/p')).toBe(7);
-    expect(maxJournalEpoch('{"epoch":9}\n{"epoch":2}\n', 'pool-edges', '/p')).toBe(9);
-    expect(maxJournalEpoch('garbage\n{"epoch":4,"at":1}\n\n', 'pool-edges', '/p')).toBe(4);
+    expect(maxJournalEpoch('{"epoch":3}\n{"epoch":7', 'pool-edges journal', '/p')).toBe(7);
+    expect(maxJournalEpoch('{"epoch":9}\n{"epoch":2}\n', 'pool-edges journal', '/p')).toBe(9);
+    expect(maxJournalEpoch('garbage\n{"epoch":4,"at":1}\n\n', 'pool-edges journal', '/p')).toBe(4);
   });
 });
 

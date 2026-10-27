@@ -80,6 +80,6 @@ export class UpdateIntentLog {
       throw err;
     }
     // D-7058: the regex walk and its throw are `journalKernel.ts#maxJournalEpoch`'s; the read and `ENOENT` stay here.
-    return maxJournalEpoch(text, 'update-intent', this.logPath);
+    return maxJournalEpoch(text, 'update-intent journal', this.logPath);
   }
 }

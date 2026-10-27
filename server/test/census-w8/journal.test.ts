@@ -3,10 +3,11 @@
 // read-only `tx()`; and against the REAL tree, where C8f's moves leave each list empty (2, 3 and 4 at the base
 // `fd32f3ecd`, which the PR body prints) while the shapes the queries look for still stand inside the kernel.
 import { describe, it, expect, afterEach } from 'vitest';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { REPO } from '../consolidationCensus.js';
 import { mkTmp, removeTmpFixtures } from '../tmpHelpers.js';
+import { parsedFile } from '../scan/symbols.js';
 import { appendBeforeApplySites, epochFloorReaders, journalFloorSites } from './journal.js';
 
 afterEach(removeTmpFixtures);
@@ -145,11 +146,10 @@ describe('the real tree (C8f\'s tip)', () => {
     expect(appendBeforeApplySites()).toEqual([]);
   });
 
-  it('the queries are not over nothing: the kernel holds the shapes, and the four writers call appendThenApply', () => {
-    const kernel = readFileSync(path.join(REPO, 'server/src/journalKernel.ts'), 'utf8');
-    expect(kernel).toContain('/"epoch":(\\d+)/');
-    expect(kernel).toContain('Math.max(dbMax, fileMax)');
-    const store = readFileSync(path.join(REPO, 'server/src/coord/store.ts'), 'utf8');
-    expect(store.match(/\bappendThenApply</g)?.length).toBe(4);
+  it('the queries are not over nothing: the kernel defines the pieces, and the four writers call appendThenApply', () => {
+    const kernel = parsedFile(path.join(REPO, 'server/src/journalKernel.ts'));
+    expect(kernel.symbols.map((x) => x.name)).toEqual(expect.arrayContaining(['maxJournalEpoch', 'journalFloor', 'appendThenApply']));
+    const calls = parsedFile(path.join(REPO, 'server/src/coord/store.ts')).calls.filter((c) => c.name === 'appendThenApply');
+    expect(calls).toHaveLength(4);
   });
 });
