@@ -903,6 +903,29 @@ describe('the act-time rows: everything is read again inside the serialiser and 
     expect((await hbPass(hb, hnames))[0]!.act).toEqual({ kind: 'hibernated' });
     expect(hb.argv).toEqual([HIB_HB(ID)]);
   });
+
+  // C4g's characterization (D-7047): the gap row above, one switch at a time, green on the old code. The listing the
+  // window writes is the one the pass was handed: today no act reads another.
+  it.each([STOP_DONE_DISABLED_MARKER, RECLAIM_PAUSE_MARKER, HIBERNATE_DISABLED_MARKER])('today\'s gap (run-done): %s raised between the pass and the act does NOT hold the act', async (k) => {
+    const w = world();
+    const names: string[] = [];
+    w.beforeAct = () => { names.push(k); };
+    expect(await sdPass(w, names)).toEqual([{ id: ID, kind: 'hibernated', runId: 10 }]);
+    expect(w.argv).toEqual([HIB_SD(ID)]);
+  });
+
+  it('today\'s gap (idle-hours): hibernate-disabled raised, or hibernate-live removed, between the pass and the act does NOT hold the act', async () => {
+    const raised = world();
+    const rnames: string[] = [HIBERNATE_LIVE_MARKER];
+    raised.beforeAct = () => { rnames.push(HIBERNATE_DISABLED_MARKER); };
+    expect((await hbPass(raised, rnames))[0]!.act).toEqual({ kind: 'hibernated' });
+    expect(raised.argv).toEqual([HIB_HB(ID)]);
+    const removed = world();
+    const lnames: string[] = [HIBERNATE_LIVE_MARKER];
+    removed.beforeAct = () => { lnames.splice(0, lnames.length); };
+    expect((await hbPass(removed, lnames))[0]!.act).toEqual({ kind: 'hibernated' });
+    expect(removed.argv).toEqual([HIB_HB(ID)]);
+  });
 });
 
 // ── Two policies, one session, one tick ────────────────────────────────────────────────────────────────────────────
