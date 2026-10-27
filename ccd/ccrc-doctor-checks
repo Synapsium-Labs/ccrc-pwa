@@ -850,6 +850,71 @@ _dr_log_hint() {   # <unit> -> the command that shows its recent log
   fi
 }
 
+# ── a shipped timer's period, for a bound or a sentence (D-7054; ARCH-69 (#804)) ──
+# A check whose bound or sentence runs "as often as the timer" reads the period
+# from the SHIPPED tree's unit file, `$BOX_TREE_DIR/deploy/systemd/<unit>` (the
+# file `_inst_units` and deploy.sh copy from), through ccrc's one reader,
+# `_timer_period_s` (D-7053). Never the installed copy: macOS installs no timer
+# (decision 17), and a second reader would be a second source. The installed
+# copy's MTIME stays the pool-sync and update-sync graces' evidence.
+#
+# THREE ANSWERS, and every caller tests the rc BEFORE any `$(( ))` or `-gt`, so
+# an empty operand never reaches arithmetic: rc 0 prints the number; rc 1, the
+# file cannot be read (OA-C8c (a), D-7062: the check WARNs naming the unit
+# through `_dr_cadence_unread` and computes no verdict from that bound, never a
+# literal fallback); rc 3, ccrc's reader or BOX_TREE_DIR is not loaded (this
+# table was sourced by something that is not ccrc: the check FAILs naming the
+# bug through `_dr_cadence_unloaded`). Neither nonzero answer prints anything.
+#
+# Each answer is cached in the shell that asked (`_DR_TIMER_PERIOD_<unit>`), so
+# later calls in that shell read no file. A `$( … )` call is its own shell, and
+# what it caches goes with it. Nothing here runs at source time.
+_dr_timer_period_s() {   # <unit> -> its period in seconds; rc 0, 1 unreadable, 3 not loaded; sets _DR_TIMER_PERIOD
+  local key="_DR_TIMER_PERIOD_${1//[^A-Za-z0-9]/_}" v
+  _DR_TIMER_PERIOD=''
+  if [ -z "${BOX_TREE_DIR:-}" ] || ! declare -F _timer_period_s >/dev/null 2>&1; then return 3; fi
+  if [ -z "${!key:-}" ]; then
+    v="$(_timer_period_s "$BOX_TREE_DIR/deploy/systemd/$1" 2>/dev/null)" && [[ "$v" =~ ^[1-9][0-9]*$ ]] || return 1
+    printf -v "$key" '%s' "$v"
+  fi
+  _DR_TIMER_PERIOD="${!key}"
+  printf '%s\n' "$_DR_TIMER_PERIOD"
+}
+_dr_cycles_s() {   # <unit> <k> -> k of its periods, in seconds; rc and silence as _dr_timer_period_s
+  local rc=0
+  _dr_timer_period_s "$1" >/dev/null || rc=$?
+  [ "$rc" -eq 0 ] || return "$rc"
+  printf '%s\n' "$(( $2 * _DR_TIMER_PERIOD ))"
+}
+_dr_every_words() {   # <seconds> -> "every minute", "every <m> minutes" (whole minutes, m >= 2) or "every <s>s"
+  if [ "$1" -eq 60 ]; then printf 'every minute'
+  elif [ $(( $1 % 60 )) -eq 0 ]; then printf 'every %s minutes' "$(( $1 / 60 ))"
+  else printf 'every %ss' "$1"
+  fi
+}
+# The rc 1 WARN (OA-C8c (a)) and the rc 3 FAIL, said once. <what> names the bound
+# the check could not measure. The detail and remedy halves are printed on their
+# own too, for the checks that record findings before they print them.
+_dr_cadence_unread_what() {   # <unit> <what>
+  printf "%s's cadence could not be read from the shipped unit file (%s), so %s is unmeasured" \
+    "$1" "$BOX_TREE_DIR/deploy/systemd/$1" "$2"
+}
+_dr_cadence_unread_fix() {
+  printf '%s' "the shipped tree at $BOX_TREE_DIR is incomplete or damaged — both deploy lanes place the whole tree there, so the next ccrc update (or deploy) restores it; then re-run ccrc doctor"
+}
+_dr_cadence_unread() {   # <check> <unit> <what> -> one WARN line naming the unit, rc 2
+  _dr_warn "$1" "$(_dr_cadence_unread_what "$2" "$3")" "$(_dr_cadence_unread_fix)"
+}
+_dr_cadence_unloaded_what() {   # <what>
+  printf "ccrc's own timer reader is not loaded, so %s was never measured" "$1"
+}
+_dr_cadence_unloaded_fix() {   # <check> <unit>
+  printf '%s' "this is a bug in ccrc, not a fact about your box — _check_$1 reads $2's cadence through _timer_period_s and BOX_TREE_DIR, both declared once in ccrc itself, and this check table was sourced by something that is not ccrc"
+}
+_dr_cadence_unloaded() {   # <check> <unit> <what> -> one FAIL line naming the bug, rc 1
+  _dr_fail "$1" "$(_dr_cadence_unloaded_what "$3")" "$(_dr_cadence_unloaded_fix "$1" "$2")"
+}
+
 # THIS FILE RUNS TWO DIFFERENT COVERAGE DESIGNS FOR TIMERS — "is a recurring
 # job actually keeping its promise" — and this check is only one of them
 # (D-2193). The units in the `known` array below are measured DIRECTLY, by
