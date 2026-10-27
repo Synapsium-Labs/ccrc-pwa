@@ -154,8 +154,14 @@ export type SleepVerdict<W extends string> =
  * unread fact holding. The row's fields steer it; its name never does.
  */
 export function decideSleep<W extends string>(i: SleepInput, policy: SleepPolicy<W>): SleepVerdict<W> {
-  // The words are the policy map's (the matrix in `sleep-lanes-pin.test.ts` holds each row to its own list).
-  const hold = (reason: string): SleepVerdict<W> => ({ act: 'hold', reason: reason as W });
+  // The words are the policy map's, checked here rather than cast: a word outside the row's own list is a ladder bug and
+  // throws, so it never reaches a lane as an answer (the lanes' catch lines then act on nothing). The matrix in
+  // `sleep-lanes-pin.test.ts` holds each real row to its own list, so neither throws.
+  const hold = (reason: string): SleepVerdict<W> => {
+    const word = policy.holds.find((h) => h === reason);
+    if (word === undefined) throw new Error(`decideSleep: the hold '${reason}' is not in this policy's hold list`);
+    return { act: 'hold', reason: word };
+  };
   const r = i.row;
   const e = policy.entry;
   if (e.child && i.child !== null && i.child.kind === 'none') return hold('not-a-child');
@@ -199,7 +205,7 @@ export function decideSleep<W extends string>(i: SleepInput, policy: SleepPolicy
   const w = i.live.word;
   if (!w.ok) return hold(w.reason === 'unmeasured' ? 'unmeasured' : 'pane');
   if (turnSays(policy.liveWord, turnWordOf(w.word)) !== 'rest') return hold('live-word');
-  if (policy.turnVerdict && i.live.turn !== 'idle') return hold(i.live.turn === 'busy' ? 'turn' : 'unmeasured');
+  if (policy.turnVerdict && i.live.turn !== 'idle') return hold(i.live.turn === 'unmeasured' ? 'unmeasured' : 'turn');
   // Hibernation's two marker holds (§5.11): a row's `background` is null once its hookstate aged out, so a shell or a
   // Monitor left running after the last Stop is visible only here — and it would die with the pane.
   const m = i.live.mark;

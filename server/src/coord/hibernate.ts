@@ -201,7 +201,9 @@ export const IDLE_HOURS_POLICY: SleepPolicy<HibernateHold> = {
 
 /** The one ladder's facts, from hibernation's input. The dead-pane compare is this lane's (`paneDead`); the child
  *  marker, the stop stamp, the verb and the turn are not read (`null`), the store carries no run, and no hold is
- *  classified (`heldPasses: false`). `afterMs` is N. */
+ *  classified (`heldPasses: false`). `afterMs` is N. idle-hours' any-hold-holds rule is encoded TWICE, on purpose: by
+ *  the row (`IDLE_HOURS_POLICY.held` is `any-holds`, so no input can pass a hold) and by this input (`heldPasses:
+ *  false`, so no row could pass one either); changing the rule means changing both. */
 export function hibernateSleepInput(i: HibernateInput, now: number, afterMs: number): SleepInput {
   const r = i.row;
   return {

@@ -13,7 +13,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { CCD } from './ccdWsHelpers.js';
 import { parsedFile } from './scan/symbols.js';
-import { scheduleFacts, statementStartAt, type ScheduleFacts } from './scan/parse.js';
+import { scheduleFacts, type ScheduleFacts } from './scan/parse.js';
 
 /** The repository root: every query's default tree. A fixture tree passes its own root in its place. */
 export const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -373,15 +373,16 @@ export function runCcdOldFoldSites(root: string = REPO, table: readonly RanTable
   return runCcdSiteArms(root, table).filter((s) => s.arm === null).map(({ file, line, text }) => ({ file, line, text }));
 }
 
-/** D-5866 (Task C1k; ARCH-71 #806): the W4 files W1b never edits. Their capability sites are reported, tagged
- *  `w4-held`, and W4 moves them. */
-export const W4_HELD_FILES: readonly string[] = ['server/src/hibernateSweep.ts', 'server/src/stopDoneSweep.ts'];
+/** D-5866 (Task C1k; ARCH-71 #806): the W4 files W1b never edits. Their capability sites were reported, tagged
+ *  `w4-held`, and W4 moved them: since D-7042 (ARCH-43 C4d) both sleep lanes ask `ccdCan` in the one executor
+ *  (`sleepLane.ts`), and no file is held. */
+export const W4_HELD_FILES: readonly string[] = [];
 
 /** What a capability site asks. `verb`: whether this box's ccd can run a `CCD_ARGV` row (every `ccdCan(` and every
  *  `verbSupported(`, and a `capSupported(` of some `CCD_CAN` row's token). `verb-precondition`: a `capSupported(` on
  *  a line that also asks `ccdCan(` of another row (the pause marker the collector needs beside its own token). `flag`:
- *  any other token, which an existing verb parses. `w4-held`: any site in `W4_HELD_FILES`. */
-export type CapabilityTag = 'verb' | 'verb-precondition' | 'flag' | 'w4-held';
+ *  any other token, which an existing verb parses. (`w4-held`, a site in `W4_HELD_FILES`, was retired by D-7042.) */
+export type CapabilityTag = 'verb' | 'verb-precondition' | 'flag';
 
 /** One capability site: where, in which form, the token it names (`null` for `verbSupported`, or an expression this
  *  census does not resolve), and its tag. */
@@ -411,7 +412,7 @@ function secondArg(code: string, open: number): string | null {
  * `server/src`, outside `ccdargv.ts` (which defines them), each tagged. THE TAG IS READ FROM `CCD_CAN`, never from a
  * list: a `capSupported(` token is resolved through `ccdargv.ts`'s own exports (an exported constant's value, or a
  * quoted literal), and is `verb` when it is some row's token. Exit target: no `verb`-tagged `verbSupported(` or
- * `capSupported(` outside `W4_HELD_FILES` (every verb question goes through `ccdCan`).
+ * `capSupported(` anywhere (every verb question goes through `ccdCan`; `W4_HELD_FILES` is empty since D-7042).
  * KNOWN WIDTH: "beside" is the same code line; a call whose arguments wrap onto the next line resolves no token, and
  * its tag is `flag` unless its form says otherwise.
  */
@@ -437,8 +438,7 @@ export async function capabilityChoiceSites(root: string = REPO): Promise<Capabi
         const form = m[1] as CapabilitySite['form'];
         const token = form === 'capSupported' ? tokenOf(secondArg(code, m.index! + m[0].length)) : null;
         const beside = form === 'capSupported' && /\bccdCan\s*\(/.test(code);
-        const tag: CapabilityTag = W4_HELD_FILES.includes(file) ? 'w4-held'
-          : form !== 'capSupported' ? 'verb'
+        const tag: CapabilityTag = form !== 'capSupported' ? 'verb'
             : beside ? 'verb-precondition'
               : token !== null && rowTokens.has(token) ? 'verb' : 'flag';
         out.push({ file, line: i + 1, text, form, token, tag });
@@ -718,81 +718,3 @@ export const ONCE_WARN_ALLOWED: ReadonlyArray<{ readonly file: string; readonly 
   // tmp-sweep-mail.test.ts's characterization: a key that comes back after another key or a clean pass stays silent.
   { file: 'server/src/tmpSweepLane.ts', reason: 'once-ever, not a change latch, D-6991' },
 ];
-
-// ARCH-43 (spec 2026-10-19 K1; plan C4a): the sleep lanes' two censuses. Both read parsed symbols (`scan/symbols.ts`, over
-// `scan/parse.ts`), never a line regex, and both REPORT until their series reaches its target: `sleepVerdictLadders` 2 -> 1
-// at C4b (`decideSleep`), `hibernateActSites` 2 -> 1 at C4d (one sleep executor), each pinned in the commit that reaches it.
-
-/** One site of a parsed-symbol census: the function it was found in (`file#name`), anchored on that function's first
- *  line. */
-export interface SymbolSite extends CensusSite { readonly symbol: string }
-
-const relOf = (root: string, f: string): string => path.relative(root, f).split(path.sep).join('/');
-
-/**
- * The sleep verdicts' hold ladders: each function under `server/src` whose body RETURNS a `hold('viewer')` call, one site
- * per function (the innermost named function holding the call). 2 at the C4a base: `server/src/stopDone.ts#stopDoneVerdict`
- * and `server/src/coord/hibernate.ts#hibernateVerdict`.
- * KNOWN WIDTH: "returns" is the text just before the call, from its statement's start, ending in `return`; a call returned
- * through a ternary, a wrapper or a variable, a `hold` under another name and a `'viewer'` built from pieces are not seen.
- */
-export function sleepVerdictLadders(root: string = REPO): SymbolSite[] {
-  const out: SymbolSite[] = [];
-  for (const f of sourceFiles(root, 'server/src')) {
-    const file = relOf(root, f);
-    const p = parsedFile(f);
-    const lines = p.text.split('\n');
-    const seen = new Set<string>();
-    for (const c of p.calls) {
-      if (c.callee !== 'hold' || c.args[0]?.kind !== 'string' || c.args[0].text !== 'viewer') continue;
-      if (!/\breturn\s*$/.test(p.text.slice(statementStartAt(p.text, c.start, f), c.start))) continue;
-      const fn = p.symbols
-        .filter((s) => (s.kind === 'function' || s.kind === 'variable-function' || s.kind === 'method' || s.kind === 'arrow-property')
-          && s.start <= c.start && c.end <= s.end)
-        .sort((a, b) => b.start - a.start)[0];
-      if (fn === undefined || seen.has(fn.name)) continue;
-      seen.add(fn.name);
-      out.push({ file, line: fn.line, text: lines[fn.line - 1] ?? '', symbol: `${file}#${fn.name}` });
-    }
-  }
-  return out;
-}
-
-/** How an act site hands its argv to `runCcd(`: written in the call, or bound first in the same body. */
-export type HibernateActShape = 'inline' | 'bound';
-export interface HibernateActSite extends SymbolSite { readonly shape: HibernateActShape }
-
-const HIBERNATE_ARGV = /\bCCD_ARGV\.hibernate\s*\(/;
-
-/**
- * The `ccd hibernate` act sites: each TOP-LEVEL function under `server/src` (a `function` or a `const` arrow, nested
- * closures included in its body) that passes to a `runCcd(` call either a `CCD_ARGV.hibernate(` expression (`inline`) or
- * an identifier the same body binds to one (`const argv = CCD_ARGV.hibernate(…)`, then `runCcd(argv)`: `bound`), one site
- * per function. A `CCD_ARGV.hibernate(` that only feeds `verbSupported(` or `ccdCan(` is a verb question, not an act, and
- * is not counted. 2 at the C4a base: `server/src/stopDoneSweep.ts#stopDonePass` (inline) and
- * `server/src/hibernateSweep.ts#actOn` (bound); a textual `runCcd(CCD_ARGV.hibernate(` query finds 1 and is not this
- * census. KNOWN WIDTH: a class method, an argv passed through a helper or a second variable, and a `runCcd` under another
- * name are not seen.
- */
-export function hibernateActSites(root: string = REPO): HibernateActSite[] {
-  const out: HibernateActSite[] = [];
-  for (const f of sourceFiles(root, 'server/src')) {
-    const file = relOf(root, f);
-    const p = parsedFile(f);
-    const lines = p.text.split('\n');
-    for (const fn of p.symbols) {
-      if (fn.name.includes('.') || (fn.kind !== 'function' && fn.kind !== 'variable-function')) continue;
-      let shape: HibernateActShape | null = null;
-      for (const c of p.calls) {
-        if (c.name !== 'runCcd' || c.start < fn.start || c.end > fn.end) continue;
-        const arg = c.args[0]?.text ?? '';
-        if (HIBERNATE_ARGV.test(arg)) { shape = 'inline'; break; }
-        const bound = /^[A-Za-z_$][\w$]*$/.test(arg) && p.bindings.some((b) => b.name === arg && b.start >= fn.start && b.end <= fn.end
-          && b.scopeStart <= c.start && c.start < b.scopeEnd && HIBERNATE_ARGV.test(b.init));
-        if (bound) shape ??= 'bound';
-      }
-      if (shape !== null) out.push({ file, line: fn.line, text: lines[fn.line - 1] ?? '', symbol: `${file}#${fn.name}`, shape });
-    }
-  }
-  return out;
-}

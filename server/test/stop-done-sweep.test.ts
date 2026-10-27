@@ -605,13 +605,16 @@ describe('stopDonePass: the mail-only feed row (D-6091)', () => {
   });
 
   // D-7041: the pair is raised through the funnel, so the lane writes neither the archive nor the ring itself. Read
-  // through scan/symbols.ts, not a literal pin: no `.recordFeedEvent(` and no `.record(` call anywhere in the file, and
-  // `recordFeed` calls `notify` once, record-only.
+  // through scan/symbols.ts, not a literal pin: no `.recordFeedEvent(` and no `.record(` call anywhere in the files, and
+  // `recordFeed` calls `notify` once, record-only. D-7042: the pair's code is the one sleep executor's (`sleepLane.ts`),
+  // so both files are read, and `recordFeed` is read where it now lives.
   it('the feed archive keeps one writer site', () => {
-    const SRC = 'server/src/stopDoneSweep.ts';
-    const calls = parsedFile(SRC).calls;
-    expect(calls.filter((c) => c.name === 'recordFeedEvent').map((c) => c.line), 'a hand-written archive write').toEqual([]);
-    expect(calls.filter((c) => c.name === 'record' && c.callee !== 'record').map((c) => c.line), 'a hand-written ring record').toEqual([]);
+    const SRC = 'server/src/sleepLane.ts';
+    for (const file of ['server/src/stopDoneSweep.ts', SRC]) {
+      const calls = parsedFile(file).calls;
+      expect(calls.filter((c) => c.name === 'recordFeedEvent').map((c) => c.line), `${file}: a hand-written archive write`).toEqual([]);
+      expect(calls.filter((c) => c.name === 'record' && c.callee !== 'record').map((c) => c.line), `${file}: a hand-written ring record`).toEqual([]);
+    }
     const raised = callsIn(symbolOf(SRC, 'recordFeed')).filter((c) => c.callee === 'notify');
     expect(raised, 'recordFeed calls notify').toHaveLength(1);
     expect(raised[0]!.args[2], 'record-only: recorded whatever the presence, never pushed').toEqual({ kind: 'string', text: 'record-only' });

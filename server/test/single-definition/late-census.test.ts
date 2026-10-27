@@ -3,9 +3,9 @@ import { describe, it, expect } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import { readFileSync, existsSync } from 'node:fs';
 import path from 'node:path';
-import { sourceOfSymbol } from '../scan/symbols.js';
-import { identifierReferences, stringExpressions } from '../scan/parse.js';
-import { sleepVerdictLadders } from '../consolidationCensus.js';
+import { parsedFile, sourceOfSymbol } from '../scan/symbols.js';
+import { identifierReferences, parseSource, stringExpressions } from '../scan/parse.js';
+import { hibernateActSites, sleepVerdictLadders } from '../census-w4/sleep.js';
 import { SLEEP_POLICY_NAMES } from '../../src/sleep.js';
 import { SWITCHES } from '../../../shared/switches.js';
 import { ALL, ALL_MJS, BASH, HISTORY_DIR, HISTORY_MJS, ccrcRoot, codeLines, here, holdersOf, mjsUnder, prose, rel, stallCode, stallCodeText } from './helpers.js';
@@ -529,7 +529,7 @@ describe('ARCH-77: child reclaim’s off switch has no writer in the tree, and o
   });
 
   it('no other cleanup lane names it: expiry, collect, the dead-coordinator lane and stop-done are stopped by reclaim-paused alone', () => {
-    const LANES = ['server/src/archivedExpiry.ts', 'server/src/stopDoneSweep.ts', 'server/src/deadCoordinator.ts',
+    const LANES = ['server/src/archivedExpiry.ts', 'server/src/stopDoneSweep.ts', 'server/src/sleepLane.ts', 'server/src/deadCoordinator.ts',
       'server/src/coord/expireArchived.ts', 'server/src/coord/endDeadCoordinator.ts', 'server/src/coord/collectTempRoot.ts',
       'server/src/coord/collectOrphanTree.ts', 'server/src/coord/staleArchive.ts'];
     for (const f of LANES) {
@@ -591,7 +591,7 @@ describe('codex bridge Stage 2 Task 10: the bridge file names and the lane mode 
 
 // D-7040 (ARCH-43, consolidation plan 2026-10-26 Task C4b; spec K1, C4 "Policies, not lanes"). APPENDED. The two sleep
 // lanes share ONE hold ladder, `decideSleep` in `server/src/sleep.ts`, steered by each policy row's fields and never by
-// its name. `sleepVerdictLadders` (the census in `consolidationCensus.ts`: each server/src function whose body returns a
+// its name. `sleepVerdictLadders` (the census in `census-w4/sleep.ts`: each server/src function whose body returns a
 // `hold('viewer')` call) read 2 at C4b's base (`stopDone.ts#stopDoneVerdict`, `coord/hibernate.ts#hibernateVerdict`)
 // and is pinned at 1 here; it may only shrink. The name scan walks `decideSleep`'s parsed body (`scan/symbols.ts`,
 // `scan/parse.ts`), never a text match over the file: a read of `.name` (a comparison, a `switch`, a destructure), of
@@ -624,5 +624,69 @@ describe('the sleep lanes share one ladder, which never asks which policy it run
     const body = sourceOfSymbol(HOME, 'decideSleep');
     expect(body, 'CONTROL: the slice is the ladder').toContain("hold('viewer')");
     expect(nameReads(body)).toEqual([]);
+  });
+
+  // C4d (C4b's review): a helper the ladder calls is the ladder's, so the scan walks decideSleep's in-file callees too —
+  // every top-level function of the same file it names (a call or a value passed on), transitively, each once.
+  /** `decideSleep`'s source, then that of every top-level function of the same source text it reaches by name. */
+  const ladderSources = (text: string, root = 'decideSleep'): string[] => {
+    const p = parseSource(text, 'sleep.ts');
+    const tops = p.symbols.filter((x) => (x.kind === 'function' || x.kind === 'variable-function') && !x.name.includes('.'));
+    const names = new Set(tops.map((x) => x.name));
+    const out: string[] = [];
+    const seen = new Set<string>();
+    const visit = (name: string): void => {
+      const fn = tops.find((x) => x.name === name);
+      if (fn === undefined || seen.has(name)) return;
+      seen.add(name);
+      const body = p.text.slice(fn.start, fn.end);
+      out.push(body);
+      for (const r of identifierReferences(body, 'sleep.ts', names)) visit(r.name);
+    };
+    visit(root);
+    return out;
+  };
+
+  it('CONTROL: the walk reaches a helper decideSleep calls, and a helper\'s helper, and the name scan catches the helper\'s compare', () => {
+    const src = [
+      "function isRunDone(p) { return p.name === 'run-done'; }",
+      'function viaHelper(p) { return isRunDone(p); }',
+      'function unrelated(p) { return p.name; }',
+      'export function decideSleep(i, policy) { if (viaHelper(policy)) return 1; return 0; }',
+    ].join('\n');
+    const reached = ladderSources(src);
+    expect(reached.map((b) => /function (\w+)/.exec(b)?.[1])).toEqual(['decideSleep', 'viaHelper', 'isRunDone']);
+    expect(nameReads(reached[0]!), 'the ladder\'s own body asks nothing: only the walk sees the helper').toEqual([]);
+    expect(reached.flatMap(nameReads)).toEqual(["p.name", 'run-done']);
+  });
+
+  it('decideSleep\'s in-file callees read no policy name either', () => {
+    const reached = ladderSources(parsedFile(HOME).text);
+    expect(reached[0], 'CONTROL: the walk starts at the ladder').toBe(sourceOfSymbol(HOME, 'decideSleep'));
+    expect(reached.flatMap(nameReads)).toEqual([]);
+  });
+});
+
+// D-7042 (ARCH-43, consolidation plan 2026-10-26 Task C4d; spec K1). APPENDED. The two sleep lanes share ONE executor,
+// `sleepPass` and `sleepAct` in `server/src/sleepLane.ts`, over the per-policy `SLEEP_LANES` rows. `hibernateActSites`
+// (`census-w4/sleep.ts`: each top-level server/src function that hands `runCcd` a `CCD_ARGV.hibernate(` argv, inline
+// or bound first) read 2 at C4d's base (`stopDoneSweep.ts#stopDonePass` inline, `hibernateSweep.ts#actOn` bound) and is
+// pinned at 1 here; it may only shrink. Every verb question is `ccdCan`'s: no capability site carries the retired
+// `w4-held` tag, and the executor asks no verb through `verbSupported(`.
+describe('the sleep lanes share one executor (D-7042; ARCH-43)', () => {
+  const HOME = 'server/src/sleepLane.ts';
+
+  it('the ccd hibernate act sites are one, sleepAct in sleepLane.ts (2 -> 1 at C4d; may only shrink)', () => {
+    expect(hibernateActSites().map((s) => s.symbol)).toEqual([`${HOME}#sleepAct`]);
+  });
+
+  it('no capability site is held for W4, and sleepLane.ts asks no verb through verbSupported(', async () => {
+    const { capabilityChoiceSites, W4_HELD_FILES } = await import('../consolidationCensus.js');
+    const sites = await capabilityChoiceSites();
+    expect(W4_HELD_FILES).toEqual([]);
+    expect(sites.map((x): string => x.tag)).not.toContain('w4-held');
+    const mine = sites.filter((x) => x.file === HOME);
+    expect(mine.filter((x) => x.tag === 'verb' && x.form !== 'ccdCan').map((x) => `${x.line} ${x.text.trim()}`)).toEqual([]);
+    expect(mine.some((x) => x.form === 'ccdCan'), 'CONTROL: the census reads the executor').toBe(true);
   });
 });

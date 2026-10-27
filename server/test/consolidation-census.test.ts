@@ -18,7 +18,6 @@ import { capabilityChoiceSites, W4_HELD_FILES } from './consolidationCensus.js';
 import { changeLatchSites, changeLatchReported, onceWarnDefinitions } from './consolidationCensus.js';
 import { registryListingSites } from './consolidationCensus.js';
 import { dialogFrameProducers, sessionStreamPollSites } from './consolidationCensus.js';
-import { hibernateActSites, sleepVerdictLadders } from './consolidationCensus.js';
 import { cadenceLiterals, declaredDerivations, laneClockFields, laneClockReported, laneClockShapes, singleFlightGuards } from './consolidationCensus.js';
 
 const show = (name: string, sites: readonly CensusSite[]): void => {
@@ -271,6 +270,7 @@ describe('capabilityChoiceSites: verbSupported(, capSupported( and ccdCan( calls
       '  const m = { verbSupported: true };',                                       // 11: a key, not a call
       '}',
     ].join('\n'));
+    // D-7042: a former W4 file is held to the one verb question like any other (W4_HELD_FILES is empty).
     at('server/src/hibernateSweep.ts', 'export const p = (a: A) => verbSupported(a.fleetState, argv);\n');
   });
   afterAll(() => { if (tree) rmSync(tree, { recursive: true, force: true }); });
@@ -278,7 +278,7 @@ describe('capabilityChoiceSites: verbSupported(, capSupported( and ccdCan( calls
   it('FIXTURE: each form and tag, and never a comment, a key or the defining file', async () => {
     expect((await capabilityChoiceSites(tree)).map((x) => [x.file.replace('server/src/', ''), x.line, x.form, x.token, x.tag]))
       .toEqual([
-        ['hibernateSweep.ts', 1, 'verbSupported', null, 'w4-held'],
+        ['hibernateSweep.ts', 1, 'verbSupported', null, 'verb'],
         ['lane.ts', 2, 'ccdCan', null, 'verb'],
         ['lane.ts', 3, 'verbSupported', null, 'verb'],
         ['lane.ts', 4, 'capSupported', 'expire-v1', 'verb'],
@@ -291,13 +291,15 @@ describe('capabilityChoiceSites: verbSupported(, capSupported( and ccdCan( calls
       ]);
   });
 
-  it('REAL: every tag is seen, and the W4 files hold the only verbSupported( calls outside the deferred watch.ts', async () => {
+  // D-7042 (ARCH-43 C4d): W4 moved its sites into the one sleep executor, and the `w4-held` tag is retired.
+  it('REAL: every tag is seen, and no verbSupported( call is left (W4 held the last ones)', async () => {
     const sites = await capabilityChoiceSites();
-    for (const tag of ['verb', 'verb-precondition', 'flag', 'w4-held'] as const) {
+    for (const tag of ['verb', 'verb-precondition', 'flag'] as const) {
       show(`capabilityChoiceSites ${tag}`, sites.filter((x) => x.tag === tag));
       expect(sites.some((x) => x.tag === tag), `no ${tag} site found`).toBe(true);
     }
-    expect(sites.filter((x) => x.tag === 'w4-held').every((x) => W4_HELD_FILES.includes(x.file))).toBe(true);
+    expect(W4_HELD_FILES).toEqual([]);
+    expect(sites.filter((x) => x.form === 'verbSupported').map((x) => `${x.file}:${x.line}`)).toEqual([]);
     expect(sites.some((x) => x.form === 'ccdCan'), 'no ccdCan( site found').toBe(true);
   });
 });
@@ -604,93 +606,5 @@ describe('onceWarnDefinitions: `warn…Once` helpers defined outside changeLatch
     const sites = onceWarnDefinitions();
     show('onceWarnDefinitions', sites);
     expect(files(sites)).toContain('server/src/tmpSweepLane.ts');
-  });
-});
-
-// ARCH-43 (spec K1; plan C4a): the sleep lanes' censuses. REAL rows report and never red until their series starts
-// (spec §5.1 rule 3): `sleepVerdictLadders` is pinned at C4b, `hibernateActSites` at C4d.
-describe('the sleep lanes\' censuses (ARCH-43)', () => {
-  let tree = '';
-  const at = (rel: string, body: string): void => {
-    const p = path.join(tree, rel);
-    mkdirSync(path.dirname(p), { recursive: true });
-    writeFileSync(p, body);
-  };
-  beforeAll(() => {
-    tree = mkdtempSync(path.join(tmpdir(), 'consolidation-census-sleep-'));
-    at('server/src/ladderA.ts', [
-      'export function decideA(i: In): Out {',
-      "  const hold = (r: string): Out => ({ act: 'hold', reason: r });",
-      "  if (i.viewer) return hold('viewer');",
-      "  if (i.sinceStart < TTL) return hold('viewer');",                          // the same function: one site
-      "  return { act: 'go' };",
-      '}',
-    ].join('\n'));
-    at('server/src/coord/ladderB.ts', [
-      'export const decideB = (i: In): Out => {',
-      "  const hold = (r: string): Out => ({ act: 'hold', reason: r });",
-      '  if (i.viewer',
-      "    || i.hidden) return hold('viewer');",                                    // a wrapped condition
-      "  return { act: 'go' };",
-      '};',
-    ].join('\n'));
-    at('server/src/notLadder.ts', [
-      'export function mention(log: (x: unknown) => void): void {',
-      "  // return hold('viewer');",                                                // a comment
-      `  const why = "return hold('viewer')";`,                                      // a string
-      "  log(hold('viewer'));",                                                     // a call not returned
-      "  log(hold('mail'));",
-      '}',
-    ].join('\n'));
-    at('server/src/actInline.ts', [
-      'export async function actInline(deps: Deps, id: string): Promise<void> {',
-      '  // await deps.runCcd(CCD_ARGV.hibernate(id, null));',                       // a comment
-      '  await deps.queueRun(id, async () => {',
-      '    await deps.runCcd(CCD_ARGV.hibernate(id, sweepDec(deps.fleetState, ACTOR), null));', // inline, in a nested closure
-      '  });',
-      '}',
-    ].join('\n'));
-    at('server/src/actBound.ts', [
-      'export const actBound = async (port: Port, id: string): Promise<void> => {',
-      '  const argv = CCD_ARGV.hibernate(id, sweepDec(port.fleetState, ACTOR));',
-      '  if (!verbSupported(port.fleetState, argv)) return;',
-      '  await port.runCcd(argv);',                                                  // bound
-      '};',
-      'export async function actOther(port: Port, id: string): Promise<void> {',
-      '  const argv = CCD_ARGV.stop(id);',
-      '  await port.runCcd(argv);',                                                  // another verb
-      '}',
-    ].join('\n'));
-    at('server/src/probeOnly.ts', [
-      'export function probeOnly(state: FleetState): boolean {',
-      "  const argv = CCD_ARGV.hibernate('x', null);",
-      "  return verbSupported(state, argv) && ccdCan(state, CCD_ARGV.hibernate('y', null));", // verb probes only
-      '}',
-    ].join('\n'));
-  });
-  afterAll(() => { if (tree) rmSync(tree, { recursive: true, force: true }); });
-
-  it('FIXTURE sleepVerdictLadders: a function returning hold(\'viewer\') is one site, however many returns; a comment, a string and an unreturned call are not', () => {
-    expect(sleepVerdictLadders(tree).map((s) => s.symbol)).toEqual([
-      'server/src/coord/ladderB.ts#decideB', 'server/src/ladderA.ts#decideA',
-    ]);
-  });
-
-  it('FIXTURE hibernateActSites: both shapes, by top-level function (counted 2, not 3); a verb probe, another verb and a comment are not acts', () => {
-    expect(hibernateActSites(tree).map((s) => [s.symbol, s.shape])).toEqual([
-      ['server/src/actBound.ts#actBound', 'bound'], ['server/src/actInline.ts#actInline', 'inline'],
-    ]);
-  });
-
-  it('REAL sleepVerdictLadders: reports the ladders by name (2 -> 1 at C4b; not yet pinned)', () => {
-    const sites = sleepVerdictLadders();
-    show('sleepVerdictLadders', sites);
-    console.log(sites.map((s) => `  ${s.symbol}`).join('\n'));
-  });
-
-  it('REAL hibernateActSites: reports the act sites by name and shape (2 -> 1 at C4d; not yet pinned)', () => {
-    const sites = hibernateActSites();
-    show('hibernateActSites', sites);
-    console.log(sites.map((s) => `  ${s.symbol} (${s.shape})`).join('\n'));
   });
 });
