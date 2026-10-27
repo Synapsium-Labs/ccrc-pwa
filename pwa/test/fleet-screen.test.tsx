@@ -385,10 +385,21 @@ describe('FleetScreen', () => {
         { seq: 3, at: stamp + 60_002, kind: 'mail', sessionId: 'x', title: 'unread as well', body: '', runId: null },
       ],
     });
-    // Before the first fleet frame the rows are the offline snapshot's, not a fact: the door says nothing waits.
-    expect(screen.getByRole('button', { name: /mail — nothing waiting for you/i })).toBeInTheDocument();
+    // Before the first fleet frame the rows are the offline snapshot's, not a fact: the door is named plainly, never
+    // "nothing waiting" (folding the not-yet-known `null` to 0 at FleetScreen's seam reds this).
+    expect(screen.getByRole('button', { name: /^Mail$/ })).toBeInTheDocument();
     seed(store, { fleetFrameSeen: true });
     expect(screen.getByRole('button', { name: /mail — 2 waiting for you/i })).toBeInTheDocument();
+  });
+
+  // The other side of that seam: a first frame with nobody waiting is a measured zero, and the door says so.
+  it('a first fleet frame with nobody waiting names the mail door "nothing waiting for you"', () => {
+    const store = makeStore();
+    renderFleet(<FleetScreen store={store} />);
+    seed(store, { conn: 'open', sessions: [session({ id: 'claude:idle', bucket: 'idle' })] });
+    expect(screen.getByRole('button', { name: /^Mail$/ })).toBeInTheDocument();
+    seed(store, { fleetFrameSeen: true });
+    expect(screen.getByRole('button', { name: /^Mail — nothing waiting for you$/ })).toBeInTheDocument();
   });
 
   // The runs line says what it counts (T2d, D-6330): "N active" is the runs in `ACTIVE_RUN_STATES`, "N open" is what

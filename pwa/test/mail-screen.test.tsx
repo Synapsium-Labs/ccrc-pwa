@@ -372,6 +372,13 @@ describe('the door', () => {
     expect(screen.getByText('3')).toBeInTheDocument();
   });
 
+  it('before anything is heard (`null`) is named plainly, with no count and no "nothing waiting"', () => {
+    render(<MailBadge waiting={null} />);
+    const door = screen.getByRole('button', { name: /^Mail$/ });
+    expect(door).toHaveAttribute('data-unread', 'false');
+    expect(door.querySelector('.mail-badge-count')).toBeNull();
+  });
+
   it('navigates rather than toggling anything', () => {
     render(<MailBadge waiting={1} />);
     fireEvent.click(screen.getByRole('button', { name: /mail/i }));
