@@ -15,6 +15,15 @@ ledger pull request.
 | doctor | `_check_land-probe` per the plan | Doctor also SKIPs a project whose per-project `paused` file stands | It mirrors the probe, which writes nothing for a paused project. |
 | mutations | The brief names `mutation-run.py` | A sequential driver: save a copy (sha checked), apply the edit once, run the named vitest files under `timeout -k` and a measured `ulimit -u`, restore from the copy (sha checked) | `mutation-run.py` loads a Python module and Python test functions. The probe is a bash file run by vitest suites. |
 
+## Mutation outcomes that differ from the plan's prediction
+
+- **M21** (the stale-scratch sweep without its uid and symlink checks) first measured green. `shutil.rmtree` refuses a
+  symlink itself, and `ignore_errors` hides that refusal. The scratch case now pins that exactly one stale scratch is
+  reported cleared, so the lstat check is what decides, and M21 measures red. The uid half still cannot be pinned with
+  one uid.
+- **M20**'s second layer alone (`write_json`'s `real_dir`) stays green, because `ensure_dir` refuses first. M20 as
+  the plan wrote it, both layers together, is red.
+
 ## Acknowledged, no change
 
 - **Parser differential (security hook, MEDIUM).** The repository slug is read from `remote.origin.url`, but the fetch
