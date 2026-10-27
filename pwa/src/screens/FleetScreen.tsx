@@ -222,7 +222,7 @@ export function FleetScreen({
         <FleetHead
           countLine={headCount && sessions.length > 0 ? countLine : null}
           poolLag={poolLag}
-          waiting={waiting ?? 0}
+          waiting={waiting}
           chrome={headChrome}
         />
       )}

@@ -26,8 +26,8 @@ export function FleetHead(
     countLine: string | null;
     /** The account-pool projection's lag, when there is one to show. */
     poolLag: string | null;
-    /** The sessions waiting on the operator (`waitingOnYou`); 0 before the first fleet frame. */
-    waiting: number;
+    /** The sessions waiting on the operator (`waitingOnYou`); `null` before the first fleet frame, "not heard yet". */
+    waiting: number | null;
     /** The wordmark and the doors. False where the skin's bar holds them (Refined's `Sidebar` and Instrument's
      *  `ListColumn` at a desk, W2 Task S4b, T2e): the readouts stay here, and the identity mark is drawn once. With no
      *  chrome, no count line and no lag the head draws nothing (T2g, D-6715). */

@@ -26,6 +26,10 @@
 // R32's F5, moved to the Inbox's own rows (mail-screen.test.tsx):
 //   MailScreen's row mark without `isUnseenAt(...)` .... "a row at the ack's own stamp, or before it, is not unseen; …"
 //   `isUnseenAt` as `>=` ............................... the same case
+// Fix round 1 (review 1087, F1; RUN at the fix, the named suite alone, then restored from a saved copy):
+//   FleetScreen folds the pre-frame `null` to 0 (`waiting ?? 0`)
+//                                                        fleet-screen "the mail door counts the sessions waiting on the
+//                                                        operator, …" and "a first fleet frame with nobody waiting …"
 import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
