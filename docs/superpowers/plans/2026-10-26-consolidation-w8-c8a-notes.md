@@ -56,7 +56,7 @@ TypeScript only and has nothing to read here.
 
 ## Departures
 
-- **D-TBD-oncalendar-step-divides-hour.** The plan reads `OnCalendar=*:0/<n>` as "every `<n>` minutes". That holds
+- **D-7090.** The plan reads `OnCalendar=*:0/<n>` as "every `<n>` minutes". That holds
   only when `<n>` divides 60: `*:0/<n>` fires at `:00` and every `<n>` minutes after it within the hour, so `*:0/7`
   fires at `:49`, `:56`, then `:00`, and has two gaps. `_timer_period_s` therefore reads `*:0/<n>` only for a step
   that divides the hour (`*:0/5` is 300, `*:0/15` is 900) and refuses any other step, as it refuses every spelling it
