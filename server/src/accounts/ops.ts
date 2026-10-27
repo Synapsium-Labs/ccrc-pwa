@@ -7,6 +7,7 @@ import {
   ACCOUNT_OP, ACCOUNT_OP_DRAIN_MS, accountOpRequestTimeoutMs, readAccountOpAnswer, updateLauncherPath, type AccountOpReq,
 } from '../../../shared/agent-protocol.js';
 import { buildAccountArgv, isAccountStdin, type AccountArgvRefusal } from '../../../shared/account-argv.js';
+import { boundedStdinSpawn } from '../../../shared/spawn.mjs';
 import type { CcrcConfig } from '../config.js';
 import { AgentOpError, LinkNotSentError, type FleetClient } from '../remote/client.js';
 
@@ -108,66 +109,12 @@ export function localAccountOps(opts: LocalAccountOpsOpts): AccountOps {
     // `not-started` here and never crashes the boot that builds this arm (D-5621).
     let launcher: string;
     try { launcher = updateLauncherPath(opts.home); } catch { return { kind: 'not-started' }; }
-    return new Promise<AccountOpResult>((resolve) => {
-      let settled = false;
-      let child: ReturnType<typeof spawn>;
-      const chunks: Buffer[] = [];
-      let bytes = 0;
-      let ended: AccountOpResult | null = null;
-      const settle = (r: AccountOpResult): void => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(bound);
-        // Once `stop` has fired, the group's KILL is NOT cancelled here (D-5621): the leader's exit raises `close`,
-        // but a group member that ignores TERM and closed its stdio is still running and still gets KILL.
-        resolve(r);
-      };
-      /**
-       * SIGTERM to the whole group (the verb's `claude`, `curl`, `jq` too), SIGKILL after the grace, then one drain
-       * deadline, as the agent's port does (D-5622 (7)): a member that left the group (setsid) and holds stdout keeps
-       * `close` from firing, and must not hold the request, and the caller's stdin buffer, past the sub's window.
-       */
-      const stop = (why: AccountOpResult): void => {
-        if (ended !== null) return;
-        ended = why;
-        const signal = (s: NodeJS.Signals): void => {
-          if (child.pid === undefined) return;
-          try { process.kill(-child.pid, s); } catch (e) {
-            // ESRCH: the group is already gone. Anything else: the child alone rather than nothing, as the agent's
-            // port does (OA-C8a (a), D-7060).
-            if ((e as NodeJS.ErrnoException).code !== 'ESRCH') { try { child.kill(s); } catch { /* gone */ } }
-          }
-        };
-        signal('SIGTERM');
-        setTimeout(() => {
-          signal('SIGKILL');
-          setTimeout(() => settle(why), ACCOUNT_OP_DRAIN_MS).unref();
-        }, grace).unref();
-      };
-      try {
-        child = spawn(launcher, argv, { env: { ...env }, stdio: ['pipe', 'pipe', 'pipe'], detached: true });
-      } catch {
-        resolve({ kind: 'not-started' });
-        return;
-      }
-      const bound = setTimeout(() => stop({ kind: 'timeout' }), timeoutOf(sub));
-      child.on('error', () => settle({ kind: 'not-started' }));
-      child.stdout!.on('data', (b: Buffer) => {
-        if (ended !== null) return;
-        bytes += b.length;
-        if (bytes > cap) { chunks.length = 0; stop({ kind: 'too-large' }); return; }
-        chunks.push(b);
-      });
-      // Drained so a chatty verb cannot block on a full pipe; never kept, never logged.
-      child.stderr!.on('data', () => {});
-      child.stdin!.on('error', () => { /* the verb closed stdin early; its exit says the rest */ });
-      child.on('close', (code, signal) => {
-        if (ended !== null) { settle(ended); return; }
-        // A signal that was not ours reads as the shell's `128 + signo`, as the agent's token-sync port does.
-        const exit = code ?? (signal === null ? 1 : 128 + (osConstants.signals[signal] ?? 0));
-        settle({ kind: 'exited', code: exit, stdout: Buffer.concat(chunks).toString('utf8') });
-      });
-      child.stdin!.end(stdin ?? Buffer.alloc(0));
+    // The body is `shared/spawn.mjs#boundedStdinSpawn` (D-7057, OA-C8a (a) / D-7060), the agent port's too: the group
+    // gets SIGTERM at the sub's bound and SIGKILL after the grace, then one `ACCOUNT_OP_DRAIN_MS` deadline (D-5622
+    // (7)); the KILL is never cancelled once the TERM went (D-5621); a non-ESRCH group kill falls back to the child
+    // alone; stdout is capped, stderr drained and dropped; a signal not ours reads as `128 + signo`.
+    return boundedStdinSpawn({ spawn, signals: osConstants.signals }, launcher, argv, stdin ?? null, {
+      env: { ...env }, timeoutMs: timeoutOf(sub), killGraceMs: grace, maxOutputBytes: cap, drainMs: ACCOUNT_OP_DRAIN_MS,
     });
   };
   return { arm: 'local', run };

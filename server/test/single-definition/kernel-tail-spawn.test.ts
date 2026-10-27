@@ -65,10 +65,12 @@ describe('every process spawner is audited, with its reason (D-7056; ARCH-73)', 
     expect(PROCESS_SPAWNERS['server/src/localcaps.ts#execCapped']?.reason).toMatch(/^KEPT by the C8d audit \(D-7056\)/);
   });
 
-  it('the account-op pair carries the C8e audit\'s verdict: kept against exec.ts (D-7057)', () => {
-    // The agent's row went when `makeAccountOpSpawn` became a wrapper over `shared/spawn.mjs#boundedStdinSpawn`.
-    for (const k of ['server/src/accounts/ops.ts#localAccountOps.run']) {
-      expect(PROCESS_SPAWNERS[k]?.reason, k).toMatch(/^KEPT against exec\.ts by the C8e audit \(D-7057\)/);
+  it('the account-op pair is one row, shared/spawn.mjs#boundedStdinSpawn: the secret on stdin and OA-C8a (a) (D-7057)', () => {
+    for (const k of ['server/src/accounts/ops.ts#localAccountOps.run', 'agent/src/accountop.ts#makeAccountOpSpawn']) {
+      expect(PROCESS_SPAWNERS[k], `${k} is a wrapper now; its row went with its spawn site`).toBeUndefined();
     }
+    const reason = PROCESS_SPAWNERS['shared/spawn.mjs#boundedStdinSpawn']?.reason ?? '';
+    expect(reason).toMatch(/D-5513/);
+    expect(reason).toMatch(/OA-C8a \(a\)/);
   });
 });
