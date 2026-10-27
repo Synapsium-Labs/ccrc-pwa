@@ -383,6 +383,7 @@
     align-self: center;
     margin-top: 0;
   }
+  .ins-group-seen,
   .ins-group-head,
   .ins-toggle-option {
     min-height: var(--row-h);
