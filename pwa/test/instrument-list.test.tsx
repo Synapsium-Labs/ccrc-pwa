@@ -274,6 +274,9 @@ describe('the counts once per screen', () => {
     expect(door.closest('.ins-group-head')).toBeNull();
     expect(done.contains(door)).toBe(true);
     expect(doneHead.querySelector('button')).toBeNull();
+    // The fold row takes the squeeze at 360 and 390, never the door's word (`shrink-0`, the row `min-w-0`).
+    expect(door).toHaveClass('shrink-0');
+    expect(doneHead).toHaveClass('min-w-0');
 
     fireEvent.click(door);
     // Every row of THAT group is acked; the other group's badge stays.
