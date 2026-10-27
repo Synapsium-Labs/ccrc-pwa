@@ -75,6 +75,18 @@ const FORBIDDEN: readonly { readonly word: RegExp; readonly name: string; readon
     why: 'a word for a disagreement that does not say what disagrees; the card says the accounts differ',
   },
   {
+    word: /\bAttention\b/i, name: 'Attention', say: 'Needs you',
+    why: 'two words for one bucket: the group heads and the chips say Needs you, and so does the rest of the screen',
+  },
+  {
+    word: /\bDead\b/i, name: 'Dead', say: 'Exited',
+    why: "one word with the row's state word: a row that is gone reads exited, so its bucket does too",
+  },
+  {
+    word: /\bunseen\b/i, name: 'unseen', say: 'new, as in "4 new"',
+    why: 'a count of what the operator has not looked at is a count of what is new; the chip says "4 new"',
+  },
+  {
     // Case-SENSITIVE on purpose: the lowercase literal was the old kicker's source text; the kicker is sentence case now.
     word: /claude is asking/, name: 'claude is asking', say: 'Claude is asking',
     why: 'sentence case; the header now says who asks, so the kicker starts a sentence',
@@ -240,7 +252,8 @@ describe('the ask surfaces speak plainly (D-6325)', () => {
 
   it('keeps every forbidden word with a replacement and a reason', () => {
     expect(FORBIDDEN.map((f) => f.name)).toEqual([
-      'own-words', 'own words row', 'envelope', 'pane', 'Coordinator row', 'hot-file', 'hot files', 'mixed', 'claude is asking',
+      'own-words', 'own words row', 'envelope', 'pane', 'Coordinator row', 'hot-file', 'hot files', 'mixed', 'Attention', 'Dead', 'unseen',
+      'claude is asking',
     ]);
     for (const f of FORBIDDEN) {
       expect(f.say.length, f.name).toBeGreaterThan(3);
@@ -250,10 +263,10 @@ describe('the ask surfaces speak plainly (D-6325)', () => {
 });
 
 // The fleet list's words (D-6331, T3a): the card head, the claims strip and the class chooser, in both places it lives.
-// Task B of T3a adds the bucket chips' files (BucketBar.tsx, statusGroups.ts, markSeen.ts, skins/instrument/FleetTable.tsx).
+// The bucket chips' files are read too (BucketBar.tsx, statusGroups.ts, markSeen.ts); Task C of T3a adds FleetTable.tsx.
 const SRC = path.join(import.meta.dirname, '..', 'src');
 const FLEET_LIST = [
-  ...['ProjectCardHead.tsx', 'HotFilesStrip.tsx', 'NewSessionSheet.tsx'].map((f) => path.join(SRC, 'fleet', f)),
+  ...['ProjectCardHead.tsx', 'HotFilesStrip.tsx', 'NewSessionSheet.tsx', 'BucketBar.tsx', 'statusGroups.ts', 'markSeen.ts'].map((f) => path.join(SRC, 'fleet', f)),
   path.join(SRC, 'screens', 'FleetScreen.tsx'),
 ];
 
