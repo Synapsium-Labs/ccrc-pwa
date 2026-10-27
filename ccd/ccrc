@@ -26283,6 +26283,13 @@ _uninst_units() {
   rm -f -- "$dir/tmux-spawn-.scope.d/50-oom-continue.conf" "$dir/ccrc-tmux-server.scope.d/50-oom-continue.conf" \
     || _ccrc_die "removing the scope drop-ins under $dir failed"
   rmdir -- "$dir/tmux-spawn-.scope.d" "$dir/ccrc-tmux-server.scope.d" 2>/dev/null || :
+  # The node `_inst_node` published for the user manager (spec 2026-10-26-node-runtime-under-nvm): the link
+  # directory and the ONE environment.d fragment ccrc wrote, nothing else under ~/.config/environment.d. Before
+  # the reload below, so that reload re-reads a manager environment without them (no second reload).
+  rm -rf -- "$HOME/.local/libexec/ccrc/node-bin" \
+    || _ccrc_die "removing the published node links under $HOME/.local/libexec/ccrc failed"
+  rm -f -- "$HOME/.config/environment.d/50-ccrc-node.conf" \
+    || _ccrc_die "removing the node environment fragment $HOME/.config/environment.d/50-ccrc-node.conf failed"
   if command -v systemctl >/dev/null 2>&1; then
     systemctl --user daemon-reload \
       || echo "uninstall: units: daemon-reload failed — systemd may still list units whose files are gone until the next reload" >&2

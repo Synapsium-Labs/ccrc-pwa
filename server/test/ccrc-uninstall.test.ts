@@ -607,6 +607,26 @@ describe('ccrc uninstall: the remove set (spec §7)', () => {
     expect(existsSync(join(home, 'tmux-poison'))).toBe(false);
   });
 
+  itLinux('units: the published node goes — the link directory and ccrc\'s ONE environment.d fragment, before the single daemon-reload, and no other environment.d file (node-runtime-under-nvm task 3)', () => {
+    const home = mkTmp('ccrc-uninst-node-pub-');
+    plantInstalledBox(home);
+    const links = join(home, '.local', 'libexec', 'ccrc', 'node-bin');
+    const envd = join(home, '.config', 'environment.d');
+    mkdirSync(links, { recursive: true });
+    mkdirSync(envd, { recursive: true });
+    for (const b of ['node', 'npm', 'npx']) symlinkSync(join(home, 'nowhere', b), join(links, b));
+    writeFileSync(join(envd, '50-ccrc-node.conf'), `PATH=${links}:\${PATH}\n`);
+    writeFileSync(join(envd, '60-operators-own.conf'), 'EDITOR=vi\n');
+    const r = runVerb(home, 'uninstall');
+    expect(r.code, r.stderr).toBe(0);
+    expect(existsSync(links), 'the node link directory survived').toBe(false);
+    expect(existsSync(join(envd, '50-ccrc-node.conf')), 'the ccrc fragment survived').toBe(false);
+    expect(readFileSync(join(envd, '60-operators-own.conf'), 'utf8'), 'another environment.d file was touched').toBe('EDITOR=vi\n');
+    const calls = readFileSync(join(home, 'systemctl-calls'), 'utf8').split('\n').filter(Boolean);
+    expect(calls.filter((c) => c === '--user daemon-reload'), 'exactly one reload, after the removal').toHaveLength(1);
+    expect(calls[calls.length - 1]).toBe('--user daemon-reload');
+  });
+
   itLinux('every ENABLED instance of ccrc\'s usage template is stopped and disabled while its template is still on disk, whatever the roster says (Plan 3a Task 7; spec §13, ruling R-C9)', () => {
     const home = mkTmp('ccrc-uninst-usage-instances-');
     plantInstalledBox(home);

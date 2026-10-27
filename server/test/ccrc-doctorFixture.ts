@@ -89,6 +89,8 @@ export function installCcrc(home: string): void {
   symlinkSync(CCRC_SRC, join(ccd, 'ccrc'));
   symlinkSync(CHECKS_SRC, join(ccd, 'ccrc-doctor-checks'));
   symlinkSync(LIB_SRC, join(ccd, 'ccrc-wrapper-shape'));
+  // The node selection library `_check_node-path` and `_fix_node-path` source from beside the doctor file (task 3).
+  symlinkSync(join(REPO, 'ccd', 'ccrc-node'), join(ccd, 'ccrc-node'));
   // The jq module the transcripts check loads (ARCH-65), beside the checks file as in a shipped tree.
   symlinkSync(join(REPO, 'ccd', 'lib'), join(ccd, 'lib'));
   // The four shipped skill trees (release/rollout design §6): `_check_skills`
@@ -670,6 +672,12 @@ export function stubSystemctl(home: string): void {
     + '  if [ -f "$f" ]; then while IFS= read -r l; do echo "$l"; done < "$f"; fi\n'
     + '  exit 0\n'
     + 'fi\n'
+    // `show-environment` (node-path): answers from `fixture-mgr-env`; an ABSENT file is a box with no user manager (exit 1).
+    + 'if [ "$1" = "--user" ] && [ "$2" = "show-environment" ]; then\n'
+    + '  f="$HOME/fixture-mgr-env"; [ -f "$f" ] || exit 1\n'
+    + '  while IFS= read -r l; do echo "$l"; done < "$f"; exit 0\n'
+    + 'fi\n'
+    + 'if [ "$1" = "--user" ] && [ "$2" = "daemon-reload" ]; then exit 0; fi\n'
     + 'if [ "$1" = "--user" ] && [ "$2" = "show" ]; then\n'
     // D-5241: `-p OOMPolicy` answers from its own file, so the oom-policy check can never read a ControlGroup.
     + '  f="$HOME/fixture-cgroup-of-$3"; [ "$5" = OOMPolicy ] && f="$HOME/fixture-oompolicy-of-$3"\n'
@@ -1184,6 +1192,19 @@ export const BT_PY_ARM = ((): string => {
 
 /** A box where every check passes. Each per-check test starts here and breaks
  *  exactly ONE thing, so a red line is attributable to that one removal. */
+/** A box `_node_publish` ran on: three links into the fixture's stub bin (`node` is the version stub; `npm`/`npx` are
+ *  presence stubs), the environment.d fragment, and a user manager whose PATH carries the link directory, so `node-path`
+ *  PASSes. Linux only: on darwin the check SKIPs and nothing is published. */
+export function plantNodePublication(home: string): void {
+  const dir = join(home, '.local', 'libexec', 'ccrc', 'node-bin');
+  mkdirSync(dir, { recursive: true });
+  for (const b of ['npm', 'npx']) stub(home, b, 'exit 0');
+  for (const b of ['node', 'npm', 'npx']) symlinkSync(join(stubBin(home), b), join(dir, b));
+  mkdirSync(join(home, '.config', 'environment.d'), { recursive: true });
+  writeFileSync(join(home, '.config', 'environment.d', '50-ccrc-node.conf'), `PATH=${dir}:\${PATH}\n`);
+  writeFileSync(join(home, 'fixture-mgr-env'), `PATH=${dir}:/usr/bin\n`);
+}
+
 export function healthy(prefix: string): string {
   const home = mkTmp(prefix);
   installCcrc(home);
@@ -1301,6 +1322,7 @@ export function healthy(prefix: string): string {
   // is already the head of every contained PATH (`ghContainedEnv`), which is
   // what the `path` check measures.
   stubSystemctl(home);
+  if (process.platform !== 'darwin') plantNodePublication(home);   // darwin: `node-path` SKIPs (HEALTHY_SKIPS)
   // `ccd-cap-scopes.timer` EXISTS ONLY ON LINUX, and a healthy fixture has to
   // say so: its job is to cap tmux pane CGROUP scopes, macOS has neither, and
   // `_inst_units`' Darwin arm deliberately installs no such job. Planting it
@@ -1664,6 +1686,8 @@ export const anyVerdictFor = (out: string, name: string): string | undefined =>
  *  without this, the macOS run reds `counts BOTH lines in the summary` and
  *  `every line is exactly PASS|WARN|FAIL|SKIP` (`expected 10 to be 9`).
  *
+ *  RAISED BY ONE ON DARWIN ONLY (node-runtime-under-nvm, task 3): `node-path` SKIPs there; on Linux `healthy()` plants the publication.
+ *
  *  RAISED BY ONE AGAIN, on every platform (wave 17, D-5316): `update-sweep`
  *  SKIPs - `healthy()` writes no `~/.ccrc/update.json`, so there is no last
  *  update to read a sweep from. The `update-sweep` describe at the end of this
@@ -1678,7 +1702,7 @@ export const anyVerdictFor = (out: string, name: string): string | undefined =>
  *  (`~/.ccrc/approval-signing.key`), which only a server that started with
  *  coordination creates. Its sibling `approval-digest-mismatch` PASSes there (no
  *  refusals journal), so it moves no count. */
-export const HEALTHY_SKIPS = (process.platform === 'darwin' ? 2 : 0) + 12;
+export const HEALTHY_SKIPS = (process.platform === 'darwin' ? 3 : 0) + 12;   // darwin's third: node-path (launchd bakes PATH; nothing published)
 
 // ── the session gate: the flag, and the passphrase it needs ───────────────
 // Stage 3a, Task 9. TWO FACTS, ONE VERDICT — `CCRC_AUTH` (out of `ccrc.env`,

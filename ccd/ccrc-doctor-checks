@@ -171,7 +171,7 @@ fi
 # — and `ccrc-doctor.test.ts`'s first case fails the build if the table and the
 # functions ever disagree in either direction.
 CCRC_DOCTOR_CHECKS=(
-  node
+  node node-path   # one line, as `flock timeout`: _check_node-path follows _check_node, _fix_node-path after it
   tmux
   tmux_skew
   git
@@ -413,6 +413,122 @@ _check_node() {
       "upgrade Node to at least ${maj}.${min}.${pat} — below it a Node without node:sqlite stops the server booting, and a node:sqlite without FTS5 leaves ccrc history capturing with no search index (fts5-absent, doctor history WARN fts-unavailable)"  # D-4296 (node-floor-remedy-history-fts)
     return 1
   fi
+}
+
+# ── node-path: the node the systemd user manager's units reach BY NAME ────
+# Spec 2026-10-26-node-runtime-under-nvm. A unit runs `node` by name on the user manager's PATH, and a node that
+# lives in nvm's version directory is on the operator's shell PATH only (exit 127, a crash loop). `ccrc install`
+# and `ccrc update` publish three links and an environment.d fragment (`_node_publish`, ccd/ccrc-node — the ONE
+# writer); this check measures what that writer leaves, arm by arm, each arm its own FAIL with its own remedy.
+# The floor is read by the LIBRARY's `_node_floor` (one reader of engines.node for the install path and this check,
+# so no third reader is added; `_check_node` above keeps its own, older, node-driven one, a tested seam this check
+# does not touch), over the same package.json candidates `_check_node` looks at.
+# No user manager (no systemctl, or `show-environment` unanswered): the manager arm alone is unmeasured and the PASS
+# says so — a whole-check SKIP would drop the three arms that need no manager.
+_node_path_dir() { printf '%s' "$HOME/.local/libexec/ccrc/node-bin"; }
+_node_path_frag() { printf '%s' "$HOME/.config/environment.d/50-ccrc-node.conf"; }
+# `_node_path_floor` -> NODE_FLOOR (library); rc 1 with NODE_WHY. Sources the library when it is not loaded.
+_node_path_floor() {
+  local lib="$CCRC_HERE/ccrc-node" cand pkg=""
+  if ! declare -F _node_floor >/dev/null 2>&1; then
+    [ -f "$lib" ] || { NODE_WHY="the node selection library is missing: $lib"; return 1; }
+    # shellcheck source=ccrc-node
+    . "$lib" || { NODE_WHY="the node selection library failed to load: $lib"; return 1; }
+  fi
+  while IFS= read -r cand; do
+    [ -f "$cand" ] && { pkg="$cand"; break; }
+  done < <(_dr_pkg_candidates)
+  [ -n "$pkg" ] || { NODE_WHY="no shipped package.json to read engines.node from"; return 1; }
+  _node_floor "$pkg"
+}
+
+_check_node-path() {
+  if [ "${CCD_OS:-linux}" = darwin ]; then
+    _dr_skip node-path "launchd bakes PATH into each plist, so there is no user-manager node directory to measure on this box"
+    return 3
+  fi
+  local dir frag b ver floor
+  dir="$(_node_path_dir)"; frag="$(_node_path_frag)"
+  if [ ! -d "$dir" ]; then
+    _dr_fail node-path "the node link directory $dir does not exist — no unit ccrc installed can find node by name under a version manager" \
+      "run: ccrc doctor --fix (or ccrc update)"
+    return 1
+  fi
+  for b in node npm npx; do
+    if [ -L "$dir/$b" ] && [ ! -e "$dir/$b" ]; then
+      _dr_fail node-path "$dir/$b is a dangling link (-> $(readlink "$dir/$b" 2>/dev/null)) — the node it named was removed or upgraded away" \
+        "run: ccrc doctor --fix (re-chooses an installed node and re-publishes)"
+      return 1
+    fi
+    if [ ! -e "$dir/$b" ]; then
+      _dr_fail node-path "$dir/$b is missing — a unit running $b by name would exit 127" \
+        "run: ccrc doctor --fix (or ccrc update)"
+      return 1
+    fi
+  done
+  ver="$("$dir/node" --version 2>/dev/null)"
+  if ! _node_path_floor; then
+    _dr_fail node-path "cannot read the node floor: $NODE_WHY" \
+      "run ccrc from inside the shipped tree (~/ccrc/ccd/ccrc) or from a checkout"
+    return 1
+  fi
+  floor="$NODE_FLOOR"
+  if ! _node_ver_ok "$ver"; then
+    _dr_fail node-path "'$dir/node --version' printed \"$ver\", which is not a version" \
+      "run: ccrc doctor --fix (re-chooses an installed node and re-publishes)"
+    return 1
+  fi
+  if ! _node_ver_ge "$ver" "$floor"; then
+    _dr_fail node-path "the linked node $ver ($(readlink "$dir/node" 2>/dev/null)) is below the floor >=$floor — units would run on it" \
+      "run: ccrc doctor --fix (picks an installed node that meets the floor; with none, run an interactive 'ccrc install' to install one)"
+    return 1
+  fi
+  if [ ! -f "$frag" ]; then
+    _dr_fail node-path "the environment.d fragment $frag is missing — the user manager's PATH does not include $dir" \
+      "run: ccrc doctor --fix (or ccrc update), then re-login or restart the user manager"
+    return 1
+  fi
+  local line named=0
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in PATH=*"$dir"*) named=1 ;; esac
+  done < "$frag"
+  if [ "$named" -ne 1 ]; then
+    _dr_fail node-path "$frag has no PATH= line naming $dir — the user manager's PATH does not include it" \
+      "run: ccrc doctor --fix (re-writes the fragment)"
+    return 1
+  fi
+  local mgr="manager PATH not measured (no user manager answers; it reads the fragment when it starts)" menv="" rc=1
+  if command -v systemctl >/dev/null 2>&1; then
+    : "${XDG_RUNTIME_DIR:=/run/user/$UID}"; export XDG_RUNTIME_DIR
+    : "${DBUS_SESSION_BUS_ADDRESS:=unix:path=${XDG_RUNTIME_DIR}/bus}"; export DBUS_SESSION_BUS_ADDRESS
+    menv="$(systemctl --user show-environment 2>/dev/null)"; rc=$?
+  fi
+  if [ "$rc" -eq 0 ]; then
+    local mpath=""
+    while IFS= read -r line; do case "$line" in PATH=*) mpath="${line#PATH=}" ;; esac; done <<< "$menv"
+    case ":$mpath:" in
+      *":$dir:"*) mgr="the user manager's PATH includes it" ;;
+      *) _dr_fail node-path "the user manager's PATH ($mpath) lacks $dir although the fragment names it — the manager has not re-read environment.d" \
+           "run: systemctl --user daemon-reload (or ccrc doctor --fix), then check: systemctl --user show-environment"
+         return 1 ;;
+    esac
+  fi
+  _dr_pass node-path "$ver at $(readlink "$dir/node" 2>/dev/null) (links in $dir, fragment $frag; $mgr)"
+}
+
+# The cure for `node-path` (`ccrc doctor --fix`): choose again in NEVER-INSTALL mode, then publish — both the
+# library's (`_node_select`, `_node_publish`), never a copy. A subshell: `_node_select` puts the node on PATH.
+_fix_node-path() {
+  local out rc=0
+  out="$(
+    NODE_NO_INSTALL=1
+    _node_path_floor || { echo "FIX node-path: refused — $NODE_WHY"; exit 1; }
+    _node_select "$NODE_FLOOR" || { echo "FIX node-path: refused — $NODE_WHY; run an interactive 'ccrc install' to install one"; exit 1; }
+    _node_publish || { echo "FIX node-path: refused — $NODE_WHY"; exit 1; }
+    echo "FIX node-path: published $NODE_VERSION at $NODE_BIN_DIR"
+  )" || rc=$?
+  echo "$out"
+  return "$rc"
 }
 
 # ── the binaries a fleet box cannot work without ──────────────────────────
