@@ -522,6 +522,8 @@ jobs:
   # warm-up. Every threshold is the one it always had; nothing was loosened, the rows moved to a quiet machine (operator
   # principle 2026-10-25: no wall-clock assertion in a required check). What the required suite
   # keeps of the hook's cost is a load-independent pin: the fork count of the cheap PostToolUse arm under strace.
+  # The same principle moved one more row here: secret-mask's 2 MB slicing row (the longest gap between slices stays under
+  # BOUND / 5, threshold unchanged, after a warm-up pass); the required suite keeps a pin on the slices themselves.
   # NOT REQUIRED: operator ruling 2026-10-25. It becomes a required check on merge_group after two weeks with zero flakes
   # (counted by the flaky-job method, from the first green run of this job); until then a red here blocks nothing.
   # Same gate as the server shards: it runs when a selection or a full run exists, and not for a docs-only change.
@@ -551,6 +553,12 @@ jobs:
           CCRC_PERF: '1'
         run: |
           ./node_modules/.bin/vitest run test/session-hook.test.ts --maxWorkers=1 --no-file-parallelism -t 'p95 of 40|costs no more than 4\.2x|costs no more than 4x the cheap|spool.s increment'
+      - name: Mask slices
+        working-directory: server
+        env:
+          CCRC_PERF: '1'
+        run: |
+          ./node_modules/.bin/vitest run test/secret-mask.test.ts --maxWorkers=1 --no-file-parallelism -t 'a 2 MB TUI pane history: after a warm-up pass'
 
   # THE REQUIRED `test (server)` CHECK (design 2026-09-23 §4.2). A summary,
   # because the server tests now run as a variable number of shards and a

@@ -1236,22 +1236,55 @@ describe('the round-2 review: the drawer, the cost and every write answer (D-599
     m.close();
   });
 
-  it('a 2 MB TUI pane history is masked in slices that each stay within the bound, with the same answer as one string, a key a slice cut splits included', async () => {
+  /** The 2 MB pane history of the two slicing rows below: a key that a slice cut splits sits in its first slice. */
+  const slicingFixture = (): { m: SecretMasker; text: string } => {
     const { m } = maskerOver(() => TOKEN_1, [CMP]);
     // a key that ends the row the first slice's cut follows, wrapped onto an indented row past the cut
     const head = listing(64 * 1024 - 400);
     const keyRows = `\nkey ${'x'.repeat(300)} ${CMP.slice(0, 25)}\n    ${CMP.slice(25)} ${'y'.repeat(200)}\n`;
     const text = `${head}${keyRows}${tuiRows(2 * 1024 * 1024)}`;
     expect(text.lastIndexOf('\n', 64 * 1024 - 1)).toBe(head.length + keyRows.indexOf(`\n    ${CMP.slice(25)}`));
+    return { m, text };
+  };
+
+  // No clock here: the wall-clock bound lives in the gated row below (D-6929's principle, no wall-clock assertion in a
+  // required check). Measured: the cold first slice (JIT) and a major GC inside one early slice each outrun it, and
+  // neither is per-slice work the masker controls. What this row pins is the load-independent shape: slice size and a pause.
+  it('a 2 MB TUI pane history is masked in slices of at most 64 Ki units with a pause between every two, with the same answer as one string, a key a slice cut splits included', async () => {
+    const { m, text } = slicingFixture();
+    const events: ('pause' | number)[] = [];
+    const inner = (m as unknown as { maskWithCarry: (t: string, o?: unknown) => unknown }).maskWithCarry.bind(m);
+    (m as unknown as { maskWithCarry: (t: string, o?: unknown) => unknown }).maskWithCarry = (t: string, o?: unknown): unknown => {
+      events.push(t.length);
+      return inner(t, o);
+    };
+    const pause = async (): Promise<void> => { events.push('pause'); await new Promise((r) => setImmediate(r)); };
+    let sliced: string;
+    try {
+      sliced = await m.maskTextSliced(text, { rows: true }, pause);
+    } finally {
+      delete (m as unknown as Record<string, unknown>)['maskWithCarry'];
+    }
+    const slices = events.filter((e): e is number => e !== 'pause');
+    expect(slices.length).toBeGreaterThan(30);
+    expect(Math.max(...slices)).toBeLessThanOrEqual(64 * 1024);
+    // slice, pause, slice, ..., slice: never two slices or two pauses adjacent
+    expect(events.map((e) => (e === 'pause' ? 'p' : 's')).join('')).toBe(Array.from({ length: slices.length * 2 - 1 }, (_, i) => (i % 2 === 0 ? 's' : 'p')).join(''));
+    expect(leaksNone(sliced, CMP)).toBe(true);
+    expect(sliced).toBe(m.maskText(text, { rows: true }));
+    m.close();
+  });
+
+  it.runIf(process.env['CCRC_PERF'] === '1')('a 2 MB TUI pane history: after a warm-up pass, no slice holds the event loop past BOUND / 5 (perf job only, D-6929)', async () => {
+    const { m, text } = slicingFixture();
+    await m.maskTextSliced(text, { rows: true }); // one discarded warm-up pass
     const gaps: number[] = [];
     let last = performance.now();
     const pause = async (): Promise<void> => { gaps.push(performance.now() - last); await new Promise((r) => setImmediate(r)); last = performance.now(); };
-    const sliced = await m.maskTextSliced(text, { rows: true }, pause);
+    await m.maskTextSliced(text, { rows: true }, pause);
     gaps.push(performance.now() - last);
     expect(gaps.length).toBeGreaterThan(30);
     expect(Math.max(...gaps)).toBeLessThan(BOUND / 5);
-    expect(leaksNone(sliced, CMP)).toBe(true);
-    expect(sliced).toBe(m.maskText(text, { rows: true }));
     m.close();
   });
 
