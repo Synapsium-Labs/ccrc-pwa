@@ -9198,25 +9198,33 @@ export class CoordStore {
       setBy: INTENT_SET_BY,
     };
     try {
-      return tx(this.db, () => {
-        const dbMax = (this.db.prepare('SELECT epoch AS e FROM update_epoch WHERE id = 1')
-          .get() as { e: number }).e;
-        let fileMax: number | null;
-        try { fileMax = log.maxEpoch(); } catch (err) { throw new IntentJournalFault('journal-unreadable', err); }
-        const epoch = (fileMax === null ? dbMax : Math.max(dbMax, fileMax)) + 1;
-        try {
-          log.append({ epoch, scope, channel, pinnedTag: row.pinnedTag, auto: row.auto,
-                       notify: row.notify, setBy: row.setBy, at: now });
-        } catch (err) { throw new IntentJournalFault('journal-unwritable', err); }
-        this.db.prepare(
-          'INSERT INTO update_intent (scope, channel, pinnedTag, auto, notify, setAt, setBy) ' +
-          'VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT (scope) DO UPDATE SET channel = excluded.channel, ' +
-          'pinnedTag = excluded.pinnedTag, auto = excluded.auto, notify = excluded.notify, ' +
-          'setAt = excluded.setAt, setBy = excluded.setBy',
-        ).run(scope, channel, row.pinnedTag, row.auto, row.notify, now, row.setBy);
-        this.db.prepare('UPDATE update_epoch SET epoch = ?, issuedAt = ? WHERE id = 1').run(epoch, now);
-        return { ok: true as const, row, epoch };
-      });
+      // D-7058: the floor is `journalFloor`, the journal-first order `appendThenApply`; the journal faults keep this
+      // method's own mapping (`IntentJournalFault`, answered below), and any other error propagates as itself.
+      return tx(this.db, () => appendThenApply<number, SetIntentResult, never>({
+        decide: () => {
+          const dbMax = (this.db.prepare('SELECT epoch AS e FROM update_epoch WHERE id = 1')
+            .get() as { e: number }).e;
+          let fileMax: number | null;
+          try { fileMax = log.maxEpoch(); } catch (err) { throw new IntentJournalFault('journal-unreadable', err); }
+          return { go: journalFloor(dbMax, fileMax) + 1 };
+        },
+        append: (epoch) => {
+          try {
+            log.append({ epoch, scope, channel, pinnedTag: row.pinnedTag, auto: row.auto,
+                         notify: row.notify, setBy: row.setBy, at: now });
+          } catch (err) { throw new IntentJournalFault('journal-unwritable', err); }
+        },
+        apply: (epoch) => {
+          this.db.prepare(
+            'INSERT INTO update_intent (scope, channel, pinnedTag, auto, notify, setAt, setBy) ' +
+            'VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT (scope) DO UPDATE SET channel = excluded.channel, ' +
+            'pinnedTag = excluded.pinnedTag, auto = excluded.auto, notify = excluded.notify, ' +
+            'setAt = excluded.setAt, setBy = excluded.setBy',
+          ).run(scope, channel, row.pinnedTag, row.auto, row.notify, now, row.setBy);
+          this.db.prepare('UPDATE update_epoch SET epoch = ?, issuedAt = ? WHERE id = 1').run(epoch, now);
+          return { ok: true as const, row, epoch };
+        },
+      }));
     } catch (err) {
       if (!(err instanceof IntentJournalFault)) throw err;
       return err.why === 'journal-unreadable'
