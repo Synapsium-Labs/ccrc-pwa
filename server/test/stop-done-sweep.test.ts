@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { heldKindOf, stopDonePass, type StopDoneMemory, type StopDoneSweepDeps } from '../src/stopDoneSweep.js';
+import { heldKindOf, stopDonePass, type StopDoneMemory, type StopDoneSweepDeps } from '../src/sleepLane.js';
 import { STOP_DONE_DISABLED_MARKER, STOP_DONE_GRACE_MS, STOP_DONE_PER_PASS, STOP_DONE_RETRY_MS } from '../src/stopDone.js';
 import { PRESENCE_OPEN_TTL_MS, PRESENCE_TTL_MS, type FleetSession } from '../../shared/api.js';
 import type { SessionRecord } from '../src/registry.js';
