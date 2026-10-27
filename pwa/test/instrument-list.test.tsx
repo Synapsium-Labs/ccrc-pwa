@@ -60,6 +60,7 @@ const { initSkin, setSkin } = await import('../src/lib/skin');
 const { useFleetStore } = await import('../src/stores/fleet');
 const { api } = await import('../src/lib/api');
 const { STATUS_GROUPS } = await import('../src/fleet/statusGroups');
+const { resetAcks } = await import('../src/lib/seen');
 const { GROUP_MODE_KEY } = await import('../src/skins/instrument/FleetTable');
 
 const SKIN_DIR = path.join(import.meta.dirname, '..', 'src', 'skins', 'instrument');
@@ -232,6 +233,79 @@ describe('status mode', () => {
     // Project mode is the shared card: the child sits under its coordinator (a nest, or the rollup's workers line).
     const nested = table().querySelector('.proj-nest[data-depth="1"]') ?? table().querySelector('.proj-children-toggle');
     expect(nested).not.toBeNull();
+  });
+});
+
+// T3a (D-6331): the counts once per screen, and no door lost. In status mode the group heads ARE the counts, so the
+// screen draws no chips above them; each badged head says "N new" and offers Mark all seen, a SIBLING of its fold row
+// (a button inside a button is not valid), through the same `markSeen.ts` the chips use. In project mode the cards carry
+// no bucket counts, so the table draws the chips itself, above them.
+describe('the counts once per screen', () => {
+  const NOW = Date.now();
+  const UNSEEN: FleetSession[] = [
+    at('project-a-asks', 'attention', { dialogPending: true, hookState: 'waiting', bucketSince: NOW }),
+    at('project-a-done-1', 'done', { bucketSince: NOW }),
+    at('project-a-done-2', 'done', { bucketSince: NOW }),
+    at('project-a-done-3', 'done', { bucketSince: null }),
+    at(COORD, 'working', { role: 'coordinator', name: 'the coordinator' }),
+    at('project-a-gone', 'dead', { bucketSince: NOW }),
+  ];
+  const words = (el: HTMLElement): string => (el.textContent ?? '').replace(/\s+/g, ' ').trim();
+  beforeEach(() => { resetAcks(); });
+
+  it("status mode renders no bucket chips; each badged group head reads 'N new' and offers Mark all seen", () => {
+    mount(UNSEEN, []);
+    expect(table().querySelector('.bucket-bar')).toBeNull();
+    expect(table().querySelector('.bucket-head')).toBeNull();
+
+    const done = groupOf('done');
+    const doneHead = head(done);
+    expect(words(doneHead)).toMatch(/Done · 3 · 2 new$/);
+    expect(within(doneHead).getByLabelText('2 new')).toHaveTextContent('2 new');
+    expect(words(head(groupOf('attention')))).toMatch(/Needs you · 1 · 1 new/);
+    // A group nothing is unseen in carries no badge and no door; Exited is never badged.
+    expect(within(head(groupOf('working'))).queryByLabelText(/new$/)).toBeNull();
+    expect(within(groupOf('working')).queryByRole('button', { name: /^Mark all/ })).toBeNull();
+    expect(within(groupOf('dead')).queryByRole('button', { name: /^Mark all/ })).toBeNull();
+
+    // The door is a SIBLING of the fold row, named for its group, never a button inside the fold row's button.
+    const door = within(done).getByRole('button', { name: 'Mark all Done seen' });
+    expect(doneHead.contains(door)).toBe(false);
+    expect(door.closest('.ins-group-head')).toBeNull();
+    expect(done.contains(door)).toBe(true);
+    expect(doneHead.querySelector('button')).toBeNull();
+
+    fireEvent.click(door);
+    // Every row of THAT group is acked; the other group's badge stays.
+    expect(within(doneHead).queryByLabelText(/new$/)).toBeNull();
+    expect(within(done).queryByRole('button', { name: /^Mark all/ })).toBeNull();
+    expect(within(head(groupOf('attention'))).getByLabelText('1 new')).toBeInTheDocument();
+    // Focus moves to the group's own fold row, and a region outside the control that unmounted says what happened.
+    expect(document.activeElement).toBe(doneHead);
+    expect(within(table()).getByRole('status')).toHaveTextContent('Done: 2 marked seen');
+    // The held-open Needs you head still folds nothing and keeps its door.
+    expect(within(groupOf('attention')).getByRole('button', { name: 'Mark all Needs you seen' })).toBeInTheDocument();
+  });
+
+  it('project mode renders the bucket chips', () => {
+    mount(UNSEEN, []);
+    pick('Project');
+    const bar = table().querySelector<HTMLElement>('.bucket-bar')!;
+    expect(bar).not.toBeNull();
+    // Above the cards, inside the table, one chip per non-empty bucket in the shared words.
+    expect(within(bar).getByRole('group', { name: 'Needs you' })).toBeInTheDocument();
+    expect(within(bar).getByRole('group', { name: 'Exited' })).toBeInTheDocument();
+    expect(bar.compareDocumentPosition(table().querySelector('.fleet-list, .proj-card, .proj-nest')!)
+      & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // The door is the chips' own and works here: it acks that bucket, announces it and keeps focus on the chip's label.
+    const chip = within(bar).getByRole('group', { name: 'Needs you' });
+    fireEvent.click(within(chip).getByRole('button', { name: 'Mark all Needs you seen' }));
+    expect(within(chip).queryByLabelText(/new$/)).toBeNull();
+    expect(document.activeElement).toBe(chip.querySelector('.bucket-head-label'));
+    expect(within(table()).getByRole('status')).toHaveTextContent('Needs you: 1 marked seen');
+    // Back in status mode the chips are gone again.
+    pick('Status');
+    expect(table().querySelector('.bucket-bar')).toBeNull();
   });
 });
 
