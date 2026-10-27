@@ -231,6 +231,93 @@ describe('auth-dead, the spawn\'s clear (`_authdead_clear_on_spawn`; D-3524)', (
   });
 });
 
+describe('auth-dead, the write primitive (`_authdead_mark`, `_authdead_clear`, `_authdead_sweep_staged`; D-7049)', () => {
+  // C5b's direct rows: the three functions sourced from `ccd/ccd` in a fixture HOME. Each is silent (its callers keep
+  // their own words), so every snippet folds stderr into the answer and the answer is the rc alone.
+  let h: CcdHarness;
+  let home: string;
+  const reg = (): string => path.join(home, '.cc-sessions');
+  const marker = (w: string): string => path.join(reg(), `${w}-authdead`);
+  const temps = (): string[] => fs.readdirSync(reg()).filter((n) => n.includes('-authdead.tmp.')).sort();
+  const call = (snippet: string, stub = ''): string => h.sh(`${stub} { ${snippet}; } 2>&1; echo "rc=$?"`);
+  beforeEach(() => { h = makeCcdHarness('ccrc-markers-primitive-'); home = h.home; });
+  afterEach(() => { h.cleanup(); });
+
+  it('rc 0: writes "<epoch> <reason>" with the epoch argument used verbatim, and leaves no temp', () => {
+    expect(call('_authdead_mark lane-a rescue-401 1757203200')).toBe('rc=0');
+    expect(fs.readFileSync(marker('lane-a'), 'utf8')).toBe('1757203200 rescue-401');
+    expect(temps()).toEqual([]);
+  });
+
+  it('rc 0 with no epoch argument: the clock\'s second at the call', () => {
+    const before = nowS();
+    expect(call('_authdead_mark lane-a auth-401')).toBe('rc=0');
+    const body = fs.readFileSync(marker('lane-a'), 'utf8');
+    expect(body).toMatch(/^\d+ auth-401$/);
+    const at = Number(body.split(' ')[0]);
+    expect(at >= before && at <= nowS() + 1, body).toBe(true);
+  });
+
+  it('stages the marker in `$REG/<lane>-authdead.tmp.XXXXXX` and renames it in with `mv -f`', () => {
+    const stub = 'mv() { printf "%s|%s\\n" "$*" "$(cat "$2" 2>/dev/null)" >> "$HOME/mv-calls"; command mv "$@"; };';
+    expect(call('_authdead_mark lane-a auth-401 1757203200', stub)).toBe('rc=0');
+    const calls = fs.readFileSync(path.join(home, 'mv-calls'), 'utf8').trim().split('\n');
+    expect(calls).toHaveLength(1);
+    const [argv, staged] = calls[0]!.split('|');
+    const m = /^-f (\S+) (\S+)$/.exec(argv!);
+    expect(m, argv).not.toBeNull();
+    expect(path.dirname(m![1]!)).toBe(reg());
+    expect(path.basename(m![1]!)).toMatch(/^lane-a-authdead\.tmp\.[A-Za-z0-9]{6}$/);
+    expect(m![2]).toBe(marker('lane-a'));
+    expect(staged, 'the temp held the whole marker before the rename').toBe('1757203200 auth-401');
+  });
+
+  it('rc 1: a temp that cannot be made writes nothing, silently', () => {
+    expect(call('_authdead_mark lane-a auth-401 1757203200', 'mktemp() { return 1; };')).toBe('rc=1');
+    expect(fs.existsSync(marker('lane-a'))).toBe(false);
+    expect(temps()).toEqual([]);
+  });
+
+  it.each([
+    ['a failed rename', 'mv() { return 1; };'],
+    ['a failed write', 'printf() { return 1; };'],
+  ])('rc 2: no temp left after a failed write (%s), nothing written, silently', (_what, stub) => {
+    fs.writeFileSync(marker('lane-b'), '1757203200 auth-401');
+    expect(call('_authdead_mark lane-a auth-401 1757203200', stub)).toBe('rc=2');
+    expect(fs.existsSync(marker('lane-a'))).toBe(false);
+    expect(temps()).toEqual([]);
+    expect(fs.readFileSync(marker('lane-b'), 'utf8'), 'another lane\'s marker untouched').toBe('1757203200 auth-401');
+  });
+
+  it('`_authdead_clear` removes the lane\'s marker (a symlink, never its target), rc 0 when absent, nothing else', () => {
+    fs.writeFileSync(marker('lane-a'), '1757203200 auth-401');
+    fs.writeFileSync(marker('lane-b'), '1757203200 auth-401');
+    fs.writeFileSync(path.join(reg(), 'lane-a-authdead.tmp.AbC123'), '1757203200 auth');
+    expect(call('_authdead_clear lane-a')).toBe('rc=0');
+    expect(fs.existsSync(marker('lane-a'))).toBe(false);
+    expect(fs.existsSync(marker('lane-b'))).toBe(true);
+    expect(temps()).toEqual(['lane-a-authdead.tmp.AbC123']);
+    expect(call('_authdead_clear lane-a')).toBe('rc=0');
+    const target = path.join(home, 'outside-the-registry');
+    fs.writeFileSync(target, '1757203200 auth-401');
+    fs.symlinkSync(target, marker('lane-a'));
+    expect(call('_authdead_clear lane-a')).toBe('rc=0');
+    expect(fs.readdirSync(reg())).not.toContain('lane-a-authdead');
+    expect(fs.readFileSync(target, 'utf8')).toBe('1757203200 auth-401');
+  });
+
+  it('`_authdead_sweep_staged` removes every `*-authdead.tmp.*` and nothing else, rc 0 with none to sweep', () => {
+    for (const n of ['lane-a-authdead.tmp.AbC123', 'lane-b-authdead.tmp.XyZ789']) fs.writeFileSync(path.join(reg(), n), '1757203200 auth');
+    fs.writeFileSync(path.join(reg(), 'lane-a-authdead.tmpx'), 'not a staged temp');
+    fs.writeFileSync(marker('lane-a'), '1757203200 auth-401');
+    expect(call('_authdead_sweep_staged')).toBe('rc=0');
+    expect(temps()).toEqual([]);
+    expect(fs.existsSync(path.join(reg(), 'lane-a-authdead.tmpx'))).toBe(true);
+    expect(fs.readFileSync(marker('lane-a'), 'utf8')).toBe('1757203200 auth-401');
+    expect(call('_authdead_sweep_staged')).toBe('rc=0');
+  });
+});
+
 describe('auth-dead, the expiry (`_authdead_expired`): pinned by `ccd-authdead.test.ts`, cited here by name', () => {
   const CITED = [
     'a credential changed after the verdict: not dead, the marker is removed, and nothing is printed on either stream',
