@@ -5,19 +5,20 @@
 // D-6325: this is the ONE renderer of Claude's own question. `askSource` hands it the questions from the hook's envelope
 // (`from: 'hook'`) or, once that has aged out, the transcript's copy (`from: 'transcript'`), which carries an option's
 // `preview` too; a question the app cannot read says so and offers the terminal (`DialogSheet`'s `ask-unreadable`), and
-// the scraped sheet that used to take over is gone. It draws no drawer of its own: `DialogSheet` renders `AskSheet`
-// (`AskParts.tsx`) once for every kind of surface, with the header and the title worked out there (`shownQuestion`), and
-// this is what goes inside it. The review screen is rendered by `DialogSheet` for every source of copy, so it is not here.
+// the scraped sheet that used to take over is gone. It draws no drawer of its own: `DialogSheet` renders `AskSurface`
+// (`AskSurface.tsx`: the Sheet below 900, an inline card at the desk, D-6326) once for every kind of surface, with the
+// header and the title worked out there (`shownQuestion`), and this is what goes inside it. The review screen is rendered by `DialogSheet` for every source of copy, so it is not here.
 //
 // `TerminalCta` is written once, here, and `DialogSheet` imports it for its `ask-unreadable` and `terminal-only` surfaces:
 // copy written twice drifts in a way no type catches.
 //
 // The classes stay `dlg-*`: chat.css grounds them and these are their only consumers. The shape moves, the ground stays.
-import { Fragment } from 'react';
+import { Fragment, useContext } from 'react';
 import type { ReactNode } from 'react';
 import type { Dialog, DialogTabTarget } from '../../../shared/api';
 import { parseAskTabs } from '../../../shared/ask-menu';
 import { Button, OptionRow } from '@ccrc/ui';
+import { AskContainer } from './AskSurface';
 // C1's correspondence check lives in `askLive.ts` (D-5089), beside the rules that choose which question is live:
 // `liveQuestion` applies it to EVERY question of the envelope, and the title only breaks a tie.
 import { chatRow, freeTextSlot, headerTab, optionCopy, tabChips, type AskQuestions, type ShownQuestion } from './askLive';
@@ -27,10 +28,11 @@ import {
   type Picks, type Words,
 } from './AskParts';
 import { keyTabs, multiKeys, questionKeys, rowKey, type KeyScreen } from './askKeys';
-import { useAskKeys } from './useAskKeys';
+import { useAskKeys, type AskEngagement } from './useAskKeys';
 import './chat.css';
 
-/** The way out of a question this app cannot answer: open the terminal, or not now.
+/** The way out of a question this app cannot answer: open the terminal, or "Not now". "Not now" is the SHEET's only: the inline card
+ *  drops it through `AskContainer` (it covers nothing, so it has nothing to put off), and "Open terminal to answer" stays.
  *
  *  THREE CALL SITES, and none is a near-copy: this content's own dead end (a question that does not match the pane yet,
  *  an approval it cannot send), and `DialogSheet`'s `ask-unreadable` and `terminal-only` surfaces. "Open terminal to
@@ -38,14 +40,18 @@ import './chat.css';
  *  callers': this content gates the whole of its handler on a send in flight (see `openTerminal` below), while the
  *  controller's two surfaces hide the sheet and go, and those are different things on purpose. */
 export function TerminalCta({ onOpen, onLater }: { onOpen: () => void; onLater: () => void }): ReactNode {
+  // D-6326: the inline card covers nothing, so it has nothing to put off: "Not now" is the sheet's dismissal alone.
+  const inline = useContext(AskContainer) === 'inline';
   return (
     <div className="dlg-actions">
       <Button variant="primary" onClick={onOpen}>
         Open terminal to answer
       </Button>
-      <button type="button" className="dlg-later" onClick={onLater}>
-        Not now
-      </button>
+      {!inline && (
+        <button type="button" className="dlg-later" onClick={onLater}>
+          Not now
+        </button>
+      )}
     </div>
   );
 }
@@ -84,6 +90,7 @@ export function EnvelopeSheet({
   tabbing = false,
   picksHeld = false,
   onTab,
+  engagement,
 }: {
   /** What `askSource` says to show: a permission request, or Claude's own questions (D-6325). */
   ask: { approval: { tool: string; summary: string } } | AskQuestions;
@@ -123,6 +130,9 @@ export function EnvelopeSheet({
   picksHeld?: boolean;
   /** Move the pane to another tab: `prev`/`next`, `submit`, or question tab k with `from` the tab showing (1-based). */
   onTab?: (to: DialogTabTarget, from?: number) => void;
+  /** The ask's one keyboard engagement (R64), held by the controller and shared with its own keys (the review's, a menu's),
+   *  so the keys stay engaged from this question to the review and back. Absent, the inline focus rule never moves focus. */
+  engagement?: AskEngagement;
 }): ReactNode {
   // Every send disables the same buttons and gates the dismissal: an option's answer, Deny (held by the controller, which
   // sends it), an own-words send and a multiSelect commit, and a tab move. The open sheet is the only honest record that
@@ -236,6 +246,7 @@ export function EnvelopeSheet({
     onTab: (to) => onTab?.(to),
     // The free-text row's digit chooses `Other` (D-6325, R5): the field opens under it.
     onWords: () => words.onOpen(questions === null ? '' : questions.questions[shown]!.question),
+    engagement,
   });
   // D-6325, R3: the chips carry Claude's own headers, the pane's tab row only the count and the marks; no strip unless
   // the pane paints one tab per question (a transcript copy of one question therefore draws one only on a one-tab row).

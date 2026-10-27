@@ -211,6 +211,14 @@ export const ASK_WORD: Record<AskState, string> = {
   unanswered: 'unanswered',
   answered: 'answered',
 };
+/** The `awaiting` word when the question is on screen right below the transcript (the desk's inline ask surface, D-6326):
+ *  the card says where to look, and `ASK_GO_TO_QUESTION` beside it raises what is already up (there is no `Answer`). The
+ *  same casing as `ASK_WORD`'s members, which the state row draws as they are. */
+export const ASK_WORD_BELOW = 'waiting for you, below';
+/** The control beside `ASK_WORD_BELOW` (R64 F5): it raises the inline card that is already up, scrolling it into view and
+ *  focusing its first option, through the same `onAnswer` that `Answer` calls on a phone. Its word is fixed, whatever the
+ *  card is waiting on, because it takes the reader to the question and does not say what the question will ask for. */
+export const ASK_GO_TO_QUESTION = 'Go to question';
 export const ASK_GLYPH: Record<AskState, string> = {
   awaiting: '❯',
   unanswered: '·',
@@ -247,6 +255,7 @@ function AskCard({
   questions,
   result,
   askPending = false,
+  askBelow = false,
   answerLabel = 'Answer',
   onAnswer,
 }: {
@@ -256,15 +265,21 @@ function AskCard({
    *  derivation source. Both shapes are hosted by the same sheet, so both
    *  make this card answerable. */
   askPending?: boolean;
+  /** D-6326: the answer surface is mounted INLINE, right below the transcript (the desk). The awaiting card then says so
+   *  (`ASK_WORD_BELOW`) and offers `ASK_GO_TO_QUESTION` instead of Answer (R64 F5): there is no sheet to raise, and the
+   *  question stays where it is, so the control takes the reader to it. A phone, or a desk with no inline card
+   *  mounted, leaves it false and keeps Answer. */
+  askBelow?: boolean;
   /** The control's word: `Answer`, or what the sheet it raises is waiting on (`Submit answers` while the pane is on an
    *  ask's review screen). It still only raises the sheet. */
   answerLabel?: string;
-  /** Raise the answer sheet. NOT an answer — see the state row below. */
+  /** Raise the answer sheet, or, with `askBelow`, the inline card. NOT an answer — see the state row below. */
   onAnswer?: () => void;
 }): ReactNode {
   const answers =
     result !== undefined && !result.isError ? askAnswers(result.text, questions) : null;
   const state = askState(result, askPending);
+  const below = state === 'awaiting' && askBelow;
   return (
     <div className="tool-ask">
       {questions.map((question, i) => (
@@ -282,7 +297,7 @@ function AskCard({
       {state !== 'answered' && (
         <p className={`ask-state ${ASK_STATE_CLASS[state]}`}>
           <span className="ask-glyph" aria-hidden="true">{ASK_GLYPH[state]}</span>
-          <span className="ask-word">{ASK_WORD[state]}</span>
+          <span className="ask-word">{below ? ASK_WORD_BELOW : ASK_WORD[state]}</span>
           {/* ONE CONTROL, ONE MEANING: `Answer` does not answer. It raises
               `EnvelopeSheet` — the one hardened answer path (`inject/ask.ts`'s
               `askKey` correspondence, `send.ts`'s settle-before-submit) — and
@@ -291,17 +306,20 @@ function AskCard({
               is virtualized, so a row owning an in-flight answer could be
               unmounted mid-send by an ordinary scroll.
 
-              Rendered only when there is a sheet to raise. A button whose
+              Rendered only when there is something to raise. A button whose
               handler is absent would do nothing at all, which is worse than
-              no button. */}
+              no button. With the question mounted inline (`below`) the same
+              button, on the same handler, reads `ASK_GO_TO_QUESTION`: the
+              raise then scrolls that card into view and focuses its first
+              option (`AskSurface`'s `InlineCard`), and still sends nothing. */}
           {state === 'awaiting' && onAnswer !== undefined && (
             <button
               type="button"
               className={`ask-answer ${FOCUS_RING}`}
-              title="Open the answer sheet"
+              title={below ? 'Go to the question below' : 'Open the answer sheet'}
               onClick={onAnswer}
             >
-              {answerLabel}
+              {below ? ASK_GO_TO_QUESTION : answerLabel}
             </button>
           )}
         </p>
@@ -340,19 +358,21 @@ export function ToolCard({
   use,
   result,
   askPending,
+  askBelow,
   answerLabel,
   onAnswer,
 }: {
   use: ToolUseEvent;
   result?: ToolResultEvent;
   askPending?: boolean;
+  askBelow?: boolean;
   answerLabel?: string;
   onAnswer?: () => void;
 }): ReactNode {
   const questions = askOf(use);
   if (questions !== null) {
     return (
-      <AskCard questions={questions} result={result} askPending={askPending} answerLabel={answerLabel} onAnswer={onAnswer} />
+      <AskCard questions={questions} result={result} askPending={askPending} askBelow={askBelow} answerLabel={answerLabel} onAnswer={onAnswer} />
     );
   }
   return <GenericToolCard use={use} result={result} />;

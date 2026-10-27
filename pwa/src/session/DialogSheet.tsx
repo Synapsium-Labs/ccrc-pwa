@@ -139,8 +139,10 @@
 // D-6325 (plan docs/superpowers/plans/2026-10-22-desktop-polish.md, Task T1b): every surface below is chosen by ONE pure
 // function, `askSource` (`askLive.ts`), and renders its answer; no string the pane painted reaches an
 // AskUserQuestion. This file stays the one controller and the one sender (answers, Deny, own words, picks, tab moves),
-// and it renders ONE container (`AskSheet`, `AskParts.tsx`) for every kind of surface, so moving between them never
-// remounts the drawer and T1c swaps the container at this one site. What goes inside it is now: nothing (no container);
+// and it renders ONE container (`AskSurface`, `AskSurface.tsx`) for every kind of surface, so moving between them never
+// remounts it. D-6326 (T1c): the container is chosen by width inside `AskSurface` (the Sheet below 900, an inline card
+// in the session pane at the desk), and the answer requests are unchanged, byte-identical to T1b's: this file is still
+// the one sender, and a card instead of a drawer changes where the rows are drawn and nothing about what a tap sends. What goes inside it is now: nothing (no container);
 // the approval and the structured question (`EnvelopeSheet`'s content, the hook's envelope or the transcript's copy of
 // the question); the review (one render here for every source of copy); a question this screen cannot read (it says so
 // and offers the terminal); a menu that is no ask (its parsed rows, `Claude needs a choice`); and an unparsed pane (the
@@ -153,10 +155,11 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { backgroundOnlyRefusal, type Dialog, type DialogTabTarget, type HookAsk } from '../../../shared/api';
 import { parseAskTabs } from '../../../shared/ask-menu';
-import { OptionRow, toast } from '@ccrc/ui';
+import { OptionRow, toast, useDesk } from '@ccrc/ui';
 import { EnvelopeSheet, TerminalCta } from './EnvelopeSheet';
+import { AskSurface } from './AskSurface';
 import {
-  AskHeader, AskReview, AskSheet, AskTabs, KICKER_CHOICE, KICKER_WAITING, REVIEW_TITLE, keyed, lit, picksBusy,
+  AskHeader, AskReview, AskTabs, KICKER_CHOICE, KICKER_WAITING, REVIEW_TITLE, keyed, lit, picksBusy,
   wordsBusy, type Asker, type PickCall, type Picks, type Words, type WordsCall,
 } from './AskParts';
 import {
@@ -164,7 +167,7 @@ import {
 } from './askLive';
 import { keyTabs, questionKeys, reviewKeys, rowKey, type KeyScreen } from './askKeys';
 import { dialogMultiRefusal, dialogRefusal, dialogTabRefusal, dialogTextRefusal } from './askWords';
-import { useAskKeys } from './useAskKeys';
+import { useAskEngagement, useAskKeys } from './useAskKeys';
 import { api, ApiError, failedTo } from '../lib/api';
 import { backgroundTasksClause } from '../lib/refusalWords';
 import { getSessionStore, type SessionStore } from '../stores/session';
@@ -210,14 +213,17 @@ export interface DialogSheetProps {
   /** D-6325, R4: who asks (the session, its project, and the held line while a coordinator holds the question), for the
    *  header every surface draws. Null or absent: no who line. */
   asker?: Asker | null;
+  /** D-6326: told whether the inline ask card is mounted (the desk), so the session screen can point the transcript at it,
+   *  stand its Escape interrupt down and hold the composer's Send. A phone's sheet never reports. */
+  onInline?: (mounted: boolean) => void;
 }
 
 
-export function DialogSheet({ id, store, onOpenTerminal, raise, asker = null }: DialogSheetProps): ReactNode {
+export function DialogSheet({ id, store, onOpenTerminal, raise, asker = null, onInline }: DialogSheetProps): ReactNode {
   const useStore = store ?? getSessionStore(id);
   const storeDialog = useStore((s) => s.dialog);
   /** Decision `ask-answer-returns-next-screen`: an answer route's `next`, into the store (`applyAnswered`). */
-  // D-6325 (review 844 I1): not while the connection has not spoken. The store's `dialog` is null in the gap, which
+  // D-6325 (fix round 2's own review, I1): not while the connection has not spoken. The store's `dialog` is null in the gap, which
   // `applyAnswered` reads as "nothing newer is held" and would write the reply's `next` into it: the old connection's
   // evidence, which a new stream that frames no menu would then be decided from. The new stream frames the current menu itself.
   const applyAnswered = (answeredId: string, next: Dialog | null): void => {
@@ -272,6 +278,8 @@ export function DialogSheet({ id, store, onOpenTerminal, raise, asker = null }: 
   // D-6325, R5: the question whose `Other` row the operator chose, so its field is open. The text and call above keep it
   // open too (`OwnWords`); this is the choice itself, before anything is typed. Ended with the send that landed.
   const [otherFor, setOtherFor] = useState<string | null>(null);
+  // R102: counts the deliberate opens of the Other field, so the inline card focuses it on one and on nothing else (`OwnWords`).
+  const [focusNonce, setFocusNonce] = useState(0);
   // D-5091: a multiSelect question's set and its commit, one value for the same reason (see `PickCall`).
   const [pick, setPick] = useState(NO_PICK);
   // Decision `ask-dialog-tab-route`: a tab move (the arrow keys, or a tab-strip chip) is under way. It is a send like
@@ -318,7 +326,9 @@ export function DialogSheet({ id, store, onOpenTerminal, raise, asker = null }: 
   // The gap (D-6325, review 843 F3): the connection is not live, so the held surface is read-only in what it SHOWS as well
   // as at the send. Every control that sends is disabled by this flag, which is NOT part of `locked`: `locked` also
   // refuses the dismissal, and the gap must still hide. The Other field and its row stay as they are (the operator's own
-  // text, its focus and a phone keyboard survive), and so does a pick-several box (a local tick, not a send).
+  // text, its focus and a phone keyboard survive), and so does a pick-several box (a local tick, not a send). After a send
+  // (R106), a click in the gap does not lift the fence: the Other field may take focus there, but its keys stay fenced until a
+  // new click or Go to question after the reconnect.
   const gap = !live;
   const sending = useRef(false);
   useLayoutEffect(() => {
@@ -331,6 +341,10 @@ export function DialogSheet({ id, store, onOpenTerminal, raise, asker = null }: 
     if (closed) return false;
     if (sending.current) return false;
     sending.current = true;
+    // R102: a send THIS client initiates at the desk ends the keyboard's engagement here, in the same event and before any
+    // await. Refused claims returned above and released nothing; a multiSelect `toggle` is no claim. `desk` and `open` are
+    // declared below: `claim` only ever runs after a render.
+    if (desk && open) engagement.release();
     return true;
   };
 
@@ -361,11 +375,64 @@ export function DialogSheet({ id, store, onOpenTerminal, raise, asker = null }: 
   const hooked = envelope !== null
     && (source.kind === 'approval' || (source.kind === 'structured' && source.from === 'hook') || source.kind === 'review');
   const askKey = hooked ? JSON.stringify(envelope) : null;
+  // D-6326, R64, R69: the ask's IDENTITY for the keyboard's engagement (`useAskEngagement`) is a LIFECYCLE GENERATION joined
+  // to what the surface can say of the ask: `${askEpoch}:${…}`, or null when there is nothing to engage with (a closed hold,
+  // or neither an envelope nor a menu).
+  //  - `askEpoch` is the store's count of the clears that end an ask (see its doc in `stores/session.ts`), raised one frame
+  //    at a time in the reducer: an `ask_cleared` that clears an envelope the store holds, and a `dialog_cleared` while the
+  //    store holds none. So a clear is seen even when it, a byte-identical ask and a screen change arrive in ONE batch,
+  //    which the content alone could not tell from one ask. A repeated `ask` or `dialog` frame, a `rotated`, a transient
+  //    `dialog_cleared` under an envelope the store holds and the socket dropping move nothing in it (at the desk the
+  //    flap still changes the screen joined below, R115). A reconnect keeps the
+  //    identity unless the store holds an envelope that the new connection's first `ask_cleared` clears. That frame means
+  //    the server stated no envelope at that moment: the ask ended during the drop, OR the server flapped (a failed
+  //    hook-state read, or an aged-envelope keep decision restarting). Either releases the keys, the safe direction. If the
+  //    store holds no envelope, that first `ask_cleared` is only the connection speaking, and counts nothing.
+  //  - A HOOKED ask adds its envelope (`askKey`: the same for every question and the review; at the desk the screen is joined
+  //    to it, below) and a different envelope is a different ask. Only the inline engagement reads this identity: the phone's
+  //    Sheet keeps its own per-hook engagement (`useAskKeys`), which never reads it.
+  //  - An ask-backed surface with no envelope (the transcript's copy of a question, its review, an unreadable ask: `askLike`,
+  //    decided from `source`, the held source when the surface is held) adds the word `ask`: the ask frames this controller
+  //    reads carry no per-ask id, and the pane dialog's id (`sha1(options + title)`) changes on EVERY screen, so the
+  //    generation alone is the ask.
+  //  - A plain menu or the terminal door adds its pane dialog's id: each such screen is its own ask, as it always was.
+  //  - AT THE DESK (R115) the identity also carries the screen showing (hooked: `screenNow`; otherwise the pane dialog's id),
+  //    so a screen change this client did not send is a new identity: it ends the engagement and, when the keyboard was engaged
+  //    or focus is in the card, fences it (`useAskEngagement`; a clear or a crossing below 900, which leave no inline card
+  //    showing, fence nothing). The phone's identity is unchanged. The operator accepted the cost (R115, amending R64 for these
+  //    changes): no desk continuity across an external screen change; a redraw under a new aged dialog id fences too, and so
+  //    does a hooked ask's pane menu vanishing for one poll (a screen the pane does not show is no screen).
+  // R102, R105, R106 (AT THE DESK; the phone's Sheet is unchanged): the identity above ends an engagement when the ASK changes.
+  // Two more acts end or lift it, both owned by `useAskEngagement`. A send this client initiates calls `engagement.release()`
+  // in `claim()`, in the same event: the engagement ends, the next screen takes no automatic focus, and a fence stops the keys
+  // inside the card (a row node the next screen reuses can keep focus with no event). Only a pointer press in the card, or
+  // Go to question (`raise`), lifts the fence, and only if input was eligible at the act: the press reads `eligibleNow` at the
+  // event, and the raise's eligibility is captured in render (`raiseMark`), so one made during a flight or in the gap is spent
+  // and nothing replays it after the reply. Tab moves focus and never unlocks. KNOWN LIMIT (R119; `useAskKeys`' header says
+  // it in full): an identical replacement driven externally, and an answer still in flight when the question changes, come
+  // from sending answers as keys into a pane, which main's phone Sheet shares; the server re-check before Enter is T1h, after
+  // T1c. A deliberate re-entry acts on whatever the card then shows.
+  // KNOWN GAP, kept plain: at the desk two DIFFERENT aged asks back to back with no clear between them are told apart by their
+  // pane dialog ids (R115), but two BYTE-IDENTICAL screens (the same dialog id) are still one identity. The transcript's events
+  // do hold the AskUserQuestion call's `toolId`, which would tell even those apart; this controller deliberately does not read
+  // it (the transcript lags the pane and rotates, and reading it would add a coupling and a parser). The continuation only ever
+  // takes focus that the engaged control's replacement dropped to the body (or that is already inside the card), never external
+  // focus.
+  const askEpoch = useStore((s) => s.askEpoch);
+  const askLike = source.kind === 'structured' || source.kind === 'review' || source.kind === 'ask-unreadable';
   // An approval is one screen; a question ask is one per question plus its review (`askScreen`).
   const screenNow = !hooked ? null : 'approval' in envelope ? (dialog === null ? null : 'approval') : askScreen(envelope, dialog);
-  const open = !closed && (hooked
+  const desk = useDesk();
+  // R115: the screen showing, joined to the identity at the desk only (hooked: `screenNow`; otherwise the pane dialog's id).
+  const screenKey = hooked ? screenNow : (dialog?.id ?? null);
+  const askIdentity = closed || (askKey === null && dialog === null) ? null
+    : `${askEpoch}:${askKey ?? (askLike ? 'ask' : `menu:${dialog?.id}`)}${desk ? `|screen:${screenKey}` : ''}`;
+  // D-6326: INLINE there is no dismissal (the card covers nothing, and has no ✕, scrim or "Not now"), so at the desk a hide
+  // never makes it vanish: `leave()` opening the terminal leaves the question where it is. The slots stay, so a crossing
+  // below 900 reads what was waved away, and `raise` still clears them.
+  const open = !closed && (desk || (hooked
     ? !(askKey === dismissedKey && (screenNow === null || screenNow === dismissedScreen))
-    : dialog !== null && dialog.id !== dismissedKey && dialog.id !== dismissedDialogId);
+    : dialog !== null && dialog.id !== dismissedKey && dialog.id !== dismissedDialogId));
 
   const hide = (): void => {
     if (hooked) {
@@ -467,7 +534,11 @@ export function DialogSheet({ id, store, onOpenTerminal, raise, asker = null }: 
     text: own.text,
     call: own.call,
     otherFor,
-    onOpen: setOtherFor,
+    onOpen: (q) => {
+      setOtherFor(q);
+      setFocusNonce((n) => n + 1);
+    },
+    focusNonce,
     onText: (text) => setOwn((o) => ({ ...o, text })),
     onSend: (row) => void sendWords(row),
   };
@@ -538,6 +609,28 @@ export function DialogSheet({ id, store, onOpenTerminal, raise, asker = null }: 
   const keyScreen: KeyScreen | null = source.kind === 'review'
     ? reviewKeys(source.rows.submit, source.rows.cancel, keyTabs(tabCount, null, true, picksHeld))
     : source.kind === 'menu' ? questionKeys(source.options.map((o) => o.index), null, null, null) : null;
+  // ONE engagement for the ask, handed to this hook and, below, to the structured sheet's: not a fact per hook instance.
+  // R106: input is eligible on the screen showing when no send is in flight, the connection is live and the surface is not
+  // closing. The owner reads it at a pointer press in the card, so a press during a flight or in the gap re-enters nothing.
+  const eligibleNow = useRef(false);
+  useLayoutEffect(() => {
+    eligibleNow.current = !locked && live && !closed;
+  });
+  const engagement = useAskEngagement(askIdentity, () => eligibleNow.current && !sending.current);
+  // R106: Go to question (`raise`, which at the desk is only that button) re-enters ONLY if input was eligible when the raise
+  // was MADE, decided here in render from this render's own state (React's "state from the previous render", as
+  // `useAskKeys`' `mark` does), never when the effect runs. A raise made during a flight or in the gap is consumed as
+  // non-unlocking for good: nothing replays it once the reply lands, so the replacement screen is never pre-authorized.
+  // A nonce standing at mount is absorbed (not unlocking), as `AskSurface`'s `seen` absorbs it.
+  const [raiseMark, setRaiseMark] = useState<{ nonce: number; unlock: boolean }>({ nonce: raise ?? 0, unlock: false });
+  // Review A1: `!sending.current` too, since `locked` can read false in the render that carries a send's completion while it is still marked sending.
+  if (raiseMark.nonce !== (raise ?? 0)) {
+    setRaiseMark({ nonce: raise ?? 0, unlock: (raise ?? 0) !== 0 && desk && !locked && !sending.current && live && !closed });
+  }
+  useEffect(() => {
+    // A send claimed between the raise's render and this effect has released, and the later release wins (R102).
+    if (raiseMark.unlock && !sending.current) engagement.reengage();
+  }, [raiseMark, engagement]);
   const keys = useAskKeys({
     screenId: dialog?.id ?? null,
     screen: keyScreen,
@@ -546,6 +639,7 @@ export function DialogSheet({ id, store, onOpenTerminal, raise, asker = null }: 
     onAnswer: (k) => void answer(k),
     onToggle: toggle,
     onTab: (to) => void moveTab(to),
+    engagement,
   });
 
   if (source.kind === 'none') return null;
@@ -584,6 +678,7 @@ export function DialogSheet({ id, store, onOpenTerminal, raise, asker = null }: 
         tabbing={tabbing}
         picksHeld={picksHeld}
         onTab={(to, from) => void moveTab(to, from)}
+        engagement={engagement}
       />
     );
   } else if (source.kind === 'review') {
@@ -666,7 +761,7 @@ export function DialogSheet({ id, store, onOpenTerminal, raise, asker = null }: 
   }
 
   return (
-    <AskSheet open={open} onClose={close} eyebrow={frame.eyebrow} title={frame.title}>
+    <AskSurface open={open} onClose={close} eyebrow={frame.eyebrow} title={frame.title} raise={raise} onInline={onInline}>
       {/* The gap's one status line, at the container level so every kind of surface gets it (the approval, a question,
           the review, a menu, the terminal door), in the plain words of `RECONNECTING`. A closed surface is on its way
           out and says nothing. */}
@@ -676,7 +771,7 @@ export function DialogSheet({ id, store, onOpenTerminal, raise, asker = null }: 
       <div className="contents" inert={closed}>
         {surface}
       </div>
-    </AskSheet>
+    </AskSurface>
   );
 }
 

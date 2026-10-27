@@ -784,7 +784,8 @@ describe('the ask holds through a reconnect, and an ask that ends closes with it
     fireEvent.click(screen.getByTestId('sheet-overlay'));
     expect(panel()?.getAttribute('data-state'), 'the scrim in the gap').toBe('closed');
     cleanup();
-    // The × is the desktop arm's (`min-width: 900px`); a phone has the scrim and the handle.
+    // D-6326: at the desk (`min-width: 900px`) the ask is the inline card, which has no × (a phone has the scrim and the
+    // handle): there is nothing to hide, so the gap holds the card, read-only, and no Close exists to press.
     vi.stubGlobal('matchMedia', (q: string) => ({
       matches: q === '(min-width: 900px)', media: q, onchange: null,
       addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, dispatchEvent: () => false,
@@ -792,9 +793,11 @@ describe('the ask holds through a reconnect, and an ask that ends closes with it
     try {
       mount(connected(askFixture(1)));
       drop();
-      expect(panel()?.getAttribute('data-state')).toBe('open');
-      fireEvent.click(screen.getByRole('button', { name: 'Close' }));
-      expect(panel()?.getAttribute('data-state'), 'the close button in the gap').toBe('closed');
+      const card = document.querySelector('[data-ask-surface="inline"]');
+      expect(card, 'the inline card holds through the gap').not.toBeNull();
+      expect(panel(), 'no dialog at the desk').toBeNull();
+      expect(screen.queryByRole('button', { name: 'Close' }), 'inline has no ×').toBeNull();
+      expect(screen.getByRole('status').textContent, 'the gap says so').toMatch(/Reconnecting/);
     } finally {
       vi.unstubAllGlobals();
     }
@@ -878,12 +881,14 @@ describe('the ask holds through a reconnect, and an ask that ends closes with it
     for (const box of screen.getAllByRole('checkbox')) expect(box, 'a box in the gap').toBeEnabled();
   });
 
-  it('a permission prompt\'s Deny sends nothing in the gap', () => {
+  it('a permission prompt\'s Deny is disabled in the gap, and a click on it sends nothing', () => {
     const interrupt = vi.spyOn(api, 'interrupt').mockResolvedValue(undefined as never);
     const store = connected(askFixture(7));
     mount(store);
     drop();
-    fireEvent.click(screen.getByRole('button', { name: /^Deny/ }));
+    const deny = screen.getByRole('button', { name: /^Deny/ });
+    expect(deny, 'Deny in the gap').toBeDisabled();
+    fireEvent.click(deny);
     expect(interrupt).not.toHaveBeenCalled();
   });
 

@@ -595,6 +595,8 @@ export const GROUNDS = {
 export const SELF_GROUNDED_EXEMPT = {
   '.chat-head .keycap:disabled': 'WCAG 1.4.3 exempts inactive controls; --ink-disabled is documented sub-AA in tokens.css',
   '.send-btn:disabled': 'WCAG 1.4.3 exempts inactive controls',
+  // R89 S1: a failed bubble's Retry while the desk's inline ask card is held; --ink-disabled on the message column's page ground.
+  '.pending-actions .pending-retry:disabled': 'WCAG 1.4.3 exempts inactive controls; --ink-disabled is documented sub-AA in tokens.css',
   // Measured, not assumed: --ink-disabled on the ghost button's sheet ground is
   // 2.85 dark / 2.63 light. It is the same --ink-disabled the three entries
   // above are exempt for; this one only became visible when variants that
@@ -896,8 +898,8 @@ export const INHERITED_GROUNDS = {
     why: "the account-pool epoch/observed staleness indicator (Task 9, account-pool-membership wave 1) sits in .fleet-head-right on the fleet screen's header. .fleet, .fleet-head and .fleet-head-right all paint no background of their own, so the real ground is body's --bg-page (styles/base.css:111) — same reasoning and same ground as .mail-chip/.mail-group-head above, which sit on the sibling .mail-screen's unpainted body. Its selector names no ancestor, so no route could ground it. Review round 1, C2: this was first added to GRANDFATHERED_UNCOVERED on the mistaken claim that nothing at this header level paints a background — INHERITED_GROUNDS already grounds three OTHER rules in this exact file against --bg-page for exactly this reason, and --ink-tertiary over --bg-page measures 6.23 dark / 5.25 light, clearing the 4.5 floor in both themes.",
   },
   '.dlg-later:disabled': {
-    under: ['var(--bg-sheet)'],
-    why: "D-6325 (the-ask-holds-through-a-reconnect): Deny's disabled look while the reconnect gap holds the ask, tertiary ink as the own-words Send and the tab chips take. It sits in .dlg-actions inside the ask sheet's <Sheet>, whose .sheet-panel paints background: var(--bg-sheet) (primitives.css:141); the rule paints no ground and its selector names no painted ancestor. Registered rather than grandfathered: the ground is recoverable by reading the component.",
+    under: ['var(--bg-sheet)', 'var(--bg-surface)'],
+    why: "D-6325 (the-ask-holds-through-a-reconnect): Deny's disabled look while the reconnect gap holds the ask, tertiary ink as the own-words Send and the tab chips take. It sits in .dlg-actions inside the ask sheet's <Sheet>, whose panel paints background: var(--bg-sheet) (its bg-sheet utility, ui/src/primitives/sheet.tsx#Sheet); the rule paints no ground and its selector names no painted ancestor. Registered rather than grandfathered: the ground is recoverable by reading the component. D-6326: at the desk the same row sits in the inline ask card, `.ask-inline` (chat.css), which paints background: var(--bg-surface), so both grounds are measured.",
   },
   '.opt-inert': {
     under: ['var(--bg-sheet)'],
@@ -1108,7 +1110,7 @@ export const OPACITY_REGISTRY = {
   },
   '.bell:disabled 0.35': { noText: 'WCAG 1.4.3 exempts inactive controls' },
   '.pending-actions .pending-send-it:disabled 0.6': {
-    noText: 'WCAG 1.4.3 exempts inactive controls; the button is only disabled for the moment its own Enter is in flight',
+    noText: 'WCAG 1.4.3 exempts inactive controls; the button is disabled while its own Enter is in flight, and while the desk\'s inline ask card holds sends (D-6326, R96)',
   },
   ".attach-chip[data-state='uploading'] .attach-thumb 0.55": {
     noText: 'an <img> upload preview; the uploading state is also carried by the ::before ring',

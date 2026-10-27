@@ -47,6 +47,7 @@ import type { ReactNode } from 'react';
 import { INSTRUMENT, REFINED, toast } from '@ccrc/ui';
 import type { ChatEvent, FleetSession } from '../../shared/api';
 import { fleetSession } from './fleetFixture';
+import { askFixture } from './askFixtures';
 
 const made = vi.hoisted(() => ({
   terms: [] as unknown[],
@@ -207,6 +208,31 @@ describe('a skin switch keeps', () => {
     toInstrument();
     expect(screen.getByRole('textbox', { name: 'Message' })).toHaveValue('half a thought');
     expect(screen.getByRole('textbox', { name: 'Message' })).toBe(box);
+  });
+
+  // D-6326 (T1c): at the desk the ask is an inline card in the session pane, a keyed `ask` slot between the transcript
+  // and the strips, so a switch (which replaces the chrome alone) keeps its node and the composer's text. Red when the
+  // slot is keyed by the skin: the card remounts and the answer in flight goes with it.
+  it('an inline ask survives a skin switch, and the composer keeps its text', () => {
+    vi.stubGlobal('matchMedia', (q: string) => ({
+      matches: q.includes('min-width: 900px') || q.includes('pointer: fine'),
+      media: q, onchange: null,
+      addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, dispatchEvent: () => false,
+    }));
+    openSession();
+    const box = screen.getByRole('textbox', { name: 'Message' });
+    fireEvent.change(box, { target: { value: 'half a thought' } });
+    act(() => { for (const f of askFixture(1).frames) getSessionStore(S.id).getState().apply(f); });
+    const cards = (): Element[] => [...document.querySelectorAll('[data-ask-surface]')];
+    expect(cards(), 'an inline card is mounted at the desk').toHaveLength(1);
+    const card = cards()[0]!;
+    expect(card.textContent).toContain('Which cache should the service use?');
+    toInstrument();
+    expect(cards(), 'one card after the switch').toHaveLength(1);
+    expect(cards()[0], 'the same DOM node').toBe(card);
+    expect(card.isConnected).toBe(true);
+    expect(screen.getByRole('textbox', { name: 'Message' })).toBe(box);
+    expect(screen.getByRole('textbox', { name: 'Message' })).toHaveValue('half a thought');
   });
 
   it("an open sheet: a session's swap sheet", () => {
