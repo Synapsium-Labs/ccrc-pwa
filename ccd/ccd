@@ -40752,6 +40752,18 @@ class Sys(object):
         """Wall-clock epoch milliseconds: stamp ages."""
         return int(time.time() * 1000)
 
+    def redact(self, s):
+        """`s` with every REDACT_RULES match replaced: each rule in order, every
+        match, by its group 1 (when the pattern has one) followed by the suffix.
+        Idempotent. It runs over every string taken from stderr or a traceback;
+        shared/docs.ts's redactDocsText is its twin, run again by the server."""
+        for rx, suffix in REDACTORS:
+            if rx.groups:
+                s = rx.sub(lambda m, x=suffix: m.group(1) + x, s)
+            else:
+                s = rx.sub(lambda m, x=suffix: x, s)
+        return s
+
 
 SYS = Sys()
 
@@ -40786,16 +40798,8 @@ REDACTORS = tuple((re.compile(pattern), suffix) for pattern, suffix in REDACT_RU
 
 
 def redact(s):
-    """`s` with every REDACT_RULES match replaced: each rule in order, every
-    match, by its group 1 (when the pattern has one) followed by the suffix.
-    Idempotent. It runs over every string taken from stderr or a traceback;
-    shared/docs.ts's redactDocsText is its twin, run again by the server."""
-    for rx, suffix in REDACTORS:
-        if rx.groups:
-            s = rx.sub(lambda m, x=suffix: m.group(1) + x, s)
-        else:
-            s = rx.sub(lambda m, x=suffix: x, s)
-    return s
+    """`s` redacted through SYS, the one seam (Sys.redact)."""
+    return SYS.redact(s)
 
 
 def clip_utf8(s, limit):
