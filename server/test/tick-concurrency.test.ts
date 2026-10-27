@@ -30,8 +30,9 @@ import { mkTmp } from './tmpHelpers.js';
 const T0 = 1790856000000;
 /** The capture bound. The later code commit replaces this with an import of `DIALOG_CAPTURE_CONCURRENCY` from watch.ts. */
 const CAPTURE_BOUND = 8;
-/** A macrotask-spin bound: a wait that outruns it fails by assertion or by a named error, never by a hang. */
-const SPIN_LIMIT = 20_000;
+/** A wait bound in REAL milliseconds (`performance.now`; the fake clock only fakes `Date`), well inside the cases' 60 s
+ *  timeout, so a wait that outruns it fails by assertion or by a named error, never by vitest's timeout or a hang. */
+const WAIT_BUDGET_MS = 30_000;
 
 const N = 12;
 const pad = (i: number): string => String(i).padStart(2, '0');
@@ -122,17 +123,23 @@ class CaptureGate {
     h.go();
   }
 
-  /** Runs `p` to completion, letting every held capture go on each macrotask: in issue order, or newest first. */
-  async drive<T>(p: Promise<T>, order: 'issue' | 'reverse' = 'issue'): Promise<T> {
+  /** Runs `p` to completion, letting every held capture go on each macrotask: in issue order, or newest first. With
+   *  `spacing: 'one'` each release is followed by a macrotask of its own, so that capture's continuation runs before the
+   *  next release (and the next step of the wall clock); the default lets a whole batch go in one synchronous loop. */
+  async drive<T>(p: Promise<T>, order: 'issue' | 'reverse' = 'issue', spacing: 'batch' | 'one' = 'batch'): Promise<T> {
     let done = false;
     let failed: unknown = null;
     const settled = p.then(() => { done = true; }, (e: unknown) => { done = true; failed = e ?? new Error('rejected'); });
-    for (let spin = 0; !done; spin += 1) {
-      if (spin > SPIN_LIMIT) throw new Error(`drive: the tick never finished (issued ${this.issued.length}, held ${this.held.length})`);
+    const until = performance.now() + WAIT_BUDGET_MS;
+    while (!done) {
+      if (performance.now() > until) throw new Error(`drive: the tick never finished (issued ${this.issued.length}, held ${this.held.length})`);
       await macrotask();
       const batch = this.held.splice(0);
       if (order === 'reverse') batch.reverse();
-      for (const h of batch) this.release(h);
+      for (const h of batch) {
+        this.release(h);
+        if (spacing === 'one') await macrotask();
+      }
     }
     await settled;
     if (failed !== null) throw failed;
@@ -148,7 +155,7 @@ interface Rig {
   /** Makes the registry directory answer `readdir` with null (the unlistable registry). */
   unlist: (on: boolean) => void;
   /** One tick, its captures let go as `order` says. */
-  tick: (order?: 'issue' | 'reverse') => Promise<void>;
+  tick: (order?: 'issue' | 'reverse', spacing?: 'batch' | 'one') => Promise<void>;
   /** The requests one tick issued (what `fn` ran, and nothing after it). */
   during: (fn: () => Promise<void>) => Promise<string[]>;
 }
@@ -167,7 +174,7 @@ const rig = (): Rig => {
     ...testDeps(mkTmp('ccrc-tick-conc-'), gate.run), cfg: fixtureConfig(), io, monotonicMs: () => mono,
     push: { notify: async (p: PushPayload) => { sent.push(p); } } as never,
   } as never, bus, 2000);
-  const tick = (order: 'issue' | 'reverse' = 'issue'): Promise<void> => gate.drive(w.tick(), order);
+  const tick = (order: 'issue' | 'reverse' = 'issue', spacing: 'batch' | 'one' = 'batch'): Promise<void> => gate.drive(w.tick(), order, spacing);
   const during = async (fn: () => Promise<void>): Promise<string[]> => {
     const from = counting.requests.length;
     await fn();
@@ -330,8 +337,8 @@ describe('the capture pass of one tick (D-6435)', () => {
   it('a second capture is issued before the first resolves', async () => {
     const r = rig();
     const tick = r.w.tick();
-    let spins = 0;
-    while (r.gate.issued.length < 1 && spins < 5000) { await macrotask(); spins += 1; }
+    const until = performance.now() + WAIT_BUDGET_MS;
+    while (r.gate.issued.length < 1 && performance.now() < until) await macrotask();
     for (let i = 0; i < 25; i += 1) await macrotask();
     const issuedBeforeAnyRelease = r.gate.issued.length;
     const releasedBeforeAnyRelease = r.gate.releases;
@@ -403,6 +410,8 @@ describe('the capture pass of one tick (D-6435)', () => {
 
   // The wall clock steps to a distinct value before each capture is let go, and the captures return newest first. A
   // pane's `doneAt` is when ITS capture returned, and `at` when it was issued, whatever happened to the others meanwhile.
+  // One capture is let go per macrotask, so its continuation runs at its own clock step, as a real return would. The `at`
+  // assertion holds only if the code takes `paneAt` where the capture is issued (the runner's issue time is that instant).
   it("a pane's doneAt is its own capture's return time", async () => {
     const r = rig();
     await primed(r);
@@ -414,7 +423,7 @@ describe('the capture pass of one tick (D-6435)', () => {
     const panes: { id: string; at: number; doneAt: number }[] = [];
     for (const id of IDS) r.bus.on(`pane:${id}`, (p: { at: number; doneAt: number }) => { panes.push({ id, at: p.at, doneAt: p.doneAt }); });
     r.setMono(r.mono() + 2000);
-    await r.tick('reverse');
+    await r.tick('reverse', 'one');
     expect(panes.map((p) => p.id), 'every row published once, in registry order').toEqual([...IDS]);
     expect(new Set(r.gate.releasedAt.values()).size, 'the release times are twelve distinct values').toBe(N);
     for (const p of panes) {
