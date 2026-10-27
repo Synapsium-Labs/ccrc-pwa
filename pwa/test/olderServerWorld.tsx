@@ -1,8 +1,9 @@
 // W4-U27's world (delegation broker wave 4, PR2 Task 2.7, spec §5.13; review 1029's F1): an older server's frame
 // sequence on a fixed clock, rendered by the whole fleet screen and by Instrument's fleet list, with every request left
-// unanswered so nothing lands after the frames. It imports only modules PR2's base (7dc486b97) already has, unchanged,
-// so this one function rendered the base's code into `fixtures/older-server/render-7dc486b97.json` and renders
-// today's code in `older-server-render.test.tsx`. It returns markup as rendered: what may differ is the test's to say.
+// unanswered so nothing lands after the frames. Every local import path exists at PR2's base (7dc486b97), but
+// shared/api.ts and stores/fleet.ts changed since that base. This same world is copied into the base tree to capture
+// its render in `fixtures/older-server/render-7dc486b97.json`, and renders today's code in `older-server-render.test.tsx`.
+// It returns markup as rendered: what may differ is the test's to say.
 import { act, cleanup, fireEvent } from '@testing-library/react';
 import { vi } from 'vitest';
 import { INSTRUMENT, REFINED } from '@ccrc/ui';
