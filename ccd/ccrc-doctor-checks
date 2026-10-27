@@ -504,8 +504,15 @@ _check_node-path() {
     menv="$(systemctl --user show-environment 2>/dev/null)"; rc=$?
   fi
   if [ "$rc" -eq 0 ]; then
-    local mpath=""
-    while IFS= read -r line; do case "$line" in PATH=*) mpath="${line#PATH=}" ;; esac; done <<< "$menv"
+    local mpath="" haspath=0
+    while IFS= read -r line; do case "$line" in PATH=*) mpath="${line#PATH=}"; haspath=1 ;; esac; done <<< "$menv"
+    # No PATH= line at all is its own condition, never folded into "PATH lacks the dir" (an empty answer would read
+    # as an empty PATH): the manager answered, but what it answered names no PATH to measure.
+    if [ "$haspath" -ne 1 ]; then
+      _dr_fail node-path "the user manager answered show-environment with no PATH= line — its PATH cannot be measured, so units may not find $dir" \
+        "check: systemctl --user show-environment; then systemctl --user daemon-reload (or ccrc doctor --fix)"
+      return 1
+    fi
     case ":$mpath:" in
       *":$dir:"*) mgr="the user manager's PATH includes it" ;;
       *) _dr_fail node-path "the user manager's PATH ($mpath) lacks $dir although the fragment names it — the manager has not re-read environment.d" \

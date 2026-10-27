@@ -183,6 +183,16 @@ describe('ccrc doctor: node-path', () => {
     expect(r.out).toMatch(/^ {2}remedy: .*daemon-reload/m);
   });
 
+  it('FAILs with its own words when the manager answers with no PATH= line at all (not "PATH lacks the dir")', () => {
+    const home = box('ccrc-nodepath-mgr-nopath-');
+    writeFileSync(join(home, 'fixture-mgr-env'), `HOME=${home}\nLANG=C\n`);
+    const r = check(home);
+    expect(r.rc).toBe(1);
+    expect(r.out).toMatch(/^FAIL node-path: the user manager answered show-environment with no PATH= line/m);
+    expect(r.out).not.toMatch(/lacks/);
+    expect(r.out).toMatch(/^ {2}remedy: .*show-environment/m);
+  });
+
   it('does not match a longer directory name as the directory (:dir: boundaries)', () => {
     const home = box('ccrc-nodepath-prefix-');
     writeFileSync(join(home, 'fixture-mgr-env'), `PATH=${dirOf(home)}-old:/usr/bin\n`);
