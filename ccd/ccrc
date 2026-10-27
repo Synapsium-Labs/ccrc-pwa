@@ -6193,7 +6193,11 @@ _exp_ddns_units() {
   # a shell that sources it, exactly as the server's plist does, and the
   # secret still never lands in this 0644 file.
   if [ "$CCD_OS" = darwin ]; then
-    local dir="$BOX_UNIT_DIR" lbl="app.ccrc.$CCRC_DDNS_UNIT" gen
+    local tree="$CCRC_HERE/.." dir="$BOX_UNIT_DIR" lbl="app.ccrc.$CCRC_DDNS_UNIT" gen period
+    # THE PERIOD BEFORE ANY WRITE (OA-C8c (a), D-7062): a tree whose timer
+    # cannot be read places no job, with no literal to fall back on.
+    period="$(_timer_period_s "$tree/deploy/systemd/$CCRC_DDNS_UNIT.timer")" \
+      || _ccrc_die "cannot place the $lbl job: the period of $CCRC_DDNS_UNIT.timer cannot be read from the shipped tree. Nothing was placed."
     mkdir -p "$dir" || _ccrc_die "cannot create $dir"
     gen="$dir/$lbl.plist.tmp.$$.new"
     cat > "$gen" <<PL || { rm -f -- "$gen"; _ccrc_die "could not generate the $lbl job"; }
