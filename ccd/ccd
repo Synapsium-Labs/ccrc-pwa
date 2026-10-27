@@ -1935,6 +1935,20 @@ _authdead() {   # wrapper -> success iff a well-formed auth-dead marker stands f
   _file_read_to t "$f"; t="${t%% *}"
   [[ "$t" =~ ^[0-9]+$ ]] && ! _authdead_expired "$1" "$t"   # D-3524: a verdict about a credential no longer on disk is not one
 }
+# THE MARKER'S WRITERS, DEFINED ONCE (D-7049; ARCH-72, spec K16). The probe, the
+# rescue and the spawn's clear call these; `_authdead_expired`'s compare-and-remove
+# is the one other writer. Silent: each caller keeps its own words. The temp is
+# dotted and in $REG, so the rename never crosses a filesystem and a crashed pass
+# leaves only what the sweep removes. `ccd/ccd-account-health` carries a byte copy
+# (`shared/hook-helpers.mjs` generates it; `ccrc restamp` regenerates it).
+_authdead_mark() {   # lane reason [epoch] -> rc 0 written, 1 no temp made, 2 the write or rename failed (temp removed)
+  local t
+  t=$(mktemp "$REG/$1-authdead.tmp.XXXXXX") || return 1
+  printf '%s %s' "${3:-$(date +%s)}" "$2" > "$t" && mv -f "$t" "$REG/$1-authdead" && return 0
+  rm -f -- "$t"; return 2
+}
+_authdead_clear() { rm -f -- "$REG/$1-authdead"; }   # lane
+_authdead_sweep_staged() { rm -f -- "$REG"/*-authdead.tmp.* 2>/dev/null; }   # the staged temps a crashed pass left
 # THE GRAMMAR IS ASCII, AND `LC_ALL=C` IS WHAT MAKES IT SO (D-2522). `[a-z]`
 # in bash's `=~` is a COLLATION range, not a codepoint range: under
 # `en_US.UTF-8` it ACCEPTS U+00E9, U+00E5, U+00FC and U+00F1 — measured, not
