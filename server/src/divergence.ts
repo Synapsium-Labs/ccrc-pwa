@@ -179,8 +179,8 @@ const key = (project: string, name: string): string => `${project}/${name}`;
  * id half of the claim rule rather than testing an invented id — a worktree
  * with no ccd id cannot have a ccd registry claim, which is a reason to keep
  * looking at the row half, never a reason to fall silent. The delegation frame
- * (`coord/delegation-projection.ts`, wave 4, D-7006) is the second caller: a
- * listed session whose id this answers owns the tree, and `null` owns nothing.
+ * (`coord/delegation-projection.ts`, wave 4, D-7006) reads it too: a listed
+ * session whose id this answers owns the tree, and `null` owns nothing.
  */
 export function ccdIdForWorktree(project: string, wtPath: string): string | null {
   // Empty segments dropped so a trailing or doubled `/` cannot shift which

@@ -1,7 +1,9 @@
 // Delegation broker wave 4, PR1 Task 1.2: the PURE projection decider.
 //
 // `projectDelegation` turns the lane's checkpoint, the census and the registry into the `delegation` frame's payload. It reads no
-// clock, makes no IO and makes no durable write. The rows below are the plan's W4-P1 to W4-P16 and pin its mutants W4-M02 to W4-M23.
+// clock, makes no IO and makes no durable write. The rows below are the plan's W4-P1 to W4-P16, and fix rounds 1 and 2's W4-P17 to
+// W4-P23; they pin the plan's mutants W4-M02 to W4-M23 (W4-M05 is the store's, in delegation-frame) and the rounds' W4-M27 and W4-M31 to
+// W4-M35 (pr1.md lists each with what it reds).
 //
 // Fixtures only: names are `lane-a-demo`-shaped ids (`p`, `w`, `c`), `project-a` and `/fixture/...`. No file is read or written.
 import { describe, it, expect } from 'vitest';
@@ -250,12 +252,14 @@ describe('projectDelegation: programme ownership, the inferred marker and unowne
     expect(out.unowned).toEqual([]);
   });
 
-  it('W4-P17 (D-7006): ownership is the ccd id of the tree, never the spelling of a path: a symlinked workdir still owns its tree', () => {
+  it('W4-P17 (D-7006): a tree under another root (`/real/<project>/<slug>`) is owned by the session its ccd id names; no workdir is read', () => {
     const out = projectDelegation(input({
       leases: [lease({ leaseId: 'l1', adminRecord: 'slug', canonicalPath: '/real/project-a/slug' })],
       attempts: [attempt({ attemptId: 'x1', adminRecord: 'other', canonicalPath: '/real/project-a/other' })],
       census: census({ [PROJECT]: [record('slug', { canonicalPath: '/real/project-a/slug' }), record('other', { canonicalPath: '/real/project-a/other' })] }),
-      // the registry spells these sessions' workdirs `/link/project-a/...` (unresolved); the id join never reads them
+      // The sessions carry no workdir: the id join reads none. Against the old workdir rule this world, with workdirs spelled
+      // `/link/project-a/...`, was measured red (fix round 1); review 1028 measured the control, the same world with them spelled
+      // `/real/project-a/...`, green. See D-7006 in pr1.md.
       sessions: [alive('p'), alive('project-a-slug'), alive('project-a-other')],
     }));
     expect(out.leases, 'the session project-a-slug owns /real/project-a/slug').toEqual([]);
