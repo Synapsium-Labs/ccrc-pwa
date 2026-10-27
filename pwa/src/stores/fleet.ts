@@ -474,9 +474,8 @@ export function createFleetStore(deps: FleetStoreDeps = {}): FleetStore {
         // the strength of the store's own `readonly RosterWire[]` type — so
         // this is the one place that type is actually enforced against
         // untrusted JSON. A stub answering an unmatched route with bare `{}`
-        // (AccountsStrip's own sibling comment names the exact shape: several
-        // fixtures across this suite predate Task 7 and do exactly this for
-        // every route they do not explicitly handle) hands back `r.roster ===
+        // (several fixtures across this suite predate Task 7 and do exactly
+        // this for every route they do not explicitly handle) hands back `r.roster ===
         // undefined`, and `set({ roster: undefined })` would corrupt every
         // consumer's next render into a `TypeError` — a shape no server
         // response can legitimately produce (`AccountsResponse.roster` is
