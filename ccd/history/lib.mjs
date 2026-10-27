@@ -238,7 +238,7 @@ export const EXPORT_CHECK_SLICE_BYTES = 128 * 1024 * 1024;
 /** CP-39 (D-6935, D-6939): the derivation's shares of the ONE run budget, per mille of its limits, in tick order (chosen).
  *  One set of numbers serves the ladder of ceilings (budgetRungs) and the floors (budgetFloors). Measured on the fleet box:
  *  every budget-gated derivation starved while ingest owned the whole budget, and under load the sweep unit (shipped at
- *  Nice=19 with idle I/O) got 0.1-0.17 of a core, so 90 s of wall clock was about 9-15 s of CPU. The FTS backfill takes
+ *  Nice=19 with idle I/O) got 0.1-0.17 of a core (measured with a local, unshipped CPU-weight drop-in present), so 90 s of wall clock was about 9-15 s of CPU. The FTS backfill takes
  *  the largest share, being the largest backlog by count (at most about 486,000 blobs owed) and the one every grep
  *  waits on; the leaves and the census 10% each (the census builds one
  *  file clock, a stat per recorded file, before its first chunk, over about 1.14 million blobs); the card step 5% (a few
@@ -3716,7 +3716,9 @@ export const SIDECAR_WALK_META = 'sidecar_walk:';
 /** CP-39 (D-6931). The most UTF-16 units of names one walk state holds, done and in progress together (chosen): twice the
  *  largest backlog measured on the fleet box (about 6,270 unlinked names, most near 40 units). It bounds the automaton's
  *  states (about 517,000 at the cap, 49 MiB of heap, measured in scratch) and the persisted state, so a walk's memory stays
- *  inside O20's RSS bound (pinned by the RSS case, P22). */
+ *  inside O20's RSS bound (pinned by the RSS case, P22). It is a soft bound (review 964): one name is admitted past it (walkNames
+ *  always takes the name that asked), and a walk's `done` grows by the names taken in the same call, whose room startSidecarWalk
+ *  measured against `done` as the call began. */
 export const SIDECAR_WALK_CHARS_MAX = 524_288;
 
 /** The most characters a persisted walk state may hold and still be parsed (D-6931): beyond it the state is read as absent. */
@@ -10439,8 +10441,8 @@ export function planSegment({ nowMs, homeRetentionDays, rows, boundBytes, reduce
  *  (history-export-select-due-transcripts)): the sweep writes the attempt clock and one stderr line, and the next step
  *  waits its interval, not the next tick. Two shapes, both a pass that wrote no segment and so moved nothing:
  *  - nothing taken and the selection did not run to its end (`taken` 0, `selectionComplete` false). The bound cannot end a
- *    selection before its first row, since planSegment takes a pass's first row whatever its size, so the budget is all
- *    that is left. A selection that never began, the budget already spent as the pass started (the export is the tick's
+ *    selection before its first row, since planSegment takes a pass's first row whatever its size, so its slice of the run's
+ *    budget is all that is left. A selection that never began, its slice of the run's budget already spent as the pass started (the export is the tick's
  *    last step), is the same fact: it did not run to its end;
  *  - rows taken and none written, the writer finding the budget spent before its first row (`written` 0, `writeStopped`
  *    'budget'). The writer checks the budget before history-off, so a budget spent beside the operator's switch reads as

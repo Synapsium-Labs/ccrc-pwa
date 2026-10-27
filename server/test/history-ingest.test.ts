@@ -871,6 +871,25 @@ describe('history ingest: chunk writes through the real sweep (plan task 19)', (
   }, 180_000);
 });
 
+/** CP-39d carry (987 F6): O2b's text without its malformed line, `[user 1, over-long, user 4]`, and the over-long line's byte offset. */
+const longLineCase = (lineMax: number): { text: string; longStart: number } => {
+  const first = IX.jsonl([IX.user(IX.uuidN(1), null, 'one', 1)]);
+  const long = `{"pad":"${'a'.repeat(lineMax + 16)}"}`;
+  return { text: IX.jsonl([IX.user(IX.uuidN(1), null, 'one', 1), long, IX.user(IX.uuidN(4), IX.uuidN(1), 'after', 4)]), longStart: Buffer.byteLength(first) };
+};
+/** CP-39d carry (987 F6): fs.readSync replaced so that only compressFdRange's first piece of the over-long line (a buffer of exactly
+ *  1 << 20 bytes read at `longStart`) calls `act`; every other read, findLineEnd's and readLines' included, is the real one. */
+const patchLongRead = (longStart: number, act: () => number): { restore: () => void; hits: () => number } => {
+  const real = fs.readSync;
+  let hits = 0;
+  (fs as { readSync: unknown }).readSync = function readSync(fd: number, buf: Buffer, ...rest: unknown[]): number {
+    if (buf.length === (1 << 20) && Number(rest[2]) === longStart) { hits += 1; return act(); }
+    return (real as (...a: unknown[]) => number)(fd, buf, ...rest);
+  };
+  syncBuiltinESMExports();
+  return { restore: () => { (fs as { readSync: unknown }).readSync = real; syncBuiltinESMExports(); }, hits: () => hits };
+};
+
 describe('history ingest: chunk writes in-process (plan task 19)', () => {
   beforeEach((ctx) => { if (process.platform === 'darwin') ctx.skip(); });
   let S: IxSweep;
@@ -982,6 +1001,68 @@ describe('history ingest: chunk writes in-process (plan task 19)', () => {
     } finally {
       db.close();
       fs.rmSync(box.home, { recursive: true, force: true });   // a 16 MiB line: never left for the file's afterAll alone
+    }
+  }, 120_000);
+
+  it('CP-39d carry (m) (987 F6, the null arm): a read of the over-long line that returns 0 answers atEof false at the line\'s start and stores no raw row; the next call stores it', async () => {
+    const box = IX.newBox('ccrc-hist-cp39d-m-');
+    const { text, longStart } = longLineCase(lib.LINE_MAX);
+    const p = IX.plantCopy(box.homes[0]!, IX.U, text);
+    const { db, ids } = await IX.openFixtureStore(box);
+    const rawOnly = (): number => (db.prepare('SELECT n FROM counters WHERE name = ?').get('raw_only') as { n: number } | undefined)?.n ?? 0;
+    let patch: ReturnType<typeof patchLongRead> | undefined;
+    try {
+      const ctx = S.makeIngestCtx(box.home, box.homes, Date.now(), ids);
+      const f = { path: p, uuid: IX.U, home: box.homes[0]! };
+      patch = patchLongRead(longStart, () => 0);
+      const r = await S.ingestPath(db, ctx, f, S.newBudget());
+      const hits = patch.hits();
+      patch.restore(); patch = undefined;
+      expect(hits, 'CONTROL: the patched read was the over-long line\'s first piece').toBe(1);
+      expect(r!.atEof, '(m) atEof: a short read of the over-long line is not the end of the file').toBe(false);
+      expect(IX.cursorOf(db, r!.fileId), '(m) the cursor holds at the over-long line\'s start').toBe(longStart);
+      expect(rawOnly(), '(m) no raw row').toBe(0);
+      expect(IX.count(db, 'entries', "parse_state = 'raw-only'")).toBe(0);
+      // CONTROL: an unpatched second call stores the over-long line raw and reaches the end.
+      const r2 = await S.ingestPath(db, ctx, f, S.newBudget());
+      expect(r2!.atEof).toBe(true);
+      expect(r2!.offset).toBe(Buffer.byteLength(text));
+      expect(rawOnly()).toBe(1);
+    } finally {
+      patch?.restore();
+      db.close();
+      fs.rmSync(box.home, { recursive: true, force: true });
+    }
+  }, 120_000);
+
+  it('CP-39d carry (n) (987 F6, the OS-error arm): a read of the over-long line that throws EIO rejects ingestPath with the cursor held, and the tick counts it file_unreadable and skips the file', async () => {
+    const box = IX.newBox('ccrc-hist-cp39d-n-');
+    const { text, longStart } = longLineCase(lib.LINE_MAX);
+    const p = IX.plantCopy(box.homes[0]!, IX.U, text);
+    const { db, ids } = await IX.openFixtureStore(box);
+    const eio = Object.assign(new Error('cp39d-k'), { code: 'EIO', syscall: 'read' });
+    const unreadable = (): number => (db.prepare('SELECT n FROM counters WHERE name = ?').get('file_unreadable') as { n: number } | undefined)?.n ?? 0;
+    let patch: ReturnType<typeof patchLongRead> | undefined;
+    try {
+      patch = patchLongRead(longStart, () => { throw eio; });
+      const f = { path: p, uuid: IX.U, home: box.homes[0]! };
+      const viaPath = await S.ingestPath(db, S.makeIngestCtx(box.home, box.homes, Date.now(), ids), f, S.newBudget()).then(() => 'resolved' as const, (e: unknown) => e);
+      expect(viaPath, '(n) ingestPath resolved: the OS error must reach the tick').toBe(eio);
+      expect(patch.hits(), 'CONTROL: the patched read was reached').toBe(1);
+      const fileId = (db.prepare('SELECT file_id AS id FROM ingest_files').get() as { id: number }).id;
+      expect(IX.cursorOf(db, fileId)).toBe(longStart);
+      expect(unreadable(), 'ingestPath itself counts nothing').toBe(0);
+      // Through the tick: the OS error is that file's, counted and skipped.
+      const t = await S.ingestTick(db, S.makeIngestCtx(box.home, box.homes, Date.now(), ids), S.newBudget());
+      expect(patch.hits(), 'CONTROL: the tick reached the patched read').toBe(2);
+      expect(t.busy).toBe(false);
+      expect(unreadable()).toBe(1);
+      expect(IX.cursorOf(db, fileId)).toBe(longStart);
+      expect([...t.skipped]).toEqual([IX.U]);
+    } finally {
+      patch?.restore();
+      db.close();
+      fs.rmSync(box.home, { recursive: true, force: true });
     }
   }, 120_000);
 
@@ -1769,7 +1850,7 @@ describe('history ingest: sidecars (plan task 21)', () => {
         return hash.digest();
       };
       const dir = sideDir(box.homes[0]!);
-      const whole = write(path.join(dir, 'whole64.txt'), 67_108_864);
+      const whole = write(path.join(dir, 'stream64.txt'), 67_108_864);   // D-7099 (987 F3): the name no longer says whole; both files are streamed
       const streamed = write(path.join(dir, 'streamed.txt'), 67_108_864 + 4096);
       let peak = 0;
       for (let pass = 0; pass < 2; pass += 1) {
@@ -1784,8 +1865,14 @@ describe('history ingest: sidecars (plan task 21)', () => {
             WHERE s.name = ?`).get(name) as { sha: Uint8Array; len: number };
           return { sha: Buffer.from(r.sha), len: r.len };
         };
-        expect(got('whole64.txt')).toEqual({ sha: whole, len: 67_108_864 });
+        expect(got('stream64.txt')).toEqual({ sha: whole, len: 67_108_864 });
         expect(got('streamed.txt')).toEqual({ sha: streamed, len: 67_108_864 + 4096 });
+        // D-7099 (987 F3): each blob is decoded and compared, so a sha taken over bytes the blob does not hold cannot pass.
+        for (const [name, want, len] of [['stream64.txt', whole, 67_108_864], ['streamed.txt', streamed, 67_108_864 + 4096]] as const) {
+          const z = (db.prepare('SELECT b.z AS z FROM sidecars s JOIN blobs b ON b.blob_id = s.blob_id WHERE s.name = ?').get(name) as { z: Uint8Array }).z;
+          const body = brotliDecompressSync(z);
+          expect({ sha: createHash('sha256').update(body).digest(), len: body.length }, `${name} decodes to the bytes written`).toEqual({ sha: want, len });
+        }
       } finally { db.close(); }
       console.log(`DM47 peak RSS ${peak} KiB on ${process.version}`);
       expect(peak).toBeLessThan(IX_RSS_BOUND_KIB);
@@ -3212,6 +3299,122 @@ describe('history ingest: the FTS index (plan task 23)', () => {
         fs.rmSync(box.home, { recursive: true, force: true });
       }
     });
+
+    it('(h) a short read destroys the encoder and answers null (987 F1)', async () => {
+      const { store } = await IX.api();
+      const box = IX.newBox('ccrc-hist-cp39b-h-');
+      const made: Transform[] = [];
+      const realRead = fs.readSync;
+      let fd = -1;
+      let restoreBrotli: (() => void) | undefined;
+      try {
+        const file = path.join(box.home, 'range.bin');
+        fs.writeFileSync(file, Buffer.alloc(3 * (1 << 20), 0x61));
+        fd = fs.openSync(file, 'r');
+        restoreBrotli = await stubBrotli(() => {
+          const t = new Transform({ transform(chunk: Buffer, _enc, cb) { cb(null, chunk); } });
+          made.push(t);
+          return t;
+        });
+        let reads = 0;
+        (fs as { readSync: unknown }).readSync = function readSync(rfd: number, ...rest: unknown[]): number {
+          if (rfd === fd) { reads += 1; if (reads === 2) return 0; }
+          return (realRead as (...a: unknown[]) => number)(rfd, ...rest);
+        };
+        syncBuiltinESMExports();
+        expect(await store.compressFdRange(fd, 0, 3 * (1 << 20))).toBeNull();
+        expect(reads, 'CONTROL: the second read is the one that came back short').toBe(2);
+        expect(made.length, 'CONTROL: the stub encoder was the one used').toBe(1);
+        expect(made[0]!.destroyed, '(h) the encoder was destroyed').toBe(true);
+      } finally {
+        (fs as { readSync: unknown }).readSync = realRead;
+        syncBuiltinESMExports();
+        restoreBrotli?.();
+        if (fd >= 0) fs.closeSync(fd);
+        fs.rmSync(box.home, { recursive: true, force: true });
+      }
+    });
+
+    it('(i) a throw from the piece\'s allocation destroys the encoder (987 F5)', async () => {
+      const { store } = await IX.api();
+      const box = IX.newBox('ccrc-hist-cp39b-i-');
+      const mark = new Error('cp39b-i: the piece could not be allocated');
+      const made: Transform[] = [];
+      const realAlloc = Buffer.allocUnsafe;
+      let fd = -1;
+      let restoreBrotli: (() => void) | undefined;
+      let asked = 0;
+      try {
+        const file = path.join(box.home, 'range.bin');
+        fs.writeFileSync(file, Buffer.alloc(777_777, 0x61));
+        fd = fs.openSync(file, 'r');
+        restoreBrotli = await stubBrotli(() => {
+          const t = new Transform({ transform(chunk: Buffer, _enc, cb) { cb(null, chunk); } });
+          made.push(t);
+          return t;
+        });
+        // vi.spyOn(Buffer, 'allocUnsafe') in effect: the real function for every size but the piece's.
+        (Buffer as { allocUnsafe: unknown }).allocUnsafe = function allocUnsafe(size: number): Buffer {
+          if (size === 777_777) { asked += 1; throw mark; }
+          return realAlloc.call(Buffer, size);
+        };
+        await expect(store.compressFdRange(fd, 0, 777_777)).rejects.toBe(mark);
+        expect(asked, 'CONTROL: the piece\'s allocation is the call that threw').toBe(1);
+        expect(made.length, 'CONTROL: the stub encoder was the one used').toBe(1);
+        expect(made[0]!.destroyed, '(i) the encoder was destroyed').toBe(true);
+      } finally {
+        (Buffer as { allocUnsafe: unknown }).allocUnsafe = realAlloc;
+        restoreBrotli?.();
+        if (fd >= 0) fs.closeSync(fd);
+        fs.rmSync(box.home, { recursive: true, force: true });
+      }
+    });
+
+    it('CP-39d carry (o) a compressor error leaves the tick instead of hanging it (987 F6)', async () => {
+      const { sweep: S, lib } = await IX.api();
+      const box = IX.newBox('ccrc-hist-cp39d-o-');
+      const { text, longStart } = longLineCase(lib.LINE_MAX);
+      const p = IX.plantCopy(box.homes[0]!, IX.U, text);
+      const { db, ids } = await IX.openFixtureStore(box);
+      const mark = new Error('cp39d-o');   // no syscall: not an OS error
+      const unreadable = (): number => (db.prepare('SELECT n FROM counters WHERE name = ?').get('file_unreadable') as { n: number } | undefined)?.n ?? 0;
+      let constructed = 0;
+      let timer: NodeJS.Timeout | undefined;
+      let restore: (() => void) | undefined;
+      /** The call's outcome, or a timeout after 10 s. */
+      const settle = <T,>(call: Promise<T>) => Promise.race([
+        call.then(() => ({ kind: 'resolved' as const }), (e: unknown) => ({ kind: 'rejected' as const, e })),
+        new Promise<{ kind: 'timeout' }>((res) => { timer = setTimeout(() => res({ kind: 'timeout' }), 10_000); }),
+      ]);
+      try {
+        restore = await stubBrotli(() => {
+          constructed += 1;
+          return new Transform({ transform(_chunk: Buffer, _enc, cb) { cb(mark); } });
+        });
+        const f = { path: p, uuid: IX.U, home: box.homes[0]! };
+        const viaPath = await settle(S.ingestPath(db, S.makeIngestCtx(box.home, box.homes, Date.now(), ids), f, S.newBudget()));
+        clearTimeout(timer);
+        expect(constructed, 'CONTROL: the stub encoder was constructed').toBeGreaterThanOrEqual(1);
+        expect(viaPath.kind === 'timeout', 'ingestPath did not settle within 10 s').toBe(false);
+        expect(viaPath, '(o) ingestPath resolved').toMatchObject({ kind: 'rejected' });
+        expect((viaPath as { e: unknown }).e, 'with the compressor\'s error').toBe(mark);
+        const fileId = (db.prepare('SELECT file_id AS id FROM ingest_files').get() as { id: number }).id;
+        expect(IX.cursorOf(db, fileId)).toBeLessThanOrEqual(longStart);
+        const before = unreadable();
+        const viaTick = await settle(S.ingestTick(db, S.makeIngestCtx(box.home, box.homes, Date.now(), ids), S.newBudget()));
+        clearTimeout(timer);
+        expect(viaTick.kind === 'timeout', 'ingestTick did not settle within 10 s').toBe(false);
+        expect(viaTick, '(o) ingestTick resolved: a compressor error was counted unreadable').toMatchObject({ kind: 'rejected' });
+        expect((viaTick as { e: unknown }).e).toBe(mark);
+        expect(unreadable(), 'a compressor error is not a file_unreadable').toBe(before);
+        expect(IX.cursorOf(db, fileId)).toBeLessThanOrEqual(longStart);
+      } finally {
+        clearTimeout(timer);
+        restore?.();
+        db.close();
+        fs.rmSync(box.home, { recursive: true, force: true });
+      }
+    }, 120_000);
   });
 
   describe('T23-a (D-4312): the backfill and the re-index never decompress a whole sidecar, and charge blobs one at a time', () => {

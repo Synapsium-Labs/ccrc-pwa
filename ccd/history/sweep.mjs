@@ -5735,7 +5735,7 @@ export async function ingestSidecar(db, ctx, s, budget, g) {
     if (!link.ready) return link.deferred === true ? { bytes: 0, deferred: true } : { bytes: 0, cut: true };
     const entryId = linkSidecar(s.name, link.candidates);
     let sha;
-    let make;   // the body to store, made only when no live blob holds this sha (D-4589's one probe, below)
+    let make;   // the body to store, stored only when no live blob holds this sha (D-4589's one probe, below): the whole arm compresses then, and the streamed arm has already compressed it in compressFdRange
     let z = null;
     // The index text comes from the bytes hashed and stored, never from a second read of the file: a rewrite between two
     // reads would index text the blob does not hold, and D-4344's re-derivation recomputes the stored blob's own text
@@ -8942,7 +8942,7 @@ export async function recoverReindex(db, ctx, cur, budget) {
 //      or blob id for the sidecars; across the runs it is not one time order. Every candidate carries its transcript's files, the
 //      census's per-row set (D-4248), and lib's planSegment (L1), with its default
 //      reducer, the census's per-copy one (B2's D-4735 (history-export-due-per-copy); RD1's one clock), decides each page under
-//      what is left of the bound: EXPORT_SEGMENT_MAX_BYTES, or what the run's byte budget has left, each row counted at
+//      what is left of the bound: EXPORT_SEGMENT_MAX_BYTES, or what its slice of the run's byte budget has left, each row counted at
 //      its new blob bytes and its metadata (D-4760 (history-export-segment-bound-estimated)).
 //   2. writeSegmentRows: through store.mjs, each row after what places it (its families, transcript, epochs and the
 //      files it names), then the entry, its variants, its boundary, its linked sidecars and its memberships by (path,
@@ -9092,7 +9092,7 @@ function ensureExportDirs(P, storeId) {
  *  planSegment under what is left of `boundBytes`. Answers the taken candidates, the blob ids whose bytes travel
  *  (`carry`), the pruned blob ids that travel as stubs, the transcripts they name, each transcript's linked sidecars,
  *  the cutoff, and `complete`: false only when due rows were left behind, planSegment's leftDue on a page the bound
- *  stopped, or the run's budget ended the scan before it could tell there were none. A bound used up by the last due
+ *  stopped, or its slice of the run's budget ended the scan before it could tell there were none. A bound used up by the last due
  *  row (it may be the forced first one, past a small room) leaves the selection complete: the scan reads on, and a
  *  later due row, which no room is left to take, is what makes it incomplete. */
 function exportSelect(db, ctx, nowMs, homeDays, boundBytes) {
@@ -9162,7 +9162,7 @@ function exportSelect(db, ctx, nowMs, homeDays, boundBytes) {
     return { kind: 'sidecar', id, pks, cand: { key: `s${id}`, tsMs: null, files: pks.flatMap(filesOf), blobs: blobsFor([id]) } };
   };
   let left = boundBytes;
-  /** One page through planSegment. False when a due row is left behind (the bound) or the run's budget ends the selection.
+  /** One page through planSegment. False when a due row is left behind (the bound) or its slice of the run's budget ends the selection.
    *  Once an earlier page took a row, this page's first row must fit what is left (takenBefore): only the pass's first row
    *  is taken whatever its size. No reducer is passed: planSegment's default is the census's (B2's per-copy reducer), so the
    *  pass and the census answer one clock (RD1). */
@@ -9184,7 +9184,7 @@ function exportSelect(db, ctx, nowMs, homeDays, boundBytes) {
       // it and counts every due row in it as left. The probe costs one more page (at most the page size, each candidate with
       // its blob and sidecar lookups) when a pass ends a page exactly at its bound, and ends at the first page holding a due
       // row; before that page it may also seek each remaining due transcript's empty young run and page through unlinked
-      // sidecars that are not yet due (that run is not filtered to due transcripts), each page under the run's budget. A
+      // sidecars that are not yet due (that run is not filtered to due transcripts), each page under its slice of the run's budget. A
       // pass that left a due row on the page it filled never probes. Where nothing else is due it reads what a pass with
       // room left reads anyway, to the end of the phases. Lib's leftDue decides; this only delivers (RD2).
       if (plan.leftDue > 0) { sel.complete = false; return false; }
@@ -9228,8 +9228,8 @@ function exportSelect(db, ctx, nowMs, homeDays, boundBytes) {
   return sel;
 }
 
-/** Phase 2: the taken candidates into the segment, each row after what places it. Before every row it reads the run's
- *  clock and history-off; it stops at either, so what it wrote is whole rows. Answers the entry and blob ids written,
+/** Phase 2: the taken candidates into the segment, each row after what places it. Before every row it reads its slice of the run's
+ *  budget clock and history-off; it stops at either, so what it wrote is whole rows. Answers the entry and blob ids written,
  *  the rows and bytes, and why it stopped early ('budget' | 'off' | null). */
 function writeSegmentRows(db, ctx, seg, sel) {
   const s = exportStmts(db);
