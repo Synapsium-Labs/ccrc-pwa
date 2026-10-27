@@ -17,6 +17,7 @@ import { INSTRUMENT, PHOSPHOR, REFINED } from '@ccrc/ui';
 import { resolveChrome } from './harness';
 import { buildDist, openApp, removeDist, serveDist, type AppFixture, type AppView, type DistServer } from './app';
 import { fleetSession } from '../test/fleetFixture';
+import { seventeenLanes, type LaneCase } from '../test/seventeenLanes';
 
 const THEMES = [PHOSPHOR, 'light'];
 const PHONES: AppView[] = THEMES.flatMap((theme) => [360, 390, 438].map((width) => ({ skin: REFINED, theme, width })));
@@ -188,41 +189,12 @@ describe("Refined's phone header is one row of finger-sized doors, and `+ New` c
   }, 60_000);
 });
 
-/** One lane of the 17-lane fixture and what its card must show. */
-interface LaneCase { acct: Record<string, unknown>; label: string; windows: string[]; counted: boolean[] }
-
-/** 17 lanes: one rolled over, one signed out, one never read, one with a long label, a few with a window but no reset,
- *  the rest reading both windows with a reset ahead. `counted` is, per shown window, whether a countdown must print. */
+/** The 17-lane fixture (`test/seventeenLanes.ts`, the one every strip suite shares) as this file's app fixture. */
 function seventeen(): { fixture: AppFixture; cases: LaneCase[] } {
-  const cases: LaneCase[] = Array.from({ length: 17 }, (_, i) => {
-    const base = {
-      wrapper: `w${i}`, five: 20 + i * 4, seven: 10 + i * 3, ts: nowSec - 60, fiveResetAt: nowSec + 7200 as number | null,
-      sevenResetAt: nowSec + 3 * 86400 as number | null, fiveRolledOver: false, sevenRolledOver: false, disabled: false, authDead: false,
-    } as Record<string, unknown>;
-    let label = `lane-${String.fromCharCode(97 + i)}`;
-    let counted = [true, true];
-    if (i === 0) { Object.assign(base, { five: 0, fiveRolledOver: true, fiveResetAt: nowSec - 60 }); counted = [false, true]; }
-    if (i === 1) base.authDead = true;
-    if (i === 2) { Object.assign(base, { five: null, seven: null, fiveResetAt: null, sevenResetAt: null }); counted = []; }
-    if (i === 3) label = 'lane-with-a-very-long-name-q';
-    if (i === 4) { Object.assign(base, { seven: null, fiveResetAt: null, sevenResetAt: null }); counted = [false]; }
-    if (i === 5) { Object.assign(base, { five: null, fiveResetAt: null, sevenResetAt: null }); counted = [false]; }
-    const windows = [base.five !== null ? '5h' : null, base.seven !== null ? '7d' : null].filter((w): w is string => w !== null);
-    return { acct: base, label, windows, counted };
-  });
+  const { cases, accounts, roster } = seventeenLanes(nowSec);
   return {
     cases,
-    fixture: {
-      ...FIXTURE,
-      api: {
-        ...FIXTURE.api,
-        '/api/accounts': {
-          accounts: cases.map((c) => c.acct),
-          projected: null,
-          roster: cases.map((c, i) => ({ id: `w${i}`, label: c.label, hue: 'cyan', homeAble: true, hidden: false })),
-        },
-      },
-    },
+    fixture: { ...FIXTURE, api: { ...FIXTURE.api, '/api/accounts': { accounts, projected: null, roster } } },
   };
 }
 
@@ -230,11 +202,11 @@ function seventeen(): { fixture: AppFixture; cases: LaneCase[] } {
  *  first, ties in roster order; a lane never read and a lane signed out go last, in roster order. */
 function mostFreeFirst(cases: readonly LaneCase[]): LaneCase[] {
   const used = (c: LaneCase): number | null => {
-    const known = [c.acct['five'], c.acct['seven']].filter((p): p is number => typeof p === 'number');
+    const known = [c.acct.five, c.acct.seven].filter((p): p is number => typeof p === 'number');
     return known.length === 0 ? null : Math.max(...known);
   };
-  const ranked = cases.map((c, i) => ({ c, i, pct: used(c) })).filter((e) => e.pct !== null && e.c.acct['authDead'] !== true);
-  const last = cases.filter((c) => used(c) === null || c.acct['authDead'] === true);
+  const ranked = cases.map((c, i) => ({ c, i, pct: used(c) })).filter((e) => e.pct !== null && e.c.acct.authDead !== true);
+  const last = cases.filter((c) => used(c) === null || c.acct.authDead === true);
   ranked.sort((x, y) => x.pct! - y.pct! || x.i - y.i);
   return [...ranked.map((e) => e.c), ...last];
 }
