@@ -2,10 +2,12 @@
 
 The operator's runbook for W2's live evaluation, with the coordinator's checkpoints (CP-40 of the ccrc-history completion plan). One named node: **the fleet box** (operator ruling, 2026-10-25). Every
 command is cited to the decisions document (`docs/superpowers/plans/2026-10-19-ccrc-history-w2-decisions.md`, "§5 act N",
-"W2-Dn") or to the plan task that ships it (W2-3, W2-4, W2-5a, W2-5b1, W2-5b2, W2-6). Every verb, flag,
-refusal word and output path below was checked against the merged code of `v0.0.730`. By the operator's ruling of 2026-10-26 (R-B1), the
-final W2 release is the tag cut from the budget-amendment wave's merge, not `v0.0.730` (see "Before act 7"). On that tag,
-as on any other, re-read each verb's usage before running it. Plan text is never ground truth; the merged code is.
+"W2-Dn") or to the plan task that ships it (W2-3, W2-4, W2-5a, W2-5b1, W2-5b2, W2-6, W2-7). Every verb, flag,
+refusal word and output path below was checked against the code of `v0.0.740`. By the operator's ruling of 2026-10-26
+(R-B1), the final W2 release carries the budget-amendment wave, W2-7 (#1641, `c1770fbf4`, first released as
+`v0.0.740`), not `v0.0.730`: it is the fleet box's release at act 6, `v0.0.740` or a later one with the same history
+code (see "Before act 7"). On that tag, re-read each verb's usage before running it. Plan text is never ground truth;
+the merged code is.
 
 ## In short
 
@@ -99,7 +101,7 @@ same `--out` (W2-D80 and §7, the classification of the unmeasured and driver wo
 |---|---|---|
 | `limits-threshold` | stop | Wait until `max(five, seven)` < `limits.threshold_pct` (70), then re-run the same command (W2-D55). |
 | `limits-stale` | stop | Refresh the limits row with one interactive statusline render on the account, then re-run. Never edit `~/.cc-limits` (W2-D55, §5 act 21). |
-| `budget-exhausted` | stop | The budget in force is spent. Before part 1, re-run with a larger `--budget`. Part 1 to part 2: part 1's `pilot_budget` binds, so raising it needs a superseding draft, which is a ruling: it re-runs acts 12 to 17, a full re-pilot included (act 12, "Any superseding draft"). From part 2: `spend_budget` is signed. `open --finalize` derives it from the pilot's usage extrapolation and refuses any other `--spend-budget`, and in `v0.0.730` no amendment kind carries a budget (W2-D90). The remedy is a new amendment kind that raises `spend_budget`, built in a small wave before act 10 (the operator's ruling of 2026-10-26, R-B1). That wave is not built yet: fill in its kind name, flags and refusal words here and in act 21 from its merged code. |
+| `budget-exhausted` | stop | The budget in force is spent. Before part 1, re-run with a larger `--budget`. Part 1 to part 2: part 1's `pilot_budget` binds, so raising it needs a superseding draft, which is a ruling: it re-runs acts 12 to 17, a full re-pilot included (act 12, "Any superseding draft"). From part 2: `spend_budget` is signed. `open --finalize` derives it from the pilot's usage extrapolation and refuses any other `--spend-budget`. The budget in force is the newest `budget-raise` amendment's figure, else the signed `spend_budget` (W2-D55 as D-7063 amends it). The remedy is `open --amend --kind budget-raise --spend-budget <N>` on the operator's ruling (R-B1; W2-7), its sha posted, then the batches resume under the new record (act 21). `arms` and `judge` resume on their own `--out`. A quiz re-pilot (step 0b and fidelity, `--section quiz`) does not: its version pin holds the old record's sha, so it is refused `out-refused` before any spawn, and it re-runs whole on a fresh `--out` under the raised record. Its earlier spend does not carry into the fresh ledger: size the raise knowing that (review 1030 F1). |
 | `claude-version-moved` | stop | Before part 2: a ruling; the likely remedy is step 0a on a fresh `--out`, a superseding draft and a re-pilot (W2-D6, W2-D56). After part 2: the act 21 re-pilot and a `version-move` amendment. |
 | `tree-moved`, `code-changed` | stop | The build freeze was breached: a release was installed. From act 6 to act 28 no release is installed, and there is no freeze exception (the operator's ruling of 2026-10-26, R-B2). Do not roll back and resume. W2 halts and closes with no verdict: acts 26 to 29, as the halts table says. The code would refuse an amendment anyway once a `gate_code` file differs: `open --amend` takes no `--allow-code-change` and refuses `code-changed`. |
 | `wrapper-moved` | stop | A generated account's wrapper changed. From act 6 to act 28 the account's wrapper does not change (the operator's ruling of 2026-10-26, R-B2). W2 halts and closes with no verdict: acts 26 to 29, as the halts table says. |
@@ -134,10 +136,13 @@ Every line must be measured and recorded before step 0a.
   - 5h-1's plan approved and 5h-2's redaction questions ruled.
 - [ ] **Every W2 PR merged.** On `main` today: 5h-1 (#737), 5h-2 (#1010), W2-1 (#1105), W2-2a (#1126), W2-2b (#1154), W2-3
   (#856), W2-4 (#826) and W2-5a (#1134). Since merged: W2-5b1 (#1497), W2-6 (#1547) and W2-5b2 with the coordinator's K25 to
-  K27 amendment (#1560) (W2-D6, §5 act 5). Still to come: the budget-amendment wave, which adds an amendment kind that
-  raises `spend_budget` (the operator's ruling of 2026-10-26, R-B1). It is not built yet. The final W2 release is the tag cut from its merge, not
-  `v0.0.730`, and act 10 waits for that release. Acts 5 and 6 roll it, so acts 7 and 9 run on it too: part 1 refuses a
-  step 0a or pilot-source record stamped with another release (`release-mismatch`).
+  K27 amendment (#1560) (W2-D6, §5 act 5). Last: W2-7, the budget-amendment wave (#1641), which adds the amendment kind
+  `budget-raise` (the operator's ruling of 2026-10-26, R-B1; D-7063). The final W2 release is the release on the
+  fleet box at act 6: `v0.0.740` (#1641's merge, `c1770fbf4`) or a later release whose history code (the four
+  `gate_code` files and `ccd/history/`) is byte-identical to `v0.0.740`'s, never `v0.0.730`. Before act 5 the
+  coordinator measures that diff and posts the tag; on 2026-10-27 the fleet box was on `v0.0.745`, whose history code
+  is `v0.0.740`'s. `<tag>` below is that tag. Act 6 pins it (rolling it first only if the box is not on it), and
+  acts 7 onward run only on it: part 1 refuses a step 0a or pilot-source record stamped with another release (`release-mismatch`).
 - [ ] **That release is on the fleet box (§5 act 6).** Rolled out through the release lane (`ccrc rollout --to <tag>`, or
   `ccrc update --to <tag>` on the box). `ccrc version` names `<tag>` with a complete, signed `install:` line. Step 0a
   reads only `version` in `~/.ccrc/build.json`: an untagged build (no `version`), or a stamp that is absent, unreadable
@@ -560,7 +565,7 @@ Every line must be measured and recorded before step 0a.
   replay arms  --section quiz --out <OUT_ARMS> --record <cur part2> --record-sha256 <H2> \
     --part1 <P>/part1.json --part1-sha256 <H1> --frozen <OUT_QUIZ>/quiz/frozen.json --frozen-sha256 <H_Q> \
     [--supersedes <P>/part2.v<k-1>.json --supersedes-sha256 <H2_prev>]
-  #   stderr: "spend share <s> = ceil(<B> x <n> / <N>)", then sha256 of <OUT_ARMS>/quiz/arms/summary.json
+  #   stderr: "spend share <s> = ceil(<B> x <n> / <N>)", <B> the budget in force, then sha256 of <OUT_ARMS>/quiz/arms/summary.json
   replay judge --section quiz --out <OUT_ARMS> (the same record, part1, frozen and supersedes flags)
   #   → <OUT_ARMS>/quiz/judged.json and <OUT_ARMS>/quiz/judge/<id>.input.json
   ```
@@ -574,9 +579,8 @@ Every line must be measured and recorded before step 0a.
   - On a second infrastructure failure, the question is `run-failed` and excluded from both arms.
   - The budget remains a soft stop. K25 reads the judge's gate as judge spend only, while `arms` counts all spend; the
     overshoot is disclosed, not capped.
-  - A `budget-exhausted` stop: write the new amendment kind that raises `spend_budget` (R-B1), then follow every
-    amendment's rules (W2-D90, K8). Its command, flags and refusal words are filled in here from the budget-amendment
-    wave's merged code; this runbook does not guess them.
+  - A `budget-exhausted` stop: on the operator's ruling, write a budget raise (R-B1; "A budget raise" below), then
+    follow every amendment's rules (W2-D90, K8).
 - **After a `claude-version-moved` stop** (W2-D56, W2-D90; W2-5b2 Task 3; Q12, K1, K7, K22). Each re-pilot gets a fresh
   `<OUT_REPILOT_m>`.
   ```
@@ -606,6 +610,41 @@ Every line must be measured and recorded before step 0a.
   ```
   - Post the sha before the next batch. The next `arms` batch's W2-D78 (iii) re-check must pass, and the operator rules
     whether the quiz and the window stand (W2-D7).
+- **A budget raise** (W2-D90, W2-D55 as D-7063 amends it; W2-7 Tasks 1 and 2; R-B1). Only on the operator's ruling, from
+  part 2 on, before window start or during it:
+  ```
+  replay open --amend --kind budget-raise --spend-budget <N> --record <cur part2> --record-sha256 <H2> \
+    --part1 <P>/part1.json --part1-sha256 <H1> --frozen <OUT_QUIZ>/quiz/frozen.json --frozen-sha256 <H_Q> [--supersedes …] \
+    > <P>/part2.v<k+1>.json
+  ```
+  - `<N>` is the whole new budget, not an increment. It must be strictly above the budget in force: the signed
+    `spend_budget`, or the newest earlier raise. A raise names no node: the budget is the record's, and each node's share
+    is `ceil(<N> × n_node / n_all)` (Q5), so one raise moves every node's share. `--node-label` is not a `budget-raise`
+    flag. A pre-window `open --finalize --prior-final` rebuilds part 2 with no amendments, so a raise made before it is
+    dropped: raise again after it if needed.
+  - Like every amendment it prints the superseding part 2 on stdout and `sha256 <hex>` on stderr, and writes nothing.
+    Save it 0600 off-repo, outside every `--out`. **Post the new `H2` before the next batch** (W2-D90).
+  - Words:
+    - `record-invalid` naming `<path> <word>`: `budget-not-raised` at `amendments[<i>].detail.spend_budget` (at or below
+      the budget in force); `field-missing` or `field-malformed` there (absent or null, or no safe integer); `field-unknown`
+      at another detail key; `value-outside-set` at `amendments[<i>].node_label_ref`. All but `budget-not-raised` arise
+      only from a hand-written record, which every part 2 consumer refuses the same way;
+    - `args-invalid`: `spend-budget-required`, `--spend-budget wants a positive integer, got "<text>"`, or
+      `--<flag> is not a budget-raise flag`;
+    - `record-*`, `code-*`, as for every amendment.
+  - **A pending version move is written before a raise.** A raise appended between a re-pilot and its version-move
+    changes the record's sha, so `open --amend --kind version-move` refuses `input-invalid` `repilot record-mismatch:
+    re-piloted under <A>, amending <B>`, prints nothing, and the re-pilot, which spends, runs again. A raise owed before
+    any re-pilot runs (for instance because the re-pilot itself stopped on a spent budget) is written first, and the
+    re-pilot then runs under the raised record, on a fresh `--out` (below).
+  - **A quiz re-pilot stopped on a spent budget re-runs whole** (review 1030 F1). Its version pin holds the old record's
+    sha, so on its own `--out` after a raise it is refused `out-refused` (`quiz/repilot-version.json is another
+    re-pilot's (record <sha>, store <id>): one re-pilot per --out, …`) before any spawn. Run step 0b and fidelity again,
+    under one record, on a fresh `<OUT_REPILOT_m>` under the raised record. Its earlier spend does not carry into the fresh
+    spend ledger, so size the raise knowing that. `arms` and `judge` do resume on their own `--out`.
+  - **After the raise**, as after every amendment: each node's arms summary, `judged.json` and verify outputs written
+    under the old record refuse `input-invalid` `record-mismatch` at `report`. Each affected node re-runs `arms` (a
+    settled question spawns nothing), `judge` and both `verify` sections under the new record (act 24, "The record").
 - **No release install and no wrapper change** (the operator's ruling of 2026-10-26, R-B2). From act 6 to act 28 no release is
   installed and the account's wrapper does not change. There is no freeze exception: the `freeze-exception` amendment
   kind and `--allow-code-change` are not used. If an install or a wrapper change is forced (a security fix, an account
@@ -700,6 +739,13 @@ Every line must be measured and recorded before step 0a.
   `<P>/verify-quiz.v<k>.json`, or `<P>/verify-quiz.start.json` if part 2 was never amended.
 - **Words:**
   - `input-invalid`: a stale verify output (K11), an output of another record, or `window-open` before `<E_ms>`;
+  - `input-invalid` `arms-summary <store>: quiz/answers/<qid>.<arm>.json is not a settled answer record`: an answer
+    record edited or damaged, such as one marked correct whose answer state is not `value` (W2-7, CP-27 F1; see the
+    halts table);
+  - `input-invalid` `verify-ab <store> lists "<id>" …`, one detail per defect (W2-7, CP-27 A10): `off the record's
+    assignment` (an entry that is no object, or names no assigned family of this store), `under arm "<a>", not the
+    record's "<b>"`, or `in state "<s>", not one of AB_STATES`. Pass the verify output act 23 wrote under `<cur part2>`; if that output
+    itself gives one of these, it was edited or damaged: re-run act 23's verify;
   - `out-refused`: `verdict.json` already exists in `--out` (use a fresh one);
   - `input-invalid` `arms-unsettled` (or `decideGate`'s `question-not-run`, printed as `input-invalid` too): resume act
     21, since it is not a halt (W2-D89 amendment);
@@ -785,7 +831,7 @@ The **markers in place** at each point:
 | `empty-arm` (W2-D89) | act 24 `halt` for criterion 1 or 3 | the same | the same | Yes |
 | A judge-failed item unlabelled | act 24 `incomplete` (a hold) | the same | none: label it (act 22) and re-run act 24 on a fresh report `--out`: `verdict.json` is written once, and the old `--out` refuses `out-refused` | Yes |
 | An unsettled question at gate time | act 24 `input-invalid` `arms-unsettled` (not a halt) | the same | none: resume act 21, then re-run act 22 on a fresh `<OUT_REPORT_n>`, label its sample, and run act 24 there. Act 23's outputs stand while the record is unchanged. | Yes |
-| Answer records edited or corrupted: two records of one arm on one node with their `answer_field.state` swapped, under an unchanged per-arm arms summary (a W2-5b2 residual) | act 24 `report` exits 1 (`internal error`), not `input-invalid`; nothing is written | the same | none: restore the answer records `arms` wrote under `<OUT_ARMS>/quiz/answers/`, then re-run act 24 on a fresh report `--out` | Yes |
+| Answer records edited or corrupted: two records of one arm on one node with their `answer_field.state` swapped, under an unchanged per-arm arms summary (a W2-5b2 residual, closed by W2-7, CP-27 F1) | act 24 `report` refuses `input-invalid` `arms-summary <store>: quiz/answers/<qid>.<arm>.json is not a settled answer record`, naming the record marked correct, before `--out`; nothing is written | the same | none: restore the answer records `arms` wrote under `<OUT_ARMS>/quiz/answers/`, then re-run act 24 on a fresh report `--out` | Yes |
 
 In every abort, the order is fixed: 26 (only if act 18 ran), then 27 (if a marker is on disk), then 28, then 29. Record each
 time, and the ruling's own time, in the ledger. A halt before window start closes W2 without W2-D86's counter report,
@@ -799,6 +845,8 @@ and the ledger records the halt (the operator's ruling of 2026-10-26, R-B4).
 - **Record every `--accept-failed-pilot` use** in the ledger as the operator's act, with the failures it printed (Q27, K14).
 - **Record each forced frozen act** with its time, its amendment's sha, and the result of the next
   arms batch's W2-D78 (iii) re-check, which must pass (W2-D7).
+- **Record each budget raise** in the programme ledger, like every amendment: its time, its figure and its amendment's
+  sha (R-B1, D-7063).
 - **Re-measure the release stamp and the live Claude Code version** at window start (act 20) and at window end (act 23).
   Both go in the report (W2-D6).
 - **Record every posted sha** (`H_0A`, `H_PS`, `H_PF`, `H1`, `H_C`, `H_VR`, `H_PW` with the Q18 decision and its scalar figures, `H_0B`, `H_PR`,
@@ -813,15 +861,17 @@ and the ledger records the halt (the operator's ruling of 2026-10-26, R-B4).
 
 **Agreed**
 - One named node, the fleet box (ruling 2026-10-25). Acts 7 to 29 run there in §5's order.
-- Every W2 PR so far is merged; W2-5b1 (#1497), W2-6 (#1547) and W2-5b2 with K25 to K27 (#1560) were the last. Every
-  verb, flag, refusal word and output path here was checked against `v0.0.730`'s code.
+- Every W2 PR is merged; W2-5b1 (#1497), W2-6 (#1547), W2-5b2 with K25 to K27 (#1560) and W2-7 (#1641) were the last.
+  Every verb, flag, refusal word and output path here was checked against `v0.0.740`'s code, which `v0.0.745` carries
+  unchanged.
 - The two-part record, saved 0600 off-repo, with only shas, counts and aggregates public (W2-D25).
 - Stops resume and refusals need a changed input (`DRIVER_STOPS` and `DRIVER_REFUSALS`). `pilot-failed` halts (K3).
 - A quiz-floor superseding draft cannot reuse the pilot result: `open --finalize` refuses one written under another
   part 1 (K21), so acts 12 to 17 re-run.
-- A spent budget after part 2 (the operator's ruling of 2026-10-26, R-B1): a small build wave, before act 10, adds an amendment
-  kind that raises `spend_budget`. The final W2 release is the tag cut from its merge. Acts 5 and 6 roll that tag, not
-  `v0.0.730`, and act 10 waits for it.
+- A spent budget after part 2 (the operator's ruling of 2026-10-26, R-B1): built by W2-7 (#1641, D-7063) as the
+  amendment kind `budget-raise`, which only raises the budget in force and moves nothing that scores. The final W2
+  release carries its merge (`c1770fbf4`, first released as `v0.0.740`): the fleet box's release at act 6 with the
+  same history code (`v0.0.745` on 2026-10-27), not `v0.0.730`, and acts 7 onward run only on it.
 - No release install and no change to the account's wrapper from act 6 to act 28 (R-B2). There is no freeze exception.
   If either is forced, W2 halts and closes with no verdict (acts 26 to 29). `tree-moved`, `code-changed` and
   `wrapper-moved` are halts. This settles both freeze-exception questions: no release is installed in the window, so
@@ -833,10 +883,9 @@ and the ledger records the halt (the operator's ruling of 2026-10-26, R-B4).
 
 **Waiting on you**
 - Act 1's account and the three exact model ids (arm, writer, judge).
-- The budget-amendment wave (R-B1): built, merged and released. Then fill in its kind name, flags and refusal words in
-  the `budget-exhausted` row and act 21, and re-check every verb here against its tag.
-- Acts 5 and 6: roll that wave's tag onto the fleet box through the release lane, then pin its update intent to that tag
-  (or set it off) and record the time. The rest of "Before act 7" follows.
+- Acts 5 and 6: the coordinator posts the final W2 release's tag (`v0.0.745` as measured on 2026-10-27); roll it onto
+  the fleet box only if the box is not on it, then pin its update intent to that tag (or set it off) and record the
+  time. The rest of "Before act 7" follows.
 - Rulings this runbook cannot make: none left. The operator's ruling of 2026-10-26 settled all six.
 
 **Later**
