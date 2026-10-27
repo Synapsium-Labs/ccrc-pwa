@@ -15,16 +15,16 @@
 import { describe, it, expect, vi, afterEach, beforeAll } from 'vitest';
 import { createElement } from 'react';
 import { act, cleanup, render } from '@testing-library/react';
-import { sessionBucket, UNCHECKED_PR, type AccountUsage, type FleetSession, type PrPhase, type PrState } from '../../shared/api';
+import { sessionBucket, UNCHECKED_PR, type FleetSession, type PrPhase, type PrState } from '../../shared/api';
 import { fleetSession } from './fleetFixture';
 import { TEST_ROSTER } from './rosterFixture';
+import { seedAccountsAnswer } from './accountsAnswer';
 import { SessionActionsSheet } from '../src/fleet/SessionActionsSheet';
 import { AccountsScreen } from '../src/screens/AccountsScreen';
 import { ArchiveScreen, archivedSummary } from '../src/screens/ArchiveScreen';
 import { PrSheet } from '../src/session/PrSheet';
 import { sessionHeaderView } from '../src/session/sessionHeaderView';
 import { createFleetStore, useFleetStore } from '../src/stores/fleet';
-import { api } from '../src/lib/api';
 
 const ID = 'session-a';
 const NOW = 1_784_600_000_000;
@@ -80,14 +80,13 @@ const SITES: readonly Site[] = [
   { name: 'SessionActionsSheet.tsx (Hold door: archivedAt === null)', verdict: (s) => sheet(s, 'Hold') },
   { name: 'SessionActionsSheet.tsx (Clean up workspace door: archivedAt !== null)', verdict: (s) => sheet(s, 'Clean up workspace…') },
   { name: 'AccountsScreen.tsx#AccountsScreen (sessions on this account)', verdict: async (s) => {
-    const acct: AccountUsage = { wrapper: 'claude', five: 0, seven: 0, ts: Math.floor(Date.now() / 1000) - 60, fiveResetAt: null, sevenResetAt: null, fiveRolledOver: false, sevenRolledOver: false, disabled: false, authDead: false };
-    const spy = vi.spyOn(api, 'accounts').mockResolvedValue({ accounts: [acct], projected: null, roster: TEST_ROSTER });
+    const undo = seedAccountsAnswer();
     act(() => useFleetStore.setState({ sessions: [s] }));
     render(createElement(AccountsScreen));
     await act(async () => { await Promise.resolve(); await Promise.resolve(); });
     const listed = document.querySelector('.accounts-session') !== null ? 'listed' : 'not-listed';
     cleanup();
-    spy.mockRestore();
+    undo();
     act(() => useFleetStore.setState({ sessions: [] }));
     return listed;
   } },

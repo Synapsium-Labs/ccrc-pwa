@@ -7,7 +7,8 @@
 // run on the workspace), and the seven run-to-session map lookups: `RunsScreen`'s three (the abandon sheet's
 // `sessionById.get(abandonTarget.sessionId)`, read through the child word the sheet is handed, and each row's worker and
 // claimant, read off the props the screen hands `RunRow`, whose real Resume door is rendered), `runWords.ts#runCard`'s
-// two, and `nestFleet`'s `attentionFirst` and `fleetTree`'s filter lookup (through `fleetTree`'s rows). Beside them, the
+// two, `nestFleet`'s `attentionFirst` (through the ORDER of a coordinator's children, its own block below: a card and
+// a depth do not show it) and `fleetTree`'s filter lookup (through `fleetTree`'s rows). Beside them, the
 // wire's own facts: `sessionRunOf(s)`, `sessionRunOf(s, 'open')` and `childIdsOf(run)`.
 //
 // THE ROWS: two runs naming one worker; a recycled id as a worker and as a coordinator; the open-vs-newest pair; a closed
@@ -23,6 +24,7 @@ import { fleetSession } from './fleetFixture';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
 import { runBelongsTo, runCard, runForSession } from '../src/fleet/runWords';
 import { cardsOf, fleetTree } from '../src/fleet/fleetTree';
+import { nestFleet, type FleetRow } from '../src/fleet/nestFleet';
 import { coordPresence } from '../src/fleet/coordWords';
 import { sessionEntries } from '../src/command/sessionEntries';
 import { ArchiveSheet } from '../src/fleet/ArchiveSheet';
@@ -279,6 +281,49 @@ describe('the matchers that ask the coordinator side (ArchiveSheet, PrSheet)', (
       const got = { archiveAsksClaimant: archiveAsks(sc, C), prOpenRunOnWorker: prOpenRun(sc) };
       console.log(`w7-run-binding-table matchers ${sc.name}: ${JSON.stringify(got)}`);
       expect(got).toEqual(MATCHERS[sc.name]);
+    });
+  }
+});
+
+describe('nestFleet\'s attentionFirst lookup: the child order under one coordinator (#746 fixture)', () => {
+  // `attentionFirst`'s `byId.get(r.sessionId)` asks "is this run's worker waiting on the operator", and its answer is
+  // only visible in the ORDER of a coordinator's children (`treeRow` above records a card and a depth, not an order).
+  // So each row here gives one live coordinator two children: an ordinary worker on wave 1, and a wave-2 run whose
+  // worker is in `attention`. Today a waiting worker's run sorts first whatever its binding, so the wave-2 row reads
+  // above the wave-1 row. Item 3's table moves this lookup to `workerOf` by binding (an unbound worker does not sort its
+  // run first), so the unbound and recycled rows are the ones C7d must name; the bound row is the control that keeps
+  // its order. Pinned twice: `fleetTree`'s rows (the fleet's own path, after its `runForSession` filter) and `nestFleet`
+  // handed the runs directly (the comparator alone, no filter in front of it).
+  const O = 'worker-o';
+  const r60 = run(60, { sessionId: O, workspace: 'ws-o', branch: 'ws/ws-o', wave: 1 });
+  const r61 = run(61, { wave: 2 });
+  const ordinary = (): FleetSession => worker({ id: O, workspace: 'ws-o', workdir: '/w/ws-o', child: { kind: 'child', runId: 60 }, run: bound(r60), openRun: bound(r60) });
+  const waiting = (over: Partial<FleetSession>): FleetSession => worker({ child: { kind: 'child', runId: 61 }, status: 'idle', bucket: 'attention', ...over });
+  const ORDERS: ReadonlyArray<{ name: string; sessions: readonly FleetSession[]; tree: readonly string[]; nest: readonly string[] }> = [
+    { name: 'the waiting worker is unbound (no run on the wire), the stale run names it by id',
+      sessions: [coord(), ordinary(), waiting({ run: null, openRun: null })], tree: [W, O], nest: [W, O] },
+    { name: 'the waiting worker is a recycled id (its binding names another run), the stale run names it by id',
+      sessions: [coord(), ordinary(), waiting({ run: bound(closed(90)), openRun: null })], tree: [W, O], nest: [W, O] },
+    { name: 'the control: the waiting worker is bound to the wave-2 run',
+      sessions: [coord(), ordinary(), waiting({ run: bound(r61), openRun: bound(r61) })], tree: [W, O], nest: [W, O] },
+  ];
+  const childrenOf = (rows: readonly FleetRow[]): string[] => {
+    const at = rows.findIndex((x) => x.kind === 'session' && x.session.id === C && x.depth === 0);
+    const out: string[] = [];
+    for (const x of rows.slice(at + 1)) {
+      if (x.depth === 0) break;
+      out.push(x.kind === 'session' ? x.session.id : `pending:${x.run.id}`);
+    }
+    return out;
+  };
+  for (const o of ORDERS) {
+    it(o.name, () => {
+      const runs = [r60, r61];
+      const tree = fleetTree([...o.sessions], ['project-a'], runs, {});
+      const card = tree.find((g) => g.project === 'project-a')!;
+      const got = { tree: childrenOf(card.rows), nest: childrenOf(nestFleet(o.sessions, runs)) };
+      console.log(`w7-run-binding-table attentionFirst ${o.name}: ${JSON.stringify(got)}`);
+      expect(got).toEqual({ tree: o.tree, nest: o.nest });
     });
   }
 });

@@ -24,9 +24,10 @@
 import { describe, it, expect, vi, beforeAll, afterAll, afterEach } from 'vitest';
 import { createElement } from 'react';
 import { act, cleanup, render } from '@testing-library/react';
-import type { AccountUsage, FleetSession, Presence, RunSummary } from '../../shared/api';
+import type { FleetSession, Presence, RunSummary } from '../../shared/api';
 import { fleetSession } from './fleetFixture';
 import { TEST_ROSTER } from './rosterFixture';
+import { seedAccountsAnswer } from './accountsAnswer';
 import { tableRows, type TableRow } from './presenceTable';
 import { ArchiveAllConfirm } from '../src/fleet/ArchiveAllPlane';
 import { SessionActionsSheet } from '../src/fleet/SessionActionsSheet';
@@ -40,7 +41,6 @@ import { orphanNote } from '../src/fleet/orphanWords';
 import { RunRow } from '../src/screens/RunRow';
 import { AccountsScreen } from '../src/screens/AccountsScreen';
 import { useFleetStore } from '../src/stores/fleet';
-import { api } from '../src/lib/api';
 import { loadFleetSnapshot, saveFleetSnapshot } from '../src/lib/offline';
 
 const ID = 'session-a';
@@ -129,14 +129,13 @@ const SITES: readonly Site[] = [
   { name: 'startProgramPolicy.ts#liveIdsIn', build: (r) => sessionOf(r), verdict: (s) => (liveIdsIn([s]).has(ID) ? 'live' : 'not-live') },
   { name: 'AccountsScreen.tsx#AccountsScreen (sessions on this account)', build: (r) => sessionOf(r, { workspace: 'ws-a', wrapper: 'claude', home: 'claude', name: 'session-a' }),
     verdict: async (s) => {
-      const acct: AccountUsage = { wrapper: 'claude', five: 0, seven: 0, ts: Math.floor(Date.now() / 1000) - 60, fiveResetAt: null, sevenResetAt: null, fiveRolledOver: false, sevenRolledOver: false, disabled: false, authDead: false };
-      const spy = vi.spyOn(api, 'accounts').mockResolvedValue({ accounts: [acct], projected: null, roster: TEST_ROSTER });
+      const undo = seedAccountsAnswer();
       act(() => useFleetStore.setState({ sessions: [s] }));
       render(createElement(AccountsScreen));
       await act(async () => { await Promise.resolve(); await Promise.resolve(); });
       const listed = document.querySelector('.accounts-session') !== null ? 'listed' : 'not-listed';
       cleanup();
-      spy.mockRestore();
+      undo();
       act(() => useFleetStore.setState({ sessions: [] }));
       return listed;
     } },

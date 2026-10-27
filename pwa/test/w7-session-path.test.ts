@@ -14,9 +14,9 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { createElement } from 'react';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
-import { isSessionIdShape, type AccountUsage, type NotifyEvent, type RunSpend, type RunSummary } from '../../shared/api';
+import { isSessionIdShape, type NotifyEvent, type RunSpend, type RunSummary } from '../../shared/api';
 import { fleetSession } from './fleetFixture';
-import { TEST_ROSTER } from './rosterFixture';
+import { seedAccountsAnswer } from './accountsAnswer';
 import { navigate } from '../src/lib/router';
 import { api } from '../src/lib/api';
 import { App } from '../src/app';
@@ -93,8 +93,7 @@ const SITES: Record<string, (id: string) => Promise<string>> = {
     return t.kind === 'session' ? t.path : `(${t.kind})`;
   },
   'screens/AccountsScreen.tsx#AccountsScreen': async (id) => {
-    const acct: AccountUsage = { wrapper: 'claude', five: 0, seven: 0, ts: Math.floor(Date.now() / 1000) - 60, fiveResetAt: null, sevenResetAt: null, fiveRolledOver: false, sevenRolledOver: false, disabled: false, authDead: false };
-    vi.spyOn(api, 'accounts').mockResolvedValue({ accounts: [acct], projected: null, roster: TEST_ROSTER });
+    seedAccountsAnswer();
     act(() => { useFleetStore.setState({ sessions: [fleetSession({ id, wrapper: 'claude', home: 'claude', workspace: 'ws-a', name: 'session-a' })] }); });
     render(createElement(AccountsScreen));
     await act(async () => { await Promise.resolve(); await Promise.resolve(); });
