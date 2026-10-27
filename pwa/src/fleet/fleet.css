@@ -3572,14 +3572,7 @@ button.proj-card-pool::before {
 @media (min-width: 900px) {
   .sess-body .fit-full { display: inline; }
   .sess-body .fit-short { display: none; }
-  .sess-label-fit {
-    display: -webkit-box;
-    -webkit-box-orient: vertical;
-    -webkit-line-clamp: 2;
-    line-clamp: 2;
-    overflow: hidden;
-    overflow-wrap: anywhere;
-  }
+  .sess-label-fit,
   .sess-context[data-context='branch'] {
     display: -webkit-box;
     -webkit-box-orient: vertical;
