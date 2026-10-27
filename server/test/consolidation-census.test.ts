@@ -102,18 +102,23 @@ describe('reclaimPauseParseSites: includes(RECLAIM_PAUSE_MARKER) expressions und
       ['server/src/coord/rundefs.ts', 'server/src/lane.ts', 'server/src/watch.ts']);
   });
 
-  // D-5856: the real-tree anchor is the stop-done lane's read, the one parse W1a's C1b leaves (W4 moves it); C1b folds
-  // childReclaim's, the anchor until then, onto `readSwitches`.
-  it("REAL: it finds stopDoneSweep's read, and fewer files parse the marker than name it", () => {
+  // D-5856: the real-tree anchor was the stop-done lane's read, the one parse W1a's C1b left. D-7041 (ARCH-43) folds it
+  // onto `readSwitches`, so no real parse site is left; the "it can see one" half reads the FIXTURE tree, which plants
+  // two.
+  it("REAL: no private parse is left once stopDoneSweep's read folds; FIXTURE: it sees one, and fewer files parse the marker than name it", () => {
     const sites = reclaimPauseParseSites();
     show('reclaimPauseParseSites', sites);
-    expect(sites.some((s) => s.file === 'server/src/stopDoneSweep.ts'), "stopDoneSweep's read is not found").toBe(true);
-    for (const s of sites) expect(s.text, `${s.file}:${s.line}`).toMatch(/\bincludes\(\s*RECLAIM_PAUSE_MARKER\s*\)/);
-    const naming = filesNaming(['reclaim-paused', 'RECLAIM_PAUSE_MARKER']);
-    console.log(`census files naming reclaim-paused: ${naming.length}\n  ${naming.join('\n  ')}`);
+    expect(sites.map((s) => `${s.file}:${s.line}`), 'a private includes(RECLAIM_PAUSE_MARKER): read it through readSwitches').toEqual([]);
+    const planted = reclaimPauseParseSites(root);
+    expect(planted.some((s) => s.file === 'server/src/lane.ts'), "the fixture's planted read is not found").toBe(true);
+    for (const s of planted) expect(s.text, `${s.file}:${s.line}`).toMatch(/\bincludes\(\s*RECLAIM_PAUSE_MARKER\s*\)/);
+    const real = filesNaming(['reclaim-paused', 'RECLAIM_PAUSE_MARKER']);
+    console.log(`census files naming reclaim-paused: ${real.length}\n  ${real.join('\n  ')}`);
+    expect(real.length, 'the real tree still names the marker (readSwitches\' readers)').toBeGreaterThan(0);
+    const naming = filesNaming(['reclaim-paused', 'RECLAIM_PAUSE_MARKER'], root);
     // Every parse site's file names the marker; a query matching the bare word would make the two sets equal.
-    for (const f of files(sites)) expect(naming).toContain(f);
-    expect(files(sites).length).toBeLessThan(naming.length);
+    for (const f of files(planted)) expect(naming).toContain(f);
+    expect(files(planted).length).toBeLessThan(naming.length);
   });
 });
 

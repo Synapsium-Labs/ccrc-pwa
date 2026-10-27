@@ -316,3 +316,34 @@ describe('noticeBanner: the notify.sh banner\'s bus frames (D-6732; ARCH-59 #794
     expect(frames('note: cc swap: s1 moved a -> b')).toHaveLength(1);
   });
 });
+
+// D-7041 (ARCH-43, the run-done funnel task; departure `notice-lane-prefix`). A writer that names its lane keeps the
+// lane's prefix in the archive-failure warning (stop-done's `stop-done: `); a writer that names none prints today's
+// line byte for byte, whether it names its own sentence or takes the default. The bytes are spelled here, not built
+// from `degradeLine`, so a change to either spelling is red.
+describe('notify: the lane prefix on the archive-failure warning (D-7041)', () => {
+  const failing = async (): Promise<FeedRecorder> => {
+    const rec = await feedRecorder(mkTmp('ccrc-notice-lane-'));
+    rec.archiveThrowsOn('every');
+    return rec;
+  };
+
+  it('lane set: the warning carries the lane after `ccrc-server: `, then the writer\'s sentence', async () => {
+    const rec = await failing();
+    const out = notify(sinks(rec), EVENT, 'record-only', { lane: 'stop-done', degraded: 'the mail-only count has no feed row' });
+    expect(out).toEqual({ recorded: true, archived: 'failed' });
+    expect(rec.warned()).toEqual(['ccrc-server: stop-done: recordFeedEvent failed (disk full) — the mail-only count has no feed row']);
+  });
+
+  it('lane absent, no sentence named: today\'s default line', async () => {
+    const rec = await failing();
+    notify(sinks(rec), EVENT, 'record-only');
+    expect(rec.warned()).toEqual(['ccrc-server: recordFeedEvent failed (disk full) — feed archive degraded, ring/push unaffected']);
+  });
+
+  it('lane absent, its own sentence named: today\'s line with that sentence', async () => {
+    const rec = await failing();
+    notify(sinks(rec), EVENT, 'push', { degraded: 'the writer\'s own sentence' });
+    expect(rec.warned()).toEqual(['ccrc-server: recordFeedEvent failed (disk full) — the writer\'s own sentence']);
+  });
+});

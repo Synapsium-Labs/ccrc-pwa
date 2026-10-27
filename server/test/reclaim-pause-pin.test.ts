@@ -125,7 +125,7 @@ const PINNED_SITES: Readonly<Record<string, number>> = {
   'server/src/coord/collectTempRoot.ts': 0,     // folded onto readSwitches (D-5856)
   'server/src/coord/endDeadCoordinator.ts': 0,  // folded onto readSwitches (D-5856)
   'server/src/coord/expireArchived.ts': 0,      // folded onto readSwitches (D-5856)
-  'server/src/stopDoneSweep.ts': 1,             // stopDonePass's switches
+  'server/src/stopDoneSweep.ts': 0,             // folded onto readSwitches (D-7041)
   'server/src/watch.ts': 0,                     // folded onto readSwitches (D-5856)
 };
 
