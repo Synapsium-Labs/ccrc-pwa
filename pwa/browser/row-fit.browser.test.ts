@@ -385,6 +385,9 @@ const NAME_12 = 'north-to-sea';
 const NAME_30 = 'quiet-river-gentle-bridge-lamp';
 const NAME_60 = 'amber-field-narrow-garden-stone-silver-harbor-morning-cedars';
 const NAME_104 = `${NAME_60}-${NAME_30}-${NAME_12}`;
+/** 60 characters joined by underscores: `shortenByToken` splits at `_`, CSS does not, so the name has a short form (it is a
+ *  `Fit` pair) and no break point of its own in the full form. */
+const NAME_SNAKE = 'alpha_beta_gamma_delta_epsilon_zeta_theta_iota_kappa_lambdas';
 const NAME_BRANCH_ROW = 'branch-row';
 const NAME_SELECTED = 'short-select';
 const BRANCH_120 = `ws/${'garden-stone-silver-harbor-morning/'.repeat(3)}quiet-rivers`;
@@ -397,6 +400,7 @@ const FIT_SESSIONS = [
   fitRow('r30', NAME_30, null),
   fitRow('r60', NAME_60, null),
   fitRow('r104', NAME_104, null),
+  fitRow('rsnake', NAME_SNAKE, null),
   fitRow('rbranch', NAME_BRANCH_ROW, BRANCH_120),
   fitRow('rsel', NAME_SELECTED, null),
 ];
@@ -438,6 +442,14 @@ async function bootFit(view: AppView, mode: string, route: string): Promise<{ pa
   return { page, errors, close: () => ctx.close() };
 }
 
+/** The desk routes select `FIT_SELECTED`: exactly one row wears `.sess-line--active`, and it is that short row (a route
+ *  that failed to resolve would leave the fixture's selected row a silent no-op). */
+async function expectSelectedRow(page: Page): Promise<void> {
+  const active = page.locator('.sess-line--active');
+  expect(await active.count(), 'exactly one row is the selected row').toBe(1);
+  expect(await active.locator('.sess-label').first().textContent(), 'and it is the selected short row').toBe(NAME_SELECTED);
+}
+
 interface FitBox {
   /** The name or the context cell drew a pair of forms (`Fit`), or only plain text. */
   readonly paired: boolean;
@@ -449,6 +461,8 @@ interface FitBox {
   readonly width: number;
   readonly lineHeight: number;
   readonly scrollHeight: number;
+  readonly scrollWidth: number;
+  readonly clientWidth: number;
   readonly clientHeight: number;
   /** The `.sess-body` content box the box sits in. */
   readonly track: number;
@@ -485,6 +499,8 @@ function measureFit(page: Page, name: string, part: 'name' | 'branch'): Promise<
       width: r.width,
       lineHeight: parseFloat(cs.lineHeight),
       scrollHeight: box.scrollHeight,
+      scrollWidth: box.scrollWidth,
+      clientWidth: box.clientWidth,
       clientHeight: box.clientHeight,
       track: body.clientWidth - parseFloat(bs.paddingLeft) - parseFloat(bs.paddingRight),
       title: box.getAttribute('title'),
@@ -494,14 +510,15 @@ function measureFit(page: Page, name: string, part: 'name' | 'branch'): Promise<
 }
 
 describe('D-6332: a session row shows its name whole where it has room', () => {
-  it('the fixture names are exactly 12, 30, 60 and 104 characters, and the branch is 120', () => {
-    expect([NAME_12, NAME_30, NAME_60, NAME_104, BRANCH_120].map((n) => n.length)).toEqual([12, 30, 60, 104, 120]);
+  it('the fixture names are exactly 12, 30, 60, 104 and 60 (underscored) characters, and the branch is 120', () => {
+    expect([NAME_12, NAME_30, NAME_60, NAME_104, NAME_SNAKE, BRANCH_120].map((n) => n.length)).toEqual([12, 30, 60, 104, 60, 120]);
   });
 
   for (const { view, mode } of fitViews([1280, 1920])) {
     it(`at 1280 and 1920, a 30-character name renders whole in both skins (${named(view)}, ${mode})`, async () => {
       const { page, errors, close } = await bootFit(view, mode, `/s/${FIT_SELECTED}`);
       try {
+        await expectSelectedRow(page);
         const twelve = await measureFit(page, NAME_12, 'name');
         expect(twelve.paired, 'a 12-character name has no shortened form').toBe(false);
         const m = await measureFit(page, NAME_30, 'name');
@@ -521,6 +538,7 @@ describe('D-6332: a session row shows its name whole where it has room', () => {
     it(`a name longer than the track is shortened to fill it (${named(view)}, ${mode})`, async () => {
       const { page, errors, close } = await bootFit(view, mode, `/s/${FIT_SELECTED}`);
       try {
+        await expectSelectedRow(page);
         const one = await measureFit(page, NAME_12, 'name');
         for (const name of [NAME_60, NAME_104]) {
           const m = await measureFit(page, name, 'name');
@@ -538,6 +556,25 @@ describe('D-6332: a session row shows its name whole where it has room', () => {
         expect(branch.height, 'a long branch is no taller than two lines').toBeLessThanOrEqual(2 * branch.lineHeight + 1);
         expect(branch.scrollHeight, 'a long branch is cut where its second line ends').toBeGreaterThan(branch.clientHeight);
         expect(branch.title, 'a long branch keeps its full text in title').toBe(BRANCH_120);
+        expect(await sideScroll(page)).toBe(0);
+        expect(errors).toEqual([]);
+      } finally {
+        await close();
+      }
+    });
+  }
+
+  for (const { view, mode } of fitViews([1280, 1920])) {
+    it(`a name with no break point wraps inside the track instead of running out of it (${named(view)}, ${mode})`, async () => {
+      const { page, errors, close } = await bootFit(view, mode, `/s/${FIT_SELECTED}`);
+      try {
+        await expectSelectedRow(page);
+        const one = await measureFit(page, NAME_12, 'name');
+        const m = await measureFit(page, NAME_SNAKE, 'name');
+        expect(m.fullShown && !m.shortShown, 'the underscored name draws its full form').toBe(true);
+        expect(m.scrollWidth, `no sideways overflow (${m.scrollWidth} of ${m.clientWidth}px)`).toBeLessThanOrEqual(m.clientWidth + 1);
+        expect(m.height, 'at most two lines tall').toBeLessThanOrEqual(2 * one.height + 1);
+        expect(m.openTitle, 'its full text stays in the row button title').toBe(NAME_SNAKE);
         expect(await sideScroll(page)).toBe(0);
         expect(errors).toEqual([]);
       } finally {

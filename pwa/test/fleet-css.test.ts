@@ -182,16 +182,20 @@ describe('fleet density and alignment', () => {
   it('clamps only a name and a branch to two lines, never a programme or its wave (desk-rule-not-container-threshold)', () => {
     // The desk draws the full form of a name, a branch and a programme (`Fit`) and lets the name and the branch
     // wrap on two lines, cut at the second. The programme slug and its wave tail (D-5528) are never clamped: no
-    // rule in the stylesheet may declare a line clamp on anything but those two.
+    // rule in the stylesheet may declare a line clamp on anything but those two, and none outside the desk block,
+    // or a phone's short form would be clamped too.
     const desk = atBlock(css, '@media (min-width: 900px)');
     expect(desk).toContain('.fit-full');
-    const clamped = [...stripComments(css).matchAll(/([^{}]+)\{([^{}]*line-clamp[^{}]*)\}/g)]
+    const clampSelectors = (text: string): string[] => [...stripComments(text).matchAll(/([^{}]+)\{([^{}]*line-clamp[^{}]*)\}/g)]
       .flatMap((m) => m[1]!.split(',').map((sel) => normSel(sel)));
-    expect(clamped.sort()).toEqual([".sess-context[data-context=branch]", '.sess-label-fit'].sort());
-    for (const sel of ['.sess-pw', '.sess-pw-prog', '.sess-pw-wave', '.sess-held', '.sess-child', '.sess-meta--context']) {
-      let values: string[] = [];
-      try { values = [...declaredValues(css, sel, '-webkit-line-clamp'), ...declaredValues(css, sel, 'line-clamp')]; } catch { /* no rule: nothing clamps it */ }
-      expect(values, `${sel} is never clamped`).toEqual([]);
+    expect(clampSelectors(css).sort()).toEqual([".sess-context[data-context=branch]", '.sess-label-fit'].sort());
+    expect(clampSelectors(css.replace(desk, '')), 'no line clamp is declared outside the desk block').toEqual([]);
+    for (const sel of ['.sess-label-fit', ".sess-context[data-context='branch']"]) {
+      const rule = ruleIn(desk, sel);
+      expect(declValue(rule, '-webkit-line-clamp'), `${sel} clamps to two lines at the desk`).toBe('2');
+      // A name with no CSS break point (`_`- or `.`-joined) wraps inside the box instead of running out of it
+      // sideways with no ellipsis (a clamp box clips at its edge).
+      expect(declValue(rule, 'overflow-wrap'), `${sel} breaks inside a token that alone exceeds the line`).toBe('anywhere');
     }
   });
 
