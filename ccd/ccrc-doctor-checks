@@ -4115,10 +4115,19 @@ _check_pool-sync() {
     # A `_plat_mtime` that cannot answer (stat missing, file raced away)
     # falls straight through to the FAIL below — the safe direction: no
     # evidence of a chance means no benefit of the doubt.
-    local pool_sync_grace=$((2 * 60)) unit_mtime unit_age
+    local pool_sync_grace=$((2 * 60)) unit_mtime unit_age grace period cad_rc=0
     unit_mtime="$(_plat_mtime "$unit_path" 2>/dev/null)"
     if [[ "$unit_mtime" =~ ^[0-9]+$ ]]; then
       unit_age=$(($(date +%s) - unit_mtime))
+      # The grace and the period its sentences name, read from the shipped
+      # unit file (D-7054) BEFORE any comparison; one that cannot be read is
+      # unmeasured, never a literal (OA-C8c (a), D-7062).
+      grace="$(_dr_cycles_s ccd-pool-sync.timer 2)" || cad_rc=$?
+      [ "$cad_rc" -ne 0 ] || period="$(_dr_cycles_s ccd-pool-sync.timer 1)" || cad_rc=$?
+      case "$cad_rc" in
+        1) _dr_cadence_unread pool-sync ccd-pool-sync.timer "the not-yet-synced grace for $f (two of the timer's periods)"; return 2 ;;
+        3) _dr_cadence_unloaded pool-sync ccd-pool-sync.timer "the not-yet-synced grace"; return 1 ;;
+      esac
       if [ "$unit_age" -ge 0 ] && [ "$unit_age" -lt "$pool_sync_grace" ]; then
         _dr_warn pool-sync "pool-sync-not-yet-synced: ccd-pool-sync.timer was installed ${unit_age}s ago and $f has not been written yet — the timer fires every 60s (OnUnitActiveSec) and converges on its own; expected right after an install, not a fault" \
           "wait for the timer to fire (up to ~60s) and re-run ccrc doctor — still absent past that window is the real fault: read the oneshot's own log ($(_dr_log_hint ccd-pool-sync.service))"
@@ -4153,8 +4162,14 @@ _check_pool-sync() {
     esac
   done < "$f"
   if [[ ! "$lease" =~ ^(0|[1-9][0-9]*)$ ]]; then
+    local period cad_rc=0 every=" (every 60s)"
+    period="$(_dr_cycles_s ccd-pool-sync.timer 1)" || { cad_rc=$?; every=''; }
     _dr_warn pool-sync "pool-sync-malformed: $f does not parse as this box's own reader would — no single, well-formed \`lease <n>\` line" \
-      "the next timer fire (every 60s) rewrites it atomically; inspect the current content by hand: cat $f"
+      "the next timer fire$every rewrites it atomically; inspect the current content by hand: cat $f"
+    case "$cad_rc" in
+      1) _dr_cadence_unread pool-sync ccd-pool-sync.timer "the period of the timer fire that remedy names" ;;
+      3) _dr_cadence_unloaded pool-sync ccd-pool-sync.timer "the period of the timer fire that remedy names"; return 1 ;;
+    esac
     return 2
   fi
   local now; now="$(date +%s)"

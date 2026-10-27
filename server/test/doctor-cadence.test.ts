@@ -358,3 +358,73 @@ describe('C8b: the doctor\'s cadence helpers', () => {
       expect(sh(tree(), `_dr_every_words ${s}; echo`).stdout).toBe(`${want}\n`);
     });
 });
+
+// STEP 4: the failure arms (OA-C8c (a), D-7062), one check per commit, each red before its commit and before its
+// check's move. A shipped unit file that cannot be read makes the check WARN naming the unit and compute no verdict
+// from that bound (never a literal fallback, never an empty operand: stderr stays empty); BOX_TREE_DIR or ccrc's
+// reader not loaded is a FAIL naming the bug.
+const UNREAD_FIX = '  remedy: the shipped tree at <home>/ccrc is incomplete or damaged — both deploy lanes place the whole tree there, so the next ccrc update (or deploy) restores it; then re-run ccrc doctor';
+const unread = (unit: string, what: string): string[] => [
+  `${unit}'s cadence could not be read from the shipped unit file (<home>/ccrc/deploy/systemd/${unit}), so ${what} is unmeasured`,
+  UNREAD_FIX,
+];
+const unloaded = (check: string, unit: string, what: string): string[] => [
+  `FAIL ${check}: ccrc's own timer reader is not loaded, so ${what} was never measured`,
+  `  remedy: this is a bug in ccrc, not a fact about your box — _check_${check} reads ${unit}'s cadence through _timer_period_s and BOX_TREE_DIR, both declared once in ccrc itself, and this check table was sourced by something that is not ccrc`,
+];
+const warnUnread = (check: string, unit: string, what: string): string[] => {
+  const [w, f] = unread(unit, what);
+  return [`WARN ${check}: ${w}`, f!];
+};
+const noTimer = (home: string, unit: string): void => writeShippedTimer(join(home, 'ccrc'), unit, null);
+
+describeLinux('C8b step 4: pool-sync, its unit file unreadable or its reader unloaded', () => {
+  const GRACE = 'the not-yet-synced grace for <home>/.cc-sessions/pool-epoch (two of the timer\'s periods)';
+  it.each([119, 120, 3600])('an unreadable ccd-pool-sync.timer makes pool-sync WARN unmeasured (installed %i s ago), never compare against a literal or an empty operand', (age) => {
+    const now = fixedNow();
+    const home = box(`c8b-pool-sync-unread-${age}-`, now);
+    unitAged(home, 'ccd-pool-sync.timer', now, age);
+    noTimer(home, 'ccd-pool-sync.timer');
+    const r = runChecks(home, '_check_pool-sync');
+    expect(r.stdout.split('\n')).toEqual([...warnUnread('pool-sync', 'ccd-pool-sync.timer', GRACE), '']);
+    expect(r.stderr).toBe('');
+    expect(r.code).toBe(2);
+  });
+
+  it('the malformed remedy drops its cadence clause, and the check WARNs naming the unit', () => {
+    const now = fixedNow();
+    const home = box('c8b-pool-sync-malformed-unread-', now);
+    unitAged(home, 'ccd-pool-sync.timer', now, 3600);
+    noTimer(home, 'ccd-pool-sync.timer');
+    mkdirSync(join(home, '.cc-sessions'), { recursive: true });
+    writeFileSync(join(home, '.cc-sessions', 'pool-epoch'), 'not a lease\n');
+    const r = runChecks(home, '_check_pool-sync');
+    expect(r.stdout.split('\n')).toEqual([
+      'WARN pool-sync: pool-sync-malformed: <home>/.cc-sessions/pool-epoch does not parse as this box\'s own reader would — no single, well-formed `lease <n>` line',
+      '  remedy: the next timer fire rewrites it atomically; inspect the current content by hand: cat <home>/.cc-sessions/pool-epoch',
+      ...warnUnread('pool-sync', 'ccd-pool-sync.timer', 'the period of the timer fire that remedy names'),
+      '',
+    ]);
+    expect(r.stderr).toBe('');
+    expect(r.code).toBe(2);
+  });
+
+  it('BOX_TREE_DIR not loaded: the grace FAILs naming the bug, and so does the malformed remedy\'s period', () => {
+    const now = fixedNow();
+    const home = box('c8b-pool-sync-unloaded-', now);
+    unitAged(home, 'ccd-pool-sync.timer', now, 120);
+    const r = runChecks(home, 'BOX_TREE_DIR=; _check_pool-sync');
+    expect(r.stdout.split('\n')).toEqual([...unloaded('pool-sync', 'ccd-pool-sync.timer', 'the not-yet-synced grace'), '']);
+    expect(r.code).toBe(1);
+    mkdirSync(join(home, '.cc-sessions'), { recursive: true });
+    writeFileSync(join(home, '.cc-sessions', 'pool-epoch'), 'not a lease\n');
+    const m = runChecks(home, 'BOX_TREE_DIR=; _check_pool-sync');
+    expect(m.stdout.split('\n')).toEqual([
+      'WARN pool-sync: pool-sync-malformed: <home>/.cc-sessions/pool-epoch does not parse as this box\'s own reader would — no single, well-formed `lease <n>` line',
+      '  remedy: the next timer fire rewrites it atomically; inspect the current content by hand: cat <home>/.cc-sessions/pool-epoch',
+      ...unloaded('pool-sync', 'ccd-pool-sync.timer', 'the period of the timer fire that remedy names'),
+      '',
+    ]);
+    expect(m.code).toBe(1);
+  });
+});
