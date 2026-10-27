@@ -291,16 +291,15 @@ describe('capabilityChoiceSites: verbSupported(, capSupported( and ccdCan( calls
       ]);
   });
 
-  // D-7042 (ARCH-43 C4d): W4 has moved its sites into the one sleep executor, so `w4-held` is no longer a tag the tree
-  // must show; it is still reported, and every site it tags is still in a W4 file.
-  it('REAL: every tag is seen, and the W4 files hold the only verbSupported( calls outside the deferred watch.ts', async () => {
+  // D-7042 (ARCH-43 C4d): W4 moved its sites into the one sleep executor, and the `w4-held` tag is retired.
+  it('REAL: every tag is seen, and no verbSupported( call is left (W4 held the last ones)', async () => {
     const sites = await capabilityChoiceSites();
-    show('capabilityChoiceSites w4-held', sites.filter((x) => x.tag === 'w4-held'));
     for (const tag of ['verb', 'verb-precondition', 'flag'] as const) {
       show(`capabilityChoiceSites ${tag}`, sites.filter((x) => x.tag === tag));
       expect(sites.some((x) => x.tag === tag), `no ${tag} site found`).toBe(true);
     }
-    expect(sites.filter((x) => x.tag === 'w4-held').every((x) => W4_HELD_FILES.includes(x.file))).toBe(true);
+    expect(W4_HELD_FILES).toEqual([]);
+    expect(sites.filter((x) => x.form === 'verbSupported').map((x) => `${x.file}:${x.line}`)).toEqual([]);
     expect(sites.some((x) => x.form === 'ccdCan'), 'no ccdCan( site found').toBe(true);
   });
 });

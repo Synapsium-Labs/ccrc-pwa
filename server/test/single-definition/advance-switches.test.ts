@@ -845,21 +845,20 @@ describe('one writer per fact (ARCH-40): the switches whose writer set is alread
 // a `verbSupported(` or a verb-tagged `capSupported(` (`consolidationCensus.ts`'s `capabilityChoiceSites`, tagged
 // from `CCD_CAN`) may stand only in W4's two files, which W1b never edits (three `verbSupported(` there). `watch.ts`'s
 // seven deferred calls moved in the follow-up `c1k-watch-after-c1f`, so nothing else is exempt. The W4 set may only
-// shrink. Flag and verb-precondition sites are reported, never ratcheted. The census is loaded inside the rows, so
+// shrink, and since D-7042 (ARCH-43 C4d) it is empty: no file is exempt. Flag and verb-precondition sites are reported, never ratcheted. The census is loaded inside the rows, so
 // this block adds no import line.
 describe('one verb question (ARCH-71): ccdCan(state, row) (D-5866)', () => {
-  it('no verb question outside ccdCan, except W4\'s three', async () => {
-    const { capabilityChoiceSites, W4_HELD_FILES } = await import('../consolidationCensus.js');
+  // D-7042 (ARCH-43 C4d): W4 moved its three verb sites into the one sleep executor's ccdCan, so nothing is held.
+  it('no verb question outside ccdCan', async () => {
+    const { capabilityChoiceSites } = await import('../consolidationCensus.js');
     const sites = await capabilityChoiceSites();
     const legacy = sites.filter((x) => x.tag === 'verb' && x.form !== 'ccdCan');
     const show = (xs: typeof sites): string[] => xs.map((x) => `${x.file}:${x.line} ${x.text.trim()}`);
     expect(show(legacy), 'ask ccdCan(state, row) instead').toEqual([]);
-    const w4 = sites.filter((x) => x.tag === 'w4-held');
-    expect(w4.filter((x) => x.form === 'verbSupported').length, 'W4\'s three verb sites may only shrink')
-      .toBeLessThanOrEqual(3);
-    expect(w4.every((x) => W4_HELD_FILES.includes(x.file))).toBe(true);
+    expect(sites.map((x): string => x.tag), 'no site is tagged w4-held any more').not.toContain('w4-held');
+    expect(sites.filter((x) => x.form === 'verbSupported').length, 'W4\'s three verb sites are gone').toBe(0);
     console.log(`capability census: flag ${sites.filter((x) => x.tag === 'flag').length}, verb-precondition ${
-      sites.filter((x) => x.tag === 'verb-precondition').length}, w4-held ${w4.length}, ccdCan ${
+      sites.filter((x) => x.tag === 'verb-precondition').length}, ccdCan ${
       sites.filter((x) => x.form === 'ccdCan').length}`);
   });
 

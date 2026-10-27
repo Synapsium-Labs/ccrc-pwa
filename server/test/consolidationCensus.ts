@@ -381,8 +381,8 @@ export const W4_HELD_FILES: readonly string[] = [];
 /** What a capability site asks. `verb`: whether this box's ccd can run a `CCD_ARGV` row (every `ccdCan(` and every
  *  `verbSupported(`, and a `capSupported(` of some `CCD_CAN` row's token). `verb-precondition`: a `capSupported(` on
  *  a line that also asks `ccdCan(` of another row (the pause marker the collector needs beside its own token). `flag`:
- *  any other token, which an existing verb parses. `w4-held`: any site in `W4_HELD_FILES`. */
-export type CapabilityTag = 'verb' | 'verb-precondition' | 'flag' | 'w4-held';
+ *  any other token, which an existing verb parses. (`w4-held`, a site in `W4_HELD_FILES`, was retired by D-7042.) */
+export type CapabilityTag = 'verb' | 'verb-precondition' | 'flag';
 
 /** One capability site: where, in which form, the token it names (`null` for `verbSupported`, or an expression this
  *  census does not resolve), and its tag. */
@@ -412,7 +412,7 @@ function secondArg(code: string, open: number): string | null {
  * `server/src`, outside `ccdargv.ts` (which defines them), each tagged. THE TAG IS READ FROM `CCD_CAN`, never from a
  * list: a `capSupported(` token is resolved through `ccdargv.ts`'s own exports (an exported constant's value, or a
  * quoted literal), and is `verb` when it is some row's token. Exit target: no `verb`-tagged `verbSupported(` or
- * `capSupported(` outside `W4_HELD_FILES` (every verb question goes through `ccdCan`).
+ * `capSupported(` anywhere (every verb question goes through `ccdCan`; `W4_HELD_FILES` is empty since D-7042).
  * KNOWN WIDTH: "beside" is the same code line; a call whose arguments wrap onto the next line resolves no token, and
  * its tag is `flag` unless its form says otherwise.
  */
@@ -438,8 +438,7 @@ export async function capabilityChoiceSites(root: string = REPO): Promise<Capabi
         const form = m[1] as CapabilitySite['form'];
         const token = form === 'capSupported' ? tokenOf(secondArg(code, m.index! + m[0].length)) : null;
         const beside = form === 'capSupported' && /\bccdCan\s*\(/.test(code);
-        const tag: CapabilityTag = W4_HELD_FILES.includes(file) ? 'w4-held'
-          : form !== 'capSupported' ? 'verb'
+        const tag: CapabilityTag = form !== 'capSupported' ? 'verb'
             : beside ? 'verb-precondition'
               : token !== null && rowTokens.has(token) ? 'verb' : 'flag';
         out.push({ file, line: i + 1, text, form, token, tag });
