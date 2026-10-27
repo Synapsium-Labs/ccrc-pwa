@@ -297,13 +297,14 @@ describe('the scanner reads positions, not shapes', () => {
   });
 });
 
-// The inspector's words (D-6334, T3d): the six sections' words.
+// The inspector's words (D-6334, T3d): the six sections and the routing line's word table.
 describe('the inspector speaks plainly (D-6334)', () => {
   const SRC_ROOT = path.join(import.meta.dirname, '..', 'src');
-  // `session/routingLine.ts` is not listed: it builds its sentence in a local of a function and returns an object, a
-  // position the scan does not read (0 strings), so listing it would only assert a scan that sees nothing.
-  const INSPECTOR = ['TasksSection', 'MailSection', 'PrSection', 'RoutingSection', 'LaneSection', 'HistorySection']
-    .map((f) => path.join(SRC_ROOT, 'inspector', `${f}.tsx`));
+  const INSPECTOR = [
+    ...['TasksSection', 'MailSection', 'PrSection', 'RoutingSection', 'LaneSection', 'HistorySection']
+      .map((f) => path.join(SRC_ROOT, 'inspector', `${f}.tsx`)),
+    path.join(SRC_ROOT, 'session', 'routingLine.ts'),
+  ];
   it.each(INSPECTOR.map((f) => [path.relative(SRC_ROOT, f), f] as const))(
     '%s (the inspector) says none of the forbidden words where an operator reads',
     (_name, file) => {
