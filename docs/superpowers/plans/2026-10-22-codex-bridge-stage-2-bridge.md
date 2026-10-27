@@ -3878,8 +3878,8 @@ departure found while executing is written `D-TBD-<slug>` and named in the task'
   | `advanced-tool-use-2025-11-20` | tool search (`tool_search` in Claude Code's table): `defer_loading` tools, `tool_reference` blocks, the server tool search tools | `requestField:defer_loading` (972 by 07:09:52Z, over 155 requests); no `unsupportedField` | `defer_loading` counted and the tool sent as an ordinary function (`inbound.py:426-427`); a `tool_reference` in a tool_result sent as `Tool loaded: <name>` (:249); a server tool type refused and counted (:422). Claude Code searches client-side; its binary carries no `input_examples` or `allowed_callers` | explain |
   | `thinking-display-updates-2026-08-18` | `thinking.display: "updates"`: progress updates as thinking text, reasoning hidden | the header on every message request (not on `count_tokens`) | `thinking` is popped and no thinking block is emitted, so there is nothing to display | explain |
   | `thinking-token-count-2026-05-13` | a thinking token count in the usage: Claude Code's usage schema reads `output_tokens_details.thinking_tokens` as optional, and drops the beta when a server rejects it (the field is documented on the extended-thinking page, `usage.output_tokens_details.thinking_tokens`, which arrives on the final `message_delta` when streaming; the beta's name is on no public page) | the header on every message request (not on `count_tokens`) | the usage carries the four counts (`reducer.anthropic_usage`, `ccd/codexbridge/reducer.py:102`) and no thinking count | explain |
-  | `mid-conversation-tool-changes-2026-07-01` | `tool_addition` and `tool_removal` blocks, by reference, in a `role: "system"` entry of `messages` | the header on every message request (not on `count_tokens`); the blocks unmeasured (below) | dropped uncounted (below) | **needs-code** |
-  | `inline-tools-2026-09-15` | the same blocks, plus a tool defined by value (`tool_addition.tool = {type: "tool_definition", definition}`), the tool absent from `tools` | the header on 110 of the first 179 message requests (by 07:36Z); the blocks unmeasured | dropped uncounted (below) | **needs-code** |
+  | `mid-conversation-tool-changes-2026-07-01` | `tool_addition` and `tool_removal` blocks, by reference, in a `role: "system"` entry of `messages` | the header on every message request (not on `count_tokens`); the blocks unmeasured until D-7094 rolls out (below) | dropped; counted by name since D-7094 (below) | **needs-code** |
+  | `inline-tools-2026-09-15` | the same blocks, plus a tool defined by value (`tool_addition.tool = {type: "tool_definition", definition}`), the tool absent from `tools` | the header on 110 of the first 179 message requests (by 07:36Z); the blocks unmeasured until D-7094 rolls out | dropped; counted by name since D-7094 (below) | **needs-code** |
   | `token-counting-2024-11-01` | the token-counting endpoint, `POST /v1/messages/count_tokens` | on the `count_tokens` requests only (5 of 184 by 07:36Z) | answered locally (Task 8, `outcomes.countTokens`); nothing is sent upstream | explain |
 
   Pin: `server/test/codex-bridge-count-stats.test.ts:299` counts all nine and `effort-2025-11-24`, and expects
@@ -3904,8 +3904,9 @@ departure found while executing is written `D-TBD-<slug>` and named in the task'
     entry with no text gives no item at all;
   - what goes wrong: a tool defined by value is never offered upstream, so the model cannot call a tool Claude Code
     believes it offered; a removed tool stays offered, so the model can still call a tool Claude Code withdrew;
-    and nothing counts either, so neither the stats file nor the doctor shows it happening. A by-reference
-    addition is harmless today only because the bridge already offers every `defer_loading` tool up front;
+    and before D-7094 nothing counted either, so neither the stats file nor the doctor showed it happening (since
+    D-7094 each block's type is counted and the doctor names it). A by-reference addition is harmless today only
+    because the bridge already offers every `defer_loading` tool up front;
   - seen on lane-b: unmeasured until D-7094 rolls out. By 07:36Z `mid-conversation-tool-changes` rode all 179 message
     requests and `inline-tools` 110 of them, but the bridge on the box counts no system-entry block type, so whether
     any request carried one cannot be read from its stats file. From the rollout on, D-7094 counts each block, and the
