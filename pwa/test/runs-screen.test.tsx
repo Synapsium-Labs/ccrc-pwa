@@ -8,9 +8,13 @@ import { navigate } from '../src/lib/router';
 import { CHILD_RECLAIM_CHIP_GLYPH, CROSSING_GLYPH, REVIEW_GLYPH, RUN_ORDER, RUN_WORD, childReclaimChip, childReclaimGone, childReclaimRefreshDue, childReclaimTitle, crossingNote, dispatchWindow, itemTallyLabel, programWave, programsWithOpenRun, resumeNote, runForSession, runHomeProject, runItems, runKindChip, waveLabel } from '../src/fleet/runWords';
 import { spawnChip, spawnVerdictChip } from '../src/fleet/spawnWords';
 import { api } from '../src/lib/api';
-import { createFleetStore, type FleetStore } from '../src/stores/fleet';
+import { createFleetStore, useFleetStore, type FleetStore } from '../src/stores/fleet';
 
-afterEach(() => { cleanup(); vi.restoreAllMocks(); });
+afterEach(() => {
+  cleanup(); vi.restoreAllMocks();
+  // The start sheet reads the app-wide fleet store's projection (C8, D-6440); a case that seeds it leaves nothing behind.
+  useFleetStore.setState({ projected: undefined });
+});
 
 // RunSummary as PR I actually shipped it (shared/api.ts) — NOT the plan's
 // historical illustrative shape. `id` is a number, there is no `waves`
@@ -599,9 +603,8 @@ describe('the run board tells the start sheet which projects already have a run 
   };
 
   const mockDoors = (): void => {
-    vi.spyOn(api, 'accounts').mockResolvedValue({
-      accounts: [], projected: { wrapper: 'claude', score: 5 }, roster: [],
-    });
+    // The sheet reads the app-wide fleet store's projection, which that store's one poll writes (C8, D-6440).
+    act(() => { useFleetStore.setState({ projected: { wrapper: 'claude', score: 5 } }); });
     vi.spyOn(api, 'projects').mockResolvedValue({
       roots: [], projects: [{ name: 'ccrc-pwa', workdir: '/home/u/projects/ccrc-pwa' }],
     });
