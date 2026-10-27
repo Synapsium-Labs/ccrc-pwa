@@ -55,7 +55,7 @@ import { rovingStep } from '../lib/rovingStep';
 import { accountsLaneHref } from '../lib/routes';
 import { navigate } from '../lib/router';
 import { lanesByFree } from './laneOrder';
-import { FLYOUT_CLOSE_MS, FLYOUT_OPEN_MS, foldLanes, foldShown, foldWords, LANE_CARD_MIN, rowFit } from './stripFold';
+import { FLYOUT_CLOSE_MS, FLYOUT_LABEL, FLYOUT_OPEN_MS, foldLanes, foldShown, foldWords, LANE_CARD_MIN, rowFit } from './stripFold';
 import { setStripExpanded, useStripExpanded } from './stripExpanded';
 import { useRowWidth } from './useRowWidth';
 import { ACCOUNTS_DOOR_LABEL, ALL_ACCOUNTS, laneDoorLabel, lanesRowLabel, NO_READING } from './laneWords';
@@ -327,8 +327,8 @@ export function AccountsStrip(): ReactNode {
     >
       {shown.map((a, i) => laneCard(a, i, shown, stop, cardRefs.current, setStopId))}
       {flyShown && (
-        // Not a dialog and it takes no focus: it is a second group of the same lanes, named as the line's is.
-        <div className="accounts-flyout" role="group" aria-label={lanesRowLabel(live, roster)}>
+        // Not a dialog and it takes no focus: it is a second group of the same lanes, named for what it holds.
+        <div className="accounts-flyout" role="group" aria-label={FLYOUT_LABEL}>
           {live.map((a, i) => laneCard(a, i, live, flyStop, flyRefs.current, setFlyStopId))}
         </div>
       )}

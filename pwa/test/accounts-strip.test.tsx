@@ -9,7 +9,7 @@ import { CommandLayer } from '../src/command/CommandLayer';
 import { AccountsStrip } from '../src/fleet/AccountsStrip';
 import { ACCOUNTS_DOOR_LABEL } from '../src/fleet/laneWords';
 import { lanesByFree } from '../src/fleet/laneOrder';
-import { FLYOUT_CLOSE_MS, FLYOUT_OPEN_MS } from '../src/fleet/stripFold';
+import { FLYOUT_CLOSE_MS, FLYOUT_LABEL, FLYOUT_OPEN_MS } from '../src/fleet/stripFold';
 import { api } from '../src/lib/api';
 import { navigate } from '../src/lib/router';
 import { declValue, ruleIn } from './cssRule';
@@ -781,11 +781,13 @@ describe('the lanes fold (S5b, D-6530)', () => {
       expect(fly).not.toBeNull();
       expect(flyCardsOf(container).map(nameOf)).toEqual(lanesByFree(names.accounts).map((a) => labelOf(a.wrapper)));
       expect(flyCardsOf(container)).toHaveLength(17);
-      // In the strip's group, after the line's cards and before the end cell; named as the line's group is, with no new words.
+      // In the strip's group, after the line's cards and before the end cell.
       expect([...groupOf(container).children].map((c) => c.className)).toEqual(
         ['account-gauge', 'account-gauge', 'account-gauge', 'accounts-flyout', 'accounts-end']);
       expect(fly).toHaveAttribute('role', 'group');
-      expect(fly.getAttribute('aria-label')).toBe(groupOf(container).getAttribute('aria-label'));
+      // Named for what it holds, and not as the line is: a screen reader never meets two groups of one name.
+      expect(fly.getAttribute('aria-label')).toBe(FLYOUT_LABEL);
+      expect(fly.getAttribute('aria-label')).not.toBe(groupOf(container).getAttribute('aria-label'));
       // Not a dialog, and it took no focus.
       expect(fly).not.toHaveAttribute('aria-modal');
       expect(fly.contains(document.activeElement)).toBe(false);
