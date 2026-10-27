@@ -84,8 +84,8 @@ export function equalitySites(root: string = REPO): EqualitySite[] {
 export interface NotBindingSite { readonly file: string; readonly text: string; readonly count?: number; readonly why: string }
 
 export const NOT_BINDING_SITES: readonly NotBindingSite[] = [
-  { file: 'server/src/coord/routes.ts', text: 'r.id === sessionId',
-    why: 'a lookup of a REGISTRY record by its id (the approval route\'s child gate): no run is read' },
+  { file: 'server/src/coord/questions.ts', text: 'r.id === sessionId',
+    why: 'a lookup of a REGISTRY record by its id (the approval raise\'s child gate, moved from coord/routes.ts with raiseApproval, W3 Q3e): no run is read' },
   { file: 'server/src/coord/routes.ts', text: 's.sessionId === byId',
     why: 'a row of the intent checkpoint\'s own session list, matched to the id the intent was declared for: no run is read' },
   { file: 'server/src/coord/openRun.ts', text: 'c.target!.claimedBy !== c.b.claimedBy',

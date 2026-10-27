@@ -86,21 +86,16 @@ import { createHash } from 'node:crypto';
 import { appendFileSync } from 'node:fs';
 import type { SessionRecord } from '../registry.js';
 import { readLiveStateMeasured } from '../livestate.js';
-import { approvalWindowMs } from '../askwindow.js';
 import { approvalClass, rootsForChild } from './approvalguard.js';
-import { redactedStored } from './redact.js';
-import { renderApprovalBrief } from './approvalbrief.js';
-import { approvalNudgeSubject } from './rundefs.js';
 import { heldFor } from './heldFor.js';
-import { approvalFor, createQuestions, openFor, type Questions } from './questions.js';
+import { approvalFor, createQuestions, openFor, type ApprovalRaiseDeps, type Questions } from './questions.js';
 import { noticeSink, type NoticeSink } from '../notice.js';
 import {
   APPROVALS_DISABLED_FILE, loadOrCreateApprovalSigner, rulingsAllowedHere, serverApprovalsDisabled, type ApprovalSigner,
 } from './approvalsign.js';
 import {
-  APPROVAL_CHILD_SHELL, APPROVAL_CWD_TRUSTED, APPROVAL_HOOK_VERSIONS, APPROVAL_REASON_MAX_CHARS, APPROVAL_REFUSALS_LOG,
-  APPROVAL_REQUEST_MAX_BYTES, CHILD_DENY_SETTINGS_FILE, approvalDigestBytes, canonicalJson,
-  type ApprovalKeyAnswer, type ApprovalMintReleaseReason, type ApprovalRequestAccepted, type ApprovalRulingAnswer,
+  APPROVAL_CHILD_SHELL, APPROVAL_REASON_MAX_CHARS, APPROVAL_REFUSALS_LOG, APPROVAL_REQUEST_MAX_BYTES,
+  CHILD_DENY_SETTINGS_FILE, type ApprovalKeyAnswer, type ApprovalRequestAccepted, type ApprovalRulingAnswer,
   type ApprovalRulingRecord, type ApprovalView,
 } from '../../../shared/api.js';
 
@@ -566,9 +561,10 @@ export function registerCoordRoutes(
   /**
    * D-7026: this server's owner of question state (`coord/questions.ts#createQuestions`), the one `buildServer` passes
    * (the watcher's own when it has one). Defaulted to a new instance over these same `deps`, so a test that registers
-   * these routes on a bare Fastify gets its own. Q3e and Q3d move their state into it; Q3b only threads it.
+   * these routes on a bare Fastify gets its own. Q3e: the raise ladder and the approval inputs live in it; Q3d moves the
+   * hold carrier.
    */
-  _questions: Questions = createQuestions(deps),
+  questions: Questions = createQuestions(deps),
 ): CoordRoutesHandle {
   const notConfigured = (reply: FastifyReply) => refuseRoute(reply, 'not-configured');
 
@@ -4080,15 +4076,6 @@ export function registerCoordRoutes(
   };
   if (deps.coord) signerFor();
 
-  /** The unredacted input a held row was classified from, kept ONLY in memory and only for the row's window (spec
-   *  §6.7: the server holds the unredacted input only for the request), so the rule route can run the guard again
-   *  (spec §6.3 server step 5). A server restarted mid-window has none, and then an allow is refused `guard-escalate`
-   *  (the guard cannot be re-run, and unknown means escalate); a deny still lands (D-5491). */
-  const approvalInputs = new Map<number, { tool: string; input: Record<string, unknown>; cwd: string | null; until: number }>();
-  const forgetExpiredInputs = (now: number): void => {
-    for (const [k, v] of approvalInputs) if (v.until <= now) approvalInputs.delete(k);
-  };
-
   /** Either kill switch (spec §6.8): the fleet box's `$REG/approvals-disabled`, read off the registry listing as the
    *  hold reads `asks-disabled` (an unlistable registry reads as ON, fail shut), and the server box's own
    *  `~/.ccrc/approvals-disabled`. Both are the operator's; nothing in this tree writes either. */
@@ -4129,6 +4116,14 @@ export function registerCoordRoutes(
     }
   };
 
+  /** What `questions.raiseApproval` reads (D-7029), built once: this server's closures above, unchanged, and the
+   *  server's own store, I/O, config and tmux. Named here, so the raise ladder reaches nothing on its own. Absent with
+   *  no coordination store, where the raise answers `notConfigured` before it would be read. */
+  const raiseDeps: ApprovalRaiseDeps | undefined = deps.coord === undefined ? undefined : {
+    coord: deps.coord, io: deps.io, cfg: deps.cfg, tmux: deps.tmux, masker: deps.masker ?? SHAPE_ONLY_MASKER,
+    signerFor, rulingsAllowedHere, heldFor, denyEngaged, liveVersionOf, journalDigestMismatch,
+  };
+
   /**
    * `POST /api/approvals` — a child's hook asks for a ruling (spec §6.3 server steps 1 to 3). The ladder, cheapest
    * refusal first, nothing minted on any refusal above the mint: box token (401), body shape (400), a kill switch
@@ -4138,10 +4133,11 @@ export function registerCoordRoutes(
    * (`digest-mismatch`, journaled), and the claimant rule (`heldFor`, D-5530): `not-a-child` with nothing minted, or a
    * row minted `released` with its reason (`approval-released`), or held. A held request whose class is `forbidden` is
    * minted `released` too, never mailed. Then the mint, the mail, and `201 {id, waitS}`, the window in seconds (D-5441).
+   * The route keeps the first five inline, in this order, so the kill switch is read before attribution; from the
+   * single-box opt-in on, the ladder is `questions.raiseApproval` (D-7029), whose verdict maps here byte for byte.
    */
   app.post('/api/approvals', async (req, reply) => {
     if (!deps.coord) return notConfigured(reply);
-    const coord = deps.coord;
     if (!requireMailToken(req, reply, 'POST /api/approvals')) return;
 
     const body = (req.body ?? {}) as Record<string, unknown>;
@@ -4156,89 +4152,26 @@ export function registerCoordRoutes(
     }
     if (await approvalsKilled()) return refuseRoute(reply, 'approvals-disabled');
     if (!(await requireAttribution(reply, sessionId, sessionUuid, 'sessionUuid'))) return;
-    if (!rulingsAllowedHere(deps.cfg.role, deps.cfg.fleetMode, deps.cfg.ccrcDir)) {
-      return refuseRoute(reply, 'single-box', { detail: 'this server shares one box with the sessions; place ~/.ccrc/approvals-single-box to opt in' });
-    }
-    const signer = signerFor();
-    if (signer === null) return refuseRoute(reply, 'internal', { detail: 'the approval signing key is not loaded' });
-
-    // [registry-refused:refuses] a refused row is in no `recs`: the request answers `not-a-child`, and a refused claimant reads as `parent-not-live` in `heldFor`, which leaves the prompt the operator's.
-    const recs = await readRegistry(deps.io, deps.cfg);
-    const rec = recs.find((r) => r.id === sessionId) ?? null;
-    if (rec === null || rec.child.kind !== 'child') return refuseRoute(reply, 'not-a-child');
-    if (!(await denyEngaged(rec))) return refuseRoute(reply, 'deny-not-engaged');
-    const version = await liveVersionOf(rec);
-    if (version === null || !APPROVAL_HOOK_VERSIONS.includes(version)) {
-      return refuseRoute(reply, 'version-unverified', { detail: `this child's live Claude Code version (${version ?? 'unread'}) is not one the rig verified` });
-    }
-
-    const now = Date.now();
-    // The digest, then the re-canonicalisation: the server's own sha256 over the string sent, and that string parsed and
-    // canonicalised again by `approvalDigestBytes`, the one home of the form (spec §6.3 "The canonical form, exactly").
-    let request: { sessionId: unknown; agentId: unknown; tool: unknown; cwd: unknown; input: unknown } | null = null;
-    if (typeof canonical === 'string') {
-      let parsed: unknown = undefined;
-      try { parsed = JSON.parse(canonical); } catch { parsed = undefined; }
-      const arr = Array.isArray(parsed) && parsed.length === 5 ? parsed : null;
-      const again = arr === null ? null : approvalDigestBytes({
-        session_id: arr[0], agent_id: arr[1], tool_name: arr[2], cwd: arr[3], tool_input: arr[4],
-      });
-      if (createHash('sha256').update(canonical, 'utf8').digest('hex') !== digest || again !== canonical || arr === null) {
-        journalDigestMismatch(sessionId, now);
-        return refuseRoute(reply, 'digest-mismatch');
-      }
-      request = { sessionId: arr[0], agentId: arr[1], tool: arr[2], cwd: arr[3], input: arr[4] };
-    }
-
-    let verdict: Awaited<ReturnType<typeof heldFor>>;
-    try {
-      verdict = await heldFor({ coord, io: deps.io, cfg: deps.cfg, tmux: deps.tmux }, rec.id, rec.child, recs, now);
-    } catch (err) {
-      return refuseRoute(reply, 'run-unreadable', { detail: err instanceof Error ? err.message : String(err) });
-    }
-    if (verdict.kind === 'not-a-child') return refuseRoute(reply, 'not-a-child');
-
-    // The request's own shape: a truncated request has no input to judge, and a canonical array whose fields are not a
-    // request's is unparseable. Both are minted `released` (the operator has them), never held.
-    const shaped = request !== null && typeof request.agentId === 'string' && typeof request.tool === 'string'
-      && (request.cwd === null || typeof request.cwd === 'string')
-      && request.input !== null && typeof request.input === 'object' && !Array.isArray(request.input);
-    const agentId = shaped ? request!.agentId as string : '';
-    const tool = shaped ? request!.tool as string : '';
-    const input = shaped ? request!.input as Record<string, unknown> : {};
-    const cwd = shaped ? request!.cwd as string | null : null;
-    const cwdTrusted = APPROVAL_CWD_TRUSTED.includes(version);
-    const roots = rootsForChild(rec, deps.cfg.home) ?? { worktree: null, tmpRoot: null, scratch: null, home: deps.cfg.home };
-    const cls = shaped ? approvalClass(tool, input, { ...roots, cwd: cwdTrusted ? cwd : null }) : 'escalate';
-    const shown = shaped ? (typeof input['command'] === 'string' ? input['command'] : (canonicalJson(input) ?? '')) : '';
-    const releaseReason: ApprovalMintReleaseReason | null = truncated === true ? 'truncated'
-      : !shaped ? 'unparseable'
-      : verdict.kind === 'released' ? verdict.reason
-      : cls === 'forbidden' ? 'forbidden'
-      : null;
-    const parent = verdict.parent;
-    const notifyAt = now + approvalWindowMs(agentId);
-    // The stored input is what the signed ruling carries unmasked (`GET /api/approvals/:id/ruling`), so the
-    // exact-bytes pass runs HERE, on the raw input before the redactor and the cap: a fingerprinted lane key that has
-    // no shape is masked in the row, the brief and the ruling alike (D-5995 (10), D-6057 (3)). The digest
-    // the ruling is signed over is of the unredacted input, so this changes no signature.
-    const stored = redactedStored((deps.masker ?? SHAPE_ONLY_MASKER).maskText(shown));
-    const id = coord.insertApproval({
-      childId: rec.id, parentId: parent, runId: verdict.runId, digest, nonce, agentId, tool,
-      inputRedacted: stored, truncated: truncated === true, class: cls, askAt: now, notifyAt,
-      ...(releaseReason === null ? {} : { releaseReason }),
-    });
-    if (releaseReason !== null) {
+    const v = await questions.raiseApproval({
+      sessionId, digest, nonce,
+      ...(canonical === undefined ? {} : { canonical: canonical as string }), ...(truncated === true ? { truncated } : {}),
+    }, raiseDeps!, Date.now());
+    switch (v.kind) {
+      case 'single-box': return refuseRoute(reply, 'single-box', { detail: v.detail });
+      case 'internal': return refuseRoute(reply, 'internal', { detail: v.detail });
+      case 'not-a-child': return refuseRoute(reply, 'not-a-child');
+      case 'deny-not-engaged': return refuseRoute(reply, 'deny-not-engaged');
+      case 'version-unverified': return refuseRoute(reply, 'version-unverified', { detail: v.detail });
+      case 'digest-mismatch': return refuseRoute(reply, 'digest-mismatch');
+      case 'run-unreadable': return refuseRoute(reply, 'run-unreadable', { detail: v.detail });
       // Released at once: the hook prints nothing, the menu stays with the operator, and nobody is mailed.
-      return refuseRoute(reply, 'approval-released', { id, releaseReason });
+      case 'approval-released': return refuseRoute(reply, 'approval-released', { id: v.id, releaseReason: v.releaseReason });
+      case 'minted': {
+        const accepted: ApprovalRequestAccepted = { id: v.id, waitS: v.waitS };
+        return reply.code(201).send(accepted);
+      }
+      default: return v satisfies never;
     }
-    approvalInputs.set(id, { tool, input, cwd: cwdTrusted ? cwd : null, until: notifyAt });
-    queueSystemMail(coord, null, {
-      fromId: 'operator', toId: parent, runId: null, kind: 'question', subject: approvalNudgeSubject(id),
-      body: renderApprovalBrief({ id, childId: rec.id, tool, agentId, inputRedacted: stored, class: cls, digest, notifyAt }),
-    });
-    const accepted: ApprovalRequestAccepted = { id, waitS: Math.floor((notifyAt - now) / 1000) };
-    return reply.code(201).send(accepted);
   });
 
   /**
@@ -4339,8 +4272,7 @@ export function registerCoordRoutes(
       // The guard again (spec §6.3 server step 5): the class stored at mint, and the classifier run once more over the
       // input held in memory for the window. Unknown — no input held — is escalate.
       if (row.class === 'forbidden') return refuseRoute(reply, 'guard-forbidden');
-      forgetExpiredInputs(now);
-      const held = approvalInputs.get(id);
+      const held = questions.approvalInput(id, now);
       const again = held === undefined ? 'escalate'
         : approvalClass(held.tool, held.input, { ...(rootsForChild(rec, deps.cfg.home) ?? { worktree: null, tmpRoot: null, scratch: null, home: deps.cfg.home }), cwd: held.cwd });
       if (again === 'forbidden') return refuseRoute(reply, 'guard-forbidden');
@@ -4359,7 +4291,7 @@ export function registerCoordRoutes(
       return refuseRoute(reply, taken.why === 'already-ruled' ? 'already-ruled' : taken.why === 'declined' ? 'declined'
         : taken.why === 'unknown-approval' ? 'unknown-approval' : 'not-held');
     }
-    approvalInputs.delete(id);
+    questions.forgetApprovalInput(id);
     // The journal's second record, beside the row: who ruled, and what, in the operator's name. Through the notice sink
     // (D-5858), `'record-only'`: never pushed, whatever the presence, and AFTER the ruling is stored, so a failed archive
     // costs the feed row only (the funnel catches it and says so), never the ruling or this 200.
@@ -4393,7 +4325,7 @@ export function registerCoordRoutes(
       return refuseRoute(reply, 'not-parent', { detail: 'only the claimant this prompt was held for may hand it over' });
     }
     if (!coord.declineApproval(id, fromId, Date.now())) return refuseRoute(reply, 'not-held');
-    approvalInputs.delete(id);
+    questions.forgetApprovalInput(id);
     watcher?.releaseHeldApproval(row.childId);
     return { ok: true };
   });

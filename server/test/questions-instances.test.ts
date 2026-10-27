@@ -10,7 +10,9 @@ import { Bus } from '../src/bus.js';
 import { buildServer } from '../src/server.js';
 import { FleetWatcher } from '../src/watch.js';
 import type { Questions } from '../src/coord/questions.js';
+import { createQuestions as createQuestionsReal } from '../src/coord/questions.js';
 import { testDeps } from './helpers.js';
+import { hookInput, PARENT, requestBody, standardFixture, TOK, uuidOf } from './approvalsHarness.js';
 import { mkTmp } from './tmpHelpers.js';
 
 const seen = vi.hoisted(() => ({ made: [] as unknown[], routed: [] as unknown[] }));
@@ -76,5 +78,32 @@ describe('one Questions instance per watcher and per server', () => {
       expect(new Set(all).size).toBe(4);
       expect(new Set(seen.made).size).toBe(4);
     } finally { await a.close(); await b.close(); }
+  });
+});
+
+// Q3e (D-7029): the approval inputs are this instance's closure locals, so two apps share none (Review focus 8). An allow
+// ruled on app B for a row app A minted is refused `guard-escalate`: B holds no input to run the guard again over.
+describe('approvalInputs: one map per Questions instance (W3 Q3e)', () => {
+  it('two buildServer apps share no approvalInputs: an allow on app B for a row minted on app A is guard-escalate', async () => {
+    const f = await standardFixture();
+    const b = await buildServer(f.deps, new Bus());
+    try {
+      const minted = await f.request(requestBody(hookInput({ command: 'rm -rf build' })));
+      expect(minted.statusCode).toBe(201);
+      const id = (minted.json() as { id: number }).id;
+      const allow = { fromId: PARENT, fromUuid: uuidOf(PARENT), verdict: 'allow', reason: 'a cleanup inside your worktree' };
+      const onB = await b.inject({ method: 'POST', url: `/api/approvals/${id}/rule`, headers: TOK, payload: allow });
+      expect(onB.statusCode).toBe(409);
+      expect(onB.body).toBe('{"ok":false,"error":"guard-escalate"}');
+      // App A, which minted it, still holds the input: its allow is ruled.
+      expect((await f.app.inject({ method: 'POST', url: `/api/approvals/${id}/rule`, headers: TOK, payload: allow })).json())
+        .toEqual({ ok: true, state: 'allowed' });
+    } finally { await b.close(); await f.close(); }
+  });
+
+  it('the input map is no property of the instance: every property the returned object carries is a function', () => {
+    const q = createQuestionsReal({}) as unknown as Record<string, unknown>;
+    expect(Object.keys(q)).not.toContain('approvalInputs');
+    expect(Object.entries(q).filter(([, v]) => typeof v !== 'function').map(([k]) => k)).toEqual([]);
   });
 });

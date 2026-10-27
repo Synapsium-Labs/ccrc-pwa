@@ -315,7 +315,6 @@ export const QUESTION_STORE_OWNERS: Readonly<Record<string, 'Q3b' | 'Q3d' | 'Q3e
   'server/src/watch.ts | FleetWatcher.settleClearedApproval': 'Q3d',
   'server/src/watch.ts | FleetWatcher.tryHold': 'Q3d',
   'server/src/watch.ts | FleetWatcher.hold': 'Q3d',
-  'server/src/coord/routes.ts | POST /api/approvals': 'Q3e',
   'server/src/coord/routes.ts | POST /api/asks/:id/answer': 'Q3f',
   'server/src/coord/routes.ts | POST /api/asks/:id/release': 'Q3f',
   'server/src/coord/routes.ts | POST /api/approvals/:id/rule': 'Q3f',
