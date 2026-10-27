@@ -105,6 +105,8 @@
 //   the `storage` listener removed ..................... strip-expanded "a storage event for ccrc-accounts-strip updates a mounted hook", and one more
 //   the fold applied in `PhoneHeader` only (the fleet column's mount given an unfolded prop)
 //                                                       instrument-shell "Instrument's phone fleet column folds the same strip"
+//   Instrument's first-row bound lowered below its measured 533.8 px (540 -> 530) ... refined-phone browser (1 of 31) "folded, with 17 lanes, four cards and one control …, and the first session row sits at most
+//                                                         540 px down at 390×844: instrument, phosphor, 390px" (fix round 1, `instrument-first-row-is-its-chrome`: the 440 check was gated on Refined's head, so Instrument ran none)
 // R120 `strip-hover-flyout` (accounts-strip alone, plus lanes-row where named):
 //   open without the delay (`FLYOUT_OPEN_MS` -> 0) ..... "…hovering the line opens the flyout after FLYOUT_OPEN_MS, …", "a pointer passing by does not open it"
 //   close without the grace (`FLYOUT_CLOSE_MS` -> 0) ... "leaving the line and the flyout closes it after FLYOUT_CLOSE_MS; coming back within the grace keeps it", "focus leaving the strip closes it, …"

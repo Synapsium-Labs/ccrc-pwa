@@ -12,8 +12,9 @@
 //
 // THE FOLD (desktop polish S5b, D-6530). The strip folds by default: with the same seventeen lanes (`test/seventeenLanes.ts`,
 // the fixture every strip suite shares) a phone shows its freest four and one control, the control and All accounts
-// share one row, nothing scrolls sideways, and the first session row sits at most 440 px down at 390x844 (it sat at 805
-// with the strip expanded, the figure the expanded case pins within 4 px). The four cards are two rows of two below 700
+// share one row, nothing scrolls sideways, and the first session row sits at most 440 px down in Refined and at most
+// 540 px down in Instrument at 390x844 (it sat at 805 with the strip expanded, the figure the expanded case pins within
+// 4 px). The four cards are two rows of two below 700
 // and one row of four from 700 (699, 700 and 899 are measured), and after "Show fewer" the control holds focus and is on
 // screen. A case that counts every lane seeds the stored choice expanded (`seedStripExpanded`).
 //
@@ -326,6 +327,12 @@ async function openFolded(view: AppView, cards: number, expanded = false, sessio
   return { ...opened, order: mostFreeFirst(cases).map((c) => c.label) };
 }
 
+/** How far down the first session row may sit at 390x844, folded, by skin. Refined's head is a phone header of its own and
+ *  holds 440. Instrument's first row sits under its own chrome, the fleet head and the table's toggle, tabs and group
+ *  header, which a fold of the strip cannot shorten, so its target is the figure measured there (533.8 px): the
+ *  instrument-first-row-is-its-chrome ruling. */
+const FIRST_ROW_MAX: Record<string, number> = { [REFINED]: 440, [INSTRUMENT]: 540 };
+
 const FOLDED_VIEWS: AppView[] = [
   ...THEMES.flatMap((theme) => [360, 390].map((width) => ({ skin: REFINED, theme, width }))),
   { skin: INSTRUMENT, theme: PHOSPHOR, width: 390 },
@@ -333,10 +340,11 @@ const FOLDED_VIEWS: AppView[] = [
 
 describe('the folded phone strip is four cards and one control', () => {
   for (const view of FOLDED_VIEWS) {
-    it(`folded, with 17 lanes at 360 and 390, four cards and one control at least 44 px tall, nothing scrolls sideways, and the first session row sits at most 440 px down at 390×844: ${named(view)}`, async () => {
+    const rowMax = FIRST_ROW_MAX[view.skin]!;
+    it(`folded, with 17 lanes, four cards and one control at least 44 px tall and nothing scrolls sideways${view.width === 390 ? `, and the first session row sits at most ${rowMax} px down at 390×844` : ''}: ${named(view)}`, async () => {
       const { ctx, page, errors, order } = await openFolded(view, 4);
       try {
-        const found = await page.evaluate(({ expected, expectedWords }) => {
+        const found = await page.evaluate(({ expected, expectedWords, rowMax }) => {
           const out: string[] = [];
           const strip = document.querySelector<HTMLElement>('.accounts-strip')!;
           const cards = [...strip.querySelectorAll<HTMLElement>('.account-gauge')];
@@ -370,12 +378,11 @@ describe('the folded phone strip is four cards and one control', () => {
           if (cr.left < -0.5 || dr.right > vw + 0.5 || cr.right > dr.left + 0.5) out.push(`the end row is cut or overlaps (${cr.left}..${cr.right}, ${dr.left}..${dr.right} in ${vw})`);
           if (control.scrollWidth > control.clientWidth + 0.5) out.push("the control's words are cut");
           if (document.documentElement.scrollWidth > vw + 0.5) out.push(`the page scrolls sideways (${document.documentElement.scrollWidth} > ${vw})`);
-          // The first session row, in document order, at Refined's 390×844 (Instrument's head is its own, so only its cards
-          // and control are held here).
+          // The first session row, in document order, at 390×844, against the skin's own bound.
           const sess = document.querySelector('.sess-line')!.getBoundingClientRect().top;
-          if (strip.closest('.ref-phone-head') !== null && vw === 390 && sess > 440) out.push(`the first session row is ${Math.round(sess)} px down, not at most 440`);
+          if (vw === 390 && sess > rowMax) out.push(`the first session row is ${Math.round(sess)} px down, not at most ${rowMax}`);
           return out;
-        }, { expected: order.slice(0, 4), expectedWords: FOLDED_WORDS });
+        }, { expected: order.slice(0, 4), expectedWords: FOLDED_WORDS, rowMax });
         expect(found).toEqual([]);
         expect(errors).toEqual([]);
       } finally {
