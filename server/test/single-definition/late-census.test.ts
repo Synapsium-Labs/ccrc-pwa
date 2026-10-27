@@ -3,8 +3,8 @@ import { describe, it, expect } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import { readFileSync, existsSync } from 'node:fs';
 import path from 'node:path';
-import { sourceOfSymbol } from '../scan/symbols.js';
-import { identifierReferences, stringExpressions } from '../scan/parse.js';
+import { parsedFile, sourceOfSymbol } from '../scan/symbols.js';
+import { identifierReferences, parseSource, stringExpressions } from '../scan/parse.js';
 import { sleepVerdictLadders } from '../census-w4/sleep.js';
 import { SLEEP_POLICY_NAMES } from '../../src/sleep.js';
 import { SWITCHES } from '../../../shared/switches.js';
@@ -624,5 +624,45 @@ describe('the sleep lanes share one ladder, which never asks which policy it run
     const body = sourceOfSymbol(HOME, 'decideSleep');
     expect(body, 'CONTROL: the slice is the ladder').toContain("hold('viewer')");
     expect(nameReads(body)).toEqual([]);
+  });
+
+  // C4d (C4b's review): a helper the ladder calls is the ladder's, so the scan walks decideSleep's in-file callees too —
+  // every top-level function of the same file it names (a call or a value passed on), transitively, each once.
+  /** `decideSleep`'s source, then that of every top-level function of the same source text it reaches by name. */
+  const ladderSources = (text: string, root = 'decideSleep'): string[] => {
+    const p = parseSource(text, 'sleep.ts');
+    const tops = p.symbols.filter((x) => (x.kind === 'function' || x.kind === 'variable-function') && !x.name.includes('.'));
+    const names = new Set(tops.map((x) => x.name));
+    const out: string[] = [];
+    const seen = new Set<string>();
+    const visit = (name: string): void => {
+      const fn = tops.find((x) => x.name === name);
+      if (fn === undefined || seen.has(name)) return;
+      seen.add(name);
+      const body = p.text.slice(fn.start, fn.end);
+      out.push(body);
+      for (const r of identifierReferences(body, 'sleep.ts', names)) visit(r.name);
+    };
+    visit(root);
+    return out;
+  };
+
+  it('CONTROL: the walk reaches a helper decideSleep calls, and a helper\'s helper, and the name scan catches the helper\'s compare', () => {
+    const src = [
+      "function isRunDone(p) { return p.name === 'run-done'; }",
+      'function viaHelper(p) { return isRunDone(p); }',
+      'function unrelated(p) { return p.name; }',
+      'export function decideSleep(i, policy) { if (viaHelper(policy)) return 1; return 0; }',
+    ].join('\n');
+    const reached = ladderSources(src);
+    expect(reached.map((b) => /function (\w+)/.exec(b)?.[1])).toEqual(['decideSleep', 'viaHelper', 'isRunDone']);
+    expect(nameReads(reached[0]!), 'the ladder\'s own body asks nothing: only the walk sees the helper').toEqual([]);
+    expect(reached.flatMap(nameReads)).toEqual(["p.name", 'run-done']);
+  });
+
+  it('decideSleep\'s in-file callees read no policy name either', () => {
+    const reached = ladderSources(parsedFile(HOME).text);
+    expect(reached[0], 'CONTROL: the walk starts at the ladder').toBe(sourceOfSymbol(HOME, 'decideSleep'));
+    expect(reached.flatMap(nameReads)).toEqual([]);
   });
 });
