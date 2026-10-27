@@ -687,7 +687,7 @@ describe('run by the watcher\'s tick (D-5370)', () => {
     try {
       const deps = { ...testDeps(home, async () => ({ ran: true, code: 1, stdout: '', stderr: '' })), cfg, coord };
       const w = new FleetWatcher(deps as never, new Bus(), 10_000);
-      const spy = vi.spyOn(w, 'sweepStopDone').mockResolvedValue(undefined);
+      const spy = vi.spyOn(w, 'sweepSleep').mockResolvedValue(undefined);
       await w.tick();
       expect(spy, 'the priming tick judges nothing').not.toHaveBeenCalled();
       await w.tick();

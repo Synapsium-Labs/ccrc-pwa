@@ -372,7 +372,7 @@ describe('the watcher\'s own shadow pass, its deps unmocked', () => {
   it('the tick runs the shadow pass, and not on the priming tick', async () => {
     const h = await harness();
     try {
-      const spy = vi.spyOn(h.w, 'sweepHibernate').mockResolvedValue(undefined);
+      const spy = vi.spyOn(h.w, 'sweepSleep').mockResolvedValue(undefined);
       await (h.w as unknown as { tick(): Promise<void> }).tick();
       expect(spy).not.toHaveBeenCalled();
       await (h.w as unknown as { tick(): Promise<void> }).tick();
