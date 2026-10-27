@@ -324,21 +324,10 @@ export function envelopePairingTitleRules(root: string = REPO): PairingRuleSite[
 }
 
 /** The W3 task that moves each question-store call, by `file | enclosing symbol` (the plan's Q3a table). A counted call
- *  whose key is not here has no owner, and the census test reds. Rows only leave this table. */
+ *  whose key is not here has no owner, and the census test reds. Rows only leave this table: Q3b's left with its reads,
+ *  Q3e's with the raise, and Q3d's thirteen `watch.ts` rows with the hold (D-7028; `watch.ts` makes no question-store
+ *  call since). */
 export const QUESTION_STORE_OWNERS: Readonly<Record<string, 'Q3b' | 'Q3d' | 'Q3e' | 'Q3f'>> = {
-  'server/src/watch.ts | FleetWatcher.stallWorkerFor': 'Q3d',
-  'server/src/watch.ts | FleetWatcher.detectDialogs': 'Q3d',
-  'server/src/watch.ts | FleetWatcher.loadReseed': 'Q3d',
-  'server/src/watch.ts | FleetWatcher.staleReseedRow': 'Q3d',
-  'server/src/watch.ts | FleetWatcher.reseedFromRows': 'Q3d',
-  'server/src/watch.ts | FleetWatcher.restampHeldAsk': 'Q3d',
-  'server/src/watch.ts | FleetWatcher.askPass': 'Q3d',
-  'server/src/watch.ts | FleetWatcher.tryHoldApproval': 'Q3d',
-  'server/src/watch.ts | FleetWatcher.sweepApprovals': 'Q3d',
-  'server/src/watch.ts | FleetWatcher.releaseHeldApproval': 'Q3d',
-  'server/src/watch.ts | FleetWatcher.settleClearedApproval': 'Q3d',
-  'server/src/watch.ts | FleetWatcher.tryHold': 'Q3d',
-  'server/src/watch.ts | FleetWatcher.hold': 'Q3d',
   'server/src/coord/routes.ts | POST /api/asks/:id/answer': 'Q3f',
   'server/src/coord/routes.ts | POST /api/asks/:id/release': 'Q3f',
   'server/src/coord/routes.ts | POST /api/approvals/:id/rule': 'Q3f',
