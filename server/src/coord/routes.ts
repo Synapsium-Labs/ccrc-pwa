@@ -92,6 +92,7 @@ import { redactedStored } from './redact.js';
 import { renderApprovalBrief } from './approvalbrief.js';
 import { approvalNudgeSubject } from './rundefs.js';
 import { heldFor } from './heldFor.js';
+import { approvalFor, createQuestions, openFor, type Questions } from './questions.js';
 import { noticeSink, type NoticeSink } from '../notice.js';
 import {
   APPROVALS_DISABLED_FILE, loadOrCreateApprovalSigner, rulingsAllowedHere, serverApprovalsDisabled, type ApprovalSigner,
@@ -562,6 +563,12 @@ export function registerCoordRoutes(
    * test that registers these routes on a bare Fastify raises its rows exactly as the server does.
    */
   notice: NoticeSink = noticeSink(deps),
+  /**
+   * D-7026: this server's owner of question state (`coord/questions.ts#createQuestions`), the one `buildServer` passes
+   * (the watcher's own when it has one). Defaulted to a new instance over these same `deps`, so a test that registers
+   * these routes on a bare Fastify gets its own. Q3e and Q3d move their state into it; Q3b only threads it.
+   */
+  _questions: Questions = createQuestions(deps),
 ): CoordRoutesHandle {
   const notConfigured = (reply: FastifyReply) => refuseRoute(reply, 'not-configured');
 
@@ -4041,7 +4048,7 @@ export function registerCoordRoutes(
       if (!(await requireAttribution(reply, parent, q.fromUuid, 'fromUuid'))) return;
     }
 
-    const read = coord.asksForParent(parent, state);
+    const read = openFor(coord, parent, state);
     // D-2545, ALL-OR-FAILURE: the parent's entire evidentiary surface is this
     // list, so a partial one is worse than none — it looks complete.
     if (!read.ok) {
@@ -4405,7 +4412,7 @@ export function registerCoordRoutes(
     if (!(await requireAttribution(reply, q.fromId, q.fromUuid, 'fromUuid'))) return;
     const id = parseCanonicalPositiveSafeInteger((req.params as { id: string }).id);
     if (id === null) return refuseRoute(reply, 'bad-request');
-    const read = coord.approvalById(id);
+    const read = approvalFor(coord, id);
     if (!read.ok) return refuseRoute(reply, 'approval-unreadable', { detail: read.detail });
     const row = read.row;
     if (row === null) return refuseRoute(reply, 'unknown-approval');

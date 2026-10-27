@@ -1272,3 +1272,103 @@ describe('docs section H, W5: GithubPermalink, githubPermalink and githubUrlAt a
     });
   }
 });
+
+
+// W3 Task Q3b (D-7026; ARCH-56 (#791); plan docs/superpowers/plans/2026-10-26-consolidation-w3-questions.md). APPENDED
+// after the file's last line, with its own imports here (ES imports hoist), so no line above moves: the citation audit
+// cites this file by line. The question tables (asks, approvals) are read through `coord/questions.ts`: the readers Q3b
+// moved (the fleet frame, the digest and its correction, the drift lane, `GET /api/asks` and `GET /api/approvals/:id`)
+// call no question-store method of their own. Measured by W3's census query (`census-w3/questions.ts`), which reads
+// the syntax tree; a planted CONTROL tree shows a new direct call is seen.
+import { mkdirSync as q3bMkdir, mkdtempSync as q3bMkdtemp, writeFileSync as q3bWrite } from 'node:fs';
+import { tmpdir as q3bTmpdir } from 'node:os';
+import { questionStoreCallsOutside } from '../census-w3/questions.js';
+
+describe('the question tables are read through coord/questions.ts (D-7026)', () => {
+  /** The readers Q3b moved: every call in these files, and every call inside these two routes. */
+  const MOVED_FILES = ['server/src/fleet.ts', 'server/src/coord/digest.ts', 'server/src/coord/driftLane.ts'];
+  const MOVED_ROUTES = ['server/src/coord/routes.ts | GET /api/asks', 'server/src/coord/routes.ts | GET /api/approvals/:id'];
+  const direct = (root?: string): string[] => questionStoreCallsOutside(root)
+    .filter((c) => MOVED_FILES.includes(c.file) || MOVED_ROUTES.includes(`${c.file} | ${c.symbol}`))
+    .map((c) => `${c.file} | ${c.symbol} | ${c.method}`);
+  const tree = (files: Record<string, string>): string => {
+    const t = q3bMkdtemp(path.join(q3bTmpdir(), 'q3b-reads-'));
+    for (const [p, body] of Object.entries(files)) {
+      q3bMkdir(path.dirname(path.join(t, p)), { recursive: true });
+      q3bWrite(path.join(t, p), body);
+    }
+    return t;
+  };
+
+  it('CONTROL: a direct store call in a moved file, or in a moved route, is seen; one through coord/questions.ts is not', () => {
+    const t = tree({
+      'server/src/fleet.ts': "function readCurrentAsks(coord: CoordStore) { return coord.currentAsksFor([]); }\n",
+      'server/src/coord/routes.ts': [
+        'export function registerCoordRoutes(app: App, coord: CoordStore) {',
+        "  app.get('/api/approvals/:id', async () => coord.approvalById(1));",
+        "  app.get('/api/approvals/:id/ruling', async () => coord.approvalById(1));",
+        "  app.get('/api/asks', async () => openFor(coord, 'p'));",
+        '}', ''].join('\n'),
+    });
+    expect(direct(t)).toEqual([
+      'server/src/coord/routes.ts | GET /api/approvals/:id | approvalById',
+      'server/src/fleet.ts | readCurrentAsks | currentAsksFor',
+    ]);
+  });
+
+  it('the fleet frame, the digest, its correction, the drift lane and the two GET routes call no question-store method', () => {
+    expect(direct()).toEqual([]);
+  });
+
+  it('each moved reader imports its read from coord/questions.ts', () => {
+    for (const [file, names] of [
+      ['server/src/fleet.ts', ['currentFor']],
+      ['server/src/coord/digest.ts', ['decidedIn', 'forCorrection']],
+      ['server/src/coord/driftLane.ts', ['heldForDrift']],
+      ['server/src/coord/routes.ts', ['approvalFor', 'openFor']],
+    ] as const) {
+      const code = stallCode(path.join(ccrcRoot, file));
+      for (const n of names) {
+        expect(code, `${file} imports ${n} from coord/questions.ts`)
+          .toMatch(new RegExp(`import\\s*\\{[^}]*\\b${n}\\b[^}]*\\}\\s*from\\s*'\\./(?:coord/)?questions\\.js'`));
+      }
+    }
+  });
+});
+
+// W3 Task Q3b (D-7026). APPENDED, as the block above. All question state lives in instances of
+// `coord/questions.ts#createQuestions`, as closure locals (plan §Global constraints): a module-scope carrier would make
+// every `buildServer` and `FleetWatcher` in one process share it (Review focus 8). So the module declares no top-level
+// `let`, and no top-level `const` bound to a `new Map`, `new Set` (or a weak one) or an array literal. A top-level
+// declaration is one at column 0 (the tree's formatting: a body is indented). KNOWN WIDTH: state hidden behind a
+// function call (`const held = makeMap()`) or a top-level object literal is not seen.
+describe('coord/questions.ts declares no module-scope state (D-7026)', () => {
+  const LET = /^(?:export\s+)?(?:let|var)\s/m;
+  const CONST_STATE = /^(?:export\s+)?const\s+\w+\s*(?::[^=\n]+)?=\s*(?:new\s+(?:Map|Set|WeakMap|WeakSet)\b|\[)/m;
+  const moduleState = (text: string): boolean => LET.test(stallCodeText(text)) || CONST_STATE.test(stallCodeText(text));
+
+  it('MUTATION: a top-level let, Map, Set or array is seen; the same inside the factory, or in a comment, is not', () => {
+    for (const planted of [
+      'let held = 0;',
+      'export let held: number | null = null;',
+      'const heldAsks = new Map<string, number>();',
+      'const seen: Set<number> = new Set();',
+      'const inputs = new WeakMap();',
+      'export const queue: string[] = [];',
+    ]) expect(moduleState(`import type { X } from './x.js';\n${planted}\nexport function createQuestions() { return {}; }\n`), planted).toBe(true);
+    expect(moduleState([
+      'export function createQuestions() {',
+      '  const heldAsks = new Map<string, number>();',
+      '  let reseedLoaded = false;',
+      '  return {};',
+      '}',
+      '// let held = 0;',
+      ' * const heldAsks = new Map();',
+      "const KINDS = Object.freeze({ ask: true });",
+    ].join('\n'))).toBe(false);
+  });
+
+  it('the real file declares none', () => {
+    expect(moduleState(readFileSync(path.join(ccrcRoot, 'server/src/coord/questions.ts'), 'utf8'))).toBe(false);
+  });
+});

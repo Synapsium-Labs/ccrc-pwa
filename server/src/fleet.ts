@@ -30,6 +30,8 @@ import { incarnationOfMark, type SessionRunRead } from './coord/runWire.js';
 // reader) imports this module, so the constants could not stay there.
 import { ASK_HELD_CHIP_MAX_MS, askNotifyAt } from './askwindow.js';
 import { redactCommand } from './coord/redact.js';
+// D-7026: the question tables are read through `coord/questions.ts`; the guard and the warn stay here.
+import { currentFor } from './coord/questions.js';
 
 /** `FleetSession.askSummary`'s ceiling — a fleet card row, not a transcript; an ask push's too (D-5356). */
 export const ASK_SUMMARY_MAX_LEN = 80;
@@ -202,7 +204,7 @@ function fleetWithCoordinator(row: AskRow | null, nowMs: number, approval: Appro
 function readHeldApprovals(coord: CoordStore | undefined, childIds: readonly string[]): Map<string, ApprovalRow> {
   if (!coord || childIds.length === 0) return new Map();
   try {
-    const read = coord.heldApprovalsFor(childIds);
+    const read = currentFor(coord, childIds, 'approval');
     if (!read.ok) {
       console.warn(`ccrc-server: heldApprovalsFor refused — ${read.detail} — one bad read must not kill the poll`);
       return new Map();
@@ -232,7 +234,7 @@ function readHeldApprovals(coord: CoordStore | undefined, childIds: readonly str
 function readCurrentAsks(coord: CoordStore | undefined, childIds: readonly string[]): Map<string, AskRow> {
   if (!coord || childIds.length === 0) return new Map();
   try {
-    const read = coord.currentAsksFor(childIds);
+    const read = currentFor(coord, childIds, 'ask');
     // D-2545. An unreadable ask row degrades the WHOLE frame's ask chips to
     // absent, exactly as a throw already did — the fail-safe direction this
     // function was written for, reached by a typed result instead of an

@@ -197,6 +197,7 @@ import {
   recordDeadCoordinatorFeed, recordDeadCoordinatorThrew, rereadDeadCoordinatorJournalTrust,
 } from './coord/endDeadCoordinator.js';
 import type { CoordRoutesHandle } from './coord/routes.js';
+import { createQuestions, type Questions } from './coord/questions.js';
 import { localIO } from './io.js';
 import { measureFleetReadiness, type FleetReadiness } from './readiness.js';
 import { FLEET_LABEL, SERVER_LABEL, sweepInventory, type InventoryDeps, type SweepOutcome } from './update/inventory.js';
@@ -1416,8 +1417,12 @@ export class FleetWatcher {
    *  fires first silence the other's own first warning. Cleared the moment a
    *  write actually lands with every row measured clean. */
   private snapshotWriteSkippedDegradedWarned = false;
+  /** D-7026: this watcher's ONE owner of question state (`coord/questions.ts#createQuestions`), made here and read by
+   *  `buildServer` (`watcher.questions`), so the routes and the watcher reach the same instance. Never module scope. */
+  readonly questions: Questions;
 
   constructor(private deps: Deps, private bus: Bus, private intervalMs = 2000, cachePath?: string) {
+    this.questions = createQuestions(deps);
     this.cachePath = cachePath ?? deps.stateCachePath ?? defaultCachePath();
     this.transcripts = new TranscriptResolver(deps.io);
     this.headsSettled = new Promise<void>((resolve) => { this.settleHeads = resolve; });

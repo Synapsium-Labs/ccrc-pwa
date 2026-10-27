@@ -11,6 +11,7 @@
 // phone. The marker is hand-armed and nothing in the tree writes it.
 import type { ChildMark } from '../../../shared/api.js';
 import { DRIFT_PUSH_LIVE_MARKER } from '../../../shared/switches.js';
+import { heldForDrift } from './questions.js';
 import type { ClaimantReading } from '../deadCoordinator.js';
 import type { NoticeSink } from '../notice.js';
 import { deadCoordinatorLaneArmed } from './endDeadCoordinator.js';
@@ -62,7 +63,7 @@ async function pass(d: DriftLaneDeps, now: number): Promise<void> {
   const runs = d.coord.driftOpenRuns();
   const deliveries = d.coord.driftOutstandingDeliveries();
   const reviews = d.coord.driftAwaitingReview();
-  const asks = d.coord.driftHeldQuestions();
+  const asks = heldForDrift(d.coord);
   const before = d.coord.driftFindingRows();
   const told = d.coord.driftStallToldRows();
   for (const r of [runs, deliveries, reviews, asks, before, told]) {
