@@ -244,10 +244,12 @@ describe('the retire executors\' censuses (ARCH-44, C4h)', () => {
     expect(names(retireDeciders(tree))).toEqual(['server/src/deciders.ts#arrowDecide', 'server/src/deciders.ts#decide']);
   });
 
-  it('REAL retireGateLadders reports (3 at the C4h base; 3 -> 2 -> 1 -> 0 through C4k, C4l, C4m)', () => {
+  it('REAL retireGateLadders is pinned exact: 2 -> 1 at C4l, archive-expired through retireAct after C4k (D-7169; 1 -> 0 at C4m)', () => {
     const sites = retireGateLadders();
     show('retireGateLadders', sites);
-    expect(Array.isArray(sites)).toBe(true);
+    expect(names(sites)).toEqual([
+      'server/src/coord/childReclaim.ts#childReclaimOutcome',
+    ]);
   });
 
   it('REAL retireActSites is pinned exact: three composers, by name (D-7177)', () => {

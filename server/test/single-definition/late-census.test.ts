@@ -804,4 +804,13 @@ describe('archive-expired runs through retireAct, its id judged before its capab
     expect(steps).toContain('capability');
     expect(steps.indexOf('id'), steps.join(' < ')).toBeLessThan(steps.indexOf('capability'));
   });
+
+  it('the retire gate ladders are at most 1, and only the one not yet moved (2 -> 1 at C4l, after C4k; may only shrink)', async () => {
+    const { retireGateLadders } = await import('../census-w4/retire.js');
+    const sites = retireGateLadders().map((s) => s.symbol);
+    expect(sites.length, sites.join(', ')).toBeLessThanOrEqual(1);
+    for (const s of sites) {
+      expect(['server/src/coord/childReclaim.ts#childReclaimOutcome'], s).toContain(s);
+    }
+  });
 });
