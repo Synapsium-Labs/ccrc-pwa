@@ -224,6 +224,16 @@ export function SessionScreen({
   // for the transcript (its live ask card points at the card), the Escape interrupt (it stands down) and the composer
   // (Send holds). A phone's sheet never reports, so none of the three changes there.
   const [askInline, setAskInline] = useState(false);
+  // The transcript's row callbacks keep their identity across this screen's renders (desktop polish Task C7): each is a
+  // prop of every row, so a new one on every render (a roster answer, a status word) would draw every row again.
+  // D-6326 (R89): Retry is a send, held while the inline card is mounted (the bubble's button is disabled for the same
+  // fact); nothing is queued to go when the card leaves.
+  const onRetry = useCallback((key: string): void => {
+    if (askInline) return;
+    useStore.getState().retry(key);
+  }, [askInline, useStore]);
+  const onDiscard = useCallback((key: string): void => { useStore.getState().discard(key); }, [useStore]);
+  const onAnswer = useCallback((): void => { setRaise((n) => n + 1); }, []);
   // Lifecycle surfaces behind the header's overflow menu.
   const [swapOpen, setSwapOpen] = useState(false);
   const [archiveOpen, setArchiveOpen] = useState(false);
@@ -646,14 +656,12 @@ export function SessionScreen({
             events={events}
             pending={pending}
             busy={pulsing}
-            // D-6326 (R89): Retry is a send, held while the inline card is mounted (the bubble's button is disabled for the
-            // same fact); nothing is queued to go when the card leaves.
-            onRetry={(key) => { if (askInline) return; useStore.getState().retry(key); }}
-            onDiscard={(key) => useStore.getState().discard(key)}
+            onRetry={onRetry}
+            onDiscard={onDiscard}
             askPending={askPending}
             askBelow={askInline}
             answerLabel={answerLabel}
-            onAnswer={() => setRaise((n) => n + 1)}
+            onAnswer={onAnswer}
           />
         )}
       </div>

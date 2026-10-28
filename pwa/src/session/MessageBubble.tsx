@@ -2,7 +2,7 @@
 // right-aligned raised bubbles with a mono receipt. Assistant turns are
 // output: full-width flush prose with rendered markdown (code blocks in dark
 // wells that scroll inside the bubble). System events are centered dividers.
-import { useState, type ReactNode } from 'react';
+import { memo, useState, type ReactNode } from 'react';
 import { Prose } from '@ccrc/ui';
 import type { ChatEvent } from '../../../shared/api';
 import { isImageClip, splitClipPaths } from '../../../shared/api';
@@ -146,7 +146,10 @@ function ClipThumbs({ id, paths }: { id: string; paths: string[] }): ReactNode {
   );
 }
 
-export function MessageBubble({
+/** One transcript message. Memoised on its props, `event`, `id` and `streaming` (desktop polish Task C7): the store
+ *  keeps an event's identity across frames, so a bubble whose event, session and caret are unchanged renders nothing
+ *  again, its markdown and highlighting included. */
+export const MessageBubble = memo(function MessageBubble({
   event,
   id,
   streaming = false,
@@ -259,4 +262,4 @@ export function MessageBubble({
       {streaming && <span className="stream-caret" aria-hidden="true" />}
     </Prose>
   );
-}
+});
