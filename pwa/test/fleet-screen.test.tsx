@@ -2179,7 +2179,11 @@ describe('archived footer row', () => {
 // directly — so it survives, renamed to match what it actually tests.
 describe('AccountsStrip', () => {
   it('renders account usage from /api/accounts with a reset countdown, independent of sessions', async () => {
-    const nowSec = Math.floor(Date.now() / 1000);
+    // One frozen clock for the fixture and the strip's `useNow`: a live clock let the second tick between the two
+    // reads under CI load, so the 5 h window read "1h 59m" and the row failed on time, not on behaviour.
+    const nowMs = 1_800_000_000_500;
+    vi.spyOn(Date, 'now').mockReturnValue(nowMs);
+    const nowSec = Math.floor(nowMs / 1000);
     // The strip reads a fleet store's accounts answer (C8, D-6440): this one's read, made once before the mount.
     const store = createFleetStore({ fetchAccounts: async () => ({
       accounts: [

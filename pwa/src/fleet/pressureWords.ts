@@ -4,7 +4,7 @@
 // `ok` with an answering link, and `unmeasured` with no stall all read as "no banner": a banner that fires on nothing
 // stops being read.
 import type { FleetHealth } from '../../../shared/api';
-import { readHostPressure, type HostPressureHealth, type PsiResource } from '../../../shared/pressure';
+import { PSI_WARN_FULL_PCT, readHostPressure, type HostPressureHealth, type PsiResource } from '../../../shared/pressure';
 
 /** Does the banner show? The server's level is `warn` or `critical`, or it read a stalled link as host pressure. The
  *  banner stack asks it (BannerStack.tsx). */
@@ -22,13 +22,21 @@ export function pressureTone(p: HostPressureHealth): 'critical' | 'warn' {
  *  what was measured. */
 const fullPct = (r: PsiResource | null): number | null => (r === null ? null : Math.floor(Math.max(r.full.avg10, r.full.avg60)));
 
-/** The one line. Host pressure names what the stall is (the agent alive, the host stalling it) so it is not read as a
- *  network fault; the level lines name the stalled shares. */
+/** The one line. It names only what is stalling: a resource whose `full` share reached the server's warn line
+ *  (`PSI_WARN_FULL_PCT`, the same line `pressureLevelOf` reads), so "memory stalled 0%" never sits under a memory
+ *  headline. When neither resource reached the line (host pressure read from older evidence), both measured figures
+ *  stay, so the banner still says what it saw. Host pressure names what the stall is (the agent alive, the host
+ *  stalling it) so it is not read as a network fault. */
 export function pressureLine(p: HostPressureHealth): string {
-  const mem = fullPct(p.memory);
-  const io = fullPct(p.io);
-  const shares = [mem === null ? null : `memory stalled ${mem}%`, io === null ? null : `io ${io}%`].filter((s) => s !== null).join(' · ');
+  const figures = [
+    { name: 'memory', pct: fullPct(p.memory) },
+    { name: 'io', pct: fullPct(p.io) },
+  ].filter((f): f is { name: string; pct: number } => f.pct !== null);
+  const stalled = figures.filter((f) => f.pct >= PSI_WARN_FULL_PCT);
+  const shown = stalled.length > 0 ? stalled : figures;
+  const shares = shown.map((f) => `${f.name} stalled ${f.pct}%`).join(' · ');
   const tail = shares === '' ? '' : ` · ${shares}`;
   if (p.link === 'host-pressure') return `Fleet host thrashing: the agent is stalled by host pressure, not offline${tail}`;
-  return p.level === 'critical' ? `Fleet host thrashing${tail}` : `Fleet host under memory or io pressure${tail}`;
+  if (p.level === 'critical') return `Fleet host thrashing${tail}`;
+  return stalled.length > 0 ? `Fleet host under ${stalled.map((f) => f.name).join(' and ')} pressure${tail}` : `Fleet host under pressure${tail}`;
 }

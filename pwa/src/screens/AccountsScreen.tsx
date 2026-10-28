@@ -154,6 +154,10 @@ function rowOrder(roster: readonly RosterWire[], accounts: readonly AccountUsage
 
 export function AccountsScreen(): ReactNode {
   const { accounts, projected, roster } = useAccountsPoll();
+  // Opening Accounts asks once (D-7180; coordinator call 3): the screen shows the store's answer at once, then a fresh
+  // one, as it did before the store became the one reader. The store's 20 s poll stays the only cadence.
+  const refreshAccounts = useFleetStore((s) => s.refreshAccounts);
+  useEffect(() => { void refreshAccounts(); }, [refreshAccounts]);
   const sessions = useFleetStore((s) => s.sessions);
   // Item 3 (I1, wave-1 fix round A): the fleet-level `pools` frame's
   // `accountPools` capability — produced (T9-R2/F2, `server/src/pools.ts`'s

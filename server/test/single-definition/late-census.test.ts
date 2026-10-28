@@ -726,3 +726,19 @@ describe('the retire executors share one gate decider, decideRetire (D-7166; ARC
     expect(identifierReferences(sourceOfSymbol(HOME, 'decideRetire'), 'retire.ts', new Set(['name']))).toEqual([]);
   });
 });
+
+// D-7080 (ARCH-72, W5 plan 2026-10-27-consolidation-w5-ccd-helpers.md Task C5k; OA-C13 ruled (b) 2026-10-27). APPENDED.
+// The usage sidecars (`$REG/usage/<id>.json`, its `.<id>.*.tmp` temps and `<id>.agents/`) have TWO deleters, and both
+// are kept: `_usage_purge` in ccd, run by `_reg_purge` when a row dies, and the usage sweep's `reap_orphans`, which
+// runs in ANOTHER PROCESS (a python timer with its own guard: no `$REG/<id>.uuid` and a readable `ts` more than a day
+// old, so an unreadable row fails toward keeping the sidecar). Spec K16's "usage sidecars deleted only by
+// `_usage_purge`" is recorded as NOT APPLIED under D-7080; option (a), a ccd verb the sweep would call, was not taken.
+// The names come from the census (`census-w5/singleWriters.ts#usageSidecarDeleters`), never a source pin here. What
+// each one removes for one orphan is pinned side by side in `server/test/usage-sidecar-removals.test.ts`.
+describe('the usage-sidecar deleters are two, named, and may only shrink: _usage_purge and the sweep\'s reap_orphans, which runs in another process (D-7080; spec K16\'s "only by `_usage_purge`" not applied)', () => {
+  it('usageSidecarDeleters() is exactly ccd/ccd#_usage_purge and ccd/ccd-usage-sweep.py#reap_orphans (2 at C5k\'s base; may only shrink)', async () => {
+    const { usageSidecarDeleters } = await import('../census-w5/singleWriters.js');
+    const r = usageSidecarDeleters();
+    expect(r.deleters.map((s) => s.name)).toEqual(['ccd/ccd#_usage_purge', 'ccd/ccd-usage-sweep.py#reap_orphans']);
+  });
+});

@@ -237,10 +237,12 @@ describe('W7 PWA census: FIXTURE rows (each query against one counted site and o
 });
 
 describe('W7 PWA census: REAL rows (reporting, not ratcheting; spec §5.1 rule 3)', () => {
-  // BAND (D-7221): floor 1 is #1720's head (the store's one call), ceiling 5 today's. Pinned exact by C7b once #1720
-  // has merged (its shrunk Step 2).
-  it('accountsReaders(): 5 calls of api.accounts at the base (band 1..5 until #1720 merges, C7b pins it)', () => {
-    held('accountsReaders', accountsReaders(), 1, 5);
+  // Pinned exact by C7b (D-7180, D-7221): #1720 merged, and the fleet store's `fetchAccounts` default is the one call.
+  // The may-only-shrink ratchet is `rings/pwa-one-owner.test.ts`'s one-owner block.
+  it('accountsReaders(): 1 call of api.accounts, the fleet store\'s fetchAccounts default', () => {
+    const sites = accountsReaders();
+    held('accountsReaders', sites, 1);
+    expect(sites.map((s) => s.file)).toEqual(['pwa/src/stores/fleet.ts']);
   });
 
   it('inlineDeadChecks(): 16 comparisons of a status with dead, in 9 files', () => {
@@ -261,10 +263,12 @@ describe('W7 PWA census: REAL rows (reporting, not ratcheting; spec §5.1 rule 3
     expect(countBy(sites, (s) => s.kind)).toEqual({ comparison: 4, lookup: 7, runForSession: 7, childRunsSeen: 1 });
   });
 
-  // BAND (D-7221): floor 2 is #1720's head (`HotFilesStrip`, `useFleetHealth`), ceiling 6 today's. Pinned exact by C7b
-  // once #1720 has merged; C7m then takes the last two.
-  it('requestPolls(): 6 hand-written request polls at the base (band 2..6 until #1720 merges, C7b pins it)', () => {
-    held('requestPolls', requestPolls(), 2, 6);
+  // Pinned exact by C7b (D-7180, D-7221): #1720 merged, leaving `HotFilesStrip`'s and `useFleetHealth`'s timers, which
+  // C7m takes. The ratchet is `rings/pwa-one-owner.test.ts`'s one-owner block.
+  it('requestPolls(): 2 hand-written request polls, HotFilesStrip and useFleetHealth', () => {
+    const sites = requestPolls();
+    held('requestPolls', sites, 2);
+    expect(sites.map((s) => s.file)).toEqual(['pwa/src/fleet/HotFilesStrip.tsx', 'pwa/src/fleet/useFleetHealth.ts']);
   });
 
   it('answerPaths(): 3 (DialogSheet\'s writes, EnvelopeSheet\'s busy, push-sw.js\'s one handler)', () => {
@@ -294,10 +298,12 @@ describe('W7 PWA census: REAL rows (reporting, not ratcheting; spec §5.1 rule 3
     held('archivedChecks', archivedChecks(), 8);
   });
 
-  it('sessionPathLiterals(): 14 string expressions starting /s/, in 12 files', () => {
+  // C9 (D-6441) gave FleetScreen and Instrument's FleetTable one session opener (`fleet/openers.ts`): their two
+  // literals became one, 14 in 12 files to 13 in 11.
+  it('sessionPathLiterals(): 13 string expressions starting /s/, in 11 files', () => {
     const sites = sessionPathLiterals();
-    held('sessionPathLiterals', sites, 14);
-    expect(Object.keys(countBy(sites, (s) => s.file)).length).toBe(12);
+    held('sessionPathLiterals', sites, 13);
+    expect(Object.keys(countBy(sites, (s) => s.file)).length).toBe(11);
   });
 
   it('ensureCallers(): 6 owners of api.ensure (5 calls, 1 member reference)', () => {
