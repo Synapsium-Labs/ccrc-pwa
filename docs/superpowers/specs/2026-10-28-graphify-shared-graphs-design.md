@@ -9,6 +9,10 @@ gone. What survives of it is a short **Later options** section (§12) with the m
 (§3.5), every build has its own id (§2.1), saved results have one absolute link and a guard exemption (§2.1,
 §2.2), the build output keeps the engine's own directory name (§3.4), and where each new file lives and how each
 reader loads it is stated (§5.2).
+**Revision 6** fixes the failure handling a review found unsafe: peak memory is the build scope's `memory.peak`,
+which counts the engine's workers (§3.4); which failed attempts force a full rebuild is listed, with the census's
+last row as the stated input (§2.3, §3.3); failing full builds back off (§3.3.1); and the build is always the
+slice's OOM victim (§3.4, §4).
 **Replaces:** the **Store** ruling of `2026-08-27-graphify-fleet-integration-design.md` (§2, §3.4, §D, the
 `workspace-graph-store` / `project-graph-store` rows of its §7) and the sweep body of its §C.
 **Keeps:** the engine pin and its provisioning (§A), skill convergence (§B), AST-only depth (Appendix A), the
@@ -222,12 +226,15 @@ About 1 KB, in every published build. Readers read it instead of tail-reading a 
   "kind": "full|incremental", "changed_files": 16,
   "last_full_commit": "<sha>", "last_full_at": "<iso>", "noise_digest": "<sha256 of the generated .graphifyignore>",
   "nodes": 48172, "edges": 114127, "files": 4104,
-  "built_at": "<iso>", "duration_ms": 36000, "peak_rss_kb": 1310720 }
+  "built_at": "<iso>", "duration_ms": 36000, "peak_mem_kb": 1310720 }
 ```
 
-`meta.json` is also the build state: the next pass reads the current build's `commit`, `engine`,
+`meta.json` is the state of the **published** build: the next pass reads the current build's `commit`, `engine`,
 `last_full_at` and `noise_digest` to decide between no build, an incremental refresh and a full rebuild (§3.3).
-There is no second state file.
+A build that did not publish writes no `meta.json`, so the outcome of the **last attempt** is read from the one other
+input, the census's last `repos[]` row for this repository (its `outcome`, `kind`, `reason`, `full_failures` and
+`full_failed_at`, §7). Those two are the whole state; there is no third file. A missing census (first pass, or the
+ring removed) reads as "no previous attempt".
 
 ---
 
@@ -275,7 +282,35 @@ A full rebuild (`changed_paths=None`) runs instead when any of these holds:
 | The diff names more than `CCRC_GRAPH_INCREMENTAL_MAX_FILES` (default 200) files | Edge loss grows with patch size (§1.4); a large patch is close to a full build's cost anyway. |
 | The diff names `.graphifyignore` | Same as a noise change. |
 | `last_full_at` is older than `CCRC_GRAPH_FULL_REBUILD_SECS` (default 86400) | The safety net: it bounds how long incremental edge loss can accumulate. |
-| The previous build of this repository failed | Do not build a patch on a state that just failed. |
+| The last attempt's census row (§2.3) is `refused-shrink`, `refused-by-guard`, or `failed` with `fail: engine` or `fail: publish` | The patch itself produced a bad graph; patching the same state again would repeat it. |
+
+**Which failed attempts force a full rebuild.** Only the four above. The engine and publish failures are: the
+wrapper's exit 1 (`_rebuild_code` returned False) and a refused publish check of §3.5 (`cannot stamp`, an
+unparsable `graph.json`, a `built_at_commit` other than `tip`). Every other non-published outcome retries **the same
+kind** of build next pass, incremental from the published build's `commit` to the new `tip` (which covers the
+diff the failed attempt had): `skipped-budget`, `skipped-slots`, `skipped-backoff`, `timed-out`, `oom-killed`, and
+`failed` with `fail: setup` (a wrapper check exiting 2, a missing slice). None of those says anything about the
+patch, and escalating them would replace a refresh of about 1.25 GB with a rebuild of about 4.2 GB (§1.4) exactly
+when the box is short of slots or memory. The census row carries the class as `fail` (`setup`, `engine`,
+`publish`), so the rule never parses `reason`.
+
+### 3.3.1 Backoff for failing full builds
+
+A full build that cannot fit (for example, the slice's cap is below what it needs beside a heavy test run) would
+otherwise be relaunched every pass into the slice that sessions' tests share. So:
+
+- The census row carries `full_failures`, the count of consecutive **full** attempts of this repository whose
+  outcome was `failed`, `timed-out` or `oom-killed` (carried from the previous row, reset to 0 by any published
+  full build), and `full_failed_at`, the time of the last one.
+- Once `full_failures` reaches `CCRC_GRAPH_FULL_FAIL_MAX` (default 2), no full build of that repository starts
+  until `CCRC_GRAPH_FAIL_BACKOFF_SECS` (default 21600) has passed since `full_failed_at`. Then one full attempt
+  runs; another failure restarts the wait.
+- During the wait, a pass whose only full-rebuild reasons are the soft rows of §3.3 (the safety net,
+  `INCREMENTAL_MAX_FILES`, a previous engine or publish failure) runs an **incremental** from the published build
+  instead, so the served graph keeps following main. When a hard row holds (no published build, an engine or noise
+  change, a rewritten main, a changed `.graphifyignore`), an incremental is not valid and the outcome is
+  `skipped-backoff`, with the wait's end in `reason`; the previous graph stays served.
+- The doctor WARNs when a repository is in backoff (§8).
 
 ### 3.4 The engine wrapper, `ccd/graph-build`
 
@@ -334,7 +369,9 @@ repository can never shadow an import.
 | Lock | `acquire_lock=False`. The engine takes no `.rebuild.lock`, writes no `.pending_changes` and drains none, so nothing is ever queued for a later process that may never run. Serialization is ccrc's: the sweep's pass lock (`flock -n` on `~/.ccrc/graph-sweep.lock`, unchanged); a second pass that finds it held exits at once with census status `pass-locked`, which the doctor reads. Nothing waits on a lock silently, and the only wait in the path, for a heavy test slot, is bounded and reported (§4). |
 | Shrink | `force=True`; ccrc's own `MAX_SHRINK_PCT` publish check decides (§3.5). |
 | Clustering | Default (`no_cluster=False`); the predecessor's `.graphify_labels.json` in `staging/graphify-out/` keeps community names stable. |
-| Result | Exit 0 when `_rebuild_code` returns True, 1 when False, 2 on a failed check, 124 from `timeout`. The wrapper also writes `.started` beside `--out` (in `staging/`, so it is never published) before the call, so the sweep can tell a build that timed out from one that never got a slot (§4), and prints its own `ru_maxrss` for `meta.json`'s `peak_rss_kb`. |
+| Result | Exit 0 when `_rebuild_code` returns True, 1 when False, 2 on a failed check, 124 from `timeout`. The wrapper also writes `.started` beside `--out` (in `staging/`, so it is never published) before the call, so the sweep can tell a build that timed out from one that never got a slot (§4). |
+| OOM victim | Before importing the engine, the wrapper writes `1000` to `/proc/self/oom_score_adj` (raising it needs no privilege; skipped where the file does not exist). The engine's extraction workers fork from it and inherit the value, so when the tests slice reaches its `MemoryMax` the kernel's cgroup OOM kill picks the build, never a session's test run (§4). |
+| Peak memory | After the engine returns, and after its `ProcessPoolExecutor` workers (`GRAPHIFY_MAX_WORKERS`, `extract.py` ~16197-16238) have exited, the wrapper reads `memory.peak` of **its own cgroup**: the `ccrc-test-<pid>` scope that `ccrc test` put it in, whose path it asks the kernel for (`/proc/self/cgroup`, the `0::` line, under `CCRC_CGROUP_ROOT`, default `/sys/fs/cgroup`), never builds. That figure counts the interpreter and every worker together. `ru_maxrss` cannot: `RUSAGE_SELF` excludes the workers, and `RUSAGE_CHILDREN` is the largest single child, not the sum. It prints the value in KiB on its last stdout line, and the sweep writes it as `peak_mem_kb` into `meta.json` and the census row. The wrapper reads it, not the sweep after `ccrc test` returns, because the scope is started with `--collect` (#1785) and its cgroup is gone by then. Where `memory.peak` is unreadable (no cgroup v2, a kernel without the file, the uncontained macOS path) `peak_mem_kb` is `null` and `reason` says "peak unmeasured". |
 
 `_rebuild_code` is private. The pin makes that acceptable, and both the wrapper's signature check and a contract
 test (§11, N3) go red if a new pin changes it.
@@ -367,7 +404,7 @@ test (§11, N3) go red if a new pin changes it.
    rollback) are deleted once older than `CCRC_GRAPH_BUILD_GRACE_SECS` (default 3600).
 
 A refused or failed build publishes nothing: `current` keeps serving the previous graph, and the next pass tries
-again (a full rebuild, by §3.3's last row).
+again, full or incremental by §3.3's failure rule and its backoff (§3.3.1).
 
 ---
 
@@ -393,9 +430,14 @@ Builds run in the capped tests slice, through its one owner, `ccrc test` (#1785,
   (macOS), `ccrc test` runs the command uncontained and says so; the sweep records it in the row's `reason`.
 - **Memory.** An incremental refresh of this repository peaks around 1.25 GB, a full rebuild around 4.2 GB
   (§1.4). Full rebuilds are therefore the build that can meet the slice's cap while a heavy test run holds the
-  other slot. One OOM-killed build costs one retry next pass and serves the previous graph meanwhile. The wrapper
-  records `peak_rss_kb` in `meta.json`, and the doctor WARNs when the last full build's peak exceeds 75% of the
-  slice's `MemoryMax` (§8), so the operator sizes `CCRC_TEST_SLICE_MEMORY_MAX` from a measurement (decision G5).
+  other slot. The build runs with `oom_score_adj` 1000 (§3.4), so the kill at the cap takes the build, not the
+  test. The sweep reports it `oom-killed` when the build exits 137 and `ccrc test` reports an OOM kill in the
+  slice during the run (its `memory.events` `oom_kill` count rose, #1785). An OOM-killed incremental retries as an
+  incremental next pass; OOM-killed full builds are bounded by the backoff of §3.3.1, so a full build that does not
+  fit drives the shared slice to its cap at most once per `FAIL_BACKOFF_SECS` after `FULL_FAIL_MAX` tries. The
+  wrapper records `peak_mem_kb` from its scope's `memory.peak` (§3.4), and the doctor WARNs when the last full
+  build's peak exceeds 75% of the slice's `MemoryMax`, or when the last full attempt was `oom-killed` (§8), so the
+  operator sizes `CCRC_TEST_SLICE_MEMORY_MAX` from a measurement (decision G5).
 - **Ordering.** This design lands after #1785. Until then the sweep cannot build, and its rows say why.
 
 One build at a time: the pass lock serializes them.
@@ -465,6 +507,8 @@ sweep rewrites it every pass.
 | `CCRC_GRAPH_FETCH_SECS` | 900 | Fetch throttle per repository; 0 never fetches and relies on refs others fetch. |
 | `CCRC_GRAPH_FULL_REBUILD_SECS` | 86400 | Safety-net full rebuild interval (§3.3). |
 | `CCRC_GRAPH_INCREMENTAL_MAX_FILES` | 200 | Above this many changed files, rebuild in full. |
+| `CCRC_GRAPH_FULL_FAIL_MAX` | 2 | Consecutive failed full attempts of one repository before the backoff starts (§3.3.1). |
+| `CCRC_GRAPH_FAIL_BACKOFF_SECS` | 21600 | Wait between full attempts once in backoff (§3.3.1). |
 | `CCRC_GRAPH_BUDGET` | 4 | **Changed meaning:** repository builds per pass (was: tree rebuilds, default 8). |
 | `CCRC_GRAPH_BUILD_TIMEOUT` | 600 | Kept. Per build, inside the slot. |
 | `CCRC_GRAPH_SLOT_WAIT_SECS` | 600 | Longest wait for a heavy test slot before `skipped-slots`. |
@@ -561,14 +605,15 @@ The census file (`~/.ccrc/graph-sweep.json`), its 10-pass ring and the pass fiel
 ```json
 { "repo_key": "…", "source": "<realpath of common dir>", "ref": "refs/remotes/origin/main",
   "tip": "<sha>", "served": "<sha of current, or empty>", "outcome": "…", "kind": "full|incremental|",
-  "changed_files": 16, "reason": "…", "duration_ms": 36000, "peak_rss_kb": 1310720,
+  "changed_files": 16, "reason": "…", "fail": "setup|engine|publish|", "duration_ms": 36000, "peak_mem_kb": 1310720,
+  "full_failures": 0, "full_failed_at": "<iso, or empty>",
   "nodes": 48172, "edges": 114127,
   "trees": 63, "linked": 61, "migrate": { "done": 8, "pending": 53, "refused": [ { "path": "…", "reason": "…" } ] } }
 ```
 
 Outcomes: `fresh` (served equals tip, nothing built), `refreshed` (incremental build published), `rebuilt` (full
-build published), `skipped-budget`, `skipped-slots`, `refused-by-guard`, `refused-shrink`, `timed-out`, `failed`,
-`no-source` (the source ref did not resolve), `excluded`. A fetch failure is a `reason`, not an outcome. The
+build published), `skipped-budget`, `skipped-slots`, `skipped-backoff` (§3.3.1), `refused-by-guard`,
+`refused-shrink`, `timed-out`, `oom-killed` (§4), `failed` (with `fail` set), `no-source` (the source ref did not resolve), `excluded`. A fetch failure is a `reason`, not an outcome. The
 words `stale-rebuilt`, `never-built`, `restamped`, `skipped-busy` and `refused-no-exclude` leave the vocabulary;
 the last becomes a `migrate.refused` reason.
 
@@ -580,7 +625,7 @@ the last becomes a `migrate.refused` reason.
 | `ccd/session-hook.sh:325-329` | prints the `trees[]` row whose `path` is the cwd and whose `reason` is non-empty | selects the `repos[]` row whose `source` equals the realpath of `git rev-parse --git-common-dir` in the cwd; prints `outcome: reason`; the D-1335 clip is unchanged |
 | `ccd/ccrc-doctor-checks:4813-4834` (status arms) | `.passes[-1].status`, `.finished`, `.pin` | none |
 | `ccd/ccrc-doctor-checks:4843-4860` (age bound) | 3 × the shipped timer's `OnUnitActiveSec` via `_dr_cycles_s ccd-graph-sweep.timer 3` (D-7054) | 3 × `CCRC_GRAPH_REFRESH_SECS` from `_graph_knobs`, since the timer is now rendered from it |
-| `ccd/ccrc-doctor-checks:4886-4888` (row counts, D-1454) | `trees[]` with `refused-by-guard` / `failed` | `repos[]` with those outcomes plus `timed-out` and `skipped-slots`; the WARN-never-FAIL ruling and its text stand |
+| `ccd/ccrc-doctor-checks:4886-4888` (row counts, D-1454) | `trees[]` with `refused-by-guard` / `failed` | `repos[]` with those outcomes plus `timed-out`, `oom-killed` and `skipped-slots`; the WARN-never-FAIL ruling and its text stand |
 | `ccd/ccrc-doctor-checks:4998` (remedy text) | ".passes[-1].trees[]; a refused tree keeps its last graph" | ".passes[-1].repos[]; a refused build keeps the repository's previous graph served" |
 | `README.md` ≈:5486 (card paragraph) and ≈:5883 (§"The sweep") | the tree row and the 15-minute timer | `repos[]`, the refresh setting, the store |
 | `shared/lifecycle.ts:30` (`graph-sweep-census`) | root, pattern R | unchanged; the other graph rows change (§10) |
@@ -612,9 +657,10 @@ or adds:
 | Dangling `graphify-out` links | FAIL naming them |
 | `git check-ignore -q graphify-out` fails for a common dir | FAIL naming the repository (no slash now) |
 | `ccrc-tests.slice` is not loaded on a Linux host | WARN: graph builds are refused until it is installed |
-| The last full build's `peak_rss_kb` is above 75% of the tests slice's `MemoryMax` | WARN with both numbers (decision G5) |
+| The last full build's `peak_mem_kb` is above 75% of the tests slice's `MemoryMax`, the last full attempt was `oom-killed`, or a full build on a Linux host has `peak_mem_kb` `null` | WARN with both numbers, or "OOM-killed at MemoryMax=…", or "peak unmeasured" (decision G5) |
+| A repository's `full_failures` is at or above `FULL_FAIL_MAX` | WARN naming it, its last outcome and reason, and when the next full attempt is allowed (§3.3.1) |
 | The last N passes' rows for one repository are all `skipped-slots` | WARN: the heavy queue never had room |
-| Census rows `refused-by-guard`, `failed`, `timed-out` (the re-pointed :4886 arm) | WARN, never FAIL (ruling unchanged) |
+| Census rows `refused-by-guard`, `failed`, `timed-out`, `oom-killed` (the re-pointed :4886 arm) | WARN, never FAIL (ruling unchanged) |
 | `graph-build --probe` against the pinned engine (the checks of §3.4 without a build) | FAIL |
 | Census: `probed-zero`; census age over 3 × `REFRESH_SECS` | FAIL / WARN, as today |
 
@@ -687,7 +733,9 @@ No class is permanent, so no `ruling` string is needed.
 
 | Failure | Behaviour |
 |---|---|
-| A build fails, times out, is refused or never gets a slot | `current` keeps the previous graph; the row says why; the next pass retries in full |
+| A build fails, times out, is OOM-killed, is refused or never gets a slot | `current` keeps the previous graph; the row says why; the next pass retries the same kind of build, except a shrink, guard, engine or publish refusal, which retries in full (§3.3) |
+| A full build keeps failing (does not fit beside a heavy test) | After `FULL_FAIL_MAX` failures, one full attempt per `FAIL_BACKOFF_SECS`; incrementals keep the graph following main where valid; doctor WARN (§3.3.1) |
+| The tests slice reaches its `MemoryMax` during a build | The build, at `oom_score_adj` 1000, is the kill; the test run beside it survives; outcome `oom-killed` |
 | Main rewritten (force-push) | `--is-ancestor` fails, so a full rebuild |
 | Engine pin bump | Full rebuild per repository, `BUDGET` per pass, repositories with no build first; the old-pin graph is served meanwhile and the card names its engine |
 | A session runs `graphify update .` | `EACCES` on the read-only build; nothing shared changes |
@@ -707,7 +755,7 @@ store. New rows, each red before and green after, in fixture HOMEs only:
 | N2 | Read-only builds | a published build is writable, or `graphify update .` through the link succeeds |
 | N3 | Engine contract | the pinned `_rebuild_code` is replaced by one that ignores `changed_paths`, `force` or `acquire_lock`, and `graph-build --probe` stays green |
 | N4 | Incremental is incremental | a one-file main commit re-extracts more than that file (counted through the engine's extraction call), or a deleted file's nodes survive |
-| N5 | Full-rebuild triggers | any row of §3.3's table does not lead to a full rebuild |
+| N5 | Full-rebuild triggers | outside a backoff, any row of §3.3's table does not lead to a full rebuild |
 | N6 | Root convention | a published `source_file` carries the checkout's path or any prefix, or the wrapper runs with a cwd other than `--root` |
 | N7 | `GRAPHIFY_OUT` honoured | the wrapper sets `GRAPHIFY_OUT` after importing graphify and still exits 0 |
 | N8 | No silent queue | a `.pending_changes` or `.rebuild.lock` appears in staging or in a published build, or the wrapper calls with `acquire_lock=True` |
@@ -728,6 +776,10 @@ store. New rows, each red before and green after, in fixture HOMEs only:
 | N23 | Saved results | a published build's `memory` link does not resolve to `<repo-key>/memory/`, `save-result` through a tree's `graphify-out/memory/` fails, or a saved result makes the guard refuse |
 | N24 | Output name | a repository tracking a directory named `staging` (or any name other than `graphify-out`) loses that directory's files from the graph, or the wrapper accepts an `--out` with another basename |
 | N25 | Loading | the installed sweep sources or runs the `ccrc` launcher, or runs with a `GRAPH_LIB` missing `ccrc`, `ccrc-test`, `graph-build` or `graph-resolve` without refusing |
+| N26 | OOM victim | on Linux, the wrapper or any engine worker runs with `oom_score_adj` other than 1000; in a fixture memcg at its cap holding a build and a test process, the test process is the one killed |
+| N27 | Failure rule | a `skipped-slots`, `skipped-budget`, `timed-out`, `oom-killed` or `fail: setup` incremental is retried as a full build; a `refused-shrink`, `refused-by-guard`, `fail: engine` or `fail: publish` attempt is retried as an incremental; the rule reads anything but `meta.json` and the last census row |
+| N28 | Backoff | a full attempt starts while `full_failures` ≥ `FULL_FAIL_MAX` and `FAIL_BACKOFF_SECS` has not passed; a soft-trigger pass in backoff skips instead of running an incremental; a published full build leaves `full_failures` non-zero; the doctor does not WARN on a repository in backoff |
+| N29 | Peak memory | `peak_mem_kb` comes from anything but the scope's `memory.peak` (with a fixture cgroup under `CCRC_CGROUP_ROOT` whose `memory.peak` exceeds the wrapper's `ru_maxrss`, the smaller figure is recorded), or an OOM-killed full attempt leaves the doctor's sizing arm green |
 
 **Plan Task 0** (measure before building on it): on the box, replay one week of this repository's main commits as
 incremental refreshes against a full build at each day's last commit, and record the edge and node gaps. If the
@@ -761,7 +813,7 @@ built by the same wrapper.
 | Session impact | skipped while busy; escape hatch after 20 commits / 6 h | never touches a session's tree; builds run behind sessions in the tests slice |
 
 The CPU and disk figures are estimates from §1's measurements; Task 0 and the first week of census rows (which
-carry `duration_ms` and `peak_rss_kb`) replace them with measurements.
+carry `duration_ms` and `peak_mem_kb`) replace them with measurements.
 
 ---
 
@@ -788,7 +840,7 @@ carry `duration_ms` and `peak_rss_kb`) replace them with measurements.
 | **G2** | The build checkout | (a) a shared clone under the store; (b) a registered `git worktree`; (c) `git archive` per build | **(a)** (§2.2, §14) |
 | **G3** | Refresh interval `REFRESH_SECS` | 300 / **900** / 1800 | **900**: today's cadence; main moves about twice an hour here, so staleness averages minutes, and a refresh is cheap enough to shorten later |
 | **G4** | Safety net | `FULL_REBUILD_SECS` 86400 and `INCREMENTAL_MAX_FILES` 200; or weekly; or every refresh in full | **daily and 200**, revisited after Task 0 measures the incremental gap (§11) |
-| **G5** | Where builds run, and the slice's memory | (a) the tests slice through `ccrc test --heavy`, sharing its queue; (b) a dedicated graph slice | **(a)**, as directed; size `CCRC_TEST_SLICE_MEMORY_MAX` so one full build (about 4.2 GB here) fits beside a heavy test run, from the doctor's `peak_rss_kb` WARN |
+| **G5** | Where builds run, and the slice's memory | (a) the tests slice through `ccrc test --heavy`, sharing its queue; (b) a dedicated graph slice | **(a)**, as directed; size `CCRC_TEST_SLICE_MEMORY_MAX` so one full build (about 4.2 GB here) fits beside a heavy test run, from the doctor's `peak_mem_kb` (the build scope's `memory.peak`) and `oom-killed` WARNs; the build is always the OOM victim, and failing full builds back off (§3.3.1) |
 | **G6** | Gate arming | (a) by share of files differing, `GATE_MAX_DIFF_PCT` 25; (b) keep "10 commits behind" | **(a)**: against a graph of main, "commits behind" no longer describes a worktree; the share works for any repository size |
 | **G7** | Fetching main | (a) the sweep fetches, throttled by `FETCH_SECS` 900; (b) rely on refs sessions fetch | **(a)**: a graph of main is only as current as the local ref; the fetch writes only the remote-tracking ref |
 | **G8** | Migration | (a) automatic, idle-gated, budgeted, deleting only graphify-shaped directories; (b) operator-run one-shot | **(a)** |
