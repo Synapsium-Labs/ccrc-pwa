@@ -255,7 +255,7 @@ describe('the retire executors\' censuses (ARCH-44, C4h)', () => {
     show('retireActSites', sites);
     expect(names(sites)).toEqual([
       'server/src/coord/childReclaim.ts#childReclaimAct',
-      'server/src/coord/collectTempRoot.ts#collectTempRoot',
+      'server/src/coord/collectTempRoot.ts#collectTempRootAct',
       'server/src/coord/expireArchived.ts#expireAct',
     ]);
   });
