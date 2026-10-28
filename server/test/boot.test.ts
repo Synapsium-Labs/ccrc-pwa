@@ -13,7 +13,8 @@
 //
 // SENSITIVITY CONTROLS are included deliberately (not just a "does it pass"
 // assertion): they spawn COPIES of index.ts that wait before listen (the
-// fix reverted, and a wait that kills nothing) and assert the SAME verdict
+// fix reverted, another ccd call killed on its timeout, and a long wait that
+// kills nothing) and assert the SAME verdict
 // the real row uses goes red on each — proof the real row's clean verdict
 // is evidence of the property holding, not merely evidence the harness
 // cannot tell a boot that waited from one that did not.
@@ -31,6 +32,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync }
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
+import { freePort } from './codexLaneFixture.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const serverRoot = path.resolve(here, '..');
@@ -64,10 +66,13 @@ const writeRoster = (home: string): void => {
   }));
 };
 
-/** A port unlikely to collide across parallel test files — derived from
- *  this process's own pid, which is unique per vitest worker. */
-let portCounter = 0;
-const freshPort = (): number => 21000 + (process.pid % 4000) + (portCounter++) * 7;
+/** A port for the spawned server, which takes it from CCRC_PORT before it
+ *  binds and refuses 0 (`loadConfig`), so it cannot bind port 0 and report
+ *  back. It comes from the codex-lane fixture's `freePort` (D-6856): free a
+ *  moment ago, below the kernel's ephemeral range, and disjoint from every
+ *  other live vitest worker's slice. This file once derived a fixed band
+ *  (`21000 + pid % 4000`), which overlapped those slices. */
+const freshPort = (): Promise<number> => freePort();
 
 /** True while `pid` is a live process. A zombie (exited, not yet reaped by its parent) counts as gone: `kill(pid, 0)`
  *  alone would still succeed on it. */
@@ -82,9 +87,15 @@ const isRunning = (pid: number): boolean => {
 };
 
 let child: ChildProcess | undefined;
-/** Every home booted in the current test: `afterEach` kills each one's recorded probe pids. A test may boot more than
- *  once (the hung-ccd verdict below boots a reference first), so this is a list, not one slot. */
+/** Every home booted in the current test: `afterEach` kills each one's recorded probe pids. A list, not one slot, so
+ *  a test that boots more than once still cleans up every home. */
 let bootedHomes: string[] = [];
+/** The stderr of the most recent boot, so a boot that never answers can say why in its failure message. */
+let lastBootStderr = '';
+
+/** The failure text for a boot that never answered: the budget, and the tail of what the child printed on stderr. */
+const neverAnswered = (budgetMs: number): string =>
+  `/health never answered within ${budgetMs} ms; the child's stderr:\n${lastBootStderr.slice(-4_000) || '(empty)'}`;
 
 const killGroup = (pid: number, signal: NodeJS.Signals): void => {
   try { process.kill(-pid, signal); } catch { /* already gone, or never a group leader */ }
@@ -150,9 +161,10 @@ async function timeToHealth(
     // cleanup kill to reach that child too.
     detached: true,
   });
-  // Drain stdio so a full pipe buffer can never itself stall the child.
+  // Drain stdio so a full pipe buffer can never itself stall the child. Stderr is kept for `neverAnswered`.
+  lastBootStderr = '';
   child.stdout?.on('data', () => undefined);
-  child.stderr?.on('data', () => undefined);
+  child.stderr?.on('data', (chunk: Buffer) => { lastBootStderr += chunk.toString('utf8'); });
 
   while (Date.now() - start < budgetMs) {
     try {
@@ -170,72 +182,55 @@ async function timeToHealth(
   return null;
 }
 
-/** The pure hang guard for a boot against a hung `ccd`: `/health` not answering by then is a failure in its own
- *  right. It is NOT what judges "boot did not wait" — `hungBootVerdict` below does that — so it is wide on purpose:
- *  past the 10s `LOCAL_CAPS_TIMEOUT_MS`, so the awaited-caps mutant still answers inside it and is judged by the same
- *  signals as the real file, and far enough past that a loaded runner cannot turn it into a timeout flake. */
+/** The hang guard for one boot against a hung `ccd`, and the matching per-boot share of the test timeout. Wide on
+ *  purpose: past the 10s `LOCAL_CAPS_TIMEOUT_MS`, so a mutant that awaits the caps read still answers inside it and is
+ *  judged by the same verdict as the real file, and far enough past that a loaded runner cannot turn it into a
+ *  timeout flake. Answering inside it is not enough to pass: `HUNG_BOOT_BOUND_MS` below is the bound. */
 const HANG_GUARD_MS = 20_000;
 
-/** How much slower than the reference boot (same runner, same test, a moment earlier) the hung-ccd boot may be.
- *  Written reason for this number: the smallest wait this row must catch without a kill to show for it (an awaited
- *  race against a 4s sleep) adds about 4000 ms, and the hung boot ran at most 266 ms over its reference in 20 runs on a
- *  busy laptop and at most 745 ms over it in 20 runs under 28 extra busy loops (references 2033-4196 ms there). Half
- *  the smallest caught wait leaves room on both sides; a wider margin would let a 2s-3s wait pass, a narrower one
- *  would start judging runner noise. */
-const BOOT_MARGIN_MS = 2_000;
+/** The one wall-clock bound on a boot against a hung `ccd`: `/health` within 8000 ms, the budget this row always gave
+ *  `timeToHealth`. Reason for the number: loaded CI runners were measured booting in 2-4 s while boot was fine, so the
+ *  old 3 s bound flaked (3092 ms, 3570 ms), and 8 s holds the line against those boots with room to spare.
+ *
+ *  Accepted gap: an awaited wait that kills nothing and lasts under about 6 s (8 s less a 2 s boot) is not caught by
+ *  this row. The old 3 s bound could not hold that line either without flaking. A slowdown of `index.ts` that does not
+ *  depend on `ccd` at all is still covered by the sibling instant-ccd row below, which keeps its 3 s bound. */
+const HUNG_BOOT_BOUND_MS = 8_000;
 
 /** What the hung-ccd row judges, as a list of failures (empty means boot did not wait). Shared by the real row and
- *  the sensitivity controls so the controls prove THESE signals go red, not some other harness.
+ *  the sensitivity controls, so the controls prove THESE checks go red, not some other harness.
  *
  *  1. Every ccd call boot made is still running when `/health` answers. The stub records one pid per invocation and
  *     sleeps 600 s, so any call that was awaited and ended by a timeout kill (the caps read's own 10s bound, or an
  *     `execFile(..., { timeout })` of any length) is dead by the time listen could follow it. This holds however
  *     slow or fast the box is.
- *  2. Boot took at most `BOOT_MARGIN_MS` longer than a reference boot of the real `index.ts` against an instant ccd,
- *     measured just before on the same runner. This catches the await that kills nothing (a race against a sleep),
- *     which signal 1 cannot see, without a fixed wall clock that a loaded runner breaks.
- *  3. The caps read was started at all, so signal 1 is not vacuously true. */
-async function hungBootVerdict(entry: string): Promise<{ failures: string[]; referenceMs: number | null; hungMs: number | null }> {
+ *  2. `/health` answered within `HUNG_BOOT_BOUND_MS`. This catches a long await that kills nothing (a race against a
+ *     sleep), which check 1 cannot see; see that constant for the gap it leaves.
+ *  3. The caps read was started at all, so check 1 is not vacuously true. */
+async function hungBootVerdict(entry: string): Promise<{ failures: string[]; hungMs: number | null }> {
   const failures: string[] = [];
-
-  const instantBoot = async (): Promise<number | null> => {
-    const refHome = mkTmp('ccrc-boot-');
-    writeRoster(refHome);
-    writeStubCcd(refHome, 'echo start\necho stop\necho stop-surface\nexit 0');
-    const ms = await timeToHealth(refHome, indexTs, freshPort(), HANG_GUARD_MS);
-    await stopBoots();
-    return ms;
-  };
-  // The reference boots twice and keeps the second: the first boot in a fresh worker pays for `tsx` transforming
-  // every source file (measured 4183 ms against ~1300 ms warm), which would widen the bound by the same amount.
-  await instantBoot();
-  const referenceMs = await instantBoot();
-  if (referenceMs === null) return { failures: ['the reference boot (instant ccd) never answered'], referenceMs, hungMs: null };
-
   const home = mkTmp('ccrc-boot-');
   writeRoster(home);
-  // The stub also names the pid of its `caps` read, so signal 3 can tell the read was started. It inherits the
+  // The stub also names the pid of its `caps` read, so check 3 can tell the read was started. It inherits the
   // server's env, so the path comes from `CCRC_HOME`.
   writeStubCcd(home, 'if [ "$1" = caps ]; then echo $$ > "$CCRC_HOME/.caps-pid"; fi\nsleep 600');
-  const hungMs = await timeToHealth(home, entry, freshPort(), HANG_GUARD_MS);
-  if (hungMs === null) return { failures: [`/health never answered within the ${HANG_GUARD_MS} ms hang guard`], referenceMs, hungMs };
+  const hungMs = await timeToHealth(home, entry, await freshPort(), HANG_GUARD_MS);
+  if (hungMs === null) return { failures: [neverAnswered(HANG_GUARD_MS)], hungMs };
 
-  // Signal 1, taken the moment /health answered.
+  // Check 1, taken the moment /health answered.
   const dead = probePids(home).filter((pid) => !isRunning(pid));
   if (dead.length > 0) failures.push(`listen followed a ccd call that was killed: pid(s) ${dead.join(', ')} no longer running when /health answered`);
 
-  // Signal 2.
-  if (hungMs > referenceMs + BOOT_MARGIN_MS) {
-    failures.push(`boot took ${hungMs} ms against a hung ccd, more than the ${referenceMs} ms reference + ${BOOT_MARGIN_MS} ms margin`);
-  }
+  // Check 2.
+  if (hungMs > HUNG_BOOT_BOUND_MS) failures.push(`boot took ${hungMs} ms against a hung ccd, over the ${HUNG_BOOT_BOUND_MS} ms bound`);
 
-  // Signal 3.
+  // Check 3.
   const capsPidFile = path.join(home, '.caps-pid');
   const startedBy = Date.now() + 5_000;
   while (!existsSync(capsPidFile) && Date.now() < startedBy) await new Promise((r) => setTimeout(r, 50));
   if (!existsSync(capsPidFile)) failures.push('the local-mode caps read was never started');
 
-  return { failures, referenceMs, hungMs };
+  return { failures, hungMs };
 }
 
 /** Writes a mutated copy of `index.ts` beside it (its sibling imports are relative, so a temp-dir copy would not
@@ -255,13 +250,24 @@ async function withMutant<T>(find: string, replace: string, fn: (mutantPath: str
   }
 }
 
-/** Three times the guard (two reference boots + the hung boot), the 5s caps-start wait, and slack for cleanup. */
-const HUNG_ROW_TIMEOUT_MS = 3 * HANG_GUARD_MS + 10_000;
+/** One boot's guard, the 5s caps-start wait, and slack for cleanup. */
+const HUNG_ROW_TIMEOUT_MS = HANG_GUARD_MS + 10_000;
+
+/** The line a control inserts before `app.listen`: an awaited `ccd` call of a verb other than `caps`, killed by
+ *  `execFile`'s own `timeout` after `ms`. */
+const awaitedExecFile = (ms: number): string =>
+  'await new Promise((r) => { void import(\'node:child_process\').then(({ execFile }) => '
+  + `execFile(cfg.ccdBin, ['status'], { timeout: ${ms} }, () => r(undefined))); });\n`;
+
+const LISTEN = 'await app.listen({ host: cfg.host, port: cfg.port });';
+
+const isKilledCall = (f: string): boolean => f.startsWith('listen followed a ccd call that was killed');
+const isOverBound = (f: string): boolean => f.startsWith('boot took');
 
 describe('the real composition root — boot never blocks on the local-caps probe', () => {
   it('a hung ccd (sleep 600, the reviewer\'s own reproduction) does not delay listen', async () => {
     // The row used to assert a fixed 3s wall clock, which loaded shared runners missed (3092 ms, 3570 ms) while boot
-    // was fine. `hungBootVerdict` judges the same property with signals a slow box does not break: see its comment.
+    // was fine. `hungBootVerdict` judges the same property with checks a slow box does not break: see its comment.
     const { failures } = await hungBootVerdict(indexTs);
     expect(failures).toEqual([]);
   }, HUNG_ROW_TIMEOUT_MS);
@@ -270,35 +276,42 @@ describe('the real composition root — boot never blocks on the local-caps prob
     const home = mkTmp('ccrc-boot-');
     writeRoster(home);
     writeStubCcd(home, 'echo start\necho stop\necho stop-surface\nexit 0');
-    const elapsed = await timeToHealth(home, indexTs, freshPort(), 8_000);
-    expect(elapsed).not.toBeNull();
+    const elapsed = await timeToHealth(home, indexTs, await freshPort(), 8_000);
+    expect(elapsed, neverAnswered(8_000)).not.toBeNull();
     expect(elapsed!).toBeLessThan(3_000);
   }, 15_000);
 
   // THE SENSITIVITY CONTROLS. Without them, "the verdict is clean" could mean either "the property holds" or "these
-  // signals cannot see a boot that waited". Each control runs a MUTATED copy of index.ts through the SAME
-  // `hungBootVerdict` the real row uses and asserts it goes red on the signal that mutant should trip. The first is the
-  // exact round-4 regression (`await` restored), which the reviewer measured by hand at 10953 ms; it trips the
-  // killed-call signal, since the caps read only settles when its 10s timeout kills it. The second waits without
-  // killing anything (an awaited race between the caps read and a 4s sleep): only the reference-relative time signal
-  // can see it, so it proves that signal goes red too.
+  // checks cannot see a boot that waited". Each control runs a MUTATED copy of index.ts through the SAME
+  // `hungBootVerdict` the real row uses and asserts it goes red on the check that mutant should trip.
+  //  - The exact round-4 regression (`await` restored), which the reviewer measured by hand at 10953 ms: the caps
+  //    read only settles when its 10s timeout kills it, so check 1 goes red.
+  //  - An awaited `execFile` of another verb, killed by its own timeout at 1.5 s and at 4 s: both are inside the 8 s
+  //    bound, so only check 1 can see them, and it must.
+  //  - An awaited race between the caps read and a 10 s sleep: check 2 (the 8 s bound) must go red.
   it('SENSITIVITY CONTROL: the verdict goes red when the caps read IS awaited', async () => {
     const { failures } = await withMutant(
       'void readLocalCcdCaps(cfg.ccdBin).then((verbs) => {',
       'await readLocalCcdCaps(cfg.ccdBin).then((verbs) => {',
       (mutant) => hungBootVerdict(mutant),
     );
-    expect(failures.some((f) => f.startsWith('listen followed a ccd call that was killed')), failures.join('\n')).toBe(true);
+    expect(failures.some(isKilledCall), failures.join('\n')).toBe(true);
   }, HUNG_ROW_TIMEOUT_MS);
 
-  it('SENSITIVITY CONTROL: the verdict goes red when boot awaits a race with a 4s sleep (nothing killed)', async () => {
+  for (const ms of [1_500, 4_000]) {
+    it(`SENSITIVITY CONTROL: the verdict goes red when boot awaits an execFile of another verb with a ${ms} ms timeout`, async () => {
+      const { failures } = await withMutant(LISTEN, awaitedExecFile(ms) + LISTEN, (mutant) => hungBootVerdict(mutant));
+      expect(failures.some(isKilledCall), failures.join('\n')).toBe(true);
+    }, HUNG_ROW_TIMEOUT_MS);
+  }
+
+  it('SENSITIVITY CONTROL: the verdict goes red when boot awaits a race with a 10s sleep', async () => {
     const { failures } = await withMutant(
-      'await app.listen({ host: cfg.host, port: cfg.port });',
-      'await Promise.race([readLocalCcdCaps(cfg.ccdBin), new Promise((r) => setTimeout(r, 4_000))]);\n'
-        + 'await app.listen({ host: cfg.host, port: cfg.port });',
+      LISTEN,
+      'await Promise.race([readLocalCcdCaps(cfg.ccdBin), new Promise((r) => setTimeout(r, 10_000))]);\n' + LISTEN,
       (mutant) => hungBootVerdict(mutant),
     );
-    expect(failures.some((f) => f.startsWith('boot took')), failures.join('\n')).toBe(true);
+    expect(failures.some(isOverBound), failures.join('\n')).toBe(true);
   }, HUNG_ROW_TIMEOUT_MS);
 });
 
@@ -332,8 +345,8 @@ describe('the real composition root — local mode records its own ccd caps', ()
     const home = mkTmp('ccrc-boot-');
     writeRoster(home);
     writeStubCcd(home, 'echo start\necho stop\necho project-pool\nexit 0');
-    const port = freshPort();
-    expect(await timeToHealth(home, indexTs, port, 8_000)).not.toBeNull();
+    const port = await freshPort();
+    expect(await timeToHealth(home, indexTs, port, 8_000), neverAnswered(8_000)).not.toBeNull();
     expect(await projectPoolsWithin(port, 'enforced', 5_000)).toBe('enforced');
   }, 20_000);
 
@@ -341,8 +354,8 @@ describe('the real composition root — local mode records its own ccd caps', ()
     const home = mkTmp('ccrc-boot-');
     writeRoster(home);
     writeStubCcd(home, 'echo start\necho stop\nexit 0');
-    const port = freshPort();
-    expect(await timeToHealth(home, indexTs, port, 8_000)).not.toBeNull();
+    const port = await freshPort();
+    expect(await timeToHealth(home, indexTs, port, 8_000), neverAnswered(8_000)).not.toBeNull();
     expect(await projectPoolsWithin(port, 'unavailable', 5_000)).toBe('unavailable');
   }, 20_000);
 
@@ -355,8 +368,8 @@ describe('the real composition root — local mode records its own ccd caps', ()
     const home = mkTmp('ccrc-boot-');
     writeRoster(home);
     writeStubCcd(home, 'if [ "$1" = caps ]; then touch "$CCRC_HOME/.caps-asked"; fi\nexit 1');
-    const port = freshPort();
-    expect(await timeToHealth(home, indexTs, port, 8_000)).not.toBeNull();
+    const port = await freshPort();
+    expect(await timeToHealth(home, indexTs, port, 8_000), neverAnswered(8_000)).not.toBeNull();
     const marker = path.join(home, '.caps-asked');
     const askedBy = Date.now() + 5_000;
     while (!existsSync(marker) && Date.now() < askedBy) await new Promise((r) => setTimeout(r, 50));
