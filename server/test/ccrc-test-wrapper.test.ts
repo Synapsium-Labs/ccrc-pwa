@@ -96,10 +96,11 @@ const started = (b: Box, tag: string) => existsSync(path.join(b.home, `started-$
 const release = (b: Box, tag: string) => writeFileSync(path.join(b.home, `release-${tag}`), '');
 
 describe('ccrc test: the slice (D-TBD-test-containment)', () => {
+  // Nothing is added to the run's environment: `already inside` is read from the cgroup, never from a variable.
   itLinux('runs the command as a scope in ccrctests.slice, with the session environment, cwd and exit code', () => {
     const b = box();
-    const r = run(b, ['--light', '--', 'sh', '-c', 'echo "$MARK:$CCRC_TEST_INSIDE:$(pwd -P)"; exit 7'], { MARK: 'session-env' });
-    expect(r.stdout.trim()).toBe(`session-env:1:${b.home}`);
+    const r = run(b, ['--light', '--', 'sh', '-c', 'echo "$MARK:${CCRC_TEST_INSIDE-unset}:$(pwd -P)"; exit 7'], { MARK: 'session-env' });
+    expect(r.stdout.trim()).toBe(`session-env:unset:${b.home}`);
     expect(r.status).toBe(7);
     expect(log(b, 'systemd-run.log')).toMatch(/^--user --scope --quiet --collect --slice=ccrctests\.slice --unit=ccrc-test-\d+ --description=ccrc test: sh -c .* -- sh -c /m);
   });
@@ -132,7 +133,7 @@ describe('ccrc test: the slice (D-TBD-test-containment)', () => {
     ['CCRC_TEST_SLICE_MEMORY_MAX', '6'], ['CCRC_TEST_SLICE_MEMORY_MAX', '0G'], ['CCRC_TEST_SLICE_MEMORY_MAX', 'infinity'],
     ['CCRC_TEST_SLICE_MEMORY_MAX', '101%'], ['CCRC_TEST_SLICE_SWAP_MAX', '1'], ['CCRC_TEST_SLICE_CPU_WEIGHT', '0'],
     ['CCRC_TEST_SLICE_CPU_WEIGHT', '10001'], ['CCRC_TEST_SLICE_CPU_QUOTA', '4'], ['CCRC_TEST_SLICE_IO_WEIGHT', 'x'],
-    ['CCRC_TEST_HEAVY_SLOTS', '0'],
+    ['CCRC_TEST_HEAVY_SLOTS', '0'], ['CCRC_TEST_WIDE_FILES', '-1'],
   ])('%s=%s is not its shape: it keeps the default and warns, naming the key, value and file', (key, value) => {
     const b = box({}, { [key]: value });
     const r = run(b, ['--classify', '--', 'true']);
@@ -141,7 +142,7 @@ describe('ccrc test: the slice (D-TBD-test-containment)', () => {
     expect(r.stderr).toMatch(/; using its default \S+\n/);
   });
   it.each([
-    ['CCRC_TEST_WIDE_FILES', '-1'], ['CCRC_TEST_PRESSURE_MAX', '100'],
+    ['CCRC_TEST_PRESSURE_MAX', '100'],
   ])('%s=%s is not its shape: it keeps the default and warns, naming the key, value and source', (key, value) => {
     const b = box();
     const r = run(b, ['--classify', '--', 'true'], { [key]: value });
@@ -364,18 +365,46 @@ describe('ccrc test: heavy or light (D-TBD-test-containment)', () => {
     ['S=systemd-run; $S --user --scope npx vitest run test/foo.test.ts', 'wrapped'],
     ['systemd-run --user --scope sleep 1', 'light'],
     ['systemd-run --user --scope ccrc test -- npx vitest run', 'light'],
+    // `ccrc test` around a systemd-run of one's own is the same escape: the inner systemd-run moves the run out of the
+    // slice the wrapper put it in. Its inner command is read through the same wrapped check.
+    ['ccrc test -- systemd-run --user --scope npx vitest run', 'wrapped'],
+    ['ccrc test --heavy -- systemd-run --user --scope -- npx tsc --noEmit', 'wrapped'],
+    ['cd server && ccrc test -- /usr/bin/systemd-run --user --scope npx vitest run test/foo.test.ts', 'wrapped'],
+    ['ccrc test -- env -u GIT_DIR systemd-run --user --scope npm test', 'wrapped'],
+    ["ccrc test -- sh -c 'systemd-run --user --scope npx tsc'", 'wrapped'],
+    ['ccrc-test -- systemd-run --user --scope npx vitest run', 'wrapped'],
+    ['ccrc test -- systemd-run --user --scope sleep 1', 'light'],
+    ["ccrc test -- sh -c 'npx vitest run'", 'light'],
   ])('--classify-shell %s is %s', (line, want) => {
     expect(run(box(), ['--classify-shell', '--', line]).stdout.trim()).toBe(want);
   });
   it('--classify-shell takes exactly one string', () => {
     expect(run(box(), ['--classify-shell', '--', 'npx', 'tsc']).status).toBe(2);
   });
-  it('CCRC_TEST_WIDE_FILES moves the wide line', () => {
-    expect(run(box(), ['--classify', '--', 'vitest', 'run', 'a.test.ts', 'b.test.ts'], { CCRC_TEST_WIDE_FILES: '1' }).stdout.trim()).toBe('heavy');
+  // The wide line decides which runs queue for the whole box, so it is the box's, as the slot count is: read from
+  // ~/.ccrc/ccrc.env alone. A session whose environment set it would read its own wide runs as light.
+  it('CCRC_TEST_WIDE_FILES in ~/.ccrc/ccrc.env moves the wide line', () => {
+    expect(run(box({}, { CCRC_TEST_WIDE_FILES: '1' }), ['--classify', '--', 'vitest', 'run', 'a.test.ts', 'b.test.ts']).stdout.trim()).toBe('heavy');
   });
-  it('--heavy and --light override the reading', () => {
+  it('CCRC_TEST_WIDE_FILES in the caller\'s environment is ignored, with a warning', () => {
+    const r = run(box(), ['--classify', '--', 'vitest', 'run', 'a.test.ts', 'b.test.ts', 'c.test.ts', 'd.test.ts'], { CCRC_TEST_WIDE_FILES: '10' });
+    expect(r.stdout.trim()).toBe('heavy');
+    expect(r.stderr).toContain('ccrc test: WARN: CCRC_TEST_WIDE_FILES=10 in the environment is ignored: it holds for the whole box, so only ~/.ccrc/ccrc.env sets it (in use: 3)');
+  });
+  it('--heavy overrides the reading', () => {
     expect(run(box(), ['--heavy', '--classify', '--', 'git', 'status']).stdout.trim()).toBe('heavy');
-    expect(run(box(), ['--light', '--classify', '--', 'npx', 'tsc']).stdout.trim()).toBe('light');
+  });
+  // --light can only confirm a light reading: a heavy command run with it still queues, so a session that reached for
+  // --light by habit never runs a whole suite beside the box's heavy runs. It says so in one line and runs.
+  it('--light is honoured when the reading is light, and says nothing', () => {
+    const r = run(box(), ['--light', '--classify', '--', 'npx', 'vitest', 'run', 'test/foo.test.ts']);
+    expect(r.stdout.trim()).toBe('light');
+    expect(r.stderr).toBe('');
+  });
+  it.each([[['npx', 'tsc']], [['npx', 'vitest', 'run']], [['npm', 'test']]])('--light on %j, which reads heavy, is ignored with a one-line note', (argv) => {
+    const r = run(box(), ['--light', '--classify', '--', ...argv]);
+    expect(r.stdout.trim()).toBe('heavy');
+    expect(r.stderr).toBe('ccrc test: --light is ignored: this command reads as heavy, so it takes its turn in the heavy queue\n');
   });
   it('a missing command is a usage error', () => {
     const r = run(box(), []);
@@ -517,17 +546,59 @@ describe('ccrc test: the admission queue (D-TBD-test-containment)', () => {
     await Promise.all([a.exit, l.exit]);
   });
 
-  itQueue('a run inside a run is already contained: it neither queues nor opens a scope', async () => {
+  // ALREADY INSIDE is read from the process's own cgroup, never from the environment: a variable any caller can set
+  // would let a whole suite skip the queue and the slice.
+  const inSlice = (): string => {
+    const proc = mkTmp('ccrc-test-proc-');
+    mkdirSync(path.join(proc, 'self'), { recursive: true });
+    writeFileSync(path.join(proc, 'self', 'cgroup'), '0::/user.slice/user-1000.slice/user@1000.service/ccrctests.slice/ccrc-test-41.scope\n');
+    return proc;
+  };
+  itQueue('a run whose cgroup is under ccrctests.slice is already contained: it neither queues nor opens a scope', async () => {
     const b = box({}, { CCRC_TEST_HEAVY_SLOTS: '1' });
     slice(b);
     const a = hold(b, 'a');
     await until('the holder to start', () => started(b, 'a'));
-    const before = log(b, 'systemd-run.log');
-    const r = run(b, ['--heavy', '--', 'sh', '-c', 'echo nested'], { CCRC_TEST_INSIDE: '1' });
+    try {
+      const before = log(b, 'systemd-run.log');
+      const r = spawnSync('bash', [WRAPPER, '--heavy', '--', 'sh', '-c', 'echo nested'], { env: { ...b.env, CCRC_PROC_ROOT: inSlice() }, encoding: 'utf8', cwd: b.home, timeout: 10000 });
+      expect(r.stdout.trim()).toBe('nested');
+      expect(r.status).toBe(0);
+      expect(log(b, 'systemd-run.log')).toBe(before);
+    } finally {
+      release(b, 'a');
+      await a.exit;
+    }
+  });
+
+  itQueue('CCRC_TEST_INSIDE in the environment is not trusted: a heavy run still queues behind the held slot', async () => {
+    const b = box({}, { CCRC_TEST_HEAVY_SLOTS: '1' });
+    slice(b);
+    const a = hold(b, 'a');
+    await until('the holder to start', () => started(b, 'a'));
+    const w = hold(b, 'w', ['--heavy'], { CCRC_TEST_INSIDE: '1' });
+    try {
+      await until('the second to queue', () => w.stderr().includes('ccrc test: queued: all 1 heavy test slots are held'));
+      await new Promise((r) => setTimeout(r, 400));
+      expect(started(b, 'w'), 'the variable did not let it skip the queue').toBe(false);
+      release(b, 'a');
+      await until('the second to start', () => started(b, 'w'));
+    } finally {
+      release(b, 'a'); release(b, 'w');
+    }
+    expect(await w.exit).toBe(0);
+    expect(await a.exit).toBe(0);
+  });
+
+  // Uncontained (macOS, or a slice the manager has not loaded) there is no cgroup to read, so a nested run knows it is
+  // inside when the holder of a held slot is one of its own ancestors: it never waits on its parent's slot.
+  itQueue('a heavy run inside a heavy run never waits on its own parent\'s slot', () => {
+    const b = box({}, { CCRC_TEST_HEAVY_SLOTS: '1' });
+    slice(b);
+    const r = spawnSync('bash', [WRAPPER, '--heavy', '--', 'bash', WRAPPER, '--heavy', '--', 'sh', '-c', 'echo nested'], { env: b.env, encoding: 'utf8', cwd: b.home, timeout: 15000 });
     expect(r.stdout.trim()).toBe('nested');
-    expect(log(b, 'systemd-run.log')).toBe(before);
-    release(b, 'a');
-    await a.exit;
+    expect(r.status).toBe(0);
+    expect(r.stderr).not.toContain('queued');
   });
 
   itQueue('with CCRC_TEST_PRESSURE_MAX set, a heavy run waits while pressure is above it', async () => {

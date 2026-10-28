@@ -71,6 +71,9 @@ describe('the test-route arm denies a test or typecheck under a systemd-run of i
     'systemd-run --user --scope tsgo -p .',
     'systemd-run --user --scope make test',
     "sh -c 'systemd-run --user --scope npx tsc'",
+    // `ccrc test` around a systemd-run of one's own is read through the same wrapped check.
+    'ccrc test -- systemd-run --user --scope npx vitest run',
+    'cd server && ccrc test --heavy -- systemd-run --user --scope -- npx tsc --noEmit -p test/tsconfig.tests.json',
   ])('%s is denied, with a reason that names ccrc test', (cmd) => {
     const why = bash(cmd);
     expect(why).toMatch(/run tests and typechecks through `ccrc test -- <command>`/);
