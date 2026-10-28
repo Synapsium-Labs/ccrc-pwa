@@ -22,7 +22,7 @@
 // - a multiSelect question's boxes are its own options, read into `Dialog.multi` (D-5048), and the answer lists the
 //   boxes in the order they became ticked (`cc300-ask-review-tick-order`); the last question's commit row reads
 //   `Submit` and lands on the review (D-5091).
-import type { AskOption, Dialog, DialogAsk, DialogMulti, HookAsk, HookAskQuestion } from '../../../shared/api';
+import type { Dialog, DialogMulti, HookAsk } from '../../../shared/api';
 import {
   ASK_TAB_ROW_RE,
   CHAT_ABOUT_ROW_RE,
@@ -30,13 +30,16 @@ import {
   FREE_TEXT_PLACEHOLDER_RE,
   parseAskTabs,
   reviewRows,
+  transcriptQuestion,
+  usableQuestions,
   type AskTab,
   type ReviewRows,
+  type StructuredQuestion,
 } from '../../../shared/ask-menu';
 
-/** One of Claude's own questions as a surface renders it (D-6325): the hook envelope's question, or the transcript's copy
- *  of one. The transcript's options may carry a `preview` (an option's worked example), which the hook's never do. */
-export type StructuredQuestion = Omit<HookAskQuestion, 'options'> & { options: readonly AskOption[] };
+/** One of Claude's own questions as a surface renders it (D-6325). Defined in `shared/ask-menu.ts` beside the
+ *  transcript copy's reading (D-7212) and re-exported here, so its importers keep their imports. */
+export type { StructuredQuestion };
 
 /** The questions of an AskUserQuestion envelope (`HookAsk`'s question arm), or of the transcript's copy. */
 export interface AskQuestions {
@@ -316,12 +319,13 @@ export function picksUncommitted(multi: DialogMulti, picked: readonly number[] |
  * I4: is there anything accessible to actually show? Mirrors the scraped path's own blank-question fallback, but a hook
  * envelope has no second source of its own, so "blank" here means "treat as absent" rather than "render with an empty
  * title", which would leave the sheet with no accessible name at all. A type guard so the call site gets `hookAsk`
- * narrowed to `HookAsk` for free. Moved here from `DialogSheet.tsx` (D-6325): `askSource` is its first reader now.
+ * narrowed to `HookAsk` for free. Moved here from `DialogSheet.tsx` (D-6325): `askSource` is its first reader now. Its
+ * question arm is `shared/ask-menu.ts#usableQuestions` (D-7212), the rule the server's pairing reads too.
  */
 export function isUsableAsk(a: HookAsk | null): a is HookAsk {
   if (a === null) return false;
   if ('approval' in a) return true;
-  return a.questions.length > 0 && a.questions[0]!.question.trim() !== '';
+  return usableQuestions(a);
 }
 
 /** One trailing `(Recommended)`, with any space around it: Claude's own mark on the option it prefers. Anchored at the
@@ -365,27 +369,6 @@ export interface AskSourceInput {
   dialog: Dialog | null;
   /** Has an `ask` or `ask_cleared` frame arrived on THIS connection (the store's `askFrameSeen`)? */
   askFrameSeen: boolean;
-}
-
-/** The transcript's copy of the question as a structured one, or null while any row did not align (a `null` option) or
- *  the question is blank. An option's `preview` is kept (D-6325): it is Claude's own worked example for that row, and
- *  the surface draws it under the row as the scraped sheet did. */
-function transcriptQuestion(a: DialogAsk | undefined): StructuredQuestion | null {
-  if (a === undefined || a.question.trim() === '' || a.options.some((o) => o === null)) return null;
-  const q: StructuredQuestion = {
-    question: a.question,
-    multiSelect: a.multiSelect,
-    options: a.options.map((o) => {
-      const { label, description, preview } = o!;
-      return {
-        label,
-        ...(description === undefined ? {} : { description }),
-        ...(preview === undefined ? {} : { preview }),
-      };
-    }),
-  };
-  if (a.header !== undefined) q.header = a.header;
-  return q;
 }
 
 /** A question's header chip, or `Question <n>` (1-based) for one with none: the one name the tab strip and the review's

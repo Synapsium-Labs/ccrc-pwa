@@ -405,3 +405,41 @@ export const countBy = (sites: readonly W7Site[], key: (s: W7Site) => string): R
   for (const s of sites) out[key(s)] = (out[key(s)] ?? 0) + 1;
   return out;
 };
+
+// ─── C7q. the transcript copy's reading and a usable question envelope (D-7212) ───────────────────────────────────
+
+/** The transcript copy's reading: a test that a `DialogAsk`'s `question` is blank (`.question.trim() === ''`) AND that
+ *  one of its options is `null` (`.options.some((o) => o === null)`), in one function. */
+const COPY_BLANK = /\.question\.trim\(\)\s*===\s*(?:''|"")/;
+const COPY_NULL_OPTION = /\.options\.some\(\s*\(?\s*(\w+)\s*\)?\s*=>\s*\1\s*===\s*null\s*\)/;
+/** A usable question envelope: `questions.length > 0` AND the first question's trimmed text (`questions[0]` with `!`,
+ *  `?` or nothing, then `.question.trim()`), in one function. */
+const USABLE_LENGTH = /questions\.length\s*>\s*0/;
+const USABLE_FIRST = /questions\[0\][!?]?\.question\.trim\(\)/;
+
+/** Each function-like symbol whose own text holds a rule, attributed to the innermost such symbol (an outer function
+ *  around a counted inner one is not a second definition). Kind `copy` or `usable`. */
+export function transcriptCopyRulesIn(p: ParsedFile, file: string): W7Site[] {
+  const rules: [string, (t: string) => boolean][] = [
+    ['copy', (t) => COPY_BLANK.test(t) && COPY_NULL_OPTION.test(t)],
+    ['usable', (t) => USABLE_LENGTH.test(t) && USABLE_FIRST.test(t)],
+  ];
+  const out: W7Site[] = [];
+  for (const [kind, holds] of rules) {
+    const hits = p.symbols.filter((s) => holds(p.text.slice(s.start, s.end)));
+    for (const s of hits) {
+      if (hits.some((o) => o !== s && s.start <= o.start && o.end <= s.end)) continue;
+      out.push({ file, symbol: s.name, line: s.line, text: lineStart(p.text, s.line).trim().slice(0, 140), kind });
+    }
+  }
+  return out.sort((a, b) => a.file.localeCompare(b.file) || a.line - b.line);
+}
+
+/** The copy and usability rules' definitions across `pwa/src`, `server/src` and `shared` (D-7212): 1 each, both in
+ *  `shared/ask-menu.ts`, which `askLive.ts#askSource` and `server/src/pane/askPairing.ts#framePairing` both import.
+ *  KNOWN WIDTH: syntax only; a rule split across two functions, or spelled through another member name, is not seen. */
+export const transcriptCopyRules = (): W7Site[] => [
+  ...pwaSources(),
+  ...walkSrc({ roots: ['server/src'], min: 200, match: /\.ts$/ }),
+  ...walkSrc({ roots: ['shared'], min: 5, flat: true, match: /\.ts$/ }),
+].flatMap((rel) => transcriptCopyRulesIn(parsedFile(rel), rel));
