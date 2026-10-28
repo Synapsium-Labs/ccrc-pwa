@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Status Tab Layouts</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@400;600&display=swap">
+<style>
+/* Layout: a single reading column of three labelled mockups, each a miniature of the console's Status tab. */
+:root {
+  --bg: #f3f5f2; --panel: #ffffff; --row: #f7f9f6; --line: #d6ddd4; --fg: #1d221d; --muted: #5d685c;
+  --ok: #1d7a3e; --ok-bg: #dcf2e2; --bad: #b42323; --bad-bg: #fbe1e1; --you: #8a5a00; --you-bg: #fbefd2;
+  --mono: "IBM Plex Mono", ui-monospace, Menlo, monospace; --sans: "IBM Plex Sans", system-ui, sans-serif;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #0f120f; --panel: #151915; --row: #1a1f1a; --line: #2b322b; --fg: #e3e8e1; --muted: #8d988b;
+  --ok: #7fe39a; --ok-bg: #173622; --bad: #ff8f8f; --bad-bg: #3d1818; --you: #ffd36b; --you-bg: #3a2f10; color-scheme: dark } }
+:root[data-theme="dark"] {
+  --bg: #0f120f; --panel: #151915; --row: #1a1f1a; --line: #2b322b; --fg: #e3e8e1; --muted: #8d988b;
+  --ok: #7fe39a; --ok-bg: #173622; --bad: #ff8f8f; --bad-bg: #3d1818; --you: #ffd36b; --you-bg: #3a2f10; color-scheme: dark }
+body { background: var(--bg); color: var(--fg); font-family: var(--sans); font-size: 15px; line-height: 1.5;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); padding-block: 24px 48px; }
+main { max-width: 760px; margin: 0 auto; display: grid; gap: 32px; }
+h1 { font-size: 24px; margin: 0; text-wrap: balance; }
+.lede { color: var(--muted); margin: 6px 0 0; max-width: 62ch; }
+section { display: grid; gap: 10px; }
+h2 { font-size: 18px; margin: 0; text-wrap: balance; }
+h2 .tag { font-family: var(--mono); font-size: 13px; color: var(--muted); margin-right: 8px; }
+.why { margin: 0; color: var(--muted); max-width: 62ch; }
+.mock { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px; font-family: var(--mono); font-size: 13px; display: grid; gap: 6px; }
+.sec { color: var(--muted); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; margin-top: 6px; }
+.row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--row); }
+.row .main { flex: 1 1 200px; min-width: 0; }
+.name { font-weight: 600; }
+.meta { color: var(--muted); }
+.chip { padding: 1px 8px; border-radius: 10px; font-size: 11px; white-space: nowrap; }
+.moving { background: var(--ok-bg); color: var(--ok); }
+.stalled { background: var(--bad-bg); color: var(--bad); }
+.you { background: var(--you-bg); color: var(--you); }
+.bar { height: 6px; width: 90px; background: var(--line); border-radius: 3px; overflow: hidden; }
+.bar i { display: block; height: 100%; background: var(--ok); }
+.ago { color: var(--muted); font-size: 12px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.ago.bad { color: var(--bad); }
+.row.stall { border-color: var(--bad); background: var(--bad-bg); }
+.row.child { margin-left: 22px; border-left: 3px solid var(--you); }
+.banner { padding: 10px 12px; border-radius: 6px; border: 1px solid; }
+.banner.bad { border-color: var(--bad); background: var(--bad-bg); }
+.banner.you { border-color: var(--you); background: var(--you-bg); }
+.banner b { display: block; }
+.banner.bad b { color: var(--bad); } .banner.you b { color: var(--you); }
+.note { font-size: 13px; color: var(--muted); border-top: 1px solid var(--line); padding-top: 16px; max-width: 62ch; }
+</style>
+</head><body>
+<main>
+  <header>
+    <h1>Status tab: what needs me, and is anything stalled?</h1>
+    <p class="lede">Three layouts for the work Status tab. In all three, child workspaces are hidden unless one needs your action. Tell me in the terminal which is closest, and what is wrong with it. The names and figures are examples.</p>
+  </header>
+
+  <section>
+    <h2><span class="tag">A</span>One list of programmes</h2>
+    <p class="why">One row per coordinator: its progress, how long since it last moved, and one state. Stalled programmes sort to the top. A child that needs you sits right under its coordinator, flagged.</p>
+    <div class="mock">
+      <div class="sec">Programmes</div>
+      <div class="row stall"><div class="main"><div class="name">programme-a</div><div class="meta">project-a · wave 4 of 6</div></div><div class="bar"><i style="width:55%"></i></div><span class="ago bad">no move 2h 10m</span><span class="chip stalled">stalled</span></div>
+      <div class="row"><div class="main"><div class="name">programme-b</div><div class="meta">project-b · 4 of 6 tasks merged</div></div><div class="bar"><i style="width:70%"></i></div><span class="ago">moved 3m ago</span><span class="chip you">needs you</span></div>
+      <div class="row child"><div class="main"><div class="name">worker-b3</div><div class="meta">asks: push now or hold?</div></div><span class="chip you">question</span></div>
+      <div class="row"><div class="main"><div class="name">programme-c</div><div class="meta">project-b · wave 2 of 3</div></div><div class="bar"><i style="width:40%"></i></div><span class="ago">moved 12m ago</span><span class="chip moving">moving</span></div>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="tag">B</span>"Needs you" first, then programmes</h2>
+    <p class="why">Everything waiting on you in one flat list at the top, each item labelled with its programme. Below it, one row per coordinator with progress and time since it last moved. A stalled one turns red.</p>
+    <div class="mock">
+      <div class="sec">Needs you · 2</div>
+      <div class="row"><div class="main"><div class="name">worker-b3 <span class="meta">in programme-b</span></div><div class="meta">asks: push now or hold?</div></div><span class="chip you">question</span></div>
+      <div class="row"><div class="main"><div class="name">programme-c <span class="meta">coordinator</span></div><div class="meta">permission: run a migration</div></div><span class="chip you">approve</span></div>
+      <div class="sec">Programmes</div>
+      <div class="row stall"><div class="main"><div class="name">programme-a</div><div class="meta">wave 4 of 6</div></div><div class="bar"><i style="width:55%"></i></div><span class="ago bad">no move 2h 10m</span></div>
+      <div class="row"><div class="main"><div class="name">programme-b</div><div class="meta">4 of 6 merged</div></div><div class="bar"><i style="width:70%"></i></div><span class="ago">3m ago</span></div>
+      <div class="row"><div class="main"><div class="name">programme-c</div><div class="meta">wave 2 of 3</div></div><div class="bar"><i style="width:40%"></i></div><span class="ago">12m ago</span></div>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="tag">C</span>Two headline banners, then the list</h2>
+    <p class="why">Two banners answer your two questions at a glance, and each opens what it counts. The compact list of every programme sits underneath.</p>
+    <div class="mock">
+      <div class="banner bad"><b>1 programme stalled</b><span class="meta">programme-a · no movement for 2h 10m · last: worker waiting on review</span></div>
+      <div class="banner you"><b>2 things need you</b><span class="meta">worker-b3 question · programme-c permission</span></div>
+      <div class="sec">All programmes</div>
+      <div class="row"><div class="main"><div class="name">programme-b</div></div><div class="bar"><i style="width:70%"></i></div><span class="ago">3m</span><span class="chip moving">moving</span></div>
+      <div class="row"><div class="main"><div class="name">programme-c</div></div><div class="bar"><i style="width:40%"></i></div><span class="ago">12m</span><span class="chip moving">moving</span></div>
+      <div class="row"><div class="main"><div class="name">programme-a</div></div><div class="bar"><i style="width:55%"></i></div><span class="ago bad">2h</span><span class="chip stalled">stalled</span></div>
+    </div>
+  </section>
+
+  <p class="note">Open question for all three: what counts as "stalled". One proposal is no new commit, mail or run step from the coordinator or any of its children for some time, with the time depending on what the programme is waiting for.</p>
+</main>
+</body></html>
