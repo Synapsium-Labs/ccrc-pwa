@@ -857,7 +857,7 @@ describe('the flyout\'s focus rules', () => {
   const view: AppView = { width: 1280, skin: REFINED, theme: GEOMETRY_THEME };
   const STRIP = 'header.shell-accounts .accounts-strip';
 
-  it(`Escape closes the flyout a keyboard opened and hands focus to a card of the line: ${named(view)}`, async () => {
+  it(`Escape closes the flyout keyboard focus holds, the pointer having opened it, and hands focus to a card of the line: ${named(view)}`, async () => {
     const { ctx, page, errors } = await openFoldedDesk(view);
     try {
       await page.hover(STRIP);
@@ -883,7 +883,7 @@ describe('the flyout\'s focus rules', () => {
     }
   }, 90_000);
 
-  it(`a click's focus never holds the flyout: hover-open, click All accounts, move off the strip, and it closes within the grace: ${named(view)}`, async () => {
+  it(`a click's focus never holds the flyout: hover-open, click All accounts, move off the strip, and it closes no sooner than its grace after the pointer leaves: ${named(view)}`, async () => {
     const { ctx, page, errors } = await openFoldedDesk(view);
     try {
       await page.hover(STRIP);

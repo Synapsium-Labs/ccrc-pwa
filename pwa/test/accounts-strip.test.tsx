@@ -1285,7 +1285,7 @@ describe('the lanes fold (S5b, D-6530)', () => {
       expect(flyoutOf(container)).toBeNull();
     });
 
-    it('it stays open while either the pointer or focus is inside the line or the flyout, and closes when neither is', async () => {
+    it('it stays open while either the pointer or keyboard focus is inside the line or the flyout, and closes when neither is', async () => {
       const container = await openByHover();
       const card = lineCardsOf(container)[1]!;
       act(() => { card.focus(); });
@@ -1425,8 +1425,10 @@ describe('the lanes fold (S5b, D-6530)', () => {
     // a move from one card to another with no key event often does not. These cases need the plain rule instead: keyboard
     // focus unless a click gave it. So `beforeEach` makes `matches(':focus-visible')` answer as `:focus` does, and false
     // for an element a case has focused as a click (`clickFocus`: a pointer-down, a mouse-down, a focus), as Chrome does;
-    // every other focus in this file is keyboard focus. The browser leg proves the shape in real Chrome (lanes-row, "a
-    // click's focus never holds the flyout …").
+    // every other focus in this file is keyboard focus. The browser leg proves the shape in real Chrome for the end cell
+    // (lanes-row, "a click's focus never holds the flyout …", a click on All accounts). For a CARD no real-Chrome case
+    // does: a card's click navigates, and the flyout closes with the route (review 1106), so the card half of the
+    // keyboard-only rule rests on this stub alone (review 1108, A5).
     const mouseFocused = new WeakSet<Element>();
     beforeEach(() => {
       const real = Element.prototype.matches;
@@ -1588,7 +1590,7 @@ describe('the lanes fold (S5b, D-6530)', () => {
       expect(flyoutOf(container)).not.toBeNull();
     });
 
-    it("a poll that drops the lane of the flyout card holding focus leaves no stale hold: a field focused elsewhere keeps its focus when the flyout closes", async () => {
+    it("a poll that drops the lane of the flyout card holding focus: a field focused elsewhere keeps its focus when the flyout closes", async () => {
       // This case installs the fake clock before the strip mounts (`mountDesk` does it after); the store's next answer
       // below needs no timer, since the strip runs no poll of its own (C8, D-6440).
       stubDesk(1248);

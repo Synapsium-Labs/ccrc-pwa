@@ -135,14 +135,14 @@
 //   the flyout below 900 ............................... "no flyout while expanded, and none below 900"
 //   the flyout reset removed when it is moot ........... "no flyout while expanded, and none below 900", and the moot-focus case below
 //   a pointer leave with keyboard focus inside closing the flyout (the early return in `onLeave` removed)
-//                                                       accounts-strip "it stays open while either the pointer or focus is inside the line or the flyout, and closes when neither is",
+//                                                       accounts-strip "it stays open while either the pointer or keyboard focus is inside the line or the flyout, and closes when neither is",
 //                                                         "a pointer passing over the strip while the open delay that focus started is pending does not cancel the open", and three more
 //                                                         (fix round 1: the ruled rule is "either"; the old case pinned a pointer leave closing the flyout with focus inside)
 //   the early return kept for an open flyout only (`&& flyOpen`): a pointer pass cancelling the open focus started
 //                                                       accounts-strip "a pointer passing over the strip while the open delay that focus started is pending does not cancel the open",
 //                                                         "keyboard focus arriving while the pointer's open delay is pending takes the open over: …"
 //   the early return kept for a pending open only (`&& !flyOpen`): the pointer leaving closing an open flyout focus holds
-//                                                       accounts-strip "it stays open while either the pointer or focus is inside the line or the flyout, and closes when neither is", and two more
+//                                                       accounts-strip "it stays open while either the pointer or keyboard focus is inside the line or the flyout, and closes when neither is", and two more
 //   the moot flyout's focus hand-back removed ......... "a flyout made moot while a card of it holds focus hands the focus to the line's tab stop, never to the page: another tab expands the strip"
 //                                                         (fix round 1: the reset called `setFlyOpen(false)` directly, so a focused flyout card was unmounted and focus fell to the page)
 //   a second copy of the card markup ................... "the flyout's cards render through the line's own card code: one card markup in the component"
@@ -171,7 +171,7 @@
 //                                                       accounts-strip "keyboard focus in the end cell holds nothing either", "keyboard focus moving from a card of the flyout to
 //                                                         the end cell, with the pointer outside, starts the grace", "focus arriving at the end cell from outside the strip opens nothing"
 //   `handFocusBack` without its `focus()` call (Escape drops focus to the page)
-//                                                       lanes-row (1 of 72) "Escape closes the flyout a keyboard opened and hands focus to a card of the line: refined, phosphor, 1280px"
+//                                                       lanes-row (1 of 72) "Escape closes the flyout keyboard focus holds, the pointer having opened it, and hands focus to a card of the line: refined, phosphor, 1280px"
 //   `onLeave` without the `openBy` test (any keyboard focus parked in the strip saves a pointer's open)
 //                                                       accounts-strip "an open the pointer started is cancelled when the pointer leaves, whatever focus is parked in the strip: after Escape the flyout stays shut"
 //   a pending pointer open not taken over by keyboard focus arriving (the `openBy` upgrade removed)
@@ -179,7 +179,7 @@
 //   `onGroupFocus` starting no close grace for focus that holds nothing
 //                                                       accounts-strip "keyboard focus moving from a card of the flyout to the end cell, with the pointer outside, starts the grace"
 //   `handFocusBack` without the `document.activeElement` guard (a stale `flyHeld` pulls focus out of a field)
-//                                                       accounts-strip "a poll that drops the lane of the flyout card holding focus leaves no stale hold: …"
+//                                                       accounts-strip "a poll that drops the lane of the flyout card holding focus: …"
 //   `handFocusBack` guarding on the body only (focus inside the strip, or nothing, not allowed)
 //                                                       accounts-strip "Escape closes it and returns focus to the card it came from", "an open the pointer started is cancelled …"
 //   `handFocusBack` ignoring `flyHeld` (the reviewer's mutant (a): it always focuses)
