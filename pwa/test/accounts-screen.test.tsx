@@ -443,7 +443,8 @@ describe('AccountsScreen — a roster that comes back the wrong shape', () => {
       .mockResolvedValueOnce({ accounts: [acct({ wrapper: 'claude' })], projected: null, roster: TEST_ROSTER })
       .mockResolvedValue({ accounts: [acct({ wrapper: 'claude' })], projected: null, roster: undefined as never });
     render(<AccountsScreen />);
-    await readAccounts();
+    // The good first read is the screen's own on open (D-7180, W7 C7b Step 3), so the case lets it land.
+    await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
     expect(screen.getByText('team·max')).toBeInTheDocument();
     await readAccounts();
     expect(accounts, 'the second, malformed read ran').toHaveBeenCalledTimes(2);
