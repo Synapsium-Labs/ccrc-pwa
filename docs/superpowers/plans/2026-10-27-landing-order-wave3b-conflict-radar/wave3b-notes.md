@@ -11,6 +11,8 @@ ledger pull request.
 | R3 | "The tick" step 1: `exec python3 -I - <<'PY'` | `exec python3 -I /dev/fd/3 3<<'PY'`, and with `CCD_LAND_PROBE_SELFTEST=git_ro` the head skips the pause, the tool check, the mkdir and the lock | With `-` the program reads itself from stdin, so the self-test could never read a JSON line from it. |
 | R6 | The plan does not say what a failed `gh pr list` does to main-health and the lineage | The probe reads `unmeasured`, `why: gh-failed`, with empty heads and pairs. The base is still fetched, and main-health and the lineage are measured against it | Neither needs the PR list. |
 | R7 | The final review proposed a new probe why word, `error` | No new why word. The step-9 rewrite of `probe` runs unconditionally. Doctor treats a null store figure as "not measured this tick", and WARNs `land-probe-incomplete` when a finished tick wrote no main-health | The probe's why set (Design, "probe" format) is a settled format. |
+| R5 (fix round 1) | "The git door": layer 1 refuses a literal prefix list of caller options (`OPTION_PREFIXES`) | Layer 1 is an allowlist of option FORMS per `where` and subcommand (`OPTION_FORMS`): each subcommand admits only the exact spellings the probe's own call sites pass, compared whole, and an element outside the list answers `option <opt>`. The prefix list stays as the first rule, so the existing reasons are unchanged. After the fetch's `--` git reads operands only, so the check stops there | The prefix list let a file-writing option (`rev-list --output=<file>`), a long-option abbreviation (`--upload-pa=<cmd>`) and `cat-file --textconv`/`--filters` pass. None is reachable from a call site today; the rule is now as strong as its stated aim (review 1109, F2 and A9). |
+| gh child (fix round 1) | The scrub "for every child" | The forge child's environment also drops every `GIT_*` variable and sets `GIT_TERMINAL_PROMPT=0`, besides dropping `GH_REPO` and `GH_HOST` | The plan's scrub is stated for every child, and gh is one (review 1109, A11). |
 | env | Child env per the plan | The child env adds `GIT_NO_LAZY_FETCH=1`, `GIT_NO_REPLACE_OBJECTS=1` and `GIT_CEILING_DIRECTORIES`, as ccd's own read env does | A lazy fetch or a replace ref could otherwise change what a read-only measurement reads. |
 | doctor | `_check_land-probe` per the plan | Doctor also SKIPs a project whose per-project `paused` file stands | It mirrors the probe, which writes nothing for a paused project. |
 | mutations | The brief names `mutation-run.py` | A sequential driver: save a copy (sha checked), apply the edit once, run the named vitest files under `timeout -k` and a measured `ulimit -u`, restore from the copy (sha checked) | `mutation-run.py` loads a Python module and Python test functions. The probe is a bash file run by vitest suites. |
@@ -62,8 +64,6 @@ falls back to a literal.
 
 ## Deferred minors (left by the final review's triage)
 
-- `cat-file --textconv`/`--filters` are allowed by the plan's tables.
-- Long-option abbreviations pass the allowlists' `startswith` checks.
 - Stray `.lp.*` temp files and a scratch made before its sentinel are never swept.
 - The uid half of M21 cannot be pinned without a second uid.
 - A child cut by the budget mid-call reports `timeout`, not `budget`.

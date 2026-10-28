@@ -837,6 +837,62 @@ describe('ccd-land-probe: a failed or partial measurement is never clean', () =>
     }
     expect(new Set(rows.map((r) => r[0]))).toEqual(new Set(['project', 'scratch']));
   });
+
+  /** A decoy repository, and every file in it with its size: what a stray write would change. */
+  const decoyListing = (decoy: string): string => fs.readdirSync(decoy, { recursive: true, encoding: 'utf8' })
+    .map((n) => { const st = fs.lstatSync(path.join(decoy, n)); return `${n} ${st.isFile() ? st.size : 'd'}`; }).sort().join('\n');
+
+  it('a hostile GIT_DIR, GIT_OBJECT_DIRECTORY, GIT_CONFIG_PARAMETERS and GIT_INDEX_FILE change nothing: the measurement is right and the project and a decoy repository are untouched', { timeout: 90_000 }, () => {
+    fx.addHead(1, { 'README.md': 'one\n' });
+    fx.addHead(2, { 'docs/a.md': 'a\n' });
+    fx.advanceMain({ 'README.md': 'main moved\n' });
+    fx.addRow('lane-a-proj-a-alpha', 'ws/alpha');
+    fx.conf(fx.project, 'lineage=on\n');
+    const decoy = path.join(h.home, 'decoy');
+    execFileSync('git', ['init', '-q', decoy], { env: { PATH: process.env['PATH'] ?? '', HOME: h.home, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' } });
+    const decoyBefore = decoyListing(decoy);
+    const projectBefore = fx.snapshot();
+    const indexFile = path.join(h.home, 'decoy-index');
+    const hostile = {
+      GIT_DIR: path.join(decoy, '.git'),
+      GIT_OBJECT_DIRECTORY: path.join(decoy, '.git', 'objects'),
+      // A config the probe's fetch cannot survive if it reaches it: no fetch over the file protocol.
+      GIT_CONFIG_PARAMETERS: "'protocol.file.allow'='never'",
+      GIT_INDEX_FILE: indexFile,
+      GIT_WORK_TREE: decoy,
+    };
+    expect(fx.run(hostile).status).toBe(0);
+    const p = fx.readJson('probe');
+    expect(p.state).toBe('measured');
+    expect(p.base.sha).toBe(fx.originMain());
+    const by = Object.fromEntries(p.heads.map((x: any) => [x.pr, x]));
+    expect(by[1].base).toEqual({ state: 'conflict', paths: ['README.md'], pathsCut: false });
+    expect(by[2].base).toEqual({ state: 'clean' });
+    expect(fx.readJson('lane-a-proj-a-alpha.lineage').state).toBe('measured');
+    expect(fx.snapshot()).toEqual(projectBefore);
+    expect(decoyListing(decoy)).toBe(decoyBefore);
+    expect(fs.existsSync(indexFile)).toBe(false);
+    expect(tmpLeft()).toEqual([]);
+  });
+
+  it('GH_REPO and GH_HOST never reach the forge CLI, and --repo still names the repository; neither does a GIT_* variable, and no prompt is possible', { timeout: 60_000 }, () => {
+    fx.addHead(1, { 'a.txt': 'a\n' });
+    fx.conf(fx.project, '');
+    expect(fx.run({ GH_REPO: 'evil/other', GH_HOST: 'evil.example', GIT_DIR: path.join(h.home, 'nowhere'), GIT_TERMINAL_PROMPT: '1' }).status).toBe(0);
+    const calls = fx.ghCalls();
+    expect(calls.filter((c) => c.startsWith(`pr list --repo ${fx.slug} `))).toHaveLength(1);
+    expect(fx.readJson('probe').heads).toHaveLength(1);
+    const envs = fx.ghEnvs();
+    expect(envs.length).toBe(calls.length);
+    expect(envs.length).toBeGreaterThan(1);
+    for (const e of envs) {
+      expect(e['GH_REPO']).toBeUndefined();
+      expect(e['GH_HOST']).toBeUndefined();
+      expect(e['GIT_DIR']).toBeUndefined();
+      expect(e['GIT_TERMINAL_PROMPT']).toBe('0');
+      expect(e['GH_PROMPT_DISABLED']).toBe('1');
+    }
+  });
 });
 
 describe('ccd-land-probe: a required set read whole, or not at all (final review t2m1, t2m2, M3)', () => {

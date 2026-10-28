@@ -1,8 +1,16 @@
 // ccd-land-probe is read-only BY CODE (landing-order wave 3b, spec section 7): the literal source pins, and the
 // validate-only self-test of git_ro's refusals. The behaviour is in ccd-land-probe.test.ts.
 //
-// The pins read ccd/ccd-land-probe's whole text. A pin is a request until a planted violation turns it red; the
-// plan's mutation table plants each one.
+// WHAT THE PINS HOLD. The pins read ccd/ccd-land-probe's whole text and match LITERAL SPELLINGS: the names the
+// program uses today, and the respellings a careless edit would reach for (an aliased import, a `from ... import`,
+// a bare module assigned to another name). They are not a proof that no process can be started: a dynamic import
+// (`__import__`, importlib) or `getattr` on a module, a name built from pieces, or code in another file defeats a text
+// pin, and that is a KNOWN LIMIT. The behaviour that matters is held by the self-test below, which runs git_check's
+// verdicts, and by the behaviour suite.
+//
+// WHERE THE PLANTING EVIDENCE IS. This file plants nothing. A pin is a request until a planted violation turns it red,
+// and that evidence is the mutation rows (one planted violation each, measured one at a time on the final files, the
+// file restored from a saved copy) that the wave's controller re-measures; they are not in this file.
 import { describe, it, expect, afterEach } from 'vitest';
 import { spawn, execFileSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -76,13 +84,21 @@ describe('ccd-land-probe: the literal source pins', () => {
     }
     expect(src).not.toMatch(/\bsubprocess\.(run|call|check_output|check_call|getoutput|getstatusoutput)\b/);
     expect(src).not.toMatch(/\bos\.(system|popen|exec\w*|spawn\w*|posix_spawn\w*|fork\w*|forkpty)\b/);
-    expect(src).not.toMatch(/^\s*from\s+(subprocess|os)\s+import\b/m);
+    expect(src).not.toMatch(/\bpty\.(spawn|fork)\b/);
+    // The respellings of the above: an aliased import, a from-import (at a line's start or after a semicolon), and a
+    // bare module handed to another name, which would run the banned names under a spelling the patterns miss.
+    expect(src, 'import ... as').not.toMatch(/^\s*import\s[^\n]*\b(subprocess|os)(\.\w+)*\s+as\b/m);
+    expect(src, 'from ... import').not.toMatch(/\bfrom\s+(subprocess|os)(\.\w+)*\s+import\b/);
+    expect(src, 'a bare module assigned').not.toMatch(/=\s*(subprocess|os)\b(?!\.)/);
+    expect(src, 'a bare module passed or listed').not.toMatch(/[,(\[]\s*(subprocess|os)\s*[,)\]]/);
   });
 
   it('R6 never names update-branch', () => {
     expect(src).not.toMatch(/update[-_]branch|updatePullRequestBranch/i);
   });
 });
+
+const OUTPUT = '--output=/project/.git/config';
 
 describe('ccd-land-probe: the git_ro self-test', () => {
   let h: CcdHarness | undefined;
@@ -144,11 +160,39 @@ describe('ccd-land-probe: the git_ro self-test', () => {
       ['project', ['rev-parse', '--git-dir=/tmp'], 'refused option --git-dir'],
       ['project', ['for-each-ref', '--format=%(refname)', '-C', '/'], 'refused option -C'],
       ['scratch', ['merge-tree', 'core.hooksPath', 'b'], 'refused key core.hooksPath'],
+      // Layer 1 is an allowlist of forms (fix round 1, F2 and A9): a file-writing option, an abbreviation of a long
+      // option and a filter-running cat-file option are each refused, on the project row and the scratch row alike.
+      ['project', ['rev-list', OUTPUT, 'HEAD'], 'refused option --output'],
+      ['scratch', ['rev-list', OUTPUT, 'HEAD'], 'refused option --output'],
+      ['scratch', ['fetch', '--upload-pa=x', 'u'], 'refused option --upload-pa'],
+      ['project', ['cat-file', '--textconv', 'HEAD:x'], 'refused option --textconv'],
+      ['scratch', ['cat-file', '--textconv', 'HEAD:x'], 'refused option --textconv'],
+      ['project', ['cat-file', '--filters', 'HEAD:x'], 'refused option --filters'],
+      ['scratch', ['cat-file', '--filters', 'HEAD:x'], 'refused option --filters'],
+      // One abbreviation of each long prefix the plan names (the short ones, -c -C -u, have none; their attached
+      // forms are above and in the prefix rule).
+      ['project', ['rev-parse', '--config-e=x=y'], 'refused option --config-e'],
+      ['project', ['rev-parse', '--git-d=/x'], 'refused option --git-d'],
+      ['project', ['rev-parse', '--work-t=/x'], 'refused option --work-t'],
+      ['project', ['rev-parse', '--exe=x'], 'refused option --exe'],
+      ['scratch', ['fetch', '--upload-pa=x', 'u'], 'refused option --upload-pa'],
+      ['scratch', ['fetch', '--receive-p=x', 'u'], 'refused option --receive-p'],
+      // An abbreviation of, or a value glued to, an option that IS allowed; an allowed option on the wrong row; a lone
+      // dash; and a `--` where only the fetch has one.
+      ['project', ['rev-parse', '--verif', 'x'], 'refused option --verif'],
+      ['scratch', ['rev-list', '--paren', '-n', '1', 'x'], 'refused option --paren'],
+      ['scratch', ['rev-list', '--parents=x', 'x'], 'refused option --parents'],
+      ['project', ['rev-list', '--parents', 'x'], 'refused option --parents'],
+      ['scratch', ['merge-tree', '--stdin', 'a', 'b'], 'refused option --stdin'],
+      ['project', ['rev-parse', '-'], 'refused option -'],
+      ['project', ['rev-parse', '--', 'x'], 'refused option --'],
     ];
     const out = fx.selftest(refusals.map(([w, a]) => [w, a]));
     expect(out.stdout.split('\n').filter(Boolean)).toEqual(refusals.map((r) => r[2]));
     // The refusals above are each one only that rule catches: a case the rule before it would answer is a different line.
     expect(fx.selftest([['scratch', ['init', '-q', '--bare', '/scratch']]]).stdout.trim()).toBe('allowed');
+    // After the fetch's `--` git reads operands only, so a dash-led operand there is the call site's to refuse (it does).
+    expect(fx.selftest([['scratch', ['fetch', '--no-tags', '--no-write-fetch-head', '--no-recurse-submodules', '--', '-odd-url', '+refs/heads/x:refs/probe/base']]]).stdout.trim()).toBe('allowed');
     expect(fx.selftest([['project', ['config', '--get', 'remote.origin.url']], ['project', ['ls-remote', '--get-url', 'origin']]]).stdout.split('\n').filter(Boolean)).toEqual(['allowed', 'allowed']);
   });
 

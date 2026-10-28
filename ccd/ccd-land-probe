@@ -21,10 +21,11 @@
 # a PR's branch.
 #   1. Every git call goes through one function, `git_ro`. It owns a fixed hardening prefix (no hooks, no fsmonitor,
 #      no optional locks on the project), takes the repository from a variable it owns, never from the caller, and
-#      refuses any subcommand outside two literal allowlists and any caller option that could run code or re-point
-#      the repository. `git_check` is its validator.
+#      refuses any subcommand outside two literal allowlists, and any option that is not one of the exact forms its
+#      subcommand's call sites pass (an allowlist of forms, not a deny list: no `--output=`, no abbreviation of a long
+#      option), besides the prefixes that could run code or re-point the repository. `git_check` is its validator.
 #   2. The forge is reached through exactly two call sites, `gh_get` (a GET) and `gh_pr_list`. Both name the
-#      repository explicitly, and the child's environment drops GH_REPO and GH_HOST.
+#      repository explicitly, and the child's environment drops GH_REPO, GH_HOST and every GIT_* variable.
 #   3. A literal source pin (server/test/ccd-land-probe-readonly.test.ts) holds the file to those shapes, and a
 #      validate-only self-test (CCD_LAND_PROBE_SELFTEST=git_ro) proves `git_ro`'s refusals without running git.
 #
@@ -166,6 +167,28 @@ FORMS = {
     ('project', 'config'): ['--get', 'remote.origin.url'],
 }
 OPTION_PREFIXES = ('-c', '--config-env', '-C', '--git-dir', '--work-tree', '--exec', '--upload-pack', '--receive-pack', '-u')
+# The option FORMS each allowlisted subcommand admits: exactly the spellings the probe's own call sites pass, compared
+# whole (never by prefix, so no `--output=<file>`, no long-option abbreviation such as `--upload-pa=`, and no
+# `cat-file --textconv` or `--filters`). A subcommand with no call site that passes an option admits none. After a
+# literal `--` (admitted for the fetch alone) git itself reads only operands, so the check stops there. This is a deliberate departure from the
+# plan's prefix deny list (fix round 1, review 1109, F2 and A9).
+OPTION_FORMS = {
+    ('project', 'rev-parse'): ('--verify', '-q'),
+    ('project', 'rev-list'): (),
+    ('project', 'for-each-ref'): (),
+    ('project', 'cat-file'): (),
+    ('project', 'merge-base'): (),
+    ('project', 'count-objects'): ('-v',),
+    ('project', 'ls-remote'): ('--get-url',),
+    ('project', 'config'): ('--get',),
+    ('scratch', 'init'): ('-q', '--bare'),
+    ('scratch', 'fetch'): ('--no-tags', '--no-write-fetch-head', '--no-recurse-submodules', '--'),
+    ('scratch', 'merge-tree'): ('--write-tree', '--name-only', '--no-messages'),
+    ('scratch', 'merge-base'): ('--is-ancestor',),
+    ('scratch', 'rev-parse'): ('--verify', '-q'),
+    ('scratch', 'rev-list'): ('--parents', '-n'),
+    ('scratch', 'cat-file'): (),
+}
 PINNED_KEYS = ('core.hooksPath', 'core.fsmonitor')
 
 Result = namedtuple('Result', ['rc', 'out', 'spawn'], defaults=(False,))   # spawn: the child could not be executed at all
@@ -229,6 +252,12 @@ def git_check(where, args):
         for p in OPTION_PREFIXES:
             if a.startswith(p):
                 raise ProbeRefused('option ' + p)
+    forms = OPTION_FORMS.get((where, sub), ())
+    for a in args[1:]:
+        if a == '--' and a in forms:
+            break
+        if a.startswith('-') and a not in forms:
+            raise ProbeRefused('option ' + a.split('=', 1)[0])
     for k in PINNED_KEYS:
         if any(k.lower() in a.lower() for a in args):
             raise ProbeRefused('key ' + k)
@@ -248,7 +277,10 @@ def child_env(keep=(), cwd=None):
 
 
 def gh_env():
-    env = dict((k, v) for k, v in os.environ.items() if k not in ('GH_REPO', 'GH_HOST'))
+    """The forge child's environment: GH_REPO and GH_HOST dropped (the call names its repository), every GIT_* variable
+    dropped as the git children's is, and no prompt on a terminal."""
+    env = dict((k, v) for k, v in os.environ.items() if k not in ('GH_REPO', 'GH_HOST') and not k.startswith('GIT_'))
+    env['GIT_TERMINAL_PROMPT'] = '0'
     env['GH_PROMPT_DISABLED'] = '1'
     env['LC_ALL'] = 'C'
     return env

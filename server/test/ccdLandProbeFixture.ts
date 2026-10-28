@@ -55,6 +55,8 @@ here = os.path.dirname(os.path.abspath(__file__))
 args = sys.argv[1:]
 with open(os.path.join(os.environ['HOME'], 'gh-stub-calls'), 'a') as f:
     f.write(' '.join(args) + '\\n')
+with open(os.path.join(os.environ['HOME'], 'gh-stub-env'), 'a') as f:
+    f.write(json.dumps({k: v for k, v in os.environ.items() if k.startswith(('GH_', 'GIT_'))}, sort_keys=True) + '\\n')
 with open(os.path.join(here, 'gh-answers.json')) as f:
     a = json.load(f)
 if a.get('sleepS'):
@@ -201,6 +203,11 @@ export function makeLandFixture(h: CcdHarness, opts: LandOpts = {}) {
     project, slug, origin, repo, reg, tmp, home, stubPath,
     landDir: path.join(reg, 'landing', project),
     confPath: (p = project): string => path.join(home, '.ccrc', 'landing', `${p}.conf`),
+    /** The GH_* and GIT_* variables each stub call saw, one object per call. */
+    ghEnvs: (): Array<Record<string, string>> => {
+      const p = path.join(home, 'gh-stub-env');
+      return fs.existsSync(p) ? fs.readFileSync(p, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)) : [];
+    },
     ghCalls: (): string[] => {
       const p = path.join(home, 'gh-stub-calls');
       return fs.existsSync(p) ? fs.readFileSync(p, 'utf8').split('\n').filter(Boolean) : [];
