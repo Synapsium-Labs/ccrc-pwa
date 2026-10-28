@@ -181,7 +181,7 @@ describe('the retire executors\' censuses (ARCH-44, C4h)', () => {
     expect(names(retireGateLadders(tree))).toEqual(['server/src/coord/ladder.ts#arrowLadder', 'server/src/coord/ladder.ts#ladder']);
   });
 
-  // D-TBD-retire-ladders-nested-read (C4k): `RetireActPort` holds its readers in its `read` member, a literal nested in
+  // D-7301 (C4k): `RetireActPort` holds its readers in its `read` member, a literal nested in
   // the one the port builder returns. Its own tree, so the row above stays byte-identical.
   it('FIXTURE retireGateLadders: readers in a literal nested in the returned one do not count; the same calls as member values do', () => {
     const nest = mkdtempSync(path.join(tmpdir(), 'consolidation-census-retire-nested-'));

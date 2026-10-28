@@ -58,7 +58,7 @@ export const RETIRE_ACT_KEYS: readonly string[] = ['wsReclaim', 'wsExpire', 'wsC
  * top-level const's object literal (`retireFacts`); an anonymous callback passed to a call is read as the body's own.
  */
 /** Every member of a literal, and of each object literal one of its members holds, at any depth
- *  (D-TBD-retire-ladders-nested-read): a port's readers stand in its `read` member's literal, one level below the
+ *  (D-7301): a port's readers stand in its `read` member's literal, one level below the
  *  literal it returns. */
 const literalMembers = (l: RetireLiteral): RetireLiteralProperty[] =>
   l.properties.flatMap((m) => [m, ...(m.literal === null ? [] : literalMembers(m.literal))]);
