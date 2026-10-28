@@ -1232,7 +1232,7 @@ const APPROVAL_EXACT: Case[] = NEAR_MISSES.flatMap((d): Case[] => [
     with_(missingU, { pr: prWith(d) }), approvalMissing('U')],
 ]);
 
-// ---- Fix round 4: read 1, read 3 and read 6 judge the value GitHub sent, not the text a shell makes of it ----
+// ---- Fix round 4: read 1 and read 3 judge the value GitHub sent, not the text a shell makes of it (read 6 did too, until ruling 5 retired it) ----
 // A command substitution drops the trailing newlines of what it captures, and `jq -r` prints a missing, null, numeric or
 // boolean field as the text `null`, `123` or `true`. So a base, a state, a head or a 404 message that was
 // never the value the contract names could pass for it, and a direct route was chosen over a source that was unusable; and
@@ -1404,10 +1404,10 @@ const codeLines = (b: string): string[] => b.split('\n').filter((l) => !/^\s*#/.
  *  FILE operand or a `<` redirect (in the same command places as `read`, and after a backtick; `head -n1 <<<"$r3"`, a
  *  here-string, and a bare `head -n1` fed by a pipe are not file reads; only `-n` or `-c` with a separate digit count and
  *  single-token flags are skipped before the operand, so `tail -n +2 file`, `head -n "$n" file` and `head -n1<file` are
- *  census limits and not caught), and a `$(<` file read. The block's own file-free reads are its gh calls, numbered 1 to 6
+ *  census limits and not caught), and a `$(<` file read. The block's own file-free reads are its gh calls, numbered 1 to 5
  *  in its comments: read 1's PR view and its paginated reviews, read 2, read 3 (and, after read 3 answers 401 or 403,
- *  read 3b, with the compare under it), read 4, read 5's two endpoints (check runs and statuses) and read 6; it spells
- *  none of the forms above. This is a finite contract check of exactly those spellings and placements, one line at a time,
+ *  read 3b, with the compare under it), read 4 and read 5's two endpoints (check runs and statuses). Read 6 was retired
+ *  with the approval licence (ruling 5). The block spells none of the forms above. This is a finite contract check of exactly those spellings and placements, one line at a time,
  *  and NOT a shell parser and not a proof: other ordinary readers and placements the list does not name are census LIMITS
  *  too, for example `jq` given a path operand, `while read`, a `.` command after `then`, or a `<` redirect into a command
  *  not listed, beside the encoded or indirect spellings (a computed command, a here-document fed to a shell). What does

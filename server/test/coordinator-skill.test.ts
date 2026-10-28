@@ -121,8 +121,9 @@ const CONTRACT = [
   'A verified `wave-done` is READ by a review run, never by this session. Once `POST /api/runs/:id/advance` has moved the work run to `awaiting-review`, this session opens a run of `kind:\'review\'` naming it, dispatches the reviewer with `references/review-brief.md`, and ends its turn; when `review-done` arrives it closes the review run with the reviewer’s own `{reviewedTip, report}` and rules on the report the server accepted. This session does not read the diff itself, and a `stale-review` refusal means a fresh review run against the live tip, never a ruling on the old report.',
   'Every brief names the shape of the wave and the routing the matrix derives from it — class, effort, subagent class and workflow mode, and the subagent effort the worker is expected to name on its calls — read from `references/routing-matrix.md`; this session revises routing only on the evidence a wave returns, and records each change and why in the ledger before the next dispatch.',
   "The review brief names the held-out panel in `references/review-panel.md` as the review's shape, and the reviewer runs it as written: three Opus lenses and a Sonnet refute pass per finding, model and effort literal in the script, exempt from every routing field and from escalation and demotion. A lens that dies or returns nothing counts as unverified, never as approval, and no wave is accepted on a reading this session made alone.",
-  // Landing-order wave 1 (spec 2026-09-23 §5.1). Written with no apostrophe at
-  // all, so neither the straight nor the curly spelling can drift.
+  // Landing-order wave 1 (spec 2026-09-23 §5.1). Its one apostrophe is the straight one in `wave's`, from main's
+  // ledger-branch rule, which the fix-round-5 merge brought in. It is escaped in this literal and typed straight in SKILL.md,
+  // so a curly spelling there reds this pin. The whole line is pinned too, in the test after "carries all nineteen".
   // Landing-order wave 3e (spec §5.7) rewrote its landing sentence: the route comes from the rules of the repository,
   // route Q keeps its spelling and words, a direct route spells exactly one method flag, and --admin is
   // never used (spec §11, ruling 5 of 2026-10-25).
