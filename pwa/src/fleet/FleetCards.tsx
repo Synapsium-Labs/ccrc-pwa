@@ -5,18 +5,24 @@
 // D-6090) hold in both skins, from one source. Nothing here was rewritten: the reads, the clock and the rollup's reset
 // are the ones `FleetScreen` carried, moved with their comments.
 //
+// MEMOISED (C9, D-6441): the tree and the rollup are rebuilt only when what they read changes, and every callback a
+// card is handed is stable, so `ProjectCard` and `SessionLine` (both `memo`'d, `lineProps.ts`) re-render only for what
+// changed: a one-row frame rebuilds the tree, so the cards re-render, but one `SessionLine` only; a chrome change with
+// the same fleet re-renders no card. No clock is read here: a spawning dispatch's readout ticks itself
+// (`ProjectCard`'s `PendingSpawn`), and the rollup re-reads the time only when its own timer wakes it.
+//
 // It reads the chrome's store (`useFleetChrome`), the one `FleetScreen` itself checks it was handed, so the cards and
 // the screen around them always describe one fleet.
-import { useEffect, useRef, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from 'react';
 import type { ReactNode } from 'react';
-import { useNow } from '@ccrc/ui';
 import { fleetTree } from './fleetTree';
 import { ProjectCard } from './ProjectCard';
-import { anyDispatchPending, isRunClosed } from './runWords';
+import { isRunClosed } from './runWords';
 import { useFolded, useRollupPrefs } from './foldState';
 import { useHoldView } from './useHoldView';
 import { useRollupClock } from './useRollupClock';
 import { prunePrefs, rollupFleet, toggleChildren, toggleProject } from './rollup';
+import type { FleetSession } from '../../../shared/api';
 import { useProjectedHome } from './useProjectedHome';
 import { useFleetChrome } from './FleetChrome';
 import { useFleetFlows } from './FleetFlows';
@@ -40,30 +46,26 @@ export function FleetCards({ selectedId, onOpen }: {
   const projects = chrome.projects;
   const open = onOpen;
   // The same active-only list the screen's runs line counts (`isRunClosed`), read from the same frame.
-  const activeRuns = useStore((s) => s.runs).filter((r) => !isRunClosed(r));
+  const runs = useStore((s) => s.runs);
+  const activeRuns = useMemo(() => runs.filter((r) => !isRunClosed(r)), [runs]);
   const projected = useProjectedHome(true, useStore);
-  // Task 4's clock, for the pending child's elapsed readout — and the CADENCE
-  // FOLLOWS THE CONTENT, the `SessionHeader`/`ToolCard` idiom `RunsScreen`
-  // already adopted for the same window: a second-granular readout on a
-  // half-minute tick is the "board that never moves" §Design complains about.
-  // `active: false` when nothing is spawning, so this screen runs NO timer at
-  // all in the ordinary case — which is how it has always behaved, and a
-  // permanent interval under twenty session rows is not a change anyone asked
-  // for. `anyDispatchPending` rather than an inline condition, so what counts
-  // as a dispatch window stays `dispatchWindow`'s single answer; it is asked
-  // of `activeRuns` and not of the per-card slices, because the tick is one
-  // fact about the screen.
-  const nowMs = useNow(1_000, anyDispatchPending(activeRuns));
+  // Task 4's clock, for the pending child's elapsed readout, is the readout's own now (C9, D-6441): `PendingSpawn`
+  // runs `useNow(1_000)` while it is drawn, so a spawning dispatch ticks one readout, never this list. The cadence still
+  // follows the content (the `SessionHeader`/`ToolCard` idiom `RunsScreen` adopted for the same window), and a fleet
+  // with nothing spawning still runs no one-second timer at all: no pending row, no readout, no clock.
   // Fold state persists across navigation (foldState.ts) — useState here would
   // re-expand every project on the way back from a session.
   const [folded, toggleFold] = useFolded();
   // D-6088: the rollup's per-device preferences, and the clock its 30-minute window reads: fresh on every render, and
   // one timer for the next window end only (`useRollupClock`), so a quiet fleet still runs no timer.
   const [rollupPrefs, updateRollup] = useRollupPrefs();
-  const rollNow = useRollupClock(sessions);
-  // The tree the cards draw, once, and its rollup over the same groups (D-6088).
-  const tree = fleetTree(sessions, projects.knownProjects, activeRuns, acks);
-  const rollup = rollupFleet(tree, rollupPrefs, Math.max(nowMs, rollNow), selectedId);
+  const roll = useRollupClock(sessions);
+  // The tree the cards draw, once, and its rollup over the same groups (D-6088). Memoised (C9): the rollup reads the
+  // time when it is rebuilt, which is on a new tree, a new preference or selection, or its timer's wake.
+  const tree = useMemo(
+    () => fleetTree(sessions, projects.knownProjects, activeRuns, acks), [sessions, projects.knownProjects, activeRuns, acks]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- `roll.wake` stands for `roll.now`: the window moves only then.
+  const rollup = useMemo(() => rollupFleet(tree, rollupPrefs, roll.now, selectedId), [tree, rollupPrefs, selectedId, roll.wake]);
   // Rule 4's reset: a stored ▾ made in the other activity class, or an open worker line whose coordinator left, is
   // dropped — from a FRESH frame only, never from a cached snapshot (`fleetFrameSeen`). `prunePrefs` answers null when
   // nothing changes, so this writes nothing on an ordinary frame.
@@ -83,6 +85,21 @@ export function FleetCards({ selectedId, onOpen }: {
   // The ··· sheet's lifecycle, the guarded reap flow and the confirm's subject
   // are the chrome's too; this screen only opens them (`useFleetFlows`).
   const archiveAll = chrome.archiveAll;
+  // The cards' callbacks, stable across renders (C9), so a memo'd card is handed the same function each time. The
+  // project ▾ reads the NEWEST rollup from a ref: a toggle acts on the card as it is drawn now.
+  const rollupRef = useRef(rollup);
+  rollupRef.current = rollup;
+  const onToggle = useCallback((key: string): void => {
+    // A project's own key names its card; a sub-fold's key (`<project>::released`, `::archived`) names none.
+    const card = rollupRef.current.cards.get(key);
+    if (card !== undefined) updateRollup((p) => toggleProject(p, card, key));
+    else toggleFold(key);
+  }, [updateRollup, toggleFold]);
+  const onToggleChildren = useCallback((id: string): void => updateRollup((p) => toggleChildren(p, id)), [updateRollup]);
+  const onActions = useCallback((s: FleetSession): void => flows.openActions(s.id), [flows]);
+  // Fleet-wide, by id: an orphan's coordinator is by construction NOT among its card's own sessions (D-3009).
+  const byId = useMemo(() => new Map(sessions.map((s) => [s.id, s] as const)), [sessions]);
+  const coordOf = useCallback((id: string): FleetSession | null => byId.get(id) ?? null, [byId]);
 
   return (
     <div className="fleet-list" ref={listRef}>
@@ -100,13 +117,9 @@ export function FleetCards({ selectedId, onOpen }: {
           /* D-6088: the project fold and the worker lines are the rollup's (`rollup.ts`); the Released and
              Archived sub-folds keep `useFolded`. */
           rollup={rollup.cards.get(g.project)}
-          onToggle={(key) => {
-            const card = rollup.cards.get(g.project);
-            if (key === g.project && card !== undefined) updateRollup((p) => toggleProject(p, card, g.project));
-            else toggleFold(key);
-          }}
-          onToggleChildren={(id) => updateRollup((p) => toggleChildren(p, id))}
-          onActions={(s) => flows.openActions(s.id)}
+          onToggle={onToggle}
+          onToggleChildren={onToggleChildren}
+          onActions={onActions}
           roster={roster}
           pools={pools}
           onPool={flows.openPool}
@@ -149,12 +162,11 @@ export function FleetCards({ selectedId, onOpen }: {
              here, and a second line for it would state the same wave
              twice (spec §6). */
           abroad={g.abroad}
-          nowMs={Math.max(nowMs, rollNow)}
           /* Fleet-wide, unlike every other lookup this card is handed —
              an orphan's coordinator is by construction NOT among this
              card's own sessions (D-3009), so a card-scoped read would
              always answer `null` for the one row that asks. */
-          coordOf={(id) => sessions.find((s) => s.id === id) ?? null}
+          coordOf={coordOf}
           frameSeen={fleetFrameSeen}
           /* INVERTED against the project fold on purpose: foldState
              stores what is COLLAPSED, so absence means open — right for

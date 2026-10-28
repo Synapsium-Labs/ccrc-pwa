@@ -36,7 +36,7 @@
 // value answers status. The phone tabs (below the desk query) are a view over the status groups, not a mode: All shows
 // every group with its folds. Both are one tab stop with roving focus: the arrow keys, Home and End move and choose
 // (the settings theme grid's pattern), and the tabs control the tabpanel that holds the groups.
-import { useId, useState, useSyncExternalStore } from 'react';
+import { useCallback, useId, useMemo, useState, useSyncExternalStore } from 'react';
 import type { KeyboardEvent, ReactNode } from 'react';
 import { BareRow, Button, CountBadge } from '@ccrc/ui';
 import type { FleetSession, SessionBucket } from '../../../../shared/api';
@@ -50,10 +50,11 @@ import { orphanNote } from '../../fleet/orphanWords';
 import { isRunClosed, runForSession } from '../../fleet/runWords';
 import { SessionLine } from '../../fleet/SessionLine';
 import { markAllSeenLabel, useMarkSeen } from '../../fleet/markSeen';
+import { OPEN_RUNS, openSession } from '../../fleet/openers';
 import { groupByStatus, STATUS_GROUPS, type StatusGroup } from '../../fleet/statusGroups';
 import { ackAll, acksSnapshot, subscribeAcks } from '../../lib/seen';
 import { matchRoute } from '../../lib/routes';
-import { navigate, useLocation } from '../../lib/router';
+import { useLocation } from '../../lib/router';
 import { rovingStep } from '../../lib/rovingStep';
 import { DESK_QUERY, useMediaQuery } from '../../lib/useMediaQuery';
 
@@ -145,8 +146,6 @@ export function FleetTable(): ReactNode {
   );
 }
 
-const openSession = (id: string): void => navigate(`/s/${encodeURIComponent(id)}`);
-
 /** Project mode: the shared cards under the bucket chips. The cards carry no bucket counts and the screen draws no bar
  *  above a skin's own list, so the chips are drawn here, reading what the screen reads (the chrome store's rows and the
  *  device's acks), once. */
@@ -173,7 +172,8 @@ function StatusTable({ selectedId, phoneTab, onTab }: {
   const sessions = useStore((s) => s.sessions);
   const roster = useStore((s) => s.roster);
   const frameSeen = useStore((s) => s.fleetFrameSeen);
-  const activeRuns = useStore((s) => s.runs).filter((r) => !isRunClosed(r));
+  const allRuns = useStore((s) => s.runs);
+  const activeRuns = useMemo(() => allRuns.filter((r) => !isRunClosed(r)), [allRuns]);
   const acks = useSyncExternalStore(subscribeAcks, acksSnapshot);
   const flows = useFleetFlows();
   const [folded, toggleFold] = useFolded();
@@ -181,15 +181,21 @@ function StatusTable({ selectedId, phoneTab, onTab }: {
   // Mark all seen's focus repair and announcement, shared with the bucket chips.
   const { labelRef, note, markSeen } = useMarkSeen(ackAll);
 
-  const groups = groupByStatus(sessions, acks);
+  // Memoised on what each reads (C9, D-6441), and every prop a row is handed is stable, so a one-row frame re-renders
+  // that row's `SessionLine` only (`memo`, `lineProps.ts`).
+  const groups = useMemo(() => groupByStatus(sessions, acks), [sessions, acks]);
   // Read by key, never compared: the bucket a group holds is the model's answer (instrument-shell's scan).
   const byBucket = new Map(groups.map((g) => [g.bucket, g] as const));
   // The cards the server placed each row on, and their runs and live rows: what the project card reads for the same
   // row (its run door, its cross-project chip, its orphan marker), so a row says the same thing in either mode.
-  const cards = cardsOf(sessions);
-  const tree = new Map<string, FleetTreeGroup>(
-    fleetTree(sessions, chrome.projects.knownProjects, activeRuns, acks).map((g) => [g.project, g] as const));
-  const lookup = (id: string): FleetSession | null => sessions.find((s) => s.id === id) ?? null;
+  const cards = useMemo(() => cardsOf(sessions), [sessions]);
+  const tree = useMemo(() => new Map<string, FleetTreeGroup>(
+    fleetTree(sessions, chrome.projects.knownProjects, activeRuns, acks).map((g) => [g.project, g] as const)),
+  [sessions, chrome.projects.knownProjects, activeRuns, acks]);
+  // By id, once per fleet: what `sessions.find` answered, without a scan per row.
+  const byId = useMemo(() => new Map(sessions.map((s) => [s.id, s] as const)), [sessions]);
+  const lookup = useCallback((id: string): FleetSession | null => byId.get(id) ?? null, [byId]);
+  const onActions = useCallback((x: FleetSession): void => flows.openActions(x.id), [flows]);
 
   const row = (s: FleetSession): ReactNode => {
     const card = tree.get(cards.get(s.id) ?? s.project) ?? null;
@@ -204,10 +210,10 @@ function StatusTable({ selectedId, phoneTab, onTab }: {
           session={s}
           onOpen={openSession}
           selected={s.id === selectedId}
-          onActions={(x) => flows.openActions(x.id)}
+          onActions={onActions}
           roster={roster}
           projectPool={chrome.projects.poolFor(s.project)}
-          onOpenRun={runForSession(runs, s) === null ? null : () => navigate('/runs')}
+          onOpenRun={runForSession(runs, s) === null ? null : OPEN_RUNS}
           workingOn={workingOn(s, cards)}
           childRun={child}
           coordinator={orphan?.presence ?? null}

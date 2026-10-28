@@ -30,6 +30,7 @@ import { BucketBar } from '../fleet/BucketBar';
 import { FleetHead } from '../fleet/FleetHead';
 import { useFleetChrome } from '../fleet/FleetChrome';
 import { useFleetFlows } from '../fleet/FleetFlows';
+import { openSession } from '../fleet/openers';
 import { navigate } from '../lib/router';
 import { ackAll, acksSnapshot, prune, subscribeAcks } from '../lib/seen';
 import { archivedSizeText, archivedSummary } from './ArchiveScreen';
@@ -135,7 +136,8 @@ export function FleetScreen({
     prune(new Set(sessions.map((s) => s.id)));
   }, [sessions]);
 
-  const open = onOpen ?? ((id: string) => navigate(`/s/${encodeURIComponent(id)}`));
+  // One session opener for both skins' lists (`openers.ts`), the same function on every render (C9, D-6441).
+  const open = onOpen ?? openSession;
   const flows = useFleetFlows();
   const newSession = onNewSession ?? flows.openNewSession;
   // The `/api/projects` plane — rows, class, placement readers, the `+`'s
