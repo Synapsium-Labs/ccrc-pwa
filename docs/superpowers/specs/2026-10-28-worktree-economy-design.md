@@ -126,7 +126,7 @@ explain why review copies, which hold full dependency trees, make up most of the
 **Why first.** It touches no policy. It frees 11.4 GB and 56 trees as soon as the cause is fixed, and every later
 section assumes reclaim works.
 
-## 3. Review and fix rounds: one reviewer, one light checkout, released at the verdict
+## 3. Review and fix rounds: one reviewer per work run, kept across rounds, with its dependencies shed between them
 
 **Measured.** 59 of 124 trees are review or fix-round copies. One work run produces a `-review` copy, then `-rev`,
 `-rev2` and `-rev3`, and each is a fresh `ws-add` on the run's project (`dispatchRun` → `CCD_ARGV.wsAddWorker`,
@@ -203,7 +203,7 @@ name-reuse bug. **This spec chooses to keep the tree across rounds (R-1a)** and 
 **What this changes in existing rules.** None. The capacity plan's Rejected list says "no report copy (W2-1
 dropped)", and this spec copies no report. `review-report-live` keeps its meaning.
 
-## 4. Shared dependencies: a per-lockfile cache
+## 4. Shared dependencies: a per-package cache
 
 **Measured.** About half of every tree is `node_modules`: 34.7 of 69 GB fleet-wide, and 12.8 of one coordinator's 14
 GB. npm writes a full copy per tree, with a link count of 1 (worktree-leak note §1). ccd already lists `node_modules`
@@ -322,8 +322,10 @@ ignored (`ccd/ccd`, the `ws-add` exclude block). The fleet has used that shape b
     path.
   - Where a deployment can run the cache under its own uid (`CCD_DEPS_CACHE_OWNER`, default unset), the cache files
     belong to that uid and a session cannot chmod them at all. The manifest checks stay on either way.
-  - A key whose postinstall must write into its own files is marked `copy-only` at fill (the fill sees the write fail
-    on the read-only staging copy), and later hydrations make a full copy.
+  - A package that writes into its own installed files at run time (not at install, which only the fill runs) would
+    trip the manifest on every tree. So a key whose entry is quarantined twice within one
+    `CCD_DEPS_CACHE_VERIFY_HOURS` period is marked `copy-only`, and later hydrations of it make a full copy, or a
+    reflink where the filesystem has one. The mark is journaled with the key, so the plan can name the package.
 - **Who installs: the instructions must change, or nothing is saved.** `npm ci` deletes `node_modules` before it
   installs. This repository's CLAUDE.md tells every session to run `npm ci` in `server`, `agent`, `ui` and `pwa`. Under
   those instructions, a hydrated tree is wiped and refilled with a private copy on its first test run, and the cache
@@ -606,34 +608,44 @@ step 8 (#1407). Step 12 needs step 11 (DT7). Step 13 needs steps 7, 8 and 11.
 
 ## 10. Operator decisions
 
-Each comes with a recommended option.
+Each is a real choice, with a recommendation and why. The three durability switches (Q7 to Q9) are hand-armed
+markers; nothing in the tree writes them, and each is armed only after its shadow record shows the evidence named.
 
-- **Q1. Diagnose the reclaim outage now?** Approve one `ws-audit --reclaim` on one stuck id (a SAFETY-list verb).
-  **Recommended: yes.** It is read-only, and it is the cheapest step to the largest saving.
-- **Q2. Review trees between rounds (R-1).** (a) Keep the reviewer's tree across rounds (R-1a), shed its
-  dependencies while it sleeps (R-1c), and reclaim it whole when the reviewed run closes, as today. (b) Release it at
-  each verdict and spawn a fresh reviewer per round. That needs a new reclaim variant that keeps the clips, and it
-  gives up W2's resume. **Recommended: (a).** It needs no new reclaim variant, deletes nothing earlier than today, and
-  is the ruled W2.
-- **Q3. The dependency cache (R-2).** (a) Reflink where the filesystem supports it, else hardlink, from a
-  read-only cache with a stat-and-hash manifest, filled only from default-branch inputs, with the instructions
-  change that replaces the blanket `npm ci`. (b) A symlinked shared directory. (c) No cache: rely on deps-shed alone.
-  **Recommended: (a).** Defaults: cache off until a root is set, 20 GB maximum, 14 days idle.
-- **Q4. Parked runs (R-3b).** (a) Nudge at 48 h, Abandon offered in the UI at 7 days, never automatic. (b) As (a),
-  plus auto-abandon of a parked run with no open PR after N days, which overturns the capacity plan's
-  Rejected-list rule. **Recommended: (a).** Revisit (b) once the nudge has been measured for two weeks.
-- **Q5. Coordinators (R-4b).** (a) Auto-archive a coordinator with no open claim, no pane and an idle chair for N
-  days, with the UI countdown and Keep, built after D8, refusing when claim attribution is unproven or when mail, an
-  ask or a permission prompt is waiting on it. (b) Never:
-  keep rule 4 and rely on deps-shed for their disk. **Recommended: (a) with N = 14 days.** In the
-  census, deps-shed already addresses most of a coordinator's bytes, so (a) is about the count, not the size.
-- **Q6. Stale floor for this deployment (R-3a).** The neutral default stays 7 days. **Recommended: set 2 days in this
-  deployment's config once §2 to §4 have landed**, not before, because the census shows lowering it earlier would
-  mainly catch manual sessions, which G1 covers. Lowering it is two settings, the server's hours and the box's
-  `CCD_WS_STALE_IDLE_S`, and the box's floor (1 day by default) still bounds it.
-- **Q7. Arm order for durability.** **Recommended:** D4's card now (after reading its shadow log), `drift-push-live`
-  after DT4, OA-D6 after D8's DT7 and not before: a hand check of today's shadow rows says nothing about a
-  coordinator revived under a new id after arming.
+| # | Decision | Recommended | Why |
+|---|---|---|---|
+| Q1 | Approve one `ws-audit --reclaim` on one stuck id (a SAFETY-list verb) to diagnose §2 | **Yes, now** | Read-only, and the cheapest step to the largest saving |
+| Q2 | Review trees between rounds: (a) keep one per work run and shed its dependencies (R-1), or (b) release at each verdict | **(a)** | It is the ruled W2, deletes nothing earlier than today, and needs no new reclaim variant |
+| Q3 | Dependencies: (a) the read-only cache with manifest and the `npm ci` instructions change (R-2), (b) a symlinked shared directory, or (c) deps-shed alone | **(a)**, off until a root is set; 20 GB, 14 days idle | Removes the per-tree copy without letting one tree change another's |
+| Q4 | Parked runs: (a) nudge at 48 h and offer Abandon at 7 days, never automatic, or (b) also auto-abandon | **(a)**; revisit (b) after two weeks of nudges | Keeps the Rejected-list rule that a close is a person's or coordinator's act |
+| Q5 | Coordinators: (a) auto-archive after N idle days with countdown and Keep, built after D8, or (b) never | **(a), N = 14** | Deps-shed already takes their bytes; this takes the count, and only once claims are proven |
+| Q6 | Stale floor in this deployment (R-3a) | **2 days, set after §2 to §4 land** | Lowering it earlier mainly catches manual sessions, which G1 covers |
+| Q7 | Arm `coordinator-roster-card-live` (D4) | **Yes, as soon as** its existing log shows the evidence below | It only adds context, fails open, and directly prevents forgotten runs |
+| Q8 | Arm `drift-push-live` (D7) | **After DT4 lands**, on the evidence below | A push must land on a PWA section the operator can act from |
+| Q9 | Arm `dead-coordinator-lane-live` (OA-D6) | **Only after D8's DT7**, then on the evidence below | Until DT7 a coordinator revived under a new id reads as dead, and no hand check of today's rows covers a later revive |
+
+Stale-archive (`stale-archive-live`, R-4a) is not a separate choice: it is armed once R-4c's G1 half ships and its
+"would archive" rows name only manual sessions the operator would let go.
+
+**What each shadow record must show before its switch is armed.**
+
+- **D4, the roster card.** Unarmed, the session hook appends each card it would have injected to the coordinator's
+  `~/.ccrc/roster-card-shadow.log` (timestamp, session id, event, card). Arm when, over at least a week and at least
+  ten compact, resume or clear events across more than one coordinator: every logged card lists exactly that
+  coordinator's non-terminal runs at that time (checked against `ccrc-api runs list` or the run history: no other
+  coordinator's run, no terminal run, none missing beyond the "+N more" line); its "awaiting you" line matches the
+  runs in `awaiting-review` and with parked mail; and no expected event is missing from the log while the server was
+  up (a gap means the 4 s read is failing open too often to rely on).
+- **D7, the drift push.** Unarmed, the lane records its findings and one record-only `drift-shadow` notice per key,
+  naming what it would have pushed. Arm when, over at least a week: every shadowed finding the operator samples
+  (at least twenty, or all of them if fewer) is a real out-of-step state when checked against the run and its
+  worker, with no false finding; the would-push count per day stays within the push budget (`driftPush.ts`) without
+  hitting it; and DT4's "Out of step" section shows each of those findings.
+- **D6, the dead-coordinator lane.** Unarmed, a due claimant is recorded as "would end programme <slug> (<n> runs)",
+  with a feed row and an attention entry, and the breaker and anchors run in shadow too. Arm, after DT7 has landed,
+  when over at least two weeks: every would-end row names a coordinator that D7's `claimant-gone` findings and the
+  lifecycle journal agree crashed and had no successor; no row names a coordinator that later came back under the
+  same id or, through DT7's claimant-revived, under a new one; and the breaker never tripped. One false row is a
+  reason not to arm.
 
 ## Rejected
 
