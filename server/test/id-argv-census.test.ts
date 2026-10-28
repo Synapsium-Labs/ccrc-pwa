@@ -612,7 +612,7 @@ describe('every id-taking argv call has an origin and a gate (spec §2.3)', () =
       expireAct: ['coord/expireArchived.ts | expireArchived'],
       childReclaimAudit: ['coord/childReclaim.ts | childReclaimOutcome'],
       childReclaimAct: ['coord/childReclaim.ts | childReclaimOutcome'],
-      collectAudit: ['coord/collectTempRoot.ts | collectTempRoot', 'coord/collectTempRoot.ts | learnCollect'],
+      collectAudit: ['coord/collectTempRoot.ts | collectRetirePort', 'coord/collectTempRoot.ts | learnCollect'],
       childSpent: ['coord/childBind.ts | childBindGate', 'coord/close.ts | childGateAtClose'],
       childSpentLive: ['coord/childSpent.ts | childSpent', 'coord/close.ts | childGateAtClose'],
       holdAndBindSession: ['coord/routes.ts | POST /api/runs'],
