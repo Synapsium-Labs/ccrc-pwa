@@ -1359,7 +1359,13 @@ export class FleetWatcher {
   readonly questions: Questions;
 
   constructor(private deps: Deps, private bus: Bus, private intervalMs = 2000, cachePath?: string) {
-    this.questions = createQuestions(deps, { heldFor });
+    // W3 Q3f (D-7030): the doors' sink, this watcher's: the door cores push through `pushOne` as the lapse sinks do, and
+    // read the two pane-edge facts a door-in needs (the painted dialog, the child's project) at the call, never copied.
+    this.questions = createQuestions(deps, { heldFor, doors: {
+      push: (ev) => this.pushOne(ev, this.activeProjects),
+      paintedDialogOf: (childId) => this.dialogIds.get(childId),
+      projectOf: (childId) => this.lastFleet?.find((f) => f.id === childId)?.project ?? '',
+    } });
     this.cachePath = cachePath ?? deps.stateCachePath ?? defaultCachePath();
     this.transcripts = new TranscriptResolver(deps.io);
     this.headsSettled = new Promise<void>((resolve) => { this.settleHeads = resolve; });

@@ -175,6 +175,18 @@ export interface QuestionsDeps {
  *  `none` from `raise`, through the hold's own any-failure arm. */
 export interface QuestionRules {
   readonly heldFor: typeof heldFor;
+  /** W3 Q3f (D-7030): the watcher's sink for the door cores, absent on a server's own instance (no watcher). */
+  readonly doors?: QuestionDoorSink;
+}
+
+/** What the watcher that makes an instance hands it for the answer doors (W3 Q3f, D-7030): the push a door's answer is
+ *  sent through (`FleetWatcher#pushOne`, as the lapse sinks send theirs), and the two pane-edge facts a door-in reads,
+ *  the dialog the pane shows for a child and the child's project, read at the call. The pane-edge maps stay the
+ *  watcher's; this hands in one fact from each, as the lapse half's `paintedDialogOf` does. */
+export interface QuestionDoorSink {
+  readonly push: (ev: QuestionPush) => void;
+  readonly paintedDialogOf: (childId: string) => string | undefined;
+  readonly projectOf: (childId: string) => string;
 }
 
 // ── the hold carrier (Q3d, D-7028) ───────────────────────────────────────────────────────────────────────────────
@@ -421,6 +433,8 @@ export interface QuestionsTestView {
   /** `ev` may carry a fixture's own `tag`, which a production push does not; it rides to the push as it did. */
   plantHeldAsk(childId: string, held: Omit<HeldAsk, 'childId' | 'ev'> & { readonly ev: QuestionPush & { readonly tag?: string } }): void;
   asksDisabled(): boolean;
+  /** The doors' sink the instance was made with (the watcher's), or undefined (a server's own). */
+  doors(): QuestionDoorSink | undefined;
 }
 
 /** The key the instance's test view hangs on: a property no production reader names, and no state of its own. */
@@ -1375,6 +1389,7 @@ export function createQuestions(deps: QuestionsDeps, rules?: QuestionRules): Que
       .map((v) => [v.childId, v])),
     plantHeldAsk: (childId, held) => { setHeldAsk(childId, held); },
     asksDisabled: () => asksDisabled,
+    doors: () => rules?.doors,
   };
 
   const questions: Questions & { readonly [TEST_VIEW]: QuestionsTestView } = {
