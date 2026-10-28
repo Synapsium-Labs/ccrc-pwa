@@ -48,6 +48,9 @@ const journal = (): Array<Record<string, unknown>> => {
     .split('\n').filter(Boolean).map((l) => JSON.parse(l) as Record<string, unknown>))
     .filter((e) => e['act'] === 'shed-deps');
 };
+/** A listing seam that names one more directory than git does (the real listing, then `extra`). */
+const widen = (extra: string): string => '_ws_shed_listing() { command git -C "$1" ls-files -z --others --ignored'
+  + ` --exclude-standard --directory; printf '%s\\0' '${extra}'; };`;
 const status = (): string => h.git(c.wt, 'status', '--porcelain=v1', '--untracked-files=all');
 
 beforeEach(() => { h = makePrHarness('ccrc-shed-deps-'); c = makeChild(h); deps(); asleep(7200); });
@@ -108,7 +111,7 @@ describe('ws-shed-deps sheds a sleeping child\'s ignored dependency directories'
     h.git(c.wt, 'add', '-f', 'pwa/node_modules/vendored/keep.js');
     h.git(c.wt, 'commit', '-m', 'vendor');
     // A git whose listing collapses that directory anyway: the second fence, `git ls-files -- <dir>`, still keeps it.
-    const wide = 'git() { if [[ " $* " == *" --others "* ]]; then command git "$@"; printf \'pwa/node_modules/\\0\'; else command git "$@"; fi; };';
+    const wide = widen('pwa/node_modules/');
     expect(shed('', wide).doc).toMatchObject({ shed: true, dirs: 1 });
     expect(exists('pwa/node_modules/vendored/keep.js')).toBe(true);
   });
@@ -146,6 +149,35 @@ describe('ws-shed-deps sheds a sleeping child\'s ignored dependency directories'
     expect(exists('node_modules')).toBe(false);
   });
 
+  it('a repository deeper inside a node_modules keeps that whole directory, uncommitted work included', () => {
+    const dep = path.join(c.wt, 'node_modules', 'gitdep');
+    fs.mkdirSync(dep, { recursive: true });
+    h.git(dep, 'init', '-q');
+    fs.writeFileSync(path.join(dep, 'wip.txt'), 'uncommitted\n');
+    const r = shed();
+    expect(r.doc).toMatchObject({ shed: true, dirs: 1 });
+    expect(exists('node_modules/gitdep/wip.txt')).toBe(true);
+    expect(exists('node_modules/pkg/index.js')).toBe(true);
+    expect(exists('pwa/node_modules')).toBe(false);
+  });
+
+  it('a names override never reaches a worktree under an ignored directory: `.worktrees/feat` keeps its work', () => {
+    write('.gitignore', 'node_modules/\ndist/\n.worktrees/\n');
+    h.git(c.wt, 'commit', '-qam', 'ignore worktrees');
+    h.git(c.wt, 'worktree', 'add', '-q', '-b', 'feat', path.join(c.wt, '.worktrees', 'feat'));
+    write('.worktrees/feat/wip.txt', 'uncommitted\n');
+    const r = h.run(`${CHILD_STUBS} ${NO_USERS} CCD_DEPS_SHED_NAMES='.worktrees' cmd_ws_shed_deps --session ${CHILD_ID} --class child`);
+    expect(JSON.parse(r.stdout)).toMatchObject({ refused: 'nothing-to-shed' });
+    expect(exists('.worktrees/feat/wip.txt')).toBe(true);
+    expect(h.git(c.wt, 'worktree', 'list')).toContain('.worktrees/feat');
+  });
+
+  it('a repository walk that cannot finish refuses `unmeasured` and removes nothing', () => {
+    expect(shed('', '_ws_shed_repos() { return 124; };').doc).toMatchObject({ refused: 'unmeasured' });
+    expect(exists('node_modules/pkg/index.js')).toBe(true);
+    expect(exists('pwa/node_modules/other/index.js')).toBe(true);
+  });
+
   it('a node_modules that is a link is never followed, and what it points at survives', () => {
     fs.rmSync(path.join(c.wt, 'node_modules'), { recursive: true });
     const outside = path.join(h.home, 'outside-deps');
@@ -153,7 +185,7 @@ describe('ws-shed-deps sheds a sleeping child\'s ignored dependency directories'
     fs.writeFileSync(path.join(outside, 'precious.js'), 'x\n');
     fs.symlinkSync(outside, path.join(c.wt, 'node_modules'));
     // git lists a link as a file, so the listing is widened to name it as a directory: the physical-path re-proof keeps it.
-    const wide = 'git() { if [[ " $* " == *" --others "* ]]; then command git "$@"; printf \'node_modules/\\0\'; else command git "$@"; fi; };';
+    const wide = widen('node_modules/');
     expect(shed('', wide).doc).toMatchObject({ shed: true, dirs: 1 });
     expect(fs.existsSync(path.join(outside, 'precious.js'))).toBe(true);
     expect(fs.lstatSync(path.join(c.wt, 'node_modules')).isSymbolicLink()).toBe(true);
@@ -214,6 +246,18 @@ describe('ws-shed-deps refuses, touching nothing', () => {
     expect(shed('', 'CCD_DEPS_SHED_MIN_ASLEEP_S=99999;').doc).toMatchObject({ refused: 'asleep-too-recently' });
     kept();
   });
+  it('`in-progress` while another verb holds the id\'s reap lock', () => {
+    const lock = path.join(h.home, '.cc-sessions', `.reap-${CHILD_ID}.lock`);
+    const r = h.run(`${CHILD_STUBS} ${NO_USERS} exec 9>>'${lock}'; flock -n 9 || exit 99;`
+      + ` cmd_ws_shed_deps --session ${CHILD_ID} --class child`);
+    expect(JSON.parse(r.stdout)).toMatchObject({ refused: 'in-progress' });
+    kept();
+    expect(journal().map((e) => e['refusal'])).toEqual(['in-progress']);
+  });
+  it('no reap lock is made for an id no row names', () => {
+    h.run(`${CHILD_STUBS} ${NO_USERS} cmd_ws_shed_deps --session project-a-nobody --class child`);
+    expect(fs.existsSync(path.join(h.home, '.cc-sessions', '.reap-project-a-nobody.lock'))).toBe(false);
+  });
   it('`unmeasured` for a shed stamp that does not read as an epoch', () => {
     fs.writeFileSync(reg('depsshed'), 'garbage');
     expect(shed().doc).toMatchObject({ refused: 'unmeasured' });
@@ -269,6 +313,19 @@ describe('ws-shed-deps fails, after the act began, on a doubt it finds there', (
       fs.chmodSync(locked, 0o755);
     }
     expect(shed().doc).toMatchObject({ shed: true });
+  });
+});
+
+describe('ws-shed-deps is bounded', () => {
+  it('CCD_DEPS_SHED_SCAN_S lowers the walks\' bound and never raises it past the default', () => {
+    expect(h.sh('_ws_shed_scan')).toBe('30');
+    expect(h.sh('CCD_DEPS_SHED_SCAN_S=5 _ws_shed_scan')).toBe('5');
+    expect(h.sh('CCD_DEPS_SHED_SCAN_S=9999 _ws_shed_scan')).toBe('30');
+  });
+  it('a size that cannot be measured answers `bytes: null` and still sheds', () => {
+    const r = shed('', '_ws_shed_size() { return 124; };');
+    expect(r.doc).toMatchObject({ shed: true, dirs: 2, bytes: null });
+    expect(fs.readFileSync(reg('depsshed'), 'utf8')).toMatch(/^\d+$/);
   });
 });
 
