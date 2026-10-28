@@ -27286,7 +27286,10 @@ console.log("restamped");
 
 # ── _test_knobs — `ccrc test`'s settings (D-TBD-test-containment) ───────────
 # The test slice's five limits and the admission queue's three numbers, read through `_ccrc_knob` like every other
-# setting: the environment, else ~/.ccrc/ccrc.env, else the default. One line per setting, `KEY<US>default<US>value
+# setting. The five limits and the slot count hold for the WHOLE BOX (one slice, one queue), so they are read in `file`
+# mode, ~/.ccrc/ccrc.env else the default: a caller's environment that set them would change the slice for every run
+# on the box, or count its own slots. The wide line and the pressure bound are the caller's own: the environment, else
+# ~/.ccrc/ccrc.env, else the default. One line per setting, `KEY<US>default<US>value
 # <US>from` with US the unit separator (octal 037, never in a setting; the value empty and `from` the reader's sentence when it cannot be read), for ccd/ccrc-test, which owns
 # what each value means and refuses a value that is not its shape. The defaults are deploy/systemd/ccrctests.slice's
 # own values (ccrc-test-wrapper.test.ts holds the two equal) and are no box's measurements: 6G of memory, 1G of swap,
@@ -27297,12 +27300,12 @@ _test_knob_say() {   # <KEY> <default> <rc of _ccrc_knob>
   else printf '%s\037%s\037\037%s\n' "$1" "$2" "$KNOB_WHY"; fi
 }
 _test_knobs() {
-  _ccrc_knob CCRC_TEST_SLICE_MEMORY_MAX 6G; _test_knob_say CCRC_TEST_SLICE_MEMORY_MAX 6G $?
-  _ccrc_knob CCRC_TEST_SLICE_SWAP_MAX 1G; _test_knob_say CCRC_TEST_SLICE_SWAP_MAX 1G $?
-  _ccrc_knob CCRC_TEST_SLICE_CPU_WEIGHT 20; _test_knob_say CCRC_TEST_SLICE_CPU_WEIGHT 20 $?
-  _ccrc_knob CCRC_TEST_SLICE_CPU_QUOTA 400%; _test_knob_say CCRC_TEST_SLICE_CPU_QUOTA 400% $?
-  _ccrc_knob CCRC_TEST_SLICE_IO_WEIGHT 20; _test_knob_say CCRC_TEST_SLICE_IO_WEIGHT 20 $?
-  _ccrc_knob CCRC_TEST_HEAVY_SLOTS 2; _test_knob_say CCRC_TEST_HEAVY_SLOTS 2 $?
+  _ccrc_knob CCRC_TEST_SLICE_MEMORY_MAX 6G file; _test_knob_say CCRC_TEST_SLICE_MEMORY_MAX 6G $?
+  _ccrc_knob CCRC_TEST_SLICE_SWAP_MAX 1G file; _test_knob_say CCRC_TEST_SLICE_SWAP_MAX 1G $?
+  _ccrc_knob CCRC_TEST_SLICE_CPU_WEIGHT 20 file; _test_knob_say CCRC_TEST_SLICE_CPU_WEIGHT 20 $?
+  _ccrc_knob CCRC_TEST_SLICE_CPU_QUOTA 400% file; _test_knob_say CCRC_TEST_SLICE_CPU_QUOTA 400% $?
+  _ccrc_knob CCRC_TEST_SLICE_IO_WEIGHT 20 file; _test_knob_say CCRC_TEST_SLICE_IO_WEIGHT 20 $?
+  _ccrc_knob CCRC_TEST_HEAVY_SLOTS 2 file; _test_knob_say CCRC_TEST_HEAVY_SLOTS 2 $?
   _ccrc_knob CCRC_TEST_WIDE_FILES 3; _test_knob_say CCRC_TEST_WIDE_FILES 3 $?
   _ccrc_knob CCRC_TEST_PRESSURE_MAX 0; _test_knob_say CCRC_TEST_PRESSURE_MAX 0 $?
 }

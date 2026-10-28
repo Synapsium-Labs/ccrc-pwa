@@ -51,8 +51,14 @@ exec "$@"
 `;
 
 interface Box { home: string; env: NodeJS.ProcessEnv }
-function box(extra: NodeJS.ProcessEnv = {}): Box {
+/** A fixture box. `settings` is the box's ~/.ccrc/ccrc.env, one `KEY=value` line each: the slot count and the five
+ *  slice limits hold for the whole box, so they are read from that file alone, never from a caller's environment. */
+function box(extra: NodeJS.ProcessEnv = {}, settings: Record<string, string> = {}): Box {
   const home = mkTmp('ccrc-test-wrapper-');
+  if (Object.keys(settings).length > 0) {
+    mkdirSync(path.join(home, '.ccrc'), { recursive: true });
+    writeFileSync(path.join(home, '.ccrc', 'ccrc.env'), Object.entries(settings).map(([k, v]) => `${k}=${v}\n`).join(''));
+  }
   const bin = path.join(home, 'bin');
   mkdirSync(bin, { recursive: true });
   writeFileSync(path.join(bin, 'systemctl'), SYSTEMCTL, { mode: 0o755 });
@@ -104,19 +110,38 @@ describe('ccrc test: the slice (D-TBD-test-containment)', () => {
     expect(setProps(b)).toBe('--user set-property --runtime ccrctests.slice MemoryMax=6G MemorySwapMax=1G CPUWeight=20 CPUQuota=400% IOWeight=20');
   });
 
-  itLinux('takes each limit from the environment, else ~/.ccrc/ccrc.env, else the default', () => {
-    const b = box();
-    mkdirSync(path.join(b.home, '.ccrc'), { recursive: true });
-    writeFileSync(path.join(b.home, '.ccrc', 'ccrc.env'), 'CCRC_TEST_SLICE_CPU_QUOTA=200%\nCCRC_TEST_SLICE_MEMORY_MAX=3G\n');
-    expect(run(b, ['--light', '--', 'true'], { CCRC_TEST_SLICE_MEMORY_MAX: '2G', CCRC_TEST_SLICE_IO_WEIGHT: '5' }).status).toBe(0);
-    expect(setProps(b)).toBe('--user set-property --runtime ccrctests.slice MemoryMax=2G MemorySwapMax=1G CPUWeight=20 CPUQuota=200% IOWeight=5');
+  // The slice is one for the whole box: a caller whose environment set a limit would change it, through
+  // set-property, for every run on the box. So each limit is read from ~/.ccrc/ccrc.env alone, else the default.
+  itLinux('takes each limit from ~/.ccrc/ccrc.env, else the default, never from the caller\'s environment', () => {
+    const b = box({}, { CCRC_TEST_SLICE_CPU_QUOTA: '200%', CCRC_TEST_SLICE_MEMORY_MAX: '3G' });
+    const r = run(b, ['--light', '--', 'true'], { CCRC_TEST_SLICE_MEMORY_MAX: '100%', CCRC_TEST_SLICE_IO_WEIGHT: '5' });
+    expect(r.status).toBe(0);
+    expect(setProps(b)).toBe('--user set-property --runtime ccrctests.slice MemoryMax=3G MemorySwapMax=1G CPUWeight=20 CPUQuota=200% IOWeight=20');
+    expect(r.stderr).toContain('ccrc test: WARN: CCRC_TEST_SLICE_MEMORY_MAX=100% in the environment is ignored: it holds for the whole box, so only ~/.ccrc/ccrc.env sets it (in use: 3G)');
+    expect(r.stderr).toContain('ccrc test: WARN: CCRC_TEST_SLICE_IO_WEIGHT=5 in the environment is ignored: it holds for the whole box, so only ~/.ccrc/ccrc.env sets it (in use: 20)');
+  });
+
+  itLinux('an environment value equal to the file\'s says nothing', () => {
+    const b = box({}, { CCRC_TEST_SLICE_MEMORY_MAX: '3G' });
+    const r = run(b, ['--light', '--', 'true'], { CCRC_TEST_SLICE_MEMORY_MAX: '3G' });
+    expect(r.status).toBe(0);
+    expect(r.stderr).not.toContain('WARN');
   });
 
   it.each([
     ['CCRC_TEST_SLICE_MEMORY_MAX', '6'], ['CCRC_TEST_SLICE_MEMORY_MAX', '0G'], ['CCRC_TEST_SLICE_MEMORY_MAX', 'infinity'],
     ['CCRC_TEST_SLICE_MEMORY_MAX', '101%'], ['CCRC_TEST_SLICE_SWAP_MAX', '1'], ['CCRC_TEST_SLICE_CPU_WEIGHT', '0'],
     ['CCRC_TEST_SLICE_CPU_WEIGHT', '10001'], ['CCRC_TEST_SLICE_CPU_QUOTA', '4'], ['CCRC_TEST_SLICE_IO_WEIGHT', 'x'],
-    ['CCRC_TEST_HEAVY_SLOTS', '0'], ['CCRC_TEST_WIDE_FILES', '-1'], ['CCRC_TEST_PRESSURE_MAX', '100'],
+    ['CCRC_TEST_HEAVY_SLOTS', '0'],
+  ])('%s=%s is not its shape: it keeps the default and warns, naming the key, value and file', (key, value) => {
+    const b = box({}, { [key]: value });
+    const r = run(b, ['--classify', '--', 'true']);
+    expect(r.status).toBe(0);
+    expect(r.stderr).toContain(`ccrc test: WARN: ${key}=${value} (from the ~/.ccrc/ccrc.env) is not `);
+    expect(r.stderr).toMatch(/; using its default \S+\n/);
+  });
+  it.each([
+    ['CCRC_TEST_WIDE_FILES', '-1'], ['CCRC_TEST_PRESSURE_MAX', '100'],
   ])('%s=%s is not its shape: it keeps the default and warns, naming the key, value and source', (key, value) => {
     const b = box();
     const r = run(b, ['--classify', '--', 'true'], { [key]: value });
@@ -127,7 +152,9 @@ describe('ccrc test: the slice (D-TBD-test-containment)', () => {
 
   itLinux('a bad limit never removes a cap: the default is applied in its place', () => {
     const b = box();
-    expect(run(b, ['--light', '--', 'true'], { CCRC_TEST_SLICE_MEMORY_MAX: 'infinity' }).status).toBe(0);
+    mkdirSync(path.join(b.home, '.ccrc'), { recursive: true });
+    writeFileSync(path.join(b.home, '.ccrc', 'ccrc.env'), 'CCRC_TEST_SLICE_MEMORY_MAX=infinity\n');
+    expect(run(b, ['--light', '--', 'true']).status).toBe(0);
     expect(setProps(b)).toContain('MemoryMax=6G');
   });
 
@@ -151,14 +178,14 @@ describe('ccrc test: the slice (D-TBD-test-containment)', () => {
   });
 
   itLinux('a run that the slice cap kills is said so, with the cap and the setting that sets it', () => {
-    const b = box();
+    const b = box({}, { CCRC_TEST_SLICE_MEMORY_MAX: '64M' });
     const cgroot = path.join(b.home, 'cgroot');
     mkdirSync(path.join(cgroot, 'user.slice', 'ccrctests.slice'), { recursive: true });
     const events = path.join(cgroot, 'user.slice', 'ccrctests.slice', 'memory.events');
     writeFileSync(events, 'low 0\nhigh 0\nmax 3\noom 2\noom_kill 2\n');
     writeFileSync(path.join(b.home, 'fixture-cg'), '/user.slice/ccrctests.slice\n');
     // The command stands in for the kernel: it raises the slice's count and dies by SIGKILL, as an OOM victim does.
-    const r = run(b, ['--light', '--', 'sh', '-c', `printf 'oom_kill 3\\n' > '${events}'; kill -9 $$`], { CCRC_CGROUP_ROOT: cgroot, CCRC_TEST_SLICE_MEMORY_MAX: '64M' });
+    const r = run(b, ['--light', '--', 'sh', '-c', `printf 'oom_kill 3\\n' > '${events}'; kill -9 $$`], { CCRC_CGROUP_ROOT: cgroot });
     expect(r.status).toBe(137);
     expect(r.stderr).toContain("ccrc test: the test slice's memory cap killed a process during this run (MemoryMax=64M, CCRC_TEST_SLICE_MEMORY_MAX; 1 OOM kill(s) in ccrctests.slice); exit 137");
     expect(r.stderr, 'bash\'s own job line is not printed').not.toMatch(/Killed/);
@@ -330,7 +357,7 @@ describe('ccrc test: the admission queue (D-TBD-test-containment)', () => {
     // No cgroup holds an uncontained run's tree, so its slot can only follow the wrapper.
     darwin: ['uncontained, its slot follows the wrapper and frees at once', async () => {
       if (!HAS_FLOCK) return;
-      const b = box({ CCRC_TEST_HEAVY_SLOTS: '1' });
+      const b = box({}, { CCRC_TEST_HEAVY_SLOTS: '1' });
       const a = hold(b, 'a');
       await until('the holder to start', () => started(b, 'a'));
       const w = hold(b, 'w');
@@ -345,7 +372,7 @@ describe('ccrc test: the admission queue (D-TBD-test-containment)', () => {
     // waiter stops that orphaned run's scope before it takes the slot. Two heavy runs are never live under one slot.
     linux: ['its run keeps the slot until a waiter stops the orphaned scope', async () => {
       if (!HAS_FLOCK) return;
-      const b = box({ CCRC_TEST_HEAVY_SLOTS: '1' });
+      const b = box({}, { CCRC_TEST_HEAVY_SLOTS: '1' });
       slice(b);
       const a = hold(b, 'a');
       await until('the holder to start', () => started(b, 'a'));
@@ -364,9 +391,47 @@ describe('ccrc test: the admission queue (D-TBD-test-containment)', () => {
     }],
   });
 
+  // The slot count bounds the whole box only when every caller counts the same number: it is read from the box's
+  // ccrc.env alone, so a session whose environment says 10 still waits behind the box's one slot.
+  itQueue('two callers whose environments set different slot counts both count the box\'s', async () => {
+    const b = box({}, { CCRC_TEST_HEAVY_SLOTS: '1' });
+    slice(b);
+    const a = hold(b, 'a', ['--heavy'], { CCRC_TEST_HEAVY_SLOTS: '1' });
+    await until('the holder to start', () => started(b, 'a'));
+    const w = hold(b, 'w', ['--heavy'], { CCRC_TEST_HEAVY_SLOTS: '10' });
+    await until('the second to queue', () => w.stderr().includes('ccrc test: queued: all 1 heavy test slots are held'));
+    expect(w.stderr()).toContain('CCRC_TEST_HEAVY_SLOTS=10 in the environment is ignored');
+    await new Promise((r) => setTimeout(r, 400));
+    expect(started(b, 'w'), 'the second waits behind the box\'s one slot').toBe(false);
+    release(b, 'a');
+    await until('the second to start', () => started(b, 'w'));
+    release(b, 'w');
+    expect(await w.exit).toBe(0);
+  });
+
+  // A slot above the count (held from before the count was lowered) is still a heavy run on the box.
+  itQueue('a held slot above the slot count is counted: a lowered count never admits one run too many', async () => {
+    const b = box({}, { CCRC_TEST_HEAVY_SLOTS: '1' });
+    slice(b);
+    const dir = path.join(b.home, '.cc-sessions', 'test-slots');
+    mkdirSync(dir, { recursive: true });
+    const holder = spawn('flock', [path.join(dir, 'slot-3'), 'sh', '-c', `touch "${b.home}/held-3"; while [ ! -f "${b.home}/release-3" ]; do sleep 0.05; done`], { env: b.env });
+    const done = new Promise((res) => holder.on('exit', res));
+    await until('slot-3 to be held', () => existsSync(path.join(b.home, 'held-3')));
+    const w = hold(b, 'w');
+    await until('the run to queue behind slot-3', () => w.stderr().includes('ccrc test: queued: all 1 heavy test slots are held (slot-3: unknown)'));
+    await new Promise((r) => setTimeout(r, 400));
+    expect(started(b, 'w'), 'slot-0 is free, but the box already runs its one heavy run').toBe(false);
+    writeFileSync(path.join(b.home, 'release-3'), '');
+    await done;
+    await until('the run to start once slot-3 frees', () => started(b, 'w'));
+    release(b, 'w');
+    expect(await w.exit).toBe(0);
+  });
+
   itQueue('a queued run that is signalled leaves the queue and never runs its command', async () => {
     for (const [sig, code] of [['SIGTERM', 143], ['SIGINT', 130], ['SIGHUP', 129]] as const) {
-      const b = box({ CCRC_TEST_HEAVY_SLOTS: '1' });
+      const b = box({}, { CCRC_TEST_HEAVY_SLOTS: '1' });
       slice(b);
       const a = hold(b, 'a');
       await until('the holder to start', () => started(b, 'a'));
@@ -383,7 +448,7 @@ describe('ccrc test: the admission queue (D-TBD-test-containment)', () => {
   });
 
   itQueue('a light run takes no slot', async () => {
-    const b = box({ CCRC_TEST_HEAVY_SLOTS: '1' });
+    const b = box({}, { CCRC_TEST_HEAVY_SLOTS: '1' });
     slice(b);
     const a = hold(b, 'a');
     await until('the holder to start', () => started(b, 'a'));
@@ -395,7 +460,7 @@ describe('ccrc test: the admission queue (D-TBD-test-containment)', () => {
   });
 
   itQueue('a run inside a run is already contained: it neither queues nor opens a scope', async () => {
-    const b = box({ CCRC_TEST_HEAVY_SLOTS: '1' });
+    const b = box({}, { CCRC_TEST_HEAVY_SLOTS: '1' });
     slice(b);
     const a = hold(b, 'a');
     await until('the holder to start', () => started(b, 'a'));

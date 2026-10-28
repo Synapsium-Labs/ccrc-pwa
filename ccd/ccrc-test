@@ -23,8 +23,9 @@
 # process's place, with this process's environment, working directory and
 # terminal, so the run sees the session environment exactly as a bare run
 # would. Before each run the slice's five limits are applied from the box's
-# settings (`_test_knobs` in ccd/ccrc, read by ccrc's one reader `_ccrc_knob`:
-# the environment, else ~/.ccrc/ccrc.env, else the default) with `systemctl
+# settings (`_test_knobs` in ccd/ccrc, read by ccrc's one reader `_ccrc_knob`
+# from ~/.ccrc/ccrc.env, else the default: the slice and the queue are the
+# box's, so a caller's environment never sets them) with `systemctl
 # --user set-property --runtime`, so a changed setting holds from the next
 # run, and a reboot falls back to the unit file's own values, which are the
 # same defaults. A slice the user manager has not loaded is REFUSED, never
@@ -87,6 +88,8 @@ _tusage() { echo "$PROG: $*" >&2; echo "usage: ccrc test [--heavy|--light] [--] 
 # reader's sentence when the setting cannot be read. A value that is not the setting's shape keeps the default and warns
 # on stderr, naming the key, the value and where it came from: a typo never removes a cap.
 declare -A TK=()
+# The settings that hold for the whole box, one slice and one queue: `_test_knobs` reads them from ~/.ccrc/ccrc.env alone.
+TBOXWIDE="CCRC_TEST_SLICE_MEMORY_MAX CCRC_TEST_SLICE_SWAP_MAX CCRC_TEST_SLICE_CPU_WEIGHT CCRC_TEST_SLICE_CPU_QUOTA CCRC_TEST_SLICE_IO_WEIGHT CCRC_TEST_HEAVY_SLOTS"
 _tshape() {   # <KEY> <value> -> 0 when the value is the key's shape
   local v="$2"
   case "$1" in
@@ -122,6 +125,11 @@ _tload() {
       echo "$PROG: WARN: $k=$v (from the $from) is not $(_tshape_says "$k"); using its default $d" >&2; v="$d"
     fi
     TK["$k"]="$v"
+    # A box-wide value set in the caller's environment is not read (`_test_knobs`); one that differs says so.
+    case " $TBOXWIDE " in
+      *" $k "*) [ -z "${!k:-}" ] || [ "${!k}" = "$v" ] \
+        || echo "$PROG: WARN: $k=${!k} in the environment is ignored: it holds for the whole box, so only ~/.ccrc/ccrc.env sets it (in use: $v)" >&2 ;;
+    esac
   done < <(_test_knobs)
 }
 
@@ -345,6 +353,14 @@ _tholders() {   # -> "slot <n>: <who>; …" for every held slot
   done
   printf '%s' "$out"
 }
+_theld() {   # -> how many slot files are held, at any index: a slot above a lowered count is still a heavy run
+  local f k=0
+  for f in "$SLOT_DIR"/slot-*; do
+    case "$f" in *.who|*'*') continue ;; esac
+    [ -e "$f" ] && _tlocked "$f" && k=$((k + 1))
+  done
+  echo "$k"
+}
 _tpressure() {   # <max> -> 0 while memory or cpu pressure is above it; PRESSURE_SAID says which
   local max="$1" r v
   PRESSURE_SAID=""
@@ -391,9 +407,13 @@ _tacquire() {   # <summary> -> sets SLOT_FD and SLOT_FILE, or dies
     if [ "$max" -gt 0 ] && _tpressure "$max"; then why="$PRESSURE_SAID"
     else
       for ((i = 0; i < n; i++)); do
+        [ "$(_theld)" -lt "$n" ] || break
         f="$SLOT_DIR/slot-$i"
         exec {fd}>>"$f" || continue
+        # Counted again once held: every slot file at every index, this one included, so a slot held above a lowered
+        # count, or a caller that took one in the same instant, never makes the box run more than n heavy runs.
         if flock -n "$fd"; then
+          if [ "$(_theld)" -gt "$n" ]; then exec {fd}>&-; break; fi
           SLOT_FD=$fd; SLOT_FILE=$f
           printf 'pid %s since %s: %s\n' "$$" "$(date +%H:%M:%S)" "$summary" > "$f.who"
           [ "$said" -eq 0 ] || echo "$PROG: slot $i is free after $((SECONDS - t0))s; starting" >&2

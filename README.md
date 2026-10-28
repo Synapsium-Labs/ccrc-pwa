@@ -1299,10 +1299,11 @@ does not name may still read its default. The thinning's time bound takes the sm
 `CCRC_UPDATE_DEADLINE_MS` the server may hold (the environment, `ccrc.env`, and `~/.ccrc/exposure.env`, which the server
 reads too), and the watchdog the largest (D-6591, D-6602). On macOS a file the box's model of systemd cannot decide
 refuses only the settings it names, and `CCRC_BACKUP_DATA_KEEP` always (D-6587). `ccrc doctor`'s `box-settings` check
-reads `ccrc.env` alone and names a line the reader refuses (D-6599). Eight more are `ccrc test`'s, read the same way
-(see **Test containment**): `CCRC_TEST_SLICE_MEMORY_MAX`, `CCRC_TEST_SLICE_SWAP_MAX`, `CCRC_TEST_SLICE_CPU_WEIGHT`,
-`CCRC_TEST_SLICE_CPU_QUOTA`, `CCRC_TEST_SLICE_IO_WEIGHT`, `CCRC_TEST_HEAVY_SLOTS`, `CCRC_TEST_WIDE_FILES` and
-`CCRC_TEST_PRESSURE_MAX`; a value that is not its shape keeps its default and warns.
+reads `ccrc.env` alone and names a line the reader refuses (D-6599). Eight more are `ccrc test`'s (see **Test
+containment**): `CCRC_TEST_SLICE_MEMORY_MAX`, `CCRC_TEST_SLICE_SWAP_MAX`, `CCRC_TEST_SLICE_CPU_WEIGHT`,
+`CCRC_TEST_SLICE_CPU_QUOTA`, `CCRC_TEST_SLICE_IO_WEIGHT` and `CCRC_TEST_HEAVY_SLOTS` hold for the whole box, so they are
+read from `ccrc.env` alone (the reader's `file` mode), and `CCRC_TEST_WIDE_FILES` and `CCRC_TEST_PRESSURE_MAX` the same
+way as the rest; a value that is not its shape keeps its default and warns.
 
 ## The session gate: `CCRC_AUTH` (off by default)
 
@@ -6173,12 +6174,14 @@ install`, `ccrc update` and `deploy.sh agent`), with the session's environment, 
 slice has a hard `MemoryMax` (default 6G), a bounded `MemorySwapMax` (1G), `CPUWeight` and `IOWeight` of 20 against
 app.slice's 100 (the slice is top-level, its name dashless, so that is every session, pane scope and ccrc-agent at once), and a `CPUQuota` (400%), and no `MemoryHigh`: a session always wins the CPU, and a run past the cap is
 killed inside the slice, never pushing the session slice into reclaim. Each value is a setting (see **ccrc's own
-settings**), applied with `systemctl --user set-property --runtime` before every run; the unit file holds the
+settings**), read from `~/.ccrc/ccrc.env` alone because the slice is the whole box's (a session's environment that sets
+one is ignored, with a warning), applied with `systemctl --user set-property --runtime` before every run; the unit file holds the
 defaults. A slice the user manager has not loaded is refused, never created, since `systemd-run --slice=` would make
 an unlimited one. A heavy run (tsc and typecheck, a vitest or jest run naming no test file, a directory, a glob or a
 filter, or more than `CCRC_TEST_WIDE_FILES` test files, browser, mutation and `npm test`/`npm t` runs; a flag's value
 is never counted as a file, and a `sh -c` string is read command by command) first takes one of
-`CCRC_TEST_HEAVY_SLOTS` (default 2) slots, a lock file `~/.cc-sessions/test-slots/slot-<n>` held with `flock`. The
+`CCRC_TEST_HEAVY_SLOTS` (default 2, also read from `~/.ccrc/ccrc.env` alone; a slot held above a lowered count still
+counts) slots, a lock file `~/.cc-sessions/test-slots/slot-<n>` held with `flock`. The
 slot is the run's: the command inherits the lock, so a wrapper killed by SIGKILL leaves its run counted, and the next
 waiter stops that orphaned run's scope before taking the slot. When the command ends, its scope is stopped, so a
 process it left behind (a leaked vitest worker) ends with it. A signal to a queued run leaves the queue and exits
