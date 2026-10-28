@@ -444,6 +444,7 @@ describe('the desk (T2e): no second head in the list column, no empty fourth col
     for (const width of [900, 1280, 1920]) {
       stubAt(width);
       mount('/');
+      expect(document.querySelector('.shell-nav section[aria-label="Fleet"]'), `${width}px: the fleet column is mounted`).not.toBeNull();
       expect(doorCounts(), `${width}px, fleet`).toEqual({ wordmark: 1, docs: 1, accounts: 1, settings: 1, inbox: 1, mail: 0, waiting: 0, bell: 1 });
       // The list column's head drops its chrome and, with no count line (T2g) and no lag in this fixture, is not drawn.
       expect(document.querySelector('.shell-nav .fleet-head'), `${width}px`).toBeNull();
@@ -555,6 +556,7 @@ describe('the desk (T2g): one count, in the status bar', () => {
     for (const width of [900, 1280, 1920]) {
       stubAt(width);
       mount('/');
+      expect(document.querySelector('.shell-nav section[aria-label="Fleet"]'), `${width}px: the fleet column is mounted`).not.toBeNull();
       const counts = document.querySelectorAll('.fleet-count, .ins-status-summary');
       expect(counts, `${width}px: count elements`).toHaveLength(1);
       expect(footer().contains(counts[0]!), `${width}px: inside the status bar`).toBe(true);
