@@ -141,11 +141,15 @@ describe('ci.yml and the merge queue (landing-order stage 2, on CI selection\'s 
 
   it('keeps every macOS job, and every job that needs one, off a queue run — and no required prerequisite mentions merge_group', () => {
     const all = jobs(ci());
-    const isMac = (b: string[]): boolean => b.some((l) => /^ {4}runs-on: macos-/.test(l));
+    // A macOS job runs on macOS, or is a call of macos.yml, where the macOS legs live (operator ruling 2026-10-28).
+    const isMac = (b: string[]): boolean => b.some((l) => /^ {4}runs-on: macos-/.test(l) || l === '    uses: ./.github/workflows/macos.yml');
     // Guard the guard: a reader that parsed no macOS job makes the loop vacuous.
     const macs = [...all].filter(([, b]) => isMac(b)).map(([n]) => n);
     expect(macs.length, 'parsed no macOS job at all — this test went blind').toBeGreaterThan(0);
-    // Every job that needs a macOS job, transitively (full-suite needs test-macos).
+    // macos.yml itself never listens for a queue run or a pull request.
+    const macosYml = readFileSync(path.join(ROOT, '.github', 'workflows', 'macos.yml'), 'utf8');
+    expect(topBlock(macosYml, 'on').join('\n')).not.toMatch(/merge_group|pull_request/);
+    // Every job that needs a macOS job, transitively (full-suite needs the `macos` call).
     const needsMac = (id: string, seen = new Set<string>()): boolean => {
       if (seen.has(id)) return false; seen.add(id);
       return needsOf(all.get(id) ?? []).some((n) => macs.includes(n) || needsMac(n, seen));
@@ -162,7 +166,7 @@ describe('ci.yml and the merge queue (landing-order stage 2, on CI selection\'s 
     const req = new Set<string>();
     const walk = (id: string): void => { if (req.has(id)) return; req.add(id); needsOf(all.get(id) ?? []).forEach(walk); };
     ['server', 'test', 'pwa', 'build-pwa'].forEach(walk);
-    expect([...req].sort()).toEqual(['build-pwa', 'deps', 'pwa', 'pwa-shard', 'pwa-static', 'select', 'server', 'server-shard', 'server-typecheck', 'test']);
+    expect([...req].sort()).toEqual(['build-pwa', 'deps', 'fast-plan', 'pwa', 'pwa-shard', 'pwa-static', 'select', 'server', 'server-shard', 'server-typecheck', 'test']);
     for (const id of req) {
       const code = (all.get(id) ?? []).filter((l) => !/^\s*#/.test(l) && !PIPELINE_STEP_LINES.includes(l)).join('\n');
       expect(code, `\`${id}\` mentions merge_group — a required leg skipped by if: reports as PASSING, and the queue would merge an untested tree`)
@@ -188,7 +192,11 @@ describe('ci.yml and the merge queue (landing-order stage 2, on CI selection\'s 
   it('keeps the full shard matrix on the queue path: server-shard is not narrowed by anything but select\'s own outputs, and a queue run is never skipped by the light rule', () => {
     const all = jobs(ci());
     const shard = (all.get('server-shard') ?? []).join('\n');
-    expect(shard, 'server-shard no longer takes its matrix from select').toContain('matrix: ${{ fromJSON(needs.select.outputs.server_matrix) }}');
+    // select's matrix, unless select answered fast — which only an ordinary pull request does (reach.mjs --ask fast
+    // answers false for every other event, ci-reach.test.ts), so a queue run always takes select's full matrix.
+    expect(shard, 'server-shard no longer takes its matrix from select').toContain("matrix: ${{ fromJSON(needs.select.outputs.fast == 'true' && needs.fast-plan.outputs.server_matrix || needs.select.outputs.server_matrix) }}");
+    expect(jobKeys(all.get('fast-plan') ?? [], 'if')[0]).toContain("needs.select.outputs.fast == 'true'");
+    expect((all.get('select') ?? []).join('\n')).toContain('node .github/ci/reach.mjs --ask fast --event "$EVENT"');
     expect(jobKeys(all.get('server-shard') ?? [], 'if')[0], 'server-shard\'s condition must not name an event')
       .not.toMatch(/github\.event_name/);
     // The light-pull-request rule (reach.mjs) is asked only of a pull request, in every job that asks it.

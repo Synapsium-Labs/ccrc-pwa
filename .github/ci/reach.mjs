@@ -18,11 +18,20 @@
 // carries the `full-ci` label or changes `.github/` (the Select step decides
 // both for the server suite; this module repeats the label and the `.github/`
 // rule, which falls out of `.github/` being foreign to nobody).
+//
+// THE FAST RUN (operator ruling 2026-10-28). An ordinary pull request runs only
+// the fast checks: the typechecks, the build, the tests its change can reach and
+// the guard suites. `fastRun` says whether a change is ordinary: it is, unless a
+// file is infrastructure every test shares (select-tests.mjs `infraTrigger`, the
+// one list). A head branch under `train/` or the `full-ci` label arrives here as
+// `--full-label true` and is never fast. The legs in QUEUE_ONLY (the browser
+// suite) run in the merge queue and on main, and skip on a fast pull request.
 
 import { appendFileSync, readFileSync, readdirSync, existsSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
+import { infraTrigger } from './select-tests.mjs';
 
 /** Directory prefixes (with the trailing slash) that a package's tests never read. */
 export const FOREIGN = {
@@ -56,6 +65,36 @@ export function skipsTests(pkg, changed) {
   const reads = Object.hasOwn(READS, pkg) ? READS[pkg] : [];
   const read = (/** @type {string} */ f) => reads.some((r) => (r.endsWith('/') ? `${f}/`.startsWith(r) : f === r));
   return files.every((f) => foreign.some((p) => f.startsWith(p)) && !read(f));
+}
+
+/** The legs a fast pull request leaves to the merge queue and main (operator ruling 2026-10-28). */
+export const QUEUE_ONLY = ['browser'];
+
+/**
+ * Whether a pull request's change may take the fast run: true only when the
+ * change is non-empty and no file is infrastructure every test shares. An empty
+ * change answers false (the full run: the safe direction), and so does a change
+ * `infraTrigger` names, with its reason.
+ * @param {string[]} changed @returns {{ fast: boolean, why: string }}
+ */
+export function fastRun(changed) {
+  const files = changed.map((f) => f.trim()).filter(Boolean);
+  if (files.length === 0) return { fast: false, why: 'no changed file could be read' };
+  for (const f of [...files].sort()) {
+    const reason = infraTrigger(f);
+    if (reason) return { fast: false, why: reason };
+  }
+  return { fast: true, why: 'an ordinary change: the fast checks run, the merge queue runs the full suite' };
+}
+
+/**
+ * A pull request's scope for a package: `skip` for a QUEUE_ONLY leg when the
+ * change takes the fast run, otherwise `scopeOf`'s answer.
+ * @param {string} pkg @param {string[]} changed @returns {'skip'|'changed'|'all'}
+ */
+export function prScope(pkg, changed) {
+  if (QUEUE_ONLY.includes(pkg) && fastRun(changed).fast) return 'skip';
+  return scopeOf(pkg, changed);
 }
 
 /**
@@ -158,16 +197,38 @@ function changedFiles(opt) {
   return execFileSync('git', ['diff', '--name-only', '--no-renames', mb, 'HEAD'], { encoding: 'utf8' }).split('\n');
 }
 
+/** `--ask fast`: writes `fast=true` for a pull request that takes the fast run, `fast=false` otherwise. */
+function askFast(opt) {
+  let fast = false;
+  let why = 'not a pull request: the full run';
+  if (opt.event === 'pull_request' && opt['full-label'] === 'true') {
+    why = 'the full-ci label or a train/ head branch asks for the full run';
+  } else if (opt.event === 'pull_request') {
+    try {
+      ({ fast, why } = fastRun(changedFiles(opt)));
+    } catch (e) {
+      why = `could not diff this change (${e instanceof Error ? e.message : e}); the full run`;
+      console.log(`::warning::${why}`);
+    }
+  }
+  console.log(`fast: ${fast} — ${why}`);
+  if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, `fast=${fast}\n`);
+}
+
 function main() {
   const opt = parseArgs(process.argv.slice(2));
+  if (opt.ask === 'fast') return askFast(opt);
   let skip = false;
   let scope = 'all';
   let why = 'every test runs';
   if (opt.event === 'pull_request' && opt['full-label'] !== 'true') {
     try {
-      scope = scopeOf(opt.pkg, changedFiles(opt));
+      const changed = changedFiles(opt);
+      scope = prScope(opt.pkg, changed);
       skip = scope === 'skip';
-      why = skip ? `no changed file can reach the ${opt.pkg} tests` : `a changed file can reach the ${opt.pkg} tests`;
+      why = skip
+        ? (QUEUE_ONLY.includes(opt.pkg) && fastRun(changed).fast ? `a fast pull request leaves the ${opt.pkg} tests to the merge queue` : `no changed file can reach the ${opt.pkg} tests`)
+        : `a changed file can reach the ${opt.pkg} tests`;
     } catch (e) {
       console.log(`::warning::could not diff this change (${e instanceof Error ? e.message : e}); running the ${opt.pkg} tests`);
     }

@@ -267,28 +267,34 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   full run's shard, on the case that makes a branch between the in-lock recompute and the pin, and green alone); any
   other red is a real break, so re-run the file alone first.
 - **What CI runs** (design `docs/superpowers/specs/2026-09-23-ci-test-selection-design.md`; one pipeline,
-  `ci.yml`, whose trigger picks a mode). **A pull request** is the LIGHT run (operator ruling 2026-10-25): it runs the server tests its change can affect, chosen
-  from a traced dependency map (`.github/ci/select-tests.mjs`) and sharded across runners behind the required
-  summary `test (server)`. The agent, pwa and browser TESTS run only when the change can reach them
+  `ci.yml`, whose trigger picks a mode). **A pull request** is the FAST run (operator ruling 2026-10-28, replacing
+  2026-10-25's light run: builders run scoped tests before pushing and every PR gets two reviews): every typecheck,
+  `build-pwa`, the static checks, the server tests vitest relates to the change from its merge base plus the guard
+  suites that scan the whole tree (censuses, single-definition, deviation-refs, growth-check, ownership, rings,
+  ccd-contexts, dtbd, `typecheck-tests`, and every `session-hook*` suite when `ccd/ccd`, `ccd/session-hook.sh` or
+  `shared/api.ts` changed: `.github/ci/fast-plan.mjs`, the `fast-plan` job), packed by measured duration behind the
+  required summary `test (server)`; and the agent and pwa TESTS only when the change can reach them
   (`.github/ci/reach.mjs`: a package skips only when every changed file is under a directory it never reads, so `agent`
-  skips for `pwa/` and `ui/` only, `pwa` and `browser` for `agent/`, `server/`, `ccd/` and `deploy/` only); every typecheck,
-  `build-pwa`, the static checks, `node-floor` (on exactly the floor's version) and `probe-macos` always run, and every
-  required check name still reports, a skipped test step reading green. `test-macos` runs the same selection, advisory.
-  A change under `.github/` or `server/scripts/`, to any
-  `package.json` or lockfile, `vitest.config.*`, `tsconfig*.json`, `.gitattributes` or `.npmrc`, a missing
-  map, or the **`full-ci` label** on the pull request runs the full suite instead (a label starts no run: add it, then push or close and reopen; GitHub's "Re-run jobs" replays the run with the label set it started with, so it does not pick up `full-ci`). On a `pwa` change that is only `.ts`/`.tsx` the pwa shards run what vitest relates to it plus every pwa test that reads the tree from disk (derived in `reach.mjs`); any other change under `pwa/src` or `ui/src` (CSS, JSON, assets) runs them all. Server tests the map has no entry for, or whose record is older than a change to what it read, are selected only when the pull request touches them; the rest are left to the merge queue, and the select summary counts them. `CCRC_SELECTION` in `ci.yml` reads `enforce` since 2026-09-29 (#211); set back to
-  `shadow`, the selection is only reported and every server test runs. **A merge-queue run** (`merge_group`) is the FULL run (operator ruling 2026-10-25, replacing 2026-09-28's "what a pull
-  request runs"): every server shard, the agent, pwa and browser tests, in a concurrency group of its own, and never the
-  macOS legs or `full-suite`. The queue is the safety net for everything the light run leaves out, so nobody bypasses
-  it: an admin merge that skips the queue lands on the light run only. **A merge
-  to `main`** starts no CI run: an **hourly** `refresh` run (cron plus `workflow_dispatch -f mode=refresh`, one concurrency
+  skips for `pwa/` and `ui/` only, `pwa` for `agent/`, `server/`, `ccd/` and `deploy/` only). The browser suite,
+  `node-floor`, the perf legs and the macOS legs do not run on it. Every required check name still reports, over what
+  ran. A head branch under **`train/`**, the **`full-ci` label**, or a change to shared infrastructure (under
+  `.github/` or `server/scripts/`, any `package.json` or lockfile, `vitest.config.*`, `tsconfig*.json`,
+  `.gitattributes` or `.npmrc`: select-tests.mjs `infraTrigger`) runs the full suite instead, server tests chosen from
+  the traced dependency map (`.github/ci/select-tests.mjs`) as before (a label starts no run: add it, then push or close and reopen; GitHub's "Re-run jobs" replays the run with the label set it started with, so it does not pick up `full-ci`). On a `pwa` change that is only `.ts`/`.tsx` the pwa shards run what vitest relates to it plus every pwa test that reads the tree from disk (derived in `reach.mjs`); any other change under `pwa/src` or `ui/src` (CSS, JSON, assets) runs them all. A server test that reaches a change only through a spawned script or a read file is left to the merge queue, so a fast PR's `plan fast server tests` summary is the list of what ran. `CCRC_SELECTION` in `ci.yml` reads `enforce` since 2026-09-29 (#211); set back to
+  `shadow`, a full-run PR's selection is only reported and every server test runs. **A merge-queue run** (`merge_group`) is the FULL run (operator ruling 2026-10-25, replacing 2026-09-28's "what a pull
+  request runs"): every server shard, the agent, pwa and browser tests and the node floor, in a concurrency group of its own, and never the
+  macOS legs or `full-suite`. The queue is the safety net for everything the fast run leaves out, so nobody bypasses
+  it: an admin merge that skips the queue lands on the fast run only. **The macOS legs** (`test-macos`, `probe-macos`)
+  live in `.github/workflows/macos.yml`, off the merge path: every push to `main` runs them (one run at a time, the newest
+  pending), and the daily run calls them; a red one is a failing run on `main`, never a PR's or a queue entry's. **A merge
+  to `main`** starts no `ci.yml` run: an **hourly** `refresh` run (cron plus `workflow_dispatch -f mode=refresh`, one concurrency
   group so runs coalesce) re-traces the tests every merge since the last refresh affected and updates the map, running
   no test legs and reporting newly failing or timed-out tests as a warning and a job summary, never a red job (D-6769).
   **Daily**, on `main`, every leg runs in full, macOS included, and the map is rebuilt — skipped when `main`'s
   head already has a green `full-suite` job from a trusted run (a daily or manual full run on `main`, or a stable
   gate; never a pull request's). **A promotion to `stable`** needs such a green `full-suite` on the commit:
-  `release-stable.yml`'s `gate` finds one or runs `ci.yml` in full mode first. So a green PR proves its
-  selection, not the whole suite; the merge queue runs the whole server suite before a merge, and the daily run and the stable gate catch the rest.
+  `release-stable.yml`'s `gate` finds one or runs `ci.yml` in full mode first. So a green PR proves its fast checks,
+  not the whole suite; the merge queue runs the whole Linux suite before a merge, and the daily run and the stable gate catch the rest.
 - **Node floor `>=22.16.0`, identical across the three engines**, pinned by `server/test/node-floor.test.ts`
   (server-only; CI's `node-floor` job runs it on exactly 22.16.0). Two reasons: `server/src/coord/db.ts` imports
   `node:sqlite` unconditionally (below 22.13 the server fails to boot), and below 22.16 that `node:sqlite` has no
