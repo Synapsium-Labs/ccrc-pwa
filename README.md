@@ -6027,7 +6027,11 @@ A paused project is not measured, and its `enabled` is removed, so a pause stops
 
 **Read-only, by code.** The fetch and every `merge-tree` object go into a per-tick bare scratch repository under
 the temp root. That repository borrows the project's object store as an alternate. It is removed on every exit path,
-SIGTERM included, and no child is left running. The probe changes no content, ref, config, hook or object set of a
+SIGTERM included, and no child is left running: a SIGTERM or SIGINT never raises where it lands. The handler records
+the signal and SIGKILLs the process group of the child in flight; no child is started after it, and the interruption
+is raised only at fixed checkpoints (after each measuring child, before the pre-pass, before each project and after
+the last). So the scratch's removal, the stale sweep and every file write run to their end, and the tick exits with
+128 plus the signal's number. The probe changes no content, ref, config, hook or object set of a
 project repository. The one thing it does touch is modification times: when `merge-tree` produces an object the
 project already has, git freshens that object's loose file or pack mtime instead of writing a copy. Every such object
 is one the project already holds. Three layers hold this:

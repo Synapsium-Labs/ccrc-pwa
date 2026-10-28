@@ -34,15 +34,23 @@
 # an object already in the project (its loose file's or pack's mtime) instead of writing a copy. No content, ref,
 # config, hook or object set changes, and every object it touches is one the project already holds. It holds the
 # regular file `.ccd-land-probe-scratch`, and it is removed on every exit path, a SIGTERM and a failed closing
-# rewrite included: the closing path catches SystemExit and KeyboardInterrupt too, kills the process group of the
-# child in flight and waits for it, and only then removes the directory, so no helper is still writing into it. A
-# signal is blocked from just before a child is forked until it is recorded, so it never lands between the two. A
-# crashed tick's scratch is cleared by the next tick, but only a real, owned directory holding a regular sentinel
-# file and older than one hour.
+# rewrite included. A SIGTERM or SIGINT never raises where it lands: the handler records the first signal and
+# SIGKILLs the process group of the child in flight, and the interruption (SystemExit, 128 plus the signal's number)
+# is raised only at fixed checkpoints: after each child the measuring code starts returns, before the pre-pass,
+# before each project, and once after the projects loop. Once a signal is recorded no child is started. So the closing
+# path, the scratch's making and removal, the stale sweep and every file write run to their end: the closing path
+# kills and reaps any child still in flight, and only then removes the directory, so no helper is still writing into
+# it. A signal is blocked from just before a child is forked until it is recorded, so the handler always finds it. A
+# crashed (SIGKILLed) tick's scratch is cleared by the next tick, but only a real, owned directory holding a regular
+# sentinel file and older than one hour.
+#
+# TEST-ONLY: CCD_LAND_PROBE_SELFSIGNAL=<point> makes the probe send itself one SIGTERM at a named point (the
+# signal-path cases of ccd-land-probe.test.ts). Nothing in the tree sets it; unset, every point is inert.
 #
 # THE TICK, in order (every step after the first is bounded by the tick budget):
 #   1. The bash head: the knobs, the global pause (exit 0), the tool check, the lock.
-#   2. SIGTERM and SIGINT become SystemExit; a stale scratch of an earlier tick is cleared.
+#   2. SIGTERM and SIGINT are recorded, never raised where they land (the handler kills the child in flight); a
+#      stale scratch of an earlier tick is cleared. The tick ends at the next checkpoint, with 128 plus the signal.
 #   3. THE `enabled` PRE-PASS, before any project is measured: one pass over every conf and every directory under
 #      $REG/landing/ writes `enabled` for a valid conf with lineage=on, an unpaused project and a real main checkout,
 #      and removes it in every other case (an invalid or missing conf, lineage=off, paused, not a checkout, a
@@ -215,7 +223,12 @@ PROJECT_DIR = None   # the project repository: the one directory the 'project' c
 SCRATCH = None       # this tick's scratch repository: the one directory the 'scratch' calls name
 CUR = None           # the project budget in force
 TICK = None          # the whole tick's budget
-CHILD = None         # the child in flight, for the finally that kills it
+CHILD = None         # the child in flight: on_signal kills its process group; run_child alone clears it
+SIGNALLED = None     # the first SIGTERM or SIGINT's number, recorded by on_signal and raised only by checkpoint
+CLOSING = False      # True in a project's fallback and closing path: no checkpoint raises there, so they run to their end
+# TEST-ONLY. CCD_LAND_PROBE_SELFSIGNAL=<point> makes the probe send itself one SIGTERM at the named point (see
+# selfsignal); only ccd-land-probe.test.ts sets it. Unset, as the unit and the head leave it, every point is inert.
+SELFSIGNAL = os.environ.get('CCD_LAND_PROBE_SELFSIGNAL') or None
 
 
 class ProbeRefused(Exception):
@@ -322,22 +335,65 @@ def kill_group(proc):
 
 
 def kill_inflight():
+    """The fallback's and the closing path's kill of a child still in flight: its group killed and the child reaped
+    first, CHILD let go only then, so a signal meanwhile still finds it (run_child clears CHILD on every return, so this
+    is a guard)."""
     global CHILD
-    proc, CHILD = CHILD, None
+    proc = CHILD
     if proc is not None:
         kill_group(proc)
+    CHILD = None
 
 
-def unblock_signals():
-    """Runs in the forked child before the exec: it does not inherit the parent's blocked SIGTERM and SIGINT."""
+def selfsignal(point):
+    """TEST-ONLY: one SIGTERM to this process at the point CCD_LAND_PROBE_SELFSIGNAL names, the first time it is
+    reached. os.kill runs the handler before it returns, so the signal lands exactly here. Inert when the variable is
+    unset."""
+    global SELFSIGNAL
+    if SELFSIGNAL is not None and SELFSIGNAL == point:
+        SELFSIGNAL = None
+        log('test-only self-signal at ' + point)
+        os.kill(os.getpid(), signal.SIGTERM)
+
+
+def on_signal(signum, frame):
+    """SIGTERM and SIGINT: record the first signal, and SIGKILL the process group of the child in flight unless it is
+    already reaped. It never raises, waits, reaps or clears CHILD (run_child reaps it), so wherever it runs, the code
+    it interrupts runs on; the measuring code raises the interruption at its checkpoints."""
+    global SIGNALLED
+    if SIGNALLED is None:
+        SIGNALLED = signum
+    proc = CHILD
+    if proc is not None and proc.returncode is None:
+        selfsignal('killpg')   # test-only: a second signal at the kill
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except OSError:
+            pass
+
+
+def checkpoint():
+    """The one place the interruption is raised: SystemExit(128 + the recorded signal), a BaseException, so every
+    `except Exception` passes it. Called after each child the measuring code starts returns, before the pre-pass, before
+    each project and after the projects loop; a no-op in a project's fallback and closing path (CLOSING)."""
+    if SIGNALLED is not None and not CLOSING:
+        raise SystemExit(128 + SIGNALLED)
+
+
+def child_signals():
+    """Runs in the forked child before the exec: SIGTERM and SIGINT back to their defaults FIRST, so the parent's
+    handler never runs in the child, then unblocked (the child does not inherit the parent's spawn mask)."""
+    signal.signal(signal.SIGTERM, signal.SIG_DFL)
+    signal.signal(signal.SIGINT, signal.SIG_DFL)
     signal.pthread_sigmask(signal.SIG_SETMASK, ())
 
 
 def run_child(argv, env, timeout):
-    """Run one child to its deadline, capped at the project budget that remains. rc None: a timeout, a spent budget
-    or a spawn failure. The child leads a session of its own, so its deadline kills every process it started. SIGTERM
-    and SIGINT are blocked from just before the fork until CHILD is set, so a signal never lands between the two (it is
-    delivered at the unblock, with the child recorded for the finally that kills it)."""
+    """Run one child to its deadline, capped at the project budget that remains; never raises. rc None: a timeout, a
+    spent budget, a recorded signal (no child is started once one is) or a spawn failure (spawn true). The child leads a
+    session of its own, so its deadline kills every process it started. SIGTERM and SIGINT are blocked from before the
+    signal test until CHILD is set, so a signal never lands between the fork and the record (it is delivered at the
+    unblock, and on_signal finds the child to kill)."""
     global CHILD
     t = float(timeout)
     if CUR is not None:
@@ -346,17 +402,20 @@ def run_child(argv, env, timeout):
         return Result(None, '')
     held = signal.pthread_sigmask(signal.SIG_BLOCK, SIGNALS)
     try:
+        if SIGNALLED is not None:
+            return Result(None, '')
         try:
             proc = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                                    env=env, start_new_session=True, close_fds=True, preexec_fn=unblock_signals)
-        except OSError:
+                                    env=env, start_new_session=True, close_fds=True, preexec_fn=child_signals)
+        except (OSError, subprocess.SubprocessError):
             return Result(None, '', True)
+        selfsignal('spawn')   # test-only: a signal between the fork and the record, held by the mask
         CHILD = proc
     finally:
         signal.pthread_sigmask(signal.SIG_SETMASK, held)
     try:
         out, _ = proc.communicate(timeout=t)
-    except subprocess.TimeoutExpired:
+    except Exception:   # the deadline, or anything else: the group is killed and the child reaped
         kill_group(proc)
         CHILD = None
         return Result(None, '')
@@ -431,6 +490,7 @@ def merge_answer(a, b, tree=False):
     if CUR is not None and CUR.remaining() <= 0:
         return {'state': 'unmeasured', 'why': 'budget'}
     r = git_ro('scratch', ['merge-tree', '--write-tree', '--name-only', '--no-messages', a, b], GIT_T)
+    checkpoint()
     if r.rc is None:
         return {'state': 'unmeasured', 'why': 'timeout'}
     if r.rc not in (0, 1):
@@ -472,6 +532,7 @@ def walk_lineage(tip, base, steps, budget):
         if budget.remaining() <= 0:
             return done('unmeasured', 'unmeasured', 'budget')
         r = git_ro('scratch', ['rev-list', '--parents', '-n', '1', c], GIT_T)
+        checkpoint()
         if r.rc != 0:
             return done('unmeasured', 'unmeasured', why_of(r))
         fields = r.out.split()
@@ -481,6 +542,7 @@ def walk_lineage(tip, base, steps, budget):
             return done('not-a-merge')
         p1, p2 = fields[1], fields[2]
         r = git_ro('scratch', ['merge-base', '--is-ancestor', p2, base], GIT_T)
+        checkpoint()
         if r.rc == 1:
             return done('second-parent-not-on-base')
         if r.rc != 0:
@@ -491,6 +553,7 @@ def walk_lineage(tip, base, steps, budget):
         if ans['state'] != 'clean':
             return done('unmeasured', 'unmeasured', ans['why'])
         r = git_ro('scratch', ['rev-parse', '--verify', '-q', c + '^{tree}'], GIT_T)
+        checkpoint()
         if r.rc != 0 or not HEX40.fullmatch(r.out.strip()):
             return done('unmeasured', 'unmeasured', why_of(r) if r.rc != 0 else 'no-tree')
         if r.out.strip() != ans['tree']:
@@ -645,6 +708,7 @@ def read_checks(slug, base_ref, sha):
         if CUR is not None and CUR.remaining() <= 0:
             return None, 'budget'
         r = gh_get(path, paginate)
+        checkpoint()
         last[0] = r
         if r.rc != 0:
             spent = r.rc is None and CUR is not None and CUR.remaining() <= 0
@@ -732,7 +796,9 @@ def write_json(dirpath, name, doc):
         return
     tmp = None
     try:
-        fd, tmp = tempfile.mkstemp(dir=dirpath, prefix='.lp.')
+        made = tempfile.mkstemp(dir=dirpath, prefix='.lp.')
+        selfsignal('mkstemp')   # test-only: a signal between the file's creation and its binding to tmp
+        fd, tmp = made
         with os.fdopen(fd, 'w', encoding='utf-8') as f:
             json.dump(doc, f, separators=(',', ':'))
             f.write('\n')
@@ -826,6 +892,7 @@ def qualifying(rows):
         except ProbeRefused:
             log('lineage-skip: a registry row names a branch the git door refuses')
             continue
+        checkpoint()   # a no-op when the fallback is the caller (CLOSING)
         if r.rc is None:
             undecided.append((rid, branch))
         elif r.rc == 0 and HEX40.fullmatch(r.out.strip()):
@@ -875,6 +942,7 @@ def make_scratch():
     (a directory with no sentinel is never swept), so SCRATCH, which the caller assigns only on success, is the only
     thing that ever needs removing."""
     d = tempfile.mkdtemp(prefix='ccd-land-probe.', dir=TMP_ROOT)
+    selfsignal('mkdtemp')   # test-only: a signal between mkdtemp and the sentinel's try
     try:
         fd = os.open(d + '/' + SENTINEL, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
         try:
@@ -932,6 +1000,7 @@ def clear_stale_scratch():
                 continue
         except OSError:
             continue
+        selfsignal('stale-sweep')   # test-only: a signal at the stale scratch's removal
         shutil.rmtree(p, ignore_errors=True)
         log('cleared a stale scratch')
 
@@ -953,6 +1022,7 @@ def store_counts():
 def open_heads(slug, base):
     """(heads, cut, ok, child): the open same-repository PRs of the base, newest PR number first; child is the gh result."""
     r = gh_pr_list(slug, base)
+    checkpoint()
     if r.rc != 0:
         return [], False, False, r
     try:
@@ -987,6 +1057,7 @@ def fetch_into_scratch(base_ref, heads):
     global SCRATCH
     SCRATCH = make_scratch()
     i = git_ro('scratch', ['init', '-q', '--bare', SCRATCH], GIT_T)
+    checkpoint()
     if i.rc != 0:
         return cut_why(i, 'fetch-failed'), None, i
     try:
@@ -1000,17 +1071,20 @@ def fetch_into_scratch(base_ref, heads):
     except OSError:
         return 'fetch-failed', None, None
     u = git_ro('project', ['ls-remote', '--get-url', 'origin'], GIT_T)
+    checkpoint()
     url = u.out.strip() if u.rc == 0 else ''
     if not url or url.startswith('-'):
         return cut_why(u, 'fetch-failed'), None, u
     specs = ['+refs/heads/%s:refs/probe/base' % base_ref]
     specs += ['+refs/pull/%d/head:refs/probe/pull/%d' % (h['pr'], h['pr']) for h in heads]
     f = git_ro('scratch', ['fetch', '--no-tags', '--no-write-fetch-head', '--no-recurse-submodules', '--', url] + specs, FETCH_T)
+    checkpoint()
     if f.rc is None:
         return cut_why(f, 'fetch-timeout'), None, f
     if f.rc != 0:
         return 'fetch-failed', None, f
     b = git_ro('scratch', ['rev-parse', '--verify', '-q', 'refs/probe/base^{commit}'], GIT_T)
+    checkpoint()
     if b.rc != 0 or not HEX40.fullmatch(b.out.strip()):
         return cut_why(b, 'fetch-failed'), None, b
     return None, b.out.strip(), None
@@ -1138,12 +1212,16 @@ def finish_probe(ldir, doc, store, interrupted):
     """The probe's closing rewrite (store.after, scratch.sizeKiB, elapsedMs), run from probe_project's finally once the
     first `probe` write happened, so the record is complete however the tick ended. What was measured stands (state, why,
     heads, pairs, at are not touched); each figure that cannot be measured stays null. A tick being terminated measures
-    nothing more (no child is started), and writes the record as it is."""
-    kib = None
-    if not interrupted:
-        store['after'] = store_counts()
+    nothing more (no child is started), and writes the record as it is. A signal recorded before or during the rewrite
+    makes it an interrupted record too (store.after and scratch.sizeKiB null, R7), never one of half-measured figures."""
+    after, kib = None, None
+    if not interrupted and SIGNALLED is None:
+        after = store_counts()
         if SCRATCH is not None:
             kib = scratch_kib(SCRATCH)
+    if SIGNALLED is not None:
+        after, kib = None, None
+    store['after'] = after
     doc['store'] = store
     doc['scratch'] = {'sizeKiB': kib}
     doc['elapsedMs'] = int(CUR.spent() * 1000)
@@ -1163,7 +1241,7 @@ def write_failed(project, ldir, base_ref, rows, store, fail, child):
 
 
 def probe_project(project, conf):
-    global PROJECT_DIR, SCRATCH, CUR
+    global PROJECT_DIR, SCRATCH, CUR, CLOSING
     if not ensure_dir(LANDING, 'landing') or not ensure_dir(LANDING + '/' + project, project):
         return
     ldir = LANDING + '/' + project
@@ -1177,8 +1255,10 @@ def probe_project(project, conf):
     interrupted = False
     try:
         store['before'] = store_counts()
+        checkpoint()
         rows = project_rows(project)
         r = git_ro('project', ['config', '--get', 'remote.origin.url'], GIT_T)
+        checkpoint()
         slug = repo_slug(r.out.rstrip('\n')) if r.rc == 0 else None
         heads, heads_cut, gh_ok = [], False, False
         base_sha = None
@@ -1205,10 +1285,14 @@ def probe_project(project, conf):
             write_json(ldir, 'main-health', health_doc(project, base_sha, verdict))
             guarded_lineage(project, ldir, rows, base_sha, None)
     except BaseException as e:
-        interrupted = not isinstance(e, Exception)   # a SIGTERM or a ^C: measure nothing more
+        CLOSING = True
+        # A checkpoint's SystemExit, or an exception with a signal recorded: measure nothing more.
+        interrupted = not isinstance(e, Exception) or SIGNALLED is not None
         if first is None and not interrupted:
             # An exception or a refusal before the first write (a scratch or alternates failure, a refused refspec):
-            # the old files must not outlive it as if they were this tick's.
+            # the old files must not outlive it as if they were this tick's. The child an exception left in flight is
+            # killed before the fallback starts one of its own.
+            kill_inflight()
             try:
                 first = write_failed(project, ldir, base_ref, rows if rows is not None else project_rows(project), store,
                                      ('fetch-failed', 'fetch-failed', 'fetch-failed'), None)
@@ -1216,29 +1300,24 @@ def probe_project(project, conf):
                 log('project-error %s: the unmeasured records were not written (%s)' % (project, type(e2).__name__))
         raise
     finally:
-        # The closing path: it catches SystemExit and KeyboardInterrupt too, so a SIGTERM that lands in the closing
-        # rewrite still reaches the cleanup below, which kills the child in flight (the count-objects too) and
-        # removes the scratch with SIGTERM and SIGINT held.
-        held = None
-        try:
-            kill_inflight()
-            if first is not None:
+        # The closing path. Nothing in it raises a signal: on_signal only records it and kills the child in flight
+        # (the closing count-objects too), and no checkpoint raises while CLOSING. So it always runs to its end: the
+        # rewrite (an interrupted record once a signal is recorded), the kill of any child in flight, and only then
+        # the scratch's removal. A signal that lands here is raised by main's checkpoint after the projects loop.
+        CLOSING = True
+        kill_inflight()
+        if first is not None:
+            try:
                 finish_probe(ldir, first, store, interrupted)
-        except BaseException as e:
-            if not isinstance(e, Exception):
-                held = e
-            log('project-error %s: the closing probe rewrite stopped (%s)' % (project, type(e).__name__))
-        mask = signal.pthread_sigmask(signal.SIG_BLOCK, SIGNALS)
-        try:
-            kill_inflight()
-            if SCRATCH is not None:
-                remove_scratch(SCRATCH)
-                SCRATCH = None
-            PROJECT_DIR = None
-        finally:
-            signal.pthread_sigmask(signal.SIG_SETMASK, mask)
-        if held is not None:
-            raise held
+            except Exception as e:
+                selfsignal('except-log')   # test-only: a signal in the except body, at its log
+                log('project-error %s: the closing probe rewrite stopped (%s)' % (project, type(e).__name__))
+        kill_inflight()
+        if SCRATCH is not None:
+            remove_scratch(SCRATCH)
+            SCRATCH = None
+        PROJECT_DIR = None
+        CLOSING = False
 
 
 def is_paused(ldir):
@@ -1296,16 +1375,13 @@ def reconcile_enabled(projects):
             remove_own(LANDING + '/' + n, 'enabled')
 
 
-def on_signal(signum, frame):
-    raise SystemExit(128 + signum)
-
-
 def main():
     global TICK
     TICK = Budget(TICK_BUDGET)
     signal.signal(signal.SIGTERM, on_signal)
     signal.signal(signal.SIGINT, on_signal)
     clear_stale_scratch()
+    checkpoint()
     try:
         entries = sorted(os.listdir(CONF_DIR))
     except OSError:
@@ -1313,7 +1389,9 @@ def main():
     projects = [e[:-len('.conf')] for e in entries if e.endswith('.conf') and PROJECT_RE.fullmatch(e[:-len('.conf')])]
     reconcile_enabled(projects)
     for project in projects:
+        checkpoint()
         handle_project(project)
+    checkpoint()   # a signal after the last project's last checkpoint (in its closing rewrite, say) still ends the tick
     return 0
 
 

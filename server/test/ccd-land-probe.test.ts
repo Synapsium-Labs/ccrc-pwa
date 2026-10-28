@@ -22,6 +22,8 @@ afterEach(() => {
 
 const tmpLeft = (): string[] => fs.readdirSync(fx.tmp).filter((n) => n.startsWith('ccd-land-probe.'));
 const ls = (dir: string): string[] => (fs.existsSync(dir) ? fs.readdirSync(dir).sort() : []);
+/** A `.lp.*` temp file of write_json left in the landing directory or the project's. */
+const landLeft = (): string[] => [path.join(fx.reg, 'landing'), fx.landDir].flatMap((d) => ls(d).filter((n) => n.startsWith('.lp.')));
 
 const run = (id: number, name: string, status: string, conclusion: string | null, app?: number): CheckRun =>
   ({ id, name, status, conclusion, ...(app === undefined ? {} : { app: { id: app } }) });
@@ -210,8 +212,10 @@ describe('ccd-land-probe: the radar', () => {
     };
     expect(await until(() => writerLog() !== null, 20_000), 'the fetch never started').toBe(true);
     run.child.kill('SIGTERM');
-    await run.done;
+    expect((await run.done).status).toBe(143);
     expect(tmpLeft()).toEqual([]);
+    // The killed fetch is never read as a failed one: the interruption is raised as its child returns, before any write.
+    expect(fx.exists('probe')).toBe(false);
     const pid = Number(fs.readFileSync(pidFile, 'utf8').trim());
     expect(await until(() => pidGone(pid), 5000), 'the writer outlived the probe').toBe(true);
     // The scratch stays gone: nothing is still writing into where it was.
@@ -1131,8 +1135,14 @@ describe('ccd-land-probe: the exit paths leave nothing behind (fix round 1, revi
       expect(done.status).toBe(143);
       expect(tmpLeft()).toEqual([]);
       expect(await until(() => pidGone(wp) && pidGone(sp), 5000), 'the count-objects child outlived the probe').toBe(true);
-      // The first write of the record stands: this tick measured, and the rewrite it was cut from is not required to finish.
-      expect(fx.readJson('probe')).toMatchObject({ state: 'measured' });
+      expect(landLeft(), 'a .lp.* temp file').toEqual([]);
+      // What this tick measured stands, and the rewrite the signal landed in still ends: an interrupted record (R7),
+      // never four null counts beside a measured scratch size (fix round 2, review 1125 item 1).
+      const p = fx.readJson('probe');
+      expect(p).toMatchObject({ state: 'measured' });
+      expect(p.store.after).toBeNull();
+      expect(p.scratch.sizeKiB).toBeNull();
+      expect(p.store.before).not.toBeNull();
     } finally {
       run.child.kill('SIGKILL');
       reap(wp);
@@ -1191,6 +1201,249 @@ describe('ccd-land-probe: the exit paths leave nothing behind (fix round 1, revi
     expect(fx.readJson('probe')).toMatchObject({ state: 'unmeasured', why: 'fetch-failed', heads: [], pairs: [] });
     expect(fx.readJson('main-health')).toMatchObject({ state: 'unmeasured', why: 'fetch-failed', required: [] });
     expect(fx.readJson('lane-a-proj-a-alpha.lineage')).toMatchObject({ state: 'unmeasured', why: 'fetch-failed', chain: [] });
+  });
+});
+
+describe('ccd-land-probe: a signal is recorded where it lands and raised only at a checkpoint (fix round 2, review 1125 items 1-4)', () => {
+  // Each case sends the probe a SIGTERM at one named point (CCD_LAND_PROBE_SELFSIGNAL, test-only) and ends with the
+  // ruling's four: no scratch, no .lp.* file, no live child, exit 143. Each has a single project, so each also holds the
+  // checkpoint after the projects loop. The git wrapper records every git child's pid (and the pids it starts), the
+  // stub forge its own.
+  let pidLog = '';
+  const trackGit = (body = ''): void => {
+    pidLog = path.join(h.home, 'git-pids');
+    fx.wrapGit(`echo $$ >> '${pidLog}'\n${body}`);
+  };
+  const childPids = (): number[] =>
+    [...(fs.existsSync(pidLog) ? fs.readFileSync(pidLog, 'utf8').split('\n').filter(Boolean).map(Number) : []), ...fx.ghPids()];
+  /** Stop what a mutant may leave behind: each recorded pid leads its own process group. */
+  const reapAll = (): void => {
+    for (const pid of childPids()) if (!pidGone(pid)) { try { process.kill(-pid, 'SIGKILL'); } catch { try { process.kill(pid, 'SIGKILL'); } catch { /* gone */ } } }
+  };
+  beforeEach(() => { pidLog = ''; });
+  afterEach(() => reapAll());
+  type RunLike = { status: number | null; stderr: string };
+  const SIG = (point: string): NodeJS.ProcessEnv => ({ CCD_LAND_PROBE_SELFSIGNAL: point });
+  /** The ruling's four, and (point given) the named point fired: the self-signal says so in the journal. */
+  async function endsClean(r: RunLike, point?: string): Promise<void> {
+    if (point !== undefined) expect(r.stderr).toContain(`test-only self-signal at ${point}`);
+    expect(r.status).toBe(143);
+    expect(tmpLeft(), 'a scratch').toEqual([]);
+    expect(landLeft(), 'a .lp.* temp file').toEqual([]);
+    const pids = childPids();
+    expect(await until(() => pids.every(pidGone), 5000), `a live child among ${pids.join(',')}`).toBe(true);
+  }
+
+  it('a SIGTERM in the closing path\'s except body, at its log (A1b), still removes the scratch', { timeout: 60_000 }, async () => {
+    fx.addHead(1, { 'a.txt': 'a\n' });
+    fx.conf(fx.project, '');
+    trackGit();
+    // The closing rewrite raises, so its except body runs; the signal lands at that body's log.
+    const r = fx.runPatched('def bad(*a):\n    raise RuntimeError("planted")\nns["scratch_kib"] = bad', SIG('except-log'));
+    expect(r.stderr).toContain('project-error proj-a: the closing probe rewrite stopped (RuntimeError)');
+    await endsClean(r, 'except-log');
+  });
+
+  it('a SIGTERM right after mkdtemp (A4a) leaves no directory', { timeout: 60_000 }, async () => {
+    fx.addHead(1, { 'a.txt': 'a\n' });
+    fx.conf(fx.project, '');
+    trackGit();
+    const r = fx.run(SIG('mkdtemp'));
+    await endsClean(r, 'mkdtemp');
+  });
+
+  it('a SIGTERM right after mkstemp (A4c) leaves no temp file, and the record is an interrupted one', { timeout: 60_000 }, async () => {
+    fx.addHead(1, { 'a.txt': 'a\n' });
+    fx.conf(fx.project, '');   // lineage off: the first write is the probe's own, while the scratch stands
+    trackGit();
+    const r = fx.run(SIG('mkstemp'));
+    await endsClean(r, 'mkstemp');
+    const p = fx.readJson('probe');
+    expect(p).toMatchObject({ state: 'measured' });
+    expect(p.store.after).toBeNull();
+    expect(p.scratch.sizeKiB).toBeNull();
+    // No child is started once the signal is recorded: the first forge read was refused, and its checkpoint raised.
+    expect(fx.ghCalls().filter((c) => c.startsWith('api'))).toEqual([]);
+    expect(fx.exists('main-health')).toBe(false);
+  });
+
+  it('a SIGTERM during the before-first-write fallback lets it finish its records, then ends the tick', { timeout: 90_000 }, async () => {
+    fx.addHead(1, { 'a.txt': 'a\n' });
+    fx.addRow('lane-a-proj-a-alpha', 'ws/alpha');
+    fx.conf(fx.project, 'lineage=on\n');
+    expect(fx.run().status).toBe(0);
+    expect(fx.readJson('lane-a-proj-a-alpha.lineage').state).toBe('measured');
+    trackGit();
+    // An exception before the first write starts the fallback; the signal lands as it builds main-health.
+    const r = fx.runPatched([
+      'import os, signal',
+      'def bad(*a):',
+      '    raise RuntimeError("planted")',
+      'ns["fetch_into_scratch"] = bad',
+      'orig = ns["unmeasured_health"]',
+      'def health(*a):',
+      '    os.kill(os.getpid(), signal.SIGTERM)',
+      '    return orig(*a)',
+      'ns["unmeasured_health"] = health',
+    ].join('\n'));
+    await endsClean(r);
+    expect(fx.readJson('main-health')).toMatchObject({ state: 'unmeasured', why: 'fetch-failed' });
+    // The fallback's lineage pass ran to its end: the row's read was refused (no child after the signal), so its old
+    // file is rewritten unmeasured with an unknown tip, never left standing as this tick's.
+    expect(fx.readJson('lane-a-proj-a-alpha.lineage')).toMatchObject({ state: 'unmeasured', why: 'fetch-failed', tip: null });
+  });
+
+  it('an exception that follows a recorded signal is an interrupted tick: no fallback runs, and the old records stand', { timeout: 90_000 }, async () => {
+    fx.addHead(1, { 'a.txt': 'a\n' });
+    fx.conf(fx.project, '');
+    expect(fx.run().status).toBe(0);
+    const before = fx.readJson('probe');
+    trackGit();
+    // The signal is recorded inside the scratch's making; the exception is raised before the next checkpoint.
+    const r = fx.runPatched([
+      'import os, signal',
+      'orig = ns["make_scratch"]',
+      'def bad():',
+      '    d = orig()',
+      '    os.kill(os.getpid(), signal.SIGTERM)',
+      '    ns["SCRATCH"] = d',
+      '    raise RuntimeError("planted")',
+      'ns["make_scratch"] = bad',
+    ].join('\n'));
+    await endsClean(r);
+    expect(r.stderr).not.toContain('unmeasured proj-a probe');
+    expect(fx.readJson('probe')).toEqual(before);
+  });
+
+  it('a SIGTERM at the stale sweep\'s removal (A4b) removes the stale scratch entirely, and no project is measured', { timeout: 60_000 }, async () => {
+    fx.addHead(1, { 'a.txt': 'a\n' });
+    fx.conf(fx.project, '');
+    trackGit();
+    const stale = path.join(fx.tmp, 'ccd-land-probe.stale');
+    fs.mkdirSync(path.join(stale, 'objects', 'pack'), { recursive: true });
+    fs.writeFileSync(path.join(stale, '.ccd-land-probe-scratch'), 's\n');
+    for (const n of ['a', 'b', 'c']) fs.writeFileSync(path.join(stale, 'objects', 'pack', n), n);
+    const old = new Date(Date.now() - 2 * 3600_000);
+    fs.utimesSync(stale, old, old);
+    const r = fx.run(SIG('stale-sweep'));
+    expect(fs.existsSync(stale), 'the stale scratch, or what is left of it').toBe(false);
+    expect(r.stderr).toContain('cleared a stale scratch');
+    await endsClean(r, 'stale-sweep');
+    // The checkpoint before the pre-pass raised: nothing was measured or written.
+    expect(fx.exists('probe')).toBe(false);
+    expect(childPids()).toEqual([]);
+  });
+
+  it('a second SIGTERM at the handler\'s kill of the child in flight (A2) leaves no live child', { timeout: 60_000 }, async () => {
+    fx.addHead(1, { 'a.txt': 'a\n' });
+    fx.conf(fx.project, '');
+    // The fetch starts a helper, then signals the probe itself; the handler sends the second signal at its killpg.
+    trackGit([
+      'case " $* " in *" fetch "*)',
+      `  sleep 100 & echo $! >> '${path.join(h.home, 'git-pids')}'`,
+      '  kill -TERM $PPID; wait;;',
+      'esac',
+    ].join('\n'));
+    const t0 = Date.now();
+    const r = fx.run(SIG('killpg'));
+    expect(Date.now() - t0, 'the fetch was killed, not waited out').toBeLessThan(30_000);
+    await endsClean(r, 'killpg');
+    expect(childPids().length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('a SIGTERM between the fork and the record of the child (F1) is held to the unblock, and kills that child', { timeout: 120_000 }, async () => {
+    fx.addHead(1, { 'a.txt': 'a\n' });
+    fx.conf(fx.project, '');
+    // The first child (store.before's count-objects) would hang for its whole 60 s deadline unless it is killed.
+    trackGit([
+      'case " $* " in *" count-objects "*)',
+      `  sleep 100 & echo $! >> '${path.join(h.home, 'git-pids')}'; wait;;`,
+      'esac',
+    ].join('\n'));
+    const t0 = Date.now();
+    const r = fx.run({ ...SIG('spawn'), CCD_LAND_PROBE_GIT_TIMEOUT: '60' });
+    expect(Date.now() - t0, 'the handler found no child to kill, and the deadline ended it').toBeLessThan(30_000);
+    await endsClean(r, 'spawn');
+    expect(fx.exists('probe')).toBe(false);
+  });
+
+  // A popen spy (runPatched) that hands the forge's `pr list` child a preexec of its own, around the probe's.
+  const prListPreexec = (body: string): string => [
+    'import os, signal',
+    'real = ns["subprocess"].Popen',
+    'def spy(argv, *a, **k):',
+    '    if argv[1:3] == ["pr", "list"]:',
+    '        mine = k["preexec_fn"]',
+    body,
+    '    return real(argv, *a, **k)',
+    'ns["subprocess"].Popen = spy',
+  ].join('\n');
+
+  it('the forked child resets SIGTERM and SIGINT to their defaults before it unblocks them (A6): a signal held for it kills it', { timeout: 90_000 }, () => {
+    fx.addHead(1, { 'a.txt': 'a\n' });
+    fx.conf(fx.project, '');
+    for (const [name, rc] of [['SIGTERM', -15], ['SIGINT', -2]] as const) {
+      // The signal is sent to the child before the probe's preexec runs, so it is pending under the inherited mask;
+      // the probe's preexec must deliver it to the default action, never to the parent's handler.
+      const r = fx.runPatched(prListPreexec([
+        '        def pre():',
+        `            os.kill(os.getpid(), signal.${name})`,
+        '            mine()',
+        '        k["preexec_fn"] = pre',
+      ].join('\n')));
+      expect(r.status, name).toBe(0);
+      expect(r.stderr, name).toContain(`unmeasured proj-a probe gh-failed rc=${rc}`);
+      expect(fx.readJson('probe'), name).toMatchObject({ state: 'unmeasured', why: 'gh-failed' });
+    }
+  });
+
+  it('a preexec that fails is a spawn failure (A6): the forge child reads spawn-failed, and the project goes on', { timeout: 90_000 }, () => {
+    fx.addHead(1, { 'a.txt': 'a\n' });
+    fx.conf(fx.project, '');
+    const r = fx.runPatched(prListPreexec([
+      '        def pre():',
+      '            raise RuntimeError("planted")',
+      '        k["preexec_fn"] = pre',
+    ].join('\n')));
+    expect(r.status).toBe(0);
+    expect(r.stderr).toContain('unmeasured proj-a probe gh-failed spawn-failed');
+    expect(r.stderr).not.toContain('project-error');
+    expect(fx.readJson('probe')).toMatchObject({ state: 'unmeasured', why: 'gh-failed' });
+    expect(fx.readJson('main-health').project).toBe('proj-a');   // the base was still fetched, and its checks read
+  });
+
+  it('the before-first-write fallback kills the child in flight before it starts one of its own (A3)', { timeout: 90_000 }, async () => {
+    fx.addHead(1, { 'a.txt': 'a\n' });
+    fx.addRow('lane-a-proj-a-alpha', 'ws/alpha');   // so the fallback's lineage pass starts a git child
+    fx.conf(fx.project, 'lineage=on\n');
+    const sleepPid = path.join(h.home, 'inflight.pid');
+    const seen = path.join(h.home, 'inflight-at-fallback.log');
+    // The fallback's first child records whether the in-flight child is still there when it starts.
+    trackGit([
+      'case " $* " in *"refs/heads/ws/alpha"*)',
+      `  p=$(cat '${sleepPid}'); [ -e /proc/$p ] && echo alive >> '${seen}';;`,
+      'esac',
+    ].join('\n'));
+    // An exception that leaves a child in flight (CHILD set, never reaped), before the first write.
+    const r = fx.runPatched([
+      'def bad(*a):',
+      '    sp = ns["subprocess"]',
+      '    proc = sp.Popen(["sleep", "60"], stdin=sp.DEVNULL, stdout=sp.PIPE, start_new_session=True)',
+      `    open(${JSON.stringify(sleepPid)}, "w").write(str(proc.pid))`,
+      '    ns["CHILD"] = proc',
+      '    raise RuntimeError("planted")',
+      'ns["fetch_into_scratch"] = bad',
+    ].join('\n'));
+    const pid = Number(fs.readFileSync(sleepPid, 'utf8').trim());
+    try {
+      expect(r.status).toBe(0);
+      expect(r.stderr).toContain('project-error proj-a: RuntimeError');
+      expect(fx.readJson('lane-a-proj-a-alpha.lineage')).toMatchObject({ state: 'unmeasured', why: 'fetch-failed' });
+      expect(fs.existsSync(seen) ? fs.readFileSync(seen, 'utf8') : '', 'the in-flight child at the fallback\'s first child').toBe('');
+      expect(await until(() => pidGone(pid), 5000), 'the in-flight child outlived the probe').toBe(true);
+    } finally {
+      if (!pidGone(pid)) { try { process.kill(-pid, 'SIGKILL'); } catch { /* gone */ } }
+    }
   });
 });
 

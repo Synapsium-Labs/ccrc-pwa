@@ -96,6 +96,38 @@ describe('ccd-land-probe: the literal source pins', () => {
   it('R6 never names update-branch', () => {
     expect(src).not.toMatch(/update[-_]branch|updatePullRequestBranch/i);
   });
+
+  it('R7 run_child tests the recorded signal and records the child inside the spawn mask (review 1125 items 1 and 2)', () => {
+    // The order is the guard: a test before the block lets a child fork after a signal, and a record after the unblock
+    // lets the handler run with no child to kill (the review's X2). Neither has a timing a case can rely on alone.
+    const body = /^def run_child\([\s\S]*?\n\n\n/m.exec(src)?.[0] ?? '';
+    const at = (needle: string): number => {
+      expect(body.split(needle).length - 1, needle).toBe(1);
+      return body.indexOf(needle);
+    };
+    const order = ['signal.pthread_sigmask(signal.SIG_BLOCK, SIGNALS)', 'if SIGNALLED is not None:', 'subprocess.Popen(',
+      'CHILD = proc', 'finally:', 'signal.pthread_sigmask(signal.SIG_SETMASK, held)'].map(at);
+    expect(order).toEqual([...order].sort((a, b) => a - b));
+  });
+
+  it('R8 the self-signal hook is test-only: read once, sent once, and set by nothing in the tree', () => {
+    expect(src.match(/os\.environ\.get\('CCD_LAND_PROBE_SELFSIGNAL'\)/g) ?? []).toHaveLength(1);
+    expect(src.match(/\bos\.kill\(/g) ?? [], 'the one os.kill, in selfsignal').toHaveLength(1);
+    expect(/^def selfsignal\([\s\S]*?\n\n\n/m.exec(src)?.[0] ?? '').toContain('os.kill(os.getpid(), signal.SIGTERM)');
+    expect(headCode).not.toContain('SELFSIGNAL');
+    // No unit, installer or other script in the shipped trees names either test-only variable.
+    const root = path.resolve(path.dirname(PROBE), '..');
+    const holders: string[] = [];
+    const walk = (d: string): void => {
+      for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+        const p = path.join(d, e.name);
+        if (e.isDirectory()) walk(p);
+        else if (e.isFile() && /CCD_LAND_PROBE_SELF(SIGNAL|TEST)/.test(fs.readFileSync(p, 'latin1'))) holders.push(path.relative(root, p));
+      }
+    };
+    for (const d of ['ccd', 'deploy']) walk(path.join(root, d));
+    expect(holders).toEqual(['ccd/ccd-land-probe']);
+  });
 });
 
 const OUTPUT = '--output=/project/.git/config';

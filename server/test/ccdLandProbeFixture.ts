@@ -55,6 +55,8 @@ here = os.path.dirname(os.path.abspath(__file__))
 args = sys.argv[1:]
 with open(os.path.join(os.environ['HOME'], 'gh-stub-calls'), 'a') as f:
     f.write(' '.join(args) + '\\n')
+with open(os.path.join(os.environ['HOME'], 'gh-stub-pids'), 'a') as f:
+    f.write(str(os.getpid()) + '\\n')
 with open(os.path.join(os.environ['HOME'], 'gh-stub-env'), 'a') as f:
     f.write(json.dumps({k: v for k, v in os.environ.items() if k.startswith(('GH_', 'GIT_'))}, sort_keys=True) + '\\n')
 with open(os.path.join(here, 'gh-answers.json')) as f:
@@ -213,6 +215,11 @@ export function makeLandFixture(h: CcdHarness, opts: LandOpts = {}) {
     ghEnvs: (): Array<Record<string, string>> => {
       const p = path.join(home, 'gh-stub-env');
       return fs.existsSync(p) ? fs.readFileSync(p, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)) : [];
+    },
+    /** The pid of each stub call, for the cases that assert no child outlives the probe. */
+    ghPids: (): number[] => {
+      const p = path.join(home, 'gh-stub-pids');
+      return fs.existsSync(p) ? fs.readFileSync(p, 'utf8').split('\n').filter(Boolean).map(Number) : [];
     },
     ghCalls: (): string[] => {
       const p = path.join(home, 'gh-stub-calls');
