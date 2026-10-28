@@ -174,6 +174,11 @@ const EXPECTED: Record<string, { what: string; codes: string[] }> = {
     what: 'the orphan-worktree verb granted without its confirmation token',
     codes: ['TS2322'],
   },
+  // THE DEPS-SHED ARM (D-7278), g21's shape: enrolled on `--session`, so the narrowed grant is a compile error.
+  'g23-ws-shed-deps-without-session.ts': {
+    what: 'the deps-shed verb granted without --session',
+    codes: ['TS2322'],
+  },
 };
 
 describe('mechanism 1+2 — granting `gh` fails to COMPILE, wherever it is written', () => {
@@ -396,6 +401,16 @@ describe('mechanism 3, values — a prefix that grants more than it names is a b
     expect(() => auditExecWhitelist(withCcd([['ws-collect', '--session']])))
       .toThrow(/only grantable with '--expect'/);
     expect(() => auditExecWhitelist(withCcd([['ws-collect', '--expect']]))).not.toThrow();
+  });
+
+  it('throws on a ws-shed-deps without --session, and grants exactly the one prefix (D-7278)', () => {
+    expect(() => auditExecWhitelist(withCcd([['ws-shed-deps']])))
+      .toThrow(/only grantable with '--session'/);
+    expect(() => auditExecWhitelist(withCcd([['ws-shed-deps', '--class']])))
+      .toThrow(/only grantable with '--session'/);
+    expect(() => auditExecWhitelist(withCcd([['ws-shed-deps', '--session']]))).not.toThrow();
+    expect(EXEC_WHITELIST.ccd.filter((p) => p[0] === 'ws-shed-deps'), 'one ws-shed-deps grant, on --session')
+      .toEqual([['ws-shed-deps', '--session']]);
   });
 
   it('throws on a ws-orphan with no confirmation token, and grants the audit modes without one (D-6630)', () => {

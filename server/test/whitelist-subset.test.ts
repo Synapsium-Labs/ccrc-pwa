@@ -517,6 +517,7 @@ describe('layer 2c — exact argv, not just prefix compliance (mutation-sweep fi
     wsOrphanCensus: ['ws-audit', '--orphans'],
     wsOrphanAudit: ['ws-audit', '--orphan-hex', '2f6f7270'],
     wsOrphan: ['ws-orphan', '--expect', 'a'.repeat(64), '--tree-hex', '2f6f7270', '--rescue', '--surface', 'agent', '--actor', 'orphan sweep'],
+    wsShedDeps: ['ws-shed-deps', '--session', 'project-a-quiet-basin', '--class', 'child', '--dry-run', '--surface', 'agent', '--actor', 'sweep:deps-shed'],
     wsCollectCensus: ['ws-audit', '--collect-census'],
     wsCollectLooseAudit: ['ws-audit', '--loose-hex', '2d7266', '--collect'],
     wsCollectLoose: ['ws-collect', '--expect', 'a'.repeat(64), '--loose-hex', '2d7266', '--surface', 'agent', '--actor', 'collect sweep'],

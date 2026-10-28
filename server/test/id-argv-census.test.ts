@@ -58,6 +58,7 @@ const ID_BUILDERS = {
   wsReclaimAudit: 'id', wsReclaim: 'id', wsExpireAudit: 'id', wsExpire: 'id',
   wsCollectAudit: 'id', wsCollect: 'id', wsAttic: 'id',
   wsOrphanCensus: 'no-id', wsOrphanAudit: 'no-id', wsOrphan: 'no-id',   // an orphaned tree travels as hex, never as an id (D-6630)
+  wsShedDeps: 'id',
   wsCollectCensus: 'no-id', wsCollectLooseAudit: 'no-id', wsCollectLoose: 'no-id',   // a loose entry's name travels as hex, never as an id (D-6626)
   wsHold: 'id', wsRelease: 'id', wsRename: 'id', wsTitle: 'id',
   coordPause: 'no-id', reclaimPause: 'no-id', projectPoolSet: 'no-id', projectPoolClear: 'no-id',
@@ -101,6 +102,7 @@ const ID_PROBE = {
   wsExpire: ['probe-token', PROBE_ID, null],
   wsCollectAudit: [PROBE_ID],
   wsCollect: ['probe-token' as CollectToken, PROBE_ID, null],
+  wsShedDeps: [PROBE_ID, 'child', false, null],
   wsAttic: [PROBE_ID],
   wsHold: [PROBE_ID, 'a reason', null],
   wsRelease: [PROBE_ID, null],
@@ -506,7 +508,7 @@ function paired(): { readonly site: Site; readonly row: CensusRow }[] {
 describe('every id-taking argv call has an origin and a gate (spec §2.3)', () => {
   it('every CCD_ARGV key is classified id or no-id', () => {
     expect(Object.keys(ID_BUILDERS).sort()).toEqual(Object.keys(CCD_ARGV).sort());
-    expect(ID_KEYS).toHaveLength(30);
+    expect(ID_KEYS).toHaveLength(31);
     expect(Object.keys(ID_PROBE).sort()).toEqual([...ID_KEYS].sort());
     for (const k of ID_KEYS) {
       const args = ID_PROBE[k] as readonly unknown[];
