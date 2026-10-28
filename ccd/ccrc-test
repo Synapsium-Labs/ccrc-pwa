@@ -365,8 +365,9 @@ _trelease() {
   SLOT_FD=""; WAIT_FD=""
 }
 _treap_gone() {   # stop the run of every held slot whose wrapper is gone; its run holds the slot and nobody watches it
-  [ "$contained" = 1 ] || return 0
-  local f who pid
+                  # -> 0 when it stopped one (its .who goes with it, so a run that will not stop is asked once)
+  [ "$contained" = 1 ] || return 1
+  local f who pid reaped=1
   for f in "$SLOT_DIR"/slot-*; do
     case "$f" in *.who|*'*') continue ;; esac
     [ -f "$f.who" ] && _tlocked "$f" || continue
@@ -377,7 +378,9 @@ _treap_gone() {   # stop the run of every held slot whose wrapper is gone; its r
     echo "$PROG: ${f##*/}'s holder (pid $pid) is gone; stopping its run ccrc-test-$pid.scope" >&2
     systemctl --user stop "ccrc-test-$pid.scope" >/dev/null 2>&1 || :
     rm -f -- "$f.who"
+    reaped=0
   done
+  return "$reaped"
 }
 _tacquire() {   # <summary> -> sets SLOT_FD and SLOT_FILE, or dies
   local summary="$1" n="${TK[CCRC_TEST_HEAVY_SLOTS]}" max="${TK[CCRC_TEST_PRESSURE_MAX]}" i f fd said=0 why t0=$SECONDS
@@ -399,7 +402,7 @@ _tacquire() {   # <summary> -> sets SLOT_FD and SLOT_FILE, or dies
         fi
         exec {fd}>&-
       done
-      _treap_gone
+      if _treap_gone; then continue; fi   # look again at once: the stopped run's slot is free
       why="all $n heavy test slots are held ($(_tholders))"
     fi
     if [ "$said" -eq 0 ]; then
