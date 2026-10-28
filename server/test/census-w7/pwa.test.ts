@@ -11,7 +11,7 @@
 // `bucketOrders()` is an exact pair on the merged tree.
 import { describe, it, expect } from 'vitest';
 import {
-  accountsReaders, accountsReadersIn, answerPaths, answerPathsIn, archivedChecks, archivedChecksIn, bucketOrders, bucketOrdersIn,
+  ANSWER_LIFECYCLE, accountsReaders, accountsReadersIn, answerPaths, answerPathsIn, archivedChecks, archivedChecksIn, bucketOrders, bucketOrdersIn,
   clientPairingDefinitions, clientPairingDefinitionsIn, coordPresenceSites, coordPresenceSitesIn, countBy, dialogSheetStates,
   dialogSheetStatesIn, ensureCallers, ensureCallersIn, fixture, inlineDeadChecks, inlineDeadChecksIn, pageClockSubscriptions,
   pageClockSubscriptionsIn, paneTextDecisions, paneTextDecisionsIn, placementCopies, placementCopiesIn, PUSH_SW, requestPolls,
@@ -104,6 +104,13 @@ describe('W7 PWA census: FIXTURE rows (each query against one counted site and o
       'export function Plain({ waiting }: P) { const busy = waiting; }',
     ].join('\n');
     expect(run(answerPathsIn, tsx).map((s) => [s.kind, s.symbol])).toEqual([['writer', 'Sheet'], ['busy', 'Envelope']]);
+    // C7e (D-7183): a write through an injected seam is a writer too; the same writes inside the lifecycle are its reducer.
+    const seam = [
+      "export function Seamed() { void answers.answerDialogText(id, d, 1, 't'); void answers.interrupt(id, 'deny'); }",
+      "export function Escape() { void seam.interrupt(id, 'escape'); void store.applyAnswered(d, null); }",
+    ].join('\n');
+    expect(run(answerPathsIn, seam).map((s) => [s.kind, s.symbol])).toEqual([['writer', 'Seamed']]);
+    expect(run(answerPathsIn, seam, ANSWER_LIFECYCLE).map((s) => [s.kind, s.symbol])).toEqual([['reducer', 'Seamed']]);
     const sw = [
       'self.addEventListener("notificationclick", async () => {',
       '  await fetch(`/api/sessions/${encodeURIComponent(sid)}/ask`, { method: "POST" });',
@@ -271,16 +278,17 @@ describe('W7 PWA census: REAL rows (reporting, not ratcheting; spec §5.1 rule 3
     expect(sites.map((s) => s.file)).toEqual(['pwa/src/fleet/HotFilesStrip.tsx', 'pwa/src/fleet/useFleetHealth.ts']);
   });
 
-  // C7e Step 4 (D-7183): EnvelopeSheet's busy comes from the answer lifecycle, so its own composition is gone.
-  it('answerPaths(): 2 (DialogSheet\'s writes, push-sw.js\'s one handler)', () => {
+  // C7e (D-7183): EnvelopeSheet's busy comes from the answer lifecycle (Step 4), and DialogSheet's writes are the
+  // lifecycle's commands, performed in one place (Step 5).
+  it('answerPaths(): 2 (the answer lifecycle\'s performer, push-sw.js\'s one handler)', () => {
     const sites = answerPaths();
     held('answerPaths', sites, 2);
-    expect(countBy(sites, (s) => s.kind)).toEqual({ writer: 1, 'push-sw': 1 });
+    expect(countBy(sites, (s) => s.kind)).toEqual({ reducer: 1, 'push-sw': 1 });
   });
 
   // C7e Step 5 (D-7183): each answer kind's state moves into the answer lifecycle in its own commit.
-  it('dialogSheetStates(): 7 useState calls inside DialogSheet', () => {
-    held('dialogSheetStates', dialogSheetStates(), 7);
+  it('dialogSheetStates(): 6 useState calls inside DialogSheet', () => {
+    held('dialogSheetStates', dialogSheetStates(), 6);
   });
 
   it('clientPairingDefinitions(): 9, prefixMatches and norm among them', () => {

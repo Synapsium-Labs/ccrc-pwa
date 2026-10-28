@@ -170,16 +170,21 @@ export const requestPolls = (): W7Site[] => overPwa(requestPollsIn);
 export const PUSH_SW = 'pwa/public/push-sw.js';
 const GEN_BEGIN = '// ccrc:generated answer-lifecycle BEGIN';
 const GEN_END = '// ccrc:generated answer-lifecycle END';
-const ANSWER_MEMBER = /^api\.answer[A-Z]\w*$/;
+const ANSWER_MEMBER = /\.answer[A-Z]\w*$/;
+/** The answer lifecycle (C7e, D-7183): the one module whose writes are the reducer's path, not a sheet's own. */
+export const ANSWER_LIFECYCLE = 'pwa/src/session/answerLifecycle.ts';
 
 /** The answer paths (plan item 5), one site per path, by kind:
- *  - `writer`: a top-level `pwa/src` symbol that calls an `api.answer*` member or `api.interrupt(…, 'deny')` (one site per
- *    symbol, at its first such call): `DialogSheet` on the base;
+ *  - `writer`: a top-level `pwa/src` symbol that calls an `answer*` member of any receiver (`api.answer*`, or an
+ *    injected seam's) or an `interrupt(…, 'deny')` (one site per symbol, at its first such call): `DialogSheet` on the
+ *    base;
+ *  - `reducer`: the same calls made inside `session/answerLifecycle.ts` (C7e, D-7183), the reducer's one performer
+ *    (`performAnswer`), which the sheets' commands go through;
  *  - `busy`: a top-level `pwa/src` symbol that binds `busy` from an `answering` flag (its own in-flight composition):
  *    `EnvelopeSheet` on the base;
  *  - `push-sw`: each `fetch(…)` call in `pwa/public/push-sw.js` whose URL argument ends `/ask`, outside the text between
  *    the `// ccrc:generated answer-lifecycle BEGIN`/`END` markers (absent on the base, which counts its one handler).
- *  3 on the base. KNOWN WIDTH: an answer request through a wrapper of another name is not seen. */
+ *  3 on the base. KNOWN WIDTH: an answer request through a wrapper of another name (not `answer*`) is not seen. */
 export function answerPathsIn(p: ParsedFile, file: string): W7Site[] {
   const out: W7Site[] = [];
   if (file.endsWith('.js')) {
@@ -194,12 +199,13 @@ export function answerPathsIn(p: ParsedFile, file: string): W7Site[] {
   }
   const writers = new Set<string>();
   for (const c of p.calls) {
-    const writes = ANSWER_MEMBER.test(c.callee) || (c.callee === 'api.interrupt' && c.args[1]?.kind === 'string' && c.args[1].text === 'deny');
+    const writes = ANSWER_MEMBER.test(c.callee)
+      || (/(?:^|\.)interrupt$/.test(c.callee) && c.args[1]?.kind === 'string' && c.args[1].text === 'deny');
     if (!writes) continue;
     const top = topSymbol(p, c.start);
     if (writers.has(top)) continue;
     writers.add(top);
-    out.push({ ...callSite(p, file, c, 'writer'), symbol: top });
+    out.push({ ...callSite(p, file, c, file === ANSWER_LIFECYCLE ? 'reducer' : 'writer'), symbol: top });
   }
   for (const b of p.bindings) {
     if (b.name === 'busy' && /\banswering\b/.test(b.init)) out.push({ file, symbol: topSymbol(p, b.start), line: b.line, text: lineStart(p.text, b.line).trim().slice(0, 140), kind: 'busy' });
