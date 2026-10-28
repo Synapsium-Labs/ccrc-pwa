@@ -30,7 +30,7 @@ export function nodeEnv(home: string): NodeJS.ProcessEnv {
   const tmp = path.join(home, 'tmp');
   mkdirSync(tmp, { recursive: true });
   const base: NodeJS.ProcessEnv = { ...process.env, HOME: home, TMPDIR: tmp };
-  for (const k of ['CCRC_UPDATE_DEADLINE_MS', 'CCRC_UPDATE_HEALTH_S', 'CCRC_RELEASE_BASE_URL', 'CCRC_BACKUP_KEEP', 'CCRC_BACKUP_DATA_KEEP', 'CCRC_VERSIONS_KEEP', 'CCRC_MODELS_ADVANCE_BUDGET_S',
+  for (const k of ['CCRC_UPDATE_DEADLINE_MS', 'CCRC_UPDATE_HEALTH_S', 'CCRC_RELEASE_BASE_URL', 'CCRC_BACKUP_KEEP', 'CCRC_BACKUP_DATA_KEEP', 'CCRC_VERSIONS_KEEP', 'CCRC_MODELS_ADVANCE_BUDGET_S', 'CCRC_SESSION_SLICE_MEMORY_MAX', 'CCRC_SESSION_SLICE_SWAP_MAX',
     'CCRC_UPDATE_LOCK_HELD', 'CCRC_UPDATE_VERIFIED']) delete base[k];
   return ghContainedEnv(home, base, { systemd: true });
 }

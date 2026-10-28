@@ -1280,17 +1280,20 @@ the `ccrc-ddns` units `ccrc expose duckdns` installed, whose timer keeps re-poin
 `--purge` removes `~/.ccrc/exposure.env` it fails every five minutes instead —
 `systemctl --user disable --now ccrc-ddns.timer` first).
 
-**ccrc's own settings.** Seven values decide what ccrc keeps or removes, how long it waits before judging an update, where
-it fetches a release from, and whether a step runs at all: `CCRC_BACKUP_KEEP`, `CCRC_BACKUP_DATA_KEEP`,
-`CCRC_VERSIONS_KEEP`, `CCRC_UPDATE_HEALTH_S`, `CCRC_UPDATE_DEADLINE_MS`, `CCRC_RELEASE_BASE_URL` and
-`CCRC_MODELS_ADVANCE_BUDGET_S`. `deploy/ccrc.env.example` documents each, with its default and range. ccrc takes each
+**ccrc's own settings.** Nine values decide what ccrc keeps or removes, how long it waits before judging an update, where
+it fetches a release from, whether a step runs at all, and how much memory and swap the box's sessions may hold together:
+`CCRC_BACKUP_KEEP`, `CCRC_BACKUP_DATA_KEEP`, `CCRC_VERSIONS_KEEP`, `CCRC_UPDATE_HEALTH_S`, `CCRC_UPDATE_DEADLINE_MS`,
+`CCRC_RELEASE_BASE_URL`, `CCRC_MODELS_ADVANCE_BUDGET_S`, `CCRC_SESSION_SLICE_MEMORY_MAX` and
+`CCRC_SESSION_SLICE_SWAP_MAX` (the last two are the session slice's limits, see
+[Memory guardrails](#memory-guardrails-linux)). `deploy/ccrc.env.example` documents each, with its default and range. ccrc takes each
 from its process environment, else from `~/.ccrc/ccrc.env`, read by name as systemd's `EnvironmentFile=` reads a line and
 never sourced, else the default. A console-driven update, the update watchdog and the models timer run with no shell of
 yours, so the file is where a lasting setting goes. A line ccrc cannot read stops only the act that reads it: the backup
 keep stops the count prune and the data keep the thinning (D-6590), the deadline lets no verification start this run past
 the keep-set's first (D-6591, D-6592), the health gate waits its default 90 seconds (D-6593), the release base stops the
 update before anything on the box changes (D-6594), the models budget turns the advance step off for that run (D-6595),
-and the versions keep stops the versions prune while `ccrc versions` still lists (D-6596). When `ccrc.env` cannot be
+the versions keep stops the versions prune while `ccrc versions` still lists (D-6596), and a slice limit keeps its
+default (24G, 6G) with a WARN while the install or deploy goes on (D-TBD-slice-limits-keys). When `ccrc.env` cannot be
 read at all (unreadable, or holding a NUL byte), every act that reads a setting from it refuses, or falls back as its
 own text says (the health gate waits its 90 seconds; the watchdog uses the largest reading it could decide), and each
 says so. Two causes are model-wide too: a non-ASCII (UTF-8) `NAME=value` line, and a line with an inner CR. Each refuses
@@ -6137,7 +6140,11 @@ holds only the `ccd supervise` loop and the session itself runs in its tmux pane
 scope (`tmux-spawn-*.scope`) is capped at `MemoryHigh=8G`, `MemoryMax=12G`, `MemorySwapMax=2G`,
 `TasksMax=4096` by `ccd-cap-scopes` (`ccd-cap-scopes.timer`, every 60 s) within about a minute of birth, because
 tmux offers no way to set them at creation. And `app-claude\x2dsession.slice`, which holds the panes, has an
-aggregate `MemoryMax=24G`, `MemorySwapMax=6G` and `MemoryHigh=infinity` — an aggregate `MemoryHigh`
+aggregate `MemoryMax` (default `24G`), `MemorySwapMax` (default `6G`) and `MemoryHigh=infinity` — the two limits are
+the box's own, `CCRC_SESSION_SLICE_MEMORY_MAX` and `CCRC_SESSION_SLICE_SWAP_MAX` in `~/.ccrc/ccrc.env`
+(`deploy/ccrc.env.example`), which `ccrc install`, `ccrc update` and `deploy.sh agent` render into the slice's
+`limits.conf` on the box, so a box with memory to spare sets them to fit and a box that sets neither keeps the
+shipped file byte for byte; an aggregate `MemoryHigh`
 throttles every allocation in the slice, and it froze the whole fleet four times in two days with nothing
 killed and nothing logged.
 
@@ -6154,7 +6161,8 @@ much (#1170: under `memory_recursiveprot` a parent's protection caps its child's
 `user-<uid>.slice`, `user@<uid>.service`) are root-owned: their drop-ins ship in `deploy/systemd-root/`, the gate
 prints the exact root step to place them, and every agent deploy says `PENDING ROOT STEP` until it is done. The
 agent's `OOMScoreAdjust` stays at the user manager's (a user manager can only raise it). `ccrc install` and `ccrc update` place only the two `limits.conf` files (and the two
-victim-policy drop-ins below) — none of the three above. The numbers were sized for a 30 GB fleet host — tune them to yours with a drop-in of your
+victim-policy drop-ins below) — none of the three above. The defaults were sized for a small fleet host: set the slice's
+two limits in `ccrc.env` as above; for the session unit's values use a drop-in of your
 own that sorts after `limits.conf` (an install or update rewrites `limits.conf` itself); leave the slice's
 `MemoryHigh` at `infinity`, which `deploy.sh agent` refuses to deploy over; the pane values are literals in
 `ccd-cap-scopes`. Doctor's `scopes` check warns when a pane scope has a process parked in memory reclaim

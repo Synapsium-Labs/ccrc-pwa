@@ -16,6 +16,8 @@ import { mkdirSync, readFileSync, writeFileSync, symlinkSync, existsSync, statSy
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkTmp, removeTmpFixturesEachTest } from './tmpHelpers.js';
+import { describeLinux } from './platformFixtures.js';
+import { freshBox, runInstall, unitDir, placed, SLICE_DIR as INSTALL_SLICE_DIR } from './ccrc-installFixture.js';
 
 removeTmpFixturesEachTest();
 
@@ -180,8 +182,10 @@ describe('_inst_slice_limits renders the template from the box\'s config (D-TBD-
   const MEMORY_GARBAGE = ['lots', '24GB', '24g', '-1G', '0', '0G', '24 G', 'infinity', '1.5G', '0%', '101%', '24G;', '1Z', '0024G'];
   for (const bad of MEMORY_GARBAGE) {
     it(`CCRC_SESSION_SLICE_MEMORY_MAX=${JSON.stringify(bad)} keeps MemoryMax=24G and warns`, () => {
-      const home = box([`CCRC_SESSION_SLICE_MEMORY_MAX=${bad}`, 'CCRC_SESSION_SLICE_SWAP_MAX=8G']);
-      const r = runFunction(home);
+      // The other key through the environment: on macOS a line bash would read differently (`24 G`) makes the
+      // settings reader refuse the whole file (model-wide, by design), and this row is about the one key.
+      const home = box([`CCRC_SESSION_SLICE_MEMORY_MAX=${bad}`]);
+      const r = runFunction(home, { CCRC_SESSION_SLICE_SWAP_MAX: '8G' });
       expect(r.code, r.stderr).toBe(0);
       expect(readFileSync(r.dest, 'utf8')).toBe(expected('24G', '8G'));
       const warn = r.stderr.split('\n').filter((l) => l.includes('CCRC_SESSION_SLICE_MEMORY_MAX'));
@@ -193,8 +197,8 @@ describe('_inst_slice_limits renders the template from the box\'s config (D-TBD-
   const SWAP_GARBAGE = ['none', '6GB', '-6G', '50%', 'infinity', '6 G', '0.5G'];
   for (const bad of SWAP_GARBAGE) {
     it(`CCRC_SESSION_SLICE_SWAP_MAX=${JSON.stringify(bad)} keeps MemorySwapMax=6G and warns`, () => {
-      const home = box(['CCRC_SESSION_SLICE_MEMORY_MAX=48G', `CCRC_SESSION_SLICE_SWAP_MAX=${bad}`]);
-      const r = runFunction(home);
+      const home = box([`CCRC_SESSION_SLICE_SWAP_MAX=${bad}`]);
+      const r = runFunction(home, { CCRC_SESSION_SLICE_MEMORY_MAX: '48G' });
       expect(r.code, r.stderr).toBe(0);
       expect(readFileSync(r.dest, 'utf8')).toBe(expected('48G', '6G'));
       const warn = r.stderr.split('\n').filter((l) => l.includes('CCRC_SESSION_SLICE_SWAP_MAX'));
@@ -203,6 +207,21 @@ describe('_inst_slice_limits renders the template from the box\'s config (D-TBD-
       expect(warn[0]).toContain('MemorySwapMax=6G');
     });
   }
+
+  it('garbage from the environment keeps the default and the WARN says where it came from', () => {
+    const home = box(['CCRC_SESSION_SLICE_SWAP_MAX=8G']);
+    const r = runFunction(home, { CCRC_SESSION_SLICE_MEMORY_MAX: '24GiB' });
+    expect(r.code, r.stderr).toBe(0);
+    expect(readFileSync(r.dest, 'utf8')).toBe(expected('24G', '8G'));
+    expect(r.stderr).toMatch(/WARN: CCRC_SESSION_SLICE_MEMORY_MAX='24GiB' \(from the environment\)/);
+  });
+
+  it('garbage from ccrc.env says the file, never the environment', () => {
+    const home = box(['CCRC_SESSION_SLICE_SWAP_MAX=6GB']);
+    const r = runFunction(home);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stderr).toMatch(/WARN: CCRC_SESSION_SLICE_SWAP_MAX='6GB' \(from ~\/\.ccrc\/ccrc\.env\)/);
+  });
 
   it('a ccrc.env line the settings reader refuses keeps the default and warns with the reader\'s own reason', () => {
     const home = box(['export CCRC_SESSION_SLICE_MEMORY_MAX=48G']);
@@ -227,7 +246,7 @@ describe('_inst_slice_limits renders the template from the box\'s config (D-TBD-
 
   it('the defaults it reads with are the template\'s own values, so unset renders the template', () => {
     const code = readFileSync(CCRC, 'utf8').split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
-    const knob = (k: string): string[] => [...code.matchAll(new RegExp(`_ccrc_knob ${k} (\\S+)`, 'g'))].map((m) => m[1]!);
+    const knob = (k: string): string[] => [...code.matchAll(new RegExp(`_ccrc_knob ${k} ([^\\s;]+)`, 'g'))].map((m) => m[1]!);
     expect(knob('CCRC_SESSION_SLICE_MEMORY_MAX')).toEqual(['24G']);
     expect(knob('CCRC_SESSION_SLICE_SWAP_MAX')).toEqual(['6G']);
   });
@@ -270,5 +289,39 @@ describe('both lanes render through the one function', () => {
     expect(r.code, r.stderr).toBe(0);
     expect(sha(readFileSync(deployed(home)))).toBe(TODAY_SHA256);
     expect(r.stderr).toMatch(/WARN.*CCRC_SESSION_SLICE_MEMORY_MAX/);
+  });
+});
+
+// The ccrc lane end to end: `ccrc install` on a fixture box, its `_inst_units` systemd arm placing the slice drop-in.
+// systemd's arm only (macOS has no slice), so Linux CI measures it; the unset-keys case is ccrc-install-units.test.ts's
+// byte-for-byte row over every unit file.
+describeLinux('ccrc install renders the slice drop-in from the box\'s config', () => {
+  const rendered = (home: string): string => readFileSync(unitDir(home, INSTALL_SLICE_DIR, 'limits.conf'), 'utf8');
+  const template = (home: string): string => readFileSync(placed(home, ...TEMPLATE_REL.split('/')), 'utf8');
+
+  it('the keys in the box\'s ccrc.env reach the placed limits.conf', () => {
+    const home = freshBox('slice-limits-install-');
+    mkdirSync(join(home, '.ccrc'), { recursive: true });
+    writeFileSync(join(home, '.ccrc', 'ccrc.env'), [
+      'CCRC_HOST=127.0.0.1', 'CCRC_PORT=7788', 'CCRC_FLEET=local', `CCRC_PROJECTS_ROOT=${home}/projects`, 'CCRC_ROLE=both',
+      'CCRC_SESSION_SLICE_MEMORY_MAX=48G', 'CCRC_SESSION_SLICE_SWAP_MAX=8G', '',
+    ].join('\n'));
+    const r = runInstall(home);
+    expect(r.code, r.stderr).toBe(0);
+    expect(rendered(home)).toBe(template(home).replace(/^MemoryMax=24G$/m, 'MemoryMax=48G').replace(/^MemorySwapMax=6G$/m, 'MemorySwapMax=8G'));
+    expect(statSync(unitDir(home, INSTALL_SLICE_DIR, 'limits.conf')).mode & 0o777).toBe(0o644);
+  });
+
+  it('garbage in ccrc.env keeps the default, warns, and the install still succeeds', () => {
+    const home = freshBox('slice-limits-install-bad-');
+    mkdirSync(join(home, '.ccrc'), { recursive: true });
+    writeFileSync(join(home, '.ccrc', 'ccrc.env'), [
+      'CCRC_HOST=127.0.0.1', 'CCRC_PORT=7788', 'CCRC_FLEET=local', `CCRC_PROJECTS_ROOT=${home}/projects`, 'CCRC_ROLE=both',
+      'CCRC_SESSION_SLICE_MEMORY_MAX=lots', '',
+    ].join('\n'));
+    const r = runInstall(home);
+    expect(r.code, r.stderr).toBe(0);
+    expect(sha(Buffer.from(rendered(home)))).toBe(TODAY_SHA256);
+    expect(r.stderr).toMatch(/WARN: CCRC_SESSION_SLICE_MEMORY_MAX='lots'/);
   });
 });

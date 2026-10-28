@@ -16383,6 +16383,81 @@ _inst_atomic() {   # <src> <dest> <mode>
   rm -f -- "$dest.tmp."*
 }
 
+# ── THE SESSION SLICE'S TWO LIMITS ARE THE BOX'S, NOT THE TREE'S (D-TBD-slice-limits-keys) ──
+# `deploy/systemd/app-claude-session.slice.d/limits.conf` is a TEMPLATE: its `MemoryMax=24G` and `MemorySwapMax=6G`
+# are the DEFAULTS, and the bytes every box carried before these keys existed. A box sets its own in its
+# ~/.ccrc/ccrc.env (deploy/ccrc.env.example documents both), through ccrc's one settings reader, `_ccrc_knob`: the
+# environment, else that file, else the default — read ON THE BOX at install, update and deploy time, never on the
+# machine that runs deploy.sh. ONE function renders it for both lanes: `_inst_units` calls `_inst_slice_limits`, and
+# deploy.sh's AGENT_BUILD_CMD sources this file out of the rsynced ~/ccrc tree and calls the same function, so the two
+# lanes cannot disagree about what a box's limits are. A box that sets neither key renders the template byte for byte.
+#
+# A VALUE IT CANNOT USE KEEPS THE DEFAULT, LOUDLY. A WARN on stderr names the key, what was set and the default it
+# keeps; the install or deploy goes on. Refusing the whole step would leave a box with no aggregate ceiling, or with the
+# previous one, for a typo — and a value systemd cannot parse would be silently ignored by systemd, the same box with no
+# ceiling at all. MemoryHigh is not one of the two: it stays `infinity`, in the template and in zz-no-memoryhigh.conf,
+# and `deploy/assert-slice-policy.sh` still refuses a deploy that would enforce anything else.
+
+# _slice_limit_ok <directive> <value> — rc 0 when <value> is one this renderer writes for <directive>: a whole number
+# of bytes with an optional K, M, G, T, P or E suffix (systemd's base-1024 suffixes, upper case, no lead zero), and,
+# for MemoryMax only, a whole percentage of physical memory from 1% to 100%. MemoryMax is never 0 (a slice that kills
+# every pane) and never `infinity` (the slice exists to carry a ceiling); MemorySwapMax may be 0 (no swap) and takes
+# no percentage. A fraction (`1.5G`) is refused rather than guessed at: write `1536M`.
+_slice_limit_ok() {   # <MemoryMax|MemorySwapMax> <value>
+  case "$1" in
+    MemoryMax) [[ "$2" =~ ^[1-9][0-9]{0,15}[KMGTPE]?$ ]] || [[ "$2" =~ ^([1-9][0-9]?|100)%$ ]] ;;
+    MemorySwapMax) [[ "$2" =~ ^(0|[1-9][0-9]{0,15}[KMGTPE]?)$ ]] ;;
+    *) return 1 ;;
+  esac
+}
+
+# _slice_limit <knob rc> <KEY> <directive> <default> — run straight after `_ccrc_knob <KEY> <default>` (the literal call
+# the settings census reads the default from), with that call's exit status: sets SLICE_LIMIT to the value the box sets,
+# else <default>, WARNing on stderr when it keeps the default because the value cannot be read or used.
+_slice_limit() {   # <knob rc> <KEY> <directive> <default>
+  SLICE_LIMIT="$4"
+  if [ "$1" -ne 0 ]; then
+    echo "$PROG: WARN: $KNOB_WHY — the session slice keeps $3=$4" >&2
+    return 0
+  fi
+  if _slice_limit_ok "$3" "$KNOB"; then SLICE_LIMIT="$KNOB"; return 0; fi
+  local from="the environment" also=", or 0"
+  [ "$KNOB_FROM" != file ] || from="~/.ccrc/ccrc.env"
+  [ "$3" != MemoryMax ] || also=", or a whole percentage from 1% to 100%"
+  echo "$PROG: WARN: $2='$KNOB' (from $from) is not a size the session slice takes for $3 (a whole number with an optional K, M, G, T, P or E suffix$also) — the session slice keeps $3=$4" >&2
+}
+
+# _inst_slice_limits <template> <dest> — render the slice drop-in from <template> to <dest>, atomically, at 644:
+# `_inst_atomic`'s shape (temp, chmod, rename; bytes compared first, so a converged box is not rewritten) with the two
+# values substituted. The template must carry exactly one `MemoryMax=` and one `MemorySwapMax=` line, or nothing is
+# written and the step dies: a template this cannot read is not one to guess at.
+_inst_slice_limits() {   # <template> <dest>
+  local src="$1" dest="$2" tmp mm sm
+  [ -f "$src" ] \
+    || _ccrc_die "the shipped tree has no $src — is this a complete ccrc tree? (re-run after: bash install.sh)"
+  _ccrc_knob CCRC_SESSION_SLICE_MEMORY_MAX 24G; _slice_limit $? CCRC_SESSION_SLICE_MEMORY_MAX MemoryMax 24G; mm="$SLICE_LIMIT"
+  _ccrc_knob CCRC_SESSION_SLICE_SWAP_MAX 6G; _slice_limit $? CCRC_SESSION_SLICE_SWAP_MAX MemorySwapMax 6G; sm="$SLICE_LIMIT"
+  tmp="$dest.tmp.$$"
+  if ! LC_ALL=C awk -v mm="$mm" -v sm="$sm" '
+      /^MemoryMax=/ { print "MemoryMax=" mm; a++; next }
+      /^MemorySwapMax=/ { print "MemorySwapMax=" sm; b++; next }
+      { print }
+      END { exit (a == 1 && b == 1) ? 0 : 3 }' "$src" > "$tmp"; then
+    rm -f -- "$tmp"
+    _ccrc_die "could not render $dest from $src (it must carry exactly one MemoryMax= and one MemorySwapMax= line) — nothing at that path was replaced"
+  fi
+  if cmp -s "$tmp" "$dest" 2>/dev/null; then
+    rm -f -- "$tmp"
+    chmod 644 "$dest" || _ccrc_die "could not set mode 644 on $dest"
+    return 0
+  fi
+  if ! { chmod 644 "$tmp" && mv -f -- "$tmp" "$dest"; }; then
+    rm -f -- "$tmp"
+    _ccrc_die "could not install $dest — nothing at that path was replaced"
+  fi
+  rm -f -- "$dest.tmp."*
+}
+
 # ── _inst_tree_copy — `_inst_atomic` for a DIRECTORY ─────────────────────
 # `_inst_atomic` is single-file by construction (one `cmp`, one `cp`, one
 # `chmod`, one `mv`), and a skill is a DIRECTORY: a `SKILL.md` beside a
@@ -17475,8 +17550,9 @@ _inst_units() {
   fi
   _inst_atomic "$tree/deploy/systemd/claude-session@.service.d/limits.conf" \
     "$dir/claude-session@.service.d/limits.conf" 644
-  _inst_atomic "$tree/deploy/systemd/app-claude-session.slice.d/limits.conf" \
-    "$slice/limits.conf" 644
+  # The slice drop-in is RENDERED, not copied: its two limits are the box's own (`_inst_slice_limits`, D-TBD-slice-limits-keys).
+  _inst_slice_limits "$tree/deploy/systemd/app-claude-session.slice.d/limits.conf" \
+    "$slice/limits.conf"
   # D-5241 (spec 2026-10-16 §5.10): the victim policy's two OOMPolicy=continue
   # drop-ins, Linux only (the Darwin arm returned above) and on every role, as
   # the two limits.conf files are: a drop-in for a scope a box never creates
@@ -20676,7 +20752,7 @@ _upd_rerun_hint() {
 # console-driven update, the watchdog, a timer) must honour it, so `_ccrc_knob` reads it from ~/.ccrc/ccrc.env too. Every
 # other CCRC_ name ccrc reads stays environment-only, in a reasoned class. This line is the one list: `_ccrc_knob` reads no
 # name outside it, and the census (ccrc-settings-census.test.ts) derives from it, never from a copy.
-CCRC_SETTINGS=(CCRC_BACKUP_KEEP CCRC_BACKUP_DATA_KEEP CCRC_VERSIONS_KEEP CCRC_UPDATE_HEALTH_S CCRC_UPDATE_DEADLINE_MS CCRC_RELEASE_BASE_URL CCRC_MODELS_ADVANCE_BUDGET_S CCRC_TEST_SLICE_MEMORY_MAX CCRC_TEST_SLICE_SWAP_MAX CCRC_TEST_SLICE_CPU_WEIGHT CCRC_TEST_SLICE_CPU_QUOTA CCRC_TEST_SLICE_IO_WEIGHT CCRC_TEST_HEAVY_SLOTS CCRC_TEST_WIDE_FILES CCRC_TEST_PRESSURE_MAX)
+CCRC_SETTINGS=(CCRC_BACKUP_KEEP CCRC_BACKUP_DATA_KEEP CCRC_VERSIONS_KEEP CCRC_UPDATE_HEALTH_S CCRC_UPDATE_DEADLINE_MS CCRC_RELEASE_BASE_URL CCRC_MODELS_ADVANCE_BUDGET_S CCRC_SESSION_SLICE_MEMORY_MAX CCRC_SESSION_SLICE_SWAP_MAX CCRC_TEST_SLICE_MEMORY_MAX CCRC_TEST_SLICE_SWAP_MAX CCRC_TEST_SLICE_CPU_WEIGHT CCRC_TEST_SLICE_CPU_QUOTA CCRC_TEST_SLICE_IO_WEIGHT CCRC_TEST_HEAVY_SLOTS CCRC_TEST_WIDE_FILES CCRC_TEST_PRESSURE_MAX)
 
 # ── _ccrc_knob <KEY> <default> [file] — ONE reader for every setting (D-6587) ──
 # The process environment, else ~/.ccrc/ccrc.env alone, else <default>: wave 23's `_bak_data_keep` read with its knob made
