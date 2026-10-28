@@ -20,6 +20,7 @@
 //   `flex-wrap` removed from the row wrapper in FleetTable ... (b) "the chooser wraps below the radiogroup at 150% and 200% text": `fine pointer, 150%: the chooser wrapped below the radiogroup: expected 109 to be greater than or equal to 142` (touch: `… expected 109 to be greater than or equal to 152.5`)
 //   the radiogroup's `flex-auto` made `flex-1` ................ (b) the same cases: the same two messages (the chooser stays at top 109, beside the radiogroup)
 //   `className="min-h-row"` removed from the chooser in FleetTable  (a) "the row is one height in both modes, under a fine pointer": `project mode: the row is --row-h, as in status mode: expected 44 to be 32` (fine pointer at 900 and 1280; the touch cases stay green, where `--row-h` is 44)
+//   the text scaling made a no-op (the test's own `setProperty` skipped) ... (b): `fine pointer, 150%: the options' font size, scaled from 13px: expected 13 to be close to 19.5` (and touch): the scaling is asserted to take, so a token that fails to scale cannot pass for a wrapped row
 //
 //   CCRC_CHROME=$HOME/.cache/ms-playwright/chromium-1243/chrome-linux64/chrome ./node_modules/.bin/vitest run --config vitest.browser.config.ts --maxWorkers=2 browser/fleet-toggle-row.browser.test.ts
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -101,6 +102,9 @@ async function measure(width: number, touch: boolean, mode: Mode, zoom = 100) {
         inGroup: choosers[0] !== undefined && group.contains(choosers[0]),
         overlap: cb !== null && !(cb.left >= gb.right - 0.5 || cb.right <= gb.left + 0.5 || cb.top >= gb.bottom - 0.5 || cb.bottom <= gb.top + 0.5),
         cutOptions: [...group.querySelectorAll<HTMLElement>('[role="radio"]')].filter((o) => o.scrollWidth > o.clientWidth).map((o) => o.textContent),
+        // The non-vacuity floor: the options the two checks above read, and the size their words are drawn at.
+        radios: group.querySelectorAll('[role="radio"]').length,
+        optionFont: parseFloat(getComputedStyle(group.querySelector<HTMLElement>('[role="radio"]') ?? group).fontSize),
         rowH: parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--row-h')),
         pageSideScroll: document.documentElement.scrollWidth - document.documentElement.clientWidth,
         navSideScroll: nav.scrollWidth - nav.clientWidth,
@@ -132,6 +136,7 @@ describe("Instrument's desk toggle row, in a real Chrome", () => {
         expect(project.rowH).toBe(expected);
         expect(status.rowHeight, 'status mode: the row is --row-h').toBe(status.rowH);
         expect(project.rowHeight, 'project mode: the row is --row-h, as in status mode').toBe(status.rowHeight);
+        expect([status.radios, project.radios], 'the toggle\'s two options, in each mode').toEqual([2, 2]);
         expect(status.choosers, 'status mode has no chooser on the row').toBe(0);
         expect(project.choosers, 'project mode has the one chooser').toBe(1);
         expect(project.inRow, 'the chooser is on the toggle row').toBe(true);
@@ -146,9 +151,14 @@ describe("Instrument's desk toggle row, in a real Chrome", () => {
 
   for (const [pointer, touch] of [['fine pointer', false], ['touch', true]] as const) {
     it(`the chooser wraps below the radiogroup at 150% and 200% text, under a ${pointer} at 1280`, async () => {
+      const base = await measure(1280, touch, 'project');
       for (const zoom of [150, 200]) {
         const m = await measure(1280, touch, 'project', zoom);
         const at = `${pointer}, ${zoom}%`;
+        // The scaling took: the options' words are drawn at the scaled size, so a token that failed to scale cannot
+        // pass for a row that wraps.
+        expect(m.radios, `${at}: the toggle's two options`).toBe(2);
+        expect(m.optionFont, `${at}: the options' font size, scaled from ${base.optionFont}px`).toBeCloseTo(base.optionFont * zoom / 100, 0);
         expect(m.choosers, `${at}: one chooser`).toBe(1);
         expect(m.chooser!.top, `${at}: the chooser wrapped below the radiogroup`).toBeGreaterThanOrEqual(m.group.bottom - 0.5);
         expect(m.group.width, `${at}: the radiogroup spans the row`).toBeGreaterThanOrEqual(m.rowWidth - 1);
