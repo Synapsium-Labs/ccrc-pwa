@@ -2244,3 +2244,256 @@ describe('decideRetire: the rows carry the difference table (C4i; D-7166, D-7173
       ['childReclaimSweepVerdict', 'childReclaimDecision'], ['archivedExpiryVerdict'], ['collectLicence']]);
   });
 });
+
+
+// ══ retireAct: the one executor loop, over FIXTURE rows (C4j; D-7167) ═══════════════════════════════════════════════
+//
+// APPENDED by C4j; nothing above is edited. `retireAct(port, reason, req)` (`server/src/retireLane.ts`) drives one row
+// through `decideRetire` with a port's readers, outcome hook, act, after-act hook and notice. These rows are FIXTURES
+// declared here (`lane-a`-style), never the three real rows: no executor moves onto the loop until C4k, C4l and C4m.
+// Each `it` is named by the red the plan's mutation table expects of it.
+import { retireAct, type RetireActPort } from '../src/retireLane.js';
+import type { RetireOnReject, RetireNoticeHome, RetireStepSpec } from '../src/retire.js';
+
+/** The fixture row's facts: each step answers a word (`ok` passes, `stop` answers), a judged rejection, or null. */
+type LaneAFact = string | RetireRejected | null;
+interface LaneAFacts {
+  readonly [RETIRE_STEPS.id]?: LaneAFact;
+  readonly [RETIRE_STEPS.switches]?: LaneAFact;
+  readonly [RETIRE_STEPS.presence]?: LaneAFact;
+  readonly [RETIRE_STEPS.audit]?: LaneAFact;
+  readonly [RETIRE_STEPS.switchesLast]?: LaneAFact;
+  readonly [RETIRE_STEPS.latch]?: LaneAFact;
+  readonly [RETIRE_STEPS.lane]?: LaneAFact;
+}
+type LaneAStep = keyof LaneAFacts & RetireStep;
+interface LaneAReq { readonly sessionId: string }
+/** How a fixture reader answers: a plain value, a promise of one, a rejected promise, or a synchronous throw. */
+type LaneARead = { readonly kind: 'value'; readonly v: string | null } | { readonly kind: 'async'; readonly v: string | null }
+  | { readonly kind: 'reject'; readonly err: Error } | { readonly kind: 'throw'; readonly err: Error };
+
+const LANE_A_DECIDE: readonly LaneAStep[] = [RETIRE_STEPS.id, RETIRE_STEPS.switches, RETIRE_STEPS.presence];
+const LANE_A_ACT: readonly LaneAStep[] = [RETIRE_STEPS.switchesLast, RETIRE_STEPS.latch, RETIRE_STEPS.lane];
+const LANE_A_STEPS: readonly LaneAStep[] = [...LANE_A_DECIDE, RETIRE_STEPS.audit, ...LANE_A_ACT];
+/** The fixture row's async steps: the switches, the audit and the last switches. Every other step is `sync`. */
+const LANE_A_ASYNC: ReadonlySet<LaneAStep> = new Set([RETIRE_STEPS.switches, RETIRE_STEPS.audit, RETIRE_STEPS.switchesLast]);
+
+/** The fixture judge's sentence for a step: its `stop` word, or its rejection's message. */
+const laneAWord = (step: RetireStep, fact: LaneAFact): string | null => {
+  if (fact instanceof RetireRejected) return `lane-a ${step}: rejected (${said(fact.rejected)})`;
+  return fact === 'stop' ? `lane-a ${step}: stop` : null;
+};
+
+/** A `lane-a` row: every step judged by `laneAWord`, each step's mode and `sync` flag as given. */
+const laneARow = (o: {
+  readonly notice?: RetireNoticeHome; readonly onReject?: Partial<Record<LaneAStep, RetireOnReject>>;
+  readonly sync?: Partial<Record<LaneAStep, boolean>>;
+} = {}): RetireReason<LaneAReq, LaneAFacts, string> => {
+  const spec = (step: LaneAStep): RetireStepSpec => ({
+    step, sync: o.sync?.[step] ?? !LANE_A_ASYNC.has(step), onReject: o.onReject?.[step] ?? 'propagate',
+  });
+  const judge: Record<string, (fact: LaneAFact) => string | null> = {};
+  for (const s of LANE_A_STEPS) judge[s] = (fact) => laneAWord(s, fact);
+  return {
+    name: RETIRE_REASON_NAMES.tempOrphan,
+    decide: LANE_A_DECIDE.map(spec),
+    audit: spec(RETIRE_STEPS.audit) as RetireStepSpec & { readonly step: typeof RETIRE_STEPS.audit },
+    act: LANE_A_ACT.map(spec),
+    listing: RETIRE_LISTING_MODES.measuredOnce,
+    presence: RETIRE_PRESENCE_RULES.noCeiling,
+    notice: o.notice ?? RETIRE_NOTICE_HOMES.executor,
+    judge: judge as RetireReason<LaneAReq, LaneAFacts, string>['judge'],
+    evidence: [],
+  };
+};
+
+/** A recorded `lane-a` port: one order log (`read:<step>`, `effect:<step>`, `answered:<step>:<out>`, `act`, `argv`,
+ *  `afterAct:<out>`, `notice:<out>`), each reader answering as `reads` says (default: `ok`, a promise for an async step).
+ *  The probe (C4h (f)'s placement): queued by the first sync reader that runs after the last async reader's
+ *  continuation, never by the async fake on settle; the act records whether it ran when it composes its argv. */
+const laneAPort = (o: {
+  readonly reads?: Partial<Record<LaneAStep, LaneARead>>; readonly act?: 'ok' | 'reject' | 'throw';
+  readonly hooks?: boolean; readonly lastAsync?: LaneAStep;
+} = {}) => {
+  const log: string[] = [];
+  const probe = { armed: false, ran: false, atArgv: null as null | boolean };
+  const lastAsync = o.lastAsync ?? RETIRE_STEPS.switchesLast;
+  let lastAsyncSettled = false;
+  const reader = (step: LaneAStep) => (): string | null | Promise<string | null> => {
+    log.push(`read:${step}`);
+    log.push(`effect:${step}`);
+    const r = o.reads?.[step] ?? (LANE_A_ASYNC.has(step) ? { kind: 'async', v: 'ok' } : { kind: 'value', v: 'ok' });
+    if (step === lastAsync && r.kind === 'async') {
+      return Promise.resolve(r.v).then((v) => { lastAsyncSettled = true; return v; });
+    }
+    if (lastAsyncSettled && !probe.armed && r.kind === 'value') {
+      probe.armed = true;
+      queueMicrotask(() => { probe.ran = true; });
+    }
+    if (r.kind === 'value') return r.v;
+    if (r.kind === 'async') return Promise.resolve(r.v);
+    if (r.kind === 'reject') return Promise.reject(r.err);
+    throw r.err;
+  };
+  const read = Object.fromEntries(LANE_A_STEPS.map((s) => [s, reader(s)])) as unknown as RetireActPort<LaneAReq, LaneAFacts, string>['read'];
+  const ACT_ERR = new Error('lane-a act refused');
+  const port: RetireActPort<LaneAReq, LaneAFacts, string> = {
+    read,
+    act: async (_facts, req) => {
+      log.push('act');
+      if (o.act === 'throw') throw ACT_ERR;
+      probe.atArgv = probe.ran;
+      log.push('argv');
+      await Promise.resolve();
+      if (o.act === 'reject') throw ACT_ERR;
+      return `lane-a collected ${req.sessionId}`;
+    },
+    ...(o.hooks === false ? {} : {
+      answered: (step, outcome) => { log.push(`answered:${step}:${outcome}`); },
+      afterAct: (outcome) => { log.push(`afterAct:${outcome}`); },
+      notice: (outcome) => { log.push(`notice:${outcome}`); },
+    }),
+  };
+  return { port, log, probe, ACT_ERR };
+};
+const LANE_A_REQ: LaneAReq = { sessionId: 'lane-a-1' };
+const readsOf = (log: readonly string[]): string[] => log.filter((l) => l.startsWith('read:')).map((l) => l.slice(5));
+const hooksOf = (log: readonly string[]): string[] => log.filter((l) => /^(answered|afterAct|notice):/.test(l));
+
+describe('retireAct: the one executor loop over fixture rows (C4j; D-7167)', () => {
+  it('the read order equals the need order', async () => {
+    const all = laneAPort();
+    await expect(retireAct(all.port, laneARow(), LANE_A_REQ)).resolves.toBe('lane-a collected lane-a-1');
+    expect(readsOf(all.log)).toEqual([...LANE_A_STEPS]);
+    // A step that answers is the last read: the next step is never read before the current one is judged.
+    for (const at of LANE_A_STEPS) {
+      const t = laneAPort({ reads: { [at]: LANE_A_ASYNC.has(at) ? { kind: 'async', v: 'stop' } : { kind: 'value', v: 'stop' } } });
+      await expect(retireAct(t.port, laneARow(), LANE_A_REQ), at).resolves.toBe(`lane-a ${at}: stop`);
+      expect(readsOf(t.log), at).toEqual(LANE_A_STEPS.slice(0, LANE_A_STEPS.indexOf(at) + 1));
+    }
+  });
+
+  it('a sync step after the last async one runs in the act\'s microtask', async () => {
+    const t = laneAPort();
+    await retireAct(t.port, laneARow(), LANE_A_REQ);
+    expect(t.probe.armed, 'the probe was armed by the first sync reader after the last listing').toBe(true);
+    expect(t.probe.atArgv, 'the probe had not run when the act composed its argv').toBe(false);
+    // A `sync: false` step whose reader answers a plain value (C4i's excused read: child-spent's generation, skipped
+    // with no read and no await for a request with no licence generation) is not awaited either.
+    const plain = laneAPort({ reads: { [RETIRE_STEPS.latch]: { kind: 'value', v: null } } });
+    await retireAct(plain.port, laneARow({ sync: { [RETIRE_STEPS.latch]: false } }), LANE_A_REQ);
+    expect(plain.probe.armed).toBe(true);
+    expect(plain.probe.atArgv, 'a plain value of a sync: false step is never awaited').toBe(false);
+  });
+
+  it('a judged step\'s rejection answers its judge\'s sentence', async () => {
+    for (const at of [RETIRE_STEPS.switches, RETIRE_STEPS.audit, RETIRE_STEPS.switchesLast] as const) {
+      const err = new Error(`${at} unreadable`);
+      const t = laneAPort({ reads: { [at]: { kind: 'reject', err } } });
+      const out = `lane-a ${at}: rejected (${at} unreadable)`;
+      await expect(retireAct(t.port, laneARow({ onReject: { [at]: 'judged' } }), LANE_A_REQ), at).resolves.toBe(out);
+      expect(hooksOf(t.log), at).toEqual([`answered:${at}:${out}`, `notice:${out}`]);
+      expect(t.log, at).not.toContain('act');
+    }
+  });
+
+  it('a propagate step\'s rejection rejects retireAct, with no answered, notice or afterAct', async () => {
+    for (const at of [RETIRE_STEPS.switches, RETIRE_STEPS.audit, RETIRE_STEPS.switchesLast] as const) {
+      const err = new Error(`${at} unreadable`);
+      const t = laneAPort({ reads: { [at]: { kind: 'reject', err } } });
+      await expect(retireAct(t.port, laneARow(), LANE_A_REQ), at).rejects.toBe(err);
+      expect(hooksOf(t.log), at).toEqual([]);
+      expect(readsOf(t.log), `${at}: no later reader`).toEqual(LANE_A_STEPS.slice(0, LANE_A_STEPS.indexOf(at) + 1));
+      expect(t.log, at).not.toContain('act');
+    }
+  });
+
+  it('a throwing synchronous reader behaves as a rejecting one of its mode', async () => {
+    for (const at of [RETIRE_STEPS.id, RETIRE_STEPS.presence, RETIRE_STEPS.lane] as const) {
+      const err = new Error(`${at} threw`);
+      const judged = laneAPort({ reads: { [at]: { kind: 'throw', err } } });
+      const out = `lane-a ${at}: rejected (${at} threw)`;
+      await expect(retireAct(judged.port, laneARow({ onReject: { [at]: 'judged' } }), LANE_A_REQ), at).resolves.toBe(out);
+      expect(hooksOf(judged.log), at).toEqual([`answered:${at}:${out}`, `notice:${out}`]);
+      const propagated = laneAPort({ reads: { [at]: { kind: 'throw', err } } });
+      await expect(retireAct(propagated.port, laneARow(), LANE_A_REQ), at).rejects.toBe(err);
+      expect(hooksOf(propagated.log), at).toEqual([]);
+      expect(readsOf(propagated.log), at).toEqual(LANE_A_STEPS.slice(0, LANE_A_STEPS.indexOf(at) + 1));
+    }
+  });
+
+  it('a rejecting act rejects retireAct', async () => {
+    for (const how of ['reject', 'throw'] as const) {
+      const t = laneAPort({ act: how });
+      await expect(retireAct(t.port, laneARow(), LANE_A_REQ), how).rejects.toBe(t.ACT_ERR);
+      expect(hooksOf(t.log), `${how}: no answered, no afterAct, no notice`).toEqual([]);
+    }
+  });
+
+  it('answered runs once per outcome, before the notice', async () => {
+    for (const at of LANE_A_STEPS) {
+      const t = laneAPort({ reads: { [at]: LANE_A_ASYNC.has(at) ? { kind: 'async', v: 'stop' } : { kind: 'value', v: 'stop' } } });
+      await retireAct(t.port, laneARow(), LANE_A_REQ);
+      const out = `lane-a ${at}: stop`;
+      expect(hooksOf(t.log), at).toEqual([`answered:${at}:${out}`, `notice:${out}`]);
+    }
+  });
+
+  it('answered never runs for a passing step', async () => {
+    const t = laneAPort({ reads: { [RETIRE_STEPS.lane]: { kind: 'value', v: 'stop' } } });
+    await retireAct(t.port, laneARow(), LANE_A_REQ);
+    expect(t.log.filter((l) => l.startsWith('answered:'))).toEqual([`answered:lane:lane-a lane: stop`]);
+    const acted = laneAPort();
+    await retireAct(acted.port, laneARow(), LANE_A_REQ);
+    expect(acted.log.filter((l) => l.startsWith('answered:')), 'nor after an act').toEqual([]);
+  });
+
+  it('a reader\'s effect runs once, only for a step the decider asked for', async () => {
+    const t = laneAPort({ reads: { [RETIRE_STEPS.presence]: { kind: 'value', v: 'stop' } } });
+    await retireAct(t.port, laneARow(), LANE_A_REQ);
+    const effects = t.log.filter((l) => l.startsWith('effect:'));
+    expect(effects).toEqual(['effect:id', 'effect:switches', 'effect:presence']);
+    // Each effect at the point its reader computes its fact: right after its own read, before the next.
+    expect(t.log.filter((l) => /^(read|effect):/.test(l))).toEqual([
+      'read:id', 'effect:id', 'read:switches', 'effect:switches', 'read:presence', 'effect:presence']);
+  });
+
+  it('the after-act hook runs only after an act that composed', async () => {
+    const t = laneAPort();
+    await retireAct(t.port, laneARow(), LANE_A_REQ);
+    const out = 'lane-a collected lane-a-1';
+    expect(t.log.slice(t.log.indexOf('act'))).toEqual(['act', 'argv', `afterAct:${out}`, `notice:${out}`]);
+    for (const at of LANE_A_STEPS) {
+      const d = laneAPort({ reads: { [at]: LANE_A_ASYNC.has(at) ? { kind: 'async', v: 'stop' } : { kind: 'value', v: 'stop' } } });
+      await retireAct(d.port, laneARow(), LANE_A_REQ);
+      expect(d.log.filter((l) => l.startsWith('afterAct:')), `${at}: no after-act hook after a deferral`).toEqual([]);
+    }
+  });
+
+  it('the notice is written once for home executor', async () => {
+    const acted = laneAPort();
+    await retireAct(acted.port, laneARow({ notice: RETIRE_NOTICE_HOMES.executor }), LANE_A_REQ);
+    expect(acted.log.filter((l) => l.startsWith('notice:'))).toEqual(['notice:lane-a collected lane-a-1']);
+    const deferred = laneAPort({ reads: { [RETIRE_STEPS.id]: { kind: 'value', v: 'stop' } } });
+    await retireAct(deferred.port, laneARow({ notice: RETIRE_NOTICE_HOMES.executor }), LANE_A_REQ);
+    expect(deferred.log.filter((l) => l.startsWith('notice:'))).toEqual(['notice:lane-a id: stop']);
+  });
+
+  it('the notice is never written for home lane', async () => {
+    const acted = laneAPort();
+    await expect(retireAct(acted.port, laneARow({ notice: RETIRE_NOTICE_HOMES.lane }), LANE_A_REQ)).resolves.toBe('lane-a collected lane-a-1');
+    const deferred = laneAPort({ reads: { [RETIRE_STEPS.id]: { kind: 'value', v: 'stop' } } });
+    await expect(retireAct(deferred.port, laneARow({ notice: RETIRE_NOTICE_HOMES.lane }), LANE_A_REQ)).resolves.toBe('lane-a id: stop');
+    expect([...acted.log, ...deferred.log].filter((l) => l.startsWith('notice:'))).toEqual([]);
+    // The other hooks still run for a lane-home row.
+    expect(hooksOf(acted.log)).toEqual(['afterAct:lane-a collected lane-a-1']);
+    expect(hooksOf(deferred.log)).toEqual(['answered:id:lane-a id: stop']);
+  });
+
+  it('a port with no hooks runs the gate and the act alone', async () => {
+    const t = laneAPort({ hooks: false });
+    await expect(retireAct(t.port, laneARow(), LANE_A_REQ)).resolves.toBe('lane-a collected lane-a-1');
+    const d = laneAPort({ hooks: false, reads: { [RETIRE_STEPS.audit]: { kind: 'async', v: 'stop' } } });
+    await expect(retireAct(d.port, laneARow(), LANE_A_REQ)).resolves.toBe('lane-a audit: stop');
+  });
+});

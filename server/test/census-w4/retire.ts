@@ -14,6 +14,9 @@
 //   - `retireNoticeSites`: the functions writing a retire reason's feed row through `notify(` (pinned exact: D-7176).
 // AND ONE MORE (C4i, D-7166):
 //   - `retireDeciders`: the functions declared to answer a `RetireDecision` (0 at C4i's base; 1 after it, pinned exact).
+// AND NO NEW QUERY AT C4j (D-7167): `retireLane.ts#retireAct` is a loop, not a ladder, and the own-body rule of
+// `retireGateLadders` already passes over it. Its REAL rows in `retire.test.ts` name it as the only server/src
+// function calling `decideRetire(`, and hold `retire.ts` and `retireLane.ts` at L1 (C4n adds `retireExecutor.ts`, L4).
 import path from 'node:path';
 import { parsedFile } from '../scan/symbols.js';
 import { identifierReferences, retireFacts, type CallSite, type ParsedFile, type SymbolSpan } from '../scan/parse.js';
