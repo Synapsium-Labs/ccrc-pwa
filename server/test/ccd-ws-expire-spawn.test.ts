@@ -185,12 +185,24 @@ describe('during the act: a spawn that would clear the archive takes the reap lo
     expect(out.trim().split('\n').pop(), 'released, not leaked').toBe('FREE');
   });
 
-  it('the CONTROL: a row that is NOT archived takes no lock at all — a held lock refuses nothing there', () => {
+  it('the CONTROL: a row that is NOT archived takes no lock and makes no lock file; a free lock refuses nothing there', () => {
     h.makeRepo('proj');
     h.sh(`${WS_ADD} CCD_WS_SLUG=quiet-dune cmd_ws_add proj`);
-    const r = run(`exec 9>>"$HOME/.cc-sessions/.reap-${ID}.lock"; flock -n 9; _spawn_start ${ID} resume`);
-    expect(r.out).not.toContain('still holds the lock');
+    const lock = path.join(h.home, '.cc-sessions', `.reap-${ID}.lock`);
+    fs.rmSync(lock, { force: true });
+    const r = run(`_spawn_start ${ID} resume`);
+    expect(r.out).not.toContain('reap lock');
+    expect(fs.existsSync(lock), 'a wake never creates a reap lock').toBe(false);
     expect(tmuxCalls().length, 'it went on to ask tmux for the pane').toBeGreaterThan(0);
+  });
+
+  it('a row that is NOT archived refuses while another process holds its reap lock (ws-shed-deps, D-7278)', () => {
+    h.makeRepo('proj');
+    h.sh(`${WS_ADD} CCD_WS_SLUG=quiet-dune cmd_ws_add proj`);
+    const before = tmuxCalls().length;
+    const r = run(`exec 9>>"$HOME/.cc-sessions/.reap-${ID}.lock"; flock -n 9; (exec 9>&-; _spawn_start ${ID} resume)`);
+    expect(r.out).toMatch(/holds .*reap lock.*shed/);
+    expect(tmuxCalls().length, 'no pane was asked for').toBe(before);
   });
 });
 

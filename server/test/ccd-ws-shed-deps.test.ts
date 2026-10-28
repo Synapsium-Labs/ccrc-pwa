@@ -254,6 +254,23 @@ describe('ws-shed-deps refuses, touching nothing', () => {
     kept();
     expect(journal().map((e) => e['refusal'])).toEqual(['in-progress']);
   });
+  it('a wake and a shed exclude each other: while the reap lock is held no pane is created for a row that is not archived', () => {
+    const lock = path.join(h.home, '.cc-sessions', `.reap-${CHILD_ID}.lock`);
+    const gate = `_ws_expire_spawn_gate ${CHILD_ID}; echo "rc=$? why=$_WS_EXPIRE_SPAWN_WHY"`;
+    // No lock file: the gate answers free and creates none.
+    expect(h.run(`${CHILD_STUBS} ${gate}`).stdout).toContain('rc=0');
+    expect(fs.existsSync(lock)).toBe(false);
+    // The file stands, nobody holds it: free, and the gate let it go (a second process can take it).
+    fs.writeFileSync(lock, '');
+    expect(h.run(`${CHILD_STUBS} ${gate}; exec 8>>'${lock}'; flock -n 8 && echo retaken`).stdout).toMatch(/rc=0[\s\S]*retaken/);
+    // Held (a shed in progress): refused, and `ccd ensure` dies before it clears the stop stamp.
+    const held = `exec 9>>'${lock}'; flock -n 9 || exit 99; (exec 9>&-; ${gate});`;
+    const r = h.run(`${CHILD_STUBS} ${held}`);
+    expect(r.stdout).toMatch(/rc=1 why=.*reap lock.*shed/);
+    const ens = h.run(`${CHILD_STUBS} exec 9>>'${lock}'; flock -n 9 || exit 99; (exec 9>&-; cmd_ensure ${CHILD_ID}) 2>&1; echo "ens=$?"`);
+    expect(ens.stdout).toMatch(/reap lock[\s\S]*ens=1/);
+    expect(fs.existsSync(reg('stopped'))).toBe(true);
+  });
   it('no reap lock is made for an id no row names', () => {
     h.run(`${CHILD_STUBS} ${NO_USERS} cmd_ws_shed_deps --session project-a-nobody --class child`);
     expect(fs.existsSync(path.join(h.home, '.cc-sessions', '.reap-project-a-nobody.lock'))).toBe(false);
@@ -275,6 +292,33 @@ describe('ws-shed-deps refuses, touching nothing', () => {
     const blind = '_ws_path_users_many() { _WS_PATH_USERS_RCS=(2 2); _WS_PATH_USERS_PIDS_OF=("" ""); _WS_PATH_USERS_WHY_OF=("walk timed out" ""); };';
     expect(shed('', blind).doc).toMatchObject({ refused: 'unmeasured' });
     kept();
+  });
+  it('a wake during the walks refuses `not-asleep` just before the act: a pane, an active unit, a cleared stop stamp', () => {
+    // The wake paths (`ccd ensure` from the PWA's route or the mail lane, `ccd start`) take no lock this verb holds, so the
+    // verb asks again, after every walk: `_ws_shed_gap` stands between rung 4's answer and the last facts.
+    const wakes: Array<[string, string]> = [
+      ['a pane came up', `_ws_shed_gap() { printf 'cc-${CHILD_ID}\\n' > "$HOME/tmux-sessions"; };`],
+      ['the unit started', '_ws_shed_gap() { _svc_is_active() { printf active; }; };'],
+      ['a wake cleared the stop stamp', `_ws_shed_gap() { rm -f "${reg('stopped')}"; };`],
+      ['a wake re-stamped it', `_ws_shed_gap() { printf '%s agent' "$(( $(date +%s) - 1 ))" > "${reg('stopped')}"; };`],
+    ];
+    for (const [why, gap] of wakes) {
+      for (const flags of ['', '--dry-run']) {
+        const r = shed(flags, gap);
+        expect(r.doc, `${why} ${flags}`).toMatchObject({ refused: 'not-asleep' });
+        kept();
+        fs.rmSync(path.join(h.home, 'tmux-sessions'), { force: true });
+        asleep(7200);
+      }
+    }
+    // A holder that appeared during the walks refuses `in-use` there too, with nothing removed.
+    const lateHolder = '_ws_shed_gap() { _ws_path_users_many() { _WS_PATH_USERS_RCS=(1 0); _WS_PATH_USERS_PIDS_OF=("77" "");'
+      + ' _WS_PATH_USERS_WHY_OF=("cwd" ""); }; };';
+    expect(shed('', lateHolder).doc).toMatchObject({ refused: 'in-use' });
+    kept();
+    expect(journal().every((e) => e['outcome'] === 'refused')).toBe(true);
+    // CONTROL: the same gap seam with nothing woken still sheds.
+    expect(shed('', '_ws_shed_gap() { :; };').doc).toMatchObject({ shed: true });
   });
   it('the dry run refuses the same way and journals nothing', () => {
     asleep(60);
