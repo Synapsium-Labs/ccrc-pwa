@@ -6,6 +6,8 @@
 // renders `no lane can serve <class>` for a `{kind:'none', class}` placement
 // (D-2854) — this suite asserts against those exact rendered words, not a
 // paraphrase.
+import { readdirSync, readFileSync } from 'node:fs';
+import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, screen, waitFor } from '@testing-library/react';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
@@ -237,5 +239,40 @@ describe('the fleet screen class chooser (routing slice 5, Task 6)', () => {
     // The head itself is still there and still carries the items that DO fit,
     // so this is not passing merely because the header stopped rendering.
     expect(document.querySelector('.fleet-head .fleet-head-right')).not.toBeNull();
+  });
+});
+
+describe('the class chooser is one component (T2f, D-6371)', () => {
+  const src = path.join(import.meta.dirname, '..', 'src');
+  const read = (...p: string[]): string => readFileSync(path.join(src, ...p), 'utf8');
+
+  /** Every .ts/.tsx under src, as paths relative to it with `/` separators. */
+  const sources = (dir = ''): string[] =>
+    readdirSync(path.join(src, dir), { withFileTypes: true }).flatMap((e) => {
+      const rel = dir === '' ? e.name : `${dir}/${e.name}`;
+      if (e.isDirectory()) return sources(rel);
+      return /\.tsx?$/.test(e.name) ? [rel] : [];
+    });
+
+  it('the chooser is one component: FleetScreen and FleetTable import ClassChooser and declare no class select of their own', () => {
+    const chooser = read('fleet', 'ClassChooser.tsx');
+    // Non-vacuity: the component holds the one select, so the absences below are read against a file that has it.
+    expect(chooser.split('aria-label="Class"').length - 1, 'ClassChooser.tsx holds the class select once').toBe(1);
+
+    const homes: readonly [string, string, string][] = [
+      ['screens/FleetScreen.tsx', read('screens', 'FleetScreen.tsx'), "from '../fleet/ClassChooser'"],
+      ['skins/instrument/FleetTable.tsx', read('skins', 'instrument', 'FleetTable.tsx'), "from '../../fleet/ClassChooser'"],
+    ];
+    for (const [name, text, importLine] of homes) {
+      expect(text, `${name} imports ClassChooser`).toContain(importLine);
+      expect(text, `${name} renders ClassChooser`).toContain('<ClassChooser');
+      expect(text, `${name} declares a class select of its own`).not.toContain('aria-label="Class"');
+      expect(text, `${name} reads chooseClass itself`).not.toContain('chooseClass');
+      expect(text, `${name} reads classFilter itself`).not.toContain('classFilter');
+    }
+
+    // The one caller of `chooseClass(` in the tree is the component; its definition is `useProjectRows`'s own.
+    const callers = sources().filter((f) => read(...f.split('/')).includes('chooseClass(')).sort();
+    expect(callers).toEqual(['fleet/ClassChooser.tsx']);
   });
 });
