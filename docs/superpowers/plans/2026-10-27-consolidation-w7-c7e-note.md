@@ -6,16 +6,15 @@ allocates none.
 
 ## slug step7-held
 
-OA-C17 is not recorded as ruled on `main`, and the coordinator had not confirmed it when this task finished. So Step 7
-is held: `push-sw.js` keeps its hand-written request and its `REFUSAL` table, `refusalWords.ts` gains no
-`NOTIFICATION_REFUSAL_TEXT`, `pwa/test/answerRegion.ts` is not created and `push-sw.test.ts` gains no rows. What Step 7
-needs is already in place: `answerLifecycle.ts#ASK_REQUEST` and `#askCommandOf` are the declared `ask` shape and parser,
-and `answer-lifecycle.test.ts` holds `answerRequest`'s `ask` arm equal to `push-sw.js`'s `fetch` today (method, path,
-header and body bytes for `ask:k1:2` on `session-a`; nothing sent for `ask:k1:x` or with no session). Step 0's ring
-check passed with a scratch `pwa/test/answerRegion.ts` in place (`mjs-node.test.ts` 6/6, `pwa-rings.test.ts` 7/7).
-`answerPaths()` stays at 2 (the reducer and `push-sw.js`'s one handler), unratcheted; Step 8's `answerPaths()` 3 -> 1
-ratchet lands with Step 7. `refusal-tables.w7.test.ts` pins the two in-app tables now, and gains the notification's
-when that table moves.
+When the build first finished, OA-C17 was not recorded as ruled, so Step 7 was held. The operator has since ruled it
+(a), recorded in `docs/superpowers/plans/2026-10-28-w7-operator-acts-ruled.md` (D-7265), and Step 7 is built as the
+plan and that ruling say, red first: `refusalWords.ts#NOTIFICATION_REFUSAL_TEXT` holds `push-sw.js`'s `REFUSAL` table
+byte for byte and `refusal-tables.w7.test.ts` pins it; `pwa/test/answerRegion.ts` renders the region between
+`// ccrc:generated answer-lifecycle BEGIN` and `END` (`askRequestOf` from `answerLifecycle.ts#ASK_REQUEST`, `REFUSAL`
+from the table); `push-sw.test.ts` holds the region equal to a fresh render (`CCRC_WRITE_ANSWER_REGION=1` writes it,
+refused under `CI`), pins today's request bytes for `ask:k1:2` on `session-a`, keeps a malformed action opening the app
+and sending nothing, and evaluates the rendered `askRequestOf` against `answerRequest(askCommandOf(…))` over an action
+corpus. The handler's control flow stays hand-written. Step 8's `answerPaths()` 3 -> 1 ratchet lands with it.
 
 ## slug lifecycle-render-lane
 
