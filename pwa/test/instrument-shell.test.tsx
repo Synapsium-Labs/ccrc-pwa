@@ -528,6 +528,25 @@ describe('the lanes fold (S5b, D-6530)', () => {
     expect(within(strip).getByRole('button', { name: '+13 more · 1 sign-in expired · 1 rate-limited' })).toHaveAttribute('aria-expanded', 'false');
     expect(document.querySelectorAll('.accounts-strip')).toHaveLength(1);
   });
+
+  it("a tap on the control in Instrument's phone fleet column opens the panel holding all 17 lanes (S5c)", async () => {
+    const f = seventeenLanes(Math.floor(Date.now() / 1000));
+    vi.spyOn(api, 'accounts').mockResolvedValue({ accounts: f.accounts, projected: { wrapper: 'w0', score: 0 }, roster: f.roster });
+    stubWidth(false);
+    mount('/');
+    const fleet = screen.getByRole('region', { name: 'Fleet' });
+    const strip = await within(fleet).findByRole('group', { name: /^account usage, highest lane-q 100%/ });
+    await within(strip).findByText('lane-a');
+    const more = within(strip).getByRole('button', { name: /^\+13 more/ });
+    fireEvent.click(more);
+    const panel = strip.querySelector<HTMLElement>('.accounts-flyout');
+    expect(panel).not.toBeNull();
+    expect(panel!.querySelectorAll('.account-gauge')).toHaveLength(17);
+    expect(more).toHaveAttribute('aria-expanded', 'true');
+    expect(more).toHaveAttribute('aria-controls', panel!.id);
+    // The line is still four cards: the panel is over the content, the strip is not expanded in place.
+    expect([...strip.children].filter((c) => c.classList.contains('account-gauge'))).toHaveLength(4);
+  });
 });
 
 describe('one instance per width', () => {

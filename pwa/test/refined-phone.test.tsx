@@ -240,20 +240,66 @@ describe("Refined's phone header (W2 Task S5)", () => {
     expect(document.querySelectorAll('.accounts-strip')).toHaveLength(1);
   });
 
-  it('the choice to expand is remembered across a remount', async () => {
+  // The phone's rule (S5c, phone-strip-tap-panel): the control opens a panel of every lane instead of expanding the strip,
+  // and the stored choice is the desk's alone, so nothing is remembered and a remount finds the strip as it began.
+  const lineNames = (strip: HTMLElement): string[] =>
+    [...strip.children].filter((c) => c.classList.contains('account-gauge')).map((c) => c.querySelector('.account-gauge-label')?.textContent ?? '');
+
+  it('a tap on the control opens a panel of all 17 lanes over a line that stays four, stores nothing, and a remount finds it closed', async () => {
     stubSeventeen();
     atWidth(390);
     const first = render(<App />);
     const strip = await within(head()).findByRole('group', { name: /^account usage/ });
     await within(strip).findByText('lane-a');
     fireEvent.click(within(strip).getByRole('button', { name: /^\+13 more/ }));
-    expect(cardNames(strip)).toHaveLength(17);
+    const panel = strip.querySelector<HTMLElement>('.accounts-flyout');
+    expect(panel).not.toBeNull();
+    expect(panel!.querySelectorAll('.account-gauge')).toHaveLength(17);
+    expect(lineNames(strip)).toHaveLength(4);
+    expect(within(strip).getByRole('button', { name: /^\+13 more/ })).toHaveAttribute('aria-controls', panel!.id);
+    expect(window.localStorage.getItem('ccrc-accounts-strip')).toBeNull();
     first.unmount();
     render(<App />);
     const again = await within(head()).findByRole('group', { name: /^account usage/ });
     await within(again).findByText('lane-a');
-    expect(cardNames(again)).toHaveLength(17);
-    expect(within(again).getByRole('button', { name: 'Show fewer' })).toHaveAttribute('aria-expanded', 'true');
+    expect(again.querySelector('.accounts-flyout')).toBeNull();
+    expect(lineNames(again)).toHaveLength(4);
+    expect(within(again).getByRole('button', { name: /^\+13 more/ })).toHaveAttribute('aria-expanded', 'false');
+  });
+
+  it('a stored choice of expanded is not read below 900: the phone header still folds to its line', async () => {
+    stubSeventeen();
+    window.localStorage.setItem('ccrc-accounts-strip', 'expanded');
+    atWidth(390);
+    render(<App />);
+    const strip = await within(head()).findByRole('group', { name: /^account usage/ });
+    await within(strip).findByText('lane-a');
+    expect(lineNames(strip)).toHaveLength(4);
+    expect(within(strip).getByRole('button', { name: /^\+13 more/ })).toHaveAttribute('aria-expanded', 'false');
+  });
+
+  it('a phone whose grid draws four tracks shows two lines of them: eight cards', async () => {
+    stubSeventeen();
+    atWidth(700);
+    // jsdom lays nothing out: the observer answers the group's width, and the computed style names the tracks it draws.
+    const real = window.getComputedStyle.bind(window);
+    vi.spyOn(window, 'getComputedStyle').mockImplementation((el, pseudo) => (
+      el.classList.contains('accounts-strip')
+        ? ({ columnGap: '6px', gridTemplateColumns: '145.5px 145.5px 145.5px 145.5px' } as CSSStyleDeclaration)
+        : real(el, pseudo)));
+    vi.stubGlobal('ResizeObserver', class {
+      private readonly cb: ResizeObserverCallback;
+      constructor(cb: ResizeObserverCallback) { this.cb = cb; }
+      observe(target: Element): void {
+        if (target.classList.contains('accounts-strip')) this.cb([{ target, contentRect: { width: 600 } } as unknown as ResizeObserverEntry], this as unknown as ResizeObserver);
+      }
+      unobserve(): void {}
+      disconnect(): void {}
+    });
+    render(<App />);
+    const strip = await within(head()).findByRole('group', { name: /^account usage/ });
+    await within(strip).findByRole('button', { name: /^\+9 more/ });
+    expect(lineNames(strip)).toHaveLength(8);
   });
 
   it('Refined renders neither FleetHead nor `.fab`; Instrument still renders both', () => {

@@ -17,6 +17,29 @@ import { isSpecifier, parseTs } from './literalWalker';
 import { TEST_ROSTER } from './rosterFixture';
 import { seventeenLanes } from './seventeenLanes';
 
+/** A desk whose cards' group measures `width` px of content (jsdom has no stylesheet, so its column-gap is not a number
+ *  unless `gap` gives the group one, in px, as the lanes row's stylesheet does). */
+const stubDesk = (width: number, gap: number | null = null): void => {
+  if (gap !== null) {
+    const real = window.getComputedStyle.bind(window);
+    vi.spyOn(window, 'getComputedStyle').mockImplementation((el, pseudo) => (
+      el.classList.contains('accounts-strip') ? ({ columnGap: `${gap}px` } as CSSStyleDeclaration) : real(el, pseudo)));
+  }
+  vi.stubGlobal('matchMedia', (q: string) => ({
+    matches: q.includes('min-width: 900px'), media: q, onchange: null,
+    addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, dispatchEvent: () => false,
+  }));
+  vi.stubGlobal('ResizeObserver', class {
+    private readonly cb: ResizeObserverCallback;
+    constructor(cb: ResizeObserverCallback) { this.cb = cb; }
+    observe(target: Element): void {
+      this.cb([{ target, contentRect: { width } } as unknown as ResizeObserverEntry], this as unknown as ResizeObserver);
+    }
+    unobserve(): void {}
+    disconnect(): void {}
+  });
+};
+
 const fleetCss = readFileSync(path.join(import.meta.dirname, '..', 'src', 'fleet', 'fleet.css'), 'utf8');
 
 const nowSec = Math.floor(Date.now() / 1000);
@@ -169,8 +192,10 @@ describe('AccountsStrip', () => {
   it('with lanes to show the strip is a group named over every live lane, no link and no tab stop; with none it is the go-accounts door', async () => {
     // The fullest lane is the last in sort order, so a name read over a subset would name another lane.
     const lanes = ['a', 'b', 'c', 'd', 'e', 'f'].map((x, i) => acct({ wrapper: `lane-${x}`, five: 5 + i * 10, seven: null }));
-    // Six lanes fold to four on a phone (S5b), and this case counts every card: it reads the stored choice, expanded.
+    // Six lanes fold on the desk (S5b) and this case counts every card: it reads the stored choice, expanded, which is the
+    // desk's alone (below 900 a phone is always folded, S5c).
     window.localStorage.setItem('ccrc-accounts-strip', 'expanded');
+    stubDesk(1300);
     stubAccounts([...lanes, acct({ wrapper: 'lane-off', five: 99, seven: null, disabled: true })]);
     const { container } = render(<AccountsStrip />);
     const group = await screen.findByRole('group', { name: 'account usage, highest lane-f 55%' });
@@ -464,28 +489,6 @@ describe('the lanes fold (S5b, D-6530)', () => {
     act(() => { useFleetStore.setState({ usage: accounts, roster }); });
   };
   const stubSeventeen = (): void => stubLanes(seventeenLanes(nowSec).accounts);
-  /** A desk whose cards' group measures `width` px of content (jsdom has no stylesheet, so its column-gap is not a number
-   *  unless `gap` gives the group one, in px, as the lanes row's stylesheet does). */
-  const stubDesk = (width: number, gap: number | null = null): void => {
-    if (gap !== null) {
-      const real = window.getComputedStyle.bind(window);
-      vi.spyOn(window, 'getComputedStyle').mockImplementation((el, pseudo) => (
-        el.classList.contains('accounts-strip') ? ({ columnGap: `${gap}px` } as CSSStyleDeclaration) : real(el, pseudo)));
-    }
-    vi.stubGlobal('matchMedia', (q: string) => ({
-      matches: q.includes('min-width: 900px'), media: q, onchange: null,
-      addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, dispatchEvent: () => false,
-    }));
-    vi.stubGlobal('ResizeObserver', class {
-      private readonly cb: ResizeObserverCallback;
-      constructor(cb: ResizeObserverCallback) { this.cb = cb; }
-      observe(target: Element): void {
-        this.cb([{ target, contentRect: { width } } as unknown as ResizeObserverEntry], this as unknown as ResizeObserver);
-      }
-      unobserve(): void {}
-      disconnect(): void {}
-    });
-  };
   const control = (name: string | RegExp = /more|Show fewer/): HTMLElement => screen.getByRole('button', { name });
   const stops = (container: HTMLElement): string[] => cardsOf(container).filter((c) => c.tabIndex === 0).map(nameOf);
 
@@ -535,10 +538,13 @@ describe('the lanes fold (S5b, D-6530)', () => {
   });
 
   it('the arrow keys move across the shown cards only, and a stop on a card that folds away goes to the first shown card', async () => {
+    // At the desk: the phone's control opens a panel, and only the desk's expands the strip in place (S5c). 1300 px holds
+    // five tracks, so four cards show beside the end cell, the same four a phone shows.
+    stubDesk(1300);
     stubSeventeen();
     const user = userEvent.setup();
     const { container } = render(<AccountsStrip />);
-    await screen.findByText('lane-a');
+    await screen.findByRole('button', { name: /more/ });
     await user.tab();
     await user.keyboard('{End}');
     expect(nameOf(document.activeElement as HTMLElement)).toBe('lane-e');
@@ -616,10 +622,11 @@ describe('the lanes fold (S5b, D-6530)', () => {
     expect(cardsOf(container).map(nameOf)).not.toContain('lane-q');
   });
 
-  it('a tap on the control folds and unfolds and never navigates, and the control carries no data-command and no data-action', async () => {
+  it('at the desk a tap on the control folds and unfolds and never navigates, and the control carries no data-command and no data-action', async () => {
+    stubDesk(1300);
     stubSeventeen();
     const { container } = render(<AccountsStrip />);
-    await screen.findByText('lane-a');
+    await screen.findByRole('button', { name: /more/ });
     const more = control(WORDS);
     expect(more).not.toHaveAttribute('data-command');
     expect(more).not.toHaveAttribute('data-action');
@@ -634,10 +641,11 @@ describe('the lanes fold (S5b, D-6530)', () => {
     expect(more).not.toHaveAttribute('data-action');
   });
 
-  it('the control\'s name is its words (no aria-label), with aria-expanded and aria-controls naming the cards\' element', async () => {
+  it('at the desk the control\'s name is its words (no aria-label), with aria-expanded and aria-controls naming the cards\' element', async () => {
+    stubDesk(1300);
     stubSeventeen();
     const { container } = render(<AccountsStrip />);
-    await screen.findByText('lane-a');
+    await screen.findByRole('button', { name: /more/ });
     const more = control(WORDS);
     expect(more).not.toHaveAttribute('aria-label');
     expect(more).toHaveAttribute('aria-expanded', 'false');
@@ -650,10 +658,11 @@ describe('the lanes fold (S5b, D-6530)', () => {
     expect(more).toHaveAttribute('aria-controls', group.id);
   });
 
-  it('focus stays on the control across Show fewer and +n more', async () => {
+  it('at the desk focus stays on the control across Show fewer and +n more', async () => {
+    stubDesk(1300);
     stubSeventeen();
     render(<AccountsStrip />);
-    await screen.findByText('lane-a');
+    await screen.findByRole('button', { name: /more/ });
     const more = control(WORDS);
     act(() => more.focus());
     fireEvent.click(more);
@@ -664,11 +673,12 @@ describe('the lanes fold (S5b, D-6530)', () => {
     expect(more).toHaveTextContent(/^\+13 more/);
   });
 
-  it('Show fewer scrolls the control into view with block nearest; mounting expanded or folded scrolls nothing', async () => {
+  it('at the desk Show fewer scrolls the control into view with block nearest; mounting expanded or folded scrolls nothing', async () => {
+    stubDesk(1300);
     stubSeventeen();
     const spy = vi.spyOn(HTMLElement.prototype, 'scrollIntoView');
     render(<AccountsStrip />);
-    await screen.findByText('lane-a');
+    await screen.findByRole('button', { name: /more/ });
     expect(spy).not.toHaveBeenCalled();
     fireEvent.click(control());                   // +n more: no scroll
     expect(spy).not.toHaveBeenCalled();
@@ -685,7 +695,8 @@ describe('the lanes fold (S5b, D-6530)', () => {
     expect(spy).not.toHaveBeenCalled();
   });
 
-  it("another tab's choice to fold, arriving after the load, scrolls nothing: only this page's own Show fewer does", async () => {
+  it("at the desk another tab's choice to fold, arriving after the load, scrolls nothing: only this page's own Show fewer does", async () => {
+    stubDesk(1300);
     stubSeventeen();
     window.localStorage.setItem('ccrc-accounts-strip', 'expanded');
     const spy = vi.spyOn(HTMLElement.prototype, 'scrollIntoView');
@@ -703,6 +714,7 @@ describe('the lanes fold (S5b, D-6530)', () => {
   });
 
   it('five lanes, folded or expanded: every card and no control', async () => {
+    stubDesk(1300);
     stubLanes(seventeenLanes(nowSec).accounts.slice(0, 5));
     const { container } = render(<AccountsStrip />);
     await screen.findByText('lane-a');
@@ -717,6 +729,7 @@ describe('the lanes fold (S5b, D-6530)', () => {
   });
 
   it('five lanes render no fold control at all, folded or expanded: the only button in the strip is All accounts', async () => {
+    stubDesk(1300);
     stubLanes(seventeenLanes(nowSec).accounts.slice(0, 5));
     for (const stored of ['folded', 'expanded']) {
       window.localStorage.setItem('ccrc-accounts-strip', stored);
@@ -746,6 +759,316 @@ describe('the lanes fold (S5b, D-6530)', () => {
     render(<AccountsStrip />);
     await screen.findByText(/all lanes disabled/);
     expect(screen.queryByRole('button')).toBeNull();
+  });
+
+  // ── the phone's panel (S5c, phone-strip-tap-panel, phone-fold-two-lines) ──
+  // Below 900 a folded strip's control opens the same panel as the desk's flyout, on a tap and on nothing else. jsdom
+  // applies no media query, so the default `matchMedia` (nothing matches) is the phone; the desk is `stubDesk`.
+  describe("the phone's panel (phone-strip-tap-panel)", () => {
+    afterEach(() => { vi.useRealTimers(); });
+    const groupOf = (container: HTMLElement): HTMLElement => container.querySelector<HTMLElement>('.accounts-strip')!;
+    const panelOf = (container: HTMLElement): HTMLElement | null => container.querySelector<HTMLElement>('.accounts-flyout');
+    const panelCardsOf = (container: HTMLElement): HTMLElement[] => [...(panelOf(container)?.querySelectorAll<HTMLElement>('.account-gauge') ?? [])];
+    const lineCardsOf = (container: HTMLElement): HTMLElement[] => [...groupOf(container).children].filter((c): c is HTMLElement => c.classList.contains('account-gauge'));
+    const names = seventeenLanes(nowSec);
+    const labelOf = (id: string): string => names.roster.find((r) => r.id === id)!.label;
+    const allAccounts = (): HTMLElement => screen.getByRole('button', { name: 'All accounts' });
+    const mountPhone = async (): Promise<HTMLElement> => {
+      stubSeventeen();
+      const { container } = render(<AccountsStrip />);
+      await screen.findByText('lane-a');
+      return container;
+    };
+    /** A tap on the control as a finger makes it: the pointer goes down, then the click. */
+    const tapControl = (): void => {
+      const c = control();
+      fireEvent.pointerDown(c);
+      fireEvent.click(c);
+    };
+    const openPanel = async (): Promise<HTMLElement> => {
+      const container = await mountPhone();
+      tapControl();
+      expect(panelOf(container)).not.toBeNull();
+      return container;
+    };
+
+    it("a tap on '+13 more' opens a panel of all 17 lanes in lanesByFree's order, in the end cell between the control and All accounts, and the control names it", async () => {
+      const container = await mountPhone();
+      const more = control(WORDS);
+      expect(panelOf(container)).toBeNull();
+      expect(more).toHaveAttribute('aria-expanded', 'false');
+      const id = more.getAttribute('aria-controls')!;
+      expect(id).not.toBe('');
+      tapControl();
+      const panel = panelOf(container)!;
+      expect(panel).not.toBeNull();
+      expect(panelCardsOf(container).map(nameOf)).toEqual(lanesByFree(names.accounts).map((a) => labelOf(a.wrapper)));
+      expect(panelCardsOf(container)).toHaveLength(17);
+      // The line stays four cards, the control keeps its words, and nothing navigated.
+      expect(lineCardsOf(container)).toHaveLength(4);
+      expect(more).toHaveTextContent(WORDS);
+      expect(location.pathname).toBe('/');
+      // The control names the panel, not the strip's group.
+      expect(more).toHaveAttribute('aria-expanded', 'true');
+      expect(panel.id).not.toBe('');
+      expect(more).toHaveAttribute('aria-controls', panel.id);
+      expect(panel.id).toBe(id);
+      expect(panel.id).not.toBe(groupOf(container).id);
+      // In the end cell, right after the control and before All accounts; a group named for what it holds, and no dialog.
+      const end = more.closest('.accounts-end')!;
+      expect([...end.children]).toEqual([more, panel, allAccounts()]);
+      expect(panel).toHaveAttribute('role', 'group');
+      expect(panel.getAttribute('aria-label')).toBe(FLYOUT_LABEL);
+      expect(panel).not.toHaveAttribute('aria-modal');
+    });
+
+    it('Tab goes from the control to the panel\'s one stop, then on to All accounts', async () => {
+      const container = await mountPhone();
+      const user = userEvent.setup();
+      act(() => { control().focus(); });
+      tapControl();
+      const cards = panelCardsOf(container);
+      expect(cards.filter((c) => c.tabIndex === 0)).toHaveLength(1);
+      await user.tab();
+      expect(document.activeElement).toBe(cards[0]);
+      await user.tab();
+      expect(document.activeElement).toBe(allAccounts());
+    });
+
+    it('each panel card is its lane\'s open-lane door, and a tap on one opens that lane and closes the panel', async () => {
+      const container = await openPanel();
+      for (const card of panelCardsOf(container)) {
+        expect(card).toHaveAttribute('role', 'link');
+        expect(card).toHaveAttribute('data-action', 'open-lane');
+      }
+      const order = lanesByFree(names.accounts).map((a) => a.wrapper);
+      fireEvent.click(panelCardsOf(container)[12]!);
+      expect(location.pathname + location.search).toBe(`/accounts?lane=${order[12]}`);
+      expect(panelOf(container)).toBeNull();
+      expect(control()).toHaveAttribute('aria-expanded', 'false');
+    });
+
+    it('Enter on a panel card opens that lane and closes the panel', async () => {
+      const container = await openPanel();
+      const order = lanesByFree(names.accounts).map((a) => a.wrapper);
+      fireEvent.keyDown(panelCardsOf(container)[3]!, { key: 'Enter' });
+      expect(location.pathname + location.search).toBe(`/accounts?lane=${order[3]}`);
+      expect(panelOf(container)).toBeNull();
+    });
+
+    it('a tap on a line card opens that lane and opens no panel', async () => {
+      const container = await mountPhone();
+      fireEvent.pointerDown(lineCardsOf(container)[1]!);
+      fireEvent.click(lineCardsOf(container)[1]!);
+      expect(location.pathname + location.search).toBe('/accounts?lane=w5');
+      expect(panelOf(container)).toBeNull();
+    });
+
+    it('nothing opens it on a phone but a tap: not the pointer resting on the strip, not focus on the line or the control', async () => {
+      const container = await mountPhone();
+      vi.useFakeTimers();
+      fireEvent.pointerEnter(groupOf(container));
+      act(() => { lineCardsOf(container)[0]!.focus(); });
+      act(() => { control().focus(); });
+      act(() => { vi.advanceTimersByTime(FLYOUT_OPEN_MS * 20); });
+      expect(panelOf(container)).toBeNull();
+      expect(vi.getTimerCount()).toBe(0);
+      expect(control()).toHaveAttribute('aria-expanded', 'false');
+    });
+
+    it('a second tap on the control closes it, and a tap on its own control closes it once (its pointer-down is not an outside tap)', async () => {
+      const container = await openPanel();
+      expect(control()).toHaveAttribute('aria-expanded', 'true');
+      tapControl();
+      expect(panelOf(container)).toBeNull();
+      expect(control()).toHaveAttribute('aria-expanded', 'false');
+      tapControl();
+      expect(panelOf(container)).not.toBeNull();
+    });
+
+    it('a tap outside the strip and the panel closes it; a tap inside the panel does not', async () => {
+      const container = await openPanel();
+      fireEvent.pointerDown(panelCardsOf(container)[2]!);
+      fireEvent.pointerDown(panelOf(container)!);
+      expect(panelOf(container)).not.toBeNull();
+      fireEvent.pointerDown(document.body);
+      expect(panelOf(container)).toBeNull();
+      expect(control()).toHaveAttribute('aria-expanded', 'false');
+      // Shut, a tap elsewhere is nothing: it opens nothing and leaves nothing listening.
+      fireEvent.pointerDown(document.body);
+      expect(panelOf(container)).toBeNull();
+    });
+
+    it('Escape closes it and the key is default-prevented, so the desk\'s Escape interrupt skips it; with it shut Escape goes on', async () => {
+      const container = await openPanel();
+      expect(fireEvent.keyDown(document.body, { key: 'Escape' })).toBe(false);
+      expect(panelOf(container)).toBeNull();
+      expect(fireEvent.keyDown(document.body, { key: 'Escape' })).toBe(true);
+      // Reopened, with focus on a card of the panel the key reaches the document the same way.
+      tapControl();
+      const card = panelCardsOf(container)[4]!;
+      act(() => { card.focus(); });
+      expect(fireEvent.keyDown(card, { key: 'Escape' })).toBe(false);
+      expect(panelOf(container)).toBeNull();
+    });
+
+    it('a close hands focus back to the control when focus was in the panel, and only then', async () => {
+      const container = await openPanel();
+      const card = panelCardsOf(container)[9]!;
+      act(() => { card.focus(); });
+      fireEvent.keyDown(card, { key: 'Escape' });
+      expect(panelOf(container)).toBeNull();
+      expect(document.activeElement).toBe(control());
+      // A tap outside with focus in a field elsewhere leaves that field its focus.
+      tapControl();
+      const field = document.createElement('input');
+      document.body.appendChild(field);
+      act(() => { field.focus(); });
+      fireEvent.pointerDown(field);
+      expect(panelOf(container)).toBeNull();
+      expect(document.activeElement).toBe(field);
+      field.remove();
+    });
+
+    it('with the stored choice \'expanded\' a phone still folds, and the control opens the panel', async () => {
+      window.localStorage.setItem('ccrc-accounts-strip', 'expanded');
+      const container = await mountPhone();
+      expect(lineCardsOf(container)).toHaveLength(4);
+      expect(container.querySelectorAll('.account-gauge')).toHaveLength(4);
+      expect(control()).toHaveTextContent(/^\+13 more/);
+      expect(control()).toHaveAttribute('aria-expanded', 'false');
+      tapControl();
+      expect(panelCardsOf(container)).toHaveLength(17);
+      expect(lineCardsOf(container)).toHaveLength(4);
+    });
+
+    it('below 900 the stored choice is neither read nor written: a tap, a close and a second tap touch no storage', async () => {
+      // A spy on jsdom's `localStorage` does not intercept (strip-expanded.test.ts), so a counting stand-in is swapped in.
+      const real = Object.getOwnPropertyDescriptor(window, 'localStorage');
+      const backing = new Map<string, string>([['ccrc-accounts-strip', 'expanded']]);
+      const reads: string[] = [];
+      const writes: string[] = [];
+      const stub: Storage = {
+        get length() { return backing.size; },
+        clear: () => backing.clear(),
+        key: (i: number) => [...backing.keys()][i] ?? null,
+        getItem: (k: string) => { reads.push(k); return backing.get(k) ?? null; },
+        setItem: (k: string, v: string) => { writes.push(k); backing.set(k, String(v)); },
+        removeItem: (k: string) => { backing.delete(k); },
+      };
+      Object.defineProperty(window, 'localStorage', { value: stub, configurable: true });
+      try {
+        const container = await mountPhone();
+        tapControl();
+        expect(panelOf(container)).not.toBeNull();
+        tapControl();
+        expect(panelOf(container)).toBeNull();
+        tapControl();
+        expect(panelCardsOf(container)).toHaveLength(17);
+        expect(reads.filter((k) => k === 'ccrc-accounts-strip')).toEqual([]);
+        expect(writes).toEqual([]);
+        expect(backing.get('ccrc-accounts-strip')).toBe('expanded');
+      } finally {
+        cleanup();
+        if (real !== undefined) Object.defineProperty(window, 'localStorage', real);
+      }
+    });
+
+    it('the panel is bounded by the room under the strip: --panel-room is the viewport\'s height less the strip\'s bottom, and follows a resize', async () => {
+      const container = await mountPhone();
+      vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+        const bottom = this.classList.contains('accounts-strip') ? 500 : 0;
+        return { x: 0, y: 0, top: 0, left: 0, right: 0, bottom, width: 0, height: bottom, toJSON: () => ({}) } as DOMRect;
+      });
+      vi.stubGlobal('innerHeight', 768);
+      tapControl();
+      const room = (): string => panelOf(container)!.style.getPropertyValue('--panel-room');
+      expect(room()).toBe('268px');
+      vi.stubGlobal('innerHeight', 600);
+      act(() => { window.dispatchEvent(new Event('resize')); });
+      expect(room()).toBe('100px');
+      // Never negative: a strip lower than the viewport leaves no room, not a negative one.
+      vi.stubGlobal('innerHeight', 400);
+      act(() => { window.dispatchEvent(new Event('resize')); });
+      expect(room()).toBe('0px');
+    });
+
+    it('a device that crosses 900 closes an open panel, and returning to a phone does not reopen it', async () => {
+      let desk = false;
+      const listeners = new Set<() => void>();
+      vi.stubGlobal('matchMedia', (q: string) => ({
+        get matches() { return desk && q.includes('min-width: 900px'); }, media: q, onchange: null,
+        addEventListener(_t: string, l: () => void) { listeners.add(l); },
+        removeEventListener(_t: string, l: () => void) { listeners.delete(l); },
+        addListener() {}, removeListener() {}, dispatchEvent: () => false,
+      }));
+      vi.stubGlobal('ResizeObserver', class {
+        private readonly cb: ResizeObserverCallback;
+        constructor(cb: ResizeObserverCallback) { this.cb = cb; }
+        observe(target: Element): void {
+          this.cb([{ target, contentRect: { width: 1300 } } as unknown as ResizeObserverEntry], this as unknown as ResizeObserver);
+        }
+        unobserve(): void {}
+        disconnect(): void {}
+      });
+      const cross = (to: boolean): void => { desk = to; act(() => { for (const l of [...listeners]) l(); }); };
+      const container = await openPanel();
+      cross(true);
+      // The desk: the panel is gone (the desk's flyout is the hover's, shut here), and the strip folds to its line.
+      expect(panelOf(container)).toBeNull();
+      cross(false);
+      expect(panelOf(container)).toBeNull();
+      expect(control()).toHaveAttribute('aria-expanded', 'false');
+      tapControl();
+      expect(panelCardsOf(container)).toHaveLength(17);
+    });
+
+    it('a poll that leaves nothing to fold takes the panel with it, and a later poll does not reopen it', async () => {
+      const container = await openPanel();
+      stubLanes(seventeenLanes(nowSec).accounts.slice(0, 5));
+      expect(panelOf(container)).toBeNull();
+      expect(screen.queryByRole('button', { name: /more|Show fewer/ })).toBeNull();
+      stubSeventeen();
+      expect(panelOf(container)).toBeNull();
+      expect(control()).toHaveAttribute('aria-expanded', 'false');
+    });
+
+    // ── phone-fold-two-lines: the phone folds to two lines of the tracks its grid draws ──
+    /** A phone whose cards' group draws `columns` (the computed `grid-template-columns`) with a 6 px gap. */
+    const stubDrawnPhone = (columns: string): void => {
+      const real = window.getComputedStyle.bind(window);
+      vi.spyOn(window, 'getComputedStyle').mockImplementation((el, pseudo) => (
+        el.classList.contains('accounts-strip')
+          ? ({ columnGap: '6px', gridTemplateColumns: columns } as CSSStyleDeclaration)
+          : real(el, pseudo)));
+      vi.stubGlobal('ResizeObserver', class {
+        private readonly cb: ResizeObserverCallback;
+        constructor(cb: ResizeObserverCallback) { this.cb = cb; }
+        observe(target: Element): void {
+          this.cb([{ target, contentRect: { width: 600 } } as unknown as ResizeObserverEntry], this as unknown as ResizeObserver);
+        }
+        unobserve(): void {}
+        disconnect(): void {}
+      });
+    };
+
+    it('a measured phone shows two lines of the tracks it draws: eight cards over four tracks, four over two', async () => {
+      stubDrawnPhone('145.5px 145.5px 145.5px 145.5px');
+      stubSeventeen();
+      const four = render(<AccountsStrip />);
+      await screen.findByRole('button', { name: /more/ });
+      expect(cardsOf(four.container)).toHaveLength(8);
+      expect(cardsOf(four.container).map(nameOf)).toEqual(lanesByFree(names.accounts).slice(0, 8).map((a) => labelOf(a.wrapper)));
+      expect(control()).toHaveTextContent(/^\+9 more/);
+      cleanup();
+      vi.restoreAllMocks();
+      stubDrawnPhone('172px 172px');
+      stubSeventeen();
+      const two = render(<AccountsStrip />);
+      await screen.findByRole('button', { name: /more/ });
+      expect(cardsOf(two.container)).toHaveLength(4);
+      expect(control()).toHaveTextContent(/^\+13 more/);
+    });
   });
 
   // ── the desk's hover and focus flyout (R120, strip-hover-flyout) ──
@@ -1126,6 +1449,62 @@ describe('the lanes fold (S5b, D-6530)', () => {
       const container = await mountDesk();
       act(() => { allAccounts().focus(); });
       advance(5000);
+      expect(flyoutOf(container)).toBeNull();
+    });
+
+    // ── Task S5c (review 1108's F1): focus arriving from the end cell is an arrival ──
+    it('keyboard focus arriving at a line card from All accounts or from the control (Shift+Tab) opens the flyout', async () => {
+      const container = await mountDesk();
+      for (const from of [allAccounts(), control()]) {
+        act(() => { from.focus(); });
+        advance(5000);
+        expect(flyoutOf(container)).toBeNull();               // the end cell itself opens nothing
+        const card = lineCardsOf(container)[0]!;
+        act(() => { card.focus(); });
+        expect(document.activeElement).toBe(card);
+        advance(FLYOUT_OPEN_MS - 1);
+        expect(flyoutOf(container)).toBeNull();
+        advance(1);
+        expect(flyoutOf(container)).not.toBeNull();
+        // Back out of the strip, and shut, for the next start.
+        fireEvent.keyDown(card, { key: 'Escape' });
+        expect(flyoutOf(container)).toBeNull();
+        act(() => { card.blur(); });
+        advance(5000);
+      }
+    });
+
+    it('focus arriving at a card of the flyout from the end cell opens it too, and one from a card of the line is still a move that opens nothing after an Escape', async () => {
+      const container = await openByHover();
+      const first = lineCardsOf(container)[0]!;
+      act(() => { first.focus(); });
+      fireEvent.keyDown(first, { key: 'Escape' });
+      expect(flyoutOf(container)).toBeNull();
+      fireEvent.pointerLeave(groupOf(container));
+      // Line card to line card: a move inside the strip, but not from its end cell.
+      fireEvent.keyDown(first, { key: 'ArrowRight' });
+      advance(5000);
+      expect(flyoutOf(container)).toBeNull();
+      // From the end cell back onto a line card: an arrival.
+      act(() => { allAccounts().focus(); });
+      act(() => { lineCardsOf(container)[1]!.focus(); });
+      advance(FLYOUT_OPEN_MS);
+      expect(flyoutOf(container)).not.toBeNull();
+      // And from the end cell onto a card of the open flyout: it stays open (an arrival, never a close).
+      act(() => { allAccounts().focus(); });
+      act(() => { flyCardsOf(container)[2]!.focus(); });
+      advance(5000);
+      expect(flyoutOf(container)).not.toBeNull();
+    });
+
+    it('the end cell still never holds the flyout, even after focus has come back from it', async () => {
+      const container = await mountDesk();
+      act(() => { allAccounts().focus(); });
+      act(() => { lineCardsOf(container)[0]!.focus(); });
+      advance(FLYOUT_OPEN_MS);
+      expect(flyoutOf(container)).not.toBeNull();
+      act(() => { allAccounts().focus(); });
+      advance(FLYOUT_CLOSE_MS);
       expect(flyoutOf(container)).toBeNull();
     });
 
