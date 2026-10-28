@@ -39,15 +39,16 @@ import { DEPS_SHED_LIVE_MARKER, readSwitches, type MarkerSwitchName } from '../.
  * when the listing names it; the verdict for each; at most `CCRC_DEPS_SHED_PER_PASS` of the `shed` answers acted on,
  * rows the box has not refused this sleep first, then oldest clock first.
  *
- * ONE ACT. On the session's queue (armed: on the coordination serialiser first, below): the row assembled again
+ * ONE ACT. Armed, on the coordination serialiser and then the session's queue (below); in shadow, on neither: the row assembled again
  * (`rowAtAct`), the store, presence and the stamp read again, the hold classified again and the verdict asked again;
  * then the capability, and the kill and arming switches over a fresh listing, the read nearest the argv (an arming
  * switch gone since the pass holds; one raised since the pass leaves this act a dry run, the safe direction). The box
  * re-proves the rest (`ccd ws-shed-deps`). The act never throws.
  *
- * THE SERIALISER, ARMED ONLY. The shadow's dry run removes nothing, so the session's queue and the box's re-proof are
- * enough and it never holds the coordination serialiser: dispatch, claims and closes never queue behind its `du`, `git
- * status` and process walk. The armed act holds it from the verdict's re-read to the box's answer, because a dispatch
+ * THE SERIALISER AND THE QUEUE, ARMED ONLY. The shadow's dry run removes nothing and takes no lock, so the box's
+ * re-proof is enough and it holds neither the coordination serialiser nor the session's queue: dispatch, claims and
+ * closes, and that session's swap, reap, forget, title and pr routes, never queue behind its `du`, `git status` and
+ * process walk. The armed act holds both from the verdict's re-read to the box's answer, because a dispatch
  * or claim that would wake or bind this session must not land between the store read that says its work is finished
  * and the removal. The hold's budget: at most `CCRC_DEPS_SHED_PER_PASS` acts (default 1) a `sleepRunDone` pass, each
  * bounded by the verb's runner row (`CCD_VERB_TIMEOUT_MS['ws-shed-deps']`, 240 s, of which a healthy act uses seconds),
@@ -269,10 +270,11 @@ async function depsShedAct(
     mem.refusals.set(id, { at: sleepAt, n });
     mem.retryAt.set(id, deps.now() + Math.min(DEPS_SHED_RETRY_MAX_MS, DEPS_SHED_RETRY_MS * 2 ** Math.min(n - 1, 30)));
   };
-  // Armed only: the coordination serialiser around the act (the header's THE SERIALISER). The dry run never takes it.
-  const guarded = <T>(fn: () => Promise<T>): Promise<T> => (armedAtPass ? serial(fn) : fn());
+  // Armed only: the coordination serialiser, then the session's queue, around the act (the header's THE SERIALISER AND
+  // THE QUEUE). The dry run takes neither.
+  const guarded = <T>(fn: () => Promise<T>): Promise<T> => (armedAtPass ? serial(() => deps.queueRun(id, fn)) : fn());
   try {
-    return await guarded(() => deps.queueRun(id, async (): Promise<DepsShedOutcome> => {
+    return await guarded(async (): Promise<DepsShedOutcome> => {
       const fresh = await deps.rowAtAct(rec);
       if (!fresh.ok) return { id, kind: 'held-at-act', verdict: null };
       const listing = await deps.listing();
@@ -308,7 +310,7 @@ async function depsShedAct(
       }
       console.warn(`ccrc-server: deps-shed: the ask about ${id} came to nothing readable (${a.detail}) — held off`);
       return { id, kind: 'unreadable', detail: a.detail };
-    }));
+    });
   } catch (err) {
     holdOff();
     return { id, kind: 'unreadable', detail: errText(err) };

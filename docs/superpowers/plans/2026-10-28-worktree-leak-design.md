@@ -142,7 +142,7 @@ listing. Only then is `ccd ws-shed-deps --session <id> --class child|coordinator
 memory), doubled for each further one in the same sleep up to a day, and the row then sorts after every row the box has
 not refused this sleep, so rows that keep refusing never starve a fresh one of the per-pass slot; `nothing-to-shed` and
 `already-shed` settle the row for its sleep. Only the armed act holds the coordination serialiser (a dispatch or claim
-must not land between the verdict's re-read and the removal); the shadow's dry run runs on the session's queue alone. A shed writes one `kind:'coord'` feed row, "Dependencies removed".
+must not land between the verdict's re-read and the removal); the shadow's dry run holds neither it nor the session's queue (it removes nothing and takes no lock, so that session's swap, reap, forget, title and pr routes never wait on it). A shed writes one `kind:'coord'` feed row, "Dependencies removed".
 
 **Switches.** The act is shadow unless `$REG/deps-shed-live` exists, a new `shared/switches.ts` row with no writer in the
 tree. In shadow the arm composes the same verb with `--dry-run`, which runs every rung and removes nothing, and records
