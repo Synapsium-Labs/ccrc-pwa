@@ -1506,11 +1506,18 @@ _ws_shed_run() {   # -> everything after the registry rungs, contained (id, cls,
   mapfile -t names < <(_ws_shed_names)
   (( ${#names[@]} )) || { _ws_shed_refused nothing-to-shed "CCD_DEPS_SHED_NAMES names no plain directory name"; return; }
   # THE CANDIDATES: git's own list of ignored, untracked paths, a whole ignored directory collapsed to one entry.
-  local listing
-  listing=$(_ws_shed_listing "$wdp" 2>/dev/null | tr '\0' '\n'; exit "${PIPESTATUS[0]}") \
+  # Read NUL by NUL, never by lines: an ignored directory named `a/b<LF>vendor` is ONE entry, and split at its newline it
+  # would name a `vendor/` git does not ignore. git's exit status rides as the last record (every entry of git's own ends
+  # in a NUL, so a listing cut short runs into the status record and refuses).
+  local -a ents=()
+  mapfile -d '' -t ents < <(_ws_shed_listing "$wdp" 2>/dev/null; printf 'rc=%s\0' "$?")
+  (( ${#ents[@]} )) && [[ ${ents[-1]} == rc=0 ]] \
     || { _ws_shed_refused unmeasured "git could not list the ignored paths of $wdp — nothing was removed"; return; }
-  while IFS= read -r rel; do
+  unset 'ents[-1]'
+  for rel in ${ents[@]+"${ents[@]}"}; do
     [[ $rel == */ ]] || continue
+    # A newline anywhere in the path is kept, never shed: the walks below answer one path per line.
+    [[ $rel != *$'\n'* ]] || continue
     rel=${rel%/}
     local leaf=${rel##*/} hit=0 nm
     for nm in "${names[@]}"; do [[ $leaf == "$nm" ]] && { hit=1; break; }; done
@@ -1524,18 +1531,20 @@ _ws_shed_run() {   # -> everything after the registry rungs, contained (id, cls,
     phys=$(cd -P -- "$dir" 2>/dev/null && pwd -P) && [[ $phys == "$dir" ]] || continue
     dev=$(_plat_devino "$dir" 2>/dev/null) && [[ ${dev%%:*} == "$wdev" ]] || continue
     pre+=("$rel"); prephys+=("$phys")
-  done <<< "$listing"
+  done
   # Not one tracked file beneath it (a vendored package git tracks keeps its directory). git's own listing never collapses
   # a directory that holds a tracked file, so this is the second fence, asked of the index directly, once for them all.
   if (( ${#pre[@]} )); then
-    local tracked
-    tracked=$(_ws_shed_tracked "$wdp" "${pre[@]}" 2>/dev/null | tr '\0' '\n'; exit "${PIPESTATUS[0]}") \
+    local -a tracked=()
+    mapfile -d '' -t tracked < <(_ws_shed_tracked "$wdp" "${pre[@]}" 2>/dev/null; printf 'rc=%s\0' "$?")
+    (( ${#tracked[@]} )) && [[ ${tracked[-1]} == rc=0 ]] \
       || { _ws_shed_refused unmeasured "git could not read the index of $wdp — nothing was removed"; return; }
+    unset 'tracked[-1]'
     for i in "${!pre[@]}"; do
       keep=0
-      while IFS= read -r line; do
+      for line in ${tracked[@]+"${tracked[@]}"}; do
         [[ -n $line && ( $line == "${pre[$i]}" || $line == "${pre[$i]}/"* ) ]] && { keep=1; break; }
-      done <<< "$tracked"
+      done
       (( keep )) || { cands+=("${pre[$i]}"); physs+=("${prephys[$i]}"); }
     done
   fi
