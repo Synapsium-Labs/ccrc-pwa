@@ -52,17 +52,25 @@ describe('coordPresence — three answers, because the client cannot measure wha
     ['the lookup missed (undefined, not null)', 'ccrc-pwa-coordinator', undefined, true],
     ['the lifecycle key never arrived', 'ccrc-pwa-coordinator', sess({ status: 'dead', lifecycle: null }), true],
     ['the lifecycle is unmeasurable', 'ccrc-pwa-coordinator', sess({ status: 'dead', lifecycle: 'unmeasurable' }), true],
-    ['a substrate fault stands', 'ccrc-pwa-coordinator',
-      sess({ status: 'dead', lifecycle: 'orphan', substrate: { at: 1, text: 'tmux: no server running' } }), true],
+    ['tmux could not be asked (the server reads the pane unknown)', 'ccrc-pwa-coordinator',
+      sess({ status: 'dead', lifecycle: 'orphan', substrate: { at: 1, text: 'tmux: no server running' }, presence: 'unknown' }), true],
   ];
   it.each(UNKNOWN)('answers `unknown` when %s', (_why, claimedBy, session, frameSeen) => {
     expect(coordPresence(claimedBy, session, frameSeen)).toBe('unknown');
   });
 
-  // D-309 IS the substrate row above, and it is worth its own name: the
-  // server already turned a cannot-ask into `status:'dead'`
-  // (`server/src/fleet.ts`), so a door gated on that word alone opens
-  // during a tmux outage and offers to hand a LIVE coordinator's program away.
+  // D-309, and it is worth its own name: the assembly turns a cannot-ask
+  // into `status:'dead'` (`server/src/fleet.ts`), so a door gated on that
+  // word alone opens during a tmux outage and offers to hand a LIVE
+  // coordinator's program away. The server's presence reads that row
+  // `unknown` (the row above). OA-C15 (a) (D-7265; C7c, D-7181): a substrate
+  // stamp over a pane tmux DID call gone, under a dead lifecycle, is the
+  // server's `dead`, and the door follows it (the reclaim route re-measures
+  // the claimant on the box, `measureClaimant`).
+  it('answers `dead` when a substrate fault stands over a pane tmux called gone: the server\'s word', () => {
+    expect(coordPresence('ccrc-pwa-coordinator',
+      sess({ status: 'dead', lifecycle: 'orphan', substrate: { at: 1, text: 'tmux: no server running' } }), true)).toBe('dead');
+  });
   const ALIVE: readonly [string, FleetSession][] = [
     ['a live pane', sess({ status: 'idle', lifecycle: 'running' })],
     ['a busy pane', sess({ status: 'busy', lifecycle: 'running' })],

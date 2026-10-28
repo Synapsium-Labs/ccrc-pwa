@@ -138,11 +138,10 @@ const CENSUS: readonly Row[] = [
   { source: 'dead-compare', file: 'pwa/src/screens/SessionScreen.tsx', hits: 2, stances: ['consults'],
     why: 'a dead screen is read-only; a sleeper (`useWakeOnOpen`) is woken when shown, reads "Waking…" with Wake, and '
       + 'keeps the composer shut until its row is alive; the dead banner\'s Restart is for a dead row with no marker' },
-  { source: 'dead-compare', file: 'pwa/src/fleet/coordWords.ts', hits: 1, stances: ['consults'],
-    why: '`coordPresence` answers a sleeping coordinator `hibernated` before its dead rung, so no Resume door and no '
-      + '"coordinator gone"; the reclaim door those point at refuses a sleeper too (`claimant-alive`)' },
-  { source: 'dead-lifecycle', file: 'pwa/src/fleet/coordWords.ts', hits: 1, stances: ['consults'],
-    why: 'the same `coordPresence` rung, reached only after the `hibernated` answer' },
+  { source: 'presence-reader', file: 'pwa/src/fleet/coordWords.ts', hits: 1, stances: ['consults'],
+    why: '`coordPresence` reads `coordinatorPresence` (D-7181), which answers a sleeping coordinator `hibernated` (the '
+      + 'server\'s `asleep`), so no Resume door and no "coordinator gone"; the reclaim door those point at refuses a '
+      + 'sleeper too (`claimant-alive`)' },
   { source: 'dead-compare', file: 'pwa/src/fleet/orphanWords.ts', hits: 1, stances: ['consults'],
     why: 'the orphan marker reads `coordPresence`, and says `coordinator hibernated` for a sleeper, never "coordinator gone"' },
   { source: 'dead-compare', file: 'pwa/src/screens/RunRow.tsx', hits: 1, stances: ['consults'], via: 'pwa/src/fleet/coordWords.ts',

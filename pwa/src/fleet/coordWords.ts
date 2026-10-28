@@ -22,10 +22,8 @@
 // (`server/src/coord/dispatch.ts`), so the phone has to say exactly what that
 // means for a program the operator might otherwise expect to dispatch — not
 // "unknown", and never a blank cell.
-import {
-  isMarkerState, lifecycleIsDead, substrateFault, type FleetSession, type MarkerState,
-} from '../../../shared/api';
-import { hibernatedSince } from './hibernated';
+import { isMarkerState, type FleetSession, type MarkerState } from '../../../shared/api';
+import { coordinatorPresence, type CoordinatorPresence } from './presence';
 
 export const MARKER_WORD: Record<MarkerState, string> = {
   clear: 'not paused',
@@ -66,7 +64,7 @@ export const COORD_CONFIRM_MS = 15_000;
 /** The client's answer to "is the run's coordinator there?" — program-leverage
  *  wave 5, D-1129. */
 /** `hibernated` (D-5242): the coordinator is asleep, and wakes on mail or when opened. */
-export type CoordPresence = 'alive' | 'dead' | 'hibernated' | 'unknown';
+export type CoordPresence = CoordinatorPresence;
 
 /** THREE answers, because the client cannot measure what the server measures.
  *
@@ -95,32 +93,10 @@ export function coordPresence(
   session: FleetSession | null | undefined,
   frameSeen: boolean,
 ): CoordPresence {
-  if (claimedBy === null) return 'unknown';
-  if (!frameSeen) return 'unknown';
-  if (session === null || session === undefined) return 'unknown';
-  // `?? null`, never the typed field directly — the `fleet` frame is CAST on
-  // arrival (`stores/fleet.ts`'s `asFleetMsg` validates only
-  // `Array.isArray(sessions)`), so a row from a server that predates this
-  // field lacks the key at runtime. `lifecycleQualifier`'s own docstring
-  // records what reading one of these directly cost the last time.
-  const lifecycle = session.lifecycle ?? null;
-  if (lifecycle === null || lifecycle === 'unmeasurable') return 'unknown';
-  // The ONE reader for this field (`substrateFault`'s own docstring,
-  // `shared/api.ts`): a supervisor that has flagged the substrate has
-  // withdrawn its own claim to know anything about this pane.
-  if (substrateFault(session) !== null) return 'unknown';
-  // BOTH halves. `lifecycleIsDead` is the tree's one answer to "does this
-  // state resolve on its own" — `restarting` does, `orphan` does not — and it
-  // deliberately answers FALSE for `unmeasurable` ("doubt is not evidence",
-  // LIFECYCLE_DEAD's own comment).
-  // D-5242: a coordinator `ccd hibernate` put to sleep is NOT gone — it reads
-  // `stopped`, which `lifecycleIsDead` calls dead, but mail and an open screen
-  // wake it, and the server's reclaim door refuses it (`measureClaimant`
-  // answers a sleeper `alive`). So it is its own answer, never `dead`: no
-  // Resume door, no "coordinator gone" (the fourth answer: D-5430).
-  if (hibernatedSince(session) !== null) return 'hibernated';
-  if (session.status === 'dead' && lifecycleIsDead(lifecycle)) return 'dead';
-  return 'alive';
+  // OA-C15 (a) (D-7265; D-7181): the server's word, read once in `fleet/presence.ts`. The server's ladder reads a pane
+  // tmux could not ask about `unknown` (the D-309 collapse above no longer reaches a door), a sleeper `asleep` (spelled
+  // `hibernated` here) and a pane gone under a lifecycle that resolves on its own `alive`.
+  return coordinatorPresence(claimedBy, session, frameSeen);
 }
 
 /** The marker toggle's word for a tap no `coord` frame confirmed within `COORD_CONFIRM_MS`. One spelling: the coord
