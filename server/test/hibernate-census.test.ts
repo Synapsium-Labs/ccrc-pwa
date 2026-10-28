@@ -127,12 +127,11 @@ const CENSUS: readonly Row[] = [
     why: 'the session header\'s view (W2 S7a, D-5471; `SessionHeader` renders it) forces bucket `dead` for a dead stream and paints the ✕ lamp ("not running") with the word `exited` '
       + '(`headerStatusWord`, D-5545); a dead row with `hibernatedAt` (`hibernatedSince`) reads `hibernated` with the '
       + 'calm dot instead, so "not running" never sits above "Waking…"' },
-  { source: 'dead-compare', file: 'pwa/src/fleet/SessionActionsSheet.tsx', hits: 1, stances: ['consults'],
-    why: 'Forget on a dead row is hidden on a sleeper (`hibernatedSince`), which offers Wake session (ccd forget refuses '
-      + 'it, D-5423)' },
-  { source: 'presence-reader', file: 'pwa/src/fleet/SessionActionsSheet.tsx', hits: 5, stances: ['consults', 'true-of-pane'],
-    why: 'the notes word the pane (`paneGone`, D-7181): the narrow-spawn note on a gone pane is hidden on a sleeper '
-      + '(`hibernatedSince`), which offers Wake session; the quota, narrow and wrapper notes speak of a live pane only' },
+  { source: 'presence-reader', file: 'pwa/src/fleet/SessionActionsSheet.tsx', hits: 6, stances: ['consults', 'true-of-pane'],
+    why: 'Forget is offered on a row the server reads `dead` (`presenceOf`, D-7181), never on its `asleep` and never on '
+      + 'a row `hibernatedSince` reads asleep, which offers Wake session (ccd forget refuses it, D-5423); the notes word '
+      + 'the pane (`paneGone`): the narrow-spawn note on a gone pane is hidden on a sleeper, and the quota, narrow and '
+      + 'wrapper notes speak of a live pane only' },
   { source: 'presence-reader', file: 'pwa/src/fleet/sessionFacts.ts', hits: 1, stances: ['consults'],
     why: 'the card\'s and the header\'s facts (D-5545) for a row whose pane is gone (`paneGone`, D-7181); a sleeper '
       + '(`hibernatedSince`) reads `hibernated · 6h` with a calm dot and no stop stamp' },
@@ -186,7 +185,7 @@ const NAMED: readonly { name: string; stances: readonly Stance[]; file: string; 
     why: 'removes `.hibernated`: an archived row is never woken by mail' },
   { name: 'the PWA\'s Forget', stances: ['consults'], file: 'pwa/src/fleet/SessionActionsSheet.tsx',
     holds: (s) => /const asleep = hibernatedSince\(session\) !== null/.test(s)
-      && /session\.workspace === null && session\.status === 'dead' && !asleep && \(\s*<Button[\s\S]*?Forget session/.test(s),
+      && /session\.workspace === null && presenceOf\(session\) === 'dead' && !asleep && \(\s*<Button[\s\S]*?Forget session/.test(s),
     why: 'offered on a dead non-workspace row and hidden on a sleeper, which offers Wake (ccd forget refuses it)' },
   { name: 'the kickoff route', stances: ['wakes-first'], file: 'server/src/coord/kickoff.ts',
     holds: (s) => /export function queueProgramKickoff[\s\S]*?queueSystemMail\(/.test(s),

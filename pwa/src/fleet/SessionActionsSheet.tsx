@@ -23,7 +23,7 @@ import { navigate } from '../lib/router';
 import { sessionDocsHref } from '../docs/docsLinks';
 import { sessionLabel } from './sessionLabel';
 import { narrowSinceWidened } from './spawnWords';
-import { paneGone } from './presence';
+import { paneGone, presenceOf } from './presence';
 import { hibernatedSince } from './hibernated';
 import { substrateFaultText, substrateFaultTitle } from './substrateWords';
 import { SwapSheet } from './SwapSheet';
@@ -466,8 +466,12 @@ export function SessionActionsSheet({
               non-workspace, strictly: a live session's removal is a kill and
               goes through Stop first; a workspace's removal destroys git
               state and goes through the audited sheet above. ccd re-proves
-              both gates (and the hold) on the box. */}
-          {session.workspace === null && session.status === 'dead' && !asleep && (
+              both gates (and the hold) on the box. Dead is the SERVER's
+              word (`presenceOf`, OA-C15 (a), D-7181), and a doubted row
+              (`unknown`) hides the door; a sleeper (the server's `asleep`,
+              and any row `hibernatedSince` reads asleep) offers Wake
+              instead (ccd forget refuses it, D-5423). */}
+          {session.workspace === null && presenceOf(session) === 'dead' && !asleep && (
             <Button variant="ghost" className="sess-sheet-remove"
                     disabled={fault !== null} title={faultTitle}
                     onClick={() => setForgetConfirmOpen(true)}>

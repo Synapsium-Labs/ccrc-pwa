@@ -561,6 +561,16 @@ describe('forget — the end-of-life a non-workspace session never had', () => {
     expect(screen.queryByRole('button', { name: /forget session/i })).not.toBeInTheDocument();
   });
 
+  // OA-C15 (a) (D-7265; C7c Step 6, D-7181): the door follows the server's word, and doubt is never dead.
+  it.each([
+    ['the server doubts the row (presence unknown: tmux did not answer)', { presence: 'unknown' as const }],
+    ['the server sends no presence (an older server, or a snapshot from before D-7208)', { presence: undefined }],
+    ['the pane is gone under a lifecycle that resolves on its own (restarting reads alive)', { lifecycle: 'restarting' as const }],
+  ])('hides Forget when %s', (_why, over) => {
+    render(<SessionActionsSheet session={deadWrapper(over)} open onClose={() => {}} onReap={() => {}} />);
+    expect(screen.queryByRole('button', { name: /forget session/i })).not.toBeInTheDocument();
+  });
+
   it('names the consequence before firing, then POSTs /forget and closes', async () => {
     const onClose = vi.fn();
     render(<SessionActionsSheet session={deadWrapper()} open onClose={onClose} onReap={() => {}} />);

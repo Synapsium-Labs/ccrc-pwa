@@ -228,8 +228,8 @@ const VERDICTS: Pin<string> = {
     unlisted: '- - - -', skew: 'shown',
   },
   'SessionActionsSheet.tsx (Forget session door)': {
-    server: 'hidden hidden hidden hidden hidden hidden hidden hidden hidden hidden hidden hidden hidden hidden hidden hidden shown shown hidden hidden shown shown hidden hidden shown shown hidden hidden shown shown hidden hidden shown shown hidden hidden shown shown hidden hidden shown shown hidden hidden shown shown hidden hidden shown shown hidden hidden shown shown hidden hidden',
-    unlisted: '- - - -', skew: 'shown',
+    server: 'hidden hidden hidden hidden hidden hidden hidden hidden hidden hidden hidden hidden hidden hidden hidden hidden shown shown hidden hidden hidden hidden hidden hidden shown shown hidden hidden shown shown hidden hidden hidden hidden hidden hidden hidden hidden hidden hidden hidden hidden hidden hidden hidden hidden hidden hidden hidden hidden hidden hidden hidden hidden hidden hidden',
+    unlisted: '- - - -', skew: 'hidden',
   },
   'SessionActionsSheet.tsx (moved-account note)': {
     server: 'shown shown shown shown shown shown shown shown shown shown shown shown shown shown shown shown hidden hidden hidden hidden hidden hidden hidden hidden hidden hidden hidden hidden hidden hidden hidden hidden hidden hidden hidden hidden hidden hidden hidden hidden hidden hidden hidden hidden hidden hidden hidden hidden hidden hidden hidden hidden hidden hidden hidden hidden',
@@ -451,24 +451,9 @@ const DIFFERS: Pin<string[]> = {
     skew: ['skew · pane gone · lifecycle absent (a server older than ARCH-48)'],
   },
   'SessionActionsSheet.tsx (Forget session door)': {
-    server: [
-      'pane gone · restarting',
-      'pane gone · restarting · substrate fault',
-      'pane gone · unmeasurable',
-      'pane gone · unmeasurable · substrate fault',
-      'pane unknown · stopped',
-      'pane unknown · stopped · substrate fault',
-      'pane unknown · restarting',
-      'pane unknown · restarting · substrate fault',
-      'pane unknown · orphan',
-      'pane unknown · orphan · substrate fault',
-      'pane unknown · never-started',
-      'pane unknown · never-started · substrate fault',
-      'pane unknown · unmeasurable',
-      'pane unknown · unmeasurable · substrate fault',
-    ],
+    server: [],
     unlisted: [],
-    skew: ['skew · pane gone · lifecycle absent (a server older than ARCH-48)'],
+    skew: [],
   },
   'SessionActionsSheet.tsx (moved-account note)': {
     server: [
