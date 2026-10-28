@@ -1,5 +1,5 @@
 // The class chooser (routing spec, slice 5, Task 6; one component since T2f, D-6371): the `<select>` that forecasts
-// EVERY card's placement for one class at a time. It takes no props and reads the fleet chrome's `projects` plane
+// EVERY card's placement for one class at a time. It holds no value of its own and reads the fleet chrome's `projects` plane
 // (`classFilter`, `chooseClass`), whose own readers are the two things the class changes: the project cards' placement
 // forecast and Add workspace's route body (`useProjectRows.ts`). Two homes, never both at once at one width: the fleet
 // screen's runs line (a phone, Refined, and any column that draws that line), and Instrument's table toggle row at a
