@@ -1,6 +1,6 @@
 // Every key each storage owner reads or writes, as a literal sorted list (D-7179; Task C7a Step 5; plan
 // docs/superpowers/plans/2026-10-27-consolidation-w7-pwa.md, item 13; ARCH-75). The owners are `storageOwners()`
-// (census-w7, 10 files); each is driven through its own read and write, and `Storage`'s three methods are recorded, so
+// (census-w7, 11 files); each is driven through its own read and write, and `Storage`'s three methods are recorded, so
 // the keys are what the code touches, not text it holds. C7l moves every owner onto one storage port; every key here
 // stays byte-identical (a renamed key loses a device's remembered choice).
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
@@ -9,6 +9,7 @@ import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { fleetSession } from './fleetFixture';
 import { loadFolded, loadRollupPrefs, saveFolded, saveRollupPrefs } from '../src/fleet/foldState';
 import { dismissRelease, readDismissed, resetDismissalForTests } from '../src/fleet/releaseDismissal';
+import { inspectorHidden, resetInspectorChoiceForTests, setInspectorHidden } from '../src/inspector/inspectorShown';
 import { loadMark, saveMark } from '../src/lib/notifymark';
 import { loadFleetSnapshot, saveFleetSnapshot } from '../src/lib/offline';
 import { ack, loadAcks } from '../src/lib/seen';
@@ -52,6 +53,12 @@ describe('each storage owner\'s keys (read and write), byte for byte', () => {
     resetDismissalForTests();
     expect(await keysTouched(() => { dismissRelease('v1.2.3'); readDismissed(); })).toEqual(['ccrc-release-dismissed']);
   });
+  it('inspector/inspectorShown.ts (the per-device choice: a write, then a read on a fresh page)', async () => {
+    resetInspectorChoiceForTests();
+    expect(await keysTouched(() => { setInspectorHidden(true); resetInspectorChoiceForTests(); inspectorHidden(); })).toEqual(['ccrc-inspector']);
+    expect(window.localStorage.getItem('ccrc-inspector')).toBe('hidden');
+    resetInspectorChoiceForTests();
+  });
   it('lib/notifymark.ts', async () => {
     expect(await keysTouched(() => { saveMark({ epoch: 'epoch-a', seq: 3 }); loadMark(); })).toEqual(['ccrc:notify:v1']);
   });
@@ -93,10 +100,10 @@ describe('each storage owner\'s keys (read and write), byte for byte', () => {
   });
 });
 
-describe('every key, across the ten owners, as one sorted list', () => {
+describe('every key, across the eleven owners, as one sorted list', () => {
   it('the literal list (the union of the rows above)', () => {
     expect([...ALL].sort()).toEqual([
-      'ccrc-fleet-group', 'ccrc-release-dismissed', 'ccrc-skin', 'ccrc-theme',
+      'ccrc-fleet-group', 'ccrc-inspector', 'ccrc-release-dismissed', 'ccrc-skin', 'ccrc-theme',
       'ccrc.drawer-view.v1', 'ccrc.fleet-folded.v1', 'ccrc.fleet-rollup.v1', 'ccrc.fleet-snapshot.v1',
       'ccrc:chat-row-samples', 'ccrc:chat-row-samples-v2', 'ccrc:notify:v1', 'ccrc:seen:v1',
     ]);
