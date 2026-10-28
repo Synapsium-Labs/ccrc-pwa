@@ -86,13 +86,30 @@ const FIXTURE: AppFixture = {
   },
   fleetFrames: [{ type: 'fleet', sessions: SESSIONS }],
 };
-// The same fleet with two open runs (T2g, D-6715): the status bar's count then reads "… · 2 runs", its longest form.
+// The same fleet with two open runs and a release waiting (T2g, D-6715; T2g's review R51 F1, carried by T2f, D-6371): the
+// status bar's count then reads "… · 2 runs", its longest form, beside T2a's update indicator, the bar's other item of
+// variable width. The update view is update-indicator.browser.test.ts's shape: two nodes behind the release `desiredTag`
+// names.
 const RUNS = [1, 2].map((id) => ({
   id, program: 'programme-a', programTitle: 'Programme A', wave: 1, waveOf: 2, project: 'project-a', homeProject: null,
   state: 'working', closedAt: null,
 }));
+const updateNode = (role: 'fleet' | 'server', id: string) => ({
+  nodeId: id, role, label: role, os: 'linux',
+  current: { sha: 'bd2bf57a91c3e0d4f6a8b2c5e7d9f1a3b5c7e9d1', ref: 'main', builtAt: '2026-09-20T12:00:00Z', dirty: false, version: 'v0.0.7' },
+  stampRead: 'ok', installState: 'complete', provenance: 'verified',
+  caps: ['update-gate'], agentOps: role === 'server' ? null : [], highestVersion: 'v0.0.7', previousVersion: null,
+  floorRead: 'measured', previousRead: 'absent',
+  measuredAt: Date.now() - 60_000, reachable: true, unreachableSince: null,
+  channel: 'stable', desiredTag: 'v0.0.9', resolveDetail: null, request: null, report: null,
+  update: { state: 'idle', target: null, startedAt: null, detail: null },
+});
+const WAITING_UPDATE = {
+  catalogue: { lastOkAt: Date.now() - 240_000, lastError: null }, releases: [],
+  nodes: [updateNode('fleet', '0b6e1c62-7a4f-4d0e-9c1a-3f2d5e8a9b10'), updateNode('server', '5f3a9d21-2c8b-4e6f-a1d7-8b0c4e2f6a93')], intent: [],
+};
 const WITH_RUNS: AppFixture = {
-  api: { ...FIXTURE.api, '/api/runs': RUNS },
+  api: { ...FIXTURE.api, '/api/runs': RUNS, '/api/updates': WAITING_UPDATE },
   fleetFrames: [{ type: 'fleet', sessions: SESSIONS }, { type: 'runs', runs: RUNS }],
 };
 const SESSION_ROUTE = '/s/project-a-desk-density-pass';
@@ -253,19 +270,34 @@ describe('one count at the desk (T2g, D-6715)', () => {
   }
 
   // Green at the base (Step 0 measured it whole there): a guard for the one count left, which must not be cut with an
-  // ellipsis now that the column's copy is gone.
+  // ellipsis now that the column's copy is gone. A release waits in this fixture (R51 F1), so the count is measured
+  // beside the update indicator, which is drawn, once, whole inside the bar: a case that never drew it measured a bar
+  // with more room than the operator's.
   for (const touch of [false, true]) {
-    it(`at 900 the status bar's count is whole, with two open runs (${touch ? 'touch' : 'fine pointer'})`, async () => {
+    it(`at 900 the status bar's count is whole, with two open runs and a release waiting (${touch ? 'touch' : 'fine pointer'})`, async () => {
       const { ctx, page } = await open(PHOSPHOR, 900, 800, '/', touch, WITH_RUNS);
       try {
-        await page.waitForFunction(() => (document.querySelector('.ins-status-summary')?.textContent ?? '').includes('run'),
-          undefined, { timeout: 20_000 });
+        await page.waitForFunction(() => (document.querySelector('.ins-status-summary')?.textContent ?? '').includes('run')
+          && document.querySelector('.ins-status .update-indicator-door') !== null, undefined, { timeout: 20_000 });
         const m = await page.evaluate(() => {
           const el = document.querySelector<HTMLElement>('.ins-status-summary')!;
-          return { text: el.textContent ?? '', scrollWidth: el.scrollWidth, clientWidth: el.clientWidth };
+          const bar = document.querySelector('.ins-status')!.getBoundingClientRect();
+          const door = document.querySelector<HTMLElement>('.ins-status .update-indicator-door')!;
+          const dr = door.getBoundingClientRect();
+          return {
+            text: el.textContent ?? '', scrollWidth: el.scrollWidth, clientWidth: el.clientWidth,
+            indicators: document.querySelectorAll('.update-indicator').length,
+            door: { width: dr.width, left: dr.left, right: dr.right, scrollWidth: door.scrollWidth, clientWidth: door.clientWidth },
+            bar: { left: bar.left, right: bar.right },
+          };
         });
         expect(m.text).toContain('run');
         expect(m.scrollWidth, m.text).toBeLessThanOrEqual(m.clientWidth);
+        expect(m.indicators, 'update indicators in the page').toBe(1);
+        expect(m.door.width, 'the update indicator is drawn').toBeGreaterThan(0);
+        expect(m.door.scrollWidth, "the indicator's words are whole").toBeLessThanOrEqual(m.door.clientWidth);
+        expect(m.door.left, 'the indicator is inside the bar').toBeGreaterThanOrEqual(m.bar.left - 0.5);
+        expect(m.door.right, 'the indicator is inside the bar').toBeLessThanOrEqual(m.bar.right + 0.5);
       } finally {
         await ctx.close();
       }
