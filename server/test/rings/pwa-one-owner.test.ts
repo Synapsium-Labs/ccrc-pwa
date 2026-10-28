@@ -6,7 +6,7 @@
 import { describe, expect, it } from 'vitest';
 import { parseFile, parseSource, type ParsedFile } from '../scan/parse.js';
 import { REPO, walkSrc } from './walkSrc.js';
-import { accountsReaders, dialogSheetStates, requestPolls } from '../census-w7/pwa.js';
+import { accountsReaders, answerPaths, dialogSheetStates, requestPolls } from '../census-w7/pwa.js';
 import path from 'node:path';
 
 const GUARDS = new Set(['isRecord', 'isObject', 'isNum', 'isCount', 'isOneOf']);
@@ -76,5 +76,11 @@ describe('DialogSheet holds only its three view states; the answer lifecycle hol
     expect(sites.length).toBeLessThanOrEqual(DIALOG_SHEET_VIEW_STATES.length);
     expect(sites.map((s) => DIALOG_SHEET_VIEW_STATES.find((n) => new RegExp(`\\[\\s*${n}\\s*,`).test(s.text)) ?? s.text).sort())
       .toEqual([...DIALOG_SHEET_VIEW_STATES].sort());
+  });
+
+  // Step 8's other ratchet: one answer path, the reducer's performer (`performAnswer`). `push-sw.js`'s request is its
+  // generated region (OA-C17 (a), D-7265), so a hand-written `/ask` fetch beside it, or a sheet writing on its own, reds.
+  it('answerPaths() 3 -> 1: only the answer lifecycle', () => {
+    expect(answerPaths().map((s) => [s.file, s.kind])).toEqual([['pwa/src/session/answerLifecycle.ts', 'reducer']]);
   });
 });

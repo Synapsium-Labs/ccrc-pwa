@@ -278,12 +278,13 @@ describe('W7 PWA census: REAL rows (reporting, not ratcheting; spec §5.1 rule 3
     expect(sites.map((s) => s.file)).toEqual(['pwa/src/fleet/HotFilesStrip.tsx', 'pwa/src/fleet/useFleetHealth.ts']);
   });
 
-  // C7e (D-7183): EnvelopeSheet's busy comes from the answer lifecycle (Step 4), and DialogSheet's writes are the
-  // lifecycle's commands, performed in one place (Step 5).
-  it('answerPaths(): 2 (the answer lifecycle\'s performer, push-sw.js\'s one handler)', () => {
+  // C7e (D-7183): EnvelopeSheet's busy comes from the answer lifecycle (Step 4), DialogSheet's writes are the
+  // lifecycle's commands, performed in one place (Step 5), and push-sw.js's request is its generated region (Step 7,
+  // OA-C17 (a), D-7265), which no hand-written answer request is left beside.
+  it('answerPaths(): 1 (the answer lifecycle\'s performer)', () => {
     const sites = answerPaths();
-    held('answerPaths', sites, 2);
-    expect(countBy(sites, (s) => s.kind)).toEqual({ reducer: 1, 'push-sw': 1 });
+    held('answerPaths', sites, 1);
+    expect(countBy(sites, (s) => s.kind)).toEqual({ reducer: 1 });
   });
 
   // C7e Step 5 (D-7183): each answer kind's state moves into the answer lifecycle in its own commit.
