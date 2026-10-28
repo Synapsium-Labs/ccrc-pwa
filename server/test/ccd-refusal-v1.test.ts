@@ -16,6 +16,7 @@ import { parseChildReclaimResult } from '../src/coord/childReclaim.js';
 import { parseExpireResult } from '../src/archivedExpiry.js';
 import { parseCollectResult } from '../src/collectLane.js';
 import { makeCcdHarness, type CcdHarness, ccdSource } from './ccdWsHelpers.js';
+import { functionSpan, lockDeclineSites } from './census-w5/ccdHelpers.js';
 
 const src = ccdSource();
 const ID = 'demo-quiet-dune';
@@ -108,6 +109,9 @@ describe('the token set is one set', () => {
     const code = src.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
     const out = new Set<string>();
     for (const m of code.matchAll(/_lc_refuse\s+[a-z]+\s+("[^"]*"|'[^']*'|\S+)\s+([a-z][a-z0-9-]*)(?=\s|\\|$)/g)) out.add(m[2]!);
+    // The reap-lock runner's two calls pass the act as `"$act"` (D-7076), which the regex above never reads: their
+    // tokens come from the runner by name, so this set does not lean on `cmd_ws_restore` still spelling them.
+    for (const r of lockDeclineSites(src).runner?.refuses ?? []) if (r.token !== null) out.add(r.token);
     return [...out].sort();
   };
   it('tokens reachable from _lc_refuse call sites == CCD_REFUSAL_TOKENS, in both directions', () => {
@@ -118,9 +122,20 @@ describe('the token set is one set', () => {
   });
   it('every call site names its token as a literal — none is computed', () => {
     const code = src.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
-    const all = [...code.matchAll(/(?<![\w_])_lc_refuse\s+[a-z]+\s/g)].length;
-    const literal = [...code.matchAll(/(?<![\w_])_lc_refuse\s+[a-z]+\s+("[^"]*"|\S+)\s+[a-z][a-z0-9-]*(?=\s|\\|$)/g)].length;
+    // An act is a literal word or, at the reap-lock runner's two calls (D-7076), one quoted variable (`"$act"`): both
+    // are counted, and both must name a literal token.
+    const all = [...code.matchAll(/(?<![\w_])_lc_refuse\s+(?:[a-z]+|"\$[A-Za-z_][A-Za-z0-9_]*")\s/g)].length;
+    const literal = [...code.matchAll(/(?<![\w_])_lc_refuse\s+(?:[a-z]+|"\$[A-Za-z_][A-Za-z0-9_]*")\s+("[^"]*"|\S+)\s+[a-z][a-z0-9-]*(?=\s|\\|$)/g)].length;
     expect(literal).toBe(all);
+    // The computed-act calls are the runner's two, by name, and nothing else: each stands inside its body.
+    const runner = lockDeclineSites(src).runner;
+    expect(runner, 'the reap-lock runner is defined').not.toBeNull();
+    const [rf, rt] = functionSpan(src, runner!.name);
+    const sites = [...src.matchAll(/(?<![\w_])_lc_refuse\s+"\$[A-Za-z_][A-Za-z0-9_]*"\s/g)]
+      .filter((m) => !/^\s*#/.test(src.slice(src.lastIndexOf('\n', m.index) + 1, m.index)))
+      .map((m) => (m.index >= rf && m.index < rt ? runner!.name : `outside the runner, line ${src.slice(0, m.index).split('\n').length}`));
+    expect(sites).toEqual(runner!.refuses.map(() => runner!.name));
+    expect(sites).toHaveLength(2);
   });
   it('the reap-lock word is spelled once in TypeScript outside tests', () => {
     const roots = [path.resolve(__dirname, '../src'), path.resolve(__dirname, '../../shared'), path.resolve(__dirname, '../../agent/src'),

@@ -251,6 +251,8 @@ _ws_orphan_locked -> _lc_tx
 _ws_orphan_refused -> _lc_emit
 _ws_reap_eval -> _reg_get
 _ws_reap_eval -> _ws_status
+_ws_reap_lock_run -> _lc_emit
+_ws_reap_lock_run -> _lc_refuse
 _ws_reap_locked -> _lc_emit
 _ws_reap_locked -> _reg_get
 _ws_reap_locked -> _ws_status

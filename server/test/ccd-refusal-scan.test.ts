@@ -13,7 +13,7 @@ import { readFileSync } from 'node:fs';
 import { LC_REFUSAL_TOKENS } from '../../shared/api.js';
 import { SENTENCES } from '../src/wsaudit.js';
 import { ccdSource } from './ccdWsHelpers.js';
-import { refuseWords } from './census-w5/ccdHelpers.js';
+import { lockDeclineSites, refuseWords } from './census-w5/ccdHelpers.js';
 
 const src = ccdSource();
 
@@ -246,6 +246,15 @@ describe('every literal refusal argument ccd carries is a token L0 or wsaudit al
     expect(collect.length, 'the COLLECT region was found — an empty cut harvests nothing').toBeGreaterThan(20000);
     for (const w of refuseWords('collect', { from: src.indexOf('COLLECT-BEGIN'), to: src.indexOf('COLLECT-END') })) found.add(w);
     for (const m of collect.matchAll(/_ws_collect_refused\s+"[^"]*"\s+"[^"]*"\s+([a-z][a-z0-9-]*)/g)) found.add(m[1]!);
+    // THE REAP-LOCK RUNNER (D-7076). `_ws_reap_lock_run` passes its act as `"$act"`, so neither regex above sees its
+    // two `_lc_refuse` calls or its `_lc_emit` decline. Their three tokens are literal positions all the same, read off
+    // the runner by name, so its spelling is held to the vocabularies whatever `cmd_ws_restore` spells. A token the
+    // census cannot read as a literal word is added as `null`, which no vocabulary owns.
+    const lock = lockDeclineSites(src).runner;
+    expect(lock, 'the reap-lock runner is defined').not.toBeNull();
+    expect(lock!.refuses.length, 'the runner\'s two `_lc_refuse` calls').toBe(2);
+    expect(lock!.emits.length, 'the runner\'s one `_lc_emit` decline').toBe(1);
+    for (const t of [...lock!.refuses, ...lock!.emits]) found.add(String(t.token));
     expect(found.size, 'the scan found almost no tokens — it is vacuous').toBeGreaterThanOrEqual(14);
     expect([...found].filter((t) => !known.has(t)).sort(), 'tokens no vocabulary owns').toEqual([]);
     expect(LC_REFUSAL_TOKENS.filter((t) => !found.has(t)).sort(),
