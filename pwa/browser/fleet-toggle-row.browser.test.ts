@@ -21,6 +21,14 @@
 //   the radiogroup's `flex-auto` made `flex-1` ................ (b) the same cases: the same two messages (the chooser stays at top 109, beside the radiogroup)
 //   `className="min-h-row"` removed from the chooser in FleetTable  (a) "the row is one height in both modes, under a fine pointer": `project mode: the row is --row-h, as in status mode: expected 44 to be 32` (fine pointer at 900 and 1280; the touch cases stay green, where `--row-h` is 44)
 //   the text scaling made a no-op (the test's own `setProperty` skipped) ... (b): `fine pointer, 150%: the options' font size, scaled from 13px: expected 13 to be close to 19.5` (and touch): the scaling is asserted to take, so a token that fails to scale cannot pass for a wrapped row
+// MUTATION TABLE (desktop polish Task C12 item 18, review 1124 A-2 and A-4; RUN):
+//   `.ins-toggle { flex: 0 0 60px; max-width: 60px }` (the group narrower than its options, which run under the
+//     chooser) ... all 8 RED, first `status mode: options whose words are cut` (the group clips its options), and the
+//     overlap with each option's own box; the file before C12 kept its 4 (a) cases green under it (the group's own box
+//     and each option's own scrollWidth cannot see it)
+//   a page error thrown when FleetTable loads ... all 8 RED: `page errors: expected [ 'c12 mutant: a page error', … ]`
+// The fixed 600 ms and 300 ms pauses are a measured settle now (`settleRow`: the fonts, then three animation frames
+// with the same boxes), and 150% and 200% are a case each.
 //
 //   CCRC_CHROME=$HOME/.cache/ms-playwright/chromium-1243/chrome-linux64/chrome ./node_modules/.bin/vitest run --config vitest.browser.config.ts --maxWorkers=2 browser/fleet-toggle-row.browser.test.ts
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -75,7 +83,7 @@ const TOKENS = ['--fs-2xs', '--fs-xs', '--fs-sm', '--fs-md', '--fs-base', '--fs-
 /** Open the fleet at `width` in `mode` (seeded before the first paint), the text at `zoom` per cent, and measure the row. */
 async function measure(width: number, touch: boolean, mode: Mode, zoom = 100) {
   const opened = await openApp(browser!, { skin: INSTRUMENT, theme: PHOSPHOR, width, touch }, FIXTURE);
-  const { ctx, page } = opened;
+  const { ctx, page, errors } = opened;
   try {
     await ctx.addInitScript(([key, value]) => {
       try { localStorage.setItem(key!, value!); } catch { /* no storage: the app opens on status */ }
@@ -83,9 +91,9 @@ async function measure(width: number, touch: boolean, mode: Mode, zoom = 100) {
     await page.setViewportSize({ width, height: 800 });
     await page.goto(server!.origin + '/');
     await page.waitForSelector('.shell-nav [role="radiogroup"]', { timeout: 20_000 });
-    await page.waitForTimeout(600);
+    await settleRow(page);
     if (zoom !== 100) await scaleText(page, zoom);
-    return await page.evaluate(() => {
+    const m = await page.evaluate(() => {
       const box = (el: Element): { left: number; right: number; top: number; bottom: number; width: number; height: number } => {
         const r = el.getBoundingClientRect();
         return { left: r.left, right: r.right, top: r.top, bottom: r.bottom, width: r.width, height: r.height };
@@ -96,12 +104,21 @@ async function measure(width: number, touch: boolean, mode: Mode, zoom = 100) {
       const nav = document.querySelector<HTMLElement>('.shell-nav')!;
       const gb = box(group);
       const cb = choosers[0] === undefined ? null : box(choosers[0]);
+      const options = [...group.querySelectorAll<HTMLElement>('[role="radio"]')];
+      const hits = (a: ReturnType<typeof box>, b: ReturnType<typeof box>): boolean =>
+        !(a.left >= b.right - 0.5 || a.right <= b.left + 0.5 || a.top >= b.bottom - 0.5 || a.bottom <= b.top + 0.5);
       return {
         rowHeight: box(row).height, rowWidth: box(row).width, group: gb, chooser: cb, choosers: choosers.length,
         inRow: choosers[0] !== undefined && row.contains(choosers[0]),
         inGroup: choosers[0] !== undefined && group.contains(choosers[0]),
-        overlap: cb !== null && !(cb.left >= gb.right - 0.5 || cb.right <= gb.left + 0.5 || cb.top >= gb.bottom - 0.5 || cb.bottom <= gb.top + 0.5),
-        cutOptions: [...group.querySelectorAll<HTMLElement>('[role="radio"]')].filter((o) => o.scrollWidth > o.clientWidth).map((o) => o.textContent),
+        // The chooser against the radiogroup's box AND each option's own box: the group may be narrower than its
+        // options (`.ins-toggle` has `min-width: 0`), so an option can run under the chooser outside the group's box.
+        overlap: cb !== null && [gb, ...options.map(box)].some((b) => hits(cb, b)),
+        // An option is cut when its own words overflow it, or when the group clips the options it holds.
+        cutOptions: [
+          ...options.filter((o) => o.scrollWidth > o.clientWidth).map((o) => o.textContent),
+          ...(group.scrollWidth > group.clientWidth + 0.5 ? ['(the radiogroup clips its options)'] : []),
+        ],
         // The non-vacuity floor: the options the two checks above read, and the size their words are drawn at.
         radios: group.querySelectorAll('[role="radio"]').length,
         optionFont: parseFloat(getComputedStyle(group.querySelector<HTMLElement>('[role="radio"]') ?? group).fontSize),
@@ -110,9 +127,34 @@ async function measure(width: number, touch: boolean, mode: Mode, zoom = 100) {
         navSideScroll: nav.scrollWidth - nav.clientWidth,
       };
     });
+    return { ...m, errors: [...errors] };
   } finally {
     await ctx.close();
   }
+}
+
+/** Wait for the fonts, then until the row, the radiogroup and the chooser hold the same boxes over three animation
+ *  frames in a row: a measured settle, not a fixed pause (review 1124, A-4), so a late font swap is waited out. */
+async function settleRow(page: Page): Promise<void> {
+  const settled = await page.evaluate(async () => {
+    await document.fonts.ready;
+    const key = (): string => ['.shell-nav [role="radiogroup"]', 'select[aria-label="Class"]'].map((sel) => {
+      const el = document.querySelector(sel);
+      const r = el?.getBoundingClientRect();
+      const row = el?.parentElement?.getBoundingClientRect();
+      return r === undefined ? '-' : [r.left, r.top, r.width, r.height, row?.width, row?.height].join(',');
+    }).join('|');
+    let last = '';
+    let same = 0;
+    for (let i = 0; i < 300 && same < 3; i += 1) {
+      await new Promise<void>((r) => requestAnimationFrame(() => r()));
+      const k = key();
+      same = k === last ? same + 1 : 0;
+      last = k;
+    }
+    return same >= 3;
+  });
+  if (!settled) throw new Error('the toggle row did not settle (harness failure, not a layout result)');
 }
 
 async function scaleText(page: Page, zoom: number): Promise<void> {
@@ -123,7 +165,7 @@ async function scaleText(page: Page, zoom: number): Promise<void> {
       if (Number.isFinite(base)) root.style.setProperty(t, `${base * (z as number) / 100}px`);
     }
   }, [TOKENS, zoom] as const);
-  await page.waitForTimeout(300);
+  await settleRow(page);
 }
 
 describe("Instrument's desk toggle row, in a real Chrome", () => {
@@ -145,14 +187,16 @@ describe("Instrument's desk toggle row, in a real Chrome", () => {
         expect(project.chooser!.height, 'the chooser is as tall as the row').toBe(project.rowH);
         expect(status.cutOptions, 'status mode: options whose words are cut').toEqual([]);
         expect(project.cutOptions, 'project mode: options whose words are cut').toEqual([]);
+        expect([...status.errors, ...project.errors], 'page errors').toEqual([]);
       }, 120_000);
     }
   }
 
+  // One case per text size, so a red at 150% does not hide 200% (review 1124, A-4).
   for (const [pointer, touch] of [['fine pointer', false], ['touch', true]] as const) {
-    it(`the chooser wraps below the radiogroup at 150% and 200% text, under a ${pointer} at 1280`, async () => {
-      const base = await measure(1280, touch, 'project');
-      for (const zoom of [150, 200]) {
+    for (const zoom of [150, 200]) {
+      it(`the chooser wraps below the radiogroup at ${zoom}% text, under a ${pointer} at 1280`, async () => {
+        const base = await measure(1280, touch, 'project');
         const m = await measure(1280, touch, 'project', zoom);
         const at = `${pointer}, ${zoom}%`;
         // The scaling took: the options' words are drawn at the scaled size, so a token that failed to scale cannot
@@ -166,7 +210,8 @@ describe("Instrument's desk toggle row, in a real Chrome", () => {
         expect(m.cutOptions, `${at}: options whose words are cut`).toEqual([]);
         expect(m.pageSideScroll, `${at}: the page scrolls sideways`).toBeLessThanOrEqual(0);
         expect(m.navSideScroll, `${at}: the list column scrolls sideways`).toBeLessThanOrEqual(0);
-      }
-    }, 180_000);
+        expect([...base.errors, ...m.errors], `${at}: page errors`).toEqual([]);
+      }, 180_000);
+    }
   }
 });

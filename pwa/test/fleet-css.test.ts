@@ -4,6 +4,7 @@
 import { describe, it, expect } from 'vitest';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
+import ts from 'typescript';
 import { BARE_ROW, CONTROL_ROW, PAGE_BODY, SELECT, TEXT_INPUT, buttonVariants } from '@ccrc/ui';
 import { cn } from '../../ui/src/lib/cn';
 
@@ -1269,11 +1270,15 @@ describe('the fleet head holds one row, and the class chooser is not on it', () 
     expect(head, 'the fleet head is not in FleetHead.tsx — find it and re-point this read')
       .toContain('<header className="fleet-head">');
     // What the chooser IS now (T2f, D-6371): the shared component, and its select's name. `fleet-class-select` is in no
-    // markup, so a check on that class name could not go red.
-    expect(head, 'the chooser component is back in the fleet head, where it never fit')
-      .not.toContain('ClassChooser');
-    expect(head, 'a class select is back inside <header>, where it never fit')
-      .not.toContain('aria-label="Class"');
+    // markup, so a check on that class name could not go red. Read in the CODE, its comments printed away, so a comment
+    // that names the chooser cannot red it, and in either quote (C12 item 18, review 1124 A-8).
+    const code = ts.createPrinter({ removeComments: true })
+      .printFile(ts.createSourceFile('FleetHead.tsx', head, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX));
+    expect(code, 'the printed code still holds the head').toContain('className="fleet-head"');
+    expect(code, 'the chooser component is back in the fleet head, where it never fit')
+      .not.toMatch(/\bClassChooser\b/);
+    expect(code, 'a class select is back inside <header>, where it never fit')
+      .not.toMatch(/aria-label=(?:["']Class["']|\{\s*["']Class["']\s*\})/);
     const screen = readFileSync(
       path.join(import.meta.dirname, '..', 'src', 'screens', 'FleetScreen.tsx'), 'utf8');
     expect(screen).toContain('<div className="fleet-runs-line">');
