@@ -1,5 +1,7 @@
 # W7: the operator acts, ruled
 
+- **D-7265 (2026-10-28)** — the W7 operator acts OA-C14 to OA-C18 are ruled, each option (a), as recorded below.
+
 **D-7265.** The operator ruled every operator act in `docs/superpowers/plans/2026-10-27-consolidation-w7-pwa.md` (§Operator acts) on 2026-10-28, each as the plan recommends. The plan file is not edited, because merged plans are append-only. This note is the record, and each task cites it where it applies the act.
 
 | Act | Ruling | Applies in |
