@@ -652,8 +652,9 @@ describe('the pool chip', () => {
     expect(chip.tagName).toBe('BUTTON');
     // Ruling 3's attention ink keys on this attribute (`fleet.css`), so the new word keeps it.
     expect(chip).toHaveAttribute('data-pool', 'untagged');
-    // The accessible name is the state's sentence, unchanged by the visible word.
-    expect(chip).toHaveAccessibleName('no project pool — any account may serve this project');
+    // The accessible name begins with the words the door shows (WCAG 2.5.3, R121 Q6; C12 item 10), then the state's
+    // sentence; the tooltip stays the sentence.
+    expect(chip).toHaveAccessibleName('Set pool — no project pool — any account may serve this project');
     expect(chip).toHaveAttribute('title', 'no project pool — any account may serve this project');
     expect(screen.queryByText('no pool')).not.toBeInTheDocument();
     fireEvent.click(chip);

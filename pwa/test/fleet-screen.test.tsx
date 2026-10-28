@@ -909,7 +909,7 @@ describe('FleetScreen', () => {
       });
 
       fireEvent.click(await screen.findByRole('button', {
-        name: 'no project pool — any account may serve this project',
+        name: 'Set pool — no project pool — any account may serve this project',
       }));
       fireEvent.click(screen.getByRole('button', { name: 'pool pool-a' }));
       await waitFor(() => expect(projects).toHaveBeenCalledTimes(2));
@@ -1016,7 +1016,7 @@ describe('FleetScreen', () => {
       });
 
       fireEvent.click(await screen.findByRole('button', {
-        name: 'no project pool — any account may serve this project',
+        name: 'Set pool — no project pool — any account may serve this project',
       }));
       fireEvent.click(screen.getByRole('button', { name: 'pool pool-a' }));
 
@@ -1053,7 +1053,7 @@ describe('FleetScreen', () => {
       });
 
       const poolChip = await screen.findByRole('button', {
-        name: 'no project pool — any account may serve this project',
+        name: 'Set pool — no project pool — any account may serve this project',
       });
       fireEvent.click(poolChip);
       fireEvent.click(screen.getByRole('button', { name: 'pool pool-a' }));
@@ -1100,14 +1100,14 @@ describe('FleetScreen', () => {
       });
 
       const poolChip = await screen.findByRole('button', {
-        name: 'no project pool — any account may serve this project',
+        name: 'Set pool — no project pool — any account may serve this project',
       });
       fireEvent.click(poolChip);
       fireEvent.click(screen.getByRole('button', { name: 'pool pool-a' }));
       await waitFor(() => expect(projects).toHaveBeenCalledTimes(2));
       fireEvent.click(screen.getByTestId('sheet-overlay'));
       fireEvent.click(screen.getByRole('button', {
-        name: 'no project pool — any account may serve this project',
+        name: 'Set pool — no project pool — any account may serve this project',
       }));
       expect(screen.getByRole('dialog', { name: 'Which pool runs this project?' }))
         .toHaveTextContent('alpha is in pool pool-a.');
@@ -1168,7 +1168,7 @@ describe('FleetScreen', () => {
       });
       await waitFor(() => expect(projects).toHaveBeenCalledTimes(2));
       const initialPool = await screen.findByRole('button', {
-        name: 'no project pool — any account may serve this project',
+        name: 'Set pool — no project pool — any account may serve this project',
       });
       fireEvent.click(initialPool);
       fireEvent.click(screen.getByRole('button', { name: 'pool pool-a' }));
@@ -1257,7 +1257,7 @@ describe('FleetScreen', () => {
         expect(projects).toHaveBeenCalledTimes(2);
 
         fireEvent.click(screen.getByRole('button', {
-          name: 'no project pool — any account may serve this project',
+          name: 'Set pool — no project pool — any account may serve this project',
         }));
         fireEvent.click(screen.getByRole('button', { name: 'pool pool-a' }));
         await act(async () => { await Promise.resolve(); });
