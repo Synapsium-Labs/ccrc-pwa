@@ -15,6 +15,7 @@ import { ArchiveSheet, restoreSession } from '../fleet/ArchiveSheet';
 import { accountHue, accountLabel, accountProvider } from '../lib/accounts';
 import { api, ApiError, failedTo, INTERRUPT_REFUSAL_TEXT, refusalText } from '../lib/api';
 import { backgroundTasksClause } from '../lib/refusalWords';
+import { dayKey } from '../lib/clock';
 import { useKeyboardInset } from '../lib/keyboard';
 import { navigate } from '../lib/router';
 import { ack } from '../lib/seen';
@@ -223,6 +224,16 @@ export function SessionScreen({
   // for the transcript (its live ask card points at the card), the Escape interrupt (it stands down) and the composer
   // (Send holds). A phone's sheet never reports, so none of the three changes there.
   const [askInline, setAskInline] = useState(false);
+  // The transcript's row callbacks keep their identity across this screen's renders (desktop polish Task C7): each is a
+  // prop of every row, so a new one on every render (a roster answer, a status word) would draw every row again.
+  // D-6326 (R89): Retry is a send, held while the inline card is mounted (the bubble's button is disabled for the same
+  // fact); nothing is queued to go when the card leaves.
+  const onRetry = useCallback((key: string): void => {
+    if (askInline) return;
+    useStore.getState().retry(key);
+  }, [askInline, useStore]);
+  const onDiscard = useCallback((key: string): void => { useStore.getState().discard(key); }, [useStore]);
+  const onAnswer = useCallback((): void => { setRaise((n) => n + 1); }, []);
   // Lifecycle surfaces behind the header's overflow menu.
   const [swapOpen, setSwapOpen] = useState(false);
   const [archiveOpen, setArchiveOpen] = useState(false);
@@ -298,6 +309,9 @@ export function SessionScreen({
   const lookup = (sid: string): FleetSession | null => (parent !== null && parent.id === sid ? parent : null);
   const parentId = live === null ? null : parentIdOf(live, activeRuns);
   const factsNow = useNow(30_000);
+  // Desktop polish Task C7, review 1128: the transcript's day, from this same clock. A row whose words read the clock
+  // (the usage-limit pill) draws again when it changes, within one tick of local midnight; no other row does.
+  const day = dayKey(factsNow);
   const presence = parentId === null ? null : coordPresence(parentId, lookup(parentId), fleetFrameSeen);
   const facts = live === null ? null : sessionFacts({
     session: live, now: factsNow, roster,
@@ -647,14 +661,13 @@ export function SessionScreen({
             events={events}
             pending={pending}
             busy={pulsing}
-            // D-6326 (R89): Retry is a send, held while the inline card is mounted (the bubble's button is disabled for the
-            // same fact); nothing is queued to go when the card leaves.
-            onRetry={(key) => { if (askInline) return; useStore.getState().retry(key); }}
-            onDiscard={(key) => useStore.getState().discard(key)}
+            onRetry={onRetry}
+            onDiscard={onDiscard}
             askPending={askPending}
             askBelow={askInline}
             answerLabel={answerLabel}
-            onAnswer={() => setRaise((n) => n + 1)}
+            onAnswer={onAnswer}
+            day={day}
           />
         )}
       </div>
