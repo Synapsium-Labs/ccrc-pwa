@@ -56,13 +56,14 @@ accessibility tree, with its 44 px overlay and its `open-actions` door. A touch 
 
 ## Row heights, base and branch (px)
 
-The row's height (`.sess-line`) by name length, from the probe above. "br" is the 5-character row with the
+The row's height (`.sess-line`) by name length, from the probe above. The Instrument status rows were measured again
+after the state-word arm (below), on the same fixture rebuilt, and are given unrounded; the base's were measured before it. "br" is the 5-character row with the
 48-character branch; every other row's context cell is its `ws/<name>` branch.
 
 | View, width | track | br | 12 | 30 | 60 | 104 | base: br / 12 / 30 / 60 / 104 |
 |---|---|---|---|---|---|---|---|
-| Instrument status, 1280 | 223 | 55 | 40 | 76 | 91 | 91 | 40 / 40 / 57 / 57 / 57 |
-| Instrument status, 1600 and 1920 | 303 | 40 | 40 | 40 | 91 | 91 | 40 / 40 / 40 / 40 / 40 |
+| Instrument status, 1280 | 223 | 55 | 40 | 73.5 | 73.5 | 73.5 | 40 / 40 / 57 / 57 / 57 |
+| Instrument status, 1600 and 1920 | 303 | 40 | 40 | 40 | 73.5 | 73.5 | 40 / 40 / 40 / 40 / 40 |
 | Instrument project, 1280 | 205 | 76 | 61 | 80 | 95 | 95 | 61 / 61 / 80 / 80 / 80 |
 | Instrument project, 1600 and 1920 | 285 | 61 | 61 | 61 | 95 | 95 | 61 / 61 / 61 / 61 / 61 |
 | Refined, 1280 | 185 | 76 | 61 | 95 | 95 | 95 | 61 / 61 / 80 / 80 / 80 |
@@ -76,16 +77,36 @@ What a row pays, read from the boxes inside it:
   Refined) and every long name's `ws/<name>` branch (80 to 95).
 - At 1600 and 1920 a 60- or 104-character name takes a second line it did not have (about 19 px), and its branch a
   second line too (15 px): 61 to 95 in Refined.
-- In Instrument's status mode at 1280, a name on two lines also moves the row's state word from beside the name onto
-  a line of its own, which is why the 30-character row is 76 and not about 57.
+- In Instrument's status mode the state word now sits on the context line (below). A long name's two lines and its
+  `ws/<name>` branch, which wraps beside the state word to two lines of its own, make 73.5 px; before the arm the state
+  word took a line of its own under a two-line name, and those rows were 76 and 91.
 
 ## R21 F2 and R32 F2
 
 The ledger gives T3b R21's F2 (a needs-you row's state word on the context line, or a wrapping name, in Instrument's
-340 px column) and R32's F2 (a two-line row with no context is 53 px). T3b takes the wrapping-name arm and leaves
-`instrument.css` alone. The state word dropping to a line of its own under a two-line name (the 76 and 91 above) is
-what the other arm would remove. That is a layout change in `instrument.css`, outside this task's files, and is left
-for a ruling.
+340 px column) and R32's F2 (a two-line row with no context is 53 px). T3b first took the wrapping-name arm alone. The
+operator then ruled (R121, Q2, option 1) that T3b takes the other arm too before it lands: the state word on the
+context line, so a long needs-you name no longer pushes it onto a line of its own.
+
+The arm (`instrument.css`, the fine-pointer desk block): a status row with a context fact gives its name the whole
+first line, or two, and draws the state word at the end of the context line; the context takes what the state leaves
+(`flex-basis: 0`, so the two always share one flex line) and wraps inside it. The state stays first in the document,
+so the reading order is unchanged. A row with no context (a main checkout) keeps the state beside its name, so R32's
+F2 row (53 px) is unchanged.
+
+Needs-you rows with a short branch for context, in px, measured in real Chrome on production builds of this branch
+with and without the arm:
+
+| Width | 30 characters | 60 characters | 104 characters |
+|---|---|---|---|
+| 1280 | 58.5 (75.5 without) | 58.5 (75.5) | 58.5 (75.5) |
+| 1600 and 1920 | 39.75 (56.75) | 58.5 (75.5) | 58.5 (75.5) |
+
+D-6716 records a long needs-you name at three lines, about 57 px, on `main`, where the name was shortened. With the arm
+a two-line name is back at 58.5, and a name that fits one line at 1600 is two lines, 39.75 px. On the realistic
+fixture of `instrument-desk.browser.test.ts` (names of 17 to 25 characters, each with its `ws/<name>` branch), the two
+needs-you rows are 54.75 at 1280 (56.75 without), `project-a-review-wave-two` is 39.75 at 1600 (56.75), and every other
+row is unchanged. No row grew.
 
 ## Mutation table, run
 
@@ -111,6 +132,9 @@ Each mutant was applied to a saved copy, its suite run, and the file restored fr
 | that rule without its `:not(:focus-visible)` | fleet-css, hover-states | red: "a hovered, focused or selected row shows ⋯"; the hover census |
 | the keyboard arm widened back to `:focus-within` | row-fit (browser), fleet-css, hover-states | red: "a ⋯ given focus back by a sheet closed with the mouse lights no second ⋯ at rest" (12 of 12, two ⋯ lit); "a hovered, focused or selected row shows ⋯"; the hover census |
 | the keyboard arm removed | row-fit (browser), fleet-css, hover-states | red: the same browser case (12 of 12, the Tab-focused row's ⋯ dark); "a hovered, focused or selected row shows ⋯"; the hover census |
+| the state-word arm's three rules removed (`instrument.css`) | row-fit (browser), instrument-desk (browser), instrument-list | red: "a needs-you row keeps its state word on the context line, however long its name" (4 of 4); 8 instrument-desk cases (`the state word is on the context line: expected false`); the arm's rule pin |
+| the context's `flex: 1 1 0` set back to `1 0 100%` | row-fit (browser), instrument-desk (browser), instrument-list | red: the same cases |
+| the state's `order: 1` removed | instrument-list | red: the arm's rule pin (the browser files are not red: the state and the context share the line either way) |
 
 No survivors among the rows run. Not run: a browser mutant for the branch clamp alone. The "stays inside its box
 sideways" assertion that replaced "fills the track" (which a block box always met) failed on the base for the plain
