@@ -157,6 +157,35 @@ name-reuse bug. **This spec chooses to keep the tree across rounds (R-1a)** and 
   tree, the clips and the registry row all stay, so the report the fix-round mail cites stays readable. This turns
   `-review`, `-rev`, `-rev2` and `-rev3` into one tree per work run. It is the largest structural saving: in the census
   it would remove most of the 59.
+
+  **A re-bound reviewer is never reclaimed under the next round.** Today a review child is kept only by the review
+  words (`review-report-live`, `review-report-stale`) and `REVIEW_CHILD_CEILING_MS`, all keyed on the run that minted
+  it, and the stale arm already lapses those words. Once round N+1 resumes round N's session, a close-time reclaim of
+  round N's review run, the stale arm or the ceiling could remove a reviewer that round N+1 is using. R-3a also makes
+  that ceiling configurable and lowerable. So R-1a requires:
+  - **(a) The earlier review run is terminal before the session is re-bound.** Dispatch binds round N+1's review run
+    to the session only after round N's review run reads terminal, through the single-writer binding pin of #1405
+    (`coord/runBinding.ts`). A session is bound to at most one non-terminal run at a time. If round N's run is not
+    terminal, or its state cannot be read, the re-bind refuses and the round opens a fresh reviewer, as today.
+  - **(b) Every verdict keeps a session bound to any non-terminal run.** Close-time child reclaim, the sweep, the stale
+    and superseded arms, the review ceiling (`review-report-stale`), deps-shed's decider rows and every shed or
+    hibernate verdict first ask whether the session is bound to a non-terminal run, whichever run minted it, and keep
+    it (a kept verdict, for example `bound-to-open-run`) when it is. An unreadable binding is doubt, and doubt keeps.
+    The plan adds one test per verdict: a reviewer minted by a terminal round-N run and re-bound to an open round-N+1
+    run is kept by each of them, including after the ceiling and the stale floor have passed.
+
+  **Moving the resumed tree to the fix round's tip.** A resume with `/clear` does not move the tree. Before the
+  kickoff, dispatch runs a box verb (named in the plan, for example `ccd ws-advance`) that does exactly this, each git
+  call contained as the reclaim ladder's are (`_ws_reclaim_contained`):
+  1. `git status --porcelain=v1 -z --untracked-files=all`. Anything listed, staged, modified or untracked (a repro
+     test, a scratch file), makes the verb **refuse** with `dirty-tree`, touching nothing;
+  2. a contained `git fetch` of the work run's branch from the remote;
+  3. `git checkout --detach <tip>` (never `reset --hard`, `stash`, `clean` or `--force`). Git itself refuses a
+     checkout that would overwrite a local change, and the verb passes that refusal on.
+
+  On any refusal, the reviewer is not resumed. The round opens a fresh reviewer, as today, and the old one stays under
+  its existing review words until its reviewed work run closes, with its files intact. The refusal is journaled and
+  shown on the round's run card.
 - **R-1b. A review checkout without its own dependencies.** A reviewer reads a branch tip and runs lenses. It may run
   tests, so it needs dependencies, but it does not need its own copy. With §4's cache, and once the reviewer skill
   stops running a blanket `npm ci` (§4, "Who installs"), a review tree gets its dependencies by hydrate in seconds and
@@ -211,10 +240,29 @@ ignored (`ccd/ccd`, the `ws-add` exclude block). The fleet has used that shape b
   `CCD_DEPS_CACHE_ROOT` (default unset, which means the cache is off and behaviour is unchanged).
 - **Fill: only from shared, reviewed inputs.** An entry is shared with every other tree, so one session must not be
   able to fill it from its own modified repository. A miss is filled only when the lockfile and `package.json` blobs
-  appear at the tip of the project's default branch on its remote. The verb fills from those blobs, read with `git
-  show`, not from the session's working copy. It runs the install with a scrubbed environment and a user config file
-  owned by the cache. A tree whose inputs are not on the default branch (a branch that changes dependencies) installs
-  privately, as today, and does not touch the cache.
+  appear at the tip of the project's default branch on its remote. The verb fills from that commit, not from the
+  session's working copy. It runs the install with a scrubbed environment and a user config file owned by the cache.
+  A tree whose inputs are not on the default branch (a branch that changes dependencies) installs privately, as
+  today, and does not touch the cache.
+- **Fill: what is staged.** The lockfile and `package.json` alone cannot be installed. `server` depends on
+  `file:../agent` and `pwa` on `file:../ui`, so `npm ci` needs the link targets on disk to resolve them, and
+  `server`'s `postinstall` runs a script from its own source (`scripts/fix-node-pty-helper.mjs`). So the fill exports,
+  from the one default-branch commit, the package's directory and the directory of every link target in its link
+  closure (`git archive <commit> -- <pkg> <targets…>`), at their relative paths inside the staging directory, and runs
+  the install there. Then:
+  - **Key.** The key adds, for each link target, its `package.json` and lockfile blobs. A package whose own
+    `package.json` declares a root lifecycle script (`preinstall`, `install`, `postinstall` or `prepare`) adds the git
+    tree id of its whole directory at that commit, because the script reads source the key cannot otherwise see. That
+    is correct but misses on every source change to that package. A deployment may name narrower key paths per
+    package in `CCD_DEPS_CACHE_KEY_PATHS` (for example the scripts directory the hook runs); default unset.
+  - **Only `node_modules` is cached.** The export is not a repository, so before the install the verb records every
+    staged path with its size, mode and mtime, and after it walks the staging tree outside the package's own
+    `node_modules` and compares. If the install wrote anywhere outside the package's
+    own `node_modules`, for example into a link target's `node_modules` or into a build output under the package, the
+    key is marked `no-cache`: a hydrate cannot restore those writes, so that package always installs privately. The
+    plan measures the four packages here before it claims a saving for any of them.
+  - The staging copy is removed after the entry is renamed into place. Only the package's `node_modules` (with its
+    links stored as relative symlinks, below) becomes the entry.
 - **Fill: staging and the filesystem.** The entry is built in a staging directory **inside** `CCD_DEPS_CACHE_ROOT`,
   not under the session's `TMPDIR`. The session's temp root can be a different filesystem (a tmpfs, or another mount),
   and a rename across filesystems fails. The finished entry is renamed into place within one directory, so a
@@ -230,17 +278,48 @@ ignored (`ccd/ccd`, the `ws-add` exclude block). The fleet has used that shape b
   the uid that owns the cache, so a `chmod u+w` (by an agent, a tool's `chmod -R` or a postinstall) changes the cache
   inode's mode for every tree, and a later in-place write then changes the bytes for every tree. Detection does not
   rely on modes:
-  - At fill, the verb writes a manifest beside the entry: path, inode, mode, size, mtime, ctime and sha256 for every
-    file.
-  - **Every hydrate** compares each file's `stat` with the manifest. A `chmod` changes ctime, and a write changes
-    mtime, ctime and size, so either shows up without hashing. Hashes are checked for a sample of files
-    (`CCD_DEPS_CACHE_HASH_SAMPLE`, default 2%).
+  - At fill, the verb writes a manifest beside the entry: path, file type, inode, mode, size, mtime and sha256 for
+    every file, and the target of every symlink. It records **no ctime and no link count**. Under hardlinks both
+    drift on every legitimate use: `link()` and `unlink()` change the shared inode's link count, which is inode
+    metadata, so the first `cp -al` hydrate and every shed or reclaim of a hydrated tree change the ctime of every
+    cache file. A ctime compare would quarantine every entry on its second hydrate.
+  - **Every hydrate** compares, per file, the `lstat` fields the manifest holds: inode, type, **mode compared
+    directly** (that is the chmod signal, in place of ctime), size and mtime, and each symlink's target. A write
+    changes size or mtime. A chmod changes mode. Hashes are checked for a sample of files
+    (`CCD_DEPS_CACHE_HASH_SAMPLE`, default 2%). What a stat compare cannot see is a chmod, an in-place write of the
+    same size, a chmod back and an mtime reset. The sample and the full re-hash below catch that, later, and the
+    quarantine then marks every tree hydrated from the entry since its last clean re-hash.
+  - **Cost.** An entry set for this repository is on the order of 300k files (a reviewer's estimate; the plan measures
+    it). The compare is one `lstat` per file, done in the same walk that links or reflinks it, so it adds no second
+    walk: roughly a second or two warm and several seconds cold, plus reading the 2% sample. The walk is bounded by
+    `CCD_DEPS_CACHE_HYDRATE_S` (default 120, under the verb's runner row). A walk that does not finish is not a
+    mismatch: the verb removes the partial target it made, does not quarantine, and the session installs privately.
+    The plan measures the walk on a real box before the default is fixed.
   - **The tmp-sweep arm** (see Eviction) re-hashes every entry in full, at most once per
     `CCD_DEPS_CACHE_VERIFY_HOURS` (default 24).
   - A mismatch **quarantines** the entry. It is renamed aside, never served again and never repaired, and the next
     miss refills it from the default branch. The verb records which trees it hydrated from each entry. On quarantine,
     those trees get a `deps-suspect` mark, and their next `ws-deps` call replaces their `node_modules`. The worker and
     reviewer skills treat a `deps-suspect` mark as "rehydrate before testing".
+  - **Hydrate only into an empty target; every replace is fenced.** A hydrate writes a package's `node_modules` only
+    when it does not exist. Every path that would remove or replace an existing one (a `deps-suspect` replace, a stamp
+    that does not match the current key, a stamp that is missing, a wake after a shed that left something behind, and
+    the cleanup of a partial hydrate) goes through deps-shed's fences, by calling the same shared ccd functions as
+    `ws-shed-deps` (#1772's rungs 7, 8, 9 and 11), not a copy:
+    - the target is a real directory on the workdir's filesystem, resolves inside the workdir, and is ignored and
+      untracked (`git ls-files -- <dir>` empty);
+    - it holds no `.git` (directory, file or link) at any depth, by one bounded `find`; a walk that does not finish
+      answers `unmeasured`;
+    - no process holds a file under it (`_ws_path_users_many` on its physical spelling), other than the verb's own
+      process tree; unmeasured answers `unmeasured`;
+    - a contained `git status --porcelain=v1 -z --untracked-files=all` digest is read before the removal and again
+      after it, and a difference answers `git-state-changed`.
+
+    Ignored trees can hold a nested checkout or a hand-patched package that git cannot see, and these fences exist for
+    that. Only deps-shed's asleep rungs do not apply, because the session running `ws-deps` is the tree's owner. Any
+    refusal leaves the existing `node_modules` exactly as it is, keeps the `deps-suspect` mark, and reports the word,
+    so the session can look and decide. It never falls back to an unfenced `rm`. Tests: one per fence on each replace
+    path.
   - Where a deployment can run the cache under its own uid (`CCD_DEPS_CACHE_OWNER`, default unset), the cache files
     belong to that uid and a session cannot chmod them at all. The manifest checks stay on either way.
   - A key whose postinstall must write into its own files is marked `copy-only` at fill (the fill sees the write fail
@@ -297,10 +376,15 @@ keys the cache does not cover.
 **Recommendation (R-3a).**
 
 - Server: `CCRC_CHILD_STALE_IDLE_HOURS`, default 168, which is today's value.
-- Box: `CCD_WS_STALE_IDLE_S`, default 604800. It can be lowered, but never below a box floor
-  `CCD_WS_STALE_IDLE_FLOOR_S` (default 86400). The box keeps the last word: it acts on
-  `max(server's figure, box floor)`, so a server misconfiguration cannot make the box reclaim a tree it would
-  refuse today.
+- Box: `CCD_WS_STALE_IDLE_S`, default 604800. It can be lowered, but the box clamps it to at least a box floor
+  `CCD_WS_STALE_IDLE_FLOOR_S` (default 86400): a value below the floor is read as the floor and logged once. The box
+  keeps the last word: it acts on `max(server's figure, CCD_WS_STALE_IDLE_S)`, with `CCD_WS_STALE_IDLE_S` already
+  clamped. The floor is never a term of that `max` on its own. So a server-only change, such as
+  `CCRC_CHILD_STALE_IDLE_HOURS=24` set by mistake, still leaves the box at its own 604800 and changes nothing it
+  reclaims. Lowering the age takes a change on both sides: the server's hours and the box's `CCD_WS_STALE_IDLE_S`.
+  A server misconfiguration therefore cannot make the box reclaim a tree it would refuse today. Tests: a server figure
+  below the box's value acts at the box's value; a box value below the floor acts at the floor; both lowered acts at
+  the larger of the two.
 - The idle wording in banners and feed rows is formatted from the configured value.
 - The same treatment applies to the other hard-coded ages this spec touches: `REVIEW_CHILD_CEILING_MS` (7 days) and
   the stale-archive lane's 14 days (`server/src/coord/staleArchive.ts`, §6).
@@ -338,6 +422,17 @@ or a coordinator's act. What changes is that the act becomes easy to reach and h
      with no worker. A later fix needs a new run on its branch." The branch on the remote is untouched, so a new run
      can pick it up.
    - **Offered plainly** when the run has no PR, or its PR is closed or merged.
+   - **The server re-checks at the press.** The card's state is only a rendering. `POST /api/runs/:id/abandon` reads
+     the run's PR state from GitHub again when it is called, and applies the same rules: it **refuses** (409, with
+     the word, for example `pr-enqueued` or `checks-pending`) while the PR is in the merge queue or has required
+     checks pending, and it **refuses** (`pr-state-unreadable`) when the PR state cannot be read, fail closed, the
+     same rule as the auto-abandon decider. An open PR that is neither needs the request to carry the warning's
+     acknowledgement, which the card sends only after showing it. A stale card, a race with an enqueue, or a GitHub
+     read failure therefore cannot release the worker or the programme hold of a run whose PR is about to merge.
+     This applies to every caller of the act, the coordinator's `ccrc-api` included, not only the PWA; a run with no
+     PR recorded needs no GitHub read and is not refused for one. The change to the coordinator's path is called out
+     in the plan's PR, since it can now refuse an abandon it accepts today. Tests: one per
+     refusal word, and one for an enqueue that lands between the card's read and the press.
    - **If a PR merges or fails after its run was abandoned** (for example, the queue ejects it), the server raises
      one attention item to the programme's coordinator, or to the operator when there is no live coordinator. The
      item names the PR and the abandoned run and offers "open a run on this branch". It goes through the existing
@@ -369,15 +464,24 @@ anything that was ever a claimant.
 
 **Recommendation (R-4).**
 
-- **R-4a. Arm G1 for manual sessions.** No code change. The operator reads the lane's "would archive" shadow rows
-  and arms `stale-archive-live`. Its 14 days becomes `CCRC_STALE_ARCHIVE_IDLE_DAYS` (default 14), as in §5.1.
+- **R-4a. Arm G1 for manual sessions, after its UI.** The lane's code is built. The operator reads its "would
+  archive" shadow rows and arms `stale-archive-live`, but **only after R-4c's G1 half has shipped**: arming archives
+  manual sessions, and expiry removes them 7 days later, so until the countdown, Keep and Archive now exist there is
+  no in-UI warning and no way to keep a parked but resumable session from the app (the operator-actions-in-the-UI
+  rule). Its 14 days becomes `CCRC_STALE_ARCHIVE_IDLE_DAYS` (default 14), as in §5.1.
 - **R-4b. Coordinators: a second arm of the same lane, not a new lane.** A coordinator qualifies when all of these
   hold:
   - it claims no non-terminal run;
   - its last chair ended more than `CCRC_COORDINATOR_ARCHIVE_IDLE_DAYS` ago (default unset, which means off);
   - it has had no pane for the same period;
   - it has no pinned or held marker, and no unanswered operator-facing question (the fleet-rollup rule: a question
-    is never hidden).
+    is never hidden);
+  - nothing is waiting on it: no parked, held or undelivered mail addressed to it, no child ask routed to it and not
+    yet answered, and no coordinator-routed permission prompt pending for it. Once it is archived, and later expired,
+    each of these would have no recipient. Each is read from its existing source (the mail queue's parked and held
+    rows, the ask and permission routing records), and a source that cannot be read is a refusal
+    (`pending-unmeasured`), as is any pending item (`pending-for-coordinator`). The same condition is re-read just
+    before the archive act.
 
   **"Claims no non-terminal run" must be proven, not read.** Claim attribution is incomplete today (§7). #1407 (the
   unborn and dup-arm gaps at `bindSession`) is open, and D8 (the coordinator's uuid on the claim, and DT7's
@@ -391,8 +495,9 @@ anything that was ever a claimant.
   tree, HEAD on a remote or rescued into the attic, no holder. It ships in shadow behind
   `coordinator-archive-live`. This changes rule 4 from "never automatically" to "never while it has work, and never
   without a recorded idle age". The operator rules on it (§10, Q5).
-- **R-4c. Visible and overridable in the UI.** Every session row that either arm will archive shows "archives in N
-  days" in the PWA, with **Keep** (it writes the existing hold marker through a whitelisted act) and **Archive now**.
+- **R-4c. Visible and overridable in the UI, in two halves.** The G1 half (manual sessions) ships before G1 is armed
+  (§9 step 3); the coordinator half ships with R-4b. Every session row that either arm will archive shows "archives
+  in N days" in the PWA, with **Keep** (it writes the existing hold marker through a whitelisted act) and **Archive now**.
   The settings screen shows both idle ages as read-only facts, taken from the server's config.
 
 ## 7. Coordinator durability: what remains of D4, D6 and D7
@@ -422,9 +527,10 @@ DT4 and arm the drift push. Then build D8 (DT6, DT7). **Arm OA-D6 only after DT7
 ends or releases a programme's runs. Until DT7's claimant-revived lands, a coordinator revived under a new id (an
 account swap or a respawn) cannot be told apart from a dead one. So reading the lane's shadow record against D7's
 `claimant-gone` findings cannot rule out a false "dead" verdict, and arming earlier could release runs that are still
-needed. The shadow record is still read before then, as evidence. If the operator wants OA-D6 armed before DT7, the
-condition is that **every** shadow row has been checked by hand against the revive history (account swaps and
-respawns of the claimant), and that no row's claimant has an id-changing revive.
+needed. The shadow record is still read before then, as evidence. There is **no early-arm path**. A hand check of
+the shadow rows covers only the rows that exist when it is done: once the lane is armed, a coordinator revived later
+under a new id still reads as dead, and its runs are released, which is exactly what DT7 prevents. A one-time audit
+cannot stand in for it, so OA-D6 stays in shadow until DT7 has landed.
 
 The programme ledger `docs/superpowers/programs/coordinator-durability.md` is stale: it still
 lists D3 and D4 as "to spec" and DT1 as "in review". Bring it up to date in the plan's first PR.
@@ -470,25 +576,33 @@ Each step is one PR. Every destructive arm ships in shadow first.
 
 1. **R-0 diagnosis and visibility.** The `probe` journal field, the bounds as config, and the failing-lane alert.
    Then the fix the diagnosis points to. Nothing else waits on this except the measurements that follow it.
-2. **Arm what is built.** These are operator acts, each after reading its shadow record:
-   `coordinator-roster-card-live` (D4), `stale-archive-live` (G1), and `deps-shed-live` once #1772 lands. No code.
-3. **R-1a** one reviewer per work run (the capacity spec's W2).
-4. **R-2** the dependency cache: the `ws-deps` verb with its manifest, quarantine and `--check`, the `ws-add --child`
-   hook, cache eviction and re-hash in the tmp sweep, the SAFETY-list entries, and **in the same PR** the CLAUDE.md
-   and worker and reviewer skill changes that replace the blanket `npm ci`. The cache is off until
+2. **Arm what is built and already visible.** Operator acts, each after reading its shadow record:
+   `coordinator-roster-card-live` (D4), and `deps-shed-live` once #1772 lands. No code. `stale-archive-live` is
+   **not** armed here (step 3).
+3. **R-4c's G1 half, then arm G1.** The "archives in N days" countdown, Keep and Archive now for every session G1
+   would archive, read from G1's own decider, and the stale-archive age shown in settings. Only then the operator
+   arms `stale-archive-live` (R-4a), after reading its shadow rows.
+4. **R-1a** one reviewer per work run (the capacity spec's W2), with the re-bind rules, the per-verdict keep tests and
+   the fenced tree advance.
+5. **R-2** the dependency cache: the `ws-deps` verb with its manifest, quarantine, fenced replace and `--check`, the
+   `ws-add --child` hook, cache eviction and re-hash in the tmp sweep, the SAFETY-list entries, and **in the same
+   PR** the CLAUDE.md and worker and reviewer skill changes that replace the blanket `npm ci`. The cache is off until
    `CCD_DEPS_CACHE_ROOT` is set.
-5. **R-1c** the deps-shed row for review children between rounds, in shadow.
-6. **R-3a** ages as config: the stale floor, the review ceiling and stale archive's 14 days.
-7. **R-5a** the D4 wake arm and its shared card builder; **#1407**.
-8. **R-3b** the parked-run nudge, the Abandon control in the PWA with its PR-state rules, and the ejected-PR attention
-   item.
-9. **DT4** the PWA "Out of step" section; arm `drift-push-live`.
-10. D8 (DT6, DT7) per the tail spec.
-11. **Arm OA-D6** (`dead-coordinator-lane-live`), an operator act after reading its shadow record.
-12. **R-4b and R-4c** the coordinator archive arm in shadow, and the UI countdown with Keep and Archive now.
+6. **R-1c** the deps-shed row for review children between rounds, in shadow.
+7. **R-3a** ages as config: the stale floor, the review ceiling and stale archive's 14 days.
+8. **R-5a** the D4 wake arm and its shared card builder; **#1407**.
+9. **R-3b** the parked-run nudge, the Abandon control in the PWA with its PR-state rules and the server's re-check at
+   the press, and the ejected-PR attention item.
+10. **DT4** the PWA "Out of step" section; arm `drift-push-live`.
+11. D8 (DT6, DT7) per the tail spec.
+12. **Arm OA-D6** (`dead-coordinator-lane-live`), an operator act after reading its shadow record. Never before step
+    11.
+13. **R-4b and R-4c's coordinator half** the coordinator archive arm in shadow, and its countdown with Keep and
+    Archive now.
 
-Steps 3 and 4 can be built in parallel. Step 5 needs steps 3 and #1772. Step 10 needs step 7 (#1407). Step 11 needs
-step 10 (DT7). Step 12 needs steps 6, 7 and 10.
+Steps 4 and 5 can be built in parallel. Step 3's arming waits on its own UI half. Step 6 needs steps 4 and #1772.
+Step 7's lowered review ceiling needs step 4's per-verdict keep (a re-bound reviewer must not age out). Step 11 needs
+step 8 (#1407). Step 12 needs step 11 (DT7). Step 13 needs steps 7, 8 and 11.
 
 ## 10. Operator decisions
 
@@ -509,15 +623,17 @@ Each comes with a recommended option.
   plus auto-abandon of a parked run with no open PR after N days, which overturns the capacity plan's
   Rejected-list rule. **Recommended: (a).** Revisit (b) once the nudge has been measured for two weeks.
 - **Q5. Coordinators (R-4b).** (a) Auto-archive a coordinator with no open claim, no pane and an idle chair for N
-  days, with the UI countdown and Keep, built after D8 and refusing when claim attribution is unproven. (b) Never:
+  days, with the UI countdown and Keep, built after D8, refusing when claim attribution is unproven or when mail, an
+  ask or a permission prompt is waiting on it. (b) Never:
   keep rule 4 and rely on deps-shed for their disk. **Recommended: (a) with N = 14 days.** In the
   census, deps-shed already addresses most of a coordinator's bytes, so (a) is about the count, not the size.
 - **Q6. Stale floor for this deployment (R-3a).** The neutral default stays 7 days. **Recommended: set 2 days in this
   deployment's config once §2 to §4 have landed**, not before, because the census shows lowering it earlier would
-  mainly catch manual sessions, which G1 covers.
+  mainly catch manual sessions, which G1 covers. Lowering it is two settings, the server's hours and the box's
+  `CCD_WS_STALE_IDLE_S`, and the box's floor (1 day by default) still bounds it.
 - **Q7. Arm order for durability.** **Recommended:** D4's card now (after reading its shadow log), `drift-push-live`
-  after DT4, OA-D6 after D8's DT7. Arming OA-D6 earlier needs every shadow row checked by hand for an id-changing
-  revive.
+  after DT4, OA-D6 after D8's DT7 and not before: a hand check of today's shadow rows says nothing about a
+  coordinator revived under a new id after arming.
 
 ## Rejected
 
@@ -530,6 +646,12 @@ Each comes with a recommended option.
   mail cites, and it removes the registry row, so nothing is left to resume. Doing it safely needs a new reclaim
   variant that keeps the clips, and it gives up W2. Keeping the tree and shedding its dependencies gets most of the
   bytes back without either cost.
+- **ctime or link count in the cache manifest.** Every hardlink and unlink changes both, so every entry would be
+  quarantined on its second hydrate. Mode is compared directly instead.
+- **An early arm of OA-D6 after a hand audit of its shadow rows.** The audit cannot cover a coordinator revived
+  under a new id after arming.
+- **`reset --hard` or `clean` to move a resumed reviewer to the fix round's tip.** Either can discard a reviewer's
+  uncommitted files. The advance refuses on a dirty tree and the round gets a fresh reviewer.
 - **A "lite" review checkout with no dependencies.** Lenses that run the suite would fail in ways that look like
   findings.
 - **Teaching the reclaim probe to skip `node_modules`.** The scan exists to find work hidden inside ignored
