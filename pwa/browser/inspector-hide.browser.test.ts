@@ -216,8 +216,10 @@ describe('Refined at 1600 and 1920', () => {
         }
         const box = await toggle(page).boundingBox();
         expect(box, `hidden=${hide}`).not.toBeNull();
-        expect(box!.width, `width, hidden=${hide}`).toBeGreaterThanOrEqual(44);
-        expect(box!.height, `height, hidden=${hide}`).toBeGreaterThanOrEqual(44);
+        // A laid-out box can read a hair under its CSS size (43.99999 on a loaded runner), so the floor allows half a
+        // pixel, below one device pixel, as update-indicator's does; a toggle that is really short (40) still reds.
+        expect(box!.width, `width, hidden=${hide}`).toBeGreaterThanOrEqual(44 - 0.5);
+        expect(box!.height, `height, hidden=${hide}`).toBeGreaterThanOrEqual(44 - 0.5);
       }
     } finally {
       await ctx.close();
