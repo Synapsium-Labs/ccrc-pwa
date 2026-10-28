@@ -757,7 +757,8 @@ export function ccrcEnv(home: string, omit: string[] = []): NodeJS.ProcessEnv {
     // prints the canned ready answer. Canned rather than forwarded to the real
     // python3, so the install stays hermetic and reads no projects root.
     `[ "$1" = -c ] && [ "$2" = '${DOCS_PROBE}' ] && exit 0`,
-    `[ "$1" = /dev/fd/3 ] && [ "$2" = docs-index ] && { printf '%s\\n' '${DOCS_READY_LINE}'; exit 0; }`,
+    // The helper's first two words are the docs redactor's CLI path and its pins (D-7077), so the verb is the fourth.
+    `[ "$1" = /dev/fd/3 ] && [ "$4" = docs-index ] && { printf '%s\\n' '${DOCS_READY_LINE}'; exit 0; }`,
     // codex-bridge Stage 1, Task 8: `ccrc codex start` reads the lane's status
     // through the auth library (`_codex_auth`, `python3 -IS <lib> status …`).
     // That library, and ONLY at its installed path, goes to the REAL

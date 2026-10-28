@@ -134,6 +134,11 @@ export const TREE_FILES = [
   'shared/base-url.mjs',
   'shared/roster-json.mjs',
   'shared/wrapper.mjs',
+  // The docs redactor's two files (D-7077, OA-C11 (a)): their reader is ccd's pair installer
+  // (`ccd/ccd-entry-install.py`), which publishes both beside ccd's body and pins their digests, and refuses a tree
+  // without them, so every install fixture built on this list needs them.
+  'shared/redact.mjs',
+  'shared/redact-cli.mjs',
   // The node floor doctor reads out of the shipped `package.json`, for BOTH
   // box roles (`_check_node` looks for the server's, then the agent's). The
   // doctor tail arrives in Task 8; the files are cheap and their absence would

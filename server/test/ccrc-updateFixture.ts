@@ -659,7 +659,8 @@ export function updateEnv(home: string): NodeJS.ProcessEnv {
     // prints the canned ready answer. Canned rather than forwarded to the real
     // python3, so the install stays hermetic and reads no projects root.
     `[ "$1" = -c ] && [ "$2" = '${DOCS_PROBE}' ] && exit 0`,
-    `[ "$1" = /dev/fd/3 ] && [ "$2" = docs-index ] && { printf '%s\\n' '${DOCS_READY_LINE}'; exit 0; }`,
+    // The helper's first two words are the docs redactor's CLI path and its pins (D-7077), so the verb is the fourth.
+    `[ "$1" = /dev/fd/3 ] && [ "$4" = docs-index ] && { printf '%s\\n' '${DOCS_READY_LINE}'; exit 0; }`,
     'echo "fixture python3: unexpected argv: $*" >&2; exit 90',
   ].join('\n'));
   // The verifier seam (design §5): `ccrc update` runs the INSTALLED tree's

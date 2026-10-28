@@ -1622,6 +1622,17 @@ describe('ccrc backup and update: the coordination snapshot callers (delegation 
     expect(set).not.toMatch(/delegation|coordination|coord\.db/);
   });
 
+  it('the backup listing names the docs redactor\'s two files before the library, and the library before the body: arm 3 restores in that order (D-7077)', () => {
+    const home = freshUpdateBox('ccrc-fx-c5h-pairs-');
+    plantOldBox(home, { version: 'v1.0.0' });
+    const pairs = sourcedCcrc(home, '_upd_backup_pairs');
+    expect(pairs.code, pairs.stderr).toBe(0);
+    const names = pairs.stdout.split('\n').filter(Boolean).map((l) => l.split('\t')[2]);
+    const at = ['ccd-shared-redact.mjs', 'ccd-shared-redact-cli.mjs', 'ccd-lib-disk-retention.sh', 'ccd-body'].map((n) => names.indexOf(n));
+    expect(at.every((i) => i >= 0), `the listing names all four: ${JSON.stringify(names)}`).toBe(true);
+    expect([...at].sort((a, b) => a - b)).toEqual(at);
+  });
+
   it('arm 3 of the restore never puts old sidecars over live ones: a record the server wrote during the update survives the revert (W3-M31)', () => {
     const home = freshUpdateBox('ccrc-fx-8b-arm3-');
     plantRestoreBox(home, {
