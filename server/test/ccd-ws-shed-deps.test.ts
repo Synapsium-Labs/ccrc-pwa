@@ -363,6 +363,32 @@ describe('ws-shed-deps refuses, touching nothing', () => {
     // Once the orphan lets the lock go, the dead marker strands nothing: free.
     expect(h.run(`${CHILD_STUBS} ${deadMarker} ${gate}`).stdout).toContain('rc=0');
   });
+  it('a real shed SIGKILLed while its rm runs: the orphaned rm still holds the lock, so a wake refuses until it ends', () => {
+    // A slow `rm` on PATH, slow only for the removal itself (every other `rm` passes straight through).
+    const bin = path.join(h.home, 'slowbin');
+    fs.mkdirSync(bin);
+    fs.writeFileSync(path.join(bin, 'rm'), '#!/bin/bash\ncase "$*" in *node_modules*)'
+      + ' : > "$HOME/rm-started"; until [[ -e "$HOME/rm-release" ]]; do sleep 0.05; done;'
+      + ' /bin/rm "$@"; rc=$?; : > "$HOME/rm-done"; exit "$rc";; esac\nexec /bin/rm "$@"\n', { mode: 0o755 });
+    const gate = `_ws_expire_spawn_gate ${CHILD_ID}; echo "gate=$? why=$_WS_EXPIRE_SPAWN_WHY"`;
+    const r = h.run(`${CHILD_STUBS} ${NO_USERS} PATH='${bin}':"$PATH";`
+      + ` (cmd_ws_shed_deps --session ${CHILD_ID} --class child >"$HOME/shed.out" 2>&1) & sp=$!;`
+      + ` n=0; until [[ -e "$HOME/rm-started" ]]; do (( ++n < 400 )) || { echo no-rm; : > "$HOME/rm-release"; exit 97; }; sleep 0.05; done;`
+      + ` read -r mpid _ < '${reg('shedding')}'; kill -9 "$mpid"; kill -9 "$sp" 2>/dev/null; wait "$sp" 2>/dev/null;`
+      + ` kill -0 "$mpid" 2>/dev/null && echo marked-alive; [[ -e '${reg('shedding')}' ]] && echo marker-stands;`
+      + ` [[ -e '${path.join(c.wt, 'node_modules')}' ]] && echo deps-stand;`
+      + ` (${gate}); : > "$HOME/rm-release";`
+      + ` n=0; until [[ -e "$HOME/rm-done" ]]; do (( ++n < 400 )) || { echo no-done; exit 96; }; sleep 0.05; done; sleep 0.2;`
+      + ` (${gate})`);
+    const out = r.stdout;
+    // Anti-vacuity: the shed's marked bash is dead, its marker stands and the removal had not finished when the gate asked.
+    expect(out).not.toMatch(/no-rm|no-done|marked-alive/);
+    expect(out).toContain('marker-stands');
+    expect(out).toContain('deps-stand');
+    const gates = [...out.matchAll(/gate=(\d)/g)].map((m) => m[1]);
+    expect(gates, out).toEqual(['1', '0']);
+    expect(out).toMatch(/gate=1 why=.*shed/);
+  });
   it('a real shed whose lock file is purged before it marks it refuses `unmeasured`, removing nothing', () => {
     // The marker binds the lock's inode, read just after the lock is taken and again after the marker is written.
     const pre = `_reg_set() { [[ $2 == shedding ]] && rm -f "$REG/.shed-$1.lock"; command printf '%s' "$3" > "$REG/$1.$2"; };`;
