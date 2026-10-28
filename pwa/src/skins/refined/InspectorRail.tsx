@@ -15,7 +15,7 @@ import { useMemo } from 'react';
 import type { ReactNode } from 'react';
 import { useMediaQuery } from '../../lib/useMediaQuery';
 import { flipInspector } from '../frame';
-import { useInspectorHidden, usePublishInspectorTarget } from '../../inspector/inspectorShown';
+import { useInspectorShown, usePublishInspectorTarget } from '../../inspector/inspectorShown';
 import {
   HistorySection, LaneSection, MailSection, PrSection, RoutingSection, TasksSection,
 } from '../../inspector/InspectorSections';
@@ -24,11 +24,13 @@ import { INSPECTOR_QUERY, useInspectorSession } from '../../inspector/useInspect
 export function InspectorRail(): ReactNode {
   const wide = useMediaQuery(INSPECTOR_QUERY);
   const session = useInspectorSession();
-  const hidden = useInspectorHidden();
+  // The one shown fact (`inspectorShown.ts`), which the strips rule and the frame's attribute read too. `placeable`
+  // is only what decides whether a target is published at all.
+  const shown = useInspectorShown();
   const placeable = wide && session !== null;
-  const target = useMemo(() => (placeable ? { shown: !hidden, toggle: flipInspector } : null), [placeable, hidden]);
+  const target = useMemo(() => (placeable ? { shown, toggle: flipInspector } : null), [placeable, shown]);
   usePublishInspectorTarget(target);
-  if (!placeable || hidden) return null;
+  if (!placeable || !shown) return null;
   return (
     <div className="ref-inspector">
       <TasksSection />
