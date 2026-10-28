@@ -56,7 +56,7 @@ ENDS_THE_ARCHIVE = ('destroy', 'purge', 'reap', 'forget', 'create', 'expire', 'r
 # registry row stands for, so it never meets an archived workspace, and it removes no workspace to end one.
 # `hibernate` is here (D-5242): it acts only on a live idle pane, which an archived workspace does not have, and
 # what it stops is woken by `ensure` or `start`, which are returns already.
-# `shed-deps` is here (D-7278): it removes only a sleeping session's ignored dependency directories, never a
+# `shed-deps` is here (#1772): it removes only a sleeping session's ignored dependency directories, never a
 # workspace, so it neither ends an archive nor returns anything from one.
 NEUTRAL_ACTS = ('attic-drop', 'claim', 'enable', 'gc', 'hibernate', 'hold', 'release', 'rename', 'rehome', 'route',
                 'shed-deps', 'stop', 'supervise', 'unsupervise', 'collect')
