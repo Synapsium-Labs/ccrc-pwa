@@ -1057,7 +1057,7 @@ carries it (spec §5.1, amended 2026-09-24).
     to `awaiting-review`.
   - **Review run 1125**, round 2 of the run's cap of 3, ran the held-out panel over the fix round and two wave lenses
     (conformance to the round-1 rulings, and the read-only boundary over the whole probe). It found 6 important
-    findings, 11 advisory and 8 refuted, with no lens unverified. The wave's suites and the repo-wide guards were
+    findings, 11 advisory and 9 refuted, with no lens unverified. The wave's suites and the repo-wide guards were
     green at the tip. The reviewer re-measured 15 of the worker's 53 mutation rows, all red, and planted five gaps of
     its own, each green. The important ones:
     - nothing goes red when the child is recorded only after the signals are unblocked;
@@ -1088,8 +1088,9 @@ carries it (spec §5.1, amended 2026-09-24).
   - **Wave 4's reads amended** (its plan, D-7268 and D-7269):
     - the lineage file's own `at` gets a freshness bound of 2400 s, so a lineage the radar stopped rewriting never
       accepts;
-    - an unmeasured doc's `null` fields read as absent, and a `null` tip answers `lineage-unmeasured` with detail
-      `tip-unmeasured`.
+    - an unmeasured doc's `null` fields read as absent, and a `null` tip answers `lineage-unmeasured` with the fixed
+      detail `tip-unmeasured`. The ruling first said the answer would carry the doc's own `why`. A fixed word keeps
+      text from the file out of the mail, so the plan uses it.
   - **The review cap.** The next review of wave 3b is the last before the operator must lift run 310's cap.
   - **Wave 3e is still held.** At 11:05 run 774 still reads 4 review rounds against a cap of 3, and no lift is
     recorded.

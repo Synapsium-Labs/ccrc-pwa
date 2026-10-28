@@ -143,7 +143,9 @@ A session that can forge those files can already move its own ref, so stage 4 ad
     - `chain[i].p1 !== chain[i+1].merge` for any `i`;
     - a present `branch` that differs from the expected branch.
   - It is `stale` when it is otherwise readable and its `at` does not parse, is older than `LINEAGE_FRESH_S`, or is more than 60 s in the future (D-7268).
-  - So wave 3b's unmeasured doc `{state: 'unmeasured', why, tip, base: null, chain: [], stop: null}` parses. Its `tip` is the local tip or, for a row whose local read the project budget left undecided on a failed fetch, `null` (wave 3b's fix round 1).
+  - So both of wave 3b's unmeasured shapes parse:
+    - a failed fetch's (`lineage_unmeasured`, also written for a failure before the first write): `{state: 'unmeasured', why, tip, base: null, chain: [], stop: null}`. Its `tip` is the local tip, or `null` for a row whose local read gave no answer (a timeout, a spent budget or a spawn failure) and that already had a file (wave 3b's fix round 1);
+    - a walk cut under a measured base: `{state: 'unmeasured', why, tip, base: <sha>, chain, stop: 'unmeasured'}`, whose `chain` holds what was proven first (D-7106 accepts from it).
 - **`MarkerRead`** is `'trusted' | 'absent' | 'unreadable' | 'stale'`.
   - `unreadable` covers bad JSON, `v` not 1, and a `project` mismatch.
   - `stale` covers an `at` that does not parse, is older than 1200 s, or is more than 60 s in the future.
@@ -160,7 +162,7 @@ A session that can forge those files can already move its own ref, so stage 4 ad
   | lineage `absent` | `unmeasured`, `not-yet-measured` |
   | lineage `unreadable` | `unmeasured`, `lineage-unreadable` |
   | lineage `stale` | `unmeasured`, `lineage-stale` |
-  | `doc.tip` is `null` | `unmeasured`, `tip-unmeasured` |
+  | `doc.tip` is `null` | `unmeasured`, `tip-unmeasured` (a fixed word: the doc's own `why` never reaches a mail) |
   | `doc.tip !== live` | `unmeasured`, `older-than-the-live-tip` |
   | `claim` is some `chain[i].p1` | `accept` |
   | `doc.state === 'unmeasured'` | `unmeasured`, `partly-measured` |
@@ -174,7 +176,8 @@ A session that can forge those files can already move its own ref, so stage 4 ad
 
 ### `lineageRead.ts` (L3)
 
-- `readLandingFacts(io, registryDir, project, id, branch, signal?)` makes its four reads concurrently.
+- `readLandingFacts(io, registryDir, project, id, branch, nowMs, signal?)` makes its four reads concurrently and returns `LandingFacts`, `{marker: MarkerRead; globalPause: PauseRead; projectPause: PauseRead; lineage: LineageRead}`. It parses the marker and the lineage itself, with `parseEnabled` and `parseLineage`, at the `nowMs` it is given; it reads no clock.
+- The verifiers pass `nowMs` from `VerifyDoneDeps`' new optional `now?: () => number`, which defaults to `Date.now`, so Task 2's cases pin the time.
 - It runs only after `readBranchTip`'s project guard has passed and the id has passed `isRegistryId`.
 - For a pause file: `ok` means paused, `absent` means running, and `unreadable` means unknown.
 - It never reads `probe` or `main-health`.
@@ -236,13 +239,14 @@ Appended to clause 3's sentence about a moving ref: "In a project your brief nam
 
 **Files:**
 - Create: `server/src/coord/lineage.ts`, `server/src/coord/lineageRead.ts`, `server/test/coord-lineage.test.ts`
+- Modify: `server/test/mail-routes.test.ts`: a `NOT_CODES` line for each detail and `stop` word `lineage.ts` spells that belongs to no vocabulary (`lineage-stale` and `tip-unmeasured` among them), because its scan reads every file under `server/src/coord`
 
 **Interfaces:**
 - Produces:
   - `parseLineage(content: string, expect: {project: string; id: string; branch: string}, nowMs: number): LineageRead`;
   - `parseEnabled(content: string, project: string, nowMs: number): MarkerRead`;
   - `decideLineage(i: LineageInput): LineageDecision`;
-  - `readLandingFacts(io: Pick<FleetIO, 'readFileMeasured'>, registryDir: string, project: string, id: string, branch: string, signal?: AbortSignal): Promise<LandingFacts>`;
+  - `readLandingFacts(io: Pick<FleetIO, 'readFileMeasured'>, registryDir: string, project: string, id: string, branch: string, nowMs: number, signal?: AbortSignal): Promise<LandingFacts>`, with `LandingFacts` as the Design states it;
   - `LAND_PROBE_ENABLED_FRESH_S`, `LINEAGE_FRESH_S` and `LINEAGE_MAX_BYTES`.
 
 - [ ] **Step 1: The failing tests.** `coord-lineage.test.ts`:
@@ -255,7 +259,7 @@ Appended to clause 3's sentence about a moving ref: "In a project your brief nam
     - a measured doc with no `base`, an unknown `stop`, nine entries;
     - `chain[0].merge` not the tip, a broken `p1`-to-`merge` link, a `branch` mismatch;
     - a measured doc with a `null` `tip`, and a measured doc with a `null` `stop`.
-  - **`parseLineage`, readable:** wave 3b's unmeasured shape with a sha `tip` and with a `null` `tip`, each with `base: null` and `stop: null`; and a valid three-entry chain.
+  - **`parseLineage`, readable:** a failed fetch's unmeasured shape with a sha `tip` and with a `null` `tip`, each with `base: null` and `stop: null`; a walk-cut unmeasured doc (a sha `base`, `stop: 'unmeasured'`, a `why` and a two-entry chain); and a valid three-entry chain.
   - **`parseLineage`, stale:** an otherwise valid doc whose `at` is 2401 s old, 61 s in the future, or does not parse; and one 2399 s old, readable.
   - **`parseEnabled`:**
     - valid and fresh;
@@ -264,7 +268,7 @@ Appended to clause 3's sentence about a moving ref: "In a project your brief nam
   - **`readLandingFacts`,** over `ioDoubles.ts`'s `absentReadIO` and `degradedReadIO`: absent and unreadable kept apart for each of the four files.
 - [ ] **Step 2: Run; see them fail.**
 - [ ] **Step 3: Implement both files, with the ring headers.**
-- [ ] **Step 4: Run with `rings/*` and `single-definition/*`; see them pass.**
+- [ ] **Step 4: Run with `rings/*`, `single-definition/*` and `mail-routes`; see them pass.**
 - [ ] **Step 5: Mutations.**
 
   | # | Mutation | Expected red |
@@ -277,7 +281,8 @@ Appended to clause 3's sentence about a moving ref: "In a project your brief nam
   | D6 | freshness 12000 | the 1201 s row |
   | D7 | `qualifies` ignored | the not-expected precedence case |
   | D8 | `LINEAGE_FRESH_S` 24000 | the 2401 s lineage case |
-  | D9 | a `null` tip read as `unreadable` | the null-tip readable case and the `tip-unmeasured` row |
+  | D9a | `parseLineage` reads an unmeasured doc's `null` tip as unreadable | the null-tip readable case |
+  | D9b | `decideLineage`'s null-tip row answers `lineage-unreadable` | the `tip-unmeasured` row |
 
 - [ ] **Step 6: Commit:** `feat(coord): the lineage decision and its reader (landing order wave 4, Task 1)`.
 
@@ -428,5 +433,5 @@ Numbers are ISSUED, never chosen; a worker never calls the allocator (worker cla
 - **D-7108** — `review-any-chain-member` (Design): a review of any commit in the chain is accepted. Each step after it is a proven clean base merge, which is stage 4's premise.
 - **D-7109** — `symlink-gap` (What this does not claim): `readFileMeasured` follows symlinks, and `FleetIO` has no `lstat`, so wave 3b's regular-file rule is not re-proved on the server. That is attribution-grade, like the rest.
 - **D-7110** — `console-half-is-4b` (Architecture): spec §5.3's server reader, wire fields and PWA chip are wave 4b's.
-- **D-7268** — `lineage-freshness` (Design): wave 3b's review (run 1125) found that its tick-start pre-pass keeps `enabled` fresh while a project the tick budget never reaches keeps its old lineage files, and a row whose local read was left undecided under a measured base keeps its previous file too. So the lineage doc's own `at` is read: older than `LINEAGE_FRESH_S`, more than 60 s in the future, or unparseable, the doc reads `stale`. That answers `lineage-unmeasured` with detail `lineage-stale`, and never accepts. The bound is not the marker's 1200 s. A qualifying row of a project the tick reaches is rewritten at every tick, but at its project's place in the tick, not at the tick's start. So two writes of one row can be one start spacing (about 930 s, D-7104) plus one tick's run (at most the unit's 900 s limit) apart: about 1830 s. 2400 s, eight intervals, covers that with a margin, so a radar that is ticking never reads stale. (Amended 2026-10-28; the landing-order ledger's Decisions, 2026-10-28 11:05.)
-- **D-7269** — `null-unmeasured-fields` (Design): wave 3b writes `base: null` and `stop: null` in every unmeasured lineage doc and, since its fix round 1, `tip: null` for a row whose local read the project budget left undecided on a failed fetch. Each `null` reads as absent. A `null` tip answers `lineage-unmeasured` with detail `tip-unmeasured`, never `lineage-unreadable`, so the mail names what happened. A `null` tip in a measured doc is unreadable. (Amended 2026-10-28; the landing-order ledger's Decisions, 2026-10-28 11:05.)
+- **D-7268** — `lineage-freshness` (Design): wave 3b's tick-start pre-pass keeps `enabled` fresh while a project the tick budget never reaches keeps its old lineage files (the worker's N6, evidenced by review run 1125); and, by the probe's own rule, a row whose local read was left undecided under a measured base keeps its previous file too. So the lineage doc's own `at` is read: older than `LINEAGE_FRESH_S`, more than 60 s in the future, or unparseable, the doc reads `stale`. That answers `lineage-unmeasured` with detail `lineage-stale`, and never accepts. The bound is not the marker's 1200 s. A qualifying row of a project the tick reaches is rewritten at every tick, but at its project's place in the tick, not at the tick's start. So two writes of one row can be one start spacing (about 930 s, D-7104) plus one tick's run (at most the unit's 900 s limit) apart: about 1830 s. 2400 s, eight intervals, covers that with a margin, so a radar that is ticking never reads stale. (Amended 2026-10-28; the landing-order ledger's Decisions, 2026-10-28 11:05.)
+- **D-7269** — `null-unmeasured-fields` (Design): wave 3b writes `base: null` and `stop: null` in a failed fetch's unmeasured doc (`lineage_unmeasured`) and, since its fix round 1, `tip: null` there for a row whose local read gave no answer. A walk cut under a measured base writes its `base` sha and `stop: 'unmeasured'` instead. Each `null` reads as absent. A `null` tip answers `lineage-unmeasured` with the fixed detail `tip-unmeasured`, never `lineage-unreadable`, so the mail names what happened without carrying any text from the file. A `null` tip in a measured doc is unreadable. (Amended 2026-10-28; the landing-order ledger's Decisions, 2026-10-28 11:05.)
