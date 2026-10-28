@@ -8,7 +8,8 @@ import { describe, it, expect } from 'vitest';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import type { CensusSite } from '../consolidationCensus.js';
+import { REPO, type CensusSite } from '../consolidationCensus.js';
+import { parsedFile } from '../scan/symbols.js';
 import {
   coordStoreQuestionShapedMethods, envelopePairingRules, envelopePairingTitleRules, NOT_QUESTION_STORE_METHODS, QUESTION_STORE_EXCLUDED,
   QUESTION_STORE_METHODS, QUESTION_STORE_OWNERS, questionDoorIns, questionDoors, questionHoldCarriers, questionPaneEdges,
@@ -223,6 +224,14 @@ describe('W3 question census (slug question-census)', () => {
     const byTag = (t: string): number => doors.filter((s) => s.tag === t).length;
     expect([doors.length, byTag('claimant'), byTag('operator'), byTag('navigation')], 'the question doors, by principal').toEqual([12, 6, 5, 1]);
     for (const d of doorIns) expect(d.callers.length, `${d.method} has a route caller`).toBeGreaterThan(0);
+    // W3 Q3f (D-7030, D-7245), at the target, may only shrink: no route calls the watcher for a question, and the four
+    // door-in forwards Q3d left (`releaseHeldAsk`, `answeredLate`, `releaseHeldApproval`, `approvalRuled`) are gone; the
+    // cores call the watcher's `Questions` instance and push through its doors sink.
+    expect(doorIns.map((d) => d.method), 'a watcher door-in a route calls').toEqual([]);
+    const watcherSymbols = parsedFile(path.join(REPO, 'server/src/watch.ts')).symbols.map((x) => x.name);
+    expect(watcherSymbols, 'the watcher was read').toContain('FleetWatcher.tick');
+    expect(watcherSymbols.filter((n) => /^FleetWatcher\.(?:releaseHeldAsk|answeredLate|releaseHeldApproval|approvalRuled)$/.test(n)),
+      'a door-in forward on the watcher').toEqual([]);
   });
 
   it('REAL: every counted question-store call has an owning task; the excluded one is named; printed for the PR body', () => {

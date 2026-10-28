@@ -1544,3 +1544,76 @@ describe('watch.ts holds no question state (D-7028)', () => {
     } finally { rmSync(t, { recursive: true, force: true }); }
   });
 });
+
+
+// W3 Q3f (D-7030; ARCH-57's server half; plan docs/superpowers/plans/2026-10-26-consolidation-w3-questions.md, Task
+// Q3f). APPENDED, for the citation audit's reason above; the census module is imported inside each case for the same
+// reason. THE RATCHET, at the series' targets (spec §5.1 rule 3), each may only shrink: (1) the family's two doors that
+// take an ask's answer read it with `readAskAnswer` and respell no index check; (2) the question-store calls outside
+// `coord/questions.ts` are exactly the one excluded ruling poll; (3) each of the eight old answer doors is an ALIAS:
+// its body holds its front ladder and ONE call into a core, and reaches no store method, no watcher, no press function
+// and no refusal word beyond its front ladder's. Code lines only (`stallCode`).
+describe('the question doors: one reader, one core per principal, the old doors aliases (W3 Q3f, D-7030)', () => {
+  const INDEX_CHECK = /typeof\s+\w+\s*===\s*'number'/;
+  /** One route handler's code, from its registration to the next registration in the file. */
+  const handler = (file: string, route: string): string => {
+    const code = stallCode(path.join(ccrcRoot, file));
+    const at = code.indexOf(`app.post('${route}'`);
+    expect(at, `${file} registers POST ${route}`).toBeGreaterThan(-1);
+    const next = code.slice(at + 1).search(/\n {2}app\.(?:get|post|put|patch|delete)\(/);
+    return next === -1 ? code.slice(at) : code.slice(at, at + 1 + next);
+  };
+  const CORE_CALL = /\bquestions\.(?:answer|rule|release)\(/g;
+  const PRESS = /\b(?:answerAsk|answerDialog|answerDialogText|answerDialogMulti|moveDialogTab)\(/;
+  const KEBAB = /'([a-z]+(?:-[a-z]+)+)'/g;
+
+  it('CONTROL: the patterns see a core call, a press and a kebab word, and pass over a comment line', () => {
+    expect('return sendAnswer(reply, await questions.rule({ kind }, d));'.match(CORE_CALL)).toHaveLength(1);
+    expect(PRESS.test('const res = await answerAsk(askDeps, id, key, idx);')).toBe(true);
+    expect([...'refuseRoute(reply, \'not-parent\')'.matchAll(KEBAB)].map((m) => m[1])).toEqual(['not-parent']);
+    expect(stallCodeText('// questions.rule(x)\nconst y = 1;')).not.toMatch(CORE_CALL);
+  });
+
+  it('the family\'s ask readers are readAskAnswer, and neither door respells the index check', () => {
+    for (const route of ['/api/questions/:id/answer', '/api/questions/:id/rule']) {
+      const code = handler('server/src/coord/routes.ts', route);
+      expect(code, route).toMatch(/\breadAskAnswer\(/);
+      expect(code, route).not.toMatch(INDEX_CHECK);
+      expect(code, route).not.toMatch(/Array\.isArray\(\s*(?:\w+\.)?optionIndexes\b/);
+    }
+  });
+
+  it('the question-store calls outside coord/questions.ts are exactly the excluded ruling poll', async () => {
+    const { questionStoreCallsOutside, QUESTION_STORE_EXCLUDED } = await import('../census-w3/questions.js');
+    expect(questionStoreCallsOutside().map((c) => `${c.file} | ${c.symbol} | ${c.method} | ${c.excluded}`))
+      .toEqual(QUESTION_STORE_EXCLUDED.map((x) => `${x.file} | ${x.symbol} | ${x.method} | true`));
+  });
+
+  /** The eight aliases, each with the refusal words its front ladder may spell (its 400 and, for an operator door, its
+   *  404), and the reader that must come before its core call when it reads an ask's answer. */
+  const ALIASES: ReadonlyArray<readonly [file: string, route: string, words: readonly string[], reader: string | null]> = [
+    ['server/src/coord/routes.ts', '/api/asks/:id/answer', ['bad-request'], 'readAskAnswer('],
+    ['server/src/coord/routes.ts', '/api/asks/:id/release', ['bad-request'], null],
+    ['server/src/coord/routes.ts', '/api/approvals/:id/rule', ['bad-request'], null],
+    ['server/src/coord/routes.ts', '/api/approvals/:id/release', ['bad-request'], null],
+    ['server/src/server.ts', '/api/sessions/:id/ask', ['unknown-session', 'bad-request'], 'readAskAnswer('],
+    ['server/src/server.ts', '/api/sessions/:id/dialog', ['unknown-session', 'bad-request'], null],
+    ['server/src/server.ts', '/api/sessions/:id/dialog/text', ['unknown-session', 'bad-request'], null],
+    ['server/src/server.ts', '/api/sessions/:id/dialog/multi', ['unknown-session', 'bad-request'], null],
+  ];
+
+  it.each(ALIASES.map((a) => [`POST ${a[1]}`, a] as const))('%s is an alias: its front ladder, then one call into a core', async (_n, [file, route, words, reader]) => {
+    const { QUESTION_STORE_METHODS } = await import('../census-w3/questions.js');
+    const code = handler(file, route);
+    expect(code.match(CORE_CALL) ?? [], 'exactly one call into a core').toHaveLength(1);
+    const core = code.search(CORE_CALL);
+    for (const m of QUESTION_STORE_METHODS) expect(code, `${route} calls the store's ${m}`).not.toMatch(new RegExp(`\\.${m}\\(`));
+    expect(code, `${route} reaches the watcher`).not.toMatch(/\bwatcher\b/);
+    expect(code, `${route} presses for itself`).not.toMatch(PRESS);
+    expect([...new Set([...code.matchAll(KEBAB)].map((m) => m[1]!))].sort(), `${route} spells a refusal beyond its front ladder`)
+      .toEqual([...words].sort());
+    // Nothing decides after the core: what follows the call only sends its answer (no branch, no further await).
+    expect(code.slice(core), `${route} decides after the core`).not.toMatch(/\bif\s*\(|\bawait\b|\?\s*[^:]*:/);
+    if (reader !== null) expect(code.indexOf(reader), `${route} reads its body before the core`).toBeLessThan(core);
+  });
+});
