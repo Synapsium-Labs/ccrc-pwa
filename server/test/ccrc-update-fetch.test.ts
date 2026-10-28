@@ -395,12 +395,11 @@ describe('ccrc update: fetch + verify, then back up, then install, then report',
       version: 'v2.0.0', sha: 'newsha0000000000000000000000000000000000',
     }), { tag: 'v2.0.0' });
     const before = treeDigest(join(home, 'ccrc-versions', 'v1.0.0'));
-    // Ahead of the recorder npm that `runUpdate` re-plants on every call
-    // (the `a spine that DIED …` case's idiom).
-    mkdirSync(join(home, 'fail-bin'), { recursive: true });
-    writeFileSync(join(home, 'fail-bin', 'npm'),
+    // Through the recorder npm's override file: `runUpdate` re-plants the recorder on every call, and a PATH prefix
+    // is shadowed by the chosen node's directory.
+    writeFileSync(join(home, 'fixture-npm-override'),
       '#!/bin/sh\necho "npm ERR! code ENOTFOUND registry.npmjs.org" >&2\nexit 1\n', { mode: 0o755 });
-    const r = runUpdate(home, [], { PATH: `${join(home, 'fail-bin')}:${updateEnv(home)['PATH'] ?? ''}` });
+    const r = runUpdate(home);
     expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(1);
     expect(r.stderr).toMatch(/^ccrc: the staged install \(which ends with doctor\) exited 1 — spine died at _inst_tree, before its flip: nothing was replaced \(\$HOME\/ccrc still points at \$HOME\/ccrc-versions\/v1\.0\.0\); put back as they were: completed-install record, caps; read its lines above\. The backup taken BEFORE it ran is complete at \S+\/ccrc-backups\/\S+$/m);
     expect(readFileSync(join(home, '.ccrc', 'install-step'), 'utf8')).toBe('_inst_tree\n');
@@ -461,10 +460,9 @@ describe('ccrc update: fetch + verify, then back up, then install, then report',
       version: 'v2.0.0', sha: 'newsha0000000000000000000000000000000000',
     }), { tag: 'v2.0.0' });
     const before = treeDigest(join(home, 'ccrc'));
-    mkdirSync(join(home, 'fail-bin'), { recursive: true });
-    writeFileSync(join(home, 'fail-bin', 'npm'),
+    writeFileSync(join(home, 'fixture-npm-override'),
       '#!/bin/sh\necho "npm ERR! code ENOTFOUND registry.npmjs.org" >&2\nexit 1\n', { mode: 0o755 });
-    const r = runUpdate(home, [], { PATH: `${join(home, 'fail-bin')}:${updateEnv(home)['PATH'] ?? ''}` });
+    const r = runUpdate(home);
     expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(1);
     expect(r.stderr).toContain('spine died at _inst_tree, before its flip: nothing was replaced '
       + '($HOME/ccrc is still the pre-versioned directory; the migration did not leave it moved); '
@@ -1277,6 +1275,9 @@ describe('ccrc update: provenance (design §5; the verifier is the INSTALLED one
     mkdirSync(realBin, { recursive: true });
     writeFileSync(join(realBin, 'node'), `#!/bin/sh\nexec '${REAL_NODE}' "$@"\n`);
     chmodSync(join(realBin, 'node'), 0o755);
+    // The update chooses its node first and wants npm and npx beside it (`ccd/ccrc-node`): this directory is now the
+    // chosen one, so it carries the fixture's own two.
+    for (const n of ['npm', 'npx']) symlinkSync(join(home, '.local', 'bin', n), join(realBin, n));
     const r = runUpdate(home, [], { PATH: `${realBin}:${updateEnv(home)['PATH']}` });
     expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(1);
     expect(existsSync(join(home, 'verify-argv')), 'the shim answered, not the real verifier').toBe(false);

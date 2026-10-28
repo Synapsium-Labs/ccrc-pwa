@@ -31,6 +31,7 @@ import { ccrcContainedEnv } from './ccrcContainment.js';
 import { assertNoRealTool } from './containedTools.js';
 import { PKG_DESCRIPTION, skillMd } from './graphifySkillFixture.js';
 import { installFixtureTree, rsyncRecorder } from './installTreeFixture.js';
+import { plantFixtureNodeDir } from './ccrc-installFixture.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(here, '..', '..');
@@ -302,6 +303,9 @@ function ccrcEnv(home: string, omit: string[] = []): NodeJS.ProcessEnv {
   plant('npm',
     '#!/bin/sh\nprintf \'%s\\n\' "$*" >> "$HOME/npm-argv"\n'
     + 'printf \'%s\\n\' "$PWD" >> "$HOME/npm-cwd"\nmkdir -p node_modules\nexit 0\n');
+  // The install puts the chosen node's directory first on PATH; without the fixture's node directory that is the real
+  // node's, whose real npm shadows the stub above (node-runtime-under-nvm).
+  plantFixtureNodeDir(home, env);
   plant('rsync', rsyncRecorder(RSYNC));
   for (const k of ['CCRC_ADDR', 'CCRC_HEALTH_TIMEOUT', 'CCRC_DOCTOR_GH_TIMEOUT']) delete env[k];
   env['CCRC_VERIFY_SETTLE'] = '0';

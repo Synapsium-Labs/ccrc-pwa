@@ -82,6 +82,7 @@ const FIXTURE_FILES: Record<string, string> = {
   'install.sh': '#!/usr/bin/env bash\necho fixture install.sh\n',
   'ccd/ccrc': '#!/usr/bin/env bash\necho fixture ccrc\n',
   'ccd/ccrc-doctor-checks': '# fixture doctor checks\n',
+  'ccd/ccrc-node': '# fixture node selection library\n',
   // The installed `ccd` is TWO release inputs: the Bash body (`ccd/ccd`, placed
   // at `~/.local/libexec/ccrc/ccd`) and the launcher TEMPLATE (`ccd/ccd-entry.py`,
   // rendered into `~/.local/bin/ccd` on the box). The script archives all of
@@ -221,7 +222,7 @@ const EXPECTED_ENTRIES = [
   'agent/package.json', 'agent/package-lock.json',
   'pwa/package.json', 'pwa/package-lock.json',
   'shared/api.ts', 'shared/package.json',
-  'ccd/ccrc', 'ccd/ccrc-doctor-checks',
+  'ccd/ccrc', 'ccd/ccrc-doctor-checks', 'ccd/ccrc-node',
   'ccd/ccd', 'ccd/ccd-entry.py',
   'deploy/ccrc.service', 'deploy/verify-service.sh',
   'install.sh',

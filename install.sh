@@ -150,20 +150,23 @@ if [ "$(uname -s 2>/dev/null)" = Darwin ]; then
   done
 fi
 
-command -v node >/dev/null 2>&1 || { echo "install.sh: node is not installed — install Node (nodesource or nvm), then re-run" >&2; exit 1; }
-# The floor is READ from the shipped package.json — never a second copy
-# (node-floor.test.ts pins all three identical). Without node:sqlite the server
-# will not boot; without its FTS5 ccrc history captures unsearched (fts5-absent; D-4296).
-floor="$(node -e 'process.stdout.write(require(process.argv[1]).engines.node)' "$ROOT/server/package.json" 2>/dev/null)" \
-  || { echo "install.sh: cannot read engines.node from $ROOT/server/package.json — is this a complete checkout?" >&2; exit 1; }
-node -e '
-const floor = process.argv[1].replace(/^>=/,"").trim();
-const cur = process.versions.node;
-const at = s => s.split(".").map(Number);
-const [a,b,c] = at(cur), [x,y,z] = at(floor);
-const ok = a>x || (a===x && (b>y || (b===y && c>=z)));
-if (!ok) { console.error(`install.sh: node ${cur} is below the required ${floor}`); process.exit(1); }
-' "$floor" || exit 1
+# The node this build (and the units `ccrc install` then writes) runs on is CHOSEN, not merely found: ccd/ccrc-node
+# is nvm-aware and reads the floor from the shipped package.json (never a second copy; node-floor.test.ts pins all
+# three identical). Without node:sqlite the server will not boot; without its FTS5 ccrc history captures
+# unsearched (fts5-absent; D-4296). It puts the chosen node first on PATH, so the build below and the `ccrc install`
+# that follows (which re-selects, same answer) use it. A terminal run may `nvm install --lts` (spec decision 4).
+# @anchor install-node-choose
+# shellcheck source=ccd/ccrc-node
+. "$ROOT/ccd/ccrc-node" || { echo "install.sh: cannot load $ROOT/ccd/ccrc-node — is this a complete checkout?" >&2; exit 1; }
+_node_floor "$ROOT/server/package.json" || { echo "install.sh: $NODE_WHY" >&2; exit 1; }
+if ! _node_select "$NODE_FLOOR"; then
+  if ! command -v node >/dev/null 2>&1 && [ ! -s "${NVM_DIR:-$HOME/.nvm}/nvm.sh" ]; then
+    echo "install.sh: $NODE_WHY — install Node (nodesource or nvm), then re-run" >&2
+  else
+    echo "install.sh: $NODE_WHY" >&2
+  fi
+  exit 1
+fi
 
 echo "install.sh: building (server deps, PWA bundle, server dist)…"
 ( cd "$ROOT/server" && npm ci --no-audit --no-fund )

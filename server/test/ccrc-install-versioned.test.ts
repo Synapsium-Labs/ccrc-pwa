@@ -73,6 +73,9 @@ describe('ccrc install: the order is stated in one place', () => {
       '_inst_stamp',
       // §9: what THIS install can do, beside the stamp that says what it is
       '_inst_caps',
+      // spec 2026-10-26-node-runtime-under-nvm: publishes the chosen node (three links and the manager's PATH
+      // fragment, then a reload) BEFORE the units land and are enabled, so the first restart already finds node.
+      '_inst_node',
       // Task 8. Three orderings in this half are load-bearing and each one is
       // measured by a test of its own below: the units land before anything
       // enables them, the account config dirs exist before the hooks installer

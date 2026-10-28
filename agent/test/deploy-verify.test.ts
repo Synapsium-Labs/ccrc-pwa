@@ -37,7 +37,7 @@
 import { describe, it, expect } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { chmodSync, copyFileSync, cpSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, copyFileSync, cpSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { bodyDigest, markGenerated } from '../../shared/mark.mjs';
@@ -347,6 +347,45 @@ const SHOW_KILLMODE = [
   'esac',
   '',
 ].join('\n');
+
+/** The box-side node step's inputs in a fixture `~/ccrc` (D-TBD-node-runtime-under-nvm): the library the remote
+ *  command sources and the lane's own package.json, whose engines.node is the floor. `floor` overrides it. */
+const plantNodeStep = (src: string, pkg: 'agent' | 'server', floor?: string): void => {
+  mkdirSync(join(src, 'ccd'), { recursive: true });
+  mkdirSync(join(src, pkg), { recursive: true });
+  cpSync(join(deployDir, '..', 'ccd', 'ccrc-node'), join(src, 'ccd', 'ccrc-node'));
+  const real = readFileSync(join(deployDir, '..', pkg, 'package.json'), 'utf8');
+  writeFileSync(join(src, pkg, 'package.json'),
+    floor === undefined ? real : JSON.stringify({ name: pkg, engines: { node: `>=${floor}` } }));
+};
+/** A fixture HOME with no nvm of its own, so the choice is the fixture PATH node below (wrappers to this runner's node, npm and npx), and
+ *  the contained `systemctl` from contain-path.setup.ts answers the publish step's manager probe with a refusal. */
+const nodeStepEnv = (home: string): NodeJS.ProcessEnv => {
+  // The PATH node is a fixture directory of wrapper SCRIPTS (never symlinks) to this runner's node, npm and npx, put
+  // first; the runner's own node directory and any nvm directory are dropped from the inherited PATH, so the step
+  // can neither choose nor link the real ones.
+  const realDir = path.dirname(process.execPath);
+  const fixDir = join(home, '.fixture-node');
+  mkdirSync(fixDir, { recursive: true });
+  for (const b of ['node', 'npm', 'npx']) {
+    writeFileSync(join(fixDir, b), `#!/bin/sh\nexec '${join(realDir, b).replace(/'/g, `'\\''`)}' "$@"\n`);
+    chmodSync(join(fixDir, b), 0o755);
+  }
+  const inherited = (process.env.PATH ?? '').split(':').filter((d) => d && d !== realDir && !/(^|\/)\.nvm(\/|$)/.test(d));
+  const env: NodeJS.ProcessEnv = { ...process.env, HOME: home, PATH: [fixDir, ...inherited].join(':') };
+  delete env.NVM_DIR;
+  delete env.NODE_NO_INSTALL;
+  return env;
+};
+/** Every published `node-bin/*` link resolves inside the fixture HOME: a link to the runner's real npm is the hazard
+ *  of 2026-10-26 (a fixture write through such a link overwrote the operator's real npm). */
+const expectNodeLinksContained = (home: string): void => {
+  const root = realpathSync(home) + path.sep;
+  for (const b of ['node', 'npm', 'npx']) {
+    const link = join(home, '.local', 'libexec', 'ccrc', 'node-bin', b);
+    expect(realpathSync(link).startsWith(root), `${link} resolves outside the fixture HOME: ${realpathSync(link)}`).toBe(true);
+  }
+};
 
 describe('the verification is actually wired into the deploy, and can observe a restart', () => {
   const deploySh = readFileSync(path.join(deployDir, 'deploy.sh'), 'utf8');
@@ -717,7 +756,9 @@ describe('the verification is actually wired into the deploy, and can observe a 
     const modelsUnit = readFileSync(path.join(deployDir, 'systemd', 'ccrc-models.service'), 'utf8');
     expect(modelsUnit,
       'ccrc-models.service has no explicit PATH — ccgpt/litellm live outside the user-unit default')
-      .toMatch(/^Environment=PATH=%h\/\.local\/bin:/m);
+      // The ccrc node directory leads (spec 2026-10-26 decision 6): this `Environment=PATH=` replaces the manager's,
+      // so the environment.d fragment that carries it for every other unit never reaches this one.
+      .toMatch(/^Environment=PATH=%h\/\.local\/libexec\/ccrc\/node-bin:%h\/\.local\/bin:/m);
     // Fix round 1, Folded Minor B: `refresh --all` probes every registered
     // lane (each curl at --max-time 30), then renders/restarts litellm for
     // codex — a multi-lane pass can outrun systemd's 90s default and get
@@ -838,7 +879,7 @@ describe('the verification is actually wired into the deploy, and can observe a 
     // daemon-reload" true (a stronger guarantee than same-string ordering:
     // AGENT_CMD's ssh cannot even START until AGENT_BUILD_CMD's ssh exits 0).
     const agentBranchStart = deploySh.indexOf('if [ "$TARGET" = "agent" ]');
-    const buildExecAt = deploySh.indexOf('"${SSH[@]}" "$BOX" "$AGENT_BUILD_CMD"');
+    const buildExecAt = deploySh.indexOf(`"\${SSH[@]}" "$BOX" "bash -c '$AGENT_BUILD_CMD'"`);
     const stampAt = deploySh.indexOf('stamp_build', agentBranchStart);
     const restartExecAt = deploySh.indexOf('"${SSH[@]}" "$BOX" "$AGENT_CMD"');
     expect(buildExecAt, 'AGENT_BUILD_CMD is defined but never executed').toBeGreaterThan(-1);
@@ -1027,12 +1068,16 @@ describe('the verification is actually wired into the deploy, and can observe a 
     cpSync(join(deployDir, 'systemd'), join(src, 'deploy', 'systemd'), { recursive: true });
     cpSync(join(deployDir, 'ccrc-agent.service'), join(src, 'deploy', 'ccrc-agent.service'));
     cpSync(join(deployDir, '..', 'ccd', 'claude-session@.service'), join(src, 'ccd', 'claude-session@.service'));
+    // The chain now opens with the box-side node choice (D-TBD-node-runtime-under-nvm), so the fixture carries
+    // the library and the lane's package.json; the node case below is that step's own gate.
+    plantNodeStep(src, 'agent');
     const scriptPath = join(home, 'units.sh');
     writeFileSync(scriptPath, `${script}\n`);
 
     const run = (pre: string): { status: number | null } =>
-      spawnSync('bash', ['-c', `${pre}exec bash "${scriptPath}"`], { env: { ...process.env, HOME: home } });
+      spawnSync('bash', ['-c', `${pre}exec bash "${scriptPath}"`], { env: nodeStepEnv(home) });
     expect(run('').status, 'the extracted unit-install chain did not succeed against a fixture HOME').toBe(0);
+    expectNodeLinksContained(home);
 
     const unitDir = join(home, '.config', 'systemd', 'user');
     // Every artifact the by-name list above claims, present on disk with the
@@ -1094,6 +1139,188 @@ describe('the verification is actually wired into the deploy, and can observe a 
       .map(([dest]) => dest)
       .filter((dest) => readFileSync(join(unitDir, dest), 'utf8') !== 'SENTINEL\n');
     expect(clobbered, 'a live unit was truncated by a copy that died mid-write').toEqual([]);
+  });
+
+  it('each lane chooses node ON THE BOX before npm ci and publishes it after its last unit, under bash (D-TBD-node-runtime-under-nvm)', () => {
+    // An nvm box's user manager has no node on PATH, so every unit that starts `node` by name crash-loops. The
+    // fallback deploy runs the same choice `ccrc install` does (ccd/ccrc-node), in each lane's BUILD half: the
+    // choice first, so `npm ci` builds with the node the units will run; the publication last, after every unit
+    // is placed and before the restart half's daemon-reload. An ssh deploy never installs node.
+    const lanes = [
+      { name: 'AGENT_BUILD_CMD', pkg: 'agent', prefix: 'cd ~/ccrc/agent && npm ci && npm run build' },
+      { name: 'REMOTE_BUILD_CMD', pkg: 'server', prefix: 'cd ~/ccrc/server && npm ci && npm run build' },
+    ] as const;
+    const bodyOf = (name: string): string | undefined => new RegExp(`${name}='([\\s\\S]*?)'\\n`).exec(deploySh)?.[1];
+    const defs: Array<[string, string]> = [];
+    for (const l of lanes) {
+      const body = bodyOf(l.name);
+      expect(body, `${l.name} is no longer a single quoted block`).toBeTruthy();
+      // 1. The library is bash (`[[ ]]`, BASH_REMATCH, `local`), and ssh hands a command string to the box user's
+      //    LOGIN shell, whatever that is. So the build half runs under bash by name. The body can hold no `'` (it
+      //    is a single-quoted literal in deploy.sh), so one pair of single quotes around it is exact.
+      expect(deploySh, `${l.name} is not run under bash on the box`)
+        .toContain(`"\${SSH[@]}" "$BOX" "bash -c '$${l.name}'"`);
+      expect(deploySh, `${l.name} is still handed to the login shell bare`).not.toContain(`"$BOX" "$${l.name}"`);
+      // 2. The two helpers, one line each, byte-equal across lanes, no `&&` (the link split would tear them).
+      const sel = /^_deploy_node_select\(\) \{.*\}$/m.exec(body!)?.[0];
+      const pub = /^_deploy_node_publish\(\) \{.*\}$/m.exec(body!)?.[0];
+      expect(sel, `${l.name} no longer defines _deploy_node_select on one line`).toBeTruthy();
+      expect(pub, `${l.name} no longer defines _deploy_node_publish on one line`).toBeTruthy();
+      defs.push([sel!, pub!]);
+      // 3. Order in the chain: select (on the lane's own package.json) before npm ci; publish the LAST link,
+      //    after the last unit.
+      const selectAt = body!.indexOf(`\n_deploy_node_select ~/ccrc/ccd/ccrc-node ~/ccrc/${l.pkg}/package.json`);
+      expect(selectAt, `${l.name} never chooses node from ~/ccrc/${l.pkg}/package.json`).toBeGreaterThan(-1);
+      expect(selectAt, `${l.name} chooses node after npm ci`).toBeLessThan(body!.indexOf('npm ci'));
+      const links = body!.split('&&').map((x) => x.replace(/\\\s*$/, '').trim());
+      expect(links[links.length - 1], `${l.name} does not publish node as its last link`).toBe('_deploy_node_publish');
+      expect(body!.lastIndexOf('&& _deploy_node_publish'), `${l.name} publishes node before a unit lands`)
+        .toBeGreaterThan(body!.lastIndexOf('_unit_atomic ~/ccrc/'));
+    }
+    expect(defs[0], 'the two lanes spell the node helpers differently').toEqual(defs[1]);
+    const [sel, pub] = defs[0]!;
+    const at = (needle: string): number => {
+      const i = sel.indexOf(needle);
+      expect(i, `_deploy_node_select lost: ${needle}`).toBeGreaterThan(-1);
+      return i;
+    };
+    const sourced = at('. "$1" ||');
+    const noInstall = at('export NODE_NO_INSTALL=1;');
+    const floor = at('_node_floor "$2" ||');
+    const chosen = at('_node_select "$NODE_FLOOR" ||');
+    expect(sourced).toBeLessThan(noInstall);
+    expect(noInstall, 'NODE_NO_INSTALL is exported after the choice it must bind').toBeLessThan(chosen);
+    expect(floor).toBeLessThan(chosen);
+    expect(sel).toContain('deploy: FAILED — $NODE_WHY');
+    expect(pub).toContain('_node_publish ||');
+    expect(pub).toContain('deploy: FAILED — $NODE_WHY');
+    for (const d of [sel, pub]) expect(d, 'a node helper carries an &&').not.toContain('&&');
+
+    // 4. RUN, against fixture HOMEs: each lane's chain with its npm half replaced by a marker, so "the build ran"
+    //    is measurable.
+    for (const l of lanes) {
+      const body = bodyOf(l.name)!;
+      expect(body, `${l.name}'s build prefix moved — this run would silently skip it`).toContain(l.prefix);
+      const script = body.replace(l.prefix, 'touch "$HOME/built"');
+      const box = (floorOverride?: string): { home: string; scriptPath: string } => {
+        const home = mkTmp(`ccrc-${l.pkg}-nodestep-`);
+        const src = join(home, 'ccrc');
+        cpSync(deployDir, join(src, 'deploy'), { recursive: true });
+        mkdirSync(join(src, 'ccd'), { recursive: true });
+        cpSync(join(deployDir, '..', 'ccd', 'claude-session@.service'), join(src, 'ccd', 'claude-session@.service'));
+        plantNodeStep(src, l.pkg, floorOverride);
+        const scriptPath = join(home, 'build.sh');
+        writeFileSync(scriptPath, `${script}\n`);
+        return { home, scriptPath };
+      };
+      const run = (b: { home: string; scriptPath: string }) =>
+        spawnSync('bash', [b.scriptPath], { env: nodeStepEnv(b.home), encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+      const units = [...script.matchAll(/(?:^|&&)\s*_unit_atomic\s+\S+\s+(\S+)/gm)]
+        .map((m) => m[1]!.replace(/^"|"$/g, '').replace(/^(?:~|\$HOME)\//, ''));
+      expect(units.length, `${l.name} places no unit this reader can see`).toBeGreaterThan(0);
+
+      // a. Green: the node this shell finds is linked, the fragment written, and the publish step's note (no
+      //    user manager answers the contained systemctl) is surfaced on stderr.
+      const ok = box();
+      const r = run(ok);
+      expect(r.status, `${l.name} did not succeed on a box whose PATH node qualifies: ${r.stderr}`).toBe(0);
+      const link = join(ok.home, '.local', 'libexec', 'ccrc', 'node-bin', 'node');
+      expect(lstatSync(link).isSymbolicLink(), `${l.name} never published node`).toBe(true);
+      expectNodeLinksContained(ok.home);
+      expect(existsSync(join(ok.home, '.config', 'environment.d', '999-ccrc-node.conf'))).toBe(true);
+      expect(r.stderr, `${l.name} swallowed the publish step's note`).toContain('deploy: note — no user manager answers');
+
+      // b. A box with no qualifying node: the lane fails with the selection's own line, BEFORE the build and
+      //    before any unit lands.
+      const low = box('999.0.0');
+      const rl = run(low);
+      expect(rl.status, `${l.name} succeeded with no qualifying node`).not.toBe(0);
+      expect(rl.stderr).toMatch(/deploy: FAILED — node v\d+\.\d+\.\d+ at .* is below the floor \(>=999\.0\.0\)/);
+      expect(existsSync(join(low.home, 'built')), `${l.name} built before choosing node`).toBe(false);
+      for (const u of units) expect(existsSync(join(low.home, u)), `${u} landed on a refused node`).toBe(false);
+
+      // c. A publication that cannot write fails the lane — after every unit has landed (publish is last).
+      const blocked = box();
+      mkdirSync(join(blocked.home, '.local'), { recursive: true });
+      writeFileSync(join(blocked.home, '.local', 'libexec'), 'not a directory\n');
+      const rb = run(blocked);
+      expect(rb.status, `${l.name} succeeded though node could not be published`).not.toBe(0);
+      expect(rb.stderr).toContain('deploy: FAILED — cannot create');
+      expect(existsSync(join(blocked.home, 'built'))).toBe(true);
+      for (const u of units) expect(existsSync(join(blocked.home, u)), `${u} was not placed before the publication`).toBe(true);
+    }
+  });
+
+  it('the server lane\'s pre-rsync node calls (coord.db backup, coordination snapshot) run on the CHOSEN node, from a library and floor shipped fresh this run (D-TBD-node-runtime-under-nvm)', () => {
+    // Those two steps run box-side `node` BEFORE the rsync and before either build half chooses one. On an nvm-only
+    // server box a bare `node` is "command not found" over non-interactive ssh; below the floor it is an obscure
+    // node:sqlite error. So each runs in a bash shell that first makes the same choice, from the library and the
+    // server's package.json scp'd beside the helpers THIS run (the box's ~/ccrc is the outgoing build, or absent).
+    const elseAt = deploySh.indexOf('\nelse');
+    const rsyncAt = deploySh.indexOf('\n  rsync -az --delete', elseAt);
+    const segStart = deploySh.indexOf('"${SSH[@]}" "$BOX" "mkdir -p ~/ccrc-backups/$TS"', elseAt);
+    expect(segStart, 'the server lane no longer opens its backup set this way').toBeGreaterThan(elseAt);
+    expect(rsyncAt).toBeGreaterThan(segStart);
+    const preRsync = deploySh.slice(elseAt, rsyncAt).split('\n').filter((l) => !l.trim().startsWith('#')).join('\n');
+    // 1. Text: every box-side command before the rsync that names `node` runs under bash and selects first.
+    const sshCmds = preRsync.replace(/\\\n/g, ' ').split('\n').filter((l) => l.trim().startsWith('"${SSH[@]}"'));
+    const nodeCmds = sshCmds.filter((l) => /\bnode --no-warnings\b/.test(l));
+    expect(nodeCmds.length, 'the pre-rsync node calls moved — this reader no longer sees them').toBe(2);
+    for (const c of nodeCmds) {
+      expect(c, `a pre-rsync node call is not run under bash with the select first: ${c}`)
+        .toMatch(/^\s*"\$\{SSH\[@\]\}" "\$BOX" "bash -c '\$BACKUP_NODE_SELECT && /);
+    }
+    const sel = /^\s*BACKUP_NODE_SELECT='([\s\S]*?)'$/m.exec(preRsync)?.[1];
+    expect(sel, 'BACKUP_NODE_SELECT is not a single quoted block').toBeTruthy();
+    const def = /^_deploy_node_select\(\) \{.*\}$/m.exec(sel!)?.[0];
+    const buildDef = /^_deploy_node_select\(\) \{.*\}$/m.exec(/REMOTE_BUILD_CMD='([\s\S]*?)'\n/.exec(deploySh)![1]!)?.[0];
+    expect(def, 'the backup shell spells the select step differently from the build halves').toBe(buildDef);
+    expect(sel).toContain('\n_deploy_node_select ~/ccrc-backups/ccrc-node ~/ccrc-backups/server-package.json');
+    expect(sel, 'the backup shell publishes node; publication is the build half\'s last link').not.toContain('_node_publish');
+    const shipLib = preRsync.indexOf('"${SCP[@]}" ccd/ccrc-node "$BOX":ccrc-backups/ccrc-node');
+    const shipPkg = preRsync.indexOf('"${SCP[@]}" server/package.json "$BOX":ccrc-backups/server-package.json');
+    expect(shipLib, 'the library is not shipped fresh beside the helpers').toBeGreaterThan(-1);
+    expect(shipPkg, 'the floor is not shipped fresh beside the helpers').toBeGreaterThan(-1);
+    const firstNode = preRsync.indexOf('node --no-warnings');
+    expect(shipLib).toBeLessThan(firstNode);
+    expect(shipPkg).toBeLessThan(firstNode);
+
+    // 2. RUN the segment (mkdir through the snapshot) against a fixture HOME, with ssh and scp replaced by local
+    //    stand-ins: ssh hands its joined arguments to the login shell, scp copies into the fixture HOME.
+    const segment = deploySh.slice(segStart, rsyncAt);
+    const runBox = (floor?: string): { home: string; r: ReturnType<typeof spawnSync> } => {
+      const home = mkTmp('ccrc-server-backup-node-');
+      mkdirSync(join(home, '.ccrc'), { recursive: true });
+      const db = spawnSync(process.execPath, ['--no-warnings', '-e',
+        "const {DatabaseSync}=require('node:sqlite');const d=new DatabaseSync(process.argv[1]);d.exec('create table t(x)');d.close()",
+        join(home, '.ccrc', 'coord.db')]);
+      expect(db.status, String(db.stderr)).toBe(0);
+      const pkg = join(home, 'fixture-package.json');
+      if (floor !== undefined) writeFileSync(pkg, JSON.stringify({ name: 'server', engines: { node: `>=${floor}` } }));
+      const script = [
+        'set -euo pipefail',
+        'fake_ssh() { shift; sh -c "$*"; }',
+        `fake_scp() { local s="$1"; if [ "$s" = server/package.json ] && [ -n "\${FIXTURE_PKG:-}" ]; then s="$FIXTURE_PKG"; fi; cp -- "$s" "$HOME/\${2#*:}"; }`,
+        'SSH=(fake_ssh); SCP=(fake_scp); BOX=box; TS=t1',
+        segment,
+      ].join('\n');
+      const scriptPath = join(home, 'backup.sh');
+      writeFileSync(scriptPath, script);
+      const env = { ...nodeStepEnv(home), ...(floor !== undefined ? { FIXTURE_PKG: pkg } : {}) };
+      const r = spawnSync('bash', [scriptPath], { cwd: join(deployDir, '..'), env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+      return { home, r };
+    };
+    // a. No qualifying node on the box: the deploy stops with the selection's own line, and no backup is taken.
+    const low = runBox('999.0.0');
+    expect(low.r.status, 'the backup ran on a node below the floor').not.toBe(0);
+    expect(low.r.stderr).toMatch(/deploy: FAILED — node v\d+\.\d+\.\d+ at .* is below the floor \(>=999\.0\.0\)/);
+    expect(existsSync(join(low.home, 'ccrc-backups', 't1', 'coord.db')), 'coord.db was backed up on a refused node').toBe(false);
+    // b. A qualifying node: the choice is named, the SQLite snapshot lands, and nothing is published.
+    const ok = runBox();
+    expect(ok.r.status, `the backup set failed on a qualifying node: ${ok.r.stderr}`).toBe(0);
+    expect(ok.r.stderr).toMatch(/deploy: node v\d+\.\d+\.\d+ from /);
+    expect(existsSync(join(ok.home, 'ccrc-backups', 't1', 'coord.db')), `coord.db was not backed up: ${ok.r.stderr}`).toBe(true);
+    expect(existsSync(join(ok.home, '.local', 'libexec', 'ccrc', 'node-bin')), 'the backup shell published node').toBe(false);
   });
 
   it('R-8 (fix round F1): the graphify skill arm is PIN-GATED — a pinless box defers instead of aborting the agent lane', () => {
@@ -1706,7 +1933,7 @@ describe('the verification is actually wired into the deploy, and can observe a 
     const agentBranchStart = deploySh.indexOf('if [ "$TARGET" = "agent" ]');
     const elseAt = deploySh.indexOf('\nelse');
 
-    const agentBuildAt = deploySh.indexOf('"${SSH[@]}" "$BOX" "$AGENT_BUILD_CMD"');
+    const agentBuildAt = deploySh.indexOf(`"\${SSH[@]}" "$BOX" "bash -c '$AGENT_BUILD_CMD'"`);
     const agentStamp = deploySh.indexOf('stamp_build', agentBranchStart);
     const agentRestartAt = deploySh.indexOf('"${SSH[@]}" "$BOX" "$AGENT_CMD"');
     expect(agentBuildAt, 'agent branch never runs its build chain').toBeGreaterThan(agentBranchStart);
@@ -1718,7 +1945,7 @@ describe('the verification is actually wired into the deploy, and can observe a 
       .toBeLessThan(agentRestartAt);
     expect(agentStamp).toBeLessThan(elseAt);
 
-    const serverBuildAt = deploySh.indexOf('"${SSH[@]}" "$BOX" "$REMOTE_BUILD_CMD"');
+    const serverBuildAt = deploySh.indexOf(`"\${SSH[@]}" "$BOX" "bash -c '$REMOTE_BUILD_CMD'"`);
     const serverStamp = deploySh.indexOf('stamp_build', elseAt);
     const serverRestartAt = deploySh.indexOf('"${SSH[@]}" "$BOX" "$REMOTE_CMD"');
     expect(serverBuildAt, 'server branch never runs its build chain').toBeGreaterThan(elseAt);
@@ -2397,7 +2624,7 @@ describe('the fallback deploy captures the coordination snapshot before rsync (W
 
   it('the helper is shipped fresh this run, beside backup-coord.mjs, and invoked with `capture` into THIS run\'s timestamp directory', () => {
     expect(code).toMatch(/"\$\{SCP\[@\]\}" deploy\/coordination-snapshot\.mjs "\$BOX":ccrc-backups\/coordination-snapshot\.mjs/);
-    expect(code).toMatch(/"\$\{SSH\[@\]\}" "\$BOX" "node --no-warnings ~\/ccrc-backups\/coordination-snapshot\.mjs capture --dir ~\/ccrc-backups\/\$TS"/);
+    expect(code).toMatch(/"\$\{SSH\[@\]\}" "\$BOX" "bash -c '\$BACKUP_NODE_SELECT && node --no-warnings ~\/ccrc-backups\/coordination-snapshot\.mjs capture --dir ~\/ccrc-backups\/\$TS'"/);
     expect(existsSync(join(deployDir, 'coordination-snapshot.mjs'))).toBe(true);
   });
 

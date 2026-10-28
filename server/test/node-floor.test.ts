@@ -147,8 +147,8 @@ describe('D-4296 is cited where its remedy text lives (review 316 F32)', () => {
     expect(remedy).toHaveLength(1);
     expect(remedy[0]).toMatch(/# D-4296\b/);
     const install = readFileSync(path.join(root, 'install.sh'), 'utf8').split('\n');
-    const at = install.findIndex((l) => l.startsWith('floor="$(node -e'));
-    expect(at, 'install.sh no longer reads the floor with node -e').toBeGreaterThan(-1);
+    const at = install.findIndex((l) => l.startsWith('. "$ROOT/ccd/ccrc-node"'));
+    expect(at, 'install.sh no longer sources the node selection library').toBeGreaterThan(-1);
     const above: string[] = [];
     for (let i = at - 1; i >= 0 && install[i]!.startsWith('#'); i -= 1) above.unshift(install[i]!);
     expect(above.join('\n')).toMatch(/\bD-4296\b/);

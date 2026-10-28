@@ -46,6 +46,7 @@ import {
 } from '../../shared/api.js';
 import { seedRoster } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
+import { wrapRealTool } from './wrapRealTool.js';
 import { describeLinux } from './platformFixtures.js';
 import { ghContainedEnv } from './ccdWsHelpers.js';
 import { CCRC, nodeEnv, plantNode, readIntent } from './updateIntentFixtures.js';
@@ -196,14 +197,21 @@ function realTool(name: string): string | null {
  *  BEFORE its first explicit `_upd_phase` call (fix round 1, F1a): the lock
  *  is taken, `UPD_REPORTING=1` is set, then the loop (`curl tar gzip node
  *  awk jq`, in that order) runs and dies on the last one — all BEFORE
- *  `_upd_phase resolving`, the first explicit write. */
+ *  `_upd_phase resolving`, the first explicit write. The node choice just
+ *  before that loop (`_ccrc_node_choose`, ccd/ccrc-node) refuses a node
+ *  directory without npm and npx beside it, so all three are placed. */
 function envWithoutJq(home: string): NodeJS.ProcessEnv {
   const bin = path.join(home, 'toolbin');
   mkdirSync(bin, { recursive: true });
-  for (const t of ['curl', 'tar', 'gzip', 'node', 'awk', 'bash', 'sha256sum',
+  for (const t of ['curl', 'tar', 'gzip', 'awk', 'bash', 'sha256sum',
     'flock', 'date', 'mktemp', 'cat', 'printf', 'chmod', 'mv', 'rm', 'mkdir', 'cp', 'cmp']) {
     const p = realTool(t);
     if (p !== null) symlinkSync(p, path.join(bin, t));
+  }
+  // Wrapper scripts, never links: a link to a user-owned node is written through by a later stub write.
+  for (const t of ['node', 'npm', 'npx']) {
+    const p = realTool(t);
+    if (p !== null) wrapRealTool(p, path.join(bin, t));
   }
   const tmp = path.join(home, 'tmp');
   mkdirSync(tmp, { recursive: true });

@@ -13,6 +13,7 @@ import { mkTmp, removeTmpFixturesEachTest } from './tmpHelpers.js';
 import { ccrcContainedEnv } from './ccrcContainment.js';
 import { assertNoRealTool } from './containedTools.js';
 import { itLinux, itDarwin, platformContrast } from './platformFixtures.js';
+import { plantNvm } from './ccrc-installFixture.js';
 import { installVersionedTree } from './installTreeFixture.js';
 import { assertSpineFrontContained } from './codexLaneFixture.js';
 import { IN_FLIGHT_UPDATE_PHASES, UPDATE_PHASES } from '../../shared/api.js';
@@ -1776,6 +1777,34 @@ describe('ccrc update: one update at a time (the lock)', () => {
     expect(second.code).toBe(1);
     expect(second.stderr).not.toMatch(/another update holds/);
     expect(second.stderr).toMatch(/^ccrc: jq is required by 'ccrc update' but is not on PATH/m);
+  });
+
+  // spec 2026-10-26-node-runtime-under-nvm: an update chooses its node like an install does (so a box whose manager
+  // PATH lacks node can still update) but NEVER installs one — it is unattended, even when stdin is a terminal.
+  it('an update with no qualifying nvm node refuses with the library\'s reason, installs nothing, and changes nothing', () => {
+    const home = stubBox('ccrc-update-node-refuse-');
+    plantNvm(home, ['v18.0.0'], 'v18.0.0');
+    // The node on PATH is the library's second choice (it falls back to a qualifying PATH node before refusing), and
+    // this fixture's PATH node forwards to the real interpreter, which qualifies. Shadow it with one below the floor,
+    // so "no qualifying node" is what the box measures.
+    const old = join(home, 'old-node-bin');
+    mkdirSync(old, { recursive: true });
+    writeFileSync(join(old, 'node'), '#!/bin/sh\n[ "$1" = --version ] && { echo v18.0.0; exit 0; }\nexit 1\n', { mode: 0o755 });
+    for (const b of ['npm', 'npx']) writeFileSync(join(old, b), '#!/bin/sh\nexit 1\n', { mode: 0o755 });
+    const r = runUpdate(home, [], { PATH: `${old}:${updateEnv(home).PATH}` });
+    expect(r.code, `stdout: ${r.stdout}`).toBe(1);
+    expect(r.stderr).toMatch(/the node on PATH: .*v18\.0\.0/m);
+    expect(r.stderr).toMatch(/^ccrc: no usable node: no installed nvm node meets the floor \(>=\d+\.\d+\.\d+\)/m);
+    expect(r.stderr).toMatch(/installing is disabled for this run \(NODE_NO_INSTALL=1\).* Nothing on this box was changed\.$/m);
+    expect(existsSync(join(home, 'nvm-install-calls')), 'an update ran `nvm install`').toBe(false);
+    expect(existsSync(join(home, 'staged-ccrc-argv')), 'the spine ran past the refusal').toBe(false);
+  });
+
+  it('the staged spine inherits NODE_NO_INSTALL=1, so the install it runs never installs node either', () => {
+    const home = stubBox('ccrc-update-node-noinstall-');
+    const r = runUpdate(home, [], { NODE_NO_INSTALL: '' });
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(readFileSync(join(home, 'staged-ccrc-nodenoinstall'), 'utf8').trim()).toBe('1');
   });
 });
 

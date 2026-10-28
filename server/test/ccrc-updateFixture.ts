@@ -60,6 +60,7 @@ import { adoptPlantedSystemd, assertSpineFrontContained, spineSystemctlArms, spi
 import { docsProbeProgram } from './docsHelperPy.js';
 import { DOCS_INDEX_READY } from './docsIndexFixtures.js';
 import { swJs } from './swFixtures.js';
+import { wrapRealTool } from './wrapRealTool.js';
 
 /** The two python3 invocations ccd's Docs front makes when the closing
  *  doctor's `docs` check runs the installed ccd (Docs W1a): the floor probe,
@@ -596,8 +597,12 @@ export function updateEnv(home: string): NodeJS.ProcessEnv {
     'esac',
     'echo "fixture loginctl: unexpected argv: $*" >&2; exit 90',
   ].join('\n'));
+  // `$HOME/fixture-npm-override`, when a case plants it, REPLACES this recorder (exec'd first, with the same argv). A
+  // case that wants a failing or differently-recording npm uses it rather than a PATH prefix: `_node_select`
+  // (ccd/ccrc-node) puts the chosen node's directory — `.local/bin` here — ahead of anything a test prefixes.
   plant('npm',
-    '#!/bin/sh\nprintf \'%s\\n\' "$*" >> "$HOME/npm-argv"\n'
+    '#!/bin/sh\n[ -x "$HOME/fixture-npm-override" ] && exec "$HOME/fixture-npm-override" "$@"\n'
+    + 'printf \'%s\\n\' "$*" >> "$HOME/npm-argv"\n'
     + 'printf \'%s\\n\' "$PWD" >> "$HOME/npm-cwd"\nmkdir -p node_modules\nexit 0\n');
   plant('rsync', rsyncRecorder(RSYNC));
   // Task 1 (design §10, "update.json is written at every phase … by rename"):
@@ -700,6 +705,9 @@ export function updateEnv(home: string): NodeJS.ProcessEnv {
     'esac',
     `exec ${REAL_NODE} "$@"`,
   ].join('\n') + '\n');
+  // `ccrc update` chooses its node before anything else (`_ccrc_node_choose`, ccd/ccrc-node) and requires npm and npx
+  // beside it — in the directory of THIS shim. npm is the recorder above; npx is the real one, linked.
+  wrapRealTool(realPath('npx'), join(home, '.local', 'bin', 'npx'));
   for (const k of ['CCRC_ADDR', 'CCRC_HEALTH_TIMEOUT', 'CCRC_DOCTOR_GH_TIMEOUT', 'CCRC_DOCTOR_DOCS_TIMEOUT',
     'CCRC_RELEASE_BASE_URL', 'CCRC_BACKUP_KEEP', 'CCRC_BACKUP_DATA_KEEP', 'CCRC_VERSIONS_KEEP', 'CCRC_CODEX_PROBE_S', 'CCRC_CODEX_READY_S',
     'CCRC_UPDATE_DEADLINE_MS', 'CCRC_MODELS_ADVANCE_BUDGET_S']) delete env[k];
@@ -910,6 +918,8 @@ export function stubTree(home: string, opts: { version: string; installExit?: nu
     // the run does; any OTHER descriptor it was handed — a lock fd — it keeps
     // for 30 s.
     + 'printf \'%s\\n\' "${CCRC_UPDATE_LOCK_HELD:-unset}" > "$HOME/staged-ccrc-lockenv"\n'
+    // An update never installs node, and the staged spine inherits that (`cmd_update` exports it).
+    + 'printf \'%s\\n\' "${NODE_NO_INSTALL:-unset}" > "$HOME/staged-ccrc-nodenoinstall"\n'
     + 'if [ -f "$HOME/fixture-spine-linger" ]; then sleep 30 >/dev/null 2>&1 </dev/null & echo $! > "$HOME/spine-linger-pid"; fi\n'
     // Task 3 (§16's parent-kill fixture): a spine that records its argv and
     // then WAITS, at most 20 s, for the test's go file. The run is parked
@@ -1272,7 +1282,7 @@ export function pathWithoutJq(home: string): string {
   // `_upd_report_readable` (its own portable `_plat_size`, i.e. `stat`)
   // before its `command -v jq` preflight — without it this PATH would die
   // at "unreadable or malformed" (rc 2, `stat` missing), never at jq's.
-  for (const b of ['tar', 'gzip', 'awk', 'flock', 'mkdir', 'stat']) symlinkSync(realPath(b), join(d, b));
+  for (const b of ['tar', 'gzip', 'awk', 'flock', 'mkdir', 'stat']) wrapRealTool(realPath(b), join(d, b));
   return `${join(home, '.local', 'bin')}:${d}`;
 }
 
@@ -1291,7 +1301,7 @@ export function pathWithoutFlock(home: string): string {
   // dies before any window opens — DOES write a `failed` report, and
   // `_upd_phase`'s own write needs both to place it.
   for (const b of ['jq', 'tar', 'gzip', 'awk', 'mkdir', 'date', 'stat', 'mv', 'chmod'])
-    symlinkSync(realPath(b), join(d, b));
+    wrapRealTool(realPath(b), join(d, b));
   return `${join(home, '.local', 'bin')}:${d}`;
 }
 
@@ -1307,7 +1317,7 @@ export function pathWithoutCurl(home: string): string {
   const d = join(home, 'no-curl-bin');
   mkdirSync(d, { recursive: true });
   for (const b of ['flock', 'jq', 'tar', 'gzip', 'awk', 'mkdir', 'date', 'stat', 'bash', 'sh', 'mv', 'chmod'])
-    symlinkSync(realPath(b), join(d, b));
+    wrapRealTool(realPath(b), join(d, b));
   return d;
 }
 
@@ -1454,6 +1464,8 @@ export const CCD_SENTINEL = "# fixture: v1.0.0's own ccd, as this box kept it\n"
 export const KEPT_SPINE = [
   '#!/bin/sh',
   'printf \'%s\\n\' "$0" "$@" > "$HOME/kept-spine-argv"',
+  // a rollback never installs node: `_ver_flip_back` hands its spine NODE_NO_INSTALL=1
+  'printf \'%s\\n\' "${NODE_NO_INSTALL:-unset}" > "$HOME/kept-spine-nodenoinstall"',
   'fd=unmeasured',
   'if [ -d "/proc/$$/fd" ]; then',
   '  fd=closed; lock="$(cd "$HOME/.ccrc" && pwd -P)/update.lock"',

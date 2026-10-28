@@ -24,6 +24,9 @@ export function ccrcContainedEnv(home: string, base: NodeJS.ProcessEnv,
     XDG_RUNTIME_DIR: path.join(home, 'no-runtime-dir'),
     DBUS_SESSION_BUS_ADDRESS: `unix:path=${path.join(home, 'no-bus')}`,
   }, opts.managers ? { systemd: true, tmux: true } : { tmux: true });
+  // A developer's own nvm (NVM_DIR in the ambient env) is not the fixture box's: unset, `ccd/ccrc-node` looks in
+  // `$HOME/.nvm`, which a fixture HOME lacks unless a test plants one (the no-nvm arm).
+  delete env['NVM_DIR'];
   const bin = harnessBin(home);
   for (const n of ['ssh', 'scp', 'launchctl']) plantPoison(bin, n);
   if (opts.curl === 'poison') {

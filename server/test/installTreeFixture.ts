@@ -52,6 +52,8 @@ export const TREE_FILES = [
   'ccd/graph-noise.default.list',
   'ccd/ccrc-doctor-checks',
   'ccd/ccrc-wrapper-shape',
+  // The node selection library `cmd_install`/`cmd_update` source (`_ccrc_node_choose`): a tree without it refuses.
+  'ccd/ccrc-node',
   'ccd/ccrc-adopt',
   // The GPT lane's five common executables, COPIED from the repository: the
   // two `.py` files (Plan 2a, placed since Plan 2b-1), and the runtime builder
