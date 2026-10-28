@@ -888,6 +888,26 @@ describe('the flyout\'s focus rules', () => {
     try {
       await page.hover(STRIP);
       await page.waitForSelector('.accounts-flyout', { timeout: 5_000 });
+      // Timed in the page, on its own clock (C12 item 16): from the pointer's last exit from the strip or the flyout to
+      // the flyout's removal. All accounts is a door to /accounts, and the route it lands can move the strip out from
+      // under a resting pointer before the pointer moves at all, which starts the grace early; read on the test's clock
+      // from the move, a loaded runner saw the close at 208 and 197 ms of a 250 ms grace. A timer never fires early, so
+      // measured from the exit the page itself saw, the bound holds however slow the runner is.
+      await page.evaluate((sel) => {
+        const w = window as unknown as { __exits: number[]; __gone: number | null };
+        w.__exits = [];
+        w.__gone = null;
+        const inside = (n: EventTarget | null): boolean => n instanceof Element
+          && (document.querySelector(sel)?.contains(n) === true || n.closest('.accounts-flyout') !== null);
+        window.addEventListener('pointerout', (e) => {
+          if (inside(e.target) && !inside(e.relatedTarget)) w.__exits.push(performance.now());
+        }, { capture: true });
+        new MutationObserver((_, obs) => {
+          if (document.querySelector('.accounts-flyout') !== null) return;
+          w.__gone = performance.now();
+          obs.disconnect();
+        }).observe(document.body, { childList: true, subtree: true });
+      }, STRIP);
       await page.click(`${STRIP} .accounts-end button:last-of-type`);
       const focused = await page.evaluate(() => ({
         inEnd: document.activeElement?.closest('.accounts-end') !== null,
@@ -895,10 +915,15 @@ describe('the flyout\'s focus rules', () => {
       }));
       expect(focused, 'the click left focus on All accounts, and Chrome calls it not focus-visible').toEqual({ inEnd: true, visible: false });
       await page.mouse.move(view.width / 2, 880);
-      const leftAt = Date.now();
       await page.waitForSelector('.accounts-flyout', { state: 'detached', timeout: FLYOUT_CLOSE_MS + 2_000 });
-      const closed = Date.now() - leftAt;
-      expect(closed, `the flyout closed after ${closed} ms, before its ${FLYOUT_CLOSE_MS} ms grace`).toBeGreaterThanOrEqual(FLYOUT_CLOSE_MS - 20);
+      const timed = await page.evaluate(() => {
+        const w = window as unknown as { __exits: number[]; __gone: number | null };
+        const before = w.__exits.filter((t) => w.__gone !== null && t <= w.__gone);
+        return { gone: w.__gone, exit: before.length === 0 ? null : before[before.length - 1]!, exits: w.__exits.length };
+      });
+      expect(timed.exit, `the pointer left the strip before the flyout closed (${timed.exits} exits seen)`).not.toBeNull();
+      const closed = Math.round(timed.gone! - timed.exit!);
+      expect(closed, `the flyout closed ${closed} ms after the pointer left, before its ${FLYOUT_CLOSE_MS} ms grace`).toBeGreaterThanOrEqual(FLYOUT_CLOSE_MS - 1);
       expect(errors).toEqual([]);
     } finally {
       await ctx.close();
