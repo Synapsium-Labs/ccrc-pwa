@@ -8,12 +8,13 @@
 import type { ReactNode } from 'react';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import type { ChatEvent, Dialog, FleetSession, HookAsk } from '../../shared/api';
 import { ToastHost } from '@ccrc/ui';
 import { api } from '../src/lib/api';
 import { DialogSheet } from '../src/session/DialogSheet';
+import { answerSeam, type AnswerSeamMocks } from './answerSeam';
 import { heldAskLine } from '../src/session/askWords';
 import { SessionScreen } from '../src/screens/SessionScreen';
 import { createFleetStore } from '../src/stores/fleet';
@@ -22,6 +23,12 @@ import {
   ASKER_COORD, ASKER_PROJECT, ASKER_SESSION, ASK_DEBRIS, DEBRIS_LABEL, HOOK_QUESTIONS, askFixture, type AskFixture,
 } from './askFixtures';
 import { fleetSession } from './fleetFixture';
+
+// D-7183: the sheet's answers go through its injected seam; each test gets fresh writers (`answerSeam.ts`).
+let answers: AnswerSeamMocks = answerSeam();
+beforeEach(() => {
+  answers = answerSeam();
+});
 
 // The transcript's rows, all of them in order: virtuoso measures nothing in jsdom and would render none.
 vi.mock('react-virtuoso', async () => {
@@ -61,7 +68,7 @@ function renderSheet(n: number, props: Partial<Parameters<typeof DialogSheet>[0]
   const onOpenTerminal = vi.fn();
   render(
     <>
-      <DialogSheet id={ID} store={store} onOpenTerminal={onOpenTerminal} {...props} />
+      <DialogSheet answers={answers} id={ID} store={store} onOpenTerminal={onOpenTerminal} {...props} />
       <ToastHost />
     </>,
   );
@@ -137,7 +144,7 @@ describe('no text from Dialog.body, Dialog.raw, Dialog.title or a scraped label 
         }] },
       });
     });
-    render(<DialogSheet id={ID} store={store} onOpenTerminal={vi.fn()} />);
+    render(<DialogSheet answers={answers} id={ID} store={store} onOpenTerminal={vi.fn()} />);
     expect(screen.getAllByRole('checkbox')).toHaveLength(3);
     for (const label of ['North', 'East', 'South']) expect(screen.getByText(label)).toBeInTheDocument();
     expect(dom()).not.toContain(DEBRIS_LABEL);
@@ -164,7 +171,7 @@ describe('no text from Dialog.body, Dialog.raw, Dialog.title or a scraped label 
         }] },
       });
     });
-    render(<DialogSheet id={ID} store={store} onOpenTerminal={vi.fn()} />);
+    render(<DialogSheet answers={answers} id={ID} store={store} onOpenTerminal={vi.fn()} />);
     expect(screen.getAllByRole('checkbox')).toHaveLength(3);
     expect(screen.getByRole('button', { name: word })).toBeInTheDocument();
     expect(dom()).toContain(`In the terminal the cursor is on the ${word} row`);
@@ -272,7 +279,7 @@ describe('the tab strip (D-6325)', () => {
       store.getState().apply({ type: 'dialog', dialog });
       store.getState().apply({ type: 'ask', ask: fx.ask!, key: null });
     });
-    render(<DialogSheet id={ID} store={store} onOpenTerminal={vi.fn()} />);
+    render(<DialogSheet answers={answers} id={ID} store={store} onOpenTerminal={vi.fn()} />);
 
     const strip = screen.getByRole('group', { name: 'Questions in this ask' });
     const chips = within(strip).getAllByRole('button').map((b) => b.getAttribute('aria-label'));
@@ -292,7 +299,7 @@ describe('the tab strip (D-6325)', () => {
       store.getState().apply({ type: 'dialog', dialog: fx.dialog! });
       store.getState().apply({ type: 'ask', ask, key: null });
     });
-    render(<DialogSheet id={ID} store={store} onOpenTerminal={vi.fn()} />);
+    render(<DialogSheet answers={answers} id={ID} store={store} onOpenTerminal={vi.fn()} />);
     expect(screen.getByRole('button', { name: /^Go to Question 2,/ })).toBeInTheDocument();
 
     // Two tabs on the pane for three questions: the words cannot be matched to the marks, so there is no strip.
@@ -303,7 +310,7 @@ describe('the tab strip (D-6325)', () => {
       store2.getState().apply({ type: 'dialog', dialog: two });
       store2.getState().apply({ type: 'ask', ask: fx.ask!, key: null });
     });
-    render(<DialogSheet id={ID} store={store2} onOpenTerminal={vi.fn()} />);
+    render(<DialogSheet answers={answers} id={ID} store={store2} onOpenTerminal={vi.fn()} />);
     expect(screen.queryByRole('group', { name: 'Questions in this ask' })).toBeNull();
   });
 });
@@ -391,7 +398,7 @@ describe('who asks (D-6325)', () => {
 
 describe('the answer path is unchanged (D-6325)', () => {
   it('a tap answers through /dialog with the same dialogId and printed index as today', () => {
-    const spy = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+    const spy = answers.answerDialog.mockReset().mockReturnValue(new Promise(() => {}));
     // The hook's envelope (fixture 1), the transcript's copy (fixture 2) and a plain menu (fixture 4): three sources, one
     // route, and the digit printed on the pane, whatever the sheet calls the row.
     renderSheet(1);
@@ -409,7 +416,7 @@ describe('the answer path is unchanged (D-6325)', () => {
   });
 
   it('the review answers Submit answers with its printed digit, and Cancel with its own', () => {
-    const spy = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+    const spy = answers.answerDialog.mockReset().mockReturnValue(new Promise(() => {}));
     renderSheet(8);
     fireEvent.click(screen.getByRole('button', { name: /^Submit answers/ }));
     expect(spy).toHaveBeenLastCalledWith(ID, 'dlg-review', 1);
@@ -422,7 +429,7 @@ describe('the answer path is unchanged (D-6325)', () => {
 
   it('a stale answer toasts the structured sentence for a structured sheet, and the menu\'s for a menu', async () => {
     const { ApiError } = await import('../src/lib/api');
-    vi.spyOn(api, 'answerDialog').mockRejectedValue(new ApiError(409, { ok: false, error: 'stale-dialog' }));
+    answers.answerDialog.mockReset().mockRejectedValue(new ApiError(409, { ok: false, error: 'stale-dialog' }));
     renderSheet(1);
     fireEvent.click(screen.getByRole('button', { name: /^In-process/ }));
     expect(await screen.findByText(/moved on in the terminal/i)).toBeInTheDocument();
@@ -485,7 +492,7 @@ describe('the rows\' copy: Recommended, label over description, Other (D-6325)',
       store.getState().apply({ type: 'dialog', dialog });
       store.getState().apply({ type: 'ask', ask, key: null });
     });
-    render(<DialogSheet id={ID} store={store} onOpenTerminal={vi.fn()} />);
+    render(<DialogSheet answers={answers} id={ID} store={store} onOpenTerminal={vi.fn()} />);
     const labels = [...document.querySelectorAll('.opt-label')].map((l) => l.firstChild?.textContent);
     expect(labels.slice(0, 3)).toEqual(['Fast path', 'Recommended reading', 'Read the (Recommended) docs first']);
     const tagged = [...document.querySelectorAll('.opt-label .chip')].map((c) => c.closest('.opt'));
@@ -510,8 +517,8 @@ describe('the rows\' copy: Recommended, label over description, Other (D-6325)',
   });
 
   it('Other is a row; choosing it shows the field and Send; Send answers through /dialog/text with the same body as today', () => {
-    const text = vi.spyOn(api, 'answerDialogText').mockReturnValue(new Promise(() => {}));
-    const option = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+    const text = answers.answerDialogText.mockReset().mockReturnValue(new Promise(() => {}));
+    const option = answers.answerDialog.mockReset().mockReturnValue(new Promise(() => {}));
     renderSheet(1);
     // A row of the list, after the three options, at the free-text row's printed index (4), saying what it does.
     const other = rowOf(/^Other/);
@@ -540,7 +547,7 @@ describe('the rows\' copy: Recommended, label over description, Other (D-6325)',
   });
 
   it('the Chat row reads Talk it over in the chat instead, and answers by its printed index', () => {
-    const option = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+    const option = answers.answerDialog.mockReset().mockReturnValue(new Promise(() => {}));
     renderSheet(1);
     const chat = rowOf(/^Talk it over in the chat instead/);
     expect(chat.querySelector('.opt-idx')?.textContent).toBe('5');
@@ -568,7 +575,7 @@ describe('the rows\' copy: Recommended, label over description, Other (D-6325)',
 
   it('a refused send keeps the field open with the text, and says why', async () => {
     const { ApiError } = await import('../src/lib/api');
-    vi.spyOn(api, 'answerDialogText').mockRejectedValue(new ApiError(409, { ok: false, error: 'not-free-text' }));
+    answers.answerDialogText.mockReset().mockRejectedValue(new ApiError(409, { ok: false, error: 'not-free-text' }));
     renderSheet(1);
     fireEvent.click(rowOf(/^Other/));
     fireEvent.change(screen.getByRole('textbox'), { target: { value: 'Memcached' } });
@@ -597,7 +604,7 @@ describe('the rows\' copy: Recommended, label over description, Other (D-6325)',
         }] },
       });
     });
-    render(<DialogSheet id={ID} store={store} onOpenTerminal={vi.fn()} />);
+    render(<DialogSheet answers={answers} id={ID} store={store} onOpenTerminal={vi.fn()} />);
     expect(screen.getAllByRole('checkbox')).toHaveLength(3);
     expect(screen.queryByRole('button', { name: /^Other/ })).toBeNull();
     expect(screen.getByText('To add your own answer, use the terminal')).toBeInTheDocument();
@@ -693,7 +700,7 @@ describe('the ask holds through a reconnect, and an ask that ends closes with it
   const panel = (): Element | null => document.querySelector('[role="dialog"]');
   const status = (): HTMLElement | null => screen.queryByRole('status');
   const mount = (store: SessionStore) =>
-    render(<><DialogSheet id={ID} store={store} onOpenTerminal={vi.fn()} /><ToastHost /></>);
+    render(<><DialogSheet answers={answers} id={ID} store={store} onOpenTerminal={vi.fn()} /><ToastHost /></>);
 
   // Every kind of surface: a question with Other open, a plan approval's menu, a permission prompt, the review, an
   // ask this screen cannot read and an unparsed pane. The gap ends with the new connection's first deciding frame.
