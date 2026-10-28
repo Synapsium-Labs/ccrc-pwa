@@ -3,10 +3,11 @@
 //      Five copies had disagreed on what a count is, and 2^53 + 1 passed the loosest.
 //  (2) No `pwa/src/fleet/` file subscribes to `visibilitychange`: a fleet view re-polls through `lib/usePoll.ts`, the
 //      one file that holds that subscription for the fleet views.
+//  (3) ARCH-49: no `status === 'dead'` outside `pwa/src/fleet/presence.ts`, and no `coordPresence` (the block at the end).
 import { describe, expect, it } from 'vitest';
 import { parseFile, parseSource, type ParsedFile } from '../scan/parse.js';
 import { REPO, walkSrc } from './walkSrc.js';
-import { accountsReaders, answerPaths, dialogSheetStates, requestPolls, transcriptCopyRules } from '../census-w7/pwa.js';
+import { DEAD_CHECK_OWNER, accountsReaders, answerPaths, coordPresenceSites, dialogSheetStates, inlineDeadChecks, inlineDeadChecksIn, requestPolls, transcriptCopyRules } from '../census-w7/pwa.js';
 import path from 'node:path';
 import { fixture, singleReaders, singleReadersIn } from '../census-w7/pwa.js';
 
@@ -116,5 +117,25 @@ describe('the PWA reads the feed, the closed runs and the projects in one place 
       ['pwa/src/screens/useColdRuns.ts', 'loadColdRuns', 'runs:call'],
       ['pwa/src/stores/fleet.ts', 'createFleetStore', 'feed:call'],
     ]);
+  });
+});
+
+// ARCH-49 (#784; W7 Task C7c, D-7181): whether a session is there is read in ONE place, `pwa/src/fleet/presence.ts`
+// (`presenceOf`, `coordinatorPresence` and the pane predicate `paneGone`, OA-C15 (a), D-7265). The ratchet counts the
+// census-w7 queries: a `status` compared with `'dead'` outside that file (16 on W7's base), and `coordPresence`, the
+// client-side coordinator ladder C7c deleted (1 definition and 3 calls on the base). May only shrink.
+describe('the PWA reads a session\'s presence through fleet/presence.ts (ARCH-49, #784)', () => {
+  it('CONTROL: an inline dead check counts outside the owner and not inside it', () => {
+    const text = "export const gone = (s: S): boolean => s.status === 'dead';";
+    expect(inlineDeadChecksIn(parseSource(text, 'pwa/src/fleet/other.ts'), 'pwa/src/fleet/other.ts')).toHaveLength(1);
+    expect(inlineDeadChecksIn(parseSource(text, DEAD_CHECK_OWNER), DEAD_CHECK_OWNER)).toEqual([]);
+  });
+
+  it('no status === \'dead\' outside fleet/presence.ts but AccountsScreen.tsx\'s one, which moves after C7b (#1774)', () => {
+    expect(inlineDeadChecks().map((s) => s.file)).toEqual(['pwa/src/screens/AccountsScreen.tsx']);
+  });
+
+  it('coordPresence is gone: no definition and no call in pwa/src', () => {
+    expect(coordPresenceSites()).toEqual([]);
   });
 });
