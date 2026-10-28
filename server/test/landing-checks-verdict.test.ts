@@ -379,6 +379,9 @@ describe('landingLineAct', () => {
     expect(landingLineAct(ep, line([], { isDraft: true, head: HEAD2 }))).toEqual({ act: 'left', phase: 'draft' });
     expect(landingLineAct(ep, line([], { state: 'MERGED' }))).toEqual({ act: 'left', phase: 'merged' });
   });
+  it('a CLOSED line that does not say it landed in a train is left closed', () => {
+    expect(landingLineAct(ep, line([], { state: 'CLOSED', ...({ landedInTrain: false } as object) }))).toEqual({ act: 'left', phase: 'closed' });
+  });
   it('bound false is left unbound; bound to another number is left unbound', () => {
     expect(landingLineAct(ep, line([], { bound: false }))).toEqual({ act: 'left', phase: 'unbound' });
     expect(landingLineAct(ep, line([], { number: 43 }))).toEqual({ act: 'left', phase: 'unbound' });

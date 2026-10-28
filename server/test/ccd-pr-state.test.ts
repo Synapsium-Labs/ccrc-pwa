@@ -1589,6 +1589,14 @@ describe('ccd and prstate.ts agree about phase, always', () => {
     ['open',            { state: 'OPEN', mergedAt: null, mergeCommit: null }, 'open', null],
     ['draft',           { state: 'OPEN', mergedAt: null, mergeCommit: null, isDraft: true }, 'draft', null],
     ['closed',          { state: 'CLOSED', mergedAt: null, mergeCommit: null }, 'closed', null],
+    // LABELS. A closed PR is `closed` whatever labels it carries, except the
+    // one label the deployment names as "landed in a merge train" (default
+    // `landed-in-train`). A merged PR is `merged` with or without it.
+    ['closed, another label', { state: 'CLOSED', mergedAt: null, mergeCommit: null,
+      closedAt: '2026-07-21T09:00:00Z', labels: [{ name: 'wontfix' }] }, 'closed', null],
+    ['closed, landed in a train', { state: 'CLOSED', mergedAt: null, mergeCommit: null,
+      closedAt: '2026-07-21T09:00:00Z', labels: [{ name: 'landed-in-train' }] }, 'closed', null],
+    ['merged, carrying the label', { labels: [{ name: 'landed-in-train' }] }, 'merged', null],
   ];
 
   it.each(matrix)('%s', async (_name, over, expected, expectedReason) => {

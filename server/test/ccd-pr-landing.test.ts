@@ -408,6 +408,12 @@ describe('the required contexts', () => {
   it('a draft carries isDraft: true', () => {
     expect(one([], { isDraft: true })).toMatchObject({ bound: true, state: 'OPEN', isDraft: true });
   });
+
+  it.each([
+    ['CLOSED', 'wontfix'], ['CLOSED', 'landed-in-train'], ['MERGED', 'landed-in-train'],
+  ])("GitHub's state word passes through raw: %s carrying %s", (state, label) => {
+    expect(one([], { state, labels: { nodes: [{ name: label }] } })).toMatchObject({ bound: true, state });
+  });
 });
 
 describe('the rules cache', () => {
