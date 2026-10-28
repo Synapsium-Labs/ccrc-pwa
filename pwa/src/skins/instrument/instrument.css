@@ -358,13 +358,16 @@
      word after the name on one row and after the context on another, so this row is a block and the state word floats
      to the end of the first line with room for it: the name's line when the two fit side by side (the name is an
      inline box at its own width), else the context's line. The context is as wide as its text (`max-content`, capped
-     at the line), and a float leaves a box that would not fit beside it to start below it: so the state word ends the
-     context line only when the whole context fits there, and otherwise takes a line of its own, the context below it
-     at its whole width. The state never narrows the context, so a programme's wave tail, a child marker and a branch
+     at the line), and it is `.sess-meta`, a flex container (fleet.css), so a formatting context of its own: a float
+     leaves such a box, when it would not fit beside it, to start below it (an ordinary block would run under the float
+     and only shorten its lines, CSS 2.1 9.5; instrument-list pins that `display`). So the state word ends the context
+     line only when the whole context fits there, and otherwise takes a line of its own, the context below it at its
+     whole width. The state never narrows the context, so a programme's wave tail, a child marker and a branch
      are never cut by it, and no row is taller than with the state word on its own line. The state stays first in the
      document, so a screen reader still hears name, state, context; only its place on the screen moves. The 2px gap
      the flex row put between the lines is the float's top margin and the context's top padding, so the state word's
-     text stays level with the context's when they share a line. */
+     text stays level with the context's when they share a line. Beside the name it sits 1.0 px higher than main's
+     baseline alignment had it (the float's top alignment and margin; measured in review 1130 and accepted). */
   .ins-row .sess-line:has(.sess-meta--context) .sess-body {
     display: block;
   }

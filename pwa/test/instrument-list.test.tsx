@@ -53,6 +53,7 @@ import { act, cleanup, fireEvent, render, screen, within } from '@testing-librar
 import { INSTRUMENT, REFINED } from '@ccrc/ui';
 import type { FleetSession, RunSummary, SessionBucket } from '../../shared/api';
 import { fleetSession } from './fleetFixture';
+import { effectiveValue, stripComments } from './cssRule';
 
 const { App } = await import('../src/app');
 const { navigate, useLocation } = await import('../src/lib/router');
@@ -66,6 +67,7 @@ const { GROUP_MODE_KEY } = await import('../src/skins/instrument/FleetTable');
 const SKIN_DIR = path.join(import.meta.dirname, '..', 'src', 'skins', 'instrument');
 const strip = (s: string): string => s.replace(/\/\*[\s\S]*?\*\//g, '');
 const CSS = strip(readFileSync(path.join(SKIN_DIR, 'instrument.css'), 'utf8'));
+const FLEET_CSS = stripComments(readFileSync(path.join(SKIN_DIR, '..', '..', 'fleet', 'fleet.css'), 'utf8'));
 const TABLE_SRC = readFileSync(path.join(SKIN_DIR, 'FleetTable.tsx'), 'utf8');
 
 const LABELS = ['Needs you', 'Done', 'Working', 'Idle', 'Cleanup', 'Archived', 'Exited'];
@@ -649,9 +651,11 @@ describe('dense rows at the desk (T2e, D-6335)', () => {
     // The operator's ruling (R121, Q2) and D-7252: the state word ends the context line, so a long name does not push it
     // onto a line of its own, but never by narrowing the context. The row is a block; the name is an inline box at its
     // own width, the state word floats to the end of the first line with room for it, and the context is as wide as its
-    // text, so a float leaves it to start below the state word when it would not fit whole beside it. A flex basis or a
-    // `min-width: 0` on the context would let the state squeeze it again. A row with no context keeps the flex row, so
-    // every rule names a row that HAS a context.
+    // text, so a float leaves it to start below the state word when it would not fit whole beside it. That needs the
+    // context to be a formatting context of its own: it is `.sess-meta`, a flex container in fleet.css, pinned below (an
+    // ordinary block would run under the float). The row's children sit in a block, so no flex basis, `order` or
+    // `min-width` on them takes part. A row with no context keeps the flex row, so every rule names a row that HAS a
+    // context.
     const body = '.ins-row .sess-line:has(.sess-meta--context) .sess-body';
     const open = '.ins-row .sess-line:has(.sess-meta--context) .sess-body > .sess-open';
     const state = '.ins-row .sess-line:has(.sess-meta--context) .sess-body > .sess-meta:not(.sess-meta--context)';
@@ -662,8 +666,8 @@ describe('dense rows at the desk (T2e, D-6335)', () => {
     expect(declsOf(state, DENSE)).toMatch(/float:\s*right/);
     expect(declsOf(context, DENSE)).toMatch(/width:\s*max-content/);
     expect(declsOf(context, DENSE)).toMatch(/max-width:\s*100%/);
-    expect(declsOf(context, DENSE)).not.toMatch(/flex|min-width/);
-    expect(declsOf(state, DENSE)).not.toMatch(/order/);
+    // The context is a formatting context of its own (review 1130 E): `.sess-meta`'s display is flex.
+    expect(effectiveValue(FLEET_CSS, '.sess-meta', 'display'), "fleet.css's .sess-meta").toBe('flex');
     // Only at the desk under a fine pointer: a touch screen or a phone keeps the shared sheet's rows.
     for (const sel of [body, open, state, context]) {
       expect(declsOf(sel), sel).toBe('');
