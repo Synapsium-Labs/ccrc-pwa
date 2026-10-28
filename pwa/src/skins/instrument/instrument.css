@@ -319,20 +319,20 @@
   overflow-wrap: anywhere;
 }
 
-/* W2 desk polish T2e (D-6335): the two-line dense row. Under a fine pointer at a desk a status row is the name, then
-   its context with the state word at that line's end (T3b, R21's F2): two lines and at most 42px when the name fits on
-   one, and a long name's second line the only line it adds, so a long needs-you name never pushes the state word onto
-   a line of its own. No fact is dropped (D-5545), and the density is the sheet's own `--row-h` (32 under a fine
-   pointer) instead of `--tap-min`. A row with no context (a main checkout) keeps the state word beside its name. Under a
+/* W2 desk polish T2e (D-6335): the two-line dense row. Under a fine pointer at a desk a status row is the name with its
+   state word at the end of the line, then its context: two lines and at most 42px when the name and the state fit side
+   by side. When they do not, the state word ends the context line instead, as long as the context fits there whole
+   (T3b, R21's F2 and the operator's R121, D-7252), so a long needs-you name does not push it onto a line of its own;
+   when neither fits, the state word takes a line of its own and the context keeps its whole width. No fact is dropped
+   (D-5545), and the density is the sheet's own `--row-h` (32 under a fine pointer) instead of `--tap-min`. Under a
    coarse pointer, or below 900, none of this applies and every row and control keeps the tap floor. CSS only:
-   `SessionLine` keeps its three children, and the wrapping flex row below places the second (the state word). */
+   `SessionLine` keeps its three children (the name, the state word, the context) in that order. */
 @media (min-width: 900px) and (pointer: fine) {
   /* A wrapping flex row (fix round 1, ruling on F2): the name and the state word share the first line when they fit
-     side by side, the state at its own width and pushed to the line's end; the context takes a line of its own. A flex
-     line breaks on the items' max-content sizes, so the state drops to its own line ONLY when the name and it do not
-     fit together, and the name then has the whole line: a long needs-you row is three lines (name, state, context),
-     never four, and a short one stays two. A row without a context (a main checkout) is one line, on the floor, when its
-     name and state fit side by side, and two (the name, then the state) when they do not. */
+     side by side, the state at its own width and pushed to the line's end. A flex line breaks on the items' max-content
+     sizes, so the state drops to a line of its own ONLY when the name and it do not fit together. This is the whole
+     layout of a row without a context (a main checkout): one line, on the floor, when its name and state fit side by
+     side, and two (the name, then the state) when they do not. A row with a context lays out by the T3b rules below. */
   .ins-row .sess-body {
     display: flex;
     flex-flow: row wrap;
@@ -353,19 +353,34 @@
   .ins-row .sess-meta--context {
     flex: 1 0 100%;
   }
-  /* T3b (R21's F2, the operator's ruling R121): a row with a context fact gives its name the whole first line, or two,
-     and puts the state word on the context line instead, at its end: the context takes what the state leaves
-     (`flex-basis: 0`, so the two always share one flex line) and wraps inside it. The state stays first in the
-     document, so a screen reader still hears name, state, context; only its place on the screen moves. */
+  /* T3b (R21's F2, the operator's ruling R121, D-7252): a row with a context fact. One flex line cannot put the state
+     word after the name on one row and after the context on another, so this row is a block and the state word floats
+     to the end of the first line with room for it: the name's line when the two fit side by side (the name is an
+     inline box at its own width), else the context's line. The context is as wide as its text (`max-content`, capped
+     at the line), and a float leaves a box that would not fit beside it to start below it: so the state word ends the
+     context line only when the whole context fits there, and otherwise takes a line of its own, the context below it
+     at its whole width. The state never narrows the context, so a programme's wave tail, a child marker and a branch
+     are never cut by it, and no row is taller than with the state word on its own line. The state stays first in the
+     document, so a screen reader still hears name, state, context; only its place on the screen moves. The 2px gap
+     the flex row put between the lines is the float's top margin and the context's top padding, so the state word's
+     text stays level with the context's when they share a line. */
+  .ins-row .sess-line:has(.sess-meta--context) .sess-body {
+    display: block;
+  }
   .ins-row .sess-line:has(.sess-meta--context) .sess-body > .sess-open {
-    flex-basis: 100%;
+    display: inline-flex;
+    max-width: 100%;
+    vertical-align: top;
   }
   .ins-row .sess-line:has(.sess-meta--context) .sess-body > .sess-meta:not(.sess-meta--context) {
-    order: 1;
+    float: right;
+    margin-block-start: calc(var(--sp-1) / 2);
+    margin-inline-start: var(--sp-2);
   }
   .ins-row .sess-line:has(.sess-meta--context) .sess-meta--context {
-    flex: 1 1 0;
-    min-width: 0;
+    width: max-content;
+    max-width: 100%;
+    padding-block-start: calc(var(--sp-1) / 2);
   }
   /* The shared sheet centres the lamp and the actions button on a three-line stack with a margin worked out from the
      tap floor; here the lamp sits on the name's line (it is as tall as that line) and the button on the row's middle.
