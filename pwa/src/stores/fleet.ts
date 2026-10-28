@@ -62,6 +62,10 @@ export interface FleetState {
   /** Reads `GET /api/accounts` now, outside the 20 s cadence (after an account act), and resolves once its answer has
    *  landed in `roster`, `usage`, `lanes`, `accountsConnect` and `projected`. Silent on failure, as the poll is. */
   refreshAccounts(): Promise<void>;
+  /** Reads `GET /api/feed?limit=100` now, through the store's one feed reader (C7n, D-7209), and merges the answer
+   *  through `mergeFeed` with its dropped count. Resolves `'ok'` once the answer has landed in `feed`, `'error'` when
+   *  the read failed (and nothing is written). The Inbox calls it on every open and words its empty state from it. */
+  refreshFeed(): Promise<'ok' | 'error'>;
   /** The dormant protocol handshake (shared/api.ts's FLEET_PROTO_MIN): set on
    *  a `hello` this build cannot satisfy, CLEARED on a later compatible one —
    *  a reconnect to a fixed server must unblock, so this is never a one-way
@@ -427,6 +431,20 @@ export function createFleetStore(deps: FleetStoreDeps = {}): FleetStore {
       if (Object.keys(next).length > 0) set(next);
     }).catch(() => {});
 
+    // THE ONE reader of `GET /api/feed` in the app (C7n, D-7192, D-7209): the connect-time durable read below and
+    // `refreshFeed()` (the Inbox, on every open) both call it. Revived rather than trusted: a kind from a newer server
+    // reaching an old client is dropped and counted, never typed as one of the kinds it is not.
+    const fetchFeed = deps.fetchFeed ?? ((n: number) => api.feed(n));
+    // `onAnswer` runs first in the answer's own turn, before the merge, so the connect-time read marks itself done in
+    // the same tick its answer lands, as it always has. `.catch`, not a second `.then` argument: a throw while handling
+    // the answer (a `null` body) resolves 'error' too, as both reads did before they were one.
+    const readFeed = (onAnswer?: () => void): Promise<'ok' | 'error'> => fetchFeed(100).then((r) => {
+      onAnswer?.();
+      const { events, dropped } = reviveNotifyEvents(r.events);
+      get().mergeFeed(events, dropped);
+      return 'ok' as const;
+    }).catch(() => 'error' as const);
+
     return {
       // Hydrate from the last persisted snapshot (lib/offline.ts) so a cold
       // start renders the fleet instantly. conn stays 'connecting' — the
@@ -456,6 +474,7 @@ export function createFleetStore(deps: FleetStoreDeps = {}): FleetStore {
       usage: null,
       projected: undefined,
       refreshAccounts: readAccounts,
+      refreshFeed: () => readFeed(),
 
       connect() {
         if (socket) return;
@@ -532,14 +551,8 @@ export function createFleetStore(deps: FleetStoreDeps = {}): FleetStore {
         let durableFeedDone = false;
         const askDurableFeed = (): void => {
           if (durableFeedDone) return;
-          const fetchFeed = deps.fetchFeed ?? ((n: number) => api.feed(n));
-          void fetchFeed(100)
-            .then((r) => {
-              durableFeedDone = true;
-              const { events, dropped } = reviveNotifyEvents(r.events);
-              get().mergeFeed(events, dropped);
-            })
-            .catch(() => { /* offline, or an older server with no such route — retry next reconnect */ });
+          // `'error'` is offline, or an older server with no such route: retry next reconnect.
+          void readFeed(() => { durableFeedDone = true; });
         };
 
         socket = new ReconnectingSocket({

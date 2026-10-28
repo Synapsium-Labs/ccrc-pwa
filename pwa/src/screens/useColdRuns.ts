@@ -1,5 +1,6 @@
 // The run board's ARCHIVE read: `GET /api/runs?closed=1`, its race guard, and
-// the four independent transitions that re-fire it.
+// the four independent transitions that re-fire it (unless the caller reads
+// once per mount: `rereadOnTransitions: false`).
 //
 // It is the ONLY carrier of a finished run — the live `/ws/runs` frame is
 // active-only by construction, so it can never itself report a row that has
@@ -17,6 +18,21 @@ import type { RunSummary } from '../../../shared/api';
 import { childReclaimDoneRefreshDue, childReclaimRefreshDue, childRunsSeen } from '../fleet/runWords';
 import { childReclaimDoneAtOf } from '../fleet/childReclaimWords';
 import type { FleetStore } from '../stores/fleet';
+import { api } from '../lib/api';
+
+/** THE ONE archive reader (C7n, D-7192): `GET /api/runs?closed=1`, the run board's default and the Inbox's. Hoisted to
+ *  module scope, not an inline default-parameter arrow: a default parameter expression is re-evaluated on every
+ *  render, so an inline `() => api.runs(true)` would be a fresh identity every time `setCold` fires, and a caller that
+ *  keys its effect on that identity tears the effect down and fires it again — forever, on the one path (the shipping
+ *  default) no test exercises directly.
+ *
+ *  `true` (i.e. `?closed=1`), not the bare default: `includeClosed` is the only thing that drops `CoordStore.runs`'s
+ *  `WHERE` clause, so it is the only call that can ever return a FINISHED run — the live `{type:'runs'}` frame is
+ *  active-only by construction (`watch.ts`'s emitter calls `coord.runs()` with no options), and `api.runs()`'s own
+ *  bare default matches it (reconciliation item 5: "a deliberate cold-start bandwidth choice … pass `?closed=1` for
+ *  the archive view"). Without this, the board's own "Finished" group could never receive real data on a cold deep
+ *  link, and the Inbox could not title a record whose run finished yesterday. */
+export const loadColdRuns = (): Promise<{ runs: RunSummary[] }> => api.runs(true);
 
 export interface ColdRuns {
   /** The archive rows, or `null` for "no answer yet". Read `state` to tell
@@ -37,9 +53,17 @@ export interface ColdRuns {
   readonly reload: () => Promise<void>;
 }
 
+export interface ColdRunsOptions {
+  /** Re-read on the three transitions below (a run leaving the live slice, a child leaving the fleet frame, a new
+   *  reclaim end). Default `true`: the run board's schedule. `false` reads once per mount and never again, the
+   *  Inbox's schedule (C7n, D-7209): its programme headers need the titles, not a finished row's reclaim chip. */
+  readonly rereadOnTransitions?: boolean;
+}
+
 export function useColdRuns(
   store: FleetStore,
   loadRuns: () => Promise<{ runs: RunSummary[] }>,
+  { rereadOnTransitions = true }: ColdRunsOptions = {},
 ): ColdRuns {
   const live = store((s) => s.runs);
   const runsFrameSeen = store((s) => s.runsFrameSeen);
@@ -134,7 +158,7 @@ export function useColdRuns(
     if (prev !== null) {
       let vanished = false;
       for (const id of prev) if (!ids.has(id)) { vanished = true; break; }
-      if (vanished) void loadCold();
+      if (vanished && rereadOnTransitions) void loadCold();
     }
     prevLiveIdsRef.current = ids;
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -155,7 +179,7 @@ export function useColdRuns(
     const ids = new Set(sessions.map((s) => s.id));
     const prev = prevSessionIdsRef.current;
     prevSessionIdsRef.current = ids;
-    if (prev !== null && childReclaimRefreshDue(cold ?? [], prev, ids)) void loadCold();
+    if (rereadOnTransitions && prev !== null && childReclaimRefreshDue(cold ?? [], prev, ids)) void loadCold();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessions, fleetFrameSeen]);
 
@@ -181,7 +205,7 @@ export function useColdRuns(
     const after = childReclaimDoneAtOf(coordFrame);
     const before = prevDoneAtRef.current;
     prevDoneAtRef.current = after;
-    if (before !== undefined && childReclaimDoneRefreshDue(cold ?? [], childRunsRef.current, before, after)) {
+    if (rereadOnTransitions && before !== undefined && childReclaimDoneRefreshDue(cold ?? [], childRunsRef.current, before, after)) {
       void loadCold();
     }
     // The coord frame's dependencies only, as wave 5's effect takes the fleet

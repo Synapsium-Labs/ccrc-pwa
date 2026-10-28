@@ -8,6 +8,7 @@ import { parseFile, parseSource, type ParsedFile } from '../scan/parse.js';
 import { REPO, walkSrc } from './walkSrc.js';
 import { accountsReaders, answerPaths, dialogSheetStates, requestPolls, transcriptCopyRules } from '../census-w7/pwa.js';
 import path from 'node:path';
+import { fixture, singleReaders, singleReadersIn } from '../census-w7/pwa.js';
 
 const GUARDS = new Set(['isRecord', 'isObject', 'isNum', 'isCount', 'isOneOf']);
 const WIRE = 'pwa/src/lib/wire.ts';
@@ -93,5 +94,27 @@ describe('the transcript copy and usability rules have one owner (C7q, D-7212)',
     const sites = transcriptCopyRules();
     expect(sites.filter((s) => s.kind === 'copy').map((s) => s.file)).toEqual(['shared/ask-menu.ts']);
     expect(sites.filter((s) => s.kind === 'usable').map((s) => s.file)).toEqual(['shared/ask-menu.ts']);
+  });
+});
+
+// C7n (D-7192, D-7209; ARCH-75 #810): the fleet reads have one reader each. `GET /api/feed` is the fleet store's
+// (`refreshFeed()`, which the Inbox calls on every open, and the connect-time read share it), `GET /api/runs?closed=1`
+// is `useColdRuns.ts#loadColdRuns` (the run board's default and the Inbox's), and `GET /api/projects` is
+// `useProjectRows.ts#loadProjects` (the fleet screen's plane, New session and Start programme's default). Calls and
+// member references count alike (`census-w7/pwa.ts#singleReaders`), so a default parameter `= api.projects` is a
+// second reader. The counts may only stay at 1.
+describe('the PWA reads the feed, the closed runs and the projects in one place each (C7n, D-7192)', () => {
+  it('CONTROL: a default parameter that hands a member on is a reader, as a call is', () => {
+    const src = 'export function S({ loadProjects = api.projects }) {}\nexport const f = () => api.feed(100);\n';
+    expect(singleReadersIn(fixture(src), 'pwa/src/fixture.tsx').map((s) => s.kind)).toEqual(['projects:reference', 'feed:call']);
+  });
+
+  it('singleReaders(): feed 2 -> 1, cold runs 2 -> 1, project loaders 3 -> 1 (calls and member references)', () => {
+    const sites = singleReaders();
+    expect(sites.map((s) => [s.file, s.symbol, s.kind])).toEqual([
+      ['pwa/src/fleet/useProjectRows.ts', 'loadProjects', 'projects:call'],
+      ['pwa/src/screens/useColdRuns.ts', 'loadColdRuns', 'runs:call'],
+      ['pwa/src/stores/fleet.ts', 'createFleetStore', 'feed:call'],
+    ]);
   });
 });

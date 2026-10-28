@@ -1,4 +1,4 @@
-// THE SESSION FACTS: what Claude Code build a session runs, and what it has
+// THE BUILD AND THE SPEND: what Claude Code build a session runs, and what it has
 // spent (D-5104; the audit's F6, data half).
 //
 // WHAT WAS UNREAD. Every `FleetSession` carries `version` (Claude Code's own,

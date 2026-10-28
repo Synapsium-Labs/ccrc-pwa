@@ -340,10 +340,10 @@ describe('W7 PWA census: REAL rows (reporting, not ratcheting; spec §5.1 rule 3
     expect(countBy(sites, (s) => s.kind)).toEqual({ visibilitychange: 10, online: 2 });
   });
 
-  it('singleReaders(): api.feed 2, api.runs 2, api.projects 3 (calls and member references)', () => {
+  it('singleReaders(): api.feed 1, api.runs 1, api.projects 1 (calls and member references)', () => {
     const sites = singleReaders();
-    held('singleReaders', sites, 7);
-    expect(countBy(sites, (s) => s.kind.split(':')[0]!)).toEqual({ feed: 2, runs: 2, projects: 3 });
+    held('singleReaders', sites, 3);
+    expect(countBy(sites, (s) => s.kind.split(':')[0]!)).toEqual({ feed: 1, runs: 1, projects: 1 });
   });
 
   // The K15 exit, met on main and pinned here (plan item 16).
