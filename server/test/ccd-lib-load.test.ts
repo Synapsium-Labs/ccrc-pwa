@@ -404,3 +404,30 @@ describe('loaderGlobals: every write and read of the loader\'s globals, over ccd
     expect(published(body)).toEqual({ out: 'installed|_plat_sha256\n', err: '' });
   });
 });
+
+describe('the layout is read one way, and the redactor\'s directory comes from ccd\'s own location (D-7125; design note §2)', () => {
+  it('REAL: every read of __CCD_LAYOUT outside _ccd_lib_load is exactly `[[ $__CCD_LAYOUT == source ]]`, in _docs_redact_cli or _docs_front', () => {
+    const reads = loaderGlobals().reads.filter((s) => s.global === '__CCD_LAYOUT' && s.fn !== '_ccd_lib_load');
+    expect(reads.map((s) => s.fn).sort()).toEqual(['_docs_front', '_docs_redact_cli']);
+    for (const s of reads) {
+      expect(s.text.split('$__CCD_LAYOUT').length - 1, site(s)).toBe(1);
+      expect(s.text, site(s)).toContain('[[ $__CCD_LAYOUT == source ]]');
+      expect(/\$\{__CCD_LAYOUT/.test(s.text), site(s)).toBe(false);
+    }
+  });
+
+  it('REAL: _docs_redact_cli derives dir as _ccd_lib_load does, made absolute, and from nothing else', () => {
+    const src = fs.readFileSync(CCD, 'utf8');
+    const body = src.slice(src.indexOf('\n_docs_redact_cli() {'), src.indexOf('\n}\n', src.indexOf('\n_docs_redact_cli() {')));
+    const loader = src.slice(src.indexOf('\n_ccd_lib_load() {'), src.indexOf('\n}\n', src.indexOf('\n_ccd_lib_load() {')));
+    const derive = '  [[ "$self" == */* ]] && dir="${self%/*}"';
+    expect(body.split('\n')).toContain(derive);
+    expect(loader.split('\n')).toContain(derive);
+    const writes = body.split('\n').filter((l) => /(?<![A-Za-z0-9_$])dir=/.test(l));
+    expect(writes).toEqual(['  local self="${BASH_SOURCE[0]}" dir=. cli pins=-', derive, '  [[ "$dir" == /* ]] || dir="$PWD/$dir"']);
+    expect(body).not.toMatch(/\$\{?(?:CCD_[A-Z_]*|HOME)\b/);
+    // The one positional read picks which word to print, on the last line, after dir is fixed.
+    const positional = body.split('\n').filter((l) => /\$\{?[1-9]/.test(l));
+    expect(positional).toEqual(['  [[ "${1-}" == pins ]] && printf \'%s\\n\' "$pins" || printf \'%s\\n\' "$cli"']);
+  });
+});

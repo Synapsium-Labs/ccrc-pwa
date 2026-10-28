@@ -795,3 +795,126 @@ describe('_docs_redact_cli hands python an absolute CLI path, whatever cwd ccd r
     expect(pins).toBe('-');
   });
 });
+
+// ---- C5h commit 9: the docs front's node and redactor probe, with its digest check (O2 (b), spec §5.13; OA-C11 (a);
+// D-7125; design note §2) ----
+// Before any work, the front answers `helper-unavailable` with `node-missing` (no node on PATH), `redactor-missing` (the CLI
+// or the redact.mjs beside it is not a readable regular file; installed, a link at either path too) or `redactor-mismatch`
+// (installed: a file whose SHA-256, through the hashing command the library loader chose, is not its pin, an empty digest
+// included). The source checkout checks no digest.
+const unavailable = (verb: string, why: string): string =>
+  `{"v":1,"verb":"${verb}","ok":false,"elapsedMs":0,"failure":"helper-unavailable","detail":"${why}"}\n`;
+
+/** Every command on this process's PATH except `missing`, as one link farm: one absent tool, and nothing else lost. */
+function pathWithout(...missing: string[]): string {
+  const farm = path.join(h.home, `no-${missing.join('-')}-bin`);
+  fs.mkdirSync(farm, { recursive: true });
+  const seen = new Set<string>(missing);
+  for (const dir of (process.env['PATH'] ?? '/usr/bin:/bin').split(path.delimiter)) {
+    let names: string[] = [];
+    try { names = fs.readdirSync(dir); } catch { continue; }
+    for (const name of names) {
+      if (seen.has(name)) continue;
+      seen.add(name);
+      fs.symlinkSync(path.join(dir, name), path.join(farm, name));
+    }
+  }
+  return farm;
+}
+
+/** An installed ccd (the shipped pair, its library and its redactor beside the body) under the fixture HOME, run as the
+ *  agent's launcher would run its body. */
+function installed(): { run: (args: readonly string[], env?: NodeJS.ProcessEnv) => DocsRun; cli: string; mjs: string } {
+  const { body } = installDirectEntry(h.home);
+  const run = (args: readonly string[], env: NodeJS.ProcessEnv = {}): DocsRun => {
+    const r = spawnSyncC7('bash', [body, ...args], { cwd: h.home, encoding: 'utf8', timeout: 120_000,
+      env: ghContainedEnv(h.home, { ...process.env, HOME: h.home, ...env }, { systemd: true, tmux: true }) });
+    return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
+  };
+  return { run, cli: path.join(path.dirname(body), 'shared', 'redact-cli.mjs'), mjs: path.join(path.dirname(body), 'shared', 'redact.mjs') };
+}
+const INDEX = ['docs-index', '--all'];
+
+describe('the docs front probes node and the pinned redactor before any work (D-7077; O2 (b), spec §5.13)', () => {
+  it('no node on the PATH ccd runs with answers helper-unavailable / node-missing', () => {
+    const r = runCcdDocs(h, INDEX, { PATH: pathWithout('node') });
+    expect([r.code, r.stdout, r.stderr]).toEqual([0, unavailable('docs-index', 'node-missing'), '']);
+  });
+
+  it('CONTROL: the unedited installed redactor answers the verb', () => {
+    plantFanoutRoot(h);
+    const r = installed().run(INDEX);
+    expect([r.code, normalized(r.stdout), r.stderr]).toEqual([0, FANOUT_INDEX_LINE, '']);
+  });
+
+  it.each(['redact-cli.mjs', 'redact.mjs'] as const)('an installed tree without shared/%s answers redactor-missing', (f) => {
+    const t = installed();
+    fs.rmSync(f === 'redact.mjs' ? t.mjs : t.cli);
+    const r = t.run(INDEX);
+    expect([r.code, r.stdout, r.stderr]).toEqual([0, unavailable('docs-index', 'redactor-missing'), '']);
+  });
+
+  it('an installed redact.mjs with one byte changed answers redactor-mismatch, before any work', () => {
+    const t = installed();
+    editRule(t.mjs);
+    const r = t.run(INDEX);
+    expect([r.code, r.stdout, r.stderr]).toEqual([0, unavailable('docs-index', 'redactor-mismatch'), '']);
+  });
+
+  it('an installed CLI changed (an echo CLI that writes each line back unmasked) answers redactor-mismatch', () => {
+    const t = installed();
+    fs.appendFileSync(t.cli, "process.stdin.on('data', (c) => process.stdout.write(c));\n");
+    const r = t.run(INDEX);
+    expect([r.code, r.stdout, r.stderr]).toEqual([0, unavailable('docs-index', 'redactor-mismatch'), '']);
+  });
+
+  it('an installed CLI replaced by a link to an identical CLI beside an edited redact.mjs answers redactor-missing, not the verb', () => {
+    plantFanoutRoot(h);
+    const t = installed();
+    const other = scratchPair('linked-elsewhere');
+    editRule(other.mjs);
+    fs.rmSync(t.cli);
+    fs.symlinkSync(other.cli, t.cli);
+    const r = t.run(INDEX);
+    expect([r.code, r.stdout, r.stderr]).toEqual([0, unavailable('docs-index', 'redactor-missing'), '']);
+  });
+
+  describe('a PATH with no sha256sum and no shasum: the front hashes with the tool the loader chose', () => {
+    const stripped = (): NodeJS.ProcessEnv => ({ PATH: pathWithout('sha256sum', 'shasum') });
+    it('the unedited tree answers the verb, never redactor-mismatch', () => {
+      plantFanoutRoot(h);
+      const r = installed().run(INDEX, stripped());
+      expect([r.code, normalized(r.stdout), r.stderr]).toEqual([0, FANOUT_INDEX_LINE, '']);
+    });
+    it.each(['redact.mjs', 'redact-cli.mjs'] as const)('one byte of %s changed answers redactor-mismatch (the fallback tool really hashed)', (f) => {
+      const t = installed();
+      if (f === 'redact.mjs') editRule(t.mjs); else fs.appendFileSync(t.cli, '// edited\n');
+      const r = t.run(INDEX, stripped());
+      expect([r.code, r.stdout, r.stderr]).toEqual([0, unavailable('docs-index', 'redactor-mismatch'), '']);
+    });
+  });
+
+  it('a hashing tool that answers the loader and then prints an empty digest answers redactor-mismatch', () => {
+    const count = path.join(h.home, 'hash-calls');
+    for (const tool of ['sha256sum', 'shasum']) {
+      const real = execFileSync('sh', ['-c', `command -v ${tool} || true`], { encoding: 'utf8' }).trim();
+      fs.writeFileSync(path.join(harnessBin(h.home), tool), [
+        '#!/bin/sh',
+        `echo x >> ${shWord(count)}`,
+        `[ "$(wc -l < ${shWord(count)})" -le 1 ] && ${real ? `exec ${shWord(real)} "$@"` : 'exit 127'}`,
+        'cat >/dev/null; exit 0',
+        '',
+      ].join('\n'), { mode: 0o755 });
+    }
+    const r = installed().run(INDEX);
+    expect(fs.readFileSync(count, 'utf8').split('\n').filter(Boolean).length, 'the loader and the front both hashed').toBeGreaterThanOrEqual(2);
+    expect([r.code, r.stdout, r.stderr]).toEqual([0, unavailable('docs-index', 'redactor-mismatch'), '']);
+  });
+
+  it('the source checkout resolves ../shared/redact-cli.mjs and checks no digest', () => {
+    expect(h.sh('_docs_redact_cli path; _docs_redact_cli pins')).toBe(`${path.dirname(CCD)}/../shared/redact-cli.mjs\n-`);
+    const r = runCcdDocs(h, INDEX);
+    expect([r.code, r.stderr]).toEqual([0, '']);
+    expect(JSON.parse(r.stdout)).toMatchObject({ ok: true });
+  });
+});

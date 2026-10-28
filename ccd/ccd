@@ -40630,18 +40630,38 @@ _docs_redact_cli() {   # path|pins -> the redactor CLI's absolute path, or its p
   [[ "${1-}" == pins ]] && printf '%s\n' "$pins" || printf '%s\n' "$cli"
 }
 
-_docs_front() {   # verb -> 0 when python3 >= 3.8 answers; else prints the one fixed line, returns 1
+_docs_front() {   # verb -> 0 when python3 >= 3.8, node and the pinned redactor answer; else prints the one fixed line, returns 1
   # The python floor's ONE definition (spec §7.2). The probe's own exit 3 means
   # "older than 3.8"; any other non-zero (127 for command-not-found, a broken
   # interpreter, a signal) means python3 cannot run this line, so it cannot run
   # the helper either. The line written on failure needs no quoting, so writing
   # it needs no python: one fixed format, filled with the verb (a literal at each
-  # call site) and one of two detail words.
-  local rc=0
+  # call site) and one detail word.
+  # THE REDACTOR (D-7077, O2 (b), spec §5.13; OA-C11 (a); D-7125): the helper redacts only through node and the CLI
+  # `_docs_redact_cli` names, so no node is `node-missing`, and a CLI or redact.mjs that is not a readable regular file is
+  # `redactor-missing` (installed, a link at either path too: node would load what the link names, never what was hashed).
+  # Installed, each file's SHA-256, through the hashing command the library loader chose, must equal its pin, or the answer
+  # is `redactor-mismatch` (an empty digest included); python checks the same pins again over the bytes it gives node.
+  local rc=0 why='' cli mjs sum i want
   python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 8) else 3)' </dev/null >/dev/null 2>&1 || rc=$?
-  (( rc == 0 )) && return 0
-  local why=python-missing
-  (( rc == 3 )) && why=python-too-old
+  if (( rc != 0 )); then
+    why=python-missing && (( rc == 3 )) && why=python-too-old
+  elif ! command -v node >/dev/null 2>&1; then
+    why=node-missing
+  else
+    cli=$(_docs_redact_cli path) && mjs="${cli%/*}/redact.mjs"
+    want=("$mjs" "$__CCD_REDACT_SHA256" "$cli" "$__CCD_REDACT_CLI_SHA256")
+    if [[ ! -f $cli || ! -r $cli || ! -f $mjs || ! -r $mjs ]]; then
+      why=redactor-missing
+    elif ! [[ $__CCD_LAYOUT == source ]]; then
+      [[ -L $cli || -L $mjs ]] && why=redactor-missing
+      for (( i = 0; i < 4 && ${#why} == 0; i += 2 )); do
+        sum=$("${__CCD_HASH_CMD[@]}" < "${want[i]}" 2>/dev/null) || sum=''
+        [[ -z "${sum%% *}" || "${sum%% *}" != "${want[i+1]}" ]] && why=redactor-mismatch
+      done
+    fi
+  fi
+  [[ -z $why ]] && return 0
   printf '{"v":1,"verb":"%s","ok":false,"elapsedMs":0,"failure":"helper-unavailable","detail":"%s"}\n' "$1" "$why"
   return 1
 }
