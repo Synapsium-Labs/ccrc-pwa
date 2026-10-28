@@ -8,6 +8,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { makePrHarness, type PrHarness } from './ccdPrHelpers.js';
 import { ccdSource } from './ccdWsHelpers.js';
+import { lockDeclineSites } from './census-w5/ccdHelpers.js';
 import { decOf, eventsOf } from './lifecycleHelpers.js';
 import { LC_REFUSAL_WORD, isLcRefusalToken } from '../../shared/api.js';
 import {
@@ -388,7 +389,11 @@ describe.skipIf(!LINUX)('the pause, the lock, and never a lock for a foreign nam
   });
 
   it('the locked body runs CONTAINED: every git call beneath it is hook-free and reads only the repository it names', () => {
-    expect(ccdSource()).toMatch(/\n  _ws_reclaim_contained _ws_collect_locked "\$token" "\$id" /);
+    // D-7297: ws-collect takes the reap lock through the one reap-lock runner (D-7076), so the command its locked body
+    // runs is read off that call by `census-w5/ccdHelpers.ts#lockDeclineSites` — exactly one call, literal act and verb.
+    const calls = lockDeclineSites(ccdSource()).calls
+      .filter((c) => c.fn === 'cmd_ws_collect' && c.act === 'collect' && c.verb === 'ws-collect');
+    expect(calls.map((c) => c.cmd)).toEqual([expect.stringMatching(/^_ws_reclaim_contained _ws_collect_locked "\$token" "\$id" /)]);
   });
 
   it('an id with neither a witness nor a record: refused not-witnessed BEFORE any lock — none is created', () => {

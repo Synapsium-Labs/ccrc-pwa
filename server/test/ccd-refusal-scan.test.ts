@@ -207,8 +207,10 @@ describe('every die in a destructive verb is reached through _lc_refuse or _lc_f
     // `_ws_collect_refused` journals every refusal past the lock decline — the verdict point, and a refusal after a
     // PROVEN restore — through one `_lc_emit`; the lock decline in `cmd_ws_collect` is the second. Comment lines are
     // not code.
+    // The flock decline is ws-collect's one call of the reap-lock runner (D-7076), with its literal act and verb.
     const code = src.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
-    expect([...code.matchAll(/_lc_emit collect refused "\$id" "[^"]*" verb ws-collect /g)]).toHaveLength(2);
+    expect([...code.matchAll(/_lc_emit collect refused "\$id" "[^"]*" verb ws-collect /g)].length
+      + lockRunnerCalls('collect', 'ws-collect')).toBe(2);
   });
 
   it('the collector’s locked functions contain NO die — past the lock, a failure is _ws_reclaim_fail and JSON', () => {
