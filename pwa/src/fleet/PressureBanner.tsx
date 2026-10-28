@@ -1,4 +1,4 @@
-// PressureBanner (#1170): the fleet host's pressure as one line, "Fleet host thrashing · memory stalled 64% · io 8%".
+// PressureBanner (#1170): the fleet host's pressure as one line, "Fleet host thrashing · memory stalled 64%" (only stalled resources are named).
 // It renders the server's `psi` block (health poll, `FleetChrome`'s one) and nothing else: no poll of its own, no
 // figure the server did not send. Renders nothing exactly when `pressureBannerShows` says so.
 //

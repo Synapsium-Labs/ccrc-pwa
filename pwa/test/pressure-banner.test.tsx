@@ -39,16 +39,26 @@ describe('whether the pressure banner shows', () => {
 });
 
 describe('the one line', () => {
-  it('warn names the pressure and the larger full share of each resource, floored', () => {
-    expect(pressureLine(block('warn', 'answering', 12, 3))).toBe('Fleet host under memory or io pressure · memory stalled 12% · io 3%');
+  it('warn names only the resource that reached the warn line, with its larger full share, floored', () => {
+    expect(pressureLine(block('warn', 'answering', 12, 3))).toBe('Fleet host under memory pressure · memory stalled 12%');
+    expect(pressureLine(block('warn', 'answering', 0, 17))).toBe('Fleet host under io pressure · io stalled 17%');
+    expect(pressureLine(block('warn', 'answering', 14, 22))).toBe('Fleet host under memory and io pressure · memory stalled 14% · io stalled 22%');
+  });
+
+  it('a share just under the warn line is not named, and one exactly on it is', () => {
+    expect(pressureLine(block('warn', 'answering', 9, 10))).toBe('Fleet host under io pressure · io stalled 10%');
+  });
+
+  it('when no resource reached the line, it names no resource and keeps both measured figures', () => {
+    expect(pressureLine(block('warn', 'answering', 4, 2))).toBe('Fleet host under pressure · memory stalled 4% · io stalled 2%');
   });
 
   it('critical says thrashing', () => {
-    expect(pressureLine(block('critical'))).toBe('Fleet host thrashing · memory stalled 64% · io 8%');
+    expect(pressureLine(block('critical'))).toBe('Fleet host thrashing · memory stalled 64%');
   });
 
   it('host pressure says the agent is stalled, not offline', () => {
-    expect(pressureLine(block('critical', 'host-pressure'))).toBe('Fleet host thrashing: the agent is stalled by host pressure, not offline · memory stalled 64% · io 8%');
+    expect(pressureLine(block('critical', 'host-pressure'))).toBe('Fleet host thrashing: the agent is stalled by host pressure, not offline · memory stalled 64%');
     expect(pressureLine({ at: null, level: 'unmeasured', link: 'host-pressure', memory: null, io: null }))
       .toBe('Fleet host thrashing: the agent is stalled by host pressure, not offline');
   });
@@ -77,7 +87,7 @@ describe('every width, skin and theme', () => {
       const { container } = render(<PressureBanner health={health(block('critical'))} />);
       const status = screen.getAllByRole('status');
       expect(status, view).toHaveLength(1);
-      expect(status[0]!.textContent, view).toBe('Fleet host thrashing · memory stalled 64% · io 8%');
+      expect(status[0]!.textContent, view).toBe('Fleet host thrashing · memory stalled 64%');
       expect(container.querySelectorAll('button, a, [style]'), view).toHaveLength(0);
       cleanup();
     }
