@@ -44,9 +44,10 @@
 // Rows 1, 4 and 7 also run in browser/instrument-desk.browser.test.ts (its own table).
 //
 // Desk polish S5b (D-6530): the lanes fold.
-// MUTATION TABLE (plan Task S5b Step 3; the whole table RUN at 182d2ac58, the last code commit of fix round 1, and the flyout rows
-// (the R120 `strip-hover-flyout` block, the Escape and flyout-name rows, fix round 2's) RUN again at d51cbc7c1, the last code commit of
-// fix round 2; bounded and hash-checked; the logs are kept outside the repo. Each mutant was applied to the working tree as one
+// MUTATION TABLE (plan Task S5b Step 3; the whole table RUN at 182d2ac58, whose pwa/ tree is fix round 1's last code commit
+// (856076c2e) unchanged, and the flyout rows (the R120 `strip-hover-flyout` block, the Escape and flyout-name rows, fix round 2's)
+// RUN again at dbe5e0506, whose pwa/ tree is fix round 2's last code commit (d51cbc7c1) unchanged; below, "182d2ac58" and
+// "d51cbc7c1" name those two runs; bounded and hash-checked; the logs are kept outside the repo. Each mutant was applied to the working tree as one
 // exact-once replacement and restored from a saved copy with its sha256 checked; the named jsdom suite(s) alone, and
 // browser/lanes-row.browser.test.ts or browser/refined-phone.browser.test.ts too where a row names one; then reverted.
 // At 182d2ac58: 75 mutants run, 75 red, none survived, none invalid. At d51cbc7c1: 33 mutants run, 33 red, none survived, none
