@@ -50,13 +50,14 @@ name: ci
 # happens to be that week. Especially worth fixing before the repo is public:
 # `pull_request` (not `pull_request_target`) already gives a fork's run a
 # read-only token and no secrets, and this keeps that true if the org default
-# is ever loosened. Four jobs ask for more than this, each in its own
+# is ever loosened. Five jobs ask for more than this, each in its own
 # `permissions:` block, and each for exactly `contents: read` plus
 # `actions: read`: `select` (it lists and downloads the trusted main runs'
 # map and durations, and on the daily run lists the workflow runs and jobs
 # of main's head to find a green full-suite), `fast-plan` (the durations it
-# packs a fast pull request's shards by), `macos` (the ceiling of its call
-# of macos.yml, whose direct-run `plan` reads the durations), and `map-build`
+# packs a fast pull request's shards by), `macos` and `macos-probe` (the
+# ceilings of their calls of macos.yml, whose direct-run `plan` reads the
+# durations: GitHub checks a called job's permissions even when it would skip), and `map-build`
 # (its check, just before a refresh publishes, that the map it was built on
 # is still the newest trusted one). No job reads check runs, and none asks
 # for any write.
@@ -1068,6 +1069,11 @@ jobs:
 
   macos-probe:
     if: github.event_name != 'merge_group' && github.event_name == 'schedule' && github.event.schedule != '23 * * * *'
+    # The ceiling of the call: GitHub checks every called job's permissions when the run starts, `plan`'s too, though a
+    # call skips it.
+    permissions:
+      contents: read
+      actions: read
     uses: ./.github/workflows/macos.yml
     with:
       probe: true

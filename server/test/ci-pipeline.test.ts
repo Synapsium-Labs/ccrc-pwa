@@ -537,7 +537,7 @@ describe('ci.yml: modes, concurrency and the selection switch (design 2026-09-23
   it('the least-privilege comment names every job that asks for more than contents: read (FR-6)', () => {
     // Derived, not listed: every job with a `permissions:` block of its own, against the top comment's census.
     const own = [...jobs(read(CI))].filter(([, b]) => /^ {4}permissions:$/m.test(b)).map(([id]) => id).sort();
-    expect(own).toEqual(['fast-plan', 'macos', 'map-build', 'select']);
+    expect(own).toEqual(['fast-plan', 'macos', 'macos-probe', 'map-build', 'select']);
     const comment = /^# Least privilege, stated rather than inherited[\s\S]*?(?=^permissions:)/m.exec(read(CI))?.[0] ?? '';
     expect(comment, 'the least-privilege comment is gone').not.toBe('');
     for (const id of own) {
@@ -545,7 +545,7 @@ describe('ci.yml: modes, concurrency and the selection switch (design 2026-09-23
       expect(job(id), `${id} asks for more than contents: read + actions: read`)
         .toMatch(/^ {4}permissions:\n {6}contents: read\n {6}actions: read\n(?! {6}[a-z-]+:)/m);
     }
-    expect(comment).toContain('Four jobs ask for more than this');
+    expect(comment).toContain('Five jobs ask for more than this');
   });
 
   it('probe-macos runs on a push to main and the daily schedule only — never on a pull request, and never gating a called or dispatched full run', () => {
