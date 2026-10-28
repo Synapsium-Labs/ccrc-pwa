@@ -16383,7 +16383,7 @@ _inst_atomic() {   # <src> <dest> <mode>
   rm -f -- "$dest.tmp."*
 }
 
-# ── THE SESSION SLICE'S TWO LIMITS ARE THE BOX'S, NOT THE TREE'S (D-TBD-slice-limits-keys) ──
+# ── THE SESSION SLICE'S TWO LIMITS ARE THE BOX'S, NOT THE TREE'S (D-7296) ──
 # `deploy/systemd/app-claude-session.slice.d/limits.conf` is a TEMPLATE: its `MemoryMax=24G` and `MemorySwapMax=6G`
 # are the DEFAULTS, and the bytes every box carried before these keys existed. A box sets its own in its
 # ~/.ccrc/ccrc.env (deploy/ccrc.env.example documents both), through ccrc's one settings reader, `_ccrc_knob`: the
@@ -17576,7 +17576,7 @@ _inst_units() {
   fi
   _inst_atomic "$tree/deploy/systemd/claude-session@.service.d/limits.conf" \
     "$dir/claude-session@.service.d/limits.conf" 644
-  # The slice drop-in is RENDERED, not copied: its two limits are the box's own (`_inst_slice_limits`, D-TBD-slice-limits-keys).
+  # The slice drop-in is RENDERED, not copied: its two limits are the box's own (`_inst_slice_limits`, D-7296).
   _inst_slice_limits "$tree/deploy/systemd/app-claude-session.slice.d/limits.conf" \
     "$slice/limits.conf"
   # D-5241 (spec 2026-10-16 §5.10): the victim policy's two OOMPolicy=continue

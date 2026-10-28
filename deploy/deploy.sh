@@ -817,7 +817,7 @@ if [ "$TARGET" = "agent" ]; then
   # `ccrc install`'s `_inst_units` places. Nothing ever deletes them on a
   # redeploy of an older tree; rolling back is removing them by hand.
   #
-  # THE SLICE DROP-IN IS RENDERED, NOT COPIED (D-TBD-slice-limits-keys). Its `MemoryMax=` and `MemorySwapMax=` are the
+  # THE SLICE DROP-IN IS RENDERED, NOT COPIED (D-7296). Its `MemoryMax=` and `MemorySwapMax=` are the
   # BOX's: `_slice_limits_unit` sources the shipped `~/ccrc/ccd/ccrc` in a child bash (its dispatch is guarded, so
   # sourcing runs no verb) and calls the function `ccrc install` calls, `_inst_slice_limits`, which reads
   # CCRC_SESSION_SLICE_MEMORY_MAX and CCRC_SESSION_SLICE_SWAP_MAX from the box's environment, else the box's

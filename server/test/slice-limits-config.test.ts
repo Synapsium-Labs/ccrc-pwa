@@ -1,4 +1,4 @@
-// The session slice's aggregate limits come from the box's own config (D-TBD-slice-limits-keys).
+// The session slice's aggregate limits come from the box's own config (D-7296).
 //
 // `deploy/systemd/app-claude-session.slice.d/limits.conf` is a TEMPLATE whose `MemoryMax=` and `MemorySwapMax=` are
 // the defaults. Both lanes that place it on a box — `ccrc install`/`ccrc update` (`_inst_units`) and `deploy.sh agent`
@@ -129,7 +129,7 @@ function expected(memoryMax: string, swapMax: string): string {
   return out;
 }
 
-describe('_inst_slice_limits renders the template from the box\'s config (D-TBD-slice-limits-keys)', () => {
+describe('_inst_slice_limits renders the template from the box\'s config (D-7296)', () => {
   it('unset keys: today\'s bytes, at 644, no staging file left', () => {
     const home = box(['CCRC_ROLE=fleet']);
     const r = runFunction(home);
@@ -259,7 +259,7 @@ describe('_inst_slice_limits renders the template from the box\'s config (D-TBD-
   });
 });
 
-// ── a value it cannot use never SHRINKS a box: it keeps what is installed (D-TBD-slice-limits-keys) ───────────────────
+// ── a value it cannot use never SHRINKS a box: it keeps what is installed (D-7296) ───────────────────
 // A box tuned above the default (the case the keys exist for: 90% on a box that runs nothing but the fleet) must not
 // fall to 24G on one typo: daemon-reload would apply the lower memory.max to the live slice, and with more than 24G in
 // use the kernel reclaims and OOM-kills panes across the fleet. So the fallback is the value the rendered drop-in at

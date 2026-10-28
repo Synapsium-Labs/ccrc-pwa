@@ -1295,7 +1295,7 @@ update before anything on the box changes (D-6594), the models budget turns the 
 the versions keep stops the versions prune while `ccrc versions` still lists (D-6596), and a slice limit keeps the
 value its installed `limits.conf` already carries (its default, 24G or 6G, only when nothing is installed yet) with a
 WARN while the install or deploy goes on, so one typo never shrinks a box tuned above the default
-(D-TBD-slice-limits-keys). When `ccrc.env` cannot be
+(D-7296). When `ccrc.env` cannot be
 read at all (unreadable, or holding a NUL byte), every act that reads a setting from it refuses, or falls back as its
 own text says (the health gate waits its 90 seconds; the watchdog uses the largest reading it could decide), and each
 says so. Two causes are model-wide too: a non-ASCII (UTF-8) `NAME=value` line, and a line with an inner CR. Each refuses

@@ -1028,7 +1028,7 @@ describe('the verification is actually wired into the deploy, and can observe a 
     cpSync(join(deployDir, 'ccrc-agent.service'), join(src, 'deploy', 'ccrc-agent.service'));
     cpSync(join(deployDir, '..', 'ccd', 'claude-session@.service'), join(src, 'ccd', 'claude-session@.service'));
     // The slice drop-in is RENDERED on the box by the shipped ccd/ccrc's `_inst_slice_limits`
-    // (D-TBD-slice-limits-keys), which `_slice_limits_unit` sources out of ~/ccrc, so the fixture tree carries it.
+    // (D-7296), which `_slice_limits_unit` sources out of ~/ccrc, so the fixture tree carries it.
     cpSync(join(deployDir, '..', 'ccd', 'ccrc'), join(src, 'ccd', 'ccrc'));
     const scriptPath = join(home, 'units.sh');
     writeFileSync(scriptPath, `${script}\n`);
@@ -1050,7 +1050,7 @@ describe('the verification is actually wired into the deploy, and can observe a 
     // install-census.test.ts already holds every `_inst_units` unit to one of
     // deploy.sh's lanes, and this lane places units `_inst_units` does not.
     const unitRoot = /^(?:~|\$HOME)\/\.config\/systemd\/user\//;
-    // `_slice_limits_unit` places the slice drop-in the same way, rendered (D-TBD-slice-limits-keys); the fixture HOME
+    // `_slice_limits_unit` places the slice drop-in the same way, rendered (D-7296); the fixture HOME
     // has no ~/.ccrc/ccrc.env, so it must land as the template's own bytes, like every copy.
     const landed: Array<[string, string]> = [...script.matchAll(/(?:^|&&)\s*(?:_unit_atomic|_slice_limits_unit)\s+(\S+)\s+(\S+)/gm)]
       .map((m) => {
