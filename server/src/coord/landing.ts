@@ -419,7 +419,9 @@ export type LandingLineAct =
 export function landingLineAct(episode: LandingEpisode, line: PrLandingLine | null): LandingLineAct {
   if (line === null || line.unmeasured.length > 0) return { act: 'unmeasured' };
   if (!line.bound || line.number !== episode.pr) return { act: 'left', phase: 'unbound' };
-  if (line.state === 'MERGED') return { act: 'left', phase: 'merged' };
+  // A PR closed as landed in a merge train left as merged: the train merged its work, and `sweepLanding`'s `merged:`
+  // is the wake for it as for any merge.
+  if (line.state === 'MERGED' || (line.state === 'CLOSED' && line.landedInTrain)) return { act: 'left', phase: 'merged' };
   if (line.state === 'CLOSED') return { act: 'left', phase: 'closed' };
   if (line.state !== 'OPEN' || line.head === null || !isHead40(line.head)) return { act: 'unmeasured' };
   if (line.isDraft) return { act: 'left', phase: 'draft' };

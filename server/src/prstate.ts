@@ -16,6 +16,15 @@ export interface CcdPrRow {
    *  one reader, `childSpent`'s incarnation placement, reads as UNDATED —
    *  never as old and never as new (child-reclamation spec §5.3). */
   createdAt?: string;
+  /** gh's own labels and close time, passed through unchanged. Neither is read
+   *  here: the label is read on the box, into `landedInTrain` below. */
+  labels?: unknown; closedAt?: string | null;
+  /** ccd's annotation, beside `ours`: GitHub says CLOSED and the PR carries the
+   *  deployment's train label (ccd's `CCD_LANDED_LABEL`, default
+   *  `landed-in-train`), i.e. a merge train landed its work and closed it.
+   *  The fleet box is the one reader of the label name, so this side never
+   *  names one. Absent on a row from an older ccd, which reads as not landed. */
+  landedInTrain?: boolean;
 }
 
 export interface CcdPrLine {
@@ -135,8 +144,12 @@ const OID_RE = /^[0-9a-f]{7,40}$/;
  * as an identity — two PRs can share one.
  */
 export function isMergedRow(row: CcdPrRow, baseShort: string, registryBranch: string): boolean {
-  return row.state === 'MERGED' && typeof row.mergedAt === 'string'
-    && typeof row.mergeCommit?.oid === 'string' && OID_RE.test(row.mergeCommit.oid)
+  const merged = row.state === 'MERGED' && typeof row.mergedAt === 'string'
+    && typeof row.mergeCommit?.oid === 'string' && OID_RE.test(row.mergeCommit.oid);
+  // A PR closed as landed in a merge train is merged for every phase reader,
+  // with no merge commit behind it; ccd's `is_landed` is the same predicate.
+  const landed = row.state === 'CLOSED' && row.landedInTrain === true;
+  return (merged || landed)
     && row.isCrossRepository === false
     && row.baseRefName === baseShort
     && row.headRefName === registryBranch
@@ -218,7 +231,11 @@ export function phaseFor(line: CcdPrLine): PrState {
     checks, checkNames,
   };
   if (isMergedRow(row, line.baseShort, line.branch)) {
-    return { ...common, phase: 'merged', mergedAt: Date.parse(String(row.mergedAt)) };
+    // A train-landed PR is dated by its close, the moment the train closed it;
+    // a close time gh did not name is no date, never `NaN`.
+    const at = row.state === 'MERGED' ? row.mergedAt : row.closedAt;
+    const ms = typeof at === 'string' ? Date.parse(at) : Number.NaN;
+    return { ...common, phase: 'merged', mergedAt: Number.isNaN(ms) ? null : ms };
   }
   // gh says MERGED but a conjunct failed: never claim merged on a partial
   // match — both the archive trigger and the cleanup offer hang off it.
@@ -417,6 +434,9 @@ export interface PrLandingLine {
   protectionNamed: string[];
   /** Required names the rules pin to an App. Absent from an older line, which reads as none. */
   pinnedNames: string[];
+  /** ccd's `landedInTrain` (see `CcdPrRow`): CLOSED, and the PR carries the deployment's train label. False when the
+   *  line does not say exactly `true`, including every line from an older ccd. */
+  landedInTrain: boolean;
   unmeasured: string[];
 }
 
@@ -466,6 +486,7 @@ export function readPrLandingLine(x: unknown): PrLandingLine | null {
     required, requiredCut: x['requiredCut'] === true,
     rulesNamed: strings(x['rulesNamed']), protectionNamed: strings(x['protectionNamed']),
     pinnedNames: strings(x['pinnedNames']),
+    landedInTrain: x['landedInTrain'] === true,
     unmeasured: shape ? [...unmeasured, 'shape'] : unmeasured,
   };
 }

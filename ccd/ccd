@@ -5546,7 +5546,18 @@ PR_GH_TIMEOUT=8           # gh pr list has no --timeout of its own; a blocking
 # PRs cannot be read inside the bound loses its check glyphs for that sweep and
 # nothing else — which is the whole point of the split.
 PR_GH_CHECKS_TIMEOUT=5
-PR_JSON_FIELDS=number,state,headRefName,headRefOid,baseRefName,isCrossRepository,mergedAt,mergeCommit,url,title,isDraft,createdAt
+PR_JSON_FIELDS=number,state,headRefName,headRefOid,baseRefName,isCrossRepository,mergedAt,mergeCommit,url,title,isDraft,createdAt,labels,closedAt
+# THE TRAIN LABEL. A merge train lands a PR's work through a train PR and then
+# CLOSES the member with this label, so GitHub never says MERGED for it — and
+# the archive trigger and the cleanup offer both hang off `merged`. A CLOSED PR
+# carrying this label (exact name) reads as merged in `pr-state` and as a
+# merged departure in `pr-landing`; every binding conjunct still applies, and
+# no other state is touched. Deployment config: `CCD_LANDED_LABEL` names it,
+# read at each call; unset is this default, and SET-BUT-EMPTY reads no label at
+# all. It meets the rule `CCD_DISK_FLOOR_GB` states for an override: it names a
+# GitHub label, never a path, so it cannot aim a command at another tree.
+# `labels`/`closedAt` above are what it is read from (and when the PR landed).
+PR_LANDED_LABEL_DEFAULT=landed-in-train
 # NAMED ONCE, spent in two places — the head-filtered row window that carries it
 # in-band, and the open-PR window `_gh_pr_checks` asks for on its own. A second
 # spelling of the token is a second thing to keep in step with `checksFor`'s
@@ -5806,7 +5817,7 @@ _pr_py() {   # mode [args…]; stdin = the gh rows JSON. One of ccd's embedded h
   # `python3 - "$@" <<PY` gives stdin='', `python3 /dev/fd/3 "$@" 3<<PY` gives
   # the rows, with sys.argv identical. The rows cannot move to argv instead —
   # spec §7 is that no GitHub-sourced string is ever placed in an argv.
-  python3 /dev/fd/3 "$@" 3<<'PY'
+  PR_LANDED_LABEL="${CCD_LANDED_LABEL-$PR_LANDED_LABEL_DEFAULT}" python3 /dev/fd/3 "$@" 3<<'PY'
 import fcntl, json, os, re, stat, subprocess, sys, time
 
 mode = sys.argv[1]
@@ -5880,10 +5891,26 @@ def one_ours(main, tip, oid):
         return False
     return tip is None or git(main, 'merge-base', '--is-ancestor', '--', oid, tip).returncode == 0
 
+# The deployment's train label, handed down by `_pr_py`; "" (also when nothing
+# was handed down) reads no label at all, so a missing value can only keep a PR
+# `closed`, never make one `merged`.
+LANDED_LABEL = os.environ.get('PR_LANDED_LABEL', '')
+
+def label_names(r):
+    """gh pr list's `labels: [{name}]` or GraphQL's `labels: {nodes: [{name}]}`; anything else is no labels."""
+    ls = r.get('labels')
+    if isinstance(ls, dict):
+        ls = ls.get('nodes')
+    return [l.get('name') for l in ls if isinstance(l, dict)] if isinstance(ls, list) else []
+
 def annotate(rows, main, tip, branch, base_short):
     out = [r for r in rows if isinstance(r, dict)]
     for r, ours in zip(out, ours_of(main, tip, [r.get('headRefOid') for r in out])):
         r['ours'] = ours
+        # Annotated here, beside `ours`, so this box's config is the ONE reader
+        # of the label name: prstate.ts reads this boolean and never a label.
+        r['landedInTrain'] = (LANDED_LABEL != '' and r.get('state') == 'CLOSED'
+                              and LANDED_LABEL in label_names(r))
     return out
 
 def bound(r, branch, base_short):
@@ -5904,6 +5931,13 @@ def is_merged(r, branch, base_short):
             and isinstance(r.get('mergedAt'), str)
             and isinstance(oid, str) and OID.match(oid) is not None
             and bound(r, branch, base_short))
+
+def is_landed(r, branch, base_short):
+    # A PR closed as landed in a merge train: `merged` for the phase, with no
+    # merge commit behind it. Kept OUT of `is_merged`, whose other caller is the
+    # reap's `pick`, which proves the tree against `mergeCommit.oid` — a landed
+    # member has none, so the reap keeps refusing `not-merged` for it.
+    return r.get('landedInTrain') is True and bound(r, branch, base_short)
 
 def pick(rows, branch, base_short):
     """Highest number AFTER the binding check, never before."""
@@ -5959,7 +5993,7 @@ if mode == 'state':
         # workspace", which is what was actually observed — instead of
         # `no-commits`, which asserts that the branch is level with base.
         phase, number = ('no-commits' if ahead == 0 else 'none'), None
-    elif is_merged(chosen, branch, base_short):
+    elif is_merged(chosen, branch, base_short) or is_landed(chosen, branch, base_short):
         phase, number = 'merged', chosen.get('number')
     elif chosen.get('state') == 'MERGED':
         # gh says MERGED but a conjunct failed. Never claim merged on a partial
@@ -6531,7 +6565,7 @@ elif mode == 'bind':
     # `gh pr list` row's shape, through the same `bound()` `state` uses. It WRITES NOTHING: no `put`, no
     # `.prstate-<id>.lock`, no `.prhistory`. stdin is the list of alias rows (null where GitHub answered no object).
     # Prints `unreadable-alias` for an alias with no object, nothing for a row that does not bind, and otherwise one JSON
-    # object of the five facts the lane reads.
+    # object of the six facts the lane reads (the sixth, `landedInTrain`, is `annotate`'s).
     (main, branch, base_short, tip, idx) = sys.argv[2:7]
     tip = tip or None
     rows = rows_in()
@@ -6544,7 +6578,7 @@ elif mode == 'bind':
             sys.stdout.write(json.dumps({
                 'number': chosen.get('number'), 'headRefOid': chosen.get('headRefOid'),
                 'baseRefName': chosen.get('baseRefName'), 'state': chosen.get('state'),
-                'isDraft': chosen.get('isDraft'),
+                'isDraft': chosen.get('isDraft'), 'landedInTrain': chosen.get('landedInTrain') is True,
             }) + '\n')
 PY
 }
@@ -11390,7 +11424,7 @@ cmd_pr_state() {   # ccd pr-state --session <id> | ccd pr-state --project <proje
 # `pullRequest(number:)`: either way every real call would fail. No datum from a session, a PR or GitHub enters the
 # text. The owner and name travel as `$o` and `$r`, the numbers as `-F n<i>=<int>`.
 PR_LANDING_RULES_TTL=600
-PR_LANDING_ALIAS='    p@I@: pullRequest(number: $n@I@) { number state isDraft isCrossRepository headRefName baseRefName headRefOid commits(last: 1) { nodes { commit { statusCheckRollup { contexts(first: 100) { pageInfo { hasNextPage } nodes { __typename ... on CheckRun { name status conclusion databaseId checkSuite { app { databaseId } workflowRun { databaseId } } isRequired(pullRequestNumber: $n@I@) } ... on StatusContext { context state isRequired(pullRequestNumber: $n@I@) } } } } } } } }'
+PR_LANDING_ALIAS='    p@I@: pullRequest(number: $n@I@) { number state isDraft isCrossRepository headRefName baseRefName headRefOid labels(first: 100) { nodes { name } } commits(last: 1) { nodes { commit { statusCheckRollup { contexts(first: 100) { pageInfo { hasNextPage } nodes { __typename ... on CheckRun { name status conclusion databaseId checkSuite { app { databaseId } workflowRun { databaseId } } isRequired(pullRequestNumber: $n@I@) } ... on StatusContext { context state isRequired(pullRequestNumber: $n@I@) } } } } } } } }'
 
 _gh_pr_landing_query() {   # K -> the GraphQL document for K aliased pull requests, on stdout
   local k="$1" i decl='$o: String!, $r: String!' body=""
@@ -11625,6 +11659,7 @@ elif mode == 'final':
             except Exception:
                 pass
             line.update({'bound': True, 'number': b.get('number'), 'state': b.get('state'),
+                         'landedInTrain': b.get('landedInTrain') is True,
                          'isDraft': b.get('isDraft') is True, 'base': b.get('baseRefName'), 'head': b.get('headRefOid'),
                          'required': req[:LIST_MAX], 'requiredCut': cut,
                          'rulesNamed': rules['names'] if rules else [],

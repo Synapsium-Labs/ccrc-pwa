@@ -6724,7 +6724,12 @@ isolation boundary its test harness relies on:
 
 `ws-add` refuses below `CCD_DISK_FLOOR_GB` (default 10) GiB free on
 `~/worktrees` — an environment override `ccd` allows because it can only make
-`ccd` refuse, never aim it at a different tree. `ccd` with no verb prints its
+`ccd` refuse, never aim it at a different tree. `CCD_LANDED_LABEL` (default
+`landed-in-train`; set empty to turn it off) names the label a merge train puts
+on a member PR it closes after landing its work: `pr-state` and `pr-landing`
+read a CLOSED PR carrying it as merged, so the archive reason, the cleanup
+bucket and the merged notice treat it as a merge. It names a label, never a
+path. `ccd` with no verb prints its
 usage, and `ccd caps` lists the verbs (and capability tokens) this copy
 implements — that list is the authority; the table below is a map:
 
