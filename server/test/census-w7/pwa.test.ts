@@ -294,10 +294,12 @@ describe('W7 PWA census: REAL rows (reporting, not ratcheting; spec §5.1 rule 3
     held('archivedChecks', archivedChecks(), 8);
   });
 
-  it('sessionPathLiterals(): 14 string expressions starting /s/, in 12 files', () => {
+  // C9 (D-6441) gave FleetScreen and Instrument's FleetTable one session opener (`fleet/openers.ts`): their two
+  // literals became one, 14 in 12 files to 13 in 11.
+  it('sessionPathLiterals(): 13 string expressions starting /s/, in 11 files', () => {
     const sites = sessionPathLiterals();
-    held('sessionPathLiterals', sites, 14);
-    expect(Object.keys(countBy(sites, (s) => s.file)).length).toBe(12);
+    held('sessionPathLiterals', sites, 13);
+    expect(Object.keys(countBy(sites, (s) => s.file)).length).toBe(11);
   });
 
   it('ensureCallers(): 6 owners of api.ensure (5 calls, 1 member reference)', () => {
