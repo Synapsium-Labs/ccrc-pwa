@@ -34,6 +34,8 @@ interface Fake {
   argv: string[][];
   feed: { title: string; sessionId: string; body: string }[];
   serialCalls: number;
+  /** The session queue's calls: the armed act only (a shadow never queues behind, or ahead of, that session's routes). */
+  queueCalls: number;
   /** Per worker: its newest placed run. */
   runs: Map<string, { runId: number; state: string; closedAt: number | null }>;
   /** Per session: its coordinator claim, as `childReclaimCoordinatorClaims` folds it. */
@@ -50,7 +52,7 @@ interface Fake {
 
 function fake(o: { caps?: string[]; serial?: boolean; perPass?: number } = {}): Fake {
   const f: Fake = {
-    argv: [], feed: [], serialCalls: 0, runs: new Map(), chairs: new Map(), answer: new Map(), atAct: new Map(),
+    argv: [], feed: [], serialCalls: 0, queueCalls: 0, runs: new Map(), chairs: new Map(), answer: new Map(), atAct: new Map(),
     actListing: undefined, stamps: new Map(), setNames: () => {}, deps: undefined as unknown as DepsShedPassDeps,
   };
   let passNames: readonly string[] = [];
@@ -94,7 +96,7 @@ function fake(o: { caps?: string[]; serial?: boolean; perPass?: number } = {}): 
       return a === 'unreadable' ? { ok: false } : { ok: true, row: row(r.id, { ...(r.id === C ? { child: { kind: 'none' } } : {}), ...(a ?? {}) } as Partial<FleetSession>) };
     },
     serial: o.serial === false ? null : async (fn) => { f.serialCalls++; return fn(); },
-    queueRun: async (_id, fn) => fn(),
+    queueRun: async (_id, fn) => { f.queueCalls++; return fn(); },
     listing: async () => (f.actListing === undefined ? [...passNames] : f.actListing),
     config: { afterMs: 24 * HOUR, parkedAfterMs: null, perPass: o.perPass ?? 1 },
     startedAt: STARTED,
@@ -131,9 +133,11 @@ describe('depsShedPass (D-7278)', () => {
       expect(out).toEqual([{ id: W, kind: 'would-shed', dirs: 2, bytes: 2 * 1024 * 1024 }]);
       expect(f.feed.map((e) => [e.title, e.sessionId])).toEqual([['Dependencies would be removed', W]]);
       expect(f.feed[0]!.body).toContain('2 directories, 2 MiB');
-      // The dry run removes nothing: the session's queue and the box's re-proof are enough, and coordination writes
+      // The dry run removes nothing and takes no lock: the box's re-proof is enough, and coordination writes
       // never queue behind its du, git status and process walk.
       expect(f.serialCalls).toBe(0);
+      // Nor the session's own queue: its swap, reap, forget, title and pr routes never wait on a shadow.
+      expect(f.queueCalls).toBe(0);
     });
     it('asks once a sleep: the next pass skips the row, and a new sleep asks again', async () => {
       const f = fake();
@@ -161,6 +165,7 @@ describe('depsShedPass (D-7278)', () => {
       expect(out).toEqual([{ id: W, kind: 'shed', dirs: 2, bytes: 2 * 1024 * 1024 }]);
       expect(f.feed.map((e) => e.title)).toEqual(['Dependencies removed']);
       expect(f.serialCalls).toBe(1);
+      expect(f.queueCalls).toBe(1);
     });
     it('an arming switch gone at the act holds `switched-off`, and nothing is composed', async () => {
       const f = fake();
@@ -173,6 +178,7 @@ describe('depsShedPass (D-7278)', () => {
       f.actListing = [DEPS_SHED_LIVE_MARKER];
       await run(f, mem(), [worker(f)]);
       expect(f.argv).toEqual([DRY(W)]);
+      expect(f.queueCalls).toBe(0);
     });
   });
 
