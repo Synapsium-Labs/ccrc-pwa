@@ -25,7 +25,7 @@ export const CENSUS_SOURCES = {
   'dead-compare': /\b(?:status|bucket|effectiveStatus|st|presence)\s*[!=]==\s*'dead'|'dead'\s*[!=]==\s*[\w.?]*\b(?:status|bucket|effectiveStatus|st|presence)\b/g,
   /** 6. a PWA reader of the server's presence (D-7181, Task C7c exception 4): a call of `presenceOf(` or
    *  `coordinatorPresence(`, and of `paneGone(`, the one pane predicate OA-C15 (a) keeps for a site that only words
-   *  what the pane shows (D-TBD-census-sees-panegone), so a site that asks presence instead of comparing a status with
+   *  what the pane shows, so a site that asks presence instead of comparing a status with
    *  `'dead'` is still a reader with a stance. `pwa/src` only (`CENSUS_SCOPES`): `server/src/sessionReading.ts` has a
    *  private ladder function of the same name, held through that file's own rows. */
   'presence-reader': /\b(?:presenceOf|coordinatorPresence|paneGone)\(/g,
