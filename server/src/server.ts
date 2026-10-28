@@ -62,8 +62,8 @@ import { SHAPE_ONLY_MASKER, type SecretMasker } from './accounts/mask.js';
 import { maskBody, maskedError, maskFleetFrame } from './accounts/egress.js';
 import { Viewers } from './viewer.js';
 import { MAIL_TOKEN_HEADER, checkMailToken } from './coord/token.js';
-import { registerCoordRoutes } from './coord/routes.js';
-import { createQuestions } from './coord/questions.js';
+import { registerCoordRoutes, type OperatorDoorWiring } from './coord/routes.js';
+import { createQuestions, type OperatorDoorDeps } from './coord/questions.js';
 import { registerUpdateRoutes } from './update/routes.js';
 import { composeDocs, registerDocsReadRoutes, registerDocsRefreshRoute } from './docs/routes.js';
 import { installDocsRequestPolicy, installDocsResponsePolicy } from './docs/hooks.js';
@@ -1866,7 +1866,22 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // D-7026: this server's ONE owner of question state, the watcher's own when it is given one (`index.ts` hands it
   // one, so production has exactly one instance), and its own otherwise; never module scope.
   const questions = watcher?.questions ?? createQuestions(deps);
-  const coordRoutes = registerCoordRoutes(app, deps, bus, sessionAuth, askDeps, watcher, notice, questions);
+  // W3 Q3f (D-7030): what the operator's core reads (`questions.answer`), built ONCE and handed to both the old operator
+  // doors below and the family's `POST /api/questions/:id/answer` in `coord/routes.ts`, so the two read the same wiring:
+  // the presses over this server's `askDeps` and `sendDeps`, the answered frame's emit, and the child's hookstate as the
+  // watcher last read it. `coord`, `io` and `cfg` are read at the call, as the old doors read them. The emit and
+  // `knownId` are declared below, beside the session routes, so both are read lazily, at a request.
+  const operatorDoorDeps: OperatorDoorDeps = {
+    get coord() { return deps.coord; }, get io() { return deps.io; }, get cfg() { return deps.cfg; }, notice,
+    pressAsk: (id, key, optionIndexes) => answerAsk(askDeps, id, key, optionIndexes),
+    pressDialog: (id, dialogId, optionIndex) => answerDialog(sendDeps, id, dialogId, optionIndex),
+    pressDialogText: (id, dialogId, optionIndex, text) => answerDialogText(sendDeps, id, dialogId, optionIndex, text),
+    pressDialogMulti: (id, dialogId, optionIndexes) => answerDialogMulti(sendDeps, id, dialogId, optionIndexes),
+    answered: (id, route, res) => answeredFrame(id, route, res),
+    hookStateOf: (id) => watcher?.currentHookStates().get(id) ?? null,
+  };
+  const operatorDoors: OperatorDoorWiring = { get knownId() { return knownId; }, answerDeps: operatorDoorDeps };
+  const coordRoutes = registerCoordRoutes(app, deps, bus, sessionAuth, askDeps, watcher, notice, questions, operatorDoors);
   // The dead-coordinator lane (workspace lifecycle §5.4) ends a programme only on this same serialiser: the watcher is
   // handed the sweep's abandon here, and has no other way to close a run. Called optionally: a test's stand-in watcher
   // (a structural double, not a `FleetWatcher`) carries no such method, and has no lane to hand it to.

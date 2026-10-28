@@ -6,7 +6,8 @@
 // the new path with the same answer, and the two outcomes (status, body bytes, row state, keys pressed, feed rows, pushes,
 // the door-ins the `Questions` instance was called with, mail to the parent) must be EQUAL. `question-doors-pin` holds the
 // old doors' rows byte for byte, so equality here is "the new path answers Q3a's rows". The other rows are the new
-// family's own: the id grammar, the kind check, the session gate, and the gate's posture.
+// family's own: the id grammar, the kind check, the session gate, and the gate's posture. A refusal that names its own
+// route (the box token's `no box token presented — <route> …`) names the new door, so it is a row of its own, not a pair.
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import { createHash } from 'node:crypto';
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -194,7 +195,6 @@ const TEXT = '- only in staging, sampled 10%';
 
 const PAIRS: Pair[] = [
   // The claimant's ask ruling: `POST /api/asks/:id/answer` and `POST /api/questions/ask-<n>/rule {kind:'ask'}`.
-  ['rule ask | no box token', askSide, ...ruleAsk({ ...P, optionIndexes: [0] }, {})],
   ['rule ask | a bad body', askSide, ...ruleAsk({ ...P, optionIndexes: ['0'] })],
   ['rule ask | a stale uuid', askSide, ...ruleAsk({ fromId: PARENT, fromUuid: 'stale', optionIndexes: [0] })],
   ['rule ask | the store refuses the read', askSide, ...ruleAsk({ ...P, optionIndexes: [0] }),
@@ -211,7 +211,6 @@ const PAIRS: Pair[] = [
   ['rule ask | success after the lapse: the late answer', askSide, ...ruleAsk({ ...P, optionIndexes: [0] }),
     (s) => { expect(s.f.coord.releaseAsk(s.id, Date.now())).toBe(true); }],
   // The claimant's ask hand-over.
-  ['release ask | no box token', askSide, (s) => post(s, `/api/asks/${s.id}/release`, P), (s) => post(s, `/api/questions/ask-${s.id}/release`, { kind: 'ask', ...P })],
   ['release ask | a bad body', askSide, ...releaseAsk({ fromId: PARENT })],
   ['release ask | the store refuses the read', askSide, ...releaseAsk(P),
     (s) => { vi.spyOn(s.f.coord, 'askById').mockReturnValueOnce({ ok: false, detail: 'fixture: the asks table is unreadable' } as never); }],
@@ -220,7 +219,6 @@ const PAIRS: Pair[] = [
   ['release ask | not held', askSide, ...releaseAsk(P), (s) => { s.f.coord.declineAsk(s.id, Date.now()); }],
   ['release ask | success: declined, the door-in fires', askSide, ...releaseAsk(P)],
   // The claimant's approval ruling.
-  ['rule approval | no box token', approvalSide, (s) => post(s, `/api/approvals/${s.id}/rule`, RULE), (s) => post(s, `/api/questions/approval-${s.id}/rule`, { kind: 'approval', ...RULE })],
   ['rule approval | a widening field', approvalSide, ...ruleApproval({ ...RULE, permanent: true })],
   ['rule approval | a bad body', approvalSide, ...ruleApproval({ ...RULE, verdict: 'maybe' })],
   ['rule approval | a stale uuid', approvalSide, ...ruleApproval({ ...RULE, fromUuid: 'stale' })],
@@ -392,6 +390,22 @@ describe('the new family\'s own front ladder', () => {
     expect((await p('/api/questions/ask-1/rule', { kind: 'approval', ...RULE, fromUuid: 'stale' }, TOK)).statusCode).toBe(403);
     expect(KEYS).toEqual([]);
     expect(f.coord.feedEvents(50).filter((e) => e.title === 'permission ruled')).toEqual([]);
+  });
+
+  it('the claimant\'s doors: no box token is the old doors\' 401, naming the door that was called', async () => {
+    const { f, post: p } = await ladder();
+    for (const [url, route, body] of [
+      ['/api/questions/ask-1/rule', 'POST /api/questions/:id/rule', { kind: 'ask', ...P, optionIndexes: [0] }],
+      ['/api/questions/approval-1/rule', 'POST /api/questions/:id/rule', { kind: 'approval', ...RULE }],
+      ['/api/questions/ask-1/release', 'POST /api/questions/:id/release', { kind: 'ask', ...P }],
+      ['/api/questions/approval-1/release', 'POST /api/questions/:id/release', { kind: 'approval', ...P }],
+    ] as const) {
+      const res = await p(url, body);
+      expect([res.statusCode, res.body], url).toEqual([401,
+        `{"ok":false,"error":"unauthenticated","detail":"no box token presented — ${route} grants no legacy tolerance"}`]);
+    }
+    expect(KEYS).toEqual([]);
+    expect(f.coord.feedEvents(50).filter((e) => e.title === 'permission ruled' || e.title === 'question answered')).toEqual([]);
   });
 
   it('the claimant\'s doors: a body with no kind, or a kind of neither, is bad-request; a bad id is bad-request', async () => {

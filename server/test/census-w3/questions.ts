@@ -144,6 +144,10 @@ export const QUESTION_DOOR_TAGS: Readonly<Record<string, QuestionDoorTag>> = {
   '/api/sessions/:id/dialog/text': 'operator',
   '/api/sessions/:id/dialog/multi': 'operator',
   '/api/sessions/:id/dialog/tab': 'navigation',
+  // W3 Q3f (D-7030; OA-C7 (a)): the family, in `coord/routes.ts`; the path picks the principal.
+  '/api/questions/:id/answer': 'operator',
+  '/api/questions/:id/rule': 'claimant',
+  '/api/questions/:id/release': 'claimant',
 };
 
 /** A question door's shape: a verb under an ask's or an approval's id, an operator's answer or dialog door under a
@@ -171,7 +175,8 @@ function routeRegistrations(parsed: ReturnType<typeof parsedFile>): RouteRegistr
 export interface QuestionDoorSite extends CensusSite { readonly route: string; readonly tag: QuestionDoorTag | 'untagged' }
 
 /** W3's question doors: the POST registrations in `coord/routes.ts` and `server.ts` whose path has a question door's
- *  shape, tagged from `QUESTION_DOOR_TAGS`. 9 at the base: 4 claimant, 4 operator, 1 navigation. */
+ *  shape, tagged from `QUESTION_DOOR_TAGS`. 9 at the base: 4 claimant, 4 operator, 1 navigation. 12 since Q3f
+ *  (D-7030): 9 + the family's 3, so 6 claimant, 5 operator, 1 navigation. */
 export function questionDoors(root: string = REPO): QuestionDoorSite[] {
   const out: QuestionDoorSite[] = [];
   for (const rel of QUESTION_DOOR_FILES) {

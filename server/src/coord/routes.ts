@@ -67,7 +67,7 @@ import { NO_FLEET_IDENTITY } from '../fleetidentity.js';
 import {
   CLAIM_INTENT_MAX_BYTES, CLAIM_PATHS_MAX, CLAIM_PATH_MAX_BYTES, isAskState,
   isPositiveDecimalSafeInteger, isRunState, isSendableMailKind,
-  parseCanonicalPositiveSafeInteger,
+  parseCanonicalPositiveSafeInteger, parseQuestionId, readDialogAnswer,
   LEDGER_STALE_MS, LEDGER_TITLE_MAX_BYTES, ledgerPath, shapeProgramSlug,
   MAIL_ARTIFACTS_MAX, MAIL_ARTIFACT_PATH_MAX_BYTES, MAIL_BODY_MAX_BYTES, MAIL_INBOX_PAGE_MAX_BYTES,
   MAIL_SUBJECT_MAX_BYTES, PEER_ETIQUETTE, PEER_MAIL_HOURLY, PEER_MAIL_MAX_OUTSTANDING, transitionsFor, IDLE_RUN_STATES,
@@ -88,7 +88,10 @@ import type { SessionRecord } from '../registry.js';
 import { readLiveStateMeasured } from '../livestate.js';
 import { approvalClass, rootsForChild } from './approvalguard.js';
 import { heldFor } from './heldFor.js';
-import { approvalFor, createQuestions, openFor, type ApprovalRaiseDeps, type Questions } from './questions.js';
+import {
+  approvalFor, createQuestions, openFor, type ApprovalRaiseDeps, type ClaimantDoorDeps, type ClaimantRule, type OperatorAnswer,
+  type OperatorDoorDeps, type Questions, type QuestionDoorAnswer,
+} from './questions.js';
 import { noticeSink, type NoticeSink } from '../notice.js';
 import {
   APPROVALS_DISABLED_FILE, loadOrCreateApprovalSigner, rulingsAllowedHere, serverApprovalsDisabled, type ApprovalSigner,
@@ -456,6 +459,18 @@ export { homeProjectVerdict, shapeHomeProject, type HomeProjectShape, type HomeP
  * (`dispatch-mutex-gate.test.ts`, D-46), so the abandon is handed to `fn` from INSIDE the hold rather than exported
  * beside it — a caller can only reach it serialised.
  */
+/**
+ * What `buildServer` hands these routes for the operator's door of the question family (W3 Q3f, D-7030):
+ * `POST /api/questions/session-<id>/answer` gates its session id exactly as `server.ts`'s session routes do, with
+ * `buildServer`'s own `knownId` (read lazily: it is declared beside those routes, after this file's routes are
+ * registered), and answers through the operator's core with the SAME deps the old operator doors read (the press
+ * functions over `askDeps` and `sendDeps`, the `answeredFrame` emit, the watcher's hookstate read), built once there.
+ */
+export interface OperatorDoorWiring {
+  readonly knownId: (id: string) => Promise<boolean>;
+  readonly answerDeps: OperatorDoorDeps;
+}
+
 export interface CoordRoutesHandle {
   /** Run `fn` as one coordination write — queued behind whichever write route's body is running, ahead of the next —
    *  handed `closeRun`'s abandon arm exactly as the abandon route runs it, and `abandonRefusal` (close.ts): what that
@@ -560,11 +575,18 @@ export function registerCoordRoutes(
   notice: NoticeSink = noticeSink(deps),
   /**
    * D-7026: this server's owner of question state (`coord/questions.ts#createQuestions`), the one `buildServer` passes
-   * (the watcher's own when it has one). Defaulted to a new instance over these same `deps`, so a test that registers
-   * these routes on a bare Fastify gets its own. Q3e: the raise ladder and the approval inputs live in it; Q3d moves the
+   * (the watcher's own when it has one). Defaulted the way `buildServer` chooses it (W3 Q3f: the door cores push through
+   * the instance's own doors sink, so a watcher's routes must reach that watcher's instance): the watcher's own, else a
+   * new instance over these same `deps`, so a test that registers these routes on a bare Fastify gets its own. Q3e: the raise ladder and the approval inputs live in it; Q3d moves the
    * hold carrier.
    */
-  questions: Questions = createQuestions(deps),
+  questions: Questions = watcher?.questions ?? createQuestions(deps),
+  /**
+   * W3 Q3f (D-7030): the operator's door's wiring (`OperatorDoorWiring`), which `buildServer` passes. Absent for a test
+   * that registers these routes on a bare Fastify: that server answers the operator's door `not-configured`, having no
+   * session routes and no press wiring of its own.
+   */
+  operatorDoors?: OperatorDoorWiring,
 ): CoordRoutesHandle {
   const notConfigured = (reply: FastifyReply) => refuseRoute(reply, 'not-configured');
 
@@ -4124,6 +4146,17 @@ export function registerCoordRoutes(
     signerFor, rulingsAllowedHere, heldFor, denyEngaged, liveVersionOf, journalDigestMismatch,
   };
 
+  /** What the claimant's cores read (W3 Q3f, D-7030; `questions.rule`, `questions.release`), built once: the raise's
+   *  store, I/O, config, tmux, signer, claimant rule and single-box gate, the notice sink, the kill switches' read above,
+   *  and the press of a digit into the child's pane over the server's one queue (`askDeps`). Absent with no coordination
+   *  store, where every claimant door answers `notConfigured` before it would be read. */
+  const claimantDeps: ClaimantDoorDeps | undefined = deps.coord === undefined ? undefined : {
+    coord: deps.coord, io: deps.io, cfg: deps.cfg, tmux: deps.tmux, signerFor, rulingsAllowedHere, heldFor, notice,
+    approvalsKilled, pressAsk: (childId, key, optionIndexes) => answerAsk(askDeps, childId, key, optionIndexes),
+  };
+  /** A core's answer, sent: the status and the body it answered, never decided here. */
+  const sendAnswer = (reply: FastifyReply, a: QuestionDoorAnswer): FastifyReply => reply.code(a.status).send(a.body);
+
   /**
    * `POST /api/approvals` — a child's hook asks for a ruling (spec §6.3 server steps 1 to 3). The ladder, cheapest
    * refusal first, nothing minted on any refusal above the mint: box token (401), body shape (400), a kill switch
@@ -4358,6 +4391,116 @@ export function registerCoordRoutes(
       verdict: row.verdict, reason: row.reason, answeredBy: row.answeredBy, toolUseId: row.toolUseId,
     };
     return reply.code(200).send({ ok: true, approval: view });
+  });
+
+  // ── the question door family (W3 Q3f, D-7030; ARCH-57's server half; OA-C7 ruled (a), 2026-10-26) ─────────────────
+  //
+  // `/api/questions/:id/*`, here behind this file's one gate (spec §2.5): the PATH picks the principal, never a body
+  // field or a header. `:id` is `parseQuestionId`'s (`ask-<n>`, `approval-<n>`, `session-<id>`), and an id or a body of
+  // the other principal's kind is `400 kind-mismatch`. Each door runs its own front ladder, then the shared core the old
+  // door it replaces now calls too (`coord/questions.ts`), so a new path answers what its old door answers, byte for
+  // byte. `/api/sessions/:id/dialog/tab` answers nothing and stays a session door.
+
+  /**
+   * `POST /api/questions/session-<id>/answer` — THE OPERATOR'S. Session-gated and origin-checked like every PWA write:
+   * it is in no EXEMPT table and consults no box token. Its ladder: the id (`bad-request`), its kind (a claimant's
+   * question is `kind-mismatch`), the session gated by `buildServer`'s `knownId` exactly as the session routes gate it
+   * (`unknown-session`), the body by its `kind` (`readAskAnswer` for an ask, which must name its `askKey`;
+   * `readDialogAnswer` for a dialog's row, free-text row or multiSelect set; anything else `bad-request`), then the
+   * operator's core. It replaces `/api/sessions/:id/ask`, `/dialog`, `/dialog/text` and `/dialog/multi`; the skew reason
+   * that split the last two off `/dialog` (an older server ignoring a field and pressing Enter) does not apply to a new
+   * path, which an older server answers 404.
+   */
+  app.post('/api/questions/:id/answer', async (req, reply) => {
+    if (operatorDoors === undefined) return notConfigured(reply);
+    const qid = parseQuestionId((req.params as { id: string }).id);
+    if (qid === null) return refuseRoute(reply, 'bad-request');
+    if (qid.kind !== 'session') return refuseRoute(reply, 'kind-mismatch');
+    if (!(await operatorDoors.knownId(qid.sessionId))) return refuseRoute(reply, 'unknown-session');
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    let answer: OperatorAnswer;
+    if (body.kind === 'ask') {
+      const read = readAskAnswer(body);
+      if (read === null || read.askKey === undefined) return refuseRoute(reply, 'bad-request');
+      answer = { kind: 'ask', sessionId: qid.sessionId, askKey: read.askKey, optionIndexes: read.optionIndexes };
+    } else if (body.kind === 'dialog') {
+      const read = readDialogAnswer(body);
+      if (read === null) return refuseRoute(reply, 'bad-request');
+      answer = 'multi' in read
+        ? { kind: 'dialog', form: 'multi', sessionId: qid.sessionId, dialogId: read.dialogId, optionIndexes: read.optionIndexes }
+        : read.text === undefined
+          ? { kind: 'dialog', form: 'row', sessionId: qid.sessionId, dialogId: read.dialogId, optionIndex: read.optionIndex }
+          : { kind: 'dialog', form: 'text', sessionId: qid.sessionId, dialogId: read.dialogId, optionIndex: read.optionIndex, text: read.text };
+    } else {
+      return refuseRoute(reply, 'bad-request');
+    }
+    return sendAnswer(reply, await questions.answer(answer, operatorDoors.answerDeps));
+  });
+
+  /**
+   * `POST /api/questions/<ask|approval>-<n>/rule` — THE CLAIMANT'S. The box token, then the body by its `kind` (an ask:
+   * `fromId`/`fromUuid` and `readAskAnswer`'s answer; an approval: the widening-field refusal, then `fromId`/`fromUuid`,
+   * `verdict` and `reason`, exactly as `/api/approvals/:id/rule` reads them), attribution against the registry, the id
+   * (`parseQuestionId`, `bad-request`), and a body kind that disagrees with the id's is `kind-mismatch`. Then the
+   * claimant's core: the stored parent and everything after it, the signing unchanged. EXEMPT from the session gate,
+   * like the two doors it replaces (`/api/asks/:id/answer`, `/api/approvals/:id/rule`).
+   */
+  app.post('/api/questions/:id/rule', async (req, reply) => {
+    if (!deps.coord) return notConfigured(reply);
+    if (!requireMailToken(req, reply, 'POST /api/questions/:id/rule')) return;
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const { kind, fromId, fromUuid } = body;
+    let ruleOf: (id: number) => ClaimantRule;
+    if (kind === 'ask') {
+      // D-5293: the answer half is the operator route's, read by the one reader both read (`readAskAnswer`).
+      const answerBody = readAskAnswer(body);
+      if (typeof fromId !== 'string' || typeof fromUuid !== 'string' || answerBody === null) {
+        return reply.code(400).send({ ok: false, error: 'bad-request',
+          detail: 'fromId/fromUuid strings, optionIndexes an array of numbers, askKey a string when given' });
+      }
+      ruleOf = (id) => ({ kind: 'ask', id, fromId, optionIndexes: answerBody.optionIndexes, askKey: answerBody.askKey });
+    } else if (kind === 'approval') {
+      for (const k of ['permanent', 'updatedPermissions', 'mode']) {
+        if (Object.prototype.hasOwnProperty.call(body, k)) {
+          return refuseRoute(reply, 'bad-request', { detail: `a ruling allows once only; ${k} is never accepted` });
+        }
+      }
+      const { verdict, reason } = body;
+      if (typeof fromId !== 'string' || typeof fromUuid !== 'string' || (verdict !== 'allow' && verdict !== 'deny')
+          || typeof reason !== 'string' || reason.trim() === '' || reason.length > APPROVAL_REASON_MAX_CHARS) {
+        return refuseRoute(reply, 'bad-request', { detail: `fromId/fromUuid strings, verdict allow or deny, and a reason of 1 to ${APPROVAL_REASON_MAX_CHARS} characters` });
+      }
+      ruleOf = (id) => ({ kind: 'approval', id, fromId, verdict, reason });
+    } else {
+      return refuseRoute(reply, 'bad-request', { detail: 'kind ask or approval' });
+    }
+    if (!(await requireAttribution(reply, fromId as string, fromUuid as string, 'fromUuid'))) return;
+    const qid = parseQuestionId((req.params as { id: string }).id);
+    if (qid === null) return refuseRoute(reply, 'bad-request');
+    if (qid.kind === 'session' || qid.kind !== kind) return refuseRoute(reply, 'kind-mismatch');
+    return sendAnswer(reply, await questions.rule(ruleOf(qid.id), claimantDeps!));
+  });
+
+  /**
+   * `POST /api/questions/<ask|approval>-<n>/release` — THE CLAIMANT'S hand-over. The box token, the body
+   * (`{kind, fromId, fromUuid}`), attribution, the id, the kind check, then the claimant's core: the stored parent, the
+   * decline, and the operator's push now. EXEMPT from the session gate, like the two doors it replaces
+   * (`/api/asks/:id/release`, `/api/approvals/:id/release`).
+   */
+  app.post('/api/questions/:id/release', async (req, reply) => {
+    if (!deps.coord) return notConfigured(reply);
+    if (!requireMailToken(req, reply, 'POST /api/questions/:id/release')) return;
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const { kind, fromId, fromUuid } = body;
+    if (kind !== 'ask' && kind !== 'approval') return refuseRoute(reply, 'bad-request', { detail: 'kind ask or approval' });
+    if (typeof fromId !== 'string' || typeof fromUuid !== 'string') {
+      return refuseRoute(reply, 'bad-request', { detail: 'fromId/fromUuid strings' });
+    }
+    if (!(await requireAttribution(reply, fromId, fromUuid, 'fromUuid'))) return;
+    const qid = parseQuestionId((req.params as { id: string }).id);
+    if (qid === null) return refuseRoute(reply, 'bad-request');
+    if (qid.kind === 'session' || qid.kind !== kind) return refuseRoute(reply, 'kind-mismatch');
+    return sendAnswer(reply, await questions.release({ kind, id: qid.id, fromId }, claimantDeps!));
   });
 
   /**

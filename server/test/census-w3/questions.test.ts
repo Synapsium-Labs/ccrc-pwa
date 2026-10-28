@@ -219,6 +219,9 @@ describe('W3 question census (slug question-census)', () => {
     expect(carriers.map((s) => s.name), 'the closure carrier is found').toContain('approvalInputs');
     expect(doors.filter((s) => s.tag === 'untagged').map((s) => s.route), 'a door-shaped POST with no principal').toEqual([]);
     expect(doors.map((s) => s.route), 'the cited door is found').toContain('POST /api/approvals/:id/rule');
+    // 9 at the base (4 claimant, 4 operator, 1 navigation); 12 since Q3f (D-7030): 9 + the 3 routes of the family.
+    const byTag = (t: string): number => doors.filter((s) => s.tag === t).length;
+    expect([doors.length, byTag('claimant'), byTag('operator'), byTag('navigation')], 'the question doors, by principal').toEqual([12, 6, 5, 1]);
     for (const d of doorIns) expect(d.callers.length, `${d.method} has a route caller`).toBeGreaterThan(0);
   });
 
