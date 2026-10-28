@@ -2,9 +2,10 @@
 // only, each driving a real Chrome through playwright-core (`browser/harness.ts`). The hermetic run
 // (`vite.config.ts`'s `test` block) excludes `browser/**`, so `npm test` never needs a browser; this config runs as
 // `npm run test:browser` and as CI's `browser (pwa)` job. jsdom is the environment so a row can render production
-// React and use DOMParser inside the harness; the generous timeouts are for Chrome's start on a loaded box.
-// Pinned by test/browser-leg.test.ts.
+// React and use DOMParser inside the harness; the generous timeouts are for Chrome's start on a loaded box. The files
+// that set the leg's wall time start first (`browser/slowFirst.ts`). Pinned by test/browser-leg.test.ts.
 import { defineConfig } from 'vitest/config';
+import { SlowFirstSequencer } from './browser/slowFirst.js';
 
 export default defineConfig({
   test: {
@@ -12,5 +13,6 @@ export default defineConfig({
     environment: 'jsdom',
     testTimeout: 60000,
     hookTimeout: 60000,
+    sequence: { sequencer: SlowFirstSequencer },
   },
 });

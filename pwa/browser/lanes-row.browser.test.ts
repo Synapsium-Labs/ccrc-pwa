@@ -481,6 +481,49 @@ describe("New session ends at the bar line's content edge", () => {
   }
 });
 
+// The bar's controls sit clear of the lanes row (desktop polish Task C12, item 19, `top-bar-sits-clear-of-the-lanes-row`):
+// the command field (Instrument) or the doors (Refined) and New session keep their size, the space from their bottom
+// edges to the first line of cards is at least the cards' own gap, and the space above them matches it, so they sit
+// centred in their line. At 900, 1280 and 1920 in both skins, under a fine and a coarse pointer. Red on main's tree in
+// both: Instrument's controls filled its line and ended 0 px above the cards. Refined's sit centred in its 56 px line,
+// 6 px above and below, 2 px short of the cards' gap: measured and accepted as they are (the coordinator's ruling), so
+// Refined is held to those 6 px.
+const REFINED_BAR_CLEAR = 6;
+describe("the bar's controls sit clear of the lanes row, centred in their line", () => {
+  for (const view of [...DESKS.filter((v) => v.theme === PHOSPHOR), ...DESKS.filter((v) => v.theme === PHOSPHOR).map((v) => ({ ...v, touch: true }))]) {
+    it(named(view), async () => {
+      const { ctx, page, errors } = await openDesk(view);
+      try {
+        const m = await page.evaluate(() => {
+          const header = document.querySelector<HTMLElement>('header.shell-accounts')!;
+          const top = header.getBoundingClientRect().top + parseFloat(getComputedStyle(header).borderTopWidth);
+          const strip = header.querySelector<HTMLElement>('.accounts-strip')!;
+          const controls = [...header.querySelectorAll<HTMLElement>('.ins-command, .ins-new, .ref-bar-door, .ref-bar-new')]
+            .map((el) => ({ name: el.getAttribute('aria-label') ?? el.textContent?.trim() ?? '?', ...el.getBoundingClientRect().toJSON() as DOMRect }));
+          const cardTop = Math.min(...[...strip.querySelectorAll<HTMLElement>('.account-gauge')].map((c) => c.getBoundingClientRect().top));
+          return {
+            controls, cardTop, top, hasNew: header.querySelector('.ins-new, .ref-bar-new') !== null,
+            cardGap: parseFloat(getComputedStyle(strip).rowGap),
+            tapMin: parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--tap-min')),
+          };
+        });
+        expect(m.hasNew, 'the bar draws New session').toBe(true);
+        expect(m.controls.length, 'the bar draws its controls').toBeGreaterThan(1);
+        expect(m.cardGap, "the cards' own gap").toBeGreaterThan(0);
+        for (const c of m.controls) expect(c.height, `${c.name} keeps its floor`).toBeGreaterThanOrEqual(m.tapMin - 0.5);
+        const below = m.cardTop - Math.max(...m.controls.map((c) => c.bottom));
+        const above = Math.min(...m.controls.map((c) => c.top)) - m.top;
+        const floor = view.skin === REFINED ? REFINED_BAR_CLEAR : m.cardGap;
+        expect(below, `the controls end ${below} px above the first cards, less than ${floor} px`).toBeGreaterThanOrEqual(floor - 0.5);
+        expect(Math.abs(above - below), `the controls are not centred in their line (${above} above, ${below} below)`).toBeLessThanOrEqual(1);
+        expect(errors).toEqual([]);
+      } finally {
+        await ctx.close();
+      }
+    }, 90_000);
+  }
+});
+
 // The Accounts screen opened from a card: the page itself must not scroll. A window nobody measured speaks "not measured" in
 // an `sr-only` span, which is absolutely positioned: with no positioned ancestor in the rows it escapes the detail pane (the
 // scroller) and stretches the document, and the lane arrival then scrolls the document and cuts off the header.
@@ -857,7 +900,7 @@ describe('the flyout\'s focus rules', () => {
   const view: AppView = { width: 1280, skin: REFINED, theme: GEOMETRY_THEME };
   const STRIP = 'header.shell-accounts .accounts-strip';
 
-  it(`Escape closes the flyout a keyboard opened and hands focus to a card of the line: ${named(view)}`, async () => {
+  it(`Escape closes the flyout keyboard focus holds, the pointer having opened it, and hands focus to a card of the line: ${named(view)}`, async () => {
     const { ctx, page, errors } = await openFoldedDesk(view);
     try {
       await page.hover(STRIP);
@@ -883,11 +926,31 @@ describe('the flyout\'s focus rules', () => {
     }
   }, 90_000);
 
-  it(`a click's focus never holds the flyout: hover-open, click All accounts, move off the strip, and it closes within the grace: ${named(view)}`, async () => {
+  it(`a click's focus never holds the flyout: hover-open, click All accounts, move off the strip, and it closes no sooner than its grace after the pointer leaves: ${named(view)}`, async () => {
     const { ctx, page, errors } = await openFoldedDesk(view);
     try {
       await page.hover(STRIP);
       await page.waitForSelector('.accounts-flyout', { timeout: 5_000 });
+      // Timed in the page, on its own clock (C12 item 16): from the pointer's last exit from the strip or the flyout to
+      // the flyout's removal. All accounts is a door to /accounts, and the route it lands can move the strip out from
+      // under a resting pointer before the pointer moves at all, which starts the grace early; read on the test's clock
+      // from the move, a loaded runner saw the close at 208 and 197 ms of a 250 ms grace. A timer never fires early, so
+      // measured from the exit the page itself saw, the bound holds however slow the runner is.
+      await page.evaluate((sel) => {
+        const w = window as unknown as { __exits: number[]; __gone: number | null };
+        w.__exits = [];
+        w.__gone = null;
+        const inside = (n: EventTarget | null): boolean => n instanceof Element
+          && (document.querySelector(sel)?.contains(n) === true || n.closest('.accounts-flyout') !== null);
+        window.addEventListener('pointerout', (e) => {
+          if (inside(e.target) && !inside(e.relatedTarget)) w.__exits.push(performance.now());
+        }, { capture: true });
+        new MutationObserver((_, obs) => {
+          if (document.querySelector('.accounts-flyout') !== null) return;
+          w.__gone = performance.now();
+          obs.disconnect();
+        }).observe(document.body, { childList: true, subtree: true });
+      }, STRIP);
       await page.click(`${STRIP} .accounts-end button:last-of-type`);
       const focused = await page.evaluate(() => ({
         inEnd: document.activeElement?.closest('.accounts-end') !== null,
@@ -895,10 +958,15 @@ describe('the flyout\'s focus rules', () => {
       }));
       expect(focused, 'the click left focus on All accounts, and Chrome calls it not focus-visible').toEqual({ inEnd: true, visible: false });
       await page.mouse.move(view.width / 2, 880);
-      const leftAt = Date.now();
       await page.waitForSelector('.accounts-flyout', { state: 'detached', timeout: FLYOUT_CLOSE_MS + 2_000 });
-      const closed = Date.now() - leftAt;
-      expect(closed, `the flyout closed after ${closed} ms, before its ${FLYOUT_CLOSE_MS} ms grace`).toBeGreaterThanOrEqual(FLYOUT_CLOSE_MS - 20);
+      const timed = await page.evaluate(() => {
+        const w = window as unknown as { __exits: number[]; __gone: number | null };
+        const before = w.__exits.filter((t) => w.__gone !== null && t <= w.__gone);
+        return { gone: w.__gone, exit: before.length === 0 ? null : before[before.length - 1]!, exits: w.__exits.length };
+      });
+      expect(timed.exit, `the pointer left the strip before the flyout closed (${timed.exits} exits seen)`).not.toBeNull();
+      const closed = Math.round(timed.gone! - timed.exit!);
+      expect(closed, `the flyout closed ${closed} ms after the pointer left, before its ${FLYOUT_CLOSE_MS} ms grace`).toBeGreaterThanOrEqual(FLYOUT_CLOSE_MS - 1);
       expect(errors).toEqual([]);
     } finally {
       await ctx.close();

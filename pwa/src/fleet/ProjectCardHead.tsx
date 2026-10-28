@@ -67,16 +67,18 @@ function PoolChip({ pool, project, dim, onTap }: {
       </span>
     );
   }
+  // The door's name begins with the words it shows (WCAG 2.5.3, R121 Q6): "Set pool — " and then the state's sentence.
+  const untagged = pool.state === 'untagged';
   return (
     <button
       type="button"
       className="proj-card-pool"
       data-pool={dataPool}
-      aria-label={label}
+      aria-label={untagged ? `Set pool — ${label}` : label}
       title={label}
       {...actionDoor('open-pool', () => onTap(project))}
     >
-      {pool.state === 'untagged' ? 'Set pool' : word}
+      {untagged ? 'Set pool' : word}
     </button>
   );
 }

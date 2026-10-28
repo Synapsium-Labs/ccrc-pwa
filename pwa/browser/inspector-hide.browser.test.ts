@@ -8,7 +8,9 @@
 //   - "hiding at the newest turn keeps the reader at the newest turn": the strips returning shrinks the transcript, and
 //     the reader that was at the newest turn is still there;
 //   - "no sideways page scroll either way";
-//   - "under touch emulation at 1600 the toggle is at least 44 px".
+//   - "under touch emulation at 1600 the toggle is at least 44 px";
+//   - "at 1600 the toggle's word sits beside its glyph, shown and hidden" (C12 item 13: `chat.css`'s
+//     `.chat-head .keycap--inspector,` removed stacks the word under the glyph, and this case reds).
 //
 // Run: `( cd pwa && CCRC_CHROME=<a Chrome or Chromium binary> ./node_modules/.bin/vitest run --config vitest.browser.config.ts
 // --maxWorkers=2 browser/inspector-hide.browser.test.ts )`.
@@ -206,6 +208,32 @@ describe('Refined at 1600 and 1920', () => {
     }, 60_000);
   }
 
+  // The worded door flows in a column, as the header's other worded keycaps do (`chat.css`'s `.chat-head .keycap--inspector`,
+  // T3e's departure): without that selector the word stacks under the glyph and no other case sees it (C12 item 13).
+  it("at 1600 the toggle's word sits beside its glyph, shown and hidden", async () => {
+    const { ctx, page } = await openSession(view(1600));
+    try {
+      for (const hide of [false, true]) {
+        if (hide) {
+          await toggle(page).click();
+          await page.waitForFunction(() => document.querySelector('.ref-inspector') === null);
+        }
+        const parts = await page.evaluate(() => {
+          const door = document.querySelector('[data-command="toggle-inspector"]')!;
+          const box = (el: Element | null) => (el === null ? null : el.getBoundingClientRect().toJSON() as DOMRect);
+          return { glyph: box(door.querySelector('svg')), word: box(door.querySelector('.keycap-word')) };
+        });
+        expect(parts.glyph, `the glyph, hidden=${hide}`).not.toBeNull();
+        expect(parts.word, `the word, hidden=${hide}`).not.toBeNull();
+        expect(parts.word!.width, `the word is drawn, hidden=${hide}`).toBeGreaterThan(0);
+        expect(parts.word!.left, `the word starts after the glyph, hidden=${hide}`).toBeGreaterThanOrEqual(parts.glyph!.right - 0.5);
+        expect(parts.word!.top, `the word is on the glyph's line, hidden=${hide}`).toBeLessThan(parts.glyph!.bottom);
+      }
+    } finally {
+      await ctx.close();
+    }
+  }, 60_000);
+
   it('under touch emulation at 1600 the toggle is at least 44 px', async () => {
     const { ctx, page } = await openSession(view(1600, true));
     try {
@@ -216,8 +244,10 @@ describe('Refined at 1600 and 1920', () => {
         }
         const box = await toggle(page).boundingBox();
         expect(box, `hidden=${hide}`).not.toBeNull();
-        expect(box!.width, `width, hidden=${hide}`).toBeGreaterThanOrEqual(44);
-        expect(box!.height, `height, hidden=${hide}`).toBeGreaterThanOrEqual(44);
+        // A laid-out box can read a hair under its CSS size (43.99999 on a loaded runner), so the floor allows half a
+        // pixel, below one device pixel, as update-indicator's does; a toggle that is really short (40) still reds.
+        expect(box!.width, `width, hidden=${hide}`).toBeGreaterThanOrEqual(44 - 0.5);
+        expect(box!.height, `height, hidden=${hide}`).toBeGreaterThanOrEqual(44 - 0.5);
       }
     } finally {
       await ctx.close();

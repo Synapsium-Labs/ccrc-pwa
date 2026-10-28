@@ -63,7 +63,7 @@ describe('a wheel over a code block whose content fits moves .chat-scroller', ()
       });
       expect(dims.sh, 'the three-line block fits').toBeLessThanOrEqual(dims.ch);
       const dy = direction(fit);
-      const m = await wheelOver(page, 'fit', 0, dy);
+      const m = await wheelOver(page, 'fit', 0, dy, fit);
       expect(Math.abs(m.boxTop), 'the block has nothing to scroll').toBeLessThan(2);
       expect(Math.abs(m.scroller), `the transcript moved by ${m.scroller}px (wanted more than 50)`).toBeGreaterThan(50);
       expect(Math.sign(m.scroller), 'in the wheel direction').toBe(Math.sign(dy));
@@ -81,7 +81,7 @@ describe('a wheel over a tool card\'s well whose content fits moves .chat-scroll
       });
       expect(dims.sh, 'the two-line result well fits').toBeLessThanOrEqual(dims.ch);
       const dy = direction(well);
-      const m = await wheelOver(page, 'well', 0, dy);
+      const m = await wheelOver(page, 'well', 0, dy, well);
       expect(Math.abs(m.boxTop), 'the well has nothing to scroll').toBeLessThan(2);
       expect(Math.abs(m.scroller), `the transcript moved by ${m.scroller}px (wanted more than 50)`).toBeGreaterThan(50);
       expect(Math.sign(m.scroller), 'in the wheel direction').toBe(Math.sign(dy));
@@ -98,14 +98,14 @@ describe('a wheel over a code block taller than --well-max scrolls the block fir
 describe('a sideways wheel over a code block that overflows moves the block\'s scrollLeft and not the scroller\'s scrollTop', () => {
   for (const view of VIEWS) {
     it(named(view), () => inView(rig(), view, 'wide', async (page) => {
-      await settle(page, 'wide');
+      const wide = await settle(page, 'wide');
       const dims = await page.evaluate(() => {
         const el = (window as unknown as { __c5: { find: (kind: string) => HTMLElement } }).__c5.find('wide');
         return { sw: el.scrollWidth, cw: el.clientWidth, left: el.scrollLeft };
       });
       expect(dims.sw, 'the 300-character line overflows sideways').toBeGreaterThan(dims.cw + 300);
       expect(dims.left, 'the block starts at its left edge').toBe(0);
-      const m = await wheelOver(page, 'wide', 300, 0);
+      const m = await wheelOver(page, 'wide', 300, 0, wide);
       expect(m.boxLeft, `the block moved sideways by ${m.boxLeft}px (wanted more than 50)`).toBeGreaterThan(50);
       expect(Math.abs(m.scroller), `the transcript moved by ${m.scroller}px on a sideways wheel`).toBeLessThan(2);
     }), 120_000);
@@ -117,7 +117,7 @@ describe('control: a wheel over prose moves .chat-scroller', () => {
     it(named(view), () => inView(rig(), view, 'prose', async (page) => {
       const prose = await settle(page, 'prose');
       const dy = direction(prose);
-      const m = await wheelOver(page, 'prose', 0, dy);
+      const m = await wheelOver(page, 'prose', 0, dy, prose);
       expect(Math.abs(m.scroller), `the transcript moved by ${m.scroller}px (wanted more than 50)`).toBeGreaterThan(50);
       expect(Math.sign(m.scroller), 'in the wheel direction').toBe(Math.sign(dy));
     }), 120_000);

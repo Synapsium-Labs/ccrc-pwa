@@ -57,9 +57,13 @@
 // bounds its height. The control names its state: `aria-expanded` is whether the panel is open, `aria-controls` is its
 // id. It closes on a second tap of the control, a tap outside the strip and the panel (a document `pointerdown`),
 // Escape (default-prevented, as the flyout's, so the desk's Escape interrupt skips it), a tap or Enter on one of its
-// cards (which then opens that lane), a device that crosses 900 px, and a poll that leaves nothing to fold. A close
-// that finds focus in the panel hands it to the control (the same guard as the flyout's hand-back); crossing back to a
-// phone does not reopen it. Presentation state, per mount.
+// cards (which then opens that lane), a device that crosses 900 px, and a poll that leaves nothing to fold. An Escape
+// another layer has handled is that layer's: the palette and the ask surface stop it in the capture phase, so the
+// panel never sees it, and a default-prevented one is left alone. A close that finds focus in the panel (or on the
+// page, where a panel that just left the DOM drops it) hands it to the control, or to the line's tab stop when a poll
+// took the control in the same commit, or to the placeholder door when it left no live lane; focus anywhere else
+// stays where it is (the same hand-back as the flyout's). Crossing back to a phone does not reopen it. Presentation
+// state, per mount.
 //
 // THE PLACEHOLDER DOOR (D-161). With no lane to show the strip is exactly one `go-accounts` door and never renders
 // nothing. As a full-width readout of meters the strip read as DATA rather than navigation, so an operator hunting for
@@ -105,7 +109,8 @@ export function AccountsStrip({ store = useFleetStore }: { store?: FleetStore } 
   const desk = useDesk();
   const expanded = useStripExpanded(desk);
   const { ref: measureRef, row } = useRowWidth();
-  // The strip's group, held for `handFocusBack`; the measure's callback ref is called from the one below.
+  // The strip's group, held for the panel's room and the outside-tap close; the measure's callback ref is called from
+  // the one below.
   const groupEl = useRef<HTMLElement | null>(null);
   const groupRef = useCallback((el: HTMLElement | null) => { groupEl.current = el; measureRef(el); }, [measureRef]);
   const groupId = useId();
@@ -183,6 +188,8 @@ export function AccountsStrip({ store = useFleetStore }: { store?: FleetStore } 
   const [panelRoom, setPanelRoom] = useState(0);
   // Whether focus is on a card of the panel, tracked by its own focus and blur, as `flyHeld` is the flyout's.
   const panelHeld = useRef(false);
+  // The placeholder door, the hand-back's last stop when a poll leaves no live lane (review 1131 A2).
+  const doorRef = useRef<HTMLDivElement>(null);
   // The line's tab stop: the card last focused, or the first shown when that lane is gone (a stop on a lane that folded
   // away falls to the first shown card).
   const lineStop = fold.shown.find((a) => a.wrapper === stopId)?.wrapper ?? fold.shown[0]?.wrapper;
@@ -198,17 +205,20 @@ export function AccountsStrip({ store = useFleetStore }: { store?: FleetStore } 
   // the panel's own focus flag, and `to` where its focus belongs. The desk's flyout hands it to the line's tab stop, the
   // card the operator came from; that move starts inside the strip, so `onGroupFocus` reads it as a move and not as
   // focus arriving. The phone's panel hands it to its control, the button that opened it, and to the line's tab stop
-  // too when that control is gone (a poll left nothing to fold, and the control left in the same commit). It moves
-  // focus only from the page (the body, or nothing) or from inside the strip: a flag gone stale (a poll dropped the
-  // focused card's lane, which fires no blur) must never pull focus out of a field the operator has since put it in.
+  // too when that control is gone (a poll left nothing to fold, and the control left in the same commit), and to the
+  // placeholder door when there is no line either (a poll left no live lane). It moves focus only from the page (the
+  // body, or nothing: a card that left the DOM drops it there) or from a card of the flyout or panel being closed: a
+  // flag gone stale (a poll dropped the focused card's lane, which fires no blur) must never pull focus out of a field,
+  // or off All accounts in the strip's own end cell, where the operator has since put it (review 1131 A1).
   const handFocusBack = (held: { current: boolean }, to: 'line' | 'control'): void => {
     if (!held.current) return;
     held.current = false;
     const at = document.activeElement;
-    if (at !== null && at !== document.body && !groupEl.current?.contains(at)) return;
+    if (at !== null && at !== document.body && at.closest('.accounts-flyout') === null) return;
     const control = to === 'control' ? controlRef.current : null;
     if (control !== null) control.focus();
     else if (lineStop !== undefined) cardRefs.current.get(lineStop)?.focus();
+    else doorRef.current?.focus();
   };
   // The timers die with the component, and with whatever makes the flyout moot: the strip expanding, or a poll leaving
   // nothing to fold. A plain effect: a focus held by the flyout that has just left the DOM rests on the page for a frame
@@ -236,8 +246,9 @@ export function AccountsStrip({ store = useFleetStore }: { store?: FleetStore } 
   // a tap outside the strip and the panel, or Escape, closes it. A pointer-down on the control is inside the strip: the
   // control's own click then toggles, so a tap on it closes the panel once. Escape is default-prevented: the desk's
   // Escape interrupt skips a prevented key, so closing the panel never stops a busy session's turn. And an Escape that
-  // another layer has already handled (default-prevented: a sheet or the palette over the panel closing itself) is
-  // that layer's alone, so the panel under it stays open.
+  // another layer has already handled is that layer's alone, so the panel under it stays open: the palette and the ask
+  // surface stop it in the capture phase, so it never reaches this listener, and `defaultPrevented` covers the layers
+  // that prevent it instead (review 1131 A9).
   useLayoutEffect(() => {
     if (!panelShown) return;
     const measure = (): void => {
@@ -280,7 +291,7 @@ export function AccountsStrip({ store = useFleetStore }: { store?: FleetStore } 
       door.onClick();
     };
     return (
-      <div className="accounts-strip" role="link" tabIndex={0} aria-label={ACCOUNTS_DOOR_LABEL} {...door} onKeyDown={onKeyDown}>
+      <div ref={doorRef} className="accounts-strip" role="link" tabIndex={0} aria-label={ACCOUNTS_DOOR_LABEL} {...door} onKeyDown={onKeyDown}>
         <span className="accounts-strip-empty">{placeholder}</span>
       </div>
     );

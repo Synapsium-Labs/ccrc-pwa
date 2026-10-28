@@ -53,6 +53,7 @@ import { act, cleanup, fireEvent, render, screen, within } from '@testing-librar
 import { INSTRUMENT, REFINED } from '@ccrc/ui';
 import type { FleetSession, RunSummary, SessionBucket } from '../../shared/api';
 import { fleetSession } from './fleetFixture';
+import { effectiveValue, stripComments } from './cssRule';
 
 const { App } = await import('../src/app');
 const { navigate, useLocation } = await import('../src/lib/router');
@@ -66,6 +67,7 @@ const { GROUP_MODE_KEY } = await import('../src/skins/instrument/FleetTable');
 const SKIN_DIR = path.join(import.meta.dirname, '..', 'src', 'skins', 'instrument');
 const strip = (s: string): string => s.replace(/\/\*[\s\S]*?\*\//g, '');
 const CSS = strip(readFileSync(path.join(SKIN_DIR, 'instrument.css'), 'utf8'));
+const FLEET_CSS = stripComments(readFileSync(path.join(SKIN_DIR, '..', '..', 'fleet', 'fleet.css'), 'utf8'));
 const TABLE_SRC = readFileSync(path.join(SKIN_DIR, 'FleetTable.tsx'), 'utf8');
 
 const LABELS = ['Needs you', 'Done', 'Working', 'Idle', 'Cleanup', 'Archived', 'Exited'];
@@ -148,6 +150,49 @@ function rulesIn(media: string | null): { selectors: string[]; decls: string }[]
     scope = bodies.join('\n');
   }
   return [...scope.matchAll(/([^{}]+)\{([^}]*)\}/g)].map((r) => ({ selectors: r[1]!.split(',').map((x) => x.trim()), decls: r[2]! }));
+}
+
+/** `sel` with every `:<name>(…)` removed, nested parentheses included. */
+function dropPseudo(sel: string, name: string): string {
+  let out = '';
+  for (let i = 0; i < sel.length;) {
+    if (!sel.startsWith(`:${name}(`, i)) { out += sel[i++]; continue; }
+    let depth = 0;
+    let j = i + name.length + 1;
+    for (; j < sel.length; j += 1) {
+      if (sel[j] === '(') depth += 1;
+      else if (sel[j] === ')' && --depth === 0) break;
+    }
+    i = j + 1;
+  }
+  return out;
+}
+
+/** Every `display` a rule of `text` (in any at-rule) gives an element that can be the context's `.sess-meta`, as
+ *  "<sheet> <selector>: <value>": a selector whose subject (its last compound, read outside parentheses) names
+ *  `.sess-meta` or `.sess-meta--context`, outside a `:not()` or `:has()`, is not a pseudo-element and does not exclude
+ *  the context with `:not(.sess-meta--context)`. */
+function contextDisplays(text: string, sheet: string): string[] {
+  const subject = (sel: string): string => {
+    let depth = 0;
+    let last = 0;
+    for (let i = 0; i < sel.length; i += 1) {
+      if (sel[i] === '(') depth += 1;
+      else if (sel[i] === ')') depth -= 1;
+      else if (depth === 0 && /[\s>+~]/.test(sel[i]!)) last = i + 1;
+    }
+    return sel.slice(last);
+  };
+  const out: string[] = [];
+  for (const [, prelude, body] of text.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+    for (const sel of prelude!.split(',').map((s) => s.trim())) {
+      const subj = subject(sel);
+      if (/::?(?:before|after|marker)\b/.test(subj) || subj.includes(':not(.sess-meta--context)')) continue;
+      if (!/\.sess-meta(?:--context)?(?![\w-])/.test(dropPseudo(dropPseudo(subj, 'not'), 'has'))) continue;
+      for (const [, value] of body!.matchAll(/(?:^|[;{\s])display\s*:\s*([^;]+)/g)) out.push(`${sheet} ${sel}: ${value!.trim()}`);
+    }
+  }
+  return out;
 }
 
 beforeEach(() => {
@@ -649,9 +694,11 @@ describe('dense rows at the desk (T2e, D-6335)', () => {
     // The operator's ruling (R121, Q2) and D-7252: the state word ends the context line, so a long name does not push it
     // onto a line of its own, but never by narrowing the context. The row is a block; the name is an inline box at its
     // own width, the state word floats to the end of the first line with room for it, and the context is as wide as its
-    // text, so a float leaves it to start below the state word when it would not fit whole beside it. A flex basis or a
-    // `min-width: 0` on the context would let the state squeeze it again. A row with no context keeps the flex row, so
-    // every rule names a row that HAS a context.
+    // text, so a float leaves it to start below the state word when it would not fit whole beside it. That needs the
+    // context to be a formatting context of its own: it is `.sess-meta`, a flex container in fleet.css, pinned below (an
+    // ordinary block would run under the float). The row's children sit in a block, so no flex basis, `order` or
+    // `min-width` on them takes part. A row with no context keeps the flex row, so every rule names a row that HAS a
+    // context.
     const body = '.ins-row .sess-line:has(.sess-meta--context) .sess-body';
     const open = '.ins-row .sess-line:has(.sess-meta--context) .sess-body > .sess-open';
     const state = '.ins-row .sess-line:has(.sess-meta--context) .sess-body > .sess-meta:not(.sess-meta--context)';
@@ -662,8 +709,13 @@ describe('dense rows at the desk (T2e, D-6335)', () => {
     expect(declsOf(state, DENSE)).toMatch(/float:\s*right/);
     expect(declsOf(context, DENSE)).toMatch(/width:\s*max-content/);
     expect(declsOf(context, DENSE)).toMatch(/max-width:\s*100%/);
-    expect(declsOf(context, DENSE)).not.toMatch(/flex|min-width/);
-    expect(declsOf(state, DENSE)).not.toMatch(/order/);
+    // The context is a formatting context of its own (review 1130 E): `.sess-meta`'s display is flex, and no rule of the
+    // two sheets that style a desk row gives the context another (review 1136 F9: a more specific `display: block`
+    // would pass a read of the base rule alone). chat.css's `.chat-facts .sess-meta` is the session page's, not a row's.
+    expect(effectiveValue(FLEET_CSS, '.sess-meta', 'display'), "fleet.css's .sess-meta").toBe('flex');
+    const displays = [...contextDisplays(FLEET_CSS, 'fleet.css'), ...contextDisplays(CSS, 'instrument.css')];
+    expect(displays, 'the scan reads the base rule').toContain('fleet.css .sess-meta: flex');
+    expect(displays.filter((d) => !d.endsWith(': flex')), 'a display other than flex on the context').toEqual([]);
     // Only at the desk under a fine pointer: a touch screen or a phone keeps the shared sheet's rows.
     for (const sel of [body, open, state, context]) {
       expect(declsOf(sel), sel).toBe('');

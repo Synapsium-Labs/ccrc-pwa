@@ -14,8 +14,9 @@
 //   - a string in a JSX child expression (`{cond ? 'a' : 'b'}`);
 //   - sentence constants: a top-level `const` holding a string, a template, or an arrow that returns one (exported or
 //     not: a private constant is rendered all the same), and a top-level function's returned strings;
-//   - the sentence values of a `Record` table (a top-level const typed `Record<…>`), at any depth under a value that is
-//     itself an object or an array (`STATUS_GROUPS`' `{ order, label, folds }` keeps its `label` one level down);
+//   - the sentence values of a `Record` table (a top-level const typed `Record<…>`, typed through a type alias this file
+//     declares, or whose value `satisfies` or is cast `as` one), at any depth under a value that is itself an object or
+//     an array (`STATUS_GROUPS`' `{ order, label, folds }` keeps its `label` one level down);
 //   - the first argument of `toast(…)`, which is a sentence the operator reads;
 //   - `api.ts` only: the Error literal in the returned API object's `projects` method, which reports a malformed
 //     project-list response. The two `wrong-representation` Errors in the docs loaders are internal machine
@@ -41,6 +42,7 @@ import { describe, expect, it } from 'vitest';
 import path from 'node:path';
 import ts from 'typescript';
 import { isSpecifier, parseTs } from './literalWalker';
+import { STATUS_GROUPS } from '../src/fleet/statusGroups';
 
 const SESSION = path.join(import.meta.dirname, '..', 'src', 'session');
 const REFUSAL_WORDS = path.join(import.meta.dirname, '..', 'src', 'lib', 'refusalWords.ts');
@@ -176,10 +178,33 @@ export function visibleStrings(file: string, text?: string, only?: readonly stri
     }
     n.forEachChild(underChild);
   };
-  const isRecordType = (t: ts.TypeNode | undefined): boolean => t !== undefined && /\bRecord</.test(t.getText(src));
-  const recordValues = (init: ts.Expression): void => {
-    const obj = ts.isObjectLiteralExpression(init) ? init : null;
-    if (obj === null) return;
+  // A Record type by what it names, wherever it is written: `Record<…>` itself, or a type alias this file declares
+  // that is one (C12 item 6), so a table retyped through an alias is still a table.
+  const recordAliases = new Set<string>();
+  const namesRecord = (t: ts.TypeNode): boolean => /\bRecord</.test(t.getText(src))
+    || [...recordAliases].some((a) => new RegExp(`\\b${a}\\b`).test(t.getText(src)));
+  for (let grew = true; grew;) {
+    grew = false;
+    for (const st of src.statements) {
+      if (ts.isTypeAliasDeclaration(st) && !recordAliases.has(st.name.text) && namesRecord(st.type)) {
+        recordAliases.add(st.name.text);
+        grew = true;
+      }
+    }
+  }
+  const isRecordType = (t: ts.TypeNode | undefined): boolean => t !== undefined && namesRecord(t);
+  /** The table a declaration holds: its object literal when the annotation is a Record type, or when the value itself
+   *  `satisfies` (or is cast `as`) one with no annotation; else null. */
+  const recordTable = (d: ts.VariableDeclaration): ts.ObjectLiteralExpression | null => {
+    let init: ts.Expression | undefined = d.initializer;
+    let typed = isRecordType(d.type);
+    while (init !== undefined && (ts.isParenthesizedExpression(init) || ts.isSatisfiesExpression(init) || ts.isAsExpression(init))) {
+      if (!ts.isParenthesizedExpression(init) && isRecordType(init.type)) typed = true;
+      init = init.expression;
+    }
+    return typed && init !== undefined && ts.isObjectLiteralExpression(init) ? init : null;
+  };
+  const recordValues = (obj: ts.ObjectLiteralExpression): void => {
     for (const p of obj.properties) {
       if (!ts.isPropertyAssignment(p)) continue;
       const key = ts.isStringLiteral(p.name) || ts.isIdentifier(p.name) ? p.name.text : null;
@@ -233,8 +258,9 @@ export function visibleStrings(file: string, text?: string, only?: readonly stri
     if (!ts.isVariableStatement(st)) continue;
     for (const d of st.declarationList.declarations) {
       if (d.initializer === undefined) continue;
-      if (isRecordType(d.type)) {
-        recordValues(d.initializer);
+      const table = recordTable(d);
+      if (table !== null || isRecordType(d.type)) {
+        if (table !== null) recordValues(table);
         continue;
       }
       if (only !== undefined) continue;
@@ -326,6 +352,15 @@ const FLEET_LIST = [
 ];
 
 describe('the fleet list speaks plainly (D-6331)', () => {
+  // The real table, not a probe (C12 item 6): every STATUS_GROUPS label is among the strings the census reads, so a
+  // retyped table, or a walk that stops at the value object, cannot leave the case green on `needsReason`'s words.
+  it('statusGroups.ts: every STATUS_GROUPS label is read', () => {
+    const labels = Object.values(STATUS_GROUPS).map((g) => g.label);
+    expect(labels.length, 'the table has its groups').toBeGreaterThan(0);
+    const texts = visibleStrings(path.join(SRC, 'fleet', 'statusGroups.ts')).map((v) => v.text);
+    expect(texts).toEqual(expect.arrayContaining(labels));
+  });
+
   it.each(FLEET_LIST.map((f) => [path.relative(SRC, f), f] as const))(
     '%s says none of the forbidden words where an operator reads',
     (_name, file) => {
@@ -358,6 +393,9 @@ describe('the scanner reads positions, not shapes', () => {
     ['a Record table value', 'const T: Readonly<Record<string, string>> = { a: "fine", b: "the envelope" };'],
     ['a Record table value nested in an object', 'const T: Record<string, { order: number; label: string }> = { a: { order: 1, label: "fine" }, b: { order: 2, label: "the envelope" } };'],
     ['a Record table value nested two deep', 'const T: Record<string, { a: { b: string[] } }> = { x: { a: { b: ["fine", "the pane"] } } };'],
+    // C12 item 6: a table is a Record by its type, wherever the type is written, not by the annotation's text alone.
+    ['a Record table typed through a local alias', 'type Words = Readonly<Record<string, string>>;\nconst T: Words = { a: "fine", b: "the envelope" };'],
+    ['a Record table that satisfies Record', 'const T = { a: "fine", b: "the envelope" } satisfies Record<string, string>;'],
     ['a toast', 'toast("claude is asking");'],
     ['a headline attribute', 'export const A = (n: number) => <Strip headline={n === 1 ? "1 hot-file claim" : "fine"} />;'],
     ['a kicker attribute', 'export const A = () => <AskHeader kicker="claude is asking" />;'],

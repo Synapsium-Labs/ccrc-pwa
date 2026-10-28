@@ -3191,7 +3191,9 @@ different builds, a fleet `ccd` too old for project pools, tmux unreachable on e
 session's state is known"), an update halt (each halting node with its own **Ack**), a release out, the
 socket reconnecting, a dismissible swap notice and — on an armed box with no passkey — *Passphrase only —
 add a passkey*. `Runs · N active` opens `/runs`, beside the **Class**
-chooser (next section); a **Hot files** strip appears only while some session holds a file claim (read-only;
+chooser (next section), in Refined at every width and in Instrument below 900. At Instrument's desk the column
+draws no runs line (the rail holds the Runs door), and the chooser sits on the list's status/project toggle row in
+project mode. A **Hot files** strip appears only while some session holds a file claim (read-only;
 "Fleet coordination" says what a claim is).
 
 **Bucket chips** count every session by bucket — `Attention`, `Working`, `Done`, `Idle`, `Cleanup`, `Archived`,

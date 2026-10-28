@@ -1,7 +1,8 @@
 // The chat's rows are memoised (desktop polish Task C7). A session screen renders again for many reasons that change no
 // row: a roster answer, a status word, the composer. Before C7 every such render re-ran react-markdown and highlight.js
 // for every mounted message. These cases pin the barriers that stop it: one row barrier in `MeasuredItem` (the item
-// compared by `sameTranscriptItem`, every other prop by identity), `MessageBubble` and `ChatMarkdown` memoised, and
+// compared by `sameTranscriptItem`, every other prop by identity, except `day`, which only a row whose words read the
+// clock compares: `sameRow.ts#readsClock`, review 1128), `MessageBubble` and `ChatMarkdown` memoised, and
 // SessionScreen's three row callbacks stable.
 //
 // Counts come from stand-ins (`vi.mock`, the real module spread, one export wrapped): `ChatMarkdown` counts each time a
