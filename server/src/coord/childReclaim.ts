@@ -43,6 +43,11 @@ import { notRanSentence } from '../unmeasured.js';
 import { recordNestedRescueShadow } from './nestedRescueShadow.js';
 import { nestedWouldRescueCount, nestedWouldRescuePaths } from '../../../shared/nestedRescue.js';
 import { SHADOW_RUNG } from '../../../shared/shadowJournal.js';
+import { childReclaimSweepVerdict } from '../childReclaimSweep.js';
+import {
+  RETIRE_LISTING_MODES, RETIRE_NOTICE_HOMES, RETIRE_PRESENCE_RULES, RETIRE_REASON_NAMES, RETIRE_STEPS, RetireRejected,
+  capabilityJudge, presenceJudge, type RetireNoRead, type RetireReason,
+} from '../retire.js';
 
 /**
  * CHILD-WORKSPACE RECLAMATION, the server half (spec 2026-09-22 §5.5–§5.7).
@@ -2319,3 +2324,208 @@ export function withChildReclaim(runs: readonly RunSummary[], src: ChildReclaimS
   });
 }
 // ── end wave 5 chip ──
+
+// ── the gate's row (D-7166; ARCH-44, consolidation spec K1) ──────────────────
+
+/** `readSessionRecord`'s answer, and the re-listing `childReclaimOutcome` takes on an `absent` or `unmeasurable` one. */
+type ChildSpentRecordRead = Awaited<ReturnType<typeof readSessionRecord>>;
+export type ChildSpentRecordFact =
+  | { readonly read: Exclude<ChildSpentRecordRead, { kind: 'absent' | 'unmeasurable' }> }
+  | { readonly read: Extract<ChildSpentRecordRead, { kind: 'absent' | 'unmeasurable' }>; readonly again: ChildReclaimRowListing };
+
+/**
+ * CHILD-SPENT'S ROW OF THE ONE RETIRE GATE (`retire.ts#decideRetire`): `childReclaimOutcome`'s steps 1 to 6, one row step
+ * per point at which it answers, in its order, each judged by its own statements over its readers' facts. The readers
+ * are its reads, unchanged (`childReclaimPauseRead` and `childReclaimDisabledDetail` included, D-7224); the mail cancels,
+ * the nested-rescue shadow and the stale told stay with the port (D-7199, D-7230). It is the executor's description, not
+ * yet its body: `childReclaimOutcome` still runs its own ladder until its reason moves (D-7170).
+ */
+export interface ChildSpentFacts {
+  readonly [RETIRE_STEPS.record]?: ChildSpentRecordFact;
+  readonly [RETIRE_STEPS.store]?: Awaited<ReturnType<typeof readChildSiblings>>;
+  /** `childReclaimHasCoordinated`, or its throw (step 2a's try). */
+  readonly [RETIRE_STEPS.coordinated]?: boolean | RetireRejected;
+  /** `childReclaimPauseRead`'s `MarkerState`, or its rejection (step 2b's try). */
+  readonly [RETIRE_STEPS.switches]?: MarkerState | RetireRejected;
+  /** `childReclaimDisabledDetail`'s answer, which folds its own rejection. */
+  readonly [RETIRE_STEPS.offSwitch]?: string | null;
+  /** `childReclaimGenerationRead`, its rejection (step 2c's try), or null when the request carries no licence. */
+  readonly [RETIRE_STEPS.generation]?: ChildReclaimGeneration | RetireRejected | null;
+  readonly [RETIRE_STEPS.presence]?: boolean;
+  /** `reclaim-v1`, then the stale arm's `reclaim-stale-v1` (true for a request that is not stale). */
+  readonly [RETIRE_STEPS.capability]?: readonly boolean[];
+  readonly [RETIRE_STEPS.audit]?: ChildReclaimAuditRead | ChildReclaimAuditUnmeasured;
+  readonly [RETIRE_STEPS.auditVerdict]?: RetireNoRead;
+  readonly [RETIRE_STEPS.markerMatch]?: RetireNoRead;
+  readonly [RETIRE_STEPS.auditGeneration]?: RetireNoRead;
+  readonly [RETIRE_STEPS.offSwitchLast]?: string | null;
+}
+
+const childSpentDeferredOf = (req: ChildReclaimRequest, why: ChildReclaimDeferWhy, detail: string): ChildReclaimOutcome =>
+  ({ kind: 'deferred', sessionId: req.sessionId, runId: req.runId, why, detail });
+const childSpentRejected = (r: RetireRejected): string => (r.rejected instanceof Error ? r.rejected.message : String(r.rejected));
+/** The audit's token, for a step after `audit-verdict` (which judged its refusal). */
+const childSpentTokenOf = (f: ChildSpentFacts): Extract<ChildReclaimAuditRead, { kind: 'token' }> => {
+  const audit = f[RETIRE_STEPS.audit];
+  if (audit === undefined || audit.kind !== 'token') throw new Error('child-spent: a step after the verdict was judged without a token');
+  return audit;
+};
+
+/** Step 1: the box's authority, re-read: the marker must name THIS request's run (D-7204: `id-argv-census.test.ts`'s
+ *  `child-reclaim-outcome` gate). The `gone` arm's mail cancel is the port's, on this step only (D-7230). */
+function childSpentRecordJudge(record: ChildSpentRecordFact, req: ChildReclaimRequest): ChildReclaimOutcome | null {
+  const { sessionId, runId } = req;
+  const deferred = (why: ChildReclaimDeferWhy, detail: string): ChildReclaimOutcome =>
+    ({ kind: 'deferred', sessionId, runId, why, detail });
+  const read = record.read;
+  switch (read.kind) {
+    case 'found': break;
+    case 'absent': case 'unmeasurable': {
+      const { again } = record as Extract<ChildSpentRecordFact, { again: ChildReclaimRowListing }>;
+      if (again.kind === 'unlistable') return deferred('marker-unreadable', 'the registry could not be listed');
+      if (again.uuid || again.child) {
+        return deferred('marker-unreadable', 'the registry lists this workspace but its row could not be built');
+      }
+      return { kind: 'gone', sessionId };
+    }
+    case 'unlistable': return deferred('marker-unreadable', 'the registry could not be listed');
+    case 'bad-id': return deferred('marker-unreadable', 'the session id is not a registry id');
+    default: {
+      const _x: never = read;
+      return _x;
+    }
+  }
+  const mark = read.record.child;
+  if (mark.kind === 'unreadable') return deferred('marker-unreadable', 'the child marker could not be read');
+  if (mark.kind === 'none') return deferred('marker-mismatch', 'the workspace carries no child marker');
+  if (mark.runId !== runId) {
+    return deferred('marker-mismatch', `the child marker names run ${mark.runId}, not run ${runId}`);
+  }
+  return null;
+}
+
+/** Step 2b: `childReclaimPauseRead`'s answer, or the rejection its try caught (D-7224). */
+function childSpentSwitchesJudge(pause: MarkerState | RetireRejected, req: ChildReclaimRequest): ChildReclaimOutcome | null {
+  const deferred = (why: ChildReclaimDeferWhy, detail: string): ChildReclaimOutcome => childSpentDeferredOf(req, why, detail);
+  if (pause instanceof RetireRejected) {
+    return deferred('paused-at-server', `whether ${RECLAIM_PAUSE_MARKER} is raised could not be read `
+      + `(${childSpentRejected(pause)})`);
+  }
+  if (pause !== 'clear') {
+    return deferred('paused-at-server', pause === 'set'
+      ? `${RECLAIM_PAUSE_MARKER} is raised: automatic reclamation is paused fleet-wide`
+      : `the registry did not list, so a raised ${RECLAIM_PAUSE_MARKER} cannot be ruled out`);
+  }
+  return null;
+}
+
+/** Steps 2b' and 6: `childReclaimDisabledDetail`'s answer. */
+const childSpentOffSwitchJudge = (detail: string | null, req: ChildReclaimRequest): ChildReclaimOutcome | null =>
+  (detail !== null ? childSpentDeferredOf(req, 'paused-at-server', detail) : null);
+
+export const CHILD_SPENT_RETIRE: RetireReason<ChildReclaimRequest, ChildSpentFacts, ChildReclaimOutcome> = {
+  name: RETIRE_REASON_NAMES.childSpent,
+  decide: [
+    { step: RETIRE_STEPS.record, sync: false, onReject: 'propagate' },
+    { step: RETIRE_STEPS.store, sync: false, onReject: 'propagate' },
+    { step: RETIRE_STEPS.coordinated, sync: true, onReject: 'judged' },
+    { step: RETIRE_STEPS.switches, sync: false, onReject: 'judged', markers: [RECLAIM_PAUSE_MARKER] },
+    // The off switch's one listing names its marker in its one reader's file (ARCH-77's single-reader guard), so its
+    // two steps name no marker here: `childReclaimDisabledDetail` lists for it.
+    { step: RETIRE_STEPS.offSwitch, sync: false, onReject: 'propagate' },
+    { step: RETIRE_STEPS.generation, sync: false, onReject: 'judged' },
+    { step: RETIRE_STEPS.presence, sync: true, onReject: 'propagate' },
+    { step: RETIRE_STEPS.capability, sync: true, onReject: 'propagate' },
+  ],
+  audit: { step: RETIRE_STEPS.audit, sync: false, onReject: 'propagate' },
+  act: [
+    { step: RETIRE_STEPS.auditVerdict, sync: true, onReject: 'propagate' },
+    { step: RETIRE_STEPS.markerMatch, sync: true, onReject: 'propagate' },
+    { step: RETIRE_STEPS.auditGeneration, sync: true, onReject: 'propagate' },
+    { step: RETIRE_STEPS.offSwitchLast, sync: false, onReject: 'propagate' },
+  ],
+  listing: RETIRE_LISTING_MODES.plainPerMarker,
+  presence: RETIRE_PRESENCE_RULES.untilCeiling,
+  notice: RETIRE_NOTICE_HOMES.executor,
+  judge: {
+    [RETIRE_STEPS.record]: (record, _f, req) => childSpentRecordJudge(record, req),
+    [RETIRE_STEPS.store]: (sib, _f, req) => {
+      if (!sib.ok) return childSpentDeferredOf(req, 'siblings-unreadable', sib.detail);
+      if (sib.open > 0) {
+        return childSpentDeferredOf(req, 'siblings-open',
+          `open run(s) ${(sib.blocking ?? []).map((s) => `#${s.id}`).join(', ')} still name this workspace`);
+      }
+      return null;
+    },
+    [RETIRE_STEPS.coordinated]: (coordinated, _f, req) => {
+      if (coordinated instanceof RetireRejected) {
+        return childSpentDeferredOf(req, 'siblings-unreadable', `whether ${req.sessionId} has coordinated a run could not be read `
+          + `(${childSpentRejected(coordinated)})`);
+      }
+      return coordinated ? childSpentDeferredOf(req, 'siblings-open', `${req.sessionId} has coordinated run(s)`) : null;
+    },
+    [RETIRE_STEPS.switches]: (pause, _f, req) => childSpentSwitchesJudge(pause, req),
+    [RETIRE_STEPS.offSwitch]: (detail, _f, req) => childSpentOffSwitchJudge(detail, req),
+    [RETIRE_STEPS.generation]: (current, _f, req) => {
+      const licence = req.licenceGeneration;
+      if (licence.kind === 'none') return null;
+      if (current instanceof RetireRejected) {
+        return childSpentDeferredOf(req, 'marker-unreadable', `${req.sessionId}.generation could not be read `
+          + `(${childSpentRejected(current)}), so which workspace stands under this name cannot be said`);
+      }
+      if (current === null) throw new Error('child-spent: a licensed request was judged without its generation re-read');
+      if (current.kind === 'unreadable') {
+        return childSpentDeferredOf(req, 'marker-unreadable',
+          `${req.sessionId}.generation could not be read, so which workspace stands under this name cannot be said`);
+      }
+      if (!childReclaimSameGenerationKey(licence, current)) {
+        return childSpentDeferredOf(req, 'generation-changed', `the workspace now carries ${childReclaimGenerationWords(current)}, `
+          + `and this request was judged under ${childReclaimGenerationWords(licence)}. ${CHILD_RECLAIM_GENERATION_CHANGED_SENTENCE}`);
+      }
+      return null;
+    },
+    [RETIRE_STEPS.presence]: presenceJudge<ChildReclaimRequest, ChildSpentFacts, ChildReclaimOutcome>(
+      RETIRE_PRESENCE_RULES.untilCeiling,
+      (req) => childSpentDeferredOf(req, 'presence', 'someone is viewing this session'), (req) => req.deferExpired),
+    [RETIRE_STEPS.capability]: capabilityJudge<ChildReclaimRequest, ChildSpentFacts, ChildReclaimOutcome>([
+      (req) => childSpentDeferredOf(req, 'unsupported', `the fleet host does not advertise ${RECLAIM_CAP}`),
+      (req) => childSpentDeferredOf(req, 'unsupported', `the fleet host does not advertise ${RECLAIM_STALE_CAP}`),
+    ]),
+    [RETIRE_STEPS.audit]: (audit, _f, req) => {
+      const { sessionId, runId } = req;
+      if (audit.kind === 'unreadable') {
+        return { kind: 'failed', sessionId, runId, resume: 'not-resumable', detail: audit.detail, token: null };
+      }
+      if (audit.kind === 'unmeasured') {
+        return { kind: 'failed', sessionId, runId, resume: audit.resume, detail: audit.detail,
+          token: CHILD_RECLAIM_PROBE_UNMEASURED };
+      }
+      return null;
+    },
+    [RETIRE_STEPS.auditVerdict]: (_n, f, req) => {
+      const audit = f[RETIRE_STEPS.audit];
+      return audit?.kind === 'refused' ? childReclaimRefusal(req, audit.token, audit.detail) : null;
+    },
+    [RETIRE_STEPS.markerMatch]: (_n, f, req) => {
+      const audit = childSpentTokenOf(f);
+      return audit.childOf !== req.runId
+        ? childSpentDeferredOf(req, 'marker-mismatch', `ws-audit read the child marker as run ${audit.childOf}, not run ${req.runId}`)
+        : null;
+    },
+    [RETIRE_STEPS.auditGeneration]: (_n, f, req) => {
+      const licence = req.licenceGeneration;
+      if (licence.kind === 'none') return null;
+      const audit = childSpentTokenOf(f);
+      if (audit.generation.kind === 'unprinted') {
+        return req.deferExpired ? childSpentDeferredOf(req, 'unsupported', CHILD_RECLAIM_AUDIT_UNBOUND) : null;
+      }
+      if (!childReclaimSameGenerationKey(licence, audit.generation)) {
+        return childSpentDeferredOf(req, 'generation-changed', `ws-audit minted its token over ${childReclaimGenerationWords(audit.generation)}, `
+          + `and this request was judged under ${childReclaimGenerationWords(licence)}. ${CHILD_RECLAIM_GENERATION_CHANGED_SENTENCE}`);
+      }
+      return null;
+    },
+    [RETIRE_STEPS.offSwitchLast]: (detail, _f, req) => childSpentOffSwitchJudge(detail, req),
+  },
+  evidence: [childReclaimSweepVerdict, childReclaimDecision],
+};

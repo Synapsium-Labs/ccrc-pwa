@@ -12,6 +12,7 @@ import { childReclaimHasCoordinated } from './childReclaim.js';
 import { readSwitches } from '../../../shared/switches.js';
 import {
   EXPIRE_ASKS_AGAIN_CADENCE, EXPIRE_CHILD_LIVE_MARKER, EXPIRE_HALT_WORDS, EXPIRE_LANE_LIVE_MARKER, EXPIRE_TOKEN_KIND, archivedExpiryStoreSkip, expireKeptParts, parseExpireAudit,
+  archivedExpiryVerdict,
   parseExpireResult, reviewKeeps,
   type ArchivedExpiryOutcome, type ExpireAuditRead, type ExpiryStoreRead,
 } from '../archivedExpiry.js';
@@ -21,6 +22,10 @@ import { notRanSentence } from '../unmeasured.js';
 import { recordNestedRescueShadow } from './nestedRescueShadow.js';
 import { journalShadowVerdict } from './shadowJournal.js';
 import { SHADOW_LANE, SHADOW_RUNG } from '../../../shared/shadowJournal.js';
+import {
+  RETIRE_LISTING_MODES, RETIRE_NOTICE_HOMES, RETIRE_PRESENCE_RULES, RETIRE_REASON_NAMES, RETIRE_STEPS, capabilityJudge,
+  presenceJudge, type RetireNoRead, type RetireReason,
+} from '../retire.js';
 
 /**
  * THE EXPIRY LANE'S ONE EXECUTOR (workspace lifecycle spec 2026-09-24 §5.3, wave 3b): `ws-audit --expire`, then
@@ -353,3 +358,135 @@ export function recordExpireFeed(deps: Pick<ExpireArchivedDeps, 'coord' | 'notif
   notify(deps, { kind: 'run', sessionId: r.sessionId, runId: null, title, body: expireFeedBody(r, standing) },
     'record-only', { degraded: `archived expiry ${r.kind}, feed archive degraded` });
 }
+
+// ── the gate's row (D-7166; ARCH-44, consolidation spec K1) ──────────────────
+
+/** `expirySwitches`' answer, as it stands (D-7224). */
+type ExpirySwitchesRead = Awaited<ReturnType<typeof expirySwitches>>;
+
+/**
+ * ARCHIVE-EXPIRED'S ROW OF THE ONE RETIRE GATE (`retire.ts#decideRetire`): `expireArchived`'s steps 0 to 7, one row step
+ * per point at which the executor answers, in its order, each judged by its own statements over its readers' facts. The
+ * readers are its reads, unchanged (`expirySwitches` included, D-7224). It is the executor's description, not yet its
+ * body: `expireArchived` still runs its own ladder until its reason moves (D-7169).
+ */
+export interface ArchiveExpiredFacts {
+  /** The request's session id: the id predicate's input. */
+  readonly [RETIRE_STEPS.id]?: string;
+  /** `expire-v1`, then the child arm's `expire-child-v1` (true for a row that is no child). */
+  readonly [RETIRE_STEPS.capability]?: readonly boolean[];
+  readonly [RETIRE_STEPS.switches]?: ExpirySwitchesRead;
+  readonly [RETIRE_STEPS.store]?: ExpiryStoreRead;
+  readonly [RETIRE_STEPS.presence]?: boolean;
+  readonly [RETIRE_STEPS.audit]?: ExpireAuditRead;
+  readonly [RETIRE_STEPS.archiveMatch]?: RetireNoRead;
+  readonly [RETIRE_STEPS.auditVerdict]?: RetireNoRead;
+  readonly [RETIRE_STEPS.switchesLast]?: ExpirySwitchesRead;
+  readonly [RETIRE_STEPS.live]?: RetireNoRead;
+}
+
+/** The markers the executor's two listings read, each from ONE measured listing. */
+const EXPIRY_SWITCH_MARKERS: readonly string[] = [RECLAIM_PAUSE_MARKER, EXPIRE_LANE_LIVE_MARKER, EXPIRE_CHILD_LIVE_MARKER];
+
+/** The executor's answer envelope (`expireArchived`'s `answer`), for one request. */
+const expiryAnswerOf = (req: ExpireArchivedRequest) =>
+  (o: ArchivedExpiryOutcome, extra: Partial<ExpireArchivedResult> = {}): ExpireArchivedResult =>
+    ({ ...o, sessionId: req.sessionId, archivedAt: req.archivedAt, expiresAt: req.expiresAt,
+      ...(req.childOf === undefined ? {} : { child: true }), ...extra } as ExpireArchivedResult);
+
+/** The audit's document, for a step after `audit` (which judged an unreadable one). */
+const expiryDocumentOf = (f: ArchiveExpiredFacts): Extract<ExpireAuditRead, { kind: 'document' }> => {
+  const audit = f[RETIRE_STEPS.audit];
+  if (audit === undefined || audit.kind !== 'document') throw new Error('archive-expired: a step after the audit was judged without its document');
+  return audit;
+};
+
+/** Step 0's id predicate, before any read (D-7204: `id-argv-census.test.ts`'s expiry gate). */
+function expiryIdJudge(sessionId: string, req: ExpireArchivedRequest): ExpireArchivedResult | null {
+  const answer = expiryAnswerOf(req);
+  if (!isRegistryId(sessionId)) return answer({ kind: 'composition', detail: EXPIRE_ID_REFUSED });
+  return null;
+}
+
+/** Steps 2 and 6: `expirySwitches`' pause, its detail passed through as it is worded (D-7224). */
+function expirySwitchesJudge(first: ExpirySwitchesRead, req: ExpireArchivedRequest): ExpireArchivedResult | null {
+  const answer = expiryAnswerOf(req);
+  if (first.kind === 'paused') return answer({ kind: 'deferred', why: 'paused-at-server', detail: first.detail });
+  return null;
+}
+
+export const ARCHIVE_EXPIRED_RETIRE: RetireReason<ExpireArchivedRequest, ArchiveExpiredFacts, ExpireArchivedResult> = {
+  name: RETIRE_REASON_NAMES.archiveExpired,
+  decide: [
+    { step: RETIRE_STEPS.id, sync: true, onReject: 'propagate' },
+    { step: RETIRE_STEPS.capability, sync: true, onReject: 'propagate' },
+    { step: RETIRE_STEPS.switches, sync: false, onReject: 'propagate', markers: EXPIRY_SWITCH_MARKERS },
+    { step: RETIRE_STEPS.store, sync: true, onReject: 'propagate' },
+    { step: RETIRE_STEPS.presence, sync: true, onReject: 'propagate' },
+  ],
+  audit: { step: RETIRE_STEPS.audit, sync: false, onReject: 'propagate' },
+  act: [
+    { step: RETIRE_STEPS.archiveMatch, sync: true, onReject: 'propagate' },
+    { step: RETIRE_STEPS.auditVerdict, sync: true, onReject: 'propagate' },
+    { step: RETIRE_STEPS.switchesLast, sync: false, onReject: 'propagate', markers: EXPIRY_SWITCH_MARKERS },
+    { step: RETIRE_STEPS.live, sync: true, onReject: 'propagate' },
+  ],
+  listing: RETIRE_LISTING_MODES.measuredOnce,
+  presence: RETIRE_PRESENCE_RULES.noCeiling,
+  notice: RETIRE_NOTICE_HOMES.lane,
+  judge: {
+    [RETIRE_STEPS.id]: (sessionId, _f, req) => expiryIdJudge(sessionId, req),
+    [RETIRE_STEPS.capability]: capabilityJudge<ExpireArchivedRequest, ArchiveExpiredFacts, ExpireArchivedResult>([
+      (req) => expiryAnswerOf(req)({ kind: 'deferred', why: 'unsupported', detail: `the fleet host does not advertise ${EXPIRE_CAP}` }),
+      (req) => expiryAnswerOf(req)({ kind: 'deferred', why: 'unsupported', detail: `the fleet host does not advertise ${EXPIRE_CHILD_CAP}` }),
+    ]),
+    [RETIRE_STEPS.switches]: (first, _f, req) => expirySwitchesJudge(first, req),
+    [RETIRE_STEPS.store]: (read, _f, req) => {
+      const kept = archivedExpiryStoreSkip(read);
+      return kept !== null ? expiryAnswerOf(req)({ kind: 'deferred', why: kept,
+        detail: `the coordination store, re-read at the act, keeps ${req.sessionId} (${kept})` }) : null;
+    },
+    [RETIRE_STEPS.presence]: presenceJudge<ExpireArchivedRequest, ArchiveExpiredFacts, ExpireArchivedResult>(
+      RETIRE_PRESENCE_RULES.noCeiling,
+      (req) => expiryAnswerOf(req)({ kind: 'deferred', why: 'presence', detail: 'someone is viewing this session' })),
+    [RETIRE_STEPS.audit]: (audit, _f, req) => {
+      const answer = expiryAnswerOf(req);
+      if (audit.kind === 'unreadable') return answer({ kind: 'audit-failed', detail: audit.detail });
+      if (audit.expiresAt.kind === 'absent') return answer({ kind: 'no-evidence' });
+      return null;
+    },
+    [RETIRE_STEPS.archiveMatch]: (_n, f, req) => {
+      const audit = expiryDocumentOf(f);
+      return audit.archivedAt !== null && audit.archivedAt !== req.archivedAt
+        ? expiryAnswerOf(req)({ kind: 'deferred', why: 'state-changed',
+          detail: `the audit read archive ${String(audit.archivedAt)}, not the ${req.archivedAt} this pass queued` })
+        : null;
+    },
+    [RETIRE_STEPS.auditVerdict]: (_n, f, req) => {
+      const answer = expiryAnswerOf(req);
+      const audit = expiryDocumentOf(f);
+      if (audit.verdict.kind === 'refused') {
+        const { token, detail } = audit.verdict;
+        return EXPIRE_TOKEN_KIND[token] === 'gone' ? answer({ kind: 'gone' })
+          : answer({ kind: 'refused', token, detail, inUse: audit.inUse,
+            auditExpiresAt: audit.expiresAt.kind === 'at' ? audit.expiresAt.at : null });
+      }
+      if (audit.archivedAt !== req.archivedAt || audit.expiresAt.kind !== 'at') {
+        return answer({ kind: 'deferred', why: 'state-changed',
+          detail: `the audit read archive ${String(audit.archivedAt)}, not the ${req.archivedAt} this pass queued` });
+      }
+      return null;
+    },
+    [RETIRE_STEPS.switchesLast]: (last, _f, req) => expirySwitchesJudge(last, req),
+    [RETIRE_STEPS.live]: (_n, f, req) => {
+      const answer = expiryAnswerOf(req);
+      const last = f[RETIRE_STEPS.switchesLast];
+      if (last?.kind !== 'clear') throw new Error('archive-expired: the shadow arm was judged without a clear last listing');
+      const audit = expiryDocumentOf(f);
+      if (!last.live) return answer({ kind: 'would-expire', sensitive: audit.sensitive });
+      if (req.childOf !== undefined && !last.childLive) return answer({ kind: 'would-expire', sensitive: audit.sensitive }, { childArmHeld: true });
+      return null;
+    },
+  },
+  evidence: [archivedExpiryVerdict],
+};

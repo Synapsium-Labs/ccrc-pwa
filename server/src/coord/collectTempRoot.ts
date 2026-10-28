@@ -20,9 +20,13 @@ import {
   collectLaneControl, collectLaneEffective, collectLaneLive, collectLatchDue, collectLatchFeedBody, measureCollectLaneRow,
   type CollectCurrentNode, type CollectEpochPair, type CollectLaneCaps, type CollectLaneControl, type CollectLaneEffective,
   type CollectLaneJournal, type CollectLaneJournalRead, type CollectLaneRowRead, type CollectLaneSettled,
-  type CollectLaneSwitches, type CollectLatchOutcome,
+  type CollectLaneSwitches, type CollectLatchOutcome, type CollectLicence,
 } from '../collectLane.js';
 import { TERMINAL_RUN_STATES, TMPROOT_ID_MAX_CHARS, isTmpRootId, type RunState } from '../../../shared/api.js';
+import {
+  RETIRE_LISTING_MODES, RETIRE_NOTICE_HOMES, RETIRE_PRESENCE_RULES, RETIRE_REASON_NAMES, RETIRE_STEPS, capabilityJudge,
+  presenceJudge, type RetireNoRead, type RetireReason,
+} from '../retire.js';
 
 /**
  * THE TEMP-ROOT COLLECTOR'S ONE EXECUTOR, AND ITS READS (child reclamation spec 2026-09-22 §5.10).
@@ -705,3 +709,174 @@ export function collectOpenRunHold(
     return held('store-unreadable', `the coordination database could not be read (${said(err)})`);
   }
 }
+
+// ── the gate's row (D-7166; ARCH-44, consolidation spec K1) ──────────────────
+
+/**
+ * TEMP-ORPHAN'S ROW OF THE ONE RETIRE GATE (`retire.ts#decideRetire`): `collectTempRoot`'s steps 1 to 6, one row step per
+ * point at which the job answers, in the job's order, each judged by the job's own statements over its readers' facts.
+ * The readers are the job's reads, unchanged (`collectSwitches` included, D-7224); the lane clears and every other
+ * effect stay with the port (D-7199). It is the job's description, not yet its body: `collectTempRoot` still runs its
+ * own ladder until its reason moves (D-7168).
+ */
+export interface TempOrphanFacts {
+  /** Both capabilities, then the loose pair (true when the id is not loose). */
+  readonly [RETIRE_STEPS.capability]?: readonly boolean[];
+  /** The loose entry's hex, or null: the id predicate's input. */
+  readonly [RETIRE_STEPS.id]?: string | null;
+  readonly [RETIRE_STEPS.switches]?: CollectSwitches;
+  readonly [RETIRE_STEPS.presence]?: boolean;
+  readonly [RETIRE_STEPS.audit]?: CollectAnswer<CollectAudit> | CollectAuditRefused;
+  /** Both clear generations, read after the audit settled. */
+  readonly [RETIRE_STEPS.staleGeneration]?: CollectGenerations;
+  readonly [RETIRE_STEPS.auditVerdict]?: RetireNoRead;
+  /** `collectLicence` over observation 1, read before the hold and judged with it. */
+  readonly [RETIRE_STEPS.licence]?: CollectLicence;
+  readonly [RETIRE_STEPS.hold]?: CollectHoldRead;
+  /** The epoch read before the last listing, and that listing. */
+  readonly [RETIRE_STEPS.switchesLast]?: { readonly listedUnder: number; readonly last: CollectSwitches };
+  /** The pair the switch is resolved under; its reader writes the latch. */
+  readonly [RETIRE_STEPS.latch]?: CollectEpochPair;
+  readonly [RETIRE_STEPS.lane]?: CollectLaneEffective;
+  /** `CollectLanePort.flipped`'s answer. */
+  readonly [RETIRE_STEPS.flip]?: boolean;
+  readonly [RETIRE_STEPS.safety]?: RetireNoRead;
+  readonly [RETIRE_STEPS.licenceStands]?: { readonly generations: CollectGenerations; readonly observation: CollectObservation | null };
+  readonly [RETIRE_STEPS.presenceLast]?: boolean;
+  readonly [RETIRE_STEPS.holdLast]?: CollectHoldRead;
+  readonly [RETIRE_STEPS.live]?: RetireNoRead;
+  /** `ccdCan(…, 'wsCollectLoose')`, asked again nearest the argv. */
+  readonly [RETIRE_STEPS.looseMarker]?: boolean;
+}
+
+/** The markers the job's two listings read, each from ONE measured listing. */
+const COLLECT_SWITCH_MARKERS: readonly string[] = [RECLAIM_PAUSE_MARKER, COLLECT_LANE_LIVE_MARKER, COLLECT_LOOSE_LIVE_MARKER];
+
+/** The audit's answer, for a step after `audit` (which judged its own refusal). */
+const collectAskedOf = (f: TempOrphanFacts): CollectAnswer<CollectAudit> => {
+  const asked = f[RETIRE_STEPS.audit];
+  if (asked === undefined || 'notAsked' in asked) throw new Error('temp-orphan: a step after the audit was judged without it');
+  return asked;
+};
+/** The collectable audit, for a step after `audit-verdict`. */
+const collectObservedOf = (f: TempOrphanFacts): CollectAnswer<CollectAuditCollectable> => {
+  const audit = collectAskedOf(f);
+  const obs2 = audit.value;
+  if (obs2.kind !== 'collectable') throw new Error('temp-orphan: a step after the verdict was judged on an uncollectable audit');
+  return { ...audit, value: obs2 };
+};
+const collectAnsweredOf = (f: TempOrphanFacts, step: 4 | 5 | 6, why: CollectAnsweredWhy, detail: string): CollectJobOutcome =>
+  ({ kind: 'answered', step, why, detail, audit: collectAskedOf(f) });
+
+/** Step 1's id predicate, on the job's own id (D-7204: `id-argv-census.test.ts`'s `collector-step-1` gate). */
+function collectIdJudge(looseHex: string | null, job: CollectJob): CollectJobOutcome | null {
+  if (looseHex === null && !isTmpRootId(job.id)) return { kind: 'not-asked', step: 1, why: 'id-refused', detail: COLLECT_ID_REFUSED };
+  return null;
+}
+
+/** Step 2's switch, as `collectSwitches` answers it (D-7224). */
+function collectSwitchesJudge(first: CollectSwitches): CollectJobOutcome | null {
+  if (first.paused) return { kind: 'not-asked', step: 2, why: 'paused', detail: COLLECT_PAUSED[first.why] };
+  return null;
+}
+
+/** Step 6's resolved switch: a stop (a pause, an unlistable registry, a moved epoch, an unmeasured node) or a missing
+ *  capability. Its epoch words read the epoch taken before the last listing and the pair's `after`. */
+function collectLaneJudge(lane: CollectLaneEffective, f: TempOrphanFacts): CollectJobOutcome | null {
+  if (collectLaneStopped(lane)) {
+    if (lane.why === 'raised' || lane.why === 'unlistable') return collectAnsweredOf(f, 5, 'paused', COLLECT_PAUSED[lane.why]);
+    if (lane.why === 'epoch-changed') {
+      const listedUnder = f[RETIRE_STEPS.switchesLast]?.listedUnder;
+      const epoch = f[RETIRE_STEPS.latch];
+      return collectAnsweredOf(f, 5, 'epoch-changed', COLLECT_EPOCH_MOVED[listedUnder === epoch?.after ? 'queued' : 'listing']);
+    }
+    const unknownFleet: 'unknown-fleet' = lane.why;       // the last stop: a new one is a compile error here
+    return collectAnsweredOf(f, 5, unknownFleet, COLLECT_UNKNOWN_FLEET);
+  }
+  if (lane.kind === 'not-running') return collectAnsweredOf(f, 6, 'caps', COLLECT_NOT_RUNNING);
+  return null;
+}
+
+export const TEMP_ORPHAN_RETIRE: RetireReason<CollectJob, TempOrphanFacts, CollectJobOutcome> = {
+  name: RETIRE_REASON_NAMES.tempOrphan,
+  decide: [
+    { step: RETIRE_STEPS.capability, sync: true, onReject: 'propagate' },
+    { step: RETIRE_STEPS.id, sync: true, onReject: 'propagate' },
+    { step: RETIRE_STEPS.switches, sync: false, onReject: 'propagate', markers: COLLECT_SWITCH_MARKERS },
+    { step: RETIRE_STEPS.presence, sync: true, onReject: 'propagate' },
+  ],
+  audit: { step: RETIRE_STEPS.audit, sync: false, onReject: 'propagate' },
+  act: [
+    { step: RETIRE_STEPS.staleGeneration, sync: true, onReject: 'propagate' },
+    { step: RETIRE_STEPS.auditVerdict, sync: true, onReject: 'propagate' },
+    { step: RETIRE_STEPS.licence, sync: true, onReject: 'propagate' },
+    { step: RETIRE_STEPS.hold, sync: true, onReject: 'propagate' },
+    { step: RETIRE_STEPS.switchesLast, sync: false, onReject: 'propagate', markers: COLLECT_SWITCH_MARKERS },
+    { step: RETIRE_STEPS.latch, sync: true, onReject: 'propagate' },
+    { step: RETIRE_STEPS.lane, sync: true, onReject: 'propagate' },
+    { step: RETIRE_STEPS.flip, sync: true, onReject: 'propagate' },
+    { step: RETIRE_STEPS.safety, sync: true, onReject: 'propagate' },
+    { step: RETIRE_STEPS.licenceStands, sync: true, onReject: 'propagate' },
+    { step: RETIRE_STEPS.presenceLast, sync: true, onReject: 'propagate' },
+    { step: RETIRE_STEPS.holdLast, sync: true, onReject: 'propagate' },
+    { step: RETIRE_STEPS.live, sync: true, onReject: 'propagate' },
+    { step: RETIRE_STEPS.looseMarker, sync: true, onReject: 'propagate' },
+  ],
+  listing: RETIRE_LISTING_MODES.measuredOnce,
+  presence: RETIRE_PRESENCE_RULES.noCeiling,
+  notice: RETIRE_NOTICE_HOMES.lane,
+  judge: {
+    [RETIRE_STEPS.capability]: capabilityJudge<CollectJob, TempOrphanFacts, CollectJobOutcome>([
+      () => ({ kind: 'not-asked', step: 1, why: 'caps',
+        detail: `the fleet host does not advertise both ${COLLECT_CAP} and ${RECLAIM_PAUSE_CAP}` }),
+      () => ({ kind: 'not-asked', step: 1, why: 'caps', detail: `the fleet host does not advertise ${COLLECT_LOOSE_CAP}` }),
+    ]),
+    [RETIRE_STEPS.id]: (looseHex, _f, job) => collectIdJudge(looseHex, job),
+    [RETIRE_STEPS.switches]: (first) => collectSwitchesJudge(first),
+    [RETIRE_STEPS.presence]: presenceJudge<CollectJob, TempOrphanFacts, CollectJobOutcome>(RETIRE_PRESENCE_RULES.noCeiling,
+      () => ({ kind: 'not-asked', step: 3, why: 'presence', detail: COLLECT_SEEN })),
+    [RETIRE_STEPS.audit]: (asked) =>
+      ('notAsked' in asked ? { kind: 'not-asked', step: 4, why: 'caps', detail: COLLECT_AUDIT_REFUSED[asked.notAsked] } : null),
+    [RETIRE_STEPS.staleGeneration]: (now, f) =>
+      (!sameGenerations(collectAskedOf(f).composed, now) ? collectAnsweredOf(f, 4, 'stale', COLLECT_STALE) : null),
+    [RETIRE_STEPS.auditVerdict]: (_n, f) => {
+      const obs2 = collectAskedOf(f).value;
+      return obs2.kind !== 'collectable' ? collectAnsweredOf(f, 4, 'not-collectable', `ws-audit answered ${obs2.kind}`) : null;
+    },
+    [RETIRE_STEPS.hold]: (hold, f) => {
+      if (hold.kind === 'held') return { kind: 'held', step: 4, hold, audit: collectObservedOf(f) };
+      const licence = f[RETIRE_STEPS.licence];
+      if (licence === undefined) throw new Error('temp-orphan: the hold was judged without the licence read before it');
+      if (licence.kind !== 'licensed') {
+        return collectAnsweredOf(f, 4, 'not-licensed', `${COLLECT_NOT_LICENSED} (${licence.kind})`);
+      }
+      return null;
+    },
+    [RETIRE_STEPS.lane]: (lane, f) => collectLaneJudge(lane, f),
+    [RETIRE_STEPS.flip]: (flipped, f) => (flipped ? collectAnsweredOf(f, 5, 'switch-flip', COLLECT_FLIPPED) : null),
+    [RETIRE_STEPS.safety]: (_n, f) => {
+      const lane = f[RETIRE_STEPS.lane];
+      return lane?.kind === 'safety-stopped' ? collectAnsweredOf(f, 5, 'safety-stopped', `${COLLECT_SAFETY_STOPPED} (${lane.why})`) : null;
+    },
+    [RETIRE_STEPS.licenceStands]: (now, f) => {
+      const licence = f[RETIRE_STEPS.licence];
+      if (licence?.kind !== 'licensed') throw new Error('temp-orphan: the pair was judged without a licensed observation 1');
+      return !collectLicenceStands(licence.first, collectAskedOf(f).composed, now.generations, now.observation)
+        ? collectAnsweredOf(f, 6, 'pair-cleared', COLLECT_PAIR_CLEARED) : null;
+    },
+    [RETIRE_STEPS.presenceLast]: presenceJudge<CollectJob, TempOrphanFacts, CollectJobOutcome>(RETIRE_PRESENCE_RULES.noCeiling,
+      (_job, f) => collectAnsweredOf(f, 6, 'presence', COLLECT_SEEN)),
+    [RETIRE_STEPS.holdLast]: (hold, f) => (hold.kind === 'held' ? { kind: 'held', step: 6, hold, audit: collectObservedOf(f) } : null),
+    [RETIRE_STEPS.live]: (_n, f) => {
+      const lane = f[RETIRE_STEPS.lane];
+      if (lane === undefined || (lane.kind !== 'live' && lane.kind !== 'shadowed')) throw new Error('temp-orphan: the shadow arm was judged on an unresolved switch');
+      return !collectLaneLive(lane) ? { kind: 'would-collect', audit: collectObservedOf(f) } : null;
+    },
+    [RETIRE_STEPS.looseMarker]: (looseCan, f) => {
+      const looseHex = f[RETIRE_STEPS.id] ?? null;
+      const last = f[RETIRE_STEPS.switchesLast]?.last;
+      return looseHex !== null && (last?.looseMarker !== true || !looseCan) ? { kind: 'would-collect', audit: collectObservedOf(f) } : null;
+    },
+  },
+  evidence: [collectLicence],
+};
