@@ -222,6 +222,17 @@ describe('the request schedule: each reader mounted or opened after the store\'s
     expect(requests).toBe(0);
   });
 
+  // C7b Step 3's behaviour row (coordinator call 3; D-7180): opening Accounts asks once, so the screen shows the
+  // store's answer at once and then a fresh one. #1720's tree sent none here.
+  it('the Accounts screen sends one on open, and shows the store\'s answer before it lands', async () => {
+    await firstAnswerLanded();
+    render(createElement(AccountsScreen));
+    expect(accountRows(), 'the store\'s answer, at once').toBe(TEST_ROSTER.length);
+    await fiveSeconds();
+    expect(requests).toBe(1);
+    expect(accountRows()).toBe(TEST_ROSTER.length);
+  });
+
   // The pickers are mounted unconditionally and opened by their `open` prop: each is mounted closed, then opened.
   const session = { id: 'session-a', wrapper: 'claude', project: 'project-a', home: 'claude' };
   const pickers: Array<[string, (open: boolean) => ReactNode]> = [
