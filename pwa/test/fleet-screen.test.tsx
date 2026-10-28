@@ -54,10 +54,13 @@ const MIN = 60_000;
  *  Unlike the sibling helper in session-card.test.tsx, this mounts the full
  *  FleetScreen tree, where other reads call fetch on mount too: the fleet
  *  store's `connect()` reads /api/accounts, the test host's
- *  `FleetChromeProvider` polls /api/fleet/health and /api/updates,
- *  `HotFilesStrip` reads /api/claims and `PasskeyNotice` reads
- *  /api/auth/status. (`AccountsStrip` reads the store and `FleetHostBanner`
- *  takes its health as a prop, so neither fetches; C8, D-6440.) A Response
+ *  `FleetChromeProvider` polls /api/fleet/health (its /api/updates poll
+ *  starts too, but this file spies `api.updates` to a promise that never
+ *  settles, so that one never reaches fetch), `HotFilesStrip` reads
+ *  /api/claims, and the banner stack's own `usePasskeyStatus()` reads
+ *  /api/auth/status once and hands it to `PasskeyNotice` as a prop.
+ *  (`AccountsStrip` reads the store since C8, D-6440, and `FleetHostBanner`
+ *  takes its health as a prop, as it did before C8; neither fetches.) A Response
  *  body can only be read once. A single shared `mockResolvedValue(response)`
  *  would let the first of those consume the body, leaving later callers
  *  (our click) with an empty, already-read stream — so this hands back a
