@@ -1,0 +1,408 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Programme Box Prototype</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@400;600&display=swap">
+<style>
+/* Layout: a console-like column. A toolbar (view, clock, stall threshold), then the list of programme boxes. Throwaway prototype on mock data. */
+:root {
+  --bg: #f3f5f2; --panel: #ffffff; --row: #f7f9f6; --tray: #eef1ec; --line: #d6ddd4; --fg: #1d221d; --muted: #5d685c;
+  --ok: #1d7a3e; --ok-bg: #dcf2e2; --bad: #b42323; --bad-bg: #fbe1e1; --you: #8a5a00; --you-bg: #fbefd2; --accent: #2f6fd1;
+  --mono: "IBM Plex Mono", ui-monospace, Menlo, monospace; --sans: "IBM Plex Sans", system-ui, sans-serif;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #0f120f; --panel: #151915; --row: #1b201b; --tray: #101310; --line: #2b322b; --fg: #e3e8e1; --muted: #8d988b;
+  --ok: #7fe39a; --ok-bg: #173622; --bad: #ff8f8f; --bad-bg: #3d1818; --you: #ffd36b; --you-bg: #3a2f10; --accent: #6ea2ff; color-scheme: dark } }
+:root[data-theme="dark"] {
+  --bg: #0f120f; --panel: #151915; --row: #1b201b; --tray: #101310; --line: #2b322b; --fg: #e3e8e1; --muted: #8d988b;
+  --ok: #7fe39a; --ok-bg: #173622; --bad: #ff8f8f; --bad-bg: #3d1818; --you: #ffd36b; --you-bg: #3a2f10; --accent: #6ea2ff; color-scheme: dark }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg); font-family: var(--sans); font-size: 15px; line-height: 1.45;
+  padding: 20px max(16px, env(safe-area-inset-right, 0px)) 60px max(16px, env(safe-area-inset-left, 0px)); }
+main { max-width: 860px; margin: 0 auto; display: grid; gap: 16px; }
+h1 { font-size: 20px; margin: 0; }
+.intro { margin: 0; color: var(--muted); max-width: 70ch; font-size: 14px; }
+button { font: inherit; cursor: pointer; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* toolbar */
+.toolbar { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; padding: 10px 12px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; font-size: 13px; }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.seg button { background: transparent; color: var(--fg); border: 0; padding: 6px 12px; font-size: 13px; }
+.seg button[aria-pressed="true"] { background: var(--fg); color: var(--bg); font-weight: 600; }
+.tool { background: var(--tray); color: var(--fg); border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; font-size: 13px; }
+.clock { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+.toolbar label { display: inline-flex; gap: 6px; align-items: center; color: var(--muted); }
+.toolbar input[type=range] { width: 110px; }
+.spacer { flex: 1; }
+
+.summaryline { display: flex; flex-wrap: wrap; gap: 8px; font-size: 13px; }
+.pill { font-family: var(--mono); font-size: 12px; padding: 2px 10px; border-radius: 12px; border: 1px solid var(--line); background: var(--panel); }
+.pill.bad { background: var(--bad-bg); color: var(--bad); border-color: transparent; }
+.pill.you { background: var(--you-bg); color: var(--you); border-color: transparent; }
+
+.list { display: grid; gap: 12px; }
+.sectionlabel { font-family: var(--mono); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin: 6px 2px -4px; }
+
+/* the project: a quiet band with a heavy rule, holding programme boxes */
+.proj { display: grid; gap: 10px; padding-top: 4px; border-top: 3px solid var(--fg); }
+.projhead { display: grid; grid-template-columns: auto 1fr auto; gap: 4px 12px; align-items: center; padding: 8px 4px 2px; cursor: pointer; user-select: none; border-radius: 6px; }
+.projhead:hover { background: var(--row); }
+.projhead.static { cursor: default; } .projhead.static:hover { background: transparent; }
+.proj[data-collapsed="false"] .projhead .caret { transform: rotate(90deg); }
+.projtitle { min-width: 0; }
+.projkind { font-family: var(--mono); font-size: 10px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin-right: 8px; }
+.projname { font-size: 19px; font-weight: 600; }
+.projtally { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; justify-content: flex-end; font-family: var(--mono); font-size: 12px; color: var(--muted); }
+.projbody { display: grid; gap: 10px; }
+.projmore { font-family: var(--mono); font-size: 12px; color: var(--muted); padding: 2px 4px; }
+@media (max-width: 560px) { .projhead { grid-template-columns: auto 1fr; } .projtally { grid-column: 2; justify-content: flex-start; } }
+
+/* the programme box */
+.box { border: 2px solid var(--line); border-radius: 12px; background: var(--panel); overflow: hidden; }
+.box.stalled { border-color: var(--bad); }
+.box.needs { border-color: var(--you); }
+.head { display: grid; grid-template-columns: auto 1fr auto; gap: 4px 12px; align-items: center; padding: 12px 14px; cursor: pointer; user-select: none; }
+.head:hover { background: var(--row); }
+.caret { width: 22px; height: 22px; display: grid; place-items: center; border-radius: 6px; color: var(--muted); transition: transform .15s ease; }
+.box[data-open="true"] .caret { transform: rotate(90deg); }
+.head.static { cursor: default; }
+.head.static:hover { background: transparent; }
+.title { min-width: 0; }
+.title .name { font-weight: 600; font-size: 16px; }
+.role { font-family: var(--mono); font-size: 10px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); border: 1px solid var(--line); border-radius: 4px; padding: 0 5px; margin-right: 8px; vertical-align: 2px; }
+.sub { font-family: var(--mono); font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
+.right { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; justify-content: flex-end; }
+.bar { height: 6px; width: 84px; background: var(--line); border-radius: 3px; overflow: hidden; }
+.bar i { display: block; height: 100%; background: var(--ok); }
+.ago { font-family: var(--mono); font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.ago.bad { color: var(--bad); font-weight: 600; }
+.chip { font-family: var(--mono); font-size: 11px; padding: 1px 8px; border-radius: 10px; white-space: nowrap; }
+.c-moving { background: var(--ok-bg); color: var(--ok); }
+.c-stalled { background: var(--bad-bg); color: var(--bad); }
+.c-you { background: var(--you-bg); color: var(--you); }
+.c-quiet { background: var(--tray); color: var(--muted); border: 1px solid var(--line); }
+
+.tray { background: var(--tray); border-top: 1px solid var(--line); padding: 6px; display: grid; gap: 4px; }
+.kid { display: grid; grid-template-columns: 1fr auto; gap: 4px 10px; align-items: center; padding: 7px 10px; border-radius: 7px; background: var(--row); font-family: var(--mono); font-size: 13px; }
+.kid.need { background: var(--you-bg); }
+.kid .kn { min-width: 0; overflow-wrap: anywhere; }
+.kid .kr { color: var(--muted); font-size: 11px; margin-right: 6px; }
+.kid .ask { display: block; color: var(--you); font-size: 12px; margin-top: 2px; }
+.kid .acts { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; align-items: center; }
+.act { background: var(--panel); color: var(--fg); border: 1px solid var(--line); border-radius: 6px; padding: 3px 9px; font-size: 12px; font-family: var(--mono); }
+.act.primary { background: var(--fg); color: var(--bg); border-color: var(--fg); }
+.foot { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 6px 10px 6px 14px; border-top: 1px solid var(--line); background: var(--tray); font-family: var(--mono); font-size: 12px; color: var(--muted); }
+.foot .act { font-size: 12px; }
+.empty { padding: 18px; text-align: center; color: var(--muted); border: 1px dashed var(--line); border-radius: 10px; font-size: 14px; }
+.lone { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: center; padding: 9px 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }
+
+.toast { position: fixed; left: 50%; bottom: calc(18px + env(safe-area-inset-bottom, 0px)); transform: translateX(-50%); background: var(--fg); color: var(--bg); padding: 8px 14px; border-radius: 8px; font-size: 13px; opacity: 0; pointer-events: none; transition: opacity .2s; max-width: calc(100% - 32px); }
+.toast.show { opacity: 1; }
+.log { font-family: var(--mono); font-size: 12px; color: var(--muted); border-top: 1px solid var(--line); padding-top: 10px; display: grid; gap: 2px; }
+@media (prefers-reduced-motion: reduce) { .caret, .toast { transition: none; } }
+@media (max-width: 560px) { .head { grid-template-columns: auto 1fr; } .right { grid-column: 2; justify-content: flex-start; } }
+</style>
+</head><body>
+<main>
+  <header style="display:grid;gap:6px">
+    <h1>Programme box: working prototype</h1>
+    <p class="intro">Mock data, nothing real. Projects hold programmes. Click a project's or a programme's header to collapse or expand it; the page remembers each choice. A collapsed project still shows any programme that needs you or has stalled. Try <b>+15 min</b> to watch a quiet programme stall, <b>A worker asks</b> to see a question break through a collapsed box, and <b>Answer</b> to clear it. <b>Status</b> shows coordinators and only the children that need you; <b>Fleet</b> shows everyone, collapsed by default.</p>
+  </header>
+
+  <div class="toolbar" role="group" aria-label="Prototype controls">
+    <span class="seg" role="group" aria-label="View">
+      <button type="button" id="v-status" aria-pressed="true">Status</button>
+      <button type="button" id="v-fleet" aria-pressed="false">Fleet</button>
+    </span>
+    <span class="clock" id="clock">14:00</span>
+    <button type="button" class="tool" id="tick">+15 min</button>
+    <button type="button" class="tool" id="asks">A worker asks</button>
+    <label for="thr">Stalled after <input type="range" id="thr" min="15" max="120" step="15" value="45"> <span class="clock" id="thrv">45m</span></label>
+    <span class="spacer"></span>
+    <button type="button" class="tool" id="expandall">Expand all</button>
+    <button type="button" class="tool" id="collapseall">Collapse all</button>
+    <button type="button" class="tool" id="reset">Reset</button>
+  </div>
+
+  <div class="summaryline" id="summary" aria-live="polite"></div>
+  <div class="list" id="list"></div>
+  <div class="log" id="log" aria-live="polite"></div>
+</main>
+<div class="toast" id="toast" role="status"></div>
+
+<script>
+(function () {
+  // ---- mock data ---------------------------------------------------------
+  function seed() {
+    return {
+      now: 14 * 60, // minutes since midnight
+      programmes: [
+        { id: 'p-a', name: 'programme-a', project: 'project-a', unit: 'waves', done: 3, total: 6, lastMove: 14 * 60 - 40, finished: false,
+          kids: [
+            { id: 'a1', name: 'worker-a1', role: 'worker', state: 'waiting', note: 'waiting on review' },
+            { id: 'a2', name: 'worker-a2', role: 'worker', state: 'idle' },
+            { id: 'a3', name: 'reviewer-a1', role: 'reviewer', state: 'exited' } ] },
+        { id: 'p-b', name: 'programme-b', project: 'project-b', unit: 'tasks merged', done: 4, total: 6, lastMove: 14 * 60 - 3, finished: false, active: true,
+          kids: [
+            { id: 'b1', name: 'worker-b1', role: 'worker', state: 'working' },
+            { id: 'b2', name: 'worker-b2', role: 'worker', state: 'working' },
+            { id: 'b3', name: 'worker-b3', role: 'worker', state: 'working', need: { kind: 'question', text: 'push now, or hold until the other PRs land?', options: ['Push now', 'Hold'] } },
+            { id: 'b4', name: 'worker-b4', role: 'worker', state: 'done' },
+            { id: 'b5', name: 'reviewer-b2', role: 'reviewer', state: 'done' } ] },
+        { id: 'p-c', name: 'programme-c', project: 'project-b', unit: 'waves', done: 2, total: 3, lastMove: 14 * 60 - 12, finished: false, active: true,
+          kids: [
+            { id: 'c1', name: 'worker-c1', role: 'worker', state: 'working' },
+            { id: 'c2', name: 'worker-c2', role: 'worker', state: 'working' },
+            { id: 'c3', name: 'reviewer-c1', role: 'reviewer', state: 'done' } ] },
+        { id: 'p-d', name: 'programme-d', project: 'project-c', unit: 'waves', done: 5, total: 5, lastMove: 14 * 60 - 200, finished: true,
+          kids: [
+            { id: 'd1', name: 'worker-d1', role: 'worker', state: 'done' },
+            { id: 'd2', name: 'worker-d2', role: 'worker', state: 'done' } ] }
+      ],
+      lone: [
+        { id: 'l1', project: 'project-b', name: 'docs-model-classes', state: 'idle' },
+        { id: 'l2', project: 'project-b', name: 'lossless-context-plugin', state: 'working' },
+        { id: 'l3', project: 'project-a', name: 'hotfix-login', state: 'idle' },
+        { id: 'l4', project: 'project-d', name: 'spike-new-renderer', state: 'working' }
+      ],
+      log: []
+    };
+  }
+  var KEY = 'programme-box-prototype-v2';
+  var S = seed();
+  var open = {};       // programme id -> true when expanded (Fleet view only)
+  var view = 'status';
+  var threshold = 45;
+  try { var saved = JSON.parse(localStorage.getItem(KEY) || '{}'); open = saved.open || {}; } catch (e) { open = {}; }
+  function persist() { try { localStorage.setItem(KEY, JSON.stringify({ open: open })); } catch (e) {} }
+
+  // ---- derived state (the decider) ----------------------------------------
+  function needs(p) { return p.kids.filter(function (k) { return k.need; }); }
+  function quietFor(p) { return S.now - p.lastMove; }
+  function stateOf(p) {
+    if (p.finished) return 'finished';
+    if (needs(p).length) return 'needs';
+    if (quietFor(p) >= threshold) return 'stalled';
+    return 'moving';
+  }
+  var ORDER = { needs: 0, stalled: 1, moving: 2, finished: 3 };
+  function sorted() { return S.programmes.slice().sort(function (a, b) { return ORDER[stateOf(a)] - ORDER[stateOf(b)] || quietFor(b) - quietFor(a); }); }
+  function fmtClock(m) { var h = Math.floor(m / 60) % 24, mm = m % 60; return (h < 10 ? '0' : '') + h + ':' + (mm < 10 ? '0' : '') + mm; }
+  function fmtAgo(m) { if (m < 1) return 'just now'; if (m < 60) return m + 'm ago'; var h = Math.floor(m / 60), r = m % 60; return h + 'h' + (r ? ' ' + r + 'm' : '') + ' ago'; }
+  function counts(p) {
+    var c = {}; p.kids.forEach(function (k) { c[k.state] = (c[k.state] || 0) + 1; });
+    var parts = [p.kids.length + ' ' + (p.kids.length === 1 ? 'worker' : 'workers')];
+    ['working', 'waiting', 'idle', 'done', 'exited'].forEach(function (s) { if (c[s]) parts.push(c[s] + ' ' + s); });
+    var n = needs(p).length; if (n) parts.push(n + ' need' + (n === 1 ? 's' : '') + ' you');
+    return parts.join(' · ');
+  }
+  var CHIP = { needs: ['c-you', 'needs you'], stalled: ['c-stalled', 'stalled'], moving: ['c-moving', 'moving'], finished: ['c-quiet', 'finished'] };
+  var KIDCHIP = { working: 'c-moving', waiting: 'c-quiet', idle: 'c-quiet', done: 'c-quiet', exited: 'c-stalled' };
+
+  // ---- rendering ----------------------------------------------------------
+  function el(tag, cls, text) { var e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
+
+  function kidRow(p, k) {
+    var row = el('div', 'kid' + (k.need ? ' need' : ''));
+    var left = el('div', 'kn');
+    left.appendChild(el('span', 'kr', k.role));
+    left.appendChild(document.createTextNode(k.name + (k.note ? ' · ' + k.note : '')));
+    if (k.need) left.appendChild(el('span', 'ask', (k.need.kind === 'question' ? 'asks: ' : 'permission: ') + k.need.text));
+    var acts = el('div', 'acts');
+    if (k.need) {
+      k.need.options.forEach(function (o, i) {
+        var b = el('button', 'act' + (i === 0 ? ' primary' : ''), o); b.type = 'button';
+        b.addEventListener('click', function (e) { e.stopPropagation(); answer(p, k, o); });
+        acts.appendChild(b);
+      });
+    } else {
+      acts.appendChild(el('span', 'chip ' + (KIDCHIP[k.state] || 'c-quiet'), k.state));
+    }
+    var openB = el('button', 'act', 'Open'); openB.type = 'button';
+    openB.addEventListener('click', function (e) { e.stopPropagation(); toast('Would open ' + k.name); });
+    acts.appendChild(openB);
+    row.appendChild(left); row.appendChild(acts);
+    return row;
+  }
+
+  function box(p) {
+    var st = stateOf(p);
+    var collapsible = view === 'fleet';
+    var isOpen = collapsible && !!open[p.id];
+    var b = el('section', 'box' + (st === 'stalled' ? ' stalled' : st === 'needs' ? ' needs' : ''));
+    b.dataset.open = String(isOpen);
+    var trayId = 'tray-' + p.id;
+
+    var head = el('div', 'head' + (collapsible ? '' : ' static'));
+    if (collapsible) {
+      head.setAttribute('role', 'button'); head.tabIndex = 0;
+      head.setAttribute('aria-expanded', String(isOpen)); head.setAttribute('aria-controls', trayId);
+      head.addEventListener('click', function () { toggle(p.id); });
+      head.addEventListener('keydown', function (e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(p.id); } });
+    }
+    var caret = el('span', 'caret', collapsible ? '▸' : ''); caret.setAttribute('aria-hidden', 'true');
+    var title = el('div', 'title');
+    var line = el('div'); line.appendChild(el('span', 'role', 'coordinator')); line.appendChild(el('span', 'name', p.name));
+    title.appendChild(line);
+    title.appendChild(el('div', 'sub', p.project + ' · ' + p.done + ' of ' + p.total + ' ' + p.unit + ' · ' + counts(p)));
+    var right = el('div', 'right');
+    var bar = el('div', 'bar'); var fill = el('i'); fill.style.width = Math.round(100 * p.done / p.total) + '%'; bar.appendChild(fill); bar.title = p.done + ' of ' + p.total;
+    right.appendChild(bar);
+    var quiet = !p.finished && quietFor(p) >= threshold;
+    right.appendChild(el('span', 'ago' + (quiet ? ' bad' : ''), quiet ? 'no move ' + fmtAgo(quietFor(p)).replace(' ago', '') : 'moved ' + fmtAgo(quietFor(p))));
+    right.appendChild(el('span', 'chip ' + CHIP[st][0], CHIP[st][1]));
+    head.appendChild(caret); head.appendChild(title); head.appendChild(right);
+    b.appendChild(head);
+
+    // what the tray shows: expanded = everyone; otherwise only the children that need you
+    var shown = isOpen ? p.kids : needs(p);
+    if (shown.length) {
+      var tray = el('div', 'tray'); tray.id = trayId;
+      shown.forEach(function (k) { tray.appendChild(kidRow(p, k)); });
+      b.appendChild(tray);
+    }
+    var hidden = p.kids.length - shown.length;
+    if (collapsible && (hidden > 0 || isOpen)) {
+      var foot = el('div', 'foot');
+      foot.appendChild(el('span', null, isOpen ? 'showing all ' + p.kids.length + ' workers' : hidden + ' more ' + (hidden === 1 ? 'worker' : 'workers') + ' hidden'));
+      var tb = el('button', 'act', isOpen ? 'Hide workers' : 'Show workers'); tb.type = 'button';
+      tb.setAttribute('aria-controls', trayId); tb.setAttribute('aria-expanded', String(isOpen));
+      tb.addEventListener('click', function (e) { e.stopPropagation(); toggle(p.id); });
+      foot.appendChild(tb); b.appendChild(foot);
+    }
+    return b;
+  }
+
+  function projectSection(name, live, done, lone) {
+    var key = 'proj:' + name;
+    var collapsible = view === 'fleet';
+    var collapsed = collapsible && !!open[key];
+    var sec = el('section', 'proj'); sec.dataset.collapsed = String(collapsed);
+    var bodyId = 'body-' + name;
+    var head = el('div', 'projhead' + (collapsible ? '' : ' static'));
+    if (collapsible) {
+      head.setAttribute('role', 'button'); head.tabIndex = 0;
+      head.setAttribute('aria-expanded', String(!collapsed)); head.setAttribute('aria-controls', bodyId);
+      head.addEventListener('click', function () { toggleProj(name); });
+      head.addEventListener('keydown', function (e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleProj(name); } });
+    }
+    var caret = el('span', 'caret', collapsible ? '▸' : ''); caret.setAttribute('aria-hidden', 'true');
+    head.appendChild(caret);
+    var t = el('div', 'projtitle'); t.appendChild(el('span', 'projkind', 'project')); t.appendChild(el('span', 'projname', name)); head.appendChild(t);
+    var tally = el('div', 'projtally');
+    var all = live.concat(done);
+    var nNeed = all.reduce(function (n, p) { return n + needs(p).length; }, 0);
+    var nStall = all.filter(function (p) { return stateOf(p) === 'stalled'; }).length;
+    tally.appendChild(el('span', null, live.length + ' running' + (done.length ? ' · ' + done.length + ' finished' : '') + (view === 'fleet' && lone.length ? ' · ' + lone.length + ' other sessions' : '')));
+    if (nNeed) tally.appendChild(el('span', 'chip c-you', nNeed + ' need' + (nNeed === 1 ? 's' : '') + ' you'));
+    if (nStall) tally.appendChild(el('span', 'chip c-stalled', nStall + ' stalled'));
+    head.appendChild(tally);
+    sec.appendChild(head);
+    var body = el('div', 'projbody'); body.id = bodyId;
+    if (collapsed) {
+      // a collapsed project still lets through every programme that needs you or has stalled
+      var urgent = live.filter(function (p) { var st = stateOf(p); return st === 'needs' || st === 'stalled'; });
+      urgent.forEach(function (p) { body.appendChild(box(p)); });
+      var rest = all.length - urgent.length;
+      if (rest > 0 || lone.length) body.appendChild(el('div', 'projmore', (rest ? rest + ' more programme' + (rest === 1 ? '' : 's') : '') + (rest && lone.length ? ' and ' : '') + (lone.length ? lone.length + ' other session' + (lone.length === 1 ? '' : 's') : '') + ' hidden'));
+    } else {
+      live.forEach(function (p) { body.appendChild(box(p)); });
+      if (view === 'fleet') {
+        done.forEach(function (p) { body.appendChild(box(p)); });
+        if (lone.length) {
+          body.appendChild(el('div', 'sectionlabel', 'Sessions outside any programme'));
+          lone.forEach(function (s) {
+            var r = el('div', 'lone'); var n = el('span', null, s.name); n.style.fontFamily = 'var(--mono)'; r.appendChild(n);
+            r.appendChild(el('span', 'chip ' + (KIDCHIP[s.state] || 'c-quiet'), s.state)); body.appendChild(r);
+          });
+        }
+      }
+    }
+    if (body.childNodes.length) sec.appendChild(body);
+    return sec;
+  }
+
+  function render(focusId) {
+    document.getElementById('clock').textContent = fmtClock(S.now);
+    var list = document.getElementById('list'); list.textContent = '';
+    var ps = sorted();
+    var nNeeds = ps.reduce(function (n, p) { return n + needs(p).length; }, 0);
+    var nStalled = ps.filter(function (p) { return stateOf(p) === 'stalled'; }).length;
+    var sum = document.getElementById('summary'); sum.textContent = '';
+    sum.appendChild(el('span', 'pill' + (nNeeds ? ' you' : ''), nNeeds + ' need' + (nNeeds === 1 ? 's' : '') + ' you'));
+    sum.appendChild(el('span', 'pill' + (nStalled ? ' bad' : ''), nStalled + ' stalled'));
+    sum.appendChild(el('span', 'pill', ps.filter(function (p) { return stateOf(p) === 'moving'; }).length + ' moving'));
+
+    // projects, most urgent first (by their most urgent programme)
+    var names = [];
+    ps.forEach(function (p) { if (names.indexOf(p.project) < 0) names.push(p.project); });
+    S.lone.forEach(function (l) { if (names.indexOf(l.project) < 0) names.push(l.project); });
+    var shownAny = false;
+    names.forEach(function (name) {
+      var mine = ps.filter(function (p) { return p.project === name; });
+      var live = mine.filter(function (p) { return !p.finished; });
+      var done = mine.filter(function (p) { return p.finished; });
+      var lone = S.lone.filter(function (l) { return l.project === name; });
+      if (view === 'status' && !live.length) return; // Status: only projects with a running programme
+      shownAny = true;
+      list.appendChild(projectSection(name, live, done, lone));
+    });
+    if (!shownAny) list.appendChild(el('div', 'empty', 'No programme is running.'));
+    var log = document.getElementById('log'); log.textContent = '';
+    S.log.slice(-5).forEach(function (l) { log.appendChild(el('div', null, l)); });
+    if (focusId) { var h = focusId.indexOf('proj:') === 0 ? list.querySelector('[aria-controls="body-' + focusId.slice(5) + '"]') : list.querySelector('.head[aria-controls="tray-' + focusId + '"]'); if (h) h.focus(); }
+  }
+
+  // ---- actions -------------------------------------------------------------
+  function note(t) { S.log.push(fmtClock(S.now) + '  ' + t); }
+  function toggle(id) { open[id] = !open[id]; persist(); render(id); }
+  function toggleProj(name) { var k = 'proj:' + name; open[k] = !open[k]; persist(); render(k); }
+  function answer(p, k, o) { note(k.name + ' answered: ' + o); delete k.need; k.state = 'working'; p.lastMove = S.now; toast('Answered ' + k.name + ': ' + o); render(); }
+  function tick() {
+    S.now += 15;
+    // a programme with a working child and nothing waiting on you moves now and then; others stay quiet
+    S.programmes.forEach(function (p, i) {
+      if (p.finished || needs(p).length) return;
+      var working = p.kids.some(function (k) { return k.state === 'working'; });
+      if (working && (S.now / 15 + i) % 2 === 0) {
+        p.lastMove = S.now;
+        if (p.done < p.total && (S.now / 15 + i) % 4 === 0) { p.done++; note(p.name + ' merged one more ' + (p.unit === 'waves' ? 'wave' : 'task')); }
+      }
+    });
+    S.programmes.forEach(function (p) { if (!p.finished && stateOf(p) === 'stalled' && quietFor(p) - 15 < threshold) note(p.name + ' stalled: no movement for ' + fmtAgo(quietFor(p)).replace(' ago', '')); });
+    render();
+  }
+  var askRound = 0;
+  function asks() {
+    var pool = [];
+    S.programmes.forEach(function (p) { if (!p.finished) p.kids.forEach(function (k) { if (!k.need && (k.state === 'working' || k.state === 'waiting')) pool.push([p, k]); }); });
+    if (!pool.length) { toast('No working worker left to ask'); return; }
+    var pick = pool[askRound++ % pool.length];
+    pick[1].need = askRound % 2 ? { kind: 'permission', text: 'run the database migration on the test box?', options: ['Allow once', 'Deny'] }
+                                 : { kind: 'question', text: 'the review found two minor notes; fix now or later?', options: ['Fix now', 'Later'] };
+    note(pick[1].name + ' (' + pick[0].name + ') asks you something');
+    render();
+  }
+  var tt;
+  function toast(t) { var e = document.getElementById('toast'); e.textContent = t; e.classList.add('show'); clearTimeout(tt); tt = setTimeout(function () { e.classList.remove('show'); }, 1800); }
+  function setView(v) {
+    view = v;
+    document.getElementById('v-status').setAttribute('aria-pressed', String(v === 'status'));
+    document.getElementById('v-fleet').setAttribute('aria-pressed', String(v === 'fleet'));
+    document.getElementById('expandall').hidden = v !== 'fleet';
+    document.getElementById('collapseall').hidden = v !== 'fleet';
+    render();
+  }
+
+  document.getElementById('v-status').addEventListener('click', function () { setView('status'); });
+  document.getElementById('v-fleet').addEventListener('click', function () { setView('fleet'); });
+  document.getElementById('tick').addEventListener('click', tick);
+  document.getElementById('asks').addEventListener('click', asks);
+  document.getElementById('thr').addEventListener('input', function (e) { threshold = +e.target.value; document.getElementById('thrv').textContent = threshold + 'm'; render(); });
+  document.getElementById('expandall').addEventListener('click', function () { S.programmes.forEach(function (p) { open[p.id] = true; }); persist(); render(); });
+  document.getElementById('collapseall').addEventListener('click', function () { S.programmes.forEach(function (p) { delete open[p.id]; }); persist(); render(); });
+  document.getElementById('reset').addEventListener('click', function () { S = seed(); open = {}; persist(); askRound = 0; threshold = 45; document.getElementById('thr').value = 45; document.getElementById('thrv').textContent = '45m'; render(); toast('Reset to the starting data'); });
+  setView('status');
+})();
+</script>
+</body></html>
