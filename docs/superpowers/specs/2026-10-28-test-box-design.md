@@ -1,6 +1,6 @@
 # The test box: test runs off the fleet host, results streamed back to the session
 
-**Spec** · 2026-10-28 · Status: draft for review, rev 5. It designs #1695 (step 2 of moving test runs off the fleet
+**Spec** · 2026-10-28 · Status: draft for review, rev 6. It designs #1695 (step 2 of moving test runs off the fleet
 host). It builds on #1694 (step 1: the capped tests slice, the fleet-wide admission queue and the `ccrc test` wrapper),
 which is not built yet; this spec names what it needs from step 1 in §3.1. Docs only: no code ships with it.
 
@@ -12,7 +12,13 @@ runs**: every run gets a fresh directory, a fresh shared checkout and a copy-on-
 the directory is deleted after the run. That removes the slot reset, the idle refs, the `.git` rebuild and check, the
 recorded deps and build keys, the retry-then-rebuild loop and the Rebuild control. The concurrency limit becomes a run
 count, the push gains a pre-receive refusal of a reused run id, and §4 states what a fresh run costs against the
-15-minute budget.
+15-minute budget. Rev 6, under the same threat model, keeps the box's tools in step with the fleet host: the ccrc
+release pins the node, npm, Chrome for Testing and python3 versions it was verified with, the update lane installs
+them on the box from their official download hosts when it rolls the fleet host, and a mismatch marks the box
+`degraded` with a **Bring tools up to date** control (§2.10). It also gives the pristine install the run's fresh
+directory, root cleanup and caps plus a retry with backoff, makes `runs/<k>` root's, adds `RemoveIPC=yes`, collects
+the log and the reporter file outside the run directory, moves the npm settings into a root-owned `npmrc`, and
+splits the cost table by when each cost is paid.
 
 **Related:** #1694 (step 1), #1785 (test containment and its good-faith scope), #389 (the vitest worker cap in the
 session environment), #1752 (per-box sizes as ccrc settings, the pattern every key below follows), #1772 (the worktree
@@ -49,6 +55,10 @@ The test box is a second, separate box that runs those suites instead. The desig
   scripts, the builds, the tests) runs as an unprivileged run user, in a static unit, with a fixed allowlisted
   environment and an empty HOME. The run has loopback only; an install reaches a local registry proxy and nothing
   else. The session's environment is never forwarded (§2.3).
+- **Tools: pinned by the release, installed by the update lane.** The release names the node, npm, Chrome for Testing
+  and python3 versions it was verified with; rolling the fleet host also installs them on the box from their official
+  download hosts, the only new names on the box's egress allowlist. A mismatch marks the box `degraded`, and the card's
+  **Bring tools up to date** runs the same step (§2.10).
 - **Fallback: the local slice, said out loud.** Remote off, box unreachable, a version mismatch, or a queue over its
   limit: the wrapper runs the same command in step 1's slice and says why, in the first line and the last (§2.4).
 - **GitHub CI keeps the full suites.** The full server suite is about 4.4 hours of file time (§1.1); it stays with the
@@ -106,19 +116,19 @@ Counted over `server/test/*.test.ts` (1,120 files) at the commit above; one file
 
 | need | files | what it means for the test box |
 |---|---|---|
-| a real `tmux` binary (contained sockets, never a live server) | ≈97 | install tmux, same major as the fleet host |
+| a real `tmux` binary (contained sockets, never a live server) | ≈97 | install tmux, same major as the fleet host (§2.10) |
 | `systemd-run`/`systemctl` named (poisoned to fail, per `ghContainedEnv` and the containment builders) | ≈91 | nothing real is called; the poison must still resolve first on PATH |
 | a `/proc` walk | ≈87 | Linux; and the walks see every same-uid process, so a run user per concurrent run and `ProtectProc=invisible` (§2.3) |
 | Linux-only (`skipIf`/`runIf` on platform) | ≈46 | Linux, like the fleet host |
 | loopback listeners, free ports | ≈85 | loopback only; no outbound network needed |
 | a literal `/tmp/` path (`delegation-rig` makes `mkdtempSync('/tmp/dlgt-')` because a unix socket path is capped near 108 bytes; `run-tmp`, `shutdown-seal`) | 29 name `'/tmp/…'`; tmux's own socket dir is `/tmp/tmux-<uid>` when `TMUX_TMPDIR` is unset | a writable private `/tmp` in both units and a `TMPDIR` no longer than the local one (§2.2, §2.3) |
 | `strace` | ≈9 | install strace |
-| `python3` (asserted present when `CI` is set) | ≈14 | install python3 |
+| `python3` (asserted present when `CI` is set) | ≈14 | install python3 at the release's pinned major.minor (§2.10) |
 | the real repository's git history or `origin/main` (`topology-clean`, `deviation-refs`, `consolidation-path-guard`, the ratchets) | about a dozen | the run needs a real clone whose HEAD and `origin/main` are the session's own shas; `consolidation-path-guard` diffs `$(git merge-base origin/main HEAD)..HEAD` and `deviation-refs` walks that range, so dirty changes must stay uncommitted (§2.1) |
 | the guards' base overrides `CCRC_HISTORY_BASE` (`topology-clean`, `consolidation-path-guard`) and `CCRC_LEDGER_BASE` (`deviation-refs`) | 3 | forwarded by default, resolved to a sha first (§2.1, §2.3) |
 | the real repository's branch name or `git status` (`buildinfo`, `build-release`) | a few | the checkout is on a branch of the session's name with the session's staged, unstaged and untracked state (§2.1); the many `ccd-*` files that read branches do it in fixture repos and need nothing |
 | gitignored build outputs (`server/dist`, `server/dist-pwa`, `agent/dist`): `auth-gate` runs cases only when `server/dist-pwa/index.html` exists, `authFixtures` imports from `server/dist/...` | 23 files name one of the three paths; most build their own copy under a fixture HOME | the snapshot never carries them (they are ignored), so the run builds each one the local tree has (§2.2) |
-| real Chrome (`CCRC_CHROME`; "throws on a box with no Chrome: red, never skipped") | 36 pwa browser files | install Chrome or Chromium, path in config |
+| real Chrome (`CCRC_CHROME`; "throws on a box with no Chrome: red, never skipped") | 36 pwa browser files | install Chrome for Testing at the release's pinned version, path in config (§2.10) |
 
 CI's own list (`.github/actions/server-deps`) is the same: `tmux jq strace python3` on Linux, plus `bash tmux flock jq
 coreutils` on macOS. The suites read almost no ambient environment: `PATH`, `HOME`, `TMPDIR`, `LANG`, `CI` and a few
@@ -181,9 +191,21 @@ source (§8, row 1), and then it is **rebuilt, not reused**: it held the fleet's
 data, and goal 2 cannot be shown on a disk that once held them. The rebuild is a fresh OS from a clean image, the fleet
 work volume detached and not reattached, a new tailnet identity, and `CCRC_TESTBOX_ROOT` on its own XFS filesystem made
 with `reflink=1` (§2.2). The tailnet ACL lets the fleet host reach the box's service port and ssh port, and lets the box
-reach nothing on the tailnet, the fleet host included. The box's egress firewall allows GitHub (the mirror fetch) and
-the npm upstream (`CCRC_TESTBOX_REGISTRY_UPSTREAM`, for the registry proxy) and nothing else, apart from the tailnet
-client's own coordination traffic. The service and the mirror's ssh listen on the tailnet address only, never on a
+reach nothing on the tailnet, the fleet host included. The box's egress allowlist (`CCRC_TESTBOX_EGRESS_ALLOW`) names
+its destinations by host name, and nothing else is reachable apart from the tailnet client's own coordination traffic:
+
+| name | for | who uses it |
+|---|---|---|
+| `github.com` | the mirror fetch | the service |
+| the npm upstream (`CCRC_TESTBOX_REGISTRY_UPSTREAM`, default `registry.npmjs.org`) | packages and the pinned npm | the registry proxy only |
+| `nodejs.org` | the pinned node release and its checksum file (§2.10) | the tools unit only |
+| `storage.googleapis.com`, the Chrome for Testing download host | the pinned Chrome for Testing build (§2.10) | the tools unit only |
+| the OS package mirror (`CCRC_TESTBOX_OS_MIRROR`, default the distribution's own) | python3, git, tmux, strace, jq and Chrome's system libraries (§2.10) | the tools unit only |
+
+A timer resolves the names into the firewall's address sets, and each rule also matches the sending unit (its
+cgroup), so a run, prepare or install unit (which reach loopback only, §2.3) gains nothing from the list. A name served from a
+shared CDN resolves to addresses that serve more than that name; under the threat model that is accepted, because no
+session-controlled code runs as a user the rules let out. The service and the mirror's ssh listen on the tailnet address only, never on a
 public interface or on loopback, so a run's loopback-only network (§2.3) cannot reach them either.
 
 ### 2.1 Transport: the session's git state pushed to scratch refs
@@ -309,8 +331,12 @@ a check for every piece of state they kept).
 **The run directory.** The box runs at most `CCRC_TESTBOX_RUNS` runs at once (config; default 2, this box 4, §8). Each
 concurrent run takes a free run user `ccrc-tb-<k>`, `k` from 1 to that count; the user owns nothing between runs. The
 run's directory is `<CCRC_TESTBOX_ROOT>/runs/<k>/run`, a fixed path, so socket paths built from it are the same length
-every time. It holds `checkout/` (the shared checkout, its `node_modules` and build outputs), `home/` and `npm-cache/`,
-all owned by the run user, mode 0700. The prepare phase refuses to start when the directory already exists.
+every time. `runs/<k>` itself is root's (0755) and the run writes only `runs/<k>/run`: the prepare unit's one
+privileged step (`ExecStartPre=+`, a fixed script) refuses to start when `run` already exists and otherwise creates it
+owned by the run user, mode 0700, and `run` is the units' only `ReadWritePaths` (§2.3). So a run cannot leave a
+sibling of `run` that the cleanup would miss, or replace `run` with a link. It holds `checkout/` (the shared checkout,
+its `node_modules` and build outputs), `home/` (the npm cache is `home/.npm`, set by the box's `npmrc`, below) and the
+reporter file `report.json`.
 
 A run has two phases, each its own unit as the run user (§2.3):
 
@@ -323,34 +349,74 @@ A run has two phases, each its own unit as the run user (§2.3):
    platform, the same inputs as `server-deps`' CI cache key. When a pristine install for that key exists, the prepare
    copies it: `cp -R --reflink=always --preserve=timestamps <pristine>/<key> checkout/<package>/node_modules`. The clone
    shares the pristine install's data blocks and diverges on write, so a test that writes under `node_modules` writes
-   its own copy, exactly as it would locally. When none exists, the prepare runs `npm ci` in the checkout against the
-   registry proxy with `npm_config_cache=<run>/npm-cache` and `--prefer-offline`, and the service queues a pristine
-   build for that key (below);
+   its own copy, exactly as it would locally. When none exists, the prepare runs `npm ci --prefer-offline` in the
+   checkout against the registry proxy (the cache and registry come from the box's `npmrc`, below), and the service
+   queues a pristine build for that key (below);
 3. the build outputs (below).
 
 **Run** (loopback only): the command (§2.5) in the package directory.
 
+**Results leave the directory first.** The run unit's stdout and stderr go to `StandardOutput=truncate:` and
+`StandardError=` files under `<CCRC_TESTBOX_ROOT>/out/<k>/`, which the system manager opens as root before it drops to
+the run user, so the run writes its output only through the descriptors it was given and never sees the files'
+directory. The service tails them for the live stream (§2.5) and appends them to the run's log under `logs/<run-id>`.
+The JSON reporter (§2.5) writes `runs/<k>/run/report.json`; the cleanup unit's first step copies it, as a regular
+file opened without following links and under a size cap (`CCRC_TESTBOX_REPORT_MAX`, default 16M), to
+`results/<run-id>/report.json`, owned by the service. A missing, oversized or non-regular report gives a summary that
+says `no report (<reason>)` and keeps the exit status.
+
 **Cleanup.** When the run unit has stopped (passed, failed, killed or timed out), the service starts
-`ccrc-testbox-clean@<k>`, a static root unit whose fixed `ExecStart` runs `rm -rf --one-file-system` on that run's
-directory and nothing else. It runs outside the run's sandbox and after it, so nothing the run left, in any mode, can
-survive it. The run user returns to the free pool only when the directory is gone. A cleanup that fails keeps that run
+`ccrc-testbox-clean@<k>`, a static root unit whose fixed `ExecStart` collects the report (above) and then runs
+`rm -rf --one-file-system` on that run's directory, and nothing else. It runs outside the run's sandbox and after it,
+so nothing the run left in the directory, in any mode, can survive it; `RemoveIPC=yes` on the units (§2.3) covers
+what a run leaves outside it, in `/dev/shm` and the System V tables. The run user returns to the free pool only when the directory is gone. A cleanup that fails keeps that run
 user out of the pool and is retried on the service's next sweep; the status answer counts it (§2.7). At start the
 service sweeps every `runs/<k>/run` with no active unit, so a box reboot leaves nothing behind.
 
-**Pristine installs.** A pristine install is built once per install key, in its own clean unit
-(`ccrc-testbox-install.service`, as the dedicated user `ccrc-tb-install`, prepare-phase network): the service writes
-the key's install inputs, read from the mirror at the run's tree, into an empty build directory, and the unit lays them
-out at their relative paths and runs `npm ci` from the lockfile alone, with its own npm cache emptied afterwards. A
-fixed privileged post-step of the unit, which reads only the key the service wrote, moves the package's resulting
-`node_modules` to
-`<CCRC_TESTBOX_ROOT>/pristine/<key>` owned by root, so no run or later install can change it, with npm's modes kept so
-a run's clone is writable by its owner as a local install is. A pristine build counts as one run against
-`CCRC_TESTBOX_RUNS` and at most one runs at a time. The service deletes a pristine install unused for
-`CCRC_TESTBOX_PRISTINE_KEEP` (default 7 d) when no prepare is copying it; a run's clone is independent of it once made.
+**Pristine installs.** A pristine install is built once per install key, in its own unit
+(`ccrc-testbox-install.service`, as the dedicated user `ccrc-tb-install`, prepare-phase network), and is treated as a
+run in every way that matters for carry-over:
+
+- **a fresh directory**: `<CCRC_TESTBOX_ROOT>/install/` is root's and the unit writes only `install/run`, which its
+  privileged first step refuses to reuse and creates empty, owned by the install user, exactly as for `runs/<k>/run`;
+- **the inputs only**: the service writes the key's install inputs, read from the mirror at the run's tree, to
+  `specs/install`; the unit lays them out at their relative paths in `install/run/build` and runs `npm ci` from the
+  lockfile alone, with HOME `install/run/home`;
+- **the same caps**: the unit runs in its own slice with the per-run `MemoryMax`, `MemorySwapMax` and CPU quota (§4),
+  with `PrivateTmp=yes` and `RemoveIPC=yes`, and counts as one run against `CCRC_TESTBOX_RUNS`; at most one runs at a
+  time;
+- **root cleanup**: on success a fixed privileged post-step, which reads only the key the service wrote, moves the
+  package's `node_modules` to `<CCRC_TESTBOX_ROOT>/pristine/<key>` owned by root, so no run or later install can change
+  it, with npm's modes kept so a run's clone is writable by its owner as a local install is; then, success or not,
+  `ccrc-testbox-clean@install` removes `install/run` as the run cleanup does.
+
+**A failed pristine build retries with backoff.** A build that exits non-zero, times out or is killed is retried for
+the same key after a delay that grows (`CCRC_TESTBOX_PRISTINE_RETRY`, default 2 m, 10 m, 1 h, then once a day). While
+a key has no pristine install, its runs keep installing in their own copy (above), so they pay one `npm ci` each and
+still pass or fail on their own merits. The card (§2.7) lists each failed key with its package, the short key, the
+exit status, the attempt count and the next attempt time, and the box is `degraded` while one is listed. A new key
+for the same package (a newer lockfile) replaces the failed one in the list.
+
+The service deletes a pristine install unused for `CCRC_TESTBOX_PRISTINE_KEEP` (default 7 d) when no prepare is
+copying it; a run's clone is independent of it once made.
 
 Lifecycle scripts run in both installs (`node-pty` needs its install step), so they are session-controlled code and run
-where §2.3 puts it. Node headers are installed on the box and named by `npm_config_nodedir`, so a native build never
-downloads them. The proxy, the service's, is the one warm layer every install reads, over HTTP.
+where §2.3 puts it. The proxy, the service's, is the one warm layer every install reads, over HTTP.
+
+**npm settings come from a root-owned `npmrc`.** The npm settings every install on the box needs are in the global
+`npmrc` of the pinned node install (`<tools>/node/<version>/etc/npmrc`, root's, written by the tools unit, §2.10),
+which npm reads with no environment variable:
+
+```
+registry=http://<CCRC_TESTBOX_REGISTRY_PROXY>/
+cache=${HOME}/.npm
+nodedir=<tools>/node/<version>
+```
+
+So the run's environment carries no `npm_config_*` name and matches a local one (§2.3), the cache lands inside the
+run's own HOME and goes with the directory, and a native build finds the headers the node release tarball ships under
+`include/node` instead of downloading them. A project `.npmrc` (ccrc-pwa has none) would override these as it does
+locally; the run's network (§2.3) still reaches only the proxy.
 
 **XFS, settled.** The run root is XFS with `reflink=1`, the `mkfs.xfs` default on current distributions. btrfs also
 reflinks, but brings snapshots, subvolumes and its own space accounting this design has no use for; XFS gives only the
@@ -402,18 +468,22 @@ and never as the service.
   tests already filter to their own trees, and the parity check (§6) is what shows they do.
 - **Static units, one narrow polkit rule.** The service never builds a unit's properties. The box installs static
   units in the system manager: the templates `ccrc-testbox-prepare@<k>`, `ccrc-testbox-run@<k>` and
-  `ccrc-testbox-clean@<k>`, and `ccrc-testbox-install`. The prepare and run templates set `User=ccrc-tb-%i`, the run's
-  slice, `IPAddressDeny`/`IPAddressAllow`, `ProtectProc`, `NoNewPrivileges`, `PrivateDevices`, `PrivateTmp=yes`,
-  `ProtectSystem=strict` with `runs/%i` as the only `ReadWritePaths`, and a fixed `ExecStart` of the service's runner
-  script. The run's argv and environment reach the runner as a spec file the service writes under
-  `<CCRC_TESTBOX_ROOT>/specs/<k>`, readable but not writable by the run user. A polkit rule lets the service user
+  `ccrc-testbox-clean@<k>` (`k` a run number or `install`), `ccrc-testbox-install` and `ccrc-testbox-tools` (§2.10).
+  The prepare and run templates set `User=ccrc-tb-%i`, the run's slice, `IPAddressDeny`/`IPAddressAllow`,
+  `ProtectProc`, `NoNewPrivileges`, `PrivateDevices`, `PrivateTmp=yes`, `RemoveIPC=yes` (the run user's POSIX shared
+  memory in `/dev/shm`, message queues and System V objects are removed when the unit stops; `PrivateDevices` still
+  shares the host's `/dev/shm`, so without it a segment could outlive the run directory), `ProtectSystem=strict` with
+  `runs/%i/run` as the only `ReadWritePaths`, and a fixed `ExecStart` of the service's runner script; the install unit
+  sets the same for `install/run`. The run's argv and environment reach the runner as a spec file the service writes
+  under `<CCRC_TESTBOX_ROOT>/specs/<k>`, readable but not writable by the run user. A polkit rule lets the service user
   `start`, `stop` and read the state of units whose name matches
-  `^ccrc-testbox-((prepare|run|clean)@[0-9]+|install)\.service$`, and nothing else. `IPAddressDeny` needs the system
+  `^ccrc-testbox-((prepare|run)@[0-9]+|clean@([0-9]+|install)|install|tools)\.service$`, and nothing else. `IPAddressDeny` needs the system
   manager, which is why these are system units; polkit cannot constrain transient-unit properties such as `User=`,
   which is why they are static. The installer writes the units, the users and the rule: box setup, not session code.
 - **A fixed environment.** The runner starts from an empty environment plus: `PATH` (the box's tool directory first),
   `HOME`, `TMPDIR`, `LANG`, `TERM`, the worker-count names (§2.5), and the names in a forward allowlist (config,
-  default `CCRC_HISTORY_BASE CCRC_LEDGER_BASE`, resolved to shas as §2.1 says). The session's environment is never
+  default `CCRC_HISTORY_BASE CCRC_LEDGER_BASE`, resolved to shas as §2.1 says). No `npm_config_*` name is set: npm's
+  settings come from the root-owned `npmrc` (§2.2). The session's environment is never
   forwarded: on the fleet host it carries the session's account settings and tokens. `CI` is forwarded only if the
   local invocation had it, so the answer matches the local one.
 - **Network.** The run unit: `PrivateNetwork=yes`, its own network namespace with only its own loopback, so it cannot
@@ -422,13 +492,15 @@ and never as the service.
   the box's loopback, so they get `IPAddressDeny=any` and `IPAddressAllow=` loopback plus the proxy's address. The proxy
   is a caching read-only npm registry run by the service user on a loopback address of its own (config, default
   `127.0.0.2:4873`), and is the only thing with egress to the upstream registry.
-- **Containment of the units.** Each run's units run in that run user's slice with its own `MemoryMax`,
-  `MemorySwapMax` and CPU quota (config), so a runaway test or install cannot take the service down with it.
+- **Containment of the units.** Each run's units, and the pristine install's, run in their user's slice with its own
+  `MemoryMax`, `MemorySwapMax` and CPU quota (config), so a runaway test or install cannot take the service down with
+  it.
 - **The snapshot is checked before it leaves.** Gitignored files never enter it (§2.1), and the size caps keep large
   untracked files out. On top of that the wrapper refuses a snapshot whose untracked, unignored paths match a deny list
   (config; default `*.pem`, `*.key`, `.env`, `.env.*`, `id_*`, `*.p12`) and names the paths. A refusal falls back to
   local, with the reason.
-- **Results.** The log the box keeps is the run's own output, kept for the retention time and deleted with the refs. It
+- **Results.** The log the box keeps is the run's own output, collected outside the run directory (§2.2), kept for the
+  retention time and deleted with the refs. It
   is fetched by run id with the fleet host's token, which only the wrapper and the agent op read (the fleet host is the
   single-user boundary). It passes through no other surface, so no new egress mask is needed; the card in §2.7 shows
   counts, never log text.
@@ -437,9 +509,10 @@ Three checks become tests of the service (§5): a fixture run that prints its wh
 the processes its `/proc` walk sees while another run sleeps, compared against the allowlist and its own unit; a
 fixture install whose lifecycle script tries the upstream registry directly, a public address, the service's token
 file and a pristine install, each of which must fail; and a carry-over fixture, where a run writes under
-`node_modules`, `node_modules/.vite`, `/tmp`, `.git/hooks` and `.git/config` and leaves a read-only directory, and the
-next run as the same run user, from another fixture session, sees none of it, the pristine install is byte-unchanged,
-and the run directory is gone between the two.
+`node_modules`, `node_modules/.vite`, `/tmp`, `/dev/shm` (a POSIX shared-memory segment left open), `.git/hooks` and
+`.git/config`, leaves a read-only directory and tries to create a sibling of `runs/<k>/run`, and the next run as the
+same run user, from another fixture session, sees none of it, the sibling was refused, the pristine install is
+byte-unchanged, and the run directory is gone between the two while its log and report are kept.
 
 ### 2.4 Fallback: the local slice, said out loud
 
@@ -451,7 +524,7 @@ The wrapper chooses remote only when all of these hold; otherwise it runs the sa
 | the remote switch is on | the switchboard marker (§2.7) | `test box: off` |
 | the repository is in the test box's table | the box's status answer | `test box: this repository is not set up there` |
 | the box answers its status call within the deadline (config, default 3 s) and is not `down` | direct call | `test box: unreachable (<detail>)` or `test box: down (<reason>)` |
-| node major.minor, npm major, tmux major, git major, python3 major.minor and Chrome major match the fleet host's | the box's status answer | `test box: version differs (<name> <local> vs <remote>)` |
+| node major.minor, npm major, tmux major, git major, python3 major.minor and Chrome major match the fleet host's | the box's status answer; a mismatch also marks the box `degraded` (§2.10) | `test box: version differs (<name> <local> vs <remote>)` |
 | the service's protocol version is the wrapper's | the box's status answer | `test box: protocol differs (<local> vs <remote>)` |
 | the queue is under its limit (config, default 20 waiting runs) | the box's status answer | `test box: queue full (<n> waiting)` |
 | the snapshot passes the deny list | §2.3 | `test box: snapshot refused (<paths>)` |
@@ -506,8 +579,8 @@ command locally (config can make it fail instead). Ctrl-C or the session ending 
 
 **The budget.** The wrapper estimates a file set's time from the per-file durations the daily CI run publishes
 (`2026-09-23-ci-test-selection-design.md`) with the median for a file it does not know, divided by the run's worker
-count. The prepare phase is not counted: at about half a minute to a minute and a half (§4) it is inside the margin a
-15-minute budget leaves. Over the budget (config, default 15 min) the wrapper does not start a remote run, and what it
+count. The prepare phase is not counted: at up to half a minute with no build outputs and up to about two minutes
+with all three (§4) it is inside the margin a 15-minute budget leaves. Over the budget (config, default 15 min) the wrapper does not start a remote run, and what it
 does depends on the form:
 
 - **bare `ccrc test <argv>`**: it falls back to the local slice like every other check in §2.4, with
@@ -534,9 +607,10 @@ explicit `--maxWorkers=<n>`. A `--maxWorkers` the session passes is kept when it
 `workers: <n>`, and when the local run of the same command would get a different count it adds `local default: <m>`.
 The parity check (§6) runs its local leg with the same count as the box.
 
-**Results stream back.** The service streams the run's stdout and stderr as they happen, then a summary frame: exit
-status, the failed files and test names (from a JSON reporter the service adds beside the session's own reporters,
-like CI's file-times reporter), the run's wall time, the prepare time, and the last 40 log lines (config). The wrapper
+**Results stream back.** The service streams the run's stdout and stderr as they happen, from the output files the
+system manager writes outside the run directory (§2.2), then a summary frame: exit status, the failed files and test
+names (from a JSON reporter the service adds beside the session's own reporters, like CI's file-times reporter, read
+from the copy the cleanup collects), the run's wall time, the prepare time, and the last 40 log lines (config). The wrapper
 prints them and exits with the run's exit status, so "counted exits" read the same as local runs.
 
 ### 2.6 Placement: which repositories and programmes
@@ -560,8 +634,8 @@ already on the box finish.
 
 **The status read.** A new agent op, `testbox`, shaped like the `disk` op (`agent/src/disk.ts`): an L3 adapter on the
 fleet host that calls the test box's status endpoint with a deadline and returns the answer or a typed failure. The
-server's L1 decider turns it into a state: `off`, `ok`, `degraded` (a version mismatch, or a run user held out by a
-failed cleanup), `down` (the service answers but cannot run: no reflink on the run root, a missing mirror), or
+server's L1 decider turns it into a state: `off`, `ok`, `degraded` (a tool version that differs from the fleet
+host's, a tool sync in progress or failed, a failed pristine key, or a run user held out by a failed cleanup), `down` (the service answers but cannot run: no reflink on the run root, a missing mirror), or
 `unreachable`. The L4 timer polls it (config, default 30 s). The server keeps its one agent link; it never reaches the
 test box itself. The fleet agent is legitimately the caller: it is on the host whose wrapper submits runs, so it sees
 the same reachability the wrapper sees.
@@ -569,19 +643,28 @@ the same reachability the wrapper sees.
 **The card.** Settings › Automation gains a Test box card beside step 1's tests-slice card:
 
 - the switch, with one sentence of what it does;
-- state, with the reason when `degraded` or `down`, last answer time, service and protocol versions, and the fleet
-  host's and the box's versions of every tool §2.4 compares;
+- state, with the reason when `degraded` or `down`, last answer time, service and protocol versions, and, for every
+  tool §2.4 compares, the release's pin, the fleet host's version and the box's, with the differing cell marked;
+- **Bring tools up to date**, shown when a tool differs or the last sync failed: it runs the same sync step as the
+  update lane (§2.10), shows `syncing <tool>` while it runs, and is disabled until it ends; the last sync's time and
+  result sit under it;
 - runs in progress of the limit, queue depth, runs and fallbacks in the last 24 hours, with fallbacks grouped by
   reason;
-- the pristine installs present per package for each repository row.
+- the pristine installs present per package for each repository row, and each failed pristine key with its exit
+  status, attempt count and next attempt (§2.2).
 
 | width | layout |
 |---|---|
-| phone | one column; the switch and state (with its reason) on top, then a two-row summary (runs, queue); versions, the 24-hour counts and the pristine installs behind a disclosure |
-| laptop | the card in the settings column; switch and state on one line, a three-cell row (runs, queue, fallbacks), versions under it |
-| wide | the same card at the column's width, with the pristine-installs table shown open |
+| phone | one column; the switch and state (with its reason) on top, then **Bring tools up to date** as a full-width button when shown, then a two-row summary (runs, queue); versions, the 24-hour counts, the pristine installs and failed keys behind a disclosure |
+| laptop | the card in the settings column; switch and state on one line, the button at the end of the state line when shown, a three-cell row (runs, queue, fallbacks), the versions table (pin, fleet host, box) under it |
+| wide | the same card at the column's width, with the versions table and the pristine-installs table shown open side by side |
 
-Doctor gains a line on the fleet host: the switch, the box's state, queue depth, and the version comparison.
+The control's route calls a `testbox.tools-sync` action through the same agent link (the `testbox` op's one write),
+which sends the box a `tools.sync` frame with the pins of the release the fleet host runs. The route, the action and
+the frame take no argument from the page: the pins are the release's, never the caller's.
+
+Doctor gains a line on the fleet host: the switch, the box's state, queue depth, and the version comparison, naming
+which side is off the release's pins.
 
 ### 2.8 The queue on the box
 
@@ -603,8 +686,58 @@ Two homes were weighed:
 
 Recommendation: **A.** The wrapper's remote arm is the client; the run frames are `run.submit` (the run id, the branch,
 which scratch refs were pushed, the build outputs present locally, the argv and the forwarded names), `run.log`,
-`run.summary`, `run.cancel` and `status`. The service's own pieces (the run manager, the pristine-install store, the
-queue) are L1 deciders with L3 adapters for git, npm and systemd, like the rest of `agent/`.
+`run.summary`, `run.cancel`, `tools.sync` (§2.10) and `status`. The service's own pieces (the run manager, the
+pristine-install store, the queue, the tool sync) are L1 deciders with L3 adapters for git, npm and systemd, like the
+rest of `agent/`.
+
+### 2.10 Tools in step with the fleet host
+
+A remote answer equals a local one only while the two hosts run the same node, npm, Chrome and python3, and the box
+has no way of its own to know what the fleet host runs or to change what it has. So the versions are carried by the
+release and installed by the lane that already rolls both hosts (§2.9).
+
+**The release pins them.** Each ccrc release carries a small tool-pins file, written by the release build from the
+versions its verifying CI jobs ran with:
+
+| tool | pinned as | integrity |
+|---|---|---|
+| node | the exact version | the sha256 from the release's `SHASUMS256.txt`, whose signature is checked against the node release keys installed at box setup |
+| npm | the exact version | the registry's `dist.integrity` for that version |
+| Chrome | the exact Chrome for Testing version of the Chrome the browser job ran | the sha256 of the `linux64` zip, which the release build downloads once and records (Chrome for Testing publishes no checksum) |
+| python3 | major.minor | the OS package manager's own signature check |
+
+git, tmux, strace and jq are not pinned: they come from the OS package mirror at the distribution's version, and §2.4
+compares the majors of git and tmux as before.
+
+**The update lane installs them.** When the update lane rolls the fleet host to a release, it also sends the test box a
+`tools.sync` frame with that release's pins (and rolls the test service itself, §2.9). The service starts
+`ccrc-testbox-tools.service`, a static root unit whose fixed script reads only the pins file the service wrote, checks
+each value against its format, and:
+
+1. downloads `node-v<version>-linux-x64.tar.xz` from `nodejs.org`, checks it against the signed checksum file, and
+   unpacks it to `<tools>/node/<version>`, which keeps the release's `include/node` headers for `nodedir` (§2.2), then
+   writes that install's root-owned `npmrc`;
+2. installs `npm@<version>` into that node prefix from the npm registry, through the registry proxy;
+3. downloads the Chrome for Testing build from its download host, checks the recorded sha256, and unpacks it to
+   `<tools>/chrome/<version>`, with its system libraries from the OS mirror;
+4. installs python3 at the pinned major.minor, git, tmux, strace and jq from the OS package mirror;
+5. switches `<tools>/current`, a directory of links naming one version of each, in a single rename.
+
+`<tools>` is `CCRC_TESTBOX_TOOLS_DIR`, root's and read-only to every other user; `CCRC_CHROME` on the box names the
+link. A run resolves `<tools>/current` once, when its prepare starts, and uses those versioned paths for its whole
+life, so a sync during a run changes nothing under it; the next prepare picks the new set. The service keeps the
+previous version of each tool until no run uses it. A new node version changes every install key (§2.2), so the
+service queues the new pristine builds as soon as the sync ends.
+
+**A mismatch is visible and has a control.** The status answer reports the box's versions, the pins it last synced
+and the sync's state. A box whose versions differ from the fleet host's is `degraded` with the reason
+`tools differ (<tool> <fleet host> vs <box>)`, and every wrapper on the fleet host falls back with §2.4's version row,
+so a mismatch costs remote runs, never a wrong answer. A sync that fails (a download, a checksum, the OS mirror without
+the pinned python3 minor) leaves `current` on the previous set, marks the box `degraded` with
+`tool sync failed (<tool>: <detail>)`, and is retried with the pristine build's backoff (`CCRC_TESTBOX_PRISTINE_RETRY`).
+The card's **Bring tools up to date** (§2.7) sends the same `tools.sync` at once. When the fleet host itself is off its
+release's pins (a tool changed on it outside the lane), syncing the box cannot help; the card and the doctor line say
+which side is off.
 
 ## 3. What this needs from others
 
@@ -621,8 +754,9 @@ If step 1 lands with another argv, §2.5 follows it.
 ### 3.2 Open PRs and order
 
 This PR adds one file under `docs/superpowers/specs/` and touches no other file, so it is line-disjoint from every open
-PR. The build that follows will touch `shared/switches.ts` (a row), `agent/` (a new entry point and op), the Settings
-Automation section and the doctor checks; it lands after #1694, and its plan re-checks open PRs on those files then.
+PR. The build that follows will touch `shared/switches.ts` (a row), `agent/` (a new entry point and op), the release
+build (the tool-pins file, §2.10), the update lane (the `tools.sync` step), the Settings Automation section and the
+doctor checks; it lands after #1694, and its plan re-checks open PRs on those files then.
 #1772's deps-shed arm and this design meet later: once typechecks and tests run remotely, a fleet worktree needs its
 `node_modules` only for local fallback runs, which makes shedding them cheaper. That is a follow-up, not part of this
 spec.
@@ -633,24 +767,32 @@ Every size, cap, count and path is a ccrc setting read through `_ccrc_knob` (the
 `~/.ccrc/ccrc.env`, else the default), as #1752 does for the session slice. Defaults are neutral: with no test box
 configured, remote is simply unavailable and every run is local.
 
-**What a fresh run costs.** Measured on a workstation (APFS clones, Apple silicon) at the commit in §1; the box's
-figures are estimates until the build measures them there:
+**What a fresh run costs.** Two columns of figures with different standing: the **measured** column was timed on a
+workstation (APFS clones, Apple silicon) at the commit in §1, and the **box** column is an estimate for XFS on the
+16-vCPU box, which the build replaces with its own measurement there. The **paid** column says when the cost falls:
+before the command starts (the run's prepare, which the session waits for), after the run (the session does not
+wait), or outside any run.
 
-| step | measured on the workstation | estimate on the box |
-|---|---|---|
-| shared checkout of the 4,105 tracked files | 3.5 s | 2–5 s |
-| `node_modules` clones: `server` (≈6,000 files), `ui` (≈18,000), `pwa` (≈20,500) | 2.9 s, 6.7 s, 11.0 s | 10–25 s together (XFS reflink, per-file metadata cost) |
-| `server/dist` (`tsc`) | 3.9 s | 5–10 s |
-| `server/dist-pwa` (the pwa build: `tsc --noEmit` then `vite build`) | ≈40 s and 10.4 s | ≈50–70 s |
-| `agent/dist` (`tsc`) | not measured (no install on the checkout) | under 10 s |
-| cleanup (`rm -rf` of the run directory) | ≈7 s for the `ui` and `pwa` clones | 5–15 s, after the run, not in its time |
+| step | paid | measured (workstation) | box (estimate) |
+|---|---|---|---|
+| shared checkout of the 4,105 tracked files | prepare, every run | 3.5 s | 2–5 s |
+| `node_modules` clones: `server` (≈6,000 files), `ui` (≈18,000), `pwa` (≈20,500) | prepare, every run | 2.9 s + 6.7 s + 11.0 s = 20.6 s | 10–25 s together (per-file metadata cost) |
+| **prepare, no build outputs** | | **≈24 s** | **12–30 s** |
+| `server/dist` (`tsc`) | prepare, when the local tree has it | 3.9 s | 5–10 s |
+| `server/dist-pwa` (the pwa build: `tsc --noEmit` ≈40 s, then `vite build` 10.4 s) | prepare, when the local tree has it | ≈50 s | 50–70 s |
+| `agent/dist` (`tsc`) | prepare, when the local tree has it | not measured (no install on the checkout) | under 10 s |
+| **prepare, all three outputs** | | **≈78 s, plus `agent/dist`** | **about 1–2 min** |
+| cleanup (`rm -rf` of the run directory) | after the run | ≈7 s for the `ui` and `pwa` clones | 5–15 s |
+| `npm ci` for a package whose key has no pristine install | prepare, first runs of a new lockfile only | not measured | 1–3 min per package against a warm proxy |
+| pristine build for a new key | outside any run (its own unit, §2.2) | not measured | 1–3 min per package |
+| tool sync (§2.10) | outside any run, once per release that changes a pin | not measured | a few minutes, mostly the Chrome download |
 
-So a run whose local tree has no build outputs pays about half a minute before its command starts, and one that has all
-three about a minute and a half: under a tenth of the 15-minute budget even in the worst case, and the budget estimate
-(§2.5) leaves it uncounted. A mutation loop pays it once per wrapper call: once for a loop inside one command, once per
-mutant for a loop that calls the wrapper each time (half a minute each when no outputs are built). A run with no
-pristine install for its key adds one `npm ci` per changed package (an estimate of one to three minutes each against
-a warm proxy), which §1.4 puts at about five times a month per package.
+So the worst ordinary case, a run whose local tree has all three outputs, waits about two minutes before its command
+starts: under a seventh of the 15-minute budget, which is why the budget estimate (§2.5) leaves the prepare uncounted.
+A mutation loop pays the prepare once per wrapper call: once for a loop inside one command, once per mutant for a loop
+that calls the wrapper each time (up to half a minute each when no outputs are built). The `npm ci` row is paid only
+by runs that arrive before the pristine build for their key is done, which §1.4 puts at about five lockfile changes a
+month per package.
 
 | key (fleet host) | default | meaning |
 |---|---|---|
@@ -683,6 +825,11 @@ a warm proxy), which §1.4 puts at about five times a month per package.
 | `CCRC_TESTBOX_FETCH_EVERY` | `5m` | mirror fetch timer |
 | `CCRC_TESTBOX_RETENTION` | `24h` | result, log and ref lifetime |
 | `CCRC_TESTBOX_PRISTINE_KEEP` | `7d` | §2.2; a pristine install unused this long is deleted |
+| `CCRC_TESTBOX_PRISTINE_RETRY` | `2m 10m 1h 1d` | §2.2, §2.10; the delays between attempts of a failed pristine build or tool sync, the last repeating |
+| `CCRC_TESTBOX_REPORT_MAX` | `16M` | §2.2; the largest reporter file the cleanup collects |
+| `CCRC_TESTBOX_TOOLS_DIR` | `/opt/ccrc-testbox/tools` | §2.10; the pinned tools, root's, with `current` naming the set in use |
+| `CCRC_TESTBOX_OS_MIRROR` | the distribution's own | §2.0, §2.10; the OS package mirror |
+| `CCRC_TESTBOX_EGRESS_ALLOW` | `github.com`, the registry upstream, `nodejs.org`, `storage.googleapis.com`, the OS mirror | §2.0; the egress allowlist by name, each name tied to the units that may use it |
 | `CCRC_TESTBOX_PUSH_USER` | `ccrc-tb-push` | §2.1; the push user |
 | `CCRC_TESTBOX_ENV_FORWARD` | `CCRC_HISTORY_BASE CCRC_LEDGER_BASE` | §2.3; a ref-valued name is resolved to a sha and pushed (§2.1) |
 | `CCRC_TESTBOX_RUN_USER_PREFIX` | `ccrc-tb-` | §2.3; concurrent run `k` runs as `<prefix><k>` |
@@ -690,7 +837,7 @@ a warm proxy), which §1.4 puts at about five times a month per package.
 | `CCRC_TESTBOX_REGISTRY_UPSTREAM` | `https://registry.npmjs.org` | §2.3; the proxy's upstream |
 | `CCRC_TESTBOX_TMPFS` | `off` | §2.2; `on` mounts the units' `/tmp` as a tmpfs instead of `PrivateTmp` |
 | `CCRC_TESTBOX_LOG_TAIL` | `40` | §2.5 |
-| `CCRC_CHROME` | unset | Chrome or Chromium binary for the browser tests |
+| `CCRC_CHROME` | `<tools>/current/chrome` | the pinned Chrome for Testing binary for the browser tests (§2.10) |
 
 ## 5. Acceptance, mapped
 
@@ -699,7 +846,8 @@ a warm proxy), which §1.4 puts at about five times a month per package.
 | the same pass/fail answer as locally | the parity check in §6, before the switch is armed; a fixture test of the wrapper that compares the summary of a remote and a local run of the same snapshot; and a git-state fixture test: a fixture repository with an `origin/main`, a branch two commits ahead, one staged, one unstaged and one untracked change, where a probe prints `rev-parse HEAD`, `--abbrev-ref HEAD`, `rev-parse origin/main`, `merge-base origin/main HEAD`, `diff --name-only <mb> HEAD`, `rev-list --count <mb>..HEAD` and `status --porcelain`, and a dirty-tree guard (a copy of `consolidation-path-guard`'s diff check) runs; local and box output must be byte-identical, run once with the session on a newer and once on an older `origin/main` than the mirror's; a socket fixture that binds a unix socket at the longest name the suites build (the run-tmp `live.sock` path and a `delegation-rig`-shaped `/tmp/dlgt-*` tmux socket), once under `TMPDIR` and once under `/tmp`, must bind on both sides; and a worker fixture whose test prints vitest's resolved worker count must print `CCRC_TESTBOX_WORKERS` on the box with no flag passed |
 | a run's checkout stays whole across mirror `gc` (§2.1) | a service test: a fixture submission with a dirty tree is prepared, the mirror runs `git gc --prune=now`, and the run must pass with `git fsck` in its checkout reporting no missing object |
 | no run's result depends on an earlier run (§2.2) | the carry-over fixture test in §2.3; a fixture run killed mid-way whose directory the cleanup must still remove; and a pushed run id that already holds a ref, which the pre-receive hook must refuse whole |
-| a run with no pristine install for its key | a fixture lockfile with no pristine install: the run installs in its own copy and passes, the pristine install appears afterwards, and the next run with that lockfile clones it |
+| a run with no pristine install for its key | a fixture lockfile with no pristine install: the run installs in its own copy and passes, the pristine install appears afterwards, and the next run with that lockfile clones it; a fixture lockfile whose install fails: the build is retried on the backoff, the card lists the key, the box is `degraded`, runs for that key still install in their copy, and the install directory is gone after every attempt |
+| the box's tools follow the fleet host's release (§2.10) | a service test against fixture download hosts: a `tools.sync` with new pins installs them, switches `current` in one rename, leaves a run that started before it on its old paths, and queues the new pristine builds; a checksum that does not match leaves `current` unchanged and marks the box `degraded` with `tool sync failed`; a status answer whose versions differ from the fleet host's makes the wrapper fall back with the version row; and the card's **Bring tools up to date** sends the same frame with the release's pins, not the page's |
 | coding sessions see no test-run memory or CPU | on the fleet host a remote run costs a `status`, a `git add -A` that reuses the session's stat cache, one push and a stream: measured in the build as the wrapper's own peak RSS and CPU time, with a ceiling in a test, on a dirty tree and on one with a file over the cap (which must not be hashed); the tests slice stays empty while every run is remote |
 | no credentials reachable, no outbound network | the env, `/proc` and install fixture tests in §2.3 |
 | when the box is down, runs fall back and say so | a fixture test per row of §2.4's table: the reason in the first and last line, the local slice used, the exit status the local run's; for the budget row also the explicit `--remote` form, which must run nothing and exit 75; a box whose run root has no reflink reports `down`; and a fixture worktree with no `node_modules`, under each value of `CCRC_TESTBOX_FALLBACK_INSTALL` |
@@ -727,16 +875,19 @@ that option.
   registry proxy, every piece of submitted code runs as an unprivileged user that cannot see other runs, and the
   snapshot is checked first.
 - Scratch refs never reach the public remote.
-- The box is rebuilt clean before it serves, the tailnet lets it reach nothing, and its egress is GitHub and the npm
-  upstream only.
+- The box is rebuilt clean before it serves, the tailnet lets it reach nothing, and its egress is a named list
+  (GitHub, the npm upstream and the tools' official download hosts), each name open only to the units that need it.
+- The box's tools are the release's pins; while they differ from the fleet host's the box says so and every run
+  falls back instead of getting a remote answer.
 - The server keeps one agent link and never reaches a third box.
 - The merge-queue CI stays the authority for landing, so even a wrong answer from the box cannot land a change.
 
 ## 8. Operator decisions
 
 Everything else in this spec is design, settled by the reasons given where it is described. The transport (§2.1), the
-secrets rule (§2.3) and the disposable runs with reflink clones of a pristine install on XFS (§2.2, from the
-2026-10-28 ruling) are among those, so none is a choice here. These are the choices the operator makes; each row names
+secrets rule (§2.3), the disposable runs with reflink clones of a pristine install on XFS (§2.2, from the
+2026-10-28 ruling) and the release's tool pins with their official download hosts (§2.10) are among those, so none is
+a choice here. These are the choices the operator makes; each row names
 the recommended option first.
 
 | # | decision | recommended | why |
@@ -748,7 +899,6 @@ the recommended option first.
 | 5 | A run lost mid-way (§2.4) | **re-run locally, as now, after sending `run.cancel`; the alternative is to fail fast (`CCRC_TESTBOX_LOST_RUN=fail`)** | the session gets its answer either way, at the cost of running the command twice when the box was only slow |
 | 6 | On/off control (§2.7) | **one switch on the Settings › Automation Test box card, backed by a marker file a terminal can remove; armed only after the parity check in §6 passes** | the operator can turn it off from the UI or a shell, and it works with the server down |
 | 7 | Which repositories first (§2.6) | **ccrc-pwa only; another repository by adding a row once its own parity check passes** | its suites are the measured load |
-
 ## Decisions this spec adds
 
 The build plan allocates a deviation number for each of these when it lands; until then they are named by this PR,
@@ -773,9 +923,19 @@ The build plan allocates a deviation number for each of these when it lands; unt
 - **Environment and isolation**: the run's fixed allowlisted environment, a user per concurrent run with an empty HOME,
   `ProtectProc=invisible` without `ProcSubset`, a private network namespace for the run, the registry proxy only for
   installs, and the snapshot deny list; the box rebuilt clean, reachable only from the fleet host over the tailnet,
-  reaching nothing on it, with egress to GitHub and the npm upstream only (§2.0, §2.3).
-- **Privilege**: static `ccrc-testbox-{prepare,run,clean}@<k>` and `ccrc-testbox-install` system units with fixed users,
-  started by the service through one polkit rule limited to those names (§2.3).
+  reaching nothing on it, with egress by name to GitHub, the npm upstream and the tools' download hosts, each open
+  only to the units that use it (§2.0, §2.3).
+- **Privilege**: static `ccrc-testbox-{prepare,run,clean}@<k>`, `ccrc-testbox-install` and `ccrc-testbox-tools` system
+  units with fixed users, `RemoveIPC=yes` on the prepare, run and install units, `runs/<k>` and `install/` root's
+  with only their `run` directory writable, started by the service through one polkit rule limited to those names
+  (§2.2, §2.3).
+- **Pristine builds**: the install unit gets the run's fresh directory, root cleanup and caps, and a failed build
+  retries with backoff and is listed on the card (§2.2).
+- **Results and npm settings**: the live output and the reporter file are collected outside the run directory before
+  cleanup; the registry, cache and `nodedir` come from a root-owned `npmrc`, never the run's environment (§2.2).
+- **Tools**: the release pins node, npm, Chrome for Testing and python3; the update lane installs them on the box from
+  their official download hosts, which are the only names added to the egress allowlist; a mismatch marks the box
+  `degraded`, falls every run back, and offers **Bring tools up to date** on the card (§2.10).
 - **Fallback**: the fallback checks (the budget, the version and protocol check, a `down` box and the prepare-phase
   failures among them), their printed reasons, the lost-run rule (`run.cancel`, then the local run) and the
   install-or-refuse rule for a worktree with no `node_modules` (§2.4).
@@ -784,6 +944,6 @@ The build plan allocates a deviation number for each of these when it lands; unt
 - **Refusal exit**: exit 75 means "refused, nothing ran", reserved in step 1's exit contract (§2.5).
 - **Routing**: what runs on the box, what stays with CI, the time budget (prepare time uncounted, §4), the command
   heads and the worker count the runner always sets (§2.5).
-- **Status**: the `testbox-remote-live` switch row, the `testbox` agent op with its `down` state, and the Settings card
-  (§2.7).
+- **Status**: the `testbox-remote-live` switch row, the `testbox` agent op with its `degraded` and `down` states and
+  its one write (`testbox.tools-sync`), and the Settings card with its per-width layout (§2.7).
 - **Service home**: the test service as a second entry point of the agent package (§2.9).
