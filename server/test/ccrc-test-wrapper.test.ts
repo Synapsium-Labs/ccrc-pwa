@@ -8,7 +8,7 @@
 // which every Linux box has (util-linux, doctor's `flock` check); a box without one skips them.
 import { describe, it, expect } from 'vitest';
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, symlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkTmp, removeTmpFixturesEachTest } from './tmpHelpers.js';
@@ -72,6 +72,25 @@ const run = (b: Box, args: string[], extra: NodeJS.ProcessEnv = {}) =>
   spawnSync('bash', [WRAPPER, ...args], { env: { ...b.env, ...extra }, encoding: 'utf8', cwd: b.home, timeout: 60000 });
 const log = (b: Box, name: string): string => (existsSync(path.join(b.home, name)) ? readFileSync(path.join(b.home, name), 'utf8') : '');
 const setProps = (b: Box): string => log(b, 'systemctl.log').split('\n').find((l) => l.startsWith('--user set-property')) ?? '';
+
+const SERVICE_MANAGER_TOOLS = new Set(['systemctl', 'systemd-run']);
+/** A PATH with every tool of /usr/bin and /bin but systemctl and systemd-run. A plain `/usr/bin:/bin` is not one: a
+ *  GitHub ubuntu runner has systemd and a user manager there, so the run would reach the real manager. */
+function noServiceManagerPath(b: Box): string {
+  const dir = path.join(b.home, 'bin-no-service-manager');
+  mkdirSync(dir, { recursive: true });
+  for (const src of ['/usr/bin', '/bin']) {
+    let names: string[] = [];
+    try { names = readdirSync(src); } catch { continue; }
+    for (const n of names) {
+      if (SERVICE_MANAGER_TOOLS.has(n) || existsSync(path.join(dir, n))) continue;
+      try { symlinkSync(path.join(src, n), path.join(dir, n)); } catch { /* a name both dirs hold, through a link */ }
+    }
+  }
+  const found = spawnSync('/bin/sh', ['-c', 'command -v systemctl || command -v systemd-run'], { env: { PATH: dir }, encoding: 'utf8' });
+  expect(found.stdout, 'the fixture PATH holds no service manager tool').toBe('');
+  return dir;
+}
 
 /** A heavy-or-light run that marks `started-<tag>` and holds until `release-<tag>` exists. */
 interface Held { proc: ChildProcess; stderr: () => string; exit: Promise<number | null> }
@@ -176,7 +195,7 @@ describe('ccrc test: the slice (D-7298)', () => {
 
   itLinux('no service manager tools on PATH: the run degrades the same way', () => {
     const b = box();
-    const r = run(b, ['--light', '--', 'sh', '-c', 'echo ran'], { PATH: `/usr/bin:/bin` });
+    const r = run(b, ['--light', '--', 'sh', '-c', 'echo ran'], { PATH: noServiceManagerPath(b) });
     expect(r.stdout.trim()).toBe('ran');
     expect(r.stderr).toContain('ccrc test: WARN: the run is NOT contained: systemctl or systemd-run is not on PATH');
   });
@@ -670,13 +689,14 @@ describe('ccrc test --status (D-7298)', () => {
   });
 });
 
-// The on-box proof (deploy/verify-test-slice.sh) is the operator's, run on a box with a real user manager; CI has none.
-// Here only its refusal is held: where it cannot measure, it changes nothing and says so.
+// The on-box proof (deploy/verify-test-slice.sh) is the operator's, run on a box with a real user manager. A GitHub
+// runner has one too, so the row takes systemctl and systemd-run off PATH: only the refusal is held here, where it
+// cannot measure, it changes nothing and says so.
 describe('deploy/verify-test-slice.sh (D-7298)', () => {
   const VERIFY = path.join(REPO, 'deploy', 'verify-test-slice.sh');
   it('refuses, changing nothing, where there is no user manager to measure', () => {
     const b = box();
-    const r = spawnSync('bash', [VERIFY], { env: { ...b.env, PATH: '/usr/bin:/bin' }, encoding: 'utf8', cwd: b.home, timeout: 60000 });
+    const r = spawnSync('bash', [VERIFY], { env: { ...b.env, PATH: noServiceManagerPath(b) }, encoding: 'utf8', cwd: b.home, timeout: 60000 });
     expect(r.status).toBe(1);
     expect(r.stderr).toMatch(/^verify-test-slice: refused, nothing changed: (this is not Linux|systemctl, systemd-run and flock must all be on PATH)/);
     expect(existsSync(path.join(b.home, '.cc-sessions')), 'no slot was touched').toBe(false);
