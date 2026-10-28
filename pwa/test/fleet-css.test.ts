@@ -1268,8 +1268,12 @@ describe('the fleet head holds one row, and the class chooser is not on it', () 
       path.join(import.meta.dirname, '..', 'src', 'fleet', 'FleetHead.tsx'), 'utf8');
     expect(head, 'the fleet head is not in FleetHead.tsx — find it and re-point this read')
       .toContain('<header className="fleet-head">');
-    expect(head, 'the chooser is back inside <header>, where it never fit')
-      .not.toContain('fleet-class-select');
+    // What the chooser IS now (T2f, D-6371): the shared component, and its select's name. `fleet-class-select` is in no
+    // markup, so a check on that class name could not go red.
+    expect(head, 'the chooser component is back in the fleet head, where it never fit')
+      .not.toContain('ClassChooser');
+    expect(head, 'a class select is back inside <header>, where it never fit')
+      .not.toContain('aria-label="Class"');
     const screen = readFileSync(
       path.join(import.meta.dirname, '..', 'src', 'screens', 'FleetScreen.tsx'), 'utf8');
     expect(screen).toContain('<div className="fleet-runs-line">');
