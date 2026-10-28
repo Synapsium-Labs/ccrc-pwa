@@ -1188,8 +1188,8 @@ const APPROVAL: Case[] = [
 // The approval is required when ANY pull_request rule's count is above 0, so a count on a second ruleset's rule, or on a rule
 // a later page of the paginated rules read carries, requires it as the first rule's would. Each case puts the count of 1 on one
 // rule and 0 on the other, with a decision that is not APPROVED: approval-missing on route G and route U. The order is mirrored
-// too, so neither the first nor the last pull_request rule alone decides. The controls are the same fixtures with the decision
-// APPROVED, where the route stands, so the stop is the approval's alone.
+// too, so neither the first nor the last pull_request rule alone decides. Each fixture has a control with the decision
+// APPROVED, where the route stands, so the stop is the approval's alone and never the second rule's mere presence.
 const ciApp = rsc([{ context: 'ci/app', integration_id: 999 }]);
 const mergeOnly = (count: number, id: number) => pull({ allowed_merge_methods: ['merge'], required_approving_review_count: count }, id);
 const anyRuleG = (rs: Answer, decision = 'REVIEW_REQUIRED') => with_(thirdParty, (f) => ({ ...f, rules: rs, pr: prWith(decision) }));
@@ -1211,9 +1211,13 @@ const APPROVAL_ANY_RULE: Case[] = [
   ['route U: the counted rule is on page 2 of the rules read, page 1 counting 0: approval-missing', anyRuleU(laterPageU), approvalMissing('U')],
   ['route G: ruleset B counts 1 and the decision is APPROVED: the route stands (control)', anyRuleG(secondG, 'APPROVED'),
     'ROUTE G method=merge admin=never strict=no'],
+  ['route G: ruleset A counts 1 and the decision is APPROVED: the route stands (control)', anyRuleG(firstG, 'APPROVED'),
+    'ROUTE G method=merge admin=never strict=no'],
   ['route G: the counted rule on page 2 and the decision APPROVED: the route stands (control)', anyRuleG(laterPageG, 'APPROVED'),
     'ROUTE G method=merge admin=never strict=no'],
   ['route U: ruleset B counts 1 and the decision is APPROVED: the route stands (control)', anyRuleU(secondU, 'APPROVED'),
+    'ROUTE U method=squash admin=never strict=no'],
+  ['route U: ruleset A counts 1 and the decision is APPROVED: the route stands (control)', anyRuleU(firstU, 'APPROVED'),
     'ROUTE U method=squash admin=never strict=no'],
   ['route U: the counted rule on page 2 and the decision APPROVED: the route stands (control)', anyRuleU(laterPageU, 'APPROVED'),
     'ROUTE U method=squash admin=never strict=no'],
@@ -1232,7 +1236,8 @@ const APPROVAL_EXACT: Case[] = NEAR_MISSES.flatMap((d): Case[] => [
     with_(missingU, { pr: prWith(d) }), approvalMissing('U')],
 ]);
 
-// ---- Fix round 4: read 1 and read 3 judge the value GitHub sent, not the text a shell makes of it (read 6 did too, until ruling 5 retired it) ----
+// ---- Fix round 4: read 1 and read 3 judge the value GitHub sent, not the text a shell makes of it ----
+// (Read 6 judged its "never" the same way, until ruling 5 retired it.)
 // A command substitution drops the trailing newlines of what it captures, and `jq -r` prints a missing, null, numeric or
 // boolean field as the text `null`, `123` or `true`. So a base, a state, a head or a 404 message that was
 // never the value the contract names could pass for it, and a direct route was chosen over a source that was unusable; and
@@ -1407,13 +1412,14 @@ const codeLines = (b: string): string[] => b.split('\n').filter((l) => !/^\s*#/.
  *  census limits and not caught), and a `$(<` file read. The block's own file-free reads are its gh calls, numbered 1 to 5
  *  in its comments: read 1's PR view and its paginated reviews, read 2, read 3 (and, after read 3 answers 401 or 403,
  *  read 3b, with the compare under it), read 4 and read 5's two endpoints (check runs and statuses). Read 6 was retired
- *  with the approval licence (ruling 5). The block spells none of the forms above. This is a finite contract check of exactly those spellings and placements, one line at a time,
- *  and NOT a shell parser and not a proof: other ordinary readers and placements the list does not name are census LIMITS
- *  too, for example `jq` given a path operand, `while read`, a `.` command after `then`, or a `<` redirect into a command
- *  not listed, beside the encoded or indirect spellings (a computed command, a here-document fed to a shell). What does
- *  not change is the runtime requirement: the block has no durable file override by any spelling, and the operator's
- *  exact-key ignore is invocation-only. The behaviour cases (a key in a file under HOME or in `.git`, CR_IGNORE unset,
- *  still stops) and the whole-conditional pin in coordinator-skill.test.ts defend that requirement where this list cannot. */
+ *  with the approval licence (ruling 5). The block spells none of the forms above. This is a finite contract check of
+ *  exactly those spellings and placements, one line at a time, and NOT a shell parser and not a proof: other ordinary
+ *  readers and placements the list does not name are census LIMITS too, for example `jq` given a path operand, `while
+ *  read`, a `.` command after `then`, or a `<` redirect into a command not listed, beside the encoded or indirect spellings
+ *  (a computed command, a here-document fed to a shell). What does not change is the runtime requirement: the block has no
+ *  durable file override by any spelling, and the operator's exact-key ignore is invocation-only. The behaviour cases (a
+ *  key in a file under HOME or in `.git`, CR_IGNORE unset, still stops) and the whole-conditional pin in
+ *  coordinator-skill.test.ts defend that requirement where this list cannot. */
 const FILE_FORMS: [string, RegExp][] = [
   ['$HOME', /\$\{?HOME\b/], ['~/', /(^|[\s"'=:])~\//], ['source', /\bsource\b/], ['. file', /(^|&&|\|\|)\s*\.\s+\S/],
   ['cat', /\bcat\b/], ['read', /(^|&&|\|\||[;|({]|\bthen|\bdo)\s*(IFS=\S*\s+)?read\s/], ['mapfile', /\b(mapfile|readarray)\b/], ['eval', /\beval\b/],
