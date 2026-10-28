@@ -41,6 +41,13 @@ const shed = (flags = '', pre = ''): { code: number; doc: Record<string, unknown
   try { doc = JSON.parse(line) as Record<string, unknown>; } catch { doc = { unparsed: r.stdout }; }
   return { code: r.code, doc, stderr: r.stderr };
 };
+/** `shed`, with the verb's stderr kept (the harness hands stderr back only when the snippet fails). */
+const shedErr = (pre: string, cd = ''): { doc: Record<string, unknown>; err: string } => {
+  const errFile = path.join(h.home, 'shed.err');
+  const r = h.run(`${cd ? `cd '${cd}' || exit 97;` : ''} ${CHILD_STUBS} ${NO_USERS} ${pre}`
+    + ` cmd_ws_shed_deps --session ${CHILD_ID} --class child 2>'${errFile}'`);
+  return { doc: JSON.parse(r.stdout.trim().split('\n').pop() ?? '{}') as Record<string, unknown>, err: fs.readFileSync(errFile, 'utf8') };
+};
 const journal = (): Array<Record<string, unknown>> => {
   const dir = path.join(h.home, '.cc-sessions', '.lifecycle');
   if (!fs.existsSync(dir)) return [];
@@ -125,29 +132,59 @@ describe('ws-shed-deps sheds a sleeping child\'s ignored dependency directories'
   });
 
   it('an ignored directory whose name holds a newline never names the non-ignored directory after it', () => {
-    // git lists `a/b<LF>vendor/` as ONE NUL-separated entry; read by lines it would split into a `vendor/` that names
-    // the worktree's own non-ignored `vendor/`. Only what git ignores is ever removed, dry run and real run alike.
-    fs.appendFileSync(path.join(c.wt, '.gitignore'), 'b*\n');
+    // git lists `a/b<LF>node_modules/` as ONE NUL-separated entry; read by lines it would split into a `node_modules/`
+    // that names the worktree's own NON-ignored `node_modules/` (this case ignores `b*` only). Only what git ignores is
+    // ever removed, dry run and real run alike.
+    write('.gitignore', 'b*\n');
     h.git(c.wt, 'add', '.gitignore');
-    h.git(c.wt, 'commit', '-m', 'ignore b*');
-    write('vendor/precious.txt', 'untracked, not ignored\n');
-    write('a/b\nvendor/pkg/index.js');
-    expect(status()).toContain('?? vendor/precious.txt');
-    const run = (flags: string): Record<string, unknown> => JSON.parse(h.run(
-      `${CHILD_STUBS} ${NO_USERS} CCD_DEPS_SHED_NAMES=vendor cmd_ws_shed_deps --session ${CHILD_ID} --class child ${flags}`,
-    ).stdout.trim().split('\n').pop() ?? '{}') as Record<string, unknown>;
-    expect(run('--dry-run')).toMatchObject({ refused: 'nothing-to-shed' });
-    expect(run('')).toMatchObject({ refused: 'nothing-to-shed' });
-    expect(exists('vendor/precious.txt')).toBe(true);
-    expect(exists('a/b\nvendor/pkg/index.js')).toBe(true);
+    h.git(c.wt, 'commit', '-m', 'ignore b* only');
+    // ws-add excludes `node_modules` in the repository's info/exclude; this case takes that line out, so the root one is not ignored.
+    const exclude = path.join(h.git(c.wt, 'rev-parse', '--path-format=absolute', '--git-common-dir').trim(), 'info', 'exclude');
+    fs.writeFileSync(exclude, fs.readFileSync(exclude, 'utf8').split('\n').filter((l) => l !== 'node_modules').join('\n'));
+    write('node_modules/precious.txt', 'untracked, not ignored\n');
+    write('a/b\nnode_modules/pkg/index.js');
+    expect(status()).toContain('?? node_modules/precious.txt');
+    expect(shed('--dry-run').doc).toMatchObject({ refused: 'nothing-to-shed' });
+    expect(shed().doc).toMatchObject({ refused: 'nothing-to-shed' });
+    expect(exists('node_modules/precious.txt')).toBe(true);
+    expect(exists('a/b\nnode_modules/pkg/index.js')).toBe(true);
   });
 
-  it('CCD_DEPS_SHED_NAMES names the directories; a name that is not one plain component is dropped', () => {
+  it('CCD_DEPS_SHED_NAMES is narrow-only: a name outside the default set is ignored with a warning, never removed', () => {
     write('dist/bundle.js');
-    const r = h.run(`${CHILD_STUBS} ${NO_USERS} CCD_DEPS_SHED_NAMES='dist ../x .git a/b' cmd_ws_shed_deps --session ${CHILD_ID} --class child`);
-    expect(JSON.parse(r.stdout)).toMatchObject({ shed: true, dirs: 1 });
-    expect(exists('dist')).toBe(false);
-    expect(exists('node_modules')).toBe(true);
+    // A wider set: `dist` (ignored here, and not rebuildable by `npm ci`) and three spellings that are no plain name.
+    const r = shedErr(`CCD_DEPS_SHED_NAMES='dist ../x .git a/b node_modules'`);
+    expect(r.doc).toMatchObject({ shed: true, dirs: 2 });
+    expect(exists('dist/bundle.js')).toBe(true);
+    expect(exists('node_modules')).toBe(false);
+    for (const w of ['dist', '../x', '.git', 'a/b']) expect(r.err).toContain(`ignoring ${w}`);
+    expect(r.err).toContain('may only narrow the default names (node_modules)');
+  });
+  it('CCD_DEPS_SHED_NAMES naming only names outside the default set sheds nothing at all', () => {
+    write('dist/bundle.js');
+    const r = shedErr(`CCD_DEPS_SHED_NAMES='dist'`);
+    expect(r.doc).toMatchObject({ refused: 'nothing-to-shed' });
+    expect(exists('dist/bundle.js')).toBe(true);
+    expect(exists('node_modules/pkg/index.js')).toBe(true);
+    expect(exists('pwa/node_modules/other/index.js')).toBe(true);
+    expect(r.err).toContain('ignoring dist');
+  });
+  it('CCD_DEPS_SHED_NAMES is split with globbing off: a `*` is a word (ignored), never the files of the working directory', () => {
+    // Run from the worktree, whose entries include `node_modules`: a globbing split would turn `*` into that name.
+    const r = shedErr(`CCD_DEPS_SHED_NAMES='*'`, c.wt);
+    expect(r.doc).toMatchObject({ refused: 'nothing-to-shed' });
+    expect(exists('node_modules/pkg/index.js')).toBe(true);
+    expect(r.err).toContain('ignoring \\*');
+    // The names helper itself: the default set when blank, a subset when narrowed, one line per name.
+    const names = (v: string): { out: string; err: string } => {
+      const errFile = path.join(h.home, 'names.err');
+      const out = h.run(`cd '${c.wt}' || exit 97; CCD_DEPS_SHED_NAMES=${v} _ws_shed_names 2>'${errFile}'`).stdout;
+      return { out, err: fs.readFileSync(errFile, 'utf8') };
+    };
+    expect(names("''").out).toBe('node_modules');
+    expect(names("'  node_modules  '").out).toBe('node_modules');
+    expect(names("'* node_modules ?'")).toMatchObject({ out: 'node_modules' });
+    expect(names("'* node_modules ?'").err).toMatch(/ignoring \\\*[\s\S]*ignoring \\\?/);
   });
 
   it('a nested repository\'s node_modules is left', () => {
@@ -184,10 +221,19 @@ describe('ws-shed-deps sheds a sleeping child\'s ignored dependency directories'
     h.git(c.wt, 'commit', '-qam', 'ignore worktrees');
     h.git(c.wt, 'worktree', 'add', '-q', '-b', 'feat', path.join(c.wt, '.worktrees', 'feat'));
     write('.worktrees/feat/wip.txt', 'uncommitted\n');
-    const r = h.run(`${CHILD_STUBS} ${NO_USERS} CCD_DEPS_SHED_NAMES='.worktrees' cmd_ws_shed_deps --session ${CHILD_ID} --class child`);
-    expect(JSON.parse(r.stdout)).toMatchObject({ refused: 'nothing-to-shed' });
+    const r = shedErr(`CCD_DEPS_SHED_NAMES='.worktrees'`);
+    expect(r.doc).toMatchObject({ refused: 'nothing-to-shed' });
+    expect(r.err).toContain('ignoring .worktrees');
     expect(exists('.worktrees/feat/wip.txt')).toBe(true);
     expect(h.git(c.wt, 'worktree', 'list')).toContain('.worktrees/feat');
+  });
+  it('a worktree that lives under an ignored node_modules keeps that whole directory, its work included', () => {
+    h.git(c.wt, 'worktree', 'add', '-q', '-b', 'nested', path.join(c.wt, 'pwa', 'node_modules', 'feat'));
+    write('pwa/node_modules/feat/wip.txt', 'uncommitted\n');
+    expect(shed().doc).toMatchObject({ shed: true, dirs: 1 });
+    expect(exists('node_modules')).toBe(false);
+    expect(exists('pwa/node_modules/feat/wip.txt')).toBe(true);
+    expect(exists('pwa/node_modules/other/index.js')).toBe(true);
   });
 
   it('a repository walk that cannot finish refuses `unmeasured` and removes nothing', () => {
@@ -320,7 +366,7 @@ describe('ws-shed-deps refuses, touching nothing', () => {
     expect(fs.existsSync(reg('shedding'))).toBe(false);
     expect(h.run(`${CHILD_STUBS} _ws_expire_spawn_gate ${CHILD_ID}; echo "rc=$?"`).stdout).toContain('rc=0');
   });
-  it('the shed marker fails closed: a live holder refuses whatever its lock file says; a dead or finished one never strands a wake', () => {
+  it('the shed marker fails closed: it frees a wake only while the lock it marked stands as that inode and is free, whatever its pid', () => {
     const regDir = path.join(h.home, '.cc-sessions');
     const lock = path.join(regDir, `.shed-${CHILD_ID}.lock`);
     const gate = `_ws_expire_spawn_gate ${CHILD_ID}; echo "rc=$? why=$_WS_EXPIRE_SPAWN_WHY"`;
@@ -338,10 +384,18 @@ describe('ws-shed-deps refuses, touching nothing', () => {
     // ... but held by someone, it refuses.
     expect(h.run(`${CHILD_STUBS} printf '%s %s' "$$" '${devino()}' > '${reg('shedding')}'; exec 9>>'${lock}'; flock -n 9 || exit 99;`
       + ` (exec 9>&-; ${gate})`).stdout).toMatch(/rc=1/);
-    // A holder that is gone (a shed killed mid-removal), its lock file purged too: free, never a stranded session.
+    // A holder that is gone (a shed killed mid-removal) and a lock file that is ANOTHER inode, free: refused.
+    const deadPid = 'sleep 0 & dead=$!; wait "$dead"; kill -0 "$dead" 2>/dev/null && exit 98;';
+    expect(h.run(`${CHILD_STUBS} ${deadPid} printf '%s 1:1' "$dead" > '${reg('shedding')}'; ${gate}`).stdout).toMatch(/rc=1/);
+    // A holder that is gone, its lock file purged too (an alias purge, then the shed killed): REFUSED, not freed — nothing
+    // the gate can ask proves the removal over, so the sentence names the marker and says to remove it by hand.
     fs.rmSync(lock);
-    expect(h.run(`${CHILD_STUBS} sleep 0 & dead=$!; wait "$dead"; printf '%s 1:1' "$dead" > '${reg('shedding')}'; ${gate}`).stdout)
-      .toContain('rc=0');
+    const out = h.run(`${CHILD_STUBS} ${deadPid} printf '%s 1:1' "$dead" > '${reg('shedding')}'; ${gate}`).stdout;
+    expect(out).toMatch(/rc=1 why=.*shedding.*by hand/);
+    expect(fs.existsSync(lock), 'the gate never creates the lock file').toBe(false);
+    // The operator removes the marker by hand: free.
+    fs.rmSync(reg('shedding'));
+    expect(h.run(`${CHILD_STUBS} ${gate}`).stdout).toContain('rc=0');
   });
   it('a shed killed mid-removal never opens a wake while its orphaned removal still holds the lock: a dead marker pid asks the lock', () => {
     // The `rm` runs as a child (through `_plat_timeout`, its own process group) and inherits the shed lock's fd, so it
@@ -357,7 +411,7 @@ describe('ws-shed-deps refuses, touching nothing', () => {
     // A dead holder pid, the lock it marked still standing and held by another live process (the orphaned rm): refused.
     expect(h.run(`${CHILD_STUBS} ${deadMarker} exec 9>>'${lock}'; flock -n 9 || exit 99; (exec 9>&-; ${gate})`).stdout)
       .toMatch(/rc=1 why=.*shed/);
-    // The same dead marker against a stale-inode marker and a held lock: refused too (the lock, not the marker, answers).
+    // A dead marker naming another inode, against a held lock: refused too.
     expect(h.run(`${CHILD_STUBS} sleep 0 & dead=$!; wait "$dead"; printf '%s 1:1' "$dead" > '${reg('shedding')}';`
       + ` exec 9>>'${lock}'; flock -n 9 || exit 99; (exec 9>&-; ${gate})`).stdout).toMatch(/rc=1 why=.*shed/);
     // Once the orphan lets the lock go, the dead marker strands nothing: free.
@@ -388,6 +442,50 @@ describe('ws-shed-deps refuses, touching nothing', () => {
     const gates = [...out.matchAll(/gate=(\d)/g)].map((m) => m[1]);
     expect(gates, out).toEqual(['1', '0']);
     expect(out).toMatch(/gate=1 why=.*shed/);
+  });
+  it('a real shed whose lock an alias purge unlinked, SIGKILLed while its rm runs: every wake refuses until the operator removes the marker', () => {
+    const bin = path.join(h.home, 'slowbin');
+    fs.mkdirSync(bin);
+    fs.writeFileSync(path.join(bin, 'rm'), '#!/bin/bash\ncase "$*" in *node_modules*)'
+      + ' : > "$HOME/rm-started"; until [[ -e "$HOME/rm-release" ]]; do sleep 0.05; done;'
+      + ' /bin/rm "$@"; rc=$?; : > "$HOME/rm-done"; exit "$rc";; esac\nexec /bin/rm "$@"\n', { mode: 0o755 });
+    const lock = path.join(h.home, '.cc-sessions', `.shed-${CHILD_ID}.lock`);
+    const gate = `_ws_expire_spawn_gate ${CHILD_ID}; echo "gate=$? why=$_WS_EXPIRE_SPAWN_WHY"`;
+    const r = h.run(`${CHILD_STUBS} ${NO_USERS} PATH='${bin}':"$PATH";`
+      + ` (cmd_ws_shed_deps --session ${CHILD_ID} --class child >"$HOME/shed.out" 2>&1) & sp=$!;`
+      + ` n=0; until [[ -e "$HOME/rm-started" ]]; do (( ++n < 400 )) || { echo no-rm; : > "$HOME/rm-release"; exit 97; }; sleep 0.05; done;`
+      // The alias id's purge (project `.shed-<project>` + the same slug) unlinks the live shed's lock file.
+      + ` _reg_purge '.shed-${CHILD_ID}'; [[ -e '${lock}' ]] && echo lock-stands;`
+      + ` read -r mpid _ < '${reg('shedding')}'; kill -9 "$mpid"; kill -9 "$sp" 2>/dev/null; wait "$sp" 2>/dev/null;`
+      + ` kill -0 "$mpid" 2>/dev/null && echo marked-alive;`
+      + ` : > "$HOME/rm-release";`
+      + ` n=0; until [[ -e "$HOME/rm-done" ]]; do (( ++n < 400 )) || { echo no-done; exit 96; }; sleep 0.05; done; sleep 0.2;`
+      // The removal is over and nothing holds anything: the marker alone stands, and it refuses.
+      + ` [[ -e '${reg('shedding')}' ]] && echo marker-stands; [[ -e '${path.join(c.wt, 'node_modules')}' ]] || echo deps-gone;`
+      + ` (${gate}); (cmd_ensure ${CHILD_ID} >/dev/null 2>&1); echo "ens=$?"; [[ -e '${reg('stopped')}' ]] && echo still-asleep;`
+      + ` (${gate});`
+      // The operator's step, as the DEPSSHED header says: no shed and no rm runs, so the marker goes by hand.
+      + ` rm -f '${reg('shedding')}'; (${gate})`);
+    const out = r.stdout;
+    // Anti-vacuity: the purge really unlinked the lock, the shed's bash is dead and its removal finished.
+    expect(out).not.toMatch(/no-rm|no-done|marked-alive|lock-stands/);
+    expect(out).toContain('marker-stands');
+    expect(out).toContain('deps-gone');
+    const gates = [...out.matchAll(/gate=(\d)/g)].map((m) => m[1]);
+    expect(gates, out).toEqual(['1', '1', '0']);
+    expect(out).toMatch(/gate=1 why=.*shedding.*by hand/);
+    expect(out).toContain('ens=1');
+    expect(out).toContain('still-asleep');
+  });
+  it('the exit takes back only its own marker: another body is left standing and journaled `marker-not-own`', () => {
+    const gap = `_ws_shed_gap() { printf '424242 1:1' > "$REG/${CHILD_ID}.shedding"; };`;
+    const r = shed('', gap);
+    expect(r.doc).toMatchObject({ shed: true });
+    expect(fs.readFileSync(reg('shedding'), 'utf8')).toBe('424242 1:1');
+    const lines = journal();
+    expect(lines.map((e) => e['refusal'] ?? null)).toContain('marker-not-own');
+    // ... and the gate keeps refusing on it, for the operator.
+    expect(h.run(`${CHILD_STUBS} _ws_expire_spawn_gate ${CHILD_ID}; echo "rc=$?"`).stdout).toContain('rc=1');
   });
   it('a real shed whose lock file is purged before it marks it refuses `unmeasured`, removing nothing', () => {
     // The marker binds the lock's inode, read just after the lock is taken and again after the marker is written.
