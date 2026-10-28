@@ -173,7 +173,7 @@ describe('ccrc test: the slice (D-TBD-test-containment)', () => {
     expect(log(b, 'systemd-run.log'), 'no transient slice is made').toBe('');
   });
 
-  itLinux('no systemctl or systemd-run on PATH: the run degrades the same way', () => {
+  itLinux('no service manager tools on PATH: the run degrades the same way', () => {
     const b = box();
     const r = run(b, ['--light', '--', 'sh', '-c', 'echo ran'], { PATH: `/usr/bin:/bin` });
     expect(r.stdout.trim()).toBe('ran');
