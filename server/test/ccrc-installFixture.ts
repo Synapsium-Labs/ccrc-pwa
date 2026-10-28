@@ -1811,9 +1811,7 @@ export const PROVISIONED_BOX_TOKEN =
  *  `filevault` and `secrets-backup-excluded` SKIP at every stage (darwin's), and `snapshot-posture` SKIPs on the fresh
  *  box (no lane secret) and PASSes on the provisioned one, whose `fleetFiles` state `none`.
  *  Wave 24 added `box-settings` (D-6599): PASS at every stage, re-measured from both box-token cases' own failing diff
- *  (a fresh box's ccrc.env sets none of ccrc's settings). Test containment added `test-slice`
- *  (D-TBD-test-containment): PASS at every stage, re-measured from both box-token cases' own failing diff (the
- *  install places ccrctests.slice, and this fixture's manager then answers it loaded). */
+ *  (a fresh box's ccrc.env sets none of ccrc's settings). */
 export const FLEET_BOX_CLASSES: Readonly<Record<string, string>> = {
   "accounts": "PASS",
   "approval-digest-mismatch": "SKIP",
@@ -1868,6 +1866,8 @@ export const FLEET_BOX_CLASSES: Readonly<Record<string, string>> = {
   "services": "PASS",
   "skills": "PASS",
   "snapshot-posture": "SKIP",
+  // D-TBD-test-containment: PASS at every stage, re-measured from both box-token cases' own failing diff (the install
+  // places ccrctests.slice, and this fixture's manager then answers it loaded).
   "test-slice": "PASS",
   "timeout": "PASS",
   "tmux": "PASS",

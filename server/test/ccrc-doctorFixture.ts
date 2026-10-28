@@ -90,8 +90,6 @@ export function installCcrc(home: string): void {
   symlinkSync(CCRC_SRC, join(ccd, 'ccrc'));
   symlinkSync(CHECKS_SRC, join(ccd, 'ccrc-doctor-checks'));
   symlinkSync(LIB_SRC, join(ccd, 'ccrc-wrapper-shape'));
-  // D-TBD-test-containment: `_check_test-slice` asks the shipped `ccrc test` wrapper for the slice and the queue.
-  symlinkSync(join(REPO, 'ccd', 'ccrc-test'), join(ccd, 'ccrc-test'));
   // The jq module the transcripts check loads (ARCH-65), beside the checks file as in a shipped tree.
   symlinkSync(join(REPO, 'ccd', 'lib'), join(ccd, 'lib'));
   // The four shipped skill trees (release/rollout design §6): `_check_skills`
@@ -118,6 +116,8 @@ export function installCcrc(home: string): void {
   // and this module's imports (`./lib.mjs`, `./store.mjs`) sit beside it in the checkout, as they do in a box's
   // tree (`_inst_tree` rsyncs `ccd/` whole).
   symlinkSync(join(REPO, 'ccd', 'history'), join(ccd, 'history'));
+  // D-TBD-test-containment: `_check_test-slice` asks the shipped `ccrc test` wrapper for the slice and the queue.
+  symlinkSync(join(REPO, 'ccd', 'ccrc-test'), join(ccd, 'ccrc-test'));
   // ── the `auth` check's two artifacts (Task 9) ──────────────────────────
   // `_check_auth` measures `~/.ccrc/auth.scrypt` by running
   // `deploy/gen-auth-hash.mjs --check`, which imports the compiled reader out
@@ -662,6 +662,13 @@ export function stubSystemctl(home: string): void {
     + '  done\n'
     + '  exit $rc\n'
     + 'fi\n'
+    // D-TBD-test-containment: `ccrc test --status` asks `show ccrctests.slice -p …` for seven properties at once, and
+    // reads each line by name. The answer is `fixture-show-ccrctests.slice`'s own text; an absent file prints nothing.
+    + 'if [ "$1" = "--user" ] && [ "$2" = "show" ] && [ "$3" = "ccrctests.slice" ]; then\n'
+    + '  f="$HOME/fixture-show-ccrctests.slice"\n'
+    + '  if [ -f "$f" ]; then while IFS= read -r l; do echo "$l"; done < "$f"; fi\n'
+    + '  exit 0\n'
+    + 'fi\n'
     + 'if [ "$1" = "--user" ] && [ "$2" = "list-units" ]; then\n'
     + '  f="$HOME/fixture-scopes"\n'
     + '  if [ -f "$f" ]; then while IFS= read -r l; do echo "$l"; done < "$f"; fi\n'
@@ -674,13 +681,6 @@ export function stubSystemctl(home: string): void {
     // present the stub answers only when BOTH XDG_RUNTIME_DIR and DBUS_SESSION_BUS_ADDRESS are set, as a real user manager does from a bare context.
     + '  if [ -f "$HOME/fixture-bus-required" ] && { [ -z "${XDG_RUNTIME_DIR:-}" ] || [ -z "${DBUS_SESSION_BUS_ADDRESS:-}" ]; }; then exit 1; fi\n'
     + '  f="$HOME/fixture-show-$7"\n'
-    + '  if [ -f "$f" ]; then while IFS= read -r l; do echo "$l"; done < "$f"; fi\n'
-    + '  exit 0\n'
-    + 'fi\n'
-    // D-TBD-test-containment: `ccrc test --status` asks `show ccrctests.slice -p …` for seven properties at once, and
-    // reads each line by name. The answer is `fixture-show-ccrctests.slice`'s own text; an absent file prints nothing.
-    + 'if [ "$1" = "--user" ] && [ "$2" = "show" ] && [ "$3" = "ccrctests.slice" ]; then\n'
-    + '  f="$HOME/fixture-show-ccrctests.slice"\n'
     + '  if [ -f "$f" ]; then while IFS= read -r l; do echo "$l"; done < "$f"; fi\n'
     + '  exit 0\n'
     + 'fi\n'
