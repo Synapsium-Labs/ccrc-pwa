@@ -325,12 +325,13 @@
   overflow-wrap: anywhere;
 }
 
-/* W2 desk polish T2e (D-6335): the two-line dense row. Under a fine pointer at a desk a status row is the name with its
-   state word, then its context: two lines and at most 42px when the name and state fit side by side, and never more than
-   three lines and under 61px: no fact is dropped (D-5545), a long name still
-   wraps, and the density is the sheet's own `--row-h` (32 under a fine pointer) instead of `--tap-min`. Under a coarse
-   pointer, or below 900, none of this applies and every row and control keeps the tap floor. CSS only: `SessionLine`
-   keeps its three children, and the wrapping flex row below puts the second (the state word) beside the first. */
+/* W2 desk polish T2e (D-6335): the two-line dense row. Under a fine pointer at a desk a status row is the name, then
+   its context with the state word at that line's end (T3b, R21's F2): two lines and at most 42px when the name fits on
+   one, and a long name's second line the only line it adds, so a long needs-you name never pushes the state word onto
+   a line of its own. No fact is dropped (D-5545), and the density is the sheet's own `--row-h` (32 under a fine
+   pointer) instead of `--tap-min`. A row with no context (a main checkout) keeps the state word beside its name. Under a
+   coarse pointer, or below 900, none of this applies and every row and control keeps the tap floor. CSS only:
+   `SessionLine` keeps its three children, and the wrapping flex row below places the second (the state word). */
 @media (min-width: 900px) and (pointer: fine) {
   /* A wrapping flex row (fix round 1, ruling on F2): the name and the state word share the first line when they fit
      side by side, the state at its own width and pushed to the line's end; the context takes a line of its own. A flex
@@ -357,6 +358,20 @@
   }
   .ins-row .sess-meta--context {
     flex: 1 0 100%;
+  }
+  /* T3b (R21's F2, the operator's ruling R121): a row with a context fact gives its name the whole first line, or two,
+     and puts the state word on the context line instead, at its end: the context takes what the state leaves
+     (`flex-basis: 0`, so the two always share one flex line) and wraps inside it. The state stays first in the
+     document, so a screen reader still hears name, state, context; only its place on the screen moves. */
+  .ins-row .sess-line:has(.sess-meta--context) .sess-body > .sess-open {
+    flex-basis: 100%;
+  }
+  .ins-row .sess-line:has(.sess-meta--context) .sess-body > .sess-meta:not(.sess-meta--context) {
+    order: 1;
+  }
+  .ins-row .sess-line:has(.sess-meta--context) .sess-meta--context {
+    flex: 1 1 0;
+    min-width: 0;
   }
   /* The shared sheet centres the lamp and the actions button on a three-line stack with a margin worked out from the
      tap floor; here the lamp sits on the name's line (it is as tall as that line) and the button on the row's middle.
