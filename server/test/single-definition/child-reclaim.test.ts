@@ -327,8 +327,19 @@ describe('child reclamation wave 10: the collector switch has one writer, one jo
     expect(definers(DEF_FN('collectRetireLatch')), 'a second definition').toEqual([EXECUTOR]);
     const calls = CALL('collectRetireLatch');
     expect(sitesOf(calls), 'a third caller, or a second call').toEqual([`${EXECUTOR}:1`, `${WATCH}:1`]);
-    expect(count(bodyAfter(code(EXECUTOR), /^export async function collectTempRoot\(/m), calls),
-      'the executor file’s call is not in collectTempRoot').toBe(1);
+    // D-7168 (ARCH-44 C4k): the executor file's one call stands in the `latch` reader of collectRetirePort's literal
+    // (scan/symbols.ts, retireFacts), and in neither the job's body nor its act.
+    const exec = path.join(ccrcRoot, EXECUTOR);
+    const latches = parsedFile(exec).calls.filter((c) => c.name === 'collectRetireLatch');
+    expect(latches.length, 'the executor file does not call the latch exactly once').toBe(1);
+    const reader = retirePortReaders(exec, 'collectRetirePort').find((r) => r.step === RETIRE_STEPS.latch);
+    expect(reader, 'collectRetirePort has no latch reader').toBeDefined();
+    const inPort = callsIn(symbolOf(exec, 'collectRetirePort')).filter((c) => c.name === 'collectRetireLatch');
+    expect(inPort.length === 1 && reader!.start <= inPort[0]!.start && inPort[0]!.end <= reader!.end,
+      'the executor file’s call is not in the port’s latch reader').toBe(true);
+    for (const fn of ['collectTempRoot', 'collectTempRootAct']) {
+      expect(callsIn(symbolOf(exec, fn)).filter((c) => c.name === 'collectRetireLatch'), `${fn} writes the latch`).toEqual([]);
+    }
     // D-6114: keyed on the method's symbol (scan/symbols.ts), so C1h's rewrite of the pass moves the slice with it.
     expect(count(stallCodeText(sourceOfSymbol(path.join(ccrcRoot, WATCH), 'FleetWatcher.collectPass')), calls),
       'watch.ts’s call is not in the pass').toBe(1);
