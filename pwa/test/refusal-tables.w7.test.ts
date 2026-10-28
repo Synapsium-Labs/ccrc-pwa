@@ -1,10 +1,11 @@
 // The refusal tables the answer paths word their tokens from (D-7183; ARCH-29 #542), each pinned as a literal object equal
 // to today's, so the answer reducer (which carries a refusal TOKEN, never a sentence) changes no surface's words. The sheets
 // read `askWords.ts#DIALOG_REFUSE_TEXT`; `refusalWords.ts#ASK_REFUSE_TEXT` words the same family of doors for the
-// surfaces that answer a held question. They word some tokens differently on purpose, and W7 changes neither.
+// surfaces that answer a held question; `refusalWords.ts#NOTIFICATION_REFUSAL_TEXT` words the notification's (push-sw.js's
+// generated region, OA-C17 (a), D-7265). They word some tokens differently on purpose, and W7 changes neither.
 // `refusal-words.characterization.test.ts` keeps its own rows.
 import { describe, expect, it } from 'vitest';
-import { ASK_REFUSE_TEXT } from '../src/lib/refusalWords';
+import { ASK_REFUSE_TEXT, NOTIFICATION_REFUSAL_TEXT } from '../src/lib/refusalWords';
 import { DIALOG_REFUSE_TEXT } from '../src/session/askWords';
 
 describe('the answer paths\' refusal tables, pinned (W7 C7e)', () => {
@@ -38,6 +39,22 @@ describe('the answer paths\' refusal tables, pinned (W7 C7e)', () => {
       'child-unmeasurable': 'This box could not read the child, so nothing can say whether the question changed.',
       declined: 'That question was released by the coordinator, so it cannot be answered later.',
       'already-answered': 'That question was already answered.',
+    });
+  });
+
+  it('NOTIFICATION_REFUSAL_TEXT: the notification\'s words for an ask answer\'s refusals (push-sw.js\'s table, moved)', () => {
+    expect(NOTIFICATION_REFUSAL_TEXT).toEqual({
+      'stale-ask': 'That question is gone.',
+      'not-waiting': 'The session has moved on.',
+      'ask-mismatch': 'The question changed — open the session and read it.',
+      'multi-question': 'This one asks more than one thing — open the session.',
+      multiselect: 'This one takes more than one answer — open the session.',
+      'duplicate-index': 'That option was sent twice — open the session.',
+      range: 'That option is no longer there.',
+      'no-menu': 'The question is no longer on screen.',
+      'menu-mismatch': 'The terminal is showing something else now.',
+      'not-alive': 'That session is no longer running.',
+      'unknown-session': 'That session is gone.',
     });
   });
 });
