@@ -1353,19 +1353,30 @@ _ws_loose_collect() {   # token hex surface actor reason -> ccd ws-collect --exp
 # removed is rebuildable (`npm ci`), and each rung is re-read here, `ccd-tmp-sweep`'s dead-arm reasoning.
 # stdout is ONE JSON line: `{"shed":…}` or `{"wouldShed":…}` (exit 0), a refusal `{"refused":<word>,…}` (exit 0), or a
 # failure after the act began `{"failed":<word>,…}` (exit 1). `--dry-run` runs every rung, removes nothing and journals
-# nothing (the arm's shadow). The refusal words, in order: paused, no-such-session, in-progress, not-a-workspace,
-# not-a-child, not-asleep, asleep-too-recently, already-shed, unmeasured, nothing-to-shed, in-use; the failures:
-# git-state-changed, shed-incomplete.
-# THE REAP LOCK. Once the row is known to stand, the verb takes `$REG/.reap-<id>.lock`, `-n`, the lock every verb that
-# removes anything of the id takes (ws-reap, ws-reclaim, ws-expire, ws-restore, ws-collect): held, it answers the
-# retryable `in-progress`, touching nothing. It is never taken for an id no row names, so no lock file is made for one.
+# nothing, takes no lock and makes no lock file (the arm's shadow). The refusal words, in order: paused,
+# no-such-session, in-progress, not-a-workspace, not-a-child, run-open, not-asleep, asleep-too-recently, already-shed,
+# unmeasured, nothing-to-shed, in-use; the failures: git-state-changed, shed-incomplete.
+# TWO LOCKS, IN ONE ORDER, BOTH `-n`. Once the row is known to stand, a REAL shed takes `$REG/.reap-<id>.lock`, the lock
+# every verb that removes anything of the id takes (ws-reap, ws-reclaim, ws-expire, ws-restore, ws-collect), and then
+# its OWN `$REG/.shed-<id>.lock`; either one held answers the retryable `in-progress`, touching nothing. Both are asked
+# `-n`, never waited on, and always reap first, so no holder of one ever waits for the other. Neither is taken for an id
+# no row names, and `--dry-run` takes neither (a shadow never delays a wake, a reap, a restore or a collect).
 # A WAKE AND A SHED EXCLUDE EACH OTHER. This is the one verb that removes from a tree that can wake, and every path that
 # creates a pane (start, ensure, the unit's supervise, swap's respawn) passes `_ws_expire_spawn_gate`, which for a row
-# that is not archived asks the same lock (`_ws_shed_spawn_held`: read-only, never creating the file, let go at once) and
-# refuses, never waits, while it is held. A wake that asked before this verb took the lock cleared the stop stamp at once,
+# that is not archived asks the SHED lock alone (`_ws_shed_spawn_held`: read-only, never creating the file, let go at
+# once) and refuses, never waits, while a real shed holds it. The reap lock is not asked there, so no other verb's hold
+# of it (ws-restore's own, across its `_spawn_start`; a reclaim of a kept child; a collect) ever refuses a spawn of a row
+# that is not archived. A wake that asked before this verb took the lock cleared the stop stamp at once,
 # so the verb asks for it twice: at rung 4, and again as its LAST FACTS, after every walk, `du` and the first git status
 # and just before the removal — the process walk over the candidates, then the stop stamp unchanged, no pane and a
 # stopped unit (`_ws_shed_asleep_why`). Either one moved refuses (`in-use`, `not-asleep`) with nothing removed.
+# ONLY A LINKED WORKTREE, RE-PROVED ON THE BOX. The row's `workspace` field is not taken on its word: the workdir must be
+# the top of a LINKED worktree (`git rev-parse --git-dir` differs from `--git-common-dir`) and be no project's main
+# checkout (`-ef` no entry of $PROJECTS_ROOT, nor its repository's own checkout); otherwise `not-a-workspace`.
+# THE CLASS IS NOT TAKEN ON THE SERVER'S WORD EITHER. `--class child` needs a readable child marker (`not-a-child`);
+# `--class coordinator` on a row that carries one needs it readable too (`not-a-child`), and refuses `run-open` while
+# the box can see that run is still going: another row it stands for, marked a child of the same run, holds no stop
+# stamp. Every journal line names the marker it was judged against (`meas.childRun`) beside the class (`meas.mode`).
 # NO REPOSITORY IS EVER INSIDE WHAT IS REMOVED. A candidate with a `.git` (a directory, a file, a link) at ANY depth is
 # not a candidate: a nested repository or a worktree that lives under an ignored directory keeps its uncommitted work,
 # and the before/after `git status` cannot see inside an ignored tree, so this walk is what proves it. A walk that cannot
@@ -1410,13 +1421,13 @@ _ws_shed_names() {   # -> the directory names, one per line; a name that is not 
 }
 _ws_shed_refused() {   # word detail -> the refusal, journaled (not under --dry-run) and printed; rc 0
   (( dry )) || _lc_emit shed-deps refused "$id" "" verb ws-shed-deps refusal "$1" detail "$2" meas.mode "$cls" \
-    dec.surface "$lc_surface" dec.actor "$lc_actor" dec.reason "$lc_reason"
+    ${childrun:+meas.childRun "$childrun"} dec.surface "$lc_surface" dec.actor "$lc_actor" dec.reason "$lc_reason"
   printf '{"refused":%s,"session":%s,"detail":%s}\n' "$(_json_str "$1")" "$(_json_str "$id")" "$(_json_str "$2")"
   return 0
 }
 _ws_shed_failed() {   # word detail -> the post-start failure, journaled and printed; rc 1
   _lc_fail shed-deps "$id" "" "$1" "$2" verb ws-shed-deps meas.mode "$cls" \
-    dec.surface "$lc_surface" dec.actor "$lc_actor" dec.reason "$lc_reason"
+    ${childrun:+meas.childRun "$childrun"} dec.surface "$lc_surface" dec.actor "$lc_actor" dec.reason "$lc_reason"
   printf '{"failed":%s,"session":%s,"detail":%s}\n' "$(_json_str "$1")" "$(_json_str "$id")" "$(_json_str "$2")"
   return 1
 }
@@ -1438,15 +1449,16 @@ _ws_shed_repos() {   # phys... -> every `.git` at any depth beneath them, one pe
 _ws_shed_size() {   # phys... -> their disk use in KiB, one integer; rc non-zero when `du` did not finish
   _plat_timeout "$scan" du -sk -x -- "$@" | awk '{ s += $1 } END { print s + 0 }'; return "${PIPESTATUS[0]}"
 }
-_ws_shed_spawn_held() {   # id -> rc 0 when another process holds id's reap lock right now; rc 1 when it is free, when its
+_ws_shed_spawn_held() {   # id -> rc 0 when a real shed holds id's SHED lock right now; rc 1 when it is free, when its
   #                          file does not stand, or when no flock exists (a box with no flock runs no shed: rung 2a).
   # THE WAKE'S HALF OF THE EXCLUSION, asked by `_ws_expire_spawn_gate` for a row that is not archived — every path that
-  # creates a pane (start, ensure, the unit's supervise, swap's respawn). It opens the file READ-ONLY, so a wake never
-  # creates a reap lock (they are never unlinked), and lets it go at once: a wake that asked while the lock was free has
-  # cleared the stop stamp by the time this verb's rung 4 or its last facts read it.
+  # creates a pane (start, ensure, the unit's supervise, swap's respawn). It asks `$REG/.shed-<id>.lock` and nothing else:
+  # only a real shed ever takes that lock (a dry run takes none), so no other verb's hold of the reap lock refuses here.
+  # It opens the file READ-ONLY, so a wake never creates a shed lock (they are never unlinked), and lets it go at once: a
+  # wake that asked while the lock was free has cleared the stop stamp by the time rung 4 or the last facts read it.
   local fd
-  [[ -f "$REG/.reap-$1.lock" && ! -L "$REG/.reap-$1.lock" ]] && command -v flock >/dev/null 2>&1 || return 1
-  { exec {fd}<"$REG/.reap-$1.lock"; } 2>/dev/null || return 1   # the group's 2> is temporary; a bare exec's would not be
+  [[ -f "$REG/.shed-$1.lock" && ! -L "$REG/.shed-$1.lock" ]] && command -v flock >/dev/null 2>&1 || return 1
+  { exec {fd}<"$REG/.shed-$1.lock"; } 2>/dev/null || return 1   # the group's 2> is temporary; a bare exec's would not be
   if flock -n "$fd"; then exec {fd}>&-; return 1; fi
   exec {fd}>&-
   return 0
@@ -1475,6 +1487,20 @@ _ws_shed_run() {   # -> everything after the registry rungs, contained (id, cls,
     && top=$(_plat_timeout "$WS_SHED_QUICK_S" git -C "$wdp" rev-parse --path-format=absolute --show-toplevel 2>/dev/null) \
     && [[ "$top" == "$wdp" ]] \
     || { _ws_shed_refused unmeasured "$wd is not the top of a git worktree that could be read — nothing was removed"; return; }
+  # A LINKED WORKTREE, NEVER A MAIN CHECKOUT: its git directory is not its repository's common one, and it is no
+  # project's checkout under any spelling (the row's `workspace` field is not taken on its word).
+  local gdirs gdir gcom p
+  gdirs=$(_plat_timeout "$WS_SHED_QUICK_S" git -C "$wdp" rev-parse --path-format=absolute --git-dir --git-common-dir 2>/dev/null) \
+    && gdir=${gdirs%%$'\n'*} && gcom=${gdirs#*$'\n'} && [[ $gdirs == *$'\n'* && $gdir == /?* && $gcom == /?* && $gcom != *$'\n'* ]] \
+    || { _ws_shed_refused unmeasured "git could not say which repository $wdp belongs to — nothing was removed"; return; }
+  [[ ! $gdir -ef $gcom && $gdir != "$gcom" ]] \
+    || { _ws_shed_refused not-a-workspace "$wdp is a repository's own checkout, not a linked worktree — its dependencies are the operator's"; return; }
+  [[ ${gcom##*/} != .git || ! "$wdp" -ef "${gcom%/*}" ]] \
+    || { _ws_shed_refused not-a-workspace "$wdp is its repository's main checkout — its dependencies are the operator's"; return; }
+  for p in "$PROJECTS_ROOT"/*; do
+    [[ ! "$wdp" -ef "$p" ]] \
+      || { _ws_shed_refused not-a-workspace "$wdp is the project directory $p — its dependencies are the operator's"; return; }
+  done
   wdev=$(_plat_devino "$wdp" 2>/dev/null) && wdev=${wdev%%:*} \
     || { _ws_shed_refused unmeasured "the file system of $wdp could not be read — nothing was removed"; return; }
   mapfile -t names < <(_ws_shed_names)
@@ -1568,13 +1594,13 @@ _ws_shed_run() {   # -> everything after the registry rungs, contained (id, cls,
   local -a mb=()
   if [[ $bytes == null ]]; then _reg_set "$id" depsshed "$now" || :; else _reg_set "$id" depsshed "$now $bytes" || :; mb=(meas.bytes "$bytes"); fi
   _lc_done shed-deps "$id" "" verb ws-shed-deps detail "removed $n dependency directories" meas.mode "$cls" \
-    ${mb[@]+"${mb[@]}"} meas.workdir "$wdp" dec.surface "$lc_surface" dec.actor "$lc_actor" dec.reason "$lc_reason"
+    ${childrun:+meas.childRun "$childrun"} ${mb[@]+"${mb[@]}"} meas.workdir "$wdp" dec.surface "$lc_surface" dec.actor "$lc_actor" dec.reason "$lc_reason"
   printf '{"shed":true,"session":%s,"class":%s,"dirs":%s,"bytes":%s}\n' "$(_json_str "$id")" "$(_json_str "$cls")" "$n" "$bytes"
   return 0
 }
 cmd_ws_shed_deps() {   # ccd ws-shed-deps --session <id> --class child|coordinator [--dry-run] [--surface <word>] [--actor <text>] [--reason <text>]
   local U='usage: ccd ws-shed-deps --session <id> --class child|coordinator [--dry-run] [--surface <word>] [--actor <text>] [--reason <text>]'
-  local lc_surface=none lc_actor='' lc_reason='' gs=0 ga=0 gr=0 id='' cls='' dry=0 w LC_ALL=C
+  local lc_surface=none lc_actor='' lc_reason='' gs=0 ga=0 gr=0 id='' cls='' dry=0 w childrun='' LC_ALL=C
   while (( $# )); do
     case "$1" in
       --session) [[ $# -ge 2 && -z "$id" && $2 != -* ]] || die "$U"; id="$2"; shift 2 ;;
@@ -1598,10 +1624,14 @@ cmd_ws_shed_deps() {   # ccd ws-shed-deps --session <id> --class child|coordinat
     || { _ws_shed_refused paused "reclamation is paused fleet-wide ($REG/reclaim-paused) — nothing was removed"; return 0; }
   # 2. the row, and never a main checkout
   [[ -f "$REG/$id.uuid" ]] || { _ws_shed_refused no-such-session "no registry row names $id — nothing was removed"; return 0; }
-  # 2a. the reap lock, the one every verb that removes anything of the id takes; held, the retryable `in-progress`
+  # 2a. a box with no flock runs no shed, and its shadow says so too (the dry run answers what the act would)
   command -v flock >/dev/null 2>&1 \
     || { _ws_shed_refused unmeasured "flock (util-linux) is unavailable, so whether another verb is removing $id's files was never asked — nothing was removed"; return 0; }
-  local lfd rc=0
+  # The shadow takes no lock and makes no lock file: it removes nothing, so it excludes nothing.
+  (( dry )) && { _ws_shed_locked; return; }
+  # 2b. a real shed: the reap lock (every verb that removes anything of the id takes it), THEN the shed's own lock (the
+  # one the spawn gate asks), both `-n`, in that order only; either held is the retryable `in-progress`.
+  local lfd sfd rc=0
   exec {lfd}>>"$REG/.reap-$id.lock" \
     || { _ws_shed_refused unmeasured "cannot open the reap lock at $REG/.reap-$id.lock — nothing was removed"; return 0; }
   flock -n "$lfd" || {
@@ -1609,8 +1639,17 @@ cmd_ws_shed_deps() {   # ccd ws-shed-deps --session <id> --class child|coordinat
     _ws_shed_refused in-progress "another ccd process is reaping, reclaiming, expiring, restoring or collecting $id and still holds the lock — nothing was removed"
     return 0
   }
+  exec {sfd}>>"$REG/.shed-$id.lock" || {
+    exec {lfd}>&-
+    _ws_shed_refused unmeasured "cannot open the shed lock at $REG/.shed-$id.lock — nothing was removed"; return 0
+  }
+  flock -n "$sfd" || {
+    exec {sfd}>&- {lfd}>&-
+    _ws_shed_refused in-progress "another ws-shed-deps of $id still holds its shed lock — nothing was removed"
+    return 0
+  }
   _ws_shed_locked; rc=$?
-  exec {lfd}>&-
+  exec {sfd}>&- {lfd}>&-
   return "$rc"
 }
 _ws_shed_locked() {   # -> rungs 2b to 11, under the caller's reap lock (the caller's locals: id, cls, dry and the dec words)
@@ -1620,11 +1659,25 @@ _ws_shed_locked() {   # -> rungs 2b to 11, under the caller's reap lock (the cal
   _reg_get_to wd "$id" workdir || wd=''
   [[ "$wd" == /?* && -d "$wd" && ! -L "${wd%/}" ]] \
     || { _ws_shed_refused unmeasured "$id's workdir (${wd:-none}) is not one plain directory — nothing was removed"; return 0; }
-  # 3. a worker's own fence: its child marker, read here, never taken on the server's word
+  # 3. the class's own fence, read here, never taken on the server's word: a worker needs its child marker; a
+  # coordinator that carries one needs it readable, and the run it names not visibly going (another row of that run,
+  # standing, holds no stop stamp). The marker is journaled beside the class on every line below (`meas.childRun`).
+  local cm=''
+  [[ -f "$REG/$id.child" && ! -L "$REG/$id.child" ]] && _file_read_to cm "$REG/$id.child"
+  _child_runid_valid "$cm" && childrun=$cm
   if [[ $cls == child ]]; then
-    local cm=''
-    [[ -f "$REG/$id.child" && ! -L "$REG/$id.child" ]] && _file_read_to cm "$REG/$id.child"
-    _child_runid_valid "$cm" || { _ws_shed_refused not-a-child "$id carries no readable child marker — a worker sheds only as a dispatched child"; return 0; }
+    [[ -n $childrun ]] || { _ws_shed_refused not-a-child "$id carries no readable child marker — a worker sheds only as a dispatched child"; return 0; }
+  elif [[ -e "$REG/$id.child" || -L "$REG/$id.child" ]]; then
+    [[ -n $childrun ]] || { _ws_shed_refused not-a-child "$id carries a child marker ($REG/$id.child) that cannot be read — which run it serves is unknown"; return 0; }
+    local sm sib sm_v
+    for sm in "$REG"/*.child; do
+      sib=${sm##*/}; sib=${sib%.child}
+      [[ $sib != "$id" && -f $sm && ! -L $sm && -f "$REG/$sib.uuid" ]] || continue
+      sm_v=''; _file_read_to sm_v "$sm" || continue
+      [[ $sm_v == "$childrun" ]] || continue
+      [[ -f "$REG/$sib.stopped" ]] \
+        || { _ws_shed_refused run-open "$id is a child of run $childrun, and $sib, another child of it, is not asleep — the box can see that run is still going"; return 0; }
+    done
   fi
   # 4. asleep: a stop stamp, no tmux session, and a unit that says inactive or failed (`ws-archive --if-no-pane`'s test)
   local st='' at=''

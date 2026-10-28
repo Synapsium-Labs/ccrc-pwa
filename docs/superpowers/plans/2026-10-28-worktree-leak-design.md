@@ -155,10 +155,17 @@ row's kill switches stop it (`stop-done-disabled`, `reclaim-paused`, `hibernate-
 JSON line, `ws-orphan`'s convention: a refusal `{"refused":<word>}` at exit 0, touching nothing, with the first word that
 applies:
 1. `paused`: `reclaim-paused` is listed;
-2. `no-such-session`, `in-progress`, `not-a-workspace`: no row; or `$REG/.reap-<id>.lock` (taken `-n` once the row
-   stands, the lock every verb that removes anything of the id takes) is held; or the row is a main checkout;
-3. `not-a-child`: `--class child` and no readable `.child` marker. This is a second, independent fence: the server's
-   worker class needs the marker, and the box checks it itself;
+2. `no-such-session`, `in-progress`, `not-a-workspace`: no row; or, for a real shed (never `--dry-run`, which takes
+   no lock and makes no lock file), `$REG/.reap-<id>.lock` (the lock every verb that removes anything of the id takes)
+   and then the shed's own `$REG/.shed-<id>.lock`, both taken `-n` in that order once the row stands, and either one
+   held; or the row is a main checkout. The box re-proves the last with git itself before any candidate is listed:
+   the workdir must be a LINKED worktree (`git rev-parse --git-dir` differs from `--git-common-dir`) and `-ef` no
+   entry of `$PROJECTS_ROOT` nor its repository's own checkout;
+3. `not-a-child`, `run-open`: `--class child` and no readable `.child` marker. This is a second, independent fence:
+   the server's worker class needs the marker, and the box checks it itself. `--class coordinator` is not taken on
+   the server's word either: a `.child` marker that stands must read (`not-a-child`), and while another standing row
+   marked a child of the same run holds no stop stamp the box can see that run is still going (`run-open`). Every
+   journal line names the marker (`meas.childRun`) beside the class (`meas.mode`);
 4. `not-asleep`: the stop stamp (`$REG/<id>.stopped`, `<epoch> <surface>`) is absent or unreadable, or a tmux session
    answers, or the unit is not `inactive` or `failed`. This is the test `ws-archive --if-no-pane` makes before it acts;
 5. `asleep-too-recently`: the stop stamp is younger than `CCD_DEPS_SHED_MIN_ASLEEP_S` (default 3600). This is the box's
@@ -200,8 +207,10 @@ with no quarantine.
 
 **On wake.** `ccd ensure` (re-dispatch), mail and Restart wake the session as today; the wake removes the stop stamp,
 so the next sleep may shed again. A wake and a shed exclude each other: every path that creates a pane passes
-`_ws_expire_spawn_gate`, which for a row that is not archived asks the reap lock this verb holds from rung 2 to its
-last removal (read-only, never creating the file, let go at once) and refuses, never waits, while it is held. A wake
+`_ws_expire_spawn_gate`, which for a row that is not archived asks the shed's OWN lock, which only a real shed holds,
+from rung 2 to its last removal (read-only, never creating the file, let go at once) and refuses, never waits, while it
+is held. The gate never asks the reap lock of a row that is not archived, so ws-restore (which holds it across its own
+`_spawn_start`), a reclaim of a kept child and a collect spawn exactly as they did, and a shadow dry run delays nothing. A wake
 that asked before the verb took the lock has cleared the stop stamp, which rung 4 or the last facts (rung 9) read. Its next test step runs `npm ci` first, as CLAUDE.md's build section
 already says. A follow-up can name the shed in the wake's kickoff line.
 
@@ -209,8 +218,8 @@ already says. A follow-up can name the shed in the wake's kickoff line.
 - No git fact changes: not the index, a ref, a tracked file, or an untracked file git does not ignore, and the box
   proves it by reading `git status` before and after. A resumable session's unpushed work is untouched.
 - A live session is never touched. The server requires a stop stamp and no viewer, and the box requires a stop stamp,
-  no tmux session and an inactive unit, at rung 4 and again just before the act; a wake refuses while the verb holds
-  the reap lock.
+  no tmux session and an inactive unit, at rung 4 and again just before the act; a wake refuses while a real shed
+  holds its shed lock.
 - A coordinator is touched only asleep, claiming no open run, past the age, and re-proved at the act (D-7278). Its
   worktree, branch and attic are never touched; rule 4 stands for them.
 - A worker that coordinated in its own generation is a coordinator here, never a worker.
@@ -296,7 +305,14 @@ Each guard was deleted or weakened alone, its suite run alone (`vitest --maxWork
 | M29 | drop the own-`.git` fence | `ccd-ws-shed-deps` | red (1) |
 | M30 | drop the physical-path re-proof | `ccd-ws-shed-deps` | red (1), after a widened listing was added; green before |
 | M31 | drop the last facts' asleep re-check (rung 9) | `ccd-ws-shed-deps` | red (1) |
-| M32 | the spawn gate skips the reap lock for a row that is not archived | `ccd-ws-shed-deps`, `ccd-ws-expire-spawn` | red (1 each) |
+| M32 | the spawn gate never refuses on the shed lock of a row that is not archived | `ccd-ws-shed-deps`, `ccd-ws-expire-spawn` | red (2, 1) |
+| M33 | the spawn gate asks the reap lock instead of the shed lock (the review's blocker: ws-restore died half-done) | `ccd-ws-shed-deps`, `ccd-ws-expire-spawn` | red (1 each) |
+| M34 | `--dry-run` takes the two locks | `ccd-ws-shed-deps` | red (1) |
+| M35 | drop the box's git-dir-differs-from-git-common-dir proof | `ccd-ws-shed-deps` | red (1), after a `--separate-git-dir` checkout was added; green before |
+| M36 | drop the `-ef` against every `$PROJECTS_ROOT` entry | `ccd-ws-shed-deps` | red (1) |
+| M37 | a coordinator-class ask passes a child marker whose run has an awake worker (`run-open`) | `ccd-ws-shed-deps` | red (1) |
+| M38 | a coordinator-class ask passes an unreadable child marker | `ccd-ws-shed-deps` | red (1) |
+| M39 | a real shed takes no shed lock | `ccd-ws-shed-deps` | red (2) |
 | M16 | the pass never composes `--dry-run` | `deps-shed-pass` | red (4) |
 | M17 | drop the kill switches at the act | `deps-shed-pass` | red (3) |
 | M18 | drop the once-a-sleep shadow memory | `deps-shed-pass` | red (1) |

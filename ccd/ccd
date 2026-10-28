@@ -37835,10 +37835,9 @@ _ws_expire_spawn_gate() {   # id -> 0 when a pane may be created for id; rc 1 wi
   # `.archived` stamp still stands: so a spawn that is about to clear that
   # stamp takes the same lock first, `-n`, and refuses if anyone holds it — a
   # refusal, never a wait, because the holder may be minutes into a teardown.
-  # No breadcrumb and no stamp: no expiry to ask about, and a box with no
-  # flock cannot be running an expiry (`cmd_ws_expire` refuses there); the
-  # reap lock is still asked, never taken past the ask, when its file stands,
-  # because ws-shed-deps holds it on a row that is not archived.
+  # No breadcrumb and no stamp: nothing to ask, no reap lock taken or asked,
+  # and a box with no flock cannot be running an expiry (`cmd_ws_expire`
+  # refuses there). Only ws-shed-deps's OWN lock is asked there (below).
   local id="$1" rbc
   _WS_EXPIRE_SPAWN_FD=""; _WS_EXPIRE_SPAWN_WHY=""
   rbc=$(_reg_get "$id" reaping)
@@ -37848,11 +37847,13 @@ _ws_expire_spawn_gate() {   # id -> 0 when a pane may be created for id; rc 1 wi
     return 1
   fi
   # NOT ARCHIVED: the one verb that removes anything from a tree that can wake, ws-shed-deps (DEPSSHED region), holds
-  # the reap lock from its first rung to its last removal, so a wake asks it too — never creating the lock file
-  # (`_ws_shed_spawn_held`) — and refuses, never waits, while it is held.
+  # its OWN lock, `$REG/.shed-<id>.lock`, across a real removal (a dry run takes none), so a wake asks that lock and no
+  # other — never creating the file (`_ws_shed_spawn_held`) — and refuses, never waits, while it is held. The reap lock
+  # is NOT asked here: ws-restore holds it on its own descriptor across its `_spawn_start`, and a reclaim of a kept
+  # child or a collect hold it too, none of which ever refused a spawn of a row that is not archived.
   if [[ ! -f "$REG/$id.archived" ]]; then
     _ws_shed_spawn_held "$id" || return 0
-    _WS_EXPIRE_SPAWN_WHY="another ccd process holds $id's reap lock (its dependencies may be being shed) — refusing to create a pane for it until that finishes; retry"
+    _WS_EXPIRE_SPAWN_WHY="ws-shed-deps is removing $id's dependency directories and holds its shed lock — refusing to create a pane for it until that finishes; retry"
     return 1
   fi
   # A BREADCRUMB THAT STANDS BUT READS AS NOTHING, ON AN ARCHIVED ROW, IS NOT
