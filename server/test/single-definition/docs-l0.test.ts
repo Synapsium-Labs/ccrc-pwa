@@ -421,3 +421,15 @@ describe('docs sections, grammar predicates and ref spec are declared once, in s
     });
   }
 });
+
+// W5 Task C5h (D-7077; ARCH-67; spec §5.8 "python redactor: 0"): ccd's docs helper redacts through shared/redact.mjs's docs
+// profile (shared/redact-cli.mjs), so no python (pattern, suffix) rule table stands in ccd's shipped programs. The census is
+// census-w5/redactors.ts#pythonRedactorTables (1 at C5h's base, `ccd/ccd#_docs_py:REDACT_RULES`); it may only shrink, and
+// it is at zero.
+import { pythonRedactorTables as c5hPythonRedactorTables } from '../census-w5/redactors.js';
+
+describe('pythonRedactorTables() equals [], may only shrink (C5h, D-7077)', () => {
+  it('no python rule table fed to re.compile stands in ccd\'s shipped programs', () => {
+    expect(c5hPythonRedactorTables().map((s) => s.name)).toEqual([]);
+  });
+});
