@@ -971,6 +971,7 @@ describe('D-5242: the wake budget and the live act have one home each (Task 17b)
     ['WAKE_BURST', 'server/src/coord/wakeBudget.ts'], ['WAKE_WINDOW_MS', 'server/src/coord/wakeBudget.ts'],
     ['HIBERNATE_PER_SWEEP', 'server/src/coord/hibernate.ts'], ['HIBERNATE_ACT_LINE_MS', 'server/src/coord/hibernate.ts'],
     ['HIBERNATE_SWEEP_ACTOR', 'server/src/coord/hibernate.ts'], ['STOP_DONE_ACTOR', 'server/src/stopDone.ts'],
+    ['DEPS_SHED_ACTOR', 'server/src/depsShed.ts'],
     ['MAIL_WAKE_FLOOR_MS', 'server/src/watch.ts'],
   ])('%s is declared once, in %s', (c, home) => {
     expect(ALL.filter((f) => decl(c).test(stallCode(f))).map(rel), c).toEqual([home]);
@@ -981,7 +982,7 @@ describe('D-5242: the wake budget and the live act have one home each (Task 17b)
       .toEqual(['server/src/watch.ts']);
   });
   it('the lanes\' actor words are code-line literals in their definers alone', () => {
-    for (const [word, home] of [['sweep:hibernate', 'server/src/coord/hibernate.ts'], ['sweep:stop-done', 'server/src/stopDone.ts']] as const) {
+    for (const [word, home] of [['sweep:hibernate', 'server/src/coord/hibernate.ts'], ['sweep:stop-done', 'server/src/stopDone.ts'], ['sweep:deps-shed', 'server/src/depsShed.ts']] as const) {
       expect(ALL.filter((f) => stallCode(f).includes(`'${word}'`)).map(rel), word).toEqual([home]);
     }
   });

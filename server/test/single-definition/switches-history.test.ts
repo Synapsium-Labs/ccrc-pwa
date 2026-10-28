@@ -157,6 +157,27 @@ describe('fleet disk retention DR-27: the stale arm’s live switch has no write
   });
 });
 
+// D-7278. The deps-shed arm SHIPS SHADOWED behind `$REG/deps-shed-live`, hand-touched on the fleet box like the stale
+// arm's: no shell line names it, its one TS definer is the L0 switch table, and the one file that reads a listing the
+// run-done body already took holds the constant.
+describe('the deps-shed arm’s live switch has no writer in the tree (D-7278)', () => {
+  const NAME = 'deps-shed-live';
+  const DEFINER = 'shared/switches.ts';
+
+  it('no shell line names it, and its one TS holder is its definer', () => {
+    expect(holdersOf(NAME), 'a line of shell names it — a writer, or a reader this design never had').toEqual([]);
+    expect(ALL.filter((f) => stallCode(f).includes(NAME)).map(rel).sort(), `spelled on a code line outside ${DEFINER}`)
+      .toEqual([DEFINER]);
+  });
+
+  it('the files that name its constant are the definer and the arm, and none reaches a write', () => {
+    const WRITE = /\b(?:writeFile|appendFile|rename|symlink|copyFile|mkdir|truncate|unlink|rm)(?:Sync)?\s*\(|\.write\w*\s*\(/;
+    const holders = ALL.filter((f) => stallCode(f).includes('DEPS_SHED_LIVE_MARKER')).map(rel).sort();
+    expect(holders).toEqual(['server/src/depsShedPass.ts', DEFINER]);
+    for (const f of holders) expect(stallCode(path.join(ccrcRoot, f)), `${f} reaches a write`).not.toMatch(WRITE);
+  });
+});
+
 // D-6922. The superseded-review release SHIPS SHADOWED behind
 // `$REG/child-superseded-reclaim-live`, hand-touched on the fleet box like the stale arm's: no shell line names it, its one
 // TS definer is the L0 switch table, and the one file that reads a listing the lane already took holds the constant.
