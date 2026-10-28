@@ -1012,6 +1012,23 @@ describe('the header before the first fleet frame lands', () => {
     } finally { vi.useRealTimers(); }
   });
 
+  // The crumb half (C12 item 2): a fallback whose crumb guessed the project wrong (the longest-prefix split) is
+  // corrected by the first frame, and the corrected crumb is drawn, not typed in, as is the guess when the row leaves.
+  it('a fallback crumb the row corrects is drawn plainly, arriving and leaving', () => {
+    vi.useFakeTimers();
+    try {
+      const guess = { ...wsFallback, crumb: 'project' };
+      const { container, rerender } = render(<SessionHeaderHost {...props({ session: null, fallback: guess })} />);
+      expect(container.querySelector('.chat-crumb')).toHaveTextContent('project');
+      rerender(<SessionHeaderHost {...props({ session: wsRow(), fallback: guess })} />);
+      expect(caret(container), 'no crumb typed in').toBeNull();
+      expect(container.querySelector('.chat-crumb')).toHaveTextContent('project-a');
+      rerender(<SessionHeaderHost {...props({ session: null, fallback: guess })} />);
+      expect(caret(container), 'no crumb typed in as the row leaves').toBeNull();
+      expect(container.querySelector('.chat-crumb')?.textContent).toBe('project');
+    } finally { vi.useRealTimers(); }
+  });
+
   it('a present row renamed still types its new name in', () => {
     vi.useFakeTimers();
     try {
@@ -1350,6 +1367,13 @@ describe('the quiet "with coordinator" state (D-5296)', () => {
         let values: string[] = [];
         try { values = declaredValues(css, sel, 'max-width'); } catch { /* no rule targets it in this sheet */ }
         expect(values.filter((v) => v !== 'none'), `${sel} max-width`).toEqual([]);
+      }
+      // A cap on the pill itself is the same cap by another door: the text wraps inside it and nothing overflows
+      // (C12 item 2). The pill may be held to its row, never to a width of its own.
+      for (const sel of ['.metachip', '.metachip--branch']) {
+        let values: string[] = [];
+        try { values = declaredValues(css, sel, 'max-width'); } catch { /* no rule targets it in this sheet */ }
+        expect(values.filter((v) => v !== 'none' && v !== '100%'), `${sel} max-width`).toEqual([]);
       }
     }
   });
