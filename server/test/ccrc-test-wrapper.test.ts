@@ -287,6 +287,15 @@ describe('ccrc test: heavy or light (D-TBD-test-containment)', () => {
     ['npx playwright install chromium', 'light'],
     ['env -u GIT_DIR npx vitest run', 'heavy'],
     ['timeout 600 npx tsc --noEmit', 'heavy'],
+    // A prefix that runs the rest as its command is dropped, as `env` is: systemd-run (its value flags skipped), setsid,
+    // flock <file>, sudo -u <user>, xargs; and `make` runs the suite by its test or check target.
+    ['systemd-run --user --scope -p MemoryMax=8G --unit t1 -- npx vitest run', 'heavy'],
+    ['setsid npx tsc --noEmit', 'heavy'],
+    ['flock /tmp/l npx vitest run', 'heavy'],
+    ['sudo -u ci npx vitest run', 'heavy'],
+    ['make test', 'heavy'],
+    ['make -C server check', 'heavy'],
+    ['make build', 'light'],
   ])('%s is %s', (cmd, want) => {
     expect(run(box(), ['--classify', '--', ...cmd.split(' ')]).stdout.trim()).toBe(want);
   });
@@ -309,7 +318,6 @@ describe('ccrc test: heavy or light (D-TBD-test-containment)', () => {
     ['npm test 2>&1 | tail -5', 'heavy'],
     ['env -u GIT_DIR -u GIT_WORK_TREE npx vitest run --maxWorkers=2', 'heavy'],
     ["tmux new-window 'npx vitest run'", 'heavy'],
-    ['S=systemd-run; $S --user --scope npx vitest run', 'heavy'],
     ['(cd server; npm run typecheck)', 'heavy'],
     ['echo $(npx tsc --noEmit)', 'heavy'],
     ['ccrc test -- npx vitest run', 'light'],
@@ -319,6 +327,43 @@ describe('ccrc test: heavy or light (D-TBD-test-containment)', () => {
     ["git commit -m 'npx vitest run; npm test'", 'light'],
     ['cat README.md # npx tsc', 'light'],
     ['npm run build > build.log 2>&1', 'light'],
+    // Prefixes and shell strings that run the rest as a command are read through, so none of them hides a heavy run.
+    ['setsid npx vitest run', 'heavy'],
+    ['ls | xargs -I {} npx vitest run {}', 'heavy'],
+    ['find test -name "*.test.ts" | xargs -n 50 npx vitest run', 'heavy'],
+    ['flock /tmp/l npx vitest run', 'heavy'],
+    ["flock -w 5 /tmp/l -c 'npm test'", 'heavy'],
+    ['watch -n 5 npm test', 'heavy'],
+    ['sudo -u ci npx tsc --noEmit', 'heavy'],
+    ["script -qc 'npx vitest run' /dev/null", 'heavy'],
+    ['eval "npx vitest run"', 'heavy'],
+    ['nice -n 5 setsid timeout 600 npx tsc', 'heavy'],
+    ['make test', 'heavy'],
+    ['make -j4 -C server typecheck', 'heavy'],
+    ['flock /tmp/l npx vitest run test/foo.test.ts', 'light'],
+    ['sudo -u ci ls', 'light'],
+    ['watch -n 5 git status', 'light'],
+    ['ls | xargs echo', 'light'],
+    ['make build', 'light'],
+    // WRAPPED: a systemd-run of one's own around ANY test or typecheck, light or heavy, escapes the slice's caps and the
+    // queue, so the hook denies it on every session. A quoted command word is the same word, and a systemd-run around
+    // `ccrc test` or around no test at all is not wrapped.
+    ['"systemd-run" --user --scope npx vitest run', 'wrapped'],
+    ['systemd-run --user --scope bun test', 'wrapped'],
+    ['systemd-run --user --scope npm t', 'wrapped'],
+    ['systemd-run --user --scope npm --prefix server test', 'wrapped'],
+    ['systemd-run --user --scope pnpm -r test', 'wrapped'],
+    ['systemd-run --user --scope tsgo -p .', 'wrapped'],
+    ['systemd-run --user --scope make test', 'wrapped'],
+    ['systemd-run --user --scope npx vitest run test/foo.test.ts', 'wrapped'],
+    ['systemd-run --user --scope --unit t1 -p MemoryMax=8G -E A=1 --description x --slice app.slice npx vitest run test/foo.test.ts', 'wrapped'],
+    ['/usr/bin/systemd-run --user --scope -- ./node_modules/.bin/vitest run test/foo.test.ts', 'wrapped'],
+    ["sh -c 'systemd-run --user --scope npx tsc'", 'wrapped'],
+    ['npx tsc --noEmit; systemd-run --user --scope npx vitest run test/foo.test.ts', 'wrapped'],
+    ['S=systemd-run; $S --user --scope npx vitest run', 'wrapped'],
+    ['S=systemd-run; $S --user --scope npx vitest run test/foo.test.ts', 'wrapped'],
+    ['systemd-run --user --scope sleep 1', 'light'],
+    ['systemd-run --user --scope ccrc test -- npx vitest run', 'light'],
   ])('--classify-shell %s is %s', (line, want) => {
     expect(run(box(), ['--classify-shell', '--', line]).stdout.trim()).toBe(want);
   });

@@ -4,7 +4,7 @@
 #
 #   ccrc test [--heavy|--light] [--] <command> [<arg>...]
 #   ccrc test --classify [--] <command> [<arg>...]   # prints heavy or light
-#   ccrc test --classify-shell [--] '<command line>'  # heavy when it starts a heavy run outside ccrc test
+#   ccrc test --classify-shell [--] '<command line>'  # heavy, wrapped (a systemd-run of one's own around a test) or light
 #   ccrc test --status                               # the slice and the queue, one line
 #
 # WHY. On a fleet box about twenty sessions each ran vitest, tests-inclusive
@@ -149,10 +149,12 @@ _tload() {
 # and `node node_modules/vitest/vitest.mjs` are one program.
 #
 # A shell's `-c` string (`sh -c`, `bash -lc`) and a tmux window's command are read as scripts, by `_tshell_heavy`: each
-# simple command in them, its prefixes (assignments, `env` and its options, `timeout`, `nice`, `command`…) dropped, is
-# classified in command position. `--classify-shell` is the same reader over a whole Bash command line, for the session
-# hook (ccd/session-hook.sh), which denies a heavy run started outside `ccrc test` on a fleet box: one classifier for the
-# wrapper and the hook. In that reading a `ccrc test` command is already contained and is skipped, and a command word
+# simple command in them, its prefixes dropped (`_tstrip`: assignments, `env`, `timeout`, `nice`, `command`, systemd-run
+# with its value flags, setsid, `sudo -u <user>`, `flock <file>`, xargs…; `eval`, `script -c`, `flock … -c` and `watch`
+# strings are read as scripts too), is classified in command position, and `make test`/`make check` is a whole suite.
+# `--classify-shell` is the same reader over a whole Bash command line, for the session hook (ccd/session-hook.sh): it
+# answers `heavy`, `light`, or `wrapped` for a systemd-run of one's own around any test or typecheck (WRAPPED, below),
+# one classifier for the wrapper and both of the hook's arms. In that reading a `ccrc test` command is already contained and is skipped, and a command word
 # that is no package manager, node, test program or `$variable` is light whatever its arguments say, so `grep vitest`,
 # `git commit -m 'npm test'` and `echo tsc` stay light.
 _tvalflag() {   # <flag> -> 0 when a vitest or jest flag takes the next word as its value
@@ -188,6 +190,16 @@ _targv_heavy() {   # <wide> <command> [<arg>...] -> 0 heavy, 1 light (the argv r
           run|run-script) case "${a[j+1]:-}" in t|tst|test*|*typecheck*) return 0 ;; esac ;;
           install|i|add|ci|remove|rm|uninstall|update|up|upgrade|link) return 1 ;;
         esac ;;
+      make|gmake)
+        # The suite by its target: test, tests, check, test-*/test:*/test_*, or any typecheck target.
+        for ((j = i + 1; j < n; j++)); do
+          case "${a[j]}" in
+            -C|--directory|-f|--file|--makefile|-I|--include-dir|-o|--old-file|-W|--what-if|--assume-new) j=$((j + 1)) ;;
+            -j|--jobs|-l|--load-average) [[ "${a[j+1]:-}" =~ ^[0-9.]+$ ]] && j=$((j + 1)) ;;
+            -*|*=*) ;;
+            test|tests|check|test[-:_]*|*typecheck*) return 0 ;;
+          esac
+        done ;;
       vitest|jest) prog="$p"; break ;;
     esac
   done
@@ -212,13 +224,16 @@ _targv_heavy() {   # <wide> <command> [<arg>...] -> 0 heavy, 1 light (the argv r
   done
   [ "$wideb" = 1 ] || [ "$files" -eq 0 ] || [ "$files" -gt "$wide" ]
 }
-_tstrip() {   # <word>... -> TW: the words from the command word on
-  TW=("$@")
-  local i=0 n=${#TW[@]} w
+_tstrip() {   # <word>... -> TW: the words from the command word on; TSR=1 when a systemd-run was among the prefixes
+  # A prefix that runs the rest as a command is dropped with its options (and their values), as `env` is. One that runs a
+  # STRING (`eval`, `script -c`, `flock … -c`, `watch`) becomes `sh -c '<string>'`, which `_tcmd_heavy` reads as a script.
+  TW=("$@"); TSR=0
+  local i=0 n=${#TW[@]} w p
   while ((i < n)); do
     w="${TW[i]}"
     if [[ "$w" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]]; then i=$((i + 1)); continue; fi
-    case "$w" in
+    p="${w##*/}"
+    case "$p" in
       '!'|'{'|'}'|then|do|else|elif|if|while|until|command|exec|time|nohup|builtin) i=$((i + 1)) ;;
       env)
         i=$((i + 1))
@@ -238,7 +253,71 @@ _tstrip() {   # <word>... -> TW: the words from the command word on
             *) break ;;
           esac
         done
-        [ "$w" != timeout ] || i=$((i + 1)) ;;   # its duration
+        [ "$p" != timeout ] || i=$((i + 1)) ;;   # its duration
+      systemd-run)
+        TSR=1; i=$((i + 1))
+        while ((i < n)); do
+          case "${TW[i]}" in
+            --) i=$((i + 1)); break ;;
+            -u|--unit|--slice|-p|--property|-E|--setenv|--description|-M|--machine|-H|--host|--uid|--gid|--nice \
+              |--working-directory|--service-type|--on-active|--on-boot|--on-startup|--on-unit-active \
+              |--on-unit-inactive|--on-calendar|--path-property|--socket-property|--timer-property|-C|--capsule) i=$((i + 2)) ;;
+            -*) i=$((i + 1)) ;;
+            *) break ;;
+          esac
+        done ;;
+      setsid|sudo|doas|taskset|chrt)
+        i=$((i + 1))
+        while ((i < n)); do
+          case "${TW[i]}" in
+            --) i=$((i + 1)); break ;;
+            -u|--user|-g|--group|-C|--close-from|-D|--chdir|-h|--host|-p|--prompt|-r|--role|-t|--type|-T \
+              |--command-timeout|-U|--other-user|-R|--chroot) [ "$p" = setsid ] && i=$((i + 1)) || i=$((i + 2)) ;;
+            -*) i=$((i + 1)) ;;
+            *) break ;;
+          esac
+        done
+        case "$p" in taskset|chrt) i=$((i + 1)) ;; esac ;;   # the CPU mask, the priority
+      xargs)
+        i=$((i + 1))
+        while ((i < n)); do
+          case "${TW[i]}" in
+            -a|--arg-file|-d|--delimiter|-E|-I|-L|-n|--max-args|-P|--max-procs|-s|--max-chars|--process-slot-var) i=$((i + 2)) ;;
+            -*) i=$((i + 1)) ;;
+            *) break ;;
+          esac
+        done ;;
+      flock)
+        i=$((i + 1))
+        while ((i < n)); do
+          case "${TW[i]}" in
+            -w|--timeout|--wait|-E|--conflict-exit-code) i=$((i + 2)) ;;
+            -*) i=$((i + 1)) ;;
+            *) break ;;
+          esac
+        done
+        i=$((i + 1))   # the lock file
+        case "${TW[i]:-}" in -c|--command) TW=(sh -c "${TW[i+1]:-}"); return 0 ;; esac ;;
+      watch)
+        i=$((i + 1))
+        while ((i < n)); do
+          case "${TW[i]}" in
+            -n|--interval|-q|--equexit) i=$((i + 2)) ;;
+            -*) i=$((i + 1)) ;;
+            *) break ;;
+          esac
+        done
+        TW=(sh -c "${TW[*]:i}"); return 0 ;;
+      eval) TW=(sh -c "${TW[*]:i+1}"); return 0 ;;
+      script)
+        local j
+        for ((j = i + 1; j < n; j++)); do
+          case "${TW[j]}" in
+            -c|--command|-[a-zA-Z]*c) TW=(sh -c "${TW[j+1]:-}"); return 0 ;;
+            --command=*) TW=(sh -c "${TW[j]#--command=}"); return 0 ;;
+          esac
+        done
+        break ;;
       *) break ;;
     esac
   done
@@ -321,23 +400,35 @@ _tcmd_heavy() {   # <wide> <how: argv, shell or hook> <command> [<arg>...] -> 0 
   esac
   if [ "$how" != argv ]; then
     case "${p%.*}" in
-      npx|bunx|pnpx|npm|pnpm|yarn|bun|node|vitest|jest|tsc|vue-tsc|tsgo|playwright|stryker|*typecheck*|'$'*) ;;
+      npx|bunx|pnpx|npm|pnpm|yarn|bun|node|vitest|jest|tsc|vue-tsc|tsgo|playwright|stryker|make|gmake|*typecheck*|'$'*) ;;
       *) return 1 ;;
     esac
   fi
   _targv_heavy "$wide" "${a[@]}"
 }
-_tshell_heavy() {   # <wide> <how: shell or hook> <shell string> -> 0 when a simple command in it is heavy
-  local wide="$1" how="${2/argv/shell}" line
+# WRAPPED: a simple command whose prefixes include systemd-run (its words read through, `"systemd-run"` included, since
+# quotes are removed) and whose command is ANY test or typecheck, light or heavy: it is read at a wide line of 0, under
+# which every vitest or jest run is heavy. A `$variable` in command position on a line that names systemd-run anywhere
+# (`S=systemd-run; $S …`) is read the same way. It sets TWRAPPED, which `--classify-shell` answers as `wrapped`, and the
+# whole string is read, so a bare heavy command before it never hides it.
+TWRAPPED=0 TLINE_SR=0
+_tshell_heavy() {   # <wide> <how: shell or hook> <shell string> -> 0 when a simple command in it is heavy (or wrapped)
+  local wide="$1" how="${2/argv/shell}" line sr hit=1
   local -a ws
   while IFS= read -r line; do
     IFS=$'\037' read -r -a ws <<<"$line"
     [ ${#ws[@]} -gt 0 ] || continue
-    _tstrip "${ws[@]}"
+    _tstrip "${ws[@]}"; sr=$TSR
     [ ${#TW[@]} -gt 0 ] || continue
-    if _tcmd_heavy "$wide" "$how" "${TW[@]}"; then return 0; fi
+    [ "$sr" = 1 ] || [ "$TLINE_SR" != 1 ] || [[ "${TW[0]}" != '$'* ]] || sr=1
+    if [ "$sr" = 1 ]; then
+      if _tcmd_heavy 0 "$how" "${TW[@]}"; then TWRAPPED=1; return 0; fi
+    elif _tcmd_heavy "$wide" "$how" "${TW[@]}"; then
+      hit=0
+    fi
+    [ "$TWRAPPED" = 0 ] || return 0   # a nested string (`sh -c '…'`) found one
   done < <(_tsegments "$3")
-  return 1
+  return "$hit"
 }
 _heavy() {   # <wide> <command> [<arg>...] -> 0 heavy, 1 light
   local wide="$1"
@@ -527,7 +618,10 @@ _tload
 if [ "$mode" = status ]; then [ $# -eq 0 ] || _tusage "--status takes no command"; _tstatus; exit $?; fi
 if [ "$mode" = classify-shell ]; then
   [ $# -eq 1 ] || _tusage "--classify-shell takes one command line, as one argument"
-  if _tshell_heavy "${TK[CCRC_TEST_WIDE_FILES]}" hook "$1"; then echo heavy; else echo light; fi
+  [[ "$1" != *systemd-run* ]] || TLINE_SR=1
+  if ! _tshell_heavy "${TK[CCRC_TEST_WIDE_FILES]}" hook "$1"; then echo light
+  elif [ "$TWRAPPED" = 1 ]; then echo wrapped
+  else echo heavy; fi
   exit 0
 fi
 [ $# -gt 0 ] || _tusage "missing command"

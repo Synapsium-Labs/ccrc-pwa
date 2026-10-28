@@ -62,6 +62,15 @@ describe('the test-route arm denies a test or typecheck under a systemd-run of i
     'systemd-run --user --scope npm run typecheck-tests',
     'true; systemd-run --user --scope npx stryker run',
     'S=systemd-run; $S --user --scope npx vitest run',
+    // The reader is the wrapper's own classifier, so every spelling it reads as a test is denied under systemd-run.
+    '"systemd-run" --user --scope npx vitest run',
+    'systemd-run --user --scope bun test',
+    'systemd-run --user --scope npm t',
+    'systemd-run --user --scope npm --prefix server test',
+    'systemd-run --user --scope pnpm -r test',
+    'systemd-run --user --scope tsgo -p .',
+    'systemd-run --user --scope make test',
+    "sh -c 'systemd-run --user --scope npx tsc'",
   ])('%s is denied, with a reason that names ccrc test', (cmd) => {
     const why = bash(cmd);
     expect(why).toMatch(/run tests and typechecks through `ccrc test -- <command>`/);
@@ -75,6 +84,7 @@ describe('the test-route arm allows what is not a hand-placed test run (D-TBD-te
     'ccrc test -- npx tsc --noEmit -p test/tsconfig.tests.json',
     './node_modules/.bin/vitest run test/systemd-run.test.ts',
     'systemd-run --user --scope sleep 1',
+    'systemd-run --user --scope ccrc test -- npx vitest run',
     'grep -n systemd-run ccd/ccrc-test',
     'npx vitest run test/foo.test.ts',
   ])('%s is allowed', (cmd) => {
@@ -96,6 +106,11 @@ const BARE_HEAVY = [
   'env -u GIT_DIR npx vitest run --maxWorkers=2 test/',
   "tmux new-window 'npx vitest run'",
   "bash -c 'npm run typecheck'",
+  'setsid npx vitest run',
+  'sudo -u ci npx tsc --noEmit',
+  "flock -w 5 /tmp/l -c 'npm test'",
+  'eval "npx vitest run"',
+  'make test',
 ];
 platformContrast('a bare heavy test run', {
   darwin: ['is allowed: no slice to send it to', () => {
@@ -124,6 +139,14 @@ describe('the bare-heavy arm leaves light and contained runs alone (D-TBD-test-c
 });
 
 describe('the test-route arm fails open (D-TBD-test-containment)', () => {
+  it('with no ccrc on PATH there is no ccrc test to send a run to, so nothing is denied', () => {
+    const r = spawnSync('bash', [HOOK], {
+      input: JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'systemd-run --user --scope npx vitest run' }, cwd: CWD }),
+      encoding: 'utf8', env: { ...env(), PATH: '/usr/bin:/bin' },
+    });
+    expect(r.status).toBe(0);
+    expect(r.stdout).not.toMatch(/ccrc test/);
+  });
   it('a malformed payload that names systemd-run prints nothing and exits 0', () => {
     expect(run('{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"systemd-run vitest"')).toBe('');
   });

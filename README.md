@@ -6191,9 +6191,11 @@ process it left behind (a leaked vitest worker) ends with it. A signal to a queu
 them, and starts when one frees. With `CCRC_TEST_PRESSURE_MAX` above 0 a heavy run also waits while memory or CPU
 pressure (PSI `some avg10`) is above it. A light run takes no slot. On macOS the command runs uncontained, saying so,
 and still queues, its slot following the wrapper. The worker and coordinator skills (clause 18) send every test and
-typecheck through `ccrc test`. The session hook denies a Bash call that starts a test or typecheck under
-`systemd-run` of its own, and, on a fleet box (Linux, a registered session), one whose command line starts a heavy run
-in command position outside `ccrc test`, read by `ccrc test --classify-shell`, the wrapper's own classifier. The
+typecheck through `ccrc test`. The session hook reads every Bash call that could start one with `ccrc test
+--classify-shell`, the wrapper's own classifier (prefixes such as `setsid`, `sudo -u`, `flock`, `xargs` and systemd-run's
+flags, and `eval`/`script -c`/`watch` strings, read through), and denies a test or typecheck under a `systemd-run` of
+its own on every session and, on a fleet box (Linux, a registered session), a heavy run in command position outside
+`ccrc test`. The
 vitest worker cap a box sets in its sessions' environment still applies inside the slice. Doctor's `test-slice` check shows the slice's live memory against its live
 cap, its other limits, and how many heavy slots are held and how many runs wait. The PWA control for the cap and the
 queue size is a follow-up.
