@@ -147,6 +147,7 @@ describe('the cadence census, on the real tree', () => {
       'OnUnitActiveSec=1h',
       'OnUnitActiveSec=2min',
       'OnUnitActiveSec=4h',
+      'OnUnitActiveSec=5min',
       'OnUnitActiveSec=60min',
       'OnUnitActiveSec=60s',
     ]);
