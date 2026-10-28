@@ -32,8 +32,11 @@
 //   `FleetTable` without `className="min-h-row"` on the chooser  "the toggle row's chooser is as tall as the toggle's options, not the tap floor's (T2f, D-6371)"
 //                                                         (`FleetTable no longer passes min-h-row to the chooser: expected '// Instrument's fleet list (W2 Task …' to contain '<ClassChooser className="min-h-row" />'`);
 //                                                         green in instrument-list, which cannot measure a height
-// The pin is a source read: jsdom has no layout, so the width itself is measured in a browser. The `flex-auto` mutants and the
-// copied-chooser mutant are the only rows this file catches; the others live in instrument-list.test.tsx.
+// The pins here are source reads: jsdom has no layout. This file catches the copied-chooser row, the `flex-auto` rows and
+// the `min-h-row` row, by their classes; the runs-row and gate rows live in instrument-list.test.tsx. What the classes DO is
+// measured in a real Chrome by browser/fleet-toggle-row.browser.test.ts ("the row is one height in both modes, under a fine
+// pointer / touch at 900 / 1280", and "the chooser wraps below the radiogroup at 150% and 200% text, under a fine pointer /
+// touch at 1280"), which also kills the `flex-wrap`, `flex-1` and `min-h-row` mutants by their geometry.
 import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { SELECT } from '@ccrc/ui';
