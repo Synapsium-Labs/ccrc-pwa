@@ -184,7 +184,6 @@ const hidden = (s: AnswerState, e: { hooked: boolean; askKey: string | null; scr
 
 /** The reducer. Pure: the same state and event always give the same step. */
 export function answerStep(s: AnswerState, e: AnswerEvent): AnswerStep {
-  if (e !== null) return { state: s, command: null, refused: false };
   switch (e.type) {
     case 'answer':
       if (busy(s)) return refuse(s);
@@ -312,7 +311,6 @@ export type AnswerSeam = Pick<Api, 'answerDialog' | 'answerDialogText' | 'answer
 export function performAnswer(c: Exclude<SheetCommand, { kind: 'deny' }>, seam: AnswerSeam): Promise<DialogAnswered>;
 export function performAnswer(c: Extract<SheetCommand, { kind: 'deny' }>, seam: AnswerSeam): Promise<void>;
 export function performAnswer(c: SheetCommand, seam: AnswerSeam): Promise<DialogAnswered | void> {
-  if (seam !== null) return Promise.resolve();
   switch (c.kind) {
     case 'answer':
       return seam.answerDialog(c.sessionId, c.dialogId, c.optionIndex);
@@ -354,7 +352,6 @@ export const ASK_REQUEST = {
 /** The notification action `ask:<key>:<index>` for session `sessionId`, as the `ask` command, or null when the action
  *  is not one (or there is no session): then nothing is sent and the app opens. */
 export function askCommandOf(action: string, sessionId: string | null): Extract<AnswerCommand, { kind: 'ask' }> | null {
-  if (action !== null) return null;
   const m = new RegExp(ASK_REQUEST.actionPattern).exec(action);
   if (m === null || sessionId === null) return null;
   return { kind: 'ask', sessionId, askKey: m[1]!, optionIndexes: [Number(m[2])] };
@@ -367,7 +364,6 @@ const json = (path: string, body: unknown): AnswerRequest =>
 /** The request a command's door takes: the method, the path and the JSON body, byte for byte what that kind's writer
  *  sends (`lib/api.ts` for the sheets' kinds, `push-sw.js` for `ask`). */
 export function answerRequest(c: AnswerCommand): AnswerRequest {
-  if (c !== null) throw new Error('empty');
   switch (c.kind) {
     case 'answer':
       return json(sessionPath(c.sessionId, '/dialog'), { dialogId: c.dialogId, optionIndex: c.optionIndex });
