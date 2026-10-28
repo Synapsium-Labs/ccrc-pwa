@@ -6,6 +6,7 @@
 import { describe, expect, it } from 'vitest';
 import { parseFile, parseSource, type ParsedFile } from '../scan/parse.js';
 import { REPO, walkSrc } from './walkSrc.js';
+import { accountsReaders, requestPolls } from '../census-w7/pwa.js';
 import path from 'node:path';
 
 const GUARDS = new Set(['isRecord', 'isObject', 'isNum', 'isCount', 'isOneOf']);
@@ -43,5 +44,20 @@ describe('the PWA poll primitive and wire-guard kit have one owner (ARCH-30, #54
     expect(fleet.length).toBeGreaterThan(20);
     expect(fleet.filter((f) => visibilitySubscriptions(parse(f)) > 0)).toEqual([]);
     expect(visibilitySubscriptions(parse(POLL))).toBe(1);
+  });
+});
+
+// D-7180 (ARCH-28, #540; W7 C7b): `GET /api/accounts` has one reader, the fleet store (#1720, D-6440), and the two
+// hand-written request polls #1720 left (`HotFilesStrip`, `useFleetHealth`, C7m's) may only go. Read through W7's
+// census (`census-w7/pwa.ts`), so the sites are the syntax tree's, never a text match.
+describe('the PWA reads /api/accounts in one place (D-7180, ARCH-28 #540)', () => {
+  it('api.accounts is called only in stores/fleet.ts, once', () => {
+    expect(accountsReaders().map((s) => s.file)).toEqual(['pwa/src/stores/fleet.ts']);
+  });
+
+  it('the hand-written request polls may only go: at most HotFilesStrip\'s and useFleetHealth\'s', () => {
+    const polls = requestPolls();
+    expect(polls.length).toBeLessThanOrEqual(2);
+    expect(polls.filter((s) => s.file !== 'pwa/src/fleet/HotFilesStrip.tsx' && s.file !== 'pwa/src/fleet/useFleetHealth.ts')).toEqual([]);
   });
 });
