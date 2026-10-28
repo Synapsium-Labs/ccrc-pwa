@@ -20,6 +20,12 @@ import { hasPrCap } from './PrKeycap';
 import { liveStatus } from './liveStatus';
 import { sessionMenu, type SessionMenuEntry } from './SessionFlows';
 
+/** The effort chip's word before the pane reports an effort. The inspector's routing line says the same word on its
+ *  effort door (`routingLine.ts`), so it is spelled here once. The header draws the chip only while it has meta to show
+ *  (`hasMeta`: a live pane with a model, an effort, a branch or ultracode read), so with none of them read the rail
+ *  says this word and the header shows no effort chip. */
+export const UNREAD_EFFORT = 'set effort';
+
 export interface SessionHeaderViewInput {
   session: FleetSession | null;
   status: SessionStatus | null;
@@ -223,7 +229,7 @@ export function sessionHeaderView({
     // The model chip is gated on a model string; a queued `class` write on a freshly spawned session (no model on the
     // pane yet) still shows its `queued` badge, alone, in the chip's place.
     if (model !== null || queuedField === 'class') chips.push({ kind: 'model', text: model, queued: queuedField === 'class' });
-    chips.push({ kind: 'effort', text: ultracode ? 'ultracode' : (effort ?? 'set effort'), ultra: ultracode, queued: queuedField === 'effort' });
+    chips.push({ kind: 'effort', text: ultracode ? 'ultracode' : (effort ?? UNREAD_EFFORT), ultra: ultracode, queued: queuedField === 'effort' });
     if (branch !== null && !branchDuplicatesTitle) chips.push({ kind: 'branch', text: branch });
   }
   if (facts !== null) chips.push({ kind: 'details', facts, coordination });
