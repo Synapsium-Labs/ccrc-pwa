@@ -214,6 +214,7 @@ import { CHILD_RECLAIM_SWEEP_MS, COLLECT_OBSERVE_INTERVAL_MS, DIVERGENCE_SWEEP_M
 import type { ChildReclaimCollectInput } from './childReclaimSweep.js';
 import { NO_FLEET_IDENTITY } from './fleetidentity.js';
 import { SLEEP_LANES, hibernatePass, stopDonePass, type HibernateSweepMemory, type StopDoneMemory } from './sleepLane.js';
+import { DEPS_SHED_STAMP_SUFFIX, depsShedPass, type DepsShedMemory } from './depsShedPass.js';
 import type { SleepPolicyName } from './sleep.js';
 import { StaleArchiveBeat } from './staleArchiveBeat.js';
 import { wakeAdmit, type WakeKind } from './coord/wakeBudget.js';
@@ -1255,6 +1256,9 @@ export class FleetWatcher {
    *  and the coordination serialiser `buildServer` hands it. Its clock and single flight are the `sleepRunDone` row
    *  (D-7045). */
   private readonly stopDoneMemory: StopDoneMemory = { retryAt: new Map() };
+  /** The deps-shed arm of the run-done row (D-7278, `depsShedPass.ts`): its retry hold-off and the sleeps its shadow
+   *  already reported. In memory only. It runs in `sleepRunDone`, after the stop-done pass, on the same serialiser. */
+  private readonly depsShedMemory: DepsShedMemory = { retryAt: new Map(), reported: new Map() };
   private stopDoneSerial: (<T>(fn: () => Promise<T>) => Promise<T>) | null = null;
   /** The process start both sleep lanes hold `viewer` against (presence is never persisted; D-7045: one field, set at
    *  construction, where each lane had its own holding the same instant). */
@@ -2055,6 +2059,22 @@ export class FleetWatcher {
       }, this.stopDoneMemory, sessions, records, names);
     } catch (err) {
       console.warn(`ccrc-server: sweepStopDone failed (${err instanceof Error ? err.message : String(err)}) — no stops this pass`);
+    }
+    // D-7278: the deps-shed arm, the second pass of this row, on the same tick's rows and listing and the same serialiser.
+    try {
+      await depsShedPass({
+        coord, runCcd: this.deps.runCcd, fleetState: this.deps.fleetState, viewers: this.deps.viewers,
+        notifyLog: this.deps.notifyLog,
+        readStamp: (id) => this.deps.io.readFile(`${this.deps.cfg.registryDir}/${id}.${DEPS_SHED_STAMP_SUFFIX}`),
+        rowAtAct: (rec) => this.rowAtAct(rec),
+        serial: this.stopDoneSerial, queueRun: (id, fn) => this.deps.queue.run(id, fn),
+        listing: async () => {
+          try { const r = await this.deps.io.readdirMeasured(this.deps.cfg.registryDir); return r.ok ? r.entries : null; } catch { return null; }
+        },
+        config: this.deps.cfg.depsShed, startedAt: this.sleepStartedAt, now: Date.now,
+      }, this.depsShedMemory, sessions, records, names);
+    } catch (err) {
+      console.warn(`ccrc-server: deps-shed failed (${err instanceof Error ? err.message : String(err)}) — nothing shed this pass`);
     }
   }
 

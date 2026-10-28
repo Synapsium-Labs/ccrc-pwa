@@ -58,6 +58,13 @@ export function depsShedHoldText(h: DepsShedHold): string { return DEPS_SHED_HOL
 export const DEPS_SHED_CLASSES = ['child', 'coordinator'] as const;
 export type DepsShedClass = (typeof DEPS_SHED_CLASSES)[number];
 
+/** The actor the arm's act declares (`sweepDec`), as every unattended server lane names itself. */
+export const DEPS_SHED_ACTOR = 'sweep:deps-shed';
+
+/** After an ask the box refused or that failed, the arm does not ask about that row again for this long. In memory
+ *  only: a restart asks once more. */
+export const DEPS_SHED_RETRY_MS = 60 * 60_000;
+
 /** The deployment defaults (D-7278): every threshold is config, read once by `loadConfig` (`depsShedConfigOf`). */
 export const DEPS_SHED_AFTER_HOURS_DEFAULT = 24;
 export const DEPS_SHED_PER_PASS_DEFAULT = 1;
