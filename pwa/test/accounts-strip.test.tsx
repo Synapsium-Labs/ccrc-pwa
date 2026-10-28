@@ -904,9 +904,9 @@ describe('the lanes fold (S5b, D-6530)', () => {
       expect(fireEvent.keyDown(document.body, { key: 'Escape' })).toBe(false);
       expect(panelOf(container)).toBeNull();
       expect(fireEvent.keyDown(document.body, { key: 'Escape' })).toBe(true);
-      // An Escape another layer over the panel has already handled (a sheet or the palette closing itself; Radix's
-      // layers listen on the document in the capture phase and prevent the Escape they take) is that layer's alone:
-      // the panel under it stays open.
+      // An Escape another layer over the panel has already handled is that layer's alone: the panel under it stays open.
+      // The palette and the ask surface stop it in the capture phase, so the panel never sees it; this case stands in for
+      // a layer that prevents it instead, which `defaultPrevented` covers (review 1131 A9).
       tapControl();
       const sheet = (e: KeyboardEvent): void => { if (e.key === 'Escape') e.preventDefault(); };
       document.addEventListener('keydown', sheet, true);
@@ -1069,6 +1069,38 @@ describe('the lanes fold (S5b, D-6530)', () => {
       const stop = lineCardsOf(container).find((c) => c.tabIndex === 0)!;
       expect(stop).toBe(lineCardsOf(container)[0]);
       expect(document.activeElement).toBe(stop);
+    });
+
+    // Review 1131 A1 (C12 item 20): a poll that drops the focused panel card's lane fires no blur, so the panel's flag goes
+    // stale; the operator then moves to All accounts, and a later poll leaves nothing to fold. The hand-back must not take
+    // focus off All accounts: only focus still in the panel, or on the page, is the panel's to hand back.
+    it('a stale panel flag never takes focus off All accounts when a later poll leaves nothing to fold', async () => {
+      const container = await openPanel();
+      const card = panelCardsOf(container)[9]!;
+      act(() => { card.focus(); });
+      const all = seventeenLanes(nowSec).accounts;
+      // The focused card's lane, by the label it draws.
+      const lane = all.find((a) => [...card.querySelectorAll('*')].some((e) => e.textContent === labelOf(a.wrapper)))!;
+      stubLanes(all.filter((a) => a !== lane));
+      expect(panelOf(container), 'sixteen lanes still fold, so the panel stays').not.toBeNull();
+      const end = allAccounts();
+      act(() => { end.focus(); });
+      expect(document.activeElement).toBe(end);
+      stubLanes(all.slice(0, 5));
+      expect(panelOf(container)).toBeNull();
+      expect(document.activeElement, 'focus stays on All accounts').toBe(end);
+    });
+
+    // Review 1131 A2 (C12 item 20): a poll that leaves no live lane draws the placeholder door, with no control and no
+    // line; a panel card's focus goes to that door, never to the page.
+    it('a poll that leaves no live lane hands a panel card\'s focus to the placeholder door, never to the page', async () => {
+      const container = await openPanel();
+      const card = panelCardsOf(container)[9]!;
+      act(() => { card.focus(); });
+      stubLanes(seventeenLanes(nowSec).accounts.map((a) => ({ ...a, disabled: true })));
+      const door = screen.getByRole('link', { name: ACCOUNTS_DOOR_LABEL });
+      expect(panelOf(container)).toBeNull();
+      expect(document.activeElement, 'on the placeholder door').toBe(door);
     });
 
     // ── phone-fold-two-lines: the phone folds to two lines of the tracks its grid draws ──
