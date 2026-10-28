@@ -194,11 +194,14 @@ export function CommandLayer({ openNewSession }: CommandLayerProps): ReactNode {
     }
   };
 
-  // The sheet lists what `useShortcuts` binds: the registry's own keys, plus
-  // the one chord the layer itself owns.
+  // The sheet lists the keys that act here: the registry's own keys on the
+  // commands offered in this context, plus the one chord the layer itself
+  // owns. `useShortcuts` binds every key everywhere, but a single key skips
+  // `when` and its run does nothing where its command is not offered (the
+  // inspector's `i` with no rail placed), so such a key is not listed.
   const rows: { id: string; title: string; keys: readonly string[] }[] = [
     { id: 'palette', title: 'Open the command palette', keys: PALETTE_KEYS },
-    ...commands.flatMap((c) => (c.keys === undefined ? [] : [{ id: c.id, title: c.title, keys: c.keys }])),
+    ...available(commands, ctx).flatMap((c) => (c.keys === undefined ? [] : [{ id: c.id, title: c.title, keys: c.keys }])),
   ];
 
   return (

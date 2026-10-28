@@ -3,8 +3,9 @@
 //
 // THE CHOICE is `ccrc-inspector` in `localStorage`, and only the exact word `hidden` hides: absent, any other value and
 // storage that throws all read as shown, so a first visit, a private window and a value a later build writes all draw
-// the rail. It is applied in memory BEFORE it is written (as `setSkin` is), so storage that refuses still toggles for
-// the page; it just will not survive a reload. Nothing else reads or writes the key.
+// the rail. The write sits in its own try/catch, which is what lets storage that refuses still toggle for the page; it
+// just will not survive a reload. The choice is applied in memory first, as `setSkin`'s is, but with the catch the order
+// changes nothing (measured under C12: writing first stays green). Nothing else reads or writes the key.
 //
 // THE SHOWN FACT is `useInspectorShown()`: the rail's width AND the choice. The rail, `SessionScreen`'s strips rule and
 // the frame's `data-inspector` attribute all read it, so a hidden rail brings the task and mail strips back into the
@@ -44,8 +45,8 @@ export function inspectorHidden(): boolean {
   return memory;
 }
 
-/** Apply a choice now, tell every subscriber, and remember it. Applied BEFORE it is written, so storage that throws
- *  still leaves the rail hidden or shown for the page. */
+/** Apply a choice now, tell every subscriber, and remember it. The write's try/catch is what keeps storage that
+ *  throws from stopping the toggle: the rail is still hidden or shown for the page. */
 export function setInspectorHidden(hidden: boolean): void {
   memory = hidden;
   for (const l of [...choiceListeners]) l();
