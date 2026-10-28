@@ -379,6 +379,13 @@ describe('the door', () => {
     expect(door.querySelector('.mail-badge-count')).toBeNull();
   });
 
+  it('at a measured zero it is not unread and draws no pill', () => {
+    render(<MailBadge waiting={0} />);
+    const door = screen.getByRole('button', { name: /^Mail — nothing waiting for you$/ });
+    expect(door).toHaveAttribute('data-unread', 'false');
+    expect(door.querySelector('.mail-badge-count')).toBeNull();
+  });
+
   it('navigates rather than toggling anything', () => {
     render(<MailBadge waiting={1} />);
     fireEvent.click(screen.getByRole('button', { name: /mail/i }));

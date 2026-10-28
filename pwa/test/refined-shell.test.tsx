@@ -260,7 +260,8 @@ describe('the app bar (W2 Task S4b)', () => {
         expect(slot.closest('.shell-banners')).not.toBeNull();
         // The sidebar's head keeps its readouts and gives its wordmark and doors to the bar: one identity mark.
         expect(document.querySelectorAll('[data-wordmark], .wordmark')).toHaveLength(1);
-        expect(within(fleet).queryByRole('button', { name: /^Mail —/ })).toBeNull();
+        // Any mail door, named or not yet: before the first frame the door is plain "Mail" (C12 item 4).
+        expect(within(fleet).queryByRole('button', { name: /^Mail\b/ })).toBeNull();
         expect(within(fleet).queryByRole('button', { name: /^Settings/ })).toBeNull();
       } else {
         expect(document.querySelector('header.shell-accounts')).toBeNull();
@@ -269,6 +270,21 @@ describe('the app bar (W2 Task S4b)', () => {
         // Below 900 the column holds the chrome: Refined's phone header and its Inbox door (W2 Task S5).
         expect(within(fleet).getByRole('button', { name: /^Inbox/ })).toHaveAttribute('data-command', 'go-inbox');
       }
+    });
+  }
+
+  // The case above runs an empty fleet, whose sidebar head draws nothing, so it cannot see a door in that head
+  // (C12 item 4). With a row the head draws its count line, and the doors stay the bar's, before the first frame
+  // (the door would be plain "Mail") and after it.
+  for (const seen of [false, true]) {
+    it(`at the desk the sidebar's head draws its count line and none of the bar's doors (frame seen: ${seen})`, () => {
+      atWidth(1280);
+      act(() => useFleetStore.setState({ sessions: [fleetSession({ id: 'ask', bucket: 'attention' })], fleetFrameSeen: seen }));
+      render(<App />);
+      const fleet = screen.getByRole('region', { name: 'Fleet' });
+      expect(fleet.querySelector('.fleet-head .fleet-count'), 'the head is drawn').not.toBeNull();
+      expect(within(fleet).queryByRole('button', { name: /^Mail\b/ })).toBeNull();
+      expect(within(fleet).queryByRole('button', { name: /^Settings/ })).toBeNull();
     });
   }
 });

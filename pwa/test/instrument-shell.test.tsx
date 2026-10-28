@@ -212,7 +212,9 @@
 // MUTATION TABLE (plan Task T2d Step 3; RUN, each mutant on the working tree, this suite alone, then reverted):
 //   the rail's Inbox door left on the unread count .... "the rail's Inbox door says 'waiting for you' with Refined's count"
 // T2e's rows 1 and 2 under "T2e review R32, F5" above are retired: `unreadMailCount` is gone, and no door here counts
-// unread mail. The F5 case and its two mutants now live in mail-screen.test.tsx, against the Inbox's own row mark.
+// unread mail. The F5 case lives in mail-screen.test.tsx, against the Inbox's own row mark, and its two mutant rows in
+// needs-you-counts.test.ts. Fix round 1's row (review 826, F1) above is retired too: its case was renamed to the row
+// just above, "the rail's Inbox door says 'waiting for you' with Refined's count".
 //
 // W2 Task T2b (desk-polish, D-6328): no floating + at the desk; Instrument's round + mounts below 900 only.
 // MUTATION TABLE (plan Task T2b Step 3; RUN, each mutant on the working tree, this suite alone, then reverted):
