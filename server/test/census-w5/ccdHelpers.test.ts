@@ -6,7 +6,7 @@
 // or more callers; each one's callers among the five tail functions are exactly its measured set, holding a reap-side and
 // a reclaim-side function; `_reg_purge` is called only from `_reg_retire`; and the four lock shapes that are not wrappers,
 // which C5g does not touch. The refusal calls hold their base counts (158: 155 on code lines and 3 on comment lines) and
-// "the two families agree on every call", which holds at every step of the series. The rows C5e, C5f and C5g move
+// every call has a region family, its name carrying none (C5e, D-7072, left one helper name). The rows C5e, C5f and C5g move
 // REPORT, as `accountMarkers.test.ts` (C5a) does (`reportRow.ts#expectReportRow`): helper definitions 2 at base (C5e
 // takes them to 1), token minters 2 (C5f: 1), reap-lock wrappers 4 (C5g: 1). Each prints its sites and holds only that
 // every name is a base site or the plan's target, that each site appears once (so the count is at most those names: the
@@ -89,14 +89,15 @@ describe('refuseCalls / refuseWords: the verdict-setting refusal helpers (D-7071
     expect(refuseWords('reap', { src: noted, codeOnly: true })).toEqual(['alpha', 'eta', 'zeta']);
   });
 
-  it('REAL: 158 calls, 155 on code lines and 3 on comment lines; 117 reap and 41 collect; the two families agree on every call', () => {
+  it('REAL: 158 calls, 155 on code lines and 3 on comment lines; 117 reap and 41 collect; every call has a region family', () => {
     const calls = refuseCalls();
     const byFn = new Map<string, number>();
     for (const c of calls) byFn.set(`${c.name} in ${c.fn ?? '<top-level>'}${c.comment ? ' (comment)' : ''}`, (byFn.get(`${c.name} in ${c.fn ?? '<top-level>'}${c.comment ? ' (comment)' : ''}`) ?? 0) + 1);
     console.log(`census refuseCalls: ${calls.length} (${calls.filter((c) => !c.comment).length} code, ${calls.filter((c) => c.comment).length} comment)\n`
       + [...byFn].map(([k, n]) => `  ${n}  ${k}`).join('\n'));
-    const disagree = calls.filter((c) => c.nameFamily !== null && c.nameFamily !== c.regionFamily);
-    expect(disagree.map((c) => `${c.line}: ${c.text.trim()}`), 'the two families agree on every call').toEqual([]);
+    // A call's family is its region's alone: no call names a helper that carries a family of its own (D-7072).
+    const named = calls.filter((c) => c.nameFamily !== null);
+    expect(named.map((c) => `${c.line}: ${c.text.trim()}`), 'every call has a region family, and its name carries none').toEqual([]);
     expect([calls.length, calls.filter((c) => !c.comment).length, calls.filter((c) => c.comment).length]).toEqual([158, 155, 3]);
     expect(calls.filter((c) => c.comment).every((c) => c.word === null), 'no comment mention has a literal word').toBe(true);
     expect([calls.filter((c) => c.regionFamily === 'reap').length, calls.filter((c) => c.regionFamily === 'collect').length]).toEqual([117, 41]);

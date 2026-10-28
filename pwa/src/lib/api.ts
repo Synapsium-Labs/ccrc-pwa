@@ -420,8 +420,8 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
      *  (`{ ok, epoch, raced?, warning? }`) — because the authority for an
      *  account's pool is `~/.ccrc/coord.db`'s `pool_edges`, re-read by
      *  `GET /api/pools/epoch`, not this route's own body. A caller that wants
-     *  the resulting tag re-polls `GET /api/accounts`, the same route
-     *  `AccountsScreen` already polls every 20s.
+     *  the resulting tag re-polls `GET /api/accounts`, the route the fleet
+     *  store already polls every 20s (C8, D-6440).
      *
      *  `warning: 'unknown-account'` is a WARNING and not a refusal, on
      *  `setProjectPool`'s exact terms: this box's roster copy can lag the

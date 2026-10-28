@@ -199,12 +199,15 @@ function sweepStubs(home: string, units: Array<{ unit: string; isActive: string[
   return bin;
 }
 
-/** What the pair installer publishes for the tree's ccd: its library pin placeholder rendered to the digest of the
- *  tree's library (D-6913), then its line-2 placeholder swapped, in place, for the marker `markGenerated` writes
- *  (install-time stamping; server/test/ccd-install-stamp.test.ts owns the rule). */
+/** What the pair installer publishes for the tree's ccd: its three pin placeholders rendered to the digests of the
+ *  tree's library (D-6913) and of the docs redactor's two `shared/` files (D-7077), then its line-2 placeholder swapped, in
+ *  place, for the marker `markGenerated` writes (install-time stamping; server/test/ccd-install-stamp.test.ts owns the rule). */
 const stampedCcd = (dir: string): Buffer => {
-  const libDigest = createHash('sha256').update(readFileSync(path.join(dir, 'lib', 'disk-retention.sh'))).digest('hex');
+  const digestOf = (p: string): string => createHash('sha256').update(readFileSync(p)).digest('hex');
+  const libDigest = digestOf(path.join(dir, 'lib', 'disk-retention.sh'));
   const lines = readFileSync(path.join(dir, 'ccd'), 'utf8')
+    .replace(/^__CCD_REDACT_SHA256=stamp-at-install$/m, `__CCD_REDACT_SHA256=${digestOf(path.join(dir, '..', 'shared', 'redact.mjs'))}`)
+    .replace(/^__CCD_REDACT_CLI_SHA256=stamp-at-install$/m, `__CCD_REDACT_CLI_SHA256=${digestOf(path.join(dir, '..', 'shared', 'redact-cli.mjs'))}`)
     .replace(/^__CCD_LIB_SHA256=stamp-at-install$/m, `__CCD_LIB_SHA256=${libDigest}`).split('\n');
   if ((lines[1] ?? '').startsWith('# ccrc:stamp-at-install')) lines.splice(1, 1);
   return Buffer.from(markGenerated(lines.join('\n')));
@@ -1754,7 +1757,10 @@ describe('the verification is actually wired into the deploy, and can observe a 
     // BOTH halves are backed up before the rsync --delete and the publication.
     const rsyncAt = deploySh.indexOf('agent shared deploy ccd "$BOX":ccrc/');
     for (const backup of ['cp -a ~/.local/bin/ccd ~/ccrc-backups/$TS/ccd;', 'cp -a ~/.local/libexec/ccrc/ccd ~/ccrc-backups/$TS/ccd-body;',
-      'cp -a ~/.local/libexec/ccrc/lib/disk-retention.sh ~/ccrc-backups/$TS/ccd-lib-disk-retention.sh;']) {
+      'cp -a ~/.local/libexec/ccrc/lib/disk-retention.sh ~/ccrc-backups/$TS/ccd-lib-disk-retention.sh;',
+      // The docs redactor's two files (D-7077), in the library's guarded form.
+      'cp -a ~/.local/libexec/ccrc/shared/redact.mjs ~/ccrc-backups/$TS/ccd-shared-redact.mjs;',
+      'cp -a ~/.local/libexec/ccrc/shared/redact-cli.mjs ~/ccrc-backups/$TS/ccd-shared-redact-cli.mjs;']) {
       expect(deploySh.indexOf(backup), `not backed up: ${backup}`).toBeGreaterThan(-1);
       expect(deploySh.indexOf(backup), `backed up only after the rsync: ${backup}`).toBeLessThan(rsyncAt);
     }
@@ -1775,6 +1781,9 @@ describe('the verification is actually wired into the deploy, and can observe a 
       // The library the body pins and the publisher places first (D-6913).
       mkdirSync(path.join(home, 'ccrc', 'ccd', 'lib'), { recursive: true });
       cpSync(path.join(repoCcd, 'lib', 'disk-retention.sh'), path.join(home, 'ccrc', 'ccd', 'lib', 'disk-retention.sh'));
+      // The docs redactor's two files (D-7077), which the publisher places beside the library and pins in the body.
+      mkdirSync(path.join(home, 'ccrc', 'shared'), { recursive: true });
+      for (const f of ['redact.mjs', 'redact-cli.mjs']) cpSync(path.join(repoCcd, '..', 'shared', f), path.join(home, 'ccrc', 'shared', f));
       return home;
     };
 

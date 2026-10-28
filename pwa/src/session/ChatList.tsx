@@ -5,7 +5,7 @@
 // wraps react-virtuoso (sticks to the bottom unless the reader scrolled up —
 // then a "jump to latest" pill); ChatListInner is the same renderer as a
 // plain list, exported for jsdom tests.
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso';
 import type { ChatEvent } from '../../../shared/api';
@@ -24,6 +24,7 @@ import {
   type HeightBucket, type Measures, type MeasuredRow, type RowRecord, type RowShape,
 } from './itemHeight';
 import { PendingBubble } from './PendingBubble';
+import { sameRowProps } from './sameRow';
 import { renderToolWell } from './ToolWellText';
 import { groupToolRun, type TranscriptItem } from './toolSummary';
 import { TranscriptRowContext } from './transcriptRow';
@@ -54,6 +55,7 @@ function ChatItemBody({
   askBelow,
   answerLabel,
   onAnswer,
+  day,
 }: {
   item: ChatItem;
   /** Session id — threaded down to clip thumbnails (`clipUrl(id, name)`). */
@@ -67,12 +69,14 @@ function ChatItemBody({
   /** The transcript's Answer control's word (decision `ask-answer-control-says-submit`). */
   answerLabel?: string;
   onAnswer?: () => void;
+  /** The viewer's local day (`lib/clock.ts#dayKey`): a row whose words read the clock draws again when it changes. */
+  day?: string;
 }): ReactNode {
   switch (item.kind) {
     case 'divider':
       return <p className="ts-divider">{item.label}</p>;
     case 'message':
-      return <MessageBubble event={item.event} id={id} streaming={item.streaming} />;
+      return <MessageBubble event={item.event} id={id} streaming={item.streaming} day={day} />;
     case 'tool':
       return (
         <ToolCard
@@ -122,6 +126,9 @@ function transcriptOf(grouping: SkinSet['transcriptGrouping'] | undefined, items
   return grouping === 'tool-runs' ? groupToolRun(items) : items;
 }
 
+/** What one transcript row is drawn from: the set, the row, and every prop a plain item's body reads. */
+type RowViewProps = Omit<Parameters<typeof ChatItemBody>[0], 'item'> & { set: SkinSet | null; item: TranscriptItem };
+
 /** One transcript row, drawn through the set's `TranscriptRow` part when it has one. The part takes no props
  *  (D-5678): it reads its row from `TranscriptRowContext`, with the shared renderer for a plain item. With no part,
  *  a plain item renders as it always has, and a group (which only a set with a row part asks for) as its entries. */
@@ -129,7 +136,7 @@ function TranscriptRowView({
   set,
   item,
   ...rest
-}: Omit<Parameters<typeof ChatItemBody>[0], 'item'> & { set: SkinSet | null; item: TranscriptItem }): ReactNode {
+}: RowViewProps): ReactNode {
   const renderItem = (it: ChatItem): ReactNode => <ChatItemView {...rest} item={it} />;
   const Row = set?.TranscriptRow ?? null;
   if (Row === null) return item.kind === 'tool-group' ? item.entries.map((e) => <div key={e.key}>{renderItem(e)}</div>) : renderItem(item);
@@ -167,6 +174,10 @@ export interface ChatListProps {
   /** Raise the answer sheet. The transcript never answers anything itself —
    *  `EnvelopeSheet` stays the one hardened sender. */
   onAnswer?: () => void;
+  /** The viewer's local day (`lib/clock.ts#dayKey`), from the screen's own clock. The row barrier compares it only for a
+   *  row whose words read the clock (`sameRow.ts#readsClock`, the usage-limit pill), so that row draws again at local
+   *  midnight and no other row does (desktop polish Task C7, review 1128). */
+  day?: string;
 }
 
 /** Plain-list renderer — the virtual list's item model without the viewport
@@ -182,6 +193,7 @@ export function ChatListInner({
   askBelow,
   answerLabel,
   onAnswer,
+  day,
 }: ChatListProps): ReactNode {
   const set = useFrameSet();
   const items = transcriptOf(set?.transcriptGrouping, buildChatItems(events, pending, busy));
@@ -197,6 +209,7 @@ export function ChatListInner({
             onDiscard={onDiscard}
             askPending={askPending} askBelow={askBelow} answerLabel={answerLabel}
             onAnswer={onAnswer}
+            day={day}
           />
         </div>
       ))}
@@ -456,18 +469,12 @@ function inOpeningForm(el: Element): boolean {
  *  and the session it belongs to. */
 interface MeteredRow { item: TranscriptItem; session: string }
 
-/** One rendered row, measured for as long as virtuoso keeps it mounted. */
-function MeasuredItem({
-  item,
-  session,
-  meter,
-  children,
-}: {
-  item: TranscriptItem;
-  session: string;
-  meter: RowMeter;
-  children: ReactNode;
-}): ReactNode {
+/** One rendered row, measured for as long as virtuoso keeps it mounted, and THE ROW BARRIER (desktop polish Task C7):
+ *  it draws its row itself, from the row's own props, and is memoised on `sameRowProps`, so a list render that leaves
+ *  a row's item the same (`sameTranscriptItem`: `buildChatItems` builds every item again over the same events) and
+ *  every other prop the same value draws nothing in that row again. */
+const MeasuredItem = memo(function MeasuredItem({ meter, ...row }: RowViewProps & { meter: RowMeter }): ReactNode {
+  const { item, id: session } = row;
   const el = useRef<HTMLDivElement>(null);
   // The row at this key changes as events arrive (a streaming turn grows); a
   // measurement is paired with what the row is THEN, not when it mounted.
@@ -477,8 +484,8 @@ function MeasuredItem({
     const node = el.current;
     return node === null ? undefined : meter.observe(node, () => current.current);
   }, [meter]);
-  return <div ref={el} className="chat-item">{children}</div>;
-}
+  return <div ref={el} className="chat-item"><TranscriptRowView {...row} /></div>;
+}, sameRowProps);
 
 /** Ordinary prose for the probe, so its average glyph is an ordinary one. */
 const PROBE_TEXT = 'the parser reads each record and the cache keeps the result so a later call returns at once unless the entry is stale ';
@@ -698,6 +705,7 @@ function ChatScroller({
   askBelow,
   answerLabel,
   onAnswer,
+  day,
   column,
 }: ChatListProps & { column: Column }): ReactNode {
   // The GROUPED list when the set folds tool runs (D-5475): every index below — the count, the keys, the seeded
@@ -774,30 +782,36 @@ function ChatScroller({
     };
   }, [meter, opened]);
 
+  // THE SAME TWO FUNCTIONS UNTIL WHAT THEY READ CHANGES (desktop polish Task C7): virtuoso calls `itemContent` again for
+  // every rendered row when it is handed a new one, so a render of this list that changes nothing they read (a screen
+  // render with the same events and the same callbacks) hands it the ones it has.
+  const computeItemKey = useCallback((i: number) => items[i]?.key ?? i, [items]);
+  const itemContent = useCallback((i: number): ReactNode => {
+    const item = items[i];
+    if (!item) return null;
+    return (
+      <MeasuredItem
+        meter={meter}
+        set={set}
+        item={item}
+        id={id}
+        onRetry={onRetry}
+        onDiscard={onDiscard}
+        askPending={askPending} askBelow={askBelow} answerLabel={answerLabel}
+        onAnswer={onAnswer}
+        day={day}
+      />
+    );
+  }, [items, meter, set, id, onRetry, onDiscard, askPending, askBelow, answerLabel, onAnswer, day]);
+
   return (
     <>
       <Virtuoso
         ref={virtuoso}
         className="chat-scroller"
         totalCount={items.length}
-        computeItemKey={(i) => items[i]?.key ?? i}
-        itemContent={(i) => {
-          const item = items[i];
-          if (!item) return null;
-          return (
-            <MeasuredItem item={item} session={id} meter={meter}>
-              <TranscriptRowView
-                set={set}
-                item={item}
-                id={id}
-                onRetry={onRetry}
-                onDiscard={onDiscard}
-                askPending={askPending} askBelow={askBelow} answerLabel={answerLabel}
-                onAnswer={onAnswer}
-              />
-            </MeasuredItem>
-          );
-        }}
+        computeItemKey={computeItemKey}
+        itemContent={itemContent}
         defaultItemHeight={opened.height}
         // Per-row priors. A row that arrives LATER, while the session tails,
         // is past the seeded range and falls back to `defaultItemHeight`.

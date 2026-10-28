@@ -13,6 +13,7 @@ import path from 'node:path';
 import { INSTRUMENT, REFINED, toast } from '@ccrc/ui';
 import type { AccountUsage, RunSummary } from '../../shared/api';
 import { fleetSession } from './fleetFixture';
+import { seventeenLanes } from './seventeenLanes';
 import { pageAt, treeOk, treeResponse } from './docsFixtures';
 import type { DocsVisit } from '../src/docs/useDocsVisit';
 
@@ -214,6 +215,101 @@ describe("Refined's phone header (W2 Task S5)", () => {
     fireEvent.click(all);
     expect(location.pathname).toBe('/accounts');
     expect(location.search).toBe('');
+  });
+
+  // The strip folds at every width (S5b, D-6530): four cards on a phone, whatever its width, and the control's words say
+  // what the fold hides that needs the operator.
+  const stubSeventeen = (): void => {
+    const f = seventeenLanes(nowSec);
+    vi.spyOn(api, 'accounts').mockResolvedValue({ accounts: f.accounts, projected: { wrapper: 'w0', score: 0 }, roster: f.roster });
+  };
+  const cardNames = (strip: HTMLElement): string[] =>
+    [...strip.querySelectorAll<HTMLElement>('.account-gauge')].map((c) => c.querySelector('.account-gauge-label')?.textContent ?? '');
+
+  it("at 390 with 17 lanes the phone header shows four cards and '+13 more · 1 sign-in expired · 1 rate-limited'", async () => {
+    stubSeventeen();
+    atWidth(390);
+    render(<App />);
+    const strip = await within(head()).findByRole('group', { name: /^account usage, highest lane-q 100%/ });
+    await within(strip).findByText('lane-a');
+    expect(cardNames(strip)).toEqual(['lane-a', 'lane-f', 'lane-with-a-very-long-name-q', 'lane-e']);
+    const more = within(strip).getByRole('button', { name: '+13 more · 1 sign-in expired · 1 rate-limited' });
+    expect(more).toHaveAttribute('aria-expanded', 'false');
+    // The end cell holds the control, then All accounts: still one strip on the page.
+    expect(more.closest('.accounts-end')!.lastElementChild).toBe(within(strip).getByRole('button', { name: 'All accounts' }));
+    expect(document.querySelectorAll('.accounts-strip')).toHaveLength(1);
+  });
+
+  // The phone's rule (S5c, phone-strip-tap-panel): the control opens a panel of every lane instead of expanding the strip,
+  // and the stored choice is the desk's alone, so nothing is remembered and a remount finds the strip as it began.
+  const lineNames = (strip: HTMLElement): string[] =>
+    [...strip.children].filter((c) => c.classList.contains('account-gauge')).map((c) => c.querySelector('.account-gauge-label')?.textContent ?? '');
+
+  it('a tap on the control opens a panel of all 17 lanes over a line that stays four, stores nothing, and a remount finds it closed', async () => {
+    stubSeventeen();
+    atWidth(390);
+    const first = render(<App />);
+    const strip = await within(head()).findByRole('group', { name: /^account usage/ });
+    await within(strip).findByText('lane-a');
+    fireEvent.click(within(strip).getByRole('button', { name: /^\+13 more/ }));
+    const panel = strip.querySelector<HTMLElement>('.accounts-flyout');
+    expect(panel).not.toBeNull();
+    expect(panel!.querySelectorAll('.account-gauge')).toHaveLength(17);
+    expect(lineNames(strip)).toHaveLength(4);
+    expect(within(strip).getByRole('button', { name: /^\+13 more/ })).toHaveAttribute('aria-controls', panel!.id);
+    expect(window.localStorage.getItem('ccrc-accounts-strip')).toBeNull();
+    first.unmount();
+    render(<App />);
+    const again = await within(head()).findByRole('group', { name: /^account usage/ });
+    await within(again).findByText('lane-a');
+    expect(again.querySelector('.accounts-flyout')).toBeNull();
+    expect(lineNames(again)).toHaveLength(4);
+    expect(within(again).getByRole('button', { name: /^\+13 more/ })).toHaveAttribute('aria-expanded', 'false');
+  });
+
+  it('a stored choice of expanded is not read below 900: the phone header still folds to its line', async () => {
+    stubSeventeen();
+    window.localStorage.setItem('ccrc-accounts-strip', 'expanded');
+    atWidth(390);
+    render(<App />);
+    const strip = await within(head()).findByRole('group', { name: /^account usage/ });
+    await within(strip).findByText('lane-a');
+    expect(lineNames(strip)).toHaveLength(4);
+    expect(within(strip).getByRole('button', { name: /^\+13 more/ })).toHaveAttribute('aria-expanded', 'false');
+  });
+
+  it('a phone whose grid draws four tracks shows two lines of them: eight cards', async () => {
+    stubSeventeen();
+    atWidth(700);
+    // jsdom lays nothing out: the observer answers the group's width, and the computed style names the tracks it draws.
+    // The strip's computed style is the real one with two properties answered (the accessible-name walk of a group query
+    // asks it for `getPropertyValue` too).
+    const real = window.getComputedStyle.bind(window);
+    const drawn: Record<string, string> = { columnGap: '6px', gridTemplateColumns: '145.5px 145.5px 145.5px 145.5px' };
+    vi.spyOn(window, 'getComputedStyle').mockImplementation((el, pseudo) => {
+      const style = real(el, pseudo);
+      if (!el.classList.contains('accounts-strip')) return style;
+      return new Proxy(style, {
+        get: (target, key: string) => {
+          if (key in drawn) return drawn[key];
+          const value = Reflect.get(target, key, target);
+          return typeof value === 'function' ? value.bind(target) : value;
+        },
+      });
+    });
+    vi.stubGlobal('ResizeObserver', class {
+      private readonly cb: ResizeObserverCallback;
+      constructor(cb: ResizeObserverCallback) { this.cb = cb; }
+      observe(target: Element): void {
+        if (target.classList.contains('accounts-strip')) this.cb([{ target, contentRect: { width: 600 } } as unknown as ResizeObserverEntry], this as unknown as ResizeObserver);
+      }
+      unobserve(): void {}
+      disconnect(): void {}
+    });
+    render(<App />);
+    const strip = await within(head()).findByRole('group', { name: /^account usage/ });
+    await within(strip).findByRole('button', { name: /^\+9 more/ });
+    expect(lineNames(strip)).toHaveLength(8);
   });
 
   it('Refined renders neither FleetHead nor `.fab`; Instrument still renders both', () => {

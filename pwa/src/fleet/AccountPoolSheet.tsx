@@ -12,9 +12,9 @@
 // generation counter and a subscription to the fleet store's `pools` frame,
 // because a project's tag can also change out from under an open sheet via
 // that live frame. There is no equivalent live frame for account pools in
-// this wave — `AccountsScreen` re-measures with its own 20s
-// `GET /api/accounts` poll, the same poll every other fact on that screen
-// already rides — so the write and its toast/remeasure side effects live
+// this wave — `AccountsScreen` re-measures with the fleet store's 20s
+// `GET /api/accounts` poll (C8, D-6440), the same poll every other fact on
+// that screen already rides — so the write and its toast/remeasure side effects live
 // with the caller (`onSet`), and this component stays a plain, easily-tested
 // renderer over whatever `roster`/`current` it is handed. POOL_NAME_RE is
 // checked here purely as a courtesy before a request is ever built; the

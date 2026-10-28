@@ -14,7 +14,7 @@ import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { mkTmp } from './tmpHelpers.js';
-import { CCD, CCD_LIB, CCD_LIB_PIN_PLACEHOLDER, canonicalPython3, installedCcdBody, seedAccountsSh } from './ccdWsHelpers.js';
+import { CCD, CCD_LIB, CCD_LIB_PIN_PLACEHOLDER, CCD_REDACT, CCD_REDACT_CLI, canonicalPython3, installedCcdBody, seedAccountsSh } from './ccdWsHelpers.js';
 import { verifyMarker, markGenerated } from '../../shared/mark.mjs';
 
 const REPO = path.resolve(__dirname, '..', '..');
@@ -30,8 +30,9 @@ const body = (): string => path.join(home, '.local', 'libexec', 'ccrc', 'ccd');
 const sha = (text: string): string => createHash('sha256').update(text).digest('hex');
 
 const lib = (): string => path.join(home, '.local', 'libexec', 'ccrc', 'lib', 'disk-retention.sh');
-/** A fixture body: the pin placeholder the installer renders (D-6913) and one line of its own. */
-const FIXTURE = `#!/usr/bin/env bash\n${CCD_LIB_PIN_PLACEHOLDER}\necho fixture\n`;
+/** A fixture body: the pin placeholders the installer renders (the library's, D-6913, and the docs redactor's two, D-7077)
+ *  and one line of its own. */
+const FIXTURE = `#!/usr/bin/env bash\n${CCD_LIB_PIN_PLACEHOLDER}\n__CCD_REDACT_SHA256=stamp-at-install\n__CCD_REDACT_CLI_SHA256=stamp-at-install\necho fixture\n`;
 
 /** A shipped-tree copy at `<home>/ccrc` holding THIS checkout's real ccd body, library, template and installer. */
 function plantTree(ccdText: string = fs.readFileSync(CCD, 'utf8')): void {
@@ -39,6 +40,10 @@ function plantTree(ccdText: string = fs.readFileSync(CCD, 'utf8')): void {
   fs.mkdirSync(path.join(dir, 'lib'), { recursive: true });
   fs.writeFileSync(path.join(dir, 'ccd'), ccdText, { mode: 0o755 });
   fs.copyFileSync(CCD_LIB, path.join(dir, 'lib', 'disk-retention.sh'));
+  // The docs redactor's two files (D-7077), which the installer publishes beside the library and pins in the body.
+  fs.mkdirSync(path.join(tree(), 'shared'), { recursive: true });
+  fs.copyFileSync(CCD_REDACT, path.join(tree(), 'shared', 'redact.mjs'));
+  fs.copyFileSync(CCD_REDACT_CLI, path.join(tree(), 'shared', 'redact-cli.mjs'));
   for (const f of ['ccd-entry.py', 'ccd-entry-install.py']) fs.copyFileSync(path.join(REPO, 'ccd', f), path.join(dir, f));
 }
 function install(): { code: number; stdout: string; stderr: string } {

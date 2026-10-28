@@ -8,6 +8,77 @@
 
 **Status:** rev 4 (2026-10-22), with the coordinator's corrections from T1a's and S5a's reviews (§Review log). Rev 2 landed after two adversarial reviews (rev 0's three lenses and a refute pass, 54 findings; rev 1's two lenses, 46 findings). Rev 3 adds the operator's later notes and was read by one more; rev 4 adds Track C (C2 to C10) from C0's report and S5a, and the coordinator's later corrections add S5b (R22), and T2g, split from T2f, and T5a, the top search, both on the operator's notes of 2026-10-23 (R28), and the corrections from the reviews of 2026-10-23 and 2026-10-24 (R33 to R46), and the operator's ruling on the desk's lanes (R48: Q13 and Q14), which rewrites T2c and carries S5b's fold to every width (§Review log). Task T0 is this plan's docs PR.
 
+**R112 child-resource disposition (operator, 2026-10-26).** The operator directs: "leverage or release your child workspaces". The remaining five work runs are blocked, with no currently authorized implementation or review to execute. End claim-upkeep-only retention: each worker gets one preservation-only final handoff, then its run closes as unfinished/failed through the server API, never as accepted/done. Preserve existing handoff/evidence records locally outside the child's reclaimable tree before closure; missing records remain missing. Completed review children become eligible for the server's reclamation after their producer closes. No manual cleanup, reaping, cap lift, new tests, source/PR edits, push, merge or rollout is authorized. Product tasks and outstanding findings remain incomplete; future work needs a newly authorized run and fresh claims/review, not revival of these terminal runs.
+
+**R112 execution snapshot (2026-10-26 at 12:05 UTC).** All five preservation manifests and listed file hashes are verified outside reclaimable children; missing/omitted evidence remains disclosed. All fifteen accepted review reports are preserved there too. Runs 802, 803, 822, 875 and 911 closed unfinished/failed with `released:true`, reclamation queued; terminal readback confirms zero open programme runs. It confirms T2c/C6/T1c workers and three C6 reviewers reclaimed; C1/B5 are still projected deferred and twelve completed reviewers pending. The server owns further reclamation; no polling or manual cleanup follows. Product tasks, PRs and acceptance gates remain incomplete and unchanged. Future newly authorized runs are not an automatic review-cap reset or a waiver of any prior stop.
+
+**R113 programme continuation (operator, 2026-10-26).** The operator directs: "ensure you stop STALLING we need this programme to progress to completion". Resume execution of the existing accepted plan through newly authorized runs and fresh children, claims and current-holder consents; R112's terminal rows stay terminal and preserved evidence stays intact. Do not retain idle children as a substitute for an executable next step. Continue uncapped work where prerequisites allow and escalate only concrete new scope or irreversible choices. Historical findings, missing evidence, spent sync exceptions, landing order and all acceptance gates remain binding. This direction is not a blanket review-cap lift.
+
+**R114 one additional T1c review (operator, 2026-10-26).** In response to the exact critical-path cap question, the operator selects "One extra round (Recommended)": authorize ONE additional independent whole-branch review on the T1c continuation run. Carry forward reviews 917, 932 and 939 as three rounds already spent: the total task budget is four, so the fresh continuation has only one remaining round, not a new three-round allowance. Resume implementation and review as needed within existing T1c/R108 authority; unresolved F3, CI, provenance and screenshot gates are not waived. Any necessary new identity or server-binding contract remains a separately stated scope decision, not an inferred implementation grant. C1, C6 and B5 cap stops are unchanged. The coordinator records and enforces this one-round remainder even if the new run's server counter begins at zero. At 14:53 UTC the server accepted fresh work run 1003 (wave 39) and its dispatch: brief queued, worker skill present, no killed-spawn adoption; this proves dispatch, not worker execution. The worker receives immutable local authority snapshots explicitly marked unpublished and exact preservation coordinates. No old row is reopened, no main sync is authorized, and no second dispatch is attempted this turn.
+
+**R115 changed-question keyboard fence (operator, 2026-10-26).** Asked whether the worker may require a fresh click or Go to question whenever the desktop question visibly changes, even when this client did not send the previous answer, the operator selects "Fence Changed Questions (Recommended)". Authorize the proposed client-only correction inside the same five R108 paths: retain one engagement owner, add the existing current screen to the desktop identity, and use the existing release/fence path on a changed screen while engagement or inline-card focus is retained. Phone identity and behavior stay unchanged. This explicitly spends R64 continuity on external screen changes and redraws that produce a new aged-dialog id; no new parser, wire field, store writer, answer bytes or sender is authorized. Red-first changed-aged-question, reused-focused-row and phone-control cases plus their independent identity/fence/phone mutants and a native-key browser case precede any credit. This is NOT the worker's proposed acceptance of F3(b)/(c) as residuals: externally driven byte-identical replacement and already-issued stale-request/server binding remain blocking, not waived or deferred out of acceptance. After this bounded correction, return the minimal committed-source/fixture binding design under R86 before render-only work or the last independent review. A new wire/server implementation still needs a separate concrete scope decision. No path expansion for the disclosed import cycle, main sync, push/PR permission, cap reset, acceptance or landing follows.
+
+**Renewed resource direction (operator, 2026-10-26).** The operator directs: "use the workspaces you already coordinate, or release them". This supersedes the current idle-retention instructions. Research/review dispatch is cap-blocked and the two implementation workers have no executable authorized next step, so request one bounded preservation-only final handoff from each of runs 1003, 1004 and 1018, verify archives outside reclaimable trees, then close each unfinished/failed through the server. Close unstarted review 1012 without claiming a review ran or refunding its committed task-total round. Preservation uses at most 15 active minutes, 400 regular files and 64 MiB per run, existing evidence and an own-branch bundle only, no symlink traversal; missing/omitted history stays disclosed. Workers release only their own live claims and stop their own unstarted upkeep callbacks. No new source work, research trial, test, screenshot, commit, push, PR change, main sync, alternate kickoff or cap bypass. The earlier suggestion to raise the daily setting to 66 is withdrawn: this checkout's policy maximum is 64. Server reclamation remains separate from accepted run closure; no manual cleanup. Strict F3, review budgets, Step 1 and all acceptance/landing gates remain binding. The programme is incomplete; preservation and closure receipts are recorded in the programme ledger before any release claim.
+
+**Renewed release receipts (20:53 UTC).** The server accepted preservation-only instructions 10449 for 1003, 10450 for 1004 and 10451 for 1018 after canonical identity/privacy/diff gates. Mail acceptance is not worker acknowledgment or a completed archive. Unstarted review 1012 closed through the supported API as failed, `released:false`, no child to reclaim; no reviewer ran and its committed task round is not refunded. The three work runs remain open only for verified preservation, then unfinished closure. No physical reclamation or product completion is claimed.
+
+**Renewed release verified (2026-10-26 at 20:58 UTC).** Release-ready deliveries 10455 (1003), 10454 (1018) and 10453 (1004) were fetched/acknowledged. Manifest hashes and every listed file's size/hash/containment match: T1c 104 files / 4,905,866 bytes; T2c 304 / 17,902,193; research 2 / 55,659, manifests additional. Each incremental branch bundle independently verifies, names the expected tip and has prerequisites present on measured `origin/main`. Missing/omitted groups remain disclosed (T1c five/six, T2c four/seven, research one/two); no evidence repair or implementation acceptance. Research reports no trial and zero budget used. Fresh claims show no live child path claims. The server closed all three work runs failed, `released:true`, reclamation queued; final readback confirms these and review 1012 failed with zero open owned programme runs. Physical reclamation still projects deferred, not removed; the server owns it. No further worker upkeep, replacement, reopening, cap retry, PR change or rollout. Future continuation requires separate authority and preserves strict F3, ONE remaining T1c review, T2c's committed budget and Step 1 hold. The programme is retired/incomplete. A fresh standalone documentation claim precedes these final ledger edits after the former run-linked claim ceased to be live.
+
+**Product continuation (operator, 2026-10-27).** The operator directs: "Please resume and take the product work to completion". This supplies the new continuation authority required after the renewed release; every terminal row stays terminal. Resume the accepted plan through new genuine work runs, fresh claims and current-holder consents, without resetting task-review budgets, waiving evidence/landing gates or accepting strict F3 residuals. Fresh server readback confirms zero open owned runs, no outstanding mail/questions and physical reclamation of the three released continuation children. The next executable critical-path task is a new wave 42 for the R118 call-bound answer-channel feasibility prerequisite. The preservation receipt reports zero research budget used; carry the SAME one allowance of 30 active minutes and six sequential trials, each at most 45 seconds, with the original isolation/no-source/no-publication limits. No additional allowance or implementation contract is granted. A supported invocation/isolation/auth blocker must be reported as unmeasured, not bypassed. Independent review precedes downstream reliance, leaving T1c's ONE final task review untouched. The installed lifecycle reference now describes concurrency-only capacity; this is not a measurement of the running server's cap policy, whose actual dispatch response remains authoritative. Coordinator intent and a fresh standalone claim on these two documents were accepted before this amendment. These latest amendments remain local/unpublished; the child receives a self-contained brief and immutable snapshots, not a claimed committed authority ref.
+
+**Continuation dispatch receipt (2026-10-27 at 05:48 UTC).** The server accepted fresh research run 1033, wave 42, and ONE normal dispatch request: `ok:true`, `briefQueued:true`, `resumed:false`, `adopted:false`, worker skill present. This proves queued delivery and a fresh binding, not worker acknowledgment, trial execution or feasibility. No daily-cap refusal occurred on this request; no capacity policy change is inferred. End the turn for worker mail. The original allowance, independent verification, strict F3 and T1c's ONE remaining task review stay unchanged; no implementation, publication, merge or rollout is claimed.
+
+**Research handoff receipt (2026-10-27 at 05:58 UTC).** Delivery 10651 was fetched and acknowledged. Independent branch metadata matches the worker's unchanged `4d41689dcdd10212a9ec8d61d9b9de35947def7a`, and GitHub lists no PR for its workspace branch. The server accepted the exact fingerprint into awaiting-review after the legal working marker; only then were the three declared research items settled. This verifies identity and the handoff claim, not feasibility or product completion. The worker reports one isolated trial ending at an authentication boundary, with runtime answer binding unmeasured. Its protocol/source assertions remain attributed; the coordinator has not read the private research report. No credentialed retry, synthetic transcript/resume experiment, implementation or research-budget reset is authorized. Dispatch a separate independent research review against the original bounded brief and immutable local authority; T1c's ONE remaining implementation review is untouched. Fresh standalone documentation claim 2691 precedes this amendment. The research report and scope recommendations are for the reviewer, not coordinator acceptance from the envelope alone.
+
+**Research review opening (2026-10-27 at 06:02 UTC).** The server accepted separate review run 1035 naming research work run 1033. It commits the first research-review round, not T1c's final implementation review. The prepared brief requires the held-out three Opus/high lenses and Sonnet/high refutation, with a Sonnet/high reviewer main loop. It is read-only and time-bounded; no new protocol trial, credentials, transcript experiment or implementation. A privacy guard stopped the first local brief template before any open or dispatch because its absolute evidence coordinates matched private-name rules. The corrected brief uses measured common-directory-relative locators and the supported completion-mail fetch for the report; the same full gate then passed. No scan waiver or blocked outgoing send occurred. Immutable authority snapshots predate this receipt intentionally. Review opening is not reviewer execution or accepted findings; one normal dispatch follows.
+
+**Research review dispatch receipt (2026-10-27 at 06:03 UTC).** ONE normal supported dispatch of review 1035 returned `ok:true`, `briefQueued:true`, fresh binding, no killed-spawn adoption and worker skill present. This proves queued review delivery, not reviewer acknowledgment, panel execution, findings or feasibility. Work run 1033 remains awaiting-review and the coordinator has not read its research report. End the turn for review mail; do not poll, start another review or grant the proposed credentialed/transcript continuation. Strict F3, original research bounds and T1c's last implementation review remain unchanged. No test suite, source edit, commit, public post, merge or rollout occurred on this wake.
+
+**Research review close and coordinator ruling (2026-10-27 at 06:26 UTC).** Delivery 10664 was fetched/acknowledged. The server accepted review 1035's exact `reviewedTip:4d41689dcdd10212a9ec8d61d9b9de35947def7a` and private report locator after its legal working marker, returning done, released and reclamation not queued because the report is still live. Only then did the coordinator read that accepted review; the worker research report remains unread by the coordinator. Fresh standalone claim 2695 is live for these two documents. Uphold F1/F2/F3 as important reporting/isolation defects and require A1/A2/A3's factual corrections. Research is not accepted as a demonstrated call-bound answer channel; strict F3 remains blocking.
+
+- **F1 upheld:** the trial inherited live ancestor instructions and skill listings despite fixture HOME and a cleared environment. That boundary is not acceptable for another trial. Keep the contaminated evidence private, in place and undistributed; no copying its contents, deletion, cleanup or new transcript inspection is authorized. Report the contamination and unknown settings/hook discovery honestly. The accepted review found no copied credentials, but that does not establish complete isolation or prove which live settings were read. No further runtime trial is authorized under this failed boundary.
+- **F2 upheld:** withdraw the strong supported-binding headline. Official noninteractive documentation, interactive applicability, correlation identity and actual answer application are separate claims. An answer map keyed by question text is not an answer keyed by the deferred tool-call id. The invocation-binding claim remains an unsupported inference, not runtime evidence. Multiple documented answer routes do not establish applicability to the existing interactive fleet path.
+- **F3 upheld:** a stopped authentication trial does not make readable documentation unavailable. Correct the documented 600-second command-hook default, cancellation/output-discard behavior, normal-permission-flow continuation on PreToolUse timeout and versioned failure-blocking option; do not call timeout an automatic answer or safety guarantee. Attribute PermissionRequest's missing tool-use id to the official context too. The review's line saying five trials conflicts with its repeated one-of-six account; require an explicit accounting correction, not five executed trials or a reset.
+- **A1/A2/A3 required reporting corrections:** distinguish actual pane-row checks from a nonexistent transcript-alignment gate and correct the latch description; inventory existing extra fixture side effects by neutral relative name/size/hash without inspecting or quoting transcript contents; disclose unretained exit/elapsed evidence and distinguish an assembled turn from measured API duration. Missing runtime controls remain missing. The three refuted panel readings stay refuted; existing timestamp/restamp owners must not be duplicated by a later design.
+
+**Bounded correction direction, pending delivery.** Send run 1033 back through the legal working edge, then one fix-round mail, not dispatch. This is completion of the original research report only: official-doc reading and private report/inventory correction, no source/tracked edit, executable/harness invocation, credentials, resume, pane/tmux/transcript experiment, new trial, public post or new design panel. Cap additional active correction work at 10 minutes AND the original cumulative 30-minute allowance, whichever comes first; preserve the same single executed trial and do not promise an exact unused balance from approximate timing. Stop earlier if the original allowance cannot be established. Return a corrected private report, new-file hashes, omissions, cumulative accounting and unchanged branch/no-PR fingerprint for a fresh independent research review; do not rewrite the accepted review. This uses no T1c implementation-review allowance and creates no new implementation or safety contract.
+
+**Review execution accounting.** The accepted report declares three Opus/high lenses and 23 Sonnet/high refuters, 26 completed agents, no dead/empty lenses, about 289 seconds of panel wall time and about 2.4 million subagent tokens. These are reviewer-reported execution figures, not a future fan-out recommendation. Its rough 15-20 minute wall estimate is contradicted by server lifecycle records: open to close is 871,768 ms (14 minutes 31.768 seconds), an outer bound including dispatch and coordinator close latency; dispatched to close is 809,146 ms. This establishes an elapsed upper bound below the 15-active-minute limit for work inside the review run, not an independently logged active-time series or sum of parallel-agent time. No replacement panel is needed to repair that rough estimate. No test suite, source edit, commit, push, acceptance, merge or rollout is claimed.
+
+**Research correction delivery receipt (2026-10-27 at 06:30 UTC).** Fresh identity, live claim 2695, unchanged worker tip and closed review state were measured before the supported send-back. The server accepted run 1033 into working using its verified unchanged-branch/no-PR fingerprint; one fix-round mail was then accepted as mail 10673. No redispatch, clear, replacement worker or new review was opened. The exact accepted private report locator is used only as the protocol-required first line and single artifact; all remaining outgoing prose, both complete changed documents, retained reports, tracked tree and diff checks passed the canonical gate in the same command before sending. Mail acceptance is queued instruction, not worker acknowledgment or completed corrections. End the turn for the bounded docs-only response; no further trial or implementation authority follows. The previously settled three items describe the original handoff, not completion of this correction round.
+
+**Corrected research handoff receipt (2026-10-27 at 06:41 UTC).** Delivery 10675 was fetched and acknowledged by delivery id. Fresh workspace-branch metadata matches the unchanged `4d41689dcdd10212a9ec8d61d9b9de35947def7a`; independent GitHub metadata lists no PR. The server accepted the exact corrected handoff fingerprint into awaiting-review. The worker claims a NEW private report supersedes the original headline and completion claim, maps F1/F2/F3/A1/A2/A3, preserves contaminated evidence unchanged, and records one cumulative trial with about three additional active correction minutes after an approximate four-to-five original minutes. These are attributed claims, not verified fixes or measured active-time logs; the coordinator has not read either worker report. No new trial is claimed or authorized. A NEW independent research review will assess the correction and its provenance within a 15-active-minute read-only bound, using the prescribed held-out panel and immutable local/unpublished scope snapshots. Do not inspect or redistribute contaminated evidence contents; metadata/hash checks do not repair failed isolation. Fresh standalone documentation claim 2701 follows a conflict check. Strict F3 and T1c's ONE remaining implementation review stay unchanged; no implementation, publication, acceptance, merge or rollout follows.
+
+**Corrected research review opening (2026-10-27 at 06:46 UTC).** The server accepted NEW review run 1037, kind review, naming work run 1033. This commits the second separate research-review round, not T1c's remaining implementation review. The full bounded read-only brief and immutable authority snapshots passed canonical privacy/diff guards before opening; fresh identity, live claim 2701 and no in-flight research review were measured. The reviewer may read the NEW corrected report and accepted prior review, official docs and exact-ref source; contaminated original evidence remains metadata/hash-only, not content inspection or copying. The prescribed three Opus/high lenses and Sonnet/high refuters run under a Sonnet/high main loop, workflow for that panel only, within 15 active minutes. Review opening is not execution or acceptance; one normal dispatch follows.
+
+**Corrected research review dispatch receipt (2026-10-27 at 06:48 UTC).** ONE normal supported dispatch for 1037 returned `ok:true`, `briefQueued:true`, `resumed:false`, `adopted:false`, `spawnState:null` and reviewer skill present. Fresh identity, live claim 2701, work awaiting-review and review planned were measured before canonical complete-brief/full-document/retained-report/tree privacy and diff gates and the request. This is queued delivery, not acknowledgment, panel execution, verified corrections or call-bound safety. End the turn for actual reviewer mail; do not poll or launch duplicate research, runtime work or T1c's final implementation review. No source/test edit, suite, screenshot, commit, push, public post, acceptance, merge or rollout occurred.
+
+**Corrected research review close and ruling (2026-10-27 at 07:04 UTC).** Delivery 10693 was fetched/acknowledged; the server accepted review 1037's exact unchanged-tip/report fingerprint after the legal working marker, returning done/released with its report still live. Only then was the accepted report read; neither worker report was read by the coordinator. Uphold two important findings: the same-id latch correction is false at the reviewed source, and the SDK alternative omits documented per-call identity/reply-correlation fields. Review 1035 and the coordinator's first A1 correction direction shared the latch overstatement; explicitly supersede those assertions without rewriting either accepted review. A fresh parsed ask does NOT always replace a non-null latch: on a same-id parsed repeat with no upgrade/repaint, the previous ask is retained and no message emitted. The SDK TypeScript reference documents `toolUseID` and `requestId`; their omission is material to this identity-focused research even though one duplicate lens treated it as minor. These are documented correlation facts, not proof of safe answer application or compatibility with existing interactive sessions. No runtime guarantee or implementation follows.
+
+**Correction disposition.** Prior isolation disclosure, headline withdrawal, timeout documentation, inventory disclosure, exit/timing distinction and one-trial accounting are corrected to the extent independently reviewed; isolation itself is NOT repaired, and side-effect hashes were not all recomputed. Retain minor advisories on the second multiselect refusal and official-doc/inference labelling. Keep refuted items refuted. The historical requirement to establish allowance BEFORE correction is not evidenced and is not retroactively satisfied by approximate estimates. Fresh server timestamps now conservatively bound the authorized original work window at 378,079 ms and the first correction window at 160,369 ms, total 538,448 ms, not an active-time log. For work confined to those windows, the original 30-minute allowance has at least 1,261,552 ms remaining and the aggregate ten-minute correction allowance at least 439,631 ms. Authorize one further reporting-only correction of at most FIVE active minutes, also within both original cumulative limits; establish accounting before work and stop if other work prevents that bound. No trial, credentials, transcript/content inspection, runtime, implementation, public post or allowance reset. A NEW final private report needs a NEW independent research review; the server last measured two research rounds of three. T1c's ONE remaining implementation review is untouched.
+
+**Review provenance.** The accepted report attributes 39 completed agents (three Opus/high lenses, 36 Sonnet/high refuters), about 330 seconds panel wall time and about 3.6 million subagent tokens, with no errors, empty/unverified lenses or unexamined findings. Four confirmed lens entries consolidate to the two important findings; two advisories and 16 refuted entries remain recorded. Review open-to-close was 766,404 ms, below 15 minutes, not an active-time series. Graph-first was not performed by the reviewer despite a disclosed stale graph; retain the method limitation, not retroactive compliance or a replacement panel. Fresh standalone documentation claim 2708 follows conflict checking. These amendments remain local/unpublished; no tests, source edits, commits, push, acceptance, merge or rollout.
+
+**Second reporting send-back receipt (2026-10-27 at 07:07 UTC).** Fresh identity, live documentation claim 2708, unchanged worker tip and closed review 1037 were measured before the server accepted work 1033 into working at its verified fingerprint. One supported fix-round mail was accepted as 10701; no redispatch, clear, new worker/review or runtime trial. The accepted review's exact private locator is limited to its required first line/single artifact; all ordinary outgoing prose and both complete changed documents, retained reports, tracked tree and diff passed canonical guards. This is queued instruction, not acknowledgment, completed correction or accepted evidence. End the turn for the FIVE-active-minute reporting response. Both cumulative limits, private unchanged contamination disposition, strict F3 and T1c's last review remain unchanged.
+
+**Final research handoff receipt (2026-10-27 at 07:19 UTC).** Delivery 10706 was fetched and acknowledged by delivery id. Fresh branch metadata matches unchanged `4d41689dcdd10212a9ec8d61d9b9de35947def7a`, the worker tree is clean and independent GitHub metadata lists no PR. The server accepted the exact final handoff fingerprint into awaiting-review. The worker claims a NEW final private report corrects the latch predicate, documented SDK correlation fields, refusal order and quote/inference separation while preserving both prior reports/reviews and unopened contaminated evidence. It discloses a seconds-long private memory-note edit outside the previously bounded windows, retains the missing first-round precheck, and reports a new interval of 07:08:09-07:09:33 UTC with accounting checked at 07:08:13. Those are attributed claims for review, not verified compliance or an active-time log. One cumulative trial remains claimed; no new trial is authorized. The coordinator has not read any worker report. A NEW independent research review must assess the final report, complete committed predicates, official SDK context and whether accounting established sufficient allowance before substantive work despite the disclosed extra work. This is the third research round if opened, not a reset or T1c's last implementation review. Standalone claim 2710 follows a fresh conflict check; prior claim 2708 is released. No implementation, publication, acceptance, merge or rollout follows.
+
+**Final research review opening (2026-10-27 at 07:23 UTC).** The server accepted NEW review 1038 naming work 1033 after exact final-fingerprint acceptance, fresh identity/live documentation claim 2710/no-in-flight-review checks and canonical complete-brief/full-document/retained-report/tree privacy and diff gates. This commits the THIRD separate research round; no additional round or T1c implementation-review spend is inferred. Immutable local/unpublished authority snapshots predate opening. The reviewer reads the NEW final report, accepted reviews and permitted clean reporting baselines, official docs and exact-ref source. Original contaminated report/evidence and side effects are off limits, including rehashing; prior inventory is referenced, not repaired by reopening contamination. The prescribed three Opus/high lenses and Sonnet/high refuters run under a Sonnet/high main loop within 15 active minutes, workflow only for that panel. Complete latch predicates, SDK correlation versus application, quotation/inference and timing/accounting require independent assessment. Opening is not reviewer execution or verified corrections; one normal dispatch follows.
+
+**Final review brief-size refusal (2026-10-27 at 07:25 UTC).** The first dispatch request for planned review 1038 passed privacy/diff gates but was refused `oversize`: 8,998 brief bytes plus the 104-byte kickoff prefix exceeded the 8,192-byte mail-body cap. This is a coordinator briefing-size defect, not capacity refusal or ambiguous launch. The documented early refusal leaves the run untouched/planned and spawns nothing. Preserve that request/response; shorten repetition while retaining panel, scope and evidence restrictions, then resend on the SAME review 1038 after fresh checks. The resized brief measures 7,723 bytes, 7,827 with the measured prefix. No new review round or worker is opened.
+
+**Final research review dispatch receipt (2026-10-27 at 07:26 UTC).** After the documented oversize refusal, fresh identity/live claim 2710/unchanged worker tip and run readback confirmed work 1033 awaiting-review, research three rounds of three, and review 1038 still planned with no bound session or dispatch timestamp. The resized request passed canonical complete outgoing/full-document/retained-report/tree privacy and diff gates. The server accepted dispatch 1038: `briefQueued:true`, `resumed:false`, `adopted:false`, `spawnState:null`, reviewer skill present. Two HTTP requests are retained: one early oversize refusal, then one accepted dispatch of the SAME review. This is queued review delivery, not acknowledgment, panel execution or verified corrections. End the turn for actual reviewer mail; no polling, duplicate review, further trial or T1c last-review spend. Original contaminated evidence remains off limits and unchanged. No test, source edit, screenshot, commit, push, public post, acceptance, merge or rollout occurred.
+
+**Final research review close and ruling (2026-10-27 at 07:42 UTC).** Delivery 10717 was fetched/acknowledged; the worker branch remains unchanged and the server accepted review 1038's EXACT reviewed-tip/report close after its legal working marker: done/released, reclamation deferred because its report remains live. Only then did the coordinator read the accepted review, not any worker report or implementation diff. Uphold F1/F2 as important reporting incompleteness, not a reversal of the blocking conclusion. F1: the poll path has an upstream feed latch (`server/src/sessionFeed.ts:252`, `server/src/sessionFeed.ts:277`) in addition to the correctly transcribed `nextDialogFrame` predicate; same-id/non-null-ask latching skips fresh transcript enrichment and reattaches the old ask. Answer-route frames also enter the stream gate directly, so neither owner can be collapsed into the other. F2: parsed menu identity derives from labels plus title (`server/src/pane/dialog.ts:461`); even changed body, descriptions or question text can share that identity. This is accepted static source evidence, not an executed replacement test. Source not read by the worker is an omission, not proof that the fact cannot be established statically.
+
+**Correction disposition and limits.** The final predicate transcription, 13-step answer refusal order and SDK correlation correction are supported within the accepted review's limits. Qualifying upgrades/repaints EMIT frames; the coordinator's earlier compressed wording must not imply otherwise. Pane parsing and transcript ask enrichment are distinct. Retain advisories on repaint qualifiers, range/null-key refusals, timeout exceptions and quote/inference boundaries; optional permission-result identity fields are correlation, not safety proof. The askAt/restampAsk omission was refuted by majority: do not require another report merely to repeat them when no next-scope recommendation is made. Retain the review's static owner findings (`CoordStore.restampAsk`, its watcher callers, askKey and the existing askAt compare-and-swap) as limitations to consolidate in any later authorized design, never new implementation authority. Other refuted entries stay refuted; factual gaps do not become proven compliance. No further correction, research trial or fourth research review is authorized. Research rounds are THREE of THREE; T1c's ONE final implementation review remains unspent.
+
+**Accounting and review-method disposition.** Retained server windows/arithmetic reproduce, but unknown out-of-window work is not zero and the first correction's pre-work check remains unproved. The latest start precedes its claimed accounting check by four seconds; the additional note-work duration, full cumulative active total and latest route are not independently established. Stop/elapsed are carried in the handoff, not fully recorded in its report. Do not inspect private note/reasoning/transcript content or use file access times as proof of who read what. Reviewer attributes 41 completed agents (three Opus/high lenses, 38 Sonnet/high refuters), 219,344 ms panel wall time, about 3.4 million subagent tokens and 213 tool uses, zero errors/empty/unverified lenses or unexamined findings. Actual model/effort beyond requests is not independently verified. Reviewer reports about 6.5 active minutes; open-to-close was 925,894 ms, dispatched-to-close 747,431 ms. The former exceeds 15 minutes including queue/coordinator latency; neither interval is an active-time log or independent proof of a breach. Graph-first was again not performed despite a stale graph. One lens listed the private worker directory and stat'ed four off-limits files; no content read/copy/hash is reported. Record this metadata boundary violation, disregard its off-limits measurements for acceptance, and preserve the report unchanged. Official docs were panel-fetched through a summarising fetcher. No runtime/suite/screenshot ran, and safe answer application remains unmeasured.
+
+**Retention blocker, not another reporting loop.** Accepted reviews 1035/1037/1038 are copied verbatim and size/hash-verified outside reclaimable children; no worker report or contaminated original evidence was opened/copied/rehashed. Research is not accepted as a demonstrated channel. Work 1033 remains awaiting-review with no source claim or active dispatch slot, solely because closing its producer makes the server delete its clips/temp evidence. That conflicts with the existing private, IN PLACE, unchanged, undistributed disposition; do not silently override it with normal reclamation. Freeze research/corrections and send an explicit waiting instruction, not a redispatch or cap-bypassing review. Operator disposition of the contaminated artifact retention is required before producer closure; recommend quarantine in place without content inspection, redistribution or deletion. A later call-bound integration/compatibility contract is a separate scope decision; more reporting or terminal rereads cannot discharge strict F3. Fresh standalone claim 2715 covers these local/unpublished amendments. No cap lift, source/test change, publication, acceptance, merge or rollout.
+
+**Stop-and-wait delivery receipt (2026-10-27 at 07:46 UTC).** After fresh identity/live claim 2715/unchanged tip and terminal-review checks, canonical full-document/outgoing/retained-report/tree privacy and diff gates passed. The server accepted mail 10722 to work 1033: explicit wait on coordinator/operator evidence-retention disposition, STOP research/corrections, no acknowledgment-only reply or new upkeep. This is queued instruction, not worker acknowledgment or producer release. Work remains awaiting-review; no working advance, correction/review opening, evidence access or deletion occurred. Accepted review preservation is complete; original contamination remains in place. These two documents remain the only dirty tracked files and stay local/unpublished; final guards and claim-release outcome are retained in private receipts.
+
 **Why this wave exists.** The operator reviewed the desktop experience (Refined, about 2000 px wide, a child session waiting on a question) and was "not super happy". They accepted this defect list in this order ("Order accepted, please proceed"). Most of what they saw is data and vocabulary, not styling: the screen shows scraped terminal output and internal words to the operator. While the plan was being written they added three more: "I still have bugs with Return not being pressed in the console", "new sessions creation is super slow, I see for a long time delayed loading screen", and "the real estate screen use in desktop mode on instrument scheme is currently suboptimal". The first two are Track B; the third is T2e. Later the same day they added more: the gauges sorted most free first in a full-width row (T2c), a way to dismiss "update available" until a newer release (T2a part (b)), a way to hide the right-side panel (T3e), colour in the chat (T4a), Instrument on a desk and Refined on a phone by default (W2's S18, brought forward), Working below Done when grouped by status (T3f), and "all UI functions feel super sluggish" (Track C). On 2026-10-23 they asked that the search bar at the top find coordinators' workspaces and projects (T5a).
 
 **Operator rulings this plan builds on (2026-10-22):**
@@ -464,7 +535,7 @@ Every Modify path exists at the base except `PhoneHeader.tsx` and `pwa/test/refi
 - Create `pwa/src/session/AskSurface.tsx`, `pwa/test/ask-inline.test.tsx`, `pwa/browser/ask-inline.browser.test.ts`.
 - Modify `pwa/src/session/DialogSheet.tsx` and `EnvelopeSheet.tsx` (every container goes through `AskSurface`), `AskParts.tsx` (Escape inside the surface), `useAskKeys.ts`, `useEscapeInterrupt.ts`, `pwa/src/screens/SessionScreen.tsx` (a keyed `ask` slot; `askBelow`), `pwa/src/session/ChatList.tsx` (threads `askBelow`), `ui/src/components/tool-card.tsx` and `tool-card.stories.tsx` (a desk story), `pwa/src/session/Composer.tsx` (the local refusal line), `pwa/src/session/chat.css`.
 - Modify, each intended change in its own commit: `ask-keys.test.tsx`, `ask-live.test.tsx` (≈:150-200), `sheet-focus.test.tsx` (≈:213), `dialog-sheet.test.tsx` (≈:277-295, desk cases), `skin-switch.test.tsx`.
-- R64 adds `pwa/src/command/useShortcuts.ts` and new `pwa/test/ask-shortcuts.test.tsx`; extend only the existing focused-control guard. R69 may extend the existing `pwa/src/stores/session.ts` lifecycle/identity seam for explicit clear generations, claimed first. No new wire field, parser or sender; `command-layer.test.tsx` is run-only, without T5a edit consent.
+- R64 adds `pwa/src/command/useShortcuts.ts` and new `pwa/test/ask-shortcuts.test.tsx`; extend only the existing focused-control guard. R69 may extend the existing `pwa/src/stores/session.ts` lifecycle/identity seam for explicit clear generations, claimed first. R89/R96 additionally permit the narrow existing action-hold hunks in `pwa/src/session/PendingBubble.tsx`, with the owned ask tests and fresh claims/consents; they do not broaden store semantics. No new wire field, parser or sender; `command-layer.test.tsx` is run-only, without T5a edit consent.
 
 **The shape.**
 - **One controller, two containers.** `DialogSheet` stays the one controller and sender. Every container it renders goes through `AskSurface`, which reads `useDesk()` (never a `(min-width: 900px)` literal, `sheet-desktop-arm.test.tsx` ≈:203): below 900 the T1b `Sheet` (unchanged phone behaviour); at ≥900 an inline card, `<section data-ask-surface aria-labelledby=<the question's id>>`. Exactly one container is mounted at any width. Every branch (approval, review, multiSelect, menu) renders inline at the desk, so the desk never shows the old modal for a menu.
@@ -474,7 +545,7 @@ Every Modify path exists at the base except `PhoneHeader.tsx` and `pwa/test/refi
 - **Keys act only inside the card.** `useAskKeys` scopes to the nearest `[data-ask-surface]` (today `[role="dialog"]`, ≈:93). Its page-body arm (`onPage`, ≈:93-96: a key whose target is the page answers the open sheet) applies to the phone sheet only; inline, a digit, an arrow or Enter acts only when the event's target is inside the card. Arrival never auto-focuses. R64 narrowly permits deliberately engaged keyboard control to continue across question-to-question, question-to-review and review-to-question within the SAME logical ask, without another click. One engagement owner serves the controller's consumers. A different ask, replacement or clear ends engagement, including a byte-identical clear/re-ask in one React batch; a per-screen dialog id is not a logical ask identity. Never reclaim deliberate external focus. Use existing envelope/dialog/lifecycle owners, with one client-side clear generation if needed, not a second content parser or a wire change (R69).
 - **Page shortcuts (R64).** The existing `useShortcuts` guard suppresses navigation, help and chords only while focus is inside the mounted inline card. Page-body, composer and unrelated control behaviour stays unchanged; no global block merely because a card exists.
 - **Escape never declines a question by accident.** Today the modal makes `useEscapeInterrupt` stand down (≈:33). Inline: the card's own Escape calls `preventDefault()` and does nothing else (the interrupt skips a prevented event, D-5235); and `useEscapeInterrupt` also stands down while an inline ask surface is mounted, so an Escape from the page body or a transcript row on a busy session sends nothing. (The composer's Escape already never interrupts: the hook skips a textarea, ≈:34-38; that case stays a regression pin.)
-- **The composer while a question is up.** Inline, the composer stays reachable. While ANY ask surface is mounted, Send is locally deferred: the composer keeps the text, disables Send, makes no request and shows the existing question-first sentence ("Claude is asking a question — answer that first, then send.", `pwa/src/lib/api.ts` ≈:55) under the field. This includes fixture 7 without a pane menu; it does not claim that the server would always refuse `dialog-open`, and changes no server policy (R63, R69).
+- **The composer while a question is up.** Inline, the composer stays reachable. While ANY ask surface is mounted, Send is locally deferred: the composer keeps the text, disables Send, makes no request and always shows the existing question-first sentence ("Claude is asking a question — answer that first, then send.", `pwa/src/lib/api.ts` ≈:55) ABOVE the field, inside the composer (R93 explicitly amends the earlier under-field placement). The textarea and Send stay unmoved; no reserved blank footer or hidden key hints. This includes fixture 7 without a pane menu; it does not claim that the server would always refuse `dialog-open`, and changes no server policy (R63, R69, R77). R89 extends this desktop hold to Retry, Replace draft and Append anyway; R96 extends it to the existing Send it recovery for enter-ignored and verify-failed with a submittable draft. Disable each action, make no request, retain draft/pending/conflict state, and never automatically resend after the ask leaves. Stop, Discard, Cancel, phone behaviour and server recovery eligibility are unchanged.
 - **Dismissal.** The inline card has no "Not now": it covers nothing. The phone sheet keeps its dismissal.
 - **Spec amendment (operator ruling 2026-10-22, D-6326).** The two-skins spec §6 places "inline-answer Needs-you cards … one card on the ask sheet's option rows" in W4 (F2), and the sheet plan put moving the ask sheet out of scope (its ≈:620). This task brings the session pane's inline answer forward. F2's other homes (the desk's empty-detail home and the top of the phone Inbox) stay W4.
 
@@ -539,6 +610,74 @@ R56 authorizes exactly one fresh-fetch `git merge origin/main` into T1c's worksp
 R64/R69 are acceptance requirements, not new operator holds: aged-ask continuity, useful visible raise, explicit-clear reset and focused-card shortcuts must hold. Refresh the full 112 after cells (seven widths, two skins, two modes, four fixtures) at the new runtime; genuine before evidence may be reused, labelled by source revision. Add interactive aged/batched-clear/long-raise/in-flight probes. Geometric stability does not prove node identity. Preserve original first-full and red-first history; no second full local PWA or full local server run.
 
 Run the new `test/ask-shortcuts.test.tsx` with the existing targeted ask/store suites and production browser cases. The active fix round preserves all older table rows and executes each new guard independently; an intentionally equivalent or unobservable arm is labelled, not counted as a named assertion red.
+
+**Later operator amendments and current hold (2026-10-25).** R89/R96 require red-first production-controller
+fixture-7 cases for each held action, both Send it eligibility states, state preservation and normal deliberate
+use after the ask leaves. R93 requires production-browser geometry across desktop widths, skins, modes,
+pointers, wrapping and zoom, with stable textarea/Send positions and unchanged phones; moving only the sentence
+back below the field must independently red the geometry guard. A disabled same-render button may make its
+additional press guard unreachable: report a measured equivalent survivor honestly, not synthetic red credit.
+
+R86 authorizes committed-source/fixture provenance DESIGN for hooked and aged questions only, not runtime
+experiments, live captures, implementation, a new identity mechanism or a residual waiver. F3 remains open:
+two different aged asks without an observed clear can share identity. R99's corrected design would end THIS
+client's engagement at answer INITIATION, not at a reply frame; it costs R64's uninterrupted continuity and
+protects only that local transition. It neither detects externally driven identical replacement nor revokes
+an issued stale request nor strengthens server answer-target binding. R102's actual operator choice selects
+the explicit-reengagement DESIGN direction and its continuity cost. R105/R106 then select pointer press or
+Go to question ONLY, not Tab; a Go to question or locked click during flight must not pre-authorize the next
+screen, which requires a new deliberate action. Tab retains ordinary focus movement. Exact desktop OwnWords
+focus isolation and phase-correct Enter/native-activation tests still need the short reviewed amendment before
+implementation. Preserve phone retained-Other focus and distinguish retained from newly assigned focus. Do not
+claim F3 closed or external-replacement/stale-request protection from this local reset.
+
+**R108 bounded implementation amendment (2026-10-25).** The corrected design may now be implemented
+within `useAskKeys.ts`, `DialogSheet.tsx`, `AskParts.tsx`, and the owned ask-inline jsdom/browser tests only.
+Release synchronously at the desktop send-initiation gate; fence native key phases and retain ordinary Tab
+focus movement without unlocking. Only an eligible pointer press or Go to question unlocks. Capture raise
+eligibility AT THE ACTION, not only in a later effect: an ineligible raise is consumed without unlocking even
+if its effect runs after the reply. Test that deferred-effect ordering with its own mutant. No unsolicited
+screen-transition focus; native Tab and deliberate raise focus are exceptions that do not imply unlocking.
+Inline OwnWords uses deliberate-open focus, sheet/default retains current chosen-change and retained-Other
+focus. Re-ground attributed source assumptions and fresh claims/consents before edits; any required path
+expansion stops for instruction. Execute test-first pins, independent mutants, phase-correct native-key tests,
+phone/crossing observations and refreshed interactive evidence; preserve original evidence and equivalent
+survivors. No second full local suite, new identity/server binding, main absorption or F3 waiver.
+
+The prior `fac0f6756` fingerprint is verified, not implementation acceptance. R108 resumes work on a new head;
+its fresh whole-branch server review is still blocked by cap three rounds against three. No reviewer was
+created by the refusal. An actual per-run operator lift is required; no old review, direct Agent/Workflow or
+coordinator diff reading supplies acceptance. Step 1 is incomplete; no landing or rollout is authorized.
+
+**R115 current continuation amendment (2026-10-26).** R114 supplies only ONE remaining task review; the historical cap stop above is not current authority to idle. The fresh worker has returned recovery/blocker triage at preserved `0d71a7026`, and the server has marked run 1003 working; the milestone's source/CI claims are not independent implementation verification. The actual R115 choice above authorizes fencing changed desktop screens in the same five R108 files, including external different-aged-question and reused-focused-row paths. R64 continuity is amended for those transitions only; phone behavior stays. External byte-identical replacement and already-issued stale-answer binding remain unmet blocking gates. Finish the narrow red-first correction, then return the minimal binding design rather than spending the last review, collecting render-only evidence against a known blocker or claiming these cases are accepted residuals. Keep the import cycle disclosed without editing `AskSurface.tsx`; no new push or PR instruction is given.
+
+**R115 second milestone and binding-design clarification (2026-10-26 at 17:06 UTC).** Delivery 10332 reports the changed-screen fence at `c532ebd65020ee99ba8b1bc9847c660891244c9c`, matching a fresh local branch-tip measurement. Run 1003 remains working; this is not a wave-done/server-verified fingerprint or implementation acceptance. Its red/green, 44 mutation-attempt and task-review assertions are worker-attributed, with equivalent/Chrome survivors and untested cases disclosed. No screenshots, push/new PR or exact-head CI is claimed. The question proposes transcript tool-call identity through shared/server/client paths beyond the authorized five files, plus a queued pre-key reread, but explicitly leaves approvals/unparsed/unmatched menus, old-server non-binding, transcript lag and a check-to-key race. R115 does NOT authorize its alternative of moving these failures out of T1c. Request ONE short source/fixture-only addendum within R86/R115: precise existing-owner/test paths, pre-send capability/match proof and mixed-version refusal behavior, and a replacement-after-check fixture or an explicit statement that the existing key-injection boundary cannot guarantee the invariant. A response-time binding echo is not pre-send safety proof. The addendum must identify the narrow remaining operator contract/tradeoff decision and phone/compatibility impact; no new implementation, parser, wire field, live experiment, render-only stage, final review, publication or main sync is granted. Keep all F3 blockers and the ONE remaining review. Escalate the resulting genuine scope choice in closing text while children are active, not a blocking dialog. The server accepted this bounded source-only instruction as mail 10339; no implementation authorization, worker acknowledgment, dispatch or review follows from that receipt.
+
+**R115 binding addendum received; new scope decision pending (2026-10-26 at 17:17 UTC).** Delivery 10341 was fetched and acknowledged. The coordinator read the requested source-only design addendum, not an implementation diff or final handoff. A fresh local measurement still matches `c532ebd65020ee99ba8b1bc9847c660891244c9c`; run 1003 remains working, and there is no structured ask row to release. All source and proposed-fixture assertions below remain worker-attributed and independently unverified.
+
+The addendum identifies `shared/api.ts#DialogAsk`, `server/src/transcript/ask.ts#readPendingAsk`, the existing `server/src/sessionws.ts` attachment, all four dialog routes and `server/src/inject/send.ts` answer functions, `pwa/src/lib/api.ts` and the one `DialogSheet.tsx` sender. It also identifies the separate `server/src/inject/ask.ts#answerAsk` entrypoints as sharing the pane but not covered by that proposed seam. The sender is shared with phones; an optional field is not proof of unchanged refusal behavior. Proposed tests include `server/test/answer.test.ts`, ask/route and PWA API/controller tests; the frame-test path is not named precisely. The worker says the latched content-derived dialog id can retain an old call id on byte-identical replacement, so carrying an id alone is insufficient. Multi-select, unmatched/unparsed menus, approvals and older pairings remain unbound. A new pre-send capability reader would itself be new scope; a success echo remains too late.
+
+The worker explicitly says the current key-injection boundary has no atomic compare-and-answer: the server queue cannot serialize external terminal replacement after the final check. Its proposed `fakeTmux` cases and reported missing landing-id check are unexecuted design claims, not reproduced defects or proof of safety. A landing check would narrow, not eliminate, the window. The addendum therefore does not close F3 or authorize its proposed best-effort residual. There is no further design loop under the exhausted one-addendum instruction.
+
+**Coordinator recommendation, NOT an operator decision or grant:** retain the strict F3 gate and seek authorization for one bounded, separate prerequisite feasibility task for a call-bound answer channel, using only an isolated disposable noninteractive process/hook-protocol harness and fixture HOME, with no pane/tmux/transcript/capture experiment even against a private fixture backend, live fleet access, shipped-source change, publication or last-review spend. The result must distinguish demonstrated support from infeasible or unmeasured behavior; inability to measure safely is a stop, not permission for a live workaround. Do not treat a hook decision output as a supported question-answer API without evidence. Any later implementation, unsupported-path fallback, compatibility/phone tradeoff or experiment outside those boundaries requires explicit scope authority. T1c remains blocked, not separated into an accepted residual. Freeze the current head while this genuine operator choice is raised in closing text. No experiment, new contract, fail-open fallback, screenshot stage, review, push/PR or main sync is authorized by receiving this addendum. The server accepted waiting instruction 10344 after fresh identity and same-command canonical full-document/outgoing/tree privacy and diff checks. The worker waits on the coordinator for an operator scope decision at the unchanged head, with no further design iteration owed; mail acceptance is not worker acknowledgment or experimental authority.
+
+### Task T1c-F: call-bound answer-channel feasibility (R118; research, no PR)
+
+**Actual operator approval (2026-10-26 at 18:37 UTC):** "Sure approved" answers the immediately preceding recommendation for one bounded, isolated prerequisite feasibility task, keeping the stale-answer safety requirement unchanged. This supersedes only the pending-decision status above. It does not authorize implementation, a best-effort residual, a review-budget or daily-cap lift, publication, main absorption or live fleet experiments. T1c remains frozen at `c532ebd65020ee99ba8b1bc9847c660891244c9c`; F3 and its ONE remaining review are unchanged.
+
+**Routing and ownership:** a fresh research work run, wave 41, separate from run 1003; Opus/high main loop, Sonnet/high subagent class, workflow off, compact 40. This is one bounded dependent research chain, not a held-out acceptance review. No implementation deviation is defined or number minted, as with the programme's C0 research wave. Read existing owners graph-first; write only a private research harness/report outside tracked files. No edit claims on shared/server/PWA source, no tracked change or commit, no PR. If a later task authorizes commits, commit on this workspace's own branch, never a separate feature branch.
+
+**Question and limits:** determine whether an existing supported process/hook protocol can submit an AskUserQuestion answer to a specific tool call, distinguishing identical successive calls and rejecting an answer for the first after the second replaces it. Permission allow/deny, changed tool input, transcript parsing, a mock accepting invented output or terminal keys are not proof of call-bound question answers. First inspect the applicable official protocol and committed-source owners; treat earlier worker assertions as hypotheses. A small actual noninteractive protocol experiment is allowed only in a disposable isolated harness with fixture HOME and fixture-owned configuration/state/cache/tmp, no copied live settings or credentials. No pane/tmux/transcript/capture experiment even against a private backend; no live fleet/session access, registration, registry mutation, install/update, trust-file write or credential/auth setup. If isolation, supported invocation or authentication cannot be satisfied within these limits, stop with the missing measurement, never fall back to a live test.
+
+**Bound:** one attempt of at most 30 minutes of active research, up to six sequential noninteractive trials, each bounded to 45 seconds with cleanup limited to its own fixture processes. No workflow, unattended continuation, full suite, screenshot stage or rerun of completed fence tests. Record exact executable/version/protocol, commands with synthetic fixtures, process outcomes, negative controls and evidence hashes; no secrets or private deployment data in distributable text. A local mock may validate the harness only and must be labelled as such. Do not claim an unsupported-path, old-peer or phone fallback is agreed. Proposed later scope is a recommendation, not code authority.
+
+**Deliverable:** a private report classifying demonstrated support, evidence of unsupported behavior, and unmeasured cases separately; state the smallest follow-on scope if any and whether the strict F3 invariant is actually achievable. Preserve the research branch tip and no-PR fingerprint for server verification. This result does not accept T1c or consume its last review; independent verification and any subsequent implementation authorization remain separate. Both runtime source and coordinator authority documents remain unpublished by this task. The server accepted research work run 1018, wave 41, as planned; no child, dispatch or execution is proved by that opening. The self-contained brief carries the local/unpublished amendment rather than claiming it exists at a committed main ref. Immutable authority snapshots preserve their opening-time hashes. Its ONE actual dispatch request later returned HTTP 502 with an empty body; no JSON success/refusal could be read. Fresh 18:44 server readback leaves 1018 planned, dispatch-start timestamp present but no bound session/workspace/branch, dispatched timestamp or queued-brief proof. This is unresolved launch state, not a clean cap refusal or execution, and does not exclude unbound spawn effects. Stop without same-turn retry, replacement/direct worker, cleanup or cap change; await relevant recovery evidence before another dispatch act. No experiment is confirmed underway. Waiting instruction 10387 was server-accepted for run 1003, naming the separate research/recovery dependency and retaining its frozen head; it grants no implementation or duplicate experiment.
+
+**Launch recovery (2026-10-26 at 20:30 UTC).** The operator asks, "why have you stalled again?" This is a recovery wake, not another scope approval or cap lift. The coordinator owns resolving the launch rather than leaving an indefinite wait. Fresh server peers and lifecycle records prove the first attempt created and spawned one live research workspace attributed to run 1018; it has no programme hold, while 1018 remains planned and unbound with no queued brief. No other open run names that workspace, and the lifecycle read reports no gaps. This localizes a partially completed launch, not the cause of the empty 502. A blind fresh-spawn retry is unsafe. The existing run-open path supports idempotently reusing this same planned programme/wave and binding an existing same-project workspace after its normal checks and server-owned hold. Recover through that path, require the returned id to remain 1018, then make at most one guarded dispatch attempt on the bound workspace. No replacement run, direct spawn, manual hold, cleanup, cap change or extra research budget. If any prior experiment is discovered, the worker must stop and report it before using the remaining original budget. The prior stop instruction is historical, not a requirement to abandon supported recovery. Research execution remains unconfirmed until the server records dispatch and the worker supplies evidence. T1c's implementation freeze, strict F3 and last review remain unchanged.
+
+**Recovery binding receipt:** the guarded idempotent open returned `ok:true`, id 1018, state planned. Fresh server readback now names the measured existing research session on 1018; workspace/branch and dispatch/brief fields are still null. This is the server's accepted binding and hold act, not a queued brief or research execution. The first recovery dispatch request was rejected `bad-request`: the coordinator incorrectly retained the birth-only `slug` after binding. The lifecycle reference explicitly requires dropping it for a resumed session. Correct that known request-shape defect without changing the brief's authority, creating a worker or retrying an ambiguous/cap refusal. Record both HTTP requests honestly; the first was validation-only, not a successful launch. No research execution is yet confirmed.
+
+**Corrected dispatch outcome (2026-10-26 at 20:35 UTC):** after removing only the invalid birth-only field, the server refused `cap-daily`, limit 64, used 64. The rejected validation request and this corrected request are both retained; neither queued research or proves execution. Stop on this measured cap, with 1018 bound to the existing workspace; no further retry, replacement worker, alternate brief delivery or cap mutation. The coordinator recommends two additional daily slots for this research and the already-planned T2c review, but that is an operator setting decision, not authority from the stall challenge. All task-review caps and strict F3 remain unchanged. A later relevant capacity wake resumes the existing rows, not new rounds. The original HTTP 502's cause is still unproven, but its partial workspace creation has been resolved into a server binding.
 
 **Rollback.** A plain revert returns the desk to T1b's centred dialog; the phone is unchanged either way. Revert T1c before T1b (§Rollback).
 
@@ -744,6 +883,12 @@ Run the new `test/ask-shortcuts.test.tsx` with the existing targeted ask/store s
       cd ui && ./node_modules/.bin/tsc --noEmit
       cd pwa && ./node_modules/.bin/vitest run --maxWorkers=3 && ./node_modules/.bin/tsc --noEmit
 
+**R116 fresh parallel continuation (coordinator application of R113, 2026-10-26).** Prepare a fresh T2c work run after T1c has resumed; old run 802 stays failed/released. Recover preserved `e962a1de11d0a99f84a50f015ccbfd89ebabc5e6` on the new child's untouched own branch without absorbing main. Carry reviews 936 and 940 as TWO spent rounds, leaving ONE task review; a new run counter does not reset that budget. R94 closed review 940 F1's disclosure condition only; keep its verified history and the later erratum immutable. Finish the open coverage: shared-ring WorkflowStrip fixture render, phone-floor mutation necessity (or honest equivalent survivor), explicit 1280 touch browser guard and row 10's partial one-strip credit. The worker may remove Gauge's duplicated reading precedence within the existing AccountRow/windowReading ownership, preserving all three outputs, with characterization/red-first/mutation evidence. Do not alter meter tokens, palette, ring reach or the task's product contract. Scope additional authored tests to the task's existing owned files; any further path needs a concrete instruction. The two R83 README Accounts-section passages (/accounts lead and disabled-lane bullet) need current exact-holder consent before edits; older update-line/usage-window consents are separate and the third stale passage remains unconsented and out of scope. No T1c overlap, new main sync, second full local suite, push/new PR, review or pre-Step-1 landing is authorized by opening this continuation. Return an early exact-head milestone, then finish the bounded existing-scope chain; blocker questions must be precise, not upkeep-only retention. At 15:18 UTC the server accepted fresh run 1004 (wave 40) and its single dispatch: brief queued, worker skill present, no killed-spawn adoption. That was dispatch only. The later recovery milestone was fetched/acknowledged at 15:24 UTC, and the server then marked run 1004 working. Archive/source/CI assertions remain attributed, not implementation acceptance. Fresh claim 2610 covers only the four current authored paths, with T1c's five paths disjoint. The worker correctly requests fresh consent for the two R83 Accounts passages; the continuation brief's description as older update-line/usage-window passages was a coordinator error, corrected without overwriting the immutable brief/snapshots. No fresh consent, code acceptance or review follows from that request. The worker continues the bounded chain without another dispatch.
+
+**R117 pre-review completion (coordinator application of R113/R116, 2026-10-26).** T2c's handoff at `d23bdc32300f65283e648139447a6b447827a26d` was independently tip/PR-measured and server-accepted into awaiting-review, then returned to working for two bounded gates before consuming its ONE remaining task review. The coordinator has not read implementation artifacts or the diff. First, the worker reports the newly edited README phone-location phrase is correct only for Instrument: request fresh exact current-holder consent for that phrase inside the SAME R83 /accounts lead, describing Refined's phone header and Instrument's phone fleet column as the existing plan requires. Do not alter the separate third unconsented passage or expand product scope. With current scoped ownership/coexistence permission, correct only that text and run its affected documentation gates. Second, after the wording is corrected and current targeted gates are green, authorize one normal push of the fresh workspace branch and one NEW draft PR superseding #1348; do not edit/close #1348, force-push, merge main, alter protection or queue. Privacy-gate the complete outgoing diff/documents/body. Preserve the first-full red, the newly disclosed typecheck red window, missing old PNG/log files, exact evidence revisions and honest mutation/coverage limits. A doc-only new head may cite earlier runtime evidence only with explicit unchanged-runtime proof and original revision labels, never relabelled captures. Return new exact fingerprint, consent coordinates, native PR CI results and actual selected-file coverage; no speculative CI retry or second full local suite. Publication is not acceptance, review, Step 1 completion or landing. Keep the final review unused until this completion handoff is ready. At 16:22 UTC a later worker milestone was fetched/acknowledged and GitHub independently confirmed draft PR #1600 at `66d43af2dba09c1f4e28735a356459d8b70e4d48`, matching the workspace branch; #1348 remains unchanged/open. The worker reports fresh consent 10295 and the README-only correction, not independently accepted implementation. CI is queued/pending, not all-green; run 1004 stays working for the terminal-CI handoff and no further push is requested.
+
+**R117 terminal-CI handoff (2026-10-26 at 16:40 UTC).** Delivery 10308 was fetched/acknowledged. Independent local/PR measurement matches `66d43af2dba09c1f4e28735a356459d8b70e4d48`, and the server accepted the worker's exact fingerprint into awaiting-review. PR #1600 remains OPEN/DRAFT/MERGEABLE; all 38 checks are terminal, 33 successful and five skipped by mode. Native shard logs independently confirm all 126 selected server files executed across ten successful shards, including README, citation/anchor, topology, PWA-ring and eleven single-definition guards. `docs-shared` and `docs-grammar` were not selected; worker local results remain claims for review. The full-suite job skipped, and no merge-queue run occurred. Preserve the original first-full red, repaired typecheck window, missing old evidence, row 10 survivors, inspector reach limit, minor advisories and original runtime-render labels. The server subsequently accepted review run 1012 as planned, naming work run 1004: 936/940 remain TWO historical rounds and 1012 commits the THIRD and FINAL task round, never a new-run reset. Its ONE dispatch attempt was then refused `cap-daily`, limit 64/used 64; 1012 remains planned and no reviewer started. Stop, report and wait for capacity or the operator's setting change, never retry on this wake, change caps or substitute a coordinator/Agent panel. The worker head stays frozen awaiting this review; Step 1 still gates landing. The coordinator does not read the implementation diff or handoff artifacts. A verified fingerprint and selected CI do not accept source, consent or evidence; no push, main absorption, Step 1 landing waiver or rollout follows.
+
 **Carried (R27).** T2a's update line sits in a full-width row under Refined's bar (D-6717). It keeps that row, and the two stack rather than share one (R48): the lanes row in the header, then the banner stack, then the update line. T2c absorbs `main` and re-measures the header and the update row at 900, 1280 and 1920, fresh and stale (`update-indicator.browser.test.ts`, `lanes-row.browser.test.ts`).
 
 **Carried (R41)**, from T2a's last review, text only, each in its own commit: `release-waiting.test.ts`'s header stops calling every case a moved one, since the null case went to `update-indicator.test.tsx` (≈:191) and the `releaseWaitingWords` and `shownRelease` cases are new (F3); `README.md`'s update-line passage leads with where the line shows, "on every screen at a desk, and on the fleet view below 900 px" (F8).
@@ -850,6 +995,13 @@ Run the new `test/ask-shortcuts.test.tsx` with the existing targeted ask/store s
       cd pwa && ./node_modules/.bin/vitest run --maxWorkers=3 && ./node_modules/.bin/tsc --noEmit
 
 **Carried (R51), each intended change in its own commit.** T2f's Files also include `pwa/browser/instrument-desk.browser.test.ts`, `pwa/test/instrument-shell.test.tsx` and the comment-only passages of `pwa/src/fleet/FleetHead.tsx`. Serve a waiting update view in `WITH_RUNS` and assert the indicator is drawn at the 900 boundary, alongside the whole count. Add the missing column-presence assertions to both no-head loops. Correct the mutation footer: rows 1 and 4 also run in the browser, row 7 only there. Name the frame's status bar and the rail's doors in FleetHead/FleetScreen comments. List all seven measured reds for row 6 rather than only five. Run the instrument-desk browser file as well as Step 5's suites; preserve the status-bar count, pool lag and phone line. These are T2g's accepted follow-ups, not a second implementation of its flags.
+
+**Departures, numbered on review 1117 (2026-10-28).**
+- **D-7257** - `t2f-chooser-takes-a-row-height`: `ClassChooser` takes one optional `className`, merged by `cn`, which the desk toggle row uses for `min-h-row`. It is the component's only prop.
+- **D-7258** - `t2f-mutation-table-in-chooser-suite`: T2f's mutation table lives in the header of `fleet-class-chooser.test.tsx`, so T3b's `instrument-list.test.tsx` carries one appended hunk.
+- **D-7259** - `t2f-fleet-css-edit-in-feat-commit`: two re-points of `fleet-css.test.ts`'s runs-line read ride inside feature commits (`b2f43b4c6` and `350ddb122`), because each feature commit would otherwise be red.
+- **D-7260** - `t2f-instrument-list-cases-after-feat`: the three `instrument-list.test.tsx` cases were committed after the feature commit, while T3b's consent (11646) was pending, so no red-first run is recorded for them. The mutation table's rows prove they guard. The case "below 900 the runs row is as today" is a characterization case, green on the base by design.
+- **D-7261** - `t2f-fleetscreen-comments-in-feat-commit`: R51 F4's FleetScreen half (the `headChrome` and `headCount` docs) is comment text inside the feature commit `b2f43b4c6`, whose message discloses it; its FleetHead half has its own commit.
 
 **Acceptance.** No runs row and no inert chooser in Instrument's desk column; R51's carried fixture, guard and comment fixes complete. **Rollback.** A plain revert.
 
@@ -1243,6 +1395,25 @@ Run the new `test/ask-shortcuts.test.tsx` with the existing targeted ask/store s
 
 **Acceptance.** The new session is on screen without a hunt; dismissal/unmount, reopen and cache-refresh races are pinned; the already-live fallback is unchanged; F8 is complete before landing. An unprompted session keeps today's banner (R39). **Rollback.** A plain revert; no wire change.
 
+**R101 prerequisite exception (operator, 2026-10-25).** Exactly ONE fresh-fetch main merge in B5's own
+workspace branch may obtain the existing plain-words suite and finish F8 plus R62's N2a wording carry. This
+amends R53's hold, not the general sync rule. Fresh claims and explicit current-holder hunk consent precede
+edits/merge; unexpected conflicts stop before resolution. Record the actual main SHA, parents and resolutions;
+preserve absorbed main changes. Widen the existing suite's actual inline `api.ts` Error read and length pin,
+with its own red-first/mutation evidence, not a copied parallel suite. Keep the original full-suite red signal;
+run targeted affected suites/renders and CI, not a second full local PWA/server suite. The C1/B5 second-lander
+limiter-union checks remain owed at the then-current owner. No second sync, cap lift, acceptance or landing
+permission follows; a changed head needs fresh independent whole-branch review.
+
+**R109 authored-edit ownership (operator, 2026-10-25).** Continue the existing two-test-file fix under
+claims for authored edits only, preserving the already-completed conflict-free main merge. Manual resolution
+or additional edits still need scoped claims and current-holder hunk consent. Earlier ask111 selection is
+retained with unknown actor/timing; this current authorization does not rewrite it. Preserve the disclosed
+unrun live-worktree scanner mutant and fixed copy before restoring ONLY its own one-line mutation; all
+subsequent mutation execution is isolated in scratch. No retrospective test-first commit fiction or historical
+order exception is granted. Disclose actual baseline/red/green chronology and any gap for independent review.
+The ONE absorption is spent; no second sync, acceptance or landing permission.
+
 #### B5 additions (rev 4)
 
 Three items join Task B5: (a) comes from C0, (b) from B4's review (the ledger's R12), and (c) from T1a's last review (R31). Their mutants join B5's table.
@@ -1336,6 +1507,10 @@ Fences:
       cd server && ./node_modules/.bin/vitest run --maxWorkers=2 test/rings/pwa-rings.test.ts
       cd ui && ./node_modules/.bin/tsc --noEmit
       cd pwa && ./node_modules/.bin/vitest run --maxWorkers=3 && ./node_modules/.bin/tsc --noEmit
+
+**Departures, numbered on review 1120 (2026-10-28).**
+- **D-7262** - `t3e-extra-files`: two files beyond the task's list. `pwa/src/session/chat.css` gets one selector, so the Inspector door lays out its word beside its glyph like Terminal and More; review 1120 measured that without it the word stacks under the glyph. `pwa/test/w7-storage-keys.test.ts` gets the `ccrc-inspector` row.
+- **D-7263** - `t3e-storage-owner`: `pwa/src/inspector/inspectorShown.ts` (the `ccrc-inspector` key) is the twelfth `localStorage` owner, and the W7 census reads 12. The plan asks for a per-device choice, and C7l's storage port has not landed, so the owner is written directly, as `stripExpanded.ts` and `foldState.ts` are.
 
 **Acceptance.** The panel hides and shows by a header button or `i`, the choice survives a reload, and its tasks and mail are never lost. **Rollback.** A plain revert; the orphaned `ccrc-inspector` key is read by nothing.
 
@@ -1712,6 +1887,119 @@ Verify runs T2c's `lane-order` and `fleet-pieces` suites as well, because `strip
 **Acceptance.** In both skins the strip folds at every width: its four freest lanes on a phone, one line of the freest lanes that fit at the desk, then one "+n more" that counts every hidden lane whose sign-in expired or that is rate-limited, with All accounts after it (at the desk at the line's end). One click or tap shows every lane, and the choice is kept on the device. Each card stays the door to its lane. With no release waiting, at 390×844 a phone's first session row is at most 440 px down folded (near the 422 before S5a), and expanded it stays at T2c's figure (±4). Cases are green, mutants red, and renders taken before and after.
 
 **Rollback.** A plain revert of the fold restores T2c's unfolded row and strip; the `SIGN_IN_EXPIRED` commit is behaviour-neutral and may stay. The `ccrc-accounts-strip` key is left orphaned, read by nothing (§Rollback's per-device keys, now three).
+
+
+**R120 amendment (the operator, 2026-10-27, while S5b runs).** The operator asked that the top lanes panel be one line
+by default, with the lanes as a sorted list, and that hovering that line show every lane, still sorted. S5b's fold
+already makes the desk strip one line by default; R120 adds two things to this task, and changes nothing else above.
+- **D-7153** - `strip-hover-flyout`: at the desk (900 px and up, both skins), while the strip is folded, hovering the
+  strip's line, or moving keyboard focus into it, opens a flyout: a panel below the line, drawn over the content and not
+  pushing it down, that holds EVERY lane card in `lanesByFree`'s order, the same cards and doors as the expanded strip.
+  It closes when the pointer has left both the line and the flyout, on Escape (focus returns to the card it came from),
+  and when focus leaves both. A short open delay and a short close grace keep a passing pointer from flickering it;
+  the worker picks and states the values. The "+n more" control and its per-device expanded state stay as above: the
+  control pins the whole strip open, and while it is open there is no flyout. Phones have no hover, so below 900 px
+  nothing changes. Tests: open on hover and on focus, close on leave, on Escape and on blur, every lane present and in
+  order, no flyout while expanded or below 900 px, and a browser render at 1280 and 1920 in both skins. Each guard
+  gets a mutant that reds it.
+- **D-7154** - `lanes-tie-break-soonest-reset`: `lanesByFree` (`pwa/src/fleet/laneOrder.ts`, T2c's, outside S5b's
+  original Files) keeps its first key, the binding use (`bindingPct`) lowest first. Lanes that tie on it now sort by
+  the binding window's reset, soonest first (a lane with no reset time after one with a reset time), then by the other
+  window's use, lowest first, and only then in roster order. A never-read lane and an expired sign-in still go last.
+  So the most available lanes, and among equals the ones that reset soonest, are at the top; the least available and
+  latest to reset are at the bottom. `bindingWindow` is the one decider of which reset binds, so `lanesByFree` reads
+  it, not a second copy. `pwa/test/lane-order.test.ts` gains the tie cases, each red first, with a mutant that drops
+  the reset key.
+- **D-7233** - `instrument-first-row-is-its-chrome`: Task S5b, coordinator ruling on review 1102's F2. The Acceptance's
+  "in both skins ... at most 440 px" holds for Refined (418.8 px at 390x844, folded). Instrument measures 533.8 px. The
+  fold saves the same 386.2 px in both skins, and the strip is the same height in both. The 115 px difference is
+  Instrument's own chrome, which S5b does not touch: 28 px in its taller `fleet-head` above the strip, and 87 px in
+  its table toggle, tabs and group header between the strip and the first row. So S5b's Instrument target is its
+  measured figure: the browser case asserts at most 540 px for Instrument at 390x844 folded, and at most 440 for
+  Refined, each under a title that says which. Whether Instrument's phone chrome should shrink toward 440 is a
+  separate question for the operator, not S5b's.
+  D-7153's closing rule, as read on the same review's A4, is a clarification and not a new number. The flyout stays
+  open while either the pointer or focus is inside the line or the flyout, and closes once neither is.
+  Refined on review 1106's F1 and F2, still a clarification. "Focus" here is KEYBOARD focus (`:focus-visible`) on the
+  line's cards or in the flyout, as R120 says ("moving keyboard focus into it"). Focus a mouse click leaves behind,
+  and focus in the end cell ("+n more", "Show fewer", All accounts), never holds the flyout open. An open the pointer
+  started is cancelled when the pointer leaves, whatever focus is parked in the strip; only an open that keyboard
+  focus started survives a passing pointer. A flyout closed by Escape stays shut until the pointer or keyboard focus
+  enters again.
+  Read on review 1108 (S5b's last round under its cap). "Cancelled" governs an open the pointer has started but not
+  finished: once the flyout is open, a card holding keyboard focus holds it by the rule above, whoever opened it, so it
+  stays open after the pointer leaves until focus leaves the cards (F2, accepted as ruled). One gap is left for the
+  programme's follow-up sweep, not S5b: keyboard focus that reaches a card from the end cell (Shift+Tab back from
+  "+n more" or All accounts) opens nothing, because the arrival test still counts the end cell as inside the strip
+  (F1). Entering from outside the strip, the main keyboard route, opens it.
+
+### Task S5c: a phone's strip opens every lane on a tap and folds to two measured lines, near-full lanes band by their reset, and a card reached from the end cell opens the desk's flyout (D-7253) — after S5b and C8 merge
+
+**Routing:** band 2. **Needs:** S5b merged (`67ebe5015`, #1727: `stripFold.ts`, the desk flyout, `stripExpanded.ts`, D-7153 and D-7154 as shipped) and C8 merged (#1720: the strip reads the fleet store and runs no poll of its own). Both move `AccountsStrip.tsx`, so S5c dispatches only once both are on `main`. **Frozen files touched:** none. **Lane:** PWA.
+
+**Why** (the programme ledger's R121, the operator's answers of 2026-10-28). Q8: "534 is ok, but implement same logic as desktop re open full panel but on tap instead of hover, otherwise show e.g. two lines." So Instrument's phone figure of 534 px (D-7233) stands, and the phone gets the desk's full panel, opened by a tap. Folded, the phone shows about two lines of cards. Q3 ("probably", taken as yes): lanes at 95% binding use or more sort as one band, soonest reset first, instead of only exact ties (amends D-7154). Review 1108's F1 is fixed here too, because it is in the same files: keyboard focus that reaches a card from the end cell opens nothing at the desk.
+
+**The shape (the operator's rule; the details are the coordinator's defaults, which the operator may still change).**
+- **D-7254** - `phone-strip-tap-panel`: below 900 px, in both skins, a folded strip with lanes folded away opens the SAME panel as the desk's flyout (D-7153): every lane card in `lanesByFree`'s order, drawn over the content under the strip, not pushing it down, each card its lane's door.
+  - A tap opens it, and nothing on the phone opens it on hover or focus alone. The tap target is the strip's control, `foldWords`' "+n more", which on a phone opens the panel instead of expanding the strip inline. The line's cards stay doors to their lanes, so tapping a card never opens the panel.
+  - It closes on a second tap of the control, a tap outside the strip and the panel, Escape, or a tap on one of its cards (which then opens that lane). A close returns focus to the control when focus was in the panel.
+  - The control names its state (`aria-expanded`, `aria-controls` naming the panel) and keeps its 44 px target under a coarse pointer.
+  - The panel has a bounded height, at most the viewport below the strip, and scrolls inside itself, so 17 lanes never push the page.
+  - Below 900 px the per-device expanded choice (`stripExpanded.ts`, `ccrc-accounts-strip`) is neither read nor written: a phone is always folded, with the panel one tap away. At the desk nothing changes: the control pins the strip open, and the hover and keyboard flyout runs as D-7153 says. A device that crosses 900 px closes an open panel.
+- **D-7255** - `phone-fold-two-lines`: below 900 px a folded strip shows as many lanes as fill two measured lines of the cards' group, instead of `FOLD_SHOWN`'s fixed four. The width is `useRowWidth` on the group, as the desk measures it. The lanes per line come from `rowFit` with the phone grid's own card floor and gap, as `shell.css` and `fleet.css` lay the phone strip out today. The count is `2 × tracks`, at least one, and the phone's end cell stays a row of its own under the cards. An unmeasured phone row shows `FOLD_SHOWN` (4), never "fold nothing", so a phone's first paint is never the full strip. `foldShown` stays the one decider. Step 0 measures what four shows today at 360, 390, 438, 699, 700 and 899 (the number of lines) and reports it. Where four already fills two lines, the visible change at that width is nil, and the rule keeps it two lines at every phone width. The first session row's top at 390×844, folded: Refined at most 440 px, Instrument at most 540 px (D-7233), unchanged.
+- **D-7256** - `near-full-lanes-band-by-reset`: `lanesByFree` (`pwa/src/fleet/laneOrder.ts`) reads one new constant, `NEAR_FULL_PCT = 95`, written once beside it.
+  - Its first key is the binding use, with every lane at or above `NEAR_FULL_PCT` reading as the same value: one band, sorted after every lane below 95.
+  - Within the band, and among exact ties below it, the order is D-7154's: the binding window's reset, soonest first (no reset time after a known one), then the other window's use, then the roster.
+  - A rate-limited lane (100%, `WINDOW_LIMITED_PCT`) is in the band, and a never-read lane and an expired sign-in still go last.
+  - Below 95 nothing changes.
+  - The "+n more" words (`foldWords`) are unchanged.
+  - `bindingWindow` stays the one decider of which reset binds.
+- **D-7253** is the task's own number. Under it, review 1108's F1 is fixed: at the desk, keyboard focus that arrives at a card of the line or the flyout from the strip's end cell opens the flyout, by Shift+Tab back from "+n more", "Show fewer" or All accounts. This is the same as focus arriving from outside the strip. The end cell still never HOLDS the flyout open (D-7153's clarification); only arriving at a card counts. A click's focus still opens nothing.
+
+**Files:**
+- Modify `pwa/src/fleet/stripFold.ts`: `foldShown` takes the phone's measured tracks, and its doc comment says two lines. `FOLD_SHOWN` stays as the unmeasured phone's count. If the phone grid's card floor is not `LANE_CARD_MIN`, add one constant for it here, never a second copy of a figure CSS also writes; the CSS reads it as a custom property, as `--lane-card-min` does.
+- Modify `pwa/src/fleet/AccountsStrip.tsx`, as C8 leaves it:
+  - the phone measures its group (`useRowWidth` is no longer desk-only);
+  - the control's phone arm opens and closes the panel;
+  - the panel mounts below 900 px (the flyout's markup, one function, as the line's and the flyout's cards are today);
+  - the outside-tap and Escape closes;
+  - the end-cell arrival fix (D-7253);
+  - the file comment's WHERE IT MOUNTS and THE FLYOUT paragraphs say what a phone does.
+- Modify `pwa/src/fleet/fleet.css` (the strip's block): the panel's phone placement (under the strip, over the content, bounded and scrolling), within the existing `.accounts-flyout` rules where they serve.
+- Modify `pwa/src/styles/shell.css` only if the phone grid's floor becomes a custom property (above).
+- Modify `pwa/src/fleet/laneOrder.ts`: `NEAR_FULL_PCT` and the band.
+- Modify `pwa/src/fleet/stripExpanded.ts` only if a phone guard belongs in it. Prefer the strip not calling it below 900.
+- Tests:
+  - `pwa/test/strip-fold.test.ts`: two lines, the unmeasured phone's four, the desk unchanged.
+  - `pwa/test/lane-order.test.ts`: the band. 94 against 96 keeps use order; 95, 97 and 100 order by reset. Rate-limited sits in the band, never-read and expired still go last.
+  - `pwa/test/accounts-strip.test.tsx`: the phone panel's open and close, every lane present and in order, a card tap opens its lane, focus handed back, no stored choice below 900, the panel closed on crossing 900, and the end-cell arrival at the desk.
+  - `pwa/test/refined-phone.test.tsx` and `pwa/test/instrument-shell.test.tsx`: the phone fold count.
+  - `pwa/browser/refined-phone.browser.test.ts`: the panel's render, bounded height and no page push at 390×844 in both skins, and the folded first-row tops.
+  - `pwa/browser/lanes-row.browser.test.ts`: the desk unchanged, and the end-cell arrival in real Chrome, since jsdom's `:focus-visible` is a heuristic.
+  - The `seventeenLanes.ts` fixture gains no lane. Its order under the band is re-derived in Step 0, and the expected lanes follow the code, never the other way round.
+- No storage owner is added, so the W7 census and `w7-storage-keys.test.ts` are unchanged here. The missing `stripExpanded.ts` row (`w7-keys-strip-row-missing`) belongs to the follow-up sweep.
+
+**Steps.**
+- [ ] **Step 0: Re-ground.** Read `AccountsStrip.tsx` as C8 and S5b left it, and re-anchor every line named above. Measure the phone fold today (lines per width, above) and the 17-lane order under the band. Report both with the renders' base figures before any code.
+- [ ] **Step 1: Red first.** Write each case above red on `main`: the band, the two-line count, the phone panel, the end-cell arrival. Commit the reds.
+- [ ] **Step 2: The band and the count.** Change `laneOrder.ts` and `stripFold.ts`. The pure suites go green, and `lane-order`, `fleet-pieces` and `strip-fold` are re-run.
+- [ ] **Step 3: The panel and the arrival.** Change `AccountsStrip.tsx` and the CSS. Every jsdom and browser case goes green.
+- [ ] **Step 4: Mutants.** Run each alone and restore it by sha. Each must red its case:
+  - the band's threshold at 101 (no band);
+  - the band reading reset before use below 95;
+  - the phone count back to `FOLD_SHOWN`;
+  - the panel opening on hover below 900;
+  - the outside-tap close removed;
+  - the stored choice read below 900;
+  - the end-cell arrival back to "inside".
+- [ ] **Step 5: Renders.** 360, 390, 438, 699, 700 and 899 × Refined and Instrument × dark and light, folded, panel open, and a release waiting once per skin; plus 1280 and 1920 at the desk, to show nothing moved. Before is `origin/main`; after is the tip.
+- [ ] **Step 6: Verify.** Task S5b's Step 5 commands, plus `test/lane-order.test.ts` and `test/fleet-pieces.test.tsx`, and the pwa suite and `tsc --noEmit`.
+
+**Fences.** S5b and C8 have merged; S5c absorbs nothing else in these files. T3e's #1749 and T2f's #1747 do not touch the strip files.
+
+**Acceptance.** On a phone, in both skins, the folded strip shows two measured lines of the freest lanes, and one tap on "+n more" opens every lane in a panel over the page, in order, each card a door. A tap outside, Escape, or the control again closes it. Lanes at 95% or more sit together at the bottom of the live lanes, soonest reset first. At the desk nothing changes, except that Shift+Tab back onto a card opens the flyout. Every case is green, every mutant red, and the renders are taken before and after.
+
+**Rollback.** A plain revert. The per-device key keeps its desk meaning throughout.
 
 ### Task C0: measure the console's responsiveness (research, no PR) — after T0
 
@@ -2146,6 +2434,41 @@ Verify runs T2c's `lane-order` and `fleet-pieces` suites as well, because `strip
 
 **Acceptance.** A fleet frame re-renders only what reads a changed row, with per-frame time before and after in the PR. **Rollback.** A plain revert; nothing persisted changes shape.
 
+**R100 bounded gate DESIGN (operator, 2026-10-25).** Review944/R98 upholds the unmodified-head ratio
+assertion `.41 > .35` and stale verification prose. The operator chose Redesign Gate, not diagnostic demotion
+or a retain exception. Return an exact test-harness design at the existing benchmark owner: controlled
+measurement/assertion protocol, before/current comparison, acceptance criteria, bounded cost, precise paths
+and consent, red-first tests and own mutants. Measured polling contamination is an exposure mechanism, NOT
+proof of the original attempt's cause. Preserve all attempts and original evidence. No new measurements,
+threshold relaxation, runtime/fixture-poll changes or implementation until the design is reviewed and a bounded
+instruction authorizes it. R104's actual operator choice approves deferring fixture API-response FULFILLMENT
+into unmeasured drains for BOTH ratio and ceiling gates, preserving threshold, frame counts and medians. This
+is a changed measurement contract and bounded mitigation, not causal isolation; late page response/render
+work and timers may enter windows. Controlled H3 ordering and bounded fulfillment-wait/exhaustion handling
+still need checking; no successful-delivery bound or measured mutant credit is inferred. Include the truthful
+R98 F2/A1-A9 correction bundle in the later bounded round.
+
+**R107 bounded implementation amendment (2026-10-25).** Extend only the existing `openApp` API handler and
+`frameCost` plus their self-test/gate and the named truthful-comment/PR bundle. Hold fixture fulfillment for
+the meter span, flush in drains, cap the in-flight wait at 5000 ms with explicit failed-attempt exhaustion,
+and disclose the capped quiet wait without treating it as proof. H3's controlled gate fallback may release on
+`readA` ONLY AFTER the self-test request's fulfillment-start event; initial reads must not resolve it. Remove
+all successful-delivery upper-bound claims. The corrected exact design is ready for bounded implementation,
+not runtime acceptance. Fresh claims and exact additional T1c consent for the two existing store-test comments
+are required; other overlap consent does not expand. Prove named self-test assertions and H1/H2/H3 separately,
+including initial-read ordering, failed-attempt cleanup and timeout exhaustion. Run ONE predeclared A B A B A
+protocol, all data and failures retained, no filtering/retry/tuning. Preserve threshold/counts/medians and old
+assertion reds. Verify affected helper consumers/types and honest F2/A1-A9 corrections, then submit a new head
+for fresh whole-branch server review. No second full local suite, main sync, acceptance or landing grant.
+
+**R111 narrow historical exception (operator, 2026-10-25).** For C6's two comment-only edits in
+`pwa/test/stores.test.ts` reviewed at `bc3975420`, waive ONLY the missing historical edit-time holder
+measurement, permanently disclosing that the measurement is missing. The original hunk consent exists;
+independent verification of its exact text/anchor binding remains required. The exception does not prove
+past ownership or execution and does not extend to any other edit or claim. R110's initial-read oracle,
+current assertion reds, provenance/coverage/model gaps, new-head CI, fresh review and review-cap requirements
+remain intact. No source/test/PR edit, rerun, code-freeze lift, acceptance or landing is authorized.
+
 ### Task C7: the chat's rows are memoised, and markdown and highlighting are cached (D-6439) — after C6, C8 and T1c merge
 
 **Routing:** band 2. **Needs:** C6 (SessionScreen narrowed); C8 (an equal accounts answer no longer writes `roster`); T1c (the same `ChatList` and `SessionScreen` lines). **Frozen files touched:** none. **Lane:** PWA. No watched god file.
@@ -2417,6 +2740,87 @@ Verify runs T2c's `lane-order` and `fleet-pieces` suites as well, because `strip
 
 ---
 
+### Task C11: the real-tmux drawer test waits for its server to go, and the browser leg gets headroom (D-7248) — now
+
+**Routing:** band 1. **Needs:** nothing. **Frozen files touched:** none. **Lane:** CI and the server test suite. A change
+under `.github/` runs the full suite on its PR, which is wanted here. Ruled by the operator in R121's Q7 ("a bit, why
+does it take so long?") and Q10 ("look at it yourself and fix what's needed").
+
+**Why.** `server/test/drawer-window-sized-client.test.ts` ejected #1727 from the merge queue on 2026-10-28, and it failed
+an unrelated PR's merge-group run the same way. Its cases (c) and (d) failed at `new-session cc-demo-<x>` with "server
+exited unexpectedly". The coordinator read the file at `main`. Its `afterEach` kills every session on the private
+socket, and with no session left tmux's `exit-empty` default makes the server exit on its own. The next case's
+`new-session -d` can reach that server while it is still exiting. Separately, the `browser (pwa)` job's 15-minute cap
+had 14 to 40 s of headroom on main's own runs before S5b, and 7 s at #1727's last head (job 893 s). Measured at that
+head (CI run 40612653530): the test step took 861 s, with 30 files summing to about 2,434 s across the workers (corrected on review 1113's A4; the first reading said about 2,700 s). Four
+files are a third of it: `wheel-chain` 400 s for 40 cases, `wheel-chain-chip` 255 s for 16, `wheel-chain-well` 221 s
+for 8, and `ask-inline` 383 s for 330 cases. `frame-cost` takes 244 s for 50.
+
+**Files:** Modify `server/test/drawer-window-sized-client.test.ts`, `.github/workflows/ci.yml` (the `browser (pwa)`
+job's `timeout-minutes` and its stale "About a minute of tests" comment), and, only where Step 2 measures a saving
+that keeps every assertion, the `wheel-chain*` browser files.
+
+- [ ] **Step 0: Re-ground.** Read the test's `afterEach` and `afterAll`, the socket naming, and how other real-tmux
+  suites in `server/test/` reset between cases. Graph-first: one reset helper may already exist; reuse it, never add a
+  second.
+- [ ] **Step 1: Red, then green, for the race.** Reproduce the race first, for example with a loop of the file, or by
+  deferring the next `new-session` against a server that is still exiting, and record how often it fails. Then make
+  the reset wait. Either `afterEach` kills the server and waits, bounded, until `list-sessions` answers "no server
+  running" and the socket is gone, or the file keeps the server alive across cases (`exit-empty off` set once on the
+  private server) and kills it only in `afterAll`. Pick one, say why, and keep every case's assertion unchanged. The
+  fix must go green across the same loop that went red.
+- [ ] **Step 2: Measure the browser leg.** Per case, say what the four slow files wait on: real timers, fixed sleeps,
+  scroll settling. Report the saving any change would make. Take only savings that keep each assertion's meaning,
+  each in its own commit with its measured before and after. Make no saving that hides a wait the product needs.
+- [ ] **Step 3: The cap.** Raise `browser (pwa)`'s `timeout-minutes` from 15 to 20 ("a bit", R121), and rewrite its
+  comment to state the measured test time and the reason for the headroom.
+- [ ] **Step 4: Verify.** The real-tmux file, run in a loop on a busy box and on CI. The full suite on the PR, which
+  the `.github/` change forces. The browser job's time at the head.
+
+- **D-7248** - `tmux-test-waits-for-its-server`: Task C11, the coordinator's reading on R121's Q7 and Q10, on
+  2026-10-28. The drawer test's reset no longer races a server that is exiting, and the browser leg's cap rises from
+  15 to 20 minutes with a measured comment. No product code changes.
+- **D-7250** - `browser-cap-pin-moves-in-ci-pipeline-test`: Task C11, ruled on review 1113 on 2026-10-28. `server/test/ci-pipeline.test.ts` pins the browser leg's cap, so its title and its expect move from 15 to 20 with the cap, red first. The pin is outside C11's Files and was taken under claim 2862.
+- **D-7251** - `d-ref-spelled-as-task-in-tracked-text`: Task C11, ruled on review 1113 on 2026-10-28. A number defined only in an unpublished plan amendment sits above main's in-tree high-water, and deviation-refs reds on it in tracked text. So a feature PR's tracked text names the task ("desktop polish Task C11"), and the number goes only in its commit messages and PR body until the ledger PR publishes the amendment.
+
+**Acceptance.** The real-tmux file passes the reproducing loop; the browser job's cap and comment match the measured
+time. **Rollback.** A plain revert.
+
+### Task C12: the programme's follow-up sweep: advisory pins, stale comments, wording and small guards (D-7264) — after the tasks whose files it touches have merged
+
+**Routing:** band 1. **Needs:** every task whose findings it carries has merged, and S5c, C9, C7 and T3b's files are not in flight when its hunks are taken. Step 0 measures the live claims, and any item whose file is held waits or asks for consent. **Frozen files touched:** none. **Lane:** PWA, plus one server test helper and README prose.
+
+**Why.** The reviews of this programme left advisory findings that were not owed in their own PRs: a guard no test reds, a comment that says what the code no longer does, a weak pin, a wording slip. The rulings sent each one here, so they land together rather than leaving a trail of one-line PRs. Each item below names the review that found it. The reports are kept privately, and the coordinator hands them to the worker. Each item is fixed in its own commit. A guard is red first, with its mutant recorded. A comment or wording item needs no red.
+
+**Items.**
+| # | From | Where | What |
+|---|---|---|---|
+| 1 | review 1091 N1 to N5 (T3d) | the routing line and the session header | pin the nowrap rule; correct the half-true comment in `routingLine.ts`; "set effort" is written once; and the header's meta condition is stated |
+| 2 | review 1093 A1 and A2 (T3c) | the header crumb and the branch pill | a crumb that ignores renames reds (with a Refined swap case); a max-width on the branch pill itself reds |
+| 3 | review 1087 F3 (T2d) | `lib/feed.ts`, `ui` `count-badge.tsx`, `instrument.css` | stale comments say what the code does |
+| 4 | review 1095 F1 to F6 (T2d) | `refined-shell.test.tsx` and T2d's note | the vacuous `/^Mail —/` pin re-pointed; MailBadge's zero arm pinned; the stale T2e row title; the note's mutant file; F5 and F6 are wording |
+| 5 | reviews 1090 and 1096 (T2b) | T2b's comments and note | the wording minors those reviews left |
+| 6 | review 1098 F-1 and F-5 (T3a) | the W7 census and BucketBar | the census's real-tree case pins a STATUS_GROUPS label, and the Record read does not key on annotation text; the BucketBar middot comment |
+| 7 | review 1103 F1 to F3 (C8) | C8's comments | the passkey-status and updates-poll attributions and the banner no-fetch credit say what is true |
+| 8 | review 1107 minor (T4a) | as the report names | as the report names |
+| 9 | review 1108 A1 to A3, A5 and A8 (S5b) | the strip's comments and tests | as the report names; F1 is S5c's, not this task's |
+| 10 | R121 Q6 | `pwa/src/fleet/ProjectCardHead.tsx` (≈:78) | "Set pool"'s accessible name begins with its visible words, "Set pool — …" (WCAG 2.5.3), pinned by a case that reds on the old name |
+| 11 | review 1113 A1 to A3 and Step 2 (C11) | `server/test/` real-tmux suites, `ci.yml`, `pwa/browser/wheel.ts` | one shared `resetServer` helper for `drawer-window-sized-client`, `ccd-tmux-anchor` and `session-hook` (the local copies go); a guard or a sweep for an empty private server left behind after a SIGKILL under `exit-empty off`; the "(e)" label collision; the `ci.yml` comment on file order; and the two `wheel.ts` savings (the redundant settle, about 115 s, and slowest-first ordering, about 48 s), each measured before and after in CI's browser leg and taken only if no wheel-chain case loses its meaning |
+| 12 | review 1117 A5 (T2f) | `README.md` ≈:3193 | the fleet-board prose names the skin and width where `Runs · N active` sits beside the Class chooser |
+| 13 | review 1120 F1 to F5 and F8 (T3e) | the inspector files, `chat.css`, `CommandLayer.tsx` | a red for the Inspector door's chat.css selector; a guard that the rail reads the one shown fact (the reviewer's m3b); the focus case runs `flipInspector`; prose in the test header and `inspectorShown.ts`; the shortcuts sheet lists only the keys that act where it is opened (or says where they act) |
+| 14 | T3e's slugs | `pwa/test/w7-storage-keys.test.ts`, the inspector | `w7-keys-strip-row-missing`: `stripExpanded.ts` (`ccrc-accounts-strip`) gets its row, and the header's census count reads 12; `t3e-target-slot-helper` as T3e's report names it |
+| 15 | review 1115 F8 to F12 residue (T3b) | only what T3b's last fix round leaves | anything that round names as a residual |
+
+**Steps.**
+- [ ] **Step 0: Re-ground.** Read every report, re-anchor each item against `main`, and drop any item a later merge already fixed, saying so. Measure the live claims. Report the list you will do and the list that waits.
+- [ ] **Step 1: One commit per item.** Each guard is red first and its mutant is run. Each comment or wording item is checked against the code it describes.
+- [ ] **Step 2: Item 11's CI savings.** Measure the browser leg before and after from CI's own logs, at the PR's run and at one re-run. Take a saving only if every wheel-chain case still fails on its own mutant.
+- [ ] **Step 3: Verify.** Run each touched suite once, the pwa and server typechecks, `deviation-refs`, and the citation and anchor tests that README edits can break.
+
+- **D-7264** - `programme-follow-up-sweep`: Task C12, issued on 2026-10-28. The advisory findings this programme's reviews sent to a later sweep land in one task, one commit per item. Any departure the sweep finds is named by slug and numbered as it is found.
+
+**Acceptance.** Every item is fixed or named as already fixed, with its commit. Every new guard is red under its mutant, and nothing else changes behaviour. **Rollback.** A plain revert, item by item.
+
 ## Acceptance (the matrix, per PR)
 
 Each rendered task's PR body carries a table: rows Refined and Instrument × dark and light; columns the task's widths (at least 360, 390, 1280 and 1920), each cell a before (`origin/main`) and after pair checked for: no horizontal page scroll; no page errors; no clipped or overlapping text; 44 px targets under coarse emulation; the identity core present; one instance of each moved readout; nothing moved that the task did not intend; and the task's own claim. Mark it ✓, or write the defect and its fix. Fixture names only. Departures are named by slug under `## Departures`, for the coordinator to number.
@@ -2576,6 +2980,217 @@ C1's move of B4's limiter into `server/src/bounded.ts` stays under D-6388. Issue
 - **D-6850** - `transcript-goes-to-the-inline-question`: Task T1c, operator R64: the transcript's non-form Go to question action calls the EXISTING raise path, revealing and focusing the first option within both the inner scrollport and viewport (R69). No duplicate answer form, new modal or answer sender; phone Answer is unchanged.
 - **D-6851** - `inline-card-uses-the-existing-shortcut-guard`: Task T1c, operator R64: pwa/src/command/useShortcuts.ts and new pwa/test/ask-shortcuts.test.tsx, outside the original Files, extend only the existing focused-control guard. Suppress page navigation/help/chords while focus is INSIDE the mounted card, not globally while an ask exists. T5a's command-layer test has no edit consent.
 - **D-6852** - `whole-pixel-mono-line`: Task C5, operator R68: investigate .msg-assist pre, WELL and .tool-ask-a separately and permit a local whole-pixel line-height fix only where fractional scroll range/dead-first-wheel behaviour reproduces. Each changed box needs its own red-first reproduction, independent guard mutant, measurements/renders and outside-transcript Well regressions. Non-reproducing boxes are measured no-fix-needed; no blanket 20px, global font change or JS wheel interception. Scope authorization is not acceptance of the unfinished R68 work.
+
+### R119 departure issued 2026-10-27
+
+`POST /api/ledger/deviations` issued D-7117, D-7118, D-7121, D-7122 to D-7124, D-7139 to D-7142, D-7145, D-7146 to D-7152, D-7153 to D-7154, D-7155 to D-7157, D-7158 to D-7159, D-7160 to D-7163, D-7164, D-7197, D-7201, D-7210, D-7215 to D-7217, D-7218, D-7219, D-7222 to D-7223, D-7233 and D-7234 on 2026-10-27, and D-7248, D-7250 to D-7252, D-7253 to D-7256, D-7257 to D-7261, D-7262 to D-7263 and D-7264 on 2026-10-28, in twenty-eight allocations, and each is defined here in the act that issued it.
+
+- **D-7117** - `c1-secret-mask-wall-clock-to-perf-job`: Task C1, under R119. The required secret-mask case "2 MB TUI pane
+  history ... slices" asserts a wall-clock maximum gap (`< BOUND/5`) over about 40 gaps, so one scheduler pre-emption
+  on a loaded shard fails it. Following D-6929's ruled shape (#1534), the required row keeps a load-independent pin:
+  every slice is at most `SLICE_UNITS`, there is a pause between every two slices, the answer equals the one-string
+  answer, and the split key is masked. The wall-clock assertion moves, threshold unchanged, to a `CCRC_PERF`-gated row
+  that the non-required `perf (server)` job runs. `ci-pipeline.test.ts`'s D-6929 pins widen to it, and `ci.yml`, which
+  sits outside C1's original Files, changes only as far as that needs. The structural pin goes red-first and under a
+  mutant.
+  Amended 2026-10-27 on C1's final-review minor M2 (coordinator ruling): the wall-clock row runs in a non-required job
+  of its OWN, not as a step of `perf (server)`. That job's two-week zero-flake clock, before it becomes required on
+  `merge_group`, is the operator's ruling of 2026-10-25 (D-6929) and counts the session-hook rows only. A new row with
+  one green run behind it must not be able to reset that clock, or hide behind a failed `Budgets` step. The new job is
+  not required, gets no promotion clock without an operator ruling, and gets its own ci-pipeline pins.
+  Recorded 2026-10-27 on review 1058's W1: the gated row also discards ONE warm-up pass before the timed pass, so it
+  bounds only warmed gaps at `BOUND/5`. The old row bounded every gap, the cold first slice included. No row now asserts
+  a cold-first-slice bound. That is a narrowing of what is measured, disclosed in the row title, ci.yml and the PR body.
+  A cold-slice bound with its own measured budget is a follow-up.
+- **D-7118** - `literal-walker-parses-ts-as-ts`: Task B5, under R119, coordinator ruling on ask 156. `pwa/test/literalWalker.ts`'s
+  `parseTs` parses every file as TSX, so `pwa/src/lib/api.ts` misparses from its generic arrow `async <T>(path`, with 534
+  parse diagnostics. This is pre-existing on main, and it leaves the literal census partly blind to that file: a
+  duplicate appended there survived. The owner picks `ScriptKind.TS` for `.ts` files and `TSX` for `.tsx`. B5 removes its own
+  separate `ScriptKind.TS` parse of `api.ts`, so the walker stays the one parser (consolidate, don't duplicate). The
+  surviving duplicate mutant must go red, and all four walker readers stay green. `literalWalker.ts` sits outside B5's
+  original Files.
+- **D-7121** - `literal-census-parses-once`: Task B5, under R119. `pwa/test/literal-census.test.ts`, outside B5's original
+  Files, parses its roughly 400 pwa, ui and shared sources once at module load, not inside each of three cases. Before
+  the fix each case parsed every file inside a 5 s deadline: about 1.5 s idle, and 4.6 to 4.8 s pinned to one core.
+  After it, 2 to 13 ms under the same contention. The census's assertions and scope are unchanged, and six census mutants
+  are killed. The original red was not reproduced in this run (it measured 4.8 s against the 5 s bound), and that is
+  disclosed.
+- **D-7122** - `t1c-r119-second-push`: Task T1c, under R119, ask 160. A second push (`afeb44f78`) went beyond the
+  brief's "push once". It carries only the jsdom 30 test repair (D-7123). The coordinator relaxed its own brief rule; this
+  is a process record, not a scope change.
+- **D-7123** - `t1c-jsdom30-test-premises`: Task T1c, under R119. Main's #1609 moved the PWA to jsdom 30 and vitest 5. On
+  jsdom 30, `blur()` leaves a disabled row focused, and `focus()` cannot land on one. Four `ask-inline.test.tsx` cases
+  whose premise was "focus falls to the body" therefore failed on the merge ref. A test-only repair: `focusToBody()` lifts
+  `disabled` for the blur alone and asserts the premise, at all 11 sites, and the gap case reads the roving tab stop. It
+  is green on both stacks, and product code is unchanged. Row 56 reds 3 cases on jsdom 30, not 4, and the row stays
+  killed. Review 1059 measured the cause: under the mutant the 16 ms inline timer calls `focus()` on the in-flight
+  disabled row, which jsdom 28 honours and jsdom 30 and Chrome refuse, so the lost kill was a jsdom 28 artefact.
+- **D-7124** - `t1c-render-matrix-fixture1-only`: Task T1c, under R119. The exact-runtime render matrix was captured at
+  `4b5598dca` for fixture 1 only (18 captures: desk 1280/1920 and phone 360/390, both skins, both palettes). The plan's
+  112-cell four-fixture set was not refreshed, and the missing older captures stay missing. `afeb44f78` changes no
+  product code, so these are the head's runtime renders.
+  Ruled 2026-10-27 on review 1059's J4 (coordinator): this satisfies R119's "screenshot matrix" gate. The R119 brief
+  defined that matrix as phone and desktop, both skins, both palettes, each capture labelled with its revision, and
+  the 18 captures are exactly that at a head whose product code equals the tip's. Since the last full 112-cell set
+  (`fac0f6756`) the product changed only in `AskParts.tsx`, `DialogSheet.tsx` and `useAskKeys.ts`, with no CSS, markup,
+  `ui/` or class change, so the older cells still describe the geometry. The cells missing as images (899/900, and
+  fixtures 3, 6 and 7) are covered as measurements by the R93 Chrome matrix (232 cases), which the reviewer ran green
+  at the tip. The 112-cell refresh is not required for T1c.
+- **D-7139** - `model-list-names-its-provider`: Task T3d. `pwa/src/lib/models.ts`, outside T3d's Files, gains two exported
+  functions: `modelListProvider` names whose list `modelOptions` picks, and `classReadbackMeasurable` is the one
+  measurability rule. `modelOptions` and `effortOptions` both go through `modelListProvider`, and `routingLine`'s rule
+  reuses that one branch instead of a second `=== 'gpt'` test, so the rule is consolidated, not duplicated. (Text
+  corrected after review 1082's F3: the entry first named a `pwa/src/session/models.ts` that does not exist and one
+  function.)
+- **D-7140** - `routing-line-takes-the-view`: Task T3d. The signature is `routingLine(row, view, laneLabel)`, with
+  `view = routeView(row, wrapper, provider)`, instead of the plan's `routingLine(row, routeInfo, provider)`. The provider
+  reaches the line through `routeView`, so the rail and the header share one decision.
+- **D-7141** - `route-view-splits-pending`: Task T3d. `routeView` also exposes `classPending` and `effortPending`;
+  `wireQueuedField` keeps today's effort-first answer. Without the split, a pending class behind a pending effort could
+  never read "asked".
+- **D-7142** - `routing-line-says-pending-effort`: Task T3d. The line adds "· asked effort <x>" while an effort is pending,
+  so the rail agrees with the header's badge. It keeps today's "routing could not be read" when a field's read failed.
+  The model and effort words stay the chooser doors, with the same accessible names.
+- **D-7145** - `desk-rule-not-container-threshold`: Task T3b. On main the row's `.sess-body` track measures 185 to 303 px
+  at the desk and 226 to 274 px on a phone, so the plan's 320 px container threshold never fires at any desk width, and a
+  container query cannot tell the desk from a phone. Instead, from 900 px (a media query) the card draws the full name
+  and branch, wrapping at token breaks and clamped at two lines; a longer name is cut where the second line fills.
+  Programme slugs render whole, so the wave tail is never cut. Below 900 px nothing changes: names are token-short, and
+  the 320 px container rule is kept for wide tablet tracks. Step 3's mutant "the threshold back at 320 px" becomes "the
+  desk rule removed". T3b takes R21 F2 / R32 F2's "wrapping name" arm, does not edit `instrument.css`, and reports
+  Instrument's 1280 row heights.
+- **D-7252** - `t3b-state-word-arm-never-cuts-a-context`: Task T3b, under R121 Q2 option 1 (the operator, 2026-10-28) and R21 F2. This supersedes D-7145's clause "does not edit `instrument.css`". In Instrument's fine-pointer desk block, a status row whose context sits whole beside its state word puts the state word at the end of the context line, so a long name has the first line or lines to itself. Ruled on review 1115 (F1 and F2): the arm never narrows a context below the width it needs to sit whole. A programme slug and its wave tail, a child marker and a branch keep D-7145's "never cut", and D-5528 and D-5545's "no fact dropped" still holds. Where the context will not fit whole beside the state word, that row lays out as on main, with the state word on a line of its own. No row at the desk widths is taller than on main; a row that would be is laid out as on main. A committed real-Chrome case pins this on needs-you and working rows whose contexts are a programme with its wave tail, a child marker and a long branch. It measures clipping (scroll width against client width) and overlap with the state word, not `textContent`, and compares each row's height with main's.
+- **D-7146** - `identical-frame-ratio-gate`: Task C6, under R119. The browser frame-cost test carries a second gated row
+  beyond the plan's one: the identical frames' cost as a ratio of the changing frames' cost, per skin. The plan's row
+  is a ceiling only, which a store that re-renders on every identical frame can still pass. The ratio row reds with
+  C6's `pwa/src` reverted (the pair at `b1225668a`, declared at 11:53:30Z, AFTER FINAL-A's red at the same head and
+  seven diagnostic repeats; review 1068 F1). It can also red with no window overrun under host CPU
+  pressure (FINAL-A, 1.78, cause not established), so CI's quiet runner is the arbiter.
+- **D-7147** - `snapshot-refusal-predicate`: Task C6. `pwa/src/lib/offline.ts` exports `snapshotRefused`, the one decision
+  behind `saveFleetSnapshot`'s refusals. The throttled snapshot scheduler reads it too, so a frame the snapshot would
+  refuse never opens a window (consolidate, don't duplicate).
+- **D-7148** - `program-attempt-comment`: Task C6. One comment in `useProgramAttempt.ts`, outside C6's Files, now says
+  that `sessions` changes only on a frame that changes, adds, removes or reorders a row. No code changes there.
+- **D-7149** - `render-fanout-stand-in`: Task C6. Render fan-out case 1 counts `SessionScreen`'s renders through a
+  stand-in child rather than by instrumenting the screen itself.
+- **D-7150** - `render-fanout-late-row`: Task C6. An extra render fan-out case: a row that arrives late must still be
+  reached by the memoised doors. The plan's "openActions opens the newest row" is green on the base too, so it cannot
+  catch frozen doors.
+- **D-7151** - `reporter-flag-wording`: Task C6. `runs-finished-fold.test.tsx`'s reporter comment credits the measurement
+  that was made: on vitest 4.1.10 in an agent session, no flag and `--silent=false` print no measurement line, while
+  `--reporter=verbose` and `--reporter=default` do; with the agent variables unset, all four print it.
+- **D-7152** - `frame-cost-window-overrun`: Task C6, under R119, the operator's answer to ask 157 ("Overrun refusal"). A
+  frame-cost window whose measured span passes `gapMs + SPAN_SLACK_MS` (1000 ms) fails the attempt as a named harness
+  failure, `window-overrun`, never as a cost figure. The check covers every window, the idle one (`during(-1)`) and the
+  self-tests' included, and the overrun window is kept in the record, which a gate case keeps through vitest's
+  test-finished hook. Threshold, frame counts, medians, the gap, both caps and the per-case budgets are unchanged. The
+  A2 reds it answers are explained by measured correlation with host memory pressure, not by an established cause.
+  Review 1068 F3: several pressure figures quoted for ask 157 did not recompute from the retained 1 s samples. #1697's
+  body restates them with the method named. The restated figures still show severe memory pressure in the A2 interval.
+- **D-7153** and **D-7154** are defined under Task S5b's R120 amendment, where they apply.
+- **D-7155** - `unread-count-retired`: Task T2d, coordinator ruling on ask 169. Once every Inbox door counts
+  `waitingOnYou` (AppBar, PhoneHeader, the rail, and the fleet head's MailBadge), `unreadMailCount` in `navBadges.ts`
+  has no production reader, so it is deleted rather than kept as a second count. `raisesUnread` and `isUnseenAt` stay
+  the Inbox rows' one unread mark (D-5431). `instrument-shell`'s R32 F5 cases, which pinned `isUnseenAt` through the
+  rail's unread count, move to the Inbox rows (`mail-screen.test.tsx`), keeping each assertion and its mutant. The
+  plan's F8 sentence ("the fleet head calls `unreadMailCount` directly") described main before T2d. The corrected
+  Rail comment names `useNavBadges`' readers instead.
+- **D-7156** - `fleethead-prop-name`: Task T2d. FleetHead's `unreadMail` prop would carry the waiting count, so it is
+  renamed with its doc. `FleetHead.tsx` is outside T2d's original Files: one prop and its comment.
+- **D-7157** - `browser-tests-unnamed`: Task T2d. Three browser files assert the old door names and are not in T2d's
+  Files: `refined-bar.browser` and `refined-phone.browser` (with the exact consent of S5b, which holds them) and
+  `instrument-desk.browser`. They change only the asserted names and counts.
+- **D-7158** - `c3-task-sweep-handoff-already-on-main`: Task C3. The task-sweep half of C3 landed before it, through
+  #1240 (D-5864): `tick()` already passes its registry read to `sweepTasks`, whose own read is tagged
+  `[registry-refused:tests-only]`, and the census already pins both. So C3 makes no edit to
+  `registry-refused-census.test.ts` (the plan's row rewrite and new pin would duplicate it), and "a due task sweep adds
+  no uuid read" is a regression pin, green on the base, whose mutant still reds it. C3's change is the bounded capture
+  pass in `detectDialogs` and the carried text.
+- **D-7159** - `c3-capture-bound-beside-module-constants`: Task C3. `TASK_SWEEP_MS` moved into `laneSchedule.ts`'s lane
+  table, so `DIALOG_CAPTURE_CONCURRENCY` goes beside `watch.ts`'s other exported module constants, not into the cadence
+  table: it is a bound, not a cadence.
+- **D-7160** - `t3c-more-sheet-lists-the-doors`: Task T3c. `sessionMenu` (`SessionFlows.tsx`) gains Terminal and, for a
+  workspace, the PR door with its word, after Docs (`session-docs-link.test.tsx` pins the first four). They run through
+  SessionFlows' one `run`; no new plumbing.
+- **D-7161** - `t3c-typed-label-test-edited`: Task T3c. `pwa/test/typed-label.test.tsx`, outside T3c's Files, pinned
+  `.chat-crumb` in its rename case; the crumb is now the project, so it pins `.chat-title-text`. The edit landed before
+  T3c took its claim (2764); no one else held the file. A process record.
+- **D-7162** - `t3c-d5390-reversed`: Task T3c. `header.test.tsx`'s D-5390 assertions (an ellipsis on
+  `.status-line-name`) are rewritten to pin the reverse, as R8's "never cut" requires.
+- **D-7163** - `t3c-refined-rail-max-width`: Task T3c. Refined's phone rail sets `max-width: none` on `.metachip`,
+  `.status-line--coordinator` and `.status-line-name`, because a capped box let its nowrap text paint under the next
+  chip (measured).
+  Ruled 2026-10-27 on T3c's wave-done residual 1: Instrument's interim header grows 48 px at exactly 900 (139.63 to
+  187.63, both palettes), because the worded doors make the chip rail wrap. The plan's never-cut rule prefers a wrap to
+  an ellipsis, and its height bound is measured at 1280, where the header is unchanged. So this is within the plan,
+  and disclosed in the PR body.
+- **D-7164** - `routing-line-names-inert-class`: Task T3d. When the session's class is inert on its lane, the one
+  routing line reads " · model set by the lane", so the old rail's "not applied on this lane" fact survives in that one
+  line (T3d's final review, M-7), and no second line is added.
+- **D-7197** - `t2b-carries-r13-in-refined-phone-browser`: Task T2b, coordinator ruling on ask 168. R13's two
+  browser-leg items live in `pwa/browser/refined-phone.browser.test.ts`, outside T2b's Files and under S5b's claim. T2b
+  edits that file for those two cases only, with S5b's exact consent. The toast case measures the real ToastHost, and
+  the home-indicator case runs at a non-zero inset (34 px, CDP-emulated). Both are test fixes with no behaviour change,
+  each red on its mutant against the new file and green against the old one.
+- **D-7201** - `c8-false-comments-corrected`: Task C8, coordinator ruling on ask 172. Once the fleet store is the one
+  `/api/accounts` caller, comments outside C8's listed hunks become false. C8 corrects them, comment-only: `lib/accounts.ts`
+  :16-20 and :41-48 and `AccountsScreen.tsx` :236-238 and :273-276 (with S5b's exact consent, which holds both), and
+  `AccountPoolSheet.tsx` :15, `StartProgramSheet.tsx` :146-149 and `lib/api.ts` :424 (under a claim C8 takes). Source
+  comments are read as authoritative history, so a false one is a defect.
+  Extended on review 1094's F2: the comments the change makes false elsewhere are corrected the same way, comment-only,
+  under their holders' consents. These are `FleetScreen.tsx`'s timer note, `HotFilesStrip.tsx`'s header, `AccountsStrip.tsx`'s
+  placeholder note, the session-docs-link and session-actions-sheet tests, and, in fix round 1, `session-actions-rename`,
+  `fleet-screen` (its timer list) and `session-lifecycle`. Extended again on review 1099's F1 and F4, for fix round 2:
+  `fleet-screen`'s two mount-fetch notes and its timer list (made complete, each interval credited to its real owner), and
+  `auth-door`'s mount-fetch note, outside C8's Files and unclaimed, comment-only.
+- **D-7210** - `t3d-inspector-css-joins-the-task`: Task T3d, coordinator ruling on review 1082's F2.
+  `pwa/src/inspector/inspector.css`, outside T3d's Files, is part of the task: the one routing line needs inline-flow
+  rules (`.insp-routing-row`, `.route-queued`, `.insp-routing-tail`) in place of the old row's dt/dd rules, and the empty
+  state's `.insp-empty` goes with the "Not read yet" text it styled. No other inspector rule changes. The F4 ruling
+  holds D-7142 as written: when nothing is read, the model and effort doors keep their old accessible names ("Model:
+  not read yet, change", "Effort: set effort, change"), which still match the header chip; only the inert effort's
+  "Effort: set by the lane, change" is new, as the task asks.
+- **D-7215** - `t3a-mixed-chip-says-pinned`: Task T3a, the operator's answer to ask 165, confirmed by the coordinator.
+  When a project's sessions sit on several accounts, the pool chip's title says "pinned to", not the plan's "run on",
+  because the chip measures each session's pinned account, not where it runs.
+- **D-7216** - `t3a-route-note-says-routing-default`: Task T3a. The New session sheet's route note reads "Unset fields
+  take the routing matrix's default (Opus · high, Sonnet subagents, workflows on).", so it no longer names the old chooser
+  word "Coordinator row" that this task retires.
+- **D-7217** - `t3a-badged-head-keeps-row-height`: Task T3a. `.ins-group-seen` joins the desk group-head rule in
+  `pwa/src/skins/instrument/instrument.css`, outside T3a's Files and under T2b's claim with its consent (one selector,
+  disjoint from T2b's hunk), so a badged Instrument head keeps the fold row's height. Found by T3a's own browser
+  pin, together with the unplanned `size="fit"` fix: `@ccrc/ui`'s Button defaults to full width, and a badged head
+  stood 156 px against 32.
+- **D-7218** - `t2b-fab-layout-browser-pin`: Task T2b, coordinator ruling on review 1083's A2. The plan says a task's
+  layout claim is pinned by a committed browser case. The two existing files that could carry T2b's are held by T2d and S5b,
+  so T2b creates `pwa/browser/instrument-fab.browser.test.ts`, outside its Files and under its own claim: at 899 the
+  round + is the one New session door, and at 900 and 1280 there is none, in both palettes. After review 1090's F1, a door
+  counts as visible only when the browser's own visibility check says so, not merely on a non-zero client rect.
+- **D-7219** - `c8-red-list-differs`: Task C8. The plan's "known so far" list of cases that assumed a component's
+  own poll is not the measured one. `fleet-pieces`, `project-card` and `add-workspace-sheet` stayed green and are
+  untouched. Seven other test files went red and are migrated, one commit per file: `lifecycle-ui`, `fleet-screen`,
+  `account-pool-chip`, `meter`, `runs-screen`, `tap-targets` (T2d's claim, with the coordinator's consent on its three
+  hunks) and `auth-passkey`, all under C8's own claim except tap-targets. Step 0's measured list is the authority, as the
+  plan says.
+- **D-7222** - `t3a-phone-tabs-keep-their-counts`: Task T3a, coordinator ruling on review 1092's F2. In Instrument's
+  status mode on a phone, each tab keeps its group's count beside the open panel's head. The tabs are the navigation to
+  panels that are not on screen, and a tab without its count would lose the only count of a hidden bucket. So "one count
+  per bucket per screen" counts a bucket's count once among the things that describe the open panel: the chips are gone,
+  and the head carries the count. The repeat on the selected tab is legitimately different, not a second count.
+- **D-7223** - `t3a-files-outside-the-list`: Task T3a, coordinator ruling on review 1092's F6. Three files outside T3a's
+  Files are part of the task: `pwa/src/fleet/classWords.ts` (new; the one home of the Automatic word and its title, from the
+  CI fix round, so literal-census holds), `pwa/test/session-line.test.tsx` (a two-line word swap that the rename forces),
+  and `pwa/browser/instrument-group-seen.browser.test.ts` (new; the committed browser pin the plan requires for T3a's
+  layout claim, beside D-7217).
+- **D-7234** - `t4a-any-escape-is-ansi`: Task T4a, coordinator ruling on review 1105's F5. The plan routes a tool
+  result with SGR codes to `ansi`, one headed by a unified diff to `diff`, and anything else to plain. T4a routes a
+  result holding ANY escape byte to the ANSI reader (`lib/ansi.ts`'s any-ESC predicate), so an erase-only, OSC-only or
+  stray escape is removed rather than shown raw. That is the safer direction, and it is accepted: no control byte
+  reaches a well. The cost is that a diff-headed result carrying a stray non-SGR escape loses its diff colouring, which
+  `tool-well.test.tsx` pins. With this routing `hasSgr` has no caller, so it and its mutant rows are removed, not kept
+  as dead code. Ruled with it: Q8's default A applies to inline code in assistant messages, as the plan names it. The
+  Docs reader's `doc-body` and the compaction recap's `compaction-body` keep today's inline code until the operator
+  rules otherwise.
 
 ## Out of scope
 

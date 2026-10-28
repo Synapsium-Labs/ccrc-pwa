@@ -30,6 +30,7 @@ import { SENTENCES } from '../src/wsaudit.js';
 import { LC_REASON_MAX_BYTES, LC_REFUSAL_TOKENS, holdReason } from '../../shared/api.js';
 import { testDeps } from './helpers.js';
 import { ccdSource } from './ccdWsHelpers.js';
+import { refuseWords } from './census-w5/ccdHelpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import { makePrHarness, type PrHarness } from './ccdPrHelpers.js';
 import { CHILD_ID, childReclaimVerb, evalOf, makeChild } from './childReclaimFixture.js';
@@ -134,7 +135,7 @@ describe('the fifteen words', () => {
     expect(end).toBeGreaterThan(begin);
     const region = ccd.slice(begin, end).split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
     const harvested = new Set([
-      ...[...region.matchAll(/_reap_refuse ([a-z][a-z-]*)/g)].map((m) => m[1]!),
+      ...refuseWords('reap', { from: begin, to: end, codeOnly: true }),
       ...[...region.matchAll(/"refused":"([a-z][a-z-]*)"/g)].map((m) => m[1]!),
       ...PIN_WORDS(region),
     ]);

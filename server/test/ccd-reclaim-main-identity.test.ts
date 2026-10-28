@@ -510,7 +510,7 @@ describe('the source: identity only refuses, and the owned check measures last (
     expect(str).toBeGreaterThan(-1);
     expect(code[str + 2]).toBe('  [[ ! "$workdir" -ef "$main" ]] \\');
     expect(code[str + 3]).toContain(
-      '_reap_refuse not-a-workspace "$workdir is the project directory $main itself, under another spelling, not a workspace of $id"');
+      '_ws_refuse not-a-workspace "$workdir is the project directory $main itself, under another spelling, not a workspace of $id"');
   });
 
   it('SRC-3 the owned check measures the two identities after its moved-tree check, directly before its last return 0 (P21)', () => {

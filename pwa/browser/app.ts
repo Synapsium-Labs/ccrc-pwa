@@ -510,3 +510,13 @@ export async function frameCost(
     await cdp.detach().catch(() => { /* the context closing first is fine */ });
   }
 }
+
+/** Store the lanes strip as expanded on this context's device (`ccrc-accounts-strip` = `'expanded'`, the one word
+ *  `stripExpanded.ts` reads as "show every lane"), so a case that counts or places every card keeps seeing all of them
+ *  now that the strip folds by default. Call it after `openApp` and before `page.goto`; each case opens a fresh context,
+ *  so the seed never leaks into the next. */
+export async function seedStripExpanded(ctx: BrowserContext): Promise<void> {
+  await ctx.addInitScript(() => {
+    try { localStorage.setItem('ccrc-accounts-strip', 'expanded'); } catch { /* storage refused: the strip then folds */ }
+  });
+}

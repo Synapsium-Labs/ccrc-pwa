@@ -15,7 +15,7 @@
 //     token rather than a literal `44px` that would not follow the token;
 //   - the RENDER proves a real element still carries the class, which is what
 //     a rule with no matching element would silently stop doing.
-import { describe, it, expect, afterEach, vi, beforeEach } from 'vitest';
+import { describe, it, expect, afterEach, vi, beforeEach, onTestFinished } from 'vitest';
 import type { CoordCapsView } from '../../shared/api';
 import { fleetSession } from './fleetFixture';
 import { act, cleanup, render, screen, fireEvent } from '@testing-library/react';
@@ -24,7 +24,7 @@ import path from 'node:path';
 import type { CoordStatus, FleetSession, MailSummary, NotifyEvent, PrState, RunSummary, WsAudit } from '../../shared/api';
 import { declValue, norm, rootBody, ruleIn, stripComments } from './cssRule';
 import { api } from '../src/lib/api';
-import { createFleetStore, type FleetStore } from '../src/stores/fleet';
+import { createFleetStore, useFleetStore, type FleetStore } from '../src/stores/fleet';
 import { ArchiveScreen } from '../src/screens/ArchiveScreen';
 import { FleetScreen } from '../src/screens/FleetScreen';
 import { renderFleet } from './fleetHost';
@@ -604,9 +604,10 @@ describe('.program-start-go — the sheet’s own confirm control', () => {
     expectQuietIsATarget();
   });
   it('is the class the rendered confirm button actually carries', async () => {
-    vi.spyOn(api, 'accounts').mockResolvedValue({
-      accounts: [], projected: { wrapper: 'claude', score: 5 }, roster: [],
-    });
+    // The sheet reads the app-wide fleet store's projection, which that store's one /api/accounts poll writes
+    // (C8, D-6440); reset when the case ends.
+    act(() => { useFleetStore.setState({ projected: { wrapper: 'claude', score: 5 } }); });
+    onTestFinished(() => { useFleetStore.setState({ projected: undefined }); });
     const store = makeStore();
     render(<StartProgramSheet open onClose={() => {}} fleet={store}
       openRunProjects={new Set<string>()}

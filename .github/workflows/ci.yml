@@ -1199,9 +1199,14 @@ jobs:
   browser-pwa:
     name: browser (pwa)
     runs-on: ubuntu-latest
-    # About a minute of tests after npm ci; 15 is headroom for a cold npm
-    # cache and a slow Chrome start, as build-pwa's is.
-    timeout-minutes: 15
+    # Measured 2026-10-28 (desktop polish Task C11, run 40612653530): the Test
+    # step took 861 s of an 893 s job, 30 files and about 2,430 s of file time
+    # over three workers. The three wheel-chain files are 876 s of that and
+    # ask-inline 383 s. vitest starts files it has no timings for largest
+    # first, so the small wheel-chain files run last and set the tail. At 15
+    # that left 7 s; 20 leaves about five minutes for a cold npm cache, a slow
+    # Chrome start and the next few files.
+    timeout-minutes: 20
     env:
       CCRC_LEG: ${{ (github.event.schedule == '23 * * * *' || inputs.mode == 'refresh' || inputs.mode == 'rebuild') && 'skip' || 'run' }}
     steps:

@@ -15,7 +15,7 @@
 import type { CSSProperties, ReactNode } from 'react';
 import type { RosterWire } from '../../../shared/api';
 import { Chip, ListRow, Meter, limitBand } from '@ccrc/ui';
-import { accountHue, accountLabel } from '../lib/accounts';
+import { accountHue, accountLabel, SIGN_IN_EXPIRED } from '../lib/accounts';
 import { condemned, type AccountFacts } from './accountPicker';
 import { windowReading } from './laneWords';
 import { PoolTag } from './PoolTag';
@@ -142,7 +142,7 @@ export function AccountRow({
             reads as live pressure on a lane nothing is running on. It was a
             `[data-disabled]` rule in fleet.css reaching into the fill; the
             component owns its own appearance now. */}
-        {off && <span className="acct-condemned">sign-in expired on the fleet host</span>}
+        {off && <span className="acct-condemned">{`${SIGN_IN_EXPIRED} on the fleet host`}</span>}
         {facts === null ? (
           <span className="acct-unknown">limits unknown</span>
         ) : (

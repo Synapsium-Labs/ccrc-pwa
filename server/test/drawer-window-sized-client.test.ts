@@ -16,7 +16,7 @@
 // environment (node-pty turns an `undefined` env value into the literal string
 // "undefined", which tmux then refuses, so we `delete` the keys instead), and
 // uses `-f ccd/tmux.conf` on every tmux invocation.
-import { describe, it, expect, afterAll, afterEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest';
 import { spawnSync, type SpawnSyncReturns } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -152,7 +152,34 @@ const assertGeometry = (target: string): void => {
   expect(geometry(target), 'client and window geometry').toEqual(EXPECTED);
 };
 
+/** The reset between cases: detach every client this file attached, then kill
+ *  every session on the private socket. The server itself stays (`beforeAll`). */
+const resetSessions = (): void => {
+  for (const p of attached.splice(0)) {
+    try { p.kill(); } catch { /* already gone */ }
+  }
+  const ls = T('list-sessions', '-F', '#{session_name}');
+  if (ls.status === 0) {
+    for (const name of ls.stdout.split('\n').filter(Boolean)) {
+      T('kill-session', '-t', `=${name}:`);
+    }
+  }
+};
+
 describe.skipIf(NO_TMUX)(BEHAVIOURAL, () => {
+  // Desktop polish Task C11: the reset kills every session, and under tmux's `exit-empty`
+  // default a server with no session exits on its own. The next case's
+  // `new-session` could reach it while it was still exiting and answer
+  // `server exited unexpectedly` (measured: 52 of 500 resets at load 6).
+  // So the private server is started once with `exit-empty off`, lives across
+  // every case, and only `afterAll` kills it: no case meets an exiting server,
+  // and no reset has to poll for one to go.
+  beforeAll(() => {
+    const start = T('start-server', ';', 'set-option', '-s', 'exit-empty', 'off');
+    expect(start.status, `start-server: ${start.stderr}`).toBe(0);
+    expect(T('show-options', '-s', '-v', 'exit-empty').stdout.trim(), 'exit-empty on the private server').toBe('off');
+  });
+
   afterAll(() => {
     if (REAL_TMUX !== null) T('kill-server');
     if (typeof process.getuid === 'function') {
@@ -160,17 +187,7 @@ describe.skipIf(NO_TMUX)(BEHAVIOURAL, () => {
     }
   });
 
-  afterEach(async () => {
-    for (const p of attached.splice(0)) {
-      try { p.kill(); } catch { /* already gone */ }
-    }
-    const ls = T('list-sessions', '-F', '#{session_name}');
-    if (ls.status === 0) {
-      for (const name of ls.stdout.split('\n').filter(Boolean)) {
-        T('kill-session', '-t', `=${name}:`);
-      }
-    }
-  });
+  afterEach(() => { resetSessions(); });
 
   it('(a) under window-size latest the client is the window plus one status row', async () => {
     const { p, target } = await spawnAndAttach('demo-a');
@@ -228,6 +245,17 @@ describe.skipIf(NO_TMUX)(BEHAVIOURAL, () => {
     expect(fs.readFileSync(STUB, 'utf8'), 'stub source never prints middle-dot').not.toContain('\u00b7');
     p.kill();
   }, 30_000);
+
+  it('(e) the reset between cases leaves the private server running', async () => {
+    await spawnAndAttach('demo-e');
+    resetSessions();
+    // Long enough for a server under exit-empty to have gone (measured: it
+    // goes within milliseconds), so a server still here is one that stays.
+    await sleep(500);
+    const ls = T('list-sessions');
+    expect({ status: ls.status, sessions: ls.stdout.trim(), stderr: ls.stderr.trim() }, 'list-sessions after the reset')
+      .toEqual({ status: 0, sessions: '', stderr: '' });
+  }, 30_000);
 });
 
 // MUTATION TABLE (D-5005), RUN on tmux 3.7c, 2026-10-14: each mutant edits
@@ -244,3 +272,17 @@ describe.skipIf(NO_TMUX)(BEHAVIOURAL, () => {
 // | 300x51 | (a), (b), (c) RED: `{ client: '300 51', window: '300x50' }`; and (d) RED: once `manual` latches the window at 220, tmux fills the client past it with U+00B7 (`collected client stream: expected '…' not to contain` it) |
 //
 // The red-first run was the 220x50 row, before the attach read the constants.
+//
+// MUTATION TABLE (desktop polish Task C11), RUN on tmux 3.6, 2026-10-28, twice, each mutant
+// alone and the file restored from a saved copy after. The race itself: a loop
+// of 500 new-session-then-reset rounds through this file's own reset answered
+// `server exited unexpectedly` 52 times before `beforeAll`, and 0 times in each
+// of two runs after it.
+//
+// | Mutant | Observed |
+// |---|---|
+// | `exit-empty off` -> `on` | `beforeAll` RED: `exit-empty on the private server: expected '' to be 'off'` (the server had already exited) |
+// | the same, and no option assertion | (e) RED: `list-sessions after the reset`, `status: 1` (`no server running`) |
+// | `start-server` alone, no option assertion | (e) RED, the same |
+// | the same, and no sleep in (e) | (e) RED, the same: the server goes within milliseconds |
+// | (e) skips the reset | (e) RED: `sessions` names the case's session |

@@ -19,7 +19,8 @@
 //     `openApp` takes `touch`.
 //
 // The card check below is refined-bar.browser.test.ts's, rewritten and not imported: that file is a test file (its
-// `beforeAll` builds the app), and it keeps the check inline. The lanes row's own layout, and the update row under it
+// `beforeAll` builds the app), and it keeps the check inline. The strip folds by default (S5b, D-6530); the desk case below
+// places all seventeen cards, so it seeds the stored choice expanded. The lanes row's own layout, and the update row under it
 // at length, are lanes-row.browser.test.ts's.
 //
 // Run: `( cd pwa && CCRC_CHROME=<a Chrome or Chromium binary> ./node_modules/.bin/vitest run --config vitest.browser.config.ts --maxWorkers=2 browser/update-indicator.browser.test.ts )`.
@@ -27,7 +28,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { chromium, type Browser, type Page } from 'playwright-core';
 import { INSTRUMENT, PHOSPHOR, REFINED } from '@ccrc/ui';
 import { resolveChrome } from './harness';
-import { buildDist, openApp, removeDist, serveDist, type AppFixture, type AppView, type DistServer } from './app';
+import { buildDist, openApp, removeDist, seedStripExpanded, serveDist, type AppFixture, type AppView, type DistServer } from './app';
 
 const THEMES = [PHOSPHOR, 'light'];
 const named = (v: AppView): string => `${v.skin}, ${v.theme}, ${v.width}px, ${v.touch === true ? 'touch' : 'mouse'}`;
@@ -209,6 +210,7 @@ describe("at the desk the bar's first line is unchanged and the update line is o
     it(named(view), async () => {
       const { ctx, page, errors } = await openApp(browser!, view, FIXTURE);
       try {
+        await seedStripExpanded(ctx); // the check below places all seventeen cards; the strip folds by default (S5b, D-6530)
         const answers = await answerViewThenFail(page);
         await page.goto(server!.origin + '/');
         const refined = view.skin === REFINED;

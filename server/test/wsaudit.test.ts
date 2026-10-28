@@ -3,10 +3,11 @@ import { readFileSync } from 'node:fs';
 import { parseAudit, parseReap, refusalSentence, SENTENCES } from '../src/wsaudit.js';
 import { reviveWsAudit } from '../../shared/api.js';
 import { CCD, ccdSource } from './ccdWsHelpers.js';
+import { refuseWords } from './census-w5/ccdHelpers.js';
 
 /**
  * The refusal-token <-> copy linkage, required by Task 13. `ccd` answers
- * refusals as TOKENS (`_reap_refuse dirty-tree …`, `printf '{"refused":"…"}'`,
+ * refusals as TOKENS (`_ws_refuse dirty-tree …`, `printf '{"refused":"…"}'`,
  * `printf '"verdict":"…"'`, and the two `!token` lines the embedded python
  * writes for `_pr_py pick`) and `refusalSentence` turns each into copy a
  * person reads. NOTHING before this test linked the two, so renaming a token
@@ -19,7 +20,7 @@ import { CCD, ccdSource } from './ccdWsHelpers.js';
  * could itself drift from either side.
  *
  * Four emission shapes, each a literal-token grep over ccd's source text:
- *   - `_reap_refuse <token> "…"` — every guard in `_ws_reap_eval` (Phase A-D1),
+ *   - `_ws_refuse <token> "…"` — every guard in `_ws_reap_eval` (Phase A-D1),
  *     which backs BOTH `cmd_ws_audit`'s non-reapable verdict and
  *     `cmd_ws_reap`'s "evaluated" refusal (`$REAP_VERDICT`, dynamic on the wire
  *     but drawn from exactly this literal set).
@@ -39,7 +40,7 @@ import { CCD, ccdSource } from './ccdWsHelpers.js';
  *     non-`reapable` verdict through `refusalSentence`).
  *   - `'!<token>` — `_pr_py pick`'s two bare `sys.stdout.write` literals
  *     (`!pr-head-not-ours`, `!not-merged`); `_ws_reap_eval`'s
- *     `_reap_refuse "${row#!}"` re-emits whichever of the two python chose, so
+ *     `_ws_refuse "${row#!}"` re-emits whichever of the two python chose, so
  *     the token itself only exists as a python string literal, not as a bash
  *     one.
  *
@@ -54,7 +55,7 @@ describe('refusal-token <-> sentence linkage (ccd source <-> wsaudit.ts SENTENCE
   const ccdSrc = ccdSource();
 
   const tokens = new Set<string>();
-  for (const m of ccdSrc.matchAll(/_reap_refuse\s+([a-zA-Z][a-zA-Z0-9_-]*)\b/g)) tokens.add(m[1]!);
+  for (const w of refuseWords('reap')) tokens.add(w);
   for (const m of ccdSrc.matchAll(/"refused":"([a-zA-Z0-9-]+)"/g)) tokens.add(m[1]!);
   for (const m of ccdSrc.matchAll(/'!([a-zA-Z0-9-]+)/g)) tokens.add(m[1]!);
   // D-6633: rung 9's rescue words ride a `failed` document, not a refusal: the pin names them in `RECLAIM_PIN_WORD=<word>`.

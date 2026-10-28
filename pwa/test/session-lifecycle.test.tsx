@@ -546,9 +546,9 @@ describe('a chat that had to look elsewhere says so', () => {
   });
 
   // The unarrived-roster case (DISPATCH-CONTEXT's task-12 addendum): a
-  // `/s/:id` deep link that never mounted FleetScreen's own accounts poller
-  // has `roster: []` (`stores/fleet.ts`'s own default, deliberately, for
-  // exactly this window). `accountLabel` degrades to the raw wrapper id
+  // `/s/:id` deep link opened before the fleet store's one accounts poll has
+  // answered has `roster: []` (`stores/fleet.ts`'s own default, deliberately,
+  // for exactly this window). `accountLabel` degrades to the raw wrapper id
   // rather than a blank cell or a throw — the same fallback SessionLine and
   // SessionActionsSheet already lean on. Kills a banner that goes blank (or
   // omits itself) before the roster has arrived, and any implementation that

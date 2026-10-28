@@ -690,3 +690,39 @@ describe('the sleep lanes share one executor (D-7042; ARCH-43)', () => {
     expect(mine.some((x) => x.form === 'ccdCan'), 'CONTROL: the census reads the executor').toBe(true);
   });
 });
+
+// D-7079 (ARCH-72, consolidation plan 2026-10-27 W5 Task C5j; spec K16), built under the coordinator's ring ruling,
+// option (a). APPENDED. `FleetState.ccdVerbs` has ONE writer, `recordCcdVerbs` in `server/src/fleetstate.ts`, beside
+// the type: the ready frame (`remote/client.ts#onReady`), the remote refresh (`refreshcaps.ts#makeRefreshCaps`, handed
+// the setter by the composition root under that ruling, so it imports `fleetstate.ts` only as a type) and local mode's
+// one read (`index.ts`) all write through it. `ccdVerbsWriters()` (`census-w5/singleWriters.ts`) read 3 at C5j's base and is pinned at 1 here;
+// it may only shrink. The two object-literal initialisers (`ccdVerbs: null`) are reported apart and are not writers.
+describe('FleetState.ccdVerbs has one writer, recordCcdVerbs, handed to refreshcaps.ts by the composition root (D-7079; ARCH-72)', () => {
+  it('the ccdVerbs writers are one, fleetstate.ts#recordCcdVerbs (3 -> 1 at C5j; may only shrink)', async () => {
+    const { ccdVerbsWriters } = await import('../census-w5/singleWriters.js');
+    const r = ccdVerbsWriters();
+    expect(r.writers.map((s) => s.name)).toEqual(['fleetstate.ts#recordCcdVerbs']);
+    expect(r.initialisers.map((s) => s.name).sort(), 'the initialisers, reported apart').toEqual(['index.ts#(module)', 'remote/client.ts#FleetClient']);
+  });
+});
+
+// D-7166 (ARCH-44, consolidation plan 2026-10-27 Task C4i; spec K1, C4 "Policies, not lanes"). APPENDED. The three retire
+// executors (temp-orphan, archive-expired, child-spent) share ONE gate decider, `decideRetire` in `server/src/retire.ts`,
+// over the per-reason rows (`TEMP_ORPHAN_RETIRE`, `ARCHIVE_EXPIRED_RETIRE`, `CHILD_SPENT_RETIRE`). `retireDeciders()`
+// (`census-w4/retire.ts`: each top-level server/src function declared to answer a `RetireDecision`) read 0 at C4i's base
+// and is pinned at exactly 1 here. The decider never asks which reason it runs: no reference to the identifier `name`
+// stands in its body (a comparison, a `switch` and a lookup alike), so every difference is a row field.
+describe('the retire executors share one gate decider, decideRetire (D-7166; ARCH-44)', () => {
+  const HOME = 'server/src/retire.ts';
+
+  it('the retire gate deciders are one, retire.ts#decideRetire (0 -> 1 at C4i; exactly 1)', async () => {
+    const { retireDeciders } = await import('../census-w4/retire.js');
+    expect(retireDeciders().map((s) => s.symbol)).toEqual([`${HOME}#decideRetire`]);
+  });
+
+  it('decideRetire never reads a reason\'s name: the identifier `name` is referenced nowhere in its body', () => {
+    const CONTROL = "function f(reason) { if (reason.name === 'child-spent') return 1; return 0; }";
+    expect(identifierReferences(CONTROL, 'control.ts', new Set(['name'])), 'CONTROL: the scan sees a name compare').toHaveLength(1);
+    expect(identifierReferences(sourceOfSymbol(HOME, 'decideRetire'), 'retire.ts', new Set(['name']))).toEqual([]);
+  });
+});

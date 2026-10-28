@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { resetClock } from '../src/lib/clock';
+import { dayKey, resetClock } from '../src/lib/clock';
 
 describe('resetClock (D-2366)', () => {
   // `now` is derived from the SAME instant so the expectation holds in any TZ.
@@ -16,5 +16,18 @@ describe('resetClock (D-2366)', () => {
   });
   it.each([NaN, Infinity])('a non-finite epoch %s has no clock', (value) => {
     expect(resetClock(value)).toBeNull();
+  });
+});
+
+describe('dayKey (C7, review 1128)', () => {
+  it('is the same all day and changes at local midnight', () => {
+    const morning = new Date(2026, 9, 28, 0, 0, 0).getTime();
+    const evening = new Date(2026, 9, 28, 23, 59, 59, 999).getTime();
+    const next = new Date(2026, 9, 29, 0, 0, 0).getTime();
+    expect(dayKey(morning)).toBe(dayKey(evening));
+    expect(dayKey(next)).not.toBe(dayKey(evening));
+    // Distinct across months and years too, not only day numbers.
+    expect(dayKey(new Date(2026, 10, 28).getTime())).not.toBe(dayKey(morning));
+    expect(dayKey(new Date(2027, 9, 28).getTime())).not.toBe(dayKey(morning));
   });
 });

@@ -943,6 +943,20 @@ describe('ccrc uninstall: the remove set (spec §7)', () => {
     expect(readFileSync(join(kept, '.local', 'libexec', 'ccrc', 'notes.txt'), 'utf8'), 'an operator file beside the body was removed').toBe('mine\n');
   });
 
+  it('ccd\'s library and docs redactor go with the body: after an uninstall no ~/.local/libexec/ccrc stands, and the line names both shared files (D-7077)', () => {
+    const home = mkTmp('ccrc-uninst-redactor-');
+    plantInstalledBox(home);
+    const libexec = join(home, '.local', 'libexec', 'ccrc');
+    for (const rel of ['ccd', 'lib/disk-retention.sh', 'shared/redact.mjs', 'shared/redact-cli.mjs']) {
+      mkdirSync(path.dirname(join(libexec, rel)), { recursive: true });
+      writeFileSync(join(libexec, rel), `# fixture ${rel}\n`, { mode: 0o644 });
+    }
+    const r = runVerb(home, 'uninstall');
+    expect(r.code, r.stderr).toBe(0);
+    expect(existsSync(libexec), 'a ccrc libexec directory survived the uninstall').toBe(false);
+    expect(r.stdout).toContain('its library and redactor (lib/disk-retention.sh, shared/redact.mjs, shared/redact-cli.mjs) with it; ');
+  });
+
   it('a STAMPED ccd-account-auth is still the bin arm\'s subject, never counted as a wrapper', () => {
     // `_inst_atomic` does not stamp, so a real box's copy is unmarked and the
     // wrapper arm keeps it silently whether or not `_uninst_wrappers`' case

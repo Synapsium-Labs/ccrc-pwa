@@ -41,12 +41,16 @@ describe('the agent’s exec of ccd crosses the installed launcher', () => {
     const out = path.join(fixture.home, 'started-as');
     const tree = path.join(fixture.home, 'fixture-tree');
     mkdirSync(path.join(tree, 'ccd'), { recursive: true });
-    // The publisher places the library a body pins (D-6913) and renders its digest into the body's one pin
-    // placeholder line: the stub body carries that placeholder, the real library is planted beside it. The stub never loads it.
+    // The publisher places the library a body pins (D-6913) and the docs redactor's two shared/ files (D-7077), and
+    // renders each digest into the body's one placeholder line for it: the stub body carries the three placeholders
+    // (__CCD_LIB_SHA256, __CCD_REDACT_SHA256, __CCD_REDACT_CLI_SHA256), the real files are planted beside it. The stub
+    // never loads any of them.
     mkdirSync(path.join(tree, 'ccd', 'lib'), { recursive: true });
     copyFileSync(path.join(REPO, 'ccd', 'lib', 'disk-retention.sh'), path.join(tree, 'ccd', 'lib', 'disk-retention.sh'));
+    mkdirSync(path.join(tree, 'shared'), { recursive: true });
+    for (const f of ['redact.mjs', 'redact-cli.mjs']) copyFileSync(path.join(REPO, 'shared', f), path.join(tree, 'shared', f));
     writeFileSync(path.join(tree, 'ccd', 'ccd'),
-      `#!/usr/bin/env bash\n__CCD_LIB_SHA256=stamp-at-install\n{ printf "%s\\0" "$-"; printf "%s\\0" "$@"; } > ${JSON.stringify(out)}\n`);
+      `#!/usr/bin/env bash\n__CCD_LIB_SHA256=stamp-at-install\n__CCD_REDACT_SHA256=stamp-at-install\n__CCD_REDACT_CLI_SHA256=stamp-at-install\n{ printf "%s\\0" "$-"; printf "%s\\0" "$@"; } > ${JSON.stringify(out)}\n`);
     copyFileSync(path.join(REPO, 'ccd', 'ccd-entry.py'), path.join(tree, 'ccd', 'ccd-entry.py'));
     copyFileSync(path.join(REPO, 'ccd', 'ccd-entry-install.py'), path.join(tree, 'ccd', 'ccd-entry-install.py'));
     const python = spawnSync('python3', ['-IS', '-c', 'import os,sys;sys.stdout.write(os.path.realpath(sys.executable))'],

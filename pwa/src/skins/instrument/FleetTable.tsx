@@ -1,9 +1,9 @@
 // Instrument's fleet list (W2 Task S10, D-5473; spec §5.3, Fleet, Instrument column): the status-grouped table, the
 // status · project toggle above it, and on a phone the underline tabs over the same groups. It fills the set's
-// `FleetList` part, which `FleetScreen` places where Refined draws its project cards, so the banners and the runs line
-// around it stay the screen's own. The bucket bar is not: the screen draws it only for a set with no such part, so the
-// counts appear once per screen (T3a, D-6331). Here the status groups' heads are the counts, and project mode draws the
-// bar itself, because the cards carry none.
+// `FleetList` part, which `FleetScreen` places where Refined draws its project cards, so the banners around it stay
+// the screen's own (at a desk there is no runs line here, T2f, D-6371). The bucket bar is not: the screen draws it only
+// for a set with no such part, so the counts appear once per screen (T3a, D-6331). Here the status groups' heads are
+// the counts, and project mode draws the bar itself, because the cards carry none.
 //
 // STATUS MODE reads `groupByStatus` (statusGroups.ts): the groups, their order, their labels and which fold are that
 // model's, never this file's. Needs you, Done and Working are open; Idle, Cleanup, Archived and Exited fold. A fold is
@@ -32,6 +32,13 @@
 // Released fold holds archive-all, and the rollup's rules hold unchanged. A card mixes statuses, so there each row
 // shows its word beside its lamp (spec §3.1), which `SessionLine` always does.
 //
+// THE CLASS CHOOSER sits on the toggle's row in project mode at a desk only (T2f, D-6371): its readers are the project
+// cards' placement forecast and Add workspace, so in status mode it would do nothing. Below 900 it stays on the screen's
+// runs line. It is the shared `ClassChooser`, a sibling of the radiogroup and never inside it; the radiogroup grows (`flex-auto`, so its
+// basis stays its content and the row wraps the chooser under it at large text sizes, which `flex-1`'s 0% basis never did)
+// to the space the chooser leaves, so the toggle keeps the row's width in both modes. `.ins-toggle` already sets
+// `min-width: 0`, so no utility repeats it.
+//
 // THE TOGGLE is remembered per device under `ccrc-fleet-group`; storage that is absent, unreadable or holds an unknown
 // value answers status. The phone tabs (below the desk query) are a view over the status groups, not a mode: All shows
 // every group with its folds. Both are one tab stop with roving focus: the arrow keys, Home and End move and choose
@@ -41,6 +48,7 @@ import type { KeyboardEvent, ReactNode } from 'react';
 import { BareRow, Button, CountBadge } from '@ccrc/ui';
 import type { FleetSession, SessionBucket } from '../../../../shared/api';
 import { BucketBar } from '../../fleet/BucketBar';
+import { ClassChooser } from '../../fleet/ClassChooser';
 import { FleetCards } from '../../fleet/FleetCards';
 import { useFleetChrome } from '../../fleet/FleetChrome';
 import { useFleetFlows } from '../../fleet/FleetFlows';
@@ -117,26 +125,29 @@ export function FleetTable(): ReactNode {
 
   return (
     <div className="ins-table" data-mode={mode}>
-      <div
-        role="radiogroup"
-        aria-label="Group sessions by"
-        className="ins-toggle"
-        onKeyDown={(e) => rovingKey(e, MODES.findIndex((m) => m.id === mode), MODES.length, 'radio',
-          (i) => choose(MODES[i]!.id))}
-      >
-        {MODES.map((m) => (
-          <Button
-            key={m.id}
-            variant="ghost"
-            role="radio"
-            aria-checked={mode === m.id}
-            tabIndex={mode === m.id ? 0 : -1}
-            className="ins-toggle-option"
-            onClick={() => choose(m.id)}
-          >
-            {m.label}
-          </Button>
-        ))}
+      <div className="flex min-w-0 flex-wrap items-center justify-between gap-1">
+        <div
+          role="radiogroup"
+          aria-label="Group sessions by"
+          className="ins-toggle flex-auto"
+          onKeyDown={(e) => rovingKey(e, MODES.findIndex((m) => m.id === mode), MODES.length, 'radio',
+            (i) => choose(MODES[i]!.id))}
+        >
+          {MODES.map((m) => (
+            <Button
+              key={m.id}
+              variant="ghost"
+              role="radio"
+              aria-checked={mode === m.id}
+              tabIndex={mode === m.id ? 0 : -1}
+              className="ins-toggle-option"
+              onClick={() => choose(m.id)}
+            >
+              {m.label}
+            </Button>
+          ))}
+        </div>
+        {desk && mode === 'project' && <ClassChooser className="min-h-row" />}
       </div>
       {mode === 'project'
         ? <ProjectCards selectedId={selectedId} />

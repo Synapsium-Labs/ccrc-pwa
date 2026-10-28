@@ -455,7 +455,7 @@ describe('the source: one probe, its seams by name, one bounded Linux walk; the 
     expect(c.length, 'the adapter could not be sliced').toBeGreaterThan(400);
     expect(c.split('_ws_cwd_users "$wt" "$workdir"').length - 1).toBe(1);
     expect(c).toContain('_ws_dir_physical "$parent"');
-    expect(c).toContain('_reap_refuse in-use');
+    expect(c).toContain('_ws_refuse in-use');
     expect(c).not.toMatch(/python3|_ws_expire_proc_root|_ws_expire_lsof/);
   });
 

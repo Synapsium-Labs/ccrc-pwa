@@ -131,6 +131,16 @@ export function baseCommands(): Command[] {
       run: (ctx) => ctx.session?.run(c.id),
     })),
     {
+      // Offered only while a part publishes an inspector target. A single key skips `when` (`useShortcuts`), so the
+      // run is null-safe: `i` where nothing is placed does nothing (desktop polish T3e, D-6385).
+      id: 'toggle-inspector',
+      title: 'Show or hide the inspector',
+      group: 'Appearance',
+      keys: ['i'],
+      when: (ctx) => ctx.inspector !== null,
+      run: (ctx) => ctx.inspector?.toggle(),
+    },
+    {
       id: 'switch-layout',
       title: 'Switch layout →',
       group: 'Appearance',

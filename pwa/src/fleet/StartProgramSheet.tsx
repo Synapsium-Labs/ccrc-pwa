@@ -144,10 +144,10 @@ export function StartProgramSheet({
   const roster = fleet((s) => s.roster);
   const coord = fleet((s) => s.coord);
   // `active: open` — this sheet is mounted UNCONDITIONALLY at RunsScreen
-  // level (review fix round 1, Minor 2): without gating the poll, `/runs`
-  // would ask `/api/accounts` every 20s whether or not the door is ever
-  // tapped, the exact shape `useProjectedHome.ts`'s own docstring (citing
-  // `useAccountUsage`) warns against.
+  // level (review fix round 1, Minor 2), so a closed sheet answers the hook's
+  // inactive `undefined`. The hook reads the fleet store's `projected`, which
+  // the store's one `/api/accounts` poll writes (C8, D-6440); this sheet
+  // polls nothing.
   const projected = useProjectedHome(open);
 
   const [slug, setSlug] = useState('');

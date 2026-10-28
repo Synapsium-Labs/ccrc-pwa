@@ -6434,11 +6434,14 @@ _check_models() {
 # `helper-unavailable` with the detail `python-missing` or `python-too-old`,
 # so this check reads the floor through the verb rather than restating it.
 # It measures the python3 ccd finds under THIS shell's PATH; the agent's unit
-# may carry another PATH, which no doctor check can see.
+# may carry another PATH, which no doctor check can see. The same front also
+# answers `node-missing`, `redactor-missing` and `redactor-mismatch` (D-7077):
+# the helper redacts only through the node redactor ccd pins, so each is named
+# here with its own remedy, never the python3 one.
 #
 # COUNTS ONLY, NEVER A PROJECT NAME: doctor output gets pasted. No arm below
 # prints a field of the answer except the failure WORD (held to a word
-# grammar by the jq program) and the two fixed `helper-unavailable` details;
+# grammar by the jq program) and the fixed `helper-unavailable` details;
 # a row's name and a `detail` string never reach a verdict line. The WARN's
 # remedy is the one-liner that lists the unreadable rows on the operator's
 # own terminal.
@@ -6535,7 +6538,7 @@ _check_docs() {
     | if .ok == true and (.projects | type) == "array" then
         "ok \(.projects | length) \([.projects[] | select(type == "object" and .state == "ready")] | length) \([.projects[] | select(type == "object" and .state == "repo-unreadable")] | length) \(if (.unwalked | type) == "number" and .unwalked > 0 then .unwalked | floor else 0 end)"
       elif .ok == false and (.failure | type) == "string" and (.failure | test("^[a-z][a-z0-9-]{0,63}$")) then
-        "fail \(.failure) \(if .detail == "python-missing" or .detail == "python-too-old" then .detail else "-" end)"
+        "fail \(.failure) \(if .detail == "python-missing" or .detail == "python-too-old" or .detail == "node-missing" or .detail == "redactor-missing" or .detail == "redactor-mismatch" then .detail else "-" end)"
       else empty end' <<<"$out" 2>/dev/null)"
   read -r tag a b c d <<<"$row"
   case "$tag" in
@@ -6558,13 +6561,20 @@ _check_docs() {
       ;;
     fail)
       if [ "$a" = helper-unavailable ]; then
-        local why="its python3 probe failed"
+        local why="its python3 probe failed" need="its Docs helper needs python3 3.8 or newer"
+        local fix="install python3 3.8 or newer on the PATH ccd runs with (Debian/Ubuntu: sudo apt install python3; macOS: brew install python3), then re-run: ccrc doctor"
         case "$b" in
           python-missing) why="ccd found no python3 it can run (python-missing)" ;;
           python-too-old) why="the python3 ccd runs is older than 3.8 (python-too-old)" ;;
+          node-missing)
+            why="ccd found no node it can run (node-missing)" need="its Docs helper redacts through node"
+            fix="install node on the PATH ccd runs with, then re-run: ccrc doctor" ;;
+          redactor-missing|redactor-mismatch)
+            why="ccd's redactor CLI is not where ccd looks for it (redactor-missing)" need="its Docs helper redacts only through the redactor ccd pins"
+            [ "$b" = redactor-mismatch ] && why="ccd's installed redactor is not the one this ccd pins (redactor-mismatch)"
+            fix="ccrc update — it reinstalls ccd with its shared/ files and their pins" ;;
         esac
-        _dr_fail docs "ccd answers docs-index with helper-unavailable: $why — its Docs helper needs python3 3.8 or newer" \
-          "install python3 3.8 or newer on the PATH ccd runs with (Debian/Ubuntu: sudo apt install python3; macOS: brew install python3), then re-run: ccrc doctor"
+        _dr_fail docs "ccd answers docs-index with helper-unavailable: $why — $need" "$fix"
         return 1
       fi
       _dr_fail docs "ccd answers docs-index with $a — Docs cannot list this box's projects" \

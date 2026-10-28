@@ -1842,6 +1842,63 @@ describe('ccd\'s library (D-6913): the file the body pins is placed by the pair 
   });
 });
 
+/** The docs redactor's two files the pair publisher places beside the body (D-7077): sources and destinations, read from the
+ *  same helper, in the order it renames them. */
+function redactDecl(): Array<{ source: string; dest: string }> {
+  const one = (name: string): string => {
+    const all = [...PAIR_HELPER.matchAll(new RegExp(`^${name} = '([^'\\n]+)'$`, 'gm'))];
+    if (all.length !== 1) throw new Error(`install-census.test.ts: expected exactly one \`${name} = '…'\` line in ${PAIR_HELPER_REL}, found ${all.length}`);
+    return all[0]![1]!;
+  };
+  return [{ source: one('REDACT_SOURCE'), dest: one('REDACT_DEST') }, { source: one('REDACT_CLI_SOURCE'), dest: one('REDACT_CLI_DEST') }];
+}
+
+describe('ccd\'s docs redactor (D-7077, OA-C11 (a)): the two shared/ files the body pins are placed by the pair publisher, removed by name and backed up before the library', () => {
+  it('the publisher declares both under a shared/ directory beside the body, and both are tracked files', () => {
+    const { bodyDest } = pairDecl();
+    for (const { source, dest } of redactDecl()) {
+      expect(dest, `${source} lives in shared/ beside the body`).toBe(`${path.posix.dirname(bodyDest)}/shared/${path.posix.basename(source)}`);
+      expect(trackedFiles().has(source), `${source} is not tracked`).toBe(true);
+    }
+  });
+
+  it('the uninstall removes both by name, and shared/ only with rmdir, before the directory that holds it', () => {
+    const { bodyDest } = pairDecl();
+    const body = fnBody('_uninst_tree_bins');
+    const dirs = calls(body, 'rmdir').map(operands);
+    for (const { dest } of redactDecl()) {
+      expect(rmFOperands(body), `_uninst_tree_bins does not rm -f $HOME/${dest}`).toContain(`$HOME/${dest}`);
+    }
+    const sharedDir = `$HOME/${path.posix.dirname(redactDecl()[0]!.dest)}`;
+    expect(dirs, `_uninst_tree_bins does not rmdir ${sharedDir} (only-if-empty)`).toContainEqual([sharedDir]);
+    expect(dirs.findIndex((o) => o[0] === sharedDir), 'shared/ is removed before its parent')
+      .toBeLessThan(dirs.findIndex((o) => o[0] === `$HOME/${path.posix.dirname(bodyDest)}`));
+  });
+
+  it('the update backup takes both BEFORE the library, and the library before the body — arm 3 restores in that order', () => {
+    const { libDest } = libDecl();
+    const { bodyDest } = pairDecl();
+    const sources = calls(fnBody('_upd_backup_set'), '_upd_backup_copy').map((a) => a[0]!);
+    const at = redactDecl().map(({ dest }) => sources.indexOf(`$HOME/${dest}`));
+    for (const [i, { dest }] of redactDecl().entries()) expect(at[i], `_upd_backup_set does not back up $HOME/${dest}`).toBeGreaterThan(-1);
+    expect(at[0]!).toBeLessThan(at[1]!);
+    expect(at[1]!).toBeLessThan(sources.indexOf(`$HOME/${libDest}`));
+    expect(sources.indexOf(`$HOME/${libDest}`)).toBeLessThan(sources.indexOf(`$HOME/${bodyDest}`));
+  });
+
+  it('deploy.sh backs both up, in the guarded form, before the library, in the same remote command', () => {
+    const { libDest } = libDecl();
+    const text = deployText();
+    const lib = text.indexOf(`[ ! -f ~/${libDest} ] || cp -a`);
+    for (const { dest } of redactDecl()) {
+      const name = `ccd-shared-${path.posix.basename(dest)}`;
+      const guarded = `{ [ ! -f ~/${dest} ] || cp -a ~/${dest} ~/ccrc-backups/$TS/${name}; }`;
+      expect(text.indexOf(guarded), `deploy.sh does not back up ~/${dest} as ${name}, guarded`).toBeGreaterThan(-1);
+      expect(text.indexOf(guarded), `~/${dest} is backed up after the library`).toBeLessThan(lib);
+    }
+  });
+});
+
 describe('every file either installer copies out of the tree is tracked in this repository', () => {
   // Header: AND THE SOURCES. A placement whose source no commit carries dies
   // on every real tree; a fixture that stubs the file hides that (D-3165).

@@ -163,3 +163,70 @@ export function pythonRedactorTables(root: string = REPO): RedactorSite[] {
   }
   return out;
 }
+
+// ---- C5h: what the library loader publishes, and the two redactor pins (D-7125; design note §2) ----
+import { enclosingFunctions } from './ccdHelpers.js';
+
+/** The globals whose writers and readers `loaderGlobals` reports. `__CCD_LAYOUT` and `__CCD_HASH_CMD` are what
+ *  `_ccd_lib_load` decided (written there only); the two pins are written only by their top-level placeholder lines, which
+ *  the installer stamps. */
+export const LOADER_GLOBALS: readonly string[] = ['__CCD_LAYOUT', '__CCD_HASH_CMD', '__CCD_REDACT_SHA256', '__CCD_REDACT_CLI_SHA256'];
+
+/** One line that writes or reads one global: its file, its enclosing function (`null` at the top level) and its text. */
+export interface GlobalSite {
+  readonly global: string;
+  readonly file: string;
+  readonly fn: string | null;
+  readonly line: number;
+  readonly text: string;
+}
+
+const nameRe = (n: string): string => `(?<![A-Za-z0-9_])${n}(?![A-Za-z0-9_])`;
+
+/** Whether bash code `code` WRITES the global `n`, in any of the forms design note §2 lists: a plain, appending or indexed
+ *  assignment (and `${n:=v}`); a declaration that names it (`declare`, `local`, `typeset`, `readonly`, `export`, any flags,
+ *  any position, `-n` included); a builtin that writes it (`printf -v`, `read`, `mapfile`/`readarray`, `unset`); an
+ *  `eval`, `source` or `.` command (at a command position) whose line names it; and an indirect expansion (`${!…}`) on a line that names it. */
+export function writesGlobal(code: string, n: string): boolean {
+  const w = nameRe(n);
+  if (!new RegExp(w).test(code)) return false;
+  return [
+    new RegExp(`(?<![A-Za-z0-9_$\\{!#])${n}(?:\\[[^\\]]*\\])?\\+?=(?!=)`),
+    new RegExp(`\\$\\{${n}:?=`),
+    new RegExp(`(?<![A-Za-z0-9_])(?:declare|local|typeset|readonly|export)(?![A-Za-z0-9_])[^;&|]*${w}`),
+    new RegExp(`(?<![A-Za-z0-9_])printf(?![A-Za-z0-9_])[^;&|]*-v\\s*['"]?${n}(?![A-Za-z0-9_])`),
+    new RegExp(`(?<![A-Za-z0-9_])(?:read|mapfile|readarray|unset)(?![A-Za-z0-9_])[^;&|]*${w}`),
+    new RegExp(`(?:^\\s*|[;&|({]\\s*|(?<![A-Za-z0-9_])(?:then|do|else)\\s+)(?:eval|source|\\.)\\s[^\\n]*${w}`),
+    /\$\{!/,
+  ].some((re) => re.test(code));
+}
+
+/** Whether bash code `code` READS the global `n` (`$n`, `${n…}`, `${#n…}`, `${!n…}`). */
+export function readsGlobal(code: string, n: string): boolean {
+  return new RegExp(`\\$${n}(?![A-Za-z0-9_])|\\$\\{[#!]?${n}(?![A-Za-z0-9_])`).test(code);
+}
+
+/** Every write and every read of `LOADER_GLOBALS` in the files the body evaluates: `ccd/ccd` and every `ccd/lib/*.sh`
+ *  (the loader evaluates the library inside its own function scope, AFTER it publishes the layout, so a library line
+ *  could rewrite it). Heredoc bodies are not bash code and are dropped; comments are stripped. */
+export function loaderGlobals(root: string = REPO): { writes: GlobalSite[]; reads: GlobalSite[] } {
+  const lib = path.join(root, 'ccd', 'lib');
+  const files = ['ccd/ccd', ...(existsSync(lib) ? readdirSync(lib).sort().filter((e) => e.endsWith('.sh')).map((e) => `ccd/lib/${e}`) : [])];
+  const writes: GlobalSite[] = [];
+  const reads: GlobalSite[] = [];
+  for (const file of files) {
+    const src = readFileSync(path.join(root, file), 'utf8');
+    const heredoc = heredocLines(src);
+    const fns = enclosingFunctions(src);
+    src.split('\n').forEach((raw, i) => {
+      if (heredoc.has(i + 1)) return;
+      const code = bashCodeOf(raw);
+      for (const g of LOADER_GLOBALS) {
+        const site = { global: g, file, fn: fns[i + 1] ?? null, line: i + 1, text: raw };
+        if (writesGlobal(code, g)) writes.push(site);
+        if (readsGlobal(code, g)) reads.push(site);
+      }
+    });
+  }
+  return { writes, reads };
+}

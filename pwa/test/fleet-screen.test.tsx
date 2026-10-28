@@ -1,10 +1,10 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import userEvent from '@testing-library/user-event';
 import { SPAWN_STALL_MS, type FleetSession, type NodeWire, type ProjectPoolsWire, type ProjectRow, type RunSummary, type UpdatesView } from '../../shared/api';
 import { fleetSession } from './fleetFixture';
-import { createFleetStore, type FleetStore } from '../src/stores/fleet';
+import { createFleetStore, useFleetStore, type FleetStore } from '../src/stores/fleet';
 import { ApiError, api } from '../src/lib/api';
 import { ack, FEED_ACK_KEY, loadAcks, resetAcks } from '../src/lib/seen';
 import { navigate } from '../src/lib/router';
@@ -52,12 +52,16 @@ const MIN = 60_000;
  *  failed lifecycle route (`{ ok: false, stderr }`, no `error` key).
  *
  *  Unlike the sibling helper in session-card.test.tsx, this mounts the full
- *  FleetScreen tree — AccountsStrip and FleetHostBanner also call fetch on
- *  mount (api.accounts / api.fleetHealth), and a Response body can only be
- *  read once. A single shared `mockResolvedValue(response)` would let the
- *  first of those consume the body, leaving later callers (our click) with
- *  an empty, already-read stream — so this hands back a fresh Response
- *  per call instead. */
+ *  FleetScreen tree, where other reads call fetch on mount too: the fleet
+ *  store's `connect()` reads /api/accounts, the test host's
+ *  `FleetChromeProvider` polls /api/fleet/health and /api/updates,
+ *  `HotFilesStrip` reads /api/claims and `PasskeyNotice` reads
+ *  /api/auth/status. (`AccountsStrip` reads the store and `FleetHostBanner`
+ *  takes its health as a prop, so neither fetches; C8, D-6440.) A Response
+ *  body can only be read once. A single shared `mockResolvedValue(response)`
+ *  would let the first of those consume the body, leaving later callers
+ *  (our click) with an empty, already-read stream — so this hands back a
+ *  fresh Response per call instead. */
 const stubFetch502 = (stderr: string): void => {
   vi.stubGlobal(
     'fetch',
@@ -74,9 +78,10 @@ const stubFetch502 = (stderr: string): void => {
 /** A real `AccountsResponse` for `GET /api/accounts` — the reap-flow fetch
  *  stubs below used to fall through to a bare `new Response('{}')` for it
  *  (a wire shape the server never sends, since `accounts`/`projected`/
- *  `roster` are none of them optional). AccountsStrip and the fleet store's
- *  own roster poll both hit this route on every FleetScreen mount, so those
- *  guards were load-bearing for this suite rather than a production-only
+ *  `roster` are none of them optional). The fleet store's one accounts poll
+ *  hits this route on every FleetScreen mount (its `connect()` reads it at
+ *  once; AccountsStrip reads the store and fetches nothing, C8, D-6440), so
+ *  those guards were load-bearing for this suite rather than a production-only
  *  boundary check (fix round 1). */
 const accountsRoute = (): Response =>
   new Response(JSON.stringify({ accounts: [], projected: null, roster: TEST_ROSTER }), {
@@ -316,11 +321,13 @@ describe('FleetScreen', () => {
   // at all. Same gap in the loading branch: a fleet mid-first-connect also
   // rendered no strip.
   it('renders the accounts strip in the first-run block, not just the populated fleet', async () => {
-    vi.spyOn(api, 'accounts').mockResolvedValue({
-      accounts: [{ wrapper: 'claude', five: 0, seven: 0, ts: null, fiveResetAt: null, sevenResetAt: null, fiveRolledOver: false, sevenRolledOver: false, disabled: false, authDead: false }],
-      projected: { wrapper: 'claude', score: 0 },
-      roster: [],
+    // The strip reads the app-wide fleet store's accounts answer, which that store's one poll writes (C8, D-6440).
+    act(() => {
+      useFleetStore.setState({
+        usage: [{ wrapper: 'claude', five: 0, seven: 0, ts: null, fiveResetAt: null, sevenResetAt: null, fiveRolledOver: false, sevenRolledOver: false, disabled: false, authDead: false }],
+      });
     });
+    onTestFinished(() => { useFleetStore.setState({ usage: null }); });
     const store = makeStore();
     renderFleet(<FleetScreen store={store} />);
     seed(store, { conn: 'open', sessions: [] });
@@ -2170,7 +2177,8 @@ describe('archived footer row', () => {
 describe('AccountsStrip', () => {
   it('renders account usage from /api/accounts with a reset countdown, independent of sessions', async () => {
     const nowSec = Math.floor(Date.now() / 1000);
-    vi.spyOn(api, 'accounts').mockResolvedValue({
+    // The strip reads a fleet store's accounts answer (C8, D-6440): this one's read, made once before the mount.
+    const store = createFleetStore({ fetchAccounts: async () => ({
       accounts: [
         // gpt has NO active session, yet still shows — telemetry-driven.
         { wrapper: 'gpt', five: 8, seven: 8, ts: nowSec, fiveResetAt: nowSec + 2 * 3600, sevenResetAt: nowSec + 3 * 86400, fiveRolledOver: false, sevenRolledOver: false, disabled: false, authDead: false },
@@ -2180,8 +2188,9 @@ describe('AccountsStrip', () => {
       // which filters `roster.homeAble`.
       projected: { wrapper: 'claude', score: 0 },
       roster: [],
-    });
-    render(<AccountsStrip />);
+    }) });
+    await act(() => store.getState().refreshAccounts());
+    render(<AccountsStrip store={store} />);
     // one account gauge → two meters (5h + 7d)
     await screen.findByText('gpt');
     expect(document.querySelectorAll('.acct-fill')).toHaveLength(2);
@@ -2543,13 +2552,15 @@ describe('the programme tree on the fleet screen', () => {
    *  in ms.
    *
    *  THE ADAPTATION against the runs-screen twin, which asserts on the whole
-   *  recorded array: that tree is single-interval, and this one is not.
-   *  `useProjectedHome` (20_000), `AccountsStrip` (20_000 for its poll and
-   *  30_000 for its own `useNow`), `FleetHostBanner` (15_000 + 30_000),
-   *  `useUpdatesView` (60_000 — the screen's one /api/updates poll, read by
-   *  UpdateIndicator) and `HotFilesStrip` (30_000) all start polling from this
-   *  screen's mount, and
-   *  none of them is what this gate decides — so the instrument is the
+   *  recorded array: that tree is single-interval, and this one is not. One
+   *  mount records seven, measured: the fleet store's one /api/accounts poll
+   *  (20_000, which this screen's `connect()` starts); the test host's
+   *  `FleetChromeProvider`, whose `useFleetHealth` (15_000, the one
+   *  /api/fleet/health poll) and `useUpdatesView` (60_000, the one
+   *  /api/updates poll, read by UpdateIndicator) the screen reads; a
+   *  `useNow(30_000)` each in `AccountsStrip`, `FleetHostBanner` and
+   *  `HotFilesStrip`; and `HotFilesStrip`'s own /api/claims poll (30_000).
+   *  None of them is what this gate decides — so the instrument is the
    *  PRESENCE of `1_000` among the recorded intervals, not their sequence.
    *  Measured across `pwa/src`: no other timer in this tree has a 1_000 ms
    *  period (the nearest neighbour is `TypedLabel`'s 28 ms typing timer), so a

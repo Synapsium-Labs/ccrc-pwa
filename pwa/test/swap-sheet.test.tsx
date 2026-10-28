@@ -15,10 +15,14 @@ import { SWAP_REFUSALS } from '../../shared/api';
 import { api, ApiError, SWAP_REFUSAL_TEXT } from '../src/lib/api';
 import { SwapSheet } from '../src/fleet/SwapSheet';
 import { leastLoaded } from '../src/fleet/accountPicker';
-import { createFleetStore, type FleetStore } from '../src/stores/fleet';
+import { createFleetStore, useFleetStore, type FleetStore } from '../src/stores/fleet';
 import { TEST_ROSTER } from './rosterFixture';
 
-afterEach(() => { cleanup(); vi.restoreAllMocks(); });
+afterEach(() => {
+  cleanup(); vi.restoreAllMocks();
+  // The sheet reads the APP-WIDE fleet store's accounts answer (C8, D-6440), whatever `fleet` store a case hands it.
+  useFleetStore.setState({ usage: null, projected: undefined, roster: [] });
+});
 
 // `fleetSession` and `storeWith` are MODULE-PRIVATE in
 // `pwa/test/lifecycle-ui.test.tsx` — not exported, so they cannot be
@@ -288,10 +292,10 @@ describe('leastLoaded — a lane with no 5h window', () => {
 });
 
 
+// The poll's answer, put where the sheet reads it: the app-wide fleet store's `usage` (C8, D-6440: the store is the
+// one reader of `GET /api/accounts`, and `useAccountUsage(open)` only reads what it wrote).
 const stubAccounts = (accounts: AccountUsage[]): void => {
-  vi.spyOn(api, 'accounts').mockResolvedValue({
-    accounts, projected: null, roster: [],
-  });
+  act(() => { useFleetStore.setState({ usage: accounts, projected: null, roster: [] }); });
 };
 
 /** The sheet, opened on `claude` (team·max), against a fleet store the test
@@ -653,12 +657,14 @@ describe('SwapSheet says WHY it has nothing to offer', () => {
     // `useAccountUsage`'s stated posture, and the one thing this round must not
     // turn fail-closed: with no rows, `disabledWrappers` returns `[]`, so every
     // lane is offered and no empty-state copy can fire.
-    vi.spyOn(api, 'accounts').mockRejectedValue(new Error('offline'));
+    // The store is left unanswered (its reset state): nothing has landed in it.
+    const accounts = vi.spyOn(api, 'accounts').mockRejectedValue(new Error('offline'));
     renderSwap();
     for (const label of ['team·alt', 'team·b', 'gpt', 'team·d']) {
       expect(screen.getByRole('button', { name: new RegExp(label) })).toBeInTheDocument();
     }
-    await waitFor(() => expect(api.accounts).toHaveBeenCalled());
+    // The sheet no longer polls: it only reads the store (C8, D-6440).
+    expect(accounts).not.toHaveBeenCalled();
     expect(screen.queryByText(/switched off on the fleet host/)).not.toBeInTheDocument();
     expect(screen.queryByText(/No other account/)).not.toBeInTheDocument();
   });

@@ -15,6 +15,7 @@ import {
   useSessionHeaderView,
 } from '../../session/SessionHeader';
 import { useSessionFlows } from '../../session/SessionFlows';
+import { InspectorToggle } from '../../inspector/InspectorToggle';
 
 export function SessionChrome(): ReactNode {
   const inputs = useSessionChromeInputs();
@@ -32,6 +33,8 @@ export function SessionChrome(): ReactNode {
         </h1>
       </div>
       <HeaderDoors view={view} openMenu={openMenu} />
+      {/* Rightmost of the doors, only while the rail is placed (desktop polish T3e, D-6385). */}
+      <InspectorToggle />
       {/* `chat-meta` for the status line's and the details door's shared rules; `ref-chip-rail` makes it one
           scrolling row. */}
       <div className="chat-meta ref-chip-rail">

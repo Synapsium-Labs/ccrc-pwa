@@ -2389,6 +2389,26 @@ describe('ccrc doctor: docs', () => {
     expect(r.code).toBe(1);
   });
 
+  it.each([
+    ['node-missing', 'ccd found no node it can run (node-missing)', 'its Docs helper redacts through node',
+      /^ {2}remedy: install node on the PATH ccd runs with, then re-run: ccrc doctor$/],
+    ['redactor-missing', 'ccd\'s redactor CLI is not where ccd looks for it (redactor-missing)', 'its Docs helper redacts only through the redactor ccd pins',
+      /^ {2}remedy: ccrc update — it reinstalls ccd with its shared\/ files and their pins$/],
+    ['redactor-mismatch', 'ccd\'s installed redactor is not the one this ccd pins (redactor-mismatch)', 'its Docs helper redacts only through the redactor ccd pins',
+      /^ {2}remedy: ccrc update — it reinstalls ccd with its shared\/ files and their pins$/],
+  ] as const)('FAILS naming the docs redactor when ccd answers helper-unavailable (%s), never python3 (D-7077)', (detail, why, need, remedy) => {
+    const line = DOCS_HELPER_UNAVAILABLE_MISSING_LINE.replace('"python-missing"', `"${detail}"`);
+    expect(line).toContain(`"detail":"${detail}"`);   // CONTROL: the replace above really happened
+    const home = healthy(`ccrc-doctor-docs-${detail}-`);
+    plantDocsCcd(home, docsIndexStubScript(line));
+    const r = runDoctor(home);
+    const v = docsVerdict(r.stdout);
+    expect(v.line, r.stdout).toBe(`FAIL docs: ccd answers docs-index with helper-unavailable: ${why} — ${need}`);
+    expect(v.line).not.toContain('python3');
+    expect(v.next).toMatch(remedy);
+    expect(r.code).toBe(1);
+  });
+
   it('FAILS naming the word on any other ok:false answer, and quotes none of its detail', () => {
     const home = healthy('ccrc-doctor-docs-helper-failed-');
     plantDocsCcd(home, docsIndexStubScript(JSON.stringify({

@@ -115,15 +115,46 @@
     border-bottom: 1px solid var(--edge-subtle);
     background: var(--bg-surface);
   }
-  /* One card per lane across the width, as many to a line as the width holds, and the end cell, All accounts, in the
-     track after the last card. A card's floor is only what its name and two windows need now that the name sits beside
-     them rather than above them; below that floor the tracks drop to fewer to a line and the row wraps onto another
-     line rather than truncating a readout. auto-fill, not auto-fit, so the tracks keep a card's width when the last
-     line holds fewer cards than the line. */
+  /* One card per lane across the width, as many to a line as the width holds, and the end cell, the fold's control and
+     All accounts, in the track after the last card. A card's floor is only what its name and two windows need now
+     that the name sits beside them rather than above them; below that floor the tracks drop to fewer to a line and the
+     row wraps onto another line rather than truncating a readout. The floor is `LANE_CARD_MIN` (stripFold.ts), written
+     once there and handed to this rule by the strip as `--lane-card-min`, so the tracks drawn and the count the fold
+     measures (`rowFit`) agree. auto-fill, not auto-fit, so the tracks keep a card's width when the last line holds
+     fewer cards than the line. */
   .shell-accounts .accounts-strip {
-    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    /* `--lane-card-min` is declared here, with no value of its own (`initial`), and the strip's inline style always
+       outranks it with `LANE_CARD_MIN`: the figure stays written once, in stripFold.ts, and the token is still one
+       a stylesheet defines (css-vars.test.ts). Without the inline style the grid's columns are invalid and the cards
+       stack, a visible failure rather than a second figure. */
+    --lane-card-min: initial;
+    position: relative;
+    grid-template-columns: repeat(auto-fill, minmax(var(--lane-card-min), 1fr));
     gap: var(--sp-2);
     margin: 0;
+  }
+  /* The flyout (R120, strip-hover-flyout): every lane's card in a panel under the folded line, drawn over the content
+     and pushing none of it down. It is out of flow, hung from the line's bottom edge (`top: 100%` of the strip, which
+     is `position: relative` above) and spanning its width, above the frame's content in the sheet layer. Its cards
+     wrap in the line's own tracks and gap, the same card in the same floor. Taller than the room under the line, it
+     scrolls itself: at most 70% of the viewport's height, since the line sits at the top of the window. Layer, hairline
+     and the pop shadow: the surface the other floating panels use, no token of its own. */
+  .shell-accounts .accounts-flyout {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    z-index: var(--z-sheet);
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(var(--lane-card-min), 1fr));
+    gap: var(--sp-2);
+    max-height: 70dvh;
+    overflow-y: auto;
+    padding: var(--sp-2);
+    background: var(--bg-surface);
+    border: 1px solid var(--edge-subtle);
+    border-radius: var(--r-md);
+    box-shadow: var(--elev-pop);
   }
   /* Gauge: the account name moves from ABOVE its windows to BESIDE them, which is
      where the height comes from — three stacked lines become two. The windows
@@ -141,9 +172,13 @@
     border: 1px solid var(--edge-subtle);
     border-radius: var(--r-md);
   }
-  /* The end cell sits inline in the next track here, not on a row of its own as on a phone. */
+  /* The end cell sits inline in the next track here, not on a row of its own as on a phone. It holds the fold's control
+     beside All accounts in that one track, on one row (fleet.css): the cell may shrink below its content
+     (`min-width: 0`, so a long "+13 more · 1 sign-in expired · 1 rate-limited" never widens the track) and the
+     control's words wrap inside it, so the cell stays one row and every item in the line keeps one top. */
   .shell-accounts .accounts-end {
     grid-column: auto;
+    min-width: 0;
   }
   /* The lane's name gives first: a long one is cut with an ellipsis (its full name is the label's `title`) so the
      windows keep their countdowns inside the card. */

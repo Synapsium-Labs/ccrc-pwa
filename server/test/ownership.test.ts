@@ -141,6 +141,9 @@ describe('the INSTALLED ccd carries a marker that matches its own bytes', () => 
   // The library the body pins (D-6913): the installer renders its digest into the body, then stamps it.
   mkdirSync(path.join(tree, 'ccd', 'lib'), { recursive: true });
   copyFileSync(path.join(REPO, 'ccd', 'lib', 'disk-retention.sh'), path.join(tree, 'ccd', 'lib', 'disk-retention.sh'));
+  // The docs redactor's two files (D-7077), which the installer publishes beside the library and pins in the body.
+  mkdirSync(path.join(tree, 'shared'), { recursive: true });
+  for (const f of ['redact.mjs', 'redact-cli.mjs']) copyFileSync(path.join(REPO, 'shared', f), path.join(tree, 'shared', f));
   const r = spawnSync(canonicalPython3(), ['-IS', path.join(tree, 'ccd', 'ccd-entry-install.py'), 'install', tree, home],
     { encoding: 'utf8', cwd: home, env: { HOME: home, PATH: process.env['PATH'] ?? '/usr/bin:/bin' } });
   const ccd = r.status === 0 ? readFileSync(path.join(home, '.local', 'libexec', 'ccrc', path.basename(CCD)), 'utf8') : '';

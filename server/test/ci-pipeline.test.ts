@@ -1316,13 +1316,13 @@ describe('the node-floor leg runs every history test file on the floor interpret
 // rules it shares with the required legs (pinned above). Here: its one name,
 // its runner and deadline, and exactly what it runs.
 describe('ci.yml: the browser leg (native Docs reader spec 2026-10-01 §5.7)', () => {
-  it('is one job, `browser-pwa`, named `browser (pwa)`, on ubuntu-latest with a 15-minute deadline', () => {
+  it('is one job, `browser-pwa`, named `browser (pwa)`, on ubuntu-latest with a 20-minute deadline', () => {
     const b = job('browser-pwa');
     expect(jobKey(b, 'name')).toBe('browser (pwa)');
     const named = [...jobs(read(CI)).values()].map((x) => jobKey(x, 'name'));
     expect(named.filter((n) => n === 'browser (pwa)'), 'two jobs report `browser (pwa)`').toHaveLength(1);
     expect(jobKey(b, 'runs-on')).toBe('ubuntu-latest');
-    expect(jobKey(b, 'timeout-minutes')).toBe('15');
+    expect(jobKey(b, 'timeout-minutes')).toBe('20');
   });
 
   it('checks out, sets up Node 22, installs pwa with npm ci, and runs the browser config with the local vitest', () => {

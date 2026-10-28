@@ -683,7 +683,7 @@ _ws_reclaim_stale_idle() {   # id transcript probe-verdict pane-activity -> 0 (t
   esac
   (( seen )) || { _ws_reclaim_unmeasured "nothing records when $id last worked (no transcript, .lastend, .spawn, .woke, .supervised or pane)"; return 1; }
   (( $(date +%s) - newest > WS_STALE_IDLE_S )) \
-    || { _reap_refuse not-idle "$id worked at epoch $newest, less than $WS_STALE_IDLE_S seconds ago — a stale reclaim waits for seven idle days"; return 1; }
+    || { _ws_refuse not-idle "$id worked at epoch $newest, less than $WS_STALE_IDLE_S seconds ago — a stale reclaim waits for seven idle days"; return 1; }
   _WS_LADDER_BIND+=("stale=$_WS_STALE_WORD" "holdDigest=$_WS_STALE_DIGEST" "idleAt=$newest")
 }
 
@@ -971,16 +971,16 @@ _ws_loose_eval() {   # name hex -> the FRESH rungs: REAP_VERDICT `collectable` (
   #                     The CALLER HOLDS `$REG/.collect-loose.lock`. Reads only.
   local name="${1-}" hex="${2-}" path="$HOME/.cc-tmp/${1-}" rc me mode owner floor now why=walk-failed dv
   _ws_loose_class "$name" || { _ws_collect_unmeasured registry "$_WS_LOOSE_WHY"; return 1; }
-  [[ "$_WS_LOOSE_CLASS" == loose ]] || { _ws_collect_refuse not-loose "the entry is class $_WS_LOOSE_CLASS — only a loose entry is this arm's"; return 1; }
+  [[ "$_WS_LOOSE_CLASS" == loose ]] || { _ws_refuse not-loose "the entry is class $_WS_LOOSE_CLASS — only a loose entry is this arm's"; return 1; }
   _ws_collect_qcheck || { _ws_collect_unmeasured quarantine "$_WS_Q_WHY — no entry is licensed to move into it, and the next pass asks again"; return 1; }
   _ws_collect_slots_of "loose.$_WS_LOOSE_SHA" || { _ws_collect_unmeasured quarantine "$_WS_QSLOTS_WHY"; return 1; }
-  (( ${#_WS_QSLOTS[@]} == 0 )) || { _ws_collect_refuse quarantine-kept "the quarantine slot ${_WS_QSLOTS[0]##*/} stands with no record naming it, and the entry is not collected beside it"; return 1; }
+  (( ${#_WS_QSLOTS[@]} == 0 )) || { _ws_refuse quarantine-kept "the quarantine slot ${_WS_QSLOTS[0]##*/} stands with no record naming it, and the entry is not collected beside it"; return 1; }
   _WS_LOOSE_TYPE=''
   [[ -d "$path" && ! -L "$path" ]] && _WS_LOOSE_TYPE=d
   [[ -f "$path" && ! -L "$path" ]] && _WS_LOOSE_TYPE=f
-  [[ -n "$_WS_LOOSE_TYPE" ]] || { _ws_collect_refuse not-loose "the entry is neither a regular file nor a directory"; return 1; }
+  [[ -n "$_WS_LOOSE_TYPE" ]] || { _ws_refuse not-loose "the entry is neither a regular file nor a directory"; return 1; }
   me=$(id -u) && _WS_LOOSE_UID=$(_ws_leaf_uid "$path") || { _ws_collect_unmeasured identity "who owns the entry could not be read"; return 1; }
-  [[ "$_WS_LOOSE_UID" == "$me" ]] || { _ws_collect_refuse not-loose "the entry belongs to uid $_WS_LOOSE_UID, not this uid $me — it is the operator's"; return 1; }
+  [[ "$_WS_LOOSE_UID" == "$me" ]] || { _ws_refuse not-loose "the entry belongs to uid $_WS_LOOSE_UID, not this uid $me — it is the operator's"; return 1; }
   dv=$(_plat_devino "$path" 2>/dev/null) && [[ "$dv" =~ ^[0-9]+:[0-9]+$ ]] || { _ws_collect_unmeasured identity "the device and inode of the entry could not be read"; return 1; }
   _WS_LOOSE_DEV="${dv%%:*}"; _WS_LOOSE_INO="${dv##*:}"
   _WS_LOOSE_BT=$(_plat_btime "$path" 2>/dev/null) && [[ "$_WS_LOOSE_BT" =~ ^[1-9][0-9]*$ ]] || _WS_LOOSE_BT=-
@@ -1000,20 +1000,20 @@ _ws_loose_eval() {   # name hex -> the FRESH rungs: REAP_VERDICT `collectable` (
   _WS_COLLECT_IDLE_AT=$(( (10#$_WS_COLLECT_NEWEST_NS + floor * 1000000000 + 999999999) / 1000000000 ))
   now=$(_ws_collect_now_ns) && [[ "$now" =~ ^[1-9][0-9]{9,18}$ ]] || { _ws_collect_unmeasured clock "this box's clock could not be read"; return 1; }
   (( 10#$now - 10#$_WS_COLLECT_NEWEST_NS >= floor * 1000000000 )) \
-    || { _ws_collect_refuse changed-recently "the newest change under the entry is less than ${floor}s old — it is collectable from epoch $_WS_COLLECT_IDLE_AT, if nothing changes it first"; return 1; }
+    || { _ws_refuse changed-recently "the newest change under the entry is less than ${floor}s old — it is collectable from epoch $_WS_COLLECT_IDLE_AT, if nothing changes it first"; return 1; }
   _ws_path_users "$path"; rc=$?
   (( rc != 2 )) || { _ws_collect_unmeasured in-use "${_WS_PATH_USERS_WHY-}"; return 1; }
-  (( rc != 1 )) || { _ws_collect_refuse in-use "a process of this uid still uses the entry (pid ${_WS_PATH_USERS_PIDS-}: ${_WS_PATH_USERS_WHY-})"; return 1; }
+  (( rc != 1 )) || { _ws_refuse in-use "a process of this uid still uses the entry (pid ${_WS_PATH_USERS_PIDS-}: ${_WS_PATH_USERS_WHY-})"; return 1; }
   _WS_CHECKOUTS_ACCEPTED=''
   if [[ "$_WS_LOOSE_TYPE" == d ]]; then
     _ws_leaf_checkouts "$path"; rc=$?
     (( rc != 2 )) || { [[ -z "${_WS_CHECKOUTS_CAPPED-}" ]] || { _ws_collect_unmeasured checkouts-cap "${_WS_CHECKOUTS_WHY-}"; return 1; }; _ws_collect_unmeasured checkouts "${_WS_CHECKOUTS_WHY-}"; return 1; }
-    (( rc != 1 )) || { _ws_collect_refuse containment-unproven "${_WS_CHECKOUTS_WHY-}"; return 1; }
+    (( rc != 1 )) || { _ws_refuse containment-unproven "${_WS_CHECKOUTS_WHY-}"; return 1; }
   fi
   _WS_LOOSE_ACCEPTED="${_WS_CHECKOUTS_ACCEPTED-}"
   _ws_loose_rows "$name" "$path"; rc=$?
   (( rc != 2 )) || { _ws_collect_unmeasured rows "$_WS_LOOSE_WHY"; return 1; }
-  (( rc != 1 )) || { _ws_collect_refuse containment-unproven "$_WS_LOOSE_WHY"; return 1; }
+  (( rc != 1 )) || { _ws_refuse containment-unproven "$_WS_LOOSE_WHY"; return 1; }
   _ws_collect_paused || return 1
   REAP_TOKEN=$(_ws_reclaim_fingerprint mode=collect-loose "name=$hex" "dev=$_WS_LOOSE_DEV" "ino=$_WS_LOOSE_INO" "btime=$_WS_LOOSE_BT" \
     "type=$_WS_LOOSE_TYPE" "uid=$_WS_LOOSE_UID" "newestCtimeNs=$_WS_COLLECT_NEWEST_NS" "entries=$_WS_COLLECT_ENTRIES" "floor=$floor")
@@ -1027,7 +1027,7 @@ _ws_loose_resume_eval() {   # name hex rec -> a RESUME from the record: `collect
   _WS_LOOSE_PHASE=''; _WS_LOOSE_RECORD="$rec"
   _ws_loose_record_read "$rec" "$hex"; rc=$?
   (( rc != 3 )) || { _ws_collect_unmeasured records "$_WS_LOOSE_WHY"; return 1; }
-  (( rc == 0 )) || { _ws_collect_refuse quarantine-kept "the loose record ${rec##*/} is kept for the operator: it is gone or not one ccd wrote for this entry"; return 1; }
+  (( rc == 0 )) || { _ws_refuse quarantine-kept "the loose record ${rec##*/} is kept for the operator: it is gone or not one ccd wrote for this entry"; return 1; }
   sl="$_WS_LREC_SLOT/leaf"; q="${_WS_LREC_SLOT%/*}"; orig="${q%/.ccd-quarantine}/$name"
   _ws_loose_ident "$sl" "$_WS_LREC_DEV:$_WS_LREC_INO" "$_WS_LREC_BT" "$_WS_LREC_TYPE"; rc=$?
   if (( rc == 0 )); then _WS_LOOSE_PHASE=moved
@@ -1035,7 +1035,7 @@ _ws_loose_resume_eval() {   # name hex rec -> a RESUME from the record: `collect
   else
     _ws_reclaim_absent "$sl"; rc=$?
     (( rc != 2 )) || { _ws_collect_unmeasured leaf "${_WS_ABSENT_WHY-}"; return 1; }
-    (( rc == 0 )) || { _ws_collect_refuse quarantine-kept "the slot's leaf is not the entry record ${rec##*/} names — it is the operator's"; return 1; }
+    (( rc == 0 )) || { _ws_refuse quarantine-kept "the slot's leaf is not the entry record ${rec##*/} names — it is the operator's"; return 1; }
     _ws_loose_ident "$orig" "$_WS_LREC_DEV:$_WS_LREC_INO" "$_WS_LREC_BT" "$_WS_LREC_TYPE"; rc=$?
     (( rc != 2 )) || { _ws_collect_unmeasured identity "the identity of the entry could not be read"; return 1; }
     if (( rc == 0 )); then _WS_LOOSE_PHASE=unmoved; else _WS_LOOSE_PHASE=removed; fi
@@ -1052,7 +1052,7 @@ _ws_loose_fork() {   # name hex -> the ONE evaluation `ws-audit --loose-hex … 
   _ws_collect_reset; _WS_LOOSE_RECORD=''; _WS_LOOSE_PHASE=''; _WS_LOOSE_CLASS=''
   _ws_loose_records_of "$_WS_LOOSE_SHA" || { _ws_collect_unmeasured records "$_WS_LOOSE_WHY"; return 1; }
   if (( ${#_WS_LOOSE_RECS[@]} == 1 )); then _ws_loose_resume_eval "$name" "$hex" "${_WS_LOOSE_RECS[0]}"
-  elif (( ${#_WS_LOOSE_RECS[@]} > 1 )); then _ws_collect_refuse quarantine-kept "${#_WS_LOOSE_RECS[@]} loose records name the entry — they are the operator's"
+  elif (( ${#_WS_LOOSE_RECS[@]} > 1 )); then _ws_refuse quarantine-kept "${#_WS_LOOSE_RECS[@]} loose records name the entry — they are the operator's"
   else _ws_loose_eval "$name" "$hex"; fi
 }
 
@@ -1068,7 +1068,7 @@ _ws_loose_audit_contained() {
   elif ! _ws_collect_mv_ok; then _ws_collect_unmeasured mv "this box's mv has no --no-copy, so the move could only ever be a copy"
   elif ! command -v flock >/dev/null 2>&1; then _ws_collect_unmeasured flock "flock (util-linux) is unavailable"
   elif ! { exec {lfd}>>"$REG/.collect-loose.lock"; } 2>/dev/null; then _ws_collect_unmeasured lock "cannot open $REG/.collect-loose.lock"
-  elif ! flock -n "$lfd"; then exec {lfd}>&-; _ws_collect_refuse in-progress "another ccd process holds the loose collect lock" || :
+  elif ! flock -n "$lfd"; then exec {lfd}>&-; _ws_refuse in-progress "another ccd process holds the loose collect lock" || :
   else _ws_loose_fork "$name" "$hex" || :; exec {lfd}>&-; fi
   _ws_loose_audit_doc "$name" "$hex"
 }

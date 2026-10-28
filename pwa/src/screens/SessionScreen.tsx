@@ -15,6 +15,7 @@ import { ArchiveSheet, restoreSession } from '../fleet/ArchiveSheet';
 import { accountHue, accountLabel, accountProvider } from '../lib/accounts';
 import { api, ApiError, failedTo, INTERRUPT_REFUSAL_TEXT, refusalText } from '../lib/api';
 import { backgroundTasksClause } from '../lib/refusalWords';
+import { dayKey } from '../lib/clock';
 import { useKeyboardInset } from '../lib/keyboard';
 import { navigate } from '../lib/router';
 import { ack } from '../lib/seen';
@@ -33,8 +34,7 @@ import { routeView } from '../session/routeView';
 import { substrateFaultTitle } from '../fleet/substrateWords';
 import { SessionChromeInputs, SessionHeader, type SessionHeaderProps } from '../session/SessionHeader';
 import { useFrameSet } from '../skins/frame';
-import { INSPECTOR_QUERY } from '../inspector/useInspectorSession';
-import { useMediaQuery } from '../lib/useMediaQuery';
+import { useInspectorShown } from '../inspector/inspectorShown';
 import { SessionFlows, type SessionActions } from '../session/SessionFlows';
 import { useEscapeInterrupt } from '../session/useEscapeInterrupt';
 import { liveStatus } from '../session/liveStatus';
@@ -224,6 +224,16 @@ export function SessionScreen({
   // for the transcript (its live ask card points at the card), the Escape interrupt (it stands down) and the composer
   // (Send holds). A phone's sheet never reports, so none of the three changes there.
   const [askInline, setAskInline] = useState(false);
+  // The transcript's row callbacks keep their identity across this screen's renders (desktop polish Task C7): each is a
+  // prop of every row, so a new one on every render (a roster answer, a status word) would draw every row again.
+  // D-6326 (R89): Retry is a send, held while the inline card is mounted (the bubble's button is disabled for the same
+  // fact); nothing is queued to go when the card leaves.
+  const onRetry = useCallback((key: string): void => {
+    if (askInline) return;
+    useStore.getState().retry(key);
+  }, [askInline, useStore]);
+  const onDiscard = useCallback((key: string): void => { useStore.getState().discard(key); }, [useStore]);
+  const onAnswer = useCallback((): void => { setRaise((n) => n + 1); }, []);
   // Lifecycle surfaces behind the header's overflow menu.
   const [swapOpen, setSwapOpen] = useState(false);
   const [archiveOpen, setArchiveOpen] = useState(false);
@@ -299,6 +309,9 @@ export function SessionScreen({
   const lookup = (sid: string): FleetSession | null => (parent !== null && parent.id === sid ? parent : null);
   const parentId = live === null ? null : parentIdOf(live, activeRuns);
   const factsNow = useNow(30_000);
+  // Desktop polish Task C7, review 1128: the transcript's day, from this same clock. A row whose words read the clock
+  // (the usage-limit pill) draws again when it changes, within one tick of local midnight; no other row does.
+  const day = dayKey(factsNow);
   const presence = parentId === null ? null : coordPresence(parentId, lookup(parentId), fleetFrameSeen);
   const facts = live === null ? null : sessionFacts({
     session: live, now: factsNow, roster,
@@ -515,8 +528,10 @@ export function SessionScreen({
   const frameSet = useFrameSet();
   const SkinChrome = frameSet?.SessionChrome ?? null;
   // ONE INSTANCE PER WIDTH (W2 Task S8, D-5474): where the skin's inspector holds the plan and the mail (at >=1600, a
-  // skin that places one), the column does not render their strips. Asked of the set, never of the skin's id.
-  const inspectorHoldsStrips = useMediaQuery(INSPECTOR_QUERY) && (frameSet?.Inspector ?? null) !== null;
+  // skin that places one, and shown: a person may hide it, T3e D-6385), the column does not render their strips, and a
+  // hidden rail brings them back. Asked of the set, never of the skin's id.
+  const inspectorShown = useInspectorShown();
+  const inspectorHoldsStrips = inspectorShown && (frameSet?.Inspector ?? null) !== null;
   const chromeInputs: SessionHeaderProps = {
     session: live,
     status,
@@ -646,14 +661,13 @@ export function SessionScreen({
             events={events}
             pending={pending}
             busy={pulsing}
-            // D-6326 (R89): Retry is a send, held while the inline card is mounted (the bubble's button is disabled for the
-            // same fact); nothing is queued to go when the card leaves.
-            onRetry={(key) => { if (askInline) return; useStore.getState().retry(key); }}
-            onDiscard={(key) => useStore.getState().discard(key)}
+            onRetry={onRetry}
+            onDiscard={onDiscard}
             askPending={askPending}
             askBelow={askInline}
             answerLabel={answerLabel}
-            onAnswer={() => setRaise((n) => n + 1)}
+            onAnswer={onAnswer}
+            day={day}
           />
         )}
       </div>

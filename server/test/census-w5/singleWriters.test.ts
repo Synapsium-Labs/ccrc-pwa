@@ -53,12 +53,13 @@ describe('ccdVerbsWriters: assignments to FleetState.ccdVerbs under server/src (
     expect(r.initialisers.map((s) => `${s.name}:${s.line}`)).toEqual(['a.ts#C:3']);
   });
 
-  it('REAL: writers, reported by name (3 at base, `remote/client.ts#onReady`, `refreshcaps.ts#makeRefreshCaps` and the local-mode closure at index.ts\'s module level; C5j takes them to 1); the 2 initialisers pinned apart', () => {
+  it('REAL: writers by name (3 at base, `remote/client.ts#onReady`, `refreshcaps.ts#makeRefreshCaps` and the local-mode closure at index.ts\'s module level; 1 at C5j, `fleetstate.ts#recordCcdVerbs`, pinned in late-census.test.ts); the 2 initialisers pinned apart', () => {
     const r = ccdVerbsWriters();
     show('ccdVerbsWriters', r.writers);
     show('ccdVerbsWriters (initialisers, not writers)', r.initialisers);
     expectReportRow('ccdVerbsWriters', r.writers.map((s) => s.name),
       ['index.ts#(module)', 'refreshcaps.ts#makeRefreshCaps', 'remote/client.ts#onReady'], ['fleetstate.ts#recordCcdVerbs'], 1);
+    expect(r.writers.map((s) => s.name), 'C5j reached its target').toEqual(['fleetstate.ts#recordCcdVerbs']);
     expect(r.initialisers.map((s) => s.file).sort()).toEqual(['server/src/index.ts', 'server/src/remote/client.ts']);
   });
 });

@@ -393,17 +393,13 @@ describe('the run board’s abandon control (Task 12, spec §4.3)', () => {
     vi.stubGlobal('fetch', fetchImpl);
     render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} loadSpend={NO_SPEND} />);
 
-    // Task 13, spec §4.4: `RunsScreen` also mounts `StartProgramSheet` now,
-    // whose own `useProjectedHome(open)` (review fix round 1, Minor 2) is
-    // gated on the SHEET's own `open` — never tapped here, so it never
-    // polls `/api/accounts` in this test at all. The exclusion below is
-    // defensive rather than currently load-bearing: it keeps this assertion
-    // meaning "no OTHER route at all" (review fix round 1, Minor 1) even if
-    // that gate is ever widened, rather than narrowing to "only the abandon
-    // route", which would stop catching a stray SECOND route (a prefetch, a
-    // second run's abandon) alongside the real one.
-    const otherCalls = (): [string, RequestInit][] =>
-      fetchImpl.mock.calls.filter(([url]) => !String(url).includes('/api/accounts')) as [string, RequestInit][];
+    // Task 13, spec §4.4: `RunsScreen` also mounts `StartProgramSheet` now. Since C8 (D-6440) its
+    // `useProjectedHome(open)` only reads the fleet store, which this test never connects, so no sheet
+    // polls `/api/accounts` and nothing needs setting aside: every fetch counts. That keeps this
+    // assertion meaning "no OTHER route at all" (review fix round 1, Minor 1) rather than narrowing to
+    // "only the abandon route", which would stop catching a stray SECOND route (a prefetch, a second
+    // run's abandon) alongside the real one.
+    const otherCalls = (): [string, RequestInit][] => fetchImpl.mock.calls as [string, RequestInit][];
 
     // First tap: the row's own control opens the sheet. Nothing has been
     // sent to any route yet — opening is not confirming.

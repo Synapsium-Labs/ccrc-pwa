@@ -29,19 +29,28 @@ const acct = (over: Partial<AccountUsage>): AccountUsage => ({
 
 const sess = (over: Partial<FleetSession> = {}): FleetSession => (fleetSession({ workspace: 'quiet-basin', branch: 'ws/quiet-basin', ...over }));
 
+/** Puts a well-formed accounts answer in the app-wide fleet store, where the screen reads it: the store is the one
+ *  `/api/accounts` reader and the screen runs no poll (C8, D-6440). A case about a failed, malformed or late answer
+ *  drives the store's real read instead (`readAccounts`), so the store's own rule is what it measures. */
 const stubAccounts = (
   accounts: AccountUsage[],
   projected: { wrapper: string; score: number } | null = null,
   roster = TEST_ROSTER,
 ): void => {
-  vi.spyOn(api, 'accounts').mockResolvedValue({ accounts, projected, roster });
+  act(() => { useFleetStore.setState({ usage: accounts, projected, roster }); });
 };
+
+/** The app-wide store's one read, answered by whatever `api.accounts` spy the case set. */
+const readAccounts = async (): Promise<void> => { await act(() => useFleetStore.getState().refreshAccounts()); };
 
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
   navigate('/');
-  act(() => useFleetStore.setState({ sessions: [], conn: 'connecting', notices: [], blocked: false }));
+  act(() => useFleetStore.setState({
+    sessions: [], conn: 'connecting', notices: [], blocked: false,
+    usage: null, projected: undefined, roster: [], lanes: null, accountsConnect: null,
+  }));
 });
 
 // Review fix: `accounts === null` ("no poll has landed yet") used to fall
@@ -52,12 +61,8 @@ afterEach(() => {
 // lines up in the component, which this used to be the one place that broke.
 describe('AccountsScreen — the waiting state, before any poll answers (review fix)', () => {
   it('never asserts "last reported —" before the first poll resolves', () => {
-    // A promise that never resolves, asserted on synchronously right after
-    // render — nothing awaited, so this is the render before any microtask
-    // from the fetch could have run. Robust against microtask-timing
-    // assumptions in a way `mockResolvedValue` + a bare synchronous check
-    // would not be.
-    vi.spyOn(api, 'accounts').mockReturnValue(new Promise(() => {}));
+    // The store before any answer has landed (`usage: null`), asserted on
+    // synchronously right after render.
     render(<AccountsScreen />);
     expect(screen.queryByText(/last reported/i)).not.toBeInTheDocument();
     // The house waiting state (Skeleton), not four confident "—" rows.
@@ -66,14 +71,12 @@ describe('AccountsScreen — the waiting state, before any poll answers (review 
 
   it('stays in the waiting state when /api/accounts fails, rather than reporting on accounts it never heard from', async () => {
     // The reviewer's exact scenario: the fleet host is up but the route
-    // 500s (or the PWA opened offline / mid restart). The poller's own
-    // `.catch(() => {})` never sets state on failure, so `accounts` stays
-    // `null` for as long as every attempt keeps failing.
+    // 500s (or the PWA opened offline / mid restart). The store's read
+    // writes nothing on failure, so `usage` stays `null` for as long as
+    // every attempt keeps failing.
     vi.spyOn(api, 'accounts').mockRejectedValue(new Error('fleet host down'));
     render(<AccountsScreen />);
-    // Let the rejected promise's microtask (and the effect's state-setting
-    // branch it does NOT take) settle before asserting the negative.
-    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+    await readAccounts();
     expect(screen.queryByText(/last reported —/i)).not.toBeInTheDocument();
   });
 });
@@ -369,8 +372,7 @@ describe('AccountsScreen — tagging an account into a pool', () => {
   const POOLED = TEST_ROSTER.map((a) => (a.id === 'claude9' ? { ...a, pool: 'pool-a' } : a));
 
   const open = async (): Promise<void> => {
-    vi.spyOn(api, 'accounts').mockResolvedValue(
-      { accounts: [acct({ wrapper: 'claude' })], projected: null, roster: POOLED });
+    stubAccounts([acct({ wrapper: 'claude' })], null, POOLED);
     render(<><AccountsScreen /><ToastHost /></>);
     fireEvent.click(await screen.findByTestId('acct-pool-chip-claude'));
   };
@@ -426,41 +428,33 @@ describe('AccountsScreen — a roster that comes back the wrong shape', () => {
     vi.spyOn(api, 'accounts').mockResolvedValue(
       { accounts: [acct({ wrapper: 'claude' })], projected: null, roster: undefined as never });
     render(<AccountsScreen />);
+    await readAccounts();
     expect(await screen.findByText('claude')).toBeInTheDocument();
     expect(warn, 'the one signal a protocol break gets').toHaveBeenCalledWith(
       expect.stringContaining('non-array roster'), expect.anything());
   });
 
   it('a BAD second poll cannot undo a good first one', async () => {
-    // This is what the guard is for. The screen re-polls on an interval; one
+    // This is what the guard is for. The store re-polls on an interval; one
     // malformed answer mid-session must not strip the labels the operator has
     // been reading for an hour.
     vi.spyOn(console, 'warn').mockImplementation(() => {});
     const accounts = vi.spyOn(api, 'accounts')
       .mockResolvedValueOnce({ accounts: [acct({ wrapper: 'claude' })], projected: null, roster: TEST_ROSTER })
       .mockResolvedValue({ accounts: [acct({ wrapper: 'claude' })], projected: null, roster: undefined as never });
-    // FAKE TIMERS BEFORE THE RENDER, deliberately: the interval is created in
-    // the screen's own mount effect, and a clock installed after that is a
-    // clock the already-scheduled timer does not read. Measured — the first
-    // version of this case advanced a clock the poll had never seen and the
-    // second request never fired.
-    vi.useFakeTimers();
     render(<AccountsScreen />);
-    // One microtask flush for the mount read's own promise chain.
-    await vi.advanceTimersByTimeAsync(1);
-    await vi.waitFor(() => expect(screen.getByText('team·max')).toBeInTheDocument());
-    await vi.advanceTimersByTimeAsync(20_000);
-    expect(accounts.mock.calls.length, 'the 20s poll fired').toBeGreaterThan(1);
+    await readAccounts();
+    expect(screen.getByText('team·max')).toBeInTheDocument();
+    await readAccounts();
+    expect(accounts, 'the second, malformed read ran').toHaveBeenCalledTimes(2);
     expect(screen.getByText('team·max'),
       'the label survived a malformed answer, which is the whole of the guard').toBeInTheDocument();
-    vi.useRealTimers();
   });
 });
 
 // D-5102: the accounts screen stands on the page scaffold.
 describe('AccountsScreen on the page scaffold (D-5102)', () => {
   it('renders a PageScaffold with one h1, and Back to the fleet', () => {
-    vi.spyOn(api, 'accounts').mockReturnValue(new Promise(() => {}));
     const { container } = render(<AccountsScreen />);
     expect(container.querySelector('[data-page-body]')?.className.split(/\s+/)).toContain('max-w-(--page-max)');
     const h1 = screen.getAllByRole('heading', { level: 1 });
@@ -524,10 +518,11 @@ describe('AccountsScreen — opens at a lane (?lane=<id>)', () => {
     navigate('/accounts?lane=claude9');
     const scroll = spyScroll();
     render(<AccountsScreen />);
-    await act(async () => { await Promise.resolve(); });
+    let read!: Promise<void>;
+    await act(async () => { read = useFleetStore.getState().refreshAccounts(); await Promise.resolve(); });
     expect(scroll.calls, 'no row yet, so nothing to scroll to').toHaveLength(0);
     expect(document.activeElement).toBe(document.body);
-    await act(async () => { land({ accounts: twoLanes, projected: null, roster: TEST_ROSTER }); });
+    await act(async () => { land({ accounts: twoLanes, projected: null, roster: TEST_ROSTER }); await read; });
     expect(scroll.calls).toEqual([rowOf('claude9')]);
     expect(document.activeElement).toBe(rowOf('claude9'));
   });

@@ -13,6 +13,7 @@ import { readFileSync } from 'node:fs';
 import { LC_REFUSAL_TOKENS } from '../../shared/api.js';
 import { SENTENCES } from '../src/wsaudit.js';
 import { ccdSource } from './ccdWsHelpers.js';
+import { refuseWords } from './census-w5/ccdHelpers.js';
 
 const src = ccdSource();
 
@@ -237,11 +238,13 @@ describe('every literal refusal argument ccd carries is a token L0 or wsaudit al
     for (const m of src.matchAll(/_lc_emit\s+[a-z-]+\s+refused\s+"[^"]*"\s+""\s+verb\s+[a-z-]+\s+refusal\s+([a-z][a-z0-9-]*)/g)) found.add(m[1]!);
     // THE COLLECTOR (child reclamation wave 7). `ws-collect` journals every refusal at its ONE refusal point,
     // `_ws_collect_refused id tx <word> …`; the evaluation it shares with `ws-audit --collect` answers through
-    // `_ws_collect_refuse <word> …`, and the verb journals that word at the same point. Both are literal positions,
-    // read inside the COLLECT region only; each regex requires `\s` right after its name, so neither meets the other.
+    // `_ws_refuse <word> …`, and the verb journals that word at the same point. Both are literal positions, read
+    // inside the COLLECT region only: the helper's words through the census's collector family over the region's
+    // offsets (D-7072), whose call is the whole name `_ws_refuse` followed by a blank, and `_ws_collect_refused` by its
+    // regex, which requires `\s` right after its name, so neither meets the other.
     const collect = src.slice(src.indexOf('COLLECT-BEGIN'), src.indexOf('COLLECT-END'));
     expect(collect.length, 'the COLLECT region was found — an empty cut harvests nothing').toBeGreaterThan(20000);
-    for (const m of collect.matchAll(/_ws_collect_refuse\s+([a-z][a-z0-9-]*)/g)) found.add(m[1]!);
+    for (const w of refuseWords('collect', { from: src.indexOf('COLLECT-BEGIN'), to: src.indexOf('COLLECT-END') })) found.add(w);
     for (const m of collect.matchAll(/_ws_collect_refused\s+"[^"]*"\s+"[^"]*"\s+([a-z][a-z0-9-]*)/g)) found.add(m[1]!);
     expect(found.size, 'the scan found almost no tokens — it is vacuous').toBeGreaterThanOrEqual(14);
     expect([...found].filter((t) => !known.has(t)).sort(), 'tokens no vocabulary owns').toEqual([]);

@@ -218,3 +218,66 @@ describe('the real composition root — boot never blocks on the local-caps prob
     }
   }, 15_000);
 });
+
+/** Polls `/api/fleet/health` on the booted server until its `projectPools` answer equals `want` or the budget runs
+ *  out, and returns the last answer seen (`undefined` if none was read). Local mode derives `projectPools` from
+ *  `fleetState.ccdVerbs` (`poolsEnforcement`), so this is the one wire answer that reads the field the local-mode read
+ *  writes, without importing `index.ts`. */
+async function projectPoolsWithin(port: number, want: string, budgetMs: number): Promise<string | undefined> {
+  const start = Date.now();
+  let last: string | undefined;
+  while (Date.now() - start < budgetMs) {
+    try {
+      const res = await fetch(`http://127.0.0.1:${port}/api/fleet/health`);
+      if (res.status === 200) {
+        last = (await res.json() as { projectPools?: string }).projectPools;
+        if (last === want) return last;
+      }
+    } catch {
+      // Not listening yet — keep polling.
+    }
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  return last;
+}
+
+// The local-mode writer itself (D-7079): `index.ts`'s `readLocalCcdCaps(...).then(...)` closure records what this
+// box's own `ccd caps` answered into `fleetState.ccdVerbs`. Only a booted composition root runs that closure, so these
+// rows boot it in local mode against a stub ccd and read the field back through `/api/fleet/health`.
+describe('the real composition root — local mode records its own ccd caps', () => {
+  it('a ccd whose caps list the project-pool verb is recorded: projectPools turns enforced', async () => {
+    const home = mkTmp('ccrc-boot-');
+    writeRoster(home);
+    writeStubCcd(home, 'echo start\necho stop\necho project-pool\nexit 0');
+    const port = freshPort();
+    expect(await timeToHealth(home, indexTs, port, 8_000)).not.toBeNull();
+    expect(await projectPoolsWithin(port, 'enforced', 5_000)).toBe('enforced');
+  }, 20_000);
+
+  it('a ccd whose caps lack the verb is recorded too: projectPools turns unavailable, not left unknown', async () => {
+    const home = mkTmp('ccrc-boot-');
+    writeRoster(home);
+    writeStubCcd(home, 'echo start\necho stop\nexit 0');
+    const port = freshPort();
+    expect(await timeToHealth(home, indexTs, port, 8_000)).not.toBeNull();
+    expect(await projectPoolsWithin(port, 'unavailable', 5_000)).toBe('unavailable');
+  }, 20_000);
+
+  // The measured rule writes only a non-null list (D-7079): a failed read is "no evidence", so the field stays
+  // unwritten and `projectPools` stays 'unknown'. Recording it as `[]` would answer 'unavailable', a false fact.
+  // The stub touches a marker when asked `caps` (it inherits the server's env, so the path comes from
+  // `CCRC_HOME`, not from this file), so the row waits until the read has demonstrably run, then holds a grace
+  // window in which an 'unavailable' answer would end the poll early and fail the assertion.
+  it('a ccd whose caps fails is not recorded: projectPools stays unknown after the read ran', async () => {
+    const home = mkTmp('ccrc-boot-');
+    writeRoster(home);
+    writeStubCcd(home, 'if [ "$1" = caps ]; then touch "$CCRC_HOME/.caps-asked"; fi\nexit 1');
+    const port = freshPort();
+    expect(await timeToHealth(home, indexTs, port, 8_000)).not.toBeNull();
+    const marker = path.join(home, '.caps-asked');
+    const askedBy = Date.now() + 5_000;
+    while (!existsSync(marker) && Date.now() < askedBy) await new Promise((r) => setTimeout(r, 50));
+    expect(existsSync(marker), 'the local-mode caps read must have run').toBe(true);
+    expect(await projectPoolsWithin(port, 'unavailable', 1_500)).toBe('unknown');
+  }, 20_000);
+});

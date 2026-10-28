@@ -5164,6 +5164,92 @@ export const parseCanonicalPositiveSafeInteger = (text: unknown): number | null 
     : null;
 };
 
+/** W3 Q3f (D-7030; ARCH-57, server half): what a question id in the `/api/questions/:id/*` door family names. `ask` and
+ *  `approval` a row of the asks or the approvals table, `session` the session whose pane shows the question the
+ *  operator answers. The path picks the principal (`QuestionDoorPrincipal`), never a body field or a header. */
+export type QuestionIdKind = 'ask' | 'approval' | 'session';
+export const QUESTION_ID_KINDS: Readonly<Record<QuestionIdKind, true>> = { ask: true, approval: true, session: true };
+
+/** A parsed question id: `ask-<n>` and `approval-<n>`, `<n>` in `parseCanonicalPositiveSafeInteger`'s one spelling, so
+ *  `ask-01`, `ask-+1` and `ask-1.0` are refused exactly as `/api/asks/01/answer` is; and `session-<id>`, `<id>` in the
+ *  registry's session id grammar (`isRegistryId`) and nothing else. */
+export type QuestionId =
+  | { readonly kind: 'ask'; readonly id: number }
+  | { readonly kind: 'approval'; readonly id: number }
+  | { readonly kind: 'session'; readonly sessionId: string };
+
+/** The one parser of a question id (W3 Q3f, D-7030), the canonical parser of every `/api/questions/:id/*` route. `null`
+ *  for any other text: an unknown prefix, an empty or non-canonical `<n>`, a session id outside the registry's grammar. */
+export const parseQuestionId = (text: unknown): QuestionId | null => {
+  if (typeof text !== 'string') return null;
+  const dash = text.indexOf('-');
+  if (dash <= 0) return null;
+  const prefix = text.slice(0, dash);
+  const rest = text.slice(dash + 1);
+  if (prefix === 'ask' || prefix === 'approval') {
+    const id = parseCanonicalPositiveSafeInteger(rest);
+    return id === null ? null : { kind: prefix, id };
+  }
+  if (prefix === 'session') return isRegistryId(rest) ? { kind: 'session', sessionId: rest } : null;
+  return null;
+};
+
+/** The one formatter of a question id: the text `parseQuestionId` reads back as `q`. */
+export const formatQuestionId = (q: QuestionId): string =>
+  q.kind === 'session' ? `session-${q.sessionId}` : `${q.kind}-${q.id}`;
+
+/** What kind of question an answer door's body answers (consolidation spec K5's `OperatorQuestion` kinds): a child's
+ *  AskUserQuestion (`ask`), a child's permission prompt (`approval`), or a dialog the pane shows (`dialog`). */
+export type QuestionKind = 'ask' | 'approval' | 'dialog';
+export const QUESTION_KINDS: Readonly<Record<QuestionKind, true>> = { ask: true, approval: true, dialog: true };
+
+/** Who a door of the family answers for (OA-C7 (a)): the operator at the PWA (`POST /api/questions/:id/answer`,
+ *  session-gated and origin-checked) or the dispatched child's claimant (`/rule` and `/release`, box token, attribution
+ *  and the stored parent). */
+export type QuestionDoorPrincipal = 'operator' | 'claimant';
+export const QUESTION_DOOR_PRINCIPALS: Readonly<Record<QuestionDoorPrincipal, true>> = { operator: true, claimant: true };
+
+/** The family's one word of its own: an id of the other principal's kind, or a body `kind` that disagrees with the id's.
+ *  400, the caller's to fix. */
+export type QuestionDoorRefusal = 'kind-mismatch';
+export const QUESTION_DOOR_REFUSALS: Readonly<Record<QuestionDoorRefusal, true>> = { 'kind-mismatch': true };
+
+/** `POST /api/questions/session-<id>/answer`'s body, the operator's: an ask by option index (replacing
+ *  `/api/sessions/:id/ask`), a dialog's row (`/dialog`), a dialog's free-text row (`/dialog/text`), or a multiSelect
+ *  question's set (`/dialog/multi`). A body matching none is `400 bad-request`. */
+export type QuestionAnswerBody =
+  | { readonly kind: 'ask'; readonly askKey: string; readonly optionIndexes: number[] }
+  | { readonly kind: 'dialog'; readonly dialogId: string; readonly optionIndex: number; readonly text?: string }
+  | { readonly kind: 'dialog'; readonly dialogId: string; readonly optionIndexes: number[]; readonly multi: true };
+
+/** `POST /api/questions/<ask|approval>-<n>/rule`'s body, the claimant's: an ask by option index (replacing
+ *  `/api/asks/:id/answer`) or a permission ruling (replacing `/api/approvals/:id/rule`, the signing unchanged). */
+export type QuestionRuleBody =
+  | { readonly kind: 'ask'; readonly fromId: string; readonly fromUuid: string; readonly optionIndexes: number[]; readonly askKey?: string }
+  | { readonly kind: 'approval'; readonly fromId: string; readonly fromUuid: string; readonly verdict: 'allow' | 'deny'; readonly reason: string };
+
+/** `POST /api/questions/<ask|approval>-<n>/release`'s body, the claimant's hand-over (replacing `/api/asks/:id/release`
+ *  and `/api/approvals/:id/release`). */
+export interface QuestionReleaseBody { readonly kind: 'ask' | 'approval'; readonly fromId: string; readonly fromUuid: string }
+
+/** The dialog arms of `QuestionAnswerBody`, read off a request body: the multiSelect set when `multi` is `true`, the
+ *  free-text row when `text` is given, the plain row otherwise. `null` is `400 bad-request`: a field of the wrong type, a
+ *  `multi` that is not `true`, or an arm's field missing. The ask arm's reader is `readAskAnswer` (`inject/ask.ts`). */
+export function readDialogAnswer(body: unknown): Extract<QuestionAnswerBody, { kind: 'dialog' }> | null {
+  if (typeof body !== 'object' || body === null) return null;
+  const b = body as Record<string, unknown>;
+  if (typeof b.dialogId !== 'string') return null;
+  if (b.multi !== undefined) {
+    if (b.multi !== true || !Array.isArray(b.optionIndexes) || !b.optionIndexes.every((n) => typeof n === 'number')) return null;
+    return { kind: 'dialog', dialogId: b.dialogId, optionIndexes: b.optionIndexes as number[], multi: true };
+  }
+  if (typeof b.optionIndex !== 'number') return null;
+  if (b.text !== undefined && typeof b.text !== 'string') return null;
+  return b.text === undefined
+    ? { kind: 'dialog', dialogId: b.dialogId, optionIndex: b.optionIndex }
+    : { kind: 'dialog', dialogId: b.dialogId, optionIndex: b.optionIndex, text: b.text };
+}
+
 /** The widest decimal the RUN ID's slot must reserve room for: SQLite's signed
  *  INTEGER maximum, nineteen digits. Deliberately WIDER than the JavaScript
  *  domain above, which every runtime seam still enforces — `runs.id` is an
@@ -10996,7 +11082,7 @@ export function backgroundOnlyRefusal(body: unknown): { count: number | null; ki
 // from Tasks 2 and 10, the file's name, the lease and the grammar in `ccd/session-hook.sh`.
 
 /** One capability word the server advertises. Spelled once, as the keys of `SERVER_CAP_MAP`. */
-export type ServerCap = 'dispatch-live-gate-v1' | 'hook-main-state-v1' | 'ask-pairing-v1';
+export type ServerCap = 'dispatch-live-gate-v1' | 'hook-main-state-v1' | 'ask-pairing-v1' | 'questions-v1';
 
 /** Every word, with what it promises. The value is `true`; the promise is the comment, which a word's reader may
  *  rely on and nothing weaker. `PR_REASON_MAP`'s idiom: a word added to `ServerCap` and not here is TS2741. */
@@ -11025,6 +11111,15 @@ const SERVER_CAP_MAP: Readonly<Record<ServerCap, true>> = {
    *  never inside `dialog`. W7 gates its client on this word before it reads the field and deletes its own pairing.
    *  Added by the change that builds the field and its two senders, cut after both. */
   'ask-pairing-v1': true,
+  /** D-7030 (Task Q3f, ARCH-57's server half): this server answers the `/api/questions/:id/*` door family in
+   *  `coord/routes.ts`, behind its one gate: `POST /api/questions/session-<id>/answer` for the operator (an ask by option
+   *  index, a dialog's row, its free-text row or a multiSelect set; session-gated, origin-checked, the session id gated
+   *  by `knownId`), and `POST /api/questions/<ask|approval>-<n>/rule` and `/release` for the claimant (box token,
+   *  attribution, the stored parent; the signing unchanged), each answering what the old door it replaces answers, byte
+   *  for byte, with `400 kind-mismatch` for an id or body of the other principal's kind. The old doors stay, as aliases
+   *  into the same cores. W7 gates its client on this word before it calls a door of the family. Added by the change
+   *  that builds the family, cut after its routes, cores and aliases. */
+  'questions-v1': true,
 };
 
 /** The words this server advertises, in `GET /health`'s `caps`, and in the file a `server` or `both` node writes. */

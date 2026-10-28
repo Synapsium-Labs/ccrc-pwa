@@ -596,10 +596,11 @@ describe('review fixes', () => {
 describe('dense rows at the desk (T2e, D-6335)', () => {
   const DENSE = '(min-width: 900px) and (pointer: fine)';
 
-  it('under a fine pointer at a desk a status row is two lines on --row-h: name and state, then the context', () => {
+  it('under a fine pointer at a desk a status row sits on --row-h: the name and the state word share a line when they fit', () => {
     // The body is a wrapping flex row: the state word beside the name when both fit, on a line of its own when they do
-    // not (a flex line breaks on max-content sizes, so the name then has the whole line), and the context on a line of
-    // its own. Never a grid with a capped state column: that squeezed a long name into three lines beside the state.
+    // not (a flex line breaks on max-content sizes, so the name then has the whole line). That is the whole layout of a
+    // row with no context; a row with a context is a block instead (T3b, the case at the end of this block). Never a grid
+    // with a capped state column: that squeezed a long name into three lines beside the state.
     const body = declsOf('.ins-row .sess-body', DENSE);
     expect(body).toMatch(/display:\s*flex/);
     expect(body).toMatch(/flex-flow:\s*row wrap/);
@@ -643,5 +644,85 @@ describe('dense rows at the desk (T2e, D-6335)', () => {
       expect(declsOf(sel), sel).not.toMatch(/min-height|margin-top|margin-inline|flex|display:\s*(grid|flex)|align-self/);
       for (const media of ['(min-width: 900px)', '(pointer: fine)']) expect(declsOf(sel, media), `${sel} in ${media}`).toBe('');
     }
+  });
+  it('a row with a context ends its context line with the state word only where the whole context fits, so the state never cuts it (T3b, R21 F2, D-7252)', () => {
+    // The operator's ruling (R121, Q2) and D-7252: the state word ends the context line, so a long name does not push it
+    // onto a line of its own, but never by narrowing the context. The row is a block; the name is an inline box at its
+    // own width, the state word floats to the end of the first line with room for it, and the context is as wide as its
+    // text, so a float leaves it to start below the state word when it would not fit whole beside it. A flex basis or a
+    // `min-width: 0` on the context would let the state squeeze it again. A row with no context keeps the flex row, so
+    // every rule names a row that HAS a context.
+    const body = '.ins-row .sess-line:has(.sess-meta--context) .sess-body';
+    const open = '.ins-row .sess-line:has(.sess-meta--context) .sess-body > .sess-open';
+    const state = '.ins-row .sess-line:has(.sess-meta--context) .sess-body > .sess-meta:not(.sess-meta--context)';
+    const context = '.ins-row .sess-line:has(.sess-meta--context) .sess-meta--context';
+    expect(declsOf(body, DENSE)).toMatch(/display:\s*block/);
+    expect(declsOf(open, DENSE)).toMatch(/display:\s*inline-flex/);
+    expect(declsOf(open, DENSE)).toMatch(/max-width:\s*100%/);
+    expect(declsOf(state, DENSE)).toMatch(/float:\s*right/);
+    expect(declsOf(context, DENSE)).toMatch(/width:\s*max-content/);
+    expect(declsOf(context, DENSE)).toMatch(/max-width:\s*100%/);
+    expect(declsOf(context, DENSE)).not.toMatch(/flex|min-width/);
+    expect(declsOf(state, DENSE)).not.toMatch(/order/);
+    // Only at the desk under a fine pointer: a touch screen or a phone keeps the shared sheet's rows.
+    for (const sel of [body, open, state, context]) {
+      expect(declsOf(sel), sel).toBe('');
+      for (const media of ['(min-width: 900px)', '(pointer: fine)']) expect(declsOf(sel, media), `${sel} in ${media}`).toBe('');
+    }
+  });
+});
+
+// ---- Desk polish, T2f (D-6371) ----------------------------------------------------------------------------------
+
+describe("Instrument's desk column: no runs row, and the class chooser on the toggle's row in project mode (T2f)", () => {
+  /** The class chooser, by its accessible name: every one in the document. */
+  const choosers = (): HTMLElement[] => screen.queryAllByLabelText('Class');
+  /** The fleet column in the frame's nav slot; asserted present first, so an absent column never passes as "no row". */
+  const column = (): HTMLElement => {
+    const el = document.querySelector<HTMLElement>('.shell-nav section[aria-label="Fleet"]');
+    expect(el, 'the fleet column is mounted').not.toBeNull();
+    return el!;
+  };
+
+  it('status mode at the desk: no runs row and no class chooser', () => {
+    mount();
+    expect(table(), 'the table is mounted').not.toBeNull();
+    expect(column().querySelector('.fleet-runs-line'), 'the runs line').toBeNull();
+    expect(within(column()).queryByRole('button', { name: /^Runs · / }), 'a Runs · n door').toBeNull();
+    expect(choosers(), 'class choosers').toHaveLength(0);
+    // The rail's Runs is the door that stays.
+    expect(document.querySelectorAll('[data-command="go-runs"]'), 'the rail\'s Runs door').toHaveLength(1);
+  });
+
+  it("project mode at the desk: the chooser on the toggle's row", () => {
+    mount();
+    pick('Project');
+    expect(column().querySelector('.fleet-runs-line'), 'the runs line').toBeNull();
+    expect(choosers(), 'class choosers').toHaveLength(1);
+    const chooser = choosers()[0]!;
+    // Beside the toggle on its row, never inside the radiogroup (whose arrow keys would rove into it).
+    expect(toggle().contains(chooser), 'inside the radiogroup').toBe(false);
+    expect(toggle().parentElement, 'the toggle sits on a row of its own').not.toBe(table());
+    expect(toggle().parentElement!.contains(chooser), "on the toggle's row").toBe(true);
+    // It is the live chooser: the options and the value the fleet screen's had.
+    expect([...(chooser as HTMLSelectElement).options].map((o) => o.value)).toEqual(['', 'default', 'fable', 'opus', 'sonnet', 'haiku']);
+    expect((chooser as HTMLSelectElement).value).toBe('');
+    // Back to status mode: the chooser leaves with project mode.
+    pick('Status');
+    expect(choosers(), 'class choosers in status mode').toHaveLength(0);
+  });
+
+  it('below 900 the runs row is as today', () => {
+    stubWidth(false);
+    mount();
+    const line = column().querySelector('.fleet-runs-line');
+    expect(line, 'the runs line').not.toBeNull();
+    expect(within(line as HTMLElement).getByRole('button', { name: 'Runs · 1 active' })).toHaveClass('fleet-runs-row');
+    expect(choosers(), 'class choosers').toHaveLength(1);
+    expect(line!.contains(choosers()[0]!), 'the chooser on the runs line').toBe(true);
+    // Project mode adds no second chooser on the toggle's row: one control, on the runs line, at any phone width.
+    pick('Project');
+    expect(choosers(), 'class choosers in project mode').toHaveLength(1);
+    expect(column().querySelector('.fleet-runs-line')!.contains(choosers()[0]!)).toBe(true);
   });
 });

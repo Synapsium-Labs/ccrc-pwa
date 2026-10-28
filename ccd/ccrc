@@ -22989,6 +22989,8 @@ _upd_backup_set() {
   # ccd is a PAIR (D-3696): its body first, then the launcher, so arm 3 of
   # `_upd_restore` — which walks these rows in order — puts the body back
   # before the launcher that names its digest.
+  _upd_backup_copy "$HOME/.local/libexec/ccrc/shared/redact.mjs" ccd-shared-redact.mjs   # the docs redactor (D-7077): restored before the body that pins it
+  _upd_backup_copy "$HOME/.local/libexec/ccrc/shared/redact-cli.mjs" ccd-shared-redact-cli.mjs
   _upd_backup_copy "$HOME/.local/libexec/ccrc/lib/disk-retention.sh" ccd-lib-disk-retention.sh   # the body's library (D-6913): restored before the body that pins it
   _upd_backup_copy "$HOME/.local/libexec/ccrc/ccd" ccd-body
   _upd_backup_copy "$HOME/.local/bin/ccd"          ccd
@@ -26967,10 +26969,12 @@ _uninst_tree_bins() {
   # and its directory only if that leaves it empty — anything else an operator
   # keeps under ~/.local/libexec is not ccrc's to remove.
   rm -f -- "$HOME/.local/libexec/ccrc/ccd" "$HOME/.local/libexec/ccrc/lib/disk-retention.sh" \
+    "$HOME/.local/libexec/ccrc/shared/redact.mjs" "$HOME/.local/libexec/ccrc/shared/redact-cli.mjs" \
     || _ccrc_die "removing ccd's body and library from \$HOME/.local/libexec/ccrc failed"
+  rmdir -- "$HOME/.local/libexec/ccrc/shared" 2>/dev/null || :
   rmdir -- "$HOME/.local/libexec/ccrc/lib" 2>/dev/null || :
   rmdir -- "$HOME/.local/libexec/ccrc" 2>/dev/null || :
-  echo "uninstall: tree: ~/ccrc removed; ccd, ccd-cap-scopes, ccd-graph-sweep, ccd-account-health, ccd-telemetry-keepalive, ccd-account-auth, ccd-usage-sweep, ccd-usage-sweep.py, ccd-tmp-sweep, ccd-scope-sweep, ccd-land-probe, ccd-tool-adj, ccd-history-sweep, ccd-pool-sync, ccd-update-sync, ccgpt-auth.py, ccgpt-proxy.py, ccgpt-usage.py, ccgpt-runtime, ccrc-codex, ccrc-api and the ccrc launcher removed from \$HOME/.local/bin, and ccd's body from \$HOME/.local/libexec/ccrc; the completed-install record and the node's update state (~/.ccrc/previous, install-step, update.json, update.lock, update-intent) removed$vsaid$msaid$nsaid"
+  echo "uninstall: tree: ~/ccrc removed; ccd, ccd-cap-scopes, ccd-graph-sweep, ccd-account-health, ccd-telemetry-keepalive, ccd-account-auth, ccd-usage-sweep, ccd-usage-sweep.py, ccd-tmp-sweep, ccd-scope-sweep, ccd-land-probe, ccd-tool-adj, ccd-history-sweep, ccd-pool-sync, ccd-update-sync, ccgpt-auth.py, ccgpt-proxy.py, ccgpt-usage.py, ccgpt-runtime, ccrc-codex, ccrc-api and the ccrc launcher removed from \$HOME/.local/bin, and ccd's body from \$HOME/.local/libexec/ccrc; its library and redactor (lib/disk-retention.sh, shared/redact.mjs, shared/redact-cli.mjs) with it; the completed-install record and the node's update state (~/.ccrc/previous, install-step, update.json, update.lock, update-intent) removed$vsaid$msaid$nsaid"
   echo "uninstall: tree: the box token's node records (~/.ccrc/box-token-generation, token-sync.json) removed; its value and state files stay with ~/.ccrc/mail.token, and ~/.cc-secrets/ccrc-mail.token is not touched"
   # ── the one entry that is not ccrc's own binary ─────────────────────────
   # `_inst_graphify_engine` converges `$HOME/.local/bin/graphify` onto the

@@ -350,6 +350,7 @@ button.metachip:active {
   }
   .chat-head .keycap--term,
   .chat-head .keycap--more,
+  .chat-head .keycap--inspector,
   .chat-head .keycap--pr {
     grid-auto-flow: column;
     gap: var(--sp-1);

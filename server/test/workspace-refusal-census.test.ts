@@ -18,6 +18,8 @@ import { REFUSAL_STATUS } from '../../shared/refusal.js';
 import { decideArchive, refusedAtStop, archiveOutcome, edgeStatus, type ArchiveMeasure } from '../src/coord/archiveDoor.js';
 import { SENTENCES } from '../src/wsaudit.js';
 import { parseFile } from './scan/parse.js';
+import { ccdSource } from './ccdWsHelpers.js';
+import { functionSpan, refuseWords } from './census-w5/ccdHelpers.js';
 import { EXPIRE_TOKEN_KIND, expireTokenKind, parseExpireResult } from '../src/archivedExpiry.js';
 import { CHILD_RECLAIM_TOKEN_KIND, childReclaimTokenKind, isChildReclaimToken, parseChildReclaimResult } from '../src/coord/childReclaim.js';
 import { COLLECT_REFUSAL_CLASS, COLLECT_REFUSAL_WORDS, collectRefusalClass } from '../src/collectLane.js';
@@ -255,8 +257,10 @@ describe('workspace refusal census (ARCH-41, #776): today’s client-read refusa
     const mirror = nonComment(CCD.slice(CCD.indexOf('MIRROR-BEGIN'), CCD.indexOf('MIRROR-END')));
     expect(from).toBeGreaterThan(-1);
     expect(mirror.length).toBeGreaterThan(0);
+    // D-7072: the reap family's words within `_ws_reap_eval`'s offsets in ccd's text, comment lines dropped.
+    const [evalFrom, evalTo] = functionSpan(ccdSource(), '_ws_reap_eval');
     const harvested = [
-      ...[...bodyOf('_ws_reap_eval').matchAll(/_reap_refuse ([a-z][a-z-]*)/g)].map((m) => m[1]!),
+      ...refuseWords('reap', { from: evalFrom, to: evalTo, codeOnly: true }),
       ...[...(span + mirror).matchAll(/"refused":"([a-z][a-z-]*)"/g)].map((m) => m[1]!),
       ...lcRefused(nonComment(CCD), 'reap'),
       ...lcRefused(bodyOf('cmd_ws_rm'), '[a-z]+'),
