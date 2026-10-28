@@ -6,6 +6,28 @@
 // renders `no lane can serve <class>` for a `{kind:'none', class}` placement
 // (D-2854) — this suite asserts against those exact rendered words, not a
 // paraphrase.
+//
+// W2 desk polish, Task T2f (D-6371): Instrument's desk column loses its "Runs · n" row, and the chooser is this one component.
+// MUTATION TABLE (plan Task T2f Step 3; RUN, each mutant on the working tree, this suite alone unless named, then restored from a saved copy):
+//   `ListColumn` without `runsLine={false}` (the runs row kept at the desk)
+//                                                       instrument-list.test.tsx: "status mode at the desk: no runs row and no class chooser" and
+//                                                         "project mode at the desk: the chooser on the toggle's row" (`the runs line: expected <div class="fleet-runs-line">…(2)</div> to be null`).
+//                                                         Green in this file, instrument-shell and fleet-screen.
+//   `FleetColumn` passes `runsLine` without `|| !desktop`  instrument-list.test.tsx: "below 900 the runs row is as today" (`the runs line: expected null not to be null`).
+//                                                         Green in this file, instrument-shell and fleet-screen.
+//   the chooser copied into `FleetTable` (the inline Select instead of `<ClassChooser />`)
+//                                                       "the chooser is one component: FleetScreen and FleetTable import ClassChooser and declare no class select of their own"
+//                                                         (`skins/instrument/FleetTable.tsx renders ClassChooser: expected '// Instrument's fleet list (W2 Task …' to contain '<ClassChooser'`)
+//   `FleetTable`'s chooser gate without `desk &&`       instrument-list.test.tsx: "below 900 the runs row is as today"
+//                                                         (`class choosers in project mode: expected [ <select …(2)>…(6)</select>, …(1) ] to have a length of 1 but got 2`)
+//   the chooser shown in status mode (`mode === 'project' &&` dropped)
+//                                                       instrument-list.test.tsx: "status mode at the desk: no runs row and no class chooser" (`class choosers: … to have a length of +0 but got 1`)
+//                                                         and "project mode at the desk: the chooser on the toggle's row" (`class choosers in status mode: … to have a length of +0 but got 1`)
+// Fix round 1 (the toggle keeps the row's width):
+//   the radiogroup's `min-w-0 flex-1` removed .......... "the toggle's radiogroup grows to the row's width beside the chooser (T2f, D-6371)"
+//                                                         (`the radiogroup no longer grows into the row: expected [ 'ins-toggle' ] to include 'flex-1'`)
+// The pin is a source read: jsdom has no layout, so the width itself is measured in a browser. The `flex-1` mutant and the
+// copied-chooser mutant are the only rows this file catches; the others live in instrument-list.test.tsx.
 import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
