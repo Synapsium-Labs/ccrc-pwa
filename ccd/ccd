@@ -40781,9 +40781,6 @@ DOCS_MAX_DRAFTS=1000
 DOCS_FETCH_MIN_INTERVAL_MS=10000
 # FAILURES is DOCS_CCD_FAILURES: every word a ccd docs answer may carry.
 FAILURES=frozenset({'bad-project','bad-ref','bad-commit','bad-section','bad-path','bad-fingerprint','unknown-project','not-a-git-repo','linked-worktree','shared-repo','partial-clone','repo-unreadable','no-default-branch','unresolved-ref','ref-not-commit','unknown-commit','not-a-commit','object-missing','absent-path','not-a-file','symlink-in-path','too-large','too-many-entries','unreadable-path','worktree-gone','ambiguous-worktree','untrusted-worktree','worktree-moved','draft-changed','remote-absent','remote-branch-absent','fetch-auth-failed','fetch-rejected-objects','fetch-transport','ref-locked','fetch-too-soon','fetch-timeout','fetch-failed','git-failed','git-timeout','helper-unavailable','helper-failed'})
-# REDACT_RULES is DOCS_REDACT_RULES: (pattern, suffix), applied in order and
-# globally; a match becomes its group 1 (when the pattern has one), then suffix.
-REDACT_RULES=((r'(://)[^/@\t\n\v\f\r ]+@','***@'),(r'([?&](?:access_token|token)=)[^&\t\n\v\f\r ]+','***'),(r'(gh[opsu]_)[A-Za-z0-9]{20,}','***'),(r'(?<![^\n])[^\n]*Authorization:[^\n]*','Authorization: ***'))
 # docs-parity: end
 
 # ===== docs: core =====
@@ -40801,16 +40798,11 @@ class Sys(object):
         return int(time.time() * 1000)
 
     def redact(self, s):
-        """`s` with every REDACT_RULES match replaced: each rule in order, every
-        match, by its group 1 (when the pattern has one) followed by the suffix.
-        Idempotent. It runs over every string taken from stderr or a traceback;
-        shared/docs.ts's redactDocsText is its twin, run again by the server."""
-        for rx, suffix in REDACTORS:
-            if rx.groups:
-                s = rx.sub(lambda m, x=suffix: m.group(1) + x, s)
-            else:
-                s = rx.sub(lambda m, x=suffix: x, s)
-        return s
+        """The core has no redactor and raises RedactorFailed, so no Sys but
+        the runner's ever redacts by a copy of the rules: the runner's
+        Sys.redact runs shared/redact.mjs's docs profile through
+        shared/redact-cli.mjs."""
+        raise RedactorFailed('no redactor')
 
 
 SYS = Sys()
@@ -40840,9 +40832,6 @@ def fail(word, **ctx):
     """Raise the Fail for `word`, with `ctx` as its context fields. Call sites
     write `raise fail(...)`, which reads as what happens; this raises first."""
     raise Fail(word, ctx)
-
-
-REDACTORS = tuple((re.compile(pattern), suffix) for pattern, suffix in REDACT_RULES)
 
 
 def redact(s):

@@ -760,21 +760,6 @@ describe('what node is started with: its environment and the files python reads 
     ].join('\n'));
     expect(JSON.parse(r.stdout)).toEqual({ got: 'RedactorFailed', seen: 1, left: [], proc: false, group: 'gone' });
   });
-
-  it('the differential row: over generated strings from a fixed seed, the core python loop and the CLI agree', () => {
-    const r = runDocsUnit(h.home, [
-      'import random',
-      'rng = random.Random(7077)',
-      "atoms = ['a', 'Z', '0', '_', '-', '.', '/', ':', '@', '?', '&', '=', ' ', '\\t', '\\n', '\\v', '\\r', '\\f', '\\u2028',",
-      "         '\\u00e9', '\\u6587', '\\U0001f600', '\\udc80', '\\udcff', 'gh', 'gho_', 'ghp_', 'ghx_', 'token', 'access_token',",
-      "         'https://', '://', 'u:p@', 'Authorization:', 'A1b2' * 6]",
-      "strings = [''.join(rng.choice(atoms) for _ in range(rng.randint(0, 24))) for _ in range(400)]",
-      'core = H.Sys.__mro__[-2]',
-      'out([s for s in strings if core.redact(H.SYS, s) != H.SYS.redact(s)])',
-    ].join('\n'));
-    expect(r.stderr).toBe('');
-    expect(JSON.parse(r.stdout)).toEqual([]);
-  });
 });
 
 describe('_docs_redact_cli hands python an absolute CLI path, whatever cwd ccd ran from (D-7125; design note §2)', () => {
