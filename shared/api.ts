@@ -8635,7 +8635,10 @@ export interface LifecycleEvent {
   /** One line for a person. DISPLAY-ONLY — nothing parses it back. */
   readonly detail: string | null;
   /** The emitter hit `LC_LINE_MAX` and dropped fields to fit — `dec.reason`,
-   *  then `obs.cgraw`, then `meas`, in that order. FALSE when the wire says
+   *  then `obs.cgraw`, then `meas`, in that order; then it cut `detail` to its
+   *  longest first part that fits, closed by ` [N bytes cut]` (N the UTF-8
+   *  bytes cut); and only a line still over the cap is
+   *  the joinable minimum, with no detail. FALSE when the wire says
    *  nothing, because absence-permits.
    *
    *  MODELLED RATHER THAN INFERRED, and that is the point: without it a

@@ -5032,6 +5032,31 @@ for drop in (None, "reason", "cgraw", "meas"):
     if len(s.encode("utf-8")) <= cap:
         sys.stdout.write(s); raise SystemExit(0)
 
+# THEN THE DETAIL IS CUT, NEVER DROPPED WHOLE. A failed
+# check says WHY in `detail`, and a long one (a rows rung naming fifty rows) is
+# exactly the line the last resort below would reduce to "something failed".
+# So the longest first part of it that fits is kept, closed by
+# ` [N bytes cut]`, N the UTF-8 bytes of what was cut, so kept and cut add up
+# to the whole. The cut falls between characters, never inside one; the
+# search is a bisection, because one escaped character can cost six bytes.
+# A line that is over the cap without its detail still falls to the minimum.
+d = ev.get("detail")
+if isinstance(d, str) and d:
+    def cut(n):
+        return d[:n] + " [%d bytes cut]" % len(d[n:].encode("utf-8", "surrogateescape"))
+    lo, hi, best = 0, len(d) - 1, None
+    while lo <= hi:
+        mid = (lo + hi) // 2
+        ev["detail"] = cut(mid)
+        if len(line(ev).encode("utf-8")) <= cap:
+            best, lo = mid, mid + 1
+        else:
+            hi = mid - 1
+    if best is not None:
+        ev["detail"] = cut(best); ev["truncated"] = True
+        sys.stdout.write(line(ev)); raise SystemExit(0)
+    ev["detail"] = d
+
 # THE LAST RESORT CARRIES THE JOINABLE MINIMUM. `tx` and `dec.surface` and the
 # refusal token are what a reader needs to pair an intent with its outcome and
 # to know what was refused; dropping them here loses the record at exactly the
