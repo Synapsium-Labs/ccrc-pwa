@@ -1203,7 +1203,9 @@ jobs:
     # step took 861 s of an 893 s job, 30 files and about 2,430 s of file time
     # over three workers. The three wheel-chain files are 876 s of that and
     # ask-inline 383 s. vitest starts files it has no timings for largest
-    # first, so the small wheel-chain files run last and set the tail. At 15
+    # first, so wheel-chain-chip and wheel-chain-well, the two smallest of
+    # the 31, run last and set the tail (wheel-chain itself is 20th by size
+    # and started about 462 s in). At 15
     # that left 7 s; 20 leaves about five minutes for a cold npm cache, a slow
     # Chrome start and the next few files.
     timeout-minutes: 20
