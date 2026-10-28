@@ -149,7 +149,8 @@ row's kill switches stop it (`stop-done-disabled`, `reclaim-paused`, `hibernate-
 
 **The box's re-proof: `ccd ws-shed-deps --session <id> --class child|coordinator [--dry-run] [--surface <w>] [--actor <t>]
 [--reason <t>]`** (new verb, in `ccd/lib/disk-retention.sh`, behind the privileged direct-entry check). It answers one
-JSON line. It refuses, exit 3, with the first word that applies:
+JSON line, `ws-orphan`'s convention: a refusal `{"refused":<word>}` at exit 0, touching nothing, with the first word that
+applies:
 1. `paused`: `reclaim-paused` is listed;
 2. `no-such-session`, `not-a-workspace`: no row, or the row is a main checkout;
 3. `not-a-child`: `--class child` and no readable `.child` marker. This is a second, independent fence: the server's
@@ -171,10 +172,10 @@ JSON line. It refuses, exit 3, with the first word that applies:
 10. `--dry-run` stops here and answers `would-shed` with the candidates' count and bytes, exit 0;
 11. the act: each candidate is removed (`rm -rf --one-file-system`, `rm -rfx` on Darwin) under a
     `CCD_DEPS_SHED_SCAN_S` bound (default 30). The git state is read again: a digest that differs answers
-    `git-state-changed` (exit 1, journaled as a failure), and so does a removal that fails partway (`shed-incomplete`).
+    `git-state-changed` (`{"failed":<word>}`, exit 1, journaled as a failure), and so does a removal that fails partway (`shed-incomplete`).
     Both are safe to retry, because what remains is still rebuildable. On success the verb writes
     `$REG/<id>.depsshed` (`<epoch> <bytes>`), journals `_lc_done shed-deps` with the class, dirs and bytes, and
-    answers `shed`, exit 0.
+    answers `{"shed":true}`, exit 0.
 
 There is no token. The act touches only bytes git calls ignored and untracked, all of which `npm ci` rebuilds, and each
 rung is re-read at the act. This is the reasoning `ccd-tmp-sweep`'s dead arm already uses: remove after a re-check,
@@ -249,6 +250,43 @@ most of the 15 to 20 GB a day. The stale arm then removes the rest of a kept chi
 - **A3, ruled with A1: taken (D-7278).** Coordinators' `node_modules` are shed as above. Their worktrees stay rule 4's.
 - **A4, left unset as recommended.** `CCRC_DEPS_SHED_PARKED_AFTER_HOURS` stays unset until the shadow rows show how
   many parked workers there are.
+
+## Mutation table (measured 2026-10-28, on this branch)
+
+Each guard was deleted or weakened alone, its suite run alone (`vitest --maxWorkers=2`, one file), and restored.
+
+| # | Mutation | Suite | Result |
+|---|---|---|---|
+| M1 | `depsShedVerdict`: drop the `awake` hold | `deps-shed-verdict` | red (2) |
+| M2 | drop `claims-open-run` | `deps-shed-verdict` | red (2) |
+| M3 | a chair from an earlier generation makes a coordinator | `deps-shed-verdict` | red (1) |
+| M4 | the age boundary `>=` to `>` | `deps-shed-verdict` | red (1) |
+| M5 | drop the once-a-sleep stamp hold | `deps-shed-verdict` | red (1) |
+| M6 | drop the `viewer` hold | `deps-shed-verdict` | red (2) |
+| M7 | `ws-shed-deps`: drop the `not-a-child` fence | `ccd-ws-shed-deps` | red (1) |
+| M8 | let the environment lower the box floor | `ccd-ws-shed-deps` | red (1) |
+| M9 | drop the index check (`git ls-files -- <dir>`) | `ccd-ws-shed-deps` | red (1), after a widened listing was added; green before |
+| M10 | drop the `git status` before/after comparison | `ccd-ws-shed-deps` | red (1) |
+| M11 | `not-asleep` reads the pane only, not the unit | `ccd-ws-shed-deps` | red (1) |
+| — | the separate leaf-link test | `ccd-ws-shed-deps` | green: redundant with M30's re-proof, so removed from the code |
+| M13 | drop `already-shed` | `ccd-ws-shed-deps` | red (1) |
+| M14 | `--dry-run` acts | `ccd-ws-shed-deps` | red (1) |
+| M15 | an in-use answer passes | `ccd-ws-shed-deps` | red (1) |
+| M29 | drop the own-`.git` fence | `ccd-ws-shed-deps` | red (1) |
+| M30 | drop the physical-path re-proof | `ccd-ws-shed-deps` | red (1), after a widened listing was added; green before |
+| M16 | the pass never composes `--dry-run` | `deps-shed-pass` | red (4) |
+| M17 | drop the kill switches at the act | `deps-shed-pass` | red (3) |
+| M18 | drop the once-a-sleep shadow memory | `deps-shed-pass` | red (1) |
+| M19 | drop the per-pass bound | `deps-shed-pass` | red (1) |
+| M20 | an arming switch gone at the act still acts | `deps-shed-pass` | red (1) |
+| M21 | the act does not re-ask the verdict | `deps-shed-pass` | red (1) |
+| M22 | `'ws-shed-deps': '--session'` out of `REQUIRED_VERB_FLAG` | agent `whitelist-structural` | red (2) |
+| M23 | `ws-shed-deps` out of `ccd-entry.py`'s protected verbs | `ccd-ws-shed-deps-reach` | red (3) |
+| M24 | `ws-shed-deps` out of the body's entry guard | `ccd-ws-shed-deps-reach` | red (1) |
+| M25 | `ws-shed-deps` out of `FORBIDDEN_CCD_VERBS` | `ccd-spawn-child-settings` | red (1) |
+| M26 | `ws-shed-deps` out of the session hook's two verb arms | `session-hook-approval-deny` | red (2) |
+| M27 | a config value of `0` or any digits accepted | `config` | red (1) |
+| M28 | the watcher hands the pass a fixed age, not the config | `deps-shed-watcher` | red (1) |
 
 ## Deviations found
 
