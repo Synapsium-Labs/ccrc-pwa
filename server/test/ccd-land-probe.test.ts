@@ -318,7 +318,7 @@ describe('ccd-land-probe: the radar', () => {
   // What this case can and cannot see. Its snapshot is refs, the object counts, the config and the hooks listing, and
   // the canary: every hook in ~/.gitconfig's hooks path would write it. It cannot see an object's modification time:
   // git freshens an object already in the project (its loose file's or pack's mtime) instead of writing a copy; no
-  // content, ref, config, hook or object set changes; every object it touches is reachable from the workspace branch.
+  // content, ref, config, hook or object set changes; every object it touches is one the project already holds.
   // Nor can it see the fsmonitor setting: no allowlisted subcommand reads the index, so no fsmonitor could run here.
   // That half is held by the literal tuple pin on GIT_PREFIX in ccd-land-probe-readonly.test.ts (R5).
   it('the project repository is not written, and no hook runs (the fsmonitor setting is held by the prefix pin)', () => {

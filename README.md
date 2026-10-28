@@ -5998,9 +5998,13 @@ It writes four JSON files, each `"v": 1`, under `~/.cc-sessions/landing/<project
 | `<id>.lineage` | one registry row's branch tip and its proven chain of clean base merges |
 | `enabled` | the mirror of the conf's `lineage=on`, with its own time |
 
-Anything the probe cannot measure is written as `unmeasured` with a why, and never as clean or green: a failed
-fetch or gh call, a git child past its deadline, a spent budget (`why: budget`), or an error before the first
-write. No failure leaves an older record in place. In `probe`, a null `store.after` or `scratch.sizeKiB` means
+Anything the probe cannot measure is written as `unmeasured` with a why, and never as clean or green. That
+covers a failed fetch or gh call, a git child past its deadline (`timeout`), a fetch the project budget cut
+(`why: budget`), and an error before the first write. A failed or cut fetch, or an error before the first write,
+rewrites `probe`, `main-health` and every lineage of the project, so none of them keeps an older measurement. A
+row the tick could not decide keeps its last lineage file, with that file's own `at`. This happens when the budget
+ran out after the fetch, when one row's read timed out, or when the tick never reached the project. Stage 4
+compares that file's tip with the live tip. In `probe`, a null `store.after` or `scratch.sizeKiB` means
 that figure was not measured on that tick, for example because the tick was interrupted or the count failed.
 
 `enabled` is reconciled in one pass at the start of every tick that runs, before any project is measured. It is
@@ -6026,11 +6030,13 @@ the temp root. That repository borrows the project's object store as an alternat
 SIGTERM included, and no child is left running. The probe changes no content, ref, config, hook or object set of a
 project repository. The one thing it does touch is modification times: when `merge-tree` produces an object the
 project already has, git freshens that object's loose file or pack mtime instead of writing a copy. Every such object
-is reachable from the workspace branch. Three layers hold this:
+is one the project already holds. Three layers hold this:
 1. **The git door.** Every git call goes through `git_ro`, which owns a fixed hardening prefix. It allows only the
-   subcommands in its two allowlists. Each one accepts only the exact options the probe's own call sites pass, plus
-   sha and ref operands that pass its checks. Every other element starting with `-` is refused, which covers a
-   file-writing `--output=`, an abbreviated long option and `cat-file --textconv`.
+   subcommands in its two allowlists, and each of them accepts only the exact options the probe's own call sites
+   pass. Any other option is refused, which covers a file-writing `--output=`, an abbreviated long option and
+   `cat-file --textconv`. So is an option placed after an operand, and so is `--end-of-options`. The call sites check
+   their own sha and ref operands, which never start with `-`. Only the fetch takes a `--`, and the elements after it
+   are its URL and refspecs.
 2. **Two gh call sites.** gh is reached through `gh api` with `GET` and through `gh pr list`, and each names the
    repository. Every child's environment drops the `GIT_*` variables that could re-point or reconfigure it, and the
    gh child also drops `GH_REPO` and `GH_HOST`.

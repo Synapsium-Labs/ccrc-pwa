@@ -26,8 +26,10 @@ ledger pull request.
 
 - **F3, the alternate refreshes object mtimes.** Git freshens an object already in the project (its loose file's or
   pack's mtime) instead of writing a copy. No content, ref, config, hook or object set changes, and every object it
-  touches is reachable from the workspace branch. The probe's header and the not-written test's comment say exactly
-  this, and the alternate stays.
+  touches is one the project already holds. The probe's header, README and the not-written test's comment say
+  exactly this, and the alternate stays. The ruling's sentence said "reachable from the workspace branch". That holds
+  for the lineage walk only: a merge-tree of the base against a head, or of a pair of heads, can freshen any object
+  the project holds. So the wording is "one the project already holds" (fix round 1 review, N4).
 - **Departure 3 (R7).** A null `store.after` and a null `scratch.sizeKiB`, for an interrupted tick or a failed count,
   are inside the `probe` grammar; a reader treats null as unmeasured.
 - **A10.** Doctor PASSes a `main-health` that reads `pending` or `no-required-set` and names it on the line; every

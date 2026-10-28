@@ -32,7 +32,7 @@
 # THE PER-TICK SCRATCH. The project repository is only READ. A bare repository under $TMPDIR borrows the project's
 # object store as an alternate; it receives the fetch and every object a merge-tree writes, except that git freshens
 # an object already in the project (its loose file's or pack's mtime) instead of writing a copy. No content, ref,
-# config, hook or object set changes, and every object it touches is reachable from the workspace branch. It holds the
+# config, hook or object set changes, and every object it touches is one the project already holds. It holds the
 # regular file `.ccd-land-probe-scratch`, and it is removed on every exit path, a SIGTERM and a failed closing
 # rewrite included: the closing path catches SystemExit and KeyboardInterrupt too, kills the process group of the
 # child in flight and waits for it, and only then removes the directory, so no helper is still writing into it. A
