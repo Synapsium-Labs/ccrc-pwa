@@ -308,7 +308,7 @@ describe('select.mjs CLI — pull_request', () => {
     expect(outputs.fallback).toBe('');
     expect(outputs.map_sha).toBe(baseSha);
 
-    expectValidMatrix(outputs.server_matrix, 2);
+    expectValidMatrix(outputs.server_matrix, 4);
     expectValidMatrix(outputs.macos_matrix, 2);
     const files = uniqueFilesInMatrix(outputs.server_matrix);
     expect(files).toEqual(new Set(['test/a.test.ts', 'test/b.test.ts', 'test/c.test.ts']));
@@ -778,7 +778,7 @@ describe('select.mjs CLI — schedule', () => {
     const all = new Set(['test/a.test.ts', 'test/b.test.ts', 'test/c.test.ts', 'test/d.test.ts']);
     expect(uniqueFilesInMatrix(outputs.server_matrix)).toEqual(all);
     expect(uniqueFilesInMatrix(outputs.trace_matrix)).toEqual(all);
-    expectValidMatrix(outputs.server_matrix, 2);
+    expectValidMatrix(outputs.server_matrix, 4);
     expectValidMatrix(outputs.macos_matrix, 2);
     expectValidMatrix(outputs.trace_matrix, 2);
     expect(outputs.count).toBe('4');

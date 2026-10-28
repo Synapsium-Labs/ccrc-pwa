@@ -52,7 +52,7 @@ export function durationsFromVitestJson(report, repoRoot) {
 
 /** @type {Record<string, ShardProfile>} */
 export const PROFILES = {
-  linux: { targetMs: 240_000, min: 1, max: 12, workers: 2, defaultMs: 5000 },
+  linux: { targetMs: 240_000, min: 1, max: 6, workers: 4, defaultMs: 5000 },
   macosSelected: { targetMs: 900_000, min: 1, max: 2, workers: 2, defaultMs: 5000, scale: 1.5 },
   macosFull: { targetMs: 900_000, min: 1, max: 4, workers: 2, defaultMs: 5000, scale: 1.5 },
   // `budgetMs`: what ONE trace shard may be planned to take. The job's own timeout is 60 minutes; a refresh plans to

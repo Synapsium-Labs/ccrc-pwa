@@ -89,7 +89,7 @@ describe('durationsFromVitestJson', () => {
 describe('PROFILES', () => {
   it('matches the contract exactly', () => {
     expect(PROFILES).toEqual({
-      linux: { targetMs: 240_000, min: 1, max: 12, workers: 2, defaultMs: 5000 },
+      linux: { targetMs: 240_000, min: 1, max: 6, workers: 4, defaultMs: 5000 },
       macosSelected: { targetMs: 900_000, min: 1, max: 2, workers: 2, defaultMs: 5000, scale: 1.5 },
       macosFull: { targetMs: 900_000, min: 1, max: 4, workers: 2, defaultMs: 5000, scale: 1.5 },
       trace: { targetMs: 900_000, min: 1, max: 8, workers: 2, defaultMs: 5000, scale: 6, budgetMs: 2_700_000 },
@@ -104,8 +104,8 @@ describe('planShards — durations known (LPT)', () => {
   });
 
   it('a single file far longer than the target gets a shard of its own', () => {
-    // total = 1,200,000 + 3*5,000 = 1,215,000ms; workers 2, targetMs 240,000
-    // -> raw = ceil(1,215,000/2/240,000) = ceil(2.53) = 3, clamped [1,5] -> 3.
+    // total = 1,200,000 + 3*5,000 = 1,215,000ms; workers 4, targetMs 240,000
+    // -> raw = ceil(1,215,000/4/240,000) = ceil(1.27) = 2, clamped [1,6] -> 2.
     const files = ['server/test/huge.test.ts', 'server/test/s1.test.ts', 'server/test/s2.test.ts', 'server/test/s3.test.ts'];
     const durations = {
       'server/test/huge.test.ts': 1_200_000,
@@ -114,7 +114,7 @@ describe('planShards — durations known (LPT)', () => {
       'server/test/s3.test.ts': 5_000,
     };
     const plan = planShards(files, durations, PROFILES.linux);
-    expect(plan).toHaveLength(3);
+    expect(plan).toHaveLength(2);
     expect(plan.every((s) => s.workers === PROFILES.linux.workers)).toBe(true);
     const withHuge = plan.find((s) => s.files.includes('server/test/huge.test.ts'));
     expect(withHuge!.files).toEqual(['server/test/huge.test.ts']);
@@ -223,7 +223,7 @@ describe('planShards — durations === null (vitest hash-shard fallback)', () =>
     const files = ['server/test/a.test.ts'];
     const plan = planShards(files, null, PROFILES.linux);
     expect(plan).toEqual([
-      { index: 1, total: 1, files: ['server/test/a.test.ts'], vitestShard: '1/1', workers: 2 },
+      { index: 1, total: 1, files: ['server/test/a.test.ts'], vitestShard: '1/1', workers: 4 },
     ]);
   });
 });
