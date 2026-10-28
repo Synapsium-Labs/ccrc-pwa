@@ -145,3 +145,40 @@ describe('the PWA presence table equals assembleFleet (the bucket.test.ts seam)'
     expect(unknownPane.length).toBe(20);
   });
 });
+
+// C7c Step 1 (D-7181): the fixture every PWA suite builds its rows with derives `presence` through the inverse rule, so
+// it is held to the assembly too: a `fleetSession` built from the assembled row's own facts carries the assembly's
+// presence (pane-unknown rows apart, D-309: a test meaning one passes `presence: 'unknown'` itself), `deadSession`
+// reads `dead`, and a lifecycle-null dead fixture is the skew row with no key.
+interface FleetFixture {
+  fleetSession: (over?: Partial<FleetSession>) => FleetSession;
+  deadSession: (over?: Partial<FleetSession>) => FleetSession;
+  hibernatedSession: (at: number, over?: Partial<FleetSession>) => FleetSession;
+}
+const fixture = async (): Promise<FleetFixture> => await import(path.join(ROOT, 'pwa/test/fleetFixture.ts')) as FleetFixture;
+
+describe('the PWA fleet fixture derives the presence the assembly sends (C7c Step 1)', () => {
+  it('every server-producible row with a measured pane: fleetSession over the assembled facts gives the assembly\'s presence', async () => {
+    const t = await table();
+    const fx = await fixture();
+    const held: string[] = [];
+    for (const r of t.tableRows().filter((x) => x.group === 'server' && x.facts.pane !== 'unknown')) {
+      const home = mkTmp('ccrc-w7-fixture-');
+      const io = seed(home, r.facts.lifecycle!, r.facts.hibernatedAt !== null, r.substrate);
+      const s = (await assembleFleet(io, loadConfig({ CCRC_HOME: home }), tmuxSaying(r.facts.pane as 'live' | 'gone'), NOW_S)).find((x) => x.id === ID)!;
+      const built = fx.fleetSession({ status: s.status, bucket: s.bucket, lifecycle: s.lifecycle, stoppedBy: s.stoppedBy, hibernatedAt: s.hibernatedAt, substrate: s.substrate });
+      expect(built.presence, r.name).toBe(s.presence);
+      held.push(r.name);
+    }
+    expect(held.length).toBe(36);
+  });
+
+  it('deadSession reads dead, hibernatedSession asleep, a live row alive, and the lifecycle-null dead row has no key', async () => {
+    const fx = await fixture();
+    expect(fx.deadSession().presence).toBe('dead');
+    expect(fx.hibernatedSession(1_784_500_000_000).presence).toBe('asleep');
+    expect(fx.fleetSession().presence).toBe('alive');
+    expect(Object.keys(fx.fleetSession({ status: 'dead', bucket: 'dead' }))).not.toContain('presence');
+    expect(Object.keys(fx.fleetSession({ status: 'dead', presence: undefined }))).toContain('presence');
+  });
+});
