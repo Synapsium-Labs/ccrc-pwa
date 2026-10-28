@@ -420,7 +420,7 @@ const CENSUS: readonly CensusRow[] = [
   { file: 'coord/close.ts', scope: 'closeReviewRun', builder: 'wsRelease', id: 'sessionId', origin: ['stored'], gate: ['close-gate'] },
   // coord/collectTempRoot.ts: the learning audit is reached from the population and from the executor's step 1.
   { file: 'coord/collectTempRoot.ts', scope: 'collectAudit', builder: 'wsCollectAudit', id: 'id', origin: ['collector'], gate: ['collector-step-1', 'collector-learn-gate', 'collector-population', 'collector-record-name'] },
-  { file: 'coord/collectTempRoot.ts', scope: 'collectTempRoot', builder: 'wsCollect', id: 'job.id', origin: ['collector'], gate: ['collector-step-1'] },
+  { file: 'coord/collectTempRoot.ts', scope: 'collectTempRootAct', builder: 'wsCollect', id: 'job.id', origin: ['collector'], gate: ['collector-step-1'] },
   // coord/dispatch.ts: refuseSpentChild's only caller is dispatchRun, below its gate; the fresh winner is a listed, valid row.
   { file: 'coord/dispatch.ts', scope: 'refuseSpentChild', builder: 'wsHold', id: 'run.sessionId', origin: ['stored'], gate: ['dispatch-gate'] },
   { file: 'coord/dispatch.ts', scope: 'refuseSpentChild', builder: 'wsRelease', id: 'run.sessionId', origin: ['stored'], gate: ['dispatch-gate'] },
