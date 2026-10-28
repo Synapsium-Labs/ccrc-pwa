@@ -5983,7 +5983,7 @@ things:
   This uses `git merge-tree` on the head shas gh reports. Only heads whose branch is a registered workspace's are
   paired, at most ten of them, highest PR number first.
 - **Base health.** Whether the base tip's required checks are green. The required set is the union of the
-  branch's rulesets and its protection. Each name is judged by its newest check run, pinned to its App where the rule
+  branch's rulesets (every page of them) and its protection. Each name is judged by its newest check run, pinned to its App where the rule
   names one. A combined status counts only for a name no App is pinned to.
 - **Lineage.** For each workspace branch in the registry, the chain of clean base merges from its tip: each step
   is a two-parent merge whose second parent is on the base, and whose tree equals what `merge-tree` gives for its
@@ -5998,13 +5998,20 @@ It writes four JSON files, each `"v": 1`, under `~/.cc-sessions/landing/<project
 | `<id>.lineage` | one registry row's branch tip and its proven chain of clean base merges |
 | `enabled` | the mirror of the conf's `lineage=on`, with its own time |
 
-Anything the probe cannot measure, such as a failed fetch or gh call, a git child past its deadline, or a spent
-budget, is written as `unmeasured` with a why, and never as clean or green.
+Anything the probe cannot measure is written as `unmeasured` with a why, and never as clean or green: a failed
+fetch or gh call, a git child past its deadline, a spent budget (`why: budget`), or an error before the first
+write. No failure leaves an older record in place. In `probe`, a null `store.after` or `scratch.sizeKiB` means
+that figure was not measured on that tick, for example because the tick was interrupted or the count failed.
+
+`enabled` is reconciled in one pass at the start of every tick that runs, before any project is measured. It is
+written for a valid conf with `lineage=on`, an unpaused project and a real main checkout, and removed in every other
+case. Its writes are therefore as far apart as the tick starts, whatever the order or budgets of the projects. Every
+removal first checks that `~/.cc-sessions/landing/` and the project's directory are real, owned directories.
 
 **The conf.** UTF-8 `key=value` lines, with no spaces around `=`; blank lines and `#` lines are ignored. There are
 two keys: `base`, a branch name that defaults to `main`, and `lineage`, `on` or `off`, which defaults to `off`. An
 empty conf turns the radar on with lineage off. A repeated or unknown key, a bad value, or a conf that is not a
-regular UTF-8 file makes the project `conf-invalid`. That project is not measured, its `enabled` is removed, and the
+regular UTF-8 file makes the project `conf-invalid`, and so does a `base` the git door would refuse. That project is not measured, its `enabled` is removed, and the
 journal names the reason (never the bytes).
 
 **The pauses.** The operator writes both by hand, and the tree has no writer for either:
@@ -6014,15 +6021,23 @@ journal names the reason (never the bytes).
 A paused project is not measured, and its `enabled` is removed, so a pause stops acceptance as well as measurement.
 `ccrc uninstall` removes the units, the binary and every `enabled` file.
 
-**Read-only, by code.** The probe never writes a project repository. The fetch and every `merge-tree` object go into
-a per-tick bare scratch repository under the temp root, which borrows the project's object store as an alternate and
-is removed on every exit. Three layers hold this, and `server/test/ccd-land-probe-readonly.test.ts` shows each one
-red by planting:
-1. Every git call goes through `git_ro`. `git_ro` owns a fixed hardening prefix, and refuses any subcommand outside
-   its two allowlists and any option that could run code or re-point the repository.
-2. gh is reached at exactly two call sites, a `GET` through `gh api` and `gh pr list`. Each names the repository.
-3. A literal source pin forbids `push`, a PR merge, `update-branch`, any gh method but `GET`, and any third call
-   site.
+**Read-only, by code.** The fetch and every `merge-tree` object go into a per-tick bare scratch repository under
+the temp root. That repository borrows the project's object store as an alternate. It is removed on every exit path,
+SIGTERM included, and no child is left running. The probe changes no content, ref, config, hook or object set of a
+project repository. The one thing it does touch is modification times: when `merge-tree` produces an object the
+project already has, git freshens that object's loose file or pack mtime instead of writing a copy. Every such object
+is reachable from the workspace branch. Three layers hold this:
+1. **The git door.** Every git call goes through `git_ro`, which owns a fixed hardening prefix. It allows only the
+   subcommands in its two allowlists. Each one accepts only the exact options the probe's own call sites pass, plus
+   sha and ref operands that pass its checks. Every other element starting with `-` is refused, which covers a
+   file-writing `--output=`, an abbreviated long option and `cat-file --textconv`.
+2. **Two gh call sites.** gh is reached through `gh api` with `GET` and through `gh pr list`, and each names the
+   repository. Every child's environment drops the `GIT_*` variables that could re-point or reconfigure it, and the
+   gh child also drops `GH_REPO` and `GH_HOST`.
+3. **Literal source pins** in `server/test/ccd-land-probe-readonly.test.ts`. They forbid `push`, a PR merge,
+   `update-branch`, any gh method but `GET`, a third call site, and any other way to start a process, including an
+   aliased import of `subprocess` or `os`. The pins match literal spellings, so a dynamic import or `getattr` is a
+   known limit. The planting evidence for every layer is the wave's measured mutation rows, not that test file.
 
 `ccrc doctor`'s `land-probe` check reads these files, and so does a person. Nothing else reads them yet: wave 4 of
 the landing-order programme adds the lineage acceptance, which reads `enabled` and the `.lineage` files, and wave 4b
