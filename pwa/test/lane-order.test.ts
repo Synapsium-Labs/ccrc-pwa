@@ -6,6 +6,7 @@ import path from 'node:path';
 import ts from 'typescript';
 import type { AccountUsage } from '../../shared/api';
 import { bindingWindow, lanesByFree } from '../src/fleet/laneOrder';
+import * as order from '../src/fleet/laneOrder';
 import { parseTs } from './literalWalker';
 
 const lane = (wrapper: string, five: number | null, seven: number | null, over: Partial<AccountUsage> = {}): AccountUsage => ({
@@ -122,6 +123,66 @@ describe('lanesByFree', () => {
     ];
     // Read and signed in by use, then the never-read and the expired ones in their own relative order.
     expect(names(lanes)).toEqual(['lane-f', 'lane-d', 'lane-b', 'lane-a', 'lane-c', 'lane-e']);
+  });
+});
+
+describe('near-full lanes band by reset (near-full-lanes-band-by-reset)', () => {
+  const names = (lanes: readonly AccountUsage[]): string[] => lanesByFree(lanes).map((l) => l.wrapper);
+
+  it('NEAR_FULL_PCT is 95', () => {
+    expect((order as Record<string, unknown>).NEAR_FULL_PCT).toBe(95);
+  });
+
+  it('below the band use still orders: 94 before 96 even when 96 resets sooner', () => {
+    const lanes = [lane('lane-a', 96, 10, { fiveResetAt: 100 }), lane('lane-b', 94, 10, { fiveResetAt: 9000 })];
+    expect(names(lanes)).toEqual(['lane-b', 'lane-a']);
+    // Two lanes below 95 are not banded with each other either: 93 before 94 whatever their resets.
+    expect(names([lane('lane-a', 94, 10, { fiveResetAt: 100 }), lane('lane-b', 93, 10, { fiveResetAt: 9000 })])).toEqual(['lane-b', 'lane-a']);
+  });
+
+  it('95, 97 and 100 read as one band, ordered by the binding reset, soonest first, whatever their use', () => {
+    const lanes = [
+      lane('lane-a', 95, 10, { fiveResetAt: 9000 }), lane('lane-b', 97, 10, { fiveResetAt: 3000 }),
+      lane('lane-c', 100, 10, { fiveResetAt: 6000 }), lane('lane-d', 96, 10, { fiveResetAt: 1000 }),
+    ];
+    expect(names(lanes)).toEqual(['lane-d', 'lane-b', 'lane-c', 'lane-a']);
+  });
+
+  it('a rate-limited lane sits in the band, ordered by its reset among the 95+ lanes', () => {
+    const lanes = [
+      lane('lane-a', 96, 10, { fiveResetAt: 5000 }), lane('lane-five', 100, 20, { fiveResetAt: 2000 }), lane('lane-b', 98, 10, { fiveResetAt: 8000 }),
+    ];
+    expect(names(lanes)).toEqual(['lane-five', 'lane-a', 'lane-b']);
+  });
+
+  it('a band lane with no reset time goes after band lanes with one', () => {
+    const lanes = [
+      lane('lane-a', 99, 10, { fiveResetAt: null }), lane('lane-b', 95, 10, { fiveResetAt: 900000 }), lane('lane-c', 97, 10, { fiveResetAt: null }),
+    ];
+    expect(names(lanes)).toEqual(['lane-b', 'lane-a', 'lane-c']);
+  });
+
+  it('within the band a tie on reset goes by the other window, then the roster', () => {
+    const lanes = [
+      lane('lane-a', 97, 60, { fiveResetAt: 4000 }), lane('lane-b', 99, 30, { fiveResetAt: 4000 }), lane('lane-c', 96, 30, { fiveResetAt: 4000 }),
+    ];
+    expect(names(lanes)).toEqual(['lane-b', 'lane-c', 'lane-a']);
+  });
+
+  it('never-read and expired lanes still go last, after the band', () => {
+    const lanes = [
+      lane('lane-a', null, null), lane('lane-b', 99, 10, { fiveResetAt: 5000 }), lane('lane-c', 5, 5, { authDead: true }),
+      lane('lane-d', 100, 10, { fiveResetAt: 1000 }), lane('lane-e', 98, 98, { authDead: true, fiveResetAt: 1, sevenResetAt: 1 }),
+    ];
+    expect(names(lanes)).toEqual(['lane-d', 'lane-b', 'lane-a', 'lane-c', 'lane-e']);
+  });
+
+  it('the band sorts after every lane below 95', () => {
+    const lanes = [
+      lane('lane-a', 100, 10, { fiveResetAt: 1 }), lane('lane-b', 95, 10, { fiveResetAt: 2 }), lane('lane-c', 94, 10, { fiveResetAt: 9000 }),
+      lane('lane-d', 0, 0, { fiveResetAt: 9000 }), lane('lane-e', 60, 10, { fiveResetAt: 9000 }),
+    ];
+    expect(names(lanes)).toEqual(['lane-d', 'lane-e', 'lane-c', 'lane-a', 'lane-b']);
   });
 });
 
