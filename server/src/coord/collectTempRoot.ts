@@ -512,6 +512,10 @@ export async function learnCollect(
 
 // ── the job ──────────────────────────────────────────────────────────────────
 
+/** Step 6's stop, as the job and its gate row read it (one spelling of the comparison, D-7166's copy rule). */
+const collectLaneStopped = (lane: CollectLaneEffective): lane is Extract<CollectLaneEffective, { kind: 'stopped' }> =>
+  lane.kind === 'stopped';
+
 export async function collectTempRoot(deps: CollectTempRootDeps, job: CollectJob): Promise<CollectJobOutcome> {
   // 1 — BOTH capabilities, proven: each refuses on no evidence, where `verbSupported` would permit (D-5866: the
   // collector's own row through `ccdCan`, the pause precondition through `capSupported`). A box the
@@ -582,7 +586,7 @@ export async function collectTempRoot(deps: CollectTempRootDeps, job: CollectJob
     switches: last, epoch, caps, control: collectControlNow(deps.control).control, node: deps.link.current(),
   });
   // A STOP: no flip, no row, a lane-wide clear (§5.5).
-  if (lane.kind === 'stopped') {
+  if (collectLaneStopped(lane)) {
     if (lane.why === 'raised' || lane.why === 'unlistable') {
       deps.lane.cleared('paused');
       return answered(5, 'paused', COLLECT_PAUSED[lane.why]);
