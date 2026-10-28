@@ -84,3 +84,4 @@ export async function actArchive(
   // The 409 arm is a refusal and answers through the one helper; the 200 and the 502 `{ stderr }` arms are not words.
   return out.status === 409 ? sendRefused(reply, out.body as RefusedBody) : reply.code(out.status).send(out.body);
 }
+// fast-path probe: a throwaway change; this pull request is never merged.
