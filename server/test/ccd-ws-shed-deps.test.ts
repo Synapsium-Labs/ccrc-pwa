@@ -124,6 +124,24 @@ describe('ws-shed-deps sheds a sleeping child\'s ignored dependency directories'
     expect(exists('dist/bundle.js')).toBe(true);
   });
 
+  it('an ignored directory whose name holds a newline never names the non-ignored directory after it', () => {
+    // git lists `a/b<LF>vendor/` as ONE NUL-separated entry; read by lines it would split into a `vendor/` that names
+    // the worktree's own non-ignored `vendor/`. Only what git ignores is ever removed, dry run and real run alike.
+    fs.appendFileSync(path.join(c.wt, '.gitignore'), 'b*\n');
+    h.git(c.wt, 'add', '.gitignore');
+    h.git(c.wt, 'commit', '-m', 'ignore b*');
+    write('vendor/precious.txt', 'untracked, not ignored\n');
+    write('a/b\nvendor/pkg/index.js');
+    expect(status()).toContain('?? vendor/precious.txt');
+    const run = (flags: string): Record<string, unknown> => JSON.parse(h.run(
+      `${CHILD_STUBS} ${NO_USERS} CCD_DEPS_SHED_NAMES=vendor cmd_ws_shed_deps --session ${CHILD_ID} --class child ${flags}`,
+    ).stdout.trim().split('\n').pop() ?? '{}') as Record<string, unknown>;
+    expect(run('--dry-run')).toMatchObject({ refused: 'nothing-to-shed' });
+    expect(run('')).toMatchObject({ refused: 'nothing-to-shed' });
+    expect(exists('vendor/precious.txt')).toBe(true);
+    expect(exists('a/b\nvendor/pkg/index.js')).toBe(true);
+  });
+
   it('CCD_DEPS_SHED_NAMES names the directories; a name that is not one plain component is dropped', () => {
     write('dist/bundle.js');
     const r = h.run(`${CHILD_STUBS} ${NO_USERS} CCD_DEPS_SHED_NAMES='dist ../x .git a/b' cmd_ws_shed_deps --session ${CHILD_ID} --class child`);
