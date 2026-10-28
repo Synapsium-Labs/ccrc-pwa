@@ -151,7 +151,8 @@
   width: 100%;
   min-height: var(--tap-min);
 }
-/* The Inbox door's unread count (T2e fix round 1, D-6335): the pill is `<CountBadge>`'s (its colours are the primitive's);
+/* The Inbox door's count of sessions waiting on the operator (T2e fix round 1, D-6335; since T2d, D-6330, it counts no
+   unread mail): the pill is `<CountBadge>`'s (its colours are the primitive's);
    here it only sits on the door's top-right corner, over the icon's box, and takes no clicks of its own. */
 .ins-rail-count {
   position: absolute;
