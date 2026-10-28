@@ -85,6 +85,8 @@ describe("the ids are W2's door table's", () => {
       // W2 Task S2d: the ⋯ menu's items on the base, and the terminal and PR caps (D-5466).
       'session-model', 'session-effort', 'open-history', 'session-docs', 'session-swap', 'session-archive',
       'session-restore', 'open-terminal', 'session-pr',
+      // Desktop polish T3e (D-6385): the inspector's hide and show, offered only while a part places a rail.
+      'toggle-inspector',
     ].sort());
   });
 });
@@ -92,7 +94,7 @@ describe("the ids are W2's door table's", () => {
 describe('the session commands (W2 Task S2d)', () => {
   const ctx = (session: CommandContext['session']): CommandContext => ({
     path: '/s/project-a-one', sessions: [], runs: [], navigate: () => {}, setSkin: () => {}, setTheme: () => {},
-    openShortcuts: () => {}, openNewSession: () => {}, openPalette: () => {}, paletteOpen: false, session,
+    openShortcuts: () => {}, openNewSession: () => {}, openPalette: () => {}, paletteOpen: false, session, inspector: null,
   });
 
   it('are offered only while a session screen hosts its flows, and only where the flows offer the item', () => {
@@ -175,7 +177,16 @@ describe('the top search: terms, tier and search-only (D-6714)', () => {
   ['layout', ['switch-layout']],
   ['h', ['open-history', 'go-archive', 'session-model', 'session-effort', 'session-docs', 'session-swap', 'session-archive', 'session-restore', 'open-terminal', 'session-pr', 'switch-layout', 'switch-theme', 'open-palette', 'show-shortcuts']],
     ];
-    for (const [q, ids] of BEFORE) expect(rankCommands(q, baseCommands()).map((c) => c.id), JSON.stringify(q)).toEqual(ids);
+    // T3e (D-6385) adds `toggle-inspector`; every other command ranks as it did, so the table is read without it, and
+    // the new command's own place is pinned in the empty list below.
+    const ranked = (q: string): string[] => rankCommands(q, baseCommands()).map((c) => c.id).filter((id) => id !== 'toggle-inspector');
+    for (const [q, ids] of BEFORE) expect(ranked(q), JSON.stringify(q)).toEqual(ids);
+    // The command's own rank row: the one command whose title holds "inspector".
+    expect(rankCommands('inspector', baseCommands()).map((c) => c.id)).toEqual(['toggle-inspector']);
+    // This pin couples to the registry's order on purpose: moving the command is a decision, not a drift.
+    const empty = rankCommands('', baseCommands()).map((c) => c.id);
+    expect(empty.indexOf('toggle-inspector'), 'after the session commands, before Switch layout').toBe(empty.indexOf('session-pr') + 1);
+    expect(empty[empty.indexOf('toggle-inspector') + 1]).toBe('switch-layout');
   });
 });
 

@@ -35,6 +35,9 @@ export interface CommandContext {
   /** The session screen's flows (`SessionFlows`, W2 Task S2d), while one is mounted: null elsewhere, so a session
    *  command is offered only on a session route. */
   session: SessionCommandTarget | null;
+  /** The inspector rail's flip (`InspectorRail`, desktop polish T3e, D-6385), while a part places one: null elsewhere,
+   *  so its command is offered only where there is a rail to show or hide. */
+  inspector: InspectorCommandTarget | null;
 }
 
 /** What a session command reaches (D-5466): the open session's flows, which say whether an item is offered (its
@@ -42,6 +45,12 @@ export interface CommandContext {
 export interface SessionCommandTarget {
   offers: (id: string) => boolean;
   run: (id: string) => void;
+}
+
+/** What the inspector command reaches: whether the rail is shown now, and the one flip that shows or hides it. */
+export interface InspectorCommandTarget {
+  shown: boolean;
+  toggle: () => void;
 }
 
 /** A second list a command opens in place of running: "Switch theme…" opens

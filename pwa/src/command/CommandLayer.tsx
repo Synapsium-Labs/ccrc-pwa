@@ -13,6 +13,7 @@ import { setTheme } from '../lib/theme';
 import { focusShownLandmark } from '../skins/frame';
 import { useFleetStore } from '../stores/fleet';
 import { useSessionCommandTarget } from '../session/SessionFlows';
+import { useInspectorCommandTarget } from '../inspector/inspectorShown';
 import { baseCommands, fleetOrder } from './commands';
 import {
   available, COMMAND_FIELD_WORDS, rankCommands, SEARCH_EMPTY, type CommandContext, type CommandPage,
@@ -119,6 +120,8 @@ export function CommandLayer({ openNewSession }: CommandLayerProps): ReactNode {
   const ordered = useMemo(() => fleetOrder(sessions, runs), [sessions, runs]);
   // The open session's flows (W2 Task S2d): its commands are offered only while a session screen hosts them.
   const session = useSessionCommandTarget();
+  // The inspector rail's flip (desktop polish T3e, D-6385), while a part places one.
+  const inspector = useInspectorCommandTarget();
   const ctx = useMemo<CommandContext>(() => ({
     path,
     sessions: ordered,
@@ -131,7 +134,8 @@ export function CommandLayer({ openNewSession }: CommandLayerProps): ReactNode {
     openPalette,
     paletteOpen: open,
     session,
-  }), [path, ordered, runs, openNewSession, openPalette, open, session]);
+    inspector,
+  }), [path, ordered, runs, openNewSession, openPalette, open, session, inspector]);
   const ctxRef = useRef(ctx);
   ctxRef.current = ctx;
 
