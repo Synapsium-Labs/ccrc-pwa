@@ -139,7 +139,10 @@ lanes' act: the registry row is assembled again (`rowAtAct`), the store, presenc
 is classified again and the verdict asked again; then the kill and arming switches are read over a fresh registry
 listing. Only then is `ccd ws-shed-deps --session <id> --class child|coordinator` composed (`child` for a worker)
 (`CCD_ARGV.wsShedDeps`, the lane's actor `sweep:deps-shed`). A refusal or failure is not asked again for an hour (in
-memory). A shed writes one `kind:'coord'` feed row, "Dependencies removed".
+memory), doubled for each further one in the same sleep up to a day, and the row then sorts after every row the box has
+not refused this sleep, so rows that keep refusing never starve a fresh one of the per-pass slot; `nothing-to-shed` and
+`already-shed` settle the row for its sleep. Only the armed act holds the coordination serialiser (a dispatch or claim
+must not land between the verdict's re-read and the removal); the shadow's dry run runs on the session's queue alone. A shed writes one `kind:'coord'` feed row, "Dependencies removed".
 
 **Switches.** The act is shadow unless `$REG/deps-shed-live` exists, a new `shared/switches.ts` row with no writer in the
 tree. In shadow the arm composes the same verb with `--dry-run`, which runs every rung and removes nothing, and records
@@ -152,7 +155,8 @@ row's kill switches stop it (`stop-done-disabled`, `reclaim-paused`, `hibernate-
 JSON line, `ws-orphan`'s convention: a refusal `{"refused":<word>}` at exit 0, touching nothing, with the first word that
 applies:
 1. `paused`: `reclaim-paused` is listed;
-2. `no-such-session`, `not-a-workspace`: no row, or the row is a main checkout;
+2. `no-such-session`, `in-progress`, `not-a-workspace`: no row; or `$REG/.reap-<id>.lock` (taken `-n` once the row
+   stands, the lock every verb that removes anything of the id takes) is held; or the row is a main checkout;
 3. `not-a-child`: `--class child` and no readable `.child` marker. This is a second, independent fence: the server's
    worker class needs the marker, and the box checks it itself;
 4. `not-asleep`: the stop stamp (`$REG/<id>.stopped`, `<epoch> <surface>`) is absent or unreadable, or a tmux session
@@ -164,18 +168,27 @@ applies:
 7. the candidates: each directory that `git -C <workdir> ls-files -z --others --ignored --exclude-standard --directory`
    lists, whose last component is one of `CCD_DEPS_SHED_NAMES` (default `node_modules`, space-separated), and for
    which `git ls-files -z -- <dir>` is empty. It must be a real directory, not a link, on the workdir's file system,
-   resolve inside the workdir, and hold no `.git` of its own. Each git call is contained as the reclaim ladder's are
-   (`_ws_reclaim_contained`). No candidate answers `nothing-to-shed`;
+   resolve inside the workdir, and hold no `.git` (directory, file or link) at ANY depth: one bounded `find` over every
+   candidate, and a walk that does not finish answers `unmeasured`. This keeps a nested repository and a git-ignored
+   worktree, uncommitted work included, whatever `CCD_DEPS_SHED_NAMES` says, because the before/after `git status`
+   cannot see inside an ignored tree. Each git call is contained as the reclaim ladder's are (`_ws_reclaim_contained`).
+   No candidate answers `nothing-to-shed`;
 8. `in-use`: `_ws_path_users_many` answers a holder for any candidate, on its physical spelling; an unmeasured answer is
    `unmeasured`;
 9. the git state: `git status --porcelain=v1 -z --untracked-files=all` is read and digested before the act;
 10. `--dry-run` stops here and answers `would-shed` with the candidates' count and bytes, exit 0;
-11. the act: each candidate is removed (`rm -rf --one-file-system`, `rm -rfx` on Darwin) under a
-    `CCD_DEPS_SHED_SCAN_S` bound (default 30). The git state is read again: a digest that differs answers
+11. the act: ONE removal of every candidate (`rm -rf --one-file-system`, `rm -rfx` on Darwin) under a
+    `CCD_DEPS_SHED_SCAN_S` bound (default 30, lower-only). The git state is read again: a digest that differs answers
     `git-state-changed` (`{"failed":<word>}`, exit 1, journaled as a failure), and so does a removal that fails partway (`shed-incomplete`).
     Both are safe to retry, because what remains is still rebuildable. On success the verb writes
     `$REG/<id>.depsshed` (`<epoch> <bytes>`), journals `_lc_done shed-deps` with the class, dirs and bytes, and
     answers `{"shed":true}`, exit 0.
+
+**Bounds.** Every call that walks a tree is bounded, and their number does not grow with the candidates: the ignored
+listing, the repository walk, the size (`du`), two `git status` reads and the one `rm`, six at `CCD_DEPS_SHED_SCAN_S`;
+the toplevel and index reads at 10 s each; the process walk at 10 s. With two TERM-to-KILL graces that is 226 s, under
+the verb's runner row `CCD_VERB_TIMEOUT_MS['ws-shed-deps']` (240 s, ws-reap's), and `deps-shed-budget.test.ts` holds the
+sum. A size that cannot be measured answers `bytes: null` and the act goes on.
 
 There is no token. The act touches only bytes git calls ignored and untracked, all of which `npm ci` rebuilds, and each
 rung is re-read at the act. This is the reasoning `ccd-tmp-sweep`'s dead arm already uses: remove after a re-check,
@@ -209,7 +222,7 @@ A value that is not a positive integer falls back to the default, with one boot 
 | `CCRC_DEPS_SHED_PER_PASS` | server | 1 |
 | `CCD_DEPS_SHED_MIN_ASLEEP_S` | box (ccd) | 3600 |
 | `CCD_DEPS_SHED_NAMES` | box | `node_modules` |
-| `CCD_DEPS_SHED_SCAN_S` | box | 30 |
+| `CCD_DEPS_SHED_SCAN_S` | box | 30 (lower-only) |
 
 **Wire.**
 - `CCD_ARGV.wsShedDeps` and the capability `shed-deps-v1`.
@@ -290,18 +303,18 @@ Each guard was deleted or weakened alone, its suite run alone (`vitest --maxWork
 
 ## Deviations found
 
-- **D-7279.** The gates (replaces D-TBD-worktree-leak-gates). Stopped workers' worktrees are kept by design: child
+- **D-7279.** The gates (replaces the gates placeholder of the first draft). Stopped workers' worktrees are kept by design: child
   reclaim keeps them for the programme, and the stale arm that lets those keeps lapse has no word for a parked run or
   an open sibling and waits 7 idle days. Stopped coordinators' worktrees have no automatic exit (rule 4). Rebuildable
   `node_modules` had no collector of its own, because the lifecycle policy (§1.2, row 2) gave it its workspace's
   lifetime.
 - **D-7278.** The operator's A1 ruling of 2026-10-28, extended to coordinators (A3): the deps-shed arm of the run-done
   row with the verb `ccd ws-shed-deps` (§4), in shadow behind `deps-shed-live`; the lifecycle policy's row 2 changes
-  for this one class; the verb joins the SAFETY list.
+  for this one class; the verb joins the SAFETY list. Two choices of the as-built arm are recorded under this number,
+  not as deviations of their own: the shadow composes the verb's `--dry-run`, so a "would" row carries the box's own
+  count and bytes (the note's earlier draft wrote the row with no box ask); and the box's asleep test and floor read the
+  stop stamp (`.stopped`), which both `ccd hibernate` and `ccd stop` write, rather than `.hibernated` alone, so a
+  coordinator stopped by hand is covered, and "once a sleep" compares `.depsshed` with the stop stamp rather than with
+  `.woke`.
 - **D-7280.** The fact record for A2: the stale arm is armed on the fleet box since 2026-10-25, and why it does not
   reach the measured leak.
-- **D-TBD-deps-shed-dry-run.** The shadow composes the verb's `--dry-run`, so a "would" row carries the box's own count
-  and bytes; the note's earlier draft wrote the row with no box ask.
-- **D-TBD-deps-shed-sleep-clock.** The box's asleep test and floor read the stop stamp (`.stopped`), which both
-  `ccd hibernate` and `ccd stop` write, rather than `.hibernated` alone, so a coordinator stopped by hand is covered;
-  "once a sleep" compares `.depsshed` with the stop stamp rather than with `.woke`.
