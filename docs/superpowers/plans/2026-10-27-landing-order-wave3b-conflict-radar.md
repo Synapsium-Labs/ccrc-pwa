@@ -272,7 +272,7 @@ This section is the contract. Tasks 1 and 2 implement it, and the plans for wave
   - the project is paused. A pause stops acceptance as well as measurement.
   - the directory under `$REG/landing/` has no conf at all.
 - **`ccrc uninstall`** removes every regular `$REG/landing/*/enabled` file.
-- **Stage 4 trusts `enabled` only when** it is a regular file, parses, its `project` matches, its `at` is within `LAND_PROBE_ENABLED_FRESH_S` (wave 4 states the bound: three timer intervals), and neither `$REG/land-probe-paused` nor `$REG/landing/<project>/paused` exists.
+- **Stage 4 trusts `enabled` only when** it is a regular file, parses, its `project` matches, its `at` is within `LAND_PROBE_ENABLED_FRESH_S` (wave 4 states the bound: four timer intervals, 1200 s, amended 2026-10-28 after review 1109), and neither `$REG/land-probe-paused` nor `$REG/landing/<project>/paused` exists.
   - In every other case stage 4 answers as for an absent or unreadable marker: `stale-tip` / `stale-review`, as today. The detail is `landing-marker-unreadable` for an unreadable marker, and `landing-marker-stale` for a stale one.
   - So a tick that never runs (global pause, bad knob, crash, dead timer) cannot keep acceptance alive.
 

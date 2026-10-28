@@ -25,12 +25,19 @@ The coordinator's exact-head enqueue, `gh pr merge <n> --match-head-commit <sha>
      - Under the cap the answer is `=<flags><US><stripped>`, with `<US>` the unit separator `\u001f`.
      - Over the cap it is `!<bytes>:<kinds>`.
 
-     `<flags>` is a string over `a` (the raw text holds the word `--admin`), `w` (a mutation word) and `p` (a merge path). `<kinds>` is a comma-separated subset of `merge`, `admin` and `api`.
+     `<flags>` is a string over `a` (the raw text holds the word `--admin`), `w` (a mutation word) and `p` (a merge path), and one flag only the allowance reads (D-7249): `s`, set when the whole raw command matches `ALLOW_ADMIN_RE`. That is a grammar anchored with `\A` and `\z`, with `[ \t\n]*` folded in at both ends instead of a separate trim (jq 1.6 and 1.7 have no `trim`, and a regex trim is quadratic), of exactly one admin merge: `gh pr merge` and a PR number written `[0-9]+` (never `\d` or `[[:digit:]]`, which admit other scripts' digits), then only single-space-separated words from a fixed set: `--admin`, `--match-head-commit <40 hex>`, `--squash`, `--merge`, `--rebase`, `--delete-branch` and `-d`. Any other byte leaves `s` unset: a quote, a separator (`;`, `&`, `|`, `(`, `)`, a newline), a `$`, a backslash, an assignment before `gh`, a URL, a branch, a repository flag or any other option. Each word in the set is told from the others by its first few characters, so the one anchored `test` cannot backtrack. It runs in the same `jq`, only in the under-cap branch, with no new call. `<kinds>` is a comma-separated subset of `merge`, `admin` and `api`.
   3. **The bypass question is asked of every session** after wave 2's question.
      - Under the cap it is denied when:
        - (the stripped command matches `GH_MERGE_RE`, and `a` is set); or
        - (the stripped command matches the new `GH_API_RE`, and `w` or `p` is set).
      - Over the cap it is denied when `<kinds>` holds `admin` or `api`.
+  4. **One project may keep `--admin`, by the operator's allowance (D-7249).** The operator ruled on 2026-10-28 that one hosted project keeps landing its PRs by admin merge. This plan names no project.
+     - The allowance is a regular file, `$REG/admin-merge-allowed/<project>`. It lives in a dotless registry subdirectory, the pools precedent, so it never collides with a `$REG/<id>.<x>` field. Nothing in the tree writes it; the operator creates it by hand. Its content is not read.
+     - The hook reads the session's project with its own registry reader, `_ct_read "$REG/$id.project"`. The value must pass the hook's own project check (`CCRC_PROJ_CLASS`, at most `CCRC_PROJ_MAX` characters), which admits no `/`, so it can never walk out of the directory. An absent or empty `.project` is not allowed. The hook never falls back to the session id here, as its card's project probe does. The hook then checks the allowance with `[[ -f "$f" && ! -L "$f" ]]`. It makes no fork and no `jq` call.
+     - Under the allowance, the admin half of the bypass question does not deny for a session of that project, and only when `s` is set: the command is exactly one admin merge of a PR named by number, with nothing before or after it. Every other spelling stays refused, a second command, a URL, a branch or a repository flag included, because nothing outside the grammar reaches gh. The `gh api` half is still refused, and wave 2's question is still asked first, so a held worker is still refused.
+     - Over the cap the allowance does not apply: `s` is computed only in the under-cap branch, so an over-cap command is refused even when it matches the grammar.
+     - A project file that is absent, unreadable, empty or fails the project check, and an allowance that is a symlink or not a regular file, each read as not allowed. That fails closed.
+     - The reason text does not mention the allowance.
 - **The wide reading, on purpose (D-7111).** Once a real `gh … pr … merge` head or `gh … api` head is present, the deny reads `--admin`, the mutation words and the paths from the whole raw command, not from the merge's own segment.
   - The strip deletes quoted spans, so a quoted flag, a quoted path or a quoted GraphQL query would otherwise be invisible. A per-segment rule also misses a `$(…)` argument, a backslash-newline and a repeated `-X` (the plan review's findings).
   - The cost is that a command holding a real merge head and an unrelated `--admin` mention is refused, for example a merge then `git commit -m "never --admin"` in one command. The reason says so, and the cost is tested.
@@ -43,6 +50,7 @@ The coordinator's exact-head enqueue, `gh pr merge <n> --match-head-commit <sha>
   - a word or path assembled at run time (`q="merge""PullRequest"`, a path in a variable built from pieces);
   - a variable or quoted command word (`$GH api …`, `"gh" api …`);
   - a `gh alias`;
+  - under the operator's allowance only, a repository gh resolves from ambient state rather than from the command: a working directory in another checkout left by an earlier call's `cd` (the Bash tool keeps its directory between calls; a `cd` in the same command is outside the grammar and refused), the checkout's git remotes, and the session's inherited environment (D-7249);
   - ways to move `main` that are not merges, out of this wave's scope and named as such: `gh api -X PATCH repos/<o>/<r>/git/refs/heads/<b>`, the GraphQL `updateRef`, `updateRefs` and `createCommitOnBranch` mutations, and `git push` to a protected branch.
 - **What it never touches:**
   - every other `gh` call: `gh pr view`, `gh pr checks`, `gh pr merge <n> --disable-auto`, and every read of the landing verdict;
@@ -75,6 +83,7 @@ This revision answers all of them. A second Opus pass confirmed them, and found 
 
 **Prerequisite:**
 1. **The operator confirms the deny's fleet-wide reach before dispatch.** The hook has no project scope, so a session in any hosted project that still lands with `--admin` would be refused. Ruling 5 already forbids that to every coordinator. Before dispatch the coordinator measures, privately and read-only, which hosted projects' rules still need `--admin` to land, and puts the list to the operator. The list never goes in this public repository.
+   - **Answered 2026-10-28.** One project keeps landing by admin merge, with the operator's express permission, through the allowance (D-7249). The operator changes the other projects' notes that tell sessions to merge with `--admin` or through `gh api`. The coordinator confirms that the allowance file exists, by `ls` only, before the live check.
 2. **Dispatch after wave 3e (#1127) merges.** Its worker's claim holds `README.md`, which Task 3 edits.
 
 This wave's workspace is a fresh child from `main`.
@@ -110,7 +119,7 @@ This wave's workspace is a fresh child from `main`.
 
    A false refusal here stops every landing on the fleet.
 2. **The two mutation words with no lowercase `merge` are refused** from a fixture HOME whose path holds no `merge`, under the cap and over it.
-3. **Every `--admin` spelling the raw text can show is refused in every session.** That covers a flag before or after the number, `--admin=true`, a quoted `'--admin'` or `"--admin"`, an `--admin` after a `$(…)` argument, and one after a backslash-newline.
+3. **Every `--admin` spelling the raw text can show is refused in every session**, except in a session of the one project the operator allows (D-7249). There, only a command that is exactly one admin merge in `ALLOW_ADMIN_RE`'s grammar passes. The refusal covers a flag before or after the number, `--admin=true`, a quoted `'--admin'` or `"--admin"`, an `--admin` after a `$(…)` argument, and one after a backslash-newline.
 4. **Every spelling of the six endpoints in the raw text is refused.** That is any method on either path, quoted or bare, and each mutation word in `-f`, `--raw-field` or a `--input -` heredoc, over the cap too. The unread classes are LISTED passes, not silent ones.
 5. **Text is not a command, and the wide reading's cost is named.**
    - Under the cap, commit messages, PR bodies, heredocs and mail texts that name `--admin` or a mutation word pass when no real merge or api head is present. Over the cap the hook cannot parse, so such a text is refused in every session with the split-or-rephrase reason. That is wave 2's accepted over-cap cost, now for every session (D-7115).
@@ -123,12 +132,13 @@ This wave's workspace is a fresh child from `main`.
 **Files:**
 - Modify:
   - `ccd/session-hook.sh`: the prefilter; `MERGE_STRIP_JQ`'s `capped` answer and the new flags; the bash parse of `mout`; the bypass question; the reason text;
-  - the hook's header paragraphs that become false: "Denying `--admin` to EVERY session, and a `gh api` merge … is wave 2b's"; "A session with neither — a coordinator's own, the operator's — is never asked"; the cap section's "Only where the deny already applies: … never refused, under the cap or over it"; THE COST; and the WHAT PASSES UNPARSED list;
+  - the hook's header paragraphs that become false: "Denying `--admin` to EVERY session, and a `gh api` merge … is wave 2b's"; "A session with neither — a coordinator's own, the operator's — is never asked"; the cap section's "Only where the deny already applies: … never refused, under the cap or over it"; THE COST; and the WHAT PASSES UNPARSED list. A new header paragraph states the operator's allowance: its path, that nothing in the tree writes it, what it lifts and what it never lifts;
   - `server/test/session-hook-merge-deny.test.ts`, including two wave 2 titles that this wave makes false. These are "lets a coordinator's enqueue through — a session with no wave hold and no child marker is never asked" and "refuses only where the deny applies: a session with no wave hold and no marker is never asked", reworded to "…is never asked the wave-2 question".
 
 **Interfaces:**
 - Produces:
   - the answer format `=<flags><US><stripped>` and `!<bytes>:<kinds>`;
+  - `ALLOW_ADMIN_RE`, the allowance's anchored grammar, defined once in the hook and read inside `MERGE_STRIP_JQ` (D-7249);
   - the bash split: `mflags=${mout%%$'\x1f'*}`, then `mcmd=${mout#*$'\x1f'}` under the cap; and `mover=${mout#!}`, `mkinds=${mover#*:}`, `mover=${mover%%:*}` over it;
   - the reason, beginning `ccrc: \`--admin\` and \`gh api\` merges are refused in every session`;
   - the over-cap bypass reason. It gives both byte counts and says the hook cannot tell prose from a command over the cap. It names the ways out: split the command, write the text with the Write tool and pass it as a file (`--body-file`, `ccrc-api mail send --json <file>`), and R9's door. It never says that landing is the operator's alone.
@@ -139,7 +149,7 @@ This wave's workspace is a fresh child from `main`.
   - R9's door, the operator's own shell or GitHub's UI;
   - that the whole command is read once it holds a merge or api command.
 
-- [ ] **Step 1: The failing cases.** These go in a new `describe('the bypass deny (wave 2b)')` whose fixture HOME is `mkTmp('ccrc-bypass-')`, asserting `expect(home).not.toContain('merge')`:
+- [ ] **Step 1: The failing cases.** These go in a new `describe('the bypass deny (wave 2b)')` whose fixture HOME is `mkTmp('ccrc-bypass-')`, asserting `expect(home).not.toContain('merge')`. The file's `bash()` helper gains an optional payload `cwd`, default the fixture HOME as today, for the allowance's cwd cases:
   - `refuses --admin in a session with no hold and no marker`: `gh pr merge 42 --admin` is denied, and the reason contains the four names above.
   - `refuses every parseable merge spelling with --admin inserted after merge`: wave 2's spelling list, each entry rewritten with `.replace(/\bmerge /, 'merge --admin ')`, and an assertion that every entry changed (`gh pr merge --auto 42` included). Every one is denied, with no hold. In wave 2's comment entry the first `merge ` is inside the `#` comment, so that entry is denied through the raw reading. That is noted in the case.
   - `refuses the --admin spellings the raw text shows`: `gh pr merge --admin 42`, `gh pr merge 42 --admin=true`, `gh pr merge 42 '--admin'`, `gh pr merge 42 "--admin"`, `gh pr merge 42 --match-head-commit "$(git rev-parse HEAD)" --admin`, `gh pr merge $(echo 42) --admin` and `gh pr merge 42 \\\n  --admin`.
@@ -147,7 +157,17 @@ This wave's workspace is a fresh child from `main`.
   - `the coordinator's landing passes`: no hold, the clause 15 spelling extracted from `ccd/coordinator-skill/SKILL.md`, and `--disable-auto`. `deny === null`.
   - `the wide reading's cost, named`: `gh pr merge 42 --match-head-commit <sha> && git commit -m "never --admin"` is denied, and the reason says the whole command is read.
   - `mentions with no merge head pass`: wave 2's mention list, which has three texts naming `--admin`, passes with no hold. So do `echo --admin`, `grep -- --admin docs` and `gh pr view 42 --json mergedAt`.
-  - `the answer format`: a direct jq run of `MERGE_STRIP_JQ`, extracted from the hook as the test file already does for its checker, over three commands. The flags and the kinds come out as specified.
+  - `the answer format`: a direct jq run of `MERGE_STRIP_JQ`, extracted from the hook as the test file already does for its checker, over three commands. The flags and the kinds come out as specified. Then `s`: it is set for `gh pr merge 42 --admin`, `gh pr merge 42 --admin --match-head-commit <40 hex>`, `gh pr merge 42 --squash --admin -d`, `gh pr merge 42 --merge --admin --delete-branch`, `gh pr merge 42 --rebase --admin`, and `gh pr merge 42 --admin` with a leading and a trailing space and newline. It is unset for each of: `gh pr merge 42 --admin --repo o/other`, `gh pr merge 42 -R o/other --admin`, `GH_REPO=o/x gh pr merge 42 --admin`, `gh pr merge https://github.com/o/other/pull/7 --admin`, `gh pr merge ws/alpha --admin`, `gh pr merge --admin 42`, `gh pr merge '42' --admin`, `gh pr merge 42 '--admin'`, `gh pr merge 42 --admin -sA x`, `gh pr merge 42 --subject x --admin`, `gh pr merge 42 --admin --repo=o/other`, `gh pr merge 42 -Ro/other --admin`, `gh pr merge 42 --auto --admin`, `gh pr merge ٤٢ --admin` (Arabic-Indic digits), `cd ../other && gh pr merge 42 --admin`, `echo x; gh pr merge 42 --admin`, `echo x` then a newline then `gh pr merge 42 --admin`, `gh pr merge 42 --match-head-commit abc --admin` (not 40 hex), and `gh pr merge 42 --admin` followed, glued and spaced, by each of `;echo`, `&echo`, `&&echo`, `||echo`, `|cat` and a newline then `echo`, and inside `(…)` and `$(…)`.
+  - `the operator's allowance lets --admin through for that one project`: with `$REG/admin-merge-allowed/proj-a` a regular file and the session's `.project` reading `proj-a`, `gh pr merge 42 --admin --match-head-commit <40 hex>` passes. These are each still denied:
+    - every command the answer-format case pins as `s` unset, run through the hook;
+    - a session whose project is `proj-b`;
+    - a session whose `.project` reads `proj-b` while the payload's cwd is a directory named `proj-a`;
+    - a `.project` reading `../admin-merge-allowed/proj-a`, which would reach the real allowance file without the project check;
+    - an allowance that is a symlink to a regular file, or a directory;
+    - an unreadable `.project`, and an empty one and an absent one, each while an allowance file named after the session's own id stands;
+    - `gh api -X PUT repos/o/r/pulls/42/merge` alone, from an allowed session;
+    - the over-cap form of the allowed command, padded past the cap with ` --squash` repeats so that it still matches the grammar;
+    - with `WAVE_HOLD`, which gives wave 2's reason byte for byte.
   - `one strip per payload`: a `jq` wrapper first on PATH counts invocations. A merge command costs exactly one more than the same command with its trigger words replaced, and that one invocation carries `--argjson cap`.
 
 - [ ] **Step 2: Run; see the new cases fail.** `(cd server && ./node_modules/.bin/vitest run test/session-hook-merge-deny.test.ts)`. Wave 2's cases still pass.
@@ -165,6 +185,20 @@ This wave's workspace is a fresh child from `main`.
   | A3 | ask the bypass question before wave 2's | the worker's-reason case |
   | A4 | `a` set only for `--admin` after the number | `gh pr merge --admin 42`, and the inserted-after-merge list case |
   | A6 | the flags computed in a separate `jq` call | the one-strip case |
+  | A7 | `ALLOW_ADMIN_RE` loses its end anchor | the trailing-separator cases |
+  | A8 | the allowance check follows a symlink (`-f` alone) | the symlink case |
+  | A9 | the allowance also lifts the `gh api` half for an allowed session | the api-alone case |
+  | A10 | the allowance read from the cwd's project, not the registry's | the cwd-named-`proj-a` case |
+  | A11 | the grammar's operand admits any word | the URL and branch cases |
+  | A12 | no project check on the project value | the `../admin-merge-allowed/proj-a` case |
+  | A13 | the grammar's word set admits any option-shaped word | the `--repo=o/other`, `-Ro/other` and `--auto` cases |
+  | A14 | the allowance file read for any project, not the session's | the `proj-b` case |
+  | A15 | `ALLOW_ADMIN_RE`'s start anchor becomes `GH_MERGE_RE`'s start group | the `GH_REPO=` case and the three leading-command cases |
+  | A18 | `s` computed before the cap split | the over-cap `--squash`-padded case |
+  | A19 | the operand written `\d+` | the Arabic-Indic digits case |
+  | A20 | the allowance lifts the admin half without reading `s` | the URL, branch and separator cases |
+  | A16 | the grammar admits a quote | the quoted `'42'` and `'--admin'` cases |
+  | A17 | an absent or empty `.project` falls back to the session id | the absent and empty cases |
 
 - [ ] **Step 6: Commit:** `feat(hook): refuse gh pr merge --admin in every session (landing order wave 2b, Task 1)`.
 
@@ -197,7 +231,7 @@ This wave's workspace is a fresh child from `main`.
   - `passes every read of the landing route`: every Review Focus 1 command, each extracted verbatim by its anchor, with `deny === null`. Also `gh api repos/o/r/pulls/42`, `gh api repos/o/r/pulls/42/merges/x` (not end-bounded, so not the path) and a `query { … mergeQueueEntry … }`.
   - `a mutation word or path in text with no gh api head passes`: `git commit -m "never call enqueuePullRequest by hand"`, a heredoc PR body naming every word and both paths, and a mail body naming them.
   - `the wide reading's cost, named`: `gh api repos/o/r/pulls/42; echo enqueuePullRequest` is denied, with the reason's sentence.
-  - `LISTED passes, so a later change updates the list`: `gh api graphql -F query=@mutation.graphql`, `gh api graphql --input body.json`, `q="merge""PullRequest"; gh api graphql -f query="mutation { $q }"`, `$GH api -X PUT repos/o/r/pulls/42/merge`, `"gh" api -X PUT repos/o/r/pulls/42/merge`, `gh alias set m 'api -X PUT'`, `gh api -X PATCH repos/o/r/git/refs/heads/main -f sha=x`, `gh api graphql -f query='mutation { updateRef(input: {refId: "x", oid: "y"}) { clientMutationId } }'` and `git push origin HEAD:main`. Each passes, with the hook header's list naming its class.
+  - `LISTED passes, so a later change updates the list`: `gh api graphql -F query=@mutation.graphql`, `gh api graphql --input body.json`, `q="merge""PullRequest"; gh api graphql -f query="mutation { $q }"`, `$GH api -X PUT repos/o/r/pulls/42/merge`, `"gh" api -X PUT repos/o/r/pulls/42/merge`, `gh alias set m 'api -X PUT'`, `gh api -X PATCH repos/o/r/git/refs/heads/main -f sha=x`, `gh api graphql -f query='mutation { updateRef(input: {refId: "x", oid: "y"}) { clientMutationId } }'` and `git push origin HEAD:main`. Each passes, with the hook header's list naming its class. One more, under the allowance: an allowed session whose payload cwd is another repository's checkout runs `gh pr merge 42 --admin`, and it passes (D-7249).
   - Over the cap, with no hold:
     - an over-cap command holding `gh pr merge 42 --admin` is denied with the split-or-rephrase reason and both byte counts;
     - so is one holding `gh api graphql --input - <<'EOF'` with `enqueuePullRequest` on a body line;
@@ -244,6 +278,7 @@ This wave's workspace is a fresh child from `main`.
   - the wide reading and its cost;
   - the listed unread classes;
   - the over-cap reading;
+  - the operator's per-project allowance: its path, that nothing writes it, and what it lifts and never lifts (D-7249);
   - R9's door.
 
   The R1 stdout paragraph's "a `gh api` merge passes it" becomes true to this wave. Re-ground every moved anchor by name.
@@ -273,8 +308,10 @@ Numbers are ISSUED, never chosen; a worker never calls the allocator (worker cla
   - a word or path assembled at run time;
   - a variable or quoted command word;
   - a `gh alias`;
+  - under the operator's allowance, a repository gh resolves from ambient state rather than from the command: a working directory in another checkout left by an earlier call's `cd` (the Bash tool keeps its directory between calls; a `cd` in the same command is outside the grammar and refused), the checkout's git remotes, and the session's inherited environment (D-7249);
   - ways to move `main` that are not merges, which are out of this wave's scope: `gh api -X PATCH repos/<o>/<r>/git/refs/heads/<b>`, the GraphQL `updateRef`, `updateRefs` and `createCommitOnBranch` mutations, and `git push` to a protected branch.
 
   The hook is a contract the fleet honours, not an access boundary (spec §4).
 - **D-7115** — `over-cap-every-session` (Review Focus 5): over the cap the hook cannot parse. An over-cap command whose raw text reads as an admin merge or an api merge is refused in every session, prose included, with the split-or-rephrase reason. Wave 2 accepted that cost for held sessions; this wave extends it to every session. A long PR body or mail that quotes these words is sent as a file (`--body-file`, `--json` from a file) or split.
 - **D-7116** — `fleet-reach` (Prerequisite): spec §5.2's rollout step 4 states the arming gate for this repository. The hook has no project scope, so the operator confirms the fleet-wide reach before dispatch, from the coordinator's private measurement.
+- **D-7249** — `operator-admin-allowance` (Architecture): spec §5.2 denies `--admin` in every fleet session. On 2026-10-28 the operator ruled that one hosted project keeps landing its PRs by admin merge, because its required approval cannot come from a session. So an operator-written file, `$REG/admin-merge-allowed/<project>`, lifts the admin half of the bypass deny for that project's sessions, and only for a command that is exactly one admin merge of a PR named by number, in a fixed grammar (`ALLOW_ADMIN_RE`). Nothing in the tree writes it. The `gh api` half, the over-cap reading and wave 2's worker deny are untouched. A repository gh resolves from ambient state (a working directory left by an earlier call's `cd`, the checkout's remotes, the inherited environment) is a listed pass under the allowance: the hook is a contract, not an access boundary (R9). Added 2026-10-28, after the plan's approval; the landing-order ledger's Decisions, 2026-10-28 08:00.
