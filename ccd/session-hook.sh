@@ -4772,6 +4772,22 @@ if [[ "$event" == PreToolUse && "$pre_json" != *'"permissionDecision":"deny"'* \
   fi
 fi
 
+# TESTS RUN THROUGH `ccrc test` (D-TBD-test-containment): on every session, a Bash call that starts `systemd-run` (a
+# word in command position, a path to it included) with a test or typecheck word anywhere in the command (vitest, jest,
+# tsc, typecheck, playwright, stryker, `npm test`, `npm run test`) is denied, with a reason that names `ccrc test`. A run
+# placed by hand escapes the test slice's caps or the admission queue, and a unit of its own escapes both. An accident
+# guard, and it fails open like the arms above: a payload jq cannot parse says nothing. Only a Bash call whose payload
+# names `systemd-run` forks a jq, and `ccrc test` itself never reaches here (it calls systemd-run from its own shell).
+TRUN_RE='(^|[[:space:];&|(`/])systemd-run([[:space:]]|$)'
+TWORD_RE='(^|[^[:alnum:]_])(vitest|jest|tsc|vue-tsc|typecheck[[:alnum:]_:-]*|playwright|stryker)([^[:alnum:]_]|$)|(^|[^[:alnum:]_])(npm|pnpm|yarn)[[:space:]]+(run[[:space:]]+)?test([^[:alnum:]_]|$)'
+if [[ "$event" == PreToolUse && "$pre_json" != *'"permissionDecision":"deny"'* && "${tool:-}" == Bash && "$payload" == *systemd-run* ]]; then
+  tcmd=$(jq -r '.tool_input.command // "" | strings' <<<"$payload" 2>/dev/null) || tcmd=""
+  if [[ "$tcmd" =~ $TRUN_RE && "$tcmd" =~ $TWORD_RE ]]; then
+    treason="ccrc: run tests and typechecks through \`ccrc test -- <command>\` (for example \`ccrc test -- npx vitest run --maxWorkers=2 test/foo.test.ts\`), never under a systemd-run of your own: \`ccrc test\` puts the run in the fleet's test slice, whose caps keep sessions ahead of tests, and queues heavy runs (tsc, typecheck, full or wide vitest, browser and mutation tests) fleet-wide (D-TBD-test-containment)."
+    if tjson=$(_hook_deny_json "$treason"); then pre_json=$tjson; fi
+  fi
+fi
+
 # A FAN-OUT NAMES ITS MODEL, AND A WORKFLOW AGENT ITS EFFORT TOO (D-6798; operator ruling 2026-10-24): on every session, an
 # Agent or Task call whose `tool_input` names no `model`, and a Workflow call whose script has an `agent(...)` call
 # naming no `model` or no `effort`, is denied, with a reason that sends the agent to the routing matrix. A call that names

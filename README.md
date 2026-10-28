@@ -1299,7 +1299,10 @@ does not name may still read its default. The thinning's time bound takes the sm
 `CCRC_UPDATE_DEADLINE_MS` the server may hold (the environment, `ccrc.env`, and `~/.ccrc/exposure.env`, which the server
 reads too), and the watchdog the largest (D-6591, D-6602). On macOS a file the box's model of systemd cannot decide
 refuses only the settings it names, and `CCRC_BACKUP_DATA_KEEP` always (D-6587). `ccrc doctor`'s `box-settings` check
-reads `ccrc.env` alone and names a line the reader refuses (D-6599).
+reads `ccrc.env` alone and names a line the reader refuses (D-6599). Eight more are `ccrc test`'s, read the same way
+(see **Test containment**): `CCRC_TEST_SLICE_MEMORY_MAX`, `CCRC_TEST_SLICE_SWAP_MAX`, `CCRC_TEST_SLICE_CPU_WEIGHT`,
+`CCRC_TEST_SLICE_CPU_QUOTA`, `CCRC_TEST_SLICE_IO_WEIGHT`, `CCRC_TEST_HEAVY_SLOTS`, `CCRC_TEST_WIDE_FILES` and
+`CCRC_TEST_PRESSURE_MAX`; a value that is not its shape keeps its default and warns.
 
 ## The session gate: `CCRC_AUTH` (off by default)
 
@@ -6163,6 +6166,26 @@ know: remove `~/.config/systemd/user/tmux-spawn-.scope.d/50-oom-continue.conf` (
 old tmux-server behaviour, `~/.config/systemd/user/ccrc-tmux-server.scope.d/50-oom-continue.conf`), run
 `systemctl --user daemon-reload`, then roll `ccd` back; a session drops the prefix at its next respawn, and
 `ccd-tool-adj` left in `~/.local/bin` is inert. `ccrc uninstall` removes both files.
+
+**Test containment** (D-TBD-test-containment). `ccrc test [--heavy|--light] -- <command>` (`ccd/ccrc-test`) runs one
+test or typecheck as a transient scope in `ccrc-tests.slice` (`deploy/systemd/ccrc-tests.slice`, placed by `ccrc
+install`, `ccrc update` and `deploy.sh agent`), with the session's environment, working directory and terminal. The
+slice has a hard `MemoryMax` (default 6G), a bounded `MemorySwapMax` (1G), `CPUWeight` and `IOWeight` of 20 against a
+session's 100, and a `CPUQuota` (400%), and no `MemoryHigh`: a session always wins the CPU, and a run past the cap is
+killed inside the slice, never pushing the session slice into reclaim. Each value is a setting (see **ccrc's own
+settings**), applied with `systemctl --user set-property --runtime` before every run; the unit file holds the
+defaults. A slice the user manager has not loaded is refused, never created, since `systemd-run --slice=` would make
+an unlimited one. A heavy run (tsc and typecheck, a vitest or jest run naming no test file or more than
+`CCRC_TEST_WIDE_FILES`, browser, mutation and `npm test` runs) first takes one of `CCRC_TEST_HEAVY_SLOTS` (default 2)
+slots, a lock file `~/.cc-sessions/test-slots/slot-<n>` held with `flock` for the run, so a killed holder frees its
+slot at once; a run that finds them all held prints that it is queued, and who holds them, and starts when one frees.
+With `CCRC_TEST_PRESSURE_MAX` above 0 a heavy run also waits while memory or CPU pressure (PSI `some avg10`) is above
+it. A light run takes no slot. On macOS the command runs uncontained, saying so, and still queues. The worker and
+coordinator skills (clause 18) send every test and typecheck through `ccrc test`, and the session hook denies a Bash
+call that starts a test or typecheck under `systemd-run` of its own; the vitest worker cap a box sets in its sessions'
+environment still applies inside the slice. Doctor's `test-slice` check shows the slice's live memory against its live
+cap, its other limits, and how many heavy slots are held and how many runs wait. The PWA control for the cap and the
+queue size is a follow-up.
 
 ### Session history: lossless recall (`ccrc history`)
 

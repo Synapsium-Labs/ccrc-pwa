@@ -2463,7 +2463,7 @@ MODELS_SUBAGENT_CLASSES="haiku sonnet"
 
 usage() {
   cat <<EOF
-usage: $PROG {doctor|status|adopt|wrappers|account|memory|models|codex|install|update|rollback|versions|channel|rollout|uninstall|backup|coordination-snapshot|logs|passwd|expose|token|restamp|version|watchdog|history}
+usage: $PROG {doctor|status|adopt|wrappers|account|memory|models|codex|install|update|rollback|versions|channel|rollout|uninstall|backup|coordination-snapshot|logs|passwd|expose|token|restamp|version|watchdog|history|test}
 
 The lifecycle CLI for a Claude Code fleet box — installs, updates and
 diagnoses a box, as a sibling to ccd (which drives sessions once one is
@@ -2709,7 +2709,7 @@ already running).
   restamp   re-stamp one file ccrc generated (a "ccrc:generated" marker, as
             on the session hook's generated region) after its body changed. A file
             with no marker is refused, never adopted; so is ccd/ccd, which is
-            stamped at install time$(_usage_history_paragraph)
+            stamped at install time$(_usage_history_paragraph)$(_usage_test_paragraph)
 
   -h, --help   print this message and exit 0
 
@@ -17493,6 +17493,9 @@ _inst_units() {
     "$dir/tmux-spawn-.scope.d/50-oom-continue.conf" 644
   _inst_atomic "$tree/deploy/systemd/ccrc-tmux-server.scope.d/50-oom-continue.conf" \
     "$dir/ccrc-tmux-server.scope.d/50-oom-continue.conf" 644
+  # D-TBD-test-containment: the slice `ccrc test` runs tests in, on every role and Linux only, as the drop-ins above (a
+  # slice nothing starts holds nothing). Its values are defaults; ccrc-test applies the box's settings on each run.
+  _inst_atomic "$tree/deploy/systemd/ccrc-tests.slice" "$dir/ccrc-tests.slice" 644
   echo "install: units: $role_unit, claude-session@.service, ccd-cap-scopes.{service,timer}, both drop-ins and the two OOMPolicy=continue scope drop-ins in \$HOME/.config/systemd/user"
 }
 
@@ -20673,7 +20676,7 @@ _upd_rerun_hint() {
 # console-driven update, the watchdog, a timer) must honour it, so `_ccrc_knob` reads it from ~/.ccrc/ccrc.env too. Every
 # other CCRC_ name ccrc reads stays environment-only, in a reasoned class. This line is the one list: `_ccrc_knob` reads no
 # name outside it, and the census (ccrc-settings-census.test.ts) derives from it, never from a copy.
-CCRC_SETTINGS=(CCRC_BACKUP_KEEP CCRC_BACKUP_DATA_KEEP CCRC_VERSIONS_KEEP CCRC_UPDATE_HEALTH_S CCRC_UPDATE_DEADLINE_MS CCRC_RELEASE_BASE_URL CCRC_MODELS_ADVANCE_BUDGET_S)
+CCRC_SETTINGS=(CCRC_BACKUP_KEEP CCRC_BACKUP_DATA_KEEP CCRC_VERSIONS_KEEP CCRC_UPDATE_HEALTH_S CCRC_UPDATE_DEADLINE_MS CCRC_RELEASE_BASE_URL CCRC_MODELS_ADVANCE_BUDGET_S CCRC_TEST_SLICE_MEMORY_MAX CCRC_TEST_SLICE_SWAP_MAX CCRC_TEST_SLICE_CPU_WEIGHT CCRC_TEST_SLICE_CPU_QUOTA CCRC_TEST_SLICE_IO_WEIGHT CCRC_TEST_HEAVY_SLOTS CCRC_TEST_WIDE_FILES CCRC_TEST_PRESSURE_MAX)
 
 # ── _ccrc_knob <KEY> <default> [file] — ONE reader for every setting (D-6587) ──
 # The process environment, else ~/.ccrc/ccrc.env alone, else <default>: wave 23's `_bak_data_keep` read with its knob made
@@ -26304,7 +26307,7 @@ _uninst_units() {
       ccd-account-health.timer ccd-account-health.service \
       ccd-telemetry-keepalive.timer ccd-telemetry-keepalive.service \
       ccrc-models.timer ccrc-models.service \
-      ccrc-update-watchdog.timer ccrc-update-watchdog.service; do
+      ccrc-update-watchdog.timer ccrc-update-watchdog.service ccrc-tests.slice; do
       [ -f "$dir/$u" ] || continue
       systemctl --user disable --now "$u" \
         || echo "uninstall: units: disable --now $u failed (continuing — the unit file is removed below; read: systemctl --user status $u)" >&2
@@ -26333,7 +26336,7 @@ _uninst_units() {
     "$dir/ccd-telemetry-keepalive.service" "$dir/ccd-telemetry-keepalive.timer" \
     "$dir/ccrc-models.service" "$dir/ccrc-models.timer" \
     "$dir/ccrc-update-watchdog.service" "$dir/ccrc-update-watchdog.timer" \
-    "$dir/ccrc-codex-usage@.service" "$dir/ccrc-codex-usage@.timer" \
+    "$dir/ccrc-codex-usage@.service" "$dir/ccrc-codex-usage@.timer" "$dir/ccrc-tests.slice" \
     || _ccrc_die "removing the unit files under $dir failed"
   rm -rf -- "$dir/claude-session@.service.d" "$slice" \
     || _ccrc_die "removing the drop-in directories under $dir failed"
@@ -27281,6 +27284,38 @@ console.log("restamped");
   esac
 }
 
+# ── _test_knobs — `ccrc test`'s settings (D-TBD-test-containment) ───────────
+# The test slice's five limits and the admission queue's three numbers, read through `_ccrc_knob` like every other
+# setting: the environment, else ~/.ccrc/ccrc.env, else the default. One line per setting, `KEY<US>default<US>value
+# <US>from` with US the unit separator (octal 037, never in a setting; the value empty and `from` the reader's sentence when it cannot be read), for ccd/ccrc-test, which owns
+# what each value means and refuses a value that is not its shape. The defaults are deploy/systemd/ccrc-tests.slice's
+# own values (ccrc-test-wrapper.test.ts holds the two equal) and are no box's measurements: 6G of memory, 1G of swap,
+# CPU and IO weight 20 against a session's 100, four CPUs of quota, two heavy runs at once, a vitest run naming more
+# than three files counted as wide, and no pressure wait.
+_test_knob_say() {   # <KEY> <default> <rc of _ccrc_knob>
+  if [ "$3" = 0 ]; then printf '%s\037%s\037%s\037%s\n' "$1" "$2" "$KNOB" "$KNOB_FROM"
+  else printf '%s\037%s\037\037%s\n' "$1" "$2" "$KNOB_WHY"; fi
+}
+_test_knobs() {
+  _ccrc_knob CCRC_TEST_SLICE_MEMORY_MAX 6G; _test_knob_say CCRC_TEST_SLICE_MEMORY_MAX 6G $?
+  _ccrc_knob CCRC_TEST_SLICE_SWAP_MAX 1G; _test_knob_say CCRC_TEST_SLICE_SWAP_MAX 1G $?
+  _ccrc_knob CCRC_TEST_SLICE_CPU_WEIGHT 20; _test_knob_say CCRC_TEST_SLICE_CPU_WEIGHT 20 $?
+  _ccrc_knob CCRC_TEST_SLICE_CPU_QUOTA 400%; _test_knob_say CCRC_TEST_SLICE_CPU_QUOTA 400% $?
+  _ccrc_knob CCRC_TEST_SLICE_IO_WEIGHT 20; _test_knob_say CCRC_TEST_SLICE_IO_WEIGHT 20 $?
+  _ccrc_knob CCRC_TEST_HEAVY_SLOTS 2; _test_knob_say CCRC_TEST_HEAVY_SLOTS 2 $?
+  _ccrc_knob CCRC_TEST_WIDE_FILES 3; _test_knob_say CCRC_TEST_WIDE_FILES 3 $?
+  _ccrc_knob CCRC_TEST_PRESSURE_MAX 0; _test_knob_say CCRC_TEST_PRESSURE_MAX 0 $?
+}
+_usage_test_paragraph() {
+  printf '\n%s' \
+    '  test      run one test or typecheck inside ccrc-tests.slice (its memory' \
+    '            cap, swap cap, CPU and IO weight and CPU quota keep sessions' \
+    '            ahead of tests), behind the fleet-wide queue for heavy runs' \
+    '            (tsc, typecheck, full or wide vitest, browser and mutation' \
+    '            tests): ccrc test [--heavy|--light] -- <command>. --status' \
+    '            prints the slice and the queue. See README, "Test containment"'
+}
+
 # Guard so the script can be `source`d (the way server/test/ccd-clip.test.ts:32
 # and server/test/ccd-workspaces.test.ts:487 source ccd itself, to call one
 # function directly without running the whole CLI) without running a command
@@ -27350,6 +27385,7 @@ case "$VERB" in
   restamp) cmd_restamp "$@" ;;
   watchdog) cmd_watchdog "$@" ;;
   history) exec node --no-warnings "$CCRC_HERE/history/cli.mjs" "$@" ;;
+  test)    exec bash "$CCRC_HERE/ccrc-test" "$@" ;;
   *) _ccrc_usage_die "$VERB" ;;
 esac
 
