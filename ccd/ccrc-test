@@ -2,7 +2,7 @@
 # ccrc-test — `ccrc test`: run one test or typecheck command inside the fleet's
 # test slice, behind the fleet-wide admission queue (D-TBD-test-containment).
 #
-#   ccrc test [--heavy|--light] [--] <command> [<arg>...]
+#   ccrc test [--heavy|--light] [--] <command> [<arg>...]   # --light only confirms a light reading
 #   ccrc test --classify [--] <command> [<arg>...]   # prints heavy or light
 #   ccrc test --classify-shell [--] '<command line>'  # heavy, wrapped (a systemd-run of one's own around a test) or light
 #   ccrc test --status                               # the slice and the queue, one line
@@ -60,9 +60,25 @@
 # `--status` counts as waiting. With CCRC_TEST_PRESSURE_MAX above 0, a heavy
 # run also waits, before it takes a slot, while the box's memory or CPU
 # pressure (PSI `some avg10`) is above it. A LIGHT run (one or a few named test
-# files) takes no slot and runs in the slice at once. A run inside a run
-# (`CCRC_TEST_INSIDE` set by this wrapper) is already contained, so it runs as
-# it is: a nested heavy run never waits on its own parent's slot.
+# files) takes no slot and runs in the slice at once. `--heavy` makes any run
+# heavy; `--light` only confirms a light reading: on a command the classifier
+# reads as heavy it is ignored, with a one-line note, and the run queues.
+#
+# ALREADY INSIDE. A run inside a run is already contained, so it runs as it
+# is: a nested heavy run never waits on its own parent's slot. That is read
+# from the process itself, never from the environment (`_tinside`): its
+# /proc/self/cgroup is under ccrctests.slice, or, uncontained (macOS, a slice
+# not loaded), the holder of a held slot is one of its ancestors. No variable
+# is set for the run, so none can be copied into a session to skip the queue.
+#
+# SCOPE: GOOD FAITH (D-TBD-test-containment). The sessions are cooperative, not adversaries.
+# This wrapper and the hook's reading of it (`--classify-shell`) catch the
+# accidental spellings a well-behaved session writes; the backstop is the
+# cgroup caps already on the box (the session slice's CPUQuota and memory
+# caps). Deliberately obfuscated spellings are accepted, out of scope, and are
+# not chased: a systemd-run inside a command substitution, prlimit, unshare or
+# cgexec prefixes, find -exec, a python os.system, an npm script that wraps
+# the suite.
 #
 # EXIT. The command's own exit code. This wrapper refuses only a usage error,
 # exit 2 (ccrc's house convention), and a ccd/ccrc it cannot load beside it,
@@ -94,7 +110,7 @@ _tusage() { echo "$PROG: $*" >&2; echo "usage: ccrc test [--heavy|--light] [--] 
 # on stderr, naming the key, the value and where it came from: a typo never removes a cap.
 declare -A TK=()
 # The settings that hold for the whole box, one slice and one queue: `_test_knobs` reads them from ~/.ccrc/ccrc.env alone.
-TBOXWIDE="CCRC_TEST_SLICE_MEMORY_MAX CCRC_TEST_SLICE_SWAP_MAX CCRC_TEST_SLICE_CPU_WEIGHT CCRC_TEST_SLICE_CPU_QUOTA CCRC_TEST_SLICE_IO_WEIGHT CCRC_TEST_HEAVY_SLOTS"
+TBOXWIDE="CCRC_TEST_SLICE_MEMORY_MAX CCRC_TEST_SLICE_SWAP_MAX CCRC_TEST_SLICE_CPU_WEIGHT CCRC_TEST_SLICE_CPU_QUOTA CCRC_TEST_SLICE_IO_WEIGHT CCRC_TEST_HEAVY_SLOTS CCRC_TEST_WIDE_FILES"
 _tshape() {   # <KEY> <value> -> 0 when the value is the key's shape
   local v="$2"
   case "$1" in
@@ -154,7 +170,8 @@ _tload() {
 # strings are read as scripts too), is classified in command position, and `make test`/`make check` is a whole suite.
 # `--classify-shell` is the same reader over a whole Bash command line, for the session hook (ccd/session-hook.sh): it
 # answers `heavy`, `light`, or `wrapped` for a systemd-run of one's own around any test or typecheck (WRAPPED, below),
-# one classifier for the wrapper and both of the hook's arms. In that reading a `ccrc test` command is already contained and is skipped, and a command word
+# one classifier for the wrapper and both of the hook's arms. In that reading a `ccrc test` command is already contained and is skipped
+# (unless its own command is a systemd-run around a test, which is WRAPPED like any other), and a command word
 # that is no package manager, node, test program or `$variable` is light whatever its arguments say, so `grep vitest`,
 # `git commit -m 'npm test'` and `echo tsc` stay light.
 _tvalflag() {   # <flag> -> 0 when a vitest or jest flag takes the next word as its value
@@ -378,9 +395,20 @@ _tcmd_heavy() {   # <wide> <how: argv, shell or hook> <command> [<arg>...] -> 0 
   case "$p" in
     ccrc|ccrc-test)
       if [ "$p" = ccrc ]; then [ "${a[1]:-}" = test ] || return 1; a=("${a[@]:2}"); else a=("${a[@]:1}"); fi
-      [ "$how" != hook ] || return 1
       while [ ${#a[@]} -gt 0 ]; do case "${a[0]}" in --) a=("${a[@]:1}"); break ;; -*) a=("${a[@]:1}") ;; *) break ;; esac; done
-      _tstrip "${a[@]}"; _tcmd_heavy "$wide" argv "${TW[@]}"; return ;;
+      _tstrip "${a[@]}"
+      # `ccrc test -- systemd-run … <test>`: the inner systemd-run moves the run out of the slice the wrapper put it in,
+      # so its command gets the same WRAPPED check as a bare line's (below), at a wide line of 0.
+      if [ "$TSR" = 1 ] || { [ "$TLINE_SR" = 1 ] && [[ "${TW[0]:-}" == '$'* ]]; }; then
+        if _tcmd_heavy 0 argv "${TW[@]}"; then TWRAPPED=1; return 0; fi
+        [ "$how" = argv ] || return 1
+      fi
+      if [ "$how" = hook ]; then
+        # Contained, so never heavy here; only a WRAPPED run inside its own shell string (`ccrc test -- sh -c '…'`) counts.
+        _tcmd_heavy "$wide" hook "${TW[@]}" || :
+        [ "$TWRAPPED" = 1 ]; return
+      fi
+      _tcmd_heavy "$wide" argv "${TW[@]}"; return ;;
     sh|bash|zsh|dash|ksh)
       for ((i = 1; i < n; i++)); do
         case "${a[i]}" in
@@ -437,8 +465,34 @@ _heavy() {   # <wide> <command> [<arg>...] -> 0 heavy, 1 light
   _tcmd_heavy "$wide" argv "${TW[@]}"
 }
 
-# ── the queue ─────────────────────────────────────────────────────────────
+# ── already inside ────────────────────────────────────────────────────────
 _tlocked() { ! flock -n "$1" true 2>/dev/null; }   # <file> -> 0 when another process holds its lock
+_tinside() {   # -> 0 when this process already runs inside a `ccrc test` run (ALREADY INSIDE above); never the environment
+  local line f who p d=0
+  if [ -r "$PROC_ROOT/self/cgroup" ]; then
+    while IFS= read -r line; do
+      case "$line" in */"$SLICE"|*/"$SLICE"/*) return 0 ;; esac
+    done < "$PROC_ROOT/self/cgroup"
+  fi
+  # Uncontained there is no cgroup to read: inside when the holder of a held slot is one of this process's ancestors.
+  command -v flock >/dev/null 2>&1 || return 1
+  local -A holder=()
+  for f in "$SLOT_DIR"/slot-*.who; do
+    [ -f "$f" ] && _tlocked "${f%.who}" || continue
+    who=""; IFS= read -r who < "$f" || :
+    [[ "$who" =~ ^pid\ ([0-9]+)\  ]] && holder["${BASH_REMATCH[1]}"]=1
+  done
+  [ ${#holder[@]} -gt 0 ] || return 1
+  p="$PPID"
+  while [[ "$p" =~ ^[0-9]+$ ]] && [ "$p" -gt 1 ] && [ "$d" -lt 64 ]; do
+    [ -z "${holder[$p]:-}" ] || return 0
+    p=$(ps -o ppid= -p "$p" 2>/dev/null) || return 1
+    p="${p//[[:space:]]/}"; d=$((d + 1))
+  done
+  return 1
+}
+
+# ── the queue ─────────────────────────────────────────────────────────────
 _tholders() {   # -> "slot <n>: <who>; …" for every held slot
   local f out="" who
   for f in "$SLOT_DIR"/slot-*; do
@@ -626,10 +680,16 @@ if [ "$mode" = classify-shell ]; then
 fi
 [ $# -gt 0 ] || _tusage "missing command"
 cmd=("$@")
-if [ -z "$force" ]; then if _heavy "${TK[CCRC_TEST_WIDE_FILES]}" "${cmd[@]}"; then force=heavy; else force=light; fi; fi
+if [ "$force" != heavy ]; then
+  if _heavy "${TK[CCRC_TEST_WIDE_FILES]}" "${cmd[@]}"; then reads=heavy; else reads=light; fi
+  # --light only confirms a light reading: a habit of passing it never lets a whole suite skip the queue.
+  [ "$force" != light ] || [ "$reads" = light ] \
+    || echo "$PROG: --light is ignored: this command reads as heavy, so it takes its turn in the heavy queue" >&2
+  force="$reads"
+fi
 if [ "$mode" = classify ]; then echo "$force"; exit 0; fi
 
-if [ -n "${CCRC_TEST_INSIDE:-}" ]; then exec "${cmd[@]}"; fi
+if _tinside; then exec "${cmd[@]}"; fi
 summary="${cmd[*]}"; summary="${summary//$'\n'/ }"; summary="${summary:0:160}"
 contained=1
 if [ "${CCD_OS:-linux}" = darwin ]; then
@@ -665,7 +725,6 @@ trap '_tonsig 130' INT
 trap '_tonsig 129' HUP
 [ "$force" = light ] || _tacquire "$summary"
 [ -z "$WAIT_FD" ] || { exec {WAIT_FD}>&-; WAIT_FD=""; }
-export CCRC_TEST_INSIDE=1
 oom0=""; [ "$contained" = 0 ] || oom0=$(_toom_kills)
 launched=1
 if [ "$contained" = 1 ]; then

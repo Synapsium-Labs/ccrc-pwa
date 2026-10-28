@@ -4782,7 +4782,11 @@ fi
 #            test/tsconfig.tests.json`, `npm test`, `make test`): denied on a fleet box (Linux, a session the registry
 #            knows), where it would land in the session's own pane scope past the slice and the queue; macOS has no slice;
 #   light    anything else, `ccrc test …` included: allowed.
+# `ccrc test -- systemd-run … <test>` is wrapped too: its inner command is read through the same check.
 # Either denial has somewhere to go: `ccrc test` degrades rather than refuses where the slice cannot be used (ccd/ccrc-test).
+# GOOD FAITH (D-TBD-test-containment): the sessions are cooperative, so this catches accidental spellings; the cgroup caps already on
+# the box are the backstop. Deliberately obfuscated spellings (a systemd-run inside a command substitution, prlimit,
+# unshare or cgexec prefixes, find -exec, python os.system, an npm script that wraps the suite) are out of scope.
 # An accident guard that fails open: no `ccrc` on PATH (then `ccrc test` is not there to send a run to either), a
 # payload jq cannot parse, or a classifier that answers anything else says nothing. Only a Bash call whose payload names
 # systemd-run (or, on a fleet box, a test program, a package manager or make) forks jq and the classifier, bounded like

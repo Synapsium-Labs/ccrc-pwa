@@ -1301,8 +1301,8 @@ reads too), and the watchdog the largest (D-6591, D-6602). On macOS a file the b
 refuses only the settings it names, and `CCRC_BACKUP_DATA_KEEP` always (D-6587). `ccrc doctor`'s `box-settings` check
 reads `ccrc.env` alone and names a line the reader refuses (D-6599). Eight more are `ccrc test`'s (see **Test
 containment**): `CCRC_TEST_SLICE_MEMORY_MAX`, `CCRC_TEST_SLICE_SWAP_MAX`, `CCRC_TEST_SLICE_CPU_WEIGHT`,
-`CCRC_TEST_SLICE_CPU_QUOTA`, `CCRC_TEST_SLICE_IO_WEIGHT` and `CCRC_TEST_HEAVY_SLOTS` hold for the whole box, so they are
-read from `ccrc.env` alone (the reader's `file` mode), and `CCRC_TEST_WIDE_FILES` and `CCRC_TEST_PRESSURE_MAX` the same
+`CCRC_TEST_SLICE_CPU_QUOTA`, `CCRC_TEST_SLICE_IO_WEIGHT`, `CCRC_TEST_HEAVY_SLOTS` and `CCRC_TEST_WIDE_FILES` hold for
+the whole box, so they are read from `ccrc.env` alone (the reader's `file` mode), and `CCRC_TEST_PRESSURE_MAX` the same
 way as the rest; a value that is not its shape keeps its default and warns.
 
 ## The session gate: `CCRC_AUTH` (off by default)
@@ -6180,7 +6180,7 @@ defaults. A slice the user manager has not loaded is never asked for, since `sys
 one; instead the run degrades, never refuses: it runs uncontained, says so in one WARN line, and still queues, so a
 session the hook sends to `ccrc test` always has a way to run its tests (limits that `set-property` cannot apply leave
 the run in the slice under the unit file's own values, said the same way). A heavy run (tsc and typecheck, a vitest or jest run naming no test file, a directory, a glob or a
-filter, or more than `CCRC_TEST_WIDE_FILES` test files, browser, mutation and `npm test`/`npm t` runs; a flag's value
+filter, or more than `CCRC_TEST_WIDE_FILES` (read from `~/.ccrc/ccrc.env` alone) test files, browser, mutation and `npm test`/`npm t` runs; a flag's value
 is never counted as a file, and a `sh -c` string is read command by command) first takes one of
 `CCRC_TEST_HEAVY_SLOTS` (default 2, also read from `~/.ccrc/ccrc.env` alone; a slot held above a lowered count still
 counts) slots, a lock file `~/.cc-sessions/test-slots/slot-<n>` held with `flock`. The
@@ -6189,13 +6189,20 @@ waiter stops that orphaned run's scope before taking the slot. When the command 
 process it left behind (a leaked vitest worker) ends with it. A signal to a queued run leaves the queue and exits
 128+signal without starting the command. A run that finds every slot held prints that it is queued, and who holds
 them, and starts when one frees. With `CCRC_TEST_PRESSURE_MAX` above 0 a heavy run also waits while memory or CPU
-pressure (PSI `some avg10`) is above it. A light run takes no slot. On macOS the command runs uncontained, saying so,
-and still queues, its slot following the wrapper. The worker and coordinator skills (clause 18) send every test and
+pressure (PSI `some avg10`) is above it. A light run takes no slot. `--heavy` makes a run heavy; `--light` only
+confirms a light reading, and on a command that reads heavy it is ignored with a one-line note. A run inside a run is
+already contained and runs as it is; that is read from the process itself, never from a variable: its
+`/proc/self/cgroup` is under `ccrctests.slice`, or, uncontained, a held slot's holder is one of its ancestors. On macOS
+the command runs uncontained, saying so, and still queues, its slot following the wrapper. The worker and coordinator skills (clause 18) send every test and
 typecheck through `ccrc test`. The session hook reads every Bash call that could start one with `ccrc test
 --classify-shell`, the wrapper's own classifier (prefixes such as `setsid`, `sudo -u`, `flock`, `xargs` and systemd-run's
 flags, and `eval`/`script -c`/`watch` strings, read through), and denies a test or typecheck under a `systemd-run` of
-its own on every session and, on a fleet box (Linux, a registered session), a heavy run in command position outside
-`ccrc test`. The
+its own on every session (`ccrc test -- systemd-run … <test>` included) and, on a fleet box (Linux, a registered
+session), a heavy run in command position outside `ccrc test`. The scope is good faith (D-TBD-test-containment): the sessions are
+cooperative, so the classifier catches the spellings a well-behaved session writes by accident, and the cgroup caps
+already on the box (the session slice's `CPUQuota` and memory caps) are the backstop. Deliberately obfuscated
+spellings are accepted and out of scope: a systemd-run inside a command substitution, `prlimit`/`unshare`/`cgexec`
+prefixes, `find -exec`, Python's `os.system`, an npm script that wraps the suite. The
 vitest worker cap a box sets in its sessions' environment still applies inside the slice. Doctor's `test-slice` check shows the slice's live memory against its live
 cap, its other limits, and how many heavy slots are held and how many runs wait. The suite drives stubs of systemctl and
 systemd-run, so the containment itself is proved on a box: `bash deploy/verify-test-slice.sh`, run by the operator or
