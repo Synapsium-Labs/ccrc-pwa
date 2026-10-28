@@ -25,7 +25,10 @@ import { actionDoor } from '../command/door';
 import './fleet.css';
 
 /** The project's measured route pool as one chip. A non-measured read yields
- *  no pool and therefore no chip. Unrecognised residue means this app is older
+ *  no pool and therefore no chip. An untagged project's chip says what the door
+ *  does, "Set pool", while it is the button that opens the pool sheet, and keeps
+ *  the state's own words, "no pool", where there is no door (a word that names an
+ *  action must not appear where nothing takes it; T3a, D-6331). Unrecognised residue means this app is older
  *  than the fleet, not a tag that can be diagnosed as unreadable or malformed. */
 function PoolChip({ pool, project, dim, onTap }: {
   pool: ProjectPoolWire;
@@ -72,7 +75,7 @@ function PoolChip({ pool, project, dim, onTap }: {
       title={label}
       {...actionDoor('open-pool', () => onTap(project))}
     >
-      {word}
+      {pool.state === 'untagged' ? 'Set pool' : word}
     </button>
   );
 }
@@ -83,7 +86,15 @@ function PinChip({ pin, roster }: { pin: FleetPin; roster: readonly RosterWire[]
   if (pin.state === 'empty') return null;
   if (pin.state === 'mixed') {
     return (
-      <span className="proj-card-pin" data-mixed aria-label="pinned accounts differ">mixed</span>
+      // `pinned`, not "run on": the chip measures each session's pinned `home`, not where it runs (T3a, D-6331).
+      <span
+        className="proj-card-pin"
+        data-mixed
+        aria-label="pinned accounts differ"
+        title="The sessions here are pinned to different accounts"
+      >
+        several accounts
+      </span>
     );
   }
   return (
@@ -141,11 +152,11 @@ export function ProjectCardHead({
           {/* A badge that reads `1` on every card carries no information. Every
               project on the live fleet holds exactly one session. */}
           {group.sessions.length > 1 && (
-            <span className="proj-card-count">{group.sessions.length}</span>
+            <span className="proj-card-count">{group.sessions.length} sessions</span>
           )}
           {/* The account this project is PINNED to (ccd `home`), which is not
               necessarily where any of its sessions is running — that is on the
-              line. `mixed` when the sessions disagree: a header asserting one
+              line. "several accounts" when the sessions disagree: a header asserting one
               account while two lines show two different ones would be a lie,
               and divergent pins across one project is worth noticing. */}
           <PinChip pin={group.pin} roster={roster} />

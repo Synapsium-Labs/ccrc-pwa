@@ -24,6 +24,7 @@ import {
   type HeightBucket, type Measures, type MeasuredRow, type RowRecord, type RowShape,
 } from './itemHeight';
 import { PendingBubble } from './PendingBubble';
+import { renderToolWell } from './ToolWellText';
 import { groupToolRun, type TranscriptItem } from './toolSummary';
 import { TranscriptRowContext } from './transcriptRow';
 import './chat.css';
@@ -50,6 +51,7 @@ function ChatItemBody({
   onRetry,
   onDiscard,
   askPending,
+  askBelow,
   answerLabel,
   onAnswer,
 }: {
@@ -59,6 +61,9 @@ function ChatItemBody({
   onRetry?: (key: string) => void;
   onDiscard?: (key: string) => void;
   askPending?: boolean;
+  /** D-6326: an inline ask surface is mounted below the transcript (the desk), so a live ask card points at it. It also holds a
+   *  failed bubble's Retry (R89, passed to `PendingBubble` as `sendHeld`): Retry is a send, deferred while the card is up. */
+  askBelow?: boolean;
   /** The transcript's Answer control's word (decision `ask-answer-control-says-submit`). */
   answerLabel?: string;
   onAnswer?: () => void;
@@ -70,14 +75,17 @@ function ChatItemBody({
       return <MessageBubble event={item.event} id={id} streaming={item.streaming} />;
     case 'tool':
       return (
-        <ToolCard use={item.use} result={item.result} askPending={askPending} answerLabel={answerLabel} onAnswer={onAnswer} />
+        <ToolCard
+          use={item.use} result={item.result} renderWell={renderToolWell(item.use)}
+          askPending={askPending} askBelow={askBelow} answerLabel={answerLabel} onAnswer={onAnswer}
+        />
       );
     case 'mail':
       return <MailCard envelope={item.envelope} />;
     case 'task':
       return <TaskCard notification={item.notification} />;
     case 'pending':
-      return <PendingBubble id={id} send={item.send} onRetry={onRetry} onDiscard={onDiscard} />;
+      return <PendingBubble id={id} send={item.send} onRetry={onRetry} onDiscard={onDiscard} sendHeld={askBelow} />;
     case 'working':
       return <WorkingIndicator />;
   }
@@ -151,6 +159,9 @@ export interface ChatListProps {
    *  two sources the ask card's state axis is derived from; the other is the
    *  card's own `tool_result`. */
   askPending?: boolean;
+  /** D-6326: the inline ask surface is mounted (the desk): a live ask card says where it is instead of offering Answer. It also
+   *  holds a failed bubble's Retry (R89, `PendingBubble`'s `sendHeld`): Retry is a send, deferred while the card is up. */
+  askBelow?: boolean;
   /** The transcript's Answer control's word (decision `ask-answer-control-says-submit`). */
   answerLabel?: string;
   /** Raise the answer sheet. The transcript never answers anything itself —
@@ -168,6 +179,7 @@ export function ChatListInner({
   onRetry,
   onDiscard,
   askPending,
+  askBelow,
   answerLabel,
   onAnswer,
 }: ChatListProps): ReactNode {
@@ -183,7 +195,7 @@ export function ChatListInner({
             id={id}
             onRetry={onRetry}
             onDiscard={onDiscard}
-            askPending={askPending} answerLabel={answerLabel}
+            askPending={askPending} askBelow={askBelow} answerLabel={answerLabel}
             onAnswer={onAnswer}
           />
         </div>
@@ -683,6 +695,7 @@ function ChatScroller({
   onRetry,
   onDiscard,
   askPending,
+  askBelow,
   answerLabel,
   onAnswer,
   column,
@@ -779,7 +792,7 @@ function ChatScroller({
                 id={id}
                 onRetry={onRetry}
                 onDiscard={onDiscard}
-                askPending={askPending} answerLabel={answerLabel}
+                askPending={askPending} askBelow={askBelow} answerLabel={answerLabel}
                 onAnswer={onAnswer}
               />
             </MeasuredItem>

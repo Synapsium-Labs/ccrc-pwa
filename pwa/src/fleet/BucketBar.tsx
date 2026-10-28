@@ -1,37 +1,40 @@
 // The bucket chips above the project cards — and the ack they perform.
 //
 // WHY IT IS ITS OWN FILE. `FleetScreen` was ONE component with a 932-line
-// body. This strip is 82 of them, and it does not merely render: it owns the
-// ack's two repairs — moving focus to the chip's own label after the control
-// that was activated unmounts itself, and announcing what happened to a
-// screen reader that would otherwise get nothing at all. Both of those live
-// here now, with the comments that argue them, instead of two hundred lines
-// above the markup they are about.
+// body. This strip is a part of it, and it does not merely render: it offers
+// the ack, whose two repairs — moving focus to the chip's own label after the
+// control that was activated unmounts itself, and announcing what happened to
+// a screen reader that would otherwise get nothing at all — live in
+// `markSeen.ts` (T3a, D-6331), the one hook this strip and Instrument's group
+// heads both call, with the comments that argue them.
 //
-// IT TAKES THREE PROPS AND KEEPS FOUR THINGS. `sessions`, `acks` and
-// `ackAll` come in; the label vocabulary, the focus refs, the announcement
-// state and `markSeen` are all this strip's own. The `role="status"` div
-// comes with it and stays OUTSIDE the chip, for the reason its own comment
-// gives: the update it reports is the one that unmounts the chip.
-import { useRef, useState } from 'react';
+// IT TAKES THREE PROPS AND KEEPS TWO THINGS. `sessions`, `acks` and
+// `ackAll` come in; the chip's markup and its derived word table are this
+// strip's own. The `role="status"` div the hook's `note` fills comes with the
+// markup and stays OUTSIDE the chip, for the reason its own comment gives: the
+// update it reports is the one that unmounts the chip.
 import type { ReactNode } from 'react';
-import type { FleetSession } from '../../../shared/api';
+import type { FleetSession, SessionBucket } from '../../../shared/api';
 import { CountBadge } from '@ccrc/ui';
 import { BUCKET_ORDER } from './sortFleet';
+import { STATUS_GROUPS } from './statusGroups';
 import { isUnseen, type Acks } from '../lib/seen';
+import { markAllSeenLabel, useMarkSeen } from './markSeen';
 import './fleet.css';
 
-/** Section-header noun for each bucket — a heading register, not the row's
- *  own state-word adjective (SessionLine.tsx's private `WORD`, which says
- *  `waiting`/`merged`/`exited` where these say `Attention`/`Cleanup`/`Dead`).
- *  Deliberately a SEPARATE small vocabulary: this is presentational only (it
- *  names buckets, it does not decide which bucket a session is in), so it
- *  carries none of the "one writer" risk `bucket` itself does. Retitling a
- *  section here changes only these headings — no row's word moves with it. */
-const SECTION_LABEL: Record<(typeof BUCKET_ORDER)[number], string> = {
-  attention: 'Attention', working: 'Working', done: 'Done', idle: 'Idle',
-  cleanup: 'Cleanup', archived: 'Archived', dead: 'Dead',
-};
+/** The chip's word for each bucket — DERIVED from `STATUS_GROUPS`, the one table Instrument's group heads read too, so
+ *  the chips say `Needs you` and `Exited` exactly as the heads do (T3a, D-6331: one vocabulary). It used to be a
+ *  deliberately SEPARATE small vocabulary (`Attention`, `Dead`), on the argument that a heading register needs no
+ *  "one writer"; the cost was two words for one bucket on one screen, and a third beside it in the rows' own state
+ *  word (`exited`). A heading is still presentational: it names buckets, it does not decide which bucket a session
+ *  is in. Retitling a bucket is a change to `STATUS_GROUPS`'s `label`, and both surfaces follow it. */
+const SECTION_LABEL = Object.fromEntries(
+  BUCKET_ORDER.map((b) => [b, STATUS_GROUPS[b].label]),
+) as Record<(typeof BUCKET_ORDER)[number], string>;
+
+/** The chips that draw quietly (T3a, D-6331): nothing is asked of you in a bucket that has exited or been archived. A
+ *  marker for the stylesheet, not a decision about the badge: `lib/seen.ts`'s BADGED already keeps these two unbadged. */
+const QUIET_BUCKETS: ReadonlySet<SessionBucket> = new Set<SessionBucket>(['dead', 'archived']);
 
 export function BucketBar(
   { sessions, acks, ackAll }: {
@@ -41,29 +44,8 @@ export function BucketBar(
   },
 ): ReactNode {
 
-  // "Mark all seen" unmounts itself. Both halves of the repair live here.
-  //
-  // FOCUS: the button is inside `{unseenCount > 0 && …}`, so activating it
-  // removes the focused element, and the browser's fallback for that is
-  // `document.body` — the next Tab restarts at the wordmark, past the bell,
-  // the banners and every preceding chip. Focus moves to the chip's own
-  // label, which is where the operator was.
-  //
-  // ANNOUNCEMENT: a screen-reader user otherwise gets nothing at all — the
-  // control they were on ceased to exist and a pill silently vanished, which
-  // is indistinguishable from a no-op. The message names the bucket and the
-  // count, because "done" would be the same sentence for every chip.
-  const labelRefs = useRef<Partial<Record<(typeof BUCKET_ORDER)[number], HTMLElement | null>>>({});
-  const [ackNote, setAckNote] = useState('');
-  const markSeen = (
-    bucket: (typeof BUCKET_ORDER)[number],
-    inBucket: readonly FleetSession[],
-    unseenCount: number,
-  ): void => {
-    ackAll(inBucket, Date.now());
-    setAckNote(`${SECTION_LABEL[bucket]}: ${unseenCount} marked seen`);
-    labelRefs.current[bucket]?.focus();
-  };
+  // Mark all seen's focus repair and announcement are `markSeen.ts`'s, shared with Instrument's group heads.
+  const { labelRef, note, markSeen } = useMarkSeen(ackAll);
 
   return (
     <>
@@ -82,7 +64,7 @@ export function BucketBar(
 
               Two folds hold rows a chip counts. `Archived (n)` holds its
               chip's members and every STOPPED main checkout, whose bucket is
-              still `dead` (M10), so the Dead chip counts a row that fold holds
+              still `dead` (M10), so the Exited chip counts a row that fold holds
               — stated, not changed (spec §5.2). `Released (n)` (workspace lifecycle
               §5.1) holds rows that are still `idle`, `done` or `dead` and
               still counted under those chips: folded, never removed, so a
@@ -101,22 +83,26 @@ export function BucketBar(
               if (inBucket.length === 0) return null;
               const unseenCount = inBucket.filter((s) => isUnseen(s, acks)).length;
               return (
-                <div key={bucket} role="group" className="bucket-head" aria-label={SECTION_LABEL[bucket]}>
+                <div key={bucket} role="group" className="bucket-head" aria-label={SECTION_LABEL[bucket]}
+                     data-quiet={QUIET_BUCKETS.has(bucket) ? 'true' : undefined}>
                   <span
                     className="bucket-head-label"
-                    /* The focus target after an ack — see `markSeen`. -1, so
+                    /* The focus target after an ack — see `markSeen.ts`. -1, so
                        it is reachable programmatically and never a Tab stop
                        of its own. */
                     tabIndex={-1}
-                    ref={(el) => { labelRefs.current[bucket] = el; }}
+                    ref={labelRef(bucket)}
                   >
                     {SECTION_LABEL[bucket]}
                   </span>
                   <span className="bucket-head-count">{inBucket.length}</span>
                   {unseenCount > 0 && (
                     <>
-                      <CountBadge className="bucket-head-unseen" aria-label={`${unseenCount} unseen`}>
-                        {unseenCount}
+                      {/* "Done 5 · 4 new": the count says its word (T3a, D-6331). The middot is decoration; the
+                          group's own name carries the sentence. */}
+                      <span className="bucket-head-sep" aria-hidden="true">·</span>
+                      <CountBadge className="bucket-head-unseen" aria-label={`${unseenCount} new`}>
+                        {unseenCount} new
                       </CountBadge>
                       <button
                         type="button"
@@ -130,7 +116,7 @@ export function BucketBar(
                            picking the wrong one silently cleared the badge on
                            the session Claude is still blocked on, with no way
                            to restore it. */
-                        aria-label={`Mark all ${SECTION_LABEL[bucket]} seen`}
+                        aria-label={markAllSeenLabel(bucket)}
                         onClick={() => markSeen(bucket, inBucket, unseenCount)}
                       >
                         Mark all seen
@@ -144,11 +130,11 @@ export function BucketBar(
           {/* The ack's only evidence. Activating "Mark all seen" DESTROYS the
               control that was activated (both it and the badge live inside
               `unseenCount > 0`), so there is nothing left to announce a state
-              change on and — without the focus transfer in `markSeen` — the
+              change on and — without the focus transfer in `markSeen.ts` — the
               browser drops focus to <body>, restarting the next Tab at the
               top of the document. Outside the chip so it is not unmounted by
               the very update it reports. */}
-          <div className="sr-only" role="status">{ackNote}</div>
+          <div className="sr-only" role="status">{note}</div>
     </>
   );
 }

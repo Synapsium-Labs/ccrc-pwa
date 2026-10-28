@@ -6001,3 +6001,164 @@ describe('W2-1 Task 2: the gate reads lib\'s names, and the instrument\'s prefix
     });
   });
 });
+
+// ── CP-39d Task 3 (D-7097, D-7098): W1-f counts searches only, and W1-b leaves out the tick that ends a backlog ──
+// Every answer is worked out by hand in its case. The CONTROL of each is the base query's reading of the same rows.
+describe('CP-39d: W1-f counts searches only, and W1-b leaves out the tick that ends a backlog (D-7097, D-7098)', () => {
+  const HOUR = 3_600_000;
+  const DAY = 86_400_000;
+  type Cell = string | number | null;
+
+  /** A store `createStore` made in its own home with `ticks` and `recall_calls` emptied; `plant` runs on a writer. */
+  const cp39dStore = (plant: (ins: (sql: string, ...p: Cell[]) => void) => void): Planted => {
+    const home = mkTmp('ccrc-measure-history-cp39d-');
+    const { storeId } = createStore(home);
+    const dbPath = path.join(home, '.ccrc', 'history', 'db', 'history.db');
+    const db = new DatabaseSync(dbPath);
+    try {
+      for (const t of ['ticks', 'recall_calls']) db.exec(`DELETE FROM ${t}`);
+      plant((sql, ...p) => { db.prepare(sql).run(...p); });
+    } finally {
+      db.close();
+    }
+    return { home, db: dbPath, storeId, families: '', b1: '', b2: '' };
+  };
+  const grep = (ins: (sql: string, ...p: Cell[]) => void, key: string, ts: number, rc: number, ms: number, arm: string | null = null): void => {
+    ins('INSERT INTO recall_calls (event_key, ccrc_id, generation, ts_ms, verb, rc, ms, arm) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+      key, 'demo-c', G1, ts, 'grep', rc, ms, arm);
+  };
+  const tick = (ins: (sql: string, ...p: Cell[]) => void, ts: number, behind: number, lag: number | null): void => {
+    ins('INSERT INTO ticks (ts_ms, lag_ms, bytes, files_behind, bytes_behind) VALUES (?, ?, 0, ?, 0)', ts, lag, behind);
+  };
+  /** measure-history.py's own rule: the value at 1-based rank ceil(95n/100), in integer arithmetic. */
+  const nearestRank95 = (xs: number[]): number => {
+    const s = [...xs].sort((x, y) => x - y);
+    return s[Math.floor((95 * s.length + 99) / 100) - 1];
+  };
+  const rowsOf = (dbPath: string, sql: string, ...p: Array<string | number>): number[] => {
+    const db = new DatabaseSync(dbPath);
+    try {
+      return db.prepare(sql).all(...p).map((r) => Number((r as { v: number }).v));
+    } finally {
+      db.close();
+    }
+  };
+  const BASE_W1B = 'SELECT lag_ms AS v FROM ticks WHERE files_behind = 0 AND lag_ms IS NOT NULL AND ts_ms > ? AND ts_ms <= ?';
+  const BASE_W1F = "SELECT ms AS v FROM recall_calls WHERE verb = 'grep' AND arm IS NULL";
+  const nowArgs = (f: Planted, ...more: string[]): string[] => ['--db', f.db, '--now', String(NOW), ...more];
+
+  it('(a) W1-f counts the greps that ran to their answer, rc 0 and rc 3; refusals and failures above the sample are left out', () => {
+    const f = cp39dStore((ins) => {
+      for (let i = 1; i <= 20; i += 1) grep(ins, `a-ok${i}`, 1000 + i, 0, 100 * i);
+      grep(ins, 'a-nf', 1100, 3, 2100);
+      for (let i = 1; i <= 30; i += 1) grep(ins, `a-fts${i}`, 2000 + i, 7, 3000);
+      for (let i = 1; i <= 2; i += 1) grep(ins, `a-ref${i}`, 3000 + i, 2, 4000);
+      grep(ins, 'a-fail', 3100, 1, 99_999);
+    });
+    // 21 rows of rc 0 and 3: 100..2100, rank ceil(0.95 * 21) = 20 is 2000.
+    expect(report(nowArgs(f)).w1f_grep_p95_ms).toBe(2000);
+    // CONTROL: over all 54 rows the base query reads 4000 (rank 52 of 54), the refusals' value.
+    const all = rowsOf(f.db, BASE_W1F);
+    expect(all.length).toBe(54);
+    expect(nearestRank95(all), 'CONTROL: the base query reads the refusals').toBe(4000);
+  });
+
+  it('(b) --w1f-since opens the window at its value (inclusive); --now closes it; without it the window opens at 0', () => {
+    const f = cp39dStore((ins) => {
+      for (let i = 1; i <= 21; i += 1) grep(ins, `b-s${i}`, 1000 + (i - 1), 0, 100 * i);
+      grep(ins, 'b-before', 999, 0, 90_000);
+      grep(ins, 'b-after', NOW + 1, 0, 80_000);
+    });
+    expect(report(nowArgs(f, '--w1f-since', '1000')).w1f_grep_p95_ms, 'the sample alone').toBe(2000);
+    // Without it the ts 999 row counts (22 rows, rank 21 is 2100) and the NOW + 1 row never does.
+    expect(report(nowArgs(f)).w1f_grep_p95_ms).toBe(2100);
+  });
+
+  it("(c) W1F_SEARCH_RCS is lib's EXIT.OK and EXIT.NOT_FOUND, spelled once", async () => {
+    const lib = await import('../../ccd/history/lib.mjs');
+    const src = readFileSync(SCRIPT, 'utf8');
+    const m = /^W1F_SEARCH_RCS = \((\d+), (\d+)\)$/m.exec(src);
+    expect(m, 'one module-level assignment of the pair').not.toBeNull();
+    expect([Number(m![1]), Number(m![2])]).toEqual([lib.EXIT.OK, lib.EXIT.NOT_FOUND]);
+    expect([Number(m![1]), Number(m![2])], 'CONTROL: the refusal for a pending FTS is not a search').not.toContain(lib.EXIT.FTS_UNAVAILABLE);
+  });
+
+  it('(d) W1-b leaves out the tick that ends a backlog and the store\'s first tick; the predecessor is by time, not insertion', () => {
+    const f = cp39dStore((ins) => {
+      tick(ins, NOW - 5 * HOUR, 0, 800_000);      // T1: the store's first tick; no predecessor
+      tick(ins, NOW - 4 * HOUR, 0, 2000);         // T2: counted
+      tick(ins, NOW - 3 * HOUR, 0, 3000);         // T3: counted
+      tick(ins, NOW - 1 * HOUR, 0, 900_000);      // T5: ends the backlog (its predecessor by time is T4); inserted before T4
+      tick(ins, NOW - 2 * HOUR, 3, 5000);         // T4: the catch-up
+      tick(ins, NOW - HOUR / 2, 0, 4000);         // T6: counted
+    });
+    expect(report(nowArgs(f)).w1b_lag_p95_ms).toBe(4000);   // {2000, 3000, 4000}: rank 3 of 3
+    const base = rowsOf(f.db, BASE_W1B, NOW - 7 * DAY, NOW);
+    expect(nearestRank95(base), 'CONTROL: the base query counts T1 and T5').toBe(900_000);
+  });
+
+  it('(e) the new flag and the new measures change neither w2 nor census', () => {
+    const f = plantedStore();
+    const W2 = ['--families', f.families, '--window-start', '1500', '--window-end', '6000', '--row-cap', '400'];
+    const withSince = report(nowArgs(f, ...W2, '--w1f-since', '100050'));
+    const without = report(nowArgs(f, ...W2));
+    expect(withSince.w2).not.toBeNull();
+    expect(withSince.w2).toEqual(without.w2);
+    const C = ['--census', '--as-of', String(NOW), '--since', '0', '--row-cap', '5'];
+    const cWith = report(nowArgs(f, ...C, '--w1f-since', '100050')) as unknown as { census: unknown; w1f_grep_p95_ms: number | null };
+    const cWithout = report(nowArgs(f, ...C)) as unknown as { census: unknown; w1f_grep_p95_ms: number | null };
+    expect(cWith.census).not.toBeNull();
+    expect(cWith.census).toEqual(cWithout.census);
+    // CONTROL: the flag reached the measure (the sample sits below 100050).
+    expect(withSince.w1f_grep_p95_ms).not.toEqual(without.w1f_grep_p95_ms);
+    expect(without.w1f_grep_p95_ms).toBe(2000);
+  });
+
+  it('(f) the predecessor is read before the week\'s filter: a tick whose predecessor lies outside the week counts', () => {
+    const f = cp39dStore((ins) => {
+      tick(ins, NOW - 8 * DAY, 0, 1000);          // T0: outside the week; the store's first tick
+      tick(ins, NOW - HOUR, 0, 700_000);          // T1: its predecessor T0 ended caught up
+      tick(ins, NOW - HOUR / 2, 0, 2000);         // T2
+    });
+    expect(report(nowArgs(f)).w1b_lag_p95_ms).toBe(700_000);   // {700000, 2000}: rank 2 of 2
+    // CONTROL: the same LAG over the in-window ticks only leaves T1 without a predecessor: {2000}.
+    const inWindow = rowsOf(f.db,
+      'SELECT lag_ms AS v FROM (SELECT ts_ms, lag_ms, files_behind, LAG(files_behind) OVER (ORDER BY ts_ms, tick_id) AS prev_behind '
+      + 'FROM ticks WHERE ts_ms > ? AND ts_ms <= ?) WHERE files_behind = 0 AND prev_behind = 0 AND lag_ms IS NOT NULL',
+      NOW - 7 * DAY, NOW);
+    expect(nearestRank95(inWindow), 'CONTROL: a predecessor read inside the week only').toBe(2000);
+  });
+
+  it('(b2) --w1f-since and --now are inclusive: a row at exactly either bound counts', () => {
+    const f = cp39dStore((ins) => {
+      grep(ins, 'b2-low', 1000, 0, 9000);            // exactly --w1f-since: the largest
+      for (let i = 1; i <= 19; i += 1) grep(ins, `b2-m${i}`, 1000 + i, 0, 100 * i);
+      grep(ins, 'b2-high', NOW, 0, 8000);            // exactly --now: the second largest
+    });
+    // 21 rows 100..1900, 8000, 9000: rank ceil(0.95 * 21) = 20 is 8000.
+    expect(report(nowArgs(f, '--w1f-since', '1000')).w1f_grep_p95_ms).toBe(8000);
+    // CONTROL: without the row at --w1f-since, or without the row at --now, 20 rows read rank 19: 1900.
+    const all = rowsOf(f.db, BASE_W1F + ' AND ts_ms >= 1000 AND ts_ms <= ' + String(NOW));
+    expect(all.length).toBe(21);
+    expect(nearestRank95(all)).toBe(8000);
+    expect(nearestRank95(rowsOf(f.db, BASE_W1F + ' AND ts_ms > 1000 AND ts_ms <= ' + String(NOW))), 'CONTROL: an exclusive lower bound').toBe(1900);
+    expect(nearestRank95(rowsOf(f.db, BASE_W1F + ' AND ts_ms >= 1000 AND ts_ms < ' + String(NOW))), 'CONTROL: an exclusive upper bound').toBe(1900);
+  });
+
+  it('(d2) ticks at one ts_ms are ordered by tick_id: the later insertion is the later tick', () => {
+    const f = cp39dStore((ins) => {
+      tick(ins, NOW - 3 * HOUR, 0, 100);          // Ta: the store's first tick
+      tick(ins, NOW - 2 * HOUR, 3, 2000);         // P: tick_id 2, a catch-up
+      tick(ins, NOW - 2 * HOUR, 0, 3000);         // Q: tick_id 3, the same ts_ms; its predecessor by tick_id is P
+      tick(ins, NOW - 1 * HOUR, 0, 4000);         // R: its predecessor is Q
+    });
+    // By (ts_ms, tick_id): Ta, P, Q, R. Q follows P (behind 3), so only R counts: {4000}.
+    expect(report(nowArgs(f)).w1b_lag_p95_ms).toBe(4000);
+    // CONTROL: the tie broken the other way (Ta, Q, P, R) counts Q (after Ta) and not R (after P): {3000}.
+    const reversed = rowsOf(f.db,
+      'SELECT lag_ms AS v FROM (SELECT ts_ms, lag_ms, files_behind, LAG(files_behind) OVER (ORDER BY ts_ms, tick_id DESC) AS prev_behind '
+      + 'FROM ticks) WHERE files_behind = 0 AND prev_behind = 0 AND lag_ms IS NOT NULL AND ts_ms > ? AND ts_ms <= ?',
+      NOW - 7 * DAY, NOW);
+    expect(nearestRank95(reversed), 'CONTROL: the opposite tiebreak reads a different tick').toBe(3000);
+  });
+});

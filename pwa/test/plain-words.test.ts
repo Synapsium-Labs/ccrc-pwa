@@ -9,13 +9,17 @@
 //
 // WHAT IT SCANS, by POSITION and never by shape (a class string that happens to say "pane" is not copy):
 //   - JSX text;
-//   - the string values of the attributes `aria-label`, `title`, `placeholder`, `alt`, `label`, `sublabel` and `kicker`;
+//   - the string values of the attributes `aria-label`, `title`, `placeholder`, `alt`, `label`, `sublabel`, `kicker` and `headline`;
 //   - a string that is a parameter's default (`function H({ kicker = '…' })`);
 //   - a string in a JSX child expression (`{cond ? 'a' : 'b'}`);
 //   - sentence constants: a top-level `const` holding a string, a template, or an arrow that returns one (exported or
 //     not: a private constant is rendered all the same), and a top-level function's returned strings;
-//   - the sentence values of a `Record` table (a top-level const typed `Record<…>`);
-//   - the first argument of `toast(…)`, which is a sentence the operator reads.
+//   - the sentence values of a `Record` table (a top-level const typed `Record<…>`), at any depth under a value that is
+//     itself an object or an array (`STATUS_GROUPS`' `{ order, label, folds }` keeps its `label` one level down);
+//   - the first argument of `toast(…)`, which is a sentence the operator reads;
+//   - `api.ts` only: the Error literal in the returned API object's `projects` method, which reports a malformed
+//     project-list response. The two `wrong-representation` Errors in the docs loaders are internal machine
+//     discriminants, so this position does not read them.
 // It never scans `className`, `data-*`, object keys, import specifiers, route literals or comments.
 //
 // WIDER THAN THE PLAN'S LIST, ON PURPOSE (D-6325, T1b; T3a and T3d extend this file and inherit the choice). The plan
@@ -30,15 +34,17 @@
 // WHOLE WORDS, case-insensitive, except the exact lowercase literal `claude is asking` (the sentence-case
 // `Claude is asking` is the new kicker and is right). A word leaves the list only by a change that says why.
 //
-// THE FILES: the five an ask surface's words live in, plus `lib/refusalWords.ts`'s two `dialog-open` sentences, which the
-// composer says when an ask is up (read, not edited: they already pass).
+// THE FILES: the five ask-surface word homes, `lib/refusalWords.ts`'s two `dialog-open` sentences which the composer
+// says when an ask is up, and `lib/api.ts`'s project-list Error. The docs loaders' internal machine discriminants stay out.
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import path from 'node:path';
 import ts from 'typescript';
 import { isSpecifier, parseTs } from './literalWalker';
 
 const SESSION = path.join(import.meta.dirname, '..', 'src', 'session');
-const API = path.join(import.meta.dirname, '..', 'src', 'lib', 'refusalWords.ts');
+const REFUSAL_WORDS = path.join(import.meta.dirname, '..', 'src', 'lib', 'refusalWords.ts');
+const API = path.join(import.meta.dirname, '..', 'src', 'lib', 'api.ts');
 
 /** The words an operator never reads, each with what is said instead and why. */
 const FORBIDDEN: readonly { readonly word: RegExp; readonly name: string; readonly say: string; readonly why: string }[] = [
@@ -59,12 +65,32 @@ const FORBIDDEN: readonly { readonly word: RegExp; readonly name: string; readon
     why: 'one word for one thing: the terminal is what the operator opens, and "pane" is its tmux name',
   },
   {
-    word: /\bCoordinator row\b/i, name: 'Coordinator row', say: 'the coordinator\'s name, in a held line',
-    why: 'a registry word; the ask surface says who may answer first in a sentence',
+    word: /\bCoordinator row\b/i, name: 'Coordinator row', say: 'the coordinator\'s name, in a held line; "Automatic" in the class chooser',
+    why: 'a registry word; the ask surface says who may answer first in a sentence, and the chooser names the routing matrix\'s pick',
   },
   {
     word: /\bhot-file\b/i, name: 'hot-file', say: 'what the file holds',
     why: "the hook's file name for its live state; never a word for the operator",
+  },
+  {
+    word: /\bhot files\b/i, name: 'hot files', say: 'Claimed files',
+    why: "the hook's internal name for contested paths; the operator sees files a session has claimed",
+  },
+  {
+    word: /\bmixed\b/i, name: 'mixed', say: 'several accounts',
+    why: 'a word for a disagreement that does not say what disagrees; the card says the accounts differ',
+  },
+  {
+    word: /\bAttention\b/i, name: 'Attention', say: 'Needs you',
+    why: 'two words for one bucket: the group heads and the chips say Needs you, and so does the rest of the screen',
+  },
+  {
+    word: /\bDead\b/i, name: 'Dead', say: 'Exited',
+    why: "one word with the row's state word: a row that is gone reads exited, so its bucket does too",
+  },
+  {
+    word: /\bunseen\b/i, name: 'unseen', say: 'new, as in "4 new"',
+    why: 'a count of what the operator has not looked at is a count of what is new; the chip says "4 new"',
   },
   {
     // Case-SENSITIVE on purpose: the lowercase literal was the old kicker's source text; the kicker is sentence case now.
@@ -84,6 +110,20 @@ function leaves(expr: ts.Node | undefined): ts.Node[] {
   if (ts.isConditionalExpression(expr)) return [...leaves(expr.whenTrue), ...leaves(expr.whenFalse)];
   if (ts.isBinaryExpression(expr)) return leaves(expr.right);
   return [];
+}
+
+/** `leaves`, and every string under an object literal's property values or an array's elements at any depth: a Record
+ *  table whose value is a small record (`STATUS_GROUPS`' `{ order, label, folds }`) keeps its sentence one level down. */
+function nestedLeaves(expr: ts.Node | undefined): ts.Node[] {
+  if (expr === undefined) return [];
+  if (ts.isParenthesizedExpression(expr) || ts.isAsExpression(expr) || ts.isSatisfiesExpression(expr)) {
+    return nestedLeaves(expr.expression);
+  }
+  if (ts.isObjectLiteralExpression(expr)) {
+    return expr.properties.flatMap((p) => (ts.isPropertyAssignment(p) ? nestedLeaves(p.initializer) : []));
+  }
+  if (ts.isArrayLiteralExpression(expr)) return expr.elements.flatMap(nestedLeaves);
+  return leaves(expr);
 }
 
 /** The text a string-like node says. A template's expressions are dropped (they are values, not words). */
@@ -107,7 +147,7 @@ function returned(fn: ts.Node): ts.Node[] {
   return out;
 }
 
-const SENTENCE_ATTRS = new Set(['aria-label', 'title', 'placeholder', 'alt', 'label', 'sublabel', 'kicker']);
+const SENTENCE_ATTRS = new Set(['aria-label', 'title', 'placeholder', 'alt', 'label', 'sublabel', 'kicker', 'headline']);
 
 /** One operator-visible string: where it is, which position kind found it, and what it says. */
 export interface Visible {
@@ -144,7 +184,7 @@ export function visibleStrings(file: string, text?: string, only?: readonly stri
       if (!ts.isPropertyAssignment(p)) continue;
       const key = ts.isStringLiteral(p.name) || ts.isIdentifier(p.name) ? p.name.text : null;
       if (only !== undefined && (key === null || !only.includes(key))) continue;
-      for (const v of leaves(p.initializer)) add(v, 'a Record table value');
+      for (const v of nestedLeaves(p.initializer)) add(v, 'a Record table value');
     }
   };
 
@@ -170,6 +210,22 @@ export function visibleStrings(file: string, text?: string, only?: readonly stri
   // Top level only: constants, tables and functions. (A sentence assembled deep inside a component is a JSX position or
   // a toast, which the walk above reads; a bare local string is not copy.)
   if (only === undefined) visit(src);
+  if (only === undefined && path.basename(file) === 'api.ts') {
+    const projectErrors = (n: ts.Node): void => {
+      if (ts.isNewExpression(n) && n.expression.getText(src) === 'Error') {
+        for (const v of leaves(n.arguments?.[0])) add(v, 'an api.projects Error');
+      }
+      n.forEachChild(projectErrors);
+    };
+    const projectMethod = (n: ts.Node): void => {
+      if (ts.isPropertyAssignment(n) && n.name.getText(src) === 'projects'
+        && (ts.isArrowFunction(n.initializer) || ts.isFunctionExpression(n.initializer))) {
+        projectErrors(n.initializer.body);
+      }
+      n.forEachChild(projectMethod);
+    };
+    src.forEachChild(projectMethod);
+  }
   for (const st of src.statements) {
     if (only === undefined && ts.isFunctionDeclaration(st)) {
       for (const v of returned(st)) add(v, 'a returned sentence');
@@ -220,10 +276,21 @@ describe('the ask surfaces speak plainly (D-6325)', () => {
     },
   );
 
-  it("refusalWords.ts's two dialog-open sentences, which the composer says while an ask is up, pass too", () => {
-    const strings = visibleStrings(API, undefined, ['dialog-open']);
-    expect(strings.map((s) => s.text), 'both sentences are read').toHaveLength(2);
-    expect(offences(API, strings)).toEqual([]);
+  it("refusalWords.ts's dialog-open sentences and api.projects' error pass too", () => {
+    const refusalStrings = visibleStrings(REFUSAL_WORDS, undefined, ['dialog-open']);
+    const projectErrorStrings = visibleStrings(API).filter((s) => s.position === 'an api.projects Error');
+    const strings = [...refusalStrings, ...projectErrorStrings];
+    expect(strings.map((s) => s.text), 'all three sentences are read').toHaveLength(3);
+    expect(offences(REFUSAL_WORDS, refusalStrings)).toEqual([]);
+    expect(offences(API, projectErrorStrings)).toEqual([]);
+  });
+
+  it("reads api.projects' inline Error by position, so a forbidden replacement fails", () => {
+    const source = readFileSync(API, 'utf8');
+    const changed = source.replace("The server's project list could not be read.", 'The pane could not be read.');
+    expect(changed).not.toBe(source);
+    const errors = visibleStrings(API, changed).filter((s) => s.position === 'an api.projects Error');
+    expect(offences(API, errors)).toHaveLength(1);
   });
 
   it('reads sentences at all: every owned file has operator-visible strings', () => {
@@ -232,13 +299,34 @@ describe('the ask surfaces speak plainly (D-6325)', () => {
 
   it('keeps every forbidden word with a replacement and a reason', () => {
     expect(FORBIDDEN.map((f) => f.name)).toEqual([
-      'own-words', 'own words row', 'envelope', 'pane', 'Coordinator row', 'hot-file', 'claude is asking',
+      'own-words', 'own words row', 'envelope', 'pane', 'Coordinator row', 'hot-file', 'hot files', 'mixed', 'Attention', 'Dead', 'unseen',
+      'claude is asking',
     ]);
     for (const f of FORBIDDEN) {
       expect(f.say.length, f.name).toBeGreaterThan(3);
       expect(f.why.length, f.name).toBeGreaterThan(20);
     }
   });
+});
+
+// The fleet list's words (D-6331, T3a): the card head, the claims strip and the class chooser, in both places it lives.
+// The bucket chips' files are read too (BucketBar.tsx, statusGroups.ts, markSeen.ts), and Instrument's FleetTable.tsx, whose group heads speak the same vocabulary.
+const SRC = path.join(import.meta.dirname, '..', 'src');
+const FLEET_LIST = [
+  ...['ProjectCardHead.tsx', 'HotFilesStrip.tsx', 'NewSessionSheet.tsx', 'BucketBar.tsx', 'statusGroups.ts', 'markSeen.ts', 'classWords.ts'].map((f) => path.join(SRC, 'fleet', f)),
+  path.join(SRC, 'screens', 'FleetScreen.tsx'),
+  path.join(SRC, 'skins', 'instrument', 'FleetTable.tsx'),
+];
+
+describe('the fleet list speaks plainly (D-6331)', () => {
+  it.each(FLEET_LIST.map((f) => [path.relative(SRC, f), f] as const))(
+    '%s says none of the forbidden words where an operator reads',
+    (_name, file) => {
+      const strings = visibleStrings(file);
+      expect(strings.length, 'the scan reads its sentences').toBeGreaterThan(0);
+      expect(offences(file, strings), 'rewrite the sentence; the table above says what to say').toEqual([]);
+    },
+  );
 });
 
 describe('the scanner reads positions, not shapes', () => {
@@ -261,7 +349,10 @@ describe('the scanner reads positions, not shapes', () => {
     ['a sentence-returning arrow', 'export const S = (n: number) => `In the terminal ${n} on the pane`;'],
     ['a returned sentence', 'export function f(x: boolean) { if (x) return "own-words"; return "ok"; }'],
     ['a Record table value', 'const T: Readonly<Record<string, string>> = { a: "fine", b: "the envelope" };'],
+    ['a Record table value nested in an object', 'const T: Record<string, { order: number; label: string }> = { a: { order: 1, label: "fine" }, b: { order: 2, label: "the envelope" } };'],
+    ['a Record table value nested two deep', 'const T: Record<string, { a: { b: string[] } }> = { x: { a: { b: ["fine", "the pane"] } } };'],
     ['a toast', 'toast("claude is asking");'],
+    ['a headline attribute', 'export const A = (n: number) => <Strip headline={n === 1 ? "1 hot-file claim" : "fine"} />;'],
     ['a kicker attribute', 'export const A = () => <AskHeader kicker="claude is asking" />;'],
     ['a parameter default', 'export function H({ kicker = "claude is asking" }: { kicker?: string }) { return kicker; }'],
     ['a plain parameter default', 'export const H = (kicker: string = "the pane") => kicker;'],
@@ -295,4 +386,22 @@ describe('the scanner reads positions, not shapes', () => {
     expect(scan(code, ['dialog-open'])).toEqual([]);
     expect(scan(code)).toHaveLength(1);
   });
+});
+
+// The inspector's words (D-6334, T3d): the six sections and the routing line's word table.
+describe('the inspector speaks plainly (D-6334)', () => {
+  const SRC_ROOT = path.join(import.meta.dirname, '..', 'src');
+  const INSPECTOR = [
+    ...['TasksSection', 'MailSection', 'PrSection', 'RoutingSection', 'LaneSection', 'HistorySection']
+      .map((f) => path.join(SRC_ROOT, 'inspector', `${f}.tsx`)),
+    path.join(SRC_ROOT, 'session', 'routingLine.ts'),
+  ];
+  it.each(INSPECTOR.map((f) => [path.relative(SRC_ROOT, f), f] as const))(
+    '%s (the inspector) says none of the forbidden words where an operator reads',
+    (_name, file) => {
+      const strings = visibleStrings(file);
+      expect(strings.length, 'the scan reads its sentences').toBeGreaterThan(0);
+      expect(offences(file, strings), 'rewrite the sentence; the table above says what to say').toEqual([]);
+    },
+  );
 });

@@ -42,13 +42,26 @@
 //                                                         "at 900, 1280 and 1920 Instrument's list column draws no count line, …"
 // Row 8 (Step 0's `flex: none` removed) does not apply: Step 0 found the count whole at 900, so T2g adds no `flex: none`.
 // Rows 1, 4 and 7 also run in browser/instrument-desk.browser.test.ts (its own table).
+//
+// W2 Task T2d (desk-polish, D-6330): the rail's Inbox door counts what waits on the operator, as Refined's tab does.
+// MUTATION TABLE (plan Task T2d Step 3; RUN, each mutant on the working tree, this suite alone, then reverted):
+//   the rail's Inbox door left on the unread count .... "the rail's Inbox door says 'waiting for you' with Refined's count"
+// T2e's rows 1 and 2 under "T2e review R32, F5" above are retired: `unreadMailCount` is gone, and no door here counts
+// unread mail. The F5 case and its two mutants now live in mail-screen.test.tsx, against the Inbox's own row mark.
+//
+// W2 Task T2b (desk-polish, D-6328): no floating + at the desk; Instrument's round + mounts below 900 only.
+// MUTATION TABLE (plan Task T2b Step 3; RUN, each mutant on the working tree, this suite alone, then reverted):
+//   `PhoneFab` mounted at every width .................. "exactly one [data-command=new-session] at 900, 1280 and 1920"
+//   `PhoneFab` with its own `onClick` that navigates ... "at 390 the round + dispatches the new-session door event"
+//   `PhoneFab` gated on a narrower width (min-width: 600px) "at 899 the round + is the one New session door"
 import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import type { ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { INSTRUMENT, REFINED } from '@ccrc/ui';
-import type { FleetSession, NotifyEvent, RunSummary } from '../../shared/api';
+import type { AccountUsage, FleetSession, NotifyEvent, RunSummary } from '../../shared/api';
+import { api } from '../src/lib/api';
 import { poolLagText } from '../src/fleet/poolLag';
 import { fleetSession } from './fleetFixture';
 
@@ -136,8 +149,10 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
+  // The `api.accounts` spies the lanes-row cases add must not leak into the next case.
+  vi.restoreAllMocks();
   navigate('/');
-  act(() => useFleetStore.setState({ sessions: [], conn: 'connecting', notices: [], blocked: false, pools: null, feed: [] }));
+  act(() => useFleetStore.setState({ sessions: [], conn: 'connecting', notices: [], blocked: false, pools: null, feed: [], fleetFrameSeen: false }));
   resetAcks();
   act(() => { setSkin(REFINED); });
   localStorage.clear();
@@ -242,14 +257,13 @@ describe('the top bar', () => {
     expect(screen.getByRole('combobox', { name: 'Command palette' })).toBeInTheDocument();
   });
 
-  it('the top bar renders the wordmark first, then the crumbs, the command field, the meters door and +', () => {
+  it('the top bar renders the wordmark first, then the crumbs, the command field and +', () => {
     mount('/');
     const bar = topBar();
     const order = [
       bar.querySelector('[data-wordmark]'),
       bar.querySelector('.ins-crumbs'),
       within(bar).getByRole('button', { name: 'Search or run a command' }),
-      bar.querySelector('.accounts-compact[data-compact="led"]'),
       within(bar).getByRole('button', { name: 'New session' }),
     ];
     for (const el of order) expect(el).not.toBeNull();
@@ -329,8 +343,25 @@ describe('the status bar', () => {
   });
 });
 
+describe('the lanes row (T2c, D-6329)', () => {
+  it("the top bar's line holds no meters, and the header's second line is the lanes row", async () => {
+    const lane = (wrapper: string, five: number): AccountUsage => ({
+      wrapper, five, seven: five, ts: 1, fiveResetAt: null, sevenResetAt: null, fiveRolledOver: false, sevenRolledOver: false,
+      disabled: false, authDead: false,
+    });
+    const lanes = ['lane-a', 'lane-b', 'lane-c', 'lane-d', 'lane-e', 'lane-f', 'lane-g', 'lane-h'].map((w, i) => lane(w, 5 + i));
+    vi.spyOn(api, 'accounts').mockResolvedValue({ accounts: lanes, projected: { wrapper: 'lane-a', score: 0 }, roster: [] });
+    mount('/');
+    const line = topBar().querySelector<HTMLElement>('.ins-topbar')!;
+    await within(topBar()).findByText('lane-h');
+    expect(line.querySelector('.accounts-strip, .account-gauge, .meter')).toBeNull();
+    expect([...topBar().children]).toEqual([line, topBar().querySelector('.accounts-strip')]);
+    expect(topBar().querySelectorAll('.accounts-strip > .account-gauge')).toHaveLength(lanes.length);
+  });
+});
+
 describe('one instance per width', () => {
-  it('one banner stack and one set of lane meters at any width', () => {
+  it('one banner stack and one full strip at any width: at 900 the full strip, in the header', () => {
     for (const desk of [false, true]) {
       stubWidth(desk);
       act(() => useFleetStore.setState({ conn: 'down', sessions: [S] }));
@@ -338,9 +369,9 @@ describe('one instance per width', () => {
       render(<App />);
       const at = desk ? '900' : '899';
       expect(document.querySelectorAll('[data-banner="offline"]').length, `${at}: banner stacks`).toBe(1);
-      const meters = document.querySelectorAll('.accounts-compact, .accounts-strip');
-      expect(meters.length, `${at}: lane meters`).toBe(1);
-      expect(meters[0]!.matches('.accounts-compact[data-compact="led"]'), at).toBe(desk);
+      const meters = document.querySelectorAll('.accounts-strip');
+      expect(meters.length, `${at}: lanes`).toBe(1);
+      expect(meters[0]!.closest('header.shell-accounts') !== null, at).toBe(desk);
       // The rail and the status bar are desk parts: mounted at 900, absent at 899.
       expect(document.querySelectorAll('nav[aria-label="Primary"]').length, `${at}: rail`).toBe(desk ? 1 : 0);
       expect(document.querySelectorAll('footer.shell-status').length, `${at}: status bar`).toBe(desk ? 1 : 0);
@@ -365,8 +396,8 @@ function stubAt(width: number): void {
 
 /** The frame's doors, counted by what each one IS (its name), never by a class: the rail's and the list head's doors
  *  carry different names for one destination, and the meters' door to /accounts is not a second Accounts door. The
- *  rail's `Inbox` (`Inbox, N unread` with mail) and the list head's `Mail — N unread` are told apart, so a desk that
- *  has the second back, or a rail door that lost its count, is a different census (T2e fix round 1, F1). */
+ *  rail's `Inbox` (`Inbox, N waiting for you`) and the list head's `Mail — N waiting for you` are told apart, so a desk
+ *  that has the second back, or a rail door that lost its count, is a different census (T2e fix round 1, F1; T2d). */
 function doorCounts(): Record<string, number> {
   const named = [...document.querySelectorAll<HTMLElement>('[aria-label]')];
   const count = (re: RegExp): number => named.filter((el) => re.test(el.getAttribute('aria-label') ?? '')).length;
@@ -377,7 +408,7 @@ function doorCounts(): Record<string, number> {
     settings: count(/^Settings\b/),
     inbox: count(/^Inbox\b/),
     mail: count(/^Mail\b/),
-    unread: count(/\d+ unread/),
+    waiting: count(/\d+ waiting for you$/),
     bell: count(/^Notifications (on|off)$/),
   };
 }
@@ -413,7 +444,7 @@ describe('the desk (T2e): no second head in the list column, no empty fourth col
     for (const width of [900, 1280, 1920]) {
       stubAt(width);
       mount('/');
-      expect(doorCounts(), `${width}px, fleet`).toEqual({ wordmark: 1, docs: 1, accounts: 1, settings: 1, inbox: 1, mail: 0, unread: 0, bell: 1 });
+      expect(doorCounts(), `${width}px, fleet`).toEqual({ wordmark: 1, docs: 1, accounts: 1, settings: 1, inbox: 1, mail: 0, waiting: 0, bell: 1 });
       // The list column's head drops its chrome and, with no count line (T2g) and no lag in this fixture, is not drawn.
       expect(document.querySelector('.shell-nav .fleet-head'), `${width}px`).toBeNull();
       expect(document.querySelector('.shell-nav .fleet-head .wordmark'), `${width}px`).toBeNull();
@@ -423,79 +454,69 @@ describe('the desk (T2e): no second head in the list column, no empty fourth col
     // Below 900 nothing changed: the head holds its chrome, and the rail and the bar are not mounted.
     stubAt(899);
     mount('/');
-    expect(doorCounts(), '899px').toEqual({ wordmark: 1, docs: 1, accounts: 1, settings: 1, inbox: 0, mail: 1, unread: 0, bell: 1 });
+    expect(doorCounts(), '899px').toEqual({ wordmark: 1, docs: 1, accounts: 1, settings: 1, inbox: 0, mail: 1, waiting: 0, bell: 1 });
     expect(document.querySelector('.shell-nav .fleet-head .wordmark')).not.toBeNull();
   });
 
-  /** `n` unread mail records past the feed's ack, and one the count never counts (an interrupt record). */
-  function unreadFeed(n: number): NotifyEvent[] {
+  /** `n` sessions waiting on the operator and a held child (its question is with its coordinator, so it reads
+   *  `working`), past the first fleet frame, and two unread mail records, which no door counts (T2d, D-6330). */
+  function waitingFleet(n: number): FleetSession[] {
     const stamp = Date.now();
     act(() => { ack(FEED_ACK_KEY, stamp); });
+    const feed = [1, 2].map((seq): NotifyEvent => ({ seq, at: stamp + 60_000 + seq, kind: 'mail', sessionId: 'x', title: 'unread', body: '', runId: null }));
+    act(() => useFleetStore.setState({ feed, fleetFrameSeen: true }));
     return [
-      ...Array.from({ length: n }, (_, i): NotifyEvent => ({ seq: i + 1, at: stamp + 60_000 + i, kind: 'mail', sessionId: 'x', title: 'unread', body: '', runId: null })),
-      { seq: n + 1, at: stamp + 120_000, kind: 'interrupt', sessionId: 'x', title: 'interrupt · keycap', body: 'source=keycap outcome=sent', runId: null },
+      ...Array.from({ length: n }, (_, i) => fleetSession({ id: `ask-${i}`, project: 'proj', bucket: 'attention' })),
+      fleetSession({ id: 'held-child', project: 'proj', bucket: 'working' }),
     ];
   }
 
-  it("at the desk with mail unread, the rail's Inbox door names and shows the count, and nothing else in the frame does", () => {
+  it("the rail's Inbox door says 'waiting for you' with Refined's count", () => {
     for (const width of [900, 1280, 1920]) {
       stubAt(width);
-      act(() => useFleetStore.setState({ feed: unreadFeed(2) }));
-      mount('/');
-      const door = within(rail()).getByRole('button', { name: 'Inbox, 2 unread' });
+      mount('/', waitingFleet(2));
+      const door = within(rail()).getByRole('button', { name: 'Inbox, 2 waiting for you' });
       expect(door, `${width}px`).toHaveAttribute('data-command', 'go-inbox');
       // The tooltip says the same as the name, and the pill prints the number.
-      expect(door.querySelector('.ins-rail-tip')?.textContent, `${width}px: tooltip`).toBe('Inbox, 2 unread');
-      expect(door.textContent, `${width}px: tooltip, then the count`).toBe('Inbox, 2 unread2');
-      // Nothing else in the frame names or draws an unread count: the list head's Mail door is gone at a desk.
-      expect(doorCounts(), `${width}px`).toEqual({ wordmark: 1, docs: 1, accounts: 1, settings: 1, inbox: 1, mail: 0, unread: 1, bell: 1 });
+      expect(door.querySelector('.ins-rail-tip')?.textContent, `${width}px: tooltip`).toBe('Inbox, 2 waiting for you');
+      expect(door.textContent, `${width}px: tooltip, then the count`).toBe('Inbox, 2 waiting for you2');
+      // Nothing else in the frame names or draws the count: the list head's Mail door is gone at a desk.
+      expect(doorCounts(), `${width}px`).toEqual({ wordmark: 1, docs: 1, accounts: 1, settings: 1, inbox: 1, mail: 0, waiting: 1, bell: 1 });
       expect(document.querySelector('.mail-badge'), `${width}px`).toBeNull();
       expect(document.querySelectorAll('.ins-rail-count, .mail-badge-count'), `${width}px: count pills`).toHaveLength(1);
       cleanup();
     }
+    // Refined's tab counts the same fleet the same way (R32's F1): one function, so no skin's door counts for itself.
+    act(() => { setSkin(REFINED); });
+    stubAt(1280);
+    mount('/', waitingFleet(2));
+    expect(screen.getByRole('button', { name: 'Inbox, 2 waiting for you' })).toHaveAttribute('data-command', 'go-inbox');
+    cleanup();
+    act(() => { setSkin(INSTRUMENT); });
     // The printed count is capped like the sibling doors' and the name carries the real number.
     stubAt(1280);
-    act(() => useFleetStore.setState({ feed: unreadFeed(120) }));
-    mount('/');
-    const capped = within(rail()).getByRole('button', { name: 'Inbox, 120 unread' });
-    expect(capped.textContent).toBe('Inbox, 120 unread99+');
+    mount('/', waitingFleet(120));
+    const capped = within(rail()).getByRole('button', { name: 'Inbox, 120 waiting for you' });
+    expect(capped.textContent).toBe('Inbox, 120 waiting for you99+');
   });
 
-  it('with no mail unread, the Inbox door draws no badge', () => {
+  it('with nobody waiting on the operator the Inbox door draws no badge, however much mail is unread', () => {
     for (const width of [900, 1920]) {
       stubAt(width);
-      mount('/');
+      mount('/', waitingFleet(0));
       const door = within(rail()).getByRole('button', { name: 'Inbox' });
       expect(door.textContent, `${width}px`).toBe('Inbox');
       expect(door.querySelector('.ins-rail-count'), `${width}px`).toBeNull();
       expect(document.querySelectorAll('.ins-rail-count, .mail-badge-count'), `${width}px: no count pill anywhere`).toHaveLength(0);
-      expect(doorCounts(), `${width}px`).toMatchObject({ inbox: 1, mail: 0, unread: 0 });
+      expect(doorCounts(), `${width}px`).toMatchObject({ inbox: 1, mail: 0, waiting: 0 });
       cleanup();
     }
-    // Interrupt records are not unread (the ack's own stamp is the next case's).
+    // Before the first fleet frame the rows are the offline snapshot's, not a fact: the door says nothing yet.
     stubAt(1280);
-    act(() => useFleetStore.setState({ feed: unreadFeed(0) }));
-    mount('/');
+    const sessions = waitingFleet(2);
+    act(() => useFleetStore.setState({ fleetFrameSeen: false }));
+    mount('/', sessions);
     expect(within(rail()).getByRole('button', { name: 'Inbox' }).textContent).toBe('Inbox');
-  });
-
-  it('mail at the ack\'s own stamp, or before it, is not unread: the Inbox door draws no badge', () => {
-    stubAt(1280);
-    const stamp = Date.now();
-    act(() => { ack(FEED_ACK_KEY, stamp); });
-    const mail = (seq: number, at: number): NotifyEvent => ({ seq, at, kind: 'mail', sessionId: 'x', title: 'seen', body: '', runId: null });
-    // The ack is the watermark: a record AT it was seen (`isUnseenAt` is a strict `>`), and so was an earlier one.
-    act(() => useFleetStore.setState({ feed: [mail(1, stamp), mail(2, stamp - 1_000)] }));
-    mount('/');
-    const door = within(rail()).getByRole('button', { name: 'Inbox' });
-    expect(door.textContent).toBe('Inbox');
-    expect(door.querySelector('.ins-rail-count')).toBeNull();
-    expect(doorCounts()).toMatchObject({ inbox: 1, unread: 0 });
-    cleanup();
-    // One millisecond past the ack is unread, so the pin above is the boundary and not a feed that counts nothing.
-    act(() => useFleetStore.setState({ feed: [mail(1, stamp), mail(3, stamp + 1)] }));
-    mount('/');
-    expect(within(rail()).getByRole('button', { name: 'Inbox, 1 unread' })).toBeInTheDocument();
   });
 
   it('the pool-lag readout shows once at the desk when the epochs differ', () => {
@@ -580,5 +601,48 @@ describe('the desk (T2g): one count, in the status bar', () => {
     mount('/', []);
     expect(document.querySelector('.shell-nav section[aria-label="Fleet"]')).not.toBeNull();
     expect(document.querySelector('.shell-nav .fleet-head')).toBeNull();
+  });
+});
+
+// ---- Desk polish, T2b (D-6328) ----------------------------------------------------------------------------------
+
+describe('no floating + at the desk (T2b, D-6328)', () => {
+  it('exactly one [data-command=new-session] at 900, 1280 and 1920', () => {
+    for (const width of [900, 1280, 1920]) {
+      stubAt(width);
+      mount('/');
+      const doors = document.querySelectorAll('[data-command="new-session"]');
+      expect(doors, `${width}px: marked doors`).toHaveLength(1);
+      expect(topBar().contains(doors[0]!), `${width}px: inside the top bar`).toBe(true);
+      // By name, so the legacy unmarked `.fab` counts as a second door.
+      expect(screen.getAllByRole('button', { name: 'New session' }), `${width}px: buttons named New session`).toHaveLength(1);
+      expect(document.querySelector('.fab'), `${width}px: no floating +`).toBeNull();
+      cleanup();
+    }
+  });
+
+  it('at 390 the round + dispatches the new-session door event', async () => {
+    stubAt(390);
+    mount('/');
+    const { DOOR_EVENT } = await import('../src/command/door');
+    const seen: string[] = [];
+    const listen = (e: Event): void => { seen.push((e as CustomEvent<string>).detail); };
+    window.addEventListener(DOOR_EVENT, listen);
+    const buttons = screen.getAllByRole('button', { name: 'New session' });
+    expect(buttons).toHaveLength(1);
+    expect(buttons[0]).toHaveClass('fab');
+    expect(buttons[0]).toHaveAttribute('data-command', 'new-session');
+    fireEvent.click(buttons[0]!);
+    expect(seen).toEqual(['new-session']);
+    window.removeEventListener(DOOR_EVENT, listen);
+  });
+
+  it('at 899 the round + is the one New session door', () => {
+    stubAt(899);
+    mount('/');
+    const doors = document.querySelectorAll('[data-command="new-session"]');
+    expect(doors).toHaveLength(1);
+    expect(doors[0]).toHaveClass('fab');
+    expect(screen.getAllByRole('button', { name: 'New session' })).toHaveLength(1);
   });
 });

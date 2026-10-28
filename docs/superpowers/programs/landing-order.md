@@ -19,14 +19,15 @@ merges, workers never do, and an unattended landing is the goal when every safeg
 |---|---|---|---|---|---|---|
 | 1 | 1 | worker clause 16 and coordinator clause 15 with their pins and count words; the PreToolUse advisory on syncs of `main`; `ccrc restamp`; `update-branch` pinned absent from executable source and counted in the skills | skills, hook (fleet box) | — | #231 | merged 2026-10-02 (`10f32755`); run 218 closed; deploy AGENT-FIRST by the update mechanism |
 | 2 | 2, repository code | `ci.yml` gains `merge_group`, the macOS skip and a `pull_request` concurrency group; `pr-state`'s `queue` field; the dequeue feed event and coordinator mail; the hook denies `gh pr merge` to workers; clause 15's native-queue sentence | ccd, hook, server | wave 1; child-reclamation wave 3 | #234 | merged 2026-10-03 (`0087a045`); run 238 closed; deploy via ccrc's updater (fleet-first measured safe); Task 7's proof run 2026-10-20 stopped by stop rule 3 (Decisions, 2026-10-20 13:00); its re-run on 2026-10-21 turned the queue on, and it stays on by the operator's ruling after stop rule 6 (Decisions, 2026-10-21 12:15) |
-| 2b | 2, the bypass deny | the hook denies `--admin` and a `gh api` merge call in every fleet session | hook | the operator's queue ruleset, approvals at 0, and the proof run; wave 3d | — | to plan, after wave 3e's plan (spec §11, item 12) |
+| 2b | 2, the bypass deny | the hook denies `--admin` and a `gh api` merge call in every fleet session | hook | the operator's queue ruleset, approvals at 0, and the proof run; wave 3d; wave 3e | plan #1678 | planned 2026-10-27 (`docs/superpowers/plans/2026-10-27-landing-order-wave2b-bypass-deny.md`, D-7111 to D-7116); dispatches after wave 3e merges and the operator confirms its fleet-wide reach |
 | 3 | — | Task 7's preconditions (the payload cap, the quote-dense timing pin), wave 2's residue, Task 7's runbook text | hook, ccd, doctor | wave 2 | #248 | merged 2026-10-07 (`9a255a74`); run 250 closed; deploy AGENT-FIRST via ccrc's updater, then Task 7; run 250 (`ccrc-pwa-still-delta`); block 3906–3915 + 3916–3920 |
-| 3b | 3 | `ccd-land-probe`, the read-only conflict radar, and its opt-in mirror | ccd, deploy | wave 3 | — | run 310 open (planned; the run's wave 4), block 4326–4335; to plan |
+| 3b | 3 | `ccd-land-probe`, the read-only conflict radar, and its opt-in mirror | ccd, deploy | wave 3 | plan #1678 | planned 2026-10-27 (`docs/superpowers/plans/2026-10-27-landing-order-wave3b-conflict-radar.md`); run 310 (the run's wave 4) dispatched 2026-10-27 on `ccrc-pwa-clear-ridge`, block 4326–4335 |
 | 3c | — | Task 7's re-run preconditions: `pr-state`'s per-workspace git cost, a sweep failure the server reports, the two suite flakes the queue turned into removals, the runbook's re-run changes | ccd, server, tests, plan text | wave 2's proof run | plan #974; #1046 | merged 2026-10-21 (`4ce282f8`) after reviews 718, 724 and 726 and two fix rounds; run 710 (the run's wave 5) closed; its block of 10 defined in the plan; deployed 2026-10-21 by ccrc's updater, fleet box first (v0.0.508); Task 7's re-run followed (Decisions, 2026-10-21 12:15) |
 | 3d | 2, the lane | the dequeue lane treats the removal GitHub records at a successful queue merge as no dequeue: `pr-state` reads the removal's `reason`, and a removal whose reason is `merged` reads `landed`, never `dequeued`; any other reason, or none, is still announced on its first read; no two-sweep wait, no new wire field, no reason allowlist; and the `merged` feed record is kept once per workspace and PR across a server restart (stop rule 6; Decisions, 2026-10-21 14:49) | server, ccd | Task 7's re-run | plan #1088; #1096 | merged 2026-10-21 (`e173c1aa`) through the merge queue after review 759, with no fix round; run 751 (the run's wave 6) closed; three numbers of its block of 10 defined in the plan; deploy via ccrc's updater (either box first, the fleet box by default), then the live proof (Decisions, 2026-10-21 19:17) |
 | 3e | 2, the landing route | the coordinator reads the repository's own rules before each landing: the merge method from every effective `pull_request` rule and the merge settings, the required checks from the rulesets and classic protection (confirmed absence apart from an unreadable read), three routes (the native queue, a gated direct merge, an ungated direct merge), a merge-commits-only repository landing with `--merge` at the reviewed head, and every conflict a stop (spec §5.7) | skills, tests | wave 3d | plan #1121 | §5.7's text approved 2026-10-22; planned 2026-10-22 in `docs/superpowers/plans/2026-10-22-landing-order-wave3e-landing-route.md` (Decisions, 2026-10-22 07:13); run 774 (the run's wave 7), PR #1127; fix rounds 1–5; at `awaiting-review` on `04745c73`, its fresh review held by the review-round cap (Decisions, 2026-10-27 08:20) |
 | 3f | — | the server's checks word reads a queued or running check run as `pending`, not `pass`; the cost of the 30 s sweep cadence is measured in its plan (spec §5.7.8) | server | wave 3e | — | ruled 2026-10-21; to plan |
-| 4 | 4 | the opted-in lineage table; `lineage-unmeasured` | server | wave 3 | — | to plan |
+| 4 | 4 | the opted-in lineage table; `lineage-unmeasured` | server | waves 3b and 3e | plan #1678 | planned 2026-10-27 (`docs/superpowers/plans/2026-10-27-landing-order-wave4-lineage-acceptance.md`, D-7102 to D-7110); dispatches after waves 3b and 3e merge; arming it is the operator's |
+| 4b | 3, the console half | the radar's server reader, its wire fields and the PWA conflict chip (moved out of wave 3b, D-4329) | server, pwa | wave 4 | — | to plan |
 | 5 | 5 | the landing line: entries, intents, holds, `land-candidate`, the coordinator's pinned merge, the PWA doors | server, ccd, skills, pwa | waves 2–4; session-continuity wave 1 | — | to plan |
 
 **A fresh workspace per wave (R4) is child-reclamation's.** The spec first drew it as step 6 of the wave lifecycle,
@@ -990,6 +991,31 @@ carries it (spec §5.1, amended 2026-09-24).
   - **Held.** Opening the fresh review was refused `cap-review-rounds` (4 rounds against a cap of 3) on 2026-10-26 at
     15:27 UTC and again on 2026-10-27 at 08:08. The ask is the operator's: the console lifts a run's cap. The worker
     keeps the branch frozen, and nothing lands until a fresh independent review is accepted.
+- **2026-10-27 11:06 — waves 3b, 4 and 2b planned and approved; wave 3b dispatched.**
+  - **The plans** landed together in #1678 (`89472477`):
+    - wave 3b, the conflict radar, `docs/superpowers/plans/2026-10-27-landing-order-wave3b-conflict-radar.md`, on run 310's
+      block (4326 to 4334 defined, 4335 spare). The radar's console half, its server reader, wire fields and PWA chip,
+      moves to a new wave 4b (D-4329);
+    - wave 4, lineage acceptance, `docs/superpowers/plans/2026-10-27-landing-order-wave4-lineage-acceptance.md`, D-7102 to
+      D-7110;
+    - wave 2b, the bypass deny, `docs/superpowers/plans/2026-10-27-landing-order-wave2b-bypass-deny.md`, D-7111 to D-7116.
+  - **Their numbers.** Waves 4 and 2b have no run yet, so their blocks were minted when their plans landed, not at a
+    run's open: `dtbd.test.ts` refuses a plan that carries a `D-TBD` placeholder. A departure found while executing
+    either plan is numbered when it is ruled.
+  - **Review.** Each plan had three Opus lenses with a Sonnet refuter per finding, then an Opus recheck after each
+    revision until a pass found nothing important. The operator approved all three on 2026-10-27.
+  - **Wave 3b dispatched** as run 310 on a fresh child, `ccrc-pwa-clear-ridge`. Its Task 4 edits `README.md`, which
+    wave 3e's worker holds, so that task waits for the claim or for its holder's consent.
+  - **What waits.** Wave 4 dispatches after waves 3b and 3e merge; arming it is the operator's (`lineage=on` in the
+    project's landing conf). Wave 2b dispatches after wave 3e, once the operator confirms its fleet-wide reach: the
+    coordinator measured that reach privately on 2026-10-27, and the findings stay out of this file. Wave 3b's live
+    proof needs the operator to write the project's landing conf with `lineage=off`.
+  - **Noted for wave 2b's brief:** the deny refuses `--admin=false` with the other spellings, with a reason that says
+    to drop the flag. Refusing a harmless spelling is the safe direction.
+  - **Wave 3e is still held.** The operator reported lifting run 774's review-round cap, but at 11:05 the server still
+    read it as not lifted, so the fresh review was not opened.
+  - **#311**, the old ledger branch, was closed unmerged and its branch deleted. Its records landed through #1674,
+    #1675 and #1676.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
   this file until a plan on the same ref defines it (`deviation-refs.test.ts`).
 

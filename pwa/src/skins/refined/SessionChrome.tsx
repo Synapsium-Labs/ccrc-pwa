@@ -10,12 +10,11 @@
 // PR sheet are `SessionFlows`', opened through `useSessionFlows()`), and any Escape binding (the session screen's
 // `useEscapeInterrupt`). So a skin switch that replaces this part loses nothing that is open.
 import type { ReactNode } from 'react';
-import { TypedLabel } from '@ccrc/ui';
 import {
-  HeaderBack, HeaderChips, HeaderCoordination, HeaderDoors, useSessionChromeInputs, useSessionHeaderView,
+  HeaderBack, HeaderChips, HeaderCoordination, HeaderCrumbText, HeaderDoors, HeaderTitleText, useSessionChromeInputs,
+  useSessionHeaderView,
 } from '../../session/SessionHeader';
 import { useSessionFlows } from '../../session/SessionFlows';
-import { metaChipTone } from '../../session/chipTones';
 
 export function SessionChrome(): ReactNode {
   const inputs = useSessionChromeInputs();
@@ -24,10 +23,13 @@ export function SessionChrome(): ReactNode {
   return (
     <header className="chat-head ref-session-head">
       <HeaderBack onBack={inputs.onBack} />
-      {/* The title row holds the name alone, so it stays one line beside the doors; the crumb (the workspace's branch)
-          is the rail's first chip after the status, in full, where the shared header wraps it under the name. */}
+      {/* The title row holds the session's name beside the doors, so it stays one line; the project is a small crumb
+          above it (desktop polish T3c, D-6333), where the shared header draws it before the title. */}
       <div className="ref-session-title">
-        <h1 className="chat-title">{view.title}</h1>
+        <HeaderCrumbText view={view} className="chat-crumb ref-session-crumb" />
+        <h1 className="chat-title">
+          <HeaderTitleText view={view} />
+        </h1>
       </div>
       <HeaderDoors view={view} openMenu={openMenu} />
       {/* `chat-meta` for the status line's and the details door's shared rules; `ref-chip-rail` makes it one
@@ -35,16 +37,7 @@ export function SessionChrome(): ReactNode {
       <div className="chat-meta ref-chip-rail">
         <HeaderChips
           view={view}
-          afterStatus={(
-            <>
-              {view.crumb !== null && (
-                <span className={metaChipTone('plain')} title={view.crumb}>
-                  <TypedLabel className="chat-crumb" text={view.crumb} />
-                </span>
-              )}
-              <HeaderCoordination view={view} />
-            </>
-          )}
+          afterStatus={<HeaderCoordination view={view} />}
         />
       </div>
     </header>

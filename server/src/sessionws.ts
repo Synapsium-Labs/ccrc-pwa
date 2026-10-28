@@ -78,7 +78,8 @@ export class SessionStream implements FeedSubscriber {
   private seenDialog: DialogSeen = { id: null, ask: null, raw: null };
   /** `applyHook`'s keep decision for an aged envelope (D-6324). */
   private agedKeep: AgedKeep = NO_AGED_KEEP;
-  /** The feed's last look at the pane failed and held the menu (under FAILED_CAPTURES_CLEAR): no reading (D-6324). */
+  /** The feed's last look at the pane this stream judged: whether it failed and held the menu (under
+   *  FAILED_CAPTURES_CLEAR). An early return in `applyDialog` keeps the previous reading's value (D-6324). */
   private captureHeld = false;
   /** The session's one reader of the pane, the plan, the hookstate and the mail (ARCH-52); null until `start()`. */
   private feed: SessionFeed | null = null;

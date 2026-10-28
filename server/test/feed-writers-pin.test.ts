@@ -52,7 +52,7 @@ import type { ChildReclaimKeptAttention, ChildReclaimLeafKept } from '../src/chi
 import { expireArchived, recordExpireFeed, type ExpireArchivedDeps } from '../src/coord/expireArchived.js';
 import { recordDeadCoordinatorFeed } from '../src/coord/endDeadCoordinator.js';
 import type { DeadCoordinatorActOutcome } from '../src/deadCoordinator.js';
-import { stopDonePass, type StopDoneSweepDeps } from '../src/stopDoneSweep.js';
+import { stopDonePass, type StopDoneSweepDeps } from '../src/sleepLane.js';
 import { STOP_DONE_GRACE_MS } from '../src/stopDone.js';
 import { CHILD, PARENT, hookInput, requestBody, standardFixture, type Approvals } from './approvalsHarness.js';
 import {
@@ -1098,6 +1098,7 @@ describe("stopDoneSweep.ts's row (stopDonePass → recordFeed): recorded always,
       rowAtAct: async () => ({ ok: true, row: row as never }),
       serial: async (fn) => fn(),
       queueRun: async (_id, fn) => fn(),
+      listing: async () => [],
       startedAt: NOW - PRESENCE_OPEN_TTL_MS - 60_000,
       now: () => NOW,
     };

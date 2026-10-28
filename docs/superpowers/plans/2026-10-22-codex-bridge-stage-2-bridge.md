@@ -1904,7 +1904,8 @@ follows only by the operator's ruling, and LiteLLM's removal is Stage 4.
 
 Every entry carries the number the controller issued (D-6410 to D-6431 at plan time, D-6804 to D-6839 for wave 1,
 D-6862 to D-6907 and D-6921 for wave 2, D-6944 to D-6963 for wave 3, D-6994 to D-6998 for the follow-up to the
-suite's macOS failures, D-7083 to D-7089, D-7093 and D-7094 for what the first live step and the flip measured). A further
+suite's macOS failures, D-7083 to D-7089, D-7093, D-7094, D-7119 and D-7120 for what the first live step, the flip and the rollout measured,
+and D-7143 and D-7144 for the tool-change blocks honoured and the second lane's switch). A further
 departure found while executing is written `D-TBD-<slug>` and named in the task's report.
 
 ### D-6410 — `end_turn:false` is continued upstream, never `pause_turn`
@@ -3862,7 +3863,7 @@ departure found while executing is written `D-TBD-<slug>` and named in the task'
 
 - **Departs from:** Task 5's `KNOWN["betaValue"]`, which explained `effort-2025-11-24` only.
 - **What changed:** Seven of the nine `anthropic-beta` values Claude Code 2.1.310 sent lane-b after the flip join
-  `KNOWN["betaValue"]` (`ccd/codexbridge/known.py:100-134`), each with a comment saying what it gates and why the
+  `KNOWN["betaValue"]` (`ccd/codexbridge/known.py:111-145`), each with a comment saying what it gates and why the
   bridge need not act; the two tool-change betas are named there as left out on purpose (:128-133). The bridge never
   forwards a beta upstream (`backend.build_headers`, `ccd/codexbridge/backend.py:160-173`); inbound counts each value
   as a name (`ccd/codexbridge/inbound.py:550-553`). Sources: Anthropic's documentation
@@ -3933,7 +3934,7 @@ departure found while executing is written `D-TBD-<slug>` and named in the task'
   string, counts `unrecognised` in its place (`unrecognised-block`, `tool_addition-block.unrecognised`). Names only:
   no tool name, description, schema or text of a block is counted. The names are NOT in `known.KNOWN`, on purpose,
   so each stays in `unexplained.requestField` and the doctor's drift WARN names it the day it first arrives; the
-  function's docstring and the betas' comment (`ccd/codexbridge/known.py:128-133`) say so. What is sent is byte for
+  function's docstring and the betas' comment (`ccd/codexbridge/known.py:139-144`) say so. What is sent is byte for
   byte as before: `_texts` alone still builds the entry's item. Pins, in `server/test/codex-bridge-inbound.test.ts`:
   - :136: an entry holding a text, a `tool_removal` by reference, a by-value `tool_addition` and a by-reference one
     counts exactly `tool_removal-block`, `tool_addition-block`, `tool_addition-block.tool_definition`,
@@ -3955,3 +3956,184 @@ departure found while executing is written `D-TBD-<slug>` and named in the task'
   read them, and a request carrying the blocks is invisible exactly as D-7093 says. A block type Claude Code adds
   later is counted under its own `<type>-block` name and named by the doctor as drift, which is the intent. Counting
   adds names to `requestField`, bounded by `stats.NAMES_MAX` like every family, and changes no outcome.
+
+### D-7119 — the backend's `keepalive` event is explained
+
+- **Departs from:** `known.py`'s `KNOWN["eventType"]`, which held the reducer's ignored events and the two Codex skips
+  only, and D-7088's list of what the answers showed: step 2's five short requests carried no `keepalive`, which
+  appeared only on real traffic after the flip (4 events in the first 471 message requests on lane-b, counted by name
+  in `bridge.stats.json`, and named by the doctor's `codex` WARN once #1673 rolled out, D-7120).
+- **What changed:** `keepalive` joins `KNOWN["eventType"]` through a set of its own, `_BACKEND_EVENTS`
+  (`ccd/codexbridge/known.py:55-64`, joined at :75), beside `_CODEX_SKIPPED_EVENTS`; its comment says what was
+  measured of the event (its name and count only) and why the bridge need not read it. Nothing else changes: the
+  bridge already reads nothing from the event (`reducer.Reducer.feed` reaches its last arm and only names it,
+  `ccd/codexbridge/reducer.py:247-248`), and its arrival already resets the bridge's idle bound like any parsed
+  event (`server.py#_Request._reduce` sets
+  `last_event` for each, `ccd/codexbridge/server.py:821-822`, against `backend.IDLE_TIMEOUT_S` at :814 and :837).
+  Upstream, re-read at openai/codex `rust-v0.164.0` (`codex-rs/codex-api/src/sse/responses.rs`):
+  `process_responses_event` has no arm for `keepalive`: an event whose data carries `type: "keepalive"` reaches its
+  default arm, which only `debug!`-logs "unhandled responses event" and returns nothing, and a frame named `keepalive`
+  whose data has no `type` fails Codex's parse into `ResponsesStreamEvent` and is skipped. The bridge cannot tell the
+  two shapes apart: it takes an event's type from its data and, failing that, from the SSE `event:` name
+  (`ccd/codexbridge/sse.py:144-146`), and it keeps no payload. Only that file's kind-independent readers
+  (`response_model()` from `headers`, `safety_buffering()`) run on every event, and they would act on a keepalive
+  only through fields nothing has measured it carrying. And `process_sse_with_treatment` bounds every wait with
+  `timeout(idle_timeout, stream.next())`, so any event, a keepalive included, resets Codex's idle timeout too. A code
+  search of openai/codex for `keepalive` finds only websocket, relay and MCP keepalives, nothing on the Responses
+  route. Pins, in `server/test/codex-bridge-count-stats.test.ts`: :263 counts `keepalive` beside the fixture event
+  `response.fx_new_event` (the positive control) and expects both counted and `unexplained.eventType` to hold only the
+  fixture name; :336 pins `keepalive` in the `known` op's `eventType`. Row: `_BACKEND_EVENTS` emptied, the :263 case
+  reds (`expected [ Array(2) ] to deeply equal [ 'response.fx_new_event' ]`); restored from a copy, sha256 compared OK.
+- **Why:** The 7-day watch's last criterion is no unexplained name in the doctor's WARN beyond the two tool-change betas
+  (D-7093). `keepalive` yields no event in Codex and is only named by the bridge, so naming it as drift every day would
+  only hide a real new name behind it.
+- **Cost if wrong:** If a future backend gives `keepalive` a payload that matters, the bridge still reads nothing from
+  it and the doctor no longer names it. The name's count still moves in the stats file's `names.eventType`, so a
+  change in how often it arrives stays readable there.
+
+### D-7120 — the rollout of #1673, as measured
+
+- **Departs from:** D-7089's and D-7093's expectation that after the rollout the doctor's `codex` check names only the
+  two tool-change betas: it named a third, `eventType:keepalive`, which D-7119 explains. And it records what a rollout
+  that changes `ccd/codexbridge/` costs a busy direct lane, which no runbook step said: the update restarts the bridge
+  onto the new tree, and the restart's drain cut one in-flight request.
+- **What changed:** Nothing in the bridge. #1673 (D-7083 to D-7089, D-7093, D-7094) merged at 09:23:19Z on
+  2026-10-27, prerelease v0.0.754. The operator moved the fleet box from the PWA to v0.0.755, which contains it:
+  - the update: its report reads started 10:05:00Z, done 10:06:26Z. It read the bridge stale (the bridge's digest
+    covers every `ccd/codexbridge/*.py`), and lane-b's bridge unit restarted onto the new tree at 10:05:39Z, with no
+    restart since;
+  - the drain: the restart's drain cut ONE in-flight request, counted `drain-cut: 1` in `outcomes` (D-6835's count);
+  - the outcomes since the flip (06:26:05Z), at the stats file's write of 10:33:37Z: 468 `2xx`, 2 `5xx`, 8
+    `compactionRequests`, 35 `countTokens` and 1 `drain-cut`; auth `ok`, mode `direct`. Both 5xx came before the
+    rollout: one upstream `server_is_overloaded` near 08:22Z and one `idle-timeout` (the bridge's own idle bound) near
+    09:10Z. Neither is a credential failure, so neither is the watch's at-once flip trigger;
+  - the doctor: `ccrc doctor` exited 0 with no FAIL. Its `codex` check WARNs "the bridge met 3 name(s) it does not
+    know": `betaValue:inline-tools-2026-09-15` and `betaValue:mid-conversation-tool-changes-2026-07-01` (expected,
+    D-7093) and `eventType:keepalive`, seen 4 times (D-7119). The 13 header names and 7 betas D-7083 and D-7093
+    explain are gone from it;
+  - D-7094's first reading: by 10:33:37Z no `requestField:*-block` and no `*tool_addition-block.*` name was counted,
+    so no request since the restart carried a `tool_addition` or `tool_removal` block. Since the flip the
+    `inline-tools` beta rode 172 of the 471 message requests and `mid-conversation-tool-changes` all 471.
+- **Why:** The watch reads against the build the box runs. From 10:05:39Z that build explains the headers and seven
+  betas and counts the dropped system-entry blocks, so its drift row is the watch's reading from here on.
+- **Cost if wrong:** Zero blocks in the first window, about half an hour of traffic, is not evidence that Claude Code
+  never sends them: the watch keeps reading `names.requestField` for them to its end. One drain-cut is one request
+  on one restart; a busier lane or a longer response at the restart could cut more, each answered 503 or cut short
+  and left to Claude Code's retry. And the two 5xx are counts with their codes, not a rate: the watch compares the
+  week's 5xx rate against lane-b's `litellm` baseline, not these two.
+
+### D-7143 — the tool-change blocks of a system entry are honoured
+
+- **Departs from:** D-7093's "needs-code" for `mid-conversation-tool-changes-2026-07-01` and `inline-tools-2026-09-15`,
+  and D-7094's "the names are NOT in `known.KNOWN`, on purpose": a system entry's `tool_addition` and `tool_removal`
+  blocks were dropped, so a tool added by value was never offered upstream and a removed tool stayed offered.
+- **What changed:** The controller's ruling (2026-10-27): honour the blocks. The tools offered upstream are the ones
+  Claude Code holds at the end of the conversation: the request's `tools`, then each system entry's blocks folded in
+  message order (`ccd/codexbridge/inbound.py:22-25`, the module docstring's THE TOOLS).
+  - The shapes, read from Claude Code 2.1.310's binary with `strings` only. Its system-entry builder emits a `text`
+    block when it has one, then each removal as `{type: "tool_removal", tool: {type: "tool_reference", name}}`, then
+    each addition as `{type: "tool_addition", tool: {type: "tool_reference", name}}` or, under `inline-tools`, as
+    `{type: "tool_addition", tool: {type: "tool_definition", definition}}`, with `cache_control` on the last of those
+    blocks, and a suffix text (its `ephemeralSuffix`) can follow them; `_texts` reads every text in order. The SDK's
+    tool runner builds the same blocks, a definition being the tool object with its `run`, `parse` and `close` keys
+    stripped. Its fold reads each block's name (a reference's `name`, a definition's `definition.name`) and, in order,
+    deletes it for a removal and adds it for an addition. It reads a reference's `name` only: `tool_name` is the
+    field of a tool_result's reference (its ToolSearch result), never written in a system entry, so the bridge reads
+    `name` only too.
+  - One per-tool helper: `_tool` (`inbound.py:490-510`) is `_tools`'s former loop body (the `_CUSTOM_TOOL_TYPES`
+    check and `_unsupported` for a server tool, the `_malformed` refusals, `defer_loading` counted,
+    `DeferredToolPlaceholder` skipped, `cut_name`, the `strict: False` function shape), and `_tools` (:519-532) and the
+    fold both call it; `_required` (:513-516) computes `tools_required` from a final list for both.
+  - The record: `_Translation.walk` keeps a system entry's text handling and `_count_dropped`'s counts as they were,
+    and adds `_tool_changes`'s reading of the entry to `self.tool_changes` (:415; the list at :358). `_tool_changes`
+    (:236-270) returns each block in order as a `_ToolChange` (:208-215): an addition by reference or by value, or a
+    removal by reference.
+  - The fold: `from_anthropic` calls `_fold_tool_changes` (:535-573) after the walk (:698). A by-value addition goes
+    through `_tool`, and its tool replaces one of the same cut name in place, or is appended; a by-reference addition
+    of a name not offered re-offers the latest definition of that name (from `tools` or an earlier by-value addition),
+    and of a name neither holds is counted `requestField:tool_addition-block.unknown-reference`
+    (`UNKNOWN_REFERENCE`, :59) and changes nothing; a name already offered changes nothing; a removal drops the name.
+    `name_map` only gains names, so a `function_call` in the history to a removed tool still maps back, and replay of
+    earlier turns is unchanged. With no block the fold returns `_tools`'s list and required set as they were.
+  - The malformed-block rule: a tool-change block the bridge cannot read is refused (`_tool_change_refused`,
+    :228-233, a 400 whose text begins `a tool_addition/tool_removal block:`), EXCEPT where `_count_dropped` already
+    counts it `unrecognised`: a `tool_addition` whose `tool` is not an object or has no string type adds nothing and
+    is passed over, its
+    `tool_addition-block.unrecognised` count left unexplained for the doctor. So a `tool_addition` whose tool has an
+    unknown type, a `tool_reference` with no name, and a `tool_removal` with no tool or a tool other than a reference
+    are each a 400, and a by-value definition fails the checks a `tools` entry does (no name, not an object, or a
+    server tool's `_unsupported`, still counted `unsupportedField`), its refusal re-worded the same way. Every such
+    refusal names `tool_addition` on purpose: Claude Code 2.1.310's retry handler reads a 400 naming it, under its
+    tool-change betas, as the server rejecting the blocks, and sends the conversation again without them and with
+    both betas off until `/clear` or `/compact` (read from the binary; not yet measured against the bridge). A
+    refusal without the word gets no such recovery, and the same history is refused again. A removal is never passed
+    over: skipped, it would leave a removed tool offered.
+    A block that is not an object or has no type is no tool-change block, counted `unrecognised-block` and passed
+    over as before.
+  - The names: `KNOWN["requestField"]` explains `tool_removal-block`, `tool_addition-block`,
+    `tool_addition-block.tool_reference` and `tool_addition-block.tool_definition` (`ccd/codexbridge/known.py:76-86`),
+    and `KNOWN["betaValue"]` the two betas (:152-159), whose "NOT HERE, ON PURPOSE (D-7093)" comment they replace.
+    `unrecognised`, any other block or tool type and the unknown-reference name stay unexplained (:84-86, and the
+    module docstring's NOT HERE list, :29-33), so the doctor still names a shape the bridge does not handle.
+  - The measured trigger: lane-a switched to `direct` at 12:32Z on 2026-10-27 (D-7144), and in its first 14 message
+    requests the bridge counted `requestField:tool_addition-block` 1 and `tool_addition-block.tool_definition` 1: a
+    tool added by value, the case that loses a tool. The `inline-tools` beta rode all 14 there; on lane-b it rode 172
+    of 471 and no block was counted.
+
+  Pins, in `server/test/codex-bridge-inbound.test.ts`, each request in Claude Code's shape with synthetic tool names:
+  :417 a by-value addition offered with its schema, cut name and name-map entry, and `countable_bytes` over the
+  folded list; :438 a by-value addition replacing a same-named `tools` entry in place; :450 a by-reference addition
+  of an offered tool, deferred or not, giving the same request as none; :461 a by-reference addition of an unknown
+  name counted and changing nothing; :473 a removal dropping the tool and its required entry, the history's call to
+  it unchanged and still mapped; :493 a removal then a re-addition (by reference and by value) bringing it back;
+  :506 a tool named over the cut limit, removed and re-added by its full name (the match is by cut name); :532 a
+  suffix text after the tool blocks, kept in the developer item in order; :540 an addition then a removal leaving it
+  gone; :558 the malformed-block rule, case by case, every refusal's text pinned to name `tool_addition` (a
+  `tool_name`-only reference among them);
+  :603 the control, a request with no block, pinned field by field. D-7094's two cases (:141, :167) keep their
+  counts, followed by the new unknown-reference count for their by-reference `ToolFx3`, which nothing offers; their
+  assertion that what is sent is unchanged now reads the by-value `ToolFx2` offered. In
+  `server/test/codex-bridge-count-stats.test.ts`, :314 counts the nine betas and expects `unexplained.betaValue`
+  absent, and :336 counts the four honoured names beside five open ones and expects only the five unexplained.
+  Rows, each restored from a saved copy with sha256 compared: the fold call deleted, codex-bridge-inbound 9 red, the
+  by-value case among them (`expected [ { …(5) } ] to deeply equal [ { type: 'function', …(4) }, …(2) ]`); the
+  removal arm made a no-op, the three removal cases red; the fold's match by full rather than cut name
+  (`cut = change.name`), the over-the-limit case red; `inline-tools-2026-09-15` deleted from KNOWN, the beta case
+  red (`expected [ 'inline-tools-2026-09-15' ] to be undefined`).
+- **Why:** The model is told, through the ToolSearch result's `Tool loaded: <name>` text, that a tool is loaded; a tool
+  added by value but never offered cannot then be called, and a withdrawn tool can. Folding by Claude Code's own rule
+  makes the upstream's tools what the client believes it offered. Passing over an addition with no typed tool keeps
+  D-7094's counted case answering as before, and costs nothing, since such a block adds nothing.
+- **Cost if wrong:** A backend that refuses a `function_call` in the input whose tool is no longer offered would turn
+  every request after a removal into an error; the bridge keeps the history as sent, so that would show as a new
+  upstream 4xx after the first removal, not as a silent loss. A definition shape Claude Code changes (a new tool type,
+  a renamed key) is refused as a 400 under the rule above, which Claude Code answers by dropping the blocks and both
+  betas for the rest of the conversation: the session keeps working, its late tools no longer added mid-conversation,
+  and the doctor names the new type the day it is counted. If a later Claude Code stops matching `tool_addition` in
+  a refusal, that recovery is lost and the same history is refused again. A tool removed and then called by the
+  model regardless is the model's error, answered by Claude Code as an unknown tool.
+
+### D-7144 — lane-a switched to `direct`, as measured
+
+- **Departs from:** the runbook's order (step 7: lane-a only after lane-b's 7-day watch). The operator ruled the
+  switch at about 12:25Z on 2026-10-27, about six hours into lane-b's watch.
+- **What changed:** Nothing in the tree. Measured on the fleet box:
+  - the watcher (the D-7089 method: 8 s with no request pending or streaming on lane-a's front port) started at
+    12:26:19Z and switched at 12:32:04Z;
+  - `ccrc codex switch lane-a direct` exited 0 in 17.8 s (lane-b's took 2.8 s): the shim stopped at 12:32:07.49Z,
+    LiteLLM at 12:32:10.17Z, and the bridge's unit started at 12:32:22.08Z, so the port went unserved for about
+    14.6 s, while the box's load was about 70 to 83. Which step took the 12 s between LiteLLM's stop and the bridge's
+    start was not measured;
+  - no API error appeared in any of lane-a's session transcripts after 12:31Z;
+  - the bridge renewed lane-a's credential at 12:33:22Z, about a minute after it started, as lane-b's did. LiteLLM had
+    never renewed it (`lastRefreshAt` null), and it was due to expire at 18:46Z that day;
+  - the first outcomes: 45 `2xx`, 2 compaction requests and 5 `countTokens` by 12:50Z, with no `4xx` or `5xx`;
+  - the unexplained names in lane-a's stats file by 12:36Z: the two tool-change betas and the two by-value block names
+    (`requestField:tool_addition-block` and `tool_addition-block.tool_definition`), which D-7143 now explains.
+- **Why:** The operator's ruling (about 12:25Z). What was measured around it: lane-a's credential had not been
+  renewed while it ran on LiteLLM (`lastRefreshAt` null) and was due to expire at 18:46Z; the bridge renewed it at
+  12:33:22Z.
+- **Cost if wrong:** This does not show that lane-a is as healthy as lane-b: its watch is hours, not a week, and its
+  first window carried a by-value tool addition the bridge then dropped (D-7143). The unserved gap grows with the
+  box's load, and Claude Code meets it with `CLAUDE_CODE_MAX_RETRIES=2`: a longer gap under heavier load could exhaust
+  those retries for a request sent inside it. The flip back is `ccrc codex switch lane-a litellm`.

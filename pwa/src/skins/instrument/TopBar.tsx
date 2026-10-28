@@ -2,14 +2,15 @@
 // row, the rail's included, so the wordmark is the frame's top-left chrome (spec §3.1). `--tap-min` tall, so it needs
 // no pointer branch.
 //
-// Left to right: `Wordmark`; the breadcrumb (`breadcrumb`, from `ROUTES`' titles and the session header's own words);
-// the command field, a door that opens the palette (`commandDoor('open-palette')`), never a second text field, so the
-// palette keeps its one input (D-5103); the LED lane meters, the shared compact gauges in their `led` arrangement, one
-// door to /accounts; and `+`, New session (`commandDoor('new-session')`).
+// Left to right on its line: `Wordmark`; the breadcrumb (`breadcrumb`, from `ROUTES`' titles and the session header's own
+// words); the command field, a door that opens the palette (`commandDoor('open-palette')`), never a second text field,
+// so the palette keeps its one input (D-5103); and `+`, New session (`commandDoor('new-session')`). Under the line the
+// header holds the lanes row, the full accounts strip (T2c, D-6329): every lane's card, one instance, since the bar
+// mounts only at the desk.
 //
 // THE OVERFLOW ORDER (900 to about 1100, instrument.css): the breadcrumb's middle crumbs truncate first, then the
-// meters wrap to "+n" (the gauges measure their own fit), then the command field's words shrink away and its ⌘K and
-// its accessible name stay.
+// command field's words shrink away and its ⌘K and its accessible name stay. The lanes row wraps onto more lines
+// instead of shrinking.
 import type { ReactNode } from 'react';
 import { BareRow, Button, COMMAND_KEY, Icon, KeyHint, Wordmark } from '@ccrc/ui';
 import { commandDoor } from '../../command/door';
@@ -24,24 +25,24 @@ export function TopBar(): ReactNode {
   const sessions = useFleetStore((s) => s.sessions);
   const crumbs = breadcrumb(path, sessions);
   return (
-    <div className="ins-topbar">
-      <Wordmark className="ins-wordmark" />
-      <ol className="ins-crumbs" aria-label="Breadcrumb">
-        {crumbs.map((c, i) => (
-          <li key={i} className="ins-crumb" title={c} aria-current={i === crumbs.length - 1 ? 'page' : undefined}>{c}</li>
-        ))}
-      </ol>
-      <BareRow className="ins-command" aria-label={COMMAND_FIELD_WORDS} {...commandDoor('open-palette')}>
-        <Icon name="search" />
-        <span className="ins-command-words">{COMMAND_FIELD_WORDS}</span>
-        <KeyHint keys={[COMMAND_KEY, 'K']} />
-      </BareRow>
-      <div className="ins-meters">
-        <AccountsStrip compact="led" />
+    <>
+      <div className="ins-topbar">
+        <Wordmark className="ins-wordmark" />
+        <ol className="ins-crumbs" aria-label="Breadcrumb">
+          {crumbs.map((c, i) => (
+            <li key={i} className="ins-crumb" title={c} aria-current={i === crumbs.length - 1 ? 'page' : undefined}>{c}</li>
+          ))}
+        </ol>
+        <BareRow className="ins-command" aria-label={COMMAND_FIELD_WORDS} {...commandDoor('open-palette')}>
+          <Icon name="search" />
+          <span className="ins-command-words">{COMMAND_FIELD_WORDS}</span>
+          <KeyHint keys={[COMMAND_KEY, 'K']} />
+        </BareRow>
+        <Button variant="primary" size="fit" className="ins-new" aria-label="New session" {...commandDoor('new-session')}>
+          <Icon name="plus" />
+        </Button>
       </div>
-      <Button variant="primary" size="fit" className="ins-new" aria-label="New session" {...commandDoor('new-session')}>
-        <Icon name="plus" />
-      </Button>
-    </div>
+      <AccountsStrip />
+    </>
   );
 }

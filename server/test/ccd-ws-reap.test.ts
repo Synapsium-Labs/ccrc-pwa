@@ -58,7 +58,7 @@ const reap = (tok: string, pre = '') =>
   h.run(`${pre}${GH_STUB} ${ARCH} cmd_ws_reap --expect ${tok} --session demo-quiet-basin`);
 
 /**
- * Read EVERY refusal through this. `ws-reap` is the only destructive verb in
+ * Read EVERY refusal through this. `ws-reap` is one of ccd's destructive verbs; in
  * the design, so a refusal has exactly one meaning: nothing was destroyed. The
  * definition of done names that explicitly — "every negative case asserts the
  * worktree still exists afterwards" — and a checklist item is not an executable

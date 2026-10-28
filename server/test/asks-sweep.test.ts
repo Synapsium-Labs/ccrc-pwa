@@ -27,6 +27,7 @@ import path from 'node:path';
 import { Bus } from '../src/bus.js';
 import type { Runner } from '../src/exec.js';
 import { FleetWatcher } from '../src/watch.js';
+import { questionsTestView } from '../src/coord/questions.js';
 import { testDeps, withFakeClock } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import type { PushPayload } from '../src/push.js';
@@ -61,8 +62,10 @@ const ASK_ANSWERING_MAX_MS = 60_000;
  *  `(w as unknown as {...})` idiom (`sweepSettled`/`forceDue`), the
  *  codebase's established way to assert on state a public method
  *  deliberately does not expose. */
+// W3 Q3d (D-7028, named exception 1): the held asks are the watcher's `Questions` instance's, read per child through
+// its test-only view, as the private `heldAsks` map held them.
 const heldMap = (w: FleetWatcher): Map<string, { until: number; askId: number; answeringSince: number | null }> =>
-  (w as unknown as { heldAsks: Map<string, { until: number; askId: number; answeringSince: number | null }> }).heldAsks;
+  questionsTestView(w.questions).heldAsks();
 
 /** Per-session bookkeeping the registry + live-status files need — verbatim
  *  idiom from `asks-mint.test.ts`'s own `Seeded`/`seedSessions` (itself
@@ -285,7 +288,7 @@ describe('sweepAsks — the release sweep (Task 7)', () => {
     at(T0 + ASK_SWEEP_MS + 1);
     await f.w.sweepAsks();
 
-    expect((f.w as unknown as { asksDisabled: boolean }).asksDisabled).toBe(true);
+    expect(questionsTestView(f.w.questions).asksDisabled()).toBe(true);
   });
 
   // RULING F9, branch 1: a principal has TAKEN the row (`answering`) — the

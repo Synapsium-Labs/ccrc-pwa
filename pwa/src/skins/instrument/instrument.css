@@ -17,7 +17,7 @@
   .ins-frame .shell-accounts {
     grid-column: 1 / -1;
     grid-row: 1;
-    padding: 0 var(--sp-2) 0 0;
+    padding: 0 var(--sp-4) var(--sp-2);
   }
   /* No `overflow` here: any value but visible makes the rail a clip box in both axes, which cuts away the tooltip
      drawn beside it and lets the hidden tips scroll the rail sideways. Stacked above the list column, so the tip
@@ -44,12 +44,6 @@
     grid-column: 1 / -1;
     grid-row: 3;
   }
-  /* The fleet list's floating New session sits in the list column, clear of the rail (shell.css pins it to the
-     frame's left edge, which is the rail's here), and above the status bar. */
-  .ins-frame .fab {
-    left: calc(52px + var(--sp-4));
-    bottom: calc(var(--sp-4) + var(--tap-min));
-  }
 }
 
 /* W2 desk polish T2e (D-6335): the list column widens at 1600, and the 320px fourth track appears only with what fills
@@ -74,13 +68,13 @@
   min-height: var(--tap-min);
   min-width: 0;
 }
-/* The wordmark sits over the rail's 52px and runs past it: its left edge is the rail's centre line. */
+/* The wordmark sits over the rail's 52px and runs past it: its left edge is the header's gutter, which the lanes row
+   under the line shares. */
 .ins-wordmark {
   flex: none;
-  padding-left: var(--sp-4);
 }
 /* The breadcrumb gives first: it takes only the room the others leave (a zero basis), its middle crumbs truncate
-   before its last, and it keeps a floor, so the meters collapse before it would vanish. */
+   before its last, and it keeps a floor, so it never vanishes. */
 .ins-crumbs {
   display: flex;
   flex: 1 1 0;
@@ -110,8 +104,8 @@
   content: '›';
   padding: 0 var(--sp-1);
 }
-/* The command field: a door, not an input. Its words shrink away after the meters have collapsed; the search glyph
-   and ⌘K stay, and so does its accessible name. */
+/* The command field: a door, not an input. Its words shrink away after the crumbs have given up their room; the search
+   glyph and ⌘K stay, and so does its accessible name. */
 .ins-command {
   display: flex;
   flex: 0 100 280px;
@@ -130,15 +124,6 @@
   overflow: hidden;
   white-space: nowrap;
   text-overflow: clip;
-}
-/* The LED meters: the shared compact gauges in their `led` arrangement, which count what wrapped into their "+n". */
-.ins-meters {
-  display: flex;
-  flex: 0 1000 auto;
-  min-width: calc(var(--tap-min) + var(--sp-6));
-}
-.ins-meters > * {
-  min-width: 0;
 }
 .ins-new {
   flex: none;
@@ -392,6 +377,7 @@
     align-self: center;
     margin-top: 0;
   }
+  .ins-group-seen,
   .ins-group-head,
   .ins-toggle-option {
     min-height: var(--row-h);

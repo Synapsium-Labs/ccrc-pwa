@@ -1,15 +1,20 @@
 // Instrument's fleet list (W2 Task S10, D-5473; spec §5.3, Fleet, Instrument column): the status-grouped table, the
 // status · project toggle above it, and on a phone the underline tabs over the same groups. It fills the set's
-// `FleetList` part, which `FleetScreen` places where Refined draws its project cards, so the banners, the runs line and
-// the bucket bar around it stay the screen's own.
+// `FleetList` part, which `FleetScreen` places where Refined draws its project cards, so the banners and the runs line
+// around it stay the screen's own. The bucket bar is not: the screen draws it only for a set with no such part, so the
+// counts appear once per screen (T3a, D-6331). Here the status groups' heads are the counts, and project mode draws the
+// bar itself, because the cards carry none.
 //
 // STATUS MODE reads `groupByStatus` (statusGroups.ts): the groups, their order, their labels and which fold are that
-// model's, never this file's. Needs you, Done and Working are open; Idle, Cleanup, Archived and Dead fold. A fold is
+// model's, never this file's. Needs you, Done and Working are open; Idle, Cleanup, Archived and Exited fold. A fold is
 // `useFolded`'s, under `status::<bucket>`, and the key means "not as it starts": for a folding group its presence
 // opens it (the archived fold's inversion, `FleetScreen`'s comment), for an open one its presence closes it. So a
 // device that never touched a fold sees the defaults. Needs you, while it holds a row, is HELD open whatever is stored:
 // an operator-facing session is never rolled up (the fleet rollup's rule 5, D-6088). Its head stays focusable
 // (aria-disabled, never `disabled`), says why in text, and its click is ignored, as `ProjectCardHead`'s held ▾ does.
+// A BADGED head reads `Done · 5 · 4 new` and offers Mark all seen, a SIBLING of the fold row (the row is itself a
+// button), through `markSeen.ts`, the one helper the bucket chips use too: after the ack the button unmounts, focus moves
+// to that head's fold row, and a status region outside the unmounting control says what happened.
 // The keys share `useFolded`'s one set with the project cards' `<project>::<fold>` keys, so a project literally named
 // `status` would share its sub-folds' keys with these groups; accepted, the plan names the keys.
 //
@@ -35,6 +40,7 @@ import { useId, useState, useSyncExternalStore } from 'react';
 import type { KeyboardEvent, ReactNode } from 'react';
 import { BareRow, Button, CountBadge } from '@ccrc/ui';
 import type { FleetSession, SessionBucket } from '../../../../shared/api';
+import { BucketBar } from '../../fleet/BucketBar';
 import { FleetCards } from '../../fleet/FleetCards';
 import { useFleetChrome } from '../../fleet/FleetChrome';
 import { useFleetFlows } from '../../fleet/FleetFlows';
@@ -43,10 +49,12 @@ import { cardsOf, childRunContext, fleetTree, parentIdOf, workingOn, type FleetT
 import { orphanNote } from '../../fleet/orphanWords';
 import { isRunClosed, runForSession } from '../../fleet/runWords';
 import { SessionLine } from '../../fleet/SessionLine';
+import { markAllSeenLabel, useMarkSeen } from '../../fleet/markSeen';
 import { groupByStatus, STATUS_GROUPS, type StatusGroup } from '../../fleet/statusGroups';
-import { acksSnapshot, subscribeAcks } from '../../lib/seen';
+import { ackAll, acksSnapshot, subscribeAcks } from '../../lib/seen';
 import { matchRoute } from '../../lib/routes';
 import { navigate, useLocation } from '../../lib/router';
+import { rovingStep } from '../../lib/rovingStep';
 import { DESK_QUERY, useMediaQuery } from '../../lib/useMediaQuery';
 
 /** The toggle's per-device memory. */
@@ -81,12 +89,10 @@ type PhoneTab = 'attention' | 'done' | 'working' | 'all';
 const PHONE_TABS: readonly PhoneTab[] = ['attention', 'done', 'working', 'all'];
 const tabLabel = (t: PhoneTab): string => (t === 'all' ? 'All' : STATUS_GROUPS[t].label);
 
-const STEP: Readonly<Record<string, number>> = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 };
-
-/** Roving choice over a radiogroup or tablist: an arrow, Home or End picks its target and moves focus there. */
+/** Roving choice over a radiogroup or tablist: an arrow, Home or End picks its target and moves focus there. The step
+ *  is `rovingStep`'s (wrapping, a choice that cycles); this is its event half. */
 function rovingKey(e: KeyboardEvent<HTMLElement>, at: number, n: number, role: string, pick: (i: number) => void): void {
-  const next = e.key === 'Home' ? 0 : e.key === 'End' ? n - 1
-    : STEP[e.key] === undefined ? null : (at + STEP[e.key]! + n) % n;
+  const next = rovingStep(e.key, at, n, { wrap: true });
   if (next === null) return;
   e.preventDefault();
   pick(next);
@@ -133,13 +139,28 @@ export function FleetTable(): ReactNode {
         ))}
       </div>
       {mode === 'project'
-        ? <FleetCards selectedId={selectedId} onOpen={openSession} />
+        ? <ProjectCards selectedId={selectedId} />
         : <StatusTable selectedId={selectedId} phoneTab={desk ? null : tab} onTab={setTab} />}
     </div>
   );
 }
 
 const openSession = (id: string): void => navigate(`/s/${encodeURIComponent(id)}`);
+
+/** Project mode: the shared cards under the bucket chips. The cards carry no bucket counts and the screen draws no bar
+ *  above a skin's own list, so the chips are drawn here, reading what the screen reads (the chrome store's rows and the
+ *  device's acks), once. */
+function ProjectCards({ selectedId }: { selectedId: string | null }): ReactNode {
+  const useStore = useFleetChrome().store;
+  const sessions = useStore((s) => s.sessions);
+  const acks = useSyncExternalStore(subscribeAcks, acksSnapshot);
+  return (
+    <>
+      <BucketBar sessions={sessions} acks={acks} ackAll={ackAll} />
+      <FleetCards selectedId={selectedId} onOpen={openSession} />
+    </>
+  );
+}
 
 function StatusTable({ selectedId, phoneTab, onTab }: {
   selectedId: string | null;
@@ -157,6 +178,8 @@ function StatusTable({ selectedId, phoneTab, onTab }: {
   const flows = useFleetFlows();
   const [folded, toggleFold] = useFolded();
   const tabsId = useId();
+  // Mark all seen's focus repair and announcement, shared with the bucket chips.
+  const { labelRef, note, markSeen } = useMarkSeen(ackAll);
 
   const groups = groupByStatus(sessions, acks);
   // Read by key, never compared: the bucket a group holds is the model's answer (instrument-shell's scan).
@@ -173,7 +196,7 @@ function StatusTable({ selectedId, phoneTab, onTab }: {
     const runs = card?.runs ?? activeRuns;
     const child = childRunContext(s, runs, lookup);
     const crumb = parentIdOf(s, runs) === null ? null : child.coordinator;
-    const note = card === null ? null
+    const orphan = card === null ? null
       : orphanNote({ kind: 'session', depth: 0, session: s }, card.runs, card.project, card.sessions, lookup, frameSeen);
     return (
       <li key={s.id} data-row={s.id} className="ins-row min-h-row">
@@ -187,8 +210,8 @@ function StatusTable({ selectedId, phoneTab, onTab }: {
           onOpenRun={runForSession(runs, s) === null ? null : () => navigate('/runs')}
           workingOn={workingOn(s, cards)}
           childRun={child}
-          coordinator={note?.presence ?? null}
-          {...(note === null ? {} : { coordinatorTitle: note.title })}
+          coordinator={orphan?.presence ?? null}
+          {...(orphan === null ? {} : { coordinatorTitle: orphan.title })}
         />
         {crumb !== null && (
           <span className="ins-coord-crumb" title={`coordinated by ${crumb}`}>
@@ -218,24 +241,51 @@ function StatusTable({ selectedId, phoneTab, onTab }: {
     const hold = held(g);
     return (
       <section key={g.bucket} className="ins-group" data-status-group={g.bucket} aria-label={g.label}>
-        <BareRow
-          className="ins-group-head"
-          aria-expanded={open}
-          aria-disabled={hold ? true : undefined}
-          onClick={() => { if (!hold) toggleFold(foldKey(g.bucket)); }}
+        {/* The fold row is a button, so the door beside it is its sibling, never inside it. `BareRow` takes no ref, so
+            the focus target is found from the wrapper: the fold row, already focusable, needs no tabIndex. */}
+        <div
+          className="flex items-center"
+          ref={(el) => labelRef(g.bucket)(el?.querySelector<HTMLElement>('.ins-group-head') ?? null)}
         >
-          <span className="ins-group-chevron" aria-hidden="true">{open ? '▾' : '▸'}</span>
-          <span className="ins-group-word">{g.label}</span>
-          <span className="ins-group-count"> · {g.sessions.length}</span>
-          {g.unseen > 0 && <CountBadge aria-label={`${g.unseen} unseen`}>{g.unseen}</CountBadge>}
-          {hold && <span className="sr-only">held open: a question here is waiting on you</span>}
-        </BareRow>
+          <BareRow
+            className="ins-group-head min-w-0"
+            aria-expanded={open}
+            aria-disabled={hold ? true : undefined}
+            onClick={() => { if (!hold) toggleFold(foldKey(g.bucket)); }}
+          >
+            <span className="ins-group-chevron" aria-hidden="true">{open ? '▾' : '▸'}</span>
+            <span className="ins-group-word">{g.label}</span>
+            <span className="ins-group-count"> · {g.sessions.length}</span>
+            {g.unseen > 0 && (
+              <>
+                {/* Read, not hidden: the fold row's name is its content, and without this "3" and "4 new" run into "34 new". */}
+                <span className="ins-group-count"> · </span>
+                <CountBadge aria-label={`${g.unseen} new`}>{g.unseen} new</CountBadge>
+              </>
+            )}
+            {hold && <span className="sr-only">held open: a question here is waiting on you</span>}
+          </BareRow>
+          {g.unseen > 0 && (
+            // The group is IN the name, as the chips' is: three badged groups are not three buttons named alike.
+            <Button
+              variant="ghost"
+              size="fit"
+              className="ins-group-seen shrink-0"
+              aria-label={markAllSeenLabel(g.bucket)}
+              onClick={() => markSeen(g.bucket, g.sessions, g.unseen)}
+            >
+              Mark all seen
+            </Button>
+          )}
+        </div>
         {open && g.sessions.length > 0 && <ul className="ins-rows">{g.sessions.map(row)}</ul>}
       </section>
     );
   });
 
-  if (phoneTab === null) return <>{body}</>;
+  // Outside the control that unmounts, so the update it reports is not the one that removes it.
+  const announce = <div className="sr-only" role="status">{note}</div>;
+  if (phoneTab === null) return <>{body}{announce}</>;
   return (
     <>
       <div
@@ -266,6 +316,7 @@ function StatusTable({ selectedId, phoneTab, onTab }: {
         })}
       </div>
       <div role="tabpanel" id={panelId} aria-labelledby={tabId(phoneTab)} className="ins-panel">{body}</div>
+      {announce}
     </>
   );
 }

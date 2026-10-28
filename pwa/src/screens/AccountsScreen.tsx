@@ -1,17 +1,18 @@
 // Accounts screen (route `/accounts`, Task 6 of Build 3 PR G) — every account
-// ccd knows about, not just the ones with headroom to spare. The compact
-// strip (AccountsStrip) hides a switched-off lane and only shows a window
+// ccd knows about, not just the ones with headroom to spare. The lanes row
+// (AccountsStrip) hides a switched-off lane and only shows a window
 // that "exists" for the account type; this screen's brief is the opposite —
 // "show me my accounts" — so a disabled lane still gets a row (greyed, with
-// its reason) and both windows always render, the %/reset/— three-way saying
-// "unknown" rather than the row disappearing.
+// its reason) and both windows always render, each through `windowReading`
+// (laneWords.ts): `n%` measured, `0%` for a window that rolled over (spoken as
+// inferred), and `—` never measured, rather than the row disappearing.
 //
 // Same /api/accounts pipeline the strip and useProjectedHome already poll —
 // a third reader, not a new route. Its own 20s poller rather than sharing
 // theirs: useProjectedHome.ts:9-12 makes the same call for ProjectCard and
 // defends the duplication — one more GET against two small local JSON files
 // beats coupling component trees that must not depend on each other mounting.
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { AccountUsage, ProjectedHome, RosterWire } from '../../../shared/api';
 import type { AccountPoolWire } from '../../../shared/poolrule';
@@ -22,7 +23,8 @@ import { formatAge } from '../fleet/formatReset';
 import { sessionLabel } from '../fleet/sessionLabel';
 import { accountColorVar, accountLabel, accountPoolState, homeAbleLabelList, rosterWrapperIds, warnNonArrayRoster } from '../lib/accounts';
 import { api, apiErrorText } from '../lib/api';
-import { navigate } from '../lib/router';
+import { navigate, useLocation } from '../lib/router';
+import { laneParam } from '../lib/routes';
 import { backToFleet } from '../command/door';
 import { useFleetStore } from '../stores/fleet';
 import '../fleet/fleet.css';
@@ -198,6 +200,32 @@ export function AccountsScreen(): ReactNode {
 
   const order = rowOrder(roster, accounts ?? []);
 
+  // The arrival at a lane (T2c, D-6329, Q14): a lane card opens `/accounts?lane=<id>`, and the screen scrolls that
+  // lane's row into view, focuses it and marks it with one accent edge. A PASSIVE effect, never a layout one: the
+  // shell's pane reset to the top (app.tsx) is a layout effect that runs on every path or search change, and layout
+  // effects run child before parent, so an arrival made in a layout effect would be undone by it. It is keyed on the
+  // lane AND on whether the lane's row exists, because the rows are drawn only once the poll lands (`order` is empty
+  // until then): an arrival at mount finds no row, and the same effect finishes the job when the poll brings it.
+  // `arrivedAt` holds the last lane arrived at, so each value scrolls once and a re-render never moves focus again;
+  // a second `?lane=` on the same mount is a new value and arrives once. An unknown lane arrives nowhere.
+  const lane = laneParam(useLocation().search);
+  const laneRowExists = lane !== null && accounts != null && order.includes(lane);
+  const rowRefs = useRef(new Map<string, HTMLElement>());
+  const arrivedAt = useRef<string | null>(null);
+  const [arrived, setArrived] = useState<string | null>(null);
+  useEffect(() => {
+    // The record follows the param: no lane, or a lane with no row, clears the edge and the ref, so a later return to
+    // the lane that was arrived at arrives again (the shell's reset will have put the pane back at the top).
+    if (!laneRowExists || lane === null) { arrivedAt.current = null; setArrived(null); return; }
+    if (arrivedAt.current === lane) return;
+    const row = rowRefs.current.get(lane);
+    if (row === undefined) return;
+    arrivedAt.current = lane;
+    row.scrollIntoView({ block: 'start' });
+    row.focus({ preventScroll: true });
+    setArrived(lane);
+  }, [lane, laneRowExists]);
+
   // The account-pool editor — one sheet, retargeted per tap, on the exact
   // terms `PoolSheet`/`FleetScreen`'s own pool sheet already use: the route-
   // owned subject lives here, not inside the sheet.
@@ -350,7 +378,15 @@ export function AccountsScreen(): ReactNode {
           // on a guess.
           const acctPoolDim = accountPools === 'unavailable';
           return (
-            <section key={wrapper} className="accounts-row" data-disabled={off ? 'true' : 'false'}>
+            <section
+              key={wrapper}
+              className="accounts-row"
+              data-disabled={off ? 'true' : 'false'}
+              data-lane={wrapper}
+              data-arrived={arrived === wrapper ? 'true' : undefined}
+              tabIndex={-1}
+              ref={(el) => { if (el === null) rowRefs.current.delete(wrapper); else rowRefs.current.set(wrapper, el); }}
+            >
               <div className="accounts-row-head">
                 <span
                   className="account-gauge-label"

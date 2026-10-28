@@ -11,7 +11,7 @@ import { act, cleanup, fireEvent, render, screen, within } from '@testing-librar
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { INSTRUMENT, REFINED, toast } from '@ccrc/ui';
-import type { AccountUsage, NotifyEvent, RunSummary } from '../../shared/api';
+import type { AccountUsage, RunSummary } from '../../shared/api';
 import { fleetSession } from './fleetFixture';
 import { pageAt, treeOk, treeResponse } from './docsFixtures';
 import type { DocsVisit } from '../src/docs/useDocsVisit';
@@ -28,11 +28,9 @@ const { App } = await import('../src/app');
 const { navigate } = await import('../src/lib/router');
 const { setSkin } = await import('../src/lib/skin');
 const { useFleetStore } = await import('../src/stores/fleet');
-const { ack, FEED_ACK_KEY } = await import('../src/lib/seen');
 const { fleetSummary } = await import('../src/fleet/fleetSummary');
 const { api } = await import('../src/lib/api');
 const { DocsHead } = await import('../src/docs/DocsHead');
-const { ACCOUNTS_DOOR_LABEL } = await import('../src/fleet/CompactGauges');
 
 /** A Docs visit whose actions are inert: the up door reads only the page. */
 const docsVisit = (): DocsVisit => ({
@@ -73,7 +71,7 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
   act(() => { navigate('/'); });
-  act(() => useFleetStore.setState({ sessions: [], conn: 'connecting', notices: [], feed: [], runs: [], runsFrameSeen: false }));
+  act(() => useFleetStore.setState({ sessions: [], conn: 'connecting', notices: [], feed: [], runs: [], runsFrameSeen: false, fleetFrameSeen: false }));
   setSkin(REFINED);
 });
 
@@ -110,22 +108,23 @@ describe("Refined's phone header (W2 Task S5)", () => {
   });
 
   it("a badged door's name carries its count", () => {
-    const stamp = Date.now();
-    act(() => { ack(FEED_ACK_KEY, stamp); });
-    const feed: NotifyEvent[] = [
-      { seq: 1, at: stamp - 60_000, kind: 'mail', sessionId: 'x', title: 'read already', body: '', runId: null },
-      { seq: 2, at: stamp + 60_000, kind: 'mail', sessionId: 'x', title: 'unread', body: '', runId: null },
-      { seq: 3, at: stamp + 60_001, kind: 'mail', sessionId: 'x', title: 'unread too', body: '', runId: null },
+    // Only what waits on the operator is counted (T2d, D-6330): two sessions ask, and one run's worker is one of them.
+    const sessions = [
+      fleetSession({ id: 'ask-a', bucket: 'attention' }),
+      fleetSession({ id: 'ask-b', bucket: 'attention' }),
+      fleetSession({ id: 'calm', bucket: 'idle' }),
     ];
-    const open = { id: 1, program: 'p', state: 'working', closedAt: null } as unknown as RunSummary;
+    const run = (id: number, sessionId: string): RunSummary =>
+      ({ id, program: 'p', state: 'working', closedAt: null, sessionId, claimedBy: 'calm' }) as unknown as RunSummary;
     atWidth(390);
     render(<App />);
-    act(() => useFleetStore.setState({ conn: 'open', feed, runs: [open], runsFrameSeen: true }));
+    act(() => useFleetStore.setState({ conn: 'open', sessions, fleetFrameSeen: true, runs: [run(1, 'ask-a'), run(2, 'calm')], runsFrameSeen: true }));
     const h = head();
-    expect(within(h).getByRole('button', { name: 'Inbox, 2 unread' })).toHaveAttribute('data-command', 'go-inbox');
-    expect(within(h).getByRole('button', { name: 'Runs, 1 active' })).toHaveAttribute('data-command', 'go-runs');
-    act(() => useFleetStore.setState({ feed: [] }));
+    expect(within(h).getByRole('button', { name: 'Inbox, 2 waiting for you' })).toHaveAttribute('data-command', 'go-inbox');
+    expect(within(h).getByRole('button', { name: 'Runs, 1 needs you' })).toHaveAttribute('data-command', 'go-runs');
+    act(() => useFleetStore.setState({ sessions: [fleetSession({ id: 'calm', bucket: 'idle' })] }));
     expect(within(h).getByRole('button', { name: 'Inbox' })).toBeInTheDocument();
+    expect(within(h).getByRole('button', { name: 'Runs' })).toBeInTheDocument();
   });
 
   it("the subtitle is `fleetSummary`'s readout", () => {
@@ -184,36 +183,37 @@ describe("Refined's phone header (W2 Task S5)", () => {
     expect(published()).toBe('');
   });
 
-  it("the phone header shows the full strip: each lane's 5h and 7d rows, the strip one door to /accounts carrying go-accounts", async () => {
+  it("the phone header shows the full strip: each lane's 5h and 7d rows, each card its lane's door, All accounts the go-accounts door", async () => {
     const lanes = [lane('lane-a', 30, 80), lane('lane-b', 12, null), lane('lane-c', null, 5), lane('lane-d', 1, 2), lane('lane-e', 3, 4)];
     vi.spyOn(api, 'accounts').mockResolvedValue({ accounts: lanes, projected: { wrapper: 'lane-a', score: 0 }, roster: [] });
     atWidth(390);
     render(<App />);
-    const strip = await within(head()).findByRole('link', { name: ACCOUNTS_DOOR_LABEL });
+    const strip = await within(head()).findByRole('group', { name: /^account usage, highest lane-a 80%/ });
     await within(strip).findByText('lane-a');
     expect(strip).toHaveClass('accounts-strip');
-    expect(strip).toHaveAttribute('data-command', 'go-accounts');
+    // The strip is no door itself: its cards are, and the end cell's All accounts is the `go-accounts` door.
+    expect(strip).not.toHaveAttribute('data-command');
     const cards = [...strip.querySelectorAll<HTMLElement>('.account-gauge')];
     expect(cards).toHaveLength(lanes.length);
+    // Most free first: lane-d (2), lane-e (4), lane-c (5), lane-b (12), lane-a (80).
+    const name = (card: HTMLElement): string => card.querySelector('.account-gauge-label')?.textContent ?? '';
+    expect(cards.map(name)).toEqual(['lane-d', 'lane-e', 'lane-c', 'lane-b', 'lane-a']);
     const windows = (card: HTMLElement): string[] => [...card.querySelectorAll('.acct-win')].map((w) => w.textContent ?? '');
-    expect(windows(cards[0]!)).toEqual(['5h', '7d']);
-    expect(windows(cards[1]!)).toEqual(['5h']);
-    expect(windows(cards[2]!)).toEqual(['7d']);
-    // One readout of the lanes on the page: the full strip is the phone's, and no compact grid sits beside it.
-    expect(document.querySelectorAll('.accounts-strip, .accounts-compact')).toHaveLength(1);
-    // The strip is a command door: the layer navigates.
-    fireEvent.click(strip);
+    expect(windows(cards.find((c) => name(c) === 'lane-a')!)).toEqual(['5h', '7d']);
+    expect(windows(cards.find((c) => name(c) === 'lane-b')!)).toEqual(['5h']);
+    expect(windows(cards.find((c) => name(c) === 'lane-c')!)).toEqual(['7d']);
+    // One readout of the lanes on the page: the full strip is the phone's.
+    expect(document.querySelectorAll('.accounts-strip')).toHaveLength(1);
+    // A card opens its lane; All accounts is a command door, which the layer navigates.
+    fireEvent.click(cards.find((c) => name(c) === 'lane-b')!);
     expect(location.pathname).toBe('/accounts');
-  });
-
-  it('the phone header mounts no compact grid', async () => {
-    const lanes = [lane('lane-a', 30, 80), lane('lane-b', 12, null)];
-    vi.spyOn(api, 'accounts').mockResolvedValue({ accounts: lanes, projected: { wrapper: 'lane-a', score: 0 }, roster: [] });
-    atWidth(390);
-    render(<App />);
-    await within(head()).findByText('lane-a');
-    expect(document.querySelector('.accounts-compact')).toBeNull();
-    expect(head().querySelector('[data-compact]')).toBeNull();
+    expect(location.search).toBe('?lane=lane-b');
+    act(() => { navigate('/'); });
+    const all = await within(head()).findByRole('button', { name: 'All accounts' });
+    expect(all).toHaveAttribute('data-command', 'go-accounts');
+    fireEvent.click(all);
+    expect(location.pathname).toBe('/accounts');
+    expect(location.search).toBe('');
   });
 
   it('Refined renders neither FleetHead nor `.fab`; Instrument still renders both', () => {

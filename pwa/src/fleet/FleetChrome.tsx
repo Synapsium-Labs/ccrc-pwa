@@ -9,7 +9,7 @@
 //
 // Outside a provider `useFleetChrome()` THROWS rather than answering a default: a part that forgets the host would
 // otherwise start rendering with no health, no updates and sheets that never open, and say nothing.
-import { createContext, useContext, useState } from 'react';
+import { createContext, useContext, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { FleetHealth } from '../../../shared/api';
 import { useFleetHealth } from './useFleetHealth';
@@ -60,10 +60,14 @@ export function FleetChromeProvider({ store, children }: { store: FleetStore; ch
   const [newOpen, setNewOpen] = useState(false);
   const [addWorkspaceFor, setAddWorkspaceFor] = useState<string | null>(null);
   const [reapId, setReapId] = useState<string | null>(null);
-  const value: FleetChrome = {
+  // Memoised (C6, D-6438). The provider re-renders on every fleet frame that changes a row (it reads `sessions` for
+  // the actions sheet's lifecycle), and an inline object would give each of its consumers a new context value, and
+  // so a render, on every one of them. Each plane is stable between changes of its own (`use*` below), so the value
+  // changes only when something a consumer reads did.
+  const value = useMemo<FleetChrome>(() => ({
     store, health, updates, projects, actions, archiveAll,
     archiveAllFor, setArchiveAllFor, newOpen, setNewOpen, addWorkspaceFor, setAddWorkspaceFor, reapId, setReapId,
-  };
+  }), [store, health, updates, projects, actions, archiveAll, archiveAllFor, newOpen, addWorkspaceFor, reapId]);
   return <FleetChromeContext.Provider value={value}>{children}</FleetChromeContext.Provider>;
 }
 

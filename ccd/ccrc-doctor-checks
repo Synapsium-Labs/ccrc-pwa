@@ -850,6 +850,75 @@ _dr_log_hint() {   # <unit> -> the command that shows its recent log
   fi
 }
 
+# ── a shipped timer's period, for a bound or a sentence (D-7054; ARCH-69 (#804)) ──
+# A check whose bound or sentence runs "as often as the timer" reads the period
+# from the SHIPPED tree's unit file, `$BOX_TREE_DIR/deploy/systemd/<unit>` (the
+# file `_inst_units` and deploy.sh copy from), through ccrc's one reader,
+# `_timer_period_s` (D-7053). Never the installed copy: macOS installs no timer
+# (decision 17), and a second reader would be a second source. The installed
+# copy's MTIME stays the pool-sync and update-sync graces' evidence.
+#
+# THREE ANSWERS, and every caller tests the rc BEFORE any `$(( ))` or `-gt`, so
+# an empty operand never reaches arithmetic: rc 0 prints the number; rc 1, the
+# file cannot be read (OA-C8c (a), D-7062: the check WARNs naming the unit
+# through `_dr_cadence_unread` and computes no verdict from that bound, never a
+# literal fallback); rc 3, ccrc's reader or BOX_TREE_DIR is not loaded (this
+# table was sourced by something that is not ccrc: the check FAILs naming the
+# bug through `_dr_cadence_unloaded`). Neither nonzero answer prints anything.
+#
+# Each answer is cached in the shell that asked (`_DR_TIMER_PERIODS`, one
+# `|<unit>=<seconds>` entry per unit read; no indirection, which
+# ccrc-settings-census.test.ts keeps to `_ccrc_knob`), so later calls in that
+# shell read no file. A `$( … )` call is its own shell, and what it caches goes
+# with it. Nothing here runs at source time.
+_dr_timer_period_s() {   # <unit> -> its period in seconds; rc 0, 1 unreadable, 3 not loaded; sets _DR_TIMER_PERIOD
+  local v
+  _DR_TIMER_PERIOD=''
+  if [ -z "${BOX_TREE_DIR:-}" ] || ! declare -F _timer_period_s >/dev/null 2>&1; then return 3; fi
+  case "${_DR_TIMER_PERIODS:-}" in
+    *"|$1="*) v="${_DR_TIMER_PERIODS#*"|$1="}"; v="${v%%|*}" ;;
+    *)
+      v="$(_timer_period_s "$BOX_TREE_DIR/deploy/systemd/$1" 2>/dev/null)" && [[ "$v" =~ ^[1-9][0-9]*$ ]] || return 1
+      _DR_TIMER_PERIODS="${_DR_TIMER_PERIODS:-}|$1=$v" ;;
+  esac
+  _DR_TIMER_PERIOD="$v"
+  printf '%s\n' "$_DR_TIMER_PERIOD"
+}
+_dr_cycles_s() {   # <unit> <k> -> k of its periods, in seconds; rc and silence as _dr_timer_period_s
+  local rc=0
+  _dr_timer_period_s "$1" >/dev/null || rc=$?
+  [ "$rc" -eq 0 ] || return "$rc"
+  printf '%s\n' "$(( $2 * _DR_TIMER_PERIOD ))"
+}
+_dr_every_words() {   # <seconds> -> "every minute", "every <m> minutes" (whole minutes, m >= 2) or "every <s>s"
+  if [ "$1" -eq 60 ]; then printf 'every minute'
+  elif [ $(( $1 % 60 )) -eq 0 ]; then printf 'every %s minutes' "$(( $1 / 60 ))"
+  else printf 'every %ss' "$1"
+  fi
+}
+# The rc 1 WARN (OA-C8c (a)) and the rc 3 FAIL, said once. <what> names the bound
+# the check could not measure. The detail and remedy halves are printed on their
+# own too, for the checks that record findings before they print them.
+_dr_cadence_unread_what() {   # <unit> <what>
+  printf "%s's cadence could not be read from the shipped unit file (%s), so %s is unmeasured" \
+    "$1" "$BOX_TREE_DIR/deploy/systemd/$1" "$2"
+}
+_dr_cadence_unread_fix() {
+  printf '%s' "the shipped tree at $BOX_TREE_DIR is incomplete or damaged — both deploy lanes place the whole tree there, so the next ccrc update (or deploy) restores it; then re-run ccrc doctor"
+}
+_dr_cadence_unread() {   # <check> <unit> <what> -> one WARN line naming the unit, rc 2
+  _dr_warn "$1" "$(_dr_cadence_unread_what "$2" "$3")" "$(_dr_cadence_unread_fix)"
+}
+_dr_cadence_unloaded_what() {   # <what>
+  printf "ccrc's own timer reader is not loaded, so %s was never measured" "$1"
+}
+_dr_cadence_unloaded_fix() {   # <check> <unit>
+  printf '%s' "this is a bug in ccrc, not a fact about your box — _check_$1 reads $2's cadence through _timer_period_s and BOX_TREE_DIR, both declared once in ccrc itself, and this check table was sourced by something that is not ccrc"
+}
+_dr_cadence_unloaded() {   # <check> <unit> <what> -> one FAIL line naming the bug, rc 1
+  _dr_fail "$1" "$(_dr_cadence_unloaded_what "$3")" "$(_dr_cadence_unloaded_fix "$1" "$2")"
+}
+
 # THIS FILE RUNS TWO DIFFERENT COVERAGE DESIGNS FOR TIMERS — "is a recurring
 # job actually keeping its promise" — and this check is only one of them
 # (D-2193). The units in the `known` array below are measured DIRECTLY, by
@@ -4039,7 +4108,8 @@ _check_pool-sync() {
     # GRACE = two of the timer's own periods, not an invented constant: one
     # tick for `OnBootSec=45s`/`AccuracySec=10s` slack plus one more so a
     # doctor run landing mid-cycle is not itself the reason this goes red
-    # (both from deploy/systemd/ccd-pool-sync.timer).
+    # (both from deploy/systemd/ccd-pool-sync.timer). Read from that shipped
+    # file at run time, `_dr_cycles_s ccd-pool-sync.timer 2` (D-7054).
     #
     # COST, stated as the brief requires: an unrelated `ccrc install` that
     # ships new BYTES for this one unit (not a fresh install) also resets
@@ -4052,13 +4122,22 @@ _check_pool-sync() {
     # A `_plat_mtime` that cannot answer (stat missing, file raced away)
     # falls straight through to the FAIL below — the safe direction: no
     # evidence of a chance means no benefit of the doubt.
-    local pool_sync_grace=$((2 * 60)) unit_mtime unit_age
+    local unit_mtime unit_age grace period cad_rc=0
     unit_mtime="$(_plat_mtime "$unit_path" 2>/dev/null)"
     if [[ "$unit_mtime" =~ ^[0-9]+$ ]]; then
       unit_age=$(($(date +%s) - unit_mtime))
-      if [ "$unit_age" -ge 0 ] && [ "$unit_age" -lt "$pool_sync_grace" ]; then
-        _dr_warn pool-sync "pool-sync-not-yet-synced: ccd-pool-sync.timer was installed ${unit_age}s ago and $f has not been written yet — the timer fires every 60s (OnUnitActiveSec) and converges on its own; expected right after an install, not a fault" \
-          "wait for the timer to fire (up to ~60s) and re-run ccrc doctor — still absent past that window is the real fault: read the oneshot's own log ($(_dr_log_hint ccd-pool-sync.service))"
+      # The grace and the period its sentences name, read from the shipped
+      # unit file (D-7054) BEFORE any comparison; one that cannot be read is
+      # unmeasured, never a literal (OA-C8c (a), D-7062).
+      grace="$(_dr_cycles_s ccd-pool-sync.timer 2)" || cad_rc=$?
+      [ "$cad_rc" -ne 0 ] || period="$(_dr_cycles_s ccd-pool-sync.timer 1)" || cad_rc=$?
+      case "$cad_rc" in
+        1) _dr_cadence_unread pool-sync ccd-pool-sync.timer "the not-yet-synced grace for $f (two of the timer's periods)"; return 2 ;;
+        3) _dr_cadence_unloaded pool-sync ccd-pool-sync.timer "the not-yet-synced grace"; return 1 ;;
+      esac
+      if [ "$unit_age" -ge 0 ] && [ "$unit_age" -lt "$grace" ]; then
+        _dr_warn pool-sync "pool-sync-not-yet-synced: ccd-pool-sync.timer was installed ${unit_age}s ago and $f has not been written yet — the timer fires every ${period}s (OnUnitActiveSec) and converges on its own; expected right after an install, not a fault" \
+          "wait for the timer to fire (up to ~${period}s) and re-run ccrc doctor — still absent past that window is the real fault: read the oneshot's own log ($(_dr_log_hint ccd-pool-sync.service))"
         return 2
       fi
     fi
@@ -4090,8 +4169,15 @@ _check_pool-sync() {
     esac
   done < "$f"
   if [[ ! "$lease" =~ ^(0|[1-9][0-9]*)$ ]]; then
+    local period cad_rc=0 every=''
+    period="$(_dr_cycles_s ccd-pool-sync.timer 1)" || cad_rc=$?
+    [ "$cad_rc" -ne 0 ] || every=" (every ${period}s)"
     _dr_warn pool-sync "pool-sync-malformed: $f does not parse as this box's own reader would — no single, well-formed \`lease <n>\` line" \
-      "the next timer fire (every 60s) rewrites it atomically; inspect the current content by hand: cat $f"
+      "the next timer fire$every rewrites it atomically; inspect the current content by hand: cat $f"
+    case "$cad_rc" in
+      1) _dr_cadence_unread pool-sync ccd-pool-sync.timer "the period of the timer fire that remedy names" ;;
+      3) _dr_cadence_unloaded pool-sync ccd-pool-sync.timer "the period of the timer fire that remedy names"; return 1 ;;
+    esac
     return 2
   fi
   local now; now="$(date +%s)"
@@ -4512,13 +4598,21 @@ _check_update-sync() {
   # a box that has not had one tick yet, never for a fixture the puller
   # itself already wrote and got wrong.
   if [ "$UPD_INTENT_WHY" = "never synced" ]; then
-    local update_sync_grace=$((2 * 60)) unit_mtime unit_age
+    local unit_mtime unit_age grace period cad_rc=0
     unit_mtime="$(_plat_mtime "$unit_path" 2>/dev/null)"
     if [[ "$unit_mtime" =~ ^[0-9]+$ ]]; then
       unit_age=$(($(date +%s) - unit_mtime))
-      if [ "$unit_age" -ge 0 ] && [ "$unit_age" -lt "$update_sync_grace" ]; then
-        _dr_warn update-sync "update-sync-not-yet-synced: ccd-update-sync.timer was installed ${unit_age}s ago and ~/.ccrc/update-intent has not been written yet — the timer fires every 60s (OnUnitActiveSec) and converges on its own; expected right after an install, not a fault" \
-          "wait for the timer to fire (up to ~60s) and re-run ccrc doctor — still absent past that window is the real fault: read the oneshot's own log ($(_dr_log_hint ccd-update-sync.service))"
+      # pool-sync's reading of the shipped unit file, for this unit (D-7054;
+      # OA-C8c (a), D-7062): unmeasured, never a literal.
+      grace="$(_dr_cycles_s ccd-update-sync.timer 2)" || cad_rc=$?
+      [ "$cad_rc" -ne 0 ] || period="$(_dr_cycles_s ccd-update-sync.timer 1)" || cad_rc=$?
+      case "$cad_rc" in
+        1) _dr_cadence_unread update-sync ccd-update-sync.timer "the not-yet-synced grace for ~/.ccrc/update-intent (two of the timer's periods)"; return 2 ;;
+        3) _dr_cadence_unloaded update-sync ccd-update-sync.timer "the not-yet-synced grace"; return 1 ;;
+      esac
+      if [ "$unit_age" -ge 0 ] && [ "$unit_age" -lt "$grace" ]; then
+        _dr_warn update-sync "update-sync-not-yet-synced: ccd-update-sync.timer was installed ${unit_age}s ago and ~/.ccrc/update-intent has not been written yet — the timer fires every ${period}s (OnUnitActiveSec) and converges on its own; expected right after an install, not a fault" \
+          "wait for the timer to fire (up to ~${period}s) and re-run ccrc doctor — still absent past that window is the real fault: read the oneshot's own log ($(_dr_log_hint ccd-update-sync.service))"
         return 2
       fi
     fi
@@ -4608,6 +4702,8 @@ _check_graphify() {
   local -a gfx_install_fail=() gfx_excludes_warn=()
   local -a gfx_census_fail=() gfx_census_warn=() gfx_disk_fail=() gfx_disk_warn=() gfx_disk_unread_warn=()
   local -a gfx_rows_warn=()
+  # The census bound's cadence, when it could not be read (D-7054; OA-C8c (a), D-7062): its rc and the bound it left unmeasured.
+  local gfx_cadence_rc=0 gfx_cadence_what=""
 
   # ── (2) engine: the venv's own `graphify --version` against the pin ──────
   # Parsed by parameter expansion, not awk — the same rule `_check_disk`'s own
@@ -4749,7 +4845,8 @@ _check_graphify() {
         ;;
       *)
         # 3x the timer's own interval (deploy/systemd/ccd-graph-sweep.timer,
-        # OnUnitActiveSec=15min) — one missed run is ordinary jitter under
+        # OnUnitActiveSec=15min, read from that shipped file through
+        # `_dr_cycles_s`, D-7054) — one missed run is ordinary jitter under
         # load, three in a row means the timer itself has stopped firing.
         # The census is rewritten atomically at the end of EVERY pass, so the
         # FILE's mtime is the last pass's finish — measured through the
@@ -4759,8 +4856,11 @@ _check_graphify() {
         local now_s fin_s
         if [ -n "$finished" ] && now_s="$(date +%s 2>/dev/null)" \
            && fin_s="$(_plat_mtime "$census" 2>/dev/null)"; then
-          local age=$(( now_s - fin_s ))
-          if [ "$age" -gt 2700 ]; then
+          local age=$(( now_s - fin_s )) gfx_bound
+          gfx_bound="$(_dr_cycles_s ccd-graph-sweep.timer 3)" || gfx_cadence_rc=$?
+          if [ "$gfx_cadence_rc" -ne 0 ]; then
+            gfx_cadence_what="whether the last graph-sweep pass, finished $((age / 60)) minutes ago, is stale"
+          elif [ "$age" -gt "$gfx_bound" ]; then
             gfx_census_warn+=("the last graph-sweep pass finished $((age / 60)) minutes ago — the timer may not be firing")
           fi
         fi
@@ -4868,6 +4968,10 @@ _check_graphify() {
       "read \$HOME/.ccrc/graph-sweep.log for what the pass hit, and check the timer: systemctl --user status ccd-graph-sweep.timer"
     rc=1
   fi
+  if [ "$gfx_cadence_rc" -eq 3 ]; then
+    _dr_fail graphify "$(_dr_cadence_unloaded_what "$gfx_cadence_what")$gfx_gate" "$(_dr_cadence_unloaded_fix graphify ccd-graph-sweep.timer)"
+    rc=1
+  fi
   if [ "${#gfx_disk_fail[@]}" -gt 0 ]; then
     _dr_fail graphify "$(_dr_join "${gfx_disk_fail[@]}")$gfx_gate" \
       "free space on that filesystem before the next sweep pass — under 2 GiB a graph build fails the same way a ccd clone does"
@@ -4881,6 +4985,10 @@ _check_graphify() {
   if [ "${#gfx_census_warn[@]}" -gt 0 ]; then
     _dr_warn graphify "$(_dr_join "${gfx_census_warn[@]}")$gfx_gate" \
       "check the timer: systemctl --user status ccd-graph-sweep.timer (and journalctl --user -u ccd-graph-sweep.service -n 20)"
+    [ "$rc" -eq 1 ] || rc=2
+  fi
+  if [ "$gfx_cadence_rc" -eq 1 ]; then
+    _dr_warn graphify "$(_dr_cadence_unread_what ccd-graph-sweep.timer "$gfx_cadence_what")$gfx_gate" "$(_dr_cadence_unread_fix)"
     [ "$rc" -eq 1 ] || rc=2
   fi
   if [ "${#gfx_rows_warn[@]}" -gt 0 ]; then
@@ -6201,8 +6309,12 @@ _check_models() {
     return 2
   fi
 
-  local -a ok=() warn=()
+  local -a ok=() warn=() unmeasured=()
   local lid status fa stale lastError age age_min
+  # The silent-timer bound, read from the shipped unit file the first time an
+  # OK catalogue needs it (D-7054); an rc other than 0 leaves that catalogue's
+  # staleness unmeasured, never compared against a literal (OA-C8c (a), D-7062).
+  local bound="" bound_rc=""
   while IFS="$US" read -r lid status fa stale lastError; do
     [ -n "$lid" ] || continue
     case "$status" in
@@ -6236,6 +6348,9 @@ _check_models() {
           continue
         fi
         age=$(( now_s - fa )); age_min=$(( age / 60 ))
+        if [ "$stale" != 1 ] && [ "$age" -ge 0 ] && [ -z "$bound_rc" ]; then
+          bound_rc=0; bound="$(_dr_cycles_s ccrc-models.timer 3)" || bound_rc=$?
+        fi
         if [ "$stale" = 1 ]; then
           # ARM 2 (C4): the timer ran, the provider refused it. Warned
           # REGARDLESS of age — quote lastError and the age.
@@ -6246,7 +6361,9 @@ _check_models() {
           # for the same reason the empty population gets its own SKIP rather
           # than a confident answer over nothing.
           warn+=("$lid's catalogue claims a fetchedAt $((-age)) s in the future — its age is unmeasurable, not fresh; run: ccrc models refresh $lid")
-        elif [ "$age" -gt 10800 ]; then
+        elif [ "$bound_rc" -ne 0 ]; then
+          unmeasured+=("$lid's catalogue ($age_min min old)")
+        elif [ "$age" -gt "$bound" ]; then
           # ARM 1 (C4): stale:false but old — the silent case `services`'
           # `known` unit list cannot see (see this function's header comment).
           # C6: the `services` check measures ACTIVATION, not production — it
@@ -6270,10 +6387,18 @@ _check_models() {
     esac
   done <<<"$out"
 
-  if [ "${#warn[@]}" -gt 0 ]; then
-    _dr_warn models "$(_dr_join "${warn[@]}")" \
-      "systemctl --user status ccrc-models.timer ; ccrc models refresh <id> for one named lane"
-    return 2
+  if [ "${#warn[@]}" -gt 0 ] || [ "${#unmeasured[@]}" -gt 0 ]; then
+    local ret=2
+    if [ "${#warn[@]}" -gt 0 ]; then
+      _dr_warn models "$(_dr_join "${warn[@]}")" \
+        "systemctl --user status ccrc-models.timer ; ccrc models refresh <id> for one named lane"
+    fi
+    if [ "${#unmeasured[@]}" -gt 0 ] && [ "$bound_rc" -eq 3 ]; then
+      _dr_cadence_unloaded models ccrc-models.timer "the staleness of $(_dr_join "${unmeasured[@]}")"; ret=1
+    elif [ "${#unmeasured[@]}" -gt 0 ]; then
+      _dr_cadence_unread models ccrc-models.timer "the staleness of $(_dr_join "${unmeasured[@]}")"
+    fi
+    return "$ret"
   fi
   # THE PASS NAMES EVERY LANE AND ITS AGE (C5): the population is what this
   # PASS is really asserting, so a box that answers PASS here cannot be a box
@@ -6482,20 +6607,24 @@ _check_docs() {
 # THE STALENESS BOUND DEPENDS ON THE LANE'S MODE (the whole-wave fix round,
 # FR3-1): one missed poll is not a finding, on either kind of lane.
 #   - A `litellm` lane, and a lane whose mode cannot be read
-#     (`_codex_lane_mode` rc 1), keep THREE of the timer's 15-minute cycles,
-#     `_DR_CODEX_USAGE_STALE_S`, and their WARNs say what they said before the
-#     bridge: a litellm lane's row is stamped when its poll writes it.
-#   - A `direct` lane adds BRIDGE_FRESH_S, `_DR_CODEX_USAGE_STALE_DIRECT_S`. Its
+#     (`_codex_lane_mode` rc 1), keep THREE of the usage timer's cycles, and
+#     their WARNs say what they said before the bridge: a litellm lane's row is
+#     stamped when its poll writes it.
+#   - A `direct` lane adds BRIDGE_FRESH_S, `_DR_CODEX_BRIDGE_FRESH_S`. Its
 #     row's `ts` is when its figures were MEASURED, not when the poll wrote it:
 #     the poll publishes the bridge's own snapshot under the bridge's stamp
 #     (`_bridge_headers` in ccgpt-usage.py), up to its BRIDGE_FRESH_S (900 s)
-#     older than the poll, so three cycles alone (2700 s) would WARN there
-#     after ONE failed poll. At 3600 s it WARNs after two, and its WARN says
+#     older than the poll, so three cycles alone would WARN there after ONE
+#     failed poll. With the window it WARNs after two, and its WARN says
 #     "measured" and counts no polls (D-6898).
-# `ccrc-doctor-codex.test.ts` ties both to the shipped timer's
-# `OnUnitActiveSec=`, and the direct one to ccgpt-usage.py's BRIDGE_FRESH_S.
-_DR_CODEX_USAGE_STALE_S=2700
-_DR_CODEX_USAGE_STALE_DIRECT_S=3600
+# BOTH BOUNDS ARE COMPUTED IN `_dr_codex_usage`, after its guards, from the
+# shipped `ccrc-codex-usage@.timer` (`_dr_cycles_s`, D-7054): nothing here runs
+# when the table is sourced, and an unreadable timer leaves each verdict that
+# needs a bound unmeasured (OA-C8c (a), D-7062). `ccrc-doctor-codex.test.ts`
+# moves the timer and watches both bounds move, and pins the bridge window to
+# ccgpt-usage.py's BRIDGE_FRESH_S. The window is a bridge constant, not a
+# cadence, so it stays a literal here.
+_DR_CODEX_BRIDGE_FRESH_S=900
 
 _dr_codex_usage_box() {   # -> WARN findings, recorded; rc 2 if any, else 0; sets DR_CODEX_USAGE_PAIR and DR_CODEX_USAGE_BOX_NOTE
   local u rc=0
@@ -6561,8 +6690,15 @@ _dr_codex_usage() {   # <id> -> WARN findings for this lane, recorded; rc 2 if a
   # bound of the lane's mode (above): a mode that cannot be read is no
   # `direct` lane, and keeps the litellm bound.
   if _codex_usage_enabled "$t" && ! _codex_usage_enabled "$f"; then
-    bound="$_DR_CODEX_USAGE_STALE_S"
-    if mode="$(_codex_lane_mode "$id" 2>/dev/null)" && [ "$mode" = direct ]; then bound="$_DR_CODEX_USAGE_STALE_DIRECT_S"; else mode=''; fi
+    # Three of the usage timer's periods, read from the shipped unit file
+    # here, after the guards above (D-7054); a bound that cannot be read leaves
+    # each verdict that needs it unmeasured (OA-C8c (a), D-7062).
+    local cycles cycles_rc=0
+    cycles="$(_dr_cycles_s ccrc-codex-usage@.timer 3)" || cycles_rc=$?
+    bound="$cycles"
+    if mode="$(_codex_lane_mode "$id" 2>/dev/null)" && [ "$mode" = direct ]; then
+      [ "$cycles_rc" -ne 0 ] || bound=$(( cycles + _DR_CODEX_BRIDGE_FRESH_S ))
+    else mode=''; fi
     row="$HOME/.cc-limits/$id.json"
     if ! now="$(date +%s 2>/dev/null)" || ! [[ "$now" =~ ^[0-9]+$ ]]; then
       _dr_cx_warn "$id: this box's \`date\` cannot answer +%s, so the age of this lane's usage row cannot be measured" \
@@ -6570,7 +6706,9 @@ _dr_codex_usage() {   # <id> -> WARN findings for this lane, recorded; rc 2 if a
       rc=2
     elif [ ! -e "$row" ] && [ ! -L "$row" ]; then
       en="$(_plat_mtime "$(_codex_usage_wants)/$t" 2>/dev/null)" || en=''
-      if [[ "$en" =~ ^[0-9]+$ ]] && [ $((now - en)) -le "$bound" ]; then
+      if [ "$cycles_rc" -ne 0 ]; then
+        _dr_codex_usage_unmeasured "$id" "$cycles_rc" "whether this lane's first usage row is overdue (none at $row yet)" || rc=$?
+      elif [[ "$en" =~ ^[0-9]+$ ]] && [ $((now - en)) -le "$bound" ]; then
         note+=("no usage row yet (enabled $((now - en))s ago; the first poll runs five minutes after enable)")
       else
         _dr_cx_warn "$id: $t has been enabled for longer than $((bound / 60)) min and this lane has never published a usage row ($row)" \
@@ -6589,7 +6727,9 @@ _dr_codex_usage() {   # <id> -> WARN findings for this lane, recorded; rc 2 if a
         rc=2
       else
         age=$((now - ts))
-        if [ "$age" -gt "$bound" ] && [ "$mode" = direct ]; then
+        if [ "$cycles_rc" -ne 0 ]; then
+          _dr_codex_usage_unmeasured "$id" "$cycles_rc" "whether this lane's usage row, ${age}s old, is stale" || rc=$?
+        elif [ "$age" -gt "$bound" ] && [ "$mode" = direct ]; then
           _dr_cx_warn "$id: its usage row was last measured $(((age + 59) / 60)) min ago — more than $((bound / 60)) min, so $t's recent polls have published nothing" \
             "read what the publisher says: $(_dr_log_hint "ccrc-codex-usage@$id.service")"
           rc=2
@@ -6608,6 +6748,18 @@ _dr_codex_usage() {   # <id> -> WARN findings for this lane, recorded; rc 2 if a
   # through models-op's `show`, and a second copy would print each twice.
   DR_CODEX_USAGE_NOTE="$(_dr_join ${note[@]+"${note[@]}"})"
   return "$rc"
+}
+
+# The finding for a lane whose usage-row verdict needs the usage timer's
+# cadence and could not read it (D-7054; OA-C8c (a), D-7062): rc 1 from
+# `_dr_cycles_s` is a WARN naming the unit, rc 3 a FAIL naming the bug.
+_dr_codex_usage_unmeasured() {   # <id> <rc> <what> -> recorded; returns 2 (WARN) or 1 (FAIL)
+  if [ "$2" -eq 3 ]; then
+    _dr_cx_fail "$1: $(_dr_cadence_unloaded_what "$3")" "$(_dr_cadence_unloaded_fix codex ccrc-codex-usage@.timer)"
+    return 1
+  fi
+  _dr_cx_warn "$1: $(_dr_cadence_unread_what ccrc-codex-usage@.timer "$3")" "$(_dr_cadence_unread_fix)"
+  return 2
 }
 
 # ── the usage timer ccrc left enabled for an id that is no longer a Codex lane ──
@@ -8136,8 +8288,18 @@ _check_scope-sweep() {
     return 2
   fi
   if (( age > stale )); then
-    _dr_warn scope-sweep "the verdict record is ${age}s old — the sweep runs every minute, so it has stopped, and its dead-scope report is stale" \
+    # The sentence names the sweep's period, read from the shipped unit file
+    # (D-7054); one that cannot be read drops the clause and says why on a line
+    # of its own, never a literal (OA-C8c (a), D-7062).
+    local period cad_rc=0 runs="the sweep has stopped"
+    period="$(_dr_cycles_s ccd-scope-sweep.timer 1)" || cad_rc=$?
+    [ "$cad_rc" -ne 0 ] || runs="the sweep runs $(_dr_every_words "$period"), so it has stopped"
+    _dr_warn scope-sweep "the verdict record is ${age}s old — $runs, and its dead-scope report is stale" \
       "systemctl --user status ccd-scope-sweep.timer ccd-scope-sweep.service; journalctl --user -u ccd-scope-sweep.service"
+    case "$cad_rc" in
+      1) _dr_cadence_unread scope-sweep ccd-scope-sweep.timer "the period that sentence names" ;;
+      3) _dr_cadence_unloaded scope-sweep ccd-scope-sweep.timer "the period that sentence names"; return 1 ;;
+    esac
     return 2
   fi
   while IFS= read -r line; do
@@ -9480,6 +9642,10 @@ _check_docs-sw() {
 _check_server-caps() {
   local LC_ALL=C
   local role="" f="$HOME/.ccrc/server-caps" writer remedy why="" lease=180 writer_unit=""
+  # The fleet writer's sentence names ccd-update-sync.timer's period, read from the shipped unit file (D-7054); one that
+  # cannot be read drops it and says why on a line of its own, never a literal (OA-C8c (a), D-7062). `cad_ret` is the
+  # class that line adds to whatever the check answers.
+  local period cad_rc=0 cad_ret=0
   [ -f "${BOX_ENV_FILE:-}" ] && [ -r "${BOX_ENV_FILE:-}" ] && role="$(_box_env_value "$BOX_ENV_FILE" CCRC_ROLE)"
   case "$role" in
     server)
@@ -9491,7 +9657,9 @@ _check_server-caps() {
         _dr_skip server-caps "ccd-update-sync.timer is not installed on this box, so nothing here records the server's words and the session hook's gated arms stay off (only a --role fleet install places it, and macOS ships no systemd timer)"
         return 3
       fi
-      writer="ccd-update-sync (it asks the server's /health every minute)"
+      period="$(_dr_cycles_s ccd-update-sync.timer 1)" || cad_rc=$?
+      writer="ccd-update-sync"
+      [ "$cad_rc" -ne 0 ] || writer="ccd-update-sync (it asks the server's /health $(_dr_every_words "$period"))"
       remedy="run systemctl --user start ccd-update-sync.service and read its log ($(_dr_log_hint ccd-update-sync.service)); the server CCRC_SERVER_URL names in ~/.ccrc/agent.env must answer /health" ;;
     both)
       writer_unit=ccrc.service
@@ -9507,6 +9675,10 @@ _check_server-caps() {
       fi
       writer="this box's own ccrc server (role derived both), if one runs here"
       remedy="record CCRC_ROLE in the box env file; if this box runs the ccrc server, $(_dr_restart_hint ccrc.service) and read its log for 'could not write ~/.ccrc/server-caps'" ;;
+  esac
+  case "$cad_rc" in
+    1) _dr_cadence_unread server-caps ccd-update-sync.timer "the period of the writer named below"; cad_ret=2 ;;
+    3) _dr_cadence_unloaded server-caps ccd-update-sync.timer "the period of the writer named below"; cad_ret=1 ;;
   esac
   local -a lines=()
   local ln="" at="" words="" now
@@ -9524,7 +9696,7 @@ _check_server-caps() {
         unit_age=$(($(date +%s) - unit_mtime))
         if [ "$unit_age" -ge 0 ] && [ "$unit_age" -lt "$lease" ]; then
           _dr_pass server-caps "first-write-pending: $writer_unit was installed ${unit_age}s ago and ~/.ccrc/server-caps has not been written yet, so the session hook's gated arms are off (the safe state) until $writer writes it, within ${lease}s"
-          return 0
+          return "$cad_ret"
         fi
       fi
     fi
@@ -9558,6 +9730,7 @@ _check_server-caps() {
   if [ -n "$why" ]; then
     _dr_warn server-caps "~/.ccrc/server-caps is $why, so the session hook's gated arms are off on this box (it writes what it always wrote, which is safe) until $writer rewrites it" \
       "$remedy"
+    [ "$cad_ret" -eq 1 ] && return 1
     return 2
   fi
   if [ -n "$words" ]; then
@@ -9565,7 +9738,7 @@ _check_server-caps() {
   else
     _dr_pass server-caps "~/.ccrc/server-caps is current (written $((now - at))s ago by $writer) and lists no words, so the server advertises nothing and the hook's gated arms stay off"
   fi
-  return 0
+  return "$cad_ret"
 }
 
 # ── oom-policy: the victim policy's two scope drop-ins (D-5241) ───────────

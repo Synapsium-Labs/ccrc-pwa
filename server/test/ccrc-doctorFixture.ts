@@ -44,6 +44,7 @@ import { mkTmp } from './tmpHelpers.js';
 import { ghContainedEnv, ghPoisonAt, seedAccountsSh } from './ccdWsHelpers.js';
 import { plantAuthHelper, plantAuthModule, fixtureSecretLine, compiledSecretJs } from './authFixtures.js';
 import { IS_DARWIN } from './platformFixtures.js';
+import { plantShippedTimers } from './shippedTimers.js';
 import { DOCS_INDEX_READY, docsIndexStubScript } from './docsIndexFixtures.js';
 import { codexRoster, freeLanes, GPT_LANE_BINS, killLaneProcesses, plantFakeRuntime, plantCodexUsage, plantLaneAuth, spawnListener, type LanePorts, type Listener } from './codexLaneFixture.js';
 import { pythonOrSkip } from './ccgptHarness.js';
@@ -148,6 +149,10 @@ export function installCcrc(home: string): void {
   for (const f of ['roster-json.mjs', 'base-url.mjs']) {
     copyFileSync(join(REPO, 'shared', f), join(home, 'ccrc', 'shared', f));
   }
+  // The shipped timers (W8 Task C8b, D-7054): the doctor reads each cadence from `$BOX_TREE_DIR/deploy/systemd/<unit>`,
+  // never the installed copy, and both deploy lanes place `deploy/` whole. COPIES, so a row may replace one
+  // (`writeShippedTimer`).
+  plantShippedTimers(join(home, 'ccrc'));
 }
 
 /** `~/.ccrc/auth.scrypt`, as `ccrc passwd` really writes it: 0600, one line,

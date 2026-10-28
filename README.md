@@ -1088,7 +1088,8 @@ In remote mode the foot of the fleet screen always
 carries `BuildLine`: `fleet <version> · server <version>`, read from the node inventory. A side reads
 `unversioned (<sha>)` for a stamp with no tag and adds `dirty` for a dirty tree; it is amber unless the side
 is a clean versioned release, and `—` when that node's stamp cannot be stated (never measured, unread, or the
-node unreachable). On the fleet screen one quiet update line (`↑ vX available`, a door to Settings › Updates,
+node unreachable). On every screen at a desk, and on the fleet screen below 900 px, one quiet update line
+(`↑ vX available`, a door to Settings › Updates,
 its title `vX is out on <channel> — …`) and a `→ vX` on that node's side of `BuildLine` appear while a measured
 node with a channel, whose stamp was read, that is not a macOS node, has a newer desired tag; the line also waits
 until GitHub has answered since the server started. Refined shows it as a row under its bar at a desk, Instrument
@@ -1758,15 +1759,18 @@ ccrc account add …                   # connect a lane by verb rather than by h
   if the map ever comes back.
 
 **`/accounts`** (one of the app's top-level routes, reached from the labelled **Account** button in the fleet
-header, or by tapping the compact `AccountsStrip` — a bar across the top on a wide screen, inside the fleet
-list on a phone) shows every account ccd knows about, not just the ones with headroom.
+header, or from the `AccountsStrip` — a row of lane cards below the bar on a wide screen in either skin, on a phone
+in Refined's fleet header or Instrument's fleet list: each card opens the screen at its account, and **All accounts**
+opens the full screen) shows every account ccd knows about, not just the ones with headroom.
 It rides the existing `GET /api/accounts` pipeline — no new route, no new
 whitelist grant — with its own 20 s poller. Per account:
 
-- Both windows (5h / 7d) as bars with the strip's exact `%`/`reset`/`—`
-  three-way, never collapsed: `reset` means the window ended and the zero is
-  *inferred* from the reset timestamp; a measured `0%` means something ran
-  and the account really is empty; `—` means nothing has ever been measured.
+- Both windows (5h / 7d) as bars, each read through the one reading the
+  strip uses (`windowReading`): a measured window shows its percentage; a
+  window that rolled over shows `0%`, *inferred* from the reset timestamp
+  and said so to a screen reader (its bar left empty); a measured `0%` is
+  plain, since something ran and the account really is empty; `—` means
+  nothing has ever been measured.
 - A freshness line, **"last reported *age*"**. Telemetry is a byproduct of a
   session rendering its statusline, so an idle account simply stops
   reporting — the screen reads as "last known", never as live. There is no
@@ -1775,9 +1779,10 @@ whitelist grant — with its own 20 s poller. Per account:
   telemetry keepalive" below).
 - A disabled lane (`~/.cc-sessions/<wrapper>-disabled` present) renders
   **greyed with "disabled on the fleet host" — shown as switched off, never
-  hidden.** The compact strip still hides a disabled lane entirely (right for
-  an always-on bar); the screen's whole job is "show me my accounts", so
-  hiding one here would be the wrong call in the other direction.
+  hidden.** The `AccountsStrip` still hides a disabled lane entirely (right
+  for an always-on row of cards), though it keeps a lane whose sign-in expired,
+  last in the row with its fills greyed; the screen's whole job is "show me my
+  accounts", so hiding one here would be the wrong call in the other direction.
 - A lane whose credential the health probe measured dead (`~/.cc-sessions/<wrapper>-authdead`) renders
   greyed with **"sign-in expired on the fleet host"** — both notes when it is also disabled, because the two
   are cleared by different acts. `GET /api/accounts` carries them as two flags, `disabled` and `authDead`,
@@ -4994,7 +4999,7 @@ residual.
 **A finished run's worker is put to sleep once idle (D-5370, D-5427, D-6091, D-6092).** A wave that is not the programme's last
 leaves its child workspace in place — the reclaim sweep above waits for the programme — and, until this lane, its
 Claude Code process too, holding its memory for as long as the programme ran. The server's stop-done lane
-(`stopDoneSweep.ts`, its verdict the pure `stopDone.ts`; once a minute on the watcher's tick, never inside the run's
+(`sleepLane.ts`, its verdict the pure `stopDone.ts`; once a minute on the watcher's tick, never inside the run's
 transition) puts such a worker to sleep with `ccd hibernate <id>`, declared as the lane `sweep:stop-done`: only a
 dispatched child (a `.child` marker — never an operator's own session), whose newest placed run (a `planned` run, a
 wave not yet dispatched, does not count) is finished — `done` or `failed` and closed at least 10 minutes ago, or a
@@ -5030,7 +5035,7 @@ stays awake), no pane menu, background work or subagents, a turn marker that rea
 exactly 0) and nothing scheduled (`crons` exactly 0; an older hook's marker, with no `crons`, holds) whose latest main
 event is more than N ago (6 h; `$REG/hibernate-after-hours`, 1 to 168, overrides), no hold, no open run naming it as
 worker or claimant in any non-terminal state, no claim, no outstanding mail, nobody with it open, not stranded,
-swap-blocked, under a substrate fault or archived, and no `$REG/<id>.no-hibernate`. The sweep (`hibernateSweep.ts`,
+swap-blocked, under a substrate fault or archived, and no `$REG/<id>.no-hibernate`. The sweep (`sleepLane.ts`,
 every 5 minutes) logs a `ccrc-server: hibernate-shadow <id> idle=<h>h` line, at most once per session an hour, until the
 operator ARMS it with `$REG/hibernate-live`; armed, on a box whose `ccd caps` lists `hibernate`, it composes `ccd
 hibernate <id>` for at most three sessions a sweep, each on the coordination serialiser and the session's queue after

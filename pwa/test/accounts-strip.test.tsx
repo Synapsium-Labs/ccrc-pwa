@@ -1,13 +1,17 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import ts from 'typescript';
 import type { AccountUsage } from '../../shared/api';
 import { CommandLayer } from '../src/command/CommandLayer';
 import { AccountsStrip } from '../src/fleet/AccountsStrip';
+import { ACCOUNTS_DOOR_LABEL } from '../src/fleet/laneWords';
 import { api } from '../src/lib/api';
 import { navigate } from '../src/lib/router';
 import { declValue, ruleIn } from './cssRule';
+import { isSpecifier, parseTs } from './literalWalker';
 import { TEST_ROSTER } from './rosterFixture';
 
 const fleetCss = readFileSync(path.join(import.meta.dirname, '..', 'src', 'fleet', 'fleet.css'), 'utf8');
@@ -34,7 +38,7 @@ const stubAccounts = (accounts: AccountUsage[]): void => {
 afterEach(() => { cleanup(); vi.restoreAllMocks(); navigate('/'); });
 
 describe('AccountsStrip', () => {
-  it('shows an inferred zero as "reset" and a measured zero as 0%', async () => {
+  it('a rolled-over window reads 0% with its countdown', async () => {
     // Both fixtures are states the server can actually emit: readLimits sets
     // fiveRolledOver only when fiveResetAt is non-null and has passed (and then
     // forces five to 0), so an inferred zero always comes with a past reset
@@ -50,11 +54,279 @@ describe('AccountsStrip', () => {
       roster: TEST_ROSTER,
     });
     render(<AccountsStrip />);
-    // claude's 5h rolled over; claude9's 5h was really measured at zero.
-    expect(await screen.findByText('reset')).toBeTruthy();
-    expect(screen.getByText('0%')).toBeTruthy();
+    // claude's 5h rolled over (R48: it reads 0%, its sr-only words say it reset and the 0% is inferred);
+    // claude9's 5h was really measured at zero, which speaks no "inferred".
+    const inferred = await screen.findByText(/inferred/);
+    expect(inferred).toHaveTextContent('0%, inferred: the window reset');
+    const rolledRow = inferred.closest('.acct-row') as HTMLElement;
+    expect(rolledRow.querySelector('.acct-pct [aria-hidden="true"]')).toHaveTextContent('0%');
+    // …beside its countdown (the stamp has passed, so the window reads as resetting now).
+    expect(rolledRow.querySelector('.acct-reset')).toHaveTextContent(/↻/);
+    // Two 0% nodes show: the rolled-over one and the measured one.
+    expect(screen.getAllByText('0%')).toHaveLength(2);
     expect(screen.getByText('57%')).toBeTruthy();
     expect(screen.getByText('93%')).toBeTruthy();
+  });
+
+  it('a measured window prints its percentage once: no sr-only span and nothing aria-hidden beside it', async () => {
+    vi.spyOn(api, 'accounts').mockResolvedValue({
+      accounts: [acct({ wrapper: 'claude', five: 40, fiveResetAt: nowSec + 9000, fiveRolledOver: false, seven: 57, sevenRolledOver: false })],
+      projected: { wrapper: 'claude', score: 57 },
+      roster: TEST_ROSTER,
+    });
+    render(<AccountsStrip />);
+    const pct = (await screen.findByText('57%')).closest('.acct-pct') as HTMLElement;
+    expect(pct.querySelector('.sr-only')).toBeNull();
+    expect(pct.querySelector('[aria-hidden]')).toBeNull();
+    expect(pct.textContent).toBe('57%');
+    // One element holds the text: the query above would have thrown on two.
+    expect(screen.getAllByText('40%')).toHaveLength(1);
+  });
+
+  // ── the lanes row (T2c, D-6329, R48): sorted, each card a door, one tab stop, All accounts at the end ──
+  const cardsOf = (container: HTMLElement): HTMLElement[] => [...container.querySelectorAll<HTMLElement>('.account-gauge')];
+  const nameOf = (card: HTMLElement): string => card.querySelector('.account-gauge-label')?.textContent ?? '';
+  const threeLanes = (): AccountUsage[] => [
+    acct({ wrapper: 'lane-a', five: 60, seven: 80, fiveResetAt: nowSec + 3600, sevenResetAt: nowSec + 86400 }),
+    acct({ wrapper: 'lane-b', five: 10, seven: null, fiveResetAt: nowSec + 7200 + 1800 }),
+    acct({ wrapper: 'lane-c', five: 30, seven: 20, fiveResetAt: nowSec + 600, sevenResetAt: nowSec + 2 * 86400 }),
+  ];
+
+  it('the cards draw lanesByFree\'s order: most free first', async () => {
+    stubAccounts(threeLanes());
+    const { container } = render(<AccountsStrip />);
+    await screen.findByText('lane-a');
+    expect(cardsOf(container).map(nameOf)).toEqual(['lane-b', 'lane-c', 'lane-a']);
+  });
+
+  it('each card is its lane\'s door: a tap and Enter open /accounts?lane=<id>, and it carries data-action open-lane and no data-command', async () => {
+    stubAccounts(threeLanes());
+    const { container } = render(<AccountsStrip />);
+    await screen.findByText('lane-a');
+    for (const card of cardsOf(container)) {
+      expect(card).toHaveAttribute('role', 'link');
+      expect(card).toHaveAttribute('data-action', 'open-lane');
+      expect(card).not.toHaveAttribute('data-command');
+    }
+    const c = cardsOf(container).find((x) => nameOf(x) === 'lane-c')!;
+    fireEvent.click(c);
+    expect(location.pathname + location.search).toBe('/accounts?lane=lane-c');
+    navigate('/');
+    fireEvent.keyDown(cardsOf(container).find((x) => nameOf(x) === 'lane-a')!, { key: 'Enter' });
+    expect(location.pathname + location.search).toBe('/accounts?lane=lane-a');
+    // A link: Space does not activate it.
+    navigate('/');
+    fireEvent.keyDown(c, { key: ' ' });
+    expect(location.pathname).toBe('/');
+  });
+
+  it('a card is named by laneDoorLabel and holds no interactive control of its own', async () => {
+    stubAccounts(threeLanes());
+    const { container } = render(<AccountsStrip />);
+    await screen.findByText('lane-a');
+    const b = cardsOf(container).find((x) => nameOf(x) === 'lane-b')!;
+    expect(b).toHaveAccessibleName(/^lane-b: 5h 10%, resets in 2h (29|30)m — opens lane-b on the Accounts screen$/);
+    expect(b.querySelector('a, button, input, select, textarea, [tabindex], [role="button"], [role="link"]')).toBeNull();
+  });
+
+  it('the label carries the lane\'s full name as its title', async () => {
+    stubAccounts([acct({ wrapper: 'lane-with-a-much-longer-name', five: 5 })]);
+    const { container } = render(<AccountsStrip />);
+    const label = await screen.findByText('lane-with-a-much-longer-name');
+    expect(label).toHaveAttribute('title', 'lane-with-a-much-longer-name');
+    expect(cardsOf(container)).toHaveLength(1);
+  });
+
+  it('the strip builds no /accounts path of its own', () => {
+    // Parsed with TypeScript: the header comment that names /accounts is not a literal. The one builder is imported.
+    const src = parseTs(path.join(import.meta.dirname, '..', 'src', 'fleet', 'AccountsStrip.tsx'));
+    const literals: string[] = [];
+    let importsBuilder = false;
+    const visit = (n: ts.Node): void => {
+      // A module specifier names a module, not a path the strip builds.
+      if ((ts.isStringLiteral(n) || ts.isNoSubstitutionTemplateLiteral(n) || ts.isJsxText(n)) && !isSpecifier(n)) literals.push(n.text);
+      if (ts.isTemplateHead(n) || ts.isTemplateMiddle(n) || ts.isTemplateTail(n)) literals.push(n.text);
+      if (ts.isImportDeclaration(n)) {
+        const b = n.importClause?.namedBindings;
+        if (b !== undefined && ts.isNamedImports(b) && b.elements.some((e) => (e.propertyName ?? e.name).text === 'accountsLaneHref')) importsBuilder = true;
+      }
+      ts.forEachChild(n, visit);
+    };
+    visit(src);
+    expect(literals.filter((l) => l.includes('/accounts'))).toEqual([]);
+    expect(importsBuilder).toBe(true);
+  });
+
+  it('after the last card, All accounts is the go-accounts door', async () => {
+    stubAccounts(threeLanes());
+    const { container } = render(<AccountsStrip />);
+    await screen.findByText('lane-a');
+    const all = screen.getByRole('button', { name: 'All accounts' });
+    expect(all).toHaveAttribute('data-command', 'go-accounts');
+    expect(all).not.toHaveAttribute('data-action');
+    expect(all).not.toHaveAttribute('aria-label');
+    expect(all.closest('.accounts-end')).not.toBeNull();
+    const last = cardsOf(container).at(-1)!;
+    expect(last.compareDocumentPosition(all) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(all.closest('.accounts-end')!.parentElement).toBe(container.querySelector('.accounts-strip'));
+  });
+
+  it('with lanes to show the strip is a group named over every live lane, no link and no tab stop; with none it is the go-accounts door', async () => {
+    // The fullest lane is the last in sort order, so a name read over a subset would name another lane.
+    const lanes = ['a', 'b', 'c', 'd', 'e', 'f'].map((x, i) => acct({ wrapper: `lane-${x}`, five: 5 + i * 10, seven: null }));
+    stubAccounts([...lanes, acct({ wrapper: 'lane-off', five: 99, seven: null, disabled: true })]);
+    const { container } = render(<AccountsStrip />);
+    const group = await screen.findByRole('group', { name: 'account usage, highest lane-f 55%' });
+    expect(group).toHaveClass('accounts-strip');
+    expect(group).not.toHaveAttribute('tabindex');
+    expect(group).not.toHaveAttribute('data-command');
+    expect(group).not.toHaveAttribute('data-action');
+    expect(screen.queryByRole('link', { name: 'account usage — open accounts' })).toBeNull();
+    expect(container.querySelectorAll('[role="link"]')).toHaveLength(lanes.length);
+    // With none (every lane disabled), the strip is the one go-accounts door: a link, a tab stop, named for where it goes.
+    cleanup();
+    stubAccounts([acct({ wrapper: 'lane-a', disabled: true }), acct({ wrapper: 'lane-b', disabled: true })]);
+    render(<AccountsStrip />);
+    const door = await screen.findByRole('link', { name: ACCOUNTS_DOOR_LABEL });
+    expect(door).toHaveClass('accounts-strip');
+    expect(door).toHaveAttribute('role', 'link');
+    expect(door.tabIndex).toBe(0);
+    expect(door).toHaveAttribute('data-command', 'go-accounts');
+    expect(screen.queryByRole('group')).toBeNull();
+  });
+
+  it('the cards are one tab stop: arrows, Home and End move focus and the stop, stop at either end, and Tab goes on to All accounts', async () => {
+    stubAccounts(threeLanes());
+    const user = userEvent.setup();
+    const { container } = render(<AccountsStrip />);
+    await screen.findByText('lane-a');
+    const cards = (): HTMLElement[] => cardsOf(container);
+    const stops = (): string[] => cards().filter((c) => c.tabIndex === 0).map(nameOf);
+    // Sorted: lane-b, lane-c, lane-a. The first card holds the stop at mount.
+    expect(stops()).toEqual(['lane-b']);
+    expect(cards().filter((c) => c.tabIndex === -1)).toHaveLength(2);
+    await user.tab();
+    expect(document.activeElement).toBe(cards()[0]);
+    await user.keyboard('{ArrowLeft}');           // no wrap at the start
+    expect(document.activeElement).toBe(cards()[0]);
+    await user.keyboard('{ArrowRight}');
+    expect(document.activeElement).toBe(cards()[1]);
+    expect(stops()).toEqual(['lane-c']);
+    await user.keyboard('{ArrowDown}');
+    expect(document.activeElement).toBe(cards()[2]);
+    await user.keyboard('{ArrowRight}');          // no wrap at the end
+    expect(document.activeElement).toBe(cards()[2]);
+    await user.keyboard('{ArrowUp}');
+    expect(document.activeElement).toBe(cards()[1]);
+    await user.keyboard('{Home}');
+    expect(document.activeElement).toBe(cards()[0]);
+    await user.keyboard('{End}');
+    expect(document.activeElement).toBe(cards()[2]);
+    expect(stops()).toEqual(['lane-a']);
+    await user.tab();
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'All accounts' }));
+    // Shift+Tab comes back to the card that holds the stop.
+    await user.tab({ shift: true });
+    expect(document.activeElement).toBe(cards()[2]);
+  });
+
+  it('the stop follows its lane through a re-sort, and falls to the first card when that lane leaves', async () => {
+    // Fake timers from before the mount, so the strip's 20 s poll interval is the fake one.
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const first = [acct({ wrapper: 'lane-a', five: 10 }), acct({ wrapper: 'lane-b', five: 20 }), acct({ wrapper: 'lane-c', five: 30 })];
+      const reply = (accounts: AccountUsage[]) => ({ accounts, projected: { wrapper: 'lane-a', score: 0 }, roster: TEST_ROSTER });
+      const spy = vi.spyOn(api, 'accounts').mockResolvedValue(reply(first));
+      const { container } = render(<AccountsStrip />);
+      await screen.findByText('lane-a');
+      const stops = (): string[] => cardsOf(container).filter((c) => c.tabIndex === 0).map(nameOf);
+      const byName = (n: string): HTMLElement => cardsOf(container).find((c) => nameOf(c) === n)!;
+      act(() => { byName('lane-a').focus(); });
+      fireEvent.keyDown(byName('lane-a'), { key: 'ArrowRight' });   // lane-b holds the stop
+      expect(stops()).toEqual(['lane-b']);
+      // lane-b becomes the fullest on the next poll: it moves to the end, and the stop stays on it.
+      spy.mockResolvedValue(reply([first[0]!, acct({ wrapper: 'lane-b', five: 90 }), first[2]!]));
+      await act(async () => { await vi.advanceTimersByTimeAsync(20_100); });
+      expect(cardsOf(container).map(nameOf)).toEqual(['lane-a', 'lane-c', 'lane-b']);
+      expect(stops()).toEqual(['lane-b']);
+      // lane-b leaves: the stop falls to the first card.
+      spy.mockResolvedValue(reply([first[0]!, first[2]!]));
+      await act(async () => { await vi.advanceTimersByTimeAsync(20_100); });
+      expect(cardsOf(container).map(nameOf)).toEqual(['lane-a', 'lane-c']);
+      expect(stops()).toEqual(['lane-a']);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('focus stays on the same lane\'s card through a re-sort, not only its tab stop', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const first = [acct({ wrapper: 'lane-a', five: 10 }), acct({ wrapper: 'lane-b', five: 20 }), acct({ wrapper: 'lane-c', five: 30 })];
+      const reply = (accounts: AccountUsage[]) => ({ accounts, projected: { wrapper: 'lane-a', score: 0 }, roster: TEST_ROSTER });
+      const spy = vi.spyOn(api, 'accounts').mockResolvedValue(reply(first));
+      const { container } = render(<AccountsStrip />);
+      await screen.findByText('lane-a');
+      const byName = (n: string): HTMLElement => cardsOf(container).find((c) => nameOf(c) === n)!;
+      act(() => { byName('lane-b').focus(); });
+      expect(document.activeElement).toBe(byName('lane-b'));
+      // lane-b becomes the fullest on the next poll: it moves from the middle to last, and focus must go with it.
+      spy.mockResolvedValue(reply([first[0]!, acct({ wrapper: 'lane-b', five: 90 }), first[2]!]));
+      await act(async () => { await vi.advanceTimersByTimeAsync(20_100); });
+      expect(cardsOf(container).map(nameOf)).toEqual(['lane-a', 'lane-c', 'lane-b']);
+      expect(document.activeElement).toBe(byName('lane-b'));
+      expect(byName('lane-b').tabIndex).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('arrow keys pressed on All accounts leave the cards\' tab stop where it was', async () => {
+    stubAccounts(threeLanes());
+    const user = userEvent.setup();
+    const { container } = render(<AccountsStrip />);
+    await screen.findByText('lane-a');
+    const stops = (): string[] => cardsOf(container).filter((c) => c.tabIndex === 0).map(nameOf);
+    await user.tab();
+    await user.keyboard('{ArrowRight}');          // lane-c holds the stop
+    expect(stops()).toEqual(['lane-c']);
+    await user.tab();                              // on to All accounts
+    const all = screen.getByRole('button', { name: 'All accounts' });
+    expect(document.activeElement).toBe(all);
+    for (const key of ['{ArrowLeft}', '{ArrowRight}', '{ArrowUp}', '{ArrowDown}', '{Home}', '{End}']) await user.keyboard(key);
+    expect(document.activeElement).toBe(all);
+    expect(stops()).toEqual(['lane-c']);
+  });
+
+  it('every card shows each window it has, with its meter, percentage and countdown', async () => {
+    stubAccounts(threeLanes());
+    const { container } = render(<AccountsStrip />);
+    await screen.findByText('lane-a');
+    const byName = (n: string): HTMLElement => cardsOf(container).find((c) => nameOf(c) === n)!;
+    const rows = (c: HTMLElement): HTMLElement[] => [...c.querySelectorAll<HTMLElement>('.acct-row')];
+    expect(rows(byName('lane-a')).map((r) => r.querySelector('.acct-win')!.textContent)).toEqual(['5h', '7d']);
+    expect(rows(byName('lane-b')).map((r) => r.querySelector('.acct-win')!.textContent)).toEqual(['5h']);
+    for (const r of rows(byName('lane-a'))) {
+      expect(r.querySelector('.acct-meter')).not.toBeNull();
+      expect(r.querySelector('.acct-pct')!.textContent).toMatch(/^\d+%$/);
+      expect(r.querySelector('.acct-reset')!.textContent).toMatch(/↻ \S/);
+    }
+    expect(rows(byName('lane-a'))[0]!.querySelector('.acct-pct')).toHaveTextContent('60%');
+    expect(rows(byName('lane-a'))[1]!.querySelector('.acct-pct')).toHaveTextContent('80%');
+  });
+
+  it('a lane never read shows no reading and draws no meter', async () => {
+    stubAccounts([acct({ wrapper: 'lane-a', five: null, seven: null }), acct({ wrapper: 'lane-b', five: 25, seven: null })]);
+    const { container } = render(<AccountsStrip />);
+    await screen.findByText('lane-b');
+    const cards = cardsOf(container);
+    // Sorted last: a lane never read.
+    expect(cards.map(nameOf)).toEqual(['lane-b', 'lane-a']);
+    const never = cards[1]!;
+    expect(never).toHaveTextContent('no reading');
+    expect(never.querySelector('.acct-row, .acct-meter, .acct-fill')).toBeNull();
+    expect(never).not.toHaveTextContent('0%');
+    expect(never).toHaveAccessibleName('lane-a: no reading — opens lane-a on the Accounts screen');
   });
 
   it('hides an account whose lane is switched off', async () => {
@@ -108,29 +380,39 @@ describe('AccountsStrip', () => {
     });
   });
 
-  // Task 6 (Build 3 PR G, Rider A): the strip is the nav affordance onto the
-  // new /accounts screen — "both mounts, one behaviour" (it's rendered twice,
-  // desktop top bar + mobile fleet list, but there's one component to make
-  // tappable). It was a plain `<div role="group">` before this; a real
-  // interactive element earns the tap-target gate.
-  //
-  // The strip is the `go-accounts` command door now (desktop-polish S5a): a tap asks the command layer, which navigates, so the two
-  // nav cases mount the layer beside it.
-  describe('nav affordance (Task 6)', () => {
-    it('is a link to /accounts, reachable by tap or keyboard', async () => {
+  // Task 6 (Build 3 PR G, Rider A) made the strip the nav affordance onto /accounts; T2c (D-6329, R48) splits that
+  // door: with lanes to show, each CARD is the door to its own lane (`actionDoor('open-lane', …)`: it navigates by
+  // itself, so no command layer is needed), and the end cell's All accounts button is the `go-accounts` command door
+  // (the layer navigates). The placeholder strip, with no lane to show, stays the one `go-accounts` door.
+  describe('nav affordance (Task 6, T2c)', () => {
+    it('a card is a link to its lane, reachable by tap, and no command layer is mounted to take it there', async () => {
       stubAccounts([acct({ wrapper: 'claude' })]);
-      render(<><CommandLayer openNewSession={() => {}} /><AccountsStrip /></>);
-      const link = await screen.findByRole('link', { name: 'account usage — open accounts' });
-      fireEvent.click(link);
+      render(<AccountsStrip />);
+      const card = await screen.findByRole('link', { name: /^team·max:/ });
+      fireEvent.click(card);
       expect(location.pathname).toBe('/accounts');
+      expect(location.search).toBe('?lane=claude');
     });
 
-    it('activates on Enter (keyboard-only reachable, not just tap)', async () => {
+    it('a card activates on Enter (keyboard-only reachable, not just tap)', async () => {
       stubAccounts([acct({ wrapper: 'claude' })]);
-      render(<><CommandLayer openNewSession={() => {}} /><AccountsStrip /></>);
-      const link = await screen.findByRole('link', { name: 'account usage — open accounts' });
-      fireEvent.keyDown(link, { key: 'Enter' });
+      render(<AccountsStrip />);
+      const card = await screen.findByRole('link', { name: /^team·max:/ });
+      fireEvent.keyDown(card, { key: 'Enter' });
       expect(location.pathname).toBe('/accounts');
+      expect(location.search).toBe('?lane=claude');
+    });
+
+    it('All accounts goes through the command layer: without one a tap goes nowhere, with one it opens /accounts', async () => {
+      stubAccounts([acct({ wrapper: 'claude' })]);
+      render(<AccountsStrip />);
+      fireEvent.click(await screen.findByRole('button', { name: 'All accounts' }));
+      expect(location.pathname).toBe('/');
+      cleanup();
+      render(<><CommandLayer openNewSession={() => {}} /><AccountsStrip /></>);
+      fireEvent.click(await screen.findByRole('button', { name: 'All accounts' }));
+      expect(location.pathname).toBe('/accounts');
+      expect(location.search).toBe('');
     });
 
     // jsdom evaluates no stylesheet (vitest runs with `css: false`), so a
@@ -138,12 +420,14 @@ describe('AccountsStrip', () => {
     // exists off the shared token, and the render proves the class is still
     // on the element the scrape describes. See test/cssRule.ts for why a text
     // scrape is the right tool here at all.
-    it('is at least one tap tall, off the shared token — the whole strip is now a link', () => {
-      expect(declValue(ruleIn(fleetCss, '.accounts-strip'), 'min-height')).toBe('var(--tap-min)');
+    it('the placeholder door and a card are each at least one tap tall, off the shared token', () => {
+      expect(declValue(ruleIn(fleetCss, '.accounts-strip[role="link"]'), 'min-height')).toBe('var(--tap-min)');
+      expect(declValue(ruleIn(fleetCss, '.account-gauge'), 'min-height')).toBe('var(--tap-min)');
+      expect(declValue(ruleIn(fleetCss, '.account-gauge'), 'cursor')).toBe('pointer');
     });
 
-    it('is the class the rendered link actually carries', async () => {
-      stubAccounts([acct({ wrapper: 'claude' })]);
+    it('the placeholder is the class the rendered link actually carries', async () => {
+      stubAccounts([]);
       render(<AccountsStrip />);
       const link = await screen.findByRole('link', { name: 'account usage — open accounts' });
       expect(link).toHaveClass('accounts-strip');
@@ -174,12 +458,16 @@ describe('AccountsStrip', () => {
     ]);
     const { container } = render(<AccountsStrip />);
     await screen.findAllByText('91%');
-    const gauges = container.querySelectorAll('.account-gauge');
+    // The expired lane sorts last (neither has a use that says it is free), so find each card by its lane.
+    const gauges = [...container.querySelectorAll<HTMLElement>('.account-gauge')];
     expect(gauges).toHaveLength(2);
+    const expired = gauges.find((g) => g.querySelector('.account-gauge-label')?.textContent === 'team·max')!;
+    const live = gauges.find((g) => g.querySelector('.account-gauge-label')?.textContent === 'team·alt')!;
+    expect(gauges[1]).toBe(expired);
     const fills = (g: Element) => [...g.querySelectorAll('.acct-fill')];
-    expect(fills(gauges[0]!).map((f) => f.classList.contains('limit-fill--off'))).toEqual([true, true]);
-    expect(gauges[0]!.querySelector('.acct-meter')).toHaveAttribute('data-band', 'crit');
-    expect(fills(gauges[1]!).map((f) => f.classList.contains('limit-fill--off'))).toEqual([false, false]);
-    expect(fills(gauges[1]!)[0]).toHaveClass('limit-fill--crit');
+    expect(fills(expired).map((f) => f.classList.contains('limit-fill--off'))).toEqual([true, true]);
+    expect(expired.querySelector('.acct-meter')).toHaveAttribute('data-band', 'crit');
+    expect(fills(live).map((f) => f.classList.contains('limit-fill--off'))).toEqual([false, false]);
+    expect(fills(live)[0]).toHaveClass('limit-fill--crit');
   });
 });

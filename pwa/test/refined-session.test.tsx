@@ -72,13 +72,19 @@ describe("Refined's session chrome", () => {
     const rails = document.querySelectorAll('.ref-chip-rail');
     expect(rails).toHaveLength(1);
     const rail = rails[0] as HTMLElement;
-    // The status, the crumb, the model and the effort, in the one rail (spec §5.3's phone row).
+    // The status, the model and the effort, in the one rail (spec §5.3's phone row). The crumb is no longer a rail
+    // chip: the project sits above the title (desktop polish T3c, D-6333).
     expect(rail.querySelector('.status-line')?.textContent).toMatch(/^working/);
     expect(within(rail).getByText('model-x')).toBeInTheDocument();
     expect(within(rail).getByText('high')).toBeInTheDocument();
-    // A workspace's crumb (its branch) is a rail chip, in full, so the title row stays one line.
-    expect(rail.textContent).toContain('feat/a-branch');
-    expect(document.querySelector('.chat-head .chat-title')?.textContent).toBe('project-a');
+    expect(rail.querySelector('.chat-crumb')).toBeNull();
+    // The title row names the session (its row's label, here the branch it was born with), and the project is a small
+    // crumb above it; the branch chip would say the title again, so it is gone.
+    expect(rail.querySelector('.metachip--branch')).toBeNull();
+    const titleRow = document.querySelector('.ref-session-title')!;
+    expect(titleRow.querySelector('.chat-crumb')?.textContent).toBe('project-a');
+    expect(titleRow.querySelector('.chat-title')?.textContent).toBe('feat/a-branch');
+    expect([...titleRow.children].map((n) => n.tagName)).toEqual(['SPAN', 'H1']);
     expect(document.querySelectorAll('.chat-meta')).toHaveLength(1);
     expect(document.querySelector('.keycap--esc')).toBeNull();
     expect(screen.queryByRole('button', { name: 'Stop' })).toBeNull();

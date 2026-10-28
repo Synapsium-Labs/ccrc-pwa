@@ -535,6 +535,7 @@ describe('session store optimistic send', () => {
       ['enter-ignored + draft', refusal('enter-ignored', 'my message'), true],
       ['verify-failed, no draft', refusal('verify-failed'), false],
       ['type-failed', refusal('type-failed'), false],
+      ['type-failed + draft', refusal('type-failed', 'my message'), false],
       ['draft-present', refusal('draft-present', 'someone else'), false],
       ['not-alive', refusal('not-alive'), false],
       ['box-unreadable', refusal('box-unreadable'), false],
@@ -1939,7 +1940,8 @@ describe('fleet store', () => {
     });
 
     it('is NOT persisted, and a fresh store starts null even with a snapshot on disk', () => {
-      // The offline snapshot is written on every `fleet` frame. Nothing pooled
+      // The offline snapshot is written on the first `fleet` frame at once; frames then write it at
+      // most once per 30 s window, plus the hidden/pagehide/disconnect flushes (C6). Nothing pooled
       // may ride it: `FleetSnapshot` has no field for it, and this asserts
       // that in the two directions that matter — the bytes on disk, and what a
       // cold store reads back.
@@ -2121,6 +2123,245 @@ describe('fleet store', () => {
       // stays false), so it could never catch the guard's absence.
       lastSocket().message(JSON.stringify({ type: 'hello', proto: '1', min: '2' }));
       expect(store.getState().blocked).toBe(false);
+      store.getState().disconnect();
+    });
+  });
+
+  // C6 (D-6438): a `fleet` frame arrives as fresh objects, so the store keeps the rows (and the array) that did not
+  // change, and frames write the offline snapshot at most once per 30 s window (the hidden, pagehide and disconnect
+  // flushes write as well) — a scheduler in the store (L4).
+  describe('the row keeper and the snapshot throttle (C6)', () => {
+    const SNAPSHOT_KEY = 'ccrc.fleet-snapshot.v1';
+    // Neutral stubs so no case reaches the network: the roster poll, the catch-up and the durable feed read.
+    const quiet = {
+      makeSocket,
+      fetchAccounts: (): Promise<AccountsResponse> => Promise.resolve({ accounts: [], projected: null, roster: [] }),
+      catchUp: () => Promise.reject(new Error('offline')),
+      fetchFeed: () => Promise.reject(new Error('offline')),
+    };
+    // A FRESH object graph on every call (a JSON round trip), so identity can only be kept by the store. `tag` is the
+    // one field that differs between distinct frames.
+    const frameOf = (tag: string): string => JSON.stringify(JSON.parse(JSON.stringify({
+      type: 'fleet',
+      sessions: [fleetSession('ws-a', 'lane-a'), { ...fleetSession('ws-b', 'lane-a'), title: tag }],
+    })));
+    // Counts the writes. A no-op, not a pass-through: jsdom's `setItem` arms a timer of its own, which would stand in
+    // the timer count `disconnect` is pinned to. What was written is read off the call, not off storage.
+    type WriteSpy = { readonly mock: { readonly calls: readonly (readonly unknown[])[] } };
+    const setItem = (): WriteSpy => vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {});
+    /** The tags of every snapshot written so far (the `title` of ws-b), in write order. */
+    const written = (spy: WriteSpy): string[] =>
+      spy.mock.calls
+        .filter((c) => c[0] === SNAPSHOT_KEY)
+        .map((c) => (JSON.parse(String(c[1])) as { sessions: FleetSession[] }).sessions[1]?.title ?? '');
+    const open = (store: ReturnType<typeof createFleetStore>): void => {
+      store.getState().connect();
+      lastSocket().open();
+    };
+    // Every store a case makes is disconnected after it, even when an assertion failed first: a case's own
+    // `disconnect()` sits on its success path, so a failing case (a mutant's) would otherwise leave its listeners,
+    // its window timer and its pending frame running into the next case. Disconnecting twice is harmless.
+    const made: Array<ReturnType<typeof createFleetStore>> = [];
+    const make = (): ReturnType<typeof createFleetStore> => {
+      const store = createFleetStore(quiet);
+      made.push(store);
+      return store;
+    };
+    afterEach(() => {
+      for (const store of made.splice(0)) store.getState().disconnect();
+    });
+
+    it('an identical frame keeps the array', () => {
+      const store = make();
+      open(store);
+      lastSocket().message(frameOf('one'));
+      const first = store.getState().sessions;
+      expect(first).toHaveLength(2);
+
+      const listener = vi.fn();
+      const unsubscribe = store.subscribe(listener);
+      lastSocket().message(frameOf('one'));
+      expect(store.getState().sessions).toBe(first);
+      expect(listener).not.toHaveBeenCalled();
+
+      // A frame changing one row: a new array, and the row that did not change is the object it was.
+      lastSocket().message(frameOf('two'));
+      const next = store.getState().sessions;
+      expect(listener).toHaveBeenCalledTimes(1);
+      expect(next).not.toBe(first);
+      expect(next[0]).toBe(first[0]);
+      expect(next[1]).not.toBe(first[1]);
+      expect(next[1]?.title).toBe('two');
+      unsubscribe();
+      store.getState().disconnect();
+    });
+
+    it('ten frames write the snapshot at most once in 30 s', () => {
+      vi.useFakeTimers();
+      const spy = setItem();
+      const store = make();
+      open(store);
+      for (let i = 0; i < 10; i++) {
+        lastSocket().message(frameOf(`f${i}`));
+        vi.advanceTimersByTime(2_900); // the last frame lands at 26 s, and the loop ends at 29 s
+      }
+      expect(written(spy)).toEqual(['f0']);
+      store.getState().disconnect();
+    });
+
+    it('the newest frame is written when the window closes', () => {
+      vi.useFakeTimers();
+      const spy = setItem();
+      const store = make();
+      open(store);
+      lastSocket().message(frameOf('A'));
+      expect(written(spy)).toEqual(['A']); // the first frame, at once
+      vi.advanceTimersByTime(5_000);
+      lastSocket().message(frameOf('B'));
+      vi.advanceTimersByTime(5_000);
+      lastSocket().message(frameOf('C'));
+      expect(written(spy)).toEqual(['A']);
+
+      vi.advanceTimersByTime(20_000); // 30 s since the first write
+      expect(written(spy)).toEqual(['A', 'C']); // the newest, not B
+
+      vi.advanceTimersByTime(30_000); // nothing pending: nothing more
+      expect(written(spy)).toEqual(['A', 'C']);
+      store.getState().disconnect();
+    });
+
+    it('the window reopens after its timed write', () => {
+      vi.useFakeTimers();
+      const spy = setItem();
+      const store = make();
+      open(store);
+      lastSocket().message(frameOf('A')); // 0 s: written at once, and opens the window
+      vi.advanceTimersByTime(10_000);
+      lastSocket().message(frameOf('C')); // 10 s: pending
+      vi.advanceTimersByTime(20_000); // 30 s: the window's end writes C, and must open the next window
+      expect(written(spy)).toEqual(['A', 'C']);
+
+      vi.advanceTimersByTime(1_000);
+      lastSocket().message(frameOf('D')); // 31 s: one second after a write, so it waits
+      vi.advanceTimersByTime(28_000); // 59 s
+      expect(written(spy)).toEqual(['A', 'C']);
+      vi.advanceTimersByTime(1_000); // 60 s
+      expect(written(spy)).toEqual(['A', 'C', 'D']);
+      store.getState().disconnect();
+    });
+
+    // A frame `saveFleetSnapshot` refuses (here: a row with an unmeasured field) is never scheduled.
+    const degradedFrameOf = (tag: string): string => JSON.stringify({
+      type: 'fleet',
+      sessions: [
+        { ...fleetSession('ws-a', 'lane-a'), unmeasured: ['workdir'] },
+        { ...fleetSession('ws-b', 'lane-a'), title: tag },
+      ],
+    });
+
+    it('a refused frame opens no window', () => {
+      vi.useFakeTimers();
+      const spy = setItem();
+      const store = make();
+      open(store);
+      lastSocket().message(degradedFrameOf('X')); // refused: nothing written, and no window opened
+      expect(written(spy)).toEqual([]);
+      vi.advanceTimersByTime(1_000);
+      lastSocket().message(frameOf('A')); // the first good frame is written at once
+      expect(written(spy)).toEqual(['A']);
+      store.getState().disconnect();
+    });
+
+    it('a refused frame does not displace the pending one', () => {
+      vi.useFakeTimers();
+      const spy = setItem();
+      const store = make();
+      open(store);
+      lastSocket().message(frameOf('A')); // 0 s: written
+      vi.advanceTimersByTime(5_000);
+      lastSocket().message(frameOf('B')); // 5 s: pending
+      vi.advanceTimersByTime(5_000);
+      lastSocket().message(degradedFrameOf('C')); // 10 s: refused, so B stays pending
+      vi.advanceTimersByTime(20_000); // 30 s
+      expect(written(spy)).toEqual(['A', 'B']);
+      store.getState().disconnect();
+    });
+
+    it('a hidden page writes the pending snapshot at once', () => {
+      vi.useFakeTimers();
+      const spy = setItem();
+      const store = make();
+      open(store);
+      lastSocket().message(frameOf('A'));
+      vi.advanceTimersByTime(1_000);
+      lastSocket().message(frameOf('B'));
+      expect(written(spy)).toEqual(['A']);
+
+      Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' });
+      try {
+        document.dispatchEvent(new Event('visibilitychange'));
+        expect(written(spy)).toEqual(['A', 'B']);
+      } finally {
+        // The own property shadows the prototype's getter; deleting it restores jsdom's.
+        delete (document as unknown as Record<string, unknown>)['visibilityState'];
+        store.getState().disconnect();
+      }
+    });
+
+    it('pagehide writes the pending snapshot at once', () => {
+      vi.useFakeTimers();
+      const spy = setItem();
+      const store = make();
+      open(store);
+      lastSocket().message(frameOf('A'));
+      vi.advanceTimersByTime(1_000);
+      lastSocket().message(frameOf('B'));
+      expect(written(spy)).toEqual(['A']);
+
+      window.dispatchEvent(new Event('pagehide'));
+      expect(written(spy)).toEqual(['A', 'B']);
+      store.getState().disconnect();
+    });
+
+    it('disconnect writes the pending snapshot and stops the window', () => {
+      vi.useFakeTimers();
+      const spy = setItem();
+      const store = make();
+      open(store);
+      lastSocket().message(frameOf('A'));
+      vi.advanceTimersByTime(1_000);
+      lastSocket().message(frameOf('B'));
+      expect(written(spy)).toEqual(['A']);
+
+      store.getState().disconnect();
+      expect(written(spy)).toEqual(['A', 'B']);
+      // The roster interval and the socket's timers are gone with it, so nothing at all is left to fire.
+      expect(vi.getTimerCount()).toBe(0);
+      vi.advanceTimersByTime(60_000);
+      expect(written(spy)).toEqual(['A', 'B']);
+
+      // A later connect starts clean: its first frame is written at once, not held behind the old window.
+      open(store);
+      lastSocket().message(frameOf('C'));
+      expect(written(spy)).toEqual(['A', 'B', 'C']);
+      store.getState().disconnect();
+    });
+
+    it('a first live frame equal to the hydrated snapshot still marks the fleet frame seen', () => {
+      // Hydrated through the production writer. The frame is a JSON clone of the hydrated rows themselves, so it is
+      // equal to them by construction (a revived row can carry a key the live wire does not, and keepRows would
+      // then rightly take the live object; that is not what this case pins).
+      saveFleetSnapshot([fleetSession('ws-a', 'lane-a'), fleetSession('ws-b', 'lane-a')]);
+      const store = make();
+      const hydrated = store.getState().sessions;
+      expect(hydrated, 'the snapshot did not hydrate: this case would pin nothing').toHaveLength(2);
+      expect(store.getState().fleetFrameSeen).toBe(false);
+
+      open(store);
+      lastSocket().message(JSON.stringify({ type: 'fleet', sessions: JSON.parse(JSON.stringify(hydrated)) }));
+      expect(store.getState().fleetFrameSeen).toBe(true);
+      // Nothing changed, so the array is the hydrated one: the flag was set without replacing it.
+      expect(store.getState().sessions).toBe(hydrated);
       store.getState().disconnect();
     });
   });

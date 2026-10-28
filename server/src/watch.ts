@@ -2,7 +2,7 @@ import { createHistogram, performance } from 'node:perf_hooks';
 import type { Deps } from './server.js';
 import type { Bus } from './bus.js';
 import { assembleFleet, lifecycleInputFor, registrySecondsToMs } from './fleet.js';
-import { answeredByBody, approvalRuledBody, askPushBody, withCoordinatorBody } from './askbody.js';
+import { askPushBody, withCoordinatorBody } from './askbody.js';
 import { measuredIdentity, readRegistry, readRegistryMeasured, readSessionRecord } from './registry.js';
 import { buildFleetReadModel, type FleetReadModel } from './fleetReadModel.js';
 import {
@@ -30,14 +30,13 @@ import {
   decideIdleCompactNudge, idleNudgeDisabled, idleNudgeFeedBody, idleNudgeRefusedBody, idleNudgeRowHold, readCompactionTail,
   type CompactionTail, type IdleNudgeRowFacts,
 } from './idlenudge.js';
-import { askActions, askKey } from './askkey.js';
+import { askActions } from './askkey.js';
 // The ask lane's two WINDOWS moved out of this file (whole-branch review
 // F2(b)): `fleet.ts`'s chip is their second reader and cannot import this
 // module — `watch.ts` imports `assembleFleet` from it — so they now live
 // where both may read them. `ASK_SWEEP_MS` below is unaffected: it is this
 // lane's poll cadence, not a window, and this file is still its only reader.
-import { ASK_SETTLE_TICKS, askNotifyAt } from './askwindow.js';
-import { UNTRUSTED_CAP_BYTES, untrustedBlock } from './coord/untrusted.js';
+import { ASK_SETTLE_TICKS } from './askwindow.js';
 import type { SessionRecord } from './registry.js';
 import type {
   ArchivedHeld, ChildMark, ChildReclaimAttention, ChildReclaimGeneration, ChildReclaimKeptWord, CoordStatus, DeadCoordinatorAttention, Dialog, ExpiryAttention, FleetSession, HookAsk, HookAskQuestion,
@@ -55,7 +54,7 @@ import { ASKS_DISABLED_MARKER, MAIL_DISABLED_MARKER, readSwitches } from '../../
 // The pause marker, reached through `rundefs.ts`'s re-export of its one definition, the `shared/switches.ts` row.
 // `single-definition.test.ts` pins that this file holds no copy.
 import {
-  COORDINATOR_PAUSE_MARKER, MAIL_ROLE_IDS, RECLAIM_PAUSE_MARKER, askNudgeSubject, isApprovalNudgeMail, isAskNudgeMail,
+  COORDINATOR_PAUSE_MARKER, MAIL_ROLE_IDS, RECLAIM_PAUSE_MARKER, isApprovalNudgeMail, isAskNudgeMail,
   survivorOf,
 } from './coord/rundefs.js';
 import { queueLandingNotice, queueStallNotice, queueSystemMail, type LandingNoticeQueued } from './coord/rundefsTx.js';
@@ -114,7 +113,6 @@ import { claimExpiry, type LivenessProbe } from './coord/claims.js';
 import { claimantMeasuredDead, measureClaimant } from './coord/reclaim.js';
 import { heldFor } from './coord/heldFor.js';
 import { buildDigest, digestDayFor, digestPushCopy, digestWindow, readDigestHour } from './coord/digest.js';
-import { redactCommand } from './coord/redact.js';
 import {
   BACKLOG_HORIZON_MS, STALL_CHECK_PREFIX, STALL_QUIET_MS, STALL_REPLY_PREFIX, parseStallDetail, stallArmingOf,
   stallCheckMail, stallCitedCheck, stallCoordinatorSubjects, stallDeadShaped, stallDetail, stallFacts,
@@ -145,7 +143,7 @@ import { deriveBranch } from './naming.js';
 import { TranscriptResolver } from './transcript/resolve.js';
 import { readAiTitle } from './transcript/title.js';
 import {
-  toRunSummary, type AskRow, type CoordStore, type MarkReleaseNotifiedResult,
+  toRunSummary, type CoordStore, type MarkReleaseNotifiedResult,
   type OpenSibling, type RunRow,
 } from './coord/store.js';
 import { renderMailNudge } from './coord/envelope.js';
@@ -197,9 +195,7 @@ import {
   recordDeadCoordinatorFeed, recordDeadCoordinatorThrew, rereadDeadCoordinatorJournalTrust,
 } from './coord/endDeadCoordinator.js';
 import type { CoordRoutesHandle } from './coord/routes.js';
-import { createQuestions, type Questions } from './coord/questions.js';
-import { decideApprovalLapse, decideAskLapse, decideDeferredApprovalPush, type AskLapse } from './coord/questionPolicy.js';
-import { isAskState } from '../../shared/api.js';
+import { createQuestions, type Questions, type RaiseVerdict } from './coord/questions.js';
 import { localIO } from './io.js';
 import { measureFleetReadiness, type FleetReadiness } from './readiness.js';
 import { FLEET_LABEL, SERVER_LABEL, sweepInventory, type InventoryDeps, type SweepOutcome } from './update/inventory.js';
@@ -217,9 +213,7 @@ import { CHILD_RECLAIM_SWEEP_MS, COLLECT_OBSERVE_INTERVAL_MS, DIVERGENCE_SWEEP_M
 // changes: `ccdargv.js` and `childReclaimSweep.js` are imported a second time here, by name.
 import type { ChildReclaimCollectInput } from './childReclaimSweep.js';
 import { NO_FLEET_IDENTITY } from './fleetidentity.js';
-import { stopDonePass, type StopDoneMemory } from './stopDoneSweep.js';
-import { hibernatePass, type HibernateSweepMemory } from './hibernateSweep.js';
-import { SLEEP_LANES } from './sleepLane.js';
+import { SLEEP_LANES, hibernatePass, stopDonePass, type HibernateSweepMemory, type StopDoneMemory } from './sleepLane.js';
 import type { SleepPolicyName } from './sleep.js';
 import { StaleArchiveBeat } from './staleArchiveBeat.js';
 import { wakeAdmit, type WakeKind } from './coord/wakeBudget.js';
@@ -659,63 +653,11 @@ export class FleetWatcher {
    * options.
    */
   private actionlessAsks = new Map<string, string>();
-  /** Asks whose operator push is DEFERRED, keyed by session id. IN MEMORY BY
-   *  DESIGN and not in coord.db (D-2169): this map is the only carrier of the
-   *  deferred push, so a lost database must not be able to swallow it. A server
-   *  restart empties the map; since D-5925 the boot re-seeds it FROM THE ROWS
-   *  (`pendingReseed`): a `held` or `answering` row whose dialog the pane is
-   *  measured still painting, with the same `askKey`, is held again until
-   *  `askNotifyAt(at)`, so the deferred push still fires (late if the deadline
-   *  passed while the server was down). A lost `coord.db` has no rows, and the
-   *  restart then re-pushes nothing, as before D-5925: `this.primed` is false
-   *  on the first tick after boot and `dialogIds` suppresses the second.
-   *
-   *  Cleared in TWO places, both keyed off the dialog leaving the pane: the
-   *  orphan-settle in the `last !== dialog.id` branch above, when a NEW
-   *  dialog silently replaces an old one with no intervening clear tick; and
-   *  (Task 8) the `else if (last !== undefined)` branch below, when the
-   *  dialog goes away with nothing to replace it — an unanswered
-   *  `AskUserQuestion` the operator escaped, or the session interrupted,
-   *  cleared, swapped, or killed out from under it. Either way the dialog's
-   *  own departure from the pane is the end of the hold; the second case
-   *  settles the row `stale` and pushes nothing, since a cleared dialog is a
-   *  question that no longer exists.
-   *
-   *  `answeringSince` (fix round 1, item 1): `null` until `sweepAsks` first
-   *  observes this row `'answering'`, then the sweep's own `now` at that
-   *  observation — never re-derived, and reset to `null` the moment the row
-   *  is observed back at `'held'` (a `sweepAsks` decision, not `hold`'s —
-   *  see `ASK_ANSWERING_MAX_MS`'s own docstring). */
-  private heldAsks = new Map<string, { until: number; askId: number;
-    ev: Parameters<FleetWatcher['pushOne']>[0]; answeringSince: number | null }>();
-  /** D-5289, late answer wins: the push the lapse fired, per child, kept so a
-   *  parent's answer after the deadline can replace that notification under
-   *  the same tag (`answeredLate`). Set only by `sweepAsks`'s own lapse (a
-   *  parent's `declined` never lands here: its push is the parent's own act),
-   *  dropped when replaced and whenever the child's dialog clears or is
-   *  replaced (`detectDialogs`), so it holds at most one entry per child
-   *  sitting on a lapsed question. Its loss on a restart is free: the operator
-   *  keeps the lapse's notification, today's behaviour. */
-  private lapsedAsks = new Map<string, { askId: number; ev: Parameters<FleetWatcher['pushOne']>[0] }>();
-  /** D-5298 (plan Task 16): the operator's deferred push for a child whose painted permission prompt has an
-   *  approvals row held for its claimant (`tryHold`'s approval arm). `until` is the latest `notifyAt` of the rows it
-   *  covers; `rowIds` are those rows (the main thread's only, D-5491), so a cleared dialog marks only them `operator`. `sweepApprovals` pushes `ev` once
-   *  no covered row is held any more and the dialog is still painted. In memory only, as `heldAsks` is: a restart
-   *  empties it, and since D-5925 the boot re-seeds it (`pendingReseed`) from a snapshot of the child's main-thread
-   *  rows still `held` at boot, once the pane is measured painting a permission prompt; a row already `released` at
-   *  boot is never re-seeded (its lapse may have pushed before the restart). Before D-5925 a restart lost the
-   *  deferral and the dialog never raised: `dialogIds` suppresses every sighting after the unprimed boot tick. */
-  private heldApprovals = new Map<string, { until: number; dialogId: string; rowIds: number[];
-    ev: Parameters<FleetWatcher['pushOne']>[0] }>();
-  /** D-5925 (held questions survive a restart): what the boot found held in `coord.db`, per child, still to be
-   *  matched against a MEASURED pane. Filled once, on the first unprimed `detectDialogs` (before that tick's
-   *  `sweepApprovals`), and consumed by every tick before `tryHold` can run for the child (`reseedFromRows`), so a
-   *  pane the boot tick could not measure is decided by a later tick and never mints a second row. Bounded by the
-   *  number of children with a held row: at most one ask row per child (the newest) and that child's held
-   *  main-thread approval rows (`id`, `notifyAt`). An entry leaves when both halves are decided. */
-  private pendingReseed = new Map<string, { ask: AskRow | null; approvals: { id: number; notifyAt: number }[] }>();
-  /** Set once the boot snapshot behind `pendingReseed` has been read (or there was no store to read). */
-  private reseedLoaded = false;
+  // The question HOLDS (the deferred pushes `heldAsks`, `lapsedAsks`, `heldApprovals`, the boot's `pendingReseed`,
+  // and the `reseedLoaded` and `asksDisabled` flags) are this watcher's `Questions` instance's (`this.questions`,
+  // W3 Q3d, D-7028; OA-C6 ruled (a)): one carrier, `coord/questions.ts#createQuestions`'s `questionHolds`, whose
+  // docstring carries their D-2169, D-5289, D-5298, D-5491 and D-5925 notes. The pane-edge maps beside this note stay
+  // here: they record what the pane showed.
   /** The digest beat's memory (D-5300): the last day it settled (sent, skipped at zero, or found already claimed),
    *  (when it last looked is the `digestBeat` row). The `digests` row, not this, is what keeps a restart from sending twice. */
   private lastDigestDay: string | null = null;
@@ -724,14 +666,9 @@ export class FleetWatcher {
    *  yet `waiting` and no envelope made it answerable. Bounded by
    *  `ASK_SETTLE_TICKS`; dropped the moment the dialog is raised or held, and
    *  whenever it clears or is replaced. Its loss on a restart is free: a
-   *  restart re-raises nothing anyway (`heldAsks`' own note). */
+   *  restart re-raises nothing anyway (the hold carrier's own note,
+   *  `coord/questions.ts#createQuestions`). */
   private settlingAsks = new Map<string, { dialogId: string; ticks: number }>();
-  /** Fail-shut kill switch for the hold, `$REG/asks-disabled`. Declared in
-   *  Task 6 (RULING F2) so the mint fork below compiled before this method
-   *  existed; now SET by `sweepAsks` below, off the same registry listing
-   *  `sweepMail` reads for `MAIL_DISABLED_MARKER` — `listing === null`
-   *  ("can't tell") reads as disabled, never as license to keep holding. */
-  private asksDisabled = false;
   /**
    * `id#prNumber` keys already told "merged … nothing archived" — so
    * `sweepMerged` announces a merge ONCE per (workspace, PR) rather than on
@@ -1314,16 +1251,17 @@ export class FleetWatcher {
    *  (normally asked every four hours) and a row backing off on the ladder are asked again within a few passes,
    *  SOONER; and it restarts the twice-observed sighting and the hour's runs, which DELAY an expiry. */
   private archivedExpiryState = new Map<string, ArchivedExpiryEntry>();
-  /** The stop-done lane (D-5370, `stopDoneSweep.ts`): its one memory (a refused stop's retry instant) and the
-   *  coordination serialiser `buildServer` hands it. Its clock and single flight are the `sleepRunDone` row (D-7045). */
+  /** The stop-done lane (D-5370, `sleepLane.ts`'s `run-done` row): its one memory (a refused stop's retry instant)
+   *  and the coordination serialiser `buildServer` hands it. Its clock and single flight are the `sleepRunDone` row
+   *  (D-7045). */
   private readonly stopDoneMemory: StopDoneMemory = { retryAt: new Map() };
   private stopDoneSerial: (<T>(fn: () => Promise<T>) => Promise<T>) | null = null;
   /** The process start both sleep lanes hold `viewer` against (presence is never persisted; D-7045: one field, set at
    *  construction, where each lane had its own holding the same instant). */
   private readonly sleepStartedAt = Date.now();
-  /** Hibernation's sweep (D-5242, `hibernateSweep.ts`): its memory (the last shadow line, and the last skip or failure
-   *  line, per id); it holds `viewer` against `sleepStartedAt`. Its act uses the stop-done lane's serialiser above, the
-   *  one `CoordMutex`. Its clock and single flight are the `sleepIdleHours` row (D-7045). */
+  /** Hibernation's sweep (D-5242, `sleepLane.ts`'s `idle-hours` row): its memory (the last shadow line, and the last
+   *  skip or failure line, per id); it holds `viewer` against `sleepStartedAt`. Its act uses the stop-done lane's
+   *  serialiser above, the one `CoordMutex`. Its clock and single flight are the `sleepIdleHours` row (D-7045). */
   private readonly hibernateMemory: HibernateSweepMemory = { lastLine: new Map(), lastActLine: new Map() };
   private readonly staleArchive = new StaleArchiveBeat(() => this.deps, this, (a) => this.transcripts.resolve(a));
   /** `flock-unavailable`, once a box has answered it: the lane composes nothing more there (this process). */
@@ -1421,7 +1359,7 @@ export class FleetWatcher {
   readonly questions: Questions;
 
   constructor(private deps: Deps, private bus: Bus, private intervalMs = 2000, cachePath?: string) {
-    this.questions = createQuestions(deps);
+    this.questions = createQuestions(deps, { heldFor });
     this.cachePath = cachePath ?? deps.stateCachePath ?? defaultCachePath();
     this.transcripts = new TranscriptResolver(deps.io);
     this.headsSettled = new Promise<void>((resolve) => { this.settleHeads = resolve; });
@@ -2084,16 +2022,6 @@ export class FleetWatcher {
     this.stopDoneSerial = (fn) => h.serial(fn);
   }
 
-  /** The stop-done lane (`run-done`) alone, through `sweepSleep` (C4f deletes this door). */
-  sweepStopDone(sessions: readonly FleetSession[], records: readonly SessionRecord[], names: readonly string[]): Promise<void> {
-    return this.sweepSleep(sessions, records, names, 'run-done');
-  }
-
-  /** Hibernation (`idle-hours`) alone, through `sweepSleep` (C4f deletes this door). */
-  sweepHibernate(sessions: readonly FleetSession[], records: readonly SessionRecord[], names: readonly string[]): Promise<void> {
-    return this.sweepSleep(sessions, records, names, 'idle-hours');
-  }
-
   /**
    * THE STOP-DONE LANE (D-5370): a finished run's dispatched worker is stopped once idle, and restarts on re-dispatch.
    * A sibling on the tick, at its own cadence, on THIS tick's assembled rows and registry listing (the listing carries
@@ -2112,6 +2040,11 @@ export class FleetWatcher {
         mark: (rec) => turnMarkFor(reads, rec),
         rowAtAct: (rec) => this.rowAtAct(rec),
         serial: this.stopDoneSerial, queueRun: (id, fn) => this.deps.queue.run(id, fn),
+        // D-7047: a listing whose failure decides (it holds the act) reads `readdirMeasured` (D-5969); absent,
+        // unreadable and a rejection all answer null, which holds.
+        listing: async () => {
+          try { const r = await this.deps.io.readdirMeasured(this.deps.cfg.registryDir); return r.ok ? r.entries : null; } catch { return null; }
+        },
         startedAt: this.sleepStartedAt, now: Date.now,
       }, this.stopDoneMemory, sessions, records, names);
     } catch (err) {
@@ -2139,6 +2072,10 @@ export class FleetWatcher {
         act: {
           runCcd: this.deps.runCcd, fleetState: this.deps.fleetState, serial: this.stopDoneSerial,
           queueRun: (id, fn) => this.deps.queue.run(id, fn), rowAtAct: (rec) => this.rowAtAct(rec),
+          // D-7047: measured, as in the run-done lane above; every failure answers null, which holds.
+          listing: async () => {
+            try { const r = await this.deps.io.readdirMeasured(this.deps.cfg.registryDir); return r.ok ? r.entries : null; } catch { return null; }
+          },
         },
       }, this.hibernateMemory, sessions, records, names);
     } catch (err) {
@@ -2470,9 +2407,9 @@ export class FleetWatcher {
       // `records` PASSED IN, never re-read here: `assembleFleet` would
       // otherwise take its OWN read (`records ?? await readRegistry(...)`),
       // a SEPARATE whole-fleet sweep a few hundred ms after the one above —
-      // in remote mode, 31 [registry-read-census:fields] field reads per
-      // session, so a 24-session fleet's baseline is 745 agent-WS operations
-      // [registry-read-census:fleet] per sweep before conditional
+      // in remote mode, 4 [registry-read-census:fields] unconditional reads and
+      // one per other listed field per session, so a 24-session fleet's floor is 97
+      // agent-WS operations [registry-read-census:fleet] per sweep before conditional
       // reconfirmation, doubled for no reason. Sharing the read also keeps
       // `sweepHookStates`/`detectDialogs` (which already consumed `records`
       // above) and this assembly looking at the identical snapshot, which is
@@ -3886,8 +3823,8 @@ export class FleetWatcher {
     //
     // Cost is ONE readdir per sweep interval (60 s), not per tick — the lane
     // clock above has already returned on every other call by the time this
-    // line runs. D-283 was about the per-tick whole-fleet read, 31 field
-    // reads [registry-read-census:fields] per session in remote mode; this is
+    // line runs. D-283 was about the per-tick whole-fleet read, 4 unconditional
+    // reads [registry-read-census:fields] per session in remote mode, plus one per other listed field; this is
     // one round trip a minute.
     const registryNames = await this.deps.io.readdir(this.deps.cfg.registryDir);
     if (registryNames === null) {
@@ -6604,7 +6541,7 @@ export class FleetWatcher {
   private stallWorkerFor(store: CoordStore, s: FleetSession | undefined, lr: StallLive | null, hookAsk: HookAskFact, refused: boolean): StallWorker {
     if (refused) return { present: 'refused' };
     if (s === undefined || lr === null) return { present: false };
-    const ask = store.currentAskFor(s.id);
+    const ask = this.questions.currentAskOf(s.id);
     const askRow: AskRowFact = !ask.ok ? { kind: 'unmeasured' }
       : ask.ask === null ? { kind: 'none' } : { kind: 'row', state: ask.ask.state, at: ask.ask.at };
     const held = store.autoContinueHeldUntil(s.id);
@@ -8763,10 +8700,16 @@ export class FleetWatcher {
    */
   private async detectDialogs(notify: boolean, listing?: readonly string[], records?: SessionRecord[]): Promise<Set<string>> {
     const pending = new Set<string>();
+    // The hold's answer, sent here: `raise` answers what to send now and never pushes (W3 Q3d, D-7028).
+    const pushRaised = (v: RaiseVerdict): RaiseVerdict => {
+      if (v.kind === 'held') this.pushOne(v.record, this.activeProjects);
+      else if (v.kind === 'released') this.pushOne(v.push, this.activeProjects);
+      return v;
+    };
     // [registry-refused:tests-only] tick() passes its records; only tests reach this read, which omits refused rows.
     const recs = records ?? await readRegistry(this.deps.io, this.deps.cfg);
     // D-5925: the boot's snapshot of held rows, read before this tick's `sweepApprovals` can lapse any of them.
-    if (!this.primed && !this.reseedLoaded) this.loadReseed();
+    if (!this.primed) this.questions.loadReseed();
     for (const r of recs) {
       const paneAt = Date.now();
       const pane = await this.deps.tmux.capture(r.id);
@@ -8856,7 +8799,7 @@ export class FleetWatcher {
       const dialog = pane !== null ? parseDialog(pane) : null;
       // D-5925: a child the boot found holding a question or a prompt is decided from the rows first. Re-seeded, or
       // still in doubt, nothing below may hold or raise it on this tick: the hold already exists in `coord.db`.
-      const reseed = this.reseedFromRows(r, pane, dialog);
+      const reseed = this.questions.reseed(r, pane, dialog, this.hookStates.get(r.id) ?? null);
       const mayRaise = notify && reseed === 'none';
       const last = this.dialogIds.get(r.id);
       if (dialog) {
@@ -8895,46 +8838,10 @@ export class FleetWatcher {
           else this.actionlessAsks.set(r.id, dialog.id);
         };
         if (last !== dialog.id) {
-          // Fix round 1, item 4 (Important): a new dialog can replace the old
-          // one with NO intervening `dialog_cleared` tick — `parseDialog`'s id
-          // hashes the menu's title+labels, so two single-question dialogs
-          // back to back both take THIS branch, never the `else if (last !==
-          // undefined)` clear branch below. Left alone, `heldAsks.set` a few
-          // lines down would silently overwrite an OLD held row, orphaning it
-          // forever: Task 7's sweep is keyed by session id (the entry is
-          // gone, so it never fires `releaseAsk`) and Task 8's clear-branch
-          // `staleAsk` is CAS'd on `(dialogId, childId)` for the CURRENT
-          // dialog only, so it can never reach a row minted against a dialog
-          // that left `dialogIds` without a clear edge. Settling it here,
-          // against `last` (the id it was actually minted under, still in
-          // scope), is the only place left that can still name it — done
-          // unconditionally, before eligibility is even asked for the NEW
-          // dialog, because the OLD one is gone from the pane either way.
-          // D-5289: a lapsed question this child replaced is no longer one a
-          // late parent answer could land in, so its notification is final.
-          this.lapsedAsks.delete(r.id);
-          if (last !== undefined) this.settleClearedApproval(r.id, last);
-          const orphaned = this.heldAsks.get(r.id);
-          if (orphaned !== undefined && last !== undefined) {
-            // The map entry is dropped unconditionally, BEFORE the guarded
-            // write below — fix round 2, item 1: a failing `staleAsk` must
-            // not leave the entry to be retried (and re-warned about) forever
-            // on every subsequent tick; the in-memory hold is over either
-            // way, since the dialog it was minted under is already gone.
-            this.heldAsks.delete(r.id);
-            // Guarded (fix round 2, item 1): this is a synchronous
-            // `node:sqlite` UPDATE sitting directly on the 2 s poll, run
-            // BEFORE the `notify` gate below — i.e. on every tick shape, not
-            // just the mint edge — so an unguarded throw here would kill the
-            // whole process exactly as the neighbouring `hold()` guard a few
-            // lines down exists to prevent, and this write sat outside that
-            // guard's reach.
-            try {
-              this.deps.coord?.staleAsk(last, r.id, Date.now());
-            } catch (err) {
-              console.warn(`ccrc-server: settling an orphaned ask hold failed for ${r.id} (${err instanceof Error ? err.message : String(err)}) — a held row may remain orphaned in coord.db`);
-            }
-          }
+          // Fix round 1, item 4: a new dialog replaced the old one with no clear tick between them, so the old
+          // question's holds end here, against `last`, before eligibility is asked for the new one (the orphan-settle,
+          // `coord/questions.ts#createQuestions`'s `settleReplaced`; D-5289's lapse is final too).
+          this.questions.settleReplaced(r.id, last);
           this.dialogIds.set(r.id, dialog.id);
           this.settlingAsks.delete(r.id);
           if (mayRaise) {
@@ -8945,7 +8852,7 @@ export class FleetWatcher {
             // Bounded by `ASK_SETTLE_TICKS`, in the arm below.
             if (actions === null && this.hookStates.get(r.id)?.state !== 'waiting') {
               this.settlingAsks.set(r.id, { dialogId: dialog.id, ticks: 1 });
-            } else if ((await this.tryHold(r, dialog, actions, recs)).kind === 'none') {
+            } else if (pushRaised(await this.questions.raise(r, dialog, this.hookStates.get(r.id) ?? null, actions, recs)).kind === 'none') {
               raise();
             }
           }
@@ -8962,18 +8869,18 @@ export class FleetWatcher {
           // raised, and any other bump, still moves it) and for why
           // re-stamping is not a weakening. Runs BEFORE the amendment gate, and
           // independent of it, whether or not the notification is replaced.
-          this.restampHeldAsk(r.id, dialog.id);
+          this.questions.restamp(r.id, dialog.id, this.hookStates.get(r.id) ?? null);
           const settling = this.settlingAsks.get(r.id);
           if (settling !== undefined && settling.dialogId === dialog.id) {
             // D-5290, the deferred first raise: still nothing to hold and
             // hookstate still not `waiting` — wait, at most `ASK_SETTLE_TICKS`
             // ticks in all; otherwise this IS the first raise, through the one
-            // `tryHold` the first sighting uses.
+            // `raise` the first sighting uses.
             if (actions === null && this.hookStates.get(r.id)?.state !== 'waiting' && settling.ticks < ASK_SETTLE_TICKS) {
               settling.ticks += 1;
             } else {
               this.settlingAsks.delete(r.id);
-              if (mayRaise && (await this.tryHold(r, dialog, actions, recs)).kind === 'none') raise();
+              if (mayRaise && pushRaised(await this.questions.raise(r, dialog, this.hookStates.get(r.id) ?? null, actions, recs)).kind === 'none') raise();
             }
           } else if (mayRaise && actions && this.actionlessAsks.get(r.id) === dialog.id) {
             // The amendment. Same question, same tag — `push-sw.js` sets
@@ -8985,12 +8892,12 @@ export class FleetWatcher {
             // of not leaving the question un-answerable.
             //
             // D-5290: the envelope that arrived a tick after the menu is the
-            // hold's first chance, so the amendment asks `tryHold` first. Held,
+            // hold's first chance, so the amendment asks `raise` first. Held,
             // the actionless notification is replaced, same tag, by the quiet
             // "with coordinator" body and no buttons, and nothing is raised;
             // released at once (a parent not live, or of another project),
-            // `tryHold` has already pushed the answerable payload.
-            const outcome = await this.tryHold(r, dialog, actions, recs);
+            // `pushRaised` has already sent the answerable payload `raise` answered.
+            const outcome = pushRaised(await this.questions.raise(r, dialog, this.hookStates.get(r.id) ?? null, actions, recs));
             if (outcome.kind === 'none') {
               raise();
             } else {
@@ -9025,242 +8932,20 @@ export class FleetWatcher {
         // different dialog minted later on the same session. Settling the
         // held ask on the way out, in THIS branch, means there is nothing
         // left for that guard to miss.
-        // D-5289: a lapsed question whose dialog cleared was acted on (or went
-        // away); no late parent answer can land in it, so its notification is final.
-        this.lapsedAsks.delete(r.id);
-        this.settleClearedApproval(r.id, last);
-        const held = this.heldAsks.get(r.id);
-        if (held !== undefined) {
-          // Dropped unconditionally, BEFORE the guarded write below — same
-          // shape as the orphan-settle above: a failing `staleAsk` must not
-          // leave the entry to be retried (and re-warned about) forever: the
-          // in-memory hold is over either way, since the dialog it was
-          // minted under is already gone from the pane.
-          this.heldAsks.delete(r.id);
-          // Guarded: a synchronous `node:sqlite` UPDATE sitting directly on
-          // the 2 s poll, and `detectDialogs` is AWAITED by `tick()`, which
-          // has no `catch` of its own (`void this.tick()` in the timer) —
-          // an unguarded throw here would kill the whole process. Never
-          // pushes: a cleared dialog is a question that no longer exists,
-          // so there is nothing to notify the operator about.
-          try {
-            this.deps.coord?.staleAsk(last, r.id, Date.now());
-          } catch (err) {
-            console.warn(`ccrc-server: settling a cleared ask hold failed for ${r.id} (${err instanceof Error ? err.message : String(err)}) — a held row may remain orphaned in coord.db`);
-          }
-        }
+        // D-5289: a lapsed question whose dialog cleared is final, and the cleared dialog's holds end, settled
+        // `stale` and pushing nothing (`coord/questions.ts#createQuestions`'s `settleCleared`).
+        this.questions.settleCleared(r.id, last);
       }
     }
     // D-5925, spec §5.2 step 3: a child measured ABSENT from the listing (its `.uuid` gone, not a refused or
     // unreadable row, and never on an unlistable tick, which returns before this) holds no question any more.
-    if (listing !== undefined && this.pendingReseed.size > 0) {
-      const listed = new Set(recs.map((x) => x.id));
-      for (const [id, entry] of [...this.pendingReseed]) {
-        if (listed.has(id) || listing.includes(`${id}.uuid`)) continue;
-        this.pendingReseed.delete(id);
-        if (entry.ask !== null) this.staleReseedRow(id, entry.ask);
-      }
-    }
+    if (listing !== undefined) this.questions.reseedGone(listing, recs);
     return pending;
   }
 
-  /** D-5925: the boot's one read of the held rows into `pendingReseed` (spec §5.2 step 1, §5.3). At most one ask
-   *  row per child, the newest by `id`: a child paints one question at a time, so an older held row of the same
-   *  child is settled `stale` at once (when it names the same dialog, `staleAsk`'s `dialogId` key settles it with
-   *  the newest instead). The approvals half is the main thread's `held` rows only, never `released` ones. A read
-   *  that fails re-seeds that half from nothing: the restart behaves as it did before D-5925. */
-  private loadReseed(): void {
-    this.reseedLoaded = true;
-    const coord = this.deps.coord;
-    if (!coord) return;
-    const entryOf = (id: string) => {
-      let e = this.pendingReseed.get(id);
-      if (e === undefined) { e = { ask: null, approvals: [] }; this.pendingReseed.set(id, e); }
-      return e;
-    };
-    try {
-      const asks = coord.heldQuestionRows();
-      if (!asks.ok) console.warn(`ccrc-server: held asks unreadable at boot (${asks.detail}) — none re-seeded`);
-      else for (const row of asks.asks) {
-        const e = entryOf(row.childId);
-        if (e.ask !== null && e.ask.dialogId !== row.dialogId) this.staleReseedRow(row.childId, e.ask);
-        e.ask = row;
-      }
-      const approvals = coord.heldApprovalRowsByChild();
-      if (!approvals.ok) console.warn(`ccrc-server: held approvals unreadable at boot (${approvals.detail}) — none re-seeded`);
-      else for (const [child, rows] of approvals.rows) entryOf(child).approvals = rows.map((x) => ({ id: x.id, notifyAt: x.notifyAt }));
-    } catch (err) {
-      console.warn(`ccrc-server: reading held rows at boot failed (${err instanceof Error ? err.message : String(err)}) — none re-seeded`);
-    }
-  }
-
-  /** A re-seed candidate the pane disproved, settled `stale` through the existing CAS; guarded, as its neighbours in
-   *  `detectDialogs` are (a synchronous `node:sqlite` UPDATE on the 2 s poll). */
-  private staleReseedRow(childId: string, row: AskRow): void {
-    try {
-      this.deps.coord?.staleAsk(row.dialogId, childId, Date.now());
-    } catch (err) {
-      console.warn(`ccrc-server: settling a held ask at boot failed for ${childId} (${err instanceof Error ? err.message : String(err)}) — a held row may remain in coord.db`);
-    }
-  }
-
-  /**
-   * D-5925 (spec §5.2 step 2, §5.3): decide a child the boot found holding a question or a permission prompt, from
-   * THIS tick's pane and hookstate. Answers `reseeded` (a carrier was re-seeded this tick), `waiting` (doubt: left for
-   * a later tick) or `none` (nothing pending, or the pane disproved it and today's path takes over). Never settles on
-   * doubt: an unmeasured pane, or a matching dialog whose hookstate is unreadable, leaves the row and the entry.
-   *
-   * The ask: a painted dialog with the row's `dialogId` and a hookstate ask hashing to its `askKey` re-seeds
-   * `heldAsks` (`until = askNotifyAt(at)`, `answeringSince` null, the payload `hold()` builds) after re-stamping
-   * `askAt` through `restampAsk`'s CAS. `askAt` is deliberately not matched: it is the field that moves while the
-   * question does not (D-2403). No `insertAsk`, no parent mail: the parent already has its brief. No dialog, or
-   * another one, settles the row `stale`.
-   *
-   * The prompt: a painted permission prompt re-seeds `heldApprovals` from the snapshot's rows, whatever state a later
-   * tick finds them in (`sweepApprovals` pushes once none is held). A pane with no prompt drops the snapshot and
-   * leaves the rows (their cleared-dialog path needs a dialog the server never saw).
-   */
-  private reseedFromRows(r: SessionRecord, pane: string | null, dialog: Dialog | null): 'none' | 'reseeded' | 'waiting' {
-    const entry = this.pendingReseed.get(r.id);
-    if (entry === undefined) return 'none';
-    if (pane === null) return 'waiting';
-    const hs = this.hookStates.get(r.id) ?? null;
-    let waiting = false;
-    let reseeded = false;
-    const row = entry.ask;
-    if (row !== null) {
-      if (dialog === null || dialog.id !== row.dialogId) {
-        entry.ask = null;
-        this.staleReseedRow(r.id, row);
-      } else if (hs === null) {
-        waiting = true;
-      } else {
-        const key = hs.ask === null ? null : askKey(hs.ask);
-        entry.ask = null;
-        if (key !== row.askKey) {
-          this.staleReseedRow(r.id, row);
-        } else {
-          try {
-            this.deps.coord?.restampAsk({ id: row.id, dialogId: dialog.id, askKey: key, askAt: hs.updatedAt });
-          } catch (err) {
-            console.warn(`ccrc-server: re-stamping a re-seeded ask failed for ${r.id} (${err instanceof Error ? err.message : String(err)}) — a parent answer may refuse ask-moved until the next tick`);
-          }
-          this.heldAsks.set(r.id, {
-            until: askNotifyAt(row.at), askId: row.id, answeringSince: null,
-            ev: askHoldPayload(r, hs, dialog, askActions(hs)),
-          });
-          reseeded = true;
-        }
-      }
-    }
-    if (entry.approvals.length > 0) {
-      if (dialog === null) {
-        entry.approvals = [];
-      } else if (hs === null) {
-        waiting = true;
-      } else {
-        const rows = entry.approvals;
-        entry.approvals = [];
-        if (hs.ask !== null && 'approval' in hs.ask) {
-          this.heldApprovals.set(r.id, {
-            until: Math.max(...rows.map((x) => x.notifyAt)), dialogId: dialog.id, rowIds: rows.map((x) => x.id),
-            ev: askHoldPayload(r, hs, dialog, null),
-          });
-          reseeded = true;
-        }
-      }
-    }
-    if (entry.ask === null && entry.approvals.length === 0) this.pendingReseed.delete(r.id);
-    return waiting ? 'waiting' : reseeded ? 'reseeded' : 'none';
-  }
-
-  /** Advance a held ask's `askAt` to the child's CURRENT hookstate, but only
-   *  where this tick has just proved the menu on screen is unchanged.
-   *
-   *  Called from the `last === dialog.id` arm of `detectDialogs`, so the
-   *  pane witness is already established by the caller; this adds the second
-   *  one, `askKey`, from the same tick's hookstate (`this.hookStates` is
-   *  rebuilt by `sweepHookStates` immediately before `detectDialogs` — see
-   *  the ordering note in `tick()`). Both are handed to `restampAsk`'s CAS
-   *  rather than trusted here, so a row that has moved on for any reason
-   *  changes zero rows and keeps the `askAt` it had.
-   *
-   *  Every early return is a REFUSAL TO ADVANCE, which is the fail-shut
-   *  direction: no held row, an unreadable or stale hookstate, an ask that
-   *  has gone from the envelope, or an envelope `askKey` will not hash — each
-   *  leaves the stored `askAt` exactly where it was, so the guard stays as
-   *  strict as it was before this method existed.
-   *
-   *  Guarded, for the same reason its two neighbours in `detectDialogs` are:
-   *  a synchronous `node:sqlite` UPDATE sitting directly on the 2 s poll, on
-   *  every tick shape rather than a mint edge, where an unguarded throw would
-   *  take the whole process down. */
-  private restampHeldAsk(id: string, dialogId: string): void {
-    const held = this.heldAsks.get(id);
-    if (held === undefined) return;
-    const hs = this.hookStates.get(id) ?? null;
-    if (hs === null || hs.ask === null) return;
-    const key = askKey(hs.ask);
-    if (key === null) return;
-    try {
-      this.deps.coord?.restampAsk({
-        id: held.askId, dialogId, askKey: key, askAt: hs.updatedAt,
-      });
-    } catch (err) {
-      console.warn(`ccrc-server: re-stamping the ask hold failed for ${id} (${err instanceof Error ? err.message : String(err)}) — a parent answer may refuse ask-moved until the next tick`);
-    }
-  }
-
-  /** Fire every held ask whose grace window has lapsed. The payload pushed is
-   *  the one `hold` snapshotted at mint time, pushed VERBATIM — `detectDialogs`'s
-   *  two triggers (`last !== dialog.id`, the amendment branch) are one-shot
-   *  edges: `dialogIds`/`actionlessAsks` are stamped on first sighting
-   *  regardless of whether a push was actually raised, so there is no second
-   *  chance to re-derive the same object later; re-deriving it here would find
-   *  nothing to re-raise.
-   *
-   *  `store.releaseAsk` is the CAS gate: it fires the push only when THIS call
-   *  is the one that moved the row `held -> released`. A `false` return means
-   *  something else moved the row first, and RULING F9 (task-7-brief) is the
-   *  reason this branches on the row's actual state instead of dropping the
-   *  `heldAsks` entry unconditionally the moment the CAS fails — the naive
-   *  "delete, then consult the result" order (the brief's own Step 3, before
-   *  the ruling) drops the deferred push forever whenever a parent is mid-
-   *  answer, which is the exact failure this lane exists to prevent:
-   *   - `'answering'` — a principal has taken the row and may still submit an
-   *     answer. KEEP the map entry so a later sweep can retry once that
-   *     resolves; pushing now would buzz the operator over a question someone
-   *     is actively answering. BOUNDED (fix round 1, item 1): `sweepAsks` is
-   *     the ONLY collector `heldAsks` has (`detectDialogs`'s orphan-settle
-   *     fires only on a NEW dialog id, and a session blocked on
-   *     `AskUserQuestion` does not repaint), so an unbounded keep here would
-   *     let a principal that took the row and never came back — the press
-   *     refused, `answerAsk` threw, the request abandoned, a restart
-   *     mid-call — strand the question forever, silently. Past
-   *     `ASK_ANSWERING_MAX_MS` since first observed `'answering'`, this
-   *     degrades exactly like the missing-row arm below: push, drop.
-   *   - `'answered'` | `'released'` | `'declined'` | `'stale'` — somebody
-   *     already resolved it (an answer landed, an explicit `POST
-   *     /api/asks/:id/release`, which is `'declined'` since D-5289, or
-   *     `detectDialogs`'s own orphan-settle). Drop the entry, no push — the
-   *     question is already closed.
-   *   - `'held'` — the CAS above just failed against this exact state, so
-   *     under ordinary single-threaded execution this is unreachable; the
-   *     only way to see it is a genuine race with another writer between
-   *     the `releaseAsk` attempt and this read. KEEP (fix round 1, item 2):
-   *     the row is demonstrably still open and unclaimed, so the NEXT
-   *     sweep's `releaseAsk` simply succeeds and pushes on its own — dropping
-   *     here would both lose the question AND orphan the row, since Task 8's
-   *     `staleAsk` (guarded on `heldAsks.get(r.id)`) could then never reach
-   *     it either. Warned, not silent — an unreachable branch that fires is
-   *     worth knowing about even though it is handled safely.
-   *   - `'unknown'` — an out-of-vocabulary state token read back off disk
-   *     (`hydrateAsk`'s own degrade). This IS the "cannot tell" case F9's
-   *     missing-row arm already rules on: push and drop, warned.
-   *   - the row itself is gone (`askById` returns `null`, e.g. a lost
-   *     coord.db) — its loss is free BY DESIGN (`heldAsks`'s own docstring):
-   *     drop the entry and push, degrading to exactly today's ordinary
-   *     immediate-notification behaviour rather than swallowing the question.
+  /** The ask half: fire every held ask whose grace window has lapsed, through this watcher's `Questions` instance
+   *  (`coord/questions.ts#createQuestions`'s `lapseAsks`, whose docstring keeps RULING F9 and the arms that keep a
+   *  question from being swallowed). Behind the `primed` gate and the `asks` row of `LANE_SCHEDULE`.
    *
    *  PUBLIC so a test can await it directly — `sweepMail`'s own reason:
    *  `tick()` void-dispatches this (it can sit behind whatever `sweepMail`
@@ -9288,224 +8973,49 @@ export class FleetWatcher {
     void this.sweepApprovals().catch(() => { /* one bad sweep must not kill the poll */ });
   }
 
-  private async askPass(store: CoordStore, fleet?: FleetReadModel): Promise<void> {
+  private async askPass(_store: CoordStore, fleet?: FleetReadModel): Promise<void> {
     const now = Date.now();
 
     // Fail-shut, same discipline as `sweepMail`'s own `MAIL_DISABLED_MARKER`
     // read a few hundred lines up: a registry we cannot list is a kill-switch
     // we cannot read, so an `unmeasurable` switch ("can't tell") reads as disabled
     // rather than as license to keep holding new asks. The switch comes from the tick's listing (D-5864): it gates
-    // the hold on later ticks, so nothing here acts on it at once.
-    this.asksDisabled = (await this.fleetFor(fleet)).switches[ASKS_DISABLED_MARKER] !== 'clear';
-
-    if (this.heldAsks.size === 0) return;
-    for (const [id, held] of [...this.heldAsks]) {
-      // The decisions are `coord/questionPolicy.ts#decideAskLapse`'s (W3 Q3c, D-7027), asked at each stage of what this
-      // sweep reads (the window, the release CAS, the re-read row); the acts below are this method's. `recordLapse` says
-      // whether this sweep's own CAS moved the row: only that lapse is recorded for a late answer (D-5289).
-      const act = (answer: AskLapse, recordLapse = false): void => {
-        switch (answer) {
-          case 'wait':
-          case 'keep':
-            return;                    // the hold stays; a later sweep retries
-          case 'keep-reset':
-            held.answeringSince = null;
-            return;
-          case 'drop':
-            this.heldAsks.delete(id);    // settled by someone else — no push
-            return;
-          case 'push-and-drop':
-            this.heldAsks.delete(id);
-            if (recordLapse) this.lapsedAsks.set(id, { askId: held.askId, ev: held.ev });
-            this.pushOne(held.ev, this.activeProjects);
-            return;
-        }
-      };
-      if (decideAskLapse(held, { kind: 'window' }, now) === 'wait') continue;
-
-      let released: boolean;
-      try {
-        released = store.releaseAsk(held.askId, now);
-      } catch (err) {
-        console.warn(`ccrc-server: releaseAsk failed for ask ${held.askId} (session ${id}) (${err instanceof Error ? err.message : String(err)}) — leaving the hold in place to retry next sweep`);
-        act(decideAskLapse(held, { kind: 'release-threw' }, now));
-        continue;
-      }
-      if (released) {
-        act(decideAskLapse(held, { kind: 'release-won' }, now), true);
-        continue;
-      }
-
-      // Beaten: the CAS did not move the row. Re-check its actual state
-      // before touching the map entry — see this method's own docstring and
-      // RULING F9.
-      let row: AskRow | null;
-      try {
-        const read = store.askById(held.askId);
-        // D-2545: the SAME degrade as the throw arm below — leave the hold in
-        // place and retry next sweep. A row this box could not read is not a
-        // row that is gone, and `row === null` below fires the push.
-        if (!read.ok) {
-          console.warn(`ccrc-server: askById refused for ask ${held.askId} (session ${id}) (${read.detail}) — leaving the hold in place to retry next sweep`);
-          act(decideAskLapse(held, { kind: 'row-refused' }, now));
-          continue;
-        }
-        row = read.ask;
-      } catch (err) {
-        console.warn(`ccrc-server: askById failed for ask ${held.askId} (session ${id}) (${err instanceof Error ? err.message : String(err)}) — leaving the hold in place to retry next sweep`);
-        act(decideAskLapse(held, { kind: 'row-threw' }, now));
-        continue;
-      }
-      // Bounded (fix round 1, item 1) — see `ASK_ANSWERING_MAX_MS`'s own
-      // docstring and this method's own. `answeringSince` is set on the
-      // sweep that FIRST observes this row `'answering'`, never
-      // re-derived, so the bound is measured from the first sighting,
-      // not from whenever `takeAskForAnswer` actually ran.
-      if (row !== null && row.state === 'answering' && held.answeringSince === null) held.answeringSince = now;
-      const answer = decideAskLapse(held, { kind: 'row', row }, now);
-      // The warn sentences follow the decider's answer: `keep-reset` is the `held` race, and a `push-and-drop` of a row
-      // that is not `answering` is a state this sweep cannot read.
-      if (answer === 'keep-reset') {
-        // Unreachable under ordinary single-threaded execution (see this
-        // method's own docstring) — a genuine race with another writer,
-        // not a defect this sweep can fix. KEEP: the row is demonstrably
-        // still open, so the next sweep's `releaseAsk` simply succeeds and
-        // pushes on its own; dropping here would orphan the row instead.
-        // Reset the answering timer too — a LATER `'answering'` sighting
-        // for this same entry is a fresh episode, not a continuation of
-        // whatever earlier one (if any) left a stale timestamp behind.
-        console.warn(`ccrc-server: sweepAsks saw ask ${held.askId} (session ${id}) unexpectedly still 'held' after a failed release — keeping the hold for the next sweep to resolve`);
-      } else if (answer === 'push-and-drop' && row !== null && row.state === 'unknown') {
-        // An out-of-vocabulary state token read back off disk
-        // (`hydrateAsk`'s own degrade) — the "cannot tell" case F9's
-        // missing-row arm already rules on: degrade to notifying the
-        // operator rather than swallowing the question.
-        console.warn(`ccrc-server: sweepAsks saw ask ${held.askId} (session ${id}) in an unrecognised state after a failed release — pushing and dropping the hold`);
-      } else if (answer === 'push-and-drop' && row !== null && !isAskState(row.state)) {
-        console.warn(`ccrc-server: sweepAsks saw ask ${held.askId} (session ${id}) in an unrecognised state '${String(row.state)}' after a failed release — pushing and dropping the hold`);
-      }
-      act(answer);
-    }
+    // the hold on later ticks, so nothing here acts on it at once. The instance holds it (W3 Q3d, D-7028).
+    this.questions.noteAsksSwitch((await this.fleetFor(fleet)).switches[ASKS_DISABLED_MARKER] !== 'clear');
+    this.questions.lapseAsks(now, (ev) => this.pushOne(ev, this.activeProjects));
   }
 
-  /**
-   * `POST /api/asks/:id/release` (Task 10, the decline route): a parent has
-   * DECLINED to rule on its child's question, so the grace window ends NOW
-   * rather than at `held.until` — the verb that makes the window a CEILING
-   * rather than a flat tax on every ask the parent cannot rule on. The route
-   * has already CAS'd the store row (`store.releaseAsk`) before calling this
-   * — this method's whole job is the in-memory half `sweepAsks` above would
-   * otherwise wait up to `ASK_SWEEP_MS` to notice on its own: drop the hold
-   * and fire the SNAPSHOTTED push immediately, exactly `sweepAsks`'s own
-   * `released` branch.
-   *
-   * PUBLIC, and the ONLY way a route may touch `heldAsks` — the map is
-   * watcher-private state (see its own docstring above), so a route has no
-   * business reaching into its shape or deleting from it directly. A
-   * `childId` with no entry (the grace window already lapsed and `sweepAsks`
-   * beat this call to it, a server restart forgot the hold, or this ask was
-   * never held by THIS watcher instance) is a no-op: the store row is
-   * released either way, and there is no snapshotted `ev` left to push.
-   */
+  /** `POST /api/asks/:id/release`'s door in (Task 10): a THIN FORWARD to this watcher's `Questions` instance, which
+   *  drops the hold and answers the snapshotted push; this sends it. Q3f deletes it when the route calls the module. */
   releaseHeldAsk(childId: string): void {
-    const held = this.heldAsks.get(childId);
-    if (held === undefined) return;
-    this.heldAsks.delete(childId);
-    this.pushOne(held.ev, this.activeProjects);
+    const ev = this.questions.released(childId);
+    if (ev !== null) this.pushOne(ev, this.activeProjects);
   }
 
-  /**
-   * D-5289, late answer wins: `POST /api/asks/:id/answer` settled a row it
-   * took from `'released'`, so the lapse already notified the operator. Replace
-   * that notification under the same tag (`pushOne`'s default
-   * `${kind}-${sessionId}`, the lapse's own) with `answeredByBody(parent)`, and
-   * no actions: the question is answered, so the lock-screen buttons must go.
-   * Only for the lapse this watcher snapshotted for THIS row (`askId`), and
-   * once: a restart, a cleared dialog or another row's answer replaces nothing.
-   * PUBLIC for the same reason `releaseHeldAsk` is: the route's only door in.
-   *
-   * A known race, benign: a tick that captures the pane while the route is
-   * still awaiting `sendKey` can see the dialog already cleared and drop the
-   * `lapsedAsks` entry before this runs, so the operator keeps the lapse's
-   * original notification (today's behaviour). Open follow-up, not this
-   * method's: a `'released'` row whose dialog clears with nobody answering
-   * never moves to `'stale'` (`staleAsk` takes `held`/`answering` only).
-   */
+  /** D-5289, late answer wins: `POST /api/asks/:id/answer`'s door in, a THIN FORWARD; the instance answers the push that
+   *  replaces this row's lapse under the same tag, or nothing. Q3f deletes it. */
   answeredLate(childId: string, askId: number, parent: string): void {
-    const lapsed = this.lapsedAsks.get(childId);
-    if (lapsed === undefined || lapsed.askId !== askId) return;
-    this.lapsedAsks.delete(childId);
-    this.pushOne({ ...lapsed.ev, body: answeredByBody(parent), actions: undefined }, this.activeProjects);
+    const ev = this.questions.answeredLate(childId, askId, parent);
+    if (ev !== null) this.pushOne(ev, this.activeProjects);
   }
 
   /**
-   * `tryHold`'s approval arm (plan Task 16, D-5298): the child's rows that are `held` and still inside their window.
-   * With one or more, the operator's push is snapshotted and recorded (D-2172: the record is the operator's durable
-   * trace) but not sent, and `sweepApprovals` sends it when the window ends, the claimant hands the prompt over, or
-   * the hook has not resolved a ruled prompt. Any failure answers `none`: the prompt raises as today.
-   */
-  private tryHoldApproval(
-    r: SessionRecord, dialog: Dialog, hs: HookState,
-  ): { kind: 'none' } | { kind: 'held'; parent: string } {
-    const coord = this.deps.coord;
-    if (!coord) return { kind: 'none' };
-    try {
-      const now = Date.now();
-      const read = coord.approvalsForChild(r.id, ['held']);
-      if (!read.ok) return { kind: 'none' };
-      // Only the main thread's rows (D-5491): the painted menu is the main thread's, because a background subagent's
-      // is painted only after its hook returns (D-5440; a fleet child's subagents are background ones, D-5443). A
-      // subagent's held row neither withholds this push nor is marked `operator` when this dialog clears.
-      const open = read.rows.filter((x) => x.agentId === '' && now < x.notifyAt && x.releaseReason === null);
-      if (open.length === 0) return { kind: 'none' };
-      const ev = askHoldPayload(r, hs, dialog, null); // the builder the restart re-seed shares (D-5925)
-      this.pushOne({ ...ev, recordAlways: true, recordOnly: true }, this.activeProjects);
-      this.heldApprovals.set(r.id, {
-        until: Math.max(...open.map((x) => x.notifyAt)), dialogId: dialog.id, rowIds: open.map((x) => x.id), ev,
-      });
-      return { kind: 'held', parent: open[open.length - 1]!.parentId };
-    } catch (err) {
-      console.warn(`ccrc-server: approval hold failed for ${r.id} (${err instanceof Error ? err.message : String(err)}) — falling back to an immediate push`);
-      return { kind: 'none' };
-    }
-  }
-
-  /**
-   * The approvals lane's clock (plan Task 16, D-5298, D-5441), on the asks sweep's cadence:
-   *  - a `held` row at or past its `notifyAt` lapses to `released` (the hook has stopped, or stops on its next poll);
-   *  - a `held` or `released` row past `askAt + APPROVAL_HOOK_WAIT_S` is `stale` (the hook's ceiling);
-   *  - a deferred push whose rows are none of them `held` any more is sent while its dialog is still painted — unless
-   *    every one of them was ruled within the last `APPROVAL_RULED_GRACE_MS`, where the hook is printing the ruling and
-   *    the dialog is about to clear;
-   *  - once a day, `pruneApprovalInputs` and the asks' question-text retention (spec §6.7).
-   * Every store call is guarded: one bad read must not kill the poll.
+   * The approval half (plan Task 16, D-5298, D-5441): the lapse, the hook's ceiling and the deferred pushes, through
+   * this watcher's `Questions` instance (`coord/questions.ts#createQuestions`'s `lapseApprovals`, given the pane's
+   * dialog per child and `APPROVAL_RULED_GRACE_MS`), and once a day (the `approvalPrune` row) the retention (spec §6.7).
+   * Every tick, ungated, with no await, so its whole body runs inside `tick`'s synchronous turn. Every store call is
+   * guarded: one bad read must not kill the poll.
    */
   async sweepApprovals(): Promise<void> {
     const coord = this.deps.coord;
     if (!coord) return;
     const now = Date.now();
     try {
-      // The decisions are `coord/questionPolicy.ts`'s (W3 Q3c, D-7027); the store calls and the map edits stay here.
-      // Each pass asks of a row as the state its read selected: this read's rows are `held` rows.
-      const held = coord.approvalsInState('held');
-      if (held.ok) for (const row of held.rows) if (decideApprovalLapse({ ...row, state: 'held' }, now) === 'lapse') coord.lapseApproval(row.id);
-      for (const st of ['held', 'released'] as const) {
-        const rows = coord.approvalsInState(st);
-        // The hook's ceiling, asked of each row as the `released` row it is or lapses to: the ceiling reads `askAt` alone,
-        // so a `held` row still due its lapse (the read above was refused) is marked `stale` all the same.
-        if (rows.ok) for (const row of rows.rows) if (decideApprovalLapse({ ...row, state: 'released' }, now) === 'stale') coord.staleApproval(row.id);
-      }
-      for (const [childId, entry] of this.heldApprovals) {
-        const read = coord.approvalsForChild(childId, ['held', 'allowed', 'denied']);
-        const answer = decideDeferredApprovalPush(entry, read, now, this.dialogIds.get(childId) === entry.dialogId, APPROVAL_RULED_GRACE_MS);
-        if (answer === 'wait') continue;
-        this.heldApprovals.delete(childId);
-        if (answer === 'push') this.pushOne(entry.ev, this.activeProjects);
-      }
-      this.runLaneSync('approvalPrune', () => {
-        coord.pruneApprovalInputs(now);
-        coord.pruneAskQuestions(now);
+      this.questions.lapseApprovals({
+        now, graceMs: APPROVAL_RULED_GRACE_MS, paintedDialogOf: (childId) => this.dialogIds.get(childId),
+        push: (ev) => this.pushOne(ev, this.activeProjects),
       });
+      this.runLaneSync('approvalPrune', () => this.questions.prune(now));
     } catch (err) {
       console.warn(`ccrc-server: sweepApprovals failed (${err instanceof Error ? err.message : String(err)}) — the next sweep retries`);
     }
@@ -9551,312 +9061,23 @@ export class FleetWatcher {
     }
   }
 
-  /** `POST /api/approvals/:id/release`'s door in (D-5440): the claimant handed the prompt over, so the deferred push
-   *  fires now, while the dialog is painted. A child with no deferred push (a background subagent's prompt, whose menu
-   *  paints only after its hook returns) raises on its first sighting instead. */
+  /** `POST /api/approvals/:id/release`'s door in (D-5440), a THIN FORWARD: the instance answers the deferred push when
+   *  the dialog it covers is still painted; this sends it. Q3f deletes it. */
   releaseHeldApproval(childId: string): void {
-    const entry = this.heldApprovals.get(childId);
-    if (entry === undefined) return;
-    const coord = this.deps.coord;
-    try {
-      const read = coord?.approvalsForChild(childId, ['held']);
-      if (read?.ok && read.rows.some((x) => entry.rowIds.includes(x.id) && Date.now() < x.notifyAt)) return;
-    } catch { /* unread: push, the operator's direction */ }
-    this.heldApprovals.delete(childId);
-    if (this.dialogIds.get(childId) === entry.dialogId) this.pushOne(entry.ev, this.activeProjects);
+    const ev = this.questions.approvalReleased(childId, this.dialogIds.get(childId));
+    if (ev !== null) this.pushOne(ev, this.activeProjects);
   }
 
-  /** `POST /api/approvals/:id/rule`'s door in: a deferred push stays deferred (the hook prints the ruling and the
-   *  dialog clears; `sweepApprovals` pushes if it does not). A prompt the operator was already pushed about (its menu
-   *  was sighted before the row was minted) has that notification replaced, same tag, by who ruled. */
+  /** `POST /api/approvals/:id/rule`'s door in, a THIN FORWARD: a prompt the operator was already pushed about has that
+   *  notification replaced, same tag, by who ruled (the instance decides; D-5491 keeps a subagent's ruling out). Q3f
+   *  deletes it. */
   approvalRuled(childId: string, agentId: string, parent: string, verdict: 'allow' | 'deny'): void {
-    // A subagent's ruling is not the painted prompt's (D-5491): the operator's notification for that prompt stays.
-    if (agentId !== '' || this.heldApprovals.has(childId) || !this.dialogIds.has(childId)) return;
-    const project = this.lastFleet?.find((f) => f.id === childId)?.project ?? '';
-    this.pushOne({ kind: 'ask', sessionId: childId, project, title: '❓ Question', body: approvalRuledBody(parent, verdict) },
-      this.activeProjects);
-  }
-
-  /** A painted approval dialog went away (`detectDialogs`' clear branch): its deferred push is dropped, and its rows
-   *  that no principal ruled become `operator` — the prompt was answered in the pane (spec §6.3 server step 5). Only the
-   *  rows its deferred push covered, so a background subagent's hidden wait (D-5440) is not ended by it (D-5491). */
-  private settleClearedApproval(childId: string, dialogId: string): void {
-    const entry = this.heldApprovals.get(childId);
-    if (entry === undefined || entry.dialogId !== dialogId) return;
-    this.heldApprovals.delete(childId);
-    try {
-      this.deps.coord?.markApprovalOperatorRows(entry.rowIds, Date.now());
-    } catch (err) {
-      console.warn(`ccrc-server: settling a cleared approval hold failed for ${childId} (${err instanceof Error ? err.message : String(err)})`);
-    }
-  }
-
-  /**
-   * D-5290 (coordinator-first routing spec §5.2): THE ONE DECISION every hold
-   * goes through — `detectDialogs`' first sighting, its deferred first raise
-   * and its amendment branch alike, so the envelope that arrives a tick after
-   * the menu is held exactly as one that arrived with it. Answers `none` (raise
-   * to the operator as today), `held` (minted `held`, the parent mailed, the
-   * operator's push deferred and recorded) or `released` (minted `released`
-   * with its reason and the operator pushed on this tick).
-   *
-   * The checks, in order, each `none` when it fails:
-   *  - D-2173: ELIGIBILITY IS `askActions`, and nothing else. Its own contract
-   *    is "offer an action only where `answerAsk` would accept it", so every
-   *    ask it refuses — an approval, a multi-question envelope, a
-   *    multi-select, a free-text ask, a blank label — is one no principal
-   *    could answer through this lane. `'questions' in ask` is redundant with
-   *    `actions !== null` at runtime; it exists so the compiler knows
-   *    `ask.questions[0]` is safe to read inside `hold`.
-   *  - the kill switch (`$REG/asks-disabled`, `sweepAsks`).
-   *  - THE CHILD MARK (spec §4): the registry row's `ChildMark` is
-   *    `{kind: 'child'}`. `none` and `unreadable` never hold: a run can name
-   *    any session (`POST /api/runs`, until Task 11b), so `parentOfSession`
-   *    alone does not make an operator-created session a child.
-   *  - the self-claim guard (`parentOfSession` answering `r.id` itself), the
-   *    run the mark names exists, and some open run names the child at all
-   *    (none is not a child, spec §4).
-   *  Then, past those, the row is minted either way (D-5530,
-   *  cross-project-claimant-holds-asks, the operator's ruling of 2026-10-18:
-   *  the ask is held for the child's run's recorded claimant WHEREVER that
-   *  claimant sits — no project is compared — and everything else fails
-   *  CLOSED, released to the operator with a reason that says why):
-   *  - the run has a claimant: `parentOfSession` answers one and the run the
-   *    mark names records one (else `run-unclaimed`, held for nobody, so the
-   *    row's parent is `ASK_OPERATOR_PRINCIPAL`);
-   *  - the parent is the claimant of the run the mark names — the minting
-   *    run (else `run-other-programme`, the same). Compared by claimant, not by
-   *    run id: a wave N >= 2 run resumes the SAME workspace (`dispatch.ts`'s
-   *    resume arm), whose marker still names wave 1, and `reclaimProgram`
-   *    moves every run of a programme to its heir together, so the claimant
-   *    is the one fact the binding run and the minting run share;
-   *  - the minting run's claimant was ATTRIBUTED (D-5531, the ruling's
-   *    "correctly attributed"): the run is not journaled `unattributed` and
-   *    carries its `coordProject` stamp (else `run-unattributed`, the same —
-   *    held for nobody). A run opened with no `claimedByUuid` before the fleet
-   *    carried the client, or before the attributed binding, records a
-   *    `claimedBy` nobody proved, and a recorded name alone is not a parent;
-   *  - the parent's registry row exists, is neither archived nor stopped, and
-   *    is not measured dead by `claimantMeasuredDead`, the predicate
-   *    `sweepDeadCoordinators` reads (else `parent-not-live`);
-   *  - the claimant ladder could measure it (else `parent-unmeasured`: doubt
-   *    is not a hold).
-   *
-   * Fix round 1, item 2 (Important): `parentOfSession` and everything `hold`
-   * does (`openRunsForSession`, the WRITE `insertAsk`, `queueSystemMail`'s own
-   * `tx()`/`BEGIN IMMEDIATE`, plus `hold`'s own throw on a key-derivation
-   * drift) reach `node:sqlite` directly, unguarded — and `tick()` is fired as
-   * `void this.tick()` with no `unhandledRejection` handler anywhere in this
-   * tree, so an unguarded throw here would kill the whole process. ANY FAILURE
-   * ANSWERS `none`, so the caller falls back to `raise()`: the lane degrades to
-   * today's ordinary immediate push rather than losing the question or the
-   * process.
-   */
-  private async tryHold(
-    r: SessionRecord, dialog: Dialog, actions: PushPayload['actions'] | null, recs: readonly SessionRecord[],
-  ): Promise<{ kind: 'none' } | { kind: 'held'; parent: string } | { kind: 'released' }> {
-    const none = { kind: 'none' } as const;
-    const hs = this.hookStates.get(r.id) ?? null;
-    const ask = hs?.ask ?? null;
-    // D-5298 (plan Task 16): a permission prompt is held when its child's hook already asked and the server minted a
-    // row HELD for the claimant (`POST /api/approvals` decided the claimant rule, the kill switches and the gates); the
-    // push waits for that row's window. No row, or none still inside its window: the prompt raises as today.
-    if (hs !== null && ask !== null && 'approval' in ask) return this.tryHoldApproval(r, dialog, hs);
-    if (actions === null || hs === null || ask === null || !('questions' in ask)) return none;
-    const coord = this.deps.coord;
-    if (!coord || this.asksDisabled) return none;
-    const mark = r.child;
-    if (mark.kind !== 'child') return none;
-    try {
-      // D-5530, D-5531: the one claimant decision, shared with the approvals lane (`coord/heldFor.ts`).
-      const verdict = await heldFor(
-        { coord, io: this.deps.io, cfg: this.deps.cfg, tmux: this.deps.tmux }, r.id, mark, recs, Date.now());
-      if (verdict.kind === 'not-a-child') return none;
-      const held = { parent: verdict.parent, reason: verdict.kind === 'released' ? verdict.reason : null };
-      const reason = held.reason;
-      const mint = this.hold(r, dialog, actions, hs, ask, held.parent, reason);
-      if (reason !== null) {
-        // Released at once: the operator's answerable push fires on THIS
-        // tick, never after the window, and no hold is kept for the sweep.
-        this.pushOne(mint.ev, this.activeProjects);
-        return { kind: 'released' };
-      }
-      // D-2172: the RECORD is minted now, not at release. `pushOne` returns
-      // before `notifyLog.record` when the operator is looking, so suppressing
-      // the raise without recording would delete the operator's only durable
-      // trace of a question their parent then answered in their name.
-      this.pushOne({ ...mint.ev, recordAlways: true, recordOnly: true }, this.activeProjects);
-      this.heldAsks.set(r.id, mint);
-      return { kind: 'held', parent: held.parent };
-    } catch (err) {
-      console.warn(`ccrc-server: ask hold failed for ${r.id} (${err instanceof Error ? err.message : String(err)}) — falling back to an immediate push`);
-      // Fix round 2, item 2: `insertAsk` and `queueSystemMail` are SEPARATE
-      // transactions inside `hold()` — a throw after the first commits (inside
-      // `queueSystemMail`'s own `tx()`, or in `pushOne`/`heldAsks.set` after
-      // it) would otherwise leave an ask row `held` with NO `heldAsks` entry:
-      // unreachable by Task 7's map-keyed sweep and Task 8's dialog-keyed
-      // `staleAsk`, while the fallback `raise()` means the operator gets the
-      // push AND a nudged parent may still act on the very question that push
-      // just escalated. Settle whatever may have committed — a no-op (0 rows
-      // changed) in the common case where nothing did — wrapped so the
-      // compensation itself cannot throw OUT of this catch.
-      try {
-        coord.staleAsk(dialog.id, r.id, Date.now());
-      } catch (compErr) {
-        console.warn(`ccrc-server: ask hold compensation failed for ${r.id} (${compErr instanceof Error ? compErr.message : String(compErr)}) — a held row may remain orphaned`);
-      }
-      return none;
-    }
-  }
-
-  /**
-   * Mint the ask row, snapshot the push `raise()` would have sent, and queue
-   * the mail that wakes the parent. Called ONLY from `tryHold`, which has
-   * already proven `actions !== null` (so `ask` is a single-question envelope
-   * with readable labels), the child mark and `parent !== null && parent !==
-   * r.id`. With a `releaseReason` (D-5290) the row is minted `released` and no
-   * mail is queued; the caller pushes `ev` at once.
-   *
-   * `ev` is snapshotted here, not re-derived at release (Task 7's
-   * `sweepAsks`) or at answer time — nothing persists a tick-local closure
-   * past its tick, and `detectDialogs`'s two triggers (`last !== dialog.id`
-   * here, the amendment branch above it) are one-shot edges: `dialogIds` is
-   * stamped on first sighting whether or not a push was raised, so there is
-   * no second chance to re-build the same object later.
-   */
-  private hold(
-    r: SessionRecord, dialog: Dialog, actions: PushPayload['actions'],
-    hs: HookState, ask: Extract<HookAsk, { questions: HookAskQuestion[] }>, parent: string,
-    releaseReason: AskMintReleaseReason | null,
-  ): { until: number; askId: number; ev: Parameters<FleetWatcher['pushOne']>[0]; answeringSince: number | null } {
-    const q = ask.questions[0]!;
-    const key = askKey(ask);
-    // `actions !== null` (askActions) already proved a key exists — this
-    // throw is unreachable by construction and exists only so a future
-    // drift between `askActions` and `askKey` fails loudly instead of
-    // minting a row with a null key.
-    if (key === null) throw new Error(`hold: eligible ask on ${r.id} produced no askKey`);
-    // D-5298 (spec §5.4, §6.7; D-5366 closed): the question and its option labels are a child's text, so they are
-    // redacted before the row stores them and before the brief carries them. The pane is answered by index, never by
-    // label, so a masked label presses the same option.
-    const question = redactCommand(q.question);
-    const options = q.options.map((o) => redactCommand(o.label));
-    const now = Date.now();
-    // D-5294: the one deadline, read by the sweep (`until`) and stated in the brief.
-    const until = askNotifyAt(now);
-    // Same run `parentOfSession` derived the parent from — `openRunsForSession`
-    // mirrors its `ORDER BY id DESC LIMIT 1` pick via "last of the ASC list",
-    // the same idiom `sweepMerged` above already uses. Recorded on the ask
-    // row for provenance; the OPERATOR MAIL below deliberately does NOT carry
-    // it (see that call's own comment).
-    // D-2545. ABORT THE MINT rather than hold a question against a run this
-    // box could not read: `hold` is called inside `detectDialogs`' try/catch,
-    // which falls back to the EXISTING immediate-operator-push `raise()` —
-    // minting no ask row and no parent mail, which is exactly the ruled
-    // behaviour. Reached by a typed result rather than by `node:sqlite`'s bare
-    // `RangeError`, but landing in the same place on purpose, and it throws
-    // BEFORE `insertAsk` so there is nothing to compensate.
-    const sib = this.deps.coord!.bindingsOf(r.id).worker();
-    if (!sib.ok) throw new Error(`hold: ${sib.detail}`);
-    const openRuns = sib.siblings;
-    const runId = openRuns.length > 0 ? openRuns[openRuns.length - 1]!.id : null;
-    const askId = this.deps.coord!.insertAsk({
-      childId: r.id, parentId: parent, runId, askKey: key, askAt: hs.updatedAt,
-      dialogId: dialog.id, question, options, now,
-      ...(releaseReason === null ? {} : { releaseReason }),
-    });
-    const ev = askHoldPayload(r, hs, dialog, actions);
-    // The parent is asleep and nothing else will wake it. Ordinary mail, so
-    // the existing idle gating applies unchanged — and the latency does not
-    // gate the operator, because the operator's own push is racing this hold
-    // on its own clock. The subject is unique BY CONSTRUCTION: mail dedupe is
-    // subject-keyed, so a fixed subject would refuse the second ask of the
-    // day as a restatement of the first. `runId: null` and `run: null`,
-    // deliberately, mirroring `queueProgramKickoff`'s own reasoning: this
-    // message is not a wave artifact — it rides the run-less peer-mail lane
-    // (bounded by its own quota) rather than a run's lifecycle, and
-    // `renderEnvelope` skips the program/wave/waveOf fields whenever `runId`
-    // is null, so nothing is lost by not attaching the run we just derived.
-    // `askNudgeSubject` (fix round 2, item 3), not a hand-spelled `` `ask:` ``
-    // literal: `isAskNudgeMail` in the same module must recognise exactly
-    // this shape, and a queue/reader pair spelling one convention twice is
-    // the kind of thing that drifts.
-    // D-5290: a row minted released mails nobody — nobody is held for it
-    // (D-5530's fail-closed reasons), and the operator already has the push.
-    if (releaseReason === null) {
-      queueSystemMail(this.deps.coord!, null, {
-        fromId: 'operator', toId: parent, runId: null, kind: 'question',
-        subject: askNudgeSubject(askId), body: renderAskBrief(askId, r.id, question, options, until),
-      });
-    }
-    return { until, askId, ev, answeringSince: null };
+    const ev = this.questions.approvalRuled(childId, agentId, parent, verdict, this.dialogIds.has(childId),
+      () => this.lastFleet?.find((f) => f.id === childId)?.project ?? '');
+    if (ev !== null) this.pushOne(ev, this.activeProjects);
   }
 }
 
-/**
- * The push a held question defers (D-5925): what `hold()` snapshots at the mint and what the restart re-seed in
- * `detectDialogs` rebuilds from the dialog's current sighting, so the two can never drift apart. Pure: built from the
- * record, this tick's hookstate, the painted dialog and the actions `askActions` derived, and nothing else. `actions`
- * `null` (an approval's deferred push, which offers no answer buttons) omits the field.
- */
-export function askHoldPayload(
-  r: Pick<SessionRecord, 'id' | 'project'>, hs: HookState | null, dialog: Dialog, actions: PushPayload['actions'] | null,
-): { kind: 'ask'; sessionId: string; project: string; title: string; body: string; actions?: PushPayload['actions'] } {
-  return {
-    kind: 'ask', sessionId: r.id, project: r.project,
-    title: '❓ Question', body: askPushBody(hs, dialog),
-    ...(actions === null ? {} : { actions }),
-  };
-}
-
-/**
- * The parent's ENTIRE evidentiary surface (design spec §6.1) is this ask row
- * plus its own artifacts — no route, ws feed, or ccd verb lets one session
- * read another's transcript. So this states the child's id, the moment the
- * operator is notified (D-5294), the question and its options in order, the
- * ready-to-run commands a parent may act through, and the lazy role invocation
- * (design spec §4) — this session is that child's parent, and
- * `ccrc-coordinator` is the skill for the job. That sentence is why nothing has
- * to happen at session creation: the role arrives with its first duty.
- *
- * D-5294 (coordinator-first spec §5.4, §6.7):
- * - the deadline is `notifyAt` (`askNotifyAt`, the one computation the sweep
- *   also acts on), printed in UTC, with the late-answer sentence D-5289 makes
- *   true; it counts from the mint (the row's `at`), not the row's `askAt`
- *   (D-5364);
- * - the question and the option labels are the child's text, so they ride
- *   inside `untrustedBlock` and nowhere else; outside it the brief names
- *   options only by index;
- * - the commands (D-5365) are the coordinator skill's own client form
- *   (`wave-lifecycle.md`'s ask lane): `"$API"`, `$id` and `$uuid` are the
- *   names the skill's preamble sets, so the heredoc is UNQUOTED and the shell
- *   expands them into the attribution the route requires. Nothing the child
- *   wrote is inside a heredoc: the ask id and the index are integers this
- *   server minted;
- * - the question and its labels arrive already redacted (`redactCommand`,
- *   applied by `hold` before the row stores them; plan Task 16 closed
- *   D-5366), and are fenced here.
- */
-function renderAskBrief(
-  askId: number, childId: string, question: string, options: string[], notifyAt: number,
-): string {
-  const asked = `${question}\n${options.map((label, i) => `  ${i}. ${label}`).join('\n')}`;
-  const deadline = new Date(notifyAt).toISOString().slice(11, 19);
-  const who = '"fromId":"$id","fromUuid":"$uuid"';
-  const answers = options.map((_label, i) =>
-    `Option ${i}:\n"$API" asks answer ${askId} --json - <<JSON\n{${who},"optionIndexes":[${i}]}\nJSON\n`).join('');
-  return `You are the parent of session \`${childId}\`, which is waiting on a question it cannot answer itself.\n` +
-    `The operator is notified at ${deadline} UTC unless you answer or hand over; ` +
-    `a later answer still counts until the operator acts.\n\n` +
-    `${untrustedBlock(asked, UNTRUSTED_CAP_BYTES, 'on the ask row (`"$API" asks list` shows it while the row is held, not after the lapse)')}\n\n` +
-    `Rule from your own artifacts — spec, plan, ledger, branch, your prior rulings — never from the child's ` +
-    `reasoning, which you cannot see.\n\n` +
-    `Answer with the index of the option you rule for ("$API", $id and $uuid are the ccrc-coordinator skill's):\n` +
-    answers +
-    `\nDecline (not yours to rule — fires the operator's own notification at once, and is final):\n` +
-    `"$API" asks release ${askId} --json - <<JSON\n{${who}}\nJSON\n\n` +
-    `Run the ccrc-coordinator skill.`;
-}
 
 // ── THE DELEGATION LANE (delegation broker wave 3, Task 13; spec §5.5, §5.12) ──────────────────────────────────────────────────
 //
@@ -10034,6 +9255,23 @@ function renderAskBrief(
 //       restart with no listing back in the hour, the hour rests on its P row alone; an outage spanning its close (the arm closes the
 //       row before any live read of P) fails closed, as a loss at expiry. A verdict over a window is final once its last hour has left
 //       the read horizon.
+//     - THE HOURS A TRANSIENT BUCKET-READ FAILURE WAITS ON (D-6967, the operator's "a failed folder read waits for a later read in the same
+//       hour"; `waits` on the pending owner of a real incarnation). Only `directory-unreadable` and `range-unreadable` wait, and only while
+//       the DURABLE state holds a measured (session, I, hour) row recorded before the hour's close (`laneCarries`: never a row this pass
+//       staged); every other word, and a first read with no such row, is today's immediate gap. A wait stages nothing: the hour joins the
+//       entry's `hours` (a lost window through `pendingWindows`, R106 included: a delay, D-6967's residue) with its word beside it in
+//       `waits`, the two removed together on every path,
+//       recorded only after the read's abort check (so a cut pass never records or rewords one; a later failure rewords it), and `listedBy`
+//       never lowered (R107). `forgetRead` never drops a waiting hour unless THIS observation ended its wait, under R101's gate and R107's:
+//       an applicable result that is not a carve-out (a measured read, the no-op skip, or any loss, which lands its own word) is a read; a
+//       carve-out (`directory-absent`, `capability-absent`) is never a read: it stages the waited word as an interval-only gap (R90 keeps
+//       the loss) and the hour leaves only once that is durable (`noteGap` finding it on file counts); an hour read whole after its close (a
+//       cut pass's late flush) ends with no gap. A result refused by name, a cut, a failed flush or an R82 refusal end nothing, and the hour
+//       left unread expires with R89's words. Restart-safe because the wait is never what keeps the hour honest: the carrier row is (the
+//       checkpoint arm's close read, and upkeep's `hour-never-closed`). Residues: a failed first read of an hour still costs it; after a
+//       restart a `capability-absent` result can take the hour's word in place of the unread stretch, which R88's not-ready window holds;
+//       a persistent failure shows as a loss only at the horizon; and D-6471's inputs move: a waiting incarnation is a pending owner `priorOf`
+//       reads, and a waiting read of P discharges nothing it owes, both the safe direction.
 //
 //   REPORT-ONLY EFFECTS. Attempts are made durable through one checkpoint-only change BEFORE any lease is journaled (so the next pass
 //   sees them), then each lease request goes through `createLease` (which deduplicates on the identity key, so a request re-emitted
@@ -10315,8 +9553,10 @@ interface LaneEvidenceIndex {
 /** One owner to observe in a pass. `incarnation: null` is a parent whose incarnation could not be measured (`reason` says why).
  *  `listedHours` are the hours (ms) a pass listed it in and no completed observation has covered yet, inside the read horizon (R89).
  *  `read` (D-6471, lane memory): the hours whose bucket result this observation applied or skipped as unchanged, never refused by name
- *  and never a carve-out: what may discharge an hour owed under this incarnation. */
-interface LaneOwner { id: string; incarnation: string | null; reason: string; live: boolean; listedHours: readonly number[]; read?: number[] }
+ *  and never a carve-out: what may discharge an hour owed under this incarnation. `ended` (D-6967, lane memory): the hours whose WAIT
+ *  this observation ended without a read: a carve-out that staged the waited loss, or an hour read whole after its close; never in
+ *  `read`, so a carve-out never discharges an owed hour. */
+interface LaneOwner { id: string; incarnation: string | null; reason: string; live: boolean; listedHours: readonly number[]; read?: number[]; ended?: number[] }
 /** R89: an owner a pass LISTED from the census, and the hours (ms) it was listed in, until one observation of it completes. */
 interface LanePendingOwner {
   id: string; incarnation: string | null; reason: string; hours: Set<number>;
@@ -10326,6 +9566,10 @@ interface LanePendingOwner {
   /** D-6471: the hours of an `(id, null)` owner DEFERRED by an `unreadable` listing, each with the prior incarnation P it waits for. Lane
    *  memory only, never durable: what keeps the hour honest across a restart is the (id, P, hour) row the deferral required. */
   owed?: Map<number, string>;
+  /** D-6967: the hours of a real incarnation that WAIT after a transient read failure, each with the loss word it would have recorded. A
+   *  wait exists only while its hour is in `hours` too: every path that removes the hour removes its word in the same statement. Lane
+   *  memory only, never durable: what keeps the hour honest across a restart is the measured (id, incarnation, hour) row it required. */
+  waits?: Map<number, string>;
 }
 /** An owner's identity in a pass and in the pending memory: (id, incarnation or null). */
 const laneOwnerKey = (id: string, incarnation: string | null): string => JSON.stringify([id, incarnation]);
@@ -10365,6 +9609,16 @@ const laneCloseAt = (hourMs: number): number => hourMs + DELEGATION_HOUR_MS + DE
 const laneInstantMs = (iso: string): number | null => {
   try { return parseDelegationInstant(iso); } catch (err) { if (err instanceof DelegationModelError) return null; throw err; }
 };
+/** D-6967: whether `state` holds a MEASURED (id, incarnation, hour) row recorded before the hour's close, the CARRIER a transient
+ *  read failure may wait on. Read from the durable state, so a row staged in this pass and not yet flushed never counts; a row whose
+ *  instant does not parse is none (the immediate gap, the safe direction). */
+const laneCarries = (state: DeepReadonly<DelegationRecoveryState>, id: string, inc: string, hourMs: number): boolean => {
+  const r = laneIntervalOf(state, id, inc, hourMs);
+  return r?.state === 'measured' && (laneInstantMs(r.recordedAt) ?? Infinity) < laneCloseAt(hourMs);
+};
+/** The checkpoint's interval row for (id, incarnation, hour), if it holds one: `noteGap`'s prior and `laneCarries`' carrier. */
+const laneIntervalOf = (state: DeepReadonly<DelegationRecoveryState>, id: string, inc: string, hourMs: number) =>
+  state.checkpoint.observationIntervals.find((r) => r.sessionId === id && r.parentIncarnation === inc && r.utcHour === formatDelegationInstant(hourMs));
 
 /** The census, flat: every project whose delegation census was a MEASURED success contributes its records, each (project, adminRecord)
  *  once. A project whose view was null is left OUT of `censused` and contributes nothing: an empty list would read as "every tree is gone"
@@ -11494,7 +10748,8 @@ class DelegationLane {
           ? laneIncarnationGap(p.owed?.has(hourMs) === true ? 'unreadable' : p.reason)      // D-6471 (review 838 F3): an owed hour was deferred under `unreadable`
           : `${DELEGATION_HOUR_NEVER_CLOSED}: listed in this hour, and never read before the hour left the read horizon`;
         // D-6471: a deferred hour stays (owed) until its loss gap is durable: a later pass finds the row and lets it go
-        if (await this.noteGap(pass, durable, p.id, p.incarnation ?? DELEGATION_UNMEASURED_INCARNATION, hourMs, detail) || !p.owed?.has(hourMs)) { p.hours.delete(hourMs); p.owed?.delete(hourMs); }
+        // D-6967: a waiting hour expires here too, with R89's words, and its word leaves with it
+        if (await this.noteGap(pass, durable, p.id, p.incarnation ?? DELEGATION_UNMEASURED_INCARNATION, hourMs, detail) || !p.owed?.has(hourMs)) { p.hours.delete(hourMs); p.owed?.delete(hourMs); p.waits?.delete(hourMs); }
       }
       if (p.hours.size === 0) this.pendingOwners.delete(k);
     }
@@ -11541,9 +10796,13 @@ class DelegationLane {
       catch { /* a dropped agent round trip is an unreadable listing */ }
       if (pass.signal.aborted) return;
     }
-    for (const hourMs of this.hoursOf(pass, durable.state(), owner, inc, listing)) {
+    const hours = this.hoursOf(pass, durable.state(), owner, inc, listing);
+    // D-6967, the close read: a listed hour `hoursOf` leaves out was read whole after its close (a cut pass's late flush); its wait ends too
+    for (const h of owner.listedHours) if (!hours.includes(h)) (owner.ended ??= []).push(h);
+    for (const hourMs of hours) {
       if (pass.signal.aborted) return;
-      if (await this.observeHour(pass, durable, owner.id, inc, hourMs, listing, capabilityPresent)) (owner.read ??= []).push(hourMs);
+      const seen = await this.observeHour(pass, durable, owner.id, inc, hourMs, listing, capabilityPresent);
+      if (seen !== false) (owner[seen] ??= []).push(hourMs);
     }
   }
 
@@ -11671,13 +10930,17 @@ class DelegationLane {
       if (refusedOwners.has(JSON.stringify([owner.id, owner.incarnation ?? DELEGATION_UNMEASURED_INCARNATION]))) continue;
       // D-6471: a LIVE read of P, durable, discharges the hours deferred for P that it read (R107: unless a newer pass listed them)
       const deferred = owner.live ? this.pendingOwners.get(laneOwnerKey(owner.id, null)) : undefined;
-      for (const h of deferred !== undefined && deferred.listedBy <= pass.seq ? owner.read ?? [] : []) if (deferred!.owed?.get(h) === owner.incarnation) { deferred!.owed.delete(h); deferred!.hours.delete(h); }
+      for (const h of deferred !== undefined && deferred.listedBy <= pass.seq ? owner.read ?? [] : []) if (deferred!.owed?.get(h) === owner.incarnation) { deferred!.owed.delete(h); deferred!.hours.delete(h); deferred!.waits?.delete(h); }
       if (deferred?.hours.size === 0) this.pendingOwners.delete(laneOwnerKey(owner.id, null));
       const k = laneOwnerKey(owner.id, owner.incarnation);
       const pending = this.pendingOwners.get(k);
       if (pending === undefined) continue;
       if (pending.listedBy > pass.seq) continue;                         // R107: a newer pass listed it; that pass decides
-      for (const hourMs of owner.listedHours) if (pending.owed?.has(hourMs) !== true) pending.hours.delete(hourMs);   // D-6471: owed stays
+      // D-6471: owed stays. D-6967: so does a waiting hour, unless THIS observation ended its wait (a read, or a carve-out's loss, durable now)
+      for (const hourMs of owner.listedHours) {
+        if (pending.owed?.has(hourMs) === true || (pending.waits?.has(hourMs) === true && owner.read?.includes(hourMs) !== true && owner.ended?.includes(hourMs) !== true)) continue;
+        pending.hours.delete(hourMs); pending.waits?.delete(hourMs);
+      }
       if (pending.hours.size === 0) this.pendingOwners.delete(k);
     }
   }
@@ -11713,7 +10976,7 @@ class DelegationLane {
   /** An hour recorded as a gap without a bucket to read: written once. True when the row is already on file (nothing staged). */
   private async noteGap(pass: LanePass, durable: DelegationDurability, id: string, inc: string, hourMs: number, detail: string): Promise<boolean> {
     const hour = formatDelegationInstant(hourMs);
-    const prior = durable.state().checkpoint.observationIntervals.find((r) => r.sessionId === id && r.parentIncarnation === inc && r.utcHour === hour);
+    const prior = laneIntervalOf(durable.state(), id, inc, hourMs);
     // R90: an unmeasured hour is written once, unless this is a loss word over a carve-out word
     if (prior !== undefined && prior.state === 'unmeasured' && !laneLossOverCarveOut(prior.detail, detail)) { this.skipped += 1; return true; }
     if (pass.signal.aborted) return false;
@@ -11724,10 +10987,11 @@ class DelegationLane {
     return false;
   }
 
-  /** True when a bucket result for the hour was applied or skipped as unchanged, not refused by name and not a carve-out (D-6471). */
+  /** `'read'` when a bucket result for the hour was applied or skipped as unchanged, not refused by name and not a carve-out (D-6471);
+   *  `'ended'` when a carve-out met a waiting hour and staged its waited loss (D-6967); `false` otherwise, a wait recorded included. */
   private async observeHour(
     pass: LanePass, durable: DelegationDurability, id: string, inc: string, hourMs: number, listing: MeasuredDirectoryRead, capabilityPresent: boolean | null,
-  ): Promise<boolean> {
+  ): Promise<'read' | 'ended' | false> {
     const bucket = laneBucketOf(hourMs);
     const closing = pass.now >= laneCloseAt(hourMs);
     const row = durable.state().checkpoint.bucketCursors.find((r) => r.sessionId === id && r.parentIncarnation === inc && r.bucket === bucket);
@@ -11737,18 +11001,36 @@ class DelegationLane {
     });
     if (pass.signal.aborted) return false;                               // a late answer of a cut pass applies nothing
     const state = durable.state();                                       // AT THIS MOMENT, never a copy taken before the read (M5/M6)
+    const failed = read.ok ? null : unreadableDelegationBucketResult({ sessionId: id, parentIncarnation: inc, bucket }, state, { reason: read.reason, detail: read.detail });
+    const k = laneOwnerKey(id, inc);
+    // D-6967: a TRANSIENT failure stages nothing and WAITS on the pending entry, under its own word, while the durable state
+    // carries the hour; a later failure rewords it. After the abort check above, so a cut pass never records or rewords a wait.
+    if (!read.ok && (read.reason === 'directory-unreadable' || read.reason === 'range-unreadable') && laneCarries(state, id, inc, hourMs)) {
+      const p = this.pendingOwners.get(k) ?? { id, incarnation: inc, reason: '', hours: new Set<number>(), listedBy: pass.seq };
+      p.hours.add(hourMs);
+      (p.waits ??= new Map()).set(hourMs, failed!.detail);
+      p.listedBy = Math.max(p.listedBy, pass.seq);                       // R107: never lower a newer pass's stamp
+      this.pendingOwners.set(k, p);
+      return false;
+    }
     const seen = { accepted: 0, read: false };
     const gate = this.gateOf(pass, durable, state, id, inc, hourMs, bucket, seen);
     try {
       if (read.ok) await ingestAndApplyDelegationBucket(read.input, state, gate);
-      else await gate.applyBucketResult(unreadableDelegationBucketResult({ sessionId: id, parentIncarnation: inc, bucket }, state, { reason: read.reason, detail: read.detail }));
+      else await gate.applyBucketResult(failed!);
     } catch (err) {
       if (err instanceof DelegationIngestError) { console.warn(`ccrc-server: delegation bucket ${id}/${bucket} was refused: ${err.message}`); return false; }
       throw err;
     }
     // An hour read AFTER it closed, with nothing new in it, is not read again by this process (once the pass's application is durable).
     if (closing && read.ok && seen.accepted === 0) pass.settle.push(this.settledKey(id, inc, hourMs));
-    return seen.read;
+    // D-6967: a carve-out never ends a wait as a read. It stages the waited loss as an interval-only gap (the cursor stays the
+    // carve-out result's; R90's merge keeps the loss in either order), and `forgetRead` lets the hour go only once that is durable.
+    const waiting = this.pendingOwners.get(k);
+    const word = waiting?.hours.has(hourMs) === true ? waiting.waits?.get(hourMs) : undefined;
+    if (seen.read || word === undefined) return seen.read ? 'read' : false;
+    await this.noteGap(pass, durable, id, inc, hourMs, word);
+    return pass.signal.aborted ? false : 'ended';
   }
 
   /** The durable door for one bucket result: the no-op skip, then Task 8's own adapter (taking note of what it journaled). */
