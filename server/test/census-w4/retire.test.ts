@@ -7,7 +7,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import type { CensusSite } from '../consolidationCensus.js';
-import { retireActSites, retireGateLadders, retireNoticeSites, retireQueueOwners, retireQueueSites } from './retire.js';
+import { retireActSites, retireDeciders, retireGateLadders, retireNoticeSites, retireQueueOwners, retireQueueSites } from './retire.js';
 
 const show = (name: string, sites: readonly (CensusSite & { symbol: string })[]): void => {
   console.log(`census ${name}: ${sites.length}\n${sites.map((s) => `  ${s.symbol}  (${s.file}:${s.line})`).join('\n')}`);
@@ -156,6 +156,18 @@ describe('the retire executors\' censuses (ARCH-44, C4h)', () => {
       '  }',
       '}',
     ]);
+    // ── retireDeciders (C4i) ──
+    at('server/src/deciders.ts', [
+      'export function decide(f: Facts, r: Row, req: Req): RetireDecision<Out> {',                    // a declared RetireDecision: counted
+      '  return { act: true };',
+      '}',
+      'export function firstAgentAfter(s: State, at: number): { at: number | null } | { need: string } {', // the `{ need }` shape: not counted
+      "  return { need: 'agent-a' };",
+      '}',
+      'export const arrowDecide = (f: Facts, r: Row, req: Req): RetireDecision<Out> => ({ act: true });', // an arrow const: counted
+      'function inferred(f: Facts) { return { need: f.next }; }',                                        // an inferred return: not counted
+      'export class Holder { decide(f: Facts): RetireDecision<Out> { return { act: true }; } }',        // a method: not top-level
+    ]);
   });
   afterAll(() => { rmSync(tree, { recursive: true, force: true }); });
 
@@ -188,6 +200,10 @@ describe('the retire executors\' censuses (ARCH-44, C4h)', () => {
     expect(names(retireNoticeSites(tree))).toEqual([
       'server/src/coord/feeds.ts#boundTitle', 'server/src/coord/feeds.ts#ownTitle', 'server/src/feedWatch.ts#record',
     ]);
+  });
+
+  it('FIXTURE retireDeciders: a function or an arrow const declared to answer RetireDecision counts; the { need } shape, an inferred return and a method do not', () => {
+    expect(names(retireDeciders(tree))).toEqual(['server/src/deciders.ts#arrowDecide', 'server/src/deciders.ts#decide']);
   });
 
   it('REAL retireGateLadders reports (3 at the C4h base; 3 -> 2 -> 1 -> 0 through C4k, C4l, C4m)', () => {
@@ -231,5 +247,11 @@ describe('the retire executors\' censuses (ARCH-44, C4h)', () => {
       'server/src/watch.ts#collectRecordCoordFeed',
       'server/src/watch.ts#collectRecordFeed',
     ]);
+  });
+
+  it('REAL retireDeciders is exactly retire.ts#decideRetire (0 at the C4i base; 1 after it)', () => {
+    const sites = retireDeciders();
+    show('retireDeciders', sites);
+    expect(names(sites)).toEqual(['server/src/retire.ts#decideRetire']);
   });
 });

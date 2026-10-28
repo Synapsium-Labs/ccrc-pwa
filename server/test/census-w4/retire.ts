@@ -12,6 +12,8 @@
 //   - `retireQueueSites`: each retire entry queued through `.queue.run(` or `retireExecutor(` (4 `queue.run` at the base);
 //   - `retireQueueOwners`: the functions owning a `KeyedQueue` run of a retire entry (4 at the base; 1 after C4n, D-7203);
 //   - `retireNoticeSites`: the functions writing a retire reason's feed row through `notify(` (pinned exact: D-7176).
+// AND ONE MORE (C4i, D-7166):
+//   - `retireDeciders`: the functions declared to answer a `RetireDecision` (0 at C4i's base; 1 after it, pinned exact).
 import path from 'node:path';
 import { parsedFile } from '../scan/symbols.js';
 import { identifierReferences, retireFacts, type CallSite, type ParsedFile, type SymbolSpan } from '../scan/parse.js';
@@ -233,6 +235,29 @@ export function retireNoticeSites(root: string = REPO): RetireSite[] {
       const fed = p.calls.some((k) => !within(k, fn) && (k.callee === `this.${name}` || k.callee === name)
         && k.args.some((a) => [...names].some((n) => new RegExp(`\\b${n}\\b`).test(a.text))));
       if (own || fed) { seen.add(fn); out.push(siteOf(file, p, fn)); }
+    }
+  }
+  return out;
+}
+
+/**
+ * The retire gate deciders (C4i, D-7166): each top-level function under `server/src` (a declaration, or a `const` arrow
+ * or function expression) whose DECLARED return type names `RetireDecision`, read from `retireFacts`' signatures, never
+ * a regex over source (D-7227). 0 at C4i's base, where no such type exists; 1 after it, `retire.ts#decideRetire`, pinned
+ * exact. Keyed on the type and not on a `{ need:` literal: `workflows/model.ts#firstAgentAfter` returns `{ need: agentId }`
+ * under a type of its own (plan item 14), and is not counted.
+ * KNOWN WIDTH: a function whose return type is inferred, or annotated on the `const` rather than on the function, is not
+ * seen.
+ */
+export function retireDeciders(root: string = REPO): RetireSite[] {
+  const out: RetireSite[] = [];
+  for (const f of sourceFiles(root, 'server/src')) {
+    const file = relOf(root, f);
+    const p = parsedFile(f);
+    const facts = retireFacts(p);
+    for (const fn of topLevel(p)) {
+      const returns = facts.signatures[fn.name]?.returnType ?? null;
+      if (returns !== null && /\bRetireDecision\b/.test(returns)) out.push(siteOf(file, p, fn));
     }
   }
   return out;
