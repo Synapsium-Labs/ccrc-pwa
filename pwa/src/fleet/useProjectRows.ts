@@ -27,6 +27,11 @@ import { api, type WorkspaceAddAnswer } from '../lib/api';
 import { useWhenVisible } from '../lib/usePoll';
 import { placementOfRow, poolOfPlacement, type ProjectPlacementRead } from './placementWords';
 
+/** THE ONE reader of `GET /api/projects` in the app (C7n, D-7192): the fleet screen's plane below calls it with the
+ *  class its chooser holds, and the New session and Start programme sheets call it with none, so their request is the
+ *  class-blind `GET /api/projects` it always was (`api.projects` appends `?class=` only when given). */
+export const loadProjects = (cls?: string): Promise<{ roots: string[]; projects: ProjectRow[] }> => api.projects(cls);
+
 /** The pools frame reduced to one comparable string. Key ORDER is not
  *  significance: the wire is rebuilt per frame, so an object that re-serialises
  *  with its keys in another order is the same measurement and must not look
@@ -190,7 +195,7 @@ export function useProjectRows(
     setProjectRows((rows) => rows.kind === 'ready' ? rows : { kind: 'pending' });
     try {
       const cls = classFilterRef.current;
-      const response = await api.projects(cls === '' ? undefined : cls);
+      const response = await loadProjects(cls === '' ? undefined : cls);
       if (request === projectRequest.current) {
         setProjectRows({ kind: 'ready', rows: response.projects });
         publishRef.current(response.projects);
