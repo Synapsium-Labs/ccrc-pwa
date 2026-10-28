@@ -109,7 +109,8 @@ export function AccountsStrip({ store = useFleetStore }: { store?: FleetStore } 
   const desk = useDesk();
   const expanded = useStripExpanded(desk);
   const { ref: measureRef, row } = useRowWidth();
-  // The strip's group, held for `handFocusBack`; the measure's callback ref is called from the one below.
+  // The strip's group, held for the panel's room and the outside-tap close; the measure's callback ref is called from
+  // the one below.
   const groupEl = useRef<HTMLElement | null>(null);
   const groupRef = useCallback((el: HTMLElement | null) => { groupEl.current = el; measureRef(el); }, [measureRef]);
   const groupId = useId();
