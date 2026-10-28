@@ -48,6 +48,12 @@
 // Row 8 (Step 0's `flex: none` removed) does not apply: Step 0 found the count whole at 900, so T2g adds no `flex: none`.
 // Rows 1 and 4 also run in browser/instrument-desk.browser.test.ts (its own table); row 7 (`.ins-status-summary { max-width: 6ch }`, the plan's row 7) runs only there.
 //
+// W2 Task T2f (D-6371): Instrument's desk column draws no runs row; Refined keeps its own at every width (review 1117, A2).
+// MUTATION TABLE (RUN, each mutant on the working tree, this suite alone, then restored from a saved copy; the rows that
+// guard Instrument's side are in instrument-list.test.tsx and fleet-class-chooser.test.tsx):
+//   Refined's `Sidebar` passes `runsLine={false}` ...... "Refined keeps its runs row at every width (T2f, D-6371)"
+//                                                         (`900px: runs lines: expected  to have a length of 1 but got +0`; the 390 and 899 rounds pass first)
+//
 // W2 Task T2d (desk-polish, D-6330): the rail's Inbox door counts what waits on the operator, as Refined's tab does.
 // MUTATION TABLE (plan Task T2d Step 3; RUN, each mutant on the working tree, this suite alone, then reverted):
 //   the rail's Inbox door left on the unread count .... "the rail's Inbox door says 'waiting for you' with Refined's count"
@@ -600,6 +606,25 @@ describe('the desk (T2g): one count, in the status bar', () => {
     stubAt(1280);
     mount('/');
     expect(document.querySelector('.shell-nav .fleet-count')).toHaveTextContent(readout);
+  });
+
+  it('Refined keeps its runs row at every width (T2f, D-6371)', () => {
+    act(() => { setSkin(REFINED); });
+    for (const width of [390, 899, 900, 1280, 1920]) {
+      stubAt(width);
+      mount('/');
+      const columns = document.querySelectorAll<HTMLElement>('section[aria-label="Fleet"]');
+      expect(columns, `${width}px: the fleet column is mounted, once`).toHaveLength(1);
+      if (width >= 900) expect(columns[0]!.closest('.shell-nav'), `${width}px: the column is the frame's nav`).not.toBeNull();
+      const lines = columns[0]!.querySelectorAll('.fleet-runs-line');
+      expect(lines, `${width}px: runs lines`).toHaveLength(1);
+      const row = within(lines[0] as HTMLElement).getByRole('button', { name: /^Runs · / });
+      expect(row, `${width}px`).toHaveClass('fleet-runs-row');
+      const choosers = document.querySelectorAll('select[aria-label="Class"]');
+      expect(choosers, `${width}px: class choosers in the document`).toHaveLength(1);
+      expect(lines[0]!.contains(choosers[0]!), `${width}px: the chooser is on the runs line`).toBe(true);
+      cleanup();
+    }
   });
 
   it('Refined at 1280 on an empty fleet with no lag draws no .shell-nav .fleet-head', () => {
