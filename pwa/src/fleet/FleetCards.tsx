@@ -41,7 +41,7 @@ export function FleetCards({ selectedId, onOpen }: {
   const open = onOpen;
   // The same active-only list the screen's runs line counts (`isRunClosed`), read from the same frame.
   const activeRuns = useStore((s) => s.runs).filter((r) => !isRunClosed(r));
-  const projected = useProjectedHome();
+  const projected = useProjectedHome(true, useStore);
   // Task 4's clock, for the pending child's elapsed readout — and the CADENCE
   // FOLLOWS THE CONTENT, the `SessionHeader`/`ToolCard` idiom `RunsScreen`
   // already adopted for the same window: a second-granular readout on a

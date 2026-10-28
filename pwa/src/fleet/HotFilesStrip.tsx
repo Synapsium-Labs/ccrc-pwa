@@ -4,10 +4,9 @@
 // once; an intent can be written every ten minutes). MailStrip's shape:
 // collapsed to one headline, expanding to rows, rendering NOTHING when no
 // claim is live — a fleet not running a program must not pay a row for it.
-// AccountsStrip's poll idiom: this strip owns its own GET /api/claims
-// cadence rather than coupling to a store no frame feeds — claims ship no
-// WS frame (the wire is additive-only and a 30 s poll is plenty for a
-// 45-minute lease).
+// This strip owns its own GET /api/claims cadence rather than coupling to a
+// store no frame feeds — claims ship no WS frame (the wire is additive-only
+// and a 30 s poll is plenty for a 45-minute lease).
 //
 // READ-ONLY BY DESIGN: no release, no break. Release is the holding
 // SESSION's own door, and the break door is the operator's, deliberately

@@ -234,7 +234,8 @@ export function FleetScreen({
           phone header holds its own, and at a desk both skins' bars hold it, so one instance is mounted at any width. */}
       {Head === null && !desk && <UpdateIndicator form="row" />}
 
-      {/* Its own poller, independent of `sessions` — it must render in EVERY
+      {/* It reads the fleet store's accounts answer (C8, D-6440), which does
+          not wait on `sessions` — it must render in EVERY
           branch below, not just the populated one. It used to sit only in
           the third (populated) arm, so a fresh fleet with zero sessions ever
           started (the first-run panel, mobile's only view of the strip)

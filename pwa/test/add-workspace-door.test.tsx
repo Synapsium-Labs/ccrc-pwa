@@ -3,7 +3,7 @@
 // reads the `fetch` call itself rather than a spy on `api`.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, screen, waitFor } from '@testing-library/react';
-import { createFleetStore, type FleetStore } from '../src/stores/fleet';
+import { createFleetStore, useFleetStore, type FleetStore } from '../src/stores/fleet';
 import { resetAcks } from '../src/lib/seen';
 import { FleetScreen } from '../src/screens/FleetScreen';
 import { NAME_FIELD_TEXT } from '../src/fleet/WorkspaceNameField';
@@ -12,7 +12,11 @@ import { fleetSession } from './fleetFixture';
 import { TEST_ROSTER } from './rosterFixture';
 
 beforeEach(() => { window.localStorage.clear(); resetAcks(); });
-afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
+afterEach(() => {
+  cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals();
+  // The sheet reads the APP-WIDE fleet store's accounts answer (C8, D-6440), whatever `store` the screen is handed.
+  useFleetStore.setState({ usage: null, projected: undefined, roster: [] });
+});
 
 const makeStore = (): FleetStore => createFleetStore({
   makeSocket: () => ({ onopen: null, onmessage: null, onclose: null, onerror: null, close(): void {} }) as unknown as WebSocket,
@@ -39,6 +43,8 @@ const stub = (create: () => Response): Sent[] => {
 
 const open = (): FleetStore => {
   const store = makeStore();
+  // What `GET /api/accounts` answers, where the sheet reads it: the app-wide store, the route's one reader (C8, D-6440).
+  act(() => { useFleetStore.setState({ usage: [], projected: null, roster: TEST_ROSTER }); });
   renderFleet(<FleetScreen store={store} />);
   act(() => {
     store.setState({

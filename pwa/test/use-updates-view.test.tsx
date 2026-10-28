@@ -450,6 +450,25 @@ describe('useUpdatesView — the issue-number signal (D-4273)', () => {
     expect(result.current).toMatchObject({ view: good, failure: 'not-configured', seq: 1 });
   });
 
+  it('an equal answer keeps view (===) and still advances seq', async () => {
+    // C8 (D-6440): a NEW object on every read, structurally equal, as a JSON body is. The view keeps its reference so
+    // its readers do not re-render; `seq` still takes each good read's number, which HaltBanner reads (D-4273).
+    vi.spyOn(api, 'updates').mockImplementation(async () => view());
+    const { result } = renderHook(() => useUpdatesView());
+    await act(async () => {});
+    const first = result.current.view;
+    expect(first).not.toBeNull();
+    expect(result.current.seq).toBe(1);
+    await act(async () => { result.current.reload(); });
+    expect(result.current.view).toBe(first);
+    expect(result.current.seq).toBe(2);
+    // A changed answer still replaces it.
+    vi.spyOn(api, 'updates').mockImplementation(async () => view({ catalogue: { lastOkAt: 9_000, lastError: null } }));
+    await act(async () => { result.current.reload(); });
+    expect(result.current.view).not.toBe(first);
+    expect(result.current.seq).toBe(3);
+  });
+
   it('seq stays 0 while no read has ever been good: a failed first read does not advance it', async () => {
     vi.spyOn(api, 'updates').mockRejectedValue(new TypeError('Failed to fetch'));
     const { result } = renderHook(() => useUpdatesView());

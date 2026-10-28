@@ -7,11 +7,9 @@
 // (laneWords.ts): `n%` measured, `0%` for a window that rolled over (spoken as
 // inferred), and `—` never measured, rather than the row disappearing.
 //
-// Same /api/accounts pipeline the strip and useProjectedHome already poll —
-// a third reader, not a new route. Its own 20s poller rather than sharing
-// theirs: useProjectedHome.ts:9-12 makes the same call for ProjectCard and
-// defends the duplication — one more GET against two small local JSON files
-// beats coupling component trees that must not depend on each other mounting.
+// It reads the fleet store's accounts answer (`usage`, `projected`, `roster`), which the store's one
+// `/api/accounts` poll writes (C8, D-6440): the store is connected app-wide whichever route is mounted, so the
+// screen needs no poll of its own.
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { AccountUsage, ProjectedHome, RosterWire } from '../../../shared/api';
@@ -21,12 +19,12 @@ import { AccountMeterRow } from '../fleet/AccountMeterRow';
 import { AccountPoolSheet } from '../fleet/AccountPoolSheet';
 import { formatAge } from '../fleet/formatReset';
 import { sessionLabel } from '../fleet/sessionLabel';
-import { accountColorVar, accountLabel, accountPoolState, homeAbleLabelList, rosterWrapperIds, SIGN_IN_EXPIRED, warnNonArrayRoster } from '../lib/accounts';
+import { accountColorVar, accountLabel, accountPoolState, homeAbleLabelList, rosterWrapperIds, SIGN_IN_EXPIRED } from '../lib/accounts';
 import { api, apiErrorText } from '../lib/api';
 import { navigate, useLocation } from '../lib/router';
 import { laneParam } from '../lib/routes';
 import { backToFleet } from '../command/door';
-import { useFleetStore } from '../stores/fleet';
+import { useFleetStore, type FleetStore } from '../stores/fleet';
 import '../fleet/fleet.css';
 import { poolCleared, poolWriteFailed } from '../fleet/poolWords';
 
@@ -107,8 +105,8 @@ function acctPoolChip(state: AccountPoolWire): {
   }
 }
 
-// `accountPoolState(roster, wrapper)` — no edges map (ruling T9-R1). This
-// screen's own `GET /api/accounts` poll (`useAccountsPoll` below) carries the
+// `accountPoolState(roster, wrapper)` — no edges map (ruling T9-R1). The
+// fleet store's `GET /api/accounts` read (`useAccountsPoll` below) carries the
 // roster, and `RosterWire.resolvedPool` (Task 7's T7-R2 fix round) rides the
 // same response when the server has one to offer — see `lib/accounts.ts`'s
 // own docstring. Every row below renders whatever `accountPoolState` returns
@@ -116,51 +114,20 @@ function acctPoolChip(state: AccountPoolWire): {
 // central tag or the declared fallback.
 
 interface AccountsPoll {
-  accounts: AccountUsage[] | null;               // null: no poll has landed yet
-  projected: ProjectedHome | null | undefined;    // undefined: no poll has landed yet; null: landed, nothing placeable
-  roster: RosterWire[];                           // []: no poll has landed yet, same as accounts/projected
+  accounts: readonly AccountUsage[] | null;      // null: no good answer has landed yet
+  projected: ProjectedHome | null | undefined;    // undefined: no answer yet; null: landed, nothing placeable
+  roster: readonly RosterWire[];                  // []: no good answer has landed yet, same as accounts/projected
 }
 
-function useAccountsPoll(): AccountsPoll {
-  const [state, setState] = useState<AccountsPoll>({ accounts: null, projected: undefined, roster: [] });
-  useEffect(() => {
-    let live = true;
-    const load = (): void => {
-      void api.accounts()
-        .then((r) => {
-          if (!live) return;
-          // `Array.isArray`, not a bare trust: a fetch stub answering an
-          // unmatched route with bare `{}` (several fixtures across this
-          // suite predate Task 7 and do exactly that) hands back `r.roster
-          // === undefined`, and `rowOrder` below does `roster.map(...)`
-          // unguarded — same reasoning as `stores/fleet.ts`'s own roster
-          // poll. `accounts`/`projected` need no equivalent guard: both
-          // already degrade a bare `undefined` to their own "no poll landed"
-          // branch (the falsy `!accounts` check, the three-state `projected`
-          // read) rather than indexing into it.
-          //
-          // Functional update, not a flat object literal (fix round 1,
-          // finding 5): the flat form clobbered an already-good roster with
-          // `[]` the instant one later poll came back malformed, while
-          // `stores/fleet.ts` and `AccountsStrip.tsx` both already preserved
-          // it by simply skipping the write. `prev.roster` is the same
-          // preservation here, where `accounts`/`projected` still need to
-          // update on every read regardless. Warn once on the malformed
-          // branch — a genuine protocol break has no other signal anywhere
-          // (finding 6).
-          setState((prev) => {
-            if (Array.isArray(r.roster)) return { accounts: r.accounts, projected: r.projected, roster: r.roster };
-            warnNonArrayRoster(r);
-            return { accounts: r.accounts, projected: r.projected, roster: prev.roster };
-          });
-        })
-        .catch(() => {});
-    };
-    load();
-    const t = setInterval(load, 20_000);
-    return () => { live = false; clearInterval(t); };
-  }, []);
-  return state;
+/** The screen's view of the fleet store's accounts answer. The store is the one reader (C8, D-6440) and keeps the
+ *  last good value of each field across a failed or malformed read, so a bad poll never empties a row the screen
+ *  already drew (the rule this hook used to apply to `roster` alone, fix round 1, finding 5). `store` defaults to the
+ *  app-wide fleet store (`RunsScreen`'s idiom). */
+function useAccountsPoll(store: FleetStore = useFleetStore): AccountsPoll {
+  const accounts = store((s) => s.usage);
+  const projected = store((s) => s.projected);
+  const roster = store((s) => s.roster);
+  return { accounts, projected, roster };
 }
 
 /** The roster's declaration order first, then any wrapper the server has
@@ -234,8 +201,8 @@ export function AccountsScreen(): ReactNode {
 
   // `POST /api/pools/accounts/:id` (Task 7) does not echo the account's
   // resulting tag — only the epoch the write produced — so this toasts off
-  // the REQUEST, not a remeasurement, and leans on `useAccountsPoll`'s own
-  // 20s interval to bring the row's next `accountPoolState` read in line
+  // the REQUEST, not a remeasurement, and leans on the fleet store's 20s
+  // accounts poll (`useAccountsPoll`) to bring the row's next `accountPoolState` read in line
   // with what the fleet host actually converges to (ccd-pool-sync's pull,
   // `OnUnitActiveSec=60s` — the same lag the fleet head's epoch/observed
   // indicator exists to make visible elsewhere).
@@ -272,9 +239,9 @@ export function AccountsScreen(): ReactNode {
   // `homeAbleNames === ''` (fix round 1, finding 7): `projected` and `roster`
   // arrive on the same poll response in the steady state, but a first
   // response that lands with a valid `projected: null` and a malformed
-  // `roster` leaves `roster` at its `[]` default (`useAccountsPoll`
-  // preserves rather than clobbers on a malformed read — see its own
-  // comment) — same degenerate case ProjectCard's `addLabel` guards.
+  // `roster` leaves `roster` at its `[]` default (the store preserves rather
+  // than clobbers on a malformed read — see `useAccountsPoll`'s comment) —
+  // same degenerate case ProjectCard's `addLabel` guards.
   const homeAbleNames = homeAbleLabelList(roster);
   const projectionLine = projected === undefined
     ? null

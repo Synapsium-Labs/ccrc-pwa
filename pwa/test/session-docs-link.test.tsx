@@ -29,7 +29,8 @@ const headerProps = (session: FleetSession): HeaderHostProps => ({
 const here = (): string => location.pathname + location.search;
 
 beforeEach(() => {
-  // The sheet mounts SwapSheet, which polls `/api/accounts` while open: answer it with an empty roster.
+  // The sheet mounts SwapSheet, which once polled `/api/accounts` while open (it reads the fleet store since C8,
+  // D-6440): any read of the route still gets an empty roster.
   vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => (String(input).includes('/api/accounts')
     ? new Response(JSON.stringify({ accounts: [], projected: null, roster: [] }),
       { status: 200, headers: { 'content-type': 'application/json' } })

@@ -18,7 +18,8 @@ const json = (body: unknown, status = 200): Response =>
   new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
 const accountsRoute = (): Response => json({ accounts: [], projected: null, roster: TEST_ROSTER });
 
-/** The title route answers `title`; every other route is the blanket `/api/accounts` the swap sheet polls. */
+/** The title route answers `title`; every other route answers a blanket `/api/accounts` body. The swap sheet no
+ *  longer polls that route: it reads the fleet store, the route's one reader. */
 const stubTitleRoute = (answer: Response): void => {
   vi.stubGlobal('fetch', vi.fn(async (u: unknown) => (String(u).endsWith('/title') ? answer : accountsRoute())));
 };

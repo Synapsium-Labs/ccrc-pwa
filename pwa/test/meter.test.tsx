@@ -20,7 +20,6 @@ import { act, cleanup, render, screen } from '@testing-library/react';
 import { Meter } from '@ccrc/ui';
 import type { AccountUsage } from '../../shared/api';
 import { AccountsScreen } from '../src/screens/AccountsScreen';
-import { api } from '../src/lib/api';
 import { navigate } from '../src/lib/router';
 import { useFleetStore } from '../src/stores/fleet';
 import { TEST_ROSTER } from './rosterFixture';
@@ -73,7 +72,9 @@ afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
   navigate('/');
-  act(() => useFleetStore.setState({ sessions: [], conn: 'connecting', notices: [], blocked: false }));
+  act(() => useFleetStore.setState({
+    sessions: [], conn: 'connecting', notices: [], blocked: false, usage: null, projected: undefined, roster: [],
+  }));
 });
 
 describe('the meter is on the palette', () => {
@@ -158,8 +159,9 @@ describe('the meter is on the palette', () => {
   });
 
   it('a disabled lane\'s meter is off while data-band still reports crit', async () => {
-    vi.spyOn(api, 'accounts').mockResolvedValue({
-      accounts: [acct({ wrapper: 'claude', five: 92, disabled: true })], projected: null, roster: TEST_ROSTER,
+    // The screen reads the app-wide fleet store's accounts answer, which the store's one poll writes (C8, D-6440).
+    act(() => {
+      useFleetStore.setState({ usage: [acct({ wrapper: 'claude', five: 92, disabled: true })], projected: null, roster: TEST_ROSTER });
     });
     render(<AccountsScreen />);
     const row = (await screen.findByText('team·max')).closest('[data-disabled]') as HTMLElement;
