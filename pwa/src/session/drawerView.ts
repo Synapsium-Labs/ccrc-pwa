@@ -8,14 +8,15 @@
  * or more the glass gets the grid, and everywhere else the wrapped view. A
  * per-device override, the view chip, beats both.
  *
- * PURE: no React, no DOM. Storage arrives as a getter, so a store that throws
- * (a private window, a preview, a thumbnail capture) is a case a test can
- * hand it.
+ * PURE: no React, no DOM. Storage arrives as a getter (the storage port's
+ * `StorageSource`, `lib/storage.ts`, D-7190), so a store that throws (a private
+ * window, a preview, a thumbnail capture) is a case a test can hand it.
  */
 import type { ConsoleFit } from './consoleFit';
 import { isCaret } from './drawerModel';
 import type { VisualRow } from './wrapScreen';
 import { PINNED_WINDOW_COLS } from '../../../shared/api';
+import { readKey, removeKey, writeKey, type StorageSource } from '../lib/storage';
 
 export type DrawerViewKind = 'grid' | 'wrapped';
 
@@ -43,34 +44,19 @@ export function chooseView(
  *  shape of the choice is a new key rather than a misread old one. */
 export const VIEW_OVERRIDE_KEY = 'ccrc.drawer-view.v1';
 
-/** The slice of `Storage` the override uses. */
-export interface StorageLike {
-  getItem(k: string): string | null;
-  setItem(k: string, v: string): void;
-  removeItem(k: string): void;
-}
-
 /** The stored override, or null: for no value, for any value but the two
  *  views, and for a store that throws on the way (its getter included). */
-export function readViewOverride(store: () => StorageLike): DrawerViewKind | null {
-  try {
-    const v = store().getItem(VIEW_OVERRIDE_KEY);
-    return v === 'grid' || v === 'wrapped' ? v : null;
-  } catch {
-    return null;
-  }
+export function readViewOverride(store: StorageSource): DrawerViewKind | null {
+  const v = readKey(VIEW_OVERRIDE_KEY, store);
+  return v === 'grid' || v === 'wrapped' ? v : null;
 }
 
-/** Store the override, or clear it with null. A store that throws is a no-op:
- *  the choice then lasts as long as the drawer that made it. */
-export function writeViewOverride(store: () => StorageLike, v: DrawerViewKind | null): void {
-  try {
-    const s = store();
-    if (v === null) s.removeItem(VIEW_OVERRIDE_KEY);
-    else s.setItem(VIEW_OVERRIDE_KEY, v);
-  } catch {
-    /* private window, preview or blocked storage: the choice is this drawer's alone */
-  }
+/** Store the override, or clear it with null. A store that throws is a no-op
+ *  (private window, preview or blocked storage): the choice then lasts as long
+ *  as the drawer that made it. */
+export function writeViewOverride(store: StorageSource, v: DrawerViewKind | null): void {
+  if (v === null) removeKey(VIEW_OVERRIDE_KEY, store);
+  else writeKey(VIEW_OVERRIDE_KEY, v, store);
 }
 
 /** The wrapped view's width W, in columns: the glass past its gutter over one

@@ -358,20 +358,20 @@ describe('W7 PWA census: REAL rows (reporting, not ratcheting; spec §5.1 rule 3
   // C7l (D-7190) adds the one storage port, `lib/storage.ts`, which names `window.localStorage` and declares the one
   // storage type (and its in-memory instance's `getItem`); its own sites are held exactly, and the owners and types
   // outside it are the count each owner's move lowers.
-  it('storageOwners(): the port, and 3 files outside it naming localStorage, none sessionStorage', () => {
+  it('storageOwners(): the port, and 2 files outside it naming localStorage, none sessionStorage', () => {
     const sites = storageOwners();
     show('storageOwners', sites);
     expect(sites.filter((s) => s.file === STORAGE_PORT).map((s) => s.symbol)).toEqual(['pageStorage']);
     const outside = sites.filter((s) => s.file !== STORAGE_PORT);
-    held('storageOwners outside lib/storage.ts', outside, 3);
-    expect(countBy(outside, (s) => s.kind)).toEqual({ localStorage: 3 });
+    held('storageOwners outside lib/storage.ts', outside, 2);
+    expect(countBy(outside, (s) => s.kind)).toEqual({ localStorage: 2 });
   });
 
-  it('storageTypes(): the port\'s StoragePort and its in-memory instance, and 1 local storage type outside it', () => {
+  it('storageTypes(): the port\'s StoragePort and its in-memory instance, and 0 local storage types outside it', () => {
     const sites = storageTypes();
     show('storageTypes', sites);
     expect(sites.filter((s) => s.file === STORAGE_PORT).map((s) => s.symbol)).toEqual(['(module)', 'memoryStorage']);
-    held('storageTypes outside lib/storage.ts', sites.filter((s) => s.file !== STORAGE_PORT), 1);
+    held('storageTypes outside lib/storage.ts', sites.filter((s) => s.file !== STORAGE_PORT), 0);
   });
 
   it('pageClockSubscriptions(): 1 visibilitychange, 1 online', () => {
