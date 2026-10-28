@@ -7,7 +7,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { makePrHarness, type PrHarness } from './ccdPrHelpers.js';
-import { CHILD_ID, CHILD_STUBS, makeChild, plantTmux, type Child } from './childReclaimFixture.js';
+import { CHILD_ID, CHILD_RUN, CHILD_STUBS, makeChild, plantTmux, type Child } from './childReclaimFixture.js';
 
 let h: PrHarness;
 let c: Child;
@@ -254,22 +254,104 @@ describe('ws-shed-deps refuses, touching nothing', () => {
     kept();
     expect(journal().map((e) => e['refusal'])).toEqual(['in-progress']);
   });
-  it('a wake and a shed exclude each other: while the reap lock is held no pane is created for a row that is not archived', () => {
-    const lock = path.join(h.home, '.cc-sessions', `.reap-${CHILD_ID}.lock`);
+  it('a wake and a shed exclude each other through the SHED\'s own lock, `$REG/.shed-<id>.lock`, and only through it', () => {
+    const lock = path.join(h.home, '.cc-sessions', `.shed-${CHILD_ID}.lock`);
+    const reapLock = path.join(h.home, '.cc-sessions', `.reap-${CHILD_ID}.lock`);
     const gate = `_ws_expire_spawn_gate ${CHILD_ID}; echo "rc=$? why=$_WS_EXPIRE_SPAWN_WHY"`;
     // No lock file: the gate answers free and creates none.
     expect(h.run(`${CHILD_STUBS} ${gate}`).stdout).toContain('rc=0');
     expect(fs.existsSync(lock)).toBe(false);
+    expect(fs.existsSync(reapLock)).toBe(false);
     // The file stands, nobody holds it: free, and the gate let it go (a second process can take it).
     fs.writeFileSync(lock, '');
     expect(h.run(`${CHILD_STUBS} ${gate}; exec 8>>'${lock}'; flock -n 8 && echo retaken`).stdout).toMatch(/rc=0[\s\S]*retaken/);
-    // Held (a shed in progress): refused, and `ccd ensure` dies before it clears the stop stamp.
+    // Held (a shed removing): refused, and `ccd ensure` dies before it clears the stop stamp.
     const held = `exec 9>>'${lock}'; flock -n 9 || exit 99; (exec 9>&-; ${gate});`;
-    const r = h.run(`${CHILD_STUBS} ${held}`);
-    expect(r.stdout).toMatch(/rc=1 why=.*reap lock.*shed/);
+    expect(h.run(`${CHILD_STUBS} ${held}`).stdout).toMatch(/rc=1 why=.*shed/);
     const ens = h.run(`${CHILD_STUBS} exec 9>>'${lock}'; flock -n 9 || exit 99; (exec 9>&-; cmd_ensure ${CHILD_ID}) 2>&1; echo "ens=$?"`);
-    expect(ens.stdout).toMatch(/reap lock[\s\S]*ens=1/);
+    expect(ens.stdout).toMatch(/shed[\s\S]*ens=1/);
     expect(fs.existsSync(reg('stopped'))).toBe(true);
+    // The REAP lock held by another process refuses no wake of a row that is not archived (a reclaim of a kept child).
+    expect(h.run(`${CHILD_STUBS} exec 9>>'${reapLock}'; flock -n 9 || exit 99; (exec 9>&-; ${gate});`).stdout).toContain('rc=0');
+  });
+  it('a real shed holds its own lock while it removes: a wake asked during its walks refuses', () => {
+    const gap = `_ws_shed_gap() { (_ws_expire_spawn_gate ${CHILD_ID}; echo "gate=$?" >> "$HOME/gate-probe"); };`;
+    const r = shed('', gap);
+    expect(r.doc).toMatchObject({ shed: true });
+    expect(fs.readFileSync(path.join(h.home, 'gate-probe'), 'utf8')).toContain('gate=1');
+  });
+  it('`in-progress` while another shed holds the id\'s shed lock', () => {
+    const lock = path.join(h.home, '.cc-sessions', `.shed-${CHILD_ID}.lock`);
+    const r = h.run(`${CHILD_STUBS} ${NO_USERS} exec 9>>'${lock}'; flock -n 9 || exit 99;`
+      + ` cmd_ws_shed_deps --session ${CHILD_ID} --class child`);
+    expect(JSON.parse(r.stdout)).toMatchObject({ refused: 'in-progress' });
+    kept();
+  });
+  it('a dry run takes no lock and makes no lock file: a wake during it is not refused, and a reap may take the lock', () => {
+    const lockDir = path.join(h.home, '.cc-sessions');
+    const locks = (): string[] => fs.readdirSync(lockDir).filter((f) => /^\.(reap|shed)-.*\.lock$/.test(f));
+    expect(locks()).toEqual([]);
+    const gap = `_ws_shed_gap() { (_ws_expire_spawn_gate ${CHILD_ID}; echo "gate=$?" >> "$HOME/gate-probe");`
+      + ` ([[ -e "$REG/.reap-${CHILD_ID}.lock" ]] && echo reapfile >> "$HOME/gate-probe"; :); };`;
+    const r = shed('--dry-run', gap);
+    expect(r.doc).toMatchObject({ wouldShed: true });
+    const probe = fs.readFileSync(path.join(h.home, 'gate-probe'), 'utf8');
+    expect(probe).toContain('gate=0');
+    expect(probe).not.toContain('reapfile');
+    expect(locks()).toEqual([]);
+    // And with the reap lock held by another verb, the dry run still answers (it asks no lock at all).
+    const reapLock = path.join(lockDir, `.reap-${CHILD_ID}.lock`);
+    const held = h.run(`${CHILD_STUBS} ${NO_USERS} exec 9>>'${reapLock}'; flock -n 9 || exit 99;`
+      + ` cmd_ws_shed_deps --session ${CHILD_ID} --class child --dry-run`);
+    expect(JSON.parse(held.stdout)).toMatchObject({ wouldShed: true });
+  });
+  it('`not-a-workspace` when the workdir is a project\'s main checkout, re-proved on the box whatever the row says', () => {
+    // The row still says workspace, but its workdir names the project's own checkout: git-dir equals git-common-dir.
+    fs.writeFileSync(path.join(c.main, '.gitignore'), 'node_modules/\n');
+    fs.mkdirSync(path.join(c.main, 'node_modules', 'p'), { recursive: true });
+    fs.writeFileSync(path.join(c.main, 'node_modules', 'p', 'i.js'), 'x\n');
+    fs.writeFileSync(reg('workdir'), `${c.main}\n`);
+    for (const flags of ['', '--dry-run']) expect(shed(flags).doc, flags).toMatchObject({ refused: 'not-a-workspace' });
+    expect(fs.existsSync(path.join(c.main, 'node_modules', 'p', 'i.js'))).toBe(true);
+    // A project directory that is itself a LINKED worktree of another repository is still a main checkout (-ef).
+    const proj = path.join(path.dirname(c.main), 'demo-linked');
+    h.git(c.main, 'worktree', 'add', '-q', '-b', 'proj-linked', proj);
+    fs.writeFileSync(reg('workdir'), `${proj}\n`);
+    expect(shed().doc).toMatchObject({ refused: 'not-a-workspace' });
+    // A repository's own checkout outside every project, its git directory kept apart (`--separate-git-dir`): no
+    // spelling names it a project, and git-dir equal to git-common-dir still says it is no linked worktree.
+    const lone = path.join(h.home, 'lone');
+    h.git(h.home, 'init', '-q', `--separate-git-dir=${path.join(h.home, 'lone-store.git')}`, lone);
+    fs.writeFileSync(path.join(lone, '.gitignore'), 'node_modules/\n');
+    fs.mkdirSync(path.join(lone, 'node_modules', 'q'), { recursive: true });
+    fs.writeFileSync(path.join(lone, 'node_modules', 'q', 'i.js'), 'x\n');
+    fs.writeFileSync(reg('workdir'), `${lone}\n`);
+    expect(shed().doc).toMatchObject({ refused: 'not-a-workspace' });
+    expect(fs.existsSync(path.join(lone, 'node_modules', 'q', 'i.js'))).toBe(true);
+  });
+  it('`run-open` for a coordinator-class ask on a row whose child marker names a run another awake worker of it still serves', () => {
+    // A sibling row of the same run, awake (no stop stamp): the box can see that run is not over.
+    const sib = path.join(h.home, '.cc-sessions', 'demo-busy-sibling');
+    fs.copyFileSync(reg('uuid'), `${sib}.uuid`);
+    fs.copyFileSync(reg('child'), `${sib}.child`);
+    const coord = (): { doc: Record<string, unknown> } => {
+      const r = h.run(`${CHILD_STUBS} ${NO_USERS} cmd_ws_shed_deps --session ${CHILD_ID} --class coordinator`);
+      return { doc: JSON.parse(r.stdout.trim().split('\n').pop() ?? '{}') as Record<string, unknown> };
+    };
+    expect(coord().doc).toMatchObject({ refused: 'run-open' });
+    kept();
+    expect(journal().map((e) => [e['refusal'], (e['meas'] as Record<string, unknown>)['childRun']]))
+      .toEqual([['run-open', String(CHILD_RUN)]]);
+    // A marker that cannot be read refuses too: the class is never taken on the server's word.
+    const mark = fs.readFileSync(reg('child'), 'utf8');
+    fs.writeFileSync(reg('child'), 'garbage\n');
+    expect(coord().doc).toMatchObject({ refused: 'not-a-child' });
+    fs.writeFileSync(reg('child'), mark);
+    // CONTROL: the sibling asleep too — nothing the box can see is still going — sheds, the class journaled with the marker.
+    fs.writeFileSync(`${sib}.stopped`, `${now() - 7200} agent`);
+    expect(coord().doc).toMatchObject({ shed: true, class: 'coordinator' });
+    const done = journal().filter((e) => e['outcome'] === 'done');
+    expect(done[0]).toMatchObject({ meas: expect.objectContaining({ mode: 'coordinator', childRun: String(CHILD_RUN) }) });
   });
   it('no reap lock is made for an id no row names', () => {
     h.run(`${CHILD_STUBS} ${NO_USERS} cmd_ws_shed_deps --session project-a-nobody --class child`);
