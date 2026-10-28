@@ -6,6 +6,13 @@ always full builds, and overlays are the only patch path (§5.3, G11); the engin
 cwd, root, lock, queue and `GRAPHIFY_OUT` (§5.3); overlay eligibility is counted on the patch set, not on branch
 size (§6.2); a tick-and-due-check replaces the `.path` unit (§10); the census gains `jobs[]`, with every reader
 listed (§10).
+**Revision 3** (after a second review): the base-coverage replay was run on the box before G1 is ruled (§5.1), and
+it replaces the `MAX_BASES` count cap with one immutable base per live merge-base cluster, bounded by
+`STORE_MAX_MB` (§5.1, G9); the tip's weight and the build order are defined (§5.1); overlays are pull-on-read, so
+a `HEAD` move alone never builds one (§6.2); a new insert-or-replace stamper writes `built_at_commit` into the job's
+`out/` (§5.3); the in-tree link is created only after its first view is published (§10); each job is a transient
+service with its own hard memory cap in a dedicated slice, admitted only under a memory-pressure check, never in
+the test slice (§12.1).
 **Replaces:** the **Store** ruling of `2026-08-27-graphify-fleet-integration-design.md` (§2, §3.4, §D, the
 `workspace-graph-store` / `project-graph-store` rows of §7) and the sweep body of its §C.
 **Keeps:** the engine pin and its provisioning (§A), skill convergence (§B), AST-only depth (Appendix A), the
@@ -24,12 +31,15 @@ plus a small **overlay** built only for a tree whose session keeps querying and 
 patch. Concretely:
 
 1. **Bases** are immutable graphs keyed by `(commit, engine pin)`, built **in full** from `git archive <commit>`
-   in a store outside every tree. A repository keeps a few of them (default 6): the main-line tip, plus the
-   merge-bases its worktrees actually sit on. Each tree is served the base whose commit is nearest its own
-   merge-base, and a tree more than 50 files from every base asks for one at its merge-base.
-2. **Overlays** are built lazily: only after a session in that tree has made 2 graph queries (a query forced by
-   the search gate does not count), only when the tree's `HEAD` differs from its served base by 100 files or
-   fewer, and keyed by the tree's `HEAD^{tree}`, so two trees with the same content share one. They are built by
+   in a store outside every tree. A repository keeps one base per **cluster** of live merge-bases (merge-bases
+   within 50 files of each other share one), plus the main-line tip. There is no count cap; the store's size
+   ceiling bounds them. Each tree is served the base whose commit is nearest its own merge-base. A base is built
+   once and is never rebuilt, because a merge-base moves only when its tree rebases or merges.
+2. **Overlays** are built lazily and pulled by reads: only after a session in that tree has made 2 graph queries
+   (a query forced by the search gate does not count), only when the tree's `HEAD` differs from its served base
+   by 100 files or fewer, and only when a query arrived after the served overlay was built. A `HEAD` move with no
+   query after it builds nothing. They are keyed by the tree's `HEAD^{tree}`, so two trees with the same content
+   share one. They are built by
    the engine's own incremental path, `_rebuild_code(changed_paths=…)`, not by a ccrc-written merger. An overlay is
    the only patched graph in the design; bases are never patched (§5.3, G11).
 3. **One config file**, `~/.ccrc/graph.env`, read by one parser, is the only place a deployment sets any of this.
@@ -41,8 +51,9 @@ patch. Concretely:
    the graph, so a session that asks one question (129 of 197 measured sessions) still knows where the graph is
    blind. That costs one `git diff --name-status`.
 
-Build cost then grows with how often each repository's main line and merge-bases move, and with how many sessions
-query a branch more than once — not with the number of worktrees.
+Build cost then grows with how often each repository's main line and merge-bases move, and with how often a
+session queries a branch again after changing it — not with the number of worktrees, and not with how often a
+tree commits.
 
 ---
 
@@ -138,6 +149,9 @@ so the design keeps patches small rather than widening them.
 | **Query-time merge without writing a file** | Would reimplement the CLI verbs (`__main__.py:2924-3015` loads one JSON file per call). |
 | **A `graphify` shim on PATH that rewrites `--graph`** | A new interception point on every session's command line; the symlink achieves the same routing with no code on the query path. |
 | **Patched bases** (a new base patched from the nearest retained one, with a full build every N generations) | Its own thresholds kill it: merge-base and tip demand fire only once the nearest base is far, which is exactly when a patch is out of its size limit, so almost every base would be a full build anyway. Where it could apply (tip bases, 4 a day here), it saves about 6 CPU-minutes a day for this repository (§13). It costs a patch-chain state (generation counts, full-ancestor age) and a drift class bases otherwise do not have. Overlays keep the patch path; bases are always full and therefore exact. |
+| **A per-repository count cap on bases (`MAX_BASES`, revision 2)** | The replay of §5.1 needs 30 clusters for this repository's 94 worktrees; 38 of 94 trees (about 40%) sit outside the six largest clusters. A vote-margin eviction rule cannot fix that: once every slot serves a tree, a single-tree merge-base never gets a base, so that tree is answered from a far base for as long as it lives. A base per cluster costs about 55 MB of disk and is built once; the size ceiling is the right bound. |
+| **Rebuilding an overlay on every `HEAD` move of a requested tree (revision 2)** | A session that commits all day after two early queries would cost up to one overlay every `OVERLAY_MIN_INTERVAL_SECS` whether or not anyone reads it, about 144 a day for one tree. Pull-on-read (§6.2) builds only when a query follows a change. |
+| **Running builds in the capped test slice (revision 2)** | Graph builds would share a memory ceiling with test runs, and on this fleet pressure inside a shared, capped slice is what stalls it (§12.1). A dedicated slice, a hard per-job cap and an admission check keep a build from taking memory others are using. |
 | **A `ccd-graph-sweep.path` unit on the request files** | `PathChanged=` watches one path through inotify, non-recursively; per-repo request directories (`<store>/<repo-key>/requests/`) sit one level below a parent a static unit can name, and the hook touches an existing request on every query (150–300 a day), which would start a pass per query with no debounce. The sweep's own short tick with a due check (§10) gives the same latency with no new unit. |
 | **Process environment as the config source** (today's `: ${CCRC_GRAPH_X:=…}`) | Four processes with four different environments (systemd unit, each session, the operator's shell, `ccrc install`) would each see their own values; nothing makes the hook and the sweep agree. One file, one parser (§4.2). |
 | **Giving the store its own registered `git worktree`** | It would appear as a child of every main checkout in `ccd`'s worktree enumeration (`_ws_children`, reap and audit). Bases are built from `git archive` instead. |
@@ -238,8 +252,8 @@ override.
 | `ccrc uninstall` | the operator's shell | the same, **before** it touches anything | `STORE` |
 
 **Rendered unit values.** Three values reach a unit file: `CCRC_GRAPH_TICK_SECS` (the timer's
-`OnUnitActiveSec`), the service's `TimeoutStartSec`, and `CCRC_GRAPH_SWEEP_MEMORY_MAX` (the service's
-`MemoryMax`). `TimeoutStartSec` is derived as `(BUDGET + OVERLAY_BUDGET) × BUILD_TIMEOUT + 600`. The shipped
+`OnUnitActiveSec`), the service's `TimeoutStartSec`, and the service's `MemoryMax`, which is
+`CCRC_GRAPH_SWEEP_MEMORY_MAX` (plus `CCRC_GRAPH_BUILD_MEMORY_MAX` only when `CCRC_GRAPH_RUNNER=inline`, §4.3). `TimeoutStartSec` is derived as `(BUDGET + OVERLAY_BUDGET) × BUILD_TIMEOUT + 600`. The shipped
 `deploy/systemd/ccd-graph-sweep.{service,timer}` become templates with `@TICK_SECS@`, `@TIMEOUT_START_SECS@` and
 `@SWEEP_MEMORY_MAX@` placeholders. `ccrc install` and `update` render them into a temporary file from the loaded
 config and lay them down with `_inst_atomic`, as today. A change to any of those keys therefore takes effect at the
@@ -247,6 +261,13 @@ next `ccrc update`. The doctor WARNs when an installed unit's value differs from
 render (§11). The sweep also enforces its own pass deadline from the same formula, so a stale render is never
 unsafe, only inexact. `CCRC_GRAPH_POLL_SECS` is deliberately **not** rendered. The sweep reads it on every tick
 (§10), so changing the poll needs no reinstall.
+
+**Values that are not rendered.** Exactly three values reach a unit file, and no others. In particular
+`CCRC_GRAPH_SLICE`, `CCRC_GRAPH_BUILD_MEMORY_MAX`, `CCRC_GRAPH_BUILD_SWAP_MAX`, the build weights and the
+admission thresholds are **not** rendered: the sweep passes them on each job's own `systemd-run` command line
+(§12.1), so a change takes effect at the next job with no reinstall, and the doctor's drift check never compares
+them. `SWEEP_MEMORY_MAX` caps only the sweep service itself (probe, git, publish), whatever `SLICE` says, because no
+build ever runs in the service's cgroup under the default runner.
 
 **Uninstall.** `ccrc uninstall` resolves the store root through the same parser first. It removes that root only
 if the root holds the `.ccrc-graph-store` marker; otherwise it prints that it kept the path and why. It removes the
@@ -266,28 +287,31 @@ Every size, interval, path and limit is deployment config with the neutral defau
 | `CCRC_GRAPH_TICK_SECS` | 60 | **Rendered** into the timer. How often the sweep wakes to check whether a pass is due (§10). A tick with no pass due exits in milliseconds and writes no census. |
 | `CCRC_GRAPH_POLL_SECS` | 300 | Maximum gap between passes (was a 15-minute timer). A new overlay request makes a pass due at the next tick instead. |
 | `CCRC_GRAPH_FETCH_SECS` | 600 | Throttle on the sweep's own `git fetch`; 0 relies on refs others fetch. |
-| `CCRC_GRAPH_MAX_BASES` | 6 | Retained bases per repository. |
-| `CCRC_GRAPH_BASE_MAX_DRIFT_FILES` | 50 | A tree whose nearest base is more than this many files from its merge-base votes for a base at its merge-base. The tip wants a base once the newest base is more than this many files from the tip. **Must be below `OVERLAY_MAX_FILES`** (§6.2); the doctor WARNs otherwise. |
-| `CCRC_GRAPH_BASE_MIN_VOTES` | 1 | Live-session trees that must vote for a merge-base before it is built. |
-| `CCRC_GRAPH_TIP_MIN_INTERVAL_SECS` | 21600 | At most one tip base per repository per window. Merge-base bases are bounded by `BUDGET`, `MIN_VOTES` and the no-thrash eviction rule (§5.1) instead. |
-| `CCRC_GRAPH_BASE_TTL_SECS` | 172800 | An unselected base older than this is collected even under the retention ceiling. |
+| `CCRC_GRAPH_BASE_MAX_DRIFT_FILES` | 50 | The cluster radius (§5.1): a merge-base more than this many files from every base and planned base starts a new cluster. The tip wants a base once the newest base is more than this many files from the tip. **Must be below `OVERLAY_MAX_FILES`** (§6.2); the doctor WARNs otherwise. |
+| `CCRC_GRAPH_BASE_MIN_TREES` | 1 | Live-session trees a merge-base cluster needs before its base is built. (Revision 2's `MAX_BASES` and `BASE_MIN_VOTES` are dropped; there is no count cap and no vote margin, §5.1.) |
+| `CCRC_GRAPH_TIP_MIN_INTERVAL_SECS` | 21600 | At most one tip base per repository per window. Merge-base clusters are bounded by `BUDGET`, `BASE_MIN_TREES` and `STORE_MAX_MB` instead. |
+| `CCRC_GRAPH_BASE_TTL_SECS` | 172800 | A base assigned to no live tree, and not the repository's newest tip base, is collected after this long. |
 | `CCRC_GRAPH_BUDGET` | 2 | **Changed meaning:** base builds per pass (was: tree rebuilds per pass, default 8). |
 | `CCRC_GRAPH_OVERLAY` | `on` | Allow overlays. |
 | `CCRC_GRAPH_OVERLAY_MIN_QUERIES` | 2 | Queries in the session before its tree's overlay is requested; a query that directly follows a gate denial does not count. |
 | `CCRC_GRAPH_OVERLAY_MAX_FILES` | 100 | Cap on the overlay's **patch set**: the files differing between the served base's commit and `HEAD`, which is base drift plus the branch's own changes (§6.2). Larger patch sets get no overlay; the card's diff list covers them. |
 | `CCRC_GRAPH_OVERLAY_BUDGET` | 4 | Overlay builds per pass. |
-| `CCRC_GRAPH_OVERLAY_MIN_INTERVAL_SECS` | 600 | Coalescing: at most one overlay build per tree per window. |
-| `CCRC_GRAPH_OVERLAY_TTL_SECS` | 86400 | A request with no query for this long lapses; an unreferenced overlay is collected after it. |
+| `CCRC_GRAPH_OVERLAY_MIN_INTERVAL_SECS` | 600 | Coalescing: at most one overlay build per tree per window, even when queries keep following commits. |
+| `CCRC_GRAPH_OVERLAY_TTL_SECS` | 86400 | A request with no query for this long lapses; an unreferenced overlay is collected after it. The TTL only keeps a request on file; it never causes a build (§6.2). |
 | `CCRC_GRAPH_OVERLAY_UNTRACKED` | `off` | Include untracked, non-ignored files and uncommitted edits; such an overlay is marked `partial` (§6.4). |
 | `CCRC_GRAPH_OVERLAY_MAX_FILE_BYTES` | 262144 | Skip larger files in an untracked-inclusive overlay. |
 | `CCRC_GRAPH_MAX_SHRINK_PCT` | 20 | Publish check: refuse a graph whose node count is this much below its predecessor's. |
-| `CCRC_GRAPH_STORE_MAX_MB` | 4096 | Soft ceiling; over it the collector evicts unselected bases, then overlays, oldest first, and the doctor warns. |
+| `CCRC_GRAPH_STORE_MAX_MB` | 8192 | The bound on bases (§5.1). Over it the collector evicts unassigned bases, then unreferenced overlays, oldest first. It never evicts a base a live tree is assigned to; a new base that would not fit is `skipped-store-full` and the doctor WARNs. |
 | `CCRC_GRAPH_MIGRATE_BUDGET` | 8 | In-tree `graphify-out` directories migrated per pass (§15.1). |
 | `CCRC_GRAPH_VIEW_GRACE_SECS` | 3600 | Superseded views and trashed dirs are deleted after this. |
-| `CCRC_GRAPH_RUNNER` | `local` | `local`: a transient scope in `CCRC_GRAPH_SLICE`. `remote`: the runner of §12.2. |
-| `CCRC_GRAPH_SLICE` | empty | The systemd slice builds run in. Empty: the sweep service's own cgroup. A deployment points it at its capped test slice. |
-| `CCRC_GRAPH_BUILD_MEMORY_MAX` | `6G` | `MemoryMax` of each build's transient scope. |
-| `CCRC_GRAPH_SWEEP_MEMORY_MAX` | `1G` | **Rendered** into the service's `MemoryMax`. Covers the probe and git only, since builds run in their own scope (§12). Applies only when `CCRC_GRAPH_SLICE` is set; with it empty, builds run in the service's own cgroup, so `install` renders `BUILD_MEMORY_MAX` instead. |
+| `CCRC_GRAPH_RUNNER` | `local` | `local`: each job is a transient user service in `CCRC_GRAPH_SLICE` (§12.1). `inline`: the job is a plain child of the sweep with no per-job cgroup, for test fixtures and hosts without a user systemd manager; the doctor WARNs when it is set on a host that has one. `remote`: the runner of §12.2. |
+| `CCRC_GRAPH_SLICE` | `ccrc-graph.slice` | The user slice each job's transient service joins. systemd creates it implicitly; ccrc ships no slice unit and sets no limit on it, because each job carries its own cap and jobs never overlap. It must not be a slice that other workloads use (§12.1). Not rendered. |
+| `CCRC_GRAPH_BUILD_MEMORY_MAX` | `6G` | `MemoryMax` of each job's transient service. A hard cap: a build over it is OOM-killed and reported `failed`, never throttled. Not rendered. |
+| `CCRC_GRAPH_BUILD_SWAP_MAX` | `0` | `MemorySwapMax` of each job, so a build cannot push other workloads' memory into swap. Not rendered. |
+| `CCRC_GRAPH_BUILD_CPU_WEIGHT` | 20 | `CPUWeight` and `IOWeight` of each job (systemd's default is 100), so sessions win any contention. Not rendered. |
+| `CCRC_GRAPH_ADMIT_MEM_PCT` | 25 | Admission: a job starts only when `MemAvailable` is at least `BUILD_MEMORY_MAX` plus this share of total memory (§12.1). |
+| `CCRC_GRAPH_ADMIT_PSI_AVG10` | 10 | Admission: a job starts only when the host's memory pressure `some avg10` (`/proc/pressure/memory`) is at or below this. |
+| `CCRC_GRAPH_SWEEP_MEMORY_MAX` | `1G` | **Rendered** into the service's `MemoryMax`. Covers the probe, git and publish only; under the `local` runner no build runs in the service's cgroup. With `RUNNER=inline` the service's cap is `BUILD_MEMORY_MAX` + this value, rendered the same way. |
 | `CCRC_GRAPH_BUILD_TIMEOUT` | 600 | Kept. Per build. |
 | `CCRC_GRAPH_MAX_WORKERS` | 4 | Kept. `GRAPHIFY_MAX_WORKERS` for every build. |
 | `CCRC_GRAPH_GATE_MAX_DIFF_FILES` | 300 | **New, replaces the hook's hard-coded `GRAPH_GATE_MAX_BEHIND=10`.** The gate arms only when the served graph's commit differs from `HEAD` by at most this many files. |
@@ -332,10 +356,34 @@ These three counts are distinct and are never interchanged. `drift_files` decide
 `head_files` against an assigned base is the overlay's prospective patch set, so it decides overlay eligibility
 (§6.2). `branch_files` is what G4's measured numbers describe, and it is what the card lists first (§9).
 
-`graph.json`'s own `built_at_commit` is also correct: the build runs with its working directory in scratch
-(`.scratch/<job>/src`) and `GIT_CEILING_DIRECTORIES` set so the engine's `_git_head` (which shells `git rev-parse HEAD` with no `cwd=`, the
-U3 upstream defect) cannot stamp an unrelated repository; the sweep then writes the true commit with the existing
-restamp splice (`_gs_restamp`) before publishing. `graph.json` stays self-describing for any tool that reads it.
+**`built_at_commit` is written by ccrc, not by the engine.** The build runs with its working directory in scratch
+(`.scratch/<job>/src`) and `GIT_CEILING_DIRECTORIES` set, so the engine's `_git_head` (which shells
+`git rev-parse HEAD` with no `cwd=`, the U3 upstream defect) cannot stamp an unrelated repository. The price is that
+it stamps nothing at all: outside a repository `_git_head()` returns `None`, `to_json` then writes **no**
+`built_at_commit` key (`export.py:537-539`), and `GRAPH_REPORT.md` gets no "Graph Freshness" section
+(`report.py:135-141`). This was confirmed with the pinned 0.9.9: `_rebuild_code(Path("."), force=True,
+acquire_lock=False)` in a non-repository directory wrote a `graph.json` with no `built_at_commit`. Today's
+`_gs_restamp` (`ccd-graph-sweep:821-825`) cannot fill that gap. It only replaces an existing sha (it returns 1 with
+"no built_at_commit to replace" when the key is missing), and it hard-codes `$tree/graphify-out` as its target.
+
+The design therefore replaces `_gs_restamp` with **`_gs_stamp <dir> <sha>`**, an insert-or-replace stamper whose
+target is a directory argument, the job's `out/`:
+
+- **`graph.json`.** It reads the last 4 KiB, as today. If a `"built_at_commit": "<sha>"` key is there, it replaces
+  the sha (the case of an untouched predecessor copied from a base). Otherwise it checks that the file ends with
+  the top-level object's closing `}` (optionally followed by a newline) and inserts `,\n  "built_at_commit":
+  "<sha>"` before it. The key is therefore the last key either way, which is where the card's and `_gs_stale`'s
+  tail reads expect it. The result goes to a temporary file in `out/` and is renamed over the original. A file
+  whose tail matches neither shape is a refusal (`failed`, reason `cannot stamp graph.json`), and nothing is
+  published.
+- **`GRAPH_REPORT.md`.** If a `- Built from commit:` line exists, it replaces the sha. Otherwise it inserts
+  `## Graph Freshness` and `- Built from commit: \`<sha8>\`` just before the first `## ` heading after `## Summary`,
+  which is where the engine puts that section, or appends them when there is no such heading. It writes only
+  those two lines. The engine's own section also says "Run `graphify update .` after code changes", which the
+  card forbids. A failure here is logged and is not a refusal, as D-1509 ruled for the report today.
+
+The publish check is then "`graph.json` parses and its `built_at_commit` equals the job's commit" (§5.3 step 5).
+`graph.json` stays self-describing for any tool that reads it. Row N9 tests both the insert and the replace.
 
 ---
 
@@ -343,43 +391,77 @@ restamp splice (`_gs_restamp`) before publishing. `graph.json` stays self-descri
 
 ### 5.1 Which commits get a base
 
-Each pass, per repository, the sweep computes for every tree its merge-base `mb` with the source ref, and for
-every retained base `b` at the current pin the drift `d(b, mb) = git diff --name-only b mb | wc -l`. The tree
-is assigned the base with the smallest drift; ties go to the newest.
+**The replay, run before G1 is ruled.** Revision 2 deferred this check to the plan's Task 0. It was run instead
+on the reference fleet's box on 2026-10-28, read-only and at idle priority, over every worktree of this repository
+present that day, whether or not a session was live in it. That makes it an upper bound on live demand. Inputs:
+each tree's merge-base with `origin/main`, and `git diff --no-renames --name-only` between commits. It used the
+clustering rule below.
 
-Demand for a new base:
+| Measured | Value |
+|---|---|
+| Worktrees | 94 (the 62 of §1.2 were counted earlier the same day, on the previous host) |
+| Distinct merge-bases | 50 |
+| Clusters at radius 50 files, so bases needed | **30**; trees per cluster 12, 12, 11, 9, 7, 5, 4, 4, 3, 3, then twenty clusters of 1 or 2 |
+| Clusters at radius 100 files | 26 |
+| Trees whose `drift_files + branch_files` ≤ `OVERLAY_MAX_FILES` (100) once their cluster base exists | **94 of 94** at radius 50; 84 of 94 at radius 100 |
+| Ages of the 30 cluster commits | 6 within the last 24 h, 16 within 7 days, the oldest about 49 days |
 
-- **Tip demand.** The main checkout and any newly created worktree sit at or near the tip. The tip wants a base
-  when the newest base differs from the source-ref tip by more than `BASE_MAX_DRIFT_FILES`. At most one tip base
-  is built per repository per `TIP_MIN_INTERVAL_SECS`.
-- **Merge-base demand.** A tree votes for a base at `mb` when its assigned base drifts more than
-  `BASE_MAX_DRIFT_FILES` from `mb`, that is, when `drift_files` (§4.4) exceeds the limit. Only trees with a
-  registered session vote (the R2 read, unchanged), so dead trees do not drive builds. A merge-base needs at least
-  `BASE_MIN_VOTES` votes.
+Revision 2's 6-slot cap could at best have served the six largest clusters, 56 of 94 trees. The other 38 trees, on 24
+clusters, would have shared whatever slot the vote-margin rule ever freed. Under that rule a one-tree cluster can
+never win a slot, so a tree like that would be answered from a far base for its whole life, where today's per-tree
+graphs are exact. That rule is therefore dropped, together with the count cap.
 
-Each pass builds at most `BUDGET` bases fleet-wide, highest-vote demand first.
+**The rule: one immutable base per live merge-base cluster.** Each pass, per repository:
 
-On this repository's measured spread, 25 distinct merge-bases cover 62 trees, and the 5 most common cover 33 of
-them. With 6 retained bases, most trees therefore sit within `BASE_MAX_DRIFT_FILES` of their merge-base. Trees
-still waiting for their base are served the nearest one, and the card states the larger drift (§8). The plan's
-Task 0 replays the selection over the measured merge-bases. It reports the share of trees within the limit, so
-the operator can set `MAX_BASES` and the limit from data (G9).
+1. **Anchors.** Collect the merge-base `mb` with the source ref of every tree that has a registered session (the
+   R2 read, unchanged), plus the **tip anchor**, which is the source-ref tip itself. Dead trees are not anchors, so
+   they never drive a build.
+2. **Clustering, stable by construction.** Retained bases at the current pin are cluster centres first. Then the
+   anchors are taken newest commit first. An anchor within `BASE_MAX_DRIFT_FILES` of an existing or already-planned
+   centre joins the nearest one. Otherwise it becomes a new planned centre, and its base will be built at that very
+   commit. Existing centres never move, so a pass never re-plans a cluster that already has a base, and an
+   anchor's cluster changes only when its tree rebases or merges.
+3. **Assignment.** Each tree is served the published base with the smallest drift `d(b, mb)`, ties to the newest.
+   Once its cluster's base is published, that drift is at most `BASE_MAX_DRIFT_FILES`. Until then the tree is
+   served the nearest base, and the card states the drift (§8).
+4. **Demand.** A planned centre is demand when its cluster holds at least `BASE_MIN_TREES` live trees. Each demand
+   has a **weight**, the number of live trees in its cluster. The tip anchor's cluster also counts **one** for the
+   main checkout, whether or not the main checkout has a live session, because new worktrees branch from the tip
+   and land in that cluster. So a tip with no live tree near it has weight 1, and a tip that live trees sit on has
+   weight 1 + those trees. Tip demand additionally waits out `TIP_MIN_INTERVAL_SECS` since the repository's last
+   tip base. A live tree whose merge-base is a fresh tip forms a merge-base cluster in its own right, so a tree is
+   never kept waiting by that interval.
 
-Every base is a **full** build (§5.3). The demand rules therefore never need a nearby predecessor, and nothing
-in the selection depends on patch distance.
+**Build order.** Each pass builds at most `BUDGET` bases fleet-wide, in this order:
 
-**Retention, with no thrash.** When a repository holds more than `MAX_BASES` bases, the sweep evicts the base
-assigned to the fewest live-session trees, oldest first. A demand build that would force an eviction runs only
-if its vote count is **strictly greater** than the victim's assigned count. A single-vote merge-base therefore
-cannot evict another single-tree base and be evicted in turn on the next pass. A base assigned to no tree for
-`BASE_TTL_SECS` is evicted regardless. The base assigned to the main checkout is never evicted while it is
-assigned.
+1. A repository with **no** base at the current or previous pin, its tip demand first. A repository with no base
+   serves nothing, and its trees get no link (§10), so this comes before any refinement elsewhere.
+2. Then demand by weight, highest first.
+3. Ties: tip before merge-base, then the newer commit.
+
+The order is the same on first install and after a pin bump (§5.2).
+
+**Retention and the bound.** There is no per-repository count and no vote margin. A base is kept while any live
+tree is assigned to it, and the repository's newest tip base is always kept. A base assigned to no live tree is
+collected after `BASE_TTL_SECS`, which is what happens to a cluster once its trees rebase, merge or die. The bound is
+`STORE_MAX_MB`. Before a base job starts, the sweep estimates its size as the repository's newest base size. If
+publishing it would exceed the ceiling, the sweep first collects unassigned bases, then unreferenced overlays,
+oldest first. If that is still not enough, the job is `skipped-store-full` and the doctor WARNs with the numbers.
+An assigned base is never evicted to make room, so nothing thrashes. On the replay that is 30 bases × about 55 MB,
+about 1.65 GB, for this repository.
+
+**Steady state.** A base is built once, at a commit some live tree's merge-base has. New worktrees start at or
+near the tip, so most join the newest cluster. The replay's cluster ages put new clusters at about 2 to 6 a day
+for this repository (16 in 7 days, 6 in the last 24 hours). §13 costs that.
+
+Every base is a **full** build (§5.3). The demand rules therefore never need a nearby predecessor, and nothing in
+the selection depends on patch distance.
 
 ### 5.2 Identity and engine pin
 
 `base-id = <commit>-<pin>`. A pin bump therefore makes every base ineligible at once, exactly as C.1's two-dimensional
-staleness intended, but the rebuild is **one base per repository first** (the most-voted), drained `BUDGET` per
-pass; trees keep being served their previous-pin base, marked as such in `meta.json`, until their new base
+staleness intended, but the rebuild is **one base per repository first** (the §5.1 build order, which puts every repository with no
+current-pin base first), drained `BUDGET` per pass; trees keep being served their previous-pin base, marked as such in `meta.json`, until their new base
 publishes. A bad bump is rolled back by restoring the old pin: the old bases are still on disk until collected.
 
 ### 5.3 How a base is built
@@ -404,7 +486,9 @@ another base. There is no per-repository build directory.
    breach the job's outcome is `refused-by-guard` and nothing is published.
 4. Build, by running `ccd/graph-patch --full` (below).
 5. Publish checks: the graph parses; its node count is not below the predecessor's by more than
-   `MAX_SHRINK_PCT` (`refused-shrink`); `built_at_commit` is restamped; `meta.json` is written. For a base, the
+   `MAX_SHRINK_PCT` (`refused-shrink`); `_gs_stamp out/ <commit>` (§4.4) has inserted or replaced
+   `built_at_commit`, and the stamped `graph.json` parses and carries exactly the job's commit; `meta.json` is
+   written. For a base, the
    predecessor is the base it replaces as the tip, or the nearest retained base for a merge-base.
 6. Publish: copy into `pub/`, `chmod` it read-only, then `mv` it to `bases/<base-id>` as one rename. Then rewrite
    the views of every tree whose assignment changed (§3).
@@ -423,7 +507,7 @@ interpreter. It is the only way ccrc invokes the engine; `graphify update` is no
 | Shrink | `force=True`. Our own `MAX_SHRINK_PCT` check in step 5 is the shrink policy. Without `force`, a patch that deletes files is refused by the engine's own `_check_shrink`, and the full-build path keeps today's stderr-parsing discriminator. |
 | Calls | Full: `_rebuild_code(Path("."), force=True, acquire_lock=False)`. Overlay: the same plus `changed_paths=[…]`. |
 | Environment | `GRAPHIFY_OUT` as above, `GRAPHIFY_NO_BACKUP=1`, `PYTHONHASHSEED=0`, `GRAPHIFY_MAX_WORKERS=$CCRC_GRAPH_MAX_WORKERS`, `GIT_CEILING_DIRECTORIES=<store root>`, under `nice -n 15 timeout $CCRC_GRAPH_BUILD_TIMEOUT`. |
-| Result | Exit 0 when `_rebuild_code` returns True, 1 when it returns False, and 124 on timeout. A True return with "outputs left untouched" (the topology did not change) is a success: `out/graph.json` is then the copied predecessor, and the restamp in step 5 gives it the right commit. |
+| Result | Exit 0 when `_rebuild_code` returns True, 1 when it returns False, and 124 on timeout. A True return with "outputs left untouched" (the topology did not change) is a success: `out/graph.json` is then the copied predecessor, still stamped with the base's commit, and `_gs_stamp` in step 5 replaces it with the overlay's. A full build always reaches step 5 with no `built_at_commit` key, and `_gs_stamp` inserts one. |
 
 `_rebuild_code` is a private engine function. The pin makes that acceptable. A test pins its signature, its
 `changed_paths` behaviour, its relative-root behaviour and its `acquire_lock=False` no-queue behaviour against the
@@ -444,10 +528,17 @@ that one flat directory (§4.1).
 - **First request.** If the file is absent, the hook creates it as a new directory entry (write to a temporary
   name in the same directory, then `mv`). Only this creation changes the directory's own mtime, and that mtime is
   what wakes the sweep (§10).
-- **Later queries.** If the file exists, the hook only `touch`es it. That updates the file's mtime, which is the
-  request's liveness. It does not change the directory's mtime, so later queries never start a pass.
+- **Later queries.** If the file exists, the hook `touch`es it. That updates the file's mtime, which is both the
+  request's liveness and **the time of the last read** that §6.2 compares against. It does not change the
+  directory's mtime, so an ordinary later query never starts a pass.
+- **A query against a stale graph.** When the hook's own measure shows the served graph no longer describes `HEAD`
+  (`GM_DIFF > 0`, §9) and the request's recorded `wake` time is older than `OVERLAY_MIN_INTERVAL_SECS`, the hook
+  rewrites the request through a temporary name and `mv` instead of touching it. The file holds one line,
+  `{"wake": <epoch>}`. The rename changes the directory's mtime, so the next tick runs a pass. This is the only
+  way a later query wakes the sweep, and it does so at most once per tree per coalescing window.
 
-A request lapses `OVERLAY_TTL_SECS` after its last touch, and the sweep then removes it.
+A request lapses `OVERLAY_TTL_SECS` after its last touch, and the sweep then removes it. Keeping a request on file
+never causes a build by itself (§6.2).
 
 On the measured distribution, 68 of 197 sessions crossed 2 queries. The 129 one-query sessions never cause a
 build.
@@ -464,11 +555,20 @@ requested tree when all of the following hold:
 - `1 ≤ head_files ≤ OVERLAY_MAX_FILES` against the assigned base.
 - No published overlay already has the key `sha12(base-id, HEAD^{tree})`. If one does (another tree with
   identical content, or this tree before an amend that kept the tree), the view is simply pointed at it.
+- **Pull-on-read.** The request's mtime, which is the last query, is newer than the `built_at` of the overlay the
+  tree is served now. If the tree has no overlay yet, this holds trivially. A `HEAD` move with no query after it
+  therefore builds nothing, however long the request stays live, and an overlay is only ever built for a read
+  that has already happened. That read was answered by the previous graph, and the card said by how much it
+  differs (§9). The next read gets the new overlay.
 - The tree's last overlay build is older than `OVERLAY_MIN_INTERVAL_SECS`.
 - The pass has `OVERLAY_BUDGET` left.
 
-**Who qualifies.** `head_files` is at most `drift_files + branch_files`. Merge-base demand keeps `drift_files` at
-or below `BASE_MAX_DRIFT_FILES` (50) for every tree whose base has been built (§5.1). Such a tree therefore
+So the overlay builds for one tree are bounded by the number of times a query followed a change, and by one per
+`OVERLAY_MIN_INTERVAL_SECS`. A session that commits all day after two early queries costs one overlay, not one per
+commit.
+
+**Who qualifies.** `head_files` is at most `drift_files + branch_files`. Clustering keeps `drift_files` at or below
+`BASE_MAX_DRIFT_FILES` (50) for every tree whose cluster base has been built (§5.1). Such a tree therefore
 qualifies whenever its branch changed at most 50 files. This repository's worktrees measure a median of 15.5 and a
 p90 of 34 branch files, so on those numbers about nine in ten trees qualify once their base exists. That claim is
 about trees *at their target drift* and no wider. Two kinds of tree may not qualify:
@@ -477,8 +577,8 @@ about trees *at their target drift* and no wider. Two kinds of tree may not qual
   base publishes. Meanwhile its card lists the files (§9).
 - A branch of more than 50 files may or may not qualify, depending on its drift.
 
-The plan's Task 0 measures the qualifying share on the box from `drift_files` and `branch_files` together, never
-from branch files alone.
+The §5.1 replay measured the qualifying share from `drift_files` and `branch_files` together, never from branch
+files alone: **94 of 94** worktrees have `drift_files + branch_files ≤ 100` once their cluster base exists.
 
 ### 6.3 How it is built
 
@@ -520,9 +620,11 @@ never compounds.
 |---|---|---|
 | `POLL_SECS` (300 s) since the last pass started | Pass: resolve refs (fetch if throttle expired), recompute assignments and demand, build ≤ `BUDGET` bases and ≤ `OVERLAY_BUDGET` overlays, swap views, collect. | A pass with nothing to do: about 24 `rev-parse` calls plus a few `git diff --name-only` per tree, a few seconds. |
 | A new request file in `<store>/requests/` (G7) | The next tick (`TICK_SECS`, 60 s) finds the directory's mtime changed and runs a pass, so an overlay does not wait out `POLL_SECS`. A touch of an existing request does not change the directory mtime and starts nothing. | Overlay ready ≈ one tick + one build (≈36 s for a 16-file patch of this repository) after the second query. |
+| A query finds its served graph stale (`GM_DIFF > 0`) | The hook rewrites the request (§6.1), so the next tick runs a pass; the pass builds an overlay because the request's mtime is newer than the served overlay (§6.2). | ≤ one wake and ≤ one build per tree per `OVERLAY_MIN_INTERVAL_SECS`. The stale read itself is answered by the previous graph, with the diff in the card. |
+| A requested tree's `HEAD` moves, no query follows | Nothing. | No build, however long the request lives. |
 | Main line moves | Tip demand once the newest base is more than `BASE_MAX_DRIFT_FILES` from the tip. | ≤ one tip base per repo per `TIP_MIN_INTERVAL_SECS` (6 h). |
-| New worktree | Assigned to the nearest base at once (a view swap, no build); creates merge-base demand only if that base is far. | Immediate. |
-| Pin bump | Bases rebuilt `BUDGET` per pass, most-voted first; old-pin bases served meanwhile. | Hours, not a fleet-wide stall. |
+| New worktree | At the next pass: assigned to the nearest base, its view published, then its link created (§10); joins the nearest cluster or plans a new one (§5.1). | ≤ `POLL_SECS` if its repository has a base; until then no link, and the card says why. |
+| Pin bump | Bases rebuilt `BUDGET` per pass in the §5.1 build order (repositories with no base first, then by weight); old-pin bases served meanwhile. | Hours, not a fleet-wide stall. |
 
 **There is no idle gate on builds.** Builds touch no tree and no session's files, so "is the session busy" no
 longer matters. This retires the 08-27 O3 tension ("a tree goes stale exactly when its session commits —
@@ -542,7 +644,9 @@ link to the graph it is served.
 | Same, after 2+ queries, `head_files` ≤ 100 | Overlay | None at the overlay's commit: the patch covers the drift files too | Covered as of the overlay's commit; ≤ one tick + one build behind `HEAD`; edge caveat of §6.5 |
 | Worktree whose merge-base is far from every retained base | Nearest base | `drift_files` > 50, stated as a number; merge-base demand recorded | Card lists the changed files |
 | `head_files` > 100 | Assigned base | as above | Card gives the counts and the first `CARD_DIFF_LIST_MAX` paths, branch files first |
-| Repo excluded, or store missing | Nothing (no link, or a dangling one) | — | Card says no graph and why, from the census |
+| New tree, or repo at `no-base` | Nothing yet: no link until a view publishes (§10) | — | Card says the graph is pending and why, from the census |
+| Repo excluded | Nothing: no link; a legacy directory is moved out (§15.1) | — | Card says the repository is excluded |
+| Store missing under a live link | Nothing (dangling link) | — | Card says no graph; doctor FAILs |
 
 Today's per-tree graph is exact for the tree's `HEAD` when the sweep has caught up. The honest trade is this.
 Without an overlay, the new design is exact for the files the branch did not change when the base sits at the
@@ -585,7 +689,8 @@ All read-side changes are in `ccd/session-hook.sh` and the compaction helper's i
 - **R4** (`graphQueries` in hookstate) is unchanged; it is now also the overlay trigger.
 - **The skill.** The installed body is the package's own and its fast path ("`graphify-out/graph.json` exists →
   query") needs no change: the link satisfies it. `install-graphify-skill.sh` gains one appended ccrc clause in the
-  assembled SRC: `graphify-out` is a ccrc-managed link; never delete, replace or build into it; branch coverage
+  assembled SRC: `graphify-out` is a ccrc-managed link; never delete, replace or build into it; when it is absent
+  the tree's graph is not ready yet, so do not build one, use search and read the card (§10); branch coverage
   arrives by asking more than one question. The convergence `diff` and `.graphify_version` stamping are
   unchanged.
 - **Writes through the link fail closed.** Published files are `0444` in `0555` directories, so a session that
@@ -601,8 +706,8 @@ Same name, same unit, same census path, same pause file, same pass flock. New bo
 0. **Due check.** The timer fires every `TICK_SECS`. The sweep loads config (§4.2) and stats two things: its own
    last-pass stamp (`<store>/.last-pass`: the start time, plus the `requests/` directory mtime it saw at
    enumeration) and the current mtime of `<store>/requests/`. A pass is due when `POLL_SECS` have passed since the
-   last start, **or** the directory's mtime differs from the recorded one, meaning a request was created or
-   removed. Otherwise the sweep exits 0 with no census row, so ticks never fill the 10-pass census ring. The
+   last start, **or** the directory's mtime differs from the recorded one, meaning a request was created, rewritten
+   by a stale-graph wake (§6.1) or removed. Otherwise the sweep exits 0 with no census row, so ticks never fill the 10-pass census ring. The
    tick is the debounce: however many requests appear within one tick, they cost one pass. A request created
    during a pass, after enumeration, changes the mtime and makes the next tick due. The pass's own removal of
    lapsed requests does the same, which costs at most one extra pass that finds nothing to do.
@@ -610,12 +715,36 @@ Same name, same unit, same census path, same pause file, same pass flock. New bo
 2. Enumerate trees with today's `_gs_trees` (unchanged, including the `.claude/worktrees` registered-session rule).
    Group by `repo-key` via `graph-resolve`. Zero trees probed on a box with trees stays `probed-zero` (C.4).
 3. Per tree: precondition `git check-ignore -q graphify-out` (**no trailing slash**, so it holds for a link);
-   ensure the link exists (create it, or migrate a real directory, §15); record assignment and demand.
+   record assignment and demand.
 4. Per repo: fetch if throttled-out; tip demand; choose and run base jobs within `BUDGET`.
 5. Overlay jobs within `OVERLAY_BUDGET` for live requests (§6.2).
 6. Swap changed views; write `index.json`.
-7. Collect (§15).
-8. Census.
+7. **Links, after views.** For each tree that has no `graphify-out` yet, and whose `trees/<tree-key>` now resolves
+   to a published view whose `graph.json` exists, create the link. A real `graphify-out` directory is migrated
+   instead (§15.1). Nothing else creates a link.
+8. Collect (§15).
+9. Census.
+
+**When the in-tree link appears.** A link is created only after its view is published, in the same pass, by step
+7. No placeholder view is written. A placeholder would satisfy the skill's fast path with an empty graph, and
+sessions would get confident empty answers. So a link never points at nothing at the moment it is made. Three cases
+follow:
+
+- **A new tree in a repository that has a base.** The first pass after it appears assigns it, publishes its view
+  and creates its link, so it waits at most one `POLL_SECS`. Before that, the tree has no `graphify-out`. The
+  card says *"graph for this tree arrives within a few minutes"*. The census row is `pending-view` with the reason.
+- **A tree of a repository still at `no-base`** (first install, a new repository, or a pin bump with no previous
+  pin base). No view, no link. The census row is `no-base` with the failing or pending job's reason, and the card
+  prints it (§10 census readers). A tree that already has a legacy real directory keeps it until migration
+  (§15.1 step 2), so it keeps a graph meanwhile. The §5.1 build order puts a repository with no base first, so
+  first install drains about one repository per base slot per pass.
+- **The skill, on a tree with no link.** The appended ccrc clause (§9) says that in a ccrc-managed tree an
+  absent `graphify-out` means "not ready yet". The session must not build one; it uses search and reads the card.
+  If a session builds a graph anyway, the result is a real directory, and migration moves it to `.trash` like any
+  legacy directory.
+
+The doctor's dangling-link FAIL (§11) therefore fires only when something removed a view or the store under a
+live link. That is a real fault, never a normal state.
 
 **Census shape.** The census file, its 10-pass ring and the pass-level fields (`started`, `finished`, `pin`,
 `status`) are unchanged. Pass statuses are unchanged as well; a not-due tick writes nothing, so it adds no status.
@@ -628,11 +757,13 @@ Each pass gains one array, so a pass object is `{started, finished, pin, status,
     *"overlay failed: <job reason>"*, or *"base for merge-base pending"*.
   - `no-base`: the repo has no published base at the current or previous pin. Its `reason` is the reason of the
     job that failed to provide one, for example the guard's refusal text, and `job` names that job.
+  - `pending-view`: the repo has a base but this tree's first view has not been published yet. No link exists.
   - `refused-no-exclude`, `migrated`, `migrate-busy` and `no-graph` (an excluded repo).
 - **`jobs[]`**: one row per build job attempted or skipped, `{job, kind: "base"|"overlay", repo_key, commit, key,
   outcome, reason, duration_ms, trees: [paths]}`. `key` is the base-id or ov-key; `trees` lists the trees the job
   was for. Job outcomes: `base-built`, `overlay-built`, `refused-by-guard`, `refused-shrink`, `timed-out`,
-  `failed`, `skipped-budget`, `coalesced` and `skipped-locked`.
+  `failed`, `skipped-budget`, `coalesced`, `skipped-locked`, `skipped-store-full` (§5.1) and `skipped-pressure`
+  (the admission check of §12.1).
 
 The discriminators for `timed-out` (exit 124) and `refused-shrink` (our own publish check now, not the engine's
 stderr text) are simpler than today's, because the job's output directory is ours.
@@ -667,7 +798,8 @@ and it would have to be added to all four lists in the same change.
 
 **Exclude writer (D').** `ccd ws-add` and `ccrc install`/`update` append **both** `graphify-out/` and
 `graphify-out` (no slash) per common dir, plus `.graphifyignore` as today. Measured: the slash-only line does not
-ignore a symlink (`git status` shows `?? graphify-out`).
+ignore a symlink (`git status` shows `?? graphify-out`). That is **all** `ccd ws-add` does for graphs. It creates no
+link and no view, and it does not wait on the store. The new tree gets its link from the next pass (step 7).
 
 **Registry read (R2).** Narrowed, not widened: the sweep still reads `*.workdir` and hookstate for the
 `.claude/worktrees` rule, for demand weighting and for the migration idle check. It still writes nothing under
@@ -697,18 +829,73 @@ or adds these:
 | Census age over 3 × `POLL_SECS` (replacing 3 × the timer period) | WARN, as today |
 | Last pass `jobs[]` with `refused-by-guard` or `failed`, and `trees[]` with `no-base` (the re-pointed :4886 arm, §10) | WARN, never FAIL (ruling unchanged) |
 | `graph-patch` signature probe against the pinned engine | FAIL (the private-function dependency of §5.3) |
+| A loaded unit in `CCRC_GRAPH_SLICE` that is not a `ccrc-graph-job-*` | WARN: builds would share that slice's pressure with another workload (§12.1) |
+| `CCRC_GRAPH_RUNNER=inline` on a host whose user systemd manager answers | WARN: builds run uncapped inside the sweep's own cgroup |
+| The last N passes' `jobs[]` are all `skipped-pressure` | WARN: the box never has room for a build; the numbers it saw are named |
+| A `skipped-store-full` job in the last pass | WARN with the store size, the ceiling and the assigned-base count |
 
 ---
 
 ## 12. Where heavy builds run
 
-### 12.1 Default: a capped transient scope on the fleet host
+### 12.1 Default: one transient service per job, in a dedicated slice, admitted under a pressure check
 
-Every job runs as `systemd-run --user --wait --collect --scope` (or `--unit`) with `--slice=$CCRC_GRAPH_SLICE`
-when set, `-p MemoryMax=$CCRC_GRAPH_BUILD_MEMORY_MAX`, `nice`, the worker cap and the timeout. On the reference
-fleet the deployment sets `CCRC_GRAPH_SLICE` to its capped test slice, so graph builds compete with test runs
-under one memory ceiling instead of with sessions. One job at a time; the sweep's pass lock serializes them. Peak
-per job: about 4.2 GB for a full build of this repository, about 1.25 GB for a patch (§1.3).
+**Why not the test slice.** Revision 2 ran builds in the deployment's capped test slice, "so graph builds compete
+with test runs under one memory ceiling". That moves session starvation rather than removing it. On the reference
+fleet, memory pressure inside a capped, shared slice is what has stalled the box: a slice throttled at its
+`MemoryHigh` went into a reclaim storm that froze everything, with no OOM kill to end it. Test runs already fill that
+slice, so a 4.2 GB build there either throttles the tests or is throttled with them, while sessions wait on both.
+A build should instead be the first thing to give way, never the reason anything else waits.
+
+**The invocation.** `systemd-run` refuses `--wait` together with `--scope` ("--wait may not be combined with
+--scope"). The design therefore fixes one form: every job is a **transient service**, never a scope.
+
+```
+systemd-run --user --quiet --wait --collect --pipe \
+  --unit=ccrc-graph-job-<job> --slice="$CCRC_GRAPH_SLICE" \
+  -p MemoryMax="$CCRC_GRAPH_BUILD_MEMORY_MAX" -p MemorySwapMax="$CCRC_GRAPH_BUILD_SWAP_MAX" \
+  -p MemoryHigh=infinity -p OOMPolicy=kill \
+  -p CPUWeight="$CCRC_GRAPH_BUILD_CPU_WEIGHT" -p IOWeight="$CCRC_GRAPH_BUILD_CPU_WEIGHT" \
+  -p RuntimeMaxSec=$((CCRC_GRAPH_BUILD_TIMEOUT + 30)) \
+  --working-directory=<job>/src \
+  --setenv=GRAPHIFY_OUT=… --setenv=GRAPHIFY_NO_BACKUP=1 --setenv=PYTHONHASHSEED=0 \
+  --setenv=GRAPHIFY_MAX_WORKERS=… --setenv=GIT_CEILING_DIRECTORIES=… \
+  -- nice -n 15 timeout "$CCRC_GRAPH_BUILD_TIMEOUT" <venv>/bin/python <ccd>/graph-patch …
+```
+
+- A transient service does not inherit the sweep's environment, so every variable §5.3 lists is passed with
+  `--setenv`. Row N25 pins that list against §5.3's.
+- `--wait` returns the service's exit status. `timeout` inside gives 124 on the job's own deadline, and
+  `RuntimeMaxSec` is only a backstop 30 s later, if `timeout` itself is stuck.
+- `--pipe` connects the job's stdout and stderr to the sweep, so the discriminators of §10 still read them.
+- The job's cgroup is **always** its own transient service. The cap that applies is therefore always
+  `BUILD_MEMORY_MAX` on that service, whatever `SLICE` says. The sweep service's `MemoryMax`
+  (`SWEEP_MEMORY_MAX`) covers only the sweep itself. That is the single answer to "which cap applies", and the
+  doctor's drift check compares the service's `MemoryMax` with `SWEEP_MEMORY_MAX` alone (§4.2).
+- `MemoryMax` is a hard cap and `MemoryHigh=infinity` is explicit. A build that outgrows its cap is OOM-killed
+  inside its own cgroup and reported `failed` with reason `oom`. It is never throttled into a stall.
+  `MemorySwapMax=0` keeps it from pushing other workloads into swap.
+- `CPUWeight` and `IOWeight` of 20, against systemd's 100, mean sessions and tests win any contention, and `nice`
+  stays on top of that.
+
+**The slice.** `CCRC_GRAPH_SLICE` defaults to `ccrc-graph.slice`, used by graph jobs and nothing else. systemd
+creates it implicitly. ccrc ships no slice unit and puts no limit on it, because jobs never overlap (the pass lock)
+and each job carries its own cap. A deployment may rename it, but it must not point it at a slice that other
+workloads use. The doctor WARNs when any loaded unit in that slice is not a `ccrc-graph-job-*` (§11).
+
+**Admission, before every job.** The sweep reads `/proc/meminfo` and `/proc/pressure/memory`. A job starts only when
+`MemAvailable ≥ BUILD_MEMORY_MAX + ADMIT_MEM_PCT % of MemTotal`, **and** memory pressure `some avg10 ≤
+ADMIT_PSI_AVG10`. Otherwise the job is `skipped-pressure`, the tree keeps its current graph, and the pass moves on.
+It does not wait, so a pass never sits on a busy box. Overlays need about 1.25 GB, but the check uses the full cap,
+since the cap is what the job may take. A host without PSI (an old kernel) uses the `MemAvailable` test alone, and
+the doctor says so once.
+
+**Runners.** `RUNNER=local` is the form above. `RUNNER=inline` runs the same command line minus `systemd-run`. It
+exists for fixture HOMEs in the test suite and for hosts without a user systemd manager, and there the service's
+rendered `MemoryMax` grows by `BUILD_MEMORY_MAX` (§4.3).
+
+One job at a time; the sweep's pass lock serializes them. Peak per job: about 4.2 GB for a full build of this
+repository, about 1.25 GB for a patch (§1.3).
 
 ### 12.2 Option: the future test box
 
@@ -723,37 +910,44 @@ on one seam, not a redesign. Not built in the first wave.
 
 ## 13. Cost: today versus this design
 
-Today's figures are measured (§1.2). This design's figures are **estimates** from those measurements; the plan's
-Task 0 re-measures them on the box.
+Today's figures are measured (§1.2). This design's base figures come from the §5.1 replay; the rest are
+**estimates** from those measurements, and the plan's first task re-measures them on the box.
 
 | | Today (per-tree, every 15 min) | This design |
 |---|---|---|
-| Builds | ~2–5 full rebuilds of ~75 s per pass for this repository alone, 96 passes a day | This repository: ≤4 tip bases a day (`TIP_MIN_INTERVAL_SECS`); merge-base bases only on demand, a handful in steady state since new worktrees start near the tip; all bases **full** (~77 s). Overlays (~36 s for a 16-file patch) for sessions with 2+ queries: measured ≈3 such sessions a day, a few `HEAD` moves each |
-| CPU | 4–17 CPU-min per pass ≈ **6–27 CPU-hours a day** | Estimate **~1–1.5 CPU-hours a day** fleet-wide; breakdown below |
-| Peak memory | 4.6–6.0 GB per pass, in the sweep's own unit | ≤4.2 GB for a full build, ≤1.25 GB for a patch, inside the capped slice |
-| Disk | **9,445 MB** (131 graphs) | Estimate **~2–3 GB**: this repository ≤6 bases × ~55 MB plus overlays (~55 MB each, TTL 24 h); other repos ≤ their tree count in bases; hard-capped by `STORE_MAX_MB` |
+| Builds | ~2–5 full rebuilds of ~75 s per pass for this repository alone, 96 passes a day | This repository: each base built **once**, at a live merge-base cluster or the tip; ≈2–6 new clusters a day (replay, §5.1) plus ≤4 tip bases; all bases **full** (~77 s). Overlays (~36 s for a 16-file patch) only when a query follows a change (pull-on-read, §6.2) |
+| CPU | 4–17 CPU-min per pass ≈ **6–27 CPU-hours a day** | Estimate **~1.5–2.5 CPU-hours a day** fleet-wide; breakdown below |
+| Peak memory | 4.6–6.0 GB per pass, in the sweep's own unit | ≤4.2 GB for a full build, ≤1.25 GB for a patch, each in its own hard-capped transient service, started only when the box has room (§12.1) |
+| Disk | **9,445 MB** (131 graphs) | Estimate **~3–4 GB**: this repository ≈30 bases × ~55 MB ≈ 1.65 GB (replay), other repos fewer and smaller, plus overlays (~55 MB each, TTL 24 h); bounded by `STORE_MAX_MB` (8 GB default) |
 | Writes inside trees | Every rebuild rewrites ~75 MB in the tree | One symlink, once |
-| Stalls a session | Skipped while busy; escape hatch after 20 commits / 6 h | Never touches a session |
+| Stalls a session | Skipped while busy; escape hatch after 20 commits / 6 h | Never touches a session's tree; builds yield on CPU and IO and never start under memory pressure |
 
 **How the CPU estimate is made.** It assumes ≈3 CPU-minutes per full build of this repository and ≈1.5 per overlay
 patch, scaled from the wall times in §1.3. For this repository, per day:
 
 | Source | Count | CPU-minutes |
 |---|---|---|
-| Tip bases | ≤ 4 | ≤ 12 |
-| Merge-base bases, steady state | ≈ 4 | ≈ 12 |
-| Overlays | ≈ 3 sessions × ≈ 5 `HEAD` moves = ≈ 15 | ≈ 22 |
-| **Total** | | **≈ 46** |
+| New merge-base clusters | ≈ 2–6 (replay: 16 in 7 days, 6 in the last 24 h) | ≈ 6–18 |
+| Tip bases | ≤ 4, often the same commit as a new cluster's | ≤ 12 |
+| Overlays | queries that follow a change. Measured ≈3 sessions a day with 2+ queries; query volume roughly doubles each month (Jul 258 → Oct 6,040), so this allows ≈6 sessions × ≈5 such queries = ≈30 | ≈ 45 |
+| **Total** | | **≈ 50–75** |
 
-The one-off migration adds at most `MAX_BASES` full builds per repository, about 18 CPU-minutes here.
+Overlay builds are bounded per tree by one per `OVERLAY_MIN_INTERVAL_SECS`, and only while queries keep following
+commits. Fleet-wide they are bounded by `OVERLAY_BUDGET` per pass. A tree that commits and is not read costs
+nothing after its first overlay. Revision 2 rebuilt on every `HEAD` move for 24 h after the last query, which
+could reach about 144 overlays a day for one busy tree.
+
+The one-off migration builds one base per live cluster: about 30 here, ≈90 CPU-minutes, drained `BUDGET` per pass
+in the §5.1 order. Every repository gets its first base before any repository gets its second.
 
 This repository holds about half the fleet's trees and the largest graph, so the fleet-wide figure is about twice
-this one, which gives the ~1–1.5 CPU-hours above.
+this one, which gives the ~1.5–2.5 CPU-hours above.
 
 Two consequences:
 
-- Patching the tip bases would save about 6 of those 46 minutes. That is why bases are not patched (§2, G11).
-- No term in the estimate grows with the number of worktrees.
+- Patching the tip bases would save at most about 6 CPU-minutes a day. That is why bases are not patched (§2, G11).
+- No term grows with the number of worktrees as such. Bases grow with *distinct live merge-bases* and are each
+  built once. Overlays grow with reads that follow a change.
 
 ---
 
@@ -765,10 +959,10 @@ Two consequences:
 | Sweep silently enforces nothing | `probed-zero` kept; doctor reds on a stuck overlay queue and on repos without a base |
 | Un-ignored store wedges `ws-rm` / reap / gc | Only an ignored symlink in the tree; exclude writer appends the no-slash line; predicate without the slash |
 | Leftover `.graphifyignore` wedges the same seams | Never written into a tree any more; exclude line kept for legacy trees |
-| `built_at_commit` stamped from the wrong repo | Builds run outside any repo with `GIT_CEILING_DIRECTORIES`; the sweep restamps the true commit |
+| `built_at_commit` stamped from the wrong repo | Builds run outside any repo with `GIT_CEILING_DIRECTORIES`, so the engine stamps nothing; the sweep's `_gs_stamp` inserts the job's commit into `out/` and the publish check refuses a graph without it (§4.4) |
 | Shrink refusal leaves a tree permanently stale | Our own publish check; a refused base is not published and the tree keeps its previous base |
 | One wedged build stops the timer | Per-job timeout, job lock probe, pass `TimeoutStartSec` |
-| Rebuild storm starves the fleet | ≤ `BUDGET` + `OVERLAY_BUDGET` jobs a pass, serialized, in a capped slice |
+| Rebuild storm starves the fleet | ≤ `BUDGET` + `OVERLAY_BUDGET` jobs a pass, serialized, each in its own hard-capped, low-weight transient service in a slice no other workload uses, admitted only under the memory and pressure check (§12.1) |
 | Unbounded backup accrual | `GRAPHIFY_NO_BACKUP=1` kept |
 | Generated artifacts poison a graph | Bases from `git archive` are tracked-only by construction; the subset guard still runs |
 | Guard false positive on `graphify-out/memory/` | `memory/` lives in the store, outside the scratch corpus |
@@ -793,7 +987,8 @@ Done by the sweep, idle-gated (the only remaining use of the R2 idle check), `CC
 8) trees per pass:
 
 1. The exclude writer has run for the common dir (both lines present); otherwise `refused-no-exclude`.
-2. The tree's repo has a base at the current pin; otherwise wait (the tree keeps its old graph meanwhile).
+2. The tree's view is published (`trees/<tree-key>` resolves to a view with a `graph.json`); otherwise wait. The
+   tree keeps its old graph meanwhile, and the link is never placed before its view exists (§10).
 3. The tree's session is idle by today's `_gs_busy`; otherwise `migrate-busy`, retried next pass.
 4. Move `graphify-out/memory/` (if any) to `<store>/<repo>/memory/<tree-key>/`.
 5. `mv <tree>/graphify-out <store>/.trash/<tree-key>.<ts>` — a same-filesystem rename, which is why
@@ -801,6 +996,12 @@ Done by the sweep, idle-gated (the only remaining use of the R2 idle check), `CC
    the sweep instead deletes the directory in place under `ionice -c3` and then places the link; the gap without
    a graph is seconds, and only for an idle session.
 6. `ln -s <store>/<repo>/trees/<tree-key> <tree>/graphify-out`; census `migrated`.
+
+**Excluded repositories** (`CCRC_GRAPH_REPOS_EXCLUDE`). The same idle gate and budget apply, with steps 2 and 6
+skipped. A legacy graphify directory goes to `.trash` (step 5), and its `memory/` is kept in the store (step 4).
+No link is placed, so an excluded repository's sessions stop reading a graph that nothing refreshes any more. An
+existing link in an excluded repository (the repository was excluded after migration) is unlinked, and its view
+is collected after `VIEW_GRACE_SECS`. The census row is `no-graph` and the card says the repository is excluded.
 
 A stray `.graphifyignore` the sweep generated is removed as today. Directories are only moved if they look like
 graphify's (contain `graph.json` or `.graphify_engine`); anything else is reported, never deleted.
@@ -830,10 +1031,10 @@ find dangle harmlessly (ignored).
 
 | Class | Root | Pattern | Creator | Collector | Bound |
 |---|---|---|---|---|---|
-| `graph-base` | `<store>/<repo>/bases/` | R (ring-capped) | sweep | sweep (§5.1 retention + TTL) | `MAX_BASES` per repo |
+| `graph-base` | `<store>/<repo>/bases/` | E (assignment + TTL) | sweep | sweep (§5.1 retention + TTL) | one per live merge-base cluster; `STORE_MAX_MB` |
 | `graph-overlay` | `<store>/<repo>/overlays/` | E (TTL) | sweep | sweep | `OVERLAY_TTL_SECS`, `STORE_MAX_MB` |
 | `graph-view` | `<store>/<repo>/views/`, `trees/` | W (tree-bound) | sweep | sweep, on tree death | tree lifetime + grace |
-| `graph-tree-link` | `<tree>/graphify-out` | W | sweep, `ccd ws-add` | the worktree's three collectors (ignored) | tree lifetime |
+| `graph-tree-link` | `<tree>/graphify-out` | W | sweep only, after the view publishes (§10 step 7) | the worktree's three collectors (ignored) | tree lifetime |
 | `graph-memory` | `<store>/<repo>/memory/` | W | graphify `save-result` | sweep, on tree death | tree lifetime + grace |
 | `graph-request` | `<store>/requests/` | E | session hook | sweep | `OVERLAY_TTL_SECS` |
 | `graph-scratch` | `<store>/.scratch/` | E | sweep job | job trap + sweep | one job |
@@ -888,7 +1089,7 @@ store. New rows, each red before and green after:
 | N6 | Overlay cap counts the patch set | a tree with `branch_files` 10 and `drift_files` 95 (so `head_files` > `OVERLAY_MAX_FILES`) is built, or the cap is checked against `branch_files` |
 | N7 | Serve-base fallback | a timed-out overlay leaves the tree without a graph |
 | N8 | Publish shrink check | a graph with 50% fewer nodes is published |
-| N9 | Restamp | the published `graph.json` carries a `built_at_commit` other than the base commit |
+| N9 | Stamp, insert and replace | (insert) a full build run outside any repository, whose `graph.json` has no `built_at_commit` key, is refused at publish or published without the key, or with the key anywhere but last, or `GRAPH_REPORT.md` gains no `Built from commit` line; (replace) an untouched-predecessor overlay is published still carrying the base's commit; or `_gs_stamp` writes anywhere but its directory argument |
 | N10 | Atomic swap | a killed swap leaves `trees/<key>` missing |
 | N11 | Collector | a removed worktree's view, memory and request survive past grace |
 | N12 | Migration safety | a busy tree is migrated; a non-graphify `graphify-out` directory is deleted |
@@ -899,7 +1100,13 @@ store. New rows, each red before and green after:
 | N17 | Root convention | a base or overlay is published whose `source_file`s carry a `src/` prefix, or an overlay fails to evict a deleted file's nodes from its base |
 | N18 | Private job state | a `.pending_changes` or `.rebuild.lock` planted in a previous job's output reaches the next job, or `graph-patch` is called with `acquire_lock=True` |
 | N19 | `GRAPHIFY_OUT` honoured | `graph-patch` sets `GRAPHIFY_OUT` after importing graphify and still exits 0 |
-| N20 | Due check | touching an existing request starts a pass; creating a new one does not make the next tick due; a not-due tick writes a census row |
+| N20 | Due check | touching an existing request starts a pass; creating a new one, or a stale-graph wake rewriting one, does not make the next tick due; a second stale-graph query within `OVERLAY_MIN_INTERVAL_SECS` wakes again; a not-due tick writes a census row |
+| N25 | Job invocation | a job runs as a scope, or without `--wait`, or in the sweep's own cgroup under `RUNNER=local`; or a §5.3 variable is missing from the job's `--setenv` list; or `MemoryHigh` is set below `infinity` |
+| N26 | Admission | a job starts while the fixture `MemAvailable` is below `BUILD_MEMORY_MAX` plus the margin, or pressure is above `ADMIT_PSI_AVG10`; or a `skipped-pressure` job leaves its tree without its previous graph |
+| N27 | Link after view | a pass creates a tree's link before its view's `graph.json` exists; `ccd ws-add` creates a link; or a tree of a `no-base` repository gets a link |
+| N28 | Cluster bases, no starvation | with the store under its ceiling, a live one-tree merge-base more than `BASE_MAX_DRIFT_FILES` from every base never gets a base; an existing cluster centre is re-planned; or an assigned base is evicted to make room |
+| N29 | Build order | a repository with no base waits while another repository's second base is built; or tip demand with no live tree near it outranks a cluster of two live trees |
+| N24 | Pull-on-read | a requested tree's `HEAD` moves three times with no query after it and any overlay is built; or a query after a move does not lead to a build within one tick plus one build |
 | N21 | Census readers | a `refused-by-guard` row in `jobs[]` is not counted by the doctor arm, or a `no-base` tree row loses its reason in the session card |
 | N22 | Rendered units | changing `TICK_SECS` in `graph.env` and running `ccrc update` leaves the old `OnUnitActiveSec`, or the doctor does not WARN before the update |
 | N23 | Store marker | `ccrc uninstall` removes a configured store root that lacks `.ccrc-graph-store` |
@@ -913,12 +1120,13 @@ store. New rows, each red before and green after:
 | **G1** | Replace the per-tree store ruling of 2026-08-27 with shared bases plus lazy overlays | (a) this design; (b) main tip only, one graph per repo; (c) keep per-tree | **(a)** — the usage numbers put most questions on existing code, which (b) answers against the wrong commit and (c) answers at 6–27 CPU-hours a day |
 | **G2** | Where the store lives | (a) on the worktrees' filesystem; (b) under `$HOME/.ccrc` on the home device | **(a)** via `CCRC_GRAPH_STORE`, so migration and swaps are same-filesystem renames and the disk floor watches the right device |
 | **G3** | Overlay trigger | (a) 2 queries, gate-forced first query not counted; (b) 1 query; (c) no overlays, diff list only | **(a)** — 129 of 197 sessions ask once; they get the diff list, the rest get an overlay |
-| **G4** | Overlay size cap, on the patch set (`head_files` = drift + branch) | 50 / **100** / 200 files | **100**: with drift held at ≤ 50 (G9), any branch of ≤ 50 files qualifies, and the measured p90 branch is 34; edge loss grows with patch size |
+| **G4** | Overlay size cap, on the patch set (`head_files` = drift + branch) | 50 / **100** / 200 files | **100**: with drift held at ≤ 50 (G9), any branch of ≤ 50 files qualifies, and the measured p90 branch is 34; the §5.1 replay puts 94 of 94 worktrees within 100 once their cluster base exists; edge loss grows with patch size |
 | **G5** | Uncommitted and untracked files in overlays | (a) off; (b) on, marked partial | **(a) off** for the first wave; turn on once overlay latency is measured |
-| **G6** | Where builds run | (a) capped test slice on the fleet host; (b) remote test box | **(a)** now; (b) when that box exists — it is one adapter on the job seam |
+| **G6** | Where builds run | (a) a dedicated `ccrc-graph.slice` on the fleet host, one hard-capped low-weight transient service per job, with an admission check; (b) the capped test slice; (c) remote test box | **(a)** now, never (b) (§12.1); (c) when that box exists — it is one adapter on the job seam |
 | **G7** | Overlay latency | (a) a 60 s tick with a due check that fires on a new request (§10); (b) a `.path` unit on the flat `requests/` dir; (c) poll only | **(a)**: the overlay lands about one tick plus one build after the second query, with no new unit, and the tick is the debounce |
 | **G8** | Migration of the 131 existing `graphify-out` directories | (a) automatic, idle-gated, budgeted, `memory/` preserved; (b) operator-run one-shot | **(a)** |
-| **G9** | Base retention, drift and rate | `MAX_BASES` 6, `BASE_MAX_DRIFT_FILES` 50, one tip base per repo per 6 h; or tighter/looser | **6, 50 and 6 h**, set from Task 0's replay, then revisited after a week of census data |
+| **G9** | Base retention, drift and rate | (a) one immutable base per live merge-base cluster, radius `BASE_MAX_DRIFT_FILES` 50, bounded by `STORE_MAX_MB` (8 GB), one tip base per repo per 6 h; (b) revision 2's count cap (`MAX_BASES` 6) with vote-margin eviction; (c) (a) at radius 100 | **(a)**: the replay was run before this ruling (§5.1). It needs 30 bases (≈1.65 GB) for 94 worktrees, and every tree then qualifies for an overlay. (b) leaves a one-tree cluster without a base for its whole life; (c) saves 4 bases but drops 10 trees out of overlay range. Revisit after a week of census data |
+| **G12** | When an overlay is rebuilt | (a) pull-on-read: only when a query arrived after the served overlay was built (§6.2); (b) on every `HEAD` move while the request is live (revision 2) | **(a)**: a `HEAD` move alone never builds; a busy tree that is not read costs nothing |
 | **G11** | Patch bases too? | (a) bases always full, overlays the only patch path; (b) patch tip bases from the previous tip with a periodic full build | **(a)**: about 6 CPU-minutes a day saved here does not pay for a patch-chain state and a drift class on shared graphs (§2, §13) |
 | **G10** | Gate arming | (a) by files differing (`GATE_MAX_DIFF_FILES`, default 300); (b) keep commits behind (10) | **(a)** — a worktree 12 commits ahead of a base at its merge-base is a good graph, and "commits behind" would refuse it |
 
