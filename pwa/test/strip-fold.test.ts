@@ -1,12 +1,15 @@
 // The lanes strip's fold (desktop polish S5b, D-6530): `stripFold.ts` decides how many lanes a folded strip shows, whether
 // it folds at all, and what its one line of words says. Pure L1, so the cases here run with no DOM: the shared 17-lane
 // fixture for the operator's fleet, and small fixtures of their own for the edges (five lanes, six, all expired).
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
+import { act, renderHook, cleanup } from '@testing-library/react';
 import path from 'node:path';
 import type { AccountUsage } from '../../shared/api';
 import { lanesByFree } from '../src/fleet/laneOrder';
+import * as fold from '../src/fleet/stripFold';
 import { FOLD_SHOWN, LANE_CARD_MIN, foldLanes, foldShown, foldWords, rowFit } from '../src/fleet/stripFold';
+import { useRowWidth } from '../src/fleet/useRowWidth';
 import { declaredValues, norm, stripComments } from './cssRule';
 import { seventeenLanes } from './seventeenLanes';
 
@@ -160,9 +163,21 @@ describe('what the fold hides and what its words count', () => {
 });
 
 describe('how many lanes a folded strip shows', () => {
-  it('a phone folds to four whatever its width', () => {
-    for (const n of [null, 0, 1, 2, 3, 7, 40]) expect(foldShown(false, n)).toBe(FOLD_SHOWN);
+  it('a phone folds to two lines of its tracks: 2 tracks show 4, 4 show 8, 1 shows 2, 3 show 6', () => {
+    expect(foldShown(false, 2)).toBe(4);
+    expect(foldShown(false, 4)).toBe(8);
+    expect(foldShown(false, 1)).toBe(2);
+    expect(foldShown(false, 3)).toBe(6);
+  });
+
+  it('an unmeasured phone folds to FOLD_SHOWN, never null', () => {
+    expect(foldShown(false, null)).toBe(FOLD_SHOWN);
+    expect(foldShown(false, null)).not.toBeNull();
+  });
+
+  it('FOLD_SHOWN is 4 and FOLD_LINES is 2', () => {
     expect(FOLD_SHOWN).toBe(4);
+    expect((fold as Record<string, unknown>).FOLD_LINES).toBe(2);
   });
 
   it("a desk folds to one card fewer than rowFit's tracks, the last track the end cell's", () => {
@@ -208,5 +223,36 @@ describe('the fold reads no layout and the card floor is written once', () => {
     for (const file of ['fleet/stripFold.ts', 'fleet/stripExpanded.ts']) {
       expect(code(sourceOf(file)), file).not.toMatch(/matchMedia|useMediaQuery|useDesk|innerWidth|ResizeObserver/);
     }
+  });
+});
+
+describe('useRowWidth', () => {
+  afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
+
+  /** A group whose computed style answers `grid` as its `grid-template-columns`, and a `ResizeObserver` that measures
+   *  300 px of content at once. */
+  function measure(grid: string): { tracks: number | null; width: number; gap: number } | null {
+    vi.spyOn(window, 'getComputedStyle').mockImplementation(() => ({ columnGap: '6px', gridTemplateColumns: grid }) as CSSStyleDeclaration);
+    vi.stubGlobal('ResizeObserver', class {
+      private readonly cb: ResizeObserverCallback;
+      constructor(cb: ResizeObserverCallback) { this.cb = cb; }
+      observe(target: Element): void {
+        this.cb([{ target, contentRect: { width: 300 } } as unknown as ResizeObserverEntry], this as unknown as ResizeObserver);
+      }
+      unobserve(): void {}
+      disconnect(): void {}
+    });
+    const { result } = renderHook(() => useRowWidth());
+    act(() => result.current.ref(document.createElement('div')));
+    return result.current.row as { tracks: number | null; width: number; gap: number } | null;
+  }
+
+  it('counts the drawn tracks of the computed grid-template-columns', () => {
+    expect(measure('172px 172px')).toEqual({ width: 300, gap: 6, tracks: 2 });
+    expect(measure('145.5px 145.5px 145.5px 145.5px')).toEqual({ width: 300, gap: 6, tracks: 4 });
+  });
+
+  it('reads null tracks for an empty, none or unparseable value', () => {
+    for (const grid of ['', 'none', 'repeat(2, 1fr)', 'auto-fill']) expect(measure(grid)?.tracks, JSON.stringify(grid)).toBeNull();
   });
 });

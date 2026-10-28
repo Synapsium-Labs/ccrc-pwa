@@ -119,8 +119,8 @@ describe('docs L0 single definitions (docs reader W1a, row 48)', () => {
 // Docs W1, Task 2 (spec 2026-10-01 section 2 (b), section 2 (i), section 3.5): the failure vocabulary, its retry
 // classes, the redactor and the ccd wire types each have ONE home, `shared/docs.ts`. The server's L1 status table,
 // its L3 adapter and the PWA's sentence table all key on these names, so a second declaration is a second
-// vocabulary that nothing forces to agree. The python copies (`FAILURES`, `REDACT_RULES`) live in `ccd/ccd`,
-// outside ROOTS; `docs-parity.test.ts` binds those. APPENDED after the file's last line:
+// vocabulary that nothing forces to agree. The python copy (`FAILURES`) lives in `ccd/ccd`, which redacts through
+// shared/redact.mjs (D-7077), outside ROOTS; `docs-parity.test.ts` binds it. APPENDED after the file's last line:
 // `session-hook.test.ts`'s citation audit cites this file by line, so nothing above may move.
 describe('docs failure vocabulary, redactor and ccd wire types are declared once, in shared/docs.ts (docs W1)', () => {
   const DOCS = path.join(ccrcRoot, 'shared', 'docs.ts');
@@ -420,4 +420,16 @@ describe('docs sections, grammar predicates and ref spec are declared once, in s
       expect(ALL.filter((f) => FN_DEF(name).test(readFileSync(f, 'utf8'))).map(rel)).toEqual(['shared/docs.ts']);
     });
   }
+});
+
+// W5 Task C5h (D-7077; ARCH-67; spec §5.8 "python redactor: 0"): ccd's docs helper redacts through shared/redact.mjs's docs
+// profile (shared/redact-cli.mjs), so no python (pattern, suffix) rule table stands in ccd's shipped programs. The census is
+// census-w5/redactors.ts#pythonRedactorTables (1 at C5h's base, `ccd/ccd#_docs_py:REDACT_RULES`); it may only shrink, and
+// it is at zero.
+import { pythonRedactorTables as c5hPythonRedactorTables } from '../census-w5/redactors.js';
+
+describe('pythonRedactorTables() equals [], may only shrink (C5h, D-7077)', () => {
+  it('no python rule table fed to re.compile stands in ccd\'s shipped programs', () => {
+    expect(c5hPythonRedactorTables().map((s) => s.name)).toEqual([]);
+  });
 });

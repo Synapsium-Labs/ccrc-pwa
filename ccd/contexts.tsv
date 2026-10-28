@@ -694,6 +694,7 @@ _gh_pr_queue	C4
 _pr_queue_stamp	C4
 _pr_queue_py	C4
 _docs_max_bytes_ok	C9
+_docs_redact_cli	C9
 _docs_front	C9
 cmd_docs_index	C9
 cmd_docs_tree	C9

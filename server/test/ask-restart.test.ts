@@ -17,6 +17,7 @@ import { CoordStore } from '../src/coord/store.js';
 import { localIO } from '../src/io.js';
 import { okAsk, okAsks } from './coordReadHelpers.js';
 import { questionsTestView } from '../src/coord/questions.js';
+import { doorInsOf } from './questionDoorIns.js';
 
 afterEach(() => { vi.restoreAllMocks(); });
 
@@ -314,7 +315,7 @@ describe('held questions survive a restart (D-5925)', () => {
     at(T0 + ASK_GRACE_MS + ASK_SWEEP_MS);
     await w2.sweepAsks();
     expect(f.askPushes()).toHaveLength(1);
-    w2.answeredLate(CHILD, askId, PARENT);
+    doorInsOf(w2).answeredLate(CHILD, askId, PARENT);
     const pushes = f.askPushes();
     expect(pushes).toHaveLength(2);
     expect(pushes[1]!.body).toContain(PARENT);

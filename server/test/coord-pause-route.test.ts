@@ -257,6 +257,9 @@ describe('the token gate is total, with the operator routes excluded BY NAME', (
    *  `/api/coord/review-cap` (D-6795): the operator's lift of the review-round cap for one work run, caps' argument
    *  exactly: no machine lane may lift a cap on its own work, and the PWA holds no box token.
    *
+   *  `/api/questions/:id/answer` (W3 Q3f, D-7030): the operator's answer to a question their fleet put to them, an ask
+   *  or a dialog. caps' argument holds: no machine lane answers in the operator's name, and the PWA holds no box token.
+   *
    *  `/api/coord/collect-lane` (child-reclamation wave 10): the operator's
    *  switch on what arms the temp-root collector's deletion. Arming it starts
    *  a deleting lane rather than releasing a wedge, so `UNGATED`'s argument
@@ -280,6 +283,8 @@ describe('the token gate is total, with the operator routes excluded BY NAME', (
   const SESSION_ONLY = new Set([
     '/api/coord/caps', '/api/coord/reclaim-pause', '/api/coord/stall-watch', '/api/coord/collect-lane',
     '/api/coord/review-cap',
+    // W3 Q3f (D-7030): the operator door of the question family (see the docstring above).
+    '/api/questions/:id/answer',
   ]);
 
   /** The two mechanisms that count as "the token was checked" — the shared

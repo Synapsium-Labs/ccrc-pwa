@@ -9,6 +9,11 @@
 // away. Every read and write is in try/catch and goes through `window.localStorage` (Node 22 ships a bare
 // `localStorage` global that shadows jsdom's; `foldState.ts` has the same idiom).
 //
+// THE PHONE NEVER READS IT: `useStripExpanded(enabled)` answers `false` and touches nothing (no storage read, no
+// subscription, no `storage` listener) when `enabled` is false. Below 900 px the strip passes false
+// (phone-strip-tap-panel: a phone is always folded, with the panel one tap away), so this per-device key keeps its desk
+// meaning only, and a phone neither reads nor writes it.
+//
 // THE PAGE VALUE: the last choice made on this page is also kept in a module value, as `theme.ts` keeps `chosen`.
 // It answers in two cases only. (1) Storage is unreadable: the strip reads folded until this page chooses, and then the
 // page's choice holds. (2) A write was REFUSED (private mode, a full quota, a policy error, with reads still working):
@@ -65,7 +70,13 @@ function subscribe(notify: () => void): () => void {
   };
 }
 
-/** Whether the strip shows every lane, live: re-read when this page chooses or another tab writes the key. */
-export function useStripExpanded(): boolean {
-  return useSyncExternalStore(subscribe, readExpanded, () => false);
+/** The disabled hook's whole machinery: no subscription to make, and one answer. Module-level, so each branch hands
+ *  `useSyncExternalStore` the same function identities on every render. */
+const subscribeNothing = (): (() => void) => () => {};
+const readFolded = (): boolean => false;
+
+/** Whether the strip shows every lane, live: re-read when this page chooses or another tab writes the key. With
+ *  `enabled` false (a phone) it answers `false` and touches nothing: no storage read, no subscription, no listener. */
+export function useStripExpanded(enabled: boolean): boolean {
+  return useSyncExternalStore(enabled ? subscribe : subscribeNothing, enabled ? readExpanded : readFolded, readFolded);
 }

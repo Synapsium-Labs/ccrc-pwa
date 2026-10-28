@@ -13,6 +13,12 @@
 //   chevron's line and the meta wraps inside the toggle; a name longer than the line is cut only at its cap, still on
 //   the chevron's line.
 //
+// - D-6332: at the desk (900 and up) a session row draws its name, its branch and its programme whole, the name (paired
+//   or plain) and the branch on at most two lines and never out of their box sideways, and a name or branch longer
+//   than that is cut at its second line's end; below 900 a long name and a long programme keep their token-shortened
+//   forms. Under a mouse one row's ⋯ is drawn at a time. Measured in the Refined cards, in Instrument's status mode
+//   (its default) and in its project mode.
+//
 // Each case runs both skins and both Phosphor palettes, and also asserts no horizontal overflow and no page error.
 // `test/account-row-fit.test.tsx` and `test/folded-card-floor.test.ts` keep the CSS and markup pins that produce this
 // geometry; this file is where the geometry itself is held.
@@ -361,6 +367,614 @@ describe('D-5576: every project card keeps its name, open and folded', () => {
           await expect.poll(() => toggle.getAttribute('aria-expanded')).toBe('false');
           const folded = await measureCard(page, project);
           check(folded, `${project}, folded`);
+        }
+        expect(await sideScroll(page)).toBe(0);
+        expect(errors).toEqual([]);
+      } finally {
+        await close();
+      }
+    });
+  }
+});
+
+// ---- D-6332 --------------------------------------------------------------------------------------------------------
+// One project card of rows whose names are 12, 30, 60 and 104 characters long, made of hyphenated tokens (so the name
+// breaks where the card breaks it), a row with a short name and a very long branch, and a short row the desk opens.
+// Every row is busy or needs the operator: a card of idle rows that need nothing renders folded, with no rows at all.
+// The needs-you rows and the context rows (D-7252) are described where they are declared.
+
+const NAME_12 = 'north-to-sea';
+const NAME_30 = 'quiet-river-gentle-bridge-lamp';
+const NAME_60 = 'amber-field-narrow-garden-stone-silver-harbor-morning-cedars';
+const NAME_104 = `${NAME_60}-${NAME_30}-${NAME_12}`;
+/** 60 characters joined by underscores: `shortenByToken` splits at `_`, CSS does not, so the name has a short form (it is a
+ *  `Fit` pair) and no break point of its own in the full form. */
+const NAME_SNAKE = 'alpha_beta_gamma_delta_epsilon_zeta_theta_iota_kappa_lambdas';
+/** Two names at or under the 28-character budget's reach that `shortenByToken` leaves whole, so each draws as ONE plain
+ *  `.sess-label` (no `Fit` pair): 40 characters with no separator at all, and 26 joined by `_`, which CSS does not break
+ *  at. Each is wider than the desk's narrowest track. */
+const NAME_UNBROKEN = 'quietriverbridgelampgardenstoneharborsea';
+const NAME_SNAKE_26 = 'alpha_beta_gamma_delta_eps';
+const NAME_BRANCH_ROW = 'branch-row';
+const NAME_SELECTED = 'short-select';
+const BRANCH_120 = `ws/${'garden-stone-silver-harbor-morning/'.repeat(3)}quiet-rivers`;
+const FIT_PROJECT = 'project-d';
+/** Two rows held by two open runs, so their context cell is the programme and its wave (`ProgrammeWave`): slugs longer
+ *  than `PROGRAMME_BUDGET` (16), so each draws a `Fit` pair, hyphen-joined so the full form wraps where CSS breaks it. */
+const PROG_A = 'harbor-lights-desk-programme-for-rows';
+const PROG_B = 'garden-stone-polish-of-the-fleet';
+const PROG_A_SHORT = 'harbor-lights…';
+const PROG_B_SHORT = 'garden-stone…';
+const NAME_PROG_A = 'prog-row-a';
+const NAME_PROG_B = 'prog-row-b';
+/** Three needs-you rows (bucket `attention`) whose names are 30, 60 and 104 hyphen-joined characters, each with a short
+ *  branch for its context cell: in Instrument's status mode the state word (`waiting`, and its marker) goes on that
+ *  context line, never on a line of its own under a long name (R21's F2, the operator's R121). */
+const NAME_N30 = 'needs-reply-gentle-bridge-lamp';
+const NAME_N60 = 'needs-reply-narrow-garden-stone-silver-harbor-morning-cedars';
+const NAME_N104 = `${NAME_N60}-quiet-river-gentle-bridge-lamp-north-to-sea`;
+
+/** Rows whose context is wider than what the state word leaves of its line at 1280 (D-7252): a programme and its wave
+ *  tail (a slug within `PROGRAMME_BUDGET`, so `main` draws the same text), a child marker naming a run on the board, a
+ *  child marker whose run is not on the board, and a branch of 26 characters. Each comes as a needs-you row and as a
+ *  working row (`waiting · needs you` leaves the context about 95 px at 1280, `working` about 171), and each with a
+ *  short name, which shares its line with the state word, and with a 26-character one, which never does at the desk
+ *  and sends the state word to the context line when the context fits there. */
+const PROG_C = 'harbor-lite';
+const PROG_D = 'harbor-lights';
+const BRANCH_26 = 'ws/harbor-lights-desk-rows';
+const CONTEXT_ROWS = ['cprog', 'cchild', 'cboard', 'cbranch'] as const;
+/** The 26-character name of each long row: one line in every desk track, and never beside the state word there. */
+const LONG_TAIL: Record<(typeof CONTEXT_ROWS)[number], string> = {
+  cprog: 'quiet-harbor-lamps', cchild: 'quiet-harbor-lamp', cboard: 'quiet-harbor-lamp', cbranch: 'quiet-river-lamp',
+};
+const contextName = (row: (typeof CONTEXT_ROWS)[number], k: 'n' | 'w', long: boolean): string =>
+  long ? `${row}-${k}-${LONG_TAIL[row]}` : `${row}-${k}`;
+/** What `main` (2c5d8852a) draws for these rows in Instrument's status mode, measured in real Chrome, by name length,
+ *  state and width: a short name shares its line with the state word, so the row is two lines, the context under it;
+ *  a long name does not share it with `waiting · needs you` at any desk width, nor with `working` at 1280, and those
+ *  rows are three lines, the name, the state, the context. */
+const MAIN_ROW_HEIGHT = (long: boolean, k: 'n' | 'w', width: number): number =>
+  long && (k === 'n' || width === 1280) ? 56.75 : 39.75;
+
+const fitRow = (slug: string, name: string, branch: string | null, extra: object = {}): object =>
+  session(FIT_PROJECT, slug, { name, branch, status: 'busy', bucket: 'working', ...extra });
+const fitRun = (id: number, program: string, slug: string): object => ({
+  id, program, programTitle: program, wave: 1, waveOf: 2, project: FIT_PROJECT, homeProject: null,
+  sessionId: `${FIT_PROJECT}-${slug}`, workspace: slug, branch: null, state: 'working', closedAt: null, kind: 'work',
+  reviews: null,
+});
+const FIT_RUNS = [
+  fitRun(501, PROG_A, 'rproga'), fitRun(502, PROG_B, 'rprogb'),
+  ...(['n', 'w'] as const).flatMap((k, i) => [false, true].flatMap((long, j) => [
+    fitRun(510 + 4 * i + 2 * j, PROG_C, `cprog-${k}${long ? 'l' : ''}`),
+    fitRun(511 + 4 * i + 2 * j, PROG_D, `cchild-${k}${long ? 'l' : ''}`),
+  ])),
+];
+/** A needs-you (`n`) and a working (`w`) row, short-named and long-named, for each context of `CONTEXT_ROWS`. */
+const contextRows = (): object[] => (['n', 'w'] as const).flatMap((k, i) => [false, true].flatMap((long, j) => {
+  const need = k === 'n' ? { bucket: 'attention', status: 'idle' } : {};
+  const ws = (row: string): string => `${row}-${k}${long ? 'l' : ''}`;
+  const run = 510 + 4 * i + 2 * j;
+  return [
+    fitRow(ws('cprog'), contextName('cprog', k, long), null, { ...need, held: `program:${PROG_C} wave:1/2 run:${run}` }),
+    fitRow(ws('cchild'), contextName('cchild', k, long), null, { ...need, child: { kind: 'child', runId: run + 1 } }),
+    fitRow(ws('cboard'), contextName('cboard', k, long), null, { ...need, child: { kind: 'child', runId: 599 } }),
+    fitRow(ws('cbranch'), contextName('cbranch', k, long), BRANCH_26, need),
+  ];
+}));
+const FIT_SESSIONS = [
+  fitRow('r12', NAME_12, null),
+  fitRow('r30', NAME_30, null),
+  fitRow('r60', NAME_60, null),
+  fitRow('r104', NAME_104, null),
+  fitRow('rsnake', NAME_SNAKE, null),
+  fitRow('runbroken', NAME_UNBROKEN, null),
+  fitRow('rsnake26', NAME_SNAKE_26, null),
+  fitRow('rbranch', NAME_BRANCH_ROW, BRANCH_120),
+  fitRow('rproga', NAME_PROG_A, null, { held: `program:${PROG_A} wave:1/2 run:501` }),
+  fitRow('rprogb', NAME_PROG_B, null, { held: `program:${PROG_B} wave:1/2 run:502` }),
+  fitRow('rn30', NAME_N30, 'ws/rn30', { bucket: 'attention', status: 'idle' }),
+  fitRow('rn60', NAME_N60, 'ws/rn60', { bucket: 'attention', status: 'idle' }),
+  fitRow('rn104', NAME_N104, 'ws/rn104', { bucket: 'attention', status: 'idle' }),
+  ...contextRows(),
+  fitRow('rsel', NAME_SELECTED, null),
+];
+const FIT_SELECTED = `${FIT_PROJECT}-rsel`;
+const FIT_FIXTURE: AppFixture = {
+  api: {
+    '/api/accounts': { accounts: [usage('lane-a', 40, 50)], projected: null, roster: ROSTER },
+    '/api/projects': { roots: ['/w'], projects: [{ name: FIT_PROJECT, workdir: `/w/${FIT_PROJECT}` }] },
+    '/api/runs': FIT_RUNS,
+    '/api/claims': [],
+  },
+  fleetFrames: [{ type: 'fleet', sessions: FIT_SESSIONS }, { type: 'runs', runs: FIT_RUNS }],
+};
+
+/** The three ways a row list is drawn: Refined's project cards, and Instrument's status mode (its default: the mode
+ *  key is NOT seeded) and project mode. */
+const FIT_MODES = [
+  { skin: REFINED, mode: 'cards' },
+  { skin: INSTRUMENT, mode: 'status' },
+  { skin: INSTRUMENT, mode: 'project' },
+] as const;
+const FIT_THEMES = THEMES;
+const fitViews = (widths: readonly number[]): { view: AppView; mode: string }[] =>
+  FIT_MODES.flatMap(({ skin, mode }) => FIT_THEMES.flatMap((theme) => widths.map((width) => ({ view: { skin, theme, width }, mode }))));
+
+async function bootFit(view: AppView, mode: string, route: string): Promise<{ page: Page; errors: string[]; close: () => Promise<void> }> {
+  const { ctx, page, errors } = await openApp(browser!, view, FIT_FIXTURE);
+  if (mode === 'project') {
+    await ctx.addInitScript((key) => {
+      try { localStorage.setItem(key, 'project'); } catch { /* no storage: Instrument opens on status */ }
+    }, GROUP_MODE_KEY);
+  }
+  await page.goto(server!.origin + route);
+  await page.waitForFunction(([skin, theme]) => {
+    const root = document.documentElement;
+    return root.getAttribute('data-skin') === skin && (root.getAttribute('data-theme') ?? 'phosphor') === theme;
+  }, [view.skin, view.theme] as const, { timeout: 20_000 });
+  await page.locator('.sess-line').first().waitFor();
+  return { page, errors, close: () => ctx.close() };
+}
+
+/** The desk routes select `FIT_SELECTED`: exactly one row wears `.sess-line--active`, and it is that short row (a route
+ *  that failed to resolve would leave the fixture's selected row a silent no-op). */
+async function expectSelectedRow(page: Page): Promise<void> {
+  const active = page.locator('.sess-line--active');
+  expect(await active.count(), 'exactly one row is the selected row').toBe(1);
+  expect(await active.locator('.sess-label').first().textContent(), 'and it is the selected short row').toBe(NAME_SELECTED);
+}
+
+interface FitBox {
+  /** The name or the context cell drew a pair of forms (`Fit`), or only plain text. */
+  readonly paired: boolean;
+  readonly fullShown: boolean;
+  readonly shortShown: boolean;
+  /** The text of the form that is drawn. */
+  readonly drawn: string;
+  readonly height: number;
+  readonly width: number;
+  readonly lineHeight: number;
+  readonly scrollHeight: number;
+  readonly scrollWidth: number;
+  readonly clientWidth: number;
+  readonly clientHeight: number;
+  readonly title: string | null;
+  readonly openTitle: string | null;
+}
+
+/** Measure the name (`part: 'name'`) or the branch (`'branch'`) of the row whose name is `name`. */
+function measureFit(page: Page, name: string, part: 'name' | 'branch'): Promise<FitBox> {
+  return page.evaluate(([want, which]) => {
+    const line = [...document.querySelectorAll<HTMLElement>('.sess-line')].find((l) => {
+      const open = l.querySelector('.sess-open');
+      return (open?.querySelector('.sr-only') ?? open?.querySelector('.sess-label'))?.textContent === want;
+    });
+    if (line === undefined) throw new Error(`no row named ${want}`);
+    const open = line.querySelector<HTMLElement>('.sess-open')!;
+    const box = which === 'name'
+      ? (line.querySelector<HTMLElement>('.sess-label-fit') ?? line.querySelector<HTMLElement>('.sess-label')!)
+      : line.querySelector<HTMLElement>('.sess-context[data-context="branch"]');
+    if (box === null) throw new Error(`no ${which} on the row named ${want}`);
+    const full = box.querySelector<HTMLElement>('.fit-full');
+    const short = box.querySelector<HTMLElement>('.fit-short');
+    const shown = (el: HTMLElement | null): boolean => el !== null && getComputedStyle(el).display !== 'none';
+    const r = box.getBoundingClientRect();
+    const cs = getComputedStyle(box);
+    return {
+      paired: full !== null && short !== null,
+      fullShown: full === null ? true : shown(full),
+      shortShown: shown(short),
+      drawn: (shown(short) ? short : full ?? box)?.textContent ?? '',
+      height: r.height,
+      width: r.width,
+      lineHeight: parseFloat(cs.lineHeight),
+      scrollHeight: box.scrollHeight,
+      scrollWidth: box.scrollWidth,
+      clientWidth: box.clientWidth,
+      clientHeight: box.clientHeight,
+      title: box.getAttribute('title'),
+      openTitle: open.getAttribute('title'),
+    };
+  }, [name, part] as const);
+}
+
+interface ProgrammeBox {
+  readonly fullShown: boolean;
+  readonly shortShown: boolean;
+  /** The text of the programme form that is drawn, and the wave tail beside it. */
+  readonly drawn: string;
+  readonly wave: string;
+  /** How far the programme's right edge runs past the `.sess-body` content box, in px (zero or less is inside). */
+  readonly overhang: number;
+}
+
+/** Measure the programme cell (`ProgrammeWave`) of the row whose name is `name`. */
+function measureProgramme(page: Page, name: string): Promise<ProgrammeBox> {
+  return page.evaluate((want) => {
+    const line = [...document.querySelectorAll<HTMLElement>('.sess-line')]
+      .find((l) => l.querySelector('.sess-open .sess-label')?.textContent === want);
+    if (line === undefined) throw new Error(`no row named ${want}`);
+    const prog = line.querySelector<HTMLElement>('.sess-pw-prog');
+    if (prog === null) throw new Error(`no programme on the row named ${want}`);
+    const full = prog.querySelector<HTMLElement>('.fit-full');
+    const short = prog.querySelector<HTMLElement>('.fit-short');
+    const shown = (el: HTMLElement | null): boolean => el !== null && getComputedStyle(el).display !== 'none';
+    const body = line.querySelector<HTMLElement>('.sess-body')!;
+    const bs = getComputedStyle(body);
+    const edge = body.getBoundingClientRect().right - parseFloat(bs.paddingRight);
+    return {
+      fullShown: shown(full),
+      shortShown: shown(short),
+      drawn: (shown(short) ? short : full)?.textContent ?? '',
+      wave: line.querySelector('.sess-pw-wave')?.textContent ?? '',
+      overhang: prog.getBoundingClientRect().right - edge,
+    };
+  }, name);
+}
+
+interface StatusRow {
+  readonly height: number;
+  /** Lines drawn by the name, and by the whole body (name, state word, context), counted as clusters of text centres. */
+  readonly nameLines: number;
+  readonly lines: number;
+  /** The state cell's first line sits on the context's first line (centres within 6 px), and on the name's first. */
+  readonly onContext: boolean;
+  readonly besideName: boolean;
+  readonly needsYou: boolean;
+}
+
+/** Measure an Instrument status row's lines, the way `instrument-desk.browser.test.ts` counts them: a line is a cluster
+ *  of text boxes whose vertical centres lie within 6 px of each other (the name's 15 px and the state's 12 px share a
+ *  line though their tops differ). */
+function measureStatusRow(page: Page, name: string): Promise<StatusRow> {
+  return page.evaluate((want) => {
+    // A clamped name's lines past the clamp still have text boxes, under the drawn ones: only a centre inside the
+    // element's own box counts.
+    const centres = (els: Element[]): number[] => {
+      const out: number[] = [];
+      for (const el of els) {
+        const own = el.getBoundingClientRect();
+        const walk = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+        for (let n = walk.nextNode(); n !== null; n = walk.nextNode()) {
+          if ((n.textContent ?? '').trim() === '' || n.parentElement!.closest('.sr-only') !== null) continue;
+          const range = document.createRange();
+          range.selectNodeContents(n);
+          for (const rc of range.getClientRects()) {
+            const c = rc.top + rc.height / 2;
+            if (rc.width > 0 && rc.height > 0 && c >= own.top && c <= own.bottom) out.push(c);
+          }
+        }
+      }
+      return out.sort((a, b) => a - b);
+    };
+    const lineCount = (cs: number[]): number => {
+      let n = 0;
+      let last = -Infinity;
+      for (const c of cs) if (c - last > 6) { n += 1; last = c; }
+      return n;
+    };
+    const line = [...document.querySelectorAll<HTMLElement>('.sess-line')].find((l) => {
+      const open = l.querySelector('.sess-open');
+      return (open?.querySelector('.sr-only') ?? open?.querySelector('.sess-label'))?.textContent === want;
+    });
+    if (line === undefined) throw new Error(`no row named ${want}`);
+    const body = line.querySelector('.sess-body')!;
+    const labels = [...line.querySelectorAll('.sess-open .sess-label')].filter((l) => l.getBoundingClientRect().width > 0);
+    const state = line.querySelector('.sess-meta:not(.sess-meta--context)');
+    const context = line.querySelector('.sess-meta--context');
+    const nameC = centres(labels);
+    const stateC = centres(state === null ? [] : [state]);
+    const contextC = centres(context === null ? [] : [context]);
+    const near = (a: number | undefined, b: number | undefined): boolean => a !== undefined && b !== undefined && Math.abs(a - b) <= 6;
+    return {
+      height: (line.closest('li') ?? line).getBoundingClientRect().height,
+      nameLines: lineCount(nameC), lines: lineCount(centres([...body.children])),
+      onContext: near(stateC[0], contextC[0]), besideName: near(stateC[0], nameC[0]),
+      needsYou: (state?.textContent ?? '').includes('needs you'),
+    };
+  }, name);
+}
+
+interface ContextRow {
+  readonly height: number;
+  /** The context, or a box inside it, is wider than the box that holds it: its text is cut sideways. */
+  readonly clipped: string[];
+  /** Area, in px², where the state word's box and the context's text cross. */
+  readonly overlap: number;
+  /** The state word's text sits on the context's first line, and how many lines the context's text takes. */
+  readonly sharesLine: boolean;
+  readonly contextLines: number;
+  readonly context: string;
+}
+
+/** Measure an Instrument status row's context cell: whether any of it is cut sideways (`scrollWidth` against
+ *  `clientWidth`, for the cell and every box drawn inside it, the screen-reader copy aside), and whether its text runs
+ *  under the state word. */
+function measureContextRow(page: Page, name: string): Promise<ContextRow> {
+  return page.evaluate((want) => {
+    const line = [...document.querySelectorAll<HTMLElement>('.sess-line')]
+      .find((l) => l.querySelector('.sess-open .sess-label')?.textContent === want);
+    if (line === undefined) throw new Error(`no row named ${want}`);
+    const context = line.querySelector<HTMLElement>('.sess-meta--context');
+    if (context === null) throw new Error(`no context on the row named ${want}`);
+    const state = line.querySelector<HTMLElement>('.sess-body > .sess-meta:not(.sess-meta--context)')!.getBoundingClientRect();
+    const clipped: string[] = [];
+    for (const el of [context, ...context.querySelectorAll<HTMLElement>('*')]) {
+      if (el.closest('.sr-only') !== null || el.getClientRects().length === 0) continue;
+      if (el.scrollWidth > el.clientWidth + 1) clipped.push(`${el.className}: ${el.scrollWidth} of ${el.clientWidth}px`);
+    }
+    let overlap = 0;
+    const own = context.getBoundingClientRect();
+    const centres: number[] = [];
+    const walk = document.createTreeWalker(context, NodeFilter.SHOW_TEXT);
+    for (let n = walk.nextNode(); n !== null; n = walk.nextNode()) {
+      if ((n.textContent ?? '').trim() === '' || n.parentElement!.closest('.sr-only') !== null) continue;
+      const range = document.createRange();
+      range.selectNodeContents(n);
+      for (const rc of range.getClientRects()) {
+        const w = Math.min(rc.right, state.right) - Math.max(rc.left, state.left);
+        const h = Math.min(rc.bottom, state.bottom) - Math.max(rc.top, state.top);
+        if (w > 0 && h > 0) overlap += w * h;
+        // A clamped branch's lines past the clamp still have text boxes, under the drawn ones: only a centre inside the
+        // cell's own box counts as a drawn line.
+        const c = rc.top + rc.height / 2;
+        if (rc.width > 0 && rc.height > 0 && c >= own.top && c <= own.bottom) centres.push(c);
+      }
+    }
+    centres.sort((a, b) => a - b);
+    let contextLines = 0;
+    let last = -Infinity;
+    for (const c of centres) if (c - last > 6) { contextLines += 1; last = c; }
+    const stateMid = state.top + state.height / 2;
+    return {
+      height: (line.closest('li') ?? line).getBoundingClientRect().height, clipped, overlap,
+      sharesLine: centres.length > 0 && Math.abs(stateMid - centres[0]!) <= 6, contextLines, context: context.innerText,
+    };
+  }, name);
+}
+
+/** The name of the row that holds the focus, or null when the focus is in no row. */
+function focusedRow(page: Page): Promise<string | null> {
+  return page.evaluate(() => {
+    const line = document.activeElement?.closest('.sess-line');
+    if (line === null || line === undefined) return null;
+    const open = line.querySelector('.sess-open');
+    return (open?.querySelector('.sr-only') ?? open?.querySelector('.sess-label'))?.textContent ?? null;
+  });
+}
+
+/** The names of the rows whose ⋯ is drawn (computed opacity 1), in list order. */
+function litActions(page: Page): Promise<string[]> {
+  return page.evaluate(() => [...document.querySelectorAll<HTMLElement>('.sess-line')].flatMap((l) => {
+    const actions = l.querySelector<HTMLElement>('.sess-actions');
+    if (actions === null || getComputedStyle(actions).opacity !== '1') return [];
+    const open = l.querySelector('.sess-open');
+    return [(open?.querySelector('.sr-only') ?? open?.querySelector('.sess-label'))?.textContent ?? ''];
+  }));
+}
+
+describe('D-6332: a session row shows its name whole where it has room', () => {
+  it('the fixture names are exactly 12, 30, 60, 104 and 60 (underscored) characters, and the branch is 120', () => {
+    expect([NAME_12, NAME_30, NAME_60, NAME_104, NAME_SNAKE, BRANCH_120].map((n) => n.length)).toEqual([12, 30, 60, 104, 60, 120]);
+    expect([NAME_UNBROKEN, NAME_SNAKE_26].map((n) => n.length)).toEqual([40, 26]);
+    expect([NAME_N30, NAME_N60, NAME_N104].map((n) => n.length)).toEqual([30, 60, 104]);
+    expect([PROG_C, PROG_D, BRANCH_26].map((n) => n.length)).toEqual([11, 13, 26]);
+    for (const row of CONTEXT_ROWS) for (const k of ['n', 'w'] as const) expect(contextName(row, k, true)).toHaveLength(26);
+  });
+
+  for (const { view, mode } of fitViews([1280, 1920])) {
+    it(`at 1280 and 1920, a 30-character name renders whole in both skins (${named(view)}, ${mode})`, async () => {
+      const { page, errors, close } = await bootFit(view, mode, `/s/${FIT_SELECTED}`);
+      try {
+        await expectSelectedRow(page);
+        const twelve = await measureFit(page, NAME_12, 'name');
+        expect(twelve.paired, 'a 12-character name has no shortened form').toBe(false);
+        const m = await measureFit(page, NAME_30, 'name');
+        expect(m.paired, 'the 30-character name draws both forms').toBe(true);
+        expect(m.fullShown, 'the full form is drawn').toBe(true);
+        expect(m.shortShown, 'the shortened form is not').toBe(false);
+        expect(m.drawn).toBe(NAME_30);
+        expect(m.scrollHeight, 'nothing of the name is clipped').toBeLessThanOrEqual(m.clientHeight + 0.5);
+        expect(m.height, 'at most two lines').toBeLessThanOrEqual(2 * twelve.height + 1);
+        expect(await sideScroll(page)).toBe(0);
+        expect(errors).toEqual([]);
+      } finally {
+        await close();
+      }
+    });
+
+    it(`a name longer than the track draws its full form on two lines, cut where the second ends (${named(view)}, ${mode})`, async () => {
+      const { page, errors, close } = await bootFit(view, mode, `/s/${FIT_SELECTED}`);
+      try {
+        await expectSelectedRow(page);
+        const one = await measureFit(page, NAME_12, 'name');
+        for (const name of [NAME_60, NAME_104]) {
+          const m = await measureFit(page, name, 'name');
+          const where = `the ${name.length}-character name`;
+          expect(m.fullShown && !m.shortShown, `${where} draws its full form`).toBe(true);
+          expect(m.height, `${where} is exactly two lines tall`).toBeGreaterThanOrEqual(2 * one.height - 1);
+          expect(m.height, `${where} is no taller than two lines`).toBeLessThanOrEqual(2 * one.height + 1);
+          if (name === NAME_104) expect(m.scrollHeight, `${where} is cut where its second line ends`).toBeGreaterThan(m.clientHeight);
+          expect(m.scrollWidth, `${where} stays inside its box sideways (${m.scrollWidth} of ${m.clientWidth}px)`).toBeLessThanOrEqual(m.clientWidth + 1);
+          expect(m.openTitle, `${where} keeps its full text in the row button's title`).toBe(name);
+        }
+        const branch = await measureFit(page, NAME_BRANCH_ROW, 'branch');
+        expect(branch.fullShown && !branch.shortShown, 'a long branch draws its full form').toBe(true);
+        expect(branch.height, 'a long branch is exactly two lines tall').toBeGreaterThanOrEqual(2 * branch.lineHeight - 1);
+        expect(branch.height, 'a long branch is no taller than two lines').toBeLessThanOrEqual(2 * branch.lineHeight + 1);
+        expect(branch.scrollHeight, 'a long branch is cut where its second line ends').toBeGreaterThan(branch.clientHeight);
+        expect(branch.title, 'a long branch keeps its full text in title').toBe(BRANCH_120);
+        expect(await sideScroll(page)).toBe(0);
+        expect(errors).toEqual([]);
+      } finally {
+        await close();
+      }
+    });
+  }
+
+  for (const { view, mode } of fitViews([1280, 1920])) {
+    it(`a name with no break point wraps inside the track instead of running out of it (${named(view)}, ${mode})`, async () => {
+      const { page, errors, close } = await bootFit(view, mode, `/s/${FIT_SELECTED}`);
+      try {
+        await expectSelectedRow(page);
+        const one = await measureFit(page, NAME_12, 'name');
+        const m = await measureFit(page, NAME_SNAKE, 'name');
+        expect(m.fullShown && !m.shortShown, 'the underscored name draws its full form').toBe(true);
+        expect(m.scrollWidth, `no sideways overflow (${m.scrollWidth} of ${m.clientWidth}px)`).toBeLessThanOrEqual(m.clientWidth + 1);
+        expect(m.height, 'at most two lines tall').toBeLessThanOrEqual(2 * one.height + 1);
+        expect(m.openTitle, 'its full text stays in the row button title').toBe(NAME_SNAKE);
+        expect(await sideScroll(page)).toBe(0);
+        expect(errors).toEqual([]);
+      } finally {
+        await close();
+      }
+    });
+  }
+
+  for (const { view, mode } of fitViews([1280, 1920]).filter((v) => v.mode === 'status')) {
+    it(`a needs-you row keeps its state word on the context line, however long its name (${named(view)}, ${mode})`, async () => {
+      const { page, errors, close } = await bootFit(view, mode, `/s/${FIT_SELECTED}`);
+      try {
+        await expectSelectedRow(page);
+        for (const name of [NAME_N30, NAME_N60, NAME_N104]) {
+          const r = await measureStatusRow(page, name);
+          const where = `the ${name.length}-character needs-you row (${r.height}px, ${r.nameLines} name lines)`;
+          expect(r.needsYou, `${where} reads needs you`).toBe(true);
+          expect(r.onContext, `${where}: the state word is on the context line`).toBe(true);
+          expect(r.besideName, `${where}: the state word is not beside the name`).toBe(false);
+          // The name's lines and the context's one: the state word takes no line of its own.
+          expect(r.lines, `${where}: lines`).toBe(r.nameLines + 1);
+        }
+        expect(await sideScroll(page)).toBe(0);
+        expect(errors).toEqual([]);
+      } finally {
+        await close();
+      }
+    });
+  }
+
+  for (const { view, mode } of fitViews([1280, 1600, 1920]).filter((v) => v.mode === 'status')) {
+    it(`a context the state word would cut keeps its whole width, and the row is no taller than on main (${named(view)}, ${mode})`, async () => {
+      const { page, errors, close } = await bootFit(view, mode, `/s/${FIT_SELECTED}`);
+      try {
+        await expectSelectedRow(page);
+        for (const row of CONTEXT_ROWS) for (const k of ['n', 'w'] as const) for (const long of [false, true]) {
+          const name = contextName(row, k, long);
+          const c = await measureContextRow(page, name);
+          const where = `${name} (${c.context}, ${c.height}px)`;
+          expect(c.clipped, `${where}: nothing of the context is cut`).toEqual([]);
+          expect(c.overlap, `${where}: the context's text does not run under the state word`).toBe(0);
+          // Beside the state word the context keeps its whole width: one line, never wrapped into what the state leaves.
+          if (c.sharesLine) expect(c.contextLines, `${where}: beside the state word, the context is one line`).toBe(1);
+          const main = MAIN_ROW_HEIGHT(long, k, view.width);
+          expect(c.height, `${where}: no taller than on main (${main}px)`).toBeLessThanOrEqual(main + 0.5);
+        }
+        expect(await sideScroll(page)).toBe(0);
+        expect(errors).toEqual([]);
+      } finally {
+        await close();
+      }
+    });
+  }
+
+  for (const { view, mode } of fitViews([1280])) {
+    it(`a plain name with no break point wraps inside its box on at most two lines (${named(view)}, ${mode})`, async () => {
+      const { page, errors, close } = await bootFit(view, mode, `/s/${FIT_SELECTED}`);
+      try {
+        await expectSelectedRow(page);
+        const one = await measureFit(page, NAME_12, 'name');
+        for (const name of [NAME_UNBROKEN, NAME_SNAKE_26]) {
+          const m = await measureFit(page, name, 'name');
+          const where = `the ${name.length}-character plain name`;
+          expect(m.paired, `${where} has no shortened form`).toBe(false);
+          expect(m.drawn).toBe(name);
+          expect(m.scrollWidth, `${where} stays inside its box sideways (${m.scrollWidth} of ${m.clientWidth}px)`).toBeLessThanOrEqual(m.clientWidth + 1);
+          expect(m.height, `${where} is at most two lines tall`).toBeLessThanOrEqual(2 * one.height + 1);
+        }
+        expect(await sideScroll(page)).toBe(0);
+        expect(errors).toEqual([]);
+      } finally {
+        await close();
+      }
+    });
+  }
+
+  for (const { view, mode } of fitViews([1280, 1920])) {
+    it(`the programme slug renders whole at the desk (${named(view)}, ${mode})`, async () => {
+      const { page, errors, close } = await bootFit(view, mode, `/s/${FIT_SELECTED}`);
+      try {
+        await expectSelectedRow(page);
+        for (const [name, prog] of [[NAME_PROG_A, PROG_A], [NAME_PROG_B, PROG_B]] as const) {
+          const m = await measureProgramme(page, name);
+          expect(m.fullShown && !m.shortShown, `the programme of ${name} draws its full form`).toBe(true);
+          expect(m.drawn).toBe(prog);
+          expect(m.wave, 'its wave tail is whole').toBe(' · wave 1 of 2');
+          expect(m.overhang, `the programme of ${name} stays inside the row's body (${m.overhang}px past it)`).toBeLessThanOrEqual(1);
+        }
+        expect(await sideScroll(page)).toBe(0);
+        expect(errors).toEqual([]);
+      } finally {
+        await close();
+      }
+    });
+
+    it(`under a mouse one row shows its ⋯ at a time (${named(view)}, ${mode})`, async () => {
+      const { page, errors, close } = await bootFit(view, mode, `/s/${FIT_SELECTED}`);
+      try {
+        await expectSelectedRow(page);
+        // At rest, away from the list, the selected row alone shows its ⋯.
+        await page.mouse.move(view.width - 4, 896);
+        expect(await litActions(page), 'at rest only the selected row shows ⋯').toEqual([NAME_SELECTED]);
+        // A hovered row shows its own, and the selected row's goes dark while it is hovered: never two.
+        await page.locator('.sess-line').filter({ has: page.locator(`.sess-label[aria-label="${NAME_12}"]`) }).hover();
+        expect(await litActions(page), 'hovering another row shows that row\'s ⋯ and no other').toEqual([NAME_12]);
+        expect(errors).toEqual([]);
+      } finally {
+        await close();
+      }
+    });
+
+    it(`a ⋯ given focus back by a sheet closed with the mouse lights no second ⋯ at rest (${named(view)}, ${mode})`, async () => {
+      const { page, errors, close } = await bootFit(view, mode, `/s/${FIT_SELECTED}`);
+      try {
+        await expectSelectedRow(page);
+        // Open another row's actions sheet with the mouse and close it on its scrim: the sheet gives the focus back to
+        // that row's ⋯, by script after a pointer, so it is not `:focus-visible`.
+        const row = page.locator('.sess-line').filter({ has: page.locator(`.sess-label[aria-label="${NAME_12}"]`) });
+        await row.locator('.sess-actions').click();
+        await page.locator('.sheet-scrim').waitFor();
+        await page.locator('.sheet-scrim').click({ position: { x: 4, y: 4 } });
+        await page.locator('.sheet-scrim').waitFor({ state: 'detached' });
+        expect(await focusedRow(page), 'the closed sheet gave the focus back to that row').toBe(NAME_12);
+        await page.mouse.move(view.width - 4, 896);
+        expect(await litActions(page), 'at rest only the selected row shows ⋯').toEqual([NAME_SELECTED]);
+        // A keyboard's focus keeps the reveal: the row the next Tab lands in draws its ⋯.
+        await page.keyboard.press('Tab');
+        const keyed = await focusedRow(page);
+        expect(keyed, 'the Tab landed in a row').not.toBeNull();
+        expect(await litActions(page), 'the keyboard-focused row shows its ⋯').toContain(keyed);
+        expect(errors).toEqual([]);
+      } finally {
+        await close();
+      }
+    });
+  }
+
+  for (const { view, mode } of fitViews([360, 390])) {
+    it(`on a phone a 30-character name keeps its token-shortened form (${named(view)}, ${mode})`, async () => {
+      const { page, errors, close } = await bootFit(view, mode, '/');
+      try {
+        const m = await measureFit(page, NAME_30, 'name');
+        expect(m.paired).toBe(true);
+        expect(m.shortShown, 'the shortened form is drawn').toBe(true);
+        expect(m.fullShown, 'the full form is not').toBe(false);
+        expect(m.drawn).toBe('quiet-river-gentle-bridge…');
+        for (const [name, short] of [[NAME_PROG_A, PROG_A_SHORT], [NAME_PROG_B, PROG_B_SHORT]] as const) {
+          const p = await measureProgramme(page, name);
+          expect(p.shortShown && !p.fullShown, `the programme of ${name} keeps its token-shortened form`).toBe(true);
+          expect(p.drawn).toBe(short);
         }
         expect(await sideScroll(page)).toBe(0);
         expect(errors).toEqual([]);

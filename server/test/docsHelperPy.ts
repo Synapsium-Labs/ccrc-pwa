@@ -5,7 +5,7 @@
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { ghContainedEnv, ccdSource } from './ccdWsHelpers.js';
+import { CCD_REDACT_CLI, ghContainedEnv, ccdSource } from './ccdWsHelpers.js';
 import { REAL_PYTHON3, type DocsRun } from './ccdDocsHelpers.js';
 
 /** The heredoc opener, a whole line of ccd/ccd: the program is on fd 3, so stdin stays the caller's. */
@@ -132,7 +132,9 @@ function helperFile(home: string): string {
 
 /** What every unit body follows: the helper imported as the module `docs_helper`, bound to `H`, and `out(o)`, which
  *  writes `o` as one JSON value (ASCII-escaped, so a lone surrogate survives the trip) to the unit's stdout. Call
- *  `out` once. Importing the helper runs nothing: its `main()` sits behind the `__main__` guard. */
+ *  `out` once. Importing the helper runs nothing: its `main()` sits behind the `__main__` guard. The helper's redactor is
+ *  the repository's `shared/redact-cli.mjs`, checked against nothing (`-`, a source checkout's pins; D-7077), set on the
+ *  class, so every `H.Sys` subclass a unit builds, and a direct `H.redact`, reach it. */
 const prelude = (file: string): string => [
   'import importlib.util as _docs_unit_iu',
   'import json as _docs_unit_json',
@@ -141,6 +143,8 @@ const prelude = (file: string): string => [
   'H = _docs_unit_iu.module_from_spec(_docs_unit_spec)',
   "_docs_unit_sys.modules['docs_helper'] = H",
   '_docs_unit_spec.loader.exec_module(H)',
+  `H.Sys.redact_cli = ${JSON.stringify(CCD_REDACT_CLI)}`,
+  "H.Sys.redact_pins = '-'",
   '',
   '',
   'def out(o):',

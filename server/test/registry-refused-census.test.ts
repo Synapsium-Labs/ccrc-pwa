@@ -134,7 +134,9 @@ const EXPECTED_SITES: readonly string[] = [
   'coord/routes.ts | POST /api/mail/:id/ack | readRegistryMeasured | refuses',
   'coord/routes.ts | attributionVerdict | readRegistryMeasured | refuses',
   'coord/questions.ts | raiseApproval | readRegistry | refuses',
-  'coord/routes.ts | POST /api/approvals/:id/rule | readRegistry | refuses',
+  // W3 Q3f (D-7030; named exception 3): the rule handler's read moved into the claimant's core with its ladder, the
+  // same reader and the same word; only the file and the enclosing symbol change.
+  'coord/questions.ts | ruleApproval | readRegistry | refuses',
   'fleet.ts | assembleFleet | readRegistryMeasured | tests-only',
   'lifecycle.ts | listProjects | readRegistryMeasured | reports',
   'registry.ts | readRegistry | readRegistryMeasured | wrapper',
@@ -409,10 +411,11 @@ describe('Task 7: the migrated readers and the six production assembleFleet call
     expect(sitesOf('fleet.ts', 'readRegistry').map(where)).toEqual([]);
     expect(sitesOf('lifecycle.ts', 'readRegistry').map(where)).toEqual([]);
     expect(sitesOf('server.ts', 'readRegistry').map(where), 'prTasks reads one row (D-6434)').toEqual([]);
-    // The two approval sites, placed refuses: the rule route's, and the raise's, which moved with its ladder into
-    // `coord/questions.ts#createQuestions`'s `raiseApproval` (D-7029; W3 Q3e, named exception 3).
-    expect(sitesOf('coord/routes.ts', 'readRegistry'), 'the rule route, placed refuses').toHaveLength(1);
-    expect(sitesOf('coord/questions.ts', 'readRegistry'), 'the raise, placed refuses').toHaveLength(1);
+    // The two approval sites, placed refuses: the raise's, which moved with its ladder into
+    // `coord/questions.ts#createQuestions`'s `raiseApproval` (D-7029; W3 Q3e, named exception 3), and the rule's, which
+    // moved with its ladder into the claimant's core, `ruleApproval` beside it (D-7030; W3 Q3f, named exception 3).
+    expect(sitesOf('coord/routes.ts', 'readRegistry'), 'no readRegistry left in the routes').toHaveLength(0);
+    expect(sitesOf('coord/questions.ts', 'readRegistry'), 'the raise and the rule, placed refuses').toHaveLength(2);
     const count = (reader: 'readRegistry' | 'readRegistryMeasured'): number =>
       allSites().filter((s) => s.reader === reader).length;
     expect(count('readRegistry'), 'readRegistry( call sites in server/src').toBe(3);

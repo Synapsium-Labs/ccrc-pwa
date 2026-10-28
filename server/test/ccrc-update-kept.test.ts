@@ -57,10 +57,14 @@ import {
   verKeptAnswer,
 } from './ccrc-updateFixture.js';
 
-/** The installed body for a tree's ccd source: ccd-entry-install.py renders the library pin from the tree's library,
- *  then swaps the source's line-2 placeholder, in place, for the marker (ccd-install-stamp.test.ts owns the rule). */
+/** The installed body for a tree's ccd source: ccd-entry-install.py renders the library pin from the tree's library and the
+ *  docs redactor's two pins from the tree's `shared/` (D-7077), then swaps the source's line-2 placeholder, in place, for the
+ *  marker (ccd-install-stamp.test.ts owns the rule). */
 const installedBodyOf = (src: string): string =>
-  installedCcdBody(readFileSync(src, 'utf8'), readFileSync(join(dirname(src), 'lib', 'disk-retention.sh')));
+  installedCcdBody(readFileSync(src, 'utf8'), readFileSync(join(dirname(src), 'lib', 'disk-retention.sh')), {
+    redact: readFileSync(join(dirname(src), '..', 'shared', 'redact.mjs')),
+    cli: readFileSync(join(dirname(src), '..', 'shared', 'redact-cli.mjs')),
+  });
 
 describe('ccrc update: restore arm 1 — a flip back to the kept previous version (W6 Task 4)', () => {
   const GATE_DENIED = 'gate: GET http://127.0.0.1:7788/health got no answer (curl exited 7)';

@@ -1,6 +1,8 @@
 // The lanes' one order and the one decider of a lane's binding window (T2c, D-6329): the window that stops work first,
 // read by the lanes row, the inspector's Lane and the row's name alike. The order is binding use, then the binding
-// window's reset, then the other window's use, then the roster's (lanes-tie-break-soonest-reset). Pure L1: no I/O, types
+// window's reset, then the other window's use, then the roster's (lanes-tie-break-soonest-reset). Every lane at or above
+// `NEAR_FULL_PCT` reads as ONE binding use, so those near-full lanes order among themselves by the binding window's
+// reset, soonest first, and sort after every lane below it (near-full-lanes-band-by-reset). Pure L1: no I/O, types
 // imported only.
 import type { AccountUsage } from '../../../shared/api';
 
@@ -24,7 +26,14 @@ export function bindingWindow(a: AccountUsage): { label: '5h' | '7d'; pct: numbe
   return { label: chosen.label, pct: chosen.pct, resetAt: chosen.resetAt, rolledOver: atBinding.every((w) => w.rolled) };
 }
 
-/** The lanes most free first: by binding use (`bindingPct`), lowest first. Lanes that tie on it go by the binding
+/** The binding use from which lanes read as one band (near-full-lanes-band-by-reset): a lane at or above it is as good as
+ *  full, so the difference between 96 and 99 is noise and what tells such lanes apart is when each frees up. Written
+ *  once, here, beside `lanesByFree`, the only reader. A rate-limited lane (100) is in the band. */
+export const NEAR_FULL_PCT = 95;
+
+/** The lanes most free first: by binding use (`bindingPct`), lowest first, every lane at or above `NEAR_FULL_PCT`
+ *  reading as the same value, so the band sorts after every lane below it and orders inside itself by the keys that
+ *  follow (near-full-lanes-band-by-reset). Lanes that tie on it (exactly, below the band) go by the binding
  *  window's reset (`bindingWindow`'s, soonest first, so among equals the one that frees up soonest leads; a lane with no
  *  reset time after one with a reset time), then by the other window's use, lowest first (an unmeasured one after a
  *  measured one), and only then in the order given (the roster's) (lanes-tie-break-soonest-reset). A lane never read (no
@@ -44,7 +53,9 @@ export function lanesByFree<T extends AccountUsage>(lanes: readonly T[]): T[] {
       return;
     }
     const otherUse = binding.label === '5h' ? lane.seven : lane.five;
-    ranked.push({ lane, pct: binding.pct, reset: binding.resetAt ?? Infinity, other: otherUse ?? Infinity, i });
+    // The band: one value for every near-full lane (an exact tie below it is still an exact tie, nothing else changes).
+    const pct = binding.pct >= NEAR_FULL_PCT ? NEAR_FULL_PCT : binding.pct;
+    ranked.push({ lane, pct, reset: binding.resetAt ?? Infinity, other: otherUse ?? Infinity, i });
   });
   // The keys compare with < and >, not by subtraction: Infinity - Infinity is NaN, and the chain should not lean on a
   // NaN being falsy to reach the next key.
