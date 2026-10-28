@@ -1,7 +1,9 @@
 // The private tmux server a real-tmux suite runs against: its reset, its socket file, and a watchdog for the one leak
-// a killed run leaves (desktop polish Task C12, item 11). `ccd-tmux-anchor`, `session-hook` and
-// `drawer-window-sized-client` each build their own `T` (the binary, `-L <sock>`, their own `-f` and environment), so
-// these take that `T` or the parts of it they need, and the shared halves are written once. Not a test file.
+// a killed run leaves (desktop polish Task C12, item 11). Two suites consume it: `ccd-tmux-anchor`'s own reset copy is
+// replaced by `resetPrivateServer`, and `drawer-window-sized-client`, which resets sessions rather than its server,
+// takes the watchdog. `session-hook` keeps its own reset copy for now (its file is held by another change). Each suite
+// builds its own `T` (the binary, `-L <sock>`, its own `-f` and environment), so these take that `T` or the parts of it
+// they need. Both suites remove their socket file with `removePrivateSocket`. Not a test file.
 //
 // NOTHING here names a live server: every call is on the `-L <sock>` the suite made, a name that is the run's alone.
 import { spawn, spawnSync, type SpawnSyncReturns } from 'node:child_process';
