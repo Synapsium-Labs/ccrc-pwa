@@ -596,10 +596,11 @@ describe('review fixes', () => {
 describe('dense rows at the desk (T2e, D-6335)', () => {
   const DENSE = '(min-width: 900px) and (pointer: fine)';
 
-  it('under a fine pointer at a desk a status row is two lines on --row-h: name and state, then the context', () => {
+  it('under a fine pointer at a desk a status row sits on --row-h: the name and the state word share a line when they fit', () => {
     // The body is a wrapping flex row: the state word beside the name when both fit, on a line of its own when they do
-    // not (a flex line breaks on max-content sizes, so the name then has the whole line), and the context on a line of
-    // its own. Never a grid with a capped state column: that squeezed a long name into three lines beside the state.
+    // not (a flex line breaks on max-content sizes, so the name then has the whole line). That is the whole layout of a
+    // row with no context; a row with a context is a block instead (T3b, the case at the end of this block). Never a grid
+    // with a capped state column: that squeezed a long name into three lines beside the state.
     const body = declsOf('.ins-row .sess-body', DENSE);
     expect(body).toMatch(/display:\s*flex/);
     expect(body).toMatch(/flex-flow:\s*row wrap/);
@@ -644,19 +645,27 @@ describe('dense rows at the desk (T2e, D-6335)', () => {
       for (const media of ['(min-width: 900px)', '(pointer: fine)']) expect(declsOf(sel, media), `${sel} in ${media}`).toBe('');
     }
   });
-  it('a row with a context draws its state word on the context line, so a long name never pushes it onto its own (T3b, R21 F2)', () => {
-    // The operator's ruling (R121, Q2): the name takes the whole first line, or two; the state word moves to the end of
-    // the context line (`order` after the context, whose `flex-basis: 0` lets the two always share one flex line). A row
-    // with no context keeps the state beside its name, so every rule names a row that HAS a context.
+  it('a row with a context ends its context line with the state word only where the whole context fits, so the state never cuts it (T3b, R21 F2, D-7252)', () => {
+    // The operator's ruling (R121, Q2) and D-7252: the state word ends the context line, so a long name does not push it
+    // onto a line of its own, but never by narrowing the context. The row is a block; the name is an inline box at its
+    // own width, the state word floats to the end of the first line with room for it, and the context is as wide as its
+    // text, so a float leaves it to start below the state word when it would not fit whole beside it. A flex basis or a
+    // `min-width: 0` on the context would let the state squeeze it again. A row with no context keeps the flex row, so
+    // every rule names a row that HAS a context.
+    const body = '.ins-row .sess-line:has(.sess-meta--context) .sess-body';
     const open = '.ins-row .sess-line:has(.sess-meta--context) .sess-body > .sess-open';
     const state = '.ins-row .sess-line:has(.sess-meta--context) .sess-body > .sess-meta:not(.sess-meta--context)';
     const context = '.ins-row .sess-line:has(.sess-meta--context) .sess-meta--context';
-    expect(declsOf(open, DENSE)).toMatch(/flex-basis:\s*100%/);
-    expect(declsOf(state, DENSE)).toMatch(/order:\s*1/);
-    expect(declsOf(context, DENSE)).toMatch(/flex:\s*1 1 0/);
-    expect(declsOf(context, DENSE)).toMatch(/min-width:\s*0/);
+    expect(declsOf(body, DENSE)).toMatch(/display:\s*block/);
+    expect(declsOf(open, DENSE)).toMatch(/display:\s*inline-flex/);
+    expect(declsOf(open, DENSE)).toMatch(/max-width:\s*100%/);
+    expect(declsOf(state, DENSE)).toMatch(/float:\s*right/);
+    expect(declsOf(context, DENSE)).toMatch(/width:\s*max-content/);
+    expect(declsOf(context, DENSE)).toMatch(/max-width:\s*100%/);
+    expect(declsOf(context, DENSE)).not.toMatch(/flex|min-width/);
+    expect(declsOf(state, DENSE)).not.toMatch(/order/);
     // Only at the desk under a fine pointer: a touch screen or a phone keeps the shared sheet's rows.
-    for (const sel of [open, state, context]) {
+    for (const sel of [body, open, state, context]) {
       expect(declsOf(sel), sel).toBe('');
       for (const media of ['(min-width: 900px)', '(pointer: fine)']) expect(declsOf(sel, media), `${sel} in ${media}`).toBe('');
     }
