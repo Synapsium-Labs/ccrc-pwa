@@ -3,8 +3,9 @@
 // routing record asks for and the pane has not read back yet. An effort not read yet says the header chip's word
 // (`UNREAD_EFFORT`, "set effort"), taken from the header so it is written once; the header draws that chip only while
 // it has meta to show, so with nothing read the rail says it and the header does not. A model not read yet says the
-// old rail's "not read yet" after the plain words "a model ": the header has no word for it, since it draws no model
-// chip without a model. Each door shows a word its accessible name speaks.
+// old rail's "not read yet" after the plain words "a model ": the header has no word for it. It draws no model chip
+// without a model, except for a queued class write, and that chip has no text, only its `queued` badge. Each door
+// shows a word its accessible name speaks.
 //
 // PURE. The provider does not come in here: it reaches the line through `routeView`, which already holds the
 // measurability rule, so the session header's model chip and this line share one decision about what is pending and
