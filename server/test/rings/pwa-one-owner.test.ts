@@ -6,7 +6,7 @@
 import { describe, expect, it } from 'vitest';
 import { parseFile, parseSource, type ParsedFile } from '../scan/parse.js';
 import { REPO, walkSrc } from './walkSrc.js';
-import { accountsReaders, requestPolls } from '../census-w7/pwa.js';
+import { accountsReaders, dialogSheetStates, requestPolls } from '../census-w7/pwa.js';
 import path from 'node:path';
 
 const GUARDS = new Set(['isRecord', 'isObject', 'isNum', 'isCount', 'isOneOf']);
@@ -59,5 +59,22 @@ describe('the PWA reads /api/accounts in one place (D-7180, ARCH-28 #540)', () =
     const polls = requestPolls();
     expect(polls.length).toBeLessThanOrEqual(2);
     expect(polls.filter((s) => s.file !== 'pwa/src/fleet/HotFilesStrip.tsx' && s.file !== 'pwa/src/fleet/useFleetHealth.ts')).toEqual([]);
+  });
+});
+
+// ─── C7e (D-7183; ARCH-29 #542): one answer reducer ────────────────────────────────────────────────────────────────
+// `DialogSheet`'s answer lifecycle lives in `pwa/src/session/answerLifecycle.ts`: the in-flight trio (answering, tabbing,
+// denying), the dismissal trio (dismissedKey, dismissedDialogId, dismissedScreen), the own-words draft and the
+// multiSelect set are its state. Three `useState` calls stay in the component, all view state that sends nothing:
+// `otherFor` (which Other field is open), `focusNonce` (a focus request) and `raiseMark` (R106's raise rule, decided in
+// render). The ceiling may only go down (spec §5.1 rule 3).
+const DIALOG_SHEET_VIEW_STATES = ['otherFor', 'focusNonce', 'raiseMark'] as const;
+
+describe('DialogSheet holds only its three view states; the answer lifecycle holds the rest (C7e, D-7183)', () => {
+  it('dialogSheetStates() 11 -> 3: otherFor, focusNonce and raiseMark', () => {
+    const sites = dialogSheetStates();
+    expect(sites.length).toBeLessThanOrEqual(DIALOG_SHEET_VIEW_STATES.length);
+    expect(sites.map((s) => DIALOG_SHEET_VIEW_STATES.find((n) => new RegExp(`\\[\\s*${n}\\s*,`).test(s.text)) ?? s.text).sort())
+      .toEqual([...DIALOG_SHEET_VIEW_STATES].sort());
   });
 });
