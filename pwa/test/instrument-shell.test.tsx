@@ -44,11 +44,14 @@
 // Rows 1, 4 and 7 also run in browser/instrument-desk.browser.test.ts (its own table).
 //
 // Desk polish S5b (D-6530): the lanes fold.
-// MUTATION TABLE (plan Task S5b Step 3; RUN at the last code commit before fix round 2, every row, bounded and hash-checked; the log is kept outside the repo.
-// Each mutant was applied to the working tree as one exact-once replacement and restored from a saved copy with its sha256
-// checked; the named jsdom suite(s) alone, and browser/lanes-row.browser.test.ts or browser/refined-phone.browser.test.ts too
-// where a row names one; then reverted. 75 mutants run: 75 red, none survived, none invalid. The counts "of 70" and "of 26"
-// are the browser files' sizes at that head):
+// MUTATION TABLE (plan Task S5b Step 3; the whole table RUN at 182d2ac58, the last code commit of fix round 1, and the flyout rows
+// (the R120 `strip-hover-flyout` block, the Escape and flyout-name rows, fix round 2's) RUN again at d51cbc7c1, the last code commit of
+// fix round 2; bounded and hash-checked; the logs are kept outside the repo. Each mutant was applied to the working tree as one
+// exact-once replacement and restored from a saved copy with its sha256 checked; the named jsdom suite(s) alone, and
+// browser/lanes-row.browser.test.ts or browser/refined-phone.browser.test.ts too where a row names one; then reverted.
+// At 182d2ac58: 75 mutants run, 75 red, none survived, none invalid. At d51cbc7c1: 33 mutants run, 33 red, none survived, none
+// invalid. The counts "of 70" and "of 26" are the browser files' sizes at 182d2ac58, "of 72" lanes-row's at d51cbc7c1; the flyout rows
+// below carry the d51cbc7c1 figures, the other rows the 182d2ac58 ones):
 //   fold when it would hide one lane (`count + 1`; at the desk, the line folding when one lane would overflow)
 //                                                       strip-fold "it never folds to hide a single lane: five lanes show all five", "foldable is false at five lanes
 //                                                         and true at six, folded or expanded", "one rule at every width: …"
@@ -110,31 +113,33 @@
 //   Instrument's first-row bound lowered below its measured 533.8 px (540 -> 530) ... refined-phone browser (1 of 26) "folded, with 17 lanes, four cards and one control …, and the first session row sits at most
 //                                                         540 px down at 390×844: instrument, phosphor, 390px" (fix round 1, `instrument-first-row-is-its-chrome`: the 440 check was gated on Refined's head, so Instrument ran none)
 // Fix round 1 trimmed the browser leg's geometry matrices to one palette (lanes-row 88 -> 70 cases, refined-phone 31 -> 26);
-// the counts above are of the trimmed files, from the run at the last code commit before fix round 2.
+// the counts above are of the trimmed files, from the run at 182d2ac58.
 // R120 `strip-hover-flyout` (accounts-strip alone, plus lanes-row where named):
-//   open without the delay (`FLYOUT_OPEN_MS` -> 0) ..... "…hovering the line opens the flyout after FLYOUT_OPEN_MS, …", "a pointer passing by does not open it"
-//   close without the grace (`FLYOUT_CLOSE_MS` -> 0) ... "leaving the line and the flyout closes it after FLYOUT_CLOSE_MS; coming back within the grace keeps it", "focus leaving the strip closes it, …"
-//   close without handing focus back to the line ....... "Escape closes it and returns focus to the card it came from"
+//   open without the delay (`FLYOUT_OPEN_MS` -> 0) ..... "…hovering the line opens the flyout after FLYOUT_OPEN_MS, …", "a pointer passing by does not open it", "a pointer passing over the strip while the open delay
+//                                                         that focus started is pending does not cancel the open", "an open the pointer started is cancelled when the pointer leaves, …"
+//   close without the grace (`FLYOUT_CLOSE_MS` -> 0) ... "leaving the line and the flyout closes it after FLYOUT_CLOSE_MS; coming back within the grace keeps it", "focus leaving the strip closes it, …", and four more
+//   close without handing focus back to the line ....... "Escape closes it and returns focus to the card it came from", "an open the pointer started is cancelled when the pointer leaves, …"
 //   the flyout while expanded .......................... "no flyout while expanded, and none below 900", and the moot-focus case below
 //   the flyout below 900 ............................... "no flyout while expanded, and none below 900"
 //   the flyout reset removed when it is moot ........... "no flyout while expanded, and none below 900", and the moot-focus case below
-//   a pointer leave with focus inside closing the flyout (the early return in `onLeave` removed)
+//   a pointer leave with keyboard focus inside closing the flyout (the early return in `onLeave` removed)
 //                                                       accounts-strip "it stays open while either the pointer or focus is inside the line or the flyout, and closes when neither is",
-//                                                         "a pointer passing over the strip while the open delay that focus started is pending does not cancel the open"
+//                                                         "a pointer passing over the strip while the open delay that focus started is pending does not cancel the open", and three more
 //                                                         (fix round 1: the ruled rule is "either"; the old case pinned a pointer leave closing the flyout with focus inside)
 //   the early return kept for an open flyout only (`&& flyOpen`): a pointer pass cancelling the open focus started
-//                                                       accounts-strip "a pointer passing over the strip while the open delay that focus started is pending does not cancel the open"
+//                                                       accounts-strip "a pointer passing over the strip while the open delay that focus started is pending does not cancel the open",
+//                                                         "keyboard focus arriving while the pointer's open delay is pending takes the open over: …"
 //   the early return kept for a pending open only (`&& !flyOpen`): the pointer leaving closing an open flyout focus holds
-//                                                       accounts-strip "it stays open while either the pointer or focus is inside the line or the flyout, and closes when neither is"
+//                                                       accounts-strip "it stays open while either the pointer or focus is inside the line or the flyout, and closes when neither is", and two more
 //   the moot flyout's focus hand-back removed ......... "a flyout made moot while a card of it holds focus hands the focus to the line's tab stop, never to the page: another tab expands the strip"
 //                                                         (fix round 1: the reset called `setFlyOpen(false)` directly, so a focused flyout card was unmounted and focus fell to the page)
 //   a second copy of the card markup ................... "the flyout's cards render through the line's own card code: one card markup in the component"
-//   the flyout's cards from `shown`, not `live` ........ eight accounts-strip cases ("…holding every lane in lanesByFree's order", …); lanes-row (4 of 70) "hovering the folded line opens a flyout below it, …"
+//   the flyout's cards from `shown`, not `live` ........ thirteen accounts-strip cases ("…holding every lane in lanesByFree's order", …); lanes-row (4 of 72) "hovering the folded line opens a flyout below it, …"
 //   focusout ignoring `relatedTarget` .................. "focus leaving the strip closes it, and focus moving between the line and the flyout does not"
 //   pointer enter not cancelling a pending close ....... "leaving the line and the flyout closes it after FLYOUT_CLOSE_MS; coming back within the grace keeps it"
 //   focus between the strip's own cards opening it again "Escape stays shut for a keyboard user: an arrow move between the line's cards does not open it again"
-//   the flyout `position: absolute` -> `static` ........ lanes-row (4 of 70) "hovering the folded line opens a flyout below it, drawn over the content, …"
-//   the flyout's `z-index` removed ..................... lanes-row (4 of 70) "hovering the folded line opens a flyout below it, drawn over the content, …"
+//   the flyout `position: absolute` -> `static` ........ lanes-row (4 of 72) "hovering the folded line opens a flyout below it, drawn over the content, …"
+//   the flyout's `z-index` removed ..................... lanes-row (4 of 72) "hovering the folded line opens a flyout below it, drawn over the content, …"
 //   the `returningFocus` guard removed from `onGroupFocus`: no row. It was SURVIVED as a dead guard (the `relatedTarget` test above it already returns for the move the guard
 //                                                         covered), so the guard was removed from `AccountsStrip` in a fix round and the cases stay green
 //   the timers not cleared on unmount .................. accounts-strip "unmounting with the open delay pending, or the close grace pending, leaves no timer behind"  (a fix round: it was SURVIVED)
