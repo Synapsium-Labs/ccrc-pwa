@@ -31,8 +31,11 @@
 //                                                         (`expected 223 to be less than or equal to 196`)
 //   `FleetHead`'s nothing-to-draw `return null` removed  the same case (`expected 212 to be less than or equal to 196`: the empty head
 //                                                         keeps its padding, and the column's gap beside it)
-//   `.ins-status-summary { max-width: 6ch }` ........... "at 900 the status bar's count is whole, with two open runs" (both pointers;
-//                                                         `expected 211 to be less than or equal to 40`)
+//   `.ins-status-summary { max-width: 6ch }` ........... "at 900 the status bar's count is whole, with two open runs and a release waiting" (both pointers;
+//                                                         `14 sessions · 3 waiting · 2 runs: expected 211 to be less than or equal to 40`)
+// T2g's review R51 F1 (carried by T2f, D-6371; RUN with -t "release waiting", each mutant reverted):
+//   `/api/updates` dropped from WITH_RUNS .............. the same case (`TimeoutError: page.waitForFunction: Timeout 20000ms exceeded.`: the indicator is never drawn)
+//   `<UpdateIndicator form="status" />` dropped from StatusBar.tsx  the same case (`TimeoutError: page.waitForFunction: Timeout 20000ms exceeded.`: the indicator is never drawn)
 // T2e review R32, F7 (carried into T2g; RUN with -t "Inbox count", each mutant reverted):
 //   `.ins-rail-count` without `position: absolute` ..... "at 1280x800 the count pill sits on the Inbox door's top-right corner, inside the door"
 //                                                         (`top inset 13.203125 vs --sp-1 4: expected 9.203125 to be less than or equal to 2`; both themes)
