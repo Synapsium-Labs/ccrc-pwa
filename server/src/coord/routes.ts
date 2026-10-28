@@ -6,8 +6,7 @@ import { decideShadowJournalQuery } from './shadowJournal.js';
 import type { Bus } from '../bus.js';
 import type { FleetWatcher } from '../watch.js';
 import {
-  UNMEASURED_ASK_AT, fieldMeasured, freshAskAt, measuredIdentity, readRegistry, readRegistryMeasured,
-  readSessionRecord,
+  fieldMeasured, measuredIdentity, readRegistry, readRegistryMeasured, readSessionRecord,
 } from '../registry.js';
 import { fleetCarriesRunsAttribution } from '../fleetstate.js';
 import { answerAsk, readAskAnswer, type AskDeps } from '../inject/ask.js';
@@ -3665,12 +3664,10 @@ export function registerCoordRoutes(
 
   // `freshAskAt` (the D-2170 fail-shut re-measurement `takeAskForAnswer`'s
   // CAS is checked against) is `registry.ts`'s export now, fix round 1
-  // finding 2 — this route and `server.ts`'s `POST /api/sessions/:id/ask`
-  // both close over the SAME `Deps` object (this file's own `deps` param IS
-  // `buildServer`'s, passed straight through by `registerCoordRoutes`), so a
-  // security-relevant fail-shut guard had no business existing as two
-  // copies that could silently drift. See `registry.ts`'s own doc comment
-  // on it for the full reasoning.
+  // finding 2, so a security-relevant fail-shut guard has no second copy
+  // that could silently drift. Since W3 Q3f (D-7030) its one reader on the
+  // answer paths is `coord/questions.ts`, the claimant's and the operator's
+  // cores. See `registry.ts`'s own doc comment on it for the full reasoning.
 
   /**
    * `POST /api/asks/:id/answer` — the parent presses the digit into its
@@ -3704,10 +3701,12 @@ export function registerCoordRoutes(
    * is `'held'`, and this row sits in `'answering'`, so it cannot even
    * reach it (it would silently strand the row forever, `changes: 0` and
    * all). `untakeAsk` is the exact CAS built for this rollback.
+   *
+   * Since W3 Q3f (D-7030) this door keeps its front ladder (the box token, the body, attribution, the id parse) and
+   * delegates the rest, the ladder above in this order, to `coord/questions.ts#createQuestions`'s `rule`.
    */
   app.post('/api/asks/:id/answer', async (req, reply) => {
     if (!deps.coord) return notConfigured(reply);
-    const coord = deps.coord;
     if (!requireMailToken(req, reply, 'POST /api/asks/:id/answer')) return;
 
     const body = (req.body ?? {}) as Record<string, unknown>;
@@ -3725,7 +3724,6 @@ export function registerCoordRoutes(
       return reply.code(400).send({ ok: false, error: 'bad-request',
         detail: 'fromId/fromUuid strings, optionIndexes an array of numbers, askKey a string when given' });
     }
-    const optionIndexes = answerBody.optionIndexes;
 
     // The box token proves "a process on this box", one shared secret
     // identical for every session on the fleet host — it cannot prove "this
@@ -3737,126 +3735,12 @@ export function registerCoordRoutes(
     // sqlite read can collapse a different textual name onto this ask.
     const id = parseCanonicalPositiveSafeInteger((req.params as { id: string }).id);
     if (id === null) return reply.code(400).send({ ok: false, error: 'bad-request' });
-    const askRead = coord.askById(id);
-    // D-2545. `unknown-ask` sends the parent to `wave-lifecycle.md`'s remedy
-    // for a row that is gone; this row is not gone, it is unreadable, and the
-    // two need different sentences for the same reason `child-unmeasurable`
-    // was split out of `ask-moved` below. 503, a fact about this box.
-    if (!askRead.ok) {
-      return reply.code(503).send({ ok: false, error: 'ask-unreadable', detail: askRead.detail });
-    }
-    const ask = askRead.ask;
-    if (ask === null) return reply.code(404).send({ ok: false, error: 'unknown-ask' });
-    if (ask.parentId !== fromId) {
-      return reply.code(403).send({ ok: false, error: 'not-parent',
-        detail: 'only this child\'s derived parent may pre-empt its question' });
-    }
-    // D-5290, D-5363: a row MINTED released (`releaseReason` set — D-5530's
-    // fail-closed reasons, or an older build's `parent-project-mismatch`) was
-    // never held and never mailed: the operator owned it from the first tick,
-    // so late answer wins (D-5289), which reaches a row the LAPSE released,
-    // does not reach this one. No new word: `not-held` is "the row is no
-    // longer pre-emptible". With the `parentId` check above, this route admits
-    // exactly the claimant the row was HELD for, wherever it sits (D-5530: no
-    // project is compared; a cross-project coordinator answers its children).
-    if (ask.releaseReason !== null) {
-      return reply.code(409).send({ ok: false, error: 'not-held' });
-    }
-    // D-5293, D-5368: the operator's body names the question it answers (`askKey`).
-    // A parent that sends it is answering the question it was shown, or
-    // nothing is pressed and the row is untouched.
-    if (answerBody.askKey !== undefined && answerBody.askKey !== ask.askKey) {
-      return reply.code(409).send({ ok: false, error: 'ask-mismatch' });
-    }
-
-    // D-2170: re-read the child's hookstate and prove the menu on screen is
-    // the INSTANCE this row was minted for — see `freshAskAt`'s own comment.
-    const fresh = await freshAskAt(deps.io, deps.cfg, ask.childId);
-    // …and say WHICH refusal this is (whole-branch review M2). `freshAskAt`
-    // answers `UNMEASURED_ASK_AT` for three READS THAT FAILED, and that
-    // value can never equal a stored `askAt` — so handing it to the CAS
-    // below would answer `ask-moved`, a true statement about the CAS and a
-    // false one about the world. The two are not interchangeable to the
-    // caller: `wave-lifecycle.md` tells a coordinator that `ask-moved` means
-    // "the child repainted — re-read the ask and answer the current one",
-    // and a coordinator told that when the truth is "this box could not read
-    // the child" re-reads, finds the row still `held`, and loops. Same
-    // fail-shut direction, before any keystroke; only the sentence changes.
-    if (fresh === UNMEASURED_ASK_AT) {
-      return reply.code(409).send({ ok: false, error: 'child-unmeasurable',
-        detail: "this box could not read the child's live state — nothing was pressed, and the ask is unchanged" });
-    }
-    const taken = coord.takeAskForAnswer(id, fresh);
-    if (!taken.ok) return reply.code(409).send({ ok: false, error: taken.why });
-
-    const res = await answerAsk(askDeps, ask.childId, ask.askKey, optionIndexes);
-    if (!res.ok) {
-      // The refused-press rollback: `untakeAsk`, NOT `releaseAsk` — see this
-      // route's own docstring. `answerAsk` never pressed a digit on this
-      // path, so the row goes back to where the take found it (`'held'`, or
-      // `'released'` after a lapse — D-5289) rather than being abandoned in
-      // `'answering'` with no exit.
-      if (!coord.untakeAsk(id, taken.from)) {
-        // Unexpected (fix round 1, item 5): `untakeAsk`'s CAS source is
-        // `'answering'`, and THIS request is the one that put the row there
-        // (`takeAskForAnswer` above, this same request). Nothing else should
-        // have moved it in between — `console.warn` on the surprise, the
-        // same idiom `watch.ts`'s `sweepAsks` already uses on its own CAS
-        // calls (e.g. its "unexpectedly still 'held' after a failed
-        // release" warning), rather than a silent discard.
-        console.warn(`ccrc-server: untakeAsk(${id}) returned false after a refused press — ` +
-          "the ask row was not 'answering' when the rollback ran; it may be stranded");
-      }
-      return reply.code(409).send(res);
-    }
-    // D-2172's SECOND record — written BEFORE `settleAsk` (fix round 1, item
-    // 3), deliberately: the mint-time record (`watch.ts`'s `hold()`) is the
-    // question; this one is the answer, naming the parent and what it chose
-    // — the operator's only durable trace of a decision made in their name
-    // over a question that never reached their phone. Ordered first so that
-    // if `settleAsk` below then throws, at least ONE durable trace of the
-    // answer survives — the feed record names who chose what even when the
-    // `asks` row's own `answeredBy`/`answer` never gets written. Through the
-    // notice sink (D-5858), `'record-only'`, as `POST /api/coord/caps` above:
-    // the archive's synchronous throw is caught inside `notify` rather than
-    // allowed to turn a successful press into a 500, and the seq `record()`
-    // minted is flushed whatever the archive does.
-    notice({
-      kind: 'ask', sessionId: ask.childId, runId: null,
-      title: 'question answered',
-      body: `${fromId} answered ${ask.childId}'s question: ${ask.question} → ` +
-            `${ask.options[optionIndexes[0]!] ?? '?'}`,
-    }, 'record-only', { degraded: 'ask answered, feed archive degraded' });
-
-    // GUARDED (fix round 1, item 3): the digit has ALREADY landed by this
-    // point — `answerAsk` returned `ok:true` above — so `settleAsk` failing
-    // must never turn a successful press into a 500. The row is held
-    // EXCLUSIVELY by this request (CAS'd to `'answering'` above; `settleAsk`'s
-    // own docstring is why no caller needs to distinguish "settled" from
-    // "lost the row between take and settle" — that race cannot happen
-    // here), so an unguarded throw would be a genuine infra fault (disk,
-    // `node:sqlite`), not a lost race — but left unguarded it would strand
-    // the row `'answering'` with no exit (`settleAsk` never ran to move it),
-    // 500 a press that actually succeeded, and the parent's natural retry
-    // would get `not-held` — a LIE about who holds it, since the retrying
-    // caller IS the one who holds it. The digit is pressed either way, so
-    // this always returns `{ok:true}`.
-    try {
-      coord.settleAsk(id, fromId, ask.options[optionIndexes[0]!] ?? '', Date.now());
-    } catch (err) {
-      console.warn('ccrc-server: settleAsk failed after the digit was already pressed ' +
-        `(${err instanceof Error ? err.message : String(err)}) — the ask row may be stranded ` +
-        "'answering'; the feed record above (if it landed) is the surviving audit trace");
-    }
-
-    // D-5289, late answer wins: the lapse already notified the operator, so
-    // that notification is replaced, under the same tag, with who answered.
-    // Only after a take from `'released'` — inside the window nothing was
-    // pushed and there is nothing to replace. The watcher decides whether its
-    // snapshot of the lapse is still this row's (`answeredLate`).
-    if (taken.from === 'released') watcher?.answeredLate(ask.childId, id, fromId);
-
-    return { ok: true };
+    // W3 Q3f (D-7030): an ALIAS from here on. Everything after the id parse (the row, the stored parent, the CAS, the
+    // press, the rollback, the record, the settle and the late answer) is the claimant's core, `questions.rule`, which
+    // `POST /api/questions/ask-<n>/rule` calls too.
+    return sendAnswer(reply, await questions.rule({
+      kind: 'ask', id, fromId, optionIndexes: answerBody.optionIndexes, askKey: answerBody.askKey,
+    }, claimantDeps!));
   });
 
   /**
