@@ -4,6 +4,8 @@
 // dispatches (`sweepAsks`, `sweepApprovals`, public so a test can await them) and the four door-ins the routes call.
 // Q3c to Q3f move the hold carrier, the lapse and the door-ins into `coord/questions.ts`: each runs this file
 // UNEDITED. It reads no private field, so nothing in it is a named exception.
+// D-7245 (W3 Q3f, option (a)): the four door-ins are driven through `questionDoorIns.ts#doorInsOf`, the watcher's
+// `Questions` member and its doors' sink, as the door cores call them; each call site is its forward's, renamed.
 //
 // HOW A ROW READS. A row is a sequence of steps; after each step it records what changed, in order: every asks and
 // approvals row (state, release reason, who answered, times relative to the fixture's T0), each push actually sent
@@ -23,6 +25,7 @@ import { localIO, type FleetIO } from '../src/io.js';
 import type { PushPayload } from '../src/push.js';
 import { testDeps, withFakeClock } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
+import { doorInsOf } from './questionDoorIns.js';
 
 const T0 = 1_786_000_000_000;
 const CHILD = 'project-a-quiet-basin';
@@ -256,9 +259,9 @@ const ASK_ROWS: Row[] = [
     const id = await heldAsk(f, w, trace, out);
     at(20_000);
     expect(f.coord.declineAsk(id, Date.now())).toBe(true);
-    w.releaseHeldAsk(CHILD); out.push(trace('declined: pushed now'));
+    doorInsOf(w).released(CHILD); out.push(trace('declined: pushed now'));
     await sweepAsksAt(w, 191_000); out.push(trace('the lapse: nothing more'));
-    w.releaseHeldAsk(CHILD); out.push(trace('a second decline door-in: nothing'));
+    doorInsOf(w).released(CHILD); out.push(trace('a second decline door-in: nothing'));
     return out;
   }],
   ['ask: a late answer after the lapse replaces it under the same tag, answeredByBody, no actions (D-5289)', async () => {
@@ -266,9 +269,9 @@ const ASK_ROWS: Row[] = [
     const id = await heldAsk(f, w, trace, out);
     await sweepAsksAt(w, 191_000); out.push(trace('lapsed: pushed'));
     at(195_000);
-    w.answeredLate(CHILD, id + 1, PARENT); out.push(trace('another row\'s late answer: nothing'));
-    w.answeredLate(CHILD, id, PARENT); out.push(trace('this row\'s late answer: replaced'));
-    w.answeredLate(CHILD, id, PARENT); out.push(trace('again: nothing (once)'));
+    doorInsOf(w).answeredLate(CHILD, id + 1, PARENT); out.push(trace('another row\'s late answer: nothing'));
+    doorInsOf(w).answeredLate(CHILD, id, PARENT); out.push(trace('this row\'s late answer: replaced'));
+    doorInsOf(w).answeredLate(CHILD, id, PARENT); out.push(trace('again: nothing (once)'));
     return out;
   }],
   ['ask: a late answer after the dialog cleared replaces nothing', async () => {
@@ -277,7 +280,7 @@ const ASK_ROWS: Row[] = [
     await sweepAsksAt(w, 191_000); out.push(trace('lapsed: pushed'));
     f.panes.set(CHILD, BARE);
     await tickAt(w, 193_000); out.push(trace('the dialog cleared'));
-    w.answeredLate(CHILD, id, PARENT); out.push(trace('the late answer: nothing'));
+    doorInsOf(w).answeredLate(CHILD, id, PARENT); out.push(trace('the late answer: nothing'));
     return out;
   }],
   ['ask: the dialog cleared while held settles the row stale and pushes nothing', async () => {
@@ -456,7 +459,7 @@ const APPROVAL_ROWS: Row[] = [
     const [id] = await heldPrompt(f, w, trace, out);
     at(5_000);
     expect(f.coord.takeApprovalForRule(id!, { by: PARENT, verdict: 'allow', reason: 'fine', ruling: '{}', now: Date.now() }).ok).toBe(true);
-    w.approvalRuled(CHILD, '', PARENT, 'allow'); out.push(trace('ruled: the door-in keeps the deferral'));
+    doorInsOf(w).approvalRuled(CHILD, '', PARENT, 'allow'); out.push(trace('ruled: the door-in keeps the deferral'));
     await sweepApprovalsAt(w, 14_000); out.push(trace('ruled within the grace: nothing'));
     await sweepApprovalsAt(w, 16_000); out.push(trace('past the grace and still painted: pushed'));
     return out;
@@ -488,8 +491,8 @@ const APPROVAL_ROWS: Row[] = [
     const [id] = await heldPrompt(f, w, trace, out);
     at(5_000);
     expect(f.coord.declineApproval(id!, PARENT, Date.now())).toBe(true);
-    w.releaseHeldApproval(CHILD); out.push(trace('handed over: pushed now'));
-    w.releaseHeldApproval(CHILD); out.push(trace('again: nothing'));
+    doorInsOf(w).approvalReleased(CHILD); out.push(trace('handed over: pushed now'));
+    doorInsOf(w).approvalReleased(CHILD); out.push(trace('again: nothing'));
     await sweepApprovalsAt(w, 61_000); out.push(trace('the window: nothing more'));
     return out;
   }],
@@ -497,7 +500,7 @@ const APPROVAL_ROWS: Row[] = [
     const f = fixture(); const w = f.watcher(); const trace = tracer(f); const out: unknown[] = [];
     await heldPrompt(f, w, trace, out);
     at(5_000);
-    w.releaseHeldApproval(CHILD); out.push(trace('still held: nothing'));
+    doorInsOf(w).approvalReleased(CHILD); out.push(trace('still held: nothing'));
     return out;
   }],
   ['approval: approvalRuled for a prompt pushed before the mint replaces that notification, same tag', async () => {
@@ -508,8 +511,8 @@ const APPROVAL_ROWS: Row[] = [
     await tickAt(w, 1_000); out.push(trace('painted with no row: pushed'));
     at(2_000);
     heldApproval(f);
-    w.approvalRuled(CHILD, '', PARENT, 'deny'); out.push(trace('ruled: replaced'));
-    w.approvalRuled(CHILD, 'a0000000000000001', PARENT, 'deny'); out.push(trace('a subagent\'s ruling: nothing'));
+    doorInsOf(w).approvalRuled(CHILD, '', PARENT, 'deny'); out.push(trace('ruled: replaced'));
+    doorInsOf(w).approvalRuled(CHILD, 'a0000000000000001', PARENT, 'deny'); out.push(trace('a subagent\'s ruling: nothing'));
     return out;
   }],
   ['approval: restart, held rows re-seed and push once no longer held; a released row is not re-seeded', async () => {

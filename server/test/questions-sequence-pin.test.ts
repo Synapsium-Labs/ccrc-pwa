@@ -20,6 +20,7 @@ import { localIO } from '../src/io.js';
 import type { PushPayload } from '../src/push.js';
 import { testDeps, withFakeClock } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
+import { doorInsOf } from './questionDoorIns.js';
 
 const T0 = 1_786_000_000_000;
 const A = 'project-a-quiet-basin';
@@ -172,8 +173,8 @@ const ROWS: Row[] = [
     const took = f.coord.takeAskForAnswer(idA, askAt);
     out.push({ step: 'the route takes A\'s released row', took });
     f.coord.settleAsk(idA, PARENT, 'Red', Date.now());
-    w.answeredLate(A, idA, PARENT); out.push(trace('A answered late: A\'s lapse replaced, B\'s kept'));
-    w.answeredLate(B, idA, PARENT); out.push(trace('A\'s row id against B: nothing'));
+    doorInsOf(w).answeredLate(A, idA, PARENT); out.push(trace('A answered late: A\'s lapse replaced, B\'s kept'));
+    doorInsOf(w).answeredLate(B, idA, PARENT); out.push(trace('A\'s row id against B: nothing'));
     return out;
   }],
   ['D-5290: the settle ticks run out and the menu raises without actions; the envelope then arrives with the parent gone: the amendment asks the hold first, minted released, the answerable push replaces the actionless one', async () => {
@@ -230,10 +231,10 @@ const ROWS: Row[] = [
     await tickAt(w, 1_000); out.push(trace('painted: deferred over the main row only'));
     at(3_000);
     expect(f.coord.takeApprovalForRule(sub, { by: PARENT, verdict: 'deny', reason: 'no', ruling: '{}', now: Date.now() }).ok).toBe(true);
-    w.approvalRuled(A, 'a0000000000000001', PARENT, 'deny'); out.push(trace('the subagent row ruled: nothing'));
+    doorInsOf(w).approvalRuled(A, 'a0000000000000001', PARENT, 'deny'); out.push(trace('the subagent row ruled: nothing'));
     at(4_000);
     expect(f.coord.declineApproval(main, PARENT, Date.now())).toBe(true);
-    w.releaseHeldApproval(A); out.push(trace('the main row handed over: pushed now'));
+    doorInsOf(w).approvalReleased(A); out.push(trace('the main row handed over: pushed now'));
     f.panes.set(A, BARE);
     await tickAt(w, 5_000); out.push(trace('cleared: nothing marked, nothing pushed'));
     await sweepApprovalsAt(w, 200_000); out.push(trace('later: nothing'));

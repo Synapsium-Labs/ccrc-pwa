@@ -32,6 +32,7 @@ import { Tmux } from '../src/exec.js';
 import { EXEMPT, needsOriginCheck } from '../src/auth/gate.js';
 import { parseDialog } from '../src/pane/dialog.js';
 import type { FleetWatcher } from '../src/watch.js';
+import type { Questions } from '../src/coord/questions.js';
 import { APPROVAL_REFUSALS_LOG, APPROVAL_SIGNING_KEY_FILE } from '../../shared/api.js';
 import {
   approvalCount, approvalsFixture, CHILD, CHILD2, DUNE, hookInput, PARENT, requestBody, standardFixture, TOK, TOKEN,
@@ -66,12 +67,18 @@ afterEach(async () => {
   for (const c of extra.splice(0)) await c();
 });
 
-/** The four watcher door-ins, spied (calling through), so a row says which the door called and with what. */
+/** The four door-ins, spied (calling through), so a row says which the door called and with what. Since D-7245 (W3 Q3f,
+ *  option (a)) they are the members of the watcher's `Questions` instance the watcher's forwards called (`released`,
+ *  `answeredLate`, `approvalReleased`, `approvalRuled`), each recorded with the arguments its forward was called with
+ *  (the child; the late answer's row and parent; the ruling's agent, parent and verdict), never the pane-edge facts the
+ *  watcher adds: a row's string is its forward's under the member's name. */
+const DOOR_INS: ReadonlyArray<readonly [keyof Questions, number]> = [['released', 1], ['answeredLate', 3], ['approvalReleased', 1], ['approvalRuled', 4]];
 const spyDoorIns = (w: FleetWatcher): (() => string[]) => {
   const calls: string[] = [];
-  for (const m of ['releaseHeldAsk', 'answeredLate', 'releaseHeldApproval', 'approvalRuled'] as const) {
-    const real = (w[m] as (...a: unknown[]) => void).bind(w);
-    vi.spyOn(w, m).mockImplementation(((...a: unknown[]) => { calls.push(`${m}(${a.map((x) => JSON.stringify(x)).join(',')})`); real(...a); }) as never);
+  const q = w.questions;
+  for (const [m, n] of DOOR_INS) {
+    const real = (q[m] as (...a: unknown[]) => unknown).bind(q);
+    vi.spyOn(q, m).mockImplementation(((...a: unknown[]) => { calls.push(`${m}(${a.slice(0, n).map((x) => JSON.stringify(x)).join(',')})`); return real(...a); }) as never);
   }
   return () => [...calls];
 };
@@ -1087,7 +1094,7 @@ const EXPECTED: Record<string, Outcome> = {
   "POST /api/asks/:id/release | 9 | not held (already answered)":
     {"status": 409, "body": "{\"ok\":false,\"error\":\"not-held\"}", "effects": {"row": {"state": "answered", "answeredBy": "operator", "answer": "Red"}, "doorIns": [], "keys": [], "feed": [], "pushes": []}},
   "POST /api/asks/:id/release | success | declined, and the door-in fires (nothing held in memory: no push)":
-    {"status": 200, "body": "{\"ok\":true}", "effects": {"row": {"state": "declined", "answeredBy": null, "answer": null}, "doorIns": ["releaseHeldAsk(\"project-a-quiet-basin\")"], "keys": [], "feed": [], "pushes": []}},
+    {"status": 200, "body": "{\"ok\":true}", "effects": {"row": {"state": "declined", "answeredBy": null, "answer": null}, "doorIns": ["released(\"project-a-quiet-basin\")"], "keys": [], "feed": [], "pushes": []}},
   "POST /api/approvals | 1 notConfigured | no coordination store":
     {"status": 501, "body": "{\"ok\":false,\"error\":\"not-configured\"}", "effects": {}},
   "POST /api/approvals | 2 401 | no box token":
@@ -1201,7 +1208,7 @@ const EXPECTED: Record<string, Outcome> = {
   "POST /api/approvals/:id/rule | 12 | a row minted released (forbidden)":
     {"status": 409, "body": "{\"ok\":false,\"error\":\"approval-released\",\"releaseReason\":\"forbidden\"}", "effects": {"minted": 1, "row": {"state": "released", "answeredBy": null, "releaseReason": "forbidden"}, "doorIns": [], "mailToParent": 0, "journal": null}},
   "POST /api/approvals/:id/rule | 13 | declined (handed over first)":
-    {"status": 409, "body": "{\"ok\":false,\"error\":\"declined\"}", "effects": {"minted": 1, "row": {"state": "declined", "answeredBy": "project-a-calm-mesa", "releaseReason": null}, "doorIns": ["releaseHeldApproval(\"project-a-quiet-basin\")"], "mailToParent": 0, "journal": null}},
+    {"status": 409, "body": "{\"ok\":false,\"error\":\"declined\"}", "effects": {"minted": 1, "row": {"state": "declined", "answeredBy": "project-a-calm-mesa", "releaseReason": null}, "doorIns": ["approvalReleased(\"project-a-quiet-basin\")"], "mailToParent": 0, "journal": null}},
   "POST /api/approvals/:id/rule | 14 | already ruled":
     {"status": 409, "body": "{\"ok\":false,\"error\":\"already-ruled\"}", "effects": {"minted": 1, "row": {"state": "denied", "answeredBy": "project-a-calm-mesa", "releaseReason": null}, "doorIns": ["approvalRuled(\"project-a-quiet-basin\",\"\",\"project-a-calm-mesa\",\"deny\")"], "mailToParent": 0, "journal": null}},
   "POST /api/approvals/:id/rule | 15 | hook-gone (the row is stale)":
@@ -1251,7 +1258,7 @@ const EXPECTED: Record<string, Outcome> = {
   "POST /api/approvals/:id/release | 9 | not held (already ruled)":
     {"status": 409, "body": "{\"ok\":false,\"error\":\"not-held\"}", "effects": {"minted": 1, "row": {"state": "denied", "answeredBy": "project-a-calm-mesa", "releaseReason": null}, "doorIns": ["approvalRuled(\"project-a-quiet-basin\",\"\",\"project-a-calm-mesa\",\"deny\")"], "mailToParent": 0, "journal": null}},
   "POST /api/approvals/:id/release | success | declined, and the door-in fires":
-    {"status": 200, "body": "{\"ok\":true}", "effects": {"minted": 1, "row": {"state": "declined", "answeredBy": "project-a-calm-mesa", "releaseReason": null}, "doorIns": ["releaseHeldApproval(\"project-a-quiet-basin\")"], "mailToParent": 0, "journal": null}},
+    {"status": 200, "body": "{\"ok\":true}", "effects": {"minted": 1, "row": {"state": "declined", "answeredBy": "project-a-calm-mesa", "releaseReason": null}, "doorIns": ["approvalReleased(\"project-a-quiet-basin\")"], "mailToParent": 0, "journal": null}},
   "POST /api/sessions/:id/ask | 1 | an unknown session":
     {"status": 404, "body": "{\"ok\":false,\"error\":\"unknown-session\"}", "effects": {"row": {"state": "held", "answeredBy": null, "answer": null}, "keys": [], "feed": []}},
   "POST /api/sessions/:id/ask | pair 1+2 | an unknown session and a bad body":
