@@ -55,6 +55,7 @@ function ChatItemBody({
   askBelow,
   answerLabel,
   onAnswer,
+  day,
 }: {
   item: ChatItem;
   /** Session id — threaded down to clip thumbnails (`clipUrl(id, name)`). */
@@ -68,12 +69,14 @@ function ChatItemBody({
   /** The transcript's Answer control's word (decision `ask-answer-control-says-submit`). */
   answerLabel?: string;
   onAnswer?: () => void;
+  /** The viewer's local day (`lib/clock.ts#dayKey`): a row whose words read the clock draws again when it changes. */
+  day?: string;
 }): ReactNode {
   switch (item.kind) {
     case 'divider':
       return <p className="ts-divider">{item.label}</p>;
     case 'message':
-      return <MessageBubble event={item.event} id={id} streaming={item.streaming} />;
+      return <MessageBubble event={item.event} id={id} streaming={item.streaming} day={day} />;
     case 'tool':
       return (
         <ToolCard
@@ -171,6 +174,10 @@ export interface ChatListProps {
   /** Raise the answer sheet. The transcript never answers anything itself —
    *  `EnvelopeSheet` stays the one hardened sender. */
   onAnswer?: () => void;
+  /** The viewer's local day (`lib/clock.ts#dayKey`), from the screen's own clock. The row barrier compares it only for a
+   *  row whose words read the clock (`sameRow.ts#readsClock`, the usage-limit pill), so that row draws again at local
+   *  midnight and no other row does (desktop polish Task C7, review 1128). */
+  day?: string;
 }
 
 /** Plain-list renderer — the virtual list's item model without the viewport
@@ -186,6 +193,7 @@ export function ChatListInner({
   askBelow,
   answerLabel,
   onAnswer,
+  day,
 }: ChatListProps): ReactNode {
   const set = useFrameSet();
   const items = transcriptOf(set?.transcriptGrouping, buildChatItems(events, pending, busy));
@@ -201,6 +209,7 @@ export function ChatListInner({
             onDiscard={onDiscard}
             askPending={askPending} askBelow={askBelow} answerLabel={answerLabel}
             onAnswer={onAnswer}
+            day={day}
           />
         </div>
       ))}
@@ -696,6 +705,7 @@ function ChatScroller({
   askBelow,
   answerLabel,
   onAnswer,
+  day,
   column,
 }: ChatListProps & { column: Column }): ReactNode {
   // The GROUPED list when the set folds tool runs (D-5475): every index below — the count, the keys, the seeded
@@ -789,9 +799,10 @@ function ChatScroller({
         onDiscard={onDiscard}
         askPending={askPending} askBelow={askBelow} answerLabel={answerLabel}
         onAnswer={onAnswer}
+        day={day}
       />
     );
-  }, [items, meter, set, id, onRetry, onDiscard, askPending, askBelow, answerLabel, onAnswer]);
+  }, [items, meter, set, id, onRetry, onDiscard, askPending, askBelow, answerLabel, onAnswer, day]);
 
   return (
     <>

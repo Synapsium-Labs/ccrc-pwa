@@ -19,8 +19,10 @@ export interface Lru<V> {
   readonly weight: number;
 }
 
-/** Every cache `createLru` has made. They are module-scope caches that live as long as the page, so holding them
- *  keeps nothing alive that would otherwise be freed. */
+/** Every cache `createLru` has made. They are module-scope caches that live as long as the page, so in production,
+ *  where each module is evaluated once, holding them keeps nothing alive that would otherwise be freed. Under the dev
+ *  server's hot reload, a module that makes one (`markdown.tsx`) can be evaluated again on its own: it makes a new
+ *  cache, and the old one stays reachable from here, entries and all, until the page reloads. */
 const MADE = new Set<Lru<unknown>>();
 
 /** Empty every cache `createLru` has made. TEST ISOLATION ONLY: `pwa/test/setup.ts`'s shared `afterEach` calls it, so

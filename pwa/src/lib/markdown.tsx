@@ -364,8 +364,10 @@ export const HIGHLIGHT_CACHE_MAX_ENTRIES = 256;
 
 /** The most characters of markup the highlight cache holds (desktop polish Task C7): a dense 64 KiB JSON block, the
  *  most `MD_HIGHLIGHT_BLOCK_MAX_CHARS` admits, comes out as about 858 000 characters (C7's Step 0), so four or so of
- *  those at once. Each key is its block's text and language, which the markup holds escaped, so a key is never longer
- *  than its markup and the cache holds at most twice this many characters in all. */
+ *  those at once. The bound weighs the markup only, not the keys. A key is its language, one separator and its
+ *  block's text, and the markup holds that text escaped, so a key is at most its markup plus the language's name and
+ *  one character: the cache holds at most twice this many characters, plus a language name and one character per
+ *  entry. */
 export const HIGHLIGHT_CACHE_MAX_CHARS = 4_000_000;
 
 /** What highlight.js answered for a (language, block) pair, by `lang` and `raw` as `boundedHighlight` received them.

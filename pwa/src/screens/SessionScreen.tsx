@@ -15,6 +15,7 @@ import { ArchiveSheet, restoreSession } from '../fleet/ArchiveSheet';
 import { accountHue, accountLabel, accountProvider } from '../lib/accounts';
 import { api, ApiError, failedTo, INTERRUPT_REFUSAL_TEXT, refusalText } from '../lib/api';
 import { backgroundTasksClause } from '../lib/refusalWords';
+import { dayKey } from '../lib/clock';
 import { useKeyboardInset } from '../lib/keyboard';
 import { navigate } from '../lib/router';
 import { ack } from '../lib/seen';
@@ -309,6 +310,9 @@ export function SessionScreen({
   const lookup = (sid: string): FleetSession | null => (parent !== null && parent.id === sid ? parent : null);
   const parentId = live === null ? null : parentIdOf(live, activeRuns);
   const factsNow = useNow(30_000);
+  // Desktop polish Task C7, review 1128: the transcript's day, from this same clock. A row whose words read the clock
+  // (the usage-limit pill) draws again when it changes, within one tick of local midnight; no other row does.
+  const day = dayKey(factsNow);
   const presence = parentId === null ? null : coordPresence(parentId, lookup(parentId), fleetFrameSeen);
   const facts = live === null ? null : sessionFacts({
     session: live, now: factsNow, roster,
@@ -662,6 +666,7 @@ export function SessionScreen({
             askBelow={askInline}
             answerLabel={answerLabel}
             onAnswer={onAnswer}
+            day={day}
           />
         )}
       </div>

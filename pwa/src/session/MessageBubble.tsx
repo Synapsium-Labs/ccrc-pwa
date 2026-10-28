@@ -146,9 +146,9 @@ function ClipThumbs({ id, paths }: { id: string; paths: string[] }): ReactNode {
   );
 }
 
-/** One transcript message. Memoised on its props, `event`, `id` and `streaming` (desktop polish Task C7): the store
- *  keeps an event's identity across frames, so a bubble whose event, session and caret are unchanged renders nothing
- *  again, its markdown and highlighting included. */
+/** One transcript message. Memoised on its props, `event`, `id`, `streaming` and `day` (desktop polish Task C7): the
+ *  store keeps an event's identity across frames, so a bubble whose event, session, caret and day are unchanged renders
+ *  nothing again, its markdown and highlighting included. */
 export const MessageBubble = memo(function MessageBubble({
   event,
   id,
@@ -159,6 +159,10 @@ export const MessageBubble = memo(function MessageBubble({
   id: string;
   /** Last assistant turn while the session is busy — shows the block caret. */
   streaming?: boolean;
+  /** The viewer's local day (`lib/clock.ts#dayKey`). No line here reads it: the usage-limit pill reads the clock when it
+   *  draws (`resetClock`), and a new day is a new prop, so the memo lets the pill draw again at local midnight
+   *  (review 1128). */
+  day?: string;
 }): ReactNode {
   if (event.kind === 'system') {
     // D-2228: the harness's resume pair. The prompt line is neutral (whether it
