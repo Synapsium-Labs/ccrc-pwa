@@ -4,7 +4,7 @@
 // dispatches (`sweepAsks`, `sweepApprovals`, public so a test can await them) and the four door-ins the routes call.
 // Q3c to Q3f move the hold carrier, the lapse and the door-ins into `coord/questions.ts`: each runs this file
 // UNEDITED. It reads no private field, so nothing in it is a named exception.
-// D-7245 (W3 Q3f, option (a)): the four door-ins are driven through `questionDoorIns.ts#doorInsOf`, the watcher's
+// Slug q3f-door-in-repoint (W3 Q3f, the coordinator's ruling of 2026-10-28, option (a)): the four door-ins are driven through `questionDoorIns.ts#doorInsOf`, the watcher's
 // `Questions` member and its doors' sink, as the door cores call them; each call site is its forward's, renamed.
 //
 // HOW A ROW READS. A row is a sequence of steps; after each step it records what changed, in order: every asks and

@@ -224,7 +224,7 @@ describe('W3 question census (slug question-census)', () => {
     const byTag = (t: string): number => doors.filter((s) => s.tag === t).length;
     expect([doors.length, byTag('claimant'), byTag('operator'), byTag('navigation')], 'the question doors, by principal').toEqual([12, 6, 5, 1]);
     for (const d of doorIns) expect(d.callers.length, `${d.method} has a route caller`).toBeGreaterThan(0);
-    // W3 Q3f (D-7030, D-7245), at the target, may only shrink: no route calls the watcher for a question, and the four
+    // W3 Q3f (D-7030; slug q3f-door-in-repoint), at the target, may only shrink: no route calls the watcher for a question, and the four
     // door-in forwards Q3d left (`releaseHeldAsk`, `answeredLate`, `releaseHeldApproval`, `approvalRuled`) are gone; the
     // cores call the watcher's `Questions` instance and push through its doors sink.
     expect(doorIns.map((d) => d.method), 'a watcher door-in a route calls').toEqual([]);

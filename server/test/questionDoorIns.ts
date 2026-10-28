@@ -1,5 +1,5 @@
-// The routes' four door-ins, driven the way a door core drives them (W3 Q3f, D-7030; coordinator ruling D-7245, option
-// (a)): the member of the watcher's own `Questions` instance, with the pane-edge facts the watcher hands that instance
+// The routes' four door-ins, driven the way a door core drives them (W3 Q3f, D-7030; the coordinator's ruling of 2026-10-28, slug
+// q3f-door-in-repoint, option (a)): the member of the watcher's own `Questions` instance, with the pane-edge facts the watcher hands that instance
 // (`QuestionDoorSink`), its answer pushed through the same sink. Each is what the watcher's forward of the same name
 // did before Q3f deleted it (`releaseHeldAsk`, `answeredLate`, `releaseHeldApproval`, `approvalRuled`), so a suite that
 // drove the forward drives this instead with no row changing meaning.

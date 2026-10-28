@@ -67,7 +67,7 @@ afterEach(async () => {
   for (const c of extra.splice(0)) await c();
 });
 
-/** The four door-ins, spied (calling through), so a row says which the door called and with what. Since D-7245 (W3 Q3f,
+/** The four door-ins, spied (calling through), so a row says which the door called and with what. Since slug q3f-door-in-repoint (W3 Q3f,
  *  option (a)) they are the members of the watcher's `Questions` instance the watcher's forwards called (`released`,
  *  `answeredLate`, `approvalReleased`, `approvalRuled`), each recorded with the arguments its forward was called with
  *  (the child; the late answer's row and parent; the ruling's agent, parent and verdict), never the pane-edge facts the

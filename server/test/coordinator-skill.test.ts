@@ -713,7 +713,7 @@ describe('the coordinator skill: linkage', () => {
       // DISK RETENTION shadow journal (D-6861) — a read-only view for the operator (and the agent that
       // reviews a disk lane before the operator arms it), not a coordination door: no session decides or acts through it.
       'GET /api/coord/shadow-journal',
-      // THE QUESTION DOOR FAMILY (W3 Q3f, D-7030; D-7246, named exception 3): three routes the skill corpus does not name
+      // THE QUESTION DOOR FAMILY (W3 Q3f, D-7030; the coordinator's ruling of 2026-10-28, slug q3f-skill-exempt; named exception 3): three routes the skill corpus does not name
       // YET, each for its own reason. The follow-up is ccd's: `ccrc-api` and the coordinator skill name the claimant's two
       // when the client moves onto them (W7 gates on the `questions-v1` cap word); until then the coordinator's doors are
       // the old pair, which stay as aliases and stay named.
