@@ -1390,9 +1390,9 @@ _ws_loose_collect() {   # token hex surface actor reason -> ccd ws-collect --exp
 # paths, never holding a repository (above).
 # THE VERB'S BOUND. Every call that walks a tree is bounded, and their number does not grow with the candidates: the
 # ignored listing, the repository walk, the size (`du`), the two `git status` reads and the ONE `rm` over every candidate,
-# six at WS_SHED_SCAN_S_DEFAULT each; the toplevel read and the ONE index read at WS_SHED_QUICK_S each; the process walk
-# at WS_PATH_USERS_SCAN_S. A bound reached ends the verb, except the size's (it answers `bytes: null` and goes on), so at
-# most two TERM-to-KILL graces are paid.
+# six at WS_SHED_SCAN_S_DEFAULT each; the ONE toplevel read (with the git and common directories) and the ONE index read
+# at WS_SHED_QUICK_S each; the process walk at WS_PATH_USERS_SCAN_S. A bound reached ends the verb, except the size's (it
+# answers `bytes: null` and goes on), so at most two TERM-to-KILL graces are paid.
 WS_SHED_MIN_ASLEEP_S_DEFAULT=3600
 WS_SHED_SCAN_S_DEFAULT=30
 WS_SHED_QUICK_S=10
@@ -1483,16 +1483,16 @@ _ws_shed_run() {   # -> everything after the registry rungs, contained (id, cls,
   local wdp rel dir phys top dev wdev i n=0 rc bytes=null kib before after err scan line keep
   local -a names=() pre=() prephys=() cands=() physs=()
   scan=$(_ws_shed_scan)
+  # ONE quick read answers three facts: the toplevel, the git directory and the repository's common one.
+  local revs gdir gcom p
+  local -a rv=()
   wdp=$(cd -P -- "$wd" 2>/dev/null && pwd -P) \
-    && top=$(_plat_timeout "$WS_SHED_QUICK_S" git -C "$wdp" rev-parse --path-format=absolute --show-toplevel 2>/dev/null) \
-    && [[ "$top" == "$wdp" ]] \
+    && revs=$(_plat_timeout "$WS_SHED_QUICK_S" git -C "$wdp" rev-parse --path-format=absolute --show-toplevel --git-dir --git-common-dir 2>/dev/null) \
+    && mapfile -t rv <<< "$revs" && (( ${#rv[@]} == 3 )) && top=${rv[0]} && gdir=${rv[1]} && gcom=${rv[2]} \
+    && [[ "$top" == "$wdp" && $gdir == /?* && $gcom == /?* ]] \
     || { _ws_shed_refused unmeasured "$wd is not the top of a git worktree that could be read — nothing was removed"; return; }
   # A LINKED WORKTREE, NEVER A MAIN CHECKOUT: its git directory is not its repository's common one, and it is no
   # project's checkout under any spelling (the row's `workspace` field is not taken on its word).
-  local gdirs gdir gcom p
-  gdirs=$(_plat_timeout "$WS_SHED_QUICK_S" git -C "$wdp" rev-parse --path-format=absolute --git-dir --git-common-dir 2>/dev/null) \
-    && gdir=${gdirs%%$'\n'*} && gcom=${gdirs#*$'\n'} && [[ $gdirs == *$'\n'* && $gdir == /?* && $gcom == /?* && $gcom != *$'\n'* ]] \
-    || { _ws_shed_refused unmeasured "git could not say which repository $wdp belongs to — nothing was removed"; return; }
   [[ ! $gdir -ef $gcom && $gdir != "$gcom" ]] \
     || { _ws_shed_refused not-a-workspace "$wdp is a repository's own checkout, not a linked worktree — its dependencies are the operator's"; return; }
   [[ ${gcom##*/} != .git || ! "$wdp" -ef "${gcom%/*}" ]] \
