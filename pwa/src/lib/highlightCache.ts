@@ -19,6 +19,17 @@ export interface Lru<V> {
   readonly weight: number;
 }
 
+/** Every cache `createLru` has made. They are module-scope caches that live as long as the page, so holding them
+ *  keeps nothing alive that would otherwise be freed. */
+const MADE = new Set<Lru<unknown>>();
+
+/** Empty every cache `createLru` has made. TEST ISOLATION ONLY: `pwa/test/setup.ts`'s shared `afterEach` calls it, so
+ *  no test sees what an earlier test cached (a suite that counts `hljs.highlight`'s calls, or mocks what it answers,
+ *  would otherwise be served an earlier test's markup). Production code never calls it. */
+export function clearEveryLru(): void {
+  for (const lru of MADE) lru.clear();
+}
+
 /** A cache of at most `maxEntries` entries and at most `maxWeight` total weight, each value weighed once by `weigh`. */
 export function createLru<V>(maxEntries: number, maxWeight: number, weigh: (value: V) => number): Lru<V> {
   // A Map iterates in insertion order, so its first key is the least recently used: a read re-inserts its key.
@@ -30,7 +41,7 @@ export function createLru<V>(maxEntries: number, maxWeight: number, weigh: (valu
     entries.delete(key);
     total -= held.weight;
   };
-  return {
+  const lru: Lru<V> = {
     get(key) {
       const held = entries.get(key);
       if (held === undefined) return undefined;
@@ -56,4 +67,6 @@ export function createLru<V>(maxEntries: number, maxWeight: number, weigh: (valu
     get size() { return entries.size; },
     get weight() { return total; },
   };
+  MADE.add(lru as Lru<unknown>);
+  return lru;
 }

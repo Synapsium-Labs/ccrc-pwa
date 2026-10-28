@@ -2,6 +2,7 @@ import '@testing-library/jest-dom/vitest';
 import { cleanup } from '@testing-library/react';
 import { afterEach, vi } from 'vitest';
 import { setStripExpanded } from '../src/fleet/stripExpanded';
+import { clearEveryLru } from '../src/lib/highlightCache';
 import { useFleetStore } from '../src/stores/fleet';
 
 // ONE teardown hook doing three unrelated jobs, merged deliberately rather than
@@ -67,6 +68,14 @@ import { useFleetStore } from '../src/stores/fleet';
 // test, which reads folded by default. `setStripExpanded(false)` clears the
 // module value (and writes `folded`); the `removeItem` after it then clears the
 // key, so a test starts with nothing stored, as a first visit does.
+//
+// (4) THE HIGHLIGHT CACHE IS EMPTIED AFTER EVERY TEST (desktop polish Task C7).
+//
+// `boundedHighlight` keeps highlight.js's markup in a module-scope cache that lives as long as the page. Across tests
+// that is a leak: a suite that counts `hljs.highlight`'s calls, or mocks what it answers, would be served markup an
+// earlier test cached. `clearEveryLru` empties every cache `createLru` made. It is test isolation only, and production
+// never calls it. `highlightCache.ts` imports nothing, so this hook loads no renderer and no file's own `vi.mock` of
+// `lib/markdown` meets an instance loaded here first.
 afterEach(async () => {
   useFleetStore.getState().disconnect();
   cleanup();
@@ -76,6 +85,7 @@ afterEach(async () => {
   } catch {
     /* a file on the node environment has no window, and a test may have made storage throw: nothing to clear then */
   }
+  clearEveryLru();
   if (vi.isFakeTimers()) {
     vi.runOnlyPendingTimers();
   } else {

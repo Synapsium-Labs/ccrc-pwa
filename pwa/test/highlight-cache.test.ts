@@ -2,7 +2,7 @@
 // and at most `maxWeight` total weight, dropping the least recently used first, and never keeps an entry heavier than
 // `maxWeight` on its own.
 import { describe, expect, it } from 'vitest';
-import { createLru } from '../src/lib/highlightCache';
+import { clearEveryLru, createLru } from '../src/lib/highlightCache';
 
 const len = (s: string): number => s.length;
 
@@ -50,6 +50,20 @@ describe('createLru', () => {
     // The weight starts again from nothing: a hundred characters fit a bound of 100, as they would in a new cache.
     lru.set('c', 'x'.repeat(100));
     expect(lru.get('c')).toBe('x'.repeat(100));
+  });
+
+  it('clearEveryLru empties every cache createLru made', () => {
+    // The test-isolation reset `test/setup.ts` calls after every test: it reaches each cache, the module's highlight
+    // cache included, without being handed any of them.
+    const one = createLru<string>(10, 100, len);
+    const two = createLru<number>(10, 100, () => 1);
+    one.set('a', 'xx');
+    two.set('b', 7);
+    clearEveryLru();
+    expect(one.size).toBe(0);
+    expect(one.weight).toBe(0);
+    expect(two.size).toBe(0);
+    expect(two.get('b')).toBeUndefined();
   });
 
   it('an over-size entry is not kept', () => {

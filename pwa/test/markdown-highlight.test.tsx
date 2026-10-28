@@ -9,7 +9,7 @@ import { cleanup, render } from '@testing-library/react';
 import { defaultUrlTransform } from 'react-markdown';
 import hljs from 'highlight.js/lib/core';
 import {
-  CHAT_COMPONENTS, CodeBlock, HIGHLIGHT_CACHE_MAX_CHARS, HIGHLIGHT_CACHE_MAX_ENTRIES, boundedHighlight, resetHighlightCache,
+  CHAT_COMPONENTS, CodeBlock, HIGHLIGHT_CACHE_MAX_CHARS, HIGHLIGHT_CACHE_MAX_ENTRIES, boundedHighlight,
 } from '../src/lib/markdown';
 import { MD_HIGHLIGHT_BLOCK_MAX_CHARS, MD_HIGHLIGHT_MAX_WORD_CHARS } from '../src/lib/markdownLimits';
 import { parseMarkdown } from '../src/lib/markdownParse';
@@ -18,7 +18,6 @@ import { renderHast } from '../src/lib/renderHast';
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
-  resetHighlightCache();
 });
 
 /** A TypeScript body of exactly `chars` characters, every line a keyword, ending in `x` (never a newline, which
@@ -107,8 +106,9 @@ describe('the highlight prop and the other two conditions', () => {
 });
 
 // Desktop polish Task C7: `boundedHighlight` keeps what highlight.js answered in a bounded module cache keyed by the
-// language and the block, read only after every bound has passed. The module's cache outlives a case, so the suite
-// empties it after each one (`resetHighlightCache`).
+// language and the block, read only after every bound has passed. Each case starts from an empty cache: the shared
+// `afterEach` in `test/setup.ts` empties it. Each case also highlights text no other case does, so no case here
+// depends on that reset.
 describe('the highlight cache (C7)', () => {
   it('hljs.highlight runs once per (lang, code)', () => {
     const spy = vi.spyOn(hljs, 'highlight');
