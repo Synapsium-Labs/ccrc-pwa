@@ -1354,16 +1354,33 @@ _ws_loose_collect() {   # token hex surface actor reason -> ccd ws-collect --exp
 # stdout is ONE JSON line: `{"shed":…}` or `{"wouldShed":…}` (exit 0), a refusal `{"refused":<word>,…}` (exit 0), or a
 # failure after the act began `{"failed":<word>,…}` (exit 1). `--dry-run` runs every rung, removes nothing and journals
 # nothing, takes no lock and makes no lock file (the arm's shadow). The refusal words, in order: paused,
-# no-such-session, in-progress, not-a-workspace, not-a-child, run-open, not-asleep, asleep-too-recently, already-shed,
+# no-such-session, in-progress, archived, not-a-workspace, not-a-child, run-open, not-asleep, asleep-too-recently, already-shed,
 # unmeasured, nothing-to-shed, in-use; the failures: git-state-changed, shed-incomplete.
 # TWO LOCKS, IN ONE ORDER, BOTH `-n`. Once the row is known to stand, a REAL shed takes `$REG/.reap-<id>.lock`, the lock
 # every verb that removes anything of the id takes (ws-reap, ws-reclaim, ws-expire, ws-restore, ws-collect), and then
 # its OWN `$REG/.shed-<id>.lock`; either one held answers the retryable `in-progress`, touching nothing. Both are asked
 # `-n`, never waited on, and always reap first, so no holder of one ever waits for the other. Neither is taken for an id
-# no row names, and `--dry-run` takes neither (a shadow never delays a wake, a reap, a restore or a collect).
+# no row names, and `--dry-run` takes neither (a shadow never delays a wake, a reap, a restore or a collect). An
+# ARCHIVED row refuses `archived`, read under the reap lock (an expiry archives under it), so no row is archived while a
+# real shed runs and the spawn gate's archived branch never has to ask the shed lock.
+# THE MARKER, BECAUSE THE LOCK FILE CAN GO. `$REG/.shed-<id>.lock` is a dot-prefixed `$REG` file a dot-led project can
+# alias (`_reg_purge`'s R-3 paragraph: project `.shed-demo` + slug `quiet-basin` purges the shed lock of the session
+# `demo-quiet-basin`), and a lock file unlinked under its holder reads as free. So a real shed also writes the row field
+# `$REG/<id>.shedding` (`<pid> <dev:ino of the lock>`, which no other id's purge glob reaches) once it holds both locks,
+# re-reads the lock's identity after writing it (a lock file that went or changed meanwhile refuses `unmeasured`), and
+# takes it back on its one way out. The gate refuses while the marker names a live pid, unless the lock it marked still
+# stands as that inode and is free; a marker that does not read refuses; a dead pid (a shed killed mid-removal) frees.
+# WHAT AN OPERATOR SEES WHEN A WAKE IS REFUSED. Every pane-creating path meets the gate in `_spawn_start` (or the return
+# verbs' gate) and dies there with its sentence, `ws-shed-deps is removing <id>'s dependency directories and holds its
+# shed lock — refusing to create a pane for it until that finishes; retry`, before the stop stamp is cleared, so the
+# session stays asleep and nothing else changed: `ccd ensure`/`ccd start` and the PWA's ensure and Revive routes answer
+# it as their error, and a supervise or swap respawn ends with it on stderr, in the unit's journal. It is never a wait. RETRY the same wake once the shed is over (it is bounded by the verb's runner row,
+# 240 s, and a healthy one takes seconds; the `shed-deps` journal line closes it). If it keeps refusing after that, the
+# marker outlived a holder whose pid was reused: check that no `ccd ws-shed-deps` of the id runs, remove
+# `$REG/<id>.shedding` by hand, and retry. The woken session runs `npm ci` before its next test step.
 # A WAKE AND A SHED EXCLUDE EACH OTHER. This is the one verb that removes from a tree that can wake, and every path that
 # creates a pane (start, ensure, the unit's supervise, swap's respawn) passes `_ws_expire_spawn_gate`, which for a row
-# that is not archived asks the SHED lock alone (`_ws_shed_spawn_held`: read-only, never creating the file, let go at
+# that is not archived asks the SHED's marker and lock alone (`_ws_shed_spawn_held`: read-only, never creating the file, let go at
 # once) and refuses, never waits, while a real shed holds it. The reap lock is not asked there, so no other verb's hold
 # of it (ws-restore's own, across its `_spawn_start`; a reclaim of a kept child; a collect) ever refuses a spawn of a row
 # that is not archived. A wake that asked before this verb took the lock cleared the stop stamp at once,
@@ -1449,14 +1466,31 @@ _ws_shed_repos() {   # phys... -> every `.git` at any depth beneath them, one pe
 _ws_shed_size() {   # phys... -> their disk use in KiB, one integer; rc non-zero when `du` did not finish
   _plat_timeout "$scan" du -sk -x -- "$@" | awk '{ s += $1 } END { print s + 0 }'; return "${PIPESTATUS[0]}"
 }
-_ws_shed_spawn_held() {   # id -> rc 0 when a real shed holds id's SHED lock right now; rc 1 when it is free, when its
-  #                          file does not stand, or when no flock exists (a box with no flock runs no shed: rung 2a).
+_ws_shed_spawn_held() {   # id -> rc 0 when a real shed holds id's SHED lock right now, or its marker says one may; rc 1
+  #                          when it is free, when neither the marker nor the lock file stands, or when no flock exists
+  #                          (a box with no flock runs no shed: rung 2a).
   # THE WAKE'S HALF OF THE EXCLUSION, asked by `_ws_expire_spawn_gate` for a row that is not archived — every path that
   # creates a pane (start, ensure, the unit's supervise, swap's respawn). It asks `$REG/.shed-<id>.lock` and nothing else:
   # only a real shed ever takes that lock (a dry run takes none), so no other verb's hold of the reap lock refuses here.
   # It opens the file READ-ONLY, so a wake never creates a shed lock (they are never unlinked), and lets it go at once: a
   # wake that asked while the lock was free has cleared the stop stamp by the time rung 4 or the last facts read it.
-  local fd
+  # THE MARKER FIRST, AND IT FAILS CLOSED (rung 2c): `$REG/<id>.shedding` standing names the shed's pid and its lock's
+  # dev:ino. A marker that does not read refuses; a holder pid that is gone (a shed killed mid-removal) is free; a live
+  # one is free only when the lock it marked still stands as that inode and nobody holds it (a finished shed's marker
+  # seen just before it was taken back). A lock file purged by an alias id's glob therefore refuses, never frees.
+  local fd m="$REG/$1.shedding" mk='' mpid mdi di
+  if [[ -e $m || -L $m ]]; then
+    [[ -f $m && ! -L $m ]] && _file_read_to mk "$m" || return 0
+    mpid=${mk%% *}; mdi=${mk#* }
+    [[ $mpid =~ ^[1-9][0-9]{0,9}$ && $mdi =~ ^[0-9]+:[0-9]+$ && $mk == "$mpid $mdi" ]] || return 0
+    kill -0 "$mpid" 2>/dev/null || return 1
+    [[ -f "$REG/.shed-$1.lock" && ! -L "$REG/.shed-$1.lock" ]] && command -v flock >/dev/null 2>&1 || return 0
+    di=$(_plat_devino "$REG/.shed-$1.lock" 2>/dev/null) && [[ $di == "$mdi" ]] || return 0
+    { exec {fd}<"$REG/.shed-$1.lock"; } 2>/dev/null || return 0
+    if flock -n "$fd"; then exec {fd}>&-; return 1; fi
+    exec {fd}>&-
+    return 0
+  fi
   [[ -f "$REG/.shed-$1.lock" && ! -L "$REG/.shed-$1.lock" ]] && command -v flock >/dev/null 2>&1 || return 1
   { exec {fd}<"$REG/.shed-$1.lock"; } 2>/dev/null || return 1   # the group's 2> is temporary; a bare exec's would not be
   if flock -n "$fd"; then exec {fd}>&-; return 1; fi
@@ -1657,12 +1691,31 @@ cmd_ws_shed_deps() {   # ccd ws-shed-deps --session <id> --class child|coordinat
     _ws_shed_refused in-progress "another ws-shed-deps of $id still holds its shed lock — nothing was removed"
     return 0
   }
+  # 2c. THE MARKER, `$REG/<id>.shedding` (`<pid> <dev:ino>`): the lock FILE can be unlinked under this holder by the
+  # purge of a dot-led alias id (`.shed-<id>`, the R-3 paragraph), and a gate that asked the file alone would read its
+  # absence as free. The marker is a row field, which no other id's purge glob reaches, and the gate refuses while it
+  # names a live holder, whatever the lock file says. The lock's identity is read before and after the marker is written:
+  # a lock file that went or changed between them refuses, with the marker taken back.
+  local sdi='' sdi2=''
+  { sdi=$(_plat_devino "$REG/.shed-$id.lock" 2>/dev/null) && [[ $sdi =~ ^[0-9]+:[0-9]+$ ]] \
+      && _reg_set "$id" shedding "$BASHPID $sdi" \
+      && sdi2=$(_plat_devino "$REG/.shed-$id.lock" 2>/dev/null) && [[ $sdi2 == "$sdi" ]]; } || {
+    rm -f -- "$REG/$id.shedding"
+    exec {sfd}>&- {lfd}>&-
+    _ws_shed_refused unmeasured "the shed lock at $REG/.shed-$id.lock went or changed as it was taken, so it could not be marked — nothing was removed"
+    return 0
+  }
   _ws_shed_locked; rc=$?
+  rm -f -- "$REG/$id.shedding"
   exec {sfd}>&- {lfd}>&-
   return "$rc"
 }
 _ws_shed_locked() {   # -> rungs 2b to 11, under the caller's reap lock (the caller's locals: id, cls, dry and the dec words)
   local wd='' ws=''
+  # 2d. never an archived row: the expiry lane owns it, and the spawn gate asks no shed lock for one. Read under the reap
+  # lock, which an expiry holds while it archives, so no row is archived while a real shed runs.
+  [[ ! -e "$REG/$id.archived" && ! -L "$REG/$id.archived" ]] \
+    || { _ws_shed_refused archived "$id is archived — the expiry lane owns an archived workspace — nothing was removed"; return 0; }
   _reg_get_to ws "$id" workspace || ws=''
   [[ -n "$ws" ]] || { _ws_shed_refused not-a-workspace "$id is a project's main checkout — its dependencies are the operator's"; return 0; }
   _reg_get_to wd "$id" workdir || wd=''
