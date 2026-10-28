@@ -179,6 +179,38 @@ describe('the retire executors\' censuses (ARCH-44, C4h)', () => {
     expect(names(retireGateLadders(tree))).toEqual(['server/src/coord/ladder.ts#arrowLadder', 'server/src/coord/ladder.ts#ladder']);
   });
 
+  // D-TBD-retire-ladders-nested-read (C4k): `RetireActPort` holds its readers in its `read` member, a literal nested in
+  // the one the port builder returns. Its own tree, so the row above stays byte-identical.
+  it('FIXTURE retireGateLadders: readers in a literal nested in the returned one do not count; the same calls as member values do', () => {
+    const nest = mkdtempSync(path.join(tmpdir(), 'consolidation-census-retire-nested-'));
+    try {
+      const p = path.join(nest, 'server/src/coord/nestedPort.ts');
+      mkdirSync(path.dirname(p), { recursive: true });
+      writeFileSync(p, [
+        'export function nestedPort(deps: Deps, job: Job): Port {',              // the port's shape: readers under `read`
+        '  return {',
+        '    read: {',
+        "      [STEPS.capability]: () => ccdCan(deps.fleetState, 'wsCollect'),",
+        '      [STEPS.presence]: () => deps.viewers?.isVisible(job.id) === true,',
+        '    },',
+        '    act: (f: Facts) => act(deps, job, f),',
+        '  };',
+        '}',
+        'export function eagerPort(deps: Deps, job: Job): Port {',               // both read in the builder's own body
+        '  return {',
+        '    read: {',
+        "      cap: ccdCan(deps.fleetState, 'wsCollect'),",
+        '      seen: deps.viewers?.isVisible(job.id) === true,',
+        '    },',
+        '  };',
+        '}',
+      ].join('\n'));
+      expect(names(retireGateLadders(nest))).toEqual(['server/src/coord/nestedPort.ts#eagerPort']);
+    } finally {
+      rmSync(nest, { recursive: true, force: true });
+    }
+  });
+
   it('FIXTURE retireActSites: an inline or bound retire verb passed to runCcd counts; an audit, a verb question and a comment do not', () => {
     expect(names(retireActSites(tree))).toEqual(['server/src/acts.ts#boundAct', 'server/src/acts.ts#inlineAct']);
   });

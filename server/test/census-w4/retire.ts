@@ -19,7 +19,9 @@
 // function calling `decideRetire(`, and hold `retire.ts` and `retireLane.ts` at L1 (C4n adds `retireExecutor.ts`, L4).
 import path from 'node:path';
 import { parsedFile } from '../scan/symbols.js';
-import { identifierReferences, retireFacts, type CallSite, type ParsedFile, type SymbolSpan } from '../scan/parse.js';
+import {
+  identifierReferences, retireFacts, type CallSite, type ParsedFile, type RetireLiteral, type RetireLiteralProperty, type SymbolSpan,
+} from '../scan/parse.js';
 import { REPO, sourceFiles, type CensusSite } from '../consolidationCensus.js';
 
 /** One site of a parsed-symbol census: the unit it was found in (`file#name`, a method by its own name), anchored on
@@ -47,18 +49,26 @@ export const RETIRE_ACT_KEYS: readonly string[] = ['wsReclaim', 'wsExpire', 'wsC
  * or arrow nested inside it) calls `ccdCan(` with a literal retire act key AND calls `.isVisible(`, one site per
  * function. 3 at the base: `coord/childReclaim.ts#childReclaimOutcome`, `coord/expireArchived.ts#expireArchived`,
  * `coord/collectTempRoot.ts#collectTempRoot`. `staleArchive.ts#act` reads both with `wsArchive` and is not counted.
- * A port builder that puts the two calls in SEPARATE nested readers (arrows or methods of the literal it returns, or
- * named functions nested in it) orders nothing itself, and is not counted (the shape C4k, C4l and C4m leave behind).
+ * A port builder that puts the two calls in SEPARATE nested readers (arrows or methods of the literal it returns, or of
+ * an object literal nested in it, as `RetireActPort`'s `read` member is, or named functions nested in it) orders nothing
+ * itself, and is not counted (the shape C4k, C4l and C4m leave behind). A call written as a member's VALUE, not inside
+ * an arrow or a method, runs in the builder's own body and is still its own.
  * KNOWN WIDTH: "nested" is a named unit (`scan/parse.ts`'s symbols) or a member of the function's returned or a
  * top-level const's object literal (`retireFacts`); an anonymous callback passed to a call is read as the body's own.
  */
+/** Every member of a literal, and of each object literal one of its members holds, at any depth
+ *  (D-TBD-retire-ladders-nested-read): a port's readers stand in its `read` member's literal, one level below the
+ *  literal it returns. */
+const literalMembers = (l: RetireLiteral): RetireLiteralProperty[] =>
+  l.properties.flatMap((m) => [m, ...(m.literal === null ? [] : literalMembers(m.literal))]);
+
 export function retireGateLadders(root: string = REPO): RetireSite[] {
   const out: RetireSite[] = [];
   for (const f of sourceFiles(root, 'server/src')) {
     const file = relOf(root, f);
     const p = parsedFile(f);
     const facts = retireFacts(p);
-    const nestedLiteralMembers = Object.values(facts.literals).flatMap((l) => l.properties)
+    const nestedLiteralMembers = Object.values(facts.literals).flatMap(literalMembers)
       .filter((m) => m.kind === 'arrow' || m.kind === 'method');
     for (const fn of topLevel(p)) {
       const nested = [
