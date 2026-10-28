@@ -8,7 +8,7 @@ import { mkdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { leafKeptWord } from '../../shared/api.js';
 import { CCD, ccdSource } from './ccdWsHelpers.js';
-import { functionSpan, refuseWords } from './census-w5/ccdHelpers.js';
+import { functionSpan, lockDeclineSites, refuseWords } from './census-w5/ccdHelpers.js';
 import { makePrHarness, type PrHarness } from './ccdPrHelpers.js';
 import { EXP_ID, expireVerb, makeArchived } from './wsExpireFixture.js';
 import {
@@ -50,7 +50,12 @@ describe('the nineteen words', () => {
     const pinWords = [...new Set([...nonComment(ccd).matchAll(/RECLAIM_PIN_WORD=(nested-rescue-[a-z-]+)/g)].map((m) => m[1]!))].sort();
     expect(pinWords, 'guards the guard: the pin names both rescue words, which ride the act failed document (D-6633)')
       .toEqual(NESTED_RESCUE_WORDS);
-    const harvested = new Set([...words(begin, end), ...words(...functionSpan(ccd, '_ws_reclaim_ladder')), ...pinWords]);
+    // The region's lock decline is its call of the reap-lock runner (D-7076), whose in-progress document stands in the
+    // runner: when a call for `expire` lies in the region, the runner's document word is the region's too.
+    const lock = lockDeclineSites(ccd);
+    const declines = lock.runner && lock.calls.some((c) => c.act === 'expire' && c.offset >= begin && c.offset < end)
+      ? lock.runner.printfs.map((p) => String(p.token)) : [];
+    const harvested = new Set([...words(begin, end), ...words(...functionSpan(ccd, '_ws_reclaim_ladder')), ...declines, ...pinWords]);
     expect(harvested.size, 'guards the guard: an empty harvest would equal an empty map').toBeGreaterThan(10);
     expect([...harvested].sort()).toEqual(Object.keys(EXPIRE_TOKEN_KIND).sort());
   });
@@ -126,10 +131,14 @@ describe('the audit document — `expiresAt` through ONE reader', () => {
 
 describe('the verb’s answer — box words told apart from composition errors (wave 3’s hand-over)', () => {
   const region = bodyOf('cmd_ws_expire');
-  /** The message a ccd `die "…"` or `_lc_refuse expire "$id" <word> "…"` prints, anchored to the call. */
+  /** The message a ccd `die "…"` or `_lc_refuse expire "$id" <word> "…"` prints, anchored to the call; and, when
+   *  `cmd_ws_expire` calls the reap-lock runner (D-7076), the runner's two `_lc_refuse` calls, read off it by name. */
   const calls = (): { word: string | null; text: string }[] => {
     const re = /\bdie "((?:[^"\\]|\\.)*)"|_lc_refuse\s+expire\s+"\$id"\s+(\S+)[\s\\]*"((?:[^"\\]|\\.)*)"/g;
-    return [...region.matchAll(re)].map((m) => (m[1] !== undefined ? { word: null, text: m[1] } : { word: m[2]!, text: m[3]! }));
+    const lock = lockDeclineSites(ccd);
+    const lockDies = lock.runner && lock.calls.some((c) => c.fn === 'cmd_ws_expire' && c.act === 'expire')
+      ? lock.runner.refuses.map((r) => ({ word: String(r.token), text: r.sentence ?? '' })) : [];
+    return [...[...region.matchAll(re)].map((m) => (m[1] !== undefined ? { word: null, text: m[1] } : { word: m[2]!, text: m[3]! })), ...lockDies];
   };
 
   it('every `die` before the lock is a COMPOSITION error — the server’s — save python3 missing, which is the BOX’s', () => {

@@ -176,10 +176,12 @@ describe('every die in a destructive verb is reached through _lc_refuse or _lc_f
   it('holds the expiry emits at exactly two in ws-expire — one verdict point, one flock decline (workspace lifecycle, wave 3)', () => {
     // `_ws_expire_locked` routes every ladder refusal, the token mismatch and the flavour refusals through one
     // `_lc_emit`; the lock decline in `cmd_ws_expire` is the second. Comment lines are not code.
+    // The flock decline is ws-expire's one call of the reap-lock runner (D-7076), with its literal act and verb.
     const region = src.slice(src.indexOf('EXPIRE-BEGIN'), src.indexOf('EXPIRE-END'));
     expect(region.length, 'the expire region could not be sliced').toBeGreaterThan(10000);
     const code = region.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
-    expect([...code.matchAll(/_lc_emit expire refused "\$id" "" verb ws-expire /g)]).toHaveLength(2);
+    expect([...code.matchAll(/_lc_emit expire refused "\$id" "" verb ws-expire /g)].length
+      + lockRunnerCalls('expire', 'ws-expire', src.indexOf('EXPIRE-BEGIN'), src.indexOf('EXPIRE-END'))).toBe(2);
   });
 
   it('holds the collector audit’s emits at exactly three in the COLLECT region — one per TERMINAL word, verb ws-audit (child reclamation, wave 7)', () => {
