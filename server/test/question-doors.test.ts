@@ -154,7 +154,7 @@ const runPair = async ([, setup, old, nu, before]: Pair): Promise<{ old: Outcome
   return { old: oldOut, nu: outcome(b, await nu(b)) };
 };
 
-const ruleAsk = (body: Record<string, unknown>, headers = TOK) => [
+const ruleAsk = (body: Record<string, unknown>, headers: Record<string, string> = TOK) => [
   (s: Side) => post(s, `/api/asks/${s.id}/answer`, body, headers),
   (s: Side) => post(s, `/api/questions/ask-${s.id}/rule`, { kind: 'ask', ...body }, headers),
 ] as const;
