@@ -77,7 +77,7 @@ A session that can forge those files can already move its own ref, so stage 4 ad
   - `lineage.ts` imports nothing but types; `lineageRead.ts` declares L3 in its header, in `server/test/rings/ring.ts`'s header grammar.
   - No import is added to `shared/api.ts` (`peers-claims-l0.test.ts`).
 - **Single definitions.**
-  - `LAND_PROBE_ENABLED_FRESH_S = 900` and `LINEAGE_MAX_BYTES = 16384` are defined once, in `lineage.ts`.
+  - `LAND_PROBE_ENABLED_FRESH_S = 1200` (four timer intervals; D-7104 says why) and `LINEAGE_MAX_BYTES = 16384` are defined once, in `lineage.ts`.
   - `lineage-unmeasured` is a member of both arrays. `DONE_REFUSAL_CODES` is derived by `.filter` from `DONE_AUTHORITY_CODES` and defined once in `shared/api.ts` (`core-vocab.test.ts` forbids a hand-typed copy).
   - Each new quoted kebab literal under `server/src/coord` gets its `NOT_CODES` line in `mail-routes.test.ts`, or belongs to a vocabulary.
 - **Wire discipline.** `AdvanceOk.verifiedHead?` is additive and optional, and its one reader is the coordinator skill text. `FLEET_PROTO` is untouched.
@@ -101,7 +101,7 @@ A session that can forge those files can already move its own ref, so stage 4 ad
 1. **Nothing but a fresh marker, no pause and a qualifying row reaches the lineage.** The cases:
    - marker absent → today;
    - marker unreadable, malformed, `v` not 1, or a `project` mismatch → today, detail `landing-marker-unreadable`;
-   - `at` older than 900 s, or more than 60 s in the future → today, detail `landing-marker-stale`;
+   - `at` older than 1200 s, or more than 60 s in the future → today, detail `landing-marker-stale`;
    - either pause marker present or unreadable → today;
    - the row does not qualify (no registry record, a branch outside `ws/`, a project mismatch) → today, detail `lineage-not-expected`.
 2. **The landing binds the head that was verified.** After an accepted advance to `merging`:
@@ -143,7 +143,7 @@ A session that can forge those files can already move its own ref, so stage 4 ad
   - So wave 3b's fetch-failed doc `{state: 'unmeasured', why, tip, chain: []}` parses.
 - **`MarkerRead`** is `'trusted' | 'absent' | 'unreadable' | 'stale'`.
   - `unreadable` covers bad JSON, `v` not 1, and a `project` mismatch.
-  - `stale` covers an `at` that does not parse, is older than 900 s, or is more than 60 s in the future.
+  - `stale` covers an `at` that does not parse, is older than 1200 s, or is more than 60 s in the future.
 - **`PauseRead`** is `'running' | 'paused' | 'unknown'`.
 - **`decideLineage({claim, live, marker, globalPause, projectPause, qualifies, lineage})`** answers in this order:
 
@@ -252,7 +252,7 @@ Appended to clause 3's sentence about a moving ref: "In a project your brief nam
   - **`parseLineage`, readable:** wave 3b's fetch-failed shape, and a valid three-entry chain.
   - **`parseEnabled`:**
     - valid and fresh;
-    - 901 s old and 61 s in the future, each `stale`;
+    - 1201 s old and 61 s in the future, each `stale`;
     - foreign project and bad JSON, each `unreadable`.
   - **`readLandingFacts`,** over `ioDoubles.ts`'s `absentReadIO` and `degradedReadIO`: absent and unreadable kept apart for each of the four files.
 - [ ] **Step 2: Run; see them fail.**
@@ -267,7 +267,7 @@ Appended to clause 3's sentence about a moving ref: "In a project your brief nam
   | D3 | accept without `tip === live` | the older-than row |
   | D4 | `partly-measured` reads `today` | that row |
   | D5 | drop the chain-link check | the broken-link case |
-  | D6 | freshness 9000 | the 901 s row |
+  | D6 | freshness 12000 | the 1201 s row |
   | D7 | `qualifies` ignored | the not-expected precedence case |
 
 - [ ] **Step 6: Commit:** `feat(coord): the lineage decision and its reader (landing order wave 4, Task 1)`.
@@ -412,7 +412,7 @@ Numbers are ISSUED, never chosen; a worker never calls the allocator (worker cla
 
 - **D-7102** — `verified-head` (Architecture): spec §5.4's accept row names only the fingerprint answer. Spec §7's R5 says "the landing binds the verified head", so after an accept the live tip replaces the claim everywhere the server binds a head, and the coordinator learns it from `AdvanceOk.verifiedHead`. Clause 15's own words are unchanged, because wave 3e's PR edits it; the landing paragraph defines the substitution instead.
 - **D-7103** — `pause-reads-today` (Design): "probe paused for this project → as today" also covers the global pause (wave 3b's D-4326) and an unreadable pause marker.
-- **D-7104** — `marker-freshness` (Design): the spec's table has no stale row. The marker is trusted for 900 s, so a radar that stopped ticking cannot keep acceptance alive.
+- **D-7104** — `marker-freshness` (Design): the spec's table has no stale row. The marker is trusted for 1200 s, four timer intervals, so a radar that stopped ticking cannot keep acceptance alive. Wave 3b's review (run 1109) found that writing `enabled` after each project's measurement spaced two writes up to about 1110 s apart. Wave 3b now reconciles `enabled` at each tick's start, so two writes are as far apart as two tick starts. A tick runs for up to its 780 s default budget, and a timer that comes due during a tick starts the next one at a later trigger. So two starts can be up to about 930 s apart, counting the timer's 30 s accuracy. 1200 s covers that with a margin. A tick killed at the unit's 900 s limit, which can stretch the gap further, is a failure, and the marker then ages out, which fails closed. (Amended 2026-10-28; the landing-order ledger's Decisions, 2026-10-28 08:00.)
 - **D-7105** — `lineage-not-expected` (Design): a row the probe never measures answers today's refusal rather than `lineage-unmeasured`, so no claim waits for a file that cannot come. The probe's qualifying predicate is restated on the server.
 - **D-7106** — `partly-measured-accepts` (Design): a claim found in the `chain` of an `unmeasured` lineage is accepted, because each listed step was proven.
 - **D-7107** — `not-a-refusal` (Architecture): `lineage-unmeasured` is a verdict code, but not a counted refusal. `DONE_REFUSAL_CODES`, derived, keeps it out of `closeRefusals`, `firstSubmission`, run health and the PWA chip, so §10's stage 4 metric ("refusals caused by a clean main sync: 0") is not inflated by radar timing. A re-sent `wave-done` still counts in `waveDoneMails`, because it is a real mail. The run-signals case pins that.
