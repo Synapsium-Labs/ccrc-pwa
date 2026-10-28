@@ -1,9 +1,11 @@
 # The worktree leak: why stopped sessions' worktrees are never reclaimed, and the smallest fix
 
-**Design note** · 2026-10-28 · Status: for the operator's ruling (§5). It builds on the fleet disk retention spec and
-plan (`docs/superpowers/specs/2026-10-23-fleet-disk-retention-design.md`, `docs/superpowers/plans/2026-10-23-fleet-disk-retention.md`,
-the #1119 rulings, merged as #1167) and the artifact lifecycle policy (`docs/superpowers/specs/2026-08-11-artifact-lifecycle-policy.md`).
-Code citations are to `origin/main` `b9ff9d446`, by anchor (file and function), never by line.
+**Design note** · 2026-10-28 · Status: **ruled 2026-10-28** (§5): A1 approved and extended to coordinators (D-7278),
+the gates recorded (D-7279), the stale arm's arming recorded as a fact (D-7280). Part B is built in this PR, in shadow.
+It builds on the fleet disk retention spec and plan (`docs/superpowers/specs/2026-10-23-fleet-disk-retention-design.md`,
+`docs/superpowers/plans/2026-10-23-fleet-disk-retention.md`, the #1119 rulings, merged as #1167) and the artifact
+lifecycle policy (`docs/superpowers/specs/2026-08-11-artifact-lifecycle-policy.md`). Code citations are to `origin/main`
+`b9ff9d446`, by anchor (file and function), never by line.
 
 ## In short
 
@@ -15,22 +17,23 @@ Code citations are to `origin/main` `b9ff9d446`, by anchor (file and function), 
   Every other collector stays out by design: the orphan lane, stale archive, expiry, `ws-collect` and the tmp sweep.
   Child reclaim keeps a finished worker for its programme by design: the non-final close re-holds it for wave N+1, and
   it is kept while its run is parked, a sibling run is open, or the run it reviewed is open. The stale arm is the one
-  mechanism that lets those keeps lapse. It ships in shadow and is armed only by `$REG/child-stale-reclaim-live`, which
-  has no writer in the tree. It also has no word for a parked run (`minting-run-open`). A coordinator's workspace is
-  never reclaimed automatically (rule 4). So nothing removes these trees, and nothing removes the rebuildable bytes
-  inside them.
-- **The fix, in two parts (§3, §4).**
-  - **Part A, no code:** the operator arms the existing reaper's stale arm (act A2). Kept children idle for seven
-    days are then reclaimed with their work pinned to the attic.
-  - **Part B, the smallest new code:** a *deps-shed* arm. For a child that stop-done has already put to sleep, whose
-    newest placed run is `done` or `failed` and closed past a configurable age, and which has never coordinated, it
-    removes the git-ignored, untracked `node_modules` directories in its worktree. It keeps everything git knows about.
-    The server decides, and a new server-only verb `ccd ws-shed-deps` re-proves on the box. It ships in shadow behind
-    `$REG/deps-shed-live`.
-- **What blocks building B in this PR (§5):** act A1. B reverses the lifecycle policy's containment spine for one
-  class: §1.2 says an artifact inside a workspace "needs no retention rule, no TTL, no sweep". B also adds a destructive
-  verb to CLAUDE.md's SAFETY list. Both have only ever changed on an operator ruling: #1119's four rulings, and D-6629
-  for `ws-orphan`. So this PR carries this note alone, and B is built once A1 is ruled.
+  mechanism that lets those keeps lapse, and it is **armed on the fleet box** (`$REG/child-stale-reclaim-live` stands
+  there since 2026-10-25, on the operator's ruling of that day; D-7280). It does not reach the measured leak: most
+  stopped workers are younger than its 7-day floor, and a run that never closes (`minting-run-open`) or has an open
+  sibling (`siblings-open`) is outside its cases. A coordinator's workspace is never reclaimed automatically (rule 4).
+  So nothing removes these trees, and nothing removes the rebuildable bytes inside them.
+- **The fix (§3, §4), ruled 2026-10-28 (D-7278).** A *deps-shed* arm of the stop-done lane's run-done row. For a
+  sleeping session whose work is finished past a configurable age, it removes the git-ignored, untracked
+  `node_modules` directories in its worktree and keeps everything git knows about. It covers **workers and
+  coordinators**: a worker whose newest placed run is `done` or `failed` and closed past the age and which never
+  coordinated in its own generation; a coordinator that claims no open run and whose last chair ended past the age.
+  The server decides, and a new server-only verb `ccd ws-shed-deps` re-proves on the box. It ships in **shadow**
+  behind `$REG/deps-shed-live` (no writer in the tree; the operator arms it), and every threshold is deployment config
+  with a neutral default (§4, the config keys).
+- **What the ruling changed.** The lifecycle policy's containment spine (§1.2: an artifact inside a workspace "needs no
+  retention rule, no TTL, no sweep") is reversed for this one class, `node_modules` inside a sleeping session's
+  worktree, and `ws-shed-deps` joins CLAUDE.md's SAFETY list (sessions never run it; the server lane does). Both are
+  recorded with D-7278.
 
 ## 1. The population
 
@@ -50,7 +53,7 @@ hibernation marker (`$REG/<id>.hibernated`). Its worktree is still registered, s
 |---|---|---|
 | child reclaim at close (`coord/close.ts`, `childReclaimDecision` in `coord/childReclaim.ts`) | the closing run's child | It reclaims only when the close is final, failed or retires the programme, or when the child is *spent* (a PR on its branch, dated to this incarnation). An ordinary non-final close re-holds the child for wave N+1 instead (`close.ts`'s claim note, case 2). |
 | child reclaim sweep (`childReclaimSweepVerdict` in `childReclaimSweep.ts`) | every row with a child marker | It keeps a child on `held` (a programme hold stands while the programme has any open run), `minting-run-open` (a parked run never closed), `siblings-open`, `review-report-live` or `-stale`, `reviewed-run-absent`, `minting-run-absent`, `terminal-refusal` and `coordinating`. None of these lapses on its own. |
-| the stale arm (`childReclaimStaleVerdict`, `coord/childReclaimStale.ts`; box half `ws-reclaim --stale`, `ccd/lib/disk-retention.sh` region 3; D-6638, D-6639) | kept children idle 7 days on both sides | **Shadow** until `$REG/child-stale-reclaim-live` exists. That marker has no writer in the tree (`shared/switches.ts`), and the box needs `reclaim-stale-v1`. It lapses `held`, `minting-run-absent`, the review words and `terminal-refusal` (`childReclaimStaleWordOf`). It has no word for `minting-run-open` or `siblings-open`, and it never takes `coordinating`. |
+| the stale arm (`childReclaimStaleVerdict`, `coord/childReclaimStale.ts`; box half `ws-reclaim --stale`, `ccd/lib/disk-retention.sh` region 3; D-6638, D-6639) | kept children idle 7 days on both sides | **Armed on the fleet box** since 2026-10-25 (`$REG/child-stale-reclaim-live`, the operator's ruling of that day; D-7280); the marker has no writer in the tree (`shared/switches.ts`), and the box needs `reclaim-stale-v1`. It lapses `held`, `minting-run-absent`, the review words and `terminal-refusal` (`childReclaimStaleWordOf`). It has no word for `minting-run-open` or `siblings-open`, it never takes `coordinating`, and nothing younger than its 7-day floor. |
 | stale archive, G1 (`coord/staleArchive.ts`, `staleArchiveVerdict`) | non-child, never-claimant workspaces with no pane for 14 days | It skips children (`child`) and anything that was ever a claimant (`claimant`), so it takes neither workers nor coordinators. Shadow until `$REG/stale-archive-live`. |
 | expiry (`archivedExpiry.ts`, `coord/expireArchived.ts`) | archived rows, 7 days after the archive | A stopped row is not archived. |
 | orphan-tree lane (`orphanTreeLane.ts`, `ws-orphan`) | linked worktrees no registry row names | A registered workdir answers `registered` at rung 4. |
@@ -61,99 +64,146 @@ So a finished worker's worktree leaves the fleet only when its programme ends, i
 incarnation at a close, or a person removes it. Nothing ever takes a coordinator's. In every case the 1.1 GB stays
 on disk while the session sleeps, and most of it is `node_modules` that `npm ci` rebuilds.
 
-**Not measured here.** This note did not touch a box. The 60 stopped workers' split by kept word can be read off the
+**Why the armed stale arm does not reach the measured leak (D-7280).** Three populations are outside it. Most stopped
+workers are younger than its floor: stop-done puts a worker to sleep about ten minutes after its run closes, and the
+stale arm waits 7 idle days on both sides, so a fleet that finishes a wave a day carries about a week of finished
+workers it cannot touch. A worker whose run never closes (parked at review, merge or close: `minting-run-open`) or has
+an open sibling (`siblings-open`) is outside its cases by design, because removing the whole tree would leave a
+send-back nothing to land on. And a coordinator is never taken (rule 4). So the arm stays armed, and the leak needs
+Part B.
+
+**Not measured here.** This note did not touch a box. The stopped workers' split by kept word can be read off the
 child-reclaim banner and the kept feed rows (`CHILD_RECLAIM_SKIP` sentences, the `kept-many` arm). The fix below does
-not depend on the split: Part B acts on any sleeping finished child, whatever kept it, and Part A covers the words the
-stale arm already lapses.
+not depend on the split: Part B acts on any sleeping finished worker, whatever kept it, and on any sleeping
+coordinator with no open claimed run.
 
 ## 3. Options
 
-1. **Arm the stale arm (Part A).** No code. It takes the whole worktree of a kept child idle 7 days, with the branch,
-   WIP and reflogs pinned under `refs/ccrc/attic/<id>/` first. It is limited by its 7-day floor (raise-only on the box,
-   `WS_STALE_IDLE_S`) and by its missing words. **Recommended now (act A2).**
-2. **Deps-shed (Part B).** Remove only rebuildable dependency directories from a sleeping finished child, after a
-   configurable age, and keep the worktree and every git fact. It reaches what Part A cannot: a worker kept by
-   `minting-run-open` or `siblings-open`, and the days before the 7-day floor. **Chosen design (§4), behind act A1.**
+1. **The stale arm (formerly Part A).** No code, and already armed on the fleet box (D-7280). It takes the whole worktree
+   of a kept child idle 7 days, with the branch, WIP and reflogs pinned under `refs/ccrc/attic/<id>/` first. It is
+   limited by its 7-day floor (raise-only on the box, `WS_STALE_IDLE_S`) and by its missing words (§2).
+2. **Deps-shed (Part B).** Remove only rebuildable dependency directories from a sleeping session whose work is
+   finished, after a configurable age, and keep the worktree and every git fact. It reaches what the stale arm cannot:
+   a worker kept by `minting-run-open` or `siblings-open`, the days before the 7-day floor, and a coordinator's
+   worktree. **Chosen design (§4), ruled (D-7278).**
 3. **Rejected:** a stale word for `minting-run-open`. It would remove a whole worktree whose run is still open, and a
    send-back would land on nothing.
 4. **Rejected:** lowering the stale arm's 7 days. The box floor is raise-only by design (§2.7.3), so the server
    cannot lower it.
-5. **Rejected:** touching a coordinator's worktree. Rule 4 and R37 exclude it, and the task's rule keeps it out.
-   Shedding a coordinator's `node_modules` is listed as a separate question (A3) and is not in B.
+5. **Rejected:** removing a coordinator's worktree. Rule 4 and R37 still exclude it. What the operator took (A3,
+   D-7278) is narrower: shedding a sleeping coordinator's ignored `node_modules`, which keeps the worktree, its branch
+   and every git fact.
 6. **Rejected:** a box-local deps arm in `ccd-tmp-sweep`. The box cannot see whether a run is done or whether a row
    ever coordinated. Those are the server's facts, and deciding them on the box would be a second writer.
 
 ## 4. Part B: the deps-shed arm
 
-**Owner.** The stop-done lane already computes the exact predicate: a dispatched child, its newest placed run
-finished, never an open claimant. It also already sees the population, because a row it has put to sleep answers its
-`stopped` hold. The deps-shed arm is a second verdict over the same pass's facts, in the same lane
-(`sleepLane.ts`'s run-done row), and adds no lane.
+**Owner.** The stop-done lane's run-done row (`sleepLane.ts`'s `RUN_DONE_LANE`, run by `FleetWatcher.sleepRunDone`). It
+already reads the store's facts the rule needs (the newest placed run, the open workers, the claimants, the live claims)
+and owns the coordination serialiser every unattended act takes. The deps-shed arm is a second pass in the same body,
+after `stopDonePass`, on the same tick's rows and listing, the same `sleepRunDone` cadence row and single flight, and
+the same kill switches. It adds no `LANE_SCHEDULE` row. It is a second pass rather than a second `SLEEP_LANES` row
+because its population is the one the sleep ladder skips (a row with a stop stamp answers `stopped` there) and its act
+is not `ccd hibernate`: a legitimately different job beside the sleep, not a copy of it.
 
-**The server's rule (L1, `server/src/depsShed.ts`, pure).** A row is shed when all of these hold:
-- it has a child marker (`child.kind === 'child'`), `workspace !== null`, and it is not archived;
-- it is asleep: `stoppedBy !== null`, and stop-done answers it `stopped`;
-- its newest placed run (`StopDoneStoreRead.last`) is `done` or `failed`, with `closedAt` older than
-  `CCRC_DEPS_SHED_AFTER_HOURS` (default 24). A run parked in review, merge or close counts only when
-  `CCRC_DEPS_SHED_PARKED_AFTER_HOURS` is set (default unset, which means never), measured from the turn marker as
-  stop-done measures it;
-- no active run names it as worker (`openWorker`), and it claims nothing (`openClaimant`, `claim`);
-- it never coordinated in its own generation (`childReclaimCoordinated`, the function the sweep, the close and the stale
-  arm use);
+**The server's rule (L1, `server/src/depsShed.ts`, pure: `depsShedVerdict`).** A row is shed when all of these hold, and
+the first that fails is its hold word:
+- `workspace !== null` (never a main checkout), not archived, and its identity and status measured;
+- it is asleep: `stoppedBy !== null` (the stop stamp both `ccd hibernate` and `ccd stop` write);
+- its class is decided by the store's coordinator claims (`childReclaimCoordinatorClaims`, the one reader the sweep,
+  the close and the stale arm use), read as follows:
+  - `'open'` (it claims a run that is not terminal) holds `claims-open-run`; `'unplaced'` holds `claim-unplaced`;
+  - a child (`child.kind === 'child'`) that never coordinated in its own generation (`childReclaimCoordinated`, with
+    its birth) is a **worker**: its newest placed run (`StopDoneStoreRead.last`) must be `done` or `failed`, with
+    `closedAt` at least `CCRC_DEPS_SHED_AFTER_HOURS` (default 24) old. A run parked at review, merge or close counts
+    only when `CCRC_DEPS_SHED_PARKED_AFTER_HOURS` is set (default unset, which means never; A4 is left unset), and its
+    clock is then the sleep's own instant (`stoppedBy.at`), because a parked run has no close;
+  - a row with a numeric claim that is not a worker (a non-child that held a chair, or a child that coordinated in its
+    own generation) is a **coordinator**: the latest instant it held a chair must be at least
+    `CCRC_DEPS_SHED_AFTER_HOURS` old;
+  - a non-child that never held a chair is the operator's own workspace and holds `not-coordinated`;
+- no active run names it as worker (`openWorker`), and it holds no live claim (`claim`);
 - its hold, classified as stop-done classifies it (`StopDoneHeldKind`), is `none`, `programme` or `run-terminal`. An
   operator's hold, a hold on a live run and an unreadable hold keep the row;
-- it is not opted out (`$REG/<id>.no-hibernate`), and nobody has it open (`Viewers.isOpen`);
-- it has not been shed since it last woke (the box's `$REG/<id>.depsshed` is older than `.woke`, or absent).
+- it is not opted out (`$REG/<id>.no-hibernate`), nobody has it open (`Viewers.isOpen`), and the server has run for at
+  least one presence TTL;
+- it has not been shed during this sleep: `$REG/<id>.depsshed` (`<epoch> <bytes>`, the box's stamp) is absent or older
+  than the stop stamp. A stamp that cannot be read keeps the row;
+- the box's ccd lists `ws-shed-deps` (`shed-deps-v1`).
 
-Any unread or unmeasured fact keeps the row. At most `CCRC_DEPS_SHED_PER_PASS` (default 1) acts a pass, fleet-wide, on
-the session's queue, oldest close first.
+Any unread or unmeasured fact keeps the row. At most `CCRC_DEPS_SHED_PER_PASS` (default 1) rows are asked a pass,
+fleet-wide, oldest clock first.
 
-**Switches.** The arm is shadow unless `$REG/deps-shed-live` exists, a new `shared/switches.ts` row with no writer in the
-tree. Without it, the arm records one `kind:'coord'` feed row per row: "dependencies would be removed (<n> dirs)".
-`reclaim-paused` and `stop-done-disabled` stop it. The box must advertise `shed-deps-v1` (`ccdCan`).
+**The act (L4, `server/src/depsShedPass.ts`).** On the coordination serialiser and then the session's queue, as the sleep
+lanes' act: the registry row is assembled again (`rowAtAct`), the store, presence and the stamp are read again, the hold
+is classified again and the verdict asked again; then the kill and arming switches are read over a fresh registry
+listing. Only then is `ccd ws-shed-deps --session <id> --class child|coordinator` composed (`child` for a worker)
+(`CCD_ARGV.wsShedDeps`, the lane's actor `sweep:deps-shed`). A refusal or failure is not asked again for an hour (in
+memory). A shed writes one `kind:'coord'` feed row, "Dependencies removed".
 
-**The box's re-proof: `ccd ws-shed-deps --session <id> [--actor <t>] [--reason <t>]`** (new verb, in
-`ccd/lib/disk-retention.sh`, behind the privileged direct-entry check). It refuses with the first word that applies:
+**Switches.** The act is shadow unless `$REG/deps-shed-live` exists, a new `shared/switches.ts` row with no writer in the
+tree. In shadow the arm composes the same verb with `--dry-run`, which runs every rung and removes nothing, and records
+one `kind:'coord'` feed row per row per sleep: "Dependencies would be removed: <id>, <n> dirs, <bytes>". The run-done
+row's kill switches stop it (`stop-done-disabled`, `reclaim-paused`, `hibernate-disabled`). The box must advertise
+`shed-deps-v1` (`ccdCan`).
+
+**The box's re-proof: `ccd ws-shed-deps --session <id> --class child|coordinator [--dry-run] [--surface <w>] [--actor <t>]
+[--reason <t>]`** (new verb, in `ccd/lib/disk-retention.sh`, behind the privileged direct-entry check). It answers one
+JSON line. It refuses, exit 3, with the first word that applies:
 1. `paused`: `reclaim-paused` is listed;
 2. `no-such-session`, `not-a-workspace`: no row, or the row is a main checkout;
-3. `not-a-child`: no readable `.child` marker. This is a second, independent fence against coordinators;
-4. `not-asleep`: no `.hibernated` marker, or a tmux session or an active unit exists. This is the same test
-   `ws-archive --if-no-pane` makes before it acts;
-5. `asleep-too-recently`: `.hibernated` is younger than `CCD_DEPS_SHED_MIN_ASLEEP_S` (default 3600). This is the box's
-   floor, and no server argument lowers it;
-6. the candidates: each directory that `git -C <workdir> ls-files -z --others --ignored --exclude-standard --directory`
-   lists, whose last component is one of `CCD_DEPS_SHED_NAMES` (default `node_modules`), and for which
-   `git ls-files -z -- <dir>` is empty. It must be a real directory, not a link, on the workdir's filesystem, and not
-   inside a nested repository. Each git call is contained as the reclaim ladder's are (`_ws_reclaim_contained`).
-   No candidate answers `nothing-to-shed`;
-7. `in-use`: `_ws_path_users` answers a holder for any candidate, on its literal or its physical spelling;
-8. the act: each candidate is removed with `rm -rf --one-file-system`, under a `CCD_DEPS_SHED_SCAN_S` bound (default
-   30). The verb writes `$REG/<id>.depsshed` (`<epoch> <bytes>`) and journals `_lc_done shed-deps` with the dirs and
-   bytes. A removal that fails partway answers `shed-incomplete`. That is safe to retry, because what remains is
-   still rebuildable.
+3. `not-a-child`: `--class child` and no readable `.child` marker. This is a second, independent fence: the server's
+   worker class needs the marker, and the box checks it itself;
+4. `not-asleep`: the stop stamp (`$REG/<id>.stopped`, `<epoch> <surface>`) is absent or unreadable, or a tmux session
+   answers, or the unit is not `inactive` or `failed`. This is the test `ws-archive --if-no-pane` makes before it acts;
+5. `asleep-too-recently`: the stop stamp is younger than `CCD_DEPS_SHED_MIN_ASLEEP_S` (default 3600). This is the box's
+   floor, and no argument lowers it;
+6. `already-shed`: `$REG/<id>.depsshed` is at least as new as the stop stamp (at most once a sleep); `unmeasured` when it
+   stands but cannot be read;
+7. the candidates: each directory that `git -C <workdir> ls-files -z --others --ignored --exclude-standard --directory`
+   lists, whose last component is one of `CCD_DEPS_SHED_NAMES` (default `node_modules`, space-separated), and for
+   which `git ls-files -z -- <dir>` is empty. It must be a real directory, not a link, on the workdir's file system,
+   resolve inside the workdir, and hold no `.git` of its own. Each git call is contained as the reclaim ladder's are
+   (`_ws_reclaim_contained`). No candidate answers `nothing-to-shed`;
+8. `in-use`: `_ws_path_users_many` answers a holder for any candidate, on its physical spelling; an unmeasured answer is
+   `unmeasured`;
+9. the git state: `git status --porcelain=v1 -z --untracked-files=all` is read and digested before the act;
+10. `--dry-run` stops here and answers `would-shed` with the candidates' count and bytes, exit 0;
+11. the act: each candidate is removed (`rm -rf --one-file-system`, `rm -rfx` on Darwin) under a
+    `CCD_DEPS_SHED_SCAN_S` bound (default 30). The git state is read again: a digest that differs answers
+    `git-state-changed` (exit 1, journaled as a failure), and so does a removal that fails partway (`shed-incomplete`).
+    Both are safe to retry, because what remains is still rebuildable. On success the verb writes
+    `$REG/<id>.depsshed` (`<epoch> <bytes>`), journals `_lc_done shed-deps` with the class, dirs and bytes, and
+    answers `shed`, exit 0.
 
 There is no token. The act touches only bytes git calls ignored and untracked, all of which `npm ci` rebuilds, and each
 rung is re-read at the act. This is the reasoning `ccd-tmp-sweep`'s dead arm already uses: remove after a re-check,
 with no quarantine.
 
-**On wake.** Nothing changes. `ccd ensure` (re-dispatch), mail and Restart wake the session as today. Its next test
-step runs `npm ci` first, as CLAUDE.md's build section already says. A follow-up can name the shed in the wake's
-kickoff line.
+**On wake.** Nothing changes. `ccd ensure` (re-dispatch), mail and Restart wake the session as today; the wake removes
+the stop stamp, so the next sleep may shed again. Its next test step runs `npm ci` first, as CLAUDE.md's build section
+already says. A follow-up can name the shed in the wake's kickoff line.
 
 **Safety.**
-- No git fact changes: not the index, a ref, a tracked file, or an untracked file git does not ignore. A resumable
-  session's unpushed work is untouched.
-- A live session is never touched. The server requires a sleeping row, and the box requires no pane and no active unit.
-- A coordinator is never touched. The server checks the claims, and the box requires the child marker.
-- An operator's hold keeps the row.
+- No git fact changes: not the index, a ref, a tracked file, or an untracked file git does not ignore, and the box
+  proves it by reading `git status` before and after. A resumable session's unpushed work is untouched.
+- A live session is never touched. The server requires a stop stamp and no viewer, and the box requires a stop stamp,
+  no tmux session and an inactive unit.
+- A coordinator is touched only asleep, claiming no open run, past the age, and re-proved at the act (D-7278). Its
+  worktree, branch and attic are never touched; rule 4 stands for them.
+- A worker that coordinated in its own generation is a coordinator here, never a worker.
+- An operator's hold keeps the row, and so does the opt-out marker.
 - Every doubt keeps.
-- The act is at most once per wake and at most `CCRC_DEPS_SHED_PER_PASS` a pass, so there is no herd.
+- The act is at most once a sleep and at most `CCRC_DEPS_SHED_PER_PASS` a pass, so there is no herd.
 
-**Config keys, neutral defaults.**
+**Config keys, neutral defaults.** Every threshold is deployment config (the operator rule of 2026-10-28: ccrc code is
+never machine-specific). The server keys are read once by `loadConfig` (`server/src/config.ts`) and documented in
+`deploy/ccrc.env.example`; the box keys are read by ccd at the act and documented in `deploy/ccrc-agent.env.example`.
+A value that is not a positive integer falls back to the default, with one boot warning on the server.
 
 | Key | Where | Default |
 |---|---|---|
-| `CCRC_DEPS_SHED_AFTER_HOURS` | server (`config.ts`) | 24 |
+| `CCRC_DEPS_SHED_AFTER_HOURS` | server | 24 |
 | `CCRC_DEPS_SHED_PARKED_AFTER_HOURS` | server | unset (parked runs never shed) |
 | `CCRC_DEPS_SHED_PER_PASS` | server | 1 |
 | `CCD_DEPS_SHED_MIN_ASLEEP_S` | box (ccd) | 3600 |
@@ -163,45 +213,57 @@ kickoff line.
 **Wire.**
 - `CCD_ARGV.wsShedDeps` and the capability `shed-deps-v1`.
 - An agent grant `['ws-shed-deps','--session']`, with `'ws-shed-deps': '--session'` in `REQUIRED_VERB_FLAG`.
-- `ws-shed-deps` in `FORBIDDEN_CCD_VERBS`.
-- A CLAUDE.md SAFETY line: the SERVER's act on a sleeping finished child's ignored dependency directories only, never a
-  session's verb, and never run against a live host from a shell or a test.
-- A `shared/lifecycle.ts` row `workspace-dependency-dirs`, and an amendment to policy row 2.
+- `ws-shed-deps` in `FORBIDDEN_CCD_VERBS`, the session hook's forbidden verbs and a child's deny list.
+- The direct-entry boundary: `ws-shed-deps <any tail>` starts under `bash -p` (`ccd/ccd`'s guard and `ccd/ccd-entry.py`).
+- A CLAUDE.md SAFETY line: the SERVER's act on a sleeping finished worker's or coordinator's ignored dependency
+  directories only, never a session's verb, and never run against a live host from a shell or a test.
+- The lifecycle act `shed-deps` (`LifecycleAct`, ccd's `_LC_ACTS`).
+- A `shared/lifecycle.ts` row `workspace-dependency-dirs`, and an amendment to policy row 2 (D-7278).
 - No `FLEET_PROTO` bump, and no coord.db migration.
 
 **Tests, red first.**
-- `depsShed.test.ts`: every conjunct, and every doubt keeping.
-- A sleep-lane case: shadow writes the feed row, armed composes the argv, and a pause or a missing capability is inert.
-- `ccd-ws-shed-deps.test.ts` on `makeCcdHarness`: each refusal word in order; a tracked file under `node_modules`
-  keeps the directory; a non-ignored untracked file survives; a held directory answers `in-use`; a nested repository's
-  `node_modules` is left; the floor cannot be lowered by an argument.
+- Characterization, green on `main` before the arm: the run-done pass leaves a sleeping worker and a sleeping
+  coordinator alone (no ccd call, no outcome), and the lifecycle manifest's class list and `child-workspaces` row.
+- `deps-shed-verdict.test.ts`: every conjunct, both classes, and every doubt keeping.
+- `deps-shed-pass.test.ts`: shadow composes `--dry-run` and writes the feed row once a sleep, armed composes the act,
+  a kill switch, a missing capability or a switch dropped at the act is inert, and the act re-reads the verdict.
+- `ccd-ws-shed-deps.test.ts` on the child fixture: each refusal word in order; a tracked file under `node_modules`
+  keeps the directory; a non-ignored untracked file survives; a held directory answers `in-use`; a nested
+  repository's `node_modules` is left; the floor cannot be lowered by an argument; the git state is unchanged.
 - The guard suites: single-definition (the marker has no writer), the approvalguard verb list, the agent whitelist, the
-  ccd capability list, and the mail-routes kebab scan.
+  ccd capability list, the verb-set census and the lifecycle act vocabulary.
 
 **Expected effect.** About 0.7 to 1 GB per finished worker comes back a day after its run closes, instead of weeks
-later or never. At the measured rate that is most of the 15 to 20 GB a day. Part A then removes the rest of a kept
-child's tree at 7 idle days.
+later or never, and about as much per sleeping coordinator a day after its last chair. At the measured rate that is
+most of the 15 to 20 GB a day. The stale arm then removes the rest of a kept child's tree at 7 idle days.
 
-## 5. Operator acts
+## 5. Operator acts (ruled 2026-10-28)
 
-- **A1, blocks Part B.** Rule whether ccrc may shed a sleeping finished child's ignored dependency directories (§4).
-  This reverses the lifecycle policy's §1.2 containment spine for that one class, and it adds `ws-shed-deps` to the
-  SAFETY list. **Recommended: approve,** for children only, shipped in shadow. Arm `deps-shed-live` after a week of
-  "would" rows.
-- **A2, independent, relieves the disk now.** Touch `$REG/child-stale-reclaim-live` on the fleet box, after checking
-  that its ccd lists `reclaim-stale-v1`. **Recommended: yes.** In shadow it records a "child would be reclaimed
-  (stale)" feed row for each child it would take, so the feed shows what arming it will remove.
-- **A3, optional, later.** Should B extend to stopped coordinators' `node_modules`, which is rebuildable too? Rule 4
-  covers the worktree, not its ignored bytes, but this note keeps coordinators out. **Recommended: not now.** Revisit
-  with B's shadow numbers.
-- **A4, optional.** Should parked runs count? Set `CCRC_DEPS_SHED_PARKED_AFTER_HOURS`. **Recommended: leave it unset**
-  until A1's week of shadow rows shows how many parked workers there are.
+- **A1, ruled: approved and extended (D-7278).** ccrc may shed a sleeping finished session's ignored dependency
+  directories (§4), for workers AND coordinators, shipped in shadow behind `$REG/deps-shed-live`, with every threshold
+  deployment config. For a coordinator the act requires it asleep, no open run it claims, never a live session, and
+  the same re-proof at the act. This reverses the lifecycle policy's §1.2 containment spine for that one class and adds
+  `ws-shed-deps` to the SAFETY list. Arming `deps-shed-live` is the operator's act, after the shadow rows.
+- **A2, a fact, not an act (D-7280).** `$REG/child-stale-reclaim-live` has stood on the fleet box since 2026-10-25, on
+  the operator's ruling of that day. The stale arm is armed; it does not reach the measured leak (§2).
+- **A3, ruled with A1: taken (D-7278).** Coordinators' `node_modules` are shed as above. Their worktrees stay rule 4's.
+- **A4, left unset as recommended.** `CCRC_DEPS_SHED_PARKED_AFTER_HOURS` stays unset until the shadow rows show how
+  many parked workers there are.
 
 ## Deviations found
 
-- **D-TBD-worktree-leak-gates.** Stopped workers' worktrees are kept by design: child reclaim keeps them for the
-  programme, and the stale arm that lets those keeps lapse is unarmed and has no word for a parked run. Stopped
-  coordinators' worktrees have no automatic exit (rule 4). Rebuildable `node_modules` has no collector of its own,
-  because the lifecycle policy (§1.2, row 2) gives it its workspace's lifetime.
-- **D-TBD-deps-shed.** The deps-shed arm of the run-done sleep lane, with the verb `ccd ws-shed-deps` (§4). It awaits
-  act A1.
+- **D-7279.** The gates (replaces D-TBD-worktree-leak-gates). Stopped workers' worktrees are kept by design: child
+  reclaim keeps them for the programme, and the stale arm that lets those keeps lapse has no word for a parked run or
+  an open sibling and waits 7 idle days. Stopped coordinators' worktrees have no automatic exit (rule 4). Rebuildable
+  `node_modules` had no collector of its own, because the lifecycle policy (§1.2, row 2) gave it its workspace's
+  lifetime.
+- **D-7278.** The operator's A1 ruling of 2026-10-28, extended to coordinators (A3): the deps-shed arm of the run-done
+  row with the verb `ccd ws-shed-deps` (§4), in shadow behind `deps-shed-live`; the lifecycle policy's row 2 changes
+  for this one class; the verb joins the SAFETY list.
+- **D-7280.** The fact record for A2: the stale arm is armed on the fleet box since 2026-10-25, and why it does not
+  reach the measured leak.
+- **D-TBD-deps-shed-dry-run.** The shadow composes the verb's `--dry-run`, so a "would" row carries the box's own count
+  and bytes; the note's earlier draft wrote the row with no box ask.
+- **D-TBD-deps-shed-sleep-clock.** The box's asleep test and floor read the stop stamp (`.stopped`), which both
+  `ccd hibernate` and `ccd stop` write, rather than `.hibernated` alone, so a coordinator stopped by hand is covered;
+  "once a sleep" compares `.depsshed` with the stop stamp rather than with `.woke`.
