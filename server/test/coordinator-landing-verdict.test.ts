@@ -1219,6 +1219,19 @@ const APPROVAL_ANY_RULE: Case[] = [
     'ROUTE U method=squash admin=never strict=no'],
 ];
 
+// ---- Fix round 6: the decision is APPROVED exactly (review 1138, F2) ----
+// The approval counts only when read 1's reviewDecision is the JSON string APPROVED as GitHub sent it. A near miss (a trailing
+// LF, lower case, a suffix, a leading space) is not APPROVED, so each is a missing approval on route G and route U: the
+// exactness fix round 4 held read 6's "never" to, applied to the check that replaced it. A prefix test, a trimmed or
+// case-folded comparison, or a match anywhere in the text would each let one of them through.
+const NEAR_MISSES = ['APPROVED\n', 'approved', 'APPROVED_X', ' APPROVED'];
+const APPROVAL_EXACT: Case[] = NEAR_MISSES.flatMap((d): Case[] => [
+  [`route G: an approval is required and the reviewDecision is ${JSON.stringify(d)}, a near miss: not APPROVED, so approval-missing`,
+    with_(missingG, { pr: prWith(d) }), approvalMissing('G')],
+  [`route U: an approval is required and the reviewDecision is ${JSON.stringify(d)}, a near miss: not APPROVED, so approval-missing`,
+    with_(missingU, { pr: prWith(d) }), approvalMissing('U')],
+]);
+
 // ---- Fix round 4: read 1, read 3 and read 6 judge the value GitHub sent, not the text a shell makes of it ----
 // A command substitution drops the trailing newlines of what it captures, and `jq -r` prints a missing, null, numeric or
 // boolean field as the text `null`, `123` or `true`. So a base, a state, a head or a 404 message that was
@@ -1632,8 +1645,8 @@ describe('the landing verdict block (landing-order wave 3e, spec §5.7)', () => 
       .toEqual([`api repos/{owner}/{repo}/compare/main...${HC}`]);
   });
 
-  it.each([...ROUTES, ...CHECKS, ...STOPS, APPROVAL_WITH_RULESET, ...REQUESTS, ...IGNORES, ...APPROVAL_CHECK, ...APPROVAL, ...APPROVAL_ANY_RULE, ...MALFORMED,
-  ...READ5, ...MIXED, ...FIELDS, ...ENTRIES, ...CONV, ...NAMES, ...ORDER, ...LOSS, ...READ1, ...READ3])('%s', (_name, fx, line, env) => {
+  it.each([...ROUTES, ...CHECKS, ...STOPS, APPROVAL_WITH_RULESET, ...REQUESTS, ...IGNORES, ...APPROVAL_CHECK, ...APPROVAL, ...APPROVAL_ANY_RULE,
+  ...APPROVAL_EXACT, ...MALFORMED, ...READ5, ...MIXED, ...FIELDS, ...ENTRIES, ...CONV, ...NAMES, ...ORDER, ...LOSS, ...READ1, ...READ3])('%s', (_name, fx, line, env) => {
     expect(blocks).toHaveLength(1);
     const r = verdict(fx(), env);
     expect(r.out, `stderr: ${r.stderr}`).toBe(`${line}\n`);
