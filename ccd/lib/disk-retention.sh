@@ -1421,10 +1421,13 @@ _ws_shed_run() {   # -> everything after the registry rungs, contained (id, cls,
     # One plain relative path inside the worktree: no `..`, no `.`, no absolute spelling.
     case "/$rel/" in */../*|*/./*|//*) continue ;; esac
     dir="$wdp/$rel"
-    [[ -d $dir && ! -L $dir && ! -e $dir/.git && ! -L $dir/.git ]] || continue
+    # A real directory with no `.git` of its own, reached through no link: its physical path is its spelling (a link
+    # anywhere on the way, the leaf included, resolves elsewhere and is skipped).
+    [[ -d $dir && ! -e $dir/.git && ! -L $dir/.git ]] || continue
     phys=$(cd -P -- "$dir" 2>/dev/null && pwd -P) && [[ $phys == "$dir" ]] || continue
     dev=$(_plat_devino "$dir" 2>/dev/null) && [[ ${dev%%:*} == "$wdev" ]] || continue
-    # Not one tracked file beneath it (a vendored package git tracks keeps its directory).
+    # Not one tracked file beneath it (a vendored package git tracks keeps its directory). git's own listing never collapses
+    # a directory that holds a tracked file, so this is the second fence, asked of the index directly.
     [[ -z "$(git -C "$wdp" ls-files -z -- "$rel" 2>/dev/null | head -c 1)" ]] || continue
     cands+=("$rel"); physs+=("$phys")
   done <<< "$listing"

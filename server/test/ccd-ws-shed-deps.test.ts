@@ -103,6 +103,16 @@ describe('ws-shed-deps sheds a sleeping child\'s ignored dependency directories'
     expect(exists('pwa/node_modules/vendored/keep.js')).toBe(true);
   });
 
+  it('the index is asked too: a listing that names a directory holding a tracked file never removes it', () => {
+    write('pwa/node_modules/vendored/keep.js');
+    h.git(c.wt, 'add', '-f', 'pwa/node_modules/vendored/keep.js');
+    h.git(c.wt, 'commit', '-m', 'vendor');
+    // A git whose listing collapses that directory anyway: the second fence, `git ls-files -- <dir>`, still keeps it.
+    const wide = 'git() { if [[ " $* " == *" --others "* ]]; then command git "$@"; printf \'pwa/node_modules/\\0\'; else command git "$@"; fi; };';
+    expect(shed('', wide).doc).toMatchObject({ shed: true, dirs: 1 });
+    expect(exists('pwa/node_modules/vendored/keep.js')).toBe(true);
+  });
+
   it('a non-ignored untracked file and an ignored directory of another name survive', () => {
     write('scratch/todo.md');
     write('dist/bundle.js');
@@ -129,13 +139,22 @@ describe('ws-shed-deps sheds a sleeping child\'s ignored dependency directories'
     expect(exists('nested/node_modules/n/index.js')).toBe(true);
   });
 
+  it('a node_modules that is a repository of its own is left', () => {
+    h.git(path.join(c.wt, 'pwa', 'node_modules'), 'init', '-q');
+    expect(shed().doc).toMatchObject({ shed: true, dirs: 1 });
+    expect(exists('pwa/node_modules/other/index.js')).toBe(true);
+    expect(exists('node_modules')).toBe(false);
+  });
+
   it('a node_modules that is a link is never followed, and what it points at survives', () => {
     fs.rmSync(path.join(c.wt, 'node_modules'), { recursive: true });
     const outside = path.join(h.home, 'outside-deps');
     fs.mkdirSync(outside);
     fs.writeFileSync(path.join(outside, 'precious.js'), 'x\n');
     fs.symlinkSync(outside, path.join(c.wt, 'node_modules'));
-    expect(shed().doc).toMatchObject({ shed: true, dirs: 1 });
+    // git lists a link as a file, so the listing is widened to name it as a directory: the physical-path re-proof keeps it.
+    const wide = 'git() { if [[ " $* " == *" --others "* ]]; then command git "$@"; printf \'node_modules/\\0\'; else command git "$@"; fi; };';
+    expect(shed('', wide).doc).toMatchObject({ shed: true, dirs: 1 });
     expect(fs.existsSync(path.join(outside, 'precious.js'))).toBe(true);
     expect(fs.lstatSync(path.join(c.wt, 'node_modules')).isSymbolicLink()).toBe(true);
   });
