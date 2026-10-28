@@ -753,3 +753,18 @@ describe('the usage-sidecar deleters are two, named, and may only shrink: _usage
     expect(r.deleters.map((s) => s.name)).toEqual(['ccd/ccd#_usage_purge', 'ccd/ccd-usage-sweep.py#reap_orphans']);
   });
 });
+
+// D-7168 (ARCH-44, consolidation plan 2026-10-27 Task C4k; spec §5.7 "reasons migrate one PR each"). APPENDED. The
+// temp-orphan executor runs through the one retire loop (`retireLane.ts#retireAct`) over its row and port, so its
+// hand-written gate ladder is gone. `retireGateLadders()` (`census-w4/retire.ts`) read 3 at C4k's base and is pinned at
+// most 2 here; it may only shrink (C4l and C4m take it to 1, then 0), and no site outside the two remaining ladders
+// may stand in it.
+describe('the temp-orphan executor has no gate ladder of its own (D-7168; ARCH-44 C4k)', () => {
+  it('retireGateLadders() is at most 2 (3 -> 2 at C4k; may only shrink), and only the two reasons not yet moved', async () => {
+    const { retireGateLadders } = await import('../census-w4/retire.js');
+    const sites = retireGateLadders().map((s) => s.symbol);
+    expect(sites.length).toBeLessThanOrEqual(2);
+    const LEFT = ['server/src/coord/childReclaim.ts#childReclaimOutcome', 'server/src/coord/expireArchived.ts#expireArchived'];
+    expect(sites.filter((s) => !LEFT.includes(s)), 'a gate ladder outside the two reasons not yet moved').toEqual([]);
+  });
+});
