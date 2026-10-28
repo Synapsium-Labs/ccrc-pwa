@@ -160,7 +160,7 @@ import { EnvelopeSheet, TerminalCta } from './EnvelopeSheet';
 import { AskSurface } from './AskSurface';
 import {
   AskHeader, AskReview, AskTabs, KICKER_CHOICE, KICKER_WAITING, REVIEW_TITLE, keyed, lit, picksBusy,
-  wordsBusy, type Asker, type PickCall, type Picks, type Words,
+  wordsBusy, type Asker, type Picks, type Words,
 } from './AskParts';
 import {
   askScreen, askSource, isUsableAsk, paneTicks, picksUncommitted, questionKey, shownQuestion, type AskSource, type ShownQuestion,
@@ -176,12 +176,6 @@ import { api, ApiError, failedTo } from '../lib/api';
 import { backgroundTasksClause } from '../lib/refusalWords';
 import { getSessionStore, type SessionStore } from '../stores/session';
 import './chat.css';
-
-/** No box touched, and no commit. `id` is the question (dialog id) `picked` belongs to: a set is never carried from
- *  one question to another. */
-const NO_PICK: { id: string | null; picked: readonly number[] | null; call: PickCall | null } = {
-  id: null, picked: null, call: null,
-};
 
 export interface DialogSheetProps {
   id: string;
@@ -283,8 +277,8 @@ export function DialogSheet({ id, store, onOpenTerminal, raise, asker = null, on
   const [otherFor, setOtherFor] = useState<string | null>(null);
   // R102: counts the deliberate opens of the Other field, so the inline card focuses it on one and on nothing else (`OwnWords`).
   const [focusNonce, setFocusNonce] = useState(0);
-  // D-5091: a multiSelect question's set and its commit, one value for the same reason (see `PickCall`).
-  const [pick, setPick] = useState(NO_PICK);
+  // D-5091: a multiSelect question's set and its commit, one value for the same reason (see `PickCall`), in the lifecycle.
+  const pick = lifeNow.pick;
   // Decision `ask-dialog-tab-route`: a tab move (the arrow keys, or a tab-strip chip) is under way. It is a send like
   // any other: it refuses the others and the dismissal while it runs.
   const [tabbing, setTabbing] = useState(false);
@@ -313,7 +307,6 @@ export function DialogSheet({ id, store, onOpenTerminal, raise, asker = null, on
     // A chosen Other is spent with its screen: unless text or a call is kept, a new screen starts with the field closed,
     // so it cannot reopen on returning to the question or on a later question with the same words.
     else if (own.text === '' && own.call === null) setOtherFor(null);
-    setPick((p) => (p.call?.state === 'flight' ? p : NO_PICK));
     // `dialog` is read at the id it belongs to; a repaint under the same id is not a new screen.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dialogId, closed]);
@@ -554,12 +547,7 @@ export function DialogSheet({ id, store, onOpenTerminal, raise, asker = null, on
   const toggle = (index: number): void => {
     const current = dialog;
     if (current === null || current.multi === undefined || sending.current) return;
-    const seed = paneTicks(current.multi);
-    setPick((p) => {
-      const base = p.id === current.id && p.picked !== null ? p.picked : seed;
-      const picked = base.includes(index) ? base.filter((k) => k !== index) : [...base, index];
-      return { ...p, id: current.id, picked };
-    });
+    machine.dispatch({ type: 'toggle', dialogId: current.id, index, seed: paneTicks(current.multi) });
   };
 
   // D-5091: commit the WHOLE set (`wanted`, ordered as the answer will list it). Like a tapped option, the sheet stays
@@ -568,16 +556,16 @@ export function DialogSheet({ id, store, onOpenTerminal, raise, asker = null, on
   const commitPicks = async (wanted: readonly number[]): Promise<void> => {
     const current = dialog;
     if (current === null || !claim()) return;
-    const call: PickCall = { dialogId: current.id, wanted, state: 'flight' };
-    setPick((p) => ({ ...p, call }));
+    const command = machine.dispatch({ type: 'multi', sessionId: id, dialogId: current.id, wanted }).command;
+    if (command?.kind !== 'multi') return;
     try {
-      const res = await api.answerDialogMulti(id, current.id, wanted);
+      const res = await performAnswer(command, answers);
       if (res.next !== undefined) applyAnswered(current.id, res.next);
       // As `sendWords`: in the gap the store's `dialog` is null and says nothing, so the commit stays landed.
       const waiting = !useStore.getState().askFrameSeen || useStore.getState().dialog?.id === current.id;
-      setPick(waiting ? { id: current.id, picked: wanted, call: { ...call, state: 'landed' } } : NO_PICK);
+      machine.dispatch({ type: 'multi-landed', dialogId: current.id, wanted, waiting });
     } catch (err) {
-      setPick({ id: current.id, picked: wanted, call: null });
+      machine.dispatch({ type: 'multi-refused', dialogId: current.id, wanted, refusal: refusalToken(err) });
       toast(dialogMultiRefusal(err), 'error');
     }
   };
