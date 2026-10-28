@@ -25,7 +25,7 @@ The coordinator's exact-head enqueue, `gh pr merge <n> --match-head-commit <sha>
      - Under the cap the answer is `=<flags><US><stripped>`, with `<US>` the unit separator `\u001f`.
      - Over the cap it is `!<bytes>:<kinds>`.
 
-     `<flags>` is a string over `a` (the raw text holds the word `--admin`), `w` (a mutation word) and `p` (a merge path), and two flags only the allowance reads (D-7249): `r` (the raw text holds `--repo`, `-R` or `GH_REPO=`) and `n` (the PR operand is a bare number). The PR operand is the first word after the merge head's `merge` in the stripped text that is not an option and not the value of a value-taking option (`--match-head-commit`, `--subject` or `-t`, `--body` or `-b`, `--body-file` or `-F`, `--author-email` or `-A`, `--repo` or `-R`). `n` is set only when that word is all digits. Both are computed in the same `jq`, with no new call. `<kinds>` is a comma-separated subset of `merge`, `admin` and `api`.
+     `<flags>` is a string over `a` (the raw text holds the word `--admin`), `w` (a mutation word) and `p` (a merge path), and two flags only the allowance reads (D-7249): `r` (the raw text holds `--repo`, `-R` or `GH_REPO=`) and `n` (the PR operand is a bare number). A merge head's PR operand is the first word after its `merge`, in the stripped text and before the next separator (`;`, `&&`, `||`, `|` or a newline), that is not an option and not the value of a value-taking option (`--match-head-commit`, `--subject` or `-t`, `--body` or `-b`, `--body-file` or `-F`, `--author-email` or `-A`, `--repo` or `-R`). `n` is set only when the command holds at least one merge head and every merge head has an operand that is all digits. A head with no operand leaves `n` unset, because gh then picks the PR from the branch. The walk stops at each separator, so it never crosses one, and it is linear in the words of the segment. Both flags are computed in the same `jq`, with no new call. `<kinds>` is a comma-separated subset of `merge`, `admin` and `api`.
   3. **The bypass question is asked of every session** after wave 2's question.
      - Under the cap it is denied when:
        - (the stripped command matches `GH_MERGE_RE`, and `a` is set); or
@@ -33,7 +33,7 @@ The coordinator's exact-head enqueue, `gh pr merge <n> --match-head-commit <sha>
      - Over the cap it is denied when `<kinds>` holds `admin` or `api`.
   4. **One project may keep `--admin`, by the operator's allowance (D-7249).** The operator ruled on 2026-10-28 that one hosted project keeps landing its PRs by admin merge. This plan names no project.
      - The allowance is a regular file, `$REG/admin-merge-allowed/<project>`. It lives in a dotless registry subdirectory, the pools precedent, so it never collides with a `$REG/<id>.<x>` field. Nothing in the tree writes it; the operator creates it by hand. Its content is not read.
-     - The hook reads the session's project with its own registry reader, `_ct_read "$REG/$id.project"`. The value must pass the hook's own project check (`CCRC_PROJ_CLASS`, at most `CCRC_PROJ_MAX` characters) and must not start with `.` or `-`, so it can never walk out of the directory. The hook then checks the allowance with `[[ -f "$f" && ! -L "$f" ]]`. It makes no fork and no `jq` call.
+     - The hook reads the session's project with its own registry reader, `_ct_read "$REG/$id.project"`. The value must pass the hook's own project check (`CCRC_PROJ_CLASS`, at most `CCRC_PROJ_MAX` characters), which admits no `/`, so it can never walk out of the directory. An absent or empty `.project` is not allowed. The hook never falls back to the session id here, as its card's project probe does. The hook then checks the allowance with `[[ -f "$f" && ! -L "$f" ]]`. It makes no fork and no `jq` call.
      - Under the allowance, the admin half of the bypass question does not deny for a session of that project. That holds only when `n` is set and `r` is not: the command names the PR by a bare number and names no other repository. A PR named by URL or by branch is refused under the allowance. gh takes the repository from a URL, and it resolves a branch name itself, which the hook cannot check. The `gh api` half is still refused, and wave 2's question is still asked first, so a held worker is still refused.
      - Over the cap the allowance does not apply, because the hook cannot read the repository flags there.
      - A project file that is absent, unreadable, empty or fails the project check, and an allowance that is a symlink or not a regular file, each read as not allowed. That fails closed.
@@ -156,16 +156,17 @@ This wave's workspace is a fresh child from `main`.
   - `the coordinator's landing passes`: no hold, the clause 15 spelling extracted from `ccd/coordinator-skill/SKILL.md`, and `--disable-auto`. `deny === null`.
   - `the wide reading's cost, named`: `gh pr merge 42 --match-head-commit <sha> && git commit -m "never --admin"` is denied, and the reason says the whole command is read.
   - `mentions with no merge head pass`: wave 2's mention list, which has three texts naming `--admin`, passes with no hold. So do `echo --admin`, `grep -- --admin docs` and `gh pr view 42 --json mergedAt`.
-  - `the answer format`: a direct jq run of `MERGE_STRIP_JQ`, extracted from the hook as the test file already does for its checker, over three commands. The flags and the kinds come out as specified. Five more commands pin `r` and `n`: `gh pr merge 42 --admin` (`n`), `gh pr merge --match-head-commit 4242 ws/alpha --admin` (no `n`: the number is the option's value), `gh pr merge --subject 42 https://github.com/o/r/pull/7 --admin` (no `n`), `gh pr merge 42 -R o/other --admin` (`n` and `r`) and `GH_REPO=o/x gh pr merge 42 --admin` (`n` and `r`).
+  - `the answer format`: a direct jq run of `MERGE_STRIP_JQ`, extracted from the hook as the test file already does for its checker, over three commands. The flags and the kinds come out as specified. Five more commands pin `r` and `n`: `gh pr merge 42 --admin` (`n`), `gh pr merge --match-head-commit 4242 ws/alpha --admin` (no `n`: the number is the option's value), `gh pr merge --subject 42 https://github.com/o/r/pull/7 --admin` (no `n`), `gh pr merge 42 -R o/other --admin` (`n` and `r`) and `GH_REPO=o/x gh pr merge 42 --admin` (`n` and `r`). Two more pin the separator rule, each with no `n`: `gh pr merge --admin;echo 42`, and `gh pr merge 42 --admin; gh pr merge https://github.com/o/other/pull/7 --admin`. A loop over all eleven spellings of the value-taking options (`--match-head-commit`, `--subject`, `-t`, `--body`, `-b`, `--body-file`, `-F`, `--author-email`, `-A`, `--repo`, `-R`) runs `gh pr merge <opt> 42 ws/alpha --admin`, and none sets `n`.
   - `the operator's allowance lets --admin through for that one project`: with `$REG/admin-merge-allowed/proj-a` a regular file and the session's `.project` reading `proj-a`, `gh pr merge 42 --admin --match-head-commit <sha>` passes. These are each still denied:
     - the same command with `--repo o/other`, with `-R o/other`, and after `GH_REPO=o/other`;
     - the PR named by URL, `gh pr merge https://github.com/o/other/pull/7 --admin`, and by branch, `gh pr merge ws/alpha --admin`;
+    - a bare-number merge followed by a URL merge in one command, and `gh pr merge --admin;echo 42`;
     - a session whose project is `proj-b`;
     - a session whose `.project` reads `proj-b` while the payload's cwd is a directory named `proj-a`;
     - a `.project` reading `../admin-merge-allowed/proj-a`, which would reach the real allowance file without the project check;
     - an allowance that is a symlink to a regular file, or a directory;
-    - an unreadable `.project`;
-    - `gh api -X PUT repos/o/r/pulls/42/merge` under the allowance;
+    - an unreadable `.project`, an empty one, and an absent one while an allowance file named after the session's own id stands;
+    - `gh pr merge 42 --admin; gh api -X PUT repos/o/r/pulls/42/merge` under the allowance, so the lifted admin half is present and only the api half can deny;
     - the over-cap form of the allowed command;
     - with `WAVE_HOLD`, which gives wave 2's reason byte for byte.
   - `one strip per payload`: a `jq` wrapper first on PATH counts invocations. A merge command costs exactly one more than the same command with its trigger words replaced, and that one invocation carries `--argjson cap`.
@@ -193,6 +194,9 @@ This wave's workspace is a fresh child from `main`.
   | A12 | no project check on the project value | the `../admin-merge-allowed/proj-a` case |
   | A13 | the allowance accepts a branch name | the branch case |
   | A14 | the allowance file read for any project, not the session's | the `proj-b` case |
+  | A15 | `n` taken from the first merge head only | the bare-number-then-URL case |
+  | A16 | the operand walk crosses a separator | the `--admin;echo 42` case |
+  | A17 | an absent `.project` falls back to the session id | the absent-project case |
 
 - [ ] **Step 6: Commit:** `feat(hook): refuse gh pr merge --admin in every session (landing order wave 2b, Task 1)`.
 
