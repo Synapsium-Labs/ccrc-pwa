@@ -413,6 +413,29 @@ const NAME_N30 = 'needs-reply-gentle-bridge-lamp';
 const NAME_N60 = 'needs-reply-narrow-garden-stone-silver-harbor-morning-cedars';
 const NAME_N104 = `${NAME_N60}-quiet-river-gentle-bridge-lamp-north-to-sea`;
 
+/** Rows whose context is wider than what the state word leaves of its line at 1280 (D-7252): a programme and its wave
+ *  tail (a slug within `PROGRAMME_BUDGET`, so `main` draws the same text), a child marker naming a run on the board, a
+ *  child marker whose run is not on the board, and a branch of 26 characters. Each comes as a needs-you row and as a
+ *  working row (`waiting · needs you` leaves the context about 95 px at 1280, `working` about 171), and each with a
+ *  short name, which shares its line with the state word, and with a 26-character one, which never does at the desk
+ *  and sends the state word to the context line when the context fits there. */
+const PROG_C = 'harbor-lite';
+const PROG_D = 'harbor-lights';
+const BRANCH_26 = 'ws/harbor-lights-desk-rows';
+const CONTEXT_ROWS = ['cprog', 'cchild', 'cboard', 'cbranch'] as const;
+/** The 26-character name of each long row: one line in every desk track, and never beside the state word there. */
+const LONG_TAIL: Record<(typeof CONTEXT_ROWS)[number], string> = {
+  cprog: 'quiet-harbor-lamps', cchild: 'quiet-harbor-lamp', cboard: 'quiet-harbor-lamp', cbranch: 'quiet-river-lamp',
+};
+const contextName = (row: (typeof CONTEXT_ROWS)[number], k: 'n' | 'w', long: boolean): string =>
+  long ? `${row}-${k}-${LONG_TAIL[row]}` : `${row}-${k}`;
+/** What `main` (2c5d8852a) draws for these rows in Instrument's status mode, measured in real Chrome, by name length,
+ *  state and width: a short name shares its line with the state word, so the row is two lines, the context under it;
+ *  a long name does not share it with `waiting · needs you` at any desk width, nor with `working` at 1280, and those
+ *  rows are three lines, the name, the state, the context. */
+const MAIN_ROW_HEIGHT = (long: boolean, k: 'n' | 'w', width: number): number =>
+  long && (k === 'n' || width === 1280) ? 56.75 : 39.75;
+
 const fitRow = (slug: string, name: string, branch: string | null, extra: object = {}): object =>
   session(FIT_PROJECT, slug, { name, branch, status: 'busy', bucket: 'working', ...extra });
 const fitRun = (id: number, program: string, slug: string): object => ({
@@ -420,7 +443,25 @@ const fitRun = (id: number, program: string, slug: string): object => ({
   sessionId: `${FIT_PROJECT}-${slug}`, workspace: slug, branch: null, state: 'working', closedAt: null, kind: 'work',
   reviews: null,
 });
-const FIT_RUNS = [fitRun(501, PROG_A, 'rproga'), fitRun(502, PROG_B, 'rprogb')];
+const FIT_RUNS = [
+  fitRun(501, PROG_A, 'rproga'), fitRun(502, PROG_B, 'rprogb'),
+  ...(['n', 'w'] as const).flatMap((k, i) => [false, true].flatMap((long, j) => [
+    fitRun(510 + 4 * i + 2 * j, PROG_C, `cprog-${k}${long ? 'l' : ''}`),
+    fitRun(511 + 4 * i + 2 * j, PROG_D, `cchild-${k}${long ? 'l' : ''}`),
+  ])),
+];
+/** A needs-you (`n`) and a working (`w`) row, short-named and long-named, for each context of `CONTEXT_ROWS`. */
+const contextRows = (): object[] => (['n', 'w'] as const).flatMap((k, i) => [false, true].flatMap((long, j) => {
+  const need = k === 'n' ? { bucket: 'attention', status: 'idle' } : {};
+  const ws = (row: string): string => `${row}-${k}${long ? 'l' : ''}`;
+  const run = 510 + 4 * i + 2 * j;
+  return [
+    fitRow(ws('cprog'), contextName('cprog', k, long), null, { ...need, held: `program:${PROG_C} wave:1/2 run:${run}` }),
+    fitRow(ws('cchild'), contextName('cchild', k, long), null, { ...need, child: { kind: 'child', runId: run + 1 } }),
+    fitRow(ws('cboard'), contextName('cboard', k, long), null, { ...need, child: { kind: 'child', runId: 599 } }),
+    fitRow(ws('cbranch'), contextName('cbranch', k, long), BRANCH_26, need),
+  ];
+}));
 const FIT_SESSIONS = [
   fitRow('r12', NAME_12, null),
   fitRow('r30', NAME_30, null),
@@ -435,6 +476,7 @@ const FIT_SESSIONS = [
   fitRow('rn30', NAME_N30, 'ws/rn30', { bucket: 'attention', status: 'idle' }),
   fitRow('rn60', NAME_N60, 'ws/rn60', { bucket: 'attention', status: 'idle' }),
   fitRow('rn104', NAME_N104, 'ws/rn104', { bucket: 'attention', status: 'idle' }),
+  ...contextRows(),
   fitRow('rsel', NAME_SELECTED, null),
 ];
 const FIT_SELECTED = `${FIT_PROJECT}-rsel`;
@@ -634,6 +676,64 @@ function measureStatusRow(page: Page, name: string): Promise<StatusRow> {
   }, name);
 }
 
+interface ContextRow {
+  readonly height: number;
+  /** The context, or a box inside it, is wider than the box that holds it: its text is cut sideways. */
+  readonly clipped: string[];
+  /** Area, in px², where the state word's box and the context's text cross. */
+  readonly overlap: number;
+  /** The state word's text sits on the context's first line, and how many lines the context's text takes. */
+  readonly sharesLine: boolean;
+  readonly contextLines: number;
+  readonly context: string;
+}
+
+/** Measure an Instrument status row's context cell: whether any of it is cut sideways (`scrollWidth` against
+ *  `clientWidth`, for the cell and every box drawn inside it, the screen-reader copy aside), and whether its text runs
+ *  under the state word. */
+function measureContextRow(page: Page, name: string): Promise<ContextRow> {
+  return page.evaluate((want) => {
+    const line = [...document.querySelectorAll<HTMLElement>('.sess-line')]
+      .find((l) => l.querySelector('.sess-open .sess-label')?.textContent === want);
+    if (line === undefined) throw new Error(`no row named ${want}`);
+    const context = line.querySelector<HTMLElement>('.sess-meta--context');
+    if (context === null) throw new Error(`no context on the row named ${want}`);
+    const state = line.querySelector<HTMLElement>('.sess-body > .sess-meta:not(.sess-meta--context)')!.getBoundingClientRect();
+    const clipped: string[] = [];
+    for (const el of [context, ...context.querySelectorAll<HTMLElement>('*')]) {
+      if (el.closest('.sr-only') !== null || el.getClientRects().length === 0) continue;
+      if (el.scrollWidth > el.clientWidth + 1) clipped.push(`${el.className}: ${el.scrollWidth} of ${el.clientWidth}px`);
+    }
+    let overlap = 0;
+    const own = context.getBoundingClientRect();
+    const centres: number[] = [];
+    const walk = document.createTreeWalker(context, NodeFilter.SHOW_TEXT);
+    for (let n = walk.nextNode(); n !== null; n = walk.nextNode()) {
+      if ((n.textContent ?? '').trim() === '' || n.parentElement!.closest('.sr-only') !== null) continue;
+      const range = document.createRange();
+      range.selectNodeContents(n);
+      for (const rc of range.getClientRects()) {
+        const w = Math.min(rc.right, state.right) - Math.max(rc.left, state.left);
+        const h = Math.min(rc.bottom, state.bottom) - Math.max(rc.top, state.top);
+        if (w > 0 && h > 0) overlap += w * h;
+        // A clamped branch's lines past the clamp still have text boxes, under the drawn ones: only a centre inside the
+        // cell's own box counts as a drawn line.
+        const c = rc.top + rc.height / 2;
+        if (rc.width > 0 && rc.height > 0 && c >= own.top && c <= own.bottom) centres.push(c);
+      }
+    }
+    centres.sort((a, b) => a - b);
+    let contextLines = 0;
+    let last = -Infinity;
+    for (const c of centres) if (c - last > 6) { contextLines += 1; last = c; }
+    const stateMid = state.top + state.height / 2;
+    return {
+      height: (line.closest('li') ?? line).getBoundingClientRect().height, clipped, overlap,
+      sharesLine: centres.length > 0 && Math.abs(stateMid - centres[0]!) <= 6, contextLines, context: context.innerText,
+    };
+  }, name);
+}
+
 /** The name of the row that holds the focus, or null when the focus is in no row. */
 function focusedRow(page: Page): Promise<string | null> {
   return page.evaluate(() => {
@@ -659,6 +759,8 @@ describe('D-6332: a session row shows its name whole where it has room', () => {
     expect([NAME_12, NAME_30, NAME_60, NAME_104, NAME_SNAKE, BRANCH_120].map((n) => n.length)).toEqual([12, 30, 60, 104, 60, 120]);
     expect([NAME_UNBROKEN, NAME_SNAKE_26].map((n) => n.length)).toEqual([40, 26]);
     expect([NAME_N30, NAME_N60, NAME_N104].map((n) => n.length)).toEqual([30, 60, 104]);
+    expect([PROG_C, PROG_D, BRANCH_26].map((n) => n.length)).toEqual([11, 13, 26]);
+    for (const row of CONTEXT_ROWS) for (const k of ['n', 'w'] as const) expect(contextName(row, k, true)).toHaveLength(26);
   });
 
   for (const { view, mode } of fitViews([1280, 1920])) {
@@ -743,6 +845,30 @@ describe('D-6332: a session row shows its name whole where it has room', () => {
           expect(r.besideName, `${where}: the state word is not beside the name`).toBe(false);
           // The name's lines and the context's one: the state word takes no line of its own.
           expect(r.lines, `${where}: lines`).toBe(r.nameLines + 1);
+        }
+        expect(await sideScroll(page)).toBe(0);
+        expect(errors).toEqual([]);
+      } finally {
+        await close();
+      }
+    });
+  }
+
+  for (const { view, mode } of fitViews([1280, 1600, 1920]).filter((v) => v.mode === 'status')) {
+    it(`a context the state word would cut keeps its whole width, and the row is no taller than on main (${named(view)}, ${mode})`, async () => {
+      const { page, errors, close } = await bootFit(view, mode, `/s/${FIT_SELECTED}`);
+      try {
+        await expectSelectedRow(page);
+        for (const row of CONTEXT_ROWS) for (const k of ['n', 'w'] as const) for (const long of [false, true]) {
+          const name = contextName(row, k, long);
+          const c = await measureContextRow(page, name);
+          const where = `${name} (${c.context}, ${c.height}px)`;
+          expect(c.clipped, `${where}: nothing of the context is cut`).toEqual([]);
+          expect(c.overlap, `${where}: the context's text does not run under the state word`).toBe(0);
+          // Beside the state word the context keeps its whole width: one line, never wrapped into what the state leaves.
+          if (c.sharesLine) expect(c.contextLines, `${where}: beside the state word, the context is one line`).toBe(1);
+          const main = MAIN_ROW_HEIGHT(long, k, view.width);
+          expect(c.height, `${where}: no taller than on main (${main}px)`).toBeLessThanOrEqual(main + 0.5);
         }
         expect(await sideScroll(page)).toBe(0);
         expect(errors).toEqual([]);
