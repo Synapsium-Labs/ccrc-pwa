@@ -45,7 +45,7 @@ import type {
   AccountUsage, CoordStatus, FleetSession, ProjectedHome, ProjectReadiness, ProjectRow, ReadinessFacts, RosterWire,
 } from '../../shared/api';
 import { StartProgramSheet } from '../src/fleet/StartProgramSheet';
-import { START_PROGRAM_WAIT_MS, openRunVerdict, startedSessionFor } from '../src/fleet/startProgramPolicy';
+import { START_PROGRAM_WAIT_MS, liveMainCheckoutIn, openRunVerdict, startedSessionFor } from '../src/fleet/startProgramPolicy';
 import { missingPreconditions } from '../src/fleet/readinessWords';
 import { ApiError, api } from '../src/lib/api';
 import { fleetSession, DEAD_LIFECYCLE } from './fleetFixture';
@@ -193,6 +193,24 @@ describe('startedSessionFor — the wait arm, directly (B-2)', () => {
     expect(startedSessionFor([main({ workspace: 'brisk-harbor' })], 'claude', 'ccrc-pwa', NONE)).toBeNull();
     expect(startedSessionFor([main({ wrapper: 'claude8' })], 'claude', 'ccrc-pwa', NONE)).toBeNull();
     expect(startedSessionFor([main({ project: 'project-j' })], 'claude', 'ccrc-pwa', NONE)).toBeNull();
+  });
+});
+
+// OA-C15 (a) (D-7265; C7c Step 6, D-7181): the refusal that hides the Start door reads the server's word, and doubt
+// refuses (hides the door); a row the server reads dead or asleep does not.
+describe('liveMainCheckoutIn — the refusal reads the server\'s presence', () => {
+  const main = (over: Partial<FleetSession> = {}): FleetSession =>
+    sess({ id: 'claude-ccrc-pwa', wrapper: 'claude', project: 'ccrc-pwa', workspace: null, ...over });
+  it.each([
+    ['a row the server doubts (tmux did not answer)', { status: 'dead' as const, lifecycle: DEAD_LIFECYCLE, presence: 'unknown' as const }],
+    ['a row an older server sent with no presence', { status: 'dead' as const, presence: undefined }],
+    ['a pane gone under a lifecycle that resolves on its own (the server reads alive)', { status: 'dead' as const, lifecycle: 'restarting' as const }],
+  ])('refuses Start over %s', (_why, over) => {
+    expect(liveMainCheckoutIn([main(over)], 'ccrc-pwa')?.id).toBe('claude-ccrc-pwa');
+  });
+  it('offers Start past a row the server reads dead, or asleep', () => {
+    expect(liveMainCheckoutIn([main({ status: 'dead', lifecycle: DEAD_LIFECYCLE })], 'ccrc-pwa')).toBeNull();
+    expect(liveMainCheckoutIn([main({ status: 'dead', lifecycle: 'stopped', hibernatedAt: 1, stoppedBy: { at: 1, surface: 'agent' } })], 'ccrc-pwa')).toBeNull();
   });
 });
 

@@ -38,6 +38,13 @@ export const START_PROGRAM_WAIT_MS = 20_000;
 const isMainCheckoutOf = (s: FleetSession, project: string): boolean =>
   s.project === project && s.workspace === null;
 
+/** Not known to be stopped: the server reads the row alive, or cannot say (`unknown`, an older server's absent key
+ *  included). A refusal arm reads this, so doubt refuses. */
+const mayBeRunning = (s: FleetSession): boolean => {
+  const p = presenceOf(s);
+  return p === 'alive' || p === 'unknown';
+};
+
 /** D-292 (was D-B4-19)'s arm: "is a live main checkout already running in this project?"
  *
  *  WRAPPER-INDEPENDENT, and that is a correction, not an oversight (re-review
@@ -67,16 +74,19 @@ const isMainCheckoutOf = (s: FleetSession, project: string): boolean =>
  *  match sends a kickoff anywhere. The arm that ACTS is the wrapper-scoped one
  *  below.
  *
- *  `status !== 'dead'` is on THIS arm only: `cmd_start`'s idempotency test is
+ *  The liveness conjunct is on THIS arm only: `cmd_start`'s idempotency test is
  *  `_alive` (tmux has-session), whose wire mirror this is. Without it a
  *  dead-but-unreaped row refuses the sheet forever with copy false on every
  *  clause, and `ws-reap` is human-only-at-a-terminal by contract — no way out
- *  from the phone. */
+ *  from the phone. It reads the server's word (`mayBeRunning`, OA-C15 (a),
+ *  D-7181): a row the server reads `dead` or `asleep` is skipped, and a row it
+ *  DOUBTS refuses, because the refusal is what hides the Start door and doubt
+ *  hides doors (one refresh, once tmux answers). */
 export function liveMainCheckoutIn(
   sessions: readonly FleetSession[],
   project: string,
 ): FleetSession | null {
-  return sessions.find((s) => isMainCheckoutOf(s, project) && s.status !== 'dead') ?? null;
+  return sessions.find((s) => isMainCheckoutOf(s, project) && mayBeRunning(s)) ?? null;
 }
 
 /** D-291's arm: "has the session I just asked for appeared yet?"
