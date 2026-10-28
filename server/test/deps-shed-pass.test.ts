@@ -4,8 +4,10 @@
 // per-pass bound takes the oldest clock first, and a refusal is not asked again for the retry interval. The rule itself
 // is pinned in `deps-shed-verdict.test.ts`.
 import { describe, expect, it, vi } from 'vitest';
-import { depsShedPass, parseDepsShedAnswer, parseDepsShedStamp, type DepsShedMemory, type DepsShedPassDeps } from '../src/depsShedPass.js';
-import { DEPS_SHED_RETRY_MS } from '../src/depsShed.js';
+import {
+  depsShedMemory, depsShedPass, parseDepsShedAnswer, parseDepsShedStamp, type DepsShedMemory, type DepsShedPassDeps,
+} from '../src/depsShedPass.js';
+import { DEPS_SHED_RETRY_MAX_MS, DEPS_SHED_RETRY_MS } from '../src/depsShed.js';
 import { ACTOR_FLAGS_CAP, SHED_DEPS_CAP } from '../src/ccdargv.js';
 import { STOP_DONE_DISABLED_MARKER } from '../src/stopDone.js';
 import { RECLAIM_PAUSE_MARKER } from '../src/coord/rundefs.js';
@@ -103,7 +105,7 @@ function fake(o: { caps?: string[]; serial?: boolean; perPass?: number } = {}): 
   return f;
 }
 
-const mem = (): DepsShedMemory => ({ retryAt: new Map(), reported: new Map() });
+const mem = (): DepsShedMemory => depsShedMemory();
 const run = async (f: Fake, m: DepsShedMemory, rows: FleetSession[], names: string[] = []) => {
   f.setNames(names);
   return depsShedPass(f.deps, m, rows, rows.map((r) => rec(r.id)), names);
@@ -129,7 +131,9 @@ describe('depsShedPass (D-7278)', () => {
       expect(out).toEqual([{ id: W, kind: 'would-shed', dirs: 2, bytes: 2 * 1024 * 1024 }]);
       expect(f.feed.map((e) => [e.title, e.sessionId])).toEqual([['Dependencies would be removed', W]]);
       expect(f.feed[0]!.body).toContain('2 directories, 2 MiB');
-      expect(f.serialCalls).toBe(1);
+      // The dry run removes nothing: the session's queue and the box's re-proof are enough, and coordination writes
+      // never queue behind its du, git status and process walk.
+      expect(f.serialCalls).toBe(0);
     });
     it('asks once a sleep: the next pass skips the row, and a new sleep asks again', async () => {
       const f = fake();
@@ -156,6 +160,7 @@ describe('depsShedPass (D-7278)', () => {
       expect(f.argv).toEqual([ACT(W)]);
       expect(out).toEqual([{ id: W, kind: 'shed', dirs: 2, bytes: 2 * 1024 * 1024 }]);
       expect(f.feed.map((e) => e.title)).toEqual(['Dependencies removed']);
+      expect(f.serialCalls).toBe(1);
     });
     it('an arming switch gone at the act holds `switched-off`, and nothing is composed', async () => {
       const f = fake();
@@ -253,10 +258,44 @@ describe('depsShedPass (D-7278)', () => {
     await run(f, m, [worker(f)], [DEPS_SHED_LIVE_MARKER]);
     expect(f.argv.length).toBe(1);
     expect(f.feed).toEqual([]);
+    expect(m.retryAt.get(W)).toBe(NOW + DEPS_SHED_RETRY_MS);
     m.retryAt.set(W, NOW - 1);
     await run(f, m, [worker(f)], [DEPS_SHED_LIVE_MARKER]);
     expect(f.argv.length).toBe(2);
-    expect(m.retryAt.get(W)).toBe(NOW + DEPS_SHED_RETRY_MS);
+    // A second refusal in the same sleep holds off twice as long, and so on, never past the ceiling.
+    expect(m.retryAt.get(W)).toBe(NOW + 2 * DEPS_SHED_RETRY_MS);
+    for (let i = 0; i < 10; i++) { m.retryAt.set(W, NOW - 1); await run(f, m, [worker(f)], [DEPS_SHED_LIVE_MARKER]); }
+    expect(m.retryAt.get(W)).toBe(NOW + DEPS_SHED_RETRY_MAX_MS);
+  });
+  it('`nothing-to-shed` is final for that sleep, in shadow and armed; a new sleep asks again', async () => {
+    for (const names of [[], [DEPS_SHED_LIVE_MARKER]]) {
+      const f = fake();
+      const m = mem();
+      const w = worker(f);
+      f.answer.set(W, JSON.stringify({ refused: 'nothing-to-shed', session: W, detail: 'none' }));
+      await run(f, m, [w], names);
+      m.retryAt.clear();
+      await run(f, m, [w], names);
+      expect(f.argv.length, names.join()).toBe(1);
+      await run(f, m, [{ ...w, stoppedBy: { at: NOW - 25 * HOUR, surface: 'agent' } } as FleetSession], names);
+      expect(f.argv.length, names.join()).toBe(2);
+    }
+  });
+  it('rows the box already refused this sleep come after a fresh one: K refusing rows never starve it', async () => {
+    const f = fake();
+    const m = mem();
+    const old = ['project-a-r1', 'project-a-r2', 'project-a-r3'].map((id, i) => worker(f, id, NOW - (60 + i) * HOUR));
+    for (const r of old) f.answer.set(r.id, JSON.stringify({ refused: 'in-use', session: r.id, detail: 'pid 1' }));
+    for (let i = 0; i < old.length; i++) await run(f, m, old, [DEPS_SHED_LIVE_MARKER]);
+    expect(f.argv.length).toBe(3);
+    m.retryAt.clear();
+    const fresh = worker(f, 'project-a-fresh', NOW - 25 * HOUR);
+    await run(f, m, [...old, fresh], [DEPS_SHED_LIVE_MARKER]);
+    expect(f.argv.at(-1)).toEqual(ACT('project-a-fresh'));
+    // With no fresh row left, the refused ones are still asked, oldest clock first.
+    m.retryAt.clear();
+    await run(f, m, old, [DEPS_SHED_LIVE_MARKER]);
+    expect(f.argv.at(-1)).toEqual(ACT('project-a-r3'));
   });
   it('a failure and an answer nobody can read hold off the same way, and write no feed row', async () => {
     const f = fake({ perPass: 3 });
