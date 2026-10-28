@@ -152,9 +152,17 @@ describe('the collect token reaches ws-collect only from the act job’s own aud
     const site = s!.at - fn.start;
     const stmt = Math.max(fn.body.lastIndexOf(';', site), fn.body.lastIndexOf('{', site), fn.body.lastIndexOf('}', site));
     const gates = [...fn.body.slice(0, stmt).matchAll(collectGate())];
-    expect(gates.length, 'asked at the job’s start and again before the act').toBeGreaterThanOrEqual(2);
+    // D-7200 (ARCH-44 C4k): the act asks once, in its own scope; the job's start and step 6 ask in the port (below).
+    expect(gates.length, 'the act asks again in its own scope, before the argv').toBeGreaterThanOrEqual(1);
     expect(fn.body.slice(gates.at(-1)!.index!, stmt), 'an await stands between the last capability check and the argv')
       .not.toMatch(/\bawait\b/);
+    // The port asks ccdCan(…, 'wsCollect') exactly twice: in its `capability` reader (step 1) and in its `lane` reader
+    // (step 6's caps, after the job's last await), each placed by its call's offset in that reader's span.
+    const readers = retirePortReaders(EXECUTOR, 'collectRetirePort');
+    const asks = callsIn(symbolOf(EXECUTOR, 'collectRetirePort'))
+      .filter((c) => c.name === 'ccdCan' && c.args[1]?.kind === 'string' && c.args[1].text === 'wsCollect');
+    expect(asks.map((c) => readers.find((r) => r.start <= c.start && c.end <= r.end)?.step ?? null),
+      'the port asks the collector\'s capability at step 1 and at step 6, in those readers, and nowhere else').toEqual(['capability', 'lane']);
   });
 });
 
