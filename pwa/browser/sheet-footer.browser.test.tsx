@@ -198,7 +198,7 @@ const session = (id: string, ws: string, extra: object = {}) => ({
   ultracode: false, branch: `ws/${ws}`, ctxPct: null, paneCols: null, tasks: null, pr: null, archivedAt: null,
   archivedBytes: null, held: null, hookState: null, askSummary: null, subagents: null, background: null,
   withCoordinator: null, lastEnd: null, hibernatedAt: null, bucket: 'idle', unmeasured: [], started: true,
-  child: { kind: 'none' }, lifecycle: 'running', ...extra,
+  child: { kind: 'none' }, lifecycle: 'running', presence: 'alive', ...extra,
 });
 const RUN = {
   id: 3, program: 'programme-a', programTitle: 'Programme A', wave: 1, waveOf: 2, project: 'project-a',
@@ -220,7 +220,7 @@ const RESUME: AppFixture = {
     '/api/coord/caps': { caps: { maxConcurrentWorkers: 4 }, usage: { running: 1 } },
   },
   fleetFrames: [
-    { type: 'fleet', sessions: [session(WORKER, 'one'), session(COORD, 'coord', { status: 'dead', lifecycle: 'orphan' })] },
+    { type: 'fleet', sessions: [session(WORKER, 'one'), session(COORD, 'coord', { status: 'dead', lifecycle: 'orphan', presence: 'dead' })] },
     { type: 'runs', runs: [RUN] }, { type: 'coord', coord: { pause: 'clear' } },
   ],
 };
