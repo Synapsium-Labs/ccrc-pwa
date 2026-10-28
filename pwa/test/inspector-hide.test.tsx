@@ -43,6 +43,7 @@ const { initSkin, setSkin } = await import('../src/lib/skin');
 const { useFleetStore } = await import('../src/stores/fleet');
 const { getSessionStore } = await import('../src/stores/session');
 const { INSPECTOR_ID } = await import('../src/skins/frame');
+const { DOOR_EVENT } = await import('../src/command/door');
 const { INSPECTOR_STORAGE_KEY, resetInspectorChoiceForTests, setInspectorHidden, storedInspectorHidden } = await import(
   '../src/inspector/inspectorShown'
 );
@@ -243,7 +244,16 @@ describe('the toggle', () => {
     resetInspectorChoiceForTests();
     open(1920);
     expect(toggle()!.tagName).toBe('BUTTON');
-    act(() => { fireEvent.click(toggle()!); });
+    // One tap, one door event naming the command: the layer is the one that runs it.
+    const heard: unknown[] = [];
+    const listen = (e: Event): void => { heard.push((e as CustomEvent<string>).detail); };
+    window.addEventListener(DOOR_EVENT, listen);
+    try {
+      act(() => { fireEvent.click(toggle()!); });
+    } finally {
+      window.removeEventListener(DOOR_EVENT, listen);
+    }
+    expect(heard, 'exactly one door event, naming the command').toEqual(['toggle-inspector']);
     expect(railShown()).toBe(false);
     act(() => { fireEvent.click(toggle()!); });
     expect(railShown()).toBe(true);
