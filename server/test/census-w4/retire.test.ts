@@ -7,7 +7,9 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import type { CensusSite } from '../consolidationCensus.js';
-import { retireActSites, retireDeciders, retireGateLadders, retireNoticeSites, retireQueueOwners, retireQueueSites } from './retire.js';
+import {
+  retireActSites, retireDeciders, retireGateLadders, retireNoticeSites, retirePortReaders, retireQueueOwners, retireQueueSites, retireRowSteps,
+} from './retire.js';
 import { REPO, sourceFiles } from '../consolidationCensus.js';
 import { parsedFile, sourceOfSymbol } from '../scan/symbols.js';
 import { identifierReferences, parseSource, type ParsedFile } from '../scan/parse.js';
@@ -330,5 +332,59 @@ describe('the one retire executor loop, retireAct (ARCH-44, C4j)', () => {
     const CONTROL = "async function f(reason) { if (reason.name === 'child-spent') return 1; return 0; }";
     expect(identifierReferences(CONTROL, 'control.ts', new Set(['name'])), 'CONTROL: the scan sees a name compare').toHaveLength(1);
     expect(identifierReferences(sourceOfSymbol(LOOP, 'retireAct'), 'retireLane.ts', new Set(['name']))).toEqual([]);
+  });
+});
+
+// C4k (D-7168, D-7200; ARCH-44): the port's readers and the row's declared steps, which the re-pointed source checks of
+// the temp-orphan move read. APPENDED; nothing above is edited.
+describe('a reason\'s port readers and row steps, as the re-pointed checks read them (ARCH-44, C4k)', () => {
+  const PLANT = [
+    'export function aPort(deps: Deps, job: Job): Port {',
+    '  return {',
+    '    read: {',
+    "      [RETIRE_STEPS.capability]: () => ccdCan(deps.fleetState, 'wsCollect'),",
+    '      [RETIRE_STEPS.switchesLast]: async () => ({ listedUnder: deps.link.epochNow(), last: await list() }),',
+    '      plain: (f) => f.x,',
+    '    },',
+    '    act: (f) => anAct(deps, job, f),',
+    '  };',
+    '}',
+    'export const A_RETIRE = {',
+    '  decide: [',
+    '    { step: RETIRE_STEPS.capability, sync: true, onReject: \'propagate\' },',
+    '  ],',
+    '  audit: { step: RETIRE_STEPS.audit, sync: false, onReject: \'propagate\' },',
+    '  act: [',
+    '    { step: RETIRE_STEPS.switchesLast, sync: false, onReject: \'propagate\', markers: M },',
+    '    { step: RETIRE_STEPS.looseMarker, sync: true, onReject: \'propagate\' },',
+    '  ],',
+    '};',
+    '',
+  ].join('\n');
+  let dir = '';
+  let file = '';
+  beforeAll(() => {
+    dir = mkdtempSync(path.join(tmpdir(), 'consolidation-census-retire-port-'));
+    file = path.join(dir, 'aPort.ts');
+    writeFileSync(file, PLANT);
+  });
+  afterAll(() => { rmSync(dir, { recursive: true, force: true }); });
+
+  it('FIXTURE retirePortReaders: each member of the read literal, by step (a computed RETIRE_STEPS name read as its step), with its kind, async flag and span', () => {
+    const readers = retirePortReaders(file, 'aPort');
+    expect(readers.map((r) => [r.step, r.kind, r.async])).toEqual([
+      ['capability', 'arrow', false], ['switches-last', 'arrow', true], ['plain', 'arrow', false]]);
+    expect(PLANT.slice(readers[0]!.start, readers[0]!.end)).toBe(readers[0]!.text);
+    expect(readers[0]!.text.startsWith('[RETIRE_STEPS.capability]: () => ccdCan(')).toBe(true);
+    expect(() => retirePortReaders(file, 'A_RETIRE'), 'a const is no port builder').toThrow(/returns no object literal/);
+  });
+
+  it('FIXTURE retireRowSteps: the row\'s steps in decide, audit, act order, each with its sync flag as written', () => {
+    expect(retireRowSteps(file, 'A_RETIRE')).toEqual([
+      { step: 'capability', sync: true, phase: 'decide' },
+      { step: 'audit', sync: false, phase: 'audit' },
+      { step: 'switches-last', sync: false, phase: 'act' },
+      { step: 'loose-marker', sync: true, phase: 'act' },
+    ]);
   });
 });
