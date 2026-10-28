@@ -39,6 +39,19 @@ describe('createLru', () => {
     expect(byWeight.weight).toBe(6);
   });
 
+  it('clear drops every entry and the weight with them', () => {
+    const lru = createLru<string>(10, 100, len);
+    lru.set('a', 'xxx');
+    lru.set('b', 'xxxx');
+    lru.clear();
+    expect(lru.size).toBe(0);
+    expect(lru.weight).toBe(0);
+    expect(lru.get('a')).toBeUndefined();
+    // The weight starts again from nothing: a hundred characters fit a bound of 100, as they would in a new cache.
+    lru.set('c', 'x'.repeat(100));
+    expect(lru.get('c')).toBe('x'.repeat(100));
+  });
+
   it('an over-size entry is not kept', () => {
     const lru = createLru<string>(10, 5, len);
     lru.set('small', 'xxx');

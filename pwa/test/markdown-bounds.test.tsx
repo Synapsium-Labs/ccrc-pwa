@@ -18,7 +18,7 @@ import hljs from 'highlight.js/lib/core';
 import type { Root as HastRoot } from 'hast';
 import {
   ChatMarkdown, CodeBlock, HIGHLIGHT_BOUNDED_CAPS, SHARED_COMPONENTS, deriveBoundedCaps, highlightBlockCap, inMarkdownPageBudget, inScanPageBudget,
-  longestBlankRun, longestWordRun,
+  longestBlankRun, longestWordRun, resetHighlightCache,
 } from '../src/lib/markdown';
 import { keystrokeParts, utf8ByteLength } from '../src/lib/markdownGuard';
 import {
@@ -29,9 +29,12 @@ import { inlineCodeExtraElements, parseMarkdown, type MarkdownProfile } from '..
 import type { MarkdownParser } from '../src/lib/markdownRunner';
 import { renderHast } from '../src/lib/renderHast';
 
+// The highlight cache (desktop polish Task C7) outlives a case, and `spyHighlight` answers an empty highlight, so each
+// case starts from an empty cache: a block an earlier case rendered is highlighted again, never served its mocked answer.
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+  resetHighlightCache();
 });
 
 /** Spies `hljs.highlight` and answers an empty highlight: a case that counts calls never pays for one. */

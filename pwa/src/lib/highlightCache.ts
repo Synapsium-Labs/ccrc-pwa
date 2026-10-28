@@ -11,6 +11,8 @@ export interface Lru<V> {
   /** Hold `value` under `key` as the most recently used, then drop the least recently used until both bounds hold. A
    *  value heavier than the weight bound is not kept, and drops whatever `key` held before. */
   set(key: string, value: V): void;
+  /** Drop every entry. */
+  clear(): void;
   /** The entries held. */
   readonly size: number;
   /** The total weight held. */
@@ -46,6 +48,10 @@ export function createLru<V>(maxEntries: number, maxWeight: number, weigh: (valu
         if (entries.size <= maxEntries && total <= maxWeight) break;
         drop(oldest);
       }
+    },
+    clear() {
+      entries.clear();
+      total = 0;
     },
     get size() { return entries.size; },
     get weight() { return total; },

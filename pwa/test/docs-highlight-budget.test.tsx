@@ -8,7 +8,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { cleanup, render } from '@testing-library/react';
 import type { Element as HastElement, Root as HastRoot } from 'hast';
 import hljs from 'highlight.js/lib/core';
-import { PreHighlightContext, SHARED_COMPONENTS } from '../src/lib/markdown';
+import { PreHighlightContext, SHARED_COMPONENTS, resetHighlightCache } from '../src/lib/markdown';
 import {
   DOCS_HIGHLIGHT_MARKDOWN_PAGE_MAX_CHARS, DOCS_HIGHLIGHT_PAGE_MAX_CHARS, DOCS_HIGHLIGHT_SCAN_PAGE_MAX_CHARS,
   MD_HIGHLIGHT_BLOCK_MAX_CHARS, MD_HIGHLIGHT_JS_BLOCK_MAX_CHARS,
@@ -249,6 +249,8 @@ describe('review 460 F10: which blocks of a mixed crafted page are highlighted, 
    *  order, whether highlight.js was asked to highlight each block's text, and each block's label. */
   const run = (blocks: readonly { name: string; text: string }[]): { highlighted: boolean[]; labels: string[] } => {
     // Calls through, so the page is really highlighted; only the text asked is kept (a spy would keep every result too).
+    // The highlight cache (desktop polish Task C7) starts empty, so a block an earlier page highlighted is asked again.
+    resetHighlightCache();
     const asked = new Set<string>();
     const real = hljs.highlight;
     hljs.highlight = ((code: string, ...rest: unknown[]) => {

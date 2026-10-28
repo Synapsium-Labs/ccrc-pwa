@@ -373,6 +373,13 @@ export const HIGHLIGHT_CACHE_MAX_CHARS = 4_000_000;
  *  scope, so it lives as long as the page: chat, the tool wells and the Docs reader share it. */
 const HIGHLIGHTED = createLru<string>(HIGHLIGHT_CACHE_MAX_ENTRIES, HIGHLIGHT_CACHE_MAX_CHARS, (html) => html.length);
 
+/** Empty the highlight cache. For tests: the cache outlives a case, so a suite that counts `hljs.highlight`'s calls,
+ *  or mocks what it answers, empties it before each case reads it (as `lib/seen.ts`'s `resetAcks` resets that module's
+ *  snapshot); otherwise a pair an earlier case highlighted is served from the cache, mocked answer and all. */
+export function resetHighlightCache(): void {
+  HIGHLIGHTED.clear();
+}
+
 /** `hljs.highlight`'s markup for `raw` in `lang`, from the cache when it holds the pair. Only `boundedHighlight` calls
  *  it, once every bound has passed, so a block the bounds refuse is never highlighted and never cached. */
 function highlighted(raw: string, lang: string): string {
