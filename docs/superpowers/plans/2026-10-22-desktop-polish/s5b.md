@@ -52,13 +52,23 @@ it needs into the ledger; this file is not the ledger. Times are UTC, 2026-10-27
   lane"), not the line's.
 - **A focus guard proved dead and was removed.** Focus handed back to the line on Escape starts inside the strip, so the
   `relatedTarget` test already reads it as a move.
-- **The flyout's close rule, as ruled.** The flyout stays open while either the pointer or focus is inside the line or
-  the flyout, and closes when neither is. This clarifies `strip-hover-flyout`'s "closes when focus leaves both"; it
-  does not change it. Until the fix round, a pointer leaving with focus inside started the close grace anyway, and it
-  cancelled an open that focus had started. Both now wait for focus.
-- **A flyout made moot while it holds focus.** If another tab expands the strip, a poll leaves nothing to fold, or the
-  desk ends, the flyout leaves the DOM in the same commit. Its focus now goes to the line's tab stop, through the same
-  hand-back as Escape, not to the page.
+- **The flyout's close rule, as ruled and refined.** The flyout stays open while either the pointer or KEYBOARD focus
+  is inside the line or the flyout, and closes when neither is. This clarifies `strip-hover-flyout`'s "closes when
+  focus leaves both"; it does not change it.
+  - Review 1102's round made the pointer's leave wait for focus.
+  - Review 1106's round narrowed "focus" to keyboard focus (`:focus-visible`) on a card of the line or the flyout. The
+    focus a click leaves behind holds nothing, and neither does focus on "+n more", "Show fewer" or All accounts. So
+    hovering it open, clicking All accounts and leaving closes it.
+  - Who started an open decides what a passing pointer does. An open the pointer started is cancelled when the pointer
+    leaves, whatever focus is parked in the strip, and only an open that keyboard focus started survives. After Escape
+    it stays shut until the pointer or keyboard focus arrives again.
+- **A flyout made moot while it holds focus.** If another tab expands the strip or a poll leaves nothing to fold, the
+  flyout leaves the DOM in the same commit. Its focus then goes to the line's tab stop, through the same hand-back as
+  Escape, not to the page.
+  - The hand-back moves focus only from the page or from inside the strip, never out of a field elsewhere.
+  - It runs in a plain effect, so the page may hold focus for one frame first.
+  - The desk ending is no third route. The shell bar that holds the desk strip unmounts at that breakpoint, so the strip
+    goes with it and nothing is left to hand back.
 - **Parked, measured:** at the desk, the first frame with lanes paints the full strip before the row is measured and
   folds. The review saw it on every load it sampled (3 of 3), for one animation frame. Removing it needs a synchronous
   layout read in `useRowWidth`.
