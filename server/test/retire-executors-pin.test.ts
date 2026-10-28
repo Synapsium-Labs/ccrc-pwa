@@ -438,6 +438,59 @@ describe('child-spent (reclaimChild): rejections, gone, the act, effects, argv a
     }
   });
 
+  // "On no other outcome" (plan C4h, the side-effect rows): the mail is cancelled on the record step's `gone` arm and
+  // after a `reclaimed` act, and on nothing else. Every step row, every judged read and every refusal is driven here.
+  it('child-spent: the mail is cancelled on no other outcome (every step row, every judged read, every refusal and failure)', async () => {
+    const cancels = (): string[] => spy.log.filter((l) => l.startsWith('cancel:'));
+    for (const s of CHILD_STEPS) {
+      spy.log.length = 0;
+      const k = await childRig(s.opts);
+      s.set(k);
+      expect(await reclaimChild(k.deps, k.req), s.step).toEqual(s.want(k));
+      expect(cancels(), s.step).toEqual([]);
+    }
+    for (const [name, opts, set, want] of JUDGED) {
+      spy.log.length = 0;
+      const k = await childRig(opts);
+      set(k);
+      expect(await reclaimChild(k.deps, k.req), name).toEqual(want(k));
+      expect(cancels(), name).toEqual([]);
+    }
+    const others: ReadonlyArray<readonly [string, (k: ChildRig) => void, string]> = [
+      ['an audit refusal', (k) => { k.answers.audit = () => k.auditDoc({ verdict: 'not-a-child', detail: 'x' }); }, 'refused'],
+      ['an audit refusal answering gone', (k) => { k.answers.audit = () => k.auditDoc({ verdict: 'no-such-session', detail: '' }); }, 'gone'],
+      ['an act refusal', (k) => { k.answers.act = () => k.actDoc({ refused: 'not-a-child', detail: 'x' }); }, 'refused'],
+      ['an act refusal answering gone', (k) => { k.answers.act = () => k.actDoc({ refused: 'no-such-session', detail: '' }); }, 'gone'],
+      ['an act refusal answering a retry', (k) => { k.answers.act = () => k.actDoc({ refused: 'paused', detail: 'x' }); }, 'deferred'],
+      ['a failed act', (k) => { k.answers.act = () => k.actDoc({ failed: 'tree-busy', detail: 'x', crumb: true }); }, 'failed'],
+      ['an act that printed no document', (k) => { k.answers.act = () => ok('not json'); }, 'failed'],
+    ];
+    for (const [name, set, kind] of others) {
+      spy.log.length = 0;
+      const k = await childRig();
+      set(k);
+      expect((await reclaimChild(k.deps, k.req)).kind, name).toBe(kind);
+      expect(cancels(), name).toEqual([]);
+    }
+  });
+
+  it('child-spent: no mail is cancelled on a marker-unreadable re-listing (unlistable, or a row that lists and cannot be built)', async () => {
+    const unlistable = await childRig();
+    unlistable.drop('uuid');
+    unlistable.hooks.listing = (n) => (n === 2 ? 'null' : undefined);
+    expect(await reclaimChild(unlistable.deps, unlistable.req)).toEqual(deferredC(unlistable, 'marker-unreadable', 'the registry could not be listed'));
+    expect(spy.log.filter((l) => l === 'readdir'), 'the record read, then its one re-listing').toHaveLength(2);
+    expect(spy.log.filter((l) => l.startsWith('cancel:'))).toEqual([]);
+    expect(unlistable.argvs).toEqual([]);
+    spy.log.length = 0;
+    const unbuilt = await childRig();
+    unbuilt.drop('uuid');
+    expect(await reclaimChild(unbuilt.deps, unbuilt.req)).toEqual(deferredC(unbuilt, 'marker-unreadable',
+      'the registry lists this workspace but its row could not be built'));
+    expect(spy.log.filter((l) => l.startsWith('cancel:'))).toEqual([]);
+    expect(unbuilt.argvs).toEqual([]);
+  });
+
   it('child-spent: an audit refusal records the nested-rescue shadow, before the refusal is classified; an act refusal never does', async () => {
     const k = await childRig();
     k.answers.audit = () => k.auditDoc({ verdict: 'not-a-child', detail: 'x', nestedRescue: { wouldRescue: ['nested/a', 'nested/b'] } });
@@ -464,6 +517,17 @@ describe('child-spent (reclaimChild): rejections, gone, the act, effects, argv a
     gen.answers.audit = () => gen.auditDoc({ childOf: gen.runId, verdict: 'reclaimable', token: KTOK, generation: G2 });
     expect(await reclaimChild(gen.deps, gen.req)).toMatchObject({ kind: 'deferred', why: 'generation-changed' });
     expect(gen.argvs).toEqual([KAUDIT]);
+  });
+
+  it('child-spent: held at the act — reclaim-v1 withdrawn during the audit answers unsupported, and ws-reclaim is never composed', async () => {
+    // The capability asked again in the act's own scope (`childReclaimAct`, plan item 2 "capability again"): the audit's
+    // fake replaces the advertised verbs with a set that no longer carries reclaim-v1 as it answers.
+    const k = await childRig();
+    k.hooks.audit = () => { (k.fleetState as { ccdVerbs: string[] | null }).ccdVerbs = CHILD_CAPS.filter((c) => c !== RECLAIM_CAP); };
+    expect(await reclaimChild(k.deps, k.req)).toEqual(deferredC(k, 'unsupported', 'the fleet host does not advertise reclaim-v1'));
+    expect(k.argvs).toEqual([KAUDIT]);
+    expect(spy.log.filter((l) => l.startsWith('cancel:') || l === 'staleTold')).toEqual([]);
+    expect(notifySpy.mock.calls.map((c) => c[1].title)).toEqual(['child reclaim deferred']);
   });
 
   it("child-spent: TODAY'S GAP — reclaim-paused clean at 2b and raised from the next listing on still reaches the ws-reclaim argv (C4o flips this row)", async () => {
@@ -515,6 +579,36 @@ describe('child-spent (reclaimChild): rejections, gone, the act, effects, argv a
         expect(String(notifySpy.mock.calls[0]![1].body), name).toContain(`${KID}, child of run #${k.runId}`);
       }
       expect(out.kind, name).toBe(name === 'a deferral the feed already says' ? 'deferred' : name === 'a failure the feed already lists' ? 'failed' : name);
+    }
+  });
+
+  it('child-spent: each notice\'s kind, title and body, byte for byte (a fixed clock)', async () => {
+    const NOW = 1_789_100_000_000;
+    const cases: ReadonlyArray<readonly [string, ChildOpts, (k: ChildRig) => void, string, (k: ChildRig) => string]> = [
+      ['reclaimed', {}, () => {}, 'child reclaimed',
+        (k) => `${KID}, child of run #${k.runId}, was reclaimed (sweep). Nothing uncommitted was left.`],
+      ['deferred', {}, (k) => { k.see(true); }, 'child reclaim deferred',
+        (k) => `${KID}, child of run #${k.runId}: reclaim deferred (presence) — someone is viewing this session. Deferred for 90 minutes so far.`],
+      ['refused', {}, (k) => { k.answers.act = () => k.actDoc({ refused: 'not-a-child', detail: 'a detail' }); }, 'child reclaim refused',
+        (k) => `${KID}, child of run #${k.runId}: ccrc did not create this workspace for a run, or its record of which run did is missing or disagrees `
+          + '— so it is never reclaimed automatically. Nothing was removed. (a detail)'],
+      ['failed', {}, (k) => { k.answers.act = () => k.actDoc({ failed: 'tree-busy', detail: 'the tree is busy', crumb: true }); },
+        'child reclaim failed',
+        (k) => `${KID}, child of run #${k.runId}: reclaim failed — tree-busy: the tree is busy. It is retried; the box resumes where it stopped.`],
+      ['a ceiling-expired deferral', { deferExpired: true }, (k) => { k.raise(RECLAIM_PAUSE_MARKER); }, 'child reclaim deferred',
+        (k) => `${KID}, child of run #${k.runId}: reclaim deferred (paused-at-server) — reclaim-paused is raised: automatic reclamation `
+          + 'is paused fleet-wide. The defer ceiling was reached after 90 minutes of deferral, so presence, an attached terminal and a '
+          + 'git operation in progress no longer held it back.'],
+    ];
+    for (const [name, opts, set, title, body] of cases) {
+      notifySpy.mockClear();
+      const k = await childRig(opts);
+      k.deps.now = () => NOW;
+      set(k);
+      // Deferred since 90 minutes before the fixed clock: the wait the body states is deterministic.
+      await reclaimChild(k.deps, { ...k.req, deferredSinceMs: NOW - 5_400_000 });
+      expect(notifySpy.mock.calls.map((c) => [c[1].kind, c[1].sessionId, c[1].runId, c[1].title, c[1].body, c[2]]), name)
+        .toEqual([['run', KID, k.runId, title, body(k), 'record-only']]);
     }
   });
 });
@@ -694,6 +788,26 @@ describe('archive-expired (expireArchived): the step matrix (C4h a)', () => {
     y.hooks.audit = () => { y.lower(EXPIRE_LANE_LIVE_MARKER); };
     expect(await expireArchived(y.deps, y.req)).toEqual(answeredX({ kind: 'would-expire', sensitive: 0 }));
     expect(y.argvs).toEqual([XAUDIT]);
+  });
+
+  it('archive-expired: held at the act — expire-v1, or a child row\'s expire-child-v1, withdrawn during the audit composes no ws-expire', async () => {
+    // The capability asked again in the act's own scope (`expireAct`, plan item 2 "capability again"): the audit's fake
+    // replaces the advertised verbs as it answers. Both re-asks answer today's one sentence, which names expire-v1.
+    const withdraw = (x: ExpiryRig, cap: string): void => {
+      x.hooks.audit = () => { (x.deps.fleetState as { ccdVerbs: string[] | null }).ccdVerbs = EXPIRY_CAPS.filter((c) => c !== cap); };
+    };
+    const plain = await expiryRig();
+    withdraw(plain, EXPIRE_CAP);
+    expect(await expireArchived(plain.deps, plain.req)).toEqual(answeredX({ kind: 'deferred', why: 'unsupported',
+      detail: 'the fleet host does not advertise expire-v1' }));
+    expect(plain.argvs).toEqual([XAUDIT]);
+    const child = await expiryRig({ childOf: 41 });
+    child.raise(EXPIRE_CHILD_LIVE_MARKER);
+    withdraw(child, EXPIRE_CHILD_CAP);
+    expect(await expireArchived(child.deps, child.req)).toEqual({ ...answeredX({ kind: 'deferred', why: 'unsupported',
+      detail: 'the fleet host does not advertise expire-v1' }), child: true });
+    expect(child.argvs).toEqual([[...XAUDIT, '--child-of', '41']]);
+    expect(notifySpy).toHaveBeenCalledTimes(0);
   });
 
   it('archive-expired: the child arm (expire-child-v1 at step 1 and at the act; expire-child-live decides its shadow)', async () => {
@@ -984,6 +1098,18 @@ describe('temp-orphan (collectTempRoot): the step matrix (C4h a)', () => {
     s.hooks.listing = (n) => { if (n === 2) s.coord.setCollectLane({ kind: 'off' }, WALL0 + 1, s.journal); };
     expect(await collectTempRoot(s.deps, s.job())).toMatchObject({ kind: 'answered', step: 5, why: 'switch-flip' });
     expect(s.attempts).toEqual([CAUDIT]);
+  });
+
+  it('temp-orphan: held at the act — collect-loose-v1 withdrawn during the loose audit answers would-collect, and ws-collect is never composed', async () => {
+    // The loose arm's capability asked again inside step 6 (plan item 2 "capability again"): the audit's fake replaces the
+    // advertised verbs with a set that no longer carries collect-loose-v1 as it answers. The lane's own capabilities
+    // stand, so the lane is live and only the loose re-ask holds the act.
+    const r = looseRig();
+    r.hooks.audit = () => { r.state.ccdVerbs = FULL_CAPS.filter((c) => c !== COLLECT_LOOSE_CAP); };
+    expect(await collectTempRoot(r.deps, r.job(LOOSE_ID))).toMatchObject({ kind: 'would-collect' });
+    expect(r.attempts).toEqual([['ws-audit', '--loose-hex', LOOSE_HEX, '--collect']]);
+    expect(r.lane.clears).toEqual([]);
+    expect(notifySpy).toHaveBeenCalledTimes(0);
   });
 });
 
