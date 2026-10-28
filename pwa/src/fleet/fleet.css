@@ -3582,7 +3582,9 @@ button.proj-card-pool::before {
    two lines, wrapping at their token breaks and cut where the second line ends (the browser's line clamp), so the
    text fills the track rather than stopping at a fixed 28 characters. A name `shortenByToken` leaves whole (no `Fit`
    pair: within the budget, or one unbroken token) is the plain `.sess-label`, the button's direct child, and takes
-   the same clamp. The full text stays in `title` and in the `sr-only` accessible name. The programme slug and its
+   the same clamp. A `Fit` pair's full text stays in the row button's `title` and in its accessible name; a plain
+   name has no `title` (it is cut only as one unbroken token longer than two lines of its track), and its full text stays
+   in the DOM, which is its accessible name, and in the session header. The programme slug and its
    wave tail are never clamped: the clamp is named for the name's box and the branch cell alone, and none of them can
    reach a `.sess-pw` descendant. `overflow-wrap: anywhere` lets a name joined by `_` or `.` (CSS breaks only at
    hyphens and spaces) wrap inside the box rather than run out of it sideways with no `…`. Below 900px nothing

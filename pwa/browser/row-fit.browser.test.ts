@@ -380,7 +380,8 @@ describe('D-5576: every project card keeps its name, open and folded', () => {
 // ---- D-6332 --------------------------------------------------------------------------------------------------------
 // One project card of rows whose names are 12, 30, 60 and 104 characters long, made of hyphenated tokens (so the name
 // breaks where the card breaks it), a row with a short name and a very long branch, and a short row the desk opens.
-// Every row is busy: a card of idle rows renders folded, with no rows at all.
+// Every row is busy or needs the operator: a card of idle rows that need nothing renders folded, with no rows at all.
+// The needs-you rows and the context rows (D-7252) are described where they are declared.
 
 const NAME_12 = 'north-to-sea';
 const NAME_30 = 'quiet-river-gentle-bridge-lamp';
@@ -784,7 +785,7 @@ describe('D-6332: a session row shows its name whole where it has room', () => {
       }
     });
 
-    it(`a name longer than the track is shortened to fill it (${named(view)}, ${mode})`, async () => {
+    it(`a name longer than the track draws its full form on two lines, cut where the second ends (${named(view)}, ${mode})`, async () => {
       const { page, errors, close } = await bootFit(view, mode, `/s/${FIT_SELECTED}`);
       try {
         await expectSelectedRow(page);

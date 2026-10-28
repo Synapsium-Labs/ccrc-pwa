@@ -203,7 +203,9 @@ export function SessionLine({
               tablet's track, and from 900px up the full form on up to two lines, where a longer name ends in the
               browser's clamp `…` at the end of the second line, D-6332). The
               button's accessible name is the FULL name either way (verifier round 1): both drawn forms are
-              `aria-hidden`, and the name is spoken once. */}
+              `aria-hidden`, and the name is spoken once. `title` is set for a `Fit` pair only: a plain name that
+              the clamp cuts (one unbroken token longer than two lines of its track) keeps its full text in the DOM and
+              in the session header, not in a `title`. */}
           {glance.name.short === undefined || glance.name.short === label ? (
             <TypedLabel className="sess-label" text={label} />
           ) : (
