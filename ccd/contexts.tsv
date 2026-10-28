@@ -784,10 +784,16 @@ _ws_loose_locked	C4
 _ws_loose_collect	C4
 _ws_shed_int	C4
 _ws_shed_floor	C4
+_ws_shed_scan	C4
 _ws_shed_names	C4
 _ws_shed_refused	C4
 _ws_shed_failed	C4
 _ws_shed_git_state	C4
+_ws_shed_listing	C4
+_ws_shed_tracked	C4
+_ws_shed_repos	C4
+_ws_shed_size	C4
 _ws_shed_gap	C4
 _ws_shed_run	C4
 cmd_ws_shed_deps	C4
+_ws_shed_locked	C4
