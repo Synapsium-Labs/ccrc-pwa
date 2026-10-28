@@ -188,13 +188,14 @@ async function timeToHealth(
  *  timeout flake. Answering inside it is not enough to pass: `HUNG_BOOT_BOUND_MS` below is the bound. */
 const HANG_GUARD_MS = 20_000;
 
-/** The one wall-clock bound on a boot against a hung `ccd`: `/health` within 8000 ms, the budget this row always gave
- *  `timeToHealth`. Reason for the number: loaded CI runners were measured booting in 2-4 s while boot was fine, so the
- *  old 3 s bound flaked (3092 ms, 3570 ms), and 8 s holds the line against those boots with room to spare.
+/** The one wall-clock bound on a boot that is meant to be fast: `/health` within 8000 ms. Both the hung-ccd row and
+ *  the sibling instant-ccd row use it. Reason for the number: loaded CI runners were measured booting in 2-4 s while
+ *  boot was fine, so the old 3 s bound flaked (3092 ms, 3570 ms). The margin is not wide: on a heavily loaded box
+ *  (28 busy loops) boot was measured at up to about 6.4 s, so 8 s leaves about 1.6 s there.
  *
  *  Accepted gap: an awaited wait that kills nothing and lasts under about 6 s (8 s less a 2 s boot) is not caught by
- *  this row. The old 3 s bound could not hold that line either without flaking. A slowdown of `index.ts` that does not
- *  depend on `ccd` at all is still covered by the sibling instant-ccd row below, which keeps its 3 s bound. */
+ *  the hung-ccd row, and an unconditional slowdown of `index.ts` (one that does not depend on `ccd`) that keeps boot
+ *  under 8 s is not caught by the instant-ccd row either. The old 3 s bound could not hold that line without flaking. */
 const HUNG_BOOT_BOUND_MS = 8_000;
 
 /** What the hung-ccd row judges, as a list of failures (empty means boot did not wait). Shared by the real row and
@@ -204,8 +205,9 @@ const HUNG_BOOT_BOUND_MS = 8_000;
  *     sleeps 600 s, so any call that was awaited and ended by a timeout kill (the caps read's own 10s bound, or an
  *     `execFile(..., { timeout })` of any length) is dead by the time listen could follow it. This holds however
  *     slow or fast the box is.
- *  2. `/health` answered within `HUNG_BOOT_BOUND_MS`. This catches a long await that kills nothing (a race against a
- *     sleep), which check 1 cannot see; see that constant for the gap it leaves.
+ *  2. `/health` answered within `HUNG_BOOT_BOUND_MS`. This is a wide wall-clock bound, so unlike check 1 it does
+ *     depend on load. It catches a long await that kills nothing (a race against a sleep), which check 1 cannot see;
+ *     see that constant for its margin and the gap it leaves.
  *  3. The caps read was started at all, so check 1 is not vacuously true. */
 async function hungBootVerdict(entry: string): Promise<{ failures: string[]; hungMs: number | null }> {
   const failures: string[] = [];
@@ -267,7 +269,8 @@ const isOverBound = (f: string): boolean => f.startsWith('boot took');
 describe('the real composition root — boot never blocks on the local-caps probe', () => {
   it('a hung ccd (sleep 600, the reviewer\'s own reproduction) does not delay listen', async () => {
     // The row used to assert a fixed 3s wall clock, which loaded shared runners missed (3092 ms, 3570 ms) while boot
-    // was fine. `hungBootVerdict` judges the same property with checks a slow box does not break: see its comment.
+    // was fine. `hungBootVerdict` judges the same property mainly by check 1, which does not depend on load, plus
+    // check 2, a wide wall-clock bound: see its comment.
     const { failures } = await hungBootVerdict(indexTs);
     expect(failures).toEqual([]);
   }, HUNG_ROW_TIMEOUT_MS);
@@ -276,10 +279,12 @@ describe('the real composition root — boot never blocks on the local-caps prob
     const home = mkTmp('ccrc-boot-');
     writeRoster(home);
     writeStubCcd(home, 'echo start\necho stop\necho stop-surface\nexit 0');
-    const elapsed = await timeToHealth(home, indexTs, await freshPort(), 8_000);
-    expect(elapsed, neverAnswered(8_000)).not.toBeNull();
-    expect(elapsed!).toBeLessThan(3_000);
-  }, 15_000);
+    // Waits up to the hang guard so a slow boot fails on the bound below with its time, not as "never answered".
+    const elapsed = await timeToHealth(home, indexTs, await freshPort(), HANG_GUARD_MS);
+    expect(elapsed, neverAnswered(HANG_GUARD_MS)).not.toBeNull();
+    // The same 8 s bound as the hung-ccd row; see `HUNG_BOOT_BOUND_MS` for its margin and the gap it leaves.
+    expect(elapsed!).toBeLessThan(HUNG_BOOT_BOUND_MS);
+  }, HANG_GUARD_MS + 5_000);
 
   // THE SENSITIVITY CONTROLS. Without them, "the verdict is clean" could mean either "the property holds" or "these
   // checks cannot see a boot that waited". Each control runs a MUTATED copy of index.ts through the SAME
@@ -337,6 +342,10 @@ async function projectPoolsWithin(port: number, want: string, budgetMs: number):
   return last;
 }
 
+/** One boot's hang guard, then the row's own polls (at most 5 s), and slack for cleanup. These rows only need
+ *  `/health` to answer, so they are not timing rows and wait up to the hang guard. */
+const LOCAL_ROW_TIMEOUT_MS = HANG_GUARD_MS + 10_000;
+
 // The local-mode writer itself (D-7079): `index.ts`'s `readLocalCcdCaps(...).then(...)` closure records what this
 // box's own `ccd caps` answered into `fleetState.ccdVerbs`. Only a booted composition root runs that closure, so these
 // rows boot it in local mode against a stub ccd and read the field back through `/api/fleet/health`.
@@ -346,18 +355,18 @@ describe('the real composition root — local mode records its own ccd caps', ()
     writeRoster(home);
     writeStubCcd(home, 'echo start\necho stop\necho project-pool\nexit 0');
     const port = await freshPort();
-    expect(await timeToHealth(home, indexTs, port, 8_000), neverAnswered(8_000)).not.toBeNull();
+    expect(await timeToHealth(home, indexTs, port, HANG_GUARD_MS), neverAnswered(HANG_GUARD_MS)).not.toBeNull();
     expect(await projectPoolsWithin(port, 'enforced', 5_000)).toBe('enforced');
-  }, 20_000);
+  }, LOCAL_ROW_TIMEOUT_MS);
 
   it('a ccd whose caps lack the verb is recorded too: projectPools turns unavailable, not left unknown', async () => {
     const home = mkTmp('ccrc-boot-');
     writeRoster(home);
     writeStubCcd(home, 'echo start\necho stop\nexit 0');
     const port = await freshPort();
-    expect(await timeToHealth(home, indexTs, port, 8_000), neverAnswered(8_000)).not.toBeNull();
+    expect(await timeToHealth(home, indexTs, port, HANG_GUARD_MS), neverAnswered(HANG_GUARD_MS)).not.toBeNull();
     expect(await projectPoolsWithin(port, 'unavailable', 5_000)).toBe('unavailable');
-  }, 20_000);
+  }, LOCAL_ROW_TIMEOUT_MS);
 
   // The measured rule writes only a non-null list (D-7079): a failed read is "no evidence", so the field stays
   // unwritten and `projectPools` stays 'unknown'. Recording it as `[]` would answer 'unavailable', a false fact.
@@ -369,11 +378,11 @@ describe('the real composition root — local mode records its own ccd caps', ()
     writeRoster(home);
     writeStubCcd(home, 'if [ "$1" = caps ]; then touch "$CCRC_HOME/.caps-asked"; fi\nexit 1');
     const port = await freshPort();
-    expect(await timeToHealth(home, indexTs, port, 8_000), neverAnswered(8_000)).not.toBeNull();
+    expect(await timeToHealth(home, indexTs, port, HANG_GUARD_MS), neverAnswered(HANG_GUARD_MS)).not.toBeNull();
     const marker = path.join(home, '.caps-asked');
     const askedBy = Date.now() + 5_000;
     while (!existsSync(marker) && Date.now() < askedBy) await new Promise((r) => setTimeout(r, 50));
     expect(existsSync(marker), 'the local-mode caps read must have run').toBe(true);
     expect(await projectPoolsWithin(port, 'unavailable', 1_500)).toBe('unknown');
-  }, 20_000);
+  }, LOCAL_ROW_TIMEOUT_MS);
 });
