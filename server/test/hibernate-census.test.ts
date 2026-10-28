@@ -130,9 +130,9 @@ const CENSUS: readonly Row[] = [
   { source: 'dead-compare', file: 'pwa/src/fleet/SessionActionsSheet.tsx', hits: 6, stances: ['consults', 'true-of-pane'],
     why: 'the narrow-spawn note and Forget on a dead row are hidden on a sleeper (`hibernatedSince`), which offers Wake '
       + 'session (ccd forget refuses it, D-5423); the quota, narrow and wrapper notes speak of a live pane only' },
-  { source: 'dead-compare', file: 'pwa/src/fleet/sessionFacts.ts', hits: 1, stances: ['consults'],
-    why: 'the card\'s and the header\'s facts (D-5545) for a dead row; a sleeper (`hibernatedSince`) reads '
-      + '`hibernated · 6h` with a calm dot and no stop stamp' },
+  { source: 'presence-reader', file: 'pwa/src/fleet/sessionFacts.ts', hits: 1, stances: ['consults'],
+    why: 'the card\'s and the header\'s facts (D-5545) for a row whose pane is gone (`paneGone`, D-7181); a sleeper '
+      + '(`hibernatedSince`) reads `hibernated · 6h` with a calm dot and no stop stamp' },
   { source: 'dead-compare', file: 'pwa/src/screens/SessionScreen.tsx', hits: 2, stances: ['consults'],
     why: 'a dead screen is read-only; a sleeper (`useWakeOnOpen`) is woken when shown, reads "Waking…" with Wake, and '
       + 'keeps the composer shut until its row is alive; the dead banner\'s Restart is for a dead row with no marker' },

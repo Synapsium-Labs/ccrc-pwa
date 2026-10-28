@@ -33,6 +33,7 @@ import { restartWords, type RestartWords } from '../lib/restart';
 import { humanBytes } from '../lib/format';
 import { lifecycleQualifier } from './lifecycleWords';
 import { hibernatedSince, hibernatedWords } from './hibernated';
+import { paneGone } from './presence';
 import {
   childOfRunLabel, programmeWave, programmeWaveTail, runSentence,
   type ChildOfRunLabel, type ChildRunContext,
@@ -223,7 +224,7 @@ export function sessionFacts(input: FactInput): SessionFactSet {
     session, now, roster = [], projectPool = null, childRun, workingOn = null, coordinator = null,
     coordinatorTitle = null,
   } = input;
-  const dead = session.status === 'dead';
+  const dead = paneGone(session);
   const asleepAt = hibernatedSince(session);
   const state = rowStateWord(session);
 
