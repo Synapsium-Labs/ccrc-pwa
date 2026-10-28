@@ -8,6 +8,10 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import type { CensusSite } from '../consolidationCensus.js';
 import { retireActSites, retireDeciders, retireGateLadders, retireNoticeSites, retireQueueOwners, retireQueueSites } from './retire.js';
+import { REPO, sourceFiles } from '../consolidationCensus.js';
+import { parsedFile, sourceOfSymbol } from '../scan/symbols.js';
+import { identifierReferences, parseSource, type ParsedFile } from '../scan/parse.js';
+import { serverRing } from '../rings/ring.js';
 
 const show = (name: string, sites: readonly (CensusSite & { symbol: string })[]): void => {
   console.log(`census ${name}: ${sites.length}\n${sites.map((s) => `  ${s.symbol}  (${s.file}:${s.line})`).join('\n')}`);
@@ -253,5 +257,46 @@ describe('the retire executors\' censuses (ARCH-44, C4h)', () => {
     const sites = retireDeciders();
     show('retireDeciders', sites);
     expect(names(sites)).toEqual(['server/src/retire.ts#decideRetire']);
+  });
+});
+
+// C4j (D-7167; ARCH-44): the one executor loop, `retireLane.ts#retireAct`. APPENDED; nothing above is edited, and no
+// query of `retire.ts` changes. These rows read the source through `scan/symbols.ts` and `scan/parse.ts` only.
+describe('the one retire executor loop, retireAct (ARCH-44, C4j)', () => {
+  const LOOP = 'server/src/retireLane.ts';
+  const UNITS = new Set(['function', 'variable-function', 'method', 'arrow-property']);
+  /** The innermost named code unit of each `decideRetire(` call in a parsed file, as `file#name`. */
+  const callersIn = (file: string, p: ParsedFile): string[] => p.calls.filter((c) => c.callee === 'decideRetire').map((c) => {
+    const unit = p.symbols.filter((u) => UNITS.has(u.kind) && u.start <= c.start && c.end <= u.end).sort((a, b) => b.start - a.start)[0];
+    return `${file}#${unit === undefined ? '(module)' : unit.name.slice(unit.name.lastIndexOf('.') + 1)}`;
+  });
+
+  it('CONTROL: the caller walk names the unit holding a decideRetire( call, a nested arrow by its own name', () => {
+    const p = parseSource([
+      'export async function loop(r) { for (;;) { const d = decideRetire({}, r, {}); if (d) return d; } }',
+      'const helper = (r) => decideRetire({}, r, {});',
+      'export function quiet() { return decideRetireLater(); }',
+    ].join('\n'), 'control.ts');
+    expect(callersIn('control.ts', p)).toEqual(['control.ts#loop', 'control.ts#helper']);
+  });
+
+  it('REAL the one loop is retireLane.ts#retireAct: the only server/src function that calls decideRetire(', () => {
+    const callers = sourceFiles(REPO, 'server/src').flatMap((f) => {
+      const file = path.relative(REPO, f).split(path.sep).join('/');
+      return callersIn(file, parsedFile(f));
+    });
+    console.log(`census decideRetire callers: ${callers.length}\n${callers.map((c) => `  ${c}`).join('\n')}`);
+    expect(callers).toEqual([`${LOOP}#retireAct`]);
+  });
+
+  it('REAL retire.ts and retireLane.ts are L1', () => {
+    expect(serverRing('server/src/retire.ts')).toEqual({ ring: 'L1', why: 'no outer-ring fact' });
+    expect(serverRing(LOOP)).toEqual({ ring: 'L1', why: 'no outer-ring fact' });
+  });
+
+  it('REAL retireAct never reads a reason\'s name: the identifier `name` is referenced nowhere in its body', () => {
+    const CONTROL = "async function f(reason) { if (reason.name === 'child-spent') return 1; return 0; }";
+    expect(identifierReferences(CONTROL, 'control.ts', new Set(['name'])), 'CONTROL: the scan sees a name compare').toHaveLength(1);
+    expect(identifierReferences(sourceOfSymbol(LOOP, 'retireAct'), 'retireLane.ts', new Set(['name']))).toEqual([]);
   });
 });
