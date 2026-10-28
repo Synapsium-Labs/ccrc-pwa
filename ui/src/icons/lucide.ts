@@ -133,6 +133,16 @@ export const ICONS = {
     ['path', { d: 'm3 17 2 2 4-4' }],
     ['path', { d: 'm3 7 2 2 4-4' }],
   ],
+  'panel-right-close': [
+    ['rect', { width: '18', height: '18', x: '3', y: '3', rx: '2' }],
+    ['path', { d: 'M15 3v18' }],
+    ['path', { d: 'm8 9 3 3-3 3' }],
+  ],
+  'panel-right-open': [
+    ['rect', { width: '18', height: '18', x: '3', y: '3', rx: '2' }],
+    ['path', { d: 'M15 3v18' }],
+    ['path', { d: 'm10 15-3-3 3-3' }],
+  ],
 } as const satisfies Readonly<Record<string, readonly IconNode[]>>;
 
 export type IconName = keyof typeof ICONS;
