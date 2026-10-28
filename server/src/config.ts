@@ -9,6 +9,7 @@ import { isNodeRole } from '../../shared/node-role.js';
 import { isReleaseSourceName } from '../../shared/release-notes.js';
 import type { NodeRole } from '../../shared/api.js';
 import type { FingerprintAnswer } from './accounts/mask.js';
+import { DEPS_SHED_AFTER_HOURS_DEFAULT, DEPS_SHED_PER_PASS_DEFAULT } from './depsShed.js';
 
 export type FleetMode = 'local' | 'remote';
 
@@ -198,6 +199,10 @@ export interface CcrcConfig {
   /** `CCRC_UPDATE_DEADLINE_MS` as a positive safe integer, else
    *  `DEFAULT_UPDATE_DEADLINE_MS`. Read by W4; carried from W2. */
   updateDeadlineMs: number;
+  /** The deps-shed arm's thresholds (D-7278), deployment config with neutral defaults: `CCRC_DEPS_SHED_AFTER_HOURS`
+   *  (24), `CCRC_DEPS_SHED_PARKED_AFTER_HOURS` (unset: a parked run never sheds) and `CCRC_DEPS_SHED_PER_PASS` (1).
+   *  `depsShedConfigOf` reads them. */
+  depsShed: DepsShedConfig;
   /**
    * Stage 3a's session gate — is it ARMED? `false` is the shipped default and
    * the whole deploy story: with the flag off `server/src/auth/gate.ts`'s one
@@ -376,6 +381,37 @@ function loadRoster(accountsPath: string): Roster {
   return parseRoster(json);
 }
 
+/** The deps-shed arm's thresholds, in the units the arm reads (D-7278). */
+export interface DepsShedConfig {
+  readonly afterMs: number;
+  /** Null: unset, and a run parked at review, merge or close never sheds (A4, left unset by the operator's ruling). */
+  readonly parkedAfterMs: number | null;
+  readonly perPass: number;
+}
+
+/** One deps-shed key: a canonical positive whole number of at most nine digits, or null. An absent or empty value is
+ *  unset and silent; any other value that is not one says so once and is unset too. */
+function depsShedKey(env: NodeJS.ProcessEnv, key: string): number | null {
+  const raw = env[key];
+  if (raw === undefined || raw === '') return null;
+  if (/^[1-9][0-9]{0,8}$/.test(raw)) return Number(raw);
+  console.warn(`ccrc-server: ${key}=${JSON.stringify(raw.slice(0, 40))} is not a positive whole number; it reads as unset (the default).`);
+  return null;
+}
+
+/** The deps-shed thresholds from the environment (D-7278). Every one is deployment config with a neutral default. */
+export function depsShedConfigOf(env: NodeJS.ProcessEnv): DepsShedConfig {
+  const hour = 3_600_000;
+  const after = depsShedKey(env, 'CCRC_DEPS_SHED_AFTER_HOURS');
+  const parked = depsShedKey(env, 'CCRC_DEPS_SHED_PARKED_AFTER_HOURS');
+  const perPass = depsShedKey(env, 'CCRC_DEPS_SHED_PER_PASS');
+  return {
+    afterMs: (after ?? DEPS_SHED_AFTER_HOURS_DEFAULT) * hour,
+    parkedAfterMs: parked === null ? null : parked * hour,
+    perPass: perPass ?? DEPS_SHED_PER_PASS_DEFAULT,
+  };
+}
+
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): CcrcConfig {
   const home = env.CCRC_HOME ?? os.homedir();
   // `||`, not `??`: an EnvironmentFile's bare `CCRC_ACCOUNTS=` line — which is
@@ -491,6 +527,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CcrcConfig {
     // and `Number('')` is 0, which the positive test refuses.
     releaseApiUrl: releaseApiUrl || DEFAULT_RELEASE_API_URL,
     updateDeadlineMs: Number.isSafeInteger(deadlineNum) && deadlineNum > 0 ? deadlineNum : DEFAULT_UPDATE_DEADLINE_MS,
+    depsShed: depsShedConfigOf(env),
     // The auth keys. Task 5 added ONLY the ones the gate itself consumes (the
     // plan parks config in Task 10, but there is no gating a route on a key
     // that does not exist); Task 8 adds `rpId`/`origin`/`passkeysPath`; Task 10
