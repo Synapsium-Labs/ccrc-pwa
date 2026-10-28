@@ -200,7 +200,7 @@ A session that can forge those files can already move its own ref, so stage 4 ad
 | advance (`advanceAct`) | `wave-advance-rejected` | `wave-advance-unmeasured` | the worker, which re-sends its unchanged `wave-done` |
 | review close | `review-done-rejected` | `review-done-unmeasured` | the reviewer, which re-sends its unchanged `review-done` |
 
-- The body is `lineage-unmeasured: <detail> — re-send the same claim, unchanged, after the radar's next tick (at most 5 minutes); after two such answers, report it to your coordinator`.
+- The body is `lineage-unmeasured: <detail> — re-send the same claim, unchanged, after the radar's next tick (usually within 5 minutes); after two such answers, report it to your coordinator`.
 - **These server mails are the only trigger.** For `lineage-unmeasured`, the coordinator does not send its own `rejected: <code>` mail, which `wave-lifecycle.md` says for every other code. The worker skill names the server's two subjects, and the reviewer skill names its one.
 - The re-sent mail passes the ball back to the coordinator, as a `wave-done` already does (`stall.ts`'s `ballToCoordinator`). A `stall-verdict` case pins that, after an unmeasured mail and before the re-send, the ball is with the worker.
 

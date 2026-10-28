@@ -33,10 +33,10 @@ The coordinator's exact-head enqueue, `gh pr merge <n> --match-head-commit <sha>
      - Over the cap it is denied when `<kinds>` holds `admin` or `api`.
   4. **One project may keep `--admin`, by the operator's allowance (D-7249).** The operator ruled on 2026-10-28 that one hosted project keeps landing its PRs by admin merge. This plan names no project.
      - The allowance is a regular file, `$REG/admin-merge-allowed/<project>`. It lives in a dotless registry subdirectory, the pools precedent, so it never collides with a `$REG/<id>.<x>` field. Nothing in the tree writes it; the operator creates it by hand. Its content is not read.
-     - The hook reads the session's project with its own registry reader, `_ct_read "$REG/$id.project"`. It then checks the allowance with `[[ -f "$f" && ! -L "$f" ]]`. It makes no fork and no `jq` call.
-     - Under the allowance, the admin half of the bypass question does not deny for a session of that project. That holds only when the raw command names no other repository: no `--repo` or `-R` flag and no `GH_REPO=`. The `gh api` half is still refused, and wave 2's question is still asked first, so a held worker is still refused.
+     - The hook reads the session's project with its own registry reader, `_ct_read "$REG/$id.project"`. The value must pass the registry id rule (only `[A-Za-z0-9._-]`, not starting with `.` or `-`), so it can never walk out of the directory. The hook then checks the allowance with `[[ -f "$f" && ! -L "$f" ]]`. It makes no fork and no `jq` call.
+     - Under the allowance, the admin half of the bypass question does not deny for a session of that project. That holds only when the raw command names the PR by a bare number and names no other repository: no `--repo` or `-R` flag and no `GH_REPO=`. A PR named by URL or by branch is refused under the allowance, because gh takes the repository from a URL. The `gh api` half is still refused, and wave 2's question is still asked first, so a held worker is still refused.
      - Over the cap the allowance does not apply, because the hook cannot read the repository flags there.
-     - A project file that is absent, unreadable or empty, and an allowance that is a symlink or not a regular file, each read as not allowed. That fails closed.
+     - A project file that is absent, unreadable, empty or outside the id rule, and an allowance that is a symlink or not a regular file, each read as not allowed. That fails closed.
      - The reason text does not mention the allowance.
 - **The wide reading, on purpose (D-7111).** Once a real `gh … pr … merge` head or `gh … api` head is present, the deny reads `--admin`, the mutation words and the paths from the whole raw command, not from the merge's own segment.
   - The strip deletes quoted spans, so a quoted flag, a quoted path or a quoted GraphQL query would otherwise be invisible. A per-segment rule also misses a `$(…)` argument, a backslash-newline and a repeated `-X` (the plan review's findings).
@@ -50,7 +50,7 @@ The coordinator's exact-head enqueue, `gh pr merge <n> --match-head-commit <sha>
   - a word or path assembled at run time (`q="merge""PullRequest"`, a path in a variable built from pieces);
   - a variable or quoted command word (`$GH api …`, `"gh" api …`);
   - a `gh alias`;
-  - under the operator's allowance only, a `cd` into another repository's checkout before the merge, in the same command (D-7249);
+  - under the operator's allowance only, a working directory in another repository's checkout, set by a `cd` in the same command or in an earlier one, because the Bash tool keeps its directory between calls (D-7249);
   - ways to move `main` that are not merges, out of this wave's scope and named as such: `gh api -X PATCH repos/<o>/<r>/git/refs/heads/<b>`, the GraphQL `updateRef`, `updateRefs` and `createCommitOnBranch` mutations, and `git push` to a protected branch.
 - **What it never touches:**
   - every other `gh` call: `gh pr view`, `gh pr checks`, `gh pr merge <n> --disable-auto`, and every read of the landing verdict;
@@ -159,7 +159,10 @@ This wave's workspace is a fresh child from `main`.
   - `the answer format`: a direct jq run of `MERGE_STRIP_JQ`, extracted from the hook as the test file already does for its checker, over three commands. The flags and the kinds come out as specified.
   - `the operator's allowance lets --admin through for that one project`: with `$REG/admin-merge-allowed/proj-a` a regular file and the session's `.project` reading `proj-a`, `gh pr merge 42 --admin --match-head-commit <sha>` passes. These are each still denied:
     - the same command with `--repo o/other`, with `-R o/other`, and after `GH_REPO=o/other`;
+    - the PR named by URL, `gh pr merge https://github.com/o/other/pull/7 --admin`, and by branch, `gh pr merge ws/alpha --admin`;
     - a session whose project is `proj-b`;
+    - a session whose `.project` reads `proj-b` while the payload's cwd is a directory named `proj-a`;
+    - a `.project` reading `../proj-a`;
     - an allowance that is a symlink to a regular file, or a directory;
     - an unreadable `.project`;
     - `gh api -X PUT repos/o/r/pulls/42/merge` under the allowance;
@@ -185,7 +188,9 @@ This wave's workspace is a fresh child from `main`.
   | A7 | the allowance ignores `--repo`, `-R` and `GH_REPO=` | the other-repository cases |
   | A8 | the allowance check follows a symlink (`-f` alone) | the symlink case |
   | A9 | the allowance also lifts the `gh api` half | the api-under-allowance case |
-  | A10 | the allowance read from the cwd's project, not the registry's | the `proj-b` case |
+  | A10 | the allowance read from the cwd's project, not the registry's | the cwd-named-`proj-a` case |
+  | A11 | the allowance accepts a PR URL | the URL case |
+  | A12 | no id rule on the project value | the `../proj-a` case |
 
 - [ ] **Step 6: Commit:** `feat(hook): refuse gh pr merge --admin in every session (landing order wave 2b, Task 1)`.
 
@@ -300,4 +305,4 @@ Numbers are ISSUED, never chosen; a worker never calls the allocator (worker cla
   The hook is a contract the fleet honours, not an access boundary (spec §4).
 - **D-7115** — `over-cap-every-session` (Review Focus 5): over the cap the hook cannot parse. An over-cap command whose raw text reads as an admin merge or an api merge is refused in every session, prose included, with the split-or-rephrase reason. Wave 2 accepted that cost for held sessions; this wave extends it to every session. A long PR body or mail that quotes these words is sent as a file (`--body-file`, `--json` from a file) or split.
 - **D-7116** — `fleet-reach` (Prerequisite): spec §5.2's rollout step 4 states the arming gate for this repository. The hook has no project scope, so the operator confirms the fleet-wide reach before dispatch, from the coordinator's private measurement.
-- **D-7249** — `operator-admin-allowance` (Architecture): spec §5.2 denies `--admin` in every fleet session. On 2026-10-28 the operator ruled that one hosted project keeps landing its PRs by admin merge, because its required approval cannot come from a session. So an operator-written file, `$REG/admin-merge-allowed/<project>`, lifts the admin half of the bypass deny for that project's sessions, and only for a command that names no other repository. Nothing in the tree writes it. The `gh api` half, the over-cap reading and wave 2's worker deny are untouched. A `cd` into another checkout under the allowance is a listed pass: the hook is a contract, not an access boundary (R9). Added 2026-10-28, after the plan's approval; the landing-order ledger's Decisions, 2026-10-28 08:00.
+- **D-7249** — `operator-admin-allowance` (Architecture): spec §5.2 denies `--admin` in every fleet session. On 2026-10-28 the operator ruled that one hosted project keeps landing its PRs by admin merge, because its required approval cannot come from a session. So an operator-written file, `$REG/admin-merge-allowed/<project>`, lifts the admin half of the bypass deny for that project's sessions, and only for a command that names its PR by number and names no other repository. Nothing in the tree writes it. The `gh api` half, the over-cap reading and wave 2's worker deny are untouched. A working directory in another checkout, from a `cd` in this command or an earlier one, is a listed pass under the allowance: the hook is a contract, not an access boundary (R9). Added 2026-10-28, after the plan's approval; the landing-order ledger's Decisions, 2026-10-28 08:00.
