@@ -3782,10 +3782,13 @@ export function registerCoordRoutes(
    * but has no hold to drop and no snapshotted push to fire, so it warns
    * instead of silently dropping the operator's notification on the floor
    * (fix round 1, item 1).
+   *
+   * Since W3 Q3f (D-7030) this door keeps its front ladder (the box token, the body, attribution, the id parse) and
+   * delegates the rest, in this order, to `coord/questions.ts#createQuestions`'s `release`; the watcher's in-memory
+   * hold is reached through that instance's `released` door-in and the watcher's doors sink.
    */
   app.post('/api/asks/:id/release', async (req, reply) => {
     if (!deps.coord) return notConfigured(reply);
-    const coord = deps.coord;
     // Literally inline, not through a wrapper: the census derives lanes by
     // regex-slicing this file between route registrations, so a gate call it
     // cannot see is a lane it will not count.
@@ -3808,42 +3811,10 @@ export function registerCoordRoutes(
     // sqlite read can collapse a different textual name onto this ask.
     const id = parseCanonicalPositiveSafeInteger((req.params as { id: string }).id);
     if (id === null) return reply.code(400).send({ ok: false, error: 'bad-request' });
-    const askRead = coord.askById(id);
-    // D-2545, `/answer`'s arm exactly — see its comment.
-    if (!askRead.ok) {
-      return reply.code(503).send({ ok: false, error: 'ask-unreadable', detail: askRead.detail });
-    }
-    const ask = askRead.ask;
-    if (ask === null) return reply.code(404).send({ ok: false, error: 'unknown-ask' });
-    if (ask.parentId !== fromId) {
-      return reply.code(403).send({ ok: false, error: 'not-parent',
-        detail: 'only this child\'s derived parent may decline its question' });
-    }
-
-    // A decline is not a failure — it is the parent saying "the operator
-    // should see this now", and it is what makes the grace window a CEILING
-    // rather than a tax on every ask the parent cannot rule on.
-    if (!coord.declineAsk(id, Date.now())) {
-      return reply.code(409).send({ ok: false, error: 'not-held' });
-    }
-    // Fix round 1, item 1: `watcher` is undefined for every non-test caller
-    // of `buildServer` today (`src/index.ts` always builds one) — but the
-    // row above has ALREADY moved `'held' -> 'declined'` (D-5289) by the time
-    // this line runs, and the response below is unconditionally `{ok:true}`.
-    // With no watcher there is no `heldAsks` entry to drop and no snapshotted
-    // push to fire, so the decline is real (the row genuinely released) but
-    // the operator's buzz — the entire reason this lane exists — silently
-    // never happens. Warning, not refusing: refusing here would tell the
-    // parent its decline failed when the store row says otherwise, which is
-    // a worse lie than a log line nobody reads until they go looking.
-    if (watcher === undefined) {
-      console.warn(`ccrc-server: POST /api/asks/:id/release released ask ${id} (child ` +
-        `${ask.childId}) with no watcher configured — the row is declined but the operator's ` +
-        'push was never fired');
-    } else {
-      watcher.releaseHeldAsk(ask.childId);
-    }
-    return { ok: true };
+    // W3 Q3f (D-7030): an ALIAS from here on. The row, the stored parent, the decline CAS and the push now (or, with
+    // no watcher, the warning) are the claimant's core, `questions.release`, which `POST /api/questions/ask-<n>/release`
+    // calls too.
+    return sendAnswer(reply, await questions.release({ kind: 'ask', id, fromId }, claimantDeps!));
   });
 
   /**
