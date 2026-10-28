@@ -15,6 +15,21 @@ ledger pull request.
 | doctor | `_check_land-probe` per the plan | Doctor also SKIPs a project whose per-project `paused` file stands | It mirrors the probe, which writes nothing for a paused project. |
 | mutations | The brief names `mutation-run.py` | A sequential driver: save a copy (sha checked), apply the edit once, run the named vitest files under `timeout -k` and a measured `ulimit -u`, restore from the copy (sha checked) | `mutation-run.py` loads a Python module and Python test functions. The probe is a bash file run by vitest suites. |
 
+## Absorbing main, and doctor's cadence
+
+PR #1740's light run went red on `census-w8/cadence` and `single-definition/kernel-tail-cadence`. These run main's
+D-7054 census, which landed after this branch's base: no doctor line restates a timer's period. Main passed both
+files on a clean checkout, so the branch absorbed main once, by `git merge` (worker clause 16, trigger 2).
+
+`_check_land-probe` now reads `ccd-land-probe.timer`'s period through `_dr_cycles_s`, as the scope-sweep and
+pool-sync checks do:
+- The stale default is four periods. `CCRC_LAND_PROBE_STALE_S` stays as the override.
+- The not-yet window is two periods.
+- The sentences name the period that was read.
+
+A period that cannot be read drops the bound or clause that needed it. Doctor then warns, naming the unit, and never
+falls back to a literal.
+
 ## Mutation outcomes that differ from the plan's prediction
 
 - **M21** (the stale-scratch sweep without its uid and symlink checks) first measured green. `shutil.rmtree` refuses a
