@@ -13,7 +13,8 @@
 //     is a row of its own under the header and the banner stack, and the lanes row sits above it: the banners are mounted
 //     and have a height, nothing overlaps, the detail pane starts below the line.
 //  3. Under a coarse pointer (a touch screen, emulated with `openApp`'s `touch`: headless Chrome ignores the DevTools
-//     pointer media feature, measured) every card and All accounts is at least 44 px tall, at a desk and on a phone.
+//     pointer media feature, measured) every card and All accounts is at least 44 px tall, at a desk and on a phone (a
+//     phone is always folded, so there it measures the line's cards, then the cards of the panel a tap opens).
 //  4. New session ends at the bar line's content edge (its right edge less the header's gutter, +-1 px): the lanes row
 //     under the line must not move it.
 //  5. The meter's inset ring (D-6329) reaches the session screen: the Workflows strip draws a `Meter` per row, and each
@@ -30,7 +31,10 @@
 // folded line opens, after the flyout's delay, a panel below it, drawn over the content (positioned, the element at each
 // card's centre its own), holding every lane in order inside the viewport, pushing the first session row nowhere, and
 // closing after its grace once the pointer leaves. The expected order is worked out here from the rule, tie keys and all
-// (`orderOf`), never by the app's decider.
+// (`orderOf`), never by the app's decider. (10) The end cell is no card (Task S5c, review 1108's F1): at 1280 in both skins,
+// with real Tab and Shift+Tab, keyboard focus arriving at the line's card from All accounts or from the fold's control opens
+// the flyout after its delay, as focus arriving from outside the strip does; the end cell itself opens nothing, and a mouse
+// click on a line card opens no flyout by its focus.
 //
 // Run: `( cd pwa && CCRC_CHROME=<a Chrome or Chromium binary> ./node_modules/.bin/vitest run --config vitest.browser.config.ts --maxWorkers=2 browser/lanes-row.browser.test.ts )`.
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -402,22 +406,32 @@ const COARSE: AppView[] = [
 describe('under coarse emulation every card and All accounts is at least 44 px tall', () => {
   for (const view of COARSE) {
     it(named(view), async () => {
-      const want = view.width < 900 ? 19 : 17; // the phone's roster adds the two short lanes
-      const opened = await openApp(browser!, view, view.width < 900 ? PHONE_FIXTURE : FIXTURE);
+      const phone = view.width < 900;
+      // A desk shows every card (seeded expanded); a phone is always folded: its line shows two lines of four cards, and a
+      // tap on the control opens a panel of the phone's whole roster (the two short lanes too).
+      const want = phone ? 19 : 17;
+      const opened = await openApp(browser!, view, phone ? PHONE_FIXTURE : FIXTURE);
       const { ctx, page, errors } = opened;
       try {
-        await seedStripExpanded(ctx); // every card is measured, not just the folded line's
+        if (!phone) await seedStripExpanded(ctx); // every card is measured, not just the folded line's
         await page.goto(server!.origin + '/');
-        await page.waitForFunction((n) => document.querySelectorAll('.accounts-strip .account-gauge').length === n, want, { timeout: 30_000 });
+        await page.waitForFunction((n) => document.querySelectorAll('.accounts-strip .account-gauge').length === n, phone ? 4 : want, { timeout: 30_000 });
         await page.waitForTimeout(300);
-        const small = await page.evaluate((count) => {
+        if (phone) {
+          await page.locator('.accounts-strip .accounts-end [aria-expanded]').tap();
+          await page.waitForFunction((n) => document.querySelectorAll('.accounts-flyout .account-gauge').length === n, want, { timeout: 10_000 });
+          await page.waitForTimeout(150);
+        }
+        const small = await page.evaluate(({ count, panel }) => {
           if (!matchMedia('(pointer: coarse)').matches) return ['the coarse pointer was not emulated'];
           const out: string[] = [];
           const cards = [...document.querySelectorAll<HTMLElement>('.accounts-strip .account-gauge')];
           const end = document.querySelector<HTMLElement>('.accounts-strip .accounts-end [data-command="go-accounts"]');
-          // The fold's control (the strip is expanded here, so it reads "Show fewer") is a finger's height too.
+          // The fold's control is a finger's height too (a desk's reads "Show fewer", a phone's opens the panel).
           const control = document.querySelector<HTMLElement>('.accounts-strip .accounts-end [aria-expanded]');
-          if (cards.length !== count) out.push(`${cards.length} cards, not ${count}`);
+          // The panel sits inside the strip, so a phone's strip holds its four line cards and the panel's whole roster.
+          const all = panel ? count + 4 : count;
+          if (cards.length !== all) out.push(`${cards.length} cards, not ${all}`);
           if (end === null) out.push('no All accounts');
           if (control === null) out.push('no fold control');
           for (const el of [...cards, ...(end === null ? [] : [end]), ...(control === null ? [] : [control])]) {
@@ -425,7 +439,7 @@ describe('under coarse emulation every card and All accounts is at least 44 px t
             if (r.height < 43.5) out.push(`${el.querySelector('.account-gauge-label')?.textContent ?? el.textContent?.trim() ?? '?'} is ${Math.round(r.width)} x ${r.height.toFixed(1)}`);
           }
           return out;
-        }, want);
+        }, { count: want, panel: phone });
         expect(small).toEqual([]);
         expect(errors).toEqual([]);
       } finally {
@@ -884,6 +898,96 @@ describe('the flyout\'s focus rules', () => {
       await page.waitForSelector('.accounts-flyout', { state: 'detached', timeout: FLYOUT_CLOSE_MS + 2_000 });
       const closed = Date.now() - leftAt;
       expect(closed, `the flyout closed after ${closed} ms, before its ${FLYOUT_CLOSE_MS} ms grace`).toBeGreaterThanOrEqual(FLYOUT_CLOSE_MS - 20);
+      expect(errors).toEqual([]);
+    } finally {
+      await ctx.close();
+    }
+  }, 90_000);
+});
+
+// Keyboard focus arriving at the line's card from the strip's end cell (Task S5c, review 1108's F1), in real Chrome with real
+// keys: jsdom's `:focus-visible` is a heuristic. Shift+Tab from All accounts reaches the control (the end cell opens nothing,
+// as the click's focus does not), and Shift+Tab from the control lands on the line's tab stop: an ARRIVAL, which opens the
+// flyout after its delay as focus from outside the strip does. The pointer stays parked away from the strip throughout.
+describe('keyboard focus arriving at a card of the line from the end cell opens the flyout', () => {
+  const STRIP = 'header.shell-accounts .accounts-strip';
+  const CONTROL = `${STRIP} .accounts-end [aria-expanded]`;
+  const DOOR = `${STRIP} .accounts-end [data-command="go-accounts"]`;
+  const where = (page: Page): Promise<string> => page.evaluate(() => {
+    const a = document.activeElement;
+    if (a?.matches('.accounts-end [aria-expanded]')) return 'control';
+    if (a?.matches('.accounts-end [data-command="go-accounts"]')) return 'All accounts';
+    if (a?.matches('.accounts-strip > .account-gauge')) return 'line card';
+    if (a?.matches('.accounts-flyout .account-gauge')) return 'flyout card';
+    return `${a?.tagName}.${a?.className}`;
+  });
+
+  for (const skin of SKINS) {
+    const view: AppView = { width: 1280, skin, theme: GEOMETRY_THEME };
+
+    it(`Shift+Tab from All accounts to the control opens nothing, and Shift+Tab again onto the line's card opens the flyout after its delay: ${named(view)}`, async () => {
+      const { ctx, page, errors } = await openFoldedDesk(view);
+      try {
+        await page.mouse.move(view.width / 2, 880); // the pointer parked away from the strip
+        await page.focus(DOOR);
+        expect(await where(page), 'focus starts on All accounts').toBe('All accounts');
+        await page.keyboard.press('Shift+Tab');
+        expect(await where(page), 'Shift+Tab from All accounts reaches the control').toBe('control');
+        await page.waitForTimeout(FLYOUT_OPEN_MS + 300);
+        expect(await page.locator('.accounts-flyout').count(), 'the end cell holds and opens nothing').toBe(0);
+        const pressedAt = Date.now();
+        await page.keyboard.press('Shift+Tab');
+        expect(await where(page), 'Shift+Tab from the control reaches the line\'s card').toBe('line card');
+        await page.waitForSelector('.accounts-flyout', { timeout: FLYOUT_OPEN_MS + 2_000 });
+        const opened = Date.now() - pressedAt;
+        expect(opened, `the flyout opened after ${opened} ms, before its ${FLYOUT_OPEN_MS} ms delay`).toBeGreaterThanOrEqual(FLYOUT_OPEN_MS - 20);
+        expect(await where(page), 'the flyout took no focus').toBe('line card');
+        // Keyboard focus on the card holds it open with the pointer outside.
+        await page.waitForTimeout(FLYOUT_CLOSE_MS + 400);
+        expect(await page.locator('.accounts-flyout').count(), 'the flyout stays while keyboard focus is on the line').toBe(1);
+        expect(errors).toEqual([]);
+      } finally {
+        await ctx.close();
+      }
+    }, 90_000);
+
+    it(`Shift+Tab from the control directly onto the line's card opens the flyout after its delay: ${named(view)}`, async () => {
+      const { ctx, page, errors } = await openFoldedDesk(view);
+      try {
+        await page.mouse.move(view.width / 2, 880);
+        await page.focus(CONTROL);
+        expect(await where(page), 'focus starts on the control').toBe('control');
+        await page.waitForTimeout(FLYOUT_OPEN_MS + 300);
+        expect(await page.locator('.accounts-flyout').count(), 'focus on the control opens nothing').toBe(0);
+        const pressedAt = Date.now();
+        await page.keyboard.press('Shift+Tab');
+        expect(await where(page)).toBe('line card');
+        await page.waitForSelector('.accounts-flyout', { timeout: FLYOUT_OPEN_MS + 2_000 });
+        const opened = Date.now() - pressedAt;
+        expect(opened, `the flyout opened after ${opened} ms, before its ${FLYOUT_OPEN_MS} ms delay`).toBeGreaterThanOrEqual(FLYOUT_OPEN_MS - 20);
+        expect(errors).toEqual([]);
+      } finally {
+        await ctx.close();
+      }
+    }, 90_000);
+  }
+
+  it(`a mouse click on a line card, the pointer gone at once, opens no flyout by the focus it leaves behind: ${named({ width: 1280, skin: REFINED, theme: GEOMETRY_THEME })}`, async () => {
+    const { ctx, page, errors } = await openFoldedDesk({ width: 1280, skin: REFINED, theme: GEOMETRY_THEME });
+    try {
+      await page.mouse.move(640, 880);
+      const at = await page.evaluate((sel) => {
+        const r = document.querySelector<HTMLElement>(`${sel} > .account-gauge`)!.getBoundingClientRect();
+        return { x: (r.left + r.right) / 2, y: (r.top + r.bottom) / 2 };
+      }, STRIP);
+      // Press and release on the card, then leave before the pointer's own open delay is up: only the click's focus is left.
+      await page.mouse.move(at.x, at.y);
+      await page.mouse.down();
+      await page.mouse.up();
+      await page.mouse.move(640, 880);
+      await page.waitForTimeout(FLYOUT_OPEN_MS + 400);
+      expect(await page.locator(STRIP).count(), 'the strip is still there to be measured').toBe(1);
+      expect(await page.locator('.accounts-flyout').count(), 'a click\'s focus opens no flyout').toBe(0);
       expect(errors).toEqual([]);
     } finally {
       await ctx.close();
