@@ -166,12 +166,20 @@ describe('ci.yml and the merge queue (landing-order stage 2, on CI selection\'s 
     const req = new Set<string>();
     const walk = (id: string): void => { if (req.has(id)) return; req.add(id); needsOf(all.get(id) ?? []).forEach(walk); };
     ['server', 'test', 'pwa', 'build-pwa'].forEach(walk);
-    expect([...req].sort()).toEqual(['build-pwa', 'deps', 'fast-plan', 'pwa', 'pwa-shard', 'pwa-static', 'select', 'server', 'server-shard', 'server-typecheck', 'test']);
+    expect([...req].sort()).toEqual(['browser-pwa', 'build-pwa', 'deps', 'fast-plan', 'node-floor', 'pwa', 'pwa-shard', 'pwa-static', 'select', 'server', 'server-shard', 'server-typecheck', 'test']);
+    // The one exception: a refusal step that only the queue runs (operator ruling 2026-10-28: `test (pwa)` refuses a
+    // red browser suite there, `test (server)` a red node floor). It can only ADD red: its `if:` starts with the
+    // event test and its body is `exit 1`, so no job and no step is skipped by it.
+    const QUEUE_REFUSAL = /^ {6}- name: [^\n]+\n {8}if: github\.event_name == 'merge_group' && needs\.[a-z-]+\.result != 'success'\n {8}run: exit 1\n/gm;
+    const refusals: string[] = [];
     for (const id of req) {
-      const code = (all.get(id) ?? []).filter((l) => !/^\s*#/.test(l) && !PIPELINE_STEP_LINES.includes(l)).join('\n');
+      const text = (all.get(id) ?? []).join('\n') + '\n';
+      for (const m of text.match(QUEUE_REFUSAL) ?? []) refusals.push(`${id}: ${/needs\.([a-z-]+)\./.exec(m)?.[1]}`);
+      const code = text.replace(QUEUE_REFUSAL, '').split('\n').filter((l) => !/^\s*#/.test(l) && !PIPELINE_STEP_LINES.includes(l)).join('\n');
       expect(code, `\`${id}\` mentions merge_group — a required leg skipped by if: reports as PASSING, and the queue would merge an untested tree`)
         .not.toContain('merge_group');
     }
+    expect(refusals.sort(), 'the queue-only refusals are exactly the browser suite and the node floor').toEqual(['pwa: browser-pwa', 'server: node-floor']);
   });
 
   it('runs the full suite where a pull request runs the light one: the mode table has the row, and decideMode agrees for every input', () => {

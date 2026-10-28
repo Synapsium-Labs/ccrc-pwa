@@ -155,6 +155,16 @@ export function infraTrigger(p) {
   return null;
 }
 
+/** Paths whose effect on the server tests vitest's import graph can follow, so `vitest list --changed` relates them:
+ *  the JavaScript and TypeScript modules under server/ and shared/. Everything else — the ccd scripts and every other
+ *  bash file, Python, a JSON or SQL fixture, a doc, a module of another package that a server test reads as text — is
+ *  reached by a spawn or a read, which only the map records. The fast run (fast-plan.mjs) adds the map's selection
+ *  for those paths to vitest's.
+ *  @param {string} p repo-relative, POSIX @returns {boolean} */
+export function vitestFollows(p) {
+  return /^(?:server|shared)\/.+\.(?:ts|tsx|mts|cts|js|mjs|cjs)$/.test(p);
+}
+
 /** The full-run trigger (spec §6.3's changed-set bullet): a reason string
  *  when ANY changed path is infrastructure the map cannot safely reason
  *  about, else `null`. Checked before any per-test rule — a match here means

@@ -23,9 +23,16 @@
 #   merge_group         full     — the queue is where the whole suite runs
 #                       (operator ruling 2026-10-25, replacing 2026-09-28's
 #                       "what a pull request runs"): every server shard, the
-#                       agent, pwa and browser tests, in a concurrency group
-#                       of its own; no macOS leg and no full-suite. Nothing
-#                       reaches main without it.
+#                       agent, pwa and browser tests and the node floor, in a
+#                       concurrency group of its own; no macOS leg and no
+#                       full-suite. The required checks carry the browser
+#                       suite (`test (pwa)`) and the node floor (`test
+#                       (server)`) here, so their red stops the merge; the perf
+#                       legs stay advisory. Nothing reaches main through the
+#                       queue without it. The one way around the queue is a
+#                       bypass actor's direct merge (`gh pr merge --admin`):
+#                       the required checks it needs are the fast run's, so it
+#                       lands only what that run tested (README, "CI").
 #   push to main        the macOS legs only, in macos.yml (operator ruling
 #                       2026-10-28): off the merge path, coalesced, advisory.
 #   schedule (hourly)   refresh  — re-trace the tests every merge since the
@@ -206,6 +213,7 @@ jobs:
       fallback: ${{ steps.select.outputs.fallback }}
       floor: ${{ steps.select.outputs.floor }}
       fast: ${{ steps.select.outputs.fast }}
+      untraced: ${{ steps.select.outputs.untraced }}
     steps:
       # Full depth: the changed set is `git diff <map-sha> HEAD`, and the map's
       # commit must be present to be diffed against.
@@ -416,8 +424,9 @@ jobs:
 
   # THE FAST RUN'S SERVER TESTS (operator ruling 2026-10-28). An ordinary pull
   # request (select's `fast`, reach.mjs `fastRun`) runs the tests vitest relates
-  # to its change from the merge base, every guard suite that scans the whole
-  # tree, and the session-hook suites when the hook's inputs changed
+  # to its change from the merge base, the map's selection for the changed paths
+  # vitest cannot follow (select's `untraced`), every guard suite that scans the
+  # whole tree or the diff, and the session-hook suites when the hook's inputs changed
   # (fast-plan.mjs has the lists), packed by measured duration. The server
   # shards below run this plan instead of select's; the merge queue runs the
   # full suite. Any failure here falls back to select's own matrix (the
@@ -475,10 +484,14 @@ jobs:
           BASE_REF: ${{ github.base_ref }}
           FALLBACK_MATRIX: ${{ needs.select.outputs.server_matrix }}
           FALLBACK_COUNT: ${{ needs.select.outputs.count }}
+          # The map's selection for the changed paths vitest cannot follow (a script, a fixture, Python): a JSON list,
+          # or `full`, which makes the plan fall back.
+          UNTRACED: ${{ needs.select.outputs.untraced }}
         run: |
+          printf '%s' "$UNTRACED" > "$RUNNER_TEMP/untraced.json"
           mb=$(git merge-base "origin/$BASE_REF" HEAD)
           (cd server && ./node_modules/.bin/vitest list --filesOnly --changed "$mb" --json > "$RUNNER_TEMP/related.json") || { rm -f "$RUNNER_TEMP/related.json"; echo "::warning::vitest list failed; the fast plan falls back"; }
-          args=(--repo "$GITHUB_WORKSPACE" --base "$mb" --related "$RUNNER_TEMP/related.json" --fallback-matrix "$FALLBACK_MATRIX" --fallback-count "$FALLBACK_COUNT")
+          args=(--repo "$GITHUB_WORKSPACE" --base "$mb" --related "$RUNNER_TEMP/related.json" --untraced "$RUNNER_TEMP/untraced.json" --fallback-matrix "$FALLBACK_MATRIX" --fallback-count "$FALLBACK_COUNT")
           if [ -f "$RUNNER_TEMP/ci-cache/testtimes.json" ]; then args+=(--times "$RUNNER_TEMP/ci-cache/testtimes.json"); fi
           node .github/ci/fast-plan.mjs "${args[@]}"
 
@@ -690,9 +703,18 @@ jobs:
   # workflow's own context). The first step reads the job results with no
   # script at all and can only ADD red: a no-op verdict.mjs cannot turn a
   # failed prerequisite green.
+  #
+  # In the merge queue it also carries the node floor (operator ruling
+  # 2026-10-28): a fast pull request skips that leg, so the queue's run is the
+  # only one before the merge, and the queue waits only for the required
+  # checks. On any other event the floor stays advisory, as before; `needs:`
+  # adds nothing there but the wait for a leg that skips by step in seconds.
+  # The gate is its own refusal step, so it can only ADD red: a required job
+  # must never be skipped by an event test, and ci-merge-queue.test.ts allows
+  # `merge_group` in one only inside a step that runs `exit 1`.
   server:
     name: test (server)
-    needs: [select, fast-plan, server-shard, server-typecheck]
+    needs: [select, fast-plan, server-shard, server-typecheck, node-floor]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -701,6 +723,9 @@ jobs:
       # the one judged (operator ruling 2026-10-28). Any other run never reads fast-plan, which it skips.
       - name: Refuse a prerequisite that did not succeed (no script involved)
         if: needs.select.result != 'success' || contains(fromJSON('["failure","cancelled"]'), needs.server-shard.result) || contains(fromJSON('["failure","cancelled"]'), needs.server-typecheck.result) || (needs.select.outputs.fast == 'true' && needs.fast-plan.result != 'success')
+        run: exit 1
+      - name: Refuse a node floor that did not succeed in the merge queue
+        if: github.event_name == 'merge_group' && needs.node-floor.result != 'success'
         run: exit 1
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -947,9 +972,13 @@ jobs:
   # when a shard failed, and script-free, so it can only ADD red. A shard that
   # failed, was cancelled or was skipped fails it. On a refresh or a rebuild
   # the shards run with every step skipped and report success, as `test` does.
+  # In the merge queue it also carries the browser suite (operator ruling
+  # 2026-10-28), for the node floor's reason in `server` above: a fast pull
+  # request skips it, so the queue's run is its only one before the merge.
+  # Elsewhere the browser suite stays advisory.
   pwa:
     name: test (pwa)
-    needs: [pwa-shard, pwa-static]
+    needs: [pwa-shard, pwa-static, browser-pwa]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -957,8 +986,11 @@ jobs:
       - name: Refuse a shard or the static checks that did not succeed
         if: needs.pwa-shard.result != 'success' || needs.pwa-static.result != 'success'
         run: exit 1
+      - name: Refuse a browser suite that did not succeed in the merge queue
+        if: github.event_name == 'merge_group' && needs.browser-pwa.result != 'success'
+        run: exit 1
       - name: Every pwa shard and the static checks succeeded
-        run: echo "pwa shards ${{ needs.pwa-shard.result }}, static ${{ needs.pwa-static.result }}"
+        run: echo "pwa shards ${{ needs.pwa-shard.result }}, static ${{ needs.pwa-static.result }}, browser ${{ needs.browser-pwa.result }}"
 
   # ── the one place a component is RENDERED and MEASURED ─────────────────────
   #
@@ -1136,7 +1168,8 @@ jobs:
   #
   # Not a branch-protection check (operator ruling 2026-10-13), but
   # `full-suite` needs it, so a red browser leg fails the daily run and the
-  # stable gate. No job-level `if:` and no `needs:`: it skips by STEP on a
+  # stable gate, and in the merge queue `test (pwa)` refuses its red (operator
+  # ruling 2026-10-28: a fast pull request skips it). No job-level `if:` and no `needs:`: it skips by STEP on a
   # refresh or a rebuild, like the required legs, because a job skipped by
   # `if:` reads as red in full-suite. Pinned by ci-pipeline.test.ts.
   browser-pwa:
@@ -1208,7 +1241,8 @@ jobs:
   #
   # Not required BY NAME (the required checks are test (server), test (agent),
   # test (pwa) and build-pwa), but `full-suite` needs it, so it gates a
-  # stable promotion. Its only job-level `if:` is `!cancelled()`, so a failed
+  # stable promotion, and in the merge queue `test (server)` refuses its red
+  # (operator ruling 2026-10-28). Its only job-level `if:` is `!cancelled()`, so a failed
   # `needs:` never skips it: it skips by STEP on a refresh, a rebuild, a fast
   # pull request (operator ruling 2026-10-28: the merge queue runs it), or a
   # pull request that changed none of its inputs (D-6771), like the required

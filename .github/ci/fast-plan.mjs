@@ -1,20 +1,29 @@
 // The server tests a FAST pull request runs (operator ruling 2026-10-28). An ordinary pull request
-// (reach.mjs `fastRun`) runs only the fast checks; for the server suite that is:
+// (reach.mjs `fastRun`) runs only the fast checks; for the server suite that is the union of:
 //   1. the tests vitest relates to the change: `vitest list --filesOnly --changed <merge base> --json`, run by the
 //      `fast-plan` job in server/ and handed here as a file. vitest follows imports from the merge base, and reruns
 //      every test when one of its own rerun triggers (a manifest, a vitest config) changed;
-//   2. the guard suites, whatever changed: they scan the whole tree rather than import what they check, so vitest
-//      can never relate them to a change (GUARD_TESTS below: the censuses, single-definition, deviation-refs,
-//      growth-check, ownership, the rings, ccd-contexts, dtbd, and the tests-inclusive typecheck);
-//   3. the session-hook suites when ccd/ccd, ccd/session-hook.sh or shared/api.ts changed (SESSION_HOOK_TRIGGERS):
+//   2. the map's selection for every changed path vitest cannot follow (select-tests.mjs `vitestFollows`: a ccd
+//      script, Python, a JSON or SQL fixture, another package's file a server test reads as text). select computes
+//      it from the same map it selects from and hands it over as its `untraced` output; `full` there (no usable map,
+//      or a path the map cannot bound) makes this plan fall back to select's own selection;
+//   3. the guard suites, whatever changed: they scan the whole tree or the diff rather than import what they check,
+//      so vitest can never relate them to a change. `guardTests` derives them: the GUARD_TESTS patterns (the
+//      censuses, single-definition, deviation-refs, growth-check, ownership, the rings, ccd-contexts, dtbd, the
+//      tests-inclusive typecheck, the oss metadata, the pin suites of TypeScript code) and every test whose source
+//      lists the tracked tree or reads the diff itself (TREE_READER: a direct `git ls-files`, `git diff` or
+//      `git merge-base`, the shape of topology-clean, gitignore-secrets and consolidation-path-guard);
+//   4. the session-hook suites when ccd/ccd, ccd/session-hook.sh or shared/api.ts changed (SESSION_HOOK_TRIGGERS):
 //      the hook is bash, so no import reaches it.
-// What this leaves out — a test that reaches a change only through a spawned script, a read file or a trace — the
-// merge queue's full run catches before anything lands; the builder ran the scoped tests before pushing.
+// What this leaves out — a test the map has no entry for or does not trust, a TypeScript file a test reads as text
+// without importing it — the merge queue's full run catches before anything lands; the builder ran the scoped
+// tests before pushing.
 //
 // The plan is packed by measured duration (shards.mjs planShards, PROFILES.linuxFast) from the durations the daily
-// run publishes. Every failure — an unreadable vitest list, a path no list can carry — answers the FALLBACK the
-// caller passes (select's own matrix and count): never "nothing", and never a green over tests that did not run.
-// Like select.mjs, this is a CLI that writes $GITHUB_OUTPUT and $GITHUB_STEP_SUMMARY; the rules are pure exports.
+// run publishes. Every failure — an unreadable vitest list, an `untraced` of `full`, a path no list can carry —
+// answers the FALLBACK the caller passes (select's own matrix and count): never "nothing", and never a green over
+// tests that did not run. Like select.mjs, this is a CLI that writes $GITHUB_OUTPUT and $GITHUB_STEP_SUMMARY; the
+// rules are pure exports.
 import { execFileSync } from 'node:child_process';
 import { appendFileSync, readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -27,7 +36,6 @@ export const GUARD_TESTS = [
   /^server\/test\/census-w[^/]*\/.+\.test\.ts$/,
   /^server\/test\/[^/]*census[^/]*\.test\.ts$/,
   /^server\/test\/single-definition\/.+\.test\.ts$/,
-  /^server\/test\/single-definition-pin\.test\.ts$/,
   /^server\/test\/deviation-refs\.test\.ts$/,
   /^server\/test\/growth-check\.test\.ts$/,
   /^server\/test\/ownership\.test\.ts$/,
@@ -36,28 +44,76 @@ export const GUARD_TESTS = [
   /^server\/test\/ccd-contexts\.test\.ts$/,
   /^server\/test\/dtbd\.test\.ts$/,
   /^server\/test\/typecheck-tests\.test\.ts$/,
+  // Reads the workflows, the README and the package metadata by name (no import, no listing).
+  /^server\/test\/oss-metadata\.test\.ts$/,
+  // The pin suites: a pin reads its subject's source as text as often as it imports it. PIN_MAP_CARRIED leaves out
+  // the ones whose subject is a script.
+  /^server\/test\/[^/]*-pin\.test\.ts$/,
 ];
+
+/** The pin suites whose subject is a ccd script (bash, spawned in a fixture): the map selects them for a change to
+ *  that script (part 2 above), so they are not guards. Each is ~5-110 s; ccd-child-reclaim-pin alone is 108 s. */
+export const PIN_MAP_CARRIED = [
+  'server/test/account-markers-pin.test.ts',
+  'server/test/ccd-child-reclaim-pin.test.ts',
+  'server/test/ccd-helpers-pin.test.ts',
+  'server/test/ccd-swap-pin.test.ts',
+];
+
+/** A test that lists the tracked tree or reads the diff ITSELF — a direct `git ls-files`, `git diff` or
+ *  `git merge-base` call (execFileSync / spawnSync / execSync and friends), not one through a fixture helper such
+ *  as `h.git(...)`. Such a test checks whatever the change touched, so vitest can never relate it. */
+export const TREE_READER = /\b(?:execFileSync|spawnSync|execSync|execFile|spawn)\(\s*['"`]git(?:['"`]\s*,\s*\[[^\]]*?['"`]|\s+(?:-C\s+\S+\s+)?)(?:ls-files|merge-base|diff)\b/;
+
+/**
+ * The guard suites among the live tests: a GUARD_TESTS pattern (less PIN_MAP_CARRIED), or a TREE_READER source.
+ * @param {string[]} live repo-relative test paths @param {(file: string) => string} readSource @returns {string[]}
+ */
+export function guardTests(live, readSource) {
+  return live.filter((f) => {
+    if (GUARD_TESTS.some((re) => re.test(f)) && !PIN_MAP_CARRIED.includes(f)) return true;
+    let src = '';
+    try { src = readSource(f); } catch { return true; } // unreadable: run it, the safe direction
+    return TREE_READER.test(src);
+  });
+}
 
 /** A change to one of these runs every session-hook suite. */
 export const SESSION_HOOK_TRIGGERS = ['ccd/ccd', 'ccd/session-hook.sh', 'shared/api.ts'];
 const SESSION_HOOK_TEST = /^server\/test\/session-hook[^/]*\.test\.ts$/;
 
 /**
- * The fast selection: the related tests that are live, every guard suite, and the session-hook suites when a
- * trigger changed. Sorted, without duplicates. Paths are repo-relative (`server/test/x.test.ts`).
- * @param {{ live: string[], related: string[], changed: string[] }} args
- * @returns {{ files: string[], related: number, guards: number, hook: boolean }}
+ * The fast selection: the related tests and the map's untraced selection that are live, every guard suite, and
+ * the session-hook suites when a trigger changed. Sorted, without duplicates. Paths are repo-relative
+ * (`server/test/x.test.ts`).
+ * @param {{ live: string[], related: string[], untraced?: string[], guards: string[], changed: string[] }} args
+ * @returns {{ files: string[], related: number, untraced: number, guards: number, hook: boolean }}
  */
-export function fastSelection({ live, related, changed }) {
+export function fastSelection({ live, related, untraced = [], guards, changed }) {
   const liveSet = new Set(live);
-  const chosen = new Set(related.filter((f) => liveSet.has(f)));
-  const relatedCount = chosen.size;
-  const guards = live.filter((f) => GUARD_TESTS.some((re) => re.test(f)));
-  for (const f of guards) chosen.add(f);
+  const relatedLive = related.filter((f) => liveSet.has(f));
+  const untracedLive = untraced.filter((f) => liveSet.has(f));
+  const chosen = new Set([...relatedLive, ...untracedLive]);
+  const guardLive = guards.filter((f) => liveSet.has(f));
+  for (const f of guardLive) chosen.add(f);
   const files = changed.map((f) => f.trim()).filter(Boolean);
   const hook = files.some((f) => SESSION_HOOK_TRIGGERS.includes(f));
   if (hook) for (const f of live) if (SESSION_HOOK_TEST.test(f)) chosen.add(f);
-  return { files: [...chosen].sort(), related: relatedCount, guards: guards.length, hook };
+  return { files: [...chosen].sort(), related: new Set(relatedLive).size, untraced: new Set(untracedLive).size, guards: guardLive.length, hook };
+}
+
+/**
+ * select's `untraced` output, as fast-plan reads it: a JSON array of repo-relative test paths. `full` (nothing
+ * bounds what the change reaches), empty text or any other shape throws, and the caller falls back.
+ * @param {string} text @returns {string[]}
+ */
+export function parseUntraced(text) {
+  const t = text.trim();
+  if (t === 'full') throw new Error('the map cannot bound a changed path vitest cannot follow (select answered untraced=full)');
+  if (t === '') throw new Error('select handed no untraced selection');
+  const v = JSON.parse(t);
+  if (!Array.isArray(v) || v.some((f) => typeof f !== 'string')) throw new Error('the untraced selection is not an array of paths');
+  return v;
 }
 
 /**
@@ -109,8 +165,11 @@ function main() {
     const report = readFileSync(opt.related, 'utf8');
     // vitest prints `[]` when no test relates to the change; an empty report reads the same.
     const related = report.trim() === '' ? [] : relatedFromVitestList(JSON.parse(report), repoDir);
+    if (!opt.untraced) throw new Error('no --untraced file was handed in');
+    const untraced = parseUntraced(readFileSync(opt.untraced, 'utf8'));
     const changed = execFileSync('git', ['diff', '--name-only', '--no-renames', opt.base, 'HEAD'], { cwd: repoDir, encoding: 'utf8' }).split('\n');
-    const sel = fastSelection({ live, related, changed });
+    const guards = guardTests(live, (f) => readFileSync(path.join(repoDir, f), 'utf8'));
+    const sel = fastSelection({ live, related, untraced, guards, changed });
     // Never an empty matrix: the guard suites always run, so an empty selection means the lists went blind.
     if (sel.files.length === 0) throw new Error('the fast selection is empty — no guard suite matched');
     const unsafe = unsafeTestPaths(sel.files);
@@ -124,13 +183,13 @@ function main() {
     const lines = [
       '## Fast server tests (an ordinary pull request)',
       '',
-      `${sel.files.length} test file(s) in ${plan.length} shard(s): ${sel.related} related to the change by vitest, ${sel.guards} guard suite(s)${sel.hook ? ', and the session-hook suites (a hook trigger changed)' : ''}. The merge queue runs the full suite.`,
+      `${sel.files.length} test file(s) in ${plan.length} shard(s): ${sel.related} related to the change by vitest, ${sel.untraced} the map selects for paths vitest cannot follow, ${sel.guards} guard suite(s)${sel.hook ? ', and the session-hook suites (a hook trigger changed)' : ''}. The merge queue runs the full suite.`,
       '',
       ...sel.files.map((f) => `- \`${f}\``),
       '',
     ];
     writeSummary(lines.join('\n'));
-    console.log(`fast plan: ${sel.files.length} file(s), ${plan.length} shard(s) (${sel.related} related, ${sel.guards} guards, session-hook ${sel.hook})`);
+    console.log(`fast plan: ${sel.files.length} file(s), ${plan.length} shard(s) (${sel.related} related, ${sel.untraced} untraced, ${sel.guards} guards, session-hook ${sel.hook})`);
   } catch (e) {
     const reason = e instanceof Error ? e.message : String(e);
     if (!fallbackMatrix || !fallbackCount) {

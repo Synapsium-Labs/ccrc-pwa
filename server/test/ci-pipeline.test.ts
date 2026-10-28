@@ -444,7 +444,9 @@ describe('ci.yml: the required checks cannot go missing (design 2026-09-23 §4.2
   it('test (server) is a summary that fails closed: always() over select, the shards and the typecheck', () => {
     const b = job('server');
     expect(jobKey(b, 'if')).toBe('always()');
-    expect(needs(b)).toEqual(['fast-plan', 'select', 'server-shard', 'server-typecheck']);
+    // node-floor: the merge queue's gate on the floor (operator ruling 2026-10-28), a refusal step of its own.
+    expect(needs(b)).toEqual(['fast-plan', 'node-floor', 'select', 'server-shard', 'server-typecheck']);
+    expect(b).toContain("      - name: Refuse a node floor that did not succeed in the merge queue\n        if: github.event_name == 'merge_group' && needs.node-floor.result != 'success'\n        run: exit 1\n");
     expect(b).toMatch(/^ {8}run: node \.github\/ci\/verdict\.mjs server$/m);
     // The verdict reads these six and nothing else; a swapped pair (the
     // typecheck's result passed as the shards') would be green on a red shard.
@@ -1050,10 +1052,12 @@ describe('ci.yml: test (pwa) is a summary over the pwa shards (D-6768)', () => {
     const b = job('pwa');
     expect(jobKey(b, 'name')).toBe('test (pwa)');
     expect(jobKey(b, 'if')).toBe('always()');
-    expect(needs(b)).toEqual(['pwa-shard', 'pwa-static']);
+    // browser-pwa: the merge queue's gate on the browser suite (operator ruling 2026-10-28), a refusal step of its own;
+    // elsewhere the browser suite stays advisory, so the first refusal does not read it.
+    expect(needs(b)).toEqual(['browser-pwa', 'pwa-shard', 'pwa-static']);
     // Script-free refusal: success is the only result that passes, so failure, cancelled and skipped all fail it.
-    expect(b).toContain("if: needs.pwa-shard.result != 'success' || needs.pwa-static.result != 'success'");
-    expect(b).not.toContain('merge_group');
+    expect(b).toContain("if: needs.pwa-shard.result != 'success' || needs.pwa-static.result != 'success'\n");
+    expect(b).toContain("      - name: Refuse a browser suite that did not succeed in the merge queue\n        if: github.event_name == 'merge_group' && needs.browser-pwa.result != 'success'\n        run: exit 1\n");
   });
 
   it('runs the pwa suite as N shards that together cover vitest --shard=1/N..N/N, and typechecks pwa exactly once', () => {

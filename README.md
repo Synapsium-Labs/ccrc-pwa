@@ -6945,16 +6945,22 @@ serves the PWA through Vite with `/api` and `/ws` proxied to `127.0.0.1:7788`.
 **What CI runs** (`.github/workflows/ci.yml` — one pipeline, whose trigger picks the mode; design
 `docs/superpowers/specs/2026-09-23-ci-test-selection-design.md`). A **pull request** is the fast run (operator
 ruling 2026-10-28): every typecheck (`typecheck (server)`, the agent and pwa `tsc --noEmit`, `@ccrc/ui`'s), `build-pwa`,
-the static checks, the server tests vitest relates to the change from its merge base plus the guard suites that scan
-the whole tree (the censuses, single-definition, deviation-refs, growth-check, ownership, the rings, ccd-contexts,
-dtbd, the tests-inclusive typecheck, and the session-hook suites when `ccd/ccd`, `ccd/session-hook.sh` or
-`shared/api.ts` changed — `.github/ci/fast-plan.mjs`), and the agent and pwa tests the change can reach
+the static checks, the server tests vitest relates to the change from its merge base, the traced map's selection for
+every changed path vitest cannot follow (a ccd script, Python, a JSON or SQL fixture), the guard suites that scan the
+whole tree or the diff (the censuses, single-definition, deviation-refs, growth-check, ownership, the rings,
+ccd-contexts, dtbd, the tests-inclusive typecheck, the oss metadata, the pin suites, and every test that runs
+`git ls-files`, `git diff` or `git merge-base` itself), and the session-hook suites when `ccd/ccd`,
+`ccd/session-hook.sh` or `shared/api.ts` changed — `.github/ci/fast-plan.mjs` — and the agent and pwa tests the change can reach
 (`.github/ci/reach.mjs`). The browser suite, `node-floor`, the perf legs and the macOS legs do not run on it. The four
 required checks report on what ran. A head branch under `train/`, the `full-ci` label, or a change to shared
 infrastructure (under `.github/` or `server/scripts/`, a `package.json` or lockfile, a `vitest.*config.*`, a
 `tsconfig*.json`, `.gitattributes` or `.npmrc`) makes it the full run. A **merge-queue** run (`merge_group`) runs the
-full Linux suite — every server shard, the agent, pwa and browser tests and the node floor — so nothing reaches `main`
-without it. The **macOS legs** (`test-macos`, `probe-macos`) live in `.github/workflows/macos.yml`: they run on every
+full Linux suite — every server shard, the agent, pwa and browser tests and the node floor; `test (pwa)` refuses a red
+browser suite there and `test (server)` a red node floor, so either stops the merge (the perf legs stay advisory).
+Nothing reaches `main` through the queue without it. The one way around it is a bypass actor's direct merge
+(`gh pr merge --admin`, which the ruleset's admin bypass still allows): the required checks are then satisfied by the
+fast run, so such a merge lands only what the fast run tested. Don't do it; the daily `full-suite` is the next run that
+would catch what it skipped. The **macOS legs** (`test-macos`, `probe-macos`) live in `.github/workflows/macos.yml`: they run on every
 push to `main` (coalesced) and nightly, block no pull request and no queue entry, and a red one is a failing run on
 `main`. An **hourly** refresh runs no test legs: it re-traces what every merge since the last one affected and
 refreshes the map. The **daily** run runs every leg in full, macOS included, ending in `full-suite` — skipped when
