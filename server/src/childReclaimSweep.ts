@@ -1213,14 +1213,14 @@ export function isChildReclaimPreLockToken(v: unknown): v is ChildReclaimPreLock
   return typeof v === 'string' && CHILD_RECLAIM_PRE_LOCK_TOKENS.includes(v);
 }
 /** A `reclaim` line that is part of a run of FAILURES (spec §5.9): `failed`, or `refused` with one
- *  of the pre-lock tokens. ccd journals those pre-lock dies through `_lc_refuse`; the
+ *  of the pre-lock tokens, or the one transient word (`CHILD_RECLAIM_TRANSIENT_WORD`). ccd journals those pre-lock dies through `_lc_refuse`; the
  *  executor reads the same call as a `pre-lock-die` failure and the sweep retries it, so the
  *  report reads it as the failure it is, never as a settled refusal. ONLY these, by name: a
  *  token ccd starts journaling under `reclaim` later is classified when it is added, in this
  *  table or in `CHILD_RECLAIM_TOKEN_KIND`, and is never inherited. NOT read by
  *  `childReclaimTerminalRefusal`: no pre-lock token is terminal. */
 export const childReclaimFailureLine = (e: { readonly outcome: string; readonly refusal: string | null }): boolean =>
-  e.outcome === FAILED || (e.outcome === REFUSED && isChildReclaimPreLockToken(e.refusal));
+  e.outcome === FAILED || (e.outcome === REFUSED && (isChildReclaimPreLockToken(e.refusal) || e.refusal === CHILD_RECLAIM_TRANSIENT_WORD));
 
 /** ONE session's attention input row. `generation` is
  *  `childReclaimGeneration(events, at)`'s answer and `latest` is
@@ -1255,7 +1255,8 @@ export function childReclaimJournalRow(
  *  capability, a mirror fail-shut and every pass that does not find the child eligible. So every first sighting
  *  reads the tier back from ccd's own journal of the CURRENT generation:
  *  - it walks back over `reclaim` lines, reading past `intent`s and other acts;
- *  - it reads past a `refused` line whose word `kindOf` classes neither `terminal` nor `gone`: a box retry
+ *  - it reads past a `refused` line that is not a failure line (`childReclaimFailureLine`: the pre-lock tokens and
+ *    `tree-unreadable` are failures and counted below) and whose word `kindOf` classes neither `terminal` nor `gone`: a box retry
  *    refusal, which the executor answers as a deferral that KEEPS the tier, or a word this build cannot classify,
  *    which it answers as a failure naming no word (neutral). ccd journals every refusal, so without this a
  *    restart would read a shorter run than the memory held;
@@ -1284,7 +1285,7 @@ export function childReclaimTierSeed(
   for (let k = generation.length - 1; k >= 0; k -= 1) {
     const e = generation[k]!;
     if (e.act !== RECLAIM_ACT || e.outcome === INTENT) continue;
-    if (e.outcome === REFUSED && e.refusal !== null && !isChildReclaimPreLockToken(e.refusal)) {
+    if (e.outcome === REFUSED && e.refusal !== null && !childReclaimFailureLine(e)) {
       const kind = kindOf(e.refusal);
       // a box retry refusal (the executor's deferral, which keeps the tier) or a word this build cannot classify
       // (a word-less failure, neutral): the live memory's tier stands through both, so the walk reads past them
@@ -1304,6 +1305,11 @@ export function childReclaimTierSeed(
  *  `nested-rescue-too-large` through `_lc_fail`, before it started anything. It is settled all the same, so it reads as
  *  a terminal refusal. No other `failed` word does, even one the table classes terminal. */
 export const CHILD_RECLAIM_FAILED_TERMINAL_WORD = 'nested-rescue-too-large';
+
+/** The ONE retry word the executor answers as a FAILURE rather than a deferral: ccd's read of the tree errored
+ *  (`tree-unreadable`), which is transient until it keeps happening. A failure is what the sweep backs off from and
+ *  what the feed and the failing item report; a deferral is re-asked every pass, a terminal refusal never again. */
+export const CHILD_RECLAIM_TRANSIENT_WORD = 'tree-unreadable';
 
 /** THE reading of "this child stands under a TERMINAL refusal": its latest
  *  reclaim event is a refusal whose token wave 3 classes terminal. Shared by
