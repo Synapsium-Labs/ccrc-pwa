@@ -1534,7 +1534,7 @@ describe('the close route (C4h k; D-7228)', () => {
 // order up to its act. A row that answers `{ act: true }` must stand where the executor composed its verb.
 import {
   RETIRE_LISTING_MODES, RETIRE_NOTICE_HOMES, RETIRE_PRESENCE_RULES, RETIRE_REASON_NAMES, RETIRE_STEPS, RetireRejected,
-  decideRetire, type RetireDecision, type RetireFactSet, type RetireReason, type RetireStep,
+  decideRetire, type RetireDecision, type RetireFactSet, type RetireReason, type RetireReasonName, type RetireStep,
 } from '../src/retire.js';
 import {
   CHILD_SPENT_RETIRE, childReclaimGenerationRead, childReclaimHasCoordinated, childReclaimRowListing, childReclaimRowUuid,
@@ -1562,8 +1562,16 @@ import type { MeasuredDirectoryRead } from '../src/io.js';
 type Readers<F> = { readonly [S in RetireStep]?: (facts: F) => unknown };
 interface Driven<Out> { readonly decision: RetireDecision<Out>; readonly needs: readonly RetireStep[]; readonly facts: Record<string, unknown> }
 
+/** A row's `sync` flag disagreeing with what its step's reader answered. */
+class SyncFlagMismatch extends Error {}
+/** A `sync: false` step whose reader may answer a plain value: child-spent's generation read, which the ladder skips
+ *  (no read, no await) for a request whose licence generation is `none` (close's requests). Its reader answers `null`
+ *  then. No other step is excused. */
+const CONDITIONAL_READS: ReadonlyArray<readonly [RetireReasonName, RetireStep]> = [[RETIRE_REASON_NAMES.childSpent, RETIRE_STEPS.generation]];
 /** The loop the decider is asked through (`retireAct`'s rules, D-7226): read the step it needs, a promise awaited and a
- *  plain value never; a `judged` step's rejection becomes its fact, any other propagates. */
+ *  plain value never; a `judged` step's rejection becomes its fact, any other propagates. The row's `sync` flag is held
+ *  to the reader's answer: a `sync: true` reader answering a promise, or a `sync: false` reader answering a plain value
+ *  (outside `CONDITIONAL_READS`' skipped read), fails the drive, so a wrong flag cannot pass through it. */
 const drive = async <Req, F extends RetireFactSet, Out>(row: RetireReason<Req, F, Out>, req: Req, read: Readers<F>): Promise<Driven<Out>> => {
   const facts: Record<string, unknown> = {};
   const needs: RetireStep[] = [];
@@ -1575,8 +1583,23 @@ const drive = async <Req, F extends RetireFactSet, Out>(row: RetireReason<Req, F
     const spec = specs.find((s) => s.step === d.need);
     const reader = read[d.need];
     if (spec === undefined || reader === undefined) throw new Error(`no reader for ${d.need}`);
+    let v: unknown;
     try {
-      const v = reader(facts as F);
+      v = reader(facts as F);
+    } catch (err) {
+      if (spec.onReject !== 'judged') throw err;
+      facts[d.need] = new RetireRejected(err);
+      continue;
+    }
+    if (spec.sync && v instanceof Promise) {
+      v.catch(() => undefined);
+      throw new SyncFlagMismatch(`${row.name}: step ${d.need} is sync: true, and its reader answered a promise`);
+    }
+    if (!spec.sync && !(v instanceof Promise)
+      && !(v === null && CONDITIONAL_READS.some(([n, s]) => n === row.name && s === d.need))) {
+      throw new SyncFlagMismatch(`${row.name}: step ${d.need} is sync: false, and its reader answered a plain value`);
+    }
+    try {
       facts[d.need] = v instanceof Promise ? await v : v;
     } catch (err) {
       if (spec.onReject !== 'judged') throw err;
@@ -2073,10 +2096,19 @@ describe('decideRetire: temp-orphan over C4h\'s matrix (C4i; D-7166)', () => {
   });
 
   it('temp-orphan: an unlistable registry names no reason (decider suite)', async () => {
+    // Each ReadFailure reason (`unreadable`, `absent`) and a rejecting listing, at listing 1 (step 2) and listing 2
+    // (step 5), each compared with the executor.
+    const answers: ReadonlyArray<'null' | 'absent' | 'reject'> = ['null', 'absent', 'reject'];
+    let rows = 0;
     for (const n of [1, 2]) {
-      const t = await collectRow(() => { const r = collectRigOf(); r.hooks.listing = (k) => (k === n ? 'null' : undefined); return r; }, (r) => r.job());
-      expect(t.outcome).toMatchObject({ why: 'paused', detail: 'the registry did not list, so a raised reclaim-paused cannot be ruled out' });
+      for (const what of answers) {
+        const t = await collectRow(() => { const r = collectRigOf(); r.hooks.listing = (k) => (k === n ? what : undefined); return r; }, (r) => r.job());
+        expect(t.outcome, `listing ${n} answering ${what}`).toMatchObject({ kind: n === 1 ? 'not-asked' : 'answered', step: n === 1 ? 2 : 5, why: 'paused',
+          detail: 'the registry did not list, so a raised reclaim-paused cannot be ruled out' });
+        rows += 1;
+      }
     }
+    expect(rows).toBe(6);
   });
 
   it('temp-orphan: a throwing synchronous read rejects the job (decider suite)', async () => {
@@ -2170,6 +2202,26 @@ describe('decideRetire: the rows carry the difference table (C4i; D-7166, D-7173
       expect(LADDER_TRY[m.reader] ?? FOLDED[m.reader], m.reader).toBeDefined();
     }
     expect(Object.keys(LADDER_TRY).length + Object.keys(FOLDED).length).toBe(READER_MODES.filter((x) => x.mode === 'judged').length);
+  });
+
+  it('each row\'s sync flags are C4h\'s measured awaits (the listings, the store and disabled reads and the audit await; temp-orphan\'s tail (f) never does)', () => {
+    const syncOf = (r: RetireReason<never, RetireFactSet, unknown>): Array<[RetireStep, boolean]> =>
+      [...r.decide, r.audit, ...r.act].map((s) => [s.step, s.sync]);
+    expect(syncOf(ROWS[0]!)).toEqual([
+      ['record', false], ['store', false], ['coordinated', true], ['switches', false], ['off-switch', false],
+      ['generation', false], ['presence', true], ['capability', true], ['audit', false], ['audit-verdict', true],
+      ['marker-match', true], ['audit-generation', true], ['off-switch-last', false]]);
+    expect(syncOf(ROWS[1]!)).toEqual([
+      ['id', true], ['capability', true], ['switches', false], ['store', true], ['presence', true], ['audit', false],
+      ['archive-match', true], ['audit-verdict', true], ['switches-last', false], ['live', true]]);
+    expect(syncOf(ROWS[2]!)).toEqual([
+      ['capability', true], ['id', true], ['switches', false], ['presence', true], ['audit', false],
+      ['stale-generation', true], ['audit-verdict', true], ['licence', true], ['hold', true], ['switches-last', false],
+      ['latch', true], ['lane', true], ['flip', true], ['safety', true], ['licence-stands', true], ['presence-last', true],
+      ['hold-last', true], ['live', true], ['loose-marker', true]]);
+    // C4h (f): after its last listing, temp-orphan's ladder reaches the verb with no await.
+    const tail = syncOf(ROWS[2]!);
+    expect(tail.slice(tail.findIndex(([s]) => s === RETIRE_STEPS.switchesLast) + 1).every(([, sync]) => sync)).toBe(true);
   });
 
   it('the listing steps: child-spent lists once per marker, the other two once per step for every marker', () => {
