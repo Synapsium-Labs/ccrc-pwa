@@ -60,7 +60,7 @@ with open(os.path.join(os.environ['HOME'], 'gh-stub-env'), 'a') as f:
 with open(os.path.join(here, 'gh-answers.json')) as f:
     a = json.load(f)
 if a.get('sleepS'):
-    time.sleep(a['sleepS'])
+    time.sleep(min(a['sleepS'], 100))   # bounded: a stub left behind by a killed probe ends by itself
 if args[:2] == ['pr', 'list']:
     repo = args[args.index('--repo') + 1] if '--repo' in args else ''
     rows = a.get('repos', {}).get(repo)
@@ -92,7 +92,13 @@ if args[:3] == ['api', '--method', 'GET']:
     if body == 'fail':
         sys.stderr.write('stub: ' + kind + ' failed\\n')
         sys.exit(1)
-    if kind == 'runs':
+    if kind == 'rules':
+        # a page of two rules, as the forge pages (30 there): without --paginate only the first page is answered
+        pages = [body[i:i + 2] for i in range(0, len(body), 2)] or [[]]
+        if '--paginate' not in args:
+            pages = pages[:1]
+        sys.stdout.write(''.join(json.dumps(pg) for pg in pages))
+    elif kind == 'runs':
         # gh api --paginate prints one object per page, run together: pages of two here
         pages = [body[i:i + 2] for i in range(0, len(body), 2)] or [[]]
         sys.stdout.write(''.join(json.dumps({'total_count': len(body), 'check_runs': pg}) for pg in pages))
@@ -321,10 +327,12 @@ export function makeLandFixture(h: CcdHarness, opts: LandOpts = {}) {
       explicitSleep = answers.sleepS ?? 0;
       writeStub();
     },
-    /** A `git` first on the probe's PATH: `body` runs first (it may exec, or exit), then the real git. */
+    /** A `git` first on the probe's PATH: `body` runs first (it may exec, or exit), then the real git. Every wrapper
+     *  ends by itself: `$DEADLINE` (a `$SECONDS` value 110 s ahead) is what a polling loop in `body` must test, so a
+     *  mutant that breaks the probe's child kill, or a SIGKILLed probe, never leaves a loop running for ever. */
     wrapGit(body: string): void {
       fs.mkdirSync(wrapDir, { recursive: true });
-      fs.writeFileSync(path.join(wrapDir, 'git'), `#!/bin/bash\nREAL='${realGit()}'\n${body}\nexec "$REAL" "$@"\n`, { mode: 0o755 });
+      fs.writeFileSync(path.join(wrapDir, 'git'), `#!/bin/bash\nREAL='${realGit()}'\nDEADLINE=$((SECONDS+110))\n${body}\nexec "$REAL" "$@"\n`, { mode: 0o755 });
       fs.chmodSync(path.join(wrapDir, 'git'), 0o755);
     },
     /** The hook directory of the not-written case: ~/.gitconfig gains core.hooksPath (keeping its insteadOf line),

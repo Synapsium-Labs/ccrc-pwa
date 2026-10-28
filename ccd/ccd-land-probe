@@ -30,11 +30,29 @@
 #      validate-only self-test (CCD_LAND_PROBE_SELFTEST=git_ro) proves `git_ro`'s refusals without running git.
 #
 # THE PER-TICK SCRATCH. The project repository is only READ. A bare repository under $TMPDIR borrows the project's
-# object store as an alternate; it receives the fetch and every object a merge-tree writes. It holds the regular file
-# `.ccd-land-probe-scratch`, and it is removed on every exit path, a SIGTERM included: the one `finally` first kills
-# the process group of the child in flight and waits for it, and only then removes the directory, so no helper is
-# still writing into it. A crashed tick's scratch is cleared by the next tick, but only a real, owned directory
-# holding a regular sentinel file and older than one hour.
+# object store as an alternate; it receives the fetch and every object a merge-tree writes, except that git freshens
+# an object already in the project (its loose file's or pack's mtime) instead of writing a copy. No content, ref,
+# config, hook or object set changes, and every object it touches is reachable from the workspace branch. It holds the
+# regular file `.ccd-land-probe-scratch`, and it is removed on every exit path, a SIGTERM and a failed closing
+# rewrite included: the closing path catches SystemExit and KeyboardInterrupt too, kills the process group of the
+# child in flight and waits for it, and only then removes the directory, so no helper is still writing into it. A
+# signal is blocked from just before a child is forked until it is recorded, so it never lands between the two. A
+# crashed tick's scratch is cleared by the next tick, but only a real, owned directory holding a regular sentinel
+# file and older than one hour.
+#
+# THE TICK, in order (every step after the first is bounded by the tick budget):
+#   1. The bash head: the knobs, the global pause (exit 0), the tool check, the lock.
+#   2. SIGTERM and SIGINT become SystemExit; a stale scratch of an earlier tick is cleared.
+#   3. THE `enabled` PRE-PASS, before any project is measured: one pass over every conf and every directory under
+#      $REG/landing/ writes `enabled` for a valid conf with lineage=on, an unpaused project and a real main checkout,
+#      and removes it in every other case (an invalid or missing conf, lineage=off, paused, not a checkout, a
+#      directory with no conf at all). Its spacing is the spacing of tick starts, whatever the order or the budgets of
+#      the projects, so stage 4 can bound its freshness. The measuring loop never writes or removes `enabled`.
+#   4. For each conf, sorted, while the tick budget lasts: parse it, skip a paused project, then within the project
+#      budget record store.before, make the scratch, read the open heads, fetch, measure base x head and the pairs,
+#      write `probe`, `main-health` and each lineage (a failed or cut fetch, or an exception before the first write,
+#      writes all of them unmeasured), rewrite `probe` with store.after and the scratch size, remove the scratch.
+#   5. Exit 0.
 #
 # PATHS
 #   ~/.ccrc/landing/<project>.conf        the operator, by hand: opts <project> in (base=, lineage=on|off)
@@ -135,6 +153,7 @@ RUN_FAIL = ('failure', 'timed_out', 'cancelled', 'action_required', 'startup_fai
 STATUS_FAIL = ('failure', 'error')
 MIN_PROJECT_S = 10
 STALE_SCRATCH_S = 3600
+SIGNALS = (signal.SIGTERM, signal.SIGINT)
 
 
 def knob(name, default):
@@ -309,21 +328,32 @@ def kill_inflight():
         kill_group(proc)
 
 
+def unblock_signals():
+    """Runs in the forked child before the exec: it does not inherit the parent's blocked SIGTERM and SIGINT."""
+    signal.pthread_sigmask(signal.SIG_SETMASK, ())
+
+
 def run_child(argv, env, timeout):
     """Run one child to its deadline, capped at the project budget that remains. rc None: a timeout, a spent budget
-    or a spawn failure. The child leads a session of its own, so its deadline kills every process it started."""
+    or a spawn failure. The child leads a session of its own, so its deadline kills every process it started. SIGTERM
+    and SIGINT are blocked from just before the fork until CHILD is set, so a signal never lands between the two (it is
+    delivered at the unblock, with the child recorded for the finally that kills it)."""
     global CHILD
     t = float(timeout)
     if CUR is not None:
         t = min(t, CUR.remaining())
     if t <= 0:
         return Result(None, '')
+    held = signal.pthread_sigmask(signal.SIG_BLOCK, SIGNALS)
     try:
-        proc = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                                env=env, start_new_session=True, close_fds=True)
-    except OSError:
-        return Result(None, '', True)
-    CHILD = proc
+        try:
+            proc = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                    env=env, start_new_session=True, close_fds=True, preexec_fn=unblock_signals)
+        except OSError:
+            return Result(None, '', True)
+        CHILD = proc
+    finally:
+        signal.pthread_sigmask(signal.SIG_SETMASK, held)
     try:
         out, _ = proc.communicate(timeout=t)
     except subprocess.TimeoutExpired:
@@ -625,16 +655,19 @@ def read_checks(slug, base_ref, sha):
         return vals, None
 
     enc = base_ref.replace('/', '%2F')
-    rules, why = get('repos/%s/rules/branches/%s' % (slug, enc))
+    rule_pages, why = get('repos/%s/rules/branches/%s' % (slug, enc), True)   # a page holds 30 rules: read them all
     if why:
         return unmeasured(why)
     view, why = get('repos/%s/branches/%s' % (slug, enc))
     if why:
         return unmeasured(why)
-    if len(rules) != 1 or not isinstance(rules[0], list) or len(view) != 1 or not isinstance(view[0], dict):
+    if not all(isinstance(pg, list) for pg in rule_pages) or len(view) != 1 or not isinstance(view[0], dict):
         return unmeasured('gh-failed')
+    rules = []
+    for pg in rule_pages:
+        rules += pg
     try:
-        required = required_set(rules[0], view[0])
+        required = required_set(rules, view[0])
     except MalformedChecks:
         return unmeasured('gh-failed')
     if not required:
@@ -667,23 +700,27 @@ def real_dir(path):
     return stat.S_ISDIR(st.st_mode) and st.st_uid == os.getuid()
 
 
-def ensure_dir(path, label):
+def ensure_dir(path, label, quiet=False):
     """True when path is a real directory this user owns, created (0755) when absent. Anything else is skipped with
-    one log line, and nothing under it is touched."""
+    one log line (none when quiet: the pre-pass leaves the saying to the measuring), and nothing under it is touched."""
+    def say(msg):
+        if not quiet:
+            log(msg)
+
     try:
         st = os.lstat(path)
     except FileNotFoundError:
         try:
             os.mkdir(path, 0o755)
         except OSError as e:
-            log('skip %s: cannot create the directory (%s)' % (label, errno.errorcode.get(e.errno, 'error')))
+            say('skip %s: cannot create the directory (%s)' % (label, errno.errorcode.get(e.errno, 'error')))
             return False
         return real_dir(path)
     except OSError as e:
-        log('skip %s: cannot read the directory (%s)' % (label, errno.errorcode.get(e.errno, 'error')))
+        say('skip %s: cannot read the directory (%s)' % (label, errno.errorcode.get(e.errno, 'error')))
         return False
     if not stat.S_ISDIR(st.st_mode) or st.st_uid != os.getuid():
-        log('skip %s: not a real directory owned by this user' % label)
+        say('skip %s: not a real directory owned by this user' % label)
         return False
     return True
 
@@ -715,10 +752,11 @@ def write_json(dirpath, name, doc):
 
 
 def remove_own(dirpath, name):
-    """Delete a regular file named `enabled` or `*.lineage` in a real, owned directory, and nothing else."""
+    """Delete a regular file named `enabled` or `*.lineage` in a real, owned directory under a real, owned
+    $REG/landing/, and nothing else: both directories are lstat-checked, so a symlinked landing directory is left alone."""
     if '/' in name or not (name == 'enabled' or name.endswith('.lineage')):
         return
-    if not real_dir(dirpath):
+    if not real_dir(LANDING) or not real_dir(dirpath):
         return
     p = dirpath + '/' + name
     try:
@@ -774,12 +812,12 @@ def project_rows(project):
 
 
 def qualifying(rows):
-    """(the rows that qualify for a lineage file, the ids of rows left undecided). A row qualifies when its branch
-    starts with ws/ and refs/heads/<branch> resolves in the project repository. Each row is read on its own: a branch
-    the git door refuses cannot qualify (decided, logged once); a read that timed out or ran past the budget leaves
-    the row undecided, and its previous file stays."""
+    """(the rows that qualify for a lineage file, the rows left undecided as (id, branch)). A row qualifies when its
+    branch starts with ws/ and refs/heads/<branch> resolves in the project repository. Each row is read on its own: a
+    branch the git door refuses cannot qualify (decided, logged once); a read that timed out or ran past the budget
+    leaves the row undecided. On a measured base its previous file stays; on a failed fetch it is rewritten unmeasured."""
     out = []
-    undecided = set()
+    undecided = []
     for rid, branch in rows:
         if branch is None or not branch.startswith('ws/'):
             continue
@@ -789,7 +827,7 @@ def qualifying(rows):
             log('lineage-skip: a registry row names a branch the git door refuses')
             continue
         if r.rc is None:
-            undecided.add(rid)
+            undecided.append((rid, branch))
         elif r.rc == 0 and HEX40.fullmatch(r.out.strip()):
             out.append((rid, branch, r.out.strip()))
     return out, undecided
@@ -823,8 +861,8 @@ def parse_conf(path):
             return None, 'repeated-key'
         seen.add(key)
         if key == 'base':
-            if not BASE_RE.fullmatch(value) or value.startswith('-'):
-                return None, 'bad-value'
+            if not BASE_RE.fullmatch(value) or value.startswith('-') or any(k.lower() in value.lower() for k in PINNED_KEYS):
+                return None, 'bad-value'   # the git door would refuse it in the fetch's refspec: refused here, at parse
         elif value not in ('on', 'off'):
             return None, 'bad-value'
         conf[key] = value
@@ -833,12 +871,19 @@ def parse_conf(path):
 
 # ---- the scratch ---------------------------------------------------------------------------------------------------
 def make_scratch():
+    """A new scratch directory holding its sentinel. A failure after the directory exists removes the directory it made
+    (a directory with no sentinel is never swept), so SCRATCH, which the caller assigns only on success, is the only
+    thing that ever needs removing."""
     d = tempfile.mkdtemp(prefix='ccd-land-probe.', dir=TMP_ROOT)
-    fd = os.open(d + '/' + SENTINEL, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
     try:
-        os.write(fd, b'ccd-land-probe scratch\n')
-    finally:
-        os.close(fd)
+        fd = os.open(d + '/' + SENTINEL, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        try:
+            os.write(fd, b'ccd-land-probe scratch\n')
+        finally:
+            os.close(fd)
+    except BaseException:
+        remove_scratch(d)
+        raise
     return d
 
 
@@ -928,6 +973,14 @@ def open_heads(slug, base):
     return heads, len(rows) >= PR_LIMIT, True, r
 
 
+def cut_why(r, word):
+    """The why of a child that failed: `word`, unless it gave no answer because the project budget ran out, which says
+    `budget` (the Design's word) in the probe and in main-health."""
+    if r.rc is None and not r.spawn and CUR is not None and CUR.remaining() <= 0:
+        return 'budget'
+    return word
+
+
 def fetch_into_scratch(base_ref, heads):
     """Make the scratch, borrow the project's objects, and fetch the base and every head into it in one call.
     (None, base sha, None) on success; (why, None, the child that failed or None) on a failure."""
@@ -935,7 +988,7 @@ def fetch_into_scratch(base_ref, heads):
     SCRATCH = make_scratch()
     i = git_ro('scratch', ['init', '-q', '--bare', SCRATCH], GIT_T)
     if i.rc != 0:
-        return 'fetch-failed', None, i
+        return cut_why(i, 'fetch-failed'), None, i
     try:
         info = SCRATCH + '/objects/info'
         os.makedirs(info, exist_ok=True)
@@ -949,17 +1002,17 @@ def fetch_into_scratch(base_ref, heads):
     u = git_ro('project', ['ls-remote', '--get-url', 'origin'], GIT_T)
     url = u.out.strip() if u.rc == 0 else ''
     if not url or url.startswith('-'):
-        return 'fetch-failed', None, u
+        return cut_why(u, 'fetch-failed'), None, u
     specs = ['+refs/heads/%s:refs/probe/base' % base_ref]
     specs += ['+refs/pull/%d/head:refs/probe/pull/%d' % (h['pr'], h['pr']) for h in heads]
     f = git_ro('scratch', ['fetch', '--no-tags', '--no-write-fetch-head', '--no-recurse-submodules', '--', url] + specs, FETCH_T)
     if f.rc is None:
-        return 'fetch-timeout', None, f
+        return cut_why(f, 'fetch-timeout'), None, f
     if f.rc != 0:
         return 'fetch-failed', None, f
     b = git_ro('scratch', ['rev-parse', '--verify', '-q', 'refs/probe/base^{commit}'], GIT_T)
     if b.rc != 0 or not HEX40.fullmatch(b.out.strip()):
-        return 'fetch-failed', None, b
+        return cut_why(b, 'fetch-failed'), None, b
     return None, b.out.strip(), None
 
 
@@ -1010,31 +1063,46 @@ def prune_lineage(ldir, keep):
             remove_own(ldir, n)
 
 
+def write_lineage_unmeasured(project, ldir, rid, branch, tip, why):
+    note_unmeasured(project, rid + '.lineage', why)
+    write_json(ldir, rid + '.lineage', lineage_unmeasured(project, rid, branch, tip, why))
+
+
 def lineage_pass(project, ldir, rows, base_sha, fail_why):
-    """Write each qualifying row's lineage, and remove the stale files. base_sha None is a failed fetch: every
-    qualifying row gets the unmeasured shape. One row never costs another: a failure inside a row is that row's alone."""
+    """Write each qualifying row's lineage, and remove the stale files. base_sha None is a failed fetch (or one the
+    budget cut): every qualifying row gets the unmeasured shape, and so does every row the local read left undecided
+    when it has an old file, whose tip is then unknown (null): no old record outlives a failed fetch. With a measured
+    base an undecided row keeps its previous file. One row never costs another: a failure inside a row is that row's
+    alone."""
     quals, undecided = qualifying(rows)
+    if base_sha is None:
+        for rid, branch in undecided:
+            try:
+                if os.path.lexists(ldir + '/' + rid + '.lineage'):
+                    write_lineage_unmeasured(project, ldir, rid, branch, None, fail_why)
+            except Exception as e:
+                log('lineage-error: one registry row was not measured (%s)' % type(e).__name__)
     for rid, branch, tip in quals:
         try:
             if base_sha is None:
-                doc = lineage_unmeasured(project, rid, branch, tip, fail_why)
-            else:
-                walk = walk_lineage(tip, base_sha, LINEAGE_STEPS, CUR)
-                doc = {'v': 1, 'project': project, 'id': rid, 'at': now_iso(), 'state': walk['state']}
-                if walk.get('why') is not None:
-                    doc['why'] = walk['why']
-                doc['branch'], doc['tip'], doc['base'] = branch, tip, base_sha
-                doc['chain'], doc['stop'] = walk['chain'], walk['stop']
+                write_lineage_unmeasured(project, ldir, rid, branch, tip, fail_why)
+                continue
+            walk = walk_lineage(tip, base_sha, LINEAGE_STEPS, CUR)
+            doc = {'v': 1, 'project': project, 'id': rid, 'at': now_iso(), 'state': walk['state']}
+            if walk.get('why') is not None:
+                doc['why'] = walk['why']
+            doc['branch'], doc['tip'], doc['base'] = branch, tip, base_sha
+            doc['chain'], doc['stop'] = walk['chain'], walk['stop']
             if doc['state'] == 'unmeasured':
                 note_unmeasured(project, rid + '.lineage', doc['why'])
             write_json(ldir, rid + '.lineage', doc)
         except Exception as e:
             log('lineage-error: one registry row was not measured (%s)' % type(e).__name__)
-    prune_lineage(ldir, set(q[0] for q in quals) | undecided)
+    prune_lineage(ldir, set(q[0] for q in quals) | set(u[0] for u in undecided))
 
 
 def guarded_lineage(project, ldir, rows, base_sha, fail_why):
-    """The lineage pass must never stop the enabled mirror or the final probe rewrite behind it."""
+    """The lineage pass must never stop the final probe rewrite behind it."""
     try:
         lineage_pass(project, ldir, rows, base_sha, fail_why)
     except Exception as e:
@@ -1082,6 +1150,18 @@ def finish_probe(ldir, doc, store, interrupted):
     write_json(ldir, 'probe', doc)
 
 
+def write_failed(project, ldir, base_ref, rows, store, fail, child):
+    """The unmeasured trio: `probe` (why fail[0]), `main-health` (why fail[1]) and every lineage (why fail[2]). Returns
+    the probe record, for the closing rewrite."""
+    first = probe_doc(project, base_ref, None, 'unmeasured', fail[0], [], False, [], [], False, store, None)
+    note_unmeasured(project, 'probe', fail[0], child)
+    write_json(ldir, 'probe', first)
+    note_unmeasured(project, 'main-health', fail[1], child)
+    write_json(ldir, 'main-health', unmeasured_health(project, None, fail[1]))
+    guarded_lineage(project, ldir, rows, None, fail[2])
+    return first
+
+
 def probe_project(project, conf):
     global PROJECT_DIR, SCRATCH, CUR
     if not ensure_dir(LANDING, 'landing') or not ensure_dir(LANDING + '/' + project, project):
@@ -1092,6 +1172,7 @@ def probe_project(project, conf):
     base_ref = conf['base']
     SCRATCH = None
     first = None   # the probe record, once it has been written the first time
+    rows = None
     store = {'before': None, 'after': None}
     interrupted = False
     try:
@@ -1102,19 +1183,14 @@ def probe_project(project, conf):
         heads, heads_cut, gh_ok = [], False, False
         base_sha = None
         if slug is None:
-            fail = ('repo-unreadable', 'gh-failed', 'repo-unreadable')
+            fail = ('repo-unreadable', 'fetch-failed', 'repo-unreadable')
             fail_child = r
         else:
             heads, heads_cut, gh_ok, gh_child = open_heads(slug, base_ref)
             why, base_sha, fail_child = fetch_into_scratch(base_ref, heads if gh_ok else [])
-            fail = (why, 'fetch-failed', 'fetch-failed') if why else None
+            fail = (why, 'budget' if why == 'budget' else 'fetch-failed', 'fetch-failed') if why else None
         if fail:
-            first = probe_doc(project, base_ref, None, 'unmeasured', fail[0], [], False, [], [], False, store, None)
-            note_unmeasured(project, 'probe', fail[0], fail_child)
-            write_json(ldir, 'probe', first)
-            note_unmeasured(project, 'main-health', fail[1], fail_child)
-            write_json(ldir, 'main-health', unmeasured_health(project, None, fail[1]))
-            guarded_lineage(project, ldir, rows, None, fail[2])
+            first = write_failed(project, ldir, base_ref, rows, store, fail, fail_child)
         else:
             if gh_ok:
                 hs, pair_heads, pairs, pairs_cut = measure(base_sha, heads, rows)
@@ -1128,49 +1204,68 @@ def probe_project(project, conf):
                 note_unmeasured(project, 'main-health', verdict['why'], verdict.get('child'))
             write_json(ldir, 'main-health', health_doc(project, base_sha, verdict))
             guarded_lineage(project, ldir, rows, base_sha, None)
-        if conf['lineage'] == 'on':
-            write_json(ldir, 'enabled', {'v': 1, 'project': project, 'at': now_iso()})
-        else:
-            remove_own(ldir, 'enabled')
     except BaseException as e:
         interrupted = not isinstance(e, Exception)   # a SIGTERM or a ^C: measure nothing more
+        if first is None and not interrupted:
+            # An exception or a refusal before the first write (a scratch or alternates failure, a refused refspec):
+            # the old files must not outlive it as if they were this tick's.
+            try:
+                first = write_failed(project, ldir, base_ref, rows if rows is not None else project_rows(project), store,
+                                     ('fetch-failed', 'fetch-failed', 'fetch-failed'), None)
+            except Exception as e2:
+                log('project-error %s: the unmeasured records were not written (%s)' % (project, type(e2).__name__))
         raise
     finally:
-        kill_inflight()
+        # The closing path: it catches SystemExit and KeyboardInterrupt too, so a SIGTERM that lands in the closing
+        # rewrite still reaches the cleanup below, which kills the child in flight (the count-objects too) and
+        # removes the scratch with SIGTERM and SIGINT held.
+        held = None
         try:
+            kill_inflight()
             if first is not None:
                 finish_probe(ldir, first, store, interrupted)
-        except Exception as e:
+        except BaseException as e:
+            if not isinstance(e, Exception):
+                held = e
             log('project-error %s: the closing probe rewrite stopped (%s)' % (project, type(e).__name__))
-        if SCRATCH is not None:
-            remove_scratch(SCRATCH)
-            SCRATCH = None
-        PROJECT_DIR = None
+        mask = signal.pthread_sigmask(signal.SIG_BLOCK, SIGNALS)
+        try:
+            kill_inflight()
+            if SCRATCH is not None:
+                remove_scratch(SCRATCH)
+                SCRATCH = None
+            PROJECT_DIR = None
+        finally:
+            signal.pthread_sigmask(signal.SIG_SETMASK, mask)
+        if held is not None:
+            raise held
+
+
+def is_paused(ldir):
+    return real_dir(LANDING) and real_dir(ldir) and os.path.lexists(ldir + '/paused')
+
+
+def is_checkout(project):
+    try:
+        return stat.S_ISDIR(os.lstat(PROJECTS + '/' + project + '/.git').st_mode)
+    except OSError:
+        return False
 
 
 def handle_project(project):
-    conf_path = CONF_DIR + '/' + project + '.conf'
     ldir = LANDING + '/' + project
-    conf, why = parse_conf(conf_path)
+    conf, why = parse_conf(CONF_DIR + '/' + project + '.conf')
     if conf is None:
         log('conf-invalid %s: %s' % (project, why))
-        remove_own(ldir, 'enabled')
         return
-    if real_dir(ldir) and os.path.lexists(ldir + '/paused'):
+    if is_paused(ldir):
         log('paused %s' % project)
-        remove_own(ldir, 'enabled')
         return
-    if conf['lineage'] != 'on':
-        remove_own(ldir, 'enabled')
     if TICK.remaining() < MIN_PROJECT_S:
         log('tick-budget: %s not started' % project)
         return
-    try:
-        if not stat.S_ISDIR(os.lstat(PROJECTS + '/' + project + '/.git').st_mode):
-            raise OSError(errno.ENOTDIR, 'not a directory')
-    except OSError:
+    if not is_checkout(project):
         log('not-a-checkout %s' % project)
-        remove_own(ldir, 'enabled')
         return
     try:
         probe_project(project, conf)
@@ -1178,8 +1273,20 @@ def handle_project(project):
         log('project-error %s: %s' % (project, type(e).__name__))
 
 
-def sweep_unconfigured():
-    """Every directory under $REG/landing/ with no conf at all has its enabled removed."""
+def reconcile_enabled(projects):
+    """The opt-in mirror, reconciled in one pass at the start of the tick, before any project is measured: `enabled` is
+    written for each valid conf with lineage=on, an unpaused project and a real main checkout, and removed in every
+    other case (an invalid conf, lineage=off, paused, not a checkout), and for every directory under $REG/landing/
+    with no conf at all. Its time is then the time of the tick's start, whatever the order and the budgets of the
+    projects measured after it. Quiet: the measuring names what it skips."""
+    for project in projects:
+        ldir = LANDING + '/' + project
+        conf, _ = parse_conf(CONF_DIR + '/' + project + '.conf')
+        if conf is not None and conf['lineage'] == 'on' and not is_paused(ldir) and is_checkout(project) \
+                and ensure_dir(LANDING, 'landing', True) and ensure_dir(ldir, project, True):
+            write_json(ldir, 'enabled', {'v': 1, 'project': project, 'at': now_iso()})
+        else:
+            remove_own(ldir, 'enabled')
     try:
         names = sorted(os.listdir(LANDING))
     except OSError:
@@ -1203,10 +1310,10 @@ def main():
         entries = sorted(os.listdir(CONF_DIR))
     except OSError:
         entries = []
-    for ent in entries:
-        if ent.endswith('.conf') and PROJECT_RE.fullmatch(ent[:-len('.conf')]):
-            handle_project(ent[:-len('.conf')])
-    sweep_unconfigured()
+    projects = [e[:-len('.conf')] for e in entries if e.endswith('.conf') and PROJECT_RE.fullmatch(e[:-len('.conf')])]
+    reconcile_enabled(projects)
+    for project in projects:
+        handle_project(project)
     return 0
 
 

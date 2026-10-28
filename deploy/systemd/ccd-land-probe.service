@@ -7,10 +7,12 @@ Description=Measure which open PRs conflict with the base, the base's required c
 [Service]
 Type=oneshot
 ExecStart=%h/.local/bin/ccd-land-probe
-# The tick's own budget is CCD_LAND_PROBE_TICK_BUDGET (780 s at most), so a tick
-# that outlives this is wedged, not slow: it is killed, the next one starts
-# clean, and every file the probe writes lands by rename, so a killed tick
-# leaves the last complete ones. The margin below this value is deliberate.
+# The tick's own budget is CCD_LAND_PROBE_TICK_BUDGET: 780 s by default, 840 s
+# at most (the knob's range is 30-840), so the margin to this value is 120 s by
+# default and 60 s at the knob's maximum. A tick that outlives this is wedged,
+# not slow: it is killed, the next one starts clean, and every file the probe
+# writes lands by rename, so a killed tick leaves the last complete ones. The
+# margin is deliberate.
 TimeoutStartSec=900
 # One git fetch and a few merge-trees into a scratch repository, driven by a
 # single python3: the working set is a handful of packfiles. Capped for

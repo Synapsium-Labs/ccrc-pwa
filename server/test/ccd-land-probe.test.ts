@@ -199,8 +199,8 @@ describe('ccd-land-probe: the radar', () => {
     fx.wrapGit([
       'case " $* " in *" fetch "*)',
       '  sc=""; prev=""; for a in "$@"; do [ "$prev" = -C ] && sc=$a; prev=$a; done',
-      `  ( while :; do echo x >> "$sc/writer.log"; sleep 0.05; done ) & echo $! > '${pidFile}'`,
-      '  sleep 120;;',
+      `  ( while [ $SECONDS -lt $DEADLINE ]; do echo x >> "$sc/writer.log"; sleep 0.05; done ) & echo $! > '${pidFile}'`,
+      '  sleep 100;;',
       'esac',
     ].join('\n'));
     const run = fx.start();
@@ -315,7 +315,13 @@ describe('ccd-land-probe: the radar', () => {
     expect(nan.stderr).toContain('CCD_LAND_PROBE_BUDGET');
   });
 
-  it('the project repository is not written, and no hook or fsmonitor runs', () => {
+  // What this case can and cannot see. Its snapshot is refs, the object counts, the config and the hooks listing, and
+  // the canary: every hook in ~/.gitconfig's hooks path would write it. It cannot see an object's modification time:
+  // git freshens an object already in the project (its loose file's or pack's mtime) instead of writing a copy; no
+  // content, ref, config, hook or object set changes; every object it touches is reachable from the workspace branch.
+  // Nor can it see the fsmonitor setting: no allowlisted subcommand reads the index, so no fsmonitor could run here.
+  // That half is held by the literal tuple pin on GIT_PREFIX in ccd-land-probe-readonly.test.ts (R5).
+  it('the project repository is not written, and no hook runs (the fsmonitor setting is held by the prefix pin)', () => {
     fx.addHead(1, { 'README.md': 'one\n' }, { branch: 'ws/alpha' });
     fx.addHead(2, { 'README.md': 'two\n' }, { branch: 'ws/beta' });
     fx.addRow('lane-a-proj-a-alpha', 'ws/alpha');
@@ -357,7 +363,8 @@ describe('ccd-land-probe: the radar', () => {
       expect(fx.run().status, url).toBe(0);
       const p = fx.readJson('probe');
       expect(p, url).toMatchObject({ state: 'unmeasured', why: 'repo-unreadable', heads: [], pairs: [] });
-      expect(fx.readJson('main-health'), url).toMatchObject({ state: 'unmeasured' });
+      // No gh call was made, so the why is not gh-failed: the plan's set has fetch-failed for a project that was not reached.
+      expect(fx.readJson('main-health'), url).toMatchObject({ state: 'unmeasured', why: 'fetch-failed' });
     }
   });
 
@@ -759,7 +766,7 @@ describe('ccd-land-probe: main-health, from the forge', () => {
     expect(fx.readJson('main-health').why).toBeUndefined();
     const api = fx.ghCalls().filter((c) => c.startsWith('api '));
     expect(api).toEqual([
-      'api --method GET repos/o/r/rules/branches/main',
+      'api --method GET repos/o/r/rules/branches/main --paginate',
       'api --method GET repos/o/r/branches/main',
       `api --method GET repos/o/r/commits/${sha}/check-runs?per_page=100 --paginate`,
       `api --method GET repos/o/r/commits/${sha}/status`,
@@ -790,7 +797,7 @@ describe('ccd-land-probe: main-health, from the forge', () => {
     expect(fx.readJson('probe').base.ref).toBe('release/1.0');
     expect(fx.readJson('main-health')).toMatchObject({ state: 'green' });
     const api = fx.ghCalls().filter((c) => c.startsWith('api '));
-    expect(api.slice(0, 2)).toEqual(['api --method GET repos/o/r/rules/branches/release%2F1.0', 'api --method GET repos/o/r/branches/release%2F1.0']);
+    expect(api.slice(0, 2)).toEqual(['api --method GET repos/o/r/rules/branches/release%2F1.0 --paginate', 'api --method GET repos/o/r/branches/release%2F1.0']);
     for (const c of api) expect(c, c).not.toContain('release/1.0');
   });
 });
@@ -975,6 +982,8 @@ describe('ccd-land-probe: a required set read whole, or not at all (final review
 });
 
 describe('ccd-land-probe: the journal names every unmeasured outcome (final review M2)', () => {
+  /** The journal lines (stderr) that match, whole: a doubled line shows as two. */
+  const journal = (r: { stderr: string }, re: RegExp): string[] => r.stderr.split('\n').filter((l) => re.test(l));
   it('a failed list of open PRs leaves one line per file with the child\'s exit code, and never the child\'s output', () => {
     fx.addHead(1, { 'a.txt': 'a\n' });
     fx.stubGh({ prList: 'fail' });
@@ -982,7 +991,8 @@ describe('ccd-land-probe: the journal names every unmeasured outcome (final revi
     fx.conf(fx.project, '');
     const r = fx.run();
     expect(r.status).toBe(0);
-    expect(r.stderr).toMatch(/^land-probe: unmeasured proj-a probe gh-failed rc=1$/m);
+    expect(journal(r, /^land-probe: unmeasured proj-a probe gh-failed rc=1$/)).toHaveLength(1);
+    expect(journal(r, /^land-probe: unmeasured /), 'one line for the one unmeasured outcome').toHaveLength(1);
     expect(r.stderr, 'the stub prints "stub: pr list failed" on its stderr: none of it reaches the journal').not.toContain('stub:');
     expect(r.stderr).not.toMatch(/^land-probe: unmeasured proj-a main-health /m);   // the PR list is not what main-health reads (R6)
   });
@@ -992,8 +1002,9 @@ describe('ccd-land-probe: the journal names every unmeasured outcome (final revi
     fx.conf(fx.project, '');
     const r = fx.run({ CCD_LAND_PROBE_GH: path.join(h.home, 'no-such-gh') });
     expect(r.status).toBe(0);
-    expect(r.stderr).toMatch(/^land-probe: unmeasured proj-a probe gh-failed spawn-failed$/m);
-    expect(r.stderr).toMatch(/^land-probe: unmeasured proj-a main-health gh-failed spawn-failed$/m);
+    expect(journal(r, /^land-probe: unmeasured proj-a probe gh-failed spawn-failed$/)).toHaveLength(1);
+    expect(journal(r, /^land-probe: unmeasured proj-a main-health gh-failed spawn-failed$/)).toHaveLength(1);
+    expect(journal(r, /^land-probe: unmeasured /), 'one line per outcome, no more').toHaveLength(2);
     expect(fx.readJson('probe')).toMatchObject({ state: 'unmeasured', why: 'gh-failed' });
   });
 
@@ -1004,16 +1015,18 @@ describe('ccd-land-probe: the journal names every unmeasured outcome (final revi
     fs.rmSync(fx.origin, { recursive: true, force: true });
     const r = fx.run();
     expect(r.status).toBe(0);
-    expect(r.stderr).toMatch(/^land-probe: unmeasured proj-a probe fetch-failed rc=\d+$/m);
-    expect(r.stderr).toMatch(/^land-probe: unmeasured proj-a main-health fetch-failed rc=\d+$/m);
-    expect(r.stderr).toMatch(/^land-probe: unmeasured proj-a lane-a-proj-a-alpha\.lineage fetch-failed$/m);
+    expect(journal(r, /^land-probe: unmeasured proj-a probe fetch-failed rc=\d+$/)).toHaveLength(1);
+    expect(journal(r, /^land-probe: unmeasured proj-a main-health fetch-failed rc=\d+$/)).toHaveLength(1);
+    expect(journal(r, /^land-probe: unmeasured proj-a lane-a-proj-a-alpha\.lineage fetch-failed$/)).toHaveLength(1);
+    expect(journal(r, /^land-probe: unmeasured /), 'one line per outcome, no more').toHaveLength(3);
   });
 
   it('a main-health that could not be read says which read, by its exit code', () => {
     fx.stubChecks({ rules: 'fail', runs: [] });
     fx.conf(fx.project, '');
     const r = fx.run();
-    expect(r.stderr).toMatch(/^land-probe: unmeasured proj-a main-health gh-failed rc=1$/m);
+    expect(journal(r, /^land-probe: unmeasured proj-a main-health gh-failed rc=1$/)).toHaveLength(1);
+    expect(journal(r, /^land-probe: unmeasured /), 'one line per outcome, no more').toHaveLength(1);
   });
 });
 
@@ -1061,5 +1074,224 @@ describe('ccd-land-probe: the closing probe rewrite is unconditional (final revi
     expect(p).toMatchObject({ state: 'measured' });
     expect(p.store).toEqual({ before: { count: null, size: null, inPack: null, packs: null }, after: { count: null, size: null, inPack: null, packs: null } });
     expect(p.scratch.sizeKiB).toBeGreaterThan(0);
+  });
+});
+
+describe('ccd-land-probe: the rules read, whole (fix round 1, review 1109 F1)', () => {
+  it('a required_status_checks rule that is only on the second page is read: its failing check is red, never green', { timeout: 60_000 }, () => {
+    // The stub pages this endpoint by two, as the forge does by thirty, and answers its first page alone to a read
+    // without --paginate. The required rule is the third rule, so it is on page 2.
+    fx.stubChecks({
+      rules: [{ type: 'pull_request', parameters: {} }, { type: 'creation' }, REQ_RULE([{ context: 'ci/test' }])],
+      runs: [run(1, 'ci/test', 'completed', 'failure')],
+    });
+    fx.conf(fx.project, '');
+    expect(fx.run().status).toBe(0);
+    expect(fx.readJson('main-health')).toMatchObject({ state: 'red', failing: ['ci/test'], required: [{ name: 'ci/test', app: null }] });
+    expect(fx.ghCalls().filter((c) => c.includes('/rules/branches/'))).toEqual(['api --method GET repos/o/r/rules/branches/main --paginate']);
+  });
+
+  it('several pages of rules are one set: a rule on each page counts', { timeout: 60_000 }, () => {
+    fx.stubChecks({
+      rules: [REQ_RULE([{ context: 'ci/a' }]), { type: 'creation' }, { type: 'deletion' }, REQ_RULE([{ context: 'ci/b' }])],
+      runs: [run(1, 'ci/a', 'completed', 'success'), run(2, 'ci/b', 'completed', 'success')],
+    });
+    fx.conf(fx.project, '');
+    expect(fx.run().status).toBe(0);
+    expect(fx.readJson('main-health')).toMatchObject({ state: 'green', required: [{ name: 'ci/a', app: null }, { name: 'ci/b', app: null }] });
+  });
+});
+
+describe('ccd-land-probe: the exit paths leave nothing behind (fix round 1, review 1109 F4, A1, A2)', () => {
+  /** Stop a fixture process group that is still alive: a mutant that breaks the probe's cleanup leaves one. */
+  const reap = (pid: number): void => { if (!pidGone(pid)) { try { process.kill(-pid, 'SIGKILL'); } catch { /* gone */ } } };
+
+  it('a SIGTERM during the closing rewrite leaves no scratch and no live child', { timeout: 60_000 }, async () => {
+    fx.addHead(1, { 'a.txt': 'a\n' });
+    fx.conf(fx.project, '');
+    const cnt = path.join(h.home, 'count-objects.n');
+    const wrapperPid = path.join(h.home, 'closing-wrapper.pid');
+    const sleepPid = path.join(h.home, 'closing-sleep.pid');
+    // The first count-objects (store.before) passes; the second is the closing rewrite's, and it hangs (bounded: 100 s).
+    fx.wrapGit([
+      'case " $* " in *" count-objects "*)',
+      `  n=$(cat '${cnt}' 2>/dev/null || echo 0); n=$((n+1)); echo $n > '${cnt}'`,
+      `  if [ $n -ge 2 ]; then echo $$ > '${wrapperPid}'; sleep 100 & echo $! > '${sleepPid}'; wait; fi;;`,
+      'esac',
+    ].join('\n'));
+    const run = fx.start();
+    let wp = 0; let sp = 0;
+    try {
+      expect(await until(() => fs.existsSync(sleepPid) && fs.readFileSync(sleepPid, 'utf8').trim() !== '', 30_000), 'the closing rewrite never started').toBe(true);
+      wp = Number(fs.readFileSync(wrapperPid, 'utf8').trim());
+      sp = Number(fs.readFileSync(sleepPid, 'utf8').trim());
+      expect(tmpLeft(), 'the scratch stands while the rewrite runs').toHaveLength(1);
+      run.child.kill('SIGTERM');
+      const done = await run.done;
+      expect(done.status).toBe(143);
+      expect(tmpLeft()).toEqual([]);
+      expect(await until(() => pidGone(wp) && pidGone(sp), 5000), 'the count-objects child outlived the probe').toBe(true);
+      // The first write of the record stands: this tick measured, and the rewrite it was cut from is not required to finish.
+      expect(fx.readJson('probe')).toMatchObject({ state: 'measured' });
+    } finally {
+      run.child.kill('SIGKILL');
+      reap(wp);
+      reap(sp);
+    }
+  });
+
+  it('SIGTERM and SIGINT are blocked from the fork until the child is recorded, and the child itself does not inherit the block', { timeout: 60_000 }, () => {
+    fx.addHead(1, { 'a.txt': 'a\n' });
+    fx.conf(fx.project, '');
+    const blk = path.join(h.home, 'sigblk.log');
+    fx.wrapGit(`grep '^SigBlk' /proc/$$/status >> '${blk}'`);
+    const maskLog = path.join(h.home, 'sigmask.log');
+    // The mask at the moment Popen is called, from inside the probe's own process: the two signals, and only them.
+    const r = fx.runPatched([
+      'import json, signal',
+      'real = ns["subprocess"].Popen',
+      'def spy(*a, **k):',
+      '    m = sorted(int(x) for x in signal.pthread_sigmask(signal.SIG_BLOCK, []))',
+      `    open(${JSON.stringify(maskLog)}, "a").write(json.dumps(m, separators=(",", ":")) + "\\n")`,
+      '    return real(*a, **k)',
+      'ns["subprocess"].Popen = spy',
+    ].join('\n'));
+    expect(r.status).toBe(0);
+    const masks = fs.readFileSync(maskLog, 'utf8').split('\n').filter(Boolean);
+    expect(masks.length).toBeGreaterThan(5);
+    expect(new Set(masks)).toEqual(new Set(['[2,15]']));
+    const childMasks = fs.readFileSync(blk, 'utf8').split('\n').filter(Boolean);
+    expect(childMasks.length).toBeGreaterThan(5);
+    // Bit n-1 is signal n: SIGINT (2) is 0x2, SIGTERM (15) is 0x4000. (The shell may hold SIGCHLD itself while it forks.)
+    for (const l of childMasks) expect(Number.parseInt(l.split('\t')[1]!, 16) & 0x4002, l).toBe(0);
+  });
+
+  it('a scratch that cannot get its sentinel removes the directory it made, and the old records become unmeasured', { timeout: 90_000 }, () => {
+    fx.addHead(1, { 'a.txt': 'a\n' });
+    fx.addRow('lane-a-proj-a-alpha', 'ws/alpha');
+    fx.stubChecks({ rules: [REQ_RULE([{ context: 'ci/test' }])], runs: [run(1, 'ci/test', 'completed', 'success')] });
+    fx.conf(fx.project, 'lineage=on\n');
+    expect(fx.run().status).toBe(0);
+    expect(fx.readJson('probe').state).toBe('measured');
+    expect(fx.readJson('main-health').state).toBe('green');
+    expect(fx.readJson('lane-a-proj-a-alpha.lineage').state).toBe('measured');
+    // The sentinel's open fails (ENOSPC) after mkdtemp made the directory.
+    const r = fx.runPatched([
+      'real = ns["os"].open',
+      'def bad(p, *a, **k):',
+      '    if str(p).endswith(".ccd-land-probe-scratch"):',
+      '        raise OSError(28, "no space")',
+      '    return real(p, *a, **k)',
+      'ns["os"].open = bad',
+    ].join('\n'));
+    expect(r.status).toBe(0);
+    expect(r.stderr).toContain('project-error proj-a: OSError');
+    expect(tmpLeft(), 'the directory mkdtemp made').toEqual([]);
+    // An exception before the first write must not leave the old files standing as this tick's.
+    expect(fx.readJson('probe')).toMatchObject({ state: 'unmeasured', why: 'fetch-failed', heads: [], pairs: [] });
+    expect(fx.readJson('main-health')).toMatchObject({ state: 'unmeasured', why: 'fetch-failed', required: [] });
+    expect(fx.readJson('lane-a-proj-a-alpha.lineage')).toMatchObject({ state: 'unmeasured', why: 'fetch-failed', chain: [] });
+  });
+});
+
+describe('ccd-land-probe: a failure never leaves an old record (fix round 1, review 1109 F6, A3, A5, A12)', () => {
+  it('a fetch the project budget cut says budget in probe and main-health, and every old lineage becomes unmeasured', { timeout: 90_000 }, () => {
+    fx.addHead(1, { 'a.txt': 'a\n' });
+    fx.addRow('lane-a-proj-a-alpha', 'ws/alpha');
+    fx.addRow('lane-a-proj-a-beta', 'ws/beta');
+    fx.stubChecks({ rules: [REQ_RULE([{ context: 'ci/test' }])], runs: [run(1, 'ci/test', 'completed', 'success')] });
+    fx.conf(fx.project, '');
+    expect(fx.run().status).toBe(0);
+    for (const id of ['lane-a-proj-a-alpha', 'lane-a-proj-a-beta']) expect(fx.readJson(`${id}.lineage`).state, id).toBe('measured');
+    expect(fx.readJson('main-health').state).toBe('green');
+    fx.addRow('lane-a-proj-a-new', 'ws/new');   // a row with no old file: the failure must not invent one
+    // The fetch outlives the whole project budget (bounded: 30 s), so every read after it has no time left.
+    fx.wrapGit('case " $* " in *" fetch "*) sleep 30;; esac');
+    const r = fx.run({ CCD_LAND_PROBE_BUDGET: '10' });
+    expect(r.status).toBe(0);
+    expect(fx.readJson('probe')).toMatchObject({ state: 'unmeasured', why: 'budget', heads: [], pairs: [] });
+    expect(fx.readJson('main-health')).toMatchObject({ state: 'unmeasured', why: 'budget', required: [] });
+    for (const id of ['lane-a-proj-a-alpha', 'lane-a-proj-a-beta']) {
+      expect(fx.readJson(`${id}.lineage`), id).toMatchObject({ state: 'unmeasured', why: 'fetch-failed', chain: [] });
+    }
+    expect(fx.exists('lane-a-proj-a-new.lineage'), 'no old file, so none is invented').toBe(false);
+    expect(tmpLeft()).toEqual([]);
+  });
+
+  it('a conf whose base the key rule would refuse is an invalid conf: nothing is measured, enabled goes', () => {
+    fx.addHead(1, { 'a.txt': 'a\n' });
+    fx.conf(fx.project, 'lineage=on\n');
+    expect(fx.run().status).toBe(0);
+    expect(fx.exists('enabled')).toBe(true);
+    for (const base of ['core.hooksPath', 'refs/CORE.FSMONITOR']) {
+      fx.conf(fx.project, `base=${base}\nlineage=on\n`);
+      fs.rmSync(path.join(fx.landDir, 'probe'));
+      const calls = fx.ghCalls().length;
+      const r = fx.run();
+      expect(r.status, base).toBe(0);
+      expect(r.stderr, base).toContain('conf-invalid proj-a: bad-value');
+      expect(fx.exists('enabled'), base).toBe(false);
+      expect(fx.exists('probe'), `${base}: nothing was measured`).toBe(false);
+      expect(fx.ghCalls().length, base).toBe(calls);
+      fx.conf(fx.project, 'lineage=on\n');
+      expect(fx.run().status).toBe(0);
+    }
+  });
+});
+
+describe('ccd-land-probe: the enabled mirror is reconciled before any project is measured (fix round 1, review 1109 item 4)', () => {
+  it('a second project\'s enabled carries the tick\'s start, though the first project spent its whole budget', { timeout: 90_000 }, () => {
+    const b = makeLandFixture(h, { project: 'proj-b', slug: 'o/r2' });
+    for (let n = 1; n <= 3; n++) fx.addHead(n, { [`f${n}.txt`]: 'x\n' });
+    b.addHead(1, { 'b.txt': 'b\n' });
+    fx.conf('proj-a', 'lineage=on\n');
+    fx.conf('proj-b', 'lineage=on\n');
+    fx.wrapGit('case " $* " in *" merge-tree "*) sleep 6;; esac');
+    const t0 = Date.now();
+    expect(fx.run({ CCD_LAND_PROBE_BUDGET: '10' }).status).toBe(0);
+    expect(fx.readJson('probe').elapsedMs, 'project a spent its budget').toBeGreaterThanOrEqual(8000);
+    const bEnabled = Date.parse(b.readJson('enabled').at);
+    expect(Date.parse(fx.readJson('enabled').at) - t0).toBeLessThan(5000);
+    expect(bEnabled - t0, 'b\'s enabled is the tick start\'s, not the time after a').toBeLessThan(5000);
+    expect(Date.parse(b.readJson('probe').at) - t0, 'b was really measured after a').toBeGreaterThanOrEqual(8000);
+  });
+
+  it('removal reaches every other case in the same pass: lineage=off, paused, not a checkout, and a directory with no conf', { timeout: 90_000 }, () => {
+    const plant = (name: string): string => {
+      const d = path.join(fx.reg, 'landing', name);
+      fs.mkdirSync(d, { recursive: true });
+      fs.writeFileSync(path.join(d, 'enabled'), '{}\n');
+      return path.join(d, 'enabled');
+    };
+    // A paused project (the plain one), a lineage=off project, a lineage=on project that is no checkout, and an orphan.
+    const off = makeLandFixture(h, { project: 'proj-off', slug: 'o/off' });
+    fx.addHead(1, { 'a.txt': 'a\n' });
+    fx.conf('proj-a', 'lineage=on\n');
+    fx.pause('project');
+    fx.conf('proj-off', 'lineage=off\n');
+    fx.conf('proj-nocheckout', 'lineage=on\n');
+    const files = ['proj-a', 'proj-off', 'proj-nocheckout', 'orphan'].map(plant);
+    expect(off.exists('enabled')).toBe(true);
+    expect(fx.run().status).toBe(0);
+    for (const f of files) expect(fs.existsSync(f), f).toBe(false);
+  });
+});
+
+describe('ccd-land-probe: every removal of enabled checks $REG/landing/ itself (fix round 1, review 1109 A4)', () => {
+  it('a landing directory that is a symlink to an owned directory keeps the enabled files in its target', () => {
+    fx.addHead(1, { 'a.txt': 'a\n' });
+    fx.conf(fx.project, 'lineage=off\n');
+    const target = path.join(h.home, 'landing-target');
+    const files = ['proj-a', 'orphan'].map((n) => {
+      fs.mkdirSync(path.join(target, n), { recursive: true });
+      const f = path.join(target, n, 'enabled');
+      fs.writeFileSync(f, '{}\n');
+      return f;
+    });
+    fs.mkdirSync(fx.reg, { recursive: true });
+    fs.symlinkSync(target, path.join(fx.reg, 'landing'));
+    expect(fx.run().status).toBe(0);
+    for (const f of files) expect(fs.readFileSync(f, 'utf8'), f).toBe('{}\n');
+    expect(ls(path.join(target, 'proj-a'))).toEqual(['enabled']);
   });
 });
