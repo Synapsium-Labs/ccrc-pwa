@@ -795,7 +795,10 @@
    quiet Button's mono, wider than a phone's share of the cell, and a cell that wrapped its buttons put All accounts
    on a second 44px row. The quiet variant is `leading-none` with no vertical padding, so the control sets a line
    height and a little padding of its own for a wrapped line to clear its border; the tap floor (`min-h-tap`) is
-   the Button's, and is kept. The control is the one element here with `aria-controls` (it names the strip's group). */
+   the Button's, and is kept. The control is the one element here with `aria-controls` (at the desk it names the strip's
+   group; on a phone, the panel it opens). On a phone the open panel is a child of this cell too, between the two, so
+   `:not([aria-controls])` matches it; its `flex: none` is moot there, since the panel is absolutely positioned (below)
+   and out of the flex row. */
 .accounts-end {
   grid-column: 1 / -1;
   display: flex;
