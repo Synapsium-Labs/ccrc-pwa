@@ -298,6 +298,68 @@ describe('ws-shed-deps refuses, touching nothing', () => {
     expect(r.doc).toMatchObject({ shed: true });
     expect(fs.readFileSync(path.join(h.home, 'gate-probe'), 'utf8')).toContain('gate=1');
   });
+  it('a dot-led project that aliases the shed lock cannot open a wake during a real shed: the purge unlinks the lock file, the gate still refuses', () => {
+    // Project `.shed-demo` + slug `quiet-basin` mints the id `.shed-demo-quiet-basin`, whose `_reg_purge` glob unlinks
+    // `$REG/.shed-demo-quiet-basin.lock`: the shed lock of the unrelated session `demo-quiet-basin`. A gate that asked
+    // the lock FILE alone would read its absence as free, and a wake could create a pane while the removal runs.
+    const alias = `.shed-${CHILD_ID}`;
+    const gap = `_ws_shed_gap() { _reg_purge '${alias}';`
+      + ` ([[ -e "$REG/.shed-${CHILD_ID}.lock" ]] && echo lockfile >> "$HOME/gate-probe"; :);`
+      + ` (_ws_expire_spawn_gate ${CHILD_ID}; echo "gate=$? why=$_WS_EXPIRE_SPAWN_WHY" >> "$HOME/gate-probe");`
+      + ` (cmd_ensure ${CHILD_ID} >/dev/null 2>&1); echo "ens=$?" >> "$HOME/gate-probe"; };`;
+    const r = shed('', gap);
+    const probe = fs.readFileSync(path.join(h.home, 'gate-probe'), 'utf8');
+    // Anti-vacuity: the alias purge really unlinked the shed lock file under the live holder.
+    expect(probe).not.toContain('lockfile');
+    expect(probe).toMatch(/gate=1 why=.*shed/);
+    expect(probe).toContain('ens=1');
+    expect(fs.existsSync(reg('stopped')), 'the refused wake never cleared the stop stamp').toBe(true);
+    // The wake was refused before it cleared the stop stamp, so the shed's last facts still read it asleep and it sheds.
+    expect(r.doc).toMatchObject({ shed: true });
+    // Once the shed is over, nothing of it is left to refuse a wake.
+    expect(fs.existsSync(reg('shedding'))).toBe(false);
+    expect(h.run(`${CHILD_STUBS} _ws_expire_spawn_gate ${CHILD_ID}; echo "rc=$?"`).stdout).toContain('rc=0');
+  });
+  it('the shed marker fails closed: a live holder refuses whatever its lock file says; a dead or finished one never strands a wake', () => {
+    const regDir = path.join(h.home, '.cc-sessions');
+    const lock = path.join(regDir, `.shed-${CHILD_ID}.lock`);
+    const gate = `_ws_expire_spawn_gate ${CHILD_ID}; echo "rc=$? why=$_WS_EXPIRE_SPAWN_WHY"`;
+    const devino = (): string => h.run(`_plat_devino '${lock}'`).stdout.trim();
+    // A live holder ($$, the shell asking) and no lock file at all: refused.
+    expect(h.run(`${CHILD_STUBS} printf '%s 1:1' "$$" > '${reg('shedding')}'; ${gate}`).stdout).toMatch(/rc=1 why=.*shed/);
+    // A live holder and a lock file that is ANOTHER inode than the one it marked: refused.
+    fs.writeFileSync(lock, '');
+    expect(h.run(`${CHILD_STUBS} printf '%s 1:1' "$$" > '${reg('shedding')}'; ${gate}`).stdout).toMatch(/rc=1/);
+    // A marker that does not read: refused (which shed left it, and whether it still runs, is unknown).
+    fs.writeFileSync(reg('shedding'), 'garbage');
+    expect(h.run(`${CHILD_STUBS} ${gate}`).stdout).toMatch(/rc=1/);
+    // A finished or crashed shed: the lock it marked stands, the same inode, and nobody holds it: free.
+    expect(h.run(`${CHILD_STUBS} printf '%s %s' "$$" '${devino()}' > '${reg('shedding')}'; ${gate}`).stdout).toContain('rc=0');
+    // ... but held by someone, it refuses.
+    expect(h.run(`${CHILD_STUBS} printf '%s %s' "$$" '${devino()}' > '${reg('shedding')}'; exec 9>>'${lock}'; flock -n 9 || exit 99;`
+      + ` (exec 9>&-; ${gate})`).stdout).toMatch(/rc=1/);
+    // A holder that is gone (a shed killed mid-removal), its lock file purged too: free, never a stranded session.
+    fs.rmSync(lock);
+    expect(h.run(`${CHILD_STUBS} sleep 0 & dead=$!; wait "$dead"; printf '%s 1:1' "$dead" > '${reg('shedding')}'; ${gate}`).stdout)
+      .toContain('rc=0');
+  });
+  it('a real shed whose lock file is purged before it marks it refuses `unmeasured`, removing nothing', () => {
+    // The marker binds the lock's inode, read just after the lock is taken and again after the marker is written.
+    const pre = `_reg_set() { [[ $2 == shedding ]] && rm -f "$REG/.shed-$1.lock"; command printf '%s' "$3" > "$REG/$1.$2"; };`;
+    expect(shed('', pre).doc).toMatchObject({ refused: 'unmeasured' });
+    expect(exists('node_modules/pkg/index.js')).toBe(true);
+    expect(fs.existsSync(reg('depsshed'))).toBe(false);
+    expect(fs.existsSync(reg('shedding'))).toBe(false);
+  });
+  it('`archived` for an archived row, under the reap lock, removing nothing; the dry run refuses the same way', () => {
+    fs.writeFileSync(reg('archived'), `${now()}`);
+    expect(shed().doc).toMatchObject({ refused: 'archived' });
+    expect(shed('--dry-run').doc).toMatchObject({ refused: 'archived' });
+    expect(exists('node_modules/pkg/index.js')).toBe(true);
+    expect(exists('pwa/node_modules/other/index.js')).toBe(true);
+    expect(fs.existsSync(reg('depsshed'))).toBe(false);
+    expect(journal().map((e) => e['refusal'])).toEqual(['archived']);
+  });
   it('`in-progress` while another shed holds the id\'s shed lock', () => {
     const lock = path.join(h.home, '.cc-sessions', `.shed-${CHILD_ID}.lock`);
     const r = h.run(`${CHILD_STUBS} ${NO_USERS} exec 9>>'${lock}'; flock -n 9 || exit 99;`
