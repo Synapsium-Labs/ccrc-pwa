@@ -88,10 +88,10 @@ describe('the collect token reaches ws-collect only from the act job’s own aud
     expect(enclosingFunction('const x = 1;\nvoid CCD_ARGV.wsCollect(t, i, d);\n', 18), 'no function, no scope').toBeNull();
   });
 
-  it('there is ONE CCD_ARGV.wsCollect( site in server/src, inside collectTempRoot', () => {
+  it('there is ONE CCD_ARGV.wsCollect( site in server/src, inside collectTempRootAct', () => {
     const sites = sitesOf('wsCollect');
     expect(sites.map((s) => s.file)).toEqual([EXECUTOR]);
-    expect(enclosingFunction(sites[0]!.text, sites[0]!.at)?.name).toBe('collectTempRoot');
+    expect(enclosingFunction(sites[0]!.text, sites[0]!.at)?.name).toBe('collectTempRootAct');
   });
 
   it('its first argument is <obs>.token, <obs> bound ONCE as <answer>.value, <answer> the job’s one collectAudit( answer, before the act', () => {
