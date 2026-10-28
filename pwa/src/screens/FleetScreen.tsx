@@ -6,7 +6,7 @@
 import { useEffect, useSyncExternalStore } from 'react';
 import type { ReactNode } from 'react';
 import {
-  ATTENTION_DOT, BareRow, BuildLine, Button, Select, Skeleton,
+  ATTENTION_DOT, BareRow, BuildLine, Button, Skeleton,
 } from '@ccrc/ui';
 import { AccountsStrip } from '../fleet/AccountsStrip';
 import { FleetHostBanner, fleetHostBannerShows } from '../fleet/FleetHostBanner';
@@ -16,7 +16,7 @@ import { diskBannerShows } from '../fleet/diskWords';
 import { PressureBanner } from '../fleet/PressureBanner';
 import { pressureBannerShows } from '../fleet/pressureWords';
 import { UpdateIndicator } from '../fleet/UpdateIndicator';
-import { AUTOMATIC_CLASS } from '../fleet/classWords';
+import { ClassChooser } from '../fleet/ClassChooser';
 import { UPDATES_STALE_TEXT } from '../fleet/useUpdatesView';
 import { SubstrateBanner, substrateBannerShows } from '../fleet/SubstrateBanner';
 import { PasskeyNotice, passkeyNoticeShows, usePasskeyStatus } from '../fleet/PasskeyNotice';
@@ -34,7 +34,6 @@ import { navigate } from '../lib/router';
 import { ackAll, acksSnapshot, prune, subscribeAcks } from '../lib/seen';
 import { archivedSizeText, archivedSummary } from './ArchiveScreen';
 import type { FleetStore } from '../stores/fleet';
-import { CLASSES, type ModelClass } from '../../../shared/models';
 import { FLEET_ID, useFrameSet } from '../skins/frame';
 import { useDesk } from '../lib/useMediaQuery';
 import '../fleet/fleet.css';
@@ -48,6 +47,7 @@ export function FleetScreen({
   banners = true,
   headChrome = true,
   headCount = true,
+  runsLine = true,
   epoch,
   observedEpoch,
 }: {
@@ -59,12 +59,17 @@ export function FleetScreen({
   showAccounts?: boolean; // false on desktop — the accounts strip is a top bar there
   /** False where the skin's frame places the banner stack under its bar (W2 Task S4b): one stack at any width. */
   banners?: boolean;
-  /** False where the skin's bar holds the head's wordmark and doors (Refined's `Sidebar` and Instrument's
-   *  `ListColumn` at a desk, W2 Task S4b, T2e); the readouts stay. */
+  /** False where the skin's frame holds the head's wordmark and doors: Refined's bar holds both, Instrument's top bar
+   *  holds the wordmark and its rail the doors (Refined's `Sidebar` and Instrument's `ListColumn` at a desk, W2 Task
+   *  S4b, T2e); the readouts stay. */
   headChrome?: boolean;
-  /** False where the skin's status bar prints the fleet's count (Instrument's `ListColumn` at a desk, T2g, D-6715):
+  /** False where the frame's status bar prints the fleet's count (Instrument's `ListColumn` at a desk, T2g, D-6715):
    *  the head draws no count line. The pool lag stays. */
   headCount?: boolean;
+  /** False where the skin's frame holds the runs doors (Instrument's `ListColumn` at a desk, T2f, D-6371): the column
+   *  draws no runs line; the rail's Runs door goes to /runs and the frame's status bar prints the open runs in its
+   *  count. */
+  runsLine?: boolean;
   /** The server's current account-pool epoch (`GET /api/pools/epoch`, Task
    *  7), off `useFleetStore`'s `pools.epoch` (`app.tsx`) — the same `pools`
    *  frame the fleet WS/REST wire carries (`server/src/pools.ts`'s
@@ -138,11 +143,6 @@ export function FleetScreen({
   const open = onOpen ?? ((id: string) => navigate(`/s/${encodeURIComponent(id)}`));
   const flows = useFleetFlows();
   const newSession = onNewSession ?? flows.openNewSession;
-  // The `/api/projects` plane — rows, class, placement readers, the `+`'s
-  // in-flight set and the pool sheet's selection — lives in its own hook
-  // (`useProjectRows`), which is where its generation discipline and its two
-  // deviations are argued; the chrome calls it once.
-  const projects = chrome.projects;
   // The skin's own fleet list, when it has one (Instrument's table, W2 Task S10); none outside a frame or in Refined.
   const set = useFrameSet();
   const FleetList = set?.FleetList ?? null;
@@ -245,7 +245,7 @@ export function FleetScreen({
           unchanged. */}
       {showAccounts && Head === null && <AccountsStrip />}
 
-      {/* The only door to /runs (fix, review finding 20) — moved OUT of the
+      {/* A door to /runs (fix, review finding 20) — moved OUT of the
           populated arm for the identical reason `AccountsStrip` was, three
           lines above, and the comment there already tells the story: it used
           to render only when `sessions.length > 0`, so the loading skeleton
@@ -253,7 +253,12 @@ export function FleetScreen({
           runs go honest-stale" case renders as the first-run panel, since a
           `readRegistry` failure still ships an honest `sessions: []` — had
           no door to the one surface that would show the operator their runs
-          going stale. D-2's rule: the only door must never render nothing. */}
+          going stale. D-2's rule: a door must never render nothing. On a
+          phone and in Refined this line IS the only door to /runs, so it
+          renders in every branch below. At Instrument's desk (T2f, D-6371)
+          it is not: the rail's Runs door (`go-runs`) and the frame's status
+          bar count are the doors, always mounted, so the column draws no
+          line there (`runsLine` false) and the rule still holds. */}
       {/* THE RUNS LINE — the runs door and the class chooser share one row.
           The chooser had a row to itself and looked orphaned on it; this row
           was already full-width, 44px tall and nearly empty, so pairing them
@@ -263,52 +268,21 @@ export function FleetScreen({
           comment, so a chooser paired with it would be side-by-side only
           while somebody held a hot file and alone again the moment the last
           claim expired. The runs door is the opposite — its comment cites
-          D-2's rule that the only door must never render nothing, so it is
-          the one sibling on this screen guaranteed to be there. */}
-      <div className="fleet-runs-line">
-        <BareRow
-          className="fleet-runs-row"
-          aria-label={`Runs · ${runsLabel}`}
-          onClick={() => navigate('/runs')}
-        >
-          Runs · {runsLabel}
-        </BareRow>
-        {/* The class chooser (routing spec, slice 5, Task 6): forecasts
-            EVERY card's placement for one class at a time, the same
-            `GET /api/projects?class=` this build has carried since slice 4
-            but with no caller until now. "Automatic" (unset) is the
-            class-blind fetch every build before this task has always sent;
-            "Default" asks explicitly for the record's own "no override"
-            word — the projects handler (`server.ts`) treats it identically
-            to the unset fetch (no per-class shares read, byte-identical
-            answer), so choosing it changes nothing about what renders, only
-            what the `+` posts. The four classes are `CLASSES` reversed —
-            the same capability order `NewSessionSheet`'s own routing row
-            uses — never a hand-typed list, so a class this build adds or
-            drops shows up here for free. */}
-        {/* `w-auto flex-none max-w-full`: a control sized to its own option
-            list, not to the row. These REPLACE `Select`'s own `w-full`
-            rather than outranking it — `cn` is tailwind-merge, so one width
-            utility reaches the DOM and it is this one. The rule that shipped
-            here instead (`.fleet-class-select { width: auto }`, one class
-            against `.route-select`'s one, 650 lines earlier in the same
-            sheet) lost the tie to source order and never applied once: the
-            control rendered 286px instead of the 167px its widest option
-            asks for, and the head overflowed the viewport by 225px at 390px.
-            `fleet-css.test.ts` pins the mechanism that replaced it. */}
-        <Select
-          className="w-auto flex-none max-w-full"
-          aria-label="Class"
-          value={projects.classFilter}
-          onChange={(e) => projects.chooseClass(e.target.value as '' | 'default' | ModelClass)}
-        >
-          <option value="" title={AUTOMATIC_CLASS.title}>{AUTOMATIC_CLASS.word}</option>
-          <option value="default">Default</option>
-          {[...CLASSES].reverse().map((c) => (
-            <option key={c} value={c}>{c.charAt(0).toUpperCase() + c.slice(1)}</option>
-          ))}
-        </Select>
-      </div>
+          D-2's rule that a door must never render nothing, so it is the one
+          sibling on this screen guaranteed to be there wherever the line is
+          drawn (every width but Instrument's desk, `runsLine`). */}
+      {runsLine && (
+        <div className="fleet-runs-line">
+          <BareRow
+            className="fleet-runs-row"
+            aria-label={`Runs · ${runsLabel}`}
+            onClick={() => navigate('/runs')}
+          >
+            Runs · {runsLabel}
+          </BareRow>
+          <ClassChooser />
+        </div>
+      )}
 
       {/* Build 9's contested-files signal (D12 ruling 3) — renders itself or
           nothing, so it mounts unconditionally, the AccountsStrip rule. */}
