@@ -15,6 +15,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { makeCcdHarness, type CcdHarness, WIDE_PANE, DEAD_PANE, ccdSource } from './ccdWsHelpers.js';
 import { asManagerCalls, itLinux, itDarwin } from './platformFixtures.js';
+import { refuseCalls, refuseWords } from './census-w5/ccdHelpers.js';
 
 let h: CcdHarness;
 beforeEach(() => { h = makeCcdHarness('ccrc-ccd-swap-refuse-'); });
@@ -479,14 +480,18 @@ describe('the refusal vocabulary', () => {
     const slice = src.slice(from, to);
     expect(slice.length, 'the refusal slice collapsed — this test would pass vacuously')
       .toBeGreaterThan(500);
-    for (const shape of [/_reap_refuse\s/, /"refused":"/, /"verdict":"/, /'!/]) {
+    // D-7072: the one refusal helper's family is its region's, so the old name's shape is a census query over the
+    // slice's offsets, comment-line calls included (as the shape matched raw text).
+    expect(refuseCalls(src).filter((c) => c.regionFamily === 'reap' && c.offset >= from && c.offset < to)
+      .map((c) => c.text.trim()), 'no reap-family call in the swap slice').toEqual([]);
+    for (const shape of [/"refused":"/, /"verdict":"/, /'!/]) {
       expect(slice, `the swap refusal is written in a harvested shape: ${shape}`)
         .not.toMatch(shape);
     }
 
     // And nothing anywhere in ccd emits a swap-flavoured token into that map.
     const tokens = new Set<string>();
-    for (const m of src.matchAll(/_reap_refuse\s+([a-zA-Z][a-zA-Z0-9_-]*)\b/g)) tokens.add(m[1]!);
+    for (const w of refuseWords('reap')) tokens.add(w);
     for (const m of src.matchAll(/"refused":"([a-zA-Z0-9-]+)"/g)) tokens.add(m[1]!);
     for (const m of src.matchAll(/'!([a-zA-Z0-9-]+)/g)) tokens.add(m[1]!);
     for (const m of src.matchAll(/"verdict":"([a-zA-Z0-9-]+)"/g)) tokens.add(m[1]!);

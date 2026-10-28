@@ -24,12 +24,13 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { ccdSource } from './ccdWsHelpers.js';
+import { markedSpan, refuseCalls, refuseWords } from './census-w5/ccdHelpers.js';
 
 const src = withoutReclaim(ccdSource());
 
 const scan = (text: string): string[] => {
   const t = new Set<string>();
-  for (const m of text.matchAll(/_reap_refuse\s+([a-zA-Z][a-zA-Z0-9_-]*)\b/g)) t.add(m[1]!);
+  for (const w of reapWords(text)) t.add(w);
   for (const m of text.matchAll(/"refused":"([a-zA-Z0-9-]+)"/g)) t.add(m[1]!);
   for (const m of text.matchAll(/'!([a-zA-Z0-9-]+)/g)) t.add(m[1]!);
   for (const m of text.matchAll(/"verdict":"([a-zA-Z0-9-]+)"/g)) { if (m[1] !== 'reapable') t.add(m[1]!); }
@@ -55,7 +56,14 @@ describe('the lifecycle block cannot poison wsaudit.test.ts\'s scan', () => {
     // whether the other three also fail. expect.soft per STANDING RULE #1,
     // softened from the brief's literal hard `expect` inside this loop.
     const slice = src.slice(from, to);
-    for (const shape of [/_reap_refuse\s/, /"refused":"/, /"verdict":"/, /'!/]) {
+    // D-7072: the one helper's family is its region's, so the old name's shape is a census query: the block's two
+    // markers re-taken in ccd's whole text, comment-line calls included (as the shape matched raw text).
+    const full = ccdSource();
+    const [a, b] = [full.indexOf('# ── lifecycle journal '), full.indexOf('# ── end lifecycle journal ')];
+    expect(b, 'the lifecycle block in ccd’s whole text').toBeGreaterThan(a);
+    expect.soft(refuseCalls(full).filter((c) => c.regionFamily === 'reap' && c.offset >= a && c.offset < b).map((c) => c.text.trim()),
+      'no reap-family call in the lifecycle block, in code OR in a comment').toEqual([]);
+    for (const shape of [/"refused":"/, /"verdict":"/, /'!/]) {
       expect.soft(slice, `the lifecycle emitter is written in a harvested shape: ${shape}`).not.toMatch(shape);
     }
   });
@@ -142,6 +150,28 @@ function markedBlock(text: string, begin: string, end: string): string {
   const from = text.lastIndexOf('\n', b) + 1;
   const nl = text.indexOf('\n', e);
   return text.slice(from, nl < 0 ? text.length : nl + 1);
+}
+
+/** The reap family's words in `text` (D-7072), which is `src` (the cut) or ccd's whole text: for the cut, the census
+ *  reads ccd's whole text with the four blocks `withoutReclaim` cuts excluded by their offsets, comment-line calls
+ *  included as `scan()` includes them. Any other text throws: the census reads ccd's text, not a slice of it.
+ *  Memoized per text: `scan()` runs once per token in the residue row, and each census read walks all of ccd. */
+const reapWordsMemo = new Map<string, readonly string[]>();
+function reapWords(text: string): string[] {
+  const hit = reapWordsMemo.get(text);
+  if (hit !== undefined) return [...hit];
+  const words = reapWordsUncached(text);
+  reapWordsMemo.set(text, words);
+  return [...words];
+}
+
+function reapWordsUncached(text: string): string[] {
+  const full = ccdSource();
+  if (text === full) return refuseWords('reap');
+  if (text !== withoutReclaim(full)) throw new Error('scan() reads ccd’s whole text or its cut, nothing else');
+  const cut = ([['RECLAIM-BEGIN', 'RECLAIM-END'], ['MIRROR-BEGIN', 'MIRROR-END'], ['EXPIRE-BEGIN', 'EXPIRE-END'],
+    ['COLLECT-BEGIN', 'COLLECT-END']] as const).map(([b, e]) => markedSpan(full, b, e)).filter((s): s is [number, number] => s !== null);
+  return refuseWords('reap', { exclude: cut });
 }
 
 /** `text` with that region — and ws-reap's mirror block below it, which holds
