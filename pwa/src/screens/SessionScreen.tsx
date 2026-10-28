@@ -40,7 +40,7 @@ import { useEscapeInterrupt } from '../session/useEscapeInterrupt';
 import { liveStatus } from '../session/liveStatus';
 import { childRunContext, coordinationOf, parentIdOf } from '../fleet/fleetTree';
 import { sessionFacts } from '../fleet/sessionFacts';
-import { coordPresence } from '../fleet/coordWords';
+import { coordinatorPresence } from '../fleet/presence';
 import { orphanGuidance } from '../fleet/orphanWords';
 import { placementOfRow, poolOfPlacement } from '../fleet/placementWords';
 import { isRunClosed } from '../fleet/runWords';
@@ -304,7 +304,7 @@ export function SessionScreen({
   const coordination = live === null ? null : coordinationOf(live, parent === null ? [] : [parent], activeRuns);
   // D-5545: the header's facts, from the model the fleet card reads, over the same inputs the card is given —
   // the active run and coordinator (`childRunContext`), whose code (`coordinationOf`), the project's pool
-  // (`placementOfRow`, the cards' own spelling) and the coordinator's presence (`coordPresence`, the orphan
+  // (`placementOfRow`, the cards' own spelling) and the coordinator's presence (`coordinatorPresence`, the orphan
   // marker's) — so the header can never know less than the card.
   const lookup = (sid: string): FleetSession | null => (parent !== null && parent.id === sid ? parent : null);
   const parentId = live === null ? null : parentIdOf(live, activeRuns);
@@ -314,7 +314,7 @@ export function SessionScreen({
   // day for every other row, so midnight alone redraws none of them; a bubble that another prop change redraws after
   // midnight sees the new day too, which costs it one memo miss and no markdown work (`ChatMarkdown`'s own memo).
   const day = dayKey(factsNow);
-  const presence = parentId === null ? null : coordPresence(parentId, lookup(parentId), fleetFrameSeen);
+  const presence = parentId === null ? null : coordinatorPresence(parentId, lookup(parentId), fleetFrameSeen);
   const facts = live === null ? null : sessionFacts({
     session: live, now: factsNow, roster,
     projectPool: poolOfPlacement(placementOfRow(projects?.find((r) => r.name === live.project))),

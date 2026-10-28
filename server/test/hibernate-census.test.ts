@@ -138,6 +138,9 @@ const CENSUS: readonly Row[] = [
   { source: 'dead-compare', file: 'pwa/src/screens/SessionScreen.tsx', hits: 2, stances: ['consults'],
     why: 'a dead screen is read-only; a sleeper (`useWakeOnOpen`) is woken when shown, reads "Waking…" with Wake, and '
       + 'keeps the composer shut until its row is alive; the dead banner\'s Restart is for a dead row with no marker' },
+  { source: 'presence-reader', file: 'pwa/src/screens/SessionScreen.tsx', hits: 1, stances: ['consults'],
+    why: 'the header\'s coordinator reads `coordinatorPresence` (D-7181): a sleeping coordinator reads `hibernated`, '
+      + 'never "coordinator gone"' },
   { source: 'presence-reader', file: 'pwa/src/fleet/coordWords.ts', hits: 1, stances: ['consults'],
     why: '`coordPresence` reads `coordinatorPresence` (D-7181), which answers a sleeping coordinator `hibernated` (the '
       + 'server\'s `asleep`), so no Resume door and no "coordinator gone"; the reclaim door those point at refuses a '
