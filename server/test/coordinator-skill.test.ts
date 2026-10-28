@@ -461,6 +461,25 @@ describe('the coordinator skill: its contract', () => {
       + '`landedInTrain: true`, `headRefOid` equal to `handoffCommit`');
   });
 
+  it('step 6 and every exact-SHA proof in §5 accept a train-landed PR — CLOSED with `landedInTrain: true` at the same head', () => {
+    // The producer-merged proof is spelled in four more places than the two
+    // above: step 6's "proven merged" and its cross-project exact-SHA proof,
+    // §5's cross-project twin, and the native-queue read-back's answers. A
+    // train-landed member answers CLOSED with no queue entry at every one.
+    const sk = flat(skill);
+    expect(sk).toContain('once wave N\'s PR is proven merged — MERGED at its verified head, or CLOSED there with '
+      + '`landedInTrain: true` on its row of `ccd pr-state --session <id>` —');
+    expect(sk).toContain('interface PR merged at the exact `producerSha` carried in the conditional producer contract '
+      + '(it reads MERGED there, or CLOSED there with `landedInTrain: true` on its row of `ccd pr-state --session <id>`)');
+    const wl = flat(refs('wave-lifecycle.md'));
+    expect(wl).toContain('PR merged at the exact `producerSha` carried with `producerRepoRoot` and `producerSourceRepoPath` '
+      + 'in the conditional producer contract (it reads MERGED there, or CLOSED there with `landedInTrain: true` on its '
+      + 'row of `ccd pr-state --session <sessionId>`)');
+    expect(wl).toContain('A `state` of `MERGED` — or of `CLOSED` with `landedInTrain: true` on the PR\'s row of '
+      + '`ccd pr-state --session <sessionId>`, a merge train having landed it and closed it — means it already landed');
+    expect(wl).toContain('A PR with no entry, no `autoMergeRequest` and neither of those landed answers means nothing is queued');
+  });
+
   it('tells the session how to learn its own id the ONE way that is actually its own', () => {
     // The bare derivation this replaced was measured on the fleet host three
     // times on 2026-09-02: with no TMUX_PANE it exits 0 naming the MOST RECENTLY

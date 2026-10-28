@@ -2466,6 +2466,38 @@ describe('a PR closed as landed in a merge train, end to end', () => {
     expect(tomb.proof).toBe('merge-tree');
     expect(tomb.pr).toBe(42);
   }, 30000);
+
+  it('reaps it after main later edited the very lines the train landed, naming the landing commit', () => {
+    // The proof is pinned to the train's landing commit, so a later PR that
+    // edits the same hunk cannot turn a proven landing into a refusal.
+    const main = h.makeGhRepo('demo');
+    h.sh(`${WS_ADD} CCD_WS_SLUG=quiet-basin cmd_ws_add demo`);
+    const wt = path.join(h.home, 'worktrees', 'demo', 'quiet-basin');
+    fs.writeFileSync(path.join(wt, 'f1.txt'), 'work 1\n');
+    h.git(wt, 'add', 'f1.txt'); h.git(wt, 'commit', '-m', 'work 1');
+    const tip = h.git(wt, 'rev-parse', 'HEAD');
+    fs.writeFileSync(path.join(main, 'f1.txt'), 'work 1\n');
+    fs.writeFileSync(path.join(main, 'member-b.txt'), 'the other member\n');
+    h.git(main, 'add', '-A'); h.git(main, 'commit', '-m', 'train: #42 #43 (#50)');
+    const train = h.git(main, 'rev-parse', 'HEAD');
+    h.git(main, 'push', 'origin', 'main');
+    h.git(wt, 'push', '-u', 'origin', 'ws/quiet-basin');
+    h.ghRows([mergedRow({ headRefOid: tip, state: 'CLOSED', mergedAt: null, mergeCommit: null,
+      closedAt: '2026-07-21T09:00:00Z', labels: [{ name: 'landed-in-train' }] })]);
+    h.sh(`${ARCH} cmd_ws_archive --session demo-quiet-basin`);
+    fs.writeFileSync(path.join(main, 'f1.txt'), 'work 1, edited by a later PR\n');
+    h.git(main, 'add', 'f1.txt'); h.git(main, 'commit', '-m', 'a later PR edits f1');
+    h.git(main, 'push', 'origin', 'main');
+    const tok = tokenOf();
+    expect(tok, 'the audit must issue a token for a landed member').toMatch(/^[0-9a-f]{64}$/);
+    const r = reap(tok);
+    expect(r.code, `stdout: ${r.stdout} stderr: ${r.stderr}`).toBe(0);
+    expect(JSON.parse(r.stdout).proof).toBe('merge-tree');
+    expect(fs.existsSync(wt)).toBe(false);
+    const tomb = JSON.parse(fs.readFileSync(
+      path.join(h.home, '.cc-sessions', '.reaped', 'demo-quiet-basin.json'), 'utf8'));
+    expect(tomb.mergeCommit).toBe(train);
+  }, 30000);
 });
 
 describe('the contained rung end to end', () => {

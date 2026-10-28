@@ -182,6 +182,28 @@ describe('the five answers', () => {
     expect(sweep('return 1').queue).toBe('unmeasured');
   });
 
+  it('none — a PR a merge train landed and closed: phase merged, in neither window, never unmeasured', () => {
+    // The train closed the member, so it is in neither the OPEN nor the MERGED
+    // window; its line already says `merged` from ccd's `landedInTrain`, and a
+    // closed PR is in no queue — the same answer a plain CLOSED one gets.
+    const tip = workspaceWithCommit('demo', 'quiet-basin');
+    h.ghRows([openRow({ state: 'CLOSED', headRefOid: tip, closedAt: '2026-07-21T09:00:00Z',
+      labels: [{ name: 'landed-in-train' }] })]);
+    setQueue(answer([node(7, 'OPEN', true, 'AddedToMergeQueueEvent')]));
+    const o = sweep();
+    expect(o.phase).toBe('merged');
+    expect(o.queue).toBe('none');
+    expect('queueAt' in o).toBe(false);
+    expect(sweep('return 1').queue).toBe('unmeasured');
+  });
+
+  it('unmeasured — a MERGED PR outside both windows is still unmeasured (only the train-landed close reads none)', () => {
+    const tip = workspaceWithCommit('demo', 'quiet-basin');
+    h.ghRows([mergedRow({ headRefOid: tip })]);
+    setQueue(answer([node(7, 'OPEN', true, 'AddedToMergeQueueEvent')]));
+    expect(sweep().queue).toBe('unmeasured');
+  });
+
   it('unmeasured — the bound PR is outside both windows', () => {
     const tip = workspaceWithCommit('demo', 'quiet-basin');
     h.ghRows([openRow({ headRefOid: tip })]);
