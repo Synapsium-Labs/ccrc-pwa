@@ -8,8 +8,9 @@
 // MEMOISED (C9, D-6441): the tree and the rollup are rebuilt only when what they read changes, and every callback a
 // card is handed is stable, so `ProjectCard` and `SessionLine` (both `memo`'d, `lineProps.ts`) re-render only for what
 // changed: a one-row frame rebuilds the tree, so the cards re-render, but one `SessionLine` only; a chrome change with
-// the same fleet re-renders no card. No clock is read here: a spawning dispatch's readout ticks itself
-// (`ProjectCard`'s `PendingSpawn`), and the rollup re-reads the time only when its own timer wakes it.
+// the same fleet re-renders no card. No one-second clock runs here: a spawning dispatch's readout ticks itself
+// (`ProjectCard`'s `PendingSpawn`). The rollup's clock is read on every render (`useRollupClock`), but the rollup is
+// rebuilt only when its next window end moves (`roll.next`), so it reads `roll.now` only then.
 //
 // It reads the chrome's store (`useFleetChrome`), the one `FleetScreen` itself checks it was handed, so the cards and
 // the screen around them always describe one fleet.
