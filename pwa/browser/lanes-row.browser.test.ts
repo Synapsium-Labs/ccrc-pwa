@@ -834,3 +834,59 @@ describe('hovering the folded line opens a flyout below it', () => {
     }, 90_000);
   }
 });
+
+// The flyout's focus rules in real Chrome, with real input (`page.mouse`, `page.keyboard`), one view: Refined, phosphor, 1280.
+// (Fix round 2, review 1106.) jsdom keeps no input modality worth trusting for `:focus-visible`, so what a click leaves
+// behind, and what Escape hands back, are held here.
+describe('the flyout\'s focus rules', () => {
+  const view: AppView = { width: 1280, skin: REFINED, theme: GEOMETRY_THEME };
+  const STRIP = 'header.shell-accounts .accounts-strip';
+
+  it(`Escape closes the flyout a keyboard opened and hands focus to a card of the line: ${named(view)}`, async () => {
+    const { ctx, page, errors } = await openFoldedDesk(view);
+    try {
+      await page.hover(STRIP);
+      await page.waitForSelector('.accounts-flyout', { timeout: 5_000 });
+      // Keyboard focus on the line's tab stop, then a real Tab: the next stop in the strip is the flyout's.
+      await page.focus(`${STRIP} > .account-gauge[tabindex="0"]`);
+      await page.keyboard.press('Tab');
+      const inFlyout = await page.evaluate(() => document.activeElement?.closest('.accounts-flyout') !== null);
+      expect(inFlyout, 'Tab from the line reached a card of the flyout').toBe(true);
+      await page.keyboard.press('Escape');
+      await page.waitForSelector('.accounts-flyout', { state: 'detached', timeout: 2_000 });
+      const where = await page.evaluate(() => {
+        const a = document.activeElement;
+        return { isCard: a?.classList.contains('account-gauge') === true, inLine: a?.parentElement?.classList.contains('accounts-strip') === true, flyout: a?.closest('.accounts-flyout') !== null };
+      });
+      expect(where, 'focus after Escape is a card of the line, not the page').toEqual({ isCard: true, inLine: true, flyout: false });
+      // It stays shut: the pointer is still on the strip, and nothing has entered or arrived since.
+      await page.waitForTimeout(FLYOUT_OPEN_MS + 400);
+      expect(await page.locator('.accounts-flyout').count(), 'the flyout stays shut after Escape').toBe(0);
+      expect(errors).toEqual([]);
+    } finally {
+      await ctx.close();
+    }
+  }, 90_000);
+
+  it(`a click's focus never holds the flyout: hover-open, click All accounts, move off the strip, and it closes within the grace: ${named(view)}`, async () => {
+    const { ctx, page, errors } = await openFoldedDesk(view);
+    try {
+      await page.hover(STRIP);
+      await page.waitForSelector('.accounts-flyout', { timeout: 5_000 });
+      await page.click(`${STRIP} .accounts-end button:last-of-type`);
+      const focused = await page.evaluate(() => ({
+        inEnd: document.activeElement?.closest('.accounts-end') !== null,
+        visible: document.activeElement?.matches(':focus-visible') ?? null,
+      }));
+      expect(focused, 'the click left focus on All accounts, and Chrome calls it not focus-visible').toEqual({ inEnd: true, visible: false });
+      await page.mouse.move(view.width / 2, 880);
+      const leftAt = Date.now();
+      await page.waitForSelector('.accounts-flyout', { state: 'detached', timeout: FLYOUT_CLOSE_MS + 2_000 });
+      const closed = Date.now() - leftAt;
+      expect(closed, `the flyout closed after ${closed} ms, before its ${FLYOUT_CLOSE_MS} ms grace`).toBeGreaterThanOrEqual(FLYOUT_CLOSE_MS - 20);
+      expect(errors).toEqual([]);
+    } finally {
+      await ctx.close();
+    }
+  }, 90_000);
+});
