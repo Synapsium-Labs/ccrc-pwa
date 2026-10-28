@@ -1,9 +1,10 @@
 import '@testing-library/jest-dom/vitest';
 import { cleanup } from '@testing-library/react';
 import { afterEach, vi } from 'vitest';
+import { setStripExpanded } from '../src/fleet/stripExpanded';
 import { useFleetStore } from '../src/stores/fleet';
 
-// ONE teardown hook doing two unrelated jobs, merged deliberately rather than
+// ONE teardown hook doing three unrelated jobs, merged deliberately rather than
 // registered as two: both arrived in the same week from different branches
 // (the socket teardown from Stage 3a, the Radix timer flush from the
 // draft-conflict flake fix), and each carried an ordering claim about the
@@ -34,9 +35,11 @@ import { useFleetStore } from '../src/stores/fleet';
 //
 // A no-op wherever nothing connected: `disconnect()` on an unconnected store
 // removes two listeners that were never added and returns. It is deliberately
-// the FIRST thing in this file's teardown and this file's only `src/` import —
-// a global hook that reached further into the app would be a fixture pretending
-// to be a harness.
+// the FIRST thing in this file's teardown, and the fleet store the only app state
+// it reaches for — a global hook that reached further into the app would be a
+// fixture pretending to be a harness. (The one other reach is (3)'s fold memory,
+// `stripExpanded`, which is a module value plus a storage key, so only this hook
+// can reset both for every file.)
 //
 // (2) Radix's FocusScope returns focus on unmount from a `setTimeout(..., 0)`
 // (@radix-ui/react-focus-scope dist/index.mjs, the unmount CustomEvent). A
@@ -55,9 +58,24 @@ import { useFleetStore } from '../src/stores/fleet';
 // fake time instead; files that restore real timers in their own afterEach
 // ran it already — vitest's stack hook order runs this setup-registered hook
 // last.
+//
+// (3) THE LANES STRIP'S FOLD CHOICE IS FORGOTTEN AFTER EVERY TEST.
+//
+// `stripExpanded.ts` keeps the operator's choice twice: in `localStorage`
+// (`ccrc-accounts-strip`) and in a module value that holds it for the page when
+// storage refuses. Either one alone would leak an expanded strip into the next
+// test, which reads folded by default. `setStripExpanded(false)` clears the
+// module value (and writes `folded`); the `removeItem` after it then clears the
+// key, so a test starts with nothing stored, as a first visit does.
 afterEach(async () => {
   useFleetStore.getState().disconnect();
   cleanup();
+  setStripExpanded(false);
+  try {
+    window.localStorage.removeItem('ccrc-accounts-strip');
+  } catch {
+    /* a file on the node environment has no window, and a test may have made storage throw: nothing to clear then */
+  }
   if (vi.isFakeTimers()) {
     vi.runOnlyPendingTimers();
   } else {

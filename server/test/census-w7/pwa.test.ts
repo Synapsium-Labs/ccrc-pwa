@@ -308,8 +308,8 @@ describe('W7 PWA census: REAL rows (reporting, not ratcheting; spec §5.1 rule 3
 
   it('storageOwners(): 10 files naming localStorage, none sessionStorage', () => {
     const sites = storageOwners();
-    held('storageOwners', sites, 10);
-    expect(countBy(sites, (s) => s.kind)).toEqual({ localStorage: 10 });
+    held('storageOwners', sites, 11);
+    expect(countBy(sites, (s) => s.kind)).toEqual({ localStorage: 11 });
   });
 
   it('storageTypes(): 1 local storage type', () => {

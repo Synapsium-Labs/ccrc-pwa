@@ -19,13 +19,29 @@
 //  5. The meter's inset ring (D-6329) reaches the session screen: the Workflows strip draws a `Meter` per row, and each
 //     track wears the 1 px inset ring in the tertiary ink (review 940 O5).
 //
+// THE FOLD AND ITS FLYOUT (desktop polish S5b, D-6530; R120's `strip-hover-flyout`; `lanes-tie-break-soonest-reset`). The
+// strip folds by default, so the cases above that count or place all seventeen cards seed the stored choice expanded
+// (`seedStripExpanded`), and what the fold itself draws is held at the end of the file, with the shared seventeen-lane
+// fixture (`test/seventeenLanes.ts`), these geometry cases under one palette (`GEOMETRY_THEME`): (6) folded, at 900, 1280
+// and 1920 in both skins, the row is one line,
+// `rowFit`'s tracks less one of cards (2, 3 and 6) in the freest-first order, then the end cell, one track wide, holding
+// the control and All accounts, every item at one top, nothing cut or sideways; (7) expanded, every lane wraps and the end
+// cell follows the last card; (8) from 1920 to 1280 the folded row re-fits, and back; (9) at 1280 and 1920 hovering the
+// folded line opens, after the flyout's delay, a panel below it, drawn over the content (positioned, the element at each
+// card's centre its own), holding every lane in order inside the viewport, pushing the first session row nowhere, and
+// closing after its grace once the pointer leaves. The expected order is worked out here from the rule, tie keys and all
+// (`orderOf`), never by the app's decider.
+//
 // Run: `( cd pwa && CCRC_CHROME=<a Chrome or Chromium binary> ./node_modules/.bin/vitest run --config vitest.browser.config.ts --maxWorkers=2 browser/lanes-row.browser.test.ts )`.
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import path from 'node:path';
 import { chromium, type Browser, type Page } from 'playwright-core';
 import { INSTRUMENT, PHOSPHOR, REFINED } from '@ccrc/ui';
 import { resolveChrome } from './harness';
-import { buildDist, openApp, removeDist, serveDist, type AppFixture, type AppView, type DistServer } from './app';
+import { buildDist, openApp, removeDist, seedStripExpanded, serveDist, type AppFixture, type AppView, type DistServer } from './app';
 import { fleetSession } from '../test/fleetFixture';
+import { seventeenLanes } from '../test/seventeenLanes';
+import { FLYOUT_CLOSE_MS, FLYOUT_OPEN_MS, foldShown, LANE_CARD_MIN, rowFit } from '../src/fleet/stripFold';
 import type { WorkflowView } from '../../shared/workflows';
 
 const THEMES = [PHOSPHOR, 'light'];
@@ -61,17 +77,36 @@ const LANES: readonly Lane[] = Array.from({ length: 17 }, (_, i) => {
 });
 
 /** The lanes most free first, worked out here from the rule and not by the app's decider: by the fuller window, lowest
- *  first, ties in roster order; a lane never read and a lane signed out go last, in roster order. */
-function expectedOrder(): string[] {
+ *  first; lanes that tie on it by that window's reset, soonest first (a lane with no reset after one with a reset), then by
+ *  the other window's use, lowest first (an unmeasured one after a measured one), then in roster order
+ *  (lanes-tie-break-soonest-reset). The fuller window is the weekly one on a tie between the windows. A lane never read
+ *  and a lane signed out go last, in roster order. */
+function orderOf(lanes: readonly Lane[]): string[] {
+  const num = (l: Lane, k: string): number | null => (typeof l.acct[k] === 'number' ? (l.acct[k] as number) : null);
   const used = (l: Lane): number | null => {
-    const known = [l.acct['five'], l.acct['seven']].filter((p): p is number => typeof p === 'number');
+    const known = [num(l, 'five'), num(l, 'seven')].filter((p): p is number => p !== null);
     return known.length === 0 ? null : Math.max(...known);
   };
-  const ranked = LANES.map((l, i) => ({ l, i, pct: used(l) })).filter((e) => e.pct !== null && e.l.acct['authDead'] !== true);
-  const last = LANES.filter((l) => used(l) === null || l.acct['authDead'] === true);
-  ranked.sort((x, y) => x.pct! - y.pct! || x.i - y.i);
+  // The binding window's reset and the other window's use, Infinity where nothing is known so unknown sorts after known.
+  const keys = (l: Lane): { reset: number; other: number } => {
+    const five = num(l, 'five');
+    const seven = num(l, 'seven');
+    const sevenBinds = seven !== null && seven === used(l);
+    return {
+      reset: (sevenBinds ? num(l, 'sevenResetAt') : num(l, 'fiveResetAt')) ?? Infinity,
+      other: (sevenBinds ? five : seven) ?? Infinity,
+    };
+  };
+  const ranked = lanes.map((l, i) => ({ l, i, pct: used(l), ...keys(l) })).filter((e) => e.pct !== null && e.l.acct['authDead'] !== true);
+  const last = lanes.filter((l) => used(l) === null || l.acct['authDead'] === true);
+  const cmp = (a: number, b: number): number => (a < b ? -1 : a > b ? 1 : 0);
+  ranked.sort((x, y) => cmp(x.pct!, y.pct!) || cmp(x.reset, y.reset) || cmp(x.other, y.other) || x.i - y.i);
   return [...ranked.map((e) => e.l.label), ...last.map((l) => l.label)];
 }
+
+/** The order of this file's own seventeen lanes. The long-named lane (index 7) and `lane-q` tie at 64% (the weekly window
+ *  of one, the 5h of the other), so the soonest reset puts `lane-q` first; the roster alone would put the long name. */
+const expectedOrder = (): string[] => orderOf(LANES);
 
 /** Per lane, the windows its card must show, and for each whether a countdown must print (a reset ahead, not rolled over). */
 function expectedWindows(): Record<string, Array<{ win: string; counted: boolean }>> {
@@ -139,9 +174,11 @@ afterAll(async () => {
   removeDist(dist);
 });
 
-/** Open the app and wait until the desk bar, all seventeen cards and its New session door are in place. */
+/** Open the app and wait until the desk bar, all seventeen cards and its New session door are in place. The strip folds by
+ *  default (S5b, D-6530), so this opener seeds the stored choice expanded: it is the all-lanes opener. */
 async function openDesk(view: AppView, fixture: AppFixture = FIXTURE): Promise<Awaited<ReturnType<typeof openApp>>> {
   const opened = await openApp(browser!, view, fixture);
+  await seedStripExpanded(opened.ctx);
   await opened.page.goto(server!.origin + '/');
   await opened.page.waitForFunction(() => document.querySelectorAll('header.shell-accounts .account-gauge').length === 17
     && document.querySelector('.ref-bar-new, .ins-new') !== null, undefined, { timeout: 30_000 });
@@ -218,11 +255,13 @@ describe("at 900, 1280 and 1920 the lanes row spans the header under the bar's l
 
           // All accounts: the go-accounts door, in the track after the last card (same line, to its right).
           const end = row.querySelector<HTMLElement>('.accounts-end');
-          const door = end?.querySelector<HTMLElement>('button');
+          const door = end?.querySelector<HTMLElement>('[data-command="go-accounts"]'); // not 'button': the fold's control may come first
           if (end === null || door === null || door === undefined) out.push('no All accounts cell');
           else {
             if (door.textContent?.trim() !== 'All accounts') out.push(`the end door reads "${door.textContent}"`);
-            if (door.getAttribute('data-command') !== 'go-accounts') out.push(`the end door's command is ${door.getAttribute('data-command')}`);
+            // The tab order the plan states: the control, when there is one, comes before All accounts.
+            const control = end!.querySelector<HTMLElement>('[aria-expanded]');
+            if (control === null || !(control.compareDocumentPosition(door) & Node.DOCUMENT_POSITION_FOLLOWING)) out.push('the fold control does not precede All accounts');
             if (cards.at(-1)!.compareDocumentPosition(end) !== Node.DOCUMENT_POSITION_FOLLOWING) out.push('All accounts does not follow the last card in the DOM');
             const er = end.getBoundingClientRect();
             const dr = door.getBoundingClientRect();
@@ -310,6 +349,7 @@ describe('in Refined with a release waiting the update row sits below the banner
       const waiting: AppFixture = { ...FIXTURE, api: { ...FIXTURE.api, '/api/updates': HALTED, '/api/fleet/health': HOST_DOWN } };
       const { ctx, page, errors } = await openApp(browser!, view, waiting);
       try {
+        await seedStripExpanded(ctx); // the row's cards are counted below: every lane
         const answers = await answerViewThenFail(page);
         await page.goto(server!.origin + '/');
         await page.waitForFunction(() => document.querySelectorAll('header.shell-accounts .account-gauge').length === 17
@@ -366,6 +406,7 @@ describe('under coarse emulation every card and All accounts is at least 44 px t
       const opened = await openApp(browser!, view, view.width < 900 ? PHONE_FIXTURE : FIXTURE);
       const { ctx, page, errors } = opened;
       try {
+        await seedStripExpanded(ctx); // every card is measured, not just the folded line's
         await page.goto(server!.origin + '/');
         await page.waitForFunction((n) => document.querySelectorAll('.accounts-strip .account-gauge').length === n, want, { timeout: 30_000 });
         await page.waitForTimeout(300);
@@ -373,10 +414,13 @@ describe('under coarse emulation every card and All accounts is at least 44 px t
           if (!matchMedia('(pointer: coarse)').matches) return ['the coarse pointer was not emulated'];
           const out: string[] = [];
           const cards = [...document.querySelectorAll<HTMLElement>('.accounts-strip .account-gauge')];
-          const end = document.querySelector<HTMLElement>('.accounts-strip .accounts-end button');
+          const end = document.querySelector<HTMLElement>('.accounts-strip .accounts-end [data-command="go-accounts"]');
+          // The fold's control (the strip is expanded here, so it reads "Show fewer") is a finger's height too.
+          const control = document.querySelector<HTMLElement>('.accounts-strip .accounts-end [aria-expanded]');
           if (cards.length !== count) out.push(`${cards.length} cards, not ${count}`);
           if (end === null) out.push('no All accounts');
-          for (const el of [...cards, ...(end === null ? [] : [end])]) {
+          if (control === null) out.push('no fold control');
+          for (const el of [...cards, ...(end === null ? [] : [end]), ...(control === null ? [] : [control])]) {
             const r = el.getBoundingClientRect();
             if (r.height < 43.5) out.push(`${el.querySelector('.account-gauge-label')?.textContent ?? el.textContent?.trim() ?? '?'} is ${Math.round(r.width)} x ${r.height.toFixed(1)}`);
           }
@@ -507,4 +551,342 @@ describe("the meter's inset ring reaches WorkflowStrip on the session screen", (
       }
     }, 90_000);
   }
+});
+
+// THE FOLD AT THE DESK (desktop polish S5b, D-6530; R48) and its flyout (R120, strip-hover-flyout). The strip folds by
+// default: with the shared seventeen-lane fixture (`test/seventeenLanes.ts`, which is not this file's own `LANES`) the row
+// is ONE line, as many cards as `rowFit` says the line's tracks hold less the one the end cell takes, then the end cell with
+// the fold's control and All accounts. The cards' group measures 868, 1248 and 1888 px with an 8 px gap at 900, 1280 and
+// 1920 in both skins (measured, T2c's Step 0 and this leg), so a line holds 3, 4 and 7 tracks and a folded one shows 2, 3
+// and 6 cards.
+const FOLD = seventeenLanes(nowSec);
+const FOLD_LANES: readonly Lane[] = FOLD.cases.map((c) => ({ acct: { ...c.acct }, label: c.label }));
+const FOLD_ORDER = orderOf(FOLD_LANES);
+const FOLD_FIXTURE: AppFixture = {
+  api: { '/api/feed': { events: [] }, '/api/accounts': { accounts: FOLD.accounts, projected: null, roster: FOLD.roster } },
+  // Nine sessions, so the fleet list has a first session row to measure: the flyout must push nothing down.
+  fleetFrames: [{ type: 'fleet', sessions: Array.from({ length: 9 }, (_, i) => fleetSession({
+    id: `s${i}`, project: `project-${i % 3}`, bucket: i === 0 ? 'attention' : 'idle',
+  })) }],
+};
+/** The cards a folded line shows at each width, the same in both skins: asserted beside `rowFit`'s own answer. */
+const FOLDED_CARDS: Readonly<Record<number, number>> = { 900: 2, 1280: 3, 1920: 6 };
+
+/** Open the app with the fold's fixture: folded (the default) or, with `expanded`, seeded to show every lane. Waits for the
+ *  fold's control, which only renders once the row has been measured, and for the first session row. */
+async function openFoldedDesk(view: AppView, expanded = false): Promise<Awaited<ReturnType<typeof openApp>>> {
+  const opened = await openApp(browser!, view, FOLD_FIXTURE);
+  if (expanded) await seedStripExpanded(opened.ctx);
+  await opened.page.goto(server!.origin + '/');
+  await opened.page.waitForFunction((all) => document.querySelector('header.shell-accounts .accounts-end [aria-expanded]') !== null
+    && document.querySelector('.sess-line') !== null
+    && (!all || document.querySelectorAll('header.shell-accounts .account-gauge').length === 17), expanded, { timeout: 30_000 });
+  await opened.page.waitForTimeout(400); // layout settles
+  return opened;
+}
+
+/** What the strip's line measures at this moment: the cards' group's content width and column gap (what `useRowWidth`
+ *  reads), and every box the fold's line is made of. Plain numbers and words, so the case judges them in Node. */
+interface LineMeasure {
+  width: number; gap: number; vw: number;
+  names: string[]; mounted: number;
+  cards: Array<{ left: number; right: number; top: number; bottom: number }>;
+  end: { left: number; right: number; top: number; bottom: number } | null;
+  control: { left: number; right: number; top: number; bottom: number; text: string; expanded: string | null; cut: boolean } | null;
+  door: { left: number; right: number; top: number; bottom: number; cut: boolean } | null;
+  row: { left: number; right: number };
+  /** Faults in the readings of each card of the line: every window, percentage and countdown has a box inside its card, is
+   *  not cut, and is the element at its own centre (the all-lanes case's check, for the folded line). */
+  readings: string[];
+  sideways: string[];
+}
+
+function measureLine(): LineMeasure {
+  const strip = document.querySelector<HTMLElement>('header.shell-accounts .accounts-strip')!;
+  const cs = getComputedStyle(strip);
+  const box = (el: Element): { left: number; right: number; top: number; bottom: number } => {
+    const r = el.getBoundingClientRect();
+    return { left: r.left, right: r.right, top: r.top, bottom: r.bottom };
+  };
+  const cards = [...strip.querySelectorAll<HTMLElement>(':scope > .account-gauge')];
+  const end = strip.querySelector<HTMLElement>(':scope > .accounts-end');
+  const control = end?.querySelector<HTMLElement>('[aria-expanded]') ?? null;
+  const door = end?.querySelector<HTMLElement>('[data-command="go-accounts"]') ?? null;
+  const header = document.querySelector<HTMLElement>('header.shell-accounts')!;
+  const sideways: string[] = [];
+  if (document.documentElement.scrollWidth > window.innerWidth + 0.5) sideways.push('the page');
+  if (header.scrollWidth > header.clientWidth + 0.5) sideways.push('the header');
+  if (strip.scrollWidth > strip.clientWidth + 0.5) sideways.push('the row');
+  const sr = strip.getBoundingClientRect();
+  const readings: string[] = [];
+  for (const card of cards) {
+    const name = card.querySelector('.account-gauge-label')?.textContent ?? '?';
+    const cr = card.getBoundingClientRect();
+    if (card.scrollWidth > card.clientWidth + 0.5) readings.push(`${name}'s card holds more than it shows`);
+    for (const el of card.querySelectorAll<HTMLElement>('.acct-reset, .acct-pct, .acct-win')) {
+      const er = el.getBoundingClientRect();
+      const what = `${name}'s ${el.className.split(' ')[0]} "${el.textContent}"`;
+      if (el.getClientRects().length === 0 || er.width < 1 || er.height < 1) { readings.push(`${what} has no box`); continue; }
+      if (er.left < cr.left - 0.5 || er.right > cr.right + 0.5 || er.top < cr.top - 0.5 || er.bottom > cr.bottom + 0.5) readings.push(`${what} is outside its card`);
+      if (el.scrollWidth > el.clientWidth + 0.5) readings.push(`${what} is cut`);
+      const hit = document.elementFromPoint((er.left + er.right) / 2, (er.top + er.bottom) / 2);
+      if (hit === null || !el.contains(hit)) readings.push(`${what} is covered by ${hit?.className ?? 'nothing'}`);
+    }
+  }
+  return {
+    width: strip.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight), gap: parseFloat(cs.columnGap) || 0, vw: window.innerWidth,
+    names: cards.map((c) => c.querySelector('.account-gauge-label')?.textContent ?? ''), mounted: document.querySelectorAll('.account-gauge').length,
+    cards: cards.map(box), end: end === null ? null : box(end),
+    control: control === null ? null : { ...box(control), text: control.textContent ?? '', expanded: control.getAttribute('aria-expanded'), cut: control.scrollWidth > control.clientWidth + 0.5 },
+    door: door === null ? null : { ...box(door), cut: door.scrollWidth > door.clientWidth + 0.5 },
+    row: { left: sr.left, right: sr.right }, readings, sideways,
+  };
+}
+
+/** The faults of a FOLDED line at `width`: `rowFit`'s tracks less one of cards, in the freest-first order, then the end
+ *  cell (one track) holding the control and All accounts, every item at one top, nothing cut or sideways. The count is
+ *  worked out from the measured width and gap by the L1 functions and held against the figure the width gives. */
+async function foldedFaults(page: Page, width: number): Promise<string[]> {
+  const m = await page.evaluate(measureLine);
+  const out: string[] = [];
+  const tracks = rowFit(m.width, LANE_CARD_MIN, m.gap);
+  const want = foldShown(true, tracks);
+  if (want !== FOLDED_CARDS[width]) out.push(`${m.width} px and a ${m.gap} px gap fit ${tracks} tracks and fold to ${want} cards, not ${FOLDED_CARDS[width]}`);
+  if (m.names.length !== want) out.push(`${m.names.length} cards, not ${want}`);
+  if (m.mounted !== m.names.length) out.push(`${m.mounted} cards are mounted, the line shows ${m.names.length}: a lane is mounted and hidden`);
+  if (m.names.join('|') !== FOLD_ORDER.slice(0, m.names.length).join('|')) out.push(`the cards read [${m.names}], not the freest first [${FOLD_ORDER.slice(0, m.names.length)}]`);
+  const { end, control, door } = m;
+  if (end === null || control === null || door === null) return [...out, 'the end cell lacks its control or All accounts'];
+  const tops = [...m.cards.map((c) => c.top), end.top, control.top];
+  if (Math.max(...tops) - Math.min(...tops) > 1) out.push(`the line's items are not at one top (${tops.map((t) => t.toFixed(1))})`);
+  const last = m.cards.at(-1)!;
+  for (let i = 1; i < m.cards.length; i++) if (m.cards[i]!.left < m.cards[i - 1]!.right - 0.5) out.push('the cards are not left to right');
+  if (end.left < last.right - 0.5) out.push(`the end cell (left ${end.left}) is not after the last card (right ${last.right})`);
+  if (Math.abs((end.right - end.left) - (last.right - last.left)) > 1.5) out.push(`the end cell is ${Math.round(end.right - end.left)} px wide, one track is ${Math.round(last.right - last.left)}`);
+  if (end.right > m.row.right + 0.5) out.push('the end cell runs past the row');
+  if (control.left < end.left - 0.5 || control.right > end.right + 0.5) out.push(`the control is not whole in the end cell (${control.left}..${control.right} in ${end.left}..${end.right})`);
+  if (door.left < end.left - 0.5 || door.right > end.right + 0.5 || door.top < end.top - 0.5 || door.bottom > end.bottom + 0.5) out.push('All accounts is not whole in the end cell');
+  if (door.left < control.right - 0.5 && door.top < control.bottom - 0.5 && door.bottom > control.top + 0.5) out.push('All accounts overlaps the control');
+  if (control.cut) out.push("the control's words are cut");
+  if (door.cut) out.push("All accounts' words are cut");
+  if (control.expanded !== 'false') out.push(`the control's aria-expanded is ${control.expanded}`);
+  const words = `+${17 - m.names.length} more · 1 sign-in expired · 1 rate-limited`;
+  if (control.text !== words) out.push(`the control reads "${control.text}", not "${words}"`);
+  out.push(...m.readings);
+  if (m.sideways.length > 0) out.push(`${m.sideways.join(', ')} scrolls sideways`);
+  return out;
+}
+
+/** The folded line's views: both skins and the three desk widths, under one palette. The fold's cases measure geometry
+ *  (card counts, tops, lefts, overlap, scroll width), which a palette does not change, so a second palette would only
+ *  repeat the measure (the browser leg runs against a time cap); the cases that read a colour keep both palettes. */
+const GEOMETRY_THEME = PHOSPHOR;
+const FOLD_VIEWS: AppView[] = DESKS.filter((v) => v.theme === GEOMETRY_THEME);
+
+describe('folded, the lanes row is one line of the freest cards and the end cell', () => {
+  for (const view of FOLD_VIEWS) {
+    it(`folded with 17 lanes at 900, 1280 and 1920 in both skins, the row is one line: rowFit's tracks less one of cards, then the end cell with the control and All accounts, every item at one top, and nothing scrolls sideways: ${named(view)}`, async () => {
+      const { ctx, page, errors } = await openFoldedDesk(view);
+      try {
+        expect(await foldedFaults(page, view.width)).toEqual([]);
+        expect(errors).toEqual([]);
+      } finally {
+        await ctx.close();
+      }
+    }, 90_000);
+  }
+});
+
+describe('expanded, every lane wraps and the end cell follows the last card', () => {
+  for (const view of FOLD_VIEWS) {
+    it(`expanded, every lane wraps and the end cell follows the last card: ${named(view)}`, async () => {
+      const { ctx, page, errors } = await openFoldedDesk(view, true);
+      try {
+        const m = await page.evaluate(measureLine);
+        const tracks = rowFit(m.width, LANE_CARD_MIN, m.gap)!;
+        const out: string[] = [];
+        if (m.names.join('|') !== FOLD_ORDER.join('|')) out.push(`the cards read [${m.names}], not every lane freest first [${FOLD_ORDER}]`);
+        const rows = new Set(m.cards.map((c) => Math.round(c.top))).size;
+        if (rows !== Math.ceil(17 / tracks)) out.push(`${rows} lines of cards, not ${Math.ceil(17 / tracks)} (${tracks} tracks hold 17)`);
+        const { end, control, door } = m;
+        if (end === null || control === null || door === null) out.push('the end cell lacks its control or All accounts');
+        else {
+          const last = m.cards.at(-1)!;
+          if (end.left < last.right - 0.5) out.push(`the end cell (left ${end.left}) is not after the last card (right ${last.right})`);
+          const mid = (end.top + end.bottom) / 2;
+          if (mid < last.top - 0.5 || mid > last.bottom + 0.5) out.push("the end cell is not on the last card's line");
+          if (control.text !== 'Show fewer' || control.expanded !== 'true') out.push(`the control reads "${control.text}", aria-expanded ${control.expanded}`);
+          if (control.cut || door.cut) out.push('the end cell\'s words are cut');
+          if (control.right > end.right + 0.5 || door.right > end.right + 0.5) out.push('the end cell holds more than it shows');
+        }
+        for (const [i, c] of m.cards.entries()) if (c.left < m.row.left - 0.5 || c.right > m.row.right + 0.5) out.push(`${m.names[i]} is not whole in the row`);
+        if (m.sideways.length > 0) out.push(`${m.sideways.join(', ')} scrolls sideways`);
+        expect(out).toEqual([]);
+        expect(errors).toEqual([]);
+      } finally {
+        await ctx.close();
+      }
+    }, 90_000);
+  }
+});
+
+describe('the folded row re-fits when the window changes', () => {
+  for (const skin of SKINS) {
+    for (const theme of [GEOMETRY_THEME]) {
+      it(`from 1920 to 1280 the folded row re-fits: ${named({ skin, theme, width: 1920 })}`, async () => {
+        const { ctx, page, errors } = await openFoldedDesk({ skin, theme, width: 1920 });
+        try {
+          expect(await foldedFaults(page, 1920), 'at 1920').toEqual([]);
+          await page.setViewportSize({ width: 1280, height: 900 });
+          await page.waitForFunction(() => document.querySelectorAll('header.shell-accounts .accounts-strip > .account-gauge').length === 3, undefined, { timeout: 10_000 });
+          await page.waitForTimeout(300);
+          expect(await foldedFaults(page, 1280), 'at 1280').toEqual([]);
+          await page.setViewportSize({ width: 1920, height: 900 });
+          await page.waitForFunction(() => document.querySelectorAll('header.shell-accounts .accounts-strip > .account-gauge').length === 6, undefined, { timeout: 10_000 });
+          await page.waitForTimeout(300);
+          expect(await foldedFaults(page, 1920), 'back at 1920').toEqual([]);
+          expect(errors).toEqual([]);
+        } finally {
+          await ctx.close();
+        }
+      }, 90_000);
+    }
+  }
+});
+
+// The flyout: hovering the folded line opens a panel below it, drawn over the content, holding every lane in order. When
+// `CCRC_BROWSER_SHOTS` names a directory, each view's open flyout is screenshotted into it (never written otherwise).
+const FLYOUT_VIEWS: AppView[] = FOLD_VIEWS.filter((v) => v.width >= 1280);
+
+describe('hovering the folded line opens a flyout below it', () => {
+  for (const view of FLYOUT_VIEWS) {
+    it(`hovering the folded line opens a flyout below it, drawn over the content, holding every lane in order, and nothing scrolls sideways: ${named(view)}`, async () => {
+      const { ctx, page, errors } = await openFoldedDesk(view);
+      try {
+        const sessTop = (): Promise<number> => page.evaluate(() => document.querySelector('.sess-line')!.getBoundingClientRect().top);
+        const before = await sessTop();
+        expect(await page.locator('.accounts-flyout').count(), 'no flyout before the pointer comes').toBe(0);
+
+        const hoveredAt = Date.now();
+        await page.hover('header.shell-accounts .accounts-strip');
+        await page.waitForSelector('.accounts-flyout', { timeout: 5_000 });
+        const opened = Date.now() - hoveredAt;
+        expect(opened, `the flyout opened after ${opened} ms, before its ${FLYOUT_OPEN_MS} ms delay`).toBeGreaterThanOrEqual(FLYOUT_OPEN_MS - 20);
+        await page.waitForTimeout(100); // paint
+
+        const found = await page.evaluate(() => {
+          const strip = document.querySelector<HTMLElement>('header.shell-accounts .accounts-strip')!;
+          const fly = strip.querySelector<HTMLElement>('.accounts-flyout')!;
+          const cards = [...fly.querySelectorAll<HTMLElement>('.account-gauge')];
+          const line = [...strip.querySelectorAll<HTMLElement>(':scope > .account-gauge, :scope > .accounts-end')];
+          const fr = fly.getBoundingClientRect();
+          const header = document.querySelector<HTMLElement>('header.shell-accounts')!;
+          return {
+            names: cards.map((c) => c.querySelector('.account-gauge-label')?.textContent ?? ''),
+            flyTop: fr.top, flyBottom: fr.bottom, flyLeft: fr.left, flyRight: fr.right, lineBottom: Math.max(...line.map((e) => e.getBoundingClientRect().bottom)),
+            headerBottom: header.getBoundingClientRect().bottom, position: getComputedStyle(fly).position, vw: window.innerWidth,
+            // Its stacking level and the content's, as computed (`auto` reads NaN, taken as 0): at 1920 the panel ends above the
+            // first session row, so hit-testing alone cannot tell it from a panel in flow.
+            z: Number.parseInt(getComputedStyle(fly).zIndex, 10) || 0,
+            contentZ: Math.max(...['main.shell-detail', '.shell-banners', '.sess-line'].map((sel) => Number.parseInt(getComputedStyle(document.querySelector(sel) ?? document.body).zIndex, 10) || 0)), vh: window.innerHeight,
+            cards: cards.map((c) => {
+              const r = c.getBoundingClientRect();
+              const hit = document.elementFromPoint((r.left + r.right) / 2, (r.top + r.bottom) / 2);
+              return { right: r.right, left: r.left, top: r.top, bottom: r.bottom, ownHit: hit !== null && c.contains(hit) };
+            }),
+            sideways: [
+              document.documentElement.scrollWidth > window.innerWidth + 0.5 ? 'the page' : '',
+              header.scrollWidth > header.clientWidth + 0.5 ? 'the header' : '',
+              fly.scrollWidth > fly.clientWidth + 0.5 ? 'the flyout' : '',
+            ].filter((x) => x !== ''),
+          };
+        });
+        const out: string[] = [];
+        if (found.names.join('|') !== FOLD_ORDER.join('|')) out.push(`the flyout reads [${found.names}], not every lane freest first [${FOLD_ORDER}]`);
+        if (found.flyTop < found.lineBottom - 0.5) out.push(`the flyout (top ${found.flyTop}) is not below the line (bottom ${found.lineBottom})`);
+        if (found.position !== 'absolute' && found.position !== 'fixed') out.push(`the flyout is ${found.position}-positioned: it must be drawn over the content, not placed in it`);
+        if (found.z <= found.contentZ || found.z <= 0) out.push(`the flyout's z-index (${found.z}) is not above the content's (${found.contentZ})`);
+        if (found.flyBottom <= found.headerBottom) out.push(`the flyout (bottom ${found.flyBottom}) does not reach past the header (bottom ${found.headerBottom})`);
+        for (const [i, c] of found.cards.entries()) {
+          if (c.right > found.vw + 0.5 || c.left < -0.5) out.push(`${found.names[i]}'s card is outside the viewport horizontally (${c.left}..${c.right})`);
+          if (c.top < -0.5 || c.bottom > found.vh + 0.5) out.push(`${found.names[i]}'s card is outside the viewport vertically (${c.top}..${c.bottom})`);
+          if (!c.ownHit) out.push(`the element at the centre of ${found.names[i]}'s card is not the card: the flyout is drawn under something`);
+        }
+        if (found.sideways.length > 0) out.push(`${found.sideways.join(', ')} scrolls sideways`);
+        const after = await sessTop();
+        if (Math.abs(after - before) > 0.5) out.push(`the first session row moved from ${before} to ${after}: the flyout pushes the content`);
+        expect(out).toEqual([]);
+
+        const shots = process.env['CCRC_BROWSER_SHOTS'];
+        if (shots !== undefined && shots !== '') await page.screenshot({ path: path.join(shots, `flyout-${view.skin}-${view.theme}-${view.width}.png`) });
+
+        // The pointer leaves: the flyout stays for the grace, then closes.
+        const leftAt = Date.now();
+        await page.mouse.move(view.width / 2, 880);
+        await page.waitForSelector('.accounts-flyout', { state: 'detached', timeout: 5_000 });
+        const closed = Date.now() - leftAt;
+        expect(closed, `the flyout closed after ${closed} ms, before its ${FLYOUT_CLOSE_MS} ms grace`).toBeGreaterThanOrEqual(FLYOUT_CLOSE_MS - 20);
+        expect(await sessTop(), 'the first session row, once closed').toBeCloseTo(before, 0);
+        expect(errors).toEqual([]);
+      } finally {
+        await ctx.close();
+      }
+    }, 90_000);
+  }
+});
+
+// The flyout's focus rules in real Chrome, with real input (`page.mouse`, `page.keyboard`), one view: Refined, phosphor, 1280.
+// (Fix round 2, review 1106.) jsdom keeps no input modality worth trusting for `:focus-visible`, so what a click leaves
+// behind, and what Escape hands back, are held here.
+describe('the flyout\'s focus rules', () => {
+  const view: AppView = { width: 1280, skin: REFINED, theme: GEOMETRY_THEME };
+  const STRIP = 'header.shell-accounts .accounts-strip';
+
+  it(`Escape closes the flyout a keyboard opened and hands focus to a card of the line: ${named(view)}`, async () => {
+    const { ctx, page, errors } = await openFoldedDesk(view);
+    try {
+      await page.hover(STRIP);
+      await page.waitForSelector('.accounts-flyout', { timeout: 5_000 });
+      // Keyboard focus on the line's tab stop, then a real Tab: the next stop in the strip is the flyout's.
+      await page.focus(`${STRIP} > .account-gauge[tabindex="0"]`);
+      await page.keyboard.press('Tab');
+      const inFlyout = await page.evaluate(() => document.activeElement?.closest('.accounts-flyout') !== null);
+      expect(inFlyout, 'Tab from the line reached a card of the flyout').toBe(true);
+      await page.keyboard.press('Escape');
+      await page.waitForSelector('.accounts-flyout', { state: 'detached', timeout: 2_000 });
+      const where = await page.evaluate(() => {
+        const a = document.activeElement;
+        return { isCard: a?.classList.contains('account-gauge') === true, inLine: a?.parentElement?.classList.contains('accounts-strip') === true, flyout: a?.closest('.accounts-flyout') !== null };
+      });
+      expect(where, 'focus after Escape is a card of the line, not the page').toEqual({ isCard: true, inLine: true, flyout: false });
+      // It stays shut: the pointer is still on the strip, and nothing has entered or arrived since.
+      await page.waitForTimeout(FLYOUT_OPEN_MS + 400);
+      expect(await page.locator('.accounts-flyout').count(), 'the flyout stays shut after Escape').toBe(0);
+      expect(errors).toEqual([]);
+    } finally {
+      await ctx.close();
+    }
+  }, 90_000);
+
+  it(`a click's focus never holds the flyout: hover-open, click All accounts, move off the strip, and it closes within the grace: ${named(view)}`, async () => {
+    const { ctx, page, errors } = await openFoldedDesk(view);
+    try {
+      await page.hover(STRIP);
+      await page.waitForSelector('.accounts-flyout', { timeout: 5_000 });
+      await page.click(`${STRIP} .accounts-end button:last-of-type`);
+      const focused = await page.evaluate(() => ({
+        inEnd: document.activeElement?.closest('.accounts-end') !== null,
+        visible: document.activeElement?.matches(':focus-visible') ?? null,
+      }));
+      expect(focused, 'the click left focus on All accounts, and Chrome calls it not focus-visible').toEqual({ inEnd: true, visible: false });
+      await page.mouse.move(view.width / 2, 880);
+      const leftAt = Date.now();
+      await page.waitForSelector('.accounts-flyout', { state: 'detached', timeout: FLYOUT_CLOSE_MS + 2_000 });
+      const closed = Date.now() - leftAt;
+      expect(closed, `the flyout closed after ${closed} ms, before its ${FLYOUT_CLOSE_MS} ms grace`).toBeGreaterThanOrEqual(FLYOUT_CLOSE_MS - 20);
+      expect(errors).toEqual([]);
+    } finally {
+      await ctx.close();
+    }
+  }, 90_000);
 });
