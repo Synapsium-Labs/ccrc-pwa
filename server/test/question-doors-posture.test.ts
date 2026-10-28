@@ -129,9 +129,15 @@ describe('question-doors posture: each old door through an armed gate (W3 Q3f, D
       expect(await postureOf(url, cred)).toEqual(EXPECTED[door]![cred]);
     });
 
-  // The new family's rows (Task Q3f Step 3): the operator's door takes the operator's posture, the claimant's two take
-  // the claimant's. Recorded here before the routes exist.
-  it.todo('POST /api/questions/:id/answer takes the operator doors\' posture');
-  it.todo('POST /api/questions/:id/rule takes the claimant doors\' posture');
-  it.todo('POST /api/questions/:id/release takes the claimant doors\' posture');
+  // The new family's rows (Task Q3f Step 3): the operator's door takes the operator doors' posture, the claimant's two
+  // take the claimant doors'. The path picks the principal (OA-C7 (a)).
+  const NEW_DOORS: ReadonlyArray<readonly [string, string, Readonly<Record<Credential, Posture>>]> = [
+    ['POST /api/questions/:id/answer', '/api/questions/session-project-a-quiet-basin/answer', OPERATOR],
+    ['POST /api/questions/:id/rule', '/api/questions/ask-1/rule', CLAIMANT],
+    ['POST /api/questions/:id/release', '/api/questions/ask-1/release', CLAIMANT],
+  ];
+  it.each(NEW_DOORS.flatMap(([door, url, want]) => CREDENTIALS.map((c) => [`${door} | ${c}`, url, want, c] as const)))(
+    '%s', async (_name, url, want, cred) => {
+      expect(await postureOf(url, cred)).toEqual(want[cred]);
+    });
 });
