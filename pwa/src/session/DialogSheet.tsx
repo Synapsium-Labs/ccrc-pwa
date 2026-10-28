@@ -151,7 +151,7 @@
 // structured sheet from the transcript's copy, or on the unreadable one. The own-words text, the picks and the senders
 // stay HERE, so that hand-off (and a change of source) keeps them.
 
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
 import type { ReactNode } from 'react';
 import { backgroundOnlyRefusal, type Dialog, type DialogTabTarget, type HookAsk } from '../../../shared/api';
 import { parseAskTabs } from '../../../shared/ask-menu';
@@ -166,7 +166,10 @@ import {
   askScreen, askSource, freeTextSlot, isUsableAsk, paneTicks, picksUncommitted, questionKey, shownQuestion, slotHolds, type AskSource, type ShownQuestion,
 } from './askLive';
 import { keyTabs, questionKeys, reviewKeys, rowKey, type KeyScreen } from './askKeys';
-import type { AnswerState } from './answerLifecycle';
+import {
+  answeringOption, createAnswerLifecycle, performAnswer, type AnswerLifecycle, type AnswerSeam, type AnswerState,
+  type RefusalToken,
+} from './answerLifecycle';
 import { dialogMultiRefusal, dialogRefusal, dialogTabRefusal, dialogTextRefusal } from './askWords';
 import { useAskEngagement, useAskKeys } from './useAskKeys';
 import { api, ApiError, failedTo } from '../lib/api';
@@ -217,10 +220,17 @@ export interface DialogSheetProps {
   /** D-6326: told whether the inline ask card is mounted (the desk), so the session screen can point the transcript at it,
    *  stand its Escape interrupt down and hold the composer's Send. A phone's sheet never reports. */
   onInline?: (mounted: boolean) => void;
+  /** D-7183: the writers this sheet's answers go through (`answerLifecycle.ts#performAnswer`). Injectable for tests;
+   *  defaults to `lib/api.ts`'s `api`. The sheets never issue the notification's `ask`. */
+  answers?: AnswerSeam;
 }
 
+/** A refusal's token for the answer lifecycle: the door's code, or `failed` for a write that did not go through. The
+ *  sentence is worded from the error where it is today (`askWords.ts`), never from this. */
+const refusalToken = (err: unknown): RefusalToken => (err instanceof ApiError ? err.message : 'failed');
 
-export function DialogSheet({ id, store, onOpenTerminal, raise, asker = null, onInline }: DialogSheetProps): ReactNode {
+
+export function DialogSheet({ id, store, onOpenTerminal, raise, asker = null, onInline, answers = api }: DialogSheetProps): ReactNode {
   const useStore = store ?? getSessionStore(id);
   const storeDialog = useStore((s) => s.dialog);
   /** Decision `ask-answer-returns-next-screen`: an answer route's `next`, into the store (`applyAnswered`). */
@@ -260,8 +270,13 @@ export function DialogSheet({ id, store, onOpenTerminal, raise, asker = null, on
   // render). Everything below renders from it. A held surface is decided as it was when it was live.
   const source = held === null ? liveSource : askSource({ ask: hookAsk, dialog, askFrameSeen: true });
 
-  // The option index whose answer is in flight (null = none).
-  const [answering, setAnswering] = useState<number | null>(null);
+  // D-7183: the answer's lifecycle (`answerLifecycle.ts`), one instance per sheet, updated synchronously at dispatch. The
+  // option whose answer is in flight, or landed and waiting for the pane to move on, is its `answeringOption`.
+  const lifecycle = useRef<AnswerLifecycle | null>(null);
+  if (lifecycle.current === null) lifecycle.current = createAnswerLifecycle();
+  const machine = lifecycle.current;
+  const lifeNow = useSyncExternalStore(machine.subscribe, machine.get);
+  const answering = answeringOption(lifeNow);
   // The identity of whichever content — a pane dialog's id, or a stringified hook envelope (HookAsk carries no id of
   // its own; see `askKey` below) — the user waved away with a scrim tap, Esc, or swipe. It stays hidden until something
   // with a DIFFERENT identity arrives. One slot serves both kinds of surface: only one is ever open at a time, and
@@ -306,7 +321,7 @@ export function DialogSheet({ id, store, onOpenTerminal, raise, asker = null, on
   // inert, so its marker and disabled look may change during the exit with nothing left to tap.
   useEffect(() => {
     const onScreen = closed ? null : dialog;
-    setAnswering(null);
+    machine.dispatch({ type: 'screen', onScreen });
     setOwn((o) => (o.call?.state === 'landed' && !showsSent(onScreen, o.call, o.text) ? NO_WORDS : o));
     if (own.call?.state === 'landed' && !showsSent(onScreen, own.call, own.text)) setOtherFor(null);
     // A chosen Other is spent with its screen: unless text or a call is kept, a new screen starts with the field closed,
@@ -454,15 +469,17 @@ export function DialogSheet({ id, store, onOpenTerminal, raise, asker = null, on
 
   const answer = async (optionIndex: number): Promise<void> => {
     if (dialog === null || !claim()) return;
-    setAnswering(optionIndex);
     const answered = dialog.id;
+    const command = machine.dispatch({ type: 'answer', sessionId: id, dialogId: answered, option: optionIndex }).command;
+    if (command?.kind !== 'answer') return;
     try {
-      const res = await api.answerDialog(id, answered, optionIndex);
+      const res = await performAnswer(command, answers);
+      machine.dispatch({ type: 'answer-landed' });
       // Decision `ask-answer-returns-next-screen`: the route says which screen the pane moved to, so the next question
       // or the review opens now, not on the stream's next poll. Without it, stay in "answering…" until a frame lands.
       if (res.next !== undefined) applyAnswered(answered, res.next);
     } catch (err) {
-      setAnswering(null);
+      machine.dispatch({ type: 'answer-refused', refusal: refusalToken(err) });
       // Each refusal by its code (`dialogRefusal`, plan Task 5), where every 409 once read alike. A stale dialog is
       // news, not a failure where the sheet renders straight from `dialog` (a menu, which re-renders with the new one
       // right after this and "showing the latest" is literally true) — but the structured sheet renders Claude's own
@@ -602,7 +619,7 @@ export function DialogSheet({ id, store, onOpenTerminal, raise, asker = null, on
   // The boxes changed here and not committed: a tab move would lose them, so ←/→ and the strip wait.
   // The lifecycle the content reads (`answerLifecycle.ts`): its in-flight flags, as this controller holds them.
   const life: AnswerState = {
-    phase: answering !== null ? { kind: 'sending', send: 'answer', option: answering }
+    phase: answering !== null ? lifeNow.phase
       : tabbing ? { kind: 'sending', send: 'tab' } : denying ? { kind: 'sending', send: 'deny' } : { kind: 'idle' },
     own,
     pick,

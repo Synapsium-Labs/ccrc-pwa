@@ -278,8 +278,9 @@ describe('W7 PWA census: REAL rows (reporting, not ratcheting; spec §5.1 rule 3
     expect(countBy(sites, (s) => s.kind)).toEqual({ writer: 1, 'push-sw': 1 });
   });
 
-  it('dialogSheetStates(): 11 useState calls inside DialogSheet', () => {
-    held('dialogSheetStates', dialogSheetStates(), 11);
+  // C7e Step 5 (D-7183): each answer kind's state moves into the answer lifecycle in its own commit.
+  it('dialogSheetStates(): 10 useState calls inside DialogSheet', () => {
+    held('dialogSheetStates', dialogSheetStates(), 10);
   });
 
   it('clientPairingDefinitions(): 9, prefixMatches and norm among them', () => {
