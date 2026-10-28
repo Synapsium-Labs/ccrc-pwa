@@ -14,10 +14,17 @@
     grid-template-rows: auto minmax(0, 1fr) auto;
   }
   /* The fourth column is the inspector's (S12), and exists only with an Inspector part (below, at >=1600). */
+  /* The bar's line clears the lanes row (C12 item 19, `top-bar-sits-clear-of-the-lanes-row`): the command field and
+     New session fill the line top to bottom, so the line takes the cards' own gap (`--sp-2`) below it and the same
+     above it, and its controls sit centred between the header's top and the first line of cards. The header grows by
+     those two gaps and nothing in it moves against anything else. */
   .ins-frame .shell-accounts {
     grid-column: 1 / -1;
     grid-row: 1;
-    padding: 0 var(--sp-4) var(--sp-2);
+    padding: var(--sp-2) var(--sp-4);
+  }
+  .ins-frame .ins-topbar {
+    margin-block-end: var(--sp-2);
   }
   /* No `overflow` here: any value but visible makes the rail a clip box in both axes, which cuts away the tooltip
      drawn beside it and lets the hidden tips scroll the rail sideways. Stacked above the list column, so the tip

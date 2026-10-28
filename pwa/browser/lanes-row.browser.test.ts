@@ -481,6 +481,49 @@ describe("New session ends at the bar line's content edge", () => {
   }
 });
 
+// The bar's controls sit clear of the lanes row (desktop polish Task C12, item 19, `top-bar-sits-clear-of-the-lanes-row`):
+// the command field (Instrument) or the doors (Refined) and New session keep their size, the space from their bottom
+// edges to the first line of cards is at least the cards' own gap, and the space above them matches it, so they sit
+// centred in their line. At 900, 1280 and 1920 in both skins, under a fine and a coarse pointer. Red on main's tree in
+// both: Instrument's controls filled its line and ended 0 px above the cards. Refined's sit centred in its 56 px line,
+// 6 px above and below, 2 px short of the cards' gap: measured and accepted as they are (the coordinator's ruling), so
+// Refined is held to those 6 px.
+const REFINED_BAR_CLEAR = 6;
+describe("the bar's controls sit clear of the lanes row, centred in their line", () => {
+  for (const view of [...DESKS.filter((v) => v.theme === PHOSPHOR), ...DESKS.filter((v) => v.theme === PHOSPHOR).map((v) => ({ ...v, touch: true }))]) {
+    it(named(view), async () => {
+      const { ctx, page, errors } = await openDesk(view);
+      try {
+        const m = await page.evaluate(() => {
+          const header = document.querySelector<HTMLElement>('header.shell-accounts')!;
+          const top = header.getBoundingClientRect().top + parseFloat(getComputedStyle(header).borderTopWidth);
+          const strip = header.querySelector<HTMLElement>('.accounts-strip')!;
+          const controls = [...header.querySelectorAll<HTMLElement>('.ins-command, .ins-new, .ref-bar-door, .ref-bar-new')]
+            .map((el) => ({ name: el.getAttribute('aria-label') ?? el.textContent?.trim() ?? '?', ...el.getBoundingClientRect().toJSON() as DOMRect }));
+          const cardTop = Math.min(...[...strip.querySelectorAll<HTMLElement>('.account-gauge')].map((c) => c.getBoundingClientRect().top));
+          return {
+            controls, cardTop, top, hasNew: header.querySelector('.ins-new, .ref-bar-new') !== null,
+            cardGap: parseFloat(getComputedStyle(strip).rowGap),
+            tapMin: parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--tap-min')),
+          };
+        });
+        expect(m.hasNew, 'the bar draws New session').toBe(true);
+        expect(m.controls.length, 'the bar draws its controls').toBeGreaterThan(1);
+        expect(m.cardGap, "the cards' own gap").toBeGreaterThan(0);
+        for (const c of m.controls) expect(c.height, `${c.name} keeps its floor`).toBeGreaterThanOrEqual(m.tapMin - 0.5);
+        const below = m.cardTop - Math.max(...m.controls.map((c) => c.bottom));
+        const above = Math.min(...m.controls.map((c) => c.top)) - m.top;
+        const floor = view.skin === REFINED ? REFINED_BAR_CLEAR : m.cardGap;
+        expect(below, `the controls end ${below} px above the first cards, less than ${floor} px`).toBeGreaterThanOrEqual(floor - 0.5);
+        expect(Math.abs(above - below), `the controls are not centred in their line (${above} above, ${below} below)`).toBeLessThanOrEqual(1);
+        expect(errors).toEqual([]);
+      } finally {
+        await ctx.close();
+      }
+    }, 90_000);
+  }
+});
+
 // The Accounts screen opened from a card: the page itself must not scroll. A window nobody measured speaks "not measured" in
 // an `sr-only` span, which is absolutely positioned: with no positioned ancestor in the rows it escapes the detail pane (the
 // scroller) and stretches the document, and the lane arrival then scrolls the document and cuts off the header.
