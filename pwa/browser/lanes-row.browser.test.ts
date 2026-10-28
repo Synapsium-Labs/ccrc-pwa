@@ -29,8 +29,9 @@
 // the control and All accounts, every item at one top, nothing cut or sideways; (7) expanded, every lane wraps and the end
 // cell follows the last card; (8) from 1920 to 1280 the folded row re-fits, and back; (9) at 1280 and 1920 hovering the
 // folded line opens, after the flyout's delay, a panel below it, drawn over the content (positioned, the element at each
-// card's centre its own), holding every lane in order inside the viewport, pushing the first session row nowhere, and
-// closing after its grace once the pointer leaves. The expected order is worked out here from the rule, tie keys and all
+// card's centre its own), holding only the lanes the line folds away (every lane drawn once across the two, in order)
+// inside the viewport, each card in the line's own tracks, pushing the first session row nowhere, and closing after its
+// grace once the pointer leaves (Task C13). The expected order is worked out here from the rule, tie keys and all
 // (`orderOf`), never by the app's decider. (10) The end cell is no card (Task S5c, review 1108's F1): at 1280 in both skins,
 // with real Tab and Shift+Tab, keyboard focus arriving at the line's card from All accounts or from the fold's control opens
 // the flyout after its delay, as focus arriving from outside the strip does; the end cell itself opens nothing, and a mouse
@@ -855,13 +856,14 @@ describe('the folded row re-fits when the window changes', () => {
  *  for the runner. */
 const CLOSE_FLOOR_MS = FLYOUT_CLOSE_MS - 1;
 
-// The flyout: hovering the folded line opens a panel below it, drawn over the content, holding every lane in order. When
+// The flyout: hovering the folded line opens a panel below it, drawn over the content, holding only the lanes the line
+// folds away, in order, each card in the line's own tracks. When
 // `CCRC_BROWSER_SHOTS` names a directory, each view's open flyout is screenshotted into it (never written otherwise).
 const FLYOUT_VIEWS: AppView[] = FOLD_VIEWS.filter((v) => v.width >= 1280);
 
 describe('hovering the folded line opens a flyout below it', () => {
   for (const view of FLYOUT_VIEWS) {
-    it(`hovering the folded line opens a flyout below it, drawn over the content, holding every lane in order, and nothing scrolls sideways: ${named(view)}`, async () => {
+    it(`hovering the folded line opens a flyout below it, drawn over the content, holding only the lanes the line folds away, in order, its cards in the line's tracks, and nothing scrolls sideways: ${named(view)}`, async () => {
       const { ctx, page, errors } = await openFoldedDesk(view);
       try {
         const sessTop = (): Promise<number> => page.evaluate(() => document.querySelector('.sess-line')!.getBoundingClientRect().top);
@@ -884,6 +886,9 @@ describe('hovering the folded line opens a flyout below it', () => {
           const header = document.querySelector<HTMLElement>('header.shell-accounts')!;
           return {
             names: cards.map((c) => c.querySelector('.account-gauge-label')?.textContent ?? ''),
+            lineNames: [...strip.querySelectorAll<HTMLElement>(':scope > .account-gauge')].map((c) => c.querySelector('.account-gauge-label')?.textContent ?? ''),
+            // The line's tracks, its cards' and the end cell's, left edge and width: the panel's cards sit in them.
+            tracks: line.map((e) => { const r = e.getBoundingClientRect(); return { left: r.left, width: r.width }; }),
             flyTop: fr.top, flyBottom: fr.bottom, flyLeft: fr.left, flyRight: fr.right, lineBottom: Math.max(...line.map((e) => e.getBoundingClientRect().bottom)),
             headerBottom: header.getBoundingClientRect().bottom, position: getComputedStyle(fly).position, vw: window.innerWidth,
             // Its stacking level and the content's, as computed (`auto` reads NaN, taken as 0): at 1920 the panel ends above the
@@ -903,7 +908,20 @@ describe('hovering the folded line opens a flyout below it', () => {
           };
         });
         const out: string[] = [];
-        if (found.names.join('|') !== FOLD_ORDER.join('|')) out.push(`the flyout reads [${found.names}], not every lane freest first [${FOLD_ORDER}]`);
+        // Every lane drawn once across the line and the panel: the panel holds the folded-away lanes, continuing the
+        // line's freest-first order from its last card.
+        const both = found.lineNames.filter((n) => found.names.includes(n));
+        if (both.length > 0) out.push(`[${both}] are drawn on the line and in the flyout`);
+        if ([...found.lineNames, ...found.names].join('|') !== FOLD_ORDER.join('|')) {
+          out.push(`the line [${found.lineNames}] then the flyout [${found.names}] do not read every lane once, freest first [${FOLD_ORDER}]`);
+        }
+        // The panel's cards in the line's own tracks: the k-th card's column is the line's (k mod tracks)-th item.
+        for (const [k, c] of found.cards.entries()) {
+          const t = found.tracks[k % found.tracks.length]!;
+          if (Math.abs(c.left - t.left) > 0.5 || Math.abs(c.right - c.left - t.width) > 0.5) {
+            out.push(`${found.names[k]}'s card (${c.left}..${c.right}) is not in the line's track ${k % found.tracks.length} (${t.left}, ${t.width} wide)`);
+          }
+        }
         if (found.flyTop < found.lineBottom - 0.5) out.push(`the flyout (top ${found.flyTop}) is not below the line (bottom ${found.lineBottom})`);
         if (found.position !== 'absolute' && found.position !== 'fixed') out.push(`the flyout is ${found.position}-positioned: it must be drawn over the content, not placed in it`);
         if (found.z <= found.contentZ || found.z <= 0) out.push(`the flyout's z-index (${found.z}) is not above the content's (${found.contentZ})`);

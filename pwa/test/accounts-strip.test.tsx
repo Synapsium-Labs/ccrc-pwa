@@ -1205,6 +1205,26 @@ describe('the lanes fold (S5b, D-6530)', () => {
       expect(fly.contains(document.activeElement)).toBe(false);
     });
 
+    it('the flyout holds only the lanes the line folds away: seventeen folded to five, no lane on both, every lane once, the folded twelve in order', async () => {
+      stubDesk(1600); // six tracks of LANE_CARD_MIN: five cards and the end cell
+      stubSeventeen();
+      const { container } = render(<AccountsStrip />);
+      await screen.findByText('lane-a');
+      await waitFor(() => expect(control()).toBeInTheDocument());
+      vi.useFakeTimers();
+      fireEvent.pointerEnter(groupOf(container));
+      advance(FLYOUT_OPEN_MS);
+      const order = lanesByFree(names.accounts).map((a) => labelOf(a.wrapper));
+      const line = lineCardsOf(container).map(nameOf);
+      const fly = flyCardsOf(container).map(nameOf);
+      expect(line).toEqual(order.slice(0, 5));
+      expect(line.filter((n) => fly.includes(n))).toEqual([]);
+      expect([...line, ...fly].sort()).toEqual([...order].sort());
+      expect(fly).toEqual(order.slice(5));
+      // The panel's count is the control's n.
+      expect(control().textContent).toMatch(new RegExp(`^\\+${fly.length} more`));
+    });
+
     it('focus moving into the line opens the flyout', async () => {
       const container = await mountDesk();
       act(() => { lineCardsOf(container)[0]!.focus(); });
