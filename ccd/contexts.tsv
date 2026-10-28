@@ -782,3 +782,12 @@ _ws_loose_fresh	C4
 _ws_loose_resume	C4
 _ws_loose_locked	C4
 _ws_loose_collect	C4
+_ws_shed_int	C4
+_ws_shed_floor	C4
+_ws_shed_names	C4
+_ws_shed_refused	C4
+_ws_shed_failed	C4
+_ws_shed_git_state	C4
+_ws_shed_gap	C4
+_ws_shed_run	C4
+cmd_ws_shed_deps	C4

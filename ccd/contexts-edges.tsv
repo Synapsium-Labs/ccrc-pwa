@@ -297,6 +297,10 @@ _ws_reclaim_tail -> _tmux
 _ws_reclaim_tail -> _tmux_t
 _ws_reclaim_tail -> _ws_unsupervise
 _ws_reclaim_workdir_shared -> _reg_read
+_ws_shed_failed -> _lc_fail
+_ws_shed_refused -> _lc_emit
+_ws_shed_run -> _lc_done
+_ws_shed_run -> _reg_set
 _ws_status -> _cfg_dir
 _ws_status -> _reg_get
 _ws_status -> _session_verdict
@@ -537,3 +541,10 @@ cmd_ws_rm -> _reg_get
 cmd_ws_rm -> _reg_retire
 cmd_ws_rm -> _tmux_t
 cmd_ws_rm -> _ws_unsupervise
+cmd_ws_shed_deps -> _child_runid_valid
+cmd_ws_shed_deps -> _lc_dec_ok
+cmd_ws_shed_deps -> _lc_surface_norm
+cmd_ws_shed_deps -> _reg_get_to
+cmd_ws_shed_deps -> _reg_id_ok
+cmd_ws_shed_deps -> _session_probe
+cmd_ws_shed_deps -> _svc_is_active

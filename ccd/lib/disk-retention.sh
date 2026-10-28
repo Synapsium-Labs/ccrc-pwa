@@ -1341,3 +1341,195 @@ _ws_loose_collect() {   # token hex surface actor reason -> ccd ws-collect --exp
 # `ws-audit --loose-hex <hex> --collect`, `ws-collect --expect <token> --loose-hex <hex>` and the record family under
 # `$REG/tmpquarantine-loose/`, in one ccd inode. The server composes them only behind that word (D-6625).
 # ── end loose temp entries ───────────────────────────────────────────────────── LOOSE-END ──
+
+# @ccd-lib:depsshed
+# ── ws-shed-deps: a sleeping session's ignored dependency directories (D-7278; design note 2026-10-28 §4) ─ DEPSSHED-BEGIN ──
+# THE SERVER'S ACT, composed by the server's deps-shed arm (`server/src/depsShedPass.ts`) and by nothing else (CLAUDE.md
+# SAFETY): sessions never run it. The server decides that the session's work is finished (a worker's run closed past the
+# age, or a coordinator's last chair ended past it, with no open chair); this verb re-proves at the act every fact the box
+# can see, and removes ONLY the git-ignored, untracked directories of the worktree whose name is one of
+# CCD_DEPS_SHED_NAMES (default `node_modules`). Every git fact stays: the index, every ref, every tracked file and every
+# untracked file git does not ignore, and `git status` is read before and after to prove it. There is no token: what is
+# removed is rebuildable (`npm ci`), and each rung is re-read here, `ccd-tmp-sweep`'s dead-arm reasoning.
+# stdout is ONE JSON line: `{"shed":…}` or `{"wouldShed":…}` (exit 0), a refusal `{"refused":<word>,…}` (exit 0), or a
+# failure after the act began `{"failed":<word>,…}` (exit 1). `--dry-run` runs every rung, removes nothing and journals
+# nothing (the arm's shadow). The refusal words, in order: paused, no-such-session, not-a-workspace, not-a-child,
+# not-asleep, asleep-too-recently, already-shed, unmeasured, nothing-to-shed, in-use; the failures: git-state-changed,
+# shed-incomplete.
+# THE ENVIRONMENT'S THREE KNOBS (ccd's override rule: an override may make ccd refuse, never aim it at another tree).
+# CCD_DEPS_SHED_MIN_ASLEEP_S is the box's floor on how long the session has slept, RAISE-ONLY (a value below the default
+# reads as the default; no argument names it); CCD_DEPS_SHED_SCAN_S bounds each removal; CCD_DEPS_SHED_NAMES names the
+# directory names, each one plain path component, and only ever inside this worktree among git's own ignored paths.
+WS_SHED_MIN_ASLEEP_S_DEFAULT=3600
+WS_SHED_SCAN_S_DEFAULT=30
+WS_SHED_NAMES_DEFAULT=node_modules
+_ws_shed_int() {   # value default -> the value when it is a whole number of at most 10 digits, else the default; on stdout
+  local LC_ALL=C
+  if [[ ${1-} =~ ^[1-9][0-9]{0,9}$ ]]; then printf '%s' "$1"; else printf '%s' "$2"; fi
+}
+_ws_shed_floor() {   # -> the floor in seconds: CCD_DEPS_SHED_MIN_ASLEEP_S, never below the default (raise-only)
+  local v; v=$(_ws_shed_int "${CCD_DEPS_SHED_MIN_ASLEEP_S-}" "$WS_SHED_MIN_ASLEEP_S_DEFAULT")
+  (( v >= WS_SHED_MIN_ASLEEP_S_DEFAULT )) || v=$WS_SHED_MIN_ASLEEP_S_DEFAULT
+  printf '%s' "$v"
+}
+_ws_shed_names() {   # -> the directory names, one per line; a name that is not one plain component (or is `.git`) is dropped
+  local LC_ALL=C n raw="${CCD_DEPS_SHED_NAMES-}"
+  [[ -n "${raw//[[:space:]]/}" ]] || raw=$WS_SHED_NAMES_DEFAULT
+  for n in $raw; do
+    [[ $n =~ ^[A-Za-z0-9._-]+$ && $n != . && $n != .. && $n != .git ]] && printf '%s\n' "$n"
+  done
+  return 0
+}
+_ws_shed_refused() {   # word detail -> the refusal, journaled (not under --dry-run) and printed; rc 0
+  (( dry )) || _lc_emit shed-deps refused "$id" "" verb ws-shed-deps refusal "$1" detail "$2" meas.mode "$cls" \
+    dec.surface "$lc_surface" dec.actor "$lc_actor" dec.reason "$lc_reason"
+  printf '{"refused":%s,"session":%s,"detail":%s}\n' "$(_json_str "$1")" "$(_json_str "$id")" "$(_json_str "$2")"
+  return 0
+}
+_ws_shed_failed() {   # word detail -> the post-start failure, journaled and printed; rc 1
+  _lc_fail shed-deps "$id" "" "$1" "$2" verb ws-shed-deps meas.mode "$cls" \
+    dec.surface "$lc_surface" dec.actor "$lc_actor" dec.reason "$lc_reason"
+  printf '{"failed":%s,"session":%s,"detail":%s}\n' "$(_json_str "$1")" "$(_json_str "$id")" "$(_json_str "$2")"
+  return 1
+}
+_ws_shed_git_state() {   # workdir -> the digest of `git status` (tracked changes and untracked files git does not ignore); rc 1 unread
+  local out
+  out=$(git -C "$1" status --porcelain=v1 -z --untracked-files=all 2>/dev/null | _plat_sha256 | cut -d' ' -f1; exit "${PIPESTATUS[0]}") \
+    && [[ $out =~ ^[0-9a-f]{64}$ ]] && printf '%s' "$out"
+}
+_ws_shed_gap() { :; }   # a test seam between the first git read and the act, as `_ws_orphan_gap` is the orphan verb's
+_ws_shed_run() {   # -> everything after the registry rungs, contained (id, cls, dry, wd, floor and the dec words are the verb's)
+  local wdp rel dir phys top dev wdev i n=0 rc bytes=0 b before after err
+  local -a names=() cands=() physs=()
+  wdp=$(cd -P -- "$wd" 2>/dev/null && pwd -P) && top=$(git -C "$wdp" rev-parse --path-format=absolute --show-toplevel 2>/dev/null) \
+    && [[ "$top" == "$wdp" ]] \
+    || { _ws_shed_refused unmeasured "$wd is not the top of a git worktree that could be read — nothing was removed"; return; }
+  wdev=$(_plat_devino "$wdp" 2>/dev/null) && wdev=${wdev%%:*} \
+    || { _ws_shed_refused unmeasured "the file system of $wdp could not be read — nothing was removed"; return; }
+  mapfile -t names < <(_ws_shed_names)
+  (( ${#names[@]} )) || { _ws_shed_refused nothing-to-shed "CCD_DEPS_SHED_NAMES names no plain directory name"; return; }
+  # THE CANDIDATES: git's own list of ignored, untracked paths, a whole ignored directory collapsed to one entry.
+  local listing
+  listing=$(git -C "$wdp" ls-files -z --others --ignored --exclude-standard --directory 2>/dev/null | tr '\0' '\n'; exit "${PIPESTATUS[0]}") \
+    || { _ws_shed_refused unmeasured "git could not list the ignored paths of $wdp — nothing was removed"; return; }
+  while IFS= read -r rel; do
+    [[ $rel == */ ]] || continue
+    rel=${rel%/}
+    local leaf=${rel##*/} hit=0 nm
+    for nm in "${names[@]}"; do [[ $leaf == "$nm" ]] && { hit=1; break; }; done
+    (( hit )) || continue
+    # One plain relative path inside the worktree: no `..`, no `.`, no absolute spelling.
+    case "/$rel/" in */../*|*/./*|//*) continue ;; esac
+    dir="$wdp/$rel"
+    [[ -d $dir && ! -L $dir && ! -e $dir/.git && ! -L $dir/.git ]] || continue
+    phys=$(cd -P -- "$dir" 2>/dev/null && pwd -P) && [[ $phys == "$dir" ]] || continue
+    dev=$(_plat_devino "$dir" 2>/dev/null) && [[ ${dev%%:*} == "$wdev" ]] || continue
+    # Not one tracked file beneath it (a vendored package git tracks keeps its directory).
+    [[ -z "$(git -C "$wdp" ls-files -z -- "$rel" 2>/dev/null | head -c 1)" ]] || continue
+    cands+=("$rel"); physs+=("$phys")
+  done <<< "$listing"
+  (( ${#cands[@]} )) || { _ws_shed_refused nothing-to-shed "no ignored, untracked directory named $(printf '%s ' "${names[@]}")stands in $wdp"; return; }
+  # IN USE: one walk of the process table for every candidate; a holder refuses, an unmeasured answer refuses.
+  _ws_path_users_many "${physs[@]}"
+  for i in "${!physs[@]}"; do
+    case "${_WS_PATH_USERS_RCS[$i]-2}" in
+      0) ;;
+      1) _ws_shed_refused in-use "${physs[$i]} is in use (pids ${_WS_PATH_USERS_PIDS_OF[$i]-}) — nothing was removed"; return ;;
+      *) _ws_shed_refused unmeasured "${_WS_PATH_USERS_WHY_OF[$i]:-whether ${physs[$i]} is in use could not be asked} — nothing was removed"; return ;;
+    esac
+  done
+  for i in "${!physs[@]}"; do
+    b=$(_plat_bytes "${physs[$i]}" 2>/dev/null) && [[ $b =~ ^[0-9]+$ ]] && bytes=$(( bytes + b ))
+  done
+  before=$(_ws_shed_git_state "$wdp") \
+    || { _ws_shed_refused unmeasured "git status of $wdp could not be read — nothing was removed"; return; }
+  if (( dry )); then
+    printf '{"wouldShed":true,"session":%s,"class":%s,"dirs":%s,"bytes":%s}\n' "$(_json_str "$id")" "$(_json_str "$cls")" \
+      "${#cands[@]}" "$bytes"
+    return 0
+  fi
+  _ws_shed_gap
+  local scan; scan=$(_ws_shed_int "${CCD_DEPS_SHED_SCAN_S-}" "$WS_SHED_SCAN_S_DEFAULT")
+  for i in "${!physs[@]}"; do
+    if [[ "$CCD_OS" == darwin ]]; then err=$(_plat_timeout "$scan" rm -rfx -- "${physs[$i]}" 2>&1); rc=$?
+    else err=$(_plat_timeout "$scan" rm -rf --one-file-system -- "${physs[$i]}" 2>&1); rc=$?; fi
+    if (( rc != 0 )) || [[ -e ${physs[$i]} || -L ${physs[$i]} ]]; then
+      _ws_shed_failed shed-incomplete "removing ${physs[$i]} did not finish (rm exit $rc${err:+: $(printf '%s' "$err" | head -1)}); what remains is still rebuildable"
+      return
+    fi
+    n=$(( n + 1 ))
+  done
+  after=$(_ws_shed_git_state "$wdp") && [[ $after == "$before" ]] \
+    || { _ws_shed_failed git-state-changed "git status of $wdp changed across the removal (or could not be read again) — removed $n dependency directories"; return; }
+  local now; _now_s_to now
+  _reg_set "$id" depsshed "$now $bytes" || :
+  _lc_done shed-deps "$id" "" verb ws-shed-deps detail "removed $n dependency directories" meas.mode "$cls" \
+    meas.bytes "$bytes" meas.workdir "$wdp" dec.surface "$lc_surface" dec.actor "$lc_actor" dec.reason "$lc_reason"
+  printf '{"shed":true,"session":%s,"class":%s,"dirs":%s,"bytes":%s}\n' "$(_json_str "$id")" "$(_json_str "$cls")" "$n" "$bytes"
+  return 0
+}
+cmd_ws_shed_deps() {   # ccd ws-shed-deps --session <id> --class child|coordinator [--dry-run] [--surface <word>] [--actor <text>] [--reason <text>]
+  local U='usage: ccd ws-shed-deps --session <id> --class child|coordinator [--dry-run] [--surface <word>] [--actor <text>] [--reason <text>]'
+  local lc_surface=none lc_actor='' lc_reason='' gs=0 ga=0 gr=0 id='' cls='' dry=0 w LC_ALL=C
+  while (( $# )); do
+    case "$1" in
+      --session) [[ $# -ge 2 && -z "$id" && $2 != -* ]] || die "$U"; id="$2"; shift 2 ;;
+      --class)   [[ $# -ge 2 && -z "$cls" ]] || die "$U"; cls="$2"; shift 2 ;;
+      --dry-run) (( ! dry )) || die "$U"; dry=1; shift ;;
+      --surface) [[ $# -ge 2 && $2 != -* ]] || die "$U"; gs=1; lc_surface="$2"; shift 2 ;;
+      --actor)   [[ $# -ge 2 && $2 != -* ]] || die "$U"; ga=1; lc_actor="$2"; shift 2 ;;
+      --reason)  [[ $# -ge 2 && $2 != -* ]] || die "$U"; gr=1; lc_reason="$2"; shift 2 ;;
+      *)         die "$U" ;;
+    esac
+  done
+  [[ -n "$id" ]] || die "$U"
+  case "$cls" in child|coordinator) ;; *) die "$U" ;; esac
+  if (( gs )); then w=$(_lc_surface_norm "$lc_surface"); lc_surface=${w:-unknown}; fi
+  if (( ga )); then [[ -n "${lc_actor//[[:space:]]/}" ]] || die "--actor must be non-blank"; _lc_dec_ok "$lc_actor" || die "--actor is longer than $_LC_DEC_MAX bytes"; fi
+  if (( gr )); then [[ -n "${lc_reason//[[:space:]]/}" ]] || die "--reason must be non-blank"; _lc_dec_ok "$lc_reason" || die "--reason is longer than $_LC_DEC_MAX bytes"; fi
+  _reg_id_ok "$id" || die "bad session id"
+  _json_str probe >/dev/null 2>&1 || die "python3 unavailable — cannot quote the record safely"
+  # 1. paused
+  [[ ! -e "$REG/reclaim-paused" && ! -L "$REG/reclaim-paused" ]] \
+    || { _ws_shed_refused paused "reclamation is paused fleet-wide ($REG/reclaim-paused) — nothing was removed"; return 0; }
+  # 2. the row, and never a main checkout
+  [[ -f "$REG/$id.uuid" ]] || { _ws_shed_refused no-such-session "no registry row names $id — nothing was removed"; return 0; }
+  local wd='' ws=''
+  _reg_get_to ws "$id" workspace || ws=''
+  [[ -n "$ws" ]] || { _ws_shed_refused not-a-workspace "$id is a project's main checkout — its dependencies are the operator's"; return 0; }
+  _reg_get_to wd "$id" workdir || wd=''
+  [[ "$wd" == /?* && -d "$wd" && ! -L "${wd%/}" ]] \
+    || { _ws_shed_refused unmeasured "$id's workdir (${wd:-none}) is not one plain directory — nothing was removed"; return 0; }
+  # 3. a worker's own fence: its child marker, read here, never taken on the server's word
+  if [[ $cls == child ]]; then
+    local cm=''
+    [[ -f "$REG/$id.child" && ! -L "$REG/$id.child" ]] && _file_read_to cm "$REG/$id.child"
+    _child_runid_valid "$cm" || { _ws_shed_refused not-a-child "$id carries no readable child marker — a worker sheds only as a dispatched child"; return 0; }
+  fi
+  # 4. asleep: a stop stamp, no tmux session, and a unit that says inactive or failed (`ws-archive --if-no-pane`'s test)
+  local st='' at=''
+  [[ -f "$REG/$id.stopped" && ! -L "$REG/$id.stopped" ]] && _file_read_to st "$REG/$id.stopped"
+  at=${st%% *}
+  [[ $at =~ ^[1-9][0-9]{0,11}$ ]] || { _ws_shed_refused not-asleep "$id carries no readable stop stamp — it is not asleep"; return 0; }
+  _session_probe "$id"
+  local unit; unit=$(_svc_is_active "claude-session@$id")
+  [[ "$PROBE_VERDICT" == gone && ( "$unit" == inactive || "$unit" == failed ) ]] \
+    || { _ws_shed_refused not-asleep "$id's pane answers ${PROBE_VERDICT:-nothing} and its unit ${unit:-nothing} — only a session with no pane and a stopped unit is shed"; return 0; }
+  # 5. the box's floor, raise-only
+  local now floor; _now_s_to now; floor=$(_ws_shed_floor)
+  (( now - at >= floor )) \
+    || { _ws_shed_refused asleep-too-recently "$id fell asleep $(( now - at ))s ago, less than the box's floor of ${floor}s"; return 0; }
+  # 6. at most once a sleep
+  if [[ -e "$REG/$id.depsshed" || -L "$REG/$id.depsshed" ]]; then
+    local ds=''
+    [[ -f "$REG/$id.depsshed" && ! -L "$REG/$id.depsshed" ]] && _file_read_to ds "$REG/$id.depsshed"
+    ds=${ds%% *}
+    [[ $ds =~ ^[1-9][0-9]{0,11}$ ]] || { _ws_shed_refused unmeasured "$REG/$id.depsshed stands but does not read as an epoch"; return 0; }
+    (( ds < at )) || { _ws_shed_refused already-shed "$id's dependencies were removed at epoch $ds, during this sleep"; return 0; }
+  fi
+  # 7 to 11, every git call contained
+  _ws_reclaim_contained _ws_shed_run
+}
+# SHED-DEPS-V1. `cmd_caps` echoes `shed-deps-v1` and `ws-shed-deps`: this box has the verb above, in one ccd inode. The
+# server composes it only behind that word (`ccdCan(state, 'wsShedDeps')`).
+# ── end deps-shed ──────────────────────────────────────────────────────────────── DEPSSHED-END ──
