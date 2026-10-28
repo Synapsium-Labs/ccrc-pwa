@@ -5,7 +5,8 @@
 // only measures and decides nothing. L4: it owns a browser observer and a piece of state.
 //
 // THE ANSWER. `null` before the first measure, and wherever `ResizeObserver` is absent (a server render, an old
-// engine): the caller folds nothing then, as for an unmeasured row. A width of 0 passes through as it is, because
+// engine): the caller reads it as an unmeasured row then, which folds nothing at the desk and shows `FOLD_SHOWN` on a
+// phone (`foldShown`). A width of 0 passes through as it is, because
 // `rowFit` reads it as unmeasured too (jsdom, a hidden row): one reading of "not a measurement", in one place. A
 // `column-gap` that does not parse to a number reads 0: jsdom evaluates no stylesheet, so its computed gap is the
 // word `normal` or empty, and a real engine answers `normal` for a grid that sets none.

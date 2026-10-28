@@ -100,8 +100,8 @@ export function AccountsStrip({ store = useFleetStore }: { store?: FleetStore } 
   // it was on. `null` (nothing focused yet) and an id no longer in the list both read as the first card.
   const [stopId, setStopId] = useState<string | null>(null);
   const cardRefs = useRef(new Map<string, HTMLElement>());
-  // The fold: the stored choice, the width class, and (at the desk only) the cards' group measured. The group's id is
-  // what the control's `aria-controls` names.
+  // The fold: the stored choice (the desk's only), the width class, and the cards' group measured at every width (the
+  // desk's width and gap, a phone's drawn tracks). The group's id is what the desk's control's `aria-controls` names.
   const desk = useDesk();
   const expanded = useStripExpanded(desk);
   const { ref: measureRef, row } = useRowWidth();
@@ -193,17 +193,22 @@ export function AccountsStrip({ store = useFleetStore }: { store?: FleetStore } 
   // inside" means to the flyout. The end cell's controls are no cards, and a click's focus is not keyboard focus.
   const keyboardHeld = (el: Element | null, group: HTMLElement): boolean =>
     el !== null && group.contains(el) && el.matches('.account-gauge:focus-visible');
-  // Closing a flyout that holds focus would drop focus to the page, so focus goes first to the line's tab stop, the card
-  // the operator came from. That move starts inside the strip, so `onGroupFocus` reads it as a move and not as focus
-  // arriving. The one hand-back: the flyout's close and the flyout becoming moot both go through it. It moves focus only
-  // from the page (the body, or nothing) or from inside the strip: a flag gone stale (a poll dropped the focused card's
-  // lane, which fires no blur) must never pull focus out of a field the operator has since put it in elsewhere.
-  const handFocusBack = (): void => {
-    if (!flyHeld.current) return;
-    flyHeld.current = false;
+  // Closing a panel of every lane that holds focus would drop focus to the page, so focus goes back first. The one
+  // hand-back, for the desk's flyout and the phone's panel alike, on a close and on the panel becoming moot: `held` is
+  // the panel's own focus flag, and `to` where its focus belongs. The desk's flyout hands it to the line's tab stop, the
+  // card the operator came from; that move starts inside the strip, so `onGroupFocus` reads it as a move and not as
+  // focus arriving. The phone's panel hands it to its control, the button that opened it, and to the line's tab stop
+  // too when that control is gone (a poll left nothing to fold, and the control left in the same commit). It moves
+  // focus only from the page (the body, or nothing) or from inside the strip: a flag gone stale (a poll dropped the
+  // focused card's lane, which fires no blur) must never pull focus out of a field the operator has since put it in.
+  const handFocusBack = (held: { current: boolean }, to: 'line' | 'control'): void => {
+    if (!held.current) return;
+    held.current = false;
     const at = document.activeElement;
     if (at !== null && at !== document.body && !groupEl.current?.contains(at)) return;
-    if (lineStop !== undefined) cardRefs.current.get(lineStop)?.focus();
+    const control = to === 'control' ? controlRef.current : null;
+    if (control !== null) control.focus();
+    else if (lineStop !== undefined) cardRefs.current.get(lineStop)?.focus();
   };
   // The timers die with the component, and with whatever makes the flyout moot: the strip expanding, or a poll leaving
   // nothing to fold. A plain effect: a focus held by the flyout that has just left the DOM rests on the page for a frame
@@ -212,21 +217,13 @@ export function AccountsStrip({ store = useFleetStore }: { store?: FleetStore } 
   useEffect(() => {
     if (flyoutOn) return;
     stopTimers();
-    handFocusBack();
+    handFocusBack(flyHeld, 'line');
     setFlyOpen(false);
     setFlyStopId(null);
   }, [flyoutOn]);
-  // The panel's close hands focus to the control when a card of the panel held it, and only from the page or from
-  // inside the strip, as `handFocusBack` does.
-  const handPanelFocusBack = (): void => {
-    if (!panelHeld.current) return;
-    panelHeld.current = false;
-    const at = document.activeElement;
-    if (at !== null && at !== document.body && !groupEl.current?.contains(at)) return;
-    controlRef.current?.focus();
-  };
+  // The panel's close hands focus back through the one hand-back: to the control, or the line's tab stop without one.
   const closePanel = (): void => {
-    handPanelFocusBack();
+    handFocusBack(panelHeld, 'control');
     setPanelOpen(false);
     setFlyStopId(null);
   };
@@ -238,7 +235,9 @@ export function AccountsStrip({ store = useFleetStore }: { store?: FleetStore } 
   // While the panel shows: the room under the strip bounds it (laid out before paint, so it never shows unbounded), and
   // a tap outside the strip and the panel, or Escape, closes it. A pointer-down on the control is inside the strip: the
   // control's own click then toggles, so a tap on it closes the panel once. Escape is default-prevented: the desk's
-  // Escape interrupt skips a prevented key, so closing the panel never stops a busy session's turn.
+  // Escape interrupt skips a prevented key, so closing the panel never stops a busy session's turn. And an Escape that
+  // another layer has already handled (default-prevented: a sheet or the palette over the panel closing itself) is
+  // that layer's alone, so the panel under it stays open.
   useLayoutEffect(() => {
     if (!panelShown) return;
     const measure = (): void => {
@@ -256,7 +255,7 @@ export function AccountsStrip({ store = useFleetStore }: { store?: FleetStore } 
       closePanel();
     };
     const onKey = (e: globalThis.KeyboardEvent): void => {
-      if (e.key !== 'Escape') return;
+      if (e.key !== 'Escape' || e.defaultPrevented) return;
       e.preventDefault();
       closePanel();
     };
@@ -308,7 +307,7 @@ export function AccountsStrip({ store = useFleetStore }: { store?: FleetStore } 
   // The flyout's delays and its closing (focus handed back first, by `handFocusBack`).
   const closeFlyout = (): void => {
     stopTimers();
-    handFocusBack();
+    handFocusBack(flyHeld, 'line');
     setFlyOpen(false);
     setFlyStopId(null);
   };

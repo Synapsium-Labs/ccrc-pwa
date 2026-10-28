@@ -407,7 +407,8 @@ describe('under coarse emulation every card and All accounts is at least 44 px t
   for (const view of COARSE) {
     it(named(view), async () => {
       const phone = view.width < 900;
-      // A desk shows every card (seeded expanded); a phone is always folded: its line shows two lines of four cards, and a
+      // A desk shows every card (seeded expanded); a phone is always folded: its line shows two lines of two cards at 390
+      // (its grid draws two tracks there), and a
       // tap on the control opens a panel of the phone's whole roster (the two short lanes too).
       const want = phone ? 19 : 17;
       const opened = await openApp(browser!, view, phone ? PHONE_FIXTURE : FIXTURE);
