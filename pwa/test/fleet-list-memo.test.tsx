@@ -294,6 +294,8 @@ describe('a chrome change with the same fleet (C9, D-6441)', () => {
     expect(screen.getByRole('button', { name: 'New workspace on project-a — project absent from the latest placement check; reload ccrc' })).toBeTruthy();
     const door = screen.getByTestId('sheet-door');
     expect(door.getAttribute('data-open')).toBe('false');
+    // The clock moves, inside every window: a rollup keyed on the time itself would be rebuilt and re-render every card.
+    vi.setSystemTime(NOW + 1_000);
     resetProbe();
     fireEvent.click(door);
     expect(door.getAttribute('data-open')).toBe('true');
