@@ -4245,8 +4245,8 @@ export function registerCoordRoutes(
       // D-5293: the answer half is the operator route's, read by the one reader both read (`readAskAnswer`).
       const answerBody = readAskAnswer(body);
       if (typeof fromId !== 'string' || typeof fromUuid !== 'string' || answerBody === null) {
-        return reply.code(400).send({ ok: false, error: 'bad-request',
-          detail: 'fromId/fromUuid strings, optionIndexes an array of numbers, askKey a string when given' });
+        return refuseRoute(reply, 'bad-request',
+          { detail: 'fromId/fromUuid strings, optionIndexes an array of numbers, askKey a string when given' });
       }
       ruleOf = (id) => ({ kind: 'ask', id, fromId, optionIndexes: answerBody.optionIndexes, askKey: answerBody.askKey });
     } else if (kind === 'approval') {

@@ -1463,8 +1463,9 @@ export function createQuestions(deps: QuestionsDeps, rules?: QuestionRules): Que
   // as the watcher's forwards called it, and its answer pushed through the watcher's doors sink; with no sink (a server
   // with no watcher) none is called, as `watcher?.` called none.
 
-  /** A refusal in `refuseRoute`'s shape: the word's one status (`REFUSAL_STATUS`), `{ok:false, error, ...extra}`. */
-  const refusal = (error: RouteRefusal, extra: Record<string, unknown> = {}): QuestionDoorAnswer =>
+  /** A refusal in `refuseRoute`'s shape: the word's one status (`REFUSAL_STATUS`), `{ok:false, error, ...extra}`. Spelled
+   *  `refused('<word>'`, a decider's shape, so `refusal-status.test.ts` reads each word a core answers. */
+  const refused = (error: RouteRefusal, extra: Record<string, unknown> = {}): QuestionDoorAnswer =>
     ({ status: REFUSAL_STATUS[error], body: { ok: false, error, ...extra } });
   const sent = (status: number, body: unknown): QuestionDoorAnswer => ({ status, body });
   const pushDoorIn = (ev: QuestionPush | null): void => { if (ev !== null) rules?.doors?.push(ev); };
@@ -1477,22 +1478,22 @@ export function createQuestions(deps: QuestionsDeps, rules?: QuestionRules): Que
     const coord = d.coord;
     const askRead = coord.askById(q.id);
     // D-2545: an unreadable row is not a gone one, and the two need different sentences. 503, a fact about this box.
-    if (!askRead.ok) return sent(503, { ok: false, error: 'ask-unreadable', detail: askRead.detail });
+    if (!askRead.ok) return refused('ask-unreadable', { detail: askRead.detail });
     const ask = askRead.ask;
-    if (ask === null) return sent(404, { ok: false, error: 'unknown-ask' });
+    if (ask === null) return refused('unknown-ask');
     if (ask.parentId !== q.fromId) {
-      return sent(403, { ok: false, error: 'not-parent', detail: 'only this child\'s derived parent may pre-empt its question' });
+      return refused('not-parent', { detail: 'only this child\'s derived parent may pre-empt its question' });
     }
     // D-5290, D-5363: a row MINTED released was never held and never mailed; the operator owned it from the first tick.
-    if (ask.releaseReason !== null) return sent(409, { ok: false, error: 'not-held' });
+    if (ask.releaseReason !== null) return refused('not-held');
     // D-5293, D-5368: a parent that sends `askKey` is answering the question it was shown, or nothing is pressed.
-    if (q.askKey !== undefined && q.askKey !== ask.askKey) return sent(409, { ok: false, error: 'ask-mismatch' });
+    if (q.askKey !== undefined && q.askKey !== ask.askKey) return refused('ask-mismatch');
     // D-2170: prove the menu on screen is the INSTANCE this row was minted for, and say WHICH refusal a failed read is
     // (whole-branch review M2): `child-unmeasurable`, never `ask-moved`.
     const fresh = await freshAskAt(d.io, d.cfg, ask.childId);
     if (fresh === UNMEASURED_ASK_AT) {
-      return sent(409, { ok: false, error: 'child-unmeasurable',
-        detail: "this box could not read the child's live state — nothing was pressed, and the ask is unchanged" });
+      return refused('child-unmeasurable',
+        { detail: "this box could not read the child's live state — nothing was pressed, and the ask is unchanged" });
     }
     const taken = coord.takeAskForAnswer(q.id, fresh);
     if (!taken.ok) return sent(409, { ok: false, error: taken.why });
@@ -1538,56 +1539,56 @@ export function createQuestions(deps: QuestionsDeps, rules?: QuestionRules): Que
     const { coord, cfg } = d;
     const { id, fromId, verdict, reason } = q;
     const read = coord.approvalById(id);
-    if (!read.ok) return refusal('approval-unreadable', { detail: read.detail });
+    if (!read.ok) return refused('approval-unreadable', { detail: read.detail });
     const row = read.row;
-    if (row === null) return refusal('unknown-approval');
-    if (await d.approvalsKilled()) return refusal('approvals-disabled');
-    if (!d.rulingsAllowedHere(cfg.role, cfg.fleetMode, cfg.ccrcDir)) return refusal('single-box');
+    if (row === null) return refused('unknown-approval');
+    if (await d.approvalsKilled()) return refused('approvals-disabled');
+    if (!d.rulingsAllowedHere(cfg.role, cfg.fleetMode, cfg.ccrcDir)) return refused('single-box');
     if (row.parentId !== fromId) {
-      return refusal('not-parent', { detail: 'only the claimant this prompt was held for may rule on it' });
+      return refused('not-parent', { detail: 'only the claimant this prompt was held for may rule on it' });
     }
-    if (row.releaseReason !== null) return refusal('approval-released', { releaseReason: row.releaseReason });
-    if (row.state === 'declined') return refusal('declined');
-    if (row.state === 'allowed' || row.state === 'denied' || row.state === 'operator') return refusal('already-ruled');
+    if (row.releaseReason !== null) return refused('approval-released', { releaseReason: row.releaseReason });
+    if (row.state === 'declined') return refused('declined');
+    if (row.state === 'allowed' || row.state === 'denied' || row.state === 'operator') return refused('already-ruled');
     const now = Date.now();
-    if (row.state !== 'held' && row.state !== 'released') return refusal('hook-gone');
+    if (row.state !== 'held' && row.state !== 'released') return refused('hook-gone');
     if (now >= row.notifyAt) {
-      return refusal('hook-gone', { detail: 'the window has passed: the child\'s hook has returned and the operator has the prompt' });
+      return refused('hook-gone', { detail: 'the window has passed: the child\'s hook has returned and the operator has the prompt' });
     }
     // [registry-refused:refuses] a refused row is in no `recs`: the ruling answers `not-a-child`, and a refused claimant reads as `parent-not-live` in `heldFor`, so no ruling is stored.
     const recs = await readRegistry(d.io, cfg);
     const rec = recs.find((r) => r.id === row.childId) ?? null;
-    if (rec === null || rec.child.kind !== 'child' || rec.child.runId !== row.runId) return refusal('not-a-child');
+    if (rec === null || rec.child.kind !== 'child' || rec.child.runId !== row.runId) return refused('not-a-child');
     let binding: Awaited<ReturnType<typeof heldFor>>;
     try {
       binding = await d.heldFor({ coord, io: d.io, cfg, tmux: d.tmux }, rec.id, rec.child, recs, now);
     } catch (err) {
-      return refusal('run-unreadable', { detail: err instanceof Error ? err.message : String(err) });
+      return refused('run-unreadable', { detail: err instanceof Error ? err.message : String(err) });
     }
-    if (binding.kind === 'not-a-child') return refusal('not-a-child');
-    if (binding.kind !== 'held' || binding.parent !== fromId) return refusal('parent-changed');
+    if (binding.kind === 'not-a-child') return refused('not-a-child');
+    if (binding.kind !== 'held' || binding.parent !== fromId) return refused('parent-changed');
     if (verdict === 'allow') {
       // The guard again (spec §6.3 server step 5): the class stored at mint, and the classifier run once more over the
       // input held in memory for the window. Unknown — no input held — is escalate.
-      if (row.class === 'forbidden') return refusal('guard-forbidden');
+      if (row.class === 'forbidden') return refused('guard-forbidden');
       forgetExpiredInputs(now);
       const held = approvalInputs.get(id);
       const again = held === undefined ? 'escalate'
         : approvalClass(held.tool, held.input, { ...(rootsForChild(rec, cfg.home) ?? { worktree: null, tmpRoot: null, scratch: null, home: cfg.home }), cwd: held.cwd });
-      if (again === 'forbidden') return refusal('guard-forbidden');
-      if (row.class !== 'ordinary' || again !== 'ordinary') return refusal('guard-escalate');
+      if (again === 'forbidden') return refused('guard-forbidden');
+      if (row.class !== 'ordinary' || again !== 'ordinary') return refused('guard-escalate');
     }
     const signer = d.signerFor();
-    if (signer === null) return refusal('internal', { detail: 'the approval signing key is not loaded' });
+    if (signer === null) return refused('internal', { detail: 'the approval signing key is not loaded' });
     const record: ApprovalRulingRecord = {
       v: 1, rowId: row.id, sessionId: row.childId, agentId: row.agentId, digest: row.digest, nonce: row.nonce,
       class: row.class, verdict, reason, expiresAt: row.notifyAt,
     };
     const sig = signer.signRuling(record);
-    if (sig === null) return refusal('internal', { detail: 'the ruling has no canonical form' });
+    if (sig === null) return refused('internal', { detail: 'the ruling has no canonical form' });
     const taken = coord.takeApprovalForRule(id, { by: fromId, verdict, reason, ruling: JSON.stringify({ record, sig }), now });
     if (!taken.ok) {
-      return refusal(taken.why === 'already-ruled' ? 'already-ruled' : taken.why === 'declined' ? 'declined'
+      return refused(taken.why === 'already-ruled' ? 'already-ruled' : taken.why === 'declined' ? 'declined'
         : taken.why === 'unknown-approval' ? 'unknown-approval' : 'not-held');
     }
     approvalInputs.delete(id);
@@ -1617,13 +1618,13 @@ export function createQuestions(deps: QuestionsDeps, rules?: QuestionRules): Que
     const coord = d.coord;
     if (q.kind === 'ask') {
       const askRead = coord.askById(q.id);
-      if (!askRead.ok) return sent(503, { ok: false, error: 'ask-unreadable', detail: askRead.detail });
+      if (!askRead.ok) return refused('ask-unreadable', { detail: askRead.detail });
       const ask = askRead.ask;
-      if (ask === null) return sent(404, { ok: false, error: 'unknown-ask' });
+      if (ask === null) return refused('unknown-ask');
       if (ask.parentId !== q.fromId) {
-        return sent(403, { ok: false, error: 'not-parent', detail: 'only this child\'s derived parent may decline its question' });
+        return refused('not-parent', { detail: 'only this child\'s derived parent may decline its question' });
       }
-      if (!coord.declineAsk(q.id, Date.now())) return sent(409, { ok: false, error: 'not-held' });
+      if (!coord.declineAsk(q.id, Date.now())) return refused('not-held');
       // With no watcher (fix round 1, item 1) the row is declined and the answer is `{ok:true}`, which is true, but no
       // hold is dropped and no push fires: warned, never refused (refusing would contradict the store row).
       if (rules?.doors === undefined) {
@@ -1636,13 +1637,13 @@ export function createQuestions(deps: QuestionsDeps, rules?: QuestionRules): Que
       return sent(200, { ok: true });
     }
     const read = coord.approvalById(q.id);
-    if (!read.ok) return refusal('approval-unreadable', { detail: read.detail });
+    if (!read.ok) return refused('approval-unreadable', { detail: read.detail });
     const row = read.row;
-    if (row === null) return refusal('unknown-approval');
+    if (row === null) return refused('unknown-approval');
     if (row.parentId !== q.fromId) {
-      return refusal('not-parent', { detail: 'only the claimant this prompt was held for may hand it over' });
+      return refused('not-parent', { detail: 'only the claimant this prompt was held for may hand it over' });
     }
-    if (!coord.declineApproval(q.id, q.fromId, Date.now())) return refusal('not-held');
+    if (!coord.declineApproval(q.id, q.fromId, Date.now())) return refused('not-held');
     approvalInputs.delete(q.id);
     const doors = rules?.doors;
     if (doors !== undefined) pushDoorIn(questions.approvalReleased(row.childId, doors.paintedDialogOf(row.childId)));
