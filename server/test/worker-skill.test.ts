@@ -80,7 +80,7 @@ const CONTRACT = [
   // Worker stall watch, wave 3 (spec 2026-09-29 §6.2): ASCII only, no apostrophe.
   "End a turn only on a wake you can name: a mail you sent that asks for an answer, a background agent you launched from your main thread yourself that has not yet reported, or a structured ask. A background shell or Monitor is never that wake: it has no deadline and may never report. A task a subagent started reports to that subagent, so an agent whose completion says it may resume on its own has reported, and is not that wake either. A restart kills every background task. When none of those holds, mail the coordinator what you did and what wakes you next before the turn ends.",
   // Fleet disk retention, DR-25 (spec 2026-10-23 §2.7.2, §10): ASCII only, no apostrophe, no double quote.
-  "A workflow script, a subagent brief or a test step never sets `TMPDIR` to a path inside a work tree and never writes scratch inside one: it uses the temp root this session was started with (`TMPDIR`, or `CCRC_SESSION_TMPDIR` where `TMPDIR` has been overridden). Long command output goes to a file there, or through `tail`, never into the work tree.",
+  "A workflow script, a subagent brief or a test step never sets `TMPDIR` to a path inside a work tree and never writes scratch inside one: it uses the temp root this session was started with (`TMPDIR`, or `CCRC_SESSION_TMPDIR` where `TMPDIR` has been overridden). Long command output goes to a file there, or through `tail`, never into the work tree. Every test and typecheck runs through `ccrc test -- <command>` (for example `ccrc test -- npx vitest run --maxWorkers=2 test/foo.test.ts` or `ccrc test -- npx tsc --noEmit -p test/tsconfig.tests.json`), which runs it in the fleet test slice and queues heavy runs fleet-wide; never run one bare, and never under a `systemd-run` of your own, which the session hook denies.",
   // Workflow rule, operator ruling 2026-10-25: no double quote, straight apostrophe.
   "Never launch a workflow. A worker is the fan-out unit: work that wants a wider fan-out is more workers, which the coordinator dispatches, and your wave's review is a separate review run, never a workflow of yours. A mechanical edit, such as a D-number substitution, a PR body edit or a re-pin, is done in your own main thread.",
 ];
@@ -125,6 +125,13 @@ describe('the worker skill: its contract', () => {
     expect(line).toContain('never writes scratch inside one');
     expect(line).toContain('`CCRC_SESSION_TMPDIR`');
     expect(line).toContain('Long command output goes to a file there, or through `tail`');
+  });
+
+  // D-TBD-test-containment: clause 18 routes every test and typecheck through `ccrc test`, and names the hook's refusal.
+  it('clause 18 routes tests and typechecks through ccrc test, never a bare run or a systemd-run of its own (D-TBD-test-containment)', () => {
+    const line = skill.split('\n').find((l) => l.startsWith('18. '));
+    expect(line).toContain('Every test and typecheck runs through `ccrc test -- <command>`');
+    expect(line).toContain('never run one bare, and never under a `systemd-run` of your own');
   });
 
   it('carries all nineteen clauses verbatim', () => {

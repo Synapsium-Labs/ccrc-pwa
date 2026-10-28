@@ -131,7 +131,7 @@ const CONTRACT = [
   // the curly spelling can drift. It names the CLIENT verb, not the route; it is an identity declaration, never a restriction.
   'Before delegating, declare coordinator intent for this session with `ccrc-api coordinators intent set --session <id>`; clear that declaration when the coordinator role ends. This is an identity declaration, not a restriction on ordinary Agent or Workflow use.',
   // Fleet disk retention, DR-25 (spec 2026-10-23 §2.7.2, §10). ASCII only, no apostrophe, no quote.
-  'A workflow script, a worker brief or a test step never sets `TMPDIR` to a path inside a work tree and never writes scratch inside one: it uses the temp root this session was started with (`TMPDIR`, or `CCRC_SESSION_TMPDIR` where `TMPDIR` has been overridden). Long command output goes to a file there, or through `tail`, never into the work tree.',
+  'A workflow script, a worker brief or a test step never sets `TMPDIR` to a path inside a work tree and never writes scratch inside one: it uses the temp root this session was started with (`TMPDIR`, or `CCRC_SESSION_TMPDIR` where `TMPDIR` has been overridden). Long command output goes to a file there, or through `tail`, never into the work tree. Every test and typecheck runs through `ccrc test -- <command>` (for example `ccrc test -- npx vitest run --maxWorkers=2 test/foo.test.ts` or `ccrc test -- npx tsc --noEmit -p test/tsconfig.tests.json`), which runs it in the fleet test slice and queues heavy runs fleet-wide; never run one bare, and never under a `systemd-run` of your own, which the session hook denies.',
   // Workflow rule, operator ruling 2026-10-25. ASCII only, no apostrophe, no quote.
   'Workflows are not a default. This session launches a workflow only for short, self-contained work that needs nothing from its own children and finishes in minutes: a review, a verification or an audit, or at least three independent items worth running in parallel. Each such workflow carries a time cap, its agents run at `medium` effort, and its vitest runs pass `--maxWorkers=2`. Nobody uses a workflow for a mechanical edit: a D-number substitution, a PR body edit, a rebase or a re-pin. This session never holds its turn open on anything that waits for its own children: it dispatches, ends its turn, and wakes on mail. Mail to a coordinator is held while it reads busy or waiting, so child mail has sat undelivered for hours behind a background workflow that died still reading busy and behind an operator question left open overnight. While any child is active, this session asks the operator in its closing turn text and ends the turn, never with an AskUserQuestion dialog, which reads waiting and holds every child mail behind it (`POST /api/mail` takes no `operator` recipient), and it never leaves a blocking question open while a child waits. A background workflow that stops, for any reason, is a wake: on its task notification, read the held mail (`GET /api/mail?to=<your id>`) in that turn.',
 ];
@@ -472,6 +472,12 @@ describe('the coordinator skill: clause 18, temp and long output', () => {
     expect(line).toContain('never writes scratch inside one');
     expect(line).toContain('`CCRC_SESSION_TMPDIR`');
     expect(line).toContain('Long command output goes to a file there, or through `tail`');
+  });
+  // D-TBD-test-containment: clause 18 routes every test and typecheck through `ccrc test`, and names the hook's refusal.
+  it('routes tests and typechecks through ccrc test, never a bare run or a systemd-run of its own (D-TBD-test-containment)', () => {
+    const line = skill.split('\n').find((l) => l.startsWith('18. '));
+    expect(line).toContain('Every test and typecheck runs through `ccrc test -- <command>`');
+    expect(line).toContain('never run one bare, and never under a `systemd-run` of your own');
   });
 });
 
