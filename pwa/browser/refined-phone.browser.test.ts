@@ -351,7 +351,7 @@ function cardFaults({ expected, cardSel, inside }: { expected: Array<{ label: st
 describe("with 17 lanes the phone's strip keeps every card readable", () => {
   for (const theme of THEMES) {
     for (const width of [360, 390]) {
-      it(`with 17 lanes at 360 and 390 the folded line's four cards and the tapped panel's seventeen run most free first, each shows its windows and every countdown it prints is seen, a long label is cut inside its card, All accounts sits on a row under the cards, and nothing scrolls sideways: ${theme}, ${width}px`, async () => {
+      it(`with 17 lanes at 360 and 390 the folded line's four cards and the tapped panel's thirteen folded-away lanes run most free first, each lane once, each shows its windows and every countdown it prints is seen, a long label is cut inside its card, All accounts sits on a row under the cards, and nothing scrolls sideways: ${theme}, ${width}px`, async () => {
         const { ctx, page, errors, order } = await openFolded({ skin: REFINED, theme, width }, 4);
         const { cases } = seventeen();
         const expected = mostFreeFirst(cases).map((c) => ({ label: c.label, windows: c.windows, counted: c.counted }));
@@ -383,9 +383,10 @@ describe("with 17 lanes the phone's strip keeps every card readable", () => {
           });
           expect([...cardsOfLine, ...end], 'the folded line').toEqual([]);
 
-          // The panel a real tap opens: all seventeen, each scrolled into the panel's visible box before it is judged.
+          // The panel a real tap opens: the thirteen lanes the line folds away, continuing its order (Task C13), each
+          // scrolled into the panel's visible box before it is judged.
           await openPanel(page);
-          const inPanel = await page.evaluate(cardFaults, { expected, cardSel: '.accounts-flyout .account-gauge', inside: '.accounts-flyout' });
+          const inPanel = await page.evaluate(cardFaults, { expected: expected.slice(4), cardSel: '.accounts-flyout .account-gauge', inside: '.accounts-flyout' });
           const sideways = await page.evaluate(() => {
             const out: string[] = [];
             if (document.documentElement.scrollWidth > window.innerWidth + 0.5) out.push('the page scrolls sideways');
@@ -721,6 +722,10 @@ describe("the phone's panel", () => {
     it(`with a release waiting the panel stays inside the viewport, bounded by the room under the strip, and scrolls inside itself to its last card: ${named(view)}`, async () => {
       const { ctx, page, errors } = await openFolded(view, 4, false, undefined, true);
       try {
+        // A shorter phone (390x744): the panel holds the thirteen folded-away lanes (Task C13), which fit Instrument's room
+        // under the strip at 844 to the pixel, so the case would no longer reach the panel's own scrolling.
+        await page.setViewportSize({ width: view.width, height: 744 });
+        await page.waitForTimeout(300);
         const before = await page.evaluate(measurePanelBaseline);
         await openPanel(page);
         const m = await page.evaluate(measurePanel, true);

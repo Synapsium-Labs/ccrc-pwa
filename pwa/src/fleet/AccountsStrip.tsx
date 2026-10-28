@@ -27,7 +27,9 @@
 //
 // THE FLYOUT (R120, strip-hover-flyout). At the desk, while the strip is folded, resting the pointer on the line (the
 // group, its end cell included) or moving keyboard focus into it opens `.accounts-flyout`: a panel under the line, drawn over
-// the content, holding EVERY lane in `lanesByFree`'s order, the line's own cards among them. It is the same card, from
+// the content, holding ONLY the lanes the line folds away (`fold.hidden`), in `lanesByFree`'s order from the line's last
+// card, so every lane is drawn once across the two (Task C13) and the panel holds as many cards as the control's "+n"
+// says. The stylesheet sets its cards in the line's own tracks, its columns under the line's. It is the same card, from
 // the same `laneCard` function, and the same `open-lane` door; it is a group of its own, one tab stop with the arrows,
 // Home and End across it. It sits in the DOM inside the strip's group, after the line's cards and before the end cell,
 // so Tab goes line, flyout, control, All accounts, and focus moving between them never leaves the strip. It opens after
@@ -49,8 +51,8 @@
 // mounted and nothing about it runs. Presentation state, per mount.
 //
 // THE PHONE'S PANEL (S5c, phone-strip-tap-panel). Below 900 px a folded strip has no hover and no stored choice, so its
-// control opens the SAME panel as the desk's flyout (`lanesPanel`: every lane in `lanesByFree`'s order, each card its
-// lane's door) on a TAP, and on nothing else: not the pointer resting on the strip, not focus, not a tap on a line card
+// control opens the SAME panel as the desk's flyout (`lanesPanel`: the lanes the line folds away, in `lanesByFree`'s
+// order, each card its lane's door) on a TAP, and on nothing else: not the pointer resting on the strip, not focus, not a tap on a line card
 // (a line card is a door and only navigates). It sits in the DOM inside the end cell, after the control and before All
 // accounts, so Tab goes the control, the panel's cards, All accounts; the stylesheet draws it over the content under
 // the strip, and `--panel-room` (the room left under the strip, measured when it opens and when the window resizes)
@@ -200,7 +202,7 @@ export function AccountsStrip({ store = useFleetStore }: { store?: FleetStore } 
   // inside" means to the flyout. The end cell's controls are no cards, and a click's focus is not keyboard focus.
   const keyboardHeld = (el: Element | null, group: HTMLElement): boolean =>
     el !== null && group.contains(el) && el.matches('.account-gauge:focus-visible');
-  // Closing a panel of every lane that holds focus would drop focus to the page, so focus goes back first. The one
+  // Closing a panel that holds focus would drop focus to the page, so focus goes back first. The one
   // hand-back, for the desk's flyout and the phone's panel alike, on a close and on the panel becoming moot: `held` is
   // the panel's own focus flag, and `to` where its focus belongs. The desk's flyout hands it to the line's tab stop, the
   // card the operator came from; that move starts inside the strip, so `onGroupFocus` reads it as a move and not as
@@ -312,7 +314,9 @@ export function AccountsStrip({ store = useFleetStore }: { store?: FleetStore } 
   };
 
   const stop = lineStop!;
-  const flyStop = live.find((a) => a.wrapper === flyStopId)?.wrapper ?? live[0]!.wrapper;
+  // The panel's tab stop, over the lanes it holds (`fold.hidden`): the card last focused, else its first. Undefined only
+  // when nothing is folded away, and then no panel is mounted to read it.
+  const flyStop = fold.hidden.find((a) => a.wrapper === flyStopId)?.wrapper ?? fold.hidden[0]?.wrapper;
   const flyShown = flyoutOn && flyOpen;
 
   // The flyout's delays and its closing (focus handed back first, by `handFocusBack`).
@@ -382,7 +386,7 @@ export function AccountsStrip({ store = useFleetStore }: { store?: FleetStore } 
   };
 
   // One card, one markup: the line's cards and the flyout's are this function's output. `list` is what the group holds
-  // (`shown` on the line, every live lane in the flyout), `at` the roving stop's lane, `refs` and `onStop` its group's.
+  // (`shown` on the line, `hidden` in the flyout), `at` the roving stop's lane, `refs` and `onStop` its group's.
   // Enter opens the lane (a link, so Space does not); the arrow keys, Home and End step across `list`, none wrapping, and
   // moving focus moves the stop (`onFocus` records it). `list` is never empty here, so `rovingStep` has a card to land on.
   // `after` runs once the lane is open, from a tap and from Enter alike: the phone's panel closes itself with it.
@@ -436,8 +440,9 @@ export function AccountsStrip({ store = useFleetStore }: { store?: FleetStore } 
     );
   };
 
-  // The panel of every lane, the desk's flyout and the phone's alike: a group of its own, named for what it holds (the
-  // line's group is named by `lanesRowLabel`, and the two never share a name), not a dialog, and it takes no focus.
+  // The panel of the lanes the line folds away (`fold.hidden`, so every lane is drawn once across the line and the panel,
+  // Task C13), the desk's flyout and the phone's alike: a group of its own, named for what it holds (the line's group is
+  // named by `lanesRowLabel`, and the two never share a name), not a dialog, and it takes no focus.
   // `held` is the ref its focus and blur keep (whether a card of it holds focus); the phone's call adds its id, its
   // bound and what a card does once it has opened its lane.
   const lanesPanel = (
@@ -453,7 +458,7 @@ export function AccountsStrip({ store = useFleetStore }: { store?: FleetStore } 
       onFocus={() => { held.current = true; }}
       onBlur={() => { held.current = false; }}
     >
-      {live.map((a, i) => laneCard(a, i, live, flyStop, flyRefs.current, setFlyStopId, phone?.onOpenLane))}
+      {fold.hidden.map((a, i) => laneCard(a, i, fold.hidden, flyStop!, flyRefs.current, setFlyStopId, phone?.onOpenLane))}
     </div>
   );
 

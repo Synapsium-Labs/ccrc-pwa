@@ -409,8 +409,8 @@ describe('under coarse emulation every card and All accounts is at least 44 px t
     it(named(view), async () => {
       const phone = view.width < 900;
       // A desk shows every card (seeded expanded); a phone is always folded: its line shows two lines of two cards at 390
-      // (its grid draws two tracks there), and a
-      // tap on the control opens a panel of the phone's whole roster (the two short lanes too).
+      // (its grid draws two tracks there), and a tap on the control opens a panel of the lanes the line folds away (the
+      // two short lanes among them, Task C13), so the line and the panel draw the phone's whole roster once.
       const want = phone ? 19 : 17;
       const opened = await openApp(browser!, view, phone ? PHONE_FIXTURE : FIXTURE);
       const { ctx, page, errors } = opened;
@@ -421,7 +421,7 @@ describe('under coarse emulation every card and All accounts is at least 44 px t
         await page.waitForTimeout(300);
         if (phone) {
           await page.locator('.accounts-strip .accounts-end [aria-expanded]').tap();
-          await page.waitForFunction((n) => document.querySelectorAll('.accounts-flyout .account-gauge').length === n, want, { timeout: 10_000 });
+          await page.waitForFunction((n) => document.querySelectorAll('.accounts-flyout .account-gauge').length === n, want - 4, { timeout: 10_000 });
           await page.waitForTimeout(150);
         }
         const small = await page.evaluate(({ count, panel }) => {
@@ -431,9 +431,9 @@ describe('under coarse emulation every card and All accounts is at least 44 px t
           const end = document.querySelector<HTMLElement>('.accounts-strip .accounts-end [data-command="go-accounts"]');
           // The fold's control is a finger's height too (a desk's reads "Show fewer", a phone's opens the panel).
           const control = document.querySelector<HTMLElement>('.accounts-strip .accounts-end [aria-expanded]');
-          // The panel sits inside the strip, so a phone's strip holds its four line cards and the panel's whole roster.
-          const all = panel ? count + 4 : count;
-          if (cards.length !== all) out.push(`${cards.length} cards, not ${all}`);
+          // The panel sits inside the strip, so a phone's strip holds its four line cards and the panel's folded-away rest:
+          // the whole roster, each lane once.
+          if (cards.length !== count) out.push(`${cards.length} cards, not ${count}${panel ? ' (the line and the panel)' : ''}`);
           if (end === null) out.push('no All accounts');
           if (control === null) out.push('no fold control');
           for (const el of [...cards, ...(end === null ? [] : [end]), ...(control === null ? [] : [control])]) {

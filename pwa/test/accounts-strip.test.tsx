@@ -792,7 +792,7 @@ describe('the lanes fold (S5b, D-6530)', () => {
       return container;
     };
 
-    it("a tap on '+13 more' opens a panel of all 17 lanes in lanesByFree's order, in the end cell between the control and All accounts, and the control names it", async () => {
+    it("a tap on '+13 more' opens a panel of the 13 lanes the line folds away, in lanesByFree's order from the line's last card, in the end cell between the control and All accounts, and the control names it", async () => {
       const container = await mountPhone();
       const more = control(WORDS);
       expect(panelOf(container)).toBeNull();
@@ -802,8 +802,8 @@ describe('the lanes fold (S5b, D-6530)', () => {
       tapControl();
       const panel = panelOf(container)!;
       expect(panel).not.toBeNull();
-      expect(panelCardsOf(container).map(nameOf)).toEqual(lanesByFree(names.accounts).map((a) => labelOf(a.wrapper)));
-      expect(panelCardsOf(container)).toHaveLength(17);
+      expect(panelCardsOf(container).map(nameOf)).toEqual(lanesByFree(names.accounts).slice(4).map((a) => labelOf(a.wrapper)));
+      expect(panelCardsOf(container)).toHaveLength(13);
       // The line stays four cards, the control keeps its words, and nothing navigated.
       expect(lineCardsOf(container)).toHaveLength(4);
       expect(more).toHaveTextContent(WORDS);
@@ -841,7 +841,7 @@ describe('the lanes fold (S5b, D-6530)', () => {
         expect(card).toHaveAttribute('role', 'link');
         expect(card).toHaveAttribute('data-action', 'open-lane');
       }
-      const order = lanesByFree(names.accounts).map((a) => a.wrapper);
+      const order = lanesByFree(names.accounts).slice(4).map((a) => a.wrapper); // the lanes the line folds away
       fireEvent.click(panelCardsOf(container)[12]!);
       expect(location.pathname + location.search).toBe(`/accounts?lane=${order[12]}`);
       expect(panelOf(container)).toBeNull();
@@ -850,7 +850,7 @@ describe('the lanes fold (S5b, D-6530)', () => {
 
     it('Enter on a panel card opens that lane and closes the panel', async () => {
       const container = await openPanel();
-      const order = lanesByFree(names.accounts).map((a) => a.wrapper);
+      const order = lanesByFree(names.accounts).slice(4).map((a) => a.wrapper); // the lanes the line folds away
       fireEvent.keyDown(panelCardsOf(container)[3]!, { key: 'Enter' });
       expect(location.pathname + location.search).toBe(`/accounts?lane=${order[3]}`);
       expect(panelOf(container)).toBeNull();
@@ -962,7 +962,7 @@ describe('the lanes fold (S5b, D-6530)', () => {
       expect(control()).toHaveTextContent(/^\+13 more/);
       expect(control()).toHaveAttribute('aria-expanded', 'false');
       tapControl();
-      expect(panelCardsOf(container)).toHaveLength(17);
+      expect(panelCardsOf(container)).toHaveLength(13);
       expect(lineCardsOf(container)).toHaveLength(4);
     });
 
@@ -988,7 +988,7 @@ describe('the lanes fold (S5b, D-6530)', () => {
         tapControl();
         expect(panelOf(container)).toBeNull();
         tapControl();
-        expect(panelCardsOf(container)).toHaveLength(17);
+        expect(panelCardsOf(container)).toHaveLength(13);
         expect(reads.filter((k) => k === 'ccrc-accounts-strip')).toEqual([]);
         expect(writes).toEqual([]);
         expect(backing.get('ccrc-accounts-strip')).toBe('expanded');
@@ -1044,7 +1044,7 @@ describe('the lanes fold (S5b, D-6530)', () => {
       expect(panelOf(container)).toBeNull();
       expect(control()).toHaveAttribute('aria-expanded', 'false');
       tapControl();
-      expect(panelCardsOf(container)).toHaveLength(17);
+      expect(panelCardsOf(container)).toHaveLength(13);
     });
 
     it('a poll that leaves nothing to fold takes the panel with it, and a later poll does not reopen it', async () => {
@@ -1182,7 +1182,7 @@ describe('the lanes fold (S5b, D-6530)', () => {
     const names = seventeenLanes(nowSec);
     const labelOf = (id: string): string => names.roster.find((r) => r.id === id)!.label;
 
-    it('at the desk, folded, hovering the line opens the flyout after FLYOUT_OPEN_MS, holding every lane in lanesByFree\'s order', async () => {
+    it('at the desk, folded, hovering the line opens the flyout after FLYOUT_OPEN_MS, holding the lanes the line folds away in lanesByFree\'s order', async () => {
       const container = await mountDesk();
       expect(flyoutOf(container)).toBeNull();
       fireEvent.pointerEnter(groupOf(container));
@@ -1191,8 +1191,8 @@ describe('the lanes fold (S5b, D-6530)', () => {
       advance(1);
       const fly = flyoutOf(container)!;
       expect(fly).not.toBeNull();
-      expect(flyCardsOf(container).map(nameOf)).toEqual(lanesByFree(names.accounts).map((a) => labelOf(a.wrapper)));
-      expect(flyCardsOf(container)).toHaveLength(17);
+      expect(flyCardsOf(container).map(nameOf)).toEqual(lanesByFree(names.accounts).slice(3).map((a) => labelOf(a.wrapper)));
+      expect(flyCardsOf(container)).toHaveLength(14);
       // In the strip's group, after the line's cards and before the end cell.
       expect([...groupOf(container).children].map((c) => c.className)).toEqual(
         ['account-gauge', 'account-gauge', 'account-gauge', 'accounts-flyout', 'accounts-end']);
@@ -1231,7 +1231,7 @@ describe('the lanes fold (S5b, D-6530)', () => {
       expect(flyoutOf(container)).toBeNull();
       advance(FLYOUT_OPEN_MS);
       expect(flyoutOf(container)).not.toBeNull();
-      expect(flyCardsOf(container)).toHaveLength(17);
+      expect(flyCardsOf(container)).toHaveLength(14);
     });
 
     it('a pointer passing by does not open it', async () => {
@@ -1382,18 +1382,18 @@ describe('the lanes fold (S5b, D-6530)', () => {
       const container = await openByHover();
       const cards = (): HTMLElement[] => flyCardsOf(container);
       expect(cards().filter((c) => c.tabIndex === 0).map(nameOf)).toEqual([nameOf(cards()[0]!)]);
-      expect(cards().filter((c) => c.tabIndex === -1)).toHaveLength(16);
+      expect(cards().filter((c) => c.tabIndex === -1)).toHaveLength(13);
       act(() => { cards()[0]!.focus(); });
       fireEvent.keyDown(cards()[0]!, { key: 'ArrowLeft' });    // no wrap at the start
       expect(document.activeElement).toBe(cards()[0]);
       fireEvent.keyDown(cards()[0]!, { key: 'ArrowRight' });
       expect(document.activeElement).toBe(cards()[1]);
       fireEvent.keyDown(cards()[1]!, { key: 'End' });
-      expect(document.activeElement).toBe(cards()[16]);
-      fireEvent.keyDown(cards()[16]!, { key: 'ArrowDown' });   // no wrap at the end
-      expect(document.activeElement).toBe(cards()[16]);
-      expect(cards().filter((c) => c.tabIndex === 0)).toEqual([cards()[16]]);
-      fireEvent.keyDown(cards()[16]!, { key: 'Home' });
+      expect(document.activeElement).toBe(cards()[13]);
+      fireEvent.keyDown(cards()[13]!, { key: 'ArrowDown' });   // no wrap at the end
+      expect(document.activeElement).toBe(cards()[13]);
+      expect(cards().filter((c) => c.tabIndex === 0)).toEqual([cards()[13]]);
+      fireEvent.keyDown(cards()[13]!, { key: 'Home' });
       expect(document.activeElement).toBe(cards()[0]);
     });
 
@@ -1411,7 +1411,7 @@ describe('the lanes fold (S5b, D-6530)', () => {
         expect(card).toHaveAttribute('data-action', 'open-lane');
         expect(card).not.toHaveAttribute('data-command');
       }
-      const order = lanesByFree(names.accounts).map((a) => a.wrapper);
+      const order = lanesByFree(names.accounts).slice(3).map((a) => a.wrapper); // the lanes the line folds away
       fireEvent.click(flyCardsOf(container)[12]!);
       expect(location.pathname + location.search).toBe(`/accounts?lane=${order[12]}`);
       navigate('/');
@@ -1654,14 +1654,14 @@ describe('the lanes fold (S5b, D-6530)', () => {
       fireEvent.pointerEnter(groupOf(container));
       advance(FLYOUT_OPEN_MS);
       expect(flyoutOf(container)).not.toBeNull();
-      const dropped = lanesByFree(names.accounts)[5]!.wrapper;
       const card = flyCardsOf(container)[5]!;
+      const dropped = names.accounts.find((a) => labelOf(a.wrapper) === nameOf(card))!.wrapper;
       act(() => { card.focus(); });
       // The store's next answer comes without that lane: its card leaves the DOM while it holds focus, and no blur is
       // fired.
       stubLanes(names.accounts.filter((a) => a.wrapper !== dropped));
       expect(card.isConnected).toBe(false);
-      expect(flyCardsOf(container)).toHaveLength(16);
+      expect(flyCardsOf(container)).toHaveLength(13); // sixteen lanes, three on the line
       expect(document.activeElement).toBe(document.body);
       const field = outsideField();
       act(() => { field.focus(); });

@@ -816,9 +816,9 @@
 .accounts-end > :not([aria-controls]) {
   flex: none;
 }
-/* The phone's panel (phone-strip-tap-panel): every lane's card, opened by a tap on the fold's control. It sits in the
-   end cell after the control, but hangs from the strip (`position: relative` above): just under the strip's bottom
-   edge and across its width, drawn over the content and pushing none of it down. Its cards wrap in the strip's own
+/* The phone's panel (phone-strip-tap-panel): the cards of the lanes the line folds away (Task C13), opened by a tap on
+   the fold's control. It sits in the end cell after the control, but hangs from the strip (`position: relative`
+   above): just under the strip's bottom edge and across its width, drawn over the content and pushing none of it down. Its cards wrap in the strip's own
    phone grid (the selector lists above). Taller than the room left under the strip, it scrolls itself: that room is
    `--panel-room`, which the strip measures when the panel opens and gives it inline, so this default (the whole
    viewport) holds only until then. Layer, hairline and the pop shadow: the surface the other floating panels use. The
