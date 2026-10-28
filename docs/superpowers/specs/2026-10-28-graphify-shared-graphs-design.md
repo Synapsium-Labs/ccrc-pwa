@@ -410,7 +410,7 @@ again, full or incremental by §3.3's failure rule and its backoff (§3.3.1).
 
 ## 4. Where builds run
 
-Builds run in the capped tests slice, through its one owner, `ccrc test` (#1785, D-TBD-test-containment):
+Builds run in the capped tests slice, through its one owner, `ccrc test` (#1785):
 
 - **The slice.** `ccrc-tests.slice` has a hard `MemoryMax`, bounded swap, `CPUWeight` and `IOWeight` of 20 against
   a session's systemd default of 100, a CPU quota, and no `MemoryHigh` (#72, #84). Its limits are ccrc settings
