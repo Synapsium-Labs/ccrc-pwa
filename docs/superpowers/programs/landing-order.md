@@ -21,12 +21,12 @@ merges, workers never do, and an unattended landing is the goal when every safeg
 | 2 | 2, repository code | `ci.yml` gains `merge_group`, the macOS skip and a `pull_request` concurrency group; `pr-state`'s `queue` field; the dequeue feed event and coordinator mail; the hook denies `gh pr merge` to workers; clause 15's native-queue sentence | ccd, hook, server | wave 1; child-reclamation wave 3 | #234 | merged 2026-10-03 (`0087a045`); run 238 closed; deploy via ccrc's updater (fleet-first measured safe); Task 7's proof run 2026-10-20 stopped by stop rule 3 (Decisions, 2026-10-20 13:00); its re-run on 2026-10-21 turned the queue on, and it stays on by the operator's ruling after stop rule 6 (Decisions, 2026-10-21 12:15) |
 | 2b | 2, the bypass deny | the hook denies `--admin` and a `gh api` merge call in every fleet session | hook | the operator's queue ruleset, approvals at 0, and the proof run; wave 3d; wave 3e | plan #1678 | planned 2026-10-27 (`docs/superpowers/plans/2026-10-27-landing-order-wave2b-bypass-deny.md`, D-7111 to D-7116); dispatches after wave 3e merges and the operator confirms its fleet-wide reach |
 | 3 | — | Task 7's preconditions (the payload cap, the quote-dense timing pin), wave 2's residue, Task 7's runbook text | hook, ccd, doctor | wave 2 | #248 | merged 2026-10-07 (`9a255a74`); run 250 closed; deploy AGENT-FIRST via ccrc's updater, then Task 7; run 250 (`ccrc-pwa-still-delta`); block 3906–3915 + 3916–3920 |
-| 3b | 3 | `ccd-land-probe`, the read-only conflict radar, and its opt-in mirror | ccd, deploy | wave 3 | plan #1678 | planned 2026-10-27 (`docs/superpowers/plans/2026-10-27-landing-order-wave3b-conflict-radar.md`); run 310 (the run's wave 4) dispatched 2026-10-27 on `ccrc-pwa-clear-ridge`, block 4326–4335; PR #1740; review 1109 ruled a fix round 2026-10-28 |
+| 3b | 3 | `ccd-land-probe`, the read-only conflict radar, and its opt-in mirror | ccd, deploy | wave 3 | plan #1678 | planned 2026-10-27 (`docs/superpowers/plans/2026-10-27-landing-order-wave3b-conflict-radar.md`); run 310 (the run's wave 4) dispatched 2026-10-27 on `ccrc-pwa-clear-ridge`, block 4326–4335; PR #1740; reviews 1109 and 1125 each ruled a fix round 2026-10-28 (fix round 2 under way, the last review round under the cap) |
 | 3c | — | Task 7's re-run preconditions: `pr-state`'s per-workspace git cost, a sweep failure the server reports, the two suite flakes the queue turned into removals, the runbook's re-run changes | ccd, server, tests, plan text | wave 2's proof run | plan #974; #1046 | merged 2026-10-21 (`4ce282f8`) after reviews 718, 724 and 726 and two fix rounds; run 710 (the run's wave 5) closed; its block of 10 defined in the plan; deployed 2026-10-21 by ccrc's updater, fleet box first (v0.0.508); Task 7's re-run followed (Decisions, 2026-10-21 12:15) |
 | 3d | 2, the lane | the dequeue lane treats the removal GitHub records at a successful queue merge as no dequeue: `pr-state` reads the removal's `reason`, and a removal whose reason is `merged` reads `landed`, never `dequeued`; any other reason, or none, is still announced on its first read; no two-sweep wait, no new wire field, no reason allowlist; and the `merged` feed record is kept once per workspace and PR across a server restart (stop rule 6; Decisions, 2026-10-21 14:49) | server, ccd | Task 7's re-run | plan #1088; #1096 | merged 2026-10-21 (`e173c1aa`) through the merge queue after review 759, with no fix round; run 751 (the run's wave 6) closed; three numbers of its block of 10 defined in the plan; deploy via ccrc's updater (either box first, the fleet box by default), then the live proof (Decisions, 2026-10-21 19:17) |
 | 3e | 2, the landing route | the coordinator reads the repository's own rules before each landing: the merge method from every effective `pull_request` rule and the merge settings, the required checks from the rulesets and classic protection (confirmed absence apart from an unreadable read), three routes (the native queue, a gated direct merge, an ungated direct merge), a merge-commits-only repository landing with `--merge` at the reviewed head, and every conflict a stop (spec §5.7) | skills, tests | wave 3d | plan #1121 | §5.7's text approved 2026-10-22; planned 2026-10-22 in `docs/superpowers/plans/2026-10-22-landing-order-wave3e-landing-route.md` (Decisions, 2026-10-22 07:13); run 774 (the run's wave 7), PR #1127; fix rounds 1–5; at `awaiting-review` on `04745c73`, its fresh review held by the review-round cap (Decisions, 2026-10-27 08:20) |
 | 3f | — | the server's checks word reads a queued or running check run as `pending`, not `pass`; the cost of the 30 s sweep cadence is measured in its plan (spec §5.7.8) | server | wave 3e | — | ruled 2026-10-21; to plan |
-| 4 | 4 | the opted-in lineage table; `lineage-unmeasured` | server | waves 3b and 3e | plan #1678 | planned 2026-10-27 (`docs/superpowers/plans/2026-10-27-landing-order-wave4-lineage-acceptance.md`, D-7102 to D-7110); dispatches after waves 3b and 3e merge; arming it is the operator's |
+| 4 | 4 | the opted-in lineage table; `lineage-unmeasured` | server | waves 3b and 3e | plan #1678 | planned 2026-10-27 (`docs/superpowers/plans/2026-10-27-landing-order-wave4-lineage-acceptance.md`, D-7102 to D-7110; amended 2026-10-28, D-7268 and D-7269); dispatches after waves 3b and 3e merge; arming it is the operator's |
 | 4b | 3, the console half | the radar's server reader, its wire fields and the PWA conflict chip (moved out of wave 3b, D-4329) | server, pwa | wave 4 | — | to plan |
 | 5 | 5 | the landing line: entries, intents, holds, `land-candidate`, the coordinator's pinned merge, the PWA doors | server, ccd, skills, pwa | waves 2–4; session-continuity wave 1 | — | to plan |
 
@@ -1051,6 +1051,48 @@ carries it (spec §5.1, amended 2026-09-24).
       change; no coordinator mail goes out.
   - **Wave 3e is still held.** At 08:00 run 774 still reads 4 review rounds against a cap of 3, and no lift is
     recorded.
+- **2026-10-28 11:05 — wave 3b's fix round 1 reviewed and sent back for a second; wave 4's lineage reads amended.**
+  - **The wave-done.** Run 310's worker reported fix round 1's wave-done at `b3b5e7ab`, four commits after the
+    reviewed tip. The tip, the PR's head and the remote branch agreed, and the required checks were green. The run went
+    to `awaiting-review`.
+  - **Review run 1125**, round 2 of the run's cap of 3, ran the held-out panel over the fix round and two wave lenses
+    (conformance to the round-1 rulings, and the read-only boundary over the whole probe). It found 6 important
+    findings, 11 advisory and 8 refuted, with no lens unverified. The wave's suites and the repo-wide guards were
+    green at the tip. The reviewer re-measured 15 of the worker's 53 mutation rows, all red, and planted five gaps of
+    its own, each green. The important ones:
+    - nothing goes red when the child is recorded only after the signals are unblocked;
+    - the table of option forms the git door admits has no literal pin, unlike the door's other tables;
+    - README says the door refuses an option after an operand, and it does not;
+    - README and a test name say the spawn pins catch any other way to start a process, and an `asyncio` spawn passes;
+    - an aliased import after a semicolon passes the alias pin;
+    - an undecided row's lineage carries `tip: null`, which the plan's form does not allow, and no test pins it.
+  - **Ruled: fix round 2.** The advisories traced most of the remaining cleanup gaps to one cause: the stop-signal
+    handler raises wherever the interpreter happens to be. A signal in the closing path, just after the scratch or a
+    temp file is made, or inside the stale sweep's removal can leave the scratch or a temp file behind. Masks narrow
+    those windows but cannot close them. So:
+    - the handler now only records the signal and kills the child's process group;
+    - the probe stops at fixed points, and every cleanup runs to its end.
+    - The spawn pins become a census of the program's syntax tree: its imports, their aliases and the dynamic
+      builtins.
+    - The git door refuses a dash-led element after the fetch's `--` too.
+    - Each unpinned guard gets its red, and the prose says what the pins hold.
+  - **Accepted:**
+    - `tip: null` for a row whose local read the budget left undecided;
+    - `fetch-failed` for a failure before the first write;
+    - the probe header's step list;
+    - the wider wording "an object the project already holds";
+    - the child unblocking its signals before its exec;
+    - `gh pr list` being a GraphQL read.
+
+    Their numbers are defined when the wave is accepted.
+  - **Wave 4's reads amended** (its plan, D-7268 and D-7269):
+    - the lineage file's own `at` gets a freshness bound of 2400 s, so a lineage the radar stopped rewriting never
+      accepts;
+    - an unmeasured doc's `null` fields read as absent, and a `null` tip answers `lineage-unmeasured` with detail
+      `tip-unmeasured`.
+  - **The review cap.** The next review of wave 3b is the last before the operator must lift run 310's cap.
+  - **Wave 3e is still held.** At 11:05 run 774 still reads 4 review rounds against a cap of 3, and no lift is
+    recorded.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
   this file until a plan on the same ref defines it (`deviation-refs.test.ts`).
 
@@ -1299,6 +1341,9 @@ above were read on 2026-10-25 and end at that day's midday; a later run of the s
 - **From wave 3b's review (1109), carried:** two other readers of `GET repos/<slug>/rules/branches/<base>` take one
   page, as the probe did before its fix round: `ccd/ccd`'s landing-rules read and `deploy/measure-landing.py`. A
   later wave pages them, or treats a full page as unmeasured.
+- **A project the tick budget leaves unstarted** keeps its old lineage files while `enabled` stays fresh, and the
+  tick takes projects in sorted order, so the same tail project can miss every tick (review 1125's N6). Wave 4's
+  lineage freshness bound makes that fail safe (D-7268). A later wave may rotate the order.
 - **SAFETY.** Never a destructive `ccd` verb against the live host; never touch tmux, `~/.cc-sessions`,
   `~/.cc-limits` or `claude-session@*.service` directly; fixture HOMEs only in tests; `gh` stays off the exec
   whitelist; never print secret contents.
@@ -1322,6 +1367,6 @@ verdict and the test that runs it; clause 15, the route prose, the licence, the 
 the PR, the deploy (`ccrc rollout --to` the prerelease that carries it, then the installed skill text verified in
 every home) and the live proof. Then wave 3f, the server's running-check fix.
 
-**Wave 3b (stage 3, `ccd-land-probe`)** is run 310, PR #1740, in fix round 1 after review run 1109 (Decisions,
-2026-10-28 08:00). Its next wave-done gets a fresh review run.
+**Wave 3b (stage 3, `ccd-land-probe`)** is run 310, PR #1740, in fix round 2 after review run 1125 (Decisions,
+2026-10-28 11:05). Its next wave-done gets a fresh review run, the last under the run's review cap.
 - **Wave 2b** (deny `--admin` and `gh api` merges fleet-wide) is planned after wave 3e's plan (spec §11, item 12).

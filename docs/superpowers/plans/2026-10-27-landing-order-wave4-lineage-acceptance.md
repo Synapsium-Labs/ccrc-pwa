@@ -61,6 +61,7 @@ The workspace is a fresh child from `main`. Arming (`lineage=on`) is the operato
 A session that can forge those files can already move its own ref, so stage 4 adds no capability a session lacked. What stage 4 does guarantee:
 - a stale or missing marker never accepts;
 - a lineage that is inconsistent in itself never accepts;
+- a lineage file the radar stopped rewriting never accepts;
 - a tip that moves between the reads never accepts;
 - the PR checks still run on the live head.
 
@@ -77,7 +78,7 @@ A session that can forge those files can already move its own ref, so stage 4 ad
   - `lineage.ts` imports nothing but types; `lineageRead.ts` declares L3 in its header, in `server/test/rings/ring.ts`'s header grammar.
   - No import is added to `shared/api.ts` (`peers-claims-l0.test.ts`).
 - **Single definitions.**
-  - `LAND_PROBE_ENABLED_FRESH_S = 1200` (four timer intervals; D-7104 says why) and `LINEAGE_MAX_BYTES = 16384` are defined once, in `lineage.ts`.
+  - `LAND_PROBE_ENABLED_FRESH_S = 1200` (four timer intervals; D-7104 says why), `LINEAGE_FRESH_S = 2400` (eight intervals; D-7268 says why) and `LINEAGE_MAX_BYTES = 16384` are defined once, in `lineage.ts`.
   - `lineage-unmeasured` is a member of both arrays. `DONE_REFUSAL_CODES` is derived by `.filter` from `DONE_AUTHORITY_CODES` and defined once in `shared/api.ts` (`core-vocab.test.ts` forbids a hand-typed copy).
   - Each new quoted kebab literal under `server/src/coord` gets its `NOT_CODES` line in `mail-routes.test.ts`, or belongs to a vocabulary.
 - **Wire discipline.** `AdvanceOk.verifiedHead?` is additive and optional, and its one reader is the coordinator skill text. `FLEET_PROTO` is untouched.
@@ -110,7 +111,7 @@ A session that can forge those files can already move its own ref, so stage 4 ad
    - the advance answer carries `verifiedHead`.
 
    After an accepted close, the recorded `handoffCommit` is the live tip.
-3. **A tip that moved between the reads is refused.** An internally inconsistent chain is unreadable: a chain not linked from `tip` through each `p1`, more than 8 entries, an unknown `stop`, a measured doc with no `base`, or a `branch` other than the resolved one.
+3. **A tip that moved between the reads is refused.** An internally inconsistent chain is unreadable: a chain not linked from `tip` through each `p1`, more than 8 entries, an unknown `stop`, a measured doc with no `base`, or a `branch` other than the resolved one. A lineage file the radar stopped rewriting is refused too: an `at` older than 2400 s, more than 60 s in the future, or one that does not parse answers `lineage-unmeasured`, detail `lineage-stale` (D-7268).
 4. **`lineage-unmeasured` ends:**
    - its sender re-sends unchanged at most twice, then reports;
    - two identical retries queue one mail;
@@ -127,12 +128,13 @@ A session that can forge those files can already move its own ref, so stage 4 ad
 
 ### `lineage.ts` (L1)
 
-- **`LineageRead`** is `{ok: true, doc}` or `{ok: false, reason: 'absent' | 'unreadable'}`.
-  - The doc is `{tip, base?, state, chain: {merge, p1, p2}[], stop?, branch?}`.
+- **`LineageRead`** is `{ok: true, doc}` or `{ok: false, reason: 'absent' | 'unreadable' | 'stale'}`.
+  - The doc is `{tip: string | null, base?, state, chain: {merge, p1, p2}[], stop?, branch?}`. A `null` `base` or `stop` reads as absent (D-7269).
   - It is unreadable when any of these holds:
     - bad JSON, `v` not 1, or more than `LINEAGE_MAX_BYTES`;
     - a `project` or `id` other than expected;
-    - any sha that is not 40 lower-case hex;
+    - any sha that is not 40 lower-case hex, except that an `unmeasured` doc's `tip` and `base` may be `null` (D-7269);
+    - a `null` `tip` in a `measured` doc;
     - `state` not in `measured | unmeasured`;
     - `state === 'measured'` without a `base` and a `stop`;
     - a `stop` outside wave 3b's words: `not-a-merge`, `second-parent-not-on-base`, `conflict`, `tree-differs`, `unmeasured`, `limit`;
@@ -140,7 +142,8 @@ A session that can forge those files can already move its own ref, so stage 4 ad
     - `chain[0].merge !== tip` (when the chain is non-empty);
     - `chain[i].p1 !== chain[i+1].merge` for any `i`;
     - a present `branch` that differs from the expected branch.
-  - So wave 3b's fetch-failed doc `{state: 'unmeasured', why, tip, chain: []}` parses.
+  - It is `stale` when it is otherwise readable and its `at` does not parse, is older than `LINEAGE_FRESH_S`, or is more than 60 s in the future (D-7268).
+  - So wave 3b's unmeasured doc `{state: 'unmeasured', why, tip, base: null, chain: [], stop: null}` parses. Its `tip` is the local tip or, for a row whose local read the project budget left undecided on a failed fetch, `null` (wave 3b's fix round 1).
 - **`MarkerRead`** is `'trusted' | 'absent' | 'unreadable' | 'stale'`.
   - `unreadable` covers bad JSON, `v` not 1, and a `project` mismatch.
   - `stale` covers an `at` that does not parse, is older than 1200 s, or is more than 60 s in the future.
@@ -156,6 +159,8 @@ A session that can forge those files can already move its own ref, so stage 4 ad
   | `qualifies === false` | `today`, `lineage-not-expected` |
   | lineage `absent` | `unmeasured`, `not-yet-measured` |
   | lineage `unreadable` | `unmeasured`, `lineage-unreadable` |
+  | lineage `stale` | `unmeasured`, `lineage-stale` |
+  | `doc.tip` is `null` | `unmeasured`, `tip-unmeasured` |
   | `doc.tip !== live` | `unmeasured`, `older-than-the-live-tip` |
   | `claim` is some `chain[i].p1` | `accept` |
   | `doc.state === 'unmeasured'` | `unmeasured`, `partly-measured` |
@@ -234,11 +239,11 @@ Appended to clause 3's sentence about a moving ref: "In a project your brief nam
 
 **Interfaces:**
 - Produces:
-  - `parseLineage(content: string, expect: {project: string; id: string; branch: string}): LineageRead`;
+  - `parseLineage(content: string, expect: {project: string; id: string; branch: string}, nowMs: number): LineageRead`;
   - `parseEnabled(content: string, project: string, nowMs: number): MarkerRead`;
   - `decideLineage(i: LineageInput): LineageDecision`;
   - `readLandingFacts(io: Pick<FleetIO, 'readFileMeasured'>, registryDir: string, project: string, id: string, branch: string, signal?: AbortSignal): Promise<LandingFacts>`;
-  - `LAND_PROBE_ENABLED_FRESH_S` and `LINEAGE_MAX_BYTES`.
+  - `LAND_PROBE_ENABLED_FRESH_S`, `LINEAGE_FRESH_S` and `LINEAGE_MAX_BYTES`.
 
 - [ ] **Step 1: The failing tests.** `coord-lineage.test.ts`:
   - **`decideLineage`:**
@@ -248,8 +253,10 @@ Appended to clause 3's sentence about a moving ref: "In a project your brief nam
     - bad JSON, `v: 2`, 16385 bytes, a foreign `project` or `id`;
     - an upper-case sha, a 39-character sha, `state: 'done'`;
     - a measured doc with no `base`, an unknown `stop`, nine entries;
-    - `chain[0].merge` not the tip, a broken `p1`-to-`merge` link, a `branch` mismatch.
-  - **`parseLineage`, readable:** wave 3b's fetch-failed shape, and a valid three-entry chain.
+    - `chain[0].merge` not the tip, a broken `p1`-to-`merge` link, a `branch` mismatch;
+    - a measured doc with a `null` `tip`, and a measured doc with a `null` `stop`.
+  - **`parseLineage`, readable:** wave 3b's unmeasured shape with a sha `tip` and with a `null` `tip`, each with `base: null` and `stop: null`; and a valid three-entry chain.
+  - **`parseLineage`, stale:** an otherwise valid doc whose `at` is 2401 s old, 61 s in the future, or does not parse; and one 2399 s old, readable.
   - **`parseEnabled`:**
     - valid and fresh;
     - 1201 s old and 61 s in the future, each `stale`;
@@ -269,6 +276,8 @@ Appended to clause 3's sentence about a moving ref: "In a project your brief nam
   | D5 | drop the chain-link check | the broken-link case |
   | D6 | freshness 12000 | the 1201 s row |
   | D7 | `qualifies` ignored | the not-expected precedence case |
+  | D8 | `LINEAGE_FRESH_S` 24000 | the 2401 s lineage case |
+  | D9 | a `null` tip read as `unreadable` | the null-tip readable case and the `tip-unmeasured` row |
 
 - [ ] **Step 6: Commit:** `feat(coord): the lineage decision and its reader (landing order wave 4, Task 1)`.
 
@@ -408,7 +417,7 @@ Appended to clause 3's sentence about a moving ref: "In a project your brief nam
 
 ## Deviations found
 
-Numbers are ISSUED, never chosen; a worker never calls the allocator (worker clause 11). The programme coordinator minted this plan's block, 7102–7110, before the plan landed, and this plan defines all nine. A departure found while executing it is named in the wave-done mail, and the coordinator assigns its number when it records the ruling.
+Numbers are ISSUED, never chosen; a worker never calls the allocator (worker clause 11). The programme coordinator minted this plan's block, 7102–7110, before the plan landed, and this plan defines all nine. Two amendments of 2026-10-28 define D-7268 and D-7269, minted for them. A departure found while executing it is named in the wave-done mail, and the coordinator assigns its number when it records the ruling.
 
 - **D-7102** — `verified-head` (Architecture): spec §5.4's accept row names only the fingerprint answer. Spec §7's R5 says "the landing binds the verified head", so after an accept the live tip replaces the claim everywhere the server binds a head, and the coordinator learns it from `AdvanceOk.verifiedHead`. Clause 15's own words are unchanged, because wave 3e's PR edits it; the landing paragraph defines the substitution instead.
 - **D-7103** — `pause-reads-today` (Design): "probe paused for this project → as today" also covers the global pause (wave 3b's D-4326) and an unreadable pause marker.
@@ -419,3 +428,5 @@ Numbers are ISSUED, never chosen; a worker never calls the allocator (worker cla
 - **D-7108** — `review-any-chain-member` (Design): a review of any commit in the chain is accepted. Each step after it is a proven clean base merge, which is stage 4's premise.
 - **D-7109** — `symlink-gap` (What this does not claim): `readFileMeasured` follows symlinks, and `FleetIO` has no `lstat`, so wave 3b's regular-file rule is not re-proved on the server. That is attribution-grade, like the rest.
 - **D-7110** — `console-half-is-4b` (Architecture): spec §5.3's server reader, wire fields and PWA chip are wave 4b's.
+- **D-7268** — `lineage-freshness` (Design): wave 3b's review (run 1125) found that its tick-start pre-pass keeps `enabled` fresh while a project the tick budget never reaches keeps its old lineage files, and a row whose local read was left undecided under a measured base keeps its previous file too. So the lineage doc's own `at` is read: older than `LINEAGE_FRESH_S`, more than 60 s in the future, or unparseable, the doc reads `stale`. That answers `lineage-unmeasured` with detail `lineage-stale`, and never accepts. The bound is not the marker's 1200 s. A qualifying row of a project the tick reaches is rewritten at every tick, but at its project's place in the tick, not at the tick's start. So two writes of one row can be one start spacing (about 930 s, D-7104) plus one tick's run (at most the unit's 900 s limit) apart: about 1830 s. 2400 s, eight intervals, covers that with a margin, so a radar that is ticking never reads stale. (Amended 2026-10-28; the landing-order ledger's Decisions, 2026-10-28 11:05.)
+- **D-7269** — `null-unmeasured-fields` (Design): wave 3b writes `base: null` and `stop: null` in every unmeasured lineage doc and, since its fix round 1, `tip: null` for a row whose local read the project budget left undecided on a failed fetch. Each `null` reads as absent. A `null` tip answers `lineage-unmeasured` with detail `tip-unmeasured`, never `lineage-unreadable`, so the mail names what happened. A `null` tip in a measured doc is unreadable. (Amended 2026-10-28; the landing-order ledger's Decisions, 2026-10-28 11:05.)
