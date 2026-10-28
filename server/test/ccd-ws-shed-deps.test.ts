@@ -343,6 +343,26 @@ describe('ws-shed-deps refuses, touching nothing', () => {
     expect(h.run(`${CHILD_STUBS} sleep 0 & dead=$!; wait "$dead"; printf '%s 1:1' "$dead" > '${reg('shedding')}'; ${gate}`).stdout)
       .toContain('rc=0');
   });
+  it('a shed killed mid-removal never opens a wake while its orphaned removal still holds the lock: a dead marker pid asks the lock', () => {
+    // The `rm` runs as a child (through `_plat_timeout`, its own process group) and inherits the shed lock's fd, so it
+    // keeps the flock after the shed's bash is killed. A dead pid in the marker is therefore no proof the removal ended.
+    const regDir = path.join(h.home, '.cc-sessions');
+    const lock = path.join(regDir, `.shed-${CHILD_ID}.lock`);
+    const gate = `_ws_expire_spawn_gate ${CHILD_ID}; echo "rc=$? why=$_WS_EXPIRE_SPAWN_WHY"`;
+    fs.writeFileSync(lock, '');
+    const devino = h.run(`_plat_devino '${lock}'`).stdout.trim();
+    expect(devino).toMatch(/^[0-9]+:[0-9]+$/);
+    const deadMarker = `sleep 0 & dead=$!; wait "$dead"; kill -0 "$dead" 2>/dev/null && exit 98;`
+      + ` printf '%s %s' "$dead" '${devino}' > '${reg('shedding')}';`;
+    // A dead holder pid, the lock it marked still standing and held by another live process (the orphaned rm): refused.
+    expect(h.run(`${CHILD_STUBS} ${deadMarker} exec 9>>'${lock}'; flock -n 9 || exit 99; (exec 9>&-; ${gate})`).stdout)
+      .toMatch(/rc=1 why=.*shed/);
+    // The same dead marker against a stale-inode marker and a held lock: refused too (the lock, not the marker, answers).
+    expect(h.run(`${CHILD_STUBS} sleep 0 & dead=$!; wait "$dead"; printf '%s 1:1' "$dead" > '${reg('shedding')}';`
+      + ` exec 9>>'${lock}'; flock -n 9 || exit 99; (exec 9>&-; ${gate})`).stdout).toMatch(/rc=1 why=.*shed/);
+    // Once the orphan lets the lock go, the dead marker strands nothing: free.
+    expect(h.run(`${CHILD_STUBS} ${deadMarker} ${gate}`).stdout).toContain('rc=0');
+  });
   it('a real shed whose lock file is purged before it marks it refuses `unmeasured`, removing nothing', () => {
     // The marker binds the lock's inode, read just after the lock is taken and again after the marker is written.
     const pre = `_reg_set() { [[ $2 == shedding ]] && rm -f "$REG/.shed-$1.lock"; command printf '%s' "$3" > "$REG/$1.$2"; };`;
