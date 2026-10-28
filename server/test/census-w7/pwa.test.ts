@@ -55,6 +55,12 @@ describe('W7 PWA census: FIXTURE rows (each query against one counted site and o
     expect(got.map((s) => [s.symbol, s.text])).toEqual([['gone', "s.status === 'dead'"], ['live', "'dead' !== s.status"]]);
   });
 
+  it('inlineDeadChecks: the owner, fleet/presence.ts, holds the definition and is not counted (C7c, D-7181)', () => {
+    const text = "export function paneGone(s: S): boolean { return s.status === 'dead'; }";
+    expect(run(inlineDeadChecksIn, text, 'pwa/src/fleet/presence.ts')).toEqual([]);
+    expect(run(inlineDeadChecksIn, text, 'pwa/src/fleet/other.ts').map((s) => s.symbol)).toEqual(['paneGone']);
+  });
+
   it('coordPresenceSites: the definition, each call and an answer compared with dead; another function is not', () => {
     const got = run(coordPresenceSitesIn, [
       'export function coordPresence(c: string | null, s: S | null, f: boolean): P { return "alive"; }',

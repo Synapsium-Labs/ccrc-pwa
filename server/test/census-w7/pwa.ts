@@ -69,6 +69,8 @@ export const accountsReaders = (): W7Site[] => overPwa(accountsReadersIn);
 
 // ─── 2. inline dead checks and coordPresence (ARCH-49, C7c) ────────────────────────────────────────────────────────
 
+/** Where a status-dead comparison is the definition, not a check (C7c). */
+export const DEAD_CHECK_OWNER = 'pwa/src/fleet/presence.ts';
 const DEAD_OPERAND = /^(?:'dead'|"dead"|`dead`)\s*(?:===|!==|==|!=)|(?:===|!==|==|!=)\s*(?:'dead'|"dead"|`dead`)$/;
 
 /** A dead check: an equality comparison one of whose operands has the leaf name `status` (`s.status`, `session!.status`,
@@ -76,6 +78,9 @@ const DEAD_OPERAND = /^(?:'dead'|"dead"|`dead`)\s*(?:===|!==|==|!=)|(?:===|!==|=
  *  code, so they never count; `s.bucket === 'dead'`, `st === 'dead'` and `presence === 'dead'` are not `status` leaves
  *  (`hibernate-census.test.ts` counts those). KNOWN WIDTH: a `switch (s.status) { case 'dead': }` is not a comparison. */
 export function inlineDeadChecksIn(p: ParsedFile, file: string): W7Site[] {
+  // The one owner (D-7181, Task C7c): `fleet/presence.ts#paneGone` is the pane predicate OA-C15 (a) keeps, and the
+  // count is of the checks OUTSIDE it (16 on the base, 0 at C7c's exit).
+  if (file === DEAD_CHECK_OWNER) return [];
   return p.comparisons.filter((c) => (c.leftLeaf === 'status' || c.rightLeaf === 'status') && DEAD_OPERAND.test(c.text))
     .map((c) => cmpSite(p, file, c));
 }
