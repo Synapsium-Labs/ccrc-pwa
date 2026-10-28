@@ -146,6 +146,18 @@ describe('the coordinator skill: its contract', () => {
     }
   });
 
+  // The substring pin above cannot see text added before or after a clause on its own line, and clause 15 is where this
+  // wave's governance lives (landing-order wave 3e, fix round 6, review 1138 F3). So clause 15 is pinned as a WHOLE line of
+  // SKILL.md, and nothing can be appended to it or put in front of it. Its four `--admin` mentions are each a never; the
+  // skill names `--admin` nowhere else, and the retired noun licence (either spelling) nowhere at all. The verb in clause 16's
+  // "A stall mail never licenses" is another word and stays. Only clause 15 has this pin shape.
+  it('pins clause 15 as a whole line of SKILL.md, with no --admin outside it and no licence anywhere (landing-order wave 3e)', () => {
+    const line15 = `\n15. ${CONTRACT[14]}\n`;
+    expect(skill, 'clause 15 is not a whole line of SKILL.md: text was added before or after it').toContain(line15);
+    expect(skill.split(line15).join('\n'), 'SKILL.md names --admin outside clause 15').not.toContain('--admin');
+    expect(skill, 'SKILL.md names the retired approval licence').not.toMatch(/licence|\blicense\b/i);
+  });
+
   it('no longer tells the coordinator to review the handoff commit itself (design 2026-09-14 §4, §13)', () => {
     expect(skill).not.toContain('Review the handoff commit');
     expect(skill).not.toContain('review the handoff commit');
