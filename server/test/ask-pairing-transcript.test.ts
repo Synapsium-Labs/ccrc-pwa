@@ -254,3 +254,13 @@ describe('the transcript copy\'s frame sequences, on a real SessionStream (D-721
     else expect(withoutFrom(got), `${sc.name}: ${last.type}`).toEqual(withoutFrom(want.pairing));
   }, 30_000);
 });
+
+describe('the recorded frame sequences (transcript-sequences.json, D-7211): what C7f\'s store rows replay', () => {
+  it('every sequence\'s frames as sent, pairing on, and the answer routes\' reply bodies beside them', async () => {
+    const out: Record<string, Awaited<ReturnType<typeof runSequence>>> = {};
+    for (const sc of TRANSCRIPT_SEQUENCES) out[sc.name] = await runSequence(sc);
+    if (RECORD) writeFileSync(SEQUENCES, `${JSON.stringify(out, null, 1)}\n`);
+    const recorded = JSON.parse(readFileSync(SEQUENCES, 'utf8')) as typeof out;
+    expect(recorded).toEqual(JSON.parse(JSON.stringify(out)));
+  }, 60_000);
+});

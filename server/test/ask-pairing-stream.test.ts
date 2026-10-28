@@ -8,7 +8,7 @@
 import { describe, expect, it } from 'vitest';
 import { createHash } from 'node:crypto';
 import type { SessionStreamMsg } from '../../shared/api.js';
-import { SCENARIOS, TRANSCRIPT_SEQUENCES, runScenario, runSequence, tablePairing, withoutPairing, type Scenario } from './askPairingStream.js';
+import { SCENARIOS, TRANSCRIPT_SEQUENCES, runScenario, runSequence, tablePairing, withoutPairing, type Scenario, type Sent } from './askPairingStream.js';
 
 const sha = (f: SessionStreamMsg): string => createHash('sha256').update(JSON.stringify(withoutPairing(f))).digest('hex').slice(0, 16);
 
@@ -28,18 +28,38 @@ const RECORDED: Record<string, [number, string, string][]> = {
 
 const stateAt = (sc: Scenario, step: number) => sc.steps[Math.max(step, 1) - 1]!;
 
+/** Task C7q (D-7206, D-7211): the per-frame pairing check, over the frames as the stream sends them. The envelope a
+ *  frame pairs is the one it carries (`ask`), none (`ask_cleared`), or the last one its connection sent (`dialog`). A pairing with a
+ *  usable question envelope is the hook's: Q3a's table row for the pane and that envelope, no `from`. RE-POINTED by
+ *  C7q's wire row (listed in its PR): "a pairing with no question envelope" became "a pairing with no usable question
+ *  envelope is `from: 'transcript'` and equals `tablePairing` over the pane's copy". */
+function checkPairings(sc: Scenario, frames: readonly Sent[]): void {
+  let sent: Scenario['steps'][number]['envelope'] = null;
+  let on = 0;
+  for (const { step, frame, conn } of frames) {
+    // A new connection is a new stream: it has sent no envelope yet.
+    if ((conn ?? 0) !== on) { on = conn ?? 0; sent = null; }
+    if (frame.type === 'ask') sent = stateAt(sc, step).envelope;
+    else if (frame.type === 'ask_cleared') sent = null;
+    const pairing = (frame as { pairing?: unknown }).pairing;
+    if (pairing === undefined) continue;
+    const { pane, copy } = stateAt(sc, step);
+    expect(pane, `${sc.name}: a pairing with no pane`).not.toBeNull();
+    expect(sent === 'APPROVAL', `${sc.name}: a pairing under an approval`).toBe(false);
+    if (sent !== null && sent !== 'BLANK') {
+      expect(pairing, `${sc.name} step ${step} ${frame.type}`).toEqual(tablePairing(pane!, sent));
+    } else {
+      expect(copy, `${sc.name}: a pairing with no usable question envelope pairs the pane's copy`).toEqual(expect.any(String));
+      expect(pairing, `${sc.name} step ${step} ${frame.type}: from the transcript's copy`).toEqual({ ...(tablePairing(pane!, copy!) as object), from: 'transcript' });
+    }
+  }
+}
+
 describe('the session stream\'s pane and envelope frames, per event order (Task Q3g characterization)', () => {
   it.each(SCENARIOS.map((sc) => [sc.name, sc] as const))('%s: the frames, their order and their bytes', async (_n, sc) => {
     const frames = await runScenario(sc);
     expect(frames.map(({ step, frame }) => [step, frame.type, sha(frame)])).toEqual(RECORDED[sc.name]);
-    for (const { step, frame } of frames) {
-      const pairing = (frame as { pairing?: unknown }).pairing;
-      if (pairing === undefined) continue;
-      const { pane, envelope } = stateAt(sc, step);
-      expect(pane, `${sc.name}: a pairing with no pane`).not.toBeNull();
-      expect(envelope === null || envelope === 'APPROVAL', `${sc.name}: a pairing with no question envelope`).toBe(false);
-      expect(pairing, `${sc.name} step ${step} ${frame.type}`).toEqual(tablePairing(pane!, envelope!));
-    }
+    checkPairings(sc, frames);
   }, 30_000);
 });
 
@@ -90,6 +110,7 @@ describe('the transcript copy\'s frame sequences (Task C7q, D-7211, D-7220)', ()
     const { frames, replies } = await runSequence(sc);
     expect(frames.map(({ step, frame, conn }) => (conn === undefined ? [step, frame.type, sha(frame)] : [step, frame.type, sha(frame), conn])))
       .toEqual(RECORDED_SEQUENCES[sc.name]);
+    checkPairings(sc, frames);
     const want = SEQUENCE_PAIRINGS[sc.name]!;
     frames.forEach(({ frame }, i) => {
       const at = `${sc.name}: frame ${i} (${frame.type})`;

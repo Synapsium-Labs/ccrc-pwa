@@ -13,11 +13,16 @@
 // `Dialog.multi`, `parsed` and the review screen are read through `shared/ask-menu.ts`'s rules (`reviewRows`), never
 // spelled again.
 //
+// D-7206, D-7211, D-7212, D-7213 (W7 Task C7q): `framePairing` is the rule a frame's pairing follows, which
+// `sessionws.ts#paired` applies to the `ask`, `dialog` and `ask_cleared` frames. The question source is chosen by the
+// rules `askLive.ts#askSource` reads, imported from `shared/ask-menu.ts` and never defined here: the hook's usable
+// question envelope (`usableQuestions`), else the transcript's copy (`transcriptQuestion`).
+//
 // The normalize-and-prefix rule (`pairMatches`) lives here: THE server's one rule for "this scraped row and this
 // structured option are the same option". `transcript/ask.ts` re-exports it, so its importers (`inject/ask.ts`'s menu
 // identity gate, `askkey.ts`) keep their imports, `alignAsk` keeps calling it, and the server keeps one definition.
-import type { AskPairing, Dialog, HookAskQuestion } from '../../../shared/api.js';
-import { reviewRows } from '../../../shared/ask-menu.js';
+import type { AskPairing, Dialog, HookAsk, HookAskQuestion } from '../../../shared/api.js';
+import { reviewRows, transcriptQuestion, usableQuestions } from '../../../shared/ask-menu.js';
 
 export type { AskPairing };
 
@@ -119,4 +124,23 @@ export function pairEnvelope(ask: AskPairingQuestions, dialog: Dialog | null): A
     screen: askScreen(ask, dialog),
     corresponds: ask.questions.map((q) => questionCorresponds(q, dialog)),
   };
+}
+
+/**
+ * The pairing a frame carries for the envelope and the dialog a stream has sent (D-7213: a pairing is present exactly
+ * when there is a dialog and a question source), or null for none:
+ * - no dialog: none (the envelope before the menu);
+ * - an approval envelope: none;
+ * - a usable question envelope (`usableQuestions`): the envelope's pairing, `from` absent (read as `'hook'`), on any
+ *   dialog, the review screen included;
+ * - else, when the dialog carries a copy `transcriptQuestion` reads (D-7206): the copy's pairing, `from: 'transcript'`;
+ * - else none. A blank question envelope is no envelope here, as it is to `askSource`.
+ */
+export function framePairing(ask: HookAsk | null, dialog: Dialog | null): AskPairing | null {
+  if (dialog === null) return null;
+  if (ask !== null && 'approval' in ask) return null;
+  if (ask !== null && usableQuestions(ask)) return pairEnvelope(ask, dialog);
+  const copy = transcriptQuestion(dialog.ask);
+  if (copy === null) return null;
+  return { ...pairEnvelope({ questions: [{ ...copy, options: [...copy.options] }] }, dialog), from: 'transcript' };
 }

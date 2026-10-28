@@ -1,0 +1,1209 @@
+{
+ "(a) connect with a copy and no envelope": {
+  "frames": [
+   {
+    "step": 0,
+    "frame": {
+     "type": "dialog",
+     "dialog": {
+      "id": "ac059b8ed4b293b7acedcc088fe22222866a0919",
+      "title": "Which colour?",
+      "body": "Colour\n\nWhich colour?",
+      "options": [
+       {
+        "index": 1,
+        "label": "Red",
+        "description": "A warm primary colour"
+       },
+       {
+        "index": 2,
+        "label": "Blue",
+        "description": "A cool primary colour"
+       },
+       {
+        "index": 3,
+        "label": "Type something."
+       },
+       {
+        "index": 4,
+        "label": "Chat about this"
+       }
+      ],
+      "selectedIndex": 1,
+      "parsed": true,
+      "raw": "    nightly. Sentence 13 of answer B: keep the schema portable and test it nightly. Sentence 14 of answer B: keep the schema portable and test it nightly.. END-B\n  - Region: Sentence 01 of answer C: keep the schema portable and test it nightly. Sentence 02 of answer C: keep the schema portable and test it nightly. Sentence 03 of answer C: keep the schema portable and test it\n    nightly. Sentence 04 of answer C: keep the schema portable and test it nightly. Sentence 05 of answer C: keep the schema portable and test it nightly. Sentence 06 of answer C: keep the schema portable and test it\n    nightly. Sentence 07 of answer C: keep the schema portable and test it nightly. Sentence 08 of answer C: keep the schema portable and test it nightly. Sentence 09 of answer C: k END-C\n\n  The Region answer came back cut off mid-word (\"k END-C\"), so it may be incomplete.\n\n✻ Cogitated for 7s · done 4:05\n\n❯ Call AskUserQuestion exactly once with THREE questions, short descriptions on every option. Q1 header \"Drink\" question \"Which drink?\" multiSelect false, options Tea, Coffee. Q2 header \"Features\" question \"Which\n  features do you want?\" multiSelect true, options Logging, Metrics, Tracing. Q3 header \"Tools\" question \"Which tools?\" multiSelect true, options Hammer, Saw, Drill. Afterwards reply with the raw answers only.\n\n⏺ User answered Claude's questions:\n  ⎿  · Which drink? → - oolong, no sugar\n     · Which features do you want? → Logging, Tracing\n     · Which tools? → Saw, Drill\n\n⏺ - Drink: - oolong, no sugar\n  - Features: Logging, Tracing\n  - Tools: Saw, Drill\n\n✻ Crunched for 3s · done 4:07\n\n❯ Call AskUserQuestion exactly once with TWO multiSelect questions, short descriptions on every option. Q1 header \"Pets\" question \"Which pets?\" options Cats, Dogs. Q2 header \"Sizes\" question \"Which sizes?\" options\n  Small, Large. Afterwards reply with the raw answers only.\n\n⏺ User answered Claude's questions:\n  ⎿  · Which pets? → Cats\n     · Which sizes? → Large\n\n⏺ - Pets: Cats\n  - Sizes: Large\n\n✻ Worked for 3s · done 4:07\n\n❯ Call AskUserQuestion exactly once with ONE single-select question: header \"Colour\" question \"Which colour?\" options Red, Blue, short descriptions. Afterwards reply with the raw answer only.\n────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────\n ☐ Colour\n\nWhich colour?\n\n❯ 1. Red\n     A warm primary colour\n  2. Blue\n     A cool primary colour\n  3. Type something.\n────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────\n  4. Chat about this\n\nEnter to select · ↑/↓ to navigate · Esc to cancel\n",
+      "ask": {
+       "question": "Which colour?",
+       "multiSelect": false,
+       "options": [
+        {
+         "label": "Red"
+        },
+        {
+         "label": "Blue"
+        }
+       ]
+      }
+     },
+     "pairing": {
+      "live": 0,
+      "named": 0,
+      "shown": 0,
+      "placed": 0,
+      "screen": "q0",
+      "corresponds": [
+       true
+      ],
+      "from": "transcript"
+     }
+    }
+   },
+   {
+    "step": 0,
+    "frame": {
+     "type": "ask_cleared",
+     "pairing": {
+      "live": 0,
+      "named": 0,
+      "shown": 0,
+      "placed": 0,
+      "screen": "q0",
+      "corresponds": [
+       true
+      ],
+      "from": "transcript"
+     }
+    }
+   }
+  ],
+  "replies": []
+ },
+ "(b) an envelope ageing out under a standing menu": {
+  "frames": [
+   {
+    "step": 0,
+    "frame": {
+     "type": "dialog",
+     "dialog": {
+      "id": "ac059b8ed4b293b7acedcc088fe22222866a0919",
+      "title": "Which colour?",
+      "body": "Colour\n\nWhich colour?",
+      "options": [
+       {
+        "index": 1,
+        "label": "Red",
+        "description": "A warm primary colour"
+       },
+       {
+        "index": 2,
+        "label": "Blue",
+        "description": "A cool primary colour"
+       },
+       {
+        "index": 3,
+        "label": "Type something."
+       },
+       {
+        "index": 4,
+        "label": "Chat about this"
+       }
+      ],
+      "selectedIndex": 1,
+      "parsed": true,
+      "raw": "    nightly. Sentence 13 of answer B: keep the schema portable and test it nightly. Sentence 14 of answer B: keep the schema portable and test it nightly.. END-B\n  - Region: Sentence 01 of answer C: keep the schema portable and test it nightly. Sentence 02 of answer C: keep the schema portable and test it nightly. Sentence 03 of answer C: keep the schema portable and test it\n    nightly. Sentence 04 of answer C: keep the schema portable and test it nightly. Sentence 05 of answer C: keep the schema portable and test it nightly. Sentence 06 of answer C: keep the schema portable and test it\n    nightly. Sentence 07 of answer C: keep the schema portable and test it nightly. Sentence 08 of answer C: keep the schema portable and test it nightly. Sentence 09 of answer C: k END-C\n\n  The Region answer came back cut off mid-word (\"k END-C\"), so it may be incomplete.\n\n✻ Cogitated for 7s · done 4:05\n\n❯ Call AskUserQuestion exactly once with THREE questions, short descriptions on every option. Q1 header \"Drink\" question \"Which drink?\" multiSelect false, options Tea, Coffee. Q2 header \"Features\" question \"Which\n  features do you want?\" multiSelect true, options Logging, Metrics, Tracing. Q3 header \"Tools\" question \"Which tools?\" multiSelect true, options Hammer, Saw, Drill. Afterwards reply with the raw answers only.\n\n⏺ User answered Claude's questions:\n  ⎿  · Which drink? → - oolong, no sugar\n     · Which features do you want? → Logging, Tracing\n     · Which tools? → Saw, Drill\n\n⏺ - Drink: - oolong, no sugar\n  - Features: Logging, Tracing\n  - Tools: Saw, Drill\n\n✻ Crunched for 3s · done 4:07\n\n❯ Call AskUserQuestion exactly once with TWO multiSelect questions, short descriptions on every option. Q1 header \"Pets\" question \"Which pets?\" options Cats, Dogs. Q2 header \"Sizes\" question \"Which sizes?\" options\n  Small, Large. Afterwards reply with the raw answers only.\n\n⏺ User answered Claude's questions:\n  ⎿  · Which pets? → Cats\n     · Which sizes? → Large\n\n⏺ - Pets: Cats\n  - Sizes: Large\n\n✻ Worked for 3s · done 4:07\n\n❯ Call AskUserQuestion exactly once with ONE single-select question: header \"Colour\" question \"Which colour?\" options Red, Blue, short descriptions. Afterwards reply with the raw answer only.\n────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────\n ☐ Colour\n\nWhich colour?\n\n❯ 1. Red\n     A warm primary colour\n  2. Blue\n     A cool primary colour\n  3. Type something.\n────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────\n  4. Chat about this\n\nEnter to select · ↑/↓ to navigate · Esc to cancel\n",
+      "ask": {
+       "question": "Which colour?",
+       "multiSelect": false,
+       "options": [
+        {
+         "label": "Red"
+        },
+        {
+         "label": "Blue"
+        }
+       ]
+      }
+     },
+     "pairing": {
+      "live": 0,
+      "named": 0,
+      "shown": 0,
+      "placed": 0,
+      "screen": "q0",
+      "corresponds": [
+       true
+      ],
+      "from": "transcript"
+     }
+    }
+   },
+   {
+    "step": 0,
+    "frame": {
+     "type": "ask",
+     "ask": {
+      "questions": [
+       {
+        "question": "Which colour?",
+        "options": [
+         {
+          "label": "Red",
+          "description": "A warm primary colour"
+         },
+         {
+          "label": "Blue",
+          "description": "A cool primary colour"
+         }
+        ],
+        "header": "Colour",
+        "multiSelect": false
+       }
+      ]
+     },
+     "key": "953b1fc8c78d6630",
+     "pairing": {
+      "live": 0,
+      "named": 0,
+      "shown": 0,
+      "placed": 0,
+      "screen": "q0",
+      "corresponds": [
+       true
+      ]
+     }
+    }
+   },
+   {
+    "step": 2,
+    "frame": {
+     "type": "ask_cleared",
+     "pairing": {
+      "live": 0,
+      "named": 0,
+      "shown": 0,
+      "placed": 0,
+      "screen": "q0",
+      "corresponds": [
+       true
+      ],
+      "from": "transcript"
+     }
+    }
+   }
+  ],
+  "replies": []
+ },
+ "(c) a reconnect mid-ask, with an envelope": {
+  "frames": [
+   {
+    "step": 0,
+    "frame": {
+     "type": "dialog",
+     "dialog": {
+      "id": "ac059b8ed4b293b7acedcc088fe22222866a0919",
+      "title": "Which colour?",
+      "body": "Colour\n\nWhich colour?",
+      "options": [
+       {
+        "index": 1,
+        "label": "Red",
+        "description": "A warm primary colour"
+       },
+       {
+        "index": 2,
+        "label": "Blue",
+        "description": "A cool primary colour"
+       },
+       {
+        "index": 3,
+        "label": "Type something."
+       },
+       {
+        "index": 4,
+        "label": "Chat about this"
+       }
+      ],
+      "selectedIndex": 1,
+      "parsed": true,
+      "raw": "    nightly. Sentence 13 of answer B: keep the schema portable and test it nightly. Sentence 14 of answer B: keep the schema portable and test it nightly.. END-B\n  - Region: Sentence 01 of answer C: keep the schema portable and test it nightly. Sentence 02 of answer C: keep the schema portable and test it nightly. Sentence 03 of answer C: keep the schema portable and test it\n    nightly. Sentence 04 of answer C: keep the schema portable and test it nightly. Sentence 05 of answer C: keep the schema portable and test it nightly. Sentence 06 of answer C: keep the schema portable and test it\n    nightly. Sentence 07 of answer C: keep the schema portable and test it nightly. Sentence 08 of answer C: keep the schema portable and test it nightly. Sentence 09 of answer C: k END-C\n\n  The Region answer came back cut off mid-word (\"k END-C\"), so it may be incomplete.\n\n✻ Cogitated for 7s · done 4:05\n\n❯ Call AskUserQuestion exactly once with THREE questions, short descriptions on every option. Q1 header \"Drink\" question \"Which drink?\" multiSelect false, options Tea, Coffee. Q2 header \"Features\" question \"Which\n  features do you want?\" multiSelect true, options Logging, Metrics, Tracing. Q3 header \"Tools\" question \"Which tools?\" multiSelect true, options Hammer, Saw, Drill. Afterwards reply with the raw answers only.\n\n⏺ User answered Claude's questions:\n  ⎿  · Which drink? → - oolong, no sugar\n     · Which features do you want? → Logging, Tracing\n     · Which tools? → Saw, Drill\n\n⏺ - Drink: - oolong, no sugar\n  - Features: Logging, Tracing\n  - Tools: Saw, Drill\n\n✻ Crunched for 3s · done 4:07\n\n❯ Call AskUserQuestion exactly once with TWO multiSelect questions, short descriptions on every option. Q1 header \"Pets\" question \"Which pets?\" options Cats, Dogs. Q2 header \"Sizes\" question \"Which sizes?\" options\n  Small, Large. Afterwards reply with the raw answers only.\n\n⏺ User answered Claude's questions:\n  ⎿  · Which pets? → Cats\n     · Which sizes? → Large\n\n⏺ - Pets: Cats\n  - Sizes: Large\n\n✻ Worked for 3s · done 4:07\n\n❯ Call AskUserQuestion exactly once with ONE single-select question: header \"Colour\" question \"Which colour?\" options Red, Blue, short descriptions. Afterwards reply with the raw answer only.\n────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────\n ☐ Colour\n\nWhich colour?\n\n❯ 1. Red\n     A warm primary colour\n  2. Blue\n     A cool primary colour\n  3. Type something.\n────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────\n  4. Chat about this\n\nEnter to select · ↑/↓ to navigate · Esc to cancel\n",
+      "ask": {
+       "question": "Which colour?",
+       "multiSelect": false,
+       "options": [
+        {
+         "label": "Red"
+        },
+        {
+         "label": "Blue"
+        }
+       ]
+      }
+     },
+     "pairing": {
+      "live": 0,
+      "named": 0,
+      "shown": 0,
+      "placed": 0,
+      "screen": "q0",
+      "corresponds": [
+       true
+      ],
+      "from": "transcript"
+     }
+    }
+   },
+   {
+    "step": 0,
+    "frame": {
+     "type": "ask",
+     "ask": {
+      "questions": [
+       {
+        "question": "Which colour?",
+        "options": [
+         {
+          "label": "Red",
+          "description": "A warm primary colour"
+         },
+         {
+          "label": "Blue",
+          "description": "A cool primary colour"
+         }
+        ],
+        "header": "Colour",
+        "multiSelect": false
+       }
+      ]
+     },
+     "key": "953b1fc8c78d6630",
+     "pairing": {
+      "live": 0,
+      "named": 0,
+      "shown": 0,
+      "placed": 0,
+      "screen": "q0",
+      "corresponds": [
+       true
+      ]
+     }
+    }
+   },
+   {
+    "step": 2,
+    "frame": {
+     "type": "dialog",
+     "dialog": {
+      "id": "ac059b8ed4b293b7acedcc088fe22222866a0919",
+      "title": "Which colour?",
+      "body": "Colour\n\nWhich colour?",
+      "options": [
+       {
+        "index": 1,
+        "label": "Red",
+        "description": "A warm primary colour"
+       },
+       {
+        "index": 2,
+        "label": "Blue",
+        "description": "A cool primary colour"
+       },
+       {
+        "index": 3,
+        "label": "Type something."
+       },
+       {
+        "index": 4,
+        "label": "Chat about this"
+       }
+      ],
+      "selectedIndex": 1,
+      "parsed": true,
+      "raw": "    nightly. Sentence 13 of answer B: keep the schema portable and test it nightly. Sentence 14 of answer B: keep the schema portable and test it nightly.. END-B\n  - Region: Sentence 01 of answer C: keep the schema portable and test it nightly. Sentence 02 of answer C: keep the schema portable and test it nightly. Sentence 03 of answer C: keep the schema portable and test it\n    nightly. Sentence 04 of answer C: keep the schema portable and test it nightly. Sentence 05 of answer C: keep the schema portable and test it nightly. Sentence 06 of answer C: keep the schema portable and test it\n    nightly. Sentence 07 of answer C: keep the schema portable and test it nightly. Sentence 08 of answer C: keep the schema portable and test it nightly. Sentence 09 of answer C: k END-C\n\n  The Region answer came back cut off mid-word (\"k END-C\"), so it may be incomplete.\n\n✻ Cogitated for 7s · done 4:05\n\n❯ Call AskUserQuestion exactly once with THREE questions, short descriptions on every option. Q1 header \"Drink\" question \"Which drink?\" multiSelect false, options Tea, Coffee. Q2 header \"Features\" question \"Which\n  features do you want?\" multiSelect true, options Logging, Metrics, Tracing. Q3 header \"Tools\" question \"Which tools?\" multiSelect true, options Hammer, Saw, Drill. Afterwards reply with the raw answers only.\n\n⏺ User answered Claude's questions:\n  ⎿  · Which drink? → - oolong, no sugar\n     · Which features do you want? → Logging, Tracing\n     · Which tools? → Saw, Drill\n\n⏺ - Drink: - oolong, no sugar\n  - Features: Logging, Tracing\n  - Tools: Saw, Drill\n\n✻ Crunched for 3s · done 4:07\n\n❯ Call AskUserQuestion exactly once with TWO multiSelect questions, short descriptions on every option. Q1 header \"Pets\" question \"Which pets?\" options Cats, Dogs. Q2 header \"Sizes\" question \"Which sizes?\" options\n  Small, Large. Afterwards reply with the raw answers only.\n\n⏺ User answered Claude's questions:\n  ⎿  · Which pets? → Cats\n     · Which sizes? → Large\n\n⏺ - Pets: Cats\n  - Sizes: Large\n\n✻ Worked for 3s · done 4:07\n\n❯ Call AskUserQuestion exactly once with ONE single-select question: header \"Colour\" question \"Which colour?\" options Red, Blue, short descriptions. Afterwards reply with the raw answer only.\n────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────\n ☐ Colour\n\nWhich colour?\n\n❯ 1. Red\n     A warm primary colour\n  2. Blue\n     A cool primary colour\n  3. Type something.\n────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────\n  4. Chat about this\n\nEnter to select · ↑/↓ to navigate · Esc to cancel\n",
+      "ask": {
+       "question": "Which colour?",
+       "multiSelect": false,
+       "options": [
+        {
+         "label": "Red"
+        },
+        {
+         "label": "Blue"
+        }
+       ]
+      }
+     },
+     "pairing": {
+      "live": 0,
+      "named": 0,
+      "shown": 0,
+      "placed": 0,
+      "screen": "q0",
+      "corresponds": [
+       true
+      ],
+      "from": "transcript"
+     }
+    },
+    "conn": 1
+   },
+   {
+    "step": 2,
+    "frame": {
+     "type": "ask",
+     "ask": {
+      "questions": [
+       {
+        "question": "Which colour?",
+        "options": [
+         {
+          "label": "Red",
+          "description": "A warm primary colour"
+         },
+         {
+          "label": "Blue",
+          "description": "A cool primary colour"
+         }
+        ],
+        "header": "Colour",
+        "multiSelect": false
+       }
+      ]
+     },
+     "key": "953b1fc8c78d6630",
+     "pairing": {
+      "live": 0,
+      "named": 0,
+      "shown": 0,
+      "placed": 0,
+      "screen": "q0",
+      "corresponds": [
+       true
+      ]
+     }
+    },
+    "conn": 1
+   }
+  ],
+  "replies": []
+ },
+ "(c) a reconnect mid-ask, without an envelope": {
+  "frames": [
+   {
+    "step": 0,
+    "frame": {
+     "type": "dialog",
+     "dialog": {
+      "id": "ac059b8ed4b293b7acedcc088fe22222866a0919",
+      "title": "Which colour?",
+      "body": "Colour\n\nWhich colour?",
+      "options": [
+       {
+        "index": 1,
+        "label": "Red",
+        "description": "A warm primary colour"
+       },
+       {
+        "index": 2,
+        "label": "Blue",
+        "description": "A cool primary colour"
+       },
+       {
+        "index": 3,
+        "label": "Type something."
+       },
+       {
+        "index": 4,
+        "label": "Chat about this"
+       }
+      ],
+      "selectedIndex": 1,
+      "parsed": true,
+      "raw": "    nightly. Sentence 13 of answer B: keep the schema portable and test it nightly. Sentence 14 of answer B: keep the schema portable and test it nightly.. END-B\n  - Region: Sentence 01 of answer C: keep the schema portable and test it nightly. Sentence 02 of answer C: keep the schema portable and test it nightly. Sentence 03 of answer C: keep the schema portable and test it\n    nightly. Sentence 04 of answer C: keep the schema portable and test it nightly. Sentence 05 of answer C: keep the schema portable and test it nightly. Sentence 06 of answer C: keep the schema portable and test it\n    nightly. Sentence 07 of answer C: keep the schema portable and test it nightly. Sentence 08 of answer C: keep the schema portable and test it nightly. Sentence 09 of answer C: k END-C\n\n  The Region answer came back cut off mid-word (\"k END-C\"), so it may be incomplete.\n\n✻ Cogitated for 7s · done 4:05\n\n❯ Call AskUserQuestion exactly once with THREE questions, short descriptions on every option. Q1 header \"Drink\" question \"Which drink?\" multiSelect false, options Tea, Coffee. Q2 header \"Features\" question \"Which\n  features do you want?\" multiSelect true, options Logging, Metrics, Tracing. Q3 header \"Tools\" question \"Which tools?\" multiSelect true, options Hammer, Saw, Drill. Afterwards reply with the raw answers only.\n\n⏺ User answered Claude's questions:\n  ⎿  · Which drink? → - oolong, no sugar\n     · Which features do you want? → Logging, Tracing\n     · Which tools? → Saw, Drill\n\n⏺ - Drink: - oolong, no sugar\n  - Features: Logging, Tracing\n  - Tools: Saw, Drill\n\n✻ Crunched for 3s · done 4:07\n\n❯ Call AskUserQuestion exactly once with TWO multiSelect questions, short descriptions on every option. Q1 header \"Pets\" question \"Which pets?\" options Cats, Dogs. Q2 header \"Sizes\" question \"Which sizes?\" options\n  Small, Large. Afterwards reply with the raw answers only.\n\n⏺ User answered Claude's questions:\n  ⎿  · Which pets? → Cats\n     · Which sizes? → Large\n\n⏺ - Pets: Cats\n  - Sizes: Large\n\n✻ Worked for 3s · done 4:07\n\n❯ Call AskUserQuestion exactly once with ONE single-select question: header \"Colour\" question \"Which colour?\" options Red, Blue, short descriptions. Afterwards reply with the raw answer only.\n────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────\n ☐ Colour\n\nWhich colour?\n\n❯ 1. Red\n     A warm primary colour\n  2. Blue\n     A cool primary colour\n  3. Type something.\n────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────\n  4. Chat about this\n\nEnter to select · ↑/↓ to navigate · Esc to cancel\n",
+      "ask": {
+       "question": "Which colour?",
+       "multiSelect": false,
+       "options": [
+        {
+         "label": "Red"
+        },
+        {
+         "label": "Blue"
+        }
+       ]
+      }
+     },
+     "pairing": {
+      "live": 0,
+      "named": 0,
+      "shown": 0,
+      "placed": 0,
+      "screen": "q0",
+      "corresponds": [
+       true
+      ],
+      "from": "transcript"
+     }
+    }
+   },
+   {
+    "step": 0,
+    "frame": {
+     "type": "ask",
+     "ask": {
+      "questions": [
+       {
+        "question": "Which colour?",
+        "options": [
+         {
+          "label": "Red",
+          "description": "A warm primary colour"
+         },
+         {
+          "label": "Blue",
+          "description": "A cool primary colour"
+         }
+        ],
+        "header": "Colour",
+        "multiSelect": false
+       }
+      ]
+     },
+     "key": "953b1fc8c78d6630",
+     "pairing": {
+      "live": 0,
+      "named": 0,
+      "shown": 0,
+      "placed": 0,
+      "screen": "q0",
+      "corresponds": [
+       true
+      ]
+     }
+    }
+   },
+   {
+    "step": 2,
+    "frame": {
+     "type": "ask_cleared",
+     "pairing": {
+      "live": 0,
+      "named": 0,
+      "shown": 0,
+      "placed": 0,
+      "screen": "q0",
+      "corresponds": [
+       true
+      ],
+      "from": "transcript"
+     }
+    }
+   },
+   {
+    "step": 3,
+    "frame": {
+     "type": "dialog",
+     "dialog": {
+      "id": "ac059b8ed4b293b7acedcc088fe22222866a0919",
+      "title": "Which colour?",
+      "body": "Colour\n\nWhich colour?",
+      "options": [
+       {
+        "index": 1,
+        "label": "Red",
+        "description": "A warm primary colour"
+       },
+       {
+        "index": 2,
+        "label": "Blue",
+        "description": "A cool primary colour"
+       },
+       {
+        "index": 3,
+        "label": "Type something."
+       },
+       {
+        "index": 4,
+        "label": "Chat about this"
+       }
+      ],
+      "selectedIndex": 1,
+      "parsed": true,
+      "raw": "    nightly. Sentence 13 of answer B: keep the schema portable and test it nightly. Sentence 14 of answer B: keep the schema portable and test it nightly.. END-B\n  - Region: Sentence 01 of answer C: keep the schema portable and test it nightly. Sentence 02 of answer C: keep the schema portable and test it nightly. Sentence 03 of answer C: keep the schema portable and test it\n    nightly. Sentence 04 of answer C: keep the schema portable and test it nightly. Sentence 05 of answer C: keep the schema portable and test it nightly. Sentence 06 of answer C: keep the schema portable and test it\n    nightly. Sentence 07 of answer C: keep the schema portable and test it nightly. Sentence 08 of answer C: keep the schema portable and test it nightly. Sentence 09 of answer C: k END-C\n\n  The Region answer came back cut off mid-word (\"k END-C\"), so it may be incomplete.\n\n✻ Cogitated for 7s · done 4:05\n\n❯ Call AskUserQuestion exactly once with THREE questions, short descriptions on every option. Q1 header \"Drink\" question \"Which drink?\" multiSelect false, options Tea, Coffee. Q2 header \"Features\" question \"Which\n  features do you want?\" multiSelect true, options Logging, Metrics, Tracing. Q3 header \"Tools\" question \"Which tools?\" multiSelect true, options Hammer, Saw, Drill. Afterwards reply with the raw answers only.\n\n⏺ User answered Claude's questions:\n  ⎿  · Which drink? → - oolong, no sugar\n     · Which features do you want? → Logging, Tracing\n     · Which tools? → Saw, Drill\n\n⏺ - Drink: - oolong, no sugar\n  - Features: Logging, Tracing\n  - Tools: Saw, Drill\n\n✻ Crunched for 3s · done 4:07\n\n❯ Call AskUserQuestion exactly once with TWO multiSelect questions, short descriptions on every option. Q1 header \"Pets\" question \"Which pets?\" options Cats, Dogs. Q2 header \"Sizes\" question \"Which sizes?\" options\n  Small, Large. Afterwards reply with the raw answers only.\n\n⏺ User answered Claude's questions:\n  ⎿  · Which pets? → Cats\n     · Which sizes? → Large\n\n⏺ - Pets: Cats\n  - Sizes: Large\n\n✻ Worked for 3s · done 4:07\n\n❯ Call AskUserQuestion exactly once with ONE single-select question: header \"Colour\" question \"Which colour?\" options Red, Blue, short descriptions. Afterwards reply with the raw answer only.\n────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────\n ☐ Colour\n\nWhich colour?\n\n❯ 1. Red\n     A warm primary colour\n  2. Blue\n     A cool primary colour\n  3. Type something.\n────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────\n  4. Chat about this\n\nEnter to select · ↑/↓ to navigate · Esc to cancel\n",
+      "ask": {
+       "question": "Which colour?",
+       "multiSelect": false,
+       "options": [
+        {
+         "label": "Red"
+        },
+        {
+         "label": "Blue"
+        }
+       ]
+      }
+     },
+     "pairing": {
+      "live": 0,
+      "named": 0,
+      "shown": 0,
+      "placed": 0,
+      "screen": "q0",
+      "corresponds": [
+       true
+      ],
+      "from": "transcript"
+     }
+    },
+    "conn": 1
+   },
+   {
+    "step": 3,
+    "frame": {
+     "type": "ask_cleared",
+     "pairing": {
+      "live": 0,
+      "named": 0,
+      "shown": 0,
+      "placed": 0,
+      "screen": "q0",
+      "corresponds": [
+       true
+      ],
+      "from": "transcript"
+     }
+    },
+    "conn": 1
+   }
+  ],
+  "replies": []
+ },
+ "(a) connect with a blank envelope and a copy": {
+  "frames": [
+   {
+    "step": 0,
+    "frame": {
+     "type": "dialog",
+     "dialog": {
+      "id": "ac059b8ed4b293b7acedcc088fe22222866a0919",
+      "title": "Which colour?",
+      "body": "Colour\n\nWhich colour?",
+      "options": [
+       {
+        "index": 1,
+        "label": "Red",
+        "description": "A warm primary colour"
+       },
+       {
+        "index": 2,
+        "label": "Blue",
+        "description": "A cool primary colour"
+       },
+       {
+        "index": 3,
+        "label": "Type something."
+       },
+       {
+        "index": 4,
+        "label": "Chat about this"
+       }
+      ],
+      "selectedIndex": 1,
+      "parsed": true,
+      "raw": "    nightly. Sentence 13 of answer B: keep the schema portable and test it nightly. Sentence 14 of answer B: keep the schema portable and test it nightly.. END-B\n  - Region: Sentence 01 of answer C: keep the schema portable and test it nightly. Sentence 02 of answer C: keep the schema portable and test it nightly. Sentence 03 of answer C: keep the schema portable and test it\n    nightly. Sentence 04 of answer C: keep the schema portable and test it nightly. Sentence 05 of answer C: keep the schema portable and test it nightly. Sentence 06 of answer C: keep the schema portable and test it\n    nightly. Sentence 07 of answer C: keep the schema portable and test it nightly. Sentence 08 of answer C: keep the schema portable and test it nightly. Sentence 09 of answer C: k END-C\n\n  The Region answer came back cut off mid-word (\"k END-C\"), so it may be incomplete.\n\n✻ Cogitated for 7s · done 4:05\n\n❯ Call AskUserQuestion exactly once with THREE questions, short descriptions on every option. Q1 header \"Drink\" question \"Which drink?\" multiSelect false, options Tea, Coffee. Q2 header \"Features\" question \"Which\n  features do you want?\" multiSelect true, options Logging, Metrics, Tracing. Q3 header \"Tools\" question \"Which tools?\" multiSelect true, options Hammer, Saw, Drill. Afterwards reply with the raw answers only.\n\n⏺ User answered Claude's questions:\n  ⎿  · Which drink? → - oolong, no sugar\n     · Which features do you want? → Logging, Tracing\n     · Which tools? → Saw, Drill\n\n⏺ - Drink: - oolong, no sugar\n  - Features: Logging, Tracing\n  - Tools: Saw, Drill\n\n✻ Crunched for 3s · done 4:07\n\n❯ Call AskUserQuestion exactly once with TWO multiSelect questions, short descriptions on every option. Q1 header \"Pets\" question \"Which pets?\" options Cats, Dogs. Q2 header \"Sizes\" question \"Which sizes?\" options\n  Small, Large. Afterwards reply with the raw answers only.\n\n⏺ User answered Claude's questions:\n  ⎿  · Which pets? → Cats\n     · Which sizes? → Large\n\n⏺ - Pets: Cats\n  - Sizes: Large\n\n✻ Worked for 3s · done 4:07\n\n❯ Call AskUserQuestion exactly once with ONE single-select question: header \"Colour\" question \"Which colour?\" options Red, Blue, short descriptions. Afterwards reply with the raw answer only.\n────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────\n ☐ Colour\n\nWhich colour?\n\n❯ 1. Red\n     A warm primary colour\n  2. Blue\n     A cool primary colour\n  3. Type something.\n────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────\n  4. Chat about this\n\nEnter to select · ↑/↓ to navigate · Esc to cancel\n",
+      "ask": {
+       "question": "Which colour?",
+       "multiSelect": false,
+       "options": [
+        {
+         "label": "Red"
+        },
+        {
+         "label": "Blue"
+        }
+       ]
+      }
+     },
+     "pairing": {
+      "live": 0,
+      "named": 0,
+      "shown": 0,
+      "placed": 0,
+      "screen": "q0",
+      "corresponds": [
+       true
+      ],
+      "from": "transcript"
+     }
+    }
+   },
+   {
+    "step": 0,
+    "frame": {
+     "type": "ask",
+     "ask": {
+      "questions": [
+       {
+        "question": "   ",
+        "options": [
+         {
+          "label": "Red"
+         },
+         {
+          "label": "Blue"
+         }
+        ]
+       }
+      ]
+     },
+     "key": "50e56e0820e7e164",
+     "pairing": {
+      "live": 0,
+      "named": 0,
+      "shown": 0,
+      "placed": 0,
+      "screen": "q0",
+      "corresponds": [
+       true
+      ],
+      "from": "transcript"
+     }
+    }
+   }
+  ],
+  "replies": []
+ },
+ "(d) a menu with no readable copy, then the envelope clearing": {
+  "frames": [
+   {
+    "step": 0,
+    "frame": {
+     "type": "dialog",
+     "dialog": {
+      "id": "ac059b8ed4b293b7acedcc088fe22222866a0919",
+      "title": "Which colour?",
+      "body": "Colour\n\nWhich colour?",
+      "options": [
+       {
+        "index": 1,
+        "label": "Red",
+        "description": "A warm primary colour"
+       },
+       {
+        "index": 2,
+        "label": "Blue",
+        "description": "A cool primary colour"
+       },
+       {
+        "index": 3,
+        "label": "Type something."
+       },
+       {
+        "index": 4,
+        "label": "Chat about this"
+       }
+      ],
+      "selectedIndex": 1,
+      "parsed": true,
+      "raw": "    nightly. Sentence 13 of answer B: keep the schema portable and test it nightly. Sentence 14 of answer B: keep the schema portable and test it nightly.. END-B\n  - Region: Sentence 01 of answer C: keep the schema portable and test it nightly. Sentence 02 of answer C: keep the schema portable and test it nightly. Sentence 03 of answer C: keep the schema portable and test it\n    nightly. Sentence 04 of answer C: keep the schema portable and test it nightly. Sentence 05 of answer C: keep the schema portable and test it nightly. Sentence 06 of answer C: keep the schema portable and test it\n    nightly. Sentence 07 of answer C: keep the schema portable and test it nightly. Sentence 08 of answer C: keep the schema portable and test it nightly. Sentence 09 of answer C: k END-C\n\n  The Region answer came back cut off mid-word (\"k END-C\"), so it may be incomplete.\n\n✻ Cogitated for 7s · done 4:05\n\n❯ Call AskUserQuestion exactly once with THREE questions, short descriptions on every option. Q1 header \"Drink\" question \"Which drink?\" multiSelect false, options Tea, Coffee. Q2 header \"Features\" question \"Which\n  features do you want?\" multiSelect true, options Logging, Metrics, Tracing. Q3 header \"Tools\" question \"Which tools?\" multiSelect true, options Hammer, Saw, Drill. Afterwards reply with the raw answers only.\n\n⏺ User answered Claude's questions:\n  ⎿  · Which drink? → - oolong, no sugar\n     · Which features do you want? → Logging, Tracing\n     · Which tools? → Saw, Drill\n\n⏺ - Drink: - oolong, no sugar\n  - Features: Logging, Tracing\n  - Tools: Saw, Drill\n\n✻ Crunched for 3s · done 4:07\n\n❯ Call AskUserQuestion exactly once with TWO multiSelect questions, short descriptions on every option. Q1 header \"Pets\" question \"Which pets?\" options Cats, Dogs. Q2 header \"Sizes\" question \"Which sizes?\" options\n  Small, Large. Afterwards reply with the raw answers only.\n\n⏺ User answered Claude's questions:\n  ⎿  · Which pets? → Cats\n     · Which sizes? → Large\n\n⏺ - Pets: Cats\n  - Sizes: Large\n\n✻ Worked for 3s · done 4:07\n\n❯ Call AskUserQuestion exactly once with ONE single-select question: header \"Colour\" question \"Which colour?\" options Red, Blue, short descriptions. Afterwards reply with the raw answer only.\n────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────\n ☐ Colour\n\nWhich colour?\n\n❯ 1. Red\n     A warm primary colour\n  2. Blue\n     A cool primary colour\n  3. Type something.\n────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────\n  4. Chat about this\n\nEnter to select · ↑/↓ to navigate · Esc to cancel\n"
+     }
+    }
+   },
+   {
+    "step": 0,
+    "frame": {
+     "type": "ask",
+     "ask": {
+      "questions": [
+       {
+        "question": "Which colour?",
+        "options": [
+         {
+          "label": "Red",
+          "description": "A warm primary colour"
+         },
+         {
+          "label": "Blue",
+          "description": "A cool primary colour"
+         }
+        ],
+        "header": "Colour",
+        "multiSelect": false
+       }
+      ]
+     },
+     "key": "953b1fc8c78d6630",
+     "pairing": {
+      "live": 0,
+      "named": 0,
+      "shown": 0,
+      "placed": 0,
+      "screen": "q0",
+      "corresponds": [
+       true
+      ]
+     }
+    }
+   },
+   {
+    "step": 2,
+    "frame": {
+     "type": "ask_cleared"
+    }
+   }
+  ],
+  "replies": []
+ },
+ "(e) an answer that moves the pane to the next question": {
+  "frames": [
+   {
+    "step": 0,
+    "frame": {
+     "type": "dialog",
+     "dialog": {
+      "id": "b6ee409f477b63a320c2339b574fd26e2fb22522",
+      "title": "Which fruit?",
+      "body": "←  ☐ Fruit  ☐ Drink  ✔ Submit  →\n\nWhich fruit?",
+      "options": [
+       {
+        "index": 1,
+        "label": "Apple",
+        "description": "Crisp and sweet."
+       },
+       {
+        "index": 2,
+        "label": "Pear",
+        "description": "Soft and juicy."
+       },
+       {
+        "index": 3,
+        "label": "Mango"
+       },
+       {
+        "index": 4,
+        "label": "Chat about this"
+       }
+      ],
+      "selectedIndex": 3,
+      "parsed": true,
+      "raw": "\n\n⏺ User declined to answer questions\n  ⎿  · Which pets do you like? (Cats / Dogs / Fish)\n     · Which size? (Small / Large)\n     · Which mode? (Fast / Safe)\n\n✻ Baked for 1s · done 3:20\n\n❯ Call AskUserQuestion exactly once with TWO single-select questions. Q1: header \"Fruit\", question \"Which fruit?\", options Apple, Pear. Q2: header \"Drink\", question \"Which drink?\", options Tea, Coffee. Short\n  descriptions. Afterwards reply with the raw answers only.\n\n⏺ User declined to answer questions\n  ⎿  · Which fruit? (Apple / Pear)\n     · Which drink? (Tea / Coffee)\n\n✻ Churned for 1s · done 3:21\n\n❯ Call AskUserQuestion exactly once with ONE question: header \"Tools\", question \"Which tools?\", multiSelect true, options Hammer, Saw, Drill, short descriptions. Afterwards reply with the raw answers only.\n\n⏺ User answered Claude's questions:\n  ⎿  · Which tools? → Hammer, Drill\n\n⏺ \"Which tools?\"=\"Hammer, Drill\"\n\n✻ Churned for 2s · done 3:21\n\n❯ Call AskUserQuestion exactly once with ONE question: header \"Tools\", question \"Which tools?\", multiSelect true, options Hammer, Saw, Drill, short descriptions. Afterwards reply with the raw answers only.\n\n⏺ User declined to answer questions\n  ⎿  · Which tools? (Hammer / Saw / Drill)\n\n✻ Cogitated for 1s · done 3:21\n\n❯ Call AskUserQuestion exactly once with TWO single-select questions. Q1: header \"Fruit\", question \"Which fruit?\", options Apple, Pear. Q2: header \"Drink\", question \"Which drink?\", options Tea, Coffee. Short\n  descriptions. Afterwards reply with the raw answers only.\n────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────\n←  ☐ Fruit  ☐ Drink  ✔ Submit  →\n\nWhich fruit?\n\n  1. Apple\n     Crisp and sweet.\n  2. Pear\n     Soft and juicy.\n❯ 3. Mango\n────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────\n  4. Chat about this\n\nEnter to select · Tab/Arrow keys to navigate · ctrl+g to edit in Vim · Esc to cancel\n"
+     }
+    }
+   },
+   {
+    "step": 0,
+    "frame": {
+     "type": "ask",
+     "ask": {
+      "questions": [
+       {
+        "question": "Which fruit?",
+        "options": [
+         {
+          "label": "Apple",
+          "description": "Crisp and sweet."
+         },
+         {
+          "label": "Pear",
+          "description": "Soft and juicy."
+         }
+        ],
+        "header": "Fruit",
+        "multiSelect": false
+       },
+       {
+        "question": "Which drink?",
+        "options": [
+         {
+          "label": "Tea",
+          "description": "Warm and gentle."
+         },
+         {
+          "label": "Coffee",
+          "description": "Strong and bold."
+         }
+        ],
+        "header": "Drink",
+        "multiSelect": false
+       }
+      ]
+     },
+     "key": "2967b055b27c859a",
+     "pairing": {
+      "live": 0,
+      "named": 0,
+      "shown": 0,
+      "placed": 0,
+      "screen": "q0",
+      "corresponds": [
+       true,
+       false
+      ]
+     }
+    }
+   },
+   {
+    "step": 2,
+    "frame": {
+     "type": "dialog",
+     "dialog": {
+      "id": "591e0a9e7b56b021a5a7d27bf944d148710f10c5",
+      "title": "Which drink?",
+      "body": "←  ☒ Fruit  ☐ Drink  ✔ Submit  →\n\nWhich drink?",
+      "options": [
+       {
+        "index": 1,
+        "label": "Tea",
+        "description": "Warm and gentle."
+       },
+       {
+        "index": 2,
+        "label": "Coffee",
+        "description": "Strong and bold."
+       },
+       {
+        "index": 3,
+        "label": "Type something."
+       },
+       {
+        "index": 4,
+        "label": "Chat about this"
+       }
+      ],
+      "selectedIndex": 1,
+      "parsed": true,
+      "raw": " ▐▛███▛█   Claude Code v2.1.300\n▝▜██████▀  Haiku 5.5 · Claude Max\n ▝▝   ▝▝   <projects-root>/project-a\n\n⚠ Safe mode: all customizations are disabled (CLAUDE.md, skills, plugins, hooks, MCP, agents, and more)\n  Restart without --safe-mode to re-enable\n\n▎ Auto mode is now Claude Code's default permission mode.\n▎ Auto mode lets Claude handle permission prompts automatically. Claude checks each tool call for risky actions and prompt injection before executing, runs the ones it assesses as lower-risk, and blocks the rest.\n▎ https://code.claude.com/docs/en/permission-modes\n  1 more notice hidden\n\n❯ Call your AskUserQuestion tool exactly once with TWO questions in one call. Question 1: header \"Colour\", question \"Which colour do you prefer?\", multiSelect false, options Red, Green, Blue (each with a short\n  description). Question 2: header \"Features\", question \"Which features do you want?\", multiSelect true, options Logging, Metrics, Tracing (each with a short description). After you get the answers, reply with the raw\n  answers exactly as the tool returned them and nothing else.\n\n⏺ User answered Claude's questions:\n  ⎿  · Which colour do you prefer? → Teal 2\n     · Which features do you want? → Tracing, Logging, Audit 3\n\n⏺ \"Which colour do you prefer?\"=\"Teal 2\", \"Which features do you want?\"=\"Tracing, Logging, Audit 3\"\n\n✻ Crunched for 3s · done 3:19\n\n❯ Now call AskUserQuestion exactly once with THREE questions. Q1: header \"Pets\", question \"Which pets do you like?\", multiSelect true, options Cats, Dogs, Fish. Q2: header \"Size\", question \"Which size?\", multiSelect\n  false, options Small, Large. Q3: header \"Mode\", question \"Which mode?\", multiSelect false, options Fast, Safe. Give each option a short description. Afterwards reply with the raw answers only.\n\n⏺ User declined to answer questions\n  ⎿  · Which pets do you like? (Cats / Dogs / Fish)\n     · Which size? (Small / Large)\n     · Which mode? (Fast / Safe)\n\n✻ Baked for 1s · done 3:20\n\n❯ Call AskUserQuestion exactly once with TWO single-select questions. Q1: header \"Fruit\", question \"Which fruit?\", options Apple, Pear. Q2: header \"Drink\", question \"Which drink?\", options Tea, Coffee. Short\n  descriptions. Afterwards reply with the raw answers only.\n────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────\n←  ☒ Fruit  ☐ Drink  ✔ Submit  →\n\nWhich drink?\n\n❯ 1. Tea\n     Warm and gentle.\n  2. Coffee\n     Strong and bold.\n  3. Type something.\n────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────\n  4. Chat about this\n\nEnter to select · Tab/Arrow keys to navigate · Esc to cancel\n"
+     },
+     "pairing": {
+      "live": 1,
+      "named": 1,
+      "shown": 1,
+      "placed": 1,
+      "screen": "q1",
+      "corresponds": [
+       false,
+       true
+      ]
+     }
+    }
+   }
+  ],
+  "replies": [
+   {
+    "step": 2,
+    "body": {
+     "ok": true,
+     "next": {
+      "id": "591e0a9e7b56b021a5a7d27bf944d148710f10c5",
+      "title": "Which drink?",
+      "body": "←  ☒ Fruit  ☐ Drink  ✔ Submit  →\n\nWhich drink?",
+      "options": [
+       {
+        "index": 1,
+        "label": "Tea",
+        "description": "Warm and gentle."
+       },
+       {
+        "index": 2,
+        "label": "Coffee",
+        "description": "Strong and bold."
+       },
+       {
+        "index": 3,
+        "label": "Type something."
+       },
+       {
+        "index": 4,
+        "label": "Chat about this"
+       }
+      ],
+      "selectedIndex": 1,
+      "parsed": true,
+      "raw": " ▐▛███▛█   Claude Code v2.1.300\n▝▜██████▀  Haiku 5.5 · Claude Max\n ▝▝   ▝▝   <projects-root>/project-a\n\n⚠ Safe mode: all customizations are disabled (CLAUDE.md, skills, plugins, hooks, MCP, agents, and more)\n  Restart without --safe-mode to re-enable\n\n▎ Auto mode is now Claude Code's default permission mode.\n▎ Auto mode lets Claude handle permission prompts automatically. Claude checks each tool call for risky actions and prompt injection before executing, runs the ones it assesses as lower-risk, and blocks the rest.\n▎ https://code.claude.com/docs/en/permission-modes\n  1 more notice hidden\n\n❯ Call your AskUserQuestion tool exactly once with TWO questions in one call. Question 1: header \"Colour\", question \"Which colour do you prefer?\", multiSelect false, options Red, Green, Blue (each with a short\n  description). Question 2: header \"Features\", question \"Which features do you want?\", multiSelect true, options Logging, Metrics, Tracing (each with a short description). After you get the answers, reply with the raw\n  answers exactly as the tool returned them and nothing else.\n\n⏺ User answered Claude's questions:\n  ⎿  · Which colour do you prefer? → Teal 2\n     · Which features do you want? → Tracing, Logging, Audit 3\n\n⏺ \"Which colour do you prefer?\"=\"Teal 2\", \"Which features do you want?\"=\"Tracing, Logging, Audit 3\"\n\n✻ Crunched for 3s · done 3:19\n\n❯ Now call AskUserQuestion exactly once with THREE questions. Q1: header \"Pets\", question \"Which pets do you like?\", multiSelect true, options Cats, Dogs, Fish. Q2: header \"Size\", question \"Which size?\", multiSelect\n  false, options Small, Large. Q3: header \"Mode\", question \"Which mode?\", multiSelect false, options Fast, Safe. Give each option a short description. Afterwards reply with the raw answers only.\n\n⏺ User declined to answer questions\n  ⎿  · Which pets do you like? (Cats / Dogs / Fish)\n     · Which size? (Small / Large)\n     · Which mode? (Fast / Safe)\n\n✻ Baked for 1s · done 3:20\n\n❯ Call AskUserQuestion exactly once with TWO single-select questions. Q1: header \"Fruit\", question \"Which fruit?\", options Apple, Pear. Q2: header \"Drink\", question \"Which drink?\", options Tea, Coffee. Short\n  descriptions. Afterwards reply with the raw answers only.\n────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────\n←  ☒ Fruit  ☐ Drink  ✔ Submit  →\n\nWhich drink?\n\n❯ 1. Tea\n     Warm and gentle.\n  2. Coffee\n     Strong and bold.\n  3. Type something.\n────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────\n  4. Chat about this\n\nEnter to select · Tab/Arrow keys to navigate · Esc to cancel\n"
+     }
+    }
+   }
+  ]
+ },
+ "(e) an answer whose next is no menu": {
+  "frames": [
+   {
+    "step": 0,
+    "frame": {
+     "type": "dialog",
+     "dialog": {
+      "id": "b6ee409f477b63a320c2339b574fd26e2fb22522",
+      "title": "Which fruit?",
+      "body": "←  ☐ Fruit  ☐ Drink  ✔ Submit  →\n\nWhich fruit?",
+      "options": [
+       {
+        "index": 1,
+        "label": "Apple",
+        "description": "Crisp and sweet."
+       },
+       {
+        "index": 2,
+        "label": "Pear",
+        "description": "Soft and juicy."
+       },
+       {
+        "index": 3,
+        "label": "Mango"
+       },
+       {
+        "index": 4,
+        "label": "Chat about this"
+       }
+      ],
+      "selectedIndex": 3,
+      "parsed": true,
+      "raw": "\n\n⏺ User declined to answer questions\n  ⎿  · Which pets do you like? (Cats / Dogs / Fish)\n     · Which size? (Small / Large)\n     · Which mode? (Fast / Safe)\n\n✻ Baked for 1s · done 3:20\n\n❯ Call AskUserQuestion exactly once with TWO single-select questions. Q1: header \"Fruit\", question \"Which fruit?\", options Apple, Pear. Q2: header \"Drink\", question \"Which drink?\", options Tea, Coffee. Short\n  descriptions. Afterwards reply with the raw answers only.\n\n⏺ User declined to answer questions\n  ⎿  · Which fruit? (Apple / Pear)\n     · Which drink? (Tea / Coffee)\n\n✻ Churned for 1s · done 3:21\n\n❯ Call AskUserQuestion exactly once with ONE question: header \"Tools\", question \"Which tools?\", multiSelect true, options Hammer, Saw, Drill, short descriptions. Afterwards reply with the raw answers only.\n\n⏺ User answered Claude's questions:\n  ⎿  · Which tools? → Hammer, Drill\n\n⏺ \"Which tools?\"=\"Hammer, Drill\"\n\n✻ Churned for 2s · done 3:21\n\n❯ Call AskUserQuestion exactly once with ONE question: header \"Tools\", question \"Which tools?\", multiSelect true, options Hammer, Saw, Drill, short descriptions. Afterwards reply with the raw answers only.\n\n⏺ User declined to answer questions\n  ⎿  · Which tools? (Hammer / Saw / Drill)\n\n✻ Cogitated for 1s · done 3:21\n\n❯ Call AskUserQuestion exactly once with TWO single-select questions. Q1: header \"Fruit\", question \"Which fruit?\", options Apple, Pear. Q2: header \"Drink\", question \"Which drink?\", options Tea, Coffee. Short\n  descriptions. Afterwards reply with the raw answers only.\n────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────\n←  ☐ Fruit  ☐ Drink  ✔ Submit  →\n\nWhich fruit?\n\n  1. Apple\n     Crisp and sweet.\n  2. Pear\n     Soft and juicy.\n❯ 3. Mango\n────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────\n  4. Chat about this\n\nEnter to select · Tab/Arrow keys to navigate · ctrl+g to edit in Vim · Esc to cancel\n"
+     }
+    }
+   },
+   {
+    "step": 0,
+    "frame": {
+     "type": "ask",
+     "ask": {
+      "questions": [
+       {
+        "question": "Which fruit?",
+        "options": [
+         {
+          "label": "Apple",
+          "description": "Crisp and sweet."
+         },
+         {
+          "label": "Pear",
+          "description": "Soft and juicy."
+         }
+        ],
+        "header": "Fruit",
+        "multiSelect": false
+       },
+       {
+        "question": "Which drink?",
+        "options": [
+         {
+          "label": "Tea",
+          "description": "Warm and gentle."
+         },
+         {
+          "label": "Coffee",
+          "description": "Strong and bold."
+         }
+        ],
+        "header": "Drink",
+        "multiSelect": false
+       }
+      ]
+     },
+     "key": "2967b055b27c859a",
+     "pairing": {
+      "live": 0,
+      "named": 0,
+      "shown": 0,
+      "placed": 0,
+      "screen": "q0",
+      "corresponds": [
+       true,
+       false
+      ]
+     }
+    }
+   },
+   {
+    "step": 2,
+    "frame": {
+     "type": "dialog_cleared"
+    }
+   }
+  ],
+  "replies": [
+   {
+    "step": 2,
+    "body": {
+     "ok": true,
+     "next": null
+    }
+   }
+  ]
+ },
+ "(e) a dialog_cleared before the answer settles": {
+  "frames": [
+   {
+    "step": 0,
+    "frame": {
+     "type": "dialog",
+     "dialog": {
+      "id": "b6ee409f477b63a320c2339b574fd26e2fb22522",
+      "title": "Which fruit?",
+      "body": "←  ☐ Fruit  ☐ Drink  ✔ Submit  →\n\nWhich fruit?",
+      "options": [
+       {
+        "index": 1,
+        "label": "Apple",
+        "description": "Crisp and sweet."
+       },
+       {
+        "index": 2,
+        "label": "Pear",
+        "description": "Soft and juicy."
+       },
+       {
+        "index": 3,
+        "label": "Mango"
+       },
+       {
+        "index": 4,
+        "label": "Chat about this"
+       }
+      ],
+      "selectedIndex": 3,
+      "parsed": true,
+      "raw": "\n\n⏺ User declined to answer questions\n  ⎿  · Which pets do you like? (Cats / Dogs / Fish)\n     · Which size? (Small / Large)\n     · Which mode? (Fast / Safe)\n\n✻ Baked for 1s · done 3:20\n\n❯ Call AskUserQuestion exactly once with TWO single-select questions. Q1: header \"Fruit\", question \"Which fruit?\", options Apple, Pear. Q2: header \"Drink\", question \"Which drink?\", options Tea, Coffee. Short\n  descriptions. Afterwards reply with the raw answers only.\n\n⏺ User declined to answer questions\n  ⎿  · Which fruit? (Apple / Pear)\n     · Which drink? (Tea / Coffee)\n\n✻ Churned for 1s · done 3:21\n\n❯ Call AskUserQuestion exactly once with ONE question: header \"Tools\", question \"Which tools?\", multiSelect true, options Hammer, Saw, Drill, short descriptions. Afterwards reply with the raw answers only.\n\n⏺ User answered Claude's questions:\n  ⎿  · Which tools? → Hammer, Drill\n\n⏺ \"Which tools?\"=\"Hammer, Drill\"\n\n✻ Churned for 2s · done 3:21\n\n❯ Call AskUserQuestion exactly once with ONE question: header \"Tools\", question \"Which tools?\", multiSelect true, options Hammer, Saw, Drill, short descriptions. Afterwards reply with the raw answers only.\n\n⏺ User declined to answer questions\n  ⎿  · Which tools? (Hammer / Saw / Drill)\n\n✻ Cogitated for 1s · done 3:21\n\n❯ Call AskUserQuestion exactly once with TWO single-select questions. Q1: header \"Fruit\", question \"Which fruit?\", options Apple, Pear. Q2: header \"Drink\", question \"Which drink?\", options Tea, Coffee. Short\n  descriptions. Afterwards reply with the raw answers only.\n────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────\n←  ☐ Fruit  ☐ Drink  ✔ Submit  →\n\nWhich fruit?\n\n  1. Apple\n     Crisp and sweet.\n  2. Pear\n     Soft and juicy.\n❯ 3. Mango\n────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────\n  4. Chat about this\n\nEnter to select · Tab/Arrow keys to navigate · ctrl+g to edit in Vim · Esc to cancel\n"
+     }
+    }
+   },
+   {
+    "step": 0,
+    "frame": {
+     "type": "ask",
+     "ask": {
+      "questions": [
+       {
+        "question": "Which fruit?",
+        "options": [
+         {
+          "label": "Apple",
+          "description": "Crisp and sweet."
+         },
+         {
+          "label": "Pear",
+          "description": "Soft and juicy."
+         }
+        ],
+        "header": "Fruit",
+        "multiSelect": false
+       },
+       {
+        "question": "Which drink?",
+        "options": [
+         {
+          "label": "Tea",
+          "description": "Warm and gentle."
+         },
+         {
+          "label": "Coffee",
+          "description": "Strong and bold."
+         }
+        ],
+        "header": "Drink",
+        "multiSelect": false
+       }
+      ]
+     },
+     "key": "2967b055b27c859a",
+     "pairing": {
+      "live": 0,
+      "named": 0,
+      "shown": 0,
+      "placed": 0,
+      "screen": "q0",
+      "corresponds": [
+       true,
+       false
+      ]
+     }
+    }
+   },
+   {
+    "step": 2,
+    "frame": {
+     "type": "dialog_cleared"
+    }
+   },
+   {
+    "step": 3,
+    "frame": {
+     "type": "dialog",
+     "dialog": {
+      "id": "591e0a9e7b56b021a5a7d27bf944d148710f10c5",
+      "title": "Which drink?",
+      "body": "←  ☒ Fruit  ☐ Drink  ✔ Submit  →\n\nWhich drink?",
+      "options": [
+       {
+        "index": 1,
+        "label": "Tea",
+        "description": "Warm and gentle."
+       },
+       {
+        "index": 2,
+        "label": "Coffee",
+        "description": "Strong and bold."
+       },
+       {
+        "index": 3,
+        "label": "Type something."
+       },
+       {
+        "index": 4,
+        "label": "Chat about this"
+       }
+      ],
+      "selectedIndex": 1,
+      "parsed": true,
+      "raw": " ▐▛███▛█   Claude Code v2.1.300\n▝▜██████▀  Haiku 5.5 · Claude Max\n ▝▝   ▝▝   <projects-root>/project-a\n\n⚠ Safe mode: all customizations are disabled (CLAUDE.md, skills, plugins, hooks, MCP, agents, and more)\n  Restart without --safe-mode to re-enable\n\n▎ Auto mode is now Claude Code's default permission mode.\n▎ Auto mode lets Claude handle permission prompts automatically. Claude checks each tool call for risky actions and prompt injection before executing, runs the ones it assesses as lower-risk, and blocks the rest.\n▎ https://code.claude.com/docs/en/permission-modes\n  1 more notice hidden\n\n❯ Call your AskUserQuestion tool exactly once with TWO questions in one call. Question 1: header \"Colour\", question \"Which colour do you prefer?\", multiSelect false, options Red, Green, Blue (each with a short\n  description). Question 2: header \"Features\", question \"Which features do you want?\", multiSelect true, options Logging, Metrics, Tracing (each with a short description). After you get the answers, reply with the raw\n  answers exactly as the tool returned them and nothing else.\n\n⏺ User answered Claude's questions:\n  ⎿  · Which colour do you prefer? → Teal 2\n     · Which features do you want? → Tracing, Logging, Audit 3\n\n⏺ \"Which colour do you prefer?\"=\"Teal 2\", \"Which features do you want?\"=\"Tracing, Logging, Audit 3\"\n\n✻ Crunched for 3s · done 3:19\n\n❯ Now call AskUserQuestion exactly once with THREE questions. Q1: header \"Pets\", question \"Which pets do you like?\", multiSelect true, options Cats, Dogs, Fish. Q2: header \"Size\", question \"Which size?\", multiSelect\n  false, options Small, Large. Q3: header \"Mode\", question \"Which mode?\", multiSelect false, options Fast, Safe. Give each option a short description. Afterwards reply with the raw answers only.\n\n⏺ User declined to answer questions\n  ⎿  · Which pets do you like? (Cats / Dogs / Fish)\n     · Which size? (Small / Large)\n     · Which mode? (Fast / Safe)\n\n✻ Baked for 1s · done 3:20\n\n❯ Call AskUserQuestion exactly once with TWO single-select questions. Q1: header \"Fruit\", question \"Which fruit?\", options Apple, Pear. Q2: header \"Drink\", question \"Which drink?\", options Tea, Coffee. Short\n  descriptions. Afterwards reply with the raw answers only.\n────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────\n←  ☒ Fruit  ☐ Drink  ✔ Submit  →\n\nWhich drink?\n\n❯ 1. Tea\n     Warm and gentle.\n  2. Coffee\n     Strong and bold.\n  3. Type something.\n────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────\n  4. Chat about this\n\nEnter to select · Tab/Arrow keys to navigate · Esc to cancel\n"
+     },
+     "pairing": {
+      "live": 1,
+      "named": 1,
+      "shown": 1,
+      "placed": 1,
+      "screen": "q1",
+      "corresponds": [
+       false,
+       true
+      ]
+     }
+    }
+   }
+  ],
+  "replies": [
+   {
+    "step": 3,
+    "body": {
+     "ok": true,
+     "next": {
+      "id": "591e0a9e7b56b021a5a7d27bf944d148710f10c5",
+      "title": "Which drink?",
+      "body": "←  ☒ Fruit  ☐ Drink  ✔ Submit  →\n\nWhich drink?",
+      "options": [
+       {
+        "index": 1,
+        "label": "Tea",
+        "description": "Warm and gentle."
+       },
+       {
+        "index": 2,
+        "label": "Coffee",
+        "description": "Strong and bold."
+       },
+       {
+        "index": 3,
+        "label": "Type something."
+       },
+       {
+        "index": 4,
+        "label": "Chat about this"
+       }
+      ],
+      "selectedIndex": 1,
+      "parsed": true,
+      "raw": " ▐▛███▛█   Claude Code v2.1.300\n▝▜██████▀  Haiku 5.5 · Claude Max\n ▝▝   ▝▝   <projects-root>/project-a\n\n⚠ Safe mode: all customizations are disabled (CLAUDE.md, skills, plugins, hooks, MCP, agents, and more)\n  Restart without --safe-mode to re-enable\n\n▎ Auto mode is now Claude Code's default permission mode.\n▎ Auto mode lets Claude handle permission prompts automatically. Claude checks each tool call for risky actions and prompt injection before executing, runs the ones it assesses as lower-risk, and blocks the rest.\n▎ https://code.claude.com/docs/en/permission-modes\n  1 more notice hidden\n\n❯ Call your AskUserQuestion tool exactly once with TWO questions in one call. Question 1: header \"Colour\", question \"Which colour do you prefer?\", multiSelect false, options Red, Green, Blue (each with a short\n  description). Question 2: header \"Features\", question \"Which features do you want?\", multiSelect true, options Logging, Metrics, Tracing (each with a short description). After you get the answers, reply with the raw\n  answers exactly as the tool returned them and nothing else.\n\n⏺ User answered Claude's questions:\n  ⎿  · Which colour do you prefer? → Teal 2\n     · Which features do you want? → Tracing, Logging, Audit 3\n\n⏺ \"Which colour do you prefer?\"=\"Teal 2\", \"Which features do you want?\"=\"Tracing, Logging, Audit 3\"\n\n✻ Crunched for 3s · done 3:19\n\n❯ Now call AskUserQuestion exactly once with THREE questions. Q1: header \"Pets\", question \"Which pets do you like?\", multiSelect true, options Cats, Dogs, Fish. Q2: header \"Size\", question \"Which size?\", multiSelect\n  false, options Small, Large. Q3: header \"Mode\", question \"Which mode?\", multiSelect false, options Fast, Safe. Give each option a short description. Afterwards reply with the raw answers only.\n\n⏺ User declined to answer questions\n  ⎿  · Which pets do you like? (Cats / Dogs / Fish)\n     · Which size? (Small / Large)\n     · Which mode? (Fast / Safe)\n\n✻ Baked for 1s · done 3:20\n\n❯ Call AskUserQuestion exactly once with TWO single-select questions. Q1: header \"Fruit\", question \"Which fruit?\", options Apple, Pear. Q2: header \"Drink\", question \"Which drink?\", options Tea, Coffee. Short\n  descriptions. Afterwards reply with the raw answers only.\n────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────\n←  ☒ Fruit  ☐ Drink  ✔ Submit  →\n\nWhich drink?\n\n❯ 1. Tea\n     Warm and gentle.\n  2. Coffee\n     Strong and bold.\n  3. Type something.\n────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────\n  4. Chat about this\n\nEnter to select · Tab/Arrow keys to navigate · Esc to cancel\n"
+     }
+    }
+   }
+  ]
+ }
+}
