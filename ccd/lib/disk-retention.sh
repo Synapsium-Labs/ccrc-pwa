@@ -1353,15 +1353,31 @@ _ws_loose_collect() {   # token hex surface actor reason -> ccd ws-collect --exp
 # removed is rebuildable (`npm ci`), and each rung is re-read here, `ccd-tmp-sweep`'s dead-arm reasoning.
 # stdout is ONE JSON line: `{"shed":…}` or `{"wouldShed":…}` (exit 0), a refusal `{"refused":<word>,…}` (exit 0), or a
 # failure after the act began `{"failed":<word>,…}` (exit 1). `--dry-run` runs every rung, removes nothing and journals
-# nothing (the arm's shadow). The refusal words, in order: paused, no-such-session, not-a-workspace, not-a-child,
-# not-asleep, asleep-too-recently, already-shed, unmeasured, nothing-to-shed, in-use; the failures: git-state-changed,
-# shed-incomplete.
+# nothing (the arm's shadow). The refusal words, in order: paused, no-such-session, in-progress, not-a-workspace,
+# not-a-child, not-asleep, asleep-too-recently, already-shed, unmeasured, nothing-to-shed, in-use; the failures:
+# git-state-changed, shed-incomplete.
+# THE REAP LOCK. Once the row is known to stand, the verb takes `$REG/.reap-<id>.lock`, `-n`, the lock every verb that
+# removes anything of the id takes (ws-reap, ws-reclaim, ws-expire, ws-restore, ws-collect): held, it answers the
+# retryable `in-progress`, touching nothing. It is never taken for an id no row names, so no lock file is made for one.
+# NO REPOSITORY IS EVER INSIDE WHAT IS REMOVED. A candidate with a `.git` (a directory, a file, a link) at ANY depth is
+# not a candidate: a nested repository or a worktree that lives under an ignored directory keeps its uncommitted work,
+# and the before/after `git status` cannot see inside an ignored tree, so this walk is what proves it. A walk that cannot
+# finish refuses `unmeasured`.
 # THE ENVIRONMENT'S THREE KNOBS (ccd's override rule: an override may make ccd refuse, never aim it at another tree).
 # CCD_DEPS_SHED_MIN_ASLEEP_S is the box's floor on how long the session has slept, RAISE-ONLY (a value below the default
-# reads as the default; no argument names it); CCD_DEPS_SHED_SCAN_S bounds each removal; CCD_DEPS_SHED_NAMES names the
-# directory names, each one plain path component, and only ever inside this worktree among git's own ignored paths.
+# reads as the default; no argument names it); CCD_DEPS_SHED_SCAN_S bounds each walk and the removal, LOWER-ONLY (a value
+# above the default reads as the default), because the server's budget for the verb (`CCD_VERB_TIMEOUT_MS['ws-shed-deps']`,
+# `server/src/remote/runner.ts`) is sized from the default and `deps-shed-budget.test.ts` holds the sum; CCD_DEPS_SHED_NAMES
+# names the directory names, each one plain path component, and only ever inside this worktree among git's own ignored
+# paths, never holding a repository (above).
+# THE VERB'S BOUND. Every call that walks a tree is bounded, and their number does not grow with the candidates: the
+# ignored listing, the repository walk, the size (`du`), the two `git status` reads and the ONE `rm` over every candidate,
+# six at WS_SHED_SCAN_S_DEFAULT each; the toplevel read and the ONE index read at WS_SHED_QUICK_S each; the process walk
+# at WS_PATH_USERS_SCAN_S. A bound reached ends the verb, except the size's (it answers `bytes: null` and goes on), so at
+# most two TERM-to-KILL graces are paid.
 WS_SHED_MIN_ASLEEP_S_DEFAULT=3600
 WS_SHED_SCAN_S_DEFAULT=30
+WS_SHED_QUICK_S=10
 WS_SHED_NAMES_DEFAULT=node_modules
 _ws_shed_int() {   # value default -> the value when it is a whole number of at most 10 digits, else the default; on stdout
   local LC_ALL=C
@@ -1370,6 +1386,11 @@ _ws_shed_int() {   # value default -> the value when it is a whole number of at 
 _ws_shed_floor() {   # -> the floor in seconds: CCD_DEPS_SHED_MIN_ASLEEP_S, never below the default (raise-only)
   local v; v=$(_ws_shed_int "${CCD_DEPS_SHED_MIN_ASLEEP_S-}" "$WS_SHED_MIN_ASLEEP_S_DEFAULT")
   (( v >= WS_SHED_MIN_ASLEEP_S_DEFAULT )) || v=$WS_SHED_MIN_ASLEEP_S_DEFAULT
+  printf '%s' "$v"
+}
+_ws_shed_scan() {   # -> each walk's bound in seconds: CCD_DEPS_SHED_SCAN_S, never above the default (lower-only)
+  local v; v=$(_ws_shed_int "${CCD_DEPS_SHED_SCAN_S-}" "$WS_SHED_SCAN_S_DEFAULT")
+  (( v <= WS_SHED_SCAN_S_DEFAULT )) || v=$WS_SHED_SCAN_S_DEFAULT
   printf '%s' "$v"
 }
 _ws_shed_names() {   # -> the directory names, one per line; a name that is not one plain component (or is `.git`) is dropped
@@ -1394,14 +1415,29 @@ _ws_shed_failed() {   # word detail -> the post-start failure, journaled and pri
 }
 _ws_shed_git_state() {   # workdir -> the digest of `git status` (tracked changes and untracked files git does not ignore); rc 1 unread
   local out
-  out=$(git -C "$1" status --porcelain=v1 -z --untracked-files=all 2>/dev/null | _plat_sha256 | cut -d' ' -f1; exit "${PIPESTATUS[0]}") \
+  out=$(_plat_timeout "$scan" git -C "$1" status --porcelain=v1 -z --untracked-files=all 2>/dev/null | _plat_sha256 | cut -d' ' -f1; exit "${PIPESTATUS[0]}") \
     && [[ $out =~ ^[0-9a-f]{64}$ ]] && printf '%s' "$out"
+}
+_ws_shed_listing() {   # workdir -> git's own NUL-separated list of ignored, untracked paths, a whole ignored directory collapsed
+  _plat_timeout "$scan" git -C "$1" ls-files -z --others --ignored --exclude-standard --directory
+}
+_ws_shed_tracked() {   # workdir rel... -> the NUL-separated tracked paths at or beneath any of the rels (one index read)
+  local w="$1"; shift
+  _plat_timeout "$WS_SHED_QUICK_S" git -C "$w" --literal-pathspecs ls-files -z -- "$@"
+}
+_ws_shed_repos() {   # phys... -> every `.git` at any depth beneath them, one per line; rc non-zero when the walk did not finish
+  _plat_timeout "$scan" find "$@" -xdev -name .git -prune -print
+}
+_ws_shed_size() {   # phys... -> their disk use in KiB, one integer; rc non-zero when `du` did not finish
+  _plat_timeout "$scan" du -sk -x -- "$@" | awk '{ s += $1 } END { print s + 0 }'; return "${PIPESTATUS[0]}"
 }
 _ws_shed_gap() { :; }   # a test seam between the first git read and the act, as `_ws_orphan_gap` is the orphan verb's
 _ws_shed_run() {   # -> everything after the registry rungs, contained (id, cls, dry, wd, floor and the dec words are the verb's)
-  local wdp rel dir phys top dev wdev i n=0 rc bytes=0 b before after err
-  local -a names=() cands=() physs=()
-  wdp=$(cd -P -- "$wd" 2>/dev/null && pwd -P) && top=$(git -C "$wdp" rev-parse --path-format=absolute --show-toplevel 2>/dev/null) \
+  local wdp rel dir phys top dev wdev i n=0 rc bytes=null kib before after err scan line keep
+  local -a names=() pre=() prephys=() cands=() physs=()
+  scan=$(_ws_shed_scan)
+  wdp=$(cd -P -- "$wd" 2>/dev/null && pwd -P) \
+    && top=$(_plat_timeout "$WS_SHED_QUICK_S" git -C "$wdp" rev-parse --path-format=absolute --show-toplevel 2>/dev/null) \
     && [[ "$top" == "$wdp" ]] \
     || { _ws_shed_refused unmeasured "$wd is not the top of a git worktree that could be read — nothing was removed"; return; }
   wdev=$(_plat_devino "$wdp" 2>/dev/null) && wdev=${wdev%%:*} \
@@ -1410,7 +1446,7 @@ _ws_shed_run() {   # -> everything after the registry rungs, contained (id, cls,
   (( ${#names[@]} )) || { _ws_shed_refused nothing-to-shed "CCD_DEPS_SHED_NAMES names no plain directory name"; return; }
   # THE CANDIDATES: git's own list of ignored, untracked paths, a whole ignored directory collapsed to one entry.
   local listing
-  listing=$(git -C "$wdp" ls-files -z --others --ignored --exclude-standard --directory 2>/dev/null | tr '\0' '\n'; exit "${PIPESTATUS[0]}") \
+  listing=$(_ws_shed_listing "$wdp" 2>/dev/null | tr '\0' '\n'; exit "${PIPESTATUS[0]}") \
     || { _ws_shed_refused unmeasured "git could not list the ignored paths of $wdp — nothing was removed"; return; }
   while IFS= read -r rel; do
     [[ $rel == */ ]] || continue
@@ -1421,17 +1457,43 @@ _ws_shed_run() {   # -> everything after the registry rungs, contained (id, cls,
     # One plain relative path inside the worktree: no `..`, no `.`, no absolute spelling.
     case "/$rel/" in */../*|*/./*|//*) continue ;; esac
     dir="$wdp/$rel"
-    # A real directory with no `.git` of its own, reached through no link: its physical path is its spelling (a link
-    # anywhere on the way, the leaf included, resolves elsewhere and is skipped).
-    [[ -d $dir && ! -e $dir/.git && ! -L $dir/.git ]] || continue
+    # A real directory reached through no link: its physical path is its spelling (a link anywhere on the way, the leaf
+    # included, resolves elsewhere and is skipped).
+    [[ -d $dir ]] || continue
     phys=$(cd -P -- "$dir" 2>/dev/null && pwd -P) && [[ $phys == "$dir" ]] || continue
     dev=$(_plat_devino "$dir" 2>/dev/null) && [[ ${dev%%:*} == "$wdev" ]] || continue
-    # Not one tracked file beneath it (a vendored package git tracks keeps its directory). git's own listing never collapses
-    # a directory that holds a tracked file, so this is the second fence, asked of the index directly.
-    [[ -z "$(git -C "$wdp" ls-files -z -- "$rel" 2>/dev/null | head -c 1)" ]] || continue
-    cands+=("$rel"); physs+=("$phys")
+    pre+=("$rel"); prephys+=("$phys")
   done <<< "$listing"
-  (( ${#cands[@]} )) || { _ws_shed_refused nothing-to-shed "no ignored, untracked directory named $(printf '%s ' "${names[@]}")stands in $wdp"; return; }
+  # Not one tracked file beneath it (a vendored package git tracks keeps its directory). git's own listing never collapses
+  # a directory that holds a tracked file, so this is the second fence, asked of the index directly, once for them all.
+  if (( ${#pre[@]} )); then
+    local tracked
+    tracked=$(_ws_shed_tracked "$wdp" "${pre[@]}" 2>/dev/null | tr '\0' '\n'; exit "${PIPESTATUS[0]}") \
+      || { _ws_shed_refused unmeasured "git could not read the index of $wdp — nothing was removed"; return; }
+    for i in "${!pre[@]}"; do
+      keep=0
+      while IFS= read -r line; do
+        [[ -n $line && ( $line == "${pre[$i]}" || $line == "${pre[$i]}/"* ) ]] && { keep=1; break; }
+      done <<< "$tracked"
+      (( keep )) || { cands+=("${pre[$i]}"); physs+=("${prephys[$i]}"); }
+    done
+  fi
+  # No repository beneath it, at any depth: ONE walk over every candidate. A `.git` under a candidate drops that candidate.
+  if (( ${#physs[@]} )); then
+    local repos
+    repos=$(_ws_shed_repos "${physs[@]}" 2>/dev/null) \
+      || { _ws_shed_refused unmeasured "whether a repository stands beneath $(printf '%s ' "${physs[@]}")could not be walked — nothing was removed"; return; }
+    local -a keepc=() keepp=()
+    for i in "${!physs[@]}"; do
+      keep=1
+      while IFS= read -r line; do
+        [[ -n $line && $line == "${physs[$i]}/"* ]] && { keep=0; break; }
+      done <<< "$repos"
+      (( keep )) && { keepc+=("${cands[$i]}"); keepp+=("${physs[$i]}"); }
+    done
+    cands=(${keepc[@]+"${keepc[@]}"}); physs=(${keepp[@]+"${keepp[@]}"})
+  fi
+  (( ${#cands[@]} )) || { _ws_shed_refused nothing-to-shed "no ignored, untracked directory named $(printf '%s ' "${names[@]}")and holding no repository stands in $wdp"; return; }
   # IN USE: one walk of the process table for every candidate; a holder refuses, an unmeasured answer refuses.
   _ws_path_users_many "${physs[@]}"
   for i in "${!physs[@]}"; do
@@ -1441,9 +1503,8 @@ _ws_shed_run() {   # -> everything after the registry rungs, contained (id, cls,
       *) _ws_shed_refused unmeasured "${_WS_PATH_USERS_WHY_OF[$i]:-whether ${physs[$i]} is in use could not be asked} — nothing was removed"; return ;;
     esac
   done
-  for i in "${!physs[@]}"; do
-    b=$(_plat_bytes "${physs[$i]}" 2>/dev/null) && [[ $b =~ ^[0-9]+$ ]] && bytes=$(( bytes + b ))
-  done
+  # THE SIZE: one bounded `du` over every candidate, in KiB of disk; one that does not finish answers `bytes: null`.
+  kib=$(_ws_shed_size "${physs[@]}" 2>/dev/null) && [[ $kib =~ ^[0-9]+$ ]] && bytes=$(( kib * 1024 ))
   before=$(_ws_shed_git_state "$wdp") \
     || { _ws_shed_refused unmeasured "git status of $wdp could not be read — nothing was removed"; return; }
   if (( dry )); then
@@ -1452,22 +1513,21 @@ _ws_shed_run() {   # -> everything after the registry rungs, contained (id, cls,
     return 0
   fi
   _ws_shed_gap
-  local scan; scan=$(_ws_shed_int "${CCD_DEPS_SHED_SCAN_S-}" "$WS_SHED_SCAN_S_DEFAULT")
-  for i in "${!physs[@]}"; do
-    if [[ "$CCD_OS" == darwin ]]; then err=$(_plat_timeout "$scan" rm -rfx -- "${physs[$i]}" 2>&1); rc=$?
-    else err=$(_plat_timeout "$scan" rm -rf --one-file-system -- "${physs[$i]}" 2>&1); rc=$?; fi
-    if (( rc != 0 )) || [[ -e ${physs[$i]} || -L ${physs[$i]} ]]; then
-      _ws_shed_failed shed-incomplete "removing ${physs[$i]} did not finish (rm exit $rc${err:+: $(printf '%s' "$err" | head -1)}); what remains is still rebuildable"
-      return
-    fi
-    n=$(( n + 1 ))
-  done
+  # THE ACT: ONE bounded removal over every candidate, on this file system only.
+  if [[ "$CCD_OS" == darwin ]]; then err=$(_plat_timeout "$scan" rm -rfx -- "${physs[@]}" 2>&1); rc=$?
+  else err=$(_plat_timeout "$scan" rm -rf --one-file-system -- "${physs[@]}" 2>&1); rc=$?; fi
+  for i in "${!physs[@]}"; do [[ -e ${physs[$i]} || -L ${physs[$i]} ]] || n=$(( n + 1 )); done
+  if (( rc != 0 || n != ${#physs[@]} )); then
+    _ws_shed_failed shed-incomplete "removing ${#physs[@]} dependency directories did not finish (rm exit $rc${err:+: $(printf '%s' "$err" | head -1)}; $n removed); what remains is still rebuildable"
+    return
+  fi
   after=$(_ws_shed_git_state "$wdp") && [[ $after == "$before" ]] \
     || { _ws_shed_failed git-state-changed "git status of $wdp changed across the removal (or could not be read again) — removed $n dependency directories"; return; }
   local now; _now_s_to now
-  _reg_set "$id" depsshed "$now $bytes" || :
+  local -a mb=()
+  if [[ $bytes == null ]]; then _reg_set "$id" depsshed "$now" || :; else _reg_set "$id" depsshed "$now $bytes" || :; mb=(meas.bytes "$bytes"); fi
   _lc_done shed-deps "$id" "" verb ws-shed-deps detail "removed $n dependency directories" meas.mode "$cls" \
-    meas.bytes "$bytes" meas.workdir "$wdp" dec.surface "$lc_surface" dec.actor "$lc_actor" dec.reason "$lc_reason"
+    ${mb[@]+"${mb[@]}"} meas.workdir "$wdp" dec.surface "$lc_surface" dec.actor "$lc_actor" dec.reason "$lc_reason"
   printf '{"shed":true,"session":%s,"class":%s,"dirs":%s,"bytes":%s}\n' "$(_json_str "$id")" "$(_json_str "$cls")" "$n" "$bytes"
   return 0
 }
@@ -1497,6 +1557,22 @@ cmd_ws_shed_deps() {   # ccd ws-shed-deps --session <id> --class child|coordinat
     || { _ws_shed_refused paused "reclamation is paused fleet-wide ($REG/reclaim-paused) — nothing was removed"; return 0; }
   # 2. the row, and never a main checkout
   [[ -f "$REG/$id.uuid" ]] || { _ws_shed_refused no-such-session "no registry row names $id — nothing was removed"; return 0; }
+  # 2a. the reap lock, the one every verb that removes anything of the id takes; held, the retryable `in-progress`
+  command -v flock >/dev/null 2>&1 \
+    || { _ws_shed_refused unmeasured "flock (util-linux) is unavailable, so whether another verb is removing $id's files was never asked — nothing was removed"; return 0; }
+  local lfd rc=0
+  exec {lfd}>>"$REG/.reap-$id.lock" \
+    || { _ws_shed_refused unmeasured "cannot open the reap lock at $REG/.reap-$id.lock — nothing was removed"; return 0; }
+  flock -n "$lfd" || {
+    exec {lfd}>&-
+    _ws_shed_refused in-progress "another ccd process is reaping, reclaiming, expiring, restoring or collecting $id and still holds the lock — nothing was removed"
+    return 0
+  }
+  _ws_shed_locked; rc=$?
+  exec {lfd}>&-
+  return "$rc"
+}
+_ws_shed_locked() {   # -> rungs 2b to 11, under the caller's reap lock (the caller's locals: id, cls, dry and the dec words)
   local wd='' ws=''
   _reg_get_to ws "$id" workspace || ws=''
   [[ -n "$ws" ]] || { _ws_shed_refused not-a-workspace "$id is a project's main checkout — its dependencies are the operator's"; return 0; }
