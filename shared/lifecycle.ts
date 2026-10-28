@@ -82,6 +82,15 @@ export const LIFECYCLE: readonly LifecycleClass[] = [
     collector: 'ws-reclaim on the run\'s close and by the sweep; its stale arm at 7 idle days (behind its live switch in shared/switches.ts); ws-expire once archived',
     bound: 'the run\'s close, or 7 idle days when kept, or 7 days after an archive; never while it coordinated',
     tier: 'a worktree plus its pinned attic refs; the work is kept under refs/ccrc/attic/<id>/ before the tree goes', ruling: null },
+  // D-7278 (the operator's A1 ruling of 2026-10-28, extended to coordinators; design note 2026-10-28 §4): the one class
+  // inside a workspace that has a collector of its own. Policy row 2 gave `node_modules` its workspace's lifetime, and a
+  // finished worker's or a coordinator's workspace outlives its use; while the session sleeps past the age, the deps-shed
+  // arm removes the git-ignored, untracked directories git lists, and keeps every git fact.
+  { name: 'workspace-dependency-dirs', root: '<workdir>/**/node_modules (git-ignored and untracked; the names CCD_DEPS_SHED_NAMES lists)', pattern: 'W',
+    creators: ['package managers (npm ci, npm install), at agent runtime'],
+    collector: 'ws-shed-deps, composed by the server\'s deps-shed arm of the run-done row (shadow unless deps-shed-live, in shared/switches.ts, stands), re-proved on the box; otherwise the workspace\'s own collectors',
+    bound: 'the workspace\'s lifetime; in a sleeping worker\'s or coordinator\'s worktree, CCRC_DEPS_SHED_AFTER_HOURS after its work finished (and CCD_DEPS_SHED_MIN_ASLEEP_S asleep), once a sleep',
+    tier: 'about 1.1 GB per worktree of this repository, most of it node_modules (measured 2026-10-28)', ruling: null },
   // Session-continuity wave 4: the pane-scope sweep's verdict record. Rolling (R):
   // rewritten whole by rename every tick, so it holds only the scopes dead NOW;
   // it lives in the runtime dir, so a reboot empties it — the safe direction for

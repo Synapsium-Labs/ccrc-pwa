@@ -1116,16 +1116,27 @@ describe('shared/lifecycle.ts — the policy §4(a) manifest', () => {
     expect(LIFECYCLE.map((c) => c.name)).toEqual([
       'workspace-graph-store', 'project-graph-store', 'graph-corpus-filter', 'graph-build-lock', 'graph-sweep-census',
       'claude-tmp-session-dirs', 'tmp-sweep-census', 'child-tmp-roots', 'ccd-orphan-worktrees', 'agent-worktrees',
-      'cc-tmp-loose-entries', 'child-workspaces', 'scope-sweep-verdicts', 'project-pool-tag', 'history-store',
+      'cc-tmp-loose-entries', 'child-workspaces', 'workspace-dependency-dirs', 'scope-sweep-verdicts', 'project-pool-tag', 'history-store',
       'history-migration-snapshot', 'history-store-id', 'history-spool', 'history-journal', 'history-switches',
       'history-backups', 'history-export', 'history-scope-markers', 'history-card-files', 'history-replay-out',
       'history-recall-off', 'server-test-run-dirs', 'archived-workspaces',
     ]);
-    expect(LIFECYCLE.filter((c) => c.root.includes('node_modules')).map((c) => c.name)).toEqual([]);
+    // D-7278 (the intended change): the one class the ruling took out of containment.
+    expect(LIFECYCLE.filter((c) => c.root.includes('node_modules')).map((c) => c.name)).toEqual(['workspace-dependency-dirs']);
     const policy = readFileSync(path.join(REPO_ROOT, 'docs/superpowers/specs/2026-08-11-artifact-lifecycle-policy.md'), 'utf8');
     const row2 = policy.split('\n').find((l) => l.startsWith('| 2 | `node_modules` inside a workspace'));
     expect(row2, 'the policy\'s inventory row 2').toBeTruthy();
-    expect(row2).toContain('| dies with #1 |');
+    expect(row2).toContain('| dies with #1; in a SLEEPING worker');
+  });
+  it('declares a sleeping session\'s ignored dependency directories, the one class the deps-shed arm collects (D-7278)', () => {
+    const c = LIFECYCLE.find((x) => x.name === 'workspace-dependency-dirs');
+    expect(c, 'shared/lifecycle.ts declares no workspace-dependency-dirs class').toBeTruthy();
+    expect(c!.pattern).toBe('W');
+    expect(c!.root).toContain('node_modules');
+    expect(c!.collector).toContain('ws-shed-deps');
+    expect(c!.collector).toContain('deps-shed-live');
+    expect(c!.bound).toContain('CCRC_DEPS_SHED_AFTER_HOURS');
+    expect(c!.ruling).toBeNull();
   });
   it('declares the pane-scope sweep\'s verdict record, a rolling class its own writer rewrites', () => {
     // Session-continuity wave 4: `ccd-scope-sweep` keeps one record in the
