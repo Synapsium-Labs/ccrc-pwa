@@ -5,6 +5,10 @@
 worktree; the per-worktree sweep is "extreme". This text replaces revisions 1 to 3 as a whole. Their machinery
 (per-branch overlays, one base per merge-base cluster, demand votes, request files, views, a `.path` trigger) is
 gone. What survives of it is a short **Later options** section (§12) with the measured case for and against each.
+**Revision 5** fixes the build mechanics a review found unbuildable: staged copies are writable until publish
+(§3.5), every build has its own id (§2.1), saved results have one absolute link and a guard exemption (§2.1,
+§2.2), the build output keeps the engine's own directory name (§3.4), and where each new file lives and how each
+reader loads it is stated (§5.2).
 **Replaces:** the **Store** ruling of `2026-08-27-graphify-fleet-integration-design.md` (§2, §3.4, §D, the
 `workspace-graph-store` / `project-graph-store` rows of its §7) and the sweep body of its §C.
 **Keeps:** the engine pin and its provisioning (§A), skill convergence (§B), AST-only depth (Appendix A), the
@@ -134,16 +138,29 @@ $CCRC_GRAPH_STORE/                     default $HOME/.ccrc/graphs; always used a
   <repo-key>/                          basename of the main checkout + "-" + sha8 of realpath(git common dir)
     source                             realpath of the repository's common dir (identity and collision check)
     <repo-name>/                       the ccrc-owned checkout of main (§2.2); the engine's cwd and scan root
-    builds/<commit12>-<pin>/           one published graph; read-only once published (0444 files, 0555 dirs)
+    builds/<build-id>/                 one published graph; read-only once published (0444 files, 0555 dirs)
       graph.json  GRAPH_REPORT.md  .graphify_labels.json  manifest.json  meta.json  .graphify_engine
-      memory -> ../../memory           the only writable member (graphify save-result)
-    current -> builds/<commit12>-<pin> the served graph; replaced by one rename
+      memory -> <store>/<repo-key>/memory   absolute link; the only writable member (graphify save-result)
+    current -> builds/<build-id>       the served graph; replaced by one rename
     memory/                            save-result output for this repository
     staging/                           the build in progress; private to the running build, removed after it
+      changed.z  .started              the sweep's and the wrapper's working files; never published
+      graphify-out/                    GRAPHIFY_OUT for the build (§3.4); becomes builds/<build-id> at publish
   .trash/                              per-tree directories being deleted by migration, when same-filesystem (§9)
 ```
 
 Each tree holds one ignored symlink, `<tree>/graphify-out -> <store>/<repo-key>/current` (absolute).
+
+**Build id.** `<build-id>` is `<commit12>-<pin>-<UTC time of the build's start, YYYYmmddTHHMMSSZ>`. Two builds at
+the same commit, which is normal (the safety-net full rebuild of a repository whose main has not moved, a
+`noise_digest` change, a `.graphifyignore` change), therefore never share a directory. Builds are serialized by
+the pass lock (§3.4), so two builds of one repository cannot start in the same second; if the target exists
+anyway, the publish refuses (`failed: build id exists`) and the next pass gets a new id. A published build is
+never replaced in place.
+
+**The `memory` link.** Every staged and published build holds `memory -> <store realpath>/<repo-key>/memory`,
+absolute, so it resolves the same from `staging/graphify-out/` and from `builds/<build-id>/`, and the move at
+publish cannot break it. The sweep creates `<repo-key>/memory/` (0755) before the first build.
 
 **One resolver.** `ccd/graph-resolve` (a sourced bash library) is the single definition of `repo-key`, the store
 root's realpath and "the source ref of this repository". The sweep, the exclude writer, the doctor, `ccrc install`
@@ -182,7 +199,13 @@ git -C <checkout> clean -ffdxq -e /.graphifyignore
   the checkout's root, where `detect()` reads it, and is excluded in the checkout's own `.git/info/exclude`. It is
   never written into a session's tree any more.
 - **The corpus guard stays,** as a consistency check: `detect()` on the checkout must be a subset of
-  `git ls-tree -r --name-only <commit>`, with the generated `.graphifyignore` excused. On a clean checkout it
+  `git ls-tree -r --name-only <commit>`, with two exemptions: the generated `.graphifyignore`, and saved results.
+  `detect()` always adds the files under `GRAPHIFY_OUT/memory` (`detect.py:1101-1104`), which here is
+  `staging/graphify-out/memory`, the link to `<repo-key>/memory/`. Those paths are outside the checkout, so they
+  are never in `git ls-tree`. The guard runs `detect()` with the same `GRAPHIFY_OUT` as the build, makes each path
+  it reports absolute and real (`os.path.realpath` against the checkout), and excuses every path under
+  `realpath(<store>/<repo-key>/memory)/`. This replaces today's `^graphify-out/memory/` exemption
+  (`ccd-graph-sweep:422`), which matched the in-tree spelling and matches nothing now. On a clean checkout it
   should never fire; if it does, the outcome is `refused-by-guard` and nothing is published. The 98 per-tree
   refusals of §1.2 came from untracked files in worktrees, which a clean checkout of main does not have.
 - **Store root constraints.** The store root must be an absolute path, not `/`, not `$HOME`, and not inside
@@ -194,7 +217,7 @@ git -C <checkout> clean -ffdxq -e /.graphifyignore
 About 1 KB, in every published build. Readers read it instead of tail-reading a 53 MB `graph.json`.
 
 ```json
-{ "schema": 1, "repo_key": "…", "source": "<realpath of common dir>", "store": "<store realpath>",
+{ "schema": 1, "build_id": "<commit12>-<pin>-<ts>", "repo_key": "…", "source": "<realpath of common dir>", "store": "<store realpath>",
   "ref": "refs/remotes/origin/main", "commit": "<full sha>", "engine": "0.9.9",
   "kind": "full|incremental", "changed_files": 16,
   "last_full_commit": "<sha>", "last_full_at": "<iso>", "noise_digest": "<sha256 of the generated .graphifyignore>",
@@ -263,17 +286,27 @@ no longer runs `graphify update`.
 
 ```
 cd <store>/<repo-key>/<repo-name>                       # realpath; the engine's cwd and project root
-GRAPHIFY_OUT=<store>/<repo-key>/staging \               # absolute; set in the environment BEFORE the interpreter starts
+GRAPHIFY_OUT=<store>/<repo-key>/staging/graphify-out \  # absolute; set in the environment BEFORE the interpreter starts
 GRAPHIFY_NO_BACKUP=1 PYTHONHASHSEED=0 \
 GRAPHIFY_MAX_WORKERS=$CCRC_GRAPH_MAX_WORKERS GIT_TERMINAL_PROMPT=0 \
 timeout --kill-after=30 $((CCRC_GRAPH_SLOT_WAIT_SECS + CCRC_GRAPH_BUILD_TIMEOUT)) \
-  <ccrc> test --heavy -- \
+  "$GRAPH_LIB/ccrc-test" --heavy -- \
     nice -n "$CCRC_GRAPH_BUILD_NICE" ionice -c3 \
     timeout --kill-after=30 "$CCRC_GRAPH_BUILD_TIMEOUT" \
-      <venv>/bin/python -s -P <libexec>/graph-build \
-        --root <checkout realpath> --out <staging realpath> --commit <tip> --pin <pin> \
-        [--changed <staging>/changed.z]
+      "$VENV/bin/python" -s -P "$GRAPH_LIB/graph-build" \
+        --root <checkout realpath> --out <staging realpath>/graphify-out --commit <tip> --pin <pin> \
+        [--changed <staging realpath>/changed.z]
 ```
+
+`$GRAPH_LIB` is the directory holding the shipped `ccrc`, `ccrc-test` (the file `ccrc test` runs, #1785), `graph-build` and `graph-resolve` (§5.2);
+`$VENV` is the pinned engine's venv, `$HOME/.ccrc/graphify-venv`, as today (`ccd-graph-sweep:11`).
+
+**The output directory is named `graphify-out`.** The pinned engine adds `GRAPHIFY_OUT`'s basename
+(`GRAPHIFY_OUT_NAME`, `paths.py:215`) to the directories `detect()` skips (`detect.py:696`) everywhere in the
+scanned tree. Any other basename would silently drop every source directory of that name from the graph, and the
+subset-only corpus guard cannot notice a missing file (`staging` would drop a tracked `staging/` directory, which
+at least one fleet repository has). `graphify-out` is the engine's default and is already skipped by today's
+builds, so this keeps the corpus exactly what it is today. The wrapper checks it (below), and test N24 holds it.
 
 `ccrc test` runs its command as a scope in place, so the command keeps this environment and working directory
 (#1785). `-s -P` keeps user site-packages and the script's directory off `sys.path`, so a module at the root of a
@@ -286,6 +319,8 @@ repository can never shadow an import.
 |---|---|
 | `os.path.realpath(os.getcwd()) == --root` | `source_file` is relativized against the cwd (§1.3); a wrong cwd silently re-roots every node. |
 | After `import graphify`: `graphify.paths.GRAPHIFY_OUT == --out` | `GRAPHIFY_OUT` is read once at import; a value set later is ignored. |
+| `os.path.basename(--out) == "graphify-out"` | Any other basename becomes a skipped directory name in the scan (above). |
+| Every file in `--out` is writable by the wrapper | The engine rewrites the report, labels and manifest in place (`watch.py:1017-1018`, `save_manifest`); a read-only copy makes `_rebuild_code` return False (`watch.py:1072`) with no clear reason. |
 | `importlib.metadata.version("graphifyy") == --pin` (the package exports no `__version__`) | The private function below is pinned to this version. |
 | `git rev-parse HEAD` in the cwd equals `--commit` | `_git_head()` stamps the cwd's `HEAD` (§1.3); this makes the stamp the target commit. |
 | `inspect.signature(_rebuild_code)` has `changed_paths`, `force` and `acquire_lock` | A pin bump that changes the private API goes red here, not silently. |
@@ -298,19 +333,22 @@ repository can never shadow an import.
 | `changed_paths` | Incremental: the NUL-separated list from §3.2, each made absolute as `<root>/<path>`. Absolute paths resolve the same way whatever the engine's cwd/watch-root fallback does (`watch.py:218-240`), and a path missing on disk is evicted. Full: `None`. |
 | Lock | `acquire_lock=False`. The engine takes no `.rebuild.lock`, writes no `.pending_changes` and drains none, so nothing is ever queued for a later process that may never run. Serialization is ccrc's: the sweep's pass lock (`flock -n` on `~/.ccrc/graph-sweep.lock`, unchanged); a second pass that finds it held exits at once with census status `pass-locked`, which the doctor reads. Nothing waits on a lock silently, and the only wait in the path, for a heavy test slot, is bounded and reported (§4). |
 | Shrink | `force=True`; ccrc's own `MAX_SHRINK_PCT` publish check decides (§3.5). |
-| Clustering | Default (`no_cluster=False`); the predecessor's `.graphify_labels.json` in `staging/` keeps community names stable. |
-| Result | Exit 0 when `_rebuild_code` returns True, 1 when False, 2 on a failed check, 124 from `timeout`. The wrapper also writes `staging/.started` before the call, so the sweep can tell a build that timed out from one that never got a slot (§4), and prints its own `ru_maxrss` for `meta.json`'s `peak_rss_kb`. |
+| Clustering | Default (`no_cluster=False`); the predecessor's `.graphify_labels.json` in `staging/graphify-out/` keeps community names stable. |
+| Result | Exit 0 when `_rebuild_code` returns True, 1 when False, 2 on a failed check, 124 from `timeout`. The wrapper also writes `.started` beside `--out` (in `staging/`, so it is never published) before the call, so the sweep can tell a build that timed out from one that never got a slot (§4), and prints its own `ru_maxrss` for `meta.json`'s `peak_rss_kb`. |
 
 `_rebuild_code` is private. The pin makes that acceptable, and both the wrapper's signature check and a contract
 test (§11, N3) go red if a new pin changes it.
 
 ### 3.5 Staging and publish
 
-1. `staging/` is created empty, then the current build's `graph.json`, `manifest.json`, `.graphify_labels.json`
-   and `GRAPH_REPORT.md` are copied in (for a full build too: the predecessor graph is what the engine remaps
-   community ids against). A `memory` link to `../memory` is placed so the report's learning section reads the
-   repository's saved results, as it does per tree today. No lock file, queue file or `.graphify_root` is ever
-   copied.
+1. `staging/` and `staging/graphify-out/` are created empty (0755), then the current build's `graph.json`,
+   `manifest.json`, `.graphify_labels.json` and `GRAPH_REPORT.md` are copied into `staging/graphify-out/` (for a
+   full build too: the predecessor graph is what the engine remaps community ids against). **The copies are made
+   writable:** the published originals are 0444, and a plain `cp` keeps that mode, so each copy is written with
+   `install -m 0644` (or `cp` then `chmod 0644`). The engine and the stamper rewrite these files in place (§3.4,
+   step 3); only step 5 removes write permission. The absolute `memory` link of §2.1 is placed so the report's
+   learning section reads the repository's saved results, as it does per tree today. No lock file, queue file or
+   `.graphify_root` is ever copied.
 2. The build runs (§3.4).
 3. **Stamp.** If the engine left its outputs untouched (an incremental refresh with no topology change, §1.3),
    `graph.json` still carries the previous commit. The sweep's stamper, today's `_gs_restamp` retargeted from
@@ -319,9 +357,12 @@ test (§11, N3) go red if a new pin changes it.
    so the key is always present; a `graph.json` without it is a refusal (`failed: cannot stamp`).
 4. **Publish checks:** `graph.json` parses; its `built_at_commit` equals `tip`; its node count is not below the
    predecessor's by more than `CCRC_GRAPH_MAX_SHRINK_PCT` (default 20; `refused-shrink`); `meta.json` is written.
-5. **Publish:** `chmod -R a-w` (files 0444, directories 0555, the `memory` link untouched), `mv staging
-   builds/<commit12>-<pin>`, then `ln -s builds/<id> current.new && mv -T current.new current`, one rename. A
-   reader that already opened the previous build's files keeps reading them.
+5. **Publish:** `find staging/graphify-out ! -type l -exec chmod a-w {} +` (files 0444, directories 0555; the
+   `memory` link is not followed and stays as it is), `mv -T staging/graphify-out builds/<build-id>` (`-T`, so an
+   existing target fails instead of receiving the directory inside it; §2.1 says why it never exists), then
+   `ln -s builds/<build-id> current.new && mv -T current.new current`, one rename, then `staging/` is removed. A
+   reader that already opened the previous build's files keeps reading them. This is the only step that removes
+   write permission.
 6. Superseded builds beyond `CCRC_GRAPH_KEEP_BUILDS` (default 2: the current one and its predecessor, kept for a
    rollback) are deleted once older than `CCRC_GRAPH_BUILD_GRACE_SECS` (default 3600).
 
@@ -377,9 +418,28 @@ lists every key, commented out at its default, and README's "ccrc's own settings
 
 ### 5.2 The readers
 
+**Where the files live, and how each reader finds them.** The two new files, `ccd/graph-build` (Python) and
+`ccd/graph-resolve` (sourced bash), ship in the ccrc tree beside `ccd/ccrc` and `ccd/ccrc-test`, and are used
+**from the shipped tree only**: `$HOME/ccrc/ccd/`, the directory the launcher already execs into
+(`CCRC_SHIPPED`, `_inst_shim`). Nothing new is installed into `~/.local/bin` or `~/.local/libexec`, so
+`_inst_*`, `deploy.sh`'s agent lane, the uninstall removal list (which removes `~/ccrc` whole), the bin census
+and the orphan scan need no change, and the tests that pin those lists stay as they are. Each reader sets
+`GRAPH_LIB`, the directory it loads from, once:
+
+- `ccrc install` / `update` / `uninstall` / `doctor` run inside the `ccrc` body, so `GRAPH_LIB=$CCRC_HERE`.
+- `ccd-graph-sweep` is installed as a copy at `~/.local/bin/ccd-graph-sweep` (`ccrc:16694`, `deploy/deploy.sh:680`),
+  where the `ccrc` beside it is the generated launcher, not the sourceable body. **The sweep never sources the
+  launcher.** It uses its own directory when `graph-resolve` and `ccrc` sit beside it (a checkout or a test runs
+  it from the tree), and otherwise `$HOME/ccrc/ccd`. It then sources `$GRAPH_LIB/ccrc` (whose dispatch runs only
+  when it is executed, `ccrc:27302`) and `$GRAPH_LIB/graph-resolve`. A `GRAPH_LIB` without all four files is a
+  refusal: pass `status: failed`, reason naming the missing file, nothing built.
+- `ccd/session-hook.sh` loads neither (§2.1, below).
+
+The sweep copy and the shipped tree come from the same install or update, which writes both.
+
 | Reader | Runs in | Loads settings by | Keys |
 |---|---|---|---|
-| `ccd-graph-sweep` | its systemd user service, which has no `EnvironmentFile=` | at pass start it sources the installed `ccrc` beside it, exactly as `ccd/ccrc-test` does (#1785), and calls `_graph_knobs`. With no process environment set by the unit, the values are the file's or the defaults. The `: "${CCRC_GRAPH_…:=…}"` lines at the top of today's sweep (`:17-21`, `:288`) are removed. Tests keep setting keys in the sweep's environment, which `_ccrc_knob` reads first, and their fixture HOME isolates `ccrc.env`. | all sweep keys |
+| `ccd-graph-sweep` | its systemd user service, which has no `EnvironmentFile=` | at pass start it sources `$GRAPH_LIB/ccrc` (above), as `ccd/ccrc-test` sources the `ccrc` beside it (#1785), and calls `_graph_knobs`. With no process environment set by the unit, the values are the file's or the defaults. The `: "${CCRC_GRAPH_…:=…}"` lines at the top of today's sweep (`:17-21`, `:288`) are removed. Tests keep setting keys in the sweep's environment, which `_ccrc_knob` reads first, and their fixture HOME isolates `ccrc.env`. | all sweep keys |
 | `ccrc install` / `ccrc update`, and `deploy.sh agent` | the operator's shell / the agent lane | `_graph_knobs`, then one renderer, `_inst_graph_timer <template> <dest>`, writes the timer from `deploy/systemd/ccd-graph-sweep.timer` with `OnUnitActiveSec=` set to `CCRC_GRAPH_REFRESH_SECS`; the agent lane calls the same function the way #1752's `_slice_limits_unit` does. Unset gives today's bytes (`15min`). The service's `TimeoutStartSec` is rendered the same way as `BUDGET × (SLOT_WAIT_SECS + BUILD_TIMEOUT) + 600`. | `REFRESH_SECS`, `BUDGET`, `SLOT_WAIT_SECS`, `BUILD_TIMEOUT` |
 | `ccrc doctor` (`_check_graphify`) | the operator's shell; `cmd_doctor` already sources ccrc | `_graph_knobs` in `file` mode (`_ccrc_knob … file`), which ignores the shell's environment and so reports what the sweep's unit sees | all |
 | `ccrc uninstall` | the operator's shell | `_graph_knobs` before it touches anything | `STORE` |
@@ -636,6 +696,7 @@ No class is permanent, so no `ruling` string is needed.
 | A second pass while one runs | `pass-locked`, at once |
 | Pass killed mid-publish | `mv` and `mv -T` are atomic; the old `current` stands; staging collected next pass |
 | A bad setting | That key keeps its default in every reader; the doctor names it |
+| A rebuild at an unchanged commit | A new `build_id` (§2.1); it is published beside the old build, which `KEEP_BUILDS` later collects |
 
 Existing rows 1, 4, 5a, 6, 7, 8, 10, 12, 13, 15, 16, 17, 18 of 08-27 §9 carry over with their targets moved to the
 store. New rows, each red before and green after, in fixture HOMEs only:
@@ -662,6 +723,11 @@ store. New rows, each red before and green after, in fixture HOMEs only:
 | N18 | Card | a tree's branch files are missing from the card, or main-line files are listed before them |
 | N19 | Gate | `GATE_MAX_DIFF_PCT` from `settings.json` is ignored, or the gate arms for a tree differing in more than that share |
 | N20 | Store marker | `ccrc uninstall` removes a configured store root without `.ccrc-graph-store` |
+| N21 | Second build | a second build of an unchanged commit (a safety-net full rebuild, a noise change) is not published, or its predecessor's files are read-only in `staging/` when the engine runs |
+| N22 | Same-commit id | two builds at one commit get one `build_id`, or `mv` nests a build inside an existing one |
+| N23 | Saved results | a published build's `memory` link does not resolve to `<repo-key>/memory/`, `save-result` through a tree's `graphify-out/memory/` fails, or a saved result makes the guard refuse |
+| N24 | Output name | a repository tracking a directory named `staging` (or any name other than `graphify-out`) loses that directory's files from the graph, or the wrapper accepts an `--out` with another basename |
+| N25 | Loading | the installed sweep sources or runs the `ccrc` launcher, or runs with a `GRAPH_LIB` missing `ccrc`, `ccrc-test`, `graph-build` or `graph-resolve` without refusing |
 
 **Plan Task 0** (measure before building on it): on the box, replay one week of this repository's main commits as
 incremental refreshes against a full build at each day's last commit, and record the edge and node gaps. If the
