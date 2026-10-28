@@ -34,8 +34,10 @@
 //
 // THE CLASS CHOOSER sits on the toggle's row in project mode at a desk only (T2f, D-6371): its readers are the project
 // cards' placement forecast and Add workspace, so in status mode it would do nothing. Below 900 it stays on the screen's
-// runs line. It is the shared `ClassChooser`, a sibling of the radiogroup and never inside it; the radiogroup grows (`flex-1`) to
-// the space the chooser leaves, so the toggle keeps the row's width in both modes.
+// runs line. It is the shared `ClassChooser`, a sibling of the radiogroup and never inside it; the radiogroup grows (`flex-auto`, so its
+// basis stays its content and the row wraps the chooser under it at large text sizes, which `flex-1`'s 0% basis never did)
+// to the space the chooser leaves, so the toggle keeps the row's width in both modes. `.ins-toggle` already sets
+// `min-width: 0`, so no utility repeats it.
 //
 // THE TOGGLE is remembered per device under `ccrc-fleet-group`; storage that is absent, unreadable or holds an unknown
 // value answers status. The phone tabs (below the desk query) are a view over the status groups, not a mode: All shows
@@ -127,7 +129,7 @@ export function FleetTable(): ReactNode {
         <div
           role="radiogroup"
           aria-label="Group sessions by"
-          className="ins-toggle min-w-0 flex-1"
+          className="ins-toggle flex-auto"
           onKeyDown={(e) => rovingKey(e, MODES.findIndex((m) => m.id === mode), MODES.length, 'radio',
             (i) => choose(MODES[i]!.id))}
         >

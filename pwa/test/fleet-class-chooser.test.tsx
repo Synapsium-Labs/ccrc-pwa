@@ -24,9 +24,11 @@
 //                                                       instrument-list.test.tsx: "status mode at the desk: no runs row and no class chooser" (`class choosers: … to have a length of +0 but got 1`)
 //                                                         and "project mode at the desk: the chooser on the toggle's row" (`class choosers in status mode: … to have a length of +0 but got 1`)
 // Fix round 1 (the toggle keeps the row's width):
-//   the radiogroup's `min-w-0 flex-1` removed .......... "the toggle's radiogroup grows to the row's width beside the chooser (T2f, D-6371)"
-//                                                         (`the radiogroup no longer grows into the row: expected [ 'ins-toggle' ] to include 'flex-1'`)
-// The pin is a source read: jsdom has no layout, so the width itself is measured in a browser. The `flex-1` mutant and the
+//   the radiogroup's `flex-auto` removed ............... "the toggle's radiogroup grows to the row's width beside the chooser (T2f, D-6371)"
+//                                                         (`the radiogroup no longer grows into the row: expected [ 'ins-toggle' ] to include 'flex-auto'`)
+//   `flex-auto` replaced by `flex-1` ................... the same case (`the radiogroup no longer grows into the row: expected [ 'ins-toggle', 'flex-1' ] to include 'flex-auto'`;
+//                                                         `flex-auto flex-1` together trips its `not.toContain('flex-1')` line)
+// The pin is a source read: jsdom has no layout, so the width itself is measured in a browser. The `flex-auto` mutants and the
 // copied-chooser mutant are the only rows this file catches; the others live in instrument-list.test.tsx.
 import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -305,7 +307,9 @@ describe('the class chooser is one component (T2f, D-6371)', () => {
     expect(group, 'the toggle radiogroup is not where this read looks').not.toBeNull();
     const classes = group![1]!.split(/\s+/);
     expect(classes, 'the radiogroup lost its class').toContain('ins-toggle');
-    expect(classes, 'the radiogroup no longer grows into the row').toContain('flex-1');
-    expect(classes, 'the radiogroup may not shrink below its content').toContain('min-w-0');
+    expect(classes, 'the radiogroup no longer grows into the row').toContain('flex-auto');
+    // `flex-1` has a 0% basis, so a `flex-wrap` row never wraps and the chooser overlaps the toggle at large text sizes:
+    // the basis must stay auto, so that the row wraps the chooser instead.
+    expect(classes, "a 0% basis (`flex-1`) lets the chooser overlap the toggle: the basis must stay auto, so the row wraps").not.toContain('flex-1');
   });
 });
