@@ -1,25 +1,16 @@
 # The test box: test runs off the fleet host, results streamed back to the session
 
-**Spec** · 2026-10-28 · Status: draft for review, rev 2. It designs #1695 (step 2 of moving test runs off the fleet
+**Spec** · 2026-10-28 · Status: draft for review, rev 3. It designs #1695 (step 2 of moving test runs off the fleet
 host). It builds on #1694 (step 1: the capped tests slice, the fleet-wide admission queue and the `ccrc test` wrapper),
 which is not built yet; this spec names what it needs from step 1 in §3.1. Docs only: no code ships with it.
 
-**Rev 1** answers the first review: the box now reproduces the session's git state (HEAD, branch, `origin/main`,
-staged, unstaged and untracked) instead of committing the dirty tree (§2.1); slots are separate shared clones, so each
-has its own `origin/main` (§2.2); gitignored build outputs the tests read are handled (§1.2, §2.2); installs and runs
-happen as a per-slot user in static units started through one narrow polkit rule (§2.3); the snapshot reuses the
-session's stat cache and has size caps (§2.1); and the push URL is per repository (§4).
-
-**Rev 2** answers the second review: both units get a private `/tmp` and the run's `TMPDIR` is a short path inside it,
-so the suites that bind unix sockets under a literal `/tmp` work and no socket path grows past the local one (§2.2,
-§2.3); each slot has its own npm cache inside its directory and the registry proxy is the only shared warm layer (§2.2);
-a slot returns to an idle state the mirror always keeps before the run's refs can expire, so the mirror's `gc` cannot
-prune objects a shared clone still names (§2.1); the parity reference is a local run at the lockfile install, the
-wrapper says when the session's installs differ from it, and the fallback says what happens with no `node_modules`
-(§2.4); the runner always sets the worker count (§2.5); the run unit sees every package's `node_modules` and the build
-outputs read-only, with the vite and vitest caches on an empty tmpfs each run, so no run leaves state for the next
-(§2.3); and a bare `ccrc test` over the time budget falls back to the local slice like every other check, while an
-explicit `--remote` refuses with an exit status no test run gives (§2.4, §2.5).
+**Revisions.** Rev 1 reproduced the session's git state instead of committing the dirty tree, made slots shared clones,
+handled build outputs and moved session code to per-slot users in static units. Rev 2 added the private `/tmp`, the
+per-slot npm cache, the slot reset, the parity reference, the fixed worker count and the read-only run view. Rev 3
+(final) closes the last review: the idle ref moves without ever leaving a slot naming an unreachable commit, the push
+key cannot touch slot refs or reuse a run id, slot users fetch from the service-owned mirror through `safe.directory`,
+the box is named (the old fleet host, rebuilt clean, on the tailnet only, §2.0), and §8 is cut to the eight choices the
+operator makes.
 
 **Related:** #1694 (step 1), #389 (the vitest worker cap in the session environment), #1752 (per-box sizes as ccrc
 settings, the pattern every key below follows), #1772 (the worktree `node_modules` lifecycle), #1274 (CI workers per
@@ -37,10 +28,13 @@ weight, as box config, not in this tree).
 
 The test box is a second, separate box that runs those suites instead. The design, one line per question:
 
+- **The box: the old fleet host, rebuilt clean.** The Hetzner CX53 the fleet moved off (16 vCPU, 32 GB) is today the
+  frozen rollback source of that move. Nothing is installed on it until it stops being that; then it is wiped,
+  reinstalled from a clean image and joined to the tailnet under a new identity (§2.0).
 - **Transport: git, never rsync.** The wrapper sends four things: the session's HEAD sha, its branch name, its
   resolved `origin/main` sha, and the dirty state (the staged tree and the worktree tree, built from a copy of the
-  session's index, so the session's index and tree are untouched). It pushes them to scratch refs in a mirror on the
-  test box. The box checks HEAD out on a branch of the same name, sets `origin/main` to the session's sha and lays the
+  session's index, so the session's index and tree are untouched). It pushes them over the tailnet to scratch refs in a mirror on
+  the test box. The box checks HEAD out on a branch of the same name, sets `origin/main` to the session's sha and lays the
   dirty state back as uncommitted changes, so `HEAD`, the branch, `git status` and every
   `merge-base(origin/main, HEAD)..HEAD` range read the same as locally. About a dozen guard suites read the real repository's history, so a file
   copy without `.git` cannot give the local answer (§2.1). Scratch refs never go to `origin`: the repository is
@@ -66,7 +60,7 @@ The test box is a second, separate box that runs those suites instead. The desig
 - **Operator controls: one switch, one card.** A switch in the switchboard turns remote runs on or off; a card in
   Settings shows the box's state, slots and queue depth, read through a new agent op shaped like `disk` (§2.7).
 
-Everything box-specific is a ccrc setting with a neutral default (§4). Ten operator decisions close the spec (§8),
+Everything box-specific is a ccrc setting with a neutral default (§4). Eight operator decisions close the spec (§8),
 including when the old box stops being the rollback source.
 
 ## 1. Measured
@@ -124,7 +118,7 @@ Counted over `server/test/*.test.ts` (1,120 files) at the commit above; one file
 | the real repository's git history or `origin/main` (`topology-clean`, `deviation-refs`, `consolidation-path-guard`, the ratchets) | about a dozen | the run needs a real clone whose HEAD and `origin/main` are the session's own shas; `consolidation-path-guard` diffs `$(git merge-base origin/main HEAD)..HEAD` and `deviation-refs` walks that range, so dirty changes must stay uncommitted (§2.1) |
 | the guards' base overrides `CCRC_HISTORY_BASE` (`topology-clean`, `consolidation-path-guard`) and `CCRC_LEDGER_BASE` (`deviation-refs`) | 3 | forwarded by default, resolved to a sha first (§2.1, §2.3) |
 | the real repository's branch name or `git status` (`buildinfo`, `build-release`) | a few | the slot is on a branch of the session's name with the session's staged, unstaged and untracked state (§2.1); the many `ccd-*` files that read branches do it in fixture repos and need nothing |
-| gitignored build outputs (`server/dist`, `server/dist-pwa`, `agent/dist`): `auth-gate` runs cases only when `server/dist-pwa/index.html` exists, `authFixtures` imports from `server/dist/...` | 23 files name one of the three paths; most build their own copy under a fixture HOME | the snapshot never carries them (they are ignored) and the slot's clean would delete them, so the box builds each one the local tree has (§2.2, OA-T9) |
+| gitignored build outputs (`server/dist`, `server/dist-pwa`, `agent/dist`): `auth-gate` runs cases only when `server/dist-pwa/index.html` exists, `authFixtures` imports from `server/dist/...` | 23 files name one of the three paths; most build their own copy under a fixture HOME | the snapshot never carries them (they are ignored) and the slot's clean would delete them, so the box builds each one the local tree has (§2.2) |
 | real Chrome (`CCRC_CHROME`; "throws on a box with no Chrome: red, never skipped") | 36 pwa browser files | install Chrome or Chromium, path in config |
 
 CI's own list (`.github/actions/server-deps`) is the same: `tmux jq strace python3` on Linux, plus `bash tmux flock jq
@@ -162,7 +156,19 @@ to that wrapper and reuses the slice as the fallback unchanged.
 
 ## 2. Decisions
 
-### 2.1 Transport: the session's git state pushed to scratch refs (D-TBD-testbox-transport)
+### 2.0 The box
+
+The test box is the old Hetzner CX53 the fleet host moved off: 16 vCPU and 32 GB, the size §4's "16-vCPU box" values
+are written for. Today it is the frozen rollback source of that move, so this spec installs nothing on it and no build
+step touches it while it holds that role. It becomes the test box only when the operator retires it as the rollback
+source (§8, row 1), and then it is **rebuilt, not reused**: it held the fleet's account credentials, tokens and work
+data, and §2.3's "no credentials on the box" cannot be shown on a disk that once held them. The rebuild is a fresh OS
+from a clean image, the fleet work volume detached and not reattached, and a new tailnet identity. The tailnet ACL lets
+the fleet host reach the box's service port and ssh port, and lets the box reach nothing on the fleet host, so code that
+escapes a slot still has no path back. The service and the mirror's ssh listen on the tailnet address only, never on a
+public interface or on loopback, so a run's loopback-only network (§2.3) cannot reach them either.
+
+### 2.1 Transport: the session's git state pushed to scratch refs
 
 Rev 0 committed the dirty tree and checked that commit out. That made dirty changes part of HEAD on the box while they
 are working-tree changes locally, so every guard that measures `merge-base(origin/main, HEAD)..HEAD` saw a different
@@ -210,8 +216,11 @@ tree writes are unreferenced after the push and `git gc` collects them; the wrap
 **The push.** `git push --no-verify <mirror-url> HEAD:refs/ccrc-test/<run-id>/head <base>:…/base S_W:…/snap` (plus the
 override refs). `--no-verify` keeps the session's `pre-push` hook out of it. Because every needed commit is pushed, the
 box never depends on its own fetch timer having caught up: a session on an older or newer `origin/main` than the
-mirror's gets its own. The mirror URL is per repository (§4). The mirror's `update` hook accepts only refs under
-`refs/ccrc-test/` from the push key, so the key cannot rewrite the mirror's copy of the repository's branches.
+mirror's gets its own. The mirror URL is per repository (§4). The mirror's `update` hook accepts from the push key only the **creation** of refs under
+`refs/ccrc-test/<run-id>/` where `<run-id>` is 32 hex characters the wrapper draws at random: it refuses any update or
+delete of an existing ref, any ref under `refs/ccrc-test/slot/` or `refs/ccrc-test/run/`, and everything outside
+`refs/ccrc-test/`. So the key cannot rewrite the mirror's branches, move a slot's idle ref (below) or overwrite another
+run's state.
 
 **The mirror.** A plain bare clone (`git clone --bare <url>`) with `remote.origin.fetch` set to
 `+refs/heads/*:refs/remotes/origin/*`, fetched with `--prune` on its timer (config, default 5 min). It is not
@@ -222,8 +231,10 @@ The timer fetch exists only to keep pushes small (they are deltas against what t
 **What the slot does with it** (in the prepare phase, as the slot's user, §2.2 and §2.3):
 
 0. the reset (see "Ref lifetime" below), so the prepare starts from the idle commit whatever the last run left;
-1. `git fetch <mirror> 'refs/ccrc-test/<run-id>/*:refs/ccrc-test/run/*'` into the slot's own refs (objects are shared,
-   so this moves no data);
+1. `git -c safe.directory=<mirror> fetch <mirror> 'refs/ccrc-test/<run-id>/*:refs/ccrc-test/run/*'` into the slot's
+   own refs (objects are shared, so this moves no data). The mirror is the service's, and git refuses a local fetch from
+   a repository another user owns unless `safe.directory` names it; repository config cannot set it and the run's HOME
+   is empty, so the runner passes it on the command line for every git call that reads the mirror;
 2. `git checkout --force -B <branch> refs/ccrc-test/run/head`, or `--detach` when the session was detached;
 3. `git update-ref refs/remotes/origin/main refs/ccrc-test/run/base`, or delete it when the session had no base;
 4. the clean (§2.2);
@@ -264,23 +275,27 @@ objects. The invariant is therefore: **every object a slot names is reachable fr
 moment.** It is kept by these rules:
 
 1. each slot is configured `core.logAllRefUpdates=false` and `gc.auto=0`, so it keeps no reflog and never repacks;
-2. the mirror keeps one idle ref per slot, `refs/ccrc-test/slot/<n>`, set by the service to the mirror's
-   `refs/remotes/origin/main` before that slot's next reset;
+2. the mirror keeps an idle ref per slot, `refs/ccrc-test/slot/<n>/current`: the commit the slot's last completed
+   reset landed on. To freshen it, the service writes the mirror's `refs/remotes/origin/main` to
+   `refs/ccrc-test/slot/<n>/next` and leaves `current` alone;
 3. **the reset**, run as the slot's user at the end of every run (the run unit's `ExecStopPost`, so a failed or killed
-   run resets too) and again as the first step of every prepare: fetch `refs/ccrc-test/slot/<n>` into the slot,
-   `git checkout --force --detach` it, `rm -f .git/index` then `git read-tree` of that commit's tree, delete every
-   local branch and `refs/remotes/origin/main` and `refs/ccrc-test/run/*`. Afterwards the slot names only the idle
-   commit and objects it reaches;
+   run resets too) and again as the first step of every prepare: fetch `next` if it exists, else `current`, into the
+   slot, `git checkout --force --detach` it, `rm -f .git/index` then `git read-tree` of that commit's tree, delete every
+   local branch and `refs/remotes/origin/main` and `refs/ccrc-test/run/*`, and report the commit it landed on.
+   Afterwards the slot names only that commit and objects it reaches. Only then does the service set `current` to the
+   reported commit and delete `next`, so the commit the slot named before the reset stays referenced until the slot has
+   left it;
 4. the mirror deletes `refs/ccrc-test/<run-id>/*` only after the run's retention time (config, default 24 h) **and**
    only when no slot records that run id as its last run without a completed reset. A slot whose reset failed is marked
    down and its run's refs are kept until an operator clears it;
-5. the mirror moves `refs/ccrc-test/slot/<n>` only while slot `n` is idle and reset, never under a run.
+5. only the service writes `refs/ccrc-test/slot/*` (the push key cannot, see "The push"), and it never deletes
+   `current`.
 
 The mirror's `gc` then runs on its own timer with git's default prune expiry and needs no "only while idle" window: the
 invariant, not the timing, keeps the slots whole. A service test runs `git gc --prune=now` on the mirror between two
 runs of one slot, with the first run's refs already expired, and the second run must prepare and pass (§5).
 
-### 2.2 Caches: warm slots keyed by lockfile (D-TBD-testbox-slots)
+### 2.2 Caches: warm slots keyed by lockfile
 
 Per repository the test box keeps `slots` checkouts (config; default 2, a 16-vCPU box sets 4, see §4). Each slot is a
 shared clone of the mirror (`git clone --shared --no-checkout`: its own refs, the mirror's objects through
@@ -310,7 +325,7 @@ A run has two phases, each its own unit as the slot's user (§2.3):
 
 **Build outputs.** The tests read three gitignored outputs (§1.2): `server/dist`, `server/dist-pwa` and `agent/dist`.
 The snapshot never carries them, and without a rule the box would skip cases a fleet worktree that has built them runs.
-The rule (OA-T9): **the box builds the outputs the local tree has.** The submission carries a list of which of the
+The rule: **the box builds the outputs the local tree has.** The submission carries a list of which of the
 repository table's declared outputs exist locally (an existence check per path, nothing more), and the prepare phase
 runs each one's build command from the table (ccrc-pwa: `npm run build` in `server` for `server/dist`, the pwa build for
 `server/dist-pwa`, `npm run build` in `agent` for `agent/dist`). A slot keeps an output and skips its build when its
@@ -342,7 +357,7 @@ suites build, under `TMPDIR` and under `/tmp`, on both sides. `/tmp` on a tmpfs 
 of `PrivateTmp`) is a config option, off by default: it removes the fsync cost but changes free space and timing, so
 it waits for the parity check (§6) to pass with it on.
 
-### 2.3 Secrets and isolation (D-TBD-testbox-env, D-TBD-testbox-privilege)
+### 2.3 Secrets and isolation
 
 The tests need no secrets: they run against fixture HOMEs, with `gh`, `curl`, `ssh`, the system managers and `tmux`
 servers contained (CLAUDE.md, "FIXTURE HOMEs only"). The test box is built so that holds by construction, not by
@@ -353,7 +368,8 @@ is the install's lifecycle scripts, the builds and the tests, and never as the s
   key used only by the mirror fetch. No `gh` login, no account files, no provider keys. The service user owns those
   files (0600) and runs nothing from a submission.
 - **A user per slot.** Slot `n` runs as `ccrc-tb-<n>` (the prefix is config), an unprivileged system user with no
-  login shell, no sudo and no group shared with the service except a read group on the mirror's object store. The
+  login shell, no sudo and no group shared with the service except a read group on the mirror (its refs and object store, never its hooks'
+  key material, which the service keeps outside it). The
   slot's directory (§2.2: its checkout, `node_modules`, npm cache and run home) is owned by that user and mode 0700;
   its `TMPDIR` is in the unit's private `/tmp`. HOME is emptied at the start of each run, with no `~/.gitconfig`
   credential helper and no ssh agent. Concurrent runs are different uids with no writable path in common, so they
@@ -400,7 +416,8 @@ is the install's lifecycle scripts, the builds and the tests, and never as the s
   (config; default `*.pem`, `*.key`, `.env`, `.env.*`, `id_*`, `*.p12`) and names the paths. A refusal falls back to
   local, with the reason.
 - **Results.** The log the box keeps is the run's own output, kept for the retention time and deleted with the refs. It
-  is shown only to the session that submitted it. It passes through no other surface, so no new egress mask is needed;
+  is fetched by run id with the fleet host's token, which only the wrapper and the agent op read (the fleet host is the
+  single-user boundary). It passes through no other surface, so no new egress mask is needed;
   the card in §2.7 shows counts, never log text.
 
 Two checks that nothing leaks become tests of the service (§5): a fixture run that prints its whole environment, its
@@ -410,7 +427,7 @@ the service's token file and another slot's npm cache, each of which must fail. 
 fixture run writes a file under `node_modules`, under `node_modules/.vite` and under `/tmp`, and the next run in the
 same slot, from another fixture session, must see none of them.
 
-### 2.4 Fallback: the local slice, said out loud (D-TBD-testbox-fallback)
+### 2.4 Fallback: the local slice, said out loud
 
 The wrapper chooses remote only when all of these hold; otherwise it runs the same command through step 1's local path
 (the tests slice and its admission queue), unchanged:
@@ -447,13 +464,13 @@ reader why a local run might disagree. The comparison reads two files per packag
 installed, has no `node_modules` for the local path. A fallback then runs `npm ci` for the missing packages inside the
 tests slice first, through the admission queue, and says so: `test box: <reason>; installing <packages> locally`.
 `CCRC_TESTBOX_FALLBACK_INSTALL=refuse` makes it refuse instead, with `test box: <reason>; no local deps for
-<packages>` and the refusal exit status of §2.5 (OA-T10).
+<packages>` and the refusal exit status of §2.5.
 
 **The box drops mid-run.** The run keeps going on the box; the wrapper reconnects with the run id and its last log
 offset, within a deadline (config, default 60 s). After that it prints `test box: lost the run` and, by default, runs
 the command locally (config can make it fail instead). Ctrl-C or the session ending cancels the remote run.
 
-### 2.5 What runs where (D-TBD-testbox-routing)
+### 2.5 What runs where
 
 | work | where | why |
 |---|---|---|
@@ -475,9 +492,9 @@ the form:
   (`gh workflow run ci.yml --ref <branch> -f mode=full` for the full suite) as a hint. Exit status: the local run's.
   So a file set step 1 ran locally still runs, and its exit means what it meant.
 - **explicit `ccrc test --remote …`**: the session asked for the box only, so the wrapper runs nothing, prints the
-  reason and the CI command, and exits with the refusal status, **75** (`EX_TEMPFAIL`). No test command this wrapper
-  runs exits 75 (vitest, `tsc` and npm give 0, 1 or 2 and pass a child's status through), so a counted exit can tell
-  "refused, nothing ran" from a red run. Step 1's exit contract reserves 75 for this (§3.1). The other refusals in
+  reason and the CI command, and exits with the refusal status, **75** (`EX_TEMPFAIL`). No command head in the
+  repository table exits 75 today (vitest and `tsc` give 0, 1 or 2; `npm test` passes its script's status through, and
+  no script in the tree uses 75), so a counted exit can tell "refused, nothing ran" from a red run. Step 1's exit contract reserves 75 for this (§3.1). The other refusals in
   this spec (`CCRC_TESTBOX_FALLBACK_INSTALL=refuse`, `CCRC_TESTBOX_LOST_RUN=fail` before anything ran) use it too.
 
 **The command.** `ccrc test --remote <package> -- <argv>`. The repository table lists, per package, the command heads
@@ -511,7 +528,7 @@ Programmes are not configured separately. Every coordinator and worker already r
 changes; once the switch is on, every programme whose repository has a row uses the test box, and the rest use the
 slice. A per-programme opt-out is not built: the fallback already covers a repository the box cannot serve.
 
-### 2.7 Operator controls and status (D-TBD-testbox-status)
+### 2.7 Operator controls and status
 
 **The switch.** A new row in `shared/switches.ts`'s `SWITCHES`: a `$REG/testbox-remote-live` marker on the fleet host,
 written by the server's switch route from the Settings card, absent meaning off. The wrapper reads the marker itself,
@@ -547,7 +564,7 @@ run per session (config), first come first served across sessions, and a waiting
 moves. A run waits at most a deadline (config, default 10 min) before the wrapper falls back with
 `test box: waited <n> min`. Slots × workers is sized to the box (§4); on 16 vCPU the defaults are 4 slots × 3 workers.
 
-### 2.9 Where the service lives in the tree (D-TBD-testbox-service-home)
+### 2.9 Where the service lives in the tree
 
 Two homes were weighed:
 
@@ -659,53 +676,56 @@ sides before it counts. Any other disagreement blocks arming and is reported by 
   registry proxy, every piece of submitted code runs as a slot user that cannot see other slots, and the snapshot is
   checked first.
 - Scratch refs never reach the public remote.
+- The box is rebuilt clean before it serves, and the tailnet lets it reach nothing on the fleet host.
 - The server keeps one agent link and never reaches a third box.
 
 ## 8. Operator decisions
 
-| # | decision | recommended |
-|---|---|---|
-| OA-T1 | Transport: snapshot commit pushed to a scratch ref on the box's mirror (§2.1), or rsync | **git push**; rsync loses the history the guard suites read |
-| OA-T2 | Where the service lives: the agent package in a test role, or a new package (§2.9) | **agent package, test role** |
-| OA-T3 | Full server suite: CI only, or allowed on the box when its queue is idle (§2.5) | **CI only**, budget 15 min per remote run |
-| OA-T4 | A run lost mid-flight: re-run locally, or fail (§2.4) | **re-run locally**, said out loud |
-| OA-T5 | Which repositories first (§2.6) | **ccrc-pwa only**; others by adding a row once its parity check passes |
-| OA-T6 | The units' private `/tmp` on tmpfs on the box (§2.2) | **off until §6 passes with it on**, then on |
-| OA-T7 | Arming: the switch on after §6 passes, and step 1's local slice kept as the fallback for good | **yes** |
-| OA-T8 | When the old box stops being the rollback source of the fleet move and is rebuilt as the test box | **after** the fleet host has run 7 days with no rollback-class incident **and** a full snapshot of the old box is taken and verified restorable; the snapshot stays the rollback source for 30 more days, then is deleted by the operator |
-| OA-T9 | Gitignored build outputs the tests read (§2.2): the box builds the ones the local tree has, or both sides run without them | **the box builds the ones the local tree has**; the other rule cannot hold locally |
-| OA-T10 | A fallback in a worktree with no `node_modules` (shed by #1772, or never installed) (§2.4): install the missing packages inside the tests slice, or refuse with exit 75 | **install inside the slice**, said out loud; the session needs its answer, and the slice caps the install |
+Everything else in this spec is design, settled by the reasons given where it is described. These are the choices the
+operator makes; each row names the recommended option first.
 
-## Deviations found
+| # | decision | recommended | why |
+|---|---|---|---|
+| 1 | Which box, and when it stops being the fleet move's rollback source (§2.0) | **the old Hetzner CX53, retired as the rollback source once the new fleet host has run 7 days with no rollback-class incident and a full snapshot of the old box is verified restorable; the snapshot stays the rollback source for 30 more days, then the operator deletes it; the box is rebuilt clean** | it is already paid for and sized for the load, and the snapshot keeps the rollback while the box is wiped |
+| 2 | Transport: the session's git state pushed over the tailnet to scratch refs on the box's mirror, or rsync of the files (§2.1) | **scratch refs over the tailnet** | the guard suites read history and `origin/main`, which a file copy cannot carry; scratch refs never reach the public remote |
+| 3 | What runs where (§2.5) | **box: single files, file sets under the 15-minute budget, the tests-inclusive typecheck, mutation loops, browser tests; local slice: everything else and every fallback; GitHub CI: the full suites and the macOS legs** | the full server suite is CI-sized (about 16,000 file-seconds) and the merge queue runs it anyway |
+| 4 | Caches: warm slots with their own installs keyed by lockfile, node version and platform, or a shared read-only install (§2.2) | **warm slots, 4 per repository on this box, a per-slot npm cache behind one registry proxy** | lockfiles change about five times a month, so nearly every run starts warm, and no slot can write what another reads |
+| 5 | Fallback when the box is down, full, refusing or lost mid-run (§2.4) | **run in step 1's local slice and say why in the first and last line; a lost run re-runs locally; a worktree with no `node_modules` installs inside the slice** | the session always gets its answer and the exit status is the local run's |
+| 6 | Secrets (§2.3) | **none on the box and none forwarded: fixed allowlisted environment, a user per slot with an empty HOME, loopback-only runs, a deny list on the snapshot** | the tests need no secrets, and session code runs on the box, so the box must hold nothing worth taking |
+| 7 | On/off control (§2.7) | **one switch on the Settings › Automation Test box card, backed by a marker file a terminal can remove; armed only after the parity check in §6 passes** | the operator can turn it off from the UI or a shell, and it works with the server down |
+| 8 | Which repositories first (§2.6) | **ccrc-pwa only; another repository by adding a row once its own parity check passes** | its suites are the measured load |
 
-New design decisions, numbered `D-TBD-<slug>` because the allocator was not reachable from the session that wrote this
-spec; they are replaced by issued numbers before landing:
+## Decisions this spec adds
 
-- **D-TBD-testbox-transport**: the session's HEAD, branch, resolved `origin/main` and staged and worktree trees, built
-  from a copy of the session's index and pushed to `refs/ccrc-test/<run-id>/*` on the box's mirror (a plain bare
-  clone, never `--mirror`); the slot reproduces them as uncommitted state; size caps; never to the clone's own remotes;
-  rsync rejected (§2.1).
-- **D-TBD-testbox-slot-invariant**: every object a slot names is reachable from a mirror ref at every moment: no slot
-  reflogs or gc, a per-slot idle ref, a reset after every run and before every prepare, and run refs kept until the
-  slot that ran them has reset (§2.1).
-- **D-TBD-testbox-slots**: warm per-repository slots as shared clones of the mirror, with per-package installs keyed by
-  lockfile hash, node version and platform, and the declared build outputs built when the local tree has them; linked
-  worktrees, shared, hardlinked and overlay trees rejected; a per-slot npm cache, the registry proxy the only shared
-  warm layer (§2.2).
-- **D-TBD-testbox-tmp**: a private `/tmp` per unit and a short run `TMPDIR` inside it, never longer than a fleet
-  session's (§2.2, §2.3).
-- **D-TBD-testbox-no-carryover**: the run unit sees `node_modules` and the build outputs read-only, with an empty
-  tmpfs over the vite and vitest caches (§2.3).
-- **D-TBD-testbox-env**: the run's fixed allowlisted environment, a user per slot with an empty HOME, `ProtectProc`,
-  loopback only for the run, the registry proxy only for the install, and the snapshot deny list (§2.3).
-- **D-TBD-testbox-privilege**: static `ccrc-testbox-{prepare,run}@<n>` system template units with fixed users, started
-  by the service through one polkit rule limited to those names (§2.3).
-- **D-TBD-testbox-fallback**: the fallback checks (the budget among them), their printed reasons, the lost-run rule
-  and the install-or-refuse rule for a worktree with no `node_modules` (§2.4).
-- **D-TBD-testbox-parity-reference**: the reference answer is a local run at the lockfile install; the wrapper names
-  local installs that differ from the lockfile (§2.4).
-- **D-TBD-testbox-refusal-exit**: exit 75 means "refused, nothing ran", reserved in step 1's exit contract (§2.5).
-- **D-TBD-testbox-routing**: what runs on the box, what stays with CI, the time budget, the command heads and the
-  worker count the runner always sets (§2.5).
-- **D-TBD-testbox-status**: the `testbox-remote-live` switch row, the `testbox` agent op and the Settings card (§2.7).
-- **D-TBD-testbox-service-home**: the test service as a second entry point of the agent package (§2.9).
+The build plan allocates a deviation number for each of these when it lands; until then they are named by this PR,
+#1780.
+
+- **Transport**: the session's HEAD, branch, resolved `origin/main` and staged and worktree trees, built from a copy of
+  the session's index and pushed over the tailnet to create-only `refs/ccrc-test/<run-id>/*` refs on the box's mirror
+  (a plain bare clone, never `--mirror`); the slot reproduces them as uncommitted state; size caps; never to the clone's
+  own remotes; rsync rejected (§2.1).
+- **Slot invariant**: every object a slot names is reachable from a mirror ref at every moment: no slot reflogs or gc,
+  a per-slot `current` idle ref replaced only after the slot's reset has left it, a reset after every run and before
+  every prepare, and run refs kept until the slot that ran them has reset (§2.1).
+- **Slots**: warm per-repository slots as shared clones of the mirror, with per-package installs keyed by lockfile
+  hash, node version and platform, and the declared build outputs built when the local tree has them; linked worktrees,
+  shared, hardlinked and overlay trees rejected; a per-slot npm cache, the registry proxy the only shared warm layer
+  (§2.2).
+- **Temp**: a private `/tmp` per unit and a short run `TMPDIR` inside it, never longer than a fleet session's; tmpfs
+  `/tmp` off until the parity check passes with it on (§2.2, §2.3, §6).
+- **No carry-over**: the run unit sees `node_modules` and the build outputs read-only, with an empty tmpfs over the
+  vite and vitest caches (§2.3).
+- **Environment and isolation**: the run's fixed allowlisted environment, a user per slot with an empty HOME,
+  `ProtectProc`, loopback only for the run, the registry proxy only for the install, and the snapshot deny list; the box
+  rebuilt clean and reachable only from the fleet host over the tailnet (§2.0, §2.3).
+- **Privilege**: static `ccrc-testbox-{prepare,run}@<n>` system template units with fixed users, started by the service
+  through one polkit rule limited to those names (§2.3).
+- **Fallback**: the fallback checks (the budget among them), their printed reasons, the lost-run rule and the
+  install-or-refuse rule for a worktree with no `node_modules` (§2.4).
+- **Parity reference**: the reference answer is a local run at the lockfile install; the wrapper names local installs
+  that differ from the lockfile (§2.4).
+- **Refusal exit**: exit 75 means "refused, nothing ran", reserved in step 1's exit contract (§2.5).
+- **Routing**: what runs on the box, what stays with CI, the time budget, the command heads and the worker count the
+  runner always sets (§2.5).
+- **Status**: the `testbox-remote-live` switch row, the `testbox` agent op and the Settings card (§2.7).
+- **Service home**: the test service as a second entry point of the agent package (§2.9).
