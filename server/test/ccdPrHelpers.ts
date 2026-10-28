@@ -9,7 +9,10 @@ import path from 'node:path';
 import { makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
 
 /** gh prints $HOME/gh-rows.json, exits with $HOME/gh-rc (default 0), echoes
- *  $HOME/gh-err to stderr, and appends its argv to $HOME/gh-calls so the exact
+ *  $HOME/gh-err to stderr — except that `gh pr view <n>` prints
+ *  $HOME/gh-view-<n>.json and a `--search` list prints $HOME/gh-search.json
+ *  when that file exists (`ghView`/`ghSearch`), so one fixture can answer the
+ *  PR list, a member's comments and a train PR differently — and appends its argv to $HOME/gh-calls so the exact
  *  flags are assertable. `timeout N cmd…` drops N and runs cmd, so a stubbed
  *  rc of 124 reproduces a real timeout exactly — and it LOGS its own argv
  *  first, because the wrapper is the only bound on a blocking DNS hang and a
@@ -19,7 +22,10 @@ export const GH_STUB = `
 gh() {
   printf '%s\\n' "$*" >> "$HOME/gh-calls"
   [[ -f "$HOME/gh-err" ]]       && cat "$HOME/gh-err" >&2
-  [[ -f "$HOME/gh-rows.json" ]] && cat "$HOME/gh-rows.json"
+  if [[ "$1 $2" == "pr view" && -f "$HOME/gh-view-$3.json" ]]; then cat "$HOME/gh-view-$3.json"
+  elif [[ " $* " == *" --search "* && -f "$HOME/gh-search.json" ]]; then cat "$HOME/gh-search.json"
+  elif [[ -f "$HOME/gh-rows.json" ]]; then cat "$HOME/gh-rows.json"
+  fi
   local rc=0; [[ -f "$HOME/gh-rc" ]] && rc=$(cat "$HOME/gh-rc")
   return "$rc"
 };
@@ -35,6 +41,10 @@ export interface PrHarness extends CcdHarness {
   ghRaw(body: string): void;
   /** Make the stubbed gh fail: rc plus the stderr it prints. 124 = timeout. */
   ghFail(rc: number, stderr: string): void;
+  /** What the stubbed `gh pr view <n>` returns, one object per PR number. */
+  ghView(n: number, body: unknown): void;
+  /** What the stubbed `gh pr list … --search …` returns. */
+  ghSearch(rows: unknown[]): void;
   ghCalls(): string[];
   /** Run a snippet, returning the failure instead of throwing. */
   run(snippet: string): { code: number; stdout: string; stderr: string };
@@ -62,6 +72,8 @@ export function makePrHarness(prefix: string): PrHarness {
       fs.writeFileSync(at('gh-rc'), String(rc));
       fs.writeFileSync(at('gh-err'), stderr);
     },
+    ghView: (n, body) => { fs.writeFileSync(at(`gh-view-${n}.json`), JSON.stringify(body)); },
+    ghSearch: (rows) => { fs.writeFileSync(at('gh-search.json'), JSON.stringify(rows)); },
     ghCalls: () => lines('gh-calls'),
     run: (snippet) => {
       try { return { code: 0, stdout: sh(snippet), stderr: '' }; }
@@ -92,4 +104,24 @@ export const mergedRow = (over: Record<string, unknown> = {}): Record<string, un
   baseRefName: 'main', isCrossRepository: false, mergedAt: '2026-07-20T10:00:00Z',
   mergeCommit: { oid: '7a68ca0' }, url: 'https://github.com/o/r/pull/42',
   title: 'the work', isDraft: false, statusCheckRollup: null, ...over,
+});
+
+/** A member PR a merge train landed and closed: CLOSED with the train label,
+ *  no merge commit, head `headOid`. */
+export const landedRow = (headOid: string, over: Record<string, unknown> = {}): Record<string, unknown> =>
+  mergedRow({ headRefOid: headOid, state: 'CLOSED', mergedAt: null, mergeCommit: null,
+    closedAt: '2026-07-21T09:00:00Z', labels: [{ name: 'landed-in-train' }], ...over });
+
+/** The comment a train leaves on a member it closes, naming its train PR. */
+export const trainComment = (train: number): Record<string, unknown> =>
+  ({ comments: [{ body: `Landed in train #${train}.` }] });
+
+/** A train PR `number`, MERGED as `mergeOid`, whose body lists each member as
+ *  `- #<n> <head sha>`. */
+export const trainRow = (number: number, mergeOid: string, members: Array<[number, string]>,
+  over: Record<string, unknown> = {}): Record<string, unknown> => ({
+  number, state: 'MERGED', mergedAt: '2026-07-21T08:59:00Z', mergeCommit: { oid: mergeOid },
+  baseRefName: 'main', isCrossRepository: false,
+  body: `Merge train.\n\nMembers:\n${members.map(([n, sha]) => `- #${n} ${sha}`).join('\n')}\n`,
+  ...over,
 });
