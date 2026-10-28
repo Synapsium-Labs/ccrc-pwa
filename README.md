@@ -6728,8 +6728,12 @@ isolation boundary its test harness relies on:
 `landed-in-train`; set empty to turn it off) names the label a merge train puts
 on a member PR it closes after landing its work: `pr-state` and `pr-landing`
 read a CLOSED PR carrying it as merged, so the archive reason, the cleanup
-bucket and the merged notice treat it as a merge. It names a label, never a
-path. `ccd` with no verb prints its
+bucket and the merged notice treat it as a merge. The cleanup itself
+(`ws-audit`/`ws-reap`) has no merge commit to prove against for such a PR, so
+it proves the branch against origin's default branch instead, as proof
+`merge-tree`: merging the branch there must change nothing. A coordinator
+proves the merge before closing the run from `landedInTrain: true` on the PR's
+row of `ccd pr-state --session <id>`. It names a label, never a path. `ccd` with no verb prints its
 usage, and `ccd caps` lists the verbs (and capability tokens) this copy
 implements — that list is the authority; the table below is a map:
 

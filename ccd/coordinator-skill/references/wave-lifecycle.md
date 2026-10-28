@@ -767,7 +767,11 @@ whole time, which is the only prevention this ordering rule buys.
    terminal state, never merge. Here, with no cross-project `producerSha` to
    read, the exact SHA is the producer run's own verified `handoffCommit`:
    prove the merge with `gh pr view <pr> --json state,headRefOid`, answering
-   MERGED with `headRefOid` equal to it — the coordinator lands every PR with
+   MERGED with `headRefOid` equal to it, or CLOSED with `headRefOid` equal to it
+   and `landedInTrain: true` on the PR's row of `ccd pr-state --session
+   <sessionId>` (a merge train landed its work through a train PR and closed
+   it; ccd reads the deployment's train label, so you never name one) — the
+   coordinator lands every PR with
    `--match-head-commit <handoffCommit>`, by the route §5b reads from the
    repository's own rules, for exactly this reason (`--admin` and GitHub API
    merge or enqueue calls are governed by the repository's external policy
@@ -848,7 +852,8 @@ whole time, which is the only prevention this ordering rule buys.
    `status` mail `merged:#<pr>` once the PR reads merged, or
    `dequeued:#<pr>@<time>` when the queue removed it without landing (GitHub
    does not re-enqueue). On `merged:`, prove the merge exactly as above —
-   MERGED, `headRefOid` equal to `handoffCommit` — then close the producer as
+   MERGED, or CLOSED with `landedInTrain: true`, `headRefOid` equal to
+   `handoffCommit` — then close the producer as
    this step closes a spent one (on the last wave, as §6 closes it), and only
    then dispatch wave N+1. A `merged:#<pr>` can also reach a run at `merging`
    on a project without the queue, when a sweep reads your own synchronous

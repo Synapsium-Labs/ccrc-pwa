@@ -41,7 +41,7 @@ export function ReapAuditRows({
             <dd>
               {/* MUTATION SURVIVOR, disclosed, on `shown.merge.proof ?? 'none'`
                   only: `??` -> `||` survives because `WsAudit['merge']['proof']`
-                  is `'ancestor' | 'tree' | 'patch-id' | 'cherry' | null` —
+                  is `'ancestor' | 'tree' | 'patch-id' | 'cherry' | 'contained' | 'merge-tree' | null` —
                   four non-empty string literals and `null`, so no value the
                   type admits is falsy-but-non-null. The two operators act on
                   exactly the same inputs at every call site; a distinguishing

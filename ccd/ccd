@@ -5936,7 +5936,9 @@ def is_landed(r, branch, base_short):
     # A PR closed as landed in a merge train: `merged` for the phase, with no
     # merge commit behind it. Kept OUT of `is_merged`, whose other caller is the
     # reap's `pick`, which proves the tree against `mergeCommit.oid` — a landed
-    # member has none, so the reap keeps refusing `not-merged` for it.
+    # member has none, so `pick` answers it on its own arm (`landed` where the
+    # oid would be) and `_ws_reap_eval` proves it against origin's default
+    # branch instead.
     return r.get('landedInTrain') is True and bound(r, branch, base_short)
 
 def pick(rows, branch, base_short):
@@ -6551,6 +6553,16 @@ elif mode == 'pick':
     chosen = pick(rows, branch, base_short)
     if chosen is None:
         sys.stdout.write('!pr-head-not-ours\n' if near else '')
+    elif is_landed(chosen, branch, base_short):
+        # A PR a merge train landed and closed: merged for the cleanup offer as
+        # for the phase, with NO merge commit to prove against. The literal
+        # word `landed` stands where the oid would be — never an empty field,
+        # which `IFS=$'\t' read` would collapse — and `_ws_reap_eval` swaps it
+        # for origin's default branch before any git command sees it.
+        sys.stdout.write('\t'.join([
+            str(chosen.get('number') or ''), str(chosen.get('url') or ''), 'landed',
+            str(chosen.get('headRefOid') or ''),
+        ]) + '\n')
     elif not is_merged(chosen, branch, base_short):
         sys.stdout.write('!not-merged\n')
     else:
@@ -12692,6 +12704,21 @@ _ws_merge_proof() {   # main M tip -> 0, with the passing rung in _WS_PROOF
   return 1
 }
 
+_ws_merge_tree_proof() {   # main M tip -> 0 when merging tip into M changes nothing
+  # A PR closed as landed in a merge train, proven against origin's default
+  # branch `M` (`_ws_reap_eval`'s rung 2 calls it for that arm ONLY). The
+  # three-way merge from their merge base keeps `M`'s tree exactly when every
+  # change on `tip` is already in `M`: a change main later reverted, or a
+  # commit the train never landed, makes the merged tree differ, and a
+  # conflict exits non-zero. A `merge-tree` that did not run — a git older
+  # than 2.38, a failed read — prints no tree, and BOTH sides must be a
+  # 40-hex oid before they are compared, so two empty answers never agree.
+  local main="$1" M="$2" tip="$3" t m
+  t=$(git -C "$main" merge-tree --write-tree -- "$M" "$tip" 2>/dev/null) || return 1
+  m=$(git -C "$main" rev-parse --verify --quiet "$M^{tree}" 2>/dev/null) || return 1
+  [[ "$t" =~ ^[0-9a-f]{40}$ && "$t" == "$m" ]]
+}
+
 _ws_fingerprint() {   # id branch tip headOid mergeOid proof dirty igndigest sensdigest stashes wthead baseOid clipsDigest childrenDigest
   # FOURTEEN facts, and the thirteenth is the clips. `~/.cc-clips/<id>` is
   # `rm -rf`'d at (h) — 3.8 MB full-resolution screenshots per the spec — and
@@ -12758,6 +12785,7 @@ _ws_reap_eval() {   # id -> 0 when reapable, else REAP_VERDICT names the refusal
   local id="$1" ws project workdir branch base baseShort main wthead common mainreal
   local st up ahead repo rows row registered errf err rc stashall dirt clipsjson nested
   local children strays contained=0 obase ourl ancwhy regbranch tombbranch uplive upremote upmerge uprc   # the last four: C1's live-head probe (D-5882)
+  local landed=0   # rung 2's train arm: `pick` answered `landed` (a PR a merge train landed and closed)
 
   # ── Phase A: identity ────────────────────────────────────────────
   [[ -f "$REG/$id.uuid" ]] || { _ws_refuse no-such-session "no registry entry for $id"; return 1; }
@@ -13600,6 +13628,25 @@ _ws_reap_eval() {   # id -> 0 when reapable, else REAP_VERDICT names the refusal
     '!'*)                 _ws_refuse "${row#!}" "the bound PR is not merged"; return 1 ;;
   esac
   IFS=$'\t' read -r REAP_PRNUM REAP_PRURL REAP_MERGE REAP_HEADOID <<< "$row"
+  # A PR CLOSED AS LANDED IN A MERGE TRAIN (`pick`'s `landed`). The train
+  # landed this member's work through a train PR, squashed beside other
+  # members', and closed the member, so GitHub names no merge commit and none
+  # of `_ws_merge_proof`'s rungs can see the work inside a commit that carries
+  # someone else's too. The proof is asked of origin's DEFAULT BRANCH, the
+  # symref rung 1 just re-derived from the remote: `_ws_merge_proof` first,
+  # then `merge-tree` — merging this branch into that commit changes nothing,
+  # so every change on it is already there. REAP_MERGE becomes that commit, so
+  # the token is over the very commit the proof ran against, and the audit and
+  # the tombstone name it where a merge commit would be. The label is GitHub's
+  # claim; this rung is what stops a label on unlanded work, or on work main
+  # later reverted, from deleting anything.
+  if [[ "$REAP_MERGE" == landed ]]; then
+    landed=1
+    REAP_MERGE=""
+    [[ -n "${obase:-}" ]] && REAP_MERGE=$(git -C "$main" rev-parse --verify --quiet "$obase^{commit}" 2>/dev/null)
+    [[ -n "$REAP_MERGE" ]] \
+      || { _ws_refuse tree-differs "the PR was closed as landed in a merge train, and $ancwhy, so its work could not be compared against anything"; return 1; }
+  fi
   # §7's argv boundary, restated on THIS side of the split — because the split
   # is what can move a value out of the field that was anchored and into one
   # that was not. `_pr_py pick` checks `mergeCommit.oid` and `headRefOid`
@@ -13639,6 +13686,8 @@ _ws_reap_eval() {   # id -> 0 when reapable, else REAP_VERDICT names the refusal
     || { _ws_refuse merge-commit-missing "$REAP_MERGE is not in the object store after a fetch"; return 1; }
   if _ws_merge_proof "$main" "$REAP_MERGE" "$REAP_TIP"; then
     REAP_PROOF="$_WS_PROOF"
+  elif (( landed )) && _ws_merge_tree_proof "$main" "$REAP_MERGE" "$REAP_TIP"; then
+    REAP_PROOF=merge-tree
   else
     _ws_refuse tree-differs "$(git -C "$main" diff --stat "$REAP_MERGE" "$REAP_TIP" -- | head -5; git -C "$main" log --oneline "$REAP_MERGE".."$REAP_TIP" | head -5)"
     return 1
