@@ -598,3 +598,16 @@ describe('ccrc test --status (D-TBD-test-containment)', () => {
     expect(run(box(), ['--status']).stdout.trim()).toBe('no user manager here, so runs are not contained; heavy slots 0 of 2 held, 0 waiting');
   });
 });
+
+// The on-box proof (deploy/verify-test-slice.sh) is the operator's, run on a box with a real user manager; CI has none.
+// Here only its refusal is held: where it cannot measure, it changes nothing and says so.
+describe('deploy/verify-test-slice.sh (D-TBD-test-containment)', () => {
+  const VERIFY = path.join(REPO, 'deploy', 'verify-test-slice.sh');
+  it('refuses, changing nothing, where there is no user manager to measure', () => {
+    const b = box();
+    const r = spawnSync('bash', [VERIFY], { env: { ...b.env, PATH: '/usr/bin:/bin' }, encoding: 'utf8', cwd: b.home, timeout: 60000 });
+    expect(r.status).toBe(1);
+    expect(r.stderr).toMatch(/^verify-test-slice: refused, nothing changed: (this is not Linux|systemctl, systemd-run and flock must all be on PATH)/);
+    expect(existsSync(path.join(b.home, '.cc-sessions')), 'no slot was touched').toBe(false);
+  });
+});

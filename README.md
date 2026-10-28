@@ -6197,8 +6197,13 @@ flags, and `eval`/`script -c`/`watch` strings, read through), and denies a test 
 its own on every session and, on a fleet box (Linux, a registered session), a heavy run in command position outside
 `ccrc test`. The
 vitest worker cap a box sets in its sessions' environment still applies inside the slice. Doctor's `test-slice` check shows the slice's live memory against its live
-cap, its other limits, and how many heavy slots are held and how many runs wait. The PWA control for the cap and the
-queue size is a follow-up.
+cap, its other limits, and how many heavy slots are held and how many runs wait. The suite drives stubs of systemctl and
+systemd-run, so the containment itself is proved on a box: `bash deploy/verify-test-slice.sh`, run by the operator or
+the deploy lane at a quiet moment on a Linux box with a user manager, checks that the slice is top-level, that a real
+scope keeps a heavy run's slot lock after its wrapper is SIGKILLed, that a run past a small `MemoryMax` is OOM-killed
+inside the slice (its `oom_kill` rises; the session slice's `memory.pressure` is printed) and that `CPUQuota`
+throttles; it refuses, changing nothing, unless the slice is idle, holds every heavy slot while it measures, and
+re-applies the box's own limits when it ends. The PWA control for the cap and the queue size is a follow-up.
 
 ### Session history: lossless recall (`ccrc history`)
 
