@@ -5,7 +5,7 @@ import { describe, expect } from 'vitest';
 import { rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { removeTmpFixturesEachTest } from './tmpHelpers.js';
-import { itDarwin, itLinux } from './platformFixtures.js';
+import { itLinux, platformContrast } from './platformFixtures.js';
 import { installDoctorHooks, healthy, runDoctor, plantTestSlice } from './ccrc-doctorFixture.js';
 
 removeTmpFixturesEachTest();
@@ -19,9 +19,15 @@ const verdict = (home: string): { line: string; remedy: string } => {
 };
 
 describe('test-slice: the test slice, live, and the queue (D-TBD-test-containment)', () => {
-  itLinux('PASS: the slice is loaded under its cap; the line names live memory, cap, limits and queue depth', () => {
-    const home = healthy('ccrc-doctor-tslice-pass-');
-    expect(verdict(home).line).toBe('PASS test-slice: ccrc-tests.slice holds 1.0G of its 6.0G memory cap, swap cap 1.0G, CPU weight 20, CPU quota 4s per second, IO weight 20; heavy slots 0 of 2 held, 0 waiting');
+  platformContrast('a healthy box', {
+    darwin: ['SKIP on macOS: launchd has no slice', () => {
+      const home = healthy('ccrc-doctor-tslice-darwin-');
+      expect(verdict(home).line).toBe('SKIP test-slice: the test slice is a systemd mechanism, and this box runs launchd');
+    }],
+    linux: ['PASS: the slice is loaded under its cap; the line names live memory, cap, limits and queue depth', () => {
+      const home = healthy('ccrc-doctor-tslice-pass-');
+      expect(verdict(home).line).toBe('PASS test-slice: ccrc-tests.slice holds 1.0G of its 6.0G memory cap, swap cap 1.0G, CPU weight 20, CPU quota 4s per second, IO weight 20; heavy slots 0 of 2 held, 0 waiting');
+    }],
   });
 
   itLinux('PASS reads the configured slot count', () => {
@@ -50,10 +56,5 @@ describe('test-slice: the test slice, live, and the queue (D-TBD-test-containmen
     const home = healthy('ccrc-doctor-tslice-nocap-');
     plantTestSlice(home, 'LoadState=loaded\nMemoryCurrent=0\nMemoryMax=infinity\n');
     expect(verdict(home).line).toMatch(/^WARN test-slice: ccrc-tests\.slice holds 0B with no memory cap \(MemoryMax=infinity\)/);
-  });
-
-  itDarwin('SKIP on macOS: launchd has no slice', () => {
-    const home = healthy('ccrc-doctor-tslice-darwin-');
-    expect(verdict(home).line).toBe('SKIP test-slice: the test slice is a systemd mechanism, and this box runs launchd');
   });
 });
