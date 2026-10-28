@@ -335,9 +335,29 @@ export function inMarkdownPageBudget(lang: string): boolean {
   return def !== undefined && def === hljs.getLanguage('markdown');
 }
 
-/** Fenced code: language label + copy bar over a syntax-highlighted well.
- *  The bar is a SIBLING above the scrolling <pre>, never an overlay.
- *  Highlighted only when the language is registered, `highlight` is not `false`, the block is at most
+/** What `boundedHighlight` answers: `html` is the highlighted markup (`null`: not highlighted), the rest are the
+ *  figures and refusals a block's label reads. */
+export interface BoundedHighlight {
+  html: string | null;
+  overCap: boolean;
+  refusedOverCap: boolean;
+  word: number;
+  overWord: boolean;
+  line: number;
+  overLine: boolean;
+  blank: number;
+  overBlank: boolean;
+}
+
+/** Whether `lang` names a grammar highlight.js has registered (a name or an alias). The one predicate: `CodeBlock`'s
+ *  `registered` reads it, and the tool wells' plan (`session/toolWell.ts`) is handed it by its caller. */
+export function isRegisteredGrammar(lang: string): boolean {
+  return Boolean(lang && hljs.getLanguage(lang));
+}
+
+/** The ONE call of `hljs.highlight` in the PWA: whether and how a block `raw` in `lang` is highlighted, with the
+ *  figures `CodeBlock`'s label reads. `highlight` is `CodeBlock`'s page-budget prop (`undefined`: allowed). Highlighted
+ *  only when the language is registered, `highlight` is not `false`, the block is at most
  *  `highlightBlockCap(lang)` characters (after the trailing-newline strip: `MD_HIGHLIGHT_BLOCK_MAX_CHARS`, or a smaller
  *  cap for the grammars of `HIGHLIGHT_BOUNDED_CAPS`, review 450 F1), its longest run of word units
  *  (`longestWordRun`) is at most `MD_HIGHLIGHT_MAX_WORD_CHARS` (W5 bound r10), its longest line is at most
@@ -349,15 +369,8 @@ export function inMarkdownPageBudget(lang: string): boolean {
  *  than one is labelled by the first: word, then line, then blank run). The size check comes first, so a block over
  *  the cap is never scanned. A block a page budget refuses (`highlight={false}`) is never scanned either: over its own cap it is labelled
  *  by its size the same way, and within it its label is the language alone. */
-export function CodeBlock({ children, highlight }: { children?: ReactNode; highlight?: boolean }): ReactNode {
-  const [copied, setCopied] = useState(false);
-  const codeEl = React.Children.toArray(children).find(React.isValidElement) as
-    | React.ReactElement<{ className?: string; children?: ReactNode }>
-    | undefined;
-  const lang = codeLanguage(codeEl?.props.className ?? '');
-  const label = LANG_LABEL[lang] ?? (lang || 'text');
-  const raw = nodeText(children).replace(/\n$/, '');
-  const registered = Boolean(lang && hljs.getLanguage(lang));
+export function boundedHighlight(raw: string, lang: string, highlight?: boolean): BoundedHighlight {
+  const registered = isRegisteredGrammar(lang);
   const wanted = highlight !== false && registered;
   const cap = highlightBlockCap(lang);
   const overCap = wanted && raw.length > cap;
@@ -373,6 +386,22 @@ export function CodeBlock({ children, highlight }: { children?: ReactNode; highl
   const html = wanted && !overCap && !overWord && !overLine && !overBlank
     ? hljs.highlight(raw, { language: lang, ignoreIllegals: true }).value // sync, never throws
     : null;
+  return { html, overCap, refusedOverCap, word, overWord, line, overLine, blank, overBlank };
+}
+
+/** Fenced code: language label + copy bar over a syntax-highlighted well.
+ *  The bar is a SIBLING above the scrolling <pre>, never an overlay.
+ *  Highlighted only as `boundedHighlight` decides (the grammar, the page budget and the four bounds are described
+ *  there); the label says why a registered block is not. */
+export function CodeBlock({ children, highlight }: { children?: ReactNode; highlight?: boolean }): ReactNode {
+  const [copied, setCopied] = useState(false);
+  const codeEl = React.Children.toArray(children).find(React.isValidElement) as
+    | React.ReactElement<{ className?: string; children?: ReactNode }>
+    | undefined;
+  const lang = codeLanguage(codeEl?.props.className ?? '');
+  const label = LANG_LABEL[lang] ?? (lang || 'text');
+  const raw = nodeText(children).replace(/\n$/, '');
+  const { html, overCap, refusedOverCap, word, overWord, line, overLine, blank, overBlank } = boundedHighlight(raw, lang, highlight);
   const onCopy = useCallback(() => {
     void navigator.clipboard?.writeText(raw).then(() => {
       setCopied(true);

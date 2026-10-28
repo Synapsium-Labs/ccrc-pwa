@@ -129,6 +129,9 @@ const TEST_LOCAL_HELPERS: Readonly<Record<string, readonly string[]>> = {
   'ccrc-doctor-fleet.test.ts': ['_check_alpha', '_check_beta', '_check_boom', '_check_dual', '_check_gamma', '_check_liar',
     '_check_mute', '_check_nothing', '_check_omega', '_check_sneak', '_check_weird'],
   'ccrc-models.test.ts': ['_fk_cfg', '_fk_log', '_fk_probe', '_fk_rc', '_fk_ret'],
+  // The helper census's PLANTED fixture keeps ccd's two retired refusal helpers (D-7072), so its name-family
+  // disagreement row still has two names to disagree.
+  'census-w5/ccdHelpers.test.ts': ['_reap_refuse', '_ws_collect_refuse'],
   // The redactor census's fixture function: a python table in a bash heredoc, which the scanner must name.
   'census-w5/redactors.test.ts': ['_fx_py'],
   'collectFixture.ts': ['_t'],

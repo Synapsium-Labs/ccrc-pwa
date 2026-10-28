@@ -12647,10 +12647,9 @@ _ws_fingerprint() {   # id branch tip headOid mergeOid proof dirty igndigest sen
   # was added, even though the parent's own facts were all unchanged —
   # exactly the TOCTOU `_ws_reap_eval`'s reason for the clips digest describes,
   # one line up, for a different set.
-  printf '%s\n' "id=$1" "branch=$2" "tip=$3" "headRefOid=$4" "mergeCommit=$5" "proof=$6" \
+  _ws_reclaim_fingerprint "id=$1" "branch=$2" "tip=$3" "headRefOid=$4" "mergeCommit=$5" "proof=$6" \
     "dirtyCount=$7" "ignoredDigest=$8" "sensitiveDigest=$9" "stashCount=${10}" \
-    "worktreeHead=${11}" "baseOid=${12}" "clipsDigest=${13}" "childrenDigest=${14}" \
-    | _plat_sha256 | cut -d' ' -f1
+    "worktreeHead=${11}" "baseOid=${12}" "clipsDigest=${13}" "childrenDigest=${14}"
 }
 
 _ws_reap_reset() {
@@ -12685,11 +12684,13 @@ _ws_reap_reset() {
 }
 
 # THE `return 1` IS READ: `_ws_reap_leaf_ok` (the MIRROR block) ends in
-# `… || _reap_refuse …`, so its status IS this function's, and `_ws_reap_eval`
+# `… || _ws_refuse …`, so its status IS this function's, and `_ws_reap_eval`
 # calls it `… || return 1` — drop the `return 1` and a linked workdir reads as
 # reapable. Every other site is still `… ; return 1`. The contract is "this
-# refuses", not "this assigns two variables".
-_reap_refuse() { REAP_VERDICT="$1"; REAP_DETAIL="$2"; return 1; }
+# refuses", not "this assigns two variables". The collector's evaluation calls
+# it too: which family a call belongs to is decided by the region it sits in
+# (`COLLECT` and `LOOSE` are the collector's).
+_ws_refuse() { REAP_VERDICT="$1"; REAP_DETAIL="$2"; return 1; }
 
 _ws_reap_eval() {   # id -> 0 when reapable, else REAP_VERDICT names the refusal
   _ws_reap_reset
@@ -12698,11 +12699,11 @@ _ws_reap_eval() {   # id -> 0 when reapable, else REAP_VERDICT names the refusal
   local children strays contained=0 obase ourl ancwhy regbranch tombbranch uplive upremote upmerge uprc   # the last four: C1's live-head probe (D-5882)
 
   # ── Phase A: identity ────────────────────────────────────────────
-  [[ -f "$REG/$id.uuid" ]] || { _reap_refuse no-such-session "no registry entry for $id"; return 1; }
+  [[ -f "$REG/$id.uuid" ]] || { _ws_refuse no-such-session "no registry entry for $id"; return 1; }
   ws=$(_reg_get "$id" workspace)
-  [[ -n "$ws" ]] || { _reap_refuse not-a-workspace "$id is a main checkout"; return 1; }
+  [[ -n "$ws" ]] || { _ws_refuse not-a-workspace "$id is a main checkout"; return 1; }
   [[ -f "$REG/$id.archived" ]] \
-    || { _reap_refuse not-archived "archive first — that is the staging"; return 1; }
+    || { _ws_refuse not-archived "archive first — that is the staging"; return 1; }
   # Registry FIRST, git's record second — and "second" is a veto, not a
   # fallback. This used to read "the reverse of ws-rm, which reads only the
   # worktree" — no longer true: ws-rm reads its branch from git's worktree
@@ -12733,13 +12734,13 @@ _ws_reap_eval() {   # id -> 0 when reapable, else REAP_VERDICT names the refusal
   base=$(_reg_get "$id" base); [[ -n "$base" ]] || base="origin/HEAD"
   baseShort="${base#origin/}"
   [[ -n "$project" && -n "$workdir" && -n "$branch" ]] \
-    || { _reap_refuse incomplete-registry "project='$project' workdir='$workdir' branch='$branch'"; return 1; }
+    || { _ws_refuse incomplete-registry "project='$project' workdir='$workdir' branch='$branch'"; return 1; }
   main="$PROJECTS_ROOT/$project"; _ws_reap_leaf_ok "$workdir" "$id" || return 1   # a LEAF link refuses before any fork reads $workdir (WS-REAP'S MIRROR)
   if [[ ! -d "$workdir" ]]; then
     # A missing worktree is a refusal when the USER removed it and a resume
     # when WE did. The breadcrumb is what tells the two apart.
     [[ -f "$REG/$id.reaping" ]] \
-      || { _reap_refuse worktree-missing "$workdir is gone"; return 1; }
+      || { _ws_refuse worktree-missing "$workdir is gone"; return 1; }
     # AND THE BRANCH COMES OUT OF THE JOURNAL HERE, for the same reason
     # `_ws_reap_tail`'s resume arm reads it there: git has no record left to
     # ask. The drift rung below lives inside `if [[ -d "$workdir" ]]`, so on
@@ -12799,13 +12800,13 @@ _ws_reap_eval() {   # id -> 0 when reapable, else REAP_VERDICT names the refusal
     # — the state the old `rev-parse` form reported as `detached-head`, about a
     # HEAD it had not managed to read.
     (( registered == 0 )) \
-      || { _reap_refuse no-worktree-record "$main has no worktree record for $workdir"; return 1; }
+      || { _ws_refuse no-worktree-record "$main has no worktree record for $workdir"; return 1; }
     # Rung 2 — registered, and the record says detached. `_ws_wt_branch` reports
     # this as empty-with-exit-0, which is why emptiness alone cannot stand in for
     # both rungs. Unlike the old form this can no longer fire because a read
     # failed: it fires only when git positively recorded a detached HEAD.
     [[ -n "$wthead" ]] \
-      || { _reap_refuse detached-head "$main records $workdir on a detached HEAD"; return 1; }
+      || { _ws_refuse detached-head "$main records $workdir on a detached HEAD"; return 1; }
     # Rung 1 — registered, on a branch, and GIT'S RECORD IS THE ONE THAT NAMES
     # IT. Both sides here are RECORDS — ccrc's registry and git's registration —
     # and they disagree whenever the operator switched branch inside the
@@ -12894,7 +12895,7 @@ _ws_reap_eval() {   # id -> 0 when reapable, else REAP_VERDICT names the refusal
     common=$(_ws_common_dir "$workdir") || common=""
     mainreal=$(_ws_common_dir "$main")  || mainreal=""
     [[ -n "$common" && -n "$mainreal" && "$common" == "$mainreal" ]] \
-      || { _reap_refuse foreign-worktree "$workdir belongs to ${common:-no repository}, not ${mainreal:-no repository}"; return 1; }
+      || { _ws_refuse foreign-worktree "$workdir belongs to ${common:-no repository}, not ${mainreal:-no repository}"; return 1; }
     # Still called WTHEAD, still fingerprinted as `worktreeHead=`, still on the
     # wire as `headMatchesRegistry`, all deliberately unrenamed: `worktree list
     # --porcelain` reports each worktree's HEAD (git reads it out of
@@ -12946,9 +12947,9 @@ _ws_reap_eval() {   # id -> 0 when reapable, else REAP_VERDICT names the refusal
     local elsewhere elsrc
     elsewhere=$(_ws_branch_elsewhere "$main" "$branch" "$workdir"); elsrc=$?
     (( elsrc == 0 )) \
-      || { _reap_refuse tree-unreadable "could not enumerate $main's worktrees, so whether another checkout holds $branch was never asked"; return 1; }
+      || { _ws_refuse tree-unreadable "could not enumerate $main's worktrees, so whether another checkout holds $branch was never asked"; return 1; }
     [[ -z "$elsewhere" ]] \
-      || { _reap_refuse branch-elsewhere "$branch is also checked out at $elsewhere — removing it here would strand that checkout; move it off $branch first"; return 1; }
+      || { _ws_refuse branch-elsewhere "$branch is also checked out at $elsewhere — removing it here would strand that checkout; move it off $branch first"; return 1; }
 
     # ── Phase B: nothing local is lost ─────────────────────────────
     # TWO statements, and the pipeline's status is not the read's. `status
@@ -12985,37 +12986,37 @@ _ws_reap_eval() {   # id -> 0 when reapable, else REAP_VERDICT names the refusal
     # status text is not the count, and one variable holding both in turn is how
     # a later reader ends up printing porcelain into a sentence that says
     # "file(s)".
-    # MUTATION SURVIVOR, disclosed: this line's `|| { _reap_refuse … }` is
+    # MUTATION SURVIVOR, disclosed: this line's `|| { _ws_refuse … }` is
     # removable with the suite green, for the same reason as the two in
     # `_ws_collect_ignored` — an empty `errf` makes `2>""` a failing redirect, the
     # status read never runs, and the `(( rc == 0 ))` two lines down refuses with
     # the same token. Unlike those two there is no file to leak here, so nothing
     # observable is left to pin. It states the case rather than relying on a
     # later line to catch it.
-    errf=$(_plat_mktemp) || { _reap_refuse tree-unreadable "could not read the tree at $workdir"; return 1; }
+    errf=$(_plat_mktemp) || { _ws_refuse tree-unreadable "could not read the tree at $workdir"; return 1; }
     dirt=$(git -C "$workdir" status --porcelain --untracked-files=all 2>"$errf"); rc=$?   # `all`: untracked files are dirt whatever status.showUntrackedFiles says, repo- or worktree-scoped
     err=$(cat "$errf" 2>/dev/null); rm -f "$errf"
     (( rc == 0 )) && [[ -z "$err" ]] \
-      || { _reap_refuse tree-unreadable "could not read the tree at $workdir"; return 1; }
+      || { _ws_refuse tree-unreadable "could not read the tree at $workdir"; return 1; }
     REAP_DIRTY=$(printf '%s' "$dirt" | grep -c . || true)
     (( REAP_DIRTY == 0 )) \
-      || { _reap_refuse dirty-tree "$REAP_DIRTY uncommitted or untracked file(s)"; return 1; }
+      || { _ws_refuse dirty-tree "$REAP_DIRTY uncommitted or untracked file(s)"; return 1; }
     # D-5884: retried once, and a scan that ran out of time BOTH times says so
     # — `scan-timeout` in the detail — instead of borrowing the wording of a
     # tree that could not be read. Same verdict, same refusal: a slow tree is
     # still not one ccd has described.
     _ws_collect_ignored_settled "$workdir" || {
       if (( REAP_IGNTIMEOUT && _WS_IGNTIMEOUT_FIRST )); then
-        _reap_refuse tree-unreadable "scan-timeout: the ignored set at $workdir was scanned twice and ran out of time both times — $REAP_IGNREASON"
+        _ws_refuse tree-unreadable "scan-timeout: the ignored set at $workdir was scanned twice and ran out of time both times — $REAP_IGNREASON"
       elif (( REAP_IGNTIMEOUT )); then
-        _reap_refuse tree-unreadable "scan-timeout: the ignored set at $workdir ran out of time on the retry — $REAP_IGNREASON"
+        _ws_refuse tree-unreadable "scan-timeout: the ignored set at $workdir ran out of time on the retry — $REAP_IGNREASON"
       else
-        _reap_refuse tree-unreadable "could not read the ignored set at $workdir${REAP_IGNREASON:+ — $REAP_IGNREASON}"
+        _ws_refuse tree-unreadable "could not read the ignored set at $workdir${REAP_IGNREASON:+ — $REAP_IGNREASON}"
       fi
       return 1
     }
     (( ${#REAP_SENSITIVE[@]} == 0 )) \
-      || { _reap_refuse sensitive-ignored "${REAP_SENSITIVE[*]}"; return 1; }
+      || { _ws_refuse sensitive-ignored "${REAP_SENSITIVE[*]}"; return 1; }
     # LAST rung of Phase B, deliberately, and after `sensitive-ignored` for the
     # same reason it sits after every other Phase B guard: the ladder is walked
     # outermost-cheapest first, and a nested checkout is a whole-tree `find`
@@ -13057,9 +13058,9 @@ _ws_reap_eval() {   # id -> 0 when reapable, else REAP_VERDICT names the refusal
     # symlinked ancestor cannot make a registered child misread as a stray or
     # the reverse.
     nested=$(_ws_nested_checkouts "$workdir") \
-      || { _reap_refuse tree-unreadable "could not scan for nested checkouts${_WS_NESTED_WHY:+ — $_WS_NESTED_WHY}"; return 1; }
+      || { _ws_refuse tree-unreadable "could not scan for nested checkouts${_WS_NESTED_WHY:+ — $_WS_NESTED_WHY}"; return 1; }
     children=$(_ws_children "$main" "$workdir") \
-      || { _reap_refuse tree-unreadable "could not enumerate registered worktrees"; return 1; }
+      || { _ws_refuse tree-unreadable "could not enumerate registered worktrees"; return 1; }
     # An IN-BASH set difference, not `comm` over two `sort`ed process
     # substitutions — fix round 1, two measured defects in that form. First:
     # `comm` requires both inputs pre-sorted in the SAME collation it compares
@@ -13086,7 +13087,7 @@ _ws_reap_eval() {   # id -> 0 when reapable, else REAP_VERDICT names the refusal
     done <<< "$nested"$'\n'
     strays="${strays%$'\n'}"
     [[ -z "$strays" ]] \
-      || { _reap_refuse nested-checkouts-present "$(printf '%s\n' "$strays" | grep -c .) unregistered checkout(s): ${strays//$'\n'/, }"; return 1; }
+      || { _ws_refuse nested-checkouts-present "$(printf '%s\n' "$strays" | grep -c .) unregistered checkout(s): ${strays//$'\n'/, }"; return 1; }
     # The per-child ladder itself, outermost-cheapest first and in the same
     # relative order Phase B above uses for the parent: an in-progress
     # operation (a rebase/merge/cherry-pick/revert marker, or a conflicted
@@ -13144,7 +13145,7 @@ _ws_reap_eval() {   # id -> 0 when reapable, else REAP_VERDICT names the refusal
       # it — instead of the blanket "not $main's worktree any more" the
       # ownership pair would otherwise report for a fact it cannot see.
       [[ -d "$cpath" ]] \
-        || { _reap_refuse child-record-stale "git still records a worktree at $cpath but nothing is there — run: git -C $main worktree prune, then re-audit"; return 1; }
+        || { _ws_refuse child-record-stale "git still records a worktree at $cpath but nothing is there — run: git -C $main worktree prune, then re-audit"; return 1; }
       # OWNERSHIP, reproven live — right after the `-d` check above, before
       # anything else touches `$cpath`, exactly the position `_ws_reap_eval`'s
       # own foreign-worktree rung (Phase B's `$workdir`/`$main` common-dir
@@ -13175,30 +13176,30 @@ _ws_reap_eval() {   # id -> 0 when reapable, else REAP_VERDICT names the refusal
       local ccommon; ccommon=$(_ws_common_dir "$cpath") || ccommon=""
       local ctop; ctop=$(git -C "$cpath" rev-parse --path-format=absolute --show-toplevel 2>/dev/null) || ctop=""
       [[ -n "$ccommon" && "$ccommon" == "$mainreal" && -n "$ctop" && "$ctop" == "$cpath" ]] \
-        || { _reap_refuse nested-checkouts-present "the checkout at $cpath is not $main's worktree any more"; return 1; }
+        || { _ws_refuse nested-checkouts-present "the checkout at $cpath is not $main's worktree any more"; return 1; }
       local cop; cop=$(_ws_child_op "$cpath") \
-        || { _reap_refuse tree-unreadable "could not probe $cpath for an in-progress operation"; return 1; }
-      [[ -z "$cop" ]] || { _reap_refuse child-busy "$cop in progress at $cpath"; return 1; }
-      [[ -n "$cbr" ]] || { _reap_refuse child-busy "detached HEAD at $cpath"; return 1; }
-      errf=$(_plat_mktemp) || { _reap_refuse tree-unreadable "could not read the child at $cpath"; return 1; }
+        || { _ws_refuse tree-unreadable "could not probe $cpath for an in-progress operation"; return 1; }
+      [[ -z "$cop" ]] || { _ws_refuse child-busy "$cop in progress at $cpath"; return 1; }
+      [[ -n "$cbr" ]] || { _ws_refuse child-busy "detached HEAD at $cpath"; return 1; }
+      errf=$(_plat_mktemp) || { _ws_refuse tree-unreadable "could not read the child at $cpath"; return 1; }
       dirt=$(git -C "$cpath" status --porcelain --untracked-files=all 2>"$errf"); rc=$?   # `all`, as the parent's: a child's own worktree config must not hide its untracked files
       err=$(cat "$errf" 2>/dev/null); rm -f "$errf"
       { (( rc == 0 )) && [[ -z "$err" ]]; } \
-        || { _reap_refuse tree-unreadable "could not read the child at $cpath"; return 1; }
+        || { _ws_refuse tree-unreadable "could not read the child at $cpath"; return 1; }
       local cdirty; cdirty=$(printf '%s' "$dirt" | grep -c . || true)
-      (( cdirty == 0 )) || { _reap_refuse child-dirty "$cdirty uncommitted file(s) in $cpath"; return 1; }; local cign; cign=$(_ws_child_ignored_count "$cpath" "$children") || { _reap_refuse tree-unreadable "could not read the child at $cpath"; return 1; }; (( cign == 0 )) || { _reap_refuse child-dirty "$cign ignored file(s) in $cpath"; return 1; }
+      (( cdirty == 0 )) || { _ws_refuse child-dirty "$cdirty uncommitted file(s) in $cpath"; return 1; }; local cign; cign=$(_ws_child_ignored_count "$cpath" "$children") || { _ws_refuse tree-unreadable "could not read the child at $cpath"; return 1; }; (( cign == 0 )) || { _ws_refuse child-dirty "$cign ignored file(s) in $cpath"; return 1; }
       local cbase; cbase=$(git -C "$main" symbolic-ref --quiet refs/remotes/origin/HEAD) \
-        || { _reap_refuse child-unpushed "no origin/HEAD to prove $cpath against"; return 1; }
+        || { _ws_refuse child-unpushed "no origin/HEAD to prove $cpath against"; return 1; }
       local cahead; cahead=$(git -C "$cpath" rev-list --count "$cbase..HEAD" 2>/dev/null) \
-        || { _reap_refuse child-unpushed "could not compare $cpath against $cbase"; return 1; }
-      (( cahead == 0 )) || { _reap_refuse child-unpushed "$cahead commit(s) in $cpath unreachable from $cbase"; return 1; }
+        || { _ws_refuse child-unpushed "could not compare $cpath against $cbase"; return 1; }
+      (( cahead == 0 )) || { _ws_refuse child-unpushed "$cahead commit(s) in $cpath unreachable from $cbase"; return 1; }
       # `-cxF`, not a `^…\$`-anchored BRE — `$cbr` is a branch name interpolated
       # straight into the pattern, and a BRE gives `.`, `*`, `[`, `\` inside it
       # special meaning; the fixed-string idiom already at `_ws_reap_tail`'s own
       # "STILL REGISTERED?" rung (`grep -qxF "worktree $ccpath"`) is what closes
       # that for a path, and the same fix applies here for a branch.
       local holders; holders=$(git -C "$main" worktree list --porcelain 2>/dev/null | grep -cxF "branch refs/heads/$cbr" || true)
-      (( holders == 1 )) || { _reap_refuse child-branch-elsewhere "branch $cbr is checked out in $holders worktrees"; return 1; }
+      (( holders == 1 )) || { _ws_refuse child-branch-elsewhere "branch $cbr is checked out in $holders worktrees"; return 1; }
       REAP_CHILDLINES+="$cpath"$'\t'"$cbr"$'\t'"$chead"$'\t'"$cdirty"$'\n'
     done <<< "$children"$'\n'
   fi
@@ -13269,11 +13270,11 @@ _ws_reap_eval() {   # id -> 0 when reapable, else REAP_VERDICT names the refusal
   if git -C "$main" rev-parse --verify --quiet refs/stash >/dev/null 2>&1; then
     stashall=$(git -C "$main" stash list 2>/dev/null | grep -c .)
     (( stashall > 0 )) \
-      || { _reap_refuse stash-unreadable "refs/stash resolves in $main but the stash list read back empty — either its reflog cannot be read, or maintenance ('git reflog expire --all') emptied it and left the ref: if this repository truly holds no stashes, 'git stash clear' (or 'git update-ref -d refs/stash') clears the stale ref"; return 1; }
+      || { _ws_refuse stash-unreadable "refs/stash resolves in $main but the stash list read back empty — either its reflog cannot be read, or maintenance ('git reflog expire --all') emptied it and left the ref: if this repository truly holds no stashes, 'git stash clear' (or 'git update-ref -d refs/stash') clears the stale ref"; return 1; }
   fi
   REAP_STASHES=$(_ws_stash_count "$main" "$branch")
   (( REAP_STASHES == 0 )) \
-    || { _reap_refuse stashes-present "$REAP_STASHES stash entr$( (( REAP_STASHES == 1 )) && echo y || echo ies) belonging to $branch (a stash taken from it on a detached HEAD names no branch and is attributed by its base commit, so an anonymous entry based on shared history counts against every workspace of $project): 'git -C $main stash list' names them, and 'git stash branch <name> stash@{N}' keeps one, 'git -C $main stash drop stash@{N}' discards one"; return 1; }
+    || { _ws_refuse stashes-present "$REAP_STASHES stash entr$( (( REAP_STASHES == 1 )) && echo y || echo ies) belonging to $branch (a stash taken from it on a detached HEAD names no branch and is attributed by its base commit, so an anonymous entry based on shared history counts against every workspace of $project): 'git -C $main stash list' names them, and 'git stash branch <name> stash@{N}' keeps one, 'git -C $main stash drop stash@{N}' discards one"; return 1; }
   # ── Phase C: containment, proven from the EVIDENCE ───────────────
   # THE RULE THIS BLOCK IS ARRANGED AROUND, because getting it wrong is what
   # made three archived workspaces (~3.6 G) permanently un-reapable from the
@@ -13309,7 +13310,7 @@ _ws_reap_eval() {   # id -> 0 when reapable, else REAP_VERDICT names the refusal
   # may reach by any path, on any rung, which is why this is resolved here
   # rather than inside whichever rung happens to prove.
   REAP_TIP=$(git -C "$main" rev-parse --verify "refs/heads/$branch" 2>/dev/null) \
-    || { _reap_refuse branch-missing "refs/heads/$branch does not resolve"; return 1; }
+    || { _ws_refuse branch-missing "refs/heads/$branch does not resolve"; return 1; }
 
   # ── C1 runs AFTER C3's fetch (D-5882, #126) — see "C1: work that is only
   # here" below. It used to sit here, before any network cost, and read
@@ -13328,7 +13329,7 @@ _ws_reap_eval() {   # id -> 0 when reapable, else REAP_VERDICT names the refusal
   # tested rather than inferred: `--get` exits 0 for a key that is set to "".
   ourl=$(git -C "$main" config --get remote.origin.url 2>/dev/null) || ourl=""
   [[ -n "$ourl" ]] \
-    || { _reap_refuse no-remote "no origin remote for $project — there is nothing to prove this work is anywhere else"; return 1; }
+    || { _ws_refuse no-remote "no origin remote for $project — there is nothing to prove this work is anywhere else"; return 1; }
 
   # ── C3: the fetch, ONCE, before any proof ────────────────────────
   # Mergedness is NEVER proven against an unfetched ref — the doctrine both old
@@ -13343,7 +13344,7 @@ _ws_reap_eval() {   # id -> 0 when reapable, else REAP_VERDICT names the refusal
   # That is the cheaper order and the more honest one: an unfetched clone
   # cannot answer a mergedness question no matter what gh says about it.
   _plat_timeout 60 git -C "$main" fetch --quiet origin \
-    || { _reap_refuse fetch-failed "could not fetch origin — nothing is claimed about your commits"; return 1; }
+    || { _ws_refuse fetch-failed "could not fetch origin — nothing is claimed about your commits"; return 1; }
   REAP_FETCHED=$(date +%s)
 
   # ── C1: work that is only here ───────────────────────────────────
@@ -13386,7 +13387,7 @@ _ws_reap_eval() {   # id -> 0 when reapable, else REAP_VERDICT names the refusal
       # unprovable.
       ahead=$(git -C "$main" rev-list --count "$up..refs/heads/$branch" 2>/dev/null)
       [[ "$ahead" == 0 ]] \
-        || { _reap_refuse unpushed-commits "$( [[ "$ahead" =~ ^[0-9]+$ ]] \
+        || { _ws_refuse unpushed-commits "$( [[ "$ahead" =~ ^[0-9]+$ ]] \
                && echo "$ahead commit(s) are not on the remote" \
                || echo "could not count the commits between $up and refs/heads/$branch — refusing on a comparison that did not run")"; return 1; }
     fi
@@ -13466,7 +13467,7 @@ _ws_reap_eval() {   # id -> 0 when reapable, else REAP_VERDICT names the refusal
   # instead, the same workspace answers `tree-differs` and the operator is
   # handed a diff dump about a proof that failed for an unrelated reason.
   REAP_BASEOID=$(git -C "$main" rev-parse --verify "$base" 2>/dev/null) \
-    || { _reap_refuse base-missing "$base does not resolve in $main"; return 1; }
+    || { _ws_refuse base-missing "$base does not resolve in $main"; return 1; }
 
   # ── C5 — RUNG 2: the merged PR, and `_ws_merge_proof` ────────────
   # Skipped in full when rung 1 proved there is no unique work: a PR bind for a
@@ -13495,7 +13496,7 @@ _ws_reap_eval() {   # id -> 0 when reapable, else REAP_VERDICT names the refusal
   # than from the slug. So it takes that arm. `no-remote` keeps ONE producer in
   # this function (C2), where the sentence is true.
   if repo=$(_gh_repo_slug "$main"); then
-    rows=$(_gh_pr_list "$repo")   || { _reap_refuse gh-unreadable "$rows"; return 1; }
+    rows=$(_gh_pr_list "$repo")   || { _ws_refuse gh-unreadable "$rows"; return 1; }
     row=$(printf '%s' "$rows" | _pr_py pick "$main" "$branch" "$baseShort" "$REAP_TIP")
   else
     row=''
@@ -13529,13 +13530,13 @@ _ws_reap_eval() {   # id -> 0 when reapable, else REAP_VERDICT names the refusal
       # sentence one rung further down.
       if [[ -n "$up" ]] || git -C "$main" config --get "branch.$branch.merge" >/dev/null 2>&1 \
          || git -C "$main" rev-parse --verify --quiet "refs/remotes/origin/$branch" >/dev/null 2>&1; then
-        _reap_refuse no-bound-pr "no merged PR binds to $branch, and $ancwhy"
+        _ws_refuse no-bound-pr "no merged PR binds to $branch, and $ancwhy"
       else
-        _reap_refuse no-upstream "$branch was never pushed (it has no remote-tracking branch and no tracking configuration), no merged PR binds to it, and $ancwhy"
+        _ws_refuse no-upstream "$branch was never pushed (it has no remote-tracking branch and no tracking configuration), no merged PR binds to it, and $ancwhy"
       fi
       return 1 ;;
-    '!pr-head-not-ours')  _reap_refuse pr-head-not-ours "the PR head commit is not reachable from $branch"; return 1 ;;
-    '!'*)                 _reap_refuse "${row#!}" "the bound PR is not merged"; return 1 ;;
+    '!pr-head-not-ours')  _ws_refuse pr-head-not-ours "the PR head commit is not reachable from $branch"; return 1 ;;
+    '!'*)                 _ws_refuse "${row#!}" "the bound PR is not merged"; return 1 ;;
   esac
   IFS=$'\t' read -r REAP_PRNUM REAP_PRURL REAP_MERGE REAP_HEADOID <<< "$row"
   # §7's argv boundary, restated on THIS side of the split — because the split
@@ -13572,20 +13573,20 @@ _ws_reap_eval() {   # id -> 0 when reapable, else REAP_VERDICT names the refusal
   # anchored, which is why each anchor needs its own fixture rather than
   # inheriting one from its neighbour.
   [[ "$REAP_MERGE" =~ ^[0-9a-f]{7,40}$ && "$REAP_HEADOID" =~ ^[0-9a-f]{7,40}$ ]] \
-    || { _reap_refuse pr-fields-malformed "gh named mergeCommit='$REAP_MERGE' headRefOid='$REAP_HEADOID'"; return 1; }
+    || { _ws_refuse pr-fields-malformed "gh named mergeCommit='$REAP_MERGE' headRefOid='$REAP_HEADOID'"; return 1; }
   git -C "$main" cat-file -e "${REAP_MERGE}^{commit}" 2>/dev/null \
-    || { _reap_refuse merge-commit-missing "$REAP_MERGE is not in the object store after a fetch"; return 1; }
+    || { _ws_refuse merge-commit-missing "$REAP_MERGE is not in the object store after a fetch"; return 1; }
   if _ws_merge_proof "$main" "$REAP_MERGE" "$REAP_TIP"; then
     REAP_PROOF="$_WS_PROOF"
   else
-    _reap_refuse tree-differs "$(git -C "$main" diff --stat "$REAP_MERGE" "$REAP_TIP" -- | head -5; git -C "$main" log --oneline "$REAP_MERGE".."$REAP_TIP" | head -5)"
+    _ws_refuse tree-differs "$(git -C "$main" diff --stat "$REAP_MERGE" "$REAP_TIP" -- | head -5; git -C "$main" log --oneline "$REAP_MERGE".."$REAP_TIP" | head -5)"
     return 1
   fi
   fi   # (( ! contained )) — rung 1 proved it, so rung 2 has nothing to add
 
   # ── Phase D1: the session ──────────────────────────────────────
-  st=$(_ws_status "$id") || { _reap_refuse status-unknown "cannot read the wrapper status file"; return 1; }
-  [[ "$st" != busy ]] || { _reap_refuse session-busy "the session is working — a model turn, a Bash tool command, or a status this ccd does not recognise"; return 1; }
+  st=$(_ws_status "$id") || { _ws_refuse status-unknown "cannot read the wrapper status file"; return 1; }
+  [[ "$st" != busy ]] || { _ws_refuse session-busy "the session is working — a model turn, a Bash tool command, or a status this ccd does not recognise"; return 1; }
 
   # MUTATION SURVIVOR, disclosed and unpinnable BY CONSTRUCTION: the `sort` can
   # be deleted with the suite green, because every state that reaches this line
@@ -13616,7 +13617,7 @@ _ws_reap_eval() {   # id -> 0 when reapable, else REAP_VERDICT names the refusal
   # the digest of `[]\n` — the value every existing token fixture computes as
   # `printf '[]\n' | sha256sum`. The refusal is the only thing that changes.
   clipsjson=$(_ws_clip_manifest "$id") \
-    || { _reap_refuse clips-unreadable "could not list $HOME/.cc-clips/$id — the pasted images this cleanup would delete cannot be enumerated"; return 1; }
+    || { _ws_refuse clips-unreadable "could not list $HOME/.cc-clips/$id — the pasted images this cleanup would delete cannot be enumerated"; return 1; }
   REAP_CLIPDIGEST=$(printf '%s\n' "$clipsjson" | _plat_sha256 | cut -d' ' -f1)
   # `printf '%s'`, not `printf '%s\n'`: unlike the clips manifest above,
   # `REAP_CHILDLINES` is not `$(…)`-captured (it is built in place by the
@@ -14629,9 +14630,9 @@ for line in children:
 }
 
 cmd_ws_reap() {   # ccd ws-reap --expect <token> --session <id>
-  # The ONLY destructive verb. Every guard is re-evaluated HERE, on the box, at
-  # the instant of deletion — the audit's verdict is not trusted, it is
-  # recomputed. A refusal prints on stdout and exits 0: it is an answer.
+  # Every guard is re-evaluated HERE, on the box, at the instant of deletion —
+  # the audit's verdict is not trusted, it is recomputed. A refusal prints on
+  # stdout and exits 0: it is an answer.
   [[ $# -eq 4 && $1 == --expect && $3 == --session ]] \
     || die "usage: ccd ws-reap --expect <token> --session <id>"
   local token=$2 id=$4
@@ -15143,9 +15144,9 @@ _ws_reap_locked() {   # token id — everything the reap lock serialises
   if ! _ws_reap_eval "$id"; then
     local paths="[]"
     [[ "$REAP_VERDICT" == sensitive-ignored ]] && paths=$(_reap_paths_json)
-    # ONE EMIT FOR ALL 35 `_reap_refuse` TOKENS, at the single point where
+    # ONE EMIT FOR EVERY REAP-FAMILY TOKEN, at the single point where
     # `REAP_VERDICT` becomes JSON. `_ws_reap_eval` never prints — it sets
-    # globals through `_reap_refuse` (ccd:7346) — so this is the only place the
+    # globals through `_ws_refuse` — so this is the only place the
     # verdict exists as a value, and journaling the 35 call sites individually
     # would be 35 chances to miss one.
     _lc_emit reap refused "$id" "" verb ws-reap refusal "$REAP_VERDICT" detail "$REAP_DETAIL"
@@ -30064,7 +30065,7 @@ cmd_clip() {   # <png-path> [id] — file an image into a session and inject its
 # every rung is how a refusal becomes an override (spec §5.5).
 #
 # THE VOCABULARY IS CLOSED AT FOURTEEN TOKENS, and every one of them is written
-# in a shape `server/test/wsaudit.test.ts` harvests — `_reap_refuse <token>` or
+# in a shape `server/test/wsaudit.test.ts` harvests — `_ws_refuse <token>` or
 # a literal `"refused":"<token>"` — so SENTENCES stays set-equal to what ccd can
 # say. `server/test/child-reclaim.test.ts` holds the same fourteen equal to
 # `CHILD_RECLAIM_TOKEN_KIND` by slicing THIS region, between its two markers.
@@ -30120,9 +30121,11 @@ _ws_reclaim_reset() {   # every REAP_* global `_ws_reap_reset` owns, plus the re
   _WS_LEGACY_ROWS=""; _WS_PENDING_ROWS=""   # the rows rung's entry-field counts: '' = not counted, printed null
 }
 
-_ws_reclaim_fingerprint() {   # key=value... -> the reclaim token. Every input is NAMED, so a
-  # reclaim token can never equal a reap token or a resume token over the same
-  # facts: the first input is always `mode=…`.
+_ws_reclaim_fingerprint() {   # key=value... -> the token. THE ONE ENCODING: every verb's
+  # token is this hash, reap's included (`_ws_fingerprint` hands it its fourteen
+  # facts). Every input is NAMED, so no two verbs' tokens can be equal over the
+  # same facts: every other verb's first input is `mode=…`, and the reap's is
+  # `id=…`, the one token whose first input is not a mode.
   printf '%s\n' "$@" | _plat_sha256 | cut -d' ' -f1
 }
 
@@ -31969,8 +31972,8 @@ _ws_reclaim_main_line_refuse() {   # main branch -> 0 when branch is PROVEN not 
   #                                    the ladder's TERMINAL `branch-elsewhere` refusal set (spec §5.5)
   local rc
   _ws_reclaim_main_branch "$1" "$2"; rc=$?
-  (( rc != 0 )) || { _reap_refuse branch-elsewhere "$2 is the main line of $1 — a reclaim never deletes it"; return 1; }
-  (( rc != 2 )) || { _reap_refuse branch-elsewhere "whether $2 is the main line of $1 could not be told (its main checkout's HEAD, or origin/HEAD, names no line or would not read) — a reclaim never deletes a branch it cannot prove is not"; return 1; }
+  (( rc != 0 )) || { _ws_refuse branch-elsewhere "$2 is the main line of $1 — a reclaim never deletes it"; return 1; }
+  (( rc != 2 )) || { _ws_refuse branch-elsewhere "whether $2 is the main line of $1 could not be told (its main checkout's HEAD, or origin/HEAD, names no line or would not read) — a reclaim never deletes a branch it cannot prove is not"; return 1; }
   return 0
 }
 
@@ -32176,9 +32179,9 @@ _ws_reclaim_eval() {   # id defer(0|1) childof('' = do not compare) -> 0 when th
   local id="$1" defer="$2" childof="$3" ws mark
   RECLAIM_DEFER="$defer"
   # 1 — registry identity
-  [[ -f "$REG/$id.uuid" ]] || { _reap_refuse no-such-session "no registry entry for $id"; return 1; }
+  [[ -f "$REG/$id.uuid" ]] || { _ws_refuse no-such-session "no registry entry for $id"; return 1; }
   ws=$(_reg_get "$id" workspace)
-  [[ -n "$ws" ]] || { _reap_refuse not-a-workspace "$id is a main checkout"; return 1; }
+  [[ -n "$ws" ]] || { _ws_refuse not-a-workspace "$id is a main checkout"; return 1; }
   # 2 — the marker, and (from the verb) its equality with --child-of. NO
   # OVERRIDE ANYWHERE: no flag, no breadcrumb, no resume skips this rung.
   # The grammar is wave 1's `_child_runid_valid` (its `LC_ALL=C` shadow: the
@@ -32188,9 +32191,9 @@ _ws_reclaim_eval() {   # id defer(0|1) childof('' = do not compare) -> 0 when th
   # readers are an enumerated list (`ccd-crosspool.test.ts`), and this is none.
   mark=$(_reg_get "$id" child)
   _child_runid_valid "$mark" \
-    || { _reap_refuse not-a-child "$id carries no readable child marker — only a workspace dispatch minted for a run is ever reclaimed"; return 1; }
+    || { _ws_refuse not-a-child "$id carries no readable child marker — only a workspace dispatch minted for a run is ever reclaimed"; return 1; }
   [[ -z "$childof" || "$mark" == "$childof" ]] \
-    || { _reap_refuse not-a-child "$id was minted for run $mark, not run $childof — the two authorities disagree"; return 1; }
+    || { _ws_refuse not-a-child "$id was minted for run $mark, not run $childof — the two authorities disagree"; return 1; }
   RECLAIM_CHILDOF="$mark"
   # …AND WHICH ROW IT IS (spec §5.5): the row's generation is a token input, so
   # a token minted over this row is never spent on a re-mint of the same id,
@@ -32224,11 +32227,11 @@ _ws_reclaim_ladder() {   # id defer -> rungs 3-10, SHARED by `_ws_reclaim_eval` 
   # 3 — the kill-switch, read HERE, at the instant of deletion (spec §5.8). -e,
   # not -f, and -L: a directory, an unreadable file or a DANGLING link pauses.
   [[ ! -e "$REG/reclaim-paused" && ! -L "$REG/reclaim-paused" ]] \
-    || { _reap_refuse paused "reclamation is paused fleet-wide ($REG/reclaim-paused)"; return 1; }
+    || { _ws_refuse paused "reclamation is paused fleet-wide ($REG/reclaim-paused)"; return 1; }
   # 4 — held. -e for the same reason: an unreadable hold is still a hold. `--stale held` passes ONE hold: the
   # one whose bytes hash to the digest it was given (`_ws_reclaim_hold_released`, DR-26).
   if [[ -e "$REG/$id.hold" ]] && ! _ws_reclaim_hold_released "$id"; then
-    _reap_refuse held "$(cat "$REG/$id.hold" 2>/dev/null || echo '<unreadable — treat as held>')"; return 1
+    _ws_refuse held "$(cat "$REG/$id.hold" 2>/dev/null || echo '<unreadable — treat as held>')"; return 1
   fi
   if [[ -n $_WS_STALE_WORD && "${_WS_LADDER_BIND[0]-}" == mode=reclaim ]]; then   # the stale arm's rung after rung 4 (DR-26)
     _session_probe "$id" anchored; pane_at=''
@@ -32252,7 +32255,7 @@ _ws_reclaim_ladder() {   # id defer -> rungs 3-10, SHARED by `_ws_reclaim_eval` 
   # row, and a local rewrite would not carry). Terminal: the same row answers
   # the same way on every retry.
   _ws_reclaim_plain_path "$workdir" \
-    || { _reap_refuse containment-unproven "the registry spells $id's workdir as '$workdir' — not one plain absolute path, so ccd cannot prove the tree at that path is $id's own"; return 1; }
+    || { _ws_refuse containment-unproven "the registry spells $id's workdir as '$workdir' — not one plain absolute path, so ccd cannot prove the tree at that path is $id's own"; return 1; }
   main="$PROJECTS_ROOT/$project"
   # 5 — presence ON THE BOX: a tmux client attached to THIS session. EXACT
   # (`_tmux_t`, `=cc-<id>:`): a bare `-t cc-<id>` is a search and resolves a prefix
@@ -32273,9 +32276,9 @@ _ws_reclaim_ladder() {   # id defer -> rungs 3-10, SHARED by `_ws_reclaim_eval` 
       gone) : ;;
       live)
         clients=$(tmux list-clients -t "$(_tmux_t "$id")" -F '#{client_tty}' 2>/dev/null) \
-          || { _reap_refuse attached "$(_tmux "$id") exists and would not list its clients — presence unmeasured is not absence"; return 1; }
+          || { _ws_refuse attached "$(_tmux "$id") exists and would not list its clients — presence unmeasured is not absence"; return 1; }
         [[ -z "$clients" ]] \
-          || { _reap_refuse attached "a terminal is attached to $(_tmux "$id"): ${clients//$'\n'/, }"; return 1; } ;;
+          || { _ws_refuse attached "a terminal is attached to $(_tmux "$id"): ${clients//$'\n'/, }"; return 1; } ;;
       *) _ws_reclaim_unmeasured "whether $(_tmux "$id") is up could not be asked — tmux answered: ${PROBE_DETAIL:-nothing}"; return 1 ;;
     esac
     # AN EXPIRY ASKS MORE OF THIS RUNG, AND ONLY MORE: a DETACHED pane, a live
@@ -32297,7 +32300,7 @@ _ws_reclaim_ladder() {   # id defer -> rungs 3-10, SHARED by `_ws_reclaim_eval` 
   # retryable `unmeasured` that a fleet, which always has another row, would
   # give a terminal leaf link instead of this refusal.
   [[ ! -L "$workdir" ]] \
-    || { _reap_refuse containment-unproven "$workdir is a symbolic link — ccd never follows a link to a tree it would pin or delete, so it cannot prove the tree at that path is $id's own"; return 1; }
+    || { _ws_refuse containment-unproven "$workdir is a symbolic link — ccd never follows a link to a tree it would pin or delete, so it cannot prove the tree at that path is $id's own"; return 1; }
   # NO OTHER REGISTRY ROW NAMES THIS WORKDIR, OR IS ROOTED INSIDE IT (spec
   # §5.5, rung 9 asked of the path) — `_ws_reclaim_workdir_shared` says why.
   # Asked BEFORE the vanished fork, so it guards both arms: the absent arm
@@ -32306,11 +32309,11 @@ _ws_reclaim_ladder() {   # id defer -> rungs 3-10, SHARED by `_ws_reclaim_eval` 
   _ws_reclaim_workdir_shared "$id" "$workdir" \
     || { _ws_reclaim_unmeasured "could not ask whether another registry row names $workdir or a path inside it: $_WS_SHARED_WHY"; return 1; }
   [[ -z "$_WS_SHARED_ROWS" ]] \
-    || { _reap_refuse containment-unproven "$workdir is also named by registry row(s) $_WS_SHARED_ROWS — ccd cannot prove the tree at that path is $id's own"; return 1; }
+    || { _ws_refuse containment-unproven "$workdir is also named by registry row(s) $_WS_SHARED_ROWS — ccd cannot prove the tree at that path is $id's own"; return 1; }
   [[ -z "$_WS_NESTED_ROWS" ]] \
-    || { _reap_refuse containment-unproven "$workdir has registry row(s) $_WS_NESTED_ROWS rooted inside it, or in its clips directory or temp root, each another session's tree — ccd cannot prove the tree at that path is $id's own"; return 1; }
+    || { _ws_refuse containment-unproven "$workdir has registry row(s) $_WS_NESTED_ROWS rooted inside it, or in its clips directory or temp root, each another session's tree — ccd cannot prove the tree at that path is $id's own"; return 1; }
   [[ -z "$_WS_THROUGH_ROWS" ]] \
-    || { _reap_refuse containment-unproven "registry row(s) $_WS_THROUGH_ROWS spell their workdir through $workdir, not as one plain path, so ccd cannot prove it lies outside $workdir — ccd cannot prove the tree at that path is $id's own"; return 1; }
+    || { _ws_refuse containment-unproven "registry row(s) $_WS_THROUGH_ROWS spell their workdir through $workdir, not as one plain path, so ccd cannot prove it lies outside $workdir — ccd cannot prove the tree at that path is $id's own"; return 1; }
   # A VANISHED WORKTREE IS NOT A REFUSAL (spec §5.5). NOTHING stands at the
   # workdir — `! -e` and `! -L`, so a dangling link is never read as absence —
   # and no breadcrumb exists (this function only runs where there is none), so
@@ -32345,7 +32348,7 @@ _ws_reclaim_ladder() {   # id defer -> rungs 3-10, SHARED by `_ws_reclaim_eval` 
     && { _ws_reclaim_unmeasured "$_WS_REC_WHY, so whether git records $workdir was never asked"; return 1; }
   if common=$(_ws_common_dir "$workdir"); then
     [[ "$common" == "$mainreal" ]] \
-      || { _reap_refuse containment-unproven "$workdir belongs to $common, not $mainreal — another repository's work cannot be pinned into this one"; return 1; }
+      || { _ws_refuse containment-unproven "$workdir belongs to $common, not $mainreal — another repository's work cannot be pinned into this one"; return 1; }
   elif (( rc == 0 )); then
     _ws_reclaim_unmeasured "$main records a worktree at $workdir, but git cannot resolve the directory's repository"; return 1
   fi
@@ -32358,7 +32361,7 @@ _ws_reclaim_ladder() {   # id defer -> rungs 3-10, SHARED by `_ws_reclaim_eval` 
   if (( rc != 0 )); then
     _ws_reclaim_no_record "$mainreal" "$workdir" \
       || { _ws_reclaim_unmeasured "$(_ws_leaf_why_line "$_WS_NOREC_WHY")"; return 1; }
-    _reap_refuse no-worktree-record "$main has no worktree record for $workdir"; return 1
+    _ws_refuse no-worktree-record "$main has no worktree record for $workdir"; return 1
   fi
   # THE RECORD MUST NOT BE THE MAIN CHECKOUT'S. A row naming `$main` itself
   # would pin the project's own checkout and hand the tail its branch's
@@ -32377,16 +32380,16 @@ _ws_reclaim_ladder() {   # id defer -> rungs 3-10, SHARED by `_ws_reclaim_eval` 
   # spelling resolves to itself. `-ef` only refuses: a stat that fails answers
   # false, and the rungs below still ask.
   (( ! RECLAIM_REC_MAIN )) \
-    || { _reap_refuse not-a-workspace "$workdir is $main's main checkout, not a workspace of $id"; return 1; }
+    || { _ws_refuse not-a-workspace "$workdir is $main's main checkout, not a workspace of $id"; return 1; }
   [[ "$(_ws_realpath "$workdir")" != "$(_ws_realpath "$main")" ]] \
-    || { _reap_refuse not-a-workspace "$workdir is the project directory $main itself, not a workspace of $id"; return 1; }
+    || { _ws_refuse not-a-workspace "$workdir is the project directory $main itself, not a workspace of $id"; return 1; }
   [[ ! "$workdir" -ef "$main" ]] \
-    || { _reap_refuse not-a-workspace "$workdir is the project directory $main itself, under another spelling, not a workspace of $id"; return 1; }
+    || { _ws_refuse not-a-workspace "$workdir is the project directory $main itself, under another spelling, not a workspace of $id"; return 1; }
   # AND THE TREE'S GIT DIRECTORY IS GIT'S OWN RECORD OF IT (spec §5.5, rung 9
   # asked of the child itself) — `_ws_reclaim_gitdir_own` says why.
   _ws_reclaim_gitdir_own "$workdir" "$mainreal"; rc=$?
   (( rc != 2 )) || { _ws_reclaim_unmeasured "$_WS_GITDIR_WHY"; return 1; }
-  (( rc == 0 )) || { _reap_refuse containment-unproven "$_WS_GITDIR_WHY — ccd cannot prove the tree at that path is $id's own"; return 1; }
+  (( rc == 0 )) || { _ws_refuse containment-unproven "$_WS_GITDIR_WHY — ccd cannot prove the tree at that path is $id's own"; return 1; }
   wthead="$RECLAIM_REC_BRANCH"
   # 6 — no in-progress git operation in the child's OWN tree, and no git
   # command holding its index lock: the pin copies that index, and a command
@@ -32397,11 +32400,11 @@ _ws_reclaim_ladder() {   # id defer -> rungs 3-10, SHARED by `_ws_reclaim_eval` 
   if (( ! defer )); then
     op=$(_ws_child_op "$workdir") \
       || { _ws_reclaim_unmeasured "could not probe $workdir for an in-progress git operation"; return 1; }
-    [[ -z "$op" ]] || { _reap_refuse tree-busy "$op in progress at $workdir"; return 1; }
+    [[ -z "$op" ]] || { _ws_refuse tree-busy "$op in progress at $workdir"; return 1; }
     h=$(git -C "$workdir" rev-parse --path-format=absolute --git-path index 2>/dev/null) && [[ -n "$h" ]] \
       || { _ws_reclaim_unmeasured "could not locate the index of $workdir"; return 1; }
     [[ ! -e "$h.lock" && ! -L "$h.lock" ]] \
-      || { _reap_refuse tree-busy "a git command holds the index lock of $workdir ($h.lock)"; return 1; }
+      || { _ws_refuse tree-busy "a git command holds the index lock of $workdir ($h.lock)"; return 1; }
   fi
   # THE BRANCH DELETED IS THE REGISTRY'S (spec §5.5: nothing that is not the
   # child's is deleted). A worktree whose HEAD has DRIFTED onto another branch
@@ -32419,7 +32422,7 @@ _ws_reclaim_ladder() {   # id defer -> rungs 3-10, SHARED by `_ws_reclaim_eval` 
   (( elsrc == 0 )) \
     || { _ws_reclaim_unmeasured "could not enumerate $main's worktrees, so whether another checkout holds $branch was never asked"; return 1; }
   [[ -z "$elsewhere" ]] \
-    || { _reap_refuse branch-elsewhere "$branch is also checked out at $elsewhere"; return 1; }
+    || { _ws_refuse branch-elsewhere "$branch is also checked out at $elsewhere"; return 1; }
   # ... and it is not the project's main line, PROVEN (`_ws_reclaim_main_branch`).
   _ws_reclaim_main_line_refuse "$main" "$branch" || return 1
   # 8 — the tree reads, after the permission pass. Its clips directory is
@@ -32431,13 +32434,13 @@ _ws_reclaim_ladder() {   # id defer -> rungs 3-10, SHARED by `_ws_reclaim_eval` 
   # listing below take the same unmeasured arm.
   _ws_reclaim_normalise "$workdir"; rc=$?
   (( rc == 2 )) && { _ws_reclaim_unmeasured "the permission pass over $workdir could not run: $_WS_NORMALISE_WHY"; return 1; }
-  (( rc == 0 )) || { _reap_refuse tree-unreadable "$workdir cannot be read: $_WS_NORMALISE_WHY"; return 1; }
+  (( rc == 0 )) || { _ws_refuse tree-unreadable "$workdir cannot be read: $_WS_NORMALISE_WHY"; return 1; }
   _ws_reclaim_normalise "$HOME/.cc-clips/$id"; rc=$?
   (( rc == 2 )) && { _ws_reclaim_unmeasured "the permission pass over $HOME/.cc-clips/$id could not run: $_WS_NORMALISE_WHY"; return 1; }
-  (( rc == 0 )) || { _reap_refuse tree-unreadable "$HOME/.cc-clips/$id cannot be read: $_WS_NORMALISE_WHY"; return 1; }
+  (( rc == 0 )) || { _ws_refuse tree-unreadable "$HOME/.cc-clips/$id cannot be read: $_WS_NORMALISE_WHY"; return 1; }
   _ws_reclaim_classify "$workdir" ""; rc=$?
   (( rc == 2 )) && { _ws_reclaim_unmeasured "$_WS_RECLAIM_CLASSIFY_WHY"; return 1; }
-  (( rc == 0 )) || { _reap_refuse tree-unreadable "$_WS_RECLAIM_CLASSIFY_WHY"; return 1; }
+  (( rc == 0 )) || { _ws_refuse tree-unreadable "$_WS_RECLAIM_CLASSIFY_WHY"; return 1; }
   # The audit's `sensitive` field lists what the pin phase will DROP: every
   # secret-shaped path, untracked or ignored.
   REAP_SENSITIVE=(${RECLAIM_SECRETS[@]+"${RECLAIM_SECRETS[@]}"})
@@ -32469,7 +32472,7 @@ _ws_reclaim_ladder() {   # id defer -> rungs 3-10, SHARED by `_ws_reclaim_eval` 
       [[ "$pcommon" != "$mainreal" ]] || continue
       _ws_reclaim_foreign_clean "$p"; rc=$?
       (( rc == 0 )) || { (( rc == 1 )) && _ws_nested_rescue_shape "$p"; } \
-        || { RECLAIM_RESCUE_WOULD=""; _reap_refuse containment-unproven "$wouldwhy"; return 1; }
+        || { RECLAIM_RESCUE_WOULD=""; _ws_refuse containment-unproven "$wouldwhy"; return 1; }
       (( rc == 0 )) || RECLAIM_RESCUE_WOULD+="$p"$'\n'
       continue
     fi
@@ -32483,10 +32486,10 @@ _ws_reclaim_ladder() {   # id defer -> rungs 3-10, SHARED by `_ws_reclaim_eval` 
       ptop=$(git -C "$p" rev-parse --path-format=absolute --show-toplevel 2>/dev/null) \
         || { _ws_reclaim_unmeasured "could not read the top of the checkout at $p"; return 1; }
       [[ "$ptop" == "$p" ]] \
-        || { _reap_refuse containment-unproven "the checkout at $p names $mainreal but is not a worktree root"; return 1; }
+        || { _ws_refuse containment-unproven "the checkout at $p names $mainreal but is not a worktree root"; return 1; }
       _ws_reclaim_gitdir_own "$p" "$mainreal"; rc=$?
       (( rc != 2 )) || { _ws_reclaim_unmeasured "$_WS_GITDIR_WHY"; return 1; }
-      (( rc == 0 )) || { _reap_refuse containment-unproven "$_WS_GITDIR_WHY"; return 1; }
+      (( rc == 0 )) || { _ws_refuse containment-unproven "$_WS_GITDIR_WHY"; return 1; }
       # RUNG 6's QUESTION, ASKED OF THE NESTED CHECKOUT TOO (spec §5.5): the pin
       # copies this tree's index and commits its work exactly as it does the
       # child's, so a git command mid-write here leaves the copy a state the
@@ -32500,10 +32503,10 @@ _ws_reclaim_ladder() {   # id defer -> rungs 3-10, SHARED by `_ws_reclaim_eval` 
         h=$(git -C "$p" rev-parse --path-format=absolute --git-path index 2>/dev/null) && [[ -n "$h" ]] \
           || { _ws_reclaim_unmeasured "could not locate the index of the nested checkout at $p"; return 1; }
         [[ ! -e "$h.lock" && ! -L "$h.lock" ]] \
-          || { _reap_refuse tree-busy "a git command holds the index lock of the nested checkout at $p ($h.lock)"; return 1; }
+          || { _ws_refuse tree-busy "a git command holds the index lock of the nested checkout at $p ($h.lock)"; return 1; }
         op=$(_ws_child_op "$p") \
           || { _ws_reclaim_unmeasured "could not probe the nested checkout at $p for an in-progress git operation"; return 1; }
-        [[ -z "$op" ]] || { _reap_refuse tree-busy "$op in progress at the nested checkout at $p"; return 1; }
+        [[ -z "$op" ]] || { _ws_refuse tree-busy "$op in progress at the nested checkout at $p"; return 1; }
       fi
       _ws_reclaim_hidden "$p" || { _ws_reclaim_unmeasured "$_WS_HIDDEN_WHY"; return 1; }
       for hp in ${_WS_HIDDEN_PATHS[@]+"${_WS_HIDDEN_PATHS[@]}"}; do
@@ -32525,16 +32528,16 @@ _ws_reclaim_ladder() {   # id defer -> rungs 3-10, SHARED by `_ws_reclaim_eval` 
       if (( rc == 1 )) && ! _ws_nested_rescue_live && _ws_nested_rescue_shape "$p"; then
         RECLAIM_RESCUE_WOULD+="$p"$'\n'; [[ -n "$wouldwhy" ]] || wouldwhy="$_WS_FOREIGN_WHY"; continue
       fi
-      RECLAIM_RESCUE_WOULD=""; _reap_refuse containment-unproven "$_WS_FOREIGN_WHY"; return 1
+      RECLAIM_RESCUE_WOULD=""; _ws_refuse containment-unproven "$_WS_FOREIGN_WHY"; return 1
     fi
     RECLAIM_FOREIGN+="$p"$'\n'
   done <<< "$nested"$'\n'
-  [[ -z "$wouldwhy" ]] || { _reap_refuse containment-unproven "$wouldwhy"; return 1; }
+  [[ -z "$wouldwhy" ]] || { _ws_refuse containment-unproven "$wouldwhy"; return 1; }
   # NOR IS ANY CHECKOUT INSIDE IT A GONE ROW'S MOVED TREE (spec §5.5):
   # asked after the scan, over its answer — `_ws_reclaim_moved_check` says why.
   _ws_reclaim_moved_check "$nested"; rc=$?
   (( rc != 2 )) || { _ws_reclaim_unmeasured "$_WS_MOVED_WHY"; return 1; }
-  (( rc == 0 )) || { _reap_refuse containment-unproven "$_WS_MOVED_WHY"; return 1; }
+  (( rc == 0 )) || { _ws_refuse containment-unproven "$_WS_MOVED_WHY"; return 1; }
   # The facts the pin phase will act on, each a fingerprint input. The branch
   # is read THREE ways (`_ws_reclaim_tip_read`, spec §5.5): its tip, or
   # PROVEN absent (no tip to pin, no branch to delete), or a read that did not
@@ -32629,12 +32632,12 @@ _ws_reclaim_eval_absent() {   # id workdir main regbranch -> the ladder's answer
   (( elsrc == 0 )) \
     || { _ws_reclaim_unmeasured "could not enumerate $main's worktrees, so whether another checkout holds $branch was never asked"; return 1; }
   [[ -z "$elsewhere" ]] \
-    || { _reap_refuse branch-elsewhere "$branch is also checked out at $elsewhere"; return 1; }
+    || { _ws_refuse branch-elsewhere "$branch is also checked out at $elsewhere"; return 1; }
   _ws_reclaim_main_line_refuse "$main" "$branch" || return 1
   # 8 — the clips directory only: there is no tree.
   _ws_reclaim_normalise "$HOME/.cc-clips/$id"; rc=$?
   (( rc == 2 )) && { _ws_reclaim_unmeasured "the permission pass over $HOME/.cc-clips/$id could not run: $_WS_NORMALISE_WHY"; return 1; }
-  (( rc == 0 )) || { _reap_refuse tree-unreadable "$HOME/.cc-clips/$id cannot be read: $_WS_NORMALISE_WHY"; return 1; }
+  (( rc == 0 )) || { _ws_refuse tree-unreadable "$HOME/.cc-clips/$id cannot be read: $_WS_NORMALISE_WHY"; return 1; }
   _ws_reclaim_tip_read "$main" "$branch" || { _ws_reclaim_unmeasured "$_WS_BRANCH_WHY"; return 1; }
   RECLAIM_STASHES=$(_ws_reclaim_stash_shas "$main" "$branch") \
     || { _ws_reclaim_unmeasured "could not read the stash list of $main"; return 1; }
@@ -32664,19 +32667,19 @@ _ws_reclaim_resume_eval() {   # id defer childof phase -> 0 with REAP_TOKEN = th
   _ws_reclaim_reset
   local id="$1" defer="$2" childof="$3" phase="$4" mark tomb tombtip tombbranch
   RECLAIM_DEFER="$defer"
-  [[ -f "$REG/$id.uuid" ]] || { _reap_refuse no-such-session "no registry entry for $id"; return 1; }
+  [[ -f "$REG/$id.uuid" ]] || { _ws_refuse no-such-session "no registry entry for $id"; return 1; }
   mark=$(_reg_get "$id" child)
   _child_runid_valid "$mark" \
-    || { _reap_refuse not-a-child "$id carries no readable child marker — an interrupted reclaim does not finish without one"; return 1; }
+    || { _ws_refuse not-a-child "$id carries no readable child marker — an interrupted reclaim does not finish without one"; return 1; }
   [[ -z "$childof" || "$mark" == "$childof" ]] \
-    || { _reap_refuse not-a-child "$id was minted for run $mark, not run $childof — the two authorities disagree"; return 1; }
+    || { _ws_refuse not-a-child "$id was minted for run $mark, not run $childof — the two authorities disagree"; return 1; }
   RECLAIM_CHILDOF="$mark"
   _ws_reclaim_generation "$id" \
     || { _ws_reclaim_unmeasured "$REG/$id.generation could not be read as this row's generation ($RECLAIM_GENERATION_WHY) — an interrupted reclaim does not finish on a row it cannot identify"; return 1; }
   [[ ! -e "$REG/reclaim-paused" && ! -L "$REG/reclaim-paused" ]] \
-    || { _reap_refuse paused "reclamation is paused fleet-wide ($REG/reclaim-paused)"; return 1; }
+    || { _ws_refuse paused "reclamation is paused fleet-wide ($REG/reclaim-paused)"; return 1; }
   if [[ -e "$REG/$id.hold" ]] && ! _ws_reclaim_hold_released "$id"; then
-    _reap_refuse held "$(cat "$REG/$id.hold" 2>/dev/null || echo '<unreadable — treat as held>')"; return 1
+    _ws_refuse held "$(cat "$REG/$id.hold" 2>/dev/null || echo '<unreadable — treat as held>')"; return 1
   fi
   tomb="$REG/.reaped/$id.json"
   tombbranch=$(_ws_tomb_str "$tomb" branch) || tombbranch=""
@@ -36917,7 +36920,7 @@ _ws_reclaim_fork_contained() {   # `_ws_reclaim_fork`'s body, run under `_ws_rec
     _ws_reclaim_unmeasured "a breadcrumb stands at $REG/$id.reaping but cannot be read — which verb left it, and at which step, is unknown" || :
   elif _crumb_parse "$rbc"; [[ -n "$rbc" && "$_CRUMB_ACT" != reclaim ]]; then
     _ws_reclaim_reset
-    _reap_refuse reap-in-progress "an interrupted ws-reap of $id stopped at its '$rbc' step — a reclaim never finishes another verb's work" || :
+    _ws_refuse reap-in-progress "an interrupted ws-reap of $id stopped at its '$rbc' step — a reclaim never finishes another verb's work" || :
   elif [[ -n "$rbc" ]]; then
     # `RECLAIM_RESUME_PHASE` carries the PHASE, as `LifecycleMeas.resumed` and
     # ws-reap's own `meas.resumed` do — never a 0/1 beside it — and is "" on a
@@ -36955,7 +36958,7 @@ _ws_reclaim_locked() {   # token childof id defer surface actor reason — every
   # 10 — the consent IS the fingerprint, recomputed HERE, inside the lock. A
   # server-side check fails open into deletion; this one cannot.
   if [[ "$REAP_VERDICT" == reclaimable && "$token" != "$REAP_TOKEN" ]]; then
-    _reap_refuse state-changed "expected $REAP_TOKEN, was given $token — $id changed since the audit that minted the token" || :
+    _ws_refuse state-changed "expected $REAP_TOKEN, was given $token — $id changed since the audit that minted the token" || :
   fi
   # A PROBE THAT COULD NOT RUN IS NOT A REFUSAL (`_ws_reclaim_unmeasured`).
   # Nothing was measured and nothing has started: there is no intent and no
@@ -37201,7 +37204,7 @@ _ws_expire_archived() {   # id -> 0 with EXPIRE_ARCHIVED_AT = the archive epoch,
   # an expiry decided on a guess is a deletion decided on one.
   local id="$1" f="$REG/$1.archived" arch now
   [[ -e "$f" || -L "$f" ]] \
-    || { _reap_refuse not-archived "$id is not archived — only a workspace archived $WS_EXPIRE_AFTER_S seconds ago or more is ever expired"; return 1; }
+    || { _ws_refuse not-archived "$id is not archived — only a workspace archived $WS_EXPIRE_AFTER_S seconds ago or more is ever expired"; return 1; }
   arch=$(_reg_get "$id" archived)
   _ws_expire_epoch_ok "$arch" \
     || { _ws_reclaim_unmeasured "the archive stamp at $f cannot be read as an epoch (it reads '$arch')"; return 1; }
@@ -37209,7 +37212,7 @@ _ws_expire_archived() {   # id -> 0 with EXPIRE_ARCHIVED_AT = the archive epoch,
   now=$(_ws_expire_now) && _ws_expire_epoch_ok "$now" \
     || { _ws_reclaim_unmeasured "the clock could not be read, so the archive's age was never measured"; return 1; }
   (( now - arch >= WS_EXPIRE_AFTER_S )) \
-    || { _reap_refuse not-expired "$id was archived $(( now - arch )) seconds ago; it expires $WS_EXPIRE_AFTER_S seconds after its archive, at $(( arch + WS_EXPIRE_AFTER_S ))"; return 1; }
+    || { _ws_refuse not-expired "$id was archived $(( now - arch )) seconds ago; it expires $WS_EXPIRE_AFTER_S seconds after its archive, at $(( arch + WS_EXPIRE_AFTER_S ))"; return 1; }
   EXPIRE_ARCHIVED_AT="$arch"
 }
 
@@ -37225,10 +37228,10 @@ _ws_expire_not_child() {   # id -> 0 when NO `.child` marker stands; else rc 1 r
   if [[ -n "${EXPIRE_CHILDOF-}" ]]; then
     mark=$(_reg_get "$id" child)
     _child_runid_valid "$mark" && [[ "$mark" == "$EXPIRE_CHILDOF" ]] && return 0
-    _reap_refuse child "$id does not carry a child marker that reads as run $EXPIRE_CHILDOF ($REG/$id.child) — only a child of that run is expired on its word"; return 1
+    _ws_refuse child "$id does not carry a child marker that reads as run $EXPIRE_CHILDOF ($REG/$id.child) — only a child of that run is expired on its word"; return 1
   fi
   [[ ! -e "$REG/$id.child" && ! -L "$REG/$id.child" ]] \
-    || { _reap_refuse child "$id carries a child marker ($REG/$id.child) — a child is reclaimed by ws-reclaim when its run closes, never expired"; return 1; }
+    || { _ws_refuse child "$id carries a child marker ($REG/$id.child) — a child is reclaimed by ws-reclaim when its run closes, never expired"; return 1; }
 }
 
 _ws_expire_presence() {   # id probe-verdict workdir [detached] -> 0 when nothing runs for id; else rc 1 (`live`,
@@ -37265,7 +37268,7 @@ _ws_expire_presence() {   # id probe-verdict workdir [detached] -> 0 when nothin
   # exec) — its cwd link cannot be read from here.
   local id="$1" verdict="$2" workdir="$3" how="${4-}" unit out lrc
   [[ "$verdict" != live ]] \
-    || { _reap_refuse live "$(_tmux "$id") is up$([[ "$how" == detached ]] && printf ' with no terminal attached') — an archived workspace whose pane runs is in use, and is never expired"; return 1; }
+    || { _ws_refuse live "$(_tmux "$id") is up$([[ "$how" == detached ]] && printf ' with no terminal attached') — an archived workspace whose pane runs is in use, and is never expired"; return 1; }
   unit=$(_svc_is_active "claude-session@$id")
   if [[ "$CCD_OS" == darwin && "$unit" == failed ]]; then
     out=$(_svc_launchctl print "$(_svc_domain)/$(_svc_label "claude-session@$id")" 2>/dev/null); lrc=$?
@@ -37281,7 +37284,7 @@ _ws_expire_presence() {   # id probe-verdict workdir [detached] -> 0 when nothin
   case "$unit" in
     inactive|failed) : ;;
     '') _ws_reclaim_unmeasured "whether claude-session@$id is running could not be asked — the service manager answered nothing"; return 1 ;;
-    *) _reap_refuse live "claude-session@$id answered '$unit' — a supervised workspace respawns its pane, and is never expired"; return 1 ;;
+    *) _ws_refuse live "claude-session@$id answered '$unit' — a supervised workspace respawns its pane, and is never expired"; return 1 ;;
   esac
   _ws_expire_cwd_users "$id" "$workdir"
 }
@@ -37333,7 +37336,7 @@ _ws_expire_cwd_users() {   # id workdir -> 0 when no process has its working dir
   case $? in
     0) return 0 ;;
     1) EXPIRE_IN_USE+=("${_WS_CWD_USERS_RECS[@]}")
-       _reap_refuse in-use "$_WS_CWD_USERS_WHY — an archived workspace somebody is working in is never expired" ;;
+       _ws_refuse in-use "$_WS_CWD_USERS_WHY — an archived workspace somebody is working in is never expired" ;;
     *) _ws_reclaim_unmeasured "$_WS_CWD_USERS_WHY" ;;
   esac
 }
@@ -37353,9 +37356,9 @@ _ws_expire_eval() {   # id -> 0 when the expiry ladder passes (REAP_VERDICT=expi
   # nothing has proved nobody is in it.
   _ws_reclaim_reset
   local id="$1" ws
-  [[ -f "$REG/$id.uuid" ]] || { _reap_refuse no-such-session "no registry entry for $id"; return 1; }
+  [[ -f "$REG/$id.uuid" ]] || { _ws_refuse no-such-session "no registry entry for $id"; return 1; }
   ws=$(_reg_get "$id" workspace)
-  [[ -n "$ws" ]] || { _reap_refuse not-a-workspace "$id is a main checkout — a main checkout is never expired"; return 1; }
+  [[ -n "$ws" ]] || { _ws_refuse not-a-workspace "$id is a main checkout — a main checkout is never expired"; return 1; }
   _ws_expire_archived "$id" || return 1
   _ws_expire_not_child "$id" || return 1
   _WS_LADDER_BIND=("mode=expire" "id=$id" "archivedAt=$EXPIRE_ARCHIVED_AT" ${EXPIRE_CHILDOF:+"childOf=$EXPIRE_CHILDOF"})   # `childOf` only when asked: a plain expiry's token is unchanged
@@ -37387,18 +37390,18 @@ _ws_expire_resume_eval() {   # id phase -> 0 with REAP_TOKEN = the RESUME token,
   # token binds the phase, the epoch and the recorded tip.
   _ws_reclaim_reset
   local id="$1" phase="$2" tomb tombtip tombbranch tombarch tombwt tombworkdir askpresence=0 askcwd=0
-  [[ -f "$REG/$id.uuid" ]] || { _reap_refuse no-such-session "no registry entry for $id"; return 1; }
+  [[ -f "$REG/$id.uuid" ]] || { _ws_refuse no-such-session "no registry entry for $id"; return 1; }
   tomb="$REG/.reaped/$id.json"
   tombarch=$(_ws_expire_tomb_epoch "$tomb") \
     || { _ws_reclaim_unmeasured "the tombstone at $tomb does not record the archive this expiry began on, so whether it is still that archive is unknown"; return 1; }
   _ws_expire_archived "$id" || return 1
   [[ "$EXPIRE_ARCHIVED_AT" == "$tombarch" ]] \
-    || { _reap_refuse state-changed "$id was archived again ($EXPIRE_ARCHIVED_AT) since this expiry began on its archive of $tombarch — an interrupted expiry never finishes on another archive"; return 1; }
+    || { _ws_refuse state-changed "$id was archived again ($EXPIRE_ARCHIVED_AT) since this expiry began on its archive of $tombarch — an interrupted expiry never finishes on another archive"; return 1; }
   _ws_expire_not_child "$id" || return 1
   [[ ! -e "$REG/reclaim-paused" && ! -L "$REG/reclaim-paused" ]] \
-    || { _reap_refuse paused "reclamation is paused fleet-wide ($REG/reclaim-paused)"; return 1; }
+    || { _ws_refuse paused "reclamation is paused fleet-wide ($REG/reclaim-paused)"; return 1; }
   if [[ -e "$REG/$id.hold" ]]; then
-    _reap_refuse held "$(cat "$REG/$id.hold" 2>/dev/null || echo '<unreadable — treat as held>')"; return 1
+    _ws_refuse held "$(cat "$REG/$id.hold" 2>/dev/null || echo '<unreadable — treat as held>')"; return 1
   fi
   # A PANE THAT CAME BACK IS NEVER KILLED BEFORE THE TEARDOWN BEGINS (ruling D,
   # carried to the resume). The tail's first step stops the unit and kills the
@@ -37484,10 +37487,10 @@ _ws_expire_fork_contained() {   # `_ws_expire_fork`'s body, run under `_ws_recla
     _ws_reclaim_unmeasured "a breadcrumb stands at $REG/$id.reaping but cannot be read — which verb left it, and at which step, is unknown" || :
   elif _crumb_parse "$rbc"; [[ "$_CRUMB_ACT" == reclaim ]]; then
     _ws_reclaim_reset
-    _reap_refuse reclaim-in-progress "an interrupted ws-reclaim of $id stopped at its '$_CRUMB_PHASE' step — an expiry never finishes another verb's work" || :
+    _ws_refuse reclaim-in-progress "an interrupted ws-reclaim of $id stopped at its '$_CRUMB_PHASE' step — an expiry never finishes another verb's work" || :
   elif [[ -n "$rbc" && "$_CRUMB_ACT" != expire ]]; then
     _ws_reclaim_reset
-    _reap_refuse reap-in-progress "an interrupted ws-reap of $id stopped at its '$rbc' step — an expiry never finishes another verb's work" || :
+    _ws_refuse reap-in-progress "an interrupted ws-reap of $id stopped at its '$rbc' step — an expiry never finishes another verb's work" || :
   elif [[ -n "$rbc" ]]; then
     RECLAIM_RESUME_PHASE="$_CRUMB_PHASE"
     _ws_expire_resume_eval "$id" "$RECLAIM_RESUME_PHASE" || :
@@ -37582,7 +37585,7 @@ _ws_expire_locked() {   # token id surface actor reason — everything the share
   else _WS_RCL_CRUMB=false; fi
   # The consent IS the fingerprint, recomputed HERE, inside the lock.
   if [[ "$REAP_VERDICT" == expirable && "$token" != "$REAP_TOKEN" ]]; then
-    _reap_refuse state-changed "expected $REAP_TOKEN, was given $token — $id changed since the audit that minted the token" || :
+    _ws_refuse state-changed "expected $REAP_TOKEN, was given $token — $id changed since the audit that minted the token" || :
   fi
   if [[ "$REAP_VERDICT" == unmeasured ]]; then
     _ws_reclaim_failed_json probe-unmeasured "$REAP_DETAIL"
@@ -38581,7 +38584,7 @@ _ws_collect_rows_clear() {   # id leaf -> 0 when no registry row lies at, inside
 #
 # THE DOCUMENT mirrors `ws-audit --expire`'s, with a `collect` object.
 # `collectable` MEANS a token, spelled through `_json_str` as the other audits'
-# success words are. Every word here is set through `_ws_collect_refuse`,
+# success words are. Every word here is set through `_ws_refuse`,
 # never the reap ladder's refusal helper, and no line of this block is written
 # in a shape the refusal harvests read (`ccd-collect-audit.test.ts` pins it).
 # `unmeasured` prints the document with that word and EXITS 1 — the server
@@ -38618,7 +38621,6 @@ _ws_collect_reset() {   # -> every answer the collector's evaluation sets, clear
   _WS_COLLECT_RECORDS=()
   _WS_WIT_DEV=''; _WS_WIT_INO=''; _WS_WIT_BTIME=''; _WS_WIT_RUN=''; _WS_WIT_UID=''; _WS_WIT_AT=''
 }
-_ws_collect_refuse() { REAP_VERDICT="$1"; REAP_DETAIL="$2"; return 1; }   # word detail -> rc 1: the collector's answer, set
 _ws_collect_unmeasured() { REAP_VERDICT=unmeasured; _WS_COLLECT_PROBE="$1"; REAP_DETAIL="$2"; return 1; }   # probe detail -> rc 1
 
 # THE FLOOR AND THE IDENTITY ARE TASK 4'S, never redefined here: bash keeps
@@ -38644,7 +38646,7 @@ _ws_collect_floor_read() {   # -> 0 with _WS_COLLECT_FLOOR = the idle floor, who
 
 _ws_collect_paused() {   # -> 0 when reclamation is not paused; rc 1 with `paused` set when it is
   [[ ! -e "$REG/reclaim-paused" && ! -L "$REG/reclaim-paused" ]] \
-    || { _ws_collect_refuse paused "reclamation is paused fleet-wide ($REG/reclaim-paused) — nothing is collected while it stands"; return 1; }
+    || { _ws_refuse paused "reclamation is paused fleet-wide ($REG/reclaim-paused) — nothing is collected while it stands"; return 1; }
 }
 
 # THE DASH-FREE SENTENCE, ONE SOURCE (path-identity spec §2.5): an id with no
@@ -38754,7 +38756,7 @@ _ws_collect_eval() {   # id -> the FRESH rungs: REAP_VERDICT `collectable` (REAP
   local id="$1" leaf="$HOME/.cc-tmp/$1" rc floor why=walk-failed mode owner
   _ws_collect_registered "$id"; rc=$?
   (( rc != 2 )) || { _ws_collect_unmeasured registry "$_WS_COLLECT_REG_WHY"; return 1; }
-  (( rc != 1 )) || { _ws_collect_refuse registered "$_WS_COLLECT_REG_WHY"; return 1; }
+  (( rc != 1 )) || { _ws_refuse registered "$_WS_COLLECT_REG_WHY"; return 1; }
   _ws_collect_witness_judge "$id" || return 1
   # THE WITNESS'S NAME IN A DETAIL (path-identity spec §3.6): when the judge
   # read a compare-and-drop aside as the witness (`_ws_collect_aside_judge`,
@@ -38767,7 +38769,7 @@ _ws_collect_eval() {   # id -> the FRESH rungs: REAP_VERDICT `collectable` (REAP
     wits="the compare-and-drop aside $_WS_COLLECT_ASIDE (read as its witness)"
   fi
   [[ "$_WS_WIT_BTIME" != - ]] \
-    || { _ws_collect_refuse witness-mismatch "$wof records no birth time, so device and inode alone would vouch for $leaf — it is offered to the operator, never taken"; return 1; }
+    || { _ws_refuse witness-mismatch "$wof records no birth time, so device and inode alone would vouch for $leaf — it is offered to the operator, never taken"; return 1; }
   _ws_reclaim_absent "$leaf"; rc=$?
   (( rc != 2 )) || { _ws_collect_unmeasured leaf "$_WS_ABSENT_WHY"; return 1; }
   if (( rc == 0 )); then
@@ -38790,7 +38792,7 @@ _ws_collect_eval() {   # id -> the FRESH rungs: REAP_VERDICT `collectable` (REAP
     _ws_collect_slots_of "$id"; rc=$?
     (( rc == 0 )) || { _ws_collect_unmeasured quarantine "$_WS_QSLOTS_WHY"; return 1; }
     (( ${#_WS_QSLOTS[@]} == 0 )) \
-      || { _ws_collect_refuse quarantine-kept "kept as it stands, listed for the operator, and $wof stays: the quarantine slot ${_WS_QSLOTS[0]##*/} stands with no record naming it"; return 1; }
+      || { _ws_refuse quarantine-kept "kept as it stands, listed for the operator, and $wof stays: the quarantine slot ${_WS_QSLOTS[0]##*/} stands with no record naming it"; return 1; }
     _ws_collect_paused || return 1
     REAP_TOKEN=$(_ws_reclaim_fingerprint mode=collect-absent "id=$id" "dev=$_WS_WIT_DEV" "ino=$_WS_WIT_INO" \
       "btime=$_WS_WIT_BTIME" "run=$_WS_WIT_RUN" "at=$_WS_WIT_AT")
@@ -38814,9 +38816,9 @@ _ws_collect_eval() {   # id -> the FRESH rungs: REAP_VERDICT `collectable` (REAP
   _ws_collect_slots_of "$id"; rc=$?
   (( rc == 0 )) || { _ws_collect_unmeasured quarantine "$_WS_QSLOTS_WHY"; return 1; }
   (( ${#_WS_QSLOTS[@]} == 0 )) \
-    || { _ws_collect_refuse quarantine-kept "kept as it stands, listed for the operator, and $wof stays: the quarantine slot ${_WS_QSLOTS[0]##*/} stands with no record naming it, and the leaf at $leaf is not collected beside it"; return 1; }
+    || { _ws_refuse quarantine-kept "kept as it stands, listed for the operator, and $wof stays: the quarantine slot ${_WS_QSLOTS[0]##*/} stands with no record naming it, and the leaf at $leaf is not collected beside it"; return 1; }
   [[ -d "$leaf" && ! -L "$leaf" ]] \
-    || { _ws_collect_refuse witness-mismatch "$leaf is a link or not a directory — the collector takes only the directory $wits names; it is offered to the operator"; return 1; }
+    || { _ws_refuse witness-mismatch "$leaf is a link or not a directory — the collector takes only the directory $wits names; it is offered to the operator"; return 1; }
   _ws_collect_ident "$leaf" "$_WS_WIT_DEV:$_WS_WIT_INO" "$_WS_WIT_BTIME"; rc=$?
   (( rc != 2 )) || { _ws_collect_unmeasured identity "the device, inode or birth time of $leaf could not be read"; return 1; }
   if (( rc != 0 )); then
@@ -38826,7 +38828,7 @@ _ws_collect_eval() {   # id -> the FRESH rungs: REAP_VERDICT `collectable` (REAP
     _ws_reclaim_absent "$leaf"; rc=$?
     (( rc != 0 )) || { _ws_collect_unmeasured leaf "$leaf vanished while its identity was read — the next pass asks again"; return 1; }
     (( rc != 2 )) || { _ws_collect_unmeasured leaf "$_WS_ABSENT_WHY"; return 1; }
-    _ws_collect_refuse witness-mismatch "$leaf is $(_plat_devino "$leaf" 2>/dev/null) born $(_plat_btime "$leaf" 2>/dev/null), not the $_WS_WIT_DEV:$_WS_WIT_INO born $_WS_WIT_BTIME $wits names — it is offered to the operator, never taken"
+    _ws_refuse witness-mismatch "$leaf is $(_plat_devino "$leaf" 2>/dev/null) born $(_plat_btime "$leaf" 2>/dev/null), not the $_WS_WIT_DEV:$_WS_WIT_INO born $_WS_WIT_BTIME $wits names — it is offered to the operator, never taken"
     return 1
   fi
   # OWNER WRITE, read off the leaf whose identity was just proven (spec
@@ -38854,16 +38856,16 @@ _ws_collect_eval() {   # id -> the FRESH rungs: REAP_VERDICT `collectable` (REAP
   _WS_COLLECT_IDLE_AT=$(( (10#$_WS_COLLECT_NEWEST_NS + floor * 1000000000 + 999999999) / 1000000000 ))
   _ws_collect_floor_held "$_WS_COLLECT_NEWEST_NS"; rc=$?
   (( rc != 2 )) || { _ws_collect_unmeasured clock "this box's clock could not be read, so how long $leaf has been idle is unknown"; return 1; }
-  (( rc != 1 )) || { _ws_collect_refuse changed-recently "the newest change under $leaf is less than ${floor}s old — it is collectable from epoch $_WS_COLLECT_IDLE_AT, if nothing changes it first"; return 1; }
+  (( rc != 1 )) || { _ws_refuse changed-recently "the newest change under $leaf is less than ${floor}s old — it is collectable from epoch $_WS_COLLECT_IDLE_AT, if nothing changes it first"; return 1; }
   _ws_path_users "$leaf"; rc=$?
   (( rc != 2 )) || { _ws_collect_unmeasured in-use "${_WS_PATH_USERS_WHY-}"; return 1; }
-  (( rc != 1 )) || { _ws_collect_refuse in-use "a process of this uid still uses $leaf (pid ${_WS_PATH_USERS_PIDS-}: ${_WS_PATH_USERS_WHY-})"; return 1; }
+  (( rc != 1 )) || { _ws_refuse in-use "a process of this uid still uses $leaf (pid ${_WS_PATH_USERS_PIDS-}: ${_WS_PATH_USERS_WHY-})"; return 1; }
   _ws_leaf_checkouts "$leaf"; rc=$?
   (( rc != 2 )) || { [[ -z "${_WS_CHECKOUTS_CAPPED-}" ]] || { _ws_collect_unmeasured checkouts-cap "${_WS_CHECKOUTS_WHY-}"; return 1; }; _ws_collect_unmeasured checkouts "${_WS_CHECKOUTS_WHY-}"; return 1; }
-  (( rc != 1 )) || { _ws_collect_refuse containment-unproven "${_WS_CHECKOUTS_WHY-}"; return 1; }
+  (( rc != 1 )) || { _ws_refuse containment-unproven "${_WS_CHECKOUTS_WHY-}"; return 1; }
   _ws_collect_rows_clear "$id" "$leaf"; rc=$?
   (( rc != 2 )) || { _ws_collect_unmeasured rows "${_WS_COLLECT_ROWS_WHY-}"; return 1; }
-  (( rc != 1 )) || { _ws_collect_refuse containment-unproven "${_WS_COLLECT_ROWS_WHY-}"; return 1; }
+  (( rc != 1 )) || { _ws_refuse containment-unproven "${_WS_COLLECT_ROWS_WHY-}"; return 1; }
   _ws_collect_paused || return 1
   REAP_TOKEN=$(_ws_collect_token "$id") && [[ "$REAP_TOKEN" =~ ^[0-9a-f]{64}$ ]] \
     || { REAP_TOKEN=''; _ws_collect_unmeasured token "the collection token of $id could not be minted"; return 1; }
@@ -38907,7 +38909,7 @@ _ws_collect_resume_eval() {   # id record... -> a RESUME: REAP_VERDICT `collecta
   _ws_collect_records_judge "$id" "$@" || return 1
   rec="$_WS_COLLECT_RECORD"; name="${rec##*/}"
   [[ "${_WS_QREC_BTIME-}" =~ ^[1-9][0-9]*$ ]] \
-    || { _ws_collect_refuse quarantine-kept "the quarantine record $rec records no birth time, so device and inode alone would vouch for what it names — it is kept for the operator"; return 1; }
+    || { _ws_refuse quarantine-kept "the quarantine record $rec records no birth time, so device and inode alone would vouch for what it names — it is kept for the operator"; return 1; }
   # THE QUARANTINE, asked as the fresh arm asks it (`_ws_collect_qcheck`,
   # READ-ONLY, mode included): ccd never reads a slot through a quarantine the
   # verb would refuse. A `~/.cc-tmp` PROVEN absent holds no quarantine to ask.
@@ -38919,15 +38921,15 @@ _ws_collect_resume_eval() {   # id record... -> a RESUME: REAP_VERDICT `collecta
   fi
   slot="$_WS_QREC_SLOT"; sleaf="$slot/leaf"; _WS_COLLECT_SLOT="$slot"
   if [[ -L "$slot" ]] || { [[ -e "$slot" ]] && [[ ! -d "$slot" ]]; }; then
-    _ws_collect_refuse quarantine-kept "the slot $slot is a link or not a directory — the collector never made it so; it is kept for the operator"
+    _ws_refuse quarantine-kept "the slot $slot is a link or not a directory — the collector never made it so; it is kept for the operator"
     return 1
   elif [[ -d "$slot" ]]; then
     ents=$(LC_ALL=C find -P "$slot" -mindepth 1 -maxdepth 1 -printf '%f/' 2>/dev/null) \
       || { _ws_collect_unmeasured slot "the slot $slot could not be listed"; return 1; }
     [[ -z "$ents" || "$ents" == leaf/ ]] \
-      || { _ws_collect_refuse quarantine-kept "the slot $slot holds what the collector never put there — it is kept for the operator"; return 1; }
+      || { _ws_refuse quarantine-kept "the slot $slot holds what the collector never put there — it is kept for the operator"; return 1; }
     if [[ -L "$sleaf" ]] || { [[ -e "$sleaf" ]] && [[ ! -d "$sleaf" ]]; }; then
-      _ws_collect_refuse quarantine-kept "$sleaf is a link or not a directory — a slot leaf that is not the one moved there is kept for the operator"
+      _ws_refuse quarantine-kept "$sleaf is a link or not a directory — a slot leaf that is not the one moved there is kept for the operator"
       return 1
     elif [[ -d "$sleaf" ]]; then
       _ws_collect_ident "$sleaf" "$_WS_QREC_DEV:$_WS_QREC_INO" "$_WS_QREC_BTIME"; rc=$?
@@ -38938,7 +38940,7 @@ _ws_collect_resume_eval() {   # id record... -> a RESUME: REAP_VERDICT `collecta
         _ws_reclaim_absent "$sleaf"; rc=$?
         (( rc != 0 )) || { _ws_collect_unmeasured slot "$sleaf vanished while its identity was read — the next pass asks again"; return 1; }
         (( rc != 2 )) || { _ws_collect_unmeasured slot "$_WS_ABSENT_WHY"; return 1; }
-        _ws_collect_refuse quarantine-kept "$sleaf is $(_plat_devino "$sleaf" 2>/dev/null) born $(_plat_btime "$sleaf" 2>/dev/null), not the $_WS_QREC_DEV:$_WS_QREC_INO born $_WS_QREC_BTIME its record names — it is kept for the operator"
+        _ws_refuse quarantine-kept "$sleaf is $(_plat_devino "$sleaf" 2>/dev/null) born $(_plat_btime "$sleaf" 2>/dev/null), not the $_WS_QREC_DEV:$_WS_QREC_INO born $_WS_QREC_BTIME its record names — it is kept for the operator"
         return 1
       fi
       sstate=leaf
@@ -38956,9 +38958,9 @@ _ws_collect_resume_eval() {   # id record... -> a RESUME: REAP_VERDICT `collecta
     *) _ws_collect_unmeasured identity "the device, inode or birth time of $orig could not be read"; return 1 ;;
   esac
   case "$sstate:$ostate" in
-    leaf:match)  _ws_collect_refuse quarantine-kept "the directory record $rec names stands both in $slot and at $orig — one of them is not what the collector moved; both are kept for the operator"; return 1 ;;
+    leaf:match)  _ws_refuse quarantine-kept "the directory record $rec names stands both in $slot and at $orig — one of them is not what the collector moved; both are kept for the operator"; return 1 ;;
     leaf:absent) phase=moved ;;
-    leaf:*)      _ws_collect_refuse quarantine-kept "something stands at $orig, the path the leaf in $slot was moved from — the original path was retaken, so the leaf cannot go back; the record, the slot and its leaf are kept for the operator"; return 1 ;;
+    leaf:*)      _ws_refuse quarantine-kept "something stands at $orig, the path the leaf in $slot was moved from — the original path was retaken, so the leaf cannot go back; the record, the slot and its leaf are kept for the operator"; return 1 ;;
     absent:match) phase=unmoved ;;
     *)          # NEITHER PLACE holds it, which is believed only on the device
                 # the record carries (`moved` and `unmoved` prove it by identity).
@@ -38971,17 +38973,17 @@ _ws_collect_resume_eval() {   # id record... -> a RESUME: REAP_VERDICT `collecta
   # and a retake usually brings a row whose retryable `registered` would hide it.
   _ws_collect_registered "$id"; rc=$?
   (( rc != 2 )) || { _ws_collect_unmeasured registry "$_WS_COLLECT_REG_WHY"; return 1; }
-  (( rc != 1 )) || { _ws_collect_refuse registered "$_WS_COLLECT_REG_WHY"; return 1; }
+  (( rc != 1 )) || { _ws_refuse registered "$_WS_COLLECT_REG_WHY"; return 1; }
   if [[ "$phase" == moved ]]; then
     _ws_path_users "$sleaf"; rc=$?
     (( rc != 2 )) || { _ws_collect_unmeasured in-use "${_WS_PATH_USERS_WHY-}"; return 1; }
-    (( rc != 1 )) || { _ws_collect_refuse in-use "a process of this uid still uses $sleaf (pid ${_WS_PATH_USERS_PIDS-}: ${_WS_PATH_USERS_WHY-})"; return 1; }
+    (( rc != 1 )) || { _ws_refuse in-use "a process of this uid still uses $sleaf (pid ${_WS_PATH_USERS_PIDS-}: ${_WS_PATH_USERS_WHY-})"; return 1; }
     _ws_path_users "$orig"; rc=$?
     (( rc != 2 )) || { _ws_collect_unmeasured in-use "${_WS_PATH_USERS_WHY-}"; return 1; }
-    (( rc != 1 )) || { _ws_collect_refuse in-use "a process of this uid still uses $orig, the spelling $sleaf had before its move (pid ${_WS_PATH_USERS_PIDS-}: ${_WS_PATH_USERS_WHY-})"; return 1; }
+    (( rc != 1 )) || { _ws_refuse in-use "a process of this uid still uses $orig, the spelling $sleaf had before its move (pid ${_WS_PATH_USERS_PIDS-}: ${_WS_PATH_USERS_WHY-})"; return 1; }
     _ws_collect_rows_clear "$id" "$orig"; rc=$?
     (( rc != 2 )) || { _ws_collect_unmeasured rows "${_WS_COLLECT_ROWS_WHY-}"; return 1; }
-    (( rc != 1 )) || { _ws_collect_refuse containment-unproven "${_WS_COLLECT_ROWS_WHY-}"; return 1; }
+    (( rc != 1 )) || { _ws_refuse containment-unproven "${_WS_COLLECT_ROWS_WHY-}"; return 1; }
   fi
   _ws_collect_paused || return 1
   # THE RESUME TOKEN binds the id, the record's name, the phase read off the
@@ -39050,8 +39052,8 @@ _ws_collect_witness_judge() {   # id -> 0 the witness parsed (_WS_WIT_* set) or,
     (( arc != 0 )) || return 0
     (( arc != 2 )) || return 1
   fi
-  (( rc != 1 )) || { _ws_collect_refuse not-witnessed "no witness stands for $id at $(_ws_tmproot_witness_file "$id") and no quarantine record names it — there is nothing to collect"; return 1; }
-  (( rc != 2 )) || { _ws_collect_refuse witness-mismatch "the witness $(_ws_tmproot_witness_file "$id") cannot be read as ccd writes it — a temp root nothing vouches for is offered to the operator, never taken"; return 1; }
+  (( rc != 1 )) || { _ws_refuse not-witnessed "no witness stands for $id at $(_ws_tmproot_witness_file "$id") and no quarantine record names it — there is nothing to collect"; return 1; }
+  (( rc != 2 )) || { _ws_refuse witness-mismatch "the witness $(_ws_tmproot_witness_file "$id") cannot be read as ccd writes it — a temp root nothing vouches for is offered to the operator, never taken"; return 1; }
 }
 
 _ws_collect_records_judge() {   # id record... -> 0 the ONE record parsed and names id (_WS_COLLECT_RECORD and
@@ -39067,14 +39069,14 @@ _ws_collect_records_judge() {   # id record... -> 0 the ONE record parsed and na
   local id="$1" rec name rc
   shift
   (( $# == 1 )) \
-    || { _ws_collect_refuse quarantine-kept "$# quarantine records name $id — a resume completes one record and never chooses between several; they are kept for the operator"; return 1; }
+    || { _ws_refuse quarantine-kept "$# quarantine records name $id — a resume completes one record and never chooses between several; they are kept for the operator"; return 1; }
   rec="$1"; name="${rec##*/}"; _WS_COLLECT_RECORD="$rec"
   _ws_collect_record_read "$rec"; rc=$?
   (( rc != 1 )) || { _ws_collect_unmeasured records "the quarantine record $rec vanished while it was read"; return 1; }
   (( rc != 3 )) || { _ws_collect_unmeasured quarantine "${_WS_QPATH_WHY:-the physical ~/.cc-tmp could not be resolved} — the slot of $rec was never derived, or whether it stands was never measured; the record stays as it is, and the next pass asks again"; return 1; }
-  (( rc == 0 )) || { _ws_collect_refuse quarantine-kept "the quarantine record $rec cannot be read as ccd writes it — it, and whatever it names, are kept for the operator"; return 1; }
+  (( rc == 0 )) || { _ws_refuse quarantine-kept "the quarantine record $rec cannot be read as ccd writes it — it, and whatever it names, are kept for the operator"; return 1; }
   [[ "${_WS_QREC_ID-}" == "$id" ]] \
-    || { _ws_collect_refuse quarantine-kept "the quarantine record $rec names ${_WS_QREC_ID-nothing}, not $id — it is kept for the operator"; return 1; }
+    || { _ws_refuse quarantine-kept "the quarantine record $rec names ${_WS_QREC_ID-nothing}, not $id — it is kept for the operator"; return 1; }
 }
 
 _ws_collect_prelock() {   # id -> 0 the reap lock may be opened; 1 an answer is set (REAP_VERDICT and REAP_DETAIL;
@@ -39223,7 +39225,7 @@ _ws_collect_audit_contained() {   # `_ws_collect_audit`'s body, run under `_ws_r
     (( ${#_WS_ASIDES[@]} == 0 )) || inpop=1
   fi
   if (( ! inpop )); then
-    _ws_collect_refuse not-witnessed "no witness stands for $id and no quarantine record names it — ccd never handed out a temp root under this id that is still to be collected" || :
+    _ws_refuse not-witnessed "no witness stands for $id and no quarantine record names it — ccd never handed out a temp root under this id that is still to be collected" || :
     _ws_collect_audit_doc "$id"; return
   fi
   _ws_collect_mv_ok || {
@@ -39242,7 +39244,7 @@ _ws_collect_audit_contained() {   # `_ws_collect_audit`'s body, run under `_ws_r
     _ws_collect_audit_doc "$id"; return; }
   if ! flock -n "$lfd"; then
     exec {lfd}>&-
-    _ws_collect_refuse in-progress "another ccd process holds the reap lock of $id — a reap, reclaim, expiry, restore or collection of it is running" || :
+    _ws_refuse in-progress "another ccd process holds the reap lock of $id — a reap, reclaim, expiry, restore or collection of it is running" || :
     _ws_collect_audit_doc "$id"; return
   fi
   _ws_collect_fork "$id" || :
@@ -40184,7 +40186,7 @@ _ws_collect_locked() {   # token id surface actor reason — everything the reap
 # @ccd-lib:loose — the loose arm of ws-collect (DR-13, D-6625; fleet disk retention spec 2026-10-23 §2.4) moved to ccd/lib/disk-retention.sh (D-6913)
 
 # ── ws-reap's mirrors: a reclaim breadcrumb, a leaf link (spec 2026-09-22 §5.5-§5.6) ─ MIRROR-BEGIN ──
-_ws_reap_leaf_ok() { [[ ! -L "${1%"${1##*[!/]}"}" ]] || _reap_refuse containment-unproven "$1 is a symbolic link — ccd never follows a link to a tree it would delete, so it cannot prove the tree at that path is $2's own"; }   # workdir id -> 0, or rc 1 refused
+_ws_reap_leaf_ok() { [[ ! -L "${1%"${1##*[!/]}"}" ]] || _ws_refuse containment-unproven "$1 is a symbolic link — ccd never follows a link to a tree it would delete, so it cannot prove the tree at that path is $2's own"; }   # workdir id -> 0, or rc 1 refused
 _ws_reclaim_mirror() {   # id breadcrumb -> ws-reap's refusal of a `reclaim:` or an `expire:` breadcrumb, on stdout
   _crumb_parse "$2" || :
   if [[ "$_CRUMB_ACT" == expire ]]; then   # ws-expire's interrupted work (workspace lifecycle, spec 2026-09-24 §5.3)

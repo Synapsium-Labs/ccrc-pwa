@@ -1797,13 +1797,13 @@ describe('the quiet "with coordinator" state (D-5296)', () => {
     expect(document.querySelector('.sess-ask-state')?.textContent).toBe('held — project-a-calm-mesa may answer');
   });
 
-  it('Needs-you does not list it: the bucket bar has no Attention chip for it, and does for the lapsed row', async () => {
+  it('Needs-you does not list it: the bucket bar has no Needs you chip for it, and does for the lapsed row', async () => {
     const { BucketBar } = await import('../src/fleet/BucketBar');
     const quiet = render(<BucketBar sessions={[held()]} acks={{}} ackAll={() => {}} />);
-    expect(quiet.container.textContent).not.toContain('Attention');
+    expect(quiet.container.textContent).not.toContain('Needs you');
     quiet.unmount();
     const loud = render(<BucketBar sessions={[held({ withCoordinator: null, bucket: 'attention' })]} acks={{}} ackAll={() => {}} />);
-    expect(loud.container.textContent).toContain('Attention');
+    expect(loud.container.textContent).toContain('Needs you');
   });
 
   // The guard that keeps the state off any row but the `working` one the hold

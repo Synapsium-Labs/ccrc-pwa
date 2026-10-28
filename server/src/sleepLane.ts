@@ -15,7 +15,7 @@ import {
 } from './coord/hibernate.js';
 import { RECLAIM_PAUSE_MARKER, programmeHoldOf } from './coord/rundefs.js';
 import { PRESENCE_OPEN_TTL_MS, TERMINAL_RUN_STATES, type FleetSession } from '../../shared/api.js';
-import { readSwitches, type MarkerSwitchName } from '../../shared/switches.js';
+import { readSwitches, type MarkerSwitchName, type SwitchReading } from '../../shared/switches.js';
 import {
   RUN_DONE_POLICY, STOP_DONE_ACTOR, STOP_DONE_DISABLED_MARKER, STOP_DONE_GRACE_MS, STOP_DONE_MEASURES_PER_PASS,
   STOP_DONE_PARKED_STATES, STOP_DONE_PER_PASS, STOP_DONE_RETRY_MS,
@@ -53,7 +53,9 @@ import type { LaneName } from './laneSchedule.js';
  * the frame assembles from it (`rowAtAct`; unreadable holds `unmeasured`), the store, presence and the live state are
  * read AGAIN — the tick's roster read alone is kept when the re-read row has none — the row's `.hold` is classified
  * again (`heldKindOf`) and the verdict asked again; where the row says so the verb is asked again beside the argv (a box
- * can be re-handshaken in the wait); only a `hibernate` answer composes `ccd hibernate <id>` (`CCD_ARGV.hibernate`,
+ * can be re-handshaken in the wait); then, the read nearest the argv, the lane's kill and arming switches over a fresh
+ * registry listing (D-7047; OA-C9 (a), D-7051): one raised, an arming switch gone or an unlistable registry holds
+ * `switched-off`, with no retry memory; only a `hibernate` answer composes `ccd hibernate <id>` (`CCD_ARGV.hibernate`,
  * the lane declared by `sweepDec` under its own actor). ccd re-measures the box-local half at the act and the one hold
  * the server cannot see (`attached`); its refusal, `ccd: session-busy: <reason>` at exit 3, is read off a call that ran
  * (D-6840). The act never throws.
@@ -81,6 +83,8 @@ export interface SleepActPort<Row> {
   /** At the act: the registry record read again and the frame's row assembled from it (`readSessionRecord`, then
    *  `liveRowFor`). `ok: false` when either could not be read — the act then holds `unmeasured`. */
   readonly rowAtAct: (rec: SessionRecord) => Promise<{ ok: true; row: Row } | { ok: false }>;
+  /** At the act (D-7047): the registry listed again, for the lane's switches; null when it cannot be listed. */
+  readonly listing: () => Promise<readonly string[] | null>;
 }
 
 /** A verdict as the executor reads it: each lane's own verdict type (`StopDoneVerdict`, `HibernateVerdict`) is one. */
@@ -105,7 +109,26 @@ export type SleepActResult<V, St> =
   | { readonly kind: 'hibernated'; readonly verdict: Asleep<V>; readonly store: St }
   | { readonly kind: 'held-at-act'; readonly verdict: V | null }
   | { readonly kind: 'skipped'; readonly detail: string; readonly by: 'verb' | 'ccd' }
-  | { readonly kind: 'failed'; readonly detail: string; readonly by: 'ccd' | 'throw' };
+  | { readonly kind: 'failed'; readonly detail: string; readonly by: 'ccd' | 'throw' }
+  | { readonly kind: 'switched-off'; readonly detail: MarkerSwitchName | typeof REGISTRY_UNLISTABLE };
+
+/** `switched-off`'s detail when the registry could not be listed at the act: it holds (fail shut, D-7047). */
+const REGISTRY_UNLISTABLE = 'registry-unlistable';
+
+/** What a `switched-off` detail says in a lane's line: `<marker> was raised`, or the registry named unlistable. */
+const switchedOffCause = (detail: string): string =>
+  detail === REGISTRY_UNLISTABLE ? 'the registry was unlistable' : `${detail} was raised`;
+
+/** The act's switch read (D-7047; OA-C9 (a), D-7051): the first of the lane's switches that holds it, or null. Any of
+ *  them unmeasurable holds (fail shut); then a raised kill switch; then an arming switch no longer set. */
+function switchedOffAt(lane: { readonly kill: readonly MarkerSwitchName[]; readonly arming: MarkerSwitchName | null },
+  s: SwitchReading): MarkerSwitchName | typeof REGISTRY_UNLISTABLE | null {
+  const read: readonly MarkerSwitchName[] = lane.arming === null ? lane.kill : [...lane.kill, lane.arming];
+  if (read.some((k) => s[k] === 'unmeasurable')) return REGISTRY_UNLISTABLE;
+  const raised = lane.kill.find((k) => s[k] === 'set');
+  if (raised !== undefined) return raised;
+  return lane.arming !== null && s[lane.arming] !== 'set' ? lane.arming : null;
+}
 
 /** The pass's facts every ask reads: the listing, the quiet threshold, the box's answers and the binding read. */
 export interface SleepPassFacts<St> {
@@ -306,7 +329,8 @@ export async function sleepPass<D extends SleepDepsBase, M, Row extends { readon
 }
 
 /** The act, for one row the pass answered `hibernate` for: on the serialiser, then the session's queue; everything
- *  re-read and the verdict asked again inside them; the verb again where the lane says so; only then `ccd hibernate`.
+ *  re-read and the verdict asked again inside them; the verb again where the lane says so; the switches over a fresh
+ *  listing (D-7047); only then `ccd hibernate`.
  *  Never throws. */
 export async function sleepAct<D extends SleepDepsBase, M, Row extends { readonly subagents: FleetSession['subagents'] }, St, V extends SleepAnswer, O>(
   lane: SleepLane<D, M, Row, St, V, O>, deps: D, mem: M, f: SleepPassFacts<St>, port: ArmedPort<Row>,
@@ -329,6 +353,9 @@ export async function sleepAct<D extends SleepDepsBase, M, Row extends { readonl
       if (lane.verb === 'arms-and-asked-at-act' && !ccdCan(port.fleetState, 'hibernate')) {
         return { kind: 'skipped', detail: 'no-verb', by: 'verb' };
       }
+      // D-7047: the switches over a fresh listing, the read nearest the argv. No retry memory: the next pass asks again.
+      const off = switchedOffAt(lane, readSwitches(await port.listing()));
+      if (off !== null) return { kind: 'switched-off', detail: off };
       const res = await port.runCcd(CCD_ARGV.hibernate(id, sweepDec(port.fleetState, lane.actor), holdOkOf(v)));
       if (!res.ok) {
         holdOff();
@@ -375,6 +402,8 @@ export interface StopDoneSweepDeps {
   readonly serial: (<T>(fn: () => Promise<T>) => Promise<T>) | null;
   /** The process's per-session write queue. */
   readonly queueRun: <T>(id: string, fn: () => Promise<T>) => Promise<T>;
+  /** At the act (D-7047): the registry listed again, for the kill switches; null when it cannot be listed. */
+  readonly listing: () => Promise<readonly string[] | null>;
   readonly startedAt: number;
   readonly now: () => number;
 }
@@ -395,7 +424,8 @@ export type StopDoneOutcome =
   | { readonly id: string; readonly kind: 'hibernated'; readonly runId: number }
   | { readonly id: string; readonly kind: 'skipped'; readonly detail: string }
   | { readonly id: string; readonly kind: 'held-at-act'; readonly verdict: StopDoneVerdict }
-  | { readonly id: string; readonly kind: 'failed'; readonly detail: string };
+  | { readonly id: string; readonly kind: 'failed'; readonly detail: string }
+  | { readonly id: string; readonly kind: 'switched-off'; readonly detail: string };
 
 /** The row's `.hold`, classified (D-6091): the grammar through `programmeHoldOf`, the one reader of
  *  `HOLD_REASON_PATTERN`, and a run suffix's state through the store's `run` read. Any read that cannot be made, or
@@ -576,6 +606,7 @@ export const RUN_DONE_LANE: SleepLane<StopDoneSweepDeps, StopDoneMemory, StopDon
     if (r.kind === 'hibernated') console.warn(`ccrc-server: stop-done: put ${id} to sleep (run ${r.verdict.runId} ${runStateWords(runStateOf(r.store))}, idle; D-5370, D-5427, D-6091, D-6092)`);
     else if (r.kind === 'skipped') console.warn(`ccrc-server: stop-done: ccd re-measured ${id} as ${r.detail} — not asked again for an hour`);
     else if (r.kind === 'failed') console.warn(`ccrc-server: stop-done: the hibernate of ${id} failed (${r.detail}) — not asked again for an hour`);
+    else if (r.kind === 'switched-off') console.warn(`ccrc-server: stop-done: ${id} was not put to sleep: ${switchedOffCause(r.detail)} during the pass`);
   },
   outcome: {
     judged: () => null,
@@ -610,6 +641,8 @@ export interface HibernateActPort {
   /** At the act: the registry record read again and the frame's row assembled from it (`readSessionRecord`, then
    *  `liveRowFor`). `ok: false` when either could not be read — the act then holds `unmeasured`. */
   readonly rowAtAct: (rec: SessionRecord) => Promise<{ ok: true; row: HibernateRow } | { ok: false }>;
+  /** At the act (D-7047): the registry listed again, for the kill and arming switches; null when it cannot be listed. */
+  readonly listing: () => Promise<readonly string[] | null>;
 }
 
 export interface HibernateSweepDeps {
@@ -643,7 +676,8 @@ export type HibernateActOutcome =
   | { readonly kind: 'hibernated' }
   | { readonly kind: 'held-at-act'; readonly verdict: HibernateVerdict }
   | { readonly kind: 'skipped'; readonly detail: string }
-  | { readonly kind: 'failed'; readonly detail: string };
+  | { readonly kind: 'failed'; readonly detail: string }
+  | { readonly kind: 'switched-off'; readonly detail: string };
 export interface HibernateSweepOutcome {
   readonly id: string;
   readonly verdict: HibernateVerdict;
@@ -773,6 +807,8 @@ export const IDLE_HOURS_LANE: SleepLane<HibernateSweepDeps, HibernateSweepMemory
       noteAct(deps, mem, id, `ccrc-server: hibernate-skip ${id}: ccd re-measured it as ${r.detail} — asked again next sweep`);
     } else if (r.kind === 'failed') {
       noteAct(deps, mem, id, `ccrc-server: hibernate of ${id} failed (${r.by === 'throw' ? r.detail : r.detail.trim() || 'no stderr'}) — asked again next sweep`);
+    } else if (r.kind === 'switched-off') {
+      noteAct(deps, mem, id, `ccrc-server: hibernate-skip ${id}: ${switchedOffCause(r.detail)} during the pass — asked again next sweep`);
     }
   },
   outcome: {

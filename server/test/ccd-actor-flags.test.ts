@@ -58,6 +58,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { readFileSync, mkdirSync } from 'node:fs';
 import { makeCcdHarness, type CcdHarness, ccdSource } from './ccdWsHelpers.js';
+import { refuseWords } from './census-w5/ccdHelpers.js';
 import { readJournal } from './lifecycleHelpers.js';
 import { stubFn } from './ccdStub.js';
 
@@ -648,7 +649,7 @@ describe('ws-rename answers flag refusals the way it answers every other refusal
     // helper-vs-literal question.
     const src = ccdSource();
     const tokens = new Set<string>();
-    for (const m of src.matchAll(/_reap_refuse\s+([a-zA-Z][a-zA-Z0-9_-]*)\b/g)) tokens.add(m[1]!);
+    for (const w of refuseWords('reap')) tokens.add(w);
     for (const m of src.matchAll(/"refused":"([a-zA-Z0-9-]+)"/g)) tokens.add(m[1]!);
     for (const m of src.matchAll(/'!([a-zA-Z0-9-]+)/g)) tokens.add(m[1]!);
     for (const m of src.matchAll(/"verdict":"([a-zA-Z0-9-]+)"/g)) {

@@ -13,6 +13,9 @@
 //                       "the open groups are ordered Needs you, Done, Working; the folded four follow"
 // The instrument-list suite's rows for these, and for PHONE_TABS alone, are that file's header's.
 import { describe, it, expect, expectTypeOf, afterEach } from 'vitest';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import ts from 'typescript';
 import { createElement } from 'react';
 import { render, cleanup } from '@testing-library/react';
 import type { FleetSession, SessionBucket } from '../../shared/api';
@@ -21,6 +24,7 @@ import { BUCKET_ORDER, sortFleet } from '../src/fleet/sortFleet';
 import { BucketBar } from '../src/fleet/BucketBar';
 import type { Acks } from '../src/lib/seen';
 import { fleetSession } from './fleetFixture';
+import { parseTs } from './literalWalker';
 
 const s = (over: Partial<FleetSession>): FleetSession =>
   fleetSession({ id: 'x', wrapper: 'claude9', home: 'claude9', project: 'p', workdir: '/p', statusUpdatedAt: 0, ...over });
@@ -31,13 +35,13 @@ describe('groupByStatus (D-5473)', () => {
   it('the open groups are ordered Needs you, Done, Working; the folded four follow', () => {
     const g = groupByStatus([], {});
     expect(g.map((x) => x.bucket)).toEqual(['attention', 'done', 'working', 'idle', 'cleanup', 'archived', 'dead']);
-    expect(g.map((x) => x.label)).toEqual(['Needs you', 'Done', 'Working', 'Idle', 'Cleanup', 'Archived', 'Dead']);
+    expect(g.map((x) => x.label)).toEqual(['Needs you', 'Done', 'Working', 'Idle', 'Cleanup', 'Archived', 'Exited']);
     expect(g.map((x) => x.folds)).toEqual([false, false, false, true, true, true, true]);
     // An empty group is kept, with a count of 0: the view decides.
     expect(g.every((x) => x.sessions.length === 0 && x.unseen === 0)).toBe(true);
   });
 
-  it('a dead session still dialogPending is in Dead, not Needs you', () => {
+  it('a dead session still dialogPending is in Exited, not Needs you', () => {
     const killed = s({ id: 'k', status: 'dead', dialogPending: true, hookState: 'waiting', bucket: 'dead' });
     const g = groupByStatus([killed], {});
     expect(g.find((x) => x.bucket === 'attention')!.sessions).toEqual([]);
@@ -95,7 +99,7 @@ describe('groupByStatus (D-5473)', () => {
     const barUnseen = new Map<SessionBucket, number>();
     heads.forEach((head, i) => {
       const badge = head.querySelector('.bucket-head-unseen');
-      barUnseen.set(shown[i]!, badge === null ? 0 : Number(badge.textContent));
+      barUnseen.set(shown[i]!, badge === null ? 0 : Number.parseInt(badge.textContent ?? '', 10));
     });
 
     for (const group of g) expect(group.unseen).toBe(barUnseen.get(group.bucket) ?? 0);
@@ -147,4 +151,28 @@ describe('needsReason (D-5473, D-5497)', () => {
       bucket: 'working', withCoordinator: { kind: 'approval', parentId: 'p-coord', since: 1, notifyAt: 2 },
     }))).toBeNull();
   });
+});
+
+// T3a (D-6331): the chips and the group heads speak ONE vocabulary. `BucketBar` used to type its own table of bucket
+// words, so a rename in `STATUS_GROUPS` left the two surfaces saying different things ("Attention" and "Needs you",
+// "Dead" and "Exited"). A SOURCE check, because no render can tell a derived word from a typed one that happens to match.
+it('BucketBar.tsx derives SECTION_LABEL from STATUS_GROUPS and holds no bucket-word literal', () => {
+  const file = path.join(import.meta.dirname, '..', 'src', 'fleet', 'BucketBar.tsx');
+  expect(readFileSync(file, 'utf8')).toMatch(/\bSTATUS_GROUPS\b/);
+
+  /** Every string a reader of the file could see as a literal: strings, template parts and JSX text. Comments are not
+   *  nodes, so they are not read. */
+  const literals: string[] = [];
+  const visit = (n: ts.Node): void => {
+    if (ts.isStringLiteral(n) || ts.isNoSubstitutionTemplateLiteral(n)) literals.push(n.text);
+    else if (ts.isTemplateExpression(n)) literals.push(n.head.text, ...n.templateSpans.map((sp) => sp.literal.text));
+    else if (ts.isJsxText(n)) literals.push(n.text);
+    n.forEachChild(visit);
+  };
+  visit(parseTs(file));
+  expect(literals.length, 'the walk reads literals at all').toBeGreaterThan(3);
+
+  const words = [...Object.values(STATUS_GROUPS).map((g) => g.label), 'Attention', 'Dead'];
+  const found = literals.flatMap((text) => words.filter((w) => new RegExp(`\\b${w}\\b`).test(text)).map((w) => `${w} in "${text}"`));
+  expect(found).toEqual([]);
 });

@@ -399,3 +399,29 @@ describe('ccrc history: the hook spools exactly SPOOL_SOURCES on SessionStart (s
     expect(m![1]!.split('|').sort()).toEqual([...members].sort());
   });
 });
+
+
+// ── ARCH-45 C5f (D-7075; plan 2026-10-27-consolidation-w5-ccd-helpers.md, spec K2): ccd mints every token through one
+// encoding, `_ws_reclaim_fingerprint`; `_ws_fingerprint` hands it the reap's fourteen `name=value` facts and pipes
+// nothing itself. APPENDED, with no import line, for the reason the blocks above state. `tokenMinters()` counts the
+// functions whose stdout is a `printf … | _plat_sha256 | cut` hash: 2 at the base, 1 here. May only shrink.
+describe('ARCH-45 C5f: one token minter in ccd’s source, `_ws_reclaim_fingerprint` (D-7075; may only shrink)', () => {
+  it('tokenMinters() is exactly ccd/ccd#_ws_reclaim_fingerprint', async () => {
+    const census = await import('../census-w5/ccdHelpers.js');
+    expect(census.tokenMinters().map((n) => `ccd/ccd#${n}`)).toEqual(['ccd/ccd#_ws_reclaim_fingerprint']);
+  });
+});
+
+// ── ARCH-45 C5e (D-7072; plan 2026-10-27-consolidation-w5-ccd-helpers.md, spec K2): ccd's two byte-identical
+// verdict-setting refusal helpers are one, `_ws_refuse`, and a call's family is the region it sits in. APPENDED, with no
+// import line, for the reason the blocks above state. The definitions count (`refuseHelperDefs()` is exactly
+// `ccd/ccd#_ws_refuse`) is `ccd-helpers-pin.test.ts`'s row; this one holds that neither old name comes back. May only shrink.
+describe('ARCH-45 C5e: no `_reap_refuse` or `_ws_collect_refuse` definition or call stands in ccd’s source (D-7072; may only shrink)', () => {
+  it('no definition and no call of either old name, in code or in a comment', async () => {
+    const census = await import('../census-w5/ccdHelpers.js');
+    const OLD = ['_reap_refuse', '_ws_collect_refuse'];
+    const defs = census.refuseHelperDefs().filter((d) => OLD.includes(d.name)).map((d) => `definition ${d.name} (line ${d.line})`);
+    const calls = census.refuseCalls().filter((c) => OLD.includes(c.name)).map((c) => `call at ${c.line}: ${c.text.trim()}`);
+    expect([...defs, ...calls]).toEqual([]);
+  });
+});

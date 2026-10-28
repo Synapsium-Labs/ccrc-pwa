@@ -56,7 +56,7 @@ export const STATUS_GROUPS: Record<SessionBucket, { readonly order: number; read
   idle: { order: 3, label: 'Idle', folds: true },
   cleanup: { order: 4, label: 'Cleanup', folds: true },
   archived: { order: 5, label: 'Archived', folds: true },
-  dead: { order: 6, label: 'Dead', folds: true },
+  dead: { order: 6, label: 'Exited', folds: true },
 };
 
 const ORDER: readonly SessionBucket[] =
@@ -68,9 +68,9 @@ export interface StatusGroup {
   /** In `sortFleet`'s order. */
   sessions: FleetSession[];
   /** Counted with `isUnseen`, the reader `BucketBar` and `groupFleet` use: its
-   *  BADGED precondition means an Idle, Working, Archived or Dead row never counts. */
+   *  BADGED precondition means an Idle, Working, Archived or Exited row never counts. */
   unseen: number;
-  /** Folded by default (Idle, Cleanup, Archived, Dead). */
+  /** Folded by default (Idle, Cleanup, Archived, Exited). */
   folds: boolean;
 }
 
