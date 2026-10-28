@@ -45,6 +45,9 @@ const { DARK, LIGHT, byName } = report.themes;
 const ALL_PALETTES = [['DARK ', DARK], ...Object.entries(byName)
   .map(([n, t]) => [n.toUpperCase(), t])];
 
+/** The nine distinct `--syn-*` hues of the code palette, one pair each on the well. */
+const SYN_HUES = ['comment', 'keyword', 'string', 'number', 'function', 'type', 'tag', 'attr', 'punct'];
+
 /** A token pair is named by its tokens.css custom property; the hex is looked
  *  up per theme, so there is no second copy of the palette to keep in sync. */
 const palette = (theme) => {
@@ -74,6 +77,12 @@ const palette = (theme) => {
     track: of('--limit-track'), lOk: of('--limit-ok'), lWarn: of('--limit-warn'), lCrit: of('--limit-critical'),
     diffAdd: of('--diff-add'), diffDel: of('--diff-del'),
     accentOnWell: of('--accent-on-well'),
+    // The code palette's nine distinct hues (T4a, D-6387): `--syn-deleted` and
+    // `--syn-inserted` alias --diff-del / --diff-add, which are paired above.
+    // Declared once in :root and spread under every [data-theme] block by
+    // loadThemes, except --syn-comment, which a palette may retune; `of`
+    // resolves each per palette, so no hex is typed here.
+    syn: Object.fromEntries(SYN_HUES.map((h) => [h, of(`--syn-${h}`)])),
     // --pr-merged (tokens.css) aliases --acct-violet, so it resolves to that
     // same hex per theme rather than being a second colour to keep in sync.
     prMerged: of('--pr-merged'),
@@ -294,6 +303,15 @@ const pairs = (T, name) => [
   [`${name} preview toggle / sheet`, T.accent, T.sheet, 4.5],
   [`${name} diff-add / well`, T.diffAdd, T.well, 4.5],
   [`${name} diff-del / well`, T.diffDel, T.well, 4.5],
+  // THE CODE PALETTE ON THE WELL (T4a, D-6387). Colour lives in the dark
+  // wells (spec §3.1): a code block, a tool box, an ANSI span and the terminal
+  // all paint a --syn-* hue on --bg-well, and the well is dark in EVERY
+  // palette. The rules that paint these hues were in the uncovered census with
+  // nothing measuring them, so a retuned hue, or a palette that overrode one,
+  // shipped unmeasured: a well hue nothing measures is a blind spot. Each hue is gated here at the
+  // 4.5 body floor (the code is 13px mono text), per palette, whichever rules
+  // use it.
+  ...SYN_HUES.map((h) => [`${name} syn-${h} / well`, T.syn[h], T.well, 4.5]),
   // The code block's COPY / COPIED label. --accent flips with the theme and the
   // light one is tuned for paper, so on a well — which is dark in BOTH themes —
   // it read 3.03:1 and shipped that way. --accent-on-well is the well spelling

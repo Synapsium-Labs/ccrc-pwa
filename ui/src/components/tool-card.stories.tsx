@@ -48,6 +48,36 @@ export const Errored: Story = {
   args: { result: result({ isError: true, text: 'grep: no such file (exit 2)' }) },
 };
 
+/** A failed call, collapsed. CHECK that the row says `failed` in the failure ink beside the red dot, at rest and without
+ *  expanding, and that it keeps its place when the summary is long (the summary shrinks, the word does not). */
+export const Failed: Story = {
+  args: {
+    use: use({ input: 'npm test -- --reporter=verbose ' + 'test/some/very/long/path/'.repeat(4) }),
+    result: result({ isError: true, text: 'npm ERR! Test failed. See above for more details.' }),
+  },
+};
+
+/** Coloured wells. CHECK that the hue classes paint on the dark well: green for the passing line, red for the failing
+ *  one, muted for the dim one. The app hands a renderer in (`renderWell`) that reads the text for colour; the design
+ *  system cannot import it, so this stand-in returns static spans to show the classes. */
+export const ColouredWells: Story = {
+  args: {
+    result: result({ text: 'ok  one\nFAIL two\n(2 skipped)' }),
+    renderWell: (part, text) =>
+      part === 'input' ? (
+        text
+      ) : (
+        <>
+          <span className="ansi-green">ok</span>
+          {'  one\n'}
+          <span className="ansi-red">FAIL</span>
+          {' two\n'}
+          <span className="ansi-muted">(2 skipped)</span>
+        </>
+      ),
+  },
+};
+
 /** Running — no result yet. CHECK that the dot BREATHES (glow means life), that
  *  the duration is a live m:ss elapsed clock rather than a finished total, and
  *  that expanding shows "running…" instead of an empty result well.
