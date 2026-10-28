@@ -57,6 +57,17 @@ describe('claims are advisory (D12)', () => {
                              // effect of a claim is that its holder's process is left
                              // running (hibernation's `claim` hold, spec §5.11). The
                              // count pin below keeps a second, differently-shaped use out.
+      'depsShedPass.ts',     // D-7278: the deps-shed arm of the run-done row reads the live claims
+                             // once per pass and passes one boolean per row, and a live claim
+                             // only HOLDS the server's own removal of the HOLDER's ignored
+                             // dependency directories (`claim`). It never refuses, delays or
+                             // redirects another party's work, and it never enforces anything:
+                             // the only effect of a claim is that the holder's node_modules
+                             // stay on disk. A missing claim sheds nothing by itself. The call
+                             // count pin below keeps a second use out.
+      'depsShed.ts',         // D-7278: the arm's L1 verdict names the field in a docstring and
+                             // only reads the boolean the pass hands it (`claim` → hold). It
+                             // carries no call, which the pin below holds at zero.
     ]);
     const holders = walk(srcRoot)
       .filter((f) => f.endsWith('.ts'))
@@ -94,5 +105,13 @@ describe('claims are advisory (D12)', () => {
     expect(claimCalls.map((c) => c.callee),
       'sleepLane.ts gained or lost an activeClaims call site — argue the D12 shape here before re-pinning')
       .toEqual(['coord.activeClaims', 'coord.activeClaims']);
+    // The deps-shed arm's exception (D-7278), held by COUNT of CALLS the same way: ONE `deps.coord.activeClaims()` in
+    // the pass's batched `storeReads`, feeding the `claim` hold, and NONE in the L1 verdict, which reads a boolean.
+    const shedCalls = (f: string) => parsedFile(path.join(srcRoot, f)).calls.filter((c) => c.name === 'activeClaims')
+      .map((c) => c.callee);
+    expect(shedCalls('depsShedPass.ts'),
+      'depsShedPass.ts gained or lost an activeClaims call site — argue the D12 shape here before re-pinning')
+      .toEqual(['deps.coord.activeClaims']);
+    expect(shedCalls('depsShed.ts'), 'the deps-shed verdict reads the store through the pass, never itself').toEqual([]);
   });
 });
