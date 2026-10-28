@@ -214,7 +214,7 @@ import { CHILD_RECLAIM_SWEEP_MS, COLLECT_OBSERVE_INTERVAL_MS, DIVERGENCE_SWEEP_M
 import type { ChildReclaimCollectInput } from './childReclaimSweep.js';
 import { NO_FLEET_IDENTITY } from './fleetidentity.js';
 import { SLEEP_LANES, hibernatePass, stopDonePass, type HibernateSweepMemory, type StopDoneMemory } from './sleepLane.js';
-import { DEPS_SHED_STAMP_SUFFIX, depsShedPass, type DepsShedMemory } from './depsShedPass.js';
+import { DEPS_SHED_STAMP_SUFFIX, depsShedMemory, depsShedPass, type DepsShedMemory } from './depsShedPass.js';
 import type { SleepPolicyName } from './sleep.js';
 import { StaleArchiveBeat } from './staleArchiveBeat.js';
 import { wakeAdmit, type WakeKind } from './coord/wakeBudget.js';
@@ -1258,7 +1258,7 @@ export class FleetWatcher {
   private readonly stopDoneMemory: StopDoneMemory = { retryAt: new Map() };
   /** The deps-shed arm of the run-done row (D-7278, `depsShedPass.ts`): its retry hold-off and the sleeps its shadow
    *  already reported. In memory only. It runs in `sleepRunDone`, after the stop-done pass, on the same serialiser. */
-  private readonly depsShedMemory: DepsShedMemory = { retryAt: new Map(), reported: new Map() };
+  private readonly depsShedMemory: DepsShedMemory = depsShedMemory();
   private stopDoneSerial: (<T>(fn: () => Promise<T>) => Promise<T>) | null = null;
   /** The process start both sleep lanes hold `viewer` against (presence is never persisted; D-7045: one field, set at
    *  construction, where each lane had its own holding the same instant). */

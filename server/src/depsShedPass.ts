@@ -13,7 +13,7 @@ import { CHILD_BIRTH_SKEW_MS } from './coord/childSpent.js';
 import { childReclaimCoordinated } from './childReclaimSweep.js';
 import { RUN_DONE_LANE, heldKindOf } from './sleepLane.js';
 import {
-  DEPS_SHED_ACTOR, DEPS_SHED_RETRY_MS, depsShedVerdict, type DepsShedChair, type DepsShedInput, type DepsShedStamp,
+  DEPS_SHED_ACTOR, DEPS_SHED_FINAL_REFUSALS, DEPS_SHED_RETRY_MAX_MS, DEPS_SHED_RETRY_MS, depsShedVerdict, type DepsShedChair, type DepsShedInput, type DepsShedStamp,
   type DepsShedStoreRead, type DepsShedVerdict,
 } from './depsShed.js';
 import { PRESENCE_OPEN_TTL_MS, type FleetSession } from '../../shared/api.js';
@@ -34,15 +34,30 @@ import { DEPS_SHED_LIVE_MARKER, readSwitches, type MarkerSwitchName } from '../.
  * be removed", with the box's own count and bytes. Armed, it composes the act itself.
  *
  * ONE PASS. The switches over the tick's listing; nothing until the serialiser is handed over; the population (every
- * sleeping, non-archived workspace row with a record, not in its retry hold-off, and in shadow not already reported
- * for this sleep); the store read once for all of them; each row's shed stamp read only when the listing names it;
- * the verdict for each; at most `CCRC_DEPS_SHED_PER_PASS` of the `shed` answers, oldest clock first, acted on.
+ * sleeping, non-archived workspace row with a record, not in its retry hold-off, not settled for this sleep, and in
+ * shadow not already reported for this sleep); the store read once for all of them; each row's shed stamp read only
+ * when the listing names it; the verdict for each; at most `CCRC_DEPS_SHED_PER_PASS` of the `shed` answers acted on,
+ * rows the box has not refused this sleep first, then oldest clock first.
  *
- * ONE ACT. On the coordination serialiser and then the session's queue: the row assembled again (`rowAtAct`), the
- * store, presence and the stamp read again, the hold classified again and the verdict asked again; then the capability,
- * and the kill and arming switches over a fresh listing, the read nearest the argv (an arming switch gone since the
- * pass holds; one raised since the pass leaves this act a dry run, the safe direction). The box re-proves the rest
- * (`ccd ws-shed-deps`). A refusal or failure is not asked again for `DEPS_SHED_RETRY_MS`. The act never throws.
+ * ONE ACT. On the session's queue (armed: on the coordination serialiser first, below): the row assembled again
+ * (`rowAtAct`), the store, presence and the stamp read again, the hold classified again and the verdict asked again;
+ * then the capability, and the kill and arming switches over a fresh listing, the read nearest the argv (an arming
+ * switch gone since the pass holds; one raised since the pass leaves this act a dry run, the safe direction). The box
+ * re-proves the rest (`ccd ws-shed-deps`). The act never throws.
+ *
+ * THE SERIALISER, ARMED ONLY. The shadow's dry run removes nothing, so the session's queue and the box's re-proof are
+ * enough and it never holds the coordination serialiser: dispatch, claims and closes never queue behind its `du`, `git
+ * status` and process walk. The armed act holds it from the verdict's re-read to the box's answer, because a dispatch
+ * or claim that would wake or bind this session must not land between the store read that says its work is finished
+ * and the removal. The hold's budget: at most `CCRC_DEPS_SHED_PER_PASS` acts (default 1) a `sleepRunDone` pass, each
+ * bounded by the verb's runner row (`CCD_VERB_TIMEOUT_MS['ws-shed-deps']`, 240 s, of which a healthy act uses seconds),
+ * and only once a sleep per row.
+ *
+ * REFUSALS. A refusal or failure holds the row off for `DEPS_SHED_RETRY_MS`, doubled for each further one in the same
+ * sleep up to `DEPS_SHED_RETRY_MAX_MS`, and the row then sorts after every row the box has not refused this sleep, so a
+ * set of rows that keep refusing (a leaked worker holding its node_modules) never starves a fresh one of the per-pass
+ * slot. `nothing-to-shed` and `already-shed` (`DEPS_SHED_FINAL_REFUSALS`) stay true for the whole sleep: the row is not
+ * asked again until it sleeps anew.
  */
 
 /** The run-done row's kill switches, which stop this pass too: the lane row's own list, read, never respelled. */
@@ -82,7 +97,15 @@ export interface DepsShedMemory {
   readonly retryAt: Map<string, number>;
   /** Shadow: the stop stamp (`stoppedBy.at`) of the sleep a row's "would" row was written for. */
   readonly reported: Map<string, number>;
+  /** The stop stamp of the sleep the box answered a final refusal for (`DEPS_SHED_FINAL_REFUSALS`): not asked again. */
+  readonly settled: Map<string, number>;
+  /** Per row, the sleep (its stop stamp) and how many refusals or failures the box has answered in it. */
+  readonly refusals: Map<string, { readonly at: number; readonly n: number }>;
 }
+
+/** An empty memory: the watcher's, and each test's. */
+export const depsShedMemory = (): DepsShedMemory =>
+  ({ retryAt: new Map(), reported: new Map(), settled: new Map(), refusals: new Map() });
 
 export type DepsShedOutcome =
   | { readonly id: string; readonly kind: 'shed' | 'would-shed'; readonly dirs: number; readonly bytes: number | null }
@@ -209,14 +232,14 @@ export async function depsShedPass(
   const armed = switches[DEPS_SHED_LIVE_MARKER] === 'set';
   const now = deps.now();
   for (const [id, until] of [...mem.retryAt]) if (until <= now) mem.retryAt.delete(id);
-  const seen = new Set(sessions.map((s) => s.id));
-  for (const [id, at] of [...mem.reported]) {
-    const s = sessions.find((x) => x.id === id);
-    if (!seen.has(id) || s?.stoppedBy?.at !== at) mem.reported.delete(id);
-  }
+  const sleepOf = new Map(sessions.map((s) => [s.id, s.stoppedBy?.at] as const));
+  // Each per-sleep memory lapses when its row is gone or sleeps anew.
+  for (const m of [mem.reported, mem.settled]) for (const [id, at] of [...m]) if (sleepOf.get(id) !== at) m.delete(id);
+  for (const [id, r] of [...mem.refusals]) if (sleepOf.get(id) !== r.at) mem.refusals.delete(id);
   const recs = new Map(records.map((r) => [r.id, r] as const));
   const pop = sessions.filter((s) => s.stoppedBy !== null && s.workspace !== null && s.archivedAt === null && recs.has(s.id)
-    && !mem.retryAt.has(s.id) && (armed || mem.reported.get(s.id) !== s.stoppedBy.at));
+    && !mem.retryAt.has(s.id) && mem.settled.get(s.id) !== s.stoppedBy.at
+    && (armed || mem.reported.get(s.id) !== s.stoppedBy.at));
   if (pop.length === 0) return [];
   const reads = storeReads(deps, pop, recs, now);
   const due: Array<{ readonly row: FleetSession; readonly clockAt: number }> = [];
@@ -224,7 +247,9 @@ export async function depsShedPass(
     const v = depsShedVerdict(inputOf(deps, row, reads.get(row.id)!, await stampOf(deps, names, row.id), names, now));
     if (v.act === 'shed') due.push({ row, clockAt: v.clockAt });
   }
-  due.sort((a, b) => a.clockAt - b.clockAt || (a.row.id < b.row.id ? -1 : a.row.id > b.row.id ? 1 : 0));
+  const refused = (r: FleetSession): number => (mem.refusals.has(r.id) ? 1 : 0);
+  due.sort((a, b) => refused(a.row) - refused(b.row) || a.clockAt - b.clockAt
+    || (a.row.id < b.row.id ? -1 : a.row.id > b.row.id ? 1 : 0));
   const out: DepsShedOutcome[] = [];
   for (const d of due.slice(0, deps.config.perPass)) {
     out.push(await depsShedAct(deps, mem, serial, armed, d.row, recs.get(d.row.id)!));
@@ -238,9 +263,17 @@ async function depsShedAct(
   row: FleetSession, rec: SessionRecord,
 ): Promise<DepsShedOutcome> {
   const id = row.id;
-  const holdOff = (): void => { mem.retryAt.set(id, deps.now() + DEPS_SHED_RETRY_MS); };
+  const sleepAt = row.stoppedBy?.at ?? 0;
+  const holdOff = (): void => {
+    const prev = mem.refusals.get(id);
+    const n = prev !== undefined && prev.at === sleepAt ? prev.n + 1 : 1;
+    mem.refusals.set(id, { at: sleepAt, n });
+    mem.retryAt.set(id, deps.now() + Math.min(DEPS_SHED_RETRY_MAX_MS, DEPS_SHED_RETRY_MS * 2 ** Math.min(n - 1, 30)));
+  };
+  // Armed only: the coordination serialiser around the act (the header's THE SERIALISER). The dry run never takes it.
+  const guarded = <T>(fn: () => Promise<T>): Promise<T> => (armedAtPass ? serial(fn) : fn());
   try {
-    return await serial(() => deps.queueRun(id, async (): Promise<DepsShedOutcome> => {
+    return await guarded(() => deps.queueRun(id, async (): Promise<DepsShedOutcome> => {
       const fresh = await deps.rowAtAct(rec);
       if (!fresh.ok) return { id, kind: 'held-at-act', verdict: null };
       const listing = await deps.listing();
@@ -264,12 +297,17 @@ async function depsShedAct(
         console.warn(`ccrc-server: deps-shed: ${a.kind === 'shed' ? 'removed' : 'would remove'} ${id}'s dependencies (${v.class}, ${sizeWords(a.dirs, a.bytes)}; D-7278)`);
         return { id, kind: a.kind, dirs: a.dirs, bytes: a.bytes };
       }
-      holdOff();
-      if (a.kind === 'refused' || a.kind === 'failed') {
-        console.warn(`ccrc-server: deps-shed: ccd ${a.kind} ${id}: ${a.word} — not asked again for an hour`);
+      if (a.kind === 'refused' && DEPS_SHED_FINAL_REFUSALS.includes(a.word)) {
+        mem.settled.set(id, fresh.row.stoppedBy?.at ?? sleepAt);
+        console.warn(`ccrc-server: deps-shed: ccd refused ${id}: ${a.word} — not asked again this sleep`);
         return { id, kind: a.kind, word: a.word, detail: a.detail };
       }
-      console.warn(`ccrc-server: deps-shed: the ask about ${id} came to nothing readable (${a.detail}) — not asked again for an hour`);
+      holdOff();
+      if (a.kind === 'refused' || a.kind === 'failed') {
+        console.warn(`ccrc-server: deps-shed: ccd ${a.kind} ${id}: ${a.word} — held off (${mem.refusals.get(id)?.n ?? 1} this sleep)`);
+        return { id, kind: a.kind, word: a.word, detail: a.detail };
+      }
+      console.warn(`ccrc-server: deps-shed: the ask about ${id} came to nothing readable (${a.detail}) — held off`);
       return { id, kind: 'unreadable', detail: a.detail };
     }));
   } catch (err) {

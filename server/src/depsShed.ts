@@ -61,9 +61,13 @@ export type DepsShedClass = (typeof DEPS_SHED_CLASSES)[number];
 /** The actor the arm's act declares (`sweepDec`), as every unattended server lane names itself. */
 export const DEPS_SHED_ACTOR = 'sweep:deps-shed';
 
-/** After an ask the box refused or that failed, the arm does not ask about that row again for this long. In memory
- *  only: a restart asks once more. */
+/** After an ask the box refused or that failed, the arm does not ask about that row again for this long; each further
+ *  refusal in the same sleep doubles it, up to `DEPS_SHED_RETRY_MAX_MS`. In memory only: a restart asks once more. */
 export const DEPS_SHED_RETRY_MS = 60 * 60_000;
+/** The ceiling of that doubling: a row that keeps refusing is asked at most once a day for the rest of its sleep. */
+export const DEPS_SHED_RETRY_MAX_MS = 24 * 60 * 60_000;
+/** The box's refusals that stay true for the whole sleep: the arm does not ask that row again until it sleeps anew. */
+export const DEPS_SHED_FINAL_REFUSALS: readonly string[] = ['nothing-to-shed', 'already-shed'];
 
 /** The deployment defaults (D-7278): every threshold is config, read once by `loadConfig` (`depsShedConfigOf`). */
 export const DEPS_SHED_AFTER_HOURS_DEFAULT = 24;
