@@ -56,16 +56,17 @@ export function FleetCards({ selectedId, onOpen }: {
   // Fold state persists across navigation (foldState.ts) — useState here would
   // re-expand every project on the way back from a session.
   const [folded, toggleFold] = useFolded();
-  // D-6088: the rollup's per-device preferences, and the clock its 30-minute window reads: fresh on every render, and
-  // one timer for the next window end only (`useRollupClock`), so a quiet fleet still runs no timer.
+  // D-6088: the rollup's per-device preferences, and the clock its 30-minute window reads: one timer for the next window
+  // end only (`useRollupClock`), and the rollup reads `roll.now` only when it is rebuilt. A folded card's "active … ago"
+  // runs its own 30 s interval (`ProjectCardHead`'s `LastActive`), so a quiet fleet runs that, and no one-second timer.
   const [rollupPrefs, updateRollup] = useRollupPrefs();
   const roll = useRollupClock(sessions);
   // The tree the cards draw, once, and its rollup over the same groups (D-6088). Memoised (C9): the rollup reads the
-  // time when it is rebuilt, which is on a new tree, a new preference or selection, or its timer's wake.
+  // time when it is rebuilt, which is on a new tree, a new preference or selection, or a window's end (`roll.next`).
   const tree = useMemo(
     () => fleetTree(sessions, projects.knownProjects, activeRuns, acks), [sessions, projects.knownProjects, activeRuns, acks]);
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- `roll.wake` stands for `roll.now`: the window moves only then.
-  const rollup = useMemo(() => rollupFleet(tree, rollupPrefs, roll.now, selectedId), [tree, rollupPrefs, selectedId, roll.wake]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- `roll.next` stands for `roll.now`: the window moves only then.
+  const rollup = useMemo(() => rollupFleet(tree, rollupPrefs, roll.now, selectedId), [tree, rollupPrefs, selectedId, roll.next]);
   // Rule 4's reset: a stored ▾ made in the other activity class, or an open worker line whose coordinator left, is
   // dropped — from a FRESH frame only, never from a cached snapshot (`fleetFrameSeen`). `prunePrefs` answers null when
   // nothing changes, so this writes nothing on an ordinary frame.
