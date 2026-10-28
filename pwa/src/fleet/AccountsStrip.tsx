@@ -84,9 +84,9 @@ export function AccountsStrip({ store = useFleetStore }: { store?: FleetStore } 
   const cardRefs = useRef(new Map<string, HTMLElement>());
   // The fold: the stored choice, the width class, and (at the desk only) the cards' group measured. The group's id is
   // what the control's `aria-controls` names.
-  const expanded = useStripExpanded();
   const desk = useDesk();
-  const { ref: measureRef, row } = useRowWidth(desk);
+  const expanded = useStripExpanded(desk);
+  const { ref: measureRef, row } = useRowWidth();
   // The strip's group, held for `handFocusBack`; the measure's callback ref is called from the one below.
   const groupEl = useRef<HTMLElement | null>(null);
   const groupRef = useCallback((el: HTMLElement | null) => { groupEl.current = el; measureRef(el); }, [measureRef]);
