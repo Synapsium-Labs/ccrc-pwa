@@ -30,7 +30,8 @@ A read-only census of one fleet box on 2026-10-28 found 124 worktrees using 69 G
    spec already ruled "one reviewer per work run, resumed per round" (its W2), but nobody built it. A review round
    also does not need its own dependencies.
 3. **Every worktree pays for its own dependencies (§4).** npm copies each file, so every tree costs about 1 GB before
-   any work happens. A per-lockfile cache with hardlinks makes a new tree cost little more than its source files.
+   any work happens. A per-package cache with hardlinks, verified against a manifest, makes a new tree cost little
+   more than its source files, once sessions stop running a blanket `npm ci`.
 4. **Some runs never close, and some sessions never leave (§5, §6).** Runs parked in review or merge keep their
    workers. Manual sessions and coordinators are never reclaimed automatically. The lanes that would release these
    either do not exist, are hard-coded at 7 or 14 days, or are built but not armed.
@@ -135,33 +136,43 @@ on purpose as `review-report-live` until the reviewed work run closes (`childRec
 
 **What is already true.** The reviewer's report does not live in its worktree. The reviewer skill writes it under
 `$HOME/.cc-clips/<session id>/`, because the agent's read allowlist excludes worktrees
-(`ccd/reviewer-skill/SKILL.md`, step 7). So `review-report-live` keeps the tree for two other reasons: the
-coordinator's fix-round mail cites the report by path, and the next round needs a reviewer to resume (capacity spec
-§3.2). The report path is outside the tree, so the first reason does not need the tree.
+(`ccd/reviewer-skill/SKILL.md`, step 7). But `review-report-live` still has to keep the whole child, not only the
+tree. Child reclaim is one act: the reclamation spec (2026-09-22, Definitions) defines it as destroying "the worktree,
+the branch, the clips, the per-session temp root, the pane, the unit and the registry row". Reclaiming a review child
+deletes its `.cc-clips`, and with them the report that the coordinator's fix-round mail cites by path. It also
+deletes the registry row, so the session cannot be resumed afterwards.
+
+**The choice this spec makes.** A review tree can either stay across rounds, so the next round resumes it (R-1a), or
+be released at its verdict, so the next round starts a fresh reviewer. It cannot do both: releasing it is a reclaim,
+and a reclaim leaves nothing to resume. No `ws-add` revives a purged session id. Reusing one would also collide with
+the generation, tombstone and birth-event fences in `coord/childReclaim.ts`, the same class of failure as the stale-run
+name-reuse bug. **This spec chooses to keep the tree across rounds (R-1a)** and to make it cheap while it waits
+(R-1b, R-1c). Release at the verdict is rejected (see Rejected).
 
 **Recommendation (R-1), in three parts.**
 
 - **R-1a. One reviewer per work run, resumed per round.** Build the capacity spec's W2 as ruled on 2026-10-20: a fix
   round's review run opens bound to the previous reviewer's `sessionId` when that reviewer reviewed the same work run.
-  Dispatch resumes it, waking it if it is asleep, with `/clear`, through the resume arm that workers already use.
-  This turns `-rev`, `-rev2` and `-rev3` into one tree. It is the largest structural saving: in the census it would
-  remove most of the 59.
+  Dispatch resumes it, waking it if it is asleep, with `/clear`, through the resume arm that workers already use. The
+  tree, the clips and the registry row all stay, so the report the fix-round mail cites stays readable. This turns
+  `-review`, `-rev`, `-rev2` and `-rev3` into one tree per work run. It is the largest structural saving: in the census
+  it would remove most of the 59.
 - **R-1b. A review checkout without its own dependencies.** A reviewer reads a branch tip and runs lenses. It may run
-  tests, so it needs dependencies, but it does not need its own copy. With §4's cache, a review tree gets its
-  dependencies by hardlink in seconds and for almost no space. Without the cache (the cache is off, or the lockfile
-  is missing from it), the review keeps today's behaviour. A separate "lite" checkout kind, with no dependencies at
-  all, is **rejected**: lenses that run the suite would fail in ways that look like findings.
-- **R-1c. Release at the verdict, not at the reviewed run's close.** When a review run closes `done`, the review
-  child is released once both of these hold: (i) the report path named in its `review-done` mail stats readable
-  through the agent, and (ii) no open review run of the same work run is bound to it. Its worktree goes through
-  normal child reclaim. Its `.cc-clips` directory, which holds the report, is kept until the reviewed work run
-  closes, under the existing clips rules. With R-1a, the session row stays resumable: the next round's dispatch
-  re-adds a tree for the same session (one `ws-add`, light with §4's cache). This makes `review-report-live` a
-  keep on the clips directory, not on the worktree. It ships in shadow behind its own marker
-  (`review-release-at-verdict-live`), with "would release" rows first.
+  tests, so it needs dependencies, but it does not need its own copy. With §4's cache, and once the reviewer skill
+  stops running a blanket `npm ci` (§4, "Who installs"), a review tree gets its dependencies by hydrate in seconds and
+  for almost no space. Without the cache (the cache is off, or the key is missing from it), the review keeps today's
+  behaviour. A separate "lite" checkout kind, with no dependencies at all, is **rejected**: lenses that run the suite
+  would fail in ways that look like findings.
+- **R-1c. Between rounds, shed rather than reclaim.** A reviewer that has posted its verdict and sleeps is kept, as
+  today, until the reviewed work run closes (`review-report-live`, unchanged). While it waits, deps-shed (§8) may
+  remove its `node_modules` after the same age as any other sleeping child; this needs one row in the shed decider
+  for review children, in shadow behind the existing `deps-shed-live` marker, with a test that a shed review child
+  keeps its tree, clips and registry row. On resume, R-1b's hydrate (or the session's own install, without the cache)
+  restores the dependencies. When the reviewed work run closes, normal child reclaim removes the reviewer whole, clips
+  included, exactly as it does today. Nothing is deleted earlier than today, and no reclaim variant is needed.
 
-**What this changes in existing rules.** The capacity plan's Rejected list says "no report copy (W2-1 dropped)".
-R-1c does not copy the report. It only stops the report's location from keeping a tree that does not contain it.
+**What this changes in existing rules.** None. The capacity plan's Rejected list says "no report copy (W2-1
+dropped)", and this spec copies no report. `review-report-live` keeps its meaning.
 
 ## 4. Shared dependencies: a per-lockfile cache
 
@@ -177,39 +188,102 @@ ignored (`ccd/ccd`, the `ws-add` exclude block). The fleet has used that shape b
 | (a) Symlink `node_modules` to a shared directory | near zero | one tree's `npm install` or postinstall changes every tree's copy; tools that resolve real paths escape the worktree | rejected |
 | (b) A package-manager content store (pnpm or similar) | near zero | changes the project's package manager; ccrc does not own projects' tooling | rejected for ccrc; a project may choose it itself |
 | (c) Reflink copy (`cp --reflink`) from a cache | near zero until written | needs a copy-on-write filesystem, which a generic deployment may not have | used when the filesystem supports it |
-| (d) Hardlink copy from a read-only per-lockfile cache | near zero; a file written in place is detected | an in-place write to a hardlinked file changes the cache | **recommended**, with (c) preferred where available |
+| (d) Hardlink copy from a read-only per-lockfile cache | near zero; a chmod or an in-place write is caught by the entry's manifest | a chmod plus an in-place write to a hardlinked file changes the cache for every tree | **recommended**, with (c) preferred where available |
 
 **Recommendation (R-2): `ccd ws-deps`, a box verb that hydrates dependencies from a cache.**
 
-- **Key.** The sha256 of the lockfile, plus the runtime's major version, platform and architecture, plus the install
-  command. Entries live under `CCD_DEPS_CACHE_ROOT` (default unset, which means the cache is off and behaviour is
-  unchanged). Only lockfile kinds listed in `CCD_DEPS_CACHE_LOCKFILES` are cached (default `package-lock.json`).
-- **Fill.** On a miss, the verb runs the install once in a scratch tree, under the session's `TMPDIR`. It then marks
-  every file in the result read-only and renames it into place, so a half-built entry is never visible.
-- **Hydrate.** Reflink when the filesystem supports it, else `cp -al` (a hardlink tree), into the worktree's
-  `node_modules`. A tree whose lockfile is not in the cache gets today's behaviour: the session runs its own install.
-- **Detect writes.** The cache files are read-only, so a tool that tries to write one in place fails, and the
-  failure is loud. If a project's postinstall needs to write, that lockfile key is marked `copy-only` in the cache
-  and later hydrations use a full copy. The cache is never repaired from a tree.
+- **Package directories.** A tree can hold several packages, each with its own lockfile and `node_modules`. This
+  repository has four (`server`, `agent`, `ui`, `pwa`). The verb finds them with `git ls-files`, matching the basenames
+  in `CCD_DEPS_CACHE_LOCKFILES` (default `package-lock.json`) and skipping anything under a `node_modules`. Each
+  package directory is its own cache entry, with its own key, filled and hydrated on its own.
+- **Linked siblings and order.** A lockfile entry with `"link": true` (a `file:` dependency) is a symlink to a sibling
+  package in the same tree. Here `server` links `../agent` and `pwa` links `../ui`, and `pwa` also resolves `ui`'s
+  source through `ui/node_modules`. The verb reads the link targets from each lockfile and processes the package
+  directories in dependency order (targets first: `agent` before `server`, `ui` before `pwa`). A cycle, a target
+  outside the tree, or an npm workspaces root makes the verb skip the cache for every package in that group, and the
+  session installs them itself. The cache stores links as relative symlinks. A hydrate checks that each one resolves
+  inside the worktree, and if any does not, it falls back to a private install for that package.
+- **Key.** The sha256 of every input that changes what the install writes: the lockfile, the package's
+  `package.json` (scripts, overrides), the project's `.npmrc` files on the package's path, the runtime's and the
+  package manager's versions, platform and architecture, the install command, and the values of the environment
+  variables in `CCD_DEPS_CACHE_ENV_KEYS` (default: the package manager's registry and script variables). A
+  user-level `.npmrc` is not read during a fill (see Fill), so it is not part of the key. Entries live under
+  `CCD_DEPS_CACHE_ROOT` (default unset, which means the cache is off and behaviour is unchanged).
+- **Fill: only from shared, reviewed inputs.** An entry is shared with every other tree, so one session must not be
+  able to fill it from its own modified repository. A miss is filled only when the lockfile and `package.json` blobs
+  appear at the tip of the project's default branch on its remote. The verb fills from those blobs, read with `git
+  show`, not from the session's working copy. It runs the install with a scrubbed environment and a user config file
+  owned by the cache. A tree whose inputs are not on the default branch (a branch that changes dependencies) installs
+  privately, as today, and does not touch the cache.
+- **Fill: staging and the filesystem.** The entry is built in a staging directory **inside** `CCD_DEPS_CACHE_ROOT`,
+  not under the session's `TMPDIR`. The session's temp root can be a different filesystem (a tmpfs, or another mount),
+  and a rename across filesystems fails. The finished entry is renamed into place within one directory, so a
+  half-built entry is never visible. A per-key lock stops two fills of one key from racing. The loser waits, then
+  hydrates.
+- **Hydrate: same filesystem, proven per tree.** A hardlink needs the cache and the worktree on one mount. A bind
+  mount of the same filesystem is still a different mount, and `link()` across it fails. Before each hydrate, the verb
+  compares device ids and makes one probe link (or one probe reflink) from the cache into the worktree. If the
+  reflink works, it reflinks: no shared inodes, so the integrity concerns below do not apply. If only the hardlink
+  works, it hardlinks (`cp -al`). If neither works, it makes a full copy, or the session installs, and the reason is
+  logged once per tree. The verb then writes a stamp, `node_modules/.ccd-deps-key`, that holds the entry's key.
+- **Integrity of a hardlinked entry.** File modes do not protect a shared inode on their own. Every session runs as
+  the uid that owns the cache, so a `chmod u+w` (by an agent, a tool's `chmod -R` or a postinstall) changes the cache
+  inode's mode for every tree, and a later in-place write then changes the bytes for every tree. Detection does not
+  rely on modes:
+  - At fill, the verb writes a manifest beside the entry: path, inode, mode, size, mtime, ctime and sha256 for every
+    file.
+  - **Every hydrate** compares each file's `stat` with the manifest. A `chmod` changes ctime, and a write changes
+    mtime, ctime and size, so either shows up without hashing. Hashes are checked for a sample of files
+    (`CCD_DEPS_CACHE_HASH_SAMPLE`, default 2%).
+  - **The tmp-sweep arm** (see Eviction) re-hashes every entry in full, at most once per
+    `CCD_DEPS_CACHE_VERIFY_HOURS` (default 24).
+  - A mismatch **quarantines** the entry. It is renamed aside, never served again and never repaired, and the next
+    miss refills it from the default branch. The verb records which trees it hydrated from each entry. On quarantine,
+    those trees get a `deps-suspect` mark, and their next `ws-deps` call replaces their `node_modules`. The worker and
+    reviewer skills treat a `deps-suspect` mark as "rehydrate before testing".
+  - Where a deployment can run the cache under its own uid (`CCD_DEPS_CACHE_OWNER`, default unset), the cache files
+    belong to that uid and a session cannot chmod them at all. The manifest checks stay on either way.
+  - A key whose postinstall must write into its own files is marked `copy-only` at fill (the fill sees the write fail
+    on the read-only staging copy), and later hydrations make a full copy.
+- **Who installs: the instructions must change, or nothing is saved.** `npm ci` deletes `node_modules` before it
+  installs. This repository's CLAUDE.md tells every session to run `npm ci` in `server`, `agent`, `ui` and `pwa`. Under
+  those instructions, a hydrated tree is wiped and refilled with a private copy on its first test run, and the cache
+  saves nothing. (The wipe is safe, because removing hardlinks never changes the cache, but it is wasted.) So the same
+  step that ships the verb also changes the instructions:
+  - `ccd ws-deps --check` exits 0 when every package directory's stamp matches its current key and the entry is not
+    quarantined.
+  - The worker and reviewer skills (`ccd/worker-skill`, `ccd/reviewer-skill`) and this repository's CLAUDE.md say:
+    when `ccd ws-deps` exists, run `ccd ws-deps` (which hydrates, or does nothing when `--check` would pass) in place
+    of `npm ci`, and run `npm ci` in a package only when `ws-deps` reports it installed nothing for that package.
+  - A project that keeps a blanket `npm ci` in its own instructions still works correctly. It just gets no saving.
+  - The saving claimed below is conditional on this change, and the plan measures it after the change, not before.
 - **Who calls it.** `ws-add --child` calls it after the checkout when the cache is configured. A coordinator or
-  manual session can run it itself. It does not belong on the SAFETY list, because it only writes inside the
-  session's own tree and the cache root.
-- **Eviction.** An entry with no remaining links outside the cache (link count 1 on a sample of files) and unused for
-  `CCD_DEPS_CACHE_IDLE_DAYS` (default 14) is removed, oldest first, until the cache is under
-  `CCD_DEPS_CACHE_MAX_GB` (default 20). This rides the existing `ccd-tmp-sweep` timer as one more arm, not as a new
-  timer.
+  manual session can run it itself, and wake after a shed calls it again.
+- **The SAFETY list.** The cache root is shared state, so the verb's forms are split by what they write. A hydrate
+  writes only the session's own tree, and its only reads of shared state are checked against the manifest. A fill
+  writes the shared cache, but only from default-branch inputs, under a lock, into staging and then a rename, so a
+  session cannot choose what it writes. Neither form is on the SAFETY list. The forms that remove or replace shared
+  entries by hand (`ws-deps --purge`, `--quarantine`, `--evict`) **are** added to the CLAUDE.md SAFETY list. The
+  sweep's own eviction and quarantine run on the box timer, not from a session.
+- **Eviction.** An entry with no hydrations recorded from a live tree, and unused for `CCD_DEPS_CACHE_IDLE_DAYS`
+  (default 14), is removed, oldest first, until the cache is under `CCD_DEPS_CACHE_MAX_GB` (default 20). A sampled
+  link count of 1 is a second check, not the main one. This rides the existing `ccd-tmp-sweep` timer as one more arm
+  (together with the full re-hash above), not as a new timer.
 - **Accounting.** With hardlinks, a per-tree `du` counts shared bytes in every tree. The disk alarm (retention spec,
   ruling 4) already reads `statfs`, which is correct. Tree-size figures in the UI and in reclaim feed rows say
   "unique bytes" when they come from `du -l` and say nothing more precise than that.
 
-**What it saves.** In the census, `node_modules` was 34.7 GB in about 120 trees, and most of those trees share a
-handful of lockfiles. With the cache, that is about one copy per lockfile, a few GB in total. A new worker costs its
-source files, which is about 0.1 GB for this repository.
+**What it saves, and when.** In the census, `node_modules` was 34.7 GB in about 120 trees, and most of those trees
+share a handful of keys (four package directories per tree in this repository, so a handful of entries per
+default-branch lockfile set). Once the instructions change above has landed, that is about one copy per entry, a few
+GB in total, and a new worker costs its source files, about 0.1 GB for this repository. Trees on branches that change
+dependencies still install privately. Before the instructions change, the saving is zero, and the plan does not
+claim it.
 
 **Interaction with deps-shed (§8).** Removing a hardlinked `node_modules` frees almost nothing, because the cache
 holds the same inodes, and that is fine. Waking a shed tree is then a hydrate, which takes seconds, rather than an
-`npm ci`. The shed arm and the cache are complementary. Deps-shed handles trees made before the cache existed and
-lockfiles the cache does not cover.
+`npm ci`. The shed arm and the cache are complementary. Deps-shed handles trees made before the cache existed, and
+keys the cache does not cover.
 
 ## 5. Finished work released promptly
 
@@ -253,12 +327,34 @@ or a coordinator's act. What changes is that the act becomes easy to reach and h
    through the existing system-mail path (`queueSystemMail`) and the run-quiet banner's facts, not a second notifier.
 2. **Abandon offer.** Past `CCRC_PARKED_RUN_ABANDON_OFFER_HOURS` (default 168), the run's card in the PWA shows an
    **Abandon** control. It is the existing abandon act (`POST /api/runs/:id/abandon`), reached from the UI, per the
-   operator-actions-in-the-UI rule. It names what it will release before it is pressed. Abandoning leaves any open PR
-   alone and closes the run; the normal close-time reclaim then runs, with its attic rescue, as it does for any
-   failed close today.
+   operator-actions-in-the-UI rule. Before it is pressed, it names what it will release. Abandoning closes the run and
+   leaves any open PR alone. The normal close-time reclaim then removes the worker, with its attic rescue, as it does
+   for any failed close today. That leaves an open PR with no worker and no run to carry a fix round, so the offer
+   depends on the PR's state:
+   - **Not offered** while the run's PR is in the merge queue, or has required checks pending. The card says why
+     ("PR in the merge queue" or "required checks running") instead of showing the control. A run in `merging` with
+     its PR enqueued is the normal case for this.
+   - **Offered with a loud warning** while the run's PR is open but not enqueued and not pending: "PR #n stays open
+     with no worker. A later fix needs a new run on its branch." The branch on the remote is untouched, so a new run
+     can pick it up.
+   - **Offered plainly** when the run has no PR, or its PR is closed or merged.
+   - **If a PR merges or fails after its run was abandoned** (for example, the queue ejects it), the server raises
+     one attention item to the programme's coordinator, or to the operator when there is no live coordinator. The
+     item names the PR and the abandoned run and offers "open a run on this branch". It goes through the existing
+     attention path. Nothing reopens the abandoned run.
 3. **Auto-abandon is off by default.** `CCRC_PARKED_RUN_AUTO_ABANDON_HOURS` (default unset) would let the server
-   abandon a parked run with no open PR and no activity on either side after that age. It exists only if the
-   operator overturns the Rejected-list rule (§10, Q4). Even then it ships in shadow behind its own marker.
+   abandon a parked run with no PR, or only a closed one, and no activity on either side after that age. It exists
+   only if the operator overturns the Rejected-list rule (§10, Q4). Even then it ships in shadow behind its own
+   marker. **"No activity on either side"** means none of these, within the period:
+   - a run state change;
+   - a push to the run's branch on the remote;
+   - a PR event (push, review, comment or check run);
+   - mail to or from the run's worker about the run;
+   - mail from its coordinator naming the run;
+   - a turn by the worker's session;
+   - a coordinator turn whose roster card (§7) listed the run.
+
+   The decider reads each of these from its existing source. If any source cannot be read, it does not act.
 
 ## 6. Idle coordinators and manual sessions: auto-archive
 
@@ -283,6 +379,14 @@ anything that was ever a claimant.
   - it has no pinned or held marker, and no unanswered operator-facing question (the fleet-rollup rule: a question
     is never hidden).
 
+  **"Claims no non-terminal run" must be proven, not read.** Claim attribution is incomplete today (§7). #1407 (the
+  unborn and dup-arm gaps at `bindSession`) is open, and D8 (the coordinator's uuid on the claim, and DT7's
+  claimant-revived after an id-changing revive) is unbuilt. A coordinator whose claim sits under a reused name, or
+  under the id it had before a revive, would read as "claims nothing". So the arm is built only after #1407 and D8's
+  DT6 and DT7 have landed (§9). The decider also **refuses**, as a kept verdict with the reason
+  `claim-attribution-unproven`, for any coordinator that has an id-changing revive in its history, or whose name was
+  used by another session, unless every run that ever named that name or a prior id is terminal.
+
   It is archived through the same act as G1, so expiry follows by the same path and the same safety checks: clean
   tree, HEAD on a remote or rescued into the attic, no holder. It ships in shadow behind
   `coordinator-archive-live`. This changes rule 4 from "never automatically" to "never while it has work, and never
@@ -301,7 +405,7 @@ tail. Measured state, 2026-10-28:
 | Item | Built and merged | Not done | Gate to finish |
 |---|---|---|---|
 | **D4** roster card (#757) | #1357: on compact, resume and clear, the session hook reads `ccrc-api runs list` once (4 s, fail open) and re-injects the coordinator's open runs plus an "awaiting you" line, capped at 2048 characters | (1) **unarmed**: `coordinator-roster-card-live` is absent, so the card goes only to a shadow log; (2) **wake is not covered**: Claude Code's idle compaction resumes without any of the three events | operator reads the shadow log and arms it; then the wake arm (below); then #757 closes |
-| **D6** parent by birth, release on archive (#758) | the parent half: #1405 (`coord/runBinding.ts`, incarnation-bound parent), #1406, #1430, #1530, #1573 | #1407 (record the bound incarnation at `bindSession`); release-on-archive runs only in **shadow**: `dead-coordinator-lane-live` is absent, so runs whose coordinator is archived or dead are never released | land #1407; operator compares the dead-coordinator lane's shadow record with D7's `claimant-gone` findings and arms it; #758 closes |
+| **D6** parent by birth, release on archive (#758) | the parent half: #1405 (`coord/runBinding.ts`, incarnation-bound parent), #1406, #1430, #1530, #1573 | #1407 (record the bound incarnation at `bindSession`); release-on-archive runs only in **shadow**: `dead-coordinator-lane-live` is absent, so runs whose coordinator is archived or dead are never released | land #1407; operator compares the dead-coordinator lane's shadow record with D7's `claimant-gone` findings, and arms it only after D8's DT7 (R-5b); #758 closes |
 | **D7** drift reconciler (#760) | DT1 decider (#884), DT2 lane and findings (#1355, #1362), DT3 digest server side (#1367), DT5 held asks re-seeded after restart (#890) | DT4, the PWA digest's "Out of step" section (no PWA code yet); the lane only **records**, because `drift-push-live` is absent | build DT4; operator arms `drift-push-live`; #760 closes |
 | **D8** claim carries the coordinator's uuid (#761) | none | DT6 and DT7 (uuid on the claim, attributed reclaim after an id-changing revive) | after W6's #1407, per the tail spec |
 
@@ -313,9 +417,16 @@ carries the same card body, built by the same code as the hook, as its first blo
 added. The card text gets one shared builder, and the hook and the wake path both call it. It ships behind the same
 `coordinator-roster-card-live` marker.
 
-**Order (R-5b).** Arm D4 first: it is the cheapest and directly prevents forgotten runs. Then land #1407 and arm
-OA-D6, which releases runs held by dead coordinators and so frees their workers. Then build DT4 and arm the drift
-push. D8 comes last. The programme ledger `docs/superpowers/programs/coordinator-durability.md` is stale: it still
+**Order (R-5b).** Arm D4 first: it is the cheapest and directly prevents forgotten runs. Then land #1407. Then build
+DT4 and arm the drift push. Then build D8 (DT6, DT7). **Arm OA-D6 only after DT7.** OA-D6, the dead-coordinator lane,
+ends or releases a programme's runs. Until DT7's claimant-revived lands, a coordinator revived under a new id (an
+account swap or a respawn) cannot be told apart from a dead one. So reading the lane's shadow record against D7's
+`claimant-gone` findings cannot rule out a false "dead" verdict, and arming earlier could release runs that are still
+needed. The shadow record is still read before then, as evidence. If the operator wants OA-D6 armed before DT7, the
+condition is that **every** shadow row has been checked by hand against the revive history (account swaps and
+respawns of the claimant), and that no row's claimant has an id-changing revive.
+
+The programme ledger `docs/superpowers/programs/coordinator-durability.md` is stale: it still
 lists D3 and D4 as "to spec" and DT1 as "in review". Bring it up to date in the plan's first PR.
 
 ## 8. How this fits with deps-shed and the existing lanes
@@ -325,6 +436,8 @@ worker or coordinator whose work finished more than `CCRC_DEPS_SHED_AFTER_HOURS`
 `deps-shed-live`. This spec depends on it and does not duplicate it:
 
 - §2 relies on it to make the reclaim probe's ignored-directory scan cheap on sleeping trees.
+- §3's R-1c adds review children that sleep between rounds to its decider, as one row in shadow behind the same
+  marker.
 - §4 makes its removal nearly free and its undo (a hydrate) fast. The shed arm needs one change: after a hydrate
   from the cache, the tree's `node_modules` is read-only hardlinks, and the shed's removal must not try to make
   cache files writable. `rm` on a read-only file inside a writable directory already works, so this is a test, not a
@@ -336,10 +449,11 @@ worker or coordinator whose work finished more than `CCRC_DEPS_SHED_AFTER_HOURS`
 
 | Lane | Owner | This spec |
 |---|---|---|
-| Child reclaim at close and the sweep (`coord/childReclaim.ts`, `childReclaimSweep.ts`) | Workspace & PR Lifecycle | §2 fixes its outage; R-1c adds a release-at-verdict case to the sweep's decider (a row in its table, not a new lane) |
+| Child reclaim at close and the sweep (`coord/childReclaim.ts`, `childReclaimSweep.ts`) | Workspace & PR Lifecycle | §2 fixes its outage; `review-report-live` is unchanged (R-1c) |
+| Deps-shed (`server/src/depsShed.ts`) | same | R-1c adds a row for sleeping review children between rounds |
 | Stale and superseded arms (`coord/childReclaimStale.ts`) | same | R-3a makes the floor config |
 | Stop-done and hibernation (`stopDone.ts`, `coord/hibernate.ts`) | same (sleep, not disk) | unchanged |
-| Stale archive and expiry (`coord/staleArchive.ts`, `archivedExpiry.ts`) | same | R-4a arms it; R-4b adds the coordinator arm to the same decider |
+| Stale archive and expiry (`coord/staleArchive.ts`, `archivedExpiry.ts`) | same | R-4a arms it; R-4b adds the coordinator arm to the same decider, after D8 |
 | Orphan tree, `ws-collect`, tmp sweep | same | the tmp sweep gains the cache-eviction arm (§4) |
 | Dispatch's resume arm (`coord/dispatch.ts`) | Coordination | R-1a uses it for reviewers |
 | Run-quiet banner, system mail | Coordination; Attention & Notification | R-3b's nudge uses both |
@@ -359,17 +473,22 @@ Each step is one PR. Every destructive arm ships in shadow first.
 2. **Arm what is built.** These are operator acts, each after reading its shadow record:
    `coordinator-roster-card-live` (D4), `stale-archive-live` (G1), and `deps-shed-live` once #1772 lands. No code.
 3. **R-1a** one reviewer per work run (the capacity spec's W2).
-4. **R-2** the dependency cache, the `ws-deps` verb and the `ws-add --child` hook, with cache eviction in the tmp
-   sweep. The cache is off until `CCD_DEPS_CACHE_ROOT` is set.
-5. **R-1c** release a review tree at its verdict, in shadow.
+4. **R-2** the dependency cache: the `ws-deps` verb with its manifest, quarantine and `--check`, the `ws-add --child`
+   hook, cache eviction and re-hash in the tmp sweep, the SAFETY-list entries, and **in the same PR** the CLAUDE.md
+   and worker and reviewer skill changes that replace the blanket `npm ci`. The cache is off until
+   `CCD_DEPS_CACHE_ROOT` is set.
+5. **R-1c** the deps-shed row for review children between rounds, in shadow.
 6. **R-3a** ages as config: the stale floor, the review ceiling and stale archive's 14 days.
-7. **R-5a** the D4 wake arm and its shared card builder; **#1407**; arm OA-D6.
-8. **R-3b** the parked-run nudge and the Abandon control in the PWA.
+7. **R-5a** the D4 wake arm and its shared card builder; **#1407**.
+8. **R-3b** the parked-run nudge, the Abandon control in the PWA with its PR-state rules, and the ejected-PR attention
+   item.
 9. **DT4** the PWA "Out of step" section; arm `drift-push-live`.
-10. **R-4b and R-4c** the coordinator archive arm in shadow, and the UI countdown with Keep and Archive now.
-11. D8 (DT6, DT7) per the tail spec.
+10. D8 (DT6, DT7) per the tail spec.
+11. **Arm OA-D6** (`dead-coordinator-lane-live`), an operator act after reading its shadow record.
+12. **R-4b and R-4c** the coordinator archive arm in shadow, and the UI countdown with Keep and Archive now.
 
-Steps 3 and 4 can be built in parallel. Step 5 needs step 3. Step 10 needs step 6.
+Steps 3 and 4 can be built in parallel. Step 5 needs steps 3 and #1772. Step 10 needs step 7 (#1407). Step 11 needs
+step 10 (DT7). Step 12 needs steps 6, 7 and 10.
 
 ## 10. Operator decisions
 
@@ -377,27 +496,40 @@ Each comes with a recommended option.
 
 - **Q1. Diagnose the reclaim outage now?** Approve one `ws-audit --reclaim` on one stuck id (a SAFETY-list verb).
   **Recommended: yes.** It is read-only, and it is the cheapest step to the largest saving.
-- **Q2. Release a review tree at its verdict (R-1c)?** (a) Yes, keep only the clips directory until the reviewed run
-  closes. (b) No, keep today's rule. **Recommended: (a).** The report is already outside the tree.
-- **Q3. The dependency cache (R-2).** (a) Hardlink, with reflink where the filesystem supports it, and a read-only
-  cache. (b) A symlinked shared directory. (c) No cache: rely on deps-shed alone. **Recommended: (a).** Defaults:
-  cache off until a root is set, 20 GB maximum, 14 days idle.
+- **Q2. Review trees between rounds (R-1).** (a) Keep the reviewer's tree across rounds (R-1a), shed its
+  dependencies while it sleeps (R-1c), and reclaim it whole when the reviewed run closes, as today. (b) Release it at
+  each verdict and spawn a fresh reviewer per round. That needs a new reclaim variant that keeps the clips, and it
+  gives up W2's resume. **Recommended: (a).** It needs no new reclaim variant, deletes nothing earlier than today, and
+  is the ruled W2.
+- **Q3. The dependency cache (R-2).** (a) Reflink where the filesystem supports it, else hardlink, from a
+  read-only cache with a stat-and-hash manifest, filled only from default-branch inputs, with the instructions
+  change that replaces the blanket `npm ci`. (b) A symlinked shared directory. (c) No cache: rely on deps-shed alone.
+  **Recommended: (a).** Defaults: cache off until a root is set, 20 GB maximum, 14 days idle.
 - **Q4. Parked runs (R-3b).** (a) Nudge at 48 h, Abandon offered in the UI at 7 days, never automatic. (b) As (a),
   plus auto-abandon of a parked run with no open PR after N days, which overturns the capacity plan's
   Rejected-list rule. **Recommended: (a).** Revisit (b) once the nudge has been measured for two weeks.
 - **Q5. Coordinators (R-4b).** (a) Auto-archive a coordinator with no open claim, no pane and an idle chair for N
-  days, with the UI countdown and Keep. (b) Never: keep rule 4 and rely on deps-shed for their disk. **Recommended:
-  (a) with N = 14 days.** In the census, deps-shed already addresses most of a coordinator's bytes, so (a) is about
-  the count, not the size.
+  days, with the UI countdown and Keep, built after D8 and refusing when claim attribution is unproven. (b) Never:
+  keep rule 4 and rely on deps-shed for their disk. **Recommended: (a) with N = 14 days.** In the
+  census, deps-shed already addresses most of a coordinator's bytes, so (a) is about the count, not the size.
 - **Q6. Stale floor for this deployment (R-3a).** The neutral default stays 7 days. **Recommended: set 2 days in this
   deployment's config once §2 to §4 have landed**, not before, because the census shows lowering it earlier would
   mainly catch manual sessions, which G1 covers.
-- **Q7. Arm order for durability.** **Recommended:** D4's card now (after reading its shadow log), OA-D6 after #1407,
-  `drift-push-live` after DT4.
+- **Q7. Arm order for durability.** **Recommended:** D4's card now (after reading its shadow log), `drift-push-live`
+  after DT4, OA-D6 after D8's DT7. Arming OA-D6 earlier needs every shadow row checked by hand for an id-changing
+  revive.
 
 ## Rejected
 
 - **A symlinked shared `node_modules`.** One tree's install changes every tree.
+- **Filling the shared cache from a session's working copy.** One session's modified lockfile, `package.json` or
+  config would be served to every other tree.
+- **Relying on file modes alone to protect hardlinked entries.** Every session runs as the cache's uid, so a chmod
+  undoes them.
+- **Releasing a review tree at its verdict.** Child reclaim deletes the clips, which hold the report the fix-round
+  mail cites, and it removes the registry row, so nothing is left to resume. Doing it safely needs a new reclaim
+  variant that keeps the clips, and it gives up W2. Keeping the tree and shedding its dependencies gets most of the
+  bytes back without either cost.
 - **A "lite" review checkout with no dependencies.** Lenses that run the suite would fail in ways that look like
   findings.
 - **Teaching the reclaim probe to skip `node_modules`.** The scan exists to find work hidden inside ignored
