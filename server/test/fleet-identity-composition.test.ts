@@ -105,7 +105,7 @@ describe('the composition root wires the identity cell (path-identity spec §5.2
   });
 
   it('refreshCaps is built with fleet.identity', () => {
-    expect(depsLiterals[0]).toMatch(/^    refreshCaps: makeRefreshCaps\(fleet\.client, fleet\.state, fleet\.identity\),$/m);
+    expect(depsLiterals[0]).toMatch(/^    refreshCaps: makeRefreshCaps\(fleet\.client, fleet\.state, fleet\.identity, recordCcdVerbs\),$/m);
     expect(codeOnly(indexTs).match(/\bmakeRefreshCaps\s*\(/g) ?? []).toHaveLength(1);
   });
 });

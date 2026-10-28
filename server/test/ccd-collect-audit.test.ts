@@ -10,6 +10,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { makePrHarness, type PrHarness } from './ccdPrHelpers.js';
 import { ccdSource } from './ccdWsHelpers.js';
+import { markedSpan } from './census-w5/ccdHelpers.js';
 import { eventsOf, readJournal, refusalsOf } from './lifecycleHelpers.js';
 import { holdCwd } from './wsExpireFixture.js';
 import { LC_REFUSAL_WORD, isLcRefusalToken } from '../../shared/api.js';
@@ -335,8 +336,15 @@ describe('the source: three terminal words journaled, and no line in a harvested
   });
 
   it('spells no word in a shape the refusal harvests read (wsaudit.test.ts, ccd-wsaudit-nonpoison.test.ts)', () => {
-    const shapes = [/_reap_refuse\s+[a-zA-Z]/, /"refused":"[a-zA-Z0-9-]+"/, /'![a-zA-Z0-9-]+/, /"verdict":"[a-zA-Z0-9-]+"/];
+    const shapes = [/"refused":"[a-zA-Z0-9-]+"/, /'![a-zA-Z0-9-]+/, /"verdict":"[a-zA-Z0-9-]+"/];
     expect(block.split('\n').filter((l) => shapes.some((s) => s.test(l)))).toEqual([]);
+    // D-7072: a call's family is its region's, so the old helper's shape is the containment fact (a "no reap-family
+    // call in the block" row could never red: every call inside the COLLECT region is collector family).
+    const region = markedSpan(src, 'COLLECT-BEGIN', 'COLLECT-END');
+    expect(region, 'the COLLECT region').not.toBeNull();
+    expect([b >= region![0] && b < region![1], e >= region![0] && e < region![1]],
+      'the WS-AUDIT-COLLECT block lies wholly inside the COLLECT region, so none of its `_ws_refuse` words reaches the reap harvest')
+      .toEqual([true, true]);
   });
 });
 

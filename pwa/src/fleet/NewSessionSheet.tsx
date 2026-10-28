@@ -3,9 +3,13 @@
 // Step 2: pick the project — searchable list from api.projects, with
 // registry projects first, most recently active on top. The confirm row
 // narrates the action in plain language ("Start project-c on
-// team·alt") and posts api.createSession; success closes the sheet (the
-// new card arrives over /ws/fleet), failure toasts ccd's stderr and leaves
-// every choice in place.
+// team·alt") and posts api.createSession. Success opens the new session: the sheet
+// closes and goes to it as soon as /ws/fleet lists its row (a create answers no id), with the old "Starting…" toast
+// as the fallback if no row comes within a minute. A project whose main checkout is ALREADY live (usually
+// the session is already running: `ccd start` answers "already running", exit 0, and no new row comes) toasts and closes
+// at once, with no wait and no navigation; where that check over-matches, this is the toast-and-close it always was.
+// Failure toasts ccd's stderr and leaves every choice in place.
+// Step 2 shows the fleet store's last project list the moment it opens, and the fetch on open replaces it.
 //
 // THE NAME FIELD (named workspaces S8, design 2026-10-20 §2.1) sits under the project list. Empty, nothing about
 // this sheet changed: the same `createSession`, the same body, the main checkout. Filled, the sheet starts a
@@ -13,10 +17,12 @@
 // server's `--wrapper`, never a quiet placement elsewhere). That create's refusals stay in the sheet with the text
 // intact; an account refusal returns to the account step, with the project and the name kept. A crossing project or
 // an account a workspace never starts on closes the door: the field is disabled with its sentence and no name is
-// ever sent (`nameDoorReason`).
+// ever sent (`nameDoorReason`). A workspace create answers its session's id, so that success closes the sheet and
+// opens the session at once, with no toast; an answer this build cannot read names no id, so it keeps the toast and the
+// close (and only a sheet still the same one closes: a dismissed sheet says it started and leaves the parent alone).
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import type { ProjectRow } from '../../../shared/api';
+import type { FleetSession, ProjectRow } from '../../../shared/api';
 import { CLASSES, type ModelClass } from '../../../shared/models';
 import { Button, Select, Sheet, toast } from '@ccrc/ui';
 import { accountIsHomeAble, accountLabel, accountPool, accountPoolState } from '../lib/accounts';
@@ -38,11 +44,16 @@ import {
 } from './accountPicker';
 import { useAccountUsage } from './useProjectedHome';
 import { ProjectPicker } from './ProjectPicker';
+import { liveIdsIn, liveMainCheckoutIn, startedSessionFor } from './startProgramPolicy';
 import { NAME_FIELD_CLASS, WorkspaceNameField } from './WorkspaceNameField';
 import { useNamePreview } from './useNamePreview';
 import { addRefusalText, classifyAddError } from './workspaceAddWords';
 import { LINEAR_SETTINGS_PATH, confirmLabel, nameDoorReason } from './workspaceNameWords';
+import { AUTOMATIC_CLASS } from './classWords';
 import './fleet.css';
+
+/** How long an unnamed create waits for its session's row on the fleet feed before it gives up, toasts and closes. */
+export const NEW_SESSION_WAIT_MS = 60_000;
 
 /** The new-session door's own sentences for the name field (named workspaces S8, design §2.1). */
 export const NEW_SESSION_NAME_TEXT = {
@@ -122,6 +133,9 @@ export function NewSessionSheet({
 }: NewSessionSheetProps): ReactNode {
   const sessions = fleet((s) => s.sessions);
   const roster = fleet((s) => s.roster);
+  // The last `/api/projects` read, which `useProjectRows` owns and writes. Read here, never written: it fills step 2
+  // until this sheet's own fetch answers.
+  const cachedProjects = fleet((s) => s.projects);
   // The SAME poll the picker's eligibility already came from, now also the
   // source of its gauges — this sheet was fetching every account row and using
   // one boolean off it while reading its numbers off the live fleet frame,
@@ -151,6 +165,8 @@ export function NewSessionSheet({
   const [name, setName] = useState('');
   // A create answers after its sheet was closed: its words are for a sheet that is gone. Bumped on every close.
   const generation = useRef(0);
+  // Ends the wait for a created session's row (settles it as "no row"); null when nothing is waiting.
+  const stopWait = useRef<(() => void) | null>(null);
   const [notice, setNotice] = useState<{ step: 'account' | 'name'; text: string } | null>(null);
   const [starting, setStarting] = useState(false);
   /** `starting` has been true for long enough that "Starting…" is no longer an
@@ -181,6 +197,12 @@ export function NewSessionSheet({
     };
   }, [open]);
 
+  // An unmount is a dismissal too: the wait's clock and its fleet subscription go with it, and nothing navigates.
+  useEffect(() => () => {
+    generation.current += 1;
+    stopWait.current?.();
+  }, []);
+
   // The slow-label clock. Keyed on `starting` alone, so it is armed by the same
   // transition that disables the button and disarmed by every exit from it —
   // including the close-reset below, which sets `starting` back to false.
@@ -194,6 +216,7 @@ export function NewSessionSheet({
   useEffect(() => {
     if (open) return;
     generation.current += 1;
+    stopWait.current?.();
     setWrapper(null);
     setProject(null);
     selectedCrossingRef.current = null;
@@ -216,10 +239,14 @@ export function NewSessionSheet({
     const prev = lastActive.get(s.workdir);
     if (prev === undefined || at > prev) lastActive.set(s.workdir, at);
   }
+  // This sheet's own list once it has one, else the store's cached one; the skeleton only when neither exists, and a
+  // failed fetch speaks only when there is nothing cached to show.
+  const shown: readonly ProjectRow[] | null = list ?? cachedProjects;
+  const shownError = shown === null ? listError : null;
   const ordered =
-    list === null
+    shown === null
       ? []
-      : [...list].sort((a, b) => {
+      : [...shown].sort((a, b) => {
           const ra = lastActive.get(a.workdir);
           const rb = lastActive.get(b.workdir);
           if (ra === undefined && rb === undefined) return 0; // keep server order
@@ -254,6 +281,22 @@ export function NewSessionSheet({
       selectedCrossingRef.current = null;
     }
   }, [project, wrapperPool]);
+
+  // The picked project follows the CURRENT row. A pick from the store's cached list holds that list's row, and the fetch
+  // that answers later replaces the list, not the pick: the crossing re-check above, the name door and `crossPool` all
+  // read the row, so it is re-resolved by workdir (the list's own identity) whenever the shown list changes. Found: the
+  // current row replaces it, and the crossing effect re-checks it from current data. Gone: the selection is withdrawn,
+  // as that effect withdraws an eligible-to-crossing change.
+  useEffect(() => {
+    if (project === null || shown === null) return;
+    const current = shown.find((candidate) => candidate.workdir === project.workdir);
+    if (current === undefined) {
+      setProject(null);
+      selectedCrossingRef.current = null;
+    } else if (current !== project) {
+      setProject(current);
+    }
+  }, [shown]);
 
   const pickProject = (candidate: ProjectRow): void => {
     selectedCrossingRef.current = isCrossing(candidate);
@@ -306,6 +349,25 @@ export function NewSessionSheet({
   /** The confirm's own gate, which Enter in the name field follows exactly. */
   const canStart = wrapper !== null && project !== null && !starting && preview.kind !== 'refused';
 
+  /** Settles with the first row `find` returns, checked now and on every change of the store, or with null at the bound
+   *  or when the sheet is dismissed (`stopWait`). The caller tells those two apart by the generation. */
+  const waitForRow = (find: () => FleetSession | null): Promise<FleetSession | null> => new Promise((resolve) => {
+    const settle = (row: FleetSession | null): void => {
+      clearTimeout(timer);
+      unsubscribe();
+      stopWait.current = null;
+      resolve(row);
+    };
+    const check = (): void => {
+      const row = find();
+      if (row !== null) settle(row);
+    };
+    const timer = setTimeout(() => settle(null), NEW_SESSION_WAIT_MS);
+    const unsubscribe = fleet.subscribe(check);
+    stopWait.current = () => settle(null);
+    check();
+  });
+
   const start = async (): Promise<void> => {
     if (wrapper === null || project === null || starting) return;
     const mine = generation.current;
@@ -319,10 +381,33 @@ export function NewSessionSheet({
         const answer = await api.workspaceAdd(project.name, { name, wrapper, ...(hasRoute ? { route } : {}) });
         // THE TITLE IS THE SERVER'S: it resolves a ticket again at create, so the preview's title (or what was typed) may
         // not be what it stored. An answer this build cannot read names none, rather than a guess.
-        toast(`Starting ${answer.named ? answer.title : project.name} on ${accountLabel(roster, wrapper)}…`);
-        onClose();
+        if (answer.named) {
+          // The answer carries the session's id: open it. A dismissed sheet only says it started, and goes nowhere.
+          if (mine !== generation.current) {
+            toast(`Starting ${answer.title} on ${accountLabel(roster, wrapper)}…`);
+            return;
+          }
+          onClose();
+          navigate(`/s/${encodeURIComponent(answer.id)}`);
+          return;
+        }
+        toast(`Starting ${project.name} on ${accountLabel(roster, wrapper)}…`);
+        // A dismissed sheet only says it started: the close is the parent's, and would shut a sheet reopened since.
+        if (mine === generation.current) onClose();
         return;
       }
+      // The new row can reach the fleet store before this create's HTTP answer, so what was alive is taken BEFORE it.
+      // The snapshot is defence in depth: past the already-live arm below, no id in it can be a main checkout of this
+      // project, so this sheet cannot reach the freshness conjunct of `startedSessionFor`. That conjunct is pinned at its
+      // owner (`start-program.test.tsx`, "startedSessionFor — the wait arm, directly").
+      const preLive = liveIdsIn(fleet.getState().sessions);
+      // A live main checkout of this project (any lane: a swap keeps the id) is usually what `ccd start` answers "already
+      // running" for, exit 0: the create succeeds and no new row comes, so there is nothing to wait for. The owner is
+      // deliberately wider than ccd's own collision test (a live `<A>-demo` while the operator picked lane B still starts a
+      // new `<B>-demo`), and then the sheet falls back to the toast-and-close it had before the wait. Taken BEFORE the
+      // create, from the owner `StartProgramSheet` refuses with.
+      const alreadyLive = liveMainCheckoutIn(fleet.getState().sessions, project.name) !== null;
+      const said = `Starting ${project.name} on ${accountLabel(roster, wrapper)}…`;
       const body = {
         wrapper, project: project.name, workdir: project.workdir,
         ...(hasRoute ? { route } : {}),
@@ -330,8 +415,25 @@ export function NewSessionSheet({
       await (isCrossing(project)
         ? api.createSession({ ...body, crossPool: true })
         : api.createSession(body));
-      toast(`Starting ${project.name} on ${accountLabel(roster, wrapper)}…`);
+      if (mine !== generation.current) {
+        toast(said);
+        return;
+      }
+      if (alreadyLive) {
+        // As before the wait existed: said, and closed, with no navigation.
+        toast(said);
+        onClose();
+        return;
+      }
+      // The create answers no id, so the sheet stays in its starting state until /ws/fleet lists the new main checkout.
+      const row = await waitForRow(() => startedSessionFor(fleet.getState().sessions, wrapper, project.name, preLive));
+      if (mine !== generation.current) {
+        toast(said); // dismissed during the wait: the create succeeded, so it is said once, with no sheet and no navigation
+        return;
+      }
+      if (row === null) toast(said);
       onClose();
+      if (row !== null) navigate(`/s/${encodeURIComponent(row.id)}`);
     } catch (err) {
       if (preview.kind === 'named') {
         const refusal = classifyAddError(err);
@@ -352,7 +454,9 @@ export function NewSessionSheet({
         toast(failedTo('start', err), 'error');
       }
     } finally {
-      setStarting(false);
+      // A dismissed start has nothing left to release: the close already cleared `starting`, and a sheet reopened since
+      // may have its own start in flight, which this one's end must not re-enable.
+      if (mine === generation.current) setStarting(false);
     }
   };
 
@@ -438,8 +542,8 @@ export function NewSessionSheet({
           <ProjectPicker
             query={query}
             onQuery={setQuery}
-            list={list}
-            listError={listError}
+            list={shown}
+            listError={shownError}
             empty={inPool.length === 0 && otherPool.length === 0}
           >
               {inPool.map((candidate) => (
@@ -499,11 +603,11 @@ export function NewSessionSheet({
               option is derived from `CLASSES`/`effortOptions` at render time,
               never a hand-typed list, so a class or effort rung this build
               adds or drops shows up here for free. Leaving all three unset
-              sends no `route` key at all — the coordinator row an ordinary
-              start has always landed on. */}
+              sends no `route` key at all — "Automatic" (unset), the coordinator
+              row an ordinary start has always landed on. */}
           <div className="route-row">
             <RouteField label="Class" value={routeClass} onChange={setRouteClass}>
-              <option value="">Coordinator row</option>
+              <option value="" title={AUTOMATIC_CLASS.title}>{AUTOMATIC_CLASS.word}</option>
               <option value="default">Default</option>
               {[...CLASSES].reverse().map((c) => (
                 <option key={c} value={c}>{classDisplayLabel(wrapper, c)}</option>
@@ -522,7 +626,7 @@ export function NewSessionSheet({
             </RouteField>
           </div>
           <p className="sheet-copy route-note">
-            Unset fields take the coordinator row (Opus · high, Sonnet subagents, workflows on).
+            Unset fields take the routing matrix's default (Opus · high, Sonnet subagents, workflows on).
             If the account can't serve the class today, ccd starts one rung down and restores it when it can.
           </p>
         </fieldset>

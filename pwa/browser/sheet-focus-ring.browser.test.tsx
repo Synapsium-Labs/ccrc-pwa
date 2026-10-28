@@ -49,10 +49,10 @@ async function openShortcuts(page: Page): Promise<void> {
   await page.keyboard.press('?');
 }
 
-/** The visible New session door: the `new-session` command door (Refined's bar and `+ New`, Instrument's top bar), or
- *  on an Instrument phone the fleet's round `+`, which carries no command mark until S11 (W2 S5, D-5471). */
+/** The visible New session door: the `new-session` command door (Refined's bar and `+ New`, Instrument's top bar).
+ *  Every visible one carries the command mark, Instrument's phone round `+` since T2b (D-6328). */
 async function openNewSession(page: Page): Promise<void> {
-  const door = page.locator('[data-command="new-session"]:visible, button.fab[aria-label="New session"]:visible').first();
+  const door = page.locator('[data-command="new-session"]:visible').first();
   await door.waitFor({ timeout: 20_000 });
   await door.focus();
   await page.keyboard.press('Enter');

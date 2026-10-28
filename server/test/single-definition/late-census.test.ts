@@ -529,7 +529,7 @@ describe('ARCH-77: child reclaim’s off switch has no writer in the tree, and o
   });
 
   it('no other cleanup lane names it: expiry, collect, the dead-coordinator lane and stop-done are stopped by reclaim-paused alone', () => {
-    const LANES = ['server/src/archivedExpiry.ts', 'server/src/stopDoneSweep.ts', 'server/src/sleepLane.ts', 'server/src/deadCoordinator.ts',
+    const LANES = ['server/src/archivedExpiry.ts', 'server/src/sleepLane.ts', 'server/src/deadCoordinator.ts',
       'server/src/coord/expireArchived.ts', 'server/src/coord/endDeadCoordinator.ts', 'server/src/coord/collectTempRoot.ts',
       'server/src/coord/collectOrphanTree.ts', 'server/src/coord/staleArchive.ts'];
     for (const f of LANES) {
@@ -688,5 +688,20 @@ describe('the sleep lanes share one executor (D-7042; ARCH-43)', () => {
     const mine = sites.filter((x) => x.file === HOME);
     expect(mine.filter((x) => x.tag === 'verb' && x.form !== 'ccdCan').map((x) => `${x.line} ${x.text.trim()}`)).toEqual([]);
     expect(mine.some((x) => x.form === 'ccdCan'), 'CONTROL: the census reads the executor').toBe(true);
+  });
+});
+
+// D-7079 (ARCH-72, consolidation plan 2026-10-27 W5 Task C5j; spec K16), built under the coordinator's ring ruling,
+// option (a). APPENDED. `FleetState.ccdVerbs` has ONE writer, `recordCcdVerbs` in `server/src/fleetstate.ts`, beside
+// the type: the ready frame (`remote/client.ts#onReady`), the remote refresh (`refreshcaps.ts#makeRefreshCaps`, handed
+// the setter by the composition root under that ruling, so it imports `fleetstate.ts` only as a type) and local mode's
+// one read (`index.ts`) all write through it. `ccdVerbsWriters()` (`census-w5/singleWriters.ts`) read 3 at C5j's base and is pinned at 1 here;
+// it may only shrink. The two object-literal initialisers (`ccdVerbs: null`) are reported apart and are not writers.
+describe('FleetState.ccdVerbs has one writer, recordCcdVerbs, handed to refreshcaps.ts by the composition root (D-7079; ARCH-72)', () => {
+  it('the ccdVerbs writers are one, fleetstate.ts#recordCcdVerbs (3 -> 1 at C5j; may only shrink)', async () => {
+    const { ccdVerbsWriters } = await import('../census-w5/singleWriters.js');
+    const r = ccdVerbsWriters();
+    expect(r.writers.map((s) => s.name)).toEqual(['fleetstate.ts#recordCcdVerbs']);
+    expect(r.initialisers.map((s) => s.name).sort(), 'the initialisers, reported apart').toEqual(['index.ts#(module)', 'remote/client.ts#FleetClient']);
   });
 });

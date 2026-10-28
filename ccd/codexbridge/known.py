@@ -28,7 +28,9 @@ explained here or fixed. The sources:
 
 NOT HERE, ON PURPOSE: `clear_tool_uses_20250919` (D-6417: the doctor names that edit the first day it arrives); a
 reasoning item with no encrypted content (`reducer.UNREADABLE_REASONING`: a reply whose reasoning cannot be replayed
-is drift); every model substitution (each is a Claude Code fallback worth seeing).
+is drift); every model substitution (each is a Claude Code fallback worth seeing); the system-entry block names the
+bridge does not handle, `unrecognised` and inbound.UNKNOWN_REFERENCE among them (D-7143: the honoured ones are
+explained in `requestField` below).
 
 MEASURED SINCE: the response headers of the backend's front end. The runbook's first live step (step 2, 2026-10-27)
 printed every answer's header names, and each name every answer carried is now in `responseHeader` below, with what
@@ -52,6 +54,17 @@ CODEX_HEADER_PREFIX = "x-codex-"
 # reducer's IGNORED_EVENTS does not hold.
 _CODEX_SKIPPED_EVENTS = frozenset({"codex.response.metadata", "response.metadata"})
 
+# The event types the backend sends that the Codex CLI does not name at all (D-7119). `keepalive` (by its name a
+# heartbeat; its payload, timing and which responses carry it were not recorded) was counted by name on lane-b's
+# direct traffic (2026-10-27: 4 events in the first 471 message requests after the flip). Upstream Codex at
+# rust-v0.164.0 yields no event for it (codex-api/src/sse/responses.rs): process_responses_event has no arm for it and
+# its default arm only logs, and a frame without a `type` fails Codex's parse and is skipped; only that file's
+# kind-independent readers (the served model in `headers`, `safety_buffering`) could act on it, and only on fields
+# nothing measured it carrying. The bridge names it and reads nothing else (reducer.Reducer.feed), and its arrival
+# resets the idle bound like any parsed event (server.py#_Request._reduce sets last_event for each), as each frame
+# restarts Codex's per-event idle timeout (process_sse_with_treatment).
+_BACKEND_EVENTS = frozenset({"keepalive"})
+
 KNOWN = {
     "requestField": frozenset({
         # measured on every Claude Code 2.1.308 message request
@@ -60,8 +73,19 @@ KNOWN = {
         "temperature", "top_p", "top_k", "stop_sequences", "service_tier", "mcp_servers", "container",
         # the names inbound counts for a shape it maps
         "thinking-block", "is_error", "defer_loading", "output_config.format",
+        # The tool-change blocks of a `role: system` entry, under Claude Code 2.1.310's two tool-change betas (betaValue
+        # below; D-7093), counted by inbound._count_dropped (D-7094) and honoured since D-7143: inbound._tool_changes
+        # reads each and inbound._fold_tool_changes folds them into the tools offered upstream, in message order.
+        # A removal (by reference) drops that tool.
+        "tool_removal-block",
+        # An addition, and its tool's type: by reference (a tool `tools` already offers, or one an earlier addition
+        # defined), or by value (a tools-style definition, made a tool exactly as a `tools` entry is, inbound._tool).
+        "tool_addition-block", "tool_addition-block.tool_reference", "tool_addition-block.tool_definition",
+        # NOT HERE, ON PURPOSE: `tool_addition-block.unrecognised` (an addition with no typed tool, passed over),
+        # any other block or tool type, and inbound.UNKNOWN_REFERENCE (a by-reference addition of a name nothing
+        # offers), so the doctor names a shape the bridge does not handle the day it arrives.
     }),
-    "eventType": reducer.IGNORED_EVENTS | _CODEX_SKIPPED_EVENTS,
+    "eventType": reducer.IGNORED_EVENTS | _CODEX_SKIPPED_EVENTS | _BACKEND_EVENTS,
     # R12's unmapped items, skipped and counted (plan Task 3)
     "itemType": frozenset({"web_search_call", "image_generation_call", "compaction"}),
     "errorCode": errors.ALL_CODES,
@@ -125,12 +149,14 @@ KNOWN = {
         # The token-counting endpoint (`POST /v1/messages/count_tokens`), which rides only that request: the bridge
         # answers it locally (Task 8, `outcomes.countTokens`) and sends nothing upstream for it.
         "token-counting-2024-11-01",
-        # NOT HERE, ON PURPOSE (D-7093): `mid-conversation-tool-changes-2026-07-01` and `inline-tools-2026-09-15`.
-        # They gate `tool_addition`/`tool_removal` blocks in a `role: system` message (by reference, and by value as
-        # a `tool_definition`), which inbound drops with every non-text system block: a tool added by value is never
-        # offered upstream, and a removed one stays offered. The doctor keeps naming both until the bridge honours
-        # those blocks. Since D-7094 inbound counts each dropped block's type by name (`requestField:<type>-block`,
-        # inbound._count_dropped), and those names are not in this table either, so the doctor names them too.
+        # Tool changes in the middle of a conversation: `tool_addition`/`tool_removal` blocks in a `role: system`
+        # message, each naming a tool by reference. Inbound honours them (D-7143, inbound._fold_tool_changes): the
+        # tools offered upstream are the request's `tools` with each entry's blocks folded in, in message order.
+        # (D-7093 left this beta open until the bridge honoured those blocks.)
+        "mid-conversation-tool-changes-2026-07-01",
+        # A tool defined in a message: a `tool_addition` whose tool is a `tool_definition`, a tool absent from
+        # `tools`. Inbound makes it a tool exactly as a `tools` entry (inbound._tool) and offers it (D-7143).
+        "inline-tools-2026-09-15",
     }),
     "contextEdit": frozenset({"clear_thinking_20251015"}),
 }  # type: Dict[str, FrozenSet[str]]

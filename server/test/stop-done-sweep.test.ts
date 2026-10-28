@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { heldKindOf, stopDonePass, type StopDoneMemory, type StopDoneSweepDeps } from '../src/stopDoneSweep.js';
+import { heldKindOf, stopDonePass, type StopDoneMemory, type StopDoneSweepDeps } from '../src/sleepLane.js';
 import { STOP_DONE_DISABLED_MARKER, STOP_DONE_GRACE_MS, STOP_DONE_PER_PASS, STOP_DONE_RETRY_MS } from '../src/stopDone.js';
 import { PRESENCE_OPEN_TTL_MS, PRESENCE_TTL_MS, type FleetSession } from '../../shared/api.js';
 import type { SessionRecord } from '../src/registry.js';
@@ -120,6 +120,7 @@ function fake(ids: readonly string[], o: { verb?: boolean; serial?: boolean; hol
     },
     serial: o.serial === false ? null : async (fn) => { f.serialCalls++; return fn(); },
     queueRun: async (_id, fn) => fn(),
+    listing: async () => [],
     startedAt: STARTED,
     now: () => NOW,
   };
@@ -607,10 +608,10 @@ describe('stopDonePass: the mail-only feed row (D-6091)', () => {
   // D-7041: the pair is raised through the funnel, so the lane writes neither the archive nor the ring itself. Read
   // through scan/symbols.ts, not a literal pin: no `.recordFeedEvent(` and no `.record(` call anywhere in the files, and
   // `recordFeed` calls `notify` once, record-only. D-7042: the pair's code is the one sleep executor's (`sleepLane.ts`),
-  // so both files are read, and `recordFeed` is read where it now lives.
+  // and `recordFeed` is read where it now lives. D-7046: `stopDoneSweep.ts` is gone, so `sleepLane.ts` is the one file.
   it('the feed archive keeps one writer site', () => {
     const SRC = 'server/src/sleepLane.ts';
-    for (const file of ['server/src/stopDoneSweep.ts', SRC]) {
+    for (const file of [SRC]) {
       const calls = parsedFile(file).calls;
       expect(calls.filter((c) => c.name === 'recordFeedEvent').map((c) => c.line), `${file}: a hand-written archive write`).toEqual([]);
       expect(calls.filter((c) => c.name === 'record' && c.callee !== 'record').map((c) => c.line), `${file}: a hand-written ring record`).toEqual([]);
@@ -700,7 +701,7 @@ describe('run by the watcher\'s tick (D-5370)', () => {
   });
 });
 
-// The pass's own suite stubs `mark` and `rowAtAct`; this one runs the REAL `sweepStopDone`, so the closures the watcher
+// The pass's own suite stubs `mark` and `rowAtAct`; this one runs the REAL `sweepSleep` (`run-done`), so the closures the watcher
 // wires (`turnMarkFor` judged against the live process, the record re-read at the act) are what decides. A temp
 // registry, a real coordination store, a pane whose pid and live file the fixture writes, and one runner that answers
 // tmux and ccd, so a stop is one `stop` argv in its log.
@@ -764,7 +765,7 @@ describe('the watcher\'s own pass, its deps unmocked (D-5370)', () => {
       return { rows: [row], records: [r.record] };
     };
     const stops = () => calls.filter((c) => c[0] === 'hibernate' || c[0] === 'stop');
-    return { home, reg, coord, w, tick, stops, turnMark, startedAt };
+    return { home, reg, coord, w, tick, stops, turnMark, startedAt, deps };
   };
 
   it('control: an idle worker whose run is done, with a fresh `done` marker, is stopped', async () => {
@@ -772,7 +773,7 @@ describe('the watcher\'s own pass, its deps unmocked (D-5370)', () => {
     try {
       const t = await h.tick();
       expect(t.rows[0]).toMatchObject({ held: null, bucket: 'idle', child: { kind: 'child' } });
-      await h.w.sweepStopDone(t.rows, t.records, []);
+      await h.w.sweepSleep(t.rows, t.records, [], 'run-done');
       expect(h.stops()).toEqual([['hibernate', WID]]);
     } finally {
       h.coord.db.close();
@@ -785,7 +786,7 @@ describe('the watcher\'s own pass, its deps unmocked (D-5370)', () => {
       const t = await h.tick();
       expect(t.rows[0]!.held).toBeNull();
       writeFileSync(path.join(h.reg, `${WID}.hold`), 'a program claimed it');
-      await h.w.sweepStopDone(t.rows, t.records, []);
+      await h.w.sweepSleep(t.rows, t.records, [], 'run-done');
       expect(h.stops()).toEqual([]);
     } finally {
       h.coord.db.close();
@@ -797,7 +798,7 @@ describe('the watcher\'s own pass, its deps unmocked (D-5370)', () => {
     try {
       h.turnMark(h.startedAt - 60_000);
       const t = await h.tick();
-      await h.w.sweepStopDone(t.rows, t.records, []);
+      await h.w.sweepSleep(t.rows, t.records, [], 'run-done');
       expect(h.stops()).toEqual([]);
     } finally {
       h.coord.db.close();
@@ -812,7 +813,7 @@ describe('the watcher\'s own pass, its deps unmocked (D-5370)', () => {
         v: 1, sessionId: WUUID, state: 'done', event: 'Stop', at, turnAt: at - 60_000, stopAt: at,
         bg: 1, bgKinds: 'monitor', bgIds: 'b1', err: null, restartAt: null, lostBg: 0, lostKinds: '', lostIds: '', crons: 0 })}\n`);
       const t = await h.tick();
-      await h.w.sweepStopDone(t.rows, t.records, []);
+      await h.w.sweepSleep(t.rows, t.records, [], 'run-done');
       expect(h.stops()).toEqual([]);
     } finally {
       h.coord.db.close();
@@ -827,7 +828,7 @@ describe('the watcher\'s own pass, its deps unmocked (D-5370)', () => {
     try {
       h.coord.db.prepare("UPDATE runs SET state = 'failed'").run();
       const t = await h.tick();
-      await h.w.sweepStopDone(t.rows, t.records, []);
+      await h.w.sweepSleep(t.rows, t.records, [], 'run-done');
       expect(h.stops()).toEqual([['hibernate', WID]]);
     } finally {
       h.coord.db.close();
@@ -839,7 +840,7 @@ describe('the watcher\'s own pass, its deps unmocked (D-5370)', () => {
     try {
       h.coord.db.prepare("UPDATE runs SET state = 'awaiting-review', closedAt = NULL").run();
       const t = await h.tick();
-      await h.w.sweepStopDone(t.rows, t.records, []);
+      await h.w.sweepSleep(t.rows, t.records, [], 'run-done');
       expect(h.stops()).toEqual([['hibernate', WID]]);
     } finally {
       h.coord.db.close();
@@ -851,12 +852,50 @@ describe('the watcher\'s own pass, its deps unmocked (D-5370)', () => {
     try {
       h.coord.db.prepare("UPDATE runs SET state = 'working', closedAt = NULL").run();
       const t = await h.tick();
-      await h.w.sweepStopDone(t.rows, t.records, []);
+      await h.w.sweepSleep(t.rows, t.records, [], 'run-done');
       expect(h.stops()).toEqual([]);
     } finally {
       h.coord.db.close();
     }
   });
+
+  // C4g fix round (D-7047; the plain-readdir ratchet, D-5969): the act's listing, as the watcher wires it, reads
+  // `readdirMeasured`, and its failure holds the act. The run-done lane has no arming switch, so a listing that read a
+  // failure as "no switches raised" would simply clear it; these rows pin the real wiring. The plain listing is left
+  // answering the registry's names, so a wiring that read it would act; both failures, and a rejection, hold.
+  for (const failure of ['absent', 'unreadable', 'rejects'] as const) {
+    it(`the act's listing through readdirMeasured: a registry ${failure} at the act holds it (fail shut)`, async () => {
+      const h = await harness();
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      try {
+        const t = await h.tick();
+        const io = h.deps.io;
+        const regDir = h.deps.cfg.registryDir;
+        const reads: string[] = [];
+        h.deps.io = {
+          ...io,
+          readdir: async (p: string) => { if (p === regDir) reads.push('plain'); return io.readdir(p); },
+          readdirMeasured: async (p: string) => {
+            if (p !== regDir) return io.readdirMeasured(p);
+            reads.push('measured');
+            if (failure === 'rejects') throw new Error('EIO');
+            return { ok: false, reason: failure };
+          },
+        } as never;
+        // the plain listing would still answer the registry's names
+        expect(await io.readdir(regDir)).toContain(`${WID}.uuid`);
+        await h.w.sweepSleep(t.rows, t.records, [], 'run-done');
+        expect(h.stops()).toEqual([]);
+        // the act lists once, measured
+        expect(reads.filter((r) => r === 'measured')).toEqual(['measured']);
+        expect(warn.mock.calls.map((c) => String(c[0])).filter((l) => l.includes('stop-done')))
+          .toEqual([`ccrc-server: stop-done: ${WID} was not put to sleep: the registry was unlistable during the pass`]);
+      } finally {
+        warn.mockRestore();
+        h.coord.db.close();
+      }
+    });
+  }
 });
 
 // D-7041 (ARCH-43, the run-done funnel task), characterization: green on the lane before its feed pair moved onto the

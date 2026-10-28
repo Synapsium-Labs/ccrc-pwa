@@ -6,7 +6,7 @@
 // 42 px under a fine pointer when its name and its context each fit on a line, the state word at the context line's end
 // (T3b, R21's F2: every row at most three lines and under 61 px, and a long name never pushes `waiting · needs you`
 // onto a line of its own; a main checkout, with no context, keeps the state beside its name), which under a touch
-// screen is the tap floor again, the status bar's count whole at 900 under both pointers, and the rail's unread pill on
+// screen is the tap floor again, the status bar's count whole at 900 under both pointers, and the rail's Inbox count pill on
 // its Inbox door's top-right corner.
 //
 // The fixture is 14 sessions across two projects, in every bucket (3 attention, 3 working, 3 done, 3 idle, 2 dead: nine
@@ -35,7 +35,7 @@
 //   `.ins-status-summary { max-width: 6ch }` ........... "at 900 the status bar's count is whole, with two open runs" (both pointers;
 //                                                         `expected 211 to be less than or equal to 40`)
 // T2e review R32, F7 (carried into T2g; RUN with -t "Inbox count", each mutant reverted):
-//   `.ins-rail-count` without `position: absolute` ..... "at 1280x800 the unread pill sits on the Inbox door's top-right corner, inside the door"
+//   `.ins-rail-count` without `position: absolute` ..... "at 1280x800 the count pill sits on the Inbox door's top-right corner, inside the door"
 //                                                         (`top inset 13.203125 vs --sp-1 4: expected 9.203125 to be less than or equal to 2`; both themes)
 //   `.ins-rail-count` without `right: var(--sp-1)` ..... the same case (`right inset 16.203125 vs --sp-1 4: expected 12.203125 to be less than or equal to 2`)
 // Desktop polish T3b (R21's F2, the operator's R121; RUN, this file alone, each mutant restored from a saved copy):
@@ -104,12 +104,6 @@ const WITH_RUNS: AppFixture = {
   fleetFrames: [{ type: 'fleet', sessions: SESSIONS }, { type: 'runs', runs: RUNS }],
 };
 const SESSION_ROUTE = '/s/project-a-desk-density-pass';
-// The same fleet with three unread mail records in the durable feed (`GET /api/feed`, which the store reads once on its
-// first connect; no ack is stored, so every record is past it): the rail's Inbox door then reads "Inbox, 3 unread".
-const MAIL = [1, 2, 3].map((seq) => ({
-  seq, at: 1_800_000_000_000 + seq, kind: 'mail', sessionId: 'project-a-desk-density-pass', title: 'unread', body: '', runId: null,
-}));
-const WITH_MAIL: AppFixture = { api: { ...FIXTURE.api, '/api/feed': { events: MAIL } }, fleetFrames: FIXTURE.fleetFrames };
 
 let dist: string | undefined;
 let server: DistServer | undefined;
@@ -192,12 +186,12 @@ const BUDGET = BEFORE - AFTER_OFFSET;
 
 describe("the rail's Inbox count (T2e review R32, F7)", () => {
   for (const theme of THEMES) {
-    it(`at 1280x800 the unread pill sits on the Inbox door's top-right corner, inside the door (${theme})`, async () => {
-      const { ctx, page } = await open(theme, 1280, 800, '/', false, WITH_MAIL);
+    it(`at 1280x800 the count pill sits on the Inbox door's top-right corner, inside the door (${theme})`, async () => {
+      const { ctx, page } = await open(theme, 1280, 800, '/');
       try {
         await page.waitForSelector('.ins-rail-count', { timeout: 20_000 });
         const m = await page.evaluate(() => {
-          const door = document.querySelector('.ins-rail-item[aria-label="Inbox, 3 unread"]')!;
+          const door = document.querySelector('.ins-rail-item[aria-label="Inbox, 3 waiting for you"]')!;
           const pill = door.querySelector('.ins-rail-count')!;
           // `--sp-1` as the page resolves it: the width of a probe that takes the token.
           const probe = document.createElement('div');

@@ -117,6 +117,22 @@ export interface SessionState {
    *  showing stays up, read-only, and sends nothing (`the-ask-holds-through-a-reconnect`). Per connection, never
    *  persisted. */
   askFrameSeen: boolean;
+  /** R69: the client-side LIFECYCLE generation of the ask: a count, starting at 0, that the reducer raises one frame at a
+   *  time (so a clear inside a batch of frames is counted whatever React batches) in exactly two cases:
+   *  - an `ask_cleared` frame while the store HOLDS an envelope (`ask` not null): the hook ended its ask. With none held it
+   *    clears nothing: it is a connection's first statement, which the server sends whenever there is no envelope;
+   *  - a `dialog_cleared` frame while NO envelope is held: without the hook's envelope the pane's menu is all there is of
+   *    the ask, so its vanishing ends it. For a hooked ask the hook is the lifecycle authority, and a poll that sees no
+   *    menu for one tick does not end it.
+   *  Nothing else moves it: not `ask`, `dialog` or `rotated`, and not the socket leaving `open` (`onState` lowers `dialog`
+   *  with no frame). So a reconnect keeps the count, except when the store held an envelope that the new connection's
+   *  first `ask_cleared` then clears. That frame, with an envelope held, means the server stated no envelope at that
+   *  moment: the ask ended during the drop, OR the server flapped (a failed hook-state read, or an aged-envelope keep
+   *  decision restarting). Either releases the keys, the safe direction. It is a lifecycle count, not a content
+   *  identity and not an ask id: the keyboard's engagement (`DialogSheet`'s `askIdentity`) joins it to the envelope's
+   *  content, so a clear plus a byte-identical ask is a new ask. Nothing persists it: no stored or offline state carries it,
+   *  though the in-memory `SessionSnapshot` the reducer works on does, and a new store starts at 0. */
+  askEpoch: number;
   tasks: TaskItem[]; // the session's task list, as the TUI's widget shows it
   /** D-5372: the tasks frame's `touchedAt` (newest task file mtime, epoch ms);
    *  absent when the frame carried none. Replaced with every tasks frame. */
@@ -189,6 +205,8 @@ export type SessionSnapshot = Pick<
   /** D-6325. Optional HERE only, like `workflows`: `snapshotOf` always carries it, and a snapshot built without it (the
    *  reducer's own suites) reads as false. */
   askFrameSeen?: boolean;
+  /** R69. Optional HERE only, as `askFrameSeen`: `snapshotOf` always carries it, and a snapshot built without it reads 0. */
+  askEpoch?: number;
   /** D-5560. Optional HERE only: `snapshotOf` always carries both, and a
    *  snapshot built without them (the reducer's own suites) reads as no rows. */
   workflows?: WorkflowView[];
@@ -289,7 +307,7 @@ export function applySessionMsg(s: SessionSnapshot, msg: SessionStreamMsg): Sess
     case 'dialog':
       return { ...s, dialog: msg.dialog };
     case 'dialog_cleared':
-      return { ...s, dialog: null };
+      return { ...s, dialog: null, askEpoch: (s.askEpoch ?? 0) + (s.ask === null ? 1 : 0) };
     case 'tasks':
       return { ...s, tasks: msg.tasks, tasksTouchedAt: msg.touchedAt };
     case 'workflows':
@@ -299,16 +317,19 @@ export function applySessionMsg(s: SessionSnapshot, msg: SessionStreamMsg): Sess
     // just above.
     case 'mail':
       return { ...s, mail: msg.mail };
-    // The hook-sourced envelope (Task 8, PR C). It resets the exact same way
-    // `dialog` does above: only its own `_cleared` message (and the store's
-    // initial state) null it out — `rotated` below touches events/uuid/offset
-    // only, because a transcript switch does not itself mean a live menu (or
-    // the hook's envelope for one) went away.
+    // The hook-sourced envelope (Task 8, PR C). Its own `_cleared` message
+    // (and the store's initial state) null it out, as `dialog_cleared` does
+    // `dialog` above — `rotated` below touches events/uuid/offset only,
+    // because a transcript switch does not itself mean a live menu (or the
+    // hook's envelope for one) went away. One difference since D-6325: the
+    // socket leaving `open` also lowers `dialog` (`onState`), and never `ask`,
+    // which stays for the held surface while `askFrameSeen` says this
+    // connection has not spoken about it.
     // Either frame is this connection's statement about the envelope, so either sets `askFrameSeen` (D-6325).
     case 'ask':
       return { ...s, ask: msg.ask, askFrameSeen: true };
     case 'ask_cleared':
-      return { ...s, ask: null, askFrameSeen: true };
+      return { ...s, ask: null, askFrameSeen: true, askEpoch: (s.askEpoch ?? 0) + (s.ask === null ? 0 : 1) };
     case 'rotated':
       // FIVE transcript facts die with the transcript (final review, Minor 6;
       // `fileMeasured` joined them with the measured-read completion) — only
@@ -360,6 +381,7 @@ const snapshotOf = (s: SessionState): SessionSnapshot => ({
   dialog: s.dialog,
   ask: s.ask,
   askFrameSeen: s.askFrameSeen,
+  askEpoch: s.askEpoch,
   tasks: s.tasks,
   tasksTouchedAt: s.tasksTouchedAt,
   workflows: s.workflows,
@@ -778,6 +800,7 @@ export function createSessionStore(id: string, deps: SessionStoreDeps = {}): Ses
       dialog: null,
       ask: null,
       askFrameSeen: false,
+      askEpoch: 0,
       tasks: [],
       workflows: [],
       workflowsUnreadable: false,

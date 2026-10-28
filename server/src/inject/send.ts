@@ -836,8 +836,12 @@ const ANY_PASTE_CHIP = /\[Pasted text #\d+/;
  * itself, for a pane `paneRows` tall: (rows - 10) / 2, wrapped rows counted.
  * Measured by the investigations at 30, 40, 50 and 70 rows (10, 15, 20, 30) and
  * here at 50 (`cc300-paste-tall-*.txt`). The fleet pins its windows at 50 rows
- * (`PINNED_WINDOW_ROWS`), so 20 there. A version that changes it makes a hidden
- * head unprovable, and the send falls back to today's refusal.
+ * (`PINNED_WINDOW_ROWS`), so 20 there. In `'tail'` mode (`ownRenderedBox`) a
+ * version that changes it makes a hidden head unprovable, and the send falls
+ * back to today's refusal. `'whole'` mode (`resumeIfOwn: 'whole'`) has no such
+ * fallback: it refuses a box only at THIS formula's cap, so under a version
+ * whose cap differs, a box at the real cap is refused only when its first run
+ * is not equal to ours (R49).
  */
 const boxRowCap = (paneRows: number): number => Math.floor((paneRows - 10) / 2);
 
@@ -921,7 +925,10 @@ export function ownRenderedBox(ansiPane: string, parts: readonly string[], prove
  * ours, so nothing of ours is hidden above the window and no row is added. `'whole'` also refuses a box AT the row
  * cap (R43 F1): such a box keeps its last rows in view, so rows above the window cannot be seen, and a claim equal to
  * the visible rows would press Enter over lines never claimed. The cost, a message that renders at exactly the cap
- * cannot be resumed and answers `draft-present`, is the safe direction (the one the hidden-head case takes). A resume
+ * cannot be resumed and answers `draft-present`, is the safe direction (the one the hidden-head case takes). That cap
+ * is `boxRowCap`'s formula, floor((paneRows - 10) / 2), measured on Claude Code 2.1.300 only (R49): `'tail'` falls back
+ * to the refusal when a version moves it, but `'whole'` does not, since under a version whose cap differs this guard
+ * misses a box at the real cap and only the first-run equality stands. A resume
  * cannot have this call's provenance (an earlier call typed the text): the ownership claim is the client's `resume`
  * plus this correspondence.
  *
@@ -1272,7 +1279,10 @@ export type OnDraft = 'refuse' | 'replace' | 'stash';
  * rows read as the rows they are (`renderedAsTyped`, the correspondence
  * `ownRenderedBox` proves: no non-space character added or removed). Any
  * other box is `draft-present`, a box at the row cap included (rows above the window cannot be seen, R43 F1; a message
- * that renders at exactly the cap cannot be resumed, the safe direction); an EMPTY box is `nothing-to-submit`,
+ * that renders at exactly the cap cannot be resumed, the safe direction). That cap is `boxRowCap`'s formula,
+ * floor((paneRows - 10) / 2), measured on Claude Code 2.1.300: unlike the `'tail'` read, this mode does not fall back
+ * to a refusal when a version moves the cap, so there a box at the real cap is refused only when its first run is not
+ * equal to ours (R49). An EMPTY box is `nothing-to-submit`,
  * because the earlier send may have landed and nothing is ever retyped. It types, clears and
  * stashes nothing (`onDraft` is not consulted).
  *

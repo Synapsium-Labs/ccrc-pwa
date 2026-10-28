@@ -18,6 +18,8 @@ import {
   HistorySection, InspectorSections, LaneSection, MailSection, PrSection, RoutingSection, TasksSection,
 } from '../src/inspector/InspectorSections';
 import { navigate } from '../src/lib/router';
+import { routeView } from '../src/session/routeView';
+import { routingLine } from '../src/session/routingLine';
 import { SessionScreen } from '../src/screens/SessionScreen';
 import { SkinSetProvider } from '../src/skins/frame';
 import { INSTRUMENT_SET } from '../src/skins/instrument/parts';
@@ -184,6 +186,205 @@ describe('the inspector sections', () => {
     render(<RoutingSection />);
     expect(screen.getByRole('button', { name: 'Model: model-x, change' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Effort: high, change' })).toBeInTheDocument();
+  });
+
+  it("an unread or inert door keeps its old name, and shows a word its name says", () => {
+    stubWidth(1920);
+    goTo(`/s/${ID}`);
+    const named = (name: string): void => {
+      const door = screen.getByRole('button', { name });
+      expect(name, door.textContent ?? '').toContain(door.textContent ?? '\u0000');
+    };
+    act(() => useFleetStore.setState({ sessions: [{ ...ROW, model: null, effort: null }] }));
+    let r = render(<RoutingSection />);
+    named('Model: not read yet, change');
+    named('Effort: set effort, change');
+    r.unmount();
+    act(() => useFleetStore.setState({
+      sessions: [{ ...ROW, route: { fields: { effort: 'max' }, degraded: null, inert: ['effort'], unreadable: [] } }],
+    }));
+    r = render(<RoutingSection />);
+    named('Effort: set by the lane, change');
+    r.unmount();
+  });
+});
+
+/** A session id the `seed()` never fills: its store holds no tasks and no mail. */
+const BARE = 'lane-a-project-a-calm-ridge';
+const sectionIds = (container: HTMLElement): string[] =>
+  [...container.querySelectorAll('[data-section]')].map((e) => e.getAttribute('data-section')!);
+
+describe('a section with nothing to show renders nothing (desktop polish T3d, D-6334)', () => {
+  it('an empty Tasks, Mail or PR section does not render', () => {
+    stubWidth(1920);
+    goTo(`/s/${BARE}`);
+    const workspaceNoPr = fleetSession({
+      id: BARE, wrapper: 'lane-a', home: 'lane-a', project: 'project-a', workspace: 'calm-ridge', model: 'model-x',
+      effort: 'high',
+      pr: { phase: 'none', number: null, url: null, title: null, checks: 'none', checkNames: null, ahead: 0,
+        reason: null, checkedAt: null, mergedAt: null, retryAt: null } as never,
+    });
+    const mainCheckout = fleetSession({
+      id: BARE, wrapper: 'lane-a', home: 'lane-a', project: 'project-a', workspace: null, model: 'model-x',
+      effort: 'high',
+    });
+    // A workspace row the PR sweep has not read at all carries no PR object (`FleetSession.pr` is nullable).
+    const workspaceNullPr = { ...workspaceNoPr, pr: null };
+    for (const row of [workspaceNoPr, workspaceNullPr, mainCheckout]) {
+      act(() => useFleetStore.setState({ sessions: [row] }));
+      const { container, unmount } = render(<InspectorSections />);
+      for (const id of ['tasks', 'mail', 'pr']) {
+        expect(container.querySelector(`[data-section='${id}']`), `${row.workspace} ${id}`).toBeNull();
+      }
+      for (const words of ['No plan', 'No mail', 'Not read yet', 'No PR']) {
+        expect(container.textContent, words).not.toContain(words);
+      }
+      unmount();
+    }
+  });
+
+  it('a row whose pr is absent renders no PR section and does not throw', () => {
+    stubWidth(1920);
+    goTo(`/s/${BARE}`);
+    // The fleet wire is a cast, so a frame can omit `pr`; the header's cap tolerates that, and so must the rail.
+    const noPr = { ...ROW, id: BARE, pr: undefined } as unknown as FleetSession;
+    act(() => useFleetStore.setState({ sessions: [noPr] }));
+    const { container } = render(<InspectorSections />);
+    expect(container.querySelector("[data-section='pr']")).toBeNull();
+    expect(container.querySelector("[data-section='history']")).not.toBeNull();
+  });
+
+  it('History renders alone when nothing else has content', () => {
+    stubWidth(1920);
+    goTo(`/s/${BARE}`);
+    // No fleet row yet (a deep link), no tasks, no mail, no usage reading.
+    act(() => useFleetStore.setState({ sessions: [], usage: null }));
+    let r = render(<Rail />);
+    expect(sectionIds(r.container)).toEqual(['history']);
+    r.unmount();
+
+    // A main checkout with a row: what runs is content, so Routing joins History and nothing else does.
+    act(() => useFleetStore.setState({
+      sessions: [fleetSession({ id: BARE, wrapper: 'lane-a', home: 'lane-a', project: 'project-a', model: 'model-x', effort: 'high' })],
+      usage: [],
+    }));
+    r = render(<Rail />);
+    expect(sectionIds(r.container)).toEqual(['routing', 'history']);
+    r.unmount();
+  });
+
+  it('the lane section renders only with a reading', () => {
+    stubWidth(1920);
+    goTo(`/s/${ID}`);
+    // The last shape has a reading for this lane but no figure in either window, so no window binds (`bindingWindow`).
+    const unmeasured = [{ ...USAGE, five: null, seven: null }];
+    for (const usage of [null, [{ ...USAGE, wrapper: 'lane-b' }], [], unmeasured] as (AccountUsage[] | null)[]) {
+      act(() => useFleetStore.setState({ usage }));
+      const r = render(<LaneSection />);
+      expect(r.container.querySelector("[data-section='lane']"), JSON.stringify(usage)).toBeNull();
+      expect(r.container.textContent).not.toMatch(/not read yet|No usage/i);
+      r.unmount();
+    }
+    // A session whose row is not read yet has no lane to name.
+    act(() => useFleetStore.setState({ sessions: [], usage: [USAGE] }));
+    const r = render(<LaneSection />);
+    expect(r.container.innerHTML).toBe('');
+    r.unmount();
+  });
+
+  it('the routing section is one line that says what runs', () => {
+    stubWidth(1920);
+    goTo(`/s/${ID}`);
+    const routed = (live: string, fields: NonNullable<FleetSession['route']>['fields']): FleetSession => ({
+      ...ROW, model: live, route: { fields, degraded: null, inert: [], unreadable: [] },
+    });
+    const line = (): HTMLElement => {
+      const { container } = render(<RoutingSection />);
+      const el = container.querySelector<HTMLElement>('.insp-routing-row');
+      expect(el).not.toBeNull();
+      return el!;
+    };
+
+    let el = line();
+    expect(el.textContent).toBe('Runs model-x on Lane A · effort high');
+    expect(el.querySelector("[data-command='session-model']")).not.toBeNull();
+    expect(el.querySelector("[data-command='session-effort']")).not.toBeNull();
+    cleanup();
+
+    // A class asked for, and the roster entry carries no provider: not measurable, so nothing is asked or queued.
+    act(() => useFleetStore.setState({ sessions: [routed('Sonnet 5', { class: 'opus' })] }));
+    el = line();
+    expect(el.textContent).not.toMatch(/asked|queued/);
+    cleanup();
+
+    // The same ask on a lane known to be Anthropic's: asked, in the header's pending style.
+    act(() => useFleetStore.setState({
+      roster: [{ id: 'lane-a', label: 'Lane A', hue: 'acct-1', homeAble: true, provider: 'anthropic' } as never],
+    }));
+    el = line();
+    expect(el.textContent).toMatch(/ · asked Opus 5\.5$/);
+    // The pill holds the asked words only: the separator is plain text beside it, so the pill never wraps it.
+    expect(el.querySelector('.route-queued')?.textContent).toBe('asked Opus 5.5');
+  });
+
+  it('the routing line reads exactly the sentence, whichever parts it carries', () => {
+    stubWidth(1920);
+    goTo(`/s/${ID}`);
+    act(() => useFleetStore.setState({
+      roster: [{ id: 'lane-a', label: 'Lane A', hue: 'acct-1', homeAble: true, provider: 'anthropic' } as never],
+    }));
+    const route = (over: Partial<NonNullable<FleetSession['route']>>): FleetSession['route'] =>
+      ({ fields: {}, degraded: null, inert: [], unreadable: [], ...over });
+    const cases: [string, Partial<FleetSession>, string][] = [
+      ['an asked class', { model: 'Sonnet 5', route: route({ fields: { class: 'opus' } }) }, ' · asked Opus 5.5'],
+      ['an asked effort', { route: route({ fields: { effort: 'max' } }) }, ' · asked effort max'],
+      ['an inert class', { route: route({ fields: { class: 'opus' }, inert: ['class'] }) }, ' · model set by the lane'],
+      ['an unreadable field', { route: route({ unreadable: ['effort'] }) }, ' · routing could not be read'],
+      ['no model yet', { model: null }, 'Runs a model not read yet on Lane A'],
+      ['no effort yet', { effort: null }, ' · set effort'],
+      ['ultracode', { effort: 'xhigh', ultracode: true }, ' · effort ultracode'],
+      ['an inert effort', { route: route({ fields: { effort: 'max' }, inert: ['effort'] }) }, ' · effort set by the lane'],
+    ];
+    for (const [name, over, expected] of cases) {
+      const row: FleetSession = { ...ROW, ...over };
+      act(() => useFleetStore.setState({ sessions: [row] }));
+      const { container, unmount } = render(<RoutingSection />);
+      const el = container.querySelector<HTMLElement>('.insp-routing-row')!;
+      const sentence = routingLine(row, routeView(row, row.wrapper, 'anthropic'), 'Lane A').sentence;
+      // The shape really carries its part, and the component prints the sentence and nothing else.
+      expect(sentence, name).toContain(expected);
+      expect(el.textContent, name).toBe(sentence);
+      // The separator travels with what follows it, so a narrow rail never ends a line on a lone "·": the effort door,
+      // each ask and each note sit in a tail that opens on " · ", and no "·" stands outside a tail.
+      const pieces = el.querySelectorAll("[data-command='session-effort'], .route-queued, .insp-note");
+      expect(pieces.length, name).toBeGreaterThan(0);
+      for (const piece of pieces) {
+        const tail = piece.parentElement;
+        expect(tail?.classList.contains('insp-routing-tail'), `${name}: ${piece.textContent}`).toBe(true);
+        expect(tail?.textContent?.startsWith(' · '), `${name}: ${tail?.textContent}`).toBe(true);
+      }
+      const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+      for (let t = walker.nextNode(); t !== null; t = walker.nextNode()) {
+        if (!t.textContent?.includes('·')) continue;
+        expect(t.parentElement?.classList.contains('insp-routing-tail'), `${name}: lone '${t.textContent}'`).toBe(true);
+      }
+      // Two tails in a row would hold no break between them, so each tail opens on a break opportunity.
+      for (const tail of el.querySelectorAll('.insp-routing-tail')) {
+        expect(tail.previousSibling?.nodeName, `${name}: ${tail.textContent}`).toBe('WBR');
+      }
+      unmount();
+    }
+
+    // An inert effort on an ultracode pane draws a plain door, not the accent one around 'set by the lane'.
+    const inertUltra: FleetSession = {
+      ...ROW, effort: 'xhigh', ultracode: true, route: route({ fields: { effort: 'max' }, inert: ['effort'] }),
+    };
+    act(() => useFleetStore.setState({ sessions: [inertUltra] }));
+    const r = render(<RoutingSection />);
+    const door = r.container.querySelector<HTMLElement>("[data-command='session-effort']")!;
+    expect(door.textContent).toBe('set by the lane');
+    expect(door.className).not.toContain('ultra');
+    r.unmount();
   });
 });
 

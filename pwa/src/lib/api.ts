@@ -347,9 +347,13 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
      *  — an ordinary fetch (the fleet screen, this sheet's own project list)
      *  asks nothing and gets the byte-identical class-blind answer; only a
      *  caller that means to forecast one class's placement sends it. */
-    projects: (cls?: string) => getJson<{ roots: string[]; projects: ProjectRow[] }>(
-      cls === undefined ? '/api/projects' : `/api/projects?class=${encodeURIComponent(cls)}`,
-    ),
+    projects: async (cls?: string) => {
+      const read = await getJson<{ roots: string[]; projects: ProjectRow[] }>(
+        cls === undefined ? '/api/projects' : `/api/projects?class=${encodeURIComponent(cls)}`,
+      );
+      if (!Array.isArray(read?.projects)) throw new Error("The server's project list could not be read.");
+      return read;
+    },
     /** `crossPool` is STRIPPED unless it is literally `true`, so an ordinary
      *  start keeps the parsed request shape it sent before pools existed —
      *  no key an older server does not know, and a flag that only ever means

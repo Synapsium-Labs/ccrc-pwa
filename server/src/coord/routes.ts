@@ -473,7 +473,7 @@ export interface CoordRoutesHandle {
   withSweepAbandon<T>(coord: CoordStore, fn: (
     abandon: (runId: number, crashedId: string, stillCrashed: SweepCloseGuard['stillCrashed']) => Promise<CloseOutcome>,
   ) => Promise<T>): Promise<T>;
-  /** The SAME hold with nothing handed in — for the stop-done lane (D-5370, `stopDoneSweep.ts`), whose act is a
+  /** The SAME hold with nothing handed in — for the stop-done lane (D-5370, `sleepLane.ts`), whose act is a
    *  `ccd stop` and never a run transition: it re-reads the store and stops inside this hold, so a dispatch opening a
    *  run onto the worker (which runs inside it too) is either finished first or starts after the stop, never between
    *  the read and the act. No `closeRun` is reachable through it. */

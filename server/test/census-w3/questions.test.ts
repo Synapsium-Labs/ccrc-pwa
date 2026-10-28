@@ -83,11 +83,67 @@ describe('W3 question census (slug question-census)', () => {
     } finally { rmSync(t, { recursive: true, force: true }); }
   });
 
+  it('FIXTURE (Q3d): the two flags are carriers when they are FleetWatcher fields, and the one carrier is found inside createQuestions', () => {
+    const t = tree({
+      'server/src/watch.ts': [
+        'export class FleetWatcher {',
+        '  private reseedLoaded = false;',
+        '  private asksDisabled = false;',
+        '  private otherFlag = false;',
+        '}',
+      ].join('\n'),
+      'server/src/coord/questions.ts': [
+        'export function createQuestions() {',
+        '  const questionHolds = new Map<string, number>();',
+        '  let reseedLoaded = false;',
+        '  let asksDisabled = false;',
+        '  const otherLocal = new Map();',
+        '  return {};',
+        '}',
+      ].join('\n'),
+    });
+    try {
+      expect(questionHoldCarriers(t).map((s) => [s.name, s.owner, s.line])).toEqual([
+        ['reseedLoaded', 'FleetWatcher', 2], ['asksDisabled', 'FleetWatcher', 3],
+        ['questionHolds', 'createQuestions', 2], ['reseedLoaded', 'createQuestions', 3], ['asksDisabled', 'createQuestions', 4],
+      ]);
+    } finally { rmSync(t, { recursive: true, force: true }); }
+  });
+
   it('FIXTURE: a sweep entry is a method tick calls that reaches a lapse, release or prune; a public half tick does not call is not one', () => {
     const t = tree({ 'server/src/watch.ts': watch });
     try {
       // `sweepAsks` reaches `releaseAsk` through `askPass` inside an arrow; `sweepOther` reads only; `sweepApprovals` is not called by tick.
       expect(questionSweepEntries(t).map((s) => [s.method, s.line])).toEqual([['sweepAsks', 7]]);
+    } finally { rmSync(t, { recursive: true, force: true }); }
+  });
+
+  it('FIXTURE (Q3d): a sweep act reached only through this.questions.<member>( counts, through the factory\'s own member calls too; a member that only reads does not', () => {
+    const t = tree({
+      'server/src/watch.ts': [
+        'export class FleetWatcher {',
+        '  async tick(): Promise<void> {',
+        '    this.sweepA();',
+        '    this.sweepB();',
+        '    this.sweepC();',
+        '  }',
+        '  sweepA(): void { this.questions.lapseAsks(1, () => {}); }',
+        '  sweepB(): void { this.questions.lapseApprovals(1); }',
+        '  sweepC(): void { this.questions.currentAskOf("x"); }',
+        '}',
+      ].join('\n'),
+      'server/src/coord/questions.ts': [
+        'export function createQuestions(deps: Deps) {',
+        '  const lapseAsks = (now: number, push: () => void): void => { deps.coord.releaseAsk(1, now); push(); };',
+        '  const prune = (now: number): void => { deps.coord.pruneAskQuestions(now); };',
+        '  const lapseApprovals = (now: number): void => { prune(now); };',
+        '  const currentAskOf = (id: string) => deps.coord.currentAskFor(id);',
+        '  return { lapseAsks, lapseApprovals, currentAskOf };',
+        '}',
+      ].join('\n'),
+    });
+    try {
+      expect(questionSweepEntries(t).map((s) => [s.method, s.line])).toEqual([['sweepA', 3], ['sweepB', 4]]);
     } finally { rmSync(t, { recursive: true, force: true }); }
   });
 

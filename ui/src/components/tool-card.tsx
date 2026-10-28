@@ -1,7 +1,7 @@
 // Tool card — the machine's work, filed neatly. Collapsed: one 44px row with
-// a result dot (green ok / red error / breathing while running), mono tool
-// name, truncated input summary and a duration readout (a live elapsed clock
-// while running). Tap expands (animated height, reduced-motion aware) to
+// a result dot (green ok / red error / breathing while running), the word
+// `failed` beside the dot of an errored call, mono tool name, truncated input
+// summary and a duration readout (a live elapsed clock while running). Tap expands (animated height, reduced-motion aware) to
 // input/result wells capped at --well-max with inner scroll.
 //
 // AskUserQuestion is the one exception: a question Claude put to the reader is
@@ -27,6 +27,10 @@ import { usePrefersReducedMotion } from '../lib/use-reduced-motion';
 import { useNow } from '../lib/use-now';
 import { Well } from '../primitives/well';
 import './tool-card.css';
+
+/** How a tool card draws a well's text: the app hands one in (`renderWell`) to read the text as code, a diff or ANSI
+ *  colour. The design system cannot import the app's renderer, so a card with none shows the text as it arrived. */
+export type RenderWell = (part: 'input' | 'result', text: string) => ReactNode;
 
 export type ToolUseEvent = Extract<ChatEvent, { kind: 'tool_use' }>;
 export type ToolResultEvent = Extract<ChatEvent, { kind: 'tool_result' }>;
@@ -211,6 +215,17 @@ export const ASK_WORD: Record<AskState, string> = {
   unanswered: 'unanswered',
   answered: 'answered',
 };
+/** The `awaiting` word when the question is on screen right below the transcript (the desk's inline ask surface, D-6326):
+ *  the card says where to look, and `ASK_GO_TO_QUESTION` beside it raises what is already up (there is no `Answer`). The
+ *  same casing as `ASK_WORD`'s members, which the state row draws as they are. */
+export const ASK_WORD_BELOW = 'waiting for you, below';
+/** The control beside `ASK_WORD_BELOW` (R64 F5): it raises the inline card that is already up, scrolling it into view and
+ *  focusing its first option, through the same `onAnswer` that `Answer` calls on a phone. Its word is fixed, whatever the
+ *  card is waiting on, because it takes the reader to the question and does not say what the question will ask for. */
+export const ASK_GO_TO_QUESTION = 'Go to question';
+/** The word on a failed call's row, at rest: the dot's hue alone is not a cue (the failure rides a word as well as a
+ *  colour). ONE home for the word, beside `ASK_WORD`. */
+export const TOOL_FAILED_WORD = 'failed';
 export const ASK_GLYPH: Record<AskState, string> = {
   awaiting: '❯',
   unanswered: '·',
@@ -247,6 +262,7 @@ function AskCard({
   questions,
   result,
   askPending = false,
+  askBelow = false,
   answerLabel = 'Answer',
   onAnswer,
 }: {
@@ -256,15 +272,21 @@ function AskCard({
    *  derivation source. Both shapes are hosted by the same sheet, so both
    *  make this card answerable. */
   askPending?: boolean;
+  /** D-6326: the answer surface is mounted INLINE, right below the transcript (the desk). The awaiting card then says so
+   *  (`ASK_WORD_BELOW`) and offers `ASK_GO_TO_QUESTION` instead of Answer (R64 F5): there is no sheet to raise, and the
+   *  question stays where it is, so the control takes the reader to it. A phone, or a desk with no inline card
+   *  mounted, leaves it false and keeps Answer. */
+  askBelow?: boolean;
   /** The control's word: `Answer`, or what the sheet it raises is waiting on (`Submit answers` while the pane is on an
    *  ask's review screen). It still only raises the sheet. */
   answerLabel?: string;
-  /** Raise the answer sheet. NOT an answer — see the state row below. */
+  /** Raise the answer sheet, or, with `askBelow`, the inline card. NOT an answer — see the state row below. */
   onAnswer?: () => void;
 }): ReactNode {
   const answers =
     result !== undefined && !result.isError ? askAnswers(result.text, questions) : null;
   const state = askState(result, askPending);
+  const below = state === 'awaiting' && askBelow;
   return (
     <div className="tool-ask">
       {questions.map((question, i) => (
@@ -282,7 +304,7 @@ function AskCard({
       {state !== 'answered' && (
         <p className={`ask-state ${ASK_STATE_CLASS[state]}`}>
           <span className="ask-glyph" aria-hidden="true">{ASK_GLYPH[state]}</span>
-          <span className="ask-word">{ASK_WORD[state]}</span>
+          <span className="ask-word">{below ? ASK_WORD_BELOW : ASK_WORD[state]}</span>
           {/* ONE CONTROL, ONE MEANING: `Answer` does not answer. It raises
               `EnvelopeSheet` — the one hardened answer path (`inject/ask.ts`'s
               `askKey` correspondence, `send.ts`'s settle-before-submit) — and
@@ -291,17 +313,20 @@ function AskCard({
               is virtualized, so a row owning an in-flight answer could be
               unmounted mid-send by an ordinary scroll.
 
-              Rendered only when there is a sheet to raise. A button whose
+              Rendered only when there is something to raise. A button whose
               handler is absent would do nothing at all, which is worse than
-              no button. */}
+              no button. With the question mounted inline (`below`) the same
+              button, on the same handler, reads `ASK_GO_TO_QUESTION`: the
+              raise then scrolls that card into view and focuses its first
+              option (`AskSurface`'s `InlineCard`), and still sends nothing. */}
           {state === 'awaiting' && onAnswer !== undefined && (
             <button
               type="button"
               className={`ask-answer ${FOCUS_RING}`}
-              title="Open the answer sheet"
+              title={below ? 'Go to the question below' : 'Open the answer sheet'}
               onClick={onAnswer}
             >
-              {answerLabel}
+              {below ? ASK_GO_TO_QUESTION : answerLabel}
             </button>
           )}
         </p>
@@ -340,30 +365,41 @@ export function ToolCard({
   use,
   result,
   askPending,
+  askBelow,
   answerLabel,
   onAnswer,
+  renderWell,
 }: {
   use: ToolUseEvent;
   result?: ToolResultEvent;
+  /** How the input and result wells draw their text (see `RenderWell`); absent: the text as it arrived. The ask card
+   *  has no such wells and ignores it. */
+  renderWell?: RenderWell;
   askPending?: boolean;
+  askBelow?: boolean;
   answerLabel?: string;
   onAnswer?: () => void;
 }): ReactNode {
   const questions = askOf(use);
   if (questions !== null) {
     return (
-      <AskCard questions={questions} result={result} askPending={askPending} answerLabel={answerLabel} onAnswer={onAnswer} />
+      <AskCard questions={questions} result={result} askPending={askPending} askBelow={askBelow} answerLabel={answerLabel} onAnswer={onAnswer} />
     );
   }
-  return <GenericToolCard use={use} result={result} />;
+  return <GenericToolCard use={use} result={result} renderWell={renderWell} />;
 }
+
+/** What the result well shows: the text, or a word for none. */
+const resultText = (result: ToolResultEvent): string => (result.text === '' ? '(no output)' : result.text);
 
 function GenericToolCard({
   use,
   result,
+  renderWell,
 }: {
   use: ToolUseEvent;
   result?: ToolResultEvent;
+  renderWell?: RenderWell;
 }): ReactNode {
   const [expanded, setExpanded] = useState(false);
   const reduced = usePrefersReducedMotion();
@@ -383,6 +419,7 @@ function GenericToolCard({
         onClick={() => setExpanded((e) => !e)}
       >
         <span className={`tool-dot ${dot}`} aria-hidden="true" />
+        {result?.isError && <span className="tool-fail">{TOOL_FAILED_WORD}</span>}
         <span className="tool-name">{use.name}</span>
         <span className="tool-sum">{summary}</span>
         {dur !== null && <span className="tool-dur">{dur}</span>}
@@ -402,7 +439,7 @@ function GenericToolCard({
           >
             <div className="tool-body">
               <p className={`tool-eyebrow ${EYEBROW}`}>input</p>
-              <Well>{use.input}</Well>
+              <Well>{renderWell ? renderWell('input', use.input) : use.input}</Well>
               {/* One cue PER WELL — the input and the result are cut against
                   two different caps (TOOL_INPUT_MAX / TOOL_RESULT_MAX) and a
                   single shared cue would report one number for two cuts. */}
@@ -410,7 +447,7 @@ function GenericToolCard({
               {result !== undefined && (
                 <>
                   <p className={`tool-eyebrow ${EYEBROW}`}>result</p>
-                  <Well>{result.text === '' ? '(no output)' : result.text}</Well>
+                  <Well>{renderWell ? renderWell('result', resultText(result)) : resultText(result)}</Well>
                   <TruncationCue bytes={result.truncatedBytes} />
                 </>
               )}

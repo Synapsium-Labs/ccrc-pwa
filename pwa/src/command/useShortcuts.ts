@@ -17,6 +17,10 @@
 // matter, and a box holding text keeps every key. The `g` chords never pass:
 // "gr" starts a word. ⌘K reaches every Go to from anywhere.
 //
+// A FOCUSED ASK CARD OWNS ITS KEYS TOO (R64 F10). At the desk the ask is an inline card in the session pane that blocks
+// nothing, so the open-dialog hold never sees it. While the key's target is inside `[data-ask-surface="inline"]`, the
+// single keys and the `g` chords stand down, as under a dialog; a mounted card with focus elsewhere holds nothing.
+//
 // A WINDOW BUBBLE LISTENER, ON PURPOSE. A surface that owns its keys stops them
 // before they get here: the terminal (xterm stops what it handles, so Ctrl+K
 // stays the shell's kill-line there), the ask sheet's keys (`useAskKeys`), and
@@ -54,10 +58,14 @@ export function keepsKey(target: EventTarget | null, key: string): boolean {
   return !(el.hasAttribute('data-page-keys') && el.value === '' && PASS_KEYS.includes(key));
 }
 
-/** An open sheet or dialog: a single key would act on the page beneath it
- *  (D-5457). ⌘K is not held back by one: the palette opens over a sheet. */
-function dialogOpen(): boolean {
-  return document.querySelector('[role="dialog"][data-state="open"]') !== null;
+/** A surface that owns the keys at this target: an open sheet or dialog, or focus INSIDE the mounted inline ask card
+ *  (R64 F10). A single key would act on the page beneath a dialog (D-5457), and a `]`, `?` or `g` typed in the card is
+ *  the card's own, never a page step, the shortcut sheet or a Go to. It reads the key's TARGET, not the mere presence of
+ *  a card: an ask that is mounted while focus is on the page body, the composer or a transcript button holds nothing.
+ *  ⌘K is not held back by either: the palette opens over a sheet and over the card. */
+function keysOwnedBySurface(target: EventTarget | null): boolean {
+  if (document.querySelector('[role="dialog"][data-state="open"]') !== null) return true;
+  return target instanceof Element && target.closest('[data-ask-surface="inline"]') !== null;
 }
 
 export interface ShortcutOptions {
@@ -87,7 +95,7 @@ export function useShortcuts({ enabled, commands, context, onPalette }: Shortcut
         palette();
         return;
       }
-      if (e.defaultPrevented || e.isComposing || modified(e) || keepsKey(e.target, e.key) || dialogOpen()) {
+      if (e.defaultPrevented || e.isComposing || modified(e) || keepsKey(e.target, e.key) || keysOwnedBySurface(e.target)) {
         chordAt = null;
         return;
       }

@@ -56,6 +56,8 @@ export function HotFilesStrip(): ReactNode {
   // one question is "what is contested RIGHT NOW".
   const liveClaims = claims.filter((c) => c.state === 'live');
   if (liveClaims.length === 0) return null;
+  // Files, not claims: the headline is true when one claim holds several paths (T3a, D-6331).
+  const files = new Set(liveClaims.flatMap((c) => c.paths.map((p) => `${c.project}/${p}`))).size;
 
   return (
     <CollapsibleStrip
@@ -64,9 +66,9 @@ export function HotFilesStrip(): ReactNode {
       // No floor: `.hotfiles-head` sized to its padding and line on main
       // (`CollapsibleStrip`'s `headFloor`).
       headFloor="content"
-      label="Hot files"
+      label="Claimed files"
       mark={<Icon name="hand" />}
-      headline={liveClaims.length === 1 ? '1 hot-file claim' : `${liveClaims.length} hot-file claims`}
+      headline={files === 1 ? '1 file claimed' : `${files} files claimed`}
     >
       {liveClaims.map((c) => (
         <li key={c.id} className="hotfiles-row">

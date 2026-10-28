@@ -11,7 +11,7 @@
 // and must not claim the list is fresh either. (2) It re-polls when the page
 // becomes visible, because a phone that slept through three polls should not
 // show a 3-minute-old "vX is out" as current.
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import type { UpdatesView } from '../../../shared/api';
 import { ApiError, api } from '../lib/api';
 import { usePoll } from '../lib/usePoll';
@@ -91,5 +91,9 @@ export function useUpdatesView(pollMs: number = UPDATES_POLL_MS): UpdatesPoll {
       }
     },
   });
-  return { view: state.view, failure: state.failure, seq: state.seq, reload };
+  // Memoised (C6, D-6438): `reload` is `usePoll`'s `useCallback([])`, so the plane changes only when a poll lands.
+  return useMemo(
+    () => ({ view: state.view, failure: state.failure, seq: state.seq, reload }),
+    [state.view, state.failure, state.seq, reload],
+  );
 }

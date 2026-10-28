@@ -196,7 +196,7 @@ _ws_collect_ignored_settled	C4
 _ws_merge_proof	C4
 _ws_fingerprint	C4
 _ws_reap_reset	C4
-_reap_refuse	C4
+_ws_refuse	C4
 _ws_reap_eval	C4
 cmd_ws_audit	C4
 _ws_attic_pin	C4
@@ -647,7 +647,6 @@ _ws_collect_floor_held	C4
 _ws_collect_token	C4
 _ws_collect_rows_clear	C4
 _ws_collect_reset	C4
-_ws_collect_refuse	C4
 _ws_collect_unmeasured	C4
 _ws_collect_floor_read	C4
 _ws_collect_paused	C4

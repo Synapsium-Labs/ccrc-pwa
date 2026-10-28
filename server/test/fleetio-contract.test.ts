@@ -56,8 +56,9 @@ const sources = (dir: string): string[] => readdirSync(dir).flatMap((n) => {
 });
 
 /** The plain `io.readdir(` call sites, as measured when the five coord folds moved to `readdirMeasured` (D-5969). It
- *  may only go DOWN: migrate a site and lower it. */
-const PLAIN_READDIR_CEILING = 42;
+ *  may only go DOWN: migrate a site and lower it. Lowered to the measured count, 39, when each sleep lane's act-time
+ *  listing (D-7047) was wired through `readdirMeasured` rather than added here. */
+const PLAIN_READDIR_CEILING = 39;
 
 describe('the plain io.readdir ratchet (D-5969)', () => {
   it(`has at most ${PLAIN_READDIR_CEILING} call sites under src/`, () => {

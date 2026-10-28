@@ -469,6 +469,19 @@ describe('FleetClient.onReady — ccdVerbs validation distinguishes null from em
     expect(fleet.state.ccdVerbs).toBeNull();
   });
 
+  // D-7079 characterization: the ready frame RESETS, `null` included. A reconnect to an older agent (no `ccdVerbs`
+  // in its ready frame) must not keep the list the previous agent advertised.
+  it('a ready frame with no ccdVerbs resets: null after a list stood', async () => {
+    let readies = 0;
+    server = await fakeReadyAgent(() => (++readies === 1 ? { ccdVerbs: ['start', 'ws-audit'] } : {}));
+    fleet = connectFleet({ url: `ws://127.0.0.1:${server.port}`, token: TOKEN, heartbeatMs: 60_000 });
+    await vi.waitFor(() => expect(fleet!.state.ccdVerbs).toEqual(['start', 'ws-audit']), { timeout: 3000 });
+    fleet.client.ws?.close();
+    await vi.waitFor(() => expect(readies).toBe(2), { timeout: 5000 });
+    await vi.waitFor(() => expect(fleet!.state.connected).toBe(true), { timeout: 3000 });
+    expect(fleet.state.ccdVerbs).toBeNull();
+  });
+
   it('a real empty array is recorded as [], distinct from the null "no evidence" case', async () => {
     server = await fakeReadyAgent({ ccdVerbs: [] });
     fleet = connectFleet({ url: `ws://127.0.0.1:${server.port}`, token: TOKEN, heartbeatMs: 60_000 });

@@ -635,13 +635,15 @@ export function declaredDerivations(root: string = REPO): Array<{ name: string; 
 /**
  * D-5864 (Task C1j; ARCH-51 #786; spec K13's listing half): every place `server/src/watch.ts` lists the registry, from its
  * syntax tree (`scan/symbols.ts`, over `scan/parse.ts`), never from a count typed by hand. A site is a call of `readRegistry(`
- * or `readRegistryMeasured(`, or of a `readdir(` whose first argument names `registryDir`, inside a method of the class.
+ * or `readRegistryMeasured(`, or of a `readdir(` or `readdirMeasured(` whose first argument names `registryDir`, inside a
+ * method of the class.
  * Each is tagged by the method it sits in:
  * - `selection`: it chooses rows for a lane. Exit target (C1j): exactly one, in `FleetWatcher.tick`; the lanes take the
  *   tick's `FleetReadModel`.
  * - `act`: it is read at the act and stays fresh, by name (`ACT_LISTING_METHODS`): the mail lane's last switch read
- *   before it delivers, and the divergence census's listing, taken after git's records on purpose; and the tick's own bare
- *   `readdir`, the snapshot write's re-confirmation when the fleet shrank.
+ *   before it delivers, and the divergence census's listing, taken after git's records on purpose; each sleep lane's
+ *   thunk for its act's switch read, nearest the argv (D-7047, C4g; it lists only when an act is about to compose); and
+ *   the tick's own bare `readdir`, the snapshot write's re-confirmation when the fleet shrank.
  * - `tests-only`: a lane's own read when called with no model, reached by tests alone (`TESTS_ONLY_LISTING_METHODS`);
  *   the registry-refused census pins that `tick()` hands each lane its model.
  * A method not named in either list is `selection`, so a new lane that lists for itself is counted as one.
@@ -649,7 +651,9 @@ export function declaredDerivations(root: string = REPO): Array<{ name: string; 
  * and left to the request-time readers' work (ARCH-52, W2); a listing reached through an alias, a helper or a `readdir`
  * whose argument is a local that holds `registryDir` is not seen.
  */
-export const ACT_LISTING_METHODS: readonly string[] = ['FleetWatcher.mailPass', 'FleetWatcher.divergencesPass'];
+export const ACT_LISTING_METHODS: readonly string[] = [
+  'FleetWatcher.mailPass', 'FleetWatcher.divergencesPass', 'FleetWatcher.sleepRunDone', 'FleetWatcher.sleepIdleHours',
+];
 export const TESTS_ONLY_LISTING_METHODS: readonly string[] = ['FleetWatcher.fleetFor', 'FleetWatcher.sweepHookStates', 'FleetWatcher.detectDialogs'];
 export const SELECTION_LISTING_METHOD = 'FleetWatcher.tick';
 
@@ -664,7 +668,7 @@ export function registryListingSites(root: string = REPO): RegistryListingSite[]
   const out: RegistryListingSite[] = [];
   for (const c of parsed.calls) {
     const isReader = c.name === 'readRegistry' || c.name === 'readRegistryMeasured';
-    const isListing = c.name === 'readdir' && (c.args[0]?.text ?? '').includes('registryDir');
+    const isListing = (c.name === 'readdir' || c.name === 'readdirMeasured') && (c.args[0]?.text ?? '').includes('registryDir');
     if (!isReader && !isListing) continue;
     const inner = parsed.symbols.filter((s) => s.kind === 'method' && s.name.startsWith('FleetWatcher.') && s.start <= c.start && c.end <= s.end)
       .sort((a, b) => b.start - a.start)[0];

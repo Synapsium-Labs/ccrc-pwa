@@ -389,6 +389,19 @@ describe('fleet density and alignment', () => {
     expect(() => ruleFor('.bucket-head-seen::before')).toThrow();
   });
 
+  // T3a (D-6331): the Exited and Archived chips are quiet. The quiet marker (`data-quiet`) selects ONE rule that stays
+  // SELF-GROUNDED (its own background and color, so `design/audit.mjs`'s descendant pass measures the chip's text and its
+  // count) and quiets with tokens and weight, never with `opacity`: a faded element composites its whole subtree and
+  // pulls the text under the contrast floor (the note above `.fleet-list` has the measurements).
+  it('draws a quiet chip from tokens, self-grounded, with no opacity', () => {
+    const rule = stripComments(ruleFor('.bucket-head[data-quiet]'));
+    expect(declValue(rule, 'background')).toMatch(/^var\(--bg-[a-z]+\)$/);
+    expect(declValue(rule, 'color')).toMatch(/^var\(--ink-[a-z]+\)$/);
+    expect(declValue(rule, 'font-weight')).toBe('var(--weight-regular)');
+    expect(rule).not.toMatch(/opacity/);
+    expect(rule).not.toMatch(/#[0-9a-f]{3,8}\b|rgba?\(|hsla?\(/i);
+  });
+
   it('right-aligns .sess-actions in its column so it shares an edge with .proj-card-add', () => {
     // .sess-line's own right padding sits INSIDE .proj-card's padding, so
     // the header needs the same padding-right to keep the + and ··· on one
@@ -1294,7 +1307,7 @@ describe('the fleet head holds one row, and the class chooser is not on it', () 
     // FAULT 2, and the one no width could have fixed. `.fleet-head-right`'s
     // four other items — count, accounts door, mail badge, bell — need 244px
     // of min-content, and the group has 294px at 390px; the chooser's widest
-    // option, "Coordinator row", measures 167px against the ~38px left once
+    // option, then "Coordinator row" (now "Automatic"), measures 167px against the ~38px left once
     // its gap is paid. A 129px deficit is not closable by a floor, a cap or a
     // shrink factor, so the control leaves the head. Those figures are browser
     // measurements and deliberately are NOT recomputed here — an arithmetic

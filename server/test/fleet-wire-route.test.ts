@@ -4,8 +4,8 @@
 // `assembleFleet`'s production read off the registry's seven routing files
 // (`server/src/registry.ts`'s `buildRecord`, whose census this task raised
 // from twenty-three reads to thirty; later waves raised it again, and today it
-// is 31 [registry-read-census:fields] — see registry.test.ts's own census
-// suite for that half).
+// is 4 [registry-read-census:fields] unconditional reads plus one per other listed
+// field — see registry.test.ts's own census suite for that half).
 //
 // Fix round 2, finding 1 (controller ruling S6-R5): the seven reads are now
 // MEASURED (`fieldMeasured`, not the collapsing `field()`), so `route` is

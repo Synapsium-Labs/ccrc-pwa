@@ -70,6 +70,9 @@ const NEUTRAL_FIELDS = [
   'cache_key', 'session_id', 'stream', 'compaction', 'countable_bytes', 'image_count', 'tools_required',
 ];
 
+/** The name a by-reference addition of a tool nothing offers is counted under (D-7143). */
+const UNKNOWN_REF = 'tool_addition-block.unknown-reference';
+
 const sha8 = (s: string): string => createHash('sha256').update(s, 'utf8').digest('hex').slice(0, 8);
 
 describe.skipIf(!PY)('inbound: the mapping table (codex-bridge spec §2.3)', () => {
@@ -113,10 +116,12 @@ describe.skipIf(!PY)('inbound: the mapping table (codex-bridge spec §2.3)', () 
     expect(l.request.items).toEqual([userText('a'), dev('mid string'), asst('ok'), dev('mid blocks'), userText('b')]);
   });
 
-  // D-7094: the blocks a system entry drops are counted by type, names only (`inbound._count_dropped`). Claude Code's
-  // two tool-change betas (D-7093) send `tool_addition`/`tool_removal` blocks here; a `tool_addition` also counts its
-  // `tool`'s type, so the by-value case (a `tool_definition`, a tool absent from `tools`) reads apart from the
-  // by-reference one. Nothing sent changes: the control is the same entry holding its text alone.
+  // D-7094: the non-text blocks of a system entry are counted by type, names only (`inbound._count_dropped`).
+  // Claude Code's two tool-change betas (D-7093) send `tool_addition`/`tool_removal` blocks here; a `tool_addition`
+  // also counts its `tool`'s type, so the by-value case (a `tool_definition`, a tool absent from `tools`) reads apart
+  // from the by-reference one. Since D-7143 the blocks are also honoured (the D-7143 describe below): those counts are
+  // unchanged, the honoured names are explained, and a by-reference addition of a name nothing offers is counted
+  // `tool_addition-block.unknown-reference` after them.
   const TOOL = { name: 'ToolFx0', description: 'd0', input_schema: { type: 'object', properties: {} } };
   const removal = { type: 'tool_removal', tool: { type: 'tool_reference', name: 'ToolFx1' } };
   const byValue = {
@@ -133,26 +138,29 @@ describe.skipIf(!PY)('inbound: the mapping table (codex-bridge spec §2.3)', () 
     messages: [{ role: 'user', content: 'a' }, { role: 'system', content }, { role: 'user', content: 'b' }],
   });
 
-  it('a system entry counts each block it drops by type, and a tool_addition its tool type; what is sent is unchanged (D-7094)', async () => {
+  it('a system entry counts each non-text block by type, and a tool_addition its tool type; its text item is unchanged (D-7094)', async () => {
     const [mixed, control, known] = await run([
       op(withEntry([{ type: 'text', text: 'mid text' }, removal, byValue, byReference])),
       op(withEntry([{ type: 'text', text: 'mid text' }])),
       { op: 'known' },
     ]);
-    expect(fam(mixed, 'requestField')).toEqual(DROPPED_NAMES);
+    // D-7094's counts, unchanged; the by-reference ToolFx3 is in neither `tools` nor an earlier addition (D-7143).
+    expect(fam(mixed, 'requestField')).toEqual([...DROPPED_NAMES, UNKNOWN_REF]);
     expect(fam(control, 'requestField')).toEqual([]);
-    // The control: the developer item, the tools and every other field of the request are what the text alone gives.
+    // The entry's text is its developer item, exactly as the text alone gives it.
     expect(mixed.request.items).toEqual([userText('a'), dev('mid text'), userText('b')]);
-    // (`cache_key` is a fresh `ccrc:anon-<uuid4>` per request when no session header is sent, so it is set aside.)
-    const sent = (l: Line): Line => ({ ...l.request, cache_key: undefined });
-    expect(sent(mixed)).toEqual(sent(control));
+    expect(mixed.request.items).toEqual(control.request.items);
     expect(Object.keys(mixed.request).sort()).toEqual([...NEUTRAL_FIELDS].sort());
-    expect(mixed.request.tools.map((t: Line) => t.name)).toEqual(['ToolFx0']);
-    // Names only: no tool name, description, schema key or cache marker of a dropped block is counted or sent.
-    const text = JSON.stringify(mixed);
-    for (const s of ['ToolFx1', 'ToolFx2', 'ToolFx3', 'desc-sentinel', 'argSentinel', 'cache_control']) expect(text).not.toContain(s);
-    // Unexplained on purpose, so the doctor's drift WARN names one the day it arrives.
-    for (const n of DROPPED_NAMES) expect(known.known.requestField, n).not.toContain(n);
+    // D-7143: the by-value ToolFx2 is offered; the removed ToolFx1 and the unknown ToolFx3 were never offered.
+    expect(mixed.request.tools.map((t: Line) => t.name)).toEqual(['ToolFx0', 'ToolFx2']);
+    expect(control.request.tools.map((t: Line) => t.name)).toEqual(['ToolFx0']);
+    // Names only: no tool name, description, schema key or cache marker of a block is counted; no cache marker is sent.
+    const counted = JSON.stringify(mixed.names);
+    for (const s of ['ToolFx1', 'ToolFx2', 'ToolFx3', 'desc-sentinel', 'argSentinel', 'cache_control']) expect(counted).not.toContain(s);
+    expect(JSON.stringify(mixed.request)).not.toContain('cache_control');
+    // Explained since D-7143, which honours them; the unknown reference stays unexplained, so the doctor names it.
+    for (const n of DROPPED_NAMES) expect(known.known.requestField, n).toContain(n);
+    expect(known.known.requestField).not.toContain(UNKNOWN_REF);
     expect(known.prefixes.requestField).toBeUndefined();
   });
 
@@ -160,7 +168,7 @@ describe.skipIf(!PY)('inbound: the mapping table (codex-bridge spec §2.3)', () 
     const [l] = await run([op(withEntry([removal, byReference, { type: 'future_fx' }, 'not-a-block', { type: 'tool_addition' }]))]);
     expect(fam(l, 'requestField')).toEqual([
       'tool_removal-block', 'tool_addition-block', 'tool_addition-block.tool_reference', 'future_fx-block',
-      'unrecognised-block', 'tool_addition-block', 'tool_addition-block.unrecognised',
+      'unrecognised-block', 'tool_addition-block', 'tool_addition-block.unrecognised', UNKNOWN_REF,
     ]);
     expect(l.request.items).toEqual([userText('a'), userText('b')]);
     expect(l.request.tools.map((t: Line) => t.name)).toEqual(['ToolFx0']);
@@ -369,6 +377,248 @@ describe.skipIf(!PY)('inbound: the mapping table (codex-bridge spec §2.3)', () 
   });
 
   // The row `the last user turn holding COMPACTION_MARKER` is the named case 'the compaction request …' below.
+});
+
+// D-7143: the tool-change blocks of a system entry are honoured. Claude Code 2.1.310 folds them into the set of tools
+// it holds BY NAME, IN ORDER (a removal deletes the name, an addition adds it), so the request sent upstream offers the
+// request's `tools`, then each system entry's blocks folded in message order
+// (ccd/codexbridge/inbound.py#_fold_tool_changes). Every request is built in Claude Code's shape (its system-entry
+// builder: a text when it has one, then removals by reference, then additions by reference or by value, and a suffix
+// text may follow them); the tool names are synthetic.
+describe.skipIf(!PY)('inbound: the tool-change blocks of a system entry (D-7143)', () => {
+  const schemaOf = (name: string, required?: string[]): Record<string, unknown> => ({
+    type: 'object', properties: { [`${name}_arg`]: { type: 'string' } }, ...(required ? { required } : {}),
+  });
+  const def = (name: string, o: { description?: string; required?: string[]; extra?: Record<string, unknown> } = {}): Record<string, unknown> => ({
+    name, description: o.description ?? `desc ${name}`, input_schema: schemaOf(name, o.required), ...(o.extra ?? {}),
+  });
+  const fn = (name: string, o: { description?: string; required?: string[]; cut?: string } = {}): Record<string, unknown> => ({
+    type: 'function', name: o.cut ?? name, description: o.description ?? `desc ${name}`, parameters: schemaOf(name, o.required), strict: false,
+  });
+  const addValue = (definition: unknown): object => ({ type: 'tool_addition', tool: { type: 'tool_definition', definition } });
+  const addRef = (name: string): object => ({ type: 'tool_addition', tool: { type: 'tool_reference', name } });
+  const remove = (name: string): object => ({ type: 'tool_removal', tool: { type: 'tool_reference', name } });
+  /** A conversation: a user turn, then each system entry in order, then a closing user turn. */
+  const conv = (tools: unknown[], ...entries: unknown[][]): Record<string, unknown> => body({
+    tools,
+    messages: [
+      { role: 'user', content: 'a' },
+      ...entries.map((content) => ({ role: 'system', content })),
+      { role: 'user', content: 'b' },
+    ],
+  });
+  const names = (l: Line): string[] => l.request.tools.map((t: Line) => t.name);
+  // (`cache_key` is a fresh `ccrc:anon-<uuid4>` per request when no session header is sent, so it is set aside.)
+  const sent = (l: Line): Line => ({ ...l.request, cache_key: undefined });
+  const countable = (l: Line): number => Buffer.byteLength(JSON.stringify({
+    developer: l.request.developer, items: l.request.items, tools: l.request.tools,
+  }), 'utf8');
+
+  it('a by-value addition is offered upstream with its schema, its cut name and its name-map entry', async () => {
+    const long = 'mcp__fx_server__' + 'b'.repeat(50) + '_fx_tool_long';
+    expect(long.length).toBeGreaterThan(64);
+    const [l, keys] = await run([
+      op(conv([def('fx_tool_a')], [{ type: 'text', text: 'loaded' }, addValue(def('fx_tool_b', { required: ['fx_tool_b_arg'] })), addValue(def(long))])),
+      { op: 'inbound-keys', cut: [long] },
+    ]);
+    const cut = keys.cut[0];
+    expect(cut).not.toBe(long);
+    expect(l.request.tools).toEqual([fn('fx_tool_a'), fn('fx_tool_b', { required: ['fx_tool_b_arg'] }), fn(long, { cut })]);
+    expect(l.request.name_map).toEqual({ fx_tool_a: 'fx_tool_a', fx_tool_b: 'fx_tool_b', [cut]: long });
+    expect(l.request.tools_required).toEqual(['fx_tool_b']);
+    // The entry's text is still its developer item, in place.
+    expect(l.request.items).toEqual([userText('a'), dev('loaded'), userText('b')]);
+    // What is counted as sent is the folded list.
+    expect(l.request.countable_bytes).toBe(countable(l));
+    expect(fam(l, 'requestField')).toEqual([
+      'tool_addition-block', 'tool_addition-block.tool_definition', 'tool_addition-block', 'tool_addition-block.tool_definition',
+    ]);
+  });
+
+  it('a by-value addition replaces a same-named tools entry in place', async () => {
+    const l = await one(conv(
+      [def('fx_tool_a'), def('fx_tool_b'), def('fx_tool_c', { required: ['fx_tool_c_arg'] })],
+      [addValue(def('fx_tool_b', { description: 'redefined', required: ['fx_tool_b_arg'] }))],
+    ));
+    expect(l.request.tools).toEqual([
+      fn('fx_tool_a'), fn('fx_tool_b', { description: 'redefined', required: ['fx_tool_b_arg'] }),
+      fn('fx_tool_c', { required: ['fx_tool_c_arg'] }),
+    ]);
+    expect(l.request.tools_required).toEqual(['fx_tool_b', 'fx_tool_c']);
+  });
+
+  it('a by-reference addition of an offered tool, deferred or not, changes nothing', async () => {
+    const tools = [def('fx_tool_a'), def('fx_tool_b', { extra: { defer_loading: true } })];
+    const [ref, control] = await run([
+      op(conv(tools, [addRef('fx_tool_b'), addRef('fx_tool_a')])),
+      op(conv(tools)),
+    ]);
+    expect(names(ref)).toEqual(['fx_tool_a', 'fx_tool_b']);
+    expect(sent(ref)).toEqual(sent(control));
+    expect(fam(ref, 'requestField')).not.toContain(UNKNOWN_REF);
+  });
+
+  it('a by-reference addition of a name nothing offers is counted, and changes nothing', async () => {
+    const [ref, control] = await run([
+      op(conv([def('fx_tool_a')], [addRef('fx_tool_z')])),
+      op(conv([def('fx_tool_a')])),
+    ]);
+    expect(names(ref)).toEqual(['fx_tool_a']);
+    expect(sent(ref)).toEqual(sent(control));
+    expect(fam(ref, 'requestField')).toEqual(['tool_addition-block', 'tool_addition-block.tool_reference', UNKNOWN_REF]);
+    // Names only: the unknown tool's name is never counted.
+    expect(JSON.stringify(ref.names)).not.toContain('fx_tool_z');
+  });
+
+  it('a removal drops the tool and its required entry; history that called it still replays, and maps back', async () => {
+    const l = await one(body({
+      tools: [def('fx_tool_a', { required: ['fx_tool_a_arg'] }), def('fx_tool_b')],
+      messages: [
+        { role: 'user', content: 'a' },
+        { role: 'assistant', content: [{ type: 'tool_use', id: 'call_fx1', name: 'fx_tool_a', input: { fx_tool_a_arg: 'v' } }] },
+        { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'call_fx1', content: 'done' }] },
+        { role: 'system', content: [remove('fx_tool_a')] },
+        { role: 'user', content: 'b' },
+      ],
+    }));
+    expect(l.request.tools).toEqual([fn('fx_tool_b')]);
+    expect(l.request.tools_required).toEqual([]);
+    expect(l.request.items).toEqual([
+      userText('a'), call('call_fx1', 'fx_tool_a', '{"fx_tool_a_arg":"v"}'), out('call_fx1', 'done'), userText('b'),
+    ]);
+    expect(l.request.name_map).toEqual({ fx_tool_a: 'fx_tool_a', fx_tool_b: 'fx_tool_b' });
+    expect(l.request.countable_bytes).toBe(countable(l));
+  });
+
+  it('a removal then a later re-addition brings the tool back, by reference or by value', async () => {
+    const [byRef, byVal] = await run([
+      op(conv([def('fx_tool_a', { required: ['fx_tool_a_arg'] }), def('fx_tool_b')], [remove('fx_tool_a')], [addRef('fx_tool_a')])),
+      op(conv([def('fx_tool_a'), def('fx_tool_b')], [remove('fx_tool_a')], [addValue(def('fx_tool_a', { description: 'again' }))])),
+    ]);
+    expect(byRef.request.tools).toEqual([fn('fx_tool_b'), fn('fx_tool_a', { required: ['fx_tool_a_arg'] })]);
+    expect(byRef.request.tools_required).toEqual(['fx_tool_a']);
+    expect(fam(byRef, 'requestField')).not.toContain(UNKNOWN_REF);
+    expect(byVal.request.tools).toEqual([fn('fx_tool_b'), fn('fx_tool_a', { description: 'again' })]);
+  });
+
+  // A reference and a removal are matched by the CUT name, as the offered tools are named: an MCP-style name longer
+  // than the cut limit is removed and re-added by its full name.
+  it('a tool whose name is over the cut limit is removed and re-added by its full name', async () => {
+    const long = 'mcp__fx_server__' + 'c'.repeat(50) + '_fx_tool_long';
+    expect(long.length).toBeGreaterThan(64);
+    const tools = [def(long, { required: [`${long}_arg`] }), def('fx_tool_b')];
+    const history = [
+      { role: 'user', content: 'a' },
+      { role: 'assistant', content: [{ type: 'tool_use', id: 'call_fx1', name: long, input: { [`${long}_arg`]: 'v' } }] },
+      { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'call_fx1', content: 'done' }] },
+      { role: 'system', content: [remove(long)] },
+    ];
+    const [gone, back, keys] = await run([
+      op(body({ tools, messages: [...history, { role: 'user', content: 'b' }] })),
+      op(body({ tools, messages: [...history, { role: 'system', content: [addRef(long)] }, { role: 'user', content: 'b' }] })),
+      { op: 'inbound-keys', cut: [long] },
+    ]);
+    const cut = keys.cut[0];
+    expect(cut).not.toBe(long);
+    expect(gone.request.tools).toEqual([fn('fx_tool_b')]);
+    expect(gone.request.tools_required).toEqual([]);
+    expect(gone.request.items[1]).toEqual(call('call_fx1', cut, JSON.stringify({ [`${long}_arg`]: 'v' })));
+    expect(gone.request.name_map[cut]).toBe(long);
+    expect(back.request.tools).toEqual([fn('fx_tool_b'), fn(long, { cut, required: [`${long}_arg`] })]);
+    expect(back.request.tools_required).toEqual([cut]);
+    expect(fam(back, 'requestField')).not.toContain(UNKNOWN_REF);
+  });
+
+  it('a text after the tool blocks (the suffix Claude Code may add) stays in the developer item, in order', async () => {
+    const l = await one(conv([def('fx_tool_a')], [{ type: 'text', text: 'lead' }, addValue(def('fx_tool_b')), { type: 'text', text: 'suffix' }]));
+    expect(names(l)).toEqual(['fx_tool_a', 'fx_tool_b']);
+    expect(l.request.items).toEqual([
+      userText('a'), { type: 'message', role: 'developer', content: [inText('lead'), inText('suffix')] }, userText('b'),
+    ]);
+  });
+
+  it('an addition then a removal leaves the tool gone, its name still mapped', async () => {
+    const [same, later] = await run([
+      op(conv([def('fx_tool_a')], [addValue(def('fx_tool_b', { required: ['fx_tool_b_arg'] })), remove('fx_tool_b')])),
+      op(conv([def('fx_tool_a')], [addValue(def('fx_tool_b'))], [{ type: 'text', text: 'gone' }, remove('fx_tool_b')])),
+    ]);
+    expect(same.request.tools).toEqual([fn('fx_tool_a')]);
+    expect(same.request.tools_required).toEqual([]);
+    expect(same.request.name_map).toEqual({ fx_tool_a: 'fx_tool_a', fx_tool_b: 'fx_tool_b' });
+    expect(later.request.tools).toEqual([fn('fx_tool_a')]);
+    expect(later.request.items).toEqual([userText('a'), dev('gone'), userText('b')]);
+  });
+
+  // The malformed-block rule: a tool-change block the bridge cannot read is refused (a 400), EXCEPT where
+  // `_count_dropped` already names it `unrecognised` (a block that is not an object or has no type, a `tool_addition`
+  // whose `tool` is not an object or has no type): that one is passed over, its count left unexplained so the doctor
+  // names it. A by-value definition goes through the same checks as a `tools` entry. Every refusal names
+  // `tool_addition`, which is what Claude Code 2.1.310 matches to recover: it sends the conversation again without the
+  // blocks and with its two tool-change betas off (ccd/codexbridge/inbound.py#_tool_change_refused).
+  it('a malformed block is a 400 Claude Code recovers from, except one already counted unrecognised, which changes nothing', async () => {
+    const [noTool, untypedTool, unknownKind, refNoName, refToolNameOnly, removalNoTool, removalByValue, defNoName, defServer, defNotObject] = await run([
+      op(conv([def('fx_tool_a')], [{ type: 'tool_addition' }, 'not-a-block', { type: 'future_fx' }])),
+      op(conv([def('fx_tool_a')], [{ type: 'tool_addition', tool: { name: 'fx_tool_b' } }])),
+      op(conv([def('fx_tool_a')], [{ type: 'tool_addition', tool: { type: 'future_kind', name: 'fx_tool_b' } }])),
+      op(conv([def('fx_tool_a')], [{ type: 'tool_addition', tool: { type: 'tool_reference' } }])),
+      // Claude Code's own fold reads a system entry's reference by `name` only; `tool_name` is a tool_result's field.
+      op(conv([def('fx_tool_a')], [{ type: 'tool_removal', tool: { type: 'tool_reference', tool_name: 'fx_tool_a' } }])),
+      op(conv([def('fx_tool_a')], [{ type: 'tool_removal' }])),
+      op(conv([def('fx_tool_a')], [{ type: 'tool_removal', tool: { type: 'tool_definition', definition: def('fx_tool_a') } }])),
+      op(conv([def('fx_tool_a')], [addValue({ description: 'nameless', input_schema: schemaOf('x') })])),
+      op(conv([def('fx_tool_a')], [addValue({ type: 'web_search_20250305', name: 'web_search' })])),
+      op(conv([def('fx_tool_a')], [addValue('not-an-object')])),
+    ]);
+    for (const ok of [noTool, untypedTool]) {
+      expect(ok.error, JSON.stringify(ok)).toBeUndefined();
+      expect(names(ok)).toEqual(['fx_tool_a']);
+    }
+    expect(fam(noTool, 'requestField')).toContain('tool_addition-block.unrecognised');
+    expect(fam(untypedTool, 'requestField')).toContain('tool_addition-block.unrecognised');
+    const malformed = (l: Line, what: string): void => {
+      expect(l.error?.status, JSON.stringify(l)).toBe(400);
+      expect(l.error.etype).toBe('invalid_request_error');
+      expect(l.error.message).toBe('malformed request: ' + what);
+    };
+    const block = 'a tool_addition/tool_removal block: ';
+    malformed(unknownKind, block + "a tool_addition's tool is not a tool_reference or a tool_definition");
+    malformed(refNoName, block + 'its tool_reference has no name');
+    malformed(refToolNameOnly, block + 'its tool_reference has no name');
+    malformed(removalNoTool, block + "a tool_removal's tool is not a tool_reference");
+    malformed(removalByValue, block + "a tool_removal's tool is not a tool_reference");
+    malformed(defNoName, block + 'its tool_definition: a tool has no name');
+    malformed(defNotObject, block + 'its tool_definition: a tool is not an object');
+    malformed(defServer, block + 'its tool_definition: unsupported server tool: web_search_20250305');
+    expect(fam(defServer, 'unsupportedField')).toEqual(['web_search_20250305']);
+    const refused = [unknownKind, refNoName, refToolNameOnly, removalNoTool, removalByValue, defNoName, defServer, defNotObject];
+    for (const l of refused) {
+      // What Claude Code 2.1.310 matches to strip the blocks and drop its betas; a cache_control error it handles apart.
+      expect(l.error.message).toMatch(/\btool_addition\b/);
+      expect(l.error.message).not.toMatch(/cache_control/);
+      // Names only: no refusal carries a tool name.
+      expect(JSON.stringify(l.error)).not.toContain('fx_tool');
+    }
+  });
+
+  it('the control: a request with no tool-change block is what it was before D-7143', async () => {
+    const l = await one(body({
+      tools: [
+        def('fx_tool_a', { required: ['fx_tool_a_arg'] }), def('fx_tool_b', { extra: { defer_loading: true } }),
+        { name: 'DeferredToolPlaceholder', description: 'placeholder', input_schema: { type: 'object' } },
+      ],
+      messages: [
+        { role: 'user', content: 'a' },
+        { role: 'system', content: [{ type: 'text', text: 'mid' }] },
+        { role: 'user', content: 'b' },
+      ],
+    }));
+    expect(l.request.tools).toEqual([fn('fx_tool_a', { required: ['fx_tool_a_arg'] }), fn('fx_tool_b')]);
+    expect(l.request.name_map).toEqual({ fx_tool_a: 'fx_tool_a', fx_tool_b: 'fx_tool_b' });
+    expect(l.request.tools_required).toEqual(['fx_tool_a']);
+    expect(l.request.items).toEqual([userText('a'), dev('mid'), userText('b')]);
+    expect(l.request.countable_bytes).toBe(countable(l));
+    expect(l.names).toEqual([['requestField', 'defer_loading']]);
+  });
 });
 
 describe.skipIf(!PY)('inbound: the named cases (codex-bridge plan Task 2)', () => {
