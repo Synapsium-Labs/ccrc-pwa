@@ -275,4 +275,15 @@ describe('the class chooser is one component (T2f, D-6371)', () => {
     const callers = sources().filter((f) => read(...f.split('/')).includes('chooseClass(')).sort();
     expect(callers).toEqual(['fleet/ClassChooser.tsx']);
   });
+
+  it("the toggle's radiogroup grows to the row's width beside the chooser (T2f, D-6371)", () => {
+    const table = read('skins', 'instrument', 'FleetTable.tsx');
+    // A source pin: the width itself is measured in a real browser, jsdom has no layout.
+    const group = table.match(/<div\s+role="radiogroup"[^>]*?className="([^"]*)"/);
+    expect(group, 'the toggle radiogroup is not where this read looks').not.toBeNull();
+    const classes = group![1]!.split(/\s+/);
+    expect(classes, 'the radiogroup lost its class').toContain('ins-toggle');
+    expect(classes, 'the radiogroup no longer grows into the row').toContain('flex-1');
+    expect(classes, 'the radiogroup may not shrink below its content').toContain('min-w-0');
+  });
 });
