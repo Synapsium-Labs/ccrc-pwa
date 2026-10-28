@@ -265,10 +265,10 @@ describe('W7 PWA census: REAL rows (reporting, not ratcheting; spec §5.1 rule 3
     expect(Object.keys(countBy(sites, (s) => s.file)).length).toBe(1);
   });
 
-  it('coordPresenceSites(): 1 definition, 3 calls, 2 answers compared with dead', () => {
+  it('coordPresenceSites(): 1 definition, 2 calls, 1 answer compared with dead', () => {
     const sites = coordPresenceSites();
-    held('coordPresenceSites', sites, 6);
-    expect(countBy(sites, (s) => s.kind)).toEqual({ definition: 1, call: 3, 'answer-dead': 2 });
+    held('coordPresenceSites', sites, 4);
+    expect(countBy(sites, (s) => s.kind)).toEqual({ definition: 1, call: 2, 'answer-dead': 1 });
   });
 
   // Desktop-polish Task G2 added three: the programme box's own matches (fleetTree's `claimed` index, programmeBoxes'

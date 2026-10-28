@@ -143,7 +143,10 @@ const CENSUS: readonly Row[] = [
       + 'server\'s `asleep`), so no Resume door and no "coordinator gone"; the reclaim door those point at refuses a '
       + 'sleeper too (`claimant-alive`)' },
   { source: 'dead-compare', file: 'pwa/src/fleet/orphanWords.ts', hits: 1, stances: ['consults'],
-    why: 'the orphan marker reads `coordPresence`, and says `coordinator hibernated` for a sleeper, never "coordinator gone"' },
+    why: 'the orphan marker reads `coordinatorPresence`, and says `coordinator hibernated` for a sleeper, never '
+      + '"coordinator gone"' },
+  { source: 'presence-reader', file: 'pwa/src/fleet/orphanWords.ts', hits: 1, stances: ['consults'],
+    why: 'that read: `coordinatorPresence` (D-7181) spells the server\'s `asleep` `hibernated`, never `dead`' },
   { source: 'dead-compare', file: 'pwa/src/screens/RunRow.tsx', hits: 1, stances: ['consults'], via: 'pwa/src/fleet/coordWords.ts',
     why: 'the Resume button reads `coordPresence`, which answers a sleeper `hibernated`, never `dead`' },
   { source: 'stopped-compare', file: 'pwa/src/fleet/lifecycleWords.ts', hits: 1, stances: ['consults'], via: 'pwa/src/fleet/sessionFacts.ts',
