@@ -18,6 +18,7 @@ import {
   requestPollsIn, runMatchers, runMatchersIn, sessionPathLiterals, sessionPathLiteralsIn, showSite, singleReaders, singleReadersIn,
   storageOwners, storageOwnersIn, storageTypes, storageTypesIn, viewerWordsAsPresence, viewerWordsAsPresenceIn, type W7Site,
 } from './pwa.js';
+import { transcriptCopyRules, transcriptCopyRulesIn } from './pwa.js';
 
 const F = 'pwa/src/fixture.tsx';
 const run = (q: (p: ReturnType<typeof fixture>, file: string) => W7Site[], src: string, file = F): W7Site[] => q(fixture(src, file), file);
@@ -360,5 +361,33 @@ describe('W7 PWA census: REAL rows (reporting, not ratcheting; spec §5.1 rule 3
       presenceHeldSince: 7, lastPresenceWallAt: 7, lastPresenceDeferredAt: 7, firstPresenceDeferredAt: 9, collectAfterPresence: 4,
       presenceSince: 5, childReclaimPresenceWithin: 3, CollectPresence: 2, CHILD_RECLAIM_PRESENCE_GAP_PASSES: 2, CHILD_RECLAIM_PRESENCE_DEFERS: 3,
     });
+  });
+});
+
+// C7q (D-7212): the transcript copy's reading and a usable question envelope, one definition each.
+describe('W7 PWA census, C7q: transcriptCopyRules (D-7212)', () => {
+  it('FIXTURE: each rule counts once, at its innermost function; a call of the shared rule and a half rule do not', () => {
+    const got = run(transcriptCopyRulesIn, [
+      'export function readCopy(a: A | undefined): Q | null {',
+      "  if (a === undefined || a.question.trim() === '' || a.options.some((o) => o === null)) return null;",
+      '  return a;',
+      '}',
+      'export function outer(e: E): boolean {',
+      "  const usable = (x: E): boolean => x.questions.length > 0 && x.questions[0]!.question.trim() !== '';",
+      '  return usable(e);',
+      '}',
+      'export function caller(a: A): boolean { return transcriptQuestion(a.ask) !== null && usableQuestions(a); }',
+      "export function half(a: A): boolean { return a.question.trim() === ''; }",
+      'export function other(e: E): boolean { return e.questions.length > 0; }',
+    ].join('\n'), 'server/src/fixture.ts');
+    expect(got.map((s) => [s.kind, s.symbol])).toEqual([['copy', 'readCopy'], ['usable', 'outer.usable']]);
+  });
+
+  it('REAL: 2 sites, one copy and one usable, both in shared/ask-menu.ts', () => {
+    const sites = transcriptCopyRules();
+    held('transcriptCopyRules', sites, 2);
+    expect(sites.map((s) => [s.kind, `${s.file}#${s.symbol}`])).toEqual([
+      ['copy', 'shared/ask-menu.ts#transcriptQuestion'], ['usable', 'shared/ask-menu.ts#usableQuestions'],
+    ]);
   });
 });

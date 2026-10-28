@@ -6,7 +6,7 @@
 import { describe, expect, it } from 'vitest';
 import { parseFile, parseSource, type ParsedFile } from '../scan/parse.js';
 import { REPO, walkSrc } from './walkSrc.js';
-import { accountsReaders, answerPaths, dialogSheetStates, requestPolls } from '../census-w7/pwa.js';
+import { accountsReaders, answerPaths, dialogSheetStates, requestPolls, transcriptCopyRules } from '../census-w7/pwa.js';
 import path from 'node:path';
 
 const GUARDS = new Set(['isRecord', 'isObject', 'isNum', 'isCount', 'isOneOf']);
@@ -82,5 +82,16 @@ describe('DialogSheet holds only its three view states; the answer lifecycle hol
   // generated region (OA-C17 (a), D-7265), so a hand-written `/ask` fetch beside it, or a sheet writing on its own, reds.
   it('answerPaths() 3 -> 1: only the answer lifecycle', () => {
     expect(answerPaths().map((s) => [s.file, s.kind])).toEqual([['pwa/src/session/answerLifecycle.ts', 'reducer']]);
+  });
+});
+
+// C7q (D-7212; plan 2026-10-27-consolidation-w7-pwa.md): the transcript copy's reading and a usable question envelope
+// have one definition each, in `shared/ask-menu.ts`, read by the PWA's `askSource` and the server's pairing alike. The
+// ratchet holds each rule at 1 (`census-w7/pwa.ts#transcriptCopyRules`); a second copy on either side reds it.
+describe('the transcript copy and usability rules have one owner (C7q, D-7212)', () => {
+  it('transcriptCopyRules(): 1 copy reading and 1 usable-envelope test, both in shared/ask-menu.ts', () => {
+    const sites = transcriptCopyRules();
+    expect(sites.filter((s) => s.kind === 'copy').map((s) => s.file)).toEqual(['shared/ask-menu.ts']);
+    expect(sites.filter((s) => s.kind === 'usable').map((s) => s.file)).toEqual(['shared/ask-menu.ts']);
   });
 });
