@@ -113,9 +113,10 @@ const CENSUS: readonly Row[] = [
     why: '`SESSION_LIFECYCLE_MAP` and `LIFECYCLE_DEAD`: no new lifecycle member (the plan\'s wire discipline)' },
   // ── pwa ── (plan Task 18 made each of these consult `hibernatedAt`, through `pwa/src/fleet/hibernated.ts`; the
   // `task-18` stance they waited under is retired, `hibernated-census-stances-consult`, D-5429)
-  { source: 'dead-compare', file: 'pwa/src/fleet/hibernated.ts', hits: 1, stances: ['definition'],
-    why: '`hibernatedSince`, the PWA\'s one reader of `hibernatedAt`: a row is asleep only while it is `dead` with the '
-      + 'marker (both halves), so a crash is never woken and a stale marker on a live row is ignored' },
+  { source: 'presence-reader', file: 'pwa/src/fleet/hibernated.ts', hits: 1, stances: ['definition'],
+    why: '`hibernatedSince`, the PWA\'s one reader of `hibernatedAt`: a row is asleep only while its pane is gone '
+      + '(`paneGone`, D-7181) with the marker (both halves), so a crash is never woken and a stale marker on a live row is '
+      + 'ignored' },
   { source: 'presence-reader', file: 'pwa/src/fleet/presence.ts', hits: 4, stances: ['definition'],
     why: 'the PWA\'s one reader of the server\'s presence (D-7181): `presenceOf` reads `asleep` as the server sends it, '
       + '`coordinatorPresence` spells it `hibernated` (never `dead`), and `paneGone` words the pane only' },
