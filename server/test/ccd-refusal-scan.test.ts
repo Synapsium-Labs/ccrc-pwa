@@ -166,9 +166,11 @@ describe('every die in a destructive verb is reached through _lc_refuse or _lc_f
     // the flavour refusal through one `_lc_emit`; the lock decline in
     // `cmd_ws_reclaim` is the second. A third is a refusal path that bypasses
     // the verdict point, which is where the journal's completeness is decided.
+    // The flock decline is ws-reclaim's one call of the reap-lock runner (D-7076), with its literal act and verb.
     const region = src.slice(src.indexOf('RECLAIM-BEGIN'), src.indexOf('RECLAIM-END'));
     expect(region.length, 'the reclaim region could not be sliced').toBeGreaterThan(20000);
-    expect([...region.matchAll(/_lc_emit reclaim refused/g)]).toHaveLength(2);
+    expect([...region.matchAll(/_lc_emit reclaim refused/g)].length
+      + lockRunnerCalls('reclaim', 'ws-reclaim', src.indexOf('RECLAIM-BEGIN'), src.indexOf('RECLAIM-END'))).toBe(2);
   });
 
   it('holds the expiry emits at exactly two in ws-expire — one verdict point, one flock decline (workspace lifecycle, wave 3)', () => {

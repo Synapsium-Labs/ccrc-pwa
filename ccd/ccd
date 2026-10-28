@@ -36970,24 +36970,9 @@ cmd_ws_reclaim() {   # ccd ws-reclaim --expect <token> --child-of <runId> --sess
     || die "python3 unavailable — cannot quote the reclaim record safely"
   # THE SHARED LOCK (spec §5.6): `$REG/.reap-<id>.lock`, the SAME file ws-reap
   # takes, so reap and reclaim never run on one workspace at once. flock, never
-  # mkdir+trap — `cmd_ws_reap`'s own comment argues why at length.
-  local lock="$REG/.reap-$id.lock" lfd rc=0
-  command -v flock >/dev/null 2>&1 \
-    || _lc_refuse reclaim "$id" flock-unavailable \
-         "flock (util-linux) is unavailable — refusing to run the destructive verb unserialised"
-  exec {lfd}>>"$lock" \
-    || _lc_refuse reclaim "$id" lock-unopenable "cannot open the reap lock at $lock"
-  flock -n "$lfd" || {
-    _lc_emit reclaim refused "$id" "" verb ws-reclaim refusal in-progress \
-      detail "another ccd process is already reaping or reclaiming $id and still holds the lock"
-    exec {lfd}>&-
-    printf '{"refused":"in-progress","detail":%s,"paths":[]}\n' \
-      "$(_json_str "another ccd process is already reaping or reclaiming $id and still holds the lock")"
-    return 0
-  }
-  _ws_reclaim_locked "$token" "$childof" "$id" "$defer" "$lc_surface" "$lc_actor" "$lc_reason"; rc=$?
-  exec {lfd}>&-
-  return "$rc"
+  # mkdir+trap — `_ws_reap_lock_run`'s own comment argues why at length.
+  _ws_reap_lock_run reclaim ws-reclaim "$id" "another ccd process is already reaping or reclaiming $id and still holds the lock" \
+    _ws_reclaim_locked "$token" "$childof" "$id" "$defer" "$lc_surface" "$lc_actor" "$lc_reason"
 }
 
 _ws_reclaim_fork() {   # id defer childof -> runs the flavour fork exactly once (spec §5.6), the ONE copy
