@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { readdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import { defaultCachePath, loadSnapshot, saveSnapshot } from '../src/fleetstate.js';
+import { defaultCachePath, loadSnapshot, recordCcdVerbs, saveSnapshot } from '../src/fleetstate.js';
 import { reviveFleetSession, substrateFault, boardHome, repoLabel, type FleetSession } from '../../shared/api.js';
 import { mkTmp } from './tmpHelpers.js';
 
@@ -816,5 +816,55 @@ describe('repoLabel — the ONE renderer decision for ProjectRepoWire (Task 1)',
     expect(repoLabel({ state: 'absent' })).toBeNull();
     expect(repoLabel({ state: 'unmeasured' })).toBeNull();
     expect(repoLabel(undefined)).toBeNull();
+  });
+});
+
+// D-7079 (ARCH-72, W5 C5j): the one writer of `FleetState.ccdVerbs`. Its two modes stay apart: a ready frame writes
+// what it carries, `null` included (the reset); a measured answer writes only a non-null list, and only under the
+// epoch it was asked on. It returns whether it wrote.
+describe('recordCcdVerbs: the one writer of FleetState.ccdVerbs (D-7079)', () => {
+  it("'ready' writes the list as given", () => {
+    const s = { ccdVerbs: ['start'] as string[] | null };
+    expect(recordCcdVerbs(s, { from: 'ready', verbs: ['start', 'ws-audit'] })).toBe(true);
+    expect(s.ccdVerbs).toEqual(['start', 'ws-audit']);
+  });
+
+  it("'ready' writes a null too: the ready frame's reset", () => {
+    const s = { ccdVerbs: ['start'] as string[] | null };
+    expect(recordCcdVerbs(s, { from: 'ready', verbs: null })).toBe(true);
+    expect(s.ccdVerbs).toBeNull();
+  });
+
+  it("'measured' writes a list asked under the epoch that still stands", () => {
+    const s = { ccdVerbs: ['start'] as string[] | null };
+    expect(recordCcdVerbs(s, { from: 'measured', verbs: [], askedEpoch: 3, epochNow: () => 3 })).toBe(true);
+    expect(s.ccdVerbs).toEqual([]);
+  });
+
+  it("'measured' keeps the list when the answer is null", () => {
+    const s = { ccdVerbs: ['start'] as string[] | null };
+    expect(recordCcdVerbs(s, { from: 'measured', verbs: null, askedEpoch: 3, epochNow: () => 3 })).toBe(false);
+    expect(s.ccdVerbs).toEqual(['start']);
+  });
+
+  it("'measured' writes nothing when the epoch moved", () => {
+    const s = { ccdVerbs: ['start'] as string[] | null };
+    expect(recordCcdVerbs(s, { from: 'measured', verbs: ['start', 'ws-rename'], askedEpoch: 3, epochNow: () => 4 })).toBe(false);
+    expect(s.ccdVerbs).toEqual(['start']);
+  });
+
+  it("local mode's shape (epoch 0 asked, 0 now): a list writes, a null keeps null", () => {
+    const s = { ccdVerbs: null as string[] | null };
+    expect(recordCcdVerbs(s, { from: 'measured', verbs: null, askedEpoch: 0, epochNow: () => 0 })).toBe(false);
+    expect(s.ccdVerbs).toBeNull();
+    expect(recordCcdVerbs(s, { from: 'measured', verbs: ['start', 'stop-surface'], askedEpoch: 0, epochNow: () => 0 })).toBe(true);
+    expect(s.ccdVerbs).toEqual(['start', 'stop-surface']);
+  });
+
+  it('reads the epoch after the answer, not before: epochNow is called once the verbs are in hand', () => {
+    const s = { ccdVerbs: ['start'] as string[] | null };
+    let calls = 0;
+    expect(recordCcdVerbs(s, { from: 'measured', verbs: ['x'], askedEpoch: 1, epochNow: () => { calls += 1; return 1; } })).toBe(true);
+    expect(calls).toBe(1);
   });
 });

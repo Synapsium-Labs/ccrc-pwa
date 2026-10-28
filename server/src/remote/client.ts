@@ -15,7 +15,7 @@ import { parseBuildInfo } from '../../../shared/buildinfo.js';
 import { validCapWords } from '../../../shared/api.js';
 import type { Runner } from '../exec.js';
 import { FleetIdentityCell } from '../fleetidentity.js';
-import type { FleetState } from '../fleetstate.js';
+import { recordCcdVerbs, type FleetState } from '../fleetstate.js';
 import type { FleetIO } from '../io.js';
 import type { SpawnPty } from '../pty.js';
 import { createRunner } from './runner.js';
@@ -477,12 +477,16 @@ export class FleetClient {
     this.identity.invalidate('awaiting-inventory');
     this.ready = true;
     this.clearConnectDeadline();
-    // Mutated directly rather than pushed through setState, whose change
-    // detection compares only connected/downSince — a reconnect to an upgraded
-    // agent must still refresh this.
-    this.state.ccdVerbs = Array.isArray(frame.ccdVerbs)
-      && frame.ccdVerbs.every((v) => typeof v === 'string')
-      ? (frame.ccdVerbs as string[]) : null;
+    // Written through `recordCcdVerbs` (its ready rule: as given, null
+    // included) rather than pushed through setState, whose change detection
+    // compares only connected/downSince — a reconnect to an upgraded agent
+    // must still refresh this.
+    recordCcdVerbs(this.state, {
+      from: 'ready',
+      verbs: Array.isArray(frame.ccdVerbs)
+        && frame.ccdVerbs.every((v) => typeof v === 'string')
+        ? (frame.ccdVerbs as string[]) : null,
+    });
     // Same stance, same reason: a frame without a usable `rosterFp` — an older
     // agent, or a fleet host with no readable projection — leaves us with NO
     // evidence, which must not read as disagreement. Reset on every ready so a
