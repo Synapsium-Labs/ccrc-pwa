@@ -4411,6 +4411,18 @@ is a startup boundary, not a sandbox: `PATH` and every binary it selects are tru
 who replaces both files is not stopped. `ws-expire`, `ws-collect`, `ws-audit --session <id> --expire` and
 `ws-audit --session <id> --collect` are decided the same way.
 
+**After a box move.** Each registry row's entry field (`$REG/<id>.workdirid`) records the device and inode of the
+directory its session entered, and the rows rung refuses a child while any other row cannot be placed. A registry
+copied onto new hardware with its trees keeps the old host's identities, so on Linux the rung places such a row by its
+path instead, for the overlap check only and with nothing written: when the recorded device is a real one that no
+line of this host's mount table carries, is the device of no target the walk measured, and the recorded path stands
+now, is where the row's workdir resolves and is that same directory. A row gets a fresh field the next time its
+session starts. Still held after a move, by design: a tree copied within one file system (its recorded device is
+mounted here), an anonymous device (a btrfs subvolume or an overlay, which a mount table need not list), a row whose
+recorded path is gone or no longer resolves to its workdir, a row whose field reads `pending`, and every row on
+Darwin, which has no table. The refusal's detail names those rows and its remedy: stop each session and start it
+again, which writes a fresh field, or purge the row once its session has ended. The next reclaim pass then places it.
+
 **The temp-root collector (child reclamation waves 7 and 9; the lane ships shadowed).** A child's temp root,
 `$HOME/.cc-tmp/<id>`, that outlives its workspace — a reclaim tail kept it because a process still used it or ccd's
 removal refused it, or a human verb left it — is taken back by
