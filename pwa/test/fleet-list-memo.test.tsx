@@ -183,6 +183,12 @@ function SheetDoor(): ReactNode {
 
 const resetProbe = (): void => { probe.lines.length = 0; probe.heads.length = 0; };
 
+/** The lines that rendered, each once. Which lines, not how many passes: under this file's frozen clock each busy line's
+ *  `useNow` sets the same instant on mount, a same-value update React replays once on that line's next render, so the
+ *  changed line renders twice in a frame (measured: with a stateless `useNow` it renders once, and no other line does
+ *  either way). */
+const linesRendered = (): string[] => [...new Set(probe.lines)];
+
 beforeEach(() => {
   window.localStorage.clear();
   resetAcks();
@@ -263,7 +269,7 @@ describe('a one-row frame re-renders one SessionLine (C9, D-6441)', () => {
     resetProbe();
     d.sendRows(renamed(FLEET, 'ws-e'));
     expect(screen.getByRole('button', { name: 'Actions for renamed ws-e' })).toBeTruthy();
-    expect(probe.lines).toEqual(['ws-e']);
+    expect(linesRendered()).toEqual(['ws-e']);
   });
 
   it('a one-row frame re-renders one SessionLine, through StatusTable', async () => {
@@ -272,7 +278,7 @@ describe('a one-row frame re-renders one SessionLine (C9, D-6441)', () => {
     resetProbe();
     d.sendRows(renamed(FLEET, 'ws-e'));
     expect(screen.getByRole('button', { name: 'Actions for renamed ws-e' })).toBeTruthy();
-    expect(probe.lines).toEqual(['ws-e']);
+    expect(linesRendered()).toEqual(['ws-e']);
   });
 });
 
