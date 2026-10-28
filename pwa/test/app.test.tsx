@@ -543,7 +543,9 @@ describe('the frame: landmarks and the skip link (W2 Task S2b)', () => {
             .filter((el) => /^(\+\d+ more|Show fewer)/.test(el.textContent ?? ''));
           expect(controls).toHaveLength(1);
           expect(strip.contains(controls[0]!)).toBe(true);
-          expect(controls[0]).toHaveAttribute('aria-controls', strip.id);
+          // At the desk it names the cards' group it pins open; on a phone it names the panel it opens (phone-strip-tap-panel).
+          if (desk) expect(controls[0]).toHaveAttribute('aria-controls', strip.id);
+          else expect(controls[0]!.getAttribute('aria-controls')).not.toBe(strip.id);
           const bar = document.querySelector('header.shell-accounts');
           if (desk) expect(bar?.contains(strip)).toBe(true);
           else expect(screen.getByRole('region', { name: 'Fleet' }).contains(strip)).toBe(true);
