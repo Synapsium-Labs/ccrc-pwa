@@ -2212,6 +2212,7 @@ const OTHER_INST_ATOMIC_FNS: Readonly<Record<string, string>> = {
   _inst_units: 'its unit files are the units describe\'s',
   _inst_units_darwin: 'launchd plists, macOS only; deploy.sh deploys only to the Linux fleet box',
   _exp_ddns_units: 'the opt-in public endpoint\'s DNS units, placed by its own verb, never by install',
+  _inst_slice_limits: 'the session slice\'s rendered limits drop-in, inside the user unit directory the units describe\'s',
 };
 
 /** `for NAME in a b c; do` loops in a body, as more values of NAME. */
