@@ -167,7 +167,7 @@ import {
 } from './askLive';
 import { keyTabs, questionKeys, reviewKeys, rowKey, type KeyScreen } from './askKeys';
 import {
-  answeringOption, createAnswerLifecycle, performAnswer, showsSent, type AnswerLifecycle, type AnswerSeam, type AnswerState,
+  answeringOption, createAnswerLifecycle, isTabbing, performAnswer, showsSent, type AnswerLifecycle, type AnswerSeam, type AnswerState,
   type RefusalToken,
 } from './answerLifecycle';
 import { dialogMultiRefusal, dialogRefusal, dialogTabRefusal, dialogTextRefusal } from './askWords';
@@ -279,9 +279,9 @@ export function DialogSheet({ id, store, onOpenTerminal, raise, asker = null, on
   const [focusNonce, setFocusNonce] = useState(0);
   // D-5091: a multiSelect question's set and its commit, one value for the same reason (see `PickCall`), in the lifecycle.
   const pick = lifeNow.pick;
-  // Decision `ask-dialog-tab-route`: a tab move (the arrow keys, or a tab-strip chip) is under way. It is a send like
-  // any other: it refuses the others and the dismissal while it runs.
-  const [tabbing, setTabbing] = useState(false);
+  // Decision `ask-dialog-tab-route`: a tab move (the arrow keys, or a tab-strip chip) is under way, the lifecycle's
+  // sending(tab). It is a send like any other: it refuses the others and the dismissal while it runs.
+  const tabbing = isTabbing(lifeNow);
   // Deny's interrupt is in flight. Not "answering an option" (Escape has no option index), so it has its own flag, but it
   // is a send like the rest: it refuses the others and the dismissal while it runs.
   const [denying, setDenying] = useState(false);
@@ -582,21 +582,24 @@ export function DialogSheet({ id, store, onOpenTerminal, raise, asker = null, on
   const moveTab = async (to: DialogTabTarget, from?: number): Promise<void> => {
     const current = dialog;
     if (current === null || !claim()) return;
-    setTabbing(true);
+    const command = machine.dispatch({ type: 'tab', sessionId: id, dialogId: current.id, to, ...(from === undefined ? {} : { from }) }).command;
+    if (command?.kind !== 'tab') return;
+    let refusal: RefusalToken | undefined;
     try {
-      const res = await api.answerDialogTab(id, { dialogId: current.id, to, ...(from === undefined ? {} : { from }) });
+      const res = await performAnswer(command, answers);
       if (res.next !== undefined) applyAnswered(current.id, res.next);
     } catch (err) {
+      refusal = refusalToken(err);
       toast(dialogTabRefusal(err), 'error');
     } finally {
-      setTabbing(false);
+      machine.dispatch(refusal === undefined ? { type: 'tab-settled' } : { type: 'tab-settled', refusal });
     }
   };
   // The boxes changed here and not committed: a tab move would lose them, so ←/→ and the strip wait.
   // The lifecycle the content reads (`answerLifecycle.ts`): its in-flight flags, as this controller holds them.
   const life: AnswerState = {
-    phase: answering !== null ? lifeNow.phase
-      : tabbing ? { kind: 'sending', send: 'tab' } : denying ? { kind: 'sending', send: 'deny' } : { kind: 'idle' },
+    phase: answering !== null || tabbing ? lifeNow.phase
+      : denying ? { kind: 'sending', send: 'deny' } : { kind: 'idle' },
     own,
     pick,
     dismissal: { key: dismissedKey, dialogId: dismissedDialogId, screen: dismissedScreen },
