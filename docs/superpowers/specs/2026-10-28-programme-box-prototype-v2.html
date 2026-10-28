@@ -1,0 +1,367 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Programme Box Prototype v2</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: prototype controls on top; below them, a frame the size of the real fleet list column (Instrument, phosphor theme),
+   holding project panels > programme boxes > worker rows. A deliberate single dark look, matching the app. */
+:root {
+  color-scheme: dark;
+  --bg-page: #0B0D0C; --bg-surface: #141715; --bg-raised: #1C201D; --bg-well: #070808;
+  --edge-subtle: #262B27; --edge-strong: #39403A;
+  --ink-1: #ECF0EC; --ink-2: #ADB6AE; --ink-3: #8B948C;
+  --accent: #45D67E; --accent-tint: #12291B;
+  --warn: #F2B84B; --warn-tint: #2E2410; --bad: #FF8B7A; --bad-tint: #33150F;
+  --sans: "Inter", system-ui, sans-serif; --mono: "JetBrains Mono", ui-monospace, Menlo, monospace;
+  --col: 420px;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg-page); color: var(--ink-1); font-family: var(--sans); font-size: 15px; line-height: 1.4;
+  padding: 16px max(16px, env(safe-area-inset-right, 0px)) 60px max(16px, env(safe-area-inset-left, 0px)); }
+button { font: inherit; cursor: pointer; color: inherit; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.page { display: grid; gap: 16px; justify-items: center; }
+
+/* ---- prototype controls (not part of the design) ---- */
+.controls { width: 100%; max-width: 760px; display: grid; gap: 8px; padding: 10px 12px; border: 1px dashed var(--edge-strong); border-radius: 10px; font-size: 13px; color: var(--ink-2); }
+.controls p { margin: 0; }
+.controls .row { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; }
+.tool { background: var(--bg-raised); border: 1px solid var(--edge-strong); border-radius: 8px; padding: 5px 10px; font-size: 13px; }
+.clock { font-family: var(--mono); color: var(--ink-1); }
+.controls label { display: inline-flex; gap: 6px; align-items: center; }
+.controls input[type=range] { width: 100px; accent-color: var(--accent); }
+.controls select { background: var(--bg-raised); color: var(--ink-1); border: 1px solid var(--edge-strong); border-radius: 6px; padding: 3px 6px; font: inherit; }
+
+/* ---- the column, at the real panel's size ---- */
+.column { width: min(var(--col), 100%); display: grid; gap: 10px; }
+.modes { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.modes button { min-height: 44px; border: 1px solid var(--edge-strong); border-radius: 8px; background: transparent; font-weight: 500; font-size: 16px; }
+.modes button[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-tint); }
+.tally { display: flex; flex-wrap: wrap; gap: 6px; }
+.tally span { font-size: 14px; padding: 5px 12px; border-radius: 8px; background: var(--bg-surface); color: var(--ink-2); }
+.tally b { font-weight: 500; color: var(--ink-1); margin-right: 6px; }
+.tally .you { background: var(--warn-tint); color: var(--warn); }
+.tally .you b, .tally .bad b { color: inherit; }
+.tally .bad { background: var(--bad-tint); color: var(--bad); }
+.list { display: grid; gap: 12px; }
+.empty { padding: 20px; text-align: center; color: var(--ink-3); border: 1px dashed var(--edge-strong); border-radius: 10px; }
+
+/* ---- level 1: the project, an outer panel ---- */
+.proj { background: var(--bg-surface); border: 1px solid var(--edge-strong); border-radius: 12px; padding: 4px 8px 8px; display: grid; gap: 8px; }
+.projhead { display: grid; grid-template-columns: 18px 1fr auto; gap: 2px 8px; align-items: center; padding: 10px 6px 4px; cursor: pointer; user-select: none; border-radius: 8px; }
+.projhead.static { cursor: default; }
+.projhead:not(.static):hover { background: var(--bg-raised); }
+.projhead .tw { color: var(--ink-3); font-size: 12px; transition: transform .15s; }
+.proj[data-open="true"] .projhead .tw { transform: rotate(90deg); }
+.projname { font-size: 19px; font-weight: 600; letter-spacing: -.01em; }
+.projname small { font-family: var(--mono); font-size: 13px; font-weight: 400; color: var(--ink-2); margin-left: 8px; letter-spacing: 0; }
+.projsub { grid-column: 2 / -1; font-family: var(--mono); font-size: 12px; color: var(--ink-3); display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.projbadges { display: flex; gap: 4px; }
+.projmore { font-family: var(--mono); font-size: 12px; color: var(--ink-3); padding: 2px 8px 4px; }
+.sublabel { font-family: var(--mono); font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--ink-3); padding: 6px 8px 0; }
+
+/* ---- level 2: the programme, a box inside the project ---- */
+.box { border: 1.5px solid var(--edge-strong); border-radius: 10px; background: var(--bg-page); overflow: hidden; }
+.box.stalled { border-color: var(--bad); }
+.box.needs { border-color: var(--warn); }
+.box.finished { opacity: .75; }
+.head { display: grid; grid-template-columns: 18px 1fr; gap: 2px 8px; padding: 10px 10px 9px 8px; cursor: pointer; user-select: none; }
+.head.static { cursor: default; }
+.head:not(.static):hover { background: var(--bg-raised); }
+.head .tw { color: var(--ink-3); font-size: 12px; line-height: 22px; transition: transform .15s; align-self: start; }
+.box[data-open="true"] .head .tw { transform: rotate(90deg); }
+.ctitle { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; min-width: 0; }
+.ctitle .cname { font-size: 17px; font-weight: 600; overflow-wrap: anywhere; }
+.coordtag { font-family: var(--mono); font-size: 10px; letter-spacing: .08em; text-transform: uppercase; color: var(--ink-3); border: 1px solid var(--edge-strong); border-radius: 4px; padding: 0 4px; }
+.cline { grid-column: 2; font-family: var(--mono); font-size: 13px; color: var(--ink-2); display: flex; flex-wrap: wrap; gap: 2px 8px; align-items: center; }
+.cline .dot { color: var(--ink-3); }
+.cline .bad { color: var(--bad); }
+.cline .ok { color: var(--accent); }
+.cline .you { color: var(--warn); }
+.prog { grid-column: 2; display: flex; gap: 8px; align-items: center; font-family: var(--mono); font-size: 12px; color: var(--ink-3); }
+.bar { height: 5px; width: 90px; background: var(--edge-strong); border-radius: 3px; overflow: hidden; flex: none; }
+.bar i { display: block; height: 100%; background: var(--accent); }
+.chip { font-family: var(--mono); font-size: 11px; padding: 1px 7px; border-radius: 9px; white-space: nowrap; }
+.c-ok { background: var(--accent-tint); color: var(--accent); }
+.c-bad { background: var(--bad-tint); color: var(--bad); }
+.c-you { background: var(--warn-tint); color: var(--warn); }
+.c-quiet { background: var(--bg-raised); color: var(--ink-3); }
+
+/* ---- level 3: the workers, in the box's tray ---- */
+.tray { border-top: 1px solid var(--edge-subtle); background: var(--bg-well); padding: 4px; display: grid; gap: 3px; }
+.kid { display: grid; grid-template-columns: 1fr auto; gap: 2px 8px; align-items: center; padding: 6px 8px; border-radius: 6px; font-family: var(--mono); font-size: 13px; }
+.kid:hover { background: var(--bg-surface); }
+.kid.need { background: var(--warn-tint); }
+.kid .kn { min-width: 0; overflow-wrap: anywhere; color: var(--ink-1); }
+.kid .kr { color: var(--ink-3); font-size: 11px; margin-right: 6px; }
+.kid .ks { color: var(--ink-3); }
+.kid .ks.ok { color: var(--accent); } .kid .ks.bad { color: var(--bad); }
+.kid .ask { grid-column: 1 / -1; color: var(--warn); font-size: 12px; }
+.kid .acts { grid-column: 1 / -1; display: flex; gap: 6px; flex-wrap: wrap; }
+.act { background: var(--bg-raised); border: 1px solid var(--edge-strong); border-radius: 6px; padding: 4px 10px; font-size: 12px; font-family: var(--mono); min-height: 30px; }
+.act.primary { background: var(--accent); color: #082312; border-color: var(--accent); }
+.foot { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 4px 6px 4px 10px; border-top: 1px solid var(--edge-subtle); background: var(--bg-well); font-family: var(--mono); font-size: 12px; color: var(--ink-3); }
+
+/* a session outside any programme: a plain row, like today's */
+.lone { display: grid; grid-template-columns: 16px 1fr; gap: 0 8px; padding: 8px 8px; border-radius: 8px; }
+.lone:hover { background: var(--bg-raised); }
+.lone .lamp { color: var(--ink-3); font-size: 11px; line-height: 22px; }
+.lone .ln { font-size: 16px; font-weight: 500; overflow-wrap: anywhere; }
+.lone .ls { grid-column: 2; font-family: var(--mono); font-size: 13px; color: var(--ink-2); }
+.lone .ls .ok { color: var(--accent); }
+
+.toast { position: fixed; left: 50%; bottom: calc(18px + env(safe-area-inset-bottom, 0px)); transform: translateX(-50%); background: var(--ink-1); color: var(--bg-page); padding: 8px 14px; border-radius: 8px; font-size: 13px; opacity: 0; pointer-events: none; transition: opacity .2s; max-width: calc(100% - 32px); }
+.toast.show { opacity: 1; }
+.log { width: min(var(--col), 100%); font-family: var(--mono); font-size: 11px; color: var(--ink-3); display: grid; gap: 2px; }
+@media (prefers-reduced-motion: reduce) { .tw, .toast { transition: none; } }
+</style>
+</head><body>
+<div class="page">
+  <div class="controls" role="group" aria-label="Prototype controls">
+    <p><b style="color:var(--ink-1)">Prototype controls</b>, not part of the design. Mock data only. The column below is the fleet list at its real size (about 420 px at the desk).</p>
+    <div class="row">
+      <span>Clock <span class="clock" id="clock">14:00</span></span>
+      <button type="button" class="tool" id="tick">+15 min</button>
+      <button type="button" class="tool" id="asks">A worker asks</button>
+      <label for="thr">Stalled after <input type="range" id="thr" min="15" max="120" step="15" value="45"> <span class="clock" id="thrv">45m</span></label>
+      <label for="width">Width <select id="width"><option value="420">420 desk column</option><option value="390">390 phone</option><option value="360">360 small phone</option></select></label>
+      <button type="button" class="tool" id="reset">Reset</button>
+    </div>
+  </div>
+
+  <div class="column" id="column">
+    <div class="modes" role="group" aria-label="Group by">
+      <button type="button" id="m-status" aria-pressed="false">Status</button>
+      <button type="button" id="m-project" aria-pressed="true">Project</button>
+    </div>
+    <div class="tally" id="tally" aria-live="polite"></div>
+    <div class="list" id="list"></div>
+  </div>
+  <div class="log" id="log" aria-live="polite"></div>
+</div>
+<div class="toast" id="toast" role="status"></div>
+
+<script>
+(function () {
+  function seed() {
+    var T = 14 * 60;
+    return {
+      now: T,
+      projects: [
+        { id: 'project-a', note: 'several accounts' },
+        { id: 'project-b', note: 'one account' },
+        { id: 'project-c', note: 'one account' }
+      ],
+      programmes: [
+        { id: 'pa', project: 'project-a', name: 'Checkout Revamp', branch: 'ws/checkout-revamp', unit: 'tasks merged', done: 4, total: 6, lastMove: T - 3,
+          kids: [
+            { id: 'a1', name: 'ws/checkout-c13', role: 'worker', state: 'working', wave: 'wave 62', need: { kind: 'question', text: 'push now, or hold until the other PRs land?', options: ['Push now', 'Hold'] } },
+            { id: 'a2', name: 'ws/checkout-c9', role: 'worker', state: 'working', wave: 'wave 33' },
+            { id: 'a3', name: 'ws/checkout-c12-rev', role: 'reviewer', state: 'done', wave: 'review' },
+            { id: 'a4', name: 'ws/checkout-t3b', role: 'worker', state: 'done', wave: 'wave 50' } ] },
+        { id: 'pb', project: 'project-a', name: 'Search Rollout', branch: 'ws/search-rollout', unit: 'waves', done: 3, total: 6, lastMove: T - 40,
+          kids: [
+            { id: 'b1', name: 'ws/search-w4', role: 'worker', state: 'waiting', wave: 'wave 4', note: 'waiting on review' },
+            { id: 'b2', name: 'ws/search-w4-rev', role: 'reviewer', state: 'exited', wave: 'review', note: 'stopped by cli, 1d ago' } ] },
+        { id: 'pc', project: 'project-a', name: 'Settings Rework', branch: 'ws/settings-rework', unit: 'waves', done: 2, total: 3, lastMove: T - 12,
+          kids: [
+            { id: 'c1', name: 'ws/settings-w2', role: 'worker', state: 'working', wave: 'wave 2' },
+            { id: 'c2', name: 'ws/settings-w1-rev', role: 'reviewer', state: 'done', wave: 'review' } ] },
+        { id: 'pd', project: 'project-b', name: 'Billing Migration', branch: 'ws/billing-migration', unit: 'waves', done: 5, total: 7, lastMove: T - 8,
+          kids: [
+            { id: 'd1', name: 'ws/billing-w5', role: 'worker', state: 'working', wave: 'wave 5 of 7' },
+            { id: 'd2', name: 'ws/billing-w4', role: 'worker', state: 'done', wave: 'wave 4 of 7' } ] },
+        { id: 'pe', project: 'project-c', name: 'Docs Reader', branch: 'ws/docs-reader', unit: 'waves', done: 7, total: 7, lastMove: T - 300, finished: true,
+          kids: [ { id: 'e1', name: 'ws/docs-reader-w7', role: 'worker', state: 'done', wave: 'wave 7 of 7' } ] }
+      ],
+      lone: [
+        { id: 'l1', project: 'project-a', name: 'ledger/wave3e-accepted', state: 'idle', note: 'limit 96%' },
+        { id: 'l2', project: 'project-a', name: 'ws/lossless-context-plugin', state: 'idle' },
+        { id: 'l3', project: 'project-a', name: 'docs/model-class-auto-advance', state: 'working' },
+        { id: 'l4', project: 'project-b', name: 'ws/hotfix-login', state: 'idle' },
+        { id: 'l5', project: 'project-c', name: 'ws/spike-renderer', state: 'working' }
+      ],
+      log: []
+    };
+  }
+  var KEY = 'programme-box-prototype-v3';
+  var S = seed(), mode = 'project', threshold = 45, openBox = {}, closedProj = {};
+  try { var sv = JSON.parse(localStorage.getItem(KEY) || '{}'); openBox = sv.openBox || {}; closedProj = sv.closedProj || {}; } catch (e) {}
+  function persist() { try { localStorage.setItem(KEY, JSON.stringify({ openBox: openBox, closedProj: closedProj })); } catch (e) {} }
+
+  // ---- the decider: one state per programme ----
+  function needs(p) { return p.kids.filter(function (k) { return k.need; }); }
+  function quiet(p) { return S.now - p.lastMove; }
+  function stateOf(p) { if (p.finished) return 'finished'; if (needs(p).length) return 'needs'; if (quiet(p) >= threshold) return 'stalled'; return 'moving'; }
+  var RANK = { needs: 0, stalled: 1, moving: 2, finished: 3 };
+  function byUrgency(a, b) { return RANK[stateOf(a)] - RANK[stateOf(b)] || quiet(b) - quiet(a); }
+  function clock(m) { var h = Math.floor(m / 60) % 24, n = m % 60; return (h < 10 ? '0' : '') + h + ':' + (n < 10 ? '0' : '') + n; }
+  function dur(m) { if (m < 60) return m + 'm'; var h = Math.floor(m / 60), r = m % 60; return h + 'h' + (r ? ' ' + r + 'm' : ''); }
+
+  function el(tag, cls, text) { var e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
+  function txt(parent, cls, t) { var s = el('span', cls, t); parent.appendChild(s); return s; }
+
+  function kidRow(p, k) {
+    var r = el('div', 'kid' + (k.need ? ' need' : ''));
+    var n = el('div', 'kn'); txt(n, 'kr', k.role); n.appendChild(document.createTextNode(k.name)); r.appendChild(n);
+    var st = el('span', 'ks' + (k.state === 'working' ? ' ok' : k.state === 'exited' ? ' bad' : ''), k.state); r.appendChild(st);
+    var meta = [k.wave, k.note].filter(Boolean).join(' · ');
+    if (meta && !k.need) { var m = el('div', 'ks', meta); m.style.gridColumn = '1 / -1'; m.style.fontSize = '12px'; r.appendChild(m); }
+    if (k.need) {
+      r.appendChild(el('div', 'ask', (k.need.kind === 'question' ? 'asks: ' : 'permission: ') + k.need.text));
+      var acts = el('div', 'acts');
+      k.need.options.forEach(function (o, i) {
+        var b = el('button', 'act' + (i === 0 ? ' primary' : ''), o); b.type = 'button';
+        b.addEventListener('click', function (e) { e.stopPropagation(); answer(p, k, o); }); acts.appendChild(b);
+      });
+      var ob = el('button', 'act', 'Open'); ob.type = 'button'; ob.addEventListener('click', function (e) { e.stopPropagation(); toast('Would open ' + k.name); }); acts.appendChild(ob);
+      r.appendChild(acts);
+    } else {
+      r.addEventListener('click', function () { toast('Would open ' + k.name); });
+      r.style.cursor = 'pointer';
+    }
+    return r;
+  }
+
+  function box(p, collapsible) {
+    var st = stateOf(p), isOpen = collapsible && !!openBox[p.id];
+    var b = el('section', 'box' + (st === 'stalled' ? ' stalled' : st === 'needs' ? ' needs' : st === 'finished' ? ' finished' : ''));
+    b.dataset.open = String(isOpen);
+    var trayId = 'tray-' + p.id;
+    var h = el('div', 'head' + (collapsible ? '' : ' static'));
+    if (collapsible) {
+      h.setAttribute('role', 'button'); h.tabIndex = 0; h.setAttribute('aria-expanded', String(isOpen)); h.setAttribute('aria-controls', trayId);
+      h.dataset.focus = 'box:' + p.id;
+      h.addEventListener('click', function () { openBox[p.id] = !openBox[p.id]; persist(); render('box:' + p.id); });
+      h.addEventListener('keydown', function (e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); h.click(); } });
+    }
+    txt(h, 'tw', collapsible ? '▶' : '');
+    var t = el('div', 'ctitle'); txt(t, 'cname', p.name); txt(t, 'coordtag', 'coordinator'); h.appendChild(t);
+    var line = el('div', 'cline');
+    if (mode === 'status') { txt(line, null, p.project); txt(line, 'dot', '·'); }
+    var q = quiet(p), isQuiet = !p.finished && q >= threshold;
+    if (st === 'finished') txt(line, null, 'finished');
+    else if (st === 'needs') txt(line, 'you', needs(p).length === 1 ? '1 needs you' : needs(p).length + ' need you');
+    else if (st === 'stalled') txt(line, 'bad', 'stalled');
+    else txt(line, 'ok', 'moving');
+    txt(line, 'dot', '·'); txt(line, isQuiet ? 'bad' : null, isQuiet ? 'no move ' + dur(q) : 'moved ' + (q < 1 ? 'just now' : dur(q) + ' ago'));
+    h.appendChild(line);
+    var prog = el('div', 'prog'); var bar = el('div', 'bar'); var fill = el('i'); fill.style.width = Math.round(100 * p.done / p.total) + '%'; bar.appendChild(fill); prog.appendChild(bar);
+    txt(prog, null, p.done + ' of ' + p.total + ' ' + p.unit);
+    h.appendChild(prog);
+    b.appendChild(h);
+
+    var shown = isOpen ? p.kids : needs(p);
+    if (shown.length) { var tray = el('div', 'tray'); tray.id = trayId; shown.forEach(function (k) { tray.appendChild(kidRow(p, k)); }); b.appendChild(tray); }
+    var hidden = p.kids.length - shown.length;
+    if (collapsible && (hidden > 0 || isOpen)) {
+      var f = el('div', 'foot');
+      var working = p.kids.filter(function (k) { return k.state === 'working'; }).length;
+      txt(f, null, isOpen ? 'all ' + p.kids.length + ' workers' : hidden + ' more ' + (hidden === 1 ? 'worker' : 'workers') + (working ? ' · ' + working + ' working' : ''));
+      var tb = el('button', 'act', isOpen ? 'Hide' : 'Show'); tb.type = 'button'; tb.setAttribute('aria-controls', trayId); tb.setAttribute('aria-expanded', String(isOpen));
+      tb.addEventListener('click', function (e) { e.stopPropagation(); openBox[p.id] = !openBox[p.id]; persist(); render('box:' + p.id); });
+      f.appendChild(tb); b.appendChild(f);
+    }
+    return b;
+  }
+
+  function loneRow(s) {
+    var r = el('div', 'lone'); txt(r, 'lamp', s.state === 'working' ? '◐' : '○'); txt(r, 'ln', s.name);
+    var l = el('div', 'ls'); txt(l, s.state === 'working' ? 'ok' : null, s.state); if (s.note) { txt(l, null, ' · '); txt(l, null, s.note); } r.appendChild(l);
+    r.style.cursor = 'pointer'; r.addEventListener('click', function () { toast('Would open ' + s.name); });
+    return r;
+  }
+
+  function projectPanel(pr) {
+    var mine = S.programmes.filter(function (p) { return p.project === pr.id; }).sort(byUrgency);
+    var lone = S.lone.filter(function (s) { return s.project === pr.id; });
+    var isOpen = !closedProj[pr.id];
+    var sec = el('section', 'proj'); sec.dataset.open = String(isOpen);
+    var bodyId = 'body-' + pr.id;
+    var h = el('div', 'projhead'); h.setAttribute('role', 'button'); h.tabIndex = 0; h.setAttribute('aria-expanded', String(isOpen)); h.setAttribute('aria-controls', bodyId);
+    h.dataset.focus = 'proj:' + pr.id;
+    h.addEventListener('click', function () { closedProj[pr.id] = !closedProj[pr.id]; persist(); render('proj:' + pr.id); });
+    h.addEventListener('keydown', function (e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); h.click(); } });
+    txt(h, 'tw', '▶');
+    var nm = el('div', 'projname', pr.id); var sessions = lone.length + mine.reduce(function (n, p) { return n + 1 + p.kids.length; }, 0);
+    nm.appendChild(el('small', null, sessions + ' sessions')); h.appendChild(nm);
+    var badges = el('div', 'projbadges');
+    var nNeed = mine.reduce(function (n, p) { return n + needs(p).length; }, 0), nStall = mine.filter(function (p) { return stateOf(p) === 'stalled'; }).length;
+    if (nNeed) txt(badges, 'chip c-you', nNeed + ' you');
+    if (nStall) txt(badges, 'chip c-bad', nStall + ' stalled');
+    h.appendChild(badges);
+    var sub = el('div', 'projsub'); txt(sub, null, mine.filter(function (p) { return !p.finished; }).length + ' programmes running · ' + lone.length + ' other sessions · ' + pr.note); h.appendChild(sub);
+    sec.appendChild(h);
+    var body = el('div'); body.id = bodyId; body.style.display = 'grid'; body.style.gap = '8px';
+    if (isOpen) {
+      mine.forEach(function (p) { body.appendChild(box(p, true)); });
+      if (lone.length) { body.appendChild(el('div', 'sublabel', 'Not in a programme')); lone.forEach(function (s) { body.appendChild(loneRow(s)); }); }
+    } else {
+      var urgent = mine.filter(function (p) { var st = stateOf(p); return st === 'needs' || st === 'stalled'; });
+      urgent.forEach(function (p) { body.appendChild(box(p, true)); });
+      var rest = mine.length - urgent.length + lone.length;
+      if (rest) body.appendChild(el('div', 'projmore', rest + ' more hidden in this project'));
+    }
+    if (body.childNodes.length) sec.appendChild(body);
+    return sec;
+  }
+
+  function render(focusKey) {
+    document.getElementById('clock').textContent = clock(S.now);
+    var nNeed = S.programmes.reduce(function (n, p) { return n + needs(p).length; }, 0);
+    var nStall = S.programmes.filter(function (p) { return stateOf(p) === 'stalled'; }).length;
+    var nMove = S.programmes.filter(function (p) { return stateOf(p) === 'moving'; }).length;
+    var tally = document.getElementById('tally'); tally.textContent = '';
+    [['you', nNeed, 'need you'], ['bad', nStall, 'stalled'], ['', nMove, 'moving']].forEach(function (t) {
+      var s = el('span', t[1] ? t[0] : ''); s.appendChild(el('b', null, String(t[1]))); s.appendChild(document.createTextNode(t[2])); tally.appendChild(s);
+    });
+    var list = document.getElementById('list'); list.textContent = '';
+    if (mode === 'project') {
+      S.projects.slice().sort(function (a, b) {
+        function top(pr) { var r = 9; S.programmes.forEach(function (p) { if (p.project === pr.id) r = Math.min(r, RANK[stateOf(p)]); }); return r; }
+        return top(a) - top(b);
+      }).forEach(function (pr) { list.appendChild(projectPanel(pr)); });
+    } else {
+      var live = S.programmes.filter(function (p) { return !p.finished; }).sort(byUrgency);
+      if (!live.length) list.appendChild(el('div', 'empty', 'No programme is running.'));
+      live.forEach(function (p) { list.appendChild(box(p, false)); });
+    }
+    var log = document.getElementById('log'); log.textContent = ''; S.log.slice(-4).forEach(function (l) { log.appendChild(el('div', null, l)); });
+    if (focusKey) { var f = list.querySelector('[data-focus="' + focusKey + '"]'); if (f) f.focus(); }
+  }
+
+  function note(t) { S.log.push(clock(S.now) + '  ' + t); }
+  function answer(p, k, o) { note(k.name + ': ' + o); delete k.need; if (k.state !== 'working') k.state = 'working'; p.lastMove = S.now; toast('Answered: ' + o); render(); }
+  function tick() {
+    S.now += 15;
+    S.programmes.forEach(function (p, i) {
+      if (p.finished || needs(p).length) return;
+      if (!p.kids.some(function (k) { return k.state === 'working'; })) return;
+      if ((S.now / 15 + i) % 2 === 0) { p.lastMove = S.now; if (p.done < p.total && (S.now / 15 + i) % 4 === 0) { p.done++; note(p.name + ': one more ' + (p.unit === 'waves' ? 'wave' : 'task') + ' done'); } }
+    });
+    S.programmes.forEach(function (p) { if (stateOf(p) === 'stalled' && quiet(p) - 15 < threshold) note(p.name + ' stalled'); });
+    render();
+  }
+  var askN = 0;
+  function asks() {
+    var pool = [];
+    S.programmes.forEach(function (p) { if (!p.finished) p.kids.forEach(function (k) { if (!k.need && (k.state === 'working' || k.state === 'waiting')) pool.push([p, k]); }); });
+    if (!pool.length) { toast('No working worker left to ask'); return; }
+    var pk = pool[askN++ % pool.length];
+    pk[1].need = askN % 2 ? { kind: 'permission', text: 'run the migration on the test box?', options: ['Allow once', 'Deny'] } : { kind: 'question', text: 'fix the two review notes now or later?', options: ['Now', 'Later'] };
+    note(pk[1].name + ' asks you'); render();
+  }
+  var tt; function toast(t) { var e = document.getElementById('toast'); e.textContent = t; e.classList.add('show'); clearTimeout(tt); tt = setTimeout(function () { e.classList.remove('show'); }, 1600); }
+  function setMode(m) { mode = m; document.getElementById('m-status').setAttribute('aria-pressed', String(m === 'status')); document.getElementById('m-project').setAttribute('aria-pressed', String(m === 'project')); render(); }
+
+  document.getElementById('m-status').addEventListener('click', function () { setMode('status'); });
+  document.getElementById('m-project').addEventListener('click', function () { setMode('project'); });
+  document.getElementById('tick').addEventListener('click', tick);
+  document.getElementById('asks').addEventListener('click', asks);
+  document.getElementById('thr').addEventListener('input', function (e) { threshold = +e.target.value; document.getElementById('thrv').textContent = threshold + 'm'; render(); });
+  document.getElementById('width').addEventListener('change', function (e) { document.documentElement.style.setProperty('--col', e.target.value + 'px'); });
+  document.getElementById('reset').addEventListener('click', function () { S = seed(); openBox = {}; closedProj = {}; askN = 0; threshold = 45; document.getElementById('thr').value = 45; document.getElementById('thrv').textContent = '45m'; persist(); render(); toast('Reset'); });
+  setMode('project');
+})();
+</script>
+</body></html>
