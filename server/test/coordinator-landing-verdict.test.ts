@@ -1184,6 +1184,41 @@ const APPROVAL: Case[] = [
     pr: prWith('REVIEW_REQUIRED') })), 'ROUTE Q method=squash admin=never strict=unknown'],
 ];
 
+// ---- Fix round 6: the approval any pull_request rule requires (review 1138, F1) ----
+// The approval is required when ANY pull_request rule's count is above 0, so a count on a second ruleset's rule, or on a rule
+// a later page of the paginated rules read carries, requires it as the first rule's would. Each case puts the count of 1 on one
+// rule and 0 on the other, with a decision that is not APPROVED: approval-missing on route G and route U. The order is mirrored
+// too, so neither the first nor the last pull_request rule alone decides. The controls are the same fixtures with the decision
+// APPROVED, where the route stands, so the stop is the approval's alone.
+const ciApp = rsc([{ context: 'ci/app', integration_id: 999 }]);
+const mergeOnly = (count: number, id: number) => pull({ allowed_merge_methods: ['merge'], required_approving_review_count: count }, id);
+const anyRuleG = (rs: Answer, decision = 'REVIEW_REQUIRED') => with_(thirdParty, (f) => ({ ...f, rules: rs, pr: prWith(decision) }));
+const anyRuleU = (rs: Answer, decision = 'REVIEW_REQUIRED') => with_(bare, (f) => ({ ...f, rules: rs, pr: prWith(decision) }));
+const secondG = ok([mergeOnly(0, 11), mergeOnly(1, 12), ciApp]);
+const firstG = ok([mergeOnly(1, 11), mergeOnly(0, 12), ciApp]);
+const laterPageG = pages([mergeOnly(0, 11), ciApp], [mergeOnly(1, 12)]);
+const secondU = ok([pull({}, 11), pull({ required_approving_review_count: 1 }, 12)]);
+const firstU = ok([pull({ required_approving_review_count: 1 }, 11), pull({}, 12)]);
+const laterPageU = pages([pull({}, 11)], [pull({ required_approving_review_count: 1 }, 12)]);
+const APPROVAL_ANY_RULE: Case[] = [
+  ['route G: ruleset A counts 0 and ruleset B counts 1, the decision REVIEW_REQUIRED: B requires it, so approval-missing',
+    anyRuleG(secondG), approvalMissing('G')],
+  ['route G: ruleset A counts 1 and ruleset B counts 0: A requires it, so approval-missing', anyRuleG(firstG), approvalMissing('G')],
+  ['route G: the counted rule is on page 2 of the rules read, page 1 counting 0: approval-missing', anyRuleG(laterPageG), approvalMissing('G')],
+  ['route U: ruleset A counts 0 and ruleset B counts 1, the decision REVIEW_REQUIRED: B requires it, so approval-missing',
+    anyRuleU(secondU), approvalMissing('U')],
+  ['route U: ruleset A counts 1 and ruleset B counts 0: A requires it, so approval-missing', anyRuleU(firstU), approvalMissing('U')],
+  ['route U: the counted rule is on page 2 of the rules read, page 1 counting 0: approval-missing', anyRuleU(laterPageU), approvalMissing('U')],
+  ['route G: ruleset B counts 1 and the decision is APPROVED: the route stands (control)', anyRuleG(secondG, 'APPROVED'),
+    'ROUTE G method=merge admin=never strict=no'],
+  ['route G: the counted rule on page 2 and the decision APPROVED: the route stands (control)', anyRuleG(laterPageG, 'APPROVED'),
+    'ROUTE G method=merge admin=never strict=no'],
+  ['route U: ruleset B counts 1 and the decision is APPROVED: the route stands (control)', anyRuleU(secondU, 'APPROVED'),
+    'ROUTE U method=squash admin=never strict=no'],
+  ['route U: the counted rule on page 2 and the decision APPROVED: the route stands (control)', anyRuleU(laterPageU, 'APPROVED'),
+    'ROUTE U method=squash admin=never strict=no'],
+];
+
 // ---- Fix round 4: read 1, read 3 and read 6 judge the value GitHub sent, not the text a shell makes of it ----
 // A command substitution drops the trailing newlines of what it captures, and `jq -r` prints a missing, null, numeric or
 // boolean field as the text `null`, `123` or `true`. So a base, a state, a head or a 404 message that was
@@ -1597,7 +1632,7 @@ describe('the landing verdict block (landing-order wave 3e, spec §5.7)', () => 
       .toEqual([`api repos/{owner}/{repo}/compare/main...${HC}`]);
   });
 
-  it.each([...ROUTES, ...CHECKS, ...STOPS, APPROVAL_WITH_RULESET, ...REQUESTS, ...IGNORES, ...APPROVAL_CHECK, ...APPROVAL, ...MALFORMED,
+  it.each([...ROUTES, ...CHECKS, ...STOPS, APPROVAL_WITH_RULESET, ...REQUESTS, ...IGNORES, ...APPROVAL_CHECK, ...APPROVAL, ...APPROVAL_ANY_RULE, ...MALFORMED,
   ...READ5, ...MIXED, ...FIELDS, ...ENTRIES, ...CONV, ...NAMES, ...ORDER, ...LOSS, ...READ1, ...READ3])('%s', (_name, fx, line, env) => {
     expect(blocks).toHaveLength(1);
     const r = verdict(fx(), env);
