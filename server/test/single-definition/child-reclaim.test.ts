@@ -448,3 +448,16 @@ describe('ARCH-45 C5e: no `_reap_refuse` or `_ws_collect_refuse` definition or c
     expect([...defs, ...calls]).toEqual([]);
   });
 });
+
+// ── ARCH-45 C5g (D-7076; plan 2026-10-27-consolidation-w5-ccd-helpers.md, spec K2 "one lock … plumbing"; OA-C10 ruled
+// (a) 2026-10-27): ws-reap, ws-reclaim, ws-expire and ws-collect take the shared `.reap-<id>.lock` through one runner,
+// `_ws_reap_lock_run`, each with its act and verb as literal words. APPENDED, with no import line, for the reason the
+// blocks above state; a named rebase point with the C5e and C5f blocks above (keep all three on a conflict).
+// `reapLockWrappers()` counts the functions that open the reap lock, try it with `flock -n` and answer a held lock with the
+// in-progress document at rc 0: 4 at the base, 1 here. May only shrink.
+describe('ARCH-45 C5g: one reap-lock runner in ccd’s source, `_ws_reap_lock_run` (D-7076; may only shrink)', () => {
+  it('reapLockWrappers() is exactly ccd/ccd#_ws_reap_lock_run', async () => {
+    const census = await import('../census-w5/ccdHelpers.js');
+    expect(census.reapLockWrappers().wrappers.map((n) => `ccd/ccd#${n}`)).toEqual(['ccd/ccd#_ws_reap_lock_run']);
+  });
+});
