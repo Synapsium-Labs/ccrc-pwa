@@ -36,7 +36,7 @@ function expectControlRowIsATarget(): void {
 }
 import { POOL_NAME_RE } from '../../shared/roster';
 import {
-  atBlock, declValue, declaredValues, norm, normSel, rootBody, ruleIn, selectorsOf, stripComments,
+  atBlock, declValue, declaredValues, norm, normSel, rootBody, ruleIn, rulesFor, selectorsOf, stripComments,
 } from './cssRule';
 
 const css = readFileSync(
@@ -149,6 +149,62 @@ describe('fleet density and alignment', () => {
     expect(css).toMatch(/\.sess-body \{ container: sess-body \/ inline-size; \}/);
     expect(css).not.toContain('container-type');
     expect(css).not.toContain('container-name');
+  });
+
+  it("the ⋯'s reveal sits inside the fine-pointer media query, and uses opacity only", () => {
+    // D-6332: under a mouse the row's ⋯ is transparent until its row is hovered, holds focus or is the selected row.
+    // The hiding is OPACITY and nothing else: it stays mounted, focusable, in the accessibility tree, with its 44px
+    // ::before overlay. A coarse pointer has no hover, so the transparent rule lives only inside the media query.
+    const fine = atBlock(css, '@media (hover: hover) and (pointer: fine)');
+    expect(declValue(ruleIn(fine, '.sess-actions'), 'opacity')).toBe('0');
+    const outside = css.replace(fine, '');
+    expect(declaredValues(outside, '.sess-actions', 'opacity'), 'no rule outside the query sets an opacity on ⋯').toEqual([]);
+    expect(declValue(ruleIn(css, '.sess-actions'), 'opacity'), 'the unconditional .sess-actions rule sets none').toBeNull();
+    // Every rule inside the query that targets ⋯ declares opacity and nothing else.
+    for (const rule of rulesFor(fine, '.sess-actions')) {
+      expect(stripComments(rule.body).match(/[\w-]+(?=\s*:)/g), `${rule.selectors.join(', ')} declares opacity only`).toEqual(['opacity']);
+    }
+    // And no rule anywhere hides it another way.
+    expect(declaredValues(css, '.sess-actions', 'display')).not.toContain('none');
+    expect(declaredValues(css, '.sess-actions', 'visibility')).not.toContain('hidden');
+    for (const prop of ['width', 'height', 'pointer-events']) {
+      expect(declaredValues(css, '.sess-actions', prop).filter((v) => /^(0(px)?|none)$/.test(v)), `${prop} never shrinks or disables ⋯`).toEqual([]);
+    }
+  });
+
+  it('a hovered, focused or selected row shows ⋯', () => {
+    const fine = atBlock(css, '@media (hover: hover) and (pointer: fine)');
+    for (const sel of ['.sess-line:hover .sess-actions', '.sess-line:has(:focus-visible) .sess-actions', '.sess-line--active .sess-actions']) {
+      expect(declValue(ruleIn(fine, sel), 'opacity'), `${sel} shows the button`).toBe('1');
+    }
+    // A keyboard's focus reveals ⋯, a pointer's does not: a row whose ⋯ took the focus from a click or a closing sheet
+    // must not light a second ⋯ beside the selected row's, so no reveal keys on `:focus-within`.
+    expect(rulesFor(fine, '.sess-actions').flatMap((r) => r.selectors).filter((sel) => sel.includes(':focus-within')),
+      'no ⋯ reveal keys on :focus-within').toEqual([]);
+    // One ⋯ at a time (the plan's acceptance): while any row of the fleet is hovered, every other row's ⋯ goes dark,
+    // the selected row's and a focused row's included, unless that ⋯ itself holds the keyboard's focus.
+    const elsewhere = '.fleet:has(.sess-line:hover) .sess-line:not(:hover) .sess-actions:not(:focus-visible)';
+    expect(declValue(ruleIn(fine, elsewhere), 'opacity'), 'a hover elsewhere darkens the other rows\' ⋯').toBe('0');
+  });
+
+  it('clamps only a name and a branch to two lines, never a programme or its wave (desk-rule-not-container-threshold)', () => {
+    // The desk draws the full form of a name, a branch and a programme (`Fit`) and lets the name, plain or paired,
+    // and the branch wrap on two lines, cut at the second. The programme slug and its wave tail (D-5528) are never
+    // clamped: no rule in the stylesheet may declare a line clamp on anything but those, and none outside the desk
+    // block, or a phone's short form would be clamped too.
+    const desk = atBlock(css, '@media (min-width: 900px)');
+    expect(desk).toContain('.fit-full');
+    const clampSelectors = (text: string): string[] => [...stripComments(text).matchAll(/([^{}]+)\{([^{}]*line-clamp[^{}]*)\}/g)]
+      .flatMap((m) => m[1]!.split(',').map((sel) => normSel(sel)));
+    expect(clampSelectors(css).sort()).toEqual([".sess-context[data-context=branch]", '.sess-label-fit', '.sess-open > .sess-label'].sort());
+    expect(clampSelectors(css.replace(desk, '')), 'no line clamp is declared outside the desk block').toEqual([]);
+    for (const sel of ['.sess-label-fit', '.sess-open > .sess-label', ".sess-context[data-context='branch']"]) {
+      const rule = ruleIn(desk, sel);
+      expect(declValue(rule, '-webkit-line-clamp'), `${sel} clamps to two lines at the desk`).toBe('2');
+      // A name with no CSS break point (`_`- or `.`-joined) wraps inside the box instead of running out of it
+      // sideways with no ellipsis (a clamp box clips at its edge).
+      expect(declValue(rule, 'overflow-wrap'), `${sel} breaks inside a token that alone exceeds the line`).toBe('anywhere');
+    }
   });
 
   it('tightens the card padding and closes the header/body gap', () => {
@@ -596,7 +652,10 @@ describe('selection is tint plus rail, status is hue (D-5101)', () => {
     // Was: the ··· re-grounded to --bg-page so it did not punch a bright chip
     // into the slab. Gone: on the tint its own --bg-raised chip is the one it
     // wears everywhere, and its ink on that is `ink-secondary / raised`.
-    expect(() => ruleFor('.sess-line--active .sess-actions')).toThrow();
+    // D-6332: the selected row's ⋯ has a rule again, but only to SHOW it under a mouse (opacity 1, inside the
+    // fine-pointer query): it re-grounds nothing, so the chip is the same one on the tint.
+    const fine = atBlock(css, '@media (hover: hover) and (pointer: fine)');
+    expect(stripComments(ruleIn(fine, '.sess-line--active .sess-actions')).match(/[\w-]+(?=\s*:)/g)).toEqual(['opacity']);
     expect(declValue(ruleFor('.sess-actions'), 'background')).toBe('var(--bg-raised)');
   });
 
