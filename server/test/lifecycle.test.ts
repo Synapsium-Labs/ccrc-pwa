@@ -1134,7 +1134,7 @@ describe('shared/lifecycle.ts — the policy §4(a) manifest', () => {
     expect(c!.pattern).toBe('W');
     expect(c!.root).toContain('node_modules');
     expect(c!.collector).toContain('ws-shed-deps');
-    expect(c!.collector).toContain('deps-shed-live');
+    expect(c!.collector).toContain('its live switch in shared/switches.ts');
     expect(c!.bound).toContain('CCRC_DEPS_SHED_AFTER_HOURS');
     expect(c!.ruling).toBeNull();
   });

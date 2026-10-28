@@ -2061,6 +2061,9 @@ export class FleetWatcher {
       console.warn(`ccrc-server: sweepStopDone failed (${err instanceof Error ? err.message : String(err)}) — no stops this pass`);
     }
     // D-7278: the deps-shed arm, the second pass of this row, on the same tick's rows and listing and the same serialiser.
+    // A config assembled without its thresholds (a hand-built one) sheds nothing: doubt keeps.
+    const shedConfig = (this.deps.cfg as Partial<typeof this.deps.cfg>).depsShed;
+    if (shedConfig === undefined) return;
     try {
       await depsShedPass({
         coord, runCcd: this.deps.runCcd, fleetState: this.deps.fleetState, viewers: this.deps.viewers,
@@ -2071,7 +2074,7 @@ export class FleetWatcher {
         listing: async () => {
           try { const r = await this.deps.io.readdirMeasured(this.deps.cfg.registryDir); return r.ok ? r.entries : null; } catch { return null; }
         },
-        config: this.deps.cfg.depsShed, startedAt: this.sleepStartedAt, now: Date.now,
+        config: shedConfig, startedAt: this.sleepStartedAt, now: Date.now,
       }, this.depsShedMemory, sessions, records, names);
     } catch (err) {
       console.warn(`ccrc-server: deps-shed failed (${err instanceof Error ? err.message : String(err)}) — nothing shed this pass`);

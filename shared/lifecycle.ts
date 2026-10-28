@@ -88,7 +88,7 @@ export const LIFECYCLE: readonly LifecycleClass[] = [
   // arm removes the git-ignored, untracked directories git lists, and keeps every git fact.
   { name: 'workspace-dependency-dirs', root: '<workdir>/**/node_modules (git-ignored and untracked; the names CCD_DEPS_SHED_NAMES lists)', pattern: 'W',
     creators: ['package managers (npm ci, npm install), at agent runtime'],
-    collector: 'ws-shed-deps, composed by the server\'s deps-shed arm of the run-done row (shadow unless deps-shed-live, in shared/switches.ts, stands), re-proved on the box; otherwise the workspace\'s own collectors',
+    collector: 'ws-shed-deps, composed by the server\'s deps-shed arm of the run-done row (shadow unless its live switch in shared/switches.ts stands), re-proved on the box; otherwise the workspace\'s own collectors',
     bound: 'the workspace\'s lifetime; in a sleeping worker\'s or coordinator\'s worktree, CCRC_DEPS_SHED_AFTER_HOURS after its work finished (and CCD_DEPS_SHED_MIN_ASLEEP_S asleep), once a sleep',
     tier: 'about 1.1 GB per worktree of this repository, most of it node_modules (measured 2026-10-28)', ruling: null },
   // Session-continuity wave 4: the pane-scope sweep's verdict record. Rolling (R):
