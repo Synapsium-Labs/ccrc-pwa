@@ -18,6 +18,7 @@ import { matchRoute, ROUTES } from '../src/lib/routes';
 import { useFleetStore } from '../src/stores/fleet';
 import { api } from '../src/lib/api';
 import { TEST_ROSTER } from './rosterFixture';
+import { seventeenLanes } from './seventeenLanes';
 
 const s = (over: Partial<FleetSession> = {}): FleetSession => (fleetSession({ workspace: 'quiet-basin', status: 'dead', branch: 'ws/quiet-basin', archivedAt: 1785300123, archivedBytes: 1_200_000_000, ...over }));
 
@@ -502,6 +503,52 @@ describe('the frame: landmarks and the skip link (W2 Task S2b)', () => {
             expect(bar).toBeNull();
             expect(fleet.contains(strips[0]!)).toBe(true);
           }
+        } finally {
+          setSkin(REFINED);
+          vi.unstubAllGlobals();
+        }
+      });
+    }
+  }
+
+  // ONE FOLD CONTROL PER WIDTH (S5b, D-6530): the strip folds wherever it mounts, so with 17 lanes each width holds one
+  // control, in the place that width's one strip sits. The desk's row is measured, so its arm stubs a 1248 px group.
+  for (const skin of [REFINED, INSTRUMENT]) {
+    for (const desk of [true, false]) {
+      it(`one fold control per width, in both skins: ${skin}, ${desk ? 'desk, in the header\'s lanes row' : 'phone, in the fleet column'}`, async () => {
+        const f = seventeenLanes(Math.floor(Date.now() / 1000));
+        vi.spyOn(api, 'accounts').mockResolvedValue({ accounts: f.accounts, projected: { wrapper: 'w0', score: 0 }, roster: f.roster });
+        vi.stubGlobal('matchMedia', (q: string) => ({
+          matches: desk && q.includes('min-width: 900px'), media: q, onchange: null,
+          addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, dispatchEvent: () => false,
+        }));
+        vi.stubGlobal('ResizeObserver', class {
+          private readonly cb: ResizeObserverCallback;
+          constructor(cb: ResizeObserverCallback) { this.cb = cb; }
+          observe(target: Element): void {
+            this.cb([{ target, contentRect: { width: 1248 } } as unknown as ResizeObserverEntry], this as unknown as ResizeObserver);
+          }
+          unobserve(): void {}
+          disconnect(): void {}
+        });
+        try {
+          setSkin(skin);
+          navigate('/');
+          render(<App />);
+          const strip = await screen.findByRole('group', { name: /^account usage/ });
+          // The fold's control, not a card: `lane-a` shows before the fold does (the row is measured a render or two after
+          // the poll lands), so a wait on it can read the strip at 17 cards with no control.
+          await within(strip).findByRole('button', { name: /more/ });
+          const controls = [...document.querySelectorAll('[aria-expanded][aria-controls]')]
+            .filter((el) => /^(\+\d+ more|Show fewer)/.test(el.textContent ?? ''));
+          expect(controls).toHaveLength(1);
+          expect(strip.contains(controls[0]!)).toBe(true);
+          expect(controls[0]).toHaveAttribute('aria-controls', strip.id);
+          const bar = document.querySelector('header.shell-accounts');
+          if (desk) expect(bar?.contains(strip)).toBe(true);
+          else expect(screen.getByRole('region', { name: 'Fleet' }).contains(strip)).toBe(true);
+          // Four on a phone; at the desk three of the 1248 px row's four tracks, the last the end cell's.
+          expect(strip.querySelectorAll('.account-gauge')).toHaveLength(desk ? 3 : 4);
         } finally {
           setSkin(REFINED);
           vi.unstubAllGlobals();

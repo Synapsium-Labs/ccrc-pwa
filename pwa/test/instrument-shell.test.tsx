@@ -43,6 +43,160 @@
 // Row 8 (Step 0's `flex: none` removed) does not apply: Step 0 found the count whole at 900, so T2g adds no `flex: none`.
 // Rows 1, 4 and 7 also run in browser/instrument-desk.browser.test.ts (its own table).
 //
+// Desk polish S5b (D-6530): the lanes fold.
+// MUTATION TABLE (plan Task S5b Step 3; the whole table RUN at 182d2ac58, whose pwa/ tree is fix round 1's last code commit
+// (856076c2e) unchanged, and the flyout rows (the R120 `strip-hover-flyout` block, the Escape and flyout-name rows, fix round 2's)
+// RUN again at dbe5e0506, whose pwa/ tree is fix round 2's last code commit (d51cbc7c1) unchanged; below, "182d2ac58" and
+// "d51cbc7c1" name those two runs; bounded and hash-checked; the logs are kept outside the repo. Each mutant was applied to the working tree as one
+// exact-once replacement and restored from a saved copy with its sha256 checked; the named jsdom suite(s) alone, and
+// browser/lanes-row.browser.test.ts or browser/refined-phone.browser.test.ts too where a row names one; then reverted.
+// At 182d2ac58: 75 mutants run, 75 red, none survived, none invalid. At d51cbc7c1: 33 mutants run, 33 red, none survived, none
+// invalid. The counts "of 70" and "of 26" are the browser files' sizes at 182d2ac58, "of 72" lanes-row's at d51cbc7c1; the flyout rows
+// below carry the d51cbc7c1 figures, the other rows the 182d2ac58 ones):
+//   fold when it would hide one lane (`count + 1`; at the desk, the line folding when one lane would overflow)
+//                                                       strip-fold "it never folds to hide a single lane: five lanes show all five", "foldable is false at five lanes
+//                                                         and true at six, folded or expanded", "one rule at every width: …"
+//   `foldable` read from `hidden.length` ............... strip-fold "foldable is false at five lanes and true at six, folded or expanded", "expanded shows every lane, in the same order"
+//   the shown lanes taken from the end ................. strip-fold "…the fold shows the freest four, in lanesByFree's order…", "six lanes fold to four and +2"; refined-phone
+//                                                         "at 390 with 17 lanes the phone header shows four cards and '+13 more · …'"
+//   expired and never-read lanes hidden whatever their position
+//                                                       strip-fold "the fold hides by position, never by state: …"
+//   the attention counts dropped from the words ........ strip-fold "+n more counts the hidden lanes that need you: …"
+//   a critical lane (above 75%) counted ................ strip-fold "a hidden lane that is only critical is not counted"
+//   a sign-in-expired lane at its limit counted under both
+//                                                       strip-fold "a lane counts once, sign-in expired first"
+//   a never-read lane counted as needing you ........... strip-fold "a never-read lane is hidden but not counted as needing you"
+//   "sign-in expired" retyped in `stripFold.ts` ........ strip-fold "the words take SIGN_IN_EXPIRED and the state word"
+//   the limit re-tested inline instead of `stateWordFor` strip-fold "the words take SIGN_IN_EXPIRED and the state word"
+//   `FOLD_SHOWN` used at the desk too .................. strip-fold "a desk folds to one card fewer than rowFit's tracks, the last track the end cell's", "one rule at every width: …";
+//                                                         lanes-row (8 of 70) "folded with 17 lanes at 900, 1280 and 1920 in both skins, the row is one line: …", "from 1920 to 1280 the folded row re-fits: …"
+//   the end cell's track not left (`foldShown(true, t)` is `t`)
+//                                                       strip-fold "a desk folds to one card fewer than rowFit's tracks, …", "one rule at every width: …";
+//                                                         lanes-row (8 of 70) "folded with 17 lanes at 900, 1280 and 1920 in both skins, the row is one line: …", "from 1920 to 1280 the folded row re-fits: …"
+//   a width query in `stripFold.ts` .................... strip-fold "stripFold.ts reads no layout"
+//   `rowFit` without the gap added back ................ strip-fold "rowFit counts the tracks one line holds: …"
+//   an unmeasured row read as one card (width 0 -> 1) .. strip-fold "an unmeasured desk row folds nothing: every lane, no control"
+//   the floor's figure kept in `shell.css` ............. strip-fold "the card's floor is LANE_CARD_MIN, once"
+//   `--lane-card-min: 260px` in the strip's rule ....... strip-fold "the card's floor is LANE_CARD_MIN, once: every lanes-row rule in shell.css reads the token, and none writes the figure"
+//   `minmax(260px, 1fr)` in the flyout's rule .......... strip-fold, the same case (fix round 1: both were SURVIVED while the guard read only the strip's `grid-template-columns`)
+//   the fold applied below 900 only .................... app "one fold control per width, in both skins: refined, desk, …" and the instrument one; lanes-row "folded with 17
+//                                                         lanes at 900, 1280 and 1920 …" (RED, run filtered to the one view refined, phosphor, 1280px; the whole file is not run for this row:
+//                                                         it outran its 580 s bound, twice, in an earlier run, with every folded desk case waiting out its own timeout)
+//   hidden cards rendered and hidden by CSS ............ accounts-strip "the folded strip mounts only the shown cards", and six more
+//   the control rendered outside the end cell .......... accounts-strip "the control sits in the end cell, after the last shown card and before All accounts, …"
+//   the control rendered after All accounts ............ accounts-strip "the control sits in the end cell, after the last shown card and before All accounts, …"
+//   the tab stop left on a card that folds away ........ accounts-strip "…a stop on a card that folds away goes to the first shown card"
+//   `lanesRowLabel` called with the shown lanes ........ accounts-strip "folded, the group's name names the fullest lane, which is hidden"
+//   the control spreads `commandDoor('go-accounts')` before its own `onClick`
+//                                                       accounts-strip "a tap on the control folds and unfolds and never navigates, and the control carries no data-command …"
+//   the same spread after its own `onClick` ............ accounts-strip "a tap on the control folds and unfolds and never navigates, …", and five more
+//   an `aria-label` on the control ..................... accounts-strip "the control's name is its words (no aria-label), …", and 26 more
+//   the control keyed on its state (remounts) .......... accounts-strip "focus stays on the control across Show fewer and +n more"
+//   the control rendered iff `hidden.length > 0` ....... accounts-strip "focus stays on the control across Show fewer and +n more", "a tap on the control folds and unfolds …"
+//   the control rendered when `expanded` regardless of `foldable`
+//                                                       accounts-strip "five lanes render no fold control at all, folded or expanded: the only button in the strip is All accounts"
+//                                                         (a fix round: it was SURVIVED while the one case looked for the control by name, which a control with no words does not have)
+//   the component compares `live.length` with `FOLD_SHOWN`
+//                                                       accounts-strip "the control renders from foldLanes alone: …"
+//   the scroll run on mount ............................ accounts-strip "another tab's choice to fold, arriving after the load, scrolls nothing: only this page's own Show fewer does"
+//                                                         (a fix round: it was SURVIVED while no case let a choice arrive after the load, the effect running only at mount)
+//   the sentence built inline in `AccountsStrip` ....... accounts-strip "the control's words are foldWords': the component builds no sentence of its own", and six more
+//   Show fewer's scroll call removed ................... accounts-strip "Show fewer scrolls the control into view with block nearest; …"; refined-phone browser (2 of 26)
+//                                                         "after Show fewer the control is focused and on screen: refined, phosphor, 360px" and 390px
+//   the choice kept in component state ................. strip-expanded "the choice survives a remount and a reload", and four more; refined-phone "the choice to expand is remembered across a remount"
+//   a malformed value read as expanded ................. strip-expanded "absent, malformed or unreadable storage reads folded"
+//   the read without try/catch ......................... strip-expanded "absent, malformed or unreadable storage reads folded", "unreadable storage reads folded until this page chooses, …"
+//   the in-page value dropped when storage refuses ..... strip-expanded "a choice storage refuses still holds for this page", and two more
+//   `useState` per hook instead of the shared store .... strip-expanded "two strips agree", and four more
+//   the `storage` listener removed ..................... strip-expanded "a storage event for ccrc-accounts-strip updates a mounted hook", and one more
+//   the fold applied in `PhoneHeader` only (the fleet column's mount given an unfolded prop)
+//                                                       instrument-shell "Instrument's phone fleet column folds the same strip"
+//   Instrument's first-row bound lowered below its measured 533.8 px (540 -> 530) ... refined-phone browser (1 of 26) "folded, with 17 lanes, four cards and one control …, and the first session row sits at most
+//                                                         540 px down at 390×844: instrument, phosphor, 390px" (fix round 1, `instrument-first-row-is-its-chrome`: the 440 check was gated on Refined's head, so Instrument ran none)
+// Fix round 1 trimmed the browser leg's geometry matrices to one palette (lanes-row 88 -> 70 cases, refined-phone 31 -> 26);
+// the counts above are of the trimmed files, from the run at 182d2ac58.
+// R120 `strip-hover-flyout` (accounts-strip alone, plus lanes-row where named):
+//   open without the delay (`FLYOUT_OPEN_MS` -> 0) ..... "…hovering the line opens the flyout after FLYOUT_OPEN_MS, …", "a pointer passing by does not open it", "a pointer passing over the strip while the open delay
+//                                                         that focus started is pending does not cancel the open", "an open the pointer started is cancelled when the pointer leaves, …"
+//   close without the grace (`FLYOUT_CLOSE_MS` -> 0) ... "leaving the line and the flyout closes it after FLYOUT_CLOSE_MS; coming back within the grace keeps it", "focus leaving the strip closes it, …", and four more
+//   close without handing focus back to the line ....... "Escape closes it and returns focus to the card it came from", "an open the pointer started is cancelled when the pointer leaves, …"
+//   the flyout while expanded .......................... "no flyout while expanded, and none below 900", and the moot-focus case below
+//   the flyout below 900 ............................... "no flyout while expanded, and none below 900"
+//   the flyout reset removed when it is moot ........... "no flyout while expanded, and none below 900", and the moot-focus case below
+//   a pointer leave with keyboard focus inside closing the flyout (the early return in `onLeave` removed)
+//                                                       accounts-strip "it stays open while either the pointer or focus is inside the line or the flyout, and closes when neither is",
+//                                                         "a pointer passing over the strip while the open delay that focus started is pending does not cancel the open", and three more
+//                                                         (fix round 1: the ruled rule is "either"; the old case pinned a pointer leave closing the flyout with focus inside)
+//   the early return kept for an open flyout only (`&& flyOpen`): a pointer pass cancelling the open focus started
+//                                                       accounts-strip "a pointer passing over the strip while the open delay that focus started is pending does not cancel the open",
+//                                                         "keyboard focus arriving while the pointer's open delay is pending takes the open over: …"
+//   the early return kept for a pending open only (`&& !flyOpen`): the pointer leaving closing an open flyout focus holds
+//                                                       accounts-strip "it stays open while either the pointer or focus is inside the line or the flyout, and closes when neither is", and two more
+//   the moot flyout's focus hand-back removed ......... "a flyout made moot while a card of it holds focus hands the focus to the line's tab stop, never to the page: another tab expands the strip"
+//                                                         (fix round 1: the reset called `setFlyOpen(false)` directly, so a focused flyout card was unmounted and focus fell to the page)
+//   a second copy of the card markup ................... "the flyout's cards render through the line's own card code: one card markup in the component"
+//   the flyout's cards from `shown`, not `live` ........ thirteen accounts-strip cases ("…holding every lane in lanesByFree's order", …); lanes-row (4 of 72) "hovering the folded line opens a flyout below it, …"
+//   focusout ignoring `relatedTarget` .................. "focus leaving the strip closes it, and focus moving between the line and the flyout does not"
+//   pointer enter not cancelling a pending close ....... "leaving the line and the flyout closes it after FLYOUT_CLOSE_MS; coming back within the grace keeps it"
+//   focus between the strip's own cards opening it again "Escape stays shut for a keyboard user: an arrow move between the line's cards does not open it again"
+//   the flyout `position: absolute` -> `static` ........ lanes-row (4 of 72) "hovering the folded line opens a flyout below it, drawn over the content, …"
+//   the flyout's `z-index` removed ..................... lanes-row (4 of 72) "hovering the folded line opens a flyout below it, drawn over the content, …"
+//   the `returningFocus` guard removed from `onGroupFocus`: no row. It was SURVIVED as a dead guard (the `relatedTarget` test above it already returns for the move the guard
+//                                                         covered), so the guard was removed from `AccountsStrip` in a fix round and the cases stay green
+//   the timers not cleared on unmount .................. accounts-strip "unmounting with the open delay pending, or the close grace pending, leaves no timer behind"  (a fix round: it was SURVIVED)
+//   `preventDefault` dropped from the flyout's Escape .. accounts-strip "an Escape that closes it is handled there: the key press is default-prevented, …", "an Escape while the open is still pending cancels the open"
+//                                                         (final review: an Escape that closes the flyout reached the desk's Escape interrupt and stopped a busy session's turn)
+//   the Escape not acting while the open is pending .... accounts-strip "an Escape while the open is still pending cancels the open"
+//   the flyout group named as the line's group is ...... accounts-strip "at the desk, folded, hovering the line opens the flyout after FLYOUT_OPEN_MS, …"
+// R120 `strip-hover-flyout`, fix round 2 (review 1106; accounts-strip alone, each mutant on the working tree and restored from a saved copy with its sha256 checked;
+// the browser rows are lanes-row's, in real Chrome). Only KEYBOARD focus (`:focus-visible`) on a card holds the flyout, and who started an open decides what a pointer does:
+//   `keyboardHeld` matching `.account-gauge` without `:focus-visible` (a click's focus on a card holds the flyout)
+//                                                       accounts-strip "focus a click leaves behind never holds the flyout: hover-open, click a card, the pointer leaves, …"
+//   `keyboardHeld` as the bare `group.contains(el)`, the rule before this round (anything focused in the strip holds it)
+//                                                       accounts-strip the same case, "nor does the end cell: hover-open, click All accounts, …" and the end-cell cases of the next row;
+//                                                         lanes-row (1 of 72) "a click's focus never holds the flyout: hover-open, click All accounts, move off the strip, and it closes
+//                                                         within the grace: refined, phosphor, 1280px" (the flyout never closes: the wait for it times out)
+//   `keyboardHeld` testing `:focus-visible` on any element of the group, the end cell's controls too
+//                                                       accounts-strip "keyboard focus in the end cell holds nothing either", "keyboard focus moving from a card of the flyout to
+//                                                         the end cell, with the pointer outside, starts the grace", "focus arriving at the end cell from outside the strip opens nothing"
+//   `handFocusBack` without its `focus()` call (Escape drops focus to the page)
+//                                                       lanes-row (1 of 72) "Escape closes the flyout a keyboard opened and hands focus to a card of the line: refined, phosphor, 1280px"
+//   `onLeave` without the `openBy` test (any keyboard focus parked in the strip saves a pointer's open)
+//                                                       accounts-strip "an open the pointer started is cancelled when the pointer leaves, whatever focus is parked in the strip: after Escape the flyout stays shut"
+//   a pending pointer open not taken over by keyboard focus arriving (the `openBy` upgrade removed)
+//                                                       accounts-strip "keyboard focus arriving while the pointer's open delay is pending takes the open over: …"
+//   `onGroupFocus` starting no close grace for focus that holds nothing
+//                                                       accounts-strip "keyboard focus moving from a card of the flyout to the end cell, with the pointer outside, starts the grace"
+//   `handFocusBack` without the `document.activeElement` guard (a stale `flyHeld` pulls focus out of a field)
+//                                                       accounts-strip "a poll that drops the lane of the flyout card holding focus leaves no stale hold: …"
+//   `handFocusBack` guarding on the body only (focus inside the strip, or nothing, not allowed)
+//                                                       accounts-strip "Escape closes it and returns focus to the card it came from", "an open the pointer started is cancelled …"
+//   `handFocusBack` ignoring `flyHeld` (the reviewer's mutant (a): it always focuses)
+//                                                       accounts-strip "a hover-only flyout hands no focus to the line when it closes: …", "focus that left the flyout is not handed back: …",
+//                                                         "a window that loses focus while a flyout card holds it: …", "Escape with focus on All accounts, which a flyout card left, …"
+//   the flyout's `onBlur` not resetting `flyHeld` (the reviewer's mutant (b))
+//                                                       accounts-strip "focus that left the flyout is not handed back: …", "a window that loses focus while a flyout card holds it: …",
+//                                                         "Escape with focus on All accounts, which a flyout card left, …"
+//   `handFocusBack` ignoring both `flyHeld` and the `activeElement` guard
+//                                                       the five above and "focus outside the strip stays put when the pointer leaves and the grace runs",
+//                                                         "a window that loses focus, then a field outside the strip taking it: …" (neither mutant alone reaches these two: each guard covers the other)
+// The reset of a moot flyout is a plain effect now (a one-frame focus on the page is accepted), and no case pins "before the browser paints".
+// `useRowWidth` (final review: it had no row; each run against accounts-strip and strip-fold):
+//   the observer not disconnected on cleanup ........... accounts-strip "the desk row's observer is disconnected when the strip unmounts"  (it was SURVIVED: no case unmounted a measured strip)
+//   the column gap read without the `Number.isFinite` fallback
+//                                                       nineteen accounts-strip cases, the first "at the desk the row folds to the measured fit: three cards at 1248 px, …" (jsdom's gap is not a number)
+//   the column gap ignored (`gap: 0` in `useRowWidth`) . accounts-strip "the desk's fit counts the column gap the group computes: 1050 px with an 8 px gap holds three tracks, …"
+//                                                         (fix round 1: it was SURVIVED, every jsdom case ran with a gap of 0 and the browser leg's three desk widths count alike with 8 px or 0)
+// R120 `lanes-tie-break-soonest-reset` (lane-order alone):
+//   drop the reset key ................................. "lanes that tie on binding use sort by the binding window's reset, soonest first", and four more
+//   reset latest first ................................. the same five
+//   a lane with no reset time sorted first ............. "a tie with no reset time sorts after one with a reset time"
+//   drop the other window's key ........................ "a tie on use and reset sorts by the other window's use, lowest first", "the reset outranks the other window's use, …"
+//   the other window read as the binding pct ........... the same two
+//   the reset read from `fiveResetAt` directly ......... "the tie-break reads the reset through bindingWindow"
+//   keys 2 and 3 swapped (other window before reset) ... "the reset outranks the other window's use, and the other window's use outranks the roster"
+//   key 3 after the roster ............................. "a tie on use and reset sorts by the other window's use, lowest first", "the reset outranks the other window's use, …"
+//   the last group (never read, expired) sorted by reset "never-read and expired lanes still go last, in roster order, whatever their resets"
 // W2 Task T2d (desk-polish, D-6330): the rail's Inbox door counts what waits on the operator, as Refined's tab does.
 // MUTATION TABLE (plan Task T2d Step 3; RUN, each mutant on the working tree, this suite alone, then reverted):
 //   the rail's Inbox door left on the unread count .... "the rail's Inbox door says 'waiting for you' with Refined's count"
@@ -64,6 +218,7 @@ import type { AccountUsage, FleetSession, NotifyEvent, RunSummary } from '../../
 import { api } from '../src/lib/api';
 import { poolLagText } from '../src/fleet/poolLag';
 import { fleetSession } from './fleetFixture';
+import { seventeenLanes } from './seventeenLanes';
 
 // The bell renders only where the browser can push; this one can, so the doors' census counts it (T2e).
 vi.mock('../src/lib/push', () => ({
@@ -357,6 +512,21 @@ describe('the lanes row (T2c, D-6329)', () => {
     expect(line.querySelector('.accounts-strip, .account-gauge, .meter')).toBeNull();
     expect([...topBar().children]).toEqual([line, topBar().querySelector('.accounts-strip')]);
     expect(topBar().querySelectorAll('.accounts-strip > .account-gauge')).toHaveLength(lanes.length);
+  });
+});
+
+describe('the lanes fold (S5b, D-6530)', () => {
+  it("Instrument's phone fleet column folds the same strip", async () => {
+    const f = seventeenLanes(Math.floor(Date.now() / 1000));
+    vi.spyOn(api, 'accounts').mockResolvedValue({ accounts: f.accounts, projected: { wrapper: 'w0', score: 0 }, roster: f.roster });
+    stubWidth(false);
+    mount('/');
+    const fleet = screen.getByRole('region', { name: 'Fleet' });
+    const strip = await within(fleet).findByRole('group', { name: /^account usage, highest lane-q 100%/ });
+    await within(strip).findByText('lane-a');
+    expect(strip.querySelectorAll('.account-gauge')).toHaveLength(4);
+    expect(within(strip).getByRole('button', { name: '+13 more · 1 sign-in expired · 1 rate-limited' })).toHaveAttribute('aria-expanded', 'false');
+    expect(document.querySelectorAll('.accounts-strip')).toHaveLength(1);
   });
 });
 

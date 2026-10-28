@@ -21,7 +21,7 @@ import { AccountMeterRow } from '../fleet/AccountMeterRow';
 import { AccountPoolSheet } from '../fleet/AccountPoolSheet';
 import { formatAge } from '../fleet/formatReset';
 import { sessionLabel } from '../fleet/sessionLabel';
-import { accountColorVar, accountLabel, accountPoolState, homeAbleLabelList, rosterWrapperIds, warnNonArrayRoster } from '../lib/accounts';
+import { accountColorVar, accountLabel, accountPoolState, homeAbleLabelList, rosterWrapperIds, SIGN_IN_EXPIRED, warnNonArrayRoster } from '../lib/accounts';
 import { api, apiErrorText } from '../lib/api';
 import { navigate, useLocation } from '../lib/router';
 import { laneParam } from '../lib/routes';
@@ -336,10 +336,10 @@ export function AccountsScreen(): ReactNode {
           // and a measurement does not explain away a switch. The two are
           // cleared by different acts.
           const offNote = disabled && authDead
-            ? 'disabled on the fleet host; sign-in expired'
+            ? `disabled on the fleet host; ${SIGN_IN_EXPIRED}`
             : disabled
               ? 'disabled on the fleet host'
-              : 'sign-in expired on the fleet host';
+              : `${SIGN_IN_EXPIRED} on the fleet host`;
           const ts = a?.ts ?? null;
           // "Sessions on this account" means LIVE sessions (Rider A §4): a
           // workspace that is archived, mid-cleanup, or whose tmux session is

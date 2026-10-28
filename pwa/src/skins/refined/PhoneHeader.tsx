@@ -4,7 +4,8 @@
 // you", "Runs, 1 needs you": only what waits on the operator, T2d, D-6330).
 // Under it one mono readout, `fleetSummary`'s, and then the accounts strip: a group of lane cards (a row for each window
 // it has, a meter and the reset countdown), each card a door to its own lane on the Accounts screen, and All accounts
-// at the end of the strip, the `go-accounts` door.
+// at the end of the strip, the `go-accounts` door. The strip folds to its freest four lanes with a "+n more" control
+// before All accounts (the fold is the strip's own, stripFold.ts); one tap shows every lane.
 //
 // DOCS, NOT ACCOUNT, among the four doors: the strip's All accounts is the phone's `go-accounts` door, one tap away
 // under the readout, and a phone must keep Docs within two taps (S17). The bell is Settings' (its notifications section

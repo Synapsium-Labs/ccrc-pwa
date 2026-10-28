@@ -260,6 +260,7 @@ export function offences(file: string, strings: readonly Visible[]): string[] {
 
 const OWNED = ['AskParts.tsx', 'askWords.ts', 'EnvelopeSheet.tsx', 'DialogSheet.tsx', 'askLive.ts'].map((f) => path.join(SESSION, f));
 const PALETTE = ['registry.ts', 'sessionEntries.ts'].map((f) => path.join(import.meta.dirname, '..', 'src', 'command', f));
+const STRIP_FOLD = path.join(import.meta.dirname, '..', 'src', 'fleet', 'stripFold.ts');
 
 describe('the ask surfaces speak plainly (D-6325)', () => {
   it.each(OWNED.map((f) => [path.basename(f), f] as const))('%s says none of the forbidden words where an operator reads', (_name, file) => {
@@ -275,6 +276,12 @@ describe('the ask surfaces speak plainly (D-6325)', () => {
       expect(offences(file, strings), 'rewrite the sentence; the table above says what to say').toEqual([]);
     },
   );
+
+  it('fleet/stripFold.ts (the lanes fold\'s words) says none of the forbidden words where an operator reads', () => {
+    const strings = visibleStrings(STRIP_FOLD);
+    expect(strings.length, 'the scan reads its sentences').toBeGreaterThan(0);
+    expect(offences(STRIP_FOLD, strings), 'rewrite the sentence; the table above says what to say').toEqual([]);
+  });
 
   it("refusalWords.ts's dialog-open sentences and api.projects' error pass too", () => {
     const refusalStrings = visibleStrings(REFUSAL_WORDS, undefined, ['dialog-open']);

@@ -7,14 +7,15 @@
 // line is whole and holds no card, the row sits under it, every card is whole inside the row with its readings whole
 // inside it, and the page does not scroll sideways. Under a coarse pointer every door in the bar is at least 44 x 44.
 // The coarse pointer is a touch screen: headless Chrome ignores the DevTools protocol's pointer media feature
-// (measured), so `openApp` takes `touch`.
+// (measured), so `openApp` takes `touch`. The strip folds by default (S5b, D-6530) and six lanes fold at every desk width, so
+// the case seeds the stored choice expanded and keeps counting all six; the fold itself is lanes-row.browser.test.ts's.
 //
 // Run: `( cd pwa && CCRC_CHROME=<a Chrome or Chromium binary> ./node_modules/.bin/vitest run --config vitest.browser.config.ts browser/refined-bar.browser.test.ts )`.
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { chromium, type Browser } from 'playwright-core';
 import { PHOSPHOR, REFINED } from '@ccrc/ui';
 import { resolveChrome } from './harness';
-import { buildDist, openApp, removeDist, serveDist, type AppFixture, type AppView, type DistServer } from './app';
+import { buildDist, openApp, removeDist, seedStripExpanded, serveDist, type AppFixture, type AppView, type DistServer } from './app';
 import { fleetSession } from '../test/fleetFixture';
 
 // Each width with a mouse and with a touch screen (a coarse pointer at a desk width: a tablet in landscape, a touch
@@ -76,6 +77,9 @@ describe("Refined's app bar shows nothing cut, and every door is a finger's squa
     it(named(view), async () => {
       const { ctx, page, errors } = await openApp(browser!, view, FIXTURE);
       try {
+        // Six lanes fold at every desk width here (a folded line holds fewer than six cards), and this case checks all six
+        // cards' fit, so the stored choice is expanded; lanes-row.browser.test.ts holds the fold.
+        await seedStripExpanded(ctx);
         await page.goto(server!.origin + '/');
         // The lanes and both badges have landed once the lanes row's cards and the two counted tab names are in place.
         await page.waitForFunction(() => document.querySelectorAll('header.shell-accounts .account-gauge').length === 6
