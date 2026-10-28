@@ -152,6 +152,49 @@ function rulesIn(media: string | null): { selectors: string[]; decls: string }[]
   return [...scope.matchAll(/([^{}]+)\{([^}]*)\}/g)].map((r) => ({ selectors: r[1]!.split(',').map((x) => x.trim()), decls: r[2]! }));
 }
 
+/** `sel` with every `:<name>(…)` removed, nested parentheses included. */
+function dropPseudo(sel: string, name: string): string {
+  let out = '';
+  for (let i = 0; i < sel.length;) {
+    if (!sel.startsWith(`:${name}(`, i)) { out += sel[i++]; continue; }
+    let depth = 0;
+    let j = i + name.length + 1;
+    for (; j < sel.length; j += 1) {
+      if (sel[j] === '(') depth += 1;
+      else if (sel[j] === ')' && --depth === 0) break;
+    }
+    i = j + 1;
+  }
+  return out;
+}
+
+/** Every `display` a rule of `text` (in any at-rule) gives an element that can be the context's `.sess-meta`, as
+ *  "<sheet> <selector>: <value>": a selector whose subject (its last compound, read outside parentheses) names
+ *  `.sess-meta` or `.sess-meta--context`, outside a `:not()` or `:has()`, is not a pseudo-element and does not exclude
+ *  the context with `:not(.sess-meta--context)`. */
+function contextDisplays(text: string, sheet: string): string[] {
+  const subject = (sel: string): string => {
+    let depth = 0;
+    let last = 0;
+    for (let i = 0; i < sel.length; i += 1) {
+      if (sel[i] === '(') depth += 1;
+      else if (sel[i] === ')') depth -= 1;
+      else if (depth === 0 && /[\s>+~]/.test(sel[i]!)) last = i + 1;
+    }
+    return sel.slice(last);
+  };
+  const out: string[] = [];
+  for (const [, prelude, body] of text.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+    for (const sel of prelude!.split(',').map((s) => s.trim())) {
+      const subj = subject(sel);
+      if (/::?(?:before|after|marker)\b/.test(subj) || subj.includes(':not(.sess-meta--context)')) continue;
+      if (!/\.sess-meta(?:--context)?(?![\w-])/.test(dropPseudo(dropPseudo(subj, 'not'), 'has'))) continue;
+      for (const [, value] of body!.matchAll(/(?:^|[;{\s])display\s*:\s*([^;]+)/g)) out.push(`${sheet} ${sel}: ${value!.trim()}`);
+    }
+  }
+  return out;
+}
+
 beforeEach(() => {
   localStorage.clear();
   document.documentElement.removeAttribute('data-skin');
@@ -666,8 +709,13 @@ describe('dense rows at the desk (T2e, D-6335)', () => {
     expect(declsOf(state, DENSE)).toMatch(/float:\s*right/);
     expect(declsOf(context, DENSE)).toMatch(/width:\s*max-content/);
     expect(declsOf(context, DENSE)).toMatch(/max-width:\s*100%/);
-    // The context is a formatting context of its own (review 1130 E): `.sess-meta`'s display is flex.
+    // The context is a formatting context of its own (review 1130 E): `.sess-meta`'s display is flex, and no rule of the
+    // two sheets that style a desk row gives the context another (review 1136 F9: a more specific `display: block`
+    // would pass a read of the base rule alone). chat.css's `.chat-facts .sess-meta` is the session page's, not a row's.
     expect(effectiveValue(FLEET_CSS, '.sess-meta', 'display'), "fleet.css's .sess-meta").toBe('flex');
+    const displays = [...contextDisplays(FLEET_CSS, 'fleet.css'), ...contextDisplays(CSS, 'instrument.css')];
+    expect(displays, 'the scan reads the base rule').toContain('fleet.css .sess-meta: flex');
+    expect(displays.filter((d) => !d.endsWith(': flex')), 'a display other than flex on the context').toEqual([]);
     // Only at the desk under a fine pointer: a touch screen or a phone keeps the shared sheet's rows.
     for (const sel of [body, open, state, context]) {
       expect(declsOf(sel), sel).toBe('');
