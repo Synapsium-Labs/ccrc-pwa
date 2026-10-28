@@ -174,7 +174,8 @@ applies:
 6. `already-shed`: `$REG/<id>.depsshed` is at least as new as the stop stamp (at most once a sleep); `unmeasured` when it
    stands but cannot be read;
 7. the candidates: each directory that `git -C <workdir> ls-files -z --others --ignored --exclude-standard --directory`
-   lists, whose last component is one of `CCD_DEPS_SHED_NAMES` (default `node_modules`, space-separated), and for
+   lists, whose last component is one of the rebuildable names (`node_modules`; `CCD_DEPS_SHED_NAMES` may only narrow
+   that set, split on blanks with globbing off, any other word ignored with a warning), and for
    which `git ls-files -z -- <dir>` is empty. It must be a real directory, not a link, on the workdir's file system,
    resolve inside the workdir, and hold no `.git` (directory, file or link) at ANY depth: one bounded `find` over every
    candidate, and a walk that does not finish answers `unmeasured`. This keeps a nested repository and a git-ignored
@@ -213,10 +214,14 @@ from rung 2 to its last removal (read-only, never creating the file, let go at o
 is held. The lock FILE is dot-prefixed, so a dot-led project aliases it (`.shed-demo` + `quiet-basin` purges the shed
 lock of `demo-quiet-basin`; `_reg_purge`'s R-3 paragraph counts it), and an unlinked lock reads as free: so a real shed
 also writes the row field `$REG/<id>.shedding` (`<pid> <dev:ino>` of its lock), which no other id's purge reaches, and the
-gate refuses while it names a live pid unless the lock it marked still stands as that inode and is free (a marker that
-does not read refuses; a dead pid frees). A refused wake dies with the gate's sentence before it clears the stop stamp,
-so the session stays asleep; the operator retries the same wake once the shed's journal line closes (at most the verb's
-240 s), and removes a marker by hand only if one outlived its holder. The gate never asks the reap lock of a row that is not archived, so ws-restore (which holds it across its own
+gate, while the marker stands, frees a wake only when the lock it marked still stands as that inode and is free,
+whatever the marker's pid says (a marker that does not read, a lock file that is gone or another inode refuses: a killed
+shed's `rm` inherits the lock, and a purged lock proves nothing). The shed takes back only a marker whose body is still
+its own (`marker-not-own` is journaled otherwise). A wake run outside the unit dies with the gate's sentence before it
+clears the stop stamp, so the session stays asleep; the unit's supervise meets the gate only after its enabling verb has
+cleared it, and the small window where that verb passed its gate before the shed's lock and cleared the stamp after the
+shed's last facts is stated in the DEPSSHED header. The operator retries the same wake once the shed's journal line
+closes (at most the verb's 240 s), and removes a marker by hand when one outlived its shed (an alias purge, then a kill). The gate never asks the reap lock of a row that is not archived, so ws-restore (which holds it across its own
 `_spawn_start`), a reclaim of a kept child and a collect spawn exactly as they did, and a shadow dry run delays nothing. A wake
 that asked before the verb took the lock has cleared the stop stamp, which rung 4 or the last facts (rung 9) read. Its next test step runs `npm ci` first, as CLAUDE.md's build section
 already says. A follow-up can name the shed in the wake's kickoff line.
@@ -245,7 +250,7 @@ A value that is not a positive integer falls back to the default, with one boot 
 | `CCRC_DEPS_SHED_PARKED_AFTER_HOURS` | server | unset (parked runs never shed) |
 | `CCRC_DEPS_SHED_PER_PASS` | server | 1 |
 | `CCD_DEPS_SHED_MIN_ASLEEP_S` | box (ccd) | 3600 |
-| `CCD_DEPS_SHED_NAMES` | box | `node_modules` |
+| `CCD_DEPS_SHED_NAMES` | box | `node_modules` (narrow-only) |
 | `CCD_DEPS_SHED_SCAN_S` | box | 30 (lower-only) |
 
 **Wire.**

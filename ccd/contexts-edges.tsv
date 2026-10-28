@@ -546,6 +546,7 @@ cmd_ws_rm -> _reg_retire
 cmd_ws_rm -> _tmux_t
 cmd_ws_rm -> _ws_unsupervise
 cmd_ws_shed_deps -> _lc_dec_ok
+cmd_ws_shed_deps -> _lc_fail
 cmd_ws_shed_deps -> _lc_surface_norm
 cmd_ws_shed_deps -> _reg_id_ok
 cmd_ws_shed_deps -> _reg_set

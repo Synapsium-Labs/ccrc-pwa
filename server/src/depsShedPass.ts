@@ -54,6 +54,14 @@ import { DEPS_SHED_LIVE_MARKER, readSwitches, type MarkerSwitchName } from '../.
  * bounded by the verb's runner row (`CCD_VERB_TIMEOUT_MS['ws-shed-deps']`, 240 s, of which a healthy act uses seconds),
  * and only once a sleep per row.
  *
+ * THE LANE'S SINGLE FLIGHT, SHADOW INCLUDED. Off the serialiser and the queue is not off the lane: this pass runs inside
+ * `sleepRunDone`'s body, so every act it awaits, the shadow's dry run as much as the armed removal, holds the run-done
+ * lane's single flight, and no later `sleepRunDone` tick (its stop-done pass, this pass) starts until it answers. The
+ * shadow's call therefore has its own, shorter bound: `CCD_DRY_RUN_TIMEOUT_MS['ws-shed-deps']`, 180 s, sized from the dry
+ * run's own bounded calls (166 s: it stops before the removal and the second `git status`), so a stuck shadow holds the
+ * lane at most `CCRC_DEPS_SHED_PER_PASS` x 180 s; a real act at most that many x 240 s. A healthy one of either takes
+ * seconds. `deps-shed-budget.test.ts` holds both sums under their rows.
+ *
  * REFUSALS. A refusal or failure holds the row off for `DEPS_SHED_RETRY_MS`, doubled for each further one in the same
  * sleep up to `DEPS_SHED_RETRY_MAX_MS`, and the row then sorts after every row the box has not refused this sleep, so a
  * set of rows that keep refusing (a leaked worker holding its node_modules) never starves a fresh one of the per-pass

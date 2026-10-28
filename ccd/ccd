@@ -37853,7 +37853,7 @@ _ws_expire_spawn_gate() {   # id -> 0 when a pane may be created for id; rc 1 wi
   # child or a collect hold it too, none of which ever refused a spawn of a row that is not archived.
   if [[ ! -f "$REG/$id.archived" ]]; then
     _ws_shed_spawn_held "$id" || return 0
-    _WS_EXPIRE_SPAWN_WHY="ws-shed-deps is removing $id's dependency directories and holds its shed lock — refusing to create a pane for it until that finishes; retry"
+    _WS_EXPIRE_SPAWN_WHY=$_WS_SHED_HELD_WHY   # the held lock's sentence, or the stranded marker's (DEPSSHED region)
     return 1
   fi
   # A BREADCRUMB THAT STANDS BUT READS AS NOTHING, ON AN ARCHIVED ROW, IS NOT

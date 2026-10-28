@@ -86,7 +86,7 @@ export const LIFECYCLE: readonly LifecycleClass[] = [
   // inside a workspace that has a collector of its own. Policy row 2 gave `node_modules` its workspace's lifetime, and a
   // finished worker's or a coordinator's workspace outlives its use; while the session sleeps past the age, the deps-shed
   // arm removes the git-ignored, untracked directories git lists, and keeps every git fact.
-  { name: 'workspace-dependency-dirs', root: '<workdir>/**/node_modules (git-ignored and untracked; the names CCD_DEPS_SHED_NAMES lists)', pattern: 'W',
+  { name: 'workspace-dependency-dirs', root: '<workdir>/**/node_modules (git-ignored and untracked; CCD_DEPS_SHED_NAMES may only narrow the names)', pattern: 'W',
     creators: ['package managers (npm ci, npm install), at agent runtime'],
     collector: 'ws-shed-deps, composed by the server\'s deps-shed arm of the run-done row (shadow unless its live switch in shared/switches.ts stands), re-proved on the box; otherwise the workspace\'s own collectors',
     bound: 'the workspace\'s lifetime; in a sleeping worker\'s or coordinator\'s worktree, CCRC_DEPS_SHED_AFTER_HOURS after its work finished (and CCD_DEPS_SHED_MIN_ASLEEP_S asleep), once a sleep',

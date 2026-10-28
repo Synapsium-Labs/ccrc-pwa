@@ -163,8 +163,21 @@ const CCD_VERB_TIMEOUT_MS: Record<string, number> = {
   'docs-fetch': 60_000,
 };
 
+/** The deps-shed SHADOW's own, shorter row (D-7278): `ws-shed-deps … --dry-run` runs every rung and removes nothing, so
+ *  the removal and the second `git status` are never reached. Its bounded calls: four tree walks at 30 s (the ignored
+ *  listing, the repository walk, the size, ONE `git status`), two quick reads at 10 s and the process walk at 10 s, with
+ *  at most two TERM-to-KILL graces (8 s at the widest): 166 s. The shadow runs inside the run-done lane's single flight
+ *  (`depsShedPass.ts`), so a stuck dry run holds that lane for this long and no longer. `deps-shed-budget.test.ts` holds
+ *  the sum under this row. ccd refuses a dash-led value for every flag of the verb, so `--dry-run` in its argv is the
+ *  flag itself. */
+const CCD_DRY_RUN_TIMEOUT_MS: Record<string, number> = {
+  'ws-shed-deps': 180_000,
+};
+
 function timeoutMsFor(cmd: string, args: string[]): number {
   if (cmd !== 'ccd') return TMUX_TIMEOUT_MS;
+  const dry = CCD_DRY_RUN_TIMEOUT_MS[args[0] ?? ''];
+  if (dry !== undefined && args.includes('--dry-run')) return dry;
   // `?? ''` guards an empty `args` (args[0] === undefined) from reaching the
   // lookup as a literal `undefined` key. Provably redundant against THIS
   // map, disclosed rather than removed: no key here is `''` or the coerced
