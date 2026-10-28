@@ -21,9 +21,10 @@ import { useFleetStore } from '../stores/fleet';
  *    because it is drawn outside that gate.
  *  - `headCount`: the head's count line. Instrument's status bar prints the fleet's count at every desk width, so its
  *    column draws none; Refined's frame has no such bar, so its column keeps the line.
- *  - `runsLine`: the runs line (the "Runs · n" door and the class chooser). Instrument's rail holds the Runs door and
- *    its status bar the runs count, so its column draws no runs line at a desk; Refined's frame has neither, so its
- *    column keeps the line, and below 900 every column keeps it.
+ *  - `runsLine`: the runs line (the "Runs · n" door and the class chooser). Instrument's rail holds the Runs door
+ *    (mounted at every desk width), and its status bar prints the open runs in its count when there are any, so its
+ *    column draws no runs line at a desk. Refined's bar has a Runs door of its own but no status bar; its column keeps
+ *    the line, as it did before the desk polish (until S11). Below 900 every column keeps it.
  *  - `banners`: the banner stack. Refined's frame places the stack under its bar; Instrument's `Banners` part is `null`,
  *    so its column is where the stack is drawn, and a flag tied to the head's would drop it there altogether.
  *  Each reads "the column draws it at a desk", and defaults to true. */

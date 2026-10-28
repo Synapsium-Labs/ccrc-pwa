@@ -66,9 +66,9 @@ export function FleetScreen({
   /** False where the frame's status bar prints the fleet's count (Instrument's `ListColumn` at a desk, T2g, D-6715):
    *  the head draws no count line. The pool lag stays. */
   headCount?: boolean;
-  /** False where the skin's frame holds the runs doors (Instrument's `ListColumn` at a desk, T2f, D-6371): the column
-   *  draws no runs line; the rail's Runs door goes to /runs and the frame's status bar prints the open runs in its
-   *  count. */
+  /** False where the skin's frame holds the Runs door (Instrument's `ListColumn` at a desk, T2f, D-6371): the column
+   *  draws no runs line; the rail's Runs door goes to /runs, and the frame's status bar prints the open runs in its
+   *  count when there are any (that count is a readout, not a door). */
   runsLine?: boolean;
   /** The server's current account-pool epoch (`GET /api/pools/epoch`, Task
    *  7), off `useFleetStore`'s `pools.epoch` (`app.tsx`) — the same `pools`
@@ -253,12 +253,16 @@ export function FleetScreen({
           runs go honest-stale" case renders as the first-run panel, since a
           `readRegistry` failure still ships an honest `sessions: []` — had
           no door to the one surface that would show the operator their runs
-          going stale. D-2's rule: a door must never render nothing. On a
-          phone and in Refined this line IS the only door to /runs, so it
-          renders in every branch below. At Instrument's desk (T2f, D-6371)
-          it is not: the rail's Runs door (`go-runs`) and the frame's status
-          bar count are the doors, always mounted, so the column draws no
-          line there (`runsLine` false) and the rule still holds. */}
+          going stale. D-2's rule: a door must never render nothing. On
+          Instrument's phone, and in a bare `FleetScreen` mounted with no
+          frame, this line IS the only door to /runs, so it renders in every
+          branch below. Refined keeps the line beside its own Runs doors (the
+          desk bar's tab and the phone header's `go-runs`), as it was before
+          the desk polish. At Instrument's desk (T2f, D-6371) the rail's Runs
+          door (`go-runs`), mounted at every desk width, is the door, so the
+          column draws no line there (`runsLine` false) and the rule still
+          holds; the status bar prints the open runs in its count when there
+          are any. */}
       {/* THE RUNS LINE — the runs door and the class chooser share one row.
           The chooser had a row to itself and looked orphaned on it; this row
           was already full-width, 44px tall and nearly empty, so pairing them
