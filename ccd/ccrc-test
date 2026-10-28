@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ccrc-test — `ccrc test`: run one test or typecheck command inside the fleet's
-# test slice, behind the fleet-wide admission queue (D-TBD-test-containment).
+# test slice, behind the fleet-wide admission queue (D-7298).
 #
 #   ccrc test [--heavy|--light] [--] <command> [<arg>...]   # --light only confirms a light reading
 #   ccrc test --classify [--] <command> [<arg>...]   # prints heavy or light
@@ -71,7 +71,7 @@
 # not loaded), the holder of a held slot is one of its ancestors. No variable
 # is set for the run, so none can be copied into a session to skip the queue.
 #
-# SCOPE: GOOD FAITH (D-TBD-test-containment). The sessions are cooperative, not adversaries.
+# SCOPE: GOOD FAITH (D-7298). The sessions are cooperative, not adversaries.
 # This wrapper and the hook's reading of it (`--classify-shell`) catch the
 # accidental spellings a well-behaved session writes; the backstop is the
 # cgroup caps already on the box (the session slice's CPUQuota and memory

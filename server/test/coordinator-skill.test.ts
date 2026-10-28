@@ -473,8 +473,8 @@ describe('the coordinator skill: clause 18, temp and long output', () => {
     expect(line).toContain('`CCRC_SESSION_TMPDIR`');
     expect(line).toContain('Long command output goes to a file there, or through `tail`');
   });
-  // D-TBD-test-containment: clause 18 routes every test and typecheck through `ccrc test`, and names the hook's refusal.
-  it('routes tests and typechecks through ccrc test, never a bare run or a systemd-run of its own (D-TBD-test-containment)', () => {
+  // D-7298: clause 18 routes every test and typecheck through `ccrc test`, and names the hook's refusal.
+  it('routes tests and typechecks through ccrc test, never a bare run or a systemd-run of its own (D-7298)', () => {
     const line = skill.split('\n').find((l) => l.startsWith('18. '));
     expect(line).toContain('Every test and typecheck runs through `ccrc test -- <command>`');
     expect(line).toContain('never run one bare, and never under a `systemd-run` of your own');

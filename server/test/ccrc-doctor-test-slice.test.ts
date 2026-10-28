@@ -1,4 +1,4 @@
-// Doctor's `test-slice` check (D-TBD-test-containment): the slice `ccrc test` runs in, read live — its memory against
+// Doctor's `test-slice` check (D-7298): the slice `ccrc test` runs in, read live — its memory against
 // its cap, its other limits — and the admission queue's depth, all from `ccrc test --status`, the queue's one reader.
 // WARN, never FAIL; SKIP on macOS, which has no slice. Each row starts from `healthy()` and breaks one thing.
 import { describe, expect } from 'vitest';
@@ -18,7 +18,7 @@ const verdict = (home: string): { line: string; remedy: string } => {
   return { line: lines[i]!, remedy: lines[i + 1] ?? '' };
 };
 
-describe('test-slice: the test slice, live, and the queue (D-TBD-test-containment)', () => {
+describe('test-slice: the test slice, live, and the queue (D-7298)', () => {
   platformContrast('a healthy box', {
     darwin: ['SKIP on macOS: launchd has no slice', () => {
       const home = healthy('ccrc-doctor-tslice-darwin-');

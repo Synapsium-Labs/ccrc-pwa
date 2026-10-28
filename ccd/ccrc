@@ -17493,7 +17493,7 @@ _inst_units() {
     "$dir/tmux-spawn-.scope.d/50-oom-continue.conf" 644
   _inst_atomic "$tree/deploy/systemd/ccrc-tmux-server.scope.d/50-oom-continue.conf" \
     "$dir/ccrc-tmux-server.scope.d/50-oom-continue.conf" 644
-  # D-TBD-test-containment: the slice `ccrc test` runs tests in, on every role and Linux only, as the drop-ins above (a
+  # D-7298: the slice `ccrc test` runs tests in, on every role and Linux only, as the drop-ins above (a
   # slice nothing starts holds nothing). Its values are defaults; ccrc-test applies the box's settings on each run.
   _inst_atomic "$tree/deploy/systemd/ccrctests.slice" "$dir/ccrctests.slice" 644
   echo "install: units: $role_unit, claude-session@.service, ccd-cap-scopes.{service,timer}, both drop-ins and the two OOMPolicy=continue scope drop-ins in \$HOME/.config/systemd/user"
@@ -27284,7 +27284,7 @@ console.log("restamped");
   esac
 }
 
-# ── _test_knobs — `ccrc test`'s settings (D-TBD-test-containment) ───────────
+# ── _test_knobs — `ccrc test`'s settings (D-7298) ───────────
 # The test slice's five limits and the admission queue's three numbers, read through `_ccrc_knob` like every other
 # setting. The five limits, the slot count and the wide line hold for the WHOLE BOX (one slice, one queue), so they are
 # read in `file` mode, ~/.ccrc/ccrc.env else the default: a caller's environment that set them would change the slice

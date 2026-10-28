@@ -616,7 +616,7 @@ export function ccrcEnv(home: string, omit: string[] = []): NodeJS.ProcessEnv {
     // that stayed up); `fixture-mainpid-drift` makes the SECOND sample differ,
     // which is exactly how a crash loop shows itself.
     '  show)',
-    // D-TBD-test-containment: the closing doctor's `test-slice` check asks `show ccrctests.slice -p …` through
+    // D-7298: the closing doctor's `test-slice` check asks `show ccrctests.slice -p …` through
     // `ccrc test --status`. The slice is loaded once `_inst_units` has placed its file (the causal chain a real
     // `daemon-reload` gives), at the shipped defaults; before that the manager does not know it.
     '    if [ "$2" = ccrctests.slice ]; then',
@@ -1866,7 +1866,7 @@ export const FLEET_BOX_CLASSES: Readonly<Record<string, string>> = {
   "services": "PASS",
   "skills": "PASS",
   "snapshot-posture": "SKIP",
-  // D-TBD-test-containment: PASS at every stage, re-measured from both box-token cases' own failing diff (the install
+  // D-7298: PASS at every stage, re-measured from both box-token cases' own failing diff (the install
   // places ccrctests.slice, and this fixture's manager then answers it loaded).
   "test-slice": "PASS",
   "timeout": "PASS",

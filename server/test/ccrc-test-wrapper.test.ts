@@ -1,4 +1,4 @@
-// `ccrc test` (ccd/ccrc-test, D-TBD-test-containment): one test or typecheck command, run inside
+// `ccrc test` (ccd/ccrc-test, D-7298): one test or typecheck command, run inside
 // `ccrctests.slice` with the session's environment, behind the fleet-wide admission queue for heavy runs.
 //
 // Runs the real wrapper in a fixture HOME, never the live one. On Linux the service manager is a pair of stubs:
@@ -95,7 +95,7 @@ const pidsOf = (b: Box, file: string): number[] => log(b, file).split('\n').filt
 const started = (b: Box, tag: string) => existsSync(path.join(b.home, `started-${tag}`));
 const release = (b: Box, tag: string) => writeFileSync(path.join(b.home, `release-${tag}`), '');
 
-describe('ccrc test: the slice (D-TBD-test-containment)', () => {
+describe('ccrc test: the slice (D-7298)', () => {
   // Nothing is added to the run's environment: `already inside` is read from the cgroup, never from a variable.
   itLinux('runs the command as a scope in ccrctests.slice, with the session environment, cwd and exit code', () => {
     const b = box();
@@ -250,7 +250,7 @@ describe('ccrc test: the slice (D-TBD-test-containment)', () => {
   });
 });
 
-describe('ccrc test: heavy or light (D-TBD-test-containment)', () => {
+describe('ccrc test: heavy or light (D-7298)', () => {
   it.each([
     ['npx vitest run --maxWorkers=2 test/foo.test.ts', 'light'],
     ['./node_modules/.bin/vitest run test/a.test.ts test/b.test.ts test/c.test.ts', 'light'],
@@ -413,7 +413,7 @@ describe('ccrc test: heavy or light (D-TBD-test-containment)', () => {
   });
 });
 
-describe('ccrc test: the admission queue (D-TBD-test-containment)', () => {
+describe('ccrc test: the admission queue (D-7298)', () => {
   const slice = (b: Box) => writeFileSync(path.join(b.home, 'fixture-slice-show'),
     'LoadState=loaded\nMemoryCurrent=0\nMemoryMax=6442450944\nMemorySwapMax=1073741824\nCPUWeight=20\nCPUQuotaPerSecUSec=4s\nIOWeight=20\n');
 
@@ -618,7 +618,7 @@ describe('ccrc test: the admission queue (D-TBD-test-containment)', () => {
   });
 });
 
-describe('ccrc test: a run ends with its whole tree (D-TBD-test-containment)', () => {
+describe('ccrc test: a run ends with its whole tree (D-7298)', () => {
   itLinux('the run\'s scope is stopped when its command ends, so a process it left behind ends too', async () => {
     const b = box();
     const r = run(b, ['--light', '--', 'sh', '-c', 'sleep 300 & for f in "$HOME"/ccrc-test-*.pids; do echo $! >> "$f"; done; echo $! > "$HOME/leftover"']);
@@ -642,7 +642,7 @@ describe('ccrc test: a run ends with its whole tree (D-TBD-test-containment)', (
   });
 });
 
-describe('ccrc test --status (D-TBD-test-containment)', () => {
+describe('ccrc test --status (D-7298)', () => {
   itLinux('names the live memory against the live cap, the other limits and the queue', () => {
     const b = box();
     writeFileSync(path.join(b.home, 'fixture-slice-show'),
@@ -672,7 +672,7 @@ describe('ccrc test --status (D-TBD-test-containment)', () => {
 
 // The on-box proof (deploy/verify-test-slice.sh) is the operator's, run on a box with a real user manager; CI has none.
 // Here only its refusal is held: where it cannot measure, it changes nothing and says so.
-describe('deploy/verify-test-slice.sh (D-TBD-test-containment)', () => {
+describe('deploy/verify-test-slice.sh (D-7298)', () => {
   const VERIFY = path.join(REPO, 'deploy', 'verify-test-slice.sh');
   it('refuses, changing nothing, where there is no user manager to measure', () => {
     const b = box();

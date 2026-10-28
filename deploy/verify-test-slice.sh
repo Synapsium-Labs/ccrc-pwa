@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# verify-test-slice.sh — the on-box proof of `ccrc test`'s containment (D-TBD-test-containment), for the operator or
+# verify-test-slice.sh — the on-box proof of `ccrc test`'s containment (D-7298), for the operator or
 # the deploy lane to run on a Linux box with a real systemd user manager. CI has none, and the wrapper's suite
 # (server/test/ccrc-test-wrapper.test.ts) drives stubs of systemctl and systemd-run that exec the command directly, so
 # four facts are measured only here:

@@ -226,7 +226,7 @@ describe('ccrc: dispatch and usage', () => {
     const home = mkTmp('ccrc-cli-usage-verbs-');
     const r = runCcrcRaw(home, ['-h']);
     expect(r.stdout).toMatch(/usage: ccrc \{doctor\|status\|adopt\|wrappers\|account\|memory\|models\|codex\|install\|update\|rollback\|versions\|channel\|rollout\|uninstall\|backup\|coordination-snapshot\|logs\|passwd\|expose\|token\|restamp\|version\|watchdog\|history\|test\}/);
-    // `test` joined it with test containment (D-TBD-test-containment) — the one dispatch line that execs
+    // `test` joined it with test containment (D-7298) — the one dispatch line that execs
     // ccd/ccrc-test, joined in place, last, with its paragraph (_usage_test_paragraph) reached beside history's.
     // `server/test/ccrc-test-wrapper.test.ts` owns what it does.
     expect(r.stdout).toMatch(/^ {2}test {6}run one test or typecheck inside ccrctests\.slice/m);

@@ -6168,7 +6168,7 @@ old tmux-server behaviour, `~/.config/systemd/user/ccrc-tmux-server.scope.d/50-o
 `systemctl --user daemon-reload`, then roll `ccd` back; a session drops the prefix at its next respawn, and
 `ccd-tool-adj` left in `~/.local/bin` is inert. `ccrc uninstall` removes both files.
 
-**Test containment** (D-TBD-test-containment). `ccrc test [--heavy|--light] -- <command>` (`ccd/ccrc-test`) runs one
+**Test containment** (D-7298). `ccrc test [--heavy|--light] -- <command>` (`ccd/ccrc-test`) runs one
 test or typecheck as a transient scope in `ccrctests.slice` (`deploy/systemd/ccrctests.slice`, placed by `ccrc
 install`, `ccrc update` and `deploy.sh agent`), with the session's environment, working directory and terminal. The
 slice has a hard `MemoryMax` (default 6G), a bounded `MemorySwapMax` (1G), `CPUWeight` and `IOWeight` of 20 against
@@ -6198,7 +6198,7 @@ typecheck through `ccrc test`. The session hook reads every Bash call that could
 --classify-shell`, the wrapper's own classifier (prefixes such as `setsid`, `sudo -u`, `flock`, `xargs` and systemd-run's
 flags, and `eval`/`script -c`/`watch` strings, read through), and denies a test or typecheck under a `systemd-run` of
 its own on every session (`ccrc test -- systemd-run … <test>` included) and, on a fleet box (Linux, a registered
-session), a heavy run in command position outside `ccrc test`. The scope is good faith (D-TBD-test-containment): the sessions are
+session), a heavy run in command position outside `ccrc test`. The scope is good faith (D-7298): the sessions are
 cooperative, so the classifier catches the spellings a well-behaved session writes by accident, and the cgroup caps
 already on the box (the session slice's `CPUQuota` and memory caps) are the backstop. Deliberately obfuscated
 spellings are accepted and out of scope: a systemd-run inside a command substitution, `prlimit`/`unshare`/`cgexec`

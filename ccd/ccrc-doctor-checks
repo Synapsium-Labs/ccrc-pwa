@@ -1208,7 +1208,7 @@ _check_scopes() {
   return 2
 }
 
-# ── test-slice (D-TBD-test-containment) ───────────────────────────────────
+# ── test-slice (D-7298) ───────────────────────────────────
 # WHERE `ccrc test` RUNS, AND HOW FULL ITS QUEUE IS. `ccrc test` puts every test
 # and typecheck in `ccrctests.slice` and holds heavy runs in a fleet-wide
 # queue (ccd/ccrc-test's header). This check reports the slice's LIVE memory

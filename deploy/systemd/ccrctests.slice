@@ -1,6 +1,6 @@
 # ccrctests.slice — where `ccrc test` (ccd/ccrc-test) runs every test and
 # typecheck on a fleet box, as one transient scope per run
-# (D-TBD-test-containment). Installed by `ccrc install`/`ccrc update`
+# (D-7298). Installed by `ccrc install`/`ccrc update`
 # (`_inst_units`) and by deploy.sh's agent lane, on Linux only.
 #
 # WHY A SLICE OF ITS OWN. Test runs (vitest's workers, tests-inclusive tsc,

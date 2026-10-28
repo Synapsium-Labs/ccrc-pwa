@@ -116,7 +116,7 @@ export function installCcrc(home: string): void {
   // and this module's imports (`./lib.mjs`, `./store.mjs`) sit beside it in the checkout, as they do in a box's
   // tree (`_inst_tree` rsyncs `ccd/` whole).
   symlinkSync(join(REPO, 'ccd', 'history'), join(ccd, 'history'));
-  // D-TBD-test-containment: `_check_test-slice` asks the shipped `ccrc test` wrapper for the slice and the queue.
+  // D-7298: `_check_test-slice` asks the shipped `ccrc test` wrapper for the slice and the queue.
   symlinkSync(join(REPO, 'ccd', 'ccrc-test'), join(ccd, 'ccrc-test'));
   // ── the `auth` check's two artifacts (Task 9) ──────────────────────────
   // `_check_auth` measures `~/.ccrc/auth.scrypt` by running
@@ -662,7 +662,7 @@ export function stubSystemctl(home: string): void {
     + '  done\n'
     + '  exit $rc\n'
     + 'fi\n'
-    // D-TBD-test-containment: `ccrc test --status` asks `show ccrctests.slice -p …` for seven properties at once, and
+    // D-7298: `ccrc test --status` asks `show ccrctests.slice -p …` for seven properties at once, and
     // reads each line by name. The answer is `fixture-show-ccrctests.slice`'s own text; an absent file prints nothing.
     + 'if [ "$1" = "--user" ] && [ "$2" = "show" ] && [ "$3" = "ccrctests.slice" ]; then\n'
     + '  f="$HOME/fixture-show-ccrctests.slice"\n'
@@ -1043,7 +1043,7 @@ export function plantOomDropins(home: string, which: ReadonlyArray<keyof typeof 
     writeFileSync(p, '[Scope]\nOOMPolicy=continue\n');
   }
 }
-/** D-TBD-test-containment: `ccrctests.slice` at the path `_inst_units` places it, and the user manager's answer for
+/** D-7298: `ccrctests.slice` at the path `_inst_units` places it, and the user manager's answer for
  *  it (`fixture-show-ccrctests.slice`, read by the stub's `show ccrctests.slice` arm), loaded at the shipped defaults
  *  unless `show` says otherwise. */
 export function plantTestSlice(home: string, show = 'LoadState=loaded\nMemoryCurrent=1073741824\nMemoryMax=6442450944\nMemorySwapMax=1073741824\nCPUWeight=20\nCPUQuotaPerSecUSec=4s\nIOWeight=20\n'): void {
@@ -1242,7 +1242,7 @@ export function healthy(prefix: string): string {
   // D-5241: both scope drop-ins on disk and the pane scope reading `continue`: `oom-policy` PASSes.
   plantOomDropins(home);
   plantOomPolicy(home, 'tmux-spawn-fixture.scope', 'continue');
-  // D-TBD-test-containment: the test slice placed and loaded at its default caps: `test-slice` PASSes on Linux.
+  // D-7298: the test slice placed and loaded at its default caps: `test-slice` PASSes on Linux.
   plantTestSlice(home);
   // The pane-scope sweep's verdict record, fresh and empty: `scope-sweep` PASSes.
   writeFileSync(join(home, 'fixture-scope-sweep.state'), `# ccd-scope-sweep v1 tick=${Math.floor(Date.now() / 1000)} up=8640000 mode=shadow\n`);
@@ -1704,7 +1704,7 @@ export const anyVerdictFor = (out: string, name: string): string | undefined =>
  *  coordination creates. Its sibling `approval-digest-mismatch` PASSes there (no
  *  refusals journal), so it moves no count.
  *
- *  RAISED BY ONE ON macOS ONLY (D-TBD-test-containment): `test-slice` SKIPs there
+ *  RAISED BY ONE ON macOS ONLY (D-7298): `test-slice` SKIPs there
  *  (launchd has no slice). On Linux `healthy()` plants the slice and the manager's
  *  answer for it, so it PASSes and the count is unchanged there. */
 export const HEALTHY_SKIPS = (process.platform === 'darwin' ? 3 : 0) + 12;

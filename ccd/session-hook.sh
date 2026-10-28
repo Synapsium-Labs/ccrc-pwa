@@ -4772,7 +4772,7 @@ if [[ "$event" == PreToolUse && "$pre_json" != *'"permissionDecision":"deny"'* \
   fi
 fi
 
-# TESTS RUN THROUGH `ccrc test` (D-TBD-test-containment). ONE READER for both arms: `ccrc test --classify-shell`, the
+# TESTS RUN THROUGH `ccrc test` (D-7298). ONE READER for both arms: `ccrc test --classify-shell`, the
 # wrapper's own classifier, so the hook and the queue agree on what a test is, and every spelling the wrapper reads
 # through (quoted words, `env`/`timeout`/`setsid`/`sudo -u`/`flock`/`xargs` prefixes, systemd-run's value flags, `sh -c`,
 # `eval`, `script -c`, `watch` and tmux window strings) is read the same way here. It answers one of three words:
@@ -4784,7 +4784,7 @@ fi
 #   light    anything else, `ccrc test …` included: allowed.
 # `ccrc test -- systemd-run … <test>` is wrapped too: its inner command is read through the same check.
 # Either denial has somewhere to go: `ccrc test` degrades rather than refuses where the slice cannot be used (ccd/ccrc-test).
-# GOOD FAITH (D-TBD-test-containment): the sessions are cooperative, so this catches accidental spellings; the cgroup caps already on
+# GOOD FAITH (D-7298): the sessions are cooperative, so this catches accidental spellings; the cgroup caps already on
 # the box are the backstop. Deliberately obfuscated spellings (a systemd-run inside a command substitution, prlimit,
 # unshare or cgexec prefixes, find -exec, python os.system, an npm script that wraps the suite) are out of scope.
 # An accident guard that fails open: no `ccrc` on PATH (then `ccrc test` is not there to send a run to either), a
@@ -4805,9 +4805,9 @@ if [[ "$event" == PreToolUse && "$pre_json" != *'"permissionDecision":"deny"'* &
     [[ -z "$tcmd" ]] || tverdict=$(${hooktmo:+"$hooktmo" 5} ccrc test --classify-shell -- "$tcmd" 2>/dev/null) || tverdict=""
     treason=""
     if [[ "$tverdict" == wrapped ]]; then
-      treason="ccrc: run tests and typechecks through \`ccrc test -- <command>\` (for example \`ccrc test -- npx vitest run --maxWorkers=2 test/foo.test.ts\`), never under a systemd-run of your own: \`ccrc test\` puts the run in the fleet's test slice, whose caps keep sessions ahead of tests, and queues heavy runs (tsc, typecheck, full or wide vitest, browser and mutation tests) fleet-wide (D-TBD-test-containment)."
+      treason="ccrc: run tests and typechecks through \`ccrc test -- <command>\` (for example \`ccrc test -- npx vitest run --maxWorkers=2 test/foo.test.ts\`), never under a systemd-run of your own: \`ccrc test\` puts the run in the fleet's test slice, whose caps keep sessions ahead of tests, and queues heavy runs (tsc, typecheck, full or wide vitest, browser and mutation tests) fleet-wide (D-7298)."
     elif [[ "$tverdict" == heavy && "$tfleet" == 1 ]]; then
-      treason="ccrc: this command starts a heavy test or typecheck outside \`ccrc test\`, so it would run in this session's own scope, past the fleet's test slice and its queue. Run it as \`ccrc test -- <command>\` (for example \`ccrc test -- npx tsc --noEmit -p test/tsconfig.tests.json\`): heavy runs (tsc, typecheck, full or wide vitest, browser and mutation tests) queue fleet-wide inside the slice, whose caps keep sessions ahead of tests (D-TBD-test-containment)."
+      treason="ccrc: this command starts a heavy test or typecheck outside \`ccrc test\`, so it would run in this session's own scope, past the fleet's test slice and its queue. Run it as \`ccrc test -- <command>\` (for example \`ccrc test -- npx tsc --noEmit -p test/tsconfig.tests.json\`): heavy runs (tsc, typecheck, full or wide vitest, browser and mutation tests) queue fleet-wide inside the slice, whose caps keep sessions ahead of tests (D-7298)."
     fi
     if [[ -n "$treason" ]] && tjson=$(_hook_deny_json "$treason"); then pre_json=$tjson; fi
   fi

@@ -1,5 +1,5 @@
 /**
- * The session hook's test-route arm (D-TBD-test-containment): tests and typechecks run through `ccrc test`. On a
+ * The session hook's test-route arm (D-7298): tests and typechecks run through `ccrc test`. On a
  * PreToolUse a Bash call that starts `systemd-run` with a test or typecheck word is denied, with a reason that names
  * `ccrc test`; `ccrc test` itself, a systemd-run of anything else, and a test file whose name only mentions systemd-run
  * pass untouched, and a payload the arm cannot read fails open.
@@ -51,7 +51,7 @@ const bash = (command: string): string | null => {
   return e.hookSpecificOutput.permissionDecision === 'deny' ? String(e.hookSpecificOutput.permissionDecisionReason) : null;
 };
 
-describe('the test-route arm denies a test or typecheck under a systemd-run of its own (D-TBD-test-containment)', () => {
+describe('the test-route arm denies a test or typecheck under a systemd-run of its own (D-7298)', () => {
   it.each([
     'systemd-run --user --scope -p MemoryMax=8G npx vitest run',
     'systemd-run --user --scope --slice=app.slice -- npx tsc --noEmit -p test/tsconfig.tests.json',
@@ -81,7 +81,7 @@ describe('the test-route arm denies a test or typecheck under a systemd-run of i
   });
 });
 
-describe('the test-route arm allows what is not a hand-placed test run (D-TBD-test-containment)', () => {
+describe('the test-route arm allows what is not a hand-placed test run (D-7298)', () => {
   it.each([
     'ccrc test -- npx vitest run --maxWorkers=2 test/foo.test.ts',
     'ccrc test -- npx tsc --noEmit -p test/tsconfig.tests.json',
@@ -128,7 +128,7 @@ platformContrast('a bare heavy test run', {
   }],
 });
 
-describe('the bare-heavy arm leaves light and contained runs alone (D-TBD-test-containment)', () => {
+describe('the bare-heavy arm leaves light and contained runs alone (D-7298)', () => {
   it.each([
     'ccrc test -- npx vitest run',
     'cd server && ccrc test -- npx tsc --noEmit -p test/tsconfig.tests.json',
@@ -141,7 +141,7 @@ describe('the bare-heavy arm leaves light and contained runs alone (D-TBD-test-c
   });
 });
 
-describe('the test-route arm fails open (D-TBD-test-containment)', () => {
+describe('the test-route arm fails open (D-7298)', () => {
   it('with no ccrc on PATH there is no ccrc test to send a run to, so nothing is denied', () => {
     const r = spawnSync('bash', [HOOK], {
       input: JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'systemd-run --user --scope npx vitest run' }, cwd: CWD }),
