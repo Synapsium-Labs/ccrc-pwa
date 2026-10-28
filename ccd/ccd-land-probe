@@ -39,7 +39,9 @@
 # rewrite included. A SIGTERM or SIGINT never raises where it lands: the handler records the first signal and
 # SIGKILLs the process group of the child in flight, and the interruption (SystemExit, 128 plus the signal's number)
 # is raised only at fixed checkpoints: after each child the measuring code starts returns, before the pre-pass,
-# before each project, and once after the projects loop. Once a signal is recorded no child is started. So the closing
+# before each project, and once after the projects loop, with SIGTERM and SIGINT then held, so a signal that arrives
+# later still sets the exit status. Once a signal is recorded no child is started. A project's fallback and closing
+# path raise none (CLOSING, let go in a finally). So the closing
 # path, the scratch's making and removal, the stale sweep and every file write run to their end: the closing path
 # kills and reaps any child still in flight, and only then removes the directory, so no helper is still writing into
 # it. A signal is blocked from just before a child is forked until it is recorded, so the handler always finds it. A
@@ -71,7 +73,7 @@
 #      refspec failure or any other exception before the first write, writes all of them unmeasured as
 #      `fetch-failed`: the probe's set has no closer word), rewrite `probe` with store.after and the scratch size,
 #      remove the scratch.
-#   5. Exit 0.
+#   5. Exit 0, or 128 plus the number of a signal recorded or held after the last checkpoint.
 #
 # PATHS
 #   ~/.ccrc/landing/<project>.conf        the operator, by hand: opts <project> in (base=, lineage=on|off)
@@ -1019,7 +1021,6 @@ def clear_stale_scratch():
                 continue
         except OSError:
             continue
-        selfsignal('stale-sweep')   # test-only: a signal at the stale scratch's removal
         shutil.rmtree(p, ignore_errors=True)
         log('cleared a stale scratch')
 
@@ -1323,20 +1324,24 @@ def probe_project(project, conf):
         # (the closing count-objects too), and no checkpoint raises while CLOSING. So it always runs to its end: the
         # rewrite (an interrupted record once a signal is recorded), the kill of any child in flight, and only then
         # the scratch's removal. A signal that lands here is raised by main's checkpoint after the projects loop.
+        # CLOSING is let go in a finally of its own: a closing path that raised anyway (a failed journal write, say)
+        # must not leave every later checkpoint a no-op.
         CLOSING = True
-        kill_inflight()
-        if first is not None:
-            try:
-                finish_probe(ldir, first, store, interrupted)
-            except Exception as e:
-                selfsignal('except-log')   # test-only: a signal in the except body, at its log
-                log('project-error %s: the closing probe rewrite stopped (%s)' % (project, type(e).__name__))
-        kill_inflight()
-        if SCRATCH is not None:
-            remove_scratch(SCRATCH)
-            SCRATCH = None
-        PROJECT_DIR = None
-        CLOSING = False
+        try:
+            kill_inflight()
+            if first is not None:
+                try:
+                    finish_probe(ldir, first, store, interrupted)
+                except Exception as e:
+                    selfsignal('except-log')   # test-only: a signal in the except body, at its log
+                    log('project-error %s: the closing probe rewrite stopped (%s)' % (project, type(e).__name__))
+            kill_inflight()
+            if SCRATCH is not None:
+                remove_scratch(SCRATCH)
+                SCRATCH = None
+            PROJECT_DIR = None
+        finally:
+            CLOSING = False
 
 
 def is_paused(ldir):
@@ -1410,8 +1415,23 @@ def main():
     for project in projects:
         checkpoint()
         handle_project(project)
-    checkpoint()   # a signal after the last project's last checkpoint (in its closing rewrite, say) still ends the tick
+    # The tick has ended. SIGTERM and SIGINT are held from here (a pending one runs its handler inside the call), so a
+    # signal that lands after the last project's last checkpoint (in its closing rewrite, say) is raised just below,
+    # and one that arrives after this checkpoint stays pending for exit_status.
+    signal.pthread_sigmask(signal.SIG_BLOCK, SIGNALS)
+    checkpoint()
+    selfsignal('exit')   # test-only: a signal after the last checkpoint, held
     return 0
+
+
+def exit_status(rc):
+    """The tick's exit status: 128 plus the number of a SIGTERM or SIGINT still pending under main's final hold,
+    which arrived after its last checkpoint, else rc."""
+    pending = signal.sigpending()
+    for s in SIGNALS:
+        if s in pending:
+            return 128 + s
+    return rc
 
 
 def selftest():
@@ -1435,5 +1455,5 @@ def selftest():
 if __name__ == '__main__':
     if os.environ.get('CCD_LAND_PROBE_SELFTEST') == 'git_ro':
         sys.exit(selftest())
-    sys.exit(main())
+    sys.exit(exit_status(main()))
 PY

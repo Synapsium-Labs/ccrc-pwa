@@ -204,6 +204,37 @@ describe('ccd-land-probe: the literal source pins', () => {
     for (const d of ['ccd', 'deploy']) walk(path.join(root, d));
     expect(holders).toEqual(['ccd/ccd-land-probe']);
   });
+
+  it('R9 every child the measuring code starts is followed by checkpoint(): only the closing rewrite and store_counts\' own body are exempt (fix round 2 scoped review I1)', () => {
+    // A signal kills the child in flight; without the checkpoint right after it, its rc -9 would be read and written as
+    // a measurement. Each site assigns the child's answer on one line, so a bare call or a returned one is a new form.
+    const lines = program.split('\n');
+    const CALL = /\b(git_ro|gh_get|gh_pr_list|store_counts)\(/;
+    let fn = '';
+    const sites: string[] = [];
+    lines.forEach((l, i) => {
+      const d = /^def (\w+)\(/.exec(l);
+      if (d) { fn = d[1]!; return; }
+      if (!CALL.test(l) || /^\s*(#|def )/.test(l)) return;
+      sites.push(fn);
+      const indent = /^\s*/.exec(l)![0];
+      const what = `${fn}: ${l.trim()}`;
+      expect(l, what).toMatch(new RegExp(`^${indent}[\\w\\[\\]', ]+ = (git_ro|gh_get|gh_pr_list|store_counts)\\(`));
+      if (fn === 'finish_probe' || fn === 'store_counts') return;   // the closing path, and the body checked at its call
+      let next = lines[i + 1] ?? '';
+      if (fn === 'qualifying') {
+        // The call sits in a try whose except refuses and continues; the checkpoint is the first line after the try.
+        const outer = indent.slice(4);
+        next = lines.slice(i + 1).find((x) => x.startsWith(outer) && !x.startsWith(indent) && !/^\s*except\b/.test(x)) ?? '';
+        expect(next.startsWith(`${outer}checkpoint()`), what).toBe(true);
+        return;
+      }
+      expect(next.startsWith(`${indent}checkpoint()`), what).toBe(true);
+    });
+    expect(sites.sort()).toEqual(['fetch_into_scratch', 'fetch_into_scratch', 'fetch_into_scratch', 'fetch_into_scratch',
+      'finish_probe', 'merge_answer', 'open_heads', 'probe_project', 'probe_project', 'qualifying', 'read_checks',
+      'store_counts', 'walk_lineage', 'walk_lineage', 'walk_lineage']);
+  });
 });
 
 const OUTPUT = '--output=/project/.git/config';

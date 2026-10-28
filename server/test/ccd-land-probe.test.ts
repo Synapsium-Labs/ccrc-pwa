@@ -1315,26 +1315,53 @@ describe('ccd-land-probe: a signal is recorded where it lands and raised only at
     expect(fx.readJson('probe')).toEqual(before);
   });
 
-  it('a SIGTERM at the stale sweep\'s removal (A4b) removes the stale scratch entirely, and no project is measured', { timeout: 60_000 }, async () => {
+  it('a SIGTERM inside the stale sweep\'s removal (A4b) removes the stale scratch entirely, and nothing is measured or written', { timeout: 60_000 }, async () => {
     fx.addHead(1, { 'a.txt': 'a\n' });
-    fx.conf(fx.project, '');
+    fx.conf(fx.project, 'lineage=on\n');
     trackGit();
+    // An `enabled` an earlier tick wrote: the checkpoint before the pre-pass raises, so this tick writes no fresh one.
+    fs.mkdirSync(fx.landDir, { recursive: true });
+    const oldEnabled = JSON.stringify({ v: 1, project: fx.project, at: '2020-01-01T00:00:00Z' }) + '\n';
+    fs.writeFileSync(path.join(fx.landDir, 'enabled'), oldEnabled);
     const stale = path.join(fx.tmp, 'ccd-land-probe.stale');
     fs.mkdirSync(path.join(stale, 'objects', 'pack'), { recursive: true });
     fs.writeFileSync(path.join(stale, '.ccd-land-probe-scratch'), 's\n');
-    for (const n of ['a', 'b', 'c']) fs.writeFileSync(path.join(stale, 'objects', 'pack', n), n);
+    for (const n of ['a', 'b', 'c', 'd']) fs.writeFileSync(path.join(stale, 'objects', 'pack', n), n);
     const old = new Date(Date.now() - 2 * 3600_000);
     fs.utimesSync(stale, old, old);
-    const r = fx.run(SIG('stale-sweep'));
+    // The signal lands INSIDE rmtree: right after the first unlink it makes (shutil calls os.unlink at call time).
+    const marker = path.join(h.home, 'unlink-signal');
+    const r = fx.runPatched([
+      'import os, signal',
+      'real_unlink = os.unlink',
+      'armed = [False]',
+      'def spy(*a, **k):',
+      '    real_unlink(*a, **k)',
+      '    if armed[0]:',
+      '        armed[0] = False',
+      `        open(${JSON.stringify(marker)}, "w").write(str(a[0]))`,
+      '        os.kill(os.getpid(), signal.SIGTERM)',
+      'os.unlink = spy',
+      'real_sweep = ns["clear_stale_scratch"]',
+      'def sweep():',
+      '    armed[0] = True',
+      '    try:',
+      '        real_sweep()',
+      '    finally:',
+      '        armed[0] = False',
+      'ns["clear_stale_scratch"] = sweep',
+    ].join('\n'));
+    expect(fs.existsSync(marker), 'the signal was sent inside the removal').toBe(true);
     expect(fs.existsSync(stale), 'the stale scratch, or what is left of it').toBe(false);
     expect(r.stderr).toContain('cleared a stale scratch');
-    await endsClean(r, 'stale-sweep');
-    // The checkpoint before the pre-pass raised: nothing was measured or written.
+    await endsClean(r);
+    // The checkpoint before the pre-pass raised: no enabled written, nothing measured.
+    expect(fs.readFileSync(path.join(fx.landDir, 'enabled'), 'utf8')).toBe(oldEnabled);
     expect(fx.exists('probe')).toBe(false);
     expect(childPids()).toEqual([]);
   });
 
-  it('a second SIGTERM at the handler\'s kill of the child in flight (A2) leaves no live child', { timeout: 60_000 }, async () => {
+  it('a second SIGTERM at the handler\'s kill of the child in flight (A2): the handler kills it, and nothing else has to', { timeout: 60_000 }, async () => {
     fx.addHead(1, { 'a.txt': 'a\n' });
     fx.conf(fx.project, '');
     // The fetch starts a helper, then signals the probe itself; the handler sends the second signal at its killpg.
@@ -1344,11 +1371,89 @@ describe('ccd-land-probe: a signal is recorded where it lands and raised only at
       '  kill -TERM $PPID; wait;;',
       'esac',
     ].join('\n'));
+    // Every later kill of a child (a deadline's, the closing path's kill_inflight) goes through kill_group: it must
+    // never be needed, because the handler's own killpg already ended the fetch.
+    const killed = path.join(h.home, 'kill-group.log');
     const t0 = Date.now();
-    const r = fx.run(SIG('killpg'));
+    const r = fx.runPatched([
+      'real_kg = ns["kill_group"]',
+      'def kg(proc):',
+      `    open(${JSON.stringify(killed)}, "a").write(str(proc.pid) + "\\n")`,
+      '    real_kg(proc)',
+      'ns["kill_group"] = kg',
+    ].join('\n'), SIG('killpg'));
     expect(Date.now() - t0, 'the fetch was killed, not waited out').toBeLessThan(30_000);
+    expect(fs.existsSync(killed) ? fs.readFileSync(killed, 'utf8') : '', 'a kill the handler should have made').toBe('');
     await endsClean(r, 'killpg');
     expect(childPids().length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('a SIGTERM during a merge-tree ends the tick at that child: the killed merge is never written as a measurement', { timeout: 60_000 }, async () => {
+    fx.addHead(1, { 'a.txt': 'a\n' });
+    fx.conf(fx.project, '');
+    trackGit([
+      'case " $* " in *" merge-tree "*)',
+      `  sleep 100 & echo $! >> '${path.join(h.home, 'git-pids')}'`,
+      '  kill -TERM $PPID; wait;;',
+      'esac',
+    ].join('\n'));
+    const r = fx.run();
+    await endsClean(r);
+    expect(fx.exists('probe'), 'a probe written from a killed merge-tree').toBe(false);
+  });
+
+  it('a signal in one project\'s closing path ends the tick before the next project is started', { timeout: 90_000 }, async () => {
+    const b = makeLandFixture(h, { project: 'proj-b', slug: 'o/r2' });
+    fx.addHead(1, { 'a.txt': 'a\n' });
+    b.addHead(1, { 'b.txt': 'b\n' });
+    fx.conf('proj-a', '');
+    fx.conf('proj-b', '');
+    trackGit();
+    const r = fx.runPatched('def bad(*a):\n    raise RuntimeError("planted")\nns["scratch_kib"] = bad', SIG('except-log'));
+    await endsClean(r, 'except-log');
+    expect(fx.readJson('probe').project).toBe('proj-a');
+    expect(fs.existsSync(b.landDir), 'proj-b was started').toBe(false);
+    expect(fx.ghCalls().filter((c) => c.includes('o/r2'))).toEqual([]);
+  });
+
+  it('a closing path that raises does not leave a later signal unraisable (CLOSING is let go in a finally)', { timeout: 90_000 }, async () => {
+    const b = makeLandFixture(h, { project: 'proj-b', slug: 'o/r2' });
+    fx.addHead(1, { 'a.txt': 'a\n' });
+    b.addHead(1, { 'b.txt': 'b\n' });
+    fx.conf('proj-a', '');
+    fx.conf('proj-b', '');
+    trackGit();
+    // proj-a's closing path raises after it removed its scratch; proj-b is then signalled as its measuring starts.
+    const r = fx.runPatched([
+      'import os, signal',
+      'real_rm = ns["remove_scratch"]',
+      'once = [True]',
+      'def rm(path):',
+      '    real_rm(path)',
+      '    if once[0]:',
+      '        once[0] = False',
+      '        raise RuntimeError("planted")',
+      'ns["remove_scratch"] = rm',
+      'real_heads = ns["open_heads"]',
+      'def heads(slug, base):',
+      '    if slug == "o/r2":',
+      '        os.kill(os.getpid(), signal.SIGTERM)',
+      '    return real_heads(slug, base)',
+      'ns["open_heads"] = heads',
+    ].join('\n'));
+    expect(r.stderr).toContain('project-error proj-a: RuntimeError');
+    await endsClean(r);
+    // The checkpoint after proj-b's refused forge read raised: nothing of proj-b was written.
+    expect(b.exists('probe'), 'proj-b measured on with its checkpoints dead').toBe(false);
+  });
+
+  it('a signal after the last checkpoint is held, and still sets the exit status', { timeout: 60_000 }, async () => {
+    fx.addHead(1, { 'a.txt': 'a\n' });
+    fx.conf(fx.project, '');
+    trackGit();
+    const r = fx.run(SIG('exit'));
+    await endsClean(r, 'exit');
+    expect(fx.readJson('probe')).toMatchObject({ state: 'measured' });
   });
 
   it('a SIGTERM between the fork and the record of the child (F1) is held to the unblock, and kills that child', { timeout: 120_000 }, async () => {
