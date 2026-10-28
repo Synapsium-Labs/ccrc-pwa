@@ -406,6 +406,12 @@ const PROG_A_SHORT = 'harbor-lights…';
 const PROG_B_SHORT = 'garden-stone…';
 const NAME_PROG_A = 'prog-row-a';
 const NAME_PROG_B = 'prog-row-b';
+/** Three needs-you rows (bucket `attention`) whose names are 30, 60 and 104 hyphen-joined characters, each with a short
+ *  branch for its context cell: in Instrument's status mode the state word (`waiting`, and its marker) goes on that
+ *  context line, never on a line of its own under a long name (R21's F2, the operator's R121). */
+const NAME_N30 = 'needs-reply-gentle-bridge-lamp';
+const NAME_N60 = 'needs-reply-narrow-garden-stone-silver-harbor-morning-cedars';
+const NAME_N104 = `${NAME_N60}-quiet-river-gentle-bridge-lamp-north-to-sea`;
 
 const fitRow = (slug: string, name: string, branch: string | null, extra: object = {}): object =>
   session(FIT_PROJECT, slug, { name, branch, status: 'busy', bucket: 'working', ...extra });
@@ -426,6 +432,9 @@ const FIT_SESSIONS = [
   fitRow('rbranch', NAME_BRANCH_ROW, BRANCH_120),
   fitRow('rproga', NAME_PROG_A, null, { held: `program:${PROG_A} wave:1/2 run:501` }),
   fitRow('rprogb', NAME_PROG_B, null, { held: `program:${PROG_B} wave:1/2 run:502` }),
+  fitRow('rn30', NAME_N30, 'ws/rn30', { bucket: 'attention', status: 'idle' }),
+  fitRow('rn60', NAME_N60, 'ws/rn60', { bucket: 'attention', status: 'idle' }),
+  fitRow('rn104', NAME_N104, 'ws/rn104', { bucket: 'attention', status: 'idle' }),
   fitRow('rsel', NAME_SELECTED, null),
 ];
 const FIT_SELECTED = `${FIT_PROJECT}-rsel`;
@@ -562,6 +571,69 @@ function measureProgramme(page: Page, name: string): Promise<ProgrammeBox> {
   }, name);
 }
 
+interface StatusRow {
+  readonly height: number;
+  /** Lines drawn by the name, and by the whole body (name, state word, context), counted as clusters of text centres. */
+  readonly nameLines: number;
+  readonly lines: number;
+  /** The state cell's first line sits on the context's first line (centres within 6 px), and on the name's first. */
+  readonly onContext: boolean;
+  readonly besideName: boolean;
+  readonly needsYou: boolean;
+}
+
+/** Measure an Instrument status row's lines, the way `instrument-desk.browser.test.ts` counts them: a line is a cluster
+ *  of text boxes whose vertical centres lie within 6 px of each other (the name's 15 px and the state's 12 px share a
+ *  line though their tops differ). */
+function measureStatusRow(page: Page, name: string): Promise<StatusRow> {
+  return page.evaluate((want) => {
+    // A clamped name's lines past the clamp still have text boxes, under the drawn ones: only a centre inside the
+    // element's own box counts.
+    const centres = (els: Element[]): number[] => {
+      const out: number[] = [];
+      for (const el of els) {
+        const own = el.getBoundingClientRect();
+        const walk = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+        for (let n = walk.nextNode(); n !== null; n = walk.nextNode()) {
+          if ((n.textContent ?? '').trim() === '' || n.parentElement!.closest('.sr-only') !== null) continue;
+          const range = document.createRange();
+          range.selectNodeContents(n);
+          for (const rc of range.getClientRects()) {
+            const c = rc.top + rc.height / 2;
+            if (rc.width > 0 && rc.height > 0 && c >= own.top && c <= own.bottom) out.push(c);
+          }
+        }
+      }
+      return out.sort((a, b) => a - b);
+    };
+    const lineCount = (cs: number[]): number => {
+      let n = 0;
+      let last = -Infinity;
+      for (const c of cs) if (c - last > 6) { n += 1; last = c; }
+      return n;
+    };
+    const line = [...document.querySelectorAll<HTMLElement>('.sess-line')].find((l) => {
+      const open = l.querySelector('.sess-open');
+      return (open?.querySelector('.sr-only') ?? open?.querySelector('.sess-label'))?.textContent === want;
+    });
+    if (line === undefined) throw new Error(`no row named ${want}`);
+    const body = line.querySelector('.sess-body')!;
+    const labels = [...line.querySelectorAll('.sess-open .sess-label')].filter((l) => l.getBoundingClientRect().width > 0);
+    const state = line.querySelector('.sess-meta:not(.sess-meta--context)');
+    const context = line.querySelector('.sess-meta--context');
+    const nameC = centres(labels);
+    const stateC = centres(state === null ? [] : [state]);
+    const contextC = centres(context === null ? [] : [context]);
+    const near = (a: number | undefined, b: number | undefined): boolean => a !== undefined && b !== undefined && Math.abs(a - b) <= 6;
+    return {
+      height: (line.closest('li') ?? line).getBoundingClientRect().height,
+      nameLines: lineCount(nameC), lines: lineCount(centres([...body.children])),
+      onContext: near(stateC[0], contextC[0]), besideName: near(stateC[0], nameC[0]),
+      needsYou: (state?.textContent ?? '').includes('needs you'),
+    };
+  }, name);
+}
+
 /** The name of the row that holds the focus, or null when the focus is in no row. */
 function focusedRow(page: Page): Promise<string | null> {
   return page.evaluate(() => {
@@ -586,6 +658,7 @@ describe('D-6332: a session row shows its name whole where it has room', () => {
   it('the fixture names are exactly 12, 30, 60, 104 and 60 (underscored) characters, and the branch is 120', () => {
     expect([NAME_12, NAME_30, NAME_60, NAME_104, NAME_SNAKE, BRANCH_120].map((n) => n.length)).toEqual([12, 30, 60, 104, 60, 120]);
     expect([NAME_UNBROKEN, NAME_SNAKE_26].map((n) => n.length)).toEqual([40, 26]);
+    expect([NAME_N30, NAME_N60, NAME_N104].map((n) => n.length)).toEqual([30, 60, 104]);
   });
 
   for (const { view, mode } of fitViews([1280, 1920])) {
@@ -649,6 +722,28 @@ describe('D-6332: a session row shows its name whole where it has room', () => {
         expect(m.scrollWidth, `no sideways overflow (${m.scrollWidth} of ${m.clientWidth}px)`).toBeLessThanOrEqual(m.clientWidth + 1);
         expect(m.height, 'at most two lines tall').toBeLessThanOrEqual(2 * one.height + 1);
         expect(m.openTitle, 'its full text stays in the row button title').toBe(NAME_SNAKE);
+        expect(await sideScroll(page)).toBe(0);
+        expect(errors).toEqual([]);
+      } finally {
+        await close();
+      }
+    });
+  }
+
+  for (const { view, mode } of fitViews([1280, 1920]).filter((v) => v.mode === 'status')) {
+    it(`a needs-you row keeps its state word on the context line, however long its name (${named(view)}, ${mode})`, async () => {
+      const { page, errors, close } = await bootFit(view, mode, `/s/${FIT_SELECTED}`);
+      try {
+        await expectSelectedRow(page);
+        for (const name of [NAME_N30, NAME_N60, NAME_N104]) {
+          const r = await measureStatusRow(page, name);
+          const where = `the ${name.length}-character needs-you row (${r.height}px, ${r.nameLines} name lines)`;
+          expect(r.needsYou, `${where} reads needs you`).toBe(true);
+          expect(r.onContext, `${where}: the state word is on the context line`).toBe(true);
+          expect(r.besideName, `${where}: the state word is not beside the name`).toBe(false);
+          // The name's lines and the context's one: the state word takes no line of its own.
+          expect(r.lines, `${where}: lines`).toBe(r.nameLines + 1);
+        }
         expect(await sideScroll(page)).toBe(0);
         expect(errors).toEqual([]);
       } finally {
