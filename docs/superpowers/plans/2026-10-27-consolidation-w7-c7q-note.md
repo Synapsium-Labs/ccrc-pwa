@@ -64,3 +64,21 @@ by the permanent `from` row.
 
 `TRANSCRIPT_SEQUENCES` carries one sequence beyond the plan's five: "(a) connect with a blank envelope and a copy", the
 stream-level twin of the corpus' blank-envelope state (the `ask` frame for a blank envelope pairs the copy).
+
+## slug split-step-1a
+
+The plan puts Step 1a (the move to `shared/ask-menu.ts`, which edits `pwa/src/session/askLive.ts`) and Step 2 (which
+edits `server/src/pane/askPairing.ts`) in one task. `askPairing.ts` is W3-owned (Q3g), and
+`consolidation-path-guard.test.ts`'s W3 row is red on a diff that touches a `pwa/` path beside a W3-owned file. The
+plan names only the W1a half of that guard, so it did not foresee this. The guard is not changed. Step 1a lands as its
+own PR, first, and this PR is rebased onto it, so this diff carries no `pwa/` path.
+
+## slug hook-copy-class
+
+The corpus gains a HOOK+COPY class, the most common live state: every usable corpus envelope (`usableQuestions`) over
+every parsed corpus screen whose `Dialog.ask` is the copy of one of that envelope's questions (675 rows: 459 that
+`askSource` answers structured from the hook, 216 on review screens). Both sides pair the hook's envelope there. Before
+it, the contrast states paired a copy only with no envelope, a blank one, a partly aligned one or an approval, so the
+permanent `from` row stayed green when either side preferred the copy over a usable envelope; only one sequence row
+held that choice. It is taken over every question, as the transcript class is. `transcript-corpus.json` is re-recorded
+with 675 rows added and no existing row changed.
