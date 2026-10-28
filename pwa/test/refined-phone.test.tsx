@@ -282,11 +282,21 @@ describe("Refined's phone header (W2 Task S5)", () => {
     stubSeventeen();
     atWidth(700);
     // jsdom lays nothing out: the observer answers the group's width, and the computed style names the tracks it draws.
+    // The strip's computed style is the real one with two properties answered (the accessible-name walk of a group query
+    // asks it for `getPropertyValue` too).
     const real = window.getComputedStyle.bind(window);
-    vi.spyOn(window, 'getComputedStyle').mockImplementation((el, pseudo) => (
-      el.classList.contains('accounts-strip')
-        ? ({ columnGap: '6px', gridTemplateColumns: '145.5px 145.5px 145.5px 145.5px' } as CSSStyleDeclaration)
-        : real(el, pseudo)));
+    const drawn: Record<string, string> = { columnGap: '6px', gridTemplateColumns: '145.5px 145.5px 145.5px 145.5px' };
+    vi.spyOn(window, 'getComputedStyle').mockImplementation((el, pseudo) => {
+      const style = real(el, pseudo);
+      if (!el.classList.contains('accounts-strip')) return style;
+      return new Proxy(style, {
+        get: (target, key: string) => {
+          if (key in drawn) return drawn[key];
+          const value = Reflect.get(target, key, target);
+          return typeof value === 'function' ? value.bind(target) : value;
+        },
+      });
+    });
     vi.stubGlobal('ResizeObserver', class {
       private readonly cb: ResizeObserverCallback;
       constructor(cb: ResizeObserverCallback) { this.cb = cb; }

@@ -4,20 +4,21 @@
 // that width into a count, so the width-to-count step is one function end to end.
 //
 // A phone folds to two measured lines (`FOLD_LINES`) of the tracks its grid DRAWS, which `useRowWidth` reads from the
-// grid's computed track list. The phone grid has no card floor: it is two columns below a 700 px viewport and four from
-// 700 (fleet.css), and its group is the same 600 px wide at 699 and 700, so a fit over the width (`rowFit`) cannot count
-// its tracks (the coordinator's ruling for S5c: read the drawn tracks; `rowFit` stays the desk's). Two lines of the
-// drawn tracks is four lanes in two columns and eight in four, never a ragged row; before the first measure the phone
-// shows `FOLD_SHOWN`, so its first paint is never the full strip. A desk folds to one line, as many cards as `rowFit` says the line's tracks hold, less the track the
-// end cell (the control and All accounts) takes. The file also holds the two delays of the desk's hover flyout
-// (`FLYOUT_OPEN_MS`, `FLYOUT_CLOSE_MS`), which are pure numbers the strip's timers and the tests share.
+// grid's computed track list. The phone grid has no card floor: it is two columns below a 700 px viewport and four
+// from 700 (fleet.css), and its group is the same 600 px wide at 699 and 700, so a fit over the width (`rowFit`)
+// cannot count its tracks (the coordinator's ruling for S5c: read the drawn tracks; `rowFit` stays the desk's). Two
+// lines of the drawn tracks is four lanes in two columns and eight in four, never a ragged row; before the first
+// measure the phone shows `FOLD_SHOWN`, so its first paint is never the full strip. A desk folds to one line, as many
+// cards as `rowFit` says the line's tracks hold, less the track the end cell (the control and All accounts) takes. The
+// file also holds the two delays of the desk's hover flyout (`FLYOUT_OPEN_MS`, `FLYOUT_CLOSE_MS`), which are pure
+// numbers the strip's timers and the tests share.
 import type { AccountUsage } from '../../../shared/api';
 import type { AccountStateWord } from '../../../shared/accounts';
 import { stateWordFor } from '../../../shared/accounts';
 import { SIGN_IN_EXPIRED } from '../lib/accounts';
 
-/** The lanes a folded phone strip shows before its grid is measured: two lines of the two-column grid. Its first paint is
- *  never the full strip. A measured phone shows `FOLD_LINES` lines of its tracks instead (`foldShown`). */
+/** The lanes a folded phone strip shows before its grid is measured: two lines of the two-column grid. Its first paint
+ *  is never the full strip. A measured phone shows `FOLD_LINES` lines of its tracks instead (`foldShown`). */
 export const FOLD_SHOWN = 4;
 
 /** How many lines a folded phone strip shows: a folded phone strip shows two lines. */
@@ -47,8 +48,9 @@ export function rowFit(width: number | null, cardMin: number, gap: number): numb
   return Math.max(1, Math.floor((width + gap) / (cardMin + gap)));
 }
 
-/** How many lanes a folded strip shows. A phone: `FOLD_LINES` lines of the `tracks` its grid draws, at least one; `FOLD_SHOWN`, never `null`, while `tracks` is null (unmeasured). A desk: one fewer
- *  than the line's `tracks` (the last track is the end cell's), at least one; `null` when the row is unmeasured. */
+/** How many lanes a folded strip shows. A phone: `FOLD_LINES` lines of the `tracks` its grid draws, at least one;
+ *  `FOLD_SHOWN`, never `null`, while `tracks` is null (unmeasured). A desk: one fewer than the line's `tracks` (the
+ *  last track is the end cell's), at least one; `null` when the row is unmeasured. */
 export function foldShown(desk: boolean, tracks: number | null): number | null {
   if (!desk) return tracks === null ? FOLD_SHOWN : Math.max(1, FOLD_LINES * tracks);
   return tracks === null ? null : Math.max(1, tracks - 1);
