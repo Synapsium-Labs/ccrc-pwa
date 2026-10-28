@@ -273,9 +273,10 @@ describe('one count at the desk (T2g, D-6715)', () => {
   }
 
   // Green at the base (Step 0 measured it whole there): a guard for the one count left, which must not be cut with an
-  // ellipsis now that the column's copy is gone. A release waits in this fixture (R51 F1), so the count is measured
-  // beside the update indicator, which is drawn, once, whole inside the bar: a case that never drew it measured a bar
-  // with more room than the operator's.
+  // ellipsis now that the column's copy is gone. A release waits in this fixture (R51 F1), so the case asserts two
+  // things in the same bar: the count is whole, and the update indicator is drawn, once, whole and inside the bar. It
+  // does not relate the two boxes (no adjacency is claimed); a case that never drew the indicator measured a bar with
+  // more room than the operator's.
   for (const touch of [false, true]) {
     it(`at 900 the status bar's count is whole, with two open runs and a release waiting (${touch ? 'touch' : 'fine pointer'})`, async () => {
       const { ctx, page } = await open(PHOSPHOR, 900, 800, '/', touch, WITH_RUNS);
