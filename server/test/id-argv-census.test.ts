@@ -350,7 +350,7 @@ const GATES = {
   'learn-expiry-step-0': { file: 'coord/expireArchived.ts', scope: 'learnExpiry', re: EXPIRY_STEP_0 },
   /** The collector executor's step 1. */
   'collector-step-1': {
-    file: 'coord/collectTempRoot.ts', scope: 'collectTempRoot',
+    file: 'coord/collectTempRoot.ts', scope: 'collectIdJudge',
     re: /if \(looseHex === null && !isTmpRootId\(job\.id\)\) return \{ kind: 'not-asked', step: 1, why: 'id-refused'/,
   },
   /** The learning audit's own id gate (path-identity W2), first in `learnCollect`: the twin of the step-1 check. */
