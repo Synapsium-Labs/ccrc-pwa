@@ -769,10 +769,14 @@
    `.account-gauge` below) and All accounts after the last card, a row of its own on a phone. The strip is a plain group
    while it has cards. Only the placeholder, no lane to show, is itself one door to /accounts (D-161), and so only
    `.accounts-strip[role="link"]` takes the floor and the pointer. */
-.accounts-strip {
+.accounts-strip,
+.accounts-flyout {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 6px;
+}
+.accounts-strip {
+  position: relative;
   margin-bottom: var(--sp-2);
 }
 .accounts-strip[role="link"] {
@@ -780,7 +784,8 @@
   cursor: pointer;
 }
 @media (min-width: 700px) {
-  .accounts-strip { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .accounts-strip,
+  .accounts-flyout { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 }
 /* The end cell: the fold's control (when the strip folds) and then All accounts, a gap between them. Its own row under
    the cards on a phone (and wherever the cards wrap to two columns); the desk's frame header puts it in the row's
@@ -807,6 +812,28 @@
 }
 .accounts-end > :not([aria-controls]) {
   flex: none;
+}
+/* The phone's panel (phone-strip-tap-panel): every lane's card, opened by a tap on the fold's control. It sits in the
+   end cell after the control, but hangs from the strip (`position: relative` above): just under the strip's bottom
+   edge and across its width, drawn over the content and pushing none of it down. Its cards wrap in the strip's own
+   phone grid (the selector lists above). Taller than the room left under the strip, it scrolls itself: that room is
+   `--panel-room`, which the strip measures when the panel opens and gives it inline, so this default (the whole
+   viewport) holds only until then. Layer, hairline and the pop shadow: the surface the other floating panels use. The
+   desk's frame header restyles the same class for its hover flyout (shell.css). */
+.accounts-flyout {
+  --panel-room: 100dvh;
+  position: absolute;
+  top: calc(100% + var(--sp-1));
+  left: 0;
+  right: 0;
+  z-index: var(--z-sheet);
+  max-height: calc(var(--panel-room) - var(--sp-1) - var(--sp-2));
+  overflow-y: auto;
+  padding: var(--sp-2);
+  background: var(--bg-surface);
+  border: 1px solid var(--edge-subtle);
+  border-radius: var(--r-md);
+  box-shadow: var(--elev-pop);
 }
 .account-gauge {
   display: grid;
