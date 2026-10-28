@@ -38,10 +38,15 @@
 //   `FleetHead`'s nothing-to-draw `return null` removed  "…and there is no head when they agree", "Refined at 1280 on an empty fleet with no lag draws no …", T2e's census case
 //   Refined's `Sidebar` passes `headCount={false}` ..... "Refined's desk column keeps its count line"
 //   the flag removed and `@media (min-width: 900px) { .shell-nav .fleet-count { display: none } }` in instrument.css
-//                                                       skin-boundary (j) "holds on the real tree" (and three of its siblings, which scan the real sheet), and
-//                                                         "at 900, 1280 and 1920 Instrument's list column draws no count line, …"
+//                                                       seven red cases (measured, T2f R51 F5), four in skin-boundary.test.ts, all under (j) "no skin stylesheet hides by width":
+//                                                         "holds on the real tree", "display: none under @container is red",
+//                                                         "a pseudo-element is exempt, but not when an element shares its selector list" and
+//                                                         "hiding outside a width block is not this case's" (the last three scan the real sheet too); and three here:
+//                                                         T2e's "at 900, 1280 and 1920 the frame holds one wordmark, and one each of the Docs, Accounts, Settings, Inbox and Bell doors",
+//                                                         "at 900, 1280 and 1920 Instrument's list column draws no count line, …" and
+//                                                         "at the desk the list column's head is the pool lag alone when the epochs differ, and there is no head when they agree"
 // Row 8 (Step 0's `flex: none` removed) does not apply: Step 0 found the count whole at 900, so T2g adds no `flex: none`.
-// Rows 1, 4 and 7 also run in browser/instrument-desk.browser.test.ts (its own table).
+// Rows 1 and 4 also run in browser/instrument-desk.browser.test.ts (its own table); row 7 (`.ins-status-summary { max-width: 6ch }`, the plan's row 7) runs only there.
 //
 // W2 Task T2d (desk-polish, D-6330): the rail's Inbox door counts what waits on the operator, as Refined's tab does.
 // MUTATION TABLE (plan Task T2d Step 3; RUN, each mutant on the working tree, this suite alone, then reverted):
