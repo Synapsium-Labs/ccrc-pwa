@@ -310,7 +310,9 @@ export function SessionScreen({
   const parentId = live === null ? null : parentIdOf(live, activeRuns);
   const factsNow = useNow(30_000);
   // Desktop polish Task C7, review 1128: the transcript's day, from this same clock. A row whose words read the clock
-  // (the usage-limit pill) draws again when it changes, within one tick of local midnight; no other row does.
+  // (the usage-limit pill) draws again when it changes, within one tick of local midnight. The row barrier skips the
+  // day for every other row, so midnight alone redraws none of them; a bubble that another prop change redraws after
+  // midnight sees the new day too, which costs it one memo miss and no markdown work (`ChatMarkdown`'s own memo).
   const day = dayKey(factsNow);
   const presence = parentId === null ? null : coordPresence(parentId, lookup(parentId), fleetFrameSeen);
   const facts = live === null ? null : sessionFacts({

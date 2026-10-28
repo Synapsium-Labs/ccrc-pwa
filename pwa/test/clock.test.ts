@@ -30,4 +30,20 @@ describe('dayKey (C7, review 1128)', () => {
     expect(dayKey(new Date(2026, 10, 28).getTime())).not.toBe(dayKey(morning));
     expect(dayKey(new Date(2027, 9, 28).getTime())).not.toBe(dayKey(morning));
   });
+
+  // Review 1132 A4 (C12 item 21): CI runs in UTC, where a UTC date and the local one are the same, so a `getUTC*` key
+  // passed every case above there. In a zone 14 hours east of UTC, noon UTC is already the next local day, and the key is
+  // the local one. Node reads TZ at run time; the zone is put back after.
+  it("is the viewer's local date, not the UTC one, whatever the runner's zone", () => {
+    const was = process.env['TZ'];
+    try {
+      process.env['TZ'] = 'Pacific/Kiritimati';
+      const noonUtc = Date.UTC(2026, 9, 28, 12, 0);
+      expect(new Date(noonUtc).getDate(), 'the zone took: local is already the 29th').toBe(29);
+      expect(dayKey(noonUtc)).toBe('2026-10-29');
+    } finally {
+      if (was === undefined) delete process.env['TZ'];
+      else process.env['TZ'] = was;
+    }
+  });
 });

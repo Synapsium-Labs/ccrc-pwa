@@ -161,7 +161,9 @@ export const MessageBubble = memo(function MessageBubble({
   streaming?: boolean;
   /** The viewer's local day (`lib/clock.ts#dayKey`). No line here reads it: the usage-limit pill reads the clock when it
    *  draws (`resetClock`), and a new day is a new prop, so the memo lets the pill draw again at local midnight
-   *  (review 1128). */
+   *  (review 1128). Every bubble gets it, but the row barrier compares it only for a row that reads the clock, so for
+   *  any other bubble a new day lands only with another prop change, as one memo miss that `ChatMarkdown`'s memo
+   *  absorbs. */
   day?: string;
 }): ReactNode {
   if (event.kind === 'system') {
