@@ -2257,11 +2257,11 @@ describe('the well hues are gated', () => {
   });
 
   it('measures the failed word on the card and the inline-code chip on the well, in every palette', () => {
-    // `.tool-fail` takes the dead text on the tool card's surface; `.msg-assist .md-code` paints its own well pair, so
-    // it is measured wherever the prose hook class is (the chat and the Docs reader alike), not by an ancestor.
+    // Docs and compaction keep the raised pair; assistant messages use the scoped well pair.
     for (const [key, pair] of [
       ['.tool-fail', 'var(--status-dead-text) on var(--bg-surface)'],
-      ['.msg-assist .md-code', 'var(--ink-on-well) on var(--bg-well)'],
+      ['.msg-assist .md-code', 'var(--ink-primary) on var(--bg-raised)'],
+      ['.msg-assist:not(.doc-body):not(.compaction-body) .md-code', 'var(--ink-on-well) on var(--bg-well)'],
     ] as const) {
       expect(report.uncovered, key).not.toContain(key);
       expect(GRANDFATHERED_UNCOVERED.has(key), key).toBe(false);
