@@ -6175,15 +6175,21 @@ session's 100, and a `CPUQuota` (400%), and no `MemoryHigh`: a session always wi
 killed inside the slice, never pushing the session slice into reclaim. Each value is a setting (see **ccrc's own
 settings**), applied with `systemctl --user set-property --runtime` before every run; the unit file holds the
 defaults. A slice the user manager has not loaded is refused, never created, since `systemd-run --slice=` would make
-an unlimited one. A heavy run (tsc and typecheck, a vitest or jest run naming no test file or more than
-`CCRC_TEST_WIDE_FILES`, browser, mutation and `npm test` runs) first takes one of `CCRC_TEST_HEAVY_SLOTS` (default 2)
-slots, a lock file `~/.cc-sessions/test-slots/slot-<n>` held with `flock` for the run, so a killed holder frees its
-slot at once; a run that finds them all held prints that it is queued, and who holds them, and starts when one frees.
-With `CCRC_TEST_PRESSURE_MAX` above 0 a heavy run also waits while memory or CPU pressure (PSI `some avg10`) is above
-it. A light run takes no slot. On macOS the command runs uncontained, saying so, and still queues. The worker and
-coordinator skills (clause 18) send every test and typecheck through `ccrc test`, and the session hook denies a Bash
-call that starts a test or typecheck under `systemd-run` of its own; the vitest worker cap a box sets in its sessions'
-environment still applies inside the slice. Doctor's `test-slice` check shows the slice's live memory against its live
+an unlimited one. A heavy run (tsc and typecheck, a vitest or jest run naming no test file, a directory, a glob or a
+filter, or more than `CCRC_TEST_WIDE_FILES` test files, browser, mutation and `npm test`/`npm t` runs; a flag's value
+is never counted as a file, and a `sh -c` string is read command by command) first takes one of
+`CCRC_TEST_HEAVY_SLOTS` (default 2) slots, a lock file `~/.cc-sessions/test-slots/slot-<n>` held with `flock`. The
+slot is the run's: the command inherits the lock, so a wrapper killed by SIGKILL leaves its run counted, and the next
+waiter stops that orphaned run's scope before taking the slot. When the command ends, its scope is stopped, so a
+process it left behind (a leaked vitest worker) ends with it. A signal to a queued run leaves the queue and exits
+128+signal without starting the command. A run that finds every slot held prints that it is queued, and who holds
+them, and starts when one frees. With `CCRC_TEST_PRESSURE_MAX` above 0 a heavy run also waits while memory or CPU
+pressure (PSI `some avg10`) is above it. A light run takes no slot. On macOS the command runs uncontained, saying so,
+and still queues, its slot following the wrapper. The worker and coordinator skills (clause 18) send every test and
+typecheck through `ccrc test`. The session hook denies a Bash call that starts a test or typecheck under
+`systemd-run` of its own, and, on a fleet box (Linux, a registered session), one whose command line starts a heavy run
+in command position outside `ccrc test`, read by `ccrc test --classify-shell`, the wrapper's own classifier. The
+vitest worker cap a box sets in its sessions' environment still applies inside the slice. Doctor's `test-slice` check shows the slice's live memory against its live
 cap, its other limits, and how many heavy slots are held and how many runs wait. The PWA control for the cap and the
 queue size is a follow-up.
 

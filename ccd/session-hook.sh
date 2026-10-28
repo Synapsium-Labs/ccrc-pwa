@@ -4778,7 +4778,7 @@ fi
 # placed by hand escapes the test slice's caps or the admission queue, and a unit of its own escapes both. An accident
 # guard, and it fails open like the arms above: a payload jq cannot parse says nothing. Only a Bash call whose payload
 # names `systemd-run` forks a jq, and `ccrc test` itself never reaches here (it calls systemd-run from its own shell).
-TRUN_RE='(^|[[:space:];&|(`/])systemd-run([[:space:]]|$)'
+TRUN_RE='(^|[[:space:];&|(`/=])systemd-run([[:space:];&|)]|$)'   # `=`, and a `;` after it: `S=systemd-run; $S …` names it too
 TWORD_RE='(^|[^[:alnum:]_])(vitest|jest|tsc|vue-tsc|typecheck[[:alnum:]_:-]*|playwright|stryker)([^[:alnum:]_]|$)|(^|[^[:alnum:]_])(npm|pnpm|yarn)[[:space:]]+(run[[:space:]]+)?test([^[:alnum:]_]|$)'
 if [[ "$event" == PreToolUse && "$pre_json" != *'"permissionDecision":"deny"'* && "${tool:-}" == Bash && "$payload" == *systemd-run* ]]; then
   tcmd=$(jq -r '.tool_input.command // "" | strings' <<<"$payload" 2>/dev/null) || tcmd=""
@@ -4786,6 +4786,28 @@ if [[ "$event" == PreToolUse && "$pre_json" != *'"permissionDecision":"deny"'* &
     treason="ccrc: run tests and typechecks through \`ccrc test -- <command>\` (for example \`ccrc test -- npx vitest run --maxWorkers=2 test/foo.test.ts\`), never under a systemd-run of your own: \`ccrc test\` puts the run in the fleet's test slice, whose caps keep sessions ahead of tests, and queues heavy runs (tsc, typecheck, full or wide vitest, browser and mutation tests) fleet-wide (D-TBD-test-containment)."
     if tjson=$(_hook_deny_json "$treason"); then pre_json=$tjson; fi
   fi
+fi
+
+# A HEAVY RUN STARTED BARE (D-TBD-test-containment): on a fleet box (Linux, a session the registry knows), a Bash call
+# whose command line starts a heavy test or typecheck in command position outside `ccrc test` (`npx vitest run`, `npx tsc
+# -p test/tsconfig.tests.json`, `npm test`, and the same under `env`, `sh -c`, `tmux new-window` or a `$VAR`) is denied,
+# with a reason that names `ccrc test`. Such a run lands in the session's own pane scope, or tmux's server scope, past
+# the test slice and the queue. The reading is `ccrc test --classify-shell`, the wrapper's own classifier, so the hook
+# and the queue agree on what is heavy, and a light run (one or a few named test files) is allowed. macOS has no slice,
+# so the arm is off there. An accident guard that fails open: no `ccrc` on PATH, a payload jq cannot parse, or a
+# classifier that answers anything but `heavy` says nothing. Only a Bash call whose payload names a test program or a
+# package manager forks jq and the classifier, bounded like the tmux question above when a bound is on PATH.
+if [[ "$event" == PreToolUse && "$pre_json" != *'"permissionDecision":"deny"'* && "${tool:-}" == Bash \
+      && "${OSTYPE:-}" == linux* && -n "$id" && -f "$REG/$id.generation" ]]; then
+  case "$payload" in
+    *vitest*|*jest*|*tsc*|*tsgo*|*typecheck*|*playwright*|*stryker*|*npm*|*pnpm*|*yarn*|*bun*)
+      hcmd=""
+      if command -v ccrc >/dev/null 2>&1; then hcmd=$(jq -r '.tool_input.command // "" | strings' <<<"$payload" 2>/dev/null) || hcmd=""; fi
+      if [[ -n "$hcmd" && "$(${hooktmo:+"$hooktmo" 5} ccrc test --classify-shell -- "$hcmd" 2>/dev/null)" == heavy ]]; then
+        hreason="ccrc: this command starts a heavy test or typecheck outside \`ccrc test\`, so it would run in this session's own scope, past the fleet's test slice and its queue. Run it as \`ccrc test -- <command>\` (for example \`ccrc test -- npx tsc --noEmit -p test/tsconfig.tests.json\`): heavy runs (tsc, typecheck, full or wide vitest, browser and mutation tests) queue fleet-wide inside the slice, whose caps keep sessions ahead of tests (D-TBD-test-containment)."
+        if hjson=$(_hook_deny_json "$hreason"); then pre_json=$hjson; fi
+      fi ;;
+  esac
 fi
 
 # A FAN-OUT NAMES ITS MODEL, AND A WORKFLOW AGENT ITS EFFORT TOO (D-6798; operator ruling 2026-10-24): on every session, an

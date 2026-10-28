@@ -4,6 +4,7 @@
 #
 #   ccrc test [--heavy|--light] [--] <command> [<arg>...]
 #   ccrc test --classify [--] <command> [<arg>...]   # prints heavy or light
+#   ccrc test --classify-shell [--] '<command line>'  # heavy when it starts a heavy run outside ccrc test
 #   ccrc test --status                               # the slice and the queue, one line
 #
 # WHY. On a fleet box about twenty sessions each ran vitest, tests-inclusive
@@ -35,11 +36,19 @@
 # THE QUEUE. A HEAVY run (`_heavy` below: tsc and typecheck, a full or wide
 # vitest or jest run, browser tests, mutation tests, `npm test`) takes one of
 # CCRC_TEST_HEAVY_SLOTS slots before it starts. A slot is a lock file in the
-# registry, `~/.cc-sessions/test-slots/slot-<n>`, held with `flock` by this
-# process for the whole run; `slot-<n>.who` says who holds it. The kernel
-# drops a lock when its holder dies, so a killed holder frees its slot at once,
-# with nothing to reap. The command itself runs with the lock's descriptor
-# closed: the slot is this wrapper's, and lives exactly as long as it does. A
+# registry, `~/.cc-sessions/test-slots/slot-<n>`, held with `flock` for the
+# whole run; `slot-<n>.who` says who holds it. THE SLOT IS THE RUN'S, not this
+# wrapper's: in the slice the command inherits the lock's descriptor, so the
+# lock lives as long as any process of the run, and a wrapper killed by SIGKILL
+# (a tool timeout that kills only the parent) leaves its run still counted,
+# never a second heavy run beside it under the same slot. A waiter that finds a
+# slot held by a gone wrapper stops that orphaned run's scope, which nobody
+# watches, and the kernel then drops the lock. When the command ends, its scope
+# is stopped too, so a process it left behind (a leaked vitest worker) ends with
+# the run instead of staying charged to the slice. Uncontained (macOS) there is
+# no scope to bound the run's tree, so there the command runs with the
+# descriptor closed and the slot follows the wrapper. A signal to a queued run
+# leaves the queue and exits 128+signal: the command never starts. A
 # run that finds every slot held prints once that it is queued, and who holds
 # the slots, then waits; `wait-<pid>` (locked the same way) is what
 # `--status` counts as waiting. With CCRC_TEST_PRESSURE_MAX above 0, a heavy
@@ -70,7 +79,7 @@ POLL_S="${CCRC_TEST_POLL_S:-2}"
 PROC_ROOT="${CCRC_PROC_ROOT:-/proc}"
 
 _tdie() { echo "$PROG: $*" >&2; exit 1; }
-_tusage() { echo "$PROG: $*" >&2; echo "usage: ccrc test [--heavy|--light] [--] <command> [<arg>...] | --classify [--] <command>... | --status" >&2; exit 2; }
+_tusage() { echo "$PROG: $*" >&2; echo "usage: ccrc test [--heavy|--light] [--] <command> [<arg>...] | --classify [--] <command>... | --classify-shell [--] '<line>' | --status" >&2; exit 2; }
 
 # ── the settings, validated ───────────────────────────────────────────────
 # `_test_knobs` (ccd/ccrc) prints `KEY<US>default<US>value<US>from` per setting (US, octal 037, is not IFS whitespace,
@@ -117,39 +126,211 @@ _tload() {
 }
 
 # ── heavy or light ────────────────────────────────────────────────────────
-# Heavy: a typecheck (`tsc`, `vue-tsc`, any word naming `typecheck`), browser or end-to-end tests (`playwright`, any
-# word naming `browser`), mutation tests (`stryker`), a package manager's whole suite (`npm test`, `npm run test…`, and
-# the same under pnpm, yarn and bun), and a vitest or jest run that names no test file or more than
-# CCRC_TEST_WIDE_FILES of them. Everything else is light. A word is read by its last path component, so `npx vitest`,
-# `./node_modules/.bin/vitest` and `vitest` are one program.
-_heavy() {   # <wide> <command> [<arg>...] -> 0 heavy, 1 light
-  local wide="$1" w b i=0 prog="" files=0
+# Heavy: a typecheck (`tsc`, `vue-tsc`, `tsgo`, any word naming `typecheck`), browser or end-to-end tests (`playwright`,
+# vitest's `--browser`), mutation tests (`stryker`), a package manager's whole suite (`npm test`, `npm t`, `npm run
+# test…`, `npm run t`, and the same under pnpm, yarn and bun), and a vitest or jest run that is WIDE or names more than
+# CCRC_TEST_WIDE_FILES test files. Only a word naming a test file (`*.test.*`, `*.spec.*`) is counted; a directory, a
+# glob or a name filter makes the run wide, and a flag's value (`--config vitest.config.ts`, `--project server`) is
+# skipped, never counted. Everything else is light: installing a package that names a test program among them. A word is
+# read by its last path component, a script extension dropped, so `npx vitest`, `./node_modules/.bin/vitest`, `vitest`
+# and `node node_modules/vitest/vitest.mjs` are one program.
+#
+# A shell's `-c` string (`sh -c`, `bash -lc`) and a tmux window's command are read as scripts, by `_tshell_heavy`: each
+# simple command in them, its prefixes (assignments, `env` and its options, `timeout`, `nice`, `command`…) dropped, is
+# classified in command position. `--classify-shell` is the same reader over a whole Bash command line, for the session
+# hook (ccd/session-hook.sh), which denies a heavy run started outside `ccrc test` on a fleet box: one classifier for the
+# wrapper and the hook. In that reading a `ccrc test` command is already contained and is skipped, and a command word
+# that is no package manager, node, test program or `$variable` is light whatever its arguments say, so `grep vitest`,
+# `git commit -m 'npm test'` and `echo tsc` stay light.
+_tvalflag() {   # <flag> -> 0 when a vitest or jest flag takes the next word as its value
+  case "$1" in
+    -c|--config|-r|--root|--dir|--project|--reporter|--reporters|--outputFile|--environment|--env|-t|--testNamePattern \
+      |--testPathPattern|--testPathIgnorePatterns|--shard|--pool|--maxWorkers|--minWorkers|--exclude|--mode \
+      |--selectProjects|--rootDir|--testRegex|--testTimeout|--workspace) return 0 ;;
+  esac
+  return 1
+}
+_targv_heavy() {   # <wide> <command> [<arg>...] -> 0 heavy, 1 light (the argv reading)
+  local wide="$1" w p i j n prog="" files=0 wideb=0 sub=1
   shift
   local -a a=("$@")
-  for w in "${a[@]}"; do
-    b="${w##*/}"
-    case "$b" in
-      tsc|vue-tsc|tsgo|playwright|stryker) return 0 ;;
-      *typecheck*|*browser*) return 0 ;;
-    esac
-  done
-  for ((i = 0; i < ${#a[@]}; i++)); do
-    b="${a[i]##*/}"
-    case "$b" in
-      npm|pnpm|yarn|bun) [ "${a[i+1]:-}" = test ] && return 0
-        [[ "${a[i+1]:-}" = run && "${a[i+2]:-}" == test* ]] && return 0 ;;
-      vitest|jest) prog="$b"; break ;;
+  n=${#a[@]}
+  for ((i = 0; i < n; i++)); do
+    p="${a[i]##*/}"
+    case "$p" in *.mjs|*.cjs|*.js) p="${p%.*}" ;; esac
+    case "$p" in
+      tsc|vue-tsc|tsgo|stryker|*typecheck*) return 0 ;;
+      playwright) case "${a[i+1]:-}" in install|install-deps|uninstall) return 1 ;; esac; return 0 ;;
+      npm|pnpm|yarn|bun)
+        j=$((i + 1))
+        while ((j < n)); do
+          case "${a[j]}" in
+            --prefix|-C|--dir|--filter|-F|-w|--workspace|--cwd) j=$((j + 2)) ;;
+            -*) j=$((j + 1)) ;;
+            *) break ;;
+          esac
+        done
+        case "${a[j]:-}" in
+          test|test[:-]*|t|tst) return 0 ;;
+          run|run-script) case "${a[j+1]:-}" in t|tst|test*|*typecheck*) return 0 ;; esac ;;
+          install|i|add|ci|remove|rm|uninstall|update|up|upgrade|link) return 1 ;;
+        esac ;;
+      vitest|jest) prog="$p"; break ;;
     esac
   done
   [ -n "$prog" ] || return 1
-  for ((i = i + 1; i < ${#a[@]}; i++)); do
+  for ((i = i + 1; i < n; i++)); do
     w="${a[i]}"
     case "$w" in
-      -*|run|watch|related|bench) ;;
-      *.ts|*.tsx|*.js|*.jsx|*.mjs|*.cjs|*.mts|*.cts|*/*) files=$((files + 1)) ;;
+      --browser|--browser=*|--browser.*) return 0 ;;
+      --|--*=*) ;;
+      -*) ! _tvalflag "$w" || i=$((i + 1)) ;;
+      *)
+        if [ "$sub" = 1 ]; then
+          sub=0
+          case "$w" in run|watch|dev|related|bench) continue ;; esac
+        fi
+        case "$w" in
+          *'*'*|*'?'*|*'['*) wideb=1 ;;
+          *.test.*|*.spec.*) files=$((files + 1)) ;;
+          *) wideb=1 ;;
+        esac ;;
     esac
   done
-  [ "$files" -eq 0 ] || [ "$files" -gt "$wide" ]
+  [ "$wideb" = 1 ] || [ "$files" -eq 0 ] || [ "$files" -gt "$wide" ]
+}
+_tstrip() {   # <word>... -> TW: the words from the command word on
+  TW=("$@")
+  local i=0 n=${#TW[@]} w
+  while ((i < n)); do
+    w="${TW[i]}"
+    if [[ "$w" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]]; then i=$((i + 1)); continue; fi
+    case "$w" in
+      '!'|'{'|'}'|then|do|else|elif|if|while|until|command|exec|time|nohup|builtin) i=$((i + 1)) ;;
+      env)
+        i=$((i + 1))
+        while ((i < n)); do
+          case "${TW[i]}" in
+            -u|-C|--unset|--chdir) i=$((i + 2)) ;;
+            -*) i=$((i + 1)) ;;
+            *) [[ "${TW[i]}" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]] && i=$((i + 1)) || break ;;
+          esac
+        done ;;
+      nice|ionice|stdbuf|timeout)
+        i=$((i + 1))
+        while ((i < n)); do
+          case "${TW[i]}" in
+            -n|-c|-s|-k|--signal|--kill-after) i=$((i + 2)) ;;
+            -*) i=$((i + 1)) ;;
+            *) break ;;
+          esac
+        done
+        [ "$w" != timeout ] || i=$((i + 1)) ;;   # its duration
+      *) break ;;
+    esac
+  done
+  TW=("${TW[@]:i}")
+}
+# One line per simple command in a shell string, its words joined by US (octal 037), quotes removed. A word is cut at
+# blanks outside quotes; a command at `;`, `&`, `|`, a newline, `(`, `)`, a backquote and `$(`, outside single quotes, so
+# a command substitution is read as a command of its own. A redirection and its target are dropped, and so is a comment.
+# Not a shell: an accident guard's reader, which errs towards reading a command (heavy) rather than missing one.
+_tsegments() {   # <string>
+  local s="$1" i n=${#1} c q="" back="" w="" have=0 skip=0 seg="" US=$'\037'
+  for ((i = 0; i < n; i++)); do
+    c="${s:i:1}"
+    if [ "$q" = "'" ]; then if [ "$c" = "'" ]; then q=""; else w+="$c"; fi; continue; fi
+    if [ "$c" = '\' ]; then i=$((i + 1)); w+="${s:i:1}"; have=1; continue; fi
+    if [ "$q" = '"' ]; then
+      case "$c" in
+        '"') q="" ;;
+        '`') q=""; back='"'; c=';' ;;
+        '$') if [ "${s:i+1:1}" = '(' ]; then q=""; back='"'; c=';'; i=$((i + 1)); else w+="$c"; fi ;;
+        *) w+="$c" ;;
+      esac
+      [ "$c" = ';' ] || continue
+    fi
+    if [ "$c" = '$' ] && [ "${s:i+1:1}" = '(' ]; then c=';'; i=$((i + 1)); fi
+    case "$c" in
+      "'"|'"') q="$c"; have=1; continue ;;
+      '#') if [ "$have" = 0 ]; then while ((i + 1 < n)) && [ "${s:i+1:1}" != $'\n' ]; do i=$((i + 1)); done; continue; fi
+           w+="$c"; continue ;;
+      '>'|'<')
+        if [ "$have" = 1 ] && [[ "$w" =~ ^[0-9]+$ ]]; then w=""; have=0; fi
+        if [ "$have" = 1 ]; then { [ "$skip" = 1 ] && skip=0; } || seg+="$w$US"; w=""; have=0; fi
+        while ((i + 1 < n)) && [[ "${s:i+1:1}" == [\<\>\&\|] ]]; do i=$((i + 1)); c="${s:i:1}"; done
+        if [ "$c" = '&' ] && [[ "${s:i+1:1}" == [0-9-] ]]; then
+          while ((i + 1 < n)) && [[ "${s:i+1:1}" == [0-9-] ]]; do i=$((i + 1)); done
+        else skip=1; fi
+        continue ;;
+      ' '|$'\t'|';'|'&'|'|'|$'\n'|'('|')'|'`') ;;
+      *) w+="$c"; have=1; continue ;;
+    esac
+    if [ "$have" = 1 ]; then { [ "$skip" = 1 ] && skip=0; } || seg+="$w$US"; w=""; have=0; fi
+    case "$c" in ' '|$'\t') ;; *) [ -z "$seg" ] || printf '%s\n' "$seg"; seg=""; skip=0 ;; esac
+    # The end of a substitution opened inside double quotes returns to them: `"$(…)"` closes where it opened.
+    case "$c" in ')'|'`') if [ -n "$back" ]; then q="$back"; back=""; have=1; fi ;; esac
+  done
+  if [ "$have" = 1 ]; then { [ "$skip" = 1 ] && skip=0; } || seg+="$w$US"; fi
+  [ -z "$seg" ] || printf '%s\n' "$seg"
+}
+_tcmd_heavy() {   # <wide> <how: argv, shell or hook> <command> [<arg>...] -> 0 heavy
+  # argv: the wrapper's own command, read whole. shell: one simple command of a shell string, read only when its command
+  # word is a test program. hook: as shell, and a `ccrc test` command is skipped, as already contained.
+  local wide="$1" how="$2" p i n
+  shift 2
+  local -a a=("$@")
+  n=${#a[@]}
+  ((n > 0)) || return 1
+  p="${a[0]##*/}"
+  case "$p" in
+    ccrc|ccrc-test)
+      if [ "$p" = ccrc ]; then [ "${a[1]:-}" = test ] || return 1; a=("${a[@]:2}"); else a=("${a[@]:1}"); fi
+      [ "$how" != hook ] || return 1
+      while [ ${#a[@]} -gt 0 ]; do case "${a[0]}" in --) a=("${a[@]:1}"); break ;; -*) a=("${a[@]:1}") ;; *) break ;; esac; done
+      _tstrip "${a[@]}"; _tcmd_heavy "$wide" argv "${TW[@]}"; return ;;
+    sh|bash|zsh|dash|ksh)
+      for ((i = 1; i < n; i++)); do
+        case "${a[i]}" in
+          --*) ;;
+          -*c*) [ $((i + 1)) -lt "$n" ] || return 1; _tshell_heavy "$wide" "$how" "${a[i+1]}"; return ;;
+          -*) ;;
+          *) return 1 ;;
+        esac
+      done
+      return 1 ;;
+    tmux)
+      case "${a[1]:-}" in
+        new-window|neww|split-window|splitw|new-session|new|respawn-pane|respawnp|respawn-window|respawnw|run-shell|run)
+          ((n > 2)) || return 1; _tshell_heavy "$wide" "$how" "${a[n-1]}"; return ;;
+      esac
+      return 1 ;;
+  esac
+  if [ "$how" != argv ]; then
+    case "${p%.*}" in
+      npx|bunx|pnpx|npm|pnpm|yarn|bun|node|vitest|jest|tsc|vue-tsc|tsgo|playwright|stryker|*typecheck*|'$'*) ;;
+      *) return 1 ;;
+    esac
+  fi
+  _targv_heavy "$wide" "${a[@]}"
+}
+_tshell_heavy() {   # <wide> <how: shell or hook> <shell string> -> 0 when a simple command in it is heavy
+  local wide="$1" how="${2/argv/shell}" line
+  local -a ws
+  while IFS= read -r line; do
+    IFS=$'\037' read -r -a ws <<<"$line"
+    [ ${#ws[@]} -gt 0 ] || continue
+    _tstrip "${ws[@]}"
+    [ ${#TW[@]} -gt 0 ] || continue
+    if _tcmd_heavy "$wide" "$how" "${TW[@]}"; then return 0; fi
+  done < <(_tsegments "$3")
+  return 1
+}
+_heavy() {   # <wide> <command> [<arg>...] -> 0 heavy, 1 light
+  local wide="$1"
+  shift
+  _tstrip "$@"
+  _tcmd_heavy "$wide" argv "${TW[@]}"
 }
 
 # ── the queue ─────────────────────────────────────────────────────────────
@@ -183,6 +364,21 @@ _trelease() {
   [ -z "$WAIT_FD" ] || exec {WAIT_FD}>&-
   SLOT_FD=""; WAIT_FD=""
 }
+_treap_gone() {   # stop the run of every held slot whose wrapper is gone; its run holds the slot and nobody watches it
+  [ "$contained" = 1 ] || return 0
+  local f who pid
+  for f in "$SLOT_DIR"/slot-*; do
+    case "$f" in *.who|*'*') continue ;; esac
+    [ -f "$f.who" ] && _tlocked "$f" || continue
+    who=""; IFS= read -r who < "$f.who" || :
+    [[ "$who" =~ ^pid\ ([0-9]+)\  ]] || continue
+    pid="${BASH_REMATCH[1]}"
+    [ "$pid" != "$$" ] && ! kill -0 "$pid" 2>/dev/null || continue
+    echo "$PROG: ${f##*/}'s holder (pid $pid) is gone; stopping its run ccrc-test-$pid.scope" >&2
+    systemctl --user stop "ccrc-test-$pid.scope" >/dev/null 2>&1 || :
+    rm -f -- "$f.who"
+  done
+}
 _tacquire() {   # <summary> -> sets SLOT_FD and SLOT_FILE, or dies
   local summary="$1" n="${TK[CCRC_TEST_HEAVY_SLOTS]}" max="${TK[CCRC_TEST_PRESSURE_MAX]}" i f fd said=0 why t0=$SECONDS
   mkdir -p -- "$SLOT_DIR" || _tdie "cannot create the slot directory ~/.cc-sessions/test-slots"
@@ -203,6 +399,7 @@ _tacquire() {   # <summary> -> sets SLOT_FD and SLOT_FILE, or dies
         fi
         exec {fd}>&-
       done
+      _treap_gone
       why="all $n heavy test slots are held ($(_tholders))"
     fi
     if [ "$said" -eq 0 ]; then
@@ -285,8 +482,9 @@ while [ $# -gt 0 ]; do
     --heavy) force=heavy; shift ;;
     --light) force=light; shift ;;
     --classify) mode=classify; shift ;;
+    --classify-shell) mode=classify-shell; shift ;;
     --status) mode=status; shift ;;
-    -h|--help) sed -n '2,7p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,8p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
     --) shift; break ;;
     -*) _tusage "unknown argument: $1" ;;
     *) break ;;
@@ -294,6 +492,11 @@ while [ $# -gt 0 ]; do
 done
 _tload
 if [ "$mode" = status ]; then [ $# -eq 0 ] || _tusage "--status takes no command"; _tstatus; exit $?; fi
+if [ "$mode" = classify-shell ]; then
+  [ $# -eq 1 ] || _tusage "--classify-shell takes one command line, as one argument"
+  if _tshell_heavy "${TK[CCRC_TEST_WIDE_FILES]}" hook "$1"; then echo heavy; else echo light; fi
+  exit 0
+fi
 [ $# -gt 0 ] || _tusage "missing command"
 cmd=("$@")
 if [ -z "$force" ]; then if _heavy "${TK[CCRC_TEST_WIDE_FILES]}" "${cmd[@]}"; then force=heavy; else force=light; fi; fi
@@ -308,19 +511,33 @@ if [ "${CCD_OS:-linux}" = darwin ]; then
 elif ! _tslice_ready; then
   _tdie "refused, nothing ran: $TSLICE_WHY"
 fi
-trap '_trelease' EXIT
-trap '[ -n "${child:-}" ] && kill -TERM "$child" 2>/dev/null' TERM INT HUP
+# SIGNALS. Before the command is launched nothing has started: a signal leaves the queue (the wait file and any slot go)
+# and exits 128+signal, so a cancelled call never leaves a waiter that later runs a test nobody watches. Once it is
+# launched, a signal is passed to the command and the run's scope is stopped, and the wrapper exits with the command.
+launched=0 stopped=0 child=""
+_tstop_run() {   # stop this run's scope: every process the command left behind, not only its main pid
+  [ "$contained" = 1 ] && [ "$launched" = 1 ] && [ "$stopped" = 0 ] || return 0
+  stopped=1
+  systemctl --user stop "ccrc-test-$$.scope" >/dev/null 2>&1 || :
+}
+_tonsig() {   # <exit code>
+  if [ "$launched" = 0 ]; then _trelease; exit "$1"; fi
+  [ -z "$child" ] || kill -TERM "$child" 2>/dev/null
+  _tstop_run
+  [ -n "$child" ] || { _trelease; exit "$1"; }
+}
+trap '_tstop_run; _trelease' EXIT
+trap '_tonsig 143' TERM
+trap '_tonsig 130' INT
+trap '_tonsig 129' HUP
 [ "$force" = light ] || _tacquire "$summary"
 [ -z "$WAIT_FD" ] || { exec {WAIT_FD}>&-; WAIT_FD=""; }
 export CCRC_TEST_INSIDE=1
-child=""
 oom0=""; [ "$contained" = 0 ] || oom0=$(_toom_kills)
+launched=1
 if [ "$contained" = 1 ]; then
-  if [ -n "$SLOT_FD" ]; then
-    systemd-run --user --scope --quiet --collect --slice="$SLICE" --unit="ccrc-test-$$" --description="ccrc test: $summary" -- "${cmd[@]}" <&0 {SLOT_FD}>&- &
-  else
-    systemd-run --user --scope --quiet --collect --slice="$SLICE" --unit="ccrc-test-$$" --description="ccrc test: $summary" -- "${cmd[@]}" <&0 &
-  fi
+  # The slot's descriptor (when a heavy run holds one) is inherited on purpose: the slot is the run's (THE QUEUE above).
+  systemd-run --user --scope --quiet --collect --slice="$SLICE" --unit="ccrc-test-$$" --description="ccrc test: $summary" -- "${cmd[@]}" <&0 &
 elif [ -n "$SLOT_FD" ]; then
   "${cmd[@]}" <&0 {SLOT_FD}>&- &
 else
@@ -332,6 +549,7 @@ while :; do
   { wait "$child"; } 2>/dev/null; rc=$?   # bash's own `Killed` job line says less than the line below
   kill -0 "$child" 2>/dev/null || break
 done
+_tstop_run
 if [ -n "$oom0" ]; then
   oom1=$(_toom_kills)
   [[ "$oom0" =~ ^[0-9]+$ && "$oom1" =~ ^[0-9]+$ ]] && [ "$oom1" -gt "$oom0" ] \
