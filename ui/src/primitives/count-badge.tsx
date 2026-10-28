@@ -2,13 +2,13 @@
 //
 // TWO RULES, SIX DECLARATIONS, BYTE-IDENTICAL. `.bucket-head-unseen` (the
 // mail feed's per-bucket unread count) and `.mail-badge-count` (the fleet
-// header's own unread count) are the same pill showing the same number in two
+// head's mail door, counting what waits on you) are the same pill in two
 // places, and each wrote it out.
 //
 // THE TONE IS NOT A VARIANT AXIS. Both are attention — amber tint, amber ink —
-// because that is what the badge MEANS: something arrived and nobody has read
-// it. A `tone` prop would invite a quiet count, and a count nobody needs to
-// see is a count that should not be rendered. `.settings-badge` looks similar
+// because that is what the badge MEANS: something is waiting for you. A
+// `tone` prop would invite a quiet count, and a count nobody needs to see is a
+// count that should not be rendered. `.settings-badge` looks similar
 // and is a different thing: a label pill with a hairline, three modifiers and
 // no number in it, which the shape census registers by name.
 //
