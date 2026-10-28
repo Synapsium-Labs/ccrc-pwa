@@ -22,6 +22,7 @@ import type { PtyLike } from '../src/pty.js';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import type { Questions } from '../src/coord/questions.js';
+import { SERVER_CAPS } from '../../shared/api.js';
 import {
   CHILD, CHILD2, hookInput, PARENT, requestBody, standardFixture, TOK, TOKEN, uuidOf, type Approvals,
 } from './approvalsHarness.js';
@@ -484,5 +485,16 @@ describe('the principals do not cross (Review focus 3)', () => {
     const res = await a.inject({ method: 'POST', url: `/api/questions/session-${CHILD}/answer`, headers: { cookie },
       payload: { kind: 'ask', askKey: ASK_KEY, optionIndexes: [0] } });
     expect([res.statusCode, res.body]).toEqual([404, '{"ok":false,"error":"unknown-session"}']);
+  });
+});
+
+// Skew (rule 1c): a client of the family gates on the word, and an older server, which has neither the word nor the
+// routes, answers every `/api/questions/*` request 404 (the old doors' rows are Q3a's pin, unchanged).
+describe('the questions-v1 cap word (W3 Q3f, D-7030)', () => {
+  it('SERVER_CAPS advertises questions-v1, and GET /health carries it', async () => {
+    expect(SERVER_CAPS).toContain('questions-v1');
+    const f = await family();
+    const res = await f.app.inject({ method: 'GET', url: '/health' });
+    expect((res.json() as { caps: string[] }).caps).toContain('questions-v1');
   });
 });

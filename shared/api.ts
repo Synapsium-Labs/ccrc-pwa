@@ -11082,7 +11082,7 @@ export function backgroundOnlyRefusal(body: unknown): { count: number | null; ki
 // from Tasks 2 and 10, the file's name, the lease and the grammar in `ccd/session-hook.sh`.
 
 /** One capability word the server advertises. Spelled once, as the keys of `SERVER_CAP_MAP`. */
-export type ServerCap = 'dispatch-live-gate-v1' | 'hook-main-state-v1' | 'ask-pairing-v1';
+export type ServerCap = 'dispatch-live-gate-v1' | 'hook-main-state-v1' | 'ask-pairing-v1' | 'questions-v1';
 
 /** Every word, with what it promises. The value is `true`; the promise is the comment, which a word's reader may
  *  rely on and nothing weaker. `PR_REASON_MAP`'s idiom: a word added to `ServerCap` and not here is TS2741. */
@@ -11111,6 +11111,15 @@ const SERVER_CAP_MAP: Readonly<Record<ServerCap, true>> = {
    *  never inside `dialog`. W7 gates its client on this word before it reads the field and deletes its own pairing.
    *  Added by the change that builds the field and its two senders, cut after both. */
   'ask-pairing-v1': true,
+  /** D-7030 (Task Q3f, ARCH-57's server half): this server answers the `/api/questions/:id/*` door family in
+   *  `coord/routes.ts`, behind its one gate: `POST /api/questions/session-<id>/answer` for the operator (an ask by option
+   *  index, a dialog's row, its free-text row or a multiSelect set; session-gated, origin-checked, the session id gated
+   *  by `knownId`), and `POST /api/questions/<ask|approval>-<n>/rule` and `/release` for the claimant (box token,
+   *  attribution, the stored parent; the signing unchanged), each answering what the old door it replaces answers, byte
+   *  for byte, with `400 kind-mismatch` for an id or body of the other principal's kind. The old doors stay, as aliases
+   *  into the same cores. W7 gates its client on this word before it calls a door of the family. Added by the change
+   *  that builds the family, cut after its routes, cores and aliases. */
+  'questions-v1': true,
 };
 
 /** The words this server advertises, in `GET /health`'s `caps`, and in the file a `server` or `both` node writes. */
