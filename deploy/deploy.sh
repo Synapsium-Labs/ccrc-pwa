@@ -821,7 +821,8 @@ if [ "$TARGET" = "agent" ]; then
   # BOX's: `_slice_limits_unit` sources the shipped `~/ccrc/ccd/ccrc` in a child bash (its dispatch is guarded, so
   # sourcing runs no verb) and calls the function `ccrc install` calls, `_inst_slice_limits`, which reads
   # CCRC_SESSION_SLICE_MEMORY_MAX and CCRC_SESSION_SLICE_SWAP_MAX from the box's environment, else the box's
-  # ~/.ccrc/ccrc.env, else the template's 24G and 6G — on the box, never from this machine's config. Paths reach the
+  # ~/.ccrc/ccrc.env, else the template's 24G and 6G — on the box, never from this machine's config. A value it cannot
+  # use keeps the one the installed drop-in carries, so a typo never shrinks a tuned box. Paths reach the
   # child as arguments; the `-c` string is fixed. A box that sets neither key gets the template byte for byte.
   AGENT_BUILD_CMD='_unit_atomic() { cp -- "$1" "$2.incoming.$$" || return 1; chmod 644 "$2.incoming.$$" || return 1; mv -f -- "$2.incoming.$$" "$2" || return 1; rm -f -- "$2.incoming."*; }
 _slice_limits_unit() { bash -c ". \"\$1\" || exit 1; _inst_slice_limits \"\$2\" \"\$3\"" slice-limits ~/ccrc/ccd/ccrc "$1" "$2"; }

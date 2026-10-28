@@ -180,7 +180,7 @@ describe('_inst_slice_limits renders the template from the box\'s config (D-TBD-
     expect(readFileSync(r.dest, 'utf8')).toBe(expected('56G', '4G'));
   });
 
-  // Garbage keeps the default and WARNs, naming the key, the value and the default; the run still succeeds, so a
+  // With nothing installed yet, garbage keeps the default and WARNs, naming the key, the value and the default; the run still succeeds, so a
   // typo never stops an install or a deploy, and never reaches systemd.
   // A suffix-less whole number is BYTES to systemd, so `24` or `90` (a typo for 90%) is a ceiling of a few bytes: the
   // next install, update or deploy would OOM-kill every pane, exactly what refusing 0 is for. MemoryMax is at least 1G.
