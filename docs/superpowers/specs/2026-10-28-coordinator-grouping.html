@@ -1,0 +1,240 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Coordinator Grouping</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@400;600&display=swap">
+<style>
+/* Layout: one reading column. Three ways to make a coordinator and its children read as ONE unit, each shown in its three states. */
+:root {
+  --bg: #f3f5f2; --panel: #ffffff; --row: #f7f9f6; --sunk: #eef1ec; --line: #d6ddd4; --fg: #1d221d; --muted: #5d685c;
+  --ok: #1d7a3e; --ok-bg: #dcf2e2; --bad: #b42323; --bad-bg: #fbe1e1; --you: #8a5a00; --you-bg: #fbefd2;
+  --p1: #2f6fd1; --p2: #8a3fc4; --p3: #0f8a7a;
+  --mono: "IBM Plex Mono", ui-monospace, Menlo, monospace; --sans: "IBM Plex Sans", system-ui, sans-serif;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #0f120f; --panel: #151915; --row: #1a1f1a; --sunk: #111411; --line: #2b322b; --fg: #e3e8e1; --muted: #8d988b;
+  --ok: #7fe39a; --ok-bg: #173622; --bad: #ff8f8f; --bad-bg: #3d1818; --you: #ffd36b; --you-bg: #3a2f10;
+  --p1: #6ea2ff; --p2: #c48af0; --p3: #4fd1bd; color-scheme: dark } }
+:root[data-theme="dark"] {
+  --bg: #0f120f; --panel: #151915; --row: #1a1f1a; --sunk: #111411; --line: #2b322b; --fg: #e3e8e1; --muted: #8d988b;
+  --ok: #7fe39a; --ok-bg: #173622; --bad: #ff8f8f; --bad-bg: #3d1818; --you: #ffd36b; --you-bg: #3a2f10;
+  --p1: #6ea2ff; --p2: #c48af0; --p3: #4fd1bd; color-scheme: dark }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg); font-family: var(--sans); font-size: 15px; line-height: 1.5;
+  padding: 24px max(16px, env(safe-area-inset-right, 0px)) 48px max(16px, env(safe-area-inset-left, 0px)); }
+main { max-width: 820px; margin: 0 auto; display: grid; gap: 40px; }
+h1 { font-size: 24px; margin: 0; text-wrap: balance; }
+h2 { font-size: 19px; margin: 0; text-wrap: balance; }
+h2 .tag { font-family: var(--mono); font-size: 13px; color: var(--muted); margin-right: 8px; }
+h3 { font-size: 12px; margin: 0; color: var(--muted); font-family: var(--mono); letter-spacing: .06em; text-transform: uppercase; font-weight: 600; }
+p { margin: 0; max-width: 66ch; }
+.muted { color: var(--muted); }
+section { display: grid; gap: 14px; }
+.rules { margin: 0; padding-left: 20px; max-width: 66ch; display: grid; gap: 4px; }
+.states { display: grid; gap: 18px; }
+.state { display: grid; gap: 6px; }
+.mono { font-family: var(--mono); font-size: 13px; }
+.chip { font-family: var(--mono); padding: 1px 8px; border-radius: 10px; font-size: 11px; white-space: nowrap; }
+.moving { background: var(--ok-bg); color: var(--ok); }
+.stalled { background: var(--bad-bg); color: var(--bad); }
+.you { background: var(--you-bg); color: var(--you); }
+.idle { background: var(--sunk); color: var(--muted); border: 1px solid var(--line); }
+.bar { height: 6px; width: 80px; background: var(--line); border-radius: 3px; overflow: hidden; flex: none; }
+.bar i { display: block; height: 100%; background: var(--ok); }
+.ago { color: var(--muted); font-size: 12px; white-space: nowrap; font-family: var(--mono); font-variant-numeric: tabular-nums; }
+.ago.bad { color: var(--bad); }
+button.toggle { font: inherit; font-family: var(--mono); font-size: 12px; color: var(--fg); background: var(--sunk); border: 1px solid var(--line); border-radius: 6px; padding: 4px 10px; cursor: pointer; }
+button.toggle:focus-visible, .head:focus-visible { outline: 2px solid var(--p1); outline-offset: 2px; }
+.caret { display: inline-block; width: 1em; transition: transform .15s; }
+[data-open="true"] .caret { transform: rotate(90deg); }
+@media (prefers-reduced-motion: reduce) { .caret { transition: none; } }
+
+/* ---- Treatment A: the programme is a box ---- */
+.box { border: 2px solid var(--line); border-radius: 10px; background: var(--panel); overflow: hidden; }
+.box.is-stalled { border-color: var(--bad); }
+.box .head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; padding: 12px 14px; cursor: pointer; }
+.box .title { flex: 1 1 220px; min-width: 0; }
+.box .title b { font-size: 16px; }
+.role { font-family: var(--mono); font-size: 10px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); border: 1px solid var(--line); border-radius: 4px; padding: 0 5px; margin-right: 6px; vertical-align: 2px; }
+.box .summary { font-family: var(--mono); font-size: 12px; color: var(--muted); }
+.box .kids { background: var(--sunk); border-top: 1px solid var(--line); padding: 6px; display: grid; gap: 4px; }
+.kid { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; padding: 6px 10px; border-radius: 6px; font-family: var(--mono); font-size: 13px; background: var(--row); }
+.kid .n { flex: 1 1 160px; min-width: 0; }
+.kid.pinned { background: var(--you-bg); }
+.box .foot { border-top: 1px solid var(--line); padding: 6px 10px; display: flex; justify-content: space-between; align-items: center; gap: 8px; background: var(--sunk); }
+
+/* ---- Treatment B: a colour rail runs down the whole group ---- */
+.rail { display: grid; grid-template-columns: 6px 1fr; gap: 0 12px; }
+.rail .stripe { border-radius: 3px; grid-row: 1 / span 99; }
+.rail .coord { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; padding: 10px 12px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; cursor: pointer; }
+.rail .coord .title { flex: 1 1 220px; min-width: 0; }
+.rail .coord b { font-size: 16px; }
+.rail .kid { margin-top: 4px; background: transparent; border-bottom: 1px dashed var(--line); border-radius: 0; padding-left: 4px; }
+.rail .kid.pinned { background: var(--you-bg); border-radius: 6px; border-bottom: 0; }
+.rail .more { margin-top: 4px; }
+
+/* ---- Treatment C: a group header row, children as a sub-table ---- */
+.grp { border-top: 3px solid var(--line); }
+.grp .head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; padding: 10px 2px 8px; cursor: pointer; }
+.grp .head .title { flex: 1 1 220px; min-width: 0; }
+.grp .head b { font-size: 17px; }
+.grp .count { font-family: var(--mono); font-size: 12px; background: var(--sunk); border: 1px solid var(--line); border-radius: 10px; padding: 0 8px; color: var(--muted); }
+.grp table { width: 100%; border-collapse: collapse; font-family: var(--mono); font-size: 13px; }
+.grp td { padding: 5px 8px; border-top: 1px solid var(--line); }
+.grp td:first-child { padding-left: 26px; color: var(--muted); width: 1%; white-space: nowrap; }
+.grp tr.pinned td { background: var(--you-bg); }
+.tablewrap { overflow-x: auto; }
+
+.note { font-size: 13px; color: var(--muted); border-top: 1px solid var(--line); padding-top: 16px; max-width: 66ch; display: grid; gap: 6px; }
+</style>
+</head><body>
+<main>
+  <header style="display:grid;gap:8px">
+    <h1>Coordinator grouping: a programme reads as one unit</h1>
+    <p class="muted">Three ways to tie child workspaces to their coordinator by something stronger than indentation. Each is shown in its three states. Click a header (or "Show workers") to collapse or expand it. Names and figures are examples.</p>
+    <ol class="rules">
+      <li><b>Collapsed by default.</b> You see one line per programme: name, progress, time since it last moved, and a summary of its workers.</li>
+      <li><b>A child that needs you breaks through.</b> Even while collapsed, any child with a question, a permission or a failure is shown inside its programme. It is never hidden behind a click.</li>
+      <li><b>Expanded shows everyone.</b> Your choice is remembered per programme on this device.</li>
+      <li><b>On the Status tab</b> only rules 1 and 2 apply: there is no expand, so you see coordinators and the children that need you, nothing else.</li>
+    </ol>
+  </header>
+
+  <!-- ================= A ================= -->
+  <section>
+    <h2><span class="tag">A</span>The programme is a box</h2>
+    <p class="muted">Coordinator and children share one bordered container. The coordinator is the box's header, and the children live in a recessed tray inside it. Membership is shown by the box, not by indentation. A stalled programme's whole border turns red.</p>
+    <div class="states">
+      <div class="state"><h3>Collapsed (default)</h3>
+        <div class="box" data-open="false">
+          <div class="head" tabindex="0" data-toggle><span class="caret">▸</span><div class="title"><span class="role">coordinator</span><b>programme-b</b><div class="summary">5 workers · 3 working · 2 done</div></div><div class="bar"><i style="width:70%"></i></div><span class="ago">moved 3m ago</span><span class="chip moving">moving</span></div>
+          <div class="kids" hidden>
+            <div class="kid"><span class="n">worker-b1</span><span class="chip moving">working</span></div>
+            <div class="kid"><span class="n">worker-b2</span><span class="chip moving">working</span></div>
+            <div class="kid"><span class="n">worker-b3</span><span class="chip moving">working</span></div>
+            <div class="kid"><span class="n">worker-b4</span><span class="chip idle">done</span></div>
+            <div class="kid"><span class="n">reviewer-b2</span><span class="chip idle">done</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="state"><h3>Collapsed, one child needs you</h3>
+        <div class="box" data-open="false">
+          <div class="head" tabindex="0" data-toggle><span class="caret">▸</span><div class="title"><span class="role">coordinator</span><b>programme-c</b><div class="summary">4 workers · 2 working · 1 needs you</div></div><div class="bar"><i style="width:40%"></i></div><span class="ago">moved 12m ago</span><span class="chip you">needs you</span></div>
+          <div class="kids">
+            <div class="kid pinned"><span class="n">worker-c2 · asks: push now or hold?</span><span class="chip you">question</span></div>
+            <div class="kid extra" hidden><span class="n">worker-c1</span><span class="chip moving">working</span></div><div class="kid extra" hidden><span class="n">worker-c3</span><span class="chip moving">working</span></div><div class="kid extra" hidden><span class="n">reviewer-c1</span><span class="chip idle">done</span></div>
+          </div>
+          <div class="foot"><span class="mono muted">3 more workers hidden</span><button class="toggle" data-toggle>Show workers</button></div>
+        </div>
+      </div>
+      <div class="state"><h3>Expanded, and stalled</h3>
+        <div class="box is-stalled" data-open="true">
+          <div class="head" tabindex="0" data-toggle><span class="caret">▸</span><div class="title"><span class="role">coordinator</span><b>programme-a</b><div class="summary">3 workers · 1 waiting on review · 2 idle</div></div><div class="bar"><i style="width:55%"></i></div><span class="ago bad">no move 2h 10m</span><span class="chip stalled">stalled</span></div>
+          <div class="kids">
+            <div class="kid"><span class="n">worker-a1 · waiting on review since 2h 10m</span><span class="chip idle">waiting</span></div>
+            <div class="kid"><span class="n">worker-a2</span><span class="chip idle">idle</span></div>
+            <div class="kid"><span class="n">reviewer-a1 · exited</span><span class="chip stalled">exited</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= B ================= -->
+  <section>
+    <h2><span class="tag">B</span>A colour rail runs down the group</h2>
+    <p class="muted">Each programme gets its own colour. A thick rail in that colour runs down the left of the coordinator and every child, so where the colour stops, the programme stops. Children are lighter, smaller rows with no card of their own, so they read as parts of the coordinator rather than peers.</p>
+    <div class="states">
+      <div class="state"><h3>Collapsed (default)</h3>
+        <div class="rail" data-open="false"><span class="stripe" style="background:var(--p2)"></span>
+          <div class="coord" tabindex="0" data-toggle><span class="caret">▸</span><div class="title"><b>programme-b</b> <span class="mono muted">· 5 workers · 3 working · 2 done</span></div><div class="bar"><i style="width:70%"></i></div><span class="ago">3m</span><span class="chip moving">moving</span></div>
+          <div class="kids" hidden>
+            <div class="kid"><span class="n">worker-b1</span><span class="chip moving">working</span></div>
+            <div class="kid"><span class="n">worker-b2</span><span class="chip moving">working</span></div>
+            <div class="kid"><span class="n">worker-b3</span><span class="chip moving">working</span></div>
+            <div class="kid"><span class="n">worker-b4</span><span class="chip idle">done</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="state"><h3>Collapsed, one child needs you</h3>
+        <div class="rail" data-open="false"><span class="stripe" style="background:var(--p3)"></span>
+          <div class="coord" tabindex="0" data-toggle><span class="caret">▸</span><div class="title"><b>programme-c</b> <span class="mono muted">· 4 workers · 1 needs you</span></div><div class="bar"><i style="width:40%"></i></div><span class="ago">12m</span><span class="chip you">needs you</span></div>
+          <div class="kid pinned"><span class="n">worker-c2 · asks: push now or hold?</span><span class="chip you">question</span></div>
+          <div class="kid extra" hidden><span class="n">worker-c1</span><span class="chip moving">working</span></div><div class="kid extra" hidden><span class="n">worker-c3</span><span class="chip moving">working</span></div><div class="kid extra" hidden><span class="n">reviewer-c1</span><span class="chip idle">done</span></div>
+          <div class="more"><button class="toggle" data-toggle>Show 3 more workers</button></div>
+        </div>
+      </div>
+      <div class="state"><h3>Expanded</h3>
+        <div class="rail" data-open="true"><span class="stripe" style="background:var(--p1)"></span>
+          <div class="coord" tabindex="0" data-toggle><span class="caret">▸</span><div class="title"><b>programme-a</b> <span class="mono muted">· 3 workers</span></div><div class="bar"><i style="width:55%"></i></div><span class="ago bad">2h 10m</span><span class="chip stalled">stalled</span></div>
+          <div class="kids">
+            <div class="kid"><span class="n">worker-a1 · waiting on review</span><span class="chip idle">waiting</span></div>
+            <div class="kid"><span class="n">worker-a2</span><span class="chip idle">idle</span></div>
+            <div class="kid"><span class="n">reviewer-a1</span><span class="chip stalled">exited</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= C ================= -->
+  <section>
+    <h2><span class="tag">C</span>A group header with a table under it</h2>
+    <p class="muted">Like a grouped spreadsheet. A heavy rule and a large header row start each programme, with a count badge saying how many children it holds. The children are compact table rows under the header, sharing its columns. The next heavy rule is unmistakably the next programme.</p>
+    <div class="states">
+      <div class="state"><h3>Collapsed (default)</h3>
+        <div class="grp" data-open="false">
+          <div class="head" tabindex="0" data-toggle><span class="caret">▸</span><div class="title"><b>programme-b</b> <span class="count">5 workers</span></div><div class="bar"><i style="width:70%"></i></div><span class="ago">3m</span><span class="chip moving">moving</span></div>
+          <div class="kids tablewrap" hidden><table><tbody>
+            <tr><td>worker</td><td>worker-b1</td><td><span class="chip moving">working</span></td></tr>
+            <tr><td>worker</td><td>worker-b2</td><td><span class="chip moving">working</span></td></tr>
+            <tr><td>worker</td><td>worker-b3</td><td><span class="chip moving">working</span></td></tr>
+            <tr><td>worker</td><td>worker-b4</td><td><span class="chip idle">done</span></td></tr>
+            <tr><td>reviewer</td><td>reviewer-b2</td><td><span class="chip idle">done</span></td></tr>
+          </tbody></table></div>
+        </div>
+      </div>
+      <div class="state"><h3>Collapsed, one child needs you</h3>
+        <div class="grp" data-open="false">
+          <div class="head" tabindex="0" data-toggle><span class="caret">▸</span><div class="title"><b>programme-c</b> <span class="count">4 workers · 1 needs you</span></div><div class="bar"><i style="width:40%"></i></div><span class="ago">12m</span><span class="chip you">needs you</span></div>
+          <div class="tablewrap"><table><tbody>
+            <tr class="pinned"><td>worker</td><td>worker-c2 · asks: push now or hold?</td><td><span class="chip you">question</span></td></tr>
+            <tr class="extra" hidden><td>worker</td><td>worker-c1</td><td><span class="chip moving">working</span></td></tr><tr class="extra" hidden><td>worker</td><td>worker-c3</td><td><span class="chip moving">working</span></td></tr><tr class="extra" hidden><td>reviewer</td><td>reviewer-c1</td><td><span class="chip idle">done</span></td></tr>
+          </tbody></table></div>
+        </div>
+      </div>
+      <div class="state"><h3>Expanded</h3>
+        <div class="grp" data-open="true" style="border-top-color:var(--bad)">
+          <div class="head" tabindex="0" data-toggle><span class="caret">▸</span><div class="title"><b>programme-a</b> <span class="count">3 workers</span></div><div class="bar"><i style="width:55%"></i></div><span class="ago bad">2h 10m</span><span class="chip stalled">stalled</span></div>
+          <div class="kids tablewrap"><table><tbody>
+            <tr><td>worker</td><td>worker-a1 · waiting on review</td><td><span class="chip idle">waiting</span></td></tr>
+            <tr><td>worker</td><td>worker-a2</td><td><span class="chip idle">idle</span></td></tr>
+            <tr><td>reviewer</td><td>reviewer-a1</td><td><span class="chip stalled">exited</span></td></tr>
+          </tbody></table></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <div class="note">
+    <p>These can combine: for example A's box with B's colour on the box's border. A first-time viewer should be able to answer "which workers belong to programme-c?" without reading a single indent.</p>
+    <p>A child workspace never appears as a top-level row anywhere. If its coordinator is gone, it shows inside a box titled "orphaned workers" so it is still visibly grouped.</p>
+  </div>
+</main>
+<script>
+// Click a header or a "Show workers" button: flip the group's data-open and show or hide its children.
+document.querySelectorAll('[data-open]').forEach(function (group) {
+  var kids = group.querySelector('.kids');
+  function set(open) {
+    group.dataset.open = String(open);
+    if (kids && !kids.querySelector('.pinned')) kids.hidden = !open;
+    group.querySelectorAll('.extra').forEach(function (x) { x.hidden = !open; });
+    group.querySelectorAll('button.toggle').forEach(function (b) { b.textContent = open ? 'Hide workers' : (b.dataset.label || b.textContent); });
+  }
+  group.querySelectorAll('button.toggle').forEach(function (b) { b.dataset.label = b.textContent; });
+  group.querySelectorAll('[data-toggle]').forEach(function (t) {
+    t.addEventListener('click', function () { set(group.dataset.open !== 'true'); });
+    t.addEventListener('keydown', function (e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); set(group.dataset.open !== 'true'); } });
+  });
+});
+</script>
+</body></html>
