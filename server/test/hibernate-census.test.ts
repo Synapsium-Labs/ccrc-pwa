@@ -1,7 +1,7 @@
 // THE HIBERNATION CENSUS (D-5242, plan Task 17b): every reader that can call a session dead states its stance on a
 // HIBERNATED row — `ccd hibernate`'s `.stopped` plus `.hibernated`, a pane gone, lifecycle `stopped`, bucket `dead`.
 //
-// The reader list is DERIVED, never listed by hand (`hibernateCensusScan.ts`): five sources over `server/src`, `shared`
+// The reader list is DERIVED, never listed by hand (`hibernateCensusScan.ts`): six sources over `server/src`, `shared`
 // and `pwa/src`, grouped by source and file with a hit count, so a new reader — or a new hit in a file already here —
 // is red until its row (or its count) is written. Each row's stance is argued from WHAT THAT READER READS, not only from
 // the verdict's holds (a run can be opened naming a sleeping session: `POST /api/runs` takes `claimedBy` from its body):
@@ -21,7 +21,7 @@ import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import {
-  CENSUS_SOURCE_NAMES, REPO, censusFiles, censusScan, type CensusFile, type CensusSource,
+  CENSUS_SCOPES, CENSUS_SOURCE_NAMES, REPO, censusFiles, censusScan, type CensusFile, type CensusSource,
 } from './hibernateCensusScan.js';
 import { FleetWatcher } from '../src/watch.js';
 import { Bus } from '../src/bus.js';
@@ -209,8 +209,10 @@ describe('the hibernation census (D-5242)', () => {
   it('a `consults` stance is real: the file (or the one it reads through) reads hibernatedAt or .hibernated', () => {
     for (const r of CENSUS.filter((x) => x.stances.includes('consults'))) {
       const reader = r.via ?? r.file;
-      expect(/hibernatedAt|\.hibernated|hibernated:|'hibernated'|hibernatedSince|hibernatedWords/.test(read(reader)), `${key(r)} (via ${reader})`).toBe(true);
-      if (r.via !== undefined) expect(read(r.file), `${r.file} reads through ${r.via}`).toMatch(/coordPresence|lifecycleQualifier/);
+      // A presence reader (D-7181) consults the server's sleep word: it names `'asleep'`, or reads `coordinatorPresence`,
+      // which words a sleeper `hibernated`.
+      expect(/hibernatedAt|\.hibernated|hibernated:|'hibernated'|hibernatedSince|hibernatedWords|'asleep'|coordinatorPresence/.test(read(reader)), `${key(r)} (via ${reader})`).toBe(true);
+      if (r.via !== undefined) expect(read(r.file), `${r.file} reads through ${r.via}`).toMatch(/coordPresence|coordinatorPresence|presenceOf|lifecycleQualifier/);
     }
   });
 
@@ -225,12 +227,19 @@ describe('the hibernation census (D-5242)', () => {
     'stopped-compare': "export const g = (lc: string) => lc === 'stopped';",
     'tmux-verdict': 'export const h = async (t: Tmux) => (await t.sessionVerdict(\'x\')).verdict;',
     'dead-compare': "export const k = (s: { bucket: string }) => s.bucket === 'dead';",
+    'presence-reader': "export const p = (s: FleetSession) => presenceOf(s) === 'dead';",
   };
+  it('the scan reads the six sources, the PWA presence reader among them (D-7181)', () => {
+    expect(CENSUS_SOURCE_NAMES).toEqual(['dead-lifecycle', 'lifecycle-table', 'stopped-compare', 'tmux-verdict', 'dead-compare', 'presence-reader']);
+    expect(CENSUS_SCOPES).toEqual({ 'presence-reader': 'pwa/src/' });
+  });
+  // Where each scratch reader is placed: a scoped source's root (the presence reader is read in `pwa/src` only).
+  const scratchRel = (src: CensusSource): string => `${CENSUS_SCOPES[src] ?? 'server/src/'}zz-scratch-reader.ts`;
   for (const src of CENSUS_SOURCE_NAMES) {
     it(`a scratch reader of the ${src} kind is found, and reds the census`, () => {
-      const scratch: CensusFile = { rel: 'server/src/zz-scratch-reader.ts', text: SCRATCH[src] };
+      const scratch: CensusFile = { rel: scratchRel(src), text: SCRATCH[src] };
       const scanned = censusScan([...censusFiles(), scratch]);
-      expect(scanned.get(`${src} server/src/zz-scratch-reader.ts`)).toBe(1);
+      expect(scanned.get(`${src} ${scratchRel(src)}`)).toBe(1);
       expect(sorted(scanned)).not.toEqual(sorted(tableMap()));
     });
   }
