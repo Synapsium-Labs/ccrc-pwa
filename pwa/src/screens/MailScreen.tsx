@@ -11,11 +11,10 @@
 // Opening this screen IS the ack, the same rule SessionScreen's mount ack
 // follows. One watermark for the whole feed (FEED_ACK_KEY), because "have I
 // read my mail" is one question, not one per sender.
-import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import type { ReactNode } from 'react';
 import type { NotifyEvent, RunSummary } from '../../../shared/api';
 import { eventRunId, interruptLine, raisesUnread, recordKey } from '../lib/feed';
-import { api } from '../lib/api';
 import { navigate } from '../lib/router';
 import { backToFleet } from '../command/door';
 import { ack, acksSnapshot, FEED_ACK_KEY, isUnseenAt, subscribeAcks } from '../lib/seen';
@@ -24,15 +23,8 @@ import { formatAge } from '../fleet/formatReset';
 import { LiftCapSheet } from '../fleet/LiftCapSheet';
 import { capDoorRun } from '../fleet/reviewCapWords';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
+import { loadColdRuns, useColdRuns } from './useColdRuns';
 import '../fleet/fleet.css';
-
-/** The programme titles the headers are built from. `api.runs(true)` — WITH
- *  closed runs — because a feed record outlives its run: a wave that finished
- *  yesterday still has its records on this screen, and the active-only default
- *  would leave every one of them unresolved. Hoisted to module scope, not an inline
- *  arrow as a default parameter: a default parameter expression is re-minted
- *  on every render, and an effect keyed on that identity never stops firing. */
-const loadRunsDefault = (): Promise<{ runs: RunSummary[] }> => api.runs(true);
 
 /** No live runs: before the runs frame has been seen, no record offers the review cap's door (D-6911). */
 const NO_RUNS: readonly RunSummary[] = [];
@@ -50,7 +42,7 @@ const KIND_GLYPH: Record<NotifyEvent['kind'], string> = {
 
 export function MailScreen({
   store = useFleetStore,
-  loadRuns = loadRunsDefault,
+  loadRuns = loadColdRuns,
 }: {
   store?: FleetStore;
   loadRuns?: () => Promise<{ runs: RunSummary[] }>;
@@ -89,20 +81,14 @@ export function MailScreen({
   // The programme titles. A SEPARATE read from the feed's, and a failure here is
   // not a failure of this screen: the records still render, under headers that
   // say the programme was not measured. Never merged into the feed's own
-  // promise — one failing read must not take the other's data with it.
-  const [runsById, setRunsById] = useState<ReadonlyMap<number, RunSummary>>(new Map());
-  const loadRunsRef = useRef(loadRuns);
-  loadRunsRef.current = loadRuns;
-  useEffect(() => {
-    let live = true;
-    void loadRunsRef.current()
-      .then((r) => {
-        if (!live) return;
-        setRunsById(new Map(r.runs.map((run) => [run.id, run] as const)));
-      })
-      .catch(() => { /* the headers degrade; the feed does not */ });
-    return () => { live = false; };
-  }, [store]);
+  // promise — one failing read must not take the other's data with it. The
+  // archive read is the run board's (C7n, D-7209), with `closed=1` because a
+  // feed record outlives its run: a wave that finished yesterday still has its
+  // records on this screen. Once per mount: no transition re-reads it, since
+  // the headers need the titles, not a finished row's reclaim chip.
+  const { cold } = useColdRuns(store, loadRuns, { rereadOnTransitions: false });
+  const runsById = useMemo<ReadonlyMap<number, RunSummary>>(
+    () => new Map((cold ?? []).map((run) => [run.id, run] as const)), [cold]);
   // D-6911: the cap's record carries its Lift cap door from the fleet store's live runs frame, never from the
   // once-per-mount read above, so a lift (here or anywhere) takes the door away on the watcher's next frame. No frame
   // yet is no door. The screen's one lift sheet opens from it.

@@ -18,6 +18,21 @@ import type { RunSummary } from '../../../shared/api';
 import { childReclaimDoneRefreshDue, childReclaimRefreshDue, childRunsSeen } from '../fleet/runWords';
 import { childReclaimDoneAtOf } from '../fleet/childReclaimWords';
 import type { FleetStore } from '../stores/fleet';
+import { api } from '../lib/api';
+
+/** THE ONE archive reader (C7n, D-7192): `GET /api/runs?closed=1`, the run board's default and the Inbox's. Hoisted to
+ *  module scope, not an inline default-parameter arrow: a default parameter expression is re-evaluated on every
+ *  render, so an inline `() => api.runs(true)` would be a fresh identity every time `setCold` fires, and a caller that
+ *  keys its effect on that identity tears the effect down and fires it again — forever, on the one path (the shipping
+ *  default) no test exercises directly.
+ *
+ *  `true` (i.e. `?closed=1`), not the bare default: `includeClosed` is the only thing that drops `CoordStore.runs`'s
+ *  `WHERE` clause, so it is the only call that can ever return a FINISHED run — the live `{type:'runs'}` frame is
+ *  active-only by construction (`watch.ts`'s emitter calls `coord.runs()` with no options), and `api.runs()`'s own
+ *  bare default matches it (reconciliation item 5: "a deliberate cold-start bandwidth choice … pass `?closed=1` for
+ *  the archive view"). Without this, the board's own "Finished" group could never receive real data on a cold deep
+ *  link, and the Inbox could not title a record whose run finished yesterday. */
+export const loadColdRuns = (): Promise<{ runs: RunSummary[] }> => api.runs(true);
 
 export interface ColdRuns {
   /** The archive rows, or `null` for "no answer yet". Read `state` to tell
