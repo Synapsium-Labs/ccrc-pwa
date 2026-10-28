@@ -19,13 +19,15 @@
 #
 # READ-ONLY BY CODE, THROUGH THREE LAYERS. This tool never sends a ref anywhere, never lands a PR, and never updates
 # a PR's branch.
-#   1. Every git call goes through one function, `git_ro`. It owns a fixed hardening prefix (no hooks, no fsmonitor,
-#      no optional locks on the project), takes the repository from a variable it owns, never from the caller, and
-#      refuses any subcommand outside two literal allowlists, and any option that is not one of the exact forms its
-#      subcommand's call sites pass (an allowlist of forms, not a deny list: no `--output=`, no abbreviation of a long
-#      option), besides the prefixes that could run code or re-point the repository. `git_check` is its validator.
-#   2. The forge is reached through exactly two call sites, `gh_get` (a GET) and `gh_pr_list`. Both name the
-#      repository explicitly, and the child's environment drops GH_REPO, GH_HOST and every GIT_* variable.
+#   1. Every git call the probe starts goes through one function, `git_ro` (the one child git itself starts is named
+#      below). It owns a fixed hardening prefix (no hooks, no fsmonitor, no optional locks on the project), takes the
+#      repository from a variable it owns, never from the caller, and refuses any subcommand outside two literal
+#      allowlists, and any option that is not one of the exact forms its subcommand's call sites pass (an allowlist of
+#      forms, not a deny list: no `--output=`, no abbreviation of a long option), besides the prefixes that could run
+#      code or re-point the repository. `git_check` is its validator.
+#   2. The forge is reached through exactly two call sites, `gh_get` (a GET) and `gh_pr_list` (a GraphQL query, which
+#      gh sends as a POST; it is a read). Both name the repository explicitly, and the child's environment drops GH_REPO,
+#      GH_HOST and every GIT_* variable.
 #   3. A literal source pin (server/test/ccd-land-probe-readonly.test.ts) holds the file to those shapes, and a
 #      validate-only self-test (CCD_LAND_PROBE_SELFTEST=git_ro) proves `git_ro`'s refusals without running git.
 #
@@ -44,6 +46,13 @@
 # crashed (SIGKILLed) tick's scratch is cleared by the next tick, but only a real, owned directory holding a regular
 # sentinel file and older than one hour.
 #
+# THE ONE GIT CHILD OUTSIDE `git_ro`. With the project as an alternate, `git fetch` itself starts
+# `git --git-dir=<project>/.git for-each-ref ...` to read the alternate's refs. Git starts it inside the fetch, with
+# the project's config and without the probe's `-c` settings, and it reads refs only. The other children git starts
+# during the fetch run in the scratch, under the prefix. A `core.alternateRefsCommand` in the operator's own config is
+# one of the fetch's own config-driven commands, like its credential helper and its ssh command (GIT_SSH,
+# GIT_SSH_COMMAND and GIT_ASKPASS name commands too, and the fetch child keeps them: FETCH_KEEP).
+#
 # TEST-ONLY: CCD_LAND_PROBE_SELFSIGNAL=<point> makes the probe send itself one SIGTERM at a named point (the
 # signal-path cases of ccd-land-probe.test.ts). Nothing in the tree sets it; unset, every point is inert.
 #
@@ -57,9 +66,11 @@
 #      directory with no conf at all). Its spacing is the spacing of tick starts, whatever the order or the budgets of
 #      the projects, so stage 4 can bound its freshness. The measuring loop never writes or removes `enabled`.
 #   4. For each conf, sorted, while the tick budget lasts: parse it, skip a paused project, then within the project
-#      budget record store.before, make the scratch, read the open heads, fetch, measure base x head and the pairs,
-#      write `probe`, `main-health` and each lineage (a failed or cut fetch, or an exception before the first write,
-#      writes all of them unmeasured), rewrite `probe` with store.after and the scratch size, remove the scratch.
+#      budget record store.before, read the open heads, then make the scratch and fetch, measure base x head and the
+#      pairs, write `probe`, `main-health` and each lineage (a failed or cut fetch, or a scratch, alternates or
+#      refspec failure or any other exception before the first write, writes all of them unmeasured as
+#      `fetch-failed`: the probe's set has no closer word), rewrite `probe` with store.after and the scratch size,
+#      remove the scratch.
 #   5. Exit 0.
 #
 # PATHS
@@ -196,9 +207,11 @@ FORMS = {
 OPTION_PREFIXES = ('-c', '--config-env', '-C', '--git-dir', '--work-tree', '--exec', '--upload-pack', '--receive-pack', '-u')
 # The option FORMS each allowlisted subcommand admits: exactly the spellings the probe's own call sites pass, compared
 # whole (never by prefix, so no `--output=<file>`, no long-option abbreviation such as `--upload-pa=`, and no
-# `cat-file --textconv` or `--filters`). A subcommand with no call site that passes an option admits none. After a
-# literal `--` (admitted for the fetch alone) git itself reads only operands, so the check stops there. This is a deliberate departure from the
-# plan's prefix deny list (fix round 1, review 1109, F2 and A9).
+# `cat-file --textconv` or `--filters`). A subcommand with no call site that passes an option admits none. A form is
+# checked wherever its element stands, before an operand or after one. A literal `--` is admitted for the fetch alone,
+# and after it git reads operands only, so the door refuses every element that starts with `-` (answering `option
+# <opt>`); the prefix rule above still runs first. This is a deliberate departure from the plan's prefix deny list
+# (fix round 1, review 1109, F2 and A9; fix round 2, review 1125).
 OPTION_FORMS = {
     ('project', 'rev-parse'): ('--verify', '-q'),
     ('project', 'rev-list'): (),
@@ -285,9 +298,15 @@ def git_check(where, args):
             if a.startswith(p):
                 raise ProbeRefused('option ' + p)
     forms = OPTION_FORMS.get((where, sub), ())
+    past = False   # after the fetch's `--`: git reads operands only, and the door refuses every dash-led one
     for a in args[1:]:
+        if past:
+            if a.startswith('-'):
+                raise ProbeRefused('option ' + a.split('=', 1)[0])
+            continue
         if a == '--' and a in forms:
-            break
+            past = True
+            continue
         if a.startswith('-') and a not in forms:
             raise ProbeRefused('option ' + a.split('=', 1)[0])
     for k in PINNED_KEYS:
@@ -492,7 +511,7 @@ def merge_answer(a, b, tree=False):
     r = git_ro('scratch', ['merge-tree', '--write-tree', '--name-only', '--no-messages', a, b], GIT_T)
     checkpoint()
     if r.rc is None:
-        return {'state': 'unmeasured', 'why': 'timeout'}
+        return {'state': 'unmeasured', 'why': why_of(r)}   # `budget` when the project budget cut it mid-call, else `timeout`
     if r.rc not in (0, 1):
         return {'state': 'unmeasured', 'why': 'rc-%d' % r.rc}
     lines = r.out.split('\n')

@@ -1466,9 +1466,46 @@ describe('ccd-land-probe: a failure never leaves an old record (fix round 1, rev
     expect(fx.readJson('main-health')).toMatchObject({ state: 'unmeasured', why: 'budget', required: [] });
     for (const id of ['lane-a-proj-a-alpha', 'lane-a-proj-a-beta']) {
       expect(fx.readJson(`${id}.lineage`), id).toMatchObject({ state: 'unmeasured', why: 'fetch-failed', chain: [] });
+      // The budget is spent by the time the rows are read, so each row's local read is undecided: its tip is unknown
+      // (null), never a sha (review 1125 F6; the decided row of a failed fetch keeps its tip: the failed-fetch case).
+      expect(fx.readJson(`${id}.lineage`).tip, `${id} tip`).toBeNull();
     }
     expect(fx.exists('lane-a-proj-a-new.lineage'), 'no old file, so none is invented').toBe(false);
     expect(tmpLeft()).toEqual([]);
+  });
+
+  // A7 (review 1125): every child the budget can cut answers `budget`, not its call's own failure word.
+  describe.each([
+    ['the scratch\'s init', ' init ', 'init'],
+    ['the project\'s ls-remote', ' ls-remote ', 'ls-remote'],
+    ['the base rev-parse after the fetch', ' rev-parse --verify -q refs/probe/base', 'rev-parse'],
+  ])('a budget that cuts %s', (_name, needle, sub) => {
+    it('says budget in probe and main-health, and the lineage stays fetch-failed', { timeout: 60_000 }, () => {
+      fx.addHead(1, { 'a.txt': 'a\n' });
+      fx.addRow('lane-a-proj-a-alpha', 'ws/alpha');
+      fx.conf(fx.project, '');
+      expect(fx.run().status).toBe(0);
+      expect(fx.readJson('probe').state).toBe('measured');
+      // The child outlives the whole project budget (bounded: 30 s), so the budget cuts it mid-call.
+      fx.wrapGit(`case " $* " in *"${needle}"*) sleep 30;; esac`);
+      const r = fx.run({ CCD_LAND_PROBE_BUDGET: '10' });
+      expect(r.status).toBe(0);
+      expect(r.stderr).toContain(`unmeasured proj-a probe budget rc=none`);
+      expect(fx.readJson('probe'), sub).toMatchObject({ state: 'unmeasured', why: 'budget', heads: [], pairs: [] });
+      expect(fx.readJson('main-health'), sub).toMatchObject({ state: 'unmeasured', why: 'budget' });
+      expect(fx.readJson('lane-a-proj-a-alpha.lineage'), sub).toMatchObject({ state: 'unmeasured', why: 'fetch-failed' });
+      expect(tmpLeft()).toEqual([]);
+    });
+  });
+
+  it('a merge-tree the project budget cut mid-call is unmeasured budget, not timeout (review 1125 A7)', { timeout: 60_000 }, () => {
+    fx.addHead(1, { 'a.txt': 'a\n' });
+    fx.conf(fx.project, '');
+    fx.wrapGit('case " $* " in *" merge-tree "*) sleep 30;; esac');
+    expect(fx.run({ CCD_LAND_PROBE_BUDGET: '10' }).status).toBe(0);
+    const p = fx.readJson('probe');
+    expect(p.state).toBe('measured');
+    expect(p.heads[0].base).toEqual({ state: 'unmeasured', why: 'budget' });
   });
 
   it('a conf whose base the key rule would refuse is an invalid conf: nothing is measured, enabled goes', () => {
@@ -1527,6 +1564,25 @@ describe('ccd-land-probe: the enabled mirror is reconciled before any project is
     expect(off.exists('enabled')).toBe(true);
     expect(fx.run().status).toBe(0);
     for (const f of files) expect(fs.existsSync(f), f).toBe(false);
+  });
+});
+
+describe('ccd-land-probe: the pause read checks $REG/landing/ itself (fix round 2, review 1125 A10)', () => {
+  it('a landing directory that is a symlink to an owned directory holding proj-a/paused is not read: the pause is not honoured, and nothing is measured', () => {
+    fx.addHead(1, { 'a.txt': 'a\n' });
+    fx.conf(fx.project, 'lineage=on\n');
+    const target = path.join(h.home, 'landing-target');
+    fs.mkdirSync(path.join(target, 'proj-a'), { recursive: true });
+    fs.writeFileSync(path.join(target, 'proj-a', 'paused'), '');
+    fs.mkdirSync(fx.reg, { recursive: true });
+    fs.symlinkSync(target, path.join(fx.reg, 'landing'));
+    const r = fx.run();
+    expect(r.status).toBe(0);
+    // is_paused is false through a symlinked landing directory (a symlink is no directory this probe reads a marker
+    // from), so the tick does not say `paused`; the project then stops at the directory check, and writes nothing.
+    expect(r.stderr).not.toContain('paused proj-a');
+    expect(r.stderr).toContain('skip landing: not a real directory owned by this user');
+    expect(ls(path.join(target, 'proj-a'))).toEqual(['paused']);
   });
 });
 

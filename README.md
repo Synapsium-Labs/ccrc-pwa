@@ -5999,8 +5999,9 @@ It writes four JSON files, each `"v": 1`, under `~/.cc-sessions/landing/<project
 | `enabled` | the mirror of the conf's `lineage=on`, with its own time |
 
 Anything the probe cannot measure is written as `unmeasured` with a why, and never as clean or green. That
-covers a failed fetch or gh call, a git child past its deadline (`timeout`), a fetch the project budget cut
-(`why: budget`), and an error before the first write. A failed or cut fetch, or an error before the first write,
+covers a failed fetch or gh call, a git child past its deadline (`timeout`), a child the project budget cut
+(`why: budget`), and an error before the first write. `fetch-failed` also covers a scratch, alternates or refspec
+failure before the first write, since the probe's set has no closer word. A failed or cut fetch, or an error before the first write,
 rewrites `probe`, `main-health` and every lineage of the project, so none of them keeps an older measurement. A
 row the tick could not decide keeps its last lineage file, with that file's own `at`. This happens when the budget
 ran out after the fetch, when one row's read timed out, or when the tick never reached the project. Stage 4
@@ -6038,16 +6039,30 @@ is one the project already holds. Three layers hold this:
 1. **The git door.** Every git call goes through `git_ro`, which owns a fixed hardening prefix. It allows only the
    subcommands in its two allowlists, and each of them accepts only the exact options the probe's own call sites
    pass. Any other option is refused, which covers a file-writing `--output=`, an abbreviated long option and
-   `cat-file --textconv`. So is an option placed after an operand, and so is `--end-of-options`. The call sites check
-   their own sha and ref operands, which never start with `-`. Only the fetch takes a `--`, and the elements after it
-   are its URL and refspecs.
+   `cat-file --textconv`. An option form is checked wherever its element stands, before an operand or after one, so
+   an allowed form after an operand is allowed and an unlisted one there is refused. `--end-of-options` is refused.
+   Only the fetch takes a `--`, and after it the door refuses every element that starts with `-`; the elements
+   there are its URL and refspecs, which the call site builds. The fetch child keeps five `GIT_*` variables (its
+   `FETCH_KEEP` set: `GIT_SSH`, `GIT_SSH_COMMAND`, `GIT_ASKPASS`, `GIT_SSL_CAINFO` and `GIT_SSL_CAPATH`). The first
+   three name commands that git runs for the fetch's own transport, like its credential helper.
 2. **Two gh call sites.** gh is reached through `gh api` with `GET` and through `gh pr list`, and each names the
-   repository. Every child's environment drops the `GIT_*` variables that could re-point or reconfigure it, and the
-   gh child also drops `GH_REPO` and `GH_HOST`.
+   repository. `gh pr list` is a GraphQL query, which `gh` sends as a POST, and it is a read. Every other child's
+   environment drops the `GIT_*` variables that could re-point or reconfigure it (the fetch child keeps the five
+   above), and the gh child also drops `GH_REPO` and `GH_HOST`.
 3. **Literal source pins** in `server/test/ccd-land-probe-readonly.test.ts`. They forbid `push`, a PR merge,
-   `update-branch`, any gh method but `GET`, a third call site, and any other way to start a process, including an
-   aliased import of `subprocess` or `os`. The pins match literal spellings, so a dynamic import or `getattr` is a
-   known limit. The planting evidence for every layer is the wave's measured mutation rows, not that test file.
+   `update-branch`, any gh method but `GET`, a third call site, and the spawn names (`os.system`, `pty.spawn`, an
+   aliased import of `subprocess` or `os`, and the rest of the banned list) by their literal spellings. A syntax-tree
+   census of the embedded program holds its imports to a pinned list, module names and aliases both and wherever the
+   statement stands, and holds out the dynamic builtins (`__import__`, `eval`, `exec`, `compile`, `getattr`,
+   `setattr`, `vars`, `globals`, `locals`) and `__dict__`. A text pin cannot see a name built from pieces, or a lookup
+   through an imported module's own attributes that no pinned name spells: that is the known limit. The planting
+   evidence for every layer is the wave's measured mutation rows, not that test file.
+
+One git child runs outside `git_ro`. With the project as an alternate, `git fetch` itself starts a `for-each-ref`
+against the project repository to read the alternate's refs. Git starts it inside the fetch, with the project's config
+and without the probe's `-c` settings, and it reads refs only. The other children git starts during the fetch run in
+the scratch, under the prefix. A `core.alternateRefsCommand` in the operator's own config is one of the fetch's own
+config-driven commands, like its credential helper and its ssh command.
 
 `ccrc doctor`'s `land-probe` check reads these files, and so does a person. Nothing else reads them yet: wave 4 of
 the landing-order programme adds the lineage acceptance, which reads `enabled` and the `.lineage` files, and wave 4b

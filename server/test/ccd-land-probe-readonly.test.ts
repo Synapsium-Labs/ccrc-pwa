@@ -1,12 +1,15 @@
 // ccd-land-probe is read-only BY CODE (landing-order wave 3b, spec section 7): the literal source pins, and the
 // validate-only self-test of git_ro's refusals. The behaviour is in ccd-land-probe.test.ts.
 //
-// WHAT THE PINS HOLD. The pins read ccd/ccd-land-probe's whole text and match LITERAL SPELLINGS: the names the
-// program uses today, and the respellings a careless edit would reach for (an aliased import, a `from ... import`,
-// a bare module assigned to another name). They are not a proof that no process can be started: a dynamic import
-// (`__import__`, importlib) or `getattr` on a module, a name built from pieces, or code in another file defeats a text
-// pin, and that is a KNOWN LIMIT. The behaviour that matters is held by the self-test below, which runs git_check's
-// verdicts, and by the behaviour suite.
+// WHAT THE PINS HOLD. The pins read ccd/ccd-land-probe's whole text, in two ways. An AST CENSUS of the embedded
+// program (R5b, `python3 -I` with the `ast` module) holds the imports to a pinned list, module names and aliases both,
+// wherever a statement stands (after a `;` or a `:`, inside a function), so any other module is red; and it holds the
+// dynamic builtins out (`__import__`, `eval`, `exec`, `compile`, `getattr`, `setattr`, `vars`, `globals`, `locals`,
+// as bare names, and a `__dict__` attribute). The spawn names are held by their LITERAL SPELLINGS (`subprocess.Popen`
+// once, `os.system`, `pty.spawn` and the rest of the banned list, an aliased import, a bare module handed to another
+// name). They are not a proof that no process can be started. The KNOWN LIMIT is a lookup through an imported
+// module's own attributes that no pinned name spells (a name built from pieces, say), and code in another file. The
+// behaviour that matters is held by the self-test below, which runs git_check's verdicts, and by the behaviour suite.
 //
 // WHERE THE PLANTING EVIDENCE IS. This file plants nothing. A pin is a request until a planted violation turns it red,
 // and that evidence is the mutation rows (one planted violation each, measured one at a time on the final files, the
@@ -23,6 +26,49 @@ const MARK = "<<'PY'";
 /** The bash head: everything before the heredoc that carries the program. */
 const head = src.slice(0, src.indexOf(MARK));
 const headCode = head.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
+/** The embedded program: the text between the heredoc's opener and its closing `PY` line. */
+const program = src.slice(src.indexOf(MARK) + MARK.length + 1, src.lastIndexOf('\nPY'));
+
+/** What the AST census reads from a program's text: its imports as [module, name, alias] (a plain `import m` has no
+ *  name; a from-import's module carries its leading dots), each bare name from the banned list, and each attribute
+ *  named `__dict__`. Run with `python3 -I` over the program on stdin, so it parses the real syntax tree: a statement
+ *  after a `;` or a `:`, or inside a function, is seen as the statement it is. */
+const CENSUS = `
+import ast, json, sys
+BANNED = ('__import__', 'eval', 'exec', 'compile', 'getattr', 'setattr', 'vars', 'globals', 'locals', '__builtins__')
+tree = ast.parse(sys.stdin.read())
+imports, names, attrs = [], [], []
+for n in ast.walk(tree):
+    if isinstance(n, ast.Import):
+        imports += [[a.name, None, a.asname] for a in n.names]
+    elif isinstance(n, ast.ImportFrom):
+        imports += [['.' * n.level + (n.module or ''), a.name, a.asname] for a in n.names]
+    elif isinstance(n, ast.Name) and n.id in BANNED:
+        names.append(n.id)
+    elif isinstance(n, ast.Attribute) and n.attr in ('__dict__', '__import__', '__builtins__'):
+        attrs.append(n.attr)
+print(json.dumps({'imports': sorted(imports, key=repr), 'names': sorted(names), 'attrs': sorted(attrs)}))
+`;
+function census(text: string): { imports: Array<[string, string | null, string | null]>; names: string[]; attrs: string[] } {
+  return JSON.parse(execFileSync('python3', ['-I', '-c', CENSUS], { input: text, encoding: 'utf8' }));
+}
+
+/** The dict literal `OPTION_FORMS = { ('where', 'sub'): ('form', ...), ... }`, read from the source text whatever its line
+ *  breaks: each key and each tuple, as `where sub` -> forms. A line of the literal that is not an entry is an error. */
+function optionForms(): Record<string, string[]> {
+  const m = /^OPTION_FORMS = \{([\s\S]*?)^\}$/m.exec(src);
+  if (!m) throw new Error('no literal dict OPTION_FORMS');
+  const body = m[1]!.split('\n').map((l) => l.replace(/#.*$/, '')).join('\n');
+  const entry = /\(\s*'([^']*)'\s*,\s*'([^']*)'\s*,?\s*\)\s*:\s*\(([^)]*)\)\s*,/g;
+  const out: Record<string, string[]> = {};
+  for (const e of body.matchAll(entry)) {
+    const key = `${e[1]} ${e[2]}`;
+    if (key in out) throw new Error(`OPTION_FORMS repeats ${key}`);
+    out[key] = [...e[3]!.matchAll(/'([^']*)'/g)].map((x) => x[1]!);
+  }
+  if (body.replace(entry, '').trim() !== '') throw new Error('OPTION_FORMS holds text that is not an entry');
+  return out;
+}
 
 /** The quoted strings of a tuple literal `NAME = ( ... )`, read from the source text. */
 function tuple(name: string): string[] {
@@ -69,9 +115,38 @@ describe('ccd-land-probe: the literal source pins', () => {
     expect(tuple('SCRATCH_ALLOW')).toEqual(['init', 'fetch', 'merge-tree', 'merge-base', 'rev-parse', 'rev-list', 'cat-file']);
     expect(tuple('OPTION_PREFIXES')).toEqual(['-c', '--config-env', '-C', '--git-dir', '--work-tree', '--exec', '--upload-pack', '--receive-pack', '-u']);
     expect(tuple('PINNED_KEYS')).toEqual(['core.hooksPath', 'core.fsmonitor']);
+    // The option forms each row admits (review 1125 F2, N5): every key and every tuple, whatever the literal's line breaks.
+    expect(src.match(/^OPTION_FORMS = \{/gm) ?? [], 'one literal').toHaveLength(1);
+    expect(optionForms()).toEqual({
+      'project rev-parse': ['--verify', '-q'],
+      'project rev-list': [],
+      'project for-each-ref': [],
+      'project cat-file': [],
+      'project merge-base': [],
+      'project count-objects': ['-v'],
+      'project ls-remote': ['--get-url'],
+      'project config': ['--get'],
+      'scratch init': ['-q', '--bare'],
+      'scratch fetch': ['--no-tags', '--no-write-fetch-head', '--no-recurse-submodules', '--'],
+      'scratch merge-tree': ['--write-tree', '--name-only', '--no-messages'],
+      'scratch merge-base': ['--is-ancestor'],
+      'scratch rev-parse': ['--verify', '-q'],
+      'scratch rev-list': ['--parents', '-n'],
+      'scratch cat-file': [],
+    });
   });
 
-  it('R5b every child process is spawned in one place: one Popen, three callers of run_child, and no other way to start a process', () => {
+  it('R5b every child process is spawned in one place: one Popen, three callers of run_child, the imports a pinned list, no dynamic builtin, and the spawn names by their literal spellings', () => {
+    // The AST census (review 1125 F4, F5): the program's imports are exactly this list, module names and aliases both and
+    // wherever a statement stands, so no other module (asyncio, multiprocessing, pty, ctypes, importlib, ...) and no
+    // alias is admitted; none of the dynamic builtins appears as a bare name; no `__dict__` attribute.
+    const mods = ['errno', 'json', 'os', 're', 'shutil', 'signal', 'stat', 'subprocess', 'sys', 'tempfile', 'time'];
+    const want = [...mods.map((m) => [m, null, null]), ['collections', 'namedtuple', null]];
+    const seen = census(program);
+    expect([...seen.imports].sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)))).toEqual(
+      [...want].sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b))));
+    expect(seen.names, 'a dynamic builtin as a bare name').toEqual([]);
+    expect(seen.attrs, 'a __dict__, __import__ or __builtins__ attribute').toEqual([]);
     // The pin above sees the ['git' spelling; this one closes a respelled third call site, for git and gh alike.
     expect(src.match(/\bsubprocess\.Popen\b/g) ?? [], 'subprocess.Popen').toHaveLength(1);
     // The def, git_ro, gh_get and gh_pr_list: a fifth is a new way to start a child, and is reviewed as one.
@@ -86,7 +161,8 @@ describe('ccd-land-probe: the literal source pins', () => {
     expect(src).not.toMatch(/\bos\.(system|popen|exec\w*|spawn\w*|posix_spawn\w*|fork\w*|forkpty)\b/);
     expect(src).not.toMatch(/\bpty\.(spawn|fork)\b/);
     // The respellings of the above: an aliased import, a from-import (at a line's start or after a semicolon), and a
-    // bare module handed to another name, which would run the banned names under a spelling the patterns miss.
+    // bare module handed to another name, which would run the banned names under a spelling the patterns miss. The
+    // census above is what closes an import anywhere; these stay for the spawn names a pinned module could still reach.
     expect(src, 'import ... as').not.toMatch(/^\s*import\s[^\n]*\b(subprocess|os)(\.\w+)*\s+as\b/m);
     expect(src, 'from ... import').not.toMatch(/\bfrom\s+(subprocess|os)(\.\w+)*\s+import\b/);
     expect(src, 'a bare module assigned').not.toMatch(/=\s*(subprocess|os)\b(?!\.)/);
@@ -223,8 +299,23 @@ describe('ccd-land-probe: the git_ro self-test', () => {
     expect(out.stdout.split('\n').filter(Boolean)).toEqual(refusals.map((r) => r[2]));
     // The refusals above are each one only that rule catches: a case the rule before it would answer is a different line.
     expect(fx.selftest([['scratch', ['init', '-q', '--bare', '/scratch']]]).stdout.trim()).toBe('allowed');
-    // After the fetch's `--` git reads operands only, so a dash-led operand there is the call site's to refuse (it does).
-    expect(fx.selftest([['scratch', ['fetch', '--no-tags', '--no-write-fetch-head', '--no-recurse-submodules', '--', '-odd-url', '+refs/heads/x:refs/probe/base']]]).stdout.trim()).toBe('allowed');
+    // After the fetch's `--` git reads operands only, and the door refuses every element that starts with `-` there
+    // (review 1125 item 6): a dash-led URL or refspec, and a second `--`, each answering `option <opt>`.
+    const fetchHead = ['fetch', '--no-tags', '--no-write-fetch-head', '--no-recurse-submodules', '--'];
+    expect(fx.selftest([
+      ['scratch', [...fetchHead, '-odd-url', '+refs/heads/x:refs/probe/base']],
+      ['scratch', [...fetchHead, 'u', '-odd=x']],
+      ['scratch', [...fetchHead, 'u', '--']],
+      ['scratch', [...fetchHead, 'u', '+refs/heads/x:refs/probe/base']],
+    ]).stdout.split('\n').filter(Boolean)).toEqual(['refused option -odd-url', 'refused option -odd', 'refused option --', 'allowed']);
+    // An option form is checked wherever its element stands (review 1125 item 7): an allowlisted one after an operand is
+    // allowed, an unlisted one there is refused.
+    expect(fx.selftest([
+      ['project', ['rev-parse', 'x', '--verify']],
+      ['scratch', ['merge-tree', 'a', 'b', '--write-tree']],
+      ['project', ['rev-parse', 'x', '--output=y']],
+      ['scratch', ['rev-list', 'x', '--output=y']],
+    ]).stdout.split('\n').filter(Boolean)).toEqual(['allowed', 'allowed', 'refused option --output', 'refused option --output']);
     expect(fx.selftest([['project', ['config', '--get', 'remote.origin.url']], ['project', ['ls-remote', '--get-url', 'origin']]]).stdout.split('\n').filter(Boolean)).toEqual(['allowed', 'allowed']);
   });
 
