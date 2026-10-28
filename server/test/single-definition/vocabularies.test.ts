@@ -973,7 +973,7 @@ describe('Build 9 nouns — the lifecycle journal vocabulary', () => {
     // A `LIFECYCLE_ACTS` that had gone empty would make `every` vacuously true
     // for EVERY file, turning the assertion above into a list of all 200-odd
     // sources — loud, but for the wrong reason. This fails first, and
-    // specifically. Re-measured at 30 acts (#1772's `shed-deps`): the
+    // specifically. Re-measured at 30 acts (D-7278's `shed-deps`): the
     // highest-scoring NON-holder is `server/src/deadCoordinator.ts` at 14 of
     // 30, so the margin is 16 tokens.
     const enumerates = (src: string): boolean =>
