@@ -211,8 +211,24 @@ describe('the rescue arm', () => {
 
   it('--rescue pins the TREE’s own reflog, not the 200 first shas of every reflog in the shared repository', () => {
     const t = claudeTree();
-    pushCommit(t, 'claude/agent-a');
+    const genEnv = ghContainedEnv(h.home, h.env({ GIT_AUTHOR_NAME: 'T', GIT_AUTHOR_EMAIL: 't@x', GIT_COMMITTER_NAME: 'T', GIT_COMMITTER_EMAIL: 't@x' }), { systemd: true, tmux: true });
+    // The tree's commit is made to sort HIGH (its sha starts with `f`), by varying a nonce in its message: the row
+    // below needs 205 foreign shas that sort before it, and a random low sha would leave too few to find. The commit
+    // is written with commit-tree and recorded with `update-ref HEAD` (HEAD is the branch's symref), which gives the
+    // tree's HEAD reflog and the branch's reflog the same entry `git commit` would. Each try passes with p=1/16, so
+    // 4000 tries cannot all miss in practice ((15/16)^4000 < 1e-100).
+    fs.writeFileSync(path.join(t, 'work.txt'), 'w\n'); h.git(t, 'add', 'work.txt');
+    const high = spawnSync('bash', ['-c', [
+      'k=0; tr=$(git write-tree) || exit 1; p=$(git rev-parse HEAD) || exit 1',
+      'while :; do k=$((k+1)); (( k <= 4000 )) || exit 2',
+      '  c=$(git commit-tree "$tr" -p "$p" -m "wip $k") || exit 1',
+      '  [[ "$c" == f* ]] && break',
+      'done',
+      'git update-ref -m "commit: wip $k" HEAD "$c" "$p" || exit 1'].join('\n')], { cwd: t, env: genEnv, encoding: 'utf8' });
+    expect(high.status, high.stderr).toBe(0);
     const amendedAway = h.git(t, 'rev-parse', 'HEAD');
+    expect(amendedAway).toMatch(/^f[0-9a-f]{39}$/);
+    expect(h.git(t, 'reflog', 'show', 'HEAD', '--format=%H').split('\n')[0]).toBe(amendedAway);
     h.git(t, 'commit', '--amend', '-m', 'b');
     const head = h.git(t, 'rev-parse', 'HEAD');
     // 205 commits on other branches, each with its own reflog entry, every one sorting BEFORE the amended-away sha:
@@ -223,7 +239,7 @@ describe('the rescue arm', () => {
       '  c=$(git commit-tree 4b825dc642cb6eb9a060e54bf8d69288fbee4904 -m "f$i") || exit 1',
       '  if [[ "$c" < "$lim" ]]; then git update-ref -m x "refs/heads/foreign/$n" "$c" || exit 1; n=$((n+1)); fi',
       '  (( i < 20000 )) || exit 2',
-      'done'].join('\n'), 'gen', amendedAway], { cwd: main(), env: ghContainedEnv(h.home, h.env({ GIT_AUTHOR_NAME: 'T', GIT_AUTHOR_EMAIL: 't@x', GIT_COMMITTER_NAME: 'T', GIT_COMMITTER_EMAIL: 't@x' }), { systemd: true, tmux: true }), encoding: 'utf8' });
+      'done'].join('\n'), 'gen', amendedAway], { cwd: main(), env: genEnv, encoding: 'utf8' });
     expect(gen.status, gen.stderr).toBe(0);
     const foreign = h.git(main(), 'for-each-ref', '--format=%(objectname)', 'refs/heads/foreign/').split('\n').filter(Boolean);
     expect(foreign.length).toBe(205);
