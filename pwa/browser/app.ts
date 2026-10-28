@@ -346,6 +346,49 @@ export const backlogFrame = (events: readonly object[]): object => ({
 });
 
 export interface Cost { readonly taskMs: number; readonly scriptMs: number }
+
+/** What React rendered over one window, read from the page's render counter (`countRenders`): `commits` is how many
+ *  times React committed, `rendered` how many component renders those commits performed (function, class, forwardRef
+ *  and simple-memo fibers that did work, the test DevTools itself applies). Counts, not milliseconds, so a slow or
+ *  loaded runner cannot move them: a frame either renders a component or it does not. */
+export interface Renders { readonly commits: number; readonly rendered: number }
+
+/** Install the render counter on `ctx`: a minimal `__REACT_DEVTOOLS_GLOBAL_HOOK__` defined before the app's first
+ *  script, which production React injects into (react-dom reads the hook at module load, and calls
+ *  `onCommitFiberRoot` after every commit in a production build too). On each commit it walks the committed tree the
+ *  way DevTools does: a subtree whose child list is the one the previous commit left is skipped (it bailed out, nothing
+ *  in it rendered), and a component fiber counts as rendered when it is new or carries React's `PerformedWork` flag
+ *  (1). Call it after `openApp` and before `page.goto`; `frameCost` reads it when `options.renders` is set. Test code
+ *  only: the page's own code never reads it. */
+export async function countRenders(ctx: BrowserContext): Promise<void> {
+  await ctx.addInitScript(() => {
+    interface Fiber { tag: number; flags: number; child: Fiber | null; sibling: Fiber | null; alternate: Fiber | null }
+    const tally = { commits: 0, rendered: 0 };
+    // FunctionComponent 0, ClassComponent 1, ForwardRef 11, SimpleMemoComponent 15. MemoComponent (14) is left out: its
+    // inner component is a fiber of its own and counts there.
+    const COMPONENT = new Set([0, 1, 11, 15]);
+    const PERFORMED_WORK = 1;
+    const onCommitFiberRoot = (_id: number, root: { current: Fiber }): void => {
+      tally.commits += 1;
+      const stack: Fiber[] = [root.current];
+      while (stack.length > 0) {
+        const fiber = stack.pop()!;
+        const prev = fiber.alternate;
+        if (COMPONENT.has(fiber.tag) && (prev === null || (fiber.flags & PERFORMED_WORK) === PERFORMED_WORK)) tally.rendered += 1;
+        if (prev !== null && fiber.child === prev.child) continue;
+        for (let child = fiber.child; child !== null; child = child.sibling) stack.push(child);
+      }
+    };
+    Object.assign(window, {
+      __ccrcRenders: tally,
+      __REACT_DEVTOOLS_GLOBAL_HOOK__: {
+        supportsFiber: true, isDisabled: false, renderers: new Map(), inject: (): number => 1,
+        onCommitFiberRoot, onCommitFiberUnmount: (): void => undefined, onPostCommitFiberRoot: (): void => undefined,
+        setStrictMode: (): void => undefined, checkDCE: (): void => undefined,
+      },
+    });
+  });
+}
 export interface FrameCost {
   /** One window with no frame sent: what the page costs doing nothing. A window runs from its first Chrome read to its
    *  second (see `frameCost`), so it is at least `gapMs` long and, in a returned result, at most `gapMs + SPAN_SLACK_MS`. */
@@ -363,6 +406,9 @@ export interface FrameCost {
    *  after the second. At least `gapMs`, and at most `gapMs + SPAN_SLACK_MS` in a returned result: a longer window fails the
    *  attempt (`window-overrun`), and is only in `FrameCostRecord`. */
   readonly spans: readonly number[];
+  /** Per window, the idle one first, when `options.renders` is set: what React rendered between its two reads (the
+   *  counter is read just outside the Chrome reads, so the meter's own evaluate is not in the CDP figures). */
+  readonly renders?: readonly Renders[];
 }
 
 /** What `frameCost` has measured so far, filled in place, one entry per COMPLETED window (the idle one first), so a
@@ -374,6 +420,8 @@ export interface FrameCostRecord {
     readonly cost: Cost; readonly spanMs: number; readonly deferred: number; readonly drainQuiet: boolean;
     /** The wall clock (epoch ms) at the window's start, to line a window up with what the host measured then. */
     readonly atMs: number;
+    /** What React rendered in the window, when `options.renders` is set. */
+    readonly renders?: Renders;
   }[];
 }
 
@@ -386,9 +434,11 @@ export interface FrameCostOptions {
   readonly during?: (index: number) => Promise<void>;
   readonly quiet?: boolean;
   readonly record?: FrameCostRecord;
+  /** Read the page's render counter (`countRenders`, installed before the page loaded) around each window. */
+  readonly renders?: boolean;
 }
 
-const medianOf = (xs: readonly number[]): number => {
+export const medianOf = (xs: readonly number[]): number => {
   const v = [...xs].sort((a, b) => a - b);
   if (v.length === 0) return 0;
   return v.length % 2 === 1 ? v[(v.length - 1) / 2]! : (v[v.length / 2 - 1]! + v[v.length / 2]!) / 2;
@@ -448,6 +498,7 @@ export async function frameCost(
   const deferred: number[] = [];
   const drainQuiet: boolean[] = [];
   const spans: number[] = [];
+  const renders: Renders[] = [];
   app.holdApi();
   try {
     await cdp.send('Performance.enable');
@@ -455,6 +506,12 @@ export async function frameCost(
       const { metrics } = await cdp.send('Performance.getMetrics');
       const get = (name: string): number => metrics.find((m) => m.name === name)?.value ?? Number.NaN;
       return { taskMs: get('TaskDuration') * 1000, scriptMs: get('ScriptDuration') * 1000 };
+    };
+    const counted = async (): Promise<Renders | null> => {
+      if (options.renders !== true) return null;
+      const now = await app.page.evaluate(() => (window as { __ccrcRenders?: Renders }).__ccrcRenders);
+      if (now === undefined) throw new Error('renders: the page has no render counter (call countRenders before page.goto)');
+      return { commits: now.commits, rendered: now.rendered };
     };
     // The main thread is quiet when TaskDuration grows by less than QUIET_TASK_MS over QUIET_STEPS reads
     // QUIET_STEP_MS apart; the wait gives up at QUIET_CAP_MS. A disclosure, not a proof that the page is done.
@@ -480,6 +537,7 @@ export async function frameCost(
       drainQuiet.push(wentQuiet);
       const began = performance.now();
       const atMs = Date.now();
+      const ra = await counted();
       const a = await read();
       app.mark('readA');
       const from = app.events.length;
@@ -487,13 +545,16 @@ export async function frameCost(
       await options.during?.(frame === null ? -1 : frame.index);
       await app.page.waitForTimeout(gapMs);
       const b = await read();
+      const rb = await counted();
       const spanMs = performance.now() - began;
       app.mark('readB');
       const intercepted = app.events.slice(from).filter((e) => e.kind === 'intercept').length;
       deferred.push(intercepted);
       spans.push(spanMs);
       const cost = { taskMs: b.taskMs - a.taskMs, scriptMs: b.scriptMs - a.scriptMs };
-      options.record?.windows.push({ cost, spanMs, deferred: intercepted, drainQuiet: wentQuiet, atMs });
+      const rendered = ra === null || rb === null ? undefined : { commits: rb.commits - ra.commits, rendered: rb.rendered - ra.rendered };
+      if (rendered !== undefined) renders.push(rendered);
+      options.record?.windows.push({ cost, spanMs, deferred: intercepted, drainQuiet: wentQuiet, atMs, ...(rendered === undefined ? {} : { renders: rendered }) });
       // The window stays in the record. Past the slack its figures are not taken as the frame's cost, so the attempt
       // fails here: no retry, no skip, no filter. The finally still releases whatever is parked.
       if (spanMs > gapMs + SPAN_SLACK_MS) {
@@ -504,7 +565,7 @@ export async function frameCost(
     const idle = await window(null);
     const costs: Cost[] = [];
     for (const [index, frame] of frames.entries()) costs.push(await window({ frame, index }));
-    return { idle, frames: costs, ...summarize(costs), deferred, drainQuiet, spans };
+    return { idle, frames: costs, ...summarize(costs), deferred, drainQuiet, spans, ...(options.renders === true ? { renders } : {}) };
   } finally {
     app.releaseApi();
     await cdp.detach().catch(() => { /* the context closing first is fine */ });

@@ -13,9 +13,10 @@
 // timers, can still run into a window. The first two self-test cases pin the deferral by the order of the harness's log.
 //
 // - Two gated cases, each in Refined and in Instrument at 1920 on `/`: the median cost of 15 changing frames stays under
-//   `FRAME_CEILING_MS` (a ceiling only), and the median script time of 5 identical frames sent after them stays under
-//   `IDENTICAL_SCRIPT_RATIO` of the changing frames' median script time (what C6 changed). The fixture is READY before
-//   it is measured: the rows are drawn (not only received), the page has no sideways scroll and threw nothing.
+//   `FRAME_CEILING_MS` (a ceiling only), and the median number of components React renders for each of 5 identical
+//   frames sent after them stays under `IDENTICAL_RENDER_RATIO` of the changing frames' median (what C6 changed),
+//   counted by `countRenders` (`browser/app.ts`), not timed. The fixture is READY before it is measured: the rows are
+//   drawn (not only received), the page has no sideways scroll and threw nothing.
 // - The measurement block runs only on demand (`CCRC_MEASURE=1`): 8 configurations (`/` and a long session, in both
 //   skins, at 1920 and 390), each 15 changing frames, one identical frame and one idle window, one console line each.
 //   When `CCRC_RENDERS` names a directory the same block also writes the viewport screenshots there (both pages, both
@@ -30,9 +31,9 @@
 // passing test's console lines, and its `default` one otherwise, which prints them (`--silent=false` alone does not
 // change that). `--reporter=verbose` or `--reporter=default` prints them in both. Add
 // `CCRC_RENDERS=<a directory outside the work tree>` for the screenshots. Each gate case also writes its per-window
-// figures (script, task, span, deferred requests, whether the drain went quiet, and the window's wall-clock start,
-// `at`) into its `task.meta.frameCost`, which the JSON reporter keeps, whether the attempt passes, fails or times out
-// (`keepOnFinish`).
+// figures (script, task, span, deferred requests, whether the drain went quiet, the window's wall-clock start, `at`,
+// and, in the ratio case, what React rendered, `renders`) into its `task.meta.frameCost`, which the JSON reporter
+// keeps, whether the attempt passes, fails or times out (`keepOnFinish`).
 import { mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -40,7 +41,7 @@ import { chromium, type Browser, type Page } from 'playwright-core';
 import { INSTRUMENT, PHOSPHOR, REFINED } from '@ccrc/ui';
 import { resolveChrome } from './harness';
 import {
-  backlogFrame, buildDist, fleetApi, fleetFixture, fleetFrame, fleetFrameAt, FIXTURE_NOW_MS, frameCost, INFLIGHT_CAP_MS, longTranscript,
+  backlogFrame, buildDist, countRenders, fleetApi, fleetFixture, fleetFrame, fleetFrameAt, FIXTURE_NOW_MS, frameCost, INFLIGHT_CAP_MS, longTranscript, medianOf,
   openApp, QUIET_CAP_MS, removeDist, serveDist, SPAN_SLACK_MS, summarize, type AppFixture, type AppView, type DistServer, type FrameCostRecord,
   type HarnessEvent, type OpenedApp,
 } from './app';
@@ -52,26 +53,33 @@ import {
  *  inside the windows (before R104): before C6 (`pwa/src` at main) Refined 101.3 ms and Instrument 93.9 ms at 1920;
  *  after C6 108.9 and 92.4. Review 944 later measured after-C6 medians of 122 to 158 ms at load 25 to 38. It does not
  *  check that the frames were applied: a page that dropped every frame would pass it (the ratio case below requires
- *  its changing-frame median script above 1 ms). What C6 does change, an identical frame, is gated below by
- *  `IDENTICAL_SCRIPT_RATIO`. Under R104 it is measured on the deferring meter like the ratio, with the same value. */
+ *  its changing frames to render at least `MIN_CHANGING_RENDERS` components). What C6 does change, an identical frame,
+ *  is gated below by `IDENTICAL_RENDER_RATIO`. Under R104 it is measured on the deferring meter, with the same value. */
 const FRAME_CEILING_MS = 220;
 
-/** The most an IDENTICAL frame's script time may be, as a share of the same page's changing-frame median script time.
- *  A ratio, not a number of milliseconds: both figures come from one page in one run, so the gate is meant not to
- *  depend on the runner's speed. That is argued, not measured: CI's runner logs no ratio, and the revert has run only
- *  on this box. After C6 an identical frame makes the store keep the array it holds and set nothing, so no subscriber
- *  renders; before it, every subscriber of `sessions` rendered again.
+/** The most an IDENTICAL frame may render, as a share of what a changing frame renders on the same page: the median
+ *  number of components React rendered in each identical frame's window over the median in each changing frame's
+ *  window (`countRenders`: a component counts when React performed work on it, the test React DevTools applies). After
+ *  C6 an identical frame makes the store keep the array it holds and set nothing, so no subscriber renders; before it,
+ *  every subscriber of `sessions` rendered again, and a shell that re-renders on the frame renders about as much as a
+ *  changing frame does.
  *
- *  Its history, all on this box, every run with the fixture's answers still inside the windows (before R104): after
- *  C6, 0.08 to 0.19 over three runs (Refined 2.2 / 17.0, 1.8 / 17.1 and 1.5 / 20.1 ms at 1920; Instrument 1.5 / 10.7,
- *  1.8 / 9.5 and 1.4 / 9.0); before C6 (`pwa/src` at main), 0.49 to 0.94 over two. At the fix-round head the case RED
- *  the unmutated tree once: Refined 12.0 / 29.6 = 0.41 (load 48 to 54; its cause was never measured). Its other
- *  attempts there: after C6, green in 4 (0.076 to 0.276); before C6, red in all 3, in both skins (0.452 to 1.136).
- *  Review 944 found how the old meter could red it: a window that caught one of the app's own polls cost 10 to 20 ms
- *  of script with no frame difference, and three such windows of five move the median. So the operator's R104 contract
- *  moved the fixture's answers out of the windows (see `frameCost`), with this value and the frame counts unchanged.
- *  That lowers the exposure; it does not remove it, and it explains nothing about the red above. */
-const IDENTICAL_SCRIPT_RATIO = 0.35;
+ *  Counted, not timed. The gate first compared ScriptDuration in ms, with this same value, and went red on CI's
+ *  shared runner with no re-render to find: Instrument's identical frames' script ran 1.1 to 10.5 ms around a median
+ *  of 3.5 to 4.9 against changing medians of 6.9 to 9.9 (0.43 to 0.69, five runs), where this box measured about
+ *  0.7 against 2.9. An identical frame still parses the whole fleet and compares it row by row, which C6 keeps and a
+ *  render count leaves out, and over a 2 s window a shared runner adds GC and timer work of a few ms: both are a
+ *  large share of Instrument's small changing-frame script. Counted on this box, 10 runs of both skins beside six
+ *  busy loops (load 26 to 60): a changing frame renders 198 to 351 components (two commits), an identical one 0, or
+ *  18 to 41 when one of the app's own timers lands in its window (the same counts land when the five frames are
+ *  replaced by a frame type the store ignores, so the frame causes none of them); ratios 0.00 to 0.14, where the ms
+ *  ratio read 0.20 to 0.38 over the same runs and would have been red in three. A store that sets a new array on an
+ *  identical frame, as before C6, reads 0.71 (Instrument) and 0.77 (Refined). The ms figures stay in the failure
+ *  message. */
+const IDENTICAL_RENDER_RATIO = 0.35;
+/** A changing frame changes nine rows (`fleetFrameAt`), so it renders at least that many components: the ratio's
+ *  denominator is never a page that applied nothing. */
+const MIN_CHANGING_RENDERS = 9;
 const IDENTICAL_FRAMES = 5;
 
 const ROWS = 80;
@@ -138,8 +146,9 @@ async function ready(page: Page, session: boolean): Promise<number> {
 const sideScroll = (page: Page): Promise<number> =>
   page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
 
-async function boot(view: AppView, route: string): Promise<{ app: OpenedApp; rows: number }> {
+async function boot(view: AppView, route: string, renders = false): Promise<{ app: OpenedApp; rows: number }> {
   const app = await openApp(browser!, view, fixture());
+  if (renders) await countRenders(app.ctx);
   await app.page.goto(server!.origin + route);
   const rows = await ready(app.page, route !== '/');
   // A transcript's markdown and code blocks finish after the rows are in the DOM: let that work end, so the idle window
@@ -356,6 +365,7 @@ function keep(task: { meta: object }, record: FrameCostRecord): void {
   Object.assign(task.meta, { frameCost: {
     idle: windows[0]?.cost, frames: windows.slice(1).map((w) => w.cost), spans: windows.map((w) => w.spanMs),
     deferred: windows.map((w) => w.deferred), drainQuiet: windows.map((w) => w.drainQuiet), at: windows.map((w) => w.atMs),
+    renders: windows.map((w) => w.renders ?? null),
   } });
 }
 
@@ -413,8 +423,8 @@ describe('frame cost (D-6438)', () => {
     // Its own page visit, not shared with the ceiling case: each case then reads on its own, and a failure of one does
     // not hide the other. The changing frames come first, as in the ceiling case, so the identical ones follow a page
     // that has just rendered a changed list.
-    it(`an identical fleet frame's script stays below 35% of a changing frame's (${skin}, 1920)`, async (ctx) => {
-      const { app } = await boot({ skin, theme: PHOSPHOR, width: 1920 }, '/');
+    it(`an identical fleet frame renders under 35% of the components a changing frame renders (${skin}, 1920)`, async (ctx) => {
+      const { app } = await boot({ skin, theme: PHOSPHOR, width: 1920 }, '/', true);
       const record: FrameCostRecord = { windows: [] };
       keepOnFinish(ctx, record);
       try {
@@ -422,19 +432,27 @@ describe('frame cost (D-6438)', () => {
         expect(await sideScroll(app.page)).toBeLessThanOrEqual(0);
         const frames = changing();
         const last = frames.at(-1)!;
-        const cost = await frameCost(app, '/ws/fleet', [...frames, ...Array.from({ length: IDENTICAL_FRAMES }, () => last)], GAP_MS, { record });
+        const cost = await frameCost(app, '/ws/fleet', [...frames, ...Array.from({ length: IDENTICAL_FRAMES }, () => last)], GAP_MS, { record, renders: true });
         expect(record.windows, 'the record holds the idle window and every frame window').toHaveLength(1 + FRAMES + IDENTICAL_FRAMES);
         expect(cost.frames).toHaveLength(FRAMES + IDENTICAL_FRAMES);
         expect(app.errors).toEqual([]);
-        const changed = summarize(cost.frames.slice(0, FRAMES)).median.scriptMs;
-        const identical = summarize(cost.frames.slice(FRAMES)).median.scriptMs;
-        // Non-vacuous: a page whose changing frames cost no script has nothing to be a share of.
-        expect(changed, `median script per changing frame, ${skin}: ${changed.toFixed(1)} ms`).toBeGreaterThan(1);
+        // `renders` has the idle window first, then one entry per frame.
+        const renders = cost.renders ?? [];
+        expect(renders, 'the render counter read every window').toHaveLength(1 + FRAMES + IDENTICAL_FRAMES);
+        const rendered = (from: number, to: number): number => medianOf(renders.slice(1 + from, 1 + to).map((r) => r.rendered));
+        const changed = rendered(0, FRAMES);
+        const identical = rendered(FRAMES, FRAMES + IDENTICAL_FRAMES);
+        const scripts = (from: number, to: number): string => cost.frames.slice(from, to).map((c) => c.scriptMs.toFixed(1)).join(', ');
+        const said = `${skin}: components rendered per window ${renders.map((r) => r.rendered).join(' ')} (idle first; commits `
+          + `${renders.map((r) => r.commits).join(' ')}); script ms, changing ${scripts(0, FRAMES)}, identical ${scripts(FRAMES, FRAMES + IDENTICAL_FRAMES)}; `
+          + `deferred ${cost.deferred.join(' ')}; spans ${cost.spans.map((x) => x.toFixed(1)).join(', ')} ms`;
+        // Non-vacuous: a changing frame re-renders at least the rows it changed, so a page that applied no frame, or a
+        // counter React never reported to, is red here and never passes the ratio by rendering nothing at all.
+        expect(changed, `median components rendered per changing frame ${changed}, below ${MIN_CHANGING_RENDERS}; ${said}`)
+          .toBeGreaterThanOrEqual(MIN_CHANGING_RENDERS);
         const ratio = identical / changed;
-        expect(ratio, `median script per identical frame ${identical.toFixed(1)} ms / per changing frame ${changed.toFixed(1)} ms = ${ratio.toFixed(2)}, ${skin}; `
-          + `identical scripts ${cost.frames.slice(FRAMES).map((c) => c.scriptMs.toFixed(1)).join(', ')}; deferred ${cost.deferred.join(' ')}; `
-          + `spans ${cost.spans.map((x) => x.toFixed(1)).join(', ')} ms`)
-          .toBeLessThan(IDENTICAL_SCRIPT_RATIO);
+        expect(ratio, `median components rendered per identical frame ${identical} / per changing frame ${changed} = ${ratio.toFixed(2)}; ${said}`)
+          .toBeLessThan(IDENTICAL_RENDER_RATIO);
       } finally {
         await app.ctx.close();
       }
