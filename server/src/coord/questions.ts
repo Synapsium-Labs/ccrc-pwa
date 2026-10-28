@@ -35,16 +35,20 @@
 // import of `currentFor` stays inward and `rings/outward-edges.data.ts` gains no pair.
 import { createHash } from 'node:crypto';
 import {
-  APPROVAL_CWD_TRUSTED, APPROVAL_HOOK_VERSIONS, approvalDigestBytes, canonicalJson, isAskState,
-  type ApprovalMintReleaseReason, type ApprovalState, type AskMintReleaseReason, type AskState, type Dialog, type HookAsk,
-  type HookAskQuestion,
+  APPROVAL_CWD_TRUSTED, APPROVAL_HOOK_VERSIONS, ASK_OPERATOR_PRINCIPAL, approvalDigestBytes, canonicalJson, isAskState,
+  type ApprovalMintReleaseReason, type ApprovalRulingRecord, type ApprovalState, type AskMintReleaseReason, type AskState,
+  type Dialog, type HookAsk, type HookAskQuestion,
 } from '../../../shared/api.js';
+import { REFUSAL_STATUS, type RouteRefusal } from '../../../shared/refusal.js';
 import { answeredByBody, approvalRuledBody, askPushBody } from '../askbody.js';
 import { askActions, askKey } from '../askkey.js';
 import { approvalWindowMs, askNotifyAt } from '../askwindow.js';
 import type { HookState } from '../hookstate.js';
+import type { AskResult } from '../inject/ask.js';
+import type { DialogMultiResult, DialogResult, DialogTextResult } from '../inject/send.js';
+import type { NoticeSink } from '../notice.js';
 import type { PushPayload } from '../push.js';
-import { readRegistry, type SessionRecord } from '../registry.js';
+import { freshAskAt, readRegistry, UNMEASURED_ASK_AT, type SessionRecord } from '../registry.js';
 import { approvalClass, rootsForChild } from './approvalguard.js';
 import { renderApprovalBrief } from './approvalbrief.js';
 import type { ApprovalSigner, rulingsAllowedHere } from './approvalsign.js';
@@ -54,7 +58,7 @@ import type { ReclaimDeps } from './reclaim.js';
 import { redactCommand, redactedStored } from './redact.js';
 import { approvalNudgeSubject, askNudgeSubject } from './rundefs.js';
 import { queueSystemMail } from './rundefsTx.js';
-import type { ApprovalRow, AskReadResult, AskRow, CoordStore } from './store.js';
+import type { ApprovalRow, AskReadResult, AskRow, AskTakeResult, CoordStore } from './store.js';
 import { UNTRUSTED_CAP_BYTES, untrustedBlock } from './untrusted.js';
 
 // ── the aggregate ────────────────────────────────────────────────────────────────────────────────────────────────
@@ -373,6 +377,61 @@ export interface ApprovalLapseInput {
   readonly push: (ev: QuestionPush) => void;
 }
 
+// ── the answer doors' cores (Q3f, D-7030; OA-C7 ruled (a), 2026-10-26) ─────────────────────────────────────────────
+
+/** A door core's answer: the status and the body the route sends, `refuseRoute`'s shape (`{ok:false, error, ...extra}`
+ *  at the word's one status) for a refusal, and the door's success body otherwise. A core never sends: the route does,
+ *  so this file holds no `reply` (spec §2.5). */
+export interface QuestionDoorAnswer { readonly status: number; readonly body: unknown }
+
+/** What the claimant's cores (`rule`, `release`) read, named and passed in, never reached for. Built ONCE in
+ *  `registerCoordRoutes` from the same closures and functions `ApprovalRaiseDeps` carries (`signerFor` stays a closure
+ *  there, `heldFor` and `rulingsAllowedHere` the real functions, so this file imports no outer ring at runtime), plus
+ *  the notice sink, the kill switches' read and the press of a digit into the child's pane (`answerAsk` over the
+ *  server's one `KeyedQueue`). `coord`, `io`, `cfg` and `tmux` are the server's. */
+export type ClaimantDoorDeps = Pick<ApprovalRaiseDeps, 'coord' | 'io' | 'cfg' | 'tmux' | 'signerFor' | 'rulingsAllowedHere' | 'heldFor'> & {
+  readonly notice: NoticeSink;
+  readonly approvalsKilled: () => Promise<boolean>;
+  readonly pressAsk: (childId: string, askKey: string, optionIndexes: readonly number[]) => Promise<AskResult>;
+};
+
+/** What the operator's core (`answer`) reads, named and passed in: built ONCE in `buildServer` and handed to both the
+ *  old operator doors and `POST /api/questions/:id/answer`, so the two can never read different wiring. The press
+ *  functions (`answerAsk`, `answerDialog`, `answerDialogText`, `answerDialogMulti` over the server's queue), the answered
+ *  frame's emit (`answeredFrame`), and the child's hookstate as the watcher last read it (the `/dialog` door's approval
+ *  marking) are closures there, so this file imports no outer ring at runtime. `coord` is the server's, and may be
+ *  absent: the operator's press goes through plain on a box with no coordination store. */
+export interface OperatorDoorDeps {
+  readonly coord: CoordStore | undefined;
+  readonly io: ReclaimDeps['io'];
+  readonly cfg: ReclaimDeps['cfg'];
+  readonly notice: NoticeSink;
+  readonly pressAsk: (sessionId: string, askKey: string, optionIndexes: readonly number[]) => Promise<AskResult>;
+  readonly pressDialog: (sessionId: string, dialogId: string, optionIndex: number) => Promise<DialogResult>;
+  readonly pressDialogText: (sessionId: string, dialogId: string, optionIndex: number, text: string) => Promise<DialogTextResult>;
+  readonly pressDialogMulti: (sessionId: string, dialogId: string, optionIndexes: number[]) => Promise<DialogMultiResult>;
+  readonly answered: (sessionId: string, route: string, res: { ok: true; next?: Dialog | null } | { ok: false; error: string }) => void;
+  readonly hookStateOf: (sessionId: string) => HookState | null;
+}
+
+/** The operator's answer, once a door's front ladder (the session gate, `knownId`, the body reader) has passed: an ask
+ *  by option index, or a dialog's row (`form: 'row'`, with the approval marking), free-text row (`'text'`) or
+ *  multiSelect set (`'multi'`). */
+export type OperatorAnswer =
+  | { readonly kind: 'ask'; readonly sessionId: string; readonly askKey: string; readonly optionIndexes: number[] }
+  | { readonly kind: 'dialog'; readonly form: 'row'; readonly sessionId: string; readonly dialogId: string; readonly optionIndex: number }
+  | { readonly kind: 'dialog'; readonly form: 'text'; readonly sessionId: string; readonly dialogId: string; readonly optionIndex: number; readonly text: string }
+  | { readonly kind: 'dialog'; readonly form: 'multi'; readonly sessionId: string; readonly dialogId: string; readonly optionIndexes: number[] };
+
+/** The claimant's ruling, once a door's front ladder (the box token, the body shape, attribution, the id parse) has
+ *  passed: `id` the row, `fromId` the attributed caller. */
+export type ClaimantRule =
+  | { readonly kind: 'ask'; readonly id: number; readonly fromId: string; readonly optionIndexes: number[]; readonly askKey: string | undefined }
+  | { readonly kind: 'approval'; readonly id: number; readonly fromId: string; readonly verdict: 'allow' | 'deny'; readonly reason: string };
+
+/** The claimant's hand-over, once a door's front ladder has passed. */
+export interface ClaimantRelease { readonly kind: 'ask' | 'approval'; readonly id: number; readonly fromId: string }
+
 /** One composition's owner of question state. Q3e: the raise and the approval inputs it holds. Q3d: the hold carrier
  *  and every act on it, as closure locals of `createQuestions` too. */
 export interface Questions {
@@ -422,6 +481,20 @@ export interface Questions {
   approvalInput(id: number, now: number): HeldApprovalInput | undefined;
   /** Forget row `id`'s input (a ruling stored, a hand-over). */
   forgetApprovalInput(id: number): void;
+  /** W3 Q3f (D-7030): THE OPERATOR'S CORE, behind `POST /api/questions/session-<id>/answer` and the four old operator
+   *  doors. Starts at the first store read: the ask's record arms (the held row taken before the digit, rolled back on a
+   *  refused press, settled after it, the operator never refused for a record failure, D-2169, D-2545), the dialog's
+   *  approval marking before the key, then the press and the door's answer. */
+  answer(request: OperatorAnswer, deps: OperatorDoorDeps): Promise<QuestionDoorAnswer>;
+  /** W3 Q3f (D-7030): THE CLAIMANT'S RULING, behind `POST /api/questions/<ask|approval>-<n>/rule` and the two old rule
+   *  doors. Starts at the first store read: the ask's take, press, rollback, record, settle and late answer (D-5289), or
+   *  the approval ladder's tail (the row, the kill switches, single-box, the stored parent, the row's state and window,
+   *  the registry and `heldFor`, the guard again for an allow, the signer, the signature and the CAS that stores it,
+   *  the input forgotten, the notice, the door-in). */
+  rule(request: ClaimantRule, deps: ClaimantDoorDeps): Promise<QuestionDoorAnswer>;
+  /** W3 Q3f (D-7030): THE CLAIMANT'S HAND-OVER, behind `POST /api/questions/<ask|approval>-<n>/release` and the two old
+   *  release doors: the row, the stored parent, the decline CAS, then the door-in's push now. */
+  release(request: ClaimantRelease, deps: ClaimantDoorDeps): Promise<QuestionDoorAnswer>;
 }
 
 /** The test-only view of one instance's carrier (`questionsTestView`), by the shapes the watcher's maps had: the held
@@ -1381,6 +1454,301 @@ export function createQuestions(deps: QuestionsDeps, rules?: QuestionRules): Que
     return coord.currentAskFor(childId);
   };
 
+  // ── the answer doors' cores (Q3f, D-7030): each starts at its door's first store read and answers what to send ──
+  //
+  // Moved, in today's order, out of the six deciding handlers (`POST /api/asks/:id/answer`, `/api/asks/:id/release`,
+  // `/api/approvals/:id/rule`, `/api/approvals/:id/release` in `coord/routes.ts`; `POST /api/sessions/:id/ask` and
+  // `/dialog` in `server.ts`; `/dialog/text` and `/dialog/multi` press with no store read and move with them). Every
+  // status and body is the handler's own, byte for byte. A door-in is called on the instance object (`questions.<m>`),
+  // as the watcher's forwards called it, and its answer pushed through the watcher's doors sink; with no sink (a server
+  // with no watcher) none is called, as `watcher?.` called none.
+
+  /** A refusal in `refuseRoute`'s shape: the word's one status (`REFUSAL_STATUS`), `{ok:false, error, ...extra}`. */
+  const refusal = (error: RouteRefusal, extra: Record<string, unknown> = {}): QuestionDoorAnswer =>
+    ({ status: REFUSAL_STATUS[error], body: { ok: false, error, ...extra } });
+  const sent = (status: number, body: unknown): QuestionDoorAnswer => ({ status, body });
+  const pushDoorIn = (ev: QuestionPush | null): void => { if (ev !== null) rules?.doors?.push(ev); };
+
+  /** `POST /api/asks/:id/answer`'s ladder after its id parse: the parent presses the digit into its child's live menu.
+   *  The CAS precedes the keystroke (`takeAskForAnswer`, re-proving the instance with `freshAskAt`, D-2170); a refused
+   *  press rolls back with `untakeAsk`, NOT `releaseAsk` (a held row only exists for a single-select ask, D-2173, so a
+   *  refused press pressed nothing; see `untakeAsk`'s docstring). */
+  const ruleAsk = async (q: Extract<ClaimantRule, { kind: 'ask' }>, d: ClaimantDoorDeps): Promise<QuestionDoorAnswer> => {
+    const coord = d.coord;
+    const askRead = coord.askById(q.id);
+    // D-2545: an unreadable row is not a gone one, and the two need different sentences. 503, a fact about this box.
+    if (!askRead.ok) return sent(503, { ok: false, error: 'ask-unreadable', detail: askRead.detail });
+    const ask = askRead.ask;
+    if (ask === null) return sent(404, { ok: false, error: 'unknown-ask' });
+    if (ask.parentId !== q.fromId) {
+      return sent(403, { ok: false, error: 'not-parent', detail: 'only this child\'s derived parent may pre-empt its question' });
+    }
+    // D-5290, D-5363: a row MINTED released was never held and never mailed; the operator owned it from the first tick.
+    if (ask.releaseReason !== null) return sent(409, { ok: false, error: 'not-held' });
+    // D-5293, D-5368: a parent that sends `askKey` is answering the question it was shown, or nothing is pressed.
+    if (q.askKey !== undefined && q.askKey !== ask.askKey) return sent(409, { ok: false, error: 'ask-mismatch' });
+    // D-2170: prove the menu on screen is the INSTANCE this row was minted for, and say WHICH refusal a failed read is
+    // (whole-branch review M2): `child-unmeasurable`, never `ask-moved`.
+    const fresh = await freshAskAt(d.io, d.cfg, ask.childId);
+    if (fresh === UNMEASURED_ASK_AT) {
+      return sent(409, { ok: false, error: 'child-unmeasurable',
+        detail: "this box could not read the child's live state — nothing was pressed, and the ask is unchanged" });
+    }
+    const taken = coord.takeAskForAnswer(q.id, fresh);
+    if (!taken.ok) return sent(409, { ok: false, error: taken.why });
+
+    const res = await d.pressAsk(ask.childId, ask.askKey, q.optionIndexes);
+    if (!res.ok) {
+      // The refused-press rollback: the row goes back to where the take found it (`'held'`, or `'released'` after a
+      // lapse, D-5289), never abandoned in `'answering'`.
+      if (!coord.untakeAsk(q.id, taken.from)) {
+        console.warn(`ccrc-server: untakeAsk(${q.id}) returned false after a refused press — ` +
+          "the ask row was not 'answering' when the rollback ran; it may be stranded");
+      }
+      return sent(409, res);
+    }
+    // D-2172's SECOND record, BEFORE `settleAsk`, so a throw there still leaves one durable trace of the answer; through
+    // the notice sink (D-5858), `'record-only'`, a failed archive never turning a landed press into a 500.
+    d.notice({
+      kind: 'ask', sessionId: ask.childId, runId: null,
+      title: 'question answered',
+      body: `${q.fromId} answered ${ask.childId}'s question: ${ask.question} → ` +
+            `${ask.options[q.optionIndexes[0]!] ?? '?'}`,
+    }, 'record-only', { degraded: 'ask answered, feed archive degraded' });
+    // GUARDED: the digit has already landed, so a failed settle must never turn the press into a 500.
+    try {
+      coord.settleAsk(q.id, q.fromId, ask.options[q.optionIndexes[0]!] ?? '', Date.now());
+    } catch (err) {
+      console.warn('ccrc-server: settleAsk failed after the digit was already pressed ' +
+        `(${err instanceof Error ? err.message : String(err)}) — the ask row may be stranded ` +
+        "'answering'; the feed record above (if it landed) is the surviving audit trace");
+    }
+    // D-5289, late answer wins: only after a take from `'released'`, the lapse's push replaced under the same tag.
+    if (taken.from === 'released' && rules?.doors !== undefined) pushDoorIn(questions.answeredLate(ask.childId, q.id, q.fromId));
+    return sent(200, { ok: true });
+  };
+
+  /** `POST /api/approvals/:id/rule`'s ladder after its id parse (spec §6.3 server steps 5 and 6, amended by D-5441 and
+   *  D-5530): the row; the kill switches and the single-box gate (nothing is signed under either); the stored parent
+   *  (`403 not-parent`, wherever the caller sits); a row minted released (`approval-released`); the row's state
+   *  (`declined`, `already-ruled`, `hook-gone`) and window (`hook-gone` at or after `notifyAt`); the child's mark and the
+   *  claimant rule (`not-a-child`, `run-unreadable`, `parent-changed`); the guard again for an allow
+   *  (`guard-forbidden`, `guard-escalate`); then the signer, the signature and the CAS that stores it. */
+  const ruleApproval = async (q: Extract<ClaimantRule, { kind: 'approval' }>, d: ClaimantDoorDeps): Promise<QuestionDoorAnswer> => {
+    const { coord, cfg } = d;
+    const { id, fromId, verdict, reason } = q;
+    const read = coord.approvalById(id);
+    if (!read.ok) return refusal('approval-unreadable', { detail: read.detail });
+    const row = read.row;
+    if (row === null) return refusal('unknown-approval');
+    if (await d.approvalsKilled()) return refusal('approvals-disabled');
+    if (!d.rulingsAllowedHere(cfg.role, cfg.fleetMode, cfg.ccrcDir)) return refusal('single-box');
+    if (row.parentId !== fromId) {
+      return refusal('not-parent', { detail: 'only the claimant this prompt was held for may rule on it' });
+    }
+    if (row.releaseReason !== null) return refusal('approval-released', { releaseReason: row.releaseReason });
+    if (row.state === 'declined') return refusal('declined');
+    if (row.state === 'allowed' || row.state === 'denied' || row.state === 'operator') return refusal('already-ruled');
+    const now = Date.now();
+    if (row.state !== 'held' && row.state !== 'released') return refusal('hook-gone');
+    if (now >= row.notifyAt) {
+      return refusal('hook-gone', { detail: 'the window has passed: the child\'s hook has returned and the operator has the prompt' });
+    }
+    // [registry-refused:refuses] a refused row is in no `recs`: the ruling answers `not-a-child`, and a refused claimant reads as `parent-not-live` in `heldFor`, so no ruling is stored.
+    const recs = await readRegistry(d.io, cfg);
+    const rec = recs.find((r) => r.id === row.childId) ?? null;
+    if (rec === null || rec.child.kind !== 'child' || rec.child.runId !== row.runId) return refusal('not-a-child');
+    let binding: Awaited<ReturnType<typeof heldFor>>;
+    try {
+      binding = await d.heldFor({ coord, io: d.io, cfg, tmux: d.tmux }, rec.id, rec.child, recs, now);
+    } catch (err) {
+      return refusal('run-unreadable', { detail: err instanceof Error ? err.message : String(err) });
+    }
+    if (binding.kind === 'not-a-child') return refusal('not-a-child');
+    if (binding.kind !== 'held' || binding.parent !== fromId) return refusal('parent-changed');
+    if (verdict === 'allow') {
+      // The guard again (spec §6.3 server step 5): the class stored at mint, and the classifier run once more over the
+      // input held in memory for the window. Unknown — no input held — is escalate.
+      if (row.class === 'forbidden') return refusal('guard-forbidden');
+      forgetExpiredInputs(now);
+      const held = approvalInputs.get(id);
+      const again = held === undefined ? 'escalate'
+        : approvalClass(held.tool, held.input, { ...(rootsForChild(rec, cfg.home) ?? { worktree: null, tmpRoot: null, scratch: null, home: cfg.home }), cwd: held.cwd });
+      if (again === 'forbidden') return refusal('guard-forbidden');
+      if (row.class !== 'ordinary' || again !== 'ordinary') return refusal('guard-escalate');
+    }
+    const signer = d.signerFor();
+    if (signer === null) return refusal('internal', { detail: 'the approval signing key is not loaded' });
+    const record: ApprovalRulingRecord = {
+      v: 1, rowId: row.id, sessionId: row.childId, agentId: row.agentId, digest: row.digest, nonce: row.nonce,
+      class: row.class, verdict, reason, expiresAt: row.notifyAt,
+    };
+    const sig = signer.signRuling(record);
+    if (sig === null) return refusal('internal', { detail: 'the ruling has no canonical form' });
+    const taken = coord.takeApprovalForRule(id, { by: fromId, verdict, reason, ruling: JSON.stringify({ record, sig }), now });
+    if (!taken.ok) {
+      return refusal(taken.why === 'already-ruled' ? 'already-ruled' : taken.why === 'declined' ? 'declined'
+        : taken.why === 'unknown-approval' ? 'unknown-approval' : 'not-held');
+    }
+    approvalInputs.delete(id);
+    // The journal's second record, beside the row: who ruled, and what, in the operator's name. `'record-only'`, AFTER
+    // the ruling is stored, so a failed archive costs the feed row only, never the ruling or this 200 (D-5858).
+    d.notice({
+      kind: 'ask', sessionId: row.childId, runId: null, title: 'permission ruled',
+      body: `${fromId} ${verdict === 'allow' ? 'allowed' : 'denied'} ${row.childId}'s ${row.tool} call: ${reason}`,
+    }, 'record-only', { degraded: 'ruling stored, feed archive degraded' });
+    const doors = rules?.doors;
+    if (doors !== undefined) {
+      pushDoorIn(questions.approvalRuled(row.childId, row.agentId, fromId, verdict, doors.paintedDialogOf(row.childId) !== undefined,
+        () => doors.projectOf(row.childId)));
+    }
+    return sent(200, { ok: true, state: verdict === 'allow' ? 'allowed' : 'denied' });
+  };
+
+  /** The claimant's ruling, by the kind its door's front ladder proved. */
+  const rule = (q: ClaimantRule, d: ClaimantDoorDeps): Promise<QuestionDoorAnswer> =>
+    q.kind === 'ask' ? ruleAsk(q, d) : ruleApproval(q, d);
+
+  /** `POST /api/asks/:id/release` and `/api/approvals/:id/release`'s ladders after their id parse: the parent DECLINES
+   *  to rule (Task 10, RULING F12) or hands the prompt over (D-5440). The decline CAS is the row acting as its own mutex
+   *  (`declineAsk`, `declineApproval`: their source state is `'held'`, so a decline that finds nothing held refuses
+   *  `not-held` rather than pretending to succeed); the door-in's push fires AFTER it, never before. */
+  const release = async (q: ClaimantRelease, d: ClaimantDoorDeps): Promise<QuestionDoorAnswer> => {
+    const coord = d.coord;
+    if (q.kind === 'ask') {
+      const askRead = coord.askById(q.id);
+      if (!askRead.ok) return sent(503, { ok: false, error: 'ask-unreadable', detail: askRead.detail });
+      const ask = askRead.ask;
+      if (ask === null) return sent(404, { ok: false, error: 'unknown-ask' });
+      if (ask.parentId !== q.fromId) {
+        return sent(403, { ok: false, error: 'not-parent', detail: 'only this child\'s derived parent may decline its question' });
+      }
+      if (!coord.declineAsk(q.id, Date.now())) return sent(409, { ok: false, error: 'not-held' });
+      // With no watcher (fix round 1, item 1) the row is declined and the answer is `{ok:true}`, which is true, but no
+      // hold is dropped and no push fires: warned, never refused (refusing would contradict the store row).
+      if (rules?.doors === undefined) {
+        console.warn(`ccrc-server: POST /api/asks/:id/release released ask ${q.id} (child ` +
+          `${ask.childId}) with no watcher configured — the row is declined but the operator's ` +
+          'push was never fired');
+      } else {
+        pushDoorIn(questions.released(ask.childId));
+      }
+      return sent(200, { ok: true });
+    }
+    const read = coord.approvalById(q.id);
+    if (!read.ok) return refusal('approval-unreadable', { detail: read.detail });
+    const row = read.row;
+    if (row === null) return refusal('unknown-approval');
+    if (row.parentId !== q.fromId) {
+      return refusal('not-parent', { detail: 'only the claimant this prompt was held for may hand it over' });
+    }
+    if (!coord.declineApproval(q.id, q.fromId, Date.now())) return refusal('not-held');
+    approvalInputs.delete(q.id);
+    const doors = rules?.doors;
+    if (doors !== undefined) pushDoorIn(questions.approvalReleased(row.childId, doors.paintedDialogOf(row.childId)));
+    return sent(200, { ok: true });
+  };
+
+  /** `POST /api/sessions/:id/ask`'s ladder after its body read (Task 12, D-2171): the OPERATOR's own answer path. A
+   *  held row is taken BEFORE the keystroke (the row is the mutex) and settled after it; a lost CAS never refuses the
+   *  operator (the press goes through on its own merits), and an unreadable or throwing store answers the press
+   *  UNRECORDED (D-2169's free degrade, D-2545, whole-branch review F3), never a 500 and never a refusal. */
+  const answerAsk = async (q: Extract<OperatorAnswer, { kind: 'ask' }>, d: OperatorDoorDeps): Promise<QuestionDoorAnswer> => {
+    const { sessionId: id, askKey: key, optionIndexes } = q;
+    // The plain press, byte-identical to the pre-Task-12 path: no coord, nothing held, or a record that cannot be read.
+    const pressPlain = async (): Promise<QuestionDoorAnswer> => {
+      const res = await d.pressAsk(id, key, optionIndexes);
+      return res.ok ? sent(200, res) : sent(409, res);
+    };
+    const coord = d.coord;
+    if (coord === undefined) return pressPlain();
+    let held: AskRow | null;
+    try {
+      const read = coord.heldAskFor(id);
+      if (!read.ok) {
+        console.warn(`ccrc-server: heldAskFor(${id}) refused (${read.detail}) — answering the ` +
+          "operator's press unrecorded rather than refusing it");
+        return pressPlain();
+      }
+      held = read.ask;
+    } catch (err) {
+      console.warn(`ccrc-server: heldAskFor(${id}) failed ` +
+        `(${err instanceof Error ? err.message : String(err)}) — answering the operator's press ` +
+        'unrecorded rather than refusing it');
+      return pressPlain();
+    }
+    if (held === null) return pressPlain();
+
+    let taken: AskTakeResult;
+    try {
+      taken = coord.takeAskForAnswer(held.id, await freshAskAt(d.io, d.cfg, id));
+    } catch (err) {
+      console.warn(`ccrc-server: takeAskForAnswer(${held.id}) failed ` +
+        `(${err instanceof Error ? err.message : String(err)}) — answering the operator's press ` +
+        'unrecorded rather than refusing it');
+      return pressPlain();
+    }
+    const res = await d.pressAsk(id, key, optionIndexes);
+    // Lost the CAS: nothing taken, nothing to roll back or settle, and the operator is never refused for it.
+    if (!taken.ok) return res.ok ? sent(200, res) : sent(409, res);
+    if (!res.ok) {
+      if (!coord.untakeAsk(held.id, taken.from)) {
+        console.warn(`ccrc-server: untakeAsk(${held.id}) returned false after a refused operator ` +
+          "press — the ask row was not 'answering' when the rollback ran; it may be stranded");
+      }
+      return sent(409, res);
+    }
+    // The digit landed. D-2172's second durable record, BEFORE `settleAsk`, `'record-only'` (D-5857).
+    d.notice({
+      kind: 'ask', sessionId: id, runId: null,
+      title: 'question answered',
+      body: `operator answered ${id}'s question: ${held.question} → ` +
+            `${held.options[optionIndexes[0]!] ?? '?'}`,
+    }, 'record-only', { degraded: 'ask answered, feed archive degraded' });
+    // GUARDED: the digit already landed, so a failure to record it must never turn the press into a 500.
+    try {
+      coord.settleAsk(held.id, ASK_OPERATOR_PRINCIPAL, held.options[optionIndexes[0]!] ?? '', Date.now());
+    } catch (err) {
+      console.warn("ccrc-server: settleAsk failed after the operator's digit was already pressed " +
+        `(${err instanceof Error ? err.message : String(err)}) — the ask row may be stranded 'answering'; ` +
+        'the feed record above (if it landed) is the surviving audit trace');
+    }
+    return sent(200, res);
+  };
+
+  /** The operator's answer: the ask's record arms, or a dialog's. `/dialog`'s row first records the operator on the
+   *  child's open approval rows BEFORE any key (D-5298, spec §6.3 server step 7), gated on the child's hookstate (none
+   *  read, or an approval envelope; D-5491: the operator is the one principal that always wins), a failed marking
+   *  answered anyway; then the press, its answered frame (`answered`), and the door's status: `bad-text` and
+   *  `bad-indexes` are the caller's to fix (400), every other refusal 409. */
+  const answer = async (q: OperatorAnswer, d: OperatorDoorDeps): Promise<QuestionDoorAnswer> => {
+    if (q.kind === 'ask') return answerAsk(q, d);
+    const id = q.sessionId;
+    if (q.form === 'row') {
+      const hs = d.hookStateOf(id);
+      if (hs === null || (hs.ask !== null && 'approval' in hs.ask)) {
+        try {
+          d.coord?.markApprovalOperator(id, Date.now());
+        } catch (err) {
+          console.warn(`ccrc-server: recording the operator on ${id}'s approval rows failed (${err instanceof Error ? err.message : String(err)}) — answering anyway`);
+        }
+      }
+      const res = await d.pressDialog(id, q.dialogId, q.optionIndex);
+      d.answered(id, 'dialog', res);
+      return res.ok ? sent(200, res) : sent(409, res);
+    }
+    if (q.form === 'text') {
+      const res = await d.pressDialogText(id, q.dialogId, q.optionIndex, q.text);
+      d.answered(id, 'dialog/text', res);
+      if (res.ok) return sent(200, res);
+      return sent(res.error === 'bad-text' ? 400 : 409, res);
+    }
+    const res = await d.pressDialogMulti(id, q.dialogId, q.optionIndexes);
+    d.answered(id, 'dialog/multi', res);
+    if (res.ok) return sent(200, res);
+    return sent(res.error === 'bad-indexes' ? 400 : 409, res);
+  };
+
   /** The test-only view (`questionsTestView`): this instance's carrier, by the shapes today's watcher maps had. */
   const testView: QuestionsTestView = {
     heldAsks: () => new Map(heldAskEntries().map((v) => [v.childId, v])),
@@ -1399,6 +1767,7 @@ export function createQuestions(deps: QuestionsDeps, rules?: QuestionRules): Que
     raise, loadReseed, reseed, reseedGone, settleReplaced, settleCleared, restamp,
     noteAsksSwitch: (disabled) => { asksDisabled = disabled; },
     lapseAsks, lapseApprovals, prune, released, answeredLate, approvalReleased, approvalRuled, currentAskOf,
+    answer, rule, release,
     [TEST_VIEW]: testView,
   };
   return questions;
