@@ -2453,10 +2453,10 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     if (typeof body.dialogId !== 'string' || typeof body.optionIndex !== 'number' || typeof body.text !== 'string') {
       return reply.code(400).send({ ok: false, error: 'bad-request' });
     }
-    const res = await answerDialogText(sendDeps, id, body.dialogId, body.optionIndex, body.text);
-    answeredFrame(id, 'dialog/text', res);
-    if (res.ok) return res;
-    return reply.code(res.error === 'bad-text' ? 400 : 409).send(res);
+    // W3 Q3f (D-7030): an ALIAS from here on, into the operator's core (`questions.answer`): the press, its answered
+    // frame, and `bad-text` 400, every other refusal 409.
+    const out = await questions.answer({ kind: 'dialog', form: 'text', sessionId: id, dialogId: body.dialogId, optionIndex: body.optionIndex, text: body.text }, operatorDoorDeps);
+    return reply.code(out.status).send(out.body);
   });
 
   /**
