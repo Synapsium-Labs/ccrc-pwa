@@ -173,9 +173,13 @@ applies:
    worktree, uncommitted work included, whatever `CCD_DEPS_SHED_NAMES` says, because the before/after `git status`
    cannot see inside an ignored tree. Each git call is contained as the reclaim ladder's are (`_ws_reclaim_contained`).
    No candidate answers `nothing-to-shed`;
-8. `in-use`: `_ws_path_users_many` answers a holder for any candidate, on its physical spelling; an unmeasured answer is
-   `unmeasured`;
-9. the git state: `git status --porcelain=v1 -z --untracked-files=all` is read and digested before the act;
+8. the git state: `git status --porcelain=v1 -z --untracked-files=all` is read and digested before the act, after the
+   size (`du`);
+9. THE LAST FACTS, after every walk and just before the act, because a wake can start a pane while the walks run (the
+   PWA's ensure route and the mail lane's wake of a hibernated row reach `ccd ensure` through no server queue the arm
+   uses): `in-use` when `_ws_path_users_many` answers a holder for any candidate, on its physical spelling (an
+   unmeasured answer is `unmeasured`); then `not-asleep` again when the stop stamp no longer reads as rung 4 read it (a
+   wake clears it first), a tmux session answers, or the unit is not `inactive` or `failed`;
 10. `--dry-run` stops here and answers `would-shed` with the candidates' count and bytes, exit 0;
 11. the act: ONE removal of every candidate (`rm -rf --one-file-system`, `rm -rfx` on Darwin) under a
     `CCD_DEPS_SHED_SCAN_S` bound (default 30, lower-only). The git state is read again: a digest that differs answers
@@ -194,15 +198,19 @@ There is no token. The act touches only bytes git calls ignored and untracked, a
 rung is re-read at the act. This is the reasoning `ccd-tmp-sweep`'s dead arm already uses: remove after a re-check,
 with no quarantine.
 
-**On wake.** Nothing changes. `ccd ensure` (re-dispatch), mail and Restart wake the session as today; the wake removes
-the stop stamp, so the next sleep may shed again. Its next test step runs `npm ci` first, as CLAUDE.md's build section
+**On wake.** `ccd ensure` (re-dispatch), mail and Restart wake the session as today; the wake removes the stop stamp,
+so the next sleep may shed again. A wake and a shed exclude each other: every path that creates a pane passes
+`_ws_expire_spawn_gate`, which for a row that is not archived asks the reap lock this verb holds from rung 2 to its
+last removal (read-only, never creating the file, let go at once) and refuses, never waits, while it is held. A wake
+that asked before the verb took the lock has cleared the stop stamp, which rung 4 or the last facts (rung 9) read. Its next test step runs `npm ci` first, as CLAUDE.md's build section
 already says. A follow-up can name the shed in the wake's kickoff line.
 
 **Safety.**
 - No git fact changes: not the index, a ref, a tracked file, or an untracked file git does not ignore, and the box
   proves it by reading `git status` before and after. A resumable session's unpushed work is untouched.
 - A live session is never touched. The server requires a stop stamp and no viewer, and the box requires a stop stamp,
-  no tmux session and an inactive unit.
+  no tmux session and an inactive unit, at rung 4 and again just before the act; a wake refuses while the verb holds
+  the reap lock.
 - A coordinator is touched only asleep, claiming no open run, past the age, and re-proved at the act (D-7278). Its
   worktree, branch and attic are never touched; rule 4 stands for them.
 - A worker that coordinated in its own generation is a coordinator here, never a worker.
@@ -287,6 +295,8 @@ Each guard was deleted or weakened alone, its suite run alone (`vitest --maxWork
 | M15 | an in-use answer passes | `ccd-ws-shed-deps` | red (1) |
 | M29 | drop the own-`.git` fence | `ccd-ws-shed-deps` | red (1) |
 | M30 | drop the physical-path re-proof | `ccd-ws-shed-deps` | red (1), after a widened listing was added; green before |
+| M31 | drop the last facts' asleep re-check (rung 9) | `ccd-ws-shed-deps` | red (1) |
+| M32 | the spawn gate skips the reap lock for a row that is not archived | `ccd-ws-shed-deps`, `ccd-ws-expire-spawn` | red (1 each) |
 | M16 | the pass never composes `--dry-run` | `deps-shed-pass` | red (4) |
 | M17 | drop the kill switches at the act | `deps-shed-pass` | red (3) |
 | M18 | drop the once-a-sleep shadow memory | `deps-shed-pass` | red (1) |

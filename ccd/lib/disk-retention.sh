@@ -1359,6 +1359,13 @@ _ws_loose_collect() {   # token hex surface actor reason -> ccd ws-collect --exp
 # THE REAP LOCK. Once the row is known to stand, the verb takes `$REG/.reap-<id>.lock`, `-n`, the lock every verb that
 # removes anything of the id takes (ws-reap, ws-reclaim, ws-expire, ws-restore, ws-collect): held, it answers the
 # retryable `in-progress`, touching nothing. It is never taken for an id no row names, so no lock file is made for one.
+# A WAKE AND A SHED EXCLUDE EACH OTHER. This is the one verb that removes from a tree that can wake, and every path that
+# creates a pane (start, ensure, the unit's supervise, swap's respawn) passes `_ws_expire_spawn_gate`, which for a row
+# that is not archived asks the same lock (`_ws_shed_spawn_held`: read-only, never creating the file, let go at once) and
+# refuses, never waits, while it is held. A wake that asked before this verb took the lock cleared the stop stamp at once,
+# so the verb asks for it twice: at rung 4, and again as its LAST FACTS, after every walk, `du` and the first git status
+# and just before the removal — the process walk over the candidates, then the stop stamp unchanged, no pane and a
+# stopped unit (`_ws_shed_asleep_why`). Either one moved refuses (`in-use`, `not-asleep`) with nothing removed.
 # NO REPOSITORY IS EVER INSIDE WHAT IS REMOVED. A candidate with a `.git` (a directory, a file, a link) at ANY depth is
 # not a candidate: a nested repository or a worktree that lives under an ignored directory keeps its uncommitted work,
 # and the before/after `git status` cannot see inside an ignored tree, so this walk is what proves it. A walk that cannot
@@ -1431,7 +1438,35 @@ _ws_shed_repos() {   # phys... -> every `.git` at any depth beneath them, one pe
 _ws_shed_size() {   # phys... -> their disk use in KiB, one integer; rc non-zero when `du` did not finish
   _plat_timeout "$scan" du -sk -x -- "$@" | awk '{ s += $1 } END { print s + 0 }'; return "${PIPESTATUS[0]}"
 }
-_ws_shed_gap() { :; }   # a test seam between the first git read and the act, as `_ws_orphan_gap` is the orphan verb's
+_ws_shed_spawn_held() {   # id -> rc 0 when another process holds id's reap lock right now; rc 1 when it is free, when its
+  #                          file does not stand, or when no flock exists (a box with no flock runs no shed: rung 2a).
+  # THE WAKE'S HALF OF THE EXCLUSION, asked by `_ws_expire_spawn_gate` for a row that is not archived — every path that
+  # creates a pane (start, ensure, the unit's supervise, swap's respawn). It opens the file READ-ONLY, so a wake never
+  # creates a reap lock (they are never unlinked), and lets it go at once: a wake that asked while the lock was free has
+  # cleared the stop stamp by the time this verb's rung 4 or its last facts read it.
+  local fd
+  [[ -f "$REG/.reap-$1.lock" && ! -L "$REG/.reap-$1.lock" ]] && command -v flock >/dev/null 2>&1 || return 1
+  { exec {fd}<"$REG/.reap-$1.lock"; } 2>/dev/null || return 1   # the group's 2> is temporary; a bare exec's would not be
+  if flock -n "$fd"; then exec {fd}>&-; return 1; fi
+  exec {fd}>&-
+  return 0
+}
+_ws_shed_gap() { :; }   # a test seam between the first git read and the last facts, as `_ws_orphan_gap` is the orphan verb's
+_WS_SHED_AWAKE_WHY=''
+_ws_shed_asleep_why() {   # stamp -> rc 0 with _WS_SHED_AWAKE_WHY set when id is NOT asleep: its stop stamp no longer reads
+  #                          as `stamp`, its pane answers anything but gone, or its unit anything but inactive or failed;
+  #                          rc 1 when it still sleeps. Asked at rung 4 and again just before the act (the caller's id)
+  local now_st='' unit
+  [[ -f "$REG/$id.stopped" && ! -L "$REG/$id.stopped" ]] && _file_read_to now_st "$REG/$id.stopped"
+  if [[ -z "$1" || "$now_st" != "$1" ]]; then
+    _WS_SHED_AWAKE_WHY="$id's stop stamp changed or went (a wake clears it)"; return 0
+  fi
+  _session_probe "$id"
+  unit=$(_svc_is_active "claude-session@$id")
+  if [[ "$PROBE_VERDICT" == gone && ( "$unit" == inactive || "$unit" == failed ) ]]; then return 1; fi
+  _WS_SHED_AWAKE_WHY="$id's pane answers ${PROBE_VERDICT:-nothing} and its unit ${unit:-nothing} — only a session with no pane and a stopped unit is shed"
+  return 0
+}
 _ws_shed_run() {   # -> everything after the registry rungs, contained (id, cls, dry, wd, floor and the dec words are the verb's)
   local wdp rel dir phys top dev wdev i n=0 rc bytes=null kib before after err scan line keep
   local -a names=() pre=() prephys=() cands=() physs=()
@@ -1494,6 +1529,14 @@ _ws_shed_run() {   # -> everything after the registry rungs, contained (id, cls,
     cands=(${keepc[@]+"${keepc[@]}"}); physs=(${keepp[@]+"${keepp[@]}"})
   fi
   (( ${#cands[@]} )) || { _ws_shed_refused nothing-to-shed "no ignored, untracked directory named $(printf '%s ' "${names[@]}")and holding no repository stands in $wdp"; return; }
+  # THE SIZE: one bounded `du` over every candidate, in KiB of disk; one that does not finish answers `bytes: null`.
+  kib=$(_ws_shed_size "${physs[@]}" 2>/dev/null) && [[ $kib =~ ^[0-9]+$ ]] && bytes=$(( kib * 1024 ))
+  before=$(_ws_shed_git_state "$wdp") \
+    || { _ws_shed_refused unmeasured "git status of $wdp could not be read — nothing was removed"; return; }
+  _ws_shed_gap
+  # THE LAST FACTS, closest to the act: everything above (the listing, the walks, `du`, git status) can take up to the
+  # verb's bounds, and nothing that wakes a session takes this verb's lock before its own early refusal
+  # (`_ws_expire_spawn_gate`), so a wake that won the race is asked for HERE, twice over.
   # IN USE: one walk of the process table for every candidate; a holder refuses, an unmeasured answer refuses.
   _ws_path_users_many "${physs[@]}"
   for i in "${!physs[@]}"; do
@@ -1503,16 +1546,14 @@ _ws_shed_run() {   # -> everything after the registry rungs, contained (id, cls,
       *) _ws_shed_refused unmeasured "${_WS_PATH_USERS_WHY_OF[$i]:-whether ${physs[$i]} is in use could not be asked} — nothing was removed"; return ;;
     esac
   done
-  # THE SIZE: one bounded `du` over every candidate, in KiB of disk; one that does not finish answers `bytes: null`.
-  kib=$(_ws_shed_size "${physs[@]}" 2>/dev/null) && [[ $kib =~ ^[0-9]+$ ]] && bytes=$(( kib * 1024 ))
-  before=$(_ws_shed_git_state "$wdp") \
-    || { _ws_shed_refused unmeasured "git status of $wdp could not be read — nothing was removed"; return; }
+  # STILL ASLEEP, the last fact of all: the same stop stamp rung 4 read (a wake clears it first), no pane, a stopped unit.
+  _ws_shed_asleep_why "$st" \
+    && { _ws_shed_refused not-asleep "$_WS_SHED_AWAKE_WHY, after the verb's walks began — nothing was removed"; return; }
   if (( dry )); then
     printf '{"wouldShed":true,"session":%s,"class":%s,"dirs":%s,"bytes":%s}\n' "$(_json_str "$id")" "$(_json_str "$cls")" \
       "${#cands[@]}" "$bytes"
     return 0
   fi
-  _ws_shed_gap
   # THE ACT: ONE bounded removal over every candidate, on this file system only.
   if [[ "$CCD_OS" == darwin ]]; then err=$(_plat_timeout "$scan" rm -rfx -- "${physs[@]}" 2>&1); rc=$?
   else err=$(_plat_timeout "$scan" rm -rf --one-file-system -- "${physs[@]}" 2>&1); rc=$?; fi
@@ -1590,10 +1631,7 @@ _ws_shed_locked() {   # -> rungs 2b to 11, under the caller's reap lock (the cal
   [[ -f "$REG/$id.stopped" && ! -L "$REG/$id.stopped" ]] && _file_read_to st "$REG/$id.stopped"
   at=${st%% *}
   [[ $at =~ ^[1-9][0-9]{0,11}$ ]] || { _ws_shed_refused not-asleep "$id carries no readable stop stamp — it is not asleep"; return 0; }
-  _session_probe "$id"
-  local unit; unit=$(_svc_is_active "claude-session@$id")
-  [[ "$PROBE_VERDICT" == gone && ( "$unit" == inactive || "$unit" == failed ) ]] \
-    || { _ws_shed_refused not-asleep "$id's pane answers ${PROBE_VERDICT:-nothing} and its unit ${unit:-nothing} — only a session with no pane and a stopped unit is shed"; return 0; }
+  ! _ws_shed_asleep_why "$st" || { _ws_shed_refused not-asleep "$_WS_SHED_AWAKE_WHY"; return 0; }
   # 5. the box's floor, raise-only
   local now floor; _now_s_to now; floor=$(_ws_shed_floor)
   (( now - at >= floor )) \

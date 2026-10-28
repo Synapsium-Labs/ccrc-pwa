@@ -37835,8 +37835,10 @@ _ws_expire_spawn_gate() {   # id -> 0 when a pane may be created for id; rc 1 wi
   # `.archived` stamp still stands: so a spawn that is about to clear that
   # stamp takes the same lock first, `-n`, and refuses if anyone holds it — a
   # refusal, never a wait, because the holder may be minutes into a teardown.
-  # No breadcrumb and no stamp: nothing to ask, no lock taken, and a box with
-  # no flock cannot be running an expiry (`cmd_ws_expire` refuses there).
+  # No breadcrumb and no stamp: no expiry to ask about, and a box with no
+  # flock cannot be running an expiry (`cmd_ws_expire` refuses there); the
+  # reap lock is still asked, never taken past the ask, when its file stands,
+  # because ws-shed-deps holds it on a row that is not archived.
   local id="$1" rbc
   _WS_EXPIRE_SPAWN_FD=""; _WS_EXPIRE_SPAWN_WHY=""
   rbc=$(_reg_get "$id" reaping)
@@ -37845,7 +37847,14 @@ _ws_expire_spawn_gate() {   # id -> 0 when a pane may be created for id; rc 1 wi
     _WS_EXPIRE_SPAWN_WHY="$id is being expired — an interrupted ws-expire stopped at its '$_CRUMB_PHASE' step, and a pane is never created for a workspace whose teardown has begun"
     return 1
   fi
-  [[ -f "$REG/$id.archived" ]] || return 0
+  # NOT ARCHIVED: the one verb that removes anything from a tree that can wake, ws-shed-deps (DEPSSHED region), holds
+  # the reap lock from its first rung to its last removal, so a wake asks it too — never creating the lock file
+  # (`_ws_shed_spawn_held`) — and refuses, never waits, while it is held.
+  if [[ ! -f "$REG/$id.archived" ]]; then
+    _ws_shed_spawn_held "$id" || return 0
+    _WS_EXPIRE_SPAWN_WHY="another ccd process holds $id's reap lock (its dependencies may be being shed) — refusing to create a pane for it until that finishes; retry"
+    return 1
+  fi
   # A BREADCRUMB THAT STANDS BUT READS AS NOTHING, ON AN ARCHIVED ROW, IS NOT
   # "NONE": an interrupted expiry leaves `.archived` standing (its purge takes
   # the breadcrumb first), so it may be one — which verb left it, and where, is
