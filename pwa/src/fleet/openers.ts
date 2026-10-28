@@ -1,6 +1,6 @@
-// The fleet list's doors, as module constants (C9, D-6441): one function each, so a memo'd row or card is handed the
-// same callback on every render. Both skins' lists import them: Refined's `FleetScreen` and Instrument's `FleetTable`
-// open a session through the one `openSession`, never two copies.
+// L4 delivery: the fleet list's doors, as module constants (C9, D-6441): one function each, so a memo'd row or card is
+// handed the same callback on every render. Both skins' lists import them: Refined's `FleetScreen` and Instrument's
+// `FleetTable` open a session through the one `openSession`, never two copies.
 import { navigate } from '../lib/router';
 
 /** Open a session's page. */
