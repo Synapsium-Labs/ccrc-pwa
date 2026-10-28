@@ -973,11 +973,12 @@ describe('Build 9 nouns — the lifecycle journal vocabulary', () => {
     // A `LIFECYCLE_ACTS` that had gone empty would make `every` vacuously true
     // for EVERY file, turning the assertion above into a list of all 200-odd
     // sources — loud, but for the wrong reason. This fails first, and
-    // specifically. Measured when written: the highest-scoring NON-holder is
-    // `pwa/src/lib/api.ts` at 8 of 24, so the margin is 15 tokens.
+    // specifically. Re-measured at 30 acts (#1772's `shed-deps`): the
+    // highest-scoring NON-holder is `server/src/deadCoordinator.ts` at 14 of
+    // 30, so the margin is 16 tokens.
     const enumerates = (src: string): boolean =>
       LIFECYCLE_ACTS.every((a) => new RegExp(`(?:'${a}'|(?<![\\w'-])${a}\\s*:)`).test(src));
-    expect(LIFECYCLE_ACTS.length).toBe(29);
+    expect(LIFECYCLE_ACTS.length).toBe(30);
     expect(LIFECYCLE_ACTS).toContain(LC_ACT_UNKNOWN);
     expect(enumerates(readFileSync(path.join(ccrcRoot, 'shared/api.ts'), 'utf8'))).toBe(true);
     expect(enumerates(readFileSync(path.join(ccrcRoot, 'pwa/src/lib/api.ts'), 'utf8'))).toBe(false);
