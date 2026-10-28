@@ -1522,3 +1522,673 @@ describe('the close route (C4h k; D-7228)', () => {
   });
 });
 
+
+// ══ decideRetire: the one gate decider over C4h's matrix (C4i; D-7166) ══════════════════════════════════════════════
+//
+// APPENDED by C4i; nothing above is edited. Each reason's row (`CHILD_SPENT_RETIRE`, `ARCHIVE_EXPIRED_RETIRE`,
+// `TEMP_ORPHAN_RETIRE`) is driven by `decideRetire` over the facts this file's own readers take from a rig built exactly
+// as the executor's twin rig is (each C4h matrix row's `opts` and `set` on both). The readers are built from the
+// executors' public faces (a private read is composed here from the same exported pieces); they are this suite's
+// oracle, not the ports C4k to C4m write. Each row must equal its old executor: the same outcome (word and detail, byte
+// for byte), and a `need` sequence whose reads, as the rig records them, are the executor's reads in the executor's
+// order up to its act. A row that answers `{ act: true }` must stand where the executor composed its verb.
+import {
+  RETIRE_LISTING_MODES, RETIRE_NOTICE_HOMES, RETIRE_PRESENCE_RULES, RETIRE_REASON_NAMES, RETIRE_STEPS, RetireRejected,
+  decideRetire, type RetireDecision, type RetireFactSet, type RetireReason, type RetireStep,
+} from '../src/retire.js';
+import {
+  CHILD_SPENT_RETIRE, childReclaimGenerationRead, childReclaimHasCoordinated, childReclaimRowListing, childReclaimRowUuid,
+  parseChildReclaimAudit, parseChildReclaimAuditFailed, type ChildSpentFacts,
+} from '../src/coord/childReclaim.js';
+import { readSessionRecord } from '../src/registry.js';
+import { readChildSiblings } from '../src/coord/siblingRead.js';
+import { CHILD_RECLAIM_DISABLED_UNREAD_SENTENCE, childReclaimDisabledSentence } from '../src/coord/childReclaimDisabled.js';
+import { ARCHIVE_EXPIRED_RETIRE, readExpiryStore, type ArchiveExpiredFacts, type ExpireArchivedRequest } from '../src/coord/expireArchived.js';
+import { parseExpireAudit } from '../src/archivedExpiry.js';
+import {
+  TEMP_ORPHAN_RETIRE, collectControlNow, collectOpenRunHold, collectRetireLatch, type CollectJob, type TempOrphanFacts,
+} from '../src/coord/collectTempRoot.js';
+import {
+  collectLaneEffective, collectLicence, collectLooseHexOf, parseCollectAudit, parseCollectLooseAudit,
+  type CollectLaneSettled,
+} from '../src/collectLane.js';
+import { CCD_ARGV, capSupported, ccdCan } from '../src/ccdargv.js';
+import { notRanSentence } from '../src/unmeasured.js';
+import type { MarkerState } from '../../shared/api.js';
+import type { CcdResult } from '../src/lifecycle.js';
+import type { MeasuredDirectoryRead } from '../src/io.js';
+
+/** One reader per step of a row, over the facts read before it. */
+type Readers<F> = { readonly [S in RetireStep]?: (facts: F) => unknown };
+interface Driven<Out> { readonly decision: RetireDecision<Out>; readonly needs: readonly RetireStep[]; readonly facts: Record<string, unknown> }
+
+/** The loop the decider is asked through (`retireAct`'s rules, D-7226): read the step it needs, a promise awaited and a
+ *  plain value never; a `judged` step's rejection becomes its fact, any other propagates. */
+const drive = async <Req, F extends RetireFactSet, Out>(row: RetireReason<Req, F, Out>, req: Req, read: Readers<F>): Promise<Driven<Out>> => {
+  const facts: Record<string, unknown> = {};
+  const needs: RetireStep[] = [];
+  const specs = [...row.decide, row.audit, ...row.act];
+  for (;;) {
+    const d = decideRetire(facts as F, row, req);
+    if (!('need' in d)) return { decision: d, needs, facts };
+    needs.push(d.need);
+    const spec = specs.find((s) => s.step === d.need);
+    const reader = read[d.need];
+    if (spec === undefined || reader === undefined) throw new Error(`no reader for ${d.need}`);
+    try {
+      const v = reader(facts as F);
+      facts[d.need] = v instanceof Promise ? await v : v;
+    } catch (err) {
+      if (spec.onReject !== 'judged') throw err;
+      facts[d.need] = new RetireRejected(err);
+    }
+  }
+};
+const said = (err: unknown): string => (err instanceof Error ? err.message : String(err));
+const stepsOf = (row: RetireReason<never, RetireFactSet, unknown>): RetireStep[] => [...row.decide, row.audit, ...row.act].map((s) => s.step);
+
+// ── child-spent's readers ──────────────────────────────────────────────────────────────────────────────────────────────
+
+/** The store's two reads, recorded in the order log too (the sibling read and the coordination fence). */
+const logChildStore = (k: ChildRig): void => {
+  const b = k.coord.bindingsOf.bind(k.coord);
+  k.coord.bindingsOf = ((id: string) => { spy.log.push('store'); return b(id); }) as typeof k.coord.bindingsOf;
+  const c = k.coord.childReclaimCoordinatorClaims.bind(k.coord);
+  k.coord.childReclaimCoordinatorClaims = ((...a: Parameters<typeof c>) => { spy.log.push('claims'); return c(...a); }) as typeof c;
+};
+const childDisabledDetail = async (k: ChildRig, when: string): Promise<string | null> => {
+  let state: MarkerState;
+  try { state = await childReclaimDisabledRead(k.deps.io, k.deps.cfg.registryDir); } catch (err) {
+    return `${CHILD_RECLAIM_DISABLED_UNREAD_SENTENCE}${when} (${said(err)})`;
+  }
+  if (state === 'set') return childReclaimDisabledSentence(when);
+  return state === 'clear' ? null : `${CHILD_RECLAIM_DISABLED_UNREAD_SENTENCE}${when}`;
+};
+const childReaders = (k: ChildRig): Readers<ChildSpentFacts> => {
+  const { deps, req } = k;
+  const now = (): number => (deps.now ?? Date.now)();
+  return {
+    [RETIRE_STEPS.record]: async () => {
+      const read = await readSessionRecord(deps.io, deps.cfg, req.sessionId);
+      return read.kind === 'absent' || read.kind === 'unmeasurable'
+        ? { read, again: await childReclaimRowListing(deps, req.sessionId) } : { read };
+    },
+    [RETIRE_STEPS.store]: () => readChildSiblings(deps, req.sessionId, now()),
+    [RETIRE_STEPS.coordinated]: (f) => {
+      const r = f[RETIRE_STEPS.record]?.read;
+      if (r?.kind !== 'found') throw new Error('the fence read before a found record');
+      return childReclaimHasCoordinated(deps.coord, req.sessionId, now(), childReclaimRowUuid(r.record));
+    },
+    [RETIRE_STEPS.switches]: () => childReclaimPauseRead(deps.io, deps.cfg.registryDir),
+    [RETIRE_STEPS.offSwitch]: () => childDisabledDetail(k, ''),
+    [RETIRE_STEPS.generation]: () => (req.licenceGeneration.kind === 'none' ? null
+      : childReclaimGenerationRead(deps.io, deps.cfg.registryDir, req.sessionId)),
+    [RETIRE_STEPS.presence]: () => !req.deferExpired && deps.viewers?.isVisible(req.sessionId) === true,
+    [RETIRE_STEPS.capability]: () => [ccdCan(deps.fleetState, 'wsReclaim'),
+      req.stale === undefined || capSupported(deps.fleetState, RECLAIM_STALE_CAP)],
+    [RETIRE_STEPS.audit]: async () => {
+      const argv = CCD_ARGV.wsReclaimAudit(req.sessionId, req.deferExpired, req.stale);
+      if (!ccdCan(deps.fleetState, 'wsReclaimAudit')) return { kind: 'unreadable', detail: 'the fleet host cannot answer ws-audit' };
+      const res = await deps.runCcd(argv);
+      if (res.ran === false) return { kind: 'unreadable', detail: notRanSentence(argv[0] ?? 'ccd', res) };
+      if (!res.ok) return parseChildReclaimAuditFailed(req.sessionId, res.stdout, res.stderr);
+      return parseChildReclaimAudit(req.sessionId, res.stdout);
+    },
+    [RETIRE_STEPS.auditVerdict]: () => true,
+    [RETIRE_STEPS.markerMatch]: () => true,
+    [RETIRE_STEPS.auditGeneration]: () => true,
+    [RETIRE_STEPS.offSwitchLast]: () => childDisabledDetail(k, ' at the act'),
+  };
+};
+const CHILD_READS = (l: string): boolean => l === 'readdir' || l === 'generation' || l === 'presence' || l === 'store' || l === 'claims'
+  || l.startsWith('argv:');
+/** The executor on one rig and the decider on its twin, each rig built by `make`: both outcomes, both read logs (each
+ *  up to the act's argv). */
+const childTwins = async (make: () => Promise<ChildRig>) => {
+  spy.log.length = 0;
+  const a = await make();
+  logChildStore(a);
+  let exec: { ok: true; out: ChildReclaimOutcome } | { ok: false; err: string };
+  try { exec = { ok: true, out: await reclaimChild(a.deps, a.req) }; } catch (err) { exec = { ok: false, err: said(err) }; }
+  const all = spy.log.filter(CHILD_READS);
+  const acted = all.includes('argv:ws-reclaim');
+  const execReads = acted ? all.slice(0, all.indexOf('argv:ws-reclaim')) : all;
+  spy.log.length = 0;
+  const b = await make();
+  logChildStore(b);
+  let dec: { ok: true; d: Driven<ChildReclaimOutcome> } | { ok: false; err: string };
+  try { dec = { ok: true, d: await drive(CHILD_SPENT_RETIRE, b.req, childReaders(b)) }; } catch (err) { dec = { ok: false, err: said(err) }; }
+  const decReads = spy.log.filter(CHILD_READS);
+  spy.log.length = 0;
+  return { a, b, exec, acted, execReads, dec, decReads };
+};
+const childRow = async (opts: ChildOpts | undefined, set: (k: ChildRig) => void) => {
+  const t = await childTwins(async () => { const k = await childRig(opts); set(k); return k; });
+  expect(t.decReads, 'the decider\'s reads are the executor\'s, in its order').toEqual(t.execReads);
+  if (!t.exec.ok || !t.dec.ok) {
+    expect(t.dec.ok ? 'answered' : t.dec.err, 'both reject, with one error').toBe(t.exec.ok ? 'answered' : t.exec.err);
+    return { ...t, outcome: null };
+  }
+  if (t.acted) {
+    expect(t.dec.d.decision, 'the executor composed its verb: the gate lets the act run').toEqual({ act: true });
+    return { ...t, outcome: null };
+  }
+  expect(t.dec.d.decision).toEqual({ outcome: t.exec.out });
+  return { ...t, outcome: t.exec.out };
+};
+
+describe('decideRetire: child-spent over C4h\'s matrix (C4i; D-7166)', () => {
+  it.each(CHILD_STEPS.map((s) => [s.step, s] as const))('child-spent: the deferral at step %s alone answers its own word and detail', async (_n, s) => {
+    const t = await childRow(s.opts, s.set);
+    expect(t.outcome).toEqual(s.want(t.b));
+  });
+
+  it('child-spent: every pair standing together answers the earlier step', async () => {
+    const pairs: ReadonlyArray<readonly [number, number]> = [[1, 3], [3, 4], [4, 5], [5, 6], [6, 7], [7, 8], [8, 9], [9, 10], [10, 11], [14, 15]];
+    for (const [i, j] of pairs) {
+      const first = CHILD_STEPS[i]!; const second = CHILD_STEPS[j]!;
+      const t = await childRow({ ...second.opts, ...first.opts }, (k) => { second.set(k); first.set(k); });
+      expect(t.outcome, `${first.step} beside ${second.step}`).toEqual(first.want(t.b));
+    }
+  });
+
+  it('child-spent: presence defers only until its ceiling (decider suite)', async () => {
+    const t = await childRow({ deferExpired: true }, (k) => { k.see(true); });
+    expect(t.dec.ok && t.dec.d.decision).toEqual({ act: true });
+    // The rule itself, over facts: a person looking defers a request below its ceiling and passes one past it.
+    const k = await childRig();
+    const facts = (await drive(CHILD_SPENT_RETIRE, k.req, childReaders(k))).facts;
+    const seen = { ...facts, [RETIRE_STEPS.presence]: true } as ChildSpentFacts;
+    expect(decideRetire(seen, CHILD_SPENT_RETIRE, k.req)).toEqual({ outcome: deferredC(k, 'presence', 'someone is viewing this session') });
+    expect(decideRetire(seen, CHILD_SPENT_RETIRE, { ...k.req, deferExpired: true })).toEqual({ act: true });
+    expect(CHILD_SPENT_RETIRE.presence).toBe(RETIRE_PRESENCE_RULES.untilCeiling);
+  });
+
+  it('child-spent: a raised pause says automatic reclamation is paused', async () => {
+    const t = await childRow(undefined, (k) => { k.raise(RECLAIM_PAUSE_MARKER); });
+    expect(t.outcome).toEqual(deferredC(t.b, 'paused-at-server', 'reclaim-paused is raised: automatic reclamation is paused fleet-wide'));
+    const u = await childRow(undefined, (k) => { k.hooks.listing = (n) => (n === 2 ? 'null' : undefined); });
+    expect(u.outcome, 'the unmeasurable reading').toEqual(deferredC(u.b, 'paused-at-server',
+      'the registry did not list, so a raised reclaim-paused cannot be ruled out'));
+  });
+
+  it('child-spent: a rejecting pause read answers its own sentence (decider suite: the judged steps)', async () => {
+    const judged: ReadonlyArray<readonly [ChildOpts, (k: ChildRig) => void, (k: ChildRig) => ChildReclaimOutcome]> = [
+      [{}, (k) => { k.coord.childReclaimCoordinatorClaims = () => { throw new Error('history unreadable'); }; },
+        (k) => deferredC(k, 'siblings-unreadable', `whether ${KID} has coordinated a run could not be read (history unreadable)`)],
+      [{}, (k) => { k.hooks.listing = (n) => (n === 2 ? 'reject' : undefined); },
+        (k) => deferredC(k, 'paused-at-server', 'whether reclaim-paused is raised could not be read (EIO: the registry listing failed)')],
+      [{}, (k) => { k.hooks.listing = (n) => (n === 3 ? 'reject' : undefined); },
+        (k) => deferredC(k, 'paused-at-server', 'the registry did not list, so a set child-reclaim-disabled cannot be ruled out (EIO: the registry listing failed)')],
+      [{ licence: 'g1' }, (k) => { k.hooks.generation = () => 'reject'; },
+        (k) => deferredC(k, 'marker-unreadable', `${KID}.generation could not be read (EIO: the generation read failed), so which workspace stands under this name cannot be said`)],
+      [{}, (k) => { k.hooks.listing = (n) => (n === 4 ? 'reject' : undefined); },
+        (k) => deferredC(k, 'paused-at-server', 'the registry did not list, so a set child-reclaim-disabled cannot be ruled out at the act (EIO: the registry listing failed)')],
+    ];
+    for (const [opts, set, want] of judged) {
+      const t = await childRow(opts, set);
+      expect(t.outcome).toEqual(want(t.b));
+    }
+  });
+
+  it('child-spent: a rejecting propagate read rejects, and the decider never judges it', async () => {
+    const propagate: ReadonlyArray<readonly [(k: ChildRig) => void, string]> = [
+      [(k) => { k.hooks.listing = (n) => (n === 1 ? 'reject' : undefined); }, 'EIO: the registry listing failed'],
+      [(k) => { k.drop('uuid'); k.hooks.listing = (n) => (n === 2 ? 'reject' : undefined); }, 'EIO: the registry listing failed'],
+      [(k) => { k.coord.bindingsOf = () => { throw new Error('the store is locked'); }; }, 'the store is locked'],
+      [(k) => { k.presenceThrows(); }, 'presence gone'],
+      [(k) => { k.answers.audit = () => 'reject'; }, 'EIO: ws-audit lost its link'],
+    ];
+    for (const [set, msg] of propagate) {
+      const t = await childRow(undefined, set);
+      expect(t.dec.ok ? 'answered' : t.dec.err).toBe(msg);
+    }
+    // A rejected fact handed to a propagate step is thrown, never judged.
+    const k = await childRig();
+    const facts = (await drive(CHILD_SPENT_RETIRE, k.req, childReaders(k))).facts;
+    const boom = new Error('EIO: presence lost');
+    expect(() => decideRetire({ ...facts, [RETIRE_STEPS.presence]: new RetireRejected(boom) } as unknown as ChildSpentFacts, CHILD_SPENT_RETIRE, k.req)).toThrow(boom);
+  });
+
+  it('child-spent: gone has three sources — the record step, the audit\'s verdict and the act — and the gate answers the first two', async () => {
+    const record = await childRow(undefined, (k) => { k.drop('uuid'); k.drop('child'); });
+    expect(record.outcome).toEqual({ kind: 'gone', sessionId: KID });
+    expect(record.dec.ok && record.dec.d.needs).toEqual([RETIRE_STEPS.record]);
+    const audit = await childRow(undefined, (k) => { k.answers.audit = () => k.auditDoc({ verdict: 'no-such-session', detail: '' }); });
+    expect(audit.outcome).toEqual({ kind: 'gone', sessionId: KID });
+    expect(audit.dec.ok && audit.dec.d.needs.at(-1)).toBe(RETIRE_STEPS.auditVerdict);
+    const act = await childRow(undefined, (k) => { k.answers.act = () => k.actDoc({ refused: 'no-such-session', detail: '' }); });
+    expect(act.dec.ok && act.dec.d.decision, 'the act\'s own refusal is the act\'s, past the gate').toEqual({ act: true });
+  });
+
+  it('child-spent: held at the act — the off switch at the act, the audit\'s generation, and today\'s gap (reclaim-paused read once)', async () => {
+    const off = await childRow(undefined, (k) => { k.hooks.audit = () => { k.raise(CHILD_RECLAIM_DISABLED_MARKER); }; });
+    expect(off.outcome).toEqual(deferredC(off.b, 'paused-at-server', 'child-reclaim-disabled is set at the act: child reclaim is switched off'));
+    const gen = await childRow({ licence: 'g1' }, (k) => {
+      k.hooks.audit = () => { writeFileSync(path.join(k.reg, `${KID}.generation`), G2); };
+      k.answers.audit = () => k.auditDoc({ childOf: k.runId, verdict: 'reclaimable', token: KTOK, generation: G2 });
+    });
+    expect(gen.outcome).toMatchObject({ kind: 'deferred', why: 'generation-changed' });
+    const gap = await childRow(undefined, (k) => { k.hooks.audit = () => { k.raise(RECLAIM_PAUSE_MARKER); }; });
+    expect(gap.dec.ok && gap.dec.d.decision, 'C4o flips this row').toEqual({ act: true });
+    const stale = await childRow({ stale: true }, () => {});
+    expect(stale.dec.ok && stale.dec.d.decision).toEqual({ act: true });
+  });
+});
+
+// ── archive-expired's readers ──────────────────────────────────────────────────────────────────────────────────────────
+
+const logExpiryStore = (x: ExpiryRig): void => {
+  const b = x.coord.bindingsOf.bind(x.coord);
+  x.coord.bindingsOf = ((id: string) => { spy.log.push('store'); return b(id); }) as typeof x.coord.bindingsOf;
+};
+/** `expirySwitches`' answer, composed from the public `collectSwitches` (the one measured listing, its pause and its
+ *  failure reason) and the names that listing returned: the expiry markers are read off the same listing. */
+const expirySwitchesOf = async (x: ExpiryRig) => {
+  let names: readonly string[] = [];
+  const io = { readdirMeasured: async (p: string): Promise<MeasuredDirectoryRead> => {
+    const r = await x.deps.io.readdirMeasured(p);
+    if (r.ok) names = r.entries;
+    return r;
+  } };
+  const s = await collectSwitches(io, x.deps.cfg.registryDir);
+  if (s.paused) {
+    return { kind: 'paused' as const, detail: s.why === 'raised' ? 'reclaim-paused is raised: cleanup is paused fleet-wide'
+      : `the registry did not list (${s.reason ?? 'unreadable'}), so a raised reclaim-paused cannot be ruled out` };
+  }
+  return { kind: 'clear' as const, live: expireLaneLive(names), childLive: names.includes(EXPIRE_CHILD_LIVE_MARKER) };
+};
+const expiryReaders = (x: ExpiryRig): Readers<ArchiveExpiredFacts> => {
+  const { deps } = x;
+  const req: ExpireArchivedRequest = x.req;
+  return {
+    [RETIRE_STEPS.id]: () => req.sessionId,
+    [RETIRE_STEPS.capability]: () => [ccdCan(deps.fleetState, 'wsExpire'),
+      req.childOf === undefined || capSupported(deps.fleetState, EXPIRE_CHILD_CAP)],
+    [RETIRE_STEPS.switches]: () => expirySwitchesOf(x),
+    [RETIRE_STEPS.store]: () => readExpiryStore(deps.coord, req.sessionId, req.childOf === undefined ? undefined : { rowUuid: req.rowUuid ?? null }),
+    [RETIRE_STEPS.presence]: () => deps.viewers?.isVisible(req.sessionId) === true,
+    [RETIRE_STEPS.audit]: async () => {
+      const argv = CCD_ARGV.wsExpireAudit(req.sessionId, req.childOf);
+      if (!ccdCan(deps.fleetState, 'wsExpireAudit')) return { kind: 'unreadable', detail: 'the fleet host cannot answer ws-audit' };
+      const res = await deps.runCcd(argv);
+      if (res.ran === false) return { kind: 'unreadable', detail: notRanSentence(argv[0] ?? 'ccd', res) };
+      return parseExpireAudit(req.sessionId, res.ok, res.stdout);
+    },
+    [RETIRE_STEPS.archiveMatch]: () => true,
+    [RETIRE_STEPS.auditVerdict]: () => true,
+    [RETIRE_STEPS.switchesLast]: () => expirySwitchesOf(x),
+    [RETIRE_STEPS.live]: () => true,
+  };
+};
+const EXPIRY_READS = (l: string): boolean => l === 'readdirMeasured' || l === 'readdir' || l === 'presence' || l === 'store' || l.startsWith('argv:');
+const expiryRow = async (opts: Parameters<typeof expiryRig>[0], set: (x: ExpiryRig) => void) => {
+  spy.log.length = 0;
+  const a = await expiryRig(opts);
+  set(a); logExpiryStore(a);
+  let exec: { ok: true; out: unknown } | { ok: false; err: string };
+  try { exec = { ok: true, out: await expireArchived(a.deps, a.req) }; } catch (err) { exec = { ok: false, err: said(err) }; }
+  const all = spy.log.filter(EXPIRY_READS);
+  const acted = all.includes('argv:ws-expire');
+  const execReads = acted ? all.slice(0, all.indexOf('argv:ws-expire')) : all;
+  spy.log.length = 0;
+  const b = await expiryRig(opts);
+  set(b); logExpiryStore(b);
+  let dec: { ok: true; d: Driven<unknown> } | { ok: false; err: string };
+  try { dec = { ok: true, d: await drive(ARCHIVE_EXPIRED_RETIRE, b.req, expiryReaders(b)) }; } catch (err) { dec = { ok: false, err: said(err) }; }
+  const decReads = spy.log.filter(EXPIRY_READS);
+  spy.log.length = 0;
+  expect(decReads, 'the decider\'s reads are the executor\'s, in its order').toEqual(execReads);
+  if (!exec.ok || !dec.ok) {
+    expect(dec.ok ? 'answered' : dec.err, 'both reject, with one error').toBe(exec.ok ? 'answered' : exec.err);
+    return { exec, dec, b, outcome: null as unknown };
+  }
+  if (acted) {
+    expect(dec.d.decision, 'the executor composed its verb: the gate lets the act run').toEqual({ act: true });
+    return { exec, dec, b, outcome: null as unknown };
+  }
+  expect(dec.d.decision).toEqual({ outcome: exec.out });
+  return { exec, dec, b, outcome: exec.out };
+};
+
+describe('decideRetire: archive-expired over C4h\'s matrix (C4i; D-7166)', () => {
+  it.each(EXPIRY_STEPS.map((s) => [s.step, s] as const))('archive-expired: the deferral at step %s alone answers its own word and detail', async (_n, s) => {
+    expect((await expiryRow(s.opts, s.set)).outcome).toEqual(s.want);
+  });
+
+  it('archive-expired: every pair standing together answers the earlier step (the id before the capability)', async () => {
+    const pairs: ReadonlyArray<readonly [number, number]> = [[0, 1], [1, 2], [2, 3], [3, 4], [4, 5], [8, 9]];
+    for (const [i, j] of pairs) {
+      const first = EXPIRY_STEPS[i]!; const second = EXPIRY_STEPS[j]!;
+      const t = await expiryRow({ ...second.opts, ...first.opts }, (x) => { second.set(x); first.set(x); });
+      expect(t.outcome, `${first.step} beside ${second.step}`).toEqual(first.want);
+    }
+  });
+
+  it('archive-expired: presence defers with no ceiling (decider suite)', async () => {
+    expect((await expiryRow(undefined, (x) => { x.see(true); })).outcome).toMatchObject({ kind: 'deferred', why: 'presence' });
+    expect(ARCHIVE_EXPIRED_RETIRE.presence).toBe(RETIRE_PRESENCE_RULES.noCeiling);
+  });
+
+  it('archive-expired: an unlistable registry names its reason (decider suite)', async () => {
+    for (const n of [1, 2]) {
+      for (const reason of ['unreadable', 'absent'] as const) {
+        const t = await expiryRow(undefined, (x) => { x.hooks.listing = (k) => (k === n ? reason : undefined); });
+        expect(t.outcome, `listing ${n}, ${reason}`).toEqual(answeredX({ kind: 'deferred', why: 'paused-at-server',
+          detail: `the registry did not list (${reason}), so a raised reclaim-paused cannot be ruled out` }));
+      }
+      const r = await expiryRow(undefined, (x) => { x.hooks.listing = (k) => (k === n ? 'reject' : undefined); });
+      expect(r.outcome, `listing ${n}, rejecting`).toEqual(answeredX({ kind: 'deferred', why: 'paused-at-server',
+        detail: 'the registry did not list (unreadable), so a raised reclaim-paused cannot be ruled out' }));
+    }
+  });
+
+  it('archive-expired: one listing reads both switches (decider suite)', async () => {
+    expect(ARCHIVE_EXPIRED_RETIRE.listing).toBe(RETIRE_LISTING_MODES.measuredOnce);
+    const listing = [...ARCHIVE_EXPIRED_RETIRE.decide, ...ARCHIVE_EXPIRED_RETIRE.act].filter((s) => s.markers !== undefined);
+    expect(listing.map((s) => [s.step, s.markers])).toEqual([
+      [RETIRE_STEPS.switches, [RECLAIM_PAUSE_MARKER, EXPIRE_LANE_LIVE_MARKER, EXPIRE_CHILD_LIVE_MARKER]],
+      [RETIRE_STEPS.switchesLast, [RECLAIM_PAUSE_MARKER, EXPIRE_LANE_LIVE_MARKER, EXPIRE_CHILD_LIVE_MARKER]],
+    ]);
+    // One measured listing per listing step, as the executor takes them.
+    const t = await expiryRow(undefined, () => {});
+    expect(t.dec.ok && t.dec.d.decision).toEqual({ act: true });
+  });
+
+  it('archive-expired: a rejecting audit rejects the executor (decider suite)', async () => {
+    for (const [set, msg] of [
+      [(x: ExpiryRig) => { x.answers.audit = () => 'reject'; }, 'EIO: ws-audit lost its link'],
+      [(x: ExpiryRig) => { x.presenceThrows(); }, 'presence gone'],
+    ] as const) {
+      const t = await expiryRow(undefined, set);
+      expect(t.dec.ok ? 'answered' : t.dec.err).toBe(msg);
+    }
+    expect(ARCHIVE_EXPIRED_RETIRE.audit.onReject).toBe('propagate');
+  });
+
+  it('a pause raised during the act holds: archive-expired (decider suite; and expire-lane-live removed answers would-expire)', async () => {
+    const paused = await expiryRow(undefined, (x) => { x.hooks.audit = () => { x.raise(RECLAIM_PAUSE_MARKER); }; });
+    expect(paused.outcome).toEqual(answeredX({ kind: 'deferred', why: 'paused-at-server', detail: 'reclaim-paused is raised: cleanup is paused fleet-wide' }));
+    const shadow = await expiryRow(undefined, (x) => { x.hooks.audit = () => { x.lower(EXPIRE_LANE_LIVE_MARKER); }; });
+    expect(shadow.outcome).toEqual(answeredX({ kind: 'would-expire', sensitive: 0 }));
+  });
+
+  it('archive-expired: the child arm (its capability at decide, expire-child-live deciding its shadow)', async () => {
+    const noCap = await expiryRow({ childOf: 41, caps: ['ws-audit', 'ws-expire', EXPIRE_CAP, ACTOR_FLAGS_CAP] }, () => {});
+    expect(noCap.outcome).toEqual({ ...answeredX({ kind: 'deferred', why: 'unsupported', detail: 'the fleet host does not advertise expire-child-v1' }), child: true });
+    const held = await expiryRow({ childOf: 41 }, () => {});
+    expect(held.outcome).toEqual({ ...answeredX({ kind: 'would-expire', sensitive: 0 }), child: true, childArmHeld: true });
+    const armed = await expiryRow({ childOf: 41 }, (x) => { x.raise(EXPIRE_CHILD_LIVE_MARKER); });
+    expect(armed.dec.ok && armed.dec.d.decision).toEqual({ act: true });
+    const refused = await expiryRow(undefined, (x) => { x.answers.audit = () => x.auditDoc({ verdict: 'not-archived', token: undefined, detail: 'x' }); });
+    expect(refused.outcome).toEqual(answeredX({ kind: 'gone' }));
+  });
+});
+
+// ── temp-orphan's readers ──────────────────────────────────────────────────────────────────────────────────────────────
+
+const collectAskedOf = async (d: CollectTempRootDeps, id: string) => {
+  if (!ccdCan(d.fleetState, 'wsCollect')) return { notAsked: 'capability' as const };
+  const hex = collectLooseHexOf(id);
+  if (hex !== null && !ccdCan(d.fleetState, 'wsCollectLooseAudit')) return { notAsked: 'capability' as const };
+  const argv = hex === null ? CCD_ARGV.wsCollectAudit(id) : CCD_ARGV.wsCollectLooseAudit(hex);
+  if (!ccdCan(d.fleetState, 'wsCollectAudit')) return { notAsked: 'verb' as const };
+  const composed = d.lane.generations(id);
+  let res: CcdResult;
+  try { res = await d.runCcd(argv); } catch (err) {
+    return { value: { kind: 'no-document' as const, stderr: said(err) }, composed, arrived: d.lane.clock() };
+  }
+  const arrived = d.lane.clock();
+  if (res.ran === false) return { value: { kind: 'no-document' as const, stderr: res.stderr }, composed, arrived };
+  return { value: hex === null ? parseCollectAudit(id, res.ok, res.stdout, res.stderr)
+    : parseCollectLooseAudit(hex, res.ok, res.stdout, res.stderr), composed, arrived };
+};
+const collectReaders = (d: CollectTempRootDeps, job: CollectJob): Readers<TempOrphanFacts> => {
+  const doc = (f: TempOrphanFacts) => {
+    const a = f[RETIRE_STEPS.audit];
+    if (a === undefined || 'notAsked' in a || a.value.kind !== 'collectable') throw new Error('no collectable audit');
+    return { ...a, value: a.value };
+  };
+  const last = (f: TempOrphanFacts) => {
+    const l = f[RETIRE_STEPS.switchesLast];
+    if (l === undefined) throw new Error('no last listing');
+    return l;
+  };
+  return {
+    [RETIRE_STEPS.capability]: () => [ccdCan(d.fleetState, 'wsCollect') && capSupported(d.fleetState, RECLAIM_PAUSE_CAP),
+      collectLooseHexOf(job.id) === null || (ccdCan(d.fleetState, 'wsCollectLoose') && ccdCan(d.fleetState, 'wsCollectLooseAudit'))],
+    [RETIRE_STEPS.id]: () => collectLooseHexOf(job.id),
+    [RETIRE_STEPS.switches]: () => collectSwitches(d.io, d.cfg.registryDir),
+    [RETIRE_STEPS.presence]: () => d.viewers?.isVisible(job.id) === true,
+    [RETIRE_STEPS.audit]: () => collectAskedOf(d, job.id),
+    [RETIRE_STEPS.staleGeneration]: () => d.lane.generations(job.id),
+    [RETIRE_STEPS.auditVerdict]: () => true,
+    [RETIRE_STEPS.licence]: (f) => {
+      const a = doc(f);
+      return collectLicence(d.lane.observation(job.id), a.value, a.arrived.mono, d.observeIntervalMs, true);
+    },
+    [RETIRE_STEPS.hold]: (f) => collectOpenRunHold(d.coord, job.id, doc(f).value),
+    [RETIRE_STEPS.switchesLast]: async () => {
+      const listedUnder = d.link.epochNow();
+      return { listedUnder, last: await collectSwitches(d.io, d.cfg.registryDir) };
+    },
+    [RETIRE_STEPS.latch]: (f) => {
+      const epoch = { before: job.epoch, after: d.link.epochNow() };
+      collectRetireLatch(d.control, last(f).last, epoch);
+      return epoch;
+    },
+    [RETIRE_STEPS.lane]: (f) => {
+      const epoch = f[RETIRE_STEPS.latch];
+      if (epoch === undefined) throw new Error('no pair');
+      return collectLaneEffective({
+        switches: last(f).last, epoch,
+        caps: { collect: ccdCan(d.fleetState, 'wsCollect'), reclaimPause: capSupported(d.fleetState, RECLAIM_PAUSE_CAP) },
+        control: collectControlNow(d.control).control, node: d.link.current(),
+      });
+    },
+    [RETIRE_STEPS.flip]: (f) => d.lane.flipped(f[RETIRE_STEPS.lane] as CollectLaneSettled),
+    [RETIRE_STEPS.safety]: () => true,
+    [RETIRE_STEPS.licenceStands]: () => ({ generations: d.lane.generations(job.id), observation: d.lane.observation(job.id) }),
+    [RETIRE_STEPS.presenceLast]: () => d.viewers?.isVisible(job.id) === true,
+    [RETIRE_STEPS.holdLast]: (f) => collectOpenRunHold(d.coord, job.id, doc(f).value),
+    [RETIRE_STEPS.live]: () => true,
+    [RETIRE_STEPS.looseMarker]: () => ccdCan(d.fleetState, 'wsCollectLoose'),
+  };
+};
+/** The executor on one traced rig and the decider on its twin: both answers, and both call logs up to the verb's argv
+ *  (the lane clears are the port's effects, D-7199, and are left out of the read log). */
+const collectRow = async (make: () => CollectRig, jobOf2: (r: CollectRig) => CollectJob, opts: { readonly mutate?: (d: CollectTempRootDeps) => CollectTempRootDeps } = {}) => {
+  const reads = (calls: readonly string[]): string[] => {
+    const r = calls.filter((c) => !c.startsWith('lane.cleared'));
+    const at = r.findIndex((c) => c === 'runCcd:ws-collect');
+    return at < 0 ? r : r.slice(0, at);
+  };
+  const a = make();
+  const ta = traced(a);
+  const da = opts.mutate?.(ta.deps) ?? ta.deps;
+  let exec: { ok: true; out: unknown } | { ok: false; err: string };
+  try { exec = { ok: true, out: await collectTempRoot(da, jobOf2(a)) }; } catch (err) { exec = { ok: false, err: said(err) }; }
+  const b = make();
+  const tb = traced(b);
+  const db = opts.mutate?.(tb.deps) ?? tb.deps;
+  let dec: { ok: true; d: Driven<unknown> } | { ok: false; err: string };
+  try { dec = { ok: true, d: await drive(TEMP_ORPHAN_RETIRE, jobOf2(b), collectReaders(db, jobOf2(b))) }; } catch (err) { dec = { ok: false, err: said(err) }; }
+  expect(reads(tb.calls), 'the decider\'s reads are the executor\'s, in its order').toEqual(reads(ta.calls));
+  if (!exec.ok || !dec.ok) {
+    expect(dec.ok ? 'answered' : dec.err, 'both reject, with one error').toBe(exec.ok ? 'answered' : exec.err);
+    return { exec, dec, a, b, ta, tb, outcome: null as unknown };
+  }
+  const outcome = exec.out as { kind: string };
+  if (outcome.kind === 'acted') {
+    expect(dec.d.decision, 'the executor composed its verb: the gate lets the act run').toEqual({ act: true });
+    return { exec, dec, a, b, ta, tb, outcome: null as unknown };
+  }
+  // The twin rigs' witnesses are written at their own wall instants: that one stamp is read as the rig's, every other
+  // byte of the answer (its audit included) must be equal.
+  const unstamped = (v: unknown): unknown => JSON.parse(JSON.stringify(v, (k, x: unknown) => (k === 'witnessAt' && typeof x === 'number' ? 'stamp' : x)));
+  expect(unstamped(dec.d.decision)).toEqual({ outcome: unstamped(exec.out) });
+  return { exec, dec, a, b, ta, tb, outcome: exec.out };
+};
+
+describe('decideRetire: temp-orphan over C4h\'s matrix (C4i; D-7166)', () => {
+  it.each(COLLECT_STEPS.map((s) => [s.step, s] as const))('temp-orphan: the deferral at step %s alone answers its own word and detail', async (_n, s) => {
+    const t = await collectRow(() => { const r = collectRigOf(s.opts); s.set(r); return r; }, (r) => jobOf(r, s.step));
+    expect(t.outcome).toMatchObject(s.want);
+  });
+
+  it('temp-orphan: every pair standing together answers the earlier step', async () => {
+    const pairs: ReadonlyArray<readonly [number, number]> = [[0, 1], [1, 2], [2, 3], [3, 4], [4, 5], [7, 8], [9, 10], [15, 16], [16, 17]];
+    for (const [i, j] of pairs) {
+      const first = COLLECT_STEPS[i]!; const second = COLLECT_STEPS[j]!;
+      const make = (): CollectRig => {
+        const r = collectRigOf({ ...second.opts, ...first.opts });
+        second.set(r);
+        const [l2, a2] = [r.hooks.listing, r.hooks.audit];
+        first.set(r);
+        const [l1, a1] = [r.hooks.listing, r.hooks.audit];
+        if (l1 !== l2 && l2 !== undefined) r.hooks.listing = (n) => { l2(n); return l1?.(n); };
+        if (a1 !== a2 && a2 !== undefined) r.hooks.audit = () => { a2(); a1?.(); };
+        return r;
+      };
+      const t = await collectRow(make, (r) => (i === 1 || j === 1 ? r.job('-not-a-tmproot') : r.job()));
+      expect(t.outcome, `${first.step} beside ${second.step}`).toMatchObject(first.want);
+    }
+    // A raised stop and a flip together answer the stop: the flip is judged only after the lane's stop arms.
+    const r = collectRigOf();
+    const facts = (await drive(TEMP_ORPHAN_RETIRE, r.job(), collectReaders(r.deps, r.job()))).facts;
+    const both = { ...facts, [RETIRE_STEPS.lane]: { kind: 'stopped', why: 'raised' }, [RETIRE_STEPS.flip]: true } as TempOrphanFacts;
+    expect(decideRetire(both, TEMP_ORPHAN_RETIRE, r.job())).toMatchObject({ outcome: { kind: 'answered', step: 5, why: 'paused' } });
+    // A hold and a refused licence together answer the hold.
+    const held = { ...facts, [RETIRE_STEPS.licence]: { kind: 'no-first' }, [RETIRE_STEPS.hold]: { kind: 'held', why: 'run-open', detail: 'x' } } as TempOrphanFacts;
+    expect(decideRetire(held, TEMP_ORPHAN_RETIRE, r.job())).toMatchObject({ outcome: { kind: 'held', step: 4 } });
+  });
+
+  it('temp-orphan: the need sequence equals the old read order', async () => {
+    const t = await collectRow(() => collectRigOf(), (r) => r.job());
+    expect(t.dec.ok && t.dec.d.decision).toEqual({ act: true });
+    expect(t.dec.ok && t.dec.d.needs).toEqual(stepsOf(TEMP_ORPHAN_RETIRE as RetireReason<never, RetireFactSet, unknown>));
+    // The licence is read before the hold, which judges both.
+    const order = t.tb.calls;
+    expect(order.indexOf('lane.observation')).toBeLessThan(order.indexOf('coord.run'));
+  });
+
+  it('temp-orphan: an unlistable registry names no reason (decider suite)', async () => {
+    for (const n of [1, 2]) {
+      const t = await collectRow(() => { const r = collectRigOf(); r.hooks.listing = (k) => (k === n ? 'null' : undefined); return r; }, (r) => r.job());
+      expect(t.outcome).toMatchObject({ why: 'paused', detail: 'the registry did not list, so a raised reclaim-paused cannot be ruled out' });
+    }
+  });
+
+  it('temp-orphan: a throwing synchronous read rejects the job (decider suite)', async () => {
+    const throwing: ReadonlyArray<(d: CollectTempRootDeps) => CollectTempRootDeps> = [
+      (d) => ({ ...d, viewers: { isVisible: () => { throw new Error('presence gone'); } } }),
+      (d) => ({ ...d, lane: { ...d.lane, generations: () => { throw new Error('presence gone'); } } }),
+      (d) => ({ ...d, lane: { ...d.lane, observation: () => { throw new Error('presence gone'); } } }),
+      (d) => ({ ...d, link: { ...d.link, epochNow: () => { throw new Error('presence gone'); } } }),
+    ];
+    for (const mutate of throwing) {
+      const t = await collectRow(() => collectRigOf(), (r) => r.job(), { mutate });
+      expect(t.dec.ok ? 'answered' : t.dec.err).toBe('presence gone');
+    }
+  });
+
+  it('temp-orphan: held at the act — a capability withdrawn before step 6, Settings flipped, and the loose arm', async () => {
+    const caps = await collectRow(() => { const r = collectRigOf(); r.hooks.audit = () => { r.state.ccdVerbs = without(COLLECT_CAP); }; return r; }, (r) => r.job());
+    expect(caps.outcome).toMatchObject({ kind: 'answered', step: 6, why: 'caps' });
+    const flip = await collectRow(() => {
+      const s = collectRigOf({ live: false, lastSeenLive: true });
+      settingsLive(s);
+      s.hooks.listing = (n) => { if (n === 2) s.coord.setCollectLane({ kind: 'off' }, WALL0 + 1, s.journal); };
+      return s;
+    }, (r) => r.job());
+    expect(flip.outcome).toMatchObject({ kind: 'answered', step: 5, why: 'switch-flip' });
+    const loose = await collectRow(() => looseRig(), (r) => r.job(LOOSE_ID));
+    expect(loose.dec.ok && loose.dec.d.decision).toEqual({ act: true });
+    const unarmed = await collectRow(() => looseRig(false), (r) => r.job(LOOSE_ID));
+    expect(unarmed.outcome).toMatchObject({ kind: 'would-collect' });
+    const withdrawn = await collectRow(() => {
+      const r = looseRig();
+      r.hooks.audit = () => { r.state.ccdVerbs = FULL_CAPS.filter((c) => c !== COLLECT_LOOSE_CAP); };
+      return r;
+    }, (r) => r.job(LOOSE_ID));
+    expect(withdrawn.outcome).toMatchObject({ kind: 'would-collect' });
+    const looseCaps = await collectRow(() => collectRigOf(), (r) => r.job(LOOSE_ID));
+    expect(looseCaps.outcome).toMatchObject({ kind: 'not-asked', step: 1, why: 'caps', detail: 'the fleet host does not advertise collect-loose-v1' });
+  });
+
+  it('temp-orphan: the judged audit answers no-document, and the hold folds a store throw', async () => {
+    const audit = await collectRow(() => { const r = collectRigOf(); r.deps.runCcd = async () => { throw new Error('link lost'); }; return r; }, (r) => r.job());
+    expect(audit.outcome).toMatchObject({ kind: 'answered', step: 4, why: 'not-collectable', detail: 'ws-audit answered no-document' });
+    const hold = await collectRow(() => collectRigOf({ coord: (real) => ({ run: (n) => real.run(n), bindingsOf: () => { throw new Error('locked'); } }) }), (r) => r.job());
+    expect(hold.outcome).toMatchObject({ kind: 'held', step: 4, hold: { why: 'store-unreadable' } });
+  });
+});
+
+// ── the rows themselves ────────────────────────────────────────────────────────────────────────────────────────────────
+
+describe('decideRetire: the rows carry the difference table (C4i; D-7166, D-7173, D-7226)', () => {
+  const ROWS = [CHILD_SPENT_RETIRE, ARCHIVE_EXPIRED_RETIRE, TEMP_ORPHAN_RETIRE] as unknown as readonly RetireReason<never, RetireFactSet, unknown>[];
+
+  it('each row names its reason, its listing mode, its presence rule and its notice home', () => {
+    expect(ROWS.map((r) => [r.name, r.listing, r.presence, r.notice])).toEqual([
+      [RETIRE_REASON_NAMES.childSpent, RETIRE_LISTING_MODES.plainPerMarker, RETIRE_PRESENCE_RULES.untilCeiling, RETIRE_NOTICE_HOMES.executor],
+      [RETIRE_REASON_NAMES.archiveExpired, RETIRE_LISTING_MODES.measuredOnce, RETIRE_PRESENCE_RULES.noCeiling, RETIRE_NOTICE_HOMES.lane],
+      [RETIRE_REASON_NAMES.tempOrphan, RETIRE_LISTING_MODES.measuredOnce, RETIRE_PRESENCE_RULES.noCeiling, RETIRE_NOTICE_HOMES.lane],
+    ]);
+  });
+
+  it('each row\'s steps in the old ladder\'s order, each step once, the audit between decide and act', () => {
+    expect(stepsOf(ROWS[0]!)).toEqual(['record', 'store', 'coordinated', 'switches', 'off-switch', 'generation', 'presence', 'capability',
+      'audit', 'audit-verdict', 'marker-match', 'audit-generation', 'off-switch-last']);
+    expect(stepsOf(ROWS[1]!)).toEqual(['id', 'capability', 'switches', 'store', 'presence', 'audit', 'archive-match', 'audit-verdict',
+      'switches-last', 'live']);
+    expect(stepsOf(ROWS[2]!)).toEqual(['capability', 'id', 'switches', 'presence', 'audit', 'stale-generation', 'audit-verdict', 'licence',
+      'hold', 'switches-last', 'latch', 'lane', 'flip', 'safety', 'licence-stands', 'presence-last', 'hold-last', 'live', 'loose-marker']);
+    for (const r of ROWS) expect(new Set(stepsOf(r)).size, r.name).toBe(stepsOf(r).length);
+    const used = new Set(ROWS.flatMap(stepsOf));
+    expect([...Object.values(RETIRE_STEPS)].filter((s) => !used.has(s)), 'every step name is some row\'s').toEqual([]);
+  });
+
+  it('each row\'s rejection modes are C4h\'s measured table (judged where the ladder\'s own try catches; a wrapper\'s fold is its fact)', () => {
+    const judged = (r: RetireReason<never, RetireFactSet, unknown>): string[] =>
+      [...r.decide, r.audit, ...r.act].filter((s) => s.onReject === 'judged').map((s) => s.step);
+    expect(judged(ROWS[0]!)).toEqual(['coordinated', 'switches', 'generation']);
+    expect(judged(ROWS[1]!)).toEqual([]);
+    expect(judged(ROWS[2]!)).toEqual([]);
+    // C4h's judged readers: the three above, and the wrappers that fold their own rejection into their answer.
+    const FOLDED: Record<string, RetireStep> = {
+      "2b' the disabled read": RETIRE_STEPS.offSwitch, '6 the disabled read at the act': RETIRE_STEPS.offSwitchLast,
+      'the switches (expirySwitches, both reads)': RETIRE_STEPS.switches, 'the store (readExpiryStore)': RETIRE_STEPS.store,
+      'the switches (collectSwitches, both reads)': RETIRE_STEPS.switches, 'the audit (collectAudit)': RETIRE_STEPS.audit,
+      'the hold (collectOpenRunHold, both reads)': RETIRE_STEPS.hold, 'the act (ws-collect)': RETIRE_STEPS.looseMarker,
+    };
+    const LADDER_TRY: Record<string, RetireStep> = {
+      '2a the coordination fence': RETIRE_STEPS.coordinated, '2b the pause read': RETIRE_STEPS.switches,
+      '2c the generation read': RETIRE_STEPS.generation,
+    };
+    for (const m of READER_MODES.filter((x) => x.mode === 'judged')) {
+      expect(LADDER_TRY[m.reader] ?? FOLDED[m.reader], m.reader).toBeDefined();
+    }
+    expect(Object.keys(LADDER_TRY).length + Object.keys(FOLDED).length).toBe(READER_MODES.filter((x) => x.mode === 'judged').length);
+  });
+
+  it('the listing steps: child-spent lists once per marker, the other two once per step for every marker', () => {
+    const listing = (r: RetireReason<never, RetireFactSet, unknown>) =>
+      [...r.decide, ...r.act].filter((s) => s.markers !== undefined).map((s) => [s.step, s.markers]);
+    expect(listing(ROWS[0]!)).toEqual([[RETIRE_STEPS.switches, [RECLAIM_PAUSE_MARKER]]]);
+    expect(listing(ROWS[2]!)).toEqual([
+      [RETIRE_STEPS.switches, [RECLAIM_PAUSE_MARKER, COLLECT_LANE_LIVE_MARKER, COLLECT_LOOSE_LIVE_MARKER]],
+      [RETIRE_STEPS.switchesLast, [RECLAIM_PAUSE_MARKER, COLLECT_LANE_LIVE_MARKER, COLLECT_LOOSE_LIVE_MARKER]],
+    ]);
+  });
+
+  it('a step whose fact is missing is the step asked for: no fact is read out of order', () => {
+    const later = { [RETIRE_STEPS.presence]: false, [RETIRE_STEPS.capability]: [true, true] } as ChildSpentFacts;
+    expect(decideRetire(later, CHILD_SPENT_RETIRE, {} as ChildReclaimRequest)).toEqual({ need: RETIRE_STEPS.record });
+  });
+
+  it('each row names its lane verdict as evidence, never called by the gate (D-7173)', () => {
+    expect(ROWS.map((r) => r.evidence.map((e) => e.name))).toEqual([
+      ['childReclaimSweepVerdict', 'childReclaimDecision'], ['archivedExpiryVerdict'], ['collectLicence']]);
+  });
+});
