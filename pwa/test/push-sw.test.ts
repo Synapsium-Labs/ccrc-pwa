@@ -5,10 +5,14 @@
 // detached from the app — possibly days after the push, against a server that
 // has moved on.
 import { describe, it, expect, beforeEach } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 
-const SRC = readFileSync(path.join(__dirname, '..', 'public', 'push-sw.js'), 'utf8');
+import { answerRegionOf, applyAnswerRegion, renderAnswerRegion } from './answerRegion';
+import { answerRequest, askCommandOf } from '../src/session/answerLifecycle';
+
+const SW_PATH = path.join(__dirname, '..', 'public', 'push-sw.js');
+const SRC = readFileSync(SW_PATH, 'utf8');
 
 interface Shown { title: string; opts: Record<string, unknown> }
 interface Posted { url: string; body: unknown }
@@ -385,5 +389,57 @@ describe('push-sw: a payload url (design 2026-09-20 §13)', () => {
     expect(posted).toEqual([{ url: '/api/sessions/cc-a/ask', body: { askKey: 'k', optionIndexes: [0] } }]);
     expect(opened).toEqual([]);
     expect(shown.at(-1)!.title).toBe('Answered');
+  });
+});
+
+// W7 C7e Step 7 (D-7183; OA-C17 (a), D-7265, recorded in docs/superpowers/plans/2026-10-28-w7-operator-acts-ruled.md):
+// the request and the sentence table are a generated region, rendered by `answerRegion.ts` from
+// `answerLifecycle.ts#ASK_REQUEST` and `refusalWords.ts#NOTIFICATION_REFUSAL_TEXT`. The handler's control flow (close,
+// waitUntil, the rejected-fetch wording, the openApp fallback) stays hand-written.
+describe('push-sw: the answer-lifecycle region', () => {
+  it('equals a fresh render, byte for byte (CCRC_WRITE_ANSWER_REGION=1 writes it instead, never under CI)', () => {
+    if (process.env.CCRC_WRITE_ANSWER_REGION === '1') {
+      expect(process.env.CI, 'CCRC_WRITE_ANSWER_REGION is set under CI: CI always compares').toBeFalsy();
+      writeFileSync(SW_PATH, applyAnswerRegion(SRC));
+      return;
+    }
+    expect(answerRegionOf(SRC)).toBe(renderAnswerRegion());
+  });
+
+  // Today's bytes, pinned as a literal beside the sentence table: green against the hand-written fetch and after.
+  it('the request shape: ask:k1:2 on session-a is POST /api/sessions/session-a/ask, JSON, {"askKey":"k1","optionIndexes":[2]}', async () => {
+    const sent: { url: string; init: unknown }[] = [];
+    fetchImpl = async (url, init) => { sent.push({ url, init }); return { ok: true, json: async () => ({ ok: true }) }; };
+    const self = load();
+    await click(self, 'ask:k1:2', { sessionId: 'session-a' });
+    expect(sent).toEqual([{
+      url: '/api/sessions/session-a/ask',
+      init: { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{"askKey":"k1","optionIndexes":[2]}' },
+    }]);
+  });
+
+  it('a malformed action, or no session, still opens the app and sends nothing', async () => {
+    for (const [action, data] of [['ask:k1:x', { sessionId: 'session-a' }], ['ask:k1:2', {}]] as const) {
+      posted = []; opened = [];
+      const self = load();
+      await click(self, action, data);
+      expect(posted, action).toEqual([]);
+      expect(opened, action).toHaveLength(1);
+    }
+  });
+
+  // The rendered function and answerRequest over one action corpus. `new Function` runs only the renderer's own
+  // output, built from this repo's declared shape; the corpus values are arguments, never part of the body.
+  it('the rendered askRequestOf equals answerRequest(askCommandOf(…)) over the action corpus', () => {
+    const askRequestOf = new Function(`${renderAnswerRegion()}\nreturn askRequestOf;`)() as
+      (action: string, sessionId: string | null) => unknown;
+    const ACTIONS = ['ask:k1:2', 'ask:k1:0', 'ask:a-b_c.9:10', 'ask:k1:x', 'ask::1', 'ask:k1:2:3', 'ask:k1:', 'open', ''];
+    const SESSIONS = ['session-a', 'cc a/b?c', null];
+    for (const action of ACTIONS) {
+      for (const sid of SESSIONS) {
+        const c = askCommandOf(action, sid);
+        expect(askRequestOf(action, sid), `${action} on ${String(sid)}`).toEqual(c === null ? null : { ...answerRequest(c) });
+      }
+    }
   });
 });
