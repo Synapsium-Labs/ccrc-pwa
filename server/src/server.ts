@@ -2474,10 +2474,10 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
         !body.optionIndexes.every((n) => typeof n === 'number')) {
       return reply.code(400).send({ ok: false, error: 'bad-request' });
     }
-    const res = await answerDialogMulti(sendDeps, id, body.dialogId, body.optionIndexes as number[]);
-    answeredFrame(id, 'dialog/multi', res);
-    if (res.ok) return res;
-    return reply.code(res.error === 'bad-indexes' ? 400 : 409).send(res);
+    // W3 Q3f (D-7030): an ALIAS from here on, into the operator's core (`questions.answer`): the press, its answered
+    // frame, and `bad-indexes` 400, every other refusal 409.
+    const out = await questions.answer({ kind: 'dialog', form: 'multi', sessionId: id, dialogId: body.dialogId, optionIndexes: body.optionIndexes as number[] }, operatorDoorDeps);
+    return reply.code(out.status).send(out.body);
   });
 
   /**

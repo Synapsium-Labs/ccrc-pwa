@@ -277,7 +277,8 @@ export interface QuestionStoreCallSite extends CensusSite { readonly symbol: str
 /** W3's question-store calls outside the store: every call of a `QUESTION_STORE_METHODS` name (`<x>.<method>(`, never
  *  `this.<method>(`) in `server/src` and `shared/`, outside `coord/store.ts` and `coord/questions.ts`. 48 at the base in 6
  *  files (`watch.ts` 22, `coord/routes.ts` 14, `server.ts` 5, `coord/digest.ts` 4, `fleet.ts` 2, `coord/driftLane.ts` 1),
- *  1 of them excluded by name: 47 counted. Q3f's may-only-shrink pin holds the whole list at the excluded row. */
+ *  1 of them excluded by name: 47 counted. 16 at Q3f's base (`coord/routes.ts` 11, `server.ts` 5); 1 at its tip, the
+ *  excluded row. Q3f's may-only-shrink pin holds the whole list at the excluded row. */
 export function questionStoreCallsOutside(root: string = REPO): QuestionStoreCallSite[] {
   const out: QuestionStoreCallSite[] = [];
   for (const dir of ['server/src', 'shared']) {
@@ -330,13 +331,7 @@ export function envelopePairingTitleRules(root: string = REPO): PairingRuleSite[
 
 /** The W3 task that moves each question-store call, by `file | enclosing symbol` (the plan's Q3a table). A counted call
  *  whose key is not here has no owner, and the census test reds. Rows only leave this table: Q3b's left with its reads,
- *  Q3e's with the raise, and Q3d's thirteen `watch.ts` rows with the hold (D-7028; `watch.ts` makes no question-store
- *  call since). */
-export const QUESTION_STORE_OWNERS: Readonly<Record<string, 'Q3b' | 'Q3d' | 'Q3e' | 'Q3f'>> = {
-  'server/src/coord/routes.ts | POST /api/asks/:id/answer': 'Q3f',
-  'server/src/coord/routes.ts | POST /api/asks/:id/release': 'Q3f',
-  'server/src/coord/routes.ts | POST /api/approvals/:id/rule': 'Q3f',
-  'server/src/coord/routes.ts | POST /api/approvals/:id/release': 'Q3f',
-  'server/src/server.ts | POST /api/sessions/:id/dialog': 'Q3f',
-  'server/src/server.ts | POST /api/sessions/:id/ask': 'Q3f',
-};
+ *  Q3e's with the raise, Q3d's thirteen `watch.ts` rows with the hold (D-7028; `watch.ts` makes no question-store call
+ *  since), and Q3f's six with the answer doors' cores (D-7030; the eight old doors are aliases). EMPTY since Q3f: every
+ *  counted call has moved, and the one left outside `coord/questions.ts` is the excluded ruling poll. */
+export const QUESTION_STORE_OWNERS: Readonly<Record<string, 'Q3b' | 'Q3d' | 'Q3e' | 'Q3f'>> = {};
