@@ -1040,9 +1040,10 @@ describe('the approvals server half\'s vocabulary and windows each have one home
   it('the one claimant decision lives in coord/heldFor.ts, and the hold and the mint both read it', () => {
     expect(holders(decl('heldFor'))).toEqual(['server/src/coord/heldFor.ts']);
     // The raise ladder's call moved into `coord/questions.ts` (`raiseApproval`, D-7029; W3 Q3e, named exception 2), and
-    // so did the hold's (`raise`, D-7028; W3 Q3d, named exception 2), so `watch.ts` leaves the list; the rule handler's
-    // call keeps `coord/routes.ts` in it until Q3f.
-    expect(holders(/\bheldFor\(/)).toEqual(['server/src/coord/heldFor.ts', 'server/src/coord/questions.ts', 'server/src/coord/routes.ts']);
+    // so did the hold's (`raise`, D-7028; W3 Q3d, named exception 2), so `watch.ts` leaves the list; and the rule
+    // handler's moved into the claimant's core (`rule`, D-7030; W3 Q3f, named exception 2), so `coord/routes.ts` leaves
+    // it too.
+    expect(holders(/\bheldFor\(/)).toEqual(['server/src/coord/heldFor.ts', 'server/src/coord/questions.ts']);
   });
   it('the 60 000 ms window is spelled nowhere but its home', () => {
     expect(holders(/\b60_000\b[^\n]*(?:approval|countdown)|(?:approval|countdown)[^\n]*\b60_000\b/i)).toEqual(['server/src/askwindow.ts']);
