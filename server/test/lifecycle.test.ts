@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { chmodSync, mkdirSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type { FastifyInstance } from 'fastify';
 import { buildServer } from '../src/server.js';
 import { loadConfig, type CcrcConfig } from '../src/config.js';
@@ -19,6 +20,7 @@ import type { FleetReadiness } from '../src/readiness.js';
 import { parseOpMarker, parsePassMarker } from '../../ccd/history/lib.mjs';
 
 const ID = 'claude9-Project-F';
+const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 
 const seedSession = (home: string, id: string, fields: Record<string, string>) => {
   const reg = path.join(home, '.cc-sessions');
@@ -1107,6 +1109,23 @@ describe('shared/lifecycle.ts — the policy §4(a) manifest', () => {
     expect(c!.bound).toContain('7 idle days');
     expect(c!.bound).toContain('never while it coordinated');
     expect(c!.ruling).toBeNull();
+  });
+  // CHARACTERIZATION (D-7278; green on `main` before the deps-shed arm): the manifest's classes, in order, and the
+  // policy's containment row for `node_modules` — it has no class of its own and "dies with" its workspace.
+  it('characterization: the manifest\'s classes, and no class of its own for a workspace\'s node_modules (D-7278)', () => {
+    expect(LIFECYCLE.map((c) => c.name)).toEqual([
+      'workspace-graph-store', 'project-graph-store', 'graph-corpus-filter', 'graph-build-lock', 'graph-sweep-census',
+      'claude-tmp-session-dirs', 'tmp-sweep-census', 'child-tmp-roots', 'ccd-orphan-worktrees', 'agent-worktrees',
+      'cc-tmp-loose-entries', 'child-workspaces', 'scope-sweep-verdicts', 'project-pool-tag', 'history-store',
+      'history-migration-snapshot', 'history-store-id', 'history-spool', 'history-journal', 'history-switches',
+      'history-backups', 'history-export', 'history-scope-markers', 'history-card-files', 'history-replay-out',
+      'history-recall-off', 'server-test-run-dirs', 'archived-workspaces',
+    ]);
+    expect(LIFECYCLE.filter((c) => c.root.includes('node_modules')).map((c) => c.name)).toEqual([]);
+    const policy = readFileSync(path.join(REPO_ROOT, 'docs/superpowers/specs/2026-08-11-artifact-lifecycle-policy.md'), 'utf8');
+    const row2 = policy.split('\n').find((l) => l.startsWith('| 2 | `node_modules` inside a workspace'));
+    expect(row2, 'the policy\'s inventory row 2').toBeTruthy();
+    expect(row2).toContain('| dies with #1 |');
   });
   it('declares the pane-scope sweep\'s verdict record, a rolling class its own writer rewrites', () => {
     // Session-continuity wave 4: `ccd-scope-sweep` keeps one record in the
