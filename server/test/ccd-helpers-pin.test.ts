@@ -235,3 +235,44 @@ describe('the reap lock\'s decline and its refusal, byte for byte (D-7071)', () 
     }, 30000);
   }
 });
+
+describe('the reap-lock runner, `_ws_reap_lock_run` (D-7076): the decline, the descriptor and the rc, sourced in a fixture HOME', () => {
+  // C5g's red-first rows (plan Task C5g, Step 2). The runner takes `<act> <verb> <id> <busy-detail> <cmd> [args…]`.
+  // The act and verb here are ones no verb passes together, so a runner that spelled a verb's own words would red.
+  const RID = 'project-a-quiet-runner';
+  const BUSY = 'a busy sentence the caller chose';
+  /** Hold `$REG/.reap-<RID>.lock` from a second process, run `body`, free it: a subshell that takes the lock and execs
+   *  `sleep`, so killing `$!` kills the holder itself and leaves no process behind (the C5d rows' `holding`). */
+  const held = (body: string): string => `lk="$REG/.reap-${RID}.lock"; : > "$lk"
+    ( exec {fd}>>"$lk"; flock -n "$fd" || exit 1; touch "$HOME/held"; exec sleep 25 ) >/dev/null 2>&1 &
+    hp=$!
+    for _ in $(seq 200); do [[ -f "$HOME/held" ]] && break; sleep 0.05; done
+    [[ -f "$HOME/held" ]] || { kill -9 "$hp" 2>/dev/null; echo "the holder never took the lock"; exit 1; }
+    ${body}
+    kill -9 "$hp" 2>/dev/null; wait "$hp" 2>/dev/null || true`;
+
+  it('a held lock answers the in-progress document for the busy detail it is given, at rc 0, with one journal row for its act and verb, and never runs the command', () => {
+    const x = harness();
+    const out = x.sh(held(`_ws_reap_lock_run expire ws-collect ${RID} "${BUSY}" touch "$HOME/ran" >"$HOME/out" 2>"$HOME/err"; echo "rc=$?"`));
+    expect(out).toBe('rc=0');
+    expect(fs.readFileSync(path.join(x.home, 'out'), 'utf8')).toBe(`{"refused":"in-progress","detail":${JSON.stringify(BUSY)},"paths":[]}\n`);
+    expect(fs.readFileSync(path.join(x.home, 'err'), 'utf8')).toBe('');
+    expect(fs.existsSync(path.join(x.home, 'ran')), 'the command ran without the lock').toBe(false);
+    expect(readJournal(x.home).map((e) => [e['act'], e['outcome'], e['verb'], e['refusal'], e['detail'], e['id']]))
+      .toEqual([['expire', 'refused', 'ws-collect', 'in-progress', BUSY, RID]]);
+  }, 30000);
+
+  it('a free lock runs the command holding it, and the command\'s rc comes back', () => {
+    const x = harness();
+    const out = x.sh(`probe() { ( exec {f}>>"$REG/.reap-${RID}.lock"; flock -n "$f" ) && echo "free:$*" || echo "held:$*"; return 7; }
+      _ws_reap_lock_run reap ws-reap ${RID} "${BUSY}" probe a b; echo "rc=$?"`);
+    expect(out).toBe('held:a b\nrc=7');
+  });
+
+  it('the descriptor goes back after the command returns: a second call in the same shell takes the lock', () => {
+    const x = harness();
+    const out = x.sh(`_ws_reap_lock_run reap ws-reap ${RID} "${BUSY}" true; echo "first=$?"
+      _ws_reap_lock_run reap ws-reap ${RID} "${BUSY}" echo second; echo "rc=$?"`);
+    expect(out).toBe('first=0\nsecond\nrc=0');
+  });
+});
