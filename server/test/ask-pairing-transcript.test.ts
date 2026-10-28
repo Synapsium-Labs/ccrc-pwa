@@ -8,8 +8,10 @@
 // every corpus envelope as the transcript's copy (`Dialog.ask`, every row aligned) on every parsed corpus screen with no
 // hook envelope; and, for each envelope's first question with options on every such screen, the same under a blank
 // question envelope, the same with its last row not aligned (a partly aligned copy) and the same under an approval
-// envelope; and a blank envelope over every parsed screen with no copy (the state where the server's
-// `'questions' in ask` and the client's `isUsableAsk` disagreed).
+// envelope; a blank envelope over every parsed screen with no copy (the state where the server's
+// `'questions' in ask` and the client's `isUsableAsk` disagreed); and the HOOK+COPY states, the most common live one:
+// every usable corpus envelope (`usableQuestions`) over every parsed corpus screen whose `Dialog.ask` is the copy of
+// one of that envelope's questions, where both sides pair the hook's envelope (`from` absent, read as `'hook'`).
 //
 // THE RULE (D-7213): a pairing is present exactly when the server has a dialog and a question source: the hook's usable
 // question envelope (on any dialog, the review screen included), else the transcript's copy (D-7206); an approval pairs
@@ -30,7 +32,7 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { AskPairing, Dialog, DialogAsk, HookAsk, HookAskQuestion, SessionStreamMsg } from '../../shared/api.js';
-import { transcriptQuestion } from '../../shared/ask-menu.js';
+import { transcriptQuestion, usableQuestions } from '../../shared/ask-menu.js';
 import { parseDialog } from '../src/pane/dialog.js';
 import { SessionStream } from '../src/sessionws.js';
 import { BLANK, CORPUS, TRANSCRIPT_SEQUENCES, envelopeOf, runSequence, type Sent } from './askPairingStream.js';
@@ -56,7 +58,7 @@ const askLive = async (): Promise<AskLive> => await import(path.join(ROOT, 'pwa/
 
 // ─── the corpus ────────────────────────────────────────────────────────────────────────────────────────────────────
 
-type Cls = 'hook' | 'transcript' | 'blank-envelope' | 'blank-envelope-no-copy' | 'partly-aligned' | 'approval';
+type Cls = 'hook' | 'hook+copy' | 'transcript' | 'blank-envelope' | 'blank-envelope-no-copy' | 'partly-aligned' | 'approval';
 interface State { readonly name: string; readonly cls: Cls; readonly ask: HookAsk | null; readonly dialog: Dialog | null }
 
 const APPROVAL: HookAsk = { approval: { tool: 'Bash', summary: 'git push origin main' } };
@@ -86,6 +88,8 @@ function corpus(): State[] {
         const at = `${env}.q${i + 1} on ${p}`;
         const dialog = { ...read(p), ask: copyOf(q) };
         out.push({ name: `${at}, no envelope`, cls: 'transcript', ask: null, dialog });
+        // The hook's usable envelope over its own question's copy: the hook's pairing on both sides, never the copy's.
+        if (usableQuestions(e)) out.push({ name: `${at}, under ${env}`, cls: 'hook+copy', ask: envelopeOf(env), dialog });
         // The contrast states, over each envelope's first question with options (the table stays reviewable).
         if (e.questions.findIndex((x) => x.options.length > 0) !== i) return;
         out.push({ name: `${at}, a blank envelope`, cls: 'blank-envelope', ask: BLANK, dialog });
@@ -158,10 +162,24 @@ describe('the transcript copy\'s pairing on the wire equals the client\'s (Task 
   it('the corpus holds every class, and the transcript states are the ones askSource answers structured from the transcript', async () => {
     const L = await askLive();
     const count = (c: Cls): number => STATES.filter((s) => s.cls === c).length;
-    for (const c of ['hook', 'transcript', 'blank-envelope', 'blank-envelope-no-copy', 'partly-aligned', 'approval'] as const) expect(count(c), c).toBeGreaterThan(0);
+    for (const c of ['hook', 'hook+copy', 'transcript', 'blank-envelope', 'blank-envelope-no-copy', 'partly-aligned', 'approval'] as const) expect(count(c), c).toBeGreaterThan(0);
     const fromTranscript = STATES.filter((s) => clientPairing(L, s.ask, s.dialog).source === 'structured:transcript');
     expect(fromTranscript.length).toBeGreaterThan(0);
     expect(new Set(fromTranscript.map((s) => s.cls))).toEqual(new Set(['transcript', 'blank-envelope']));
+  });
+
+  it('the hook+copy states: a usable envelope over a dialog carrying the copy of one of its questions is the hook\'s, on both sides', async () => {
+    const L = await askLive();
+    const states = STATES.filter((s) => s.cls === 'hook+copy');
+    const structured = states.filter((s) => clientPairing(L, s.ask, s.dialog).source === 'structured:hook');
+    expect(structured.length, 'hook+copy states askSource answers structured from the hook').toBeGreaterThan(0);
+    for (const s of states) {
+      expect(s.dialog?.ask, s.name).toBeDefined();
+      expect(['structured:hook', 'review'], s.name).toContain(clientPairing(L, s.ask, s.dialog).source);
+      const got = serverPairing(s).dialog;
+      expect(got, s.name).not.toBeNull();
+      expect(got!.from ?? 'hook', s.name).toBe('hook');
+    }
   });
 
   it.each(ROWS)('%s', async (_n, s) => {
