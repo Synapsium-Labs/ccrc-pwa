@@ -1,6 +1,6 @@
 # The test box: test runs off the fleet host, results streamed back to the session
 
-**Spec** · 2026-10-28 · Status: draft for review, rev 6. It designs #1695 (step 2 of moving test runs off the fleet
+**Spec** · 2026-10-28 · Status: draft for review, rev 7 (the last design round). It designs #1695 (step 2 of moving test runs off the fleet
 host). It builds on #1694 (step 1: the capped tests slice, the fleet-wide admission queue and the `ccrc test` wrapper),
 which is not built yet; this spec names what it needs from step 1 in §3.1. Docs only: no code ships with it.
 
@@ -18,7 +18,12 @@ them on the box from their official download hosts when it rolls the fleet host,
 `degraded` with a **Bring tools up to date** control (§2.10). It also gives the pristine install the run's fresh
 directory, root cleanup and caps plus a retry with backoff, makes `runs/<k>` root's, adds `RemoveIPC=yes`, collects
 the log and the reporter file outside the run directory, moves the npm settings into a root-owned `npmrc`, and
-splits the cost table by when each cost is paid.
+splits the cost table by when each cost is paid. Rev 7 closes the last review's three points and ends the design
+rounds: the box installs the versions the fleet agent **measures on the fleet host** (node, npm, Chrome, python3, git,
+tmux), not versions recorded from CI; the box gets a new test-service release as the same signed tarball the fleet
+host installs, fetched from the release host on the update lane's signal and verified by the same signature check;
+and node downloads are verified against the node release keys shipped inside that ccrc release, not a keyring frozen
+at box setup (§2.10). What is still open goes to the build plan (§9).
 
 **Related:** #1694 (step 1), #1785 (test containment and its good-faith scope), #389 (the vitest worker cap in the
 session environment), #1752 (per-box sizes as ccrc settings, the pattern every key below follows), #1772 (the worktree
@@ -55,10 +60,10 @@ The test box is a second, separate box that runs those suites instead. The desig
   scripts, the builds, the tests) runs as an unprivileged run user, in a static unit, with a fixed allowlisted
   environment and an empty HOME. The run has loopback only; an install reaches a local registry proxy and nothing
   else. The session's environment is never forwarded (§2.3).
-- **Tools: pinned by the release, installed by the update lane.** The release names the node, npm, Chrome for Testing
-  and python3 versions it was verified with; rolling the fleet host also installs them on the box from their official
-  download hosts, the only new names on the box's egress allowlist. A mismatch marks the box `degraded`, and the card's
-  **Bring tools up to date** runs the same step (§2.10).
+- **Tools: the fleet host's own versions, installed by the update lane.** The fleet agent measures the node, npm,
+  Chrome, python3, git and tmux versions its host runs; rolling the fleet host also brings the box the same signed
+  release and installs exactly those versions from their official download hosts. A mismatch marks the box
+  `degraded`, and the card's **Bring tools up to date** runs the same step (§2.10).
 - **Fallback: the local slice, said out loud.** Remote off, box unreachable, a version mismatch, or a queue over its
   limit: the wrapper runs the same command in step 1's slice and says why, in the first line and the last (§2.4).
 - **GitHub CI keeps the full suites.** The full server suite is about 4.4 hours of file time (§1.1); it stays with the
@@ -116,19 +121,19 @@ Counted over `server/test/*.test.ts` (1,120 files) at the commit above; one file
 
 | need | files | what it means for the test box |
 |---|---|---|
-| a real `tmux` binary (contained sockets, never a live server) | ≈97 | install tmux, same major as the fleet host (§2.10) |
+| a real `tmux` binary (contained sockets, never a live server) | ≈97 | install tmux at the fleet host's version (§2.10) |
 | `systemd-run`/`systemctl` named (poisoned to fail, per `ghContainedEnv` and the containment builders) | ≈91 | nothing real is called; the poison must still resolve first on PATH |
 | a `/proc` walk | ≈87 | Linux; and the walks see every same-uid process, so a run user per concurrent run and `ProtectProc=invisible` (§2.3) |
 | Linux-only (`skipIf`/`runIf` on platform) | ≈46 | Linux, like the fleet host |
 | loopback listeners, free ports | ≈85 | loopback only; no outbound network needed |
 | a literal `/tmp/` path (`delegation-rig` makes `mkdtempSync('/tmp/dlgt-')` because a unix socket path is capped near 108 bytes; `run-tmp`, `shutdown-seal`) | 29 name `'/tmp/…'`; tmux's own socket dir is `/tmp/tmux-<uid>` when `TMUX_TMPDIR` is unset | a writable private `/tmp` in both units and a `TMPDIR` no longer than the local one (§2.2, §2.3) |
 | `strace` | ≈9 | install strace |
-| `python3` (asserted present when `CI` is set) | ≈14 | install python3 at the release's pinned major.minor (§2.10) |
+| `python3` (asserted present when `CI` is set) | ≈14 | install python3 at the fleet host's version (§2.10) |
 | the real repository's git history or `origin/main` (`topology-clean`, `deviation-refs`, `consolidation-path-guard`, the ratchets) | about a dozen | the run needs a real clone whose HEAD and `origin/main` are the session's own shas; `consolidation-path-guard` diffs `$(git merge-base origin/main HEAD)..HEAD` and `deviation-refs` walks that range, so dirty changes must stay uncommitted (§2.1) |
 | the guards' base overrides `CCRC_HISTORY_BASE` (`topology-clean`, `consolidation-path-guard`) and `CCRC_LEDGER_BASE` (`deviation-refs`) | 3 | forwarded by default, resolved to a sha first (§2.1, §2.3) |
 | the real repository's branch name or `git status` (`buildinfo`, `build-release`) | a few | the checkout is on a branch of the session's name with the session's staged, unstaged and untracked state (§2.1); the many `ccd-*` files that read branches do it in fixture repos and need nothing |
 | gitignored build outputs (`server/dist`, `server/dist-pwa`, `agent/dist`): `auth-gate` runs cases only when `server/dist-pwa/index.html` exists, `authFixtures` imports from `server/dist/...` | 23 files name one of the three paths; most build their own copy under a fixture HOME | the snapshot never carries them (they are ignored), so the run builds each one the local tree has (§2.2) |
-| real Chrome (`CCRC_CHROME`; "throws on a box with no Chrome: red, never skipped") | 36 pwa browser files | install Chrome for Testing at the release's pinned version, path in config (§2.10) |
+| real Chrome (`CCRC_CHROME`; "throws on a box with no Chrome: red, never skipped") | 36 pwa browser files | install Chrome for Testing at the fleet host's version, path in config (§2.10) |
 
 CI's own list (`.github/actions/server-deps`) is the same: `tmux jq strace python3` on Linux, plus `bash tmux flock jq
 coreutils` on macOS. The suites read almost no ambient environment: `PATH`, `HOME`, `TMPDIR`, `LANG`, `CI` and a few
@@ -197,9 +202,10 @@ its destinations by host name, and nothing else is reachable apart from the tail
 | name | for | who uses it |
 |---|---|---|
 | `github.com` | the mirror fetch | the service |
-| the npm upstream (`CCRC_TESTBOX_REGISTRY_UPSTREAM`, default `registry.npmjs.org`) | packages and the pinned npm | the registry proxy only |
-| `nodejs.org` | the pinned node release and its checksum file (§2.10) | the tools unit only |
-| `storage.googleapis.com`, the Chrome for Testing download host | the pinned Chrome for Testing build (§2.10) | the tools unit only |
+| the npm upstream (`CCRC_TESTBOX_REGISTRY_UPSTREAM`, default `registry.npmjs.org`) | packages and npm itself | the registry proxy only |
+| the release host, the one the fleet host's update lane fetches from | the signed ccrc release tarball (§2.10) | the tools unit only |
+| `nodejs.org` | the node release, its checksum file and that file's signature (§2.10) | the tools unit only |
+| `storage.googleapis.com`, the Chrome for Testing download host | the Chrome for Testing build at the fleet host's version (§2.10) | the tools unit only |
 | the OS package mirror (`CCRC_TESTBOX_OS_MIRROR`, default the distribution's own) | python3, git, tmux, strace, jq and Chrome's system libraries (§2.10) | the tools unit only |
 
 A timer resolves the names into the firewall's address sets, and each rule also matches the sending unit (its
@@ -404,7 +410,7 @@ Lifecycle scripts run in both installs (`node-pty` needs its install step), so t
 where §2.3 puts it. The proxy, the service's, is the one warm layer every install reads, over HTTP.
 
 **npm settings come from a root-owned `npmrc`.** The npm settings every install on the box needs are in the global
-`npmrc` of the pinned node install (`<tools>/node/<version>/etc/npmrc`, root's, written by the tools unit, §2.10),
+`npmrc` of the box's node install (`<tools>/node/<version>/etc/npmrc`, root's, written by the tools unit, §2.10),
 which npm reads with no environment variable:
 
 ```
@@ -644,7 +650,7 @@ the same reachability the wrapper sees.
 
 - the switch, with one sentence of what it does;
 - state, with the reason when `degraded` or `down`, last answer time, service and protocol versions, and, for every
-  tool §2.4 compares, the release's pin, the fleet host's version and the box's, with the differing cell marked;
+  tool §2.4 compares, the fleet host's measured version and the box's, with the differing cell marked;
 - **Bring tools up to date**, shown when a tool differs or the last sync failed: it runs the same sync step as the
   update lane (§2.10), shows `syncing <tool>` while it runs, and is disabled until it ends; the last sync's time and
   result sit under it;
@@ -656,15 +662,15 @@ the same reachability the wrapper sees.
 | width | layout |
 |---|---|
 | phone | one column; the switch and state (with its reason) on top, then **Bring tools up to date** as a full-width button when shown, then a two-row summary (runs, queue); versions, the 24-hour counts, the pristine installs and failed keys behind a disclosure |
-| laptop | the card in the settings column; switch and state on one line, the button at the end of the state line when shown, a three-cell row (runs, queue, fallbacks), the versions table (pin, fleet host, box) under it |
+| laptop | the card in the settings column; switch and state on one line, the button at the end of the state line when shown, a three-cell row (runs, queue, fallbacks), the versions table (fleet host, box) under it |
 | wide | the same card at the column's width, with the versions table and the pristine-installs table shown open side by side |
 
 The control's route calls a `testbox.tools-sync` action through the same agent link (the `testbox` op's one write),
-which sends the box a `tools.sync` frame with the pins of the release the fleet host runs. The route, the action and
-the frame take no argument from the page: the pins are the release's, never the caller's.
+which sends the box a `tools.sync` frame naming the release the fleet host runs and the versions the agent measured
+on it. The route, the action and the frame take no argument from the page: the release and the versions are the fleet
+host's own, never the caller's.
 
-Doctor gains a line on the fleet host: the switch, the box's state, queue depth, and the version comparison, naming
-which side is off the release's pins.
+Doctor gains a line on the fleet host: the switch, the box's state, queue depth, and the version comparison.
 
 ### 2.8 The queue on the box
 
@@ -692,36 +698,41 @@ rest of `agent/`.
 
 ### 2.10 Tools in step with the fleet host
 
-A remote answer equals a local one only while the two hosts run the same node, npm, Chrome and python3, and the box
-has no way of its own to know what the fleet host runs or to change what it has. So the versions are carried by the
-release and installed by the lane that already rolls both hosts (§2.9).
+A remote answer equals a local one only while the two hosts run the same node, npm, Chrome, python3, git and tmux, and
+the box has no way of its own to know what the fleet host runs. So the fleet host says what it runs, and the box
+installs exactly that, through the lane that already rolls both hosts (§2.9).
 
-**The release pins them.** Each ccrc release carries a small tool-pins file, written by the release build from the
-versions its verifying CI jobs ran with:
+**The versions are the fleet host's, measured.** The fleet agent measures the versions its host runs, with the `PATH`
+sessions get: `node --version`, `npm --version`, `"$CCRC_CHROME" --version` (a Chrome for Testing version),
+`python3 --version`, `git --version` and `tmux -V`. It measures after the update lane has rolled the host and on every
+`testbox` poll (§2.7). That measurement is the only source of the versions the box installs; CI's versions play no
+part, because the answer that must match is the one the same session would get locally.
 
-| tool | pinned as | integrity |
-|---|---|---|
-| node | the exact version | the sha256 from the release's `SHASUMS256.txt`, whose signature is checked against the node release keys installed at box setup |
-| npm | the exact version | the registry's `dist.integrity` for that version |
-| Chrome | the exact Chrome for Testing version of the Chrome the browser job ran | the sha256 of the `linux64` zip, which the release build downloads once and records (Chrome for Testing publishes no checksum) |
-| python3 | major.minor | the OS package manager's own signature check |
+**How the box gets a new test-service release.** The test service ships in the ccrc release tarball (§2.9). When the
+update lane rolls the fleet host to a release, it signals the box with a `tools.sync` frame naming that release (its
+version and its URL on the release host) and carrying the versions the agent measured. The service starts
+`ccrc-testbox-tools.service`, a static root unit whose fixed script reads only the spec the service wrote, checks each
+value against its format, and:
 
-git, tmux, strace and jq are not pinned: they come from the OS package mirror at the distribution's version, and §2.4
-compares the majors of git and tmux as before.
+1. fetches the same signed release tarball the fleet host installed from the release host and verifies it with the
+   same signature check the fleet host's update lane runs (the release signing key, installed at box setup as on the
+   fleet host); a tarball that fails the check is not unpacked. It installs the test service from it; the new service
+   takes over once the runs in progress end, and queued runs wait for it;
+2. downloads `node-v<version>-linux-x64.tar.xz`, `SHASUMS256.txt` and its signature `SHASUMS256.txt.sig` from
+   `nodejs.org`, checks the signature against the **node release keys shipped inside the release just verified** (the
+   release build keeps them current, so a new node signing key reaches the box with the release that needs it, never
+   from a keyring frozen at box setup), checks the tarball's sha256 from that file, and unpacks it to
+   `<tools>/node/<version>`, which keeps the release's `include/node` headers for `nodedir` (§2.2), then writes that
+   install's root-owned `npmrc`;
+3. installs `npm@<version>` into that node prefix from the npm registry, through the registry proxy, checked against
+   the registry's `dist.integrity`;
+4. downloads the Chrome for Testing `linux64` build at the measured version from its download host over HTTPS and
+   unpacks it to `<tools>/chrome/<version>`, with its system libraries from the OS mirror;
+5. installs python3, git and tmux at the measured versions, and strace and jq at the distribution's, from the OS
+   package mirror under the package manager's own signature check;
+6. switches `<tools>/current`, a directory of links naming one version of each, in a single rename.
 
-**The update lane installs them.** When the update lane rolls the fleet host to a release, it also sends the test box a
-`tools.sync` frame with that release's pins (and rolls the test service itself, §2.9). The service starts
-`ccrc-testbox-tools.service`, a static root unit whose fixed script reads only the pins file the service wrote, checks
-each value against its format, and:
-
-1. downloads `node-v<version>-linux-x64.tar.xz` from `nodejs.org`, checks it against the signed checksum file, and
-   unpacks it to `<tools>/node/<version>`, which keeps the release's `include/node` headers for `nodedir` (§2.2), then
-   writes that install's root-owned `npmrc`;
-2. installs `npm@<version>` into that node prefix from the npm registry, through the registry proxy;
-3. downloads the Chrome for Testing build from its download host, checks the recorded sha256, and unpacks it to
-   `<tools>/chrome/<version>`, with its system libraries from the OS mirror;
-4. installs python3 at the pinned major.minor, git, tmux, strace and jq from the OS package mirror;
-5. switches `<tools>/current`, a directory of links naming one version of each, in a single rename.
+A `tools.sync` whose release is the one installed and whose versions are the box's changes nothing.
 
 `<tools>` is `CCRC_TESTBOX_TOOLS_DIR`, root's and read-only to every other user; `CCRC_CHROME` on the box names the
 link. A run resolves `<tools>/current` once, when its prepare starts, and uses those versioned paths for its whole
@@ -729,15 +740,16 @@ life, so a sync during a run changes nothing under it; the next prepare picks th
 previous version of each tool until no run uses it. A new node version changes every install key (§2.2), so the
 service queues the new pristine builds as soon as the sync ends.
 
-**A mismatch is visible and has a control.** The status answer reports the box's versions, the pins it last synced
-and the sync's state. A box whose versions differ from the fleet host's is `degraded` with the reason
-`tools differ (<tool> <fleet host> vs <box>)`, and every wrapper on the fleet host falls back with §2.4's version row,
-so a mismatch costs remote runs, never a wrong answer. A sync that fails (a download, a checksum, the OS mirror without
-the pinned python3 minor) leaves `current` on the previous set, marks the box `degraded` with
+**A mismatch is visible and has a control.** The status answer reports the release the box runs, its tool versions
+and the sync's state, and the fleet agent compares them with its own measurement. A box whose release or versions
+differ from the fleet host's is `degraded` with the reason `tools differ (<tool> <fleet host> vs <box>)`; when the
+difference reaches §2.4's version row, every wrapper on the fleet host falls back with that row, so a mismatch costs
+remote runs, never a wrong answer. A tool changed on the fleet host outside the lane shows up at the next poll the
+same way. A sync that fails (a download, a signature or checksum, an OS mirror without the measured version) leaves
+`current` and the installed release on the previous set, marks the box `degraded` with
 `tool sync failed (<tool>: <detail>)`, and is retried with the pristine build's backoff (`CCRC_TESTBOX_PRISTINE_RETRY`).
-The card's **Bring tools up to date** (§2.7) sends the same `tools.sync` at once. When the fleet host itself is off its
-release's pins (a tool changed on it outside the lane), syncing the box cannot help; the card and the doctor line say
-which side is off.
+The card's **Bring tools up to date** (§2.7) sends the same `tools.sync` at once, with the agent's latest
+measurement.
 
 ## 3. What this needs from others
 
@@ -755,7 +767,8 @@ If step 1 lands with another argv, §2.5 follows it.
 
 This PR adds one file under `docs/superpowers/specs/` and touches no other file, so it is line-disjoint from every open
 PR. The build that follows will touch `shared/switches.ts` (a row), `agent/` (a new entry point and op), the release
-build (the tool-pins file, §2.10), the update lane (the `tools.sync` step), the Settings Automation section and the
+build (the node release keys in the tarball, §2.10), the agent's tool-version measurement, the update lane (the
+`tools.sync` step), the Settings Automation section and the
 doctor checks; it lands after #1694, and its plan re-checks open PRs on those files then.
 #1772's deps-shed arm and this design meet later: once typechecks and tests run remotely, a fleet worktree needs its
 `node_modules` only for local fallback runs, which makes shedding them cheaper. That is a follow-up, not part of this
@@ -785,7 +798,7 @@ wait), or outside any run.
 | cleanup (`rm -rf` of the run directory) | after the run | ≈7 s for the `ui` and `pwa` clones | 5–15 s |
 | `npm ci` for a package whose key has no pristine install | prepare, first runs of a new lockfile only | not measured | 1–3 min per package against a warm proxy |
 | pristine build for a new key | outside any run (its own unit, §2.2) | not measured | 1–3 min per package |
-| tool sync (§2.10) | outside any run, once per release that changes a pin | not measured | a few minutes, mostly the Chrome download |
+| tool sync (§2.10) | outside any run, once per release or fleet-host tool change | not measured | a few minutes, mostly the Chrome download |
 
 So the worst ordinary case, a run whose local tree has all three outputs, waits about two minutes before its command
 starts: under a seventh of the 15-minute budget, which is why the budget estimate (§2.5) leaves the prepare uncounted.
@@ -827,9 +840,9 @@ month per package.
 | `CCRC_TESTBOX_PRISTINE_KEEP` | `7d` | §2.2; a pristine install unused this long is deleted |
 | `CCRC_TESTBOX_PRISTINE_RETRY` | `2m 10m 1h 1d` | §2.2, §2.10; the delays between attempts of a failed pristine build or tool sync, the last repeating |
 | `CCRC_TESTBOX_REPORT_MAX` | `16M` | §2.2; the largest reporter file the cleanup collects |
-| `CCRC_TESTBOX_TOOLS_DIR` | `/opt/ccrc-testbox/tools` | §2.10; the pinned tools, root's, with `current` naming the set in use |
+| `CCRC_TESTBOX_TOOLS_DIR` | `/opt/ccrc-testbox/tools` | §2.10; the synced tools, root's, with `current` naming the set in use |
 | `CCRC_TESTBOX_OS_MIRROR` | the distribution's own | §2.0, §2.10; the OS package mirror |
-| `CCRC_TESTBOX_EGRESS_ALLOW` | `github.com`, the registry upstream, `nodejs.org`, `storage.googleapis.com`, the OS mirror | §2.0; the egress allowlist by name, each name tied to the units that may use it |
+| `CCRC_TESTBOX_EGRESS_ALLOW` | `github.com`, the registry upstream, the release host, `nodejs.org`, `storage.googleapis.com`, the OS mirror | §2.0; the egress allowlist by name, each name tied to the units that may use it |
 | `CCRC_TESTBOX_PUSH_USER` | `ccrc-tb-push` | §2.1; the push user |
 | `CCRC_TESTBOX_ENV_FORWARD` | `CCRC_HISTORY_BASE CCRC_LEDGER_BASE` | §2.3; a ref-valued name is resolved to a sha and pushed (§2.1) |
 | `CCRC_TESTBOX_RUN_USER_PREFIX` | `ccrc-tb-` | §2.3; concurrent run `k` runs as `<prefix><k>` |
@@ -837,7 +850,7 @@ month per package.
 | `CCRC_TESTBOX_REGISTRY_UPSTREAM` | `https://registry.npmjs.org` | §2.3; the proxy's upstream |
 | `CCRC_TESTBOX_TMPFS` | `off` | §2.2; `on` mounts the units' `/tmp` as a tmpfs instead of `PrivateTmp` |
 | `CCRC_TESTBOX_LOG_TAIL` | `40` | §2.5 |
-| `CCRC_CHROME` | `<tools>/current/chrome` | the pinned Chrome for Testing binary for the browser tests (§2.10) |
+| `CCRC_CHROME` | `<tools>/current/chrome` | the Chrome for Testing binary at the fleet host's version, for the browser tests (§2.10) |
 
 ## 5. Acceptance, mapped
 
@@ -847,7 +860,7 @@ month per package.
 | a run's checkout stays whole across mirror `gc` (§2.1) | a service test: a fixture submission with a dirty tree is prepared, the mirror runs `git gc --prune=now`, and the run must pass with `git fsck` in its checkout reporting no missing object |
 | no run's result depends on an earlier run (§2.2) | the carry-over fixture test in §2.3; a fixture run killed mid-way whose directory the cleanup must still remove; and a pushed run id that already holds a ref, which the pre-receive hook must refuse whole |
 | a run with no pristine install for its key | a fixture lockfile with no pristine install: the run installs in its own copy and passes, the pristine install appears afterwards, and the next run with that lockfile clones it; a fixture lockfile whose install fails: the build is retried on the backoff, the card lists the key, the box is `degraded`, runs for that key still install in their copy, and the install directory is gone after every attempt |
-| the box's tools follow the fleet host's release (§2.10) | a service test against fixture download hosts: a `tools.sync` with new pins installs them, switches `current` in one rename, leaves a run that started before it on its old paths, and queues the new pristine builds; a checksum that does not match leaves `current` unchanged and marks the box `degraded` with `tool sync failed`; a status answer whose versions differ from the fleet host's makes the wrapper fall back with the version row; and the card's **Bring tools up to date** sends the same frame with the release's pins, not the page's |
+| the box's tools follow the fleet host's release (§2.10) | a service test against fixture download hosts: a `tools.sync` with a fixture release and new measured versions verifies the release's signature, checks node against the keys inside that release (a node checksum file signed by a key absent from it must fail), installs the versions, switches `current` in one rename, leaves a run that started before it on its old paths, and queues the new pristine builds; a checksum that does not match leaves `current` unchanged and marks the box `degraded` with `tool sync failed`; a status answer whose versions differ from the fleet host's makes the wrapper fall back with the version row; and the card's **Bring tools up to date** sends the same frame with the fleet host's release and measured versions, not the page's |
 | coding sessions see no test-run memory or CPU | on the fleet host a remote run costs a `status`, a `git add -A` that reuses the session's stat cache, one push and a stream: measured in the build as the wrapper's own peak RSS and CPU time, with a ceiling in a test, on a dirty tree and on one with a file over the cap (which must not be hashed); the tests slice stays empty while every run is remote |
 | no credentials reachable, no outbound network | the env, `/proc` and install fixture tests in §2.3 |
 | when the box is down, runs fall back and say so | a fixture test per row of §2.4's table: the reason in the first and last line, the local slice used, the exit status the local run's; for the budget row also the explicit `--remote` form, which must run nothing and exit 75; a box whose run root has no reflink reports `down`; and a fixture worktree with no `node_modules`, under each value of `CCRC_TESTBOX_FALLBACK_INSTALL` |
@@ -876,9 +889,10 @@ that option.
   snapshot is checked first.
 - Scratch refs never reach the public remote.
 - The box is rebuilt clean before it serves, the tailnet lets it reach nothing, and its egress is a named list
-  (GitHub, the npm upstream and the tools' official download hosts), each name open only to the units that need it.
-- The box's tools are the release's pins; while they differ from the fleet host's the box says so and every run
-  falls back instead of getting a remote answer.
+  (GitHub, the npm upstream, the release host and the tools' official download hosts), each name open only to the
+  units that need it.
+- The box runs the fleet host's own release, verified as the fleet host verifies it, and the tool versions measured
+  on the fleet host; while they differ the box says so and every run falls back instead of getting a remote answer.
 - The server keeps one agent link and never reaches a third box.
 - The merge-queue CI stays the authority for landing, so even a wrong answer from the box cannot land a change.
 
@@ -886,7 +900,8 @@ that option.
 
 Everything else in this spec is design, settled by the reasons given where it is described. The transport (§2.1), the
 secrets rule (§2.3), the disposable runs with reflink clones of a pristine install on XFS (§2.2, from the
-2026-10-28 ruling) and the release's tool pins with their official download hosts (§2.10) are among those, so none is
+2026-10-28 ruling) and the tools synced to the fleet host's measured versions with the release fetched and verified
+as the fleet host's (§2.10) are among those, so none is
 a choice here. These are the choices the operator makes; each row names
 the recommended option first.
 
@@ -899,6 +914,7 @@ the recommended option first.
 | 5 | A run lost mid-way (§2.4) | **re-run locally, as now, after sending `run.cancel`; the alternative is to fail fast (`CCRC_TESTBOX_LOST_RUN=fail`)** | the session gets its answer either way, at the cost of running the command twice when the box was only slow |
 | 6 | On/off control (§2.7) | **one switch on the Settings › Automation Test box card, backed by a marker file a terminal can remove; armed only after the parity check in §6 passes** | the operator can turn it off from the UI or a shell, and it works with the server down |
 | 7 | Which repositories first (§2.6) | **ccrc-pwa only; another repository by adding a row once its own parity check passes** | its suites are the measured load |
+
 ## Decisions this spec adds
 
 The build plan allocates a deviation number for each of these when it lands; until then they are named by this PR,
@@ -933,9 +949,11 @@ The build plan allocates a deviation number for each of these when it lands; unt
   retries with backoff and is listed on the card (§2.2).
 - **Results and npm settings**: the live output and the reporter file are collected outside the run directory before
   cleanup; the registry, cache and `nodedir` come from a root-owned `npmrc`, never the run's environment (§2.2).
-- **Tools**: the release pins node, npm, Chrome for Testing and python3; the update lane installs them on the box from
-  their official download hosts, which are the only names added to the egress allowlist; a mismatch marks the box
-  `degraded`, falls every run back, and offers **Bring tools up to date** on the card (§2.10).
+- **Tools**: the fleet agent measures node, npm, Chrome, python3, git and tmux on the fleet host and the box installs
+  exactly those versions; on the update lane's signal the box fetches the same signed release tarball from the release
+  host and verifies it with the fleet host's signature check; node is verified against the node release keys shipped
+  in that release; the release host and the tools' download hosts are the only names added to the egress allowlist; a
+  mismatch marks the box `degraded`, falls every run back, and offers **Bring tools up to date** on the card (§2.10).
 - **Fallback**: the fallback checks (the budget, the version and protocol check, a `down` box and the prepare-phase
   failures among them), their printed reasons, the lost-run rule (`run.cancel`, then the local run) and the
   install-or-refuse rule for a worktree with no `node_modules` (§2.4).
@@ -947,3 +965,16 @@ The build plan allocates a deviation number for each of these when it lands; unt
 - **Status**: the `testbox-remote-live` switch row, the `testbox` agent op with its `degraded` and `down` states and
   its one write (`testbox.tools-sync`), and the Settings card with its per-width layout (§2.7).
 - **Service home**: the test service as a second entry point of the agent package (§2.9).
+
+## 9. Left to the build plan
+
+This is the last design round. These minor points are settled in the build plan, not in another revision:
+
+- Chrome for Testing publishes no checksum, so its download is trusted on HTTPS from the official host; the plan may
+  add a hash the fleet agent records from its own install.
+- An OS mirror may not carry the fleet host's exact python3, git or tmux version; the sync then fails visibly (§2.10),
+  and the plan decides whether the box tracks the fleet host's distribution release to avoid it.
+- How the new test service takes over from the old one while runs are in progress (§2.10, step 1), and the frame's
+  exact fields.
+- The agent's measurement runs with the sessions' `PATH`; the plan names where it reads that `PATH` from.
+- The box column of §4's cost table, replaced by measurements on the box.
