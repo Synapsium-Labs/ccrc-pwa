@@ -11,11 +11,12 @@
 // through the target this host publishes (`useSessionCommandTarget`), which answers whether an item is offered with
 // the menu's own gate (`sessionMenu`, the substrate fault included), so the palette can never offer what the menu
 // shows disabled.
-import { createContext, useContext, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { createContext, useContext, useLayoutEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { substrateFault, type FleetSession } from '../../../shared/api';
 import { ListRow, Sheet, cn } from '@ccrc/ui';
 import { commandDoor } from '../command/door';
+import { createTargetSlot } from '../command/targetSlot';
 import type { SessionCommandTarget } from '../command/registry';
 import { navigate } from '../lib/router';
 import { sessionDocsHref } from '../docs/docsLinks';
@@ -148,22 +149,14 @@ export function useSessionFlows(): SessionFlowDoors {
 }
 
 // THE TARGET THE COMMAND LAYER READS. The layer is mounted above the frame (D-5467) and this host inside the ladder,
-// so the host publishes its target here while it is mounted, and the layer subscribes. One slot: one session screen
-// is mounted at a time; a host clears it on unmount only if it is still the one published.
-let target: SessionCommandTarget | null = null;
-const listeners = new Set<() => void>();
-function publish(next: SessionCommandTarget | null): void {
-  target = next;
-  for (const l of listeners) l();
-}
-function subscribe(l: () => void): () => void {
-  listeners.add(l);
-  return () => { listeners.delete(l); };
-}
+// so the host publishes its target in the shared slot (`command/targetSlot.ts`) while it is mounted, and the layer
+// subscribes. One slot: one session screen is mounted at a time; a host clears it on unmount only if it is still the
+// one published.
+const slot = createTargetSlot<SessionCommandTarget>();
 
 /** The open session's command target, or null off a session screen (`CommandLayer`'s `ctx.session`). */
 export function useSessionCommandTarget(): SessionCommandTarget | null {
-  return useSyncExternalStore(subscribe, () => target, () => null);
+  return slot.useValue();
 }
 
 export interface SessionFlowsProps {
@@ -223,8 +216,8 @@ export function SessionFlows({ session, title, actions, children }: SessionFlows
   });
 
   useLayoutEffect(() => {
-    publish(mine);
-    return () => { if (target === mine) publish(null); };
+    slot.publish(mine);
+    return () => slot.clear(mine);
   }, [mine]);
 
   return (
