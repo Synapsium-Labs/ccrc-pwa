@@ -1329,7 +1329,7 @@ describe('the fleet head holds one row, and the class chooser is not on it', () 
     const chooser = readFileSync(
       path.join(import.meta.dirname, '..', 'src', 'fleet', 'ClassChooser.tsx'), 'utf8');
     expect(chooser, 'the component lost the measured width utilities')
-      .toContain('className="w-auto flex-none max-w-full"');
+      .toContain("cn('w-auto flex-none max-w-full', className)");
     expect(row, 'HotFilesStrip was pulled inside the runs line — it renders nothing when idle')
       .not.toContain('<HotFilesStrip');
   });

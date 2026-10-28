@@ -28,10 +28,16 @@
 //                                                         (`the radiogroup no longer grows into the row: expected [ 'ins-toggle' ] to include 'flex-auto'`)
 //   `flex-auto` replaced by `flex-1` ................... the same case (`the radiogroup no longer grows into the row: expected [ 'ins-toggle', 'flex-1' ] to include 'flex-auto'`;
 //                                                         `flex-auto flex-1` together trips its `not.toContain('flex-1')` line)
+// Final-review fix wave (the chooser as tall as the toggle's options):
+//   `FleetTable` without `className="min-h-row"` on the chooser  "the toggle row's chooser is as tall as the toggle's options, not the tap floor's (T2f, D-6371)"
+//                                                         (`FleetTable no longer passes min-h-row to the chooser: expected '// Instrument's fleet list (W2 Task …' to contain '<ClassChooser className="min-h-row" />'`);
+//                                                         green in instrument-list, which cannot measure a height
 // The pin is a source read: jsdom has no layout, so the width itself is measured in a browser. The `flex-auto` mutants and the
 // copied-chooser mutant are the only rows this file catches; the others live in instrument-list.test.tsx.
 import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
+import { SELECT } from '@ccrc/ui';
+import { cn } from '../../ui/src/lib/cn';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, screen, waitFor } from '@testing-library/react';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
@@ -311,5 +317,17 @@ describe('the class chooser is one component (T2f, D-6371)', () => {
     // `flex-1` has a 0% basis, so a `flex-wrap` row never wraps and the chooser overlaps the toggle at large text sizes:
     // the basis must stay auto, so that the row wraps the chooser instead.
     expect(classes, "a 0% basis (`flex-1`) lets the chooser overlap the toggle: the basis must stay auto, so the row wraps").not.toContain('flex-1');
+  });
+
+  it("the toggle row's chooser is as tall as the toggle's options, not the tap floor's (T2f, D-6371)", () => {
+    // `min-h-row` REPLACES the select's `min-h-tap` (ui's `cn` declares `row` a spacing key), so the row is as tall in
+    // project mode as in status mode. Under a coarse pointer `--row-h` is 44, so the tap floor still holds there.
+    const merged = cn(SELECT, 'w-auto flex-none max-w-full', 'min-h-row').split(/\s+/);
+    expect(merged, 'min-h-row did not reach the DOM').toContain('min-h-row');
+    expect(merged, 'min-h-tap survived beside min-h-row').not.toContain('min-h-tap');
+    // The other half: the toggle row asks for it, and the component merges it over its own width utilities.
+    const table = read('skins', 'instrument', 'FleetTable.tsx');
+    expect(table, 'FleetTable no longer passes min-h-row to the chooser').toContain('<ClassChooser className="min-h-row" />');
+    expect(read('fleet', 'ClassChooser.tsx'), 'ClassChooser dropped its className').toContain("cn('w-auto flex-none max-w-full', className)");
   });
 });

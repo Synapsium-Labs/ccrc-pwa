@@ -147,7 +147,7 @@ export function FleetTable(): ReactNode {
             </Button>
           ))}
         </div>
-        {desk && mode === 'project' && <ClassChooser />}
+        {desk && mode === 'project' && <ClassChooser className="min-h-row" />}
       </div>
       {mode === 'project'
         ? <ProjectCards selectedId={selectedId} />

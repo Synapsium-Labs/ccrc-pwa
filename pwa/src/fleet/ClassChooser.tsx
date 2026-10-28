@@ -3,14 +3,17 @@
 // (`classFilter`, `chooseClass`), whose own readers are the two things the class changes: the project cards' placement
 // forecast and Add workspace's route body (`useProjectRows.ts`). Two homes, never both at once at one width: the fleet
 // screen's runs line (a phone, Refined, and any column that draws that line), and Instrument's table toggle row at a
-// desk in project mode, where it has an effect (T2f, D-6371).
+// desk in project mode, where it has an effect (T2f, D-6371). It takes one optional `className`, merged over its own
+// width utilities: the toggle row passes `min-h-row` so the chooser is as tall as the toggle's options (`--row-h`, 32
+// under a fine pointer and 44 under a coarse one), because the select's own `min-h-tap` (44) would grow that row in
+// project mode and move the toggle and the list by the difference on every mode switch.
 import type { ReactNode } from 'react';
-import { Select } from '@ccrc/ui';
+import { cn, Select } from '@ccrc/ui';
 import { CLASSES, type ModelClass } from '../../../shared/models';
 import { AUTOMATIC_CLASS } from './classWords';
 import { useFleetChrome } from './FleetChrome';
 
-export function ClassChooser(): ReactNode {
+export function ClassChooser({ className }: { className?: string } = {}): ReactNode {
   const { projects } = useFleetChrome();
   return (
     <>
@@ -38,7 +41,7 @@ export function ClassChooser(): ReactNode {
           asks for, and the head overflowed the viewport by 225px at 390px.
           `fleet-css.test.ts` pins the mechanism that replaced it. */}
       <Select
-        className="w-auto flex-none max-w-full"
+        className={cn('w-auto flex-none max-w-full', className)}
         aria-label="Class"
         value={projects.classFilter}
         onChange={(e) => projects.chooseClass(e.target.value as '' | 'default' | ModelClass)}
