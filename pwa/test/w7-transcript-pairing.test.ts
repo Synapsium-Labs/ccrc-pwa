@@ -92,7 +92,8 @@ describe('the transcript-copy rows (askSource answers structured from the transc
     expect(rows.filter((x) => !x.endsWith(UNPLACED))).toEqual(PLACED);
     expect(rows.filter((x) => x.endsWith(UNPLACED)).length).toBe(317);
     expect(rows.length).toBe(346);
-  });
+    // 346 full DialogSheet renders in one test: ~1.5s on a laptop, 6-7s on a loaded CI shard, past vitest's 5s default.
+  }, 30_000);
 });
 
 const PLACED: readonly string[] = [
