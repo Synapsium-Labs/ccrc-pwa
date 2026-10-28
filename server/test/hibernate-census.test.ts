@@ -160,8 +160,9 @@ const CENSUS: readonly Row[] = [
     why: 'counts an account\'s running sessions: a sleeper is not running' },
   { source: 'dead-compare', file: 'pwa/src/fleet/startProgramPolicy.ts', hits: 3, stances: ['true-of-pane'],
     why: 'the live main checkout and live ids: a sleeping session is not running, which is true of its pane' },
-  { source: 'dead-compare', file: 'pwa/src/fleet/spawnWords.ts', hits: 1, stances: ['true-of-pane'],
-    why: 'silent about a spawn on a dead row: a sleeper has no spawn in progress to speak of' },
+  { source: 'presence-reader', file: 'pwa/src/fleet/spawnWords.ts', hits: 1, stances: ['true-of-pane'],
+    why: 'silent about a spawn on a row whose pane is gone (`paneGone`, D-7181): a sleeper has no spawn in progress to '
+      + 'speak of' },
 ];
 
 /** Readers outside the scan's reach, by name, each with the text that holds its stance. */

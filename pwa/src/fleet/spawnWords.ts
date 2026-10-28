@@ -23,6 +23,7 @@
 // Each function's docstring argues its own scope; the run board's half was
 // decided in Task 5's review round and is measured in both suites.
 import { paneWidth, READER_MIN_COLS, type FleetSession, type SpawnVerdict } from '../../../shared/api';
+import { paneGone } from './presence';
 
 /** The verdict's DISPLAYED word, or `null` for a verdict with nothing to say.
  *
@@ -82,12 +83,12 @@ export interface SpawnChip { word: string; data: string }
  *  running, so how the last spawn ended describes work that no longer exists —
  *  the same exemption `critical` and the subagent list already take.
  *
- *  It is a NAMED predicate rather than `status === 'dead'` written twice below,
- *  because both questions this file answers ask it and one of them is now asked
+ *  It is a NAMED predicate rather than the pane's word (`paneGone`, D-7181)
+ *  written twice below, because both questions this file answers ask it and one of them is now asked
  *  from a second surface: two copies of one exemption is how a row goes quiet on
  *  the fleet screen and loud on the run board for the identical session. */
 function silentAboutSpawn(session: FleetSession): boolean {
-  return session.status === 'dead';
+  return paneGone(session);
 }
 
 /** A `narrow` spawn whose pane THIS TICK measures at least `READER_MIN_COLS`

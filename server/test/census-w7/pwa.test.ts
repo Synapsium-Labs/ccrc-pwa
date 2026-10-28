@@ -259,10 +259,10 @@ describe('W7 PWA census: REAL rows (reporting, not ratcheting; spec §5.1 rule 3
     expect(sites.map((s) => s.file)).toEqual(['pwa/src/stores/fleet.ts']);
   });
 
-  it('inlineDeadChecks(): 14 comparisons of a status with dead, in 7 files', () => {
+  it('inlineDeadChecks(): 13 comparisons of a status with dead, in 6 files', () => {
     const sites = inlineDeadChecks();
-    held('inlineDeadChecks', sites, 14);
-    expect(Object.keys(countBy(sites, (s) => s.file)).length).toBe(7);
+    held('inlineDeadChecks', sites, 13);
+    expect(Object.keys(countBy(sites, (s) => s.file)).length).toBe(6);
   });
 
   it('coordPresenceSites(): 1 definition, 3 calls, 2 answers compared with dead', () => {
