@@ -2,6 +2,7 @@
 import { describe, it, expect } from 'vitest';
 import { spawn, spawnSync } from 'node:child_process';
 import { createServer, type IncomingMessage, type IncomingHttpHeaders, type ServerResponse, type Server } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import {
   writeFileSync, mkdirSync, chmodSync, readFileSync, existsSync, lstatSync, copyFileSync, readdirSync, renameSync, symlinkSync,
   openSync, writeSync, closeSync, unlinkSync, constants as fsConstants,
@@ -93,10 +94,13 @@ const HAS_IPV6_LOOPBACK = Object.values(os.networkInterfaces()).some(
   (addrs) => addrs?.some((i) => i.family === 'IPv6' && i.internal && i.address === '::1'),
 );
 
-// task-10-rulings.md (commit af7cc0bc) §5: "Ports: 45020 for this suite. 45010/45011 belong to
-// the proxy suite and the two cannot run at once." A fixed port, not an
-// OS-assigned one, matching the proxy suite's own convention.
-const USAGE_PORT = 45020;
+// Every listener in this suite binds port 0 and reads the port the OS
+// assigned. A fixed listening port (this suite once bound 45020) sits inside
+// Linux's ephemeral range (32768-60999), so any concurrent socket on a CI
+// runner could already hold it and every case failed with EADDRINUSE.
+// UNDIALLED_PORT is for the one case whose publisher refuses before it
+// dials; nothing listens on it, and the case asserts the refusal.
+const UNDIALLED_PORT = 45020;
 
 /** lane.json's one writer (spec §5.4), resolved from this file's path the way
  *  `ccgptFile` resolves the publisher — see the task-6 case below. */
@@ -267,9 +271,10 @@ function startEndpoint(
       });
     });
     server.on('error', reject);
-    server.listen(USAGE_PORT, '127.0.0.1', () => {
+    server.listen(0, '127.0.0.1', () => {
+      const { port } = server.address() as AddressInfo;
       resolve({
-        url: `http://127.0.0.1:${USAGE_PORT}`,
+        url: `http://127.0.0.1:${port}`,
         close: () => new Promise<void>((r) => server.close(() => r())),
         requests,
       });
@@ -617,7 +622,7 @@ describe.skipIf(!PY)('ccgpt-usage.py', () => {
       home,
       env: {
         // CCGPT_ACCOUNT_ID and PYTHONPATH both deliberately omitted.
-        CCGPT_USAGE_ENDPOINT: `http://127.0.0.1:${USAGE_PORT}`,
+        CCGPT_USAGE_ENDPOINT: `http://127.0.0.1:${UNDIALLED_PORT}`,
       },
     });
     expect(r.timedOut).toBe(false);
@@ -684,7 +689,7 @@ describe.skipIf(!PY)('ccgpt-usage.py', () => {
         res.end();
         return;
       }
-      res.writeHead(302, { Location: `http://127.0.0.1:${USAGE_PORT}/second-hop` });
+      res.writeHead(302, { Location: `http://${req.headers.host}/second-hop` });
       res.end();
     });
     try {
@@ -1065,14 +1070,14 @@ describe.skipIf(!PY)('ccgpt-usage.py', () => {
       requests.push({ headers: req.headers, body: null });
       fullHeaders()(req, res);
     });
-    await new Promise<void>((resolve, reject) => {
+    const v6Port = await new Promise<number>((resolve, reject) => {
       server.on('error', reject);
-      server.listen(USAGE_PORT, '::1', () => resolve());
+      server.listen(0, '::1', () => resolve((server.address() as AddressInfo).port));
     });
     try {
       const r = await runPyAsync(ccgptFile('ccgpt-usage.py'), {
         home,
-        env: publisherEnv(id, `http://[::1]:${USAGE_PORT}`),
+        env: publisherEnv(id, `http://[::1]:${v6Port}`),
       });
       expect(r.timedOut).toBe(false);
       expect(r.status).toBe(0);
