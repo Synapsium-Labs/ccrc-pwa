@@ -28,11 +28,16 @@
 # box's, so a caller's environment never sets them) with `systemctl
 # --user set-property --runtime`, so a changed setting holds from the next
 # run, and a reboot falls back to the unit file's own values, which are the
-# same defaults. A slice the user manager has not loaded is REFUSED, never
-# created: `systemd-run --slice=` of an unknown slice makes a transient one
-# with no limits at all, which is the uncontained run this file exists to stop.
-# macOS has no user manager and no cgroups; there the command runs as it is,
-# says so, and still takes its turn in the queue.
+# same defaults. A slice the user manager has not loaded is never asked for:
+# `systemd-run --slice=` of an unknown slice makes a transient one with no
+# limits at all. DEGRADE, NEVER REFUSE: the session hook sends every bare heavy
+# run and every systemd-run of one's own here, so a refusal would leave a
+# session no way to run a test. Where the slice cannot be used (not loaded, no
+# systemctl or systemd-run) the command runs uncontained, says so in one WARN
+# line, and still takes its turn in the queue; where only the box's limits
+# cannot be applied it runs in the slice under the unit file's own limits, and
+# says that. macOS has no user manager and no cgroups; there the command runs
+# as it is, says so, and still takes its turn in the queue.
 #
 # THE QUEUE. A HEAVY run (`_heavy` below: tsc and typecheck, a full or wide
 # vitest or jest run, browser tests, mutation tests, `npm test`) takes one of
@@ -59,10 +64,11 @@
 # (`CCRC_TEST_INSIDE` set by this wrapper) is already contained, so it runs as
 # it is: a nested heavy run never waits on its own parent's slot.
 #
-# EXIT. The command's own exit code. This wrapper's own refusals exit 1 (the
-# slice is unavailable, a slot could not be taken) and 2 (usage), ccrc's house
-# convention, each with one `ccrc test:` line on stderr. The command never ran
-# when either is printed.
+# EXIT. The command's own exit code. This wrapper refuses only a usage error,
+# exit 2 (ccrc's house convention), and a ccd/ccrc it cannot load beside it,
+# exit 1, each with one `ccrc test:` line on stderr; the command never ran
+# when either is printed. A slice or a queue that
+# cannot be used degrades the run, with a WARN line, and never refuses it.
 set -uo pipefail
 
 TEST_HERE="${BASH_SOURCE[0]}"
@@ -79,7 +85,6 @@ SLOT_DIR="$HOME/.cc-sessions/test-slots"
 POLL_S="${CCRC_TEST_POLL_S:-2}"
 PROC_ROOT="${CCRC_PROC_ROOT:-/proc}"
 
-_tdie() { echo "$PROG: $*" >&2; exit 1; }
 _tusage() { echo "$PROG: $*" >&2; echo "usage: ccrc test [--heavy|--light] [--] <command> [<arg>...] | --classify [--] <command>... | --classify-shell [--] '<line>' | --status" >&2; exit 2; }
 
 # ── the settings, validated ───────────────────────────────────────────────
@@ -398,10 +403,13 @@ _treap_gone() {   # stop the run of every held slot whose wrapper is gone; its r
   done
   return "$reaped"
 }
-_tacquire() {   # <summary> -> sets SLOT_FD and SLOT_FILE, or dies
+_tacquire() {   # <summary> -> sets SLOT_FD and SLOT_FILE, or warns that the run is unqueued
   local summary="$1" n="${TK[CCRC_TEST_HEAVY_SLOTS]}" max="${TK[CCRC_TEST_PRESSURE_MAX]}" i f fd said=0 why t0=$SECONDS
-  mkdir -p -- "$SLOT_DIR" || _tdie "cannot create the slot directory ~/.cc-sessions/test-slots"
-  command -v flock >/dev/null 2>&1 || _tdie "flock is not on PATH, so no test slot can be taken (install util-linux)"
+  # No queue to wait in is a degraded run, never a refused one (DEGRADE, NEVER REFUSE below): it starts unqueued, saying so.
+  mkdir -p -- "$SLOT_DIR" 2>/dev/null \
+    || { echo "$PROG: WARN: cannot create the slot directory ~/.cc-sessions/test-slots, so this heavy run is NOT queued" >&2; return 0; }
+  command -v flock >/dev/null 2>&1 \
+    || { echo "$PROG: WARN: flock is not on PATH, so this heavy run is NOT queued (install util-linux)" >&2; return 0; }
   while :; do
     why=""
     if [ "$max" -gt 0 ] && _tpressure "$max"; then why="$PRESSURE_SAID"
@@ -443,7 +451,8 @@ _tslice_props() {   # -> the five limits as set-property arguments
   printf '%s\n' "MemoryMax=${TK[CCRC_TEST_SLICE_MEMORY_MAX]}" "MemorySwapMax=${TK[CCRC_TEST_SLICE_SWAP_MAX]}" \
     "CPUWeight=${TK[CCRC_TEST_SLICE_CPU_WEIGHT]}" "CPUQuota=${TK[CCRC_TEST_SLICE_CPU_QUOTA]}" "IOWeight=${TK[CCRC_TEST_SLICE_IO_WEIGHT]}"
 }
-_tslice_ready() {   # -> 0 when the slice is loaded and took the limits; TSLICE_WHY otherwise
+_tslice_ready() {   # -> 0 when the run can go in the slice (TSLICE_WHY says when the box's limits could not be applied
+                    # and the unit file's own hold); 1, TSLICE_WHY saying why, when it cannot
   local load props
   TSLICE_WHY=""
   command -v systemctl >/dev/null 2>&1 && command -v systemd-run >/dev/null 2>&1 \
@@ -452,7 +461,8 @@ _tslice_ready() {   # -> 0 when the slice is loaded and took the limits; TSLICE_
   [ "$load" = loaded ] || { TSLICE_WHY="$SLICE is not loaded by the user manager (LoadState=${load:-unanswered}): ccrc install or ccrc update places ~/.config/systemd/user/$SLICE, then systemctl --user daemon-reload"; return 1; }
   mapfile -t props < <(_tslice_props)
   systemctl --user set-property --runtime "$SLICE" "${props[@]}" 2>/dev/null \
-    || { TSLICE_WHY="systemctl --user set-property $SLICE ${props[*]} failed, so its limits are unmeasured"; return 1; }
+    || TSLICE_WHY="systemctl --user set-property $SLICE ${props[*]} failed, so the run is in $SLICE under its unit file's own limits"
+  return 0
 }
 
 # The slice's OOM kill count (memory.events `oom_kill`), empty when it cannot be read. The cgroup path is ASKED FOR
@@ -485,7 +495,7 @@ _tstatus() {
   while IFS='=' read -r k v; do [ -n "$k" ] && p["$k"]="$v"; done \
     < <(systemctl --user show "$SLICE" -p LoadState -p MemoryCurrent -p MemoryMax -p MemorySwapMax -p CPUWeight -p CPUQuotaPerSecUSec -p IOWeight 2>/dev/null)
   if [ "${p[LoadState]:-}" != loaded ]; then
-    echo "$SLICE is not loaded (LoadState=${p[LoadState]:-unanswered}), so ccrc test refuses every run; $queue"; return 2
+    echo "$SLICE is not loaded (LoadState=${p[LoadState]:-unanswered}), so ccrc test runs every run uncontained; $queue"; return 2
   fi
   local cur="${p[MemoryCurrent]:-}" max="${p[MemoryMax]:-}"
   [[ "$cur" =~ ^[0-9]+$ ]] && cur="$(_thuman "$cur")" || cur="0B"
@@ -532,7 +542,13 @@ if [ "${CCD_OS:-linux}" = darwin ]; then
   contained=0
   echo "$PROG: this box has no systemd user manager (macOS), so the run is not contained; the queue still applies" >&2
 elif ! _tslice_ready; then
-  _tdie "refused, nothing ran: $TSLICE_WHY"
+  # DEGRADE, NEVER REFUSE. The session hook sends every bare heavy run here, so a refusal would leave a session no way
+  # to run a test at all. Uncontained, the run is still queued; `--slice=` of a slice the manager has not loaded is
+  # never asked for, since that makes a transient slice with no limits.
+  contained=0
+  echo "$PROG: WARN: the run is NOT contained: $TSLICE_WHY; it still takes its turn in the queue" >&2
+elif [ -n "$TSLICE_WHY" ]; then
+  echo "$PROG: WARN: $TSLICE_WHY" >&2
 fi
 # SIGNALS. Before the command is launched nothing has started: a signal leaves the queue (the wait file and any slot go)
 # and exits 128+signal, so a cancelled call never leaves a waiter that later runs a test nobody watches. Once it is

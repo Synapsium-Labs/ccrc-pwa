@@ -36,11 +36,11 @@ describe('test-slice: the test slice, live, and the queue (D-TBD-test-containmen
     expect(verdict(home).line).toMatch(/; heavy slots 0 of 3 held, 0 waiting$/);
   });
 
-  itLinux('WARN: the slice unit file is missing, so every run is refused', () => {
+  itLinux('WARN: the slice unit file is missing, so every run is uncontained', () => {
     const home = healthy('ccrc-doctor-tslice-nofile-');
     rmSync(join(home, '.config', 'systemd', 'user', 'ccrctests.slice'));
     const v = verdict(home);
-    expect(v.line).toBe('WARN test-slice: ~/.config/systemd/user/ccrctests.slice is missing, so ccrc test refuses every run');
+    expect(v.line).toBe('WARN test-slice: ~/.config/systemd/user/ccrctests.slice is missing, so ccrc test runs every run uncontained');
     expect(v.remedy).toBe('  remedy: ccrc update (or ccrc install) places it; then systemctl --user daemon-reload');
   });
 
@@ -48,7 +48,7 @@ describe('test-slice: the test slice, live, and the queue (D-TBD-test-containmen
     const home = healthy('ccrc-doctor-tslice-notloaded-');
     plantTestSlice(home, 'LoadState=not-found\n');
     const v = verdict(home);
-    expect(v.line).toMatch(/^WARN test-slice: ccrctests\.slice is not loaded \(LoadState=not-found\), so ccrc test refuses every run; heavy slots 0 of 2 held, 0 waiting$/);
+    expect(v.line).toMatch(/^WARN test-slice: ccrctests\.slice is not loaded \(LoadState=not-found\), so ccrc test runs every run uncontained; heavy slots 0 of 2 held, 0 waiting$/);
     expect(v.remedy).toMatch(/^ {2}remedy: systemctl --user daemon-reload, then re-run/);
   });
 

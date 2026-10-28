@@ -158,23 +158,36 @@ describe('ccrc test: the slice (D-TBD-test-containment)', () => {
     expect(setProps(b)).toContain('MemoryMax=6G');
   });
 
-  itLinux('refuses a slice the user manager has not loaded, and the command never runs', () => {
-    const b = box();
+  // NO RATCHET WITHOUT AN ESCAPE. The session hook denies a bare heavy run and a systemd-run of one's own, and sends
+  // the call here; so `ccrc test` must run what it is given on every box, never refuse it. Where the slice cannot be
+  // used (a deploy window before daemon-reload, a missing unit file) it degrades: the run is uncontained, says so
+  // once, and still takes its turn in the queue. `--slice=` of a slice the manager has not loaded is never asked for,
+  // since that makes a transient slice with no limits at all.
+  itLinux('a slice the user manager has not loaded: the run degrades, uncontained but queued, and says so', () => {
+    const b = box({}, { CCRC_TEST_HEAVY_SLOTS: '1' });
     writeFileSync(path.join(b.home, 'fixture-loadstate'), 'not-found\n');
-    const r = run(b, ['--light', '--', 'touch', path.join(b.home, 'ran')]);
-    expect(r.status).toBe(1);
-    expect(r.stderr).toMatch(/^ccrc test: refused, nothing ran: ccrctests\.slice is not loaded by the user manager \(LoadState=not-found\)/);
-    expect(existsSync(path.join(b.home, 'ran'))).toBe(false);
-    expect(log(b, 'systemd-run.log')).toBe('');
+    const r = run(b, ['--heavy', '--', 'sh', '-c', `ls "$HOME/.cc-sessions/test-slots" > "$HOME/slots"; exit 4`]);
+    expect(r.status, 'the command ran, and its exit code is the run\'s').toBe(4);
+    expect(r.stderr).toMatch(/^ccrc test: WARN: the run is NOT contained: ccrctests\.slice is not loaded by the user manager \(LoadState=not-found\).*; it still takes its turn in the queue$/m);
+    expect(readFileSync(path.join(b.home, 'slots'), 'utf8'), 'the heavy run held a slot').toMatch(/^slot-0$/m);
+    expect(log(b, 'systemd-run.log'), 'no transient slice is made').toBe('');
   });
 
-  itLinux('refuses when the limits cannot be applied', () => {
+  itLinux('no systemctl or systemd-run on PATH: the run degrades the same way', () => {
+    const b = box();
+    const r = run(b, ['--light', '--', 'sh', '-c', 'echo ran'], { PATH: `/usr/bin:/bin` });
+    expect(r.stdout.trim()).toBe('ran');
+    expect(r.stderr).toContain('ccrc test: WARN: the run is NOT contained: systemctl or systemd-run is not on PATH');
+  });
+
+  itLinux('limits that cannot be applied: the run is still in the slice, under its unit file\'s own limits, and says so', () => {
     const b = box();
     writeFileSync(path.join(b.home, 'fixture-setprop-rc'), '1');
-    const r = run(b, ['--light', '--', 'touch', path.join(b.home, 'ran')]);
-    expect(r.status).toBe(1);
-    expect(r.stderr).toContain('refused, nothing ran: systemctl --user set-property ccrctests.slice');
-    expect(existsSync(path.join(b.home, 'ran'))).toBe(false);
+    const r = run(b, ['--light', '--', 'sh', '-c', 'echo ran']);
+    expect(r.status).toBe(0);
+    expect(r.stdout.trim()).toBe('ran');
+    expect(r.stderr).toContain("ccrc test: WARN: systemctl --user set-property ccrctests.slice MemoryMax=6G MemorySwapMax=1G CPUWeight=20 CPUQuota=400% IOWeight=20 failed, so the run is in ccrctests.slice under its unit file's own limits");
+    expect(log(b, 'systemd-run.log')).toMatch(/--slice=ccrctests\.slice/);
   });
 
   itLinux('a run that the slice cap kills is said so, with the cap and the setting that sets it', () => {
@@ -534,7 +547,7 @@ describe('ccrc test --status (D-TBD-test-containment)', () => {
     writeFileSync(path.join(b.home, 'fixture-slice-show'), 'LoadState=not-found\n');
     const r = run(b, ['--status']);
     expect(r.status).toBe(2);
-    expect(r.stdout).toContain('ccrctests.slice is not loaded (LoadState=not-found), so ccrc test refuses every run');
+    expect(r.stdout).toContain('ccrctests.slice is not loaded (LoadState=not-found), so ccrc test runs every run uncontained');
   });
   it.skipIf(!IS_DARWIN)('on macOS it says runs are not contained', () => {
     expect(run(box(), ['--status']).stdout.trim()).toBe('no user manager here, so runs are not contained; heavy slots 0 of 2 held, 0 waiting');

@@ -6176,8 +6176,10 @@ app.slice's 100 (the slice is top-level, its name dashless, so that is every ses
 killed inside the slice, never pushing the session slice into reclaim. Each value is a setting (see **ccrc's own
 settings**), read from `~/.ccrc/ccrc.env` alone because the slice is the whole box's (a session's environment that sets
 one is ignored, with a warning), applied with `systemctl --user set-property --runtime` before every run; the unit file holds the
-defaults. A slice the user manager has not loaded is refused, never created, since `systemd-run --slice=` would make
-an unlimited one. A heavy run (tsc and typecheck, a vitest or jest run naming no test file, a directory, a glob or a
+defaults. A slice the user manager has not loaded is never asked for, since `systemd-run --slice=` would make an unlimited
+one; instead the run degrades, never refuses: it runs uncontained, says so in one WARN line, and still queues, so a
+session the hook sends to `ccrc test` always has a way to run its tests (limits that `set-property` cannot apply leave
+the run in the slice under the unit file's own values, said the same way). A heavy run (tsc and typecheck, a vitest or jest run naming no test file, a directory, a glob or a
 filter, or more than `CCRC_TEST_WIDE_FILES` test files, browser, mutation and `npm test`/`npm t` runs; a flag's value
 is never counted as a file, and a `sh -c` string is read command by command) first takes one of
 `CCRC_TEST_HEAVY_SLOTS` (default 2, also read from `~/.ccrc/ccrc.env` alone; a slot held above a lowered count still

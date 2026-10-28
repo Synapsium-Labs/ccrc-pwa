@@ -1218,8 +1218,9 @@ _check_scopes() {
 # `ccrc-test --status`, the queue's own reader, so the queue has one owner.
 # WARN, never FAIL, `_check_scopes`' reason: `cmd_install` returns doctor's
 # code, and a slice the manager has not reloaded yet is a runtime fact. A
-# missing unit file WARNs too: every `ccrc test` run is refused until it is
-# placed, which is the safe direction.
+# missing unit file WARNs too: until it is placed every `ccrc test` run is
+# uncontained (it degrades, saying so, and still queues), never refused, so a
+# session the hook sends there always has a way to run its tests.
 _check_test-slice() {
   if [ "${CCD_OS:-linux}" = darwin ]; then
     _dr_skip test-slice "the test slice is a systemd mechanism, and this box runs launchd"
@@ -1231,7 +1232,7 @@ _check_test-slice() {
   fi
   local unit="$HOME/.config/systemd/user/ccrctests.slice" line rc=0
   if [ ! -f "$unit" ]; then
-    _dr_warn test-slice "~/.config/systemd/user/ccrctests.slice is missing, so ccrc test refuses every run" \
+    _dr_warn test-slice "~/.config/systemd/user/ccrctests.slice is missing, so ccrc test runs every run uncontained" \
       "ccrc update (or ccrc install) places it; then systemctl --user daemon-reload"
     return 2
   fi
