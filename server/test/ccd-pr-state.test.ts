@@ -91,12 +91,12 @@ describe('pr-state argv', () => {
     expect(call).not.toContain('mergeStateStatus');   // literal "UNKNOWN" on merged PRs
     expect(call).not.toContain('mergeable');
     // The whole list, in order. The loop above says WHY six of these are here;
-    // this says that none of the thirteen may quietly leave, which the loop
+    // this says that none of the fifteen may quietly leave, which the loop
     // cannot: the stub returns its rows whatever --json asks for, and `state`
     // is a substring of `--state all`, so five field names were assertable
     // only as an exact string. Task 12's prstate.ts reads every one of them.
     expect(call).toContain('--json number,state,headRefName,headRefOid,baseRefName,'
-      + 'isCrossRepository,mergedAt,mergeCommit,url,title,isDraft,createdAt,statusCheckRollup');
+      + 'isCrossRepository,mergedAt,mergeCommit,url,title,isDraft,createdAt,labels,closedAt,statusCheckRollup');
     // …and the call is WRAPPED. `gh pr list` has no timeout of its own, so a
     // blocking DNS hang is bounded by this and nothing else; without the stub
     // logging its own argv, dropping the wrapper left the suite green.
@@ -280,12 +280,13 @@ describe('the project sweep fetches the rollup it reads, not the ninety-nine it 
       .find((c) => c.includes('--json number,state,'));
     expect(rowCall).toBeDefined();
     expect(rowCall).not.toContain('statusCheckRollup');
-    // The other twelve stay, in order and entire: this task removes ONE field,
+    // The other fourteen stay, in order and entire: this task removes ONE field,
     // and the row window is still what every binding conjunct is read from.
     // The twelfth, `createdAt`, is no binding conjunct: it dates a row against
-    // a child's birth (child-reclamation spec §5.3).
+    // a child's birth (child-reclamation spec §5.3). `labels` and `closedAt`
+    // read a PR closed as landed in a merge train, and when it landed.
     expect(rowCall).toContain('--json number,state,headRefName,headRefOid,baseRefName,'
-      + 'isCrossRepository,mergedAt,mergeCommit,url,title,isDraft,createdAt');
+      + 'isCrossRepository,mergedAt,mergeCommit,url,title,isDraft,createdAt,labels,closedAt');
     expect(rowCall).toContain('--state all');
     expect(rowCall).toContain('--limit 100');
   });
@@ -1535,6 +1536,66 @@ describe('gh isolation', () => {
   });
 });
 
+describe('a PR closed as landed in a merge train', () => {
+  const landed = (label: string, over: Record<string, unknown> = {}): Record<string, unknown> =>
+    ({ state: 'CLOSED', mergedAt: null, mergeCommit: null, closedAt: '2026-07-21T09:00:00Z',
+       labels: [{ name: label }], ...over });
+
+  it('is merged, and persists the phase and number the archive trigger reads', () => {
+    // ws-archive files `merged:#N` off exactly these two registry fields
+    // (ccd-archive.test.ts pins that half), and the server's merged notice and
+    // cleanup bucket read the same phase off the line.
+    const { tip } = workspaceWithCommit('demo', 'quiet-basin');
+    h.ghRows([mergedRow({ headRefOid: tip, ...landed('landed-in-train') })]);
+    const o = line(h.sh(`${GH_STUB} cmd_pr_state --session demo-quiet-basin`));
+    expect(o.phase).toBe('merged');
+    expect(o.number).toBe(42);
+    expect(o.rows[0].landedInTrain).toBe(true);
+    expect(h.reg('demo-quiet-basin', 'prphase')).toBe('merged');
+    expect(h.reg('demo-quiet-basin', 'prnumber')).toBe('42');
+  });
+
+  it('stays closed without the label, and annotates no other state', () => {
+    const { tip } = workspaceWithCommit('demo', 'quiet-basin');
+    h.ghRows([
+      mergedRow({ headRefOid: tip, ...landed('wontfix') }),
+      mergedRow({ number: 41, headRefOid: tip, labels: [{ name: 'landed-in-train' }] }),
+    ]);
+    const o = line(h.sh(`${GH_STUB} cmd_pr_state --session demo-quiet-basin`));
+    expect(o.phase).toBe('closed');
+    expect(o.rows.map((r: Record<string, unknown>) => r.landedInTrain)).toEqual([false, false]);
+    expect(h.reg('demo-quiet-basin', 'prphase')).toBe('closed');
+  });
+
+  it('reads the label the deployment names, and only that one', () => {
+    const { tip } = workspaceWithCommit('demo', 'quiet-basin');
+    h.ghRows([mergedRow({ headRefOid: tip, ...landed('shipped') })]);
+    expect(line(h.sh(`export CCD_LANDED_LABEL=shipped; ${GH_STUB} cmd_pr_state --session demo-quiet-basin`)).phase)
+      .toBe('merged');
+    h.ghRows([mergedRow({ headRefOid: tip, ...landed('landed-in-train') })]);
+    expect(line(h.sh(`export CCD_LANDED_LABEL=shipped; ${GH_STUB} cmd_pr_state --session demo-quiet-basin`)).phase)
+      .toBe('closed');
+  });
+
+  it('reads no label at all when the deployment sets it empty', () => {
+    const { tip } = workspaceWithCommit('demo', 'quiet-basin');
+    h.ghRows([mergedRow({ headRefOid: tip, ...landed('landed-in-train') })]);
+    const o = line(h.sh(`export CCD_LANDED_LABEL=; ${GH_STUB} cmd_pr_state --session demo-quiet-basin`));
+    expect(o.phase).toBe('closed');
+    expect(o.rows[0].landedInTrain).toBe(false);
+  });
+
+  it('never hands the reap a landed PR as merged: it has no merge commit to prove against', () => {
+    // `ws-reap`'s rung 2 proves the tree against `mergeCommit.oid`, which a
+    // closed member does not have. The reap is not a phase reader, and it
+    // keeps refusing `not-merged` rather than a malformed-fields sentence.
+    const { main, tip } = workspaceWithCommit('demo', 'quiet-basin');
+    const rows = JSON.stringify([mergedRow({ headRefOid: tip, ...landed('landed-in-train') })]);
+    fs.writeFileSync(path.join(h.home, 'rows.json'), rows);
+    expect(h.sh(`_pr_py pick "${main}" ws/quiet-basin main "${tip}" < "$HOME/rows.json"`).trim()).toBe('!not-merged');
+  });
+});
+
 describe('ccd and prstate.ts agree about phase, always', () => {
   // The predicate exists twice by necessity: ccd persists it (the server
   // cannot write the registry) and prstate.ts puts it on the wire. Drift means
@@ -1594,8 +1655,17 @@ describe('ccd and prstate.ts agree about phase, always', () => {
     // `landed-in-train`). A merged PR is `merged` with or without it.
     ['closed, another label', { state: 'CLOSED', mergedAt: null, mergeCommit: null,
       closedAt: '2026-07-21T09:00:00Z', labels: [{ name: 'wontfix' }] }, 'closed', null],
+    // A merge train lands the PR's work through a train PR and then CLOSES
+    // the member with the train label: GitHub never says MERGED for it, and
+    // the archive trigger and the cleanup offer must still fire.
     ['closed, landed in a train', { state: 'CLOSED', mergedAt: null, mergeCommit: null,
-      closedAt: '2026-07-21T09:00:00Z', labels: [{ name: 'landed-in-train' }] }, 'closed', null],
+      closedAt: '2026-07-21T09:00:00Z', labels: [{ name: 'landed-in-train' }] }, 'merged', null],
+    // The label never stands in for the binding: a fork's labelled PR binds
+    // to nothing, and an OPEN PR carrying the label is still open.
+    ['closed, landed in a train, a fork', { state: 'CLOSED', mergedAt: null, mergeCommit: null, isCrossRepository: true,
+      closedAt: '2026-07-21T09:00:00Z', labels: [{ name: 'landed-in-train' }] }, 'none', null],
+    ['open, carrying the label', { state: 'OPEN', mergedAt: null, mergeCommit: null,
+      labels: [{ name: 'landed-in-train' }] }, 'open', null],
     ['merged, carrying the label', { labels: [{ name: 'landed-in-train' }] }, 'merged', null],
   ];
 

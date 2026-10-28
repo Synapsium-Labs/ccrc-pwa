@@ -410,9 +410,20 @@ describe('the required contexts', () => {
   });
 
   it.each([
-    ['CLOSED', 'wontfix'], ['CLOSED', 'landed-in-train'], ['MERGED', 'landed-in-train'],
-  ])("GitHub's state word passes through raw: %s carrying %s", (state, label) => {
-    expect(one([], { state, labels: { nodes: [{ name: label }] } })).toMatchObject({ bound: true, state });
+    ['CLOSED', 'wontfix', false], ['CLOSED', 'landed-in-train', true], ['MERGED', 'landed-in-train', false],
+    ['OPEN', 'landed-in-train', false],
+  ])("GitHub's state word passes through raw: %s carrying %s, landedInTrain %s", (state, label, landed) => {
+    expect(one([], { state, labels: { nodes: [{ name: label }] } }))
+      .toMatchObject({ bound: true, state, landedInTrain: landed });
+  });
+
+  it('asks GitHub for the labels it reads', () => {
+    const t0 = workspace('demo', 'quiet-basin');
+    put('gql.json', answer([pr(41, 'quiet-basin', t0)]));
+    emptyRules();
+    landing('demo', 'demo-quiet-basin:41');
+    const q = calls().find((c) => c[1] === 'graphql')!.find((a) => a.startsWith('query='))!;
+    expect(q.replace(/\s+/g, ' ')).toContain('labels(first: 100) { nodes { name } }');
   });
 });
 

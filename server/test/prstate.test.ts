@@ -7,6 +7,7 @@ import {
 import { UNMEASURED } from '../src/unmeasured.js';
 import type { CcdResult } from '../src/coord/ports.js';
 import type { PrReason, TaskItem } from '../../shared/api.js';
+import { sessionBucket } from '../../shared/api.js';
 
 const row = (over: Partial<CcdPrRow> = {}): CcdPrRow => ({
   number: 42, state: 'MERGED', headRefName: 'ws/quiet-basin', headRefOid: 'deadbee',
@@ -231,6 +232,56 @@ describe('phaseFor', () => {
     // real — the same token-forgery class this plan has closed repeatedly.
     const s = phaseFor(line({ rows: [row({ number: undefined })] }));
     expect(s.number).toBeNull();
+  });
+});
+
+describe('a PR closed as landed in a merge train', () => {
+  // ccd annotates `landedInTrain` (the deployment's label, read on the fleet
+  // box) the way it annotates `ours`; this side reads the annotation and never
+  // a label name of its own.
+  const landed = (over: Partial<CcdPrRow> = {}): CcdPrRow => row({
+    state: 'CLOSED', mergedAt: null, mergeCommit: null, closedAt: '2026-07-21T09:00:00Z', landedInTrain: true, ...over,
+  });
+
+  it('is merged, dated by its close', () => {
+    expect(isMergedRow(landed(), 'main', 'ws/quiet-basin')).toBe(true);
+    const s = phaseFor(line({ rows: [landed()] }));
+    expect(s.phase).toBe('merged');
+    expect(s.reason).toBeNull();
+    expect(s.number).toBe(42);
+    expect(s.mergedAt).toBe(Date.parse('2026-07-21T09:00:00Z'));
+  });
+
+  it('is merged with no date when gh named no close time', () => {
+    const s = phaseFor(line({ rows: [landed({ closedAt: undefined })] }));
+    expect(s.phase).toBe('merged');
+    expect(s.mergedAt).toBeNull();
+  });
+
+  it('reaches the cleanup offer exactly as a merge does', () => {
+    const pr = phaseFor(line({ rows: [landed()] }));
+    const r = sessionBucket({
+      status: 'dead', statusUpdatedAt: 1000, dialogPending: false, hookState: null,
+      archivedAt: 1_800_000_000, pr, background: null,
+    }, null);
+    expect(r.bucket).toBe('cleanup');
+  });
+
+  it.each([
+    ['without the annotation', { landedInTrain: undefined }, 'closed'],
+    ['annotated false', { landedInTrain: false }, 'closed'],
+    ['a fork', { isCrossRepository: true }, 'none'],
+    ['a head not reachable from our tip', { ours: false }, 'none'],
+    ['OPEN, whatever the annotation says', { state: 'OPEN' }, 'open'],
+  ])('is not merged %s', (_name, over, phase) => {
+    expect(isMergedRow(landed(over as Partial<CcdPrRow>), 'main', 'ws/quiet-basin')).toBe(false);
+    expect(phaseFor(line({ rows: [landed(over as Partial<CcdPrRow>)] })).phase).toBe(phase);
+  });
+
+  it('leaves a MERGED row exactly as it was', () => {
+    const s = phaseFor(line({ rows: [row({ landedInTrain: true })] }));
+    expect(s.phase).toBe('merged');
+    expect(s.mergedAt).toBe(Date.parse('2026-07-20T10:00:00Z'));
   });
 });
 

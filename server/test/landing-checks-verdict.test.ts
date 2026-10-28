@@ -21,7 +21,7 @@ const ctx = (name: string, state: string, checkId: number | null = 1, over: Part
   ({ name, appId: checkId === null ? null : 15368, state, checkId, runId: checkId === null ? null : checkId + 1000, ...over });
 const line = (required: PrLandingRequired[], over: Partial<PrLandingLine> = {}): PrLandingLine => ({
   id: 'ws-a', bound: true, number: 42, state: 'OPEN', isDraft: false, base: 'main', head: HEAD,
-  required, requiredCut: false, rulesNamed: [], protectionNamed: [], pinnedNames: [], unmeasured: [], ...over,
+  required, requiredCut: false, rulesNamed: [], protectionNamed: [], pinnedNames: [], unmeasured: [], landedInTrain: false, ...over,
 });
 const word = (l: PrLandingLine): RequiredChecksWord => requiredChecksVerdict(l, digest).word;
 
@@ -380,7 +380,14 @@ describe('landingLineAct', () => {
     expect(landingLineAct(ep, line([], { state: 'MERGED' }))).toEqual({ act: 'left', phase: 'merged' });
   });
   it('a CLOSED line that does not say it landed in a train is left closed', () => {
-    expect(landingLineAct(ep, line([], { state: 'CLOSED', ...({ landedInTrain: false } as object) }))).toEqual({ act: 'left', phase: 'closed' });
+    expect(landingLineAct(ep, line([], { state: 'CLOSED', landedInTrain: false }))).toEqual({ act: 'left', phase: 'closed' });
+  });
+  it('a CLOSED line that landed in a train is left merged, as a MERGED one is', () => {
+    expect(landingLineAct(ep, line([], { state: 'CLOSED', landedInTrain: true }))).toEqual({ act: 'left', phase: 'merged' });
+    expect(landingLineAct(ep, line([], { state: 'MERGED', landedInTrain: true }))).toEqual({ act: 'left', phase: 'merged' });
+  });
+  it('the train annotation never moves an OPEN line', () => {
+    expect(landingLineAct(ep, line([], { landedInTrain: true }))).toEqual({ act: 'edge' });
   });
   it('bound false is left unbound; bound to another number is left unbound', () => {
     expect(landingLineAct(ep, line([], { bound: false }))).toEqual({ act: 'left', phase: 'unbound' });
