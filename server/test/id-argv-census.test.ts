@@ -610,7 +610,7 @@ describe('every id-taking argv call has an origin and a gate (spec §2.3)', () =
       fleetArgv: ['coord/close.ts | actOnFleet'],
       refuseSpentChild: ['coord/dispatch.ts | resumeBound'],
       resumeBound: ['coord/dispatch.ts | dispatchRun'],
-      expireAudit: ['coord/expireArchived.ts | expireArchived', 'coord/expireArchived.ts | learnExpiry'],
+      expireAudit: ['coord/expireArchived.ts | expireRetirePort', 'coord/expireArchived.ts | learnExpiry'],
       expireAct: ['coord/expireArchived.ts | expireArchived'],
       childReclaimAudit: ['coord/childReclaim.ts | childReclaimOutcome'],
       childReclaimAct: ['coord/childReclaim.ts | childReclaimOutcome'],
