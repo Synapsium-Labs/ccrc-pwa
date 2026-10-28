@@ -444,6 +444,14 @@ export function heldKindOf(held: string | null, coord: Pick<StopDoneSweepDeps['c
   }
 }
 
+/** One session's newest PLACED run as worker, indexed out of `lastRunBySession`'s batched answer (the store made the
+ *  last-closed decision): ONE spelling for the run-done lane and its deps-shed arm (`depsShedPass.ts`, D-7278). */
+export function runDoneLastPlacedOf(
+  last: Extract<ReturnType<CoordStore['lastRunBySession']>, { ok: true }>, id: string,
+): (typeof last.lastPlaced)[number] | null {
+  return last.lastPlaced.find((l) => l.sessionId === id) ?? null;
+}
+
 /** One session's store answers, from the pass's batched reads. */
 function storeReadFor(
   id: string,
@@ -454,7 +462,7 @@ function storeReadFor(
   if (!last.ok) return { ok: false, detail: last.detail };
   try {
     // D-6091: the PLACED reads — a `planned` run (a wave not yet dispatched) is neither its newest run nor an open one.
-    const run = last.lastPlaced.find((l) => l.sessionId === id) ?? null;
+    const run = runDoneLastPlacedOf(last, id);
     return {
       ok: true,
       last: run === null ? null : { runId: run.runId, state: run.state, closedAt: run.closedAt },
@@ -494,6 +502,15 @@ async function runDoneLive(deps: StopDoneSweepDeps, rec: SessionRecord): Promise
   return { kind: 'read', word: w.ok ? { ok: true, word: w.word } : { ok: false, reason: w.reason }, turn, mark };
 }
 
+/** The run-done row's viewer facts, ONE spelling for the lane and its deps-shed arm (`depsShedPass.ts`, D-7278): is
+ *  the session open now (fail closed without a viewer registry), how long since this server started, and the open
+ *  claim's TTL that no presence is believed inside after a start. */
+export function runDoneViewerFacts(
+  deps: { readonly viewers: Pick<Viewers, 'isOpen'> | undefined; readonly startedAt: number }, id: string, at: number,
+): { readonly viewer: boolean; readonly sinceStartMs: number; readonly viewerOpenTtlMs: number } {
+  return { viewer: deps.viewers?.isOpen(id) ?? true, sinceStartMs: at - deps.startedAt, viewerOpenTtlMs: PRESENCE_OPEN_TTL_MS };
+}
+
 /** run-done's verdict input: the row's `.hold` classified again at each ask (`heldKindOf`), presence read as it is
  *  built. */
 function runDoneInput(
@@ -501,9 +518,8 @@ function runDoneInput(
   live: StopDoneLive, at: number,
 ): StopDoneInput {
   return {
-    row, heldKind: heldKindOf(row.held, deps.coord), holdOkVerb: f.holdOkVerb, store, viewer: deps.viewers?.isOpen(row.id) ?? true,
-    sinceStartMs: at - deps.startedAt,
-    viewerOpenTtlMs: PRESENCE_OPEN_TTL_MS, verb: f.verb, optedOut: f.names.includes(`${row.id}.${NO_HIBERNATE_SUFFIX}`),
+    row, heldKind: heldKindOf(row.held, deps.coord), holdOkVerb: f.holdOkVerb, store, ...runDoneViewerFacts(deps, row.id, at),
+    verb: f.verb, optedOut: f.names.includes(`${row.id}.${NO_HIBERNATE_SUFFIX}`),
     live, now: at, graceMs: f.quietMs,
   };
 }

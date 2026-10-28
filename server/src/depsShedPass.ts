@@ -11,12 +11,12 @@ import { NO_HIBERNATE_SUFFIX } from './coord/hibernate.js';
 import { childReclaimBornAt, childReclaimClaimsByChair, childReclaimRowUuid } from './coord/childReclaim.js';
 import { CHILD_BIRTH_SKEW_MS } from './coord/childSpent.js';
 import { childReclaimCoordinated } from './childReclaimSweep.js';
-import { RUN_DONE_LANE, heldKindOf } from './sleepLane.js';
+import { RUN_DONE_LANE, heldKindOf, runDoneLastPlacedOf, runDoneViewerFacts } from './sleepLane.js';
 import {
   DEPS_SHED_ACTOR, DEPS_SHED_FINAL_REFUSALS, DEPS_SHED_RETRY_MAX_MS, DEPS_SHED_RETRY_MS, depsShedVerdict, type DepsShedChair, type DepsShedInput, type DepsShedStamp,
   type DepsShedStoreRead, type DepsShedVerdict,
 } from './depsShed.js';
-import { PRESENCE_OPEN_TTL_MS, type FleetSession } from '../../shared/api.js';
+import type { FleetSession } from '../../shared/api.js';
 import { DEPS_SHED_LIVE_MARKER, readSwitches, type MarkerSwitchName } from '../../shared/switches.js';
 
 /**
@@ -159,7 +159,7 @@ function storeReads(deps: DepsShedPassDeps, rows: readonly FleetSession[], recs:
     for (const row of rows) {
       if (!last.ok) { out.set(row.id, { ok: false, detail: last.detail }); continue; }
       try {
-        const run = last.lastPlaced.find((l) => l.sessionId === row.id) ?? null;
+        const run = runDoneLastPlacedOf(last, row.id);
         const claim = chairs.get(row.id);
         const rec = recs.get(row.id);
         const chair: DepsShedChair = claim === undefined ? { kind: 'never' }
@@ -194,8 +194,7 @@ function inputOf(deps: DepsShedPassDeps, row: FleetSession, store: DepsShedStore
   names: readonly string[], now: number): DepsShedInput {
   return {
     row, heldKind: heldKindOf(row.held, deps.coord), store, stamp,
-    optedOut: names.includes(`${row.id}.${NO_HIBERNATE_SUFFIX}`), viewer: deps.viewers?.isOpen(row.id) ?? true,
-    sinceStartMs: now - deps.startedAt, viewerOpenTtlMs: PRESENCE_OPEN_TTL_MS,
+    optedOut: names.includes(`${row.id}.${NO_HIBERNATE_SUFFIX}`), ...runDoneViewerFacts(deps, row.id, now),
     verb: ccdCan(deps.fleetState, 'wsShedDeps'), now,
     afterMs: deps.config.afterMs, parkedAfterMs: deps.config.parkedAfterMs,
   };
