@@ -13,6 +13,7 @@
 import type { FleetSession, ProjectRow } from '../../../shared/api';
 import type { useProjectedHome } from './useProjectedHome';
 import { ApiError, apiErrorText } from '../lib/api';
+import { presenceOf } from './presence';
 
 /** D-291: how long the sheet waits for the freshly created session to
  *  appear in a `/ws/fleet` snapshot before giving up. Tied to the fleet
@@ -88,6 +89,11 @@ export function liveMainCheckoutIn(
  *  (someone else's, or a swapped one) collect this sheet's kickoff: verbatim
  *  the hijack D-292 exists to prevent, arriving through the wait instead.
  *
+ *  LIVENESS is the server's word (`presenceOf(s) === 'alive'`, OA-C15 (a),
+ *  D-7181): this arm ACTS, so a row the server doubts never collects the
+ *  kickoff, and a pane gone under a lifecycle that resolves on its own
+ *  (`restarting`) is the session itself, alive.
+ *
  *  LIVENESS + FRESHNESS, both required (coordinator review B-2). An earlier
  *  version of this docstring argued for NO liveness conjunct, on the grounds
  *  that `cmd_start` writes the registry fields before tmux is up, so
@@ -140,7 +146,7 @@ export function startedSessionFor(
   return sessions.find((s) =>
     isMainCheckoutOf(s, project)
     && s.wrapper === wrapper
-    && s.status !== 'dead'
+    && presenceOf(s) === 'alive'
     && !preLive.has(s.id)) ?? null;
 }
 
@@ -148,9 +154,9 @@ export function startedSessionFor(
  *  snapshot. Taken from `fleet.getState()` (authoritative) rather than the
  *  render-scoped `sessions`, and taken BEFORE the create, so "was already
  *  running before I asked for anything" is a measurement and not an
- *  inference. */
+ *  inference. Alive by the same word `startedSessionFor` reads (`presenceOf`). */
 export const liveIdsIn = (sessions: readonly FleetSession[]): ReadonlySet<string> =>
-  new Set(sessions.filter((s) => s.status !== 'dead').map((s) => s.id));
+  new Set(sessions.filter((s) => presenceOf(s) === 'alive').map((s) => s.id));
 
 /** `createSession`'s own refusals. 400 is a client-authored mistake (an
  *  unknown/empty project); apiErrorText's stderr-first priority already

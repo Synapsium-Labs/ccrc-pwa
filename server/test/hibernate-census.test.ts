@@ -149,18 +149,22 @@ const CENSUS: readonly Row[] = [
   { source: 'stopped-compare', file: 'pwa/src/fleet/lifecycleWords.ts', hits: 1, stances: ['consults'], via: 'pwa/src/fleet/sessionFacts.ts',
     why: '`lifecycleQualifier` words a stopped row "stopped by …"; `sessionFacts`, its one reader (D-5545), skips it '
       + 'on a sleeper and reads `hibernated · 6h`' },
-  { source: 'dead-compare', file: 'pwa/src/fleet/groupFleet.ts', hits: 2, stances: ['true-of-pane'],
-    why: 'a dead row\'s rank on the card and the stranded count over live rows: a sleeper\'s pane is not running; '
-      + '`inArchivedFold` keeps it at the top level' },
+  { source: 'dead-compare', file: 'pwa/src/fleet/groupFleet.ts', hits: 1, stances: ['true-of-pane'],
+    why: 'a dead row\'s rank on the card: a sleeper\'s pane is not running; `inArchivedFold` keeps it at the top level' },
+  { source: 'presence-reader', file: 'pwa/src/fleet/groupFleet.ts', hits: 1, stances: ['true-of-pane'],
+    why: 'the stranded count over rows the server reads alive (`presenceOf`, D-7181): a sleeper is not running' },
   { source: 'dead-compare', file: 'pwa/src/command/sessionEntries.ts', hits: 1, stances: ['true-of-pane'],
     why: 'the palette\'s session entries (D-6714) rank a dead row last among equal matches (tier 3): a sleeper\'s pane '
       + 'is not running; it is still listed and found, and opening it is the session screen\'s wake' },
-  { source: 'dead-compare', file: 'pwa/src/fleet/ArchiveAllPlane.tsx', hits: 1, stances: ['true-of-pane'],
-    why: 'counts the batch\'s live rows: a sleeper is not running' },
+  { source: 'presence-reader', file: 'pwa/src/fleet/ArchiveAllPlane.tsx', hits: 1, stances: ['true-of-pane'],
+    why: 'counts the batch\'s rows the server reads alive (`presenceOf`, D-7181): a sleeper is not running' },
   { source: 'dead-compare', file: 'pwa/src/screens/AccountsScreen.tsx', hits: 1, stances: ['true-of-pane'],
     why: 'counts an account\'s running sessions: a sleeper is not running' },
-  { source: 'dead-compare', file: 'pwa/src/fleet/startProgramPolicy.ts', hits: 3, stances: ['true-of-pane'],
-    why: 'the live main checkout and live ids: a sleeping session is not running, which is true of its pane' },
+  { source: 'dead-compare', file: 'pwa/src/fleet/startProgramPolicy.ts', hits: 1, stances: ['true-of-pane'],
+    why: 'the live main checkout: a sleeping session is not running, which is true of its pane' },
+  { source: 'presence-reader', file: 'pwa/src/fleet/startProgramPolicy.ts', hits: 2, stances: ['true-of-pane'],
+    why: 'the started session and the live ids read the server\'s alive (`presenceOf`, D-7181): a sleeping session is '
+      + 'not running' },
   { source: 'presence-reader', file: 'pwa/src/fleet/spawnWords.ts', hits: 1, stances: ['true-of-pane'],
     why: 'silent about a spawn on a row whose pane is gone (`paneGone`, D-7181): a sleeper has no spawn in progress to '
       + 'speak of' },
