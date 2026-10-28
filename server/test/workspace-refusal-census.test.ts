@@ -245,7 +245,8 @@ describe('workspace refusal census (ARCH-41, #776): today’s client-read refusa
     [...t.matchAll(new RegExp(`_lc_refuse ${act} (?:"[^"]*"|\\S+) ([a-z][a-z-]*)`, 'g'))].map((m) => m[1]!);
   // The reap-lock runner (D-7076) refuses with `_lc_refuse "$act" …`, which the pattern above never reads, and its
   // in-progress document stands outside every verb's span: an act's harvest also takes the runner's two tokens and its
-  // document's word when the runner has a call for that act, read off it by name.
+  // document's word when the runner has a call for that act, read off it by name (D-7299: the plan named only the two
+  // tokens, but the word the reap move drops is the document's `in-progress`).
   const lockRefused = (act: string): string[] => {
     const lock = lockDeclineSites(CCD);
     return lock.runner && lock.calls.some((c) => c.act === act)
