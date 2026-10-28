@@ -8359,8 +8359,8 @@ _check_scope-sweep() {
 
 # ── land-probe ────────────────────────────────────────────────────────────
 # WHAT ccd-land-probe WROTE — READ, NEVER RE-DERIVED (landing-order spec stage 3, wave 3b). For each project the operator
-# opted in (one `~/.ccrc/landing/<project>.conf`), the probe rewrites `$reg/landing/<project>/probe` and `main-health` every
-# five minutes: JSON with "v": 1 and its own `at`. This check reads those two files and nothing else: it runs no git and no
+# opted in (one `~/.ccrc/landing/<project>.conf`), the probe rewrites `$reg/landing/<project>/probe` and `main-health` on every
+# tick of its timer: JSON with "v": 1 and its own `at`. This check reads those two files and nothing else: it runs no git and no
 # gh, and it asks nothing of systemd (`services` asks after `ccd-land-probe.timer`, which is in `known`). Appended at the END of
 # this file, for `_check_timeout`'s reason (lines above are cited by number).
 #
@@ -8370,12 +8370,12 @@ _check_scope-sweep() {
 # (`$reg/land-probe-paused`: it then rewrites nothing, so its files age by design, never a stopped timer).
 #
 # SIX WORDS, each a WARN with its own sentence (a measurement is a runtime fact, and `ccrc install` ends with doctor):
-#   land-probe-not-yet     no `probe` yet, but the timer unit file landed under ten minutes ago: the first tick has not had its
-#                          turn (the timer's first elapse is three minutes after it is armed). The fresh-install word.
+#   land-probe-not-yet     no `probe` yet, but the timer unit file landed under two of the timer's periods ago: the first tick has
+#                          not had its turn (the timer's first elapse follows its arming delay). The fresh-install word.
 #   land-probe-never       no `probe` and the timer unit file is older than that, or absent: the radar has never run here. A conf
-#                          written under ten minutes ago reads land-probe-not-yet too (the operator just opted in).
+#                          written under two periods ago reads land-probe-not-yet too (the operator just opted in).
 #   land-probe-unreadable  a file that is not a regular v1 record with a readable time, or `main-health` missing beside a `probe`.
-#   land-probe-stale       a file older than CCRC_LAND_PROBE_STALE_S (default 1200: four ticks): the radar has stopped.
+#   land-probe-stale       a file older than CCRC_LAND_PROBE_STALE_S (default: four of the timer's periods): the radar has stopped.
 #   land-probe-unmeasured  the probe ran and could not measure (`state: unmeasured`, with its `why`), every one of its heads came back
 #                          unmeasured, or the base's checks could not be judged. A base whose checks are `pending` or that has no
 #                          required set is the repository's fact, not the probe's, and reads on the PASS line instead.
@@ -8391,6 +8391,11 @@ _check_scope-sweep() {
 # `<project>: N heads, M conflicting with <base>, <base> green; store +K objects, scratch S KiB this tick`: the store figure is
 # the change in the project's object count over its last tick (the probe's scratch is meant to keep it at +0, spec 12).
 # CCRC_LAND_PROBE_STALE_S is the only knob; the units, the home and the registry are fixed by the install.
+# THE TIMER'S PERIOD IS READ, NEVER RESTATED (D-7054): the stale default (four periods), the not-yet window (two) and the periods the
+# sentences name come from the shipped `ccd-land-probe.timer` through `_dr_cycles_s`, the way scope-sweep and pool-sync read theirs.
+# A unit file that cannot be read drops the bound or clause that needed it and the check WARNs naming the unit (`_dr_cadence_unread`,
+# OA-C8c (a), D-7062); an absent reader FAILs naming the bug (`_dr_cadence_unloaded`). A bound that cannot be derived is a stale arm
+# that does not run (the python reader gets -1), never a literal.
 _LP_PY='
 import calendar, json, os, re, stat, sys, time
 d, stale, now = sys.argv[1], int(sys.argv[2]), int(sys.argv[3])
@@ -8427,7 +8432,7 @@ def fresh(name, doc, t):
     age = now - t
     if age < -60:
         say("unreadable", name, "future")
-    if age > stale:
+    if stale >= 0 and age > stale:
         say("stale", name, age)
     return age
 def count(o):
@@ -8499,6 +8504,7 @@ say("ok", len(heads), conflicts, ref, main, delta, "-" if kib is None else kib, 
 '
 _check_land-probe() {
   local _srv_role="" reg confdir conf proj stale now unit_path unit_mtime unit_age conf_mtime conf_age out kind a b what
+  local period="" stale_default="" window="" cad_rc=0 u_stale=0 u_window=0 u_sentence=0
   local -a found=() okl=() projects=() words=() running=()
   local PROJ_RE='^[A-Za-z0-9][A-Za-z0-9._-]*$' NUM='^(0|[1-9][0-9]{0,15})$'
   if [ "${CCD_OS:-linux}" = darwin ]; then
@@ -8533,7 +8539,18 @@ _check_land-probe() {
       "install python3 (the probe itself needs it), then re-run doctor"
     return 2
   fi
-  stale=${CCRC_LAND_PROBE_STALE_S:-1200}; [[ "$stale" =~ ^[1-9][0-9]{0,8}$ ]] || stale=1200   # a non-number would abort the arithmetic below
+  # The timer's period, from the shipped unit file (D-7054), tested BEFORE any arithmetic: rc 1 unreadable, rc 3 reader not loaded.
+  # CCRC_LAND_PROBE_STALE_S stays the override (a non-number would abort the arithmetic below, so it is ignored); its default is
+  # four periods and the not-yet window two. -1 hands the python reader no stale bound: that arm does not run, and the WARN says so.
+  period="$(_dr_cycles_s ccd-land-probe.timer 1)" || cad_rc=$?
+  if [ "$cad_rc" -eq 0 ]; then
+    stale_default="$(_dr_cycles_s ccd-land-probe.timer 4)" || cad_rc=$?
+    window="$(_dr_cycles_s ccd-land-probe.timer 2)" || cad_rc=$?
+  fi
+  if [[ "${CCRC_LAND_PROBE_STALE_S:-}" =~ ^[1-9][0-9]{0,8}$ ]]; then stale=$CCRC_LAND_PROBE_STALE_S
+  elif [ "$cad_rc" -eq 0 ]; then stale=$stale_default
+  else stale=-1; u_stale=1
+  fi
   now=$(date +%s)
   unit_path="$CCRC_UNIT_DIR/$(_dr_unit_file ccd-land-probe.timer)"
   for proj in "${projects[@]}"; do
@@ -8563,10 +8580,13 @@ _check_land-probe() {
         conf_age=-1
         conf_mtime="$(_plat_mtime "$confdir/$proj.conf" 2>/dev/null)"
         [[ "$conf_mtime" =~ ^[0-9]+$ ]] && conf_age=$((now - conf_mtime))
-        if [ "$unit_age" -ge 0 ] && [ "$unit_age" -lt 600 ]; then
-          found+=("land-probe-not-yet: $proj has no probe file yet and ccd-land-probe.timer was installed ${unit_age}s ago - its first tick is three minutes after it is armed, so this is expected right after an install, not a fault"); words+=(not-yet)
-        elif [ "$conf_age" -ge 0 ] && [ "$conf_age" -lt 600 ]; then
-          found+=("land-probe-not-yet: $proj has no probe file yet and its conf was written ${conf_age}s ago - the next tick (every five minutes) is the first to measure it, so this is expected right after opting in, not a fault"); words+=(not-yet)
+        if [ "$cad_rc" -ne 0 ]; then
+          u_window=1   # no window to compare the ages with: the not-yet arm does not run, and the WARN after the loop says so
+          found+=("land-probe-never: $proj is opted in but the radar has never written its probe, so no PR conflict is measured and coordinators send sync and order mail without one"); words+=(never)
+        elif [ "$unit_age" -ge 0 ] && [ "$unit_age" -lt "$window" ]; then
+          found+=("land-probe-not-yet: $proj has no probe file yet and ccd-land-probe.timer was installed ${unit_age}s ago - its first tick follows the timer's arming delay, so this is expected right after an install, not a fault"); words+=(not-yet)
+        elif [ "$conf_age" -ge 0 ] && [ "$conf_age" -lt "$window" ]; then
+          found+=("land-probe-not-yet: $proj has no probe file yet and its conf was written ${conf_age}s ago - the next tick (the timer fires $(_dr_every_words "$period")) is the first to measure it, so this is expected right after opting in, not a fault"); words+=(not-yet)
         else
           found+=("land-probe-never: $proj is opted in but the radar has never written its probe, so no PR conflict is measured and coordinators send sync and order mail without one"); words+=(never)
         fi ;;
@@ -8579,7 +8599,9 @@ _check_land-probe() {
         found+=("land-probe-unreadable: $proj: the $a file under $reg/landing/$proj is $what, so its measurements cannot be read"); words+=(unreadable) ;;
       stale)
         if [[ "$b" =~ $NUM ]]; then
-          found+=("land-probe-stale: $proj: the $a file is ${b}s old - the radar ticks every five minutes, so it has stopped, and its conflict and base-health readings are stale"); words+=(stale)
+          local stopped="the radar has stopped"   # names its period only when the shipped unit file gave one (a bound set by the override can stand without it)
+          if [ "$cad_rc" -eq 0 ]; then stopped="the radar ticks $(_dr_every_words "$period"), so it has stopped"; else u_sentence=1; fi
+          found+=("land-probe-stale: $proj: the $a file is ${b}s old - $stopped, and its conflict and base-health readings are stale"); words+=(stale)
         else
           found+=("land-probe-unreadable: $proj: the age of the $a file could not be read back"); words+=(unreadable)
         fi ;;
@@ -8616,14 +8638,30 @@ _check_land-probe() {
     local joined="" w
     for w in "${found[@]}"; do joined="${joined:+$joined | }$w"; done
     case "${words[0]}" in
-      not-yet) _dr_warn land-probe "$joined" "wait up to five minutes for the first tick, then re-run doctor; still absent past that is the real fault: systemctl --user status ccd-land-probe.timer ccd-land-probe.service" ;;
+      not-yet)
+        local wait_for="wait for the first tick"
+        [ "$cad_rc" -ne 0 ] || wait_for="wait for the first tick (the timer fires $(_dr_every_words "$period"))"
+        _dr_warn land-probe "$joined" "$wait_for, then re-run doctor; still absent past that is the real fault: systemctl --user status ccd-land-probe.timer ccd-land-probe.service" ;;
       never|stale) _dr_warn land-probe "$joined" "systemctl --user status ccd-land-probe.timer ccd-land-probe.service; journalctl --user -u ccd-land-probe.service; a pause marker ($reg/land-probe-paused or $reg/landing/<project>/paused) stops the writes by design; an invalid conf or a missing checkout under $HOME/projects also stops them, and the journal names it" ;;
       incomplete) _dr_warn land-probe "$joined" "read why the tick stopped partway: journalctl --user -u ccd-land-probe.service (a project-error line names the exception); then let it re-measure: systemctl --user start ccd-land-probe.service; then re-run doctor" ;;
       unmeasured) _dr_warn land-probe "$joined" "read why the tick could not measure: journalctl --user -u ccd-land-probe.service; then let it re-measure: systemctl --user start ccd-land-probe.service; then re-run doctor" ;;
       *) _dr_warn land-probe "$joined" "let the probe rewrite its files: systemctl --user start ccd-land-probe.service; then re-run doctor" ;;
     esac
-    return 2
   fi
+  # What the unit file's period would have bounded and could not: one WARN naming the unit (rc 1), or the FAIL naming the bug (rc 3).
+  if [ "$cad_rc" -ne 0 ] && [ $((u_stale + u_window + u_sentence)) -gt 0 ]; then
+    local -a unmeasured=(); local w
+    [ "$u_stale" -eq 0 ] || unmeasured+=("the stale bound (four of the timer's periods; the stale arm did not run)")
+    [ "$u_window" -eq 0 ] || unmeasured+=("the not-yet window (two of the timer's periods; the not-yet arm did not run)")
+    [ "$u_sentence" -eq 0 ] || unmeasured+=("the period the stale sentence names")
+    what=""
+    for w in "${unmeasured[@]}"; do what="${what:+$what and }$w"; done
+    case "$cad_rc" in
+      1) _dr_cadence_unread land-probe ccd-land-probe.timer "$what"; return 2 ;;
+      *) _dr_cadence_unloaded land-probe ccd-land-probe.timer "$what"; return 1 ;;
+    esac
+  fi
+  [ "${#found[@]}" -eq 0 ] || return 2
   local pl="" o
   for o in "${okl[@]}"; do pl="${pl:+$pl | }$o"; done
   for o in ${running[@]+"${running[@]}"}; do pl="${pl:+$pl | }$o: a tick is running, so there is no reading yet"; done
