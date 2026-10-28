@@ -44,7 +44,7 @@
 // Rows 1, 4 and 7 also run in browser/instrument-desk.browser.test.ts (its own table).
 //
 // Desk polish S5b (D-6530): the lanes fold.
-// MUTATION TABLE (plan Task S5b Step 3; RUN at 182d2ac58, every row, bounded and hash-checked; the log is kept outside the repo.
+// MUTATION TABLE (plan Task S5b Step 3; RUN at the last code commit before fix round 2, every row, bounded and hash-checked; the log is kept outside the repo.
 // Each mutant was applied to the working tree as one exact-once replacement and restored from a saved copy with its sha256
 // checked; the named jsdom suite(s) alone, and browser/lanes-row.browser.test.ts or browser/refined-phone.browser.test.ts too
 // where a row names one; then reverted. 75 mutants run: 75 red, none survived, none invalid. The counts "of 70" and "of 26"
@@ -110,7 +110,7 @@
 //   Instrument's first-row bound lowered below its measured 533.8 px (540 -> 530) ... refined-phone browser (1 of 26) "folded, with 17 lanes, four cards and one control …, and the first session row sits at most
 //                                                         540 px down at 390×844: instrument, phosphor, 390px" (fix round 1, `instrument-first-row-is-its-chrome`: the 440 check was gated on Refined's head, so Instrument ran none)
 // Fix round 1 trimmed the browser leg's geometry matrices to one palette (lanes-row 88 -> 70 cases, refined-phone 31 -> 26);
-// the counts above are of the trimmed files, from the run at 182d2ac58.
+// the counts above are of the trimmed files, from the run at the last code commit before fix round 2.
 // R120 `strip-hover-flyout` (accounts-strip alone, plus lanes-row where named):
 //   open without the delay (`FLYOUT_OPEN_MS` -> 0) ..... "…hovering the line opens the flyout after FLYOUT_OPEN_MS, …", "a pointer passing by does not open it"
 //   close without the grace (`FLYOUT_CLOSE_MS` -> 0) ... "leaving the line and the flyout closes it after FLYOUT_CLOSE_MS; coming back within the grace keeps it", "focus leaving the strip closes it, …"
@@ -142,6 +142,39 @@
 //                                                         (final review: an Escape that closes the flyout reached the desk's Escape interrupt and stopped a busy session's turn)
 //   the Escape not acting while the open is pending .... accounts-strip "an Escape while the open is still pending cancels the open"
 //   the flyout group named as the line's group is ...... accounts-strip "at the desk, folded, hovering the line opens the flyout after FLYOUT_OPEN_MS, …"
+// R120 `strip-hover-flyout`, fix round 2 (review 1106; accounts-strip alone, each mutant on the working tree and restored from a saved copy with its sha256 checked;
+// the browser rows are lanes-row's, in real Chrome). Only KEYBOARD focus (`:focus-visible`) on a card holds the flyout, and who started an open decides what a pointer does:
+//   `keyboardHeld` matching `.account-gauge` without `:focus-visible` (a click's focus on a card holds the flyout)
+//                                                       accounts-strip "focus a click leaves behind never holds the flyout: hover-open, click a card, the pointer leaves, …"
+//   `keyboardHeld` as the bare `group.contains(el)`, the rule before this round (anything focused in the strip holds it)
+//                                                       accounts-strip the same case, "nor does the end cell: hover-open, click All accounts, …" and the end-cell cases of the next row;
+//                                                         lanes-row (1 of 72) "a click's focus never holds the flyout: hover-open, click All accounts, move off the strip, and it closes
+//                                                         within the grace: refined, phosphor, 1280px" (the flyout never closes: the wait for it times out)
+//   `keyboardHeld` testing `:focus-visible` on any element of the group, the end cell's controls too
+//                                                       accounts-strip "keyboard focus in the end cell holds nothing either", "keyboard focus moving from a card of the flyout to
+//                                                         the end cell, with the pointer outside, starts the grace", "focus arriving at the end cell from outside the strip opens nothing"
+//   `handFocusBack` without its `focus()` call (Escape drops focus to the page)
+//                                                       lanes-row (1 of 72) "Escape closes the flyout a keyboard opened and hands focus to a card of the line: refined, phosphor, 1280px"
+//   `onLeave` without the `openBy` test (any keyboard focus parked in the strip saves a pointer's open)
+//                                                       accounts-strip "an open the pointer started is cancelled when the pointer leaves, whatever focus is parked in the strip: after Escape the flyout stays shut"
+//   a pending pointer open not taken over by keyboard focus arriving (the `openBy` upgrade removed)
+//                                                       accounts-strip "keyboard focus arriving while the pointer's open delay is pending takes the open over: …"
+//   `onGroupFocus` starting no close grace for focus that holds nothing
+//                                                       accounts-strip "keyboard focus moving from a card of the flyout to the end cell, with the pointer outside, starts the grace"
+//   `handFocusBack` without the `document.activeElement` guard (a stale `flyHeld` pulls focus out of a field)
+//                                                       accounts-strip "a poll that drops the lane of the flyout card holding focus leaves no stale hold: …"
+//   `handFocusBack` guarding on the body only (focus inside the strip, or nothing, not allowed)
+//                                                       accounts-strip "Escape closes it and returns focus to the card it came from", "an open the pointer started is cancelled …"
+//   `handFocusBack` ignoring `flyHeld` (the reviewer's mutant (a): it always focuses)
+//                                                       accounts-strip "a hover-only flyout hands no focus to the line when it closes: …", "focus that left the flyout is not handed back: …",
+//                                                         "a window that loses focus while a flyout card holds it: …", "Escape with focus on All accounts, which a flyout card left, …"
+//   the flyout's `onBlur` not resetting `flyHeld` (the reviewer's mutant (b))
+//                                                       accounts-strip "focus that left the flyout is not handed back: …", "a window that loses focus while a flyout card holds it: …",
+//                                                         "Escape with focus on All accounts, which a flyout card left, …"
+//   `handFocusBack` ignoring both `flyHeld` and the `activeElement` guard
+//                                                       the five above and "focus outside the strip stays put when the pointer leaves and the grace runs",
+//                                                         "a window that loses focus, then a field outside the strip taking it: …" (neither mutant alone reaches these two: each guard covers the other)
+// The reset of a moot flyout is a plain effect now (a one-frame focus on the page is accepted), and no case pins "before the browser paints".
 // `useRowWidth` (final review: it had no row; each run against accounts-strip and strip-fold):
 //   the observer not disconnected on cleanup ........... accounts-strip "the desk row's observer is disconnected when the strip unmounts"  (it was SURVIVED: no case unmounted a measured strip)
 //   the column gap read without the `Number.isFinite` fallback

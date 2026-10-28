@@ -23,18 +23,25 @@
 // away. The row itself is a group, not a door.
 //
 // THE FLYOUT (R120, strip-hover-flyout). At the desk, while the strip is folded, resting the pointer on the line (the
-// group, its end cell included) or moving focus into it opens `.accounts-flyout`: a panel under the line, drawn over
+// group, its end cell included) or moving keyboard focus into it opens `.accounts-flyout`: a panel under the line, drawn over
 // the content, holding EVERY lane in `lanesByFree`'s order, the line's own cards among them. It is the same card, from
 // the same `laneCard` function, and the same `open-lane` door; it is a group of its own, one tab stop with the arrows,
 // Home and End across it. It sits in the DOM inside the strip's group, after the line's cards and before the end cell,
 // so Tab goes line, flyout, control, All accounts, and focus moving between them never leaves the strip. It opens after
-// `FLYOUT_OPEN_MS`, and stays open while EITHER the pointer OR focus is inside the line or the flyout. It closes after
-// `FLYOUT_CLOSE_MS` once neither is: the pointer has left with focus outside, or focus has left with the pointer outside
-// (a pointer passing by, or crossing the gap, flickers nothing). It closes at once on Escape, which is default-prevented
-// so the desk's Escape interrupt skips it. A close that finds focus in the flyout, and a flyout made moot while it holds
-// focus (another tab expands the strip, a poll leaves nothing to fold, the desk ends), hand it back to the line's tab
-// stop first. Only focus arriving from outside the strip opens it, so an Escape holds against the arrow keys. Not
-// foldable, expanded, or below the desk: it is not mounted and nothing about it runs. Presentation state, per mount.
+// `FLYOUT_OPEN_MS`, and stays open while EITHER the pointer OR keyboard focus is inside the line or the flyout. "Focus"
+// is KEYBOARD focus on a card of the line or the flyout (`keyboardHeld`, `:focus-visible`): the focus a click leaves
+// behind holds nothing, and neither does focus in the end cell. It closes after `FLYOUT_CLOSE_MS` once neither is: the
+// pointer has left with no keyboard focus held, or keyboard focus has left with the pointer outside (a pointer passing by,
+// or crossing the gap, flickers nothing). WHO STARTED an open decides what a passing pointer does (`openBy`): an open the
+// pointer started is cancelled when the pointer leaves, whatever focus is parked in the strip; only an open keyboard focus
+// started survives it. It closes at once on Escape, which is default-prevented so the desk's Escape interrupt skips it, and
+// then stays shut until the pointer enters again or keyboard focus arrives again. A close that finds focus in the flyout,
+// and a flyout made moot while it holds focus (another tab expands the strip, a poll leaves nothing to fold), hand it back
+// to the line's tab stop first, and only from the page or from inside the strip: focus the operator has put in a field
+// elsewhere is never pulled. (The desk itself ending is no third route: the shell bar that holds the desk strip unmounts
+// at that breakpoint, so the strip goes with it and nothing is left to hand back.) Only keyboard focus ARRIVING from
+// outside the strip opens it, so an Escape holds against the arrow keys. Not foldable, expanded, or below the desk: it
+// is not mounted and nothing about it runs. Presentation state, per mount.
 //
 // THE PLACEHOLDER DOOR (D-161). With no lane to show the strip is exactly one `go-accounts` door and never renders
 // nothing. As a full-width readout of meters the strip read as DATA rather than navigation, so an operator hunting for
@@ -44,7 +51,7 @@
 // yet) is exactly the state the Accounts screen exists to explain (its bespoke "<home-able accounts>, all disabled"
 // copy, see homeAbleLabelList in lib/accounts.ts). So the link stays mounted, with a quiet placeholder body, instead
 // of disappearing with the cards.
-import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import type { CSSProperties, FocusEvent, KeyboardEvent, PointerEvent, ReactNode } from 'react';
 import type { AccountUsage, RosterWire } from '../../../shared/api';
 import { accountColorVar, accountLabel, warnNonArrayRoster } from '../lib/accounts';
@@ -82,7 +89,10 @@ export function AccountsStrip(): ReactNode {
   // what the control's `aria-controls` names.
   const expanded = useStripExpanded();
   const desk = useDesk();
-  const { ref: groupRef, row } = useRowWidth(desk);
+  const { ref: measureRef, row } = useRowWidth(desk);
+  // The strip's group, held for `handFocusBack`; the measure's callback ref is called from the one below.
+  const groupEl = useRef<HTMLElement | null>(null);
+  const groupRef = useCallback((el: HTMLElement | null) => { groupEl.current = el; measureRef(el); }, [measureRef]);
   const groupId = useId();
   const controlRef = useRef<HTMLButtonElement>(null);
   // Set by a user's "Show fewer" click and read once the strip has folded: the control scrolls itself into view then,
@@ -104,11 +114,15 @@ export function AccountsStrip(): ReactNode {
   const openTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pointerIn = useRef(false);
+  // Who started the open delay that is pending, if one is: the pointer's is cancelled when the pointer leaves, keyboard
+  // focus's is not.
+  const openBy = useRef<'pointer' | 'keyboard' | null>(null);
   const stopTimers = (): void => {
     if (openTimer.current !== null) clearTimeout(openTimer.current);
     if (closeTimer.current !== null) clearTimeout(closeTimer.current);
     openTimer.current = null;
     closeTimer.current = null;
+    openBy.current = null;
   };
 
   useEffect(() => {
@@ -176,18 +190,27 @@ export function AccountsStrip(): ReactNode {
   // Whether focus is on a card of the flyout, tracked by the flyout's own focus and blur: a flyout made moot by something
   // outside the strip leaves its DOM in the very commit that notices, so the DOM cannot be asked then.
   const flyHeld = useRef(false);
+  // Whether `el` is a card of the line or the flyout holding KEYBOARD focus (`:focus-visible`): the one test of what "focus
+  // inside" means to the flyout. The end cell's controls are no cards, and a click's focus is not keyboard focus.
+  const keyboardHeld = (el: Element | null, group: HTMLElement): boolean =>
+    el !== null && group.contains(el) && el.matches('.account-gauge:focus-visible');
   // Closing a flyout that holds focus would drop focus to the page, so focus goes first to the line's tab stop, the card
   // the operator came from. That move starts inside the strip, so `onGroupFocus` reads it as a move and not as focus
-  // arriving. The one hand-back: the flyout's close and the flyout becoming moot both go through it.
+  // arriving. The one hand-back: the flyout's close and the flyout becoming moot both go through it. It moves focus only
+  // from the page (the body, or nothing) or from inside the strip: a flag gone stale (a poll dropped the focused card's
+  // lane, which fires no blur) must never pull focus out of a field the operator has since put it in elsewhere.
   const handFocusBack = (): void => {
     if (!flyHeld.current) return;
     flyHeld.current = false;
+    const at = document.activeElement;
+    if (at !== null && at !== document.body && !groupEl.current?.contains(at)) return;
     if (lineStop !== undefined) cardRefs.current.get(lineStop)?.focus();
   };
-  // The timers die with the component, and with whatever makes the flyout moot: the strip expanding, the desk ending.
-  // A layout effect, so a focus held by the flyout that has just left the DOM is handed back before the browser paints.
+  // The timers die with the component, and with whatever makes the flyout moot: the strip expanding, or a poll leaving
+  // nothing to fold. A plain effect: a focus held by the flyout that has just left the DOM rests on the page for a frame
+  // before it is handed back, which is fine.
   useEffect(() => stopTimers, []);
-  useLayoutEffect(() => {
+  useEffect(() => {
     if (flyoutOn) return;
     stopTimers();
     handFocusBack();
@@ -233,35 +256,47 @@ export function AccountsStrip(): ReactNode {
     setFlyOpen(false);
     setFlyStopId(null);
   };
-  const scheduleOpen = (): void => {
-    if (!flyoutOn || flyOpen || openTimer.current !== null) return;
-    openTimer.current = setTimeout(() => { openTimer.current = null; setFlyOpen(true); }, FLYOUT_OPEN_MS);
+  // A pending open that keyboard focus joins becomes keyboard's: it no longer depends on the pointer staying.
+  const scheduleOpen = (by: 'pointer' | 'keyboard'): void => {
+    if (!flyoutOn || flyOpen) return;
+    if (openTimer.current !== null) {
+      if (by === 'keyboard') openBy.current = 'keyboard';
+      return;
+    }
+    openBy.current = by;
+    openTimer.current = setTimeout(() => { openTimer.current = null; openBy.current = null; setFlyOpen(true); }, FLYOUT_OPEN_MS);
   };
   const scheduleClose = (): void => {
-    if (openTimer.current !== null) { clearTimeout(openTimer.current); openTimer.current = null; }
+    if (openTimer.current !== null) { clearTimeout(openTimer.current); openTimer.current = null; openBy.current = null; }
     if (!flyOpen || closeTimer.current !== null) return;
     closeTimer.current = setTimeout(() => { closeTimer.current = null; closeFlyout(); }, FLYOUT_CLOSE_MS);
   };
   const cancelClose = (): void => {
     if (closeTimer.current !== null) { clearTimeout(closeTimer.current); closeTimer.current = null; }
   };
-  const onEnter = (): void => { pointerIn.current = true; cancelClose(); scheduleOpen(); };
-  // The flyout stays while either the pointer or focus is inside the line or the flyout, and closes when neither is. So a
-  // pointer leaving with focus inside the strip changes nothing: it neither starts the close grace of an open flyout nor
-  // cancels the open delay that focus started. The close then waits for focus to leave (`onGroupBlur`).
+  const onEnter = (): void => { pointerIn.current = true; cancelClose(); scheduleOpen('pointer'); };
+  // The flyout stays while either the pointer or keyboard focus is inside the line or the flyout, and closes when neither
+  // is. So a pointer leaving with keyboard focus on a card changes nothing: it starts no close grace for an open flyout and
+  // cancels no open delay that keyboard focus started; the close then waits for focus to leave (`onGroupBlur`). An open
+  // the POINTER started is cancelled by its leaving, whatever focus is parked in the strip.
   const onLeave = (e: PointerEvent<HTMLElement>): void => {
     pointerIn.current = false;
-    if (e.currentTarget.contains(document.activeElement)) return;
+    if (openBy.current !== 'pointer' && keyboardHeld(document.activeElement, e.currentTarget)) return;
     scheduleClose();
   };
-  // `onFocus` and `onBlur` are React's focusin and focusout, so they fire for any element inside, the flyout's too. Only
-  // focus ARRIVING from outside the strip opens the flyout: a move between its cards (an arrow key) is not an arrival,
-  // so an Escape, or a close by the pointer leaving, stays shut until focus has left and come back. A pending close is
-  // cancelled by any focus inside.
+  // `onFocus` and `onBlur` are React's focusin and focusout, so they fire for any element inside, the flyout's too. Focus
+  // that is not keyboard focus on a card (a click's, the end cell's) holds nothing and opens nothing: with the pointer
+  // outside it starts the close grace. Only keyboard focus ARRIVING from outside the strip opens the flyout: a move between
+  // its cards (an arrow key) is not an arrival, so an Escape, or a close by the pointer leaving, stays shut until focus
+  // has left and come back. A pending close is cancelled by any focus inside.
   const onGroupFocus = (e: FocusEvent<HTMLElement>): void => {
     cancelClose();
+    if (!keyboardHeld(document.activeElement, e.currentTarget)) {
+      if (!pointerIn.current) scheduleClose();
+      return;
+    }
     if (e.relatedTarget instanceof Node && e.currentTarget.contains(e.relatedTarget)) return;
-    scheduleOpen();
+    scheduleOpen('keyboard');
   };
   // A focusout whose destination is inside the strip is a move between the line and the flyout, not a leave; one with no
   // destination (focus left the page, or went to nothing) is a leave.

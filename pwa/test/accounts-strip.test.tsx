@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
-import { describe, it, expect, vi, afterEach } from 'vitest';
+import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import ts from 'typescript';
@@ -1071,6 +1071,214 @@ describe('the lanes fold (S5b, D-6530)', () => {
       // The hand-back is a move inside the strip, not an arrival: nothing opens (there is no flyout while expanded).
       advance(5000);
       expect(flyoutOf(container)).toBeNull();
+    });
+
+    // ── fix round 2 (review 1106): only KEYBOARD focus holds the flyout, and who started an open decides what a pointer does ──
+    // jsdom's `:focus-visible` (its selector engine's) follows a heuristic over the last key event and the focus history, so
+    // whether a script `focus()` matches it depends on the order of the calls before it: a first focus from the page does,
+    // a move from one card to another with no key event often does not. These cases need the plain rule instead: keyboard
+    // focus unless a click gave it. So `beforeEach` makes `matches(':focus-visible')` answer as `:focus` does, and false
+    // for an element a case has focused as a click (`clickFocus`: a pointer-down, a mouse-down, a focus), as Chrome does;
+    // every other focus in this file is keyboard focus. The browser leg proves the shape in real Chrome (lanes-row, "a
+    // click's focus never holds the flyout …").
+    const mouseFocused = new WeakSet<Element>();
+    beforeEach(() => {
+      const real = Element.prototype.matches;
+      vi.spyOn(Element.prototype, 'matches').mockImplementation(function (this: Element, selector: string): boolean {
+        if (!selector.includes(':focus-visible')) return real.call(this, selector);
+        return !mouseFocused.has(this) && real.call(this, selector.replace(':focus-visible', ':focus'));
+      });
+    });
+    const clickFocus = (el: HTMLElement): void => {
+      fireEvent.pointerDown(el);
+      fireEvent.mouseDown(el);
+      mouseFocused.add(el);
+      act(() => { el.focus(); });
+    };
+    const strays: HTMLElement[] = [];
+    afterEach(() => { for (const el of strays.splice(0)) el.remove(); });
+    /** A field outside the strip, in the document. */
+    const outsideField = (): HTMLInputElement => {
+      const input = document.createElement('input');
+      document.body.appendChild(input);
+      strays.push(input);
+      return input;
+    };
+    const allAccounts = (): HTMLElement => screen.getByRole('button', { name: 'All accounts' });
+
+    it("focus a click leaves behind never holds the flyout: hover-open, click a card, the pointer leaves, and it closes after FLYOUT_CLOSE_MS", async () => {
+      const container = await openByHover();
+      clickFocus(lineCardsOf(container)[0]!);
+      fireEvent.pointerLeave(groupOf(container));
+      advance(FLYOUT_CLOSE_MS - 1);
+      expect(flyoutOf(container)).not.toBeNull();
+      advance(1);
+      expect(flyoutOf(container)).toBeNull();
+    });
+
+    it('nor does the end cell: hover-open, click All accounts, the pointer leaves, and it closes after FLYOUT_CLOSE_MS', async () => {
+      const container = await openByHover();
+      clickFocus(allAccounts());
+      fireEvent.pointerLeave(groupOf(container));
+      advance(FLYOUT_CLOSE_MS - 1);
+      expect(flyoutOf(container)).not.toBeNull();
+      advance(1);
+      expect(flyoutOf(container)).toBeNull();
+    });
+
+    it('keyboard focus in the end cell holds nothing either', async () => {
+      const container = await openByHover();
+      act(() => { allAccounts().focus(); });
+      fireEvent.pointerLeave(groupOf(container));
+      advance(FLYOUT_CLOSE_MS);
+      expect(flyoutOf(container)).toBeNull();
+    });
+
+    it('keyboard focus moving from a card of the flyout to the end cell, with the pointer outside, starts the grace', async () => {
+      const container = await openByHover();
+      act(() => { flyCardsOf(container)[3]!.focus(); });
+      fireEvent.pointerLeave(groupOf(container));
+      advance(5000);
+      expect(flyoutOf(container)).not.toBeNull();             // keyboard focus on a card holds it
+      act(() => { allAccounts().focus(); });                  // Tab to All accounts: the card no longer holds it
+      advance(FLYOUT_CLOSE_MS - 1);
+      expect(flyoutOf(container)).not.toBeNull();
+      advance(1);
+      expect(flyoutOf(container)).toBeNull();
+    });
+
+    it('focus arriving at the end cell from outside the strip opens nothing', async () => {
+      const container = await mountDesk();
+      act(() => { allAccounts().focus(); });
+      advance(5000);
+      expect(flyoutOf(container)).toBeNull();
+    });
+
+    it("an open the pointer started is cancelled when the pointer leaves, whatever focus is parked in the strip: after Escape the flyout stays shut", async () => {
+      const container = await openByHover();
+      const fromLine = lineCardsOf(container)[0]!;
+      act(() => { flyCardsOf(container)[9]!.focus(); });
+      fireEvent.keyDown(document.activeElement!, { key: 'Escape' });
+      expect(flyoutOf(container)).toBeNull();
+      expect(document.activeElement).toBe(fromLine);          // parked on the line card Escape handed it to, by keyboard
+      // A pointer passes: it enters and leaves before the open delay runs out.
+      fireEvent.pointerLeave(groupOf(container));
+      fireEvent.pointerEnter(groupOf(container));
+      advance(FLYOUT_OPEN_MS - 50);
+      fireEvent.pointerLeave(groupOf(container));
+      advance(5000);
+      expect(flyoutOf(container)).toBeNull();
+      // A pointer that stays still opens it: the pointer enters again.
+      fireEvent.pointerEnter(groupOf(container));
+      advance(FLYOUT_OPEN_MS);
+      expect(flyoutOf(container)).not.toBeNull();
+    });
+
+    it('keyboard focus arriving while the pointer\'s open delay is pending takes the open over: a pointer then leaving does not cancel it', async () => {
+      const container = await mountDesk();
+      fireEvent.pointerEnter(groupOf(container));
+      advance(FLYOUT_OPEN_MS - 50);
+      act(() => { lineCardsOf(container)[0]!.focus(); });
+      fireEvent.pointerLeave(groupOf(container));
+      advance(50);
+      expect(flyoutOf(container)).not.toBeNull();
+    });
+
+    it("a poll that drops the lane of the flyout card holding focus leaves no stale hold: a field focused elsewhere keeps its focus when the flyout closes", async () => {
+      // The poll's interval must run on the fake clock, so this case installs it before the strip mounts (`mountDesk` does it after).
+      stubDesk(1248);
+      stubSeventeen();
+      vi.useFakeTimers();
+      const { container } = render(<AccountsStrip />);
+      await act(async () => { await Promise.resolve(); });
+      expect(control()).toBeInTheDocument();
+      fireEvent.pointerEnter(groupOf(container));
+      advance(FLYOUT_OPEN_MS);
+      expect(flyoutOf(container)).not.toBeNull();
+      const dropped = lanesByFree(names.accounts)[5]!.wrapper;
+      const card = flyCardsOf(container)[5]!;
+      act(() => { card.focus(); });
+      // The next poll answers without that lane: its card leaves the DOM while it holds focus, and no blur is fired.
+      stubLanes(names.accounts.filter((a) => a.wrapper !== dropped));
+      await act(async () => { vi.advanceTimersByTime(20_000); });
+      expect(card.isConnected).toBe(false);
+      expect(flyCardsOf(container)).toHaveLength(16);
+      expect(document.activeElement).toBe(document.body);
+      const field = outsideField();
+      act(() => { field.focus(); });
+      fireEvent.pointerLeave(groupOf(container));
+      advance(FLYOUT_CLOSE_MS);
+      expect(flyoutOf(container)).toBeNull();
+      expect(document.activeElement).toBe(field);
+    });
+
+    it('a window that loses focus while a flyout card holds it: the close hands nothing back, and throws nothing', async () => {
+      const container = await openByHover();
+      const card = flyCardsOf(container)[5]!;
+      act(() => { card.focus(); });
+      fireEvent.pointerLeave(groupOf(container));
+      advance(5000);
+      expect(flyoutOf(container)).not.toBeNull();             // keyboard focus holds it
+      // The window blurs: the card keeps `document.activeElement`, and its focusout carries no destination.
+      expect(() => { fireEvent.focusOut(card, { relatedTarget: null }); }).not.toThrow();
+      advance(FLYOUT_CLOSE_MS);
+      expect(flyoutOf(container)).toBeNull();
+      expect(lineCardsOf(container)).not.toContain(document.activeElement);
+      expect(document.activeElement).toBe(document.body);
+    });
+
+    it('a window that loses focus, then a field outside the strip taking it: the close leaves the field its focus', async () => {
+      const container = await openByHover();
+      const card = flyCardsOf(container)[5]!;
+      act(() => { card.focus(); });
+      fireEvent.pointerLeave(groupOf(container));
+      fireEvent.focusOut(card, { relatedTarget: null });
+      const field = outsideField();
+      act(() => { field.focus(); });
+      advance(FLYOUT_CLOSE_MS);
+      expect(flyoutOf(container)).toBeNull();
+      expect(document.activeElement).toBe(field);
+    });
+
+    it('focus outside the strip stays put when the pointer leaves and the grace runs', async () => {
+      const container = await openByHover();
+      const field = outsideField();
+      act(() => { field.focus(); });
+      expect(document.activeElement).toBe(field);
+      fireEvent.pointerLeave(groupOf(container));
+      advance(FLYOUT_CLOSE_MS);
+      expect(flyoutOf(container)).toBeNull();
+      expect(document.activeElement).toBe(field);
+    });
+
+    it('a hover-only flyout hands no focus to the line when it closes: nothing held it, so nothing is handed back', async () => {
+      const container = await openByHover();
+      expect(document.activeElement).toBe(document.body);
+      fireEvent.pointerLeave(groupOf(container));
+      advance(FLYOUT_CLOSE_MS);
+      expect(flyoutOf(container)).toBeNull();
+      expect(document.activeElement).toBe(document.body);
+    });
+
+    it('focus that left the flyout is not handed back: a card focused then blurred, the close finds focus on the page and leaves it there', async () => {
+      const container = await openByHover();
+      const card = flyCardsOf(container)[2]!;
+      act(() => { card.focus(); });
+      act(() => { card.blur(); });                            // the flyout's blur says it no longer holds focus
+      fireEvent.pointerLeave(groupOf(container));
+      advance(FLYOUT_CLOSE_MS);
+      expect(flyoutOf(container)).toBeNull();
+      expect(document.activeElement).toBe(document.body);
+    });
+
+    it('Escape with focus on All accounts, which a flyout card left, closes the flyout and leaves the focus there', async () => {
+      const container = await openByHover();
+      act(() => { flyCardsOf(container)[2]!.focus(); });
+      const end = allAccounts();
+      act(() => { end.focus(); });
+      fireEvent.keyDown(end, { key: 'Escape' });
+      expect(flyoutOf(container)).toBeNull();
+      expect(document.activeElement).toBe(end);
     });
 
     it('unmounting with the open delay pending, or the close grace pending, leaves no timer behind', async () => {
