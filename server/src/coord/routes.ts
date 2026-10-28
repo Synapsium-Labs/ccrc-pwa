@@ -4133,10 +4133,10 @@ export function registerCoordRoutes(
   });
 
   /** `POST /api/approvals/:id/release` — the held-for claimant hands the prompt over (`held -> declined`, D-5440): the
-   *  hook stops on its next poll, and the operator's push fires at once. Box token, attribution, the stored parent. */
+   *  hook stops on its next poll, and the operator's push fires at once. Box token, attribution, the stored parent.
+   *  Since W3 Q3f (D-7030) the door keeps its front ladder and delegates from the row on to `questions.release`. */
   app.post('/api/approvals/:id/release', async (req, reply) => {
     if (!deps.coord) return notConfigured(reply);
-    const coord = deps.coord;
     if (!requireMailToken(req, reply, 'POST /api/approvals/:id/release')) return;
     const body = (req.body ?? {}) as Record<string, unknown>;
     const { fromId, fromUuid } = body;
@@ -4146,17 +4146,9 @@ export function registerCoordRoutes(
     if (!(await requireAttribution(reply, fromId, fromUuid, 'fromUuid'))) return;
     const id = parseCanonicalPositiveSafeInteger((req.params as { id: string }).id);
     if (id === null) return refuseRoute(reply, 'bad-request');
-    const read = coord.approvalById(id);
-    if (!read.ok) return refuseRoute(reply, 'approval-unreadable', { detail: read.detail });
-    const row = read.row;
-    if (row === null) return refuseRoute(reply, 'unknown-approval');
-    if (row.parentId !== fromId) {
-      return refuseRoute(reply, 'not-parent', { detail: 'only the claimant this prompt was held for may hand it over' });
-    }
-    if (!coord.declineApproval(id, fromId, Date.now())) return refuseRoute(reply, 'not-held');
-    questions.forgetApprovalInput(id);
-    watcher?.releaseHeldApproval(row.childId);
-    return { ok: true };
+    // W3 Q3f (D-7030): an ALIAS from here on. The row, the stored parent, the decline, the input forgotten and the push
+    // now are the claimant's core, `questions.release`, which `POST /api/questions/approval-<n>/release` calls too.
+    return sendAnswer(reply, await questions.release({ kind: 'approval', id, fromId }, claimantDeps!));
   });
 
   /** `GET /api/approvals/:id?fromId=&fromUuid=` — one row, redacted, for the claimant it was held for (spec §6.7:
