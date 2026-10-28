@@ -160,14 +160,14 @@ import { EnvelopeSheet, TerminalCta } from './EnvelopeSheet';
 import { AskSurface } from './AskSurface';
 import {
   AskHeader, AskReview, AskTabs, KICKER_CHOICE, KICKER_WAITING, REVIEW_TITLE, keyed, lit, picksBusy,
-  wordsBusy, type Asker, type PickCall, type Picks, type Words, type WordsCall,
+  wordsBusy, type Asker, type PickCall, type Picks, type Words,
 } from './AskParts';
 import {
-  askScreen, askSource, freeTextSlot, isUsableAsk, paneTicks, picksUncommitted, questionKey, shownQuestion, slotHolds, type AskSource, type ShownQuestion,
+  askScreen, askSource, isUsableAsk, paneTicks, picksUncommitted, questionKey, shownQuestion, type AskSource, type ShownQuestion,
 } from './askLive';
 import { keyTabs, questionKeys, reviewKeys, rowKey, type KeyScreen } from './askKeys';
 import {
-  answeringOption, createAnswerLifecycle, performAnswer, type AnswerLifecycle, type AnswerSeam, type AnswerState,
+  answeringOption, createAnswerLifecycle, performAnswer, showsSent, type AnswerLifecycle, type AnswerSeam, type AnswerState,
   type RefusalToken,
 } from './answerLifecycle';
 import { dialogMultiRefusal, dialogRefusal, dialogTabRefusal, dialogTextRefusal } from './askWords';
@@ -177,24 +177,11 @@ import { backgroundTasksClause } from '../lib/refusalWords';
 import { getSessionStore, type SessionStore } from '../stores/session';
 import './chat.css';
 
-/** No own-words text, and no call. */
-const NO_WORDS: { text: string; call: WordsCall | null } = { text: '', call: null };
-
 /** No box touched, and no commit. `id` is the question (dialog id) `picked` belongs to: a set is never carried from
  *  one question to another. */
 const NO_PICK: { id: string | null; picked: readonly number[] | null; call: PickCall | null } = {
   id: null, picked: null, call: null,
 };
-
-/** Does `dialog` show the question `call` was made for (`questionKey`)? */
-const showsQuestion = (dialog: Dialog | null, call: WordsCall): dialog is Dialog =>
-  dialog !== null && questionKey(dialog, call.row) === call.question;
-
-/** Does `dialog` still show the question `call` typed into, its free-text row holding exactly `text`? That is the
- *  typed row of this very send (the stream may deliver it after the call answered), not other text, and not a new
- *  question. */
-const showsSent = (dialog: Dialog | null, call: WordsCall, text: string): boolean =>
-  showsQuestion(dialog, call) && slotHolds(freeTextSlot(dialog, call.row - 1), text);
 
 export interface DialogSheetProps {
   id: string;
@@ -289,8 +276,8 @@ export function DialogSheet({ id, store, onOpenTerminal, raise, asker = null, on
   const [dismissedDialogId, setDismissedDialogId] = useState<string | null>(null);
   /** The envelope's screen (`askScreen`) the sheet was hidden on; meaningful only while `dismissedKey` is that ask. */
   const [dismissedScreen, setDismissedScreen] = useState<string | null>(null);
-  // D-5090: the own-words text and its call, one value so the two change together (see `WordsCall`).
-  const [own, setOwn] = useState(NO_WORDS);
+  // D-5090: the own-words text and its call, one value so the two change together (see `WordsCall`), in the lifecycle.
+  const own = lifeNow.own;
   // D-6325, R5: the question whose `Other` row the operator chose, so its field is open. The text and call above keep it
   // open too (`OwnWords`); this is the choice itself, before anything is typed. Ended with the send that landed.
   const [otherFor, setOtherFor] = useState<string | null>(null);
@@ -322,7 +309,6 @@ export function DialogSheet({ id, store, onOpenTerminal, raise, asker = null, on
   useEffect(() => {
     const onScreen = closed ? null : dialog;
     machine.dispatch({ type: 'screen', onScreen });
-    setOwn((o) => (o.call?.state === 'landed' && !showsSent(onScreen, o.call, o.text) ? NO_WORDS : o));
     if (own.call?.state === 'landed' && !showsSent(onScreen, own.call, own.text)) setOtherFor(null);
     // A chosen Other is spent with its screen: unless text or a call is kept, a new screen starts with the field closed,
     // so it cannot reopen on returning to the question or on a later question with the same words.
@@ -525,9 +511,11 @@ export function DialogSheet({ id, store, onOpenTerminal, raise, asker = null, on
     const kept = own.text;
     if (current === null || !claim()) return;
     const call = { row, question: questionKey(current, row) };
-    setOwn({ text: kept, call: { ...call, state: 'flight' } });
+    const flight = { ...call, state: 'flight' as const };
+    const command = machine.dispatch({ type: 'text', sessionId: id, dialogId: current.id, row, question: call.question }).command;
+    if (command?.kind !== 'text') return;
     try {
-      const res = await api.answerDialogText(id, current.id, row, kept.trim());
+      const res = await performAnswer(command, answers);
       if (res.next !== undefined) {
         // Typing changed the screen's id, so the store may hold the typed row by now: the same question by its key.
         const held = useStore.getState().dialog;
@@ -541,10 +529,10 @@ export function DialogSheet({ id, store, onOpenTerminal, raise, asker = null, on
       const gapNow = !useStore.getState().askFrameSeen;
       const now = useStore.getState().dialog;
       const waiting = gapNow || (now !== null && (now.id === current.id || showsSent(now, { ...call, state: 'landed' }, kept)));
-      setOwn(waiting ? { text: kept, call: { ...call, state: 'landed' } } : NO_WORDS);
+      machine.dispatch({ type: 'text-landed', text: kept, call: flight, waiting });
       if (!waiting) setOtherFor(null);
     } catch (err) {
-      setOwn({ text: kept, call: { ...call, state: 'refused' } });
+      machine.dispatch({ type: 'text-refused', text: kept, call: flight, refusal: refusalToken(err) });
       toast(dialogTextRefusal(err), 'error');
     }
   };
@@ -557,7 +545,7 @@ export function DialogSheet({ id, store, onOpenTerminal, raise, asker = null, on
       setFocusNonce((n) => n + 1);
     },
     focusNonce,
-    onText: (text) => setOwn((o) => ({ ...o, text })),
+    onText: (text) => machine.dispatch({ type: 'words', text }),
     onSend: (row) => void sendWords(row),
   };
 
