@@ -812,7 +812,7 @@ CREATE TABLE entries (entry_id INTEGER PRIMARY KEY AUTOINCREMENT, uuid TEXT NOT 
   blob_id INTEGER NOT NULL REFERENCES blobs ON DELETE RESTRICT);   -- open vocab: no CHECK on type
 CREATE INDEX entries_ts ON entries(transcript_pk, ts_ms);
 CREATE INDEX entries_unexported ON entries(ts_ms) WHERE exported_ms IS NULL;
-CREATE INDEX entries_blob ON entries(blob_id);                     -- FTS hit -> scope join
+CREATE INDEX entries_blob ON entries(blob_id);                     -- a blob's referrer probes; grep's entry and variant arms read entries_ts (D-7095)
 CREATE INDEX entries_event ON entries(request_id, api_block_index) WHERE request_id IS NOT NULL;
 CREATE TABLE memberships (file_id INTEGER NOT NULL REFERENCES ingest_files,
   entry_id INTEGER NOT NULL REFERENCES entries,
@@ -2064,7 +2064,7 @@ Each tick runs with umask 077, under the shim's flock. `history-off` is checked 
    - Receipts (`event_key`, `payload_sha`) make a duplicate a no-op. `event_key` comes from the draining file's name and the line's ordinal, never a receive time (§9.14). A same key with a different payload increments a counter and never throws.
    - Startup/resume lines, and from W1-B2 fork lines (ruled Q16), enter `epoch_candidates` and chain on confirmation (§6.1): their `reg` equals their sid; else their sid equals the observed `.uuid`, the first match recorded while held, or, failing all, `.uuid` at a later tick within 7 days of the line's journaling. Clear lines chain at drain with `confirmed_ms` NULL until §6.1's rule confirms them. A confirmation at a later tick is a verdict too: its transaction commits `FULL`, and its row is flushed to the journal right after. The rule is `lib.mjs`'s `decideEpochLine`, which replay calls too (IV4).
 2. **Discover files.**
-   - Sources: spool hints from confirmed sids, plus a periodic scan (every 30 min, *chosen*).
+   - Sources: spool hints from confirmed sids, plus a periodic scan (every 30 min, *chosen*), and, on a tick whose scan is not due, the live main-thread files of the uuids `$REG/*.uuid` names whose identity, size or mtime changed since the sweep last examined them, at most `ACTIVE_STAT_MAX` (256, *chosen*) lstats a tick, each uuid's most recently recorded copy first (CP-39d, D-7096).
    - The scan resolves `<home>/projects/*/<uuid>.jsonl` for every known uuid, across the rostered homes the shim passed.
    - Known uuids come from confirmed spool lines, `$REG/*.uuid` and earlier confirmed epochs. An unconfirmed clear epoch's file is opened only to read its first uuid row, for §6.1's location rule (SE5).
    - **Sidecars** (rev 3.2 review, FE6; slug `history-sidecar-ingest-rules`) are found by `<home>/projects/*/<uuid>/tool-results/*` for every known uuid, including homes that hold no `<uuid>.jsonl`: `_swap_carry_sidecars` merges those trees between homes (`ccd/ccd:22826` at `d12b5aba0`).
@@ -2744,8 +2744,8 @@ Slug `history-sole-copy-export`. Claude Code deletes a transcript some days afte
 - **What the analysis counts** (rev 3 review, RR13): only `recall_calls` rows whose (`ccrc_id`, generation) is on the pre-registered list. A `''` family a re-key has merged is mapped to the generation it merged into through `merged_into`: the census folds it into that family as a merged generation, and never lists it on its own (W2-3, D-5773). A family whose id was purged and reused mid-window is a new family, off the list, and its `recall-off` reads as stale, so it is neither in the control arm nor counted.
 - **A changed assignment** (rev 3.2 review, SE7). The sweep records each `recall-off` file's presence per tick, and a family whose file appeared or went during the window (`recall_off_changed`, with its time) is dropped from the reported arm comparisons. The gate is unaffected: criterion 3 reads treatment windows only, and accuracy and fabrication come from the quiz.
 - **The queries** (rev 3.2 review, FE2; slug `history-event-tables-v1`), each run by `measure-history.py` over one node's store, the W2 window statistic built in Node from its raw rows (W2-3, D-5770):
-  - **W1-b**: the p95 of `ticks.lag_ms` over a week's ticks with `files_behind = 0` (outside backfill and catch-up);
-  - **W1-f**: the p95 of `recall_calls.ms` over `verb = 'grep'` rows with `arm IS NULL`;
+  - **W1-b**: the p95 of `ticks.lag_ms` over a week's ticks with `files_behind = 0` on the tick and on the tick before it, by time (outside backfill and catch-up; CP-39d, D-7098);
+  - **W1-f**: the p95 of `recall_calls.ms` over `verb = 'grep'` rows with `arm IS NULL` and `rc` 0 or 3, from `--w1f-since` to `--now` (CP-39d, D-7097);
   - **the W2 window statistic** (W2-3, D-5770; the copy rules, D-5771): for each main boundary of a listed family inside the window, the window copy is the copy holding the boundary with the most membership rows after it (W1's rule; ties go to lib's `pickHoldingCopy`), and the boundary's producer stratum reads `pickHoldingCopy`'s copy over its `models` (§6.2). K = 10 counts assistant **turns**: that copy's assistant rows after its summary row in file order, `<synthetic>` rows dropped (`isSyntheticModel`; a row with no model stays a turn), consecutive rows grouped by `msg_id`, else `request_id`, else uuid. The window opens at the boundary's `ts_ms`, inclusive, and ends, exclusive, at the earlier of turn 11's first row and the next main boundary's row in that copy; with neither, it ends, inclusive, at the copy's last timed row. It is `unmeasured`, excluded and counted, when no copy holds the boundary, when its copy has no timed row, when its summary row lies past the next main boundary, when the row cap cut the copy before turn 11's first row was seen (whether or not a next boundary exists), or when the timestamp of a window end is null. The window counts when a `recall_calls` row of that family (`ccrc_id`, generation), with a read verb and `arm IS NULL`, has a `ts_ms` inside it. The per-turn rate divides the same calls by the window's turns (at most K). The cluster bootstrap then runs over families.
 
 **Pins:**
@@ -2893,7 +2893,7 @@ Slug `history-sole-copy-export`. Claude Code deletes a transcript some days afte
 | Wave | Row | Target | Data source |
 |---|---|---|---|
 | W1-a | ccrc main sessions active since install with a `sessions` row, on every session-hosting node | 100% per node | the census against that node's `$REG/*.uuid` |
-| W1-b | index lag p95 over a week, outside backfill | ≤ 4 min (2 ticks) | `ticks.lag_ms` with `files_behind = 0`, by §10.2's query |
+| W1-b | index lag p95 over a week, outside backfill | ≤ 4 min (2 ticks) | `ticks.lag_ms` with `files_behind = 0` on the tick and its predecessor, by §10.2's query (CP-39d, D-7098) |
 | W1-c | duplicate entries per uuid | 0 | `measure-history.py` |
 | W1-d | store growth, first week, with real compression | measured and recorded; the affordability note updated | `status` |
 | W1-e | card line served on main-scope compactions with a caught-up indexer | ≥ 95%; `card_id_mismatch` ≤ 2% | transcript attachments (§8.6) |

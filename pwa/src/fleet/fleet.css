@@ -165,6 +165,8 @@
    and groupFleet.ts for the shape it used to have, where `Cleanup` counted
    rows that rendered nowhere on this screen. The one chip whose rows sit
    behind a fold is `Archived`, and that fold states the identical count.
+   The words are `STATUS_GROUPS`' labels (Needs you, Done, ... Exited), one
+   vocabulary with Instrument's group heads (T3a, D-6331).
    Every chip is self-grounded (background + color on the ONE rule) so the
    count, the unseen badge and "Mark all seen" are all measured by
    design/audit.mjs's own descendant-of-a-self-grounded-ancestor pass —
@@ -185,10 +187,21 @@
   padding: var(--sp-1) var(--sp-3);
   font: var(--weight-medium) var(--fs-xs) / 1 var(--family-ui);
 }
-.bucket-head .bucket-head-count {
+.bucket-head .bucket-head-count,
+.bucket-head .bucket-head-sep {
   font-family: var(--family-mono);
   font-variant-numeric: tabular-nums;
   color: var(--ink-tertiary);
+}
+/* Exited and Archived are quiet (T3a, D-6331): nothing is asked of you there, so the chip recedes by ink and weight
+   and draws no unseen badge (`lib/seen.ts`'s BADGED holds only attention, done and cleanup). `data-quiet` is the
+   marker `BucketBar` sets. Self-grounded like every chip (background and color on this ONE rule, so the audit's
+   descendant pass measures the label and the count), from tokens: `--ink-tertiary` on `--bg-surface` is 5.77 dark and
+   5.70 light, both over 4.5. Never `opacity`, which composites the whole subtree (see the note above `.fleet-list`). */
+.bucket-head[data-quiet] {
+  background: var(--bg-surface);
+  color: var(--ink-tertiary);
+  font-weight: var(--weight-regular);
 }
 /* Same tokens as the "waiting on you" badge elsewhere on this screen
    (--status-attention-text on --status-attention-tint) — reused, not
@@ -769,12 +782,31 @@
 @media (min-width: 700px) {
   .accounts-strip { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 }
-/* The end cell: All accounts. Its own row under the cards on a phone (and wherever the cards wrap to two columns);
-   the desk's frame header puts it in the row's next track (shell.css). The button brings its own tap floor. */
+/* The end cell: the fold's control (when the strip folds) and then All accounts, a gap between them. Its own row under
+   the cards on a phone (and wherever the cards wrap to two columns); the desk's frame header puts it in the row's
+   next track (shell.css). The two share ONE row at every width and never stack: All accounts keeps its width
+   (`flex: none`), and the control gives (`flex: 1 1 0; min-width: 0`), its words wrapping inside it, centred, over
+   as many lines as they need. "+13 more · 1 sign-in expired · 1 rate-limited" is 290 to 330px on one line in the
+   quiet Button's mono, wider than a phone's share of the cell, and a cell that wrapped its buttons put All accounts
+   on a second 44px row. The quiet variant is `leading-none` with no vertical padding, so the control sets a line
+   height and a little padding of its own for a wrapped line to clear its border; the tap floor (`min-h-tap`) is
+   the Button's, and is kept. The control is the one element here with `aria-controls` (it names the strip's group). */
 .accounts-end {
   grid-column: 1 / -1;
   display: flex;
   align-items: center;
+  gap: var(--sp-2);
+}
+.accounts-end > [aria-controls] {
+  flex: 1 1 0;
+  min-width: 0;
+  padding-block: var(--sp-1);
+  line-height: 1.25;
+  text-align: center;
+  white-space: normal;
+}
+.accounts-end > :not([aria-controls]) {
+  flex: none;
 }
 .account-gauge {
   display: grid;

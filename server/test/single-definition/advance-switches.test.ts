@@ -674,7 +674,7 @@ describe('one writer per fact (ARCH-40): the switches whose writer set is alread
   it('literal source pins over W1a\'s files may only shrink (D-5854; ARCH-06\'s counting rule)', () => {
     // Measured on merge day. Lower a row when a pin moves onto scan/symbols.ts; never raise one.
     const CEILING: Record<string, number> = {
-      'server/src/watch.ts': 79,
+      'server/src/watch.ts': 69,   // W3 Q3d (D-7028): 79 - 10, the pins whose text moved to coord/questions.ts, re-keyed on scan/symbols.ts
       'server/src/server.ts': 23,
       'server/src/interruptlog.ts': 0,
       'server/src/coord/routes.ts': 38,
@@ -715,7 +715,7 @@ describe('one writer per fact (ARCH-40): the switches whose writer set is alread
   // onto scan/symbols.ts ahead of W1b lowers a row here. Measured on this slice's tip; may only shrink.
   it('literal source pins over W1b\'s files may only shrink (D-6114; ARCH-06\'s counting rule)', () => {
     const CEILING: Record<string, number> = {
-      'server/src/watch.ts': 79,
+      'server/src/watch.ts': 69,   // W3 Q3d (D-7028): 79 - 10, the pins whose text moved to coord/questions.ts, re-keyed on scan/symbols.ts
       'server/src/coord/routes.ts': 38,
       'server/src/ccdargv.ts': 6,
       'server/src/registry.ts': 2,
@@ -1070,6 +1070,27 @@ describe('one registry listing per tick (ARCH-51): the tick\'s FleetReadModel (D
         'class FleetWatcher {',
         '  async tick(): Promise<void> { await readRegistryMeasured(io, cfg); }',
         '  private async fooPass(): Promise<void> { await readRegistry(io, cfg); }',
+        '}',
+      ].join('\n'));
+      expect(registryListingSites(tree).filter((x) => x.tag === 'selection' && x.method !== 'FleetWatcher.tick')).toHaveLength(1);
+    } finally {
+      rm(tree, { recursive: true, force: true });
+    }
+  });
+
+  // D-7047 fix round: a listing read through `readdirMeasured(registryDir)` (the sleep lanes' act-time listing) is a
+  // listing too, so a lane that selects its rows that way is not hidden from the ratchet by the measured read.
+  it('CONTROL: the census sees a lane that lists for itself through readdirMeasured', async () => {
+    const { registryListingSites } = await import('../consolidationCensus.js');
+    const { mkdtempSync: mk, mkdirSync: md, writeFileSync: wf, rmSync: rm } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const tree = mk(path.join(tmpdir(), 'listing-ratchet-measured-'));
+    try {
+      md(path.join(tree, 'server/src'), { recursive: true });
+      wf(path.join(tree, 'server/src/watch.ts'), [
+        'class FleetWatcher {',
+        '  async tick(): Promise<void> { await readRegistryMeasured(io, cfg); }',
+        '  private async fooPass(): Promise<void> { await this.deps.io.readdirMeasured(this.deps.cfg.registryDir); }',
         '}',
       ].join('\n'));
       expect(registryListingSites(tree).filter((x) => x.tag === 'selection' && x.method !== 'FleetWatcher.tick')).toHaveLength(1);

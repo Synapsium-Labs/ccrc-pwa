@@ -49,6 +49,7 @@ import { NAME_FIELD_CLASS, WorkspaceNameField } from './WorkspaceNameField';
 import { useNamePreview } from './useNamePreview';
 import { addRefusalText, classifyAddError } from './workspaceAddWords';
 import { LINEAR_SETTINGS_PATH, confirmLabel, nameDoorReason } from './workspaceNameWords';
+import { AUTOMATIC_CLASS } from './classWords';
 import './fleet.css';
 
 /** How long an unnamed create waits for its session's row on the fleet feed before it gives up, toasts and closes. */
@@ -602,11 +603,11 @@ export function NewSessionSheet({
               option is derived from `CLASSES`/`effortOptions` at render time,
               never a hand-typed list, so a class or effort rung this build
               adds or drops shows up here for free. Leaving all three unset
-              sends no `route` key at all — the coordinator row an ordinary
-              start has always landed on. */}
+              sends no `route` key at all — "Automatic" (unset), the coordinator
+              row an ordinary start has always landed on. */}
           <div className="route-row">
             <RouteField label="Class" value={routeClass} onChange={setRouteClass}>
-              <option value="">Coordinator row</option>
+              <option value="" title={AUTOMATIC_CLASS.title}>{AUTOMATIC_CLASS.word}</option>
               <option value="default">Default</option>
               {[...CLASSES].reverse().map((c) => (
                 <option key={c} value={c}>{classDisplayLabel(wrapper, c)}</option>
@@ -625,7 +626,7 @@ export function NewSessionSheet({
             </RouteField>
           </div>
           <p className="sheet-copy route-note">
-            Unset fields take the coordinator row (Opus · high, Sonnet subagents, workflows on).
+            Unset fields take the routing matrix's default (Opus · high, Sonnet subagents, workflows on).
             If the account can't serve the class today, ccd starts one rung down and restores it when it can.
           </p>
         </fieldset>

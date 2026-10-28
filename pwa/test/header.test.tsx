@@ -683,28 +683,27 @@ describe('the substrate gate — Archive, Restart and Restore refuse a session n
 // — keyboard discipline —
 
 describe('breadcrumb', () => {
-  it('names the workspace beside the project', () => {
-    // The header's branch metachip (session/SessionHeader.tsx's `.chat-meta`)
-    // already renders this session's raw branch text, so a bare getByText for
-    // 'ws/quiet-basin' is ambiguous once the crumb exists too — scope to the
-    // crumb span, which is what this test is actually about.
+  it('names the project before the workspace', () => {
+    // The title is the session (its row's label); the crumb before it is the project (desktop polish T3c, D-6333).
     const { container } = render(<SessionHeaderHost {...props({ session: fleetSession({
       project: 'project-d', workspace: 'quiet-basin', name: null, branch: 'ws/quiet-basin',
     }) })} />);
-    expect(screen.getByText('project-d')).toBeInTheDocument();
-    expect(container.querySelector('.chat-crumb')).toHaveTextContent('ws/quiet-basin');
+    expect(container.querySelector('.chat-crumb')).toHaveTextContent('project-d');
+    expect(container.querySelector('.chat-title-text')).toHaveTextContent('ws/quiet-basin');
+    expect(container.querySelector('.chat-title')?.textContent).toBe('project-d›ws/quiet-basin');
+    // The crumb is drawn first, the separator between, then the title.
+    const kids = [...container.querySelector('.chat-title')!.children].map((n) => n.className.split(' ')[0]);
+    expect(kids).toEqual(['chat-crumb', 'chat-crumb-sep', 'chat-title-text']);
   });
 
   it('distinguishes two workspaces of one project — the whole point', () => {
-    // Same ambiguity as above: the branch metachip duplicates the crumb text,
-    // so assert against the crumb element specifically.
     const { container, unmount } = render(<SessionHeaderHost {...props({ session: fleetSession({
       id: 'a', project: 'demo', workspace: 'quiet-basin', branch: 'ws/quiet-basin' }) })} />);
-    expect(container.querySelector('.chat-crumb')).toHaveTextContent('ws/quiet-basin');
+    expect(container.querySelector('.chat-title-text')).toHaveTextContent('ws/quiet-basin');
     unmount();
     const { container: container2 } = render(<SessionHeaderHost {...props({ session: fleetSession({
       id: 'b', project: 'demo', workspace: 'still-cove', branch: 'ws/still-cove' }) })} />);
-    expect(container2.querySelector('.chat-crumb')).toHaveTextContent('ws/still-cove');
+    expect(container2.querySelector('.chat-title-text')).toHaveTextContent('ws/still-cove');
   });
 
   it('shows the project alone for a main checkout', () => {
@@ -712,6 +711,21 @@ describe('breadcrumb', () => {
       project: 'demo', workspace: null, name: null, branch: null, id: 'demo' }) })} />);
     expect(screen.getByText('demo')).toBeInTheDocument();
     expect(container.querySelector('.chat-crumb')).toBeNull();
+    expect(container.querySelector('.chat-title')?.textContent).toBe('demo');
+  });
+
+  it("a main checkout's title is plain text; only a workspace's title, which a rename changes, types in", () => {
+    // TypedLabel streams a CHANGED label in; a main checkout's title is its project, which no rename changes, so the
+    // header mounts no TypedLabel (and no motion listener) for it: the same mounts as before the title was the label.
+    const { container, unmount } = render(<SessionHeaderHost {...props({ session: fleetSession({
+      project: 'demo', workspace: null, name: null, branch: null, id: 'demo' }) })} />);
+    const plain = container.querySelector('.chat-title-text');
+    expect(plain).toHaveTextContent('demo');
+    expect(plain).not.toHaveAttribute('role');
+    unmount();
+    const { container: ws } = render(<SessionHeaderHost {...props({ session: fleetSession({
+      project: 'project-d', workspace: 'quiet-basin', name: null, branch: 'ws/quiet-basin' }) })} />);
+    expect(ws.querySelector('.chat-title-text')).toHaveAttribute('aria-label', 'ws/quiet-basin');
   });
 
   it('prefers a chosen name over the branch, as the fleet line does', () => {
@@ -721,12 +735,12 @@ describe('breadcrumb', () => {
   });
 
   // The common case: no chosen `name`, so sessionLabel() falls through to
-  // `branch` and the crumb prints the exact same string the branch metachip
+  // `branch` and the title prints the exact same string the branch metachip
   // would — a few pixels below it. The chip must not repeat it.
-  it('suppresses the branch chip when it would repeat the crumb', () => {
+  it('suppresses the branch chip when it would repeat the title', () => {
     const { container } = render(<SessionHeaderHost {...props({ session: fleetSession({
       project: 'demo', workspace: 'quiet-basin', name: null, branch: 'ws/quiet-basin' }) })} />);
-    expect(container.querySelector('.chat-crumb')).toHaveTextContent('ws/quiet-basin');
+    expect(container.querySelector('.chat-title-text')).toHaveTextContent('ws/quiet-basin');
     expect(container.querySelector('.metachip--branch')).toBeNull();
     // Belt and braces: the branch text appears exactly once in the whole
     // header, not zero (that would pass against deleting the chip outright)
@@ -734,15 +748,15 @@ describe('breadcrumb', () => {
     expect(screen.getAllByText('ws/quiet-basin')).toHaveLength(1);
   });
 
-  it('keeps the branch chip once it differs from the crumb — two distinct elements', () => {
+  it('keeps the branch chip once it differs from the title — two distinct elements', () => {
     const { container } = render(<SessionHeaderHost {...props({ session: fleetSession({
       project: 'demo', workspace: 'quiet-basin', name: 'refactor-auth', branch: 'ws/quiet-basin' }) })} />);
-    const crumb = container.querySelector('.chat-crumb');
+    const title = container.querySelector('.chat-title-text');
     const chip = container.querySelector('.metachip--branch');
-    expect(crumb).toHaveTextContent('refactor-auth');
+    expect(title).toHaveTextContent('refactor-auth');
     expect(chip).toHaveTextContent('ws/quiet-basin');
-    expect(crumb).not.toBe(chip);
-    expect(crumb?.textContent).not.toBe(chip?.textContent);
+    expect(title).not.toBe(chip);
+    expect(title?.textContent).not.toBe(chip?.textContent);
   });
 
   it('keeps the branch chip for a main checkout with no crumb at all', () => {
@@ -967,6 +981,45 @@ describe('the header before the first fleet frame lands', () => {
     // header jumps when the frame lands.
     renderHeader({ session: null, fallback: undefined });
     expect(screen.getByText('…')).toBeInTheDocument();
+  });
+
+  // Review 1078 F1 (desktop polish T3c, D-6333): the fallback exists so the title does not jump when the first frame
+  // lands. A fallback title that typed in as a rename when its row arrived, or when the row left, would be that jump:
+  // only a rename of a row that is present types in.
+  const wsRow = (over: Partial<FleetSession> = {}): FleetSession => fleetSession({
+    id: 'project-a-quiet-basin', project: 'project-a', workspace: 'quiet-basin', name: 'tidy-up', branch: 'ws/quiet-basin', ...over,
+  });
+  const wsFallback = { title: 'ws/quiet-basin', crumb: 'project-a', wrapper: 'claude' };
+  const caret = (c: HTMLElement): Element | null => c.querySelector('.chat-head .typed-caret');
+
+  it('the row landing over the fallback draws its title plainly, even where the words differ', () => {
+    vi.useFakeTimers();
+    try {
+      const { container, rerender } = render(<SessionHeaderHost {...props({ session: null, fallback: wsFallback })} />);
+      rerender(<SessionHeaderHost {...props({ session: wsRow(), fallback: wsFallback })} />);
+      expect(caret(container), 'no rename typed in').toBeNull();
+      expect(container.querySelector('.chat-title-text')).toHaveTextContent('tidy-up');
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('the row leaving draws the fallback plainly', () => {
+    vi.useFakeTimers();
+    try {
+      const { container, rerender } = render(<SessionHeaderHost {...props({ session: wsRow(), fallback: wsFallback })} />);
+      rerender(<SessionHeaderHost {...props({ session: null, fallback: wsFallback })} />);
+      expect(caret(container), 'no rename typed in').toBeNull();
+      expect(container.querySelector('.chat-title-text')).toHaveTextContent('ws/quiet-basin');
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('a present row renamed still types its new name in', () => {
+    vi.useFakeTimers();
+    try {
+      const { container, rerender } = render(<SessionHeaderHost {...props({ session: wsRow({ name: null }) })} />);
+      rerender(<SessionHeaderHost {...props({ session: wsRow() })} />);
+      expect(caret(container), 'the rename types in').not.toBeNull();
+      expect(container.querySelector('.chat-title-text')).toHaveAttribute('aria-label', 'tidy-up');
+    } finally { vi.useRealTimers(); }
   });
 });
 
@@ -1217,15 +1270,19 @@ describe('the quiet "with coordinator" state (D-5296)', () => {
   }
 
   // Layout is not measurable in jsdom: the widths above prove the words, and
-  // these rules are what the Playwright measurements (PR body) depend on. The
-  // name never breaks; the word sits beside the dot; the title column may
-  // shrink to the column instead of pushing the name under the keycaps.
-  it('the header rules: the name never breaks, the word stays beside the dot', async () => {
+  // these rules are what the browser measurements (browser/session-header) depend on. The word sits beside the dot;
+  // the title column may shrink to the column instead of pushing the name under the keycaps. The name no longer
+  // ellipsises (desktop polish T3c, D-6333): it may break inside rather than clip.
+  it('the header rules: the word stays beside the dot, and no name is clipped', async () => {
     const { readFileSync } = await import('node:fs');
     const path = await import('node:path');
     const { ruleIn, declValue, stripComments } = await import('./cssRule');
     const css = stripComments(readFileSync(path.join(import.meta.dirname, '..', 'src', 'session', 'chat.css'), 'utf8'));
-    expect(declValue(ruleIn(css, '.chat-meta .status-line-name'), 'white-space')).toBe('nowrap');
+    const name = ruleIn(css, '.chat-meta .status-line-name');
+    expect(declValue(name, 'overflow-wrap')).toBe('anywhere');
+    expect(declValue(name, 'overflow')).toBeNull();
+    expect(declValue(name, 'text-overflow')).toBeNull();
+    expect(declValue(name, 'white-space')).toBeNull();
     expect(declValue(ruleIn(css, '.chat-meta .status-line--coordinator'), 'max-width')).toBe('calc(100% - 8px - var(--sp-2))');
     expect(declValue(ruleIn(css, '.chat-meta:has(.status-line--coordinator)'), 'min-width')).toBe('0');
     renderHeader({ session: held(), status: 'idle' });
@@ -1277,18 +1334,37 @@ describe('the quiet "with coordinator" state (D-5296)', () => {
     expect(line?.className).not.toContain('status-line--coordinator');
   });
 
-  // D-5390: a `<wrapper>-<project>` main-checkout parent keeps its whole id,
-  // which at 360 and 390 px is wider than the column. The name ellipsises
-  // inside the status line (Playwright-measured, PR body); the full id stays
-  // on `title`.
-  it('a long `<wrapper>-<project>` parent ellipsises inside the line, the full id on title', async () => {
+  // Review 1078 F7 (desktop polish T3c, D-6333): the branch chip's text had a 22ch cap; it is gone at every width.
+  // `declaredValues` reads every rule whose subject is a chip's text, inside a media block or not, so a cap restored
+  // at the desk (or below 900) on either skin's header stylesheet reds.
+  it("no rule caps a chip's text width, the branch's included, at any width", async () => {
+    const { readFileSync } = await import('node:fs');
+    const path = await import('node:path');
+    const { declaredValues, stripComments } = await import('./cssRule');
+    const read = (...p: string[]): string => stripComments(readFileSync(path.join(import.meta.dirname, '..', 'src', ...p), 'utf8'));
+    const chat = read('session', 'chat.css');
+    // The chip's own text rule is still there, so the scan below reads something (a renamed class throws here).
+    expect(declaredValues(chat, '.metachip-text', 'overflow-wrap')).toEqual(['anywhere']);
+    for (const css of [chat, read('skins', 'refined', 'refined.css')]) {
+      for (const sel of ['.metachip-text', '.metachip--branch .metachip-text']) {
+        let values: string[] = [];
+        try { values = declaredValues(css, sel, 'max-width'); } catch { /* no rule targets it in this sheet */ }
+        expect(values.filter((v) => v !== 'none'), `${sel} max-width`).toEqual([]);
+      }
+    }
+  });
+
+  // D-5390, reversed by desktop polish T3c (D-6333): a `<wrapper>-<project>` main-checkout parent keeps its whole id,
+  // which at 360 and 390 px is wider than the column. The name no longer ellipsises: it shows whole (breaking inside
+  // only when it alone is wider than its row), and the full id stays on `title`.
+  it('a long `<wrapper>-<project>` parent is never clipped, the full id on title', async () => {
     const { readFileSync } = await import('node:fs');
     const path = await import('node:path');
     const { ruleIn, declValue, stripComments } = await import('./cssRule');
     const css = stripComments(readFileSync(path.join(import.meta.dirname, '..', 'src', 'session', 'chat.css'), 'utf8'));
     const rule = ruleIn(css, '.chat-meta .status-line-name');
-    expect(declValue(rule, 'overflow')).toBe('hidden');
-    expect(declValue(rule, 'text-overflow')).toBe('ellipsis');
+    expect(declValue(rule, 'overflow')).toBeNull();
+    expect(declValue(rule, 'text-overflow')).toBeNull();
     expect(declValue(rule, 'display')).toBe('inline-block');
     expect(declValue(rule, 'max-width')).toBe('100%');
     renderHeader({ session: held({ withCoordinator: { ...WC, parentId: 'wrapper-two-project-a' } }), status: 'idle' });
@@ -1396,5 +1472,98 @@ describe('SessionScreen: the coordination line (D-5527)', () => {
   it('a session nobody coordinates has no coordination line — the no-regression baseline', () => {
     mount([baseSession({ id: CHILD, project: 'project-b' })], []);
     expect(document.querySelector('.chat-coord')).toBeNull();
+  });
+});
+
+describe('the header doors carry words (desktop polish T3c, D-6333)', () => {
+  const withPr = (number: number | null, phase: 'open' | 'none' = 'open'): FleetSession => fleetSession({
+    workspace: 'quiet-basin', name: 'tidy-up', branch: 'ws/quiet-basin',
+    pr: {
+      phase, number, url: null, title: null, checks: null, checkNames: null, ahead: 1, reason: null,
+      checkedAt: null, mergedAt: null, retryAt: null,
+    },
+  });
+
+  it('below 900 the doors are glyphs with a title, and the More sheet names each', async () => {
+    stubPointer(false);
+    const p = props({ session: withPr(5) });
+    const { container } = render(<SessionHeaderHost {...p} />);
+    const cap = (cls: string): HTMLElement => container.querySelector<HTMLElement>(`.chat-head .${cls}`)!;
+    // Each door keeps its accessible name and gains a title; the glyph stays aria-hidden and the word is a span of
+    // its own, which the stylesheet shows from 900 only.
+    expect(cap('keycap--term')).toHaveAttribute('aria-label', 'Terminal');
+    expect(cap('keycap--term')).toHaveAttribute('title', 'Terminal');
+    expect(cap('keycap--more')).toHaveAttribute('aria-label', 'More');
+    expect(cap('keycap--more')).toHaveAttribute('title', 'More');
+    expect(cap('keycap--pr').getAttribute('aria-label')).toMatch(/^Pull request #5: open\./);
+    expect(cap('keycap--pr')).toHaveAttribute('title', cap('keycap--pr').getAttribute('aria-label'));
+    for (const c of ['keycap--term', 'keycap--more']) {
+      // The glyph itself (the door's one span that is not its word) is what must stay hidden (review 1078 F4).
+      const glyph = cap(c).querySelector(':scope > span:not(.keycap-word)');
+      expect(glyph?.textContent).toBe(c === 'keycap--term' ? '>_' : '⋯');
+      expect(glyph).toHaveAttribute('aria-hidden', 'true');
+      expect(cap(c).querySelector('.keycap-word')?.textContent).toBe(c === 'keycap--term' ? 'Terminal' : 'More');
+    }
+    expect(cap('keycap--pr').querySelector('.keycap-word')?.textContent).toBe('#5');
+    // The words are display:none below 900 and shown from it: the stylesheet is what draws them.
+    const { readFileSync } = await import('node:fs');
+    const path = await import('node:path');
+    const { ruleIn, atBlock, declValue, stripComments } = await import('./cssRule');
+    const css = stripComments(readFileSync(path.join(import.meta.dirname, '..', 'src', 'session', 'chat.css'), 'utf8'));
+    expect(declValue(ruleIn(css, '.chat-head .keycap-word'), 'display')).toBe('none');
+    expect(declValue(ruleIn(atBlock(css, '@media (min-width: 900px)'), '.chat-head .keycap-word'), 'display')).not.toBe('none');
+    // The More sheet lists every door with its word, through the one menu: Terminal and the PR door among them.
+    fireEvent.click(screen.getByRole('button', { name: 'More' }));
+    const rows = Array.from(document.querySelectorAll('.menu-item'));
+    const byCommand = (id: string): Element | undefined => rows.find((r) => r.getAttribute('data-command') === id);
+    expect(byCommand('open-terminal')?.querySelector('.menu-label')?.textContent).toBe('Terminal');
+    expect(byCommand('session-pr')?.querySelector('.menu-label')?.textContent).toBe('#5');
+    // And they run: Terminal opens the drawer and closes the sheet (review 1078 F5).
+    expect(screen.getByTestId('sheet-overlay')).toBeInTheDocument();
+    fireEvent.click(byCommand('open-terminal')!);
+    expect(p.onOpenTerminal).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(screen.queryByTestId('sheet-overlay')).not.toBeInTheDocument());
+  });
+
+  // The cap is also drawn by the inspector's PR section, outside `.chat-head` (`PrSection`): there the word span must
+  // stay hidden, or the legend and the word both show ("#5#5"). The hide is the cap's own; only the SHOW is the header's.
+  it("the PR cap's word is hidden wherever the cap is drawn, and shown only in the header from 900", async () => {
+    const { readFileSync } = await import('node:fs');
+    const path = await import('node:path');
+    const { ruleIn, atBlock, declValue, stripComments } = await import('./cssRule');
+    const css = stripComments(readFileSync(path.join(import.meta.dirname, '..', 'src', 'session', 'chat.css'), 'utf8'));
+    expect(declValue(ruleIn(css, '.keycap--pr .keycap-word'), 'display')).toBe('none');
+    const desk = atBlock(css, '@media (min-width: 900px)');
+    expect(declValue(ruleIn(desk, '.chat-head .keycap-word'), 'display')).toBe('inline');
+    expect(declValue(ruleIn(desk, '.chat-head .keycap--pr .pr-legend'), 'display')).toBe('none');
+  });
+
+  // A closed PR's non-colour cue is the line through its legend; from 900 the word replaces the legend, so it wears it too.
+  it("a closed PR's word is struck through like its legend", async () => {
+    const { readFileSync } = await import('node:fs');
+    const path = await import('node:path');
+    const { ruleIn, selectorsOf, normSel, declValue, stripComments } = await import('./cssRule');
+    const css = stripComments(readFileSync(path.join(import.meta.dirname, '..', 'src', 'session', 'chat.css'), 'utf8'));
+    const legend = ".keycap--pr[data-phase='closed'] .pr-legend";
+    expect(selectorsOf(css, legend)).toContain(normSel(".keycap--pr[data-phase='closed'] .keycap-word"));
+    expect(declValue(ruleIn(css, legend), 'text-decoration')).toBe('line-through');
+  });
+
+  it('the PR door says what tapping it does when there is no number, and a main checkout has no PR door', () => {
+    stubPointer(false);
+    const word = (s: FleetSession): string | undefined => {
+      const { container, unmount } = render(<SessionHeaderHost {...props({ session: s })} />);
+      const w = container.querySelector('.keycap--pr .keycap-word')?.textContent ?? undefined;
+      unmount();
+      return w;
+    };
+    expect(word(withPr(null, 'none'))).toBe('Open PR');
+    expect(word(fleetSession({ workspace: 'quiet-basin', pr: null }))).toBe('Check PR');
+    expect(word(fleetSession({ workspace: null }))).toBeUndefined();
+    render(<SessionHeaderHost {...props({ session: fleetSession({ workspace: null }) })} />);
+    fireEvent.click(screen.getByRole('button', { name: 'More' }));
+    const ids = Array.from(document.querySelectorAll('.menu-item')).map((r) => r.getAttribute('data-command'));
+    expect(ids).toContain('open-terminal');
+    expect(ids).not.toContain('session-pr');
   });
 });

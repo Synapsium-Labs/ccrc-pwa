@@ -1,4 +1,6 @@
-// The door to /mail, and the feed's unread count.
+// The door to /mail, and the count of sessions waiting on the operator (`waitingOnYou`, T2d, D-6330). `null` is "not
+// heard yet" (before the first fleet frame): the door is named plainly "Mail", never "nothing waiting", which only a
+// measured 0 says.
 //
 // NOT a badge painted on the bell. `NotificationBell` is an aria-pressed toggle
 // for Web Push; a count on it would make one control report one fact and do an
@@ -9,25 +11,23 @@
 import type { ReactNode } from 'react';
 import { CountBadge, Icon } from '@ccrc/ui';
 import { navigate } from '../lib/router';
+import { badgePrint, INBOX_BADGE_UNIT } from './navBadges';
 import './fleet.css';
 
-/** Printed cap. The accessible name still carries the REAL number — a count a
- *  screen reader announces as "99 plus" when it is 412 is a different lie from
- *  a narrow chip. */
-const PRINT_CAP = 99;
-
-export function MailBadge({ unread }: { unread: number }): ReactNode {
+export function MailBadge({ waiting }: { waiting: number | null }): ReactNode {
+  const name = waiting === null ? 'Mail'
+    : waiting > 0 ? `Mail — ${waiting} ${INBOX_BADGE_UNIT}` : `Mail — nothing ${INBOX_BADGE_UNIT}`;
   return (
     <button
       type="button"
       className="mail-badge"
-      data-unread={unread > 0 ? 'true' : 'false'}
-      aria-label={unread > 0 ? `Mail — ${unread} unread` : 'Mail — nothing unread'}
+      data-unread={waiting !== null && waiting > 0 ? 'true' : 'false'}
+      aria-label={name}
       onClick={() => navigate('/mail')}
     >
       <span className="mail-badge-glyph" aria-hidden="true"><Icon name="mail" /></span>
-      {unread > 0 && (
-        <CountBadge className="mail-badge-count">{unread > PRINT_CAP ? `${PRINT_CAP}+` : unread}</CountBadge>
+      {waiting !== null && waiting > 0 && (
+        <CountBadge className="mail-badge-count">{badgePrint(waiting)}</CountBadge>
       )}
     </button>
   );

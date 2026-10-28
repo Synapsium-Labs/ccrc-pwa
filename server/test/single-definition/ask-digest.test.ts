@@ -377,15 +377,25 @@ describe('the ask push body is built once, in server/src/askbody.ts (D-5302)', (
     expect(holders(DEFINES)).toEqual(['server/src/askbody.ts']);
   });
 
-  it("watch.ts's ask raise sites call askPushBody, and no body there reads dialog.title", () => {
+  it("the ask raise sites (watch.ts and coord/questions.ts) call askPushBody, and no body there reads dialog.title", async () => {
     const watch = stallCode(path.join(ccrcRoot, 'server/src/watch.ts'));
+    // W3 Q3d (D-7028, named exception 2): the hold, its payload builder and the re-seed moved into
+    // `coord/questions.ts`, so the sites are counted over the two files together; the totals are today's. The moved
+    // text is read by symbol (`askHoldPayload`, `createQuestions`) and the import from the parse, never as a literal
+    // pin over the file (the literal-pin ratchet, `advance-switches.test.ts`).
+    const { parsedFile, sourceOfSymbol } = await import('../scan/symbols.js');
+    const QUESTIONS = path.join(ccrcRoot, 'server/src/coord/questions.ts');
+    const questions = ['askHoldPayload', 'createQuestions'].map((n) => stallCodeText(sourceOfSymbol(QUESTIONS, n))).join('\n');
+    const both = `${watch}\n${questions}`;
     expect(watch).toMatch(/import\s*\{[^}]*\baskPushBody\b[^}]*\}\s*from\s*'\.\/askbody\.js'/);
-    // Two since D-5925: the first raise, and `askHoldPayload`, the one builder of a held push. `hold()`, the approval
-    // hold (`tryHoldApproval`, plan Task 16) and the restart re-seed all build through it.
-    expect(watch.match(/body:\s*askPushBody\(/g) ?? []).toHaveLength(2);
-    expect(watch.match(/\bev\s*=\s*askHoldPayload\(/g) ?? []).toHaveLength(2);
-    expect(watch.match(/\bev:\s*askHoldPayload\(/g) ?? []).toHaveLength(2);
+    expect(parsedFile(QUESTIONS).imports.some((e) => e.specifier === '../askbody.js' && e.names.includes('askPushBody') && !e.typeOnly)).toBe(true);
+    // Two since D-5925: the first raise (watch.ts), and `askHoldPayload` (coord/questions.ts), the one builder of a held
+    // push. `hold()`, the approval hold (`holdApproval`, plan Task 16) and the restart re-seed all build through it.
+    expect(both.match(/body:\s*askPushBody\(/g) ?? []).toHaveLength(2);
+    expect(both.match(/\bev\s*=\s*askHoldPayload\(/g) ?? []).toHaveLength(2);
+    expect(both.match(/\bev:\s*askHoldPayload\(/g) ?? []).toHaveLength(2);
     expect(watch).not.toMatch(/body:\s*dialog\.title/);
+    expect(questions).not.toMatch(/body:\s*dialog\.title/);
   });
 
   // D-5356 (coordinator ruling `approval-push-body-tool-only-until-redactor`): until the redactor is applied where
@@ -401,43 +411,58 @@ describe('the ask push body is built once, in server/src/askbody.ts (D-5302)', (
 
 
 // D-5290 (plan docs/superpowers/plans/2026-10-17-coordinator-first-routing.md, Task 5; spec §5.2). APPENDED. ONE
-// `tryHold` decides every ask hold: it is defined once, in `server/src/watch.ts`; it is the only caller of `hold` (the
-// mint) and the watcher's only reader of `parentOfSession`, so no raise site can hold on its own checks; and the
-// first sighting, the deferred first raise and the amendment branch all call it. Its parent-live check reads the
-// dead-coordinator sweep's own predicate, `claimantMeasuredDead`, defined once in `server/src/coord/reclaim.ts` and
-// read by both. Code lines only (`stallCode`).
-describe('one tryHold decides every ask hold (D-5290)', () => {
+// `raise` decides every ask hold (it was `watch.ts#tryHold` until W3 Q3d, D-7028, moved it into the watcher's
+// `Questions` instance; named exception 2): it is defined once, in `server/src/coord/questions.ts`, inside
+// `createQuestions`; it is the only caller of `hold` (the mint) and the only reader of the claimant rule there, so no
+// raise site can hold on its own checks; and `watch.ts`'s first sighting, deferred first raise and amendment branch all
+// call it. Its parent-live check reads the dead-coordinator sweep's own predicate, `claimantMeasuredDead`, defined once
+// in `server/src/coord/reclaim.ts` and read by both. Code lines only (`stallCode`).
+describe('one raise decides every ask hold (D-5290)', () => {
   const holders = (re: RegExp): string[] => ALL.filter((f) => re.test(stallCode(f))).map(rel).sort();
-  const DEFINES_TRY = /\basync\s+tryHold\s*\(|\bfunction\s+tryHold\b|\btryHold\s*=\s*(?:async\s*)?\(/;
+  // The hold's `raise` is async (it awaits the claimant rule); `notice.ts`'s synchronous `function raise` is the notice
+  // funnel's own step, a different function, and the pattern passes over it.
+  const DEFINES_RAISE = /\bconst\s+raise\s*=\s*async\s*\(|\basync\s+raise\s*\(|\basync\s+function\s+raise\b/;
   const DEFINES_DEAD = /\bfunction\s+claimantMeasuredDead\b|\bclaimantMeasuredDead\s*=\s*\(/;
+  const MINT = /(?<![.\w])hold\(/g;
+  const QUESTIONS = path.join(ccrcRoot, 'server/src/coord/questions.ts');
 
-  it('CONTROL: the patterns see a definition and pass over a call and a comment line', () => {
-    expect(DEFINES_TRY.test('  private async tryHold(')).toBe(true);
-    expect(DEFINES_TRY.test('await this.tryHold(r, dialog, actions, recs)')).toBe(false);
+  it('CONTROL: the patterns see a definition and pass over a call, the immediate raise and a comment line', () => {
+    expect(DEFINES_RAISE.test('  const raise = async (')).toBe(true);
+    expect(DEFINES_RAISE.test('await this.questions.raise(r, dialog, hs, actions, recs)')).toBe(false);
+    expect(DEFINES_RAISE.test('const raise = (): void => {')).toBe(false);
+    expect(DEFINES_RAISE.test('async function raise(r) {')).toBe(true);
+    expect(DEFINES_RAISE.test('function raise(deps: NoticeDeps, event: NoticeRecord): NoticeOutcome {')).toBe(false);
     expect(DEFINES_DEAD.test('export function claimantMeasuredDead(v: ClaimantVerdict): boolean {')).toBe(true);
-    expect(stallCodeText('// private async tryHold(\nconst x = 1;')).not.toMatch(DEFINES_TRY);
+    expect(stallCodeText('// const raise = async (\nconst x = 1;')).not.toMatch(DEFINES_RAISE);
+    expect('const mint = hold(r, dialog);'.match(MINT) ?? []).toHaveLength(1);
+    expect('this.hold(r); holdApproval(r); const hold = (r) => r;'.match(MINT) ?? []).toHaveLength(0);
   });
 
-  it('tryHold is defined in server/src/watch.ts and nowhere else', () => {
-    expect(holders(DEFINES_TRY)).toEqual(['server/src/watch.ts']);
+  it('raise is defined in server/src/coord/questions.ts, inside createQuestions, and nowhere else', async () => {
+    expect(holders(DEFINES_RAISE)).toEqual(['server/src/coord/questions.ts']);
+    const { symbolOf } = await import('../scan/symbols.js');
+    expect(symbolOf(QUESTIONS, 'createQuestions.raise').kind).toBe('variable-function');
   });
 
-  it("watch.ts mints only inside tryHold, reads the child's run series only there, and calls it from all three raise paths", () => {
+  it("the mint runs only inside raise, which reads the claimant rule; no run-series read elsewhere; watch.ts calls it from all three raise paths", async () => {
+    // By symbol, never as a literal pin over the file (the literal-pin ratchet, `advance-switches.test.ts`).
+    const { parsedFile, symbolOf } = await import('../scan/symbols.js');
+    const raw = parsedFile(QUESTIONS).text;
+    const raise = symbolOf(QUESTIONS, 'createQuestions.raise');
+    const body = stallCodeText(raw.slice(raise.start, raise.end));
+    const rest = stallCodeText(raw.slice(0, raise.start) + raw.slice(raise.end));
     const watch = stallCode(path.join(ccrcRoot, 'server/src/watch.ts'));
-    const start = watch.search(/\basync\s+tryHold\s*\(/);
-    const end = watch.indexOf('\n  }\n', start);
-    expect(start).toBeGreaterThan(-1);
-    const body = watch.slice(start, end);
-    const rest = watch.slice(0, start) + watch.slice(end);
-    expect(body.match(/\bthis\.hold\(/g) ?? []).toHaveLength(1);
-    expect(rest).not.toMatch(/\bthis\.hold\(/);
+    expect(body.match(MINT) ?? []).toHaveLength(1);
+    expect(rest.match(MINT) ?? []).toHaveLength(0);
+    expect(watch).not.toMatch(/\bthis\.hold\(/);
     // D-5530 (plan Task 16): the claimant decision moved, whole, into `coord/heldFor.ts`, which the approvals mint
-    // reads too: `tryHold` calls it, and the watcher reads the child's run series (`bindingRunsOf`, which replaced
-    // `parentOfSession`: ARCH-62 slice 2) nowhere else. heldFor reads it through `bindingsOf(id).parent` (ARCH-42:
+    // reads too: `raise` calls it, and neither file reads the child's run series (`bindingRunsOf`, which replaced
+    // `parentOfSession`: ARCH-62 slice 2) anywhere else. heldFor reads it through `bindingsOf(id).parent` (ARCH-42:
     // `childParentRead`, bindingReads.ts, through the store's one query), the one parent read it shares with the drift lane.
     expect(body).toMatch(/\bheldFor\(/);
     expect(rest).not.toMatch(/\.bindingRunsOf\(/);
-    expect(rest.match(/\bthis\.tryHold\(/g) ?? []).toHaveLength(3);
+    expect(watch).not.toMatch(/\.bindingRunsOf\(/);
+    expect(watch.match(/\bthis\.questions\.raise\(/g) ?? []).toHaveLength(3);
     const heldForSrc = stallCode(path.join(ccrcRoot, 'server/src/coord/heldFor.ts'));
     expect(heldForSrc).toMatch(/\.bindingsOf\(childId\)\.parent\(/);
     expect(heldForSrc).toMatch(/\bclaimantMeasuredDead\(/);
@@ -544,20 +569,29 @@ describe('the ask window, its deadline and the untrusted-data fence are each def
   });
 
   // D-5925: the restart re-seed is the second reader, and it reads the deadline from the row's own mint time.
-  it('askNotifyAt is defined in server/src/askwindow.ts alone; the hold reads it once for both uses, the restart re-seed once from the row', () => {
+  // W3 Q3d (D-7028, named exception 2): the hold and the re-seed are `coord/questions.ts#createQuestions`'s members, so
+  // the two reads are counted in that factory's body; the file's read side (`askQuestion`, W3 Q3b) lifts a row with a
+  // third, outside it (slug q3d-notify-at-count). `watch.ts` reads it nowhere.
+  it('askNotifyAt is defined in server/src/askwindow.ts alone; the hold reads it once for both uses, the restart re-seed once from the row', async () => {
     expect(holders(defines('askNotifyAt'))).toEqual(['server/src/askwindow.ts']);
+    const { sourceOfSymbol } = await import('../scan/symbols.js');
+    const questions = stallCodeText(sourceOfSymbol(path.join(ccrcRoot, 'server/src/coord/questions.ts'), 'createQuestions'));
     const watch = stallCode(path.join(ccrcRoot, 'server/src/watch.ts'));
-    expect(watch.match(/\baskNotifyAt\(/g) ?? []).toHaveLength(2);
-    expect(watch).toMatch(/renderAskBrief\([^)]*\buntil\)/);
-    expect(watch).toMatch(/return \{ until, askId,/);
-    expect(watch).toMatch(/until: askNotifyAt\(row\.at\)/);
+    expect(questions.match(/\baskNotifyAt\(/g) ?? []).toHaveLength(2);
+    expect(watch).not.toMatch(/\baskNotifyAt\(/);
+    expect(questions).toMatch(/renderAskBrief\([^)]*\buntil\)/);
+    expect(questions).toMatch(/return \{ until, askId,/);
+    expect(questions).toMatch(/until: askNotifyAt\(row\.at\)/);
   });
 
-  it('untrustedBlock and its preface live in server/src/coord/untrusted.ts alone, and the brief calls it', () => {
+  it('untrustedBlock and its preface live in server/src/coord/untrusted.ts alone, and the brief calls it', async () => {
     expect(holders(defines('untrustedBlock'))).toEqual(['server/src/coord/untrusted.ts']);
     expect(holders(/untrusted data written by a model/)).toEqual(['server/src/coord/untrusted.ts']);
-    const watch = stallCode(path.join(ccrcRoot, 'server/src/watch.ts'));
-    expect(watch).toMatch(/\buntrustedBlock\(asked, UNTRUSTED_CAP_BYTES,/);
+    // W3 Q3d (D-7028, named exception 2): the ask brief (`renderAskBrief`) moved with the hold into coord/questions.ts,
+    // read here by symbol (the literal-pin ratchet, `advance-switches.test.ts`).
+    const { sourceOfSymbol } = await import('../scan/symbols.js');
+    const brief = stallCodeText(sourceOfSymbol(path.join(ccrcRoot, 'server/src/coord/questions.ts'), 'renderAskBrief'));
+    expect(brief).toMatch(/\buntrustedBlock\(asked, UNTRUSTED_CAP_BYTES,/);
   });
 });
 
@@ -1005,9 +1039,10 @@ describe('the approvals server half\'s vocabulary and windows each have one home
   });
   it('the one claimant decision lives in coord/heldFor.ts, and the hold and the mint both read it', () => {
     expect(holders(decl('heldFor'))).toEqual(['server/src/coord/heldFor.ts']);
-    // The raise ladder's call moved into `coord/questions.ts` (`raiseApproval`, D-7029; W3 Q3e, named exception 2); the
-    // rule handler's call keeps `coord/routes.ts` in the list until Q3f.
-    expect(holders(/\bheldFor\(/)).toEqual(['server/src/coord/heldFor.ts', 'server/src/coord/questions.ts', 'server/src/coord/routes.ts', 'server/src/watch.ts']);
+    // The raise ladder's call moved into `coord/questions.ts` (`raiseApproval`, D-7029; W3 Q3e, named exception 2), and
+    // so did the hold's (`raise`, D-7028; W3 Q3d, named exception 2), so `watch.ts` leaves the list; the rule handler's
+    // call keeps `coord/routes.ts` in it until Q3f.
+    expect(holders(/\bheldFor\(/)).toEqual(['server/src/coord/heldFor.ts', 'server/src/coord/questions.ts', 'server/src/coord/routes.ts']);
   });
   it('the 60 000 ms window is spelled nowhere but its home', () => {
     expect(holders(/\b60_000\b[^\n]*(?:approval|countdown)|(?:approval|countdown)[^\n]*\b60_000\b/i)).toEqual(['server/src/askwindow.ts']);
@@ -1417,14 +1452,20 @@ describe('one question sweep (D-7027)', () => {
     expect(stallCodeText(sourceOfSymbol(WATCH, 'FleetWatcher.sweepApprovals'))).not.toMatch(/\bawait\b/);
   });
 
+  // W3 Q3d (D-7028; named exception 2, slug q3d-walk-pin): the acts moved behind the watcher's `Questions` instance, so
+  // the walk's last step is the member `askPass` and `sweepApprovals` call (`coord/questions.ts#createQuestions`'s
+  // `lapseAsks` and `lapseApprovals`), whose bodies hold the store calls.
   it('the walk is real: sweepQuestions dispatches both halves, which reach releaseAsk and lapseApproval', async () => {
     const { sourceOfSymbol } = await import('../scan/symbols.js');
     const code = (name: string): string => stallCodeText(sourceOfSymbol(WATCH, `FleetWatcher.${name}`));
+    const member = (name: string): string => stallCodeText(sourceOfSymbol(path.join(ccrcRoot, 'server/src/coord/questions.ts'), `createQuestions.${name}`));
     expect(code('sweepQuestions')).toMatch(/\bthis\.sweepAsks\(\s*registryRead\s*\)/);
     expect(code('sweepQuestions')).toMatch(/\bthis\.sweepApprovals\(\s*\)/);
     expect(code('sweepAsks')).toMatch(/\bthis\.askPass\(/);
-    expect(code('askPass')).toMatch(/\bstore\.releaseAsk\(/);
-    expect(code('sweepApprovals')).toMatch(/\bcoord\.lapseApproval\(/);
+    expect(code('askPass')).toMatch(/\bthis\.questions\.lapseAsks\(/);
+    expect(member('lapseAsks')).toMatch(/\bstore\.releaseAsk\(/);
+    expect(code('sweepApprovals')).toMatch(/\bthis\.questions\.lapseApprovals\(/);
+    expect(member('lapseApprovals')).toMatch(/\bcoord\.lapseApproval\(/);
   });
 
   it('MUTATION: a second sweep tick calls is counted; an async or awaiting sweepQuestions is seen', async () => {
@@ -1457,5 +1498,48 @@ describe('one question sweep (D-7027)', () => {
     expect(synchronous('async sweepQuestions(r: X): Promise<void> {\n  void this.sweepAsks(r);\n}')).toBe(false);
     expect(synchronous('sweepQuestions(r: X): void {\n  void (async () => { await this.sweepAsks(r); })();\n}')).toBe(false);
     expect(synchronous('sweepQuestions(r: X): void {\n  // no await here\n  void this.sweepAsks(r);\n}')).toBe(true);
+  });
+});
+
+// W3 Task Q3d (D-7028; OA-C6 ruled (a), 2026-10-26). APPENDED, as the blocks above. watch.ts holds no question state:
+// `census-w3/questions.ts#questionHoldCarriers` reports no carrier whose owner is `FleetWatcher` (4 maps and 2 flags at
+// Q3d's base) and none at module scope, and `questionDoorIns` reaches no watcher map (4 door-ins at the base, thin
+// forwards now). Both may only shrink, and both are at 0. The module's one carrier is found where it lives. A MUTATION
+// row plants each shape back so the pins are seen to red.
+describe('watch.ts holds no question state (D-7028)', () => {
+  it('watch.ts holds no question state: no hold carrier is a FleetWatcher field or module scope; the one carrier is createQuestions\'s', async () => {
+    const { questionHoldCarriers } = await import('../census-w3/questions.js');
+    const carriers = questionHoldCarriers();
+    expect(carriers.filter((c) => c.owner === 'FleetWatcher').map((c) => c.name), 'a question carrier in FleetWatcher').toEqual([]);
+    expect(carriers.filter((c) => c.owner === 'module scope').map((c) => c.name), 'a question carrier at module scope').toEqual([]);
+    expect(carriers.filter((c) => c.owner === 'createQuestions').map((c) => c.name)).toContain('questionHolds');
+  });
+
+  it('no watcher door-in touches question state: the four are forwards', async () => {
+    const { questionDoorIns } = await import('../census-w3/questions.js');
+    expect(questionDoorIns().map((d) => d.method)).toEqual([]);
+  });
+
+  it('MUTATION: a question Map field back in FleetWatcher, a carrier at the module\'s top, and a door-in reading a watcher map are seen', async () => {
+    const { mkdtempSync, mkdirSync, writeFileSync, rmSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { questionDoorIns, questionHoldCarriers } = await import('../census-w3/questions.js');
+    const t = mkdtempSync(path.join(tmpdir(), 'ccrc-no-watcher-state-'));
+    try {
+      mkdirSync(path.join(t, 'server/src/coord'), { recursive: true });
+      writeFileSync(path.join(t, 'server/src/watch.ts'), [
+        'export class FleetWatcher {',
+        '  private heldAsks = new Map<string, number>();',
+        '  releaseHeldAsk(id: string): void { this.heldAsks.delete(id); }',
+        '}',
+      ].join('\n'));
+      writeFileSync(path.join(t, 'server/src/coord/questions.ts'), 'const questionHolds = new Map();\nexport function createQuestions() { return {}; }\n');
+      writeFileSync(path.join(t, 'server/src/coord/routes.ts'),
+        "export function registerCoordRoutes(app: App, deps: Deps): void {\n  app.post('/api/asks/:id/release', async () => { deps.watcher?.releaseHeldAsk('x'); });\n}\n");
+      const carriers = questionHoldCarriers(t);
+      expect(carriers.filter((c) => c.owner === 'FleetWatcher').map((c) => c.name)).toEqual(['heldAsks']);
+      expect(carriers.filter((c) => c.owner === 'module scope').map((c) => c.name)).toEqual(['questionHolds']);
+      expect(questionDoorIns(t).map((d) => d.method)).toEqual(['releaseHeldAsk']);
+    } finally { rmSync(t, { recursive: true, force: true }); }
   });
 });

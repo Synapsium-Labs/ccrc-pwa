@@ -1098,6 +1098,7 @@ describe("stopDoneSweep.ts's row (stopDonePass → recordFeed): recorded always,
       rowAtAct: async () => ({ ok: true, row: row as never }),
       serial: async (fn) => fn(),
       queueRun: async (_id, fn) => fn(),
+      listing: async () => [],
       startedAt: NOW - PRESENCE_OPEN_TTL_MS - 60_000,
       now: () => NOW,
     };

@@ -11,8 +11,9 @@ import { act, cleanup, fireEvent, render, screen, within } from '@testing-librar
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { INSTRUMENT, REFINED, toast } from '@ccrc/ui';
-import type { AccountUsage, NotifyEvent, RunSummary } from '../../shared/api';
+import type { AccountUsage, RunSummary } from '../../shared/api';
 import { fleetSession } from './fleetFixture';
+import { seventeenLanes } from './seventeenLanes';
 import { pageAt, treeOk, treeResponse } from './docsFixtures';
 import type { DocsVisit } from '../src/docs/useDocsVisit';
 
@@ -28,7 +29,6 @@ const { App } = await import('../src/app');
 const { navigate } = await import('../src/lib/router');
 const { setSkin } = await import('../src/lib/skin');
 const { useFleetStore } = await import('../src/stores/fleet');
-const { ack, FEED_ACK_KEY } = await import('../src/lib/seen');
 const { fleetSummary } = await import('../src/fleet/fleetSummary');
 const { api } = await import('../src/lib/api');
 const { DocsHead } = await import('../src/docs/DocsHead');
@@ -72,7 +72,7 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
   act(() => { navigate('/'); });
-  act(() => useFleetStore.setState({ sessions: [], conn: 'connecting', notices: [], feed: [], runs: [], runsFrameSeen: false }));
+  act(() => useFleetStore.setState({ sessions: [], conn: 'connecting', notices: [], feed: [], runs: [], runsFrameSeen: false, fleetFrameSeen: false }));
   setSkin(REFINED);
 });
 
@@ -109,22 +109,23 @@ describe("Refined's phone header (W2 Task S5)", () => {
   });
 
   it("a badged door's name carries its count", () => {
-    const stamp = Date.now();
-    act(() => { ack(FEED_ACK_KEY, stamp); });
-    const feed: NotifyEvent[] = [
-      { seq: 1, at: stamp - 60_000, kind: 'mail', sessionId: 'x', title: 'read already', body: '', runId: null },
-      { seq: 2, at: stamp + 60_000, kind: 'mail', sessionId: 'x', title: 'unread', body: '', runId: null },
-      { seq: 3, at: stamp + 60_001, kind: 'mail', sessionId: 'x', title: 'unread too', body: '', runId: null },
+    // Only what waits on the operator is counted (T2d, D-6330): two sessions ask, and one run's worker is one of them.
+    const sessions = [
+      fleetSession({ id: 'ask-a', bucket: 'attention' }),
+      fleetSession({ id: 'ask-b', bucket: 'attention' }),
+      fleetSession({ id: 'calm', bucket: 'idle' }),
     ];
-    const open = { id: 1, program: 'p', state: 'working', closedAt: null } as unknown as RunSummary;
+    const run = (id: number, sessionId: string): RunSummary =>
+      ({ id, program: 'p', state: 'working', closedAt: null, sessionId, claimedBy: 'calm' }) as unknown as RunSummary;
     atWidth(390);
     render(<App />);
-    act(() => useFleetStore.setState({ conn: 'open', feed, runs: [open], runsFrameSeen: true }));
+    act(() => useFleetStore.setState({ conn: 'open', sessions, fleetFrameSeen: true, runs: [run(1, 'ask-a'), run(2, 'calm')], runsFrameSeen: true }));
     const h = head();
-    expect(within(h).getByRole('button', { name: 'Inbox, 2 unread' })).toHaveAttribute('data-command', 'go-inbox');
-    expect(within(h).getByRole('button', { name: 'Runs, 1 active' })).toHaveAttribute('data-command', 'go-runs');
-    act(() => useFleetStore.setState({ feed: [] }));
+    expect(within(h).getByRole('button', { name: 'Inbox, 2 waiting for you' })).toHaveAttribute('data-command', 'go-inbox');
+    expect(within(h).getByRole('button', { name: 'Runs, 1 needs you' })).toHaveAttribute('data-command', 'go-runs');
+    act(() => useFleetStore.setState({ sessions: [fleetSession({ id: 'calm', bucket: 'idle' })] }));
     expect(within(h).getByRole('button', { name: 'Inbox' })).toBeInTheDocument();
+    expect(within(h).getByRole('button', { name: 'Runs' })).toBeInTheDocument();
   });
 
   it("the subtitle is `fleetSummary`'s readout", () => {
@@ -214,6 +215,45 @@ describe("Refined's phone header (W2 Task S5)", () => {
     fireEvent.click(all);
     expect(location.pathname).toBe('/accounts');
     expect(location.search).toBe('');
+  });
+
+  // The strip folds at every width (S5b, D-6530): four cards on a phone, whatever its width, and the control's words say
+  // what the fold hides that needs the operator.
+  const stubSeventeen = (): void => {
+    const f = seventeenLanes(nowSec);
+    vi.spyOn(api, 'accounts').mockResolvedValue({ accounts: f.accounts, projected: { wrapper: 'w0', score: 0 }, roster: f.roster });
+  };
+  const cardNames = (strip: HTMLElement): string[] =>
+    [...strip.querySelectorAll<HTMLElement>('.account-gauge')].map((c) => c.querySelector('.account-gauge-label')?.textContent ?? '');
+
+  it("at 390 with 17 lanes the phone header shows four cards and '+13 more · 1 sign-in expired · 1 rate-limited'", async () => {
+    stubSeventeen();
+    atWidth(390);
+    render(<App />);
+    const strip = await within(head()).findByRole('group', { name: /^account usage, highest lane-q 100%/ });
+    await within(strip).findByText('lane-a');
+    expect(cardNames(strip)).toEqual(['lane-a', 'lane-f', 'lane-with-a-very-long-name-q', 'lane-e']);
+    const more = within(strip).getByRole('button', { name: '+13 more · 1 sign-in expired · 1 rate-limited' });
+    expect(more).toHaveAttribute('aria-expanded', 'false');
+    // The end cell holds the control, then All accounts: still one strip on the page.
+    expect(more.closest('.accounts-end')!.lastElementChild).toBe(within(strip).getByRole('button', { name: 'All accounts' }));
+    expect(document.querySelectorAll('.accounts-strip')).toHaveLength(1);
+  });
+
+  it('the choice to expand is remembered across a remount', async () => {
+    stubSeventeen();
+    atWidth(390);
+    const first = render(<App />);
+    const strip = await within(head()).findByRole('group', { name: /^account usage/ });
+    await within(strip).findByText('lane-a');
+    fireEvent.click(within(strip).getByRole('button', { name: /^\+13 more/ }));
+    expect(cardNames(strip)).toHaveLength(17);
+    first.unmount();
+    render(<App />);
+    const again = await within(head()).findByRole('group', { name: /^account usage/ });
+    await within(again).findByText('lane-a');
+    expect(cardNames(again)).toHaveLength(17);
+    expect(within(again).getByRole('button', { name: 'Show fewer' })).toHaveAttribute('aria-expanded', 'true');
   });
 
   it('Refined renders neither FleetHead nor `.fab`; Instrument still renders both', () => {

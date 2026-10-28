@@ -6,13 +6,13 @@
 // EVERY CONTROL IS A DOOR (the plan's door table): each tab, search, Settings and New session is built
 // with `commandDoor(id)`, so the bar and the palette run the same command with the same context. A tab's place comes
 // from `ROUTES` (its title, and whether it is current), never from a path written here. Its badge comes from the one
-// function the fleet's own door reads (`useNavBadges`), and a badged tab says its count in its name ("Inbox, 3
-// unread"). This file holds markup and its own class names only.
+// function the fleet's own door reads (`useNavBadges`), and a badged tab says its count in its name ("Inbox, 2 waiting
+// for you"). This file holds markup and its own class names only.
 import type { ReactNode } from 'react';
 import { Button, CountBadge, Door, Icon, Wordmark } from '@ccrc/ui';
 import { commandDoor } from '../../command/door';
 import { AccountsStrip } from '../../fleet/AccountsStrip';
-import { useNavBadges } from '../../fleet/navBadges';
+import { badgePrint, INBOX_BADGE_UNIT, RUNS_BADGE_UNIT, useNavBadges } from '../../fleet/navBadges';
 import { NotificationBell } from '../../fleet/NotificationBell';
 import { useLocation } from '../../lib/router';
 import { matchRoute, ROUTES } from '../../lib/routes';
@@ -20,9 +20,6 @@ import { matchRoute, ROUTES } from '../../lib/routes';
 /** The bar's places, in its order (spec §5.3): each is a `ROUTES` id. */
 export const TAB_IDS = ['fleet', 'inbox', 'runs', 'accounts', 'docs'] as const;
 type TabId = (typeof TAB_IDS)[number];
-
-/** A badge's printed cap; the accessible name carries the real number. */
-const PRINT_CAP = 99;
 
 function Tab({ id, here, count, word }: { id: TabId; here: boolean; count: number; word: string }): ReactNode {
   const route = ROUTES.find((r) => r.id === id)!;
@@ -35,7 +32,7 @@ function Tab({ id, here, count, word }: { id: TabId; here: boolean; count: numbe
       className="ref-tab font-ui text-ui font-medium aria-[current=page]:text-ink-primary"
     >
       {route.title}
-      {count > 0 && <CountBadge>{count > PRINT_CAP ? `${PRINT_CAP}+` : count}</CountBadge>}
+      {count > 0 && <CountBadge>{badgePrint(count)}</CountBadge>}
     </Door>
   );
 }
@@ -43,9 +40,9 @@ function Tab({ id, here, count, word }: { id: TabId; here: boolean; count: numbe
 export function AppBar(): ReactNode {
   const { path } = useLocation();
   const here = matchRoute(path)?.route.id ?? null;
-  const { unreadMail, openRuns } = useNavBadges();
+  const { waiting, runsNeedYou } = useNavBadges();
   const badge = (id: TabId): { count: number; word: string } =>
-    id === 'inbox' ? { count: unreadMail, word: 'unread' } : id === 'runs' ? { count: openRuns ?? 0, word: 'active' } : { count: 0, word: '' };
+    id === 'inbox' ? { count: waiting ?? 0, word: INBOX_BADGE_UNIT } : id === 'runs' ? { count: runsNeedYou ?? 0, word: RUNS_BADGE_UNIT } : { count: 0, word: '' };
   return (
     <>
       <div className="ref-bar">

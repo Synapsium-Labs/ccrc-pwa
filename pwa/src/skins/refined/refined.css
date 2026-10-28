@@ -52,6 +52,26 @@
   }
 }
 
+/* Desktop polish T3c (D-6333): the header names the session. The project is a small crumb above the title (the shared
+   header draws it before the title, on the one line); the title row stays beside the doors. Layout and type only: the
+   crumb's ink is `.chat-crumb`'s. */
+.ref-session-crumb {
+  display: block;
+  font-size: var(--fs-2xs);
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+/* Nothing in the phone rail is cut: its chips are whole and the rail scrolls to them. The shared rules cap a chip, and
+   the coordinator's status line, at the row's width (they wrap there); in a row that scrolls, a capped box would
+   leave its text overflowing it and the next chip painted over that text. */
+@media (max-width: 899px) {
+  .chat-head .ref-chip-rail .metachip,
+  .chat-head .ref-chip-rail .status-line--coordinator,
+  .chat-head .ref-chip-rail .status-line-name {
+    max-width: none;
+  }
+}
+
 /* W2 Task S13b (D-5475): the grouped tool row, one line for a run of tool entries. Layout and type only: the row
    paints no ground and declares no colour, so its sentence and count take the chat column's own ink and nothing here
    is a new contrast identity. The line is cut, never wrapped, so the row is one fixed height (`itemHeight.ts`'s
