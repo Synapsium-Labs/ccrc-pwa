@@ -147,8 +147,10 @@ const CENSUS: readonly Row[] = [
       + '"coordinator gone"' },
   { source: 'presence-reader', file: 'pwa/src/fleet/orphanWords.ts', hits: 1, stances: ['consults'],
     why: 'that read: `coordinatorPresence` (D-7181) spells the server\'s `asleep` `hibernated`, never `dead`' },
-  { source: 'dead-compare', file: 'pwa/src/screens/RunRow.tsx', hits: 1, stances: ['consults'], via: 'pwa/src/fleet/coordWords.ts',
-    why: 'the Resume button reads `coordPresence`, which answers a sleeper `hibernated`, never `dead`' },
+  { source: 'dead-compare', file: 'pwa/src/screens/RunRow.tsx', hits: 1, stances: ['consults'], via: 'pwa/src/fleet/presence.ts',
+    why: 'the Resume button reads `coordinatorPresence` (D-7181), which answers a sleeper `hibernated`, never `dead`' },
+  { source: 'presence-reader', file: 'pwa/src/screens/RunRow.tsx', hits: 1, stances: ['consults'], via: 'pwa/src/fleet/presence.ts',
+    why: 'that read: the server\'s `asleep`, spelled `hibernated`, opens no Resume door' },
   { source: 'stopped-compare', file: 'pwa/src/fleet/lifecycleWords.ts', hits: 1, stances: ['consults'], via: 'pwa/src/fleet/sessionFacts.ts',
     why: '`lifecycleQualifier` words a stopped row "stopped by …"; `sessionFacts`, its one reader (D-5545), skips it '
       + 'on a sleeper and reads `hibernated · 6h`' },
