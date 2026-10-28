@@ -11,8 +11,10 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { mkTmp } from './tmpHelpers.js';
+import { platformContrast } from './platformFixtures.js';
 
 const HOOK = path.resolve(__dirname, '../../ccd/session-hook.sh');
+const CCRC_TEST = path.resolve(__dirname, '../../ccd/ccrc-test');
 const GENERATION = '0189abcd-1234-5678-9abc-0123456789ab';
 const TOP = 'project-a-calm-mesa';
 const CWD = '/srv/work/project-a';
@@ -26,6 +28,8 @@ beforeAll(() => {
   const bin = path.join(home, 'bin');
   fs.mkdirSync(bin, { recursive: true });
   fs.writeFileSync(path.join(bin, 'tmux'), '#!/bin/sh\nprintf "cc-%s\\n" "${TMUX_PANE#%}"\n', { mode: 0o755 });
+  // `ccrc test` is the real wrapper: the arm asks its classifier, the one ccrc has.
+  fs.writeFileSync(path.join(bin, 'ccrc'), `#!/bin/sh\n[ "$1" = test ] || exit 2\nshift\nexec bash '${CCRC_TEST}' "$@"\n`, { mode: 0o755 });
 });
 afterAll(() => { fs.rmSync(home, { recursive: true, force: true }); });
 
@@ -57,6 +61,7 @@ describe('the test-route arm denies a test or typecheck under a systemd-run of i
     'systemd-run --user --scope npx playwright test',
     'systemd-run --user --scope npm run typecheck-tests',
     'true; systemd-run --user --scope npx stryker run',
+    'S=systemd-run; $S --user --scope npx vitest run',
   ])('%s is denied, with a reason that names ccrc test', (cmd) => {
     const why = bash(cmd);
     expect(why).toMatch(/run tests and typechecks through `ccrc test -- <command>`/);
@@ -78,6 +83,43 @@ describe('the test-route arm allows what is not a hand-placed test run (D-TBD-te
   it('a non-Bash tool naming systemd-run and vitest is allowed', () => {
     const out = run(JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: 'Read', tool_input: { file_path: '/x/systemd-run vitest' }, cwd: CWD }));
     expect(out).not.toMatch(/ccrc test/);
+  });
+});
+
+// A heavy test or typecheck started in command position outside `ccrc test` runs in the session's own pane scope, past
+// the slice and the queue. On a fleet box (Linux, a registered session) the arm denies it; macOS has no slice to send
+// it to, so it is allowed there.
+const BARE_HEAVY = [
+  'npx vitest run',
+  'cd server && npx tsc --noEmit -p test/tsconfig.tests.json',
+  'npm test',
+  'env -u GIT_DIR npx vitest run --maxWorkers=2 test/',
+  "tmux new-window 'npx vitest run'",
+  "bash -c 'npm run typecheck'",
+];
+platformContrast('a bare heavy test run', {
+  darwin: ['is allowed: no slice to send it to', () => {
+    for (const cmd of BARE_HEAVY) expect(bash(cmd), cmd).toBeNull();
+  }],
+  linux: ['is denied, with a reason that names ccrc test', () => {
+    for (const cmd of BARE_HEAVY) {
+      const why = bash(cmd);
+      expect(why, cmd).toMatch(/starts a heavy test or typecheck outside `ccrc test`/);
+      expect(why, cmd).toContain('ccrc test -- <command>');
+    }
+  }],
+});
+
+describe('the bare-heavy arm leaves light and contained runs alone (D-TBD-test-containment)', () => {
+  it.each([
+    'ccrc test -- npx vitest run',
+    'cd server && ccrc test -- npx tsc --noEmit -p test/tsconfig.tests.json',
+    'npx vitest run --maxWorkers=2 test/foo.test.ts',
+    'grep -rn vitest server/test',
+    "git commit -m 'npx vitest run'",
+    'npm run build',
+  ])('%s is allowed', (cmd) => {
+    expect(bash(cmd)).toBeNull();
   });
 });
 

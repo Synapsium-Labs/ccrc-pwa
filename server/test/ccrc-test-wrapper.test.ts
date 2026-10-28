@@ -12,7 +12,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkTmp, removeTmpFixturesEachTest } from './tmpHelpers.js';
-import { itDarwin, itLinux, IS_DARWIN } from './platformFixtures.js';
+import { itDarwin, itLinux, IS_DARWIN, platformContrast } from './platformFixtures.js';
 
 removeTmpFixturesEachTest();
 
@@ -33,6 +33,10 @@ if [ "$1" = --user ] && [ "$2" = show ]; then
   fi
   [ -f "$HOME/fixture-slice-show" ] && cat "$HOME/fixture-slice-show"; exit 0
 fi
+if [ "$1" = --user ] && [ "$2" = stop ]; then
+  # A scope's stop ends every process in it: the stub ends every pid its systemd-run stub filed for that unit.
+  u="\${3%.scope}"; [ -f "$HOME/$u.pids" ] && while read -r p; do kill -KILL "$p" 2>/dev/null; done < "$HOME/$u.pids"; exit 0
+fi
 if [ "$1" = --user ] && [ "$2" = set-property ]; then
   [ -f "$HOME/fixture-setprop-rc" ] && exit "$(cat "$HOME/fixture-setprop-rc")"; exit 0
 fi
@@ -40,6 +44,7 @@ exit 0
 `;
 const SYSTEMD_RUN = `#!/bin/sh
 printf '%s\\n' "$*" >> "$HOME/systemd-run.log"
+for a in "$@"; do case "$a" in --unit=*) echo $$ >> "$HOME/\${a#--unit=}.pids" ;; --) break ;; esac; done
 while [ $# -gt 0 ] && [ "$1" != -- ]; do shift; done
 shift
 exec "$@"
@@ -79,6 +84,8 @@ async function until(what: string, p: () => boolean, ms = 15000): Promise<void> 
     await new Promise((r) => setTimeout(r, 50));
   }
 }
+const alive = (pid: number): boolean => { try { process.kill(pid, 0); return true; } catch { return false; } };
+const pidsOf = (b: Box, file: string): number[] => log(b, file).split('\n').filter(Boolean).map(Number);
 const started = (b: Box, tag: string) => existsSync(path.join(b.home, `started-${tag}`));
 const release = (b: Box, tag: string) => writeFileSync(path.join(b.home, `release-${tag}`), '');
 
@@ -206,8 +213,66 @@ describe('ccrc test: heavy or light (D-TBD-test-containment)', () => {
     ['npx stryker run', 'heavy'],
     ['npm run build', 'light'],
     ['git status', 'light'],
+    // A flag's value is not a test file, and only a named test file counts toward the wide line: a directory, a glob
+    // or a name filter is wide.
+    ['npx vitest run --config vitest.config.ts', 'heavy'],
+    ['npx vitest run -c vitest.config.mts', 'heavy'],
+    ['npx vitest run --config vitest.config.ts test/foo.test.ts', 'light'],
+    ['npx vitest run --project server -t name test/foo.test.ts', 'light'],
+    ['npx vitest run server/test', 'heavy'],
+    ['npx vitest run test/', 'heavy'],
+    ['npx vitest run test/*.test.ts', 'heavy'],
+    ['npx vitest run foo', 'heavy'],
+    ['npx vitest run test/foo.spec.ts', 'light'],
+    ['npx vitest run --browser test/foo.test.ts', 'heavy'],
+    ['node node_modules/vitest/vitest.mjs run', 'heavy'],
+    ['node node_modules/jest/bin/jest.js', 'heavy'],
+    ['npm t', 'heavy'],
+    ['npm run t', 'heavy'],
+    ['npm --prefix server test', 'heavy'],
+    ['yarn test:unit', 'heavy'],
+    ['pnpm t', 'heavy'],
+    ['npm install -D vitest', 'light'],
+    ['npx playwright install chromium', 'light'],
+    ['env -u GIT_DIR npx vitest run', 'heavy'],
+    ['timeout 600 npx tsc --noEmit', 'heavy'],
   ])('%s is %s', (cmd, want) => {
     expect(run(box(), ['--classify', '--', ...cmd.split(' ')]).stdout.trim()).toBe(want);
+  });
+  // A shell's -c string is read as a script: each simple command in it, in command position.
+  it.each([
+    [['sh', '-c', 'npx vitest run'], 'heavy'],
+    [['bash', '-c', 'cd server && npx tsc --noEmit -p test/tsconfig.tests.json'], 'heavy'],
+    [['bash', '-lc', 'env -u GIT_DIR npx vitest run --maxWorkers=2 test/'], 'heavy'],
+    [['sh', '-c', 'npx vitest run test/foo.test.ts; echo done'], 'light'],
+    [['sh', '-c', 'echo "npx vitest run" > notes.txt'], 'light'],
+    [['sh', '-c', "git commit -m 'typecheck the tests'"], 'light'],
+  ])('%j is %s', (argv, want) => {
+    expect(run(box(), ['--classify', '--', ...argv]).stdout.trim()).toBe(want);
+  });
+  // --classify-shell reads a whole Bash command line, as the session hook hands it over: heavy when a simple command in
+  // it starts a heavy test or typecheck in command position outside `ccrc test`.
+  it.each([
+    ['npx vitest run', 'heavy'],
+    ['cd server && npx tsc --noEmit -p test/tsconfig.tests.json', 'heavy'],
+    ['npm test 2>&1 | tail -5', 'heavy'],
+    ['env -u GIT_DIR -u GIT_WORK_TREE npx vitest run --maxWorkers=2', 'heavy'],
+    ["tmux new-window 'npx vitest run'", 'heavy'],
+    ['S=systemd-run; $S --user --scope npx vitest run', 'heavy'],
+    ['(cd server; npm run typecheck)', 'heavy'],
+    ['echo $(npx tsc --noEmit)', 'heavy'],
+    ['ccrc test -- npx vitest run', 'light'],
+    ['cd server && ccrc test -- npx tsc --noEmit -p test/tsconfig.tests.json', 'light'],
+    ['npx vitest run --maxWorkers=2 test/foo.test.ts', 'light'],
+    ['grep -rn vitest server/test', 'light'],
+    ["git commit -m 'npx vitest run; npm test'", 'light'],
+    ['cat README.md # npx tsc', 'light'],
+    ['npm run build > build.log 2>&1', 'light'],
+  ])('--classify-shell %s is %s', (line, want) => {
+    expect(run(box(), ['--classify-shell', '--', line]).stdout.trim()).toBe(want);
+  });
+  it('--classify-shell takes exactly one string', () => {
+    expect(run(box(), ['--classify-shell', '--', 'npx', 'tsc']).status).toBe(2);
   });
   it('CCRC_TEST_WIDE_FILES moves the wide line', () => {
     expect(run(box(), ['--classify', '--', 'vitest', 'run', 'a.test.ts', 'b.test.ts'], { CCRC_TEST_WIDE_FILES: '1' }).stdout.trim()).toBe('heavy');
@@ -250,18 +315,60 @@ describe('ccrc test: the admission queue (D-TBD-test-containment)', () => {
     expect(run(b, ['--status']).stdout).toContain('heavy slots 0 of 2 held, 0 waiting');
   });
 
-  itQueue('a killed holder frees its slot', async () => {
-    const b = box({ CCRC_TEST_HEAVY_SLOTS: '1' });
-    slice(b);
-    const a = hold(b, 'a');
-    await until('the holder to start', () => started(b, 'a'));
-    const w = hold(b, 'w');
-    await until('the second to queue', () => w.stderr().includes('queued'));
-    a.proc.kill('SIGKILL');
-    await a.exit;
-    await until('the waiter to take the freed slot', () => started(b, 'w'));
-    release(b, 'a'); release(b, 'w');
-    expect(await w.exit).toBe(0);
+  platformContrast('a holder killed by SIGKILL', {
+    // No cgroup holds an uncontained run's tree, so its slot can only follow the wrapper.
+    darwin: ['uncontained, its slot follows the wrapper and frees at once', async () => {
+      if (!HAS_FLOCK) return;
+      const b = box({ CCRC_TEST_HEAVY_SLOTS: '1' });
+      const a = hold(b, 'a');
+      await until('the holder to start', () => started(b, 'a'));
+      const w = hold(b, 'w');
+      await until('the second to queue', () => w.stderr().includes('queued'));
+      a.proc.kill('SIGKILL');
+      await a.exit;
+      await until('the waiter to take the freed slot', () => started(b, 'w'));
+      release(b, 'a'); release(b, 'w');
+      expect(await w.exit).toBe(0);
+    }],
+    // The slot is the run's: the command holds the lock, so a killed wrapper's run is still counted, and the next
+    // waiter stops that orphaned run's scope before it takes the slot. Two heavy runs are never live under one slot.
+    linux: ['its run keeps the slot until a waiter stops the orphaned scope', async () => {
+      if (!HAS_FLOCK) return;
+      const b = box({ CCRC_TEST_HEAVY_SLOTS: '1' });
+      slice(b);
+      const a = hold(b, 'a');
+      await until('the holder to start', () => started(b, 'a'));
+      const apid = a.proc.pid!;
+      const [cmd] = pidsOf(b, `ccrc-test-${apid}.pids`);
+      expect(cmd, 'the run\'s command pid').toBeGreaterThan(0);
+      a.proc.kill('SIGKILL');
+      await a.exit;
+      const w = hold(b, 'w');
+      await until('the waiter to take the slot', () => started(b, 'w'));
+      expect(alive(cmd!), 'the orphaned run is gone before the waiter starts').toBe(false);
+      expect(log(b, 'systemctl.log')).toContain(`--user stop ccrc-test-${apid}.scope`);
+      expect(w.stderr()).toContain(`ccrc test: slot-0's holder (pid ${apid}) is gone; stopping its run ccrc-test-${apid}.scope`);
+      release(b, 'w');
+      expect(await w.exit).toBe(0);
+    }],
+  });
+
+  itQueue('a queued run that is signalled leaves the queue and never runs its command', async () => {
+    for (const [sig, code] of [['SIGTERM', 143], ['SIGINT', 130], ['SIGHUP', 129]] as const) {
+      const b = box({ CCRC_TEST_HEAVY_SLOTS: '1' });
+      slice(b);
+      const a = hold(b, 'a');
+      await until('the holder to start', () => started(b, 'a'));
+      const w = hold(b, 'w');
+      await until('the second to queue', () => w.stderr().includes('queued'));
+      w.proc.kill(sig);
+      expect(await w.exit, `${sig} ends the queued run`).toBe(code);
+      expect(run(b, ['--status']).stdout).toContain('0 waiting');
+      release(b, 'a');
+      expect(await a.exit).toBe(0);
+      await new Promise((r) => setTimeout(r, 400));
+      expect(started(b, 'w'), `${sig}: the cancelled run never started`).toBe(false);
+    }
   });
 
   itQueue('a light run takes no slot', async () => {
@@ -303,6 +410,30 @@ describe('ccrc test: the admission queue (D-TBD-test-containment)', () => {
     await until('the run to start once pressure falls', () => started(b, 'p'));
     release(b, 'p');
     expect(await h.exit).toBe(0);
+  });
+});
+
+describe('ccrc test: a run ends with its whole tree (D-TBD-test-containment)', () => {
+  itLinux('the run\'s scope is stopped when its command ends, so a process it left behind ends too', async () => {
+    const b = box();
+    const r = run(b, ['--light', '--', 'sh', '-c', 'sleep 300 & for f in "$HOME"/ccrc-test-*.pids; do echo $! >> "$f"; done; echo $! > "$HOME/leftover"']);
+    expect(r.status).toBe(0);
+    const left = Number(log(b, 'leftover').trim());
+    expect(left).toBeGreaterThan(0);
+    await until('the leftover to end', () => !alive(left), 5000);
+    expect(log(b, 'systemctl.log')).toMatch(/^--user stop ccrc-test-\d+\.scope$/m);
+  });
+
+  itLinux('a run signalled while it runs stops its scope and exits non-zero', async () => {
+    const b = box();
+    const h = hold(b, 'r', ['--light']);
+    await until('the run to start', () => started(b, 'r'));
+    const [cmd] = pidsOf(b, `ccrc-test-${h.proc.pid!}.pids`);
+    h.proc.kill('SIGTERM');
+    const code = await h.exit;
+    expect(code).not.toBe(0);
+    expect(alive(cmd!), 'the run\'s command is gone').toBe(false);
+    expect(log(b, 'systemctl.log')).toContain(`--user stop ccrc-test-${h.proc.pid!}.scope`);
   });
 });
 
