@@ -8,7 +8,7 @@
 // lives (slug q3c-policy-askwindow). `APPROVAL_RULED_GRACE_MS` stays `watch.ts`'s and is handed in (slug
 // q3c-grace-param).
 import type { AskState } from '../../../shared/api.js';
-import { APPROVAL_HOOK_WAIT_S } from '../../../shared/api.js';
+import { APPROVAL_HOOK_WAIT_S, QUESTION_DOOR_REFUSALS } from '../../../shared/api.js';
 import { ASK_ANSWERING_MAX_MS } from '../askwindow.js';
 import type { ApprovalRow } from './store.js';
 
@@ -145,9 +145,11 @@ export const QUESTION_HOLD_PHASES: Readonly<Record<QuestionHoldPhase, true>> = {
 /** Whether `tok` is one of this module's words (the three answer unions, the ask read's stages and the carrier's
  *  phases), for `mail-routes.test.ts`'s scan of quoted kebab tokens under `server/src/coord` (slug q3c-kebab-union):
  *  none is a mail rejection or a run refusal; they ride the sweep's decisions and the carrier, and never reach a route.
+ *  And (W3 Q3f, D-7030) the question door family's own refusal, `kind-mismatch` (`shared/api.ts#QUESTION_DOOR_REFUSALS`,
+ *  read and never re-spelled): a route refusal of the family's front ladder, never a mail rejection or a run refusal.
  *  Derived from the tables above. */
 export function isQuestionPolicyKebab(tok: string): boolean {
   return Object.hasOwn(ASK_LAPSE_ANSWERS, tok) || Object.hasOwn(ASK_LAPSE_READ_KINDS, tok)
     || Object.hasOwn(APPROVAL_LAPSE_ANSWERS, tok) || Object.hasOwn(DEFERRED_APPROVAL_PUSH_ANSWERS, tok)
-    || Object.hasOwn(QUESTION_HOLD_PHASES, tok);
+    || Object.hasOwn(QUESTION_HOLD_PHASES, tok) || Object.hasOwn(QUESTION_DOOR_REFUSALS, tok);
 }
