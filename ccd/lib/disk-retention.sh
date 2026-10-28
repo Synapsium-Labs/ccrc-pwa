@@ -1369,14 +1369,18 @@ _ws_loose_collect() {   # token hex surface actor reason -> ccd ws-collect --exp
 # `$REG/<id>.shedding` (`<pid> <dev:ino of the lock>`, which no other id's purge glob reaches) once it holds both locks,
 # re-reads the lock's identity after writing it (a lock file that went or changed meanwhile refuses `unmeasured`), and
 # takes it back on its one way out. The gate refuses while the marker names a live pid, unless the lock it marked still
-# stands as that inode and is free; a marker that does not read refuses; a dead pid (a shed killed mid-removal) frees.
+# stands as that inode and is free; a marker that does not read refuses. A dead pid is NOT proof the removal ended: the
+# `rm` runs as a child in its own process group (`_plat_timeout`) and inherits the lock's fd, so a shed whose bash is
+# killed mid-removal leaves the rm holding the flock. A dead pid therefore asks the lock as if there were no marker:
+# free once the lock file is gone or nobody holds it, refused while anything does.
 # WHAT AN OPERATOR SEES WHEN A WAKE IS REFUSED. Every pane-creating path meets the gate in `_spawn_start` (or the return
 # verbs' gate) and dies there with its sentence, `ws-shed-deps is removing <id>'s dependency directories and holds its
 # shed lock — refusing to create a pane for it until that finishes; retry`, before the stop stamp is cleared, so the
 # session stays asleep and nothing else changed: `ccd ensure`/`ccd start` and the PWA's ensure and Revive routes answer
 # it as their error, and a supervise or swap respawn ends with it on stderr, in the unit's journal. It is never a wait. RETRY the same wake once the shed is over (it is bounded by the verb's runner row,
 # 240 s, and a healthy one takes seconds; the `shed-deps` journal line closes it). If it keeps refusing after that, the
-# marker outlived a holder whose pid was reused: check that no `ccd ws-shed-deps` of the id runs, remove
+# marker outlived a holder whose pid was reused, or a killed shed's orphaned `rm` (bounded by its own timeout) still
+# holds the lock: check that no `ccd ws-shed-deps` of the id and no `rm` under its worktree runs, remove
 # `$REG/<id>.shedding` by hand, and retry. The woken session runs `npm ci` before its next test step.
 # A WAKE AND A SHED EXCLUDE EACH OTHER. This is the one verb that removes from a tree that can wake, and every path that
 # creates a pane (start, ensure, the unit's supervise, swap's respawn) passes `_ws_expire_spawn_gate`, which for a row
@@ -1475,21 +1479,24 @@ _ws_shed_spawn_held() {   # id -> rc 0 when a real shed holds id's SHED lock rig
   # It opens the file READ-ONLY, so a wake never creates a shed lock (they are never unlinked), and lets it go at once: a
   # wake that asked while the lock was free has cleared the stop stamp by the time rung 4 or the last facts read it.
   # THE MARKER FIRST, AND IT FAILS CLOSED (rung 2c): `$REG/<id>.shedding` standing names the shed's pid and its lock's
-  # dev:ino. A marker that does not read refuses; a holder pid that is gone (a shed killed mid-removal) is free; a live
-  # one is free only when the lock it marked still stands as that inode and nobody holds it (a finished shed's marker
-  # seen just before it was taken back). A lock file purged by an alias id's glob therefore refuses, never frees.
+  # dev:ino. A marker that does not read refuses; a live holder pid is free only when the lock it marked still stands
+  # as that inode and nobody holds it (a finished shed's marker seen just before it was taken back), so a lock file
+  # purged by an alias id's glob refuses, never frees. A holder pid that is gone (a shed killed mid-removal, or one
+  # `kill -0` cannot signal) falls through to the lock-only answer below: its orphaned `rm` inherited the lock's fd and
+  # may still hold it, so it refuses while the lock is held and frees once the file is gone or free.
   local fd m="$REG/$1.shedding" mk='' mpid mdi di
   if [[ -e $m || -L $m ]]; then
     [[ -f $m && ! -L $m ]] && _file_read_to mk "$m" || return 0
     mpid=${mk%% *}; mdi=${mk#* }
     [[ $mpid =~ ^[1-9][0-9]{0,9}$ && $mdi =~ ^[0-9]+:[0-9]+$ && $mk == "$mpid $mdi" ]] || return 0
-    kill -0 "$mpid" 2>/dev/null || return 1
-    [[ -f "$REG/.shed-$1.lock" && ! -L "$REG/.shed-$1.lock" ]] && command -v flock >/dev/null 2>&1 || return 0
-    di=$(_plat_devino "$REG/.shed-$1.lock" 2>/dev/null) && [[ $di == "$mdi" ]] || return 0
-    { exec {fd}<"$REG/.shed-$1.lock"; } 2>/dev/null || return 0
-    if flock -n "$fd"; then exec {fd}>&-; return 1; fi
-    exec {fd}>&-
-    return 0
+    if kill -0 "$mpid" 2>/dev/null; then
+      [[ -f "$REG/.shed-$1.lock" && ! -L "$REG/.shed-$1.lock" ]] && command -v flock >/dev/null 2>&1 || return 0
+      di=$(_plat_devino "$REG/.shed-$1.lock" 2>/dev/null) && [[ $di == "$mdi" ]] || return 0
+      { exec {fd}<"$REG/.shed-$1.lock"; } 2>/dev/null || return 0
+      if flock -n "$fd"; then exec {fd}>&-; return 1; fi
+      exec {fd}>&-
+      return 0
+    fi
   fi
   [[ -f "$REG/.shed-$1.lock" && ! -L "$REG/.shed-$1.lock" ]] && command -v flock >/dev/null 2>&1 || return 1
   { exec {fd}<"$REG/.shed-$1.lock"; } 2>/dev/null || return 1   # the group's 2> is temporary; a bare exec's would not be
