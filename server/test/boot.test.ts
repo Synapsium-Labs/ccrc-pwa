@@ -26,12 +26,11 @@
 // therefore records its own PID first, and `afterEach` kills both the
 // server and every recorded probe PID's whole group.
 import { describe, it, expect, afterEach } from 'vitest';
-import { spawn, type ChildProcess } from 'node:child_process';
+import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
-import { freePort } from './codexLaneFixture.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const serverRoot = path.resolve(here, '..');
@@ -65,13 +64,22 @@ const writeRoster = (home: string): void => {
   }));
 };
 
-/** A port for the spawned server, which takes it from CCRC_PORT before it
- *  binds and refuses 0 (`loadConfig`), so it cannot bind port 0 and report
- *  back. It comes from the codex-lane fixture's `freePort` (D-6856): free a
- *  moment ago, below the kernel's ephemeral range, and disjoint from every
- *  other live vitest worker's slice. This file once derived a fixed band
- *  (`21000 + pid % 4000`), which overlapped those slices. */
-const freshPort = (): Promise<number> => freePort();
+/** A port unlikely to collide across parallel test files — derived from
+ *  this process's own pid, which is unique per vitest worker. */
+let portCounter = 0;
+const freshPort = (): number => 21000 + (process.pid % 4000) + (portCounter++) * 7;
+
+/** True while `pid` is a live process. A zombie (exited, not yet reaped by its parent) counts as gone: `kill(pid, 0)`
+ *  alone would still succeed on it. */
+const isRunning = (pid: number): boolean => {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    const stat = execFileSync('ps', ['-o', 'stat=', '-p', String(pid)], { encoding: 'utf8' }).trim();
+    return stat !== '' && !stat.startsWith('Z');
+  } catch {
+    return false; // ps exits non-zero when no such process exists
+  }
+};
 
 let child: ChildProcess | undefined;
 let currentHome: string | undefined;
@@ -160,21 +168,30 @@ describe('the real composition root — boot never blocks on the local-caps prob
   it('a hung ccd (sleep 600, the reviewer\'s own reproduction) does not delay listen', async () => {
     const home = mkTmp('ccrc-boot-');
     writeRoster(home);
-    writeStubCcd(home, 'sleep 600');
-    const elapsed = await timeToHealth(home, indexTs, await freshPort(), 8_000);
-    expect(elapsed, '/health must answer well within the 8s budget, not time out').not.toBeNull();
-    // Generous relative to the reviewer's own measured baseline (~700-800ms)
-    // but tight relative to the 10s LOCAL_CAPS_TIMEOUT_MS bound this test
-    // exists to prove boot does not wait on — a regression that reintroduced
-    // the block would land at or past that ceiling, not merely a bit slower.
-    expect(elapsed, 'boot took long enough to suggest it waited on the probe').toBeLessThan(3_000);
-  }, 15_000);
+    // The stub names the pid of its `caps` read, so the row can ask whether THAT read is still hung once `/health`
+    // answers. It inherits the server's env, so the path comes from `CCRC_HOME`.
+    writeStubCcd(home, 'if [ "$1" = caps ]; then echo $$ > "$CCRC_HOME/.caps-pid"; fi\nsleep 600');
+    // The budget is wider than LOCAL_CAPS_TIMEOUT_MS (10s) on purpose: the wall clock is not what this row judges.
+    // A 3s ceiling used to stand in for "did not wait", and it failed on loaded shared runners (3092 ms, 3570 ms)
+    // while boot was fine. The signal below is causal instead: `/health` answered while the caps read it would have
+    // waited on is still running. A boot that awaited the read could only answer after the read settled, which for
+    // this stub means after the 10s timeout killed it, so the read is dead by then however slow or fast the box is.
+    const elapsed = await timeToHealth(home, indexTs, freshPort(), 12_000);
+    expect(elapsed, '/health must answer within the budget, not time out').not.toBeNull();
+    const pidFile = path.join(home, '.caps-pid');
+    const startedBy = Date.now() + 5_000;
+    while (!existsSync(pidFile) && Date.now() < startedBy) await new Promise((r) => setTimeout(r, 50));
+    expect(existsSync(pidFile), 'the local-mode caps read must have been started').toBe(true);
+    const capsPid = Number(readFileSync(pidFile, 'utf8').trim());
+    expect(isRunning(capsPid), 'listen waited for the hung caps read: it was no longer running when /health answered')
+      .toBe(true);
+  }, 25_000);
 
   it('a valid, instant ccd also boots fast — the hung case above is not fast merely by refusing connections', async () => {
     const home = mkTmp('ccrc-boot-');
     writeRoster(home);
     writeStubCcd(home, 'echo start\necho stop\necho stop-surface\nexit 0');
-    const elapsed = await timeToHealth(home, indexTs, await freshPort(), 8_000);
+    const elapsed = await timeToHealth(home, indexTs, freshPort(), 8_000);
     expect(elapsed).not.toBeNull();
     expect(elapsed!).toBeLessThan(3_000);
   }, 15_000);
@@ -215,7 +232,7 @@ describe('the real composition root — boot never blocks on the local-caps prob
       // (the same ceiling the real tests above must beat) proves the
       // control fails to answer in time — i.e. the harness DOES tell the
       // two cases apart.
-      const elapsed = await timeToHealth(home, mutantPath, await freshPort(), 3_000);
+      const elapsed = await timeToHealth(home, mutantPath, freshPort(), 3_000);
       expect(elapsed, 'the control must NOT answer within the same 3s budget the real file beats').toBeNull();
     } finally {
       rmSync(mutantPath, { force: true });
@@ -253,7 +270,7 @@ describe('the real composition root — local mode records its own ccd caps', ()
     const home = mkTmp('ccrc-boot-');
     writeRoster(home);
     writeStubCcd(home, 'echo start\necho stop\necho project-pool\nexit 0');
-    const port = await freshPort();
+    const port = freshPort();
     expect(await timeToHealth(home, indexTs, port, 8_000)).not.toBeNull();
     expect(await projectPoolsWithin(port, 'enforced', 5_000)).toBe('enforced');
   }, 20_000);
@@ -262,7 +279,7 @@ describe('the real composition root — local mode records its own ccd caps', ()
     const home = mkTmp('ccrc-boot-');
     writeRoster(home);
     writeStubCcd(home, 'echo start\necho stop\nexit 0');
-    const port = await freshPort();
+    const port = freshPort();
     expect(await timeToHealth(home, indexTs, port, 8_000)).not.toBeNull();
     expect(await projectPoolsWithin(port, 'unavailable', 5_000)).toBe('unavailable');
   }, 20_000);
@@ -276,7 +293,7 @@ describe('the real composition root — local mode records its own ccd caps', ()
     const home = mkTmp('ccrc-boot-');
     writeRoster(home);
     writeStubCcd(home, 'if [ "$1" = caps ]; then touch "$CCRC_HOME/.caps-asked"; fi\nexit 1');
-    const port = await freshPort();
+    const port = freshPort();
     expect(await timeToHealth(home, indexTs, port, 8_000)).not.toBeNull();
     const marker = path.join(home, '.caps-asked');
     const askedBy = Date.now() + 5_000;
