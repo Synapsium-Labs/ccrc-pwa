@@ -72,6 +72,13 @@ const CCD_VERB_TIMEOUT_MS: Record<string, number> = {
   // looks for what is still unreadable, the registry row passes, and the `rm` itself. A big leaf can outrun the row, and
   // it fails safe: it may need several passes, and nothing is lost, because the quarantine record carries the next pass.
   'ws-collect': 240_000,
+  // The deps-shed act (D-7278): the removal of a sleeping session's ignored dependency directories, gigabytes of
+  // node_modules, under the reap lock. Its bounded calls do not grow with the candidates: six tree walks at 30 s (the
+  // ignored listing, the repository walk, the size, two `git status` reads, ONE `rm` over every candidate), two quick
+  // reads at 10 s and the process walk at 10 s, with at most two TERM-to-KILL graces (8 s at the widest): 226 s.
+  // `deps-shed-budget.test.ts` reads both sides from source and holds the sum under this row. A kill here would leave no
+  // stamp and no journal row, so the row is ws-reap's, not the flat 90 s.
+  'ws-shed-deps': 240_000,
   // The two SPAWNING verbs, and the reason they need the agent's MAXIMUM
   // (`MAX_EXEC_TIMEOUT_MS`, agent/src/server.ts) rather than a merely larger
   // number (F8, found live 2026-08-12). Both end in `_spawn`, which blocks in
