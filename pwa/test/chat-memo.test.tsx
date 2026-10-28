@@ -15,6 +15,7 @@ import { act, cleanup, render } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import type { ChatEvent } from '../../shared/api';
 import { MAIL_ENVELOPE_FENCE } from '../../shared/api';
+import type { PendingSend } from '../src/stores/session';
 
 const counts = vi.hoisted(() => ({ markdown: 0, toolCard: 0, prescan: 0, screen: 0 }));
 
@@ -195,5 +196,83 @@ describe('a re-render with unchanged rows does no row work (C7)', () => {
     expect(counts.screen).toBeGreaterThan(0);
     expect(counts.toolCard).toBe(0);
     expect(counts.markdown).toBe(0);
+  });
+});
+
+// Review 1128 (C7's fix round 1). The barrier must still let through what a row draws from: an item field that changes
+// on a rebuild (the streaming flag), a non-item prop (`askBelow`), and the viewer's day for a row whose words read the
+// clock (the usage-limit pill, `resetClock`), which says "resets 12:00" on the day of the reset and the date on any
+// other. The day is a coarse key (`lib/clock.ts#dayKey`) that SessionScreen derives from the clock it already ticks
+// (`useNow(30_000)`); only a row whose words read the clock compares it, so nothing else draws again at midnight.
+const resetsAt = new Date(2026, 9, 28, 12, 0).getTime() / 1000; // local noon on the day of the reset
+const limitRow: ChatEvent = {
+  kind: 'system', uuid: 'l1', ts: TS, text: "You've hit your limit · resets 12pm", origin: 'limit', resetsAt,
+};
+const failedSend: PendingSend = { key: 'p1', text: 'retry me', state: 'failed', error: 'The send failed.' };
+
+describe('what a row draws from still reaches it (C7, review 1128)', () => {
+  afterEach(() => { vi.useRealTimers(); });
+
+  it('a streaming row whose flag turns false loses its caret', () => {
+    const events = [assistant('a1')];
+    const { rerender } = render(
+      <ChatList id="s" events={events} pending={[]} busy onRetry={onRetry} onDiscard={onDiscard} onAnswer={onAnswer} />,
+    );
+    expect(document.querySelector('.stream-caret')).not.toBeNull();
+    // The same events: only the item's `streaming` field changes, on an item `buildChatItems` built again.
+    rerender(<ChatList id="s" events={events} pending={[]} busy={false} onRetry={onRetry} onDiscard={onDiscard} onAnswer={onAnswer} />);
+    expect(document.querySelector('.stream-caret')).toBeNull();
+  });
+
+  it("a row's non-item prop reaches it: askBelow holds a failed send's Retry", () => {
+    const at = (askBelow: boolean) => (
+      <ChatList id="s" events={EVENTS} pending={[failedSend]} askBelow={askBelow} onRetry={onRetry} onDiscard={onDiscard} onAnswer={onAnswer} />
+    );
+    const { rerender } = render(at(false));
+    const retry = (): HTMLButtonElement => document.querySelector<HTMLButtonElement>('.pending-retry')!;
+    expect(retry().disabled).toBe(false);
+    rerender(at(true));
+    expect(retry().disabled).toBe(true);
+  });
+
+  it('a new day redraws the usage-limit pill and no other row', () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date(2026, 9, 28, 10, 0));
+    const at = (day: string) => (
+      <ChatList id="s" events={[...EVENTS, limitRow]} pending={[]} day={day} onRetry={onRetry} onDiscard={onDiscard} onAnswer={onAnswer} />
+    );
+    const { rerender } = render(at('day-1'));
+    expect(document.body.textContent).toContain('usage limit · resets 12:00');
+    expect(counts.markdown).toBeGreaterThan(0);
+    expect(counts.toolCard).toBeGreaterThan(0);
+    reset();
+    // Later the same day: the same key, so nothing draws again.
+    vi.setSystemTime(new Date(2026, 9, 28, 23, 0));
+    rerender(at('day-1'));
+    expect(counts.markdown).toBe(0);
+    // Past midnight: the pill says the date of a reset that is no longer today, and no other row draws again.
+    vi.setSystemTime(new Date(2026, 9, 29, 0, 0, 15));
+    rerender(at('day-2'));
+    expect(document.body.textContent).toContain('usage limit · resets 12:00 · 28 Oct');
+    expect(counts.markdown).toBe(0);
+    expect(counts.toolCard).toBe(0);
+  });
+
+  it("SessionScreen's own clock carries the pill across midnight", () => {
+    vi.useFakeTimers({ toFake: ['Date', 'setInterval', 'clearInterval'] });
+    vi.setSystemTime(new Date(2026, 9, 28, 23, 59, 45));
+    const store = createSessionStore('s', {
+      makeSocket: () => ({ onopen: null, onmessage: null, onclose: null, onerror: null, close(): void {} }) as unknown as WebSocket,
+      api: { prompt: vi.fn().mockResolvedValue(undefined) },
+    });
+    render(<SessionScreen id="s" store={store} />);
+    act(() => { store.setState({ uuid: 'u1', status: 'idle', events: [...EVENTS, limitRow] }); });
+    expect(document.body.textContent).toContain('usage limit · resets 12:00');
+    expect(document.body.textContent).not.toContain('resets 12:00 · 28 Oct');
+    reset();
+    act(() => { vi.advanceTimersByTime(30_000); }); // one tick of the screen's 30-second clock, past midnight
+    expect(document.body.textContent).toContain('usage limit · resets 12:00 · 28 Oct');
+    expect(counts.markdown).toBe(0);
+    expect(counts.toolCard).toBe(0);
   });
 });

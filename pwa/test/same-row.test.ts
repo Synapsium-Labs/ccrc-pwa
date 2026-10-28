@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest';
 import type { ChatEvent } from '../../shared/api';
 import { MAIL_ENVELOPE_FENCE } from '../../shared/api';
 import { buildChatItems, type ChatItem } from '../src/session/chatItems';
-import { sameRowProps, sameTranscriptItem } from '../src/session/sameRow';
+import { readsClock, sameRowProps, sameTranscriptItem } from '../src/session/sameRow';
 import { groupToolRun, type TranscriptItem } from '../src/session/toolSummary';
 
 const TS = '2026-10-28T10:00:00.000Z';
@@ -20,6 +20,15 @@ const mailTurn = (uuid: string): ChatEvent => ({
     'ack: ccrc-api mail ack 17 (a delivery id).', '  Ack it promptly.', '--', 'Implement Tasks 1-3 in order.', '```',
   ].join('\n'),
 });
+/** A finished background task's report, a system row (`task-card.test.tsx`'s fixture). */
+const taskRow = (uuid: string): ChatEvent => ({
+  kind: 'system', uuid, ts: TS, text: '<task-notification>\n<task-id>w0s3mcrji</task-id>\n'
+    + '<tool-use-id>toolu_01Qj6Dyd</tool-use-id>\n<status>completed</status>\n'
+    + '<summary>Dynamic workflow "resolve the six design forks" completed</summary>\n'
+    + '<result>{"verdict":"shippable"}</result>\n</task-notification>',
+});
+const limitRow = (uuid: string): ChatEvent =>
+  ({ kind: 'system', uuid, ts: TS, text: 'limit', origin: 'limit', resetsAt: 1_793_181_600 });
 
 /** The one item of `kind` that `events` builds to. */
 function only<K extends TranscriptItem['kind']>(items: readonly TranscriptItem[], kind: K): Extract<TranscriptItem, { kind: K }> {
@@ -46,6 +55,15 @@ describe('sameTranscriptItem', () => {
     const b = only(buildChatItems(events, []), 'mail');
     // The envelope is parsed again on every build: a new object read off the same event.
     expect(a.envelope).not.toBe(b.envelope);
+    expect(sameTranscriptItem(a, b)).toBe(true);
+  });
+
+  it('a rebuilt task item is the same row', () => {
+    const events = [taskRow('n1')];
+    const a = only(buildChatItems(events, []), 'task');
+    const b = only(buildChatItems(events, []), 'task');
+    // The notification is parsed again on every build: a new object read off the same event.
+    expect(a.notification).not.toBe(b.notification);
     expect(sameTranscriptItem(a, b)).toBe(true);
   });
 
@@ -95,5 +113,28 @@ describe('sameRowProps', () => {
     expect(sameRowProps(a, { ...b, askBelow: true })).toBe(false);
     expect(sameRowProps(a, { ...b, onRetry: (): void => {} })).toBe(false);
     expect(sameRowProps(a, { ...b, item: only(buildChatItems([assistant('a1', 'hello')], []), 'message') })).toBe(false);
+  });
+});
+
+describe('readsClock, and the day a row compares (review 1128)', () => {
+  it('only a usage-limit pill with a reset time reads the clock', () => {
+    expect(readsClock(only(buildChatItems([limitRow('l1')], []), 'message'))).toBe(true);
+    const { resetsAt: _, ...noTime } = limitRow('l2') as Extract<ChatEvent, { kind: 'system' }>;
+    expect(readsClock(only(buildChatItems([noTime], []), 'message'))).toBe(false);
+    expect(readsClock(only(buildChatItems([assistant('a1', 'hello')], []), 'message'))).toBe(false);
+    expect(readsClock(only(buildChatItems([taskRow('n1')], []), 'task'))).toBe(false);
+    expect(readsClock({ kind: 'working', key: 'working' })).toBe(false);
+  });
+
+  it('a new day is a new row only where the row reads the clock', () => {
+    const limit = [limitRow('l1')];
+    const pill = { item: only(buildChatItems(limit, []), 'message'), id: 's', day: 'day-1' };
+    expect(sameRowProps(pill, { ...pill, item: only(buildChatItems(limit, []), 'message') })).toBe(true);
+    expect(sameRowProps(pill, { ...pill, day: 'day-2' })).toBe(false);
+    const prose = [assistant('a1', 'hello')];
+    const message = { item: only(buildChatItems(prose, []), 'message'), id: 's', day: 'day-1' };
+    expect(sameRowProps(message, { ...message, day: 'day-2' })).toBe(true);
+    // The day is the only prop a row may skip: any other change is still a new row.
+    expect(sameRowProps(message, { ...message, id: 't' })).toBe(false);
   });
 });
