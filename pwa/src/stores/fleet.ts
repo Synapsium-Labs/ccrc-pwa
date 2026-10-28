@@ -436,13 +436,14 @@ export function createFleetStore(deps: FleetStoreDeps = {}): FleetStore {
     // reaching an old client is dropped and counted, never typed as one of the kinds it is not.
     const fetchFeed = deps.fetchFeed ?? ((n: number) => api.feed(n));
     // `onAnswer` runs first in the answer's own turn, before the merge, so the connect-time read marks itself done in
-    // the same tick its answer lands, as it always has.
+    // the same tick its answer lands, as it always has. `.catch`, not a second `.then` argument: a throw while handling
+    // the answer (a `null` body) resolves 'error' too, as both reads did before they were one.
     const readFeed = (onAnswer?: () => void): Promise<'ok' | 'error'> => fetchFeed(100).then((r) => {
       onAnswer?.();
       const { events, dropped } = reviveNotifyEvents(r.events);
       get().mergeFeed(events, dropped);
       return 'ok' as const;
-    }, () => 'error' as const);
+    }).catch(() => 'error' as const);
 
     return {
       // Hydrate from the last persisted snapshot (lib/offline.ts) so a cold

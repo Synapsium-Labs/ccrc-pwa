@@ -43,6 +43,12 @@ describe('MailScreen: its three empty states, byte for byte', () => {
     expect(emptyState()).toEqual({ state: 'error', text: 'Could not reach the server — mail may exist that is not shown.' });
   });
 
+  it('the error sentence after a null body, as before C7n', async () => {
+    render(<MailScreen store={makeStore(async () => null as never)} loadRuns={async () => ({ runs: [] })} />);
+    await flush();
+    expect(emptyState()).toEqual({ state: 'error', text: 'Could not reach the server — mail may exist that is not shown.' });
+  });
+
   it('nothing of either once it answers: an empty answer reads "Nothing yet.", a record renders no empty state', async () => {
     render(<MailScreen store={makeStore(async () => ({ events: [] }))} loadRuns={async () => ({ runs: [] })} />);
     await flush();

@@ -61,6 +61,14 @@ describe('refreshFeed(): the store\'s one feed reader, on demand', () => {
     expect(store.getState().feedDropped).toBe(0);
   });
 
+  it('a null body resolves error and writes nothing (a throw while handling the answer is caught, as before C7n)', async () => {
+    const store = makeStore({ fetchFeed: async () => null as never });
+    store.getState().mergeFeed([event(1)], 0);
+    await expect(store.getState().refreshFeed()).resolves.toBe('error');
+    expect(store.getState().feed.map((e) => e.seq)).toEqual([1]);
+    expect(store.getState().feedDropped).toBe(0);
+  });
+
   it('the connect-time durable read and refreshFeed share the one reader', async () => {
     const fetchFeed = vi.fn(async (_limit: number) => ({ events: [event(1)] }));
     const store = makeStore({ fetchFeed });
