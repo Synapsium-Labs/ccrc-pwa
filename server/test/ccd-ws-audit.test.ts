@@ -375,6 +375,113 @@ describe('the proof ladder', () => {
   });
 });
 
+/**
+ * A PR CLOSED AS LANDED IN A MERGE TRAIN. The train squashes several members
+ * into one train PR, merges THAT, and closes each member with the deployment's
+ * label (`CCD_LANDED_LABEL`, default `landed-in-train`). So the member has no
+ * merge commit, its own commits are no ancestor of main, and the one commit
+ * that carries its work carries ANOTHER member's work too: `tree`, `patch-id`
+ * and `cherry` all say no. What does hold is that merging this branch into
+ * origin's default branch changes nothing — `merge-tree`.
+ *
+ * `later` adds a commit on main AFTER the train, the ordinary case by the time
+ * anyone taps cleanup.
+ */
+function trainLanded(label = 'landed-in-train', later = true): Built {
+  const main = h.makeGhRepo('demo');
+  h.sh(`${WS_ADD} CCD_WS_SLUG=quiet-basin cmd_ws_add demo`);
+  const wt = path.join(h.home, 'worktrees', 'demo', 'quiet-basin');
+  for (const n of ['1', '2']) {
+    fs.writeFileSync(path.join(wt, `f${n}.txt`), `work ${n}\n`);
+    h.git(wt, 'add', `f${n}.txt`); h.git(wt, 'commit', '-m', `work ${n}`);
+  }
+  const tip = h.git(wt, 'rev-parse', 'HEAD');
+  fs.writeFileSync(path.join(main, 'other.txt'), 'someone else\n');
+  h.git(main, 'add', 'other.txt'); h.git(main, 'commit', '-m', 'unrelated');
+  // The train PR's squash: this member's two files AND another member's one.
+  for (const n of ['1', '2']) fs.writeFileSync(path.join(main, `f${n}.txt`), `work ${n}\n`);
+  fs.writeFileSync(path.join(main, 'member-b.txt'), 'the other member\n');
+  h.git(main, 'add', '-A'); h.git(main, 'commit', '-m', 'train: #42 #43 (#50)');
+  if (later) {
+    fs.writeFileSync(path.join(main, 'after.txt'), 'after the train\n');
+    h.git(main, 'add', 'after.txt'); h.git(main, 'commit', '-m', 'after the train');
+  }
+  const merge = h.git(main, 'rev-parse', 'HEAD');
+  h.git(main, 'push', 'origin', 'main');
+  h.git(wt, 'push', '-u', 'origin', 'ws/quiet-basin');
+  h.ghRows([mergedRow({ headRefOid: tip, state: 'CLOSED', mergedAt: null, mergeCommit: null,
+    closedAt: '2026-07-21T09:00:00Z', labels: [{ name: label }] })]);
+  h.sh(`${ARCH} cmd_ws_archive --session demo-quiet-basin`);
+  return { main, wt, tip, merge };
+}
+
+describe('a PR closed as landed in a merge train', () => {
+  it('is reapable: proven against origin\'s default branch by merge-tree, bound to its own PR', () => {
+    const { main, merge } = trainLanded();
+    expect(containedByOriginHead(main, 'ws/quiet-basin'), 'a train squash is never an ancestor').toBe(false);
+    const a = audit();
+    expect(a.verdict, a.detail).toBe('reapable');
+    expect(a.merge.proof).toBe('merge-tree');
+    expect(a.pr.number).toBe(42);
+    // No merge commit was ever named: the commit the proof ran against is
+    // origin's default branch, and the token is over it.
+    expect(a.pr.mergeCommit).toBe(merge);
+    expect(a.token).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it('is reapable when the train is the last commit on main, too', () => {
+    trainLanded('landed-in-train', false);
+    const a = audit();
+    expect(a.verdict, a.detail).toBe('reapable');
+    expect(a.merge.proof).toBe('merge-tree');
+  });
+
+  it('REFUSES tree-differs when the branch carries a commit the train did not land', () => {
+    const { wt } = trainLanded();
+    fs.writeFileSync(path.join(wt, 'later.txt'), 'not in the train\n');
+    h.git(wt, 'add', 'later.txt'); h.git(wt, 'commit', '-m', 'a real follow-up');
+    h.git(wt, 'push', 'origin', 'ws/quiet-basin');
+    const a = refusal(wt);
+    expect(a.verdict).toBe('tree-differs');
+    expect(a.detail).toContain('later.txt');
+  });
+
+  it('REFUSES tree-differs when main later reverted part of the landed work', () => {
+    const { main, wt } = trainLanded();
+    h.git(main, 'rm', '-q', 'f2.txt'); h.git(main, 'commit', '-m', 'revert f2');
+    h.git(main, 'push', 'origin', 'main');
+    expect(refusal(wt).verdict).toBe('tree-differs');
+  });
+
+  it('REFUSES tree-differs when the label is on a PR whose work never reached main', () => {
+    const main = h.makeGhRepo('demo');
+    h.sh(`${WS_ADD} CCD_WS_SLUG=quiet-basin cmd_ws_add demo`);
+    const wt = path.join(h.home, 'worktrees', 'demo', 'quiet-basin');
+    fs.writeFileSync(path.join(wt, 'f1.txt'), 'work 1\n');
+    h.git(wt, 'add', 'f1.txt'); h.git(wt, 'commit', '-m', 'work 1');
+    const tip = h.git(wt, 'rev-parse', 'HEAD');
+    h.git(wt, 'push', '-u', 'origin', 'ws/quiet-basin');
+    h.ghRows([mergedRow({ headRefOid: tip, state: 'CLOSED', mergedAt: null, mergeCommit: null,
+      closedAt: '2026-07-21T09:00:00Z', labels: [{ name: 'landed-in-train' }] })]);
+    h.sh(`${ARCH} cmd_ws_archive --session demo-quiet-basin`);
+    expect(main).toBeTruthy();
+    expect(refusal(wt).verdict).toBe('tree-differs');
+  });
+
+  it('still refuses not-merged for a closed PR without the label', () => {
+    const { wt } = trainLanded('wontfix');
+    expect(refusal(wt).verdict).toBe('not-merged');
+  });
+
+  it('never proves merge-tree from a merge that did not run', () => {
+    // A `merge-tree` that fails (an old git, a conflict) prints no tree, and
+    // an empty answer compared against an empty read must not pass.
+    const { wt } = trainLanded();
+    const NOMT = `git() { [[ "$*" == *" merge-tree "* ]] && return 128; command git "$@"; };`;
+    expect(refusal(wt, NOMT).verdict).toBe('tree-differs');
+  });
+});
+
 describe('binding refusals', () => {
   it('refuses when the PR head is not reachable from our tip', () => {
     const { wt } = squashMovedBase();

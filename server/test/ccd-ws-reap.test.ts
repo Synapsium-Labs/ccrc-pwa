@@ -2431,6 +2431,43 @@ describe('child teardown (D2/D3)', () => {
  * tip — the rung resolves REAP_TIP itself, and this test is what pins that
  * (an empty old-value turns `update-ref -d` into an unconditional delete).
  */
+describe('a PR closed as landed in a merge train, end to end', () => {
+  it('reaps it exactly as a merged one: bound to its PR, proof merge-tree', () => {
+    // The train squashed this member with another one into a train PR and
+    // closed the member with the label, so gh names no merge commit at all.
+    const main = h.makeGhRepo('demo');
+    h.sh(`${WS_ADD} CCD_WS_SLUG=quiet-basin cmd_ws_add demo`);
+    const wt = path.join(h.home, 'worktrees', 'demo', 'quiet-basin');
+    fs.writeFileSync(path.join(wt, 'f1.txt'), 'work 1\n');
+    h.git(wt, 'add', 'f1.txt'); h.git(wt, 'commit', '-m', 'work 1');
+    const tip = h.git(wt, 'rev-parse', 'HEAD');
+    fs.writeFileSync(path.join(main, 'other.txt'), 'someone else\n');
+    h.git(main, 'add', 'other.txt'); h.git(main, 'commit', '-m', 'unrelated');
+    fs.writeFileSync(path.join(main, 'f1.txt'), 'work 1\n');
+    fs.writeFileSync(path.join(main, 'member-b.txt'), 'the other member\n');
+    h.git(main, 'add', '-A'); h.git(main, 'commit', '-m', 'train: #42 #43 (#50)');
+    h.git(main, 'push', 'origin', 'main');
+    h.git(wt, 'push', '-u', 'origin', 'ws/quiet-basin');
+    h.ghRows([mergedRow({ headRefOid: tip, state: 'CLOSED', mergedAt: null, mergeCommit: null,
+      closedAt: '2026-07-21T09:00:00Z', labels: [{ name: 'landed-in-train' }] })]);
+    h.sh(`${ARCH} cmd_ws_archive --session demo-quiet-basin`);
+    const tok = tokenOf();
+    expect(tok, 'the audit must issue a token for a landed member').toMatch(/^[0-9a-f]{64}$/);
+    const r = reap(tok);
+    expect(r.code, `stderr: ${r.stderr}`).toBe(0);
+    const out = JSON.parse(r.stdout);
+    expect(out.reaped).toBe('demo-quiet-basin');
+    expect(out.pr).toBe(42);
+    expect(out.proof).toBe('merge-tree');
+    expect(fs.existsSync(wt)).toBe(false);
+    expect(h.git(main, 'branch', '--list', 'ws/quiet-basin')).toBe('');
+    const tomb = JSON.parse(fs.readFileSync(
+      path.join(h.home, '.cc-sessions', '.reaped', 'demo-quiet-basin.json'), 'utf8'));
+    expect(tomb.proof).toBe('merge-tree');
+    expect(tomb.pr).toBe(42);
+  }, 30000);
+});
+
 describe('the contained rung end to end', () => {
   it('reaps a never-pushed workspace origin already holds — pr null, proof contained', () => {
     const main = h.makeGhRepo('demo');

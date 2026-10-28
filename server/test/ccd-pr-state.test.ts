@@ -1585,12 +1585,21 @@ describe('a PR closed as landed in a merge train', () => {
     expect(o.rows[0].landedInTrain).toBe(false);
   });
 
-  it('never hands the reap a landed PR as merged: it has no merge commit to prove against', () => {
-    // `ws-reap`'s rung 2 proves the tree against `mergeCommit.oid`, which a
-    // closed member does not have. The reap is not a phase reader, and it
-    // keeps refusing `not-merged` rather than a malformed-fields sentence.
+  it('hands the reap a landed PR as merged, with `landed` where a merge commit would be', () => {
+    // A closed member has no `mergeCommit.oid`, so `pick` names the one fact
+    // that stands in for it: the reap proves the work against origin's
+    // default branch instead (`_ws_reap_eval`'s rung 2), never against an oid
+    // gh did not name. The cleanup offer would otherwise be a dead end.
     const { main, tip } = workspaceWithCommit('demo', 'quiet-basin');
     const rows = JSON.stringify([mergedRow({ headRefOid: tip, ...landed('landed-in-train') })]);
+    fs.writeFileSync(path.join(h.home, 'rows.json'), rows);
+    expect(h.sh(`_pr_py pick "${main}" ws/quiet-basin main "${tip}" < "$HOME/rows.json"`).trim())
+      .toBe(`42\thttps://github.com/o/r/pull/42\tlanded\t${tip}`);
+  });
+
+  it('still refuses the reap `not-merged` for a closed PR without the label', () => {
+    const { main, tip } = workspaceWithCommit('demo', 'quiet-basin');
+    const rows = JSON.stringify([mergedRow({ headRefOid: tip, ...landed('wontfix') })]);
     fs.writeFileSync(path.join(h.home, 'rows.json'), rows);
     expect(h.sh(`_pr_py pick "${main}" ws/quiet-basin main "${tip}" < "$HOME/rows.json"`).trim()).toBe('!not-merged');
   });
