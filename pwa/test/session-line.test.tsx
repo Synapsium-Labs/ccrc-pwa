@@ -5,7 +5,7 @@ import path from 'node:path';
 import { cleanup, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { ASK_OPERATOR_PRINCIPAL, graphGateCount, READER_MIN_COLS, sessionAsk, type AskState, type ChildMark, type FleetSession } from '../../shared/api';
-import { fleetSession, hibernatedSession } from './fleetFixture';
+import { fleetSession, hibernatedSession, DEAD_LIFECYCLE } from './fleetFixture';
 import { SessionLine } from '../src/fleet/SessionLine';
 import { childMarkOf, childOfRunLabel, type ChildMarkRead } from '../src/fleet/runWords';
 import { TEST_ROSTER } from './rosterFixture';
@@ -64,7 +64,7 @@ describe('label', () => {
 
 describe('state', () => {
   it('reads exited when dead', () => {
-    render(<SessionLine session={s({ status: 'dead', bucket: 'dead' })}
+    render(<SessionLine session={s({ status: 'dead', lifecycle: DEAD_LIFECYCLE, bucket: 'dead' })}
                         onOpen={() => {}} onActions={() => {}} />);
     expect(screen.getByText('exited')).toBeInTheDocument();
   });
@@ -115,7 +115,7 @@ describe('state', () => {
     header(s({ tasks }));
     expect(screen.getByText('4/7 tasks')).toBeInTheDocument();
     cleanup();
-    header(s({ tasks, status: 'dead' }));
+    header(s({ tasks, status: 'dead', lifecycle: DEAD_LIFECYCLE }));
     expect(screen.queryByText('4/7 tasks')).not.toBeInTheDocument();
   });
 
@@ -135,7 +135,7 @@ describe('state', () => {
     const { rerender } = render(
       <SessionLine session={s({ limits })} onOpen={() => {}} onActions={() => {}} />);
     expect(screen.getByTitle('account limit near')).toHaveTextContent('limit 82%');
-    rerender(<SessionLine session={s({ limits, status: 'dead' })}
+    rerender(<SessionLine session={s({ limits, status: 'dead', lifecycle: DEAD_LIFECYCLE })}
                           onOpen={() => {}} onActions={() => {}} />);
     expect(screen.queryByTitle('account limit near')).not.toBeInTheDocument();
   });
@@ -173,7 +173,7 @@ describe('context pressure chip (D-2011) and the wedge signature (D-2016)', () =
   });
 
   it('never renders on a dead row, even at 99% — the same exemption the limits warning takes', () => {
-    render(<SessionLine session={s({ ctxPct: 99, status: 'dead', bucket: 'dead' })}
+    render(<SessionLine session={s({ ctxPct: 99, status: 'dead', lifecycle: DEAD_LIFECYCLE, bucket: 'dead' })}
                         onOpen={() => {}} onActions={() => {}} />);
     expect(chip()).toBeNull();
   });
@@ -373,7 +373,7 @@ describe('away from home', () => {
   });
 
   it('never says so for a dead session — it is not running anywhere', () => {
-    header(s({ wrapper: 'claude9', home: 'claude', status: 'dead' }), { roster: TEST_ROSTER });
+    header(s({ wrapper: 'claude9', home: 'claude', status: 'dead', lifecycle: DEAD_LIFECYCLE }), { roster: TEST_ROSTER });
     expect(screen.queryByText(/pinned to/)).not.toBeInTheDocument();
   });
 });
@@ -542,7 +542,7 @@ describe('subagent disclosure', () => {
   });
 
   it('never shows the disclosure on a dead session, even with stale hook data', () => {
-    header(s({ status: 'dead', bucket: 'dead',
+    header(s({ status: 'dead', lifecycle: DEAD_LIFECYCLE, bucket: 'dead',
       subagents: [{ name: 'reviewer', startedAt: 1 }] }));
     expect(screen.queryByRole('button', { name: /subagent/ })).toBeNull();
   });
@@ -1016,7 +1016,7 @@ describe('the spawn chip (§1.6b)', () => {
   });
 
   it('never renders a chip on a dead row — the exemption critical/subagentList already take', () => {
-    render(<SessionLine session={s({ status: 'dead', bucket: 'dead', spawnState: 'blocked', started: false })}
+    render(<SessionLine session={s({ status: 'dead', lifecycle: DEAD_LIFECYCLE, bucket: 'dead', spawnState: 'blocked', started: false })}
                         onOpen={() => {}} onActions={() => {}} />);
     expect(chip()).toBeNull();
   });
@@ -1192,7 +1192,7 @@ describe('the graph chip', () => {
     // is about what to DO with the corpse, and a live-session read count is
     // not that. The count is non-null and non-zero here so that only the
     // `!dead` guard can be what hides it.
-    header(s({ graphQueries: 4, status: 'dead', bucket: 'dead' }));
+    header(s({ graphQueries: 4, status: 'dead', lifecycle: DEAD_LIFECYCLE, bucket: 'dead' }));
     expect(screen.queryByText(/^graph /)).toBeNull();
   });
 
@@ -1376,7 +1376,7 @@ describe('the strand cell', () => {
   it('is silent on a dead row, exactly as `away` is', () => {
     // Nothing is running, so "stranded" would describe a rescue with nothing
     // left to rescue.
-    render(<SessionLine session={s({ status: 'dead', bucket: 'dead', stranded: { at: 1, reason: 'nowhere' } })}
+    render(<SessionLine session={s({ status: 'dead', lifecycle: DEAD_LIFECYCLE, bucket: 'dead', stranded: { at: 1, reason: 'nowhere' } })}
                         onOpen={() => {}} onActions={() => {}} />);
     expect(screen.queryByText(/stranded/)).not.toBeInTheDocument();
   });
@@ -1440,7 +1440,7 @@ describe('the off-pool marker', () => {
   });
 
   it('is silent on a dead row', () => {
-    render(<SessionLine session={s({ wrapper: 'claude9', home: 'claude9', status: 'dead', bucket: 'dead' })}
+    render(<SessionLine session={s({ wrapper: 'claude9', home: 'claude9', status: 'dead', lifecycle: DEAD_LIFECYCLE, bucket: 'dead' })}
                         roster={pooled({ claude9: 'pool-b' })}
                         projectPool={{ state: 'tagged', name: 'pool-a' }}
                         onOpen={() => {}} onActions={() => {}} />);
@@ -1811,7 +1811,7 @@ describe('the quiet "with coordinator" state (D-5296)', () => {
   // asks row is still `held` (a restart dropped the hold), until `notifyAt`.
   it('a dead row with the field set reads exited, never the coordinator words', () => {
     const { container } = render(
-      <SessionLine session={held({ status: 'dead', bucket: 'dead' })} onOpen={() => {}} onActions={() => {}} />,
+      <SessionLine session={held({ status: 'dead', lifecycle: DEAD_LIFECYCLE, bucket: 'dead' })} onOpen={() => {}} onActions={() => {}} />,
     );
     expect(container.querySelector('.sess-state')?.textContent).toBe('exited');
     expect(container.querySelector('.sess-state--coordinator')).not.toBeInTheDocument();
@@ -1821,7 +1821,7 @@ describe('the quiet "with coordinator" state (D-5296)', () => {
   // process that died before the ladder refiled the row is still `working`.
   it('a dead process on a row still bucketed working never reads the coordinator words', () => {
     const { container } = render(
-      <SessionLine session={held({ status: 'dead' })} onOpen={() => {}} onActions={() => {}} />,
+      <SessionLine session={held({ status: 'dead', lifecycle: DEAD_LIFECYCLE })} onOpen={() => {}} onActions={() => {}} />,
     );
     expect(container.querySelector('.sess-state--coordinator')).not.toBeInTheDocument();
     expect(container.querySelector('.sess-state')?.textContent).not.toContain('with coordinator');

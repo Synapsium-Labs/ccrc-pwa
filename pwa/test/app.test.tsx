@@ -9,7 +9,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import type { AccountUsage, FleetSession } from '../../shared/api';
-import { fleetSession } from './fleetFixture';
+import { fleetSession, DEAD_LIFECYCLE } from './fleetFixture';
 import { App } from '../src/app';
 import { INSTRUMENT, REFINED } from '@ccrc/ui';
 import { navigate } from '../src/lib/router';
@@ -20,7 +20,7 @@ import { api } from '../src/lib/api';
 import { TEST_ROSTER } from './rosterFixture';
 import { seventeenLanes } from './seventeenLanes';
 
-const s = (over: Partial<FleetSession> = {}): FleetSession => (fleetSession({ workspace: 'quiet-basin', status: 'dead', branch: 'ws/quiet-basin', archivedAt: 1785300123, archivedBytes: 1_200_000_000, ...over }));
+const s = (over: Partial<FleetSession> = {}): FleetSession => (fleetSession({ workspace: 'quiet-basin', status: 'dead', lifecycle: DEAD_LIFECYCLE, branch: 'ws/quiet-basin', archivedAt: 1785300123, archivedBytes: 1_200_000_000, ...over }));
 
 afterEach(() => {
   cleanup();

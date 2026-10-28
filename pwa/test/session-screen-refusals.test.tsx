@@ -9,7 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import type { FleetSession } from '../../shared/api';
-import { fleetSession as baseSession } from './fleetFixture';
+import { fleetSession as baseSession, DEAD_LIFECYCLE } from './fleetFixture';
 import { SessionScreen } from '../src/screens/SessionScreen';
 // W2 Task S2d: the session menu's items and the model/effort chips are command doors, run by the one layer
 // `app.tsx` mounts above the screen; a case that drives them mounts it beside, as the app does.
@@ -76,7 +76,7 @@ describe('Restart session — the one control a dead row offers', () => {
     // that left the button saying "Restarting…" for ever would make a
     // recoverable failure look terminal.
     ensure.mockRejectedValue(new Error('tmux: no server running'));
-    renderScreen({ status: 'dead', bucket: 'dead' }, 'dead');
+    renderScreen({ status: 'dead', lifecycle: DEAD_LIFECYCLE, bucket: 'dead' }, 'dead');
     const btn = await screen.findByRole('button', { name: 'Restart session' });
     fireEvent.click(btn);
     const t = await screen.findByText("Couldn't restart — tmux: no server running");
@@ -88,7 +88,7 @@ describe('Restart session — the one control a dead row offers', () => {
     // The `String(err)` arm. ccd's own failures arrive as Errors; a rejected
     // fetch in a stale browser does not.
     ensure.mockRejectedValue('offline');
-    renderScreen({ status: 'dead', bucket: 'dead' }, 'dead');
+    renderScreen({ status: 'dead', lifecycle: DEAD_LIFECYCLE, bucket: 'dead' }, 'dead');
     fireEvent.click(await screen.findByRole('button', { name: 'Restart session' }));
     expect(await screen.findByText("Couldn't restart — offline")).toBeInTheDocument();
   });
@@ -99,7 +99,7 @@ describe('Restart session — the one control a dead row offers', () => {
     // one.
     let release!: () => void;
     ensure.mockReturnValue(new Promise<void>((res) => { release = () => res(); }));
-    renderScreen({ status: 'dead', bucket: 'dead' }, 'dead');
+    renderScreen({ status: 'dead', lifecycle: DEAD_LIFECYCLE, bucket: 'dead' }, 'dead');
     const btn = await screen.findByRole('button', { name: 'Restart session' });
     fireEvent.click(btn);
     await waitFor(() => expect(screen.getByRole('button', { name: 'Restarting…' })).toBeDisabled());

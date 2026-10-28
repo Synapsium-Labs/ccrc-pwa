@@ -15,7 +15,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import { createElement } from 'react';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { isSessionIdShape, type NotifyEvent, type RunSpend, type RunSummary } from '../../shared/api';
-import { fleetSession } from './fleetFixture';
+import { fleetSession, DEAD_LIFECYCLE } from './fleetFixture';
 import { seedAccountsAnswer } from './accountsAnswer';
 import { navigate } from '../src/lib/router';
 import { api } from '../src/lib/api';
@@ -66,7 +66,7 @@ const chromeApis = (): void => {
 /** Each driveable site: run its door for `id` and return the path it produced. */
 const SITES: Record<string, (id: string) => Promise<string>> = {
   'app.tsx#ArchiveRoute': async (id) => {
-    act(() => { useFleetStore.setState({ conn: 'open', sessions: [fleetSession({ id, workspace: 'quiet-basin', status: 'dead', bucket: 'archived', archivedAt: 1_784_500_000 })] }); });
+    act(() => { useFleetStore.setState({ conn: 'open', sessions: [fleetSession({ id, workspace: 'quiet-basin', status: 'dead', lifecycle: DEAD_LIFECYCLE, bucket: 'archived', archivedAt: 1_784_500_000 })] }); });
     navigate('/archive');
     render(createElement(App));
     fireEvent.click(screen.getByRole('button', { name: /^workspace /i }));

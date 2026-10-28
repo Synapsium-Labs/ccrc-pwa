@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach, vi } from 'vitest';
 import { StrictMode } from 'react';
 import { act, cleanup, render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { RUN_STATES, SPAWN_STALL_MS, type ChildReclaimStatus, type CoordCapsView, type FleetSession, type RunSpend, type RunSummary } from '../../shared/api';
-import { fleetSession } from './fleetFixture';
+import { fleetSession, DEAD_LIFECYCLE } from './fleetFixture';
 import { RunsScreen } from '../src/screens/RunsScreen';
 import { navigate } from '../src/lib/router';
 import { CHILD_RECLAIM_CHIP_GLYPH, CROSSING_GLYPH, REVIEW_GLYPH, RUN_ORDER, RUN_WORD, childReclaimChip, childReclaimGone, childReclaimRefreshDue, childReclaimTitle, crossingNote, dispatchWindow, itemTallyLabel, programWave, programsWithOpenRun, resumeNote, runForSession, runHomeProject, runItems, runKindChip, waveLabel } from '../src/fleet/runWords';
@@ -1057,7 +1057,7 @@ describe('the run row renders its session’s spawn verdict (Task 5)', () => {
     // until now only `session-line.test.tsx` measured it: deleting it left
     // this suite entirely green. Nothing is running, so how the last spawn
     // ended describes work that no longer exists.
-    withSession({ spawnState: 'blocked', status: 'dead' });
+    withSession({ spawnState: 'blocked', status: 'dead', lifecycle: DEAD_LIFECYCLE });
     expect(chip()).toBeNull();
   });
 
