@@ -6,7 +6,7 @@ import { decideShadowJournalQuery } from './shadowJournal.js';
 import type { Bus } from '../bus.js';
 import type { FleetWatcher } from '../watch.js';
 import {
-  fieldMeasured, measuredIdentity, readRegistry, readRegistryMeasured, readSessionRecord,
+  fieldMeasured, measuredIdentity, readRegistryMeasured, readSessionRecord,
 } from '../registry.js';
 import { fleetCarriesRunsAttribution } from '../fleetstate.js';
 import { answerAsk, readAskAnswer, type AskDeps } from '../inject/ask.js';
@@ -85,7 +85,6 @@ import { createHash } from 'node:crypto';
 import { appendFileSync } from 'node:fs';
 import type { SessionRecord } from '../registry.js';
 import { readLiveStateMeasured } from '../livestate.js';
-import { approvalClass, rootsForChild } from './approvalguard.js';
 import { heldFor } from './heldFor.js';
 import {
   approvalFor, createQuestions, openFor, type ApprovalRaiseDeps, type ClaimantDoorDeps, type ClaimantRule, type OperatorAnswer,
@@ -98,7 +97,7 @@ import {
 import {
   APPROVAL_CHILD_SHELL, APPROVAL_REASON_MAX_CHARS, APPROVAL_REFUSALS_LOG, APPROVAL_REQUEST_MAX_BYTES,
   CHILD_DENY_SETTINGS_FILE, type ApprovalKeyAnswer, type ApprovalRequestAccepted, type ApprovalRulingAnswer,
-  type ApprovalRulingRecord, type ApprovalView,
+  type ApprovalView,
 } from '../../../shared/api.js';
 
 /** The approval request's id shapes (plan Task 16): a registry id as `ccrc-api`'s `SAFE_RE` admits it, a lowercase
@@ -4107,11 +4106,12 @@ export function registerCoordRoutes(
    * state (`declined`, `already-ruled`, `hook-gone`); the window (`hook-gone` at or after `notifyAt`, D-5441); the
    * child's mark still names the row's run (`not-a-child`) and the claimant rule still holds the row for the caller
    * (`parent-changed`); the guard again for an allow (`guard-forbidden`, `guard-escalate`); then the signature, and
-   * the CAS that stores it.
+   * the CAS that stores it. Since W3 Q3f (D-7030) the door keeps its front ladder (the box token, the widening fields,
+   * the body, attribution, the id parse) and the rest, from the row on and in this order, is
+   * `coord/questions.ts#createQuestions`'s `rule`, with `signerFor` passed in as the raise's is.
    */
   app.post('/api/approvals/:id/rule', async (req, reply) => {
     if (!deps.coord) return notConfigured(reply);
-    const coord = deps.coord;
     if (!requireMailToken(req, reply, 'POST /api/approvals/:id/rule')) return;
     const body = (req.body ?? {}) as Record<string, unknown>;
     for (const k of ['permanent', 'updatedPermissions', 'mode']) {
@@ -4127,68 +4127,9 @@ export function registerCoordRoutes(
     if (!(await requireAttribution(reply, fromId, fromUuid, 'fromUuid'))) return;
     const id = parseCanonicalPositiveSafeInteger((req.params as { id: string }).id);
     if (id === null) return refuseRoute(reply, 'bad-request');
-    const read = coord.approvalById(id);
-    if (!read.ok) return refuseRoute(reply, 'approval-unreadable', { detail: read.detail });
-    const row = read.row;
-    if (row === null) return refuseRoute(reply, 'unknown-approval');
-    if (await approvalsKilled()) return refuseRoute(reply, 'approvals-disabled');
-    if (!rulingsAllowedHere(deps.cfg.role, deps.cfg.fleetMode, deps.cfg.ccrcDir)) return refuseRoute(reply, 'single-box');
-    if (row.parentId !== fromId) {
-      return refuseRoute(reply, 'not-parent', { detail: 'only the claimant this prompt was held for may rule on it' });
-    }
-    if (row.releaseReason !== null) return refuseRoute(reply, 'approval-released', { releaseReason: row.releaseReason });
-    if (row.state === 'declined') return refuseRoute(reply, 'declined');
-    if (row.state === 'allowed' || row.state === 'denied' || row.state === 'operator') return refuseRoute(reply, 'already-ruled');
-    const now = Date.now();
-    if (row.state !== 'held' && row.state !== 'released') return refuseRoute(reply, 'hook-gone');
-    if (now >= row.notifyAt) {
-      return refuseRoute(reply, 'hook-gone', { detail: 'the window has passed: the child\'s hook has returned and the operator has the prompt' });
-    }
-    // [registry-refused:refuses] a refused row is in no `recs`: the ruling answers `not-a-child`, and a refused claimant reads as `parent-not-live` in `heldFor`, so no ruling is stored.
-    const recs = await readRegistry(deps.io, deps.cfg);
-    const rec = recs.find((r) => r.id === row.childId) ?? null;
-    if (rec === null || rec.child.kind !== 'child' || rec.child.runId !== row.runId) return refuseRoute(reply, 'not-a-child');
-    let binding: Awaited<ReturnType<typeof heldFor>>;
-    try {
-      binding = await heldFor({ coord, io: deps.io, cfg: deps.cfg, tmux: deps.tmux }, rec.id, rec.child, recs, now);
-    } catch (err) {
-      return refuseRoute(reply, 'run-unreadable', { detail: err instanceof Error ? err.message : String(err) });
-    }
-    if (binding.kind === 'not-a-child') return refuseRoute(reply, 'not-a-child');
-    if (binding.kind !== 'held' || binding.parent !== fromId) return refuseRoute(reply, 'parent-changed');
-    if (verdict === 'allow') {
-      // The guard again (spec §6.3 server step 5): the class stored at mint, and the classifier run once more over the
-      // input held in memory for the window. Unknown — no input held — is escalate.
-      if (row.class === 'forbidden') return refuseRoute(reply, 'guard-forbidden');
-      const held = questions.approvalInput(id, now);
-      const again = held === undefined ? 'escalate'
-        : approvalClass(held.tool, held.input, { ...(rootsForChild(rec, deps.cfg.home) ?? { worktree: null, tmpRoot: null, scratch: null, home: deps.cfg.home }), cwd: held.cwd });
-      if (again === 'forbidden') return refuseRoute(reply, 'guard-forbidden');
-      if (row.class !== 'ordinary' || again !== 'ordinary') return refuseRoute(reply, 'guard-escalate');
-    }
-    const signer = signerFor();
-    if (signer === null) return refuseRoute(reply, 'internal', { detail: 'the approval signing key is not loaded' });
-    const record: ApprovalRulingRecord = {
-      v: 1, rowId: row.id, sessionId: row.childId, agentId: row.agentId, digest: row.digest, nonce: row.nonce,
-      class: row.class, verdict, reason, expiresAt: row.notifyAt,
-    };
-    const sig = signer.signRuling(record);
-    if (sig === null) return refuseRoute(reply, 'internal', { detail: 'the ruling has no canonical form' });
-    const taken = coord.takeApprovalForRule(id, { by: fromId, verdict, reason, ruling: JSON.stringify({ record, sig }), now });
-    if (!taken.ok) {
-      return refuseRoute(reply, taken.why === 'already-ruled' ? 'already-ruled' : taken.why === 'declined' ? 'declined'
-        : taken.why === 'unknown-approval' ? 'unknown-approval' : 'not-held');
-    }
-    questions.forgetApprovalInput(id);
-    // The journal's second record, beside the row: who ruled, and what, in the operator's name. Through the notice sink
-    // (D-5858), `'record-only'`: never pushed, whatever the presence, and AFTER the ruling is stored, so a failed archive
-    // costs the feed row only (the funnel catches it and says so), never the ruling or this 200.
-    notice({
-      kind: 'ask', sessionId: row.childId, runId: null, title: 'permission ruled',
-      body: `${fromId} ${verdict === 'allow' ? 'allowed' : 'denied'} ${row.childId}'s ${row.tool} call: ${reason}`,
-    }, 'record-only', { degraded: 'ruling stored, feed archive degraded' });
-    watcher?.approvalRuled(row.childId, row.agentId, fromId, verdict);
-    return { ok: true, state: verdict === 'allow' ? 'allowed' : 'denied' };
+    // W3 Q3f (D-7030): an ALIAS from here on. The row and everything after it, the signing unchanged, are the
+    // claimant's core, `questions.rule`, which `POST /api/questions/approval-<n>/rule` calls too.
+    return sendAnswer(reply, await questions.rule({ kind: 'approval', id, fromId, verdict, reason }, claimantDeps!));
   });
 
   /** `POST /api/approvals/:id/release` — the held-for claimant hands the prompt over (`held -> declined`, D-5440): the
