@@ -1447,6 +1447,25 @@ describe('ccd-land-probe: a signal is recorded where it lands and raised only at
     expect(b.exists('probe'), 'proj-b measured on with its checkpoints dead').toBe(false);
   });
 
+  it('a signal that kills the fallback\'s own read of a row leaves that row undecided: its old lineage is rewritten unmeasured, never pruned (review 1140 F1)', { timeout: 90_000 }, async () => {
+    fx.addHead(1, { 'a.txt': 'a\n' });
+    fx.addRow('lane-a-proj-a-alpha', 'ws/alpha');
+    fx.conf(fx.project, 'lineage=on\n');
+    expect(fx.run().status).toBe(0);
+    expect(fx.readJson('lane-a-proj-a-alpha.lineage').state).toBe('measured');
+    // Only the fallback reads refs/heads/ws/alpha in this run (the measuring path raises before its lineage pass), so
+    // the wrapper needs no marker: on that read it starts a helper and signals the probe, whose handler kills the read.
+    trackGit([
+      'case " $* " in *"refs/heads/ws/alpha"*)',
+      `  sleep 100 & echo $! >> '${path.join(h.home, 'git-pids')}'`,
+      '  kill -TERM $PPID; wait;;',
+      'esac',
+    ].join('\n'));
+    const r = fx.runPatched('def bad(*a):\n    raise RuntimeError("planted")\nns["fetch_into_scratch"] = bad');
+    await endsClean(r);
+    expect(fx.readJson('lane-a-proj-a-alpha.lineage')).toMatchObject({ state: 'unmeasured', why: 'fetch-failed', tip: null, chain: [] });
+  });
+
   it('a signal after the last checkpoint is held, and still sets the exit status', { timeout: 60_000 }, async () => {
     fx.addHead(1, { 'a.txt': 'a\n' });
     fx.conf(fx.project, '');
@@ -1549,6 +1568,49 @@ describe('ccd-land-probe: a signal is recorded where it lands and raised only at
     } finally {
       if (!pidGone(pid)) { try { process.kill(-pid, 'SIGKILL'); } catch { /* gone */ } }
     }
+  });
+});
+
+describe('ccd-land-probe: only rc 0 and rc 1 decide a row (fix round 3, review 1140 F1)', () => {
+  const ALPHA = 'lane-a-proj-a-alpha.lineage';
+  /** A measured tick with one ws/ row, so the row has an old lineage file; then the wrapper is cleared again. */
+  const measuredOnce = (): string => {
+    fx.wrapGit('');
+    expect(fx.run().status).toBe(0);
+    expect(fx.readJson(ALPHA).state).toBe('measured');
+    return fs.readFileSync(path.join(fx.landDir, ALPHA), 'utf8');
+  };
+
+  it('an unreadable answer (rc 128) or a read killed by its own SIGTERM (rc -15) leaves the row undecided: the old file stays on a measured base and is rewritten unmeasured on a failed fetch', { timeout: 120_000 }, () => {
+    fx.addHead(1, { 'a.txt': 'a\n' });
+    fx.addRow('lane-a-proj-a-alpha', 'ws/alpha');
+    fx.conf(fx.project, 'lineage=on\n');
+    const answers: Array<[string, string]> = [['rc 128', 'exit 128'], ['rc -15', 'kill -TERM $$; sleep 5; exit 0']];
+    for (const [name, act] of answers) {
+      const old = measuredOnce();
+      fx.wrapGit(`case " $* " in *"refs/heads/ws/alpha"*) ${act};; esac`);
+      expect(fx.run().status, `${name}, measured base`).toBe(0);
+      expect(fx.readJson('probe').state, name).toBe('measured');
+      expect(fs.readFileSync(path.join(fx.landDir, ALPHA), 'utf8'), `${name}, measured base: the old file`).toBe(old);
+
+      measuredOnce();
+      fx.wrapGit(`case " $* " in *" fetch "*) exit 1;; *"refs/heads/ws/alpha"*) ${act};; esac`);
+      const r = fx.run();
+      expect(r.status, `${name}, failed fetch`).toBe(0);
+      expect(fx.readJson('probe'), name).toMatchObject({ state: 'unmeasured', why: 'fetch-failed' });
+      expect(fx.readJson(ALPHA), `${name}, failed fetch`).toMatchObject({ state: 'unmeasured', why: 'fetch-failed', tip: null, chain: [] });
+    }
+  });
+
+  it('a ws/ row whose branch is missing (rc 1) is decided: it does not qualify, and its old file is pruned', { timeout: 90_000 }, () => {
+    fx.addHead(1, { 'a.txt': 'a\n' });
+    fx.addRow('lane-a-proj-a-alpha', 'ws/alpha');
+    fx.conf(fx.project, 'lineage=on\n');
+    measuredOnce();
+    fx.gitIn(fx.repo, 'branch', '-D', 'ws/alpha');
+    expect(fx.run().status).toBe(0);
+    expect(fx.readJson('probe').state).toBe('measured');
+    expect(fx.exists(ALPHA), 'the old file of a row whose branch is gone').toBe(false);
   });
 });
 

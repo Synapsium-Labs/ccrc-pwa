@@ -5999,12 +5999,17 @@ It writes four JSON files, each `"v": 1`, under `~/.cc-sessions/landing/<project
 | `enabled` | the mirror of the conf's `lineage=on`, with its own time |
 
 Anything the probe cannot measure is written as `unmeasured` with a why, and never as clean or green. That
-covers a failed fetch or gh call, a git child past its deadline (`timeout`), a child the project budget cut
-(`why: budget`), and an error before the first write. `fetch-failed` also covers a scratch, alternates or refspec
+covers a failed fetch or gh call, a git child past its deadline (`timeout`), and an error before the first write.
+A child the project budget cut says `why: budget` at these sites: the scratch's `init`, the fetch URL's
+`ls-remote --get-url`, the fetch itself and the fetched base's `rev-parse` (in `probe` and `main-health`), and every
+`merge-tree` (a head's or a pair's verdict, and the lineage walk's merge step). A budget cut on the first read of
+`remote.origin.url`, whether the read itself was cut or `store.before`'s count had already spent the budget, writes
+`probe` and every lineage file `repo-unreadable` and `main-health` `fetch-failed`. `fetch-failed` also covers a scratch, alternates or refspec
 failure before the first write, since the probe's set has no closer word. A failed or cut fetch, or an error before the first write,
 rewrites `probe`, `main-health` and every lineage of the project, so none of them keeps an older measurement. A
 row the tick could not decide keeps its last lineage file, with that file's own `at`. This happens when the budget
-ran out after the fetch, when one row's read timed out, or when the tick never reached the project. Stage 4
+ran out after the fetch, when one row's read timed out or gave no readable answer, or when the tick never reached
+the project. Stage 4
 compares that file's tip with the live tip. In `probe`, a null `store.after` or `scratch.sizeKiB` means
 that figure was not measured on that tick, for example because the tick was interrupted or the count failed.
 

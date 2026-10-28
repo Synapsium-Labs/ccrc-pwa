@@ -8397,6 +8397,11 @@ _check_scope-sweep() {
 # scratch size read as "not measured" on the PASS line, and an interim probe (store.after null) with no main-health beside it is a
 # first tick still running (a SKIP, or a note on the PASS line), never land-probe-unreadable. A PASS line also counts the heads that
 # came back unmeasured (", K unmeasured") when some but not all did.
+# AN INTERRUPTED TICK READS AS A RUNNING ONE (review 1140 F2, accepted): a SIGTERM or SIGINT leaves the probe in the interim
+# record's shape (R7: store.after and scratch.sizeKiB null), so until the next tick rewrites the trio this check reads it as a
+# tick still running, and its PASS line carries the previous tick's main-health verdict. That is what it shows during every
+# running tick too, bounded by the next tick and by the stale arm. Telling an interrupted tick from a running one needs an
+# explicit marker, which is a later wave's to add if a reader needs it.
 # A red base is likewise a fact about the repository, and the PASS line says "red". The PASS line per project reads
 # `<project>: N heads, M conflicting with <base>, <base> green; store +K objects, scratch S KiB this tick`: the store figure is
 # the change in the project's object count over its last tick (the probe's scratch is meant to keep it at +0, spec 12).

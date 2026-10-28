@@ -213,7 +213,8 @@ OPTION_PREFIXES = ('-c', '--config-env', '-C', '--git-dir', '--work-tree', '--ex
 # checked wherever its element stands, before an operand or after one. A literal `--` is admitted for the fetch alone,
 # and after it git reads operands only, so the door refuses every element that starts with `-` (answering `option
 # <opt>`); the prefix rule above still runs first. This is a deliberate departure from the plan's prefix deny list
-# (fix round 1, review 1109, F2 and A9; fix round 2, review 1125).
+# (fix round 1, review 1109, F2 and A9; fix round 2, review 1125). Bound once, here, and never written: R5b's AST census
+# refuses a rebinding, an item or attribute store, a delete and a method call on it anywhere else (review 1140 A2).
 OPTION_FORMS = {
     ('project', 'rev-parse'): ('--verify', '-q'),
     ('project', 'rev-list'): (),
@@ -299,7 +300,8 @@ def git_check(where, args):
         for p in OPTION_PREFIXES:
             if a.startswith(p):
                 raise ProbeRefused('option ' + p)
-    forms = OPTION_FORMS.get((where, sub), ())
+    # Read by subscript: R5b's census refuses any write to the table and any method called on it (review 1140 A2).
+    forms = OPTION_FORMS[(where, sub)] if (where, sub) in OPTION_FORMS else ()
     past = False   # after the fetch's `--`: git reads operands only, and the door refuses every dash-led one
     for a in args[1:]:
         if past:
@@ -899,10 +901,15 @@ def project_rows(project):
 
 
 def qualifying(rows):
-    """(the rows that qualify for a lineage file, the rows left undecided as (id, branch)). A row qualifies when its
-    branch starts with ws/ and refs/heads/<branch> resolves in the project repository. Each row is read on its own: a
-    branch the git door refuses cannot qualify (decided, logged once); a read that timed out or ran past the budget
-    leaves the row undecided. On a measured base its previous file stays; on a failed fetch it is rewritten unmeasured."""
+    """(the rows that qualify for a lineage file, the rows left undecided as (id, branch)). Only a ws/ branch is read,
+    each row on its own, with `rev-parse --verify -q refs/heads/<branch>`, and only two answers decide: rc 0 with a
+    40-hex sha qualifies, and rc 1 (the ref is missing) does not qualify. A branch the git door refuses cannot qualify
+    either (decided, logged once). Every other answer leaves the row undecided: rc None (a deadline, a spent budget, a
+    recorded signal, a spawn failure), a negative rc (a child a signal killed: the handler's own kill, or a stop that
+    signalled the child directly), 128 (an unreadable repository) or any other value. An undecided row's previous file
+    stays on a measured base; on a failed fetch, and in the before-first-write fallback, it is rewritten unmeasured
+    with tip null. Never pruned: the checkpoint after the read is a no-op in the fallback (CLOSING), so this rule is
+    what keeps a killed read from deciding the row."""
     out = []
     undecided = []
     for rid, branch in rows:
@@ -914,10 +921,10 @@ def qualifying(rows):
             log('lineage-skip: a registry row names a branch the git door refuses')
             continue
         checkpoint()   # a no-op when the fallback is the caller (CLOSING)
-        if r.rc is None:
-            undecided.append((rid, branch))
-        elif r.rc == 0 and HEX40.fullmatch(r.out.strip()):
+        if r.rc == 0 and HEX40.fullmatch(r.out.strip()):
             out.append((rid, branch, r.out.strip()))
+        elif r.rc != 1:
+            undecided.append((rid, branch))
     return out, undecided
 
 
@@ -1232,8 +1239,10 @@ def finish_probe(ldir, doc, store, interrupted):
     """The probe's closing rewrite (store.after, scratch.sizeKiB, elapsedMs), run from probe_project's finally once the
     first `probe` write happened, so the record is complete however the tick ended. What was measured stands (state, why,
     heads, pairs, at are not touched); each figure that cannot be measured stays null. A tick being terminated measures
-    nothing more (no child is started), and writes the record as it is. A signal recorded before or during the rewrite
-    makes it an interrupted record too (store.after and scratch.sizeKiB null, R7), never one of half-measured figures."""
+    nothing more (no child is started), and writes the record as it is. A signal recorded before the nulling test below
+    (before the rewrite, or while its count or size is measured) makes it an interrupted record too (store.after and
+    scratch.sizeKiB null, R7), never one of half-measured figures. A signal that lands later, inside the closing
+    write_json, leaves the measured record whole, and the tick still exits 128 plus the signal."""
     after, kib = None, None
     if not interrupted and SIGNALLED is None:
         after = store_counts()

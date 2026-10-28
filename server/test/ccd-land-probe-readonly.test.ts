@@ -7,9 +7,12 @@
 // dynamic builtins out (`__import__`, `eval`, `exec`, `compile`, `getattr`, `setattr`, `vars`, `globals`, `locals`,
 // as bare names, and a `__dict__` attribute). The spawn names are held by their LITERAL SPELLINGS (`subprocess.Popen`
 // once, `os.system`, `pty.spawn` and the rest of the banned list, an aliased import, a bare module handed to another
-// name). They are not a proof that no process can be started. The KNOWN LIMIT is a lookup through an imported
-// module's own attributes that no pinned name spells (a name built from pieces, say), and code in another file. The
-// behaviour that matters is held by the self-test below, which runs git_check's verdicts, and by the behaviour suite.
+// name). They are not a proof that no process can be started. The census also holds OPTION_FORMS bound once and never
+// written: no rebinding, item or attribute store, delete or method call on it outside its definition (review 1140 A2).
+// The KNOWN LIMIT is a lookup through an imported module's own attributes that no pinned name spells (a name built
+// from pieces, say), a write to the door's table through an alias (`x = OPTION_FORMS; x[...] = ...`), which the census
+// does not follow, and code in another file. The behaviour that matters is held by the self-test below, which runs
+// git_check's verdicts, and by the behaviour suite.
 //
 // WHERE THE PLANTING EVIDENCE IS. This file plants nothing. A pin is a request until a planted violation turns it red,
 // and that evidence is the mutation rows (one planted violation each, measured one at a time on the final files, the
@@ -37,8 +40,18 @@ const CENSUS = `
 import ast, json, sys
 BANNED = ('__import__', 'eval', 'exec', 'compile', 'getattr', 'setattr', 'vars', 'globals', 'locals', '__builtins__')
 tree = ast.parse(sys.stdin.read())
-imports, names, attrs = [], [], []
+imports, names, attrs, forms = [], [], [], []
 for n in ast.walk(tree):
+    # Every write to OPTION_FORMS, and every method called on it: a rebinding (its one definition is the one expected),
+    # an item or attribute store or delete, an augmented assignment, a call such as .update().
+    if isinstance(n, ast.Name) and n.id == 'OPTION_FORMS' and not isinstance(n.ctx, ast.Load):
+        forms.append('bind %d' % n.col_offset)
+    if isinstance(n, (ast.Subscript, ast.Attribute)) and isinstance(n.value, ast.Name) and n.value.id == 'OPTION_FORMS' \
+            and not isinstance(n.ctx, ast.Load):
+        forms.append('store')
+    if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) and isinstance(n.func.value, ast.Name) \
+            and n.func.value.id == 'OPTION_FORMS':
+        forms.append('call .' + n.func.attr)
     if isinstance(n, ast.Import):
         imports += [[a.name, None, a.asname] for a in n.names]
     elif isinstance(n, ast.ImportFrom):
@@ -47,9 +60,9 @@ for n in ast.walk(tree):
         names.append(n.id)
     elif isinstance(n, ast.Attribute) and n.attr in ('__dict__', '__import__', '__builtins__'):
         attrs.append(n.attr)
-print(json.dumps({'imports': sorted(imports, key=repr), 'names': sorted(names), 'attrs': sorted(attrs)}))
+print(json.dumps({'imports': sorted(imports, key=repr), 'names': sorted(names), 'attrs': sorted(attrs), 'forms': sorted(forms)}))
 `;
-function census(text: string): { imports: Array<[string, string | null, string | null]>; names: string[]; attrs: string[] } {
+function census(text: string): { imports: Array<[string, string | null, string | null]>; names: string[]; attrs: string[]; forms: string[] } {
   return JSON.parse(execFileSync('python3', ['-I', '-c', CENSUS], { input: text, encoding: 'utf8' }));
 }
 
@@ -147,6 +160,9 @@ describe('ccd-land-probe: the literal source pins', () => {
       [...want].sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b))));
     expect(seen.names, 'a dynamic builtin as a bare name').toEqual([]);
     expect(seen.attrs, 'a __dict__, __import__ or __builtins__ attribute').toEqual([]);
+    // OPTION_FORMS is bound once, at module level (column 0), and never written or called on (review 1140 A2): R5 pins
+    // its literal, and this holds that nothing widens it at run time.
+    expect(seen.forms, 'a write to OPTION_FORMS, or a method called on it').toEqual(['bind 0']);
     // The pin above sees the ['git' spelling; this one closes a respelled third call site, for git and gh alike.
     expect(src.match(/\bsubprocess\.Popen\b/g) ?? [], 'subprocess.Popen').toHaveLength(1);
     // The def, git_ro, gh_get and gh_pr_list: a fifth is a new way to start a child, and is reviewed as one.
@@ -191,23 +207,35 @@ describe('ccd-land-probe: the literal source pins', () => {
     expect(src.match(/\bos\.kill\(/g) ?? [], 'the one os.kill, in selfsignal').toHaveLength(1);
     expect(/^def selfsignal\([\s\S]*?\n\n\n/m.exec(src)?.[0] ?? '').toContain('os.kill(os.getpid(), signal.SIGTERM)');
     expect(headCode).not.toContain('SELFSIGNAL');
-    // No unit, installer or other script in the shipped trees names either test-only variable.
+    // No unit, installer or other script anywhere in the repository names either test-only variable: every TRACKED
+    // file is read (review 1140 A3), and the only holders are the probe, the tests and the wave's notes. The plan
+    // names the self-test knob as its D-4334, so it may hold CCD_LAND_PROBE_SELFTEST, never the self-signal one.
     const root = path.resolve(path.dirname(PROBE), '..');
-    const holders: string[] = [];
-    const walk = (d: string): void => {
-      for (const e of fs.readdirSync(d, { withFileTypes: true })) {
-        const p = path.join(d, e.name);
-        if (e.isDirectory()) walk(p);
-        else if (e.isFile() && /CCD_LAND_PROBE_SELF(SIGNAL|TEST)/.test(fs.readFileSync(p, 'latin1'))) holders.push(path.relative(root, p));
-      }
-    };
-    for (const d of ['ccd', 'deploy']) walk(path.join(root, d));
-    expect(holders).toEqual(['ccd/ccd-land-probe']);
+    const tracked = execFileSync('git', ['-C', root, 'ls-files', '-z'], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 })
+      .split('\0').filter(Boolean);
+    expect(tracked.length, 'the tracked files').toBeGreaterThan(100);
+    const holders = (re: RegExp): string[] => tracked.filter((f) => {
+      const p = path.join(root, f);
+      try {
+        return fs.lstatSync(p).isFile() && re.test(fs.readFileSync(p, 'latin1'));
+      } catch { return false; }
+    });
+    const allowed = (f: string): boolean => f === 'ccd/ccd-land-probe' || f.startsWith('server/test/')
+      || f === 'docs/superpowers/plans/2026-10-27-landing-order-wave3b-conflict-radar/wave3b-notes.md';
+    const signal = holders(/CCD_LAND_PROBE_SELFSIGNAL/);
+    expect(signal).toContain('ccd/ccd-land-probe');
+    expect(signal.filter((f) => !allowed(f)), 'a holder of CCD_LAND_PROBE_SELFSIGNAL').toEqual([]);
+    const selftest = holders(/CCD_LAND_PROBE_SELFTEST/);
+    expect(selftest.filter((f) => !allowed(f) && f !== 'docs/superpowers/plans/2026-10-27-landing-order-wave3b-conflict-radar.md'),
+      'a holder of CCD_LAND_PROBE_SELFTEST').toEqual([]);
   });
 
   it('R9 every child the measuring code starts is followed by checkpoint(): only the closing rewrite and store_counts\' own body are exempt (fix round 2 scoped review I1)', () => {
     // A signal kills the child in flight; without the checkpoint right after it, its rc -9 would be read and written as
     // a measurement. Each site assigns the child's answer on one line, so a bare call or a returned one is a new form.
+    // A checkpoint is a no-op under CLOSING, so in the before-first-write fallback it cannot stop a killed read: there
+    // it is qualifying's rule (only rc 0 and rc 1 decide a row) that keeps a killed read from deciding the row (review
+    // 1140 F1, held by the behaviour cases, not by this text pin).
     const lines = program.split('\n');
     const CALL = /\b(git_ro|gh_get|gh_pr_list|store_counts)\(/;
     let fn = '';
