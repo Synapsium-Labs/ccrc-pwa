@@ -287,8 +287,8 @@ describe('W7 PWA census: REAL rows (reporting, not ratcheting; spec §5.1 rule 3
   });
 
   // C7e Step 5 (D-7183): each answer kind's state moves into the answer lifecycle in its own commit.
-  it('dialogSheetStates(): 6 useState calls inside DialogSheet', () => {
-    held('dialogSheetStates', dialogSheetStates(), 6);
+  it('dialogSheetStates(): 3 useState calls inside DialogSheet (otherFor, focusNonce, raiseMark)', () => {
+    held('dialogSheetStates', dialogSheetStates(), 3);
   });
 
   it('clientPairingDefinitions(): 9, prefixMatches and norm among them', () => {

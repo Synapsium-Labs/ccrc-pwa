@@ -260,18 +260,15 @@ export function DialogSheet({ id, store, onOpenTerminal, raise, asker = null, on
   const [lifeNow, showLife] = useReducer((_: AnswerState, next: AnswerState) => next, machine.get());
   useLayoutEffect(() => machine.subscribe(() => showLife(machine.get())), [machine]);
   const answering = answeringOption(lifeNow);
-  // The identity of whichever content — a pane dialog's id, or a stringified hook envelope (HookAsk carries no id of
-  // its own; see `askKey` below) — the user waved away with a scrim tap, Esc, or swipe. It stays hidden until something
-  // with a DIFFERENT identity arrives. One slot serves both kinds of surface: only one is ever open at a time, and
-  // sharing it means a dismissal survives the moment display hands off from one to the other.
-  const [dismissedKey, setDismissedKey] = useState<string | null>(null);
-  // D-5089: the pane dialog that was live when the operator hid the ENVELOPE.
-  // The envelope's own key is a hash of its JSON, which no pane dialog id
-  // ever equals, so without this the hand-off on `ask_cleared` re-opened the
-  // very question the operator had just waved away.
-  const [dismissedDialogId, setDismissedDialogId] = useState<string | null>(null);
-  /** The envelope's screen (`askScreen`) the sheet was hidden on; meaningful only while `dismissedKey` is that ask. */
-  const [dismissedScreen, setDismissedScreen] = useState<string | null>(null);
+  // The dismissal, the lifecycle's (`Dismissal`). `dismissedKey`: the identity of whichever content — a pane dialog's id,
+  // or a stringified hook envelope (HookAsk carries no id of its own; see `askKey` below) — the user waved away with a
+  // scrim tap, Esc, or swipe. It stays hidden until something with a DIFFERENT identity arrives. One slot serves both
+  // kinds of surface: only one is ever open at a time, and sharing it means a dismissal survives the moment display hands
+  // off from one to the other. `dismissedDialogId` (D-5089): the pane dialog that was live when the operator hid the
+  // ENVELOPE. The envelope's own key is a hash of its JSON, which no pane dialog id ever equals, so without this the
+  // hand-off on `ask_cleared` re-opened the very question the operator had just waved away. `dismissedScreen`: the
+  // envelope's screen (`askScreen`) the sheet was hidden on; meaningful only while `dismissedKey` is that ask.
+  const { key: dismissedKey, dialogId: dismissedDialogId, screen: dismissedScreen } = lifeNow.dismissal;
   // D-5090: the own-words text and its call, one value so the two change together (see `WordsCall`), in the lifecycle.
   const own = lifeNow.own;
   // D-6325, R5: the question whose `Other` row the operator chose, so its field is open. The text and call above keep it
@@ -345,9 +342,8 @@ export function DialogSheet({ id, store, onOpenTerminal, raise, asker = null, on
   // raise cannot conjure a sheet for a question that is no longer live.
   useEffect(() => {
     if (!raise) return;
-    setDismissedKey(null);
-    setDismissedDialogId(null);
-  }, [raise]);
+    machine.dispatch({ type: 'raise' });
+  }, [raise, machine]);
 
   // Dismissal, per kind of surface. The hook's envelope has no id of its own: a hash of its JSON stands in for one
   // (`askKey`). Content equality is exactly what should reopen or stay dismissed here: session-hook.sh rewrites the
@@ -425,21 +421,13 @@ export function DialogSheet({ id, store, onOpenTerminal, raise, asker = null, on
     ? !(askKey === dismissedKey && (screenNow === null || screenNow === dismissedScreen))
     : dialog !== null && dialog.id !== dismissedKey && dialog.id !== dismissedDialogId));
 
-  const hide = (): void => {
-    if (hooked) {
-      setDismissedKey(askKey);
-      setDismissedScreen(screenNow);
-      setDismissedDialogId(dialog?.id ?? null);
-    } else if (dialog !== null) {
-      setDismissedKey(dialog.id);
-    }
-  };
+  // What a hide records: a hooked ask's key, its screen and the pane dialog live then; any other surface, its dialog's id.
+  const hiding = { hooked, askKey, screen: screenNow, dialogId: dialog?.id ?? null };
 
   const close = (): void => {
     // Non-dismissable while an answer is in flight — the open sheet is the
-    // only honest record that the tap is still landing.
-    if (locked) return;
-    hide();
+    // only honest record that the tap is still landing. The lifecycle refuses it.
+    machine.dispatch({ type: 'dismiss', ...hiding });
   };
 
   const answer = async (optionIndex: number): Promise<void> => {
@@ -595,13 +583,6 @@ export function DialogSheet({ id, store, onOpenTerminal, raise, asker = null, on
     }
   };
   // The boxes changed here and not committed: a tab move would lose them, so ←/→ and the strip wait.
-  // The lifecycle the content reads (`answerLifecycle.ts`): its in-flight flags, as this controller holds them.
-  const life: AnswerState = {
-    phase: lifeNow.phase,
-    own,
-    pick,
-    dismissal: { key: dismissedKey, dialogId: dismissedDialogId, screen: dismissedScreen },
-  };
   const picksHeld = dialog?.multi !== undefined && pick.id === dialog.id && pick.call === null
     && picksUncommitted(dialog.multi, pick.picked);
 
@@ -660,7 +641,7 @@ export function DialogSheet({ id, store, onOpenTerminal, raise, asker = null, on
   const frame = askFrame(source, view, asker);
   // The way out of a surface that cannot be answered here: hide it and open the terminal.
   const leave = (): void => {
-    hide();
+    machine.dispatch({ type: 'leave', ...hiding });
     onOpenTerminal?.();
   };
 
@@ -674,7 +655,7 @@ export function DialogSheet({ id, store, onOpenTerminal, raise, asker = null, on
         view={view}
         from={source.kind === 'structured' ? source.from : 'hook'}
         dialog={dialog}
-        life={life}
+        life={lifeNow}
         gap={gap}
         words={words}
         picks={picks}
