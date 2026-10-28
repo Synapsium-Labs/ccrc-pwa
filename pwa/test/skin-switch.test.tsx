@@ -458,6 +458,42 @@ describe('a reader following a running turn', () => {
  *  More sheet, its quick bar's sheets and its inspector overlay if they close. */
 export const SWITCH_CLOSES: Readonly<Record<string, string>> = {};
 
+// Desktop polish T3e (D-6385): the inspector's hidden choice is the device's, kept in `inspectorShown.ts` and in
+// storage, never in a part a switch replaces. Red when the choice lives in the rail's own state: Instrument's set
+// places no rail, so the choice would be lost on the way there and back.
+describe('the inspector choice', () => {
+  it("the inspector's hidden choice survives a switch and a switch back", async () => {
+    const { INSPECTOR_STORAGE_KEY, resetInspectorChoiceForTests } = await import('../src/inspector/inspectorShown');
+    resetInspectorChoiceForTests();
+    vi.stubGlobal('matchMedia', (q: string) => {
+      const min = /min-width:\s*(\d+)px/.exec(q);
+      return {
+        matches: (min === null || 1920 >= Number(min[1])) && !q.includes('pointer: coarse'),
+        media: q, onchange: null,
+        addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, dispatchEvent: () => false,
+      };
+    });
+    try {
+      openSession(WS);
+      const rail = (): boolean => document.querySelector('.ref-inspector') !== null;
+      const door = (): HTMLElement | null => document.querySelector<HTMLElement>("[data-command='toggle-inspector']");
+      expect(rail(), 'shown to begin with').toBe(true);
+      fireEvent.click(door()!);
+      expect(rail()).toBe(false);
+      toInstrument();
+      expect(door(), 'Instrument places none').toBeNull();
+      act(() => { setSkin(REFINED); });
+      expect(rail(), 'still hidden after the way back').toBe(false);
+      expect(door()!.getAttribute('aria-expanded')).toBe('false');
+      expect(localStorage.getItem(INSPECTOR_STORAGE_KEY)).toBe('hidden');
+      fireEvent.click(door()!);
+      expect(rail(), 'and it shows again').toBe(true);
+    } finally {
+      resetInspectorChoiceForTests();
+    }
+  });
+});
+
 describe('SWITCH_CLOSES is exact', () => {
   it('every layer open before a switch is open after it, unless registered; every registered one closes', () => {
     openSession();

@@ -33,8 +33,7 @@ import { routeView } from '../session/routeView';
 import { substrateFaultTitle } from '../fleet/substrateWords';
 import { SessionChromeInputs, SessionHeader, type SessionHeaderProps } from '../session/SessionHeader';
 import { useFrameSet } from '../skins/frame';
-import { INSPECTOR_QUERY } from '../inspector/useInspectorSession';
-import { useMediaQuery } from '../lib/useMediaQuery';
+import { useInspectorShown } from '../inspector/inspectorShown';
 import { SessionFlows, type SessionActions } from '../session/SessionFlows';
 import { useEscapeInterrupt } from '../session/useEscapeInterrupt';
 import { liveStatus } from '../session/liveStatus';
@@ -515,8 +514,10 @@ export function SessionScreen({
   const frameSet = useFrameSet();
   const SkinChrome = frameSet?.SessionChrome ?? null;
   // ONE INSTANCE PER WIDTH (W2 Task S8, D-5474): where the skin's inspector holds the plan and the mail (at >=1600, a
-  // skin that places one), the column does not render their strips. Asked of the set, never of the skin's id.
-  const inspectorHoldsStrips = useMediaQuery(INSPECTOR_QUERY) && (frameSet?.Inspector ?? null) !== null;
+  // skin that places one, and shown: a person may hide it, T3e D-6385), the column does not render their strips, and a
+  // hidden rail brings them back. Asked of the set, never of the skin's id.
+  const inspectorShown = useInspectorShown();
+  const inspectorHoldsStrips = inspectorShown && (frameSet?.Inspector ?? null) !== null;
   const chromeInputs: SessionHeaderProps = {
     session: live,
     status,
