@@ -645,3 +645,58 @@ describe('dense rows at the desk (T2e, D-6335)', () => {
     }
   });
 });
+
+// ---- Desk polish, T2f (D-6371) ----------------------------------------------------------------------------------
+
+describe("Instrument's desk column: no runs row, and the class chooser on the toggle's row in project mode (T2f)", () => {
+  /** The class chooser, by its accessible name: every one in the document. */
+  const choosers = (): HTMLElement[] => screen.queryAllByLabelText('Class');
+  /** The fleet column in the frame's nav slot; asserted present first, so an absent column never passes as "no row". */
+  const column = (): HTMLElement => {
+    const el = document.querySelector<HTMLElement>('.shell-nav section[aria-label="Fleet"]');
+    expect(el, 'the fleet column is mounted').not.toBeNull();
+    return el!;
+  };
+
+  it('status mode at the desk: no runs row and no class chooser', () => {
+    mount();
+    expect(table(), 'the table is mounted').not.toBeNull();
+    expect(column().querySelector('.fleet-runs-line'), 'the runs line').toBeNull();
+    expect(within(column()).queryByRole('button', { name: /^Runs · / }), 'a Runs · n door').toBeNull();
+    expect(choosers(), 'class choosers').toHaveLength(0);
+    // The rail's Runs is the door that stays.
+    expect(document.querySelectorAll('[data-command="go-runs"]'), 'the rail\'s Runs door').toHaveLength(1);
+  });
+
+  it("project mode at the desk: the chooser on the toggle's row", () => {
+    mount();
+    pick('Project');
+    expect(column().querySelector('.fleet-runs-line'), 'the runs line').toBeNull();
+    expect(choosers(), 'class choosers').toHaveLength(1);
+    const chooser = choosers()[0]!;
+    // Beside the toggle on its row, never inside the radiogroup (whose arrow keys would rove into it).
+    expect(toggle().contains(chooser), 'inside the radiogroup').toBe(false);
+    expect(toggle().parentElement, 'the toggle sits on a row of its own').not.toBe(table());
+    expect(toggle().parentElement!.contains(chooser), "on the toggle's row").toBe(true);
+    // It is the live chooser: the options and the value the fleet screen's had.
+    expect([...(chooser as HTMLSelectElement).options].map((o) => o.value)).toEqual(['', 'default', 'fable', 'opus', 'sonnet', 'haiku']);
+    expect((chooser as HTMLSelectElement).value).toBe('');
+    // Back to status mode: the chooser leaves with project mode.
+    pick('Status');
+    expect(choosers(), 'class choosers in status mode').toHaveLength(0);
+  });
+
+  it('below 900 the runs row is as today', () => {
+    stubWidth(false);
+    mount();
+    const line = column().querySelector('.fleet-runs-line');
+    expect(line, 'the runs line').not.toBeNull();
+    expect(within(line as HTMLElement).getByRole('button', { name: 'Runs · 1 active' })).toHaveClass('fleet-runs-row');
+    expect(choosers(), 'class choosers').toHaveLength(1);
+    expect(line!.contains(choosers()[0]!), 'the chooser on the runs line').toBe(true);
+    // Project mode adds no second chooser on the toggle's row: one control, on the runs line, at any phone width.
+    pick('Project');
+    expect(choosers(), 'class choosers in project mode').toHaveLength(1);
+    expect(column().querySelector('.fleet-runs-line')!.contains(choosers()[0]!)).toBe(true);
+  });
+});

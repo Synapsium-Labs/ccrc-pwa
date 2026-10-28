@@ -6,6 +6,41 @@
 // renders `no lane can serve <class>` for a `{kind:'none', class}` placement
 // (D-2854) — this suite asserts against those exact rendered words, not a
 // paraphrase.
+//
+// W2 desk polish, Task T2f (D-6371): Instrument's desk column loses its "Runs · n" row, and the chooser is this one component.
+// MUTATION TABLE (plan Task T2f Step 3; RUN, each mutant on the working tree, this suite alone unless named, then restored from a saved copy):
+//   `ListColumn` without `runsLine={false}` (the runs row kept at the desk)
+//                                                       instrument-list.test.tsx: "status mode at the desk: no runs row and no class chooser" and
+//                                                         "project mode at the desk: the chooser on the toggle's row" (`the runs line: expected <div class="fleet-runs-line">…(2)</div> to be null`).
+//                                                         Green in this file, instrument-shell and fleet-screen.
+//   `FleetColumn` passes `runsLine` without `|| !desktop`  instrument-list.test.tsx: "below 900 the runs row is as today" (`the runs line: expected null not to be null`).
+//                                                         Green in this file, instrument-shell and fleet-screen.
+//   the chooser copied into `FleetTable` (the inline Select instead of `<ClassChooser />`)
+//                                                       "the chooser is one component: FleetScreen and FleetTable import ClassChooser and declare no class select of their own"
+//                                                         (`skins/instrument/FleetTable.tsx renders ClassChooser: expected '// Instrument's fleet list (W2 Task …' to contain '<ClassChooser'`)
+//   `FleetTable`'s chooser gate without `desk &&`       instrument-list.test.tsx: "below 900 the runs row is as today"
+//                                                         (`class choosers in project mode: expected [ <select …(2)>…(6)</select>, …(1) ] to have a length of 1 but got 2`)
+//   the chooser shown in status mode (`mode === 'project' &&` dropped)
+//                                                       instrument-list.test.tsx: "status mode at the desk: no runs row and no class chooser" (`class choosers: … to have a length of +0 but got 1`)
+//                                                         and "project mode at the desk: the chooser on the toggle's row" (`class choosers in status mode: … to have a length of +0 but got 1`)
+// Fix round 1 (the toggle keeps the row's width):
+//   the radiogroup's `flex-auto` removed ............... "the toggle's radiogroup grows to the row's width beside the chooser (T2f, D-6371)"
+//                                                         (`the radiogroup no longer grows into the row: expected [ 'ins-toggle' ] to include 'flex-auto'`)
+//   `flex-auto` replaced by `flex-1` ................... the same case (`the radiogroup no longer grows into the row: expected [ 'ins-toggle', 'flex-1' ] to include 'flex-auto'`;
+//                                                         `flex-auto flex-1` together trips its `not.toContain('flex-1')` line)
+// Final-review fix wave (the chooser as tall as the toggle's options):
+//   `FleetTable` without `className="min-h-row"` on the chooser  "the toggle row's chooser is as tall as the toggle's options, not the tap floor's (T2f, D-6371)"
+//                                                         (`FleetTable no longer passes min-h-row to the chooser: expected '// Instrument's fleet list (W2 Task …' to contain '<ClassChooser className="min-h-row" />'`);
+//                                                         green in instrument-list, which cannot measure a height
+// The pins here are source reads: jsdom has no layout. This file catches the copied-chooser row, the `flex-auto` rows and
+// the `min-h-row` row, by their classes; the runs-row and gate rows live in instrument-list.test.tsx. What the classes DO is
+// measured in a real Chrome by browser/fleet-toggle-row.browser.test.ts ("the row is one height in both modes, under a fine
+// pointer / touch at 900 / 1280", and "the chooser wraps below the radiogroup at 150% and 200% text, under a fine pointer /
+// touch at 1280"), which also kills the `flex-wrap`, `flex-1` and `min-h-row` mutants by their geometry.
+import { readdirSync, readFileSync } from 'node:fs';
+import path from 'node:path';
+import { SELECT } from '@ccrc/ui';
+import { cn } from '../../ui/src/lib/cn';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, screen, waitFor } from '@testing-library/react';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
@@ -237,5 +272,65 @@ describe('the fleet screen class chooser (routing slice 5, Task 6)', () => {
     // The head itself is still there and still carries the items that DO fit,
     // so this is not passing merely because the header stopped rendering.
     expect(document.querySelector('.fleet-head .fleet-head-right')).not.toBeNull();
+  });
+});
+
+describe('the class chooser is one component (T2f, D-6371)', () => {
+  const src = path.join(import.meta.dirname, '..', 'src');
+  const read = (...p: string[]): string => readFileSync(path.join(src, ...p), 'utf8');
+
+  /** Every .ts/.tsx under src, as paths relative to it with `/` separators. */
+  const sources = (dir = ''): string[] =>
+    readdirSync(path.join(src, dir), { withFileTypes: true }).flatMap((e) => {
+      const rel = dir === '' ? e.name : `${dir}/${e.name}`;
+      if (e.isDirectory()) return sources(rel);
+      return /\.tsx?$/.test(e.name) ? [rel] : [];
+    });
+
+  it('the chooser is one component: FleetScreen and FleetTable import ClassChooser and declare no class select of their own', () => {
+    const chooser = read('fleet', 'ClassChooser.tsx');
+    // Non-vacuity: the component holds the one select, so the absences below are read against a file that has it.
+    expect(chooser.split('aria-label="Class"').length - 1, 'ClassChooser.tsx holds the class select once').toBe(1);
+
+    const homes: readonly [string, string, string][] = [
+      ['screens/FleetScreen.tsx', read('screens', 'FleetScreen.tsx'), "from '../fleet/ClassChooser'"],
+      ['skins/instrument/FleetTable.tsx', read('skins', 'instrument', 'FleetTable.tsx'), "from '../../fleet/ClassChooser'"],
+    ];
+    for (const [name, text, importLine] of homes) {
+      expect(text, `${name} imports ClassChooser`).toContain(importLine);
+      expect(text, `${name} renders ClassChooser`).toContain('<ClassChooser');
+      expect(text, `${name} declares a class select of its own`).not.toContain('aria-label="Class"');
+      expect(text, `${name} reads chooseClass itself`).not.toContain('chooseClass');
+      expect(text, `${name} reads classFilter itself`).not.toContain('classFilter');
+    }
+
+    // The one caller of `chooseClass(` in the tree is the component; its definition is `useProjectRows`'s own.
+    const callers = sources().filter((f) => read(...f.split('/')).includes('chooseClass(')).sort();
+    expect(callers).toEqual(['fleet/ClassChooser.tsx']);
+  });
+
+  it("the toggle's radiogroup grows to the row's width beside the chooser (T2f, D-6371)", () => {
+    const table = read('skins', 'instrument', 'FleetTable.tsx');
+    // A source pin: the width itself is measured in a real browser, jsdom has no layout.
+    const group = table.match(/<div\s+role="radiogroup"[^>]*?className="([^"]*)"/);
+    expect(group, 'the toggle radiogroup is not where this read looks').not.toBeNull();
+    const classes = group![1]!.split(/\s+/);
+    expect(classes, 'the radiogroup lost its class').toContain('ins-toggle');
+    expect(classes, 'the radiogroup no longer grows into the row').toContain('flex-auto');
+    // `flex-1` has a 0% basis, so a `flex-wrap` row never wraps and the chooser overlaps the toggle at large text sizes:
+    // the basis must stay auto, so that the row wraps the chooser instead.
+    expect(classes, "a 0% basis (`flex-1`) lets the chooser overlap the toggle: the basis must stay auto, so the row wraps").not.toContain('flex-1');
+  });
+
+  it("the toggle row's chooser is as tall as the toggle's options, not the tap floor's (T2f, D-6371)", () => {
+    // `min-h-row` REPLACES the select's `min-h-tap` (ui's `cn` declares `row` a spacing key), so the row is as tall in
+    // project mode as in status mode. Under a coarse pointer `--row-h` is 44, so the tap floor still holds there.
+    const merged = cn(SELECT, 'w-auto flex-none max-w-full', 'min-h-row').split(/\s+/);
+    expect(merged, 'min-h-row did not reach the DOM').toContain('min-h-row');
+    expect(merged, 'min-h-tap survived beside min-h-row').not.toContain('min-h-tap');
+    // The other half: the toggle row asks for it, and the component merges it over its own width utilities.
+    const table = read('skins', 'instrument', 'FleetTable.tsx');
+    expect(table, 'FleetTable no longer passes min-h-row to the chooser').toContain('<ClassChooser className="min-h-row" />');
+    expect(read('fleet', 'ClassChooser.tsx'), 'ClassChooser dropped its className').toContain("cn('w-auto flex-none max-w-full', className)");
   });
 });

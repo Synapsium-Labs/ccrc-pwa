@@ -1268,8 +1268,12 @@ describe('the fleet head holds one row, and the class chooser is not on it', () 
       path.join(import.meta.dirname, '..', 'src', 'fleet', 'FleetHead.tsx'), 'utf8');
     expect(head, 'the fleet head is not in FleetHead.tsx — find it and re-point this read')
       .toContain('<header className="fleet-head">');
-    expect(head, 'the chooser is back inside <header>, where it never fit')
-      .not.toContain('fleet-class-select');
+    // What the chooser IS now (T2f, D-6371): the shared component, and its select's name. `fleet-class-select` is in no
+    // markup, so a check on that class name could not go red.
+    expect(head, 'the chooser component is back in the fleet head, where it never fit')
+      .not.toContain('ClassChooser');
+    expect(head, 'a class select is back inside <header>, where it never fit')
+      .not.toContain('aria-label="Class"');
     const screen = readFileSync(
       path.join(import.meta.dirname, '..', 'src', 'screens', 'FleetScreen.tsx'), 'utf8');
     expect(screen).toContain('<div className="fleet-runs-line">');
@@ -1324,7 +1328,12 @@ describe('the fleet head holds one row, and the class chooser is not on it', () 
     const row = screen.slice(lineStart, lineEnd);
     expect(row, 'the runs door left the line the chooser was seated on')
       .toContain('className="fleet-runs-row"');
-    expect(row, 'the chooser left the runs line').toContain('fleet-class-select');
+    // The select itself moved into one component (T2f, D-6371); the line places it.
+    expect(row, 'the chooser left the runs line').toContain('<ClassChooser />');
+    const chooser = readFileSync(
+      path.join(import.meta.dirname, '..', 'src', 'fleet', 'ClassChooser.tsx'), 'utf8');
+    expect(chooser, 'the component lost the measured width utilities')
+      .toContain("cn('w-auto flex-none max-w-full', className)");
     expect(row, 'HotFilesStrip was pulled inside the runs line — it renders nothing when idle')
       .not.toContain('<HotFilesStrip');
   });

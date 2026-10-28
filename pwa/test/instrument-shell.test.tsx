@@ -38,10 +38,21 @@
 //   `FleetHead`'s nothing-to-draw `return null` removed  "…and there is no head when they agree", "Refined at 1280 on an empty fleet with no lag draws no …", T2e's census case
 //   Refined's `Sidebar` passes `headCount={false}` ..... "Refined's desk column keeps its count line"
 //   the flag removed and `@media (min-width: 900px) { .shell-nav .fleet-count { display: none } }` in instrument.css
-//                                                       skin-boundary (j) "holds on the real tree" (and three of its siblings, which scan the real sheet), and
-//                                                         "at 900, 1280 and 1920 Instrument's list column draws no count line, …"
+//                                                       seven red cases (measured, T2f R51 F5), four in skin-boundary.test.ts, all under (j) "no skin stylesheet hides by width":
+//                                                         "holds on the real tree", "display: none under @container is red",
+//                                                         "a pseudo-element is exempt, but not when an element shares its selector list" and
+//                                                         "hiding outside a width block is not this case's" (the last three scan the real sheet too); and three here:
+//                                                         T2e's "at 900, 1280 and 1920 the frame holds one wordmark, and one each of the Docs, Accounts, Settings, Inbox and Bell doors",
+//                                                         "at 900, 1280 and 1920 Instrument's list column draws no count line, …" and
+//                                                         "at the desk the list column's head is the pool lag alone when the epochs differ, and there is no head when they agree"
 // Row 8 (Step 0's `flex: none` removed) does not apply: Step 0 found the count whole at 900, so T2g adds no `flex: none`.
-// Rows 1, 4 and 7 also run in browser/instrument-desk.browser.test.ts (its own table).
+// Rows 1 and 4 also run in browser/instrument-desk.browser.test.ts (its own table); row 7 (`.ins-status-summary { max-width: 6ch }`, the plan's row 7) runs only there.
+//
+// W2 Task T2f (D-6371): Instrument's desk column draws no runs row; Refined keeps its own at every width (review 1117, A2).
+// MUTATION TABLE (RUN, each mutant on the working tree, this suite alone, then restored from a saved copy; the rows that
+// guard Instrument's side are in instrument-list.test.tsx and fleet-class-chooser.test.tsx):
+//   Refined's `Sidebar` passes `runsLine={false}` ...... "Refined keeps its runs row at every width (T2f, D-6371)"
+//                                                         (`900px: runs lines: expected  to have a length of 1 but got +0`; the 390 and 899 rounds pass first)
 //
 // Desk polish S5b (D-6530): the lanes fold.
 // MUTATION TABLE (plan Task S5b Step 3; the whole table RUN at 182d2ac58, whose pwa/ tree is fix round 1's last code commit
@@ -614,6 +625,7 @@ describe('the desk (T2e): no second head in the list column, no empty fourth col
     for (const width of [900, 1280, 1920]) {
       stubAt(width);
       mount('/');
+      expect(document.querySelector('.shell-nav section[aria-label="Fleet"]'), `${width}px: the fleet column is mounted`).not.toBeNull();
       expect(doorCounts(), `${width}px, fleet`).toEqual({ wordmark: 1, docs: 1, accounts: 1, settings: 1, inbox: 1, mail: 0, waiting: 0, bell: 1 });
       // The list column's head drops its chrome and, with no count line (T2g) and no lag in this fixture, is not drawn.
       expect(document.querySelector('.shell-nav .fleet-head'), `${width}px`).toBeNull();
@@ -725,6 +737,7 @@ describe('the desk (T2g): one count, in the status bar', () => {
     for (const width of [900, 1280, 1920]) {
       stubAt(width);
       mount('/');
+      expect(document.querySelector('.shell-nav section[aria-label="Fleet"]'), `${width}px: the fleet column is mounted`).not.toBeNull();
       const counts = document.querySelectorAll('.fleet-count, .ins-status-summary');
       expect(counts, `${width}px: count elements`).toHaveLength(1);
       expect(footer().contains(counts[0]!), `${width}px: inside the status bar`).toBe(true);
@@ -763,6 +776,25 @@ describe('the desk (T2g): one count, in the status bar', () => {
     stubAt(1280);
     mount('/');
     expect(document.querySelector('.shell-nav .fleet-count')).toHaveTextContent(readout);
+  });
+
+  it('Refined keeps its runs row at every width (T2f, D-6371)', () => {
+    act(() => { setSkin(REFINED); });
+    for (const width of [390, 899, 900, 1280, 1920]) {
+      stubAt(width);
+      mount('/');
+      const columns = document.querySelectorAll<HTMLElement>('section[aria-label="Fleet"]');
+      expect(columns, `${width}px: the fleet column is mounted, once`).toHaveLength(1);
+      if (width >= 900) expect(columns[0]!.closest('.shell-nav'), `${width}px: the column is the frame's nav`).not.toBeNull();
+      const lines = columns[0]!.querySelectorAll('.fleet-runs-line');
+      expect(lines, `${width}px: runs lines`).toHaveLength(1);
+      const row = within(lines[0] as HTMLElement).getByRole('button', { name: /^Runs · / });
+      expect(row, `${width}px`).toHaveClass('fleet-runs-row');
+      const choosers = document.querySelectorAll('select[aria-label="Class"]');
+      expect(choosers, `${width}px: class choosers in the document`).toHaveLength(1);
+      expect(lines[0]!.contains(choosers[0]!), `${width}px: the chooser is on the runs line`).toBe(true);
+      cleanup();
+    }
   });
 
   it('Refined at 1280 on an empty fleet with no lag draws no .shell-nav .fleet-head', () => {
