@@ -498,8 +498,6 @@ cmd_ws_hold -> _reg_set
 cmd_ws_orphan -> _lc_dec_ok
 cmd_ws_orphan -> _lc_refuse
 cmd_ws_orphan -> _lc_surface_norm
-cmd_ws_reap -> _lc_emit
-cmd_ws_reap -> _lc_refuse
 cmd_ws_reclaim -> _child_runid_valid
 cmd_ws_reclaim -> _lc_dec_ok
 cmd_ws_reclaim -> _lc_emit

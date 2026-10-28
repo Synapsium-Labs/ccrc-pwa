@@ -19,7 +19,7 @@ import { decideArchive, refusedAtStop, archiveOutcome, edgeStatus, type ArchiveM
 import { SENTENCES } from '../src/wsaudit.js';
 import { parseFile } from './scan/parse.js';
 import { ccdSource } from './ccdWsHelpers.js';
-import { functionSpan, refuseWords } from './census-w5/ccdHelpers.js';
+import { functionSpan, lockDeclineSites, refuseWords } from './census-w5/ccdHelpers.js';
 import { EXPIRE_TOKEN_KIND, expireTokenKind, parseExpireResult } from '../src/archivedExpiry.js';
 import { CHILD_RECLAIM_TOKEN_KIND, childReclaimTokenKind, isChildReclaimToken, parseChildReclaimResult } from '../src/coord/childReclaim.js';
 import { CHILD_RECLAIM_TRANSIENT_WORD } from '../src/childReclaimSweep.js';
@@ -243,6 +243,14 @@ describe('workspace refusal census (ARCH-41, #776): today’s client-read refusa
   };
   const lcRefused = (t: string, act: string): string[] =>
     [...t.matchAll(new RegExp(`_lc_refuse ${act} (?:"[^"]*"|\\S+) ([a-z][a-z-]*)`, 'g'))].map((m) => m[1]!);
+  // The reap-lock runner (D-7076) refuses with `_lc_refuse "$act" …`, which the pattern above never reads, and its
+  // in-progress document stands outside every verb's span: an act's harvest also takes the runner's two tokens and its
+  // document's word when the runner has a call for that act, read off it by name.
+  const lockRefused = (act: string): string[] => {
+    const lock = lockDeclineSites(CCD);
+    return lock.runner && lock.calls.some((c) => c.act === act)
+      ? [...lock.runner.refuses, ...lock.runner.printfs].map((r) => String(r.token)) : [];
+  };
   const excluded = Object.keys(EXCLUDED);
   it('restore and forget: each verb’s codes equal what its ccd verb refuses with, less EXCLUDED', () => {
     const restore = lcRefused(bodyOf('cmd_ws_restore'), 'restore');
@@ -264,6 +272,7 @@ describe('workspace refusal census (ARCH-41, #776): today’s client-read refusa
       ...refuseWords('reap', { from: evalFrom, to: evalTo, codeOnly: true }),
       ...[...(span + mirror).matchAll(/"refused":"([a-z][a-z-]*)"/g)].map((m) => m[1]!),
       ...lcRefused(nonComment(CCD), 'reap'),
+      ...lockRefused('reap'),
       ...lcRefused(bodyOf('cmd_ws_rm'), '[a-z]+'),
     ];
     expect(new Set(harvested).size, 'guards the guard: an empty harvest').toBeGreaterThan(30);

@@ -24,6 +24,11 @@ const bodyOf = (name: string, until: string): string => {
   return from > -1 && to > from ? src.slice(from, to) : '';
 };
 
+/** The reap-lock runner's calls for `act` (D-7076) whose offsets lie in `[from, to)`: a verb's flock decline is its one
+ *  call of the runner, which carries the act as a literal word (`census-w5/ccdHelpers.ts#lockDeclineSites`). */
+const lockRunnerCalls = (act: string, verb: string, from = 0, to = src.length): number =>
+  lockDeclineSites(src).calls.filter((c) => c.act === act && c.verb === verb && c.offset >= from && c.offset < to).length;
+
 const lineAt = (s: string, i: number): string => {
   const a = s.lastIndexOf('\n', i) + 1;
   const b = s.indexOf('\n', i);
@@ -35,7 +40,12 @@ const VERBS: readonly (readonly [string, string, number])[] = [
   ['cmd_ws_rm', 'cmd_ws_rename', 8000],
   ['cmd_forget', 'cmd_ls', 2000],
   ['cmd_ws_restore', 'cmd_ws_attic', 5000],
-  ['cmd_ws_reap', '_ws_reap_locked', 7000],
+  // D-7297 (1): ws-reap's slice starts at the reap-lock runner (D-7076), defined directly above `cmd_ws_reap`, so it
+  // measures `cmd_ws_reap` together with the runner body. The runner holds the four destructive verbs' lock dies (its
+  // two `_lc_refuse` calls), so its text is scanned with the verb it was cut from, and the lock's long comments, which
+  // moved onto it, keep the slice over its floor. Measured 12635 characters when this
+  // entry was written (`cmd_ws_reap` to `_ws_reap_locked` alone: 6148).
+  ['_ws_reap_lock_run', '_ws_reap_locked', 7000],
   // Measured 4091 characters for cmd_ws_reclaim's pre-lock parse and lock when
   // this entry was written; the floor sits under it with room for an edit.
   ['cmd_ws_reclaim', '_ws_reclaim_locked', 3500],
@@ -128,10 +138,14 @@ describe('every die in a destructive verb is reached through _lc_refuse or _lc_f
   });
 
   it('holds the reap emits at exactly two — one verdict point, one flock decline', () => {
-    const reapRegion = src.slice(src.indexOf('cmd_ws_reap() {'), src.indexOf('# ── reclamation'));
+    // The verdict point is a literal `_lc_emit reap refused` in the region; the flock decline is ws-reap's one call of
+    // the reap-lock runner (D-7076), read with its literal act and verb.
+    const reapFrom = src.indexOf('cmd_ws_reap() {');
+    const reapTo = src.indexOf('# ── reclamation');
+    const reapRegion = src.slice(reapFrom, reapTo);
     expect(reapRegion.length, 'the reap region could not be sliced').toBeGreaterThan(20000);
-    expect([...reapRegion.matchAll(/_lc_emit reap refused/g)],
-      'D15 authorises exactly two reap refusal emits; more is scope creep').toHaveLength(2);
+    expect([...reapRegion.matchAll(/_lc_emit reap refused/g)].length + lockRunnerCalls('reap', 'ws-reap', reapFrom, reapTo),
+      'D15 authorises exactly two reap refusal emits; more is scope creep').toBe(2);
   });
 
   it('the reap lock\'s two inner functions still contain NO die at all', () => {
