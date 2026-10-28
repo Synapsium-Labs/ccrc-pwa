@@ -14,7 +14,7 @@
 // its check decides. Each site's verdict is a short word, and beside it the verdict the site WOULD give reading the
 // server's presence: by default the same site over the row's twin whose `status` is `'dead'` exactly when the presence
 // is `dead` (the literal move, `status === 'dead'` read as `presence === 'dead'`); `hibernatedSince` over
-// `presence === 'asleep'`; and the coordinator readers over `coordPresence`'s four words read from the presence
+// `presence === 'asleep'`; and the coordinator readers over `coordinatorPresence`'s four words read from the presence
 // (`asleep` is its `hibernated`, an absent presence `unknown`). A row is SAME when the two agree and DIFFERS when not.
 //
 // THE SNAPSHOT-REVIVED ROWS (item 20): each server row through `lib/offline.ts#saveFleetSnapshot` and
@@ -31,7 +31,7 @@ import { seedAccountsAnswer } from './accountsAnswer';
 import { tableRows, type TableRow } from './presenceTable';
 import { ArchiveAllConfirm } from '../src/fleet/ArchiveAllPlane';
 import { SessionActionsSheet } from '../src/fleet/SessionActionsSheet';
-import { coordPresence, type CoordPresence } from '../src/fleet/coordWords';
+import { coordinatorPresence, type CoordinatorPresence } from '../src/fleet/presence';
 import { groupFleet } from '../src/fleet/groupFleet';
 import { hibernatedSince } from '../src/fleet/hibernated';
 import { sessionFacts } from '../src/fleet/sessionFacts';
@@ -54,8 +54,8 @@ const sessionOf = (r: TableRow, over: Partial<FleetSession> = {}): FleetSession 
 /** The twin: the same row with `status` reading the presence (`'dead'` exactly when the server's presence is `dead`). */
 const twin = (s: FleetSession): FleetSession => ({ ...s, status: s.presence === 'dead' ? 'dead' : s.status === 'dead' ? 'idle' : s.status });
 
-const COORD_WORD: Record<Presence, CoordPresence> = { alive: 'alive', asleep: 'hibernated', dead: 'dead', unknown: 'unknown' };
-const coordWordOf = (p: Presence | undefined): CoordPresence => (p === undefined ? 'unknown' : COORD_WORD[p]);
+const COORD_WORD: Record<Presence, CoordinatorPresence> = { alive: 'alive', asleep: 'hibernated', dead: 'dead', unknown: 'unknown' };
+const coordWordOf = (p: Presence | undefined): CoordinatorPresence => (p === undefined ? 'unknown' : COORD_WORD[p]);
 
 const RUN = (over: Partial<RunSummary> = {}): RunSummary => ({
   id: 7, program: 'program-a', programTitle: 'Program A', wave: 1, waveOf: 2, project: 'project-a', homeProject: null,
@@ -116,8 +116,8 @@ const SITES: readonly Site[] = [
   { name: 'SessionActionsSheet.tsx (narrow spawn, pane gone note)', build: (r) => sessionOf(r, SHEET_A), verdict: (s) => sheet(s, 'and that pane is gone') },
   { name: 'SessionActionsSheet.tsx (Forget session door)', build: (r) => sessionOf(r, SHEET_A), verdict: (s) => sheet(s, 'Forget session…') },
   { name: 'SessionActionsSheet.tsx (moved-account note)', build: (r) => sessionOf(r, SHEET_A), verdict: (s) => sheet(s, 'moved when its account filled up') },
-  { name: 'coordWords.ts#coordPresence', build: (r) => sessionOf(r),
-    verdict: (s) => coordPresence(s.id, s, true), fromPresence: (_s, p) => coordWordOf(p), unlisted: () => coordPresence(ID, null, true) },
+  { name: 'fleet/presence.ts#coordinatorPresence', build: (r) => sessionOf(r),
+    verdict: (s) => coordinatorPresence(s.id, s, true), fromPresence: (_s, p) => coordWordOf(p), unlisted: () => coordinatorPresence(ID, null, true) },
   { name: 'groupFleet.ts#groupFleet (stranded count)', build: (r) => sessionOf(r, { workspace: 'ws-a', stranded: { at: 1, reason: 'no account' } }),
     verdict: (s) => String(groupFleet([s], ['project-a'])[0]?.stranded ?? 'no-group') },
   { name: 'hibernated.ts#hibernatedSince', build: (r) => sessionOf(r),
@@ -139,21 +139,22 @@ const SITES: readonly Site[] = [
       act(() => useFleetStore.setState({ sessions: [] }));
       return listed;
     } },
-  // The three coordPresence callers: the row is the COORDINATOR; the worker is a live row it claims.
-  { name: 'orphanWords.ts#orphanNote (coordPresence caller)', build: (r) => sessionOf(r),
+  // The three coordinatorPresence callers (they were coordPresence's, deleted in C7c): the row is the COORDINATOR; the
+  // worker is a live row it claims.
+  { name: 'orphanWords.ts#orphanNote (coordinatorPresence caller)', build: (r) => sessionOf(r),
     verdict: (s) => orphanNote({ kind: 'session', depth: 0, session: WORKER() }, [RUN()], 'project-a', [], (id) => (id === s.id ? s : null), true)?.presence ?? 'no-note',
     fromPresence: (_s, p) => coordWordOf(p),
     unlisted: () => orphanNote({ kind: 'session', depth: 0, session: WORKER() }, [RUN()], 'project-a', [], () => null, true)?.presence ?? 'no-note' },
-  { name: 'RunRow.tsx (coordPresence caller: the Resume door)', build: (r) => sessionOf(r),
-    verdict: (s) => resumeDoor(s, coordPresence(s.id, s, true)),
+  { name: 'RunRow.tsx (coordinatorPresence caller: the Resume door)', build: (r) => sessionOf(r),
+    verdict: (s) => resumeDoor(s, coordinatorPresence(s.id, s, true)),
     fromPresence: (_s, p) => (coordWordOf(p) === 'dead' ? 'resume' : 'none'),
     unlisted: () => resumeDoor(null, 'n/a') },
-  // SessionScreen's call is `coordPresence(parentId, lookup(parentId), fleetFrameSeen)` (census-w7 holds its text), and
+  // SessionScreen's call is `coordinatorPresence(parentId, lookup(parentId), fleetFrameSeen)`, and
   // its header reads the answer through `sessionFacts`' `orphan`: the caller is read through that one fact.
-  { name: 'SessionScreen.tsx#SessionScreen (coordPresence caller: the header orphan fact)', build: (r) => sessionOf(r),
-    verdict: (s) => String(sessionFacts({ session: WORKER(), now: NOW, coordinator: coordPresence(s.id, s, true) }).orphan),
+  { name: 'SessionScreen.tsx#SessionScreen (coordinatorPresence caller: the header orphan fact)', build: (r) => sessionOf(r),
+    verdict: (s) => String(sessionFacts({ session: WORKER(), now: NOW, coordinator: coordinatorPresence(s.id, s, true) }).orphan),
     fromPresence: (_s, p) => String(sessionFacts({ session: WORKER(), now: NOW, coordinator: coordWordOf(p) }).orphan),
-    unlisted: () => String(sessionFacts({ session: WORKER(), now: NOW, coordinator: coordPresence(ID, null, true) }).orphan) },
+    unlisted: () => String(sessionFacts({ session: WORKER(), now: NOW, coordinator: coordinatorPresence(ID, null, true) }).orphan) },
 ];
 
 /** RunRow's Resume door for a run this row claims; `n/a` asks the row with no coordinator in the frame. */
@@ -235,7 +236,7 @@ const VERDICTS: Pin<string> = {
     server: 'shown shown shown shown shown shown shown shown shown shown shown shown shown shown shown shown hidden hidden hidden hidden hidden hidden hidden hidden hidden hidden hidden hidden hidden hidden hidden hidden hidden hidden hidden hidden hidden hidden hidden hidden hidden hidden hidden hidden hidden hidden hidden hidden hidden hidden hidden hidden hidden hidden hidden hidden',
     unlisted: '- - - -', skew: 'hidden',
   },
-  'coordWords.ts#coordPresence': {
+  'fleet/presence.ts#coordinatorPresence': {
     server: 'alive alive alive alive alive alive alive alive alive alive alive alive alive alive alive alive dead dead hibernated hibernated alive alive alive alive dead dead dead dead dead dead dead dead unknown unknown unknown unknown unknown unknown unknown unknown unknown unknown unknown unknown unknown unknown unknown unknown unknown unknown unknown unknown unknown unknown unknown unknown',
     unlisted: 'unknown unknown unknown unknown', skew: 'unknown',
   },
@@ -271,15 +272,15 @@ const VERDICTS: Pin<string> = {
     server: 'listed listed listed listed listed listed listed listed listed listed listed listed listed listed listed listed not-listed not-listed not-listed not-listed not-listed not-listed not-listed not-listed not-listed not-listed not-listed not-listed not-listed not-listed not-listed not-listed not-listed not-listed not-listed not-listed not-listed not-listed not-listed not-listed not-listed not-listed not-listed not-listed not-listed not-listed not-listed not-listed not-listed not-listed not-listed not-listed not-listed not-listed not-listed not-listed',
     unlisted: '- - - -', skew: 'not-listed',
   },
-  'orphanWords.ts#orphanNote (coordPresence caller)': {
+  'orphanWords.ts#orphanNote (coordinatorPresence caller)': {
     server: 'alive alive alive alive alive alive alive alive alive alive alive alive alive alive alive alive dead dead hibernated hibernated alive alive alive alive dead dead dead dead dead dead dead dead unknown unknown unknown unknown unknown unknown unknown unknown unknown unknown unknown unknown unknown unknown unknown unknown unknown unknown unknown unknown unknown unknown unknown unknown',
     unlisted: 'unknown unknown unknown unknown', skew: 'unknown',
   },
-  'RunRow.tsx (coordPresence caller: the Resume door)': {
+  'RunRow.tsx (coordinatorPresence caller: the Resume door)': {
     server: 'none none none none none none none none none none none none none none none none resume resume none none none none none none resume resume resume resume resume resume resume resume none none none none none none none none none none none none none none none none none none none none none none none none',
     unlisted: 'none none none none', skew: 'none',
   },
-  'SessionScreen.tsx#SessionScreen (coordPresence caller: the header orphan fact)': {
+  'SessionScreen.tsx#SessionScreen (coordinatorPresence caller: the header orphan fact)': {
     server: 'null null null null null null null null null null null null null null null null gone gone hibernated hibernated null null null null gone gone gone gone gone gone gone gone null null null null null null null null null null null null null null null null null null null null null null null null',
     unlisted: 'null null null null', skew: 'null',
   },
@@ -460,7 +461,7 @@ const DIFFERS: Pin<string[]> = {
     unlisted: [],
     skew: ['skew · pane gone · lifecycle absent (a server older than ARCH-48)'],
   },
-  'coordWords.ts#coordPresence': {
+  'fleet/presence.ts#coordinatorPresence': {
     server: [],
     unlisted: ['row absent'],
     skew: [],
@@ -617,17 +618,17 @@ const DIFFERS: Pin<string[]> = {
     unlisted: [],
     skew: ['skew · pane gone · lifecycle absent (a server older than ARCH-48)'],
   },
-  'orphanWords.ts#orphanNote (coordPresence caller)': {
+  'orphanWords.ts#orphanNote (coordinatorPresence caller)': {
     server: [],
     unlisted: ['row absent'],
     skew: [],
   },
-  'RunRow.tsx (coordPresence caller: the Resume door)': {
+  'RunRow.tsx (coordinatorPresence caller: the Resume door)': {
     server: [],
     unlisted: ['row absent'],
     skew: [],
   },
-  'SessionScreen.tsx#SessionScreen (coordPresence caller: the header orphan fact)': {
+  'SessionScreen.tsx#SessionScreen (coordinatorPresence caller: the header orphan fact)': {
     server: [],
     unlisted: ['row absent'],
     skew: [],

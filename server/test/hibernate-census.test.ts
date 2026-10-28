@@ -32,8 +32,8 @@ type Stance = 'consults' | 'wakes-first' | 'journal' | 'held-awake' | 'other-mea
 interface Row {
   readonly source: CensusSource; readonly file: string; readonly hits: number;
   readonly stances: readonly Stance[]; readonly why: string;
-  /** For a `consults` row that reads the dead answer through another file (`coordPresence`, `lifecycleQualifier`): that
-   *  file, which is the one that consults the marker. */
+  /** For a `consults` row that reads the dead answer through another file (`coordinatorPresence`,
+   *  `lifecycleQualifier`): that file, which is the one that consults the marker. */
   readonly via?: string;
 }
 
@@ -141,10 +141,6 @@ const CENSUS: readonly Row[] = [
   { source: 'presence-reader', file: 'pwa/src/screens/SessionScreen.tsx', hits: 1, stances: ['consults'],
     why: 'the header\'s coordinator reads `coordinatorPresence` (D-7181): a sleeping coordinator reads `hibernated`, '
       + 'never "coordinator gone"' },
-  { source: 'presence-reader', file: 'pwa/src/fleet/coordWords.ts', hits: 1, stances: ['consults'],
-    why: '`coordPresence` reads `coordinatorPresence` (D-7181), which answers a sleeping coordinator `hibernated` (the '
-      + 'server\'s `asleep`), so no Resume door and no "coordinator gone"; the reclaim door those point at refuses a '
-      + 'sleeper too (`claimant-alive`)' },
   { source: 'dead-compare', file: 'pwa/src/fleet/orphanWords.ts', hits: 1, stances: ['consults'],
     why: 'the orphan marker reads `coordinatorPresence`, and says `coordinator hibernated` for a sleeper, never '
       + '"coordinator gone"' },
@@ -231,7 +227,7 @@ describe('the hibernation census (D-5242)', () => {
       // A presence reader (D-7181) consults the server's sleep word: it names `'asleep'`, or reads `coordinatorPresence`,
       // which words a sleeper `hibernated`.
       expect(/hibernatedAt|\.hibernated|hibernated:|'hibernated'|hibernatedSince|hibernatedWords|'asleep'|coordinatorPresence/.test(read(reader)), `${key(r)} (via ${reader})`).toBe(true);
-      if (r.via !== undefined) expect(read(r.file), `${r.file} reads through ${r.via}`).toMatch(/coordPresence|coordinatorPresence|presenceOf|lifecycleQualifier/);
+      if (r.via !== undefined) expect(read(r.file), `${r.file} reads through ${r.via}`).toMatch(/coordinatorPresence|presenceOf|lifecycleQualifier/);
     }
   });
 

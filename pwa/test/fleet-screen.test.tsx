@@ -2721,7 +2721,7 @@ describe('the programme tree on the fleet screen', () => {
     // `g.sessions` — the coordinator sits on alpha's card while the marker is
     // drawn on beta's. Nothing in project-card.test.tsx alone can catch a
     // regression at the wiring site (it passes the props directly), so this
-    // case mounts the whole screen and seeds the store the way `coordPresence`
+    // case mounts the whole screen and seeds the store the way `coordinatorPresence`
     // actually needs: a dead-measured session fleet-wide, and BOTH frame-seen
     // flags true.
     const store = makeStore();

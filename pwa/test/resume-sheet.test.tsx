@@ -1,5 +1,5 @@
 // The resume door — the three doors a dead coordinator leaves open. Two
-// halves, `abandon-sheet.test.tsx`'s own split: `coordPresence` as a TABLE
+// halves, `abandon-sheet.test.tsx`'s own split: `coordinatorPresence` as a TABLE
 // (it is the gate, and a gate exercised only through a render is one nobody
 // can enumerate), and `ResumeSheet` rendered with INJECTED api functions for
 // the copy and the refusals. The row control's own pins live in
@@ -10,7 +10,7 @@ import type { ReactNode } from 'react';
 import { act, cleanup, render, screen, fireEvent, waitFor } from '@testing-library/react';
 import type { FleetSession, RunSummary } from '../../shared/api';
 import { fleetSession } from './fleetFixture';
-import { coordPresence } from '../src/fleet/coordWords';
+import { coordinatorPresence } from '../src/fleet/presence';
 import { ResumeSheet } from '../src/fleet/ResumeSheet';
 import { ApiError } from '../src/lib/api';
 
@@ -36,9 +36,9 @@ const run = (over: Partial<RunSummary> = {}): RunSummary => ({
 
 const sess = (over: Partial<FleetSession> = {}): FleetSession => (fleetSession({ id: 'ccrc-pwa-coordinator', project: 'ccrc-pwa', bucket: 'working', ...over }));
 
-describe('coordPresence — three answers, because the client cannot measure what the server measures', () => {
+describe('coordinatorPresence — the server\'s word, and the two rules only the client can know', () => {
   it('answers `dead` for a dead row whose lifecycle never resolves on its own', () => {
-    expect(coordPresence('ccrc-pwa-coordinator', sess({ status: 'dead', lifecycle: 'orphan' }), true))
+    expect(coordinatorPresence('ccrc-pwa-coordinator', sess({ status: 'dead', lifecycle: 'orphan' }), true))
       .toBe('dead');
   });
 
@@ -56,7 +56,7 @@ describe('coordPresence — three answers, because the client cannot measure wha
       sess({ status: 'dead', lifecycle: 'orphan', substrate: { at: 1, text: 'tmux: no server running' }, presence: 'unknown' }), true],
   ];
   it.each(UNKNOWN)('answers `unknown` when %s', (_why, claimedBy, session, frameSeen) => {
-    expect(coordPresence(claimedBy, session, frameSeen)).toBe('unknown');
+    expect(coordinatorPresence(claimedBy, session, frameSeen)).toBe('unknown');
   });
 
   // D-309, and it is worth its own name: the assembly turns a cannot-ask
@@ -68,7 +68,7 @@ describe('coordPresence — three answers, because the client cannot measure wha
   // server's `dead`, and the door follows it (the reclaim route re-measures
   // the claimant on the box, `measureClaimant`).
   it('answers `dead` when a substrate fault stands over a pane tmux called gone: the server\'s word', () => {
-    expect(coordPresence('ccrc-pwa-coordinator',
+    expect(coordinatorPresence('ccrc-pwa-coordinator',
       sess({ status: 'dead', lifecycle: 'orphan', substrate: { at: 1, text: 'tmux: no server running' } }), true)).toBe('dead');
   });
   const ALIVE: readonly [string, FleetSession][] = [
@@ -80,7 +80,7 @@ describe('coordPresence — three answers, because the client cannot measure wha
       sess({ status: 'idle', lifecycle: 'orphan' })],
   ];
   it.each(ALIVE)('answers `alive` for %s', (_why, session) => {
-    expect(coordPresence('ccrc-pwa-coordinator', session, true)).toBe('alive');
+    expect(coordinatorPresence('ccrc-pwa-coordinator', session, true)).toBe('alive');
   });
 });
 

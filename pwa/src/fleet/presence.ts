@@ -10,7 +10,7 @@
 //     server older than ARCH-48, or a snapshot written before the revive kept it, D-7208) and a word this build does
 //     not know read `unknown`, and `unknown` hides the door: a hidden door costs one refresh, a door over a live session
 //     costs its work.
-//   - `coordinatorPresence`: the run board's and the orphan marker's coordinator, `coordPresence`'s frame and claim
+//   - `coordinatorPresence`: the run board's and the orphan marker's coordinator, the frame and claim
 //     rules over `presenceOf`, in its four words (`asleep` is spelled `hibernated` there, so every screen word stays).
 //   - `paneGone`: a site that only WORDS what the pane shows (a note, a chip, a fact about a running pane) reads the
 //     pane itself. The assembly writes `status: 'dead'` for a pane tmux called gone and for one it could not ask
@@ -35,9 +35,10 @@ const COORDINATOR_WORD: Record<Presence, CoordinatorPresence> = {
   alive: 'alive', asleep: 'hibernated', dead: 'dead', unknown: 'unknown',
 };
 
-/** `coordPresence`'s two rules the client alone can know, over the server's word: a run that names no claimant, and a
- *  fleet frame that has not landed (a session missing from an unlanded frame is not a missing session, D-1138), read
- *  `unknown`; so does a claimant the landed frame does not list. Otherwise the claimant's presence, in these words. */
+/** The two rules the client alone can know (they were `coordPresence`'s, D-1129), over the server's word: a run that
+ *  names no claimant, and a fleet frame that has not landed (a session missing from an unlanded frame is not a missing
+ *  session, D-1138), read `unknown`; so does a claimant the landed frame does not list. Otherwise the claimant's
+ *  presence, in these words. */
 export function coordinatorPresence(
   claimedBy: string | null,
   session: FleetSession | null | undefined,

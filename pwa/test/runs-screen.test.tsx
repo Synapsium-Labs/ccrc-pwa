@@ -1139,7 +1139,7 @@ describe('programsWithOpenRun — the program-level half of the resume door (D-1
   });
 });
 
-// The resume door on the board (program-leverage wave 5, D-1129). `coordPresence`
+// The resume door on the board (program-leverage wave 5, D-1129). `coordinatorPresence`
 // decides (its own table lives in `resume-sheet.test.tsx`); this pins that the
 // BOARD asks it, with the right three arguments, and renders nothing when the
 // answer is not `dead`.
@@ -1750,7 +1750,7 @@ describe('the board’s doors', () => {
     // cold read. Both were uncovered functions.
     const store = makeStore();
     // The Resume control is gated on a coordinator this board measured DEAD
-    // (`coordPresence`), so the row needs both a dead session and a seen
+    // (`coordinatorPresence`), so the row needs both a dead session and a seen
     // fleet frame — without either, the door is correctly absent.
     act(() => {
       store.setState({

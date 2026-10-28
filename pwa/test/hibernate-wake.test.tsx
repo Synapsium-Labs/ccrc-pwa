@@ -14,7 +14,7 @@ import { SessionScreen } from '../src/screens/SessionScreen';
 import { ToastHost } from '@ccrc/ui';
 import { createSessionStore } from '../src/stores/session';
 import { createFleetStore } from '../src/stores/fleet';
-import { coordPresence } from '../src/fleet/coordWords';
+import { coordinatorPresence } from '../src/fleet/presence';
 import { hibernatedSince, hibernatedWords } from '../src/fleet/hibernated';
 import { TEST_ROSTER } from './rosterFixture';
 
@@ -247,8 +247,8 @@ describe('the word for a sleeping row (D-5242)', () => {
   });
 
   it('a hibernated coordinator is not a dead one: no Resume door, no "coordinator gone"', () => {
-    expect(coordPresence('project-a-quiet-basin', asleep(), true)).toBe('hibernated');
-    expect(coordPresence('project-a-quiet-basin', awake({ status: 'dead', bucket: 'dead', lifecycle: 'orphan' }), true))
+    expect(coordinatorPresence('project-a-quiet-basin', asleep(), true)).toBe('hibernated');
+    expect(coordinatorPresence('project-a-quiet-basin', awake({ status: 'dead', bucket: 'dead', lifecycle: 'orphan' }), true))
       .toBe('dead');
   });
 });

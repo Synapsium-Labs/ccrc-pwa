@@ -40,7 +40,7 @@ import {
 } from './runWords';
 import { spawnChip, type SpawnChip } from './spawnWords';
 import { substrateFaultText } from './substrateWords';
-import type { CoordPresence } from './coordWords';
+import type { CoordinatorPresence } from './presence';
 import { sessionLabel } from './sessionLabel';
 import { unmeasuredTitle } from './chips';
 
@@ -120,7 +120,7 @@ export interface FactInput {
   readonly workingOn?: string | null;
   /** The presence of its coordinator when that coordinator is not a live row beside it
    *  (`orphanNote`'s `presence`): `dead` is "coordinator gone", `hibernated` says so. */
-  readonly coordinator?: CoordPresence | null;
+  readonly coordinator?: CoordinatorPresence | null;
   /** The orphan marker's guidance (`orphanGuidance`): the card and the header both put it on the marker. */
   readonly coordinatorTitle?: string | null;
 }

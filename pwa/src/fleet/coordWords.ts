@@ -22,8 +22,7 @@
 // (`server/src/coord/dispatch.ts`), so the phone has to say exactly what that
 // means for a program the operator might otherwise expect to dispatch — not
 // "unknown", and never a blank cell.
-import { isMarkerState, type FleetSession, type MarkerState } from '../../../shared/api';
-import { coordinatorPresence, type CoordinatorPresence } from './presence';
+import { isMarkerState, type MarkerState } from '../../../shared/api';
 
 export const MARKER_WORD: Record<MarkerState, string> = {
   clear: 'not paused',
@@ -60,44 +59,6 @@ export const markerState = (v: unknown): MarkerState => (isMarkerState(v) ? v : 
  *  paused. "We don't know yet" is a state this banner can render truthfully;
  *  a guessed state is not. */
 export const COORD_CONFIRM_MS = 15_000;
-
-/** The client's answer to "is the run's coordinator there?" — program-leverage
- *  wave 5, D-1129. */
-/** `hibernated` (D-5242): the coordinator is asleep, and wakes on mail or when opened. */
-export type CoordPresence = CoordinatorPresence;
-
-/** THREE answers, because the client cannot measure what the server measures.
- *
- *  `assembleFleet` (`server/src/fleet.ts`, D-309) collapses a tmux `unknown`
- *  into `alive = false`, and says so: "a substrate fault reads 'dead' in the
- *  PWA — a false dead". So `status === 'dead'` is not proof of a dead
- *  coordinator, and a door hung on it alone would offer, during a tmux outage,
- *  to hand a live coordinator's program to somebody else. A session MISSING
- *  from the fleet array is weaker still — that is indistinguishable from a
- *  frame that has not landed, which is why `frameSeen` is a parameter rather
- *  than a length check (D-1138).
- *
- *  `unknown` HIDES the door. That is the whole asymmetry: a hidden door costs
- *  the operator one refresh; a door offered over a live coordinator costs a
- *  running program its ledger.
- *
- *  NOT a fourth condition on `statusUnmeasured`: that flag is only ever set
- *  inside `assembleFleet`'s own `if (alive)` block, so a `dead` row
- *  structurally cannot carry it — reading it here would be a guard over a
- *  state this field cannot be in.
- *
- *  Clock-free and store-free, the ladder discipline `lifecycleQualifier`
- *  (`lifecycleWords.ts`) already states: every input is an argument. */
-export function coordPresence(
-  claimedBy: string | null,
-  session: FleetSession | null | undefined,
-  frameSeen: boolean,
-): CoordPresence {
-  // OA-C15 (a) (D-7265; D-7181): the server's word, read once in `fleet/presence.ts`. The server's ladder reads a pane
-  // tmux could not ask about `unknown` (the D-309 collapse above no longer reaches a door), a sleeper `asleep` (spelled
-  // `hibernated` here) and a pane gone under a lifecycle that resolves on its own `alive`.
-  return coordinatorPresence(claimedBy, session, frameSeen);
-}
 
 /** The marker toggle's word for a tap no `coord` frame confirmed within `COORD_CONFIRM_MS`. One spelling: the coord
  *  banner's toggles (`useMarkerToggle`) and the Temp root collector's Pause all cleanup say it alike. */
