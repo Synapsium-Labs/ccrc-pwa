@@ -6730,8 +6730,13 @@ on a member PR it closes after landing its work: `pr-state` and `pr-landing`
 read a CLOSED PR carrying it as merged, so the archive reason, the cleanup
 bucket and the merged notice treat it as a merge. The cleanup itself
 (`ws-audit`/`ws-reap`) has no merge commit to prove against for such a PR, so
-it proves the branch against origin's default branch instead, as proof
-`merge-tree`: merging the branch there must change nothing. A coordinator
+it proves the branch against the train's landing commit instead — the
+commit on origin's default branch whose message names the PR (`#<n>`) — as
+proof `merge-tree`: merging the branch into that commit's first parent must
+give its tree, or merging it into the commit must change nothing with every
+path the branch changes changed by that commit. The proof and the token's
+merge fact are pinned to that commit, so main later editing the same lines
+never turns a proven landing into a refusal. A coordinator
 proves the merge before closing the run from `landedInTrain: true` on the PR's
 row of `ccd pr-state --session <id>`. It names a label, never a path. `ccd` with no verb prints its
 usage, and `ccd caps` lists the verbs (and capability tokens) this copy

@@ -836,14 +836,16 @@ whole time, which is the only prevention this ordering rule buys.
    is IN the queue before you rely on the server:
    `gh api graphql -F o='{owner}' -F n='{repo}' -F p=<pr> -f query='query($o: String!, $n: String!, $p: Int!) { repository(owner: $o, name: $n) { pullRequest(number: $p) { state autoMergeRequest { enabledAt } mergeQueueEntry { state } } } }'`
    gives one of four answers. A queued PR answers a non-null
-   `mergeQueueEntry`, the success answer. A `state` of `MERGED` means it
-   already landed: wait for or prove `merged:#<pr>`, and never disarm — a
+   `mergeQueueEntry`, the success answer. A `state` of `MERGED` — or of
+   `CLOSED` with `landedInTrain: true` on the PR's row of
+   `ccd pr-state --session <sessionId>`, a merge train having landed it and
+   closed it — means it already landed: wait for or prove `merged:#<pr>`, and never disarm — a
    merged PR answers a null entry too, so the entry alone cannot tell merged
    from nothing queued. A PR with no entry but a non-null `autoMergeRequest`
    means it is only armed, and nothing is queued and nothing will tell you so:
    disarm it (`gh pr merge <pr> --disable-auto`) and read why before you do
-   anything else. A PR with no entry, no `autoMergeRequest` and not merged
-   means nothing is queued: read why before you do anything else. Disarm the
+   anything else. A PR with no entry, no `autoMergeRequest` and neither of
+   those landed answers means nothing is queued: read why before you do anything else. Disarm the
    same way before any fix round from `merging` — an armed auto-merge queues
    whatever head the branch carries once its checks pass, and GitHub disarms it on a push only
    from a login without write access. End your turn. The run waits at
@@ -891,7 +893,9 @@ whole time, which is the only prevention this ordering rule buys.
    run id, and require its own `state` to be `done`. If the consumer depends on
    an interface from this producer, independently prove the producer interface
    PR merged at the exact `producerSha` carried with `producerRepoRoot` and
-   `producerSourceRepoPath` in the conditional producer contract. The closed row
+   `producerSourceRepoPath` in the conditional producer contract (it reads
+   MERGED there, or CLOSED there with `landedInTrain: true` on its row of
+   `ccd pr-state --session <sessionId>`). The closed row
    proves fingerprint and terminal state, not merge.
 
    A missing/non-`done` producer row, failed release, or required exact-SHA merge

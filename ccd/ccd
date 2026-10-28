@@ -5937,8 +5937,8 @@ def is_landed(r, branch, base_short):
     # merge commit behind it. Kept OUT of `is_merged`, whose other caller is the
     # reap's `pick`, which proves the tree against `mergeCommit.oid` — a landed
     # member has none, so `pick` answers it on its own arm (`landed` where the
-    # oid would be) and `_ws_reap_eval` proves it against origin's default
-    # branch instead.
+    # oid would be) and `_ws_reap_eval` proves it against the train's landing
+    # commit on origin's default branch instead (`_ws_train_landing`).
     return r.get('landedInTrain') is True and bound(r, branch, base_short)
 
 def pick(rows, branch, base_short):
@@ -6558,7 +6558,7 @@ elif mode == 'pick':
         # for the phase, with NO merge commit to prove against. The literal
         # word `landed` stands where the oid would be — never an empty field,
         # which `IFS=$'\t' read` would collapse — and `_ws_reap_eval` swaps it
-        # for origin's default branch before any git command sees it.
+        # for the train's landing commit before any git command sees it.
         sys.stdout.write('\t'.join([
             str(chosen.get('number') or ''), str(chosen.get('url') or ''), 'landed',
             str(chosen.get('headRefOid') or ''),
@@ -12704,19 +12704,67 @@ _ws_merge_proof() {   # main M tip -> 0, with the passing rung in _WS_PROOF
   return 1
 }
 
-_ws_merge_tree_proof() {   # main M tip -> 0 when merging tip into M changes nothing
-  # A PR closed as landed in a merge train, proven against origin's default
-  # branch `M` (`_ws_reap_eval`'s rung 2 calls it for that arm ONLY). The
-  # three-way merge from their merge base keeps `M`'s tree exactly when every
-  # change on `tip` is already in `M`: a change main later reverted, or a
-  # commit the train never landed, makes the merged tree differ, and a
-  # conflict exits non-zero. A `merge-tree` that did not run — a git older
-  # than 2.38, a failed read — prints no tree, and BOTH sides must be a
-  # 40-hex oid before they are compared, so two empty answers never agree.
-  local main="$1" M="$2" tip="$3" t m
-  t=$(git -C "$main" merge-tree --write-tree -- "$M" "$tip" 2>/dev/null) || return 1
-  m=$(git -C "$main" rev-parse --verify --quiet "$M^{tree}" 2>/dev/null) || return 1
-  [[ "$t" =~ ^[0-9a-f]{40}$ && "$t" == "$m" ]]
+_ws_merge_tree_proof() {   # main L tip -> 0 when the landing commit L carries every change on tip
+  # A PR closed as landed in a merge train, proven against the train's LANDING
+  # COMMIT `L` (`_ws_train_landing` finds it; `_ws_reap_eval`'s rung 2 calls
+  # this for that arm ONLY) — never against origin's current head, which a
+  # later PR editing the same lines would make conflict FOR EVER. Two arms,
+  # both asked of `L` and its first parent `P`, the default branch the train
+  # landed on:
+  #   1. merging tip into `P` gives exactly `L`'s tree: `L` is this member and
+  #      nothing else (a one-member train);
+  #   2. merging tip into `L` changes nothing, AND every path tip changes is a
+  #      path `L` changed from `P`: the member's own diff is contained in the
+  #      landing commit's, beside another member's.
+  # A commit the train never landed makes both differ, and a conflict exits
+  # non-zero. A `merge-tree` that did not run — a git older than 2.38, a failed
+  # read — prints no tree, and BOTH sides must be a 40-hex oid before they are
+  # compared, so two empty answers never agree.
+  local main="$1" L="$2" tip="$3" P t m mb p
+  m=$(git -C "$main" rev-parse --verify --quiet "$L^{tree}" 2>/dev/null) || return 1
+  [[ "$m" =~ ^[0-9a-f]{40}$ ]] || return 1
+  P=$(git -C "$main" rev-parse --verify --quiet "$L^1^{commit}" 2>/dev/null) || return 1
+  t=$(git -C "$main" merge-tree --write-tree -- "$P" "$tip" 2>/dev/null) \
+    && [[ "$t" =~ ^[0-9a-f]{40}$ && "$t" == "$m" ]] && return 0
+  t=$(git -C "$main" merge-tree --write-tree -- "$L" "$tip" 2>/dev/null) || return 1
+  [[ "$t" =~ ^[0-9a-f]{40}$ && "$t" == "$m" ]] || return 1
+  mb=$(git -C "$main" merge-base -- "$P" "$tip" 2>/dev/null) || return 1
+  # Each path the member changed must differ between `P` and `L` — `diff
+  # --quiet` exits 1 for "differs", 0 for "the same", anything else for a read
+  # that failed, and only 1 passes. NUL-delimited and `:(literal)`, so no path
+  # is ever read as an option or a glob.
+  while IFS= read -r -d '' p; do
+    git -C "$main" diff --quiet "$P" "$L" -- ":(literal)$p" 2>/dev/null
+    [[ $? -eq 1 ]] || return 1
+  done < <(git -C "$main" diff --name-only -z --no-renames "$mb" "$tip" -- 2>/dev/null)
+  return 0
+}
+
+# How many default-branch commits naming the member `_ws_train_landing` tries.
+WS_TRAIN_LANDING_MAX=20
+
+_ws_train_landing() {   # main ref number tip -> the train's landing commit on stdout, 0; else 1
+  # THE COMMIT THE TRAIN LANDED AS: a commit on `ref`'s first-parent history
+  # (origin's default branch) whose message names the member as `#<number>` —
+  # the train PR's squash lists its members. Newest first; the first that
+  # `_ws_merge_proof` or `_ws_merge_tree_proof` proves is the answer. When none
+  # proves, the NEWEST is answered anyway, so the ladder's own refusal prints
+  # the diff against it; when none names the member at all, nothing is
+  # answered and the caller refuses. `#420` never names `#42`: the number is
+  # bounded on both sides. The number is GitHub's, so it is anchored to digits
+  # before it is spliced into the pattern.
+  local main="$1" ref="$2" n="$3" tip="$4" c first=""
+  [[ "$n" =~ ^[1-9][0-9]{0,9}$ ]] || return 1
+  while IFS= read -r c; do
+    [[ "$c" =~ ^[0-9a-f]{40}$ ]] || continue
+    [[ -n "$first" ]] || first="$c"
+    if _ws_merge_proof "$main" "$c" "$tip" || _ws_merge_tree_proof "$main" "$c" "$tip"; then
+      printf '%s\n' "$c"; return 0
+    fi
+  done < <(git -C "$main" log --first-parent --format=%H --extended-regexp \
+             --grep="(^|[^0-9A-Za-z_])#$n([^0-9]|\$)" --max-count="$WS_TRAIN_LANDING_MAX" "$ref" -- 2>/dev/null)
+  [[ -n "$first" ]] || return 1
+  printf '%s\n' "$first"
 }
 
 _ws_fingerprint() {   # id branch tip headOid mergeOid proof dirty igndigest sensdigest stashes wthead baseOid clipsDigest childrenDigest
@@ -13632,20 +13680,27 @@ _ws_reap_eval() {   # id -> 0 when reapable, else REAP_VERDICT names the refusal
   # landed this member's work through a train PR, squashed beside other
   # members', and closed the member, so GitHub names no merge commit and none
   # of `_ws_merge_proof`'s rungs can see the work inside a commit that carries
-  # someone else's too. The proof is asked of origin's DEFAULT BRANCH, the
-  # symref rung 1 just re-derived from the remote: `_ws_merge_proof` first,
-  # then `merge-tree` — merging this branch into that commit changes nothing,
-  # so every change on it is already there. REAP_MERGE becomes that commit, so
-  # the token is over the very commit the proof ran against, and the audit and
-  # the tombstone name it where a merge commit would be. The label is GitHub's
-  # claim; this rung is what stops a label on unlanded work, or on work main
-  # later reverted, from deleting anything.
+  # someone else's too. The proof is asked of the train's LANDING COMMIT on
+  # origin's default branch (the symref rung 1 just re-derived from the
+  # remote): the first-parent commit whose message names this PR, found by
+  # `_ws_train_landing` — `_ws_merge_proof` first, then `merge-tree` against
+  # it and its first parent. PINNED to that commit, never to origin's current
+  # head: a later PR that edits the lines the train landed would make a merge
+  # into the head conflict for ever, and a head that moves would move the
+  # token with it (`state-changed` between the sheet and the tap for nothing).
+  # REAP_MERGE becomes the landing commit, so the token is over the very
+  # commit the proof ran against, and the audit and the tombstone name it
+  # where a merge commit would be. The label is GitHub's claim; this rung is
+  # what stops a label on unlanded work from deleting anything. A later revert
+  # on main does not un-land it, exactly as for a MERGED PR: the work is in
+  # history at the landing commit.
   if [[ "$REAP_MERGE" == landed ]]; then
     landed=1
     REAP_MERGE=""
-    [[ -n "${obase:-}" ]] && REAP_MERGE=$(git -C "$main" rev-parse --verify --quiet "$obase^{commit}" 2>/dev/null)
-    [[ -n "$REAP_MERGE" ]] \
-      || { _ws_refuse tree-differs "the PR was closed as landed in a merge train, and $ancwhy, so its work could not be compared against anything"; return 1; }
+    [[ -n "${obase:-}" ]] \
+      || { _ws_refuse tree-differs "the PR was closed as landed in a merge train, and $ancwhy, so its landing commit could not be looked for"; return 1; }
+    REAP_MERGE=$(_ws_train_landing "$main" "$obase" "$REAP_PRNUM" "$REAP_TIP") \
+      || { _ws_refuse tree-differs "the PR was closed as landed in a merge train, but no commit on $obase names #$REAP_PRNUM, so its work could not be compared against anything"; return 1; }
   fi
   # §7's argv boundary, restated on THIS side of the split — because the split
   # is what can move a value out of the field that was anchored and into one
@@ -40618,7 +40673,9 @@ _authdead_clear_on_spawn() {   # wrapper — `_spawn_settle`'s rc-0 half for the
 #               no bound PR", a PR that never met the queue, a MERGED PR whose
 #               last removal had another reason (merged by hand after it), and a
 #               CLOSED PR that never merged: it is in neither window, but its own
-#               line already says `phase: closed`, and a closed PR is in no queue
+#               line already says `phase: closed`, and a closed PR is in no queue;
+#               and a PR a merge train landed and closed (`landedInTrain` on its
+#               bound row, `phase: merged`), CLOSED to GitHub and so in no window
 #   unmeasured  the call did not answer, or the bound PR is outside both windows
 #               and is not closed
 # plus `queueAt`, the ISO timestamp of that last act, only when it has one and
@@ -40733,7 +40790,13 @@ def word(line):
         return 'none', None
     f = FACTS.get(num)
     if f is None:
-        if line.get('phase') == 'closed':
+        # A closed PR is in no queue, and neither window holds it. That covers
+        # a PR a merge train landed and CLOSED, whose phase reads `merged` (its
+        # bound row carries ccd's own `landedInTrain`): GitHub still says
+        # CLOSED, so it is in no window either, and `unmeasured` would be false.
+        if line.get('phase') == 'closed' or (line.get('phase') == 'merged' and any(
+                isinstance(r, dict) and r.get('number') == num and r.get('landedInTrain') is True
+                for r in line.get('rows') or [])):
             return 'none', None
         return 'unmeasured', None
     state, entry, act, at, why = f

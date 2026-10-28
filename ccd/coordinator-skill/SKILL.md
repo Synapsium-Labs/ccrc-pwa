@@ -377,7 +377,9 @@ not after.
      Separately, a fresh child always branches from the project's default
      branch and carries none of the previous producer's unmerged commits,
      which is why, when wave N+1 builds on wave N's code, it dispatches only
-     once wave N's PR is proven merged, exactly as §5's "One PR per child"
+     once wave N's PR is proven merged — MERGED at its verified head, or
+     CLOSED there with `landedInTrain: true` on its row of
+     `ccd pr-state --session <id>` — exactly as §5's "One PR per child"
      requires. An UNMARKED producer — every workspace minted without a
      marker: by a box whose ccd did not yet mark children, or by a
      dispatch that journaled `child-omitted` — is never refused this way;
@@ -399,7 +401,8 @@ not after.
      by run id, and require its own `state` to be `done`. If the consumer depends
      on an interface from that producer, independently prove the producer
      interface PR merged at the exact `producerSha` carried in the conditional
-     producer contract. A missing or non-`done` row, failed release, or required
+     producer contract (it reads MERGED there, or CLOSED there with
+     `landedInTrain: true` on its row of `ccd pr-state --session <id>`). A missing or non-`done` row, failed release, or required
      exact-SHA merge proof that is absent means report and do not dispatch. The
      closed row proves the fingerprint and terminal run state; it does not prove
      a required interface merged. Only then dispatch wave N+1 (step 2).

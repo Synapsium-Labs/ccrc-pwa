@@ -437,11 +437,13 @@ describe('the coordinator skill: its contract', () => {
     expect(para, 'the read-back no longer says how many answers it gives').toContain('gives one of four answers.');
     expect(para, 'the queued answer (a non-null entry) is gone').toContain('answers a non-null `mergeQueueEntry`');
     expect(para, 'the MERGED answer is gone: a merged PR would read as nothing queued')
-      .toContain('A `state` of `MERGED` means it already landed: wait for or prove `merged:#<pr>`, and never disarm');
+      .toContain('A `state` of `MERGED` — or of `CLOSED` with `landedInTrain: true` on the PR\'s row of '
+        + '`ccd pr-state --session <sessionId>`, a merge train having landed it and closed it — means it already '
+        + 'landed: wait for or prove `merged:#<pr>`, and never disarm');
     expect(para, 'the ARMED answer is gone')
       .toContain('no entry but a non-null `autoMergeRequest` means it is only armed');
     expect(para, 'the NEITHER answer is gone')
-      .toContain('no entry, no `autoMergeRequest` and not merged means nothing is queued: read why');
+      .toContain('no entry, no `autoMergeRequest` and neither of those landed answers means nothing is queued: read why');
     // The disarm is the armed answer's act ALONE: it sits after the MERGED rule.
     const merged = para.indexOf('and never disarm');
     const disarm = para.indexOf('`gh pr merge <pr> --disable-auto`');

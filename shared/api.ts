@@ -1349,9 +1349,10 @@ export interface WsAudit {
    *  origin/HEAD, so nothing unique exists to lose. `pr.number` is `null` on
    *  that verdict — the audit claims no merge it did not witness.
    *  `merge-tree` is the sixth: a PR a merge train landed and closed, whose
-   *  work merging into origin's default branch changes nothing; `pr.number`
-   *  is that PR and `pr.mergeCommit` the default-branch commit the proof ran
-   *  against, since the train named no merge commit for it. */
+   *  work the train's landing commit (the default-branch commit whose message
+   *  names the PR) is proven to carry; `pr.number` is that PR and
+   *  `pr.mergeCommit` that landing commit, the one the proof ran against,
+   *  since the train named no merge commit for it. */
   merge: { proof: 'ancestor' | 'tree' | 'patch-id' | 'cherry' | 'contained' | 'merge-tree' | null; fetchedAt: number | null };
   transcript: string;
   /** The checkouts nested under this workspace's worktree — registered
