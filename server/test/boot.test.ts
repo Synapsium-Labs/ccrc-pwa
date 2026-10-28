@@ -31,6 +31,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync }
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
+import { freePort } from './codexLaneFixture.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const serverRoot = path.resolve(here, '..');
@@ -64,10 +65,13 @@ const writeRoster = (home: string): void => {
   }));
 };
 
-/** A port unlikely to collide across parallel test files — derived from
- *  this process's own pid, which is unique per vitest worker. */
-let portCounter = 0;
-const freshPort = (): number => 21000 + (process.pid % 4000) + (portCounter++) * 7;
+/** A port for the spawned server, which takes it from CCRC_PORT before it
+ *  binds and refuses 0 (`loadConfig`), so it cannot bind port 0 and report
+ *  back. It comes from the codex-lane fixture's `freePort` (D-6856): free a
+ *  moment ago, below the kernel's ephemeral range, and disjoint from every
+ *  other live vitest worker's slice. This file once derived a fixed band
+ *  (`21000 + pid % 4000`), which overlapped those slices. */
+const freshPort = (): Promise<number> => freePort();
 
 let child: ChildProcess | undefined;
 let currentHome: string | undefined;
@@ -157,7 +161,7 @@ describe('the real composition root — boot never blocks on the local-caps prob
     const home = mkTmp('ccrc-boot-');
     writeRoster(home);
     writeStubCcd(home, 'sleep 600');
-    const elapsed = await timeToHealth(home, indexTs, freshPort(), 8_000);
+    const elapsed = await timeToHealth(home, indexTs, await freshPort(), 8_000);
     expect(elapsed, '/health must answer well within the 8s budget, not time out').not.toBeNull();
     // Generous relative to the reviewer's own measured baseline (~700-800ms)
     // but tight relative to the 10s LOCAL_CAPS_TIMEOUT_MS bound this test
@@ -170,7 +174,7 @@ describe('the real composition root — boot never blocks on the local-caps prob
     const home = mkTmp('ccrc-boot-');
     writeRoster(home);
     writeStubCcd(home, 'echo start\necho stop\necho stop-surface\nexit 0');
-    const elapsed = await timeToHealth(home, indexTs, freshPort(), 8_000);
+    const elapsed = await timeToHealth(home, indexTs, await freshPort(), 8_000);
     expect(elapsed).not.toBeNull();
     expect(elapsed!).toBeLessThan(3_000);
   }, 15_000);
@@ -211,7 +215,7 @@ describe('the real composition root — boot never blocks on the local-caps prob
       // (the same ceiling the real tests above must beat) proves the
       // control fails to answer in time — i.e. the harness DOES tell the
       // two cases apart.
-      const elapsed = await timeToHealth(home, mutantPath, freshPort(), 3_000);
+      const elapsed = await timeToHealth(home, mutantPath, await freshPort(), 3_000);
       expect(elapsed, 'the control must NOT answer within the same 3s budget the real file beats').toBeNull();
     } finally {
       rmSync(mutantPath, { force: true });
@@ -249,7 +253,7 @@ describe('the real composition root — local mode records its own ccd caps', ()
     const home = mkTmp('ccrc-boot-');
     writeRoster(home);
     writeStubCcd(home, 'echo start\necho stop\necho project-pool\nexit 0');
-    const port = freshPort();
+    const port = await freshPort();
     expect(await timeToHealth(home, indexTs, port, 8_000)).not.toBeNull();
     expect(await projectPoolsWithin(port, 'enforced', 5_000)).toBe('enforced');
   }, 20_000);
@@ -258,7 +262,7 @@ describe('the real composition root — local mode records its own ccd caps', ()
     const home = mkTmp('ccrc-boot-');
     writeRoster(home);
     writeStubCcd(home, 'echo start\necho stop\nexit 0');
-    const port = freshPort();
+    const port = await freshPort();
     expect(await timeToHealth(home, indexTs, port, 8_000)).not.toBeNull();
     expect(await projectPoolsWithin(port, 'unavailable', 5_000)).toBe('unavailable');
   }, 20_000);
@@ -272,7 +276,7 @@ describe('the real composition root — local mode records its own ccd caps', ()
     const home = mkTmp('ccrc-boot-');
     writeRoster(home);
     writeStubCcd(home, 'if [ "$1" = caps ]; then touch "$CCRC_HOME/.caps-asked"; fi\nexit 1');
-    const port = freshPort();
+    const port = await freshPort();
     expect(await timeToHealth(home, indexTs, port, 8_000)).not.toBeNull();
     const marker = path.join(home, '.caps-asked');
     const askedBy = Date.now() + 5_000;

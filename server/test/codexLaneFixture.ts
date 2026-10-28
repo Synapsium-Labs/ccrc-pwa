@@ -51,15 +51,16 @@ const REPO = path.resolve(here, '..', '..');
 // machine can take it (D-6856). Three kinds of taker, three rules:
 //  - other tests binding port 0: the kernel serves those from its ephemeral range
 //    (Linux starts at 32768, macOS higher), so every port here is BELOW it;
-//  - the one fixed-port suite in the tree: `shutdown-seal.test.ts` binds
-//    `26000 + pid % 3000`, so 26000-28999 is left out;
+//  - 26000-28999 is left out: `shutdown-seal.test.ts` once bound the fixed
+//    `26000 + pid % 3000` there. It draws from `freePort` now, and the band
+//    stays reserved so every slice keeps its bounds;
 //  - a parallel vitest worker running this same allocator: each worker draws from
 //    its OWN slice, keyed by `VITEST_POOL_ID` (unique among the workers alive at
 //    once), so two workers can never issue one port. Within a slice the walk
 //    starts at a random point, for two vitest runs on one machine.
 const PORT_FLOOR = 12_000;
 const PORT_CEILING = 32_000; // exclusive; under the lowest ephemeral port of any supported kernel
-/** `shutdown-seal.test.ts`'s fixed `26000 + pid % 3000`, [start, end). */
+/** The band `shutdown-seal.test.ts`'s fixed `26000 + pid % 3000` once took, still reserved, [start, end). */
 export const SEAL_PORTS = [26_000, 29_000] as const;
 export const PORT_SLICE = 500;
 /** Every slice, in order: whole PORT_SLICE-wide runs of [PORT_FLOOR, PORT_CEILING)
