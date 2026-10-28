@@ -462,8 +462,7 @@ export { homeProjectVerdict, shapeHomeProject, type HomeProjectShape, type HomeP
 /**
  * What `buildServer` hands these routes for the operator's door of the question family (W3 Q3f, D-7030):
  * `POST /api/questions/session-<id>/answer` gates its session id exactly as `server.ts`'s session routes do, with
- * `buildServer`'s own `knownId` (read lazily: it is declared beside those routes, after this file's routes are
- * registered), and answers through the operator's core with the SAME deps the old operator doors read (the press
+ * `buildServer`'s own `knownId`, and answers through the operator's core with the SAME deps the old operator doors read (the press
  * functions over `askDeps` and `sendDeps`, the `answeredFrame` emit, the watcher's hookstate read), built once there.
  */
 export interface OperatorDoorWiring {
@@ -582,11 +581,12 @@ export function registerCoordRoutes(
    */
   questions: Questions = watcher?.questions ?? createQuestions(deps),
   /**
-   * W3 Q3f (D-7030): the operator's door's wiring (`OperatorDoorWiring`), which `buildServer` passes. Absent for a test
+   * W3 Q3f (D-7030): the operator's door's wiring (`OperatorDoorWiring`), which `buildServer` passes, read at a request
+   * (a thunk, because `buildServer` declares `knownId` beside its session routes, after this call). Absent for a test
    * that registers these routes on a bare Fastify: that server answers the operator's door `not-configured`, having no
    * session routes and no press wiring of its own.
    */
-  operatorDoors?: OperatorDoorWiring,
+  operatorDoors?: () => OperatorDoorWiring,
 ): CoordRoutesHandle {
   const notConfigured = (reply: FastifyReply) => refuseRoute(reply, 'not-configured');
 
@@ -4412,11 +4412,12 @@ export function registerCoordRoutes(
    * path, which an older server answers 404.
    */
   app.post('/api/questions/:id/answer', async (req, reply) => {
-    if (operatorDoors === undefined) return notConfigured(reply);
+    const wiring = operatorDoors?.();
+    if (wiring === undefined) return notConfigured(reply);
     const qid = parseQuestionId((req.params as { id: string }).id);
     if (qid === null) return refuseRoute(reply, 'bad-request');
     if (qid.kind !== 'session') return refuseRoute(reply, 'kind-mismatch');
-    if (!(await operatorDoors.knownId(qid.sessionId))) return refuseRoute(reply, 'unknown-session');
+    if (!(await wiring.knownId(qid.sessionId))) return refuseRoute(reply, 'unknown-session');
     const body = (req.body ?? {}) as Record<string, unknown>;
     let answer: OperatorAnswer;
     if (body.kind === 'ask') {
@@ -4434,7 +4435,7 @@ export function registerCoordRoutes(
     } else {
       return refuseRoute(reply, 'bad-request');
     }
-    return sendAnswer(reply, await questions.answer(answer, operatorDoors.answerDeps));
+    return sendAnswer(reply, await questions.answer(answer, wiring.answerDeps));
   });
 
   /**

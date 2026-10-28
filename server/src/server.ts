@@ -1880,7 +1880,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     answered: (id, route, res) => answeredFrame(id, route, res),
     hookStateOf: (id) => watcher?.currentHookStates().get(id) ?? null,
   };
-  const operatorDoors: OperatorDoorWiring = { get knownId() { return knownId; }, answerDeps: operatorDoorDeps };
+  const operatorDoors = (): OperatorDoorWiring => ({ knownId, answerDeps: operatorDoorDeps });
   const coordRoutes = registerCoordRoutes(app, deps, bus, sessionAuth, askDeps, watcher, notice, questions, operatorDoors);
   // The dead-coordinator lane (workspace lifecycle §5.4) ends a programme only on this same serialiser: the watcher is
   // handed the sweep's abandon here, and has no other way to close a run. Called optionally: a test's stand-in watcher
