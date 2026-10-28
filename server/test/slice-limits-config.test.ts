@@ -111,12 +111,13 @@ describe('characterization: what every box carries today', () => {
 
 /** The fixed driver for the ccrc lane's function: source ccd/ccrc (its dispatch is guarded by BASH_SOURCE, so sourcing
  *  runs nothing else), then call `_inst_slice_limits <template> <dest>`. Paths arrive as arguments. */
-function runFunction(home: string, extra: Record<string, string> = {}): Ran & { dest: string } {
+function runFunction(home: string, extra: Record<string, string> = {}, installed?: string): Ran & { dest: string } {
   const driver = join(home, 'fn-driver.sh');
   writeFileSync(driver, '. "$1" || exit 97\nshift\n_inst_slice_limits "$@"\n');
   const dir = join(home, '.config', 'systemd', 'user', SLICE_DIR);
   mkdirSync(dir, { recursive: true });
   const dest = join(dir, 'limits.conf');
+  if (installed !== undefined) writeFileSync(dest, installed, { mode: 0o644 });
   return { ...ran(spawnSync('bash', [driver, CCRC, TEMPLATE, dest], { encoding: 'utf8', cwd: home, env: cleanEnv(home, extra) })), dest };
 }
 
@@ -153,7 +154,9 @@ describe('_inst_slice_limits renders the template from the box\'s config (D-TBD-
     expect(sha(readFileSync(r.dest))).toBe(TODAY_SHA256);
   });
 
-  for (const [mm, sm] of [['48G', '8G'], ['90%', '0'], ['49152M', '12G'], ['100%', '16384M'], ['64G', '6G'], ['24G', '2T']] as const) {
+  // The floors' own edges are taken: MemoryMax at least 1G however it is spelled, MemorySwapMax 0 or at least 1M.
+  for (const [mm, sm] of [['48G', '8G'], ['90%', '0'], ['49152M', '12G'], ['100%', '16384M'], ['64G', '6G'], ['24G', '2T'],
+    ['1G', '1M'], ['1048576K', '1024K'], ['1073741824', '1048576'], ['1%', '0']] as const) {
     it(`ccrc.env sets MemoryMax=${mm}, MemorySwapMax=${sm}: those values, every other byte the template's`, () => {
       const home = box(['CCRC_ROLE=fleet', `CCRC_SESSION_SLICE_MEMORY_MAX=${mm}`, `CCRC_SESSION_SLICE_SWAP_MAX=${sm}`]);
       const r = runFunction(home);
@@ -179,7 +182,10 @@ describe('_inst_slice_limits renders the template from the box\'s config (D-TBD-
 
   // Garbage keeps the default and WARNs, naming the key, the value and the default; the run still succeeds, so a
   // typo never stops an install or a deploy, and never reaches systemd.
-  const MEMORY_GARBAGE = ['lots', '24GB', '24g', '-1G', '0', '0G', '24 G', 'infinity', '1.5G', '0%', '101%', '24G;', '1Z', '0024G'];
+  // A suffix-less whole number is BYTES to systemd, so `24` or `90` (a typo for 90%) is a ceiling of a few bytes: the
+  // next install, update or deploy would OOM-kill every pane, exactly what refusing 0 is for. MemoryMax is at least 1G.
+  const MEMORY_GARBAGE = ['lots', '24GB', '24g', '-1G', '0', '0G', '24 G', 'infinity', '1.5G', '0%', '101%', '24G;', '1Z', '0024G',
+    '24', '90', '1', '512M', '1048575K', '1073741823'];
   for (const bad of MEMORY_GARBAGE) {
     it(`CCRC_SESSION_SLICE_MEMORY_MAX=${JSON.stringify(bad)} keeps MemoryMax=24G and warns`, () => {
       // The other key through the environment: on macOS a line bash would read differently (`24 G`) makes the
@@ -194,7 +200,8 @@ describe('_inst_slice_limits renders the template from the box\'s config (D-TBD-
       expect(warn[0]).toContain('MemoryMax=24G');
     });
   }
-  const SWAP_GARBAGE = ['none', '6GB', '-6G', '50%', 'infinity', '6 G', '0.5G'];
+  // The swap ceiling's floor is lower (a small swap allowance is a real choice) but a bare `6` is six bytes, not 6G.
+  const SWAP_GARBAGE = ['none', '6GB', '-6G', '50%', 'infinity', '6 G', '0.5G', '6', '1', '1023K', '1048575'];
   for (const bad of SWAP_GARBAGE) {
     it(`CCRC_SESSION_SLICE_SWAP_MAX=${JSON.stringify(bad)} keeps MemorySwapMax=6G and warns`, () => {
       const home = box([`CCRC_SESSION_SLICE_SWAP_MAX=${bad}`]);
@@ -249,6 +256,89 @@ describe('_inst_slice_limits renders the template from the box\'s config (D-TBD-
     const knob = (k: string): string[] => [...code.matchAll(new RegExp(`_ccrc_knob ${k} ([^\\s;]+)`, 'g'))].map((m) => m[1]!);
     expect(knob('CCRC_SESSION_SLICE_MEMORY_MAX')).toEqual(['24G']);
     expect(knob('CCRC_SESSION_SLICE_SWAP_MAX')).toEqual(['6G']);
+  });
+});
+
+// ── a value it cannot use never SHRINKS a box: it keeps what is installed (D-TBD-slice-limits-keys) ───────────────────
+// A box tuned above the default (the case the keys exist for: 90% on a box that runs nothing but the fleet) must not
+// fall to 24G on one typo: daemon-reload would apply the lower memory.max to the live slice, and with more than 24G in
+// use the kernel reclaims and OOM-kills panes across the fleet. So the fallback is the value the rendered drop-in at
+// <dest> already carries, and the template's default only when nothing usable is installed yet. A key that is UNSET
+// (or `KEY=`) is not a fallback: it is the box choosing the default, and it renders the default.
+describe('_inst_slice_limits keeps the installed value when the configured one cannot be used', () => {
+  const TUNED = (): string => expected('90%', '12G');
+
+  for (const bad of ['90 %', '1.5G', '90g', '24', 'lots']) {
+    it(`installed MemoryMax=90%, ccrc.env CCRC_SESSION_SLICE_MEMORY_MAX=${JSON.stringify(bad)}: the drop-in is unchanged, and it warns`, () => {
+      const home = box([`CCRC_SESSION_SLICE_MEMORY_MAX=${bad}`]);
+      const r = runFunction(home, { CCRC_SESSION_SLICE_SWAP_MAX: '12G' }, TUNED());
+      expect(r.code, r.stderr).toBe(0);
+      expect(readFileSync(r.dest, 'utf8')).toBe(TUNED());
+      const warn = r.stderr.split('\n').filter((l) => l.includes('CCRC_SESSION_SLICE_MEMORY_MAX'));
+      expect(warn, r.stderr).toHaveLength(1);
+      expect(warn[0]).toMatch(/WARN/);
+      expect(warn[0]).toContain('MemoryMax=90%');
+      expect(warn[0]).not.toContain('MemoryMax=24G');
+    });
+  }
+
+  it('installed MemorySwapMax=12G, garbage swap key: the swap line is unchanged, and it warns', () => {
+    const home = box(['CCRC_SESSION_SLICE_SWAP_MAX=6GB']);
+    const r = runFunction(home, { CCRC_SESSION_SLICE_MEMORY_MAX: '90%' }, TUNED());
+    expect(r.code, r.stderr).toBe(0);
+    expect(readFileSync(r.dest, 'utf8')).toBe(TUNED());
+    expect(r.stderr).toMatch(/WARN.*CCRC_SESSION_SLICE_SWAP_MAX.*MemorySwapMax=12G/);
+  });
+
+  it('a NUL byte anywhere in ccrc.env (the reader refuses the file): both installed lines are kept', () => {
+    const home = box();
+    mkdirSync(join(home, '.ccrc'), { recursive: true });
+    writeFileSync(join(home, '.ccrc', 'ccrc.env'), Buffer.from('CCRC_SESSION_SLICE_MEMORY_MAX=90%\nCCRC_SESSION_SLICE_SWAP_MAX=12G\nX=\0\n'));
+    const r = runFunction(home, {}, TUNED());
+    expect(r.code, r.stderr).toBe(0);
+    expect(readFileSync(r.dest, 'utf8')).toBe(TUNED());
+    expect(r.stderr).toMatch(/WARN.*MemoryMax=90%/);
+    expect(r.stderr).toMatch(/WARN.*MemorySwapMax=12G/);
+  });
+
+  it('a line the reader refuses (`export KEY=...`) keeps the installed value too', () => {
+    const home = box(['export CCRC_SESSION_SLICE_MEMORY_MAX=90%']);
+    const r = runFunction(home, { CCRC_SESSION_SLICE_SWAP_MAX: '12G' }, TUNED());
+    expect(r.code, r.stderr).toBe(0);
+    expect(readFileSync(r.dest, 'utf8')).toBe(TUNED());
+  });
+
+  it('an UNSET key is the box choosing the default: installed 90% renders 24G, without a warning', () => {
+    const home = box(['CCRC_ROLE=fleet']);
+    const r = runFunction(home, {}, TUNED());
+    expect(r.code, r.stderr).toBe(0);
+    expect(sha(readFileSync(r.dest))).toBe(TODAY_SHA256);
+    expect(r.stderr).toBe('');
+  });
+
+  it('an installed value this renderer would itself refuse is not kept: garbage falls to the default', () => {
+    const home = box(['CCRC_SESSION_SLICE_MEMORY_MAX=lots']);
+    const r = runFunction(home, { CCRC_SESSION_SLICE_SWAP_MAX: '12G' }, expected('24', '12G'));
+    expect(r.code, r.stderr).toBe(0);
+    expect(readFileSync(r.dest, 'utf8')).toBe(expected('24G', '12G'));
+    expect(r.stderr).toMatch(/WARN.*MemoryMax=24G/);
+  });
+
+  it('an installed drop-in with two MemoryMax lines is not read: garbage falls to the default', () => {
+    const home = box(['CCRC_SESSION_SLICE_MEMORY_MAX=lots']);
+    const r = runFunction(home, { CCRC_SESSION_SLICE_SWAP_MAX: '12G' }, `${TUNED()}MemoryMax=48G\n`);
+    expect(r.code, r.stderr).toBe(0);
+    expect(readFileSync(r.dest, 'utf8')).toBe(expected('24G', '12G'));
+  });
+
+  it('the deploy lane keeps the installed value on garbage, the same as the ccrc lane', () => {
+    const home = box(['CCRC_SESSION_SLICE_MEMORY_MAX=90 %', 'CCRC_SESSION_SLICE_SWAP_MAX=12G']);
+    mkdirSync(path.dirname(deployed(home)), { recursive: true });
+    writeFileSync(deployed(home), TUNED(), { mode: 0o644 });
+    const r = runDeployLane(home);
+    expect(r.code, r.stderr).toBe(0);
+    expect(readFileSync(deployed(home), 'utf8')).toBe(TUNED());
+    expect(r.stderr).toMatch(/WARN.*MemoryMax=90%/);
   });
 });
 
