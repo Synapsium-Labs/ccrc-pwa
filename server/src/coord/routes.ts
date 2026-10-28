@@ -548,10 +548,10 @@ export function registerCoordRoutes(
   askDeps: AskDeps,
   /**
    * Task 10's `POST /api/asks/:id/release` (the decline route) drops the
-   * watcher's in-memory hold and fires the deferred push immediately —
-   * `FleetWatcher.releaseHeldAsk` is the ONLY way in, because `heldAsks` is
-   * watcher-private state (that method's own docstring) and this file has no
-   * business reaching into its shape. Threaded in as its own parameter,
+   * in-memory hold and fires the deferred push immediately — since W3 Q3f
+   * (D-7030) through the watcher's `Questions` instance (`questions` below,
+   * the watcher's own) and the doors sink the watcher gave it, so this file
+   * never reaches into the hold's shape. Threaded in as its own parameter,
    * the same move `askDeps` just above made for `answerAsk`'s queue: `Deps`
    * deliberately does not carry the watcher (`buildServer`'s own third
    * argument, not a `Deps` field — see that function's signature), so a
@@ -3769,10 +3769,11 @@ export function registerCoordRoutes(
    * (D-5289): a parent that handed the question over may not answer it later
    * (`/answer` refuses `409 declined`), where a lapsed row stays answerable.
    *
-   * `watcher.releaseHeldAsk` is the ONLY way this route touches the
-   * watcher's in-memory hold (F12's own argument, `watch.ts`'s docstring on
-   * `heldAsks`): the map is watcher-private state, so this route names the
-   * child id and nothing about the map's shape. It runs AFTER the CAS
+   * The `Questions` instance's `released` door-in is the ONLY way this route
+   * touches the in-memory hold (F12's own argument; since W3 Q3f, D-7030, the
+   * claimant's core calls it and pushes through the watcher's doors sink): the
+   * hold is the instance's state, so this route names the child id and nothing
+   * about its shape. It runs AFTER the CAS
    * succeeds, never before — the store row is the fact, the in-memory hold
    * is only ever a cache of the push `sweepAsks` would otherwise send later.
    * A `watcher === undefined` server (every non-test `buildServer` caller

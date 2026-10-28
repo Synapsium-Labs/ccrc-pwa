@@ -8991,20 +8991,6 @@ export class FleetWatcher {
     this.questions.lapseAsks(now, (ev) => this.pushOne(ev, this.activeProjects));
   }
 
-  /** `POST /api/asks/:id/release`'s door in (Task 10): a THIN FORWARD to this watcher's `Questions` instance, which
-   *  drops the hold and answers the snapshotted push; this sends it. Q3f deletes it when the route calls the module. */
-  releaseHeldAsk(childId: string): void {
-    const ev = this.questions.released(childId);
-    if (ev !== null) this.pushOne(ev, this.activeProjects);
-  }
-
-  /** D-5289, late answer wins: `POST /api/asks/:id/answer`'s door in, a THIN FORWARD; the instance answers the push that
-   *  replaces this row's lapse under the same tag, or nothing. Q3f deletes it. */
-  answeredLate(childId: string, askId: number, parent: string): void {
-    const ev = this.questions.answeredLate(childId, askId, parent);
-    if (ev !== null) this.pushOne(ev, this.activeProjects);
-  }
-
   /**
    * The approval half (plan Task 16, D-5298, D-5441): the lapse, the hook's ceiling and the deferred pushes, through
    * this watcher's `Questions` instance (`coord/questions.ts#createQuestions`'s `lapseApprovals`, given the pane's
@@ -9065,22 +9051,6 @@ export class FleetWatcher {
     } catch (err) {
       console.warn(`ccrc-server: sweepDigest failed (${err instanceof Error ? err.message : String(err)}) — the next beat retries`);
     }
-  }
-
-  /** `POST /api/approvals/:id/release`'s door in (D-5440), a THIN FORWARD: the instance answers the deferred push when
-   *  the dialog it covers is still painted; this sends it. Q3f deletes it. */
-  releaseHeldApproval(childId: string): void {
-    const ev = this.questions.approvalReleased(childId, this.dialogIds.get(childId));
-    if (ev !== null) this.pushOne(ev, this.activeProjects);
-  }
-
-  /** `POST /api/approvals/:id/rule`'s door in, a THIN FORWARD: a prompt the operator was already pushed about has that
-   *  notification replaced, same tag, by who ruled (the instance decides; D-5491 keeps a subagent's ruling out). Q3f
-   *  deletes it. */
-  approvalRuled(childId: string, agentId: string, parent: string, verdict: 'allow' | 'deny'): void {
-    const ev = this.questions.approvalRuled(childId, agentId, parent, verdict, this.dialogIds.has(childId),
-      () => this.lastFleet?.find((f) => f.id === childId)?.project ?? '');
-    if (ev !== null) this.pushOne(ev, this.activeProjects);
   }
 }
 

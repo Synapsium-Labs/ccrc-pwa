@@ -1853,10 +1853,11 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // in-flight prompt against the identical tmux pane.
   //
   // The 6th argument (Task 10) is this function's own `watcher` parameter,
-  // passed straight through: `POST /api/asks/:id/release` calls
-  // `watcher?.releaseHeldAsk` to drop the in-memory hold and fire the
-  // deferred push the moment a parent declines, rather than making the
-  // operator wait out the rest of the grace window. `Deps` deliberately does
+  // passed straight through. Since W3 Q3f (D-7030) the decline drops the
+  // in-memory hold and fires the deferred push through the watcher's own
+  // `Questions` instance (the 8th argument, `watcher.questions`) and the doors
+  // sink the watcher gave it, the moment a parent declines, rather than making
+  // the operator wait out the rest of the grace window. `Deps` deliberately does
   // not carry the watcher (this function's own third argument), so there is
   // no second place this wiring could come from.
   //
