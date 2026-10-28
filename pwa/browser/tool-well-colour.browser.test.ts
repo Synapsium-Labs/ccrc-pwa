@@ -3,6 +3,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { chromium, type Browser } from 'playwright-core';
 import { INSTRUMENT, PHOSPHOR, REFINED } from '@ccrc/ui';
+import { ANSI_HUE_TOKEN } from '../src/lib/ansi';
 import { resolveChrome } from './harness';
 import { buildDist, openApp, removeDist, serveDist, type AppFixture, type AppView, type DistServer } from './app';
 
@@ -35,8 +36,10 @@ const EVENTS = [
   { kind: 'user', uuid: 'q1', ts: TS, text: 'Run the check.' },
   { kind: 'assistant', uuid: 'a1', ts: TS, text: 'Running it.' },
   { kind: 'tool_use', uuid: 'u1', ts: TS, toolId: 't1', name: 'Bash',
-    input: JSON.stringify({ description: 'Check output', command: COMMAND }) },
-  { kind: 'tool_result', ts: TS, toolId: 't1', text: '\x1b[31mred\x1b[0m \x1b[32mgreen\x1b[0m\x1b[2K\x1b]0;title\x07', isError: false },
+    input: JSON.stringify({ description: 'Check \x1b[31moutput\x1b[0m', command: COMMAND }) },
+  { kind: 'tool_result', ts: TS, toolId: 't1', text: [30, 31, 32, 33, 34, 35, 36].map((n) => `\x1b[${n}m${n}\x1b[0m`).join(' ') + '\x1b[2K\x1b]0;title\x07', isError: false },
+  { kind: 'tool_use', uuid: 'u2', ts: TS, toolId: 't2', name: 'Bash', input: 'literal\x1b[2Kinput' },
+  { kind: 'tool_result', ts: TS, toolId: 't2', text: 'ok', isError: false },
 ];
 let dist: string | undefined;
 let server: DistServer | undefined;
@@ -65,10 +68,14 @@ describe('an expanded Bash card shows its command and output in palette hues on 
           const group = groups.nth(i);
           if (await group.getAttribute('aria-expanded') !== 'true') await group.click();
         }
-        const card = page.locator('.toolcard').filter({ has: page.locator('.tool-name', { hasText: 'Bash' }) });
+        const cards = page.locator('.toolcard').filter({ has: page.locator('.tool-name', { hasText: 'Bash' }) });
+        const card = cards.nth(0);
+        const rawCard = cards.nth(1);
+        await rawCard.locator('.tool-row').click();
+        expect(await rawCard.locator('.well').first().textContent()).toBe('literalinput');
         await card.locator('.tool-row').click();
         await expect.poll(() => card.locator('.well').count()).toBe(2);
-        const m = await card.evaluate((element) => {
+        const m = await card.evaluate((element, hueTokens) => {
           const wells = [...element.querySelectorAll<HTMLElement>('.well')];
           const probe = document.createElement('span');
           document.body.append(probe);
@@ -77,8 +84,11 @@ describe('an expanded Bash card shows its command and output in palette hues on 
             return getComputedStyle(probe).color;
           };
           const bg = token('--bg-well');
-          const red = token('--diff-del');
-          const green = token('--diff-add');
+          const hues = Object.entries(hueTokens).map(([hue, name]) => ({
+            hue, actual: wells[1]?.querySelector<HTMLElement>(`.ansi-${hue}`) ? getComputedStyle(wells[1].querySelector<HTMLElement>(`.ansi-${hue}`)!).color : null,
+            expected: token(name),
+          }));
+          const stringToken = token('--syn-string');
           probe.remove();
           const walk = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
           let escape = false;
@@ -86,18 +96,40 @@ describe('an expanded Bash card shows its command and output in palette hues on 
           const scroller = document.querySelector<HTMLElement>('.chat-scroller');
           return {
             input: wells[0]?.querySelector('.hljs')?.textContent ?? null,
-            red: wells[1]?.querySelector<HTMLElement>('.ansi-red') ? getComputedStyle(wells[1].querySelector<HTMLElement>('.ansi-red')!).color : null,
-            green: wells[1]?.querySelector<HTMLElement>('.ansi-green') ? getComputedStyle(wells[1].querySelector<HTMLElement>('.ansi-green')!).color : null,
-            redToken: red, greenToken: green, backgrounds: wells.map((well) => getComputedStyle(well).backgroundColor), bg,
-            escape, text: element.textContent ?? '', styled: wells.flatMap((well) => [...well.querySelectorAll('[style]')]).length,
+            hues, stringToken,
+            stringColour: wells[0]?.querySelector<HTMLElement>('.hljs-string') ? getComputedStyle(wells[0].querySelector<HTMLElement>('.hljs-string')!).color : null,
+            backgrounds: wells.map((well) => getComputedStyle(well).backgroundColor), bg,
+            escape, text: wells.map((well) => well.textContent ?? '').join(''), styled: wells.flatMap((well) => [...well.querySelectorAll('[style]')]).length,
             scrollerSide: scroller ? scroller.scrollWidth - scroller.clientWidth : -1,
             pageSide: document.documentElement.scrollWidth - document.documentElement.clientWidth,
           };
-        });
-        expect(m.input).toContain(COMMAND);
-        expect(m.red).toBe(m.redToken);
-        expect(m.green).toBe(m.greenToken);
+        }, ANSI_HUE_TOKEN);
+        expect(m.input).toBe(`# Check output\n${COMMAND}`);
+        expect(m.hues).toHaveLength(7);
+        for (const hue of m.hues) expect(hue.actual, hue.hue).toBe(hue.expected);
+        expect(m.stringColour).toBe(m.stringToken);
         expect(m.backgrounds).toEqual([m.bg, m.bg]);
+        const surfaces = await page.evaluate(() => {
+          const host = document.createElement('div');
+          host.innerHTML = '<div class="msg-assist"><code class="md-code">x</code></div><article class="msg-assist doc-body"><code class="md-code">x</code></article><div class="msg-assist compaction-body"><code class="md-code">x</code></div>';
+          document.body.append(host);
+          const probe = document.createElement('span');
+          document.body.append(probe);
+          const colour = (name: string) => { probe.style.color = getComputedStyle(document.documentElement).getPropertyValue(name); return getComputedStyle(probe).color; };
+          const samples = [...host.querySelectorAll('code')].map((el) => {
+            const s = getComputedStyle(el);
+            return { colour: s.color, background: s.backgroundColor, border: s.borderColor, font: s.font, padding: s.padding, radius: s.borderRadius };
+          });
+          const expected = { primary: colour('--ink-primary'), raised: colour('--bg-raised'), edge: colour('--edge-subtle'), ink: colour('--ink-on-well'), well: colour('--bg-well'), hair: colour('--well-bar-hair') };
+          host.remove(); probe.remove();
+          return { samples, expected };
+        });
+        const [message, doc, compact] = surfaces.samples;
+        expect(message).toMatchObject({ colour: surfaces.expected.ink, background: surfaces.expected.well, border: surfaces.expected.hair });
+        for (const surface of [doc, compact]) {
+          expect(surface).toMatchObject({ colour: surfaces.expected.primary, background: surfaces.expected.raised, border: surfaces.expected.edge });
+          expect([surface?.font, surface?.padding, surface?.radius]).toEqual([message?.font, message?.padding, message?.radius]);
+        }
         expect(m.escape).toBe(false);
         expect(m.text).not.toMatch(/\[\d+(?:;\d+)*[a-zA-Z]/);
         expect(m.styled).toBe(0);

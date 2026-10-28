@@ -17,6 +17,52 @@ const planOf = (name: string, obj: unknown) => {
 };
 
 describe('toolWellPlan', () => {
+  const terminators = [['CRLF', '\r\n'], ['LF', '\n'], ['CR', '\r'], ['LS', String.fromCharCode(0x2028)], ['PS', String.fromCharCode(0x2029)]];
+  it.each(terminators)('marks each Bash comment line with %s boundaries', (_name, end) => {
+    expect(planOf('Bash', { command: 'pwd', description: `first${end}second` })).toEqual({
+      kind: 'code', lang: 'bash', text: '# first\n# second\npwd',
+    });
+  });
+  it.each(terminators)('marks each hunk payload line with %s boundaries', (_name, end) => {
+    expect(planOf('Edit', { file_path: 'x', old_string: `a${end}b`, new_string: `c${end}d` })).toEqual({
+      kind: 'diff', text: '@@ x @@\n- a\n- b\n+ c\n+ d',
+    });
+  });
+
+  it('omits phantom diff lines for empty strings and terminal line breaks', () => {
+    expect(planOf('Edit', { file_path: 'x', old_string: '', new_string: 'a\n' }))
+      .toEqual({ kind: 'diff', text: '@@ x @@\n+ a' });
+    expect(planOf('Edit', { file_path: 'x', old_string: 'a\n\nb\n', new_string: '' }))
+      .toEqual({ kind: 'diff', text: '@@ x @@\n- a\n- \n- b' });
+  });
+
+  it('strips input escapes from parsed content and metadata before highlighting', () => {
+    const esc = String.fromCharCode(27);
+    const values = [
+      ['Bash', { command: `echo ${esc}[31mword`, description: `desc ${esc}[2Ktail` }],
+      ['Write', { file_path: `a.ts${esc}[2K`, content: `let ${esc}[31mx = 1` }],
+      ['Edit', { file_path: 'a', old_string: `old${esc}[2K`, new_string: `new${esc}[31m` }],
+      ['MultiEdit', { file_path: 'a', edits: [{ old_string: `old${esc}[2K`, new_string: `new${esc}[31m` }] }],
+    ] as const;
+    for (const [name, value] of values) {
+      const plan = planOf(name, value);
+      expect(plan.kind).not.toBe('plain');
+      expect(JSON.stringify(plan)).not.toContain('\\u001b');
+    }
+  });
+
+  it('retains metadata fields whose displayed names collide after stripping', () => {
+    const esc = String.fromCharCode(27);
+    expect(planOf('Bash', { command: 'pwd', name: 'first', [`na${esc}[31mme`]: 'second' }))
+      .toEqual({ kind: 'code', lang: 'bash', text: '# name: first\n# name: second\npwd' });
+  });
+
+  it('strips escapes from nested displayed metadata keys without losing colliding fields', () => {
+    const esc = String.fromCharCode(27);
+    const plan = planOf('Bash', { command: 'pwd', nested: { name: 'first', [`na${esc}[31mme`]: 'second' } });
+    expect(plan).toEqual({ kind: 'code', lang: 'bash', text: '# nested: {"name":"first","name":"second"}\npwd' });
+  });
+
   it('preserves non-string Bash descriptions', () => {
     for (const value of [null, false, 12, { reason: 'inspect' }, ['a', 'b']]) {
       expect(planOf('Bash', { command: 'pwd', description: value })).toEqual({
@@ -36,10 +82,10 @@ describe('toolWellPlan', () => {
       expect(plan.kind).toBe('diff');
       if (plan.kind !== 'diff') throw new Error('expected diff');
       const lines = plan.text.split('\n');
-      expect(lines.slice(1)).toEqual(['-old', '-more', '+new', '+more']);
+      expect(lines.slice(1)).toEqual(['- old', '- more', '+ new', '+ more']);
       expect(lines[0]).toContain('a\\n+path');
       expect(lines[0]).toContain('key\\n+fake');
-      expect(lines[0]).toContain('value\\r\\n-fake\\t\\u001b\\u2028');
+      expect(lines[0]).toContain('value\\r\\n-fake\\t\\u2028');
       if (name === 'MultiEdit') expect(lines[0]).toContain('top\\n+fake: top\\n-fake');
     }
   });
@@ -77,19 +123,19 @@ describe('toolWellPlan', () => {
 
   it('an Edit input is one hunk; MultiEdit one per edit', () => {
     expect(planOf('Edit', { file_path: 'src/a.ts', old_string: 'a\nb', new_string: 'c' }))
-      .toEqual({ kind: 'diff', text: '@@ src/a.ts @@\n-a\n-b\n+c' });
+      .toEqual({ kind: 'diff', text: '@@ src/a.ts @@\n- a\n- b\n+ c' });
     expect(planOf('Edit', { file_path: 'src/a.ts', old_string: 'a', new_string: 'b', replace_all: true }))
-      .toEqual({ kind: 'diff', text: '@@ src/a.ts, replace_all: true @@\n-a\n+b' });
+      .toEqual({ kind: 'diff', text: '@@ src/a.ts, replace_all: true @@\n- a\n+ b' });
     expect(planOf('MultiEdit', {
       file_path: 'f.ts',
       edits: [{ old_string: 'a', new_string: 'b' }, { old_string: 'c\nd', new_string: 'e', replace_all: true }],
     })).toEqual({
       kind: 'diff',
-      text: '@@ f.ts (edit 1/2) @@\n-a\n+b\n@@ f.ts (edit 2/2), replace_all: true @@\n-c\n-d\n+e',
+      text: '@@ f.ts (edit 1/2) @@\n- a\n+ b\n@@ f.ts (edit 2/2), replace_all: true @@\n- c\n- d\n+ e',
     });
     // another top-level field rides the first hunk's header
     expect(planOf('MultiEdit', { file_path: 'f.ts', note: 'n', edits: [{ old_string: 'a', new_string: 'b' }] }))
-      .toEqual({ kind: 'diff', text: '@@ f.ts (edit 1/1), note: n @@\n-a\n+b' });
+      .toEqual({ kind: 'diff', text: '@@ f.ts (edit 1/1), note: n @@\n- a\n+ b' });
   });
 
   it('a Write input is its path comment and content in its grammar; an unregistered extension is plain', () => {

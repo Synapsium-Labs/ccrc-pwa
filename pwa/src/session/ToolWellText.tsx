@@ -8,7 +8,7 @@
 // palette token, and no run writes a `style` attribute. A block that is over a highlight bound (`html` null) renders as the
 // original text, exactly as a fenced block over its bound renders plain.
 import { useMemo, type ReactNode } from 'react';
-import { ansiClass, ansiRuns } from '../lib/ansi';
+import { ansiClass, ansiRuns, stripAnsi } from '../lib/ansi';
 import { boundedHighlight, isRegisteredGrammar } from '../lib/markdown';
 import { toolWellPlan, type ToolWellPart } from './toolWell';
 
@@ -31,11 +31,11 @@ export function ToolWellText({ use, part, text }: { use: { name: string; input: 
     const plan = toolWellPlan({ name, input: text }, part, text, isRegisteredGrammar);
     switch (plan.kind) {
       case 'plain':
-        return text;
+        return part === 'input' ? stripAnsi(text) : text;
       case 'code':
       case 'diff': {
         const { html } = boundedHighlight(plan.text, plan.kind === 'diff' ? 'diff' : plan.lang);
-        if (html === null) return text;
+        if (html === null) return part === 'input' ? stripAnsi(text) : text;
         return <HighlightedWell html={html} head={plan.kind === 'code' ? plan.head : undefined} />;
       }
       case 'ansi':

@@ -13,6 +13,7 @@ import { ToolCard, type ToolResultEvent, type ToolUseEvent } from '@ccrc/ui';
 import { renderToolWell } from '../src/session/ToolWellText';
 import { ChatMarkdown } from '../src/lib/markdown';
 import { MD_HIGHLIGHT_BLOCK_MAX_CHARS } from '../src/lib/markdownLimits';
+import { ANSI_HUE_TOKEN } from '../src/lib/ansi';
 
 afterEach(cleanup);
 
@@ -32,6 +33,41 @@ function expanded(u: ToolUseEvent, r?: ToolResultEvent): HTMLElement[] {
 const textNodes = (el: Element): ChildNode[] => Array.from(el.childNodes);
 
 describe('tool well', () => {
+  it('paints synthetic payloads that resemble diff headers as changes', () => {
+    const [well] = expanded(use('Edit', JSON.stringify({ file_path: 'x', old_string: '--old', new_string: '++new' })), result('ok'));
+    expect(well!.querySelector('.hljs-deletion')?.textContent).toBe('- --old');
+    expect(well!.querySelector('.hljs-addition')?.textContent).toBe('+ ++new');
+    expect(well!.querySelector('code')?.textContent).toBe('@@ x @@\n- --old\n+ ++new');
+  });
+
+  it('bare expanded card preserves raw input and displays empty-result fallback', () => {
+    const raw = '{"command":"pwd"}';
+    const { container } = render(<ToolCard use={use('Bash', raw)} result={result('')} />);
+    fireEvent.click(container.querySelector('.tool-row')!);
+    const wells = container.querySelectorAll('.well');
+    expect(wells[0]?.textContent).toBe(raw);
+    expect(wells[1]?.textContent).toBe('(no output)');
+  });
+
+  it('strips parsed input escapes before rendering highlighted command and metadata', () => {
+    const esc = String.fromCharCode(27);
+    const [well] = expanded(use('Bash', JSON.stringify({ command: `echo ${esc}[31mword`, description: `desc ${esc}[2Ktail` })), result('ok'));
+    expect(well!.querySelector('code.hljs')?.textContent).toBe('# desc tail\necho word');
+    expect(well!.textContent).not.toContain(esc);
+  });
+
+  it('strips input escapes on plain and over-bound fallbacks', () => {
+    const esc = String.fromCharCode(27);
+    const malformed = `bad${esc}[2Kinput`;
+    const plain = render(<ToolWellText use={{ name: 'Bash', input: malformed }} part="input" text={malformed} />);
+    expect(plain.container.textContent).toBe('badinput');
+    plain.unmount();
+    const long = JSON.stringify({ command: `${'x'.repeat(MD_HIGHLIGHT_BLOCK_MAX_CHARS + 1)}${esc}[2Kdone` });
+    const capped = render(<ToolWellText use={{ name: 'Bash', input: long }} part="input" text={long} />);
+    expect(capped.container.textContent).not.toContain(esc);
+    expect(capped.container.textContent).toBe(long);
+  });
+
   it('strips control-only and escape-bearing diff results', () => {
     const cases = [['before\x1b[2Kafter', 'beforeafter'], ['\x1b]0;title\x07ok', 'ok'], ['ok\x1b', 'ok'], ['@@ -1 +1 @@\n-old\n+new\x1b[2K', '@@ -1 +1 @@\n-old\n+new']];
     for (const [raw, expected] of cases) {
@@ -113,11 +149,29 @@ describe('tool well', () => {
     const css = readFileSync(path.join(import.meta.dirname, '..', '..', 'ui', 'src', 'components', 'prose.css'), 'utf8');
     const rule = /\.msg-assist \.md-code\s*\{([^}]*)\}/.exec(css);
     expect(rule).not.toBeNull();
-    expect(rule![1]).toMatch(/background:\s*var\(--bg-well\)/);
-    expect(rule![1]).toMatch(/color:\s*var\(--ink-on-well\)/);
+    expect(rule![1]).toMatch(/background:\s*var\(--bg-raised\)/);
+    expect(rule![1]).toMatch(/color:\s*var\(--ink-primary\)/);
+    const scoped = /\.msg-assist:not\(\.doc-body\):not\(\.compaction-body\) \.md-code\s*\{([^}]*)\}/.exec(css);
+    expect(scoped).not.toBeNull();
+    expect(scoped![1]).toMatch(/background:\s*var\(--bg-well\)/);
+    expect(scoped![1]).toMatch(/color:\s*var\(--ink-on-well\)/);
     const { container } = render(<ChatMarkdown text={'run `ls -la` now'} />);
     const chip = container.querySelector('.md-code');
     expect(chip?.textContent).toBe('ls -la');
+  });
+
+  it('well emphasis and strong retain syntax typography', () => {
+    const css = readFileSync(path.join(import.meta.dirname, '..', '..', 'ui', 'src', 'components', 'prose.css'), 'utf8');
+    expect(css).toMatch(/\.well \.hljs-emphasis\s*\{\s*font-style:\s*italic/);
+    expect(css).toMatch(/\.well \.hljs-strong\s*\{\s*font-weight:\s*var\(--weight-semibold\)/);
+  });
+
+  it('ANSI hue tokens match the actual tool-card stylesheet', () => {
+    const css = readFileSync(path.join(import.meta.dirname, '..', '..', 'ui', 'src', 'components', 'tool-card.css'), 'utf8');
+    for (const [hue, token] of Object.entries(ANSI_HUE_TOKEN)) {
+      const match = new RegExp(`\\.well \\.ansi-${hue}\\s*\\{\\s*color:\\s*var\\((--[\\w-]+)\\)`).exec(css);
+      expect(match?.[1], hue).toBe(token);
+    }
   });
 
   it('a Bash input renders a highlighted code element holding the command', () => {

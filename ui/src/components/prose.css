@@ -219,18 +219,22 @@
       var(--edge-strong) 15%, var(--edge-strong) 85%, transparent);
   }
 
-  /* INLINE CODE — a small well chip (replaces the old .msg-assist code element rule). Q8 default A (D-6387): code
-     reads as code at rest; the well pair is gated (contrast.test.ts). The ink and ground are the well's own, so the
-     chip is as dark as a code block in both themes, and its hairline is the well bar's. Explicit ink keeps it legible
-     inside lists. */
+  /* INLINE CODE — Docs and compaction retain the original pair; Q8 default A
+     gives assistant messages the well chip (D-6387). Explicit ink keeps both
+     treatments legible inside lists. */
   .msg-assist .md-code {
     font: var(--weight-regular) var(--fs-sm) / 1 var(--family-mono);
-    color: var(--ink-on-well);
-    background: var(--bg-well);
-    border: 1px solid var(--well-bar-hair);
+    color: var(--ink-primary);
+    background: var(--bg-raised);
+    border: 1px solid var(--edge-subtle);
     border-radius: var(--r-sm);
     padding: 1px 5px;
     overflow-wrap: anywhere;
+  }
+  .msg-assist:not(.doc-body):not(.compaction-body) .md-code {
+    color: var(--ink-on-well);
+    background: var(--bg-well);
+    border-color: var(--well-bar-hair);
   }
   /* KEYCAPS — echoes the chrome .keycap language, sized to sit inline. */
   .msg-assist .kbd-combo { display: inline-flex; align-items: center; gap: 3px; vertical-align: baseline; }
@@ -448,6 +452,6 @@
   .msg-assist .hljs-deletion, .well .hljs-deletion          { color: var(--syn-deleted); }
   .msg-assist .hljs-addition, .well .hljs-addition          { color: var(--syn-inserted); }
   .msg-assist .hljs-link, .well .hljs-link                  { color: var(--syn-function); text-decoration: underline; }
-  .msg-assist .hljs-emphasis { font-style: italic; }
-  .msg-assist .hljs-strong   { font-weight: var(--weight-semibold); }
+  .msg-assist .hljs-emphasis, .well .hljs-emphasis { font-style: italic; }
+  .msg-assist .hljs-strong, .well .hljs-strong     { font-weight: var(--weight-semibold); }
 }

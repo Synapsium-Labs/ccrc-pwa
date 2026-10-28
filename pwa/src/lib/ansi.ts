@@ -32,6 +32,9 @@ export const ANSI_HUE_TOKEN: Readonly<Record<AnsiHue, string>> = {
 
 export const ansiClass = (hue: AnsiHue): string => `ansi-${hue}`;
 
+/** Text from the static ANSI reader, without terminal escapes or colour. */
+export const stripAnsi = (text: string): string => ansiRuns(text).map((run) => run.text).join('');
+
 /** Any escape needs the static transcript reader, including non-SGR controls. */
 export const hasEscape = (text: string): boolean => text.includes('\x1b');
 
@@ -39,10 +42,7 @@ export const hasEscape = (text: string): boolean => text.includes('\x1b');
 export const escapeHeader = (text: string): string =>
   JSON.stringify(text).slice(1, -1).replace(/[\u007f-\u009f\u2028\u2029]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`);
 
-/** Whether the shared transcript scanner encounters an SGR sequence. */
-export function hasSgr(text: string): boolean {
-  return scanAnsi(text).sgr;
-}
+export const splitDisplayLines = (text: string): string[] => text.split(/\r\n|[\n\r\u2028\u2029]/);
 
 const ESC = 0x1b;
 const BEL = 0x07;
@@ -78,10 +78,10 @@ function applySgr(pen: Pen, params: string): void {
       let n: number;
       if (sub.length > 1) {
         kind = sub[1];
-        n = num(sub[2]);
+        n = sub[2] === undefined || sub[2] === '' ? NaN : num(sub[2]);
       } else {
         kind = list[k + 1];
-        n = num(list[k + 2]);
+        n = list[k + 2] === undefined || list[k + 2] === '' ? NaN : num(list[k + 2]);
         if (kind === '5') k += 2;
         else if (kind === '2') k += 4;
       }
@@ -106,14 +106,13 @@ function applySgr(pen: Pen, params: string): void {
  * other two-byte escapes, a lone or trailing ESC), and an unterminated one is removed to the end of the text.
  */
 export function ansiRuns(text: string): AnsiRun[] {
-  return scanAnsi(text).runs;
+  return scanAnsi(text);
 }
 
-function scanAnsi(text: string): { runs: AnsiRun[]; sgr: boolean } {
-  if (text === '') return { runs: [], sgr: false };
-  if (!hasEscape(text)) return { runs: [{ text, hue: null }], sgr: false };
+function scanAnsi(text: string): AnsiRun[] {
+  if (text === '') return [];
+  if (!hasEscape(text)) return [{ text, hue: null }];
   const runs: AnsiRun[] = [];
-  let sgr = false;
   const pen: Pen = { fg: null, dim: false };
   const hue = (): AnsiHue | null => pen.fg ?? (pen.dim ? 'muted' : null);
   const push = (s: string): void => {
@@ -144,7 +143,6 @@ function scanAnsi(text: string): { runs: AnsiRun[]; sgr: boolean } {
         if (j === p1 && text.charCodeAt(j) === 0x6d) {
           const params = text.slice(p0, p1);
           if (/^[0-9;:]*$/.test(params)) {
-            sgr = true;
             applySgr(pen, params);
           }
         }
@@ -177,5 +175,5 @@ function scanAnsi(text: string): { runs: AnsiRun[]; sgr: boolean } {
     from = j;
   }
   push(text.slice(from));
-  return { runs, sgr };
+  return runs;
 }

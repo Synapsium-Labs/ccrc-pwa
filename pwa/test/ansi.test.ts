@@ -4,7 +4,7 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
-import { ANSI_HUE_TOKEN, ansiClass, ansiRuns, hasSgr, type AnsiHue } from '../src/lib/ansi';
+import { ANSI_HUE_TOKEN, ansiClass, ansiRuns, type AnsiHue } from '../src/lib/ansi';
 import * as ansi from '../src/lib/ansi';
 import { GLASS_ANSI } from '../src/session/drawerModel';
 import { declValue, rootBody } from './cssRule';
@@ -21,22 +21,6 @@ const hueOf = (codes: string): AnsiHue | null => {
 };
 
 describe('ANSI detection and display helpers', () => {
-  it('detects SGR including empty and colon parameters', () => {
-    expect(hasSgr(`a${ESC}[31mb`)).toBe(true);
-    expect(hasSgr(`${ESC}[m`)).toBe(true);
-    expect(hasSgr(`${ESC}[38:5:1m`)).toBe(true);
-  });
-  it('does not detect SGR in non-SGR CSI', () => {
-    expect(hasSgr(`${ESC}[2K${ESC}[?25l`)).toBe(false);
-  });
-  it('does not detect SGR in plain text', () => {
-    expect(hasSgr('plain [31m')).toBe(false);
-  });
-  it('detects only SGR encountered by the transcript scanner', () => {
-    const text = `${ESC}]title${ESC}[31mred`;
-    expect(hasSgr(text)).toBe(true);
-    expect(ansiRuns(text)).toEqual([{ text: 'red', hue: 'red' }]);
-  });
   it('detects any escape, not just SGR', () => {
     const fn = (ansi as Record<string, unknown>).hasEscape;
     expect(typeof fn).toBe('function');
@@ -60,10 +44,6 @@ describe('ansiRuns', () => {
     const text = 'plain \t text\nwith [brackets] and ] and m\r\n';
     expect(ansiRuns(text)).toEqual([{ text, hue: null }]);
     expect(ansiRuns('')).toEqual([]);
-    expect(hasSgr(text)).toBe(false);
-    expect(hasSgr(`a${ESC}[31mb`)).toBe(true);
-    expect(hasSgr(`a${ESC}[mb`)).toBe(true);
-    expect(hasSgr(`a${ESC}[2Kb`)).toBe(false);
   });
 
   it("31–36 and 91–96 map to the six hues; 30, 90 and 2 to the muted ink; 37, 39 and 0 to the well's ink", () => {
@@ -88,6 +68,13 @@ describe('ansiRuns', () => {
     for (const ignored of ['1', '3', '4', '7', '27', '53', '999']) expect(hueOf(ignored)).toBeNull();
     // runs of the same hue merge and empty runs are dropped
     expect(ansiRuns(`${ESC}[31ma${ESC}[1mb${ESC}[31m${ESC}[0m${ESC}[31mc`)).toEqual([{ text: 'abc', hue: 'red' }]);
+  });
+
+  it('missing indexed foreground uses well ink', () => {
+    for (const codes of ['38;5', '38:5']) {
+      expect(hueOf(codes)).toBeNull();
+      expect(ansiRuns(`${ESC}[31ma${ESC}[${codes}mb`)).toEqual([{ text: 'a', hue: 'red' }, { text: 'b', hue: null }]);
+    }
   });
 
   it('a background code paints nothing', () => {

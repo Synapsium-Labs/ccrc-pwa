@@ -11,7 +11,7 @@
 // does not parse). A text that does not parse is `plain`: it is never repaired and no prefix is retried, because a
 // guessed closing would draw words the tool never took.
 
-import { escapeHeader, hasEscape } from '../lib/ansi';
+import { escapeHeader, hasEscape, splitDisplayLines, stripAnsi } from '../lib/ansi';
 import { isRecord } from '../lib/wire';
 
 export type ToolWellPart = 'input' | 'result';
@@ -27,15 +27,21 @@ const PLAIN: ToolWellPlan = { kind: 'plain' };
 type Fields = Record<string, unknown>;
 
 const isString = (v: unknown): v is string => typeof v === 'string';
-const shown = (v: unknown): string => (isString(v) ? v : JSON.stringify(v));
+// Serialize display keys without rebuilding an object: distinct keys may have the same stripped spelling.
+function displayJson(v: unknown): string {
+  if (Array.isArray(v)) return `[${v.map(displayJson).join(',')}]`;
+  if (isRecord(v)) return `{${Object.entries(v).map(([k, item]) => `${JSON.stringify(stripAnsi(k))}:${displayJson(item)}`).join(',')}}`;
+  return JSON.stringify(v);
+}
+const shown = (v: unknown): string => (isString(v) ? v : displayJson(v));
 
 /** `, <key>: <value>` for every field of `o` not in `skip`, in the object's order. */
 function extras(o: Fields, skip: readonly string[]): string {
-  return Object.keys(o).filter((k) => !skip.includes(k)).map((k) => `, ${k}: ${shown(o[k])}`).join('');
+  return Object.keys(o).filter((k) => !skip.includes(k)).map((k) => `, ${stripAnsi(k)}: ${shown(o[k])}`).join('');
 }
 
 /** `text` as shell comment lines: the mark on every line, so a multi-line value never becomes a command. */
-const commentLines = (text: string): string[] => text.split('\n').map((l) => `# ${l}`);
+const commentLines = (text: string): string[] => splitDisplayLines(text).map((l) => `# ${l}`);
 
 function bashPlan(o: Fields): ToolWellPlan | null {
   if (!isString(o.command)) return null;
@@ -43,15 +49,21 @@ function bashPlan(o: Fields): ToolWellPlan | null {
   if (isString(o.description)) lines.push(...commentLines(o.description));
   for (const k of Object.keys(o)) {
     if (k === 'command' || (k === 'description' && isString(o.description))) continue;
-    lines.push(...commentLines(`${k}: ${shown(o[k])}`));
+    lines.push(...commentLines(`${stripAnsi(k)}: ${shown(o[k])}`));
   }
   lines.push(o.command);
   return { kind: 'code', lang: 'bash', text: lines.join('\n') };
 }
 
+const payloadLines = (text: string): string[] => {
+  const lines = splitDisplayLines(text);
+  if (lines[lines.length - 1] === '') lines.pop();
+  return lines;
+};
+
 /** One hunk: the header, every old line as `-`, every new line as `+`. */
 const hunk = (header: string, oldS: string, newS: string): string =>
-  [`@@ ${escapeHeader(header)} @@`, ...oldS.split('\n').map((l) => `-${l}`), ...newS.split('\n').map((l) => `+${l}`)].join('\n');
+  [`@@ ${escapeHeader(header)} @@`, ...payloadLines(oldS).map((l) => `- ${l}`), ...payloadLines(newS).map((l) => `+ ${l}`)].join('\n');
 
 function editPlan(o: Fields): ToolWellPlan | null {
   if (!isString(o.file_path) || !isString(o.old_string) || !isString(o.new_string)) return null;
@@ -85,10 +97,17 @@ function writePlan(o: Fields, isRegistered: (lang: string) => boolean): ToolWell
   return { kind: 'code', lang: ext, text: o.content, head: `${o.file_path}${extras(o, ['file_path', 'content'])}` };
 }
 
+function cleanInput(value: unknown): unknown {
+  if (isString(value)) return stripAnsi(value);
+  if (Array.isArray(value)) return value.map(cleanInput);
+  if (isRecord(value)) return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, cleanInput(item)]));
+  return value;
+}
+
 function inputPlan(use: { name: string }, text: string, isRegistered: (lang: string) => boolean): ToolWellPlan {
   let parsed: unknown;
   try {
-    parsed = JSON.parse(text);
+    parsed = cleanInput(JSON.parse(text));
   } catch {
     return PLAIN;
   }
