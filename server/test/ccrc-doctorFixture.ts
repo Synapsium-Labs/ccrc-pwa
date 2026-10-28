@@ -677,10 +677,10 @@ export function stubSystemctl(home: string): void {
     + '  if [ -f "$f" ]; then while IFS= read -r l; do echo "$l"; done < "$f"; fi\n'
     + '  exit 0\n'
     + 'fi\n'
-    // D-TBD-test-containment: `ccrc test --status` asks `show ccrc-tests.slice -p …` for seven properties at once, and
-    // reads each line by name. The answer is `fixture-show-ccrc-tests.slice`'s own text; an absent file prints nothing.
-    + 'if [ "$1" = "--user" ] && [ "$2" = "show" ] && [ "$3" = "ccrc-tests.slice" ]; then\n'
-    + '  f="$HOME/fixture-show-ccrc-tests.slice"\n'
+    // D-TBD-test-containment: `ccrc test --status` asks `show ccrctests.slice -p …` for seven properties at once, and
+    // reads each line by name. The answer is `fixture-show-ccrctests.slice`'s own text; an absent file prints nothing.
+    + 'if [ "$1" = "--user" ] && [ "$2" = "show" ] && [ "$3" = "ccrctests.slice" ]; then\n'
+    + '  f="$HOME/fixture-show-ccrctests.slice"\n'
     + '  if [ -f "$f" ]; then while IFS= read -r l; do echo "$l"; done < "$f"; fi\n'
     + '  exit 0\n'
     + 'fi\n'
@@ -1043,14 +1043,14 @@ export function plantOomDropins(home: string, which: ReadonlyArray<keyof typeof 
     writeFileSync(p, '[Scope]\nOOMPolicy=continue\n');
   }
 }
-/** D-TBD-test-containment: `ccrc-tests.slice` at the path `_inst_units` places it, and the user manager's answer for
- *  it (`fixture-show-ccrc-tests.slice`, read by the stub's `show ccrc-tests.slice` arm), loaded at the shipped defaults
+/** D-TBD-test-containment: `ccrctests.slice` at the path `_inst_units` places it, and the user manager's answer for
+ *  it (`fixture-show-ccrctests.slice`, read by the stub's `show ccrctests.slice` arm), loaded at the shipped defaults
  *  unless `show` says otherwise. */
 export function plantTestSlice(home: string, show = 'LoadState=loaded\nMemoryCurrent=1073741824\nMemoryMax=6442450944\nMemorySwapMax=1073741824\nCPUWeight=20\nCPUQuotaPerSecUSec=4s\nIOWeight=20\n'): void {
-  const p = join(home, '.config', 'systemd', 'user', 'ccrc-tests.slice');
+  const p = join(home, '.config', 'systemd', 'user', 'ccrctests.slice');
   mkdirSync(path.dirname(p), { recursive: true });
-  writeFileSync(p, readFileSync(join(REPO, 'deploy', 'systemd', 'ccrc-tests.slice'), 'utf8'));
-  writeFileSync(join(home, 'fixture-show-ccrc-tests.slice'), show);
+  writeFileSync(p, readFileSync(join(REPO, 'deploy', 'systemd', 'ccrctests.slice'), 'utf8'));
+  writeFileSync(join(home, 'fixture-show-ccrctests.slice'), show);
 }
 export function plantOomPolicy(home: string, unit: string, value: string): void {
   writeFileSync(join(home, `fixture-oompolicy-of-${unit}`), `${value}\n`);

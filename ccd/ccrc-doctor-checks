@@ -1210,7 +1210,7 @@ _check_scopes() {
 
 # ── test-slice (D-TBD-test-containment) ───────────────────────────────────
 # WHERE `ccrc test` RUNS, AND HOW FULL ITS QUEUE IS. `ccrc test` puts every test
-# and typecheck in `ccrc-tests.slice` and holds heavy runs in a fleet-wide
+# and typecheck in `ccrctests.slice` and holds heavy runs in a fleet-wide
 # queue (ccd/ccrc-test's header). This check reports the slice's LIVE memory
 # against its LIVE cap (what the user manager enforces now, never the unit
 # file's text), its swap cap, CPU and IO weights and CPU quota, and how many
@@ -1229,9 +1229,9 @@ _check_test-slice() {
     _dr_skip test-slice "systemctl is not on PATH, so the test slice cannot be read"
     return 3
   fi
-  local unit="$HOME/.config/systemd/user/ccrc-tests.slice" line rc=0
+  local unit="$HOME/.config/systemd/user/ccrctests.slice" line rc=0
   if [ ! -f "$unit" ]; then
-    _dr_warn test-slice "~/.config/systemd/user/ccrc-tests.slice is missing, so ccrc test refuses every run" \
+    _dr_warn test-slice "~/.config/systemd/user/ccrctests.slice is missing, so ccrc test refuses every run" \
       "ccrc update (or ccrc install) places it; then systemctl --user daemon-reload"
     return 2
   fi
@@ -1239,7 +1239,7 @@ _check_test-slice() {
   line="${line%%$'\n'*}"
   if [ "$rc" -eq 0 ] && [ -n "$line" ]; then _dr_pass test-slice "$line"; return 0; fi
   _dr_warn test-slice "${line:-ccrc-test --status answered nothing (exit $rc)}" \
-    "systemctl --user daemon-reload, then re-run; if it persists, ccrc update (or ccrc install) re-places ~/.config/systemd/user/ccrc-tests.slice"
+    "systemctl --user daemon-reload, then re-run; if it persists, ccrc update (or ccrc install) re-places ~/.config/systemd/user/ccrctests.slice"
   return 2
 }
 

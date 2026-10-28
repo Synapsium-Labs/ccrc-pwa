@@ -616,11 +616,11 @@ export function ccrcEnv(home: string, omit: string[] = []): NodeJS.ProcessEnv {
     // that stayed up); `fixture-mainpid-drift` makes the SECOND sample differ,
     // which is exactly how a crash loop shows itself.
     '  show)',
-    // D-TBD-test-containment: the closing doctor's `test-slice` check asks `show ccrc-tests.slice -p …` through
+    // D-TBD-test-containment: the closing doctor's `test-slice` check asks `show ccrctests.slice -p …` through
     // `ccrc test --status`. The slice is loaded once `_inst_units` has placed its file (the causal chain a real
     // `daemon-reload` gives), at the shipped defaults; before that the manager does not know it.
-    '    if [ "$2" = ccrc-tests.slice ]; then',
-    '      if [ -f "$HOME/.config/systemd/user/ccrc-tests.slice" ]; then printf \'LoadState=loaded\\nMemoryCurrent=0\\nMemoryMax=6442450944\\nMemorySwapMax=1073741824\\nCPUWeight=20\\nCPUQuotaPerSecUSec=4s\\nIOWeight=20\\n\'; else echo LoadState=not-found; fi',
+    '    if [ "$2" = ccrctests.slice ]; then',
+    '      if [ -f "$HOME/.config/systemd/user/ccrctests.slice" ]; then printf \'LoadState=loaded\\nMemoryCurrent=0\\nMemoryMax=6442450944\\nMemorySwapMax=1073741824\\nCPUWeight=20\\nCPUQuotaPerSecUSec=4s\\nIOWeight=20\\n\'; else echo LoadState=not-found; fi',
     '      exit 0',
     '    fi',
     // W6 Task 5 — spec §11's GC reads `show -p ExecStart <unit>`, answered in
@@ -1813,7 +1813,7 @@ export const PROVISIONED_BOX_TOKEN =
  *  Wave 24 added `box-settings` (D-6599): PASS at every stage, re-measured from both box-token cases' own failing diff
  *  (a fresh box's ccrc.env sets none of ccrc's settings). Test containment added `test-slice`
  *  (D-TBD-test-containment): PASS at every stage, re-measured from both box-token cases' own failing diff (the
- *  install places ccrc-tests.slice, and this fixture's manager then answers it loaded). */
+ *  install places ccrctests.slice, and this fixture's manager then answers it loaded). */
 export const FLEET_BOX_CLASSES: Readonly<Record<string, string>> = {
   "accounts": "PASS",
   "approval-digest-mismatch": "SKIP",

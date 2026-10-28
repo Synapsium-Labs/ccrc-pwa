@@ -12,14 +12,14 @@
 # sessions themselves. The box's load passed the agent's ability to answer, so
 # the server read the fleet box as unreachable, and the tests' fsyncs raised the
 # io-pressure banner. This wrapper moves every test run out of the session's
-# pane scope into one slice of its own, `ccrc-tests.slice`
-# (deploy/systemd/ccrc-tests.slice), whose hard memory cap, bounded swap, low
+# pane scope into one slice of its own, `ccrctests.slice`
+# (deploy/systemd/ccrctests.slice), whose hard memory cap, bounded swap, low
 # CPU and IO weight and CPU quota hold the runs below the sessions: a session
 # always wins the CPU, and a run past the memory cap is killed inside the slice
 # without pushing the session slice into reclaim.
 #
 # THE SLICE. The command runs as `systemd-run --user --scope
-# --slice=ccrc-tests.slice -- <command>`. A scope runs the command in this
+# --slice=ccrctests.slice -- <command>`. A scope runs the command in this
 # process's place, with this process's environment, working directory and
 # terminal, so the run sees the session environment exactly as a bare run
 # would. Before each run the slice's five limits are applied from the box's
@@ -71,7 +71,7 @@ TEST_HERE="$(cd "${TEST_HERE%/*}" && pwd)"
 . "$TEST_HERE/ccrc" || { echo "ccrc test: cannot load $TEST_HERE/ccrc, so no setting can be read" >&2; exit 1; }
 PROG="ccrc test"
 
-SLICE=ccrc-tests.slice
+SLICE=ccrctests.slice
 SLOT_DIR="$HOME/.cc-sessions/test-slots"
 # How often a queued run looks again, in seconds. Environment only: a bound on one wait, overridable so a suite need not
 # wait it out (the CCRC_HEALTH_TIMEOUT class), never a box's setting.

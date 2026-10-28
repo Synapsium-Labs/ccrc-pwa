@@ -26,7 +26,7 @@ describe('test-slice: the test slice, live, and the queue (D-TBD-test-containmen
     }],
     linux: ['PASS: the slice is loaded under its cap; the line names live memory, cap, limits and queue depth', () => {
       const home = healthy('ccrc-doctor-tslice-pass-');
-      expect(verdict(home).line).toBe('PASS test-slice: ccrc-tests.slice holds 1.0G of its 6.0G memory cap, swap cap 1.0G, CPU weight 20, CPU quota 4s per second, IO weight 20; heavy slots 0 of 2 held, 0 waiting');
+      expect(verdict(home).line).toBe('PASS test-slice: ccrctests.slice holds 1.0G of its 6.0G memory cap, swap cap 1.0G, CPU weight 20, CPU quota 4s per second, IO weight 20; heavy slots 0 of 2 held, 0 waiting');
     }],
   });
 
@@ -38,9 +38,9 @@ describe('test-slice: the test slice, live, and the queue (D-TBD-test-containmen
 
   itLinux('WARN: the slice unit file is missing, so every run is refused', () => {
     const home = healthy('ccrc-doctor-tslice-nofile-');
-    rmSync(join(home, '.config', 'systemd', 'user', 'ccrc-tests.slice'));
+    rmSync(join(home, '.config', 'systemd', 'user', 'ccrctests.slice'));
     const v = verdict(home);
-    expect(v.line).toBe('WARN test-slice: ~/.config/systemd/user/ccrc-tests.slice is missing, so ccrc test refuses every run');
+    expect(v.line).toBe('WARN test-slice: ~/.config/systemd/user/ccrctests.slice is missing, so ccrc test refuses every run');
     expect(v.remedy).toBe('  remedy: ccrc update (or ccrc install) places it; then systemctl --user daemon-reload');
   });
 
@@ -48,13 +48,13 @@ describe('test-slice: the test slice, live, and the queue (D-TBD-test-containmen
     const home = healthy('ccrc-doctor-tslice-notloaded-');
     plantTestSlice(home, 'LoadState=not-found\n');
     const v = verdict(home);
-    expect(v.line).toMatch(/^WARN test-slice: ccrc-tests\.slice is not loaded \(LoadState=not-found\), so ccrc test refuses every run; heavy slots 0 of 2 held, 0 waiting$/);
+    expect(v.line).toMatch(/^WARN test-slice: ccrctests\.slice is not loaded \(LoadState=not-found\), so ccrc test refuses every run; heavy slots 0 of 2 held, 0 waiting$/);
     expect(v.remedy).toMatch(/^ {2}remedy: systemctl --user daemon-reload, then re-run/);
   });
 
   itLinux('WARN: the live slice holds no memory cap', () => {
     const home = healthy('ccrc-doctor-tslice-nocap-');
     plantTestSlice(home, 'LoadState=loaded\nMemoryCurrent=0\nMemoryMax=infinity\n');
-    expect(verdict(home).line).toMatch(/^WARN test-slice: ccrc-tests\.slice holds 0B with no memory cap \(MemoryMax=infinity\)/);
+    expect(verdict(home).line).toMatch(/^WARN test-slice: ccrctests\.slice holds 0B with no memory cap \(MemoryMax=infinity\)/);
   });
 });

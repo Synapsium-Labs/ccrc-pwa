@@ -6168,10 +6168,10 @@ old tmux-server behaviour, `~/.config/systemd/user/ccrc-tmux-server.scope.d/50-o
 `ccd-tool-adj` left in `~/.local/bin` is inert. `ccrc uninstall` removes both files.
 
 **Test containment** (D-TBD-test-containment). `ccrc test [--heavy|--light] -- <command>` (`ccd/ccrc-test`) runs one
-test or typecheck as a transient scope in `ccrc-tests.slice` (`deploy/systemd/ccrc-tests.slice`, placed by `ccrc
+test or typecheck as a transient scope in `ccrctests.slice` (`deploy/systemd/ccrctests.slice`, placed by `ccrc
 install`, `ccrc update` and `deploy.sh agent`), with the session's environment, working directory and terminal. The
-slice has a hard `MemoryMax` (default 6G), a bounded `MemorySwapMax` (1G), `CPUWeight` and `IOWeight` of 20 against a
-session's 100, and a `CPUQuota` (400%), and no `MemoryHigh`: a session always wins the CPU, and a run past the cap is
+slice has a hard `MemoryMax` (default 6G), a bounded `MemorySwapMax` (1G), `CPUWeight` and `IOWeight` of 20 against
+app.slice's 100 (the slice is top-level, its name dashless, so that is every session, pane scope and ccrc-agent at once), and a `CPUQuota` (400%), and no `MemoryHigh`: a session always wins the CPU, and a run past the cap is
 killed inside the slice, never pushing the session slice into reclaim. Each value is a setting (see **ccrc's own
 settings**), applied with `systemctl --user set-property --runtime` before every run; the unit file holds the
 defaults. A slice the user manager has not loaded is refused, never created, since `systemd-run --slice=` would make

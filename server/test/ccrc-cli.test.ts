@@ -229,7 +229,7 @@ describe('ccrc: dispatch and usage', () => {
     // `test` joined it with test containment (D-TBD-test-containment) — the one dispatch line that execs
     // ccd/ccrc-test, joined in place, last, with its paragraph (_usage_test_paragraph) reached beside history's.
     // `server/test/ccrc-test-wrapper.test.ts` owns what it does.
-    expect(r.stdout).toMatch(/^ {2}test {6}run one test or typecheck inside ccrc-tests\.slice/m);
+    expect(r.stdout).toMatch(/^ {2}test {6}run one test or typecheck inside ccrctests\.slice/m);
     // codex bridge Stage 2's whole-wave addendum (U-1): the paragraph names each mode's tiers, and `switch`.
     expect(r.stdout).toMatch(/^ {2}codex {5}run a Codex lane's tiers - in litellm mode its LiteLLM gateway$/m);
     expect(r.stdout.replace(/\s+/g, ' ')).toContain('in direct mode its bridge alone');

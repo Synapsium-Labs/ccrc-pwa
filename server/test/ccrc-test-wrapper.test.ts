@@ -1,5 +1,5 @@
 // `ccrc test` (ccd/ccrc-test, D-TBD-test-containment): one test or typecheck command, run inside
-// `ccrc-tests.slice` with the session's environment, behind the fleet-wide admission queue for heavy runs.
+// `ccrctests.slice` with the session's environment, behind the fleet-wide admission queue for heavy runs.
 //
 // Runs the real wrapper in a fixture HOME, never the live one. On Linux the service manager is a pair of stubs:
 // `systemctl` logs its argv and answers `show` from fixture files, `systemd-run` logs its argv and execs the command
@@ -18,7 +18,7 @@ removeTmpFixturesEachTest();
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const WRAPPER = path.join(REPO, 'ccd', 'ccrc-test');
-const SLICE_FILE = path.join(REPO, 'deploy', 'systemd', 'ccrc-tests.slice');
+const SLICE_FILE = path.join(REPO, 'deploy', 'systemd', 'ccrctests.slice');
 const HAS_FLOCK = spawnSync('sh', ['-c', 'command -v flock'], { encoding: 'utf8' }).status === 0;
 const itQueue = it.skipIf(!HAS_FLOCK);
 
@@ -90,18 +90,18 @@ const started = (b: Box, tag: string) => existsSync(path.join(b.home, `started-$
 const release = (b: Box, tag: string) => writeFileSync(path.join(b.home, `release-${tag}`), '');
 
 describe('ccrc test: the slice (D-TBD-test-containment)', () => {
-  itLinux('runs the command as a scope in ccrc-tests.slice, with the session environment, cwd and exit code', () => {
+  itLinux('runs the command as a scope in ccrctests.slice, with the session environment, cwd and exit code', () => {
     const b = box();
     const r = run(b, ['--light', '--', 'sh', '-c', 'echo "$MARK:$CCRC_TEST_INSIDE:$(pwd -P)"; exit 7'], { MARK: 'session-env' });
     expect(r.stdout.trim()).toBe(`session-env:1:${b.home}`);
     expect(r.status).toBe(7);
-    expect(log(b, 'systemd-run.log')).toMatch(/^--user --scope --quiet --collect --slice=ccrc-tests\.slice --unit=ccrc-test-\d+ --description=ccrc test: sh -c .* -- sh -c /m);
+    expect(log(b, 'systemd-run.log')).toMatch(/^--user --scope --quiet --collect --slice=ccrctests\.slice --unit=ccrc-test-\d+ --description=ccrc test: sh -c .* -- sh -c /m);
   });
 
   itLinux('applies the five limits at their defaults before the run', () => {
     const b = box();
     expect(run(b, ['--light', '--', 'true']).status).toBe(0);
-    expect(setProps(b)).toBe('--user set-property --runtime ccrc-tests.slice MemoryMax=6G MemorySwapMax=1G CPUWeight=20 CPUQuota=400% IOWeight=20');
+    expect(setProps(b)).toBe('--user set-property --runtime ccrctests.slice MemoryMax=6G MemorySwapMax=1G CPUWeight=20 CPUQuota=400% IOWeight=20');
   });
 
   itLinux('takes each limit from the environment, else ~/.ccrc/ccrc.env, else the default', () => {
@@ -109,7 +109,7 @@ describe('ccrc test: the slice (D-TBD-test-containment)', () => {
     mkdirSync(path.join(b.home, '.ccrc'), { recursive: true });
     writeFileSync(path.join(b.home, '.ccrc', 'ccrc.env'), 'CCRC_TEST_SLICE_CPU_QUOTA=200%\nCCRC_TEST_SLICE_MEMORY_MAX=3G\n');
     expect(run(b, ['--light', '--', 'true'], { CCRC_TEST_SLICE_MEMORY_MAX: '2G', CCRC_TEST_SLICE_IO_WEIGHT: '5' }).status).toBe(0);
-    expect(setProps(b)).toBe('--user set-property --runtime ccrc-tests.slice MemoryMax=2G MemorySwapMax=1G CPUWeight=20 CPUQuota=200% IOWeight=5');
+    expect(setProps(b)).toBe('--user set-property --runtime ccrctests.slice MemoryMax=2G MemorySwapMax=1G CPUWeight=20 CPUQuota=200% IOWeight=5');
   });
 
   it.each([
@@ -136,7 +136,7 @@ describe('ccrc test: the slice (D-TBD-test-containment)', () => {
     writeFileSync(path.join(b.home, 'fixture-loadstate'), 'not-found\n');
     const r = run(b, ['--light', '--', 'touch', path.join(b.home, 'ran')]);
     expect(r.status).toBe(1);
-    expect(r.stderr).toMatch(/^ccrc test: refused, nothing ran: ccrc-tests\.slice is not loaded by the user manager \(LoadState=not-found\)/);
+    expect(r.stderr).toMatch(/^ccrc test: refused, nothing ran: ccrctests\.slice is not loaded by the user manager \(LoadState=not-found\)/);
     expect(existsSync(path.join(b.home, 'ran'))).toBe(false);
     expect(log(b, 'systemd-run.log')).toBe('');
   });
@@ -146,21 +146,21 @@ describe('ccrc test: the slice (D-TBD-test-containment)', () => {
     writeFileSync(path.join(b.home, 'fixture-setprop-rc'), '1');
     const r = run(b, ['--light', '--', 'touch', path.join(b.home, 'ran')]);
     expect(r.status).toBe(1);
-    expect(r.stderr).toContain('refused, nothing ran: systemctl --user set-property ccrc-tests.slice');
+    expect(r.stderr).toContain('refused, nothing ran: systemctl --user set-property ccrctests.slice');
     expect(existsSync(path.join(b.home, 'ran'))).toBe(false);
   });
 
   itLinux('a run that the slice cap kills is said so, with the cap and the setting that sets it', () => {
     const b = box();
     const cgroot = path.join(b.home, 'cgroot');
-    mkdirSync(path.join(cgroot, 'user.slice', 'ccrc-tests.slice'), { recursive: true });
-    const events = path.join(cgroot, 'user.slice', 'ccrc-tests.slice', 'memory.events');
+    mkdirSync(path.join(cgroot, 'user.slice', 'ccrctests.slice'), { recursive: true });
+    const events = path.join(cgroot, 'user.slice', 'ccrctests.slice', 'memory.events');
     writeFileSync(events, 'low 0\nhigh 0\nmax 3\noom 2\noom_kill 2\n');
-    writeFileSync(path.join(b.home, 'fixture-cg'), '/user.slice/ccrc-tests.slice\n');
+    writeFileSync(path.join(b.home, 'fixture-cg'), '/user.slice/ccrctests.slice\n');
     // The command stands in for the kernel: it raises the slice's count and dies by SIGKILL, as an OOM victim does.
     const r = run(b, ['--light', '--', 'sh', '-c', `printf 'oom_kill 3\\n' > '${events}'; kill -9 $$`], { CCRC_CGROUP_ROOT: cgroot, CCRC_TEST_SLICE_MEMORY_MAX: '64M' });
     expect(r.status).toBe(137);
-    expect(r.stderr).toContain("ccrc test: the test slice's memory cap killed a process during this run (MemoryMax=64M, CCRC_TEST_SLICE_MEMORY_MAX; 1 OOM kill(s) in ccrc-tests.slice); exit 137");
+    expect(r.stderr).toContain("ccrc test: the test slice's memory cap killed a process during this run (MemoryMax=64M, CCRC_TEST_SLICE_MEMORY_MAX; 1 OOM kill(s) in ccrctests.slice); exit 137");
     expect(r.stderr, 'bash\'s own job line is not printed').not.toMatch(/Killed/);
   });
 
@@ -195,6 +195,17 @@ describe('ccrc test: the slice (D-TBD-test-containment)', () => {
       CPUWeight: def['CCRC_TEST_SLICE_CPU_WEIGHT'], CPUQuota: def['CCRC_TEST_SLICE_CPU_QUOTA'], IOWeight: def['CCRC_TEST_SLICE_IO_WEIGHT'],
     });
     expect(unit, 'no aggregate MemoryHigh, ever (#72, #84)').not.toMatch(/^MemoryHigh=/m);
+  });
+
+  // A dash in a slice name is nesting in systemd: `a-b.slice` sits inside `a.slice`, which systemd makes implicitly at
+  // the default weight 100. The weights only compete among siblings, so the slice must be top-level, beside app.slice
+  // (where every session, its pane scopes and ccrc-agent live), for CPUWeight and IOWeight to hold tests below them.
+  it('the slice is top-level: its name has no dash, so its CPU and IO weights compete with app.slice itself', () => {
+    const name = readFileSync(WRAPPER, 'utf8').match(/^SLICE=(\S+)$/m)?.[1] ?? '';
+    expect(name).toMatch(/^[a-z0-9]+\.slice$/);
+    expect(path.basename(SLICE_FILE)).toBe(name);
+    expect(existsSync(SLICE_FILE), 'the unit file ships under the name the wrapper runs in').toBe(true);
+    expect(readFileSync(path.join(REPO, 'ccd', 'ccrc'), 'utf8'), 'install places the same name').toContain(`deploy/systemd/${name}"`);
   });
 });
 
@@ -444,21 +455,21 @@ describe('ccrc test --status (D-TBD-test-containment)', () => {
       'LoadState=loaded\nMemoryCurrent=1610612736\nMemoryMax=6442450944\nMemorySwapMax=1073741824\nCPUWeight=20\nCPUQuotaPerSecUSec=4s\nIOWeight=20\n');
     const r = run(b, ['--status']);
     expect(r.status).toBe(0);
-    expect(r.stdout.trim()).toBe('ccrc-tests.slice holds 1.5G of its 6.0G memory cap, swap cap 1.0G, CPU weight 20, CPU quota 4s per second, IO weight 20; heavy slots 0 of 2 held, 0 waiting');
+    expect(r.stdout.trim()).toBe('ccrctests.slice holds 1.5G of its 6.0G memory cap, swap cap 1.0G, CPU weight 20, CPU quota 4s per second, IO weight 20; heavy slots 0 of 2 held, 0 waiting');
   });
   itLinux('a slice with no memory cap answers 2', () => {
     const b = box();
     writeFileSync(path.join(b.home, 'fixture-slice-show'), 'LoadState=loaded\nMemoryCurrent=0\nMemoryMax=infinity\n');
     const r = run(b, ['--status']);
     expect(r.status).toBe(2);
-    expect(r.stdout).toContain('ccrc-tests.slice holds 0B with no memory cap (MemoryMax=infinity)');
+    expect(r.stdout).toContain('ccrctests.slice holds 0B with no memory cap (MemoryMax=infinity)');
   });
   itLinux('a slice that is not loaded answers 2', () => {
     const b = box();
     writeFileSync(path.join(b.home, 'fixture-slice-show'), 'LoadState=not-found\n');
     const r = run(b, ['--status']);
     expect(r.status).toBe(2);
-    expect(r.stdout).toContain('ccrc-tests.slice is not loaded (LoadState=not-found), so ccrc test refuses every run');
+    expect(r.stdout).toContain('ccrctests.slice is not loaded (LoadState=not-found), so ccrc test refuses every run');
   });
   it.skipIf(!IS_DARWIN)('on macOS it says runs are not contained', () => {
     expect(run(box(), ['--status']).stdout.trim()).toBe('no user manager here, so runs are not contained; heavy slots 0 of 2 held, 0 waiting');
