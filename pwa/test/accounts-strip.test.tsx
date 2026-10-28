@@ -904,6 +904,21 @@ describe('the lanes fold (S5b, D-6530)', () => {
       expect(fireEvent.keyDown(document.body, { key: 'Escape' })).toBe(false);
       expect(panelOf(container)).toBeNull();
       expect(fireEvent.keyDown(document.body, { key: 'Escape' })).toBe(true);
+      // An Escape another layer over the panel has already handled (a sheet or the palette closing itself; Radix's
+      // layers listen on the document in the capture phase and prevent the Escape they take) is that layer's alone:
+      // the panel under it stays open.
+      tapControl();
+      const sheet = (e: KeyboardEvent): void => { if (e.key === 'Escape') e.preventDefault(); };
+      document.addEventListener('keydown', sheet, true);
+      try {
+        fireEvent.keyDown(document.body, { key: 'Escape' });
+        expect(panelOf(container)).not.toBeNull();
+        expect(control()).toHaveAttribute('aria-expanded', 'true');
+      } finally {
+        document.removeEventListener('keydown', sheet, true);
+      }
+      expect(fireEvent.keyDown(document.body, { key: 'Escape' })).toBe(false);
+      expect(panelOf(container)).toBeNull();
       // Reopened, with focus on a card of the panel the key reaches the document the same way.
       tapControl();
       const card = panelCardsOf(container)[4]!;
@@ -919,6 +934,15 @@ describe('the lanes fold (S5b, D-6530)', () => {
       fireEvent.keyDown(card, { key: 'Escape' });
       expect(panelOf(container)).toBeNull();
       expect(document.activeElement).toBe(control());
+      // Focus on a card of the LINE (inside the strip, not in the panel): a tap outside closes the panel and leaves that
+      // focus where it is. Nothing in the panel held it, so nothing is handed back (a hand-back would move it to the
+      // control, which the page-or-strip guard allows from here).
+      tapControl();
+      const lineCard = lineCardsOf(container)[1]!;
+      act(() => { lineCard.focus(); });
+      fireEvent.pointerDown(document.body);
+      expect(panelOf(container)).toBeNull();
+      expect(document.activeElement).toBe(lineCard);
       // A tap outside with focus in a field elsewhere leaves that field its focus.
       tapControl();
       const field = document.createElement('input');
@@ -1033,14 +1057,38 @@ describe('the lanes fold (S5b, D-6530)', () => {
       expect(control()).toHaveAttribute('aria-expanded', 'false');
     });
 
+    it("a poll that leaves nothing to fold while a panel card holds focus hands it to the line's tab stop, never to the page: the control went in the same commit", async () => {
+      const container = await openPanel();
+      const card = panelCardsOf(container)[9]!;
+      act(() => { card.focus(); });
+      expect(document.activeElement).toBe(card);
+      stubLanes(seventeenLanes(nowSec).accounts.slice(0, 5));
+      expect(panelOf(container)).toBeNull();
+      expect(screen.queryByRole('button', { name: /more|Show fewer/ })).toBeNull();
+      // Five lanes, no fold: the line's tab stop is its first card, and focus is on it, not on the page.
+      const stop = lineCardsOf(container).find((c) => c.tabIndex === 0)!;
+      expect(stop).toBe(lineCardsOf(container)[0]);
+      expect(document.activeElement).toBe(stop);
+    });
+
     // ── phone-fold-two-lines: the phone folds to two lines of the tracks its grid draws ──
     /** A phone whose cards' group draws `columns` (the computed `grid-template-columns`) with a 6 px gap. */
     const stubDrawnPhone = (columns: string): void => {
+      // The strip's computed style is the real declaration with two properties answered, so anything else that asks it
+      // (`getPropertyValue`, from an accessible-name walk) gets a real answer, and the case can fail only on the count.
       const real = window.getComputedStyle.bind(window);
-      vi.spyOn(window, 'getComputedStyle').mockImplementation((el, pseudo) => (
-        el.classList.contains('accounts-strip')
-          ? ({ columnGap: '6px', gridTemplateColumns: columns } as CSSStyleDeclaration)
-          : real(el, pseudo)));
+      const drawn: Record<string, string> = { columnGap: '6px', gridTemplateColumns: columns };
+      vi.spyOn(window, 'getComputedStyle').mockImplementation((el, pseudo) => {
+        const style = real(el, pseudo);
+        if (!el.classList.contains('accounts-strip')) return style;
+        return new Proxy(style, {
+          get: (target, key: string) => {
+            if (key in drawn) return drawn[key];
+            const value = Reflect.get(target, key, target);
+            return typeof value === 'function' ? value.bind(target) : value;
+          },
+        });
+      });
       vi.stubGlobal('ResizeObserver', class {
         private readonly cb: ResizeObserverCallback;
         constructor(cb: ResizeObserverCallback) { this.cb = cb; }
@@ -1474,7 +1522,9 @@ describe('the lanes fold (S5b, D-6530)', () => {
       }
     });
 
-    it('focus arriving at a card of the flyout from the end cell opens it too, and one from a card of the line is still a move that opens nothing after an Escape', async () => {
+    // The arrival rule can only be seen with the flyout SHUT, and a shut flyout has no cards: so the arrival is onto a card
+    // of the line, after an Escape has shut it, and the open flyout's half below is a hold, not an arrival.
+    it('after an Escape a move between the line\'s cards opens nothing, while focus arriving at a line card from the end cell opens it again; and from the end cell onto a card of the open flyout it stays open', async () => {
       const container = await openByHover();
       const first = lineCardsOf(container)[0]!;
       act(() => { first.focus(); });
@@ -1490,7 +1540,7 @@ describe('the lanes fold (S5b, D-6530)', () => {
       act(() => { lineCardsOf(container)[1]!.focus(); });
       advance(FLYOUT_OPEN_MS);
       expect(flyoutOf(container)).not.toBeNull();
-      // And from the end cell onto a card of the open flyout: it stays open (an arrival, never a close).
+      // And from the end cell onto a card of the open flyout: it stays open (focus on its card holds it; never a close).
       act(() => { allAccounts().focus(); });
       act(() => { flyCardsOf(container)[2]!.focus(); });
       advance(5000);
