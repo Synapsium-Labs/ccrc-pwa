@@ -315,6 +315,22 @@ describe('a card\'s ▾ after a frame changed it (C9, D-6441)', () => {
   });
 });
 
+describe('the memoised rollup at a window\'s end (C9, D-6441)', () => {
+  it('a render that rebuilds no tree, past a window\'s end and before its timer fires, rolls the project up', async () => {
+    vi.useFakeTimers({ now: NOW, toFake: ['Date', 'setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });
+    // project-x's one row went idle 29.5 minutes ago: its window ends in 30 s, the fleet's next boundary.
+    const x = row('ws-x', 'project-x', { status: 'idle', bucket: 'idle', statusUpdatedAt: NOW - 29.5 * MIN, bucketSince: NOW - 29.5 * MIN });
+    const d = driven([...FLEET, x], RUNS);
+    renderFleet(<FleetScreen store={d.store} />, d.store);
+    await settle();
+    expect(cardOf('project-x').getAttribute('data-collapsed')).toBeNull();
+    // Past the window's end with its timer unfired, a chrome change re-renders the list over the same fleet: the clock's
+    // next boundary moves past this one, which clears that timer, so the rollup must be rebuilt on this render.
+    act(() => { vi.setSystemTime(NOW + 40_000); d.store.setState({ conn: 'connecting' }); });
+    expect(cardOf('project-x').getAttribute('data-collapsed')).toBe('true');
+  });
+});
+
 describe('a folded card\'s last-active readout (C9, D-6441)', () => {
   it('a folded card\'s \'active … ago\' advances with no fleet frame', async () => {
     vi.useFakeTimers({ now: NOW, toFake: ['Date', 'setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });
