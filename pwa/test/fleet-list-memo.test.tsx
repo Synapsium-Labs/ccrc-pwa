@@ -121,6 +121,9 @@ interface Driven {
   sendRuns: (runs: readonly RunSummary[]) => void;
 }
 
+/** A pools frame: the chrome asks `/api/projects` on one (`useProjectRows`), so every card reads a READY placement. */
+const POOLS = { listed: true, byProject: {}, enforcement: 'enforced' };
+
 const never = <T,>(): Promise<T> => new Promise<T>(() => {});
 
 const opened: FleetStore[] = [];
@@ -145,6 +148,7 @@ const driven = (rows: readonly FleetSession[], runs: readonly RunSummary[]): Dri
   };
   d.sendRows(rows);
   d.sendRuns(runs);
+  act(() => { sock.message(JSON.stringify({ type: 'pools', pools: POOLS })); });
   return d;
 };
 
@@ -152,8 +156,8 @@ const driven = (rows: readonly FleetSession[], runs: readonly RunSummary[]): Dri
 const renamed = (rows: readonly FleetSession[], id: string): FleetSession[] =>
   rows.map((s) => (s.id === id ? { ...s, name: `renamed ${id}` } : s));
 
-/** The chrome's own planes, held open, and `/api/projects` answered with no rows, so every card's placement is a
- *  measured `missing`: `placementOfRow` builds that read afresh on every call, which is what `sameCardProps` gates. */
+/** The chrome's own planes, held open, and `/api/projects` answered with no rows, so every card's placement is
+ *  `missing`: `placementOfRow` builds that read afresh on every call, which is what `sameCardProps` gates. */
 const holdApis = (): void => {
   vi.spyOn(api, 'accounts').mockReturnValue(never());
   vi.spyOn(api, 'fleetHealth').mockReturnValue(never());
@@ -286,6 +290,8 @@ describe('a chrome change with the same fleet (C9, D-6441)', () => {
   it('a chrome change with the same fleet re-renders no ProjectCard', async () => {
     await mountScreen(RUNS);
     expect(probe.heads).toEqual(expect.arrayContaining(['project-a', 'project-b', 'project-c', 'project-d']));
+    // The cards read the answered placement (built afresh per call), not the pending read's one object.
+    expect(screen.getByRole('button', { name: 'New workspace on project-a — project absent from the latest placement check; reload ccrc' })).toBeTruthy();
     const door = screen.getByTestId('sheet-door');
     expect(door.getAttribute('data-open')).toBe('false');
     resetProbe();
@@ -293,6 +299,19 @@ describe('a chrome change with the same fleet (C9, D-6441)', () => {
     expect(door.getAttribute('data-open')).toBe('true');
     expect(probe.heads).toEqual([]);
     expect(probe.lines).toEqual([]);
+  });
+});
+
+describe('a card\'s ▾ after a frame changed it (C9, D-6441)', () => {
+  it('a card\'s ▾ acts on the card as it is drawn now, after a frame changed it', async () => {
+    const d = await mountScreen(RUNS);
+    expect(cardOf('project-d').getAttribute('data-collapsed')).toBe('true');
+    // ws-q starts working: project-d is active now, so it opens by default.
+    d.sendRows(FLEET.map((s) => (s.id === 'ws-q' ? { ...s, status: 'busy', bucket: 'working', statusUpdatedAt: NOW, bucketSince: NOW } : s)));
+    expect(cardOf('project-d').getAttribute('data-collapsed')).toBeNull();
+    // The ▾ rolls up the card as drawn now (active, open), never the one the list first drew (inactive, rolled up).
+    fireEvent.click(cardOf('project-d').querySelector<HTMLElement>('.proj-card-toggle')!);
+    expect(cardOf('project-d').getAttribute('data-collapsed')).toBe('true');
   });
 });
 

@@ -32,6 +32,7 @@ describe('sameLineProps', () => {
     expect(sameLineProps({ ...base, childRun: child() }, { ...base, childRun: child({ coordinator: 'another' }) })).toBe(false);
     // A prop present on one side only is a change, as React's own compare counts keys.
     expect(sameLineProps({ ...base, childRun: child() }, { ...base })).toBe(false);
+    expect(sameLineProps({ ...base }, { ...base, childRun: child() })).toBe(false);
   });
 
   it('any other prop compares by identity', () => {
