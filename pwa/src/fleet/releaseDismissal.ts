@@ -5,8 +5,7 @@
 //
 // WHAT STORAGE MAY SAY: a value counts only when it is a well-formed release tag (`isReleaseTag`); absent, malformed
 // or unreadable storage dismisses nothing, because the failure of a convenience must never hide a release. Every read
-// and write is in try/catch, and always via `window.localStorage` (Node 22 ships a bare `localStorage` global that
-// shadows jsdom's; foldState.ts has the same idiom).
+// and write goes through the one storage port (`lib/storage.ts`, D-7190), which guards each one.
 //
 // THE PAGE MARK: a dismissal is recorded on the page too, so it holds for this page when storage refuses the write
 // (private mode, a full quota). `readDismissed` answers the higher of the two, so a tab that wrote a newer tag is
@@ -15,6 +14,7 @@
 import { useSyncExternalStore } from 'react';
 import { isReleaseTag } from '../../../shared/api';
 import { compareReleaseTags } from '../../../shared/semver';
+import { pageStorage, readKey, UNREADABLE, writeKey } from '../lib/storage';
 
 const KEY = 'ccrc-release-dismissed';
 
@@ -34,12 +34,9 @@ function higher(a: string | null, b: string | null): string | null {
 type Stored = { kind: 'tag'; tag: string } | { kind: 'absent' } | { kind: 'unreadable' };
 
 function readStored(): Stored {
-  try {
-    const raw = window.localStorage.getItem(KEY);
-    return isReleaseTag(raw) ? { kind: 'tag', tag: raw } : { kind: 'absent' };
-  } catch {
-    return { kind: 'unreadable' };
-  }
+  const raw = readKey(KEY, pageStorage, UNREADABLE);
+  if (raw === UNREADABLE) return { kind: 'unreadable' };
+  return isReleaseTag(raw) ? { kind: 'tag', tag: raw } : { kind: 'absent' };
 }
 
 /** The release tag dismissed on this device (storage and this page together), or `null` when none is. */
@@ -56,11 +53,7 @@ export function dismissRelease(tag: string): void {
   const stored = readStored();
   // Over unreadable storage nothing is written: the write could lower a newer mark; the page mark below still holds.
   if (stored.kind === 'absent' || (stored.kind === 'tag' && compareReleaseTags(tag, stored.tag) === 1)) {
-    try {
-      window.localStorage.setItem(KEY, tag);
-    } catch {
-      /* the page mark below still holds it for this page */
-    }
+    writeKey(KEY, tag); // refused: the page mark below still holds it for this page
   }
   pageMark = higher(pageMark, tag);
   for (const notify of [...listeners]) notify();
