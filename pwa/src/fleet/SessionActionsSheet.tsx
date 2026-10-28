@@ -23,6 +23,7 @@ import { navigate } from '../lib/router';
 import { sessionDocsHref } from '../docs/docsLinks';
 import { sessionLabel } from './sessionLabel';
 import { narrowSinceWidened } from './spawnWords';
+import { paneGone } from './presence';
 import { hibernatedSince } from './hibernated';
 import { substrateFaultText, substrateFaultTitle } from './substrateWords';
 import { SwapSheet } from './SwapSheet';
@@ -240,7 +241,7 @@ export function SessionActionsSheet({
   const five = session.limits?.five ?? null;
   const seven = session.limits?.seven ?? null;
   const critical =
-    session.status === 'dead' ? null
+    paneGone(session) ? null
     : five !== null && five > CRITICAL ? '5h'
     : seven !== null && seven > CRITICAL ? '7d'
     : null;
@@ -338,17 +339,17 @@ export function SessionActionsSheet({
               the remedy is widening it. Once it has died, Restart session IS the
               respawn — the second arm. The width is the constant ccd stands
               down at. */}
-          {session.spawnState === 'narrow' && session.status !== 'dead' && !narrowSinceWidened(session) && (
+          {session.spawnState === 'narrow' && !paneGone(session) && !narrowSinceWidened(session) && (
             <p className="sess-sheet-note">
               {`The last spawn landed in a pane under ${READER_MIN_COLS} columns, or one whose width ccd could not read, so ccd answered none of its startup prompts, skipped its /effort and turn re-drive, and keeps auto-swap and auto-compact off while it stays that narrow. Opening and closing this session's terminal drawer widens it; then check the terminal for an unanswered startup prompt. A current ccd pins every spawn 220x50, so the usual cause is a terminal attached straight to this session; it can also be a failed pin or a width ccd could not read, and a marker left by an older ccd may come from a narrow terminal on any session.`}
             </p>
           )}
-          {narrowSinceWidened(session) && session.status !== 'dead' && (
+          {narrowSinceWidened(session) && !paneGone(session) && (
             <p className="sess-sheet-note">
               {`The last spawn landed in a pane under ${READER_MIN_COLS} columns, or one whose width ccd could not read, so ccd answered none of its startup prompts and skipped its /effort and its re-drive of any interrupted turn. The pane has since been widened and its prompt is up, so auto-swap and auto-compact are back on — if this session was mid-turn when it respawned, it may still be waiting for a nudge. This marker stays until the session next spawns.`}
             </p>
           )}
-          {session.spawnState === 'narrow' && session.status === 'dead' && !asleep && (
+          {session.spawnState === 'narrow' && paneGone(session) && !asleep && (
             <p className="sess-sheet-note">
               {`The last spawn landed in a pane under ${READER_MIN_COLS} columns, or one whose width ccd could not read, and that pane is gone. Restart session builds a new one, which a current ccd pins 220x50.`}
             </p>
@@ -474,7 +475,7 @@ export function SessionActionsSheet({
             </Button>
           )}
 
-          {session.status !== 'dead' && session.wrapper !== session.home && (
+          {!paneGone(session) && session.wrapper !== session.home && (
             <p className="sess-sheet-note">
               Pinned to {accountLabel(roster, session.home)}, running on{' '}
               {accountLabel(roster, session.wrapper)} — moved when its account filled up.
