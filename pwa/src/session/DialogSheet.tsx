@@ -166,6 +166,7 @@ import {
   askScreen, askSource, freeTextSlot, isUsableAsk, paneTicks, picksUncommitted, questionKey, shownQuestion, slotHolds, type AskSource, type ShownQuestion,
 } from './askLive';
 import { keyTabs, questionKeys, reviewKeys, rowKey, type KeyScreen } from './askKeys';
+import type { AnswerState } from './answerLifecycle';
 import { dialogMultiRefusal, dialogRefusal, dialogTabRefusal, dialogTextRefusal } from './askWords';
 import { useAskEngagement, useAskKeys } from './useAskKeys';
 import { api, ApiError, failedTo } from '../lib/api';
@@ -599,6 +600,14 @@ export function DialogSheet({ id, store, onOpenTerminal, raise, asker = null, on
     }
   };
   // The boxes changed here and not committed: a tab move would lose them, so ←/→ and the strip wait.
+  // The lifecycle the content reads (`answerLifecycle.ts`): its in-flight flags, as this controller holds them.
+  const life: AnswerState = {
+    phase: answering !== null ? { kind: 'sending', send: 'answer', option: answering }
+      : tabbing ? { kind: 'sending', send: 'tab' } : denying ? { kind: 'sending', send: 'deny' } : { kind: 'idle' },
+    own,
+    pick,
+    dismissal: { key: dismissedKey, dialogId: dismissedDialogId, screen: dismissedScreen },
+  };
   const picksHeld = dialog?.multi !== undefined && pick.id === dialog.id && pick.call === null
     && picksUncommitted(dialog.multi, pick.picked);
 
@@ -665,8 +674,7 @@ export function DialogSheet({ id, store, onOpenTerminal, raise, asker = null, on
         view={view}
         from={source.kind === 'structured' ? source.from : 'hook'}
         dialog={dialog}
-        answering={answering}
-        denying={denying}
+        life={life}
         gap={gap}
         words={words}
         picks={picks}
@@ -675,7 +683,6 @@ export function DialogSheet({ id, store, onOpenTerminal, raise, asker = null, on
         onSelectOption={(optionIndex) => void answer(optionIndex)}
         onDeny={() => void deny()}
         onOpenTerminal={onOpenTerminal}
-        tabbing={tabbing}
         picksHeld={picksHeld}
         onTab={(to, from) => void moveTab(to, from)}
         engagement={engagement}

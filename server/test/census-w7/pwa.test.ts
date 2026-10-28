@@ -271,10 +271,11 @@ describe('W7 PWA census: REAL rows (reporting, not ratcheting; spec §5.1 rule 3
     expect(sites.map((s) => s.file)).toEqual(['pwa/src/fleet/HotFilesStrip.tsx', 'pwa/src/fleet/useFleetHealth.ts']);
   });
 
-  it('answerPaths(): 3 (DialogSheet\'s writes, EnvelopeSheet\'s busy, push-sw.js\'s one handler)', () => {
+  // C7e Step 4 (D-7183): EnvelopeSheet's busy comes from the answer lifecycle, so its own composition is gone.
+  it('answerPaths(): 2 (DialogSheet\'s writes, push-sw.js\'s one handler)', () => {
     const sites = answerPaths();
-    held('answerPaths', sites, 3);
-    expect(countBy(sites, (s) => s.kind)).toEqual({ writer: 1, busy: 1, 'push-sw': 1 });
+    held('answerPaths', sites, 2);
+    expect(countBy(sites, (s) => s.kind)).toEqual({ writer: 1, 'push-sw': 1 });
   });
 
   it('dialogSheetStates(): 11 useState calls inside DialogSheet', () => {
