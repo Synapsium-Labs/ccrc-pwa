@@ -8,7 +8,7 @@ import type { DepsShedConfig } from './config.js';
 import { notify, type NoticeRecord } from './notice.js';
 import { CCD_ARGV, ccdCan, sweepDec } from './ccdargv.js';
 import { NO_HIBERNATE_SUFFIX } from './coord/hibernate.js';
-import { childReclaimBornAt, childReclaimRowUuid } from './coord/childReclaim.js';
+import { childReclaimBornAt, childReclaimClaimsByChair, childReclaimRowUuid } from './coord/childReclaim.js';
 import { CHILD_BIRTH_SKEW_MS } from './coord/childSpent.js';
 import { childReclaimCoordinated } from './childReclaimSweep.js';
 import { RUN_DONE_LANE, heldKindOf } from './sleepLane.js';
@@ -155,7 +155,7 @@ function storeReads(deps: DepsShedPassDeps, rows: readonly FleetSession[], recs:
   try {
     const last = deps.coord.lastRunBySession(ids);
     const claimants = new Set(deps.coord.activeClaims().map((c) => c.heldBy));
-    const chairs = deps.coord.childReclaimCoordinatorClaims();
+    const chairs = childReclaimClaimsByChair(deps.coord);
     for (const row of rows) {
       if (!last.ok) { out.set(row.id, { ok: false, detail: last.detail }); continue; }
       try {

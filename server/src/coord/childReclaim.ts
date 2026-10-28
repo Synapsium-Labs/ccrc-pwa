@@ -285,6 +285,16 @@ export function childReclaimEverClaimedIds(coord: Pick<CoordStore, 'childReclaim
   return coord.childReclaimCoordinatorClaims().keys();
 }
 
+/** Every claimant's folded claim, DATED (`'open'`, `'unplaced'` or the instant it ended): the store read's one home
+ *  (spec §1 rule 4), for a consumer that reads the whole fleet once per pass and asks this file's fence row by row
+ *  (the deps-shed arm, D-7278: `childReclaimCoordinated` with `childReclaimBornAt` for a child). Throws when the store
+ *  read throws; the caller keeps its own unreadable answer. */
+export function childReclaimClaimsByChair(
+  coord: Pick<CoordStore, 'childReclaimCoordinatorClaims'>,
+): ReturnType<CoordStore['childReclaimCoordinatorClaims']> {
+  return coord.childReclaimCoordinatorClaims();
+}
+
 /** Why a reclaim did not happen YET. The server's own reasons first, then the
  *  seven retryable box words — exactly the `retry` rows above, so a deferral
  *  always says which condition it is waiting on. `generation-changed` is the
