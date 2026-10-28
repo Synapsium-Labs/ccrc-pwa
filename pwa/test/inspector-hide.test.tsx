@@ -233,11 +233,16 @@ describe('the toggle', () => {
         cleanup();
       }
     }
-    resetInspectorChoiceForTests();
-    for (const [width, path] of [[1599, `/s/${ID}`], [1280, `/s/${ID}`], [390, `/s/${ID}`], [1920, '/runs'], [1920, '/']] as const) {
-      open(width, path);
-      expect(document.querySelectorAll(TOGGLE).length, `${width} ${path}`).toBe(0);
-      cleanup();
+    // Where nothing is placed there is no toggle, whichever way the device's choice stands.
+    for (const hidden of [false, true]) {
+      for (const [width, path] of [[1599, `/s/${ID}`], [1280, `/s/${ID}`], [390, `/s/${ID}`], [1920, '/runs'], [1920, '/']] as const) {
+        localStorage.clear();
+        resetInspectorChoiceForTests();
+        if (hidden) act(() => setInspectorHidden(true));
+        open(width, path);
+        expect(document.querySelectorAll(TOGGLE).length, `${width} ${path} hidden=${hidden}`).toBe(0);
+        cleanup();
+      }
     }
     // A door, not a control with a handler of its own: a tap asks the one layer, and the result is the rail's flip.
     localStorage.clear();

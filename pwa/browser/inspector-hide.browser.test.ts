@@ -125,7 +125,6 @@ describe('Refined at 1600 and 1920', () => {
         expect(shown.strips, 'the rail holds the plan and the mail').toEqual({ task: false, mail: false, aboveComposer: false });
         expect(shown.column.width, 'the reading column, shown (yields to the pane at 1600)').toBeLessThanOrEqual(820);
         if (width === 1920) expect(shown.column.width).toBe(820);
-        expect(shown.sideScroll, 'no sideways page scroll, shown').toBe(0);
 
         await toggle(page).click();
         await page.waitForFunction(() => document.querySelector('.ref-inspector') === null);
@@ -138,7 +137,6 @@ describe('Refined at 1600 and 1920', () => {
         expect(Math.abs(hidden.column.leftGap - hidden.column.rightGap), `centred (${hidden.column.leftGap} / ${hidden.column.rightGap})`)
           .toBeLessThanOrEqual(1);
         expect(hidden.strips, 'the plan and the mail are back, above the composer').toEqual({ task: true, mail: true, aboveComposer: true });
-        expect(hidden.sideScroll, 'no sideways page scroll, hidden').toBe(0);
 
         // Shown again by the key: the same three tracks.
         await page.keyboard.press('i');
@@ -146,8 +144,24 @@ describe('Refined at 1600 and 1920', () => {
         await page.waitForTimeout(300);
         const again = await measure(page);
         expect(again.tracks).toEqual(shown.tracks);
-        expect(again.sideScroll).toBe(0);
         expect(errors).toEqual([]);
+      } finally {
+        await ctx.close();
+      }
+    }, 60_000);
+
+    it(`${width}px, no sideways page scroll either way`, async () => {
+      const { ctx, page } = await openSession(view(width));
+      try {
+        expect((await measure(page)).sideScroll, 'shown').toBe(0);
+        await toggle(page).click();
+        await page.waitForFunction(() => document.querySelector('.ref-inspector') === null);
+        await page.waitForTimeout(300);
+        expect((await measure(page)).sideScroll, 'hidden').toBe(0);
+        await page.keyboard.press('i');
+        await page.waitForFunction(() => document.querySelector('.ref-inspector') !== null);
+        await page.waitForTimeout(300);
+        expect((await measure(page)).sideScroll, 'shown again').toBe(0);
       } finally {
         await ctx.close();
       }
@@ -156,7 +170,7 @@ describe('Refined at 1600 and 1920', () => {
     it(`${width}px, hiding at the newest turn keeps the reader at the newest turn`, async () => {
       const { ctx, page } = await openSession(view(width));
       try {
-        const reading = (): Promise<{ fromEnd: number; lastVisible: boolean }> => page.evaluate((text) => {
+        const reading = (): Promise<{ fromEnd: number; lastVisible: boolean; overflow: number; height: number }> => page.evaluate((text) => {
           const sc = document.querySelector<HTMLElement>('.chat-scroller')!;
           const r = sc.getBoundingClientRect();
           const last = [...document.querySelectorAll<HTMLElement>('.chat-item')].reverse()
@@ -164,15 +178,20 @@ describe('Refined at 1600 and 1920', () => {
           const box = last?.getBoundingClientRect();
           return {
             fromEnd: Math.round(sc.scrollHeight - sc.scrollTop - sc.clientHeight),
+            overflow: sc.scrollHeight - sc.clientHeight,
+            height: sc.clientHeight,
             lastVisible: box !== undefined && box.bottom <= r.bottom + 1 && box.top >= r.top - 1,
           };
         }, LAST_TEXT);
         const before = await reading();
+        // Not vacuous: the transcript overflows its scroller, so "at the newest turn" is a position that can be lost.
+        expect(before.overflow, 'the transcript overflows the scroller').toBeGreaterThan(200);
         expect(before.fromEnd, 'at the newest turn to begin with').toBeLessThanOrEqual(4);
         await toggle(page).click();
         await page.waitForFunction(() => document.querySelector('.ref-inspector') === null);
         await page.waitForTimeout(500);
         const hidden = await reading();
+        expect(hidden.height, 'the strips came back, so the scroller got shorter').toBeLessThan(before.height);
         expect(hidden.fromEnd, 'still at the newest turn, hidden').toBeLessThanOrEqual(4);
         expect(hidden.lastVisible, 'the newest turn is on screen, hidden').toBe(true);
         await toggle(page).click();
