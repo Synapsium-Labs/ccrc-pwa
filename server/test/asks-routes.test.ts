@@ -357,7 +357,7 @@ describe('POST /api/asks/:id/answer', () => {
  * `POST /api/asks/:id/release` — the parent DECLINES to rule on its
  * child's question (Task 10). The verb that makes the grace window a
  * CEILING rather than a flat tax on every ask the parent cannot answer: a
- * decline fires the operator's push NOW, through `FleetWatcher.releaseHeldAsk`
+ * decline fires the operator's push NOW, through the `released` door-in (the watcher's forward until W3 Q3f)
  * — the ONLY door a route has into the watcher's in-memory hold, since
  * `heldAsks` is watcher-private state.
  *
@@ -377,7 +377,7 @@ describe('POST /api/asks/:id/release', () => {
   /** Same shape as `buildServer`'s own third argument (`fleetws.test.ts`'s
    *  idiom): the `FleetWatcher` is constructed FIRST, sharing the one `deps`
    *  object `buildServer` also receives, so both sides see the same
-   *  `heldAsks` map this route reaches through `releaseHeldAsk`. */
+   *  hold this route reaches through the `released` door-in (since W3 Q3f, the claimant's core). */
   const openAppWithWatcher = async (home: string, run: Runner, sent: PushPayload[]) => {
     const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
     const notify = async (p: PushPayload) => { sent.push(p); };
@@ -390,7 +390,7 @@ describe('POST /api/asks/:id/release', () => {
 
   /** The watcher's in-memory hold, through its `Questions` instance's test-only view (W3 Q3d, D-7028, named
    *  exception 1; it was a reflection read of the private `heldAsks`): per child, as that map held it. The hold still
-   *  has no public read; `releaseHeldAsk` is its only public WRITE, and `plantHeldAsk` seeds it as `hold()` would. */
+   *  has no public read; the `released` door-in is its only route WRITE, and `plantHeldAsk` seeds it as `hold()` would. */
   const heldMap = (w: FleetWatcher): Map<string, { until: number; askId: number;
       ev: unknown; answeringSince: number | null }> => questionsTestView(w.questions).heldAsks();
 

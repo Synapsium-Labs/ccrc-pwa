@@ -12,7 +12,7 @@ import { parseDialog } from '../src/pane/dialog.js';
 import { Bus } from '../src/bus.js';
 import {
   HOLD_ROUTE_REASON_MAX_BYTES,
-  parseCanonicalPositiveSafeInteger,
+  parseCanonicalPositiveSafeInteger, parseQuestionId, formatQuestionId,
   type SessionStreamMsg,
 } from '../../shared/api.js';
 import { mkTmp } from './tmpHelpers.js';
@@ -134,17 +134,34 @@ function coordIdPathRoutes(): Omit<RouteSource, 'code'>[] {
     : []));
 }
 
+/** The canonical parsers of a `:id` seam: `parseCanonicalPositiveSafeInteger` everywhere, and (W3 Q3f, D-7030)
+ *  `parseQuestionId` on a `/api/questions/` path only, whose numeric arms parse `<n>` with the former. */
 function canonicalCoordIdRoutes(): Omit<RouteSource, 'code'>[] {
   const src = readFileSync(new URL('../src/coord/routes.ts', import.meta.url), 'utf8');
   const starts = [...src.matchAll(/^  app\.(get|post)\(\s*'([^']+)'/gm)];
   return starts.flatMap((start, i) => {
     const code = withoutComments(src.slice(start.index, starts[i + 1]?.index));
-    return /\bparseCanonicalPositiveSafeInteger\s*\(/.test(code)
+    const canonical = /\bparseCanonicalPositiveSafeInteger\s*\(/.test(code)
+      || (start[2]!.startsWith('/api/questions/') && /\bparseQuestionId\s*\(/.test(code));
+    return canonical
       ? [{
           method: start[1]!.toUpperCase() as 'GET' | 'POST',
           routePath: start[2]!,
         }]
       : [];
+  });
+}
+
+/** W3 Q3f (D-7030): the `knownId` gates registered in `coord/routes.ts`, the operator's door of the question family,
+ *  which gates its session id with `buildServer`'s `knownId` exactly as the session routes do. */
+function coordKnownIdCalls(): KnownIdCall[] {
+  const src = readFileSync(new URL('../src/coord/routes.ts', import.meta.url), 'utf8');
+  const starts = [...src.matchAll(/^  app\.(get|post)\(\s*'([^']+)'/gm)];
+  return starts.flatMap((start, i) => {
+    const code = withoutComments(src.slice(start.index, starts[i + 1]?.index));
+    return [...code.matchAll(/\bknownId\(\s*([^\n)]*?)\s*\)/g)].map((call) => ({
+      method: start[1]!.toUpperCase() as 'GET' | 'POST', routePath: start[2]!, args: call[1]!.replace(/\s+/g, ' ').trim(),
+    }));
   });
 }
 
@@ -207,8 +224,28 @@ describe('canonical positive-safe decimal parser', () => {
   });
 });
 
+describe('the question id parser (W3 Q3f, D-7030)', () => {
+  it.each([
+    ['ask-1', { kind: 'ask', id: 1 }],
+    ['approval-42', { kind: 'approval', id: 42 }],
+    [`ask-${Number.MAX_SAFE_INTEGER}`, { kind: 'ask', id: Number.MAX_SAFE_INTEGER }],
+    ['session-project-a-quiet-basin', { kind: 'session', sessionId: 'project-a-quiet-basin' }],
+  ] as const)('accepts %s', (text, want) => {
+    expect(parseQuestionId(text)).toEqual(want);
+    expect(formatQuestionId(parseQuestionId(text)!)).toBe(text);
+  });
+
+  it.each([
+    'ask-01', 'ask-+1', 'ask-1.0', 'ask-', 'ask-0', 'ask- 1', `ask-${Number.MAX_SAFE_INTEGER + 1}`, 'approval-1e0',
+    'session-', 'session--actor', 'session-.hidden', 'session-a/b', 'session- x',
+    'question-1', 'asks-1', '-1', 'ask1', '', 1,
+  ])('refuses %j', (text) => {
+    expect(parseQuestionId(text)).toBeNull();
+  });
+});
+
 describe('canonical coordination id route census', () => {
-  it('keeps all twenty-one textual resource-id seams on the shared parser', () => {
+  it('keeps all twenty-four textual resource-id seams on a shared parser (twenty-one, plus the question family\'s three)', () => {
     expect(canonicalCoordIdRoutes()).toEqual([
       { method: 'POST', routePath: '/api/mail/:id/ack' },
       { method: 'GET', routePath: '/api/mail/:id' },
@@ -236,6 +273,10 @@ describe('canonical coordination id route census', () => {
       { method: 'POST', routePath: '/api/approvals/:id/rule' },
       { method: 'POST', routePath: '/api/approvals/:id/release' },
       { method: 'GET', routePath: '/api/approvals/:id' },
+      // W3 Q3f (D-7030): the question door family, on `parseQuestionId`, registered after the approvals lane.
+      { method: 'POST', routePath: '/api/questions/:id/answer' },
+      { method: 'POST', routePath: '/api/questions/:id/rule' },
+      { method: 'POST', routePath: '/api/questions/:id/release' },
     ]);
   });
 
@@ -314,6 +355,12 @@ describe('knownId route census', () => {
       requestGates.length,
       requestGates.filter(({ method }) => method === 'POST').length,
       requestGates.filter(({ method }) => method === 'GET').length,
+    ]);
+  });
+
+  it('gates the question family\'s operator door in coord/routes.ts, and nothing else there (W3 Q3f, D-7030)', () => {
+    expect(coordKnownIdCalls()).toEqual([
+      { method: 'POST', routePath: '/api/questions/:id/answer', args: 'qid.sessionId' },
     ]);
   });
 });

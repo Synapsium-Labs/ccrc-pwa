@@ -36,6 +36,7 @@ import { CoordStore } from '../src/coord/store.js';
 import { localIO, type FleetIO } from '../src/io.js';
 import { askKey } from '../src/askkey.js';
 import { okAsk, okAsks } from './coordReadHelpers.js';
+import { doorInsOf } from './questionDoorIns.js';
 
 afterEach(() => { vi.restoreAllMocks(); });
 
@@ -514,14 +515,14 @@ describe('sweepAsks — late answer wins (D-5289)', () => {
     expect(sent.filter((p) => p.tag === askTag(KID))).toHaveLength(1);
     expect(okAsk(f.coord.askById(askId))!.state).toBe('released');
 
-    f.w.answeredLate(KID, askId, MESA);
+    doorInsOf(f.w).answeredLate(KID, askId, MESA);
     const tagged = sent.filter((p) => p.tag === askTag(KID));
     expect(tagged).toHaveLength(2);
     expect(tagged[1]!.body).toBe(`Answered by ${MESA}`);
     expect(tagged[1]!.actions).toBeUndefined();
 
     // Once: the replacement is the lapse's, not a fresh notification per call.
-    f.w.answeredLate(KID, askId, MESA);
+    doorInsOf(f.w).answeredLate(KID, askId, MESA);
     expect(sent.filter((p) => p.tag === askTag(KID))).toHaveLength(2);
   });
 
@@ -531,12 +532,12 @@ describe('sweepAsks — late answer wins (D-5289)', () => {
     at(T0);
     const f = fixture({ push, sessions: [`project-a/${KID}`] });
     const askId = await mintHold(f, KID, MESA);
-    f.w.answeredLate(KID, askId, MESA);                 // still held: no push went out
+    doorInsOf(f.w).answeredLate(KID, askId, MESA);                 // still held: no push went out
     expect(sent.filter((p) => p.tag === askTag(KID))).toEqual([]);
 
     at(T0 + ASK_GRACE_MS + 1);
     await f.w.sweepAsks();
-    f.w.answeredLate(KID, askId + 1, MESA);             // another row's answer
+    doorInsOf(f.w).answeredLate(KID, askId + 1, MESA);             // another row's answer
     expect(sent.filter((p) => p.tag === askTag(KID))).toHaveLength(1);
   });
 
@@ -550,7 +551,7 @@ describe('sweepAsks — late answer wins (D-5289)', () => {
     await f.w.sweepAsks();
     f.showMenu(KID, BARE_PROMPT);
     await f.tick();                                      // dialog_cleared
-    f.w.answeredLate(KID, askId, MESA);
+    doorInsOf(f.w).answeredLate(KID, askId, MESA);
     expect(sent.filter((p) => p.tag === askTag(KID))).toHaveLength(1);
   });
 });

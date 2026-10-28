@@ -144,6 +144,10 @@ export const QUESTION_DOOR_TAGS: Readonly<Record<string, QuestionDoorTag>> = {
   '/api/sessions/:id/dialog/text': 'operator',
   '/api/sessions/:id/dialog/multi': 'operator',
   '/api/sessions/:id/dialog/tab': 'navigation',
+  // W3 Q3f (D-7030; OA-C7 (a)): the family, in `coord/routes.ts`; the path picks the principal.
+  '/api/questions/:id/answer': 'operator',
+  '/api/questions/:id/rule': 'claimant',
+  '/api/questions/:id/release': 'claimant',
 };
 
 /** A question door's shape: a verb under an ask's or an approval's id, an operator's answer or dialog door under a
@@ -171,7 +175,8 @@ function routeRegistrations(parsed: ReturnType<typeof parsedFile>): RouteRegistr
 export interface QuestionDoorSite extends CensusSite { readonly route: string; readonly tag: QuestionDoorTag | 'untagged' }
 
 /** W3's question doors: the POST registrations in `coord/routes.ts` and `server.ts` whose path has a question door's
- *  shape, tagged from `QUESTION_DOOR_TAGS`. 9 at the base: 4 claimant, 4 operator, 1 navigation. */
+ *  shape, tagged from `QUESTION_DOOR_TAGS`. 9 at the base: 4 claimant, 4 operator, 1 navigation. 12 since Q3f
+ *  (D-7030): 9 + the family's 3, so 6 claimant, 5 operator, 1 navigation. */
 export function questionDoors(root: string = REPO): QuestionDoorSite[] {
   const out: QuestionDoorSite[] = [];
   for (const rel of QUESTION_DOOR_FILES) {
@@ -272,7 +277,8 @@ export interface QuestionStoreCallSite extends CensusSite { readonly symbol: str
 /** W3's question-store calls outside the store: every call of a `QUESTION_STORE_METHODS` name (`<x>.<method>(`, never
  *  `this.<method>(`) in `server/src` and `shared/`, outside `coord/store.ts` and `coord/questions.ts`. 48 at the base in 6
  *  files (`watch.ts` 22, `coord/routes.ts` 14, `server.ts` 5, `coord/digest.ts` 4, `fleet.ts` 2, `coord/driftLane.ts` 1),
- *  1 of them excluded by name: 47 counted. Q3f's may-only-shrink pin holds the whole list at the excluded row. */
+ *  1 of them excluded by name: 47 counted. 16 at Q3f's base (`coord/routes.ts` 11, `server.ts` 5); 1 at its tip, the
+ *  excluded row. Q3f's may-only-shrink pin holds the whole list at the excluded row. */
 export function questionStoreCallsOutside(root: string = REPO): QuestionStoreCallSite[] {
   const out: QuestionStoreCallSite[] = [];
   for (const dir of ['server/src', 'shared']) {
@@ -325,13 +331,7 @@ export function envelopePairingTitleRules(root: string = REPO): PairingRuleSite[
 
 /** The W3 task that moves each question-store call, by `file | enclosing symbol` (the plan's Q3a table). A counted call
  *  whose key is not here has no owner, and the census test reds. Rows only leave this table: Q3b's left with its reads,
- *  Q3e's with the raise, and Q3d's thirteen `watch.ts` rows with the hold (D-7028; `watch.ts` makes no question-store
- *  call since). */
-export const QUESTION_STORE_OWNERS: Readonly<Record<string, 'Q3b' | 'Q3d' | 'Q3e' | 'Q3f'>> = {
-  'server/src/coord/routes.ts | POST /api/asks/:id/answer': 'Q3f',
-  'server/src/coord/routes.ts | POST /api/asks/:id/release': 'Q3f',
-  'server/src/coord/routes.ts | POST /api/approvals/:id/rule': 'Q3f',
-  'server/src/coord/routes.ts | POST /api/approvals/:id/release': 'Q3f',
-  'server/src/server.ts | POST /api/sessions/:id/dialog': 'Q3f',
-  'server/src/server.ts | POST /api/sessions/:id/ask': 'Q3f',
-};
+ *  Q3e's with the raise, Q3d's thirteen `watch.ts` rows with the hold (D-7028; `watch.ts` makes no question-store call
+ *  since), and Q3f's six with the answer doors' cores (D-7030; the eight old doors are aliases). EMPTY since Q3f: every
+ *  counted call has moved, and the one left outside `coord/questions.ts` is the excluded ruling poll. */
+export const QUESTION_STORE_OWNERS: Readonly<Record<string, 'Q3b' | 'Q3d' | 'Q3e' | 'Q3f'>> = {};

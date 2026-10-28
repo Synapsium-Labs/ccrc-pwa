@@ -42,7 +42,7 @@
  *     `refuseOversizedClaim`, not the table.
  */
 import type { ClaimRefusal } from './box-token.js';
-import type { AccountGateRefusal, ApprovalRefusal, ArchiveRefusal, CollectLaneRefusal, DigestRefusal, DoneRejectCode, MailRejectCode, RunRefuseCode, RunRouteRefuseCode, StepUpRefusal, SwapRefusal, UpdateRouteError } from './api.js';
+import type { AccountGateRefusal, ApprovalRefusal, ArchiveRefusal, CollectLaneRefusal, DigestRefusal, DoneRejectCode, MailRejectCode, QuestionDoorRefusal, RunRefuseCode, RunRouteRefuseCode, StepUpRefusal, SwapRefusal, UpdateRouteError } from './api.js';
 import { ARCHIVE_REFUSALS, SWAP_REFUSALS } from './api.js';
 
 /**
@@ -103,7 +103,9 @@ export type RouteRefusal = ClaimRefusal | MailRouteRefusal | UpdateRouteError | 
   | ApprovalRefusal | DigestRefusal | StepUpRefusal | AccountGateRefusal | WsCreateRefusal | WsTitleRefusal
   | ArchiveRefusal
   // The coordinator's route door (D-6735, ARCH-20): `decideRoute` answers a `RunRouteRefuseCode`, sent through `refuseRoute`.
-  | RunRouteRefuseCode;
+  | RunRouteRefuseCode
+  // The question door family (W3 Q3f, D-7030): its one word of its own, `kind-mismatch`.
+  | QuestionDoorRefusal;
 
 /** Each route refusal word's one status (D-5381). Measured from the sends on
  *  landing day, never chosen: changing one is a behaviour change. */
@@ -187,6 +189,9 @@ export const REFUSAL_STATUS: Readonly<Record<RouteRefusal, number>> = {
   [ARCHIVE_REFUSALS.runOpen]: 409, [ARCHIVE_REFUSALS.coordinatorHasOpenRuns]: 409,
   [ARCHIVE_REFUSALS.programmePartlyEnded]: 409, [ARCHIVE_REFUSALS.worktreeGone]: 409,
   [ARCHIVE_REFUSALS.manifestUnbuildable]: 409,
+  // The question door family (W3 Q3f, D-7030): CHOSEN, not measured — a new word. 400: an id of the other principal's
+  // kind, or a body kind that disagrees with the id's, is the caller's to fix, like a malformed body.
+  'kind-mismatch': 400,
 };
 
 /** The runtime list, derived from the table (`PR_REASONS`'s idiom). */
