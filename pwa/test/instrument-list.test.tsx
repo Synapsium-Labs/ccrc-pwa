@@ -535,4 +535,21 @@ describe('dense rows at the desk (T2e, D-6335)', () => {
       for (const media of ['(min-width: 900px)', '(pointer: fine)']) expect(declsOf(sel, media), `${sel} in ${media}`).toBe('');
     }
   });
+  it('a row with a context draws its state word on the context line, so a long name never pushes it onto its own (T3b, R21 F2)', () => {
+    // The operator's ruling (R121, Q2): the name takes the whole first line, or two; the state word moves to the end of
+    // the context line (`order` after the context, whose `flex-basis: 0` lets the two always share one flex line). A row
+    // with no context keeps the state beside its name, so every rule names a row that HAS a context.
+    const open = '.ins-row .sess-line:has(.sess-meta--context) .sess-body > .sess-open';
+    const state = '.ins-row .sess-line:has(.sess-meta--context) .sess-body > .sess-meta:not(.sess-meta--context)';
+    const context = '.ins-row .sess-line:has(.sess-meta--context) .sess-meta--context';
+    expect(declsOf(open, DENSE)).toMatch(/flex-basis:\s*100%/);
+    expect(declsOf(state, DENSE)).toMatch(/order:\s*1/);
+    expect(declsOf(context, DENSE)).toMatch(/flex:\s*1 1 0/);
+    expect(declsOf(context, DENSE)).toMatch(/min-width:\s*0/);
+    // Only at the desk under a fine pointer: a touch screen or a phone keeps the shared sheet's rows.
+    for (const sel of [open, state, context]) {
+      expect(declsOf(sel), sel).toBe('');
+      for (const media of ['(min-width: 900px)', '(pointer: fine)']) expect(declsOf(sel, media), `${sel} in ${media}`).toBe('');
+    }
+  });
 });

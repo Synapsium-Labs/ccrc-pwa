@@ -3,8 +3,9 @@
 // geometry; this file holds the geometry: no empty fourth column (the reading column is 860 at 1600 and the detail
 // reaches the viewport's edge), no head in the list column (T2e removed its chrome and T2g its count line; this fixture
 // has no pool lag, so nothing else draws there and the first row starts higher), a status row of two lines and at most
-// 42 px under a fine pointer when its name and state fit (every row at most three lines and under 61 px: the name,
-// `waiting · needs you` and the context, when a long name and the state do not fit side by side), which under a touch
+// 42 px under a fine pointer when its name and its context each fit on a line, the state word at the context line's end
+// (T3b, R21's F2: every row at most three lines and under 61 px, and a long name never pushes `waiting · needs you`
+// onto a line of its own; a main checkout, with no context, keeps the state beside its name), which under a touch
 // screen is the tap floor again, the status bar's count whole at 900 under both pointers, and the rail's unread pill on
 // its Inbox door's top-right corner.
 //
@@ -37,6 +38,13 @@
 //   `.ins-rail-count` without `position: absolute` ..... "at 1280x800 the unread pill sits on the Inbox door's top-right corner, inside the door"
 //                                                         (`top inset 13.203125 vs --sp-1 4: expected 9.203125 to be less than or equal to 2`; both themes)
 //   `.ins-rail-count` without `right: var(--sp-1)` ..... the same case (`right inset 16.203125 vs --sp-1 4: expected 12.203125 to be less than or equal to 2`)
+// Desktop polish T3b (R21's F2, the operator's R121; RUN, this file alone, each mutant restored from a saved copy):
+//   the state-on-context rules removed ................ 8 cases: the two dense-row cases, the needs-you case, the 1600
+//                                                         case (`the state word is on the context line: expected false`,
+//                                                         `lines: expected 3 to be 2`)
+//   the context's `flex: 1 1 0` as `1 0 100%` ......... the same 8 cases
+//   the state's `order: 1` removed .................... NOT red here (the state and the context share the line either
+//                                                         way): test/instrument-list.test.tsx's rule pin catches it.
 // The plan's row 8 (Step 0's `flex: none` removed) does not apply: Step 0 found the count whole at 900 under both pointers, so
 // T2g added no `flex: none`.
 // The state's `flex: 0 0 auto` as `0 1 auto` + `min-width: 0` is NOT red here (a wrapped flex line is decided on max-content
@@ -287,9 +295,12 @@ async function measureRows(page: import('playwright-core').Page) {
     // The vertical centres of the text boxes the elements draw: the text nodes only (a Range over an element also
     // returns the element's own box, whose centre sits between two wrapped lines), and not the screen-reader copy of a
     // name (`.sr-only`). A text node that is not drawn (the shortened form of a long name, `display: none`) has no box.
+    // A clamped name or branch (D-6332's desk clamp) still has text boxes for its lines past the clamp, under the drawn
+    // ones: only a centre inside the element's own box counts (T3b).
     const centres = (els: Element[]): number[] => {
       const out: number[] = [];
       for (const el of els) {
+        const own = el.getBoundingClientRect();
         const walk = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
         for (let n = walk.nextNode(); n !== null; n = walk.nextNode()) {
           if ((n.textContent ?? '').trim() === '') continue;
@@ -297,7 +308,10 @@ async function measureRows(page: import('playwright-core').Page) {
           if (p.closest('.sr-only') !== null) continue;
           const range = document.createRange();
           range.selectNodeContents(n);
-          for (const rc of range.getClientRects()) if (rc.width > 0 && rc.height > 0) out.push(rc.top + rc.height / 2);
+          for (const rc of range.getClientRects()) {
+            const c = rc.top + rc.height / 2;
+            if (rc.width > 0 && rc.height > 0 && c >= own.top && c <= own.bottom) out.push(c);
+          }
         }
       }
       return out.sort((a, b) => a - b);
@@ -323,11 +337,16 @@ async function measureRows(page: import('playwright-core').Page) {
       // The state cell: the state word and its marker (`needs you`), the first `.sess-meta`; the context is the second.
       const state = line.querySelector('.sess-meta:not(.sess-meta--context)');
       const stateLines = centres(state === null ? [] : [state]);
+      const contextEl = line.querySelector('.sess-meta--context');
+      const contextLines = centres(contextEl === null ? [] : [contextEl]);
       return {
         id: li.getAttribute('data-row')!, height: box.height, lines: lineCount(centres([...body.children])),
         nameLines: lineCount(nameLines),
         // The state word shares the name's first line (the two centres lie within a line's tolerance).
         beside: stateLines.length > 0 && Math.abs((stateLines[0] ?? NaN) - (nameLines[0] ?? NaN)) <= 6,
+        // The state word shares the context's first line (T3b, R21's F2): a row with a context draws it there.
+        onContext: stateLines.length > 0 && Math.abs((stateLines[0] ?? NaN) - (contextLines[0] ?? NaN)) <= 6,
+        contextLines: lineCount(contextLines),
         needsYou: (state?.textContent ?? '').includes('needs you'),
         name: shown(li.querySelector('.sess-open'), box), state: shown(state, box),
         context: shown(li.querySelector('.sess-meta--context'), box),
@@ -351,7 +370,7 @@ describe('dense rows under a fine pointer', () => {
 
   for (const theme of THEMES) {
     for (const [width, column] of [[1280, 340], [1600, 420]] as const) {
-      it(`at ${width} (the ${column} column) a row whose name and state fit on one line is two lines and at most 42 px, and every row is at most three lines and under 61 px (${theme})`, async () => {
+      it(`at ${width} (the ${column} column) a row whose name and context each fit on one line is two lines and at most 42 px, the state word on the context line, and every row is at most three lines and under 61 px (${theme})`, async () => {
         const { ctx, page } = await open(theme, width, 900, '/');
         try {
           const rows = await measureRows(page);
@@ -361,48 +380,64 @@ describe('dense rows under a fine pointer', () => {
             expect(r.name, `${r.id}: name`).toBe(true);
             expect(r.state, `${r.id}: state word`).toBe(true);
             expect(r.context, `${r.id}: context`).toBe(!MAIN_CHECKOUTS.includes(r.id)); // a main checkout has none
-            // Every fact is drawn, at most as name, state, context: three lines, under the 61 px of main's rows.
+            // Every fact is drawn, at most three lines (the name's and the context's), under the 61 px of main's rows.
             expect(r.lines, `${r.id}: lines`).toBeLessThanOrEqual(3);
             expect(r.height, `${r.id}: height`).toBeLessThan(61);
-            if (r.nameLines === 1 && r.beside) {
-              // The name and the state fit side by side: the name and state line, then the context (a main checkout
-              // has none: one line).
-              expect(r.lines, `${r.id}: lines`).toBe(r.id === 'project-a' ? 1 : 2);
+            if (r.context) {
+              // T3b (R21's F2): the state word is on the context line, never beside the name nor on a line of its own.
+              expect(r.onContext, `${r.id}: the state word is on the context line`).toBe(true);
+              expect(r.lines, `${r.id}: the name's lines and the context's`).toBe(r.nameLines + r.contextLines);
+            }
+            if (r.context && r.nameLines === 1 && r.contextLines === 1) {
+              expect(r.lines, `${r.id}: lines`).toBe(2);
               expect(r.height, `${r.id}: height`).toBeLessThanOrEqual(42);
             }
           }
-          // The rows that fit, exactly: at 340 neither needs-you row nor the second main checkout (a 26-character name
-          // beside `waiting · needs you`); at 420 only project-a-review-wave-two and project-b do not.
-          const fit = rows.filter((r) => r.nameLines === 1 && r.beside).map((r) => r.id).sort();
-          const open = ['project-a', 'project-a-banner-quiet-line', 'project-a-desk-density-pass', 'project-a-gauge-window-words',
+          // The rows of two lines, exactly: at 340 every workspace row but the two needs-you rows, whose branch beside
+          // `waiting · needs you` takes a second line; at 420 every workspace row. The main checkouts have no context:
+          // project-a's is one line, project-b's two (its long name, then the state).
+          const two = rows.filter((r) => r.context && r.lines === 2).map((r) => r.id).sort();
+          const open = ['project-a-banner-quiet-line', 'project-a-desk-density-pass', 'project-a-gauge-window-words',
             'project-a-inspector-sections-tidy', 'project-a-transcript-search-rungs'];
-          expect(fit, 'rows that fit').toEqual(width === 1280 ? open : [...open, 'project-a-ask-routing-follow-up'].sort());
+          expect(two, 'two-line rows').toEqual(width === 1280 ? open
+            : [...open, 'project-a-ask-routing-follow-up', 'project-a-project-a-review-wave-two'].sort());
         } finally {
           await ctx.close();
         }
       });
     }
 
-    it(`at 1280 the two workspace needs-you rows, a long name beside "waiting · needs you", are exactly three lines: the name, the state, the context; the second main checkout is the name and the state (${theme})`, async () => {
+    it(`at 1280 the two workspace needs-you rows keep "waiting · needs you" on the context line: the name, then the context and the state; the second main checkout is the name and the state (${theme})`, async () => {
       const { ctx, page } = await open(theme, 1280, 800, '/');
       try {
         const rows = (await measureRows(page)).filter((r) => r.needsYou);
         expect(rows.map((r) => r.id).sort()).toEqual(['project-a-ask-routing-follow-up', 'project-a-project-a-review-wave-two', 'project-b']);
         for (const r of rows) {
-          expect(r.lines, `${r.id}: lines`).toBe(r.id === 'project-b' ? 2 : 3);
-          expect(r.beside, `${r.id}: the state word has dropped to its own line`).toBe(false);
+          if (r.id === 'project-b') {
+            // No context: the state drops under the long name, two lines (D-6716's no-context arm, unchanged).
+            expect(r.lines, `${r.id}: lines`).toBe(2);
+            expect(r.beside, `${r.id}: the state word has dropped to its own line`).toBe(false);
+            continue;
+          }
+          // T3b (R21's F2, the operator's R121): the state word is on the context line, and takes no line of its own.
+          expect(r.onContext, `${r.id}: the state word is on the context line`).toBe(true);
+          expect(r.beside, `${r.id}: the state word is not beside the name`).toBe(false);
+          expect(r.lines, `${r.id}: the name's lines and the context's`).toBe(r.nameLines + r.contextLines);
+          expect(r.height, `${r.id}: height`).toBeLessThan(61);
         }
       } finally {
         await ctx.close();
       }
     });
 
-    it(`at 1600 every row but project-a-review-wave-two is two lines (one for the main checkout project-a), and that row is three (${theme})`, async () => {
+    it(`at 1600 every row is two lines (one for the main checkout project-a), project-a-review-wave-two included (${theme})`, async () => {
       const { ctx, page } = await open(theme, 1600, 900, '/');
       try {
         const rows = await measureRows(page);
         for (const r of rows) {
-          const want = r.id === 'project-a-project-a-review-wave-two' ? 3 : r.id === 'project-a' ? 1 : 2;
+          // T3b (R21's F2): with the state word on the context line, the needs-you row whose name and state did not fit
+          // side by side is two lines, not three.
+          const want = r.id === 'project-a' ? 1 : 2;
           expect(r.lines, `${r.id}: lines`).toBe(want);
         }
       } finally {
