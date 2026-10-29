@@ -45,8 +45,9 @@
   --pg: var(--ink-secondary);
   --pg-tint: var(--bg-surface);
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: var(--sp-1);
+  gap: 2px var(--sp-1);
   min-width: 0;
   padding: var(--sp-1) var(--sp-2);
   background: var(--pg-tint);
@@ -62,7 +63,9 @@
 .pg-word { flex: none; text-transform: uppercase; letter-spacing: 0.08em; }
 .pg-sep,
 .pg-also { flex: none; }
-.pg-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* The title before the progress: in a narrow column the progress wraps below it, and only a title longer than the
+   whole line is cut. */
+.pg-title { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pg-prog { margin-left: auto; display: flex; align-items: center; gap: var(--sp-1); flex: none; }
 .pg-count { white-space: nowrap; }
 /* The bar is a picture of the count beside it, never the only cue: a non-text rule in the hue. */
@@ -99,7 +102,7 @@
 .pg-tray [data-hue='blue'] .sess-pw-prog { color: var(--prog-blue); }
 
 .pg-foot { padding: 0 var(--sp-2); border-top: 1px solid var(--edge-subtle); background: var(--bg-surface); }
-.pg-foot .proj-children-toggle { width: 100%; min-height: 32px; }
+.pg-foot .proj-children-toggle { width: 100%; }
 
 /* The workers of programmes elsewhere: each slug in its programme's hue, on the card's surface. */
 .pg-elsewhere { display: flex; flex-direction: column; background: var(--bg-surface); color: var(--ink-primary); }

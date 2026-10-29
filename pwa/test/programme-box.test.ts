@@ -3,6 +3,7 @@
 // is pinned in `programme-box-card.test.tsx`.
 import { describe, expect, it } from 'vitest';
 import type { FleetSession, RunSummary } from '../../shared/api';
+import { fleetTree } from '../src/fleet/fleetTree';
 import { nestFleet } from '../src/fleet/nestFleet';
 import {
   PROG_HUES, assignHues, boxNeeds, boxOrder, boxState, movementWords, programmeBoxes, type BoxState, type ProgrammeBoxView,
@@ -183,6 +184,24 @@ describe('programmeBoxes', () => {
     expect(boxNeeds(only(boxesOf([coord, kid('w1'), kid('w2')], runs)))).toBe(false);
     const askingCoord = sess('coord', 'project-c', { role: 'coordinator', ...asking() });
     expect(boxNeeds(only(boxesOf([askingCoord, kid('w1'), kid('w2')], runs)))).toBe(true);
+  });
+});
+
+describe('fleetTree\'s cross-card run index (`claimed`)', () => {
+  it('gives a card the runs its sessions claim whose worker renders on another card, and no other', () => {
+    const c = sess('coord', 'project-d', { role: 'coordinator' });
+    const near = sess('w1', 'project-d', { role: 'child' });
+    const far = sess('w9', 'project-c', { role: 'child' });
+    const runs = [run(10, 'coord', 'w1', { project: 'project-d' }), run(30, 'coord', 'w9', { project: 'project-c' })];
+    const tree = fleetTree([c, near, far], [], runs);
+    const card = (p: string) => tree.find((g) => g.project === p)!;
+    expect(card('project-d').claimed.map((r) => r.id)).toEqual([30]);
+    expect(card('project-d').runs.map((r) => r.id)).toEqual([10]);
+    expect(card('project-c').claimed).toEqual([]);
+    expect(card('project-c').runs.map((r) => r.id)).toEqual([30]);
+    // The card's box reads both lists: the far worker is its abroad, never a second copy of its row.
+    const d = card('project-d');
+    expect(only(programmeBoxes(d.rows, [...d.runs, ...d.claimed], () => null)).abroad.map((r) => r.id)).toEqual([30]);
   });
 });
 
