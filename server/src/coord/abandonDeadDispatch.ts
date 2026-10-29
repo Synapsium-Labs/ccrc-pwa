@@ -63,6 +63,7 @@ export interface AbandonDeadDispatchOutcome {
 /** The registry as the verdict reads it, from ONE measured read: rows, refused names, and the pause from its listing. */
 async function registryFacts(deps: Pick<AbandonDeadDispatchDeps, 'io' | 'cfg'>): Promise<DeadDispatchRegistry> {
   let read;
+  // [registry-refused:refuses] an unlistable registry, or any refused name, keeps every run: the verdict abandons none.
   try { read = await readRegistryMeasured(deps.io, deps.cfg); } catch { return { listed: false }; }
   if (!read.listed) return { listed: false };
   return {
