@@ -300,3 +300,27 @@ describe('the PWA reads "archived" from the bucket, through isArchivedRow (C7j, 
     expect(archivedChecks().map((s) => `${s.file}#${s.symbol}`)).toEqual([]);
   });
 });
+
+// C7k (D-7189; ARCH-75 #810, PR 2): a session's path has one builder, `lib/routes.ts#sessionPath`, beside the route
+// table row that parses it, and `POST /api/sessions/:id/ensure` has one owner, `session/useEnsure.ts#ensureSession`,
+// which the two Restart buttons (through `useEnsure`), the wake on open, the swap sheet's toast Wake, a main checkout's
+// Restore and the Resume sheet's default read. Read through W7's census (`census-w7/pwa.ts#sessionPathLiterals` and
+// `#ensureCallers`, whose FIXTURE rows red an inline template and a default parameter `ensure = api.ensure`), imported
+// in the block. Each count may only go down.
+describe('one session path and one ensure (C7k, D-7189)', () => {
+  const site = (s: { file: string; symbol: string }): string => `${s.file}#${s.symbol}`;
+
+  it('sessionPathLiterals(): 0 (from 13) string expressions starting /s/ outside sessionPath; may only shrink', async () => {
+    const { SESSION_PATH_OWNER, sessionPathLiterals } = await import('../census-w7/pwa.js');
+    const sites = sessionPathLiterals();
+    expect(sites.filter((s) => site(s) !== SESSION_PATH_OWNER).map((s) => `${site(s)} ${s.text}`)).toEqual([]);
+    expect(sites.map(site)).toEqual([SESSION_PATH_OWNER]);
+  });
+
+  it('ensureCallers(): 1 (from 6) owner of api.ensure, calls and member references, useEnsure.ts#ensureSession; may only shrink', async () => {
+    const { ENSURE_OWNER, ensureCallers } = await import('../census-w7/pwa.js');
+    const sites = ensureCallers();
+    expect(sites.length).toBeLessThanOrEqual(1);
+    expect(sites.map((s) => `${site(s)} [${s.kind}]`)).toEqual([`${ENSURE_OWNER} [call]`]);
+  });
+});
