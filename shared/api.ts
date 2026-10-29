@@ -953,6 +953,11 @@ export type PrChecks = 'pass' | 'fail' | 'pending' | 'unmeasured' | null;
  * deployment's landed-in-train label, but ccd could not prove the landing from the train record (the train PR it names
  * is MERGED and lists it at exactly its head). A label alone never makes a PR merged, so it stays closed and says why.
  *
+ * `train-unread` (D-7378) is that same labelled CLOSED PR when its train record could not be READ at all: no budget
+ * (the `--project` sweep has none and reads only kept proofs), a timeout, GitHub unreachable. It is a failed read, so
+ * the phase is `unknown`: never `closed`, which would end a run on a PR that may well have landed. `ccd pr-train-prove`
+ * proves it and keeps the proof, and the next sweep reads `merged`.
+ *
  * Integration finding 7. This vocabulary lived in FOUR places: this union
  * (inline in `PrState.reason`), the snapshot-revival list below, `prstate.ts`'s
  * `REASONS` Set, and `PrKeycap.tsx`'s `REASON_TEXT`. Only the last of the four
@@ -971,7 +976,7 @@ export type PrReason =
   | 'no-remote' | 'unsupported' | 'agent-down' | 'error'
   | 'merge-unproven' | 'branch-drift'
   | 'unavailable' | 'truncated' | 'cut-short'
-  | 'train-unproven';
+  | 'train-unproven' | 'train-unread';
 
 /**
  * The runtime list, derived from the type. `Record<PrReason, true>` is what
@@ -993,7 +998,7 @@ const PR_REASON_MAP: Record<PrReason, true> = {
   'no-remote': true, unsupported: true, 'agent-down': true, error: true,
   'merge-unproven': true, 'branch-drift': true,
   unavailable: true, truncated: true, 'cut-short': true,
-  'train-unproven': true,
+  'train-unproven': true, 'train-unread': true,
 };
 export const PR_REASONS: readonly PrReason[] = Object.keys(PR_REASON_MAP) as PrReason[];
 

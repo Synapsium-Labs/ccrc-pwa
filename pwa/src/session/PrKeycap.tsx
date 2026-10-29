@@ -109,6 +109,9 @@ const REASON_TEXT: Record<PrReason, string> = {
   // The third reason that is NOT a failed read, and the one a `closed` phase carries (D-7362): GitHub answered, the PR
   // wears the landed-in-train label, and no merged train PR lists it at its head, so ccrc will not call it merged.
   'train-unproven': 'It is labelled as landed in a merge train, but no merged train PR lists it at its head, so ccrc will not call it merged.',
+  // A FAILED read (D-7378): the same label, and the train record was not read yet. Not closed and not merged; ccrc
+  // reads the record on its own and says which once it has.
+  'train-unread': 'It is labelled as landed in a merge train, and ccrc has not read the train’s record yet. ccrc will try again.',
   // The second reason that is NOT a failed read: ccrc's registry and git
   // disagree about which branch this workspace is on, so there are two
   // candidate answers to "its PR" and ccd measured neither rather than

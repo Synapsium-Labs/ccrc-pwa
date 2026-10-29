@@ -38,7 +38,8 @@ gh() {
       if [[ -f "$HOME/rules-\${2##*/}.json" ]]; then cat "$HOME/rules-\${2##*/}.json"; elif [[ -f "$HOME/rules.json" ]]; then cat "$HOME/rules.json"; fi; return "$rc" ;;
     'api repos/o/r/branches/'*) if [[ -f "$HOME/branch-\${2##*/}.json" ]]; then cat "$HOME/branch-\${2##*/}.json"; elif [[ -f "$HOME/branch.json" ]]; then cat "$HOME/branch.json"; fi; return 0 ;;
     'pr list') echo '[]'; return 0 ;;
-    'pr view') [[ -f "$HOME/view-$3.json" ]] && { cat "$HOME/view-$3.json"; return 0; }; return 1 ;;
+    'pr view') [[ -f "$HOME/view-$3.rc" ]] && return "$(cat "$HOME/view-$3.rc")"
+      [[ -f "$HOME/view-$3.json" ]] && { cat "$HOME/view-$3.json"; return 0; }; return 1 ;;
   esac
   return 1
 };
@@ -411,13 +412,16 @@ describe('the required contexts', () => {
   });
 
   it.each([
-    ['CLOSED', 'wontfix', false], ['CLOSED', 'landed-in-train', false], ['MERGED', 'landed-in-train', false],
-    ['OPEN', 'landed-in-train', false],
-  ])("GitHub's state word passes through raw: %s carrying %s, with no train record, landedInTrain %s", (state, label, landed) => {
+    ['CLOSED', 'wontfix', false, []], ['CLOSED', 'landed-in-train', false, ['train']],
+    ['MERGED', 'landed-in-train', false, []], ['OPEN', 'landed-in-train', false, []],
+  ])("GitHub's state word passes through raw: %s carrying %s, with no train record, landedInTrain %s", (state, label, landed, unm) => {
     // A label with no train record behind it is never a landing (D-7362):
-    // this fixture's gh names no train, so the merged notice cannot fire.
+    // this fixture's gh answers no `pr view` for the member at all, so the
+    // record was not READ, and a labelled CLOSED member is unmeasured
+    // (`train`, D-7378), never closed: the merged notice cannot fire and the
+    // closed end cannot either.
     expect(one([], { state, labels: { nodes: [{ name: label }] } }))
-      .toMatchObject({ bound: true, state, landedInTrain: landed });
+      .toMatchObject({ bound: true, state, landedInTrain: landed, unmeasured: unm });
   });
 
   // RED-FIRST ROWS (D-7362): `landedInTrain` is ccd's proof from the train
@@ -450,6 +454,40 @@ describe('the required contexts', () => {
   it('a labelled PR the train lists at a different sha is not landedInTrain', () => {
     expect(labelled(() => trainPr([[41, 'c'.repeat(40)]])))
       .toMatchObject({ bound: true, state: 'CLOSED', landedInTrain: false });
+  });
+
+  // D-7378: a proof that could not be READ is unmeasured, so `landingLineAct`
+  // answers unmeasured and `checksEnd` sends no closed end; a proof that was
+  // read and failed is `closed`.
+  it('a train read the call\'s budget kills (124) is unmeasured, never closed', async () => {
+    const { landingLineAct } = await import('../src/coord/landing.js');
+    const { readPrLandingLine } = await import('../src/prstate.js');
+    put('view-50.rc', '124');
+    const l = labelled((t0) => trainPr([[41, t0]]));
+    expect(l).toMatchObject({ bound: true, state: 'CLOSED', landedInTrain: false, unmeasured: ['train'] });
+    expect(landingLineAct({ pr: 41 } as never, readPrLandingLine(l))).toEqual({ act: 'unmeasured' });
+  });
+
+  it('the member\'s comments timing out is unmeasured too', () => {
+    put('view-41.rc', '124');
+    expect(labelled((t0) => trainPr([[41, t0]]))).toMatchObject({ landedInTrain: false, unmeasured: ['train'] });
+  });
+
+  it('a proof read and failed is closed, measured: the closed end may follow', async () => {
+    const { landingLineAct } = await import('../src/coord/landing.js');
+    const { readPrLandingLine } = await import('../src/prstate.js');
+    const l = labelled((t0) => trainPr([[41, t0]], { state: 'CLOSED', mergedAt: null, mergeCommit: null }));
+    expect(l).toMatchObject({ landedInTrain: false, unmeasured: [] });
+    expect(landingLineAct({ pr: 41 } as never, readPrLandingLine(l))).toEqual({ act: 'left', phase: 'closed' });
+  });
+
+  it('a proof the prover kept answers the landing read with no train call', () => {
+    const t0 = workspace('demo', 'quiet-basin');
+    fs.writeFileSync(path.join(h.home, '.cc-sessions', '.train-proofs'), `o/r main 41 ${t0} 50 ${TRAIN_MERGE}\n`);
+    put('gql.json', answer([pr(41, 'quiet-basin', t0, [], { state: 'CLOSED', labels: { nodes: [{ name: 'landed-in-train' }] } })]));
+    emptyRules();
+    expect(landing('demo', 'demo-quiet-basin:41').lines[0]).toMatchObject({ landedInTrain: true, unmeasured: [] });
+    expect(calls().some((c) => c[0] === 'pr' && c[1] === 'view')).toBe(false);
   });
 
   it('keeps no proof: the landing read writes nothing under $REG', () => {

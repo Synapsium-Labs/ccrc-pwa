@@ -190,12 +190,13 @@ describe('the five answers', () => {
     h.ghRows([openRow({ state: 'CLOSED', headRefOid: tip, closedAt: '2026-07-21T09:00:00Z',
       labels: [{ name: 'landed-in-train' }] })]);
     setQueue(answer([node(7, 'OPEN', true, 'AddedToMergeQueueEvent')]));
-    // The sweep reads only proofs already kept (D-7362): no proof is closed,
-    // `train-unproven`, and a closed PR is in no queue either.
-    const unproven = sweep();
-    expect([unproven.phase, unproven.reason, unproven.queue]).toEqual(['closed', 'train-unproven', 'none']);
-    // The proof a `--session` read, a landing read or an audit kept.
-    fs.appendFileSync(path.join(h.home, '.cc-sessions', '.train-proofs'), `o/r 42 ${tip} 50 ${'e'.repeat(40)}\n`);
+    // The sweep reads only proofs already kept (D-7362): with none kept the
+    // record was not read, so the phase is unmeasured (`train-unread`,
+    // D-7378) and so is the queue word — never `none` off a guess.
+    const unread = sweep();
+    expect([unread.phase, unread.reason, unread.queue]).toEqual(['unknown', 'train-unread', 'unmeasured']);
+    // The proof a `--session` read, an audit or `pr-train-prove` kept, keyed by base.
+    fs.appendFileSync(path.join(h.home, '.cc-sessions', '.train-proofs'), `o/r main 42 ${tip} 50 ${'e'.repeat(40)}\n`);
     const o = sweep();
     expect(o.phase).toBe('merged');
     expect(o.queue).toBe('none');

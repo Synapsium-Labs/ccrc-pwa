@@ -6738,15 +6738,23 @@ is an issue, a missing number or unreadable is only a failed candidate), or one
 a search finds whose record lists the member's head sha, must be MERGED into
 the same base and its record must list the member at exactly the member's head;
 the reap also requires that the branch hold nothing beyond that head. A
-labelled PR without that proof reads as closed, with reason `train-unproven`
-(`trainUnproven: true` on the row), and the reap refuses it `not-merged`, or
-`gh-unreadable` only when GitHub itself could not be read. A CLOSED train that
-never merged proves nothing. The token's merge fact is the train PR's merge
-commit, so main later editing the same lines never turns a proven landing into
-a refusal. A proof, once made, is kept in `$REG/.train-proofs` (a merged train
-never un-merges), which is how the `pr-state --project` sweep, which has no time
-left for train reads, sees a landing a `--session` read, a landing read or an
-audit proved.
+labelled PR whose train record was read and did not prove it (the train is
+CLOSED unmerged, lists another sha, or no train names it) reads as closed, with
+reason `train-unproven` (`trainUnproven: true` on the row), and the reap refuses
+it `not-merged`. A labelled PR whose train record could not be READ (no time
+left in the read's budget, a timeout, GitHub unreachable) is neither closed nor
+merged: it reads `unknown` with reason `train-unread` (`trainUnread: true` on
+the row; `pr-landing` adds `train` to the line's `unmeasured`), so nothing ends
+a run on it, and the reap refuses it `gh-unreadable` (D-7378). A CLOSED train
+that never merged proves nothing. The token's merge fact is the train PR's
+merge commit, so main later editing the same lines never turns a proven landing
+into a refusal. A proof, once made, is kept in `$REG/.train-proofs`, one line
+per member keyed by repository, base, number and head (a merged train never
+un-merges; a refusal is never kept). The `pr-state --project` sweep has no time
+left for train reads and reads only kept proofs, so the server follows a sweep
+that read `train-unread` with `ccd pr-train-prove --project <p>`: its own verb
+and timeout row, proving at most `PR_TRAIN_PROVE_MAX` members once each and
+keeping the proofs, so the next sweep reads `merged`.
 
 **The train record (D-7335)** is the one machine-readable block in a train PR's
 body, and a train tool writes exactly one: an HTML comment on lines of its own,

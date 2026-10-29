@@ -457,6 +457,9 @@ export const EXEC_WHITELIST = {
     ['pr-state', '--project'],
     // D-6784: the checks lane's read-only PR read; the verb takes only --project and --sessions.
     ['pr-landing', '--project'],
+    // D-7378: the bounded train prover; it takes only --project (and ccd's own --max default), reads GitHub and keeps
+    // train proofs in the registry, nothing else.
+    ['pr-train-prove', '--project'],
     ['pr-open',  '--session'],
     ['ws-archive', '--session'],
     ['ws-restore', '--session'],

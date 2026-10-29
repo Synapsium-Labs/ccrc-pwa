@@ -31,6 +31,9 @@ export interface CcdPrRow {
   /** ccd's other half of the same judgement: CLOSED with the train label and NOT proven by the train record, so
    *  `closed` with reason `train-unproven`, never merged. Absent on a row from an older ccd. */
   trainUnproven?: boolean;
+  /** The third answer (D-7378): CLOSED with the train label and the train record NOT READ (no budget, a timeout,
+   *  GitHub unreachable), so `unknown` with reason `train-unread` — unmeasured, never closed. */
+  trainUnread?: boolean;
 }
 
 export interface CcdPrLine {
@@ -253,6 +256,8 @@ export function phaseFor(line: CcdPrLine): PrState {
   // for the same row (Task 3), and Step 6's agreement test pins the two equal on
   // `reason` as well as `phase`.
   if (row.state === 'MERGED') return { ...common, phase: 'unknown', reason: 'merge-unproven' };
+  // A train label whose record ccd did not READ (D-7378): unmeasured, never closed — ccd's `train-unread`.
+  if (row.state === 'CLOSED' && row.trainUnread === true) return { ...common, phase: 'unknown', reason: 'train-unread' };
   // A train label ccd could not prove from the train record: closed, and why (`train-unproven`, D-7362).
   if (row.state === 'CLOSED') {
     return { ...common, phase: 'closed', reason: row.trainUnproven === true ? 'train-unproven' : null };

@@ -162,3 +162,37 @@ describe('pr-landing fits inside the bound that kills it (D-6784)', () => {
     for (const c of new Set(CALLS)) expect(ccdSeconds(c), c).toBeLessThan(verbTimeoutMs('pr-landing') / 1000);
   });
 });
+
+describe('pr-train-prove fits inside its own bound, and pr-state keeps its own (D-7378)', () => {
+  // The bounded prover the 120 s sweep runs after `pr-state --project`: ONE row-window call (`_gh_pr_list`,
+  // PR_GH_TIMEOUT) and then PR_TRAIN_PROVE_TIMEOUT over every train read of the call together, each read bounded by
+  // what is left of it. Its own row in CCD_VERB_TIMEOUT_MS, so the coordMutex-held `pr-state` bound is not raised.
+  const CALLS = ['PR_GH_TIMEOUT', 'PR_TRAIN_PROVE_TIMEOUT'] as const;
+
+  it('the row window plus the train budget leave room for the per-workspace loop', () => {
+    const secs = CALLS.map((c) => ccdSeconds(c));
+    secs.forEach((s, i) => expect(s, `${CALLS[i]} read as zero`).toBeGreaterThan(0));
+    const budgetS = verbTimeoutMs('pr-train-prove') / 1000;
+    expect(budgetS, 'the outer bound read as zero').toBeGreaterThan(0);
+    const sum = secs.reduce((a, b) => a + b, 0);
+    expect(sum, `${secs.join('s + ')}s against ${budgetS}s`).toBeLessThanOrEqual(budgetS * (1 - LOCAL_LOOP_RESERVE));
+  });
+
+  it('K is small, and the deadline is set once per call from the prover budget', () => {
+    const k = ccdSeconds('PR_TRAIN_PROVE_MAX');
+    expect(k).toBeGreaterThan(0);
+    expect(k).toBeLessThanOrEqual(4);
+    const src = ccdSource();
+    const start = src.indexOf('\ncmd_pr_train_prove()');
+    expect(start, 'cmd_pr_train_prove moved').toBeGreaterThan(0);
+    const body = src.slice(start, src.indexOf('\n}\n', start));
+    expect(body).toContain('local _PR_TRAIN_DEADLINE=$(( SECONDS + PR_TRAIN_PROVE_TIMEOUT ))');
+    // Its gh reads are the row window and `_ws_train_record`'s, which take their bound from that deadline.
+    expect(body).toContain('rows=$(_gh_pr_list "$repo")');
+    expect(body).not.toMatch(/_plat_timeout [^\n]* gh /);
+  });
+
+  it('the pr-state bound is untouched by the prover: still the 25 s the three-call pin sums against', () => {
+    expect(verbTimeoutMs('pr-state')).toBe(25_000);
+  });
+});

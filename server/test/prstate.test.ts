@@ -291,6 +291,18 @@ describe('a PR closed as landed in a merge train', () => {
     expect(b.bucket).not.toBe('cleanup');
   });
 
+  it('a label whose train record was not READ is unknown, train-unread: never closed, never merged (D-7378)', () => {
+    const r = landed({ landedInTrain: false, trainUnproven: false, trainUnread: true });
+    expect(isMergedRow(r, 'main', 'ws/quiet-basin')).toBe(false);
+    const s = phaseFor(line({ rows: [r] }));
+    expect([s.phase, s.reason]).toEqual(['unknown', 'train-unread']);
+    const b = sessionBucket({
+      status: 'dead', statusUpdatedAt: 1000, dialogPending: false, hookState: null,
+      archivedAt: 1_800_000_000, pr: s, background: null,
+    }, null);
+    expect(b.bucket).not.toBe('cleanup');
+  });
+
   it('a plain closed PR carries no reason', () => {
     expect(phaseFor(line({ rows: [landed({ landedInTrain: false })] })).reason).toBeNull();
   });
