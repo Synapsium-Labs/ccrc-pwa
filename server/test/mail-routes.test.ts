@@ -784,6 +784,24 @@ describe('the rejection table is total, in both directions', () => {
       'stash-failed',
       'stash-occupied',
       'enter-ignored',
+      // LANDING ORDER WAVE 4 (plan docs/superpowers/plans/2026-10-27-landing-order-wave4-lineage-acceptance.md, Task 1):
+      // `coord/lineage.ts` spells wave 3b's walk-stop words (`LINEAGE_STOPS`, the radar's vocabulary, written into a
+      // lineage file and only read here) and the DETAIL words of `decideLineage`'s answers. A detail is free text
+      // appended to a refusal's own body (` (<detail>)`) or to `lineage-unmeasured`'s, never a code of its own: no
+      // route, no `error`/`refused`/`reject.code` field and no wire union carries one by itself.
+      'not-a-merge',
+      'second-parent-not-on-base',
+      'tree-differs',
+      'landing-marker-unreadable',
+      'landing-marker-stale',
+      'lineage-not-expected',
+      'not-yet-measured',
+      'lineage-unreadable',
+      'lineage-stale',
+      'tip-unmeasured',
+      'older-than-the-live-tip',
+      'partly-measured',
+      'land-probe-paused',    // `coord/lineageRead.ts`: the global pause marker's FILE NAME under `$REG`, wave 3b's; a path segment
     ]);
     for (const m of sources().matchAll(/'([a-z]+(?:-[a-z]+)+)'/g)) {
       const tok = m[1]!;
