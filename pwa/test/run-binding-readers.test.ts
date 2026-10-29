@@ -4,7 +4,9 @@
 // arm; `coordinatorOf` is a named by-id lookup for every run; `claimedRunsOf` is the one coordinator-side reader;
 // `boundOpenRun` is the session's open bound run as the runs list carries it.
 import { describe, it, expect } from 'vitest';
-import type { FleetSession, RunSummary, SessionRun } from '../../shared/api';
+import { childIdsOf, sessionRunOf, type FleetSession, type RunSummary, type SessionRun } from '../../shared/api';
+import { coordinationOf, fleetTree, parentIdOf } from '../src/fleet/fleetTree';
+import { orphanNote } from '../src/fleet/orphanWords';
 import { fleetSession } from './fleetFixture';
 import { boundOpenRun, claimedRunsOf, coordinatorOf, workerOf } from '../src/fleet/runWords';
 import { coordinatorPresence } from '../src/fleet/presence';
@@ -125,5 +127,35 @@ describe('boundOpenRun: the session\'s open bound run, as the runs list carries 
     expect(boundOpenRun([run(51)], worker({}))).toBeNull();
     expect(boundOpenRun([run(83)], worker({ run: null, openRun: null }))).toBeNull();
     expect(boundOpenRun([run(10)], worker({ run: bound(run(99)), openRun: bound(run(99)) }))).toBeNull();
+  });
+});
+
+// The skew rows (spec §5.1 rule 1c; Task C7d Step 12): the new PWA against a server predating ARCH-61's server half
+// (#1546), whose fleet frame carries no `run` or `openRun` key and whose runs carry no `childIds`. The keys read as
+// `null`, `null` and `[]`, and every worker-side surface then shows what it shows for a session with no run: no
+// bracket, no header programme line, no hold door, no orphan marker. The coordinator side is unchanged (`coordinatorOf`
+// and `claimedRunsOf` read the run's claimant id, D-7207), so the palette's programme terms and the Resume door stay.
+describe('the skew rows: an older server sends no binding', () => {
+  const coordS = coord({ status: 'idle', bucket: 'idle', lifecycle: 'running', name: 'the coordinator' });
+  const workerS = worker({ held: 'program:program-10 wave:1/2 run:10' });
+  const r10 = run(10);
+  it('the binding keys read null, null and []', () => {
+    expect(sessionRunOf(workerS)).toBeNull();
+    expect(sessionRunOf(workerS, 'open')).toBeNull();
+    expect(childIdsOf(r10)).toEqual([]);
+  });
+  it('the worker-side readers answer as for a session with no run', () => {
+    const fleet = [coordS, workerS];
+    const rowsOf = (runs: RunSummary[]): string[] => fleetTree(fleet, [], runs).flatMap((g) => g.rows.map((x) => (x.kind === 'session' ? `${x.session.id}:${x.depth}` : `spawn:${x.run.id}`)));
+    expect(rowsOf([r10])).toEqual(rowsOf([]));
+    expect(parentIdOf(workerS, [r10])).toBeNull();
+    expect(coordinationOf(workerS, fleet, [r10])).toEqual(coordinationOf(workerS, fleet, []));
+    expect(boundOpenRun([r10], workerS)).toBeNull();
+    expect(orphanNote({ kind: 'session', depth: 0, session: workerS }, [r10], 'project-a', [workerS], () => null, true)).toBeNull();
+    expect(workerOf(r10, byId(...fleet))).toBeNull();
+  });
+  it('the coordinator side keeps today\'s answer: the claimant, and its claimed open runs', () => {
+    expect(idOf(coordinatorOf(r10, byId(coordS, workerS)))).toBe(C);
+    expect(claimedRunsOf([r10], C).map((r) => r.id)).toEqual([10]);
   });
 });
