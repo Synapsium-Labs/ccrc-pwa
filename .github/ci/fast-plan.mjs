@@ -315,10 +315,11 @@ export const SCANNER_MAX_MS = 10_000;
  * detector's alone.
  * @param {string[]} live @param {(file: string) => string} readSource @param {Record<string, number> | null} [durations]
  * @param {Record<string, string[]> | null} [recorded]
+ * @param {Map<string, unknown>} [memo] the static detector's per-file results (`scansSourceTree`'s memo); a caller that
+ *   asks more than once over the same `readSource` passes one, so the tree is scanned once, not once per call
  * @returns {Array<{ file: string, hit: string, ms: number | null }>}
  */
-export function treeScanners(live, readSource, durations = null, recorded = null) {
-  const memo = new Map();
+export function treeScanners(live, readSource, durations = null, recorded = null, memo = new Map()) {
   const out = [];
   const ms = (f) => (durations && typeof durations[f] === 'number' ? durations[f] : null);
   for (const f of live) {
@@ -337,10 +338,11 @@ export function treeScanners(live, readSource, durations = null, recorded = null
  * @param {string[]} live repo-relative test paths @param {(file: string) => string} readSource
  * @param {Record<string, number> | null} [durations] the full run's per-file durations, ms
  * @param {Record<string, string[]> | null} [recorded] the full run's recorded tree scanners, or null
+ * @param {Map<string, unknown>} [memo] the static detector's memo, as `treeScanners` takes it
  * @returns {string[]}
  */
-export function guardTests(live, readSource, durations = null, recorded = null) {
-  const scanners = new Set(treeScanners(live, readSource, durations, recorded).filter((s) => s.ms === null || s.ms <= SCANNER_MAX_MS).map((s) => s.file));
+export function guardTests(live, readSource, durations = null, recorded = null, memo = new Map()) {
+  const scanners = new Set(treeScanners(live, readSource, durations, recorded, memo).filter((s) => s.ms === null || s.ms <= SCANNER_MAX_MS).map((s) => s.file));
   return live.filter((f) => {
     if (GUARD_TESTS.some((re) => re.test(f)) && !PIN_MAP_CARRIED.includes(f)) return true;
     let src = '';
@@ -447,8 +449,9 @@ function main() {
     // The full run's recorded scanners, unioned with the static detector's; null (no --scanners, or not readable):
     // the static detector's alone.
     const recorded = readTreeScanners(opt.scanners);
-    const guards = guardTests(live, readSource, durations, recorded);
-    const heavy = treeScanners(live, readSource, durations, recorded).filter((s) => s.ms !== null && s.ms > SCANNER_MAX_MS);
+    const memo = new Map(); // one static scan of the tree for both
+    const guards = guardTests(live, readSource, durations, recorded, memo);
+    const heavy = treeScanners(live, readSource, durations, recorded, memo).filter((s) => s.ms !== null && s.ms > SCANNER_MAX_MS);
     const sel = fastSelection({ live, related, untraced, guards, changed });
     // Never an empty matrix: the guard suites always run, so an empty selection means the lists went blind.
     if (sel.files.length === 0) throw new Error('the fast selection is empty — no guard suite matched');

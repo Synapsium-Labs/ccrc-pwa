@@ -17,6 +17,10 @@ import { untracedOutput } from '../../.github/ci/select.mjs';
 import { globBase, mergeScans, parseScanLines, readTreeScanners, rootOf, wrapListers } from '../../.github/ci/tree-scanners.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
+// The static detector's results over this tree, shared by every call below that reads it with readFileSync under ROOT:
+// one scan of every live test costs seconds, and a case that asked it afresh four times ran past the 20 s test budget on
+// a loaded full-suite shard. The answers are the same, since the memo holds only per-file results of the same source.
+const ROOT_SCANS = new Map();
 const PLAN = path.join(ROOT, '.github', 'ci', 'fast-plan.mjs');
 
 /** The static detector's positive shapes. The scanShape row holds that the detector finds each; the SELF-CHECK runs each
@@ -96,7 +100,7 @@ describe('fastSelection: the related tests, every guard suite, and the hook suit
 
 describe('the guard suites: patterns, less the map-carried pins, plus every test that reads the tree or the diff itself', () => {
   const live = liveTestFiles(ROOT);
-  const guards = guardTests(live, (f) => readFileSync(path.join(ROOT, f), 'utf8'));
+  const guards = guardTests(live, (f) => readFileSync(path.join(ROOT, f), 'utf8'), null, null, ROOT_SCANS);
 
   it('every guard family the ruling names matches a live test in this tree', () => {
     for (const family of ['census', 'single-definition', 'deviation-refs', 'growth-check', 'ownership', 'rings/', 'ccd-contexts',
@@ -152,7 +156,7 @@ describe('the tree scanners: every test that lists a source tree itself runs on 
   const read = (f: string): string => readFileSync(path.join(ROOT, f), 'utf8');
 
   it('a pull request touching only server/src/coord/childReclaim.ts runs the plain io.readdir ratchet (fleetio-contract)', () => {
-    const guards = guardTests(live, read);
+    const guards = guardTests(live, read, null, null, ROOT_SCANS);
     const sel = fastSelection({ live, related: [], guards, changed: ['server/src/coord/childReclaim.ts'] });
     expect(sel.files).toContain('server/test/fleetio-contract.test.ts');
   });
@@ -197,17 +201,17 @@ describe('the tree scanners: every test that lists a source tree itself runs on 
 
   it('a scanner whose file measured over SCANNER_MAX_MS is left to the merge queue; an unmeasured one runs', () => {
     const light = 'server/test/fleetio-contract.test.ts';
-    const scanners = treeScanners(live, read).map((s) => s.file);
+    const scanners = treeScanners(live, read, null, null, ROOT_SCANS).map((s) => s.file);
     expect(scanners).toContain(light);
     // A scanner that is neither a pattern guard nor a TREE_READER, so the cap is the only thing that can drop it.
     const heavyOne = scanners.find((f) => !GUARD_TESTS.some((re) => re.test(f)) && !TREE_READER.test(read(f)) && f !== light) ?? '';
     expect(heavyOne).not.toBe('');
-    const guards = guardTests(live, read, { [light]: 100, [heavyOne]: SCANNER_MAX_MS + 1 });
+    const guards = guardTests(live, read, { [light]: 100, [heavyOne]: SCANNER_MAX_MS + 1 }, null, ROOT_SCANS);
     expect(guards).toContain(light);
     expect(guards).not.toContain(heavyOne);
-    expect(guardTests(live, read, {})).toContain(heavyOne);
+    expect(guardTests(live, read, {}, null, ROOT_SCANS)).toContain(heavyOne);
     // The cap never drops a pattern guard.
-    expect(guardTests(live, read, { 'server/test/deviation-refs.test.ts': 10 * SCANNER_MAX_MS })).toContain('server/test/deviation-refs.test.ts');
+    expect(guardTests(live, read, { 'server/test/deviation-refs.test.ts': 10 * SCANNER_MAX_MS }, null, ROOT_SCANS)).toContain('server/test/deviation-refs.test.ts');
   });
 
   // The capture holds the fallback: every shape the static detector finds, run for real under the runtime capture, is
@@ -243,7 +247,7 @@ describe('the tree scanners: every test that lists a source tree itself runs on 
   });
 
   it('the map-carried pins stay out even when they scan', () => {
-    const scanners = treeScanners(live, read).map((s) => s.file);
+    const scanners = treeScanners(live, read, null, null, ROOT_SCANS).map((s) => s.file);
     for (const f of PIN_MAP_CARRIED) expect(scanners, f).not.toContain(f);
   });
 });
@@ -330,23 +334,23 @@ describe('the tree-scan capture (tree-scanners.mjs): what a full run records, an
     const recordedOnly = 'server/test/tmp-sweep.test.ts';
     const staticOnly = 'server/test/fleetio-contract.test.ts';
     const heavy = 'server/test/ccrc-sweep-window.test.ts';
-    expect(scansSourceTree(recordedOnly, read)).toBeNull();
+    expect(scansSourceTree(recordedOnly, read, ROOT_SCANS)).toBeNull();
     const recorded = { [recordedOnly]: ['server/src'], [heavy]: ['ccd'] };
-    const guards = guardTests(live, read, { [heavy]: SCANNER_MAX_MS + 1 }, recorded);
+    const guards = guardTests(live, read, { [heavy]: SCANNER_MAX_MS + 1 }, recorded, ROOT_SCANS);
     expect(guards).toContain(recordedOnly);
     expect(guards).toContain(staticOnly);
     expect(guards).not.toContain(heavy);
-    const staticSet = treeScanners(live, read).map((t) => t.file);
+    const staticSet = treeScanners(live, read, null, null, ROOT_SCANS).map((t) => t.file);
     expect(staticSet).toContain(staticOnly);
     expect(staticSet).not.toContain(recordedOnly);
-    expect(treeScanners(live, read, null, recorded).map((t) => t.file).sort()).toEqual([...new Set([...staticSet, heavy, recordedOnly])].sort());
+    expect(treeScanners(live, read, null, recorded, ROOT_SCANS).map((t) => t.file).sort()).toEqual([...new Set([...staticSet, heavy, recordedOnly])].sort());
     // Every static scanner is in the guard set with the record as without it (none is over the cap here).
     for (const f of staticSet) expect(guards, f).toContain(f);
     // The pattern guards and the tree readers stay, whatever was recorded.
     expect(guards).toContain('server/test/deviation-refs.test.ts');
     // No artifact (or an unreadable one): the static detector, exactly as before.
-    const fallback = guardTests(live, read, null, readTreeScanners(path.join(tmpdir(), 'no-such-tree-scanners.json')));
-    expect(fallback).toEqual(guardTests(live, read));
+    const fallback = guardTests(live, read, null, readTreeScanners(path.join(tmpdir(), 'no-such-tree-scanners.json')), ROOT_SCANS);
+    expect(fallback).toEqual(guardTests(live, read, null, null, ROOT_SCANS));
     expect(fallback).toContain(staticOnly);
     expect(fallback).not.toContain(recordedOnly);
   });
