@@ -7,7 +7,7 @@ import { AUTO, SKINS, SYSTEM, THEMES } from '@ccrc/ui';
 import type { FleetSession, RunSummary } from '../../../shared/api';
 import { fleetTree } from '../fleet/fleetTree';
 import { isRunClosed } from '../fleet/runWords';
-import { matchRoute, ROUTES } from '../lib/routes';
+import { matchRoute, ROUTES, sessionPath } from '../lib/routes';
 import type { Command, CommandContext } from './registry';
 import { sessionEntries } from './sessionEntries';
 
@@ -66,7 +66,7 @@ export function stepSession(ctx: CommandContext, step: 1 | -1): void {
   const next = at < 0
     ? (step > 0 ? 0 : list.length - 1)
     : (at + step + list.length) % list.length;
-  ctx.navigate(`/s/${encodeURIComponent(list[next]!.id)}`);
+  ctx.navigate(sessionPath(list[next]!.id));
 }
 
 /** The session's commands (W2 Task S2d, D-5466): the ⋯ menu's items on the base, plus the two header doors that
