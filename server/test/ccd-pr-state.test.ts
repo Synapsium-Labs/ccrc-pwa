@@ -4,7 +4,8 @@ import { readFileSync } from 'node:fs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { CCD, WS_ADD, ghContainedEnv, ccdSource } from './ccdWsHelpers.js';
-import { GH_STUB, makePrHarness, mergedRow, trainBlock, trainComment, trainRow, type PrHarness } from './ccdPrHelpers.js';
+import { GH_HTTP_502, GH_RATE_LIMITED, GH_STUB, makePrHarness, mergedRow, trainBlock, trainComment, trainRow,
+  type PrHarness } from './ccdPrHelpers.js';
 import { isFullLine, parsePrLines, phaseFor } from '../src/prstate.js';
 import { plantGitRecorder, type RecordedGitCall } from './ccdDocsHelpers.js';
 import { createHash } from 'node:crypto';
@@ -1645,13 +1646,15 @@ describe('a PR closed as landed in a merge train', () => {
     const { tip } = workspaceWithCommit('demo', 'quiet-basin');
     h.ghRows([mergedRow({ headRefOid: tip, ...landed('landed-in-train') })]);
     proven(tip, { state: 'CLOSED', mergedAt: null, mergeCommit: null });
-    expect(JSON.parse(h.sh(`${GH_STUB} cmd_pr_train_prove --project demo`).trim()).proof).toBe('unproven');
-    expect(proofsFile()).toBe('');
     // The member's comments time out: not read, so nothing is kept and the answer is `unread`.
     h.ghViewFail(42, 124);
     expect(JSON.parse(h.sh(`${GH_STUB} cmd_pr_train_prove --project demo`).trim()).proof).toBe('unread');
     expect(proofsFile()).toBe('');
     expect(sweep().reason).toBe('train-unread');
+    // Read now, and the train is CLOSED unmerged: a refusal, and still nothing is kept as a proof.
+    fs.rmSync(path.join(h.home, 'gh-view-42.rc'));
+    expect(JSON.parse(h.sh(`${GH_STUB} cmd_pr_train_prove --project demo`).trim()).proof).toBe('unproven');
+    expect(proofsFile()).toBe('');
   });
 
   it('pr-train-prove proves at most --max members a call, and defers the rest to the next', () => {
@@ -1702,6 +1705,161 @@ describe('a PR closed as landed in a merge train', () => {
     const o = line(h.sh(`${GH_STUB} cmd_pr_state --session demo-quiet-basin`));
     expect([o.phase, o.reason]).toEqual(['unknown', 'train-unread']);
     expect(h.reg('demo-quiet-basin', 'prphase')).not.toBe('closed');
+  });
+
+  // D-7381: a candidate FAILS only on GitHub's definitive answer about it; any
+  // other failure is UNREAD, and an unread candidate is never outvoted by an
+  // empty search fallback.
+  it.each([
+    ['an HTTP 502', 1, GH_HTTP_502],
+    ['a rate limit', 1, GH_RATE_LIMITED],
+    ['a network error', 1, 'error connecting to api.github.com\n'],
+    ['a timeout', 124, ''],
+    ['a signal', 137, ''],
+  ])('--session: a train read that fails with %s, then an empty search, is unread, never closed', (_n, rc, err) => {
+    const { tip } = workspaceWithCommit('demo', 'quiet-basin');
+    h.ghRows([mergedRow({ headRefOid: tip, ...landed('landed-in-train') })]);
+    h.ghView(42, trainComment(50));
+    h.ghViewFail(50, rc, err);
+    h.ghSearch([]);
+    const o = line(h.sh(`${GH_STUB} cmd_pr_state --session demo-quiet-basin`));
+    expect([o.phase, o.reason]).toEqual(['unknown', 'train-unread']);
+    expect([o.rows[0].trainUnread, o.rows[0].trainUnproven]).toEqual([true, false]);
+    expect(h.reg('demo-quiet-basin', 'prphase')).not.toBe('closed');
+    const s = phaseFor(o as never);
+    expect([s.phase, s.reason]).toEqual(['unknown', 'train-unread']);
+  });
+
+  it('--session: a train answer that is not a pull request\'s JSON, then an empty search, is unread', () => {
+    const { tip } = workspaceWithCommit('demo', 'quiet-basin');
+    h.ghRows([mergedRow({ headRefOid: tip, ...landed('landed-in-train') })]);
+    h.ghView(42, trainComment(50));
+    fs.writeFileSync(path.join(h.home, 'gh-view-50.json'), '<html>unicorn</html>');
+    h.ghSearch([]);
+    expect(line(h.sh(`${GH_STUB} cmd_pr_state --session demo-quiet-basin`)).reason).toBe('train-unread');
+  });
+
+  it('--session: GitHub saying the train is no pull request here, then an empty search, is closed, train-unproven', () => {
+    const { tip } = workspaceWithCommit('demo', 'quiet-basin');
+    h.ghRows([mergedRow({ headRefOid: tip, ...landed('landed-in-train') })]);
+    h.ghView(42, trainComment(50));
+    h.ghViewFail(50);   // rc 1, `Could not resolve to a PullRequest`
+    h.ghSearch([]);
+    const o = line(h.sh(`${GH_STUB} cmd_pr_state --session demo-quiet-basin`));
+    expect([o.phase, o.reason]).toEqual(['closed', 'train-unproven']);
+    expect(h.reg('demo-quiet-basin', 'prphase')).toBe('closed');
+  });
+
+  it('one unread candidate beside a definitive refusal is still unread', () => {
+    const { tip } = workspaceWithCommit('demo', 'quiet-basin');
+    h.ghRows([mergedRow({ headRefOid: tip, ...landed('landed-in-train') })]);
+    h.ghView(42, { comments: [{ body: 'Landed in train #50.' }, { body: 'train #77' }] });
+    h.ghViewFail(77);                      // definitive: no such pull request
+    h.ghViewFail(50, 1, GH_HTTP_502);      // transient
+    h.ghSearch([]);
+    expect(line(h.sh(`${GH_STUB} cmd_pr_state --session demo-quiet-basin`)).reason).toBe('train-unread');
+  });
+
+  // D-7381: the prover is FAIR, and a refusal it read stays a refusal while fresh.
+  const triedFile = (): string => {
+    const f = path.join(h.home, '.cc-sessions', '.train-tried');
+    return fs.existsSync(f) ? fs.readFileSync(f, 'utf8') : '';
+  };
+  /** Three workspaces of `demo` in registry order: #41 and #43 refused by a CLOSED
+   *  train #60, #44 landed in train #50. */
+  const refusedRefusedLanded = (): Record<number, string> => {
+    h.makeGhRepo('demo');
+    const tips: Record<number, string> = {};
+    const rows: Record<string, unknown>[] = [];
+    for (const [n, slug] of [[41, 'amber-fen'], [43, 'birch-gap'], [44, 'cedar-run']] as Array<[number, string]>) {
+      h.sh(`${WS_ADD} CCD_WS_SLUG=${slug} cmd_ws_add demo`);
+      const wt = path.join(h.home, 'worktrees', 'demo', slug);
+      fs.writeFileSync(path.join(wt, `${slug}.txt`), `${slug}\n`);
+      h.git(wt, 'add', `${slug}.txt`);
+      h.git(wt, 'commit', '-m', slug);
+      tips[n] = h.git(wt, 'rev-parse', 'HEAD');
+      rows.push(mergedRow({ number: n, headRefName: `ws/${slug}`, headRefOid: tips[n],
+        url: `https://github.com/o/r/pull/${n}`, ...landed('landed-in-train') }));
+    }
+    h.ghRows(rows);
+    h.ghView(41, trainComment(60));
+    h.ghView(43, trainComment(60));
+    h.ghView(60, trainRow(60, 'd'.repeat(40), [[41, tips[41]!], [43, tips[43]!]],
+      { state: 'CLOSED', mergedAt: null, mergeCommit: null }));
+    h.ghView(44, trainComment(50));
+    h.ghView(50, trainRow(50, TRAIN_MERGE, [[44, tips[44]!]]));
+    h.ghSearch([]);
+    return tips;
+  };
+  const prove = (args = '--max 1'): Record<number, string> => Object.fromEntries(
+    h.sh(`${GH_STUB} cmd_pr_train_prove --project demo ${args}`).trim().split('\n')
+      .map((l) => JSON.parse(l)).map((o) => [o.number, o.proof]));
+  const sweepById = (): Record<string, Record<string, any>> => Object.fromEntries(
+    h.sh(`${GH_STUB} cmd_pr_state --project demo`).split('\n').filter((l) => l.includes('"rows"'))
+      .map((l) => JSON.parse(l)).map((o) => [o.id, o]));
+
+  it('with --max 1 and members [refused, refused, landed], the landed one is proved within 3 calls', () => {
+    refusedRefusedLanded();
+    expect(prove()).toEqual({ 41: 'unproven', 43: 'deferred', 44: 'deferred' });
+    expect(prove()).toEqual({ 41: 'unproven', 43: 'unproven', 44: 'deferred' });
+    const calls = h.ghCalls().length;
+    expect(prove()).toEqual({ 41: 'unproven', 43: 'unproven', 44: 'proved' });
+    // The fresh refusals were not asked again: the third call read only #44's record.
+    const third = h.ghCalls().slice(calls).filter((c) => c.startsWith('pr view'));
+    expect(third.every((c) => /^pr view (44|50) /.test(c)), third.join('\n')).toBe(true);
+    expect(proofsFile()).toMatch(/^o\/r main 44 [0-9a-f]{40} 50 e{40}\n$/);
+    // A proof is never a tried line, and a tried line is never a proof.
+    expect(triedFile().split('\n').filter(Boolean).map((l) => l.split(' ').slice(2, 3).concat(l.split(' ')[4]!)))
+      .toEqual([['41', 'failed'], ['43', 'failed']]);
+  });
+
+  it('a refused member reads train-unproven on the sweep while its record is fresh, and its keycap copy is the refusal', () => {
+    refusedRefusedLanded();
+    prove('--max 3');
+    const calls = h.ghCalls().length;
+    const s = sweepById();
+    for (const [id, n] of [['demo-amber-fen', 41], ['demo-birch-gap', 43]] as Array<[string, number]>) {
+      expect([s[id]!.phase, s[id]!.reason], id).toEqual(['closed', 'train-unproven']);
+      const row = s[id]!.rows.find((r: Record<string, unknown>) => r.number === n);
+      expect([row.trainUnproven, row.trainUnread], id).toEqual([true, false]);
+      const p = phaseFor(s[id] as never);
+      expect([p.phase, p.reason]).toEqual(['closed', 'train-unproven']);
+    }
+    expect([s['demo-cedar-run']!.phase,
+      s['demo-cedar-run']!.rows.find((r: Record<string, unknown>) => r.number === 44).landedInTrain]).toEqual(['merged', true]);
+    expect(h.ghCalls().slice(calls).some((c) => c.startsWith('pr view')), 'the sweep spends no gh call on a train').toBe(false);
+    // The sweep answering from a fresh line rewrites nothing.
+    const before = triedFile();
+    sweepById();
+    expect(triedFile()).toBe(before);
+  });
+
+  it('an expired refusal is unread on the sweep again and the prover asks again', () => {
+    const tips = refusedRefusedLanded();
+    const old = Math.floor(Date.now() / 1000) - 1801;
+    fs.writeFileSync(path.join(h.home, '.cc-sessions', '.train-tried'),
+      `o/r main 41 ${tips[41]} failed ${old}\no/r main 43 ${tips[43]} failed ${old}\n`);
+    expect(sweepById()['demo-amber-fen']!.reason).toBe('train-unread');
+    // Never-tried #44 goes first; then the oldest tried.
+    expect(prove()).toEqual({ 41: 'deferred', 43: 'deferred', 44: 'proved' });
+    expect(prove()).toEqual({ 41: 'unproven', 43: 'deferred', 44: 'kept' });
+  });
+
+  it('an unread outcome is retried on the next call', () => {
+    const { tip } = workspaceWithCommit('demo', 'quiet-basin');
+    h.ghRows([mergedRow({ headRefOid: tip, ...landed('landed-in-train') })]);
+    h.ghView(42, trainComment(50));
+    h.ghViewFail(50, 1, GH_HTTP_502);
+    h.ghSearch([]);
+    expect(prove()).toEqual({ 42: 'unread' });
+    expect(triedFile()).toMatch(new RegExp(`^o/r main 42 ${tip} unread [0-9]+\\n$`));
+    expect(sweep().reason).toBe('train-unread');
+    // GitHub answers now: the next call asks again and proves it, and the tried line goes.
+    fs.rmSync(path.join(h.home, 'gh-view-50.rc'));
+    h.ghView(50, trainRow(50, TRAIN_MERGE, [[42, tip]]));
+    expect(prove()).toEqual({ 42: 'proved' });
+    expect(triedFile()).toBe('');
+    expect(sweep().phase).toBe('merged');
   });
 
   it('the train lists are cleared per call: a proof handed down by a caller never reaches the next workspace', () => {

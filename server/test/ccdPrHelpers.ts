@@ -13,7 +13,8 @@ import { makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
  *  $HOME/gh-view-<n>.json and a `--search` list prints $HOME/gh-search.json
  *  when that file exists (`ghView`/`ghSearch`), and `gh pr view <n>` fails
  *  with $HOME/gh-view-<n>.rc when that exists (`ghViewFail`: an issue number, a
- *  missing one, or a train GitHub would not show), so one fixture can answer the
+ *  missing one, or a train GitHub would not show) and prints $HOME/gh-view-<n>.err
+ *  to stderr, so one fixture can answer the
  *  PR list, a member's comments and a train PR differently — and appends its argv to $HOME/gh-calls so the exact
  *  flags are assertable. `timeout N cmd…` drops N and runs cmd, so a stubbed
  *  rc of 124 reproduces a real timeout exactly — and it LOGS its own argv
@@ -24,7 +25,9 @@ export const GH_STUB = `
 gh() {
   printf '%s\\n' "$*" >> "$HOME/gh-calls"
   [[ -f "$HOME/gh-err" ]]       && cat "$HOME/gh-err" >&2
-  if [[ "$1 $2" == "pr view" && -f "$HOME/gh-view-$3.rc" ]]; then return "$(cat "$HOME/gh-view-$3.rc")"
+  if [[ "$1 $2" == "pr view" && -f "$HOME/gh-view-$3.rc" ]]; then
+    [[ -f "$HOME/gh-view-$3.err" ]] && cat "$HOME/gh-view-$3.err" >&2
+    return "$(cat "$HOME/gh-view-$3.rc")"
   elif [[ "$1 $2" == "pr view" && -f "$HOME/gh-view-$3.json" ]]; then cat "$HOME/gh-view-$3.json"
   elif [[ " $* " == *" --search "* && -f "$HOME/gh-search.json" ]]; then cat "$HOME/gh-search.json"
   elif [[ -f "$HOME/gh-rows.json" ]]; then cat "$HOME/gh-rows.json"
@@ -34,6 +37,14 @@ gh() {
 };
 timeout() { case "$1" in -*) return 125 ;; esac; printf 'timeout %s\\n' "$*" >> "$HOME/gh-calls"; shift; "$@"; };
 `;
+
+/** What gh prints, rc 1, for `gh pr view <n>` on an issue or a number with no PR: GitHub's definitive answer. */
+export const notAPullRequest = (n: number): string =>
+  `GraphQL: Could not resolve to a PullRequest with the number of ${n}. (repository.pullRequest)\n`;
+/** What gh prints, rc 1, when GitHub answers 502: transient, so a train read this way is UNREAD (D-7381). */
+export const GH_HTTP_502 = 'HTTP 502: Bad Gateway (https://api.github.com/graphql)\n';
+/** What gh prints, rc 1, on a rate limit: transient, UNREAD. */
+export const GH_RATE_LIMITED = 'GraphQL: API rate limit exceeded for user ID 1. (RATE_LIMITED)\n';
 
 export interface PrHarness extends CcdHarness {
   /** What the stubbed `gh pr list` returns. */
@@ -46,8 +57,11 @@ export interface PrHarness extends CcdHarness {
   ghFail(rc: number, stderr: string): void;
   /** What the stubbed `gh pr view <n>` returns, one object per PR number. */
   ghView(n: number, body: unknown): void;
-  /** Make the stubbed `gh pr view <n>` fail with `rc`, as it does for an issue or a missing number. */
-  ghViewFail(n: number, rc?: number): void;
+  /** Make the stubbed `gh pr view <n>` fail with `rc` and `stderr`. The default is
+   *  what gh answers for an issue or a missing number: rc 1 and GitHub's
+   *  `Could not resolve to a PullRequest` (definitive, D-7381); any other rc
+   *  defaults to no stderr. Pass `GH_HTTP_502` for a transient rc-1 failure. */
+  ghViewFail(n: number, rc?: number, stderr?: string): void;
   /** What the stubbed `gh pr list … --search …` returns. */
   ghSearch(rows: unknown[]): void;
   ghCalls(): string[];
@@ -78,7 +92,10 @@ export function makePrHarness(prefix: string): PrHarness {
       fs.writeFileSync(at('gh-err'), stderr);
     },
     ghView: (n, body) => { fs.writeFileSync(at(`gh-view-${n}.json`), JSON.stringify(body)); },
-    ghViewFail: (n, rc = 1) => { fs.writeFileSync(at(`gh-view-${n}.rc`), String(rc)); },
+    ghViewFail: (n, rc = 1, stderr = rc === 1 ? notAPullRequest(n) : '') => {
+      fs.writeFileSync(at(`gh-view-${n}.rc`), String(rc));
+      fs.writeFileSync(at(`gh-view-${n}.err`), stderr);
+    },
     ghSearch: (rows) => { fs.writeFileSync(at('gh-search.json'), JSON.stringify(rows)); },
     ghCalls: () => lines('gh-calls'),
     run: (snippet) => {

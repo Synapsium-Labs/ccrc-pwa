@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { CCD, WS_ADD, ghContainedEnv, ccdSource } from './ccdWsHelpers.js';
-import { CFG_DIR, GH_STUB, landedRow, makePrHarness, mergedRow, trainBlock, trainComment, trainRow, trainTable, type PrHarness } from './ccdPrHelpers.js';
+import { CFG_DIR, GH_HTTP_502, GH_RATE_LIMITED, GH_STUB, landedRow, makePrHarness, mergedRow, trainBlock, trainComment, trainRow, trainTable, type PrHarness } from './ccdPrHelpers.js';
 import { describeLinux, describeDarwin, itLinux } from './platformFixtures.js';
 
 let h: PrHarness;
@@ -648,14 +648,28 @@ describe('a PR closed as landed in a merge train', () => {
     expect(a.pr.mergeCommit).toBe(train);
   });
 
-  it('a reference that cannot be read is a failed candidate, not gh-unreadable, once the search answered', () => {
+  it('a reference GitHub says is no pull request is a failed candidate, not gh-unreadable, once the search answered', () => {
     const { wt } = trainLanded();
     h.ghView(42, { comments: [{ body: 'Landed in train #77.' }] });
-    h.ghViewFail(77);
+    h.ghViewFail(77);   // rc 1, `Could not resolve to a PullRequest`: definitive (D-7381)
     h.ghSearch([]);
     const a = refusal(wt);
     expect(a.verdict).toBe('not-merged');
     expect(a.detail).toContain('#77');
+  });
+
+  // D-7381: only GitHub's definitive answer fails a candidate. A transient
+  // failure is unread, and an empty search fallback never outvotes it.
+  it.each([
+    ['an HTTP 502', 1, GH_HTTP_502],
+    ['a rate limit', 1, GH_RATE_LIMITED],
+    ['a timeout', 124, ''],
+  ])('a reference whose read fails with %s is unread: gh-unreadable even though the search answered empty', (_n, rc, err) => {
+    const { wt } = trainLanded();
+    h.ghView(42, { comments: [{ body: 'Landed in train #77.' }] });
+    h.ghViewFail(77, rc, err);
+    h.ghSearch([]);
+    expect(refusal(wt).verdict).toBe('gh-unreadable');
   });
 
   it('REFUSES tree-differs when the branch carries a commit the train did not land', () => {

@@ -6733,17 +6733,23 @@ phase, and so the archive reason, the cleanup bucket and the merged notice, in
 `train`) — only when the train record proves it, and ccd decides that once, in
 one place, for every reader (`landedInTrain: true` on the row). The proof: the
 train PR the member names (a `train #<n>` comment on it, as a train leaves when
-it closes a member — every such reference is tried, newest first, and one that
-is an issue, a missing number or unreadable is only a failed candidate), or one
+it closes a member — every such reference is tried, newest first, and one
+GitHub says is no pull request in this repository is only a failed candidate),
+or one
 a search finds whose record lists the member's head sha, must be MERGED into
 the same base and its record must list the member at exactly the member's head;
 the reap also requires that the branch hold nothing beyond that head. A
 labelled PR whose train record was read and did not prove it (the train is
-CLOSED unmerged, lists another sha, or no train names it) reads as closed, with
-reason `train-unproven` (`trainUnproven: true` on the row), and the reap refuses
-it `not-merged`. A labelled PR whose train record could not be READ (no time
-left in the read's budget, a timeout, GitHub unreachable) is neither closed nor
-merged: it reads `unknown` with reason `train-unread` (`trainUnread: true` on
+CLOSED unmerged, lists another sha, GitHub says the number it names is no pull
+request here, or no train names it) reads as closed, with reason
+`train-unproven` (`trainUnproven: true` on the row), and the reap refuses it
+`not-merged`. Only such a definitive answer fails a candidate (D-7381): a train
+read that fails any other way (an HTTP 5xx, a rate limit, the network, auth, a
+timeout, a signal, an answer that is not a PR's JSON) is unread, and one unread
+candidate makes the whole record unread unless something proved the landing,
+even when the search fallback answered empty. A labelled PR whose train record
+could not be READ (no time left in the read's budget, a timeout, GitHub
+unreachable) is neither closed nor merged: it reads `unknown` with reason `train-unread` (`trainUnread: true` on
 the row; `pr-landing` adds `train` to the line's `unmeasured`), so nothing ends
 a run on it, and the reap refuses it `gh-unreadable` (D-7378). A CLOSED train
 that never merged proves nothing. The token's merge fact is the train PR's
@@ -6753,8 +6759,15 @@ per member keyed by repository, base, number and head (a merged train never
 un-merges; a refusal is never kept). The `pr-state --project` sweep has no time
 left for train reads and reads only kept proofs, so the server follows a sweep
 that read `train-unread` with `ccd pr-train-prove --project <p>`: its own verb
-and timeout row, proving at most `PR_TRAIN_PROVE_MAX` members once each and
-keeping the proofs, so the next sweep reads `merged`.
+and timeout row, proving at most `PR_TRAIN_PROVE_MAX` members a call and
+keeping the proofs, so the next sweep reads `merged`. The prover is fair
+(D-7381): every attempt that does not prove leaves a tried line in
+`$REG/.train-tried` (outcome `failed` or `unread`, and the time; a separate
+file, never read as a proof), and each call asks the members with no tried line
+first, then the oldest tried. A member whose record was read and failed less
+than `PR_TRAIN_TRIED_TTL` (30 minutes) ago is not asked again, and the sweep
+reads it `train-unproven`, not `train-unread`, until the line expires; an
+`unread` outcome is asked again on the next call.
 
 **The train record (D-7335)** is the one machine-readable block in a train PR's
 body, and a train tool writes exactly one: an HTML comment on lines of its own,
