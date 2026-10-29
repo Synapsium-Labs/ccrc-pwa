@@ -26,8 +26,8 @@ merges, workers never do, and an unattended landing is the goal when every safeg
 | 3d | 2, the lane | the dequeue lane treats the removal GitHub records at a successful queue merge as no dequeue: `pr-state` reads the removal's `reason`, and a removal whose reason is `merged` reads `landed`, never `dequeued`; any other reason, or none, is still announced on its first read; no two-sweep wait, no new wire field, no reason allowlist; and the `merged` feed record is kept once per workspace and PR across a server restart (stop rule 6; Decisions, 2026-10-21 14:49) | server, ccd | Task 7's re-run | plan #1088; #1096 | merged 2026-10-21 (`e173c1aa`) through the merge queue after review 759, with no fix round; run 751 (the run's wave 6) closed; three numbers of its block of 10 defined in the plan; deploy via ccrc's updater (either box first, the fleet box by default), then the live proof (Decisions, 2026-10-21 19:17) |
 | 3e | 2, the landing route | the coordinator reads the repository's own rules before each landing: the merge method from every effective `pull_request` rule and the merge settings, the required checks from the rulesets and classic protection (confirmed absence apart from an unreadable read), three routes (the native queue, a gated direct merge, an ungated direct merge), a merge-commits-only repository landing with `--merge` at the reviewed head, and every conflict a stop (spec §5.7) | skills, tests | wave 3d | plan #1121 | §5.7's text approved 2026-10-22; planned 2026-10-22 in `docs/superpowers/plans/2026-10-22-landing-order-wave3e-landing-route.md` (Decisions, 2026-10-22 07:13); run 774 (the run's wave 7), PR #1127; fix rounds 1–6; accepted on `c8b56b8e` after review run 1141 and merged through the native queue as `7e38b5f4` (Decisions, 2026-10-28 19:12); D-6336–D-6345; live proof complete 2026-10-29 (Decisions, 2026-10-29 06:01) |
 | 3f | — | the server's checks word reads a queued or running check run as `pending`, not `pass`; the cost of the 30 s sweep cadence is measured in its plan (spec §5.7.8) | server | wave 3e | #1383 | ruled 2026-10-21; the fix shipped from outside the programme in #1383 (`5a009277`, 2026-10-25); the cadence-cost measurement is left (Decisions, 2026-10-29 09:41) |
-| 4 | 4 | the opted-in lineage table; `lineage-unmeasured` | server | waves 3b and 3e | plan #1678 | planned 2026-10-27 (`docs/superpowers/plans/2026-10-27-landing-order-wave4-lineage-acceptance.md`, D-7102 to D-7110; amended 2026-10-28, D-7268 and D-7269); run 1189 (the run's wave 9) dispatched 2026-10-29, block 7433–7442, with the coordinator's rulings on where the plan had drifted from `main` (Decisions, 2026-10-29 09:41); arming it is the operator's |
-| 4b | 3, the console half | the radar's server reader, its wire fields and the PWA conflict chip (moved out of wave 3b, D-4329) | server, pwa | wave 4 | — | to plan |
+| 4 | 4 | the opted-in lineage table; `lineage-unmeasured` | server | waves 3b and 3e | plan #1678 | planned 2026-10-27 (`docs/superpowers/plans/2026-10-27-landing-order-wave4-lineage-acceptance.md`, D-7102 to D-7110; amended 2026-10-28, D-7268 and D-7269); run 1189 (the run's wave 9) dispatched 2026-10-29, block 7433–7442, with the coordinator's rulings on where the plan had drifted from `main` (Decisions, 2026-10-29 09:41); PR #1884; fix round 1 after review 1212; accepted on `5aa30a97` after review run 1216 and merged through the native queue as `f6b67a5b` (Decisions, 2026-10-29 17:38); D-7433–D-7442 and D-7464–D-7467 defined after the merge; deploy, arming (the operator's) and the live proof wait (Next-wave brief) |
+| 4b | 3, the console half | first, the lineage hardening carried from wave 4's reviews (Carried constraints); then the radar's server reader, its wire fields and the PWA conflict chip (moved out of wave 3b, D-4329) | server, skills, pwa | wave 4 | — | run 1219 (the run's wave 10) opened 2026-10-29 as planned, before run 1189 closed (Decisions, 2026-10-29 17:38); to plan |
 | 5 | 5 | the landing line: entries, intents, holds, `land-candidate`, the coordinator's pinned merge, the PWA doors | server, ccd, skills, pwa | waves 2–4; session-continuity wave 1 | — | to plan |
 
 **A fresh workspace per wave (R4) is child-reclamation's.** The spec first drew it as step 6 of the wave lifecycle,
@@ -1229,6 +1229,50 @@ carries it (spec §5.1, amended 2026-09-24).
   - **Wave 3f's fix** shipped from outside the programme in #1383 on 2026-10-25: the first non-empty of a check entry's
     conclusion, state and status speaks for it, so a queued or running check run reads `pending`. What remains is the
     plan's measurement of what the 30 s sweep cadence costs; where it runs is for that plan to decide.
+- **2026-10-29 17:38 — wave 4 accepted and merged; wave 4b opened.**
+  - **Review run 1212** (wave 4's first, `2a7e0db9`) found the wave sound where it measured:
+    - the touched files, the guards and both typechecks green, and the sampled mutation rows red;
+    - red-first measured, and the brief's rulings applied;
+    - no interaction with #1844, the one overlapping `main` commit no CI run had tested beside the wave.
+
+    Its three important findings, and the worker's items:
+    - **F1.** An `unmeasured` doc, or one naming no base, accepted when its chain held the claim. The radar never
+      writes such a doc, and spec §5.4's accept row says "fetched base named". **Ruled: fixed.** A non-empty chain
+      requires a sha `base` and a `stop`, and `state` and `stop` agree.
+    - **F2.** The forgery's reach, measured: a session that puts its own `ws/` ref at a head and writes a fresh
+      `enabled` marker and a consistent lineage file lands that head unreviewed. It needs no forged mail, works after
+      the genuine review closed, and can opt in a project the operator never opted in. **Ruled: accepted at
+      attribution grade,** as spec §4 and its edge-case list already say. The plan's sentence that stage 4 "adds no
+      capability a session lacked" is corrected: it adds no new class, but it lowers the cost. A coordinator-side
+      re-proof of the chain is carried to wave 4b.
+    - **F3.** D-7441's rule had no end, so it would wedge an ordinary fix round. **Ruled: fixed,** scoped to the
+      wave-done it answers.
+    - **The worker's items:**
+      - a `TIP MOVED` report whose close was accepted is followed by a fresh review run against the live tip;
+      - a brief names the radar base as a ref name, read from the PR's `baseRefName`;
+      - an unreadable marker keeps its `landing-marker-unreadable` detail even in a project nobody opted in, as spec
+        §5.4's second row says. So the plan's "a project with no `enabled` marker answers byte for byte as today" holds
+        for a marker proven absent.
+  - **`main` moved during the review.** #1797 conflicted with the wave in `landing.ts`. Fix round 1 absorbed `main` with
+    one merge, resolved as #1797's doc comment over the wave's signature. It pinned a merged brief that carries both the
+    recorded head and #1797's train proof.
+  - **Review run 1216** (fix round 1, `5aa30a97`) was scoped to the round.
+    - The rulings held, no wider and no narrower, and the merge changed only its one hunk.
+    - The suites and guards were green, and the sampled mutation rows red.
+    - Its nine findings are none critical. Each fails closed except one: the new parser header claims more than its two
+      checks hold. A measured doc with no `branch`, a cut walk with no `why`, and an `unmeasured` doc with a full chain
+      still accept, though each needs a hand-written file, within F2's accepted reach.
+
+    **Accepted, with no fix round 2.** The findings are carried to wave 4b (Carried constraints).
+  - **Landed.** The landing verdict read `ROUTE Q method=squash admin=never strict=no`, run on its own, and the
+    required-checks gate exited `0`. PR #1884 was enqueued at the reviewed head and merged at `5aa30a97` as `f6b67a5b`,
+    with no dequeue.
+  - **Recorded:** D-7433 to D-7442 and D-7464 to D-7467 in the plan's Deviations, and the plan's "What this does not
+    claim" corrected.
+  - **Wave 4b** is run 1219, opened as planned before run 1189 closed, so the programme keeps an open run. Its plan takes
+    the lineage hardening carried from wave 4's reviews first, then the console half.
+  - **Until wave 4b lands,** the coordinator's first worker brief for an opted-in project names the radar base as
+    `origin/<default branch>`, because no PR exists yet to read `baseRefName` from.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
   this file until a plan on the same ref defines it (`deviation-refs.test.ts`).
 
@@ -1541,14 +1585,43 @@ above were read on 2026-10-25 and end at that day's midday; a later run of the s
     - the allowance header and README list fewer refusals than the code makes;
     - the `\u` listed pass pairs `--input -` with `-f query=`, where gh encodes the value, so that call cannot merge.
   - **jq 1.6 and 1.7** are unmeasured; only 1.8.1 was installed where the wave was measured.
+- **From wave 4's reviews (1212 and 1216), carried to wave 4b.** None of them accepts wrongly a doc the radar writes:
+  each fails closed, or needs a hand-written file within the attribution-grade reach the plan states.
+  - **The parser header** says the parser reads only the radar's shapes. But a measured doc with no `branch`, a cut walk
+    with no `why`, a measured doc with a `why`, and an `unmeasured` doc with an 8-entry chain still accept. Require
+    `branch`, make `why` agree with `state` and an 8-entry chain with `stop: 'limit'`, then restate the header. Until
+    then, it reads "an inconsistent `state`, `stop`, `base` or chain is unreadable".
+  - **One "radar control"** has a sha base, an empty chain and a null stop, which is not a radar shape. It answers a
+    wait, never an accept. Move it out of the controls, or refuse it.
+  - **The base before a PR exists.** The opt-in paragraph reads `baseRefName` from the PR, but a first worker brief comes
+    before one exists. Add the fallback: the default branch.
+  - **The head-null merged brief's case** asserts less than its comment says. Assert equality with `main`'s text.
+  - **A train-landed line** answers `merged` before any head check. The coordinator's MERGED proof still refuses a
+    different head. Pin a train-landed line under a lineage-accepted episode head.
+  - **The review-cap ask** carries the newest `review-done` report, which can be a `TIP MOVED` one that is never ruled
+    on. Decide whether the ask skips such a report.
+  - **A coordinator-side re-proof of the chain** before a lineage-bound landing. It would walk the verified head back to
+    the reviewed tip, checking two parents, a second parent on the base and a clean merge tree, so the files become
+    hints. Its second copy of the walk needs its "legitimately different" reason.
+  - **The dequeue brief** reads the current episode's head without checking the run's state. So a run sent back and
+    later dequeued could print the earlier episode's head.
+  - **A close after a second merge following the wave-done** records a third sha. Clause 9 forbids that merge, and the
+    MERGED proof comes first.
+  - **Lenient chains and times:** a cycle, duplicate entries, `p2 === p1` and `Date.parse`'s leniency all accept. None
+    adds reach beyond the forgery.
+- **From wave 4's review 1216, for the next wave that edits the merge-train proof text (#1797).** Both fail closed: the
+  coordinator reports instead of acting.
+  - A train-landed spent producer cannot prove its landing once its row is reclaimed, because the proof reads
+    `ccd pr-state --session <id>` after the close.
+  - §5b's prose and verdict do not name the `landedInTrain` alternative that step 3 accepts.
 - **SAFETY.** Never a destructive `ccd` verb against the live host; never touch tmux, `~/.cc-sessions`,
   `~/.cc-limits` or `claude-session@*.service` directly; fixture HOMEs only in tests; `gh` stays off the exec
   whitelist; never print secret contents.
 
 ## Next-wave brief
 
-Waves 1–3, 2b, 3b, 3c, 3d and 3e are merged (#231 `10f32755`, #234 `0087a045`, #1863 `d3250900`, #248 `9a255a74`, #1740
-`3ca67389`, #1046 `4ce282f8`, #1096 `e173c1aa`, #1127 `7e38b5f4`). Task 7's re-run on 2026-10-21 turned the merge queue on for `main`, and
+Waves 1–3, 2b, 3b, 3c, 3d, 3e and 4 are merged (#231 `10f32755`, #234 `0087a045`, #1863 `d3250900`, #248 `9a255a74`,
+#1740 `3ca67389`, #1046 `4ce282f8`, #1096 `e173c1aa`, #1127 `7e38b5f4`, #1884 `f6b67a5b`). Task 7's re-run on 2026-10-21 turned the merge queue on for `main`, and
 it stays on by the operator's ruling (Decisions, 2026-10-21 12:15). Wave 3d answers its stop rule 6: a removal whose
 reason is `merged` reads `landed` (Decisions, 2026-10-21 14:49 and 19:17).
 
@@ -1569,9 +1642,14 @@ shipped in #1383; its plan's measurement of the 30 s sweep cadence's cost is lef
   next tick, the coordinator reads what the plan's Task 4 Step 4 names, read-only.
 - **The proof never sets `lineage=on`.** That is wave 4's to arm.
 
-**Wave 4 (stage 4, the lineage acceptance)** is run 1189, dispatched 2026-10-29 (Decisions, 2026-10-29 09:41). Its
-brief carries wave 3b's carried items that touch its reader: the null `id`, and the live tip read by its full ref name.
-Arming it is the operator's.
+**Wave 4 is merged** (#1884 `f6b67a5b`; Decisions, 2026-10-29 17:38). A clean merge of `main` keeps its wave-done and
+its review, for a project the operator opts in.
+- **Deploy.** ccrc's updater carries the skills before the server (AGENT-FIRST, plan Task 4 Step 3).
+- **Arming is the operator's:** `lineage=on` in the radar's conf for `ccrc-pwa`, after wave 3b's live proof with
+  `lineage=off`.
+- **The live proof** is the programme's next work run whose worker absorbs the base cleanly after its wave-done. The
+  advance with the original claim answers `verifiedHead`, the landing binds it, and the ledger records both shas. That
+  run's brief names the opt-in and the base; until wave 4b lands, a first brief names `origin/<default branch>`.
 
 **Wave 2b is merged** (#1863 `d3250900`; Decisions, 2026-10-29 09:41): `--admin` and `gh api` merges are refused in every
 fleet session, with the operator's per-project allowance (D-7249).
@@ -1581,4 +1659,5 @@ fleet session, with the operator's per-project allowance (D-7249).
   denied, and clause 15's spelling and one verdict read pass.
 - **From then on,** the landing verdict, the checks gate and the enqueue run as separate commands (D-7314).
 
-**Waves 4b and 5** are planned once wave 4 has landed what they read.
+**Wave 4b** is run 1219 (Decisions, 2026-10-29 17:38). Its plan takes wave 4's carried lineage hardening first, then
+the console half. **Wave 5** is planned once wave 4b has landed what it reads.

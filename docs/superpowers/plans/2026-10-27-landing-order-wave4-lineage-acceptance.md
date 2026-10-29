@@ -58,14 +58,20 @@ The workspace is a fresh child from `main`. Arming (`lineage=on`) is the operato
 
 `$REG` is writable by every fleet session: one UNIX user, and identity is attribution, not authentication (CLAUDE.md; spec §12: "identity is attribution, and this spec does not claim otherwise"). A session can hand-write an `enabled` marker and a lineage file. Acceptance through them is attribution-grade, like `handoffCommit` itself, which `fingerprint.ts` already calls "CORRESPONDENCE ONLY".
 
-A session that can forge those files can already move its own ref, so stage 4 adds no capability a session lacked. What stage 4 does guarantee:
+A session that can forge those files can already move its own ref and send mail under another session's identity, so stage 4 adds no new class of capability: acceptance stays attribution-grade. It does lower the cost (corrected 2026-10-29, after review run 1212). A session that puts its own `ws/` ref at a head, and writes a fresh `enabled` marker and a consistent lineage file naming that head, lands a head nobody reviewed:
+- it needs no forged mail;
+- it works after the genuine review has closed;
+- it can opt in a project the operator never opted in;
+- the radar's next tick removes the files.
+
+A coordinator-side re-proof of the chain is carried to wave 4b (the landing-order ledger's Carried constraints). What stage 4 does guarantee:
 - a stale or missing marker never accepts;
 - a lineage that is inconsistent in itself never accepts;
 - a lineage file the radar stopped rewriting never accepts;
 - a tip that moves between the reads never accepts;
 - the PR checks still run on the live head.
 
-`readFileMeasured` follows symlinks, and `FleetIO` has no `lstat`, so wave 3b's "regular file" rule is the probe's own and is not re-proved here (D-7109). The PR body says all of this.
+`FleetIO` has `lstatMeasured`, so the reader re-proves wave 3b's "regular file" rule: it reads `enabled` and a lineage file only when lstat answers `regular`, and it decides the pause markers by lstat alone (D-7433, which corrects D-7109's premise). The PR body says all of this.
 
 ## Global Constraints
 
@@ -431,7 +437,24 @@ Numbers are ISSUED, never chosen; a worker never calls the allocator (worker cla
 - **D-7106** — `partly-measured-accepts` (Design): a claim found in the `chain` of an `unmeasured` lineage is accepted, because each listed step was proven.
 - **D-7107** — `not-a-refusal` (Architecture): `lineage-unmeasured` is a verdict code, but not a counted refusal. `DONE_REFUSAL_CODES`, derived, keeps it out of `closeRefusals`, `firstSubmission`, run health and the PWA chip, so §10's stage 4 metric ("refusals caused by a clean main sync: 0") is not inflated by radar timing. A re-sent `wave-done` still counts in `waveDoneMails`, because it is a real mail. The run-signals case pins that.
 - **D-7108** — `review-any-chain-member` (Design): a review of any commit in the chain is accepted. Each step after it is a proven clean base merge, which is stage 4's premise.
-- **D-7109** — `symlink-gap` (What this does not claim): `readFileMeasured` follows symlinks, and `FleetIO` has no `lstat`, so wave 3b's regular-file rule is not re-proved on the server. That is attribution-grade, like the rest.
+- **D-7109** — `symlink-gap` (What this does not claim): `readFileMeasured` follows symlinks, and `FleetIO` has no `lstat`, so wave 3b's regular-file rule is not re-proved on the server. That is attribution-grade, like the rest. (Its premise is false: `FleetIO` has `lstatMeasured`. See D-7433.)
 - **D-7110** — `console-half-is-4b` (Architecture): spec §5.3's server reader, wire fields and PWA chip are wave 4b's.
 - **D-7268** — `lineage-freshness` (Design): wave 3b's tick-start pre-pass keeps `enabled` fresh while a project the tick budget never reaches keeps its old lineage files (the worker's N6, evidenced by review run 1125); and, by the probe's own rule, a row whose local read was left undecided under a measured base keeps its previous file too. So the lineage doc's own `at` is read: older than `LINEAGE_FRESH_S`, more than 60 s in the future, or unparseable, the doc reads `stale`. That answers `lineage-unmeasured` with detail `lineage-stale`, and never accepts. The bound is not the marker's 1200 s. A qualifying row of a project the tick reaches is rewritten at every tick, but at its project's place in the tick, not at the tick's start. So two writes of one row can be one start spacing (about 930 s, D-7104) plus one tick's run (at most the unit's 900 s limit) apart: about 1830 s. 2400 s, eight intervals, covers that with a margin, so a radar that is ticking never reads stale. (Amended 2026-10-28; the landing-order ledger's Decisions, 2026-10-28 11:05.)
 - **D-7269** — `null-unmeasured-fields` (Design): wave 3b writes `base: null` and `stop: null` in a failed fetch's unmeasured doc (`lineage_unmeasured`) and, since its fix round 1, `tip: null` there for a row whose local read gave no answer. A walk cut under a measured base writes its `base` sha and `stop: 'unmeasured'` instead. Each `null` reads as absent. A `null` tip answers `lineage-unmeasured` with the fixed detail `tip-unmeasured`, never `lineage-unreadable`, so the mail names what happened without carrying any text from the file. A `null` tip in a measured doc is unreadable. (Amended 2026-10-28; the landing-order ledger's Decisions, 2026-10-28 11:05.)
+
+Run 1189 executed this plan. Its block is 7433–7442, and the coordinator defines all ten below, after review runs 1212 and 1216 accepted the wave at fix round 1 and #1884 merged. Four more of the worker's choices had no number left in the block. They take 7464–7467, issued on 2026-10-29 after the merge. Fix round 1's two `parseLineage` checks are not a departure: a non-empty chain requires a sha `base` and a `stop`, and `state` and `stop` agree. They hold the parser to spec §5.4's "fetched base named" and to this plan's Global Constraints ("fail closed").
+
+- **D-7433** — `lstat-reproves-regular` (What this does not claim; corrects D-7109): `readLandingFacts` reads `enabled` and `<id>.lineage` only after `lstatMeasured` answers `regular`. The pause markers are decided by lstat alone.
+- **D-7434** — `brief-head-through-the-sweep` (Design): the episode head is a fact of `landingVerdict`, read in `watch.ts`'s landing sweep. Both landing briefs print it as one added line, and the pinned `<handoffCommit>` sentences are unchanged. With no head, or a head that is not 40-hex, a brief prints exactly today's text.
+- **D-7435** — `head-binding-list` (Task 2 Step 1): the measured list of `handoffCommit` readers replaces the plan's list.
+- **D-7436** — `recorded-head-rule` (Coordinator text): `wave-lifecycle.md` gains one rule sentence before §5's first spelling, pinned verbatim. A companion sentence says that an advance answer with no `verifiedHead` means the submitted claim was itself the verified head. The §5b verdict block's code is untouched.
+- **D-7437** — `done-refusal-guard` (Task 2): `single-definition/core-vocab` requires one `.filter`-derived `DONE_REFUSAL_CODES`, and reds on a hand-typed copy.
+- **D-7438** — `helpers-copied` (Task 1): `ccd-land-lineage-accept.test.ts` copies the few fingerprint helpers it needs, so `coord-fingerprint.test.ts`'s existing rows stay unedited.
+- **D-7439** — `task-3-before-task-2` (Tasks): by the coordinator's ruling, Task 3 ran before Task 2 while the claims stood.
+- **D-7440** — `fingerprint-l3-close-l4` (Rings): `fingerprint.ts`'s runtime import of the declared-L3 reader was an outward edge. Instead of an exemption or a port, `fingerprint.ts` now declares L3, and `close.ts`, the executor, declares L4, each in its header.
+- **D-7441** — `submit-at-verified-head` (Coordinator text): once an advance has answered `verifiedHead`, the later advances and the close that answer the same wave-done submit the worker's fingerprint with `branchTip` and `handoffCommit` both set to that `verifiedHead`. So an accepted run never strands at its close when the radar pauses, `lineage=off` is set or the marker goes stale. Fix round 1 scoped the rule after review 1212's F3: it ends when the run goes back to `working` or a fresh `wave-done` arrives. A run-routes case removes the marker between the advance and the close: the close passes and records the live tip. The server is unchanged.
+- **D-7442** — `one-resend-count` (Who re-sends): the server's body reads "… (usually within 5 minutes), at most twice; if it is still answered this way, report it to your coordinator". This plan's Design and coordinator text still say "after two such answers, report it". The coordinator acts on one report, as Review Focus 4 asks.
+- **D-7464** — `recorded-handoff` (Task 2): `close-decide.test.ts` pins `decideVerified`'s plan as `{line: null}`. So the live tip comes from a new pure `recordedHandoff(plan, verdict)` in `closeDecide.ts`, not from a plan field.
+- **D-7465** — `verified-head-any-forward-advance` (Design): `verifiedHead` is answered on any accepted forward advance, `awaiting-review` included, not only on an advance to `merging`.
+- **D-7466** — `door-keys` (Who re-sends): `DONE_CLAIM_SUBJECTS` is keyed `work`, `advance` and `review`, because the kebab scan in `mail-routes` flagged a `'wave-done'` key. `NOT_CODES` gained the three subjects and `base-only-merge`.
+- **D-7467** — `lineage-qualifies-l1` (Design): the qualifying predicate is the pure `lineageQualifies` in `lineage.ts`, not an expression in the caller.
