@@ -17,7 +17,7 @@
 //   (c) the rejection rows (D-7226): `propagate` readers reject the executor (no notice, no effect) and land in the
 //       caller's own sentence; `judged` readers answer their step's sentence;
 //   (d) child-spent's three `gone` sources (D-7230);
-//   (e) the held-at-the-act rows, and today's gap (child-spent's `reclaim-paused` read once, at 2b);
+//   (e) the held-at-the-act rows (child-spent's `reclaim-paused` re-read at step 6 since C4o, D-7401);
 //   (f) temp-orphan's synchronous tail (two probes);
 //   (g) the collector's call order;
 //   (h) the side-effect rows (D-7199);
@@ -530,12 +530,23 @@ describe('child-spent (reclaimChild): rejections, gone, the act, effects, argv a
     expect(notifySpy.mock.calls.map((c) => c[1].title)).toEqual(['child reclaim deferred']);
   });
 
-  it("child-spent: TODAY'S GAP — reclaim-paused clean at 2b and raised from the next listing on still reaches the ws-reclaim argv (C4o flips this row)", async () => {
+  it('child-spent: held at the act — reclaim-paused clean at 2b and raised from the next listing on composes no ws-reclaim (C4o flipped this row, D-7401)', async () => {
+    // Before C4o the server composed ws-reclaim here and folded ccd's in-lock `paused` refusal; ccd's answer is still
+    // scripted, so a server that reached the argv again would read it.
     const k = await childRig();
     k.hooks.audit = () => { k.raise(RECLAIM_PAUSE_MARKER); };
     k.answers.act = () => k.actDoc({ refused: 'paused', detail: 'reclaim-paused is raised' });
-    expect(await reclaimChild(k.deps, k.req)).toEqual(deferredC(k, 'paused', 'reclaim-paused is raised'));
-    expect(k.argvs).toEqual([KAUDIT, kAct(k.runId)]);
+    expect(await reclaimChild(k.deps, k.req)).toEqual(deferredC(k, 'paused-at-server',
+      'reclaim-paused is raised: automatic reclamation is paused fleet-wide at the act'));
+    expect(k.argvs).toEqual([KAUDIT]);
+  });
+
+  it('child-spent: an unmeasurable listing at step 6 still answers the child-reclaim-disabled sentence', async () => {
+    const k = await childRig();
+    k.hooks.listing = (n) => (n === 4 ? 'null' : undefined);
+    expect(await reclaimChild(k.deps, k.req)).toEqual(deferredC(k, 'paused-at-server',
+      'the registry did not list, so a set child-reclaim-disabled cannot be ruled out at the act'));
+    expect(k.argvs).toEqual([KAUDIT]);
   });
 
   it('child-spent: the stale arm needs its own capability, and its flags ride both argvs', async () => {
@@ -1784,7 +1795,7 @@ describe('decideRetire: child-spent over C4h\'s matrix (C4i; D-7166)', () => {
     expect(act.dec.ok && act.dec.d.decision, 'the act\'s own refusal is the act\'s, past the gate').toEqual({ act: true });
   });
 
-  it('child-spent: held at the act — the off switch at the act, the audit\'s generation, and today\'s gap (reclaim-paused read once)', async () => {
+  it('child-spent: held at the act — the off switch at the act, the audit\'s generation, and reclaim-paused at the act (C4o, D-7401)', async () => {
     const off = await childRow(undefined, (k) => { k.hooks.audit = () => { k.raise(CHILD_RECLAIM_DISABLED_MARKER); }; });
     expect(off.outcome).toEqual(deferredC(off.b, 'paused-at-server', 'child-reclaim-disabled is set at the act: child reclaim is switched off'));
     const gen = await childRow({ licence: 'g1' }, (k) => {
@@ -1793,7 +1804,8 @@ describe('decideRetire: child-spent over C4h\'s matrix (C4i; D-7166)', () => {
     });
     expect(gen.outcome).toMatchObject({ kind: 'deferred', why: 'generation-changed' });
     const gap = await childRow(undefined, (k) => { k.hooks.audit = () => { k.raise(RECLAIM_PAUSE_MARKER); }; });
-    expect(gap.dec.ok && gap.dec.d.decision, 'C4o flips this row').toEqual({ act: true });
+    expect(gap.outcome, 'C4o flipped this row').toEqual(deferredC(gap.b, 'paused-at-server',
+      'reclaim-paused is raised: automatic reclamation is paused fleet-wide at the act'));
     const stale = await childRow({ stale: true }, () => {});
     expect(stale.dec.ok && stale.dec.d.decision).toEqual({ act: true });
   });
