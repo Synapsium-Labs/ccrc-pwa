@@ -4993,7 +4993,7 @@ export class FleetWatcher {
     // read HERE, as the job is queued, never inside the callback. Its executor composes nothing when the epoch it reads
     // after its final listing differs, so a reconnect between the queueing and the job's start composes nothing.
     const epoch = this.collectSeenEpoch;
-    void this.deps.queue.run(id, () => collectTempRoot({
+    void retireExecutor(this.deps.queue, id, () => collectTempRoot({
       coord, io: this.deps.io, cfg: this.deps.cfg, runCcd: this.collectRunCcd(id), fleetState: this.deps.fleetState,
       viewers: this.deps.viewers, lane: this.collectPortFor(coord, id), observeIntervalMs: COLLECT_OBSERVE_INTERVAL_MS,
       control: this.collectControlDeps(coord), link: this.deps.fleetIdentity ?? NO_FLEET_IDENTITY,
