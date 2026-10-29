@@ -85,13 +85,22 @@ describe('the compaction flag beside foldsAway (D-7186)', () => {
     expect(events().filter(({ e }) => 'compaction' in e && e.compaction !== true)).toEqual([]);
   });
 
-  it('the skew row: an old PWA ignores the key, so its verdict with the flag equals its verdict without it', async () => {
-    const { foldsAway } = await bubble();
+  // C7i (D-7187) moves the PWA's verdict onto the flag, so the old PWA this row is about is no longer in the tree: it
+  // is the shipped client's verdict before C7i, frozen here byte for byte (its pattern, over a user- or assistant-kind
+  // text), and the first assertion holds the frozen copy to the verdict C7a recorded for that client.
+  const OLD_PWA_RECAP = /^\s*(?:\[[^\]]*]\s*)?This session is being continued from a previous conversation/;
+  const oldPwaFoldsAway = (e: { kind: 'user' | 'assistant'; text: string }): boolean => OLD_PWA_RECAP.test(e.text);
+
+  it('the skew row: an old PWA ignores the key, so its verdict with the flag equals its verdict without it', () => {
     const all = events();
+    expect(all.filter(({ e }) => oldPwaFoldsAway(e)).map(({ source, e }) => `${source} ${e.kind}`)).toEqual([
+      'compactCardFixtures.summary (the recap) user',
+      'compactCardFixtures.user (the recap, typed by a person) user',
+    ]);
     expect(all.some(({ e }) => e.compaction === true)).toBe(true);
     for (const { source, e } of all) {
       const { compaction: _ignored, ...withoutFlag } = e;
-      expect(foldsAway(e), source).toBe(foldsAway(withoutFlag));
+      expect(oldPwaFoldsAway(e), source).toBe(oldPwaFoldsAway(withoutFlag));
     }
   });
 });
