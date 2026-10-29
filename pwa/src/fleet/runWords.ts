@@ -78,6 +78,17 @@ export const itemTallyLabel = (items: RunItemTally): string =>
 export const runClosedAt = (run: { closedAt?: number | null }): number | null =>
   run.closedAt ?? null;
 
+/** What `runLastMove` reads: `RunSummary`'s two times, and the server's `lastMoveAt` (D-7334). Declared here, structurally, until
+ *  `RunSummary` carries `lastMoveAt` itself; every `RunSummary` already satisfies it. When the field lands on the wire type,
+ *  this alias goes and the reader takes `RunSummary`, with no caller changing. */
+type LastMoveCarrier = Pick<RunSummary, 'openedAt' | 'dispatchedAt'> & { readonly lastMoveAt?: number | null };
+
+/** The one reader of `RunSummary.lastMoveAt` (D-7334, D-7338). ABSENT is an older server and reads null, so an older server
+ *  shows no movement (programme-boxes spec §5). NULL is a server that measured no move on the run yet, and falls back to its
+ *  dispatch time, then its open time. A number is the move. */
+export const runLastMove = (run: LastMoveCarrier): number | null =>
+  run.lastMoveAt === undefined ? null : run.lastMoveAt ?? run.dispatchedAt ?? run.openedAt;
+
 /** The active/finished SPLIT (fix, review findings 3/22): `state`, never
  *  `closedAt` — `CoordStore.runs()` itself (the live `{type:'runs'}` frame's
  *  own source, `watch.ts`'s `emitRuns`) draws the SAME line by excluding
