@@ -583,6 +583,32 @@ export const ASK_REFUSE_TEXT: Readonly<Record<AskRefuseCode, string>> = {
   'already-answered': 'That question was already answered.',
 };
 
+/**
+ * The notification's words for the refusals `POST /api/sessions/:id/ask` can return (W7 C7e, D-7183; OA-C17 (a), D-7265),
+ * moved from `public/push-sw.js`'s `REFUSAL` table byte for byte. The operator reads them with no app open and no way to
+ * ask a follow-up question. `push-sw.js` is a classic script that cannot import this module, so its copy is a generated
+ * region rendered from this table (`pwa/test/answerRegion.ts`) and held byte-equal by `push-sw.test.ts`.
+ *
+ * The set is the route's own union (`server/src/inject/ask.ts`), not a subset: `multiselect` and `duplicate-index`
+ * cannot be produced by a one-index tap today, but they stay because the route owns that union and a future action shape
+ * could send more than one index. An unlisted token falls back to the worker's generic sentence rather than showing the
+ * operator a bare error code. It words some tokens differently from `ASK_REFUSE_TEXT` on purpose (`stale-ask` is "That
+ * question is gone." here), and W7 changes neither.
+ */
+export const NOTIFICATION_REFUSAL_TEXT: Readonly<Record<string, string>> = {
+  'stale-ask': 'That question is gone.',
+  'not-waiting': 'The session has moved on.',
+  'ask-mismatch': 'The question changed — open the session and read it.',
+  'multi-question': 'This one asks more than one thing — open the session.',
+  'multiselect': 'This one takes more than one answer — open the session.',
+  'duplicate-index': 'That option was sent twice — open the session.',
+  'range': 'That option is no longer there.',
+  'no-menu': 'The question is no longer on screen.',
+  'menu-mismatch': 'The terminal is showing something else now.',
+  'not-alive': 'That session is no longer running.',
+  'unknown-session': 'That session is gone.',
+};
+
 /** An account-pool write's refusals (`SetAccountPoolsRefuseCode`) in words. No screen renders it yet. */
 export const SET_ACCOUNT_POOLS_REFUSAL_TEXT: Readonly<Record<SetAccountPoolsRefuseCode, string>> = {
   'multi-pool-not-supported': 'An account can be in only one pool.',

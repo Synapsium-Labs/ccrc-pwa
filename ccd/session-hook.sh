@@ -4772,6 +4772,47 @@ if [[ "$event" == PreToolUse && "$pre_json" != *'"permissionDecision":"deny"'* \
   fi
 fi
 
+# TESTS RUN THROUGH `ccrc test` (D-7298). ONE READER for both arms: `ccrc test --classify-shell`, the
+# wrapper's own classifier, so the hook and the queue agree on what a test is, and every spelling the wrapper reads
+# through (quoted words, `env`/`timeout`/`setsid`/`sudo -u`/`flock`/`xargs` prefixes, systemd-run's value flags, `sh -c`,
+# `eval`, `script -c`, `watch` and tmux window strings) is read the same way here. It answers one of three words:
+#   wrapped  a `systemd-run` of one's own around ANY test or typecheck (`S=systemd-run; $S …` included): denied on every
+#            session, since a run placed by hand escapes the test slice's caps, the queue, or both;
+#   heavy    a heavy test or typecheck started in command position outside `ccrc test` (`npx vitest run`, `npx tsc -p
+#            test/tsconfig.tests.json`, `npm test`, `make test`): denied on a fleet box (Linux, a session the registry
+#            knows), where it would land in the session's own pane scope past the slice and the queue; macOS has no slice;
+#   light    anything else, `ccrc test …` included: allowed.
+# `ccrc test -- systemd-run … <test>` is wrapped too: its inner command is read through the same check.
+# Either denial has somewhere to go: `ccrc test` degrades rather than refuses where the slice cannot be used (ccd/ccrc-test).
+# GOOD FAITH (D-7298): the sessions are cooperative, so this catches accidental spellings; the cgroup caps already on
+# the box are the backstop. Deliberately obfuscated spellings (a systemd-run inside a command substitution, prlimit,
+# unshare or cgexec prefixes, find -exec, python os.system, an npm script that wraps the suite) are out of scope.
+# An accident guard that fails open: no `ccrc` on PATH (then `ccrc test` is not there to send a run to either), a
+# payload jq cannot parse, or a classifier that answers anything else says nothing. Only a Bash call whose payload names
+# systemd-run (or, on a fleet box, a test program, a package manager or make) forks jq and the classifier, bounded like
+# the tmux question above when a bound is on PATH.
+if [[ "$event" == PreToolUse && "$pre_json" != *'"permissionDecision":"deny"'* && "${tool:-}" == Bash ]]; then
+  tfleet=0
+  [[ "${OSTYPE:-}" == linux* && -n "$id" && -f "$REG/$id.generation" ]] && tfleet=1
+  task=0
+  case "$payload" in
+    *systemd-run*) task=1 ;;
+    *vitest*|*jest*|*tsc*|*tsgo*|*typecheck*|*playwright*|*stryker*|*npm*|*pnpm*|*yarn*|*bun*|*make*) task=$tfleet ;;
+  esac
+  if [[ "$task" == 1 ]] && command -v ccrc >/dev/null 2>&1; then
+    tcmd=$(jq -r '.tool_input.command // "" | strings' <<<"$payload" 2>/dev/null) || tcmd=""
+    tverdict=""
+    [[ -z "$tcmd" ]] || tverdict=$(${hooktmo:+"$hooktmo" 5} ccrc test --classify-shell -- "$tcmd" 2>/dev/null) || tverdict=""
+    treason=""
+    if [[ "$tverdict" == wrapped ]]; then
+      treason="ccrc: run tests and typechecks through \`ccrc test -- <command>\` (for example \`ccrc test -- npx vitest run --maxWorkers=2 test/foo.test.ts\`), never under a systemd-run of your own: \`ccrc test\` puts the run in the fleet's test slice, whose caps keep sessions ahead of tests, and queues heavy runs (tsc, typecheck, full or wide vitest, browser and mutation tests) fleet-wide (D-7298)."
+    elif [[ "$tverdict" == heavy && "$tfleet" == 1 ]]; then
+      treason="ccrc: this command starts a heavy test or typecheck outside \`ccrc test\`, so it would run in this session's own scope, past the fleet's test slice and its queue. Run it as \`ccrc test -- <command>\` (for example \`ccrc test -- npx tsc --noEmit -p test/tsconfig.tests.json\`): heavy runs (tsc, typecheck, full or wide vitest, browser and mutation tests) queue fleet-wide inside the slice, whose caps keep sessions ahead of tests (D-7298)."
+    fi
+    if [[ -n "$treason" ]] && tjson=$(_hook_deny_json "$treason"); then pre_json=$tjson; fi
+  fi
+fi
+
 # A FAN-OUT NAMES ITS MODEL, AND A WORKFLOW AGENT ITS EFFORT TOO (D-6798; operator ruling 2026-10-24): on every session, an
 # Agent or Task call whose `tool_input` names no `model`, and a Workflow call whose script has an `agent(...)` call
 # naming no `model` or no `effort`, is denied, with a reason that sends the agent to the routing matrix. A call that names

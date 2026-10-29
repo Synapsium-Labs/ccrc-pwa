@@ -23,6 +23,7 @@ import path from 'node:path';
 import * as pty from 'node-pty';
 import { tmuxName, tmuxTarget } from '../../shared/tmux-target.js';
 import { PINNED_WINDOW_COLS, PINNED_WINDOW_ROWS, TMUX_STATUS_ROWS } from '../../shared/api.js';
+import { removePrivateSocket, watchPrivateServer } from './privateTmux.js';
 
 const ROOT = path.resolve(__dirname, '..', '..');
 const STUB = path.join(__dirname, 'fixtures', 'drawer-stub-alt.mjs');
@@ -61,7 +62,7 @@ const windowSizeOpt = (target: string): string =>
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
-// (e) The attach and the expectations both read the shared constants, so a
+// THE ATTACH: the attach and the expectations both read the shared constants, so a
 // change to the constants moves the test with them. The expectations never
 // read ATTACH_*, so a wrong attach on its own goes red (the mutation table).
 const ATTACH_COLS = PINNED_WINDOW_COLS;
@@ -174,17 +175,21 @@ describe.skipIf(NO_TMUX)(BEHAVIOURAL, () => {
   // So the private server is started once with `exit-empty off`, lives across
   // every case, and only `afterAll` kills it: no case meets an exiting server,
   // and no reset has to poll for one to go.
+  // A server that outlives every session also outlives a worker killed before `afterAll` (a SIGKILL, an OOM, a
+  // cancelled run), outside the per-run temp parent the global setup sweeps, so a watchdog kills it once this worker
+  // has gone (desktop polish Task C12, item 11; `privateTmux.ts`).
+  let stopWatch: (() => void) | null = null;
   beforeAll(() => {
     const start = T('start-server', ';', 'set-option', '-s', 'exit-empty', 'off');
     expect(start.status, `start-server: ${start.stderr}`).toBe(0);
+    stopWatch = watchPrivateServer(REAL_TMUX!, SOCK, CONF);
     expect(T('show-options', '-s', '-v', 'exit-empty').stdout.trim(), 'exit-empty on the private server').toBe('off');
   });
 
   afterAll(() => {
+    stopWatch?.();
     if (REAL_TMUX !== null) T('kill-server');
-    if (typeof process.getuid === 'function') {
-      fs.rmSync(path.join('/tmp', `tmux-${process.getuid()}`, SOCK), { force: true });
-    }
+    removePrivateSocket(SOCK);
   });
 
   afterEach(() => { resetSessions(); });

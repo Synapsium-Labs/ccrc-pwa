@@ -8,6 +8,8 @@
 //   the section ignores `tasksTouchedAt` (D-5372 lost at >=1600) ............ "…a stale plan is a plan left open"
 //   a section re-implemented as an arrow or an aliased import .............. "…the same markup as the shared ones"
 //   the model and effort doors named by their value alone .................. "…named by their field"
+//   the routing tail's nowrap rule removed from inspector.css ................ "…its rule is nowrap"
+//   "set effort" typed again in routingLine.ts or the header (C12 item 1) ... "…the header chip's, written once"
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -385,6 +387,22 @@ describe('a section with nothing to show renders nothing (desktop polish T3d, D-
     expect(door.textContent).toBe('set by the lane');
     expect(door.className).not.toContain('ultra');
     r.unmount();
+  });
+
+  // The markup keeps each "·" with what follows; the stylesheet is what makes that tail unbreakable.
+  it('a routing tail never breaks inside itself: its rule is nowrap', () => {
+    const css = readFileSync(path.join(SRC, 'inspector/inspector.css'), 'utf8');
+    expect(css).toMatch(/\.insp-routing-tail\s*\{[^}]*white-space:\s*nowrap;/);
+  });
+
+  it("the effort door's word before the pane reports one is the header chip's, written once", () => {
+    const literal = /['"]set effort['"]/g;
+    const code = (file: string) => readFileSync(path.join(SRC, file), 'utf8')
+      .replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+    const header = code('session/sessionHeaderView.ts');
+    const line = code('session/routingLine.ts');
+    expect(header.match(literal), 'the header spells it').toHaveLength(1);
+    expect(line.match(literal), 'the routing line takes it from the header').toBeNull();
   });
 });
 

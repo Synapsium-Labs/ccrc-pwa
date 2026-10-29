@@ -12,7 +12,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync } from
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { skipsTests, scopeOf, FOREIGN, alwaysRunPwaTests } from '../../.github/ci/reach.mjs';
+import { skipsTests, scopeOf, prScope, fastRun, QUEUE_ONLY, FOREIGN, alwaysRunPwaTests } from '../../.github/ci/reach.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const REACH = path.join(ROOT, '.github', 'ci', 'reach.mjs');
@@ -213,13 +213,57 @@ describe('reach.mjs CLI', () => {
       return /^skip=(.*)$/m.exec(readFileSync(out, 'utf8'))?.[1] ?? '';
     };
 
-    it('shared/ moved into server/ still runs the pwa and browser tests', () => {
+    it('shared/ moved into server/ still runs the pwa tests; the browser leg is the merge queue\'s on a fast pull request', () => {
       expect(moved('shared/x.ts', 'server/x.ts', 'pwa')).toBe('false');
-      expect(moved('shared/x.ts', 'server/x.ts', 'browser')).toBe('false');
+      // reach.mjs QUEUE_ONLY (operator ruling 2026-10-28): an ordinary pull request leaves the browser suite to the queue.
+      expect(moved('shared/x.ts', 'server/x.ts', 'browser')).toBe('true');
     });
 
     it('shared/ moved into ui/ still runs the agent tests', () => {
       expect(moved('shared/x.ts', 'ui/x.ts', 'agent')).toBe('false');
     });
+  });
+});
+
+describe('the fast run (operator ruling 2026-10-28): an ordinary pull request runs the fast checks only', () => {
+  it('fastRun: an ordinary change is fast; shared infrastructure, or no change at all, is the full run', () => {
+    expect(fastRun(['pwa/src/a.ts', 'server/src/b.ts', 'ccd/ccd', 'docs/x.md']).fast).toBe(true);
+    for (const infra of ['.github/workflows/ci.yml', 'server/package-lock.json', 'pwa/package.json', 'server/vitest.config.ts',
+      'agent/tsconfig.json', '.gitattributes', '.npmrc', 'server/scripts/fix-node-pty-helper.mjs']) {
+      const answer = fastRun(['pwa/src/a.ts', infra]);
+      expect(answer.fast, infra).toBe(false);
+      expect(answer.why, infra).toContain(infra);
+    }
+    expect(fastRun([]).fast).toBe(false);
+    expect(fastRun(['', '  ']).fast).toBe(false);
+  });
+
+  it('prScope: the browser leg skips on a fast change and follows scopeOf otherwise; every other package is scopeOf', () => {
+    expect(QUEUE_ONLY).toEqual(['browser']);
+    expect(prScope('browser', ['pwa/src/a.ts'])).toBe('skip');
+    expect(prScope('browser', ['pwa/package.json'])).toBe(scopeOf('browser', ['pwa/package.json']));
+    expect(prScope('browser', ['pwa/package.json'])).toBe('all');
+    for (const changed of [['pwa/src/a.ts'], ['server/src/b.ts'], ['pwa/src/x.css']]) {
+      for (const pkg of ['agent', 'pwa']) expect(prScope(pkg, changed)).toBe(scopeOf(pkg, changed));
+    }
+  });
+
+  it('--ask fast writes fast=true only for an ordinary pull request without the full-ci label or a train/ branch', () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'ccrc-reach-fast-'));
+    const ask = (event: string, fullLabel: string, changed: string): string => {
+      const out = path.join(dir, `out-${event}-${fullLabel}-${changed.replace(/\W/g, '_')}.txt`);
+      const list = path.join(dir, 'changed.txt');
+      writeFileSync(out, '');
+      writeFileSync(list, `${changed}\n`);
+      execFileSync('node', [REACH, '--ask', 'fast', '--event', event, '--full-label', fullLabel, '--changed-file', list], {
+        env: { ...process.env, GITHUB_OUTPUT: out }, encoding: 'utf8',
+      });
+      return readFileSync(out, 'utf8');
+    };
+    expect(ask('pull_request', 'false', 'pwa/src/a.ts')).toBe('fast=true\n');
+    expect(ask('pull_request', 'true', 'pwa/src/a.ts')).toBe('fast=false\n');
+    expect(ask('pull_request', 'false', '.github/workflows/ci.yml')).toBe('fast=false\n');
+    expect(ask('merge_group', 'false', 'pwa/src/a.ts')).toBe('fast=false\n');
+    expect(ask('schedule', 'false', 'pwa/src/a.ts')).toBe('fast=false\n');
   });
 });

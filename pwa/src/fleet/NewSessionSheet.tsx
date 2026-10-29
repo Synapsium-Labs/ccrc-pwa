@@ -1,6 +1,7 @@
 // New-session sheet — two steps in one sheet. Step 1: pick the account
 // (shared AccountRow chips with limit gauges from GET /api/accounts).
-// Step 2: pick the project — searchable list from api.projects, with
+// Step 2: pick the project — searchable list from the one project loader
+// (`useProjectRows.ts#loadProjects`, class-blind), with
 // registry projects first, most recently active on top. The confirm row
 // narrates the action in plain language ("Start project-c on
 // team·alt") and posts api.createSession. Success opens the new session: the sheet
@@ -47,6 +48,7 @@ import { ProjectPicker } from './ProjectPicker';
 import { liveIdsIn, liveMainCheckoutIn, startedSessionFor } from './startProgramPolicy';
 import { NAME_FIELD_CLASS, WorkspaceNameField } from './WorkspaceNameField';
 import { useNamePreview } from './useNamePreview';
+import { loadProjects } from './useProjectRows';
 import { addRefusalText, classifyAddError } from './workspaceAddWords';
 import { LINEAR_SETTINGS_PATH, confirmLabel, nameDoorReason } from './workspaceNameWords';
 import { AUTOMATIC_CLASS } from './classWords';
@@ -184,7 +186,7 @@ export function NewSessionSheet({
     let cancelled = false;
     setList(null);
     setListError(null);
-    api.projects().then(
+    loadProjects().then(
       (r) => {
         if (!cancelled) setList(r.projects);
       },

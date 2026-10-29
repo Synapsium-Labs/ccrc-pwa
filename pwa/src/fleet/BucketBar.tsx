@@ -98,8 +98,8 @@ export function BucketBar(
                   <span className="bucket-head-count">{inBucket.length}</span>
                   {unseenCount > 0 && (
                     <>
-                      {/* "Done 5 · 4 new": the count says its word (T3a, D-6331). The middot is decoration; the
-                          group's own name carries the sentence. */}
+                      {/* "Done 5 · 4 new": the count says its word (T3a, D-6331). The middot is decoration and
+                          hidden; the badge names itself ("4 new"), and the group's own name is the bucket word alone. */}
                       <span className="bucket-head-sep" aria-hidden="true">·</span>
                       <CountBadge className="bucket-head-unseen" aria-label={`${unseenCount} new`}>
                         {unseenCount} new

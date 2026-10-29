@@ -3083,12 +3083,15 @@ describe('boot refusal (R24): an active restore marker, or one that cannot be me
     mkdirSync(path.join(home, '.ccrc'), { recursive: true });
     writeFileSync(path.join(home, '.ccrc', COORDINATION_RESTORE_MARKER_FILE), '{"state":"replacing"}\n');
     const tsx = path.resolve(__dirname, '../node_modules/.bin/tsx');
+    // The server refuses before it listens, so nothing binds this port: a fixed one is safe here. Only a mutant that boots
+    // past the refusal would take it, and this case reds on that mutant by its exit code.
+    const NEVER_BOUND_PORT = 23000 + (process.pid % 3000);
     // A process GROUP of its own (`tsx` runs the server as its child), so that a server that did NOT refuse to boot, and would be left
     // listening, is killed whole: only the PIDs this test started are ever signalled.
     const child = spawn(tsx, [path.resolve(srcRoot, 'index.ts')], {
       cwd: path.resolve(__dirname, '..'),
       env: {
-        PATH: process.env['PATH'] ?? '', HOME: home, CCRC_HOME: home, CCRC_PORT: String(23000 + (process.pid % 3000)), CCRC_HOST: '127.0.0.1',
+        PATH: process.env['PATH'] ?? '', HOME: home, CCRC_HOME: home, CCRC_PORT: String(NEVER_BOUND_PORT), CCRC_HOST: '127.0.0.1',
         // Fail-safe insurance for a mutant that disables the refusal: a server that DID boot would find a fixture tmux directory, never
         // the caller's default tmux socket (M7).
         TMUX_TMPDIR: mkTmp('ccrc-boot-tmux-'),

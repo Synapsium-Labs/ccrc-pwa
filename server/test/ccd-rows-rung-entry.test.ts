@@ -29,7 +29,7 @@ import {
 } from './childReclaimFixture.js';
 import { verbHelpers } from './childReclaimVerbHelpers.js';
 import { EXP_ID, expireAudit, makeArchived } from './wsExpireFixture.js';
-import { FAKE_PROC_SELF, walkSpy, writeField } from './worktreeIdentityFixture.js';
+import { DARWIN_IDENT_SHIMS, FAKE_PROC_SELF, walkSpy, writeField } from './worktreeIdentityFixture.js';
 import { parseChildReclaimAudit, parseChildReclaimAuditFailed } from '../src/coord/childReclaim.js';
 import { parseExpireAudit } from '../src/archivedExpiry.js';
 
@@ -559,6 +559,92 @@ describe('ws-expire and the collector share the rows rung', () => {
     const r = collectClear();
     expect(r.rc, r.why).toBe('2');
     expect(r.why).toContain(`registry row(s) ${SIB} ${HELD}`);
+  }, 90_000);
+});
+
+// A BOX MOVE. A registry copied onto new hardware keeps every field as the old box wrote
+// it: the device its pane entered on is one this host does not mount, while the tree, copied, stands at the very path
+// the field records. Before the fix rule (d) held every such row, and one held row stopped every child's reclaim.
+// The rung now places such a row by its path, for the overlap check only, and writes nothing: the device must be a
+// real one (major not 0) that no line of this host's mount table carries and that no target of the walk is on, and
+// the recorded path must stand and be where the row's workdir resolves now. Linux only: Darwin keeps no table.
+const LINUX = process.platform === 'linux';
+const tableMajMins = (): Set<string> => new Set(fs.readFileSync('/proc/self/mountinfo', 'utf8').split('\n')
+  .map((l) => l.split(' ')[2] ?? '').filter(Boolean));
+/** A Linux `st_dev` (glibc `makedev`, small numbers) whose `major:minor` this process's mount table never names. */
+const unmountedDev = (major: number): number => {
+  const seen = tableMajMins();
+  for (let minor = 250; minor > 0; minor -= 1) {
+    if (!seen.has(`${major}:${minor}`)) return major * 256 + minor;
+  }
+  throw new Error(`no free minor for major ${major}`);
+};
+describe.runIf(LINUX)('a box move: a recorded device this host does not mount', () => {
+  /** A standing row outside the child, spelled physically, whose field records `dev` and `phys` (default: the row's
+   *  own path, as a copy that kept its layout does). */
+  const movedRow = (dev: number, phys?: (cur: string) => string, inoOf?: () => string): { cur: string; c: Child; body: string } => {
+    const c = makeChild(h);
+    const cur = fs.realpathSync(mk('cur'));
+    otherRow('demo-moved', cur);
+    const ino = h.sh(`_plat_devino '${inoOf ? inoOf() : cur}'`).split(':')[1] ?? '';
+    expect(ino, 'the CONTROL: an inode').toMatch(/^[0-9]+$/);
+    const body = field(`${dev}:${ino}:1111`, phys ? phys(cur) : cur, cur);
+    writeField(h, 'demo-moved', body);
+    expect(fieldState('demo-moved', cur), 'the CONTROL: the field reads valid').toBe('valid');
+    return { cur, c, body };
+  };
+
+  it('the tree copied to its own path, its recorded device mounted nowhere here — placed by its path: reclaimable, and the field is not rewritten', () => {
+    const { c, cur, body } = movedRow(unmountedDev(8));
+    placed(evalOf(h, { pre: BTIME('1111') }), 'the audit');
+    expect(ownedOf(CHILD_ID, c.wt, c.main).rc, 'the tail’s ownership check, the same rung').toBe('0');
+    expect(fs.readFileSync(path.join(REG(), 'demo-moved.workdirid'), 'utf8'), 'nothing was written').toBe(body);
+    expect(fieldState('demo-moved', cur)).toBe('valid');
+  }, 90_000);
+
+  it('CONTROL: the same row whose recorded device IS mounted here (copied within one file system) still holds — unmeasured', () => {
+    const dev = Number(h.sh(`stat -c %d '${fs.realpathSync(h.home)}'`));
+    expect(Number.isInteger(dev) && dev > 0, 'the CONTROL: a device').toBe(true);
+    movedRow(dev, undefined, () => fs.realpathSync(mk('the-original')));
+    answers(evalOf(h, { pre: BTIME('1111') }), 'unmeasured', `registry row(s) demo-moved ${UNREC}`);
+  }, 90_000);
+
+  it('an anonymous device (major 0), which a table never has to list, still holds — unmeasured', () => {
+    movedRow(unmountedDev(0));
+    answers(evalOf(h, { pre: BTIME('1111') }), 'unmeasured', `registry row(s) demo-moved ${UNREC}`);
+  }, 90_000);
+
+  const ELSEWHERE: Array<[string, (cur: string) => string]> = [
+    ['it records another path that stands', () => fs.realpathSync(mk('elsewhere'))],
+    ['it records a path that is gone', () => gone()],
+  ];
+  it.each(ELSEWHERE)('a row whose workdir no longer leads where it entered stays held, whatever its device — %s', (_l, phys) => {
+    movedRow(unmountedDev(8), phys);
+    answers(evalOf(h, { pre: BTIME('1111') }), 'unmeasured', `registry row(s) demo-moved ${UNREC}`);
+  }, 90_000);
+
+  it('placed by path still refuses: a copied row inside the child is NESTED', () => {
+    const c = makeChild(h);
+    const x = fs.realpathSync(path.join(c.wt)) + '/x';
+    fs.mkdirSync(x);
+    otherRow('demo-moved', x);
+    const ino = h.sh(`_plat_devino '${x}'`).split(':')[1] ?? '';
+    writeField(h, 'demo-moved', field(`${unmountedDev(8)}:${ino}:1111`, x, x));
+    answers(evalOf(h, { pre: BTIME('1111') }), 'containment-unproven', NESTED_BY('demo-moved'));
+  }, 90_000);
+
+  it('on Darwin, which keeps no mount table, the row still holds — unmeasured', () => {
+    movedRow(unmountedDev(8));
+    answers(evalOf(h, { pre: `CCD_OS=darwin; ${DARWIN_IDENT_SHIMS} ${BTIME('1111')}` }), 'unmeasured',
+      `registry row(s) demo-moved ${UNREC}`);
+  }, 90_000);
+
+  it('the one walk asks each valid field’s device (D) before its recorded path (F), only beside the table', () => {
+    movedRow(unmountedDev(8));
+    evalOf(h, { pre: `${walkSpy} ${BTIME('1111')}` });
+    const toks = walkCalls()[0]!.split(' ').slice(1);
+    expect(toks, 'the table, then one D by field').toEqual(expect.arrayContaining(['M0', 'D0', 'F0']));
+    expect(toks.indexOf('D0') < toks.indexOf('F0'), toks.join(' ')).toBe(true);
   }, 90_000);
 });
 

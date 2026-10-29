@@ -293,7 +293,9 @@ function plantInstalledBox(home: string, opts: { versioned?: string[] } = {}): v
     // W4a Task 9: the server-role watchdog's pair.
     'ccrc-update-watchdog.service', 'ccrc-update-watchdog.timer',
     // Plan 3a Task 6: ccrc's own usage pair, placed on fleet/both.
-    'ccrc-codex-usage@.service', 'ccrc-codex-usage@.timer']) {
+    'ccrc-codex-usage@.service', 'ccrc-codex-usage@.timer',
+    // D-7298: the test slice, placed on every Linux role.
+    'ccrctests.slice']) {
     writeFileSync(join(units, u), `[Unit]\nDescription=fixture ${u}\n`);
   }
   writeFileSync(join(units, 'claude-session@.service.d', 'limits.conf'), '[Service]\n');
@@ -607,6 +609,8 @@ describe('ccrc uninstall: the remove set (spec §7)', () => {
     expect(calls).toContain('--user disable --now ccd-telemetry-keepalive.timer');
     expect(calls).toContain('--user disable --now ccrc-models.timer');
     expect(calls).toContain('--user disable --now ccrc-update-watchdog.timer');
+    // D-7298: stopping the slice ends any test run still in it before its file goes.
+    expect(calls).toContain('--user disable --now ccrctests.slice');
     expect(calls[calls.length - 1]).toBe('--user daemon-reload');
     // The sacred rule holds even here: no claude-session@ instance is ever a
     // systemctl target, and tmux is never touched (poison would have fired).

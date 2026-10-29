@@ -17,7 +17,8 @@
 // 900 px the strip is always folded and the stored choice (`seedStripExpanded`) is neither read nor written. With the
 // same seventeen lanes (`test/seventeenLanes.ts`, the fixture every strip suite shares) a phone shows two lines of the
 // tracks its grid draws: four cards in two rows of two below 700 (360, 390 and 699 are measured here; the fold at 438 is
-// held in jsdom only), eight in two rows of four from 700 (700 and 899); the control and All accounts share one row, nothing scrolls sideways, and the first session row sits
+// not measured here, and jsdom, which evaluates no stylesheet, cannot hold it either), eight in two rows of four from
+// 700 (700 and 899); the control and All accounts share one row, nothing scrolls sideways, and the first session row sits
 // at most 440 px down in Refined and at most 540 px down in Instrument at 390x844, with the choice stored expanded too.
 // A real tap on the control (`locator.tap()`, a touch screen below 900) opens the panel: every lane in order, hung from
 // the strip's bottom edge, drawn over the content with no push of the page, bounded by the room left under the strip and

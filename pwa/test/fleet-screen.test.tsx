@@ -54,10 +54,13 @@ const MIN = 60_000;
  *  Unlike the sibling helper in session-card.test.tsx, this mounts the full
  *  FleetScreen tree, where other reads call fetch on mount too: the fleet
  *  store's `connect()` reads /api/accounts, the test host's
- *  `FleetChromeProvider` polls /api/fleet/health and /api/updates,
- *  `HotFilesStrip` reads /api/claims and `PasskeyNotice` reads
- *  /api/auth/status. (`AccountsStrip` reads the store and `FleetHostBanner`
- *  takes its health as a prop, so neither fetches; C8, D-6440.) A Response
+ *  `FleetChromeProvider` polls /api/fleet/health (its /api/updates poll
+ *  starts too, but this file spies `api.updates` to a promise that never
+ *  settles, so that one never reaches fetch), `HotFilesStrip` reads
+ *  /api/claims, and the banner stack's own `usePasskeyStatus()` reads
+ *  /api/auth/status once and hands it to `PasskeyNotice` as a prop.
+ *  (`AccountsStrip` reads the store since C8, D-6440, and `FleetHostBanner`
+ *  takes its health as a prop, as it did before C8; neither fetches.) A Response
  *  body can only be read once. A single shared `mockResolvedValue(response)`
  *  would let the first of those consume the body, leaving later callers
  *  (our click) with an empty, already-read stream — so this hands back a
@@ -906,7 +909,7 @@ describe('FleetScreen', () => {
       });
 
       fireEvent.click(await screen.findByRole('button', {
-        name: 'no project pool — any account may serve this project',
+        name: 'Set pool — no project pool — any account may serve this project',
       }));
       fireEvent.click(screen.getByRole('button', { name: 'pool pool-a' }));
       await waitFor(() => expect(projects).toHaveBeenCalledTimes(2));
@@ -1013,7 +1016,7 @@ describe('FleetScreen', () => {
       });
 
       fireEvent.click(await screen.findByRole('button', {
-        name: 'no project pool — any account may serve this project',
+        name: 'Set pool — no project pool — any account may serve this project',
       }));
       fireEvent.click(screen.getByRole('button', { name: 'pool pool-a' }));
 
@@ -1050,7 +1053,7 @@ describe('FleetScreen', () => {
       });
 
       const poolChip = await screen.findByRole('button', {
-        name: 'no project pool — any account may serve this project',
+        name: 'Set pool — no project pool — any account may serve this project',
       });
       fireEvent.click(poolChip);
       fireEvent.click(screen.getByRole('button', { name: 'pool pool-a' }));
@@ -1097,14 +1100,14 @@ describe('FleetScreen', () => {
       });
 
       const poolChip = await screen.findByRole('button', {
-        name: 'no project pool — any account may serve this project',
+        name: 'Set pool — no project pool — any account may serve this project',
       });
       fireEvent.click(poolChip);
       fireEvent.click(screen.getByRole('button', { name: 'pool pool-a' }));
       await waitFor(() => expect(projects).toHaveBeenCalledTimes(2));
       fireEvent.click(screen.getByTestId('sheet-overlay'));
       fireEvent.click(screen.getByRole('button', {
-        name: 'no project pool — any account may serve this project',
+        name: 'Set pool — no project pool — any account may serve this project',
       }));
       expect(screen.getByRole('dialog', { name: 'Which pool runs this project?' }))
         .toHaveTextContent('alpha is in pool pool-a.');
@@ -1165,7 +1168,7 @@ describe('FleetScreen', () => {
       });
       await waitFor(() => expect(projects).toHaveBeenCalledTimes(2));
       const initialPool = await screen.findByRole('button', {
-        name: 'no project pool — any account may serve this project',
+        name: 'Set pool — no project pool — any account may serve this project',
       });
       fireEvent.click(initialPool);
       fireEvent.click(screen.getByRole('button', { name: 'pool pool-a' }));
@@ -1254,7 +1257,7 @@ describe('FleetScreen', () => {
         expect(projects).toHaveBeenCalledTimes(2);
 
         fireEvent.click(screen.getByRole('button', {
-          name: 'no project pool — any account may serve this project',
+          name: 'Set pool — no project pool — any account may serve this project',
         }));
         fireEvent.click(screen.getByRole('button', { name: 'pool pool-a' }));
         await act(async () => { await Promise.resolve(); });
@@ -2176,7 +2179,11 @@ describe('archived footer row', () => {
 // directly — so it survives, renamed to match what it actually tests.
 describe('AccountsStrip', () => {
   it('renders account usage from /api/accounts with a reset countdown, independent of sessions', async () => {
-    const nowSec = Math.floor(Date.now() / 1000);
+    // One frozen clock for the fixture and the strip's `useNow`: a live clock let the second tick between the two
+    // reads under CI load, so the 5 h window read "1h 59m" and the row failed on time, not on behaviour.
+    const nowMs = 1_800_000_000_500;
+    vi.spyOn(Date, 'now').mockReturnValue(nowMs);
+    const nowSec = Math.floor(nowMs / 1000);
     // The strip reads a fleet store's accounts answer (C8, D-6440): this one's read, made once before the mount.
     const store = createFleetStore({ fetchAccounts: async () => ({
       accounts: [

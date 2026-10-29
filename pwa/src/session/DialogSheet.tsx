@@ -151,7 +151,7 @@
 // structured sheet from the transcript's copy, or on the unreadable one. The own-words text, the picks and the senders
 // stay HERE, so that hand-off (and a change of source) keeps them.
 
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useReducer, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { backgroundOnlyRefusal, type Dialog, type DialogTabTarget, type HookAsk } from '../../../shared/api';
 import { parseAskTabs } from '../../../shared/ask-menu';
@@ -159,38 +159,22 @@ import { OptionRow, toast, useDesk } from '@ccrc/ui';
 import { EnvelopeSheet, TerminalCta } from './EnvelopeSheet';
 import { AskSurface } from './AskSurface';
 import {
-  AskHeader, AskReview, AskTabs, KICKER_CHOICE, KICKER_WAITING, REVIEW_TITLE, keyed, lit, picksBusy,
-  wordsBusy, type Asker, type PickCall, type Picks, type Words, type WordsCall,
+  AskHeader, AskReview, AskTabs, KICKER_CHOICE, KICKER_WAITING, REVIEW_TITLE, keyed, lit, type Asker, type Picks, type Words,
 } from './AskParts';
 import {
-  askScreen, askSource, freeTextSlot, isUsableAsk, paneTicks, picksUncommitted, questionKey, shownQuestion, slotHolds, type AskSource, type ShownQuestion,
+  askScreen, askSource, isUsableAsk, paneTicks, picksUncommitted, questionKey, shownQuestion, type AskSource, type ShownQuestion,
 } from './askLive';
 import { keyTabs, questionKeys, reviewKeys, rowKey, type KeyScreen } from './askKeys';
+import {
+  answeringOption, busy, createAnswerLifecycle, performAnswer, showsSent, type AnswerEvent, type AnswerLifecycle,
+  type AnswerSeam, type AnswerState, type RefusalToken, type SheetCommand,
+} from './answerLifecycle';
 import { dialogMultiRefusal, dialogRefusal, dialogTabRefusal, dialogTextRefusal } from './askWords';
 import { useAskEngagement, useAskKeys } from './useAskKeys';
 import { api, ApiError, failedTo } from '../lib/api';
 import { backgroundTasksClause } from '../lib/refusalWords';
 import { getSessionStore, type SessionStore } from '../stores/session';
 import './chat.css';
-
-/** No own-words text, and no call. */
-const NO_WORDS: { text: string; call: WordsCall | null } = { text: '', call: null };
-
-/** No box touched, and no commit. `id` is the question (dialog id) `picked` belongs to: a set is never carried from
- *  one question to another. */
-const NO_PICK: { id: string | null; picked: readonly number[] | null; call: PickCall | null } = {
-  id: null, picked: null, call: null,
-};
-
-/** Does `dialog` show the question `call` was made for (`questionKey`)? */
-const showsQuestion = (dialog: Dialog | null, call: WordsCall): dialog is Dialog =>
-  dialog !== null && questionKey(dialog, call.row) === call.question;
-
-/** Does `dialog` still show the question `call` typed into, its free-text row holding exactly `text`? That is the
- *  typed row of this very send (the stream may deliver it after the call answered), not other text, and not a new
- *  question. */
-const showsSent = (dialog: Dialog | null, call: WordsCall, text: string): boolean =>
-  showsQuestion(dialog, call) && slotHolds(freeTextSlot(dialog, call.row - 1), text);
 
 export interface DialogSheetProps {
   id: string;
@@ -216,10 +200,17 @@ export interface DialogSheetProps {
   /** D-6326: told whether the inline ask card is mounted (the desk), so the session screen can point the transcript at it,
    *  stand its Escape interrupt down and hold the composer's Send. A phone's sheet never reports. */
   onInline?: (mounted: boolean) => void;
+  /** D-7183: the writers this sheet's answers go through (`answerLifecycle.ts#performAnswer`). Injectable for tests;
+   *  defaults to `lib/api.ts`'s `api`. The sheets never issue the notification's `ask`. */
+  answers?: AnswerSeam;
 }
 
+/** A refusal's token for the answer lifecycle: the door's code, or `failed` for a write that did not go through. The
+ *  sentence is worded from the error where it is today (`askWords.ts`), never from this. */
+const refusalToken = (err: unknown): RefusalToken => (err instanceof ApiError ? err.message : 'failed');
 
-export function DialogSheet({ id, store, onOpenTerminal, raise, asker = null, onInline }: DialogSheetProps): ReactNode {
+
+export function DialogSheet({ id, store, onOpenTerminal, raise, asker = null, onInline, answers = api }: DialogSheetProps): ReactNode {
   const useStore = store ?? getSessionStore(id);
   const storeDialog = useStore((s) => s.dialog);
   /** Decision `ask-answer-returns-next-screen`: an answer route's `next`, into the store (`applyAnswered`). */
@@ -239,7 +230,7 @@ export function DialogSheet({ id, store, onOpenTerminal, raise, asker = null, on
   //  - live, and `askSource` says `none` (the ask ended): the surface it was showing is marked `closed`, and stays
   //    rendered, closed (`open={false}`, its content inert), so it leaves with its exit and never re-opens on its own;
   //  - not live (the socket dropped, or the new connection has not spoken): the same held surface, as it was, read-only
-  //    (`claim` refuses every send) with one status line, so a reconnect neither unmounts the drawer nor closes a phone's
+  //    (`start` refuses every send) with one status line, so a reconnect neither unmounts the drawer nor closes a phone's
   //    keyboard, and a `dialog` frame that arrives in the gap does not repaint it.
   // The ref is written during render, idempotently (the same render writes the same value); it holds the store it
   // belongs to, so another session's surface is never carried over.
@@ -259,35 +250,37 @@ export function DialogSheet({ id, store, onOpenTerminal, raise, asker = null, on
   // render). Everything below renders from it. A held surface is decided as it was when it was live.
   const source = held === null ? liveSource : askSource({ ask: hookAsk, dialog, askFrameSeen: true });
 
-  // The option index whose answer is in flight (null = none).
-  const [answering, setAnswering] = useState<number | null>(null);
-  // The identity of whichever content — a pane dialog's id, or a stringified hook envelope (HookAsk carries no id of
-  // its own; see `askKey` below) — the user waved away with a scrim tap, Esc, or swipe. It stays hidden until something
-  // with a DIFFERENT identity arrives. One slot serves both kinds of surface: only one is ever open at a time, and
-  // sharing it means a dismissal survives the moment display hands off from one to the other.
-  const [dismissedKey, setDismissedKey] = useState<string | null>(null);
-  // D-5089: the pane dialog that was live when the operator hid the ENVELOPE.
-  // The envelope's own key is a hash of its JSON, which no pane dialog id
-  // ever equals, so without this the hand-off on `ask_cleared` re-opened the
-  // very question the operator had just waved away.
-  const [dismissedDialogId, setDismissedDialogId] = useState<string | null>(null);
-  /** The envelope's screen (`askScreen`) the sheet was hidden on; meaningful only while `dismissedKey` is that ask. */
-  const [dismissedScreen, setDismissedScreen] = useState<string | null>(null);
-  // D-5090: the own-words text and its call, one value so the two change together (see `WordsCall`).
-  const [own, setOwn] = useState(NO_WORDS);
+  // D-7183: the answer's lifecycle (`answerLifecycle.ts`), one instance per sheet, updated synchronously at dispatch. The
+  // option whose answer is in flight, or landed and waiting for the pane to move on, is its `answeringOption`.
+  const lifecycle = useRef<AnswerLifecycle | null>(null);
+  if (lifecycle.current === null) lifecycle.current = createAnswerLifecycle();
+  const machine = lifecycle.current;
+  // The render's copy of it. Each change is handed to React from the dispatch itself, so it renders in the lane of the
+  // event or settle that caused it, batched with whatever else that moment changed, as the sheet's own state always did.
+  const [lifeNow, showLife] = useReducer((_: AnswerState, next: AnswerState) => next, machine.get());
+  useLayoutEffect(() => machine.subscribe(() => showLife(machine.get())), [machine]);
+  const answering = answeringOption(lifeNow);
+  // The dismissal, the lifecycle's (`Dismissal`). `dismissedKey`: the identity of whichever content — a pane dialog's id,
+  // or a stringified hook envelope (HookAsk carries no id of its own; see `askKey` below) — the user waved away with a
+  // scrim tap, Esc, or swipe. It stays hidden until something with a DIFFERENT identity arrives. One slot serves both
+  // kinds of surface: only one is ever open at a time, and sharing it means a dismissal survives the moment display hands
+  // off from one to the other. `dismissedDialogId` (D-5089): the pane dialog that was live when the operator hid the
+  // ENVELOPE. The envelope's own key is a hash of its JSON, which no pane dialog id ever equals, so without this the
+  // hand-off on `ask_cleared` re-opened the very question the operator had just waved away. `dismissedScreen`: the
+  // envelope's screen (`askScreen`) the sheet was hidden on; meaningful only while `dismissedKey` is that ask.
+  const { key: dismissedKey, dialogId: dismissedDialogId, screen: dismissedScreen } = lifeNow.dismissal;
+  // D-5090: the own-words text and its call, one value so the two change together (see `WordsCall`), in the lifecycle.
+  const own = lifeNow.own;
   // D-6325, R5: the question whose `Other` row the operator chose, so its field is open. The text and call above keep it
   // open too (`OwnWords`); this is the choice itself, before anything is typed. Ended with the send that landed.
   const [otherFor, setOtherFor] = useState<string | null>(null);
   // R102: counts the deliberate opens of the Other field, so the inline card focuses it on one and on nothing else (`OwnWords`).
   const [focusNonce, setFocusNonce] = useState(0);
-  // D-5091: a multiSelect question's set and its commit, one value for the same reason (see `PickCall`).
-  const [pick, setPick] = useState(NO_PICK);
-  // Decision `ask-dialog-tab-route`: a tab move (the arrow keys, or a tab-strip chip) is under way. It is a send like
-  // any other: it refuses the others and the dismissal while it runs.
-  const [tabbing, setTabbing] = useState(false);
-  // Deny's interrupt is in flight. Not "answering an option" (Escape has no option index), so it has its own flag, but it
-  // is a send like the rest: it refuses the others and the dismissal while it runs.
-  const [denying, setDenying] = useState(false);
+  // D-5091: a multiSelect question's set and its commit, one value for the same reason (see `PickCall`), in the lifecycle.
+  const pick = lifeNow.pick;
+  // Decision `ask-dialog-tab-route`: a tab move (the arrow keys, or a tab-strip chip) is the lifecycle's sending(tab), and
+  // Deny's interrupt its sending(deny) (Escape has no option index). Each is a send like any other: it refuses the others
+  // and the dismissal while it runs.
 
   // A new question (or a cleared one) invalidates the in-flight marker.
   // D-5090: and ends an own-words answer that LANDED, the same way, unless the new frame is that send's own typed row
@@ -305,24 +298,22 @@ export function DialogSheet({ id, store, onOpenTerminal, raise, asker = null, on
   // inert, so its marker and disabled look may change during the exit with nothing left to tap.
   useEffect(() => {
     const onScreen = closed ? null : dialog;
-    setAnswering(null);
-    setOwn((o) => (o.call?.state === 'landed' && !showsSent(onScreen, o.call, o.text) ? NO_WORDS : o));
+    machine.dispatch({ type: 'screen', onScreen });
     if (own.call?.state === 'landed' && !showsSent(onScreen, own.call, own.text)) setOtherFor(null);
     // A chosen Other is spent with its screen: unless text or a call is kept, a new screen starts with the field closed,
     // so it cannot reopen on returning to the question or on a later question with the same words.
     else if (own.text === '' && own.call === null) setOtherFor(null);
-    setPick((p) => (p.call?.state === 'flight' ? p : NO_PICK));
     // `dialog` is read at the id it belongs to; a repaint under the same id is not a new screen.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dialogId, closed]);
 
-  // Anything in flight: an option's answer, a Deny, an own-words send or a multiSelect commit. Each refuses another send and
-  // the dismissal.
-  const locked = answering !== null || wordsBusy(own.call) || picksBusy(pick.call) || tabbing || denying;
+  // Anything in flight: an option's answer, a Deny, an own-words send, a multiSelect commit or a tab move. Each refuses
+  // another send and the dismissal.
+  const locked = busy(lifeNow);
   // One send at a time, held where a send STARTS. `locked` is render state, and React commits a tap's state only after
-  // its handler returns, so a second tap handled in the same tick finds every row still enabled and `locked` still
-  // false: an option and then `Chat about this` (which declines the whole ask) would both be sent. `sending` is set the
-  // moment a send starts (`claim`) and follows `locked` again from the next render on.
+  // its handler returns, so a second tap handled in the same tick would find every row still enabled and `locked` still
+  // false: an option and then `Chat about this` (which declines the whole ask) would both be sent. The lifecycle is
+  // updated synchronously at dispatch (`start`), so that second tap finds the send already taken and is refused.
   // The gap (D-6325, review 843 F3): the connection is not live, so the held surface is read-only in what it SHOWS as well
   // as at the send. Every control that sends is disabled by this flag, which is NOT part of `locked`: `locked` also
   // refuses the dismissal, and the gap must still hide. The Other field and its row stay as they are (the operator's own
@@ -330,22 +321,19 @@ export function DialogSheet({ id, store, onOpenTerminal, raise, asker = null, on
   // (R106), a click in the gap does not lift the fence: the Other field may take focus there, but its keys stay fenced until a
   // new click or Go to question after the reconnect.
   const gap = !live;
-  const sending = useRef(false);
-  useLayoutEffect(() => {
-    sending.current = locked;
-  });
-  const claim = (): boolean => {
+  /** Start a send: the lifecycle's command for `e`, or null when it is refused (anything in flight) or may not go. */
+  const start = (e: AnswerEvent): SheetCommand | null => {
     // The gap is read-only (`the-ask-holds-through-a-reconnect`): no answer goes on the old connection's evidence.
-    if (!live) return false;
+    if (!live) return null;
     // A closing surface is the screen gone: it sends nothing, even where its `inert` content is not honoured.
-    if (closed) return false;
-    if (sending.current) return false;
-    sending.current = true;
+    if (closed) return null;
+    const { command } = machine.dispatch(e);
+    if (command === null) return null;
     // R102: a send THIS client initiates at the desk ends the keyboard's engagement here, in the same event and before any
-    // await. Refused claims returned above and released nothing; a multiSelect `toggle` is no claim. `desk` and `open` are
-    // declared below: `claim` only ever runs after a render.
+    // await. Refused starts returned above and released nothing; a multiSelect `toggle` is no start. `desk` and `open` are
+    // declared below: `start` only ever runs after a render.
     if (desk && open) engagement.release();
-    return true;
+    return command;
   };
 
   // D-286: the transcript asked for this sheet back. Clearing the dismissal
@@ -354,9 +342,8 @@ export function DialogSheet({ id, store, onOpenTerminal, raise, asker = null, on
   // raise cannot conjure a sheet for a question that is no longer live.
   useEffect(() => {
     if (!raise) return;
-    setDismissedKey(null);
-    setDismissedDialogId(null);
-  }, [raise]);
+    machine.dispatch({ type: 'raise' });
+  }, [raise, machine]);
 
   // Dismissal, per kind of surface. The hook's envelope has no id of its own: a hash of its JSON stands in for one
   // (`askKey`). Content equality is exactly what should reopen or stay dismissed here: session-hook.sh rewrites the
@@ -404,7 +391,7 @@ export function DialogSheet({ id, store, onOpenTerminal, raise, asker = null, on
   //    does a hooked ask's pane menu vanishing for one poll (a screen the pane does not show is no screen).
   // R102, R105, R106 (AT THE DESK; the phone's Sheet is unchanged): the identity above ends an engagement when the ASK changes.
   // Two more acts end or lift it, both owned by `useAskEngagement`. A send this client initiates calls `engagement.release()`
-  // in `claim()`, in the same event: the engagement ends, the next screen takes no automatic focus, and a fence stops the keys
+  // in `start()`, in the same event: the engagement ends, the next screen takes no automatic focus, and a fence stops the keys
   // inside the card (a row node the next screen reuses can keep focus with no event). Only a pointer press in the card, or
   // Go to question (`raise`), lifts the fence, and only if input was eligible at the act: the press reads `eligibleNow` at the
   // event, and the raise's eligibility is captured in render (`raiseMark`), so one made during a flight or in the gap is spent
@@ -434,34 +421,28 @@ export function DialogSheet({ id, store, onOpenTerminal, raise, asker = null, on
     ? !(askKey === dismissedKey && (screenNow === null || screenNow === dismissedScreen))
     : dialog !== null && dialog.id !== dismissedKey && dialog.id !== dismissedDialogId));
 
-  const hide = (): void => {
-    if (hooked) {
-      setDismissedKey(askKey);
-      setDismissedScreen(screenNow);
-      setDismissedDialogId(dialog?.id ?? null);
-    } else if (dialog !== null) {
-      setDismissedKey(dialog.id);
-    }
-  };
+  // What a hide records: a hooked ask's key, its screen and the pane dialog live then; any other surface, its dialog's id.
+  const hiding = { hooked, askKey, screen: screenNow, dialogId: dialog?.id ?? null };
 
   const close = (): void => {
     // Non-dismissable while an answer is in flight — the open sheet is the
-    // only honest record that the tap is still landing.
-    if (locked) return;
-    hide();
+    // only honest record that the tap is still landing. The lifecycle refuses it.
+    machine.dispatch({ type: 'dismiss', ...hiding });
   };
 
   const answer = async (optionIndex: number): Promise<void> => {
-    if (dialog === null || !claim()) return;
-    setAnswering(optionIndex);
+    if (dialog === null) return;
     const answered = dialog.id;
+    const command = start({ type: 'answer', sessionId: id, dialogId: answered, option: optionIndex });
+    if (command?.kind !== 'answer') return;
     try {
-      const res = await api.answerDialog(id, answered, optionIndex);
+      const res = await performAnswer(command, answers);
+      machine.dispatch({ type: 'answer-landed' });
       // Decision `ask-answer-returns-next-screen`: the route says which screen the pane moved to, so the next question
       // or the review opens now, not on the stream's next poll. Without it, stay in "answering…" until a frame lands.
       if (res.next !== undefined) applyAnswered(answered, res.next);
     } catch (err) {
-      setAnswering(null);
+      machine.dispatch({ type: 'answer-refused', refusal: refusalToken(err) });
       // Each refusal by its code (`dialogRefusal`, plan Task 5), where every 409 once read alike. A stale dialog is
       // news, not a failure where the sheet renders straight from `dialog` (a menu, which re-renders with the new one
       // right after this and "showing the latest" is literally true) — but the structured sheet renders Claude's own
@@ -476,11 +457,13 @@ export function DialogSheet({ id, store, onOpenTerminal, raise, asker = null, on
   // whatever the menu is. It moved here from the approval's content (D-6325) so the one container's dismissal (`close`)
   // sees it as the send it is, and this file stays the only sender.
   const deny = async (): Promise<void> => {
-    if (!claim()) return;
-    setDenying(true);
+    const command = start({ type: 'deny', sessionId: id });
+    if (command?.kind !== 'deny') return;
+    let refusal: RefusalToken | undefined;
     try {
-      await api.interrupt(id, 'deny');
+      await performAnswer(command, answers);
     } catch (err) {
+      refusal = refusalToken(err);
       if (err instanceof ApiError && err.status === 409) {
         // interrupt's `not-busy` can mean EITHER "the agent already finished
         // on its own" or "someone else already answered this same request" —
@@ -495,7 +478,7 @@ export function DialogSheet({ id, store, onOpenTerminal, raise, asker = null, on
         toast(failedTo('decline', err), 'error');
       }
     } finally {
-      setDenying(false);
+      machine.dispatch(refusal === undefined ? { type: 'deny-settled' } : { type: 'deny-settled', refusal });
     }
   };
 
@@ -505,11 +488,13 @@ export function DialogSheet({ id, store, onOpenTerminal, raise, asker = null, on
   const sendWords = async (row: number): Promise<void> => {
     const current = dialog;
     const kept = own.text;
-    if (current === null || !claim()) return;
+    if (current === null) return;
     const call = { row, question: questionKey(current, row) };
-    setOwn({ text: kept, call: { ...call, state: 'flight' } });
+    const flight = { ...call, state: 'flight' as const };
+    const command = start({ type: 'text', sessionId: id, dialogId: current.id, row, question: call.question });
+    if (command?.kind !== 'text') return;
     try {
-      const res = await api.answerDialogText(id, current.id, row, kept.trim());
+      const res = await performAnswer(command, answers);
       if (res.next !== undefined) {
         // Typing changed the screen's id, so the store may hold the typed row by now: the same question by its key.
         const held = useStore.getState().dialog;
@@ -523,10 +508,10 @@ export function DialogSheet({ id, store, onOpenTerminal, raise, asker = null, on
       const gapNow = !useStore.getState().askFrameSeen;
       const now = useStore.getState().dialog;
       const waiting = gapNow || (now !== null && (now.id === current.id || showsSent(now, { ...call, state: 'landed' }, kept)));
-      setOwn(waiting ? { text: kept, call: { ...call, state: 'landed' } } : NO_WORDS);
+      machine.dispatch({ type: 'text-landed', text: kept, call: flight, waiting });
       if (!waiting) setOtherFor(null);
     } catch (err) {
-      setOwn({ text: kept, call: { ...call, state: 'refused' } });
+      machine.dispatch({ type: 'text-refused', text: kept, call: flight, refusal: refusalToken(err) });
       toast(dialogTextRefusal(err), 'error');
     }
   };
@@ -539,7 +524,7 @@ export function DialogSheet({ id, store, onOpenTerminal, raise, asker = null, on
       setFocusNonce((n) => n + 1);
     },
     focusNonce,
-    onText: (text) => setOwn((o) => ({ ...o, text })),
+    onText: (text) => machine.dispatch({ type: 'words', text }),
     onSend: (row) => void sendWords(row),
   };
 
@@ -547,13 +532,9 @@ export function DialogSheet({ id, store, onOpenTerminal, raise, asker = null, on
   // edits what the pane shows; from then the sheet's set stands until the question changes.
   const toggle = (index: number): void => {
     const current = dialog;
-    if (current === null || current.multi === undefined || sending.current) return;
-    const seed = paneTicks(current.multi);
-    setPick((p) => {
-      const base = p.id === current.id && p.picked !== null ? p.picked : seed;
-      const picked = base.includes(index) ? base.filter((k) => k !== index) : [...base, index];
-      return { ...p, id: current.id, picked };
-    });
+    // Refused by the lifecycle while a send is in flight.
+    if (current === null || current.multi === undefined) return;
+    machine.dispatch({ type: 'toggle', dialogId: current.id, index, seed: paneTicks(current.multi) });
   };
 
   // D-5091: commit the WHOLE set (`wanted`, ordered as the answer will list it). Like a tapped option, the sheet stays
@@ -561,17 +542,17 @@ export function DialogSheet({ id, store, onOpenTerminal, raise, asker = null, on
   // operator's, so trying again sends it again (the server presses only what is still needed).
   const commitPicks = async (wanted: readonly number[]): Promise<void> => {
     const current = dialog;
-    if (current === null || !claim()) return;
-    const call: PickCall = { dialogId: current.id, wanted, state: 'flight' };
-    setPick((p) => ({ ...p, call }));
+    if (current === null) return;
+    const command = start({ type: 'multi', sessionId: id, dialogId: current.id, wanted });
+    if (command?.kind !== 'multi') return;
     try {
-      const res = await api.answerDialogMulti(id, current.id, wanted);
+      const res = await performAnswer(command, answers);
       if (res.next !== undefined) applyAnswered(current.id, res.next);
       // As `sendWords`: in the gap the store's `dialog` is null and says nothing, so the commit stays landed.
       const waiting = !useStore.getState().askFrameSeen || useStore.getState().dialog?.id === current.id;
-      setPick(waiting ? { id: current.id, picked: wanted, call: { ...call, state: 'landed' } } : NO_PICK);
+      machine.dispatch({ type: 'multi-landed', dialogId: current.id, wanted, waiting });
     } catch (err) {
-      setPick({ id: current.id, picked: wanted, call: null });
+      machine.dispatch({ type: 'multi-refused', dialogId: current.id, wanted, refusal: refusalToken(err) });
       toast(dialogMultiRefusal(err), 'error');
     }
   };
@@ -587,15 +568,18 @@ export function DialogSheet({ id, store, onOpenTerminal, raise, asker = null, on
   // the sheet where it is.
   const moveTab = async (to: DialogTabTarget, from?: number): Promise<void> => {
     const current = dialog;
-    if (current === null || !claim()) return;
-    setTabbing(true);
+    if (current === null) return;
+    const command = start({ type: 'tab', sessionId: id, dialogId: current.id, to, ...(from === undefined ? {} : { from }) });
+    if (command?.kind !== 'tab') return;
+    let refusal: RefusalToken | undefined;
     try {
-      const res = await api.answerDialogTab(id, { dialogId: current.id, to, ...(from === undefined ? {} : { from }) });
+      const res = await performAnswer(command, answers);
       if (res.next !== undefined) applyAnswered(current.id, res.next);
     } catch (err) {
+      refusal = refusalToken(err);
       toast(dialogTabRefusal(err), 'error');
     } finally {
-      setTabbing(false);
+      machine.dispatch(refusal === undefined ? { type: 'tab-settled' } : { type: 'tab-settled', refusal });
     }
   };
   // The boxes changed here and not committed: a tab move would lose them, so ←/→ and the strip wait.
@@ -613,23 +597,29 @@ export function DialogSheet({ id, store, onOpenTerminal, raise, asker = null, on
   // R106: input is eligible on the screen showing when no send is in flight, the connection is live and the surface is not
   // closing. The owner reads it at a pointer press in the card, so a press during a flight or in the gap re-enters nothing.
   const eligibleNow = useRef(false);
+  // Review A1: whether the last COMMITTED render showed a send in flight. A send's completion and a raise can be rendered
+  // in one batch, where this render's `locked` already reads false: the raise must still see the flight the operator was
+  // looking at when it was made. A view fact (what was on screen), not the send guard, which is the lifecycle's.
+  const lockedShown = useRef(false);
   useLayoutEffect(() => {
     eligibleNow.current = !locked && live && !closed;
+    lockedShown.current = locked;
   });
-  const engagement = useAskEngagement(askIdentity, () => eligibleNow.current && !sending.current);
+  const engagement = useAskEngagement(askIdentity, () => eligibleNow.current && !busy(machine.get()));
   // R106: Go to question (`raise`, which at the desk is only that button) re-enters ONLY if input was eligible when the raise
   // was MADE, decided here in render from this render's own state (React's "state from the previous render", as
   // `useAskKeys`' `mark` does), never when the effect runs. A raise made during a flight or in the gap is consumed as
   // non-unlocking for good: nothing replays it once the reply lands, so the replacement screen is never pre-authorized.
   // A nonce standing at mount is absorbed (not unlocking), as `AskSurface`'s `seen` absorbs it.
   const [raiseMark, setRaiseMark] = useState<{ nonce: number; unlock: boolean }>({ nonce: raise ?? 0, unlock: false });
-  // Review A1: `!sending.current` too, since `locked` can read false in the render that carries a send's completion while it is still marked sending.
+  // Review A1: not while the last committed render showed a send (`lockedShown`) or the lifecycle holds one now, since
+  // `locked` can read false in the render that carries a send's completion.
   if (raiseMark.nonce !== (raise ?? 0)) {
-    setRaiseMark({ nonce: raise ?? 0, unlock: (raise ?? 0) !== 0 && desk && !locked && !sending.current && live && !closed });
+    setRaiseMark({ nonce: raise ?? 0, unlock: (raise ?? 0) !== 0 && desk && !locked && !lockedShown.current && !busy(machine.get()) && live && !closed });
   }
   useEffect(() => {
-    // A send claimed between the raise's render and this effect has released, and the later release wins (R102).
-    if (raiseMark.unlock && !sending.current) engagement.reengage();
+    // A send started between the raise's render and this effect has released, and the later release wins (R102).
+    if (raiseMark.unlock && !busy(machine.get())) engagement.reengage();
   }, [raiseMark, engagement]);
   const keys = useAskKeys({
     screenId: dialog?.id ?? null,
@@ -651,7 +641,7 @@ export function DialogSheet({ id, store, onOpenTerminal, raise, asker = null, on
   const frame = askFrame(source, view, asker);
   // The way out of a surface that cannot be answered here: hide it and open the terminal.
   const leave = (): void => {
-    hide();
+    machine.dispatch({ type: 'leave', ...hiding });
     onOpenTerminal?.();
   };
 
@@ -665,8 +655,7 @@ export function DialogSheet({ id, store, onOpenTerminal, raise, asker = null, on
         view={view}
         from={source.kind === 'structured' ? source.from : 'hook'}
         dialog={dialog}
-        answering={answering}
-        denying={denying}
+        life={lifeNow}
         gap={gap}
         words={words}
         picks={picks}
@@ -675,7 +664,6 @@ export function DialogSheet({ id, store, onOpenTerminal, raise, asker = null, on
         onSelectOption={(optionIndex) => void answer(optionIndex)}
         onDeny={() => void deny()}
         onOpenTerminal={onOpenTerminal}
-        tabbing={tabbing}
         picksHeld={picksHeld}
         onTab={(to, from) => void moveTab(to, from)}
         engagement={engagement}

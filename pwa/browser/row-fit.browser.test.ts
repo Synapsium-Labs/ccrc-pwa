@@ -418,13 +418,14 @@ const NAME_N104 = `${NAME_N60}-quiet-river-gentle-bridge-lamp-north-to-sea`;
  *  tail (a slug within `PROGRAMME_BUDGET`, so `main` draws the same text), a child marker naming a run on the board, a
  *  child marker whose run is not on the board, and a branch of 26 characters. Each comes as a needs-you row and as a
  *  working row (`waiting · needs you` leaves the context about 95 px at 1280, `working` about 171), and each with a
- *  short name, which shares its line with the state word, and with a 26-character one, which never does at the desk
- *  and sends the state word to the context line when the context fits there. */
+ *  short name, which shares its line with the state word, and with a 26-character one, which does not share it with
+ *  `waiting · needs you` at any desk width, nor with `working` at 1280, and then sends the state word to the context
+ *  line when the context fits there. */
 const PROG_C = 'harbor-lite';
 const PROG_D = 'harbor-lights';
 const BRANCH_26 = 'ws/harbor-lights-desk-rows';
 const CONTEXT_ROWS = ['cprog', 'cchild', 'cboard', 'cbranch'] as const;
-/** The 26-character name of each long row: one line in every desk track, and never beside the state word there. */
+/** The 26-character name of each long row: one line in every desk track; beside `working` at 1600 and 1920 only. */
 const LONG_TAIL: Record<(typeof CONTEXT_ROWS)[number], string> = {
   cprog: 'quiet-harbor-lamps', cchild: 'quiet-harbor-lamp', cboard: 'quiet-harbor-lamp', cbranch: 'quiet-river-lamp',
 };

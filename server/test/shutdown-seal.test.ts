@@ -14,6 +14,7 @@ import { installShutdownSeal, SHUTDOWN_SEAL_BOUND_MS, type SealingWatcher, type 
 import type { DeadCoordinatorSealResult } from '../src/deadCoordinator.js';
 import { openCoordDb } from '../src/coord/db.js';
 import { mkTmp } from './tmpHelpers.js';
+import { freePort } from './codexLaneFixture.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const serverRoot = path.resolve(here, '..');
@@ -257,7 +258,9 @@ describe('the real composition root installs the handler (D-4916)', () => {
     const seed = openCoordDb(db);
     seed.exec(`INSERT INTO dead_coordinator_breaker_state (id, generation, state, held, writtenAt) VALUES (1, 1, 'sealed', 'dead-coordinator-breaker-held:', 1)`);
     seed.close();
-    const port = 26000 + (process.pid % 3000);
+    // The server takes its port from CCRC_PORT and refuses 0, so the port comes from the codex-lane fixture's
+    // `freePort` (D-6856), not the fixed `26000 + pid % 3000` band this case once bound.
+    const port = await freePort();
     shortTmp = mkdtempSync(path.join('/tmp', 'ccrc-ss-'));
     child = spawn(tsx, [indexTs], {
       cwd: serverRoot,

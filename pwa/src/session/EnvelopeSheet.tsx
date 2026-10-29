@@ -24,10 +24,11 @@ import { AskContainer } from './AskSurface';
 import { chatRow, freeTextSlot, headerTab, optionCopy, tabChips, type AskQuestions, type ShownQuestion } from './askLive';
 import {
   AskTabs, ChatRow, FOOT_PLAIN, FOOT_WITH_OTHER, MultiPick, OptionPreview, OtherQuestions, OwnWords,
-  SEVERAL_ANSWERS, keyed, lit, ownWordsRow, picksBusy, recommendedTag, wordsBusy,
+  SEVERAL_ANSWERS, keyed, lit, ownWordsRow, recommendedTag,
   type Picks, type Words,
 } from './AskParts';
 import { keyTabs, multiKeys, questionKeys, rowKey, type KeyScreen } from './askKeys';
+import { answeringOption, busy as busyOf, inFlight, isDenying, type AnswerState } from './answerLifecycle';
 import { useAskKeys, type AskEngagement } from './useAskKeys';
 import './chat.css';
 
@@ -77,8 +78,7 @@ export function EnvelopeSheet({
   view,
   from = 'hook',
   dialog,
-  answering,
-  denying,
+  life,
   gap,
   words,
   picks,
@@ -87,7 +87,6 @@ export function EnvelopeSheet({
   onSelectOption,
   onDeny,
   onOpenTerminal,
-  tabbing = false,
   picksHeld = false,
   onTab,
   engagement,
@@ -104,11 +103,10 @@ export function EnvelopeSheet({
    *  null means the question showed up with no matching live pane menu yet
    *  (or it moved on) — read-only until one appears. */
   dialog: Dialog | null;
-  /** The controller's in-flight option index — shared so every numbered-option
-   *  tap disables the same rows. */
-  answering: number | null;
-  /** Deny's interrupt is in flight (held by the controller, the one sender). */
-  denying: boolean;
+  /** The controller's answer lifecycle (`answerLifecycle.ts`, D-7183), the one record of what is in flight: an option's
+   *  answer (shared so every numbered-option tap disables the same rows), Deny's interrupt, an own-words send, a
+   *  multiSelect commit and a tab move. This content keeps no in-flight flag of its own. */
+  life: AnswerState;
   /** The connection is not live (`DialogSheet`'s gap, D-6325): every control that sends is disabled. A flag of its own, not
    *  part of `busy`, which also refuses the dismissal and the way to the terminal; the Other field stays as it is. */
   gap: boolean;
@@ -124,8 +122,6 @@ export function EnvelopeSheet({
   /** Decline an approval: the controller's `deny` (`api.interrupt`'s literal Escape). */
   onDeny: () => void;
   onOpenTerminal?: () => void;
-  /** Decision `ask-dialog-tab-route`: a tab move is under way (held by the parent, which sends it). */
-  tabbing?: boolean;
   /** The boxes were changed here and not committed, so a tab move waits (`picksUncommitted`). */
   picksHeld?: boolean;
   /** Move the pane to another tab: `prev`/`next`, `submit`, or question tab k with `from` the tab showing (1-based). */
@@ -137,9 +133,10 @@ export function EnvelopeSheet({
   // Every send disables the same buttons and gates the dismissal: an option's answer, Deny (held by the controller, which
   // sends it), an own-words send and a multiSelect commit, and a tab move. The open sheet is the only honest record that
   // a tap is still landing.
-  const sendingWords = wordsBusy(words.call);
-  const picking = picksBusy(picks.call);
-  const busy = answering !== null || denying || sendingWords || picking || tabbing;
+  // Each partial lock below names the sends it leaves out (a row's own send does not lock that row's own controls).
+  const busy = busyOf(life);
+  const answering = answeringOption(life);
+  const denying = isDenying(life);
   // D-5089: WHICH question, before anything about it. The hook writes every question of an ask at once and keeps the
   // envelope until the tool call ends, while the pane paints one question at a time and then the review screen. So
   // the sheet answers the question the PANE is painting (`liveQuestion`: labels first, a unique correspondence winning
@@ -362,7 +359,7 @@ export function EnvelopeSheet({
           dialogId={pane.id}
           copy={q.options}
           picks={picks}
-          locked={answering !== null || sendingWords || tabbing}
+          locked={busyOf(life, ['multi', 'deny'])}
           gap={gap}
           keys={keys}
         />
@@ -390,7 +387,7 @@ export function EnvelopeSheet({
                     label={label}
                     tag={recommendedTag(recommended)}
                     sublabel={o.description}
-                    disabled={!canAnswer || gap || answering !== null || sendingWords || picking || tabbing}
+                    disabled={!canAnswer || gap || busyOf(life, ['deny'])}
                     busy={waiting}
                     onClick={() => onSelectOption(idx)}
                     marker={waiting ? <span className="opt-wait">answering…</span> : undefined}
@@ -402,13 +399,13 @@ export function EnvelopeSheet({
             })}
             {/* `Other`, through the pane's free-text row (D-5090, D-6325): the last row of the list, the field and Send
                 under it once chosen. A send under way stays on screen even if the pane stops matching mid-call. */}
-            {(pane !== null || sendingWords) && (
+            {(pane !== null || inFlight(life).has('text')) && (
               <OwnWords
                 slot={slot}
                 chat={chat !== undefined}
                 words={words}
                 question={q.question}
-                locked={answering !== null || picking || tabbing}
+                locked={busyOf(life, ['text', 'deny'])}
                 gap={gap}
                 keys={keyScreen === null ? undefined : keys}
               />

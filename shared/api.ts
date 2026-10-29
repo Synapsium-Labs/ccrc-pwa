@@ -4472,7 +4472,10 @@ export interface DialogAsk extends Omit<AskQuestion, 'options'> {
  *  `placed`: `live ?? named`, where the pane IS; `screen`: `review`, `q<i>`, or null for a screen that cannot be
  *  placed; `corresponds`: per question, whether its options line up with the pane's rows by position. Rides the `ask`
  *  and `dialog` frames as an optional TOP-LEVEL field, never inside `dialog`. ADDITIVE, absence-permits: no reader
- *  before W7, which gates on the `ask-pairing-v1` cap word. */
+ *  before W7, which gates on the `ask-pairing-v1` cap word.
+ *  D-7206, D-7211 (W7 Task C7q): the server also pairs the transcript's copy of the question (`Dialog.ask`, read by
+ *  `shared/ask-menu.ts#transcriptQuestion`) when there is no usable question envelope, as the PWA's `askSource` does,
+ *  and the `ask_cleared` frame carries that pairing too. */
 export interface AskPairing {
   readonly live: number | null;
   readonly named: number | null;
@@ -4480,6 +4483,9 @@ export interface AskPairing {
   readonly placed: number | null;
   readonly screen: string | null;
   readonly corresponds: readonly boolean[];
+  /** D-7206: which question was paired: `'transcript'` for the transcript's copy; ABSENT for the hook's envelope, read
+   *  as `'hook'` (every pairing before C7q is one). ADDITIVE, absence-permits; no `FLEET_PROTO` bump. */
+  readonly from?: 'hook' | 'transcript';
 }
 
 export interface Dialog {
@@ -4599,7 +4605,7 @@ export type SessionStreamMsg =
    *  preference lives: it prefers this envelope over the scraped `dialog`
    *  when both are present. */
   | { type: 'ask'; ask: HookAsk; key: string | null; pairing?: AskPairing }   // key: answerable via POST /api/sessions/:id/ask; null for approval envelopes; pairing: D-7031, never on an approval
-  | { type: 'ask_cleared' }                       // the hook's ask went null, stale, or its hookstate file is gone
+  | { type: 'ask_cleared'; pairing?: AskPairing } // the hook's ask went null, stale, or its hookstate file is gone; pairing: D-7211, the transcript copy's
   | { type: 'tasks'; tasks: TaskItem[];          // the session's task list changed (or first read)
       /** D-5372: the newest task file `mtimeMs`, epoch ms. OPTIONAL: absent when
        *  the list has no open item, no stat answered, or the server is older;
@@ -8014,6 +8020,9 @@ export type LifecycleAct =
                     // <to>" (no new dec key — the dec vocabulary is pinned at
                     // four). Additive on the wire, as every act is.
   | 'start' | 'ensure' | 'swap' | 'enable' | 'stop' | 'forget' | 'hibernate'   // `hibernate` (D-5242): `ccd hibernate`, a DELIBERATE stop of a long-idle session journalled before its own `unsupervise` row (surface `none`, which alone reads as a crash); its own act so the journal never needs a filter to tell a sleep from a stop; `ensure` wakes it
+  | 'shed-deps'     // ws-shed-deps (#1772): a sleeping session's git-ignored, untracked dependency
+                    // directories removed, server-composed. Its own act: it removes no workspace,
+                    // puts down no session and changes no git fact, so no removal set counts it.
   | 'unarchive'     // a return verb's gate (wave 3b) or `_spawn_start` cleared
                     // an archive stamp because a pane was asked for. DISTINCT
                     // FROM `restore`: that is the deliberate way back; this is
@@ -8029,7 +8038,7 @@ const LIFECYCLE_ACT_MAP: Record<LifecycleAct, true> = {
   create: true, claim: true, purge: true, supervise: true, unsupervise: true,
   destroy: true, rename: true, hold: true, release: true, archive: true, restore: true,
   'attic-drop': true, reap: true, reclaim: true, expire: true, collect: true, rehome: true, gc: true, spawn: true, route: true, start: true, ensure: true,
-  swap: true, enable: true, stop: true, forget: true, hibernate: true, unarchive: true,
+  swap: true, enable: true, stop: true, forget: true, hibernate: true, 'shed-deps': true, unarchive: true,
   unknown: true,
 };
 export const LIFECYCLE_ACTS: readonly LifecycleAct[] =
@@ -8632,7 +8641,10 @@ export interface LifecycleEvent {
   /** One line for a person. DISPLAY-ONLY — nothing parses it back. */
   readonly detail: string | null;
   /** The emitter hit `LC_LINE_MAX` and dropped fields to fit — `dec.reason`,
-   *  then `obs.cgraw`, then `meas`, in that order. FALSE when the wire says
+   *  then `obs.cgraw`, then `meas`, in that order; then it cut `detail` to its
+   *  longest first part that fits, closed by ` [N bytes cut]` (N the UTF-8
+   *  bytes cut); and only a line still over the cap is
+   *  the joinable minimum, with no detail. FALSE when the wire says
    *  nothing, because absence-permits.
    *
    *  MODELLED RATHER THAN INFERRED, and that is the point: without it a

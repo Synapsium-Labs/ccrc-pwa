@@ -17,7 +17,7 @@
 // mechanical justification: `ChatList` is virtualized, so a row owning an
 // in-flight answer could be unmounted mid-send by an ordinary scroll. The
 // `does not POST` test below is the pin on that.
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -26,10 +26,17 @@ import { api } from '../src/lib/api';
 import { ChatListInner } from '../src/session/ChatList';
 import { ASK_GLYPH, ASK_WORD, askState, type ToolResultEvent } from '@ccrc/ui';
 import { DialogSheet } from '../src/session/DialogSheet';
+import { answerSeam, type AnswerSeamMocks } from './answerSeam';
 import { SUBMIT_ANSWERS, answerControlLabel } from '../src/session/askLive';
 import { pane } from './askPanes';
 import { createSessionStore, type SessionStore } from '../src/stores/session';
 import { declValue, norm, ruleIn, stripComments } from './cssRule';
+
+// D-7183: the sheet's answers go through its injected seam; each test gets fresh writers (`answerSeam.ts`).
+let answers: AnswerSeamMocks = answerSeam();
+beforeEach(() => {
+  answers = answerSeam();
+});
 
 afterEach(() => {
   cleanup();
@@ -152,7 +159,7 @@ describe('Answer opens the one answer path, and does nothing else', () => {
     // Negative pin. Every send path this could have reached is spied; the
     // control must touch none of them.
     const answerAsk = vi.spyOn(api, 'answerAsk').mockResolvedValue(undefined as never);
-    const answerDialog = vi.spyOn(api, 'answerDialog').mockResolvedValue({ ok: true });
+    const answerDialog = answers.answerDialog.mockReset().mockResolvedValue({ ok: true });
     const prompt = vi.spyOn(api, 'prompt').mockResolvedValue(undefined as never);
     const onAnswer = vi.fn();
 
@@ -191,7 +198,7 @@ describe('Answer opens the one answer path, and does nothing else', () => {
     };
     act(() => { store.setState({ dialog, askFrameSeen: true }); });
 
-    const { rerender } = render(<DialogSheet id="s" store={store} raise={0} />);
+    const { rerender } = render(<DialogSheet answers={answers} id="s" store={store} raise={0} />);
     expect(screen.getByText('Allow Bash?')).toBeInTheDocument();
 
     // Wave it away.
@@ -199,7 +206,7 @@ describe('Answer opens the one answer path, and does nothing else', () => {
     expect(screen.queryByText('Allow Bash?')).toBeNull();
 
     // The transcript control bumps the nonce; the same dialog comes back.
-    rerender(<DialogSheet id="s" store={store} raise={1} />);
+    rerender(<DialogSheet answers={answers} id="s" store={store} raise={1} />);
     expect(screen.getByText('Allow Bash?')).toBeInTheDocument();
   });
 
@@ -214,7 +221,7 @@ describe('Answer opens the one answer path, and does nothing else', () => {
     const ask: HookAsk = { questions: [{ question: 'Which colour?', options: [{ label: 'Red' }] }] };
     act(() => { store.setState({ ask, askFrameSeen: true }); });
 
-    render(<DialogSheet id="s" store={store} raise={0} />);
+    render(<DialogSheet answers={answers} id="s" store={store} raise={0} />);
     fireEvent.click(document.querySelector('.sheet-scrim') as HTMLElement);
     expect(screen.queryByText('Which colour?')).toBeNull();
   });

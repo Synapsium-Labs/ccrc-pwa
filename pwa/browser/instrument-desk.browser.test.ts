@@ -302,8 +302,8 @@ describe('one count at the desk (T2g, D-6715)', () => {
           return {
             text: el.textContent ?? '', scrollWidth: el.scrollWidth, clientWidth: el.clientWidth,
             indicators: document.querySelectorAll('.update-indicator').length,
-            door: { width: dr.width, left: dr.left, right: dr.right, scrollWidth: door.scrollWidth, clientWidth: door.clientWidth },
-            bar: { left: bar.left, right: bar.right },
+            door: { width: dr.width, left: dr.left, right: dr.right, top: dr.top, bottom: dr.bottom, scrollWidth: door.scrollWidth, clientWidth: door.clientWidth },
+            bar: { left: bar.left, right: bar.right, top: bar.top, bottom: bar.bottom },
           };
         });
         expect(m.text).toContain('run');
@@ -313,6 +313,9 @@ describe('one count at the desk (T2g, D-6715)', () => {
         expect(m.door.scrollWidth, "the indicator's words are whole").toBeLessThanOrEqual(m.door.clientWidth);
         expect(m.door.left, 'the indicator is inside the bar').toBeGreaterThanOrEqual(m.bar.left - 0.5);
         expect(m.door.right, 'the indicator is inside the bar').toBeLessThanOrEqual(m.bar.right + 0.5);
+        // Top and bottom too (C12 item 18, review 1124 A-6): a door pushed out of the bar vertically is not inside it.
+        expect(m.door.top, 'the indicator is inside the bar, top').toBeGreaterThanOrEqual(m.bar.top - 0.5);
+        expect(m.door.bottom, 'the indicator is inside the bar, bottom').toBeLessThanOrEqual(m.bar.bottom + 0.5);
       } finally {
         await ctx.close();
       }

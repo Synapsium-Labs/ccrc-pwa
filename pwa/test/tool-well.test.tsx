@@ -56,15 +56,18 @@ describe('tool well', () => {
     expect(well!.textContent).not.toContain(esc);
   });
 
-  it('strips input escapes on plain and over-bound fallbacks', () => {
+  it('strips input escapes on the plain fallback; over its bound an input shows its JSON text as written', () => {
     const esc = String.fromCharCode(27);
     const malformed = `bad${esc}[2Kinput`;
     const plain = render(<ToolWellText use={{ name: 'Bash', input: malformed }} part="input" text={malformed} />);
     expect(plain.container.textContent).toBe('badinput');
     plain.unmount();
+    // JSON spells the escape as six characters and refuses a raw one, so the over-bound text holds no ESC to strip
+    // (C12 item 8): it is shown whole, as a fenced block over its bound is.
     const long = JSON.stringify({ command: `${'x'.repeat(MD_HIGHLIGHT_BLOCK_MAX_CHARS + 1)}${esc}[2Kdone` });
+    expect(long).not.toContain(esc);
+    expect(() => JSON.parse(`{"command":"a${esc}b"}`)).toThrow();
     const capped = render(<ToolWellText use={{ name: 'Bash', input: long }} part="input" text={long} />);
-    expect(capped.container.textContent).not.toContain(esc);
     expect(capped.container.textContent).toBe(long);
   });
 

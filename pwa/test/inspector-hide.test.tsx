@@ -2,7 +2,12 @@
 //
 // RED FIRST, and what each case catches:
 //   an unknown stored value read as hidden, or the read without try/catch ... "the stored choice: only 'hidden' hides…"
-//   the choice written before it is applied in memory ......................... "a choice storage refuses still applies…"
+//   the write's try/catch removed (a refused write throws out of the toggle) ... "a choice storage refuses still applies…"
+//     (the rail still hides, the run reds on the unhandled throw; with the catch kept, writing before applying stays
+//     green: the catch, not the order, carries it, measured under C12)
+//   the focus repair pulling focus on every hide (`if (hiding)`) .............. "hiding with focus elsewhere…"
+//   the rail re-deriving the fact from the width and the choice (review m3b) .. "the rail reads the one shown fact…"
+//   the shortcuts sheet listing a key whose command is not offered here ....... "the shortcuts sheet lists the inspector's i…"
 //   the rail gated on INSPECTOR_QUERY alone, or the strips rule ignoring it .... "hidden at 1600 and 1920: …"
 //   the door always mounted and hidden by CSS, or its own onClick ............. "the toggle is mounted in Refined's…"
 //   `aria-expanded` dropped or inverted, `aria-controls` off the aside ......... "the toggle says its state…"
@@ -11,6 +16,8 @@
 //   a toggle or command placed by a skin with no Inspector part ............... "Instrument places no inspector…"
 // The cases render the whole `App` in Refined (and Instrument for the last), as `skin-switch.test.tsx` does, so the
 // rail, the session header, the strips and the command layer are the real ones.
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { INSTRUMENT, REFINED } from '@ccrc/ui';
@@ -362,12 +369,44 @@ describe('focus', () => {
     expect(document.activeElement).not.toBe(document.body);
   });
 
+  // Through the command, as `i` on a focused control outside the rail runs it (C12 item 13): `flipInspector` is the only
+  // code that moves focus on a hide, so a hide set directly could not see it pull focus to the toggle.
   it('hiding with focus elsewhere moves focus nowhere', () => {
     open(1920);
-    const box = screen.getByRole('textbox', { name: 'Message' });
-    act(() => box.focus());
-    act(() => setInspectorHidden(true));
-    expect(document.activeElement).toBe(box);
+    const other = screen.getByRole('button', { name: 'More' });
+    act(() => other.focus());
+    expect(aside()!.contains(document.activeElement)).toBe(false);
+    press('i', other);
+    expect(railShown()).toBe(false);
+    expect(document.activeElement, 'focus stays where it was').toBe(other);
+  });
+});
+
+describe('the one fact', () => {
+  // Review 1120's m3b (C12 item 13): a rail that re-derives "shown" from the width and the choice behaves the same today
+  // and is a second owner of the fact, so the source is read: the rail takes `useInspectorShown()` and nothing else.
+  it('the rail reads the one shown fact and does not re-derive it', () => {
+    const src = readFileSync(path.join(import.meta.dirname, '..', 'src', 'skins', 'refined', 'InspectorRail.tsx'), 'utf8');
+    expect(src).toMatch(/import \{[^}]*\buseInspectorShown\b[^}]*\} from '\.\.\/\.\.\/inspector\/inspectorShown'/);
+    expect(src).toMatch(/=\s*useInspectorShown\(\)/);
+    expect(src, 'no local copy of the fact').not.toMatch(/(?:const|function)\s+useInspectorShown\b/);
+    expect(src, 'no read of the choice').not.toMatch(/\buseInspectorHidden\b|\binspectorHidden\s*\(|localStorage|INSPECTOR_STORAGE_KEY/);
+  });
+});
+
+describe('the shortcuts sheet', () => {
+  // A single key skips `when` (`useShortcuts`), so `i` where no rail is placed does nothing; the sheet lists only the keys
+  // that act where it is opened (C12 item 13).
+  it("the shortcuts sheet lists the inspector's i where a rail is placed, and not where none is", () => {
+    const sheet = (): HTMLElement => screen.getByRole('dialog', { name: 'Keyboard shortcuts' });
+    open(1920);
+    fireEvent.keyDown(document.body, { key: '?', shiftKey: true });
+    expect(within(sheet()).getByText('Show or hide the inspector')).toBeInTheDocument();
+    cleanup();
+    open(1599);
+    fireEvent.keyDown(document.body, { key: '?', shiftKey: true });
+    expect(within(sheet()).getByText('Next session'), 'the sheet lists the keys that do act').toBeInTheDocument();
+    expect(within(sheet()).queryByText('Show or hide the inspector')).toBeNull();
   });
 });
 

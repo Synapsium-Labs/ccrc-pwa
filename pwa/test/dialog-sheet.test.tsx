@@ -6,19 +6,20 @@
 import { readFileSync } from 'node:fs';
 import type { DialogAnswered } from '../../shared/api';
 import path from 'node:path';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import {
   DIALOG_MULTI_REFUSE_CODES, DIALOG_REFUSE_CODES, DIALOG_TEXT_MAX, DIALOG_TEXT_REFUSE_CODES, isDialogText, type Dialog,
   type HookAsk, type HookAskQuestion,
 } from '../../shared/api';
 import { ToastHost } from '@ccrc/ui';
-import { api, ApiError, failedTo, sendErrorText } from '../src/lib/api';
+import { ApiError, failedTo, sendErrorText } from '../src/lib/api';
 import {
   DIALOG_MULTI_REFUSE_TEXT, DIALOG_REFUSE_TEXT, DIALOG_TEXT_REFUSE_TEXT, STALE_UNDER_ENVELOPE, dialogMultiRefusal,
   dialogRefusal, dialogTextRefusal, ownWordsHeld,
 } from '../src/session/askWords';
 import { DialogSheet } from '../src/session/DialogSheet';
+import { answerSeam, type AnswerSeamMocks } from './answerSeam';
 import { createSessionStore } from '../src/stores/session';
 import { atBlock, declValue, effectiveValue, norm, ruleIn, selectorsOf } from './cssRule';
 import {
@@ -38,6 +39,12 @@ import {
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+});
+
+// D-7183: the sheet's answers go through its injected seam; each test gets fresh writers (`answerSeam.ts`).
+let answers: AnswerSeamMocks = answerSeam();
+beforeEach(() => {
+  answers = answerSeam();
 });
 
 // — fixtures —
@@ -134,7 +141,7 @@ const renderWithDialog = (dialog: Dialog, onOpenTerminal = vi.fn()) => {
   });
   render(
     <>
-      <DialogSheet id={SESSION_ID} store={store} onOpenTerminal={onOpenTerminal} />
+      <DialogSheet answers={answers} id={SESSION_ID} store={store} onOpenTerminal={onOpenTerminal} />
       <ToastHost />
     </>,
   );
@@ -161,7 +168,7 @@ describe('DialogSheet (parsed)', () => {
   });
 
   it('tapping an option answers with dialogId + optionIndex and shows the answering state', () => {
-    const spy = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+    const spy = answers.answerDialog.mockReset().mockReturnValue(new Promise(() => {}));
     renderWithDialog(parsedDialog());
 
     fireEvent.click(screen.getByRole('button', { name: 'Freeze reads, then migrate' }));
@@ -172,7 +179,7 @@ describe('DialogSheet (parsed)', () => {
   });
 
   it('stays open after a successful answer until dialog_cleared closes it', async () => {
-    vi.spyOn(api, 'answerDialog').mockResolvedValue({ ok: true });
+    answers.answerDialog.mockReset().mockResolvedValue({ ok: true });
     const { store } = renderWithDialog(parsedDialog());
 
     fireEvent.click(screen.getByRole('button', { name: 'Expand–contract' }));
@@ -188,7 +195,7 @@ describe('DialogSheet (parsed)', () => {
   });
 
   it('a stale 409 toasts and keeps the sheet open on the store dialog', async () => {
-    vi.spyOn(api, 'answerDialog').mockRejectedValue(
+    answers.answerDialog.mockReset().mockRejectedValue(
       new ApiError(409, { ok: false, error: 'stale-dialog' }),
     );
     renderWithDialog(parsedDialog());
@@ -251,7 +258,7 @@ describe('DialogSheet dismissal', () => {
   });
 
   it('refuses to dismiss while an answer is in flight', () => {
-    vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+    answers.answerDialog.mockReset().mockReturnValue(new Promise(() => {}));
     renderWithDialog(parsedDialog());
 
     fireEvent.click(screen.getByRole('button', { name: 'Ask me later' }));
@@ -469,7 +476,7 @@ describe('DialogSheet (enriched by Dialog.ask)', () => {
   });
 
   it('answers with the pane index even when the transcript relabels the row', () => {
-    const spy = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+    const spy = answers.answerDialog.mockReset().mockReturnValue(new Promise(() => {}));
     renderSheet(ASKED);
 
     fireEvent.click(screen.getByRole('button', { name: /Ship as-is, alert \+ runbook/ }));
@@ -630,7 +637,7 @@ describe('DialogSheet (hook envelope)', () => {
     });
     render(
       <>
-        <DialogSheet id={SESSION_ID} store={store} />
+        <DialogSheet answers={answers} id={SESSION_ID} store={store} />
         <ToastHost />
       </>,
     );
@@ -638,7 +645,7 @@ describe('DialogSheet (hook envelope)', () => {
   };
 
   it('renders the envelope question, and tapping option N answers with digit N via answerDialog', () => {
-    const spy = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+    const spy = answers.answerDialog.mockReset().mockReturnValue(new Promise(() => {}));
     renderWithAsk(QUESTION_ASK, matchingDialog());
 
     expect(screen.getByText('Which rollout strategy?')).toBeInTheDocument();
@@ -688,7 +695,7 @@ describe('DialogSheet (hook envelope)', () => {
     });
     render(
       <>
-        <DialogSheet id={SESSION_ID} store={store} onOpenTerminal={onOpenTerminal} />
+        <DialogSheet answers={answers} id={SESSION_ID} store={store} onOpenTerminal={onOpenTerminal} />
         <ToastHost />
       </>,
     );
@@ -718,7 +725,7 @@ describe('DialogSheet (hook envelope)', () => {
     });
     render(
       <>
-        <DialogSheet id={SESSION_ID} store={store} />
+        <DialogSheet answers={answers} id={SESSION_ID} store={store} />
         <ToastHost />
       </>,
     );
@@ -752,7 +759,7 @@ describe('DialogSheet (hook envelope)', () => {
     // multi-select footer no longer says "Space to select". A tap walks the
     // cursor and presses Enter, and Enter on a 2.1.280 multi-select row ticks
     // that box and submits nothing (measured), so no tap is an answer.
-    const spy = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+    const spy = answers.answerDialog.mockReset().mockReturnValue(new Promise(() => {}));
     renderWithAsk(
       {
         questions: [
@@ -785,7 +792,7 @@ describe('DialogSheet (hook envelope)', () => {
   });
 
   it.each([false, undefined])('control: the same question with multiSelect %s is tappable against that pane', (multiSelect) => {
-    const spy = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+    const spy = answers.answerDialog.mockReset().mockReturnValue(new Promise(() => {}));
     renderWithAsk(
       { questions: [{ question: 'Pick languages', ...(multiSelect === undefined ? {} : { multiSelect }), options: [{ label: 'TS' }, { label: 'Go' }] }] },
       parsedDialog({ title: 'Pick languages', options: [{ index: 1, label: 'TS' }, { index: 2, label: 'Go' }] }),
@@ -795,7 +802,7 @@ describe('DialogSheet (hook envelope)', () => {
   });
 
   it('renders an approval envelope (tool + summary); Allow answers digit 1 via answerDialog', () => {
-    const answerSpy = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+    const answerSpy = answers.answerDialog.mockReset().mockReturnValue(new Promise(() => {}));
     renderWithAsk(APPROVAL_ASK, yesNoDialog());
 
     expect(screen.getByText('Bash')).toBeInTheDocument();
@@ -807,8 +814,8 @@ describe('DialogSheet (hook envelope)', () => {
   });
 
   it('Deny sends Escape via api.interrupt', () => {
-    vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
-    const interruptSpy = vi.spyOn(api, 'interrupt').mockResolvedValue(undefined as never);
+    answers.answerDialog.mockReset().mockReturnValue(new Promise(() => {}));
+    const interruptSpy = answers.interrupt.mockReset().mockResolvedValue(undefined as never);
     renderWithAsk(APPROVAL_ASK, yesNoDialog());
 
     fireEvent.click(screen.getByRole('button', { name: 'Deny' }));
@@ -817,7 +824,7 @@ describe('DialogSheet (hook envelope)', () => {
   });
 
   it('toasts an honest, ambiguity-acknowledging message when Deny 409s (fix round 1: not-busy could mean either idle or already-resolved)', async () => {
-    vi.spyOn(api, 'interrupt').mockRejectedValue(new ApiError(409, { ok: false, error: 'not-busy' }));
+    answers.interrupt.mockReset().mockRejectedValue(new ApiError(409, { ok: false, error: 'not-busy' }));
     renderWithAsk(APPROVAL_ASK, yesNoDialog());
 
     fireEvent.click(screen.getByRole('button', { name: 'Deny' }));
@@ -827,7 +834,7 @@ describe('DialogSheet (hook envelope)', () => {
   });
 
   it('a Deny refused background-only names the background work and says the request already resolved (ARCH-13a)', async () => {
-    vi.spyOn(api, 'interrupt').mockRejectedValue(
+    answers.interrupt.mockReset().mockRejectedValue(
       new ApiError(409, { ok: false, error: 'background-only', count: 2, kinds: ['workflow'] }));
     renderWithAsk(APPROVAL_ASK, yesNoDialog());
 
@@ -837,7 +844,7 @@ describe('DialogSheet (hook envelope)', () => {
   });
 
   it('a Deny refused background-only with no count still names the background work', async () => {
-    vi.spyOn(api, 'interrupt').mockRejectedValue(
+    answers.interrupt.mockReset().mockRejectedValue(
       new ApiError(409, { ok: false, error: 'background-only', count: null, kinds: [] }));
     renderWithAsk(APPROVAL_ASK, yesNoDialog());
 
@@ -890,7 +897,7 @@ describe('DialogSheet (hook envelope)', () => {
     // The 409 has its own deliberately ambiguous sentence (the case above).
     // Every other failure is unambiguous and must say so: a 502 from a box
     // whose tmux is gone is not "the session may be idle".
-    vi.spyOn(api, 'interrupt').mockRejectedValue(
+    answers.interrupt.mockReset().mockRejectedValue(
       new ApiError(502, { ok: false, stderr: 'tmux: no server running' }));
     renderWithAsk(APPROVAL_ASK, yesNoDialog());
 
@@ -901,7 +908,7 @@ describe('DialogSheet (hook envelope)', () => {
   });
 
   it('N1: toasts honestly about a 409 on the envelope path — nothing on screen actually changed', async () => {
-    vi.spyOn(api, 'answerDialog').mockRejectedValue(
+    answers.answerDialog.mockReset().mockRejectedValue(
       new ApiError(409, { ok: false, error: 'stale-dialog' }),
     );
     renderWithAsk(QUESTION_ASK, matchingDialog());
@@ -975,7 +982,7 @@ describe('DialogSheet (hook envelope)', () => {
     });
 
     it('refuses to dismiss while a numbered-option answer is in flight', () => {
-      const spy = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+      const spy = answers.answerDialog.mockReset().mockReturnValue(new Promise(() => {}));
       renderWithAsk(QUESTION_ASK, matchingDialog());
 
       fireEvent.click(screen.getByRole('button', { name: /Big bang/ }));
@@ -985,7 +992,7 @@ describe('DialogSheet (hook envelope)', () => {
     });
 
     it('refuses to dismiss while Allow is in flight', () => {
-      vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+      answers.answerDialog.mockReset().mockReturnValue(new Promise(() => {}));
       renderWithAsk(APPROVAL_ASK, yesNoDialog());
 
       fireEvent.click(screen.getByRole('button', { name: 'Allow' }));
@@ -994,7 +1001,7 @@ describe('DialogSheet (hook envelope)', () => {
     });
 
     it('refuses to dismiss while Deny is in flight', () => {
-      vi.spyOn(api, 'interrupt').mockReturnValue(new Promise(() => {}));
+      answers.interrupt.mockReset().mockReturnValue(new Promise(() => {}));
       renderWithAsk(APPROVAL_ASK, yesNoDialog());
 
       fireEvent.click(screen.getByRole('button', { name: 'Deny' }));
@@ -1013,7 +1020,7 @@ describe('DialogSheet (hook envelope)', () => {
       });
       render(
         <>
-          <DialogSheet id={SESSION_ID} store={store} onOpenTerminal={onOpenTerminal} />
+          <DialogSheet answers={answers} id={SESSION_ID} store={store} onOpenTerminal={onOpenTerminal} />
           <ToastHost />
         </>,
       );
@@ -1038,14 +1045,14 @@ describe('DialogSheet (hook envelope)', () => {
     });
 
     it('an approval\'s Allow renders disabled with the same CTA; Deny stays enabled (interrupt needs no dialog)', () => {
-      const interruptSpy = vi.spyOn(api, 'interrupt').mockResolvedValue(undefined as never);
+      const interruptSpy = answers.interrupt.mockReset().mockResolvedValue(undefined as never);
       const store = makeStore();
       act(() => {
         store.getState().apply({ type: 'ask', ask: APPROVAL_ASK, key: null });
       });
       render(
         <>
-          <DialogSheet id={SESSION_ID} store={store} />
+          <DialogSheet answers={answers} id={SESSION_ID} store={store} />
           <ToastHost />
         </>,
       );
@@ -1065,13 +1072,13 @@ describe('DialogSheet (hook envelope)', () => {
     // hide, exactly the "second action on top of an unresolved first one"
     // the code's own comment claimed was prevented.
     it('the CTA is refused while Deny is in flight: onOpenTerminal is not called, the sheet stays open', () => {
-      vi.spyOn(api, 'interrupt').mockReturnValue(new Promise(() => {}));
+      answers.interrupt.mockReset().mockReturnValue(new Promise(() => {}));
       const onOpenTerminal = vi.fn();
       const store = makeStore();
       act(() => {
         store.getState().apply({ type: 'ask', ask: APPROVAL_ASK, key: null });
       });
-      render(<DialogSheet id={SESSION_ID} store={store} onOpenTerminal={onOpenTerminal} />);
+      render(<DialogSheet answers={answers} id={SESSION_ID} store={store} onOpenTerminal={onOpenTerminal} />);
 
       fireEvent.click(screen.getByRole('button', { name: 'Deny' }));
       fireEvent.click(screen.getByRole('button', { name: 'Open terminal to answer' }));
@@ -1081,12 +1088,12 @@ describe('DialogSheet (hook envelope)', () => {
     });
 
     it('once a MATCHING scraped dialog appears, the same envelope\'s rows become tappable', () => {
-      const spy = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+      const spy = answers.answerDialog.mockReset().mockReturnValue(new Promise(() => {}));
       const store = makeStore();
       act(() => {
         store.getState().apply({ type: 'ask', ask: QUESTION_ASK, key: null });
       });
-      render(<DialogSheet id={SESSION_ID} store={store} />);
+      render(<DialogSheet answers={answers} id={SESSION_ID} store={store} />);
       expect(screen.getByRole('button', { name: /Big bang/ })).toBeDisabled();
 
       act(() => {
@@ -1109,7 +1116,7 @@ describe('DialogSheet (hook envelope)', () => {
   // question 2's own index into question 1's menu. These pin the fix.
   describe('correspondence gate (fix round 3)', () => {
     it('C1: a mismatched dialog (a different question on the pane) disables the rows instead of answering the wrong one', () => {
-      const spy = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+      const spy = answers.answerDialog.mockReset().mockReturnValue(new Promise(() => {}));
       // Canary first / Big bang (QUESTION_ASK) vs Expand–contract / Big-bang
       // cutover / … (parsedDialog()) — this exact pairing used to pin the
       // bug this test now guards against: tapping "Big bang" walked the
@@ -1163,7 +1170,7 @@ describe('DialogSheet (hook envelope)', () => {
   // — fix round 1, (I2), as D-5089 left it: the question the PANE is painting is the tappable one. With question 1 on
   // the pane that is question 1, and question 2 waits read-only (the control for "the envelope follows the pane").
   it('question 1 on the pane: question 1 is tappable, question 2 waits read-only', () => {
-    const spy = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+    const spy = answers.answerDialog.mockReset().mockReturnValue(new Promise(() => {}));
     renderWithAsk(TWO_QUESTIONS, envDialog());
 
     // The second question is on screen…
@@ -1203,7 +1210,7 @@ describe('DialogSheet (hook envelope)', () => {
   // — fix round 1, (I5): a11y parity with the scraped rows —
   describe('aria-busy', () => {
     it('a question row carries aria-busy and "answering…" while its answer is in flight', () => {
-      vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+      answers.answerDialog.mockReset().mockReturnValue(new Promise(() => {}));
       renderWithAsk(QUESTION_ASK, matchingDialog());
 
       const row = screen.getByRole('button', { name: /Big bang/ });
@@ -1213,7 +1220,7 @@ describe('DialogSheet (hook envelope)', () => {
     });
 
     it('Allow carries aria-busy while in flight; Deny carries it independently', () => {
-      vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+      answers.answerDialog.mockReset().mockReturnValue(new Promise(() => {}));
       renderWithAsk(APPROVAL_ASK, yesNoDialog());
 
       const allow = screen.getByRole('button', { name: /Allow/ });
@@ -1224,7 +1231,7 @@ describe('DialogSheet (hook envelope)', () => {
     });
 
     it('Deny carries aria-busy while its own interrupt call is in flight', () => {
-      vi.spyOn(api, 'interrupt').mockReturnValue(new Promise(() => {}));
+      answers.interrupt.mockReset().mockReturnValue(new Promise(() => {}));
       renderWithAsk(APPROVAL_ASK, yesNoDialog());
 
       const deny = screen.getByRole('button', { name: /Deny/ });
@@ -1253,7 +1260,7 @@ describe('the envelope follows the pane (D-5089)', () => {
     });
     render(
       <>
-        <DialogSheet id={SESSION_ID} store={store} onOpenTerminal={vi.fn()} />
+        <DialogSheet answers={answers} id={SESSION_ID} store={store} onOpenTerminal={vi.fn()} />
         <ToastHost />
       </>,
     );
@@ -1261,7 +1268,7 @@ describe('the envelope follows the pane (D-5089)', () => {
   };
   const heading = (name: string): HTMLElement => screen.getByRole('heading', { name });
   const pending = (): ReturnType<typeof vi.spyOn> =>
-    vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+    answers.answerDialog.mockReset().mockReturnValue(new Promise(() => {}));
   const CANCEL_SAYS = 'Declines every question in this ask — nothing you answered is sent.';
   /** The one option BUTTON whose label is exactly `label` (a read-only row is a div, and is not one). By label, not
    *  by accessible name: the name runs the label into its description (`NoLeave tracing off`), and `/^No/` also
@@ -1502,12 +1509,12 @@ describe('the envelope follows the pane (D-5089)', () => {
         });
         store.getState().apply({ type: 'ask', ask: FRUIT_DRINK, key: null });
       });
-      const { rerender } = render(<DialogSheet id={SESSION_ID} store={store} raise={0} />);
+      const { rerender } = render(<DialogSheet answers={answers} id={SESSION_ID} store={store} raise={0} />);
       fireEvent.click(screen.getByTestId('sheet-overlay'));
       act(() => store.getState().apply({ type: 'ask_cleared' }));
       expect(screen.queryByRole('heading', { name: 'Which drink?' })).toBeNull();
 
-      rerender(<DialogSheet id={SESSION_ID} store={store} raise={1} />);
+      rerender(<DialogSheet answers={answers} id={SESSION_ID} store={store} raise={1} />);
       expect(heading('Which drink?')).toBeInTheDocument();
     });
   });
@@ -1538,7 +1545,7 @@ describe('own words go through the free-text row (D-5090)', () => {
     });
     render(
       <>
-        <DialogSheet id={SESSION_ID} store={store} onOpenTerminal={vi.fn()} />
+        <DialogSheet answers={answers} id={SESSION_ID} store={store} onOpenTerminal={vi.fn()} />
         <ToastHost />
       </>,
     );
@@ -1572,8 +1579,8 @@ describe('own words go through the free-text row (D-5090)', () => {
   const refused = (code: string) => new ApiError(409, { ok: false, error: code });
 
   it('envelope: an empty Type something. row at n+1 offers Your own answer, and Send calls answerDialogText', () => {
-    const text = vi.spyOn(api, 'answerDialogText').mockReturnValue(new Promise(() => {}));
-    const option = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+    const text = answers.answerDialogText.mockReset().mockReturnValue(new Promise(() => {}));
+    const option = answers.answerDialog.mockReset().mockReturnValue(new Promise(() => {}));
     const q2 = pane('cc300-ask-same-labels-q2');
     expect(q2.id.startsWith('38f07f99')).toBe(true);
     const { prompt } = renderAsk(CACHING_TRACING, q2);
@@ -1588,7 +1595,7 @@ describe('own words go through the free-text row (D-5090)', () => {
   });
 
   it('envelope: the pane\'s Chat about this row is offered after the own words, and says it declines the ask', () => {
-    const option = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+    const option = answers.answerDialog.mockReset().mockReturnValue(new Promise(() => {}));
     const q2 = pane('cc300-ask-same-labels-q2');
     renderAsk(CACHING_TRACING, q2);
 
@@ -1611,8 +1618,8 @@ describe('own words go through the free-text row (D-5090)', () => {
   });
 
   it('scraped: own words answer the question through the Type something. row', () => {
-    const text = vi.spyOn(api, 'answerDialogText').mockReturnValue(new Promise(() => {}));
-    const option = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+    const text = answers.answerDialogText.mockReset().mockReturnValue(new Promise(() => {}));
+    const option = answers.answerDialog.mockReset().mockReturnValue(new Promise(() => {}));
     const open = pane('cc300-ask-1q-open');
     expect(open.id.startsWith('ac059b8e')).toBe(true);
     const { prompt } = renderAsk(null, aged(COLOUR_ONE, open));
@@ -1625,7 +1632,7 @@ describe('own words go through the free-text row (D-5090)', () => {
   });
 
   it('the two-column layout has no own-words row: one line, no field, and the Chat row says what it does', () => {
-    const option = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+    const option = answers.answerDialog.mockReset().mockReturnValue(new Promise(() => {}));
     const twoCol = pane('ask-2col-chat-about');
     renderAsk(null, aged(TWO_COL, twoCol));
 
@@ -1649,7 +1656,7 @@ describe('own words go through the free-text row (D-5090)', () => {
 
   it('the text and the busy state belong to the call: a frame with the typed label arriving mid-call changes neither', () => {
     const call = deferred();
-    vi.spyOn(api, 'answerDialogText').mockReturnValue(call.promise);
+    answers.answerDialogText.mockReset().mockReturnValue(call.promise);
     const q2 = pane('cc300-ask-same-labels-q2');
     const { store } = renderAsk(CACHING_TRACING, q2);
     type(TEXT);
@@ -1680,7 +1687,7 @@ describe('own words go through the free-text row (D-5090)', () => {
   it('a send under way stays on screen when the pane stops matching mid-call', () => {
     // The envelope reads its free-text row only while the question is live; a capture of another screen mid-call
     // (DERIVED sequence: `cc300-ask-1q-open`, another ask's pane) must not take the operator's text and busy Send away.
-    vi.spyOn(api, 'answerDialogText').mockReturnValue(new Promise(() => {}));
+    answers.answerDialogText.mockReset().mockReturnValue(new Promise(() => {}));
     const { store } = renderAsk(CACHING_TRACING, pane('cc300-ask-same-labels-q2'));
     type(TEXT);
     fireEvent.click(send());
@@ -1693,8 +1700,8 @@ describe('own words go through the free-text row (D-5090)', () => {
 
   it('a refused text answer keeps what was typed and says why', async () => {
     // The scraped sheet (`cc300-ask-same-labels-q2`, no envelope): the old reply emptied the box before its call.
-    vi.spyOn(api, 'answerDialogText').mockRejectedValue(refused('echo-failed'));
-    vi.spyOn(api, 'answerDialog').mockRejectedValue(refused('stale-dialog'));
+    answers.answerDialogText.mockReset().mockRejectedValue(refused('echo-failed'));
+    answers.answerDialog.mockReset().mockRejectedValue(refused('stale-dialog'));
     renderAsk(null, aged(CACHING_TRACING, pane('cc300-ask-same-labels-q2'), 1));
     type(TEXT);
     fireEvent.click(send());
@@ -1706,7 +1713,7 @@ describe('own words go through the free-text row (D-5090)', () => {
   });
 
   it('stranded text: when the row holds exactly the kept text, Send submits it under the new id', async () => {
-    const call = vi.spyOn(api, 'answerDialogText')
+    const call = answers.answerDialogText.mockReset()
       .mockRejectedValueOnce(refused('echo-failed'))
       .mockReturnValueOnce(new Promise(() => {}));
     const q2 = pane('cc300-ask-same-labels-q2');
@@ -1732,7 +1739,7 @@ describe('own words go through the free-text row (D-5090)', () => {
     // (`questionKey`): a refused call outliving its question once hid a real option and offered the placeholder as a
     // row. DERIVED: a later question titled like the refused one, with an option more, and its own copy (the transcript's
     // copy is re-attached to each pane it describes).
-    const call = vi.spyOn(api, 'answerDialogText')
+    const call = answers.answerDialogText.mockReset()
       .mockRejectedValueOnce(refused('stale-dialog'))
       .mockReturnValueOnce(new Promise(() => {}));
     const drink = pane('cc300-ask-q2-of-2-single');
@@ -1768,7 +1775,7 @@ describe('own words go through the free-text row (D-5090)', () => {
     // (`cc300-ask-freetext-walk-3-typed`) holding the text's first 22 characters, as a capture taken while tmux was
     // typing shows it.
     for (const ask of [CACHING_TRACING, null]) {
-      const call = vi.spyOn(api, 'answerDialogText')
+      const call = answers.answerDialogText.mockReset()
         .mockRejectedValueOnce(refused('echo-failed'))
         .mockReturnValueOnce(new Promise(() => {}));
       // The aged-out sheet reads every pane through the transcript's copy of the question.
@@ -1813,7 +1820,7 @@ describe('own words go through the free-text row (D-5090)', () => {
   it('text typed here stays in view when the terminal row fills with other text', () => {
     // Not sent yet: the operator typed in the field, then text was typed into the row in the terminal (DERIVED: the
     // recorded typed row holding other words). The field keeps the operator's text, Send waits, and the line says why.
-    const text = vi.spyOn(api, 'answerDialogText').mockReturnValue(new Promise(() => {}));
+    const text = answers.answerDialogText.mockReset().mockReturnValue(new Promise(() => {}));
     const { store } = renderAsk(CACHING_TRACING, pane('cc300-ask-same-labels-q2'));
     type('only in production');
     const typed = pane('cc300-ask-freetext-walk-3-typed');
@@ -1828,7 +1835,7 @@ describe('own words go through the free-text row (D-5090)', () => {
   });
 
   it('ok clears the text, and question 2 is answerable', async () => {
-    vi.spyOn(api, 'answerDialogText').mockResolvedValue({ ok: true });
+    answers.answerDialogText.mockReset().mockResolvedValue({ ok: true });
     const q1 = pane('cc300-ask-same-labels-q1');
     const { store } = renderAsk(CACHING_TRACING, q1);
     type('only in production');
@@ -1847,7 +1854,7 @@ describe('own words go through the free-text row (D-5090)', () => {
   it('an answer that landed waits for the pane to move on, through a late frame of the typed row', async () => {
     // Like a tapped option: the sheet stays busy after ok until the pane paints the next screen. A capture of the
     // typed row taken before Enter can arrive after the call answered; it is this send, not other text.
-    vi.spyOn(api, 'answerDialogText').mockResolvedValue({ ok: true });
+    answers.answerDialogText.mockReset().mockResolvedValue({ ok: true });
     const { store } = renderAsk(CACHING_TRACING, pane('cc300-ask-same-labels-q2'));
     type(TEXT);
     fireEvent.click(send());
@@ -1867,7 +1874,7 @@ describe('own words go through the free-text row (D-5090)', () => {
   it('an answer that landed stops waiting on another question, even one whose row reads the same text', async () => {
     // Only this send's OWN typed row keeps the sheet waiting: the same text in another question's free-text row is
     // that question's. DERIVED: the recorded typed row (`cc300-ask-freetext-walk-3-typed`) under Caching's title.
-    vi.spyOn(api, 'answerDialogText').mockResolvedValue({ ok: true });
+    answers.answerDialogText.mockReset().mockResolvedValue({ ok: true });
     const { store } = renderAsk(CACHING_TRACING, pane('cc300-ask-same-labels-q2'));
     type(TEXT);
     fireEvent.click(send());
@@ -1884,7 +1891,7 @@ describe('own words go through the free-text row (D-5090)', () => {
 
   it('an answer whose next screen arrived mid-call does not hold that screen busy', async () => {
     const call = deferred();
-    vi.spyOn(api, 'answerDialogText').mockReturnValue(call.promise);
+    answers.answerDialogText.mockReset().mockReturnValue(call.promise);
     const { store } = renderAsk(CACHING_TRACING, pane('cc300-ask-same-labels-q2'));
     type(TEXT);
     fireEvent.click(send());
@@ -1912,7 +1919,7 @@ describe('own words go through the free-text row (D-5090)', () => {
       `Point ${i + 1}: keep the migration behind a flag, run it on staging first, and roll back on any checksum mismatch.`,
     ).join(' ');
     expect(paste.length).toBeGreaterThan(DIALOG_TEXT_MAX + 400);
-    const text = vi.spyOn(api, 'answerDialogText').mockReturnValue(new Promise(() => {}));
+    const text = answers.answerDialogText.mockReset().mockReturnValue(new Promise(() => {}));
     const open = pane('cc300-ask-1q-open');
     renderAsk(null, aged(COLOUR_ONE, open));
     expect(field(), 'a browser would cut the paste at the limit').not.toHaveAttribute('maxlength');
@@ -1963,7 +1970,7 @@ describe('own words go through the free-text row (D-5090)', () => {
     // A paste out of a table carries a Tab, which a text field keeps and draws as a gap. The route refuses it
     // (`isDialogText`: one line, no control character), so Send waits, and says so as it does over the limit, rather
     // than sitting disabled with no word. DERIVED texts: a Tab, a C1 control, and a line separator.
-    const text = vi.spyOn(api, 'answerDialogText').mockReturnValue(new Promise(() => {}));
+    const text = answers.answerDialogText.mockReset().mockReturnValue(new Promise(() => {}));
     const open = pane('cc300-ask-1q-open');
     renderAsk(null, aged(COLOUR_ONE, open));
     for (const held of ['Teal\tif there is one', 'Teal\u0085if there is one', 'Teal if there is one']) {
@@ -2015,7 +2022,7 @@ describe('own words go through the free-text row (D-5090)', () => {
   });
 
   it('dismissal is refused while a text answer is in flight, on either source of the question', () => {
-    vi.spyOn(api, 'answerDialogText').mockReturnValue(new Promise(() => {}));
+    answers.answerDialogText.mockReset().mockReturnValue(new Promise(() => {}));
     const { store } = renderAsk(CACHING_TRACING, aged(CACHING_TRACING, pane('cc300-ask-same-labels-q2'), 1));
     type(TEXT);
     fireEvent.click(send());
@@ -2033,7 +2040,7 @@ describe('own words go through the free-text row (D-5090)', () => {
 
     it('ask_cleared mid-call: the next sheet shows the same text and busy state, and ok clears it', async () => {
       const call = deferred();
-      vi.spyOn(api, 'answerDialogText').mockReturnValue(call.promise);
+      answers.answerDialogText.mockReset().mockReturnValue(call.promise);
       const { store } = renderAsk(CACHING_TRACING, seen(pane('cc300-ask-same-labels-q2')));
       type(TEXT);
       fireEvent.click(send());
@@ -2059,7 +2066,7 @@ describe('own words go through the free-text row (D-5090)', () => {
     it('after a refusal, the next sheet offers the same stranded retry', async () => {
       // The transcript's copy says how many options the question has, so the typed row is never taken for an option;
       // only this sheet's own call says which text is the operator's own.
-      const call = vi.spyOn(api, 'answerDialogText')
+      const call = answers.answerDialogText.mockReset()
         .mockRejectedValueOnce(refused('echo-failed'))
         .mockReturnValueOnce(new Promise(() => {}));
       const { store } = renderAsk(CACHING_TRACING, seen(pane('cc300-ask-same-labels-q2')));
@@ -2116,7 +2123,7 @@ describe('multiSelect boxes (D-5091)', () => {
     });
     render(
       <>
-        <DialogSheet id={SESSION_ID} store={store} onOpenTerminal={vi.fn()} />
+        <DialogSheet answers={answers} id={SESSION_ID} store={store} onOpenTerminal={vi.fn()} />
         <ToastHost />
       </>,
     );
@@ -2163,8 +2170,8 @@ describe('multiSelect boxes (D-5091)', () => {
   });
 
   it('Next sends the whole wanted set', () => {
-    const multi = vi.spyOn(api, 'answerDialogMulti').mockReturnValue(new Promise(() => {}));
-    const option = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+    const multi = answers.answerDialogMulti.mockReset().mockReturnValue(new Promise(() => {}));
+    const option = answers.answerDialog.mockReset().mockReturnValue(new Promise(() => {}));
     const digit1 = pane('cc300-ask-multiselect-digit1');
     renderAsk(DRINK_FEATURES_TOOLS, digit1);
 
@@ -2177,7 +2184,7 @@ describe('multiSelect boxes (D-5091)', () => {
   });
 
   it('boxes ticked here follow the pane\'s, in tap order', () => {
-    const multi = vi.spyOn(api, 'answerDialogMulti').mockReturnValue(new Promise(() => {}));
+    const multi = answers.answerDialogMulti.mockReset().mockReturnValue(new Promise(() => {}));
     const tools = pane('cc300-ask-multiselect-tools-open');
     renderAsk(TOOLS_SIZES, tools);
     fireEvent.click(box('Drill'));
@@ -2188,7 +2195,7 @@ describe('multiSelect boxes (D-5091)', () => {
   });
 
   it('a box ticked on the pane keeps its place, even unticked and ticked again here', () => {
-    const multi = vi.spyOn(api, 'answerDialogMulti').mockReturnValue(new Promise(() => {}));
+    const multi = answers.answerDialogMulti.mockReset().mockReturnValue(new Promise(() => {}));
     const digit1 = pane('cc300-ask-multiselect-digit1');
     renderAsk(DRINK_FEATURES_TOOLS, digit1);
     fireEvent.click(box('Tracing'));
@@ -2209,7 +2216,7 @@ describe('multiSelect boxes (D-5091)', () => {
   });
 
   it('the last question\'s commit reads Review answers', () => {
-    const multi = vi.spyOn(api, 'answerDialogMulti').mockReturnValue(new Promise(() => {}));
+    const multi = answers.answerDialogMulti.mockReset().mockReturnValue(new Promise(() => {}));
     const last = pane('cc300-ask-multiselect-submit-open');
     renderAsk(DRINK_FEATURES_TOOLS, last);
     expect(heading('Which tools?')).toBeInTheDocument();
@@ -2255,7 +2262,7 @@ describe('multiSelect boxes (D-5091)', () => {
   });
 
   it('a touched sheet keeps its own set across a repaint', () => {
-    const multi = vi.spyOn(api, 'answerDialogMulti').mockReturnValue(new Promise(() => {}));
+    const multi = answers.answerDialogMulti.mockReset().mockReturnValue(new Promise(() => {}));
     const { store } = renderAsk(DRINK_FEATURES_TOOLS, pane('cc300-ask-multiselect-digit1'));
     fireEvent.click(box('Metrics'));
     show(store, pane('cc300-ask-multiselect-digit1-3'));
@@ -2266,7 +2273,7 @@ describe('multiSelect boxes (D-5091)', () => {
   });
 
   it('a refusal says why and re-enables the boxes, and Next sends the same set again', async () => {
-    const multi = vi.spyOn(api, 'answerDialogMulti')
+    const multi = answers.answerDialogMulti.mockReset()
       .mockRejectedValueOnce(refused('ticks-failed'))
       .mockReturnValueOnce(new Promise(() => {}));
     // Untouched: Next commits the pane's own ticks (`-digit1-3`, Logging and Tracing).
@@ -2300,7 +2307,7 @@ describe('multiSelect boxes (D-5091)', () => {
   });
 
   it('a one-question multiSelect envelope answers through the boxes', () => {
-    const multi = vi.spyOn(api, 'answerDialogMulti').mockReturnValue(new Promise(() => {}));
+    const multi = answers.answerDialogMulti.mockReset().mockReturnValue(new Promise(() => {}));
     // DERIVED: `Which tools?` asked alone (the recorded ask has it first of two).
     const alone: HookAsk = { questions: [TOOLS_SIZES.questions[0]!] };
     const tools = pane('cc300-ask-multiselect-tools-open');
@@ -2315,7 +2322,7 @@ describe('multiSelect boxes (D-5091)', () => {
   it('a multiSelect question with no Dialog.multi keeps the honest terminal copy and offers no box', () => {
     // The 2.1.222 shape (`multiselect`): no commit row, so no `Dialog.multi`, and its keys were never measured. DERIVED
     // envelope: that recording's prompt line is not captured, so its one question is read off the screen.
-    const multi = vi.spyOn(api, 'answerDialogMulti').mockReturnValue(new Promise(() => {}));
+    const multi = answers.answerDialogMulti.mockReset().mockReturnValue(new Promise(() => {}));
     const old = pane('multiselect');
     expect(old.multi).toBeUndefined();
     renderAsk({ questions: [{ question: 'Select the tools to allow', header: 'Tools', multiSelect: true,
@@ -2330,8 +2337,8 @@ describe('multiSelect boxes (D-5091)', () => {
 
   it('the boxes and Next are disabled, and dismissal refused, while the commit is in flight', async () => {
     const call = deferred();
-    vi.spyOn(api, 'answerDialogMulti').mockReturnValue(call.promise);
-    const option = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+    answers.answerDialogMulti.mockReset().mockReturnValue(call.promise);
+    const option = answers.answerDialog.mockReset().mockReturnValue(new Promise(() => {}));
     const { store } = renderAsk(DRINK_FEATURES_TOOLS, pane('cc300-ask-multiselect-digit1'));
     fireEvent.click(box('Tracing'));
     fireEvent.click(commit('Next'));
@@ -2362,7 +2369,7 @@ describe('multiSelect boxes (D-5091)', () => {
 
   it('a commit whose next screen arrived mid-call does not hold that screen busy', async () => {
     const call = deferred();
-    vi.spyOn(api, 'answerDialogMulti').mockReturnValue(call.promise);
+    answers.answerDialogMulti.mockReset().mockReturnValue(call.promise);
     const { store } = renderAsk(DRINK_FEATURES_TOOLS, pane('cc300-ask-multiselect-digit1-3'));
     fireEvent.click(commit('Next'));
     show(store, pane('cc300-ask-multiselect-submit-open'));
@@ -2381,7 +2388,7 @@ describe('multiSelect boxes (D-5091)', () => {
   it('a single-select screen arriving mid-commit waits too, its Other row included', () => {
     // DERIVED sequence: the recorded multiSelect question, then the ask's recorded single-select question
     // (`cc300-ask-q2-of-2-single`, as the pane paints it after a ← back) before the commit answers. One call at a time.
-    vi.spyOn(api, 'answerDialogMulti').mockReturnValue(new Promise(() => {}));
+    answers.answerDialogMulti.mockReset().mockReturnValue(new Promise(() => {}));
     const { store } = renderAsk(DRINK_FEATURES_TOOLS, pane('cc300-ask-multiselect-digit1-3'));
     fireEvent.click(commit('Next'));
     show(store, pane('cc300-ask-q2-of-2-single'));
@@ -2408,7 +2415,7 @@ describe('multiSelect boxes (D-5091)', () => {
     };
 
     it('the envelope\'s boxes give way to the terminal door, with no boxes and nothing sent', () => {
-      const multi = vi.spyOn(api, 'answerDialogMulti').mockReturnValue(new Promise(() => {}));
+      const multi = answers.answerDialogMulti.mockReset().mockReturnValue(new Promise(() => {}));
       const digit1 = pane('cc300-ask-multiselect-digit1');
       expect(digit1.parsed).toBe(false);
       expect(digit1.ask).toBeUndefined();
@@ -2440,7 +2447,7 @@ describe('multiSelect boxes (D-5091)', () => {
 
     it('ask_cleared while a commit is in flight leaves the unreadable surface, and the pending call is the only call', async () => {
       const call = deferred();
-      const multi = vi.spyOn(api, 'answerDialogMulti').mockReturnValue(call.promise);
+      const multi = answers.answerDialogMulti.mockReset().mockReturnValue(call.promise);
       const { store } = renderAsk(DRINK_FEATURES_TOOLS, pane('cc300-ask-multiselect-digit1'));
       fireEvent.click(box('Tracing'));
       fireEvent.click(commit('Next'));
@@ -2457,7 +2464,7 @@ describe('multiSelect boxes (D-5091)', () => {
     });
 
     it('a set touched on the envelope sheet is not sent by the hand-off, and its boxes are gone', () => {
-      const multi = vi.spyOn(api, 'answerDialogMulti').mockReturnValue(new Promise(() => {}));
+      const multi = answers.answerDialogMulti.mockReset().mockReturnValue(new Promise(() => {}));
       const tools = pane('cc300-ask-multiselect-tools-open');
       const { store } = renderAsk(TOOLS_SIZES, tools);
       fireEvent.click(box('Drill'));
@@ -2491,7 +2498,7 @@ describe('one send at a time, to the row it was meant for (D-5089, D-5090, D-509
     });
     render(
       <>
-        <DialogSheet id={SESSION_ID} store={store} onOpenTerminal={vi.fn()} />
+        <DialogSheet answers={answers} id={SESSION_ID} store={store} onOpenTerminal={vi.fn()} />
         <ToastHost />
       </>,
     );
@@ -2528,8 +2535,8 @@ describe('one send at a time, to the row it was meant for (D-5089, D-5090, D-509
   };
 
   it('Chat about this waits while own words are being sent, on both sheets', () => {
-    vi.spyOn(api, 'answerDialogText').mockReturnValue(new Promise(() => {}));
-    const option = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+    answers.answerDialogText.mockReset().mockReturnValue(new Promise(() => {}));
+    const option = answers.answerDialog.mockReset().mockReturnValue(new Promise(() => {}));
     const { store } = renderAsk(CACHING_TRACING, aged(CACHING_TRACING, pane('cc300-ask-same-labels-q2'), 1));
     fireEvent.change(field(), { target: { value: TEXT } });
     fireEvent.click(send());
@@ -2543,8 +2550,8 @@ describe('one send at a time, to the row it was meant for (D-5089, D-5090, D-509
   it('Chat about this waits while a multiSelect commit is under way, on both sheets', () => {
     // The commit's next screen (question 1 of the same ask, `cc300-ask-q2-of-2-single`'s Which drink?, as the pane
     // paints it after a ← back) reaches the sheet before the commit answers. DERIVED sequence of recorded screens.
-    vi.spyOn(api, 'answerDialogMulti').mockReturnValue(new Promise(() => {}));
-    const option = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+    answers.answerDialogMulti.mockReset().mockReturnValue(new Promise(() => {}));
+    const option = answers.answerDialog.mockReset().mockReturnValue(new Promise(() => {}));
     const envelope = renderAsk(DRINK_FEATURES_TOOLS, pane('cc300-ask-multiselect-digit1-3'));
     fireEvent.click(commit('Next'));
     show(envelope.store, pane('cc300-ask-q2-of-2-single'));
@@ -2570,8 +2577,8 @@ describe('one send at a time, to the row it was meant for (D-5089, D-5090, D-509
 
   it('the review\'s Submit and Cancel wait while own words are being sent, on both sheets', () => {
     // Enter landed and the stream painted the review before the text call answered.
-    vi.spyOn(api, 'answerDialogText').mockReturnValue(new Promise(() => {}));
-    const option = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+    answers.answerDialogText.mockReset().mockReturnValue(new Promise(() => {}));
+    const option = answers.answerDialog.mockReset().mockReturnValue(new Promise(() => {}));
     const envelope = renderAsk(CACHING_TRACING, pane('cc300-ask-same-labels-q2'));
     fireEvent.change(field(), { target: { value: TEXT } });
     fireEvent.click(send());
@@ -2589,8 +2596,8 @@ describe('one send at a time, to the row it was meant for (D-5089, D-5090, D-509
 
   it('the review\'s Submit and Cancel wait while a multiSelect commit is under way, on both sheets', () => {
     // The last question's commit lands on the review (measured: `-submit-open`, then `cc300-ask-review-multiselect`).
-    vi.spyOn(api, 'answerDialogMulti').mockReturnValue(new Promise(() => {}));
-    const option = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+    answers.answerDialogMulti.mockReset().mockReturnValue(new Promise(() => {}));
+    const option = answers.answerDialog.mockReset().mockReturnValue(new Promise(() => {}));
     const envelope = renderAsk(DRINK_FEATURES_TOOLS, pane('cc300-ask-multiselect-submit-open'));
     fireEvent.click(box('Saw'));
     fireEvent.click(commit('Review answers'));
@@ -2613,8 +2620,8 @@ describe('one send at a time, to the row it was meant for (D-5089, D-5090, D-509
   it('the own-words field and Send wait while a tapped option\'s answer is under way, on both sheets', () => {
     // The text typed before the tap stays in view, inert: the field disabled, and Send and Enter held, so the field
     // never looks live under an answer that may already be landing.
-    const option = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
-    const text = vi.spyOn(api, 'answerDialogText').mockReturnValue(new Promise(() => {}));
+    const option = answers.answerDialog.mockReset().mockReturnValue(new Promise(() => {}));
+    const text = answers.answerDialogText.mockReset().mockReturnValue(new Promise(() => {}));
     const sheets: [string, HookAsk | null, Dialog, string][] = [
       ['envelope', CACHING_TRACING, pane('cc300-ask-same-labels-q2'), 'No'],
       ['aged out', null, aged(COLOUR_ONE, pane('cc300-ask-1q-open')), 'Blue'],
@@ -2656,7 +2663,7 @@ describe('one send at a time, to the row it was meant for (D-5089, D-5090, D-509
   it('a question whose labels read like the review\'s rows never takes the review screen', () => {
     // DERIVED envelope: `Ship it?` offers Submit and Cancel, which prefix-match the review's two rows. The review is
     // told first (its body ends with the ready line), so its rows stay the review's.
-    const option = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+    const option = answers.answerDialog.mockReset().mockReturnValue(new Promise(() => {}));
     const review = pane('cc300-ask-review-same-labels');
     renderAsk({
       questions: [
@@ -2671,7 +2678,7 @@ describe('one send at a time, to the row it was meant for (D-5089, D-5090, D-509
   });
 
   it('the own-words form never submits what Send holds back (Enter in the field)', () => {
-    const text = vi.spyOn(api, 'answerDialogText').mockReturnValue(new Promise(() => {}));
+    const text = answers.answerDialogText.mockReset().mockReturnValue(new Promise(() => {}));
     renderAsk(null, aged(COLOUR_ONE, pane('cc300-ask-1q-open')));
     for (const held of ['int x = 1;', 'one\ttwo', '   ']) {
       fireEvent.change(field(), { target: { value: held } });
@@ -2682,7 +2689,7 @@ describe('one send at a time, to the row it was meant for (D-5089, D-5090, D-509
   });
 
   it('the stranded retry\'s field is read-only: the row accepts exactly that text', async () => {
-    const call = vi.spyOn(api, 'answerDialogText')
+    const call = answers.answerDialogText.mockReset()
       .mockRejectedValueOnce(new ApiError(409, { ok: false, error: 'echo-failed' }))
       .mockReturnValueOnce(new Promise(() => {}));
     const { store } = renderAsk(CACHING_TRACING, pane('cc300-ask-same-labels-q2'));
@@ -2697,7 +2704,7 @@ describe('one send at a time, to the row it was meant for (D-5089, D-5090, D-509
   });
 
   it('own words are sent trimmed: the route\'s rule is read on what it receives', () => {
-    const text = vi.spyOn(api, 'answerDialogText').mockReturnValue(new Promise(() => {}));
+    const text = answers.answerDialogText.mockReset().mockReturnValue(new Promise(() => {}));
     const open = pane('cc300-ask-1q-open');
     renderAsk(null, aged(COLOUR_ONE, open));
     fireEvent.change(field(), { target: { value: '   Teal, if there is one  ' } });
@@ -2722,7 +2729,7 @@ describe('one send at a time, to the row it was meant for (D-5089, D-5090, D-509
     // React commits a tap's state after the handler returns, so a second tap handled in the same tick finds every row
     // still enabled. The handlers hold the lock themselves (`DialogSheet`'s `sending`), at the moment a send starts.
     it('an option, then Chat about this', () => {
-      const option = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+      const option = answers.answerDialog.mockReset().mockReturnValue(new Promise(() => {}));
       const q2 = pane('cc300-ask-same-labels-q2');
       renderAsk(CACHING_TRACING, q2);
       const yes = optionButton('Yes');
@@ -2736,7 +2743,7 @@ describe('one send at a time, to the row it was meant for (D-5089, D-5090, D-509
     });
 
     it('own words, sent twice', () => {
-      const text = vi.spyOn(api, 'answerDialogText').mockReturnValue(new Promise(() => {}));
+      const text = answers.answerDialogText.mockReset().mockReturnValue(new Promise(() => {}));
       renderAsk(null, aged(COLOUR_ONE, pane('cc300-ask-1q-open')));
       fireEvent.change(field(), { target: { value: 'Teal' } });
       const button = send();
@@ -2748,8 +2755,8 @@ describe('one send at a time, to the row it was meant for (D-5089, D-5090, D-509
     });
 
     it('own words, then Chat about this', () => {
-      const text = vi.spyOn(api, 'answerDialogText').mockReturnValue(new Promise(() => {}));
-      const option = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+      const text = answers.answerDialogText.mockReset().mockReturnValue(new Promise(() => {}));
+      const option = answers.answerDialog.mockReset().mockReturnValue(new Promise(() => {}));
       renderAsk(null, aged(COLOUR_ONE, pane('cc300-ask-1q-open')));
       fireEvent.change(field(), { target: { value: 'Teal' } });
       const button = send();
@@ -2763,7 +2770,7 @@ describe('one send at a time, to the row it was meant for (D-5089, D-5090, D-509
     });
 
     it('a multiSelect commit, sent twice', () => {
-      const multi = vi.spyOn(api, 'answerDialogMulti').mockReturnValue(new Promise(() => {}));
+      const multi = answers.answerDialogMulti.mockReset().mockReturnValue(new Promise(() => {}));
       renderAsk(DRINK_FEATURES_TOOLS, pane('cc300-ask-multiselect-digit1-3'));
       const next = commit('Next');
       act(() => {
@@ -2793,7 +2800,7 @@ describe('the own-words region and the busy commits keep their shape (D-5090, D-
       store.getState().apply({ type: 'dialog', dialog });
       if (ask) store.getState().apply({ type: 'ask', ask, key: null });
     });
-    render(<DialogSheet id={SESSION_ID} store={store} onOpenTerminal={vi.fn()} />);
+    render(<DialogSheet answers={answers} id={SESSION_ID} store={store} onOpenTerminal={vi.fn()} />);
     return { store };
   };
   const field = ownField;
@@ -2809,7 +2816,7 @@ describe('the own-words region and the busy commits keep their shape (D-5090, D-
     [...b.querySelectorAll(':scope > span')].map((f) => `${drawn(f)}${f.getAttribute('aria-hidden') === 'true' ? ':hidden' : ''}`);
 
   it('Send keeps its width while busy: both faces share one cell, the one not showing is hidden, and busy draws no word', () => {
-    vi.spyOn(api, 'answerDialogText').mockReturnValue(new Promise(() => {}));
+    answers.answerDialogText.mockReset().mockReturnValue(new Promise(() => {}));
     renderAsk(null, aged(COLOUR_ONE, pane('cc300-ask-1q-open')));
     field(); // choose `Other`, which opens the field and Send
     const idle = screen.getByRole('button', { name: 'Send' });
@@ -2866,7 +2873,7 @@ describe('the own-words region and the busy commits keep their shape (D-5090, D-
   };
 
   it('at the phone floor the field holds its whole placeholder beside Send, idle and busy', () => {
-    vi.spyOn(api, 'answerDialogText').mockReturnValue(new Promise(() => {}));
+    answers.answerDialogText.mockReset().mockReturnValue(new Promise(() => {}));
     renderAsk(null, aged(COLOUR_ONE, pane('cc300-ask-1q-open')));
     const placeholder = field().placeholder; // choosing `Other` opens it
     expect(MEASURED_PX[placeholder], `measure "${placeholder}" again`).toBeDefined();
@@ -2903,7 +2910,7 @@ describe('the own-words region and the busy commits keep their shape (D-5090, D-
 
   it('the busy commits keep a gap between the label and answering…', () => {
     // `Button` is a flex box, which drops the marker's leading space: `Nextanswering…` (measured, every width).
-    vi.spyOn(api, 'answerDialogMulti').mockReturnValue(new Promise(() => {}));
+    answers.answerDialogMulti.mockReset().mockReturnValue(new Promise(() => {}));
     renderAsk(DRINK_FEATURES_TOOLS, pane('cc300-ask-multiselect-digit1-3'));
     const next = screen.getByRole('button', { name: /^Next/ });
     fireEvent.click(next);
@@ -2971,7 +2978,7 @@ describe('a refused tap, and the foot line, say what is true (D-5089, D-5090, D-
 
   it('answer()\'s refusals say what happened, by code', async () => {
     for (const code of ['free-text-row', 'unparsed-dialog', 'walk-failed', 'not-alive'] as const) {
-      vi.spyOn(api, 'answerDialog').mockRejectedValueOnce(refused(code));
+      answers.answerDialog.mockReset().mockRejectedValueOnce(refused(code));
       renderWithDialog(parsedDialog());
       fireEvent.click(screen.getByRole('button', { name: 'Big-bang cutover' }));
       expect(await screen.findByText(DIALOG_REFUSE_TEXT[code]), code).toBeInTheDocument();
@@ -3063,7 +3070,7 @@ describe('the sheet can always submit (the 2026-10-16 report)', () => {
     });
     render(
       <>
-        <DialogSheet id={SESSION_ID} store={store} onOpenTerminal={vi.fn()} />
+        <DialogSheet answers={answers} id={SESSION_ID} store={store} onOpenTerminal={vi.fn()} />
         <ToastHost />
       </>,
     );
@@ -3071,7 +3078,7 @@ describe('the sheet can always submit (the 2026-10-16 report)', () => {
   };
 
   it('reproduces the report: Q2 answered, then a poll with no menu — the envelope sheet falls to the terminal CTA', async () => {
-    vi.spyOn(api, 'answerDialog').mockResolvedValue({ ok: true });
+    answers.answerDialog.mockReset().mockResolvedValue({ ok: true });
     const store = render296(q2());
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: /^Borrow and transport/ }));
@@ -3084,7 +3091,7 @@ describe('the sheet can always submit (the 2026-10-16 report)', () => {
 
   it('the answer\'s next screen opens the review even after that poll (decision ask-answer-returns-next-screen)', async () => {
     let land!: (v: DialogAnswered) => void;
-    vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise<DialogAnswered>((r) => { land = r; }));
+    answers.answerDialog.mockReset().mockReturnValue(new Promise<DialogAnswered>((r) => { land = r; }));
     const store = render296(q2());
     fireEvent.click(screen.getByRole('button', { name: /^Borrow and transport/ }));
     act(() => store.getState().apply({ type: 'dialog_cleared' }));
@@ -3094,7 +3101,7 @@ describe('the sheet can always submit (the 2026-10-16 report)', () => {
   });
 
   it('the answer\'s next screen opens the review with no frame from the stream at all', async () => {
-    vi.spyOn(api, 'answerDialog').mockResolvedValue({ ok: true, next: review() });
+    answers.answerDialog.mockReset().mockResolvedValue({ ok: true, next: review() });
     render296(q2());
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: /^Borrow and transport/ }));
@@ -3104,7 +3111,7 @@ describe('the sheet can always submit (the 2026-10-16 report)', () => {
 
   it('a frame the stream delivered after the answer was sent wins over the answer\'s next', async () => {
     let land!: (v: DialogAnswered) => void;
-    vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise<DialogAnswered>((r) => { land = r; }));
+    answers.answerDialog.mockReset().mockReturnValue(new Promise<DialogAnswered>((r) => { land = r; }));
     const store = render296(q1());
     fireEvent.click(screen.getByRole('button', { name: /^Split shifts/ }));
     act(() => store.getState().apply({ type: 'dialog', dialog: review() }));
@@ -3175,7 +3182,7 @@ describe('the sheet can always submit (the 2026-10-16 report)', () => {
   });
 
   it('on the review, 1 submits and 2 cancels at once, as in Claude Code (decision ask-review-digit-keys)', async () => {
-    const spy = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+    const spy = answers.answerDialog.mockReset().mockReturnValue(new Promise(() => {}));
     render296(review());
     // The Cancel row keeps saying what it does.
     expect(screen.getByText(/Declines every question in this ask/)).toBeInTheDocument();
@@ -3187,7 +3194,7 @@ describe('the sheet can always submit (the 2026-10-16 report)', () => {
   });
 
   it('digit 1 on the review submits; a digit typed into a text field, or with a modifier, is text', () => {
-    const spy = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+    const spy = answers.answerDialog.mockReset().mockReturnValue(new Promise(() => {}));
     render296(review());
     const field = document.createElement('textarea');
     document.body.appendChild(field);
@@ -3202,7 +3209,7 @@ describe('the sheet can always submit (the 2026-10-16 report)', () => {
   // Decision `ask-sheet-keyboard-model` (PR 2) supersedes this case's first form ("digits on a question are not the
   // review's keys"): on a question a digit answers that option at once, as Claude Code's does.
   it('a digit on a question answers that option, as in Claude Code', () => {
-    const spy = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+    const spy = answers.answerDialog.mockReset().mockReturnValue(new Promise(() => {}));
     render296(q2());
     fireEvent.keyDown(document.body, { key: '2' });
     expect(spy).toHaveBeenCalledWith(SESSION_ID, q2().id, 2);

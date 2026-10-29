@@ -35,7 +35,10 @@ export function ToolWellText({ use, part, text }: { use: { name: string; input: 
       case 'code':
       case 'diff': {
         const { html } = boundedHighlight(plan.text, plan.kind === 'diff' ? 'diff' : plan.lang);
-        if (html === null) return part === 'input' ? stripAnsi(text) : text;
+        // Over its bound the well shows the original text. An input reaches `code` or `diff` only when `JSON.parse`
+        // took it, and JSON refuses a raw ESC, so there is nothing here to strip (an escape is the six characters
+        // `\u001b`); a result reaches `diff` only without an escape (`toolWellPlan`).
+        if (html === null) return text;
         return <HighlightedWell html={html} head={plan.kind === 'code' ? plan.head : undefined} />;
       }
       case 'ansi':

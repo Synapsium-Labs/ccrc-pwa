@@ -7,7 +7,13 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import type { CensusSite } from '../consolidationCensus.js';
-import { retireActSites, retireDeciders, retireGateLadders, retireNoticeSites, retireQueueOwners, retireQueueSites } from './retire.js';
+import {
+  retireActSites, retireDeciders, retireGateLadders, retireNoticeSites, retirePortReaders, retireQueueOwners, retireQueueSites, retireRowSteps,
+} from './retire.js';
+import { REPO, sourceFiles } from '../consolidationCensus.js';
+import { parsedFile, sourceOfSymbol } from '../scan/symbols.js';
+import { identifierReferences, parseSource, type ParsedFile } from '../scan/parse.js';
+import { serverRing } from '../rings/ring.js';
 
 const show = (name: string, sites: readonly (CensusSite & { symbol: string })[]): void => {
   console.log(`census ${name}: ${sites.length}\n${sites.map((s) => `  ${s.symbol}  (${s.file}:${s.line})`).join('\n')}`);
@@ -175,6 +181,38 @@ describe('the retire executors\' censuses (ARCH-44, C4h)', () => {
     expect(names(retireGateLadders(tree))).toEqual(['server/src/coord/ladder.ts#arrowLadder', 'server/src/coord/ladder.ts#ladder']);
   });
 
+  // D-7301 (C4k): `RetireActPort` holds its readers in its `read` member, a literal nested in
+  // the one the port builder returns. Its own tree, so the row above stays byte-identical.
+  it('FIXTURE retireGateLadders: readers in a literal nested in the returned one do not count; the same calls as member values do', () => {
+    const nest = mkdtempSync(path.join(tmpdir(), 'consolidation-census-retire-nested-'));
+    try {
+      const p = path.join(nest, 'server/src/coord/nestedPort.ts');
+      mkdirSync(path.dirname(p), { recursive: true });
+      writeFileSync(p, [
+        'export function nestedPort(deps: Deps, job: Job): Port {',              // the port's shape: readers under `read`
+        '  return {',
+        '    read: {',
+        "      [STEPS.capability]: () => ccdCan(deps.fleetState, 'wsCollect'),",
+        '      [STEPS.presence]: () => deps.viewers?.isVisible(job.id) === true,',
+        '    },',
+        '    act: (f: Facts) => act(deps, job, f),',
+        '  };',
+        '}',
+        'export function eagerPort(deps: Deps, job: Job): Port {',               // both read in the builder's own body
+        '  return {',
+        '    read: {',
+        "      cap: ccdCan(deps.fleetState, 'wsCollect'),",
+        '      seen: deps.viewers?.isVisible(job.id) === true,',
+        '    },',
+        '  };',
+        '}',
+      ].join('\n'));
+      expect(names(retireGateLadders(nest))).toEqual(['server/src/coord/nestedPort.ts#eagerPort']);
+    } finally {
+      rmSync(nest, { recursive: true, force: true });
+    }
+  });
+
   it('FIXTURE retireActSites: an inline or bound retire verb passed to runCcd counts; an audit, a verb question and a comment do not', () => {
     expect(names(retireActSites(tree))).toEqual(['server/src/acts.ts#boundAct', 'server/src/acts.ts#inlineAct']);
   });
@@ -206,10 +244,12 @@ describe('the retire executors\' censuses (ARCH-44, C4h)', () => {
     expect(names(retireDeciders(tree))).toEqual(['server/src/deciders.ts#arrowDecide', 'server/src/deciders.ts#decide']);
   });
 
-  it('REAL retireGateLadders reports (3 at the C4h base; 3 -> 2 -> 1 -> 0 through C4k, C4l, C4m)', () => {
+  it('REAL retireGateLadders is pinned exact: 2 -> 1 at C4l, archive-expired through retireAct after C4k (D-7169; 1 -> 0 at C4m)', () => {
     const sites = retireGateLadders();
     show('retireGateLadders', sites);
-    expect(Array.isArray(sites)).toBe(true);
+    expect(names(sites)).toEqual([
+      'server/src/coord/childReclaim.ts#childReclaimOutcome',
+    ]);
   });
 
   it('REAL retireActSites is pinned exact: three composers, by name (D-7177)', () => {
@@ -217,7 +257,7 @@ describe('the retire executors\' censuses (ARCH-44, C4h)', () => {
     show('retireActSites', sites);
     expect(names(sites)).toEqual([
       'server/src/coord/childReclaim.ts#childReclaimAct',
-      'server/src/coord/collectTempRoot.ts#collectTempRoot',
+      'server/src/coord/collectTempRoot.ts#collectTempRootAct',
       'server/src/coord/expireArchived.ts#expireAct',
     ]);
   });
@@ -253,5 +293,100 @@ describe('the retire executors\' censuses (ARCH-44, C4h)', () => {
     const sites = retireDeciders();
     show('retireDeciders', sites);
     expect(names(sites)).toEqual(['server/src/retire.ts#decideRetire']);
+  });
+});
+
+// C4j (D-7167; ARCH-44): the one executor loop, `retireLane.ts#retireAct`. APPENDED; nothing above is edited, and no
+// query of `retire.ts` changes. These rows read the source through `scan/symbols.ts` and `scan/parse.ts` only.
+describe('the one retire executor loop, retireAct (ARCH-44, C4j)', () => {
+  const LOOP = 'server/src/retireLane.ts';
+  const UNITS = new Set(['function', 'variable-function', 'method', 'arrow-property']);
+  /** The innermost named code unit of each `decideRetire(` call in a parsed file, as `file#name`. */
+  const callersIn = (file: string, p: ParsedFile): string[] => p.calls.filter((c) => c.callee === 'decideRetire').map((c) => {
+    const unit = p.symbols.filter((u) => UNITS.has(u.kind) && u.start <= c.start && c.end <= u.end).sort((a, b) => b.start - a.start)[0];
+    return `${file}#${unit === undefined ? '(module)' : unit.name.slice(unit.name.lastIndexOf('.') + 1)}`;
+  });
+
+  it('CONTROL: the caller walk names the unit holding a decideRetire( call, a nested arrow by its own name', () => {
+    const p = parseSource([
+      'export async function loop(r) { for (;;) { const d = decideRetire({}, r, {}); if (d) return d; } }',
+      'const helper = (r) => decideRetire({}, r, {});',
+      'export function quiet() { return decideRetireLater(); }',
+    ].join('\n'), 'control.ts');
+    expect(callersIn('control.ts', p)).toEqual(['control.ts#loop', 'control.ts#helper']);
+  });
+
+  it('REAL the one loop is retireLane.ts#retireAct: the only server/src function that calls decideRetire(', () => {
+    const callers = sourceFiles(REPO, 'server/src').flatMap((f) => {
+      const file = path.relative(REPO, f).split(path.sep).join('/');
+      return callersIn(file, parsedFile(f));
+    });
+    console.log(`census decideRetire callers: ${callers.length}\n${callers.map((c) => `  ${c}`).join('\n')}`);
+    expect(callers).toEqual([`${LOOP}#retireAct`]);
+  });
+
+  it('REAL retire.ts and retireLane.ts are L1', () => {
+    expect(serverRing('server/src/retire.ts')).toEqual({ ring: 'L1', why: 'no outer-ring fact' });
+    expect(serverRing(LOOP)).toEqual({ ring: 'L1', why: 'no outer-ring fact' });
+  });
+
+  it('REAL retireAct never reads a reason\'s name: the identifier `name` is referenced nowhere in its body', () => {
+    const CONTROL = "async function f(reason) { if (reason.name === 'child-spent') return 1; return 0; }";
+    expect(identifierReferences(CONTROL, 'control.ts', new Set(['name'])), 'CONTROL: the scan sees a name compare').toHaveLength(1);
+    expect(identifierReferences(sourceOfSymbol(LOOP, 'retireAct'), 'retireLane.ts', new Set(['name']))).toEqual([]);
+  });
+});
+
+// C4k (D-7168, D-7200; ARCH-44): the port's readers and the row's declared steps, which the re-pointed source checks of
+// the temp-orphan move read. APPENDED; nothing above is edited.
+describe('a reason\'s port readers and row steps, as the re-pointed checks read them (ARCH-44, C4k)', () => {
+  const PLANT = [
+    'export function aPort(deps: Deps, job: Job): Port {',
+    '  return {',
+    '    read: {',
+    "      [RETIRE_STEPS.capability]: () => ccdCan(deps.fleetState, 'wsCollect'),",
+    '      [RETIRE_STEPS.switchesLast]: async () => ({ listedUnder: deps.link.epochNow(), last: await list() }),',
+    '      plain: (f) => f.x,',
+    '    },',
+    '    act: (f) => anAct(deps, job, f),',
+    '  };',
+    '}',
+    'export const A_RETIRE = {',
+    '  decide: [',
+    '    { step: RETIRE_STEPS.capability, sync: true, onReject: \'propagate\' },',
+    '  ],',
+    '  audit: { step: RETIRE_STEPS.audit, sync: false, onReject: \'propagate\' },',
+    '  act: [',
+    '    { step: RETIRE_STEPS.switchesLast, sync: false, onReject: \'propagate\', markers: M },',
+    '    { step: RETIRE_STEPS.looseMarker, sync: true, onReject: \'propagate\' },',
+    '  ],',
+    '};',
+    '',
+  ].join('\n');
+  let dir = '';
+  let file = '';
+  beforeAll(() => {
+    dir = mkdtempSync(path.join(tmpdir(), 'consolidation-census-retire-port-'));
+    file = path.join(dir, 'aPort.ts');
+    writeFileSync(file, PLANT);
+  });
+  afterAll(() => { rmSync(dir, { recursive: true, force: true }); });
+
+  it('FIXTURE retirePortReaders: each member of the read literal, by step (a computed RETIRE_STEPS name read as its step), with its kind, async flag and span', () => {
+    const readers = retirePortReaders(file, 'aPort');
+    expect(readers.map((r) => [r.step, r.kind, r.async])).toEqual([
+      ['capability', 'arrow', false], ['switches-last', 'arrow', true], ['plain', 'arrow', false]]);
+    expect(PLANT.slice(readers[0]!.start, readers[0]!.end)).toBe(readers[0]!.text);
+    expect(readers[0]!.text.startsWith('[RETIRE_STEPS.capability]: () => ccdCan(')).toBe(true);
+    expect(() => retirePortReaders(file, 'A_RETIRE'), 'a const is no port builder').toThrow(/returns no object literal/);
+  });
+
+  it('FIXTURE retireRowSteps: the row\'s steps in decide, audit, act order, each with its sync flag as written', () => {
+    expect(retireRowSteps(file, 'A_RETIRE')).toEqual([
+      { step: 'capability', sync: true, phase: 'decide' },
+      { step: 'audit', sync: false, phase: 'audit' },
+      { step: 'switches-last', sync: false, phase: 'act' },
+      { step: 'loose-marker', sync: true, phase: 'act' },
+    ]);
   });
 });

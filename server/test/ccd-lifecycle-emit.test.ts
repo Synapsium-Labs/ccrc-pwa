@@ -25,7 +25,7 @@ describe('_LC_ACTS / _LC_OUTCOMES — the closed vocabularies, bound to L0', () 
     // `expected [ …20 acts… ] to deeply equal [ …21 acts… ]`, and an act ccd
     // emits would degrade to `unknown` on a build that models it perfectly well.
     const want = LIFECYCLE_ACTS.filter((a) => a !== LC_ACT_UNKNOWN);
-    expect(want.length, 'guards the guard: an empty want passes everything').toBe(28);   // 28 since D-5242's `hibernate`
+    expect(want.length, 'guards the guard: an empty want passes everything').toBe(29);   // 29 since #1772's `shed-deps`
     const got = lines(h.sh('printf "%s\\n" "${_LC_ACTS[@]}"'));
     expect([...got].sort()).toEqual([...want].sort());
     expect(got, 'unknown is the READER\'s degrade, never a call site\'s choice')
@@ -447,6 +447,53 @@ describe('_lc_emit — the one writer', () => {
     const [e] = readJournal(h.home);
     expect.soft(e!['truncated']).toBe(true);
     expect.soft(e!['tx']).toBe('1787000000000000000.9.1');
+    expect.soft(e!['refusal']).toBe('dirty-tree');
+    expect.soft(decOf(e!)['surface']).toBe('pwa');
+  });
+
+  it('an over-cap DETAIL is cut to fit, its first part kept and the cut counted, before the last resort', () => {
+    // A failing check's detail is what says WHY; the last resort drops it whole, so a long `probe-unmeasured` detail
+    // (a rows rung naming fifty rows) left the journal saying only that something failed. Mutant: delete the cut rung
+    // -> the line is the last resort, and `detail` is undefined.
+    const head = 'registry row(s) a, b, c entered a directory other than the one their workdir names now';
+    const detail = `${head} ${'x'.repeat(4000)}`;
+    h.sh(`t=1787000000000000000.9.2
+      _lc_emit reclaim failed sess "$t" refusal probe-unmeasured dec.surface pwa detail '${detail}'`);
+    const [e] = readJournal(h.home);
+    expect.soft(Buffer.byteLength(JSON.stringify(e), 'utf8')).toBeLessThanOrEqual(2048);
+    expect.soft(e!['truncated']).toBe(true);
+    expect.soft(e!['tx']).toBe('1787000000000000000.9.2');
+    expect.soft(e!['refusal']).toBe('probe-unmeasured');
+    const got = String(e!['detail'] ?? '');
+    expect(got.startsWith(head), got.slice(0, 120)).toBe(true);
+    const m = /^(.*) \[(\d+) bytes cut\]$/s.exec(got);
+    expect(m, `the marker closes the detail: ${got.slice(-40)}`).not.toBeNull();
+    expect(Buffer.byteLength(m![1]!, 'utf8') + Number(m![2]), 'what was kept and what was cut are the whole detail')
+      .toBe(Buffer.byteLength(detail, 'utf8'));
+    expect(Buffer.byteLength(JSON.stringify(e), 'utf8'), 'the cut keeps as much as fits').toBeGreaterThan(2000);
+  });
+
+  it('a non-ASCII over-cap detail is cut on a character, and its marker counts bytes', () => {
+    const detail = `é${'ü'.repeat(3000)}`;
+    h.sh(`_lc_emit reclaim failed sess "" refusal probe-unmeasured detail '${detail}'`);
+    const [e] = readJournal(h.home);
+    expect.soft(Buffer.byteLength(JSON.stringify(e), 'utf8')).toBeLessThanOrEqual(2048);
+    const m = /^(.*) \[(\d+) bytes cut\]$/s.exec(String(e!['detail'] ?? ''));
+    expect(m).not.toBeNull();
+    expect(detail.startsWith(m![1]!), 'a prefix of the detail, never a broken character').toBe(true);
+    expect(Buffer.byteLength(m![1]!, 'utf8') + Number(m![2])).toBe(Buffer.byteLength(detail, 'utf8'));
+  });
+
+  it('the LAST RESORT still stands where a cut detail cannot fit: tx, dec.surface and refusal survive', () => {
+    // The cut rung only shortens `detail`; a line over the cap for another field (an over-long dec value the ladder
+    // does not drop) still reaches the minimal row. Mutant: drop `tx`/`dec`/`refusal` from the fallback dict -> this
+    // fails, as the case above it did before the cut rung reached its input first.
+    h.sh(`t=1787000000000000000.9.3
+      _lc_emit destroy refused sess "$t" refusal dirty-tree dec.surface pwa dec.actor '${'a'.repeat(3000)}' detail '${'d'.repeat(4000)}'`);
+    const [e] = readJournal(h.home);
+    expect.soft(e!['truncated']).toBe(true);
+    expect.soft(e!['detail'], 'the minimal row').toBeUndefined();
+    expect.soft(e!['tx']).toBe('1787000000000000000.9.3');
     expect.soft(e!['refusal']).toBe('dirty-tree');
     expect.soft(decOf(e!)['surface']).toBe('pwa');
   });

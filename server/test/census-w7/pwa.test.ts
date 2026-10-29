@@ -11,13 +11,14 @@
 // `bucketOrders()` is an exact pair on the merged tree.
 import { describe, it, expect } from 'vitest';
 import {
-  accountsReaders, accountsReadersIn, answerPaths, answerPathsIn, archivedChecks, archivedChecksIn, bucketOrders, bucketOrdersIn,
+  ANSWER_LIFECYCLE, accountsReaders, accountsReadersIn, answerPaths, answerPathsIn, archivedChecks, archivedChecksIn, bucketOrders, bucketOrdersIn,
   clientPairingDefinitions, clientPairingDefinitionsIn, coordPresenceSites, coordPresenceSitesIn, countBy, dialogSheetStates,
   dialogSheetStatesIn, ensureCallers, ensureCallersIn, fixture, inlineDeadChecks, inlineDeadChecksIn, pageClockSubscriptions,
   pageClockSubscriptionsIn, paneTextDecisions, paneTextDecisionsIn, placementCopies, placementCopiesIn, PUSH_SW, requestPolls,
   requestPollsIn, runMatchers, runMatchersIn, sessionPathLiterals, sessionPathLiteralsIn, showSite, singleReaders, singleReadersIn,
   storageOwners, storageOwnersIn, storageTypes, storageTypesIn, viewerWordsAsPresence, viewerWordsAsPresenceIn, type W7Site,
 } from './pwa.js';
+import { transcriptCopyRules, transcriptCopyRulesIn } from './pwa.js';
 
 const F = 'pwa/src/fixture.tsx';
 const run = (q: (p: ReturnType<typeof fixture>, file: string) => W7Site[], src: string, file = F): W7Site[] => q(fixture(src, file), file);
@@ -104,6 +105,13 @@ describe('W7 PWA census: FIXTURE rows (each query against one counted site and o
       'export function Plain({ waiting }: P) { const busy = waiting; }',
     ].join('\n');
     expect(run(answerPathsIn, tsx).map((s) => [s.kind, s.symbol])).toEqual([['writer', 'Sheet'], ['busy', 'Envelope']]);
+    // C7e (D-7183): a write through an injected seam is a writer too; the same writes inside the lifecycle are its reducer.
+    const seam = [
+      "export function Seamed() { void answers.answerDialogText(id, d, 1, 't'); void answers.interrupt(id, 'deny'); }",
+      "export function Escape() { void seam.interrupt(id, 'escape'); void store.applyAnswered(d, null); }",
+    ].join('\n');
+    expect(run(answerPathsIn, seam).map((s) => [s.kind, s.symbol])).toEqual([['writer', 'Seamed']]);
+    expect(run(answerPathsIn, seam, ANSWER_LIFECYCLE).map((s) => [s.kind, s.symbol])).toEqual([['reducer', 'Seamed']]);
     const sw = [
       'self.addEventListener("notificationclick", async () => {',
       '  await fetch(`/api/sessions/${encodeURIComponent(sid)}/ask`, { method: "POST" });',
@@ -237,10 +245,12 @@ describe('W7 PWA census: FIXTURE rows (each query against one counted site and o
 });
 
 describe('W7 PWA census: REAL rows (reporting, not ratcheting; spec §5.1 rule 3)', () => {
-  // BAND (D-7221): floor 1 is #1720's head (the store's one call), ceiling 5 today's. Pinned exact by C7b once #1720
-  // has merged (its shrunk Step 2).
-  it('accountsReaders(): 5 calls of api.accounts at the base (band 1..5 until #1720 merges, C7b pins it)', () => {
-    held('accountsReaders', accountsReaders(), 1, 5);
+  // Pinned exact by C7b (D-7180, D-7221): #1720 merged, and the fleet store's `fetchAccounts` default is the one call.
+  // The may-only-shrink ratchet is `rings/pwa-one-owner.test.ts`'s one-owner block.
+  it('accountsReaders(): 1 call of api.accounts, the fleet store\'s fetchAccounts default', () => {
+    const sites = accountsReaders();
+    held('accountsReaders', sites, 1);
+    expect(sites.map((s) => s.file)).toEqual(['pwa/src/stores/fleet.ts']);
   });
 
   it('inlineDeadChecks(): 16 comparisons of a status with dead, in 9 files', () => {
@@ -261,20 +271,26 @@ describe('W7 PWA census: REAL rows (reporting, not ratcheting; spec §5.1 rule 3
     expect(countBy(sites, (s) => s.kind)).toEqual({ comparison: 4, lookup: 7, runForSession: 7, childRunsSeen: 1 });
   });
 
-  // BAND (D-7221): floor 2 is #1720's head (`HotFilesStrip`, `useFleetHealth`), ceiling 6 today's. Pinned exact by C7b
-  // once #1720 has merged; C7m then takes the last two.
-  it('requestPolls(): 6 hand-written request polls at the base (band 2..6 until #1720 merges, C7b pins it)', () => {
-    held('requestPolls', requestPolls(), 2, 6);
+  // Pinned exact by C7b (D-7180, D-7221): #1720 merged, leaving `HotFilesStrip`'s and `useFleetHealth`'s timers, which
+  // C7m takes. The ratchet is `rings/pwa-one-owner.test.ts`'s one-owner block.
+  it('requestPolls(): 2 hand-written request polls, HotFilesStrip and useFleetHealth', () => {
+    const sites = requestPolls();
+    held('requestPolls', sites, 2);
+    expect(sites.map((s) => s.file)).toEqual(['pwa/src/fleet/HotFilesStrip.tsx', 'pwa/src/fleet/useFleetHealth.ts']);
   });
 
-  it('answerPaths(): 3 (DialogSheet\'s writes, EnvelopeSheet\'s busy, push-sw.js\'s one handler)', () => {
+  // C7e (D-7183): EnvelopeSheet's busy comes from the answer lifecycle (Step 4), DialogSheet's writes are the
+  // lifecycle's commands, performed in one place (Step 5), and push-sw.js's request is its generated region (Step 7,
+  // OA-C17 (a), D-7265), which no hand-written answer request is left beside.
+  it('answerPaths(): 1 (the answer lifecycle\'s performer)', () => {
     const sites = answerPaths();
-    held('answerPaths', sites, 3);
-    expect(countBy(sites, (s) => s.kind)).toEqual({ writer: 1, busy: 1, 'push-sw': 1 });
+    held('answerPaths', sites, 1);
+    expect(countBy(sites, (s) => s.kind)).toEqual({ reducer: 1 });
   });
 
-  it('dialogSheetStates(): 11 useState calls inside DialogSheet', () => {
-    held('dialogSheetStates', dialogSheetStates(), 11);
+  // C7e Step 5 (D-7183): each answer kind's state moves into the answer lifecycle in its own commit.
+  it('dialogSheetStates(): 3 useState calls inside DialogSheet (otherFor, focusNonce, raiseMark)', () => {
+    held('dialogSheetStates', dialogSheetStates(), 3);
   });
 
   it('clientPairingDefinitions(): 9, prefixMatches and norm among them', () => {
@@ -294,10 +310,12 @@ describe('W7 PWA census: REAL rows (reporting, not ratcheting; spec §5.1 rule 3
     held('archivedChecks', archivedChecks(), 8);
   });
 
-  it('sessionPathLiterals(): 14 string expressions starting /s/, in 12 files', () => {
+  // C9 (D-6441) gave FleetScreen and Instrument's FleetTable one session opener (`fleet/openers.ts`): their two
+  // literals became one, 14 in 12 files to 13 in 11.
+  it('sessionPathLiterals(): 13 string expressions starting /s/, in 11 files', () => {
     const sites = sessionPathLiterals();
-    held('sessionPathLiterals', sites, 14);
-    expect(Object.keys(countBy(sites, (s) => s.file)).length).toBe(12);
+    held('sessionPathLiterals', sites, 13);
+    expect(Object.keys(countBy(sites, (s) => s.file)).length).toBe(11);
   });
 
   it('ensureCallers(): 6 owners of api.ensure (5 calls, 1 member reference)', () => {
@@ -322,10 +340,10 @@ describe('W7 PWA census: REAL rows (reporting, not ratcheting; spec §5.1 rule 3
     expect(countBy(sites, (s) => s.kind)).toEqual({ visibilitychange: 10, online: 2 });
   });
 
-  it('singleReaders(): api.feed 2, api.runs 2, api.projects 3 (calls and member references)', () => {
+  it('singleReaders(): api.feed 1, api.runs 1, api.projects 1 (calls and member references)', () => {
     const sites = singleReaders();
-    held('singleReaders', sites, 7);
-    expect(countBy(sites, (s) => s.kind.split(':')[0]!)).toEqual({ feed: 2, runs: 2, projects: 3 });
+    held('singleReaders', sites, 3);
+    expect(countBy(sites, (s) => s.kind.split(':')[0]!)).toEqual({ feed: 1, runs: 1, projects: 1 });
   });
 
   // The K15 exit, met on main and pinned here (plan item 16).
@@ -343,5 +361,33 @@ describe('W7 PWA census: REAL rows (reporting, not ratcheting; spec §5.1 rule 3
       presenceHeldSince: 7, lastPresenceWallAt: 7, lastPresenceDeferredAt: 7, firstPresenceDeferredAt: 9, collectAfterPresence: 4,
       presenceSince: 5, childReclaimPresenceWithin: 3, CollectPresence: 2, CHILD_RECLAIM_PRESENCE_GAP_PASSES: 2, CHILD_RECLAIM_PRESENCE_DEFERS: 3,
     });
+  });
+});
+
+// C7q (D-7212): the transcript copy's reading and a usable question envelope, one definition each.
+describe('W7 PWA census, C7q: transcriptCopyRules (D-7212)', () => {
+  it('FIXTURE: each rule counts once, at its innermost function; a call of the shared rule and a half rule do not', () => {
+    const got = run(transcriptCopyRulesIn, [
+      'export function readCopy(a: A | undefined): Q | null {',
+      "  if (a === undefined || a.question.trim() === '' || a.options.some((o) => o === null)) return null;",
+      '  return a;',
+      '}',
+      'export function outer(e: E): boolean {',
+      "  const usable = (x: E): boolean => x.questions.length > 0 && x.questions[0]!.question.trim() !== '';",
+      '  return usable(e);',
+      '}',
+      'export function caller(a: A): boolean { return transcriptQuestion(a.ask) !== null && usableQuestions(a); }',
+      "export function half(a: A): boolean { return a.question.trim() === ''; }",
+      'export function other(e: E): boolean { return e.questions.length > 0; }',
+    ].join('\n'), 'server/src/fixture.ts');
+    expect(got.map((s) => [s.kind, s.symbol])).toEqual([['copy', 'readCopy'], ['usable', 'outer.usable']]);
+  });
+
+  it('REAL: 2 sites, one copy and one usable, both in shared/ask-menu.ts', () => {
+    const sites = transcriptCopyRules();
+    held('transcriptCopyRules', sites, 2);
+    expect(sites.map((s) => [s.kind, `${s.file}#${s.symbol}`])).toEqual([
+      ['copy', 'shared/ask-menu.ts#transcriptQuestion'], ['usable', 'shared/ask-menu.ts#usableQuestions'],
+    ]);
   });
 });

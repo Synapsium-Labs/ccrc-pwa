@@ -22,6 +22,7 @@ import { ccdSource } from './ccdWsHelpers.js';
 import { functionSpan, refuseWords } from './census-w5/ccdHelpers.js';
 import { EXPIRE_TOKEN_KIND, expireTokenKind, parseExpireResult } from '../src/archivedExpiry.js';
 import { CHILD_RECLAIM_TOKEN_KIND, childReclaimTokenKind, isChildReclaimToken, parseChildReclaimResult } from '../src/coord/childReclaim.js';
+import { CHILD_RECLAIM_TRANSIENT_WORD } from '../src/childReclaimSweep.js';
 import { COLLECT_REFUSAL_CLASS, COLLECT_REFUSAL_WORDS, collectRefusalClass } from '../src/collectLane.js';
 import {
   WORKSPACE_TRANSITIONS, WORKSPACE_VERBS, WORKSPACE_STATES, WORKSPACE_REFUSALS_BY_VERB, isWorkspaceRefusal,
@@ -373,7 +374,9 @@ describe('the expire, reclaim and collect lanes read refusals as they do today (
   };
   const RECLAIM_KINDS = {
     'no-such-session': 'gone', 'not-a-workspace': 'terminal', 'not-a-child': 'terminal', 'branch-elsewhere': 'terminal',
-    'tree-unreadable': 'terminal', 'containment-unproven': 'terminal', 'no-worktree-record': 'terminal',
+    // `tree-unreadable` is a retry word for reclaim (an errored read is transient), and the ONE retry word the executor
+    // answers as a failure (`CHILD_RECLAIM_TRANSIENT_WORD`), so the sweep's failure backoff paces it; pinned below.
+    'tree-unreadable': 'retry', 'containment-unproven': 'terminal', 'no-worktree-record': 'terminal',
     paused: 'retry', held: 'retry', attached: 'retry', 'tree-busy': 'retry', 'state-changed': 'retry',
     'in-progress': 'retry', 'reap-in-progress': 'retry', 'nested-rescue-too-large': 'terminal',
     'nested-rescue-failed': 'retry', 'not-idle': 'retry',
@@ -399,6 +402,8 @@ describe('the expire, reclaim and collect lanes read refusals as they do today (
 
   it('reclaim: every word’s kind, and the guard and result parser narrow exactly those words', () => {
     expect(CHILD_RECLAIM_TOKEN_KIND).toEqual(RECLAIM_KINDS);
+    expect(CHILD_RECLAIM_TRANSIENT_WORD).toBe('tree-unreadable');
+    expect(RECLAIM_KINDS[CHILD_RECLAIM_TRANSIENT_WORD]).toBe('retry');
     for (const [w, k] of Object.entries(RECLAIM_KINDS)) {
       expect(childReclaimTokenKind(w), w).toBe(k);
       expect(isChildReclaimToken(w), w).toBe(true);

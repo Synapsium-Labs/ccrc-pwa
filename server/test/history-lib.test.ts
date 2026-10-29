@@ -10435,6 +10435,68 @@ describe('redactAfter: a relayed batch is read with its stream\'s look-behind (D
     expect(batch.split('\n').length, 'CONTROL: the batch held two').toBe(2);
     expect(libRedact.redactAfter('file a.md ok\n{"password":', batch, idx).emit, 'CONTROL: the same key without the sequence is aligned, and the plain line is written').toBe(`"${M}"}\nnext line`);
   });
+
+  // D-7336: the shim's stdout reaches the relay in whatever reads the pipe gives it, and a loaded runner split the two one-chunk
+  // relay cases of history-maint at a line break. The relay batches as cli.mjs's onOut does: each read's whole lines but the last,
+  // the line held before them first. Every chunking at line breaks is read here, and none leaks. The residual, pinned as measured:
+  // a read that ends right after the TOKEN line holds it, and the next read's lines go out with it as one batch, behind a
+  // look-behind that ends on the open BEGIN line. The batch's standalone pass masks its own BEGIN to END, so the joined reading sees
+  // the look-behind's BEGIN with no END, and its mark runs to the batch's end: the line after TOKEN's in that batch is lost. An
+  // availability loss, never a leak (the residual named above).
+  it('every chunking at line breaks of the two one-chunk relay cases leaks nothing; a read ending after the TOKEN line loses the next line (D-7336)', () => {
+    const relay = (reads: string[]): string => {
+      let buf = '';
+      let held: string | null = null;
+      let keep = '';
+      let out = '';
+      for (const d of reads) {
+        buf += d;
+        const cut = buf.lastIndexOf('\n');
+        if (cut === -1) continue;
+        const lines = buf.slice(0, cut).split('\n');
+        buf = buf.slice(cut + 1);
+        const last = lines.pop()!;
+        if (held !== null) lines.unshift(held);
+        if (lines.length > 0) {
+          const r = libRedact.redactAfter(keep, lines.join('\n'), idx);
+          keep = r.keep;
+          out += `${r.emit}\n`;
+        }
+        held = last;
+      }
+      return out;
+    };
+    const chunkings = (stdout: string): string[][] => {
+      const writes = stdout.split(/(?<=\n)/);
+      return Array.from({ length: 1 << (writes.length - 1) }, (_, cuts) => {
+        const reads: string[] = [];
+        let cur = '';
+        writes.forEach((w, i) => {
+          cur += w;
+          if (i < writes.length - 1 && (cuts >> i) & 1) { reads.push(cur); cur = ''; }
+        });
+        return [...reads, cur];
+      });
+    };
+    const V = 'hunter2xyzABCDEF';
+    const pem = `zqx26 start\nzqx26 ${BEGIN}\nTOKEN=${BEGIN}abc${END}${V}\nzqx26 after\n{"rc":0}\n`;
+    const json = `zqx26 start\n{"token":\n"password": "${V}"}\nzqx26 after\n{"rc":0}\n`;
+    for (const [name, stdout] of [['pem', pem], ['json', json]] as const) {
+      const all = chunkings(stdout);
+      expect(all, `CONTROL ${name}: every chunking of five writes`).toHaveLength(16);
+      for (const reads of all) {
+        const out = relay(reads);
+        expect(out, `${name} ${JSON.stringify(reads)}: nothing leaks`).not.toContain(V);
+        expect(out.split('\n'), `${name} ${JSON.stringify(reads)}: the first line arrives`).toContain('zqx26 start');
+      }
+      expect(relay([stdout]).split('\n'), `CONTROL ${name}: one read, the line after arrives`).toContain('zqx26 after');
+    }
+    const lines = pem.split(/(?<=\n)/);
+    const split = relay([lines.slice(0, 3).join(''), lines.slice(3).join('')]);
+    expect(split, 'the residual: a read ending after the TOKEN line').toBe(`zqx26 start\nzqx26 ${M}\n${M}\n`);
+    expect(relay([lines.slice(0, 3).join(''), lines[3]!, lines[4]!]).split('\n'), 'CONTROL: a read ending after the line after it too puts the TOKEN line in a batch of its own, and the line after arrives').toContain('zqx26 after');
+    for (const reads of chunkings(json)) expect(relay(reads).split('\n'), `json ${JSON.stringify(reads)}: the line after arrives in every chunking`).toContain('zqx26 after');
+  });
 });
 
 // ── W5h-2 Task 4: the op marker names its process (D-5748 (history-op-marker-identity)) ─────────────────────────

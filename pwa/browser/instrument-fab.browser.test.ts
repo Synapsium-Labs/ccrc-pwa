@@ -8,7 +8,8 @@
 // AND the browser's own `checkVisibility` (with `visibility` and `opacity`) says it is visible, so a door that is
 // mounted but hidden (`visibility: hidden`, `opacity: 0`, `display: none` or a zero-size box) is not counted: a hidden
 // round `+` at 899 reds (the one door is gone), and so does a second visible door at the desk. A door laid out
-// off-screen still counts; this file does not measure position.
+// off-screen, clipped (`clip-path`, an ancestor's overflow) or covered by another element still counts; this file does
+// not measure position or overlap.
 //
 // MUTATION TABLE (each mutant is transient; the file it touches is restored from a saved copy and `git diff` is empty after):
 //   V   `@media (max-width: 899.98px) { .fab { visibility: hidden } }` appended to fleet.css: the round + is mounted at 899

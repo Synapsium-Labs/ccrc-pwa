@@ -12,11 +12,14 @@
 // Fold state is passed IN, never owned here: FleetScreen holds it (foldState.ts)
 // so it survives navigation, and a pure card is what lets a test assert folding
 // without touching localStorage.
-import { Fragment } from 'react';
+//
+// MEMOISED (C9, D-6441): `ProjectCard` is `memo(…, sameCardProps)`, so a list that hands it the same props draws
+// nothing; `placement` compares by value (`lineProps.ts`). It reads no clock of its own: a spawning dispatch's readout
+// (`PendingSpawn`) and the folded header's "active … ago" (`ProjectCardHead`'s `LastActive`) each tick themselves.
+import { Fragment, memo } from 'react';
 import type { ReactNode } from 'react';
-import { BareRow, Button } from '@ccrc/ui';
+import { BareRow, Button, useNow } from '@ccrc/ui';
 import type { FleetSession, ProjectedHome, ProjectPoolWire, ProjectPoolsWire, RosterWire, RunSummary } from '../../../shared/api';
-import { navigate } from '../lib/router';
 import { orphanNote, type OrphanNote } from './orphanWords';
 import { addWorkspaceLabel, poolOfPlacement, type ProjectPlacementRead } from './placementWords';
 import { formatElapsed } from './formatReset';
@@ -28,6 +31,8 @@ import { ProjectCardHead } from './ProjectCardHead';
 import type { CardRollup, RolledRow } from './rollup';
 import { CROSSING_GLYPH, DISPATCH_GLYPH, dispatchWindow, runForSession, waveLabel } from './runWords';
 import { SessionLine } from './SessionLine';
+import { sameCardProps } from './lineProps';
+import { OPEN_RUNS } from './openers';
 import { actionDoor } from '../command/door';
 import './fleet.css';
 
@@ -59,8 +64,11 @@ export const NEST_BRACKET = '└─';
  *  Exported so the suite pins the sentence rather than a paraphrase of it. */
 export const POOL_UNAVAILABLE_TEXT = 'fleet ccd predates pools';
 
-function PendingSpawn({ run, nowMs }: { run: RunSummary; nowMs: number }): ReactNode {
-  const spawn = dispatchWindow(run, nowMs);
+function PendingSpawn({ run, nowMs }: { run: RunSummary; nowMs: number | undefined }): ReactNode {
+  // The readout's own clock (C9, D-6441), to the second, while it is drawn; a test passes its clock instead. Only this
+  // leaf re-renders each second, never its card or the card's rows.
+  const tick = useNow(1_000, nowMs === undefined);
+  const spawn = dispatchWindow(run, nowMs ?? tick);
   // Unreachable by construction — `nestFleet` emits this row only for a run
   // `dispatchWindow` has already answered non-`none` for, and THAT half of its
   // answer never reads the clock (`isDispatchPending`'s docstring). Handled
@@ -82,7 +90,7 @@ function PendingSpawn({ run, nowMs }: { run: RunSummary; nowMs: number }): React
 }
 
 
-export function ProjectCard({
+function ProjectCardView({
   group,
   onOpen,
   selectedId = null,
@@ -103,7 +111,7 @@ export function ProjectCard({
   runs = [],
   abroad = [],
   poolFor = () => null,
-  nowMs = Date.now(),
+  nowMs,
   coordOf = () => null,
   frameSeen = false,
   rollup,
@@ -195,12 +203,9 @@ export function ProjectCard({
    *  passes this, or a test that predates the fix, keeps every row on the
    *  card's own project (the common case) rendering exactly as before. */
   poolFor?: (project: string) => ProjectPoolWire | null;
-  /** The shared tick, in MILLISECONDS, for the pending child's elapsed clock.
-   *  This card is pure and controlled (fold state, roster and projection all
-   *  arrive the same way), so the CADENCE belongs to `FleetScreen`, which runs
-   *  it only while a spawn is actually in flight. The default reads the clock
-   *  at render: honest, and it simply stops advancing until the next render —
-   *  which is the correct degrade for a card nobody is ticking. */
+  /** A test's clock, in MILLISECONDS, for the pending child's elapsed readout and the folded header's "active … ago".
+   *  Absent in the app (C9, D-6441): each of those leaves then ticks its own clock (`PendingSpawn` each second while a
+   *  spawn is drawn, `LastActive` each half minute), so the card itself never re-renders for the time. */
   nowMs?: number;
   /** The coordinator session by id, looked up FLEET-WIDE — it may sit on
    *  another card, in an archive fold, or nowhere this pass. Feeds
@@ -276,8 +281,9 @@ export function ProjectCard({
   // (`ArchiveConflictSheet`'s own note names that as the first of the three
   // things such a link would need). The board groups by programme and the cell
   // names the programme, so the operator lands looking at the right group.
+  // `OPEN_RUNS`, one module constant (C9), so a memo'd line is handed the same door on every render.
   const openRunFor = (session: FleetSession): (() => void) | null =>
-    runForSession(runs, session) === null ? null : () => navigate('/runs');
+    runForSession(runs, session) === null ? null : OPEN_RUNS;
 
   // The orphaned worker's marker and every ruling about when it stays silent:
   // `orphanWords.ts`. Bound here to this card's own runs, project and LIVE
@@ -486,3 +492,6 @@ export function ProjectCard({
     </section>
   );
 }
+
+/** The card, memo'd (C9, D-6441): every prop by identity but `placement`, by value (`sameCardProps`). */
+export const ProjectCard = memo(ProjectCardView, sameCardProps);

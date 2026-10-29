@@ -20,17 +20,24 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { useLayoutEffect, type ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import type { ChatEvent, Dialog, FleetSession } from '../../shared/api';
 import { api, ApiError, sendErrorText } from '../src/lib/api';
 import { ChatListInner } from '../src/session/ChatList';
 import { DialogSheet } from '../src/session/DialogSheet';
+import { answerSeam, type AnswerSeamMocks } from './answerSeam';
 import { SessionScreen } from '../src/screens/SessionScreen';
 import { createFleetStore } from '../src/stores/fleet';
 import { createSessionStore, type SessionStore } from '../src/stores/session';
 import { askFixture, HOOK_QUESTIONS } from './askFixtures';
 import { fleetSession } from './fleetFixture';
+
+// D-7183: the sheet's answers go through its injected seam; each test gets fresh writers (`answerSeam.ts`).
+let answers: AnswerSeamMocks = answerSeam();
+beforeEach(() => {
+  answers = answerSeam();
+});
 
 // The transcript's rows, all of them in order: virtuoso measures nothing in jsdom and would render none.
 vi.mock('react-virtuoso', async () => {
@@ -1100,10 +1107,10 @@ describe('the keys in the card are fenced after a send and re-enter only deliber
       // transcript's button is not drawn in the gap (its card follows `askPending`), so the raise is the controller's own prop,
       // the nonce that button bumps, set on a real `DialogSheet`.
       media(true);
-      const answer = vi.spyOn(api, 'answerDialog').mockResolvedValueOnce({ ok: true, next: agedQuestion2() });
+      const answer = answers.answerDialog.mockReset().mockResolvedValueOnce({ ok: true, next: agedQuestion2() });
       const store = createSessionStore(ID, { makeSocket: fakeSocket });
       for (const f of askFixture(2).frames) store.getState().apply(f);
-      const view = render(<DialogSheet id={ID} store={store} raise={0} />);
+      const view = render(<DialogSheet answers={answers} id={ID} store={store} raise={0} />);
       const first = opt(card(), /^Redis/);
       act(() => first.focus());
       await act(async () => { key(first, '1'); });
@@ -1111,7 +1118,7 @@ describe('the keys in the card are fenced after a send and re-enter only deliber
       expect(within(card()).getByText(HOOK_QUESTIONS[1]!.question), 'premise: question 2 is in the card').toBeInTheDocument();
       expect(document.activeElement, 'premise: focus stayed on the reused node').toBe(first);
       act(() => store.setState({ conn: 'down', askFrameSeen: false, dialog: null }));
-      view.rerender(<DialogSheet id={ID} store={store} raise={1} />); // Go to question, made in the gap
+      view.rerender(<DialogSheet answers={answers} id={ID} store={store} raise={1} />); // Go to question, made in the gap
       act(() => store.setState({ conn: 'open' }));
       act(() => {
         store.getState().apply({ type: 'dialog', dialog: agedQuestion2() });
@@ -1122,7 +1129,7 @@ describe('the keys in the card are fenced after a send and re-enter only deliber
       key(document.activeElement!, '2');
       expect(answer, 'a digit sends nothing: the raise made in the gap unlocked nothing').toHaveBeenCalledTimes(1);
       answer.mockReturnValue(new Promise(() => {}));
-      view.rerender(<DialogSheet id={ID} store={store} raise={2} />); // a NEW one, after the reconnect
+      view.rerender(<DialogSheet answers={answers} id={ID} store={store} raise={2} />); // a NEW one, after the reconnect
       expect(card().contains(document.activeElement), 'the new Go to question focused the card').toBe(true);
       key(document.activeElement!, '2');
       expect(answer, 'and a digit then answers once').toHaveBeenCalledTimes(2);
@@ -1373,8 +1380,8 @@ describe('a raise rendered in one batch with a Deny\'s completion unlocks nothin
     const before = env.IS_REACT_ACT_ENVIRONMENT;
     const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
     let reply: () => void = () => {};
-    const interrupt = vi.spyOn(api, 'interrupt').mockReturnValueOnce(new Promise<void>((r) => { reply = r; }));
-    const answer = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+    const interrupt = answers.interrupt.mockReset().mockReturnValueOnce(new Promise<void>((r) => { reply = r; }));
+    const answer = answers.answerDialog.mockReset().mockReturnValue(new Promise(() => {}));
     const store = createSessionStore(ID, { makeSocket: fakeSocket });
     for (const f of askFixture(7).frames) store.getState().apply(f);
     const host = document.createElement('div');
@@ -1384,7 +1391,7 @@ describe('a raise rendered in one batch with a Deny\'s completion unlocks nothin
     // comes back prevented while the fence stands (the dispatch returns false), and unprevented once it is lifted.
     const free = (k: string): boolean =>
       document.activeElement!.dispatchEvent(new KeyboardEvent('keydown', { key: k, bubbles: true, cancelable: true }));
-    const show = (raise: number): void => root.render(<DialogSheet id={ID} store={store} raise={raise} />);
+    const show = (raise: number): void => root.render(<DialogSheet answers={answers} id={ID} store={store} raise={raise} />);
     try {
       env.IS_REACT_ACT_ENVIRONMENT = false;
       show(0);
@@ -1703,7 +1710,7 @@ describe('a send claimed after an eligible raise renders and before its effect r
     const env = globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean };
     const before = env.IS_REACT_ACT_ENVIRONMENT;
     const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
-    const answer = vi.spyOn(api, 'answerDialog').mockResolvedValueOnce({ ok: true, next: agedQuestion2() })
+    const answer = answers.answerDialog.mockReset().mockResolvedValueOnce({ ok: true, next: agedQuestion2() })
       .mockReturnValue(new Promise(() => {}));
     const store = createSessionStore(ID, { makeSocket: fakeSocket });
     for (const f of askFixture(2).frames) store.getState().apply(f);
@@ -1718,7 +1725,7 @@ describe('a send claimed after an eligible raise renders and before its effect r
       useLayoutEffect(() => { if (n !== 0) press('1'); }, [n]);
       return null;
     }
-    const show = (raise: number): void => root.render(<><DialogSheet id={ID} store={store} raise={raise} /><Presser n={raise} /></>);
+    const show = (raise: number): void => root.render(<><DialogSheet answers={answers} id={ID} store={store} raise={raise} /><Presser n={raise} /></>);
     try {
       env.IS_REACT_ACT_ENVIRONMENT = false;
       show(0);
@@ -1748,7 +1755,7 @@ describe('a send claimed after an eligible raise renders and before its effect r
     const env = globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean };
     const before = env.IS_REACT_ACT_ENVIRONMENT;
     const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
-    const answer = vi.spyOn(api, 'answerDialog').mockRejectedValueOnce(new ApiError(409, { ok: false, error: 'stale-dialog' }))
+    const answer = answers.answerDialog.mockReset().mockRejectedValueOnce(new ApiError(409, { ok: false, error: 'stale-dialog' }))
       .mockReturnValue(new Promise(() => {}));
     const store = createSessionStore(ID, { makeSocket: fakeSocket });
     for (const f of askFixture(2).frames) store.getState().apply(f);
@@ -1763,7 +1770,7 @@ describe('a send claimed after an eligible raise renders and before its effect r
       useLayoutEffect(() => { if (n !== 0) press('1'); }, [n]);
       return null;
     }
-    const show = (raise: number): void => root.render(<><DialogSheet id={ID} store={store} raise={raise} /><Presser n={raise} /></>);
+    const show = (raise: number): void => root.render(<><DialogSheet answers={answers} id={ID} store={store} raise={raise} /><Presser n={raise} /></>);
     try {
       env.IS_REACT_ACT_ENVIRONMENT = false;
       show(0);
@@ -1953,13 +1960,13 @@ describe('the transcript stops repeating the ask the card already shows', () => 
     act(() => { for (const f of fx.frames) store.getState().apply(f); });
     const outside = document.createElement('button');
     document.body.appendChild(outside);
-    const view = render(<DialogSheet id={ID} store={store} raise={0} />);
+    const view = render(<DialogSheet answers={answers} id={ID} store={store} raise={0} />);
     const section = card();
     act(() => outside.focus());
     expect(scrolled, 'an inert raise (0) scrolls nothing').toHaveLength(0);
     expect(document.activeElement, 'and takes no focus').toBe(outside);
 
-    view.rerender(<DialogSheet id={ID} store={store} raise={1} />);
+    view.rerender(<DialogSheet answers={answers} id={ID} store={store} raise={1} />);
     const first = section.querySelector<HTMLElement>('.opt[tabindex="0"]');
     expect(first, 'the roving tab stop is the first option').not.toBeNull();
     expect(first).toBe(opt(section, /^Redis/));
@@ -1982,7 +1989,7 @@ describe.each([
     const store = createSessionStore(ID, { makeSocket: fakeSocket, api: { prompt: vi.fn().mockResolvedValue(undefined) } });
     act(() => { for (const f of askFixture(n).frames) store.getState().apply(f); });
     const onOpenTerminal = vi.fn();
-    render(<DialogSheet id={ID} store={store} onOpenTerminal={onOpenTerminal} />);
+    render(<DialogSheet answers={answers} id={ID} store={store} onOpenTerminal={onOpenTerminal} />);
     return { onOpenTerminal };
   }
 

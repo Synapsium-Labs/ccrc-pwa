@@ -1300,7 +1300,11 @@ does not name may still read its default. The thinning's time bound takes the sm
 `CCRC_UPDATE_DEADLINE_MS` the server may hold (the environment, `ccrc.env`, and `~/.ccrc/exposure.env`, which the server
 reads too), and the watchdog the largest (D-6591, D-6602). On macOS a file the box's model of systemd cannot decide
 refuses only the settings it names, and `CCRC_BACKUP_DATA_KEEP` always (D-6587). `ccrc doctor`'s `box-settings` check
-reads `ccrc.env` alone and names a line the reader refuses (D-6599).
+reads `ccrc.env` alone and names a line the reader refuses (D-6599). Eight more are `ccrc test`'s (see **Test
+containment**): `CCRC_TEST_SLICE_MEMORY_MAX`, `CCRC_TEST_SLICE_SWAP_MAX`, `CCRC_TEST_SLICE_CPU_WEIGHT`,
+`CCRC_TEST_SLICE_CPU_QUOTA`, `CCRC_TEST_SLICE_IO_WEIGHT`, `CCRC_TEST_HEAVY_SLOTS` and `CCRC_TEST_WIDE_FILES` hold for
+the whole box, so they are read from `ccrc.env` alone (the reader's `file` mode), and `CCRC_TEST_PRESSURE_MAX` the same
+way as the rest; a value that is not its shape keeps its default and warns.
 
 ## The session gate: `CCRC_AUTH` (off by default)
 
@@ -3192,7 +3196,9 @@ different builds, a fleet `ccd` too old for project pools, tmux unreachable on e
 session's state is known"), an update halt (each halting node with its own **Ack**), a release out, the
 socket reconnecting, a dismissible swap notice and — on an armed box with no passkey — *Passphrase only —
 add a passkey*. `Runs · N active` opens `/runs`, beside the **Class**
-chooser (next section); a **Hot files** strip appears only while some session holds a file claim (read-only;
+chooser (next section), in Refined at every width and in Instrument below 900. At Instrument's desk the column
+draws no runs line (the rail holds the Runs door), and the chooser sits on the list's status/project toggle row in
+project mode. A **Hot files** strip appears only while some session holds a file claim (read-only;
 "Fleet coordination" says what a claim is).
 
 **Bucket chips** count every session by bucket — `Attention`, `Working`, `Done`, `Idle`, `Cleanup`, `Archived`,
@@ -4410,6 +4416,18 @@ is a startup boundary, not a sandbox: `PATH` and every binary it selects are tru
 who replaces both files is not stopped. `ws-expire`, `ws-collect`, `ws-audit --session <id> --expire` and
 `ws-audit --session <id> --collect` are decided the same way.
 
+**After a box move.** Each registry row's entry field (`$REG/<id>.workdirid`) records the device and inode of the
+directory its session entered, and the rows rung refuses a child while any other row cannot be placed. A registry
+copied onto new hardware with its trees keeps the old host's identities, so on Linux the rung places such a row by its
+path instead, for the overlap check only and with nothing written: when the recorded device is a real one that no
+line of this host's mount table carries, is the device of no target the walk measured, and the recorded path stands
+now, is where the row's workdir resolves and is that same directory. A row gets a fresh field the next time its
+session starts. Still held after a move, by design: a tree copied within one file system (its recorded device is
+mounted here), an anonymous device (a btrfs subvolume or an overlay, which a mount table need not list), a row whose
+recorded path is gone or no longer resolves to its workdir, a row whose field reads `pending`, and every row on
+Darwin, which has no table. The refusal's detail names those rows and its remedy: stop each session and start it
+again, which writes a fresh field, or purge the row once its session has ended. The next reclaim pass then places it.
+
 **The temp-root collector (child reclamation waves 7 and 9; the lane ships shadowed).** A child's temp root,
 `$HOME/.cc-tmp/<id>`, that outlives its workspace — a reclaim tail kept it because a process still used it or ccd's
 removal refused it, or a human verb left it — is taken back by
@@ -5070,7 +5088,7 @@ take either side of that one line, resolve every other hunk as the source it is,
 `~/.local/bin/ccrc restamp <file>`. `ccrc restamp` re-stamps a stamped file and refuses, file
 untouched, one with no marker, a symlink, a generator's own output, or `ccd/ccd` (its stamp is written at install time; see Contributing). Coordinator
 clause 15 is the other half: the coordinator never calls `update-branch` by any route, never writes a
-repository's rulesets, branch protection, auto-merge setting or `allow_update_branch`, sends a
+repository's rulesets, branch protection, merge-method settings, auto-merge setting or `allow_update_branch`, sends a
 rebase-check only on a conflict it has measured, and commits programme-ledger documents on its own
 ledger PR, never inside a feature PR. The session hook carries the rule to every session, and is the
 only place a session that loads no ccrc skill sees it: a `Bash` call that merges, pulls or rebases
@@ -6273,6 +6291,50 @@ old tmux-server behaviour, `~/.config/systemd/user/ccrc-tmux-server.scope.d/50-o
 `systemctl --user daemon-reload`, then roll `ccd` back; a session drops the prefix at its next respawn, and
 `ccd-tool-adj` left in `~/.local/bin` is inert. `ccrc uninstall` removes both files.
 
+**Test containment** (D-7298). `ccrc test [--heavy|--light] -- <command>` (`ccd/ccrc-test`) runs one
+test or typecheck as a transient scope in `ccrctests.slice` (`deploy/systemd/ccrctests.slice`, placed by `ccrc
+install`, `ccrc update` and `deploy.sh agent`), with the session's environment, working directory and terminal. The
+slice has a hard `MemoryMax` (default 6G), a bounded `MemorySwapMax` (1G), `CPUWeight` and `IOWeight` of 20 against
+app.slice's 100 (the slice is top-level, its name dashless, so that is every session, pane scope and ccrc-agent at once), and a `CPUQuota` (400%), and no `MemoryHigh`: a session always wins the CPU, and a run past the cap is
+killed inside the slice, never pushing the session slice into reclaim. Each value is a setting (see **ccrc's own
+settings**), read from `~/.ccrc/ccrc.env` alone because the slice is the whole box's (a session's environment that sets
+one is ignored, with a warning), applied with `systemctl --user set-property --runtime` before every run; the unit file holds the
+defaults. A slice the user manager has not loaded is never asked for, since `systemd-run --slice=` would make an unlimited
+one; instead the run degrades, never refuses: it runs uncontained, says so in one WARN line, and still queues, so a
+session the hook sends to `ccrc test` always has a way to run its tests (limits that `set-property` cannot apply leave
+the run in the slice under the unit file's own values, said the same way). A heavy run (tsc and typecheck, a vitest or jest run naming no test file, a directory, a glob or a
+filter, or more than `CCRC_TEST_WIDE_FILES` (read from `~/.ccrc/ccrc.env` alone) test files, browser, mutation and `npm test`/`npm t` runs; a flag's value
+is never counted as a file, and a `sh -c` string is read command by command) first takes one of
+`CCRC_TEST_HEAVY_SLOTS` (default 2, also read from `~/.ccrc/ccrc.env` alone; a slot held above a lowered count still
+counts) slots, a lock file `~/.cc-sessions/test-slots/slot-<n>` held with `flock`. The
+slot is the run's: the command inherits the lock, so a wrapper killed by SIGKILL leaves its run counted, and the next
+waiter stops that orphaned run's scope before taking the slot. When the command ends, its scope is stopped, so a
+process it left behind (a leaked vitest worker) ends with it. A signal to a queued run leaves the queue and exits
+128+signal without starting the command. A run that finds every slot held prints that it is queued, and who holds
+them, and starts when one frees. With `CCRC_TEST_PRESSURE_MAX` above 0 a heavy run also waits while memory or CPU
+pressure (PSI `some avg10`) is above it. A light run takes no slot. `--heavy` makes a run heavy; `--light` only
+confirms a light reading, and on a command that reads heavy it is ignored with a one-line note. A run inside a run is
+already contained and runs as it is; that is read from the process itself, never from a variable: its
+`/proc/self/cgroup` is under `ccrctests.slice`, or, uncontained, a held slot's holder is one of its ancestors. On macOS
+the command runs uncontained, saying so, and still queues, its slot following the wrapper. The worker and coordinator skills (clause 18) send every test and
+typecheck through `ccrc test`. The session hook reads every Bash call that could start one with `ccrc test
+--classify-shell`, the wrapper's own classifier (prefixes such as `setsid`, `sudo -u`, `flock`, `xargs` and systemd-run's
+flags, and `eval`/`script -c`/`watch` strings, read through), and denies a test or typecheck under a `systemd-run` of
+its own on every session (`ccrc test -- systemd-run … <test>` included) and, on a fleet box (Linux, a registered
+session), a heavy run in command position outside `ccrc test`. The scope is good faith (D-7298): the sessions are
+cooperative, so the classifier catches the spellings a well-behaved session writes by accident, and the cgroup caps
+already on the box (the session slice's `CPUQuota` and memory caps) are the backstop. Deliberately obfuscated
+spellings are accepted and out of scope: a systemd-run inside a command substitution, `prlimit`/`unshare`/`cgexec`
+prefixes, `find -exec`, Python's `os.system`, an npm script that wraps the suite. The
+vitest worker cap a box sets in its sessions' environment still applies inside the slice. Doctor's `test-slice` check shows the slice's live memory against its live
+cap, its other limits, and how many heavy slots are held and how many runs wait. The suite drives stubs of systemctl and
+systemd-run, so the containment itself is proved on a box: `bash deploy/verify-test-slice.sh`, run by the operator or
+the deploy lane at a quiet moment on a Linux box with a user manager, checks that the slice is top-level, that a real
+scope keeps a heavy run's slot lock after its wrapper is SIGKILLed, that a run past a small `MemoryMax` is OOM-killed
+inside the slice (its `oom_kill` rises; the session slice's `memory.pressure` is printed) and that `CPUQuota`
+throttles; it refuses, changing nothing, unless the slice is idle, holds every heavy slot while it measures, and
+re-applies the box's own limits when it ends. The PWA control for the cap and the queue size is a follow-up.
+
 ### Session history: lossless recall (`ccrc history`)
 
 Claude Code compacts a long session's context into a summary, and deletes a transcript once its
@@ -7054,21 +7116,30 @@ must exist) with your real `HOME`, so ccd writes to your real `~/.cc-sessions` w
 serves the PWA through Vite with `/api` and `/ws` proxied to `127.0.0.1:7788`.
 
 **What CI runs** (`.github/workflows/ci.yml` — one pipeline, whose trigger picks the mode; design
-`docs/superpowers/specs/2026-09-23-ci-test-selection-design.md`). A **pull request** runs the server
-tests its change can affect — `.github/ci/select-tests.mjs` chooses them from a traced dependency map,
-sharded behind the required `test (server)` summary, which also needs `typecheck (server)` — while
-`test (agent)` and `test (pwa)` (vitest, then `tsc --noEmit`), `build-pwa` and `node-floor` (the floor test on exactly the `engines.node` version) run in full; `test-macos`
-runs the same selection and `probe-macos` a fixed probe; neither blocks a pull request, but
-`full-suite` needs `test-macos` and `node-floor`, so a red macOS or floor leg blocks a promotion to `stable`. A change under
-`.github/` or `server/scripts/`, to a `package.json` or lockfile, a `vitest.*config.*`, a
-`tsconfig*.json`, `.gitattributes` or `.npmrc`, a symlink, a path the map's own baseline reads, or a
-missing map runs the whole server suite instead. A **merge-queue** run (`merge_group`) runs what a
-pull request runs, minus the macOS legs. A **push to `main`** starts no run; an **hourly** refresh runs no test legs: it re-traces what
-every merge since the last one affected and refreshes the map. The **daily** run runs every leg in full, macOS included, ending
-in `full-suite` — skipped when `main`'s head already carries a green one from a trusted run;
-`gh workflow run ci.yml --ref <branch> -f mode=full` asks for a full run by hand. A promotion to
-`stable` needs a green `full-suite` on its commit, and `release-stable.yml` runs one first when none
-exists. So a green pull request proves its selection, not the whole suite.
+`docs/superpowers/specs/2026-09-23-ci-test-selection-design.md`). A **pull request** is the fast run (operator
+ruling 2026-10-28): every typecheck (`typecheck (server)`, the agent and pwa `tsc --noEmit`, `@ccrc/ui`'s), `build-pwa`,
+the static checks, the server tests vitest relates to the change from its merge base, the traced map's selection for
+every changed path vitest cannot follow (a ccd script, Python, a JSON or SQL fixture), the guard suites that scan the
+whole tree or the diff (the censuses, single-definition, deviation-refs, growth-check, ownership, the rings,
+ccd-contexts, dtbd, the tests-inclusive typecheck, the oss metadata, the pin suites, and every test that runs
+`git ls-files`, `git diff` or `git merge-base` itself), and the session-hook suites when `ccd/ccd`,
+`ccd/session-hook.sh` or `shared/api.ts` changed — `.github/ci/fast-plan.mjs` — and the agent and pwa tests the change can reach
+(`.github/ci/reach.mjs`). The browser suite, `node-floor`, the perf legs and the macOS legs do not run on it. The four
+required checks report on what ran. A head branch under `train/`, the `full-ci` label, or a change to shared
+infrastructure (under `.github/` or `server/scripts/`, a `package.json` or lockfile, a `vitest.*config.*`, a
+`tsconfig*.json`, `.gitattributes` or `.npmrc`) makes it the full run. A **merge-queue** run (`merge_group`) runs the
+full Linux suite — every server shard, the agent, pwa and browser tests and the node floor; `test (pwa)` refuses a red
+browser suite there and `test (server)` a red node floor, so either stops the merge (the perf legs stay advisory).
+Nothing reaches `main` through the queue without it. The one way around it is a bypass actor's direct merge
+(`gh pr merge --admin`, which the ruleset's admin bypass still allows): the required checks are then satisfied by the
+fast run, so such a merge lands only what the fast run tested. Don't do it; the daily `full-suite` is the next run that
+would catch what it skipped. The **macOS legs** (`test-macos`, `probe-macos`) live in `.github/workflows/macos.yml`: they run on every
+push to `main` (coalesced) and nightly, block no pull request and no queue entry, and a red one is a failing run on
+`main`. An **hourly** refresh runs no test legs: it re-traces what every merge since the last one affected and
+refreshes the map. The **daily** run runs every leg in full, macOS included, ending in `full-suite` — skipped when
+`main`'s head already carries a green one from a trusted run; `gh workflow run ci.yml --ref <branch> -f mode=full` asks
+for a full run by hand. A promotion to `stable` needs a green `full-suite` on its commit, and `release-stable.yml` runs
+one first when none exists. So a green pull request proves its fast checks; the merge queue proves the suite.
 
 ## Deploy
 

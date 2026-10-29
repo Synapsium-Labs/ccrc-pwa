@@ -170,16 +170,21 @@ export const requestPolls = (): W7Site[] => overPwa(requestPollsIn);
 export const PUSH_SW = 'pwa/public/push-sw.js';
 const GEN_BEGIN = '// ccrc:generated answer-lifecycle BEGIN';
 const GEN_END = '// ccrc:generated answer-lifecycle END';
-const ANSWER_MEMBER = /^api\.answer[A-Z]\w*$/;
+const ANSWER_MEMBER = /\.answer[A-Z]\w*$/;
+/** The answer lifecycle (C7e, D-7183): the one module whose writes are the reducer's path, not a sheet's own. */
+export const ANSWER_LIFECYCLE = 'pwa/src/session/answerLifecycle.ts';
 
 /** The answer paths (plan item 5), one site per path, by kind:
- *  - `writer`: a top-level `pwa/src` symbol that calls an `api.answer*` member or `api.interrupt(…, 'deny')` (one site per
- *    symbol, at its first such call): `DialogSheet` on the base;
+ *  - `writer`: a top-level `pwa/src` symbol that calls an `answer*` member of any receiver (`api.answer*`, or an
+ *    injected seam's) or an `interrupt(…, 'deny')` (one site per symbol, at its first such call): `DialogSheet` on the
+ *    base;
+ *  - `reducer`: the same calls made inside `session/answerLifecycle.ts` (C7e, D-7183), the reducer's one performer
+ *    (`performAnswer`), which the sheets' commands go through;
  *  - `busy`: a top-level `pwa/src` symbol that binds `busy` from an `answering` flag (its own in-flight composition):
  *    `EnvelopeSheet` on the base;
  *  - `push-sw`: each `fetch(…)` call in `pwa/public/push-sw.js` whose URL argument ends `/ask`, outside the text between
  *    the `// ccrc:generated answer-lifecycle BEGIN`/`END` markers (absent on the base, which counts its one handler).
- *  3 on the base. KNOWN WIDTH: an answer request through a wrapper of another name is not seen. */
+ *  3 on the base. KNOWN WIDTH: an answer request through a wrapper of another name (not `answer*`) is not seen. */
 export function answerPathsIn(p: ParsedFile, file: string): W7Site[] {
   const out: W7Site[] = [];
   if (file.endsWith('.js')) {
@@ -194,12 +199,13 @@ export function answerPathsIn(p: ParsedFile, file: string): W7Site[] {
   }
   const writers = new Set<string>();
   for (const c of p.calls) {
-    const writes = ANSWER_MEMBER.test(c.callee) || (c.callee === 'api.interrupt' && c.args[1]?.kind === 'string' && c.args[1].text === 'deny');
+    const writes = ANSWER_MEMBER.test(c.callee)
+      || (/(?:^|\.)interrupt$/.test(c.callee) && c.args[1]?.kind === 'string' && c.args[1].text === 'deny');
     if (!writes) continue;
     const top = topSymbol(p, c.start);
     if (writers.has(top)) continue;
     writers.add(top);
-    out.push({ ...callSite(p, file, c, 'writer'), symbol: top });
+    out.push({ ...callSite(p, file, c, file === ANSWER_LIFECYCLE ? 'reducer' : 'writer'), symbol: top });
   }
   for (const b of p.bindings) {
     if (b.name === 'busy' && /\banswering\b/.test(b.init)) out.push({ file, symbol: topSymbol(p, b.start), line: b.line, text: lineStart(p.text, b.line).trim().slice(0, 140), kind: 'busy' });
@@ -399,3 +405,41 @@ export const countBy = (sites: readonly W7Site[], key: (s: W7Site) => string): R
   for (const s of sites) out[key(s)] = (out[key(s)] ?? 0) + 1;
   return out;
 };
+
+// ─── C7q. the transcript copy's reading and a usable question envelope (D-7212) ───────────────────────────────────
+
+/** The transcript copy's reading: a test that a `DialogAsk`'s `question` is blank (`.question.trim() === ''`) AND that
+ *  one of its options is `null` (`.options.some((o) => o === null)`), in one function. */
+const COPY_BLANK = /\.question\.trim\(\)\s*===\s*(?:''|"")/;
+const COPY_NULL_OPTION = /\.options\.some\(\s*\(?\s*(\w+)\s*\)?\s*=>\s*\1\s*===\s*null\s*\)/;
+/** A usable question envelope: `questions.length > 0` AND the first question's trimmed text (`questions[0]` with `!`,
+ *  `?` or nothing, then `.question.trim()`), in one function. */
+const USABLE_LENGTH = /questions\.length\s*>\s*0/;
+const USABLE_FIRST = /questions\[0\][!?]?\.question\.trim\(\)/;
+
+/** Each function-like symbol whose own text holds a rule, attributed to the innermost such symbol (an outer function
+ *  around a counted inner one is not a second definition). Kind `copy` or `usable`. */
+export function transcriptCopyRulesIn(p: ParsedFile, file: string): W7Site[] {
+  const rules: [string, (t: string) => boolean][] = [
+    ['copy', (t) => COPY_BLANK.test(t) && COPY_NULL_OPTION.test(t)],
+    ['usable', (t) => USABLE_LENGTH.test(t) && USABLE_FIRST.test(t)],
+  ];
+  const out: W7Site[] = [];
+  for (const [kind, holds] of rules) {
+    const hits = p.symbols.filter((s) => holds(p.text.slice(s.start, s.end)));
+    for (const s of hits) {
+      if (hits.some((o) => o !== s && s.start <= o.start && o.end <= s.end)) continue;
+      out.push({ file, symbol: s.name, line: s.line, text: lineStart(p.text, s.line).trim().slice(0, 140), kind });
+    }
+  }
+  return out.sort((a, b) => a.file.localeCompare(b.file) || a.line - b.line);
+}
+
+/** The copy and usability rules' definitions across `pwa/src`, `server/src` and `shared` (D-7212): 1 each, both in
+ *  `shared/ask-menu.ts`, which `askLive.ts#askSource` and `server/src/pane/askPairing.ts#framePairing` both import.
+ *  KNOWN WIDTH: syntax only; a rule split across two functions, or spelled through another member name, is not seen. */
+export const transcriptCopyRules = (): W7Site[] => [
+  ...pwaSources(),
+  ...walkSrc({ roots: ['server/src'], min: 200, match: /\.ts$/ }),
+  ...walkSrc({ roots: ['shared'], min: 5, flat: true, match: /\.ts$/ }),
+].flatMap((rel) => transcriptCopyRulesIn(parsedFile(rel), rel));

@@ -16,6 +16,7 @@
 // The classes stay `proj-*`: fleet.css grounds them and this is the only
 // consumer. The shape moves, the ground stays.
 import type { ReactNode } from 'react';
+import { useNow } from '@ccrc/ui';
 import type { ProjectPoolWire, RosterWire } from '../../../shared/api';
 import { accountColorVar, accountLabel } from '../lib/accounts';
 import type { FleetGroup, FleetPin } from './groupFleet';
@@ -66,16 +67,18 @@ function PoolChip({ pool, project, dim, onTap }: {
       </span>
     );
   }
+  // The door's name begins with the words it shows (WCAG 2.5.3, R121 Q6): "Set pool — " and then the state's sentence.
+  const untagged = pool.state === 'untagged';
   return (
     <button
       type="button"
       className="proj-card-pool"
       data-pool={dataPool}
-      aria-label={label}
+      aria-label={untagged ? `Set pool — ${label}` : label}
       title={label}
       {...actionDoor('open-pool', () => onTap(project))}
     >
-      {pool.state === 'untagged' ? 'Set pool' : word}
+      {untagged ? 'Set pool' : word}
     </button>
   );
 }
@@ -108,6 +111,13 @@ function PinChip({ pin, roster }: { pin: FleetPin; roster: readonly RosterWire[]
   );
 }
 
+/** A folded header's "active … ago" (D-6088), a leaf with its own half-minute clock (C9, D-6441): the readout moves
+ *  with no fleet frame, and only this span re-renders for it. A test passes its clock in `now`. */
+function LastActive({ at, now }: { at: number; now: number | undefined }): ReactNode {
+  const tick = useNow(30_000, now === undefined);
+  return <span className="proj-card-last">{`active ${formatAge(Math.floor(((now ?? tick) - at) / 1000))}`}</span>;
+}
+
 export interface ProjectCardHeadProps {
   group: FleetGroup;
   collapsed: boolean;
@@ -123,7 +133,7 @@ export interface ProjectCardHeadProps {
   adding: boolean;
   /** D-6088: the latest change of a live member (`rollup.ts`'s `lastActive`); a folded header says how long ago. */
   lastActive?: number | null;
-  /** The clock `lastActive` is read against. */
+  /** A test's clock for `lastActive`; absent, the readout ticks its own (`LastActive`). */
   now?: number;
   /** D-6088 rule 5: an operator-facing question holds the card open, so the ▾ does nothing and says so. */
   pinnedOpen?: boolean;
@@ -131,7 +141,7 @@ export interface ProjectCardHeadProps {
 
 export function ProjectCardHead({
   group, collapsed, onToggle, roster, pool, poolDim, onPool, onAddWorkspace, addLabel, adding,
-  lastActive = null, now = Date.now(), pinnedOpen = false,
+  lastActive = null, now, pinnedOpen = false,
 }: ProjectCardHeadProps): ReactNode {
   return (
       <div className="proj-card-head">
@@ -182,9 +192,7 @@ export function ProjectCardHead({
             </span>
           )}
           {/* D-6088: a rolled-up card says when it last moved, so a quiet project reads as quiet since when. */}
-          {collapsed && lastActive !== null && (
-            <span className="proj-card-last">{`active ${formatAge(Math.floor((now - lastActive) / 1000))}`}</span>
-          )}
+          {collapsed && lastActive !== null && <LastActive at={lastActive} now={now} />}
         </button>
 
         {/* A sibling, never a descendant of the project fold button: nested

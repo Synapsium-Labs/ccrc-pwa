@@ -1,6 +1,8 @@
 // The global keys (D-5103). ⌘K or Ctrl+K opens the palette from anywhere; the
 // single keys and the `g` chords are the registry's own `keys`, so every key
-// bound here is a key the shortcut sheet lists, and the other way round.
+// the shortcut sheet lists is bound here. The sheet lists only the keys whose
+// command is offered where it is opened, so a key bound here can be missing
+// from it there: the inspector's `i` where no rail is placed (`CommandLayer`).
 //
 // A SINGLE KEY IS FOR THE PAGE, NEVER FOR A FIELD. `[`, `]`, `?` and the chords
 // fire only when no modifier is held and the target is not a text field: a `]`

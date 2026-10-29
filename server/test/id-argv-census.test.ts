@@ -262,6 +262,8 @@ interface GateHome { readonly file: string; readonly scope: string; readonly re:
 /** The id check, then the capability in either form (D-5866, Task C1k): `capSupported(deps.fleetState, EXPIRE_CAP)`
  *  or `ccdCan(deps.fleetState, 'wsExpire')`. */
 const EXPIRY_STEP_0 = /!isRegistryId\(sessionId\)[^;]*EXPIRE_ID_REFUSED[\s\S]*?(?:capSupported\(deps\.fleetState, EXPIRE_CAP\)|ccdCan\(deps\.fleetState, 'wsExpire'\))/;
+// D-7204: the executor's id check alone, in its judge `expiryIdJudge`; the capability stays in the port's `capability` reader.
+const EXPIRY_ID_JUDGE = /!isRegistryId\(sessionId\)[^;]*EXPIRE_ID_REFUSED/;
 
 /** Where each check is written, and its text (spec §2.3). */
 const GATES = {
@@ -345,12 +347,12 @@ const GATES = {
     re: /ask === undefined \|\| !isRegistryId\(req\.sessionId\)\) return;/,
   },
   /** Expiry's step 0, before its capability read. */
-  'expiry-step-0': { file: 'coord/expireArchived.ts', scope: 'expireArchived', re: EXPIRY_STEP_0 },
+  'expiry-step-0': { file: 'coord/expireArchived.ts', scope: 'expiryIdJudge', re: EXPIRY_ID_JUDGE },
   /** The learning audit's own step 0, before its capability read. */
   'learn-expiry-step-0': { file: 'coord/expireArchived.ts', scope: 'learnExpiry', re: EXPIRY_STEP_0 },
   /** The collector executor's step 1. */
   'collector-step-1': {
-    file: 'coord/collectTempRoot.ts', scope: 'collectTempRoot',
+    file: 'coord/collectTempRoot.ts', scope: 'collectIdJudge',
     re: /if \(looseHex === null && !isTmpRootId\(job\.id\)\) return \{ kind: 'not-asked', step: 1, why: 'id-refused'/,
   },
   /** The learning audit's own id gate (path-identity W2), first in `learnCollect`: the twin of the step-1 check. */
@@ -420,7 +422,7 @@ const CENSUS: readonly CensusRow[] = [
   { file: 'coord/close.ts', scope: 'closeReviewRun', builder: 'wsRelease', id: 'sessionId', origin: ['stored'], gate: ['close-gate'] },
   // coord/collectTempRoot.ts: the learning audit is reached from the population and from the executor's step 1.
   { file: 'coord/collectTempRoot.ts', scope: 'collectAudit', builder: 'wsCollectAudit', id: 'id', origin: ['collector'], gate: ['collector-step-1', 'collector-learn-gate', 'collector-population', 'collector-record-name'] },
-  { file: 'coord/collectTempRoot.ts', scope: 'collectTempRoot', builder: 'wsCollect', id: 'job.id', origin: ['collector'], gate: ['collector-step-1'] },
+  { file: 'coord/collectTempRoot.ts', scope: 'collectTempRootAct', builder: 'wsCollect', id: 'job.id', origin: ['collector'], gate: ['collector-step-1'] },
   // coord/dispatch.ts: refuseSpentChild's only caller is dispatchRun, below its gate; the fresh winner is a listed, valid row.
   { file: 'coord/dispatch.ts', scope: 'refuseSpentChild', builder: 'wsHold', id: 'run.sessionId', origin: ['stored'], gate: ['dispatch-gate'] },
   { file: 'coord/dispatch.ts', scope: 'refuseSpentChild', builder: 'wsRelease', id: 'run.sessionId', origin: ['stored'], gate: ['dispatch-gate'] },
@@ -608,11 +610,11 @@ describe('every id-taking argv call has an origin and a gate (spec §2.3)', () =
       fleetArgv: ['coord/close.ts | actOnFleet'],
       refuseSpentChild: ['coord/dispatch.ts | resumeBound'],
       resumeBound: ['coord/dispatch.ts | dispatchRun'],
-      expireAudit: ['coord/expireArchived.ts | expireArchived', 'coord/expireArchived.ts | learnExpiry'],
-      expireAct: ['coord/expireArchived.ts | expireArchived'],
+      expireAudit: ['coord/expireArchived.ts | expireRetirePort', 'coord/expireArchived.ts | learnExpiry'],
+      expireAct: ['coord/expireArchived.ts | expireRetirePort'],
       childReclaimAudit: ['coord/childReclaim.ts | childReclaimOutcome'],
       childReclaimAct: ['coord/childReclaim.ts | childReclaimOutcome'],
-      collectAudit: ['coord/collectTempRoot.ts | collectTempRoot', 'coord/collectTempRoot.ts | learnCollect'],
+      collectAudit: ['coord/collectTempRoot.ts | collectRetirePort', 'coord/collectTempRoot.ts | learnCollect'],
       childSpent: ['coord/childBind.ts | childBindGate', 'coord/close.ts | childGateAtClose'],
       childSpentLive: ['coord/childSpent.ts | childSpent', 'coord/close.ts | childGateAtClose'],
       holdAndBindSession: ['coord/routes.ts | POST /api/runs'],

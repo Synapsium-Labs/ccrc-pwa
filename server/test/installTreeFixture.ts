@@ -53,6 +53,9 @@ export const TREE_FILES = [
   'ccd/ccrc-doctor-checks',
   'ccd/ccrc-wrapper-shape',
   'ccd/ccrc-adopt',
+  // D-7298: the `ccrc test` wrapper, which doctor's closing `test-slice` check asks for the slice and
+  // the queue (`$CCRC_HERE/ccrc-test --status`). A real tree has it: `_inst_tree` rsyncs `ccd/` whole.
+  'ccd/ccrc-test',
   // The GPT lane's five common executables, COPIED from the repository: the
   // two `.py` files (Plan 2a, placed since Plan 2b-1), and the runtime builder
   // and launcher. Plan 2b-2 wrote each of those two unplaced, then added both

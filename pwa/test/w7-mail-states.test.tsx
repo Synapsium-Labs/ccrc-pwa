@@ -11,8 +11,11 @@ import { MailScreen } from '../src/screens/MailScreen';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
 import { api } from '../src/lib/api';
 
-const makeStore = (): FleetStore => createFleetStore({
+/** The screen's feed read is the store's `refreshFeed()` (C7n, D-7209): a row's feed answer is the store's injected
+ *  reader, and none is the store's default, `api.feed`. */
+const makeStore = (fetchFeed?: () => Promise<{ events: NotifyEvent[] }>): FleetStore => createFleetStore({
   makeSocket: () => ({ onopen: null, onmessage: null, onclose: null, onerror: null, close(): void {} }) as unknown as WebSocket,
+  ...(fetchFeed === undefined ? {} : { fetchFeed }),
 });
 const flush = async (): Promise<void> => { await act(async () => { await vi.advanceTimersByTimeAsync(0); }); };
 
@@ -29,23 +32,29 @@ afterEach(() => { cleanup(); vi.useRealTimers(); vi.restoreAllMocks(); });
 
 describe('MailScreen: its three empty states, byte for byte', () => {
   it('"Loading…" before its feed read settles', async () => {
-    render(<MailScreen store={makeStore()} loadFeed={() => new Promise(() => {})} loadRuns={async () => ({ runs: [] })} />);
+    render(<MailScreen store={makeStore(() => new Promise(() => {}))} loadRuns={async () => ({ runs: [] })} />);
     await flush();
     expect(emptyState()).toEqual({ state: 'loading', text: 'Loading…' });
   });
 
   it('the error sentence after it rejects', async () => {
-    render(<MailScreen store={makeStore()} loadFeed={async () => { throw new Error('down'); }} loadRuns={async () => ({ runs: [] })} />);
+    render(<MailScreen store={makeStore(async () => { throw new Error('down'); })} loadRuns={async () => ({ runs: [] })} />);
+    await flush();
+    expect(emptyState()).toEqual({ state: 'error', text: 'Could not reach the server — mail may exist that is not shown.' });
+  });
+
+  it('the error sentence after a null body, as before C7n', async () => {
+    render(<MailScreen store={makeStore(async () => null as never)} loadRuns={async () => ({ runs: [] })} />);
     await flush();
     expect(emptyState()).toEqual({ state: 'error', text: 'Could not reach the server — mail may exist that is not shown.' });
   });
 
   it('nothing of either once it answers: an empty answer reads "Nothing yet.", a record renders no empty state', async () => {
-    render(<MailScreen store={makeStore()} loadFeed={async () => ({ events: [] })} loadRuns={async () => ({ runs: [] })} />);
+    render(<MailScreen store={makeStore(async () => ({ events: [] }))} loadRuns={async () => ({ runs: [] })} />);
     await flush();
     expect(emptyState()).toEqual({ state: 'ok', text: 'Nothing yet.' });
     cleanup();
-    render(<MailScreen store={makeStore()} loadFeed={async () => ({ events: [event(1)] })} loadRuns={async () => ({ runs: [] })} />);
+    render(<MailScreen store={makeStore(async () => ({ events: [event(1)] }))} loadRuns={async () => ({ runs: [] })} />);
     await flush();
     expect(document.body.textContent).toContain('a finding');
     expect(document.body.textContent).not.toMatch(/Loading…|Could not reach the server|Nothing yet\./);

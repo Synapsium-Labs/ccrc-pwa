@@ -904,9 +904,9 @@ describe('the lanes fold (S5b, D-6530)', () => {
       expect(fireEvent.keyDown(document.body, { key: 'Escape' })).toBe(false);
       expect(panelOf(container)).toBeNull();
       expect(fireEvent.keyDown(document.body, { key: 'Escape' })).toBe(true);
-      // An Escape another layer over the panel has already handled (a sheet or the palette closing itself; Radix's
-      // layers listen on the document in the capture phase and prevent the Escape they take) is that layer's alone:
-      // the panel under it stays open.
+      // An Escape another layer over the panel has already handled is that layer's alone: the panel under it stays open.
+      // The palette and the ask surface stop it in the capture phase, so the panel never sees it; this case stands in for
+      // a layer that prevents it instead, which `defaultPrevented` covers (review 1131 A9).
       tapControl();
       const sheet = (e: KeyboardEvent): void => { if (e.key === 'Escape') e.preventDefault(); };
       document.addEventListener('keydown', sheet, true);
@@ -1069,6 +1069,38 @@ describe('the lanes fold (S5b, D-6530)', () => {
       const stop = lineCardsOf(container).find((c) => c.tabIndex === 0)!;
       expect(stop).toBe(lineCardsOf(container)[0]);
       expect(document.activeElement).toBe(stop);
+    });
+
+    // Review 1131 A1 (C12 item 20): a poll that drops the focused panel card's lane fires no blur, so the panel's flag goes
+    // stale; the operator then moves to All accounts, and a later poll leaves nothing to fold. The hand-back must not take
+    // focus off All accounts: only focus still in the panel, or on the page, is the panel's to hand back.
+    it('a stale panel flag never takes focus off All accounts when a later poll leaves nothing to fold', async () => {
+      const container = await openPanel();
+      const card = panelCardsOf(container)[9]!;
+      act(() => { card.focus(); });
+      const all = seventeenLanes(nowSec).accounts;
+      // The focused card's lane, by the label it draws.
+      const lane = all.find((a) => [...card.querySelectorAll('*')].some((e) => e.textContent === labelOf(a.wrapper)))!;
+      stubLanes(all.filter((a) => a !== lane));
+      expect(panelOf(container), 'sixteen lanes still fold, so the panel stays').not.toBeNull();
+      const end = allAccounts();
+      act(() => { end.focus(); });
+      expect(document.activeElement).toBe(end);
+      stubLanes(all.slice(0, 5));
+      expect(panelOf(container)).toBeNull();
+      expect(document.activeElement, 'focus stays on All accounts').toBe(end);
+    });
+
+    // Review 1131 A2 (C12 item 20): a poll that leaves no live lane draws the placeholder door, with no control and no
+    // line; a panel card's focus goes to that door, never to the page.
+    it('a poll that leaves no live lane hands a panel card\'s focus to the placeholder door, never to the page', async () => {
+      const container = await openPanel();
+      const card = panelCardsOf(container)[9]!;
+      act(() => { card.focus(); });
+      stubLanes(seventeenLanes(nowSec).accounts.map((a) => ({ ...a, disabled: true })));
+      const door = screen.getByRole('link', { name: ACCOUNTS_DOOR_LABEL });
+      expect(panelOf(container)).toBeNull();
+      expect(document.activeElement, 'on the placeholder door').toBe(door);
     });
 
     // ── phone-fold-two-lines: the phone folds to two lines of the tracks its grid draws ──
@@ -1285,7 +1317,7 @@ describe('the lanes fold (S5b, D-6530)', () => {
       expect(flyoutOf(container)).toBeNull();
     });
 
-    it('it stays open while either the pointer or focus is inside the line or the flyout, and closes when neither is', async () => {
+    it('it stays open while either the pointer or keyboard focus is inside the line or the flyout, and closes when neither is', async () => {
       const container = await openByHover();
       const card = lineCardsOf(container)[1]!;
       act(() => { card.focus(); });
@@ -1425,8 +1457,10 @@ describe('the lanes fold (S5b, D-6530)', () => {
     // a move from one card to another with no key event often does not. These cases need the plain rule instead: keyboard
     // focus unless a click gave it. So `beforeEach` makes `matches(':focus-visible')` answer as `:focus` does, and false
     // for an element a case has focused as a click (`clickFocus`: a pointer-down, a mouse-down, a focus), as Chrome does;
-    // every other focus in this file is keyboard focus. The browser leg proves the shape in real Chrome (lanes-row, "a
-    // click's focus never holds the flyout …").
+    // every other focus in this file is keyboard focus. The browser leg proves the shape in real Chrome for the end cell
+    // (lanes-row, "a click's focus never holds the flyout …", a click on All accounts). For a CARD no real-Chrome case
+    // does: a card's click navigates, and the flyout closes with the route (review 1106), so the card half of the
+    // keyboard-only rule rests on this stub alone (review 1108, A5).
     const mouseFocused = new WeakSet<Element>();
     beforeEach(() => {
       const real = Element.prototype.matches;
@@ -1588,7 +1622,7 @@ describe('the lanes fold (S5b, D-6530)', () => {
       expect(flyoutOf(container)).not.toBeNull();
     });
 
-    it("a poll that drops the lane of the flyout card holding focus leaves no stale hold: a field focused elsewhere keeps its focus when the flyout closes", async () => {
+    it("a poll that drops the lane of the flyout card holding focus: a field focused elsewhere keeps its focus when the flyout closes", async () => {
       // This case installs the fake clock before the strip mounts (`mountDesk` does it after); the store's next answer
       // below needs no timer, since the strip runs no poll of its own (C8, D-6440).
       stubDesk(1248);

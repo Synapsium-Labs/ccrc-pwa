@@ -179,8 +179,9 @@ describe('the highlight cache (C7)', () => {
     const markupOf = (i: number): number => hljs.highlight(dense(i), { language: 'json', ignoreIllegals: true }).value.length;
     let fit = 0;
     let markup = 0;
-    while (markup + markupOf(fit) <= HIGHLIGHT_CACHE_MAX_CHARS) {
-      markup += markupOf(fit);
+    // Each block's markup is computed once (review 1132 A7): the condition and the sum read the same figure.
+    for (let next = markupOf(fit); markup + next <= HIGHLIGHT_CACHE_MAX_CHARS; next = markupOf(fit)) {
+      markup += next;
       fit += 1;
     }
     expect(fit).toBeGreaterThan(1);

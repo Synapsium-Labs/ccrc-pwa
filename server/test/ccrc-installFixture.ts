@@ -616,6 +616,13 @@ export function ccrcEnv(home: string, omit: string[] = []): NodeJS.ProcessEnv {
     // that stayed up); `fixture-mainpid-drift` makes the SECOND sample differ,
     // which is exactly how a crash loop shows itself.
     '  show)',
+    // D-7298: the closing doctor's `test-slice` check asks `show ccrctests.slice -p …` through
+    // `ccrc test --status`. The slice is loaded once `_inst_units` has placed its file (the causal chain a real
+    // `daemon-reload` gives), at the shipped defaults; before that the manager does not know it.
+    '    if [ "$2" = ccrctests.slice ]; then',
+    '      if [ -f "$HOME/.config/systemd/user/ccrctests.slice" ]; then printf \'LoadState=loaded\\nMemoryCurrent=0\\nMemoryMax=6442450944\\nMemorySwapMax=1073741824\\nCPUWeight=20\\nCPUQuotaPerSecUSec=4s\\nIOWeight=20\\n\'; else echo LoadState=not-found; fi',
+    '      exit 0',
+    '    fi',
     // W6 Task 5 — spec §11's GC reads `show -p ExecStart <unit>`, answered in
     // systemd's REAL struct form (measured on a user unit, 2026-09-23):
     // `path=` is `/usr/bin/env` and the tree path is inside `argv[]`, so a
@@ -1864,6 +1871,9 @@ export const FLEET_BOX_CLASSES: Readonly<Record<string, string>> = {
   "services": "PASS",
   "skills": "PASS",
   "snapshot-posture": "SKIP",
+  // D-7298: PASS at every stage, re-measured from both box-token cases' own failing diff (the install
+  // places ccrctests.slice, and this fixture's manager then answers it loaded).
+  "test-slice": "PASS",
   "timeout": "PASS",
   "tmux": "PASS",
   "tmux_skew": "PASS",

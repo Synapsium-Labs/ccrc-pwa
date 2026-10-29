@@ -1,4 +1,4 @@
-// THE SESSION FACTS, version and cost (D-5104; the audit's F6, data half).
+// THE BUILD AND THE SPEND, version and cost (D-5104; the audit's F6, data half).
 //
 // Every `FleetSession` carries `version` (Claude Code's own, from its session
 // file) and `usage`, whose `cost` is the statusline's `cost.total_cost_usd`
@@ -29,7 +29,7 @@ import type { FleetSession, SessionUsage } from '../../shared/api';
 import {
   COORDINATOR_WORD, coordinatorRole, headerFacts, sessionFacts as fleetFacts,
 } from '../src/fleet/sessionFacts';
-import { sessionFacts } from '../src/session/sessionFacts';
+import { sessionFacts } from '../src/session/buildAndSpend';
 import { fleetSession } from './fleetFixture';
 import { parseTs } from './literalWalker';
 

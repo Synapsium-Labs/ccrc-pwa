@@ -99,10 +99,12 @@ const wsAudit: WsAudit = {
   transcript: '/t.jsonl', children: [], verdict: 'reapable', detail: '', token: 'q'.repeat(64), sentence: '',
 };
 
-/** Store whose ReconnectingSocket gets an inert fake — connect() is harmless. */
-const makeStore = (): FleetStore => createFleetStore({
+/** Store whose ReconnectingSocket gets an inert fake — connect() is harmless. `fetchFeed` is the store's feed reader,
+ *  which `MailScreen` reads through `refreshFeed()` (C7n, D-7209). */
+const makeStore = (fetchFeed?: () => Promise<{ events: NotifyEvent[] }>): FleetStore => createFleetStore({
   makeSocket: () => ({ onopen: null, onmessage: null, onclose: null, onerror: null,
     close(): void {} }) as unknown as WebSocket,
+  ...(fetchFeed === undefined ? {} : { fetchFeed }),
 });
 
 // Build 7 Task 5 — RunSummary as PR I actually shipped it (see
@@ -436,7 +438,7 @@ describe('.mail-back — the feed’s back control', () => {
     expect(backButton).not.toContain('44px');
   });
   it('is the class the rendered control actually carries', () => {
-    render(<MailScreen store={makeStore()} loadFeed={async () => ({ events: [] })} />);
+    render(<MailScreen store={makeStore(async () => ({ events: [] }))} />);
     expect(screen.getByLabelText(/back to fleet/i)).toHaveClass('mail-back');
   });
 });
@@ -458,7 +460,7 @@ describe('.mail-chip — the feed’s programme filter', () => {
       { id: 5, program: 'build9b', programTitle: 'Build 9b' },
       { id: 6, program: 'crossrepo', programTitle: 'Cross-repo' },
     ] as unknown as RunSummary[];
-    render(<MailScreen store={makeStore()} loadFeed={async () => ({ events })}
+    render(<MailScreen store={makeStore(async () => ({ events }))}
                         loadRuns={async () => ({ runs })} />);
     expect(await screen.findByRole('button', { name: 'Build 9b' })).toHaveClass('mail-chip');
     expect(screen.getByRole('button', { name: 'All' })).toHaveClass('mail-chip');

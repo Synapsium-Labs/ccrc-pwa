@@ -834,6 +834,7 @@ cd ~/ccrc/agent && npm ci && npm run build \
     && _unit_atomic ~/ccrc/deploy/systemd/ccrc-agent.service.d/protect.conf ~/.config/systemd/user/ccrc-agent.service.d/protect.conf \
     && mkdir -p ~/.config/systemd/user/app.slice.d \
     && _unit_atomic ~/ccrc/deploy/systemd/app.slice.d/50-ccrc-agent-protect.conf ~/.config/systemd/user/app.slice.d/50-ccrc-agent-protect.conf \
+    && _unit_atomic ~/ccrc/deploy/systemd/ccrctests.slice ~/.config/systemd/user/ccrctests.slice \
     && _unit_atomic ~/ccrc/deploy/systemd/ccd-cap-scopes.service ~/.config/systemd/user/ccd-cap-scopes.service \
     && _unit_atomic ~/ccrc/deploy/systemd/ccd-cap-scopes.timer ~/.config/systemd/user/ccd-cap-scopes.timer \
     && _unit_atomic ~/ccrc/deploy/systemd/ccd-pool-sync.service ~/.config/systemd/user/ccd-pool-sync.service \

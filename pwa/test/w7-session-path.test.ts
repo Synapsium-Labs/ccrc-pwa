@@ -1,6 +1,6 @@
 // The session path, pinned before C7k builds one `sessionPath` (D-7179; Task C7a Step 5; plan
 // docs/superpowers/plans/2026-10-27-consolidation-w7-pwa.md, item 11; ARCH-75). `sessionPathLiterals()` (census-w7)
-// counts 14 string expressions starting `/s/` in 12 files; two of them (`app.tsx#ArchiveRoute`,
+// counts 13 string expressions starting `/s/` in 11 files; two of them (`app.tsx#ArchiveRoute`,
 // `AccountsScreen.tsx#AccountsScreen`) do not `encodeURIComponent` the id. Every id the server sends passes
 // `shared/api.ts#isSessionIdShape`, and over that charset `encodeURIComponent` is the identity, so one helper that
 // encodes every id changes no byte of any path the wire can produce.
@@ -117,9 +117,10 @@ const SITES: Record<string, (id: string) => Promise<string>> = {
     fireEvent.click(document.querySelector<HTMLElement>('.sess-open')!);
     return landed();
   },
-  'skins/instrument/FleetTable.tsx#openSession': async (id) => {
+  'fleet/openers.ts#openSession': async (id) => {
     chromeApis();
-    // A working row: its status group does not fold, so the row is on the table.
+    // Driven through Instrument's table, which opens a row through this one opener (C9). A working row: its status
+    // group does not fold, so the row is on the table.
     act(() => { useFleetStore.setState({ conn: 'open', sessions: [fleetSession({ id, project: 'project-a', workspace: 'ws-a', status: 'busy', bucket: 'working' })], fleetFrameSeen: true }); });
     render(createElement(FleetChromeProvider, { store: useFleetStore }, createElement(FleetTable)));
     fireEvent.click(document.querySelector<HTMLElement>('.sess-open')!);
@@ -156,7 +157,7 @@ describe('each driveable site\'s path, for an id inside the charset and one outs
     'screens/AccountsScreen.tsx#AccountsScreen': ['/s/session-a', '/s/session%20a/1'],
     'screens/RunRow.tsx': ['/s/session-a', '/s/session%20a%2F1'],
     'screens/FleetScreen.tsx#FleetScreen': ['/s/session-a', '/s/session%20a%2F1'],
-    'skins/instrument/FleetTable.tsx#openSession': ['/s/session-a', '/s/session%20a%2F1'],
+    'fleet/openers.ts#openSession': ['/s/session-a', '/s/session%20a%2F1'],
     'session/SessionDetails.tsx#SessionCoordination': ['/s/session-a', '/s/session%20a%2F1'],
   };
   for (const [site, door] of Object.entries(SITES)) {

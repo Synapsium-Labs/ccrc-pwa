@@ -138,6 +138,33 @@ function parentOf(p) {
   return dir === '' ? '.' : dir;
 }
 
+/** The half of `fullTrigger` that needs no map: a reason string when `p` (repo-relative, POSIX) is infrastructure every
+ *  test shares — a package manifest or lockfile, a vitest config, a tsconfig, `.gitattributes`, `.npmrc`, an install
+ *  script under server/scripts/, or the pipeline under .github/ — else `null`. The ONE list: `fullTrigger` checks it
+ *  first, and reach.mjs asks it whether a pull request may take the fast run (operator ruling 2026-10-28).
+ *  @param {string} p @returns {string | null} */
+export function infraTrigger(p) {
+  const base = path.posix.basename(p);
+  if (PACKAGE_FILE_RE.test(base)) return `package manifest changed: ${p}`;
+  if (VITEST_CONFIG_RE.test(base)) return `vitest config changed: ${p}`;
+  if (TSCONFIG_RE.test(base)) return `tsconfig changed: ${p}`;
+  if (GITATTRIBUTES_RE.test(base)) return `checkout attributes changed: ${p}`;
+  if (NPMRC_RE.test(base)) return `npm config changed: ${p}`;
+  if (p.startsWith('server/scripts/')) return `install script changed: ${p}`;
+  if (p === '.github' || p.startsWith('.github/')) return `pipeline path changed: ${p}`;
+  return null;
+}
+
+/** Paths whose effect on the server tests vitest's import graph can follow, so `vitest list --changed` relates them:
+ *  the JavaScript and TypeScript modules under server/ and shared/. Everything else — the ccd scripts and every other
+ *  bash file, Python, a JSON or SQL fixture, a doc, a module of another package that a server test reads as text — is
+ *  reached by a spawn or a read, which only the map records. The fast run (fast-plan.mjs) adds the map's selection
+ *  for those paths to vitest's.
+ *  @param {string} p repo-relative, POSIX @returns {boolean} */
+export function vitestFollows(p) {
+  return /^(?:server|shared)\/.+\.(?:ts|tsx|mts|cts|js|mjs|cjs)$/.test(p);
+}
+
 /** The full-run trigger (spec §6.3's changed-set bullet): a reason string
  *  when ANY changed path is infrastructure the map cannot safely reason
  *  about, else `null`. Checked before any per-test rule — a match here means
@@ -158,14 +185,8 @@ export function fullTrigger(changes, baseline) {
   const readSet = new Set(baseline.read);
   const probedSet = new Set(baseline.probed);
   for (const c of [...changes].sort((a, b) => a.path.localeCompare(b.path))) {
-    const base = path.posix.basename(c.path);
-    if (PACKAGE_FILE_RE.test(base)) return `package manifest changed: ${c.path}`;
-    if (VITEST_CONFIG_RE.test(base)) return `vitest config changed: ${c.path}`;
-    if (TSCONFIG_RE.test(base)) return `tsconfig changed: ${c.path}`;
-    if (GITATTRIBUTES_RE.test(base)) return `checkout attributes changed: ${c.path}`;
-    if (NPMRC_RE.test(base)) return `npm config changed: ${c.path}`;
-    if (c.path.startsWith('server/scripts/')) return `install script changed: ${c.path}`;
-    if (c.path === '.github' || c.path.startsWith('.github/')) return `pipeline path changed: ${c.path}`;
+    const infra = infraTrigger(c.path);
+    if (infra) return infra;
     if (c.symlink) return `symlink changed: ${c.path}`;
     if (readSet.has(c.path)) return `baseline reads this path: ${c.path}`;
     if (probedSet.has(c.path)) return `baseline probed this path: ${c.path}`;

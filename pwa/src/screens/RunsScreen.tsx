@@ -53,27 +53,7 @@ import { Button, EmptyState, PageScaffold, useNow } from '@ccrc/ui';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
 import '../fleet/fleet.css';
 
-/** Hoisted to module scope, not an inline default-parameter arrow — the exact
- *  defect `MailScreen`'s `loadFeedDefault` already fixed once (see that
- *  file's own comment, and the commit that fixed it: a default parameter
- *  expression is re-evaluated on every render, so an inline
- *  `() => api.runs(true)` would be a fresh identity every time `setCold`
- *  fires below, and a caller that keys its effect on that identity tears the
- *  effect down and fires it again — forever, on the one path (the shipping
- *  default) no test here ever exercises directly.
- *
- *  `true` (i.e. `?closed=1`), not the bare default: `includeClosed` is the
- *  only thing that drops `CoordStore.runs`'s `WHERE` clause, so it is the
- *  only call that can ever return a FINISHED run — the live `{type:'runs'}`
- *  frame is active-only by construction (`watch.ts`'s emitter calls
- *  `coord.runs()` with no options), and `api.runs()`'s own bare default
- *  matches it (reconciliation item 5: "a deliberate cold-start bandwidth
- *  choice … pass `?closed=1` for the archive view"). Without this, the
- *  board's own "Finished" group could never receive real data on a cold
- *  deep link — only ever from a test poking the store directly. */
-const loadRunsDefault = (): Promise<{ runs: RunSummary[] }> => api.runs(true);
-
-/** The caps dial's default reader, module-scope beside `loadRunsDefault` and
+/** The caps dial's default reader, module-scope like `useColdRuns.ts#loadColdRuns` and
  *  for the same reason: a stable identity rather than a fresh closure per
  *  render, so the control's own effect does not re-fire on every parent
  *  re-render. */
@@ -82,12 +62,12 @@ const loadCapsDefault = (): Promise<CoordCapsView> => api.coordCaps();
 const loadSpendDefault = (id: number): Promise<RunSpend> => api.run(id).then((r) => r.spend);
 
 import { RunRow } from './RunRow';
-import { useColdRuns } from './useColdRuns';
+import { loadColdRuns, useColdRuns } from './useColdRuns';
 
 
 export function RunsScreen({
   store = useFleetStore,
-  loadRuns = loadRunsDefault,
+  loadRuns = loadColdRuns,
   loadCaps = loadCapsDefault,
   loadSpend = loadSpendDefault,
 }: {

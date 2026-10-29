@@ -168,10 +168,13 @@ describe('workflow and package posture', () => {
     // The ceiling carries as much of this as the key does: `timeout-minutes:
     // 360` would satisfy a presence-only check while restating the default it
     // is supposed to replace.
-    for (const f of ['.github/workflows/ci.yml', '.github/workflows/release.yml', '.github/workflows/release-main.yml']) {
+    for (const f of ['.github/workflows/ci.yml', '.github/workflows/macos.yml', '.github/workflows/release.yml', '.github/workflows/release-main.yml']) {
       const jobs = jobBlocks(read(f));
       expect(jobs.size, `${f}: parsed no jobs at all`).toBeGreaterThan(0);
       for (const [name, block] of jobs) {
+        // A call of a reusable workflow cannot carry timeout-minutes; the called workflow's jobs do (macos.yml is in
+        // this list for that reason).
+        if (/^ {4}uses: \.\/\.github\/workflows\/[\w-]+\.yml$/m.test(block)) continue;
         const m = /^ {4}timeout-minutes: (\d+)$/m.exec(block);
         expect(m, `${f}: job \`${name}\` declares no timeout-minutes — it inherits 360`)
           .not.toBeNull();
