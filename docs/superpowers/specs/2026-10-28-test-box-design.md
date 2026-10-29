@@ -1,6 +1,6 @@
 # The test box: test runs off the fleet host, results streamed back to the session
 
-**Spec** · 2026-10-28 · Status: draft for review, rev 7 (the last design round). It designs #1695 (step 2 of moving test runs off the fleet
+**Spec** · 2026-10-28 · Status: draft for review, rev 7 and its close-out (no further design rounds). It designs #1695 (step 2 of moving test runs off the fleet
 host). It builds on #1694 (step 1: the capped tests slice, the fleet-wide admission queue and the `ccrc test` wrapper),
 which is not built yet; this spec names what it needs from step 1 in §3.1. Docs only: no code ships with it.
 
@@ -20,10 +20,13 @@ directory, root cleanup and caps plus a retry with backoff, makes `runs/<k>` roo
 the log and the reporter file outside the run directory, moves the npm settings into a root-owned `npmrc`, and
 splits the cost table by when each cost is paid. Rev 7 closes the last review's three points and ends the design
 rounds: the box installs the versions the fleet agent **measures on the fleet host** (node, npm, Chrome, python3, git,
-tmux), not versions recorded from CI; the box gets a new test-service release as the same signed tarball the fleet
-host installs, fetched from the release host on the update lane's signal and verified by the same signature check;
-and node downloads are verified against the node release keys shipped inside that ccrc release, not a keyring frozen
-at box setup (§2.10). What is still open goes to the build plan (§9).
+tmux), not versions recorded from CI, and the box gets a new test-service release as the same tarball the fleet
+host installs, fetched from the release host on the update lane's signal. The close-out (2026-10-29) makes §2.10 match
+the code and adds no key machinery: the box verifies a release exactly as the fleet host's update lane does today
+(`SHA256SUMS`, then the tarball's Sigstore provenance bundle through the installed `deploy/verify-provenance.mjs`,
+then the tarball's `MANIFEST`), a node download is checked against nodejs.org's `SHASUMS256.txt`, the new service takes
+over only after the tools are switched, and the only version difference that makes runs fall back is §2.4's version
+row; any smaller difference shows on the card only. What is still open goes to the build plan (§9).
 
 **Related:** #1694 (step 1), #1785 (test containment and its good-faith scope), #389 (the vitest worker cap in the
 session environment), #1752 (per-box sizes as ccrc settings, the pattern every key below follows), #1772 (the worktree
@@ -61,11 +64,13 @@ The test box is a second, separate box that runs those suites instead. The desig
   environment and an empty HOME. The run has loopback only; an install reaches a local registry proxy and nothing
   else. The session's environment is never forwarded (§2.3).
 - **Tools: the fleet host's own versions, installed by the update lane.** The fleet agent measures the node, npm,
-  Chrome, python3, git and tmux versions its host runs; rolling the fleet host also brings the box the same signed
-  release and installs exactly those versions from their official download hosts. A mismatch marks the box
-  `degraded`, and the card's **Bring tools up to date** runs the same step (§2.10).
-- **Fallback: the local slice, said out loud.** Remote off, box unreachable, a version mismatch, or a queue over its
-  limit: the wrapper runs the same command in step 1's slice and says why, in the first line and the last (§2.4).
+  Chrome, python3, git and tmux versions its host runs; rolling the fleet host also brings the box the same release,
+  verified as the fleet host's update lane verifies it, and installs exactly those versions from their official
+  download hosts. A mismatch marks the box `degraded`, and the card's **Bring tools up to date** runs the same step
+  (§2.10).
+- **Fallback: the local slice, said out loud.** Remote off, box unreachable, a tool version that differs at the
+  version row, or a queue over its limit: the wrapper runs the same command in step 1's slice and says why, in the
+  first line and the last (§2.4).
 - **GitHub CI keeps the full suites.** The full server suite is about 4.4 hours of file time (§1.1); it stays with the
   merge queue and `workflow_dispatch`. The test box takes single files, file sets under a time budget, the
   tests-inclusive typecheck, mutation loops and the browser tests (§2.5).
@@ -203,8 +208,8 @@ its destinations by host name, and nothing else is reachable apart from the tail
 |---|---|---|
 | `github.com` | the mirror fetch | the service |
 | the npm upstream (`CCRC_TESTBOX_REGISTRY_UPSTREAM`, default `registry.npmjs.org`) | packages and npm itself | the registry proxy only |
-| the release host, the one the fleet host's update lane fetches from | the signed ccrc release tarball (§2.10) | the tools unit only |
-| `nodejs.org` | the node release, its checksum file and that file's signature (§2.10) | the tools unit only |
+| the release host, the one the fleet host's update lane fetches from | the ccrc release tarball, its `SHA256SUMS` and its provenance bundle (§2.10) | the tools unit only |
+| `nodejs.org` | the node release and its checksum file (§2.10) | the tools unit only |
 | `storage.googleapis.com`, the Chrome for Testing download host | the Chrome for Testing build at the fleet host's version (§2.10) | the tools unit only |
 | the OS package mirror (`CCRC_TESTBOX_OS_MIRROR`, default the distribution's own) | python3, git, tmux, strace, jq and Chrome's system libraries (§2.10) | the tools unit only |
 
@@ -709,28 +714,32 @@ sessions get: `node --version`, `npm --version`, `"$CCRC_CHROME" --version` (a C
 part, because the answer that must match is the one the same session would get locally.
 
 **How the box gets a new test-service release.** The test service ships in the ccrc release tarball (§2.9). When the
-update lane rolls the fleet host to a release, it signals the box with a `tools.sync` frame naming that release (its
-version and its URL on the release host) and carrying the versions the agent measured. The service starts
-`ccrc-testbox-tools.service`, a static root unit whose fixed script reads only the spec the service wrote, checks each
-value against its format, and:
+update lane has finished rolling the fleet host to a release, it signals the box with a `tools.sync` frame naming that
+release's version and carrying the versions the agent measured. The service starts `ccrc-testbox-tools.service`, a
+static root unit whose fixed script reads only the spec the service wrote, checks each value against its format, and:
 
-1. fetches the same signed release tarball the fleet host installed from the release host and verifies it with the
-   same signature check the fleet host's update lane runs (the release signing key, installed at box setup as on the
-   fleet host); a tarball that fails the check is not unpacked. It installs the test service from it; the new service
-   takes over once the runs in progress end, and queued runs wait for it;
-2. downloads `node-v<version>-linux-x64.tar.xz`, `SHASUMS256.txt` and its signature `SHASUMS256.txt.sig` from
-   `nodejs.org`, checks the signature against the **node release keys shipped inside the release just verified** (the
-   release build keeps them current, so a new node signing key reaches the box with the release that needs it, never
-   from a keyring frozen at box setup), checks the tarball's sha256 from that file, and unpacks it to
-   `<tools>/node/<version>`, which keeps the release's `include/node` headers for `nodedir` (§2.2), then writes that
-   install's root-owned `npmrc`;
+1. fetches that release from the release host and verifies it **exactly as the fleet host's update lane does today**
+   (`_upd_resolve` and `_upd_fetch` in `ccd/ccrc`, covered by `ccrc-update-fetch.test.ts`): `SHA256SUMS` first, which
+   must name `ccrc-<version>.tar.gz` for the requested version; the tarball's sha256 against it; the tarball's Sigstore
+   provenance bundle (`<tarball>.sigstore.json`) through `deploy/verify-provenance.mjs` from the box's **installed**
+   tree, which checks the signature against the vendored Sigstore trusted root, the attested subject name, the OIDC
+   issuer and a certificate identity limited to this repository's release workflow for that tag; and after extraction
+   in a staging directory, the tree's `MANIFEST` and its `build.json` version. There is no release signing key to
+   install: the provenance is keyless, and the box holds no key of its own. A missing bundle refuses (the box has no
+   `--allow-unsigned`), and a release that fails any check is never installed. The verified tree stays staged until
+   step 6;
+2. downloads `node-v<version>-linux-x64.tar.xz` and `SHASUMS256.txt` from `nodejs.org` over HTTPS, checks the
+   tarball's sha256 from that file, and unpacks it to `<tools>/node/<version>`, which keeps the release's
+   `include/node` headers for `nodedir` (§2.2), then writes that install's root-owned `npmrc`;
 3. installs `npm@<version>` into that node prefix from the npm registry, through the registry proxy, checked against
    the registry's `dist.integrity`;
 4. downloads the Chrome for Testing `linux64` build at the measured version from its download host over HTTPS and
    unpacks it to `<tools>/chrome/<version>`, with its system libraries from the OS mirror;
 5. installs python3, git and tmux at the measured versions, and strace and jq at the distribution's, from the OS
    package mirror under the package manager's own signature check;
-6. switches `<tools>/current`, a directory of links naming one version of each, in a single rename.
+6. switches `<tools>/current`, a directory of links naming one version of each, in a single rename, and only then
+   installs the test service from the staged release; the new service takes over once the runs in progress end, and
+   queued runs wait for it. So a new service never runs on the previous tool set.
 
 A `tools.sync` whose release is the one installed and whose versions are the box's changes nothing.
 
@@ -742,9 +751,12 @@ service queues the new pristine builds as soon as the sync ends.
 
 **A mismatch is visible and has a control.** The status answer reports the release the box runs, its tool versions
 and the sync's state, and the fleet agent compares them with its own measurement. A box whose release or versions
-differ from the fleet host's is `degraded` with the reason `tools differ (<tool> <fleet host> vs <box>)`; when the
-difference reaches §2.4's version row, every wrapper on the fleet host falls back with that row, so a mismatch costs
-remote runs, never a wrong answer. A tool changed on the fleet host outside the lane shows up at the next poll the
+differ from the fleet host's is `degraded` with the reason `tools differ (<tool> <fleet host> vs <box>)`. The one rule
+for falling back is §2.4's version row (and its protocol row, for a service that speaks another protocol): a
+difference that reaches it makes every wrapper on the fleet host fall back with that row. Any difference below it (a
+node or python3 patch, an npm, git or tmux minor, a Chrome build, or a release whose protocol is unchanged, as in the
+window between the fleet host's roll and the box's sync) only shows on the card, as `degraded`, and runs stay
+remote. A tool changed on the fleet host outside the lane shows up at the next poll the
 same way. A sync that fails (a download, a signature or checksum, an OS mirror without the measured version) leaves
 `current` and the installed release on the previous set, marks the box `degraded` with
 `tool sync failed (<tool>: <detail>)`, and is retried with the pristine build's backoff (`CCRC_TESTBOX_PRISTINE_RETRY`).
@@ -766,10 +778,9 @@ If step 1 lands with another argv, §2.5 follows it.
 ### 3.2 Open PRs and order
 
 This PR adds one file under `docs/superpowers/specs/` and touches no other file, so it is line-disjoint from every open
-PR. The build that follows will touch `shared/switches.ts` (a row), `agent/` (a new entry point and op), the release
-build (the node release keys in the tarball, §2.10), the agent's tool-version measurement, the update lane (the
-`tools.sync` step), the Settings Automation section and the
-doctor checks; it lands after #1694, and its plan re-checks open PRs on those files then.
+PR. The build that follows will touch `shared/switches.ts` (a row), `agent/` (a new entry point and op), the agent's
+tool-version measurement, the update lane (the `tools.sync` step), the Settings Automation section and the doctor
+checks; it lands after #1694, and its plan re-checks open PRs on those files then.
 #1772's deps-shed arm and this design meet later: once typechecks and tests run remotely, a fleet worktree needs its
 `node_modules` only for local fallback runs, which makes shedding them cheaper. That is a follow-up, not part of this
 spec.
@@ -860,7 +871,7 @@ month per package.
 | a run's checkout stays whole across mirror `gc` (§2.1) | a service test: a fixture submission with a dirty tree is prepared, the mirror runs `git gc --prune=now`, and the run must pass with `git fsck` in its checkout reporting no missing object |
 | no run's result depends on an earlier run (§2.2) | the carry-over fixture test in §2.3; a fixture run killed mid-way whose directory the cleanup must still remove; and a pushed run id that already holds a ref, which the pre-receive hook must refuse whole |
 | a run with no pristine install for its key | a fixture lockfile with no pristine install: the run installs in its own copy and passes, the pristine install appears afterwards, and the next run with that lockfile clones it; a fixture lockfile whose install fails: the build is retried on the backoff, the card lists the key, the box is `degraded`, runs for that key still install in their copy, and the install directory is gone after every attempt |
-| the box's tools follow the fleet host's release (§2.10) | a service test against fixture download hosts: a `tools.sync` with a fixture release and new measured versions verifies the release's signature, checks node against the keys inside that release (a node checksum file signed by a key absent from it must fail), installs the versions, switches `current` in one rename, leaves a run that started before it on its old paths, and queues the new pristine builds; a checksum that does not match leaves `current` unchanged and marks the box `degraded` with `tool sync failed`; a status answer whose versions differ from the fleet host's makes the wrapper fall back with the version row; and the card's **Bring tools up to date** sends the same frame with the fleet host's release and measured versions, not the page's |
+| the box's tools follow the fleet host's release (§2.10) | a service test against fixture download hosts: a `tools.sync` with a fixture release and new measured versions verifies the release as `_upd_fetch` does (a tarball whose provenance bundle names another workflow, or is absent, must not install), installs the versions, switches `current` in one rename before the new service takes over, leaves a run that started before it on its old paths, and queues the new pristine builds; a checksum that does not match leaves `current` unchanged and marks the box `degraded` with `tool sync failed`; a status answer whose versions differ at §2.4's version row makes the wrapper fall back with that row, and one that differs only below it marks the box `degraded` and still runs remote; and the card's **Bring tools up to date** sends the same frame with the fleet host's release and measured versions, not the page's |
 | coding sessions see no test-run memory or CPU | on the fleet host a remote run costs a `status`, a `git add -A` that reuses the session's stat cache, one push and a stream: measured in the build as the wrapper's own peak RSS and CPU time, with a ceiling in a test, on a dirty tree and on one with a file over the cap (which must not be hashed); the tests slice stays empty while every run is remote |
 | no credentials reachable, no outbound network | the env, `/proc` and install fixture tests in §2.3 |
 | when the box is down, runs fall back and say so | a fixture test per row of §2.4's table: the reason in the first and last line, the local slice used, the exit status the local run's; for the budget row also the explicit `--remote` form, which must run nothing and exit 75; a box whose run root has no reflink reports `down`; and a fixture worktree with no `node_modules`, under each value of `CCRC_TESTBOX_FALLBACK_INSTALL` |
@@ -891,8 +902,9 @@ that option.
 - The box is rebuilt clean before it serves, the tailnet lets it reach nothing, and its egress is a named list
   (GitHub, the npm upstream, the release host and the tools' official download hosts), each name open only to the
   units that need it.
-- The box runs the fleet host's own release, verified as the fleet host verifies it, and the tool versions measured
-  on the fleet host; while they differ the box says so and every run falls back instead of getting a remote answer.
+- The box runs the fleet host's own release, verified as the fleet host's update lane verifies it, and the tool
+  versions measured on the fleet host; any difference shows on the card, and one that reaches §2.4's version row makes
+  every run fall back instead of getting a remote answer.
 - The server keeps one agent link and never reaches a third box.
 - The merge-queue CI stays the authority for landing, so even a wrong answer from the box cannot land a change.
 
@@ -901,7 +913,7 @@ that option.
 Everything else in this spec is design, settled by the reasons given where it is described. The transport (§2.1), the
 secrets rule (§2.3), the disposable runs with reflink clones of a pristine install on XFS (§2.2, from the
 2026-10-28 ruling) and the tools synced to the fleet host's measured versions with the release fetched and verified
-as the fleet host's (§2.10) are among those, so none is
+as the fleet host's update lane verifies it (§2.10) are among those, so none is
 a choice here. These are the choices the operator makes; each row names
 the recommended option first.
 
@@ -950,10 +962,12 @@ The build plan allocates a deviation number for each of these when it lands; unt
 - **Results and npm settings**: the live output and the reporter file are collected outside the run directory before
   cleanup; the registry, cache and `nodedir` come from a root-owned `npmrc`, never the run's environment (§2.2).
 - **Tools**: the fleet agent measures node, npm, Chrome, python3, git and tmux on the fleet host and the box installs
-  exactly those versions; on the update lane's signal the box fetches the same signed release tarball from the release
-  host and verifies it with the fleet host's signature check; node is verified against the node release keys shipped
-  in that release; the release host and the tools' download hosts are the only names added to the egress allowlist; a
-  mismatch marks the box `degraded`, falls every run back, and offers **Bring tools up to date** on the card (§2.10).
+  exactly those versions; on the update lane's signal the box fetches the same release tarball from the release host
+  and verifies it as `_upd_fetch` does (`SHA256SUMS`, the Sigstore provenance bundle through the installed
+  `verify-provenance.mjs`, `MANIFEST`), with no key of its own; node is checked against nodejs.org's `SHASUMS256.txt`;
+  the new service takes over only after `current` is switched; the release host and the tools' download hosts are the
+  only names added to the egress allowlist; a mismatch marks the box `degraded` and offers **Bring tools up to date**
+  on the card, and only a difference at §2.4's version or protocol row makes runs fall back (§2.10).
 - **Fallback**: the fallback checks (the budget, the version and protocol check, a `down` box and the prepare-phase
   failures among them), their printed reasons, the lost-run rule (`run.cancel`, then the local run) and the
   install-or-refuse rule for a worktree with no `node_modules` (§2.4).
@@ -974,7 +988,12 @@ This is the last design round. These minor points are settled in the build plan,
   add a hash the fleet agent records from its own install.
 - An OS mirror may not carry the fleet host's exact python3, git or tmux version; the sync then fails visibly (§2.10),
   and the plan decides whether the box tracks the fleet host's distribution release to avoid it.
-- How the new test service takes over from the old one while runs are in progress (§2.10, step 1), and the frame's
+- Step 1 of §2.10 runs the installed tree's `verify-provenance.mjs`, which needs a node and the server package's
+  production dependencies on the box; the plan names how box setup places the first verified release and which node
+  runs the verifier.
+- Node's `SHASUMS256.txt` is checked over HTTPS only; whether the box also checks its `.sig`, and where node's
+  release keys would come from, is the plan's (no code ships them today).
+- How the new test service takes over from the old one while runs are in progress (§2.10, step 6), and the frame's
   exact fields.
 - The agent's measurement runs with the sessions' `PATH`; the plan names where it reads that `PATH` from.
 - The box column of §4's cost table, replaced by measurements on the box.
