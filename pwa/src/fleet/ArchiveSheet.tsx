@@ -30,6 +30,7 @@ import {
 import { Button, QC_ACTIONS, QC_CONSEQUENCE, Sheet, toast } from '@ccrc/ui';
 import { ARCHIVE_REFUSAL_TEXT, ApiError, api, apiErrorText, archivePartial } from '../lib/api';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
+import { ensureSession } from '../session/useEnsure';
 import {
   CLAIMED_CONSEQUENCE, CLAIMED_TITLE, claimedSentence, isArchiveConflictRun, runPhrase,
   type ArchiveConflictRun,
@@ -48,7 +49,7 @@ export const isPutAway = (s: FleetSession): boolean => inArchivedFold(s) || s.bu
  *  ensured — `cmd_ensure` clears the stop stamp on the attempt and the row's own registry fields decide the respawn,
  *  exactly as Restart session does. ONE spelling, two callers. */
 export const restoreSession = (s: FleetSession): Promise<void> =>
-  restoreReachesEnsure(s) ? api.ensure(s.id) : api.restore(s.id);
+  restoreReachesEnsure(s) ? ensureSession(s.id) : api.restore(s.id);
 
 /** Whether this row's Restore is the SAME request as Restart session — `POST /ensure`, which a standing substrate
  *  fault refuses (spec §4): a main checkout. A workspace's Restore is `ws-restore`, a different verb, and stays
