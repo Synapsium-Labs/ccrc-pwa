@@ -4093,6 +4093,26 @@ fi
 # a heredoc inside backticks, likewise. A terminated heredoc BODY line that
 # begins `gh pr merge` is text and passes, unless an unquoted body runs it
 # inside `$(…)`.
+# WHAT PASSES UNPARSED, the `gh api` half (each pinned by a LISTED-pass case in
+# `session-hook-merge-deny.test.ts`, which looks for the phrase below in this list):
+#   - a query or body read from a file (`-F query=@mutation.graphql`,
+#     `--input body.json`, `cat f | gh api graphql --input -`): the file's text is
+#     never in the command;
+#   - a word or path assembled at run time (`q="merge""PullRequest"`, a path in a
+#     variable built from pieces, a `$(…)` with a blank in a path word such as
+#     `pulls/$(echo 42)/merge`, a backslash inside the word);
+#   - a variable or quoted command word (`$GH api …`, `"gh" api …`): the strip
+#     drops the quoted word, so no `gh … api` head is left to ask about;
+#   - a `gh alias` (`gh alias set m 'api -X PUT'`);
+#   - under the operator's allowance only, a repository gh resolves from ambient
+#     state rather than from the command: a working directory in another checkout
+#     left by an earlier call's `cd` (the Bash tool keeps its directory between
+#     calls; a `cd` in the same command is outside the grammar and refused), the
+#     checkout's git remotes, and the session's inherited environment (D-7249);
+#   - ways to move `main` that are not merges, out of this wave's scope and named
+#     as such: `gh api -X PATCH repos/<o>/<r>/git/refs/heads/<b>`, the GraphQL
+#     `updateRef`, `updateRefs` and `createCommitOnBranch` mutations, and `git
+#     push` to a protected branch.
 # The hook is a contract the fleet honours, not an access boundary (spec §4),
 # and identity on this box is attribution. A session with neither — a
 # coordinator's own, the operator's — is never asked THIS question (wave 2's), so
@@ -4134,20 +4154,45 @@ fi
 # landing `gh pr merge <n> --match-head-commit <sha>`, the read of the verdict
 # `gh pr view <n> --json state,mergedAt`, R9's door (the operator's own shell or
 # GitHub's UI) and the wide reading. Text with no merge head passes (`echo
-# --admin`, a commit message that names it). The `gh api` half of this wave (a
-# GraphQL merge mutation or a REST merge path) is the wave's second task: until
-# it lands each passes this deny, measured.
+# --admin`, a commit message that names it).
+#
+# THE gh api HALF. A `gh … api` call that reaches a merge is refused the same way,
+# in every session, by the same single jq and with the same reason prefix. Once the
+# STRIPPED text holds a real `gh … api` head (GH_API_RE: GH_MERGE_RE's head grammar
+# with `api` for `pr … merge`, derived from its text, so the two never drift) the
+# RAW command is asked for a mutation word (`w`: the fixed-string `contains` of any
+# of `mergePullRequest`, `enqueuePullRequest`, `enablePullRequestAutoMerge` or
+# `mergeBranch`, the set written once in the jq program) or a merge path (`p`: the
+# raw text with every `'` and `"` removed, so `pulls/"$n"/merge` and
+# `pulls/42/'merge'` are paths, tested for `pulls/<seg>/merge` or
+# `repos/<seg>/<seg>/merges`, each END-BOUNDED so `pulls/42/merges/x` is not one,
+# and possessive, so the test cannot backtrack). Any METHOD is refused, a GET
+# included (D-7112): a text-read GET exemption is defeated by a later `-X PUT` or a
+# `GET` inside a quoted field, and `gh pr view <n> --json state,mergedAt` answers
+# the same question, which the reason names. The wide reading is the same on
+# purpose (D-7111) and its cost is named in the reason's own sentence: a real `gh
+# api` head beside an unrelated mutation word (`gh api repos/o/r/pulls/42; echo
+# enqueuePullRequest`) is refused too; run them as separate commands. THE
+# ALLOWANCE NEVER LIFTS THIS HALF. Text with no `gh api` head passes (a commit
+# message, a PR body, a heredoc, a mail body that names a word or a path).
 #
 # THE VERDICT FLAGS. The strip's answer carries them, computed in the same jq.
 # Under the cap it is `=<flags><US><stripped>`, `<US>` the unit separator (0x1f)
-# and `<flags>` a string over `a` (the raw text holds the word `--admin`) and `s`
-# (the whole raw command matches ALLOW_ADMIN_RE, below). Over the cap it is
-# `!<bytes>:<kinds>`, `<kinds>` a comma-separated subset of `merge` (wave 2's
-# `ocwords`) and `admin` (`ocwords` AND the fixed string `--admin` anywhere in
-# the raw command; no `splits(` regex call is added). Over the cap wave 2's
-# reason fires only when `<kinds>` holds `merge`, the bypass question follows,
-# and the allowance never applies: `s` is computed in the under-cap branch only.
-# The bash side splits the answer with parameter expansion on `$'\x1f'`, no fork.
+# and `<flags>` a string over `a` (the raw text holds the substring `--admin`), `s`
+# (the whole raw command matches ALLOW_ADMIN_RE, below), `w` (the raw text holds a
+# mutation word) and `p` (the quote-free raw text holds a merge path), in that
+# order. Over the cap it is `!<bytes>:<kinds>`, `<kinds>` a comma-separated subset
+# of `merge` (wave 2's `ocwords`), `admin` (`ocwords` AND the fixed string
+# `--admin` anywhere in the raw command) and `api` (`ocapiwords`: one segment, from
+# the same fixed-string `ocsegs` split, holds the words `gh` then `api` as an
+# `ocafter` bounded word match reads them, AND the raw text holds a mutation word
+# or the fixed string `/merge`, which stands for BOTH paths over the cap: its
+# wider reach, any `gh … api` segment beside the text `/merge` anywhere, is part of
+# the named over-cap cost below). No `splits(` regex call is added. Over the cap
+# wave 2's reason fires only when `<kinds>` holds `merge`, the bypass question
+# follows (`admin` or `api`), and the allowance never applies: `s` is computed in
+# the under-cap branch only. The bash side splits the answer with parameter
+# expansion on `$'\x1f'`, no fork.
 #
 # THE OPERATOR'S ALLOWANCE (D-7249). On 2026-10-28 the operator ruled that one
 # hosted project keeps landing by admin merge. The lift is a regular file,
@@ -4177,8 +4222,9 @@ fi
 # substring prefilter costs no fork (`merge`, `Merge` and `enqueuePullRequest`:
 # bash glob tests are case-sensitive, and the last two names hold no lowercase
 # `merge`), and only a Bash payload carrying one of them pays the one jq for its
-# command, which also computes the flags (two fixed-string tests and one
-# anchored `test`, no new call). The hold is read through `_ct_read` and
+# command, which also computes the flags (four fixed-string tests, one anchored
+# `test` and one linear, possessive path `test` over the quote-free text; no new
+# call; the path test runs under the cap only, the four mutation tests on either side). The hold is read through `_ct_read` and
 # judged by `CCRC_HOLD_WAVE_RE` under `CCRC_HOLD_MAX` — the card's own reader,
 # shape and bound — so an absent, unreadable, empty, oversized or non-wave hold
 # is not a worker wave, exactly as the card declines to call it one; such a
@@ -4259,7 +4305,8 @@ fi
 # wave hold and no child marker is never refused ON ITS ACCOUNT, under the cap
 # or over it. The bypass question (wave 2b) is asked of every session, and over
 # the cap it is refused when the raw text also holds `--admin` (the `admin`
-# kind, above). THE VALUE IS MEASURED: the largest round size at which the worst quote-dense shape
+# kind, above) or an api command (the `api` kind, above: the fixed `/merge` stands
+# for both REST paths there, D-7115). THE VALUE IS MEASURED: the largest round size at which the worst quote-dense shape
 # measured costs about a quarter of `session-hook-sync-advisory.test.ts`'s
 # 1500 ms whole-hook bound. That shape is a run of quoted substitutions that
 # each hold a quote or a `<` (`"$(<)"` repeated), one nested strip per span:
@@ -4271,9 +4318,12 @@ fi
 # escapes keep it one segment), a trailing `# comment`, a PR body that quotes or
 # merely mentions them in that order. It stays refused until it is split,
 # rephrased, or moved into a file. Since wave 2b the same cost falls on EVERY
-# session whose over-cap raw text also holds `--admin` anywhere (D-7115): the
-# reason says to split the command or pass the text as a file, and gives both
-# byte counts. The coordinator accepted it (ruling 3510): of
+# session whose over-cap raw text also holds `--admin` anywhere (D-7115), or, for
+# the `api` kind, a segment that names `gh` then `api` as words beside a mutation
+# word or the text `/merge` anywhere in the command (a wider reach than the
+# under-cap paths: `/merge` stands for both, and prose can hold it): the
+# reason says to split the command or pass the text as a file, says the hook
+# cannot tell prose from a command over the cap, and gives both byte counts. The coordinator accepted it (ruling 3510): of
 # 3,537 over-cap fleet commands in another two-day window, the segment rule
 # refuses at most 12 more than a word-bounded three-word match would (that count
 # measured the three word tests unordered; the in-order search is stricter). No
@@ -4312,6 +4362,12 @@ fi
 # heredoc.
 MERGE_PARSE_CAP=2048
 GH_MERGE_RE=$'(^|[;&|(\n]|\\$\\()[ \t]*(([!{]|if|then|do|else|elif|while|until|time|env|command|exec|nohup|sudo)[ \t]+|timeout[ \t]+([^[:space:];&|()]|\\$\\(\\(?[^;&|()\n]*\\)?\\))+[ \t]+|[A-Za-z_][A-Za-z0-9_]*=([^[:space:];&|()]|\\$\\(\\(?[^;&|()\n]*\\)?\\))*[ \t]+)*([^[:space:];&|()]*/)?gh([ \t]+-([^[:space:];&|()]|\\$\\(\\(?[^;&|()\n]*\\)?\\))+([ \t]+([^-[:space:];&|()]|\\$\\(\\(?[^;&|()\n]*\\)?\\))([^[:space:];&|()]|\\$\\(\\(?[^;&|()\n]*\\)?\\))*)?)*[ \t]+pr([ \t]+-([^[:space:];&|()]|\\$\\(\\(?[^;&|()\n]*\\)?\\))+([ \t]+([^-[:space:];&|()]|\\$\\(\\(?[^;&|()\n]*\\)?\\))([^[:space:];&|()]|\\$\\(\\(?[^;&|()\n]*\\)?\\))*)?)*[ \t]+merge([[:space:];&|()<>]|$)'
+# GH_API_RE: the same head grammar with `api` for `pr … merge`, DERIVED from GH_MERGE_RE's own text so the two never
+# drift. GH_MERGE_RE is `<head>[ \t]+pr(<gh flags>)*[ \t]+merge<end>`, and `[ \t]+pr(` (GH_API_CUT, a blank class
+# then `pr(`, spelled with a real tab as GH_MERGE_RE spells it) occurs once in it, right after the head, so cutting
+# there leaves the head alone. The cut is quoted so the brackets are literal in the pattern, not a glob class.
+GH_API_CUT=$'[ \t]+pr('
+GH_API_RE=${GH_MERGE_RE%%"$GH_API_CUT"*}$'[ \t]+api([[:space:];&|()<>]|$)'
 # ALLOW_ADMIN_RE (D-7249): the allowance's grammar, defined ONCE and handed to the strip's single jq as
 # `--arg allow`. Oniguruma: `\A` and `\z` anchor the whole raw command, `[ \t\n]*` is folded in at both
 # ends (jq 1.6 and 1.7 have no `trim`), digits are `[0-9]+` (never `\d`), and each word of the set is told
@@ -4367,8 +4423,17 @@ def ocafter($re): . as $s | [match($re)] | if length == 0 then empty else $s[.[0
 def ocmerge: ocafter("(^|[^A-Za-z0-9_])gh(?=\\s)") | ocafter("\\spr(?=\\s|$)") | ocafter("\\smerge($|[\\s`()<>])");
 def ocwords: contains("gh") and contains("merge")
   and any(ocsegs[] | select(contains("gh") and contains("merge")) | ocmerge; true);
-def ockinds: if ocwords then (["merge"] + (if contains("--admin") then ["admin"] else [] end) | join(",")) else "" end;
-def vflags: (if contains("--admin") then "a" else "" end) + (if test($allow) then "s" else "" end);
+def ocapi: ocafter("(^|[^A-Za-z0-9_])gh(?=\\s)") | ocafter("\\sapi($|[\\s`()<>])");
+def MUT: ["mergePullRequest", "enqueuePullRequest", "enablePullRequestAutoMerge", "mergeBranch"];
+def mutword: . as $s | any(MUT[]; . as $w | $s | contains($w));
+def ocapiwords: contains("gh") and contains("api") and (mutword or contains("/merge"))
+  and any(ocsegs[] | select(contains("gh") and contains("api")) | ocapi; true);
+def ockinds: (ocwords) as $m | (ocapiwords) as $a
+  | [(if $m then "merge" else empty end), (if $m and contains("--admin") then "admin" else empty end), (if $a then "api" else empty end)] | join(",");
+def unq: split($q) | join("") | split("\"") | join("");
+def mergepath: "pulls/[^[:space:]/]++/merge(?![A-Za-z0-9_-])|repos/[^[:space:]/]++/[^[:space:]/]++/merges(?![A-Za-z0-9_-])";
+def vflags: (if contains("--admin") then "a" else "" end) + (if test($allow) then "s" else "" end)
+  + (if mutword then "w" else "" end) + (if (unq | test(mergepath)) then "p" else "" end);
 def capped(f): (.tool_input.command // "") as $c
   | if ($c | type) == "string" and ($c | utf8bytelength) > $cap
     then ($c | ockinds) as $k | (if $k == "" then "" else "!\($c | utf8bytelength):\($k)" end)
@@ -4378,19 +4443,25 @@ if [[ "$event" == PreToolUse && "${tool:-}" == Bash \
       && ( "$payload" == *merge* || "$payload" == *Merge* || "$payload" == *enqueuePullRequest* ) \
       && "$pre_json" != *'"permissionDecision":"deny"'* ]]; then
   mout=$(jq -r --arg q "'" --argjson cap "$MERGE_PARSE_CAP" --arg allow "$ALLOW_ADMIN_RE" "$MERGE_STRIP_JQ" <<<"$payload" 2>/dev/null) || mout=""
-  mcmd="" mover="" mkinds="" mflags="" mmerge="" mbypass=""
+  mcmd="" mover="" mkinds="" mflags="" mmerge="" mbypass="" mapi="" madmin=""
   case "$mout" in
     '='*$'\x1f'*) mflags=${mout%%$'\x1f'*}; mflags=${mflags#=}; mcmd=${mout#*$'\x1f'} ;;
     '!'*:*) mover=${mout#!}; mkinds=${mover#*:}; mover=${mover%%:*} ;;
   esac
-  # Wave 2's question concerns a merge; the bypass question concerns `--admin` (and Task 2's api kinds).
+  # Wave 2's question concerns a merge. The bypass question concerns `--admin` on a merge (madmin) and a
+  # `gh api` call that reaches a merge (mapi); the allowance may lift the first and never the second.
   if [[ -n "$mover" ]]; then
     case ",$mkinds," in *,merge,*) mmerge=1 ;; esac
-    case ",$mkinds," in *,admin,*) mbypass=1 ;; esac
-  elif [[ -n "$mcmd" && "$mcmd" =~ $GH_MERGE_RE ]]; then
-    mmerge=1
-    if [[ "$mflags" == *a* ]]; then mbypass=1; fi
+    case ",$mkinds," in *,admin,*) madmin=1 ;; esac
+    case ",$mkinds," in *,api,*) mapi=1 ;; esac
+  elif [[ -n "$mcmd" ]]; then
+    if [[ "$mcmd" =~ $GH_MERGE_RE ]]; then
+      mmerge=1
+      if [[ "$mflags" == *a* ]]; then madmin=1; fi
+    fi
+    if [[ ( "$mflags" == *w* || "$mflags" == *p* ) && "$mcmd" =~ $GH_API_RE ]]; then mapi=1; fi
   fi
+  if [[ -n "$madmin" || -n "$mapi" ]]; then mbypass=1; fi
   if [[ -n "$mmerge" || -n "$mbypass" ]]; then
     mwhy="" mreason=""
     if [[ -n "$mmerge" ]]; then
@@ -4411,20 +4482,29 @@ if [[ "$event" == PreToolUse && "${tool:-}" == Bash \
       # exactly one admin merge (`s`). The session's project is read from its own registry row, never
       # from the id or the cwd: absent, empty, unreadable or off-class reads as not allowed. No fork.
       mallow=""
-      if [[ -z "$mover" && "$mflags" == *s* ]] && _ct_read "$REG/$id.project" && [[ -n "$CT_V" ]]; then
+      if [[ -z "$mover" && -z "$mapi" && "$mflags" == *s* ]] && _ct_read "$REG/$id.project" && [[ -n "$CT_V" ]]; then
         case "$CT_V" in
           *[!$CCRC_PROJ_CLASS]*) ;;
           *) if (( ${#CT_V} <= CCRC_PROJ_MAX )) && [[ -f "$REG/admin-merge-allowed/$CT_V" && ! -L "$REG/admin-merge-allowed/$CT_V" ]]; then mallow=1; fi ;;
         esac
       fi
       if [[ -n "$mover" ]]; then
-        mreason="ccrc: \`--admin\` and \`gh api\` merges are refused in every session, and this command is $mover bytes, over the deny's $MERGE_PARSE_CAP-byte parse cap, and its raw text reads as a \`gh … pr … merge\` command that names \`--admin\`: the hook cannot tell prose from a command over the cap, so it refuses the text."
+        # What the over-cap text reads as: a merge naming `--admin`, a `gh … api` call naming a mutation or `/merge`, or both.
+        mread=""
+        if [[ -n "$madmin" ]]; then mread="a \`gh … pr … merge\` command that names \`--admin\`"; fi
+        if [[ -n "$mapi" ]]; then mread+="${mread:+ and }a \`gh … api\` command that names a merge mutation or \`/merge\`"; fi
+        mreason="ccrc: \`--admin\` and \`gh api\` merges are refused in every session, and this command is $mover bytes, over the deny's $MERGE_PARSE_CAP-byte parse cap, and its raw text holds $mread: the hook cannot tell prose from a command over the cap, so it refuses the text."
         mreason+=" Split it into commands of at most $MERGE_PARSE_CAP bytes, or write the text with the Write tool and pass it as a file (\`--body-file <file>\` for \`gh pr create\`, \`ccrc-api mail send --json <file>\` for a mail), which keeps the command short."
         mreason+=" A landing is \`gh pr merge <n> --match-head-commit <sha>\`, which enqueues the PR; a bypass is R9's door, the operator's own shell or GitHub's UI."
       elif [[ -z "$mallow" ]]; then
         mreason="ccrc: \`--admin\` and \`gh api\` merges are refused in every session: the merge queue is how a PR lands, and a bypass of it is not a session's to take (landing-order spec §5.2)."
         mreason+=" Land a PR with \`gh pr merge <n> --match-head-commit <sha>\`, which enqueues it, and read whether it merged with \`gh pr view <n> --json state,mergedAt\`. A bypass is R9's door: the operator's own shell or GitHub's UI."
-        mreason+=" Note that the whole command is read, quoted text included, once it holds a merge or api command, so a real \`gh pr merge\` and an unrelated \`--admin\` in one command is refused too: run them as separate commands."
+        if [[ -n "$mapi" ]]; then
+          mreason+=" A \`gh api\` call is refused when its command names a merge mutation (\`mergePullRequest\`, \`enqueuePullRequest\`, \`enablePullRequestAutoMerge\`, \`mergeBranch\`) or a merge path (\`repos/<o>/<r>/pulls/<n>/merge\`, \`repos/<o>/<r>/merges\`), by any method, a GET included: the hook cannot tell a read of the merge path from a write, so \`gh pr view <n> --json state,mergedAt\` is how a session asks whether a PR merged."
+          mreason+=" Note that the whole command is read, quoted text included, once it holds a \`gh api\` or merge command, so a real \`gh api\` call and an unrelated mention of a mutation word or merge path in one command is refused too: run them as separate commands."
+        else
+          mreason+=" Note that the whole command is read, quoted text included, once it holds a merge or api command, so a real \`gh pr merge\` and an unrelated \`--admin\` in one command is refused too: run them as separate commands."
+        fi
       fi
     fi
     if [[ -n "$mreason" ]]; then

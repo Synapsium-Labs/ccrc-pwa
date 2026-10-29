@@ -3,10 +3,12 @@
  * session hook's PreToolUse arm DENIES `gh pr merge` in a session whose hold
  * names a programme wave, and in any workspace that carries the child marker
  * (`$REG/<id>.child`, which only a dispatch writes) — a child whose run has
- * let it go keeps its pane until the reclaim, and it is still a worker. Every
- * other session's merge passes: the coordinator's `gh pr merge <n>
- * --match-head-commit <sha>` is how it enqueues. A deny never replaces the
- * graph gate's, which has already counted the denial it prints (D-1689).
+ * let it go keeps its pane until the reclaim, and it is still a worker. A merge
+ * without `--admin` passes outside a held or child session: the coordinator's
+ * `gh pr merge <n> --match-head-commit <sha>` is how it enqueues. `--admin` and
+ * `gh api` merges (wave 2b, the describes below) are refused in every session.
+ * A deny never replaces the graph gate's, which has already counted the denial
+ * it prints (D-1689).
  *
  * Runs `ccd/session-hook.sh` for real in a fixture HOME, the way
  * `session-hook.test.ts` does: a stub `tmux` answers the session name, stdin
@@ -734,6 +736,43 @@ const S_UNSET = [
 /** Wave 2's reason for a hold, byte for byte. */
 const waveReason = (h: string): string => `ccrc: this workspace's hold reads \`${h}\` — a programme wave's session, and a wave's session never merges (landing-order R5: the coordinator merges, workers never do). Report wave-done to your coordinator; it lands the PR.`;
 
+// ---- the gh api half (Task 2) ----
+/** The four GraphQL mutations that merge or enqueue; two of them hold no lowercase `merge`. */
+const MUTATIONS = ['mergePullRequest', 'enqueuePullRequest', 'enablePullRequestAutoMerge', 'mergeBranch'];
+const gqlMutation = (word: string): string => `gh api graphql -f query='mutation { ${word}(input: {pullRequestId: "x"}) { clientMutationId } }'`;
+
+const LIFECYCLE = path.resolve(__dirname, '../../ccd/coordinator-skill/references/wave-lifecycle.md');
+/** Review Focus 1's first source: every backticked `gh …` span of the lifecycle reference's paragraph
+ *  "Landing on a native-queue project", extracted by its anchors, never retyped. A span may wrap across
+ *  a line break in the Markdown, so the paragraph's lines are trimmed and joined with a space first. */
+const landingSpans = (): string[] => {
+  const lines = fs.readFileSync(LIFECYCLE, 'utf8').split('\n');
+  const from = lines.findIndex((l) => l.includes('**Landing on a native-queue project**'));
+  const to = lines.findIndex((l, i) => i > from && l.includes('**Same project:**'));
+  if (from < 0 || to < 0) throw new Error('the lifecycle reference no longer has the paragraph "Landing on a native-queue project" before "Same project:"');
+  const text = lines.slice(from, to).map((l) => l.trim()).join(' ');
+  const spans = [...text.matchAll(/`([^`]+)`/g)].map((m) => m[1] as string).filter((s) => s.startsWith('gh '));
+  if (spans.length === 0) throw new Error('the landing paragraph spells no backticked `gh` command');
+  return spans;
+};
+/** Review Focus 1's second source: the landing verdict block, the fenced bash block that follows the
+ *  `### 5b` heading, from the line that begins `( # The landing verdict` to before its closing fence. */
+const verdictBlock = (): string => {
+  const lines = fs.readFileSync(LIFECYCLE, 'utf8').split('\n');
+  const heading = lines.findIndex((l) => l.startsWith('### 5b'));
+  const start = lines.findIndex((l, i) => i > heading && l.startsWith('( # The landing verdict'));
+  const end = lines.findIndex((l, i) => i > start && l.startsWith('```'));
+  if (heading < 0 || start < 0 || end < 0) throw new Error('the lifecycle reference no longer has the landing verdict block under "### 5b"');
+  return lines.slice(start, end).join('\n');
+};
+
+/** `bash()` with the wall time of the call. */
+const timed = (command: string): { deny: string | null; ms: number } => {
+  const t0 = Date.now();
+  const r = bash(command);
+  return { deny: r.deny, ms: Date.now() - t0 };
+};
+
 describe('the bypass deny (wave 2b)', () => {
   beforeAll(() => { homePrefix = 'ccrc-bypass-'; });
   afterAll(() => { homePrefix = 'ccrc-mergedeny-'; });
@@ -773,6 +812,9 @@ describe('the bypass deny (wave 2b)', () => {
     ['gh pr merge --admin 42'], ['gh pr merge 42 --admin=true'], ["gh pr merge 42 '--admin'"], ['gh pr merge 42 "--admin"'],
     ['gh pr merge 42 --match-head-commit "$(git rev-parse HEAD)" --admin'], ['gh pr merge $(echo 42) --admin'],
     ['gh pr merge 42 \\\n  --admin'],
+    // The wide `a` reading: the flag is the raw SUBSTRING `--admin`, not the word, so a flag that
+    // only begins with it is refused too (D-7111). A false refusal here is the named cost.
+    ['gh pr merge 42 --admin-foo'],
   ])('refuses the --admin spelling the raw text shows: %j', (c) => {
     expect(bash(c).deny, `not denied: ${c}`).not.toBeNull();
   });
@@ -914,6 +956,24 @@ describe('the bypass deny (wave 2b)', () => {
       hold(WAVE_HOLD);
       expect(bash(ADMIN).deny).toBe(waveReason(WAVE_HOLD));
     });
+
+    it('never lifts the gh api half: from an allowed session a REST merge call alone is refused', () => {
+      project('proj-a');
+      allow('proj-a');
+      expect(bash('gh pr merge 42 --admin').deny, 'the fixture must be an allowed session').toBeNull();
+      const d = bash('gh api -X PUT repos/o/r/pulls/42/merge').deny;
+      expect(d, 'the allowance lifted the gh api half').not.toBeNull();
+      expect(d).toMatch(/^ccrc: `--admin` and `gh api` merges are refused in every session/);
+      expect(bash(gqlMutation('enqueuePullRequest')).deny, 'the allowance lifted a GraphQL mutation').not.toBeNull();
+    });
+
+    it('lets an allowed session\'s admin merge through from another checkout: the repository gh resolves from ambient state is a LISTED pass (D-7249)', () => {
+      project('proj-a');
+      allow('proj-a');
+      const other = path.join(home, 'another-checkout');
+      fs.mkdirSync(other);
+      expect(bash('gh pr merge 42 --admin', false, other).deny, 'the listed pass was refused: update the hook header\'s list').toBeNull();
+    });
   });
 
   describe('over the cap, every session is asked', () => {
@@ -949,6 +1009,289 @@ describe('the bypass deny (wave 2b)', () => {
       expect(d).toContain(WAVE_HOLD);
       expect(d).toContain('the coordinator merges, workers never do');
       expect(d).toContain('A landing is the operator\'s, from their own shell.');
+    });
+  });
+
+  // ---- the gh api half (landing-order wave 2b, Task 2) ----
+  // A `gh … api` command head whose RAW text names one of four GraphQL mutations (`w`) or one of two
+  // REST merge paths, quotes removed (`p`), is refused in every session by any method, a GET included.
+  // The allowance never lifts it. The classes it cannot read are LISTED passes, each pinned below.
+  describe('the gh api deny', () => {
+    const hookText = fs.readFileSync(HOOK, 'utf8');
+    const heredocQuery = (word: string): string =>
+      `gh api graphql --input - <<'EOF'\n{"query":"mutation { ${word}(input: {pullRequestId: \\"x\\"}) { clientMutationId } }"}\nEOF`;
+
+    it('refuses each mutation word, the two with no lowercase merge included', () => {
+      for (const word of MUTATIONS) {
+        const forms = [
+          gqlMutation(word),
+          `gh api graphql --raw-field query='mutation { ${word}(input: {pullRequestId: "x"}) { clientMutationId } }'`,
+          heredocQuery(word),
+        ];
+        for (const c of forms) {
+          const d = bash(c).deny;
+          expect(d, `not denied: ${JSON.stringify(c)}`).not.toBeNull();
+          expect(d).toMatch(/^ccrc: `--admin` and `gh api` merges are refused in every session/);
+        }
+      }
+    });
+
+    it('writes the mutation set once, in the jq program', () => {
+      const program = stripProgram();
+      for (const word of MUTATIONS) expect(program.split(word).length - 1, `${word} must appear once in the strip's program`).toBe(1);
+    });
+
+    it('refuses either path by any method', () => {
+      for (const c of [
+        'gh api -X PUT repos/o/r/pulls/42/merge', 'gh api --method PUT "repos/{owner}/{repo}/pulls/42/merge"',
+        'gh api repos/o/r/pulls/42/merge -f merge_method=squash',
+        'gh api -X GET -X PUT repos/o/r/pulls/42/merge', "gh api -X PUT repos/o/r/pulls/42/merge -f commit_title='-X GET'",
+        'gh api --method GET repos/o/r/pulls/42/merge',
+        'gh api -X POST repos/o/r/merges -f base=main -f head=x',
+        'gh api -X PUT repos/o/r/pulls/"$n"/merge', "gh api -X PUT repos/o/r/pulls/42/'merge'",
+      ]) expect(bash(c).deny, `not denied: ${c}`).not.toBeNull();
+    });
+
+    it('names the substitute for the GET it refuses, and its own sentence for the wide reading', () => {
+      const d = bash('gh api --method GET repos/o/r/pulls/42/merge').deny;
+      expect(d).toContain('gh pr view <n> --json state,mergedAt');
+      expect(d).toContain('a GET included');
+      expect(d).toContain('the whole command is read');
+    });
+
+    it('passes every read of the landing route, extracted by anchor from the lifecycle reference', () => {
+      const spans = landingSpans();
+      expect(spans.some((s) => s.startsWith('gh api graphql')), 'the queue read-back is among the spans').toBe(true);
+      expect(spans.some((s) => s.startsWith('gh pr merge <pr> --match-head-commit')), 'the enqueue is among the spans').toBe(true);
+      for (const sp of spans) {
+        const substituted = sp.replace(/<pr>/g, '42').replace(/<handoffCommit>/g, SHA);
+        for (const f of [sp, substituted]) expect(bash(f).deny, `the landing route was refused: ${f}`).toBeNull();
+      }
+    });
+
+    it('passes the landing verdict block whole, in a session with no hold and in a held one, and each of its gh api lines alone', () => {
+      const block = verdictBlock();
+      // Its comments name `--admin`, and it is over the cap: the over-cap reading must still pass it.
+      expect(block).toContain('--admin');
+      expect(Buffer.byteLength(block), 'the block is over the cap').toBeGreaterThan(CAP);
+      expect(bash(block).deny, 'the whole verdict block was refused with no hold').toBeNull();
+      const apiLines = block.split('\n').filter((l) => l.includes('gh api'));
+      expect(apiLines.length, 'the verdict block no longer holds a gh api read').toBeGreaterThan(0);
+      for (const l of apiLines) expect(bash(l).deny, `a verdict gh api read was refused: ${l}`).toBeNull();
+      hold(WAVE_HOLD);
+      expect(bash(block).deny, 'a held coordinator runs the verdict, and it was refused').toBeNull();
+    });
+
+    it.each([
+      ['gh api repos/o/r/pulls/42'],
+      ['gh api repos/o/r/pulls/42/merges/x'], // not end-bounded, so not the path
+      ['gh api repos/o/r/pulls/42/merge-queue'],
+      ['gh api graphql -F p=42 -f query=\'query { repository(owner: "o", name: "r") { pullRequest(number: 42) { mergeQueueEntry { state } } } }\''],
+      ['gh api repos/o/r/pulls/42 --jq .merged_at # merge state'],
+    ])('passes a read that is not a merge call: %j', (c) => {
+      expect(bash(c).deny, `refused: ${c}`).toBeNull();
+    });
+
+    it('passes a mutation word or a path in text that has no gh api head', () => {
+      for (const c of [
+        'git commit -m "never call enqueuePullRequest by hand"',
+        "gh pr create --title t --body-file - <<'EOF'\nThe hook refuses mergePullRequest, enqueuePullRequest, enablePullRequestAutoMerge and mergeBranch,\nand the paths repos/o/r/pulls/42/merge and repos/o/r/merges.\nEOF",
+        "ccrc-api mail send --json - <<'J'\n{\"body\":\"gh api -X PUT repos/o/r/pulls/42/merge and enqueuePullRequest are refused\"}\nJ",
+        'gh pr create --title t --body "uses gh api repos/o/r/pulls/42/merge"',
+        'echo gh api -X PUT repos/o/r/pulls/42/merge', 'grep -rn "enablePullRequestAutoMerge" docs',
+        'cat <<EOF\ngh api -X PUT repos/o/r/pulls/42/merge\nEOF',
+      ]) expect(bash(c).deny, `refused: ${c}`).toBeNull();
+    });
+
+    it('the wide reading\'s cost, named: a real gh api call and an unrelated mutation word in one command is refused', () => {
+      const d = bash('gh api repos/o/r/pulls/42; echo enqueuePullRequest').deny;
+      expect(d, 'a real gh api head beside an unrelated mutation word went through').not.toBeNull();
+      expect(d).toContain('a real `gh api` call and an unrelated mention of a mutation word or merge path in one command is refused too');
+    });
+
+    // The classes the hook cannot read, each passing and each named in the hook header's
+    // WHAT PASSES UNPARSED list (the phrase is searched for there), so a later change that closes one
+    // turns this case red and updates the list.
+    it.each([
+      ['gh api graphql -F query=@mutation.graphql', 'a query or body read from a file'],
+      ['gh api graphql --input body.json', 'a query or body read from a file'],
+      ['cat f | gh api graphql --input -', 'a query or body read from a file'],
+      ['q="merge""PullRequest"; gh api graphql -f query="mutation { $q }"', 'a word or path assembled at run time'],
+      ['gh api -X PUT repos/o/r/pulls/$(echo 42)/merge', 'a word or path assembled at run time'],
+      ['gh api -X PUT repos/o/r/pulls/42/m\\erge', 'a word or path assembled at run time'],
+      ['$GH api -X PUT repos/o/r/pulls/42/merge', 'a variable or quoted command word'],
+      ['"gh" api -X PUT repos/o/r/pulls/42/merge', 'a variable or quoted command word'],
+      ["gh alias set m 'api -X PUT'", 'a `gh alias`'],
+      ['gh api -X PATCH repos/o/r/git/refs/heads/main -f sha=x', 'ways to move `main` that are not merges'],
+      ['gh api graphql -f query=\'mutation { updateRef(input: {refId: "x", oid: "y"}) { clientMutationId } }\'', 'ways to move `main` that are not merges'],
+      ['git push origin HEAD:main', 'ways to move `main` that are not merges'],
+    ])('LISTED pass: %j (%s)', (c, cls) => {
+      expect(bash(c).deny, 'the listed pass was refused: update the hook header\'s list').toBeNull();
+      expect(hookText, `the hook header's WHAT PASSES UNPARSED list does not name the class "${cls}"`).toContain(cls);
+    });
+
+    it('the head grammar is GH_MERGE_RE\'s with `api` for `pr … merge`, derived from its text', () => {
+      const defs = ['GH_MERGE_RE', 'GH_API_CUT', 'GH_API_RE'].map((n) => {
+        const m = new RegExp(`^${n}=.*$`, 'm').exec(hookText);
+        if (m === null) throw new Error(`the hook no longer defines ${n} on one line`);
+        return m[0];
+      }).join('\n');
+      const run = (script: string, ...args: string[]): string => {
+        const r = spawnSync('bash', ['-c', `${defs}\n${script}`, 'x', ...args], { encoding: 'utf8' });
+        expect(r.status, r.stderr).toBe(0);
+        return r.stdout;
+      };
+      const [mergeRe, apiRe] = run('printf "%s\\0%s" "$GH_MERGE_RE" "$GH_API_RE"').split('\0') as [string, string];
+      const headEnd = apiRe.indexOf('[ \t]+api(');
+      expect(headEnd, 'the api tail follows the head').toBeGreaterThan(0);
+      expect(mergeRe.startsWith(apiRe.slice(0, headEnd)), 'GH_API_RE\'s head is GH_MERGE_RE\'s, character for character').toBe(true);
+      expect(apiRe.slice(0, headEnd)).not.toContain('[ \t]+pr(');
+      const verdicts = (cmds: string[]): boolean[] =>
+        run('for c in "$@"; do if [[ "$c" =~ $GH_API_RE ]]; then echo 1; else echo 0; fi; done', ...cmds).trim().split('\n').map((x) => x === '1');
+      const yes = ['gh api x', 'GH_TOKEN=x gh -R o/r api x', 'env gh api x', 'gh api', 'echo ok; gh api x', 'x=$(gh api y)', 'timeout 60 gh api x',
+        '/usr/bin/gh api x', 'gh --hostname h api x', 'gh api;echo'];
+      const no = ['gh apix', 'gh pr view', 'echo gh api x', 'ghx api x', 'gh pr merge 42', 'gh alias set m api', 'gh -R o/r pr view api'];
+      expect(verdicts(yes), `matched: ${yes.join(' | ')}`).toEqual(yes.map(() => true));
+      expect(verdicts(no), `matched: ${no.join(' | ')}`).toEqual(no.map(() => false));
+    });
+
+    it('answers the api flags from the raw text: `w` for a mutation word, `p` for a path with its quotes removed', () => {
+      expect(flagsOf('gh api graphql -f query=\'mutation { mergeBranch }\'')).toContain('w');
+      expect(flagsOf('gh api -X PUT repos/o/r/pulls/42/merge')).toContain('p');
+      expect(flagsOf('gh api --method PUT "repos/{owner}/{repo}/pulls/42/merge"'), 'the path is read from the raw text, quotes removed').toContain('p');
+      expect(flagsOf("gh api -X PUT repos/o/r/pulls/42/'merge'")).toContain('p');
+      expect(flagsOf('gh api -X POST repos/o/r/merges')).toContain('p');
+      expect(flagsOf('gh api repos/o/r/pulls/42/merges/x'), 'not end-bounded').not.toContain('p');
+      expect(flagsOf('gh api repos/o/r/pulls/42')).not.toMatch(/[wp]/);
+    });
+  });
+
+  describe('over the cap, the gh api kind', () => {
+    const pad = (n: number): string => sized('pad ', '', n);
+    it('refuses an over-cap REST merge call, answering inside the existing bound', () => {
+      const c = over('gh api -X PUT repos/o/r/pulls/42/merge');
+      expect(strip(c)).toBe(`!${Buffer.byteLength(c)}:api`);
+      const r = timed(c);
+      expect(r.deny, 'an over-cap REST merge went through').not.toBeNull();
+      expect(r.deny).toMatch(/^ccrc: `--admin` and `gh api` merges are refused in every session/);
+      expect(r.deny).toContain(`${Buffer.byteLength(c)} bytes`);
+      expect(r.deny).toContain(`${CAP}-byte parse cap`);
+      expect(r.deny).toContain('cannot tell prose from a command');
+      expect(r.ms, `the hook took ${r.ms} ms`).toBeLessThan(1500);
+    });
+
+    it('refuses an over-cap heredoc body that names a mutation, and an over-cap multi-line -f query', () => {
+      for (const word of MUTATIONS) {
+        const heredoc = `gh api graphql --input - <<'EOF'\n${pad(CAP)}\n${word}\nEOF`;
+        const multi = `gh api graphql -f query='mutation {\n  ${word}(input: {pullRequestId: "x"}) { clientMutationId }\n}' ${pad(CAP)}`;
+        for (const c of [heredoc, multi]) {
+          expect(Buffer.byteLength(c)).toBeGreaterThan(CAP);
+          const r = timed(c);
+          expect(r.deny, `an over-cap ${word} went through: ${JSON.stringify(c.slice(0, 60))}`).not.toBeNull();
+          expect(r.deny).toContain('parse cap');
+          expect(r.ms, `the hook took ${r.ms} ms`).toBeLessThan(1500);
+        }
+      }
+    });
+
+    it('refuses the two mutations that hold no lowercase merge, from a HOME whose path holds none, over the cap too', () => {
+      expect(home).not.toContain('merge');
+      for (const word of ['enqueuePullRequest', 'enablePullRequestAutoMerge']) {
+        expect(bash(over(gqlMutation(word))).deny, `an over-cap ${word} went through`).not.toBeNull();
+      }
+    });
+
+    it('passes an over-cap command that holds neither a mutation word nor /merge, or no gh api head', () => {
+      expect(bash(over('gh api repos/o/r/pulls/42')).deny, 'a gh api read').toBeNull();
+      expect(bash(over('echo hello')).deny).toBeNull();
+      expect(bash(over('echo enqueuePullRequest')).deny, 'a mutation word with no gh api in it').toBeNull();
+      expect(bash(over('echo gh pr view; echo /merge')).deny, '/merge with no gh api in it').toBeNull();
+      expect(bash(over('gh pr merge 42')).deny, 'wave 2\'s reading, unchanged').toBeNull();
+    });
+
+    it('reads the api words in order, in one segment: another segment\'s gh does not pair with this one\'s api', () => {
+      expect(bash(over('gh pr view 42; api /merge')).deny).toBeNull();
+      expect(bash(over('api gh /merge')).deny).toBeNull();
+      expect(bash(over('gh x api /merge')).deny, '`api` as a later word of the segment reads as an api call').not.toBeNull();
+    });
+
+    it('answers 100 KB of api shapes in bounded time', () => {
+      // Many segments that pass the whole-command prefilter and the per-segment one: the first segment
+      // that reads as an api call ends the search; the reversed words never do.
+      for (const [unit, tail, denied] of [['gh api x/merge;', '', true], ['api gh;', '/merge', false], ['gh api;', '', false]] as const) {
+        const c = sized(unit, tail, 100000);
+        const r = timed(c);
+        expect(r.deny !== null, `${JSON.stringify(unit)}: denied ${r.deny !== null}`).toBe(denied);
+        expect(r.ms, `the hook took ${r.ms} ms on 100 KB of ${JSON.stringify(unit)}`).toBeLessThan(1500);
+      }
+    }, 60000);
+
+    it('a held session\'s over-cap api-only command gets the bypass reason, not wave 2\'s', () => {
+      hold(WAVE_HOLD);
+      const d = bash(over('gh api -X PUT repos/o/r/pulls/42/merge')).deny;
+      expect(d).toMatch(/^ccrc: `--admin` and `gh api` merges are refused in every session/);
+      expect(d, 'wave 2 fired without a merge in the kinds').not.toContain(WAVE_HOLD);
+      expect(d).not.toContain('the coordinator merges, workers never do');
+    });
+
+    it('over the cap, the coordinator\'s long prose that quotes an admin merge is refused (the named cost)', () => {
+      const body = `${pad(CAP)} and then the coordinator never runs gh pr merge 42 --admin`;
+      const c = `gh pr create --title t --body '${body}'`;
+      expect(Buffer.byteLength(c)).toBeGreaterThan(CAP);
+      const d = bash(c).deny;
+      expect(d, 'over the cap the hook cannot tell prose from a command').not.toBeNull();
+      expect(d).toContain('cannot tell prose from a command');
+      expect(d).toContain('Split it into commands of at most');
+      expect(d).toContain('--body-file');
+    });
+
+    it('over the cap, prose that quotes a gh api merge is refused the same way', () => {
+      const c = `gh pr create --title t --body '${pad(CAP)} and then run gh api -X PUT repos/o/r/pulls/42/merge'`;
+      const d = bash(c).deny;
+      expect(d).not.toBeNull();
+      expect(d).toContain('cannot tell prose from a command');
+      expect(d).toContain('`gh … api`');
+    });
+  });
+
+  describe('the deny\'s precedence', () => {
+    // Wave 2's two precedence cases, re-run for the bypass deny: it supersedes a sync advisory, and it
+    // never replaces the graph gate's counted deny.
+    it.each([
+      ['an admin merge', 'git merge origin/main && gh pr merge 42 --admin'],
+      ['an api merge', 'git merge origin/main && gh api -X PUT repos/o/r/pulls/42/merge'],
+    ])('supersedes a sync advisory on the same call — one line, and it is the deny: %s', (_n, c) => {
+      const r = bash(c);
+      expect(r.stdout.split('\n')).toHaveLength(1);
+      expect(r.deny, 'the advisory won and the bypass went through').toMatch(/^ccrc: `--admin` and `gh api` merges are refused in every session/);
+    });
+
+    it.each([
+      ['an admin merge', 'rg assembleFleet src && gh pr merge 42 --admin'],
+      ['an api merge', 'rg assembleFleet src && gh api -X PUT repos/o/r/pulls/42/merge'],
+    ])('never replaces the graph gate\'s counted deny: %s', (_n, command) => {
+      const tree = path.join(home, 'tree');
+      fs.mkdirSync(tree, { recursive: true });
+      const git = (...a: string[]): string => spawnSync('git',
+        ['-C', tree, '-c', 'user.email=f@example.invalid', '-c', 'user.name=fixture', ...a], { encoding: 'utf8' }).stdout.trim();
+      git('init', '-q');
+      fs.writeFileSync(path.join(tree, 'c.txt'), '0\n');
+      git('add', '-A');
+      git('commit', '-q', '-m', 'c');
+      fs.mkdirSync(path.join(tree, 'graphify-out'));
+      fs.writeFileSync(path.join(tree, 'graphify-out', 'graph.json'),
+        `{\n  "hyperedges": [],\n  "built_at_commit": "${git('rev-parse', 'HEAD')}"\n}\n`);
+      fs.writeFileSync(path.join(tree, 'graphify-out', '.graphify_engine'), '0.9.9\n');
+      const r = spawnSync('bash', [HOOK], {
+        input: JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command }, cwd: tree }),
+        encoding: 'utf8',
+        env: { ...process.env, HOME: home, PATH: `${path.join(home, 'bin')}:${process.env['PATH'] ?? ''}`,
+          TMUX_PANE: '%1', CLAUDE_CODE_SESSION_ID: 'uuid-1', CLAUDE_PID: '4242', CCRC_SESSION_GENERATION: GENERATION },
+      });
+      expect(r.status, 'the hook contract: exit 0 on every path').toBe(0);
+      expect(r.stdout.trim(), 'the gate did not fire — this case went blind').not.toBe('');
+      const reason = String(JSON.parse(r.stdout.trim()).hookSpecificOutput.permissionDecisionReason);
+      expect(reason, 'the bypass deny replaced the graph gate\'s counted deny').toContain('Denial 1 of 3');
     });
   });
 
@@ -989,7 +1332,8 @@ describe('the bypass deny (wave 2b)', () => {
       expect(lines('echo enablePullRequestAutoMerge').length - lines('echo enablePullRequestAutoMarge').length,
         'the auto-merge mutation (it holds `Merge`)').toBe(1);
       expect(lines('echo mergeBranch').length - lines('echo margeBranch').length, 'the branch mutation (it holds `merge`)').toBe(1);
-      expect(lines('echo Marge').length - lines('echo Marge').length, 'the control').toBe(0);
+      // The control: two different commands that wake no trigger word cost the same number of jq calls.
+      expect(lines('echo hello').length - lines('echo world').length, 'the control').toBe(0);
     });
   });
 });
