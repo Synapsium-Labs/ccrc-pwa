@@ -4416,6 +4416,7 @@ fi
 # calls; this deny does, before the tool runs, and invariant 10 rests on it (spec §6.6), whatever Claude Code's deny
 # matcher takes (Task 15's file names the bare forms only; Task 13 measured that no leading wildcard matched). The
 # approval surface is `approvals` as `ccrc-api`'s FIRST argument (bare, a path, or `"$API"`/`$API`), `/api/approvals`,
+# the question family's approval ids (`/api/questions/approval-<n>/…`, D-7323; its ask ids are not the surface),
 # any `approval-signing` path (the pinned public key's, and the server's private key's on `--role both`) and the
 # verifier; for Write, Edit, MultiEdit and NotebookEdit, a key's or the verifier's path; for Read, Grep and Glob, a
 # signing key's path (a Glob's pattern included). A child never rules on,
@@ -4528,7 +4529,7 @@ def fmatch:
   (ACCTV as $v | select(test(WB + "ccrc[" + $q + "\"]?" + SP + "+" + FLAGS + "account" + SP + "+" + FLAGS + $v + NW)) | "account\tccrc account \($v)"),
   (select(test(CCD + "account-pane" + NW)) | "account\tccd account-pane"),
   (select(test(AAUTH)) | "account\tccd-account-auth"),
-  (select(test("(?:ccrc-api|\\$\\{?API\\}?)[" + $q + "\"]?" + SP + "+" + FLAGS + "approvals" + NW + "|/api/approvals" + NW + "|approval-signing|approval-verify\\.mjs")) | "surface\tthe approval surface"),
+  (select(test("(?:ccrc-api|\\$\\{?API\\}?)[" + $q + "\"]?" + SP + "+" + FLAGS + "approvals" + NW + "|/api/approvals" + NW + "|/api/questions/approval-|approval-signing|approval-verify\\.mjs")) | "surface\tthe approval surface"),
   (select(hbt("\n"; WB + "(?:systemctl|systemd-run|kill|pkill|killall)" + NW; "claude-session@|ccrc|tmux")) | "other\ta session unit or the tmux scope"),
   (select(hbt("[\n;&|]"; WR; SENS)) | "other\tan edit to a settings file, a hook or a CLAUDE.md"),
   (select(hbt("[\n;&|]"; WR; BUILD)) | "other\ta write to a Claude Code build or its launcher"),
