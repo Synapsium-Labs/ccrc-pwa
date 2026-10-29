@@ -93,6 +93,16 @@ describe('the compaction flag beside foldsAway (D-7186)', () => {
     expect(events().filter(({ e }) => 'compaction' in e && e.compaction !== true)).toEqual([]);
   });
 
+  // C7i (D-7187), the other direction: this PWA against a server older than C7h, whose events carry no flag. No user-
+  // or assistant-kind event folds, the recap included (its cost: the recap renders as text, named in the PR body).
+  it('the skew row: this PWA over the same events with the flag stripped folds none of them', async () => {
+    const { foldsAway } = await bubble();
+    const all = events();
+    expect(all.some(({ e }) => e.compaction === true)).toBe(true);
+    const folded = all.filter(({ e }) => { const { compaction: _ignored, ...withoutFlag } = e; return foldsAway(withoutFlag); });
+    expect(folded.map(({ source }) => source)).toEqual([]);
+  });
+
   // C7i (D-7187) moves the PWA's verdict onto the flag, so the old PWA this row is about is no longer in the tree: it
   // is the shipped client's verdict before C7i, frozen here byte for byte (its pattern, over a user- or assistant-kind
   // text), and the first assertion holds the frozen copy to the verdict C7a recorded for that client.

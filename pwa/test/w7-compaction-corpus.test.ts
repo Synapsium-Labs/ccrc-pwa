@@ -51,3 +51,14 @@ describe('a marker-only summary folds on the flag (D-7361)', () => {
     ]).toEqual([true, true, false, false]);
   });
 });
+
+// The skew row (spec §5.1 rule 1c; C7i Step 3): the PWA against a server older than C7h sends no flag, and then no
+// user or assistant row folds: a recap renders as the text it is, the cost of a server more than two releases old.
+describe('the skew row: no flag folds nothing (a server without C7h)', () => {
+  it('every corpus case and every recap placement, user and assistant, unflagged: none folds', () => {
+    for (const kind of ['user', 'assistant'] as const) {
+      expect(CASES.filter((c) => foldsAway(event(kind, c.text))).map((c) => c.name), kind).toEqual([]);
+      expect(RECAP_PLACEMENTS.filter((p) => foldsAway(event(kind, p.text))).map((p) => p.text), kind).toEqual([]);
+    }
+  });
+});
