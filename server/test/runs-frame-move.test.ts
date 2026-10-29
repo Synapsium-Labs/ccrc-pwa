@@ -75,6 +75,7 @@ describe('the runs frame carries lastMoveAt and stallQuietMs (D-7334)', () => {
   async function start(): Promise<{ coord: CoordStore; watcher: FleetWatcher; runId: number; emitted: unknown[]; connect: () => Promise<ReturnType<typeof runsFrames>> }> {
     const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
     const opened = coord.openRun({ program: 'program-a', title: 'Program A', project: 'project-a', wave: 1, waveOf: 3, claimedBy: COORDINATOR }) as { id: number };
+    coord.db.prepare('UPDATE runs SET sessionId = ? WHERE id = ?').run(WORKER, opened.id);   // the run's worker (F3)
     const deps = { ...testDeps(home), coord };
     const bus = new Bus();
     // Every array the watcher broadcasts, in order: `maskedFrame`'s cache is keyed on that object.

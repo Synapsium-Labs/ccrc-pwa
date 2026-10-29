@@ -1,7 +1,8 @@
 // Task G1 (D-7334): a run says when it last moved. `CoordStore.runLastMoves` is the one read of "a move": the newest act
 // row the drift reader counts (not a stall observation, not `causedBy = 'operator'`), or the newest mail naming the run
-// whose sender is a session, never one of the role senders (`MAIL_ROLE_IDS`). `withLastMoves` carries it onto the runs
-// frame's summaries, once per frame, and leaves the field off when the read fails (absence permits).
+// from its worker, its reviewer or its coordinator session (programme-boxes spec §2.5; fix round 1, F3), never from one of
+// the role senders (`MAIL_ROLE_IDS`). `withLastMoves` carries it onto the runs frame's summaries, once per frame, and
+// leaves the field off when the read fails (absence permits).
 import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import type { RunSummary } from '../../shared/api.js';
@@ -16,10 +17,19 @@ const NOW = 1_790_000_000_000;
 const H = 3_600_000;
 
 const fresh = (): CoordStore => new CoordStore(openCoordDb(path.join(mkTmp('ccrc-run-last-move-'), '.ccrc', 'coord.db')));
-const open = (coord: CoordStore, program = 'program-a'): number => {
+/** A work run claimed by `coord-a`, its worker session `worker`. */
+const open = (coord: CoordStore, program = 'program-a', worker = 'worker-1'): number => {
   const r = coord.openRun({ program, title: 'T', project: 'project-a', wave: 1, waveOf: 3, claimedBy: 'coord-a' });
   if (!('id' in r)) throw new Error('fixture openRun refused');
+  coord.db.prepare('UPDATE runs SET sessionId = ? WHERE id = ?').run(worker, r.id);
   return r.id;
+};
+/** A review run of `reviewed`, its reviewer session `reviewer` (its own program row: `openRun` answers an open program's
+ *  wave with the run already there). */
+const openReview = (coord: CoordStore, reviewed: number, reviewer: string): number => {
+  const id = open(coord, `review-of-${reviewed}`, reviewer);
+  coord.db.prepare("UPDATE runs SET kind = 'review', reviews = ? WHERE id = ?").run(reviewed, id);
+  return id;
 };
 const event = (coord: CoordStore, runId: number, at: number, causedBy: string, detail: string | null = null): void => {
   coord.db.prepare('INSERT INTO run_events (runId, at, fromState, toState, causedBy, detail) VALUES (?, ?, ?, ?, ?, ?)')
@@ -96,11 +106,38 @@ describe('CoordStore.runLastMoves: the newest act on a run', () => {
   it('only the run named counts: another run\'s act and run-less mail do not move it', () => {
     const coord = fresh();
     const a = open(coord, 'program-a');
-    const b = open(coord, 'program-b');
+    const b = open(coord, 'program-b', 'worker-2');
     event(coord, b, NOW - H, 'worker-2');
     mail(coord, b, NOW - H, 'worker-2');
     mail(coord, null, NOW - H, 'worker-1');
     expect(movesOf(coord, [a, b])).toEqual(new Map([[a, null], [b, NOW - H]]));
+  });
+
+  it('a mail from the run\'s reviewer session moves it', () => {
+    const coord = fresh();
+    const id = open(coord);
+    openReview(coord, id, 'reviewer-1');
+    event(coord, id, NOW - 3 * H, 'coordinator');
+    mail(coord, id, NOW - H, 'reviewer-1');
+    expect(movesOf(coord, [id]).get(id)).toBe(NOW - H);
+  });
+
+  it('a mail from the run\'s coordinator session (its claimedBy) moves it', () => {
+    const coord = fresh();
+    const id = open(coord);
+    event(coord, id, NOW - 3 * H, 'coordinator');
+    mail(coord, id, NOW - H, 'coord-a');
+    expect(movesOf(coord, [id]).get(id)).toBe(NOW - H);
+  });
+
+  it('a mail from a session unrelated to the run moves nothing: a peer worker, another coordinator, a reviewer of another run', () => {
+    const coord = fresh();
+    const id = open(coord);
+    const other = open(coord, 'program-b', 'worker-2');
+    openReview(coord, other, 'reviewer-2');
+    event(coord, id, NOW - 3 * H, 'coordinator');
+    for (const sender of ['worker-2', 'coord-b', 'reviewer-2']) mail(coord, id, NOW - H, sender);
+    expect(movesOf(coord, [id]).get(id)).toBe(NOW - 3 * H);
   });
 
   it('agrees with the drift reader on the act half: one predicate', () => {
@@ -136,7 +173,7 @@ describe('withLastMoves: the runs frame carries lastMoveAt, once per frame', () 
   it('every summary gets its run\'s move, null included', () => {
     const coord = fresh();
     const a = open(coord, 'program-a');
-    const b = open(coord, 'program-b');
+    const b = open(coord, 'program-b', 'worker-2');
     mail(coord, b, NOW - H, 'worker-2');
     const out = withLastMoves(coord, summaries(coord), () => { throw new Error('no failure expected'); });
     expect(out.map((r) => [r.id, r.lastMoveAt])).toEqual([[a, null], [b, NOW - H]]);
