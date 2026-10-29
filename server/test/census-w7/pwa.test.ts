@@ -320,11 +320,12 @@ describe('W7 PWA census: REAL rows (reporting, not ratcheting; spec §5.1 rule 3
   });
 
   // Exact on the merged tree: #1715 (one bucket vocabulary) landed before this task, so no band.
-  // C7j (D-7188): `RANK` reads `shared/api.ts#BUCKET_RANK`, which the query reads too, so the count holds at 2 here.
-  it('bucketOrders(): 2 (shared/api.ts#BUCKET_RANK, STATUS_GROUPS)', () => {
+  // C7j (D-7188): `RANK` reads `shared/api.ts#BUCKET_RANK`, which the query reads too, and `STATUS_GROUPS` lost its
+  // `order` (the status table reads `BUCKET_ORDER`): 2 -> 1.
+  it('bucketOrders(): 1 (from 2: shared/api.ts#BUCKET_RANK, the one order)', () => {
     const sites = bucketOrders();
-    held('bucketOrders', sites, 2);
-    expect(sites.map((s) => `${s.file}#${s.symbol}`).sort()).toEqual(['pwa/src/fleet/statusGroups.ts#STATUS_GROUPS', 'shared/api.ts#BUCKET_RANK']);
+    held('bucketOrders', sites, 1);
+    expect(sites.map((s) => `${s.file}#${s.symbol}`)).toEqual(['shared/api.ts#BUCKET_RANK']);
   });
 
   it('archivedChecks(): 8 absence checks on archivedAt', () => {

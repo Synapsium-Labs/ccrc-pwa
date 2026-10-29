@@ -277,3 +277,16 @@ describe('the PWA reads the run binding from the wire (C7d, D-7182)', () => {
     expect(kinds('export const g = (runs: R[], s: S) => runForSession(runs, s);', 'pwa/src/fleet/x.ts')).toEqual(['runForSession']);
   });
 });
+
+// C7j (D-7188, OA-C14 (a), D-7265): one bucket order, `shared/api.ts#BUCKET_RANK` (and `BUCKET_ORDER`, computed from
+// it), which every surface that orders buckets reads: `sortFleet.ts#RANK`, `BucketBar` and `statusGroups.ts`'s status
+// table. Read through W7's census (`census-w7/pwa.ts#bucketOrders`, whose FIXTURE row reds a numeric rank and an
+// `order:` table), imported in the block.
+describe('the buckets read in one order, shared/api.ts#BUCKET_RANK (C7j, D-7188)', () => {
+  it('bucketOrders(): 1 (from 2), BUCKET_RANK in shared/api.ts; may only shrink', async () => {
+    const { bucketOrders } = await import('../census-w7/pwa.js');
+    const sites = bucketOrders().map((s) => `${s.file}#${s.symbol}`);
+    expect(sites.length).toBeLessThanOrEqual(1);
+    expect(sites).toEqual(['shared/api.ts#BUCKET_RANK']);
+  });
+});

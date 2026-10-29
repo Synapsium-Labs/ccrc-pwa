@@ -441,7 +441,7 @@ export const finishedMoreLabel = (next: number, hidden: number): string => {
 
 /** Board order: the ones that can move first, the ones that are over last.
  *  One constant, shared by the grouping and the sort, so the two cannot drift —
- *  the same shape `sortFleet.ts`'s RANK/BUCKET_ORDER pair has. */
+ *  the same shape `shared/api.ts`'s BUCKET_RANK/BUCKET_ORDER pair has. */
 export const RUN_ORDER: readonly RunState[] = [
   'awaiting-review', 'failed', 'working', 'dispatched', 'merging', 'closing', 'planned', 'done', 'unknown',
 ];

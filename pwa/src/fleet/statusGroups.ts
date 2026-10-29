@@ -40,27 +40,24 @@
 // So `allow` and `sign-in` are in the answer's type, for the tags W3 renders,
 // and this model answers neither until the server carries a field for them.
 // A session the fields cannot place answers `null`, never a guessed reason.
-import { sessionAsk, substrateFault, type FleetSession, type SessionBucket } from '../../../shared/api';
+import { BUCKET_ORDER, sessionAsk, substrateFault, type FleetSession, type SessionBucket } from '../../../shared/api';
 import { isUnseen, type Acks } from '../lib/seen';
 import { sortFleet } from './sortFleet';
 
 /** Why a Needs-you session needs you. `null` is "no field says", never a fifth reason. */
 export type NeedsReason = 'ask' | 'allow' | 'fault' | 'sign-in';
 
-/** The table's order, its headings and which groups fold. A `Record`, so a new
- *  `SessionBucket` member is a compile error here, never a silently missing group. */
-export const STATUS_GROUPS: Record<SessionBucket, { readonly order: number; readonly label: string; readonly folds: boolean }> = {
-  attention: { order: 0, label: 'Needs you', folds: false },
-  done: { order: 1, label: 'Done', folds: false },
-  working: { order: 2, label: 'Working', folds: false },
-  idle: { order: 3, label: 'Idle', folds: true },
-  cleanup: { order: 4, label: 'Cleanup', folds: true },
-  archived: { order: 5, label: 'Archived', folds: true },
-  dead: { order: 6, label: 'Exited', folds: true },
+/** The table's headings and which groups fold. A `Record`, so a new `SessionBucket` member is a compile error here,
+ *  never a silently missing group. The order is not here: it is `shared/api.ts#BUCKET_ORDER`, the one order (D-7188). */
+export const STATUS_GROUPS: Record<SessionBucket, { readonly label: string; readonly folds: boolean }> = {
+  attention: { label: 'Needs you', folds: false },
+  done: { label: 'Done', folds: false },
+  working: { label: 'Working', folds: false },
+  idle: { label: 'Idle', folds: true },
+  cleanup: { label: 'Cleanup', folds: true },
+  archived: { label: 'Archived', folds: true },
+  dead: { label: 'Exited', folds: true },
 };
-
-const ORDER: readonly SessionBucket[] =
-  (Object.keys(STATUS_GROUPS) as SessionBucket[]).sort((a, b) => STATUS_GROUPS[a].order - STATUS_GROUPS[b].order);
 
 export interface StatusGroup {
   bucket: SessionBucket;
@@ -78,7 +75,7 @@ export interface StatusGroup {
  *  count of 0; the view decides whether to show it. */
 export function groupByStatus(sessions: readonly FleetSession[], acks: Acks): StatusGroup[] {
   const sorted = sortFleet([...sessions]);
-  return ORDER.map((bucket) => {
+  return BUCKET_ORDER.map((bucket) => {
     const rows = sorted.filter((s) => s.bucket === bucket);
     return {
       bucket,

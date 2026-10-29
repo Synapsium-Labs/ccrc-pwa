@@ -12,7 +12,8 @@ import { createElement } from 'react';
 import { act, cleanup, render } from '@testing-library/react';
 import type { FleetSession, SessionBucket } from '../../shared/api';
 import { fleetSession } from './fleetFixture';
-import { BUCKET_ORDER, RANK, sortFleet } from '../src/fleet/sortFleet';
+import { RANK, sortFleet } from '../src/fleet/sortFleet';
+import { BUCKET_ORDER } from '../../shared/api';
 import { STATUS_GROUPS, groupByStatus } from '../src/fleet/statusGroups';
 import { BucketBar } from '../src/fleet/BucketBar';
 import { fleetTree } from '../src/fleet/fleetTree';
@@ -62,9 +63,11 @@ describe('the two orders, as literal lists', () => {
     expect(BUCKET_ORDER).toEqual(['attention', 'done', 'working', 'idle', 'cleanup', 'archived', 'dead']);
     expect((Object.keys(RANK) as SessionBucket[]).sort((a, b) => RANK[a] - RANK[b])).toEqual(BUCKET_ORDER);
   });
-  it('STATUS_GROUPS (its order field, ascending)', () => {
-    expect((Object.keys(STATUS_GROUPS) as SessionBucket[]).sort((a, b) => STATUS_GROUPS[a].order - STATUS_GROUPS[b].order))
-      .toEqual(['attention', 'done', 'working', 'idle', 'cleanup', 'archived', 'dead']);
+  // C7j Step 4 (D-7188): STATUS_GROUPS keeps its labels and folds and loses its `order`; the status table reads the one
+  // BUCKET_ORDER, which holds the order STATUS_GROUPS held, so the table's order is the same list.
+  it('the status table (groupByStatus, over BUCKET_ORDER; STATUS_GROUPS holds labels and folds, no order)', () => {
+    expect(groupByStatus([], {}).map((g) => g.bucket)).toEqual(['attention', 'done', 'working', 'idle', 'cleanup', 'archived', 'dead']);
+    expect((Object.keys(STATUS_GROUPS) as SessionBucket[]).map((b) => Object.keys(STATUS_GROUPS[b]).sort().join(','))).toEqual(Array(7).fill('folds,label'));
   });
 });
 
