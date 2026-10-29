@@ -1579,8 +1579,8 @@ jobs:
           retention-days: 14
       # The tree scanners the shards recorded (D-7455, .github/ci/tree-scanners.mjs), merged into
       # tree-scanners.json and published beside testtimes; fast-plan reads it as it reads testtimes. Both layouts
-      # as for the durations (D-6740). No shard's scans means none is published, and fast-plan falls back to the
-      # static detector: never a failure of this job, whose durations are already kept.
+      # as for the durations (D-6740). No shard's scans means none is published, and fast-plan uses the static
+      # detector alone (it unions the two otherwise): never a failure of this job, whose durations are already kept.
       - name: Fetch the tree scans
         uses: actions/download-artifact@v8
         continue-on-error: true

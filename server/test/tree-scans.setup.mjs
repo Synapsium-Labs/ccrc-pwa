@@ -3,6 +3,9 @@
 // (vitest.select.config.ts adds this file then, and only then). It wraps fs's directory listers once per worker
 // process and records, for the test file running now, which source roots it listed; at the end of that file it
 // appends one line to `CCRC_TREE_SCANS_OUT` when it listed any. A developer's run never loads it.
+//
+// Blind spots (the plan unions this record with its static detector for them): a listing in a child process the
+// test spawned, a listing through a mocked fs, and a listing of an ANCESTOR of the roots — the repository root, `server/`, a `readdirSync(REPO, { recursive: true })` or a `glob('**/*.ts', { cwd: REPO })` that walks into them — is matched against the path listed, which sits above every root, so it is not recorded.
 import fs from 'node:fs';
 import { syncBuiltinESMExports } from 'node:module';
 import path from 'node:path';

@@ -14,9 +14,10 @@
 //      lists the tracked tree or reads the diff itself (TREE_READER: a direct `git ls-files`, `git diff` or
 //      `git merge-base`, the shape of topology-clean, gitignore-secrets and consolidation-path-guard), and every test
 //      that lists a source tree itself (a ratchet, a census, a "nowhere else in server/src" rule) whose file measured
-//      at most SCANNER_MAX_MS on the last full run. Which tests those are, the last full run RECORDED (the
-//      `tree-scanners` artifact, tree-scanners.mjs); without a readable artifact, the static detector
-//      `scansSourceTree` stands in;
+//      at most SCANNER_MAX_MS on the last full run. Which tests those are: the UNION of what the last full run
+//      RECORDED (the `tree-scanners` artifact, tree-scanners.mjs) and what the static detector `scansSourceTree`
+//      finds, so a shard whose record was lost, or a listing the capture cannot see, drops no scanner the detector
+//      knows; without a readable artifact, the static detector alone;
 //   4. the session-hook suites when ccd/ccd, ccd/session-hook.sh or shared/api.ts changed (SESSION_HOOK_TRIGGERS):
 //      the hook is bash, so no import reaches it.
 // What this leaves out — a test the map has no entry for or does not trust, a TypeScript file a test reads as text
@@ -74,8 +75,10 @@ export const TREE_READER = /\b(?:execFileSync|spawnSync|execSync|execFile|spawn)
 // A test that LISTS a source tree itself (a ratchet, a census, a single-definition or ring rule, a "nowhere else in
 // server/src" check) reads every file under it as text, so vitest relates it to no change, and a red there first
 // shows in the merge queue. The full run RECORDS them (tree-scanners.mjs: a setup file wraps fs's listers), and the
-// plan reads that record. The static detector below is the FALLBACK, used only when no `tree-scanners` artifact is
-// readable; it is kept as it is, with no further shapes. `scansSourceTree` finds them from the source, by shape:
+// plan reads that record UNIONED with the static detector below: the record adds what the detector misses, and the
+// detector keeps what the record lost (a shard's scans not uploaded) or cannot see (a child process, a mocked fs, a
+// listing of an ancestor of the roots). With no readable `tree-scanners` artifact, the detector alone. It is kept as
+// it is, with no further shapes. `scansSourceTree` finds them from the source, by shape:
 //   - a source root spelled as a literal: `'server/src'`, `'pwa/src'`, `'agent/src'`, `'shared'`, `'ccd'`, or the
 //     segments `'server', 'src'` / `serverRoot, 'src'` / `'..', 'src'` (from server/test, server/src) — the directory itself, never a
 //     file or subdirectory under it, never one joined onto a base that does not name the repository (a fixture's
@@ -92,7 +95,7 @@ export const TREE_READER = /\b(?:execFileSync|spawnSync|execSync|execFile|spawn)
 //   - a SCANNER: a lister called on a root, or a function that calls a scanner (`sitesOf(REPO, ['server/src'], …)`,
 //     the census helpers' `ccdCallGraph()`).
 // A test file scans when its own code calls a scanner. Comments are blanked first. ci-fast-plan.test.ts's SELF-CHECK
-// holds the capture to the fallback: every static positive fixture there, run under the capture, is recorded.
+// holds the capture to the detector: every static positive fixture there, run under the capture, is recorded.
 
 const ROOT_DIRS = String.raw`(?:server\/src|pwa\/src|agent\/src|shared|ccd)\/?`;
 const Q = '[\'"`]';
@@ -306,8 +309,10 @@ export const SCANNER_MAX_MS = 10_000;
 
 /**
  * The live tests that list a source tree themselves, less the map-carried pins, each with what shows it and its
- * measured duration (null when none was measured). With `recorded` (the `tree-scanners` artifact, `{ file: roots }`),
- * they are the files the last full run recorded; without it (null: missing or unreadable), the static detector's.
+ * measured duration (null when none was measured): the files the static detector finds, and with `recorded` (the
+ * `tree-scanners` artifact, `{ file: roots }`) every file the last full run recorded too — the union, so neither a lost
+ * shard record nor a shape the detector misses drops a scanner. Without it (null: missing or unreadable), the static
+ * detector's alone.
  * @param {string[]} live @param {(file: string) => string} readSource @param {Record<string, number> | null} [durations]
  * @param {Record<string, string[]> | null} [recorded]
  * @returns {Array<{ file: string, hit: string, ms: number | null }>}
@@ -318,9 +323,8 @@ export function treeScanners(live, readSource, durations = null, recorded = null
   const ms = (f) => (durations && typeof durations[f] === 'number' ? durations[f] : null);
   for (const f of live) {
     if (PIN_MAP_CARRIED.includes(f)) continue;
-    const hit = recorded
-      ? (Object.hasOwn(recorded, f) && recorded[f].length > 0 ? `listed ${recorded[f].join(', ')} on the last full run` : null)
-      : scansSourceTree(f, readSource, memo);
+    const seen = recorded && Object.hasOwn(recorded, f) && recorded[f].length > 0 ? `listed ${recorded[f].join(', ')} on the last full run` : null;
+    const hit = seen ?? scansSourceTree(f, readSource, memo);
     if (hit) out.push({ file: f, hit, ms: ms(f) });
   }
   return out;
@@ -328,7 +332,7 @@ export function treeScanners(live, readSource, durations = null, recorded = null
 
 /**
  * The guard suites among the live tests: a GUARD_TESTS pattern (less PIN_MAP_CARRIED), a TREE_READER source, or a
- * tree scanner (`treeScanners`: recorded, or the static fallback) whose file measured at most SCANNER_MAX_MS (or was
+ * tree scanner (`treeScanners`: the recorded and the static ones) whose file measured at most SCANNER_MAX_MS (or was
  * not measured: run it, the safe direction).
  * @param {string[]} live repo-relative test paths @param {(file: string) => string} readSource
  * @param {Record<string, number> | null} [durations] the full run's per-file durations, ms
@@ -440,7 +444,8 @@ function main() {
       try { durations = JSON.parse(readFileSync(opt.times, 'utf8')); } catch { durations = null; }
     }
     const readSource = (f) => readFileSync(path.join(repoDir, f), 'utf8');
-    // The full run's recorded scanners; null (no --scanners, or not readable) falls back to the static detector.
+    // The full run's recorded scanners, unioned with the static detector's; null (no --scanners, or not readable):
+    // the static detector's alone.
     const recorded = readTreeScanners(opt.scanners);
     const guards = guardTests(live, readSource, durations, recorded);
     const heavy = treeScanners(live, readSource, durations, recorded).filter((s) => s.ms !== null && s.ms > SCANNER_MAX_MS);
@@ -461,7 +466,7 @@ function main() {
       ...sel.files.map((f) => `- \`${f}\``),
       '',
       recorded
-        ? `The tree scanners are the ${Object.keys(recorded).length} file(s) the last full run recorded listing a source root (the \`tree-scanners\` artifact).`
+        ? `The tree scanners are the ${Object.keys(recorded).length} file(s) the last full run recorded listing a source root (the \`tree-scanners\` artifact), and every file the static detector (\`scansSourceTree\`) finds.`
         : 'No `tree-scanners` artifact was readable: the tree scanners are the static detector\'s (`scansSourceTree`).',
       '',
       ...(left.length === 0 ? [] : [

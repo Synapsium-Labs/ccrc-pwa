@@ -14,8 +14,11 @@
 // — and publishes it as the `tree-scanners` artifact next to `testtimes`; fast-plan.mjs fetches the newest trusted one
 // the way it fetches `testtimes` (main-artifact.mjs) and reads it with `readTreeScanners`.
 //
-// What it cannot see: a listing made in a child process the test spawned (a script it runs), and a listing through a
-// module a test mocked. The wrapping costs one path check per lister call.
+// What it cannot see: a listing made in a child process the test spawned (a script it runs), a listing through a
+// module a test mocked, and a listing of an ANCESTOR of the roots — the repository root, `server/`, a `readdirSync(REPO, { recursive: true })` or a `glob('**/*.ts', { cwd: REPO })` that walks into them — is matched against the path listed, which sits above every root, so it is not recorded (a root's own path, or one under it, is
+// what `rootOf` matches; recording every ancestor listing would record every test that lists the repository for
+// any reason). fast-plan.mjs therefore takes the UNION of this record and its static detector, never the record
+// alone. The wrapping costs one path check per lister call.
 import { appendFileSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';

@@ -33,7 +33,9 @@ const STATIC_SCANS: string[] = [
   "function walk(d) { return fs.readdirSync(d).flatMap((n) => walk(n)); }\nconst all = [...walk('ccd'), ...walk('server/src')];",
   "const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');\nreaddirSync(path.join(root, 'src'));",
   "describe('x', () => {\n  let SRC_DIR = '';\n  beforeAll(() => {\n    SRC_DIR = path.resolve(here, '..', '..', 'agent', 'src');\n  });\n  it('y', () => {\n    readdirSync(SRC_DIR);\n  });\n});",
-  "const CCD = path.resolve(__dirname, '../../ccd/ccd');\nconst ccdDir = path.dirname(CCD);\nreaddirSync(ccdDir);",
+  // A helper's path to a file directly in ccd/. Not the ccd script's own path: single-definition/core-vocab holds that
+  // spelling to ccdWsHelpers.ts alone, and the shape is the same for any file directly in the root.
+  "const API = path.resolve(__dirname, '../../ccd/ccrc-api');\nconst ccdDir = path.dirname(API);\nreaddirSync(ccdDir);",
   "const srcRoot = path.resolve(here, '..', 'src');\nconst sources = (dir = srcRoot) =>\n  readdirSync(dir);\nsources();",
   "['deploy', 'ccd'].flatMap((d) => walk(path.join(REPO, d)));\nfunction walk(x) { return readdirSync(x); }",
 ];
@@ -257,9 +259,9 @@ describe('the tree-scan capture (tree-scanners.mjs): what a full run records, an
     return [...roots].sort();
   };
 
-  it('a test that lists path.dirname(CCD) is recorded as a ccd scan, through the named import too', async () => {
-    const CCD = path.join(ROOT, 'ccd', 'ccd');
-    expect(await captured(() => readdirSync(path.dirname(CCD)))).toEqual(['ccd']);
+  it('a test that lists path.dirname(<a file in ccd/>) is recorded as a ccd scan, through the named import too', async () => {
+    const API = path.join(ROOT, 'ccd', 'ccrc-api');
+    expect(await captured(() => readdirSync(path.dirname(API)))).toEqual(['ccd']);
     expect(await captured(() => fs.promises.readdir(path.join(ROOT, 'server', 'src', 'coord')))).toEqual(['server/src']);
     expect(await captured(() => fs.globSync('**/*.ts', { cwd: path.join(ROOT, 'pwa', 'src') }))).toEqual(['pwa/src']);
     expect(await captured(() => fs.opendirSync(path.join(ROOT, 'shared')).closeSync())).toEqual(['shared']);
@@ -284,6 +286,10 @@ describe('the tree-scan capture (tree-scanners.mjs): what a full run records, an
     const repo = mkdtempSync(path.join(tmpdir(), 'ccrc-scan-repo-'));
     expect(rootOf(repo, tmpdir())(path.join(repo, 'ccd'))).toBe('ccd');
     expect(rootOf(repo, tmpdir())(path.join(box, 'ccd'))).toBeNull();
+    // The documented blind spot: a listing of an ANCESTOR of the roots (the repository, `server/`) is not recorded,
+    // which is why the plan unions the record with the static detector.
+    expect(rootOf(ROOT)(ROOT)).toBeNull();
+    expect(rootOf(ROOT)(path.join(ROOT, 'server'))).toBeNull();
   });
 
   it('globBase, the shard lines and their merge', () => {
@@ -316,11 +322,11 @@ describe('the tree-scan capture (tree-scanners.mjs): what a full run records, an
     }
   });
 
-  it('the plan adds every recorded scanner under SCANNER_MAX_MS, and only those; a missing artifact falls back to static', () => {
+  it('the plan adds every recorded scanner under SCANNER_MAX_MS, unioned with the static ones; a missing artifact falls back to static', () => {
     const live = liveTestFiles(ROOT);
     const read = (f: string): string => readFileSync(path.join(ROOT, f), 'utf8');
     // tmp-sweep is no scanner to the static detector; recorded, it is one. fleetio-contract is a static scanner the
-    // recording left out: the record replaces the detector, it does not add to it.
+    // recording left out (a lost shard, a listing the capture cannot see): the union keeps it.
     const recordedOnly = 'server/test/tmp-sweep.test.ts';
     const staticOnly = 'server/test/fleetio-contract.test.ts';
     const heavy = 'server/test/ccrc-sweep-window.test.ts';
@@ -328,9 +334,14 @@ describe('the tree-scan capture (tree-scanners.mjs): what a full run records, an
     const recorded = { [recordedOnly]: ['server/src'], [heavy]: ['ccd'] };
     const guards = guardTests(live, read, { [heavy]: SCANNER_MAX_MS + 1 }, recorded);
     expect(guards).toContain(recordedOnly);
-    expect(guards).not.toContain(staticOnly);
+    expect(guards).toContain(staticOnly);
     expect(guards).not.toContain(heavy);
-    expect(treeScanners(live, read, null, recorded).map((t) => t.file).sort()).toEqual([heavy, recordedOnly].sort());
+    const staticSet = treeScanners(live, read).map((t) => t.file);
+    expect(staticSet).toContain(staticOnly);
+    expect(staticSet).not.toContain(recordedOnly);
+    expect(treeScanners(live, read, null, recorded).map((t) => t.file).sort()).toEqual([...new Set([...staticSet, heavy, recordedOnly])].sort());
+    // Every static scanner is in the guard set with the record as without it (none is over the cap here).
+    for (const f of staticSet) expect(guards, f).toContain(f);
     // The pattern guards and the tree readers stay, whatever was recorded.
     expect(guards).toContain('server/test/deviation-refs.test.ts');
     // No artifact (or an unreadable one): the static detector, exactly as before.
