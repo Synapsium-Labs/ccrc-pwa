@@ -12,7 +12,7 @@
  * `session-hook.test.ts` does: a stub `tmux` answers the session name, stdin
  * carries the payload, stdout is the one PreToolUse envelope (or nothing).
  */
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, beforeAll, afterAll } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -24,8 +24,11 @@ const ID = 'demo-quiet-basin';
 const WAVE_HOLD = 'program:landing-order wave:2/5 run:17';
 
 let home: string;
+/** The fixture HOME's prefix. Wave 2's cases keep a HOME whose path holds `merge` (so the arm's
+ *  substring prefilter always passes); the bypass describe sets one that does not. */
+let homePrefix = 'ccrc-mergedeny-';
 beforeEach(() => {
-  home = mkTmp('ccrc-mergedeny-');
+  home = mkTmp(homePrefix);
   fs.mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
   fs.writeFileSync(path.join(home, '.cc-sessions', `${ID}.generation`), GENERATION);
   const bin = path.join(home, 'bin');
@@ -49,11 +52,12 @@ const CAP = ((): number => {
 const sized = (unit: string, tail: string, bytes: number): string =>
   unit.repeat(Math.ceil(bytes / unit.length)).slice(0, bytes - tail.length) + tail;
 
-/** One PreToolUse Bash call through the real hook. Exit 0 and a silent stderr
+/** One PreToolUse Bash call through the real hook; `cwd` is the payload's working directory (the
+ *  fixture HOME unless a case names another). Exit 0 and a silent stderr
  *  are the hook's standing contract, asserted on every call. */
-const bash = (command: string, nulStderr = false): { deny: string | null; stdout: string } => {
+const bash = (command: string, nulStderr = false, cwd: string = home): { deny: string | null; stdout: string } => {
   const r = spawnSync('bash', [HOOK], {
-    input: JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command }, cwd: home }),
+    input: JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command }, cwd }),
     encoding: 'utf8',
     env: { ...process.env, HOME: home, PATH: `${path.join(home, 'bin')}:${process.env['PATH'] ?? ''}`,
       TMUX_PANE: '%1', CLAUDE_CODE_SESSION_ID: 'uuid-1', CLAUDE_PID: '4242', CCRC_SESSION_GENERATION: GENERATION },
@@ -74,6 +78,63 @@ const bash = (command: string, nulStderr = false): { deny: string | null; stdout
   };
 };
 
+/** Wave 2's parseable spellings of the merge command at a command head: every one is refused to a
+ *  wave session, and the bypass describe below rewrites each with `--admin`. */
+const SPELLINGS: string[] = [
+  'gh pr merge 42 --squash', 'gh pr merge --auto 42', 'cd /tmp && gh pr merge 42',
+  `gh pr merge 42 --match-head-commit ${'a'.repeat(40)}`,
+  'GH_TOKEN=x gh pr merge 42', 'env gh pr merge 42', 'command gh pr merge 42',
+  '/usr/bin/gh pr merge 42', 'gh -R owner/repo pr merge 42', 'echo ok; gh pr merge 42',
+  'x=$(gh pr merge 42)', 'echo ok\ngh pr merge 42',
+  // The heads an agent writes for "wait for checks, then merge": reserved
+  // words, grouping, and the wrappers a command can sit behind.
+  'if gh pr checks 42 --watch; then gh pr merge 42; fi', 'for n in 42; do gh pr merge $n; done',
+  'while true; do gh pr merge 42; done', '{ gh pr merge 42; }', '! gh pr merge 42',
+  'time gh pr merge 42', 'timeout 60 gh pr merge 42', 'nohup gh pr merge 42',
+  'env GH_TOKEN=x gh pr merge 42', 'gh pr --repo o/r merge 42',
+  // A "…" span that holds a `$(` keeps that substitution, which runs; and a
+  // quote INSIDE a "…" span does not open a '…' one.
+  'x="$(gh pr merge 42)"', 'echo "it\'s" && gh pr merge 42',
+  // A `#` comment and a backslash-escaped quote open no '…' span: bash
+  // reads neither as a quote, so neither may hide the merge after it.
+  '# don\'t merge before CI is green\ngh pr merge 42\necho \'done\'',
+  "echo it\\'s time; gh pr merge 42; echo 'ok'",
+];
+
+/** Wave 2's mentions and other-gh commands: none is a merge at a command head. Three name
+ *  `--admin`; the bypass describe runs the list again, with no hold. */
+const MENTIONS: string[] = [
+  'gh pr view 42', 'gh pr list --search merge', 'gh pr merged 42',
+  "grep -rn 'gh pr merge' docs", 'echo "gh pr merge 42"', 'ghx pr merge 42',
+  'echo run gh pr merge later', 'echo hi # gh pr merge 42 after the CI run',
+  // A closing backtick is no command head: bash runs `echo <date> gh …`.
+  'echo `date` gh pr merge 42',
+  // What a wave on THIS feature writes about it: commit messages and PR
+  // bodies that quote the command, in Markdown code spans and in prose.
+  'git commit -m "docs (gh pr merge 42 enqueues)"',
+  'git commit -m "fix; gh pr merge is the coordinator\'s"',
+  'git commit -m "the coordinator lands with `gh pr merge <n>`, never --admin"',
+  "git commit -m \"$(cat <<'MSG'\nfeat(hook): deny `gh pr merge --admin` in every session\nMSG\n)\"",
+  "gh pr create --title t --body 'landing is `gh pr merge <n>` with no --admin'",
+  // A plain quoted mention, and one holding a separator; a heredoc body is
+  // text up to its terminator line — bash runs none of it, even a line
+  // that begins `gh pr merge`.
+  'echo "gh pr merge"', 'git commit -m "docs; gh pr merge 42 is how"',
+  "git commit -F - <<'EOF'\nfix: it's the strip\ngh pr merge 42 enqueues\nEOF",
+  "gh pr create --body \"$(cat <<'EOF'\n## Summary\n- it's (part of it\ngh pr merge 42 lands it\nEOF\n)\"",
+  "x=$(cat <<'EOF'\nbody: gh pr merge 42 lands it\nEOF\n)",
+  // Precision, now that what the strip cannot complete is kept raw: each of
+  // these is parsed to its end, so the heredoc mention after it stays text.
+  "gh pr create --body \"$(cat <<'EOF'\nit's\ngh pr merge 42 lands it\nEOF)\"",
+  "(( x << y ))\ngit commit -F - <<'EOF'\ngh pr merge 42 is how\nEOF",
+  "x=\"$(date # it's\n)\"\ngit commit -F - <<'EOF'\ngh pr merge 42 is how\nEOF",
+  "git commit -F - <<-'EOF'\n\tgh pr merge 42 is how\n\tEOF\necho done",
+  "echo \"${x:-\"a\"}\" && git commit -F - <<'EOF'\ngh pr merge 42 is how\nEOF",
+  "echo \"$(echo $$'\\')\" && git commit -F - <<'EOF'\ngh pr merge 42 is how\nEOF",
+  "git commit -F - <<'MY EOF'\ngh pr merge 42 is how\nMY EOF",
+  "git commit -F - <<1\ngh pr merge 42 is how\n1",
+];
+
 describe('the worker merge deny', () => {
   it('refuses a worker\'s merge, naming the hold and who lands instead', () => {
     hold(WAVE_HOLD);
@@ -83,7 +144,7 @@ describe('the worker merge deny', () => {
     expect(r.deny).toContain('the coordinator merges, workers never do');
   });
 
-  it('lets a coordinator\'s enqueue through — a session with no wave hold and no child marker is never asked', () => {
+  it('lets a coordinator\'s enqueue through — a session with no wave hold and no child marker is never asked the wave-2 question', () => {
     expect(bash('gh pr merge 42 --match-head-commit ' + 'a'.repeat(40)).deny).toBeNull();
     expect(bash('gh pr merge 42').deny).toBeNull();
   });
@@ -120,26 +181,7 @@ describe('the worker merge deny', () => {
 
   it('refuses every spelling it can parse at a command head', () => {
     hold(WAVE_HOLD);
-    for (const c of [
-      'gh pr merge 42 --squash', 'gh pr merge --auto 42', 'cd /tmp && gh pr merge 42',
-      `gh pr merge 42 --match-head-commit ${'a'.repeat(40)}`,
-      'GH_TOKEN=x gh pr merge 42', 'env gh pr merge 42', 'command gh pr merge 42',
-      '/usr/bin/gh pr merge 42', 'gh -R owner/repo pr merge 42', 'echo ok; gh pr merge 42',
-      'x=$(gh pr merge 42)', 'echo ok\ngh pr merge 42',
-      // The heads an agent writes for "wait for checks, then merge": reserved
-      // words, grouping, and the wrappers a command can sit behind.
-      'if gh pr checks 42 --watch; then gh pr merge 42; fi', 'for n in 42; do gh pr merge $n; done',
-      'while true; do gh pr merge 42; done', '{ gh pr merge 42; }', '! gh pr merge 42',
-      'time gh pr merge 42', 'timeout 60 gh pr merge 42', 'nohup gh pr merge 42',
-      'env GH_TOKEN=x gh pr merge 42', 'gh pr --repo o/r merge 42',
-      // A "…" span that holds a `$(` keeps that substitution, which runs; and a
-      // quote INSIDE a "…" span does not open a '…' one.
-      'x="$(gh pr merge 42)"', 'echo "it\'s" && gh pr merge 42',
-      // A `#` comment and a backslash-escaped quote open no '…' span: bash
-      // reads neither as a quote, so neither may hide the merge after it.
-      '# don\'t merge before CI is green\ngh pr merge 42\necho \'done\'',
-      "echo it\\'s time; gh pr merge 42; echo 'ok'",
-    ]) {
+    for (const c of SPELLINGS) {
       expect(bash(c).deny, `not denied: ${c}`).not.toBeNull();
     }
   });
@@ -434,7 +476,7 @@ describe('the worker merge deny', () => {
       expect(ms, `the hook took ${ms} ms on 100 KB of ${JSON.stringify(unit)}`).toBeLessThan(1500);
     }, 60000);
 
-    it('refuses only where the deny applies: a session with no wave hold and no marker is never asked', () => {
+    it('refuses only where the deny applies: a session with no wave hold and no marker is never asked the wave-2 question', () => {
       expect(bash(sized('gh pr merge 42 ', ' ', CAP + 1)).deny).toBeNull();
       marker();
       const r = bash(sized('gh pr merge 42 ', ' ', CAP + 1)).deny;
@@ -627,39 +669,328 @@ describe('the worker merge deny', () => {
 
   it('leaves every other gh and every mention of the words alone', () => {
     hold(WAVE_HOLD);
-    for (const c of [
-      'gh pr view 42', 'gh pr list --search merge', 'gh pr merged 42',
-      "grep -rn 'gh pr merge' docs", 'echo "gh pr merge 42"', 'ghx pr merge 42',
-      'echo run gh pr merge later', 'echo hi # gh pr merge 42 after the CI run',
-      // A closing backtick is no command head: bash runs `echo <date> gh …`.
-      'echo `date` gh pr merge 42',
-      // What a wave on THIS feature writes about it: commit messages and PR
-      // bodies that quote the command, in Markdown code spans and in prose.
-      'git commit -m "docs (gh pr merge 42 enqueues)"',
-      'git commit -m "fix; gh pr merge is the coordinator\'s"',
-      'git commit -m "the coordinator lands with `gh pr merge <n>`, never --admin"',
-      "git commit -m \"$(cat <<'MSG'\nfeat(hook): deny `gh pr merge --admin` in every session\nMSG\n)\"",
-      "gh pr create --title t --body 'landing is `gh pr merge <n>` with no --admin'",
-      // A plain quoted mention, and one holding a separator; a heredoc body is
-      // text up to its terminator line — bash runs none of it, even a line
-      // that begins `gh pr merge`.
-      'echo "gh pr merge"', 'git commit -m "docs; gh pr merge 42 is how"',
-      "git commit -F - <<'EOF'\nfix: it's the strip\ngh pr merge 42 enqueues\nEOF",
-      "gh pr create --body \"$(cat <<'EOF'\n## Summary\n- it's (part of it\ngh pr merge 42 lands it\nEOF\n)\"",
-      "x=$(cat <<'EOF'\nbody: gh pr merge 42 lands it\nEOF\n)",
-      // Precision, now that what the strip cannot complete is kept raw: each of
-      // these is parsed to its end, so the heredoc mention after it stays text.
-      "gh pr create --body \"$(cat <<'EOF'\nit's\ngh pr merge 42 lands it\nEOF)\"",
-      "(( x << y ))\ngit commit -F - <<'EOF'\ngh pr merge 42 is how\nEOF",
-      "x=\"$(date # it's\n)\"\ngit commit -F - <<'EOF'\ngh pr merge 42 is how\nEOF",
-      "git commit -F - <<-'EOF'\n\tgh pr merge 42 is how\n\tEOF\necho done",
-      "echo \"${x:-\"a\"}\" && git commit -F - <<'EOF'\ngh pr merge 42 is how\nEOF",
-      "echo \"$(echo $$'\\')\" && git commit -F - <<'EOF'\ngh pr merge 42 is how\nEOF",
-      "git commit -F - <<'MY EOF'\ngh pr merge 42 is how\nMY EOF",
-      "git commit -F - <<1\ngh pr merge 42 is how\n1",
-    ]) {
+    for (const c of MENTIONS) {
       expect(bash(c).deny, `denied: ${c}`).toBeNull();
     }
+  });
+});
+
+// ---- the bypass deny (landing-order wave 2b, Task 1): `--admin` in EVERY session ----
+// The merge arm's second question. Wave 2 asks whether the session is a worker (a wave hold or the
+// child marker); this one asks every session whether the merge it runs carries `--admin`, read from
+// the RAW command (quotes included) once the stripped text holds a real merge head. One project may
+// keep `--admin` by the operator's allowance file, and only for a command that is exactly one admin
+// merge of a PR named by number (`ALLOW_ADMIN_RE`). The fixture HOME's path holds no `merge`, so a
+// command that does not spell the word does not reach the arm at all.
+const US = '\u001f';
+const SHA = '0123456789abcdef0123456789abcdef01234567';
+
+/** `ALLOW_ADMIN_RE`, READ from the hook (never re-typed here): a single-quoted shell assignment. */
+const allowRe = (): string => {
+  const m = /^ALLOW_ADMIN_RE='([^']*)'$/m.exec(fs.readFileSync(HOOK, 'utf8'));
+  if (m === null) throw new Error('the hook no longer defines ALLOW_ADMIN_RE as a single-quoted assignment');
+  return m[1] as string;
+};
+/** The strip's jq program, extracted from the hook the way the `as` checker below extracts it. */
+const stripProgram = (): string => {
+  const p = jqPrograms(fs.readFileSync(HOOK, 'utf8')).find((x) => x.name === 'MERGE_STRIP_JQ');
+  if (p === undefined) throw new Error('the hook no longer keeps MERGE_STRIP_JQ as a single-quoted assignment');
+  return p.body;
+};
+/** One direct run of `MERGE_STRIP_JQ` over a Bash command: the answer line, without jq's newline. */
+const strip = (command: string): string => {
+  const r = spawnSync('jq', ['-r', '--arg', 'q', "'", '--argjson', 'cap', String(CAP), '--arg', 'allow', allowRe(), stripProgram()], {
+    input: JSON.stringify({ tool_name: 'Bash', tool_input: { command } }), encoding: 'utf8',
+  });
+  expect(r.status, `jq failed: ${r.stderr}`).toBe(0);
+  return r.stdout.replace(/\n$/, '');
+};
+/** The flags of an under-cap answer `=<flags><US><stripped>`. */
+const flagsOf = (command: string): string => {
+  const out = strip(command);
+  expect(out.startsWith('='), `not an under-cap answer: ${JSON.stringify(out.slice(0, 40))}`).toBe(true);
+  return out.slice(1, out.indexOf(US));
+};
+
+const ADMIN = `gh pr merge 42 --admin --match-head-commit ${SHA}`;
+/** What `ALLOW_ADMIN_RE` admits: exactly one admin merge of a PR named by number. */
+const S_SET = [
+  'gh pr merge 42 --admin', ADMIN, 'gh pr merge 42 --squash --admin -d', 'gh pr merge 42 --merge --admin --delete-branch',
+  'gh pr merge 42 --rebase --admin', ' gh pr merge 42 --admin \n',
+];
+const SEPARATORS = [';echo', '&echo', '&&echo', '||echo', '|cat', '\necho'];
+/** What it does not: each of these is an `--admin` merge the grammar refuses. */
+const S_UNSET = [
+  'gh pr merge 42 --admin --repo o/other', 'gh pr merge 42 -R o/other --admin', 'GH_REPO=o/x gh pr merge 42 --admin',
+  'gh pr merge https://github.com/o/other/pull/7 --admin', 'gh pr merge ws/alpha --admin', 'gh pr merge --admin 42',
+  "gh pr merge '42' --admin", "gh pr merge 42 '--admin'", 'gh pr merge 42 --admin -sA x', 'gh pr merge 42 --subject x --admin',
+  'gh pr merge 42 --admin --repo=o/other', 'gh pr merge 42 -Ro/other --admin', 'gh pr merge 42 --auto --admin',
+  'gh pr merge ٤٢ --admin', // Arabic-Indic digits
+  'cd ../other && gh pr merge 42 --admin', 'echo x; gh pr merge 42 --admin', 'echo x\ngh pr merge 42 --admin',
+  'gh pr merge 42 --match-head-commit abc --admin',
+  ...SEPARATORS.flatMap((s) => [`gh pr merge 42 --admin${s}`, `gh pr merge 42 --admin ${s}`]),
+  '(gh pr merge 42 --admin)', '$(gh pr merge 42 --admin)',
+];
+/** Wave 2's reason for a hold, byte for byte. */
+const waveReason = (h: string): string => `ccrc: this workspace's hold reads \`${h}\` — a programme wave's session, and a wave's session never merges (landing-order R5: the coordinator merges, workers never do). Report wave-done to your coordinator; it lands the PR.`;
+
+describe('the bypass deny (wave 2b)', () => {
+  beforeAll(() => { homePrefix = 'ccrc-bypass-'; });
+  afterAll(() => { homePrefix = 'ccrc-mergedeny-'; });
+  beforeEach(() => { expect(home, 'this describe\'s HOME must not spell the trigger word').not.toContain('merge'); });
+  const reg = (...p: string[]): string => path.join(home, '.cc-sessions', ...p);
+  const project = (text: string): void => { fs.writeFileSync(reg(`${ID}.project`), text); };
+  const allow = (name: string): void => {
+    fs.mkdirSync(reg('admin-merge-allowed'), { recursive: true });
+    fs.writeFileSync(reg('admin-merge-allowed', name), '');
+  };
+  const over = (c: string): string => `${c} ${'a'.repeat(CAP)}`;
+
+  it('refuses --admin in a session with no hold and no marker, naming the queue landing, the read, the door and the wide reading', () => {
+    const r = bash('gh pr merge 42 --admin');
+    expect(r.deny, 'an --admin merge went through').not.toBeNull();
+    expect(r.deny).toMatch(/^ccrc: `--admin` and `gh api` merges are refused in every session/);
+    expect(r.deny).toContain('gh pr merge <n> --match-head-commit <sha>');
+    expect(r.deny).toContain('gh pr view <n> --json state,mergedAt');
+    expect(r.deny).toContain('R9\'s door');
+    expect(r.deny).toContain('the operator\'s own shell or GitHub\'s UI');
+    expect(r.deny).toContain('the whole command is read');
+    expect(r.deny, 'the reason never claims landing is the operator\'s alone').not.toContain('landing is the operator');
+    expect(r.deny, 'the reason does not mention the allowance').not.toMatch(/allow/i);
+  });
+
+  it('refuses every parseable merge spelling with --admin inserted after merge', () => {
+    const rewritten = SPELLINGS.map((c) => c.replace(/\bmerge /, 'merge --admin '));
+    SPELLINGS.forEach((c, i) => expect(rewritten[i], `the rewrite changed nothing: ${c}`).not.toBe(c));
+    expect(rewritten).toContain('gh pr merge --admin --auto 42');
+    // Wave 2's comment entry holds its first `merge ` inside the `#` comment: that entry is denied
+    // through the RAW reading (the strip removes the comment, the raw text still holds `--admin`),
+    // its real merge head being `gh pr merge 42`.
+    for (const c of rewritten) expect(bash(c).deny, `not denied: ${c}`).not.toBeNull();
+  });
+
+  it.each([
+    ['gh pr merge --admin 42'], ['gh pr merge 42 --admin=true'], ["gh pr merge 42 '--admin'"], ['gh pr merge 42 "--admin"'],
+    ['gh pr merge 42 --match-head-commit "$(git rev-parse HEAD)" --admin'], ['gh pr merge $(echo 42) --admin'],
+    ['gh pr merge 42 \\\n  --admin'],
+  ])('refuses the --admin spelling the raw text shows: %j', (c) => {
+    expect(bash(c).deny, `not denied: ${c}`).not.toBeNull();
+  });
+
+  it('a worker\'s --admin still reads as the worker deny — wave 2\'s reason, byte for byte', () => {
+    hold(WAVE_HOLD);
+    expect(bash('gh pr merge 42 --admin').deny).toBe(waveReason(WAVE_HOLD));
+    marker();
+    fs.rmSync(reg(`${ID}.hold`));
+    expect(bash('gh pr merge 42 --admin').deny).toContain('the child marker');
+  });
+
+  it('the coordinator\'s landing passes: clause 15\'s spelling, extracted from the skill, and --disable-auto', () => {
+    const skill = fs.readFileSync(path.resolve(__dirname, '../../ccd/coordinator-skill/SKILL.md'), 'utf8');
+    const line = skill.split('\n').find((l) => l.startsWith('15. '));
+    if (line === undefined) throw new Error('the skill no longer has a clause 15');
+    const spans = [...line.matchAll(/`(gh pr merge[^`]*)`/g)].map((m) => m[1] as string);
+    if (spans.length === 0) throw new Error('clause 15 no longer spells a `gh pr merge` command in backticks');
+    const forms = spans.flatMap((sp) => [sp,
+      sp.replace('--<method>', '--squash').replace(/<n>/g, '42').replace(/<handoffCommit>/g, SHA)]);
+    for (const f of forms) expect(bash(f).deny, `the coordinator's landing was refused: ${f}`).toBeNull();
+    expect(bash('gh pr merge 42 --disable-auto').deny).toBeNull();
+  });
+
+  it('the wide reading\'s cost, named: a real merge and an unrelated --admin mention in one command is refused', () => {
+    const r = bash(`gh pr merge 42 --match-head-commit ${SHA} && git commit -m "never --admin"`);
+    expect(r.deny, 'a quoted --admin beside a real merge went through').not.toBeNull();
+    expect(r.deny).toContain('the whole command is read');
+  });
+
+  it('mentions with no merge head pass: wave 2\'s list (three of its texts name --admin), and the other --admin mentions', () => {
+    expect(MENTIONS.filter((c) => c.includes('--admin')), 'the list lost one of its three --admin texts').toHaveLength(3);
+    for (const c of [...MENTIONS, 'echo --admin', 'grep -- --admin docs', 'gh pr view 42 --json mergedAt']) {
+      expect(bash(c).deny, `denied: ${c}`).toBeNull();
+    }
+  });
+
+  it('LISTED pass: a flag word broken by quoting is not the word --admin in the raw text', () => {
+    expect(bash("gh pr merge 42 --adm''in").deny, 'the listed pass was refused: update the hook header\'s list').toBeNull();
+  });
+
+  it('the answer format: =<flags><US><stripped> under the cap, !<bytes>:<kinds> over it', () => {
+    expect(strip('gh pr merge 42 --auto')).toBe(`=${US}gh pr merge 42 --auto`);
+    expect(strip('gh pr merge 42 --admin')).toBe(`=as${US}gh pr merge 42 --admin`);
+    const longAdmin = over('gh pr merge 42 --admin');
+    expect(strip(longAdmin)).toBe(`!${Buffer.byteLength(longAdmin)}:merge,admin`);
+    const longPlain = over('gh pr merge 42');
+    expect(strip(longPlain)).toBe(`!${Buffer.byteLength(longPlain)}:merge`);
+    // `--admin` over the cap with no merge command in it is no kind at all.
+    expect(strip(over('echo --admin'))).toBe('');
+    // The stripped text still removes the quoted --admin, while the flag reads the raw text.
+    expect(strip("gh pr merge 42 '--admin'")).toBe(`=a${US}gh pr merge 42 `);
+  });
+
+  it('the allowance flag s: set for exactly one admin merge of a PR named by number, unset for every other spelling', () => {
+    for (const c of S_SET) expect(flagsOf(c), `s not set: ${JSON.stringify(c)}`).toContain('s');
+    for (const c of S_UNSET) {
+      const f = flagsOf(c);
+      expect(f, `s set: ${JSON.stringify(c)}`).not.toContain('s');
+    }
+    // The flag `a` is set by the raw word wherever it stands, quoted or not.
+    for (const c of S_UNSET) expect(flagsOf(c), `a not set: ${JSON.stringify(c)}`).toContain('a');
+  });
+
+  describe('the operator\'s allowance lets --admin through for that one project', () => {
+    it('passes one admin merge, in the grammar, for a session of the allowed project', () => {
+      project('proj-a');
+      allow('proj-a');
+      for (const c of S_SET) expect(bash(c).deny, `refused: ${JSON.stringify(c)}`).toBeNull();
+      // The project file may end in a newline, as `ccd` writes it.
+      project('proj-a\n');
+      expect(bash(ADMIN).deny).toBeNull();
+    });
+
+    it('still refuses every spelling the grammar refuses', () => {
+      project('proj-a');
+      allow('proj-a');
+      for (const c of S_UNSET) expect(bash(c).deny, `not denied: ${JSON.stringify(c)}`).not.toBeNull();
+    });
+
+    it('still refuses a session of another project, and one whose cwd is named for the allowed project', () => {
+      allow('proj-a');
+      project('proj-b');
+      expect(bash(ADMIN).deny, 'the allowance of proj-a lifted proj-b').not.toBeNull();
+      const cwd = path.join(home, 'proj-a');
+      fs.mkdirSync(cwd);
+      expect(bash(ADMIN, false, cwd).deny, 'the allowance was read from the cwd\'s name').not.toBeNull();
+    });
+
+    it('reads the project through the project check: a value that walks out of the directory is refused', () => {
+      allow('proj-a');
+      project('../admin-merge-allowed/proj-a');
+      expect(fs.existsSync(reg('admin-merge-allowed', '..', 'admin-merge-allowed', 'proj-a')), 'the fixture must reach the file').toBe(true);
+      expect(bash(ADMIN).deny, 'a project value with a slash reached the allowance').not.toBeNull();
+      project('x'.repeat(65));
+      allow('x'.repeat(65));
+      expect(bash(ADMIN).deny, 'a project value over the bound reached the allowance').not.toBeNull();
+    });
+
+    it('refuses an allowance that is a symlink to a regular file, or a directory', () => {
+      project('proj-a');
+      fs.mkdirSync(reg('admin-merge-allowed'), { recursive: true });
+      fs.writeFileSync(reg('real-file'), '');
+      fs.symlinkSync(reg('real-file'), reg('admin-merge-allowed', 'proj-a'));
+      expect(bash(ADMIN).deny, 'a symlinked allowance lifted the deny').not.toBeNull();
+      fs.rmSync(reg('admin-merge-allowed', 'proj-a'));
+      fs.mkdirSync(reg('admin-merge-allowed', 'proj-a'));
+      expect(bash(ADMIN).deny, 'a directory lifted the deny').not.toBeNull();
+    });
+
+    it('refuses a session whose .project is unreadable, empty or absent, though an allowance named for its id stands', () => {
+      allow(ID);
+      expect(bash(ADMIN).deny, 'an absent .project fell back to the session id').not.toBeNull();
+      project('');
+      expect(bash(ADMIN).deny, 'an empty .project fell back to the session id').not.toBeNull();
+      project('\n');
+      expect(bash(ADMIN).deny, 'a blank .project fell back to the session id').not.toBeNull();
+      fs.rmSync(reg(`${ID}.project`));
+      fs.mkdirSync(reg(`${ID}.project`));
+      expect(bash(ADMIN).deny, 'an unreadable .project fell back to the session id').not.toBeNull();
+    });
+
+    it('does not lift the over-cap form of the allowed command, padded past the cap so that it still matches the grammar', () => {
+      project('proj-a');
+      allow('proj-a');
+      const padded = ADMIN + ' --squash'.repeat(Math.ceil(CAP / 9));
+      expect(Buffer.byteLength(padded)).toBeGreaterThan(CAP);
+      // `\A` and `\z` are Oniguruma's; JS spells the same anchors `^` and `$` (no `m` flag).
+      const js = new RegExp(allowRe().replace('\\A', '^').replace('\\z', '$'));
+      expect(js.test(padded), 'the padded command must still match the grammar').toBe(true);
+      const d = bash(padded).deny;
+      expect(d, 'an over-cap command lifted the deny').not.toBeNull();
+      expect(d).toContain('parse cap');
+    });
+
+    it('does not lift wave 2: a worker of the allowed project is refused with wave 2\'s reason', () => {
+      project('proj-a');
+      allow('proj-a');
+      hold(WAVE_HOLD);
+      expect(bash(ADMIN).deny).toBe(waveReason(WAVE_HOLD));
+    });
+  });
+
+  describe('over the cap, every session is asked', () => {
+    it('refuses an over-cap admin merge in a session with no hold, giving both byte counts and the ways out', () => {
+      const c = over('gh pr merge 42 --admin');
+      const d = bash(c).deny;
+      expect(d, 'an over-cap admin merge went through').not.toBeNull();
+      expect(d).toMatch(/^ccrc: `--admin` and `gh api` merges are refused in every session/);
+      expect(d).toContain(`${Buffer.byteLength(c)} bytes`);
+      expect(d).toContain(`${CAP}-byte parse cap`);
+      expect(d).toContain('cannot tell prose from a command');
+      expect(d).toContain('Write tool');
+      expect(d).toContain('--body-file');
+      expect(d).toContain('ccrc-api mail send --json <file>');
+      expect(d).toContain('R9\'s door');
+      expect(d, 'the over-cap reason never claims landing is the operator\'s alone').not.toContain('landing is the operator');
+    });
+
+    it('reads --admin anywhere in the raw text once an over-cap segment spells a merge, prose included (the accepted cost)', () => {
+      expect(bash(over('gh pr merge 42; echo --admin')).deny).not.toBeNull();
+      expect(bash(over('echo "the coordinator never runs gh pr merge 42 --admin"')).deny).not.toBeNull();
+    });
+
+    it('passes an over-cap command that is not a merge, or that is a merge with no --admin', () => {
+      expect(bash(over('echo --admin')).deny, '--admin with no merge command in it').toBeNull();
+      expect(bash(over('gh pr merge 42')).deny, 'an over-cap merge with no --admin: wave 2 asks workers only').toBeNull();
+      expect(bash(over('gh pr view 42 --admin')).deny).toBeNull();
+    });
+
+    it('asks wave 2 first: a held session\'s over-cap admin merge gets wave 2\'s over-cap reason', () => {
+      hold(WAVE_HOLD);
+      const d = bash(over('gh pr merge 42 --admin')).deny;
+      expect(d).toContain(WAVE_HOLD);
+      expect(d).toContain('the coordinator merges, workers never do');
+      expect(d).toContain('A landing is the operator\'s, from their own shell.');
+    });
+  });
+
+  describe('the arm\'s budget', () => {
+    /** A `jq` first on PATH that logs each call's option words, then runs the real one. */
+    const countJq = (): void => {
+      const real = (process.env['PATH'] ?? '').split(':').map((d) => path.join(d, 'jq')).find((p) => fs.existsSync(p));
+      if (real === undefined) throw new Error('no jq on PATH');
+      fs.writeFileSync(path.join(home, 'bin', 'jq'),
+        `#!/bin/sh\nl=""\nfor a in "$@"; do case "$a" in -*|cap|allow) l="$l $a";; esac; done\necho "$l" >> "${path.join(home, 'jq.calls')}"\nexec ${real} "$@"\n`,
+        { mode: 0o755 });
+    };
+    const calls = (): string[] => {
+      const f = path.join(home, 'jq.calls');
+      return fs.existsSync(f) ? fs.readFileSync(f, 'utf8').split('\n').filter((l) => l !== '') : [];
+    };
+    const lines = (c: string): string[] => { fs.rmSync(path.join(home, 'jq.calls'), { force: true }); bash(c); return calls(); };
+
+    it('one strip per payload: a merge command costs exactly one more jq than the same command with its trigger words replaced, and it carries --argjson cap', () => {
+      countJq();
+      bash('echo warm'); // the first call in a fresh HOME does one-time work of its own
+      // The coordinator's landing: it is not denied, so no deny envelope (which costs its own jq) is built.
+      const withMerge = lines(`gh pr merge 42 --match-head-commit ${SHA}`);
+      // `marge` keeps the letters `rg` that `merge` carries, so the graph-search read, which the word
+      // `merge` also wakes, is the same on both sides and the difference is the arm's own call.
+      const without = lines(`gh pr marge 42 --match-head-commit ${SHA}`);
+      expect(withMerge.length - without.length, 'the arm made more than one jq call, or none').toBe(1);
+      expect(withMerge.filter((l) => l.includes('--argjson cap')), 'the one extra call carries the cap').toHaveLength(1);
+      expect(without.filter((l) => l.includes('--argjson cap'))).toHaveLength(0);
+      expect(withMerge.filter((l) => l.includes('--arg allow')), 'the allowance grammar rides the same call').toHaveLength(1);
+    });
+
+    it('the prefilter also lets `Merge` and `enqueuePullRequest` reach the strip, and nothing else does', () => {
+      countJq();
+      bash('echo warm');
+      expect(lines('echo Merge').length - lines('echo Marge').length, 'a capitalised Merge').toBe(1);
+      expect(lines('echo enqueuePullRequest').length - lines('echo enqueuePullRequezt').length, 'the enqueue mutation').toBe(1);
+      expect(lines('echo enablePullRequestAutoMerge').length - lines('echo enablePullRequestAutoMarge').length,
+        'the auto-merge mutation (it holds `Merge`)').toBe(1);
+      expect(lines('echo mergeBranch').length - lines('echo margeBranch').length, 'the branch mutation (it holds `merge`)').toBe(1);
+      expect(lines('echo Marge').length - lines('echo Marge').length, 'the control').toBe(0);
+    });
   });
 });
 
