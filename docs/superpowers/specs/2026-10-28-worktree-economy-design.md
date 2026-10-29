@@ -51,7 +51,8 @@ The stale age stays raise-only, as the retention spec ruled (§5.1, R-3a): the S
 lower it below the box's floor. Whether to overturn that is the operator's call (§10, Q11; recommended no). The box
 does not report that floor today (`ccd caps` prints only verb and capability tokens), so reporting it is its own build
 step (§9 step 5, in both fleet modes). Until it lands, the row is read-only and shows the box floor as unknown, never
-a guess.
+a guess. A failed read of the box's caps is retried on a schedule until it answers, in local mode as in remote, and
+the locked row says why it is locked and offers a Refresh (§9 step 5), so no row stays locked without a way out.
 
 Every age, count, size and path below has a neutral default. Every new destructive arm ships in shadow. **Every
 operator act is one control in Settings › Automation backed by one stored value on the server (R-6, R-7).** When a box
@@ -267,7 +268,8 @@ ignored (`ccd/ccd`, the `ws-add` exclude block). The fleet has used that shape b
   copy that is missing or unreadable reads as Off, which is today's behaviour. On is refused with `cache-root-unset`
   when the box reports `CCD_DEPS_CACHE_ROOT` as unset, and the row says so. The box does not report it today: that
   report is §9 step 5's `limit deps-cache-root` line. While the box reports nothing (before step 5, or an older agent
-  or ccd), the row shows the cache root as unknown, and On is refused with `cache-root-unmeasured`, never assumed.
+  or ccd), the row shows the cache root as unknown with the same reason line and **Refresh** as the Stale reclaim row
+  (§5.1, §9 step 5), and On is refused with `cache-root-unmeasured`, never assumed.
 - **Fill: only from shared, reviewed inputs.** An entry is shared with every other tree, so one session must not be
   able to fill it from its own modified repository. A miss is filled only when the lockfile and `package.json` blobs
   appear at the tip of the project's default branch on its remote. The verb fills from that commit, not from the
@@ -431,10 +433,12 @@ so it is the operator's call, not this spec's: §10, Q11.
   hours either.
 - **Until the box reports its floor, the row is read-only.** In either fleet mode, while the server's caps record
   carries no `stale-idle-s` limit (before §9 step 5 lands, a failed probe, or an older agent or ccd), or carries one
-  the parser rejects, the row shows its stored value (seeded 168 hours) and "box floor: unknown (this box does not
-  report it)", and the Ages route refuses every edit with `floor-unmeasured`. The server never guesses the floor, not
-  even as today's 168 hours. It keeps sending the stored value as `--stale-idle-s`, and the box's own check below
-  stays the guard.
+  the parser rejects, the row shows its stored value (seeded 168 hours) and "box floor: unknown", followed by the
+  reason the caps record gives (§9 step 5, "Retry until measured"): the box's caps have not been read yet, the last
+  read failed (with its time and the next retry), or the box answered without the floor (its ccd predates step 5).
+  The row offers **Refresh**, which reads the box's caps again at once. The Ages route refuses every edit with
+  `floor-unmeasured`. The server never guesses the floor, not even as today's 168 hours. It keeps sending the stored
+  value as `--stale-idle-s`, and the box's own check below stays the guard.
 - **How the box gets it.** The stale arm already calls the box with `--stale <word>` on `ws-audit --reclaim` and
   `ws-reclaim`. `staleFlags` adds `--stale-idle-s <n>`, the row's value in seconds, to those same two calls, so the
   box checks the figure the server decided on, in the same call, and nothing has to be kept in step. This is the
@@ -790,7 +794,8 @@ one stored value on the server. The rule has three parts.
     vocabulary in ccd (`deps-cache`, `deps-cache-max-gb`, `deps-cache-idle-days`), each value checked against bounds
     in ccd, written atomically to one file per name under `$REG/box-settings/`, and echoed back. The server sends it
     after every write of the row and again whenever it starts talking to the box (each agent connect in remote mode;
-    server start in local mode, where there is no agent), so the box converges on the server's value. `ccd box-setting
+    server start in local mode, where there is no agent), and a failed send is retried each minute until the box
+    echoes it (§9 step 5), so the box converges on the server's value. `ccd box-setting
     --get` returns the box's copy, and the row shows "On the box: <value>" or "not yet on the box". It is a
     disk-config verb, not a coordination mutation. It is added to the agent's grant for remote mode
     (`whitelist-subset.test.ts`) and to the CLAUDE.md SAFETY list, so only the server writes the box copy. A missing
@@ -851,7 +856,10 @@ Each step is one PR. Every destructive arm ships in shadow first.
    - **Local mode** (`CCRC_FLEET=local`, the default deployment in `deploy/ccrc.env.example`). There is no agent. The
      server runs its own box's `ccd caps` once at boot with `readLocalCcdCaps` (`server/src/localcaps.ts`), which
      returns `parseCcdCaps`'s `string[]`, or `null` when the probe failed, and `index.ts` records it with
-     `recordCcdVerbs`. Nothing re-reads it before the next server restart.
+     `recordCcdVerbs`. `index.ts` does not await it, and nothing re-reads it before the next server restart: a boot
+     probe that fails or times out answers `null`, the measured rule writes nothing, and the record stays unmeasured
+     until the server restarts. `Deps.refreshCaps`, the seam the watcher's 60 s `caps` lane calls, is set in remote
+     mode only.
    - **Remote mode.** The agent runs `ccd caps` (`readCcdVerbs`, `agent/src/server.ts`, cached by `refreshVerbs`)
      and sends the tokens in its ready frame (`ccdVerbs`) and its `caps` reply (`verbs`).
 
@@ -877,10 +885,38 @@ Each step is one PR. Every destructive arm ships in shadow first.
      written by the same `recordCcdVerbs` call and the same measured rule (a `null` answer writes nothing). In local
      mode `index.ts` records the boot read's `limits`, and the local reader re-runs, inside its existing bound, when
      the Ages or Dependency cache card is read and the key above has changed since the last read, so a changed floor
-     is seen without a restart. In remote mode the agent adds `limits` as one optional field to its ready frame and to
-     its `caps` reply (additive; an older agent omits it, which the server reads as `null`). The Ages and Dependency
-     cache rows read only `fleetState.ccdLimits`, never the mode, so the hand-off is one code path. A name with no
-     value is unknown.
+     is seen without a restart. That key-change re-read is not the retry: a boot probe that failed leaves the key
+     unchanged, so the next bullet covers it. In remote mode the agent adds `limits` as one optional field to its
+     ready frame and to its `caps` reply (additive; an older agent omits it, which the server reads as `null`). The
+     Ages and Dependency cache rows read only `fleetState.ccdLimits`, never the mode, so the hand-off is one code
+     path. A name with no value is unknown.
+   - **Retry until measured, in both modes.** A failed read is never final. Local mode gets its own `refreshCaps`
+     (`makeLocalRefreshCaps`, beside `makeRefreshCaps` in `server/src/refreshcaps.ts`, bound by `index.ts` to
+     `readLocalCcdCaps` and `recordCcdVerbs`), so the watcher's existing 60 s `caps` lane, single-flight through
+     `runLane`, drives both modes. In local mode each tick runs the reader while the record is unmeasured
+     (`ccdVerbs` still `null`) or the limit-file key has changed, and does nothing otherwise, so a box that has
+     answered costs no exec per minute. Remote mode keeps its lane as today. The `deps.ts` comment that calls
+     `refreshCaps` remote-only is corrected in the same PR, and no reader may use the field's presence as the mode
+     test. The boot read stays and stays unawaited (boot must not wait on ccd), but it is now the first try, not
+     the only one.
+   - **What the record says about itself.** `recordCcdVerbs`, still the one writer, also stamps
+     `FleetState.ccdCapsRead = { askedAt, answered: boolean, answeredAt: number | null }` on every measured answer,
+     including a `null` one (which still writes no verbs or limits). The rows turn it into one reason, shown under
+     the locked value: **not read yet** (no answer since start; the boot read is in flight), **the last read failed**
+     (`askedAt`, and "retrying within a minute"), or **the box does not report it** (`answered`, but the name is
+     `null`: its ccd predates this step, or the line was malformed; "update ccd on the box"). Remote mode adds a
+     fourth from the fleet link it already shows: **the fleet host is not connected**.
+   - **Refresh, on the locked row.** The Stale reclaim and Dependency cache rows, while locked, offer **Refresh**.
+     It calls `POST /api/settings/box-caps/refresh`, which runs the mode's `refreshCaps` once now (in local mode
+     forced past the key check), joins a lane run already in flight rather than starting a second exec, waits for it
+     inside the reader's own bound (`LOCAL_CAPS_TIMEOUT_MS`, or the agent's request timeout), and returns the row's
+     new state and reason. It reads only; it changes no setting and needs no confirm. A Refresh that still finds the
+     value unknown says which reason holds, so the operator learns what to fix rather than pressing again.
+   - **The box copy converges the same way.** `ccd box-setting` (§8) is sent at server start in local mode and on
+     each agent connect in remote mode. A send that fails is retried on the same 60 s lane until `ccd box-setting
+     --get` echoes the server's value, and the Dependency cache row's "not yet on the box" also offers Refresh,
+     which re-sends and re-reads. A failed start-time send never leaves the box on an old value until the next
+     restart.
    - **Order.** In remote mode the agent lane ships before the server lane (agent first), so the server never reads a
      field no deployed agent sends; until then it reads unknown. In local mode ccd and the server are on one box: a
      server whose ccd predates this step reads `null` for every name until ccd is updated, and the key change then
@@ -893,14 +929,22 @@ Each step is one PR. Every destructive arm ships in shadow first.
      boot wiring sets `fleetState.ccdLimits`; a changed limit file re-reads on the next card read and an unchanged
      one does not; the Ages route, with the server in local mode, accepts a value at or above the stub's floor,
      refuses one below with `out-of-bounds`, and refuses every edit with `floor-unmeasured` when the stub reports no
-     floor. **Remote mode:** the ready frame and the `caps` reply carry the field; an older agent's frame reads
-     unknown; a change to the lib file re-reads caps in the agent; the same three Ages route cases with the limits
-     arriving from the agent. The Dependency cache row's `cache-root-unset` and `cache-root-unmeasured` cases run in
-     both modes too.
+     floor. **Local mode retry:** a boot probe that fails is followed by a lane tick that reads again and, once the
+     stub answers, sets `ccdVerbs` and `ccdLimits` with no restart; a measured record with an unchanged key runs no
+     exec on later ticks; a hung stub on one tick does not start a second exec on the next (single-flight).
+     **Refresh, both modes:** the route on a failed record re-reads and unlocks the row when the stub or agent now
+     answers; on a still-failing read it returns the "last read failed" reason; on an old-shape answer it returns
+     "the box does not report it"; two Refresh presses during one read run one exec. The row shows each reason and
+     the Refresh button while locked, and neither once unlocked. **Box copy:** a failed start-time `box-setting`
+     send is retried on the next tick until `--get` echoes the value. **Remote mode:** the ready frame and the `caps`
+     reply carry the field; an older agent's frame reads unknown; a change to the lib file re-reads caps in the
+     agent; the same three Ages route cases with the limits arriving from the agent. The Dependency cache row's
+     `cache-root-unset` and `cache-root-unmeasured` cases run in both modes too.
 
    **Until this step lands**, in either mode, the Stale reclaim row is read-only and shows the box floor as unknown,
    with edits refused `floor-unmeasured` (§5.1), and the Dependency cache row shows the cache root as unknown, with On
-   refused `cache-root-unmeasured` (§4). Neither value is guessed.
+   refused `cache-root-unmeasured` (§4). Neither value is guessed. The reason line and Refresh land with this step;
+   before it, both rows say only that this box does not report the value, which is then the truth.
 6. **R-2** the dependency cache: the `ws-deps` verb with its manifest, quarantine, fenced replace and `--check`, the
    `ws-add --child` hook, cache eviction and re-hash in the tmp sweep, the SAFETY-list entries, the Dependency cache
    row with `ccd box-setting` and its re-send on agent connect (remote) or server start (local), and **in the same
@@ -944,7 +988,7 @@ record shows the evidence named below.
 | Q3 | Dependencies: (a) the read-only cache with manifest and the `npm ci` instructions change (R-2), (b) a symlinked shared directory, or (c) deps-shed alone | **(a)**, seeded Off; 20 GB, 14 days idle | Removes the per-tree copy without letting one tree change another's | a design ruling; then the Dependency cache row (On, size cap, idle age), handed to the box by `ccd box-setting`. The cache root is install config and only makes On possible |
 | Q4 | Parked runs: (a) nudge at 48 h, mark the existing run row "parked" at 7 days, add the PR check to the existing Abandon with the operator's bounded wait or unproven confirm, and to the archive door's programme end with its unproven confirm (R-3b.4); never automatic. Or (b) also auto-abandon | **(a)**; revisit (b) after two weeks of nudges | No new control outside the existing sheet. Keeps the Rejected-list rule that a close is a person's or a coordinator's act, and never locks the operator out of it | the Ages rows Parked-run nudge, Parked-run line and Abandon settle wait; the run row's Abandon. Under (b), one Shadow lanes row holds auto-abandon's switch and age |
 | Q5 | Coordinators: (a) auto-archive after N idle days with countdown and Keep, built after D8, or (b) never | **(a), N = 14** | Deps-shed already takes their bytes; this takes the count, and only once claims are proven | a design ruling; then the coordinator archive's Shadow lanes row (switch and N), and Keep or Archive now on each session row |
-| Q6 | Stale reclaim age in this deployment (R-3a) | **Keep 168 h**, the floor | The row can only raise it (Q11), and raising it keeps trees longer, which the census does not call for | the Ages row Stale reclaim after, editable once the box reports its floor (§9 step 5, local and remote mode alike) and read-only until then; the box takes it on each stale call (`--stale-idle-s`) and refuses a figure below its own floor |
+| Q6 | Stale reclaim age in this deployment (R-3a) | **Keep 168 h**, the floor | The row can only raise it (Q11), and raising it keeps trees longer, which the census does not call for | the Ages row Stale reclaim after, editable once the box reports its floor (§9 step 5, local and remote mode alike) and read-only until then, with the reason and a Refresh while locked; the box takes it on each stale call (`--stale-idle-s`) and refuses a figure below its own floor |
 | Q7 | Set the Roster card row live (D4) | **Yes, as soon as** its existing log shows the evidence below | It only adds context, fails open, and directly prevents forgotten runs | its Shadow lanes row; the hook reads it from the `runs list` reply |
 | Q8 | Set the Drift push row live (D7) | **After DT4 lands**, on the evidence below | A push must land on a PWA section the operator can act from | its Shadow lanes row |
 | Q9 | Set the Dead-coordinator lane row live (OA-D6) | **Only after D8's DT7**, then on the evidence below | Until DT7 a coordinator revived under a new id reads as dead, and no hand check of today's rows covers a later revive | its Shadow lanes row; its gate refuses Live before DT7 |
