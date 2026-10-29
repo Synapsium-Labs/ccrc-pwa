@@ -309,7 +309,7 @@ describe('the client stays closed', () => {
       'both the id and the query value must be checked').toBeGreaterThanOrEqual(3);
   });
 
-  it('fills a body on exactly two rows, and the census of rows is unchanged (D-5298)', () => {
+  it('fills a body on exactly two rows and splices the family\'s kind on the four claimant rows, and the census of rows is unchanged (D-5298, D-7322)', () => {
     // A body fill is one of the two ways this client writes words its caller did not.
     // `ledger.allocate` fills `byId`; `runs.open` fills `claimedByUuid`, the
     // claimant's own `.uuid` (coordinator-first routing, plan Task 11a). A third
@@ -323,6 +323,9 @@ describe('the client stays closed', () => {
     // twenty-eight; they fill nothing either: the hook builds its request body whole.
     // The claimant's three (plan Task 16) took it to thirty-one: `rule` and `release` carry the caller's own body,
     // and `show` derives its query from the pane as `asks list` does — a query, not a body fill.
+    // The third fill is the question door family's `kind` (K5 Q3j): on the four claimant rows only, and only while the
+    // server advertises `questions-v1`, the client splices a `kind` read from the row's family template, never from the
+    // caller, so it is counted by its own scan below rather than by the two keyed fills' spelling.
     const code = clientCode();
     const filled = [...code.matchAll(/^\s*if \[\[ "\$key" == '([a-z.-]+)' && -n "\$body" \]\]; then$/gm)]
       .map((m) => m[1]!).sort();
@@ -331,6 +334,15 @@ describe('the client stays closed', () => {
     // The claimant's identity is the PANE's, derived, never a value the caller
     // passes as a flag: the runs.open fill splices `$DERIVED_UUID` and nothing else.
     expect(code).toMatch(/splice_body_field 'claimedByUuid' "\$DERIVED_UUID"/);
+    // The family's splice: one guard line, one `kind` splice, its value the variable read from `$family`'s prefix, and
+    // the rows that carry a family are exactly the four claimant rows.
+    expect([...code.matchAll(/^\s*if \[\[ -n "\$family" \]\] && _api_server_cap questions-v1; then$/gm)], 'the family guard line').toHaveLength(1);
+    const kindSplices = [...code.matchAll(/splice_body_field 'kind' "\$([a-z_]+)"/g)].map((m) => m[1]!);
+    expect(kindSplices, 'the kind splice').toEqual(['qkind']);
+    expect(code, 'the spliced kind is derived from the family template\'s prefix').toMatch(
+      /^\s*local qkind="\$\{family#\/api\/questions\/\}"\n\s*qkind="\$\{qkind%%-\*\}"$/m);
+    expect(clientRoutes().filter((r) => r.family !== null).map((r) => r.key))
+      .toEqual(['asks.answer', 'asks.release', 'approvals.rule', 'approvals.release']);
   });
 });
 
