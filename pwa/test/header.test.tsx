@@ -884,7 +884,11 @@ describe('archived chip', () => {
     render(<SessionHeaderHost {...props({ session: fleetSession({
       workspace: 'quiet-basin', archivedAt: 1785300000, pr: null,
     }) })} />);
-    expect(screen.getByText('archived')).toBeInTheDocument();
+    // The archived row is the server's (the fixture's archived rung: pane gone, bucket archived, C7j, D-7468), so the
+    // status chip reads "archived" too; the pin is the archived chip's own text.
+    const chips = screen.getAllByText('archived').filter((e) => e.classList.contains('chip--archived'));
+    expect(chips).toHaveLength(1);
+    expect(chips[0]).toBeInTheDocument();
   });
 
   it('does not derive from pr.phase — a merged PR alone is not an archive', () => {
