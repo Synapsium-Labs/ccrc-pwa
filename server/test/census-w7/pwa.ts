@@ -483,3 +483,53 @@ export const transcriptCopyRules = (): W7Site[] => [
   ...walkSrc({ roots: ['server/src'], min: 200, match: /\.ts$/ }),
   ...walkSrc({ roots: ['shared'], min: 5, flat: true, match: /\.ts$/ }),
 ].flatMap((rel) => transcriptCopyRulesIn(parsedFile(rel), rel));
+
+// ─── C7g. the operator answer doors (ARCH-57's PWA half, D-7185, D-7485) ─────────────────────────────────────────────
+
+/** The four `lib/api.ts` writers W3 Q3f's family replaces (`/ask`, `/dialog`, `/dialog/text`, `/dialog/multi`). */
+export const OLD_ANSWER_WRITERS: readonly string[] = ['answerDialog', 'answerDialogText', 'answerDialogMulti', 'answerAsk'];
+
+/** Every place a `pwa/src` file names one of the four old writers as code, by kind: `reference`, a definition or a
+ *  member reference (`answerDialog: async (…) => …` in `createApi`, `seam.answerDialog` not called); `call`, a call
+ *  (`api.answerDialog(…)`, `seam.answerDialogMulti(…)`); `name`, the name as a whole string literal (a
+ *  `Pick<Api, 'answerDialog'>` key). A comment is not code, and a longer name (`answerDialogTab`) is another name. The
+ *  base (`origin/main` before C7g) counts 10: `createApi`'s four definitions, `AnswerSeam`'s three `Pick` keys and
+ *  `performAnswer`'s three calls. C7g's tip counts 0. KNOWN WIDTH: a name built from parts, or reached through a
+ *  computed member, is not seen. */
+export function oldAnswerWritersIn(p: ParsedFile, file: string): W7Site[] {
+  const names = new Set(OLD_ANSWER_WRITERS);
+  const lines = p.text.split('\n');
+  const refs = identifierReferences(p.text, file, names).filter((r) => r.role !== 'import').map((r): W7Site => ({
+    file, symbol: enclosingSymbol(p, lineOffset(p.text, r.line, r.name)), line: r.line,
+    text: (lines[r.line - 1] ?? '').trim().slice(0, 140), kind: r.role === 'call' ? 'call' : 'reference',
+  }));
+  const strings = stringExpressions(p.text, file).filter((e) => !e.partial && names.has(e.text))
+    .map((e) => site(p, file, e.start, e.line, p.text.slice(e.start, e.end), 'name'));
+  return [...refs, ...strings].sort((a, b) => a.line - b.line);
+}
+export const oldAnswerWriters = (): W7Site[] => overPwa(oldAnswerWritersIn);
+
+/** The old operator answer doors' path endings. `/dialog/tab` is not one: Q3f keeps it a session door (D-7485). */
+const OLD_ANSWER_DOOR = /\/(?:ask|dialog|dialog\/text|dialog\/multi)$/;
+/** The one place C7g keeps the old doors' paths: the skew row's table, deleted by C7p with the aliases. */
+export const LEGACY_ANSWER_DOORS_NAME = 'LEGACY_ANSWER_DOORS';
+
+/** Every string expression in `pwa/src`, and in `pwa/public/push-sw.js`, whose text ends with an old operator answer
+ *  door (`/ask`, `/dialog`, `/dialog/text`, `/dialog/multi`; a template's static part counts, so `${sid(id)}/dialog`
+ *  is one), by kind: `skew-table`, a string inside `answerLifecycle.ts#LEGACY_ANSWER_DOORS`'s initialiser (the doors a
+ *  server without `questions-v1` is answered through); `region`, a string between push-sw.js's generated markers (its
+ *  render of that table's `/ask`); `door`, any other. The base counts 9 (`lib/api.ts`'s four writers,
+ *  `answerLifecycle.ts#answerRequest`'s three and `ASK_REQUEST`'s `/ask`, and the region's render); C7g's tip counts
+ *  the table's 4 and the region's 1, and no `door`. KNOWN WIDTH: a path assembled from a variable suffix is not seen. */
+export function oldAnswerDoorPathsIn(p: ParsedFile, file: string): W7Site[] {
+  const table = p.bindings.find((b) => b.name === LEGACY_ANSWER_DOORS_NAME);
+  const b = p.text.indexOf(GEN_BEGIN);
+  const e = b < 0 ? -1 : p.text.indexOf(GEN_END, b);
+  return stringExpressions(p.text, file).filter((x) => OLD_ANSWER_DOOR.test(x.text)).map((x) => {
+    const kind = table !== undefined && table.start <= x.start && x.end <= table.end ? 'skew-table'
+      : b >= 0 && e >= 0 && x.start > b && x.start < e ? 'region' : 'door';
+    return site(p, file, x.start, x.line, p.text.slice(x.start, x.end).slice(0, 140), kind);
+  });
+}
+export const oldAnswerDoorPaths = (): W7Site[] =>
+  [...overPwa(oldAnswerDoorPathsIn), ...oldAnswerDoorPathsIn(parseSource(readFileSync(path.join(REPO, PUSH_SW), 'utf8'), PUSH_SW), PUSH_SW)];

@@ -324,3 +324,26 @@ describe('one session path and one ensure (C7k, D-7189)', () => {
     expect(sites.map((s) => `${site(s)} [${s.kind}]`)).toEqual([`${ENSURE_OWNER} [call]`]);
   });
 });
+
+// C7g (D-7185, D-7485; ARCH-57 #792, PWA half): the PWA answers every operator question through one writer,
+// `lib/api.ts#answerQuestion`, on W3 Q3f's `POST /api/questions/session-<id>/answer`. The four writers the family replaces
+// (`answerDialog`, `answerDialogText`, `answerDialogMulti`, `answerAsk`) are gone, and no `pwa/src` code names them
+// (`census-w7/pwa.ts#oldAnswerWriters`). The old doors' paths live in ONE place, the skew row's table
+// (`answerLifecycle.ts#LEGACY_ANSWER_DOORS`, a server without `questions-v1`) and push-sw.js's render of it; C7p deletes
+// both with the aliases. RECORDED MUTANT (run at C7g's tip): putting `answerAsk` back on `createApi` as it stood
+// (`answerAsk: (id, askKey, optionIndexes) => post(`${sid(id)}/ask`, …)`) reds both rows below: oldAnswerWriters()
+// finds `pwa/src/lib/api.ts#createApi [reference]`, and oldAnswerDoorPaths() finds its `${sid(id)}/ask` as a `door`.
+describe('the PWA answers operator questions through one writer on Q3f\'s door (C7g, D-7185, D-7485)', () => {
+  it('oldAnswerWriters(): 0 (from 10); may only shrink', async () => {
+    const { oldAnswerWriters, showSite } = await import('../census-w7/pwa.js');
+    expect(oldAnswerWriters().map(showSite)).toEqual([]);
+  });
+
+  it('oldAnswerDoorPaths(): no door outside the skew table and its push-sw render (from 8 doors); may only shrink', async () => {
+    const { oldAnswerDoorPaths } = await import('../census-w7/pwa.js');
+    const sites = oldAnswerDoorPaths();
+    expect(sites.filter((s) => s.kind === 'door').map((s) => `${s.file}#${s.symbol}:${s.line} ${s.text}`)).toEqual([]);
+    expect(sites.filter((s) => s.kind === 'skew-table').every((s) => s.file === 'pwa/src/session/answerLifecycle.ts')).toBe(true);
+    expect(sites.length).toBeLessThanOrEqual(5);
+  });
+});
