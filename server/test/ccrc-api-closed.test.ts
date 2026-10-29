@@ -9,6 +9,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { CCRC_API } from './ccdWsHelpers.js';
+import { clientRoutes } from './ccrcApiTable.js';
 
 const root = path.join(import.meta.dirname, '..', '..');
 const corpusFiles = (): string[] => {
@@ -28,12 +29,7 @@ const corpusFiles = (): string[] => {
 
 const client = (): string => fs.readFileSync(CCRC_API, 'utf8');
 
-const routeKeys = (): Set<string> => {
-  const src = client();
-  const start = src.indexOf('declare -A ROUTES=(');
-  const table = src.slice(start, src.indexOf('\n)', start));
-  return new Set([...table.matchAll(/^\s*\[([a-z.-]+)\]=/gm)].map((m) => m[1]!));
-};
+const routeKeys = (): Set<string> => new Set(clientRoutes().map((r) => r.key));
 
 /** The client with its comments stripped. The negative flag scans below MUST
  *  read this and not the raw file: `ccrc-api`'s own header names every flag it
