@@ -78,9 +78,10 @@ export const itemTallyLabel = (items: RunItemTally): string =>
 export const runClosedAt = (run: { closedAt?: number | null }): number | null =>
   run.closedAt ?? null;
 
-/** What `runLastMove` reads: `RunSummary`'s two times, and the server's `lastMoveAt` (D-7334). Declared here, structurally, until
- *  `RunSummary` carries `lastMoveAt` itself; every `RunSummary` already satisfies it. When the field lands on the wire type,
- *  this alias goes and the reader takes `RunSummary`, with no caller changing. */
+/** What `runLastMove` reads: `RunSummary`'s two times, and the server's `lastMoveAt` (D-7334). It was declared here,
+ *  structurally, before `RunSummary` carried the field; `RunSummary.lastMoveAt` is on the wire type now, and every
+ *  `RunSummary` satisfies this alias. The alias goes in Task G1b, with the card wiring (D-7380), when the reader takes
+ *  `RunSummary` and no caller changes. */
 type LastMoveCarrier = Pick<RunSummary, 'openedAt' | 'dispatchedAt'> & { readonly lastMoveAt?: number | null };
 
 /** The one reader of `RunSummary.lastMoveAt` (D-7334, D-7338). ABSENT is an older server and reads null, so an older server
