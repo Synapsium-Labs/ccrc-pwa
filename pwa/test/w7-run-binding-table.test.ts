@@ -241,8 +241,10 @@ describe('the run binding table (#746 fixture): today\'s readers, row by row', (
     'an open planned run with sessionId null': {
       50: { question: 'which listed session carries the claimant id', wire: { sessionRunOf: null, openRunOf: null, childIds: 'absent' }, runForSession: null, runBelongsTo: false, worker: null, coordSession: C, coordPresence: 'dead', resumeDoor: true, abandonChild: 'unknown', runCard: 'project-a', paletteClaims: true, treeRow: 'project-a:depth0' },
     },
+    // C7d's behaviour rows, OA-C15 (a) (D-7265): an open run's worker is the session the wire binds to it, so a worker
+    // the wire does not bind is not bracketed under the run's claimant (fleetTree, `treeRow`: depth1 before).
     'an open run whose worker binding is undecidable (no run key on the worker)': {
-      51: { question: 'which live session is this open run\'s worker', wire: { sessionRunOf: null, openRunOf: null, childIds: 'absent' }, runForSession: 51, runBelongsTo: true, worker: W, coordSession: C, coordPresence: 'dead', resumeDoor: true, abandonChild: 'child', runCard: 'project-a', paletteClaims: true, treeRow: 'project-a:depth1' },
+      51: { question: 'which live session is this open run\'s worker', wire: { sessionRunOf: null, openRunOf: null, childIds: 'absent' }, runForSession: 51, runBelongsTo: true, worker: W, coordSession: C, coordPresence: 'dead', resumeDoor: true, abandonChild: 'child', runCard: 'project-a', paletteClaims: true, treeRow: 'project-a:depth0' },
     },
     'an open run on a tick whose childIds are empty (the registry was unlistable)': {
       52: { question: 'which live session is this open run\'s worker', wire: { sessionRunOf: 52, openRunOf: 52, childIds: [] }, runForSession: 52, runBelongsTo: true, worker: W, coordSession: C, coordPresence: 'dead', resumeDoor: true, abandonChild: 'child', runCard: 'project-a', paletteClaims: true, treeRow: 'project-a:depth1' },
@@ -301,9 +303,12 @@ describe('nestFleet\'s attentionFirst lookup: the child order under one coordina
   const waiting = (over: Partial<FleetSession>): FleetSession => worker({ child: { kind: 'child', runId: 61 }, status: 'idle', bucket: 'attention', ...over });
   const ORDERS: ReadonlyArray<{ name: string; sessions: readonly FleetSession[]; tree: readonly string[]; nest: readonly string[] }> = [
     { name: 'the waiting worker is unbound (no run on the wire), the stale run names it by id',
-      sessions: [coord(), ordinary(), waiting({ run: null, openRun: null })], tree: [W, O], nest: [W, O] },
+      // C7d's behaviour row, OA-C15 (a): the tree brackets only the run the wire binds, so the unbound waiting worker is
+      // not this coordinator's child on the card (tree: [W, O] before).
+      sessions: [coord(), ordinary(), waiting({ run: null, openRun: null })], tree: [O], nest: [W, O] },
     { name: 'the waiting worker is a recycled id (its binding names another run), the stale run names it by id',
-      sessions: [coord(), ordinary(), waiting({ run: bound(closed(90)), openRun: null })], tree: [W, O], nest: [W, O] },
+      // C7d's behaviour row, OA-C15 (a): the recycled id's binding names another run (tree: [W, O] before).
+      sessions: [coord(), ordinary(), waiting({ run: bound(closed(90)), openRun: null })], tree: [O], nest: [W, O] },
     { name: 'the control: the waiting worker is bound to the wave-2 run',
       sessions: [coord(), ordinary(), waiting({ run: bound(r61), openRun: bound(r61) })], tree: [W, O], nest: [W, O] },
   ];
