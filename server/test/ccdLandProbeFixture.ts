@@ -31,6 +31,21 @@ export function pidGone(pid: number): boolean {
   } catch { return true; }
 }
 
+/** A holder of `lock`: ONE process opens it on fd 9, takes flock(2) on that descriptor, then becomes `sleep` (exec keeps
+ *  the pid and the descriptor), so SIGKILL on the returned child releases the lock and leaves no orphan. The descriptor
+ *  form is the one spelling both flock(1)s share: util-linux's `--no-fork` (and `-F`) is missing from the BSD-side
+ *  flock a macOS runner installs, which refuses it with rc 64, so the lock was never taken there. The caller waits
+ *  for `lockHeld` and kills the child (D-7499). */
+export function holdLandLock(lock: string): ChildProcess {
+  return spawn('bash', ['-c', 'exec 9>>"$1" && flock 9 && exec sleep 30', '_', lock], { stdio: 'ignore' });
+}
+
+/** True while another process holds `lock`: a non-blocking take on a fresh descriptor answers 1, the conflict code
+ *  of both flock(1)s. Any other failure (no flock, a bad option) is not a holder, so it never reads as one. */
+export function lockHeld(lock: string): boolean {
+  return spawnSync('bash', ['-c', 'exec 9>>"$1" && flock -n 9', '_', lock]).status === 1;
+}
+
 /** Wait until `fn` holds, or the budget (ms) is spent; the last answer. */
 export async function until(fn: () => boolean, ms = 10_000, stepMs = 50): Promise<boolean> {
   const end = Date.now() + ms;

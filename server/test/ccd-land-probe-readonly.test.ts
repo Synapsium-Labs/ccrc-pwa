@@ -27,11 +27,11 @@
 // and that evidence is the mutation rows (one planted violation each, measured one at a time on the final files, the
 // file restored from a saved copy) that the wave's controller re-measures; they are not in this file.
 import { describe, it, expect, afterEach } from 'vitest';
-import { spawn, execFileSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { makeCcdHarness, ghPoisonAt, type CcdHarness } from './ccdWsHelpers.js';
-import { makeLandFixture, until, PROBE } from './ccdLandProbeFixture.js';
+import { makeLandFixture, holdLandLock, lockHeld, until, PROBE } from './ccdLandProbeFixture.js';
 import { mkTmp } from './tmpHelpers.js';
 
 const src = fs.readFileSync(PROBE, 'utf8');
@@ -482,11 +482,9 @@ describe('ccd-land-probe: the git_ro self-test', () => {
     // The lock is HELD while the self-test prints every verdict: a self-test that took it (flock -n) would exit 0
     // without printing, and one that read the pause marker would stop at "paused".
     fs.mkdirSync(path.join(home, '.ccrc'), { recursive: true });
-    const holder = spawn('flock', ['--no-fork', lock, 'sleep', '30'], { stdio: 'ignore' });
+    const holder = holdLandLock(lock);
     try {
-      const held = (): boolean => {
-        try { execFileSync('flock', ['-n', lock, 'true']); return false; } catch { return true; }
-      };
+      const held = (): boolean => lockHeld(lock);
       expect(await until(held, 5000), 'the test never took the lock').toBe(true);
       const snap = (): string => [fx.tmp, fx.reg, path.join(home, '.ccrc')].map((d) => fs.readdirSync(d).sort().join(',')).join('|');
       const before = snap();
