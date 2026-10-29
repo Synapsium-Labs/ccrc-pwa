@@ -579,6 +579,18 @@ const SIBLING_ENV_ONLY: Record<string, { cls: EnvOnlyClass; why: string }> = {
   CCRC_MODELS_PROBE_FIXTURE: { cls: 'fixture-path', why: 'ccrc-models-probe\'s one test seam: a file whose bytes stand in for the network answer.' },
 };
 
+/** The graph settings ccd-graph-sweep still reads by its own `: "${NAME:=default}"` line (D-7524). The graphify r2 wave's
+ *  GR2 makes them settings (CCRC_SETTINGS) before its GR4 replaces those lines with ccrc's reader, so in between each is
+ *  both a setting and an environment read there. Named here, never derived: W29-S2 exempts exactly these names, and only
+ *  in ccd-graph-sweep, and W29-S2t holds each to one such line and no other read. GR4 deletes each row with its line. */
+const GRAPH_SWEEP = 'ccd/ccd-graph-sweep';
+const GRAPH_TRANSITIONAL: Record<string, string> = {
+  CCRC_GRAPH_BUILD_TIMEOUT: 'ccd-graph-sweep bounds one engine build with it, by its own := default until GR4 reads it through ccrc\'s reader.',
+  CCRC_GRAPH_BUDGET: 'ccd-graph-sweep stops a pass after this many tree rebuilds, by its own := default until GR4 reads it with its repository-build meaning (D-7358).',
+  CCRC_GRAPH_MAX_WORKERS: 'ccd-graph-sweep hands one engine build this many workers, by its own := default until GR4 reads it through ccrc\'s reader.',
+  CCRC_GRAPH_HOOKSTATE_FRESH_SECS: 'ccd-graph-sweep\'s idle gate trusts a hookstate pointer this young, by its own := default until GR4 reads it through ccrc\'s reader.',
+};
+
 /** The tracked `.mjs` files ccd/ccrc names in a code line, by repository path or by a path that ends with the file's
  *  path below its top directory (`$CCRC_HERE/history/cli.mjs`, `$HOME/.cc-sessions/compact-card.mjs`). */
 const HELPER_FILES: readonly string[] = (() => {
@@ -666,6 +678,23 @@ describe('W29: the ccd-* sweeps read their settings through the shared reader fi
       inBoth: Object.keys(SIBLING_ENV_ONLY).filter((n) => n in ENV_ONLY).sort(),
     }).toEqual({ unclassified: [], aSetting: [], noLongerRead: [], inBoth: [] });
     for (const [n, e] of Object.entries(SIBLING_ENV_ONLY)) expect(e.why, `${n}'s reason is one sentence`).toMatch(/^[^\n]+\.$/);
+  });
+
+  it('W29-S2t (D-7524): a graph setting the graph sweep still reads by its own := line is a named transitional row, read by that one line and no other', () => {
+    const faults: string[] = [];
+    expect(SIBLING_FILES, 'the graph sweep is a sibling').toContain(GRAPH_SWEEP);
+    for (const n of Object.keys(GRAPH_TRANSITIONAL)) {
+      if (!SETTINGS.includes(n)) faults.push(`${n}: not in CCRC_SETTINGS, so not transitional; delete its row`);
+      if (n in SIBLING_ENV_ONLY || n in ENV_ONLY) faults.push(`${n}: also an environment-only exception`);
+      const shape = new RegExp('^: "\\$\\{' + n + ':=[^}]*\\}"$');
+      const own = SIBLING_CODE[GRAPH_SWEEP]!.split('\n').filter((l) => shape.test(l)).length;
+      if (own !== 1) faults.push(`${GRAPH_SWEEP}: ${own} \`: "\${${n}:=…}"\` lines, not one (GR4 deletes the line and this row together)`);
+      for (const f of SIBLING_FILES)
+        for (const l of SIBLING_CODE[f]!.split('\n'))
+          if (!(f === GRAPH_SWEEP && shape.test(l)) && envReads(l).has(n)) faults.push(`${f}: ${n} read other than by its := line: ${l.trim()}`);
+    }
+    expect(faults).toEqual([]);
+    for (const [n, why] of Object.entries(GRAPH_TRANSITIONAL)) expect(why, `${n}'s reason is one sentence`).toMatch(/^[^\n]+\.$/);
   });
 
   it('W29-S3: every CCRC_ name a node helper reads is in HELPER_ENV_ONLY, and no exception is documented as a ccrc.env line', () => {
