@@ -29,7 +29,17 @@
 // exports ONCE, imported through `shared/models.ts`'s re-export — there is no
 // second implementation left to compare it against.
 //
-// It imports nothing, not even `node:*`.
+// One import, and only one: `./base-url.mjs`, the endpoint gate (D-7308),
+// which imports nothing itself, `node:*` included — `shared/roster-json.mjs`'s
+// precedent. The registry's `baseUrl` is the endpoint the `compatible` probe
+// sends the lane's bearer key to, so whether one is admissible is the gate's
+// decision and its loopback set, imported rather than mirrored: a private copy
+// here drifted once already (another order, and laxer on six case-table rows,
+// the base-url plan's item 5). Every tree that ships this file ships the gate
+// beside it (`installTreeFixture.ts`'s TREE_FILES, `ccrc-doctorFixture.ts`'s
+// MODELS_OP_CLOSURE, the deployed checkout `ccd-usage-sweep` reads). Nothing
+// else is imported, not even `node:*`.
+import { BASE_URL_OK, LOOPBACK_HOSTS } from './base-url.mjs';
 
 /** The runtime twin of `shared/models.ts`'s own `as const` `CLASSES`, in the
  *  same order — that file keeps its own literal because only `.ts` can derive
@@ -201,12 +211,6 @@ export function modelsPushDecision(message, roster) {
 }
 
 const REGISTRY_KEYS = ['probe', 'classes', 'subagent', 'discovery', 'effort', 'baseUrl'];
-
-/** The hostnames `parseRegistry`'s `baseUrl` scheme gate (C13) treats as a
- *  local proxy, and so the one case http:// is legal for. `URL#hostname`
- *  keeps the brackets on an IPv6 literal (`new URL('http://[::1]/').hostname`
- *  is `'[::1]'`, measured), so that is the form matched here. */
-const LOOPBACK_HOSTS = ['127.0.0.1', 'localhost', '[::1]'];
 
 /** Thrown by `parseRegistry`. Carries the offending FIELD as data, not only in
  *  the sentence: the verbs' contract is "refuses, with the field named" (§10),

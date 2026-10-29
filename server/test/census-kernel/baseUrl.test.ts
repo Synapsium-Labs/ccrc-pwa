@@ -71,7 +71,8 @@ describe('loopbackSets — every array literal of exactly the three loopback hos
 
   it('real tree: 3 sets, one of them in another order (characterization)', () => {
     // Re-pointed in the move commit (D-7306): the title names the plan base's count; the `.ts` copy is gone.
-    expect(loopbackSets()).toEqual(['shared/base-url.mjs#LOOPBACK_HOSTS', 'shared/models.mjs#LOOPBACK_HOSTS']);
+    // Re-pointed again in BU3's move commit (D-7308): `shared/models.mjs` imports the set, so its private copy is gone.
+    expect(loopbackSets()).toEqual(['shared/base-url.mjs#LOOPBACK_HOSTS']);
   });
 });
 
@@ -181,6 +182,8 @@ describe('gateImporters — every import or re-export declaration of the gate, o
   });
 
   it('real tree: the ten sites in nine files (characterization)', () => {
+    // Re-pointed in BU3's move commit (D-7462): the title names the plan base's count. `shared/models.mjs`'s one
+    // import of the gate (D-7308) is an eleventh caller site, in a tenth file; the other ten are byte-identical.
     expect(gateImporters()).toEqual([
       { file: 'deploy/account-op.mjs', specifier: '../shared/base-url.mjs', resolves: 'shared/base-url.mjs' },
       { file: 'pwa/src/screens/settings/signInGate.ts', specifier: '../../../../shared/base-url', resolves: 'shared/base-url.ts', vite: 'shared/base-url.mjs' },
@@ -190,6 +193,7 @@ describe('gateImporters — every import or re-export declaration of the gate, o
       { file: 'server/test/base-url.test.ts', specifier: '../../shared/base-url.mjs', resolves: 'shared/base-url.mjs' },
       { file: 'server/test/fixtures/baseUrlCases.ts', specifier: '../../../shared/base-url.js', resolves: 'shared/base-url.ts' },
       { file: 'server/test/update-catalogue.test.ts', specifier: '../../shared/base-url.js', resolves: 'shared/base-url.ts' },
+      { file: 'shared/models.mjs', specifier: './base-url.mjs', resolves: 'shared/base-url.mjs' },
       { file: 'shared/roster-json.mjs', specifier: './base-url.mjs', resolves: 'shared/base-url.mjs' },
       { file: 'shared/roster.ts', specifier: './base-url.js', resolves: 'shared/base-url.ts' },
     ]);
