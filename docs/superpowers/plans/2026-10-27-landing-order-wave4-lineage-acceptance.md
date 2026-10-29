@@ -64,7 +64,7 @@ A session that can forge those files can already move its own ref and send mail 
 - it can opt in a project the operator never opted in;
 - the radar's next tick removes the files.
 
-A coordinator-side re-proof of the chain is carried to wave 4b (the landing-order ledger's Carried constraints). What stage 4 does guarantee:
+A coordinator-side re-proof of the chain is carried to wave 4c (the landing-order ledger's Carried constraints). What stage 4 does guarantee:
 - a stale or missing marker never accepts;
 - a lineage that is inconsistent in itself never accepts;
 - a lineage file the radar stopped rewriting never accepts;
