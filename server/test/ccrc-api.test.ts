@@ -23,6 +23,7 @@ import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import { hashLine } from '../src/auth/secret.js';
 import { CCRC_API, ghContainedEnv, harnessBin } from './ccdWsHelpers.js';
+import { clientRoutes } from './ccrcApiTable.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import { loopbackCurlFront } from './containedTools.js';
@@ -191,14 +192,12 @@ const sh = (script: string, input: string): Promise<string> =>
  *  second copy of this slice is exactly how the two would come to disagree,
  *  which is the fault the pin exists to catch one level up.
  *
- *  The class allows a HYPHEN: `runs items-list` is the first two-word verb, and
- *  a `[a-z.]+` class silently DROPPED it (D-843) — that is the whole reason this
- *  reads the client instead of counting the `ROWS` table below. */
-const routeKeys = (): string[] => {
-  const src = fs.readFileSync(CCRC_API, 'utf8');
-  const table = src.slice(src.indexOf('declare -A ROUTES=('));
-  return [...table.slice(0, table.indexOf('\n)')).matchAll(/^\s*\[([a-z.-]+)\]=/gm)].map((m) => m[1]!);
-};
+ *  Read through `ccrcApiTable.ts#clientRoutes`, the one reader of the table
+ *  (D-7320), whose key class allows a HYPHEN: `runs items-list` is the first
+ *  two-word verb, and a `[a-z.]+` class silently DROPPED it (D-843) — that is
+ *  the whole reason this reads the client instead of counting the `ROWS` table
+ *  below. */
+const routeKeys = (): string[] => clientRoutes().map((r) => r.key);
 
 describe('the closed route table', () => {
   // One case per row of the table, method AND path, because a table is only a
