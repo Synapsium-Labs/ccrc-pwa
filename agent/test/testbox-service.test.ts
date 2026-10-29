@@ -5,11 +5,11 @@
 // not this task's): it lays a fixture package into `run/checkout/`. The run's command is a fixture `vitest` whose
 // behaviour its `--mode=` word picks. The fake manager emulates root's two privileges and nothing else: `runs/<k>` is
 // writable only while root's prestart and clean steps run, so a run cannot create a sibling of `run`.
-import { describe, it, expect, afterAll } from 'vitest';
+import { describe, it, expect, afterAll, vi } from 'vitest';
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import {
-  chmodSync, closeSync, existsSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync,
+  appendFileSync, chmodSync, closeSync, existsSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync,
   utimesSync, writeFileSync,
 } from 'node:fs';
 import os from 'node:os';
@@ -29,11 +29,12 @@ import { listenRefusal, POLICY_CLOSE_CODE, startTestboxServer } from '../src/tes
 import { mirrorOps, type MirrorOps } from '../src/testbox/mirror.js';
 import { admit, cancel, enqueue, EMPTY_QUEUE, finish, positions, type QueueState } from '../src/testbox/queue.js';
 import { cleaned, fillRow, makePool, prepareFailedFrom, retentionPlan, startupSweep, step, takeUser, queuedRun } from '../src/testbox/runs.js';
+import { OutputTail } from '../src/testbox/results.js';
 import { FRAME_HANDLERS, TestboxService, type Conn, type ServiceSettings } from '../src/testbox/service.js';
 import { buildRunSpec, encodeSpec, workerArgv } from '../src/testbox/spec.js';
 import { statusAnswer, type StatusFacts } from '../src/testbox/status.js';
 import { boundedExec, type Exec } from '../src/testbox/exec.js';
-import { checkUnit, systemctlManager, units, unitExit, parseShow, type SystemManager, type UnitEnd } from '../src/testbox/systemd.js';
+import { checkUnit, systemctlManager, units, unitEnd, unitExit, parseShow, type SystemManager, type UnitEnd } from '../src/testbox/systemd.js';
 import { mkTmp } from './tmpHelpers.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -41,6 +42,8 @@ const REPO = path.resolve(HERE, '..', '..');
 const BIN = path.join(REPO, 'deploy', 'testbox', 'bin');
 const ME = os.userInfo().username;
 const LINUX = process.platform === 'linux';
+/** A unix socket path's cap, as `server/test/run-tmp.globalsetup.mjs#RUN_SUN_PATH_MAX` spells it. */
+const SUN_PATH_MAX = LINUX ? 108 : 104;
 
 // ---------------------------------------------------------------------------------------------------------------
 // Fixtures.
@@ -72,7 +75,7 @@ function chownStub(dir: string): string {
 
 const SETTINGS = (root: string, over: Partial<ServiceSettings> = {}): ServiceSettings => ({
   root, workers: 3, runTmpdir: '/tmp', toolsDir: path.join(root, 'tools'), envForward: ['CCRC_HISTORY_BASE', 'CCRC_LEDGER_BASE'],
-  runUserPrefix: 'ccrc-tb-', reportMaxBytes: 1024, serviceUser: ME, runs: 2, sessionRuns: 1, logTail: 5, retentionMs: 3_600_000, ...over,
+  runUserPrefix: 'ccrc-tb-', reportMaxBytes: 1024, serviceUser: ME, runs: 2, sessionRuns: 1, logTail: 5, retentionMs: 3_600_000, outputDrainMs: 100, ...over,
 });
 
 const ROW = (root: string): TestboxRepoRow => ({
@@ -105,11 +108,13 @@ class FakeManager implements SystemManager {
     if (typeof o === 'number') closeSync(o);
     if (typeof e === 'number') closeSync(e);
     const done = new Promise<UnitEnd>((resolve) => {
+      // What `systemctl start --wait` and `show` would say of this main process, read by the real manager's reader.
       child.on('exit', (code, signal) => {
         const sig = signal === null ? 0 : (os.constants.signals[signal] ?? 0);
-        resolve({ exit: code ?? 128 + sig, result: code === 0 ? 'success' : 'exit-code' });
+        const show = code === null ? `ExecMainCode=killed\nExecMainStatus=${sig}\nResult=signal\n` : `ExecMainCode=exited\nExecMainStatus=${code}\nResult=${code === 0 ? 'success' : 'exit-code'}\n`;
+        resolve(unitEnd({ status: code === 0 ? 0 : 3, killed: false }, parseShow(show)));
       });
-      child.on('error', () => resolve({ exit: 127, result: 'resources' }));
+      child.on('error', () => resolve(unitEnd({ status: 1, killed: false }, parseShow('ExecMainCode=0\nExecMainStatus=0\nResult=resources\n'))));
     });
     return { child, done };
   }
@@ -128,7 +133,9 @@ class FakeManager implements SystemManager {
       const pre = this.spawnTo(path.join(BIN, 'prestart'), [spec], null, path.join(out, 'prestart.stderr'));
       const preEnd = await pre.done;
       chmodSync(slot, 0o555);
-      if (preEnd.exit !== 0) return preEnd;
+      // An `ExecStartPre=` that refused: `start --wait` fails and the main process never ran, so `show` gives the
+      // defaults. The same reader as the real manager's reads it.
+      if (preEnd.exit !== 0) return unitEnd({ status: 1, killed: false }, parseShow('ExecMainCode=0\nExecMainStatus=0\nResult=exit-code\n'));
       return this.track(unit, this.spawnTo(this.prepare, [spec], path.join(out, 'prepare.stdout'), path.join(out, 'prepare.stderr')));
     }
     if (kind === 'run') return this.track(unit, this.spawnTo(path.join(BIN, 'runner'), [spec], path.join(out, 'stdout'), path.join(out, 'stderr')));
@@ -246,6 +253,11 @@ async function runOne(box: Box, over: Partial<RunSubmit> = {}): Promise<{ summar
   await box.svc.idle();
   return { summary, sink, id: f.runId };
 }
+
+/** How long a row waits for a live run's streamed output, and the row's own timeout above it: vitest's default 5 s
+ *  test timeout would otherwise end the row before its poll could. */
+const LIVE_POLL_MS = 20_000;
+const LIVE_ROW_TIMEOUT_MS = LIVE_POLL_MS + 10_000;
 
 const runDir = (box: Box, k: number): string => path.join(box.root, 'runs', String(k), 'run');
 
@@ -497,6 +509,29 @@ describe('systemd.ts: the static unit names only, the polkit rule\'s regex', () 
     ]);
     expect(unitExit(parseShow('ExecMainCode=1\nExecMainStatus=3\n'))).toBe(3);
   });
+  // What `systemctl` answers when the main process never ran or `start` itself failed: `show` then gives default or
+  // stale ExecMain values, so only `start`'s own status, `Result=` and `ExecMainCode` tell a pass from a unit that
+  // never ran.
+  const answering = (startStatus: number, show: string): Exec => async (_file, args) =>
+    ({ status: args[0] === 'start' ? startStatus : 0, stdout: args[0] === 'show' ? show : '', stderr: '', killed: false });
+  it.each([
+    ['ExecStartPre= refused (start exits 1, the main never ran)', 1, 'ExecMainCode=0\nExecMainStatus=0\nResult=exit-code\n'],
+    ['a unit that is not found (start exits 5, show gives the defaults)', 5, 'ExecMainCode=0\nExecMainStatus=0\nResult=success\n'],
+    ['a denied start (start exits 4, show gives the last run\'s pass)', 4, 'ExecMainCode=1\nExecMainStatus=0\nResult=success\n'],
+    ['a start that exits 0 but whose main never ran', 0, 'ExecMainCode=0\nExecMainStatus=0\nResult=success\n'],
+    ['a start that exits 0 with no ExecMainCode', 0, 'ExecMainStatus=0\nResult=success\n'],
+    ['a main that exited 0 in a unit whose Result is not success', 0, 'ExecMainCode=1\nExecMainStatus=0\nResult=timeout\n'],
+  ])('never a pass: %s', async (_name, startStatus, show) => {
+    const m = systemctlManager(answering(startStatus, show), answering(startStatus, show), 'systemctl');
+    expect((await m.run(units.run(1))).exit).not.toBe(0);
+    expect(unitEnd({ status: startStatus, killed: false }, parseShow(show)).exit).not.toBe(0);
+  });
+  it('a real pass is 0, a test failure keeps its exit, a signal is 128 plus its number', async () => {
+    const read = async (startStatus: number, show: string) => (await systemctlManager(answering(startStatus, show), answering(startStatus, show), 'systemctl').run(units.run(1)));
+    expect(await read(0, 'ExecMainCode=1\nExecMainStatus=0\nResult=success\n')).toEqual({ exit: 0, result: 'success' });
+    expect(await read(3, 'ExecMainCode=1\nExecMainStatus=1\nResult=exit-code\n')).toEqual({ exit: 1, result: 'exit-code' });
+    expect(await read(3, 'ExecMainCode=2\nExecMainStatus=15\nResult=signal\n')).toEqual({ exit: 143, result: 'signal' });
+  });
   it('a `start --wait` the bound ended stops the unit before its end is read', async () => {
     const short: string[][] = [];
     const m = systemctlManager(recorder(short), recorder([], true), 'systemctl');
@@ -584,7 +619,20 @@ describe('main.ts: the tailnet address only (spec §2.0)', () => {
   it.each(['0.0.0.0', '::', '', '127.0.0.1', '127.1.2.3', '::1', '::ffff:127.0.0.1', 'localhost', 'testbox.invalid'])('refuses %s', (h) => {
     expect(listenRefusal(h)).not.toBeNull();
   });
-  it.each(['192.0.2.10', '2001:db8::10'])('accepts %s', (h) => {
+  // The same addresses spelled another way: the guard compares addresses, not strings.
+  it.each(['0:0:0:0:0:0:0:0', '::0', '0::', '0000::', '::ffff:0.0.0.0', '::ffff:0:0', '0:0:0:0:0:ffff:0.0.0.0'])('refuses %s as every interface', (h) => {
+    expect(listenRefusal(h)).toMatch(/every interface/);
+  });
+  it.each(['0:0:0:0:0:0:0:1', '::0:1', '0::1', '::ffff:7f00:1', '::ffff:127.9.9.9', '0:0:0:0:0:ffff:7f00:0001', '::FFFF:127.0.0.1'])('refuses %s as loopback', (h) => {
+    expect(listenRefusal(h)).toMatch(/loopback/);
+  });
+  it.each(['0:0:0:0:0:0:0:0', '::0', '0::', '::ffff:0.0.0.0'])('the server itself refuses to bind %s', async (h) => {
+    const box = makeBox();
+    await expect(startTestboxServer({ host: h, port: 0, token: 'tok', service: box.svc })).rejects.toThrow(/must not bind/);
+  });
+  // 100.100.1.1 is the CGNAT-range (tailnet-shaped) row: the one placeholder
+  // topology-clean's CGNAT class sanctions.
+  it.each(['192.0.2.10', '2001:db8::10', '100.100.1.1', 'fd7a:115c:a1e0::1', '::ffff:192.0.2.10'])('accepts %s', (h) => {
     expect(listenRefusal(h)).toBeNull();
   });
 });
@@ -658,7 +706,7 @@ describe('a run through the units: prepare, run, clean, summary', () => {
     const sink = new Sink();
     const f = SUBMIT({ argv: ['./node_modules/.bin/vitest', 'run', '--mode=sleep'] });
     box.svc.submit(f, sink);
-    await expect.poll(() => sink.output(f.runId), { timeout: 20_000 }).toContain('started');
+    await expect.poll(() => sink.output(f.runId), { timeout: LIVE_POLL_MS }).toContain('started');
     await box.svc.cancel(f.runId);
     const summary = await sink.summary(f.runId);
     await box.svc.idle();
@@ -666,7 +714,7 @@ describe('a run through the units: prepare, run, clean, summary', () => {
     expect(box.mgr.log).toContain('stop ccrc-testbox-run@1.service');
     expect(existsSync(runDir(box, 1))).toBe(false);
     expect(box.svc.poolNow()[0]!.state).toBe('free');
-  });
+  }, LIVE_ROW_TIMEOUT_MS);
   it('a waiting run cancelled leaves the queue, nothing started for it', async () => {
     const box = makeBox({ runs: 1 });
     await box.svc.start();
@@ -679,12 +727,12 @@ describe('a run through the units: prepare, run, clean, summary', () => {
     expect(box.svc.status().queueDepth).toBe(1);
     await box.svc.cancel(second.runId);
     expect(box.svc.status().queueDepth).toBe(0);
-    await expect.poll(() => sink.output(first.runId), { timeout: 20_000 }).toContain('started');
+    await expect.poll(() => sink.output(first.runId), { timeout: LIVE_POLL_MS }).toContain('started');
     await box.svc.cancel(first.runId);
     await sink.summary(first.runId);
     await box.svc.idle();
     expect(sink.frames.some((x) => x.t === 'run.summary' && x.runId === second.runId)).toBe(false);
-  });
+  }, LIVE_ROW_TIMEOUT_MS);
   it('a failed prepare runs nothing of the command, cleans up and says why in TESTBOX_FALLBACK\'s words', async () => {
     const box = makeBox();
     writeFileSync(path.join(box.template, 'FAIL_PREPARE'), 'npm ci output\ntest box: install failed (server, exit 1)\n');
@@ -693,6 +741,19 @@ describe('a run through the units: prepare, run, clean, summary', () => {
     expect(summary).toMatchObject({ exit: 1, prepareFailed: { id: 'install-failed', text: 'test box: install failed (server, exit 1)' }, builtOnBox: [] });
     expect(box.mgr.log).toEqual(['ccrc-testbox-prepare@1.service', 'ccrc-testbox-clean@1.service']);
     expect(existsSync(runDir(box, 1))).toBe(false);
+  });
+  it('a prepare whose prestart refused (the run directory is there already) is a failure, and a previous run\'s prepare stderr gives no reason', async () => {
+    const box = makeBox();
+    await box.svc.start();
+    mkdirSync(runDir(box, 1));
+    // What the last run of slot 1 left in the output directory the system manager writes to.
+    writeFileSync(path.join(box.root, 'out', '1', 'prepare.stderr'), 'test box: install failed (server, exit 1)\n');
+    writeFileSync(path.join(box.root, 'out', '1', 'prepare.stdout'), 'prepared\n');
+    const { summary } = await runOne(box);
+    expect(summary.exit).not.toBe(0);
+    expect(summary.prepareFailed?.id).toBe('prepare-failed');
+    expect(summary.prepareFailed?.text).not.toContain('install failed');
+    expect(box.mgr.log).toEqual(['ccrc-testbox-prepare@1.service', 'ccrc-testbox-clean@1.service']);
   });
   it('the build outputs the local tree has are reported as built on the box', async () => {
     const box = makeBox();
@@ -761,6 +822,52 @@ describe('a run through the units: prepare, run, clean, summary', () => {
     box.svc.submit({ ...f, session: 'session-z' }, again);
     expect(again.refusals).toEqual([`run id ${f.runId} already used`]);
     expect(box.mgr.log.filter((u) => u.startsWith('ccrc-testbox-prepare'))).toHaveLength(1);
+  });
+});
+
+describe('the output tail: streamed on the watchers AND on a periodic drain, so a missed watch event never stalls the log', () => {
+  it('a write is sent within one drain interval with no watch event at all (fake timers: no event can be delivered)', () => {
+    const dir = mkTmp('ccrc-tb-tail-');
+    const out = path.join(dir, 'out');
+    mkdirSync(out);
+    writeFileSync(path.join(out, 'stdout'), '');
+    const chunks: string[] = [];
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'setTimeout', 'clearTimeout'] });
+    try {
+      const tail = new OutputTail(out, path.join(dir, 'logs', 'run.log'), (c) => chunks.push(c.bytes.toString('utf8')), 250);
+      tail.watch();
+      writeFileSync(path.join(out, 'stdout'), 'started\n');
+      expect(chunks).toEqual([]);
+      vi.advanceTimersByTime(250);
+      expect(chunks).toEqual(['started\n']);
+      appendFileSync(path.join(out, 'stdout'), 'more\n');
+      vi.advanceTimersByTime(250);
+      expect(chunks).toEqual(['started\n', 'more\n']);
+      tail.stop();
+      appendFileSync(path.join(out, 'stdout'), 'after stop\n');
+      vi.advanceTimersByTime(1000);
+      expect(chunks).toEqual(['started\n', 'more\n']);
+      expect(readFileSync(path.join(dir, 'logs', 'run.log'), 'utf8')).toBe('started\nmore\n');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+  it('a tail whose output directory does not exist yet still drains once it does', () => {
+    const dir = mkTmp('ccrc-tb-tail-');
+    const out = path.join(dir, 'out');
+    const chunks: string[] = [];
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'setTimeout', 'clearTimeout'] });
+    try {
+      const tail = new OutputTail(out, path.join(dir, 'logs', 'run.log'), (c) => chunks.push(c.bytes.toString('utf8')), 250);
+      tail.watch();
+      mkdirSync(out);
+      writeFileSync(path.join(out, 'stderr'), 'late\n');
+      vi.advanceTimersByTime(250);
+      expect(chunks).toEqual(['late\n']);
+      tail.stop();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
@@ -838,12 +945,31 @@ describe('the run\'s environment is the allowlist plus the forwarded names (spec
 });
 
 describe('the socket fixture (spec §5 row 1): the longest names the suites build bind under TMPDIR and under /tmp', () => {
-  it('both bind', async () => {
-    const box = makeBox();
+  // The run-tmp parent's socket path: realpath(TMPDIR)/ccrc-testrun-XXXXXX/live.sock.
+  const RUN_TMP_TAIL = Buffer.byteLength('/ccrc-testrun-XXXXXX/live.sock');
+  /** A run TMPDIR (not /tmp, not under it on macOS) as long as one may be: the live.sock under it is exactly the
+   *  platform's sun_path cap, the run-tmp parent's own limit. */
+  const made: string[] = [];
+  afterAll(() => { for (const d of made.splice(0)) rmSync(d, { recursive: true, force: true }); });
+  const longestRunTmpdir = (): string => {
+    // Under the real /tmp, not os.tmpdir(): a suite run's own TMPDIR is a long run-tmp directory with no room left.
+    const base = mkdtempSync(path.join(realpathSync('/tmp'), 'ccrc-tb-sock-'));
+    made.push(base);
+    const pad = SUN_PATH_MAX - RUN_TMP_TAIL - Buffer.byteLength(base) - 1;
+    if (pad < 1) throw new Error(`the fixture temp root is too long to pad: ${base}`);
+    const dir = path.join(base, 'p'.repeat(pad));
+    mkdirSync(dir);
+    return dir;
+  };
+  it('both bind, the TMPDIR one at the longest path the cap allows', async () => {
+    const runTmpdir = longestRunTmpdir();
+    const box = makeBox({ runTmpdir });
     await box.svc.start();
     const { sink, id, summary } = await runOne(box, { argv: ['./node_modules/.bin/vitest', 'run', '--mode=socket'] });
     expect(summary.exit).toBe(0);
-    expect(sink.output(id).split('\n').filter((l) => l.startsWith('bound') || l.startsWith('refused')).sort()).toEqual(['bound /tmp', 'bound TMPDIR']);
+    const lines = sink.output(id).split('\n').filter((l) => l.startsWith('bound') || l.startsWith('refused'));
+    expect(lines.map((l) => l.split(' ').slice(0, 2).join(' ')).sort()).toEqual(['bound /tmp', 'bound TMPDIR']);
+    expect(lines.find((l) => l.startsWith('bound TMPDIR'))).toBe(`bound TMPDIR ${SUN_PATH_MAX}`);
   });
 });
 

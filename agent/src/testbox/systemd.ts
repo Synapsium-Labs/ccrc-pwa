@@ -63,6 +63,22 @@ export function unitExit(show: ReadonlyMap<string, string>): number {
   return status;
 }
 
+/** The main process's `ExecMainCode`s: `exited`, `killed`, `dumped`, or their numbers. Anything else (`0`, or the
+ *  field absent) means the main process never ran. */
+const MAIN_RAN = new Set(['exited', 'killed', 'dumped', '1', '2', '3']);
+
+/** A unit's end from `start --wait`'s own status and `show`. `ExecMain*` describe the main process only, and after a
+ *  start that failed before it (an `ExecStartPre=` that refused, a unit not found, masked or denied) they are the
+ *  defaults or the last run's: so 0 is a pass only when `start` exited 0, `Result=` is `success` and the main process
+ *  ran. Every other 0 reads as `UNKNOWN_EXIT`; a non-zero exit of the main is kept as it is. */
+export function unitEnd(started: { readonly status: number; readonly killed: boolean }, show: ReadonlyMap<string, string>): UnitEnd {
+  const result = show.get('Result') ?? 'unknown';
+  if (!MAIN_RAN.has(show.get('ExecMainCode') ?? '')) return { exit: UNKNOWN_EXIT, result };
+  const exit = unitExit(show);
+  if (exit === 0 && (started.status !== 0 || started.killed || result !== 'success')) return { exit: UNKNOWN_EXIT, result };
+  return { exit, result };
+}
+
 /** The real manager: `systemctl start --wait`, `stop` and `show` of a checked name, nothing else. `start --wait` runs
  *  under the long bound (`CCRC_TESTBOX_UNIT_MAX`, which the units' own `RuntimeMaxSec=` also is, TB7); a client the
  *  bound ended stops the unit before the end is read, so nothing runs on after the service has moved on. */
@@ -74,8 +90,7 @@ export function systemctlManager(short: Exec, long: Exec, systemctl = 'systemctl
       const started = await long(systemctl, ['start', '--wait', name]);
       if (started.killed) await exec(systemctl, ['stop', name]);
       const r = await exec(systemctl, ['show', '-p', 'ExecMainCode', '-p', 'ExecMainStatus', '-p', 'Result', name]);
-      const show = parseShow(r.stdout);
-      return { exit: unitExit(show), result: show.get('Result') ?? 'unknown' };
+      return unitEnd(started, parseShow(r.stdout));
     },
     async stop(unit) {
       await exec(systemctl, ['stop', checkUnit(unit)]);

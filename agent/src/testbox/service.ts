@@ -16,7 +16,7 @@ import type {
 } from '../../../shared/testbox.js';
 import type { MirrorOps } from './mirror.js';
 import { admit, cancel as queueCancel, enqueue, EMPTY_QUEUE, finish, positions, queueCounts, type QueueState } from './queue.js';
-import { lastLine, logTail, OutputTail, PREPARE_STDERR, readReport, RUN_LOG } from './results.js';
+import { lastLine, logTail, OUTPUT_DRAIN_MS, OutputTail, PREPARE_STDERR, readReport, RUN_LOG, SLOT_OUTPUT_FILES } from './results.js';
 import {
   cleaned, heldUsers, liveRunIds, makePool, queuedRun, retentionPlan, retrySweep, startupSweep, step, takeUser,
   type KeptRun, type Pool, type RunAct, type RunEvent, type RunState,
@@ -31,6 +31,8 @@ export interface ServiceSettings extends SpecSettings {
   readonly sessionRuns: number;
   readonly logTail: number;
   readonly retentionMs: number;
+  /** How often a run's output tail drains besides its watchers; `results.ts#OUTPUT_DRAIN_MS` when unset. */
+  readonly outputDrainMs?: number;
 }
 
 export interface ServiceDeps {
@@ -216,6 +218,9 @@ export class TestboxService {
         run.spec = built.spec;
         writeSpec(this.s.root, built.spec);
         mkdirSync(p.out, { recursive: true });
+        // The slot's output files are the last run's until a unit writes them again: a prepare that never ran its main
+        // (an `ExecStartPre=` that refused) must not be given that run's reason, nor a run its output.
+        for (const f of SLOT_OUTPUT_FILES) rmSync(path.join(p.out, f), { force: true });
         const t0 = this.d.now();
         const end = run.state.cancelled ? FAILED_END : await this.unitRun(units.prepare(k));
         run.prepareMs = Math.max(0, this.d.now() - t0);
@@ -225,7 +230,7 @@ export class TestboxService {
       case 'start-run': {
         const tail = new OutputTail(p.out, path.join(p.logs, RUN_LOG), (c) => {
           run.sink.send({ t: 'run.log', runId: run.submit.runId, offset: c.offset, stream: c.stream, bytes: c.bytes.toString('base64') });
-        });
+        }, this.s.outputDrainMs ?? OUTPUT_DRAIN_MS);
         tail.watch();
         const t0 = this.d.now();
         const end = run.state.cancelled ? FAILED_END : await this.unitRun(units.run(k));

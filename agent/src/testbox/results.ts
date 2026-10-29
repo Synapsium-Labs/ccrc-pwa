@@ -13,6 +13,9 @@ export interface OutputChunk { readonly stream: TestboxStream; readonly offset: 
 
 export const OUTPUT_FILES: Readonly<Record<TestboxStream, string>> = { stdout: 'stdout', stderr: 'stderr' };
 export const PREPARE_STDERR = 'prepare.stderr';
+export const PREPARE_STDOUT = 'prepare.stdout';
+/** Every file the system manager writes into `out/<k>/` for one run, prepare and run units both. */
+export const SLOT_OUTPUT_FILES: readonly string[] = [PREPARE_STDOUT, PREPARE_STDERR, OUTPUT_FILES.stdout, OUTPUT_FILES.stderr];
 export const RUN_LOG = 'run.log';
 
 /** Bytes of `file` from `offset` to its current end. */
@@ -35,13 +38,21 @@ function readFrom(file: string, offset: number): Buffer {
   }
 }
 
+/** How often the tail drains besides its watchers, by default (`ServiceSettings.outputDrainMs`). A watch event can be
+ *  missed (macOS's directory and file watchers both drop writes under load), and without this a missed one would
+ *  hold the live log back until the unit stopped. */
+export const OUTPUT_DRAIN_MS = 500;
+
 /** The tail of one run's two output files. */
 export class OutputTail {
   private readonly offsets: Record<TestboxStream, number> = { stdout: 0, stderr: 0 };
   private watchers: FSWatcher[] = [];
   private readonly watched = new Set<string>();
+  private timer: ReturnType<typeof setInterval> | null = null;
 
-  constructor(private readonly outDir: string, private readonly logFile: string, private readonly onChunk: (c: OutputChunk) => void) {
+  constructor(private readonly outDir: string, private readonly logFile: string, private readonly onChunk: (c: OutputChunk) => void,
+    private readonly drainEveryMs: number = OUTPUT_DRAIN_MS) {
+    if (!Number.isInteger(drainEveryMs) || drainEveryMs < 1) throw new RangeError(`not a drain interval: ${String(drainEveryMs)}`);
     mkdirSync(path.dirname(logFile), { recursive: true });
   }
 
@@ -57,11 +68,20 @@ export class OutputTail {
     }
   }
 
-  /** Drain on every change, until `stop`. The directory is watched by its real path (a watcher on a path through a
-   *  symlink misses its events on some platforms), and each output file by itself as soon as it exists: a directory
-   *  watcher reports a file's creation everywhere but its writes only on some platforms. */
+  /** Drain on every change and every `drainEveryMs`, until `stop`. The directory is watched by its real path (a
+   *  watcher on a path through a symlink misses its events on some platforms), and each output file by itself as soon
+   *  as it exists: a directory watcher reports a file's creation everywhere but its writes only on some platforms.
+   *  The periodic drain is the floor under both: no write waits longer than one interval to be sent. */
   watch(): void {
-    if (this.watchers.length > 0 || !existsSync(this.outDir)) return;
+    if (this.timer === null) {
+      this.timer = setInterval(() => { this.watchDir(); this.drain(); }, this.drainEveryMs);
+      this.timer.unref?.();
+    }
+    this.watchDir();
+  }
+
+  private watchDir(): void {
+    if (this.timer === null || this.watchers.length > 0 || !existsSync(this.outDir)) return;
     const dir = realpathSync(this.outDir);
     const attach = (): void => {
       for (const name of Object.values(OUTPUT_FILES)) {
@@ -81,6 +101,8 @@ export class OutputTail {
 
   /** The last drain, then no more. */
   stop(): void {
+    if (this.timer !== null) clearInterval(this.timer);
+    this.timer = null;
     for (const w of this.watchers.splice(0)) w.close();
     this.watched.clear();
     this.drain();

@@ -7,7 +7,7 @@
 // nothing of the fleet agent's (`agent/test/testbox-imports.test.ts`).
 import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
-import { isIP } from 'node:net';
+import { BlockList, isIP } from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -27,14 +27,42 @@ export const POLICY_CLOSE_CODE = 1008;
 /** A close frame's reason is at most 123 bytes (RFC 6455); the refusal is cut to fit. */
 const CLOSE_REASON_MAX = 123;
 
+/** The unspecified addresses (every interface), in each family and IPv4-mapped. */
+const EVERY_INTERFACE = new BlockList();
+EVERY_INTERFACE.addAddress('0.0.0.0', 'ipv4');
+EVERY_INTERFACE.addAddress('::', 'ipv6');
+EVERY_INTERFACE.addAddress('::ffff:0.0.0.0', 'ipv6');
+/** Loopback, in each family and IPv4-mapped. */
+const LOOPBACK = new BlockList();
+LOOPBACK.addSubnet('127.0.0.0', 8, 'ipv4');
+LOOPBACK.addAddress('::1', 'ipv6');
+LOOPBACK.addSubnet('::ffff:127.0.0.0', 104, 'ipv6');
+
+/** What a host is, compared as an address (so `0::`, `0:0:0:0:0:0:0:1` and `::ffff:7f00:1` read as what they are):
+ *  every interface, loopback, another address, or not an address at all. */
+export function listenClass(host: string): 'every-interface' | 'loopback' | 'address' | 'not-an-address' {
+  if (host === '') return 'every-interface';
+  const family = isIP(host);
+  if (family === 0) return 'not-an-address';
+  const type = family === 4 ? 'ipv4' : 'ipv6';
+  try {
+    if (EVERY_INTERFACE.check(host, type)) return 'every-interface';
+    if (LOOPBACK.check(host, type)) return 'loopback';
+  } catch {
+    return 'not-an-address';
+  }
+  return 'address';
+}
+
 /** Why a configured listen host is refused, or `null`: the wildcard addresses, loopback and a name that is not an
- *  address (a name could resolve to either). */
+ *  address (a name could resolve to either), each however it is spelled. */
 export function listenRefusal(host: string): string | null {
-  const h = host.toLowerCase();
-  if (h === '0.0.0.0' || h === '::' || h === '') return `${host || '(empty)'} is every interface; the service binds the tailnet address only`;
-  if (isIP(h) === 0) return `${host} is not an address; the service binds the tailnet address only`;
-  if (/^127\./.test(h) || h === '::1' || /^::ffff:127\./.test(h)) return `${host} is loopback; a run's loopback must not reach the service`;
-  return null;
+  switch (listenClass(host)) {
+    case 'every-interface': return `${host || '(empty)'} is every interface; the service binds the tailnet address only`;
+    case 'not-an-address': return `${host} is not an address; the service binds the tailnet address only`;
+    case 'loopback': return `${host} is loopback; a run's loopback must not reach the service`;
+    case 'address': return null;
+  }
 }
 
 export interface TestboxServerOpts {
@@ -78,10 +106,10 @@ function handleConnection(ws: WebSocket, o: TestboxServerOpts): void {
   ws.on('close', () => clearTimeout(helloTimer));
 }
 
-/** The WebSocket server. It refuses only the wildcard addresses itself; `main` refuses loopback too, from the
+/** The WebSocket server. It refuses only the wildcard addresses itself, however spelled; `main` refuses loopback too, from the
  *  settings, so in-process tests can bind loopback while the service never does. */
 export async function startTestboxServer(o: TestboxServerOpts): Promise<RunningTestbox> {
-  if (o.host === '0.0.0.0' || o.host === '::') throw new Error('the test service must not bind 0.0.0.0/::');
+  if (listenClass(o.host) === 'every-interface') throw new Error(`the test service must not bind every interface (${o.host || '(empty)'})`);
   const httpServer: Server = createServer();
   const wss = new WebSocketServer({ server: httpServer });
   wss.on('connection', (ws) => handleConnection(ws, o));

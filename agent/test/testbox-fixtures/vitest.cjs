@@ -30,12 +30,15 @@ if (mode === 'socket') {
   const runTmp = fs.mkdtempSync(path.join(tmp, 'ccrc-testrun-'));
   const dlgt = fs.mkdtempSync('/tmp/dlgt-');
   fs.mkdirSync(path.join(dlgt, 'tmux-' + process.getuid()));
-  const socks = [path.join(runTmp, 'live.sock'), path.join(dlgt, 'tmux-' + process.getuid(), 'default')];
+  // Each socket is labelled by the directory it was built under, never by a prefix test: where TMPDIR itself lies
+  // under /tmp (Linux's default), a prefix test would give both sockets one label.
+  const socks = [['TMPDIR', path.join(runTmp, 'live.sock')], ['/tmp', path.join(dlgt, 'tmux-' + process.getuid(), 'default')]];
   let left = socks.length;
-  for (const s of socks) {
+  for (const [label, s] of socks) {
+    const bytes = Buffer.byteLength(s);
     const srv = net.createServer();
-    srv.on('error', (e) => { console.log('refused ' + s.length + ' ' + e.code); if (--left === 0) done(); });
-    srv.listen(s, () => { console.log('bound ' + (s.startsWith(tmp) ? 'TMPDIR' : '/tmp')); srv.close(() => { if (--left === 0) done(); }); });
+    srv.on('error', (e) => { console.log('refused ' + label + ' ' + bytes + ' ' + e.code); if (--left === 0) done(); });
+    srv.listen(s, () => { console.log('bound ' + label + ' ' + bytes); srv.close(() => { if (--left === 0) done(); }); });
   }
   function done() { fs.rmSync(runTmp, { recursive: true, force: true }); fs.rmSync(dlgt, { recursive: true, force: true }); report(false); process.exit(0); }
   return;
