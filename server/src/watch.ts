@@ -136,6 +136,7 @@ import { LEDGER_FLOOR_DIRS, SWEEP_POLICY, readLedgerDocs } from './coord/ledgers
 import type { ProvenancePair } from './coord/store.js';
 import { incarnationsOfSessions, withChildIds, withLastMoves } from './coord/runWire.js';
 import { coordinatorOfRun, readCoordinatorOfRun } from './coord/bindingReads.js';
+import { abandonDeadDispatches } from './coord/abandonDeadDispatch.js';
 import type { PushPayload } from './push.js';
 import { notify, noticeSink } from './notice.js';
 import { runDriftPass } from './coord/driftLane.js';
@@ -5638,6 +5639,18 @@ export class FleetWatcher {
     }
   }
 
+  /** D-7319: the dead-dispatch reason of the dead-coordinator lane's pass. Nothing before `buildServer` hands over the
+   *  serialiser (the lane's only way to end a run); a throw is said and the pass goes on to the coordinator reason. */
+  private async deadDispatchStep(coord: CoordStore): Promise<void> {
+    const serial = this.deadCoordinatorSerial;
+    if (serial === null) return;
+    try {
+      await abandonDeadDispatches({ coord, io: this.deps.io, cfg: this.deps.cfg, serial, now: () => Date.now() });
+    } catch (err) {
+      console.warn(`ccrc-server: dispatch-abandon: the pass failed (${err instanceof Error ? err.message : String(err)}) — nothing more this pass`);
+    }
+  }
+
   /** One pass of the dead-coordinator lane — `sweepDeadCoordinators`'s body, run only while no other pass runs. */
   private async deadCoordinatorPass(
     coord: CoordStore, records: readonly SessionRecord[], names: readonly string[], now: number,
@@ -5651,6 +5664,10 @@ export class FleetWatcher {
     // written. The run of crashed passes is forgotten, so a lowered switch needs two FRESH passes; the durable anchors
     // stand (the next crashed pass continues them, or the gap restarts them).
     if (readSwitches(names)[RECLAIM_PAUSE_MARKER] === 'set') { forget(); return; }
+    // D-7319 — THE LANE'S SECOND REASON: a run whose dispatch never came back is abandoned (`abandonDeadDispatch.ts`).
+    // Here, after the switch and before every gate that is the crash's own (the journal's trust, the anchors, the
+    // breaker, shadow): none of those measures a dispatch, so none of them may hold one. Its failure is its own.
+    await this.deadDispatchStep(coord);
     // TWO — the journal's own trust (`readDeadCoordinatorJournalTrust`): a mirror not swept yet, or gone stale,
     // decides NOTHING this pass — no anchor is written or deleted, and the run of crashed passes starts again.
     const journal = await readDeadCoordinatorJournalTrust({ coord, io: this.deps.io, cfg: this.deps.cfg }, this.lifecycleHealth());

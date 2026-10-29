@@ -4232,6 +4232,22 @@ seen dead, and one when the breaker trips) are records of the same incident. A m
 and the act stops the act and keeps the hour, and every act that fails writes a feed row, whatever it had done. A mirror
 gone stale, or a gap recorded, while the act measures the coordinator stops it too: the act reads both again after it.
 
+**A dispatch that never came back is abandoned by the server** (D-7319, the operator's ruling of 2026-10-29). The fleet
+card draws "spawn never completed" for a `planned` run whose dispatch stamp is older than `SPAWN_STALL_MS` and that
+bound no session. The same lane pass, before any of the crash's own gates, abandons such a run once it is proven dead:
+the stamp is at least `CCRC_DISPATCH_ABANDON_MS` old (default 15 minutes; a value under `SPAWN_STALL_MS` is refused for
+the default, so the `ws-add` started at that stamp has returned or been killed), no registry row's `.child` marker names
+the run, no row of its project has an unreadable marker or the shape a cut-short `ws-add` leaves (a workspace with no
+marker, no hold and no spawn), the box marks its workspaces (no `child-omitted:` on the run), the registry was read
+whole, the run is still claimed, and `$REG/reclaim-paused` is clear. The act is the operator's own abandon arm, reached
+through the coordination serialiser like the dead-coordinator lane's (`causedBy: sweep`): it re-reads all of that
+immediately before its commit, inside the serialiser every dispatch holds, so a retry that restamped the run, a child
+that appeared or a switch turned off meanwhile stops it. After the commit the run's events carry
+`dispatch-abandoned:never-came-back` and the coordinator is mailed `dispatch-abandoned` so it can dispatch again. A
+`ws-add` that somehow finished later leaves a child of a closed run: the run stays `failed`, and child reclamation takes
+that workspace under its usual rule. **Settings › Automation › Dispatches that never came back** turns it off (stored in
+`coord.db`, seeded On; `/api/coord/dispatch-abandon`); only an exact stored On arms it.
+
 **What a crossing costs.** Caps stay global: one row, whole box, no per-project
 and no per-programme cap. Running-worker concurrency counts dispatched runs in
 an ACTIVE state — `dispatched`, `working`, `unknown` — and not merely

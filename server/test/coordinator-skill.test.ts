@@ -749,6 +749,11 @@ describe('the coordinator skill: linkage', () => {
       // DISK RETENTION shadow journal (D-6861) — a read-only view for the operator (and the agent that
       // reviews a disk lane before the operator arms it), not a coordination door: no session decides or acts through it.
       'GET /api/coord/shadow-journal',
+      // D-7319 — the operator-dial shape once more: the switch of the server's act that abandons a dispatch that never
+      // came back. A coordinator told about this door would be told how to stop the server abandoning its own stalled
+      // runs; the read is the first half of that invitation, so neither half is named.
+      'GET /api/coord/dispatch-abandon',
+      'POST /api/coord/dispatch-abandon',
       // THE QUESTION DOOR FAMILY (W3 Q3f, D-7030; the coordinator's ruling of 2026-10-28, slug q3f-skill-exempt; named exception 3): one
       // route the skill corpus does not name. The claimant's two, `POST /api/questions/:id/rule` and `/release`, left this
       // list when the client moved onto them behind the `questions-v1` cap word (K5 Q3j, D-7322): the ask lane and the

@@ -54,6 +54,8 @@ import {
   stallLevelOf, stallNeedsConfirm, stallNextStep, stallNoticeCounts, stallSettingsAfter, stallSettingsChange,
   stallStages, stallUnheldBoxOf, stallWriteEffect, type StallBoxArming, type StallResolved,
 } from './stallsettings.js';
+import { dispatchAbandonViewOf } from './deadDispatch.js';
+import { isDispatchAbandonChoice } from '../../../shared/dispatch-abandon.js';
 import { childBindGate } from './childBind.js';
 import {
   openRunPreconditions, type AttributionRead, type HomeProjectVerdict, type OpenRunRefusal, type SessionMarkRead,
@@ -2671,6 +2673,39 @@ export function registerCoordRoutes(
     return reply.code(200).send({ ok: true, ...collectLaneView({
       row: proofRow, journal: proofJournal, switches, epoch, node, caps, counts, notice: COLLECT_LANE_APPLIES_TEXT,
     }) });
+  });
+
+  /** `GET`/`POST /api/coord/dispatch-abandon` (D-7319): the Settings switch of the act that abandons a dispatch that
+   *  never came back (`abandonDeadDispatch.ts`). One path for both verbs, the stall-watch door's shape, so one gate entry
+   *  covers it: session-gated when `CCRC_AUTH` is armed, open dark, no box token (no machine lane calls it). The view is
+   *  `dispatchAbandonViewOf`'s (L1): only an exact `on` reads armed. The POST takes `{choice:'on'|'off'}` and nothing
+   *  else, writes the one row, and records the change in the feed (`record-only`), as the stall watch's door does. */
+  app.get('/api/coord/dispatch-abandon', async (_req, reply) => {
+    if (!deps.coord) return notConfigured(reply);
+    return reply.code(200).send({ ok: true, ...dispatchAbandonViewOf(deps.coord.dispatchAbandonSetting(), deps.cfg.dispatchAbandonMs) });
+  });
+
+  app.post('/api/coord/dispatch-abandon', async (req, reply) => {
+    if (!deps.coord) return notConfigured(reply);
+    const coord = deps.coord;
+    const body = req.body;
+    const keys = body !== null && typeof body === 'object' && !Array.isArray(body) ? Object.keys(body) : null;
+    const choice = keys !== null && keys.length === 1 && keys[0] === 'choice' ? (body as { choice: unknown }).choice : undefined;
+    if (!isDispatchAbandonChoice(choice)) {
+      return refuseRoute(reply, 'bad-request', { detail: "the body is {choice:'on'|'off'} and nothing else" });
+    }
+    const before = dispatchAbandonViewOf(coord.dispatchAbandonSetting(), deps.cfg.dispatchAbandonMs);
+    if (before.stored === 'unreadable') {
+      return refuseRoute(reply, 'state-unreadable', { detail: before.detail ?? 'the switch could not be read' });
+    }
+    const after = dispatchAbandonViewOf(coord.setDispatchAbandon(choice, Date.now()), deps.cfg.dispatchAbandonMs);
+    if (before.stored !== after.stored && deps.notifyLog) {
+      const actor = deps.cfg.authEnabled ? deviceActor(sessionAuth(req).device) : 'flag-off';
+      notice({ kind: 'coord', sessionId: '', title: 'dispatch abandon changed', runId: null,
+        body: `abandoning dispatches that never came back: ${before.stored} -> ${after.stored}; by ${actor}` },
+      'record-only', { degraded: 'dispatch abandon switch written, feed archive degraded' });
+    }
+    return reply.code(200).send({ ok: true, ...after });
   });
 
   /**

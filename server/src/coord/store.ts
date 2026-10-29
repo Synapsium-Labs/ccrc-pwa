@@ -29,6 +29,8 @@ import { parseStallDetail } from './stall.js';
 // their consumer, the L1 `stallsettings.ts`; the insert arm starts from its seed, and the no-op skip asks its compare.
 import { STALL_SETTINGS_SEED, stallPatchIsNoOp } from './stallsettings.js';
 import type { StallObservationRow, StallSettingsPatch, StallSettingsRead } from './stallsettings.js';
+import type { DispatchAbandonRead } from './deadDispatch.js';
+import type { DispatchAbandonChoice } from '../../../shared/dispatch-abandon.js';
 // The coordination fence's claim shape is declared by its CONSUMER, the L1
 // sweep file's `childReclaimCoordinated` (the same port rule as above); the
 // read below implements it.
@@ -4905,6 +4907,42 @@ export class CoordStore {
       }
       return { kind: 'written', before, after: this.stallSettings() };
     });
+  }
+
+  // ── the dead-dispatch act's switch and candidates (D-7319) ─────────────────────────────────────────────────
+  /** `dispatch_abandon_settings` (migration 33), read: the row's raw choice and write time, `absent` for a lost row, or
+   *  `unreadable` with the driver's detail. `stallSettings()`'s shape: prepared and run inside the `try`, never a throw.
+   *  Nothing is decided here: only an exact `on` arms the act, and `isDispatchAbandonChoice` says so at the reader. */
+  dispatchAbandonSetting(): DispatchAbandonRead {
+    try {
+      const r = this.db.prepare('SELECT choice, CAST(updatedAt AS TEXT) AS updatedText FROM dispatch_abandon_settings WHERE id = 1')
+        .get() as { choice: unknown; updatedText: unknown } | undefined;
+      if (r === undefined) return { kind: 'absent' };
+      const at = typeof r.updatedText === 'string' ? Number(r.updatedText) : NaN;
+      return { kind: 'row', choice: r.choice, updatedAt: Number.isSafeInteger(at) ? at : null };
+    } catch (err) {
+      return { kind: 'unreadable', detail: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
+  /** The switch's one writer, called only by `POST /api/coord/dispatch-abandon`: an upsert of the one row, in one
+   *  statement, then the read back. The route has validated `choice`. */
+  setDispatchAbandon(choice: DispatchAbandonChoice, at: number): DispatchAbandonRead {
+    this.db.prepare(
+      'INSERT INTO dispatch_abandon_settings (id, choice, updatedAt) VALUES (1, ?, ?) ' +
+      'ON CONFLICT(id) DO UPDATE SET choice = excluded.choice, updatedAt = excluded.updatedAt',
+    ).run(choice, at);
+    return this.dispatchAbandonSetting();
+  }
+
+  /** The act's candidates (D-7319): every `planned` run with no session whose dispatch stamp is at or before
+   *  `startedAtOrBefore`, oldest stamp first. Ids only: the executor reads each run whole (`run(id)`) and decides on it,
+   *  so this query is economy, never a permission. */
+  stalledDispatchRunIds(startedAtOrBefore: number): number[] {
+    return (this.db.prepare(
+      "SELECT CAST(id AS TEXT) AS idText FROM runs WHERE state = 'planned' AND sessionId IS NULL " +
+      'AND dispatchStartedAt IS NOT NULL AND dispatchStartedAt <= ? ORDER BY dispatchStartedAt, id',
+    ).all(startedAtOrBefore) as { idText: string }[]).map((r) => Number(r.idText)).filter((n) => Number.isSafeInteger(n));
   }
 
   // ── the drift decider's reads (coordinator-durability tail spec §4.2, D-5921) ─────────────────────────────

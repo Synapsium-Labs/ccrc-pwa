@@ -1858,6 +1858,30 @@ export const MIGRATIONS: readonly string[] = [
   );
   CREATE INDEX shadow_journal_at ON shadow_journal(at);
   `,
+  // ── 33: user_version 32 -> 33 ─────────────────────────────────────────────
+  // D-7319 (operator ruling 2026-10-29): the Settings switch of the act that abandons a dispatch that never came back
+  // (`coord/abandonDeadDispatch.ts`). ONE ROW, `CHECK (id = 1)`, the `stall_settings` idiom. Its one writer is
+  // `CoordStore.setDispatchAbandon`, called only by `POST /api/coord/dispatch-abandon`; its reader is
+  // `CoordStore.dispatchAbandonSetting`, and only an exact `on` arms the act (`isDispatchAbandonChoice`, never a cast).
+  // `choice` carries NO CHECK, `collect_lane_settings.choice`'s reason: a token a newer build writes must not stop an
+  // older build opening the file; this build reads it as `unknown`, which arms nothing.
+  //
+  // THE SEED IS THE RULING: `on`, updatedAt 0. A lost row arms nothing (the store answers `absent`) and nothing inserts
+  // one but the POST.
+  //
+  // A NEW TABLE AND NOTHING ELSE: an older build opening a file at `user_version 33` takes rule 3 (it warns, reads as-is
+  // and migrates nothing) and never names it. Every earlier entry is frozen. RE-MEASURE the slot before the PR and
+  // before merge:
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE dispatch_abandon_settings (
+    id        INTEGER PRIMARY KEY CHECK (id = 1),
+    choice    TEXT NOT NULL,
+    updatedAt INTEGER NOT NULL
+  );
+  INSERT INTO dispatch_abandon_settings (id, choice, updatedAt) VALUES (1, 'on', 0);
+  `,
 ];
 
 /** The version this build writes. `MIGRATIONS.length` and nothing else: a
