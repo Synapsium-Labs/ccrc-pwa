@@ -443,7 +443,8 @@ describe('the hibernation lanes name themselves (D-5242, D-5427)', () => {
 
   it('the armed hibernation sweep declares `sweep:hibernate`', async () => {
     expect(actCalls('sweepDec')).toEqual([['port.fleetState', 'lane.actor']]);
-    expect(actCalls('runCcd')).toEqual([['CCD_ARGV.hibernate(id, sweepDec(port.fleetState, lane.actor), holdOkOf(v))']]);
+    // D-7458: a fourth argument, whether the lane wakes what it sleeps (`--roll`, the automatic roll's one act).
+    expect(actCalls('runCcd')).toEqual([['CCD_ARGV.hibernate(id, sweepDec(port.fleetState, lane.actor), holdOkOf(v), wake)']]);
     const { IDLE_HOURS_LANE } = await import('../src/sleepLane.js');
     const { HIBERNATE_SWEEP_ACTOR } = await import('../src/coord/hibernate.js');
     expect(IDLE_HOURS_LANE.actor).toBe(HIBERNATE_SWEEP_ACTOR);
@@ -471,6 +472,18 @@ describe('the hibernation lanes name themselves (D-5242, D-5427)', () => {
     const w = src('watch.ts');
     expect((w.match(/CCD_ARGV\.ensure\(/g) ?? []).length).toBe(1);
     expect(w).toMatch(/gated\(d, 'hibernated'\);[\s\S]{0,400}this\.admitWake\('auto', d\.toId\)\) \{\n\s+const res = await this\.deps\.runCcd\(CCD_ARGV\.ensure\(d\.toId\)\);/);
+  });
+
+  it('the automatic roll declares `sweep:roll` on its ONE act, through the same act site (D-7452, D-7458)', async () => {
+    const { ROLL_LANE } = await import('../src/rollLane.js');
+    const { ROLL_SWEEP_ACTOR } = await import('../src/coord/rollTarget.js');
+    expect(ROLL_LANE.actor).toBe(ROLL_SWEEP_ACTOR);
+    expect(ROLL_SWEEP_ACTOR).toBe('sweep:roll');
+    expect(ROLL_LANE.then).toBe('wake');
+    // The wake rides the one argv: no second ccd call, no `ensure`, anywhere in the roll's files.
+    expect(src('rollLane.ts')).not.toMatch(/runCcd\(|CCD_ARGV\.ensure\(/);
+    expect(CCD_ARGV.hibernate('project-a-quiet-basin', sweepDec(NEW, ROLL_SWEEP_ACTOR), null, true))
+      .toEqual(['hibernate', '--roll', 'project-a-quiet-basin', '--surface', 'agent', '--actor', 'sweep:roll']);
   });
 
   it('a composed hibernate argv carries the declared lane to the flags', () => {

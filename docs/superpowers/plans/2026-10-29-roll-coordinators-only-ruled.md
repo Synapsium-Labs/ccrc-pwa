@@ -2,6 +2,8 @@
 
 - **D-7443 (2026-10-29)** — automatic rolls take idle coordinators only; every other session picks up a new build when it next starts
 
+**Superseded in part, the same day.** The operator's later rulings built the roll's release half and removed `all`. See `2026-10-29-auto-roll-release-ruled.md` (D-7452 to D-7454). The setting is now `coordinators | off`, and it lives on its own Settings › Automation row ("Roll idle sessions"), stored in `roll_settings`. `rollTargetVerdict` is the setting-and-role filter inside `autoRollVerdict`, whose caller is the sleep executor's roll row. The rest of this file describes the predicate as first written. Where it says `all`, or that nothing calls the predicate, the later file is the record.
+
 **The ruling.** The operator, 2026-10-29: "Always auto-roll all coordinators when they go idle, but never auto-roll any non-coordinators." Their reason: many idle non-coordinator sessions will never do real work again, and a useful one may be working constantly, so rolling either one is waste or disruption. A coordinator should follow the new rules (a new release, a new binary, new skill text) as soon as it is idle. A non-coordinator picks up the new release or binary only when it next starts for another reason.
 
 **What ships here.**

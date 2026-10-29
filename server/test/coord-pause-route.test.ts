@@ -292,6 +292,8 @@ describe('the token gate is total, with the operator routes excluded BY NAME', (
     '/api/coord/review-cap',
     // D-7319: the dead-dispatch switch (see the docstring above).
     '/api/coord/dispatch-abandon',
+    // D-7453: Settings › Automation › Roll idle sessions, the operator's, session-gated like the stall-watch door.
+    '/api/coord/roll-idle',
     // W3 Q3f (D-7030): the operator door of the question family (see the docstring above).
     '/api/questions/:id/answer',
   ]);

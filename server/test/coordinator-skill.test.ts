@@ -776,6 +776,12 @@ describe('the coordinator skill: linkage', () => {
       // would be told how to lift the review-round cap on its own run, which is the cap's own defeat. The
       // forbid-mention case below is what turns this permission-to-omit into a prohibition.
       'POST /api/coord/review-cap',
+      // THE AUTOMATIC COORDINATOR ROLL (D-7453) — the operator-dial shape once more. The setting decides whether an idle
+      // coordinator is rolled onto the current release and its new rules; a coordinator told about this door would be
+      // told how to turn off its own roll and stay on rules the operator has replaced. Neither half is named, for the
+      // caps reason: the read is the first half of the invitation. The forbid-mention case below forbids it.
+      'GET /api/coord/roll-idle',
+      'POST /api/coord/roll-idle',
       // D-6910: the operator's read of that cap's ask, unnamed for the caps reason: the read is the first half of the
       // invitation. The same forbid-mention case covers it, since it names `review-cap` at all.
       'GET /api/coord/review-cap/:id',
@@ -1873,6 +1879,12 @@ describe('the peer protocol reference (Build 9 wave 8, D17)', () => {
     // Stall-watch settings wave 1, the caps dial's accounting: EXEMPT above
     // only PERMITS the omission; this is what FORBIDS the mention.
     expect(allSkillText).not.toContain('/api/coord/stall-watch');
+  });
+
+  it('never names the roll-idle settings door — a door that would tell a coordinator how to turn off its own roll onto the current release (D-7453)', () => {
+    // The caps dial's accounting: EXEMPT above only PERMITS the omission; this is what FORBIDS the mention.
+    expect(`${allSkillText}\nGET /api/coord/roll-idle\n`, 'CONTROL: a planted mention is seen').toContain('/api/coord/roll-idle');
+    expect(allSkillText).not.toContain('/api/coord/roll-idle');
   });
 
   it('never names the collector switch or its legacy file — a door that would tell a coordinator how to arm deletion of its own children’s temp roots', () => {

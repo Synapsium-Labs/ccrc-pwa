@@ -1882,6 +1882,28 @@ export const MIGRATIONS: readonly string[] = [
   );
   INSERT INTO dispatch_abandon_settings (id, choice, updatedAt) VALUES (1, 'on', 0);
   `,
+  // ── 34: user_version 33 -> 34 ─────────────────────────────────────────────
+  // D-7453 (the automatic coordinator roll, the operator's rulings of 2026-10-29): `roll_settings`, the Settings ›
+  // Automation row "Roll idle sessions". ONE ROW, `CHECK (id = 1)`, the `stall_settings` idiom. `targets` is a
+  // `ClaudeRollTargets` (`coordinators` or `off`), read back through `isClaudeRollTargets`, never cast, so NO CHECK: a
+  // word a newer build writes reads as unknown here, which rolls nothing (`rollTargetsOf`). Its one writer is
+  // `CoordStore.setRollTargets`, called only by `POST /api/coord/roll-idle`; its one reader `CoordStore.rollSettings`.
+  //
+  // THE SEED IS THE OPERATOR'S RULE: `coordinators`, the row ON. A lost row reads as the same default.
+  //
+  // A NEW TABLE AND NOTHING ELSE: an older build opening a file at `user_version 34` takes rule 3 (it warns, reads as-is
+  // and migrates nothing) and never names it. Every earlier entry is frozen. RE-MEASURE the slot before the PR and
+  // before merge:
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE roll_settings (
+    id        INTEGER PRIMARY KEY CHECK (id = 1),
+    targets   TEXT    NOT NULL,
+    updatedAt INTEGER NOT NULL
+  );
+  INSERT INTO roll_settings (id, targets, updatedAt) VALUES (1, 'coordinators', 0);
+  `,
 ];
 
 /** The version this build writes. `MIGRATIONS.length` and nothing else: a

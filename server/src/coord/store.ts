@@ -68,6 +68,8 @@ import { bodyDigest } from '../../../shared/mark.mjs';
 // Fix round 1, item 5 (ruling A): the same tag comparator every other
 // ordering in this design uses — never `publishedAt` — for `newestUnyankedStable`.
 import { newestTag } from '../../../shared/semver.js';
+import type { ClaudeRollTargets } from '../../../shared/claudeVersion.js';
+import type { RollSettingsRead } from './rollTarget.js';
 import {
   SHADOW_JOURNAL_MAX_AGE_MS, SHADOW_JOURNAL_MAX_ROWS, isShadowLane, shadowVerdictKey,
   type ShadowLane, type ShadowVerdictInput, type ShadowVerdictRow,
@@ -4850,6 +4852,35 @@ export class CoordStore {
       `SELECT count(*) AS c FROM runs WHERE dispatchedAt IS NOT NULL AND state NOT IN ${INACTIVE_RUN_STATES_SQL}`,
     ).get() as { c: number }).c;
     return { running };
+  }
+
+  // ── the automatic roll's setting (D-7453) ─────────────────────────────────
+
+  /** The "Roll idle sessions" row as read: a row, no row, or a read that failed, never one `null`. Nothing is decided
+   *  here: `rollTargetsOf` (L1, `coord/rollTarget.ts`) decides what the stored word means. */
+  rollSettings(): RollSettingsRead {
+    try {
+      const r = this.db.prepare('SELECT targets FROM roll_settings WHERE id = 1').get() as { targets: unknown } | undefined;
+      return r === undefined ? { kind: 'absent' } : { kind: 'row', targets: r.targets };
+    } catch (err) {
+      return { kind: 'unreadable', detail: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
+  /** The one writer of `roll_settings`, in one `tx()`: the row before, then the write (an insert for a lost row), then
+   *  the row after. It validates nothing: the route has narrowed `targets`. A write that changes nothing runs no
+   *  `UPDATE`, so `updatedAt` stays. */
+  setRollTargets(targets: ClaudeRollTargets, at: number): { before: RollSettingsRead; after: RollSettingsRead } {
+    return tx(this.db, () => {
+      const before = this.rollSettings();
+      if (before.kind === 'unreadable') throw new Error(`roll settings unreadable inside the write: ${before.detail}`);
+      if (before.kind === 'absent') {
+        this.db.prepare('INSERT INTO roll_settings (id, targets, updatedAt) VALUES (1, ?, ?)').run(targets, at);
+      } else if (before.targets !== targets) {
+        this.db.prepare('UPDATE roll_settings SET targets = ?, updatedAt = ? WHERE id = 1').run(targets, at);
+      }
+      return { before, after: this.rollSettings() };
+    });
   }
 
   // ── stall watch settings (design 2026-10-05 §8, §11) ───────────────────────

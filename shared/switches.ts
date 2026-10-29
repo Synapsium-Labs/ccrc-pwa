@@ -269,6 +269,11 @@ export const SWITCHES = {
     meaning: 'Test runs go to the test box when its checks pass; any run that cannot falls back to the local tests slice and says why.',
     writer: 'ccd testbox-remote, through POST /api/testbox/switch',
   },
+  'roll-idle-targets': {
+    storage: { setting: 'roll_settings.targets' }, default: 'coordinators', owner: 'C4',
+    meaning: 'Which idle sessions the automatic roll restarts onto the current release: coordinators, or off (D-7453).',
+    writer: 'POST /api/coord/roll-idle',
+  },
 } as const satisfies Readonly<Record<string, SwitchRow>>;
 
 export type SwitchName = keyof typeof SWITCHES;

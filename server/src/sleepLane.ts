@@ -6,7 +6,7 @@ import type { SessionRecord } from './registry.js';
 import type { CoordStore } from './coord/store.js';
 import type { TurnVerdict } from './coord/archiveDoor.js';
 import { notify, type NoticeRecord } from './notice.js';
-import { CCD_ARGV, HIBERNATE_HOLD_OK_CAP, capSupported, ccdCan, sweepDec } from './ccdargv.js';
+import { CCD_ARGV, HIBERNATE_HOLD_OK_CAP, HIBERNATE_ROLL_CAP, capSupported, ccdCan, sweepDec } from './ccdargv.js';
 import {
   HIBERNATE_ACT_LINE_MS, HIBERNATE_AFTER_HOURS_FILE, HIBERNATE_DISABLED_MARKER, HIBERNATE_LIVE_MARKER,
   HIBERNATE_PER_SWEEP, HIBERNATE_SHADOW_LINE_MS, HIBERNATE_SWEEP_ACTOR, IDLE_HOURS_POLICY, NO_HIBERNATE_SUFFIX,
@@ -85,6 +85,9 @@ export interface SleepActPort<Row> {
   readonly rowAtAct: (rec: SessionRecord) => Promise<{ ok: true; row: Row } | { ok: false }>;
   /** At the act (D-7047): the registry listed again, for the lane's switches; null when it cannot be listed. */
   readonly listing: () => Promise<readonly string[] | null>;
+  /** A lane that wakes what it put to sleep (`then: 'wake'`, the automatic roll, D-7452): the fleet-wide wake budget
+   *  (`FleetWatcher.admitWake('auto', …)`), asked before the hibernate; false or absent holds the act. */
+  readonly admitWake?: (id: string) => boolean;
 }
 
 /** A verdict as the executor reads it: each lane's own verdict type (`StopDoneVerdict`, `HibernateVerdict`) is one. */
@@ -106,9 +109,14 @@ type ArmedPort<Row> = SleepActPort<Row> & { readonly serial: NonNullable<SleepAc
 /** What one act came to, before the lane words it. `held-at-act` with `verdict: null`: the record could not be re-read
  *  (`unmeasured`). `by` says where a skip or a failure came from: the verb asked again, ccd, or a throw. */
 export type SleepActResult<V, St> =
-  | { readonly kind: 'hibernated'; readonly verdict: Asleep<V>; readonly store: St }
+  | {
+    readonly kind: 'hibernated'; readonly verdict: Asleep<V>; readonly store: St;
+    /** A `then: 'wake'` lane's wake, inside its one `ccd hibernate --roll` (D-7458): `true`, or ccd's stderr when the
+     *  sleep landed and the wake failed (`roll-wake-failed`, exit 4); absent for a lane that stays asleep. */
+    readonly woke?: true | { readonly failed: string };
+  }
   | { readonly kind: 'held-at-act'; readonly verdict: V | null }
-  | { readonly kind: 'skipped'; readonly detail: string; readonly by: 'verb' | 'ccd' }
+  | { readonly kind: 'skipped'; readonly detail: string; readonly by: 'verb' | 'ccd' | 'wake-budget' }
   | { readonly kind: 'failed'; readonly detail: string; readonly by: 'ccd' | 'throw' }
   | { readonly kind: 'switched-off'; readonly detail: MarkerSwitchName | typeof REGISTRY_UNLISTABLE };
 
@@ -194,6 +202,11 @@ export interface SleepLane<D extends SleepDepsBase, M, Row extends { readonly su
   readonly verb: 'holds-before-measure' | 'arms-and-asked-at-act';
   /** The lane passes a workspace hold through `--hold-ok` (`hibernate-hold-ok`, asked once a pass). */
   readonly holdOk: boolean;
+  /** What follows a sleep: `stay-asleep` (both sleep policies), or `wake`, the automatic roll's in-place resume
+   *  (D-7452): the wake budget asked before the act, and the act is `ccd hibernate --roll` (D-7458), whose wake runs
+   *  inside ccd, so the executor still runs ccd once. A `wake` lane is armed only where the box lists
+   *  `hibernate-roll`. */
+  readonly then: 'stay-asleep' | 'wake';
   readonly actor: string;
   /** `per-pass`: one clock read for the pass's first asks (and the retry prune); `per-row`: one per row. */
   readonly clock: 'per-pass' | 'per-row';
@@ -225,6 +238,12 @@ export interface SleepLane<D extends SleepDepsBase, M, Row extends { readonly su
 
 /** ccd's refusal of an act it re-measured as not idle (`_hib_refuse`, exit 3): `ccd: session-busy: <reason>`. */
 const SESSION_BUSY = /ccd: session-busy: ?(\S*)/;
+/** `cmd_hibernate --roll`'s exit-4 line (D-7458): the sleep landed and the wake did not. */
+const ROLL_WAKE_FAILED = /ccd: roll-wake-failed/;
+
+/** Whether the box can run this lane's act: `hibernate` listed, and for a `wake` lane the `--roll` flag too. */
+export const laneVerb = (then: 'stay-asleep' | 'wake', fleetState: FleetState | undefined): boolean =>
+  ccdCan(fleetState, 'hibernate') && (then !== 'wake' || capSupported(fleetState, HIBERNATE_ROLL_CAP));
 
 const errText = (err: unknown): string => (err instanceof Error ? err.message : String(err));
 
@@ -247,7 +266,7 @@ export async function sleepPass<D extends SleepDepsBase, M, Row extends { readon
   const serial = port?.serial ?? null;
   const armed: ArmedPort<Row> | null = port !== null && serial !== null
     && (lane.arming === null || switches[lane.arming] === 'set')
-    && (lane.verb !== 'arms-and-asked-at-act' || ccdCan(port.fleetState, 'hibernate')) ? { ...port, serial } : null;
+    && (lane.verb !== 'arms-and-asked-at-act' || laneVerb(lane.then, port.fleetState)) ? { ...port, serial } : null;
   if (armed === null && lane.unarmed === 'nothing') return [];
   const byId = new Map(records.map((r) => [r.id, r] as const));
   const passNow = lane.clock === 'per-pass' ? deps.now() : null;
@@ -350,23 +369,30 @@ export async function sleepAct<D extends SleepDepsBase, M, Row extends { readonl
       const { v, store } = await lane.asks.atAct(deps, f, again, rec);
       if (!isAsleep(v)) return { kind: 'held-at-act', verdict: v };
       // Never sent to a ccd that does not list the verb, asked again here where the lane says so.
-      if (lane.verb === 'arms-and-asked-at-act' && !ccdCan(port.fleetState, 'hibernate')) {
+      if (lane.verb === 'arms-and-asked-at-act' && !laneVerb(lane.then, port.fleetState)) {
         return { kind: 'skipped', detail: 'no-verb', by: 'verb' };
       }
       // D-7047: the switches over a fresh listing, the read nearest the argv. No retry memory: the next pass asks again.
       const off = switchedOffAt(lane, readSwitches(await port.listing()));
       if (off !== null) return { kind: 'switched-off', detail: off };
-      const res = await port.runCcd(CCD_ARGV.hibernate(id, sweepDec(port.fleetState, lane.actor), holdOkOf(v)));
+      // D-7452: a lane that wakes what it sleeps is an automatic wake, asked of the budget before anything stops.
+      if (lane.then === 'wake' && !(port.admitWake?.(id) ?? false)) return { kind: 'skipped', detail: 'wake-budget', by: 'wake-budget' };
+      // D-7458: a `wake` lane's act is `--roll`, the sleep and the in-place resume in ONE ccd verb.
+      const wake = lane.then === 'wake';
+      const res = await port.runCcd(CCD_ARGV.hibernate(id, sweepDec(port.fleetState, lane.actor), holdOkOf(v), wake));
       if (!res.ok) {
         holdOff();
         // D-6840: a call that never ran has no `session-busy` to read off the runner's forged stderr.
         const busy = res.ran === false ? null : SESSION_BUSY.exec(res.stderr);
-        return busy !== null
-          ? { kind: 'skipped', detail: busy[1] || 'busy', by: 'ccd' }
-          : { kind: 'failed', detail: res.stderr, by: 'ccd' };
+        if (busy !== null) return { kind: 'skipped', detail: busy[1] || 'busy', by: 'ccd' };
+        // The roll's sleep landed and its wake did not: a sanctioned hibernated row, which mail or an open screen wakes.
+        if (wake && res.ran !== false && ROLL_WAKE_FAILED.test(res.stderr)) {
+          return { kind: 'hibernated', verdict: v, store, woke: { failed: res.stderr } };
+        }
+        return { kind: 'failed', detail: res.stderr, by: 'ccd' };
       }
       lane.notices?.slept(deps, id, v, store);
-      return { kind: 'hibernated', verdict: v, store };
+      return wake ? { kind: 'hibernated', verdict: v, store, woke: true } : { kind: 'hibernated', verdict: v, store };
     }));
   } catch (err) {
     holdOff();
@@ -589,6 +615,7 @@ export const RUN_DONE_LANE: SleepLane<StopDoneSweepDeps, StopDoneMemory, StopDon
   unarmed: 'nothing',
   verb: 'holds-before-measure',
   holdOk: true,
+  then: 'stay-asleep',
   actor: STOP_DONE_ACTOR,
   clock: 'per-pass',
   quietMs: () => STOP_DONE_GRACE_MS,
@@ -745,8 +772,9 @@ function claimantsOf(coord: HibernateSweepDeps['coord']): ReadonlySet<string> | 
 
 const hours = (ms: number): number => Math.floor(ms / (60 * 60_000));
 
-/** idle-hours' binding read: the live claims once, then each session's store read at each ask. */
-function idleHoursBindings(deps: HibernateSweepDeps): (id: string) => HibernateStoreRead {
+/** idle-hours' binding read: the live claims once, then each session's store read at each ask. The automatic roll's
+ *  lane (`rollLane.ts`, D-7452) reads its idle gate's store facts through it too. */
+export function idleHoursBindings(deps: Pick<HibernateSweepDeps, 'coord'>): (id: string) => HibernateStoreRead {
   const claimants = claimantsOf(deps.coord);
   return (id) => storeRead(deps.coord, claimants, id);
 }
@@ -787,6 +815,7 @@ export const IDLE_HOURS_LANE: SleepLane<HibernateSweepDeps, HibernateSweepMemory
   unarmed: 'shadow',
   verb: 'arms-and-asked-at-act',
   holdOk: false,
+  then: 'stay-asleep',
   actor: HIBERNATE_SWEEP_ACTOR,
   clock: 'per-row',
   quietMs: (deps, names) => (names.includes(HIBERNATE_AFTER_HOURS_FILE)

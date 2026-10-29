@@ -108,6 +108,7 @@ describe('the switchboard: SWITCHES rows and readSwitches (D-5855)', () => {
     expect(Object.fromEntries(settingRows.map(([k, r]) => [k, 'setting' in r.storage ? r.storage.setting : null]))).toEqual({
       'stall-watch-level': 'stall_settings.level',
       'collect-lane-choice': 'collect_lane_settings.choice',
+      'roll-idle-targets': 'roll_settings.targets',
     });
   });
 
@@ -120,7 +121,7 @@ describe('the switchboard: SWITCHES rows and readSwitches (D-5855)', () => {
     }
   });
 
-  it('the writers are the ones the tree has or a named task adds: three route-backed ccd verbs, two settings routes, the rest by hand', () => {
+  it('the writers are the ones the tree has or a named task adds: three route-backed ccd verbs, three settings routes, the rest by hand', () => {
     const writers = Object.fromEntries(rows.filter(([, r]) => r.writer !== 'hand-only').map(([k, r]) => [k, r.writer]));
     expect(writers).toEqual({
       'coordinator-paused': 'ccd coord-pause, through POST /api/coord/pause',
@@ -128,6 +129,7 @@ describe('the switchboard: SWITCHES rows and readSwitches (D-5855)', () => {
       'stall-watch-level': 'POST /api/coord/stall-watch',
       'collect-lane-choice': 'POST /api/coord/collect-lane',
       'testbox-remote-live': 'ccd testbox-remote, through POST /api/testbox/switch',
+      'roll-idle-targets': 'POST /api/coord/roll-idle',
     });
   });
 

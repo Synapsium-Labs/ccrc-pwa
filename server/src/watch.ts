@@ -224,7 +224,10 @@ import type { SleepPolicyName } from './sleep.js';
 import { StaleArchiveBeat } from './staleArchiveBeat.js';
 import { wakeAdmit, type WakeKind } from './coord/wakeBudget.js';
 import { HIBERNATE_AFTER_HOURS_FILE } from './coord/hibernate.js';
-import { liveRowFor, liveWordFor, turnMarkFor, turnReadDeps, turnVerdictFor } from './turnverdict.js';
+import { liveRowFor, liveWordFor, processStartedAtFor, turnMarkFor, turnReadDeps, turnVerdictFor } from './turnverdict.js';
+import { rollPass, type RollSweepMemory } from './rollLane.js';
+import { rollTargetsOf } from './coord/rollTarget.js';
+import { NODE_FILES } from '../../shared/agent-protocol.js';
 import {
   COLLECT_AUDITS_PER_PASS, COLLECT_FEED_TITLE, collectAfterAct, collectFeedTitle, collectAfterAudit, collectAfterFoldFailed, collectAfterHold,
   collectAfterViewer, collectAfterWouldCollect, collectAttentionItems, collectAttentionViews, collectBoxAfterPopulation,
@@ -1279,6 +1282,8 @@ export class FleetWatcher {
    *  skip or failure line, per id); it holds `viewer` against `sleepStartedAt`. Its act uses the stop-done lane's
    *  serialiser above, the one `CoordMutex`. Its clock and single flight are the `sleepIdleHours` row (D-7045). */
   private readonly hibernateMemory: HibernateSweepMemory = { lastLine: new Map(), lastActLine: new Map() };
+  /** The automatic coordinator roll's journal throttle (D-7452). Its clock and single flight are the `rollIdle` row. */
+  private readonly rollMemory: RollSweepMemory = { lastAt: new Map(), lastWhat: new Map() };
   private readonly staleArchive = new StaleArchiveBeat(() => this.deps, this, (a) => this.transcripts.resolve(a));
   /** `flock-unavailable`, once a box has answered it: the lane composes nothing more there (this process). */
   private archivedExpiryBoxRefused: string | null = null;
@@ -2168,6 +2173,48 @@ export class FleetWatcher {
     }
   }
 
+  /**
+   * THE AUTOMATIC COORDINATOR ROLL, RELEASE HALF (D-7452): every `rollIdle` beat (hibernation's clock), on THIS tick's
+   * rows and listing, `rollPass` rolls at most one idle coordinator whose pane started before the node's current ccrc
+   * install, by `ccd hibernate` then `ccd ensure` on the coordination serialiser and the session's queue. The setting is
+   * the Settings row (`CoordStore.rollSettings`, D-7453); without a store it reads as unreadable and nothing is rolled.
+   * The install time is `~/.ccrc/installed`'s modification time on the fleet node (`deps.io`, the fleet box's io in
+   * remote mode, under the same `ccrcDir` the inventory reads). Never awaited by the tick.
+   */
+  sweepRoll(sessions: readonly FleetSession[], records: readonly SessionRecord[], names: readonly string[]): Promise<void> | null {
+    return this.runLane('rollIdle', async () => {
+      try {
+        const reads = turnReadDeps(this.deps, this);
+        const coord = this.deps.coord;
+        await rollPass({
+          coord, viewers: this.deps.viewers,
+          targets: () => (coord === undefined ? null : rollTargetsOf(coord.rollSettings())),
+          release: async () => {
+            try {
+              const st = await this.deps.io.statMeasured(`${this.deps.cfg.ccrcDir}/${NODE_FILES.installed}`);
+              return st.ok ? st.mtimeMs : null;
+            } catch { return null; }
+          },
+          liveWord: (rec) => liveWordFor(reads, rec), mark: (rec) => turnMarkFor(reads, rec),
+          processStartedAt: (rec) => processStartedAtFor(reads, rec),
+          readAfterHours: () => this.deps.io.readFile(`${this.deps.cfg.registryDir}/${HIBERNATE_AFTER_HOURS_FILE}`),
+          log: (line) => console.warn(line),
+          startedAt: this.sleepStartedAt, now: Date.now,
+          act: {
+            runCcd: this.deps.runCcd, fleetState: this.deps.fleetState, serial: this.stopDoneSerial,
+            queueRun: (id, fn) => this.deps.queue.run(id, fn), rowAtAct: (rec) => this.rowAtAct(rec),
+            listing: async () => {
+              try { const r = await this.deps.io.readdirMeasured(this.deps.cfg.registryDir); return r.ok ? r.entries : null; } catch { return null; }
+            },
+            admitWake: (id) => this.admitWake('auto', id),
+          },
+        }, this.rollMemory, sessions, records, names);
+      } catch (err) {
+        console.warn(`ccrc-server: sweepRoll failed (${err instanceof Error ? err.message : String(err)}) — nothing rolled this pass`);
+      }
+    });
+  }
+
   /** Each sleep lane's own body, by its policy's name (D-7045): `sweepSleep` starts them in `SLEEP_LANES`' order. */
   private readonly sleepRunners: Readonly<Record<SleepPolicyName,
     (sessions: readonly FleetSession[], records: readonly SessionRecord[], names: readonly string[]) => Promise<void>>> = {
@@ -2658,6 +2705,8 @@ export class FleetWatcher {
       // hibernation (D-5242), on THIS tick's rows and listing, each started without awaiting the other. Gated on
       // `primed` like the stall watch, so the priming tick puts nothing to sleep.
       if (this.primed) void this.sweepSleep(sessions, records, registryRead.names).catch(() => { /* one bad sweep must not kill the poll */ });
+      // D-7452: the automatic coordinator roll, at hibernation's clock, never awaited, gated on `primed` the same way.
+      if (this.primed) void this.sweepRoll(sessions, records, registryRead.names)?.catch(() => { /* one bad sweep must not kill the poll */ });
       if (this.primed) void this.sweepStaleArchive(records, registryRead.names).catch(() => { /* one bad sweep must not kill the poll */ });
       // D-5373: NEVER awaited, `sweepMail`'s reason — it can call `sendPrompt` through the per-session queue. Own clock.
       // A due beat that lands on a pass still running is skipped by the row and still spends its slot, as it always did.

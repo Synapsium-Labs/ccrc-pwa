@@ -56,15 +56,18 @@ export const CLAUDE_ROLL_MODES = ['off', 'manual', 'auto'] as const;
 export type ClaudeRollMode = (typeof CLAUDE_ROLL_MODES)[number];
 export const CLAUDE_ROLL_MODE_DEFAULT: ClaudeRollMode = 'manual';
 
-/** Which sessions an AUTOMATIC roll may take (D-7443, the operator's rule of
- *  2026-10-29: "always auto-roll all coordinators when they go idle, but never
- *  auto-roll any non-coordinators"). `coordinators`, the default, is that rule;
- *  `all` lets the scheduler take an idle child too. A manual roll (the
- *  operator's Restart, a `ccd` verb) never reads this. A session the scheduler
- *  skips picks up a new build when it next starts for another reason. */
-export const CLAUDE_ROLL_TARGETS = ['coordinators', 'all'] as const;
+/** Which sessions an AUTOMATIC roll may take: the Settings › Automation row "Roll idle sessions" (D-7443; D-7453, the
+ *  operator's rulings of 2026-10-29). `coordinators`, the default and the row's ON, rolls an idle coordinator onto the
+ *  current release; `off` rolls nothing. There is no `all`: a non-coordinator is never rolled automatically and picks
+ *  up a new release only when it next starts for another reason (a wake, an ensure, a swap). A manual restart never
+ *  reads this. */
+export const CLAUDE_ROLL_TARGETS = ['coordinators', 'off'] as const;
 export type ClaudeRollTargets = (typeof CLAUDE_ROLL_TARGETS)[number];
 export const CLAUDE_ROLL_TARGETS_DEFAULT: ClaudeRollTargets = 'coordinators';
+/** The one narrowing of an untrusted value (a stored column, a request body) to a `ClaudeRollTargets`. */
+export function isClaudeRollTargets(v: unknown): v is ClaudeRollTargets {
+  return typeof v === 'string' && (CLAUDE_ROLL_TARGETS as readonly string[]).includes(v);
+}
 
 /** The lane kinds a (node, lane kind) target is kept for (spec §10.1). */
 export const CLAUDE_LANE_KINDS = ['anthropic', 'codex'] as const;
