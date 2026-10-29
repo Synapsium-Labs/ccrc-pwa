@@ -386,6 +386,15 @@ describe('landingLineAct', () => {
     expect(landingLineAct(ep, line([], { state: 'CLOSED', landedInTrain: true }))).toEqual({ act: 'left', phase: 'merged' });
     expect(landingLineAct(ep, line([], { state: 'MERGED', landedInTrain: true }))).toEqual({ act: 'left', phase: 'merged' });
   });
+  it('a CLOSED train-landed line at a head that differs from the episode head is still left merged (D-7474)', () => {
+    // The checks lane only RECORDS the merge: whether the head that landed is the head the run verified is not asked
+    // here. The coordinator's MERGED proof is what refuses a different head — it requires `headRefOid` to equal the
+    // run's recorded head (`renderMergedBrief`) — so a head compared first would answer something other than merged
+    // (`moved`, or `left closed`) and the merge would go unrecorded. The line sees only the episode's head, so the pin
+    // stands for any head the episode verified, a lineage-accepted one included.
+    expect(HEAD2).not.toBe(ep.head);
+    expect(landingLineAct(ep, line([], { state: 'CLOSED', landedInTrain: true, head: HEAD2 }))).toEqual({ act: 'left', phase: 'merged' });
+  });
   it('the train annotation never moves an OPEN line', () => {
     expect(landingLineAct(ep, line([], { landedInTrain: true }))).toEqual({ act: 'edge' });
   });

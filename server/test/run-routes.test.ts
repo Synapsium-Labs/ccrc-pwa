@@ -4732,11 +4732,13 @@ describe('an opted-in project: the lineage through the run routes (landing order
       await f.advance('awaiting-review');
       await f.advance('merging');
       const head = f.coord.currentEpisode(f.id)!.head;
-      const base = { runs: { ok: true as const, run: { id: f.id } }, coordinator: CLAIMED_BY, told: false, head };
+      // The run IS at merging (advanced above), so both arms read its episode head; a dequeue reads the state first (D-7470).
+      const base = { runs: { ok: true as const, run: { id: f.id } }, coordinator: CLAIMED_BY,
+        runState: { ok: true as const, state: 'merging' }, told: false, head };
       const dq = landingVerdict(landingAsk({ sessionId: SID, workspace: SID, number: 7, phase: 'open',
         queue: { state: 'dequeued', at: null } }, new Set())!, base);
       const mg = landingVerdict(landingAsk({ sessionId: SID, workspace: SID, number: 7, phase: 'merged',
-        queue: { state: 'landed', at: null } }, new Set())!, { ...base, runState: { ok: true, state: 'merging' } });
+        queue: { state: 'landed', at: null } }, new Set())!, base);
       expect(dq).toMatchObject({ step: 'deliver', mail: { body: renderDequeueBrief(SID, 7, LIVE) } });
       expect(mg).toMatchObject({ step: 'deliver', mail: { body: renderMergedBrief(SID, 7, LIVE) } });
       for (const v of [dq, mg]) {
@@ -4921,7 +4923,8 @@ describe('an opted-in project: the lineage through the run routes (landing order
       const report = path.join(root, 'report.md'); writeFileSync(report, '# findings\n');
       const lineage = o.lineage === undefined
         ? JSON.stringify({ v: 1, project: PROJECT, id: WID, at: nowIso(-5), state: 'measured', branch: `ws/${WID}`, tip: LIVE,
-          base: BASE, chain: [{ merge: LIVE, p1: TIPW, p2: BASE }], stop: 'not-a-merge' })
+          // p2 is not TIPW: here TIPW and BASE are one sha, and a merge whose two parents agree is no radar shape (D-7469).
+          base: BASE, chain: [{ merge: LIVE, p1: TIPW, p2: 'e'.repeat(40) }], stop: 'not-a-merge' })
         : o.lineage;
       optIn(home, WID, `ws/${WID}`, { ...(o.marker === undefined ? {} : { marker: o.marker }), lineage });
       calls.length = 0;

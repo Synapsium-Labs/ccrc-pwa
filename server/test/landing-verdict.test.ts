@@ -90,7 +90,7 @@ describe('landingVerdict — a dequeue', () => {
   });
 
   it('open run + coordinator, not yet told: a status mail from the operator AND the feed record', () => {
-    const v = step(ask(), { runs: { ok: true, run: { id: 7 } }, coordinator: COORD, told: false, head: null });
+    const v = step(ask(), { runs: { ok: true, run: { id: 7 } }, coordinator: COORD, runState: { ok: true, state: 'merging' }, told: false, head: null });
     expect(v).toEqual({
       step: 'deliver',
       mail: { fromId: 'operator', toId: COORD, runId: 7, kind: 'status',
@@ -132,7 +132,7 @@ describe('landingVerdict — a dequeue', () => {
 
   it('a removal without a time falls back to the subject per PR, and says so in the record', () => {
     const a = ask({ queue: { state: 'dequeued', at: null } });
-    const v = step(a, { runs: { ok: true, run: { id: 7 } }, coordinator: COORD, told: false, head: null });
+    const v = step(a, { runs: { ok: true, run: { id: 7 } }, coordinator: COORD, runState: { ok: true, state: 'merging' }, told: false, head: null });
     expect(v).toMatchObject({ mail: { subject: dequeuedSubject(42, null) },
       record: { body: `PR #42 left the merge queue without landing; GitHub does not re-enqueue it. Mailed coordinator ${COORD}.` } });
   });
@@ -185,12 +185,62 @@ describe('landingVerdict — a merge', () => {
   });
 });
 
+describe('landingVerdict — a named dequeue reads the run state before the head (landing order wave 4c, D-7470)', () => {
+  const runs: LandingFacts['runs'] = { ok: true, run: { id: 7 } };
+  const HEAD = 'c'.repeat(40);
+  const named: LandingFacts = { runs, coordinator: COORD, told: false };
+
+  it('after "not told" the next read is the run state, before any head', () => {
+    expect(step(ask(), named)).toEqual({ step: 'runState', runId: 7 });
+  });
+
+  it('a run no longer at merging (sent back to working) delivers a brief with no recorded-head line, and asks for no head', () => {
+    const f: LandingFacts = { ...named, runState: { ok: true, state: 'working' } };
+    // The step after runState is the delivery itself: `head` is never requested, and none is in the facts.
+    expect(f.head).toBeUndefined();
+    const v = step(ask(), f);
+    expect(v).toMatchObject({ step: 'deliver', mail: { toId: COORD, runId: 7, body: renderDequeueBrief(ID, 42) } });
+    expect(v.step === 'deliver' ? v.mail?.body : '').not.toContain('recorded head');
+    // A head that a stale episode left in the facts is not printed either.
+    expect(step(ask(), { ...f, head: HEAD })).toMatchObject({ mail: { body: renderDequeueBrief(ID, 42) } });
+  });
+
+  it('every state but merging delivers headless, and a run row that is gone does too', () => {
+    for (const state of ['working', 'awaiting-review', 'planned', null]) {
+      const v = step(ask(), { ...named, runState: { ok: true, state } });
+      expect(v, String(state)).toMatchObject({ step: 'deliver', mail: { body: renderDequeueBrief(ID, 42) } });
+    }
+  });
+
+  it('a run at merging reads its episode head, then delivers the brief with the recorded-head line', () => {
+    const f: LandingFacts = { ...named, runState: { ok: true, state: 'merging' } };
+    expect(step(ask(), f)).toEqual({ step: 'head', runId: 7 });
+    const v = step(ask(), { ...f, head: HEAD });
+    expect(v).toMatchObject({ step: 'deliver', mail: { body: renderDequeueBrief(ID, 42, HEAD) } });
+    expect(v.step === 'deliver' ? v.mail?.body : '').toContain(`recorded head (its verified handoffCommit) is \`${HEAD}\``);
+  });
+
+  it('an unreadable run row defers with its detail — never headless delivery, never a latch', () => {
+    expect(step(ask(), { ...named, runState: { ok: false, detail: 'b' } })).toEqual({ step: 'defer', detail: 'b' });
+  });
+
+  it('a dequeue with no coordinator named reads no run state: the feed-only path is unchanged', () => {
+    expect(step(ask(), { runs, coordinator: null })).toMatchObject({ step: 'toldFeed' });
+    expect(step(ask(), { runs, coordinator: null, told: false })).toMatchObject({ step: 'deliver', mail: null });
+    expect(step(ask(), { runs: { ok: true, run: null }, told: false })).toMatchObject({ step: 'deliver', mail: null });
+  });
+
+  it('a notice already told is latched before the run state is read', () => {
+    expect(step(ask(), { runs, coordinator: COORD, told: true })).toEqual({ step: 'latch' });
+  });
+});
+
 describe('landingVerdict — the episode head (landing order wave 4, D-7102)', () => {
   const runs: LandingFacts['runs'] = { ok: true, run: { id: 7 } };
   const HEAD = 'c'.repeat(40);
 
   it('a dequeue that names a coordinator reads the episode head once, after "not told" and before the mail', () => {
-    const f: LandingFacts = { runs, coordinator: COORD, told: false };
+    const f: LandingFacts = { runs, coordinator: COORD, runState: { ok: true, state: 'merging' }, told: false };
     expect(step(ask(), f)).toEqual({ step: 'head', runId: 7 });
     expect(step(ask(), { ...f, head: HEAD })).toMatchObject({ step: 'deliver', mail: { body: renderDequeueBrief(ID, 42, HEAD) } });
   });
@@ -206,7 +256,7 @@ describe('landingVerdict — the episode head (landing order wave 4, D-7102)', (
   });
 
   it('the dequeue brief prints the episode head as a value; the merged brief does too', () => {
-    const d = step(ask(), { runs, coordinator: COORD, told: false, head: HEAD });
+    const d = step(ask(), { runs, coordinator: COORD, runState: { ok: true, state: 'merging' }, told: false, head: HEAD });
     const m = step(merged(), { runs, coordinator: COORD, runState: { ok: true, state: 'merging' }, told: false, head: HEAD });
     for (const v of [d, m]) {
       expect(v.step).toBe('deliver');
@@ -256,9 +306,25 @@ describe('the notice bodies', () => {
     expect(b).toContain(`recorded head (its verified handoffCommit) is \`${head}\``);
     expect(b).toContain(`or, when it answers CLOSED, PR #42's row of \`ccd pr-state --session ${ID}\` reads `
       + '`landedInTrain: true`');
-    // With no head the brief is main's text exactly: the same proof clause and no recorded-head line.
     expect(renderMergedBrief(ID, 42, null)).toContain('`landedInTrain: true`');
     expect(renderMergedBrief(ID, 42, null)).not.toContain('recorded head');
+  });
+
+  it('the head-null merged brief is main\'s text exactly: a LITERAL, and the head brief less its recorded-head line (D-7470)', () => {
+    // The text `renderMergedBrief(ID, 42)` produced at fc74774b2, before the recorded-head line
+    // existed. A word added to the head-null path, or a reworded clause, turns this red whichever way it is made.
+    const AT_FC74774B2 = `PR #42 (workspace \`demo-quiet-basin\`) merged while its run waited at \`merging\`.
+Prove it from your own shell — \`gh pr view 42 --json state,headRefOid\` answers MERGED with \`headRefOid\` equal to the run's verified handoffCommit, or, when it answers CLOSED, PR #42's row of \`ccd pr-state --session demo-quiet-basin\` reads \`landedInTrain: true\` with that same \`headRefOid\` (ccd sets it only when the merge train's own record proves the landing; a label alone reads \`trainUnproven\`) — then close the run as references/wave-lifecycle.md §5 closes a producer.
+
+Run the ccrc-coordinator skill.`;
+    expect(renderMergedBrief(ID, 42, null)).toBe(AT_FC74774B2);
+    expect(renderMergedBrief(ID, 42)).toBe(AT_FC74774B2);
+    // The head brief is that text plus one line, and nothing else.
+    const head = 'c'.repeat(40);
+    const withHead = renderMergedBrief(ID, 42, head);
+    const headLine = `The run's recorded head (its verified handoffCommit) is \`${head}\`: the head the merge must have landed at.\n`;
+    expect(withHead).toContain(headLine);
+    expect(withHead.replace(headLine, '')).toBe(AT_FC74774B2);
   });
 });
 
