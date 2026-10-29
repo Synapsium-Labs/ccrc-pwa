@@ -48,8 +48,9 @@ describe('the fleet store reads the runs frame\'s stallQuietMs', () => {
     });
     store.getState().connect();
     sock!.onopen?.(new Event('open'));
-    const frame = (m: unknown): void => sock!.onmessage?.({ data: JSON.stringify(m) } as MessageEvent);
-    return { store, frame };
+    const text = (data: string): void => sock!.onmessage?.({ data } as MessageEvent);
+    const frame = (m: unknown): void => text(JSON.stringify(m));
+    return { store, frame, text };
   };
 
   it('is null before any runs frame, the frame\'s value after one, and null again from a frame without it', () => {
@@ -63,10 +64,19 @@ describe('the fleet store reads the runs frame\'s stallQuietMs', () => {
 
   it('reads anything but a positive finite number as none', () => {
     const { store, frame } = open();
-    for (const bad of [0, -1, 'soon', null, Number.POSITIVE_INFINITY]) {
+    for (const bad of [0, -1, 'soon', null]) {
       frame({ type: 'runs', runs: [], stallQuietMs: 7_200_000 });
       frame({ type: 'runs', runs: [], stallQuietMs: bad });
       expect(store.getState().stallQuietMs, String(bad)).toBeNull();
     }
+  });
+
+  // Fix round 1, F6: `JSON.stringify` turns Infinity into null, so only an out-of-range literal reaches the store as a
+  // non-finite number. `JSON.parse` reads `1e999` as Infinity, which the store's Number.isFinite guard refuses.
+  it('reads an out-of-range literal on the wire (1e999, parsed as Infinity) as none', () => {
+    const { store, frame, text } = open();
+    frame({ type: 'runs', runs: [], stallQuietMs: 7_200_000 });
+    text('{"type":"runs","runs":[],"stallQuietMs":1e999}');
+    expect(store.getState().stallQuietMs).toBeNull();
   });
 });
