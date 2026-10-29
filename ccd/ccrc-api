@@ -57,7 +57,10 @@
 #
 # SELF-CONTAINED. This file `source`s nothing. The moment it does it needs the
 # shim treatment `ccrc` has (deploy/deploy.sh argues that at length) and a lone
-# copy at ~/.local/bin would be dead on every box.
+# copy at ~/.local/bin would be dead on every box. The GENERATED SERVER-CAP
+# READER region below is a byte copy of the hook's `_hook_server_cap`, renamed
+# `_api_server_cap` (D-7321), never a `source`; regenerate it with
+# `ccrc restamp ccd/ccrc-api`.
 set +x; set -uo pipefail   # `set +x` FIRST, a SECRETS control as in ccd-pool-sync: an inherited xtrace would print the box token (R16, D-4096)
 
 # `~/.local/bin` is NOT on the `claude-session@` unit PATH (measured 2026-08-26),
@@ -169,6 +172,22 @@ declare -A ROUTES=(
   [approvals.release]='POST|/api/approvals/{id}/release|yes|-'
   [approvals.show]='GET|/api/approvals/{id}|yes|-'
 )
+
+# ── BEGIN GENERATED SERVER-CAP READER (shared/hook-helpers.mjs; edit _hook_server_cap in ccd/session-hook.sh, then regenerate) ──
+# ccrc:generated 1 sha256=b13a129bd7002352be7dfc797c104d07461cf4b34ab6bc1d6cb6e2dde47e177a
+_api_server_cap() {
+  local want="$1" l1="" l2="" l3="" l4="" at now
+  { { IFS= read -r l1 && IFS= read -r l2 && IFS= read -r l3 && ! IFS= read -r l4; } < "$HOME/.ccrc/server-caps"; } 2>/dev/null || return 1
+  [[ -z "$l4" && "$l3" == end && "$l1" =~ ^at\ ([0123456789]{1,11})$ ]] || return 1
+  at=$(( 10#${BASH_REMATCH[1]} ))
+  # The word class is spelled out, never a range: under a UTF-8 locale `a-z` may collate non-ASCII letters into it.
+  [[ "$l2" =~ ^caps(\ [abcdefghijklmnopqrstuvwxyz0123456789-]{1,64})*$ ]] || return 1
+  if [[ -n "${EPOCHREALTIME:-}" ]]; then now="${EPOCHREALTIME%%[.,]*}"; else printf -v now '%(%s)T' -1; fi
+  [[ "$now" =~ ^[0123456789]+$ ]] || return 1
+  (( at <= now && now - at <= 180 )) || return 1
+  [[ " ${l2#caps} " == *" $want "* ]]
+}
+# ── END GENERATED SERVER-CAP READER ──
 
 # Every refusal leaves by this door, in the SAME JSON envelope the routes
 # themselves use, so a caller never parses two shapes. The human sentence goes to
