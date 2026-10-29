@@ -16,7 +16,7 @@
 import { describe, it, expect } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkTmp, removeTmpFixturesEachTest } from './tmpHelpers.js';
@@ -184,10 +184,19 @@ function frameOf(r: Ran): Frame {
   return JSON.parse(lines[0]) as Frame;
 }
 
-function checkout(w: World, f: Frame, dest: string): Ran {
+function checkout(w: World, f: Frame, dest: string, env: NodeJS.ProcessEnv = {}): Ran {
   const args = [CHECKOUT, '--mirror', w.mirror, '--run-id', f.runId, '--fetch-url', w.upstream, '--dest', dest];
   if (f.branch !== null) args.push('--branch', f.branch);
-  return sh('bash', args, w.root, w.env);
+  return sh('bash', args, w.root, { ...w.env, ...env });
+}
+
+/** spec §2.1's owner layout: the mirror is the service's, the push user and the run user are other users. git's own
+ *  switch GIT_TEST_ASSUME_DIFFERENT_OWNER makes every repository look foreign to the process that has it, so a row
+ *  allows the directories its user owns and leaves the mirror foreign. The fixture is checked to bite on this git. */
+const FOREIGN: NodeJS.ProcessEnv = { GIT_TEST_ASSUME_DIFFERENT_OWNER: '1' };
+function expectForeign(w: World, repo: string): void {
+  const r = sh('git', ['rev-parse', '--git-dir'], repo, { ...w.env, ...FOREIGN });
+  expect({ status: r.status, dubious: /dubious ownership/.test(r.stderr) }, 'the foreign-owner fixture bites').toEqual({ status: 128, dubious: true });
 }
 
 const scratchRefs = (w: World, repo: string): string => w.git(repo, 'for-each-ref', '--format=%(refname) %(objectname)', 'refs/ccrc-test');
@@ -550,6 +559,39 @@ describe('never origin (§Review focus 1): a mirror URL equal to a remote of the
     expectFallback(w, snap(w, { mirror: elsewhere }), 'test box: unreachable (push: the mirror URL is this clone\'s remote fork)');
     expect(scratchRefs(w, elsewhere)).toBe('');
   }, T);
+
+  // A network remote spelled two ways: ssh:// against the scp form, the host in another case, another user, the default
+  // port. GIT_SSH=false: nothing connects, so a push that is not refused fails `unreachable (git push: ...)`.
+  const NO_SSH: NodeJS.ProcessEnv = { GIT_SSH: 'false', GIT_SSH_VARIANT: 'simple' };
+  const ORIGIN_REFUSED = 'test box: unreachable (push: the mirror URL is this clone\'s remote origin)';
+
+  it('origin scp-like, the mirror URL ssh:// (host case, user, port, trailing slash)', () => {
+    const w = world();
+    dirtySession(w);
+    w.git(w.sess, 'remote', 'set-url', 'origin', 'git@testbox.invalid:org/r.git');
+    for (const base of ['ssh://git@testbox.invalid', 'ssh://git@TESTBOX.invalid', 'ssh://other@testbox.invalid:22/', 'ssh://testbox.invalid']) {
+      expectFallback(w, snap(w, { base, mirror: '/org/r.git', env: NO_SSH }), ORIGIN_REFUSED);
+    }
+    expectFallback(w, snap(w, { base: 'ssh://git@testbox.invalid', mirror: '/org/r', env: NO_SSH }), ORIGIN_REFUSED);
+  }, T);
+
+  it('origin ssh://, the mirror URL scp-like; a path in another case on the same host', () => {
+    const w = world();
+    dirtySession(w);
+    w.git(w.sess, 'remote', 'set-url', 'origin', 'ssh://git@Testbox.Invalid:22/Org/R.git');
+    for (const base of ['git@testbox.invalid:', 'testbox.invalid:']) {
+      expectFallback(w, snap(w, { base, mirror: '/org/r.git', env: NO_SSH }), ORIGIN_REFUSED);
+    }
+  }, T);
+
+  it('another path on the same host is not origin: the push is tried (and, with no ssh, fails unreachable)', () => {
+    const w = world();
+    dirtySession(w);
+    w.git(w.sess, 'remote', 'set-url', 'origin', 'git@testbox.invalid:org/r.git');
+    const r = snap(w, { base: 'ssh://git@testbox.invalid', mirror: '/srv/mirrors/r.git', env: NO_SSH });
+    expect(r.status).toBe(3);
+    expect(r.stdout).toMatch(/^test box: unreachable \(git push: .+\)\n$/);
+  }, T);
 });
 
 describe('the fallback lines are TESTBOX_FALLBACK\'s words', () => {
@@ -622,7 +664,10 @@ describe.skipIf(!LINUX)('the pre-receive hook (spec §2.1 "the create-only rule"
 /** A fixed GIT_SSH driver standing in for sshd and authorized_keys' forced command: git calls it as
  *  `<driver> <host> <command>` (GIT_SSH_VARIANT=simple); it runs the forced command with SSH_ORIGINAL_COMMAND set to
  *  the command git asked for. Paths reach it through the environment, never through a built command line. */
-const SSH_DRIVER = '#!/bin/sh\n[ "$1" = testbox.invalid ] || exit 255\nSSH_ORIGINAL_COMMAND=$2\nexport SSH_ORIGINAL_COMMAND\nexec bash "$TB3_PUSH_COMMAND" "$TB3_REPOS"\n';
+// TB3_FOREIGN=1: the forced command runs as a user who does not own the mirror (spec §2.1's push user).
+const SSH_DRIVER = '#!/bin/sh\n[ "$1" = testbox.invalid ] || exit 255\nSSH_ORIGINAL_COMMAND=$2\nexport SSH_ORIGINAL_COMMAND\n'
+  + 'if [ -n "$TB3_FOREIGN" ]; then GIT_TEST_ASSUME_DIFFERENT_OWNER=1; export GIT_TEST_ASSUME_DIFFERENT_OWNER; fi\n'
+  + 'exec bash "$TB3_PUSH_COMMAND" "$TB3_REPOS"\n';
 
 describe.skipIf(!LINUX)('the forced command (spec §2.1 "The push user")', () => {
   const forced = (w: World, cmd: string | undefined, marker: string): Ran => {
@@ -644,6 +689,18 @@ describe.skipIf(!LINUX)('the forced command (spec §2.1 "The push user")', () =>
     writeFileSync(driver, SSH_DRIVER);
     chmodSync(driver, 0o755);
     const f = frameOf(snap(w, { base: 'ssh://testbox.invalid', env: { GIT_SSH: driver, GIT_SSH_VARIANT: 'simple', TB3_PUSH_COMMAND: PUSH_COMMAND, TB3_REPOS: w.table } }));
+    expect(scratchRefs(w, w.mirror).split('\n').filter(Boolean)).toHaveLength(3);
+    expect(f.refs).toEqual(['head', 'base', 'snap']);
+  }, T);
+
+  it('a mirror the push user does not own (the service owns it): the push still lands', () => {
+    const w = world();
+    dirtySession(w);
+    expectForeign(w, w.mirror);
+    const driver = path.join(w.root, 'ssh-driver');
+    writeFileSync(driver, SSH_DRIVER);
+    chmodSync(driver, 0o755);
+    const f = frameOf(snap(w, { base: 'ssh://testbox.invalid', env: { GIT_SSH: driver, GIT_SSH_VARIANT: 'simple', TB3_PUSH_COMMAND: PUSH_COMMAND, TB3_REPOS: w.table, TB3_FOREIGN: '1' } }));
     expect(scratchRefs(w, w.mirror).split('\n').filter(Boolean)).toHaveLength(3);
     expect(f.refs).toEqual(['head', 'base', 'snap']);
   }, T);
@@ -760,6 +817,20 @@ describe.skipIf(!LINUX)('the run\'s checkout (spec §2.1 "The run\'s checkout"; 
     const fsck = w.gitRan(co, 'fsck', '--full', '--no-dangling');
     expect(fsck.status, fsck.stderr).toBe(0);
     expect(`${fsck.stdout}${fsck.stderr}`).not.toMatch(/missing/);
+    expect(probe(w, co)).toBe(probe(w, w.sess));
+  }, T);
+
+  it('a mirror the run user does not own (the service owns it, the run user only reads it): the checkout is the same', () => {
+    const w = world();
+    dirtySession(w);
+    expectForeign(w, w.mirror);
+    const f = frameOf(snap(w));
+    const co = path.join(w.root, 'co');
+    // The run user owns its own checkout; the mirror stays foreign.
+    appendFileSync(path.join(w.home, '.gitconfig'), `[safe]\n\tdirectory = ${co}\n`);
+    expect(checkout(w, f, co, FOREIGN)).toEqual({ status: 0, stdout: '', stderr: '' });
+    expect(w.git(co, 'for-each-ref', '--format=%(refname)').split('\n').filter(Boolean).sort())
+      .toEqual(['refs/ccrc-test/run/base', 'refs/ccrc-test/run/head', 'refs/ccrc-test/run/snap', 'refs/heads/feat', 'refs/remotes/origin/main']);
     expect(probe(w, co)).toBe(probe(w, w.sess));
   }, T);
 
