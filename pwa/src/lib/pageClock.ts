@@ -1,7 +1,8 @@
-// The page clock (D-7191; ARCH-75, #810): the ONE `visibilitychange` subscription in `pwa/src`. Every view, hook and
-// store that acts when the page turns visible or hidden subscribes here, and each subscription returns its stop. The
-// document listener is added with its first subscriber and removed with its last stop, so a page with no subscriber
-// holds none (the leak rows in `pwa/test/page-clock.test.ts`).
+// The page clock (D-7191; ARCH-75, #810): the ONE `visibilitychange` and the ONE `online` subscription in `pwa/src`.
+// Every view, hook and store that acts when the page turns visible, turns hidden or comes back online subscribes
+// here, and each subscription returns its stop. A document (or window) listener is added with its first subscriber
+// and removed with its last stop, so a page with no subscriber holds none (the leak rows in
+// `pwa/test/page-clock.test.ts`).
 //
 // The handler sets keep the DOM's own rules, so a handler moved here from its own `addEventListener` behaves as it
 // did: the same handler subscribed twice to one event is held once, handlers run in the order they subscribed, a
@@ -42,4 +43,18 @@ export function onPageVisible(handler: Handler): Stop {
 /** Run `handler` each time the page becomes hidden; the returned function stops it. */
 export function onPageHidden(handler: Handler): Stop {
   return subscribeVisibility(hiddenHandlers, handler);
+}
+
+// ─── online ────────────────────────────────────────────────────────────────────────────────────────────────────────
+const onlineHandlers = new Set<Handler>();
+const onBackOnline = (): void => fanOut(onlineHandlers);
+
+/** Run `handler` each time the browser comes back online; the returned function stops it. */
+export function onOnline(handler: Handler): Stop {
+  if (onlineHandlers.size === 0) window.addEventListener('online', onBackOnline);
+  onlineHandlers.add(handler);
+  return () => {
+    if (!onlineHandlers.delete(handler)) return;
+    if (onlineHandlers.size === 0) window.removeEventListener('online', onBackOnline);
+  };
 }

@@ -1,7 +1,8 @@
-// The page clock (D-7191; ARCH-75, #810; W7 C7m): one `visibilitychange` listener however many subscribers; each stop removes only its own handler; the listener goes with the last stop (Review focus 10: a
+// The page clock (D-7191; ARCH-75, #810; W7 C7m): one `visibilitychange` and one `online` listener however many
+// subscribers; each stop removes only its own handler; the listener goes with the last stop (Review focus 10: a
 // listener that never unsubscribes).
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { onPageHidden, onPageVisible } from '../src/lib/pageClock';
+import { onOnline, onPageHidden, onPageVisible } from '../src/lib/pageClock';
 
 const setVisibility = (v: DocumentVisibilityState): void => {
   Object.defineProperty(document, 'visibilityState', { value: v, configurable: true });
@@ -31,14 +32,25 @@ describe('the page clock', () => {
     expect(live()).toBe(0);
   });
 
-  it('visible handlers run on visible, hidden handlers on hidden', () => {
+  it('one online listener however many subscribers', () => {
+    const live = listenerCount(window, 'online');
+    const stops = [onOnline(() => {}), onOnline(() => {}), onOnline(() => {})];
+    expect(live()).toBe(1);
+    for (const stop of stops) stop();
+    expect(live()).toBe(0);
+  });
+
+  it('visible handlers run on visible, hidden handlers on hidden, online handlers on online', () => {
     const visible = vi.fn();
     const hidden = vi.fn();
-    const stops = [onPageVisible(visible), onPageHidden(hidden)];
+    const online = vi.fn();
+    const stops = [onPageVisible(visible), onPageHidden(hidden), onOnline(online)];
     turn('visible');
-    expect([visible.mock.calls.length, hidden.mock.calls.length]).toEqual([1, 0]);
+    expect([visible.mock.calls.length, hidden.mock.calls.length, online.mock.calls.length]).toEqual([1, 0, 0]);
     turn('hidden');
-    expect([visible.mock.calls.length, hidden.mock.calls.length]).toEqual([1, 1]);
+    expect([visible.mock.calls.length, hidden.mock.calls.length, online.mock.calls.length]).toEqual([1, 1, 0]);
+    window.dispatchEvent(new Event('online'));
+    expect([visible.mock.calls.length, hidden.mock.calls.length, online.mock.calls.length]).toEqual([1, 1, 1]);
     for (const stop of stops) stop();
   });
 
@@ -91,10 +103,13 @@ describe('the page clock', () => {
 
   it('leak rows: 100 subscribers mounted and stopped leave zero listeners', () => {
     const vis = listenerCount(document, 'visibilitychange');
+    const on = listenerCount(window, 'online');
     const stops: (() => void)[] = [];
-    for (let i = 0; i < 100; i += 1) stops.push(onPageVisible(() => {}), onPageHidden(() => {}));
-    expect(vis()).toBe(1);
+    for (let i = 0; i < 100; i += 1) {
+      stops.push(onPageVisible(() => {}), onPageHidden(() => {}), onOnline(() => {}));
+    }
+    expect([vis(), on()]).toEqual([1, 1]);
     for (const stop of stops) stop();
-    expect(vis()).toBe(0);
+    expect([vis(), on()]).toEqual([0, 0]);
   });
 });
