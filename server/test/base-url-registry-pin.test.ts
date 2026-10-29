@@ -31,27 +31,30 @@ const refused = { ok: false, field: 'baseUrl' } as const;
 
 describe("parseRegistry's baseUrl arm over the endpoint gate's case table (D-7305, characterization)", () => {
   it('answers each of the 24 rows as measured on the old code: the raw text stored, or the baseUrl field refused', () => {
+    // Re-pointed in BU3's behaviour commit (D-7308; OA-BU1 ruled (b), D-7460): the title names the old code. The six
+    // rows the gate refuses for userinfo, a query or a fragment are refused, and the five accepted rows whose text
+    // the gate normalises are stored as its url. The other 13 rows are byte-identical.
     expect(ROWS.map((r) => [r.raw, registryAnswer(r.raw)])).toEqual([
       ['https://openrouter.ai/api/v1', { ok: true, stored: 'https://openrouter.ai/api/v1' }],
-      ['https://orchard-api', { ok: true, stored: 'https://orchard-api' }],
+      ['https://orchard-api', { ok: true, stored: 'https://orchard-api/' }],
       ['https://orchard-api:8443/v1', { ok: true, stored: 'https://orchard-api:8443/v1' }],
-      ['http://127.0.0.1:8642', { ok: true, stored: 'http://127.0.0.1:8642' }],
+      ['http://127.0.0.1:8642', { ok: true, stored: 'http://127.0.0.1:8642/' }],
       ['http://[::1]:8642/v1', { ok: true, stored: 'http://[::1]:8642/v1' }],
       ['http://localhost:8642/v1', { ok: true, stored: 'http://localhost:8642/v1' }],
-      ['http://127.0.0.1./v1', { ok: true, stored: 'http://127.0.0.1./v1' }],
-      ['HTTPS://Orchard-API/V1', { ok: true, stored: 'HTTPS://Orchard-API/V1' }],
-      ['  https://orchard-api/v1  ', { ok: true, stored: '  https://orchard-api/v1  ' }],
+      ['http://127.0.0.1./v1', { ok: true, stored: 'http://127.0.0.1/v1' }],
+      ['HTTPS://Orchard-API/V1', { ok: true, stored: 'https://orchard-api/V1' }],
+      ['  https://orchard-api/v1  ', { ok: true, stored: 'https://orchard-api/v1' }],
       ['http://orchard-api/v1', refused],
       ['http://203.0.113.7/v1', refused],
       ['http://127.0.0.2/v1', refused],
       ['ftp://orchard-api/v1', refused],
-      ['https://user:pass@orchard-api/v1', { ok: true, stored: 'https://user:pass@orchard-api/v1' }],
-      ['https://user@orchard-api/v1', { ok: true, stored: 'https://user@orchard-api/v1' }],
+      ['https://user:pass@orchard-api/v1', refused],
+      ['https://user@orchard-api/v1', refused],
       ['http://user:pass@orchard-api/v1', refused],
-      ['https://orchard-api/v1?beta=true', { ok: true, stored: 'https://orchard-api/v1?beta=true' }],
-      ['https://orchard-api/v1?', { ok: true, stored: 'https://orchard-api/v1?' }],
-      ['https://orchard-api/v1#frag', { ok: true, stored: 'https://orchard-api/v1#frag' }],
-      ['https://orchard-api/v1#', { ok: true, stored: 'https://orchard-api/v1#' }],
+      ['https://orchard-api/v1?beta=true', refused],
+      ['https://orchard-api/v1?', refused],
+      ['https://orchard-api/v1#frag', refused],
+      ['https://orchard-api/v1#', refused],
       ['orchard-api', refused],
       ['https://', refused],
       ['', refused],
@@ -63,20 +66,9 @@ describe("parseRegistry's baseUrl arm over the endpoint gate's case table (D-730
     const answers = ROWS.map((r) => ({ r, a: registryAnswer(r.raw) }));
     const verdictDiffers = answers.filter(({ r, a }) => a.ok !== r.expect.ok).map(({ r }) => r.why).sort();
     const storedDiffers = answers.filter(({ r, a }) => a.ok && r.expect.ok && a.stored !== r.expect.url).map(({ r }) => r.why).sort();
-    expect(verdictDiffers).toEqual([
-      'a BARE hash leaves hash empty and href unchanged — the same trap',
-      'a BARE question mark leaves search empty and href unchanged — the trap',
-      'a URL is not a place to keep a key',
-      'a fragment is not part of an endpoint',
-      'a query string is not part of an endpoint',
-      'a username with no password is still userinfo',
-    ]);
-    expect(storedDiffers).toEqual([
-      'a trailing-dot loopback normalises to the loopback and is admitted',
-      'http on the IPv4 loopback — this fleet\'s existing api-key lanes run here (§4.3)',
-      'https with no path — URL supplies the root, and the stored value says so',
-      'scheme and host are lower-cased and the path is not — the stored value is what resolves',
-      'surrounding whitespace is a paste artefact, not an endpoint',
-    ]);
+    // Both lists emptied in BU3's behaviour commit (D-7308; OA-BU1 ruled (b), D-7460): the arm asks the gate and
+    // stores its url, so it agrees on every verdict and every stored value.
+    expect(verdictDiffers).toEqual([]);
+    expect(storedDiffers).toEqual([]);
   });
 });

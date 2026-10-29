@@ -126,8 +126,10 @@ describe('inlineGates — functions outside the gate that admit http: only on a 
   });
 
   it('real tree: 1 inline gate, with 2 different-question readers apart (characterization)', () => {
+    // Re-pointed in BU3's behaviour commit (D-7308): the title names the plan base's count; `parseRegistry` asks
+    // `BASE_URL_OK` instead of testing the URL inline.
     expect(inlineGates()).toEqual({
-      gates: ['shared/models.mjs#parseRegistry'],
+      gates: [],
       apart: ['server/src/accounts/gate.ts#accountOriginClass', 'server/src/auth/webauthn.ts#originProblem'],
     });
   });

@@ -166,7 +166,7 @@ describe('parseRegistry (§4.1)', () => {
     r['baseUrl'] = '';
     expect(() => parseRegistry(r)).toThrow(/baseUrl/);
     r['baseUrl'] = 'https://api.cortecs.ai';
-    expect(parseRegistry(r).baseUrl).toBe('https://api.cortecs.ai');
+    expect(parseRegistry(r).baseUrl).toBe('https://api.cortecs.ai/'); // stored as the gate's url (D-7460)
   });
 
   it('accepts baseUrl on a codex or openrouter registry but never requires it', () => {
@@ -187,12 +187,13 @@ describe('parseRegistry (§4.1)', () => {
 
   it('accepts an http baseUrl when the host is loopback — the local-proxy case (C13)', () => {
     const r = good(); r['probe'] = 'compatible';
+    // Each stored as the gate's url (OA-BU1 (b), D-7460): the bare host gains its root `/`.
     for (const u of ['http://127.0.0.1:4000', 'http://localhost:4000', 'http://[::1]:4000']) {
       r['baseUrl'] = u;
-      expect(parseRegistry(r).baseUrl).toBe(u);
+      expect(parseRegistry(r).baseUrl).toBe(`${u}/`);
     }
     r['baseUrl'] = 'https://vendor.example.com';
-    expect(parseRegistry(r).baseUrl).toBe('https://vendor.example.com');
+    expect(parseRegistry(r).baseUrl).toBe('https://vendor.example.com/');
   });
 
   // D-7308: the registry's baseUrl decides through the one endpoint gate, `BASE_URL_OK`, so it refuses what a roster

@@ -803,7 +803,7 @@ describe('ccrc models <id> init', () => {
   it('passes --base-url through for a compatible lane', () => {
     const r = run(['models', 'router', 'init', 'compatible', '--base-url', 'https://api.cortecs.ai']);
     expect(r.code).toBe(0);
-    expect(registryOf('router')['baseUrl']).toBe('https://api.cortecs.ai');
+    expect(registryOf('router')['baseUrl']).toBe('https://api.cortecs.ai/'); // stored as the gate's url (D-7460)
   });
 
   it('an openrouter lane is created unseeded and prints the remedy', () => {

@@ -33,13 +33,14 @@
 // which imports nothing itself, `node:*` included — `shared/roster-json.mjs`'s
 // precedent. The registry's `baseUrl` is the endpoint the `compatible` probe
 // sends the lane's bearer key to, so whether one is admissible is the gate's
-// decision and its loopback set, imported rather than mirrored: a private copy
-// here drifted once already (another order, and laxer on six case-table rows,
-// the base-url plan's item 5). Every tree that ships this file ships the gate
-// beside it (`installTreeFixture.ts`'s TREE_FILES, `ccrc-doctorFixture.ts`'s
-// MODELS_OP_CLOSURE, the deployed checkout `ccd-usage-sweep` reads). Nothing
-// else is imported, not even `node:*`.
-import { BASE_URL_OK, LOOPBACK_HOSTS } from './base-url.mjs';
+// decision, imported rather than mirrored. The inline test and private
+// loopback set this file kept until D-7308 had drifted from it (the set in
+// another order, the test laxer on six case-table rows: a user name or
+// password, a query, a fragment). Every tree that ships this file ships the
+// gate beside it (`installTreeFixture.ts`'s TREE_FILES,
+// `ccrc-doctorFixture.ts`'s MODELS_OP_CLOSURE, the deployed checkout
+// `ccd-usage-sweep` reads). Nothing else is imported, not even `node:*`.
+import { BASE_URL_OK } from './base-url.mjs';
 
 /** The runtime twin of `shared/models.ts`'s own `as const` `CLASSES`, in the
  *  same order — that file keeps its own literal because only `.ts` can derive
@@ -211,6 +212,25 @@ export function modelsPushDecision(message, roster) {
 }
 
 const REGISTRY_KEYS = ['probe', 'classes', 'subagent', 'discovery', 'effort', 'baseUrl'];
+
+/** `parseRegistry`'s sentence for each of `BASE_URL_OK`'s five refusals, by
+ *  reason. The three that the gate added to this file (D-7308) name their
+ *  reason word, and none of them repeats the value: a user name and password,
+ *  or a key in a query, would otherwise be printed back on the refusal. The
+ *  `base-url-insecure` sentence is the C13 wording this file always had. */
+const BASE_URL_REFUSED = {
+  'base-url-unparseable': (raw) => `base-url-unparseable: baseUrl ${JSON.stringify(raw)} is not a valid URL.`,
+  'base-url-credentials': () => 'base-url-credentials: baseUrl carries a user name or password, which would be stored '
+    + 'in this file and sent on every probe request. Put the key in the lane\'s secrets file and give the endpoint '
+    + 'without it.',
+  'base-url-query': () => 'base-url-query: baseUrl carries a query string (a "?"), which is not part of an endpoint. '
+    + 'Give the endpoint without it.',
+  'base-url-fragment': () => 'base-url-fragment: baseUrl carries a fragment (a "#"), which is not part of an '
+    + 'endpoint. Give the endpoint without it.',
+  'base-url-insecure': (raw) => `baseUrl ${JSON.stringify(raw)} must be https:// — the lane's key goes out on every `
+    + 'request this probe makes. http:// is accepted only for a loopback host (127.0.0.1, '
+    + 'localhost, [::1]), the one legitimate local-proxy case.',
+};
 
 /** Thrown by `parseRegistry`. Carries the offending FIELD as data, not only in
  *  the sentence: the verbs' contract is "refuses, with the field named" (§10),
@@ -417,23 +437,17 @@ export function parseRegistry(json, catalogue) {
       throw new RegistryInvalid('baseUrl', 'baseUrl must be a non-empty string when it is present.');
     }
     // C13: this URL carries the lane's bearer token on every request the
-    // probe makes (`ccrc-models-probe`'s `compatible` arm). http:// sends
-    // that key in cleartext, so it is refused — except for a loopback host
-    // (127.0.0.1, localhost, [::1]), the one legitimate local-proxy case.
-    let parsed;
-    try {
-      parsed = new URL(baseUrlRaw);
-    } catch {
-      throw new RegistryInvalid('baseUrl', `baseUrl ${JSON.stringify(baseUrlRaw)} is not a valid URL.`);
-    }
-    const isLoopbackHost = LOOPBACK_HOSTS.includes(parsed.hostname);
-    if (parsed.protocol !== 'https:' && !(parsed.protocol === 'http:' && isLoopbackHost)) {
-      throw new RegistryInvalid('baseUrl',
-        `baseUrl ${JSON.stringify(baseUrlRaw)} must be https:// — the lane's key goes out on every `
-        + 'request this probe makes. http:// is accepted only for a loopback host (127.0.0.1, '
-        + 'localhost, [::1]), the one legitimate local-proxy case.');
-    }
-    baseUrl = baseUrlRaw;
+    // probe makes (`ccrc-models-probe`'s `compatible` arm), so whether it is
+    // admissible is the endpoint gate's decision, `BASE_URL_OK`
+    // (`shared/base-url.mjs`, D-7308), the one every roster `exec.baseUrl`
+    // already passes: https://, or http:// only on a loopback host (the one
+    // legitimate local-proxy case), and never a user name or password, a query
+    // or a fragment. An admitted value is stored as the gate's normalised `url`
+    // (OA-BU1 ruled (b), D-7460, as `shared/roster.ts` stores `exec.baseUrl`),
+    // so this file holds the endpoint the probe will actually resolve.
+    const verdict = BASE_URL_OK(baseUrlRaw);
+    if (!verdict.ok) throw new RegistryInvalid('baseUrl', BASE_URL_REFUSED[verdict.reason](baseUrlRaw));
+    baseUrl = verdict.url;
   }
   if (probe === 'compatible' && baseUrl === undefined) {
     throw new RegistryInvalid('baseUrl',
