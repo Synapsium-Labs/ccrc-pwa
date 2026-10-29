@@ -4721,7 +4721,7 @@ describe('an opted-in project: the lineage through the run routes (landing order
       expect(detail.detail.startsWith(`merging-at:${LIVE}:7:`)).toBe(true);
 
       const line = (head: string): PrLandingLine => ({
-        id: SID, bound: true, number: 7, state: 'OPEN', isDraft: false, base: 'main', head,
+        id: SID, bound: true, number: 7, state: 'OPEN', isDraft: false, landedInTrain: false, base: 'main', head,
         required: [], requiredCut: false, rulesNamed: [], protectionNamed: [], pinnedNames: [], unmeasured: [] });
       expect(landingLineAct({ pr: ep.pr!, head: ep.head }, line(LIVE))).toEqual({ act: 'edge' });
       expect(landingLineAct({ pr: ep.pr!, head: ep.head }, line(TIP))).toEqual({ act: 'moved', head: TIP });
