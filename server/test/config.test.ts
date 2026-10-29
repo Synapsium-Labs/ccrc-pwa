@@ -608,3 +608,33 @@ describe('ccrcDir and the two update knobs', () => {
     }
   });
 });
+
+// D-7278: the deps-shed arm's three server thresholds are deployment config with neutral defaults (the operator rule of
+// 2026-10-28: ccrc code is never machine-specific). A value that is not a positive whole number falls back, saying so.
+describe('the deps-shed thresholds (D-7278)', () => {
+  const HOUR = 3_600_000;
+  const cfgOf = (extra: Record<string, string>) => loadConfig({ CCRC_HOME: '/h', CCRC_ACCOUNTS: ROSTER_PATH, ...extra });
+  it('defaults: 24 hours, parked runs never, one row a pass', () => {
+    expect(cfgOf({}).depsShed).toEqual({ afterMs: 24 * HOUR, parkedAfterMs: null, perPass: 1 });
+  });
+  it('each key is read', () => {
+    expect(cfgOf({ CCRC_DEPS_SHED_AFTER_HOURS: '48', CCRC_DEPS_SHED_PARKED_AFTER_HOURS: '72', CCRC_DEPS_SHED_PER_PASS: '3' }).depsShed)
+      .toEqual({ afterMs: 48 * HOUR, parkedAfterMs: 72 * HOUR, perPass: 3 });
+  });
+  it('an empty line is unset, silently; anything else that is not a positive whole number falls back with a warning', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      expect(cfgOf({ CCRC_DEPS_SHED_AFTER_HOURS: '', CCRC_DEPS_SHED_PARKED_AFTER_HOURS: '', CCRC_DEPS_SHED_PER_PASS: '' }).depsShed)
+        .toEqual({ afterMs: 24 * HOUR, parkedAfterMs: null, perPass: 1 });
+      expect(warn.mock.calls.filter((c) => String(c[0]).includes('DEPS_SHED'))).toEqual([]);
+      for (const bad of ['0', '-1', '1.5', 'abc', '1e3', ' 5', '99999999999']) {
+        warn.mockClear();
+        expect(cfgOf({ CCRC_DEPS_SHED_AFTER_HOURS: bad, CCRC_DEPS_SHED_PARKED_AFTER_HOURS: bad, CCRC_DEPS_SHED_PER_PASS: bad }).depsShed, bad)
+          .toEqual({ afterMs: 24 * HOUR, parkedAfterMs: null, perPass: 1 });
+        expect(warn.mock.calls.filter((c) => String(c[0]).includes('DEPS_SHED')).length, bad).toBe(3);
+      }
+    } finally {
+      warn.mockRestore();
+    }
+  });
+});

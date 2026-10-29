@@ -615,8 +615,14 @@ describe('the sleep lanes share one ladder, which never asks which policy it run
     ...stringExpressions(body, 'decideSleep.ts').filter((e) => (SLEEP_POLICY_NAMES as readonly string[]).includes(e.text)).map((e) => e.text),
   ];
 
+  // D-7278: `depsShedVerdict` is NOT a sleep ladder, legitimately different: it decides another act (`ws-shed-deps`, never
+  // `ccd hibernate`) over the population this ladder skips (a row with a stop stamp answers `stopped` here), and its
+  // `viewer` hold is the same presence fact read again. It is named by symbol, so a second SLEEP ladder is still red.
+  const NOT_SLEEP_LADDERS: readonly string[] = ['server/src/depsShed.ts#depsShedVerdict'];
   it('the sleep verdict ladders are one, decideSleep in sleep.ts (2 -> 1 at C4b; may only shrink)', () => {
-    expect(sleepVerdictLadders().map((s) => s.symbol)).toEqual([`${HOME}#decideSleep`]);
+    const all = sleepVerdictLadders().map((s) => s.symbol);
+    expect(all.filter((s) => !NOT_SLEEP_LADDERS.includes(s))).toEqual([`${HOME}#decideSleep`]);
+    expect(all.filter((s) => NOT_SLEEP_LADDERS.includes(s)), 'each named exception is still a ladder the census sees').toEqual(NOT_SLEEP_LADDERS);
   });
 
   it('CONTROL: the name scan sees a comparison, a switch, a destructure, the name list and a quoted name, and passes a field read', () => {

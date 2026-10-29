@@ -5,7 +5,7 @@
  * `<wrapper>-<project>`. Every per-id name that ccd, its session hook and the server derive
  * from that id must fit the 255-byte NAME_MAX, or a write that names it fails long after the
  * id exists. Those names are the registry fields, the dot-leading temps, the reap lock, the
- * quarantine slot, the unit and the history sweep's draining file. `ID_NAME_TEMPLATES` is
+ * quarantine slot, the deps shed's lock, the unit and the history sweep's draining file. `ID_NAME_TEMPLATES` is
  * that census, one row per distinct template, with the bytes each adds beyond the id.
  *
  * The cap is NAME_MAX less the widest overhead, lowered to the hook's own id gate
@@ -27,6 +27,7 @@ import path from 'node:path';
 import { CCD, FIXTURE_MOUNTINFO, WS_ADD, ghContainedEnv, makeCcdHarness, type CcdHarness, ccdSource } from './ccdWsHelpers.js';
 import { inheritedEnv } from './gitEnvStrip.js';
 import { eventsOf } from './lifecycleHelpers.js';
+import { DEPS_SHED_STAMP_SUFFIX } from '../src/depsShedPass.js';
 
 const REPO = path.resolve(__dirname, '../..');
 const read = (rel: string): string => fs.readFileSync(path.join(REPO, rel), 'utf8');
@@ -90,6 +91,9 @@ const ID_NAME_TEMPLATES: readonly IdNameTemplate[] = [
   // The entry field's pane temp (path-identity spec §4.3): written in $REG beside the field, then renamed over it.
   { file: 'ccd/ccd', template: '.<id>.workdirid.<pid>.tmp', overhead: 23 },
   { file: 'ccd/ccd', template: '.reap-<id>.lock', overhead: 11 },
+  // ws-shed-deps's own lock (D-7278), the reap lock's shape under another verb; its row marker `<id>.shedding` and its
+  // stamp `<id>.depsshed` are both in the `<field>` family.
+  { file: 'ccd/lib/disk-retention.sh', template: '.shed-<id>.lock', overhead: 11 },
   // Keyed on the project, which is shorter than any id composed from it, so this row is an upper bound.
   { file: 'ccd/ccd', template: '.ws-add-<id>.lock', overhead: 13 },
   // The quarantine slot: spec §2.6's 222 was derived from this row alone.
@@ -116,11 +120,11 @@ const CENSUS_EXCLUDED: readonly { file: string; reason: string }[] = [
 ];
 
 /** Task 0's (e4) patterns as ONE tokenizer:
- *  - a `$REG/<id>.` name, the reap and ws-add locks, the slot, a witness, a leaf and the unit (ccd's bash);
+ *  - a `$REG/<id>.` name, the reap, shed and ws-add locks, the slot, a witness, a leaf and the unit (ccd's bash);
  *  - a `${id}.`/`${sessionId}.` name with its literal prefix (`server/src` and the .mjs files).
  *  A token runs until a quote, a space, a bracket or a separator. */
 const CENSUS_TOKEN =
-  /(?:\$REG\/\.?\$\{?(?:id|1)\}?\.|\$REG\/\.?\$\{?2\}?\.(?=\$\{?3\}?(?![0-9]))|\.reap-\$|\.ws-add-\$|slot\.\$\{?id|\/tmproots\/\$|\.cc-tmp\/\$|claude-session@|[A-Za-z0-9._@-]*\$\{(?:id|sessionId)\}\.)[^\s"'`(),;:<>\\]*/g;
+  /(?:\$REG\/\.?\$\{?(?:id|1)\}?\.|\$REG\/\.?\$\{?2\}?\.(?=\$\{?3\}?(?![0-9]))|\.reap-\$|\.shed-\$|\.ws-add-\$|slot\.\$\{?id|\/tmproots\/\$|\.cc-tmp\/\$|claude-session@|[A-Za-z0-9._@-]*\$\{(?:id|sessionId)\}\.)[^\s"'`(),;:<>\\]*/g;
 
 /** Every spelling of the id in those templates. `$project` keys the ws-add lock: an upper bound, above.
  *  `_reg_get_to`'s `$1` is its out-var, so its `$REG/$2.$3` spells the id `$2`: that pair alone, never a bare `$2`. */
@@ -141,6 +145,9 @@ const PLACEHOLDERS: ReadonlyArray<readonly [RegExp, string]> = [
   [/\$\{tickMs\}/g, '<ms>'],
   [/\$2(?![0-9])|\$\{f\}|\$f(?![A-Za-z0-9_])|\$field(?![A-Za-z0-9_])|\$\{field\}|\$\{name\}/g, '<field>'],
   [/\$base(?![A-Za-z0-9_])/g, '<base>'],
+  // A suffix server/src spells through its exported constant reads as the literal ccd writes, so the `<field>` family's
+  // own length check measures it (the deps shed stamp, `<id>.depsshed`).
+  [/\$\{DEPS_SHED_STAMP_SUFFIX\}/g, DEPS_SHED_STAMP_SUFFIX],
 ];
 
 /** A token's template (`<id>` plus placeholders), or null when it names no file: a glob, a prefix, or no id. */

@@ -26,7 +26,8 @@ get wrong when editing `src/whitelist.ts`.
   binds the archive; the server composes it for an archived workspace with no human in the path), `ws-collect` requires
   `--expect` (the collection token, which binds the witnessed temp root; only the server composes it, for an orphaned
   temp root with no human in the path), `ws-title` requires `--session` (the workspace rename: it sets or clears one
-  workspace's operator title and nothing else, and the flag is its whole argument surface). **Ungrantable verbs:** `ws-rm`, `ws-gc`. An empty prefix
+  workspace's operator title and nothing else, and the flag is its whole argument surface), `ws-shed-deps` requires `--session` (the
+  deps-shed arm's act on one sleeping session's ignored dependency directories; only the server composes it, D-7278). **Ungrantable verbs:** `ws-rm`, `ws-gc`. An empty prefix
   `[]` grants every subcommand and is fatal.
 - `EXEC_WHITELIST` and its prefix lists are `Object.freeze`d at load; `isExecAllowed` uses `Object.hasOwn` +
   `GRANTABLE_COMMANDS.includes` + `Array.isArray` so prototype-named keys (`constructor`, `__proto__`) fail

@@ -9,7 +9,7 @@
 set -uo pipefail
 
 # ── THE DIRECT-ENTRY BOUNDARY (D-3696, D-3697) — before any external command ──
-# A direct `ws-reclaim`, `ws-expire`, `ws-collect` or `ws-orphan`, or a direct `ws-audit --session <id>
+# A direct `ws-reclaim`, `ws-expire`, `ws-collect`, `ws-orphan`, `scratch-rescue` or `ws-shed-deps`, or a direct `ws-audit --session <id>
 # --reclaim [--defer-expired]`, `… --expire` or `… --collect`, runs under Bash >= 4.4 PRIVILEGED with
 # no shell function defined — the state the installed launcher (`ccd/ccd-entry.py`
 # rendered to ~/.local/bin/ccd) starts it in, re-measured here, not taken on its
@@ -31,7 +31,7 @@ if [[ $# -ge 5 && "${1-}" == ws-audit && "${2-}" == --session && "${4-}" == --re
     case "${!__ccd_i}" in --defer-expired) ;; --stale|--hold-digest) __ccd_i=$((__ccd_i + 1)) ;; *) __ccd_stale=0; break ;; esac
   done
 fi
-if [[ "${BASH_SOURCE[0]}" == "${0}" ]] && { [[ "${1-}" == ws-reclaim || "${1-}" == ws-expire || "${1-}" == ws-collect || "${1-}" == ws-orphan || "${1-}" == scratch-rescue ]] \
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]] && { [[ "${1-}" == ws-reclaim || "${1-}" == ws-expire || "${1-}" == ws-collect || "${1-}" == ws-orphan || "${1-}" == scratch-rescue || "${1-}" == ws-shed-deps ]] \
      || (( __ccd_stale )) \
      || { [[ $# -ge 4 && $# -le 6 && "${1-}" == ws-audit && "${2-}" == --session ]] \
           && [[ ( "${4-}" == --reclaim && ( $# -eq 4 || ( $# -eq 5 && "${5-}" == --defer-expired ) ) ) || ( "${4-}" == --expire && ( $# -eq 4 || ( $# -eq 6 && "${5-}" == --child-of ) ) ) || ( $# -eq 4 && "${4-}" == --collect ) ]]; } || [[ $# -eq 4 && "${1-}" == ws-audit && "${2-}" == --loose-hex && "${4-}" == --collect ]]; }; then   # + the loose arm's audit (D-6625)
@@ -6558,43 +6558,43 @@ WS_NOUN=(mesa river ridge harbor meadow canyon summit hollow prairie basin cove 
 
 _ws_slug_valid() { [[ "$1" =~ ^[a-z0-9][a-z0-9-]{1,30}$ ]]; }
 
-# R-3, wave review. Ids are `<project>-<slug>`, and `_reg_purge` unlinks
-# `"$REG/$id".*` for every dot-free suffix — so a PROJECT with a LEADING DOT
-# mints an id that ALIASES one of ccd's own hidden, dot-prefixed registry
-# files for an unrelated session. THE RULE, not a fixed list: a dot-leading
-# project aliases EVERY `$REG/.<name>.<dot-free-suffix>` file ccd owns. Four
-# known instances illustrate it, all verified: project `.prstate-demo` +
-# slug `quiet-basin` -> id `.prstate-demo-quiet-basin`, whose purge glob
-# matches `$REG/.prstate-demo-quiet-basin.lock` — the PR-STATE LOCK of the
-# unrelated session `demo-quiet-basin` (new this wave, the lock `_pr_py`'s
-# migration off `.uuid` introduced); project `.reap-demo` + slug
-# `quiet-basin` aliases that same session's REAP LOCK,
-# `$REG/.reap-demo-quiet-basin.lock` (pre-dates this wave); project
-# `.ws-add` + slug `demo` -> id `.ws-add-demo`, aliasing the WS-ADD LOCK for
-# project `demo`, `$REG/.ws-add-demo.lock` (pre-dates this wave);
-# project `.tmux` + slug `server` -> id `.tmux-server`, aliasing the
-# TMUX-SERVER LOCK `$REG/.tmux-server.lock` that `_tmux_new_session` takes
-# (pre-dates this wave); and project `.account` + slug `placement` -> id
-# `.account-placement`, aliasing the ACCOUNT-PLACEMENT LOCK
-# `$REG/.account-placement.lock` that all five `ccrc account` writing verbs
-# serialise on (new with that verb, and NOT amended here when it landed — see
-# the census note below) — `server` and `placement` pass `_ws_slug_valid`
-# exactly as the other three slugs do, no more contrived. Unlinking a lock file while
-# another process holds it is exactly how two processes come to hold "the
-# lock" on two different inodes — reopening the double compare-and-set this
-# branch's lock migration closed. A sixth, D-5884 (#128): project `.ignored`
-# + slug `scan` -> id `.ignored-scan`, aliasing the IGNORED-SCAN LOCK
-# `$REG/.ignored-scan.lock` that `_ws_collect_ignored_settled` takes before
-# its one retry. Unlinking that one costs nothing a lock protects: it only
-# lowers contention and is never a gate, so two retries holding two inodes is
-# two retries running at once, each with every refusal intact. A seventh,
-# D-6625: project `.collect` + slug `loose` -> id `.collect-loose`, aliasing
-# the COLLECT-LOOSE LOCK `$REG/.collect-loose.lock` that ws-collect's loose arm
-# holds over its census, audit and verb; it has no reap lock, since a loose
-# entry has no id.
+# R-3, wave review. Ids are `<project>-<slug>`, and `_reg_purge` unlinks `"$REG/$id".*` for
+# every dot-free suffix — so a PROJECT with a LEADING DOT mints an id that ALIASES one of
+# ccd's own hidden, dot-prefixed registry files for an unrelated session. THE RULE, not a
+# fixed list: a dot-leading project aliases EVERY `$REG/.<name>.<dot-free-suffix>` file ccd
+# owns. Four known instances illustrate it, all verified: project `.prstate-demo` + slug
+# `quiet-basin` -> id `.prstate-demo-quiet-basin`, whose purge glob matches
+# `$REG/.prstate-demo-quiet-basin.lock` — the PR-STATE LOCK of the unrelated session
+# `demo-quiet-basin` (new this wave, the lock `_pr_py`'s migration off `.uuid` introduced);
+# project `.reap-demo` + slug `quiet-basin` aliases that same session's REAP LOCK,
+# `$REG/.reap-demo-quiet-basin.lock` (pre-dates this wave); project `.ws-add` + slug `demo`
+# -> id `.ws-add-demo`, aliasing the WS-ADD LOCK for project `demo`,
+# `$REG/.ws-add-demo.lock` (pre-dates this wave); project `.tmux` + slug `server` -> id
+# `.tmux-server`, aliasing the TMUX-SERVER LOCK `$REG/.tmux-server.lock` that
+# `_tmux_new_session` takes (pre-dates this wave); and project `.account` + slug `placement`
+# -> id `.account-placement`, aliasing the ACCOUNT-PLACEMENT LOCK
+# `$REG/.account-placement.lock` that all five `ccrc account` writing verbs serialise on
+# (new with that verb, and NOT amended here when it landed — see the census note below) —
+# `server` and `placement` pass `_ws_slug_valid` exactly as the other three slugs do, no
+# more contrived. Unlinking a lock file while another process holds it is exactly how two
+# processes come to hold "the lock" on two different inodes — reopening the double
+# compare-and-set this branch's lock migration closed. A sixth, D-5884 (#128): project
+# `.ignored` + slug `scan` -> id `.ignored-scan`, aliasing the IGNORED-SCAN LOCK
+# `$REG/.ignored-scan.lock` that `_ws_collect_ignored_settled` takes before its one retry.
+# Unlinking that one costs nothing a lock protects: it only lowers contention and is never a
+# gate, so two retries holding two inodes is two retries running at once, each with every
+# refusal intact. A seventh, D-6625: project `.collect` + slug `loose` -> id
+# `.collect-loose`, aliasing the COLLECT-LOOSE LOCK `$REG/.collect-loose.lock` that
+# ws-collect's loose arm holds over its census, audit and verb; it has no reap lock, since a
+# loose entry has no id. An eighth, D-7278: project `.shed-demo` + slug `quiet-basin` -> id
+# `.shed-demo-quiet-basin`, aliasing the SHED LOCK `$REG/.shed-demo-quiet-basin.lock` of the
+# unrelated session `demo-quiet-basin`, which `ws-shed-deps` holds across a real removal and
+# the spawn gate asks; a wake would read it unlinked as free, so the shed also holds the row
+# marker `$REG/<id>.shedding`, which no alias glob reaches, and the gate fails closed on it
+# (DEPSSHED region).
 #
-# NOT reachable this way, and this set IS the boundary — FIFTEEN dot-prefixed
-# artifacts live under `$REG`; the seven above are reachable, these eight are
+# NOT reachable this way, and this set IS the boundary — SIXTEEN dot-prefixed
+# artifacts live under `$REG`; the eight above are reachable, these eight are
 # not. THE CARDINAL IS MEASURED NOW, and it had to be: this paragraph said
 # EIGHT about a tree that already held nine, because `.account-placement.lock`
 # landed with `ccrc account` and nothing here reds when prose drifts.
@@ -9002,6 +9002,7 @@ EOF
   # child reclamation (wave 3): see "RECLAIM-V1" in the RECLAIM region
   echo reclaim-v1
   echo reclaim-stale-v1   # `ws-reclaim`/`ws-audit --reclaim` take `--stale <word> [--hold-digest <sha256>]` (DR-26, D-6638); sent only behind this word
+  echo shed-deps-v1; echo ws-shed-deps   # D-7278: the deps-shed arm's verb, one inode; see SHED-DEPS-V1 in ccd/lib/disk-retention.sh
   echo nested-rescue-v1; echo scratch-rescue   # D-6632: rung 9's rescue and the box-local `scratch-rescue` entry, one inode; see NESTED-RESCUE-V1
   echo reclaim-pause-v1; echo expire-v1; echo expire-child-v1; echo ws-expire; echo collect-v1; echo ws-collect; echo collect-loose-v1; echo orphan-v1; echo ws-orphan; echo archive-if-no-pane-v1   # the verbs ride here, not in the list above, which sits above the frozen corpus; see "EXPIRE-V1" and "COLLECT-V1"
   echo docs-tree
@@ -37827,8 +37828,9 @@ _ws_expire_spawn_gate() {   # id -> 0 when a pane may be created for id; rc 1 wi
   # `.archived` stamp still stands: so a spawn that is about to clear that
   # stamp takes the same lock first, `-n`, and refuses if anyone holds it — a
   # refusal, never a wait, because the holder may be minutes into a teardown.
-  # No breadcrumb and no stamp: nothing to ask, no lock taken, and a box with
-  # no flock cannot be running an expiry (`cmd_ws_expire` refuses there).
+  # No breadcrumb and no stamp: nothing to ask, no reap lock taken or asked,
+  # and a box with no flock cannot be running an expiry (`cmd_ws_expire`
+  # refuses there). Only ws-shed-deps's OWN lock is asked there (below).
   local id="$1" rbc
   _WS_EXPIRE_SPAWN_FD=""; _WS_EXPIRE_SPAWN_WHY=""
   rbc=$(_reg_get "$id" reaping)
@@ -37837,7 +37839,16 @@ _ws_expire_spawn_gate() {   # id -> 0 when a pane may be created for id; rc 1 wi
     _WS_EXPIRE_SPAWN_WHY="$id is being expired — an interrupted ws-expire stopped at its '$_CRUMB_PHASE' step, and a pane is never created for a workspace whose teardown has begun"
     return 1
   fi
-  [[ -f "$REG/$id.archived" ]] || return 0
+  # NOT ARCHIVED: ws-shed-deps (DEPSSHED region) holds its OWN lock, `$REG/.shed-<id>.lock`, and its row marker
+  # `$REG/<id>.shedding` across a real removal (a dry run takes neither), so a wake asks those and nothing else, creating
+  # neither (`_ws_shed_spawn_held`; the marker fails closed if an alias purge unlinks the lock) and refuses while held. The reap lock
+  # is NOT asked here: ws-restore holds it on its own descriptor across its `_spawn_start`, and a reclaim of a kept
+  # child or a collect hold it too, none of which ever refused a spawn of a row that is not archived.
+  if [[ ! -f "$REG/$id.archived" ]]; then
+    _ws_shed_spawn_held "$id" || return 0
+    _WS_EXPIRE_SPAWN_WHY=$_WS_SHED_HELD_WHY   # the held lock's sentence, or the stranded marker's (DEPSSHED region)
+    return 1
+  fi
   # A BREADCRUMB THAT STANDS BUT READS AS NOTHING, ON AN ARCHIVED ROW, IS NOT
   # "NONE": an interrupted expiry leaves `.archived` standing (its purge takes
   # the breadcrumb first), so it may be one — which verb left it, and where, is
@@ -40254,6 +40265,8 @@ _ws_collect_locked() {   # token id surface actor reason — everything the reap
 # ── end temp-root collection ─────────────────────────────────────────────────── COLLECT-END ──
 
 # @ccd-lib:loose — the loose arm of ws-collect (DR-13, D-6625; fleet disk retention spec 2026-10-23 §2.4) moved to ccd/lib/disk-retention.sh (D-6913)
+
+# @ccd-lib:depsshed — the deps-shed verb, `ws-shed-deps` (D-7278), lives in ccd/lib/disk-retention.sh
 
 # ── ws-reap's mirrors: a reclaim breadcrumb, a leaf link (spec 2026-09-22 §5.5-§5.6) ─ MIRROR-BEGIN ──
 _ws_reap_leaf_ok() { [[ ! -L "${1%"${1##*[!/]}"}" ]] || _ws_refuse containment-unproven "$1 is a symbolic link — ccd never follows a link to a tree it would delete, so it cannot prove the tree at that path is $2's own"; }   # workdir id -> 0, or rc 1 refused
@@ -44616,6 +44629,7 @@ case "${1:-}" in
   ws-collect) shift; cmd_ws_collect "$@" ;;
   ws-orphan)  shift; cmd_ws_orphan "$@" ;;
   scratch-rescue) shift; cmd_scratch_rescue "$@" ;;
+  ws-shed-deps) shift; cmd_ws_shed_deps "$@" ;;
   ws-hold)    shift; cmd_ws_hold "$@" ;;
   ws-release) shift; cmd_ws_release "$@" ;;
   ws-title)   shift; cmd_ws_title "$@" ;;
@@ -44633,6 +44647,6 @@ case "${1:-}" in
   docs-show)  shift; cmd_docs_show "$@" ;;
   docs-fetch) shift; cmd_docs_fetch "$@" ;;
   version)   shift; cmd_version "$@" ;;
-  *) echo "usage: ccd {start|ensure|supervise|enable|stop|forget|hibernate|swap|swap-self|carry-dedupe|prefer|ls|menu|attach|clip|caps|ws-add|ws-rm|ws-rename|ws-gc|ws-archive|ws-restore|ws-attic|ws-audit|path-users|ws-reap|ws-reclaim|ws-expire|ws-collect|ws-orphan|scratch-rescue|ws-hold|ws-release|ws-title|coord-pause|reclaim-pause|win-size|account-pane|project-pool|route|pr-landing|pr-open|pr-state|docs-index|docs-tree|docs-show|docs-fetch|version} <args>" >&2; exit 1 ;;
+  *) echo "usage: ccd {start|ensure|supervise|enable|stop|forget|hibernate|swap|swap-self|carry-dedupe|prefer|ls|menu|attach|clip|caps|ws-add|ws-rm|ws-rename|ws-gc|ws-archive|ws-restore|ws-attic|ws-audit|path-users|ws-reap|ws-reclaim|ws-expire|ws-collect|ws-orphan|scratch-rescue|ws-shed-deps|ws-hold|ws-release|ws-title|coord-pause|reclaim-pause|win-size|account-pane|project-pool|route|pr-landing|pr-open|pr-state|docs-index|docs-tree|docs-show|docs-fetch|version} <args>" >&2; exit 1 ;;
 esac
 fi

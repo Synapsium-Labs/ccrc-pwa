@@ -177,11 +177,11 @@ describe('reapLockWrappers: the shared reap lock\'s wrappers (D-7071)', () => {
     expect(reapLockWrappers(LOCKS)).toEqual({ wrappers: ['cmd_wrap'], others: ['cmd_restoreish', 'probe_listing'] });
   });
 
-  it('REAL: wrappers, reported by name (4 at base; C5g takes it to 1, `_ws_reap_lock_run`), and the four other shapes pinned by name', () => {
+  it('REAL: wrappers, reported by name (4 at base; C5g takes it to 1, `_ws_reap_lock_run`), and the five other shapes pinned by name (ws-shed-deps refuses through its own journaled row, D-7278)', () => {
     const r = reapLockWrappers();
     console.log(`census reapLockWrappers: ${r.wrappers.length}\n${r.wrappers.map((n) => `  ${n}`).join('\n')}\n  other shapes, not counted:\n${r.others.map((n) => `    ${n}`).join('\n')}`);
     expectReportRow('reapLockWrappers', r.wrappers, ['cmd_ws_reap', 'cmd_ws_reclaim', 'cmd_ws_expire', 'cmd_ws_collect'], ['_ws_reap_lock_run'], 1);
-    expect([...r.others].sort()).toEqual(['_ws_collect_audit_contained', '_ws_collect_registered', '_ws_expire_spawn_gate', 'cmd_ws_restore']);
+    expect([...r.others].sort()).toEqual(['_ws_collect_audit_contained', '_ws_collect_registered', '_ws_expire_spawn_gate', 'cmd_ws_restore', 'cmd_ws_shed_deps']);
   });
 });
 
