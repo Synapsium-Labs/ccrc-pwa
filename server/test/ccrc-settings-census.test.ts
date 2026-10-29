@@ -542,8 +542,9 @@ describe('W24: every ccrc setting is read through _ccrc_knob, and every environm
 // Wave 24 read ccd/ccrc and the doctor's checks; the sweeps sourced nothing of ccrc's, so a CCRC_ name they read was
 // environment-only by construction. Since wave 29 two of them read four settings through ccd/lib/ccrc-settings.sh,
 // and this describe holds the rest of what they and the node helpers read to a reason. ccd-graph-sweep is not one of
-// them (D-7500): the graphify r2 wave gives the graph settings their own reader and meaning, so its two operator
-// numbers stay environment-only here until that wave moves them. Its scope: SIBLING_FILES (the
+// them (D-7500): the graphify r2 wave gives the graph settings their own reader and meaning. Its GR2 makes four
+// names the sweep reads by its own `:=` lines settings, so they are GRAPH_TRANSITIONAL rows, not environment-only
+// exceptions, until its GR4 moves the lines and deletes the rows (D-7524). Its scope: SIBLING_FILES (the
 // bash executables `_inst_bins` places, derived, plus ccd/ccrc-models-probe) and HELPER_FILES (the tracked `.mjs`
 // files ccd/ccrc names in its code). WHAT IT DOES NOT CATCH, as C5 and C6 do not: a bare `$NAME` read with no
 // default, a node read through destructuring or `process.env[k]` with `k` a variable, and a python helper's reads.
@@ -552,12 +553,8 @@ describe('W24: every ccrc setting is read through _ccrc_knob, and every environm
  *  every other CCRC_ name a sibling reads from the environment outside the reader. Names wave 24's ENV_ONLY already
  *  classes (the health timeout, the cgroup and proc roots) are not repeated here. */
 const SIBLING_ENV_ONLY: Record<string, { cls: EnvOnlyClass; why: string }> = {
-  CCRC_GRAPH_BUDGET: { cls: 'tuning', why: 'ccd-graph-sweep stops a pass after this many tree rebuilds, environment-only until the graphify r2 wave reads it through ccrc\'s reader with its new meaning (D-7500).' },
-  CCRC_GRAPH_MAX_WORKERS: { cls: 'call-bound', why: 'ccd-graph-sweep hands one engine build this many workers, environment-only until the graphify r2 wave reads it through ccrc\'s reader (D-7500).' },
-  CCRC_GRAPH_BUILD_TIMEOUT: { cls: 'call-bound', why: 'ccd-graph-sweep bounds one engine build with it (`timeout` around `graphify update`), overridable so a test need not wait out 600 s.' },
   CCRC_GRAPH_STALE_ESCAPE_COMMITS: { cls: 'tuning', why: 'ccd-graph-sweep\'s stale-escape rule rebuilds a tree this many commits behind whatever its idle gate says, a policy number its header does not offer an operator.' },
   CCRC_GRAPH_STALE_ESCAPE_SECS: { cls: 'tuning', why: 'ccd-graph-sweep\'s stale-escape rule rebuilds a graph this old whatever its idle gate says, a policy number its header does not offer an operator.' },
-  CCRC_GRAPH_HOOKSTATE_FRESH_SECS: { cls: 'tuning', why: 'ccd-graph-sweep\'s idle gate trusts a hookstate pointer this young, a guard number its header does not offer an operator.' },
   CCRC_KEEPALIVE_TURN_TIMEOUT: { cls: 'call-bound', why: 'ccd-telemetry-keepalive bounds one turn with it (`timeout` around the wrapper), overridable so a test need not wait it out.' },
   CCRC_KEEPALIVE_BACKOFF_AFTER: { cls: 'tuning', why: 'ccd-telemetry-keepalive\'s backoff starts after this many failed turns in a row, one of the three plain numbers its header argues rather than offers.' },
   CCRC_KEEPALIVE_BACKOFF_BASE: { cls: 'tuning', why: 'ccd-telemetry-keepalive\'s backoff window starts here and doubles, one of the three plain numbers its header argues rather than offers.' },
@@ -669,7 +666,8 @@ describe('W29: the ccd-* sweeps read their settings through the shared reader fi
 
   it('W29-S2: every CCRC_ name a sweep reads from the environment is a setting or a reasoned exception, and every exception is still read', () => {
     const reads = new Set<string>();
-    for (const f of SIBLING_FILES) for (const n of envReads(SIBLING_CODE[f]!)) reads.add(n);
+    for (const f of SIBLING_FILES)
+      for (const n of envReads(SIBLING_CODE[f]!)) if (!(f === GRAPH_SWEEP && n in GRAPH_TRANSITIONAL)) reads.add(n);   // W29-S2t holds those (D-7524)
     const known = [...Object.keys(SIBLING_ENV_ONLY), ...Object.keys(ENV_ONLY)];
     expect({
       unclassified: diff(reads, known),
