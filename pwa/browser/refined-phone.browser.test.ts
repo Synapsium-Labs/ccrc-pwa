@@ -10,8 +10,8 @@
 // 1280 and 1920 no `+ New` is mounted (the bar's button is the door). Instrument's phone keeps today's head and round
 // `+` (S11). With seventeen lanes at 360 and 390 the folded strip's four cards read most free first, each shows its
 // windows, every countdown it prints is seen (a client rect inside the card, not covered), and All accounts has a row of
-// its own under the cards; the same checks run over the phone's PANEL, which holds all seventeen (T2c, D-6329; R18 F4,
-// F5; S5c).
+// its own under the cards; the same checks run over the phone's PANEL, which holds the thirteen lanes the line folds
+// away (T2c, D-6329; R18 F4, F5; S5c; Task C13).
 //
 // THE FOLD AND THE PHONE'S PANEL (desktop polish S5b, D-6530; S5c, phone-strip-tap-panel, phone-fold-two-lines). Below
 // 900 px the strip is always folded and the stored choice (`seedStripExpanded`) is neither read nor written. With the
@@ -23,7 +23,8 @@
 // A real tap on the control (`locator.tap()`, a touch screen below 900) opens the panel: the lanes the line folds away, in
 // order, each lane drawn once across the line and the panel (Task C13), hung from
 // the strip's bottom edge, drawn over the content with no push of the page, bounded by the room left under the strip and
-// scrolling inside itself when it is taller (also with a release waiting). A tap outside the strip and the panel, Escape
+// scrolling inside itself when it is taller (also with a release waiting, a case run at 390x744 so that the panel of
+// thirteen scrolls: at 844 it fits Instrument's room, review 1142 measured). A tap outside the strip and the panel, Escape
 // and a second tap on the control close it; closing leaves focus on the control, on screen.
 //
 // Run: `( cd pwa && CCRC_CHROME=<a Chrome or Chromium binary> ./node_modules/.bin/vitest run --config vitest.browser.config.ts browser/refined-phone.browser.test.ts )`.
@@ -722,8 +723,9 @@ describe("the phone's panel", () => {
     it(`with a release waiting the panel stays inside the viewport, bounded by the room under the strip, and scrolls inside itself to its last card: ${named(view)}`, async () => {
       const { ctx, page, errors } = await openFolded(view, 4, false, undefined, true);
       try {
-        // A shorter phone (390x744): the panel holds the thirteen folded-away lanes (Task C13), which fit Instrument's room
-        // under the strip at 844 to the pixel, so the case would no longer reach the panel's own scrolling.
+        // A shorter phone (390x744), so that the panel scrolls: it holds the thirteen folded-away lanes (Task C13), which
+        // fit Instrument's room under the strip at 844 (review 1142 measured about 106 px to spare there, and about 8 px of
+        // scrolling at 744).
         await page.setViewportSize({ width: view.width, height: 744 });
         await page.waitForTimeout(300);
         const before = await page.evaluate(measurePanelBaseline);

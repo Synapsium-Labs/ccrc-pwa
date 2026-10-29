@@ -138,7 +138,8 @@
      edge (`top: 100%` of the strip, which is `position: relative` above), above the frame's content in the sheet layer.
      Its cards wrap in the line's own tracks and gap, the same card in the same floor, and its columns sit under the
      line's: the panel reaches out past the strip's edges by its own padding and border, so its content box is the
-     strip's width at the strip's left and its auto-fill tracks are the line's, track for track. Taller than the room
+     strip's width at the strip's left and its auto-fill tracks are the line's, track for track, while the panel does
+     not scroll (a classic scrollbar, once it scrolls, narrows its content box and so its tracks). Taller than the room
      under the line, it scrolls itself: at most 70% of the viewport's height, since the line sits at the top of the
      window. Layer, hairline and the pop shadow: the surface the other floating panels use, no token of its own. */
   .shell-accounts .accounts-flyout {
