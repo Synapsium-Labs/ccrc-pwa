@@ -4,17 +4,26 @@
 // over all of them), so their sum is fixed: six tree walks at WS_SHED_SCAN_S_DEFAULT (the ignored listing, the
 // repository walk, the size, two `git status` reads, the removal), two quick reads at WS_SHED_QUICK_S (the toplevel,
 // the index), and the process walk at WS_PATH_USERS_SCAN_S. A bound reached ends the verb except the size's, so at most
-// TWO TERM-to-KILL graces are paid. CCD_DEPS_SHED_SCAN_S is lower-only, so the default is the bound. Each half is read
-// from source as TEXT and each read asserts it matched exactly once (`collect-audit-budget.test.ts`'s method). Stated
+// TWO TERM-to-KILL graces are paid. CCD_DEPS_SHED_SCAN_S is lower-only, so the default is the bound. ccd's half is read
+// from source as TEXT, each read asserting it matched exactly once (`collect-audit-budget.test.ts`'s method); the runner's
+// half is the budget the runner itself sends (a row missing reads the flat 90 s, which reds the sums below). Stated
 // residual: the registry rungs (file reads, the pane probe, the unit read, the journal) carry no bound in the sum.
 import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'node:fs';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { ccdSource } from './ccdWsHelpers.js';
+import { createRunner } from '../src/remote/runner.js';
+import type { FleetClient } from '../src/remote/client.js';
 
-const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
-const readRel = (r: string): string => readFileSync(path.join(ROOT, r), 'utf8');
+/** The budget the runner sends for one ccd argv, as `remote-runner.test.ts` reads it: a client that records it. */
+async function sentBudgetMs(args: string[]): Promise<number> {
+  let seen = -1;
+  const client = {
+    request: async (req: { timeoutMs?: number }) => { seen = req.timeoutMs ?? -1; return { code: 0, stdout: '', stderr: '' }; },
+  } as unknown as FleetClient;
+  await createRunner(client)('/home/u/.local/bin/ccd', args);
+  return seen;
+}
+const ROW_MS = await sentBudgetMs(['ws-shed-deps', '--session', 'x', '--class', 'child']);
+const DRY_ROW_MS = await sentBudgetMs(['ws-shed-deps', '--session', 'x', '--class', 'child', '--dry-run']);
 
 function exactlyOne(text: string, re: RegExp, what: string): RegExpMatchArray {
   const hits = [...text.matchAll(re)];
@@ -33,24 +42,15 @@ function region(ccd: string): string {
 function budget(): { scanS: number; quickS: number; usersS: number; graceMaxS: number; rowS: number; dryRowS: number; r: string } {
   const ccd = ccdSource();
   const int = (re: RegExp, what: string): number => Number(exactlyOne(ccd, re, what)[1]!);
-  // Each table read inside its own declaration: the verb's row in CCD_VERB_TIMEOUT_MS, the shadow's in CCD_DRY_RUN_TIMEOUT_MS.
-  const runner = readRel('server/src/remote/runner.ts');
-  const table = (name: string): string => {
-    const a = runner.indexOf(`const ${name}: Record<string, number> = {`);
-    if (a < 0) throw new Error(`${name} was not found`);
-    return runner.slice(a, runner.indexOf('\n};', a));
-  };
-  const row = exactlyOne(table('CCD_VERB_TIMEOUT_MS'), /^[ \t]*'ws-shed-deps':[ \t]*([\d_]+),/gm,
-    "CCD_VERB_TIMEOUT_MS['ws-shed-deps']");
-  const dryRow = exactlyOne(table('CCD_DRY_RUN_TIMEOUT_MS'), /^[ \t]*'ws-shed-deps':[ \t]*([\d_]+),/gm,
-    "CCD_DRY_RUN_TIMEOUT_MS['ws-shed-deps']");
+  // The two rows are read through the runner itself, not its text: the budget a real `createRunner` sends for the act's
+  // argv and for the shadow's (`remote-runner.test.ts`'s per-verb method), so no literal pin rests on runner.ts.
   return {
     scanS: int(/^WS_SHED_SCAN_S_DEFAULT=(\d+)\b/gm, 'WS_SHED_SCAN_S_DEFAULT'),
     quickS: int(/^WS_SHED_QUICK_S=(\d+)\b/gm, 'WS_SHED_QUICK_S'),
     usersS: int(/^WS_PATH_USERS_SCAN_S=(\d+)\b/gm, 'WS_PATH_USERS_SCAN_S'),
     graceMaxS: int(/\[ "\$grace" -gt (\d+) \] && grace=\1\b/g, "_plat_timeout's grace ceiling"),
-    rowS: Number(row[1]!.replace(/_/g, '')) / 1000,
-    dryRowS: Number(dryRow[1]!.replace(/_/g, '')) / 1000,
+    rowS: ROW_MS / 1000,
+    dryRowS: DRY_ROW_MS / 1000,
     r: region(ccd),
   };
 }
