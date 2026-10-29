@@ -2,6 +2,7 @@
 // the open session and the per-device preferences. Both skins' lists render its answer
 // (`fleet-rollup-render.test.tsx` pins that), so a restyle that drops a rule goes red here AND there.
 import { describe, expect, it } from 'vitest';
+import { DEAD_LIFECYCLE } from './fleetFixture';
 import type { FleetSession, RunSummary } from '../../shared/api';
 import { fleetTree } from '../src/fleet/fleetTree';
 import {
@@ -29,7 +30,7 @@ const shape = (rows: readonly RolledRow[]): [string, number][] => rows.map((r) =
 
 describe('rollup — projects (rule 2)', () => {
   it('rolls up an inactive project: nothing working, nobody waiting, no change in 30 minutes', () => {
-    const c = card(roll([sess('a1', 'project-a'), sess('a2', 'project-a', { status: 'dead', bucket: 'dead' })]), 'project-a');
+    const c = card(roll([sess('a1', 'project-a'), sess('a2', 'project-a', { status: 'dead', lifecycle: DEAD_LIFECYCLE, bucket: 'dead' })]), 'project-a');
     expect(c.cls).toBe('inactive');
     expect(c.collapsed).toBe(true);
     expect(c.lastActive).toBe(NOW - 5 * HOUR);
@@ -78,7 +79,7 @@ describe('rollup — the operator-facing predicate (rule 1)', () => {
     expect(operatorAsk(sess('x', 'p', heldByCoordinator()))).toBe(false);
     expect(operatorAsk(sess('x', 'p', answeredByCoordinator()))).toBe(false);
     // A killed pane that still carries the dialog flag is dead first (the ladder), never a question.
-    expect(operatorAsk(sess('x', 'p', { dialogPending: true, status: 'dead', bucket: 'dead' }))).toBe(false);
+    expect(operatorAsk(sess('x', 'p', { dialogPending: true, status: 'dead', lifecycle: DEAD_LIFECYCLE, bucket: 'dead' }))).toBe(false);
   });
 });
 
@@ -110,7 +111,7 @@ describe('rollup — children (rules 6 and 7)', () => {
   });
 
   it('counts a hibernated worker as asleep and a pending spawn as spawning', () => {
-    const { sessions, runs } = coordinatorFleet({ status: 'dead', bucket: 'dead', hibernatedAt: NOW - HOUR });
+    const { sessions, runs } = coordinatorFleet({ status: 'dead', lifecycle: DEAD_LIFECYCLE, bucket: 'dead', hibernatedAt: NOW - HOUR });
     const spawn = run(30, 'coord', null, { state: 'planned', dispatchStartedAt: NOW - MIN });
     const c = card(roll(sessions, [...runs, spawn]), 'project-c');
     expect(c.rows[1]).toMatchObject({ kind: 'summary', text: '6 workers · 2 working · 2 idle · 1 asleep · 1 spawning' });

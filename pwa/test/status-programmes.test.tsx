@@ -336,7 +336,7 @@ describe("Instrument's Status view shows programmes, not children (G3, D-7333)",
   it('a lone worker keeps its orphan marker in status mode: its coordinator measured gone says so on the row (G3\'s Step 0 ruling)', () => {
     // The claimant is in the fleet but archived, in its card's Archived fold, so it heads no box; measured dead, the
     // row says "coordinator gone", as a project card's does.
-    const gone = sess('gone-coord', 'project-a', { status: 'dead', bucket: 'archived', lifecycle: 'orphan', archivedAt: Math.floor(Date.now() / 1000) });
+    const gone = sess('gone-coord', 'project-a', { status: 'dead', presence: 'dead', bucket: 'archived', lifecycle: 'orphan', archivedAt: Math.floor(Date.now() / 1000) });
     const sessions = [...SESSIONS, gone, sess('orphan', 'project-a', { bucket: 'working', status: 'busy' })];
     mount(sessions, [...RUNS, run(8, 'gone-coord', 'orphan', { program: 'prog-c', project: 'project-a' })]);
     const row = groupOf('working').querySelector<HTMLElement>('[data-row="orphan"]')!;
@@ -348,7 +348,7 @@ describe("Instrument's Status view shows programmes, not children (G3, D-7333)",
 
   it('a lone worker of a claimant in the Released fold, measured dead, keeps its orphan marker too', () => {
     const rel = sess('rel-coord', 'project-a', {
-      status: 'dead', bucket: 'done', lifecycle: 'orphan',
+      status: 'dead', presence: 'dead', bucket: 'done', lifecycle: 'orphan',
       releasedFrom: { runId: 90, program: 'prog-old', programTitle: null, claimedBy: 'coord-a', closedAt: 1, child: true },
     });
     const sessions = [...SESSIONS, rel, sess('orphan', 'project-a', { bucket: 'working', status: 'busy' })];
@@ -379,7 +379,7 @@ describe("Instrument's Status view shows programmes, not children (G3, D-7333)",
 // in the groups their own status puts them in, never hidden members of its box. The box still draws while its runs are
 // open. A hibernated claimant is not gone (mail wakes it), and a presence the frame did not measure claims nothing.
 describe('a dead claimant is gone: its workers are lone orphan rows (G3 fix round 2)', () => {
-  const dead = { status: 'dead' as const, bucket: 'dead' as const, lifecycle: 'orphan' as const };
+  const dead = { status: 'dead' as const, presence: 'dead' as const, bucket: 'dead' as const, lifecycle: 'orphan' as const };
   const fleet = (claimant: FleetSession, worker: Partial<FleetSession> = { bucket: 'working', status: 'busy' }) => ({
     sessions: [...SESSIONS, claimant, sess('w', 'project-a', worker)],
     runs: [...RUNS, run(9, claimant.id, 'w', { program: 'prog-d', programTitle: 'Programme D', project: 'project-a' })],
@@ -426,12 +426,12 @@ describe('a dead claimant is gone: its workers are lone orphan rows (G3 fix roun
   });
 
   it('a claimant whose presence was not measured is not gone: its worker stays a member', () => {
-    const { sessions, runs } = fleet(sess('dc', 'project-b', { ...dead, lifecycle: 'unmeasurable' }));
+    const { sessions, runs } = fleet(sess('dc', 'project-b', { ...dead, presence: 'unknown', lifecycle: 'unmeasurable' }));
     mount(sessions, runs);
     expect(rowIds(table())).not.toContain('w');
     // Asking, it is drawn in the box's tray, the box in Needs you.
     cleanup();
-    const asked = fleet(sess('dc', 'project-b', { ...dead, lifecycle: 'unmeasurable' }),
+    const asked = fleet(sess('dc', 'project-b', { ...dead, presence: 'unknown', lifecycle: 'unmeasurable' }),
       asking({ ask: { state: 'held', parentId: 'dc', answeredBy: null } }));
     mount(asked.sessions, asked.runs);
     expect(rowIds(boxOf(groupOf('attention'), 'dc').querySelector('.pg-tray')!)).toEqual(['w']);

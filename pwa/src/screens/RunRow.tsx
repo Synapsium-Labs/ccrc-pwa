@@ -23,7 +23,7 @@ import {
 } from '../fleet/runWords';
 import { spawnVerdictChip } from '../fleet/spawnWords';
 import { GraphChip, LastSpawnChip, UnmeasuredChip } from '../fleet/chips';
-import { coordPresence } from '../fleet/coordWords';
+import { coordinatorPresence } from '../fleet/presence';
 import { runSpendLine } from '../fleet/runSpendWords';
 import { useRunSpend } from './useRunSpend';
 import { formatAge, formatElapsed } from '../fleet/formatReset';
@@ -297,11 +297,11 @@ export const RunRow = memo(function RunRow({
     </button>
   );
 
-  // The resume door. `coordPresence` decides the FIRST half — three answers,
-  // and only `dead` opens it: `unknown` is what a substrate fault, a missing
-  // row and an unarrived frame all read as, and each of those would otherwise
-  // offer to hand a live coordinator's program to somebody else (D-309's
-  // collapse, quoted on `coordPresence`'s own docstring; D-1129). D-1146 does
+  // The resume door. `coordinatorPresence` decides the FIRST half — the
+  // server's word (D-7181, OA-C15 (a)), and only `dead` opens it: `unknown` is
+  // what a pane tmux could not ask about, a missing row and an unarrived
+  // frame all read as, and each of those would otherwise offer to hand a live
+  // coordinator's program to somebody else (D-309's collapse; D-1129). D-1146 does
   // not touch that half and it must stay exactly this strong: widening the
   // second term below is only safe because the first one still refuses to act
   // on doubt.
@@ -342,7 +342,7 @@ export const RunRow = memo(function RunRow({
   // the one that arm is stuck on. Mail naming an explicit `runId` resolves
   // through a direct row read and is unaffected, which is the path the
   // coordinator corpus already sends a resumed coordinator down.
-  const presence = coordPresence(run.claimedBy, coordSession, frameSeen);
+  const presence = coordinatorPresence(run.claimedBy, coordSession, frameSeen);
   const resumeButton = presence === 'dead' && (!isRunClosed(run) || !programHasOpenRun) ? (
     <button
       type="button"

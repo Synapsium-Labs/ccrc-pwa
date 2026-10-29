@@ -1,7 +1,7 @@
 // THE HIBERNATION CENSUS (D-5242, plan Task 17b): every reader that can call a session dead states its stance on a
 // HIBERNATED row — `ccd hibernate`'s `.stopped` plus `.hibernated`, a pane gone, lifecycle `stopped`, bucket `dead`.
 //
-// The reader list is DERIVED, never listed by hand (`hibernateCensusScan.ts`): five sources over `server/src`, `shared`
+// The reader list is DERIVED, never listed by hand (`hibernateCensusScan.ts`): six sources over `server/src`, `shared`
 // and `pwa/src`, grouped by source and file with a hit count, so a new reader — or a new hit in a file already here —
 // is red until its row (or its count) is written. Each row's stance is argued from WHAT THAT READER READS, not only from
 // the verdict's holds (a run can be opened naming a sleeping session: `POST /api/runs` takes `claimedBy` from its body):
@@ -21,7 +21,7 @@ import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import {
-  CENSUS_SOURCE_NAMES, REPO, censusFiles, censusScan, type CensusFile, type CensusSource,
+  CENSUS_SCOPES, CENSUS_SOURCE_NAMES, REPO, censusFiles, censusScan, type CensusFile, type CensusSource,
 } from './hibernateCensusScan.js';
 import { FleetWatcher } from '../src/watch.js';
 import { Bus } from '../src/bus.js';
@@ -32,8 +32,8 @@ type Stance = 'consults' | 'wakes-first' | 'journal' | 'held-awake' | 'other-mea
 interface Row {
   readonly source: CensusSource; readonly file: string; readonly hits: number;
   readonly stances: readonly Stance[]; readonly why: string;
-  /** For a `consults` row that reads the dead answer through another file (`coordPresence`, `lifecycleQualifier`): that
-   *  file, which is the one that consults the marker. */
+  /** For a `consults` row that reads the dead answer through another file (`coordinatorPresence`,
+   *  `lifecycleQualifier`): that file, which is the one that consults the marker. */
   readonly via?: string;
 }
 
@@ -113,48 +113,63 @@ const CENSUS: readonly Row[] = [
     why: '`SESSION_LIFECYCLE_MAP` and `LIFECYCLE_DEAD`: no new lifecycle member (the plan\'s wire discipline)' },
   // ── pwa ── (plan Task 18 made each of these consult `hibernatedAt`, through `pwa/src/fleet/hibernated.ts`; the
   // `task-18` stance they waited under is retired, `hibernated-census-stances-consult`, D-5429)
-  { source: 'dead-compare', file: 'pwa/src/fleet/hibernated.ts', hits: 1, stances: ['definition'],
-    why: '`hibernatedSince`, the PWA\'s one reader of `hibernatedAt`: a row is asleep only while it is `dead` with the '
-      + 'marker (both halves), so a crash is never woken and a stale marker on a live row is ignored' },
+  { source: 'presence-reader', file: 'pwa/src/fleet/hibernated.ts', hits: 1, stances: ['definition'],
+    why: '`hibernatedSince`, the PWA\'s one reader of `hibernatedAt`: a row is asleep only while its pane is gone '
+      + '(`paneGone`, D-7181) with the marker (both halves), so a crash is never woken and a stale marker on a live row is '
+      + 'ignored' },
+  { source: 'presence-reader', file: 'pwa/src/fleet/presence.ts', hits: 4, stances: ['definition'],
+    why: 'the PWA\'s one reader of the server\'s presence (D-7181): `presenceOf` reads `asleep` as the server sends it, '
+      + '`coordinatorPresence` spells it `hibernated` (never `dead`), and `paneGone` words the pane only' },
+  { source: 'dead-compare', file: 'pwa/src/fleet/presence.ts', hits: 1, stances: ['definition'],
+    why: '`paneGone`, the pane predicate OA-C15 (a) keeps for sites that only word the pane: a sleeper\'s pane is gone, '
+      + 'which is true, and the sites that must tell a sleep from a death read `presenceOf` or `hibernatedSince`' },
   { source: 'dead-compare', file: 'pwa/src/session/sessionHeaderView.ts', hits: 4, stances: ['consults'],
     why: 'the session header\'s view (W2 S7a, D-5471; `SessionHeader` renders it) forces bucket `dead` for a dead stream and paints the ✕ lamp ("not running") with the word `exited` '
       + '(`headerStatusWord`, D-5545); a dead row with `hibernatedAt` (`hibernatedSince`) reads `hibernated` with the '
       + 'calm dot instead, so "not running" never sits above "Waking…"' },
-  { source: 'dead-compare', file: 'pwa/src/fleet/SessionActionsSheet.tsx', hits: 6, stances: ['consults', 'true-of-pane'],
-    why: 'the narrow-spawn note and Forget on a dead row are hidden on a sleeper (`hibernatedSince`), which offers Wake '
-      + 'session (ccd forget refuses it, D-5423); the quota, narrow and wrapper notes speak of a live pane only' },
-  { source: 'dead-compare', file: 'pwa/src/fleet/sessionFacts.ts', hits: 1, stances: ['consults'],
-    why: 'the card\'s and the header\'s facts (D-5545) for a dead row; a sleeper (`hibernatedSince`) reads '
-      + '`hibernated · 6h` with a calm dot and no stop stamp' },
+  { source: 'presence-reader', file: 'pwa/src/fleet/SessionActionsSheet.tsx', hits: 6, stances: ['consults', 'true-of-pane'],
+    why: 'Forget is offered on a row the server reads `dead` (`presenceOf`, D-7181), never on its `asleep` and never on '
+      + 'a row `hibernatedSince` reads asleep, which offers Wake session (ccd forget refuses it, D-5423); the notes word '
+      + 'the pane (`paneGone`): the narrow-spawn note on a gone pane is hidden on a sleeper, and the quota, narrow and '
+      + 'wrapper notes speak of a live pane only' },
+  { source: 'presence-reader', file: 'pwa/src/fleet/sessionFacts.ts', hits: 1, stances: ['consults'],
+    why: 'the card\'s and the header\'s facts (D-5545) for a row whose pane is gone (`paneGone`, D-7181); a sleeper '
+      + '(`hibernatedSince`) reads `hibernated · 6h` with a calm dot and no stop stamp' },
   { source: 'dead-compare', file: 'pwa/src/screens/SessionScreen.tsx', hits: 2, stances: ['consults'],
     why: 'a dead screen is read-only; a sleeper (`useWakeOnOpen`) is woken when shown, reads "Waking…" with Wake, and '
       + 'keeps the composer shut until its row is alive; the dead banner\'s Restart is for a dead row with no marker' },
-  { source: 'dead-compare', file: 'pwa/src/fleet/coordWords.ts', hits: 1, stances: ['consults'],
-    why: '`coordPresence` answers a sleeping coordinator `hibernated` before its dead rung, so no Resume door and no '
-      + '"coordinator gone"; the reclaim door those point at refuses a sleeper too (`claimant-alive`)' },
-  { source: 'dead-lifecycle', file: 'pwa/src/fleet/coordWords.ts', hits: 1, stances: ['consults'],
-    why: 'the same `coordPresence` rung, reached only after the `hibernated` answer' },
+  { source: 'presence-reader', file: 'pwa/src/screens/SessionScreen.tsx', hits: 1, stances: ['consults'],
+    why: 'the header\'s coordinator reads `coordinatorPresence` (D-7181): a sleeping coordinator reads `hibernated`, '
+      + 'never "coordinator gone"' },
   { source: 'dead-compare', file: 'pwa/src/fleet/orphanWords.ts', hits: 1, stances: ['consults'],
-    why: 'the orphan marker reads `coordPresence`, and says `coordinator hibernated` for a sleeper, never "coordinator gone"' },
-  { source: 'dead-compare', file: 'pwa/src/screens/RunRow.tsx', hits: 1, stances: ['consults'], via: 'pwa/src/fleet/coordWords.ts',
-    why: 'the Resume button reads `coordPresence`, which answers a sleeper `hibernated`, never `dead`' },
+    why: 'the orphan marker reads `coordinatorPresence`, and says `coordinator hibernated` for a sleeper, never '
+      + '"coordinator gone"' },
+  { source: 'presence-reader', file: 'pwa/src/fleet/orphanWords.ts', hits: 1, stances: ['consults'],
+    why: 'that read: `coordinatorPresence` (D-7181) spells the server\'s `asleep` `hibernated`, never `dead`' },
+  { source: 'dead-compare', file: 'pwa/src/screens/RunRow.tsx', hits: 1, stances: ['consults'], via: 'pwa/src/fleet/presence.ts',
+    why: 'the Resume button reads `coordinatorPresence` (D-7181), which answers a sleeper `hibernated`, never `dead`' },
+  { source: 'presence-reader', file: 'pwa/src/screens/RunRow.tsx', hits: 1, stances: ['consults'], via: 'pwa/src/fleet/presence.ts',
+    why: 'that read: the server\'s `asleep`, spelled `hibernated`, opens no Resume door' },
   { source: 'stopped-compare', file: 'pwa/src/fleet/lifecycleWords.ts', hits: 1, stances: ['consults'], via: 'pwa/src/fleet/sessionFacts.ts',
     why: '`lifecycleQualifier` words a stopped row "stopped by …"; `sessionFacts`, its one reader (D-5545), skips it '
       + 'on a sleeper and reads `hibernated · 6h`' },
-  { source: 'dead-compare', file: 'pwa/src/fleet/groupFleet.ts', hits: 2, stances: ['true-of-pane'],
-    why: 'a dead row\'s rank on the card and the stranded count over live rows: a sleeper\'s pane is not running; '
-      + '`inArchivedFold` keeps it at the top level' },
+  { source: 'dead-compare', file: 'pwa/src/fleet/groupFleet.ts', hits: 1, stances: ['true-of-pane'],
+    why: 'a dead row\'s rank on the card: a sleeper\'s pane is not running; `inArchivedFold` keeps it at the top level' },
+  { source: 'presence-reader', file: 'pwa/src/fleet/groupFleet.ts', hits: 1, stances: ['true-of-pane'],
+    why: 'the stranded count over rows the server reads alive (`presenceOf`, D-7181): a sleeper is not running' },
   { source: 'dead-compare', file: 'pwa/src/command/sessionEntries.ts', hits: 1, stances: ['true-of-pane'],
     why: 'the palette\'s session entries (D-6714) rank a dead row last among equal matches (tier 3): a sleeper\'s pane '
       + 'is not running; it is still listed and found, and opening it is the session screen\'s wake' },
-  { source: 'dead-compare', file: 'pwa/src/fleet/ArchiveAllPlane.tsx', hits: 1, stances: ['true-of-pane'],
-    why: 'counts the batch\'s live rows: a sleeper is not running' },
-  { source: 'dead-compare', file: 'pwa/src/screens/AccountsScreen.tsx', hits: 1, stances: ['true-of-pane'],
-    why: 'counts an account\'s running sessions: a sleeper is not running' },
-  { source: 'dead-compare', file: 'pwa/src/fleet/startProgramPolicy.ts', hits: 3, stances: ['true-of-pane'],
-    why: 'the live main checkout and live ids: a sleeping session is not running, which is true of its pane' },
-  { source: 'dead-compare', file: 'pwa/src/fleet/spawnWords.ts', hits: 1, stances: ['true-of-pane'],
-    why: 'silent about a spawn on a dead row: a sleeper has no spawn in progress to speak of' },
+  { source: 'presence-reader', file: 'pwa/src/fleet/ArchiveAllPlane.tsx', hits: 1, stances: ['true-of-pane'],
+    why: 'counts the batch\'s rows the server reads alive (`presenceOf`, D-7181): a sleeper is not running' },
+  { source: 'presence-reader', file: 'pwa/src/screens/AccountsScreen.tsx', hits: 1, stances: ['true-of-pane'],
+    why: 'counts an account\'s sessions the server reads alive (`presenceOf`, D-7181): a sleeper is not running' },
+  { source: 'presence-reader', file: 'pwa/src/fleet/startProgramPolicy.ts', hits: 3, stances: ['true-of-pane'],
+    why: 'the live main checkout (alive or doubted), the started session and the live ids read the server\'s word '
+      + '(`presenceOf`, D-7181): a sleeping session is not running, which is true of its pane' },
+  { source: 'presence-reader', file: 'pwa/src/fleet/spawnWords.ts', hits: 1, stances: ['true-of-pane'],
+    why: 'silent about a spawn on a row whose pane is gone (`paneGone`, D-7181): a sleeper has no spawn in progress to '
+      + 'speak of' },
 ];
 
 /** Readers outside the scan's reach, by name, each with the text that holds its stance. */
@@ -175,7 +190,7 @@ const NAMED: readonly { name: string; stances: readonly Stance[]; file: string; 
     why: 'removes `.hibernated`: an archived row is never woken by mail' },
   { name: 'the PWA\'s Forget', stances: ['consults'], file: 'pwa/src/fleet/SessionActionsSheet.tsx',
     holds: (s) => /const asleep = hibernatedSince\(session\) !== null/.test(s)
-      && /session\.workspace === null && session\.status === 'dead' && !asleep && \(\s*<Button[\s\S]*?Forget session/.test(s),
+      && /session\.workspace === null && presenceOf\(session\) === 'dead' && !asleep && \(\s*<Button[\s\S]*?Forget session/.test(s),
     why: 'offered on a dead non-workspace row and hidden on a sleeper, which offers Wake (ccd forget refuses it)' },
   { name: 'the kickoff route', stances: ['wakes-first'], file: 'server/src/coord/kickoff.ts',
     holds: (s) => /export function queueProgramKickoff[\s\S]*?queueSystemMail\(/.test(s),
@@ -209,8 +224,10 @@ describe('the hibernation census (D-5242)', () => {
   it('a `consults` stance is real: the file (or the one it reads through) reads hibernatedAt or .hibernated', () => {
     for (const r of CENSUS.filter((x) => x.stances.includes('consults'))) {
       const reader = r.via ?? r.file;
-      expect(/hibernatedAt|\.hibernated|hibernated:|'hibernated'|hibernatedSince|hibernatedWords/.test(read(reader)), `${key(r)} (via ${reader})`).toBe(true);
-      if (r.via !== undefined) expect(read(r.file), `${r.file} reads through ${r.via}`).toMatch(/coordPresence|lifecycleQualifier/);
+      // A presence reader (D-7181) consults the server's sleep word: it names `'asleep'`, or reads `coordinatorPresence`,
+      // which words a sleeper `hibernated`.
+      expect(/hibernatedAt|\.hibernated|hibernated:|'hibernated'|hibernatedSince|hibernatedWords|'asleep'|coordinatorPresence/.test(read(reader)), `${key(r)} (via ${reader})`).toBe(true);
+      if (r.via !== undefined) expect(read(r.file), `${r.file} reads through ${r.via}`).toMatch(/coordinatorPresence|presenceOf|lifecycleQualifier/);
     }
   });
 
@@ -225,12 +242,19 @@ describe('the hibernation census (D-5242)', () => {
     'stopped-compare': "export const g = (lc: string) => lc === 'stopped';",
     'tmux-verdict': 'export const h = async (t: Tmux) => (await t.sessionVerdict(\'x\')).verdict;',
     'dead-compare': "export const k = (s: { bucket: string }) => s.bucket === 'dead';",
+    'presence-reader': "export const p = (s: FleetSession) => presenceOf(s) === 'dead';",
   };
+  it('the scan reads the six sources, the PWA presence reader among them (D-7181)', () => {
+    expect(CENSUS_SOURCE_NAMES).toEqual(['dead-lifecycle', 'lifecycle-table', 'stopped-compare', 'tmux-verdict', 'dead-compare', 'presence-reader']);
+    expect(CENSUS_SCOPES).toEqual({ 'presence-reader': 'pwa/src/' });
+  });
+  // Where each scratch reader is placed: a scoped source's root (the presence reader is read in `pwa/src` only).
+  const scratchRel = (src: CensusSource): string => `${CENSUS_SCOPES[src] ?? 'server/src/'}zz-scratch-reader.ts`;
   for (const src of CENSUS_SOURCE_NAMES) {
     it(`a scratch reader of the ${src} kind is found, and reds the census`, () => {
-      const scratch: CensusFile = { rel: 'server/src/zz-scratch-reader.ts', text: SCRATCH[src] };
+      const scratch: CensusFile = { rel: scratchRel(src), text: SCRATCH[src] };
       const scanned = censusScan([...censusFiles(), scratch]);
-      expect(scanned.get(`${src} server/src/zz-scratch-reader.ts`)).toBe(1);
+      expect(scanned.get(`${src} ${scratchRel(src)}`)).toBe(1);
       expect(sorted(scanned)).not.toEqual(sorted(tableMap()));
     });
   }

@@ -48,18 +48,18 @@
 // only while they ask the operator (`operatorAsk`) or the operator has one open (G3's Step 0 ruling). A worker whose claimant is a
 // box nowhere (the coordinator gone, or in a fold) stays a row of its own, so nothing is lost (the same ruling); so does every
 // row the tree does not draw (Released, Archived). So does a worker whose claimant is measured dead, though that claimant's
-// box still draws while its runs are open (G3's fix-round 2 ruling): the orphan marker's own presence word (`coordPresence`,
-// through the same lookup), so 'hibernated' (mail wakes it) and an unmeasured presence are not gone. The groups: Needs you (the boxes that need the operator, then the
+// box still draws while its runs are open (G3's fix-round 2 ruling): the orphan marker's own presence word
+// (`coordinatorPresence`, through the same lookup), so 'hibernated' (mail wakes it) and an unmeasured presence are not gone. The groups: Needs you (the boxes that need the operator, then the
 // rows in no programme that do), Programmes (the other boxes, in `boxOrder`), then `groupByStatus` over the rows in no
 // programme. Every group counts what it draws: a box counts one, and a hidden child counts nowhere.
 import { sessionAsk, substrateFault, type FleetSession, type SessionBucket } from '../../../shared/api';
 import { isUnseen, type Acks } from '../lib/seen';
-import { coordPresence } from './coordWords';
 import type { FleetTreeGroup } from './fleetTree';
 import type { FleetRow } from './nestFleet';
 import {
   boxNeeds, boxOrder, boxState, programmeBoxes, rowRun, type BoxState, type ProgHue, type ProgrammeBoxView, type Tray,
 } from './programmeBoxes';
+import { coordinatorPresence } from './presence';
 import { operatorAsk } from './rollup';
 import { sortFleet } from './sortFleet';
 
@@ -191,7 +191,7 @@ export function statusView(
   // draws sessions only.
   const heads = new Set(cards.flatMap(({ prog }) => prog.boxes.map((b) => b.coordinatorId)));
   const gone = new Set([...heads].filter((id) => {
-    const presence = coordPresence(id, coordOf(id), frameSeen);
+    const presence = coordinatorPresence(id, coordOf(id), frameSeen);
     return presence === 'dead';
   }));
   const members = new Map<string, { session: FleetSession; hue: ProgHue | undefined }[]>();

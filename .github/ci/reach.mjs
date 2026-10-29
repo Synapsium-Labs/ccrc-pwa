@@ -48,8 +48,8 @@ export const FOREIGN = {
  * resolves under a foreign prefix without an entry here.
  */
 export const READS = {
-  pwa: ['server/test/fixtures/', 'server/src/laneSchedule.ts'],
-  browser: ['server/test/fixtures/', 'server/src/laneSchedule.ts'],
+  pwa: ['server/test/fixtures/', 'server/src/laneSchedule.ts', 'server/src/pane/'],
+  browser: ['server/test/fixtures/', 'server/src/laneSchedule.ts', 'server/src/pane/'],
 };
 
 /**

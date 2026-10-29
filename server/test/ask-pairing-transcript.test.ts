@@ -27,12 +27,16 @@
 //
 // ONE ROW IS PERMANENT (D-7212): "the server's `from` equals `askSource`'s" keeps importing `askLive.ts#askSource` by
 // path after C7f, because `askSource` survives C7f and nothing else holds the two sides' choice of source equal.
+//
+// W7 Task C7f (D-7184) deleted the client's pairing functions, so every other row reads the recorded table
+// (`transcript-corpus.json`: today's client, recorded by C7q, its `source` and its `pairing` per state) where it once
+// imported `askLive.ts`. The table's rows are fixed: a pairing change is a behaviour change, and its PR says so.
 import { describe, expect, it } from 'vitest';
 import { readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { AskPairing, Dialog, DialogAsk, HookAsk, HookAskQuestion, SessionStreamMsg } from '../../shared/api.js';
-import { transcriptQuestion, usableQuestions } from '../../shared/ask-menu.js';
+import { usableQuestions } from '../../shared/ask-menu.js';
 import { parseDialog } from '../src/pane/dialog.js';
 import { SessionStream } from '../src/sessionws.js';
 import { BLANK, CORPUS, TRANSCRIPT_SEQUENCES, envelopeOf, runSequence, type Sent } from './askPairingStream.js';
@@ -41,18 +45,17 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '.
 const PANES = path.join(ROOT, 'server/test/fixtures/panes');
 const TABLE = path.join(ROOT, 'server/test/fixtures/ask-pairing/transcript-corpus.json');
 const SEQUENCES = path.join(ROOT, 'server/test/fixtures/ask-pairing/transcript-sequences.json');
-/** Set to `1` to rewrite the two recorded files from this run (a reviewed change only; a row's expectation is never
- *  regenerated to make a server change pass). */
+/** Set to `1` to rewrite the recorded sequences from this run (a reviewed change only; a row's expectation is never
+ *  regenerated to make a server change pass). The corpus table was recorded from the client before C7f deleted it, and
+ *  is not re-recorded: the server is held to it. */
 const RECORD = process.env.C7Q_RECORD === '1';
 
 type WirePairing = AskPairing & { readonly from?: 'hook' | 'transcript' };
 type Source = { kind: 'structured'; questions: readonly HookAskQuestion[]; from: 'hook' | 'transcript' } | { kind: string };
+/** What the PERMANENT row reads of the client (D-7212): its choice of source, which survives C7f. */
 interface AskLive {
   askSource(i: { ask: HookAsk | null; dialog: Dialog | null; askFrameSeen: boolean }): Source;
   isUsableAsk(a: HookAsk | null): boolean;
-  questionCorresponds(q: HookAskQuestion, d: Dialog | null): boolean;
-  shownQuestion(a: { questions: readonly HookAskQuestion[] }, d: Dialog | null): { live: number | null; named: number | null; shown: number; placed: number | null };
-  askScreen(a: { questions: readonly HookAskQuestion[] }, d: Dialog | null): string | null;
 }
 const askLive = async (): Promise<AskLive> => await import(path.join(ROOT, 'pwa/src/session/askLive.ts')) as AskLive;
 
@@ -118,36 +121,18 @@ function serverPairing(s: State): { dialog: WirePairing | null; envelope: WirePa
   };
 }
 
-interface Expected { source: string; pairing: WirePairing | null; compareFrom: boolean }
-
-/** Today's client, by the rule of D-7213: `askSource` decides the source; the review screen is paired by the hook's
- *  usable question envelope, else by the copy the shared rule reads (`askSource` answers `review` for both, no `from`). */
-function clientPairing(L: AskLive, ask: HookAsk | null, dialog: Dialog | null): Expected {
-  const src = L.askSource({ ask, dialog, askFrameSeen: true });
-  const structured = src.kind === 'structured' ? (src as Extract<Source, { kind: 'structured' }>) : null;
-  const source = structured === null ? src.kind : `structured:${structured.from}`;
-  if (dialog === null) return { source, pairing: null, compareFrom: false };
-  let questions: readonly HookAskQuestion[] | null = null;
-  let from: 'hook' | 'transcript' = 'hook';
-  if (structured !== null) ({ questions, from } = structured);
-  else if (src.kind === 'review' && ask !== null && 'questions' in ask && L.isUsableAsk(ask)) questions = ask.questions;
-  else if (src.kind === 'review' && !(ask !== null && 'approval' in ask)) {
-    const copy = transcriptQuestion(dialog.ask);
-    if (copy !== null) { questions = [{ ...copy, options: [...copy.options] }]; from = 'transcript'; }
-  }
-  if (questions === null) return { source, pairing: null, compareFrom: false };
-  const { live, named, shown, placed } = L.shownQuestion({ questions }, dialog);
-  return {
-    source,
-    compareFrom: structured !== null,
-    pairing: {
-      live, named, shown, placed,
-      screen: L.askScreen({ questions }, dialog),
-      corresponds: questions.map((q) => L.questionCorresponds(q, dialog)),
-      ...(from === 'transcript' ? { from } : {}),
-    },
-  };
-}
+/** A state's recorded row (`transcript-corpus.json`): the client's `source` and `pairing`, by the rule of D-7213, as
+ *  C7q recorded them before C7f. */
+interface Recorded { name: string; source: string; pairing: WirePairing | null }
+const RECORDED = (JSON.parse(readFileSync(TABLE, 'utf8')) as { rows: Recorded[] }).rows;
+const BY_NAME = new Map(RECORDED.map((r) => [r.name, r]));
+const recordedOf = (name: string): Recorded => {
+  const r = BY_NAME.get(name);
+  if (r === undefined) throw new Error(`transcript-corpus.json has no row ${name}`);
+  return r;
+};
+/** `from` is compared only where the client answered `structured` and a dialog exists (D-7213). */
+const comparesFrom = (r: Recorded, dialog: Dialog | null): boolean => r.source.startsWith('structured:') && dialog !== null;
 
 const withoutFrom = (p: WirePairing | null): WirePairing | null => {
   if (p === null) return null;
@@ -159,65 +144,53 @@ const STATES = corpus();
 const ROWS = STATES.map((s) => [`${s.cls}: ${s.name}`, s] as const);
 
 describe('the transcript copy\'s pairing on the wire equals the client\'s (Task C7q, D-7206, D-7213)', () => {
-  it('the corpus holds every class, and the transcript states are the ones askSource answers structured from the transcript', async () => {
-    const L = await askLive();
+  it('the corpus holds every class, and the transcript states are the ones askSource answers structured from the transcript', () => {
     const count = (c: Cls): number => STATES.filter((s) => s.cls === c).length;
     for (const c of ['hook', 'hook+copy', 'transcript', 'blank-envelope', 'blank-envelope-no-copy', 'partly-aligned', 'approval'] as const) expect(count(c), c).toBeGreaterThan(0);
-    const fromTranscript = STATES.filter((s) => clientPairing(L, s.ask, s.dialog).source === 'structured:transcript');
+    const fromTranscript = STATES.filter((s) => recordedOf(`${s.cls}: ${s.name}`).source === 'structured:transcript');
     expect(fromTranscript.length).toBeGreaterThan(0);
     expect(new Set(fromTranscript.map((s) => s.cls))).toEqual(new Set(['transcript', 'blank-envelope']));
   });
 
-  it('the hook+copy states: a usable envelope over a dialog carrying the copy of one of its questions is the hook\'s, on both sides', async () => {
-    const L = await askLive();
+  it('the hook+copy states: a usable envelope over a dialog carrying the copy of one of its questions is the hook\'s, on both sides', () => {
     const states = STATES.filter((s) => s.cls === 'hook+copy');
-    const structured = states.filter((s) => clientPairing(L, s.ask, s.dialog).source === 'structured:hook');
+    const structured = states.filter((s) => recordedOf(`${s.cls}: ${s.name}`).source === 'structured:hook');
     expect(structured.length, 'hook+copy states askSource answers structured from the hook').toBeGreaterThan(0);
     for (const s of states) {
       expect(s.dialog?.ask, s.name).toBeDefined();
-      expect(['structured:hook', 'review'], s.name).toContain(clientPairing(L, s.ask, s.dialog).source);
+      expect(['structured:hook', 'review'], s.name).toContain(recordedOf(`${s.cls}: ${s.name}`).source);
       const got = serverPairing(s).dialog;
       expect(got, s.name).not.toBeNull();
       expect(got!.from ?? 'hook', s.name).toBe('hook');
     }
   });
 
-  it.each(ROWS)('%s', async (_n, s) => {
-    const L = await askLive();
-    const want = clientPairing(L, s.ask, s.dialog);
+  it.each(ROWS)('%s', (n, s) => {
+    const want = recordedOf(n);
     const got = serverPairing(s);
     expect(got.envelope, 'the envelope\'s frame and the dialog frame carry one pairing').toEqual(got.dialog);
-    if (want.compareFrom) expect(got.dialog).toEqual(want.pairing);
+    if (comparesFrom(want, s.dialog)) expect(got.dialog).toEqual(want.pairing);
     else expect(withoutFrom(got.dialog)).toEqual(withoutFrom(want.pairing));
   });
 
-  it('the recorded table (transcript-corpus.json) is this comparison, row for row', async () => {
-    const L = await askLive();
-    const table = STATES.map((s) => {
-      const { source, pairing } = clientPairing(L, s.ask, s.dialog);
-      return { name: `${s.cls}: ${s.name}`, source, pairing };
-    });
-    if (RECORD) writeFileSync(TABLE, `{"rows":[\n${table.map((r) => JSON.stringify(r)).join(',\n')}\n]}\n`);
-    const recorded = JSON.parse(readFileSync(TABLE, 'utf8')) as { rows: typeof table };
-    expect(recorded.rows).toEqual(table);
+  it('the recorded table (transcript-corpus.json) is this corpus, row for row and in order', () => {
+    expect(RECORDED.map((r) => r.name)).toEqual(STATES.map((s) => `${s.cls}: ${s.name}`));
   });
 });
 
 describe('the named row classes (D-7213): green on the base and after', () => {
-  it('the review rows: a hook pairing with screen review while askSource answers review', async () => {
-    const L = await askLive();
-    const review = STATES.filter((s) => s.cls === 'hook' && s.dialog !== null && L.askSource({ ask: s.ask, dialog: s.dialog, askFrameSeen: true }).kind === 'review');
+  it('the review rows: a hook pairing with screen review while askSource answers review', () => {
+    const review = STATES.filter((s) => s.cls === 'hook' && s.dialog !== null && recordedOf(`${s.cls}: ${s.name}`).source === 'review');
     expect(review.map((s) => s.name)).toContain('cc300-ask-review-same-labels x CACHING_TRACING');
     for (const s of review) expect(serverPairing(s).dialog?.screen, s.name).toBe('review');
   });
 
-  it('the no-pane rows: a question envelope with no dialog carries no pairing while askSource answers structured from the hook', async () => {
-    const L = await askLive();
+  it('the no-pane rows: a question envelope with no dialog carries no pairing while askSource answers structured from the hook', () => {
     const none = STATES.filter((s) => s.cls === 'hook' && s.dialog === null);
     expect(none.length).toBeGreaterThan(0);
     for (const s of none) {
       expect(serverPairing(s).envelope, s.name).toBeNull();
-      expect(clientPairing(L, s.ask, null).source, s.name).toBe('structured:hook');
+      expect(recordedOf(`${s.cls}: ${s.name}`).source, s.name).toBe('structured:hook');
     }
   });
 });
@@ -260,16 +233,33 @@ function endState(frames: readonly Sent[]): { ask: HookAsk | null; dialog: Dialo
   return { ask, dialog };
 }
 
+/** Each sequence's end state as a recorded corpus row (C7f, D-7184: the recorded client answer for it), or null where the
+ *  end state has no dialog, which pairs nothing (D-7213). Sequence (d)'s menu carries no copy at all (under four options
+ *  `alignAsk` forgives no row), and the partly aligned row is its recorded state: no source, so no pairing, either way. */
+const END_ROW: Record<string, string | null> = {
+  '(a) connect with a copy and no envelope': 'transcript: COLOUR_ONE.q1 on cc300-ask-1q-open, no envelope',
+  '(b) an envelope ageing out under a standing menu': 'transcript: COLOUR_ONE.q1 on cc300-ask-1q-open, no envelope',
+  '(c) a reconnect mid-ask, with an envelope': 'hook+copy: COLOUR_ONE.q1 on cc300-ask-1q-open, under COLOUR_ONE',
+  '(c) a reconnect mid-ask, without an envelope': 'transcript: COLOUR_ONE.q1 on cc300-ask-1q-open, no envelope',
+  '(a) connect with a blank envelope and a copy': 'blank-envelope: COLOUR_ONE.q1 on cc300-ask-1q-open, a blank envelope',
+  '(d) a menu with no readable copy, then the envelope clearing': 'partly-aligned: COLOUR_ONE.q1 on cc300-ask-1q-open, partly aligned',
+  '(e) an answer that moves the pane to the next question': 'hook: cc300-ask-q2-of-2-single x FRUIT_DRINK',
+  '(e) an answer whose next is no menu': null,
+  '(e) a dialog_cleared before the answer settles': 'hook: cc300-ask-q2-of-2-single x FRUIT_DRINK',
+};
+
 describe('the transcript copy\'s frame sequences, on a real SessionStream (D-7211, D-7220)', () => {
-  it.each(TRANSCRIPT_SEQUENCES.map((sc) => [sc.name, sc] as const))('%s: the last frame of the pair carries today\'s client pairing for the end state', async (_n, sc) => {
-    const L = await askLive();
+  it.each(TRANSCRIPT_SEQUENCES.map((sc) => [sc.name, sc] as const))('%s: the last frame of the pair carries the recorded client pairing for the end state', async (_n, sc) => {
     const { frames } = await runSequence(sc);
     const last = frames.at(-1)!.frame;
-    const { ask, dialog } = endState(frames);
-    const want = clientPairing(L, ask, dialog);
+    const { dialog } = endState(frames);
+    const row = END_ROW[sc.name];
+    expect(row, `${sc.name}: an end row is named`).not.toBeUndefined();
+    expect(dialog === null, `${sc.name}: the end state has no dialog exactly where no row is named`).toBe(row === null);
+    const want = row === null || row === undefined ? null : recordedOf(row);
     const got = last.type === 'dialog_cleared' ? null : pairingOf(last);
-    if (want.compareFrom) expect(got, `${sc.name}: ${last.type}`).toEqual(want.pairing);
-    else expect(withoutFrom(got), `${sc.name}: ${last.type}`).toEqual(withoutFrom(want.pairing));
+    if (want !== null && comparesFrom(want, dialog)) expect(got, `${sc.name}: ${last.type}`).toEqual(want.pairing);
+    else expect(withoutFrom(got), `${sc.name}: ${last.type}`).toEqual(withoutFrom(want?.pairing ?? null));
   }, 30_000);
 });
 

@@ -20,6 +20,7 @@ import type { Command, CommandContext } from '../src/command/registry';
 import { useShortcuts } from '../src/command/useShortcuts';
 import { DialogSheet } from '../src/session/DialogSheet';
 import { createSessionStore } from '../src/stores/session';
+import { served } from './wirePairing';
 import { askFixture } from './askFixtures';
 
 afterEach(() => {
@@ -199,10 +200,10 @@ describe('the real inline card at the desk', () => {
   it('the keys stand down on the mounted card\'s real option and fire from a button outside it', () => {
     desk();
     const ran: string[] = [];
-    const store = createSessionStore(ID, {
+    const store = served(createSessionStore(ID, {
       makeSocket: () => ({ onopen: null, onmessage: null, onclose: null, onerror: null, close(): void {} }) as unknown as WebSocket,
       api: { prompt: vi.fn().mockResolvedValue(undefined) },
-    });
+    }));
     act(() => { for (const f of askFixture(1).frames) store.getState().apply(f); });
     const outside = document.createElement('button');
     document.body.appendChild(outside);

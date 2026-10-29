@@ -6,142 +6,15 @@
 // fixture directories. No case reaches the live user manager, a real /proc or a
 // real tmux server, so the suite runs on any platform. Each case is red when
 // its guard is removed (the plan's mutation table is the measurement).
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+// The harness (the fixture tree, the stubs and the helpers below) lives in `paneScopeFixture.ts` (D-7303), shared
+// with `cap-scopes.test.ts` and `pane-scope-acts.test.ts`; this suite makes its box without `honourPattern`.
+import { describe, it, expect } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
+import { makePaneScopeBox, SWEEP, UP, HOUR, CCD_SERVER } from './paneScopeFixture.js';
 
-const SWEEP = path.resolve(__dirname, '../../ccd/ccd-scope-sweep');
-const SLICE = 'app-claude\\x2dsession.slice';
-const UP = 100 * 86400;                  // the fixture box has been up 100 days: /proc/uptime, the sweep's clock
-const HOUR = 3600;
-const CCD_SERVER = 2000;
-const NETNS = 'net:[4026531840]';        // the sweep's own network namespace, and every fixture process's unless it says otherwise
-
-interface Fx { base: string; home: string; xdg: string; proc: string; cg: string; bin: string }
-let fx: Fx;
-
-beforeEach(() => {
-  const base = mkTmp('ccrc-scope-sweep-');
-  fx = { base, home: path.join(base, 'home'), xdg: path.join(base, 'xdg'), proc: path.join(base, 'proc'), cg: path.join(base, 'cg'), bin: path.join(base, 'bin') };
-  for (const d of [path.join(fx.home, '.cc-sessions'), fx.xdg, path.join(fx.proc, 'net'), path.join(fx.proc, 'self', 'ns'), fx.cg, fx.bin, path.join(base, 'show')]) fs.mkdirSync(d, { recursive: true });
-  fs.writeFileSync(path.join(fx.proc, 'uptime'), `${UP}.25 1234.00\n`);
-  fs.symlinkSync(NETNS, path.join(fx.proc, 'self', 'ns', 'net'));
-  fs.writeFileSync(path.join(fx.proc, 'net', 'tcp'), '  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n');
-  for (const f of ['tcp6', 'udp', 'udp6']) fs.copyFileSync(path.join(fx.proc, 'net', 'tcp'), path.join(fx.proc, 'net', f));
-  fs.writeFileSync(path.join(fx.proc, 'net', 'unix'), 'Num       RefCount Protocol Flags    Type St Inode Path\n');
-  fs.writeFileSync(path.join(base, 'units'), '');
-  const stub = (name: string, body: string): void => { fs.writeFileSync(path.join(fx.bin, name), `#!/usr/bin/env bash\n${body}\n`, { mode: 0o755 }); };
-  stub('systemctl', [
-    `F=${JSON.stringify(base)}`,
-    'echo "$*" >> "$F/calls"',
-    '[ "$1" = --user ] || { echo "fixture systemctl: not --user: $*" >&2; exit 90; }',
-    'case "$2" in',
-    '  list-units) cat "$F/units"; exit 0 ;;',
-    '  show) [ -f "$F/show-rc" ] && exit "$(cat "$F/show-rc")"',
-    '        if [ -f "$F/show/$3" ]; then cat "$F/show/$3"; else printf "Id=%s\\nDescription=%s\\nSlice=\\nControlGroup=\\n" "$3" "$3"; fi; exit 0 ;;',
-    '  stop) [ "$3" = --no-block ] || exit 91; [ -f "$F/stop-rc" ] && exit "$(cat "$F/stop-rc")"; exit 0 ;;',
-    'esac',
-    'echo "fixture systemctl: unexpected argv: $*" >&2; exit 90',
-  ].join('\n'));
-  stub('tmux', [
-    `F=${JSON.stringify(base)}`,
-    '[ "$1 $2" = "list-panes -a" ] || { echo "fixture tmux: unexpected argv: $*" >&2; exit 90; }',
-    'if [ -f "$F/panes" ]; then cat "$F/panes"; exit 0; fi',
-    'echo "no server running on /tmp/tmux-1000/default" >&2; exit 1',
-  ].join('\n'));
-  stub('getconf', '[ "$1" = CLK_TCK ] && { echo 100; exit 0; }; exit 1');
-  server(CCD_SERVER, 10 * 86400);
-  fs.writeFileSync(path.join(base, 'panes'), `${CCD_SERVER} 4242\n`);   // ccd's server is up, serving some other session's pane
-});
-afterEach(() => { removeTmpFixtures(); });
-
-/** A process in the fixture /proc: started `age` seconds ago, in cgroup `cg`, holding `sockets` (inode numbers). */
-function proc(pid: number, o: { age: number; comm?: string; ppid?: number; cg?: string; sockets?: number[]; fdUnreadable?: boolean; netns?: string; statUnreadable?: boolean; state?: string; threads?: number }): void {
-  const d = path.join(fx.proc, String(pid));
-  fs.mkdirSync(path.join(d, 'fd'), { recursive: true });
-  fs.mkdirSync(path.join(d, 'ns'));
-  const comm = o.comm ?? 'node';
-  const ticks = (UP - o.age) * 100;
-  const state = o.state ?? 'S';
-  const threads = o.threads ?? 1;   // stat field 20, `num_threads`: a `Z` thread-group leader whose other threads still run reads more than 1
-  // `t` is Linux's tracing stop (a process under ptrace): readable, yet outside the sweep's `[A-Z]` states.
-  if (!/^[A-Z]$/.test(state) && state !== 't') throw new Error(`invalid fixture process state ${state}`);
-  // `pid (comm) state ppid …` with the start time as field 22 — the comm carries a space and a paren, as real ones can
-  fs.writeFileSync(path.join(d, 'stat'), `${pid} (${comm}) ${state} ${o.ppid ?? 1} ${pid} ${pid} 0 -1 4194560 0 0 0 0 0 0 0 0 20 0 ${threads} 0 ${ticks} 1000 10 0\n`);
-  fs.writeFileSync(path.join(d, 'comm'), `${comm}\n`);
-  fs.writeFileSync(path.join(d, 'cgroup'), `0::${o.cg ?? '/elsewhere.scope'}\n`);
-  fs.symlinkSync(o.netns ?? NETNS, path.join(d, 'ns', 'net'));
-  (o.sockets ?? []).forEach((ino, i) => fs.symlinkSync(`socket:[${ino}]`, path.join(d, 'fd', String(10 + i))));
-  fs.symlinkSync('/dev/null', path.join(d, 'fd', '0'));
-  if (o.fdUnreadable) fs.chmodSync(path.join(d, 'fd'), 0o000);
-  if (o.statUnreadable) fs.chmodSync(path.join(d, 'stat'), 0o000);
-}
-function server(pid: number, age: number, comm = 'tmux: server'): void { proc(pid, { age, comm, cg: '/ccrc-tmux-server.scope' }); }
-const cgOf = (unit: string): string => `/user.slice/user-1000.slice/user@1000.service/app.slice/${SLICE}/${unit}`;
-const unitName = (n: number): string => `tmux-spawn-0000000${n}-0000-4000-8000-000000000000.scope`;
-
-/** A pane scope: listed, shown, its cgroup holding `procs`. `bornAgo` (and `monoOffset`, µs) date its
- *  ActiveEnterTimestampMonotonic; `cgShown`, `cpuShown` and `monoShown` replace what `show` answers. */
-function scope(n: number, o: {
-  pane: number; server?: number; procs: number[]; cpu?: number; mem?: number; bornAgo?: number; monoOffset?: number;
-  slice?: string; desc?: string; unit?: string; noProcsFile?: boolean; cgShown?: string; cpuShown?: string; monoShown?: string;
-}): string {
-  const u = o.unit ?? unitName(n);
-  const cg = cgOf(u);
-  fs.appendFileSync(path.join(fx.base, 'units'), `${u} loaded active running tmux child pane\n`);
-  const mono = (UP - (o.bornAgo ?? 9 * 86400)) * 1_000_000 + (o.monoOffset ?? 475_320);
-  fs.writeFileSync(path.join(fx.base, 'show', u), [
-    `Id=${u}`, `Slice=${o.slice ?? SLICE}`,
-    `Description=${o.desc ?? `tmux child pane ${o.pane} launched by process ${o.server ?? CCD_SERVER}`}`,
-    `ControlGroup=${o.cgShown ?? cg}`, `CPUUsageNSec=${o.cpuShown ?? o.cpu ?? 7255660000}`, `MemoryCurrent=${o.mem ?? 20 * 2 ** 20}`,
-    `ActiveEnterTimestampMonotonic=${o.monoShown ?? mono}`,
-  ].join('\n') + '\n');
-  if (!o.noProcsFile) {
-    fs.mkdirSync(path.join(fx.cg, cg), { recursive: true });
-    fs.writeFileSync(path.join(fx.cg, cg, 'cgroup.procs'), o.procs.map((p) => `${p}\n`).join(''));
-  }
-  return u;
-}
-/** A dead ccd scope that passes every predicate, first seen seven hours ago with the same CPU it reads now. */
-function inert(n: number, pid = 3000 + n): string {
-  proc(pid, { age: 2 * 86400, cg: cgOf(unitName(n)) });
-  const u = scope(n, { pane: pid, procs: [pid] });
-  seen(u, 7 * HOUR, 7255660000);
-  return u;
-}
-const STATE = (): string => path.join(fx.xdg, 'ccd-scope-sweep.state');
-const seenLines: string[] = [];
-/** A previous tick's line: first seen dead `ago` seconds ago on the sweep's boot-relative clock. */
-function seen(u: string, ago: number, cpu: number, verdict = 'report'): void {
-  seenLines.push(`dead ${u} first=${UP - ago} cpu0=${cpu} verdict=${verdict} why=dead-under-6h server=ccd procs=1 mem=1 sockets=0 youngest=1 oldest=1 age=1 pids=1`);
-  fs.writeFileSync(STATE(), ['# ccd-scope-sweep v1 tick=1 up=1 mode=shadow', ...seenLines].join('\n') + '\n');
-}
-beforeEach(() => { seenLines.length = 0; });
-const arm = (): void => fs.writeFileSync(path.join(fx.home, '.cc-sessions', 'scope-sweep-live'), '');
-const livePanes = (...panes: number[]): void => fs.writeFileSync(path.join(fx.base, 'panes'), [4242, ...panes].map((p) => `${CCD_SERVER} ${p}\n`).join(''));
-
-function run(env: Record<string, string | undefined> = {}): { code: number; out: string; err: string } {
-  const r = spawnSync('bash', [SWEEP], {
-    encoding: 'utf8', timeout: 30000,   // a sweep that spins (a parent cycle) is a red case, not a hung suite
-    env: { PATH: `${fx.bin}:${process.env['PATH'] ?? ''}`, HOME: fx.home, XDG_RUNTIME_DIR: fx.xdg,
-      CCRC_PROC_ROOT: fx.proc, CCRC_CGROUP_ROOT: fx.cg, LC_ALL: 'C', ...env },
-  });
-  return { code: r.status ?? -1, out: r.stdout ?? '', err: r.stderr ?? '' };
-}
-const stops = (): string[] => (fs.existsSync(path.join(fx.base, 'calls')) ? fs.readFileSync(path.join(fx.base, 'calls'), 'utf8') : '')
-  .split('\n').filter((l) => l.startsWith('--user stop'));
-const rows = (kind: 'dead' | 'old' | 'carry'): Record<string, Record<string, string>> => {
-  const out: Record<string, Record<string, string>> = {};
-  if (!fs.existsSync(STATE())) return out;
-  for (const l of fs.readFileSync(STATE(), 'utf8').split('\n')) {
-    const p = l.split(' ');
-    if (p[0] !== kind) continue;
-    out[kind === 'old' ? `${p[1]} ${p[2]}` : p[1]!] = Object.fromEntries(p.slice(2).map((kv) => kv.split('=') as [string, string]));
-  }
-  return out;
-};
+const { fx, proc, server, cgOf, unitName, scope, inert, STATE, seen, arm, livePanes, run, stops, rows } = makePaneScopeBox();
 
 // ── THE STOP SHIPS SHADOWED ─────────────────────────────────────────────────
 

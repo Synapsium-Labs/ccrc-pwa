@@ -638,9 +638,9 @@ export function MultiPick({
   multi: DialogMulti;
   /** The live dialog's id: a call committed to another question shows nothing of its set here. */
   dialogId: string;
-  /** Claude's own copy for the boxes, by position (`questionCorresponds` matched them one for one, so the counts are
-   *  equal). Required (D-6325): the label and description shown are this copy's, and a box with no description shows
-   *  none, never the pane's sub-text under it. */
+  /** Claude's own copy for the boxes, by position (the pairing's `corresponds`, the server's rule since D-7184, matched
+   *  them one for one, so the counts are equal). Required (D-6325): the label and description shown are this copy's, and
+   *  a box with no description shows none, never the pane's sub-text under it. */
   copy: StructuredQuestion['options'];
   picks: Picks;
   /** Another send is in flight (an option's answer, or own words). */
@@ -660,7 +660,7 @@ export function MultiPick({
     <>
       <div className="opts">
         {multi.options.map((o, k) => {
-          const c = copy[k]!; // `questionCorresponds`: one copy per box
+          const c = copy[k]!; // the pairing's `corresponds` (D-7184): one copy per box
           const { label, recommended } = optionCopy(c.label);
           return (
             <OptionRow

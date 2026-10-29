@@ -69,6 +69,8 @@ export const accountsReaders = (): W7Site[] => overPwa(accountsReadersIn);
 
 // ─── 2. inline dead checks and coordPresence (ARCH-49, C7c) ────────────────────────────────────────────────────────
 
+/** Where a status-dead comparison is the definition, not a check (C7c). */
+export const DEAD_CHECK_OWNER = 'pwa/src/fleet/presence.ts';
 const DEAD_OPERAND = /^(?:'dead'|"dead"|`dead`)\s*(?:===|!==|==|!=)|(?:===|!==|==|!=)\s*(?:'dead'|"dead"|`dead`)$/;
 
 /** A dead check: an equality comparison one of whose operands has the leaf name `status` (`s.status`, `session!.status`,
@@ -76,18 +78,18 @@ const DEAD_OPERAND = /^(?:'dead'|"dead"|`dead`)\s*(?:===|!==|==|!=)|(?:===|!==|=
  *  code, so they never count; `s.bucket === 'dead'`, `st === 'dead'` and `presence === 'dead'` are not `status` leaves
  *  (`hibernate-census.test.ts` counts those). KNOWN WIDTH: a `switch (s.status) { case 'dead': }` is not a comparison. */
 export function inlineDeadChecksIn(p: ParsedFile, file: string): W7Site[] {
+  // The one owner (D-7181, Task C7c): `fleet/presence.ts#paneGone` is the pane predicate OA-C15 (a) keeps, and the
+  // count is of the checks OUTSIDE it (16 on the base, 0 at C7c's exit).
+  if (file === DEAD_CHECK_OWNER) return [];
   return p.comparisons.filter((c) => (c.leftLeaf === 'status' || c.rightLeaf === 'status') && DEAD_OPERAND.test(c.text))
     .map((c) => cmpSite(p, file, c));
 }
 export const inlineDeadChecks = (): W7Site[] => overPwa(inlineDeadChecksIn);
 
 /** `coordPresence`'s definition (a symbol of that name, kind `definition`) and its calls (kind `call`), and each
- *  comparison of a value bound from a `coordPresence(…)` call with `'dead'` (kind `answer-dead`). 1 definition, 4 calls
- *  (`orphanNote`, `RunRow`, `SessionScreen`, `statusView`), 3 answer comparisons (plan item 2's two, and `statusView`'s).
- *  `statusView` (pwa/src/fleet/statusGroups.ts, desktop-polish G3) reads it to find a claimant measured dead, whose
- *  workers are then lone rows with the orphan marker, never hidden members of its box: G3's orphan ruling as amended on
- *  review 1177's N1, and the census row raised by the ruling on ask 190. KNOWN WIDTH: an answer compared inline
- *  (`coordPresence(r) === 'dead'`) is counted as a call only. */
+ *  comparison of a value bound from a `coordPresence(…)` call with `'dead'` (kind `answer-dead`). 1 definition, 3 calls
+ *  (`orphanNote`, `RunRow`, `SessionScreen`), 2 answer comparisons on the base (plan item 2). KNOWN WIDTH: an answer
+ *  compared inline (`coordPresence(r) === 'dead'`) is counted as a call only. */
 export function coordPresenceSitesIn(p: ParsedFile, file: string): W7Site[] {
   const out: W7Site[] = [];
   for (const s of p.symbols) if (s.name.split('.').pop() === 'coordPresence') out.push({ file, symbol: s.name, line: s.line, text: lineStart(p.text, s.line).trim().slice(0, 140), kind: 'definition' });
@@ -247,7 +249,8 @@ const moduleDefinitions = (p: ParsedFile, file: string, names: readonly string[]
 };
 
 /** A module-scope definition (a top-level function or a module-scope binding) named one of `CLIENT_PAIRING_NAMES`, in
- *  any PWA source. 9 on the base, all in `session/askLive.ts`. A helper inlined into its caller leaves the count.
+ *  any PWA source. 9 on the base, all in `session/askLive.ts`; 0 since C7f (D-7184), which reads the wire's pairing. A
+ *  helper inlined into its caller leaves the count.
  *  KNOWN WIDTH: a definition under another name is not seen (the name list is closed, and reviewed). */
 export const clientPairingDefinitionsIn = (p: ParsedFile, file: string): W7Site[] => moduleDefinitions(p, file, CLIENT_PAIRING_NAMES);
 export const clientPairingDefinitions = (): W7Site[] => overPwa(clientPairingDefinitionsIn);

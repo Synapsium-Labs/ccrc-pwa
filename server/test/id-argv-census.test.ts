@@ -332,7 +332,7 @@ const GATES = {
   },
   /** The child-reclaim executor defers a bad id before either of its builders. */
   'child-reclaim-outcome': {
-    file: 'coord/childReclaim.ts', scope: 'childReclaimOutcome',
+    file: 'coord/childReclaim.ts', scope: 'childSpentRecordJudge',
     re: /deferred\('marker-unreadable', 'the session id is not a registry id'\)/,
   },
   /** The stale-archive act asks the capability once more, nearest the argv, after `rowNow` re-read the row. */
@@ -612,8 +612,8 @@ describe('every id-taking argv call has an origin and a gate (spec §2.3)', () =
       resumeBound: ['coord/dispatch.ts | dispatchRun'],
       expireAudit: ['coord/expireArchived.ts | expireRetirePort', 'coord/expireArchived.ts | learnExpiry'],
       expireAct: ['coord/expireArchived.ts | expireRetirePort'],
-      childReclaimAudit: ['coord/childReclaim.ts | childReclaimOutcome'],
-      childReclaimAct: ['coord/childReclaim.ts | childReclaimOutcome'],
+      childReclaimAudit: ['coord/childReclaim.ts | childReclaimRetirePort'],
+      childReclaimAct: ['coord/childReclaim.ts | childReclaimRetirePort'],
       collectAudit: ['coord/collectTempRoot.ts | collectRetirePort', 'coord/collectTempRoot.ts | learnCollect'],
       childSpent: ['coord/childBind.ts | childBindGate', 'coord/close.ts | childGateAtClose'],
       childSpentLive: ['coord/childSpent.ts | childSpent', 'coord/close.ts | childGateAtClose'],

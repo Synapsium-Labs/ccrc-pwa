@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach, vi } from 'vitest';
 import { StrictMode } from 'react';
 import { act, cleanup, render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { RUN_STATES, SPAWN_STALL_MS, type ChildReclaimStatus, type CoordCapsView, type FleetSession, type RunSpend, type RunSummary } from '../../shared/api';
-import { fleetSession } from './fleetFixture';
+import { fleetSession, DEAD_LIFECYCLE } from './fleetFixture';
 import { RunsScreen } from '../src/screens/RunsScreen';
 import { navigate } from '../src/lib/router';
 import { CHILD_RECLAIM_CHIP_GLYPH, CROSSING_GLYPH, REVIEW_GLYPH, RUN_ORDER, RUN_WORD, childReclaimChip, childReclaimGone, childReclaimRefreshDue, childReclaimTitle, crossingNote, dispatchWindow, itemTallyLabel, programWave, programsWithOpenRun, resumeNote, runForSession, runHomeProject, runItems, runKindChip, waveLabel } from '../src/fleet/runWords';
@@ -1057,7 +1057,7 @@ describe('the run row renders its session’s spawn verdict (Task 5)', () => {
     // until now only `session-line.test.tsx` measured it: deleting it left
     // this suite entirely green. Nothing is running, so how the last spawn
     // ended describes work that no longer exists.
-    withSession({ spawnState: 'blocked', status: 'dead' });
+    withSession({ spawnState: 'blocked', status: 'dead', lifecycle: DEAD_LIFECYCLE });
     expect(chip()).toBeNull();
   });
 
@@ -1139,7 +1139,7 @@ describe('programsWithOpenRun — the program-level half of the resume door (D-1
   });
 });
 
-// The resume door on the board (program-leverage wave 5, D-1129). `coordPresence`
+// The resume door on the board (program-leverage wave 5, D-1129). `coordinatorPresence`
 // decides (its own table lives in `resume-sheet.test.tsx`); this pins that the
 // BOARD asks it, with the right three arguments, and renders nothing when the
 // answer is not `dead`.
@@ -1188,6 +1188,20 @@ describe('the resume door on the run board', () => {
 
   it('hides it when the claimant is alive', () => {
     board({ sessions: [coord({ status: 'idle', lifecycle: 'running' })], fleetFrameSeen: true });
+    expect(screen.queryByRole('button', { name: /resume run 3/i })).toBeNull();
+  });
+
+  // D-7371: a hibernated orphan or never-started claimant is asleep (mail or opening it wakes it, D-5430): Resume would
+  // reclaim the program from a coordinator that is not gone, so the door stays closed, as the row's own sheet offers Wake.
+  it.each(['orphan', 'never-started'] as const)('hides it when the claimant is a hibernated %s', (lifecycle) => {
+    board({ sessions: [coord({ status: 'dead', bucket: 'dead', lifecycle, hibernatedAt: 1_784_500_000_000 })], fleetFrameSeen: true });
+    expect(screen.queryByRole('button', { name: /resume run 3/i })).toBeNull();
+  });
+
+  // D-7370: a substrate stamp over a pane tmux called gone is doubt (D-309): the coordinator may be alive, and Resume
+  // reclaims its runs, so the door stays closed.
+  it.each(['stopped', 'orphan', 'never-started'] as const)('hides it when a substrate fault stands over the claimant\'s gone pane (%s)', (lifecycle) => {
+    board({ sessions: [coord({ status: 'dead', bucket: 'dead', lifecycle, substrate: { at: 1, text: 'tmux: no server running' } })], fleetFrameSeen: true });
     expect(screen.queryByRole('button', { name: /resume run 3/i })).toBeNull();
   });
 
@@ -1750,7 +1764,7 @@ describe('the board’s doors', () => {
     // cold read. Both were uncovered functions.
     const store = makeStore();
     // The Resume control is gated on a coordinator this board measured DEAD
-    // (`coordPresence`), so the row needs both a dead session and a seen
+    // (`coordinatorPresence`), so the row needs both a dead session and a seen
     // fleet frame — without either, the door is correctly absent.
     act(() => {
       store.setState({

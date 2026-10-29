@@ -12,14 +12,14 @@
 // the row list and the repo label. Every one of those rulings is about WHAT TO
 // SAY and WHEN TO STAY SILENT; none of it renders.
 import type { FleetSession, RunSummary } from '../../../shared/api';
-import { coordPresence, type CoordPresence } from './coordWords';
+import { coordinatorPresence, type CoordinatorPresence } from './presence';
 import { crossingNote, runForSession } from './runWords';
 import type { FleetRow } from './nestFleet';
 
 export interface OrphanNote {
   /** The guidance for the row's marker `title` — a phone never shows it, which is why the marker itself says "coordinator gone". */
   readonly title: string;
-  readonly presence: CoordPresence;
+  readonly presence: CoordinatorPresence;
 }
 
 // F4. `nestFleet`'s rule 3 leaves a worker whose coordinator is NOT on this
@@ -74,7 +74,7 @@ export interface OrphanNote {
 // home when that home is, measured, this card's own project).
 /** The orphan marker's guidance for a coordinator measured gone or asleep — the card's marker and the session
  *  header's both carry it (`sessionFacts`' `coordinatorTitle`). `null` for any other presence. */
-export function orphanGuidance(parent: string, presence: CoordPresence): string | null {
+export function orphanGuidance(parent: string, presence: CoordinatorPresence): string | null {
   return presence === 'dead'
     ? `coordinator ${parent} is gone — reclaim this programme from the run board (the held cell opens it)`
     : presence === 'hibernated'
@@ -99,11 +99,11 @@ export function orphanNote(
   if (parent === null || parent === row.session.id) return null;
   if (live.some((s) => s.id === parent)) return null;
   const crossing = crossingNote({ ...run, project });
-  // D-3009: the runs board's own three-answer read (`coordPresence`), off a
+  // D-3009: the runs board's own read of the server's word (`coordinatorPresence`), off a
   // FLEET-WIDE lookup — the coordinator may sit on another card, in an
   // archive fold, or nowhere this pass — so the marker never claims more
   // than the frame has actually measured.
-  const presence = coordPresence(parent, coordOf(parent), frameSeen);
+  const presence = coordinatorPresence(parent, coordOf(parent), frameSeen);
   // D-5242: a sleeping coordinator is not gone, and nothing should be reclaimed
   // from it: mail or opening it wakes it.
   const where = orphanGuidance(parent, presence) ?? `this worker's coordinator is not among this card's live sessions`;
@@ -111,7 +111,7 @@ export function orphanNote(
   // invisible on touch, so the row's marker itself says "coordinator gone"
   // (`sessionFacts.ts`, D-5545), and only for `dead` (or "coordinator
   // hibernated"): `unknown` and `alive` say nothing new, because
-  // `coordPresence` refusing to measure is not a claim that anything is gone
+  // `coordinatorPresence` refusing to measure is not a claim that anything is gone
   // (D-1138).
   return crossing === null
     ? { title: where, presence }

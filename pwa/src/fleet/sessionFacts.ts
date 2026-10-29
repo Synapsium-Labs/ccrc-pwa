@@ -33,13 +33,14 @@ import { restartWords, type RestartWords } from '../lib/restart';
 import { humanBytes } from '../lib/format';
 import { lifecycleQualifier } from './lifecycleWords';
 import { hibernatedSince, hibernatedWords } from './hibernated';
+import { paneGone } from './presence';
 import {
   childOfRunLabel, programmeWave, programmeWaveTail, runSentence,
   type ChildOfRunLabel, type ChildRunContext,
 } from './runWords';
 import { spawnChip, type SpawnChip } from './spawnWords';
 import { substrateFaultText } from './substrateWords';
-import type { CoordPresence } from './coordWords';
+import type { CoordinatorPresence } from './presence';
 import { sessionLabel } from './sessionLabel';
 import { unmeasuredTitle } from './chips';
 
@@ -119,7 +120,7 @@ export interface FactInput {
   readonly workingOn?: string | null;
   /** The presence of its coordinator when that coordinator is not a live row beside it
    *  (`orphanNote`'s `presence`): `dead` is "coordinator gone", `hibernated` says so. */
-  readonly coordinator?: CoordPresence | null;
+  readonly coordinator?: CoordinatorPresence | null;
   /** The orphan marker's guidance (`orphanGuidance`): the card and the header both put it on the marker. */
   readonly coordinatorTitle?: string | null;
 }
@@ -223,7 +224,7 @@ export function sessionFacts(input: FactInput): SessionFactSet {
     session, now, roster = [], projectPool = null, childRun, workingOn = null, coordinator = null,
     coordinatorTitle = null,
   } = input;
-  const dead = session.status === 'dead';
+  const dead = paneGone(session);
   const asleepAt = hibernatedSince(session);
   const state = rowStateWord(session);
 

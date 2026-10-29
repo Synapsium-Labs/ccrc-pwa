@@ -3,7 +3,7 @@ import { afterEach, describe, it, expect, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { FleetSession, PoolsEnforcement, ProjectPoolWire, ProjectPoolsWire, RunSummary } from '../../shared/api';
-import { fleetSession, hibernatedSession } from './fleetFixture';
+import { fleetSession, hibernatedSession, DEAD_LIFECYCLE } from './fleetFixture';
 import type { ProjectPlacementRead } from '../src/fleet/placementWords';
 import { SPAWN_STALL_MS } from '../../shared/api';
 import { groupFleet, type FleetGroup } from '../src/fleet/groupFleet';
@@ -788,7 +788,7 @@ describe('route-owned pool handoff to session rows', () => {
     // the active case above independently pins ProjectCard's handoff.
     const archived = sess({
       id: 'demo-quiet-basin', wrapper: 'claude9', home: 'claude9',
-      workspace: 'quiet-basin', status: 'dead', bucket: 'archived',
+      workspace: 'quiet-basin', status: 'dead', lifecycle: DEAD_LIFECYCLE, bucket: 'archived',
       archivedAt: 1_785_300_000,
     });
     render(<ProjectCard group={grp({ archived: [archived] })} placement={placement}
@@ -860,7 +860,7 @@ describe('the stranded cell', () => {
   it('does not surface a stranded aggregate for a sole dead marker-bearing row', () => {
     const marker = { at: 1, reason: 'no account in pool pool-a can take it' };
     const [group] = groupFleet([
-      sess({ status: 'dead', bucket: 'dead', stranded: marker }),
+      sess({ status: 'dead', lifecycle: DEAD_LIFECYCLE, bucket: 'dead', stranded: marker }),
     ], []);
     render(<ProjectCard group={group!} onOpen={() => {}} onActions={() => {}} />);
 
@@ -1148,6 +1148,31 @@ describe('the orphan worker\'s marker rides its row', () => {
     expect(m.textContent).toBe('coordinator hibernated');
   });
 
+  // D-7371: a hibernated orphan or never-started coordinator (the server reads it `dead`) is asleep, never gone.
+  it.each(['orphan', 'never-started'] as const)('says HIBERNATED, not gone, for a hibernated %s coordinator (D-7371)', (lifecycle) => {
+    const sleepingCoord = fleetSession({ id: 'off-card-coordinator', project: 'elsewhere', status: 'dead', bucket: 'dead',
+      lifecycle, hibernatedAt: FROZEN - 3_600_000 });
+    const { container } = render(
+      <ProjectCard group={orphans()} runs={[orphanRun]} nowMs={FROZEN} frameSeen
+                   coordOf={(id) => (id === 'off-card-coordinator' ? sleepingCoord : null)}
+                   onOpen={() => {}} onActions={() => {}} />);
+    const m = marker(container)!;
+    expect(m.getAttribute('data-marker')).toBe('coordinator-hibernated');
+    expect(container.textContent).not.toContain('coordinator gone');
+  });
+
+  // D-7370: a substrate stamp over a pane tmux called gone is doubt (D-309): no marker, no "coordinator gone".
+  it('claims nothing about a coordinator whose gone pane carries a substrate stamp (D-7370)', () => {
+    const stamped = fleetSession({ id: 'off-card-coordinator', project: 'elsewhere', status: 'dead', bucket: 'dead',
+      lifecycle: 'orphan', substrate: { at: 1, text: 'tmux: no server running' } });
+    const { container } = render(
+      <ProjectCard group={orphans()} runs={[orphanRun]} nowMs={FROZEN} frameSeen
+                   coordOf={(id) => (id === 'off-card-coordinator' ? stamped : null)}
+                   onOpen={() => {}} onActions={() => {}} />);
+    expect(marker(container)).toBeNull();
+    expect(container.textContent).not.toContain('coordinator gone');
+  });
+
   it('claims nothing about a coordinator the frame has not measured', () => {
     const { container } = render(
       <ProjectCard group={orphans()} runs={[orphanRun]} nowMs={FROZEN}
@@ -1289,7 +1314,7 @@ describe('the Released (n) fold (workspace lifecycle spec §5.1)', () => {
       releasedFrom: { runId: closedAt, program, programTitle: program === 'alpha' ? 'Alpha programme' : null, claimedBy: 'coord', closedAt, child },
       ...over,
     });
-  const archivedRow = sess({ id: 'demo-old-bay', workspace: 'old-bay', status: 'dead', bucket: 'archived', archivedAt: 1_785_300_000 });
+  const archivedRow = sess({ id: 'demo-old-bay', workspace: 'old-bay', status: 'dead', lifecycle: DEAD_LIFECYCLE, bucket: 'archived', archivedAt: 1_785_300_000 });
 
   it('renders nothing when nothing is released', () => {
     render(<ProjectCard group={grp()} onOpen={() => {}} onActions={() => {}} />);

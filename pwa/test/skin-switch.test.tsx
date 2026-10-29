@@ -48,6 +48,7 @@ import { INSTRUMENT, REFINED, toast } from '@ccrc/ui';
 import type { ChatEvent, FleetSession } from '../../shared/api';
 import { fleetSession } from './fleetFixture';
 import { askFixture } from './askFixtures';
+import { pairedFrames } from './wirePairing';
 
 const made = vi.hoisted(() => ({
   terms: [] as unknown[],
@@ -222,7 +223,8 @@ describe('a skin switch keeps', () => {
     openSession();
     const box = screen.getByRole('textbox', { name: 'Message' });
     fireEvent.change(box, { target: { value: 'half a thought' } });
-    act(() => { for (const f of askFixture(1).frames) getSessionStore(S.id).getState().apply(f); });
+    // C7f (D-7184, D-7363): the frames as a server carrying C7q sends them, with the pairing the sheet reads.
+    act(() => { for (const f of pairedFrames(askFixture(1).frames)) getSessionStore(S.id).getState().apply(f); });
     const cards = (): Element[] => [...document.querySelectorAll('[data-ask-surface]')];
     expect(cards(), 'an inline card is mounted at the desk').toHaveLength(1);
     const card = cards()[0]!;

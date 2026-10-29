@@ -19,6 +19,7 @@ import { boardHome, type FleetSession } from '../../../shared/api';
 import { api, apiErrorText } from '../lib/api';
 import { archivableReleased, archiveReleased, archiveReleasedSummary } from './archiveReleased';
 import { inReleasedFold } from './groupFleet';
+import { presenceOf } from './presence';
 import type { FleetStore } from '../stores/fleet';
 
 export interface ArchiveAllPlane {
@@ -91,7 +92,8 @@ export function ArchiveAllConfirm({
   const rows = project === null ? []
     : sessions.filter((s) => boardHome(s) === project && archivableReleased(s));
   const count = rows.length;
-  const live = rows.filter((s) => s.status !== 'dead').length;
+  // Live is the server's word (`presenceOf`, OA-C15 (a), D-7181): a doubted row is not counted live, as today.
+  const live = rows.filter((s) => presenceOf(s) === 'alive').length;
   return (
     <QuickConfirm
       open={project !== null}

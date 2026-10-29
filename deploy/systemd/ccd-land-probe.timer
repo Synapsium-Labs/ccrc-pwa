@@ -1,0 +1,20 @@
+# ccd-land-probe.timer - fires ccd-land-probe.service: first three minutes after the timer is armed, then every
+# five minutes. Its first-run anchor is OnActiveSec= for the reason D-1981 states below.
+[Unit]
+Description=Run the read-only conflict radar every five minutes
+[Timer]
+# `OnActiveSec=`, NOT `OnBootSec=`, for ccd-telemetry-keepalive.timer's reason
+# (D-1981): this timer is first armed by a deploy on a box that has been up for
+# days, where a boot-relative elapse point is already in the past and the first
+# tick would start AT ONCE - on top of deploy.sh's supervisor sweep, which is at
+# that instant restarting every claude-session@ unit. Three minutes after
+# arming is the honest anchor; at boot the two anchors are the same thing.
+# `Persistent=` would do nothing here: it only affects OnCalendar= timers.
+OnActiveSec=3min
+# Five minutes: the readers (doctor, and landing acceptance in the next wave)
+# treat a measurement older than a few intervals as no measurement, and a
+# conflict is a fact about branches that move in minutes, not seconds.
+OnUnitActiveSec=5min
+AccuracySec=30s
+[Install]
+WantedBy=timers.target

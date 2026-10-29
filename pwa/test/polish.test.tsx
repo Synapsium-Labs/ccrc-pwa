@@ -5,7 +5,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, render, screen } from '@testing-library/react';
 import type { FleetSession } from '../../shared/api';
-import { fleetSession as baseSession } from './fleetFixture';
+import { fleetSession as baseSession, DEAD_LIFECYCLE } from './fleetFixture';
 import { initTheme, type ThemeMedia } from '../src/lib/theme';
 import { navigate } from '../src/lib/router';
 import { AttachButton } from '@ccrc/ui';
@@ -102,7 +102,7 @@ describe('SessionScreen status fallback', () => {
     });
     const fleet = createFleetStore({ makeSocket: fakeSocket });
     act(() => {
-      fleet.setState({ conn: 'open', sessions: [fleetSession({ status: 'dead' })] });
+      fleet.setState({ conn: 'open', sessions: [fleetSession({ status: 'dead', lifecycle: DEAD_LIFECYCLE })] });
     });
     render(<SessionScreen id="claude:ProjectC" store={store} fleet={fleet} />);
     expect(screen.getByText(/chat is read-only/i)).toBeInTheDocument();
@@ -116,7 +116,7 @@ describe('SessionScreen status fallback', () => {
     });
     const fleet = createFleetStore({ makeSocket: fakeSocket });
     act(() => {
-      fleet.setState({ conn: 'open', sessions: [fleetSession({ status: 'dead' })] });
+      fleet.setState({ conn: 'open', sessions: [fleetSession({ status: 'dead', lifecycle: DEAD_LIFECYCLE })] });
     });
     render(<SessionScreen id="claude:ProjectC" store={store} fleet={fleet} />);
     expect(screen.queryByText(/chat is read-only/i)).not.toBeInTheDocument();

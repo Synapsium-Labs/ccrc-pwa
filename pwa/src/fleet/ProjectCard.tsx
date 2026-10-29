@@ -224,7 +224,7 @@ function ProjectCardView({
   nowMs?: number;
   /** The coordinator session by id, looked up FLEET-WIDE — it may sit on
    *  another card, in an archive fold, or nowhere this pass. Feeds
-   *  `coordPresence`, the same three-answer read the runs board uses (D-1129);
+   *  `coordinatorPresence`, the same read the runs board uses (D-1129, D-7181);
    *  `null` there reads as `unknown`, never as dead. Default: nothing known. */
   coordOf?: (id: string) => FleetSession | null;
   /** `stores/fleet.ts`'s `fleetFrameSeen`: without it a coordinator absent from

@@ -13,7 +13,7 @@ import { fleetSession } from './fleetFixture';
 import { childRunContext, coordinationLine, coordinationOf, fleetTree, parentIdOf } from '../src/fleet/fleetTree';
 import { orphanNote } from '../src/fleet/orphanWords';
 import { runBelongsTo, runForSession } from '../src/fleet/runWords';
-import { coordPresence } from '../src/fleet/coordWords';
+import { coordinatorPresence } from '../src/fleet/presence';
 import { cardFacts, headerFacts, sessionFacts } from '../src/fleet/sessionFacts';
 import { ProjectCard } from '../src/fleet/ProjectCard';
 import type { FleetRow } from '../src/fleet/nestFleet';
@@ -61,7 +61,7 @@ const depth0 = (s: FleetSession): FleetRow => ({ kind: 'session', depth: 0, sess
 /** The session header's facts, wired exactly as `SessionScreen` wires them. */
 const headerInput = (s: FleetSession, runs: readonly RunSummary[]) => {
   const pid = parentIdOf(s, runs);
-  const presence = pid === null ? null : coordPresence(pid, lookup(pid), true);
+  const presence = pid === null ? null : coordinatorPresence(pid, lookup(pid), true);
   return sessionFacts({
     session: s, now: NOW, childRun: childRunContext(s, runs, lookup), coordinator: presence,
   });

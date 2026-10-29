@@ -506,6 +506,7 @@ way; the refusal on a missing `diff` comes from the skill installers it then run
 | `ccd-pool-sync.timer`, `ccd-update-sync.timer` | fleet | 60 s | pull the account-pool and update projections from the server | — |
 | `ccrc-update-watchdog.timer` | server, both | 60 s | re-measures a self-update that died with its updater ("Releases") | — |
 | `ccd-history-sweep.timer` | fleet, both | 2 min | copies every rostered home's transcripts verbatim, secrets a session printed included, into the store `ccrc history` reads ("Session history", below) | `~/.ccrc/history-off` |
+| `ccd-land-probe.timer` | fleet, both | 5 min | measures, for each project opted in by `~/.ccrc/landing/<project>.conf`, which open PRs conflict with the base and each other, the base's required checks, and each workspace branch's lineage of clean base merges, read-only ("Conflict radar", below) | `~/.cc-sessions/land-probe-paused`; per project `~/.cc-sessions/landing/<project>/paused` |
 | `ccd-graph-sweep.timer` | fleet, both | 15 min | refreshes per-tree code graphs | `~/.ccrc/graph-sweep-paused` |
 | `ccd-account-health.timer` | fleet, both | 15 min | probes each setup-token account's credential, spending no tokens | `~/.ccrc/account-health-paused` |
 | `ccd-telemetry-keepalive.timer` | fleet, both | 15 min | one minimal turn on an idle measured account (below) | `~/.ccrc/keepalive-paused` |
@@ -4421,16 +4422,19 @@ who replaces both files is not stopped. `ws-expire`, `ws-collect`, `ws-audit --s
 `ws-audit --session <id> --collect` are decided the same way.
 
 **After a box move.** Each registry row's entry field (`$REG/<id>.workdirid`) records the device and inode of the
-directory its session entered, and the rows rung refuses a child while any other row cannot be placed. A registry
-copied onto new hardware with its trees keeps the old host's identities, so on Linux the rung places such a row by its
-path instead, for the overlap check only and with nothing written: when the recorded device is a real one that no
-line of this host's mount table carries, is the device of no target the walk measured, and the recorded path stands
-now, is where the row's workdir resolves and is that same directory. A row gets a fresh field the next time its
-session starts. Still held after a move, by design: a tree copied within one file system (its recorded device is
+directory its session entered, and the rows rung refuses a child while any other row cannot be placed. A registry copied
+onto new hardware with its trees keeps the old host's identities, so on Linux the rung places such a row by its path
+instead, for the overlap check only and with nothing written: when the recorded device is a real one that no line of
+this host's mount table carries, is the device of no target the walk measured, and the recorded path stands now, is
+where the row's workdir resolves and is that same directory. That holds whether or not the child's own tree still
+stands: a child whose tree has vanished asks the table for those devices alone. A row gets a fresh field the next time
+its session starts. Still held after a move, by design: a tree copied within one file system (its recorded device is
 mounted here), an anonymous device (a btrfs subvolume or an overlay, which a mount table need not list), a row whose
-recorded path is gone or no longer resolves to its workdir, a row whose field reads `pending`, and every row on
-Darwin, which has no table. The refusal's detail names those rows and its remedy: stop each session and start it
-again, which writes a fresh field, or purge the row once its session has ended. The next reclaim pass then places it.
+recorded path is gone or no longer resolves to its workdir, a row whose field reads `pending`, and every row on Darwin,
+which has no table. The refusal's detail names those rows and its remedy: stop each session and start it again, which
+writes a fresh field, or purge the row once its session has ended. The next reclaim pass then places it. One hold
+weakens until then: a gone row's recorded identity still names the old host's device, so the check that holds a child
+when a checkout inside it is that row's moved tree matches no checkout; git's record of the tree still holds it.
 
 **The temp-root collector (child reclamation waves 7 and 9; the lane ships shadowed).** A child's temp root,
 `$HOME/.cc-tmp/<id>`, that outlives its workspace — a reclaim tail kept it because a process still used it or ccd's
@@ -5993,6 +5997,129 @@ roughly 8 passes at the sweep's own budget (`CCRC_GRAPH_BUDGET=8` builds/pass). 
 shrink-refusal literal the build discriminator greps for (the comment at its check in
 `ccd/ccd-graph-sweep`) against the new version's installed `watch.py`/`export.py` before shipping —
 the message has already moved once between minor versions.
+
+### Conflict radar (ccd-land-probe)
+
+`ccd-land-probe` runs from `ccd-land-probe.timer` every five minutes on a `fleet` or `both` box (Linux). It measures
+each project the operator has opted in, and nothing else. A project is opted in by a hand-written
+`~/.ccrc/landing/<project>.conf`, and nothing in the tree writes one. Per opted-in project, each tick measures three
+things:
+
+- **Conflicts.** Which open pull requests conflict with the base, and which pairs of them conflict with each other.
+  This uses `git merge-tree` on the head shas gh reports. Only heads whose branch is a registered workspace's are
+  paired, at most ten of them, highest PR number first. A head's `id` names the registry row whose branch it is;
+  `id` null means no row names the head's branch, or more than one row does, or the registry could not be listed;
+  the record does not say which.
+- **Base health.** Whether the base tip's required checks are green. The required set is the union of the
+  branch's rulesets (every page of them) and its protection. Each name is judged by its newest check run, pinned to its App where the rule
+  names one. A combined status counts only for a name no App is pinned to.
+- **Lineage.** For each workspace branch in the registry, the chain of clean base merges from its tip: each step
+  is a two-parent merge whose second parent is on the base, and whose tree equals what `merge-tree` gives for its
+  parents. The walk stops at the first step that is not such a merge, after at most eight steps.
+
+It writes four JSON files, each `"v": 1`, under `~/.cc-sessions/landing/<project>/`:
+
+| file | what it holds |
+|---|---|
+| `probe` | the heads, the pairs and each one's verdict (`clean`, `conflict` with its paths, or `unmeasured` with a why) |
+| `main-health` | `green`, `red` or `unmeasured`, with the required names, the failing ones and those not yet proven |
+| `<id>.lineage` | one registry row's branch tip and its proven chain of clean base merges |
+| `enabled` | the mirror of the conf's `lineage=on`, with its own time |
+
+Anything the probe cannot measure is written as `unmeasured` with a why, and never as clean or green. That
+covers a failed fetch or gh call, a git child past its deadline (`timeout`), and an error before the first write.
+A child the project budget cut says `why: budget`, and so does a step the spent budget kept from starting. That
+happens at each of these: the scratch's `init`, the fetch URL's `ls-remote --get-url`, the fetch itself and the
+fetched base's `rev-parse` (in `probe` and `main-health`); every `merge-tree` of a head or a pair (in `probe`); the
+forge reads behind the base's checks (the rules, the branch view, the check runs and the status, in `main-health`);
+and the lineage walk, which checks the budget before each step and says `budget` for its `rev-list`, `merge-base`,
+`merge-tree` and tree reads (in a lineage file). A budget cut on the first read of `remote.origin.url`, whether the
+read itself was cut or `store.before`'s count had already spent the budget, writes `probe` `repo-unreadable`,
+`main-health` `fetch-failed`, and the lineage files `repo-unreadable` as the lineage pass decides them (below).
+`fetch-failed` also covers a scratch, alternates or refspec failure before the first write, since the probe's set
+has no closer word. A failed or cut fetch, or an error before the first write, rewrites `probe`, `main-health` and
+the project's lineage files, so none of them keeps an older measurement, with three exceptions. When the registry
+cannot be listed, no lineage file is written or removed. A row is held, and its file left as it was, when its
+registry `.project` or `.branch` exists but cannot be read, or when its `.branch` starts with `ws/` but does not
+name a well-formed branch after it (corrupt registry content, such as a NUL byte, `ws/a~0` or `ws/a.lock`); each
+case logs its own `lineage-skip:` line. And a signal leaves the lineage files as they were only when it is recorded
+before the last read checkpoint the tick's route passes through. Recorded later on a failed or cut fetch, or when no
+GitHub repository could be read from the origin URL, it lets the rewrite and the removal of stale files finish. On a measured
+base, rows rewritten before a later row's walk checkpoint raises stay rewritten. The before-first-write fallback
+raises at no checkpoint, so it always finishes. On every route, `probe` and `main-health` are this tick's by the
+time the lineage files are written; a signal at the fetch's own checkpoint, before any write, leaves the old ones
+standing and runs no fallback. On a measured base, a row the tick could not decide keeps its last lineage file,
+with that file's own `at`: when the budget ran out after the fetch, or when one row's read timed out, was killed or
+answered anything but a sha (rc 0) or rc 1. On a failed or cut fetch, when no GitHub repository could
+be read from the origin URL, or in the before-first-write fallback, such a row with an old file is rewritten unmeasured with
+`tip: null`. The last file also stands when the tick never reached the project, when the registry could not be
+listed, and, on every route, when the row is held. rc 1 is git's answer that
+the ref is not there: a missing ref, and also one git itself ignores as broken or cannot read. That row is decided,
+its file is removed, and stage 4 reads the absence as `lineage-unmeasured`. For a
+kept file, stage 4 compares its tip with the live tip. In `probe`, a null `store.after` or `scratch.sizeKiB` means
+that figure was not measured on that tick, for example because the tick was interrupted or the count failed.
+
+`enabled` is reconciled in one pass at the start of every tick that runs, before any project is measured. It is
+written for a valid conf with `lineage=on`, an unpaused project and a real main checkout, and removed in every other
+case. Its writes are therefore as far apart as the tick starts, whatever the order or budgets of the projects. Every
+removal first checks that `~/.cc-sessions/landing/` and the project's directory are real, owned directories.
+
+**The conf.** UTF-8 `key=value` lines, with no spaces around `=`; blank lines and `#` lines are ignored. There are
+two keys: `base`, a branch name that defaults to `main`, and `lineage`, `on` or `off`, which defaults to `off`. An
+empty conf turns the radar on with lineage off. A repeated or unknown key, a bad value, or a conf that is not a
+regular UTF-8 file makes the project `conf-invalid`, and so does a `base` the git door would refuse. That project is not measured, its `enabled` is removed, and the
+journal names the reason (never the bytes).
+
+**The pauses.** The operator writes both by hand, and the tree has no writer for either:
+- `~/.cc-sessions/land-probe-paused` stops the whole tick before its lock.
+- `~/.cc-sessions/landing/<project>/paused` stops one project.
+
+A paused project is not measured, and its `enabled` is removed, so a pause stops acceptance as well as measurement.
+`ccrc uninstall` removes the units, the binary and every `enabled` file.
+
+**Read-only, by code.** The fetch and every `merge-tree` object go into a per-tick bare scratch repository under
+the temp root. That repository borrows the project's object store as an alternate. It is removed on every exit path,
+SIGTERM included, and no child is left running: a SIGTERM or SIGINT never raises where it lands. The handler records
+the signal and SIGKILLs the process group of the child in flight; no child is started after it, and the interruption
+is raised only at fixed checkpoints (after each measuring child, before the pre-pass, before each project and after
+the last). So the scratch's removal, the stale sweep and every file write run to their end, and the tick exits with
+128 plus the signal's number. The probe changes no content, ref, config, hook or object set of a
+project repository. The one thing it does touch is modification times: when `merge-tree` produces an object the
+project already has, git freshens that object's loose file or pack mtime instead of writing a copy. Every such object
+is one the project already holds. Three layers hold this:
+1. **The git door.** Every git call goes through `git_ro`, which owns a fixed hardening prefix. It allows only the
+   subcommands in its two allowlists, and each of them accepts only the exact options the probe's own call sites
+   pass. Any other option is refused, which covers a file-writing `--output=`, an abbreviated long option and
+   `cat-file --textconv`. An option form is checked wherever its element stands, before an operand or after one, so
+   an allowed form after an operand is allowed and an unlisted one there is refused. `--end-of-options` is refused.
+   Only the fetch takes a `--`, and after it the door refuses every element that starts with `-`; the elements
+   there are its URL and refspecs, which the call site builds. The fetch child keeps five `GIT_*` variables (its
+   `FETCH_KEEP` set: `GIT_SSH`, `GIT_SSH_COMMAND`, `GIT_ASKPASS`, `GIT_SSL_CAINFO` and `GIT_SSL_CAPATH`). The first
+   three name commands that git runs for the fetch's own transport, like its credential helper.
+2. **Two gh call sites.** gh is reached through `gh api` with `GET` and through `gh pr list`, and each names the
+   repository. `gh pr list` is a GraphQL query, which `gh` sends as a POST, and it is a read. Every other child's
+   environment drops the `GIT_*` variables that could re-point or reconfigure it (the fetch child keeps the five
+   above), and the gh child also drops `GH_REPO` and `GH_HOST`.
+3. **Literal source pins** in `server/test/ccd-land-probe-readonly.test.ts`. They forbid `push`, a PR merge,
+   `update-branch`, any gh method but `GET`, a third call site, and the spawn names (`os.system`, `pty.spawn`, an
+   aliased import of `subprocess` or `os`, and the rest of the banned list) by their literal spellings. A syntax-tree
+   census of the embedded program holds its imports to a pinned list, module names and aliases both and wherever the
+   statement stands, and holds out the dynamic builtins (`__import__`, `eval`, `exec`, `compile`, `getattr`,
+   `setattr`, `vars`, `globals`, `locals`, `__builtins__`) as bare names, and `__dict__`, `__import__`,
+   `__builtins__`, `__globals__`, `f_globals` and `f_locals` as attributes. The known limit, measured by planting each
+   route: a pin cannot see what names a value only as a string, through an object's own `__getattribute__` (the name
+   whole or built from pieces), or a refused builtin reached as an attribute of the builtins module. The planting
+   evidence for every layer is the wave's measured mutation rows, not that test file.
+
+One git child runs outside `git_ro`. With the project as an alternate, `git fetch` itself starts a `for-each-ref`
+against the project repository to read the alternate's refs. Git starts it inside the fetch, with the project's config
+and without the probe's `-c` settings, and it reads refs only. The other children git starts during the fetch run in
+the scratch, under the prefix. A `core.alternateRefsCommand` in the operator's own config is one of the fetch's own
+config-driven commands, like its credential helper and its ssh command.
+
+`ccrc doctor`'s `land-probe` check reads these files, and so does a person. Nothing else reads them yet: wave 4 of
+the landing-order programme adds the lineage acceptance, which reads `enabled` and the `.lineage` files, and wave 4b
+adds the server's reader and the PWA chip.
 
 ### Temp-dir reaper (ccd-tmp-sweep)
 

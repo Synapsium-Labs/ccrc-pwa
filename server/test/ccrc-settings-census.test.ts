@@ -120,6 +120,7 @@ const ENV_ONLY: Record<string, { cls: EnvOnlyClass; why: string }> = {
   CCRC_DOCTOR_GH_TIMEOUT: { cls: 'call-bound', why: 'The header above its `:=` default in ccd/ccrc-doctor-checks bounds one `gh auth status` call so a test need not wait out a production timeout.' },
   CCRC_DOCTOR_DOCS_TIMEOUT: { cls: 'call-bound', why: 'The header above its `:=` default in ccd/ccrc-doctor-checks bounds one `ccd docs-index --all` call, overridable for the gh knob\'s reason.' },
   CCRC_SCOPE_SWEEP_STALE_S: { cls: 'call-bound', why: '`_check_scope-sweep` uses it as the age past which one verdict record reads stale.' },
+  CCRC_LAND_PROBE_STALE_S: { cls: 'call-bound', why: '`_check_land-probe` uses it as the age past which the conflict radar\'s probe and main-health files read stale.' },
   CCRC_SCOPE_SETTLE_SEC: { cls: 'call-bound', why: '`_check_scopes` waits this settle inside one scope measurement.' },
   // fixture path: a path, endpoint or permission a test points elsewhere.
   CCRC_CADDY_SYSTEM_FILE: { cls: 'fixture-path', why: 'Its header in ccd/ccrc says it is overridable so the suite can point the root-owned Caddyfile at a fixture.' },
