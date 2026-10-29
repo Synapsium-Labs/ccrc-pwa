@@ -4434,8 +4434,13 @@ export const RATE_LIMIT_ERROR = 'rate_limit';
  * simply ignore.
  */
 export type ChatEvent =
-  | { kind: 'user'; uuid: string; ts: string; text: string }
-  | { kind: 'assistant'; uuid: string; ts: string; text: string }
+  | { kind: 'user'; uuid: string; ts: string; text: string; compaction?: true }
+  | { kind: 'assistant'; uuid: string; ts: string; text: string;
+      /** On either arm, `true` when this row is a /compact recap (D-7186): Claude Code marked the record
+       *  `isCompactSummary`, or its text opens with the recap sentence the PWA folds by (the pattern, moved to
+       *  `server/src/transcript/parse.ts` unchanged). Absent otherwise, never `false`; absence-permits, so an older
+       *  PWA ignores the key and folds by its own copy of the pattern. Set by the parser, read by no PWA yet. */
+      compaction?: true }
   | { kind: 'tool_use'; uuid: string; ts: string; toolId: string; name: string; input: string; truncatedBytes?: number }
   | { kind: 'tool_result'; ts: string; toolId: string; text: string; isError: boolean; truncatedBytes?: number }
   | { kind: 'system'; uuid: string; ts: string; text: string; origin?: SystemOrigin;
