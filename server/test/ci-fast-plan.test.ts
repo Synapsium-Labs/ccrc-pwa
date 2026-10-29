@@ -10,7 +10,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { fastSelection, relatedFromVitestList, guardTests, parseUntraced, scanShape, scansSourceTree, treeScanners, GUARD_TESTS, PIN_MAP_CARRIED, SCANNER_MAX_MS, TREE_READER, SESSION_HOOK_TRIGGERS } from '../../.github/ci/fast-plan.mjs';
+import { fastSelection, relatedFromVitestList, guardTests, parseUntraced, blankComments, scanShape, scansSourceTree, treeScanners, GUARD_TESTS, PIN_MAP_CARRIED, SCANNER_MAX_MS, TREE_READER, SESSION_HOOK_TRIGGERS } from '../../.github/ci/fast-plan.mjs';
 import { liveTestFiles, vitestFollows } from '../../.github/ci/select-tests.mjs';
 import { untracedOutput } from '../../.github/ci/select.mjs';
 
@@ -137,7 +137,11 @@ describe('the tree scanners: every test that lists a source tree itself runs on 
   it('the scanners this tree has are found, each by the call that lists a source root', () => {
     const memo = new Map();
     for (const f of ['fleetio-contract', 'coord-routes-single-file', 'landing-words', 'no-routing-keystroke-from-server', 'readme-holds',
-      'run-binding', 'license', 'module-format']) {
+      'run-binding', 'license', 'module-format',
+      // Namespaced and spread calls (`fs.readdirSync(`, `[...walk('ccd')]`), a package dir with 'src' joined on, a name
+      // assigned in a beforeAll, `path.dirname(<a helper's ccd/ccd>)`, a default parameter aliasing a root.
+      'ccd-id-cap', 'ws-collect-wiring', 'ccd-tmux-anchor', 'ccd-collect-recycle-pins', 'child-reclaim-generation',
+      'transcript-ladder', 'whitelist-subset', 'ccd-reg-id-ok', 'macos-platform', 'registry-refused-census', 'fleet-health']) {
       expect(scansSourceTree(`server/test/${f}.test.ts`, read, memo), f).not.toBeNull();
     }
     // Through a census helper: the test calls a helper's scanner, and lists nothing itself.
@@ -163,13 +167,30 @@ describe('the tree scanners: every test that lists a source tree itself runs on 
     expect(scans("readFileSync(path.join(REPO, 'shared'), 'utf8'); readdirSync(tmp);")).toBe(false);
     // A loop variable is bound for the loop's body only, not for a later call that reuses the name.
     expect(scans("for (const f of ['server/src']) {\n  x(f);\n}\nreaddirSync(f);")).toBe(false);
+    // Reached through a namespace or an object, or spread: the name lists, whatever it is reached through.
+    expect(scans("const root = path.join(REPO, 'server/src');\nfs.readdirSync(root);")).toBe(true);
+    expect(scans("fsp.readdir(path.join(REPO, 'shared'));")).toBe(true);
+    expect(scans("fs.promises.readdir(path.join(REPO, 'pwa', 'src'));")).toBe(true);
+    expect(scans("function walk(d) { return fs.readdirSync(d).flatMap((n) => walk(n)); }\nconst all = [...walk('ccd'), ...walk('server/src')];")).toBe(true);
+    // A name bound to a package dir, with 'src' joined on; never with a subdirectory joined after it.
+    expect(scans("const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');\nreaddirSync(path.join(root, 'src'));")).toBe(true);
+    expect(scans("const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');\nreaddirSync(path.join(root, 'src', 'coord'));")).toBe(false);
+    // A name declared first and assigned a root later (a beforeAll): bound for its declaration's block.
+    expect(scans("describe('x', () => {\n  let SRC_DIR = '';\n  beforeAll(() => {\n    SRC_DIR = path.resolve(here, '..', '..', 'agent', 'src');\n  });\n  it('y', () => {\n    readdirSync(SRC_DIR);\n  });\n});")).toBe(true);
+    // The directory of a file directly in a root; a default parameter that aliases a root binding.
+    expect(scans("const CCD = path.resolve(__dirname, '../../ccd/ccd');\nconst ccdDir = path.dirname(CCD);\nreaddirSync(ccdDir);")).toBe(true);
+    expect(scans("const srcRoot = path.resolve(here, '..', 'src');\nconst sources = (dir = srcRoot) =>\n  readdirSync(dir);\nsources();")).toBe(true);
+    // A root after another literal segment is a fixture's path, not the tree; an array of roots is still roots.
+    expect(scans("readdirSync(join(home, '.local', 'bin', 'ccd'));")).toBe(false);
+    expect(scans("['deploy', 'ccd'].flatMap((d) => walk(path.join(REPO, d)));\nfunction walk(x) { return readdirSync(x); }")).toBe(true);
   });
 
   it('a scanner whose file measured over SCANNER_MAX_MS is left to the merge queue; an unmeasured one runs', () => {
     const light = 'server/test/fleetio-contract.test.ts';
     const scanners = treeScanners(live, read).map((s) => s.file);
     expect(scanners).toContain(light);
-    const heavyOne = scanners.find((f) => !GUARD_TESTS.some((re) => re.test(f)) && f !== light) ?? '';
+    // A scanner that is neither a pattern guard nor a TREE_READER, so the cap is the only thing that can drop it.
+    const heavyOne = scanners.find((f) => !GUARD_TESTS.some((re) => re.test(f)) && !TREE_READER.test(read(f)) && f !== light) ?? '';
     expect(heavyOne).not.toBe('');
     const guards = guardTests(live, read, { [light]: 100, [heavyOne]: SCANNER_MAX_MS + 1 });
     expect(guards).toContain(light);
@@ -177,6 +198,54 @@ describe('the tree scanners: every test that lists a source tree itself runs on 
     expect(guardTests(live, read, {})).toContain(heavyOne);
     // The cap never drops a pattern guard.
     expect(guardTests(live, read, { 'server/test/deviation-refs.test.ts': 10 * SCANNER_MAX_MS })).toContain('server/test/deviation-refs.test.ts');
+  });
+
+  // The rule's recall, checked against a deliberately broad net: every server test whose code names a source root and
+  // lists a directory in any form is either found by the rule or excused here, by name, with its reason. A scanner the
+  // rule misses fails here, on the pull request that adds it, instead of slipping to the merge queue.
+  it('SELF-CHECK: every server test that names a source root and lists a directory is found, or excused by name', () => {
+    const Rq = String.raw`['"\x60](?:(?:server|pwa|agent)\/src|shared|ccd|deploy)\/?['"\x60]`;
+    const NAMES_ROOT = new RegExp([
+      String.raw`['"\x60](?:\.\.\/)*(?:server|pwa|agent)\/src\/?['"\x60]`,
+      String.raw`['"\x60](?:\.\.\/)*(?:shared|ccd)\/['"\x60]`,
+      String.raw`(?:join|resolve)\(\s*[\w$.]*(?:repo|root|here|dirname)[\w$.]*(?:\([^()\n]*\))?\s*,\s*(?:['"\x60]\.\.['"\x60]\s*,\s*)*['"\x60](?:shared|ccd)['"\x60]\s*\)`,
+      String.raw`\[\s*${Rq}(?:\s*,\s*${Rq})+\s*\]`,
+      String.raw`['"\x60](?:server|pwa|agent|\.\.)['"\x60]\s*,\s*['"\x60]src['"\x60]\s*\)`,
+      String.raw`\b[\w$]*(?:repo|root|here|server|pkg)[\w$]*\s*,\s*['"\x60]src['"\x60]\s*\)`,
+    ].join('|'), 'i');
+    const LISTS_DIR = /\b(?:readdirSync|readdir|opendirSync|opendir|globSync|glob)\s*\(/;
+    const EXCUSED: Record<string, string> = {
+      'server/test/auth-passkey.test.ts': 'walks four ccd/*-skill subdirectories, not a root',
+      'server/test/ccd-account-auth.test.ts': 'lists ccd/lib, a subdirectory; its other listings are fixture registries',
+      'server/test/ccrc-codex-bridge.test.ts': 'hands the ccd dir to python as an argv path; lists only fixture dirs and /proc',
+      'server/test/ccrc-codex-lifecycle.test.ts': 'symlinks shared into a fixture box; lists only fixture dirs',
+      'server/test/ccrc-models-advance.test.ts': 'symlinks shared into a fixture box; lists deploy (not a source root)',
+      'server/test/ccrc-models-lock.test.ts': 'symlinks shared into a fixture box; lists only fixture dirs',
+      'server/test/ccrc-models.test.ts': 'symlinks shared into a fixture box; lists deploy and fixture dirs',
+      'server/test/ccrc-update-fetch.test.ts': 'expects a path under the ccd dir in argv; lists only fixture dirs',
+      'server/test/ccrc-wrappers.test.ts': 'reads single files from the ccd dir; lists only fixture dirs',
+      'server/test/child-reclaim-generation-lane.test.ts': 'reads single files from server/src; lists a fixture registry',
+      'server/test/ci-trace-run.test.ts': 'writes a fixture script that links shared; walks server/test, not a source root',
+      'server/test/models-op.test.ts': 'rewrites an import to the shared dir; lists only fixture dirs',
+      'server/test/session-hook.test.ts': 'quotes `ccd/` in an expected sentence; lists only fixture registries',
+      'server/test/token-rotation-real-verb.test.ts': 'compares argv against the ccd dir; lists only fixture dirs',
+    };
+    const memo = new Map();
+    const missed: string[] = [];
+    const candidates: string[] = [];
+    for (const f of live.filter((x) => x.startsWith('server/test/'))) {
+      const code = blankComments(read(f));
+      if (!NAMES_ROOT.test(code) || !LISTS_DIR.test(code)) continue;
+      candidates.push(f);
+      if (scansSourceTree(f, read, memo) === null && !(f in EXCUSED)) missed.push(f);
+    }
+    expect(candidates.length, 'the net caught the scanners it was built from').toBeGreaterThan(50);
+    expect(missed, 'tree scanners the rule does not find: teach scansSourceTree their shape, or excuse a fixture-only file in EXCUSED').toEqual([]);
+    // An excuse stays honest: it names a file the net still catches and the rule still does not find.
+    for (const [f, why] of Object.entries(EXCUSED)) {
+      expect(candidates, `${f} (${why}) is no longer caught by the net: drop its excuse`).toContain(f);
+      expect(scansSourceTree(f, read, memo), `${f} is found by the rule now: drop its excuse`).toBeNull();
+    }
   });
 
   it('the map-carried pins stay out even when they scan', () => {

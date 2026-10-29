@@ -73,30 +73,44 @@ export const TREE_READER = /\b(?:execFileSync|spawnSync|execSync|execFile|spawn)
 // shows in the merge queue. `scansSourceTree` finds them from the source, by shape:
 //   - a source root spelled as a literal: `'server/src'`, `'pwa/src'`, `'agent/src'`, `'shared'`, `'ccd'`, or the
 //     segments `'server', 'src'` / `serverRoot, 'src'` / `'..', 'src'` (from server/test, server/src) — the directory itself, never a
-//     file or subdirectory under it, and never one joined onto a base that does not name the repository (a fixture's
-//     `join(home, 'ccd')` is not the tree);
-//   - a name bound to one: a `const` whose value spells a root (for the rest of its block), and a loop or an array
-//     callback over such a value (for its body);
+//     file or subdirectory under it, never one joined onto a base that does not name the repository (a fixture's
+//     `join(home, 'ccd')` is not the tree) or after another literal segment (`join(h, 'older-tree', 'ccd')`); a
+//     leading `../` is allowed (`'../../pwa/src'`), and an array of roots is roots (`['deploy', 'ccd']`);
+//   - a name bound to one: a `const` whose value spells a root (for the rest of its block), a name declared first and
+//     assigned one later (a `beforeAll`; for its declaration's block), an alias of one (a default parameter
+//     `dir = srcRoot`), `path.dirname(<a file directly in a root>)` (a helper's `CCD`, `ccd/ccd`), a package dir with
+//     `'src'` joined on (`path.join(root, 'src')`, `root` the server package), and a loop or an array callback over
+//     such a value (for its body);
 //   - a LISTER: readdirSync / readdir / opendirSync / globSync / glob, or a function the module defines or imports
-//     from a helper under server/test that calls a lister (the repo's walkers: `walk`, `sourceFiles`, `walkSrc`…);
+//     from a helper under server/test that calls a lister (the repo's walkers: `walk`, `sourceFiles`, `walkSrc`…),
+//     however it is reached: `fs.readdirSync(`, `fsp.readdir(`, `io.readdir(`, `fs.promises.readdir(`, `[...walk(`;
 //   - a SCANNER: a lister called on a root, or a function that calls a scanner (`sitesOf(REPO, ['server/src'], …)`,
 //     the census helpers' `ccdCallGraph()`).
-// A test file scans when its own code calls a scanner. Comments are blanked first.
+// A test file scans when its own code calls a scanner. Comments are blanked first. ci-fast-plan.test.ts's SELF-CHECK
+// holds the rule's recall: every server test that names a root and lists a directory is found, or excused by name.
 
 const ROOT_DIRS = String.raw`(?:server\/src|pwa\/src|agent\/src|shared|ccd)\/?`;
 const Q = '[\'"`]';
 /** A source root spelled as a literal; another segment may follow only when it is a root too. */
-export const SOURCE_ROOT = new RegExp(String.raw`(?:${Q}${ROOT_DIRS}${Q}|${Q}(?:server|pwa|agent|\.\.)${Q}\s*,\s*${Q}src${Q}|\b(?:server|pwa|agent)[\w$]*\s*,\s*${Q}src${Q}|${Q}\.\.\/src\/?${Q})(?!\s*,\s*${Q}(?!${ROOT_DIRS}${Q}))`, 'g');
+export const SOURCE_ROOT = new RegExp(String.raw`(?:${Q}(?:\.\.\/)*${ROOT_DIRS}${Q}|${Q}(?:server|pwa|agent|\.\.)${Q}\s*,\s*${Q}src${Q}|\b(?:server|pwa|agent)[\w$]*\s*,\s*${Q}src${Q}|${Q}\.\.\/src\/?${Q})(?!\s*,\s*${Q}(?!${ROOT_DIRS}${Q}))`, 'g');
 /** A base a root may be joined onto: one that names the repository or the test's own directory. */
 const REPO_BASE = /repo|root|here|dirname|import\.meta/i;
 const FS_LISTERS = ['readdirSync', 'readdir', 'opendirSync', 'globSync', 'glob'];
 const IDENT = '[A-Za-z_$][\\w$]*';
 const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
-/** Does `text` spell a source root (not one joined onto a non-repository base)? */
+/** Does `text` spell a source root (not one joined onto a non-repository base, nor under another literal segment)? */
 function spellsRoot(text) {
   for (const m of text.matchAll(SOURCE_ROOT)) {
-    const base = /(?:join|resolve)\(\s*([^,()]+?)\s*,\s*(?:['"`]\.\.['"`]\s*,\s*)*$/.exec(text.slice(0, m.index));
+    // The literal segments written before it in the same call: only `'..'` may sit between a base and a root
+    // (`join(home, '.local', 'bin', 'ccd')` and `join(h, 'older-tree', 'ccd')` are a fixture's files, not the tree).
+    // An array or another call's arguments (`['deploy', 'ccd']`) is a list of roots, not a path.
+    const before = text.slice(0, m.index);
+    const segs = /(?:['"`][^'"`\n]*['"`]\s*,\s*)*$/.exec(before)[0];
+    const head = before.slice(0, before.length - segs.length);
+    const inJoin = /(?:join|resolve)\(\s*(?:[^,()]+?\s*,\s*)?$/.test(head);
+    if (inJoin && [...segs.matchAll(/['"`]([^'"`\n]*)['"`]/g)].some((x) => x[1] !== '..')) continue;
+    const base = /(?:join|resolve)\(\s*([^,()]+?)\s*,\s*$/.exec(head);
     if (!base || REPO_BASE.test(base[1])) return true;
   }
   return false;
@@ -105,7 +119,7 @@ function spellsRoot(text) {
 /** Comments blanked, newlines kept. One left-to-right pass, so whichever opens first wins: a `/*` inside a string
  *  (a `'**' + '/*.ts'` glob) is the string's, a `//` inside a string stays (server/test/sourceScan.ts's reading). */
 const CODE_OR_COMMENT = /('(?:\\.|[^\\'\n])*'|"(?:\\.|[^\\"\n])*"|`(?:\\[\s\S]|[^\\`])*`)|\/\*[\s\S]*?\*\/|\/\/[^\n]*/g;
-const blankComments = (s) => s.replace(CODE_OR_COMMENT, (m, str) => (str !== undefined ? m : m.replace(/[^\n]/g, ' ')));
+export const blankComments = (s) => s.replace(CODE_OR_COMMENT, (m, str) => (str !== undefined ? m : m.replace(/[^\n]/g, ' ')));
 
 const indentAt = (src, idx) => src.slice(src.lastIndexOf('\n', idx - 1) + 1).match(/^[ \t]*/)[0].length;
 /** Where the code that starts at `idx` ends: the first later line indented less than it (`block`: the rest of the
@@ -128,13 +142,67 @@ function definedFunctions(src) {
   return [...src.matchAll(re)].map((m) => ({ name: m[1] ?? m[2], start: m.index + m[0].length, end: regionEnd(src, m.index, false) }));
 }
 
-/** `covers(text, at)`: does `text`, at offset `at`, spell a root or name a binding to one in scope there? */
-function rootCover(src) {
-  /** @type {Array<{ name: string, start: number, end: number }>} */
+/** A name used as itself (`NAME`, `...NAME`), never a member of something else (`x.NAME`) or a piece of a string. */
+const usedName = (name, tail = String.raw`(?![\w$'"\x60])`) => new RegExp(String.raw`(?<![\w$'"\x60])(?<!(?:^|[^.])\.)${esc(name)}${tail}`);
+/** A package directory's value (`path.join(here, '..')` from server/test, `path.join(REPO, 'server')`): one that
+ *  would spell a source root with `'src'` joined on. Its first line only, ending in the call's closing paren. */
+function spellsPackageDir(value) {
+  const v = value.split('\n')[0].trim().replace(/;$/, '').trim();
+  return v.endsWith(')') && !spellsRoot(v) && spellsRoot(`${v.slice(0, -1)}, 'src')`);
+}
+/** A file directly in a source root (`path.resolve(__dirname, '../../ccd/ccd')`, `path.join(REPO, 'ccd', 'ccd')`):
+ *  the value spells a root once its last segment is dropped. `path.dirname(<it>)` is that root. */
+function spellsFileInRoot(value) {
+  const v = value.split('\n')[0].trim().replace(/;$/, '').trim();
+  const last = /,\s*(['"`])([^'"`\n]+)\1\s*\)$/.exec(v);
+  if (!last || last[2] === '..' || spellsRoot(v)) return false;
+  const cut = last[2].includes('/') ? `${last[1]}${last[2].slice(0, last[2].lastIndexOf('/'))}${last[1]}` : '';
+  return spellsRoot(`${v.slice(0, last.index)}${cut === '' ? '' : `, ${cut}`})`);
+}
+
+/** `covers(text, at)`: does `text`, at offset `at`, spell a root or name a binding to one in scope there? A binding
+ *  is a `const`/`let` whose value spells a root, a name assigned one after its declaration (`let SRC_DIR = ''` then
+ *  `SRC_DIR = path.resolve(…, 'agent', 'src')` in a `beforeAll`: bound for the declaration's block), `<package dir
+ *  binding>, 'src'` (`path.join(root, 'src')` where `root` is the server package), and a loop or array callback over
+ *  one (for its body). */
+function rootCover(src, importedFiles = new Set()) {
+  /** @type {Array<{ name: string, start: number, end: number, pkg?: boolean }>} */
   const bound = [];
-  const covers = (text, at) => spellsRoot(text) || bound.some((b) => at >= b.start && at < b.end && new RegExp(`(?<![\\w$.'"\`])${esc(b.name)}(?![\\w$'"\`])`).test(text));
-  for (const m of src.matchAll(new RegExp(`\\b(?:const|let)\\s+(${IDENT})\\s*(?::[^=\\n]{0,80})?=\\s*([^;]{0,300})`, 'g'))) {
-    if (spellsRoot(m[2])) bound.push({ name: m[1], start: m.index, end: regionEnd(src, m.index, true) });
+  /** Names bound to a file directly in a root (`CCD`, a helper's `ccd/ccd`), and where. */
+  const files = [];
+  const fileIn = (name, at) => importedFiles.has(name) || files.some((b) => b.name === name && inScope(b, at));
+  const inScope = (b, at) => at >= b.start && at < b.end;
+  const covers = (text, at) => spellsRoot(text) || bound.some((b) => inScope(b, at) && (b.pkg
+    ? usedName(b.name, String.raw`\s*,\s*${Q}src${Q}(?!\s*,\s*${Q})`).test(text)
+    : usedName(b.name).test(text)));
+  const seen = new Set();
+  const bind = (name, at, value, declared) => {
+    if (seen.has(`${name}@${at}`)) return;
+    // A later assignment is bound from its declaration when one comes before it, else from the assignment.
+    const span = () => {
+      const decls = declared ? [] : [...src.slice(0, at).matchAll(new RegExp(String.raw`\b(?:let|var)\s+${esc(name)}\b`, 'g'))];
+      const from = decls.length > 0 ? decls[decls.length - 1].index : at;
+      seen.add(`${name}@${at}`);
+      return { name, start: from, end: regionEnd(src, from, true) };
+    };
+    if (spellsFileInRoot(value)) { files.push(span()); return; }
+    const dir = new RegExp(String.raw`^\s*(?:path\.)?dirname\(\s*(${IDENT})\s*\)\s*(?:[),;]|$)`).exec(value);
+    // An alias of a root binding (`dir = srcRoot`, a default parameter), never of a package one.
+    const alias = new RegExp(String.raw`^\s*(${IDENT})\s*(?:[),;:]|$)`).exec(value);
+    const root = spellsRoot(value);
+    const pkg = !root && spellsPackageDir(value);
+    if (!(pkg || root || (dir && fileIn(dir[1], at)) || (alias && alias[1] !== name && bound.some((b) => !b.pkg && b.name === alias[1] && inScope(b, at))))) return;
+    bound.push({ ...span(), pkg });
+  };
+  const DECL = new RegExp(`\\b(?:const|let)\\s+(${IDENT})\\s*(?::[^=\\n]{0,80})?=\\s*([^;]{0,300})`, 'g');
+  // A later assignment: `NAME = value`, not `==`/`=>`, not a member (`x.NAME =`) and not a declaration (seen above).
+  const ASSIGN = new RegExp(String.raw`(?<![\w$.])(${IDENT})[ \t]*=(?![=>])[ \t]*(?=([^;\n]{0,300}))`, 'g'); // the value is looked at, not consumed: `f = (dir = SRC)`
+  const assigns = [...src.matchAll(ASSIGN)].filter((m) => !/[\w$.][ \t]*$/.test(src.slice(Math.max(0, m.index - 24), m.index))
+    && !/^(?:const|let|var|null|undefined|true|false|this)$/.test(m[1]));
+  const decls = [...src.matchAll(DECL)];
+  for (let pass = 0; pass < 2; pass++) {
+    for (const m of decls) bind(m[1], m.index, m[2], true);
+    for (const m of assigns) bind(m[1], m.index, m[2], false);
   }
   for (let pass = 0; pass < 2; pass++) {
     for (const m of src.matchAll(new RegExp(`\\bfor\\s*\\(\\s*(?:const|let)\\s+(${IDENT})\\s+of\\s+([^)\\n]{0,300})\\)`, 'g'))) {
@@ -144,26 +212,30 @@ function rootCover(src) {
       if (covers(m[1], m.index)) bound.push({ name: m[2], start: m.index, end: regionEnd(src, m.index, false) });
     }
   }
+  covers.files = files.map((b) => b.name);
   return covers;
 }
 
-/** The calls `name(args…` to any of `names` in `src` between `from` and `to` (args: the rest of that line). */
+/** The calls `name(args…` to any of `names` in `src` between `from` and `to` (args: the rest of that line). A call
+ *  through a namespace or an object (`fs.readdirSync(`, `fsp.readdir(`, `io.readdir(`, `fs.promises.readdir(`) and a
+ *  spread one (`[...walk('ccd')]`) count: the name is what lists, whatever it is reached through. */
 function callsTo(src, names, from = 0, to = src.length) {
   if (names.size === 0) return [];
-  const re = new RegExp(`(?<![\\w$.])(${[...names].map(esc).join('|')})\\(([^;\\n]{0,300})`, 'g');
+  const re = new RegExp(`(?<![\\w$])(${[...names].map(esc).join('|')})\\(([^;\\n]{0,300})`, 'g');
   return [...src.slice(from, to).matchAll(re)].map((m) => ({ name: m[1], args: m[2], at: from + m.index }));
 }
 
 /**
- * One module's listers and scanners, and the first call of its own that scans a source root (`hit`, or null).
- * `imported` carries the listers and scanners its helper imports bring, under the names this module uses.
- * @param {string} raw @param {{ listers: Set<string>, scanners: Set<string> }} [imported]
- * @returns {{ listers: Set<string>, scanners: Set<string>, hit: string | null }}
+ * One module's listers, scanners and names bound to a file directly in a root, and the first call of its own that
+ * scans a source root (`hit`, or null). `imported` carries what its helper imports bring, under the names this module
+ * uses (a helper's `CCD = path.resolve(__dirname, '../../ccd/ccd')` makes `path.dirname(CCD)` the ccd root here).
+ * @param {string} raw @param {{ listers: Set<string>, scanners: Set<string>, files?: Set<string> }} [imported]
+ * @returns {{ listers: Set<string>, scanners: Set<string>, files: Set<string>, hit: string | null }}
  */
-export function scanShape(raw, imported = { listers: new Set(), scanners: new Set() }) {
+export function scanShape(raw, imported = { listers: new Set(), scanners: new Set(), files: new Set() }) {
   const src = blankComments(raw);
   const fns = definedFunctions(src);
-  const covers = rootCover(src);
+  const covers = rootCover(src, imported.files ?? new Set());
   const listers = new Set([...FS_LISTERS, ...imported.listers]);
   const scanners = new Set(imported.scanners);
   const scans = (c) => scanners.has(c.name) || (listers.has(c.name) && covers(c.args, c.at));
@@ -176,19 +248,20 @@ export function scanShape(raw, imported = { listers: new Set(), scanners: new Se
     }
   }
   const hit = callsTo(src, new Set([...listers, ...scanners])).find(scans);
-  if (hit) return { listers, scanners, hit: `${hit.name}(${hit.args}`.slice(0, 120) };
+  const files = new Set(covers.files);
+  if (hit) return { listers, scanners, files, hit: `${hit.name}(${hit.args}`.slice(0, 120) };
   // A lister handed to an iteration over roots: `ROOTS.flatMap(sources)`.
   const named = [...listers].map(esc).join('|');
   const passed = [...src.matchAll(new RegExp(`(\\[[^\\]\\n]{0,300}\\]|${IDENT})\\s*\\.(?:flatMap|map|forEach)\\(\\s*(${named})\\s*\\)`, 'g'))]
     .find((m) => covers(m[1], m.index));
-  return { listers, scanners, hit: passed ? passed[0].slice(0, 120) : null };
+  return { listers, scanners, files, hit: passed ? passed[0].slice(0, 120) : null };
 }
 
 /**
  * Does the test (or helper) at `file` list a source tree itself? Its helper imports under server/test are read with
  * `readSource` too, so a test that calls a census helper's scanner scans. Returns the scanning call, or null.
  * @param {string} file repo-relative @param {(file: string) => string} readSource
- * @param {Map<string, { exports: { listers: Set<string>, scanners: Set<string> }, hit: string | null }>} [memo]
+ * @param {Map<string, { exports: { listers: Set<string>, scanners: Set<string>, files: Set<string> }, hit: string | null }>} [memo]
  * @returns {string | null}
  */
 export function scansSourceTree(file, readSource, memo = new Map()) {
@@ -198,12 +271,12 @@ export function scansSourceTree(file, readSource, memo = new Map()) {
 function moduleScan(file, readSource, memo, stack) {
   const known = memo.get(file);
   if (known) return known;
-  const none = { exports: { listers: new Set(), scanners: new Set() }, hit: null };
+  const none = { exports: { listers: new Set(), scanners: new Set(), files: new Set() }, hit: null };
   if (stack.has(file)) return none;
   stack.add(file);
   let src;
   try { src = readSource(file); } catch { return none; }
-  const imported = { listers: new Set(), scanners: new Set() };
+  const imported = { listers: new Set(), scanners: new Set(), files: new Set() };
   for (const m of src.matchAll(/\bimport\s*\{([^}]*)\}\s*from\s*['"](\.\.?\/[^'"]+)['"]/g)) {
     const target = path.posix.normalize(path.posix.join(path.posix.dirname(file), m[2])).replace(/\.[cm]?js$/, '.ts');
     if (!target.startsWith('server/test/') || /\.test\.ts$/.test(target)) continue;
@@ -213,10 +286,11 @@ function moduleScan(file, readSource, memo, stack) {
       if (!orig) continue;
       if (helper.exports.listers.has(orig)) imported.listers.add(alias ?? orig);
       if (helper.exports.scanners.has(orig)) imported.scanners.add(alias ?? orig);
+      if (helper.exports.files.has(orig)) imported.files.add(alias ?? orig);
     }
   }
   const shape = scanShape(src, imported);
-  const result = { exports: { listers: shape.listers, scanners: shape.scanners }, hit: shape.hit };
+  const result = { exports: { listers: shape.listers, scanners: shape.scanners, files: shape.files }, hit: shape.hit };
   memo.set(file, result);
   return result;
 }
