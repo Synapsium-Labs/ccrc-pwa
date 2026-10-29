@@ -30,8 +30,7 @@
 // Plain ESM with no npm imports, like `shared/mark.mjs`, so `deploy/` and the tests can run it with a bare `node`.
 
 import { readFileSync, realpathSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { markGenerated, verifyMarker } from './mark.mjs';
 
 /** The hook's project/session-id shape, bounds and read cap: one definition. */
@@ -187,7 +186,7 @@ if (startedAsScript()) {
   const ccd = readFileSync(ccdPath, 'utf8');
   const row = regionOf(target);
   // The `apicap` row renders from the hook beside the given ccd; no other row reads it.
-  const hook = row?.source === 'hook' ? readFileSync(join(dirname(ccdPath), 'session-hook.sh'), 'utf8') : undefined;
+  const hook = row?.source === 'hook' ? readFileSync(fileURLToPath(new URL('session-hook.sh', pathToFileURL(ccdPath))), 'utf8') : undefined;
   if (mode === '--restamp') {
     // One line for `ccrc restamp`: nothere | refused-missing | current | regenerated.
     let v;
