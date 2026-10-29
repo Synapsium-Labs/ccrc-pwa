@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { CCD, WS_ADD, ghContainedEnv, ccdSource } from './ccdWsHelpers.js';
-import { CFG_DIR, GH_STUB, landedRow, makePrHarness, mergedRow, trainComment, trainRow, type PrHarness } from './ccdPrHelpers.js';
+import { CFG_DIR, GH_STUB, landedRow, makePrHarness, mergedRow, trainBlock, trainComment, trainRow, trainTable, type PrHarness } from './ccdPrHelpers.js';
 import { describeLinux, describeDarwin, itLinux } from './platformFixtures.js';
 
 let h: PrHarness;
@@ -445,7 +445,7 @@ describe('a PR closed as landed in a merge train', () => {
     expect(a.token).toMatch(/^[0-9a-f]{64}$/);
   });
 
-  it('proves BOTH members of one train that edited the same hunk', () => {
+  it('proves BOTH members of one train that edited the same hunk: one block lists both', () => {
     // The train resolved the two edits together, so neither member's tree is
     // in the landing commit: a merge of either tip into it conflicts. The
     // train record lists each at its own head, and that is the proof.
@@ -543,6 +543,63 @@ describe('a PR closed as landed in a merge train', () => {
     const { wt, train } = trainLanded();
     h.ghView(50, trainRow(50, train, [[42, 'c'.repeat(40)]]));
     expect(refusal(wt).verdict).toBe('not-merged');
+  });
+
+  it('REFUSES when the train PR body has only the human table and list, no ccrc-train block', () => {
+    // The table and a `- #42 <sha>` list are for people and never parsed:
+    // only the block is the record (D-7335).
+    const { wt, tip, train } = trainLanded();
+    h.ghView(50, trainRow(50, train, [[42, tip]], { body: `Merge train.\n\n${trainTable([[42, tip]])}` }));
+    const a = refusal(wt);
+    expect(a.verdict).toBe('not-merged');
+    expect(a.detail).toContain('ccrc-train');
+  });
+
+  it('REFUSES when the block is not on lines of its own', () => {
+    const { wt, tip, train } = trainLanded();
+    h.ghView(50, trainRow(50, train, [[42, tip]],
+      { body: `Merge train. <!-- ccrc-train v1 member #42 ${tip} -->\n` }));
+    const a = refusal(wt);
+    expect(a.verdict).toBe('not-merged');
+    expect(a.detail).toContain('ccrc-train');
+  });
+
+  it('REFUSES when the body carries two ccrc-train blocks', () => {
+    // Exactly one block: a second one (a stale copy, a quoted body) makes the
+    // record ambiguous, whichever of them lists the member.
+    const { wt, tip, train } = trainLanded();
+    h.ghView(50, trainRow(50, train, [[42, tip]],
+      { body: `${trainBlock([[42, tip]])}\n${trainBlock([[43, 'b'.repeat(40)]])}` }));
+    const a = refusal(wt);
+    expect(a.verdict).toBe('not-merged');
+    expect(a.detail).toContain('ccrc-train');
+  });
+
+  it('REFUSES when a line inside the block is not a member line', () => {
+    const { wt, tip, train } = trainLanded();
+    h.ghView(50, trainRow(50, train, [[42, tip]],
+      { body: `<!-- ccrc-train v1\nmember #42 ${tip}\n- #43 ${'b'.repeat(40)}\n-->\n` }));
+    const a = refusal(wt);
+    expect(a.verdict).toBe('not-merged');
+    expect(a.detail).toContain('ccrc-train');
+  });
+
+  it('REFUSES when the block lists this member twice', () => {
+    const { wt, tip, train } = trainLanded();
+    h.ghView(50, trainRow(50, train, [[42, tip]],
+      { body: trainBlock([[42, tip], [42, tip]]) }));
+    const a = refusal(wt);
+    expect(a.verdict).toBe('not-merged');
+    expect(a.detail).toContain('ccrc-train');
+  });
+
+  it('REFUSES when the block never closes', () => {
+    const { wt, tip, train } = trainLanded();
+    h.ghView(50, trainRow(50, train, [[42, tip]],
+      { body: `<!-- ccrc-train v1\nmember #42 ${tip}\n` }));
+    const a = refusal(wt);
+    expect(a.verdict).toBe('not-merged');
+    expect(a.detail).toContain('ccrc-train');
   });
 
   it('REFUSES when the train PR does not list this member — #420 never names #42', () => {

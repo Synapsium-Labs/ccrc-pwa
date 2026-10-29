@@ -116,12 +116,24 @@ export const landedRow = (headOid: string, over: Record<string, unknown> = {}): 
 export const trainComment = (train: number): Record<string, unknown> =>
   ({ comments: [{ body: `Landed in train #${train}.` }] });
 
-/** A train PR `number`, MERGED as `mergeOid`, whose body lists each member as
- *  `- #<n> <head sha>`. */
+/** The human half of a train PR body: the table a reader sees, and a plain
+ *  `- #<n> <head sha>` list. Never parsed — a body with only this proves nothing. */
+export const trainTable = (members: Array<[number, string]>): string =>
+  `| PR | head |\n| --- | --- |\n${members.map(([n, sha]) => `| #${n} | ${sha} |`).join('\n')}\n\n`
+  + `Members:\n${members.map(([n, sha]) => `- #${n} ${sha}`).join('\n')}\n`;
+
+/** The ONE machine-readable train record (D-7335): an HTML comment on its own
+ *  lines, `<!-- ccrc-train v1`, one `member #<n> <40-hex head sha>` line per
+ *  member, then `-->`. */
+export const trainBlock = (members: Array<[number, string]>): string =>
+  `<!-- ccrc-train v1\n${members.map(([n, sha]) => `member #${n} ${sha}`).join('\n')}\n-->\n`;
+
+/** A train PR `number`, MERGED as `mergeOid`, whose body carries the human
+ *  table and the `ccrc-train v1` block listing each member at its head sha. */
 export const trainRow = (number: number, mergeOid: string, members: Array<[number, string]>,
   over: Record<string, unknown> = {}): Record<string, unknown> => ({
   number, state: 'MERGED', mergedAt: '2026-07-21T08:59:00Z', mergeCommit: { oid: mergeOid },
   baseRefName: 'main', isCrossRepository: false,
-  body: `Merge train.\n\nMembers:\n${members.map(([n, sha]) => `- #${n} ${sha}`).join('\n')}\n`,
+  body: `Merge train.\n\n${trainTable(members)}\n${trainBlock(members)}`,
   ...over,
 });
