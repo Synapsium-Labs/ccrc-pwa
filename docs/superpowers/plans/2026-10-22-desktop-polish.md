@@ -241,6 +241,10 @@ C1 (registry reads; the one bounded pool) ──┬── C3 (the tick: one regi
 C6 (the fleet store's fan-out) ── C8 (one accounts poll) ──┬── C9 (the fleet list memo)
                                                             └── C7 (the chat's rows and highlight cache; after T1c too)
 
+--- G: programme boxes (the operator approved prototype v6, 2026-10-29) ---
+G2 (a programme is a box, both skins) ── G3 (Instrument's Status view: programmes, not children)
+G1 (a run says when it last moved; when claim 2921 is released; wires into G2)
+
 --- T5: finding things (the operator's note of 2026-10-23), as slots free ---
 T5a (the top search finds sessions, after the commands, coordinators first; after #1158)
 ```
@@ -1999,6 +2003,11 @@ already makes the desk strip one line by default; R120 adds two things to this t
 
 **Acceptance.** On a phone, in both skins, the folded strip shows two measured lines of the freest lanes, and one tap on "+n more" opens every lane in a panel over the page, in order, each card a door. A tap outside, Escape, or the control again closes it. Lanes at 95% or more sit together at the bottom of the live lanes, soonest reset first. At the desk nothing changes, except that Shift+Tab back onto a card opens the flyout. Every case is green, every mutant red, and the renders are taken before and after.
 
+**Departures, numbered on review 1126 (2026-10-28).**
+- **D-7266** - `phone-tracks-read-drawn`: under the coordinator's answer to ask 174, the phone reads the cards' group's DRAWN tracks (its computed `grid-template-columns`) through `useRowWidth.ts`, which is outside the task's Files. `useRowWidth` drops its `enabled` parameter and measures at every width. The phone grid has no card floor, since its tracks come from a viewport breakpoint, so no floor is written anywhere.
+- **D-7267** - `app-test-phone-control-names-panel`: `pwa/test/app.test.tsx` (outside Files, claim 2876). Its assertion that the control's `aria-controls` names the strip's group becomes desk-only, because on a phone the control names the panel.
+- Review 1126 F7: "Show fewer" exists only while the strip is expanded, and then there is no flyout. So D-7253's list of origins is in effect "+n more" and All accounts.
+
 **Rollback.** A plain revert. The per-device key keeps its desk meaning throughout.
 
 ### Task C0: measure the console's responsiveness (research, no PR) — after T0
@@ -2809,7 +2818,14 @@ time. **Rollback.** A plain revert.
 | 12 | review 1117 A5 (T2f) | `README.md` ≈:3193 | the fleet-board prose names the skin and width where `Runs · N active` sits beside the Class chooser |
 | 13 | review 1120 F1 to F5 and F8 (T3e) | the inspector files, `chat.css`, `CommandLayer.tsx` | a red for the Inspector door's chat.css selector; a guard that the rail reads the one shown fact (the reviewer's m3b); the focus case runs `flipInspector`; prose in the test header and `inspectorShown.ts`; the shortcuts sheet lists only the keys that act where it is opened (or says where they act) |
 | 14 | T3e's slugs | `pwa/test/w7-storage-keys.test.ts`, the inspector | `w7-keys-strip-row-missing`: `stripExpanded.ts` (`ccrc-accounts-strip`) gets its row, and the header's census count reads 12; `t3e-target-slot-helper` as T3e's report names it |
-| 15 | review 1115 F8 to F12 residue (T3b) | only what T3b's last fix round leaves | anything that round names as a residual |
+| 16 | CI at T3b's 1497f442a | `pwa/browser/lanes-row.browser.test.ts`, "a click's focus never holds the flyout … closes within the grace" | the case asserts a close at no sooner than 230 ms against a 250 ms grace, and a loaded runner measured 208 ms; bound it on the timers rather than on wall time, so it cannot flake |
+| 17 | CI at T3b's 1497f442a | `pwa/browser/inspector-hide.browser.test.ts`, "under touch emulation at 1600 the toggle is at least 44 px" | a sub-pixel height (43.99999 px) failed an integer floor of 44 on a loaded runner, though the same merge passed 7 of 7 before; compare rounded or with a tolerance below one device pixel |
+| 15 | review 1130 A, D2, E, F, H and I (T3b, its last round) | `pwa/src/skins/instrument/instrument.css` (≈:360-378), `pwa/test/instrument-list.test.tsx` (≈:648-670), `pwa/browser/row-fit.browser.test.ts` (≈:421-427), `pwa/src/fleet/SessionLine.tsx` (≈:206), `pwa/src/fleet/fleet.css` (≈:3585), T3b's task note | the note says the arm never exceeds the no-arm height and names the three rows it shortens; the 1 px state-word offset beside the name is accepted and the comment says so; the float comment names its dependency on the context's own formatting context (`display: flex`), pinned in the unit case; the rule pin drops its two inert assertions and its comment describes the block layout; row-fit's two comments say where a 26-character name fits; "cut only as one unbroken token" is weakened to what is measured |
+| 18 | review 1124 A-2, A-4, A-6, A-7 and A-8 (T2f) | `pwa/browser/fleet-toggle-row.browser.test.ts`, `pwa/browser/instrument-desk.browser.test.ts` (≈:303), `pwa/test/fleet-class-chooser.test.tsx` (≈:35), `pwa/test/fleet-css.test.ts` (≈:1271) | the toggle row's overlap and cut checks see an option running under the chooser; its fixed waits give way to a measured settle, page errors are read and 150% and 200% are separate cases; "inside the bar" is measured top and bottom too; the A3 footer says which row source text catches; the re-pointed header check reads code, not comments |
+| 19 | the operator, 2026-10-28 (D-7281) | `pwa/src/skins/instrument/instrument.css` (`.ins-topbar`, ≈:64), `pwa/src/styles/shell.css` (`.shell-accounts`, ≈:111), `pwa/browser/lanes-row.browser.test.ts` | the top bar's command field and New session sit clear of the lanes row: a gap under them at least the cards' own gap, red first in real Chrome |
+| 20 | review 1131 A1, A2, A3, A5 and A9 (S5c) | `pwa/src/fleet/AccountsStrip.tsx` (≈:60-62, ≈:208-238), `pwa/browser/refined-phone.browser.test.ts` (≈:19), `pwa/test/accounts-strip.test.tsx` (≈:907) | the panel's focus fallback moves focus only when it is on the page, so a stale held flag never takes it off All accounts after two polls (red first); a poll that leaves no live lane hands a panel card's focus to the placeholder door, not the page; the 438 claim says not measured here; the header names the fallback and the handled-Escape rule; the comments say the palette and the ask sheet stop Escape in the capture phase |
+| 21 | review 1132 A0, A1, A3, A4, A5, A6 and A7 (C7) | `pwa/test/clock.test.ts`, `pwa/src/session/ChatList.tsx` (≈:79), `pwa/src/screens/SessionScreen.tsx` (≈:313), `pwa/test/chat-memo.test.tsx` (≈:3), `pwa/test/markdown-highlight.test.tsx` (≈:182), C7's task note | a case that pins `dayKey` reads the LOCAL date whatever the runner's zone (a getUTC* mutant reds under TZ=UTC); the day reaches only the rows that read the clock, or the two comments say what is true; the chat-memo header names the day exception; the weight-bound case computes its markup once; the note's divider, mutation-row and fixture-count wording is exact, and a zone change that keeps the local date is named as a residual |
+| 22 | review 1133 A1 and review 1135 AF1 (C9) | `server/test/rings/` (the ring tests), `pwa/src/fleet/FleetCards.tsx` (≈:12-13) | a case pins that `pwaRing` answers L4 for `pwa/src/fleet/openers.ts` by its header, red when the header goes; FleetCards' header qualifies "rebuilt only when roll.next moves" with "with the same fleet, preferences and selection" |
 
 **Steps.**
 - [ ] **Step 0: Re-ground.** Read every report, re-anchor each item against `main`, and drop any item a later merge already fixed, saying so. Measure the live claims. Report the list you will do and the list that waits.
@@ -2818,8 +2834,206 @@ time. **Rollback.** A plain revert.
 - [ ] **Step 3: Verify.** Run each touched suite once, the pwa and server typechecks, `deviation-refs`, and the citation and anchor tests that README edits can break.
 
 - **D-7264** - `programme-follow-up-sweep`: Task C12, issued on 2026-10-28. The advisory findings this programme's reviews sent to a later sweep land in one task, one commit per item. Any departure the sweep finds is named by slug and numbered as it is found.
+- **D-7281** - `top-bar-sits-clear-of-the-lanes-row`: Task C12 item 19, issued on 2026-10-28 from the operator's report that the search field does not sit nicely above the accounts bar. At the desk, Instrument's bar line is `--tap-min` tall and its command field and New session fill it top to bottom, and the frame header leaves about 4 px (`.shell-accounts`' padding) before the lanes row's first cards, against the cards' own `--sp-2` gap, so the field and `+` read as resting on the cards. Fix: the bar's controls keep their size and floors, and the space between their bottom edge and the first line of cards is at least the gap between cards (`--sp-2`), with the bar's top gutter matched so the controls sit centred in their line. The header grows by that much, and nothing else in it moves. Refined (its 56 px line) is measured too and changes only if it shows the same fault. A real-Chrome case in lanes-row.browser, red on main's tree, measures the gap from the command field's and New session's bottom edges to the top of the first card, at 900, 1280 and 1920, both skins, fine and coarse pointer, and the controls' heights stay at their floors. The files are T3b's and S5c's until #1703 and #1765 merge.
+- **D-7282** - `c12-note-corrections-in-c12-note`: Task C12, issued on 2026-10-28. The corrections that items 4, 5, 15 and 21 make to earlier task notes (t2d.md, t2b.md, t3b.md and c7.md) go in C12's own new note, c12.md, and no existing note is edited, because the ledger guard refuses an edit to an existing plan note without a ledger-edit trailer. The coordinator folds them on the ledger PR.
+- **D-7283** - `c12-desk-head-case-added`: Task C12 item 4, issued on 2026-10-28. The old desk-width case ran an empty fleet, whose sidebar head draws nothing, so it could not see a stray mail door; a new case with a row covers it.
+- **D-7284** - `c12-slow-first-sequencer-files`: Task C12 item 11, issued on 2026-10-28. Running the browser leg's slowest files first needs a sequencer (`pwa/browser/slowFirst.ts`, wired in `vitest.browser.config.ts` and pinned in `test/browser-leg.test.ts`), which lies outside the item's named files.
+- **D-7285** - `c12-lanes-row-page-clock`: Task C12 item 16, issued on 2026-10-28. Reading the leave time before the pointer moves was measured first and still under-read under load (a close read at 22 ms), because the All accounts route moves the strip out from under the resting pointer before the move. The case now times the close on the page's own clock.
+- **D-7286** - `c12-refined-bar-clear-6px`: Task C12 item 19, under D-7281, issued on 2026-10-28. Refined's bar controls sit centred, 6 px clear of the lanes row's cards, which is not the fault D-7281 fixes (controls resting on the cards), so Refined is unchanged (ask 179), and the case holds Refined to its 6 px.
+- **D-7287** - `c12-day-comments-not-call`: Task C12 item 21 (review 1132 A1), issued on 2026-10-28. The day still reaches every bubble, and the comments in SessionScreen and MessageBubble now say so, rather than the call handing it only to the rows that read the clock. Behaviour is unchanged.
+- **D-7288** - `c12-session-hook-reset-copy-left`: Task C12 item 11, issued on 2026-10-28. `server/test/session-hook.test.ts` keeps its local reset copy, because the file is under another programme's claim, and the request to its holder was withdrawn (11789). It is a residual for a later change once that claim releases.
 
 **Acceptance.** Every item is fixed or named as already fixed, with its commit. Every new guard is red under its mutant, and nothing else changes behaviour. **Rollback.** A plain revert, item by item.
+
+### Task C13: the lanes panel holds only the lanes the line folds away (D-7290) — after #1783 (C12) merges
+
+**Routing:** band 1. **Needs:** C12 (#1783) merged, since its items 9, 16 and 20 edit the strip's files. **Files:** `pwa/src/fleet/AccountsStrip.tsx` (`lanesPanel`, the flyout and the phone's panel), `pwa/src/fleet/stripFold.ts` (`foldLanes`, `foldShown`, `FLYOUT_LABEL`) if the split belongs there, `pwa/src/fleet/fleet.css` and `pwa/src/styles/shell.css` (the panel's tracks) if the cards must align, `pwa/test/accounts-strip.test.tsx`, `pwa/test/refined-phone.test.tsx`, `pwa/test/strip-fold.test.ts`, `pwa/browser/lanes-row.browser.test.ts`, `pwa/browser/refined-phone.browser.test.ts`, and comments and census rows that say the panel holds every lane or draws from the line's list (among them `pwa/src/skins/refined/PhoneHeader.tsx` ≈:8 and `pwa/test/instrument-shell.test.tsx`'s mutation-census row).
+
+**Why.** The operator, 2026-10-28, on a desk screenshot of the open flyout: the flyout repeats the line's cards as its first row, and it should not. A lane already on the line is drawn twice, so the flyout reads as a second copy of the strip rather than the rest of it.
+
+**What.** D-7291: the panel (the desk's flyout, D-7153, and the phone's panel, D-7254) holds ONLY the lanes the folded line does not show, in `lanesByFree`'s order continuing from the line's last card. Every lane is drawn exactly once across the line and the panel, and the panel's count equals the "+n more" control's n. Everything else D-7153, D-7254 and the S5c and C12 fixes hold stands: the open delay and close grace, Escape, the one focus hand-back, the tab order (line, panel, control, All accounts), the line and the panel each their own roving stop for the arrow keys (as on main; corrected on C13's Step 0, since main never crossed between them), the panel drawn over the content, and each card its lane's door. At the desk, the panel's cards sit in the line's own tracks, so its columns line up under the line's.
+
+**Steps.**
+- [ ] **Step 0: Re-ground** on main after #1783, and list every site that builds the panel's lanes, its label and the comments that say "every lane".
+- [ ] **Step 1: Red first.** A jsdom case in accounts-strip asserts that, with seventeen lanes folded to five, no lane id is both on the line and in the panel, the two together are every lane once, and the panel holds the folded twelve in order. A real-Chrome case in lanes-row, at 1280 and 1920 in both skins, asserts the same of the drawn cards and that the panel's first card sits under the line's first track. A refined-phone case at 390 asserts the same of the phone's panel. Each is red on main.
+- [ ] **Step 2: Fix** at the one place the panel takes its lanes, never a second list. Re-word `FLYOUT_LABEL` and every comment that says the panel holds every lane.
+- [ ] **Step 3: Verify.** Run the strip, fold, lanes-row and refined-phone suites and pwa tsc once each. Run the mutants: the panel given every lane again, and the split off by one. Render the open flyout at 1280 in both skins and the phone's panel at 390, before and after.
+
+**Acceptance.** The open flyout and the phone's panel hold only the folded-away lanes, each once, in order, aligned under the line at the desk. Every guard is red under its mutant, and no other strip behaviour changes. **Rollback.** A plain revert.
+
+- **D-7290** - `lanes-panel-holds-only-the-folded-lanes`: Task C13, issued on 2026-10-28 from the operator's report that the open flyout repeats the line's first row.
+- **D-7291** - `panel-never-repeats-the-line`: the operator, 2026-10-28. This supersedes D-7153's "holds EVERY lane card ... the same cards and doors as the expanded strip" and D-7254's "every lane card". The panel holds only the lanes the folded line does not show, in `lanesByFree`'s order, so every lane is drawn exactly once across the line and the panel. The expanded strip, a stored per-device choice, still draws every lane on its own lines.
+
+### Task G2: a programme is a box in its project card, in both skins (D-7331, D-7332)
+
+**Spec:** `docs/superpowers/specs/2026-10-29-programme-boxes-design.md` (§2.1 to §2.6, §2.8, §2.9). The operator approved prototype v6 on 2026-10-29. It is on the brainstorm branch as `2026-10-29-programme-box-prototype-v6.html`, a self-contained page you can open in Chrome. Its left column is the app's own markup from main, with the boxes injected, so it is the visual reference. Where it and the spec differ, the spec wins: one box per coordinator, a tray with no tint, no colour switch.
+
+**Routing:** band 2. **Needs:** none. G1 can land before or after, because the decider takes movement as an input. **Files:**
+- create `pwa/src/fleet/programmeBox.ts` (L1, pure), `pwa/src/fleet/ProgrammeBox.tsx` and `pwa/src/fleet/programmeBox.css` (imported by `ProjectCard.tsx`);
+- modify `pwa/src/fleet/ProjectCard.tsx`, `pwa/src/fleet/rollup.ts`, and `pwa/src/fleet/fleetTree.ts` only if box membership needs the cross-card run index (§2.1, workers elsewhere);
+- in `ui/src/styles/tokens.css`, add the `--prog-*` alias family once, OUTSIDE the generated block;
+- tests: create `pwa/test/programme-box.test.ts`, `pwa/test/programme-box-card.test.tsx` and `pwa/browser/programme-box.browser.test.ts`; modify `pwa/test/contrast.test.ts`, and modify `pwa/test/project-card.test.tsx`, `pwa/test/rollup.test.ts` and `pwa/test/fleet-rollup-render.test.tsx` where they pin the coordinator's summary line;
+- the two-skins spec's §3 lane-hue row (D-7332's amendment).
+
+`fleet.css` is NOT in Files: it is under C13's claim, and the box's rules live in `programmeBox.css`.
+
+**Interfaces (produced, read by G1 and G3):**
+- `export const PROG_HUES = ['cyan', 'violet', 'magenta', 'blue'] as const; export type ProgHue = (typeof PROG_HUES)[number];`
+- `export function assignHues(slugs: readonly string[]): ReadonlyMap<string, ProgHue>`. FNV-1a 32-bit of the slug, modulo 4, is the preferred hue. The slugs are processed in sorted order, and a slug whose preferred hue is taken takes the next free one in `PROG_HUES` order. With more than four slugs, hues repeat from the preferred hue. The function is pure and stable: the same set gives the same map.
+- `export type BoxState = 'needs' | 'stalled' | 'moving' | 'paused';`
+- `export interface ProgrammeBoxView { coordinatorId: string; lead: { slug: string; title: string; hue: ProgHue }; more: number; progress: { wave: number; waveOf: number | null }; children: readonly FleetRow[]; abroad: readonly RunSummary[]; lastMoveAt: number | null; waiting: 'awaiting-review' | 'merging' | null }`
+- `export function programmeBoxes(rows: readonly FleetRow[], runs: readonly RunSummary[], lastMoveOf: (r: RunSummary) => number | null): { boxes: ProgrammeBoxView[]; elsewhere: FleetRow[]; lone: FleetRow[] }`.
+  - The members are `nestFleet`'s parent edge.
+  - The lead programme is the one with the most open work runs; a tie goes to the newest run.
+  - `progress` comes from `programWave` over the lead's work runs; review runs never count.
+  - `lastMoveAt` is the maximum of `lastMoveOf` over the coordinator's open runs. Where every value is null, it falls back to the newest `dispatchedAt ?? openedAt`. With `lastMoveOf = () => null` it is null.
+- `export function boxState(b: ProgrammeBoxView, rowsNeed: boolean, now: number, quietMs: number | null, paused: boolean): BoxState`. The order is `needs`, then `paused`, then `stalled`, then `moving`. It is never `stalled` when `quietMs === null` or `b.lastMoveAt === null` (G1 absent).
+- `export function movementWords(b: ProgrammeBoxView, state: BoxState, now: number): string`. It returns "moved 3m ago", "no move 2h 10m", "no move 2h 10m · awaiting review" or "paused", using `formatElapsed`'s units. It returns '' when `lastMoveAt` is null.
+- `export function boxOrder(a, b)`: needs, then stalled, then moving and paused, then the longest quiet first.
+
+Until G1 lands, `ProjectCard` passes `lastMoveOf = () => null` and `quietMs = null`, and the card has no clock in the app (`nowMs` is a test-only prop). G1 supplies all three: the moves, the threshold, and a clock through the rollup's boundary idiom (`nextRollupBoundary`). That idiom re-renders a card when a box crosses its threshold with no new frame, so the memo holds (review 1152 F1).
+
+**Steps.**
+- [ ] **Step 0: Re-ground** on main. List:
+  - where the card builds rows (`fleetTree` → `rollupCard` → `ProjectCard` ≈:269);
+  - where the coordinator's summary line draws (≈:332-350);
+  - every test that pins that line or the `└─` nest for a coordinator with children;
+  - the contrast census's shape for a token on a ground.
+
+  Confirm that `operatorAsk` is the folded tray's rule.
+- [ ] **Step 1: Red first, the decider** (`programme-box.test.ts`).
+  - `assignHues`: stable across calls and input order; two slugs sharing an FNV bucket get different hues; five slugs repeat exactly one hue.
+  - `programmeBoxes`: a coordinator with three children gives one box whose `children` are those three. A coordinator holding runs of two programmes gives one box, `more === 1`, led by the programme with more work runs. A worker whose coordinator is on another card goes to `elsewhere`, not `lone`. A coordinator with no open run is in `lone`. A review run is not counted in `progress`.
+  - `boxState`:
+    - attention wins over every other state;
+    - `paused` wins over `stalled`;
+    - with `quietMs` 7_200_000, quiet for 7_199_999 ms is `moving` and quiet for 7_200_000 ms is `stalled`;
+    - a null `quietMs` or a null `lastMoveAt` is never `stalled`.
+  - `movementWords`: the four shapes above.
+
+  Show every case red: the module is absent.
+- [ ] **Step 2: Implement `programmeBox.ts`.** It imports L0, `nestFleet`'s types and `runWords`' `programWave` and `programmeTitle` only, never React.
+- [ ] **Step 3: Red first, the card** (`programme-box-card.test.tsx`, jsdom, the rollup fixture).
+  - A project card with one coordinator, three children (one attention) and two lone sessions draws one `section.pg-box` before the lone rows.
+  - Its kicker reads "Programme" and "3/6 waves" when `waveOf` is 6, and "wave 3" with no bar when `waveOf` is null.
+  - The coordinator's row title is the programme title.
+  - Folded, the tray holds only the attention child, with its ask. The footer reads "2 more workers · 1 working", and clicking it shows all three and stores the coordinator id in `openChildren`, the same key and no new one.
+  - The sub-heading "Not in a programme" precedes the lone rows. A worker of a programme elsewhere sits under "Workers of programmes elsewhere".
+  - The box carries `data-hue` from `assignHues`, and `data-state` `needs` while the attention child stands.
+  - A folded project card keeps a `needs` box and says "n more in this project".
+
+  Show each case red on main.
+- [ ] **Step 4: Build `ProgrammeBox.tsx` and `programmeBox.css`.**
+  - `ProgrammeBox.tsx` renders the coordinator's and children's rows through the card's existing `rowBody`, never a second row renderer. The footer is the existing children toggle. The movement readout is a leaf that ticks itself (as `LastActive`), so `ProjectCard`'s memo (C9, D-6441) is not broken; `sameCardProps` keeps passing.
+  - `programmeBox.css`:
+    - a 4 px left rule in `--pg`;
+    - the kicker and coordinator band on `--pg-tint`;
+    - the title, flow icon, progress bar and the tray rows' `.sess-pw-prog` in `--pg`;
+    - the tray on the card's own ground, with no tint;
+    - the outline `--status-attention` for `needs` and `--status-dead` for `stalled`;
+    - no glow, no `box-shadow` bloom.
+
+    Each skin's row metrics come from its own existing rules; add no skin branch.
+  - In `tokens.css`, add `--prog-<hue>: var(--acct-<hue>)` and its `-tint` for the four hues, once in `:root`, outside the generated block. Run `npm run themes:check` in `ui/` (must stay green, since the generated block is untouched).
+- [ ] **Step 5: Contrast.** `contrast.test.ts` gains rows for `--prog-<hue>` on `--prog-<hue>-tint` (4.5:1) and on `surface` (4.5:1), in every palette the census walks. A red row is fixed by changing the ground the CSS uses, never the hue values, and never `make-themes.mjs`.
+- [ ] **Step 6: Browser** (`programme-box.browser.test.ts`). At 390, 1280 and 1920, Refined and Instrument, Phosphor and light, with a fixture of two projects and three programmes (one needs you, one with a hue collision):
+  - no sideways scroll and no page error;
+  - the box's left rule colour equals the computed `--prog-<hue>`;
+  - the kicker band's text and ground pass 4.5:1, measured;
+  - the footer toggle and the ask's buttons are at least 44 px under coarse emulation;
+  - the folded tray shows only the attention child.
+
+  Render before and after, and look at them.
+- [ ] **Step 7: The amendment** (D-7332). Edit the two-skins spec §3's lane-hue row and its table line ≈:117. Lane hues stay the lanes'. A programme box borrows the four cool ones through `--prog-*`, always beside its title in words, never as a chip and never on a lane's card.
+- [ ] **Step 8: Verify.** Run once each:
+  - programme-box, programme-box-card, project-card, rollup, fleet-rollup-render, contrast, instrument-shell and refined-shell;
+  - the browser file plus `instrument-desk.browser`;
+  - pwa tsc and ui `themes:check`.
+
+  Run the mutants:
+  - `assignHues` without the collision step;
+  - `boxState` with `stalled` checked before `paused`;
+  - the tray showing every child while folded;
+  - the hue rule removed from `programmeBox.css`.
+
+**Acceptance.**
+- Every coordinator with an open run is one box in its project card, in both skins, folded to the workers that need you, in its own hue, ordered most urgent first.
+- Lone sessions follow under their sub-headings.
+- No storage key, door or row renderer is added.
+- The contrast census is green in every palette.
+
+**Rollback.** A plain revert. The `--prog-*` aliases go with it, and nothing else reads them.
+
+- **D-7331** - `programme-is-a-box`: Task G2, issued on 2026-10-29 from the operator's approval of prototype v6. A coordinator's open work is one box in its project card (one box per coordinator session, led by its busiest programme): a kicker, the coordinator's row, a tray folded to the workers `operatorAsk` holds for, and the existing children toggle. The box's state is one pure decider: needs, paused, stalled, then moving. Supersedes the coordinator's "n workers · …" summary line as a separate row. `foldChildren`'s rule and `openChildren` are unchanged.
+- **D-7332** - `programme-hue-borrows-the-cool-lane-hues`: the operator approved v6 with the overlap named. A programme's identity hue is one of cyan, violet, magenta and blue, through the `--prog-*` aliases of the `--acct-*` pairs, assigned by `assignHues` (FNV-1a of the slug, collisions to the next free hue). It amends the two-skins spec §3's "same hue per lane" row: the lanes keep their hues, and a programme borrows the four cool ones, always beside its title in words, never glowing, never on a lane's card.
+
+- **D-7337** - `programme-title-rides-the-kicker`: G2's Step 0 departure, ruled 2026-10-29. The programme's title is printed in the box's kicker ("Programme · <title>", in its hue). The coordinator's row keeps the session's own label, so a box names both the programme and the session that runs it, and `SessionLine` takes no new prop. This amends the spec's §2.2, which put the title on the coordinator's row.
+- **D-7338** - `last-move-fallback-belongs-to-the-reader`: G2's Step 0 departure, ruled 2026-10-29. `programmeBoxes`' `lastMoveAt` is the maximum of `lastMoveOf` over the open runs, and null when every value is null. The `dispatchedAt ?? openedAt` fallback belongs to G1's reader at the call site: a server that sent `lastMoveAt: null` falls back, an absent field reads null. So an older server shows no movement, as the spec's §5 says.
+- **D-7340** - `coordinator-band-stays-on-surface`: G2's departure, ruled 2026-10-29. Only the kicker sits on the programme's tint. The coordinator's row stays on the box's own ground, because the session row's inks measure below 4.5:1 on the hue tints in several palettes (for example `--ink-tertiary` on the cyan tint in tokyo-night, 3.70:1). The contrast census pins the kicker's pairs. This amends the spec's §2.8, which also tinted the coordinator band, under its own rule that a red pair changes the ground, never the hue.
+- **D-7341** - `decider-file-named-for-its-export`: G2's departure, ruled 2026-10-29. The pure decider is `pwa/src/fleet/programmeBoxes.ts`, named for its main export, because `programmeBox.ts` beside `ProgrammeBox.tsx` is one file on a case-insensitive disk and `drawer-keybar.test.tsx`'s case census refuses it. Every exported name and type is unchanged. G1 and G3 import from `./programmeBoxes`. On the same CI run, `census-w7/pwa.test.ts`'s `runMatchers()` row (reporting, not ratcheting) moves from 19 to 22, with the three new match sites named in the PR body: fleetTree's `claimed` index, programmeBoxes' claimant lookup, and its call of `runForSession`.
+- **D-7369** - `one-programme-one-hue-across-the-fleet`: ruled on review 1152, 2026-10-29. `assignHues` runs once over every open programme in the fleet (the runs frame's open work runs' slugs), not once per card. So a programme keeps one hue on every card, in a far worker's line and in G3's Status view, and it changes only when the set of open programmes does. Collisions still move to the next free hue in sorted-slug order. Past four open programmes, hues repeat. That is acceptable, because the title in words is always printed. The map is computed once per runs frame. Each card receives only its own programmes' entries, compared by value, so `ProjectCard`'s memo (C9, D-6441) holds. This amends the spec's §2.8, which resolved collisions per card.
+### Task G3: Instrument's Status view shows programmes, not children (D-7333) — after G2
+
+**Spec:** §2.7. **Routing:** band 2. **Needs:** G2 merged (`programmeBoxes.ts`, `ProgrammeBox.tsx`). **Files:**
+- modify `pwa/src/skins/instrument/FleetTable.tsx` (status mode, `StatusTable` ≈:172-330, the phone tabs ≈:79-94) and `pwa/src/fleet/statusGroups.ts`;
+- tests: modify `pwa/test/instrument-list.test.tsx` and its status-mode cases, `pwa/test/instrument-shell.test.tsx` (its mutation census) and `pwa/browser/instrument-desk.browser.test.ts`; create `pwa/test/status-programmes.test.tsx`.
+
+**Interfaces:** consumes G2's `programmeBoxes`, `boxState`, `boxOrder` (from `pwa/src/fleet/programmeBoxes.ts`, D-7341) and `ProgrammeBox`. G2's `ProgrammeBox` takes a `folded: 'needs-only'` mode for this view: no footer, and the kicker names the project ("Programme · project-a").
+
+**Steps.**
+- [ ] **Step 0: Re-ground.** List where status mode buckets rows (`groupByStatus`), where a child's `↳` crumb is built (`parentIdOf`, `childRunContext`), the phone tab model, and every test that pins a child row in status mode.
+- [ ] **Step 1: Red first** (`status-programmes.test.tsx`), on a fixture of two coordinators (one needing you through a child, one quiet past the threshold), five children and four lone sessions (one attention):
+  - no child row is drawn outside a box;
+  - the groups are, in order:
+    - Needs you: the needing box, then the lone attention session;
+    - Programmes: the other box;
+    - then today's groups for the lone sessions;
+  - each group's count equals the rows and boxes it draws;
+  - the needing box's tray shows only the attention child, with its ask;
+  - the bucket bar in project mode is unchanged.
+
+  On a phone (`phoneTab`), Programmes is the tab after Needs you, and the Needs you chip lands on the Needs you tab. Show each case red on main.
+- [ ] **Step 2: Implement.** Add one decider in `statusGroups.ts`, the groups for status mode given the boxes, so `FleetTable` decides nothing. Drop the child crumb path from status mode only, since project mode never used it.
+- [ ] **Step 3: Verify.**
+  - Run once each: instrument-list, instrument-shell, status-programmes, statusGroups' own suite, `instrument-desk.browser` and pwa tsc.
+  - Run the mutants: a child row drawn outside its box; counts taken from sessions instead of drawn rows.
+  - Render the Status view at 1280 and 390, before and after.
+
+**Acceptance.** In Instrument's Status view the operator sees the boxes that need them first, then the other programmes, then the sessions in no programme. No child appears outside its box, and every count matches what it shows. **Rollback.** A plain revert.
+
+- **D-7333** - `status-view-shows-programmes-not-children`: Task G3, the operator's words of 2026-10-28 ("just the coordinators, and only those children that need my action"). In Instrument's Status view a child draws only inside its programme's box, and only while `operatorAsk` holds. The groups are Needs you (boxes, then lone sessions), Programmes, then today's groups for the lone sessions. Every group counts what it draws.
+
+### Task G1: a run says when it last moved (D-7334) — when claim 2921 on `shared/api.ts` and `server/src/server.ts` is released
+
+**Spec:** §2.5. **Routing:** band 2. **Needs:** the other programme's live claim on `shared/api.ts` and `server/src/server.ts` released. The coordinator dispatches G1 then, never earlier. G2 merged, for the one call site to wire. **Files:**
+- modify `shared/api.ts` (`RunSummary.lastMoveAt?`, and the runs frame's `stallQuietMs?` and `coordPaused?`), `server/src/coord/store.ts` (one read: `runLastMoves(runIds)`), `server/src/server.ts` (where the runs frame is composed, ≈:1597), `pwa/src/fleet/runWords.ts` (the one reader, `runLastMove`) and `pwa/src/fleet/ProjectCard.tsx` (the call site G2 left);
+- tests: create `server/test/run-last-move.test.ts`; modify the runs-frame and fleet websocket tests that pin the frame's keys, and `pwa/test/programme-box-card.test.tsx`.
+
+**Interfaces:**
+- `RunSummary.lastMoveAt?: number | null`. Absent means an older server. It is the `at` of the run's newest act: a `run_events` row that is not a stall observation and not `causedBy = 'operator'` (the drift reader's rule; reuse its predicate, never copy it), or a mail row naming the run whose `fromId` is a session id, never the literal `coordinator` or `operator`.
+- On the runs frame: `stallQuietMs?: number` (the stall watch's effective `stallQuietMs`) and `coordPaused?: boolean` (`$REG/coordinator-paused`, as the server already measures it). If the pause is not measured where the frame is composed, record that and leave `coordPaused` out.
+- PWA: `runLastMove(r: RunSummary): number | null` in `runWords.ts`, the one reader. Absent and null both read null. The frame's two fields are read once in the fleet store.
+
+**Steps.**
+- [ ] **Step 0: Re-ground.** Find where the runs frame is composed and pushed, and whether a mail write or a `run_events` write re-pushes it. Movement must reach the app without a clock tick on the server. Find where `stallQuietMs` and the pause marker are read.
+- [ ] **Step 1: Red first.**
+  - `run-last-move.test.ts`, on a `CoordStore` over a temp db:
+    - a dispatch transition sets `lastMoveAt`;
+    - a later worker mail on the run moves it;
+    - a `coordinator`-sent system mail and a stall observation do not;
+    - an operator-caused transition does not;
+    - a run with no act reads null.
+  - The frame test: the frame carries `stallQuietMs` equal to the Settings choice when one is set, else `STALL_QUIET_MS`.
+  - `programme-box-card`: with `lastMoveAt` 2 h 10 m old and `stallQuietMs` 7_200_000, the box reads "no move 2h 10m" and `data-state="stalled"`; with `coordPaused` it reads "paused".
+  - Through `FleetCards` with a real rollup, never the test-only `nowMs`: a box crosses the threshold with no new frame and reads stalled at the boundary. A stalled box on a folded card stays visible with "n more in this project" (review 1152 F1 and F2).
+- [ ] **Step 2: Implement.** The store read is synchronous and indexed (`run_events_by_run`, and mail by `runId`). It is computed once per frame for the open runs only, so the frame's cost stays bounded. Measure the frame's compose time before and after on a store of 200 open runs, and state it.
+- [ ] **Step 3: Verify.**
+  - Run once each: the server's run-last-move, the runs frame and fleet websocket suites, `single-definition`, `box-token-census` (no route is added), pwa programme-box-card and pwa tsc.
+  - Run the mutants: system mail counted; stall observations counted; `stallQuietMs` left off the frame (the box never stalls).
+
+**Acceptance.** A box says when its programme last moved, and reads stalled at the stall watch's own threshold or paused under the operator's pause. An older server or an older app sees no change. **Rollback.** A plain revert. The fields are optional, so nothing else reads them.
+
+- **D-7334** - `a-run-says-when-it-last-moved`: Task G1. `RunSummary.lastMoveAt` is the newest act on the run: a non-stall, non-operator `run_events` row, or a session-sent mail naming the run. The runs frame carries the stall watch's `stallQuietMs` and the operator's pause, so the app's stalled word and the stall watch mean one thing by quiet. Additive, absence-permits.
 
 ## Acceptance (the matrix, per PR)
 
@@ -2983,7 +3197,7 @@ C1's move of B4's limiter into `server/src/bounded.ts` stays under D-6388. Issue
 
 ### R119 departure issued 2026-10-27
 
-`POST /api/ledger/deviations` issued D-7117, D-7118, D-7121, D-7122 to D-7124, D-7139 to D-7142, D-7145, D-7146 to D-7152, D-7153 to D-7154, D-7155 to D-7157, D-7158 to D-7159, D-7160 to D-7163, D-7164, D-7197, D-7201, D-7210, D-7215 to D-7217, D-7218, D-7219, D-7222 to D-7223, D-7233 and D-7234 on 2026-10-27, and D-7248, D-7250 to D-7252, D-7253 to D-7256, D-7257 to D-7261, D-7262 to D-7263 and D-7264 on 2026-10-28, in twenty-eight allocations, and each is defined here in the act that issued it.
+`POST /api/ledger/deviations` issued D-7117, D-7118, D-7121, D-7122 to D-7124, D-7139 to D-7142, D-7145, D-7146 to D-7152, D-7153 to D-7154, D-7155 to D-7157, D-7158 to D-7159, D-7160 to D-7163, D-7164, D-7197, D-7201, D-7210, D-7215 to D-7217, D-7218, D-7219, D-7222 to D-7223, D-7233 and D-7234 on 2026-10-27, and D-7248, D-7250 to D-7252, D-7253 to D-7256, D-7257 to D-7261, D-7262 to D-7263, D-7264, D-7266 to D-7267, D-7281, D-7282 to D-7288 and D-7290 to D-7291 on 2026-10-28, and D-7331 to D-7334, D-7337 to D-7338, D-7340, D-7341 and D-7369 on 2026-10-29, in thirty-seven allocations, and each is defined here in the act that issued it.
 
 - **D-7117** - `c1-secret-mask-wall-clock-to-perf-job`: Task C1, under R119. The required secret-mask case "2 MB TUI pane
   history ... slices" asserts a wall-clock maximum gap (`< BOUND/5`) over about 40 gaps, so one scheduler pre-emption
@@ -3059,7 +3273,7 @@ C1's move of B4's limiter into `server/src/bounded.ts` stays under D-6388. Issue
   the 320 px container rule is kept for wide tablet tracks. Step 3's mutant "the threshold back at 320 px" becomes "the
   desk rule removed". T3b takes R21 F2 / R32 F2's "wrapping name" arm, does not edit `instrument.css`, and reports
   Instrument's 1280 row heights.
-- **D-7252** - `t3b-state-word-arm-never-cuts-a-context`: Task T3b, under R121 Q2 option 1 (the operator, 2026-10-28) and R21 F2. This supersedes D-7145's clause "does not edit `instrument.css`". In Instrument's fine-pointer desk block, a status row whose context sits whole beside its state word puts the state word at the end of the context line, so a long name has the first line or lines to itself. Ruled on review 1115 (F1 and F2): the arm never narrows a context below the width it needs to sit whole. A programme slug and its wave tail, a child marker and a branch keep D-7145's "never cut", and D-5528 and D-5545's "no fact dropped" still holds. Where the context will not fit whole beside the state word, that row lays out as on main, with the state word on a line of its own. No row at the desk widths is taller than on main; a row that would be is laid out as on main. A committed real-Chrome case pins this on needs-you and working rows whose contexts are a programme with its wave tail, a child marker and a long branch. It measures clipping (scroll width against client width) and overlap with the state word, not `textContent`, and compares each row's height with main's.
+- **D-7252** - `t3b-state-word-arm-never-cuts-a-context`: Task T3b, under R121 Q2 option 1 (the operator, 2026-10-28) and R21 F2. This supersedes D-7145's clause "does not edit `instrument.css`". In Instrument's fine-pointer desk block, a status row whose context sits whole beside its state word puts the state word at the end of the context line, so a long name has the first line or lines to itself. Ruled on review 1115 (F1 and F2): the arm never narrows a context below the width it needs to sit whole. A programme slug and its wave tail, a child marker and a branch keep D-7145's "never cut", and D-5528 and D-5545's "no fact dropped" still holds. Where the context will not fit whole beside the state word, that row lays out as on main, with the state word on a line of its own. No row at the desk widths is taller than on main; a row that would be is laid out as on main. A committed real-Chrome case pins this on needs-you and working rows whose contexts are a programme with its wave tail, a child marker and a long branch. It measures clipping (scroll width against client width) and overlap with the state word, not `textContent`, and compares each row's height with main's. Clarified on T3b's fix round 2 (the coordinator, 2026-10-28): "taller than on main" bounds the arm. A row that D-7145's full forms already make taller than main (a two-line long name, a whole branch, a long programme slug) is bounded by its own height without the arm, which the arm never exceeds; the committed case picks rows whose text main draws the same, so it bounds by main exactly.
 - **D-7146** - `identical-frame-ratio-gate`: Task C6, under R119. The browser frame-cost test carries a second gated row
   beyond the plan's one: the identical frames' cost as a ratio of the changing frames' cost, per skin. The plan's row
   is a ceiling only, which a store that re-renders on every identical frame can still pass. The ratio row reds with
