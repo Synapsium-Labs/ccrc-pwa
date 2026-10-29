@@ -206,7 +206,9 @@ afterAll(() => {
 
 type Pin<T> = Record<string, { server: T; unlisted: T; skew: T }>;
 // The pins, written from the old code's run (C7a). A SAME site's vector stays byte-identical through C7c Step 4; a
-// DIFFERS row changes only in C7c Step 6, under OA-C15's ruling, with its before/after in that PR body.
+// DIFFERS row changes only in C7c Step 6, under OA-C15's ruling, with its before/after in that PR body. The four
+// coordinator readers' seven `server` differs rows are the coordinator's two rulings within OA-C15 (a) over the server's
+// `dead`: a substrate stamp over a gone pane reads `unknown` (D-7370), a hibernation stamp reads `hibernated` (D-7371).
 const VERDICTS: Pin<string> = {
   'ArchiveAllPlane.tsx#ArchiveAllConfirm (live panes counted)': {
     server: 'live live live live live live live live live live live live live live live live not-live not-live not-live not-live live live live live not-live not-live not-live not-live not-live not-live not-live not-live not-live not-live not-live not-live not-live not-live not-live not-live not-live not-live not-live not-live not-live not-live not-live not-live not-live not-live not-live not-live not-live not-live not-live not-live',
@@ -237,7 +239,7 @@ const VERDICTS: Pin<string> = {
     unlisted: '- - - -', skew: 'hidden',
   },
   'fleet/presence.ts#coordinatorPresence': {
-    server: 'alive alive alive alive alive alive alive alive alive alive alive alive alive alive alive alive dead dead hibernated hibernated alive alive alive alive dead dead dead dead dead dead dead dead unknown unknown unknown unknown unknown unknown unknown unknown unknown unknown unknown unknown unknown unknown unknown unknown unknown unknown unknown unknown unknown unknown unknown unknown',
+    server: 'alive alive alive alive alive alive alive alive alive alive alive alive alive alive alive alive dead unknown hibernated hibernated alive alive alive alive dead unknown hibernated hibernated dead unknown hibernated hibernated unknown unknown unknown unknown unknown unknown unknown unknown unknown unknown unknown unknown unknown unknown unknown unknown unknown unknown unknown unknown unknown unknown unknown unknown',
     unlisted: 'unknown unknown unknown unknown', skew: 'unknown',
   },
   'groupFleet.ts#groupFleet (stranded count)': {
@@ -273,15 +275,15 @@ const VERDICTS: Pin<string> = {
     unlisted: '- - - -', skew: 'not-listed',
   },
   'orphanWords.ts#orphanNote (coordinatorPresence caller)': {
-    server: 'alive alive alive alive alive alive alive alive alive alive alive alive alive alive alive alive dead dead hibernated hibernated alive alive alive alive dead dead dead dead dead dead dead dead unknown unknown unknown unknown unknown unknown unknown unknown unknown unknown unknown unknown unknown unknown unknown unknown unknown unknown unknown unknown unknown unknown unknown unknown',
+    server: 'alive alive alive alive alive alive alive alive alive alive alive alive alive alive alive alive dead unknown hibernated hibernated alive alive alive alive dead unknown hibernated hibernated dead unknown hibernated hibernated unknown unknown unknown unknown unknown unknown unknown unknown unknown unknown unknown unknown unknown unknown unknown unknown unknown unknown unknown unknown unknown unknown unknown unknown',
     unlisted: 'unknown unknown unknown unknown', skew: 'unknown',
   },
   'RunRow.tsx (coordinatorPresence caller: the Resume door)': {
-    server: 'none none none none none none none none none none none none none none none none resume resume none none none none none none resume resume resume resume resume resume resume resume none none none none none none none none none none none none none none none none none none none none none none none none',
+    server: 'none none none none none none none none none none none none none none none none resume none none none none none none none resume none none none resume none none none none none none none none none none none none none none none none none none none none none none none none none none none',
     unlisted: 'none none none none', skew: 'none',
   },
   'SessionScreen.tsx#SessionScreen (coordinatorPresence caller: the header orphan fact)': {
-    server: 'null null null null null null null null null null null null null null null null gone gone hibernated hibernated null null null null gone gone gone gone gone gone gone gone null null null null null null null null null null null null null null null null null null null null null null null null',
+    server: 'null null null null null null null null null null null null null null null null gone null hibernated hibernated null null null null gone null hibernated hibernated gone null hibernated hibernated null null null null null null null null null null null null null null null null null null null null null null null null',
     unlisted: 'null null null null', skew: 'null',
   },
 };
@@ -462,7 +464,15 @@ const DIFFERS: Pin<string[]> = {
     skew: ['skew · pane gone · lifecycle absent (a server older than ARCH-48)'],
   },
   'fleet/presence.ts#coordinatorPresence': {
-    server: [],
+    server: [
+      'pane gone · stopped · substrate fault',
+      'pane gone · orphan · substrate fault',
+      'pane gone · orphan · hibernated',
+      'pane gone · orphan · hibernated · substrate fault',
+      'pane gone · never-started · substrate fault',
+      'pane gone · never-started · hibernated',
+      'pane gone · never-started · hibernated · substrate fault',
+    ],
     unlisted: ['row absent'],
     skew: [],
   },
@@ -588,17 +598,41 @@ const DIFFERS: Pin<string[]> = {
     skew: [],
   },
   'orphanWords.ts#orphanNote (coordinatorPresence caller)': {
-    server: [],
+    server: [
+      'pane gone · stopped · substrate fault',
+      'pane gone · orphan · substrate fault',
+      'pane gone · orphan · hibernated',
+      'pane gone · orphan · hibernated · substrate fault',
+      'pane gone · never-started · substrate fault',
+      'pane gone · never-started · hibernated',
+      'pane gone · never-started · hibernated · substrate fault',
+    ],
     unlisted: ['row absent'],
     skew: [],
   },
   'RunRow.tsx (coordinatorPresence caller: the Resume door)': {
-    server: [],
+    server: [
+      'pane gone · stopped · substrate fault',
+      'pane gone · orphan · substrate fault',
+      'pane gone · orphan · hibernated',
+      'pane gone · orphan · hibernated · substrate fault',
+      'pane gone · never-started · substrate fault',
+      'pane gone · never-started · hibernated',
+      'pane gone · never-started · hibernated · substrate fault',
+    ],
     unlisted: ['row absent'],
     skew: [],
   },
   'SessionScreen.tsx#SessionScreen (coordinatorPresence caller: the header orphan fact)': {
-    server: [],
+    server: [
+      'pane gone · stopped · substrate fault',
+      'pane gone · orphan · substrate fault',
+      'pane gone · orphan · hibernated',
+      'pane gone · orphan · hibernated · substrate fault',
+      'pane gone · never-started · substrate fault',
+      'pane gone · never-started · hibernated',
+      'pane gone · never-started · hibernated · substrate fault',
+    ],
     unlisted: ['row absent'],
     skew: [],
   },

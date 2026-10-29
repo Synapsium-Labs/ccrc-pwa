@@ -52,6 +52,8 @@ describe('coordinatorPresence — the server\'s word, and the two rules only the
     ['the lookup missed (undefined, not null)', 'ccrc-pwa-coordinator', undefined, true],
     ['the lifecycle key never arrived', 'ccrc-pwa-coordinator', sess({ status: 'dead', lifecycle: null }), true],
     ['the lifecycle is unmeasurable', 'ccrc-pwa-coordinator', sess({ status: 'dead', lifecycle: 'unmeasurable' }), true],
+    ['a substrate fault stands', 'ccrc-pwa-coordinator',
+      sess({ status: 'dead', lifecycle: 'orphan', substrate: { at: 1, text: 'tmux: no server running' } }), true],
     ['tmux could not be asked (the server reads the pane unknown)', 'ccrc-pwa-coordinator',
       sess({ status: 'dead', lifecycle: 'orphan', substrate: { at: 1, text: 'tmux: no server running' }, presence: 'unknown' }), true],
   ];
@@ -59,17 +61,32 @@ describe('coordinatorPresence — the server\'s word, and the two rules only the
     expect(coordinatorPresence(claimedBy, session, frameSeen)).toBe('unknown');
   });
 
-  // D-309, and it is worth its own name: the assembly turns a cannot-ask
-  // into `status:'dead'` (`server/src/fleet.ts`), so a door gated on that
-  // word alone opens during a tmux outage and offers to hand a LIVE
-  // coordinator's program away. The server's presence reads that row
-  // `unknown` (the row above). OA-C15 (a) (D-7265; C7c, D-7181): a substrate
-  // stamp over a pane tmux DID call gone, under a dead lifecycle, is the
-  // server's `dead`, and the door follows it (the reclaim route re-measures
-  // the claimant on the box, `measureClaimant`).
-  it('answers `dead` when a substrate fault stands over a pane tmux called gone: the server\'s word', () => {
-    expect(coordinatorPresence('ccrc-pwa-coordinator',
-      sess({ status: 'dead', lifecycle: 'orphan', substrate: { at: 1, text: 'tmux: no server running' } }), true)).toBe('dead');
+  // D-309 IS the substrate row above, and it is worth its own name: the
+  // assembly turns a cannot-ask into `status:'dead'` (`server/src/fleet.ts`),
+  // so a door gated on that word alone opens during a tmux outage and offers
+  // to hand a LIVE coordinator's program away. The server's presence reads a
+  // cannot-ask `unknown` (the row above it); a substrate stamp over a pane tmux
+  // DID call gone, which the server reads `dead`, stays `unknown` here too
+  // (D-7370, a coordinator ruling within OA-C15 (a)): Resume reclaims runs, and
+  // on a substrate fault the coordinator may be alive.
+  it('a substrate stamp over a gone pane is `unknown` under every dead lifecycle, never `dead` (D-7370)', () => {
+    for (const lifecycle of ['stopped', 'orphan', 'never-started'] as const) {
+      const s = sess({ status: 'dead', lifecycle, substrate: { at: 1, text: 'tmux: no server running' } });
+      expect(s.presence, lifecycle).toBe('dead');
+      expect(coordinatorPresence('ccrc-pwa-coordinator', s, true), lifecycle).toBe('unknown');
+    }
+  });
+
+  // D-7371 (option (i), a coordinator ruling within OA-C15 (a)): a hibernated
+  // orphan or never-started coordinator, which the server reads `dead`, stays
+  // `hibernated` (no Resume door, no "coordinator gone", D-5430), the answer
+  // the row's own sheet gives (it offers Wake, and Forget stays hidden, D-7345).
+  it.each(['orphan', 'never-started'] as const)('a hibernated %s coordinator is `hibernated`, never `dead` (D-7371)', (lifecycle) => {
+    const s = sess({ status: 'dead', lifecycle, hibernatedAt: 1_784_500_000_000 });
+    expect(s.presence).toBe('dead');
+    expect(coordinatorPresence('ccrc-pwa-coordinator', s, true)).toBe('hibernated');
+    expect(coordinatorPresence('ccrc-pwa-coordinator', { ...s, substrate: { at: 1, text: 'tmux: no server running' } }, true))
+      .toBe('hibernated');
   });
   const ALIVE: readonly [string, FleetSession][] = [
     ['a live pane', sess({ status: 'idle', lifecycle: 'running' })],

@@ -1148,6 +1148,31 @@ describe('the orphan worker\'s marker rides its row', () => {
     expect(m.textContent).toBe('coordinator hibernated');
   });
 
+  // D-7371: a hibernated orphan or never-started coordinator (the server reads it `dead`) is asleep, never gone.
+  it.each(['orphan', 'never-started'] as const)('says HIBERNATED, not gone, for a hibernated %s coordinator (D-7371)', (lifecycle) => {
+    const sleepingCoord = fleetSession({ id: 'off-card-coordinator', project: 'elsewhere', status: 'dead', bucket: 'dead',
+      lifecycle, hibernatedAt: FROZEN - 3_600_000 });
+    const { container } = render(
+      <ProjectCard group={orphans()} runs={[orphanRun]} nowMs={FROZEN} frameSeen
+                   coordOf={(id) => (id === 'off-card-coordinator' ? sleepingCoord : null)}
+                   onOpen={() => {}} onActions={() => {}} />);
+    const m = marker(container)!;
+    expect(m.getAttribute('data-marker')).toBe('coordinator-hibernated');
+    expect(container.textContent).not.toContain('coordinator gone');
+  });
+
+  // D-7370: a substrate stamp over a pane tmux called gone is doubt (D-309): no marker, no "coordinator gone".
+  it('claims nothing about a coordinator whose gone pane carries a substrate stamp (D-7370)', () => {
+    const stamped = fleetSession({ id: 'off-card-coordinator', project: 'elsewhere', status: 'dead', bucket: 'dead',
+      lifecycle: 'orphan', substrate: { at: 1, text: 'tmux: no server running' } });
+    const { container } = render(
+      <ProjectCard group={orphans()} runs={[orphanRun]} nowMs={FROZEN} frameSeen
+                   coordOf={(id) => (id === 'off-card-coordinator' ? stamped : null)}
+                   onOpen={() => {}} onActions={() => {}} />);
+    expect(marker(container)).toBeNull();
+    expect(container.textContent).not.toContain('coordinator gone');
+  });
+
   it('claims nothing about a coordinator the frame has not measured', () => {
     const { container } = render(
       <ProjectCard group={orphans()} runs={[orphanRun]} nowMs={FROZEN}

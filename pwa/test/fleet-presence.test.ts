@@ -58,6 +58,24 @@ describe('coordinatorPresence: coordPresence\'s frame and claim rules over the s
   it.each(UNKNOWN)('reads `unknown` when %s', (_why, claimedBy, session, frameSeen) => {
     expect(coordinatorPresence(claimedBy, session, frameSeen)).toBe('unknown');
   });
+
+  // The two coordinator rulings within OA-C15 (a), over the server's `dead` only: every other word passes through.
+  const STAMP = { at: 1, text: 'tmux: no server running' };
+  it('D-7370: a substrate stamp over a pane the server reads `dead` reads `unknown` (D-309: it may be alive)', () => {
+    expect(coordinatorPresence(ID, deadSession({ id: ID, substrate: STAMP }), true)).toBe('unknown');
+    expect(coordinatorPresence(ID, fleetSession({ id: ID, presence: 'dead', substrate: STAMP }), true)).toBe('unknown');
+  });
+
+  it('D-7371: a hibernation stamp over a pane the server reads `dead` reads `hibernated` (D-5430), stamp or no stamp', () => {
+    expect(coordinatorPresence(ID, deadSession({ id: ID, hibernatedAt: 1_784_500_000_000 }), true)).toBe('hibernated');
+    expect(coordinatorPresence(ID, deadSession({ id: ID, lifecycle: 'never-started', hibernatedAt: 1_784_500_000_000 }), true)).toBe('hibernated');
+    expect(coordinatorPresence(ID, deadSession({ id: ID, hibernatedAt: 1_784_500_000_000, substrate: STAMP }), true)).toBe('hibernated');
+  });
+
+  it.each(['alive', 'asleep', 'unknown'] as const)('neither rule touches the server\'s `%s`', (p) => {
+    const row = fleetSession({ id: ID, status: 'dead', presence: p, substrate: STAMP, hibernatedAt: 1_784_500_000_000 });
+    expect(coordinatorPresence(ID, row, true)).toBe(WORD[p]);
+  });
 });
 
 describe('paneGone words the pane, not the session', () => {

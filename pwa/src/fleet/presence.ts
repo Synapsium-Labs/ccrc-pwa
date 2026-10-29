@@ -11,13 +11,15 @@
 //     not know read `unknown`, and `unknown` hides the door: a hidden door costs one refresh, a door over a live session
 //     costs its work.
 //   - `coordinatorPresence`: the run board's and the orphan marker's coordinator, the frame and claim
-//     rules over `presenceOf`, in its four words (`asleep` is spelled `hibernated` there, so every screen word stays).
+//     rules over `presenceOf`, in its four words (`asleep` is spelled `hibernated` there, so every screen word stays),
+//     and the coordinator's two rulings within OA-C15 (a) over the server's `dead` (D-7370, D-7371: see the function).
 //   - `paneGone`: a site that only WORDS what the pane shows (a note, a chip, a fact about a running pane) reads the
 //     pane itself. The assembly writes `status: 'dead'` for a pane tmux called gone and for one it could not ask
 //     (D-309), so this is "the pane is not shown running", never "the session is dead"; no door may hang on it.
 //
 // L1: pure, clock-free and store-free; no `.tsx`, store or `lib/api.ts` import.
-import { PRESENCES, type FleetSession, type Presence } from '../../../shared/api';
+import { PRESENCES, substrateFault, type FleetSession, type Presence } from '../../../shared/api';
+import { hibernatedSince } from './hibernated';
 
 /** The server's word for one row. The `fleet` frame is CAST on arrival (`stores/fleet.ts`'s `asFleetMsg`), so the
  *  field is read as `unknown` at runtime: an absent key or a word this build has never heard of reads `unknown`. */
@@ -38,7 +40,15 @@ const COORDINATOR_WORD: Record<Presence, CoordinatorPresence> = {
 /** The two rules the client alone can know (they were `coordPresence`'s, D-1129), over the server's word: a run that
  *  names no claimant, and a fleet frame that has not landed (a session missing from an unlanded frame is not a missing
  *  session, D-1138), read `unknown`; so does a claimant the landed frame does not list. Otherwise the claimant's
- *  presence, in these words. */
+ *  presence, in these words, with two rules over the server's `dead` only (coordinator rulings within OA-C15 (a),
+ *  each overturnable to "the server's `dead` wins"):
+ *
+ *  - ASLEEP IS NOT GONE (D-7371): a hibernated `orphan` or `never-started` coordinator, which the server reads `dead`,
+ *    reads `hibernated` (no Resume door, no "coordinator gone", D-5430), the answer its own sheet gives (Wake, and
+ *    Forget's `!asleep` guard, D-7345). First, so a sleeper with a substrate stamp still reads asleep.
+ *  - A SUBSTRATE FAULT IS DOUBT (D-7370): a pane tmux called gone under a substrate stamp reads `unknown`. Resume
+ *    reclaims the coordinator's runs, and while its supervisor has flagged the substrate the coordinator may be alive
+ *    (D-309). */
 export function coordinatorPresence(
   claimedBy: string | null,
   session: FleetSession | null | undefined,
@@ -47,7 +57,10 @@ export function coordinatorPresence(
   if (claimedBy === null) return 'unknown';
   if (!frameSeen) return 'unknown';
   if (session === null || session === undefined) return 'unknown';
-  return COORDINATOR_WORD[presenceOf(session)];
+  const word = presenceOf(session);
+  if (word === 'dead' && hibernatedSince(session) !== null) return 'hibernated';
+  if (word === 'dead' && substrateFault(session) !== null) return 'unknown';
+  return COORDINATOR_WORD[word];
 }
 
 /** The pane is not shown running: the assembly's `dead` status (a gone pane, or one tmux could not be asked about).

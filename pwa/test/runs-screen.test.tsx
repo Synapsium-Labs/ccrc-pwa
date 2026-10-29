@@ -1191,6 +1191,20 @@ describe('the resume door on the run board', () => {
     expect(screen.queryByRole('button', { name: /resume run 3/i })).toBeNull();
   });
 
+  // D-7371: a hibernated orphan or never-started claimant is asleep (mail or opening it wakes it, D-5430): Resume would
+  // reclaim the program from a coordinator that is not gone, so the door stays closed, as the row's own sheet offers Wake.
+  it.each(['orphan', 'never-started'] as const)('hides it when the claimant is a hibernated %s', (lifecycle) => {
+    board({ sessions: [coord({ status: 'dead', bucket: 'dead', lifecycle, hibernatedAt: 1_784_500_000_000 })], fleetFrameSeen: true });
+    expect(screen.queryByRole('button', { name: /resume run 3/i })).toBeNull();
+  });
+
+  // D-7370: a substrate stamp over a pane tmux called gone is doubt (D-309): the coordinator may be alive, and Resume
+  // reclaims its runs, so the door stays closed.
+  it.each(['stopped', 'orphan', 'never-started'] as const)('hides it when a substrate fault stands over the claimant\'s gone pane (%s)', (lifecycle) => {
+    board({ sessions: [coord({ status: 'dead', bucket: 'dead', lifecycle, substrate: { at: 1, text: 'tmux: no server running' } })], fleetFrameSeen: true });
+    expect(screen.queryByRole('button', { name: /resume run 3/i })).toBeNull();
+  });
+
   /** The terminal-row fixture. A closed row can only reach this screen through
    *  the COLD read (`finished` has no other source), so these cases hand the
    *  archive to `loadRuns` and let the live frame answer the active half — an
