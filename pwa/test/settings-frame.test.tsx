@@ -36,6 +36,7 @@ const pendingReads = () => {
     updates: vi.spyOn(api, 'updates').mockImplementation(never),
     stall: vi.spyOn(api, 'stallWatch').mockImplementation(never),
     collect: vi.spyOn(api, 'collectLane').mockImplementation(never),
+    dispatchAbandon: vi.spyOn(api, 'dispatchAbandon').mockImplementation(never),
     fetch,
   };
 };
@@ -103,11 +104,11 @@ describe('the index and the section routes', () => {
     expect(within(index()).getAllByRole('link')).toHaveLength(5);
   });
 
-  it('headings nest h1, h2, h3 with no level skipped (the Automation page, its three cards)', () => {
+  it('headings nest h1, h2, h3 with no level skipped (the Automation page, its four cards)', () => {
     pendingReads();
     renderSettings('automation');
     const levels = screen.getAllByRole('heading').map((h) => Number(h.tagName.slice(1)));
-    expect(levels).toEqual([1, 2, 3, 3, 3]);
+    expect(levels).toEqual([1, 2, 3, 3, 3, 3]);
   });
 });
 
@@ -149,6 +150,7 @@ describe('the provider: reads made once (spec §4.4)', () => {
       expect(reads.updates).toHaveBeenCalledTimes(1);
       expect(reads.stall).toHaveBeenCalledTimes(1);
       expect(reads.collect).toHaveBeenCalledTimes(1);
+      expect(reads.dispatchAbandon).toHaveBeenCalledTimes(1);
       // The auth status, once per mount (its own fetch: `readAuthStatus` never raises auth-lost).
       expect(reads.fetch.mock.calls.filter(([u]) => String(u).includes('/api/auth/status'))).toHaveLength(1);
     });
@@ -203,6 +205,7 @@ describe('the provider: reads made once (spec §4.4)', () => {
     expect(reads.updates).not.toHaveBeenCalled();
     expect(reads.stall).not.toHaveBeenCalled();
     expect(reads.collect).not.toHaveBeenCalled();
+    expect(reads.dispatchAbandon).not.toHaveBeenCalled();
     expect(reads.fetch).not.toHaveBeenCalled();
   });
 
@@ -286,7 +289,7 @@ describe('the cards: scope and purpose, in order (spec §3.3)', () => {
     updates: ['Fleet version', 'Nodes', 'Update policy'],
     appearance: ['Layout and theme'],
     notifications: ['Push notifications', 'Release announcements'],
-    automation: ['Stall watch', 'Temp root collector', 'Cleanup pause'],
+    automation: ['Stall watch', 'Temp root collector', 'Dispatches that never came back', 'Cleanup pause'],
     security: ['Sign-in gate', 'Box token', 'Linear'],
   };
   const SCOPES: readonly string[] = Object.values(SETTINGS_SCOPE);

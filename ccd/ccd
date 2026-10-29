@@ -9,7 +9,7 @@
 set -uo pipefail
 
 # ── THE DIRECT-ENTRY BOUNDARY (D-3696, D-3697) — before any external command ──
-# A direct `ws-reclaim`, `ws-expire`, `ws-collect` or `ws-orphan`, or a direct `ws-audit --session <id>
+# A direct `ws-reclaim`, `ws-expire`, `ws-collect`, `ws-orphan`, `scratch-rescue` or `ws-shed-deps`, or a direct `ws-audit --session <id>
 # --reclaim [--defer-expired]`, `… --expire` or `… --collect`, runs under Bash >= 4.4 PRIVILEGED with
 # no shell function defined — the state the installed launcher (`ccd/ccd-entry.py`
 # rendered to ~/.local/bin/ccd) starts it in, re-measured here, not taken on its
@@ -31,7 +31,7 @@ if [[ $# -ge 5 && "${1-}" == ws-audit && "${2-}" == --session && "${4-}" == --re
     case "${!__ccd_i}" in --defer-expired) ;; --stale|--hold-digest) __ccd_i=$((__ccd_i + 1)) ;; *) __ccd_stale=0; break ;; esac
   done
 fi
-if [[ "${BASH_SOURCE[0]}" == "${0}" ]] && { [[ "${1-}" == ws-reclaim || "${1-}" == ws-expire || "${1-}" == ws-collect || "${1-}" == ws-orphan || "${1-}" == scratch-rescue ]] \
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]] && { [[ "${1-}" == ws-reclaim || "${1-}" == ws-expire || "${1-}" == ws-collect || "${1-}" == ws-orphan || "${1-}" == scratch-rescue || "${1-}" == ws-shed-deps ]] \
      || (( __ccd_stale )) \
      || { [[ $# -ge 4 && $# -le 6 && "${1-}" == ws-audit && "${2-}" == --session ]] \
           && [[ ( "${4-}" == --reclaim && ( $# -eq 4 || ( $# -eq 5 && "${5-}" == --defer-expired ) ) ) || ( "${4-}" == --expire && ( $# -eq 4 || ( $# -eq 6 && "${5-}" == --child-of ) ) ) || ( $# -eq 4 && "${4-}" == --collect ) ]]; } || [[ $# -eq 4 && "${1-}" == ws-audit && "${2-}" == --loose-hex && "${4-}" == --collect ]]; }; then   # + the loose arm's audit (D-6625)
@@ -3238,10 +3238,10 @@ _reg_get() { [[ -f "$REG/$1.$2" && ! -L "$REG/$1.$2" ]] || return 1; local __rg_
 # THE FOLD `_reg_get` KEEPS, AND THE READ THAT DOES NOT. `_reg_get` answers `""`
 # for a field that is ABSENT, one that is UNREADABLE and one that is EMPTY — the
 # overloaded null the ring rules forbid at a seam. It stays exactly as it is,
-# and the reason is a count rather than a preference: this file makes 208
-# invocations across 177 non-comment lines.
+# and the reason is a count rather than a preference: this file makes 209
+# invocations across 178 non-comment lines.
 #
-# THE LAST MOVE WAS `cmd_pr_landing`'s two reads (a session's `workspace` and `project`), the +2 calls on two lines; before it ws-expire's `--child-of` marker read (`_ws_expire_not_child`, D-6640), the +1 call on its own line; before it the named-workspace title verb's workspace gate (`cmd_ws_title`'s `workspace` read), the +1 call on its own line; before it the children's spawn record (plan Task 15, D-5299), the +1 (`_spawn_start`'s `.child` test); before it the tick diet's `_reg_get_to` conversions (D-4963), the −9 (`_session_hard_blocked` 2, `_auto_stale_check` 1, `_auto_swap_check` 2, `_auto_compact_check` 3, `_route_applied_get_to` 1: each hot read now fills its variable with builtins, no subshell); before it the forked-session transcript's review round 2 — the held-conversation wait (`_ci_held_wait` +3, `_supervised_start` +2, `_ci_bgwait_open`/`_ci_bgwait_close` +1 each — D-4944), the +7; before it its review round 1 (`_ci_bg_follow`, `_ci_chain_end`, `_ci_resume_follow` — D-4944/D-4945), the +3; before it the forked-session transcript's continued-in walk (`_sync_uuid`, `_follow_continued_in`), the +2; before it the read-back's lane gate (`_route_readback_transcript`), the +1; before it the read-back's transcript memo (`_route_readback_transcript`), the +1; before it the return gate's unarchive (workspace lifecycle wave 3b), the +2; before it the route read-back's uuid read (`_route_readback`), the +1; before it the EXPIRE region's reads (workspace lifecycle wave 3), the +10; before that the operator-choice reads (session-continuity wave 3), the +3; before that the rescue wait's reads (session-continuity wave 2), the +3;
+# THE LAST MOVE WAS `cmd_pr_train_prove`'s project read (D-7378), the +1 call on its own line; before it `cmd_pr_landing`'s two reads (a session's `workspace` and `project`), the +2 calls on two lines; before it ws-expire's `--child-of` marker read (`_ws_expire_not_child`, D-6640), the +1 call on its own line; before it the named-workspace title verb's workspace gate (`cmd_ws_title`'s `workspace` read), the +1 call on its own line; before it the children's spawn record (plan Task 15, D-5299), the +1 (`_spawn_start`'s `.child` test); before it the tick diet's `_reg_get_to` conversions (D-4963), the −9 (`_session_hard_blocked` 2, `_auto_stale_check` 1, `_auto_swap_check` 2, `_auto_compact_check` 3, `_route_applied_get_to` 1: each hot read now fills its variable with builtins, no subshell); before it the forked-session transcript's review round 2 — the held-conversation wait (`_ci_held_wait` +3, `_supervised_start` +2, `_ci_bgwait_open`/`_ci_bgwait_close` +1 each — D-4944), the +7; before it its review round 1 (`_ci_bg_follow`, `_ci_chain_end`, `_ci_resume_follow` — D-4944/D-4945), the +3; before it the forked-session transcript's continued-in walk (`_sync_uuid`, `_follow_continued_in`), the +2; before it the read-back's lane gate (`_route_readback_transcript`), the +1; before it the read-back's transcript memo (`_route_readback_transcript`), the +1; before it the return gate's unarchive (workspace lifecycle wave 3b), the +2; before it the route read-back's uuid read (`_route_readback`), the +1; before it the EXPIRE region's reads (workspace lifecycle wave 3), the +10; before that the operator-choice reads (session-continuity wave 3), the +3; before that the rescue wait's reads (session-continuity wave 2), the +3;
 # then D-3526's carried-in verdict, the +6 (`_limit_dated`, `_limit_read`, `_never_came_up`, three in `_carried_in_note`); then the RECLAIM region's reads (#166 wave 3, Task 5), `_child_tmpdir`'s and #127's.
 # BEFORE THAT IT WAS ROUTING SLICE 4's, and naming it is what stops the next
 # reader hunting for a merge that did not happen: the applier and its registry
@@ -5546,7 +5546,18 @@ PR_GH_TIMEOUT=8           # gh pr list has no --timeout of its own; a blocking
 # PRs cannot be read inside the bound loses its check glyphs for that sweep and
 # nothing else — which is the whole point of the split.
 PR_GH_CHECKS_TIMEOUT=5
-PR_JSON_FIELDS=number,state,headRefName,headRefOid,baseRefName,isCrossRepository,mergedAt,mergeCommit,url,title,isDraft,createdAt
+PR_JSON_FIELDS=number,state,headRefName,headRefOid,baseRefName,isCrossRepository,mergedAt,mergeCommit,url,title,isDraft,createdAt,labels,closedAt
+# THE TRAIN LABEL. A merge train lands a PR's work through a train PR and then
+# CLOSES the member with this label, so GitHub never says MERGED for it — and
+# the archive trigger and the cleanup offer both hang off `merged`. A CLOSED PR
+# carrying this label (exact name) reads as merged in `pr-state` and as a
+# merged departure in `pr-landing`; every binding conjunct still applies, and
+# no other state is touched. Deployment config: `CCD_LANDED_LABEL` names it,
+# read at each call; unset is this default, and SET-BUT-EMPTY reads no label at
+# all. It meets the rule `CCD_DISK_FLOOR_GB` states for an override: it names a
+# GitHub label, never a path, so it cannot aim a command at another tree.
+# `labels`/`closedAt` above are what it is read from (and when the PR landed).
+PR_LANDED_LABEL_DEFAULT=landed-in-train
 # NAMED ONCE, spent in two places — the head-filtered row window that carries it
 # in-band, and the open-PR window `_gh_pr_checks` asks for on its own. A second
 # spelling of the token is a second thing to keep in step with `checksFor`'s
@@ -5806,7 +5817,7 @@ _pr_py() {   # mode [args…]; stdin = the gh rows JSON. One of ccd's embedded h
   # `python3 - "$@" <<PY` gives stdin='', `python3 /dev/fd/3 "$@" 3<<PY` gives
   # the rows, with sys.argv identical. The rows cannot move to argv instead —
   # spec §7 is that no GitHub-sourced string is ever placed in an argv.
-  python3 /dev/fd/3 "$@" 3<<'PY'
+  PR_TRAIN_PROOFS="${_PR_TRAIN_PROOFS-}" PR_TRAIN_REFUSED="${_PR_TRAIN_REFUSED-}" PR_LANDED_LABEL="${CCD_LANDED_LABEL-$PR_LANDED_LABEL_DEFAULT}" python3 /dev/fd/3 "$@" 3<<'PY'
 import fcntl, json, os, re, stat, subprocess, sys, time
 
 mode = sys.argv[1]
@@ -5819,6 +5830,9 @@ mode = sys.argv[1]
 # like `abc` do the same. `is_merged` reads `mergeCommit.oid` through it as a
 # SHAPE check only — a merge commit is never an identity, two PRs can share one.
 OID = re.compile(r'^[0-9a-f]{7,40}$')
+# A PR number: the run id's grammar (`_child_runid_valid`, a positive decimal of at most ten
+# digits), spelled once in this program because python cannot call the bash helper.
+PR_NUM = r'[1-9][0-9]{0,9}'
 
 def rows_in():
     """The rows, or None for A BODY WE COULD NOT READ — which is NOT `[]`.
@@ -5880,10 +5894,70 @@ def one_ours(main, tip, oid):
         return False
     return tip is None or git(main, 'merge-base', '--is-ancestor', '--', oid, tip).returncode == 0
 
+# The deployment's train label, handed down by `_pr_py`; "" (also when nothing
+# was handed down) reads no label at all, so a missing value can only keep a PR
+# `closed`, never make one `merged`.
+LANDED_LABEL = os.environ.get('PR_LANDED_LABEL', '')
+
+# THE TRAIN PROOFS (D-7362), handed down by `_pr_py` from `_pr_train_proofs`:
+# one `<member> <head sha> <train> <train merge commit>` line per member whose
+# train record `_ws_train_record` PROVED. The label is GitHub's claim and this
+# is the proof: a labelled PR is `landedInTrain` only when its number and its
+# exact head are listed here. Nothing handed down proves nothing, so a missing
+# value can only keep a PR out of `merged`, never put one in it.
+def train_proofs():
+    got = {}
+    for l in os.environ.get('PR_TRAIN_PROOFS', '').splitlines():
+        m = re.fullmatch(rf'({PR_NUM}) ([0-9a-f]{{40}}) ({PR_NUM}) ([0-9a-f]{{40}})', l)
+        if m:
+            got[(m.group(1), m.group(2))] = (m.group(3), m.group(4))
+    return got
+
+# THE READ-AND-FAILED PROOFS (D-7378): one `<member> <head sha>` line per
+# member whose train record was READ and did not prove it (`_ws_train_record`'s
+# 1: the train is CLOSED unmerged, lists another sha, or no train names it).
+# Only these are `trainUnproven`. A labelled member in neither list was not
+# read at all — no budget, the sweep's zero budget, a timeout, GitHub
+# unreachable — and is `trainUnread`: unmeasured, never `closed`.
+def train_refused():
+    got = set()
+    for l in os.environ.get('PR_TRAIN_REFUSED', '').splitlines():
+        m = re.fullmatch(rf'({PR_NUM}) ([0-9a-f]{{40}})', l)
+        if m:
+            got.add((m.group(1), m.group(2)))
+    return got
+
+TRAIN_PROOFS = train_proofs()
+TRAIN_REFUSED = train_refused()
+
+def labelled(r):
+    """CLOSED and carrying the deployment's train label: a CLAIM of a train landing, never its proof."""
+    return LANDED_LABEL != '' and r.get('state') == 'CLOSED' and LANDED_LABEL in label_names(r)
+
+def label_names(r):
+    """gh pr list's `labels: [{name}]` or GraphQL's `labels: {nodes: [{name}]}`; anything else is no labels."""
+    ls = r.get('labels')
+    if isinstance(ls, dict):
+        ls = ls.get('nodes')
+    return [l.get('name') for l in ls if isinstance(l, dict)] if isinstance(ls, list) else []
+
 def annotate(rows, main, tip, branch, base_short):
     out = [r for r in rows if isinstance(r, dict)]
     for r, ours in zip(out, ours_of(main, tip, [r.get('headRefOid') for r in out])):
         r['ours'] = ours
+        # Annotated here, beside `ours`, so this box is the ONE reader of the
+        # label and the ONE judge of the train record: prstate.ts, the landing
+        # lane, the queue word and the reap read these two booleans and never a
+        # label. `landedInTrain` is the PROOF (the train PR is MERGED and its
+        # record lists this member at exactly this head). A label whose record
+        # was read and failed is `trainUnproven`, which reads as closed; one
+        # whose record was NOT read is `trainUnread`, which reads as
+        # unmeasured (D-7378) — never closed, so nothing ends on it.
+        claim = labelled(r)
+        key = (str(r.get('number')), r.get('headRefOid'))
+        r['landedInTrain'] = claim and key in TRAIN_PROOFS
+        r['trainUnproven'] = claim and not r['landedInTrain'] and key in TRAIN_REFUSED
+        r['trainUnread'] = claim and not r['landedInTrain'] and not r['trainUnproven']
     return out
 
 def bound(r, branch, base_short):
@@ -5904,6 +5978,15 @@ def is_merged(r, branch, base_short):
             and isinstance(r.get('mergedAt'), str)
             and isinstance(oid, str) and OID.match(oid) is not None
             and bound(r, branch, base_short))
+
+def is_landed(r, branch, base_short):
+    # A PR closed as landed in a merge train: `merged` for the phase, with no
+    # merge commit behind it. Kept OUT of `is_merged`, whose other caller is the
+    # reap's `pick`, which proves the tree against `mergeCommit.oid` — a landed
+    # member has none, so `pick` answers it on its own arm (`landed` where the
+    # oid would be) and `_ws_reap_eval` proves it by the train record instead
+    # (`_ws_train_record`), pinned to the train PR's merge commit.
+    return r.get('landedInTrain') is True and bound(r, branch, base_short)
 
 def pick(rows, branch, base_short):
     """Highest number AFTER the binding check, never before."""
@@ -5959,7 +6042,7 @@ if mode == 'state':
         # workspace", which is what was actually observed — instead of
         # `no-commits`, which asserts that the branch is level with base.
         phase, number = ('no-commits' if ahead == 0 else 'none'), None
-    elif is_merged(chosen, branch, base_short):
+    elif is_merged(chosen, branch, base_short) or is_landed(chosen, branch, base_short):
         phase, number = 'merged', chosen.get('number')
     elif chosen.get('state') == 'MERGED':
         # gh says MERGED but a conjunct failed. Never claim merged on a partial
@@ -5968,8 +6051,19 @@ if mode == 'state':
         # `error` puts "GitHub could not be read" on a phone about a read that
         # worked. phaseFor answers the same token for the same row.
         phase, number, reason = 'unknown', chosen.get('number'), 'merge-unproven'
+    elif chosen.get('trainUnread') is True and bound(chosen, branch, base_short):
+        # Labelled, and the train record was NOT READ (D-7378): no budget (the
+        # `--project` sweep has none), a timeout, GitHub unreachable. Neither
+        # merged nor closed — `train-unread`, which phaseFor answers for the
+        # same row; `ccd pr-train-prove` reads it and keeps the proof, and the
+        # next sweep reads `merged`.
+        phase, number, reason = 'unknown', chosen.get('number'), 'train-unread'
     elif chosen.get('state') == 'CLOSED':
+        # A train label with no train record behind it is CLOSED and unmerged,
+        # and says why: `train-unproven`, which phaseFor answers for the same row.
         phase, number = 'closed', chosen.get('number')
+        if chosen.get('trainUnproven') is True:
+            reason = 'train-unproven'
     elif chosen.get('isDraft') is True:
         phase, number = 'draft', chosen.get('number')
     else:
@@ -6517,6 +6611,21 @@ elif mode == 'pick':
     chosen = pick(rows, branch, base_short)
     if chosen is None:
         sys.stdout.write('!pr-head-not-ours\n' if near else '')
+    elif is_landed(chosen, branch, base_short):
+        # A PR a merge train landed and closed: merged for the cleanup offer as
+        # for the phase, with NO merge commit to prove against. The literal
+        # word `landed` stands where the oid would be — never an empty field,
+        # which `IFS=$'\t' read` would collapse — and `_ws_reap_eval` swaps it
+        # for the train PR's merge commit before any git command sees it.
+        sys.stdout.write('\t'.join([
+            str(chosen.get('number') or ''), str(chosen.get('url') or ''), 'landed',
+            str(chosen.get('headRefOid') or ''),
+        ]) + '\n')
+    elif chosen.get('trainUnproven') is True or chosen.get('trainUnread') is True:
+        # Labelled, and the train record did not prove it (read and failed, or
+        # not read): the reap names the number so `_ws_reap_eval` can say
+        # which read failed and how.
+        sys.stdout.write('!not-merged train %s\n' % str(chosen.get('number') or ''))
     elif not is_merged(chosen, branch, base_short):
         sys.stdout.write('!not-merged\n')
     else:
@@ -6526,12 +6635,147 @@ elif mode == 'pick':
             str(chosen.get('headRefOid') or ''),
         ]) + '\n')
 
+elif mode == 'train-cands':
+    # The rows `_pr_train_proofs` must prove: CLOSED with the train label, on
+    # this branch and base, from this repository, with a number and a full
+    # head sha. Only digits and hex leave here, `<n>\t<head>` per row, so the
+    # shell can anchor both before either reaches an argv. Never a proof.
+    (branch, base_short) = sys.argv[2:4]
+    for r in rows_in() or []:
+        if not isinstance(r, dict) or not labelled(r):
+            continue
+        n, head = r.get('number'), r.get('headRefOid')
+        if (isinstance(n, int) and not isinstance(n, bool) and 0 < n < 10 ** 10
+                and isinstance(head, str) and re.fullmatch(r'[0-9a-f]{40}', head)
+                and r.get('headRefName') == branch and r.get('baseRefName') == base_short
+                and r.get('isCrossRepository') is False):
+            sys.stdout.write('%d\t%s\n' % (n, head))
+
+elif mode == 'train-refs':
+    # The train PRs a member's comments name: `train #<n>` in any comment, the
+    # comment a merge train leaves when it closes a member with the label.
+    # Newest comment first, each number once, and EVERY one: a cap would let
+    # stray newer mentions hide the real train, and `_ws_train_record`'s
+    # deadline is what bounds the reads. Only digits leave here, so the shell
+    # can anchor them before any reaches an argv.
+    (member,) = sys.argv[2:3]
+    try:
+        doc = json.loads(sys.stdin.read() or 'null')
+    except ValueError:
+        doc = None
+    comments = doc.get('comments') if isinstance(doc, dict) else None
+    seen = []
+    for c in reversed(comments if isinstance(comments, list) else []):
+        body = c.get('body') if isinstance(c, dict) else None
+        if not isinstance(body, str):
+            continue
+        for m in re.finditer(rf'(?i)\btrain\s+#({PR_NUM})\b', body):
+            if m.group(1) != member and m.group(1) not in seen:
+                seen.append(m.group(1))
+    sys.stdout.write(''.join(n + '\n' for n in seen))
+
+elif mode == 'train-check':
+    # THE TRAIN RECORD (D-7335). stdin is one train PR (`gh pr view`) or a list
+    # of them (`gh pr list --search`). A train proves the member landed when it
+    # is MERGED into the member's base, from this repository, with a merge
+    # commit, and its body's ONE `ccrc-train v1` block lists the member at
+    # exactly the member's head. The block is an HTML comment on lines of its
+    # own, the only part of the body a machine reads:
+    #     <!-- ccrc-train v1
+    #     member #<n> <40-hex head sha>
+    #     -->
+    # Human tables and lists beside it are never parsed. No block, two blocks,
+    # a block that never closes, a line in it that is not a member line, or a
+    # member listed twice proves nothing. Prints `<train>\t<merge oid>` for the
+    # first that proves; else `?<sentence>` when a candidate's answer was not
+    # definitive (an OPEN train, a missing or odd state), `!<sentence>` for the
+    # first failed candidate's reason, nothing when there was no candidate at
+    # all, or `?unreadable` when stdin was no PR's JSON and no list of them
+    # (D-7381). Only a CLOSED train, another sha or no listing fails.
+    (member, head, base_short) = sys.argv[2:5]
+    try:
+        doc = json.loads(sys.stdin.read() or 'null')
+    except ValueError:
+        doc = None
+    if not isinstance(doc, (list, dict)):
+        # No pull request's JSON at all (empty, unparseable, a bare value): GitHub
+        # said nothing about any train, so `?` — unread, never a failed candidate (D-7381).
+        sys.stdout.write('?unreadable\n')
+        sys.exit(0)
+    cands = doc if isinstance(doc, list) else [doc]
+    OPEN, CLOSE = '<!-- ccrc-train v1', '-->'
+    MEMBER = re.compile(rf'member #({PR_NUM}) ([0-9a-f]{{40}})')
+
+    def train_block(body):
+        # -> ({member number: head sha}, None) or (None, why).
+        lines = [l.strip() for l in body.splitlines()]
+        starts = [i for i, l in enumerate(lines) if l == OPEN]
+        if not starts:
+            return None, 'carries no ccrc-train v1 block'
+        if len(starts) > 1:
+            return None, 'carries %d ccrc-train v1 blocks, not one' % len(starts)
+        got = {}
+        for l in lines[starts[0] + 1:]:
+            if l == CLOSE:
+                return got, None
+            m = MEMBER.fullmatch(l)
+            if m is None:
+                return None, 'has a ccrc-train v1 block with a line that is not a member line'
+            if m.group(1) in got:
+                return None, 'has a ccrc-train v1 block listing #%s twice' % m.group(1)
+            got[m.group(1)] = m.group(2)
+        return None, 'has a ccrc-train v1 block that never closes'
+
+    why = None
+    unread = None
+    for t in cands:
+        if not isinstance(t, dict):
+            continue
+        n = t.get('number')
+        if not isinstance(n, int) or str(n) == member:
+            continue
+        oid = (t.get('mergeCommit') or {}).get('oid')
+        state = t.get('state')
+        if state == 'CLOSED':
+            # GitHub's definitive answer: closed and never merged. A failed candidate.
+            why = why or 'train #%d is closed, not merged' % n
+            continue
+        if (state != 'MERGED' or not isinstance(t.get('mergedAt'), str)
+                or not isinstance(oid, str) or re.fullmatch(r'[0-9a-f]{40}', oid) is None):
+            # An OPEN train may still merge, and a missing or odd state (or a
+            # MERGED one with no merge commit) says nothing definitive: UNREAD,
+            # never a failed candidate (#1797 round 7, D-7381).
+            unread = unread or ('train #%d is still open' % n if state == 'OPEN'
+                                else "train #%d's state could not be read" % n)
+            continue
+        if t.get('baseRefName') != base_short or t.get('isCrossRepository') is not False:
+            why = why or 'train #%d did not merge into %s from this repository' % (n, base_short)
+            continue
+        body = t.get('body') if isinstance(t.get('body'), str) else ''
+        listed, bad = train_block(body)
+        if bad:
+            why = why or 'train #%d %s' % (n, bad)
+            continue
+        if member not in listed:
+            why = why or "train #%d's ccrc-train v1 block does not list #%s" % (n, member)
+            continue
+        if listed[member] != head:
+            why = why or "train #%d's ccrc-train v1 block lists #%s at %s, not its head %s" % (n, member, listed[member], head)
+            continue
+        sys.stdout.write('%d\t%s\n' % (n, oid))
+        sys.exit(0)
+    # An unread candidate is never outvoted by a failed one: `?` wins over `!`.
+    if unread:
+        sys.stdout.write('?' + unread + '\n')
+    elif why:
+        sys.stdout.write('!' + why + '\n')
+
 elif mode == 'bind':
     # `pr-landing`'s binding (spec 3.3): `annotate` then `pick` over the ONE row a GraphQL alias answered, in a
     # `gh pr list` row's shape, through the same `bound()` `state` uses. It WRITES NOTHING: no `put`, no
     # `.prstate-<id>.lock`, no `.prhistory`. stdin is the list of alias rows (null where GitHub answered no object).
     # Prints `unreadable-alias` for an alias with no object, nothing for a row that does not bind, and otherwise one JSON
-    # object of the five facts the lane reads.
+    # object of the seven facts the lane reads (the last two, `landedInTrain` and `trainUnread`, are `annotate`'s).
     (main, branch, base_short, tip, idx) = sys.argv[2:7]
     tip = tip or None
     rows = rows_in()
@@ -6544,7 +6788,8 @@ elif mode == 'bind':
             sys.stdout.write(json.dumps({
                 'number': chosen.get('number'), 'headRefOid': chosen.get('headRefOid'),
                 'baseRefName': chosen.get('baseRefName'), 'state': chosen.get('state'),
-                'isDraft': chosen.get('isDraft'),
+                'isDraft': chosen.get('isDraft'), 'landedInTrain': chosen.get('landedInTrain') is True,
+                'trainUnread': chosen.get('trainUnread') is True,
             }) + '\n')
 PY
 }
@@ -6558,49 +6803,53 @@ WS_NOUN=(mesa river ridge harbor meadow canyon summit hollow prairie basin cove 
 
 _ws_slug_valid() { [[ "$1" =~ ^[a-z0-9][a-z0-9-]{1,30}$ ]]; }
 
-# R-3, wave review. Ids are `<project>-<slug>`, and `_reg_purge` unlinks
-# `"$REG/$id".*` for every dot-free suffix — so a PROJECT with a LEADING DOT
-# mints an id that ALIASES one of ccd's own hidden, dot-prefixed registry
-# files for an unrelated session. THE RULE, not a fixed list: a dot-leading
-# project aliases EVERY `$REG/.<name>.<dot-free-suffix>` file ccd owns. Four
-# known instances illustrate it, all verified: project `.prstate-demo` +
-# slug `quiet-basin` -> id `.prstate-demo-quiet-basin`, whose purge glob
-# matches `$REG/.prstate-demo-quiet-basin.lock` — the PR-STATE LOCK of the
-# unrelated session `demo-quiet-basin` (new this wave, the lock `_pr_py`'s
-# migration off `.uuid` introduced); project `.reap-demo` + slug
-# `quiet-basin` aliases that same session's REAP LOCK,
-# `$REG/.reap-demo-quiet-basin.lock` (pre-dates this wave); project
-# `.ws-add` + slug `demo` -> id `.ws-add-demo`, aliasing the WS-ADD LOCK for
-# project `demo`, `$REG/.ws-add-demo.lock` (pre-dates this wave);
-# project `.tmux` + slug `server` -> id `.tmux-server`, aliasing the
-# TMUX-SERVER LOCK `$REG/.tmux-server.lock` that `_tmux_new_session` takes
-# (pre-dates this wave); and project `.account` + slug `placement` -> id
-# `.account-placement`, aliasing the ACCOUNT-PLACEMENT LOCK
-# `$REG/.account-placement.lock` that all five `ccrc account` writing verbs
-# serialise on (new with that verb, and NOT amended here when it landed — see
-# the census note below) — `server` and `placement` pass `_ws_slug_valid`
-# exactly as the other three slugs do, no more contrived. Unlinking a lock file while
-# another process holds it is exactly how two processes come to hold "the
-# lock" on two different inodes — reopening the double compare-and-set this
-# branch's lock migration closed. A sixth, D-5884 (#128): project `.ignored`
-# + slug `scan` -> id `.ignored-scan`, aliasing the IGNORED-SCAN LOCK
-# `$REG/.ignored-scan.lock` that `_ws_collect_ignored_settled` takes before
-# its one retry. Unlinking that one costs nothing a lock protects: it only
-# lowers contention and is never a gate, so two retries holding two inodes is
-# two retries running at once, each with every refusal intact. A seventh,
-# D-6625: project `.collect` + slug `loose` -> id `.collect-loose`, aliasing
-# the COLLECT-LOOSE LOCK `$REG/.collect-loose.lock` that ws-collect's loose arm
-# holds over its census, audit and verb; it has no reap lock, since a loose
-# entry has no id.
+# R-3, wave review. Ids are `<project>-<slug>`, and `_reg_purge` unlinks `"$REG/$id".*` for
+# every dot-free suffix — so a PROJECT with a LEADING DOT mints an id that ALIASES one of
+# ccd's own hidden, dot-prefixed registry files for an unrelated session. THE RULE, not a
+# fixed list: a dot-leading project aliases EVERY `$REG/.<name>.<dot-free-suffix>` file ccd
+# owns. Four known instances illustrate it, all verified: project `.prstate-demo` + slug
+# `quiet-basin` -> id `.prstate-demo-quiet-basin`, whose purge glob matches
+# `$REG/.prstate-demo-quiet-basin.lock` — the PR-STATE LOCK of the unrelated session
+# `demo-quiet-basin` (new this wave, the lock `_pr_py`'s migration off `.uuid` introduced);
+# project `.reap-demo` + slug `quiet-basin` aliases that same session's REAP LOCK,
+# `$REG/.reap-demo-quiet-basin.lock` (pre-dates this wave); project `.ws-add` + slug `demo`
+# -> id `.ws-add-demo`, aliasing the WS-ADD LOCK for project `demo`,
+# `$REG/.ws-add-demo.lock` (pre-dates this wave); project `.tmux` + slug `server` -> id
+# `.tmux-server`, aliasing the TMUX-SERVER LOCK `$REG/.tmux-server.lock` that
+# `_tmux_new_session` takes (pre-dates this wave); and project `.account` + slug `placement`
+# -> id `.account-placement`, aliasing the ACCOUNT-PLACEMENT LOCK
+# `$REG/.account-placement.lock` that all five `ccrc account` writing verbs serialise on
+# (new with that verb, and NOT amended here when it landed — see the census note below) —
+# `server` and `placement` pass `_ws_slug_valid` exactly as the other three slugs do, no
+# more contrived. Unlinking a lock file while another process holds it is exactly how two
+# processes come to hold "the lock" on two different inodes — reopening the double
+# compare-and-set this branch's lock migration closed. A sixth, D-5884 (#128): project
+# `.ignored` + slug `scan` -> id `.ignored-scan`, aliasing the IGNORED-SCAN LOCK
+# `$REG/.ignored-scan.lock` that `_ws_collect_ignored_settled` takes before its one retry.
+# Unlinking that one costs nothing a lock protects: it only lowers contention and is never a
+# gate, so two retries holding two inodes is two retries running at once, each with every
+# refusal intact. A seventh, D-6625: project `.collect` + slug `loose` -> id
+# `.collect-loose`, aliasing the COLLECT-LOOSE LOCK `$REG/.collect-loose.lock` that
+# ws-collect's loose arm holds over its census, audit and verb; it has no reap lock, since a
+# loose entry has no id. An eighth, D-7278: project `.shed-demo` + slug `quiet-basin` -> id
+# `.shed-demo-quiet-basin`, aliasing the SHED LOCK `$REG/.shed-demo-quiet-basin.lock` of the
+# unrelated session `demo-quiet-basin`, which `ws-shed-deps` holds across a real removal and
+# the spawn gate asks; a wake would read it unlinked as free, so the shed also holds the row
+# marker `$REG/<id>.shedding`, which no alias glob reaches, and the gate fails closed on it
+# (DEPSSHED region).
 #
-# NOT reachable this way, and this set IS the boundary — FIFTEEN dot-prefixed
-# artifacts live under `$REG`; the seven above are reachable, these eight are
+# NOT reachable this way, and this set IS the boundary — EIGHTEEN dot-prefixed
+# artifacts live under `$REG`; the eight above are reachable, these ten are
 # not. THE CARDINAL IS MEASURED NOW, and it had to be: this paragraph said
 # EIGHT about a tree that already held nine, because `.account-placement.lock`
 # landed with `ccrc account` and nothing here reds when prose drifts.
 # `ccd-account-auth.test.ts`'s "the dot-prefixed registry inventory is a
 # census, not a memory" derives the number from the shipped bash and refuses
-# a paragraph that disagrees with it. The eight: `$REG/.carry.lock` (no id is the dash-free `.carry`);
+# a paragraph that disagrees with it. The ten: `$REG/.carry.lock` (no id is the dash-free `.carry`);
+# `$REG/.train-proofs` and `$REG/.train-tried` (D-7362, D-7381: the PR lane's kept train proofs and its tried
+# records, `PR_TRAIN_PROOFS_FILE` and `PR_TRAIN_TRIED_FILE`; neither name has a dot after its leading one, so no
+# `<id>.<field>` split leaves an id at all, and `.train-tried`'s `.tmp.XXXXXX` staging files, counted WITH it,
+# carry the second dot the `*.*` skip below excludes);
 # `$REG/.orphan-<sha16>.lock` (DR-17, D-6629: `ccd ws-orphan`'s per-tree lock; its suffix is the sha16 of a PATH, not
 # a `<project>-<slug>` id, so no `_reg_purge` glob can match it);
 # `$REG/.lifecycle/` (the lifecycle journal — a dotted DIRECTORY for
@@ -8827,6 +9076,7 @@ pick
 pr-landing
 pr-open
 pr-state
+pr-train-prove
 prefer
 project-pool
 reclaim-pause
@@ -9002,6 +9252,7 @@ EOF
   # child reclamation (wave 3): see "RECLAIM-V1" in the RECLAIM region
   echo reclaim-v1
   echo reclaim-stale-v1   # `ws-reclaim`/`ws-audit --reclaim` take `--stale <word> [--hold-digest <sha256>]` (DR-26, D-6638); sent only behind this word
+  echo shed-deps-v1; echo ws-shed-deps   # D-7278: the deps-shed arm's verb, one inode; see SHED-DEPS-V1 in ccd/lib/disk-retention.sh
   echo nested-rescue-v1; echo scratch-rescue   # D-6632: rung 9's rescue and the box-local `scratch-rescue` entry, one inode; see NESTED-RESCUE-V1
   echo reclaim-pause-v1; echo expire-v1; echo expire-child-v1; echo ws-expire; echo collect-v1; echo ws-collect; echo collect-loose-v1; echo orphan-v1; echo ws-orphan; echo archive-if-no-pane-v1   # the verbs ride here, not in the list above, which sits above the frozen corpus; see "EXPIRE-V1" and "COLLECT-V1"
   echo docs-tree
@@ -11173,6 +11424,9 @@ _pr_state_one() {   # id main repo rows [answered-at-ms] [rows-head-branch] -> o
   fi
   tmpl=""
   [[ -f "$main/.github/pull_request_template.md" ]] && tmpl=$(cat "$main/.github/pull_request_template.md")
+  # The train proof (D-7362) under the verb's budget (`_PR_TRAIN_DEADLINE`,
+  # none when this is called on its own), keeping what it proves.
+  _pr_train_proofs "$main" "$repo" "$branch" "$baseShort" 1 "$rows"
   printf '%s' "$rows" | _pr_py state "$id" "$project" "$main" "$repo" "$branch" "$base" \
     "$baseShort" "$tip" "$ahead" "$dirty" "$tmpl" "$REG" "$answeredAt"
 }
@@ -11303,6 +11557,13 @@ cmd_pr_state() {   # ccd pr-state --session <id> | ccd pr-state --project <proje
   # a refusal that stops a phase from ever updating.
   answeredAt=$(_plat_epoch_ms 2>/dev/null)
   [[ "$answeredAt" =~ ^[0-9]+$ ]] || answeredAt=""
+  # THE TRAIN PROOF'S BUDGET (D-7362): `--session` may read train records for
+  # its one branch; the `--project` sweep has no room left inside its bound and
+  # reads only the proofs already kept (see PR_STATE_TRAIN_TIMEOUT).
+  local _PR_TRAIN_DEADLINE=$SECONDS
+  [[ $mode == --session ]] && _PR_TRAIN_DEADLINE=$(( SECONDS + PR_STATE_TRAIN_TIMEOUT ))
+  # This call's train answers only (D-7378): `_pr_train_proofs` refills them per workspace.
+  local _PR_TRAIN_PROOFS="" _PR_TRAIN_FAILS="" _PR_TRAIN_REFUSED=""
 
   # ── THE ROLLUPS, WHICH THE WIDE WINDOW CANNOT CARRY ────────────────
   # `_gh_pr_list` sends `statusCheckRollup` only with a head filter, because a
@@ -11376,6 +11637,118 @@ cmd_pr_state() {   # ccd pr-state --session <id> | ccd pr-state --project <proje
   { for id in "${ids[@]}"; do _pr_state_one "$id" "$main" "$repo" "$rows" "$answeredAt" "$head"; done; } | _pr_queue_stamp "$mode" "$repo"
 }
 
+cmd_pr_train_prove() {   # ccd pr-train-prove --project <project> [--max <K>]
+  # THE BOUNDED PROVER (D-7378). `pr-state --project` has no room for a train
+  # read inside its bound (`pr-timeout-budget.test.ts`), so a member a merge
+  # train landed and CLOSED reads `train-unread` (unmeasured) on the sweep
+  # until its proof is kept. This verb is the one place the sweep's members
+  # are proven: the server runs it after the sweep, as a separate call with its
+  # own timeout row, whenever a line read `train-unread`. It reads the same row
+  # window the sweep reads (`_gh_pr_list`, one call), proves at most K
+  # labelled CLOSED members that have no kept proof yet under
+  # PR_TRAIN_PROVE_TIMEOUT for the whole call, and keeps every proof in
+  # `$REG/.train-proofs`. The next sweep then reads `merged` from the kept
+  # proof, which is what wakes `sweepMerged` and a run's merging wait.
+  #
+  # IT IS FAIR (D-7381). Each attempt that does not prove writes the member's
+  # TRIED line (`$REG/.train-tried`, outcome and time, never a proof). The K
+  # are chosen from the members with no tried line first, then the OLDEST
+  # tried, so members GitHub keeps refusing never starve one that landed. A
+  # member whose record was read and FAILED less than PR_TRAIN_TRIED_TTL ago is
+  # not asked again (`unproven`, no gh call) and the sweep reads it
+  # `train-unproven`; an `unread` outcome is asked again on the next call.
+  #
+  # One JSON line per labelled member of the project's workspaces (a member
+  # two workspaces share is listed once, under the first):
+  #   {"id","number","proof"} with proof one of
+  #   kept      a proof was already kept; no gh call
+  #   proved    proven now, and kept
+  #   unproven  the record was read and did not prove it, now or less than
+  #             PR_TRAIN_TRIED_TTL ago (nothing kept)
+  #   unread    the record could not be read inside the budget (nothing kept)
+  #   deferred  past this call's K; a later call reaches it
+  local p="" max="$PR_TRAIN_PROVE_MAX"
+  while (( $# )); do
+    case "$1" in
+      --project) [[ $# -ge 2 ]] || die "usage: ccd pr-train-prove --project <project> [--max <K>]"; p="$2"; shift 2 ;;
+      --max)     [[ $# -ge 2 ]] || die "usage: ccd pr-train-prove --project <project> [--max <K>]"; max="$2"; shift 2 ;;
+      *)         die "usage: ccd pr-train-prove --project <project> [--max <K>]" ;;
+    esac
+  done
+  [[ "$p" =~ ^[A-Za-z0-9._-]+$ ]] || die "bad project"
+  [[ "$max" =~ ^([1-9]|1[0-6])$ ]] || die "bad --max (1 to 16)"
+
+  local -a ids=()
+  local f id
+  for f in "$REG"/*.workspace; do
+    [[ -e "$f" ]] || continue
+    id=$(basename "$f" .workspace)
+    [[ "$id" =~ ^[A-Za-z0-9._-]+$ ]] || continue
+    [[ -f "$REG/$id.uuid" ]] || continue
+    [[ "$(_reg_get "$id" project)" == "$p" ]] || continue
+    ids+=("$id")
+  done
+  (( ${#ids[@]} )) || return 0
+
+  local main repo rows
+  main="$PROJECTS_ROOT/$p"
+  repo=$(_gh_repo_slug "$main") || { printf '{"phase":"unknown","reason":"no-remote"}\n'; return 0; }
+  rows=$(_gh_pr_list "$repo") || { printf '%s\n' "$rows"; return 0; }
+
+  # 1. Every labelled member, once, in workspace order: `<id> <n> <head> <base>`.
+  local project branch base baseShort tip ahead workdir wthead registered BIND_REFUSAL c h rc key i
+  local -a entries=()
+  local -A seen=() word=()
+  for id in "${ids[@]}"; do
+    _pr_bind_facts "$id" "$main" "" || continue
+    while IFS=$'\t' read -r c h; do
+      _pr_num_valid "$c" && [[ "$h" =~ ^[0-9a-f]{40}$ ]] || continue
+      key="$c $h $baseShort"
+      [[ -n "${seen[$key]:-}" ]] && continue
+      seen[$key]=1
+      entries+=("$id $key")
+    done < <(printf '%s' "$rows" | _pr_py train-cands "$branch" "$baseShort")
+  done
+
+  # 2. Answer what needs no gh call; rank the rest: no tried line first (0),
+  #    then by when it was last tried, oldest first; ties keep workspace order.
+  local -a ranked=()
+  for (( i = 0; i < ${#entries[@]}; i++ )); do
+    read -r id c h baseShort <<< "${entries[$i]}"
+    key="$c $h $baseShort"
+    if _ws_train_kept "$repo" "$baseShort" "$c" "$h"; then
+      word[$key]=kept
+    elif _ws_train_tried_fresh_failed "$repo" "$baseShort" "$c" "$h"; then
+      word[$key]=unproven
+    elif _ws_train_tried_get "$repo" "$baseShort" "$c" "$h"; then
+      ranked+=("$(( _WS_TRIED_AT + 1 )) $i")
+    else
+      ranked+=("0 $i")
+    fi
+  done
+
+  # 3. Prove the first K under the call's one budget; the rest wait.
+  local spent=0 r
+  local _PR_TRAIN_DEADLINE=$(( SECONDS + PR_TRAIN_PROVE_TIMEOUT ))
+  local -a order=()
+  (( ${#ranked[@]} )) && mapfile -t order < <(printf '%s\n' "${ranked[@]}" | sort -s -n -k1,1 -k2,2)
+  for r in "${order[@]}"; do
+    i="${r#* }"
+    read -r id c h baseShort <<< "${entries[$i]}"
+    key="$c $h $baseShort"
+    if (( spent >= max )); then word[$key]=deferred; continue; fi
+    spent=$(( spent + 1 ))
+    _ws_train_record "$main" "$repo" "$c" "$h" "$baseShort" 1 < /dev/null; rc=$?
+    case "$rc" in 0) word[$key]=proved ;; 1) word[$key]=unproven ;; *) word[$key]=unread ;; esac
+  done
+
+  for r in "${entries[@]}"; do
+    read -r id c h baseShort <<< "$r"
+    printf '{"id":%s,"number":%s,"proof":"%s"}\n' "$(_json_str "$id")" "$c" "${word["$c $h $baseShort"]}"
+  done
+  return 0
+}
+
 # ── pr-landing: the checks lane's read (PR-landing stage 1, spec 3.3) ───────────────────────────
 # READ-ONLY, of gh and of $REG. One `gh api graphql` query (a `query`, never a mutation) reads every named PR by
 # NUMBER, so a landing PR older than `gh pr list`'s newest-100 window still binds; two `gh api` GETs read the base's
@@ -11389,7 +11762,7 @@ cmd_pr_state() {   # ccd pr-state --session <id> | ccd pr-state --project <proje
 # `pullRequest(number:)`: either way every real call would fail. No datum from a session, a PR or GitHub enters the
 # text. The owner and name travel as `$o` and `$r`, the numbers as `-F n<i>=<int>`.
 PR_LANDING_RULES_TTL=600
-PR_LANDING_ALIAS='    p@I@: pullRequest(number: $n@I@) { number state isDraft isCrossRepository headRefName baseRefName headRefOid commits(last: 1) { nodes { commit { statusCheckRollup { contexts(first: 100) { pageInfo { hasNextPage } nodes { __typename ... on CheckRun { name status conclusion databaseId checkSuite { app { databaseId } workflowRun { databaseId } } isRequired(pullRequestNumber: $n@I@) } ... on StatusContext { context state isRequired(pullRequestNumber: $n@I@) } } } } } } } }'
+PR_LANDING_ALIAS='    p@I@: pullRequest(number: $n@I@) { number state isDraft isCrossRepository headRefName baseRefName headRefOid labels(first: 100) { nodes { name } } commits(last: 1) { nodes { commit { statusCheckRollup { contexts(first: 100) { pageInfo { hasNextPage } nodes { __typename ... on CheckRun { name status conclusion databaseId checkSuite { app { databaseId } workflowRun { databaseId } } isRequired(pullRequestNumber: $n@I@) } ... on StatusContext { context state isRequired(pullRequestNumber: $n@I@) } } } } } } } }'
 
 _gh_pr_landing_query() {   # K -> the GraphQL document for K aliased pull requests, on stdout
   local k="$1" i decl='$o: String!, $r: String!' body=""
@@ -11616,6 +11989,11 @@ elif mode == 'final':
                 prot = None
                 unm.append('protection')
             pins = sorted(set(pinned_of(rules)) | set(pinned_of(prot)))
+            # A labelled member whose train record was not read inside this
+            # call's budget (D-7378): unmeasured, so the lane neither wakes the
+            # run as merged nor ends it as closed.
+            if b.get('trainUnread') is True:
+                unm.append('train')
             req = required_of(row, frozenset(pins)) if isinstance(row, dict) else []
             cut = len(req) > LIST_MAX
             cut = cut or bool(rules and rules['cut']) or bool(prot and prot['cut'])
@@ -11624,6 +12002,7 @@ elif mode == 'final':
             except Exception:
                 pass
             line.update({'bound': True, 'number': b.get('number'), 'state': b.get('state'),
+                         'landedInTrain': b.get('landedInTrain') is True,
                          'isDraft': b.get('isDraft') is True, 'base': b.get('baseRefName'), 'head': b.get('headRefOid'),
                          'required': req[:LIST_MAX], 'requiredCut': cut,
                          'rulesNamed': rules['names'] if rules else [],
@@ -11698,6 +12077,9 @@ cmd_pr_landing() {   # ccd pr-landing --project <p> --sessions <id>:<pr>[,<id>:<
 
   # THE BINDING, per session, through the code `pr-state` binds with and persisting nothing.
   local branch base baseShort tip ahead workdir wthead registered BIND_REFUSAL facts="" bind bases=$'\n'
+  # The train proof's budget for the whole call (D-7362); this read keeps nothing.
+  local _PR_TRAIN_DEADLINE=$(( SECONDS + $PR_LANDING_TRAIN_TIMEOUT ))
+  local _PR_TRAIN_PROOFS="" _PR_TRAIN_FAILS="" _PR_TRAIN_REFUSED=""   # this call's train answers only (D-7378)
   for (( i = 0; i < k; i++ )); do
     id="${ids[$i]}"
     if ! _pr_bind_facts "$id" "$main" ""; then
@@ -11705,6 +12087,7 @@ cmd_pr_landing() {   # ccd pr-landing --project <p> --sessions <id>:<pr>[,<id>:<
     elif (( gqlok == 0 )); then
       facts+="$(printf '{"id":"%s","gql":true}' "$id")"$'\n'
     else
+      _pr_train_proofs "$main" "$repo" "$branch" "$baseShort" 0 "$rows"
       bind=$(printf '%s' "$rows" | _pr_py bind "$main" "$branch" "$baseShort" "$tip" "$i" 2>/dev/null) || bind="unreadable-alias"
       case "$bind" in
         unreadable-alias) facts+="$(printf '{"id":"%s","unreadable":true}' "$id")"$'\n' ;;
@@ -12656,6 +13039,266 @@ _ws_merge_proof() {   # main M tip -> 0, with the passing rung in _WS_PROOF
   return 1
 }
 
+# THE TRAIN PROOF'S TIME BUDGETS (D-7362), in seconds: the most one verb may
+# spend on train records, over every member it proves, each gh call bounded by
+# what is left (never more than `PR_GH_TIMEOUT`). The proof is computed in ONE
+# place (`_pr_train_proofs` -> `_ws_train_record`) and every reader takes its
+# answer, so the budgets are the only per-verb difference:
+#   pr-state --session  PR_STATE_TRAIN_TIMEOUT (inside the 25 s bound, beside its one rows call)
+#   pr-state --project  0 — the sweep has no room (`pr-timeout-budget.test.ts`) and reads proofs a
+#                       `--session` read, an audit or `pr-train-prove` already made and kept; a
+#                       labelled member with no kept proof reads `train-unread` (D-7378), unmeasured
+#   pr-train-prove      PR_TRAIN_PROVE_TIMEOUT over at most PR_TRAIN_PROVE_MAX members, its own verb and
+#                       its own server row, run by the 120 s sweep after `pr-state --project` (D-7378)
+#   pr-landing          PR_LANDING_TRAIN_TIMEOUT, beside its GraphQL and REST reads, keeping nothing
+#   ws-audit / ws-reap  WS_TRAIN_TIMEOUT per workspace
+# Running out of budget proves nothing and is UNREAD (rc 2), never `not landed`.
+# Only a read with no budget at all (it can make no gh call: the sweep) answers
+# from the member's tried record, when it says the record was read and FAILED
+# less than PR_TRAIN_TRIED_TTL ago (D-7381): then it is that refusal (rc 1).
+PR_STATE_TRAIN_TIMEOUT=6
+PR_LANDING_TRAIN_TIMEOUT=3
+WS_TRAIN_TIMEOUT=16
+PR_TRAIN_PROVE_TIMEOUT=16
+PR_TRAIN_PROVE_MAX=3
+# THE KEPT PROOFS: one `<repo> <base> <member> <head> <train> <train merge
+# commit>` line per proven member, appended by a proof made with keep=1. A
+# MERGED train never un-merges, so a proof stands for good; nothing but a proof
+# is written, so a refusal is always re-asked. Keyed by the base too (D-7378):
+# a proof that a train merged into one base is no proof for another. Every
+# field is anchored on the way in and again on the way out, and a line that
+# does not parse (an older five-field line among them) is no proof.
+PR_TRAIN_PROOFS_FILE=.train-proofs
+# THE TRIED RECORDS (D-7381): one `<repo> <base> <member> <head> <outcome>
+# <epoch>` line per member a proof was ATTEMPTED for and did not prove, written
+# by a read that keeps (keep=1). The outcome is `failed` (GitHub answered and
+# the record did not prove it: `_ws_train_record`'s 1) or `unread` (its 2). A
+# separate file from the proofs, and NEVER read as a proof: it only orders the
+# prover (no record first, then the oldest tried) and, while a `failed` line is
+# fresh (PR_TRAIN_TRIED_TTL), lets a read with no budget at all (no gh call
+# made) answer `train-unproven` instead of `train-unread` and keeps the prover
+# from asking again. An `unread` line is retried on the next call. A proof found
+# by any read (keep=0 too) removes the member's line, and a kept proof is
+# consulted before any line; lines older than PR_TRAIN_TRIED_KEEP are dropped
+# on write.
+PR_TRAIN_TRIED_FILE=.train-tried
+PR_TRAIN_TRIED_TTL=1800
+PR_TRAIN_TRIED_KEEP=86400
+
+_ws_train_tried_get() {   # repo base number head -> 0 with the outcome in _WS_TRIED_OUTCOME and its epoch in _WS_TRIED_AT; 1 when none is recorded
+  local got
+  _WS_TRIED_OUTCOME="" _WS_TRIED_AT=""
+  _ws_train_keyable "$1" "$2" && [[ -f "$REG/$PR_TRAIN_TRIED_FILE" ]] || return 1
+  got=$(awk -v r="$1" -v b="$2" -v n="$3" -v h="$4" \
+          '$1 == r && $2 == b && $3 == n && $4 == h && NF == 6 { l = $5 " " $6 } END { if (l != "") print l }' \
+          "$REG/$PR_TRAIN_TRIED_FILE" 2>/dev/null)
+  [[ "$got" =~ ^(failed|unread)\ ([0-9]{1,12})$ ]] || return 1
+  _WS_TRIED_OUTCOME="${BASH_REMATCH[1]}" _WS_TRIED_AT="${BASH_REMATCH[2]}"
+}
+
+_ws_train_tried_fresh_failed() {   # repo base number head -> 0 when the member's record was read and FAILED less than PR_TRAIN_TRIED_TTL ago
+  local now age
+  _ws_train_tried_get "$@" && [[ "$_WS_TRIED_OUTCOME" == failed ]] || return 1
+  _now_s_to now
+  age=$(( now - _WS_TRIED_AT ))
+  (( age >= 0 && age < PR_TRAIN_TRIED_TTL ))
+}
+
+_ws_train_tried_put() {   # repo base number head outcome -> replaces the member's tried line with `outcome` now (`failed` or `unread`), or removes it when outcome is empty. Best effort: a file that cannot be written orders nothing and proves nothing
+  local f="$REG/$PR_TRAIN_TRIED_FILE" tmp now
+  _ws_train_keyable "$1" "$2" && _pr_num_valid "$3" && [[ "$4" =~ ^[0-9a-f]{40}$ ]] || return 0
+  [[ -z "$5" || "$5" == failed || "$5" == unread ]] || return 0
+  [[ -n "$5" || -f "$f" ]] || return 0
+  _now_s_to now
+  tmp=$(mktemp "$REG/.train-tried.tmp.XXXXXX" 2>/dev/null) || return 0
+  {
+    [[ ! -f "$f" ]] || awk -v r="$1" -v b="$2" -v n="$3" -v h="$4" -v now="$now" -v keep="$PR_TRAIN_TRIED_KEEP" \
+      'NF == 6 && !($1 == r && $2 == b && $3 == n && $4 == h) && $6 ~ /^[0-9]+$/ && now - $6 < keep { print }' "$f"
+    if [[ -n "$5" ]]; then printf '%s %s %s %s %s %s\n' "$1" "$2" "$3" "$4" "$5" "$now"; fi
+  } > "$tmp" 2>/dev/null && mv -f "$tmp" "$f" 2>/dev/null || rm -f "$tmp"
+  return 0
+}
+
+_ws_train_left() {   # -> on stdout, the seconds the next train-record gh call may take: what is left of `_PR_TRAIN_DEADLINE` (a `$SECONDS` value; unset is none left), never more than PR_GH_TIMEOUT; rc 1 once it is spent
+  local l=$(( ${_PR_TRAIN_DEADLINE:-$SECONDS} - SECONDS ))
+  (( l > 0 )) || return 1
+  (( l < PR_GH_TIMEOUT )) || l=$PR_GH_TIMEOUT
+  printf '%s' "$l"
+}
+
+_pr_num_valid() { _child_runid_valid "$@"; }   # value -> 0 iff it is a legal PR number: the run id's grammar (a positive decimal of at most ten digits, ASCII in every locale), spelled once in _child_runid_valid
+
+_ws_train_keyable() {   # repo base -> 0 when both may stand as one field of a kept-proof line: the slug's own spelling, and a base name with no space, no leading dash and nothing outside a ref's usual letters
+  [[ "$1" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ && "$2" =~ ^[A-Za-z0-9._/-]+$ && "$2" != -* ]]
+}
+
+_ws_train_kept() {   # repo base number head -> 0 with the kept proof's train in _WS_TRAIN_NUM and its merge commit in _WS_TRAIN_MERGE; 1 when none is kept. Same repository, same base, same member, same head (D-7378)
+  local kept
+  _ws_train_keyable "$1" "$2" && [[ -f "$REG/$PR_TRAIN_PROOFS_FILE" ]] || return 1
+  kept=$(awk -v r="$1" -v b="$2" -v n="$3" -v h="$4" \
+           '$1 == r && $2 == b && $3 == n && $4 == h && NF == 6 { print $5 " " $6; exit }' \
+           "$REG/$PR_TRAIN_PROOFS_FILE" 2>/dev/null)
+  [[ "$kept" =~ ^([^ ]+)\ ([0-9a-f]{40})$ ]] || return 1
+  _WS_TRAIN_NUM="${BASH_REMATCH[1]}" _WS_TRAIN_MERGE="${BASH_REMATCH[2]}"
+  _pr_num_valid "$_WS_TRAIN_NUM" || { _WS_TRAIN_NUM="" _WS_TRAIN_MERGE=""; return 1; }
+}
+
+_ws_train_record() {   # main repo number headOid baseShort [keep] -> 0 with the train PR in _WS_TRAIN_NUM and its merge commit in _WS_TRAIN_MERGE; else 1 (not landed) or 2 (GitHub could not be reached, or the budget ran out, before anything proved it), the sentence in _WS_TRAIN_WHY. Called directly, never in $(…), so the globals reach the caller
+  # THE PROOF FOR A PR CLOSED AS LANDED IN A MERGE TRAIN, and it is the TRAIN
+  # RECORD, never a tree merge. A train squashes its members together and
+  # resolves their overlaps, so no member's tree need be in the landing commit
+  # — two members editing one hunk each fail any tree comparison — and main
+  # editing those lines later makes a merge into its head conflict for ever.
+  # What does hold is what the train itself wrote down: the train PR the member
+  # names (in the comment the train leaves on it, `train #<n>`), or one a
+  # search on the member's head sha finds, is MERGED and its one `ccrc-train v1`
+  # block lists this member at exactly this member's head sha (`_pr_py
+  # train-check`, D-7335; the format is in the README).
+  #
+  # EVERY REFERENCE IS A CANDIDATE, AND A BAD ONE IS ONLY A FAILED CANDIDATE
+  # (D-7362) — and a candidate FAILS only when GitHub DEFINITIVELY answered
+  # about it (D-7381): the train PR was read and is CLOSED unmerged (an OPEN
+  # train, or a missing or odd state, is unread: it may yet merge), lists
+  # another sha or does not list the member, or gh said the number is not a
+  # pull request in this repository (rc 1 with `Could not resolve to a
+  # PullRequest` on its stderr). Every other failure — rc 1 with an HTTP 5xx, a
+  # rate limit, a network or auth error, rc 124, a signal, an answer that is
+  # not a pull request's JSON — is UNREAD. The search goes on through every
+  # reference the comments name and then the search fallback: a newer stray
+  # `train #77` never hides the real train named before it. `2` means GitHub
+  # did not answer about SOME candidate — a train, the member's comments or the
+  # search — or the deadline (`_PR_TRAIN_DEADLINE`, a `$SECONDS` value the verb
+  # set; unset is no budget at all) ran out, and nothing proved the landing: an
+  # unread candidate is never outvoted by an empty search. A proof found first
+  # always wins.
+  #
+  # A READ WITH NO BUDGET LEFT — one that can make no gh call at all, the
+  # `--project` sweep — answers from the member's TRIED record (D-7381): a
+  # record read and FAILED less than PR_TRAIN_TRIED_TTL ago is `1` (closed,
+  # `train-unproven`), so the sweep shows a refused member as refused while the
+  # record is fresh; anything else is `2`. A read that DID ask GitHub and hit an
+  # unread candidate is `2` regardless of a fresh line (#1797 round 7). With
+  # keep=1 an attempt that did not prove writes the member's tried line
+  # (`failed` for 1, `unread` for 2); a proof found by any read, keep=0
+  # included, removes it; an answer taken from a fresh line rewrites nothing.
+  #
+  # The caller bound the member: CLOSED with the label, on this branch and
+  # base. Every number and sha placed in a gh argv is anchored first (spec §7):
+  # the member number and head here, a train number by `train-refs`'s
+  # digit-only output and again below.
+  local main="$1" repo="$2" n="$3" head="$4" base="$5" keep="${6:-0}" out t ans why="" unreach=0 left rc errf
+  _WS_TRAIN_WHY="" _WS_TRAIN_MERGE="" _WS_TRAIN_NUM=""
+  _pr_num_valid "$n" && [[ "$head" =~ ^[0-9a-f]{40}$ ]] \
+    || { _WS_TRAIN_WHY="gh named #$n at '$head', not a full head sha a train record can list"; return 1; }
+  # A proof already kept answers without a gh call, before any tried line is
+  # consulted, and clears a stale one (round 7).
+  if _ws_train_kept "$repo" "$base" "$n" "$head"; then
+    _ws_train_tried_get "$repo" "$base" "$n" "$head" && _ws_train_tried_put "$repo" "$base" "$n" "$head" ""
+    return 0
+  fi
+  local fields=number,state,mergedAt,mergeCommit,body,baseRefName,isCrossRepository
+  if ! left=$(_ws_train_left); then
+    if _ws_train_tried_fresh_failed "$repo" "$base" "$n" "$head"; then
+      _WS_TRAIN_WHY="the train record for #$n was read and did not prove it less than $(( PR_TRAIN_TRIED_TTL / 60 )) minutes ago"; return 1
+    fi
+    _WS_TRAIN_WHY="the train record for #$n was not read inside this read's time budget"; return 2
+  fi
+  # gh's stderr for a train read is what tells a definitive "no such pull
+  # request" from a transient failure; with no scratch file every failure is unread.
+  errf=$(_plat_mktemp 2>/dev/null) || errf=""
+  if out=$(_plat_timeout "$left" gh pr view "$n" --repo "$repo" --json comments 2>/dev/null); then
+    while IFS= read -r t; do
+      _pr_num_valid "$t" || continue
+      left=$(_ws_train_left) || { unreach=1; break; }
+      if ans=$(_plat_timeout "$left" gh pr view "$t" --repo "$repo" --json "$fields" 2>"${errf:-/dev/null}"); then :
+      else
+        rc=$?
+        # FAILED only when GitHub said this number is no pull request here
+        # (D-7381); a 5xx, a rate limit, the network, auth, a timeout (124) or
+        # a signal is UNREAD (D-7378).
+        if (( rc == 1 )) && [[ -n "$errf" ]] \
+             && grep -qE 'Could not resolve to a PullRequest|is not a pull request' "$errf" 2>/dev/null; then
+          [[ -n "$why" ]] || why="#$n names train #$t, which GitHub says is not a pull request in this repository"
+        else
+          unreach=1
+        fi
+        continue
+      fi
+      ans=$(printf '%s' "$ans" | _pr_py train-check "$n" "$head" "$base")
+      case "$ans" in
+        '!'*) [[ -n "$why" ]] || why="${ans#!}" ;;
+        # An answer that is no train PR's JSON says nothing about the train: unread.
+        ''|'?'*) unreach=1 ;;
+        *)    _WS_TRAIN_NUM="${ans%%$'\t'*}" _WS_TRAIN_MERGE="${ans#*$'\t'}"; break ;;
+      esac
+    done < <(printf '%s' "$out" | _pr_py train-refs "$n")
+  else
+    unreach=1
+  fi
+  [[ -n "$errf" ]] && rm -f "$errf"
+  if [[ -z "$_WS_TRAIN_MERGE" ]]; then
+    if left=$(_ws_train_left) && out=$(_plat_timeout "$left" gh pr list --repo "$repo" --state merged --limit 5 \
+            --search "$head in:body" --json "$fields" 2>/dev/null); then
+      ans=$(printf '%s' "$out" | _pr_py train-check "$n" "$head" "$base")
+      case "$ans" in
+        '!'*)  [[ -n "$why" ]] || why="${ans#!}" ;;
+        # A search answer that is not a JSON list of PRs was not read.
+        '?'*)  unreach=1 ;;
+        ?*)    _WS_TRAIN_NUM="${ans%%$'\t'*}" _WS_TRAIN_MERGE="${ans#*$'\t'}" ;;
+      esac
+    else
+      unreach=1
+    fi
+  fi
+  if _pr_num_valid "$_WS_TRAIN_NUM" && [[ "$_WS_TRAIN_MERGE" =~ ^[0-9a-f]{40}$ ]]; then
+    if [[ "$keep" == 1 ]] && _ws_train_keyable "$repo" "$base"; then
+      printf '%s %s %s %s %s %s\n' "$repo" "$base" "$n" "$head" "$_WS_TRAIN_NUM" "$_WS_TRAIN_MERGE" \
+        >> "$REG/$PR_TRAIN_PROOFS_FILE" 2>/dev/null || true
+    fi
+    # A proof found by ANY read removes the member's tried line, keep=0 too: a
+    # read that keeps no proof still never leaves a stale `failed` line behind.
+    _ws_train_tried_put "$repo" "$base" "$n" "$head" ""
+    return 0
+  fi
+  _WS_TRAIN_NUM="" _WS_TRAIN_MERGE=""
+  if (( unreach )); then
+    # A read that made gh calls and hit an unread candidate is UNREAD, whatever
+    # a fresh `failed` line says (round 7): only the no-budget return above,
+    # which could ask GitHub nothing, answers from that line.
+    [[ "$keep" == 1 ]] && _ws_train_tried_put "$repo" "$base" "$n" "$head" unread
+    _WS_TRAIN_WHY="GitHub could not be read for the train record of #$n${why:+, and $why}"; return 2
+  fi
+  [[ "$keep" == 1 ]] && _ws_train_tried_put "$repo" "$base" "$n" "$head" failed
+  _WS_TRAIN_WHY="${why:-no merged train PR names #$n or lists it at $head}"
+  return 1
+}
+
+_pr_train_proofs() {   # main repo branch baseShort keep rows -> _PR_TRAIN_PROOFS (the lines `_pr_py` hands python), _PR_TRAIN_REFUSED (`<n> <head>` per member whose record was READ and failed) and _PR_TRAIN_FAILS (`<n> <rc> <sentence>` per refused member). Called directly, never in $(…)
+  # THE ONE PLACE `landedInTrain` IS DECIDED (D-7362). Every reader of a train
+  # landing — `pr-state`'s phase and the archive trigger it feeds, the landing
+  # lane's merged notice, the queue word, the cleanup audit and the reap —
+  # runs the rows through here before `_pr_py` annotates them, and `annotate`
+  # sets `landedInTrain` only for a member listed in `_PR_TRAIN_PROOFS`. A
+  # label whose record was read and failed is `trainUnproven`: closed, never
+  # merged. A label whose record was NOT read (rc 2: no budget, a timeout,
+  # GitHub unreachable) is in neither list and reads `trainUnread`: unmeasured
+  # (D-7378). EVERY call starts from empty, so a list can never carry one
+  # call's — or one workspace's — answers into the next.
+  local main="$1" repo="$2" branch="$3" base="$4" keep="$5" rows="$6" c h rc
+  _PR_TRAIN_PROOFS="" _PR_TRAIN_FAILS="" _PR_TRAIN_REFUSED=""
+  while IFS=$'\t' read -r c h; do
+    _pr_num_valid "$c" && [[ "$h" =~ ^[0-9a-f]{40}$ ]] || continue
+    _ws_train_record "$main" "$repo" "$c" "$h" "$base" "$keep"; rc=$?
+    if (( rc == 0 )); then
+      _PR_TRAIN_PROOFS+="$c $h $_WS_TRAIN_NUM $_WS_TRAIN_MERGE"$'\n'
+    else
+      (( rc == 1 )) && _PR_TRAIN_REFUSED+="$c $h"$'\n'
+      _PR_TRAIN_FAILS+="$c $rc $_WS_TRAIN_WHY"$'\n'
+    fi
+  done < <(printf '%s' "$rows" | _pr_py train-cands "$branch" "$base")
+  return 0
+}
+
 _ws_fingerprint() {   # id branch tip headOid mergeOid proof dirty igndigest sensdigest stashes wthead baseOid clipsDigest childrenDigest
   # FOURTEEN facts, and the thirteenth is the clips. `~/.cc-clips/<id>` is
   # `rm -rf`'d at (h) — 3.8 MB full-resolution screenshots per the spec — and
@@ -12722,6 +13365,9 @@ _ws_reap_eval() {   # id -> 0 when reapable, else REAP_VERDICT names the refusal
   local id="$1" ws project workdir branch base baseShort main wthead common mainreal
   local st up ahead repo rows row registered errf err rc stashall dirt clipsjson nested
   local children strays contained=0 obase ourl ancwhy regbranch tombbranch uplive upremote upmerge uprc   # the last four: C1's live-head probe (D-5882)
+  local landed=0   # rung 2's train arm: `pick` answered `landed` (a PR a merge train landed and closed)
+  # This workspace's train answers only, never the last workspace's (D-7378).
+  local _PR_TRAIN_PROOFS="" _PR_TRAIN_FAILS="" _PR_TRAIN_REFUSED=""
 
   # ── Phase A: identity ────────────────────────────────────────────
   [[ -f "$REG/$id.uuid" ]] || { _ws_refuse no-such-session "no registry entry for $id"; return 1; }
@@ -13522,6 +14168,11 @@ _ws_reap_eval() {   # id -> 0 when reapable, else REAP_VERDICT names the refusal
   # this function (C2), where the sentence is true.
   if repo=$(_gh_repo_slug "$main"); then
     rows=$(_gh_pr_list "$repo")   || { _ws_refuse gh-unreadable "$rows"; return 1; }
+    # The train proof first (D-7362): `pick` reads `landedInTrain` off the
+    # same `_pr_train_proofs` every other reader uses, with this workspace's
+    # own budget, and keeps what it proves.
+    local _PR_TRAIN_DEADLINE=$(( SECONDS + WS_TRAIN_TIMEOUT ))
+    _pr_train_proofs "$main" "$repo" "$branch" "$baseShort" 1 "$rows"
     row=$(printf '%s' "$rows" | _pr_py pick "$main" "$branch" "$baseShort" "$REAP_TIP")
   else
     row=''
@@ -13561,9 +14212,44 @@ _ws_reap_eval() {   # id -> 0 when reapable, else REAP_VERDICT names the refusal
       fi
       return 1 ;;
     '!pr-head-not-ours')  _ws_refuse pr-head-not-ours "the PR head commit is not reachable from $branch"; return 1 ;;
+    '!not-merged train '*)
+      # Labelled as landed in a merge train, and the train record did not
+      # prove it: `not-merged` only when the record was READ and failed
+      # (`_ws_train_record`'s 1), with the sentence; otherwise — GitHub did
+      # not answer, the budget ran out, or no read was made — `gh-unreadable`
+      # (D-7378).
+      local tn="${row#!not-merged train }" tf
+      tf=$(awk -v n="$tn" '$1 == n { $1 = ""; print substr($0, 2); exit }' <<< "$_PR_TRAIN_FAILS")
+      if [[ "$tf" == 1\ * ]]; then
+        _ws_refuse not-merged "the PR was closed as landed in a merge train, but ${tf#1 }"
+      elif [[ "$tf" == 2\ * ]]; then
+        _ws_refuse gh-unreadable "the PR was closed as landed in a merge train, but ${tf#2 }"
+      else
+        _ws_refuse gh-unreadable "the PR was closed as landed in a merge train, and its train record was not read"
+      fi
+      return 1 ;;
     '!'*)                 _ws_refuse "${row#!}" "the bound PR is not merged"; return 1 ;;
   esac
   IFS=$'\t' read -r REAP_PRNUM REAP_PRURL REAP_MERGE REAP_HEADOID <<< "$row"
+  # A PR CLOSED AS LANDED IN A MERGE TRAIN (`pick`'s `landed`). The train
+  # landed this member's work through a train PR, squashed and resolved beside
+  # other members', and closed the member, so GitHub names no merge commit and
+  # no tree comparison can tell this member's work from the rest. The proof is
+  # the TRAIN RECORD (`_ws_train_record`): the train PR the member names is
+  # MERGED and lists it at exactly its head sha. REAP_MERGE becomes the train
+  # PR's merge commit, so the token, the audit and the tombstone are pinned to
+  # it, never to origin's current head: main later editing the same lines, or
+  # reverting them, does not un-land it, exactly as for a MERGED PR. The label
+  # is GitHub's claim; this rung is what stops a label on unlanded work from
+  # deleting anything, and the tip check below what stops a commit the train
+  # never saw.
+  if [[ "$REAP_MERGE" == landed ]]; then
+    landed=1
+    # `pick` says `landed` only for a member `_pr_train_proofs` proved, so
+    # its proof line is there; the train PR's merge commit stands in for the
+    # oid gh did not name.
+    REAP_MERGE=$(awk -v n="$REAP_PRNUM" -v h="$REAP_HEADOID" '$1 == n && $2 == h { print $4; exit }' <<< "$_PR_TRAIN_PROOFS")
+  fi
   # §7's argv boundary, restated on THIS side of the split — because the split
   # is what can move a value out of the field that was anchored and into one
   # that was not. `_pr_py pick` checks `mergeCommit.oid` and `headRefOid`
@@ -13601,7 +14287,18 @@ _ws_reap_eval() {   # id -> 0 when reapable, else REAP_VERDICT names the refusal
     || { _ws_refuse pr-fields-malformed "gh named mergeCommit='$REAP_MERGE' headRefOid='$REAP_HEADOID'"; return 1; }
   git -C "$main" cat-file -e "${REAP_MERGE}^{commit}" 2>/dev/null \
     || { _ws_refuse merge-commit-missing "$REAP_MERGE is not in the object store after a fetch"; return 1; }
-  if _ws_merge_proof "$main" "$REAP_MERGE" "$REAP_TIP"; then
+  if (( landed )); then
+    # The train record lists the member at its head, and `pick` bound a head
+    # reachable from our tip, so the tip being an ancestor of that head means
+    # the two are the same commit: nothing on the branch is beyond what the
+    # train landed.
+    if git -C "$main" merge-base --is-ancestor -- "$REAP_TIP" "$REAP_HEADOID" 2>/dev/null; then
+      REAP_PROOF=train
+    else
+      _ws_refuse tree-differs "the branch carries commits beyond the head the train landed: $(git -C "$main" diff --stat "$REAP_HEADOID" "$REAP_TIP" -- | head -5; git -C "$main" log --oneline "$REAP_HEADOID".."$REAP_TIP" | head -5)"
+      return 1
+    fi
+  elif _ws_merge_proof "$main" "$REAP_MERGE" "$REAP_TIP"; then
     REAP_PROOF="$_WS_PROOF"
   else
     _ws_refuse tree-differs "$(git -C "$main" diff --stat "$REAP_MERGE" "$REAP_TIP" -- | head -5; git -C "$main" log --oneline "$REAP_MERGE".."$REAP_TIP" | head -5)"
@@ -37827,8 +38524,9 @@ _ws_expire_spawn_gate() {   # id -> 0 when a pane may be created for id; rc 1 wi
   # `.archived` stamp still stands: so a spawn that is about to clear that
   # stamp takes the same lock first, `-n`, and refuses if anyone holds it — a
   # refusal, never a wait, because the holder may be minutes into a teardown.
-  # No breadcrumb and no stamp: nothing to ask, no lock taken, and a box with
-  # no flock cannot be running an expiry (`cmd_ws_expire` refuses there).
+  # No breadcrumb and no stamp: nothing to ask, no reap lock taken or asked,
+  # and a box with no flock cannot be running an expiry (`cmd_ws_expire`
+  # refuses there). Only ws-shed-deps's OWN lock is asked there (below).
   local id="$1" rbc
   _WS_EXPIRE_SPAWN_FD=""; _WS_EXPIRE_SPAWN_WHY=""
   rbc=$(_reg_get "$id" reaping)
@@ -37837,7 +38535,16 @@ _ws_expire_spawn_gate() {   # id -> 0 when a pane may be created for id; rc 1 wi
     _WS_EXPIRE_SPAWN_WHY="$id is being expired — an interrupted ws-expire stopped at its '$_CRUMB_PHASE' step, and a pane is never created for a workspace whose teardown has begun"
     return 1
   fi
-  [[ -f "$REG/$id.archived" ]] || return 0
+  # NOT ARCHIVED: ws-shed-deps (DEPSSHED region) holds its OWN lock, `$REG/.shed-<id>.lock`, and its row marker
+  # `$REG/<id>.shedding` across a real removal (a dry run takes neither), so a wake asks those and nothing else, creating
+  # neither (`_ws_shed_spawn_held`; the marker fails closed if an alias purge unlinks the lock) and refuses while held. The reap lock
+  # is NOT asked here: ws-restore holds it on its own descriptor across its `_spawn_start`, and a reclaim of a kept
+  # child or a collect hold it too, none of which ever refused a spawn of a row that is not archived.
+  if [[ ! -f "$REG/$id.archived" ]]; then
+    _ws_shed_spawn_held "$id" || return 0
+    _WS_EXPIRE_SPAWN_WHY=$_WS_SHED_HELD_WHY   # the held lock's sentence, or the stranded marker's (DEPSSHED region)
+    return 1
+  fi
   # A BREADCRUMB THAT STANDS BUT READS AS NOTHING, ON AN ARCHIVED ROW, IS NOT
   # "NONE": an interrupted expiry leaves `.archived` standing (its purge takes
   # the breadcrumb first), so it may be one — which verb left it, and where, is
@@ -40255,6 +40962,8 @@ _ws_collect_locked() {   # token id surface actor reason — everything the reap
 
 # @ccd-lib:loose — the loose arm of ws-collect (DR-13, D-6625; fleet disk retention spec 2026-10-23 §2.4) moved to ccd/lib/disk-retention.sh (D-6913)
 
+# @ccd-lib:depsshed — the deps-shed verb, `ws-shed-deps` (D-7278), lives in ccd/lib/disk-retention.sh
+
 # ── ws-reap's mirrors: a reclaim breadcrumb, a leaf link (spec 2026-09-22 §5.5-§5.6) ─ MIRROR-BEGIN ──
 _ws_reap_leaf_ok() { [[ ! -L "${1%"${1##*[!/]}"}" ]] || _ws_refuse containment-unproven "$1 is a symbolic link — ccd never follows a link to a tree it would delete, so it cannot prove the tree at that path is $2's own"; }   # workdir id -> 0, or rc 1 refused
 _ws_reclaim_mirror() {   # id breadcrumb -> ws-reap's refusal of a `reclaim:` or an `expire:` breadcrumb, on stdout
@@ -40521,7 +41230,9 @@ _authdead_clear_on_spawn() {   # wrapper — `_spawn_settle`'s rc-0 half for the
 #               no bound PR", a PR that never met the queue, a MERGED PR whose
 #               last removal had another reason (merged by hand after it), and a
 #               CLOSED PR that never merged: it is in neither window, but its own
-#               line already says `phase: closed`, and a closed PR is in no queue
+#               line already says `phase: closed`, and a closed PR is in no queue;
+#               and a PR a merge train landed and closed (`landedInTrain` on its
+#               bound row, `phase: merged`), CLOSED to GitHub and so in no window
 #   unmeasured  the call did not answer, or the bound PR is outside both windows
 #               and is not closed
 # plus `queueAt`, the ISO timestamp of that last act, only when it has one and
@@ -40636,7 +41347,13 @@ def word(line):
         return 'none', None
     f = FACTS.get(num)
     if f is None:
-        if line.get('phase') == 'closed':
+        # A closed PR is in no queue, and neither window holds it. That covers
+        # a PR a merge train landed and CLOSED, whose phase reads `merged` (its
+        # bound row carries ccd's own `landedInTrain`): GitHub still says
+        # CLOSED, so it is in no window either, and `unmeasured` would be false.
+        if line.get('phase') == 'closed' or (line.get('phase') == 'merged' and any(
+                isinstance(r, dict) and r.get('number') == num and r.get('landedInTrain') is True
+                for r in line.get('rows') or [])):
             return 'none', None
         return 'unmeasured', None
     state, entry, act, at, why = f
@@ -44616,6 +45333,7 @@ case "${1:-}" in
   ws-collect) shift; cmd_ws_collect "$@" ;;
   ws-orphan)  shift; cmd_ws_orphan "$@" ;;
   scratch-rescue) shift; cmd_scratch_rescue "$@" ;;
+  ws-shed-deps) shift; cmd_ws_shed_deps "$@" ;;
   ws-hold)    shift; cmd_ws_hold "$@" ;;
   ws-release) shift; cmd_ws_release "$@" ;;
   ws-title)   shift; cmd_ws_title "$@" ;;
@@ -44628,11 +45346,12 @@ case "${1:-}" in
   pr-open)   shift; cmd_pr_open "$@" ;;
   pr-state)  shift; cmd_pr_state "$@" ;;
   pr-landing) shift; cmd_pr_landing "$@" ;;
+  pr-train-prove) shift; cmd_pr_train_prove "$@" ;;
   docs-index) shift; cmd_docs_index "$@" ;;
   docs-tree)  shift; cmd_docs_tree "$@" ;;
   docs-show)  shift; cmd_docs_show "$@" ;;
   docs-fetch) shift; cmd_docs_fetch "$@" ;;
   version)   shift; cmd_version "$@" ;;
-  *) echo "usage: ccd {start|ensure|supervise|enable|stop|forget|hibernate|swap|swap-self|carry-dedupe|prefer|ls|menu|attach|clip|caps|ws-add|ws-rm|ws-rename|ws-gc|ws-archive|ws-restore|ws-attic|ws-audit|path-users|ws-reap|ws-reclaim|ws-expire|ws-collect|ws-orphan|scratch-rescue|ws-hold|ws-release|ws-title|coord-pause|reclaim-pause|win-size|account-pane|project-pool|route|pr-landing|pr-open|pr-state|docs-index|docs-tree|docs-show|docs-fetch|version} <args>" >&2; exit 1 ;;
+  *) echo "usage: ccd {start|ensure|supervise|enable|stop|forget|hibernate|swap|swap-self|carry-dedupe|prefer|ls|menu|attach|clip|caps|ws-add|ws-rm|ws-rename|ws-gc|ws-archive|ws-restore|ws-attic|ws-audit|path-users|ws-reap|ws-reclaim|ws-expire|ws-collect|ws-orphan|scratch-rescue|ws-shed-deps|ws-hold|ws-release|ws-title|coord-pause|reclaim-pause|win-size|account-pane|project-pool|route|pr-landing|pr-open|pr-state|pr-train-prove|docs-index|docs-tree|docs-show|docs-fetch|version} <args>" >&2; exit 1 ;;
 esac
 fi

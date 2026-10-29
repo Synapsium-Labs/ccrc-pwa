@@ -19,6 +19,7 @@ import { dayKey } from '../lib/clock';
 import { useKeyboardInset } from '../lib/keyboard';
 import { navigate } from '../lib/router';
 import { ack } from '../lib/seen';
+import { onPageHidden, onPageVisible } from '../lib/pageClock';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
 import { getSessionStore, type SessionStore } from '../stores/session';
 import { ChatList } from '../session/ChatList';
@@ -110,8 +111,8 @@ export function useWakeOnOpen(
 
   useEffect(() => {
     const onChange = (): void => { setVisible(document.visibilityState === 'visible'); };
-    document.addEventListener('visibilitychange', onChange);
-    return () => document.removeEventListener('visibilitychange', onChange);
+    const stops = [onPageVisible(onChange), onPageHidden(onChange)];
+    return () => { for (const stop of stops) stop(); };
   }, []);
 
   // One screen per id: a screen re-pointed at another session starts that session's wake from scratch.

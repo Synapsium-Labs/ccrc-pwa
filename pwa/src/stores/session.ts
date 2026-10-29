@@ -19,6 +19,7 @@ import {
 import type { WorkflowView } from '../../../shared/workflows';
 import { api, ApiError, sendErrorText, type Api } from '../lib/api';
 import { ReconnectingSocket, wsUrl } from '../lib/ws';
+import { onOnline, onPageHidden, onPageVisible } from '../lib/pageClock';
 
 /** A staged image handed to send(). The path is what the server/dispatch see;
  *  the preview URL is carried only so the optimistic bubble can render the
@@ -707,6 +708,8 @@ export function createSessionStore(id: string, deps: SessionStoreDeps = {}): Ses
   let socket: ReconnectingSocket | null = null;
   /** The presence heartbeat's timer — see `beat` below. */
   let heartbeat: ReturnType<typeof setInterval> | null = null;
+  // The page clock's stops for this connection's subscriptions (D-7191): visible, hidden and online.
+  let stopPageClock: (() => void)[] = [];
   let keySeq = 0;
   const timers = new Map<string, ReturnType<typeof setTimeout>>();
 
@@ -915,14 +918,13 @@ export function createSessionStore(id: string, deps: SessionStoreDeps = {}): Ses
           makeSocket: deps.makeSocket,
         });
         socket.start();
-        document.addEventListener('visibilitychange', onVisible);
-        window.addEventListener('online', nudge);
+        stopPageClock = [onPageVisible(onVisible), onPageHidden(onVisible), onOnline(nudge)];
         heartbeat ??= setInterval(beat, PRESENCE_REFRESH_MS);
       },
 
       disconnect() {
-        document.removeEventListener('visibilitychange', onVisible);
-        window.removeEventListener('online', nudge);
+        for (const stop of stopPageClock) stop();
+        stopPageClock = [];
         if (heartbeat !== null) { clearInterval(heartbeat); heartbeat = null; }
         // Say so before the socket goes: leaving the session screen means the
         // operator is no longer looking at it, and a close alone would let the

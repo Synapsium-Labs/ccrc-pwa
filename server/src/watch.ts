@@ -125,7 +125,7 @@ import {
   type StallVerdict, type StallWorker, type TurnMarkRead,
 } from './coord/stall.js';
 import {
-  parseStallSettings, resolveStallWatch, stallBoxArmingOf, stallBusyClock,
+  parseStallSettings, resolveStallWatch, stallBoxArmingOf, stallBusyClock, stallQuietOf,
   type StallBoxArming, type StallResolved, type StallSettingsParsed, type StallSettingsRead,
 } from './coord/stallsettings.js';
 // `floorFromScan` owns the seed arithmetic (max + LEDGER_SEED_GAP) and the
@@ -134,8 +134,9 @@ import {
 import { definitionsIn, floorFromScan, unallocatedDefinitions } from './coord/ledger.js';
 import { LEDGER_FLOOR_DIRS, SWEEP_POLICY, readLedgerDocs } from './coord/ledgerseed.js';
 import type { ProvenancePair } from './coord/store.js';
-import { incarnationsOfSessions, withChildIds } from './coord/runWire.js';
+import { incarnationsOfSessions, withChildIds, withLastMoves } from './coord/runWire.js';
 import { coordinatorOfRun, readCoordinatorOfRun } from './coord/bindingReads.js';
+import { abandonDeadDispatches } from './coord/abandonDeadDispatch.js';
 import type { PushPayload } from './push.js';
 import { notify, noticeSink } from './notice.js';
 import { runDriftPass } from './coord/driftLane.js';
@@ -182,6 +183,7 @@ import {
   type ExpiryStoreRead,
 } from './archivedExpiry.js';
 import { childEverCoordinated, expireArchived, expireLaneLive, expiryReviewing, learnExpiry, recordExpireFeed } from './coord/expireArchived.js';
+import { retireExecutor } from './retireExecutor.js';
 import {
   deadAnchorNext, deadCoordinatorNewEpisode, deadCoordinatorAttention, deadCoordinatorBreaker,
   deadCoordinatorBreakerHeldKey, deadCoordinatorBreakerKey, deadCoordinatorCrash, deadCoordinatorDue, deadCoordinatorEntry, deadCoordinatorJournal, deadCoordinatorJournalSpawnedAt,
@@ -214,6 +216,7 @@ import { CHILD_RECLAIM_SWEEP_MS, COLLECT_OBSERVE_INTERVAL_MS, DIVERGENCE_SWEEP_M
 import type { ChildReclaimCollectInput } from './childReclaimSweep.js';
 import { NO_FLEET_IDENTITY } from './fleetidentity.js';
 import { SLEEP_LANES, hibernatePass, stopDonePass, type HibernateSweepMemory, type StopDoneMemory } from './sleepLane.js';
+import { DEPS_SHED_STAMP_SUFFIX, depsShedMemory, depsShedPass, type DepsShedMemory } from './depsShedPass.js';
 import type { SleepPolicyName } from './sleep.js';
 import { StaleArchiveBeat } from './staleArchiveBeat.js';
 import { wakeAdmit, type WakeKind } from './coord/wakeBudget.js';
@@ -1202,6 +1205,9 @@ export class FleetWatcher {
    *  least once, even into an empty fleet — mirroring `lastJson`'s own
    *  initial value. */
   private lastRunsJson: string | null = null;
+  /** D-7334: the stall watch's quiet time the last runs frame carried, for `/ws/fleet`'s frames (`currentStallQuietMs`).
+   *  `null` until `emitRuns` first emits. */
+  private runsQuietMs: number | null = null;
   /** The `coord` frame's last value and its own byte-equality guard, beside
    *  `lastRunsJson` and for the same reasons. `coord` is `null` until the first
    *  tick measures — see `currentCoord()`. */
@@ -1255,6 +1261,9 @@ export class FleetWatcher {
    *  and the coordination serialiser `buildServer` hands it. Its clock and single flight are the `sleepRunDone` row
    *  (D-7045). */
   private readonly stopDoneMemory: StopDoneMemory = { retryAt: new Map() };
+  /** The deps-shed arm of the run-done row (D-7278, `depsShedPass.ts`): its retry hold-off and the sleeps its shadow
+   *  already reported. In memory only. It runs in `sleepRunDone`, after the stop-done pass, on the same serialiser. */
+  private readonly depsShedMemory: DepsShedMemory = depsShedMemory();
   private stopDoneSerial: (<T>(fn: () => Promise<T>) => Promise<T>) | null = null;
   /** The process start both sleep lanes hold `viewer` against (presence is never persisted; D-7045: one field, set at
    *  construction, where each lane had its own holding the same instant). */
@@ -1936,6 +1945,12 @@ export class FleetWatcher {
     return this.coord;
   }
 
+  /** The stall watch's quiet time as the last runs frame carried it (D-7334), for the frame's `stallQuietMs`; `null` before
+   *  the first runs frame, `currentCoord()`'s "never measured". */
+  currentStallQuietMs(): number | null {
+    return this.runsQuietMs;
+  }
+
   /** The child marks off the last LISTED registry read, for `GET /api/runs`'s
    *  reclaim chip (wave 5), or null when no tick has listed one. In memory, and
    *  the reason is cost: a route-time `readRegistry` is ~721 agent-WS operations
@@ -2055,6 +2070,25 @@ export class FleetWatcher {
       }, this.stopDoneMemory, sessions, records, names);
     } catch (err) {
       console.warn(`ccrc-server: sweepStopDone failed (${err instanceof Error ? err.message : String(err)}) — no stops this pass`);
+    }
+    // D-7278: the deps-shed arm, the second pass of this row, on the same tick's rows and listing and the same serialiser.
+    // A config assembled without its thresholds (a hand-built one) sheds nothing: doubt keeps.
+    const shedConfig = (this.deps.cfg as Partial<typeof this.deps.cfg>).depsShed;
+    if (shedConfig === undefined) return;
+    try {
+      await depsShedPass({
+        coord, runCcd: this.deps.runCcd, fleetState: this.deps.fleetState, viewers: this.deps.viewers,
+        notifyLog: this.deps.notifyLog,
+        readStamp: (id) => this.deps.io.readFile(`${this.deps.cfg.registryDir}/${id}.${DEPS_SHED_STAMP_SUFFIX}`),
+        rowAtAct: (rec) => this.rowAtAct(rec),
+        serial: this.stopDoneSerial, queueRun: (id, fn) => this.deps.queue.run(id, fn),
+        listing: async () => {
+          try { const r = await this.deps.io.readdirMeasured(this.deps.cfg.registryDir); return r.ok ? r.entries : null; } catch { return null; }
+        },
+        config: shedConfig, startedAt: this.sleepStartedAt, now: Date.now,
+      }, this.depsShedMemory, sessions, records, names);
+    } catch (err) {
+      console.warn(`ccrc-server: deps-shed failed (${err instanceof Error ? err.message : String(err)}) — nothing shed this pass`);
     }
   }
 
@@ -2737,15 +2771,26 @@ export class FleetWatcher {
         return;
       }
       // ARCH-61 (#796): `childIds`, decided through `childrenOf` against this tick's reading of the fleet's sessions.
-      runs = withChildIds(coord, read.runs.map(toRunSummary), incarnationsOfSessions(coord, sessions), (c, d) => console.warn(`ccrc-server: emitRuns could not read the series of ${c} (${d}) — childIds absent for its runs`));
+      // D-7334: each run's last move, in one read for the frame; a failed read leaves the field off (`withLastMoves`).
+      runs = withLastMoves(coord, withChildIds(coord, read.runs.map(toRunSummary), incarnationsOfSessions(coord, sessions), (c, d) => console.warn(`ccrc-server: emitRuns could not read the series of ${c} (${d}) — childIds absent for its runs`)), (d) => console.warn(`ccrc-server: emitRuns could not read the runs' last moves (${d}) — lastMoveAt absent this tick`));
     }
     catch (err) {
       console.warn(`ccrc-server: emitRuns failed (${err instanceof Error ? err.message : String(err)}) — one bad read must not kill the poll`);
       return;
     }
-    const json = JSON.stringify(runs);
+    // D-7334: the frame carries the stall watch's quiet time (`server.ts`'s `onRuns`), read each tick by the resolver's own
+    // quiet half, so the first frame has it and a Settings change re-emits on the next tick. A read that throws is the
+    // built-in, as `stallResolveNow`'s fallback is, and never costs the runs their frame.
+    let quietMs: number;
+    try {
+      quietMs = stallQuietOf(parseStallSettings(coord.stallSettings())).quietMs;
+    } catch {
+      quietMs = STALL_QUIET_MS;
+    }
+    const json = JSON.stringify({ runs, stallQuietMs: quietMs });
     if (json === this.lastRunsJson) return;
     this.lastRunsJson = json;
+    this.runsQuietMs = quietMs;
     this.bus.emit('runs', runs);
   }
 
@@ -4756,7 +4801,7 @@ export class FleetWatcher {
     // the literal is built INSIDE the queue callback, so its members are
     // `deps`'s current answer WHEN THE JOB RUNS, never a snapshot taken when
     // the sweep queued it.
-    return this.deps.queue.run(req.sessionId, () => reclaimChild({
+    return retireExecutor(this.deps.queue, req.sessionId, () => reclaimChild({
       coord, io: this.deps.io, cfg: this.deps.cfg, runCcd: this.deps.runCcd,
       fleetState: this.deps.fleetState, viewers: this.deps.viewers, notifyLog: this.deps.notifyLog,
     }, req));
@@ -4949,7 +4994,7 @@ export class FleetWatcher {
     // read HERE, as the job is queued, never inside the callback. Its executor composes nothing when the epoch it reads
     // after its final listing differs, so a reconnect between the queueing and the job's start composes nothing.
     const epoch = this.collectSeenEpoch;
-    void this.deps.queue.run(id, () => collectTempRoot({
+    void retireExecutor(this.deps.queue, id, () => collectTempRoot({
       coord, io: this.deps.io, cfg: this.deps.cfg, runCcd: this.collectRunCcd(id), fleetState: this.deps.fleetState,
       viewers: this.deps.viewers, lane: this.collectPortFor(coord, id), observeIntervalMs: COLLECT_OBSERVE_INTERVAL_MS,
       control: this.collectControlDeps(coord), link: this.deps.fleetIdentity ?? NO_FLEET_IDENTITY,
@@ -5444,7 +5489,7 @@ export class FleetWatcher {
         .sort(([ia, a], [ib, b]) => a.nextAskAt - b.nextAskAt || (a.expiresAt ?? 0) - (b.expiresAt ?? 0) || (ia < ib ? -1 : 1))[0]!;
       const [id, entry] = pick;
       try {
-        const result = await this.deps.queue.run(id, () => expireArchived({
+        const result = await retireExecutor(this.deps.queue, id, () => expireArchived({
           coord, io: this.deps.io, cfg: this.deps.cfg, runCcd: this.deps.runCcd, fleetState: this.deps.fleetState,
           viewers: this.deps.viewers, notifyLog: this.deps.notifyLog,
         }, { sessionId: id, archivedAt: entry.archivedAt, expiresAt: entry.expiresAt!, childOf: childOfOf.get(id), rowUuid: rowUuidOf.get(id) ?? null }));
@@ -5594,6 +5639,18 @@ export class FleetWatcher {
     }
   }
 
+  /** D-7319: the dead-dispatch reason of the dead-coordinator lane's pass. Nothing before `buildServer` hands over the
+   *  serialiser (the lane's only way to end a run); a throw is said and the pass goes on to the coordinator reason. */
+  private async deadDispatchStep(coord: CoordStore): Promise<void> {
+    const serial = this.deadCoordinatorSerial;
+    if (serial === null) return;
+    try {
+      await abandonDeadDispatches({ coord, io: this.deps.io, cfg: this.deps.cfg, serial, now: () => Date.now() });
+    } catch (err) {
+      console.warn(`ccrc-server: dispatch-abandon: the pass failed (${err instanceof Error ? err.message : String(err)}) — nothing more this pass`);
+    }
+  }
+
   /** One pass of the dead-coordinator lane — `sweepDeadCoordinators`'s body, run only while no other pass runs. */
   private async deadCoordinatorPass(
     coord: CoordStore, records: readonly SessionRecord[], names: readonly string[], now: number,
@@ -5607,6 +5664,10 @@ export class FleetWatcher {
     // written. The run of crashed passes is forgotten, so a lowered switch needs two FRESH passes; the durable anchors
     // stand (the next crashed pass continues them, or the gap restarts them).
     if (readSwitches(names)[RECLAIM_PAUSE_MARKER] === 'set') { forget(); return; }
+    // D-7319 — THE LANE'S SECOND REASON: a run whose dispatch never came back is abandoned (`abandonDeadDispatch.ts`).
+    // Here, after the switch and before every gate that is the crash's own (the journal's trust, the anchors, the
+    // breaker, shadow): none of those measures a dispatch, so none of them may hold one. Its failure is its own.
+    await this.deadDispatchStep(coord);
     // TWO — the journal's own trust (`readDeadCoordinatorJournalTrust`): a mirror not swept yet, or gone stale,
     // decides NOTHING this pass — no anchor is written or deleted, and the run of crashed passes starts again.
     const journal = await readDeadCoordinatorJournalTrust({ coord, io: this.deps.io, cfg: this.deps.cfg }, this.lifecycleHealth());
@@ -8064,6 +8125,16 @@ export class FleetWatcher {
         // --project` was CALLED with, which is the same argument the failure
         // arm above already uses for the same reason.
         this.retainRepo(project, repoCellFor({ slug: line.repo }));
+      }
+      // THE BOUNDED TRAIN PROVER (D-7378), a separate step with its own timeout row: `pr-state --project` has no room
+      // for a train read, so a member a merge train landed and closed reads `train-unread` (unmeasured) until its proof
+      // is kept. One `ccd pr-train-prove` proves a few such members once and keeps the proofs; the NEXT sweep reads
+      // `merged` from them, and `sweepMerged` and `sweepLanding` wake on that as on any merge. Asked only when a line
+      // read `train-unread`, and its answer is never a phase: a failure costs one sweep's wait, nothing else.
+      if (lines.some((l) => isFullLine(l) && phaseFor(l).reason === 'train-unread')
+        && ccdCan(this.deps.fleetState, 'prTrainProve')) {
+        const proved = await this.deps.runCcd(CCD_ARGV.prTrainProve(project));
+        if (!proved.ok) console.warn(`ccrc-server: train prover of ${project} failed (${failureDetail(proved)})`);
       }
     }
     this.sweepMerged(records);

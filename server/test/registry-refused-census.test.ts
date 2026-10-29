@@ -126,6 +126,9 @@ const EXPECTED_SITES: readonly string[] = [
   'coord/dispatch.ts | spawnFresh | readRegistryMeasured | refuses',
   'coord/dispatch.ts | resumeBound | readRegistryMeasured | gated',
   'coord/fingerprint.ts | resolveDoneBranch | readRegistryMeasured | holds',
+  // The dead-dispatch pass reads the registry once per pass; an unlistable registry or a refused name keeps every
+  // run (deadDispatch.ts, `registry-unmeasured`), so a refused row can never make a run look childless.
+  'coord/abandonDeadDispatch.ts | registryFacts | readRegistryMeasured | refuses',
   'coord/routes.ts | GET /api/peers | readRegistryMeasured | reports',
   'coord/routes.ts | POST /api/claims | readRegistryMeasured | reports',
   'server.ts | GET /api/fleet | readRegistryMeasured | stale',
@@ -196,8 +199,8 @@ describe('every registry reader call is classified for refused rows (spec §2.3)
       .toEqual([]);
   });
 
-  it('the classified set is exactly these 20 sites', () => {
-    expect(EXPECTED_SITES).toHaveLength(20);
+  it('the classified set is exactly these 21 sites', () => {
+    expect(EXPECTED_SITES).toHaveLength(21);
     expect(allSites().map(key).sort()).toEqual([...EXPECTED_SITES].sort());
   });
 
@@ -419,6 +422,6 @@ describe('Task 7: the migrated readers and the six production assembleFleet call
     const count = (reader: 'readRegistry' | 'readRegistryMeasured'): number =>
       allSites().filter((s) => s.reader === reader).length;
     expect(count('readRegistry'), 'readRegistry( call sites in server/src').toBe(3);
-    expect(count('readRegistryMeasured'), 'readRegistryMeasured( call sites in server/src, the wrapper included').toBe(17);
+    expect(count('readRegistryMeasured'), 'readRegistryMeasured( call sites in server/src, the wrapper included').toBe(18);
   });
 });

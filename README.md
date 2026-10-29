@@ -4232,6 +4232,22 @@ seen dead, and one when the breaker trips) are records of the same incident. A m
 and the act stops the act and keeps the hour, and every act that fails writes a feed row, whatever it had done. A mirror
 gone stale, or a gap recorded, while the act measures the coordinator stops it too: the act reads both again after it.
 
+**A dispatch that never came back is abandoned by the server** (D-7319, the operator's ruling of 2026-10-29). The fleet
+card draws "spawn never completed" for a `planned` run whose dispatch stamp is older than `SPAWN_STALL_MS` and that
+bound no session. The same lane pass, before any of the crash's own gates, abandons such a run once it is proven dead:
+the stamp is at least `CCRC_DISPATCH_ABANDON_MS` old (default 15 minutes; a value under `SPAWN_STALL_MS` is refused for
+the default, so the `ws-add` started at that stamp has returned or been killed), no registry row's `.child` marker names
+the run, no row of its project has an unreadable marker or the shape a cut-short `ws-add` leaves (a workspace with no
+marker, no hold and no spawn), the box marks its workspaces (no `child-omitted:` on the run), the registry was read
+whole, the run is still claimed, and `$REG/reclaim-paused` is clear. The act is the operator's own abandon arm, reached
+through the coordination serialiser like the dead-coordinator lane's (`causedBy: sweep`): it re-reads all of that
+immediately before its commit, inside the serialiser every dispatch holds, so a retry that restamped the run, a child
+that appeared or a switch turned off meanwhile stops it. After the commit the run's events carry
+`dispatch-abandoned:never-came-back` and the coordinator is mailed `dispatch-abandoned` so it can dispatch again. A
+`ws-add` that somehow finished later leaves a child of a closed run: the run stays `failed`, and child reclamation takes
+that workspace under its usual rule. **Settings › Automation › Dispatches that never came back** turns it off (stored in
+`coord.db`, seeded On; `/api/coord/dispatch-abandon`); only an exact stored On arms it.
+
 **What a crossing costs.** Caps stay global: one row, whole box, no per-project
 and no per-programme cap. Running-worker concurrency counts dispatched runs in
 an ACTIVE state — `dispatched`, `working`, `unknown` — and not merely
@@ -5164,8 +5180,52 @@ refused like a worker and is sent to the operator's shell. The deny is a contrac
 cannot parse (`bash -c "…"`, a quoted command word, a variable or alias, a path-spelled wrapper, and
 the rest) is listed in the hook's header, and a jq failure or a hook timeout fails it open
 (`server/test/session-hook-merge-deny.test.ts`). This tree changes no repository setting: requiring
-the queue is the operator's act, and denying `--admin` to every session, or a `gh api` merge, is not
-shipped.
+the queue is the operator's act.
+
+**The bypass deny (landing-order wave 2b).** A second question, asked of every session after the worker
+deny's and with its text unchanged, closes the two ways past the queue that the worker deny leaves open:
+the hook refuses `gh pr merge … --admin`, and a `gh api` call that reaches a merge (the pulls merge
+endpoint, the repository `merges` endpoint, and the `mergePullRequest`, `enqueuePullRequest`,
+`enablePullRequestAutoMerge` and `mergeBranch` mutations), in any session, held or not, coordinator
+included. It is the same arm, the same single `jq` and the same strip: once the stripped text holds a real
+`gh … pr … merge` head or `gh … api` head (the second head grammar is derived from the first's text, so the
+two cannot drift), the verdict is read from the raw command, quotes included. That wide reading is on purpose
+and its cost is named in the reason: a command that holds a real head beside an unrelated `--admin` or
+mutation word (a merge, then a `git commit -m "never --admin"`, in one command) is refused, so run them as
+separate commands. For the `gh api` half the raw text is first read quote-free (`'`, `"` and `\` removed), so
+`merge""PullRequest` and `pulls/"$n"/merge` are words and paths, and a merge path counts under either of two
+segment readings, one up to the next blank or `/` and one up to the next `/` or separator; the second reads
+`pulls/$(…)/merge` and `pulls/$((42|0))/merge` as paths, at the cost that `gh api repos/o/r/pulls/42 -f
+body=docs/merge` is refused too (pass the body as a file). Any method is refused, a `GET` of a merge path
+included, because a text-read exemption is defeated by a later `-X PUT`; `gh pr view <n> --json
+state,mergedAt` answers the same question. Text with no such head passes, so a commit message, a PR body or a
+mail that names these words is untouched, and so does everything the coordinator runs to land: the
+`--match-head-commit <sha>` enqueue, `--disable-auto` and every read of the landing verdict. Over the
+2048-byte parse cap the hook cannot parse, so an over-cap command whose raw text reads as an admin merge or a
+`gh api` merge is refused in every session, prose included, with a reason that gives both byte counts; send a
+long body as a file (`--body-file`) or split the command. What it does not read is listed, not closed, in the
+hook header's `WHAT PASSES UNPARSED` list, each class pinned by a LISTED-pass case: a query or body read from
+a file, a word or path assembled at run time, a variable or quoted command word, a `gh alias`, the head
+grammar's own classes (`xargs`, `bash -c`, `eval`, a leading redirection, a path-spelled wrapper), an
+encoded, doubled-slash or case-variant merge path, a mutation word written with JSON `\u` escapes, a word
+broken by quotes before the prefilter sees it, a quoted or backticked `api` word, a `.` or `..` path
+segment, another HTTP client handed gh's credential (`curl` with `gh auth token`), a write of the base
+branch's rules or protection that removes the queue, and the ways to move `main` that are not merges (a ref
+`PATCH`, the `updateRef` family of mutations, `git push` to a protected branch), which are out of scope. It is
+a contract the fleet honours, not a wall, and a jq failure or a hook timeout fails it open.
+
+One narrow allowance exists (D-7249). The operator may create, by hand, a regular file at
+`$REG/admin-merge-allowed/<project>` (a dotless registry subdirectory, so no registry glob sees it; nothing in
+this tree writes it, and its content is never read). For a session of that project, read from its own
+`$REG/<id>.project` with no fallback to the session id, a `.project` that is absent, unreadable, empty or
+off-class, and an allowance that is a symlink or not a regular file, each read as not allowed, and the
+allowance lifts only the admin half, only for a command in a fixed grammar and only under the
+cap: exactly one admin merge of a PR named by number, optionally with `--match-head-commit <40 hex>`,
+`--squash`, `--merge`, `--rebase`, `--delete-branch` or `-d`, single-spaced, with nothing before or after it. It
+never lifts the `gh api` half, the over-cap reading or the worker deny. A repository `gh` resolves from
+ambient state (a working directory left by an earlier call's `cd`, the checkout's remotes, the inherited
+environment) is a listed pass under it. The break-glass door for everyone else is the operator's own shell,
+which runs no hook, or GitHub's UI (R9).
 
 **Peers and claims (build 9).** Sessions that share a repository find each other and stake out paths
 through the server — `ccd` never sees a claim. `GET /api/peers?of=<id>` (or `?project=<slug>`,
@@ -5519,8 +5579,9 @@ is that the read side lives only where ccrc owns the file it is written in, and 
   to it on the `compact` source alone (R8, below) — and on a `PreToolUse` at most one of: the search
   gate's deny on a gated call (R5, below), the worker merge deny on a `gh pr merge` from a session whose
   hold names a programme wave or whose workspace carries the child marker (the landing-order rule, "The native merge queue" above: the
-  coordinator merges, workers never do; a speed bump on that one verb, not a wall — a `gh api` merge
-  passes it), the role-skill deny on a `Skill` call from a subagent (a payload with a non-empty
+  coordinator merges, workers never do; a speed bump on that one verb, not a wall — the bypass deny
+  (landing-order wave 2b, "The native merge queue" above) answers every session's `--admin` merge and `gh api`
+  merge in the same reason slot, with the worker deny's reason first), the role-skill deny on a `Skill` call from a subagent (a payload with a non-empty
   `agent_id`) that names `ccrc-worker`, `ccrc-reviewer` or `ccrc-coordinator`, exactly or behind one
   `<namespace>:` prefix, with the name read as Claude Code reads it (trimmed of JavaScript's `trim` set,
   then ONE leading `/` stripped, so ` ccrc-worker` and `/ccrc-worker` are the worker skill) (D-4934: those
@@ -6679,7 +6740,81 @@ isolation boundary its test harness relies on:
 
 `ws-add` refuses below `CCD_DISK_FLOOR_GB` (default 10) GiB free on
 `~/worktrees` — an environment override `ccd` allows because it can only make
-`ccd` refuse, never aim it at a different tree. `ccd` with no verb prints its
+`ccd` refuse, never aim it at a different tree. `CCD_LANDED_LABEL` (default
+`landed-in-train`; set empty to turn it off) names the label a merge train puts
+on a member PR it closes after landing its work. The label is a claim, never
+the proof (D-7362): a CLOSED PR carrying it reads as merged — in `pr-state`'s
+phase, and so the archive reason, the cleanup bucket and the merged notice, in
+`pr-landing`, and in the cleanup itself (`ws-audit`/`ws-reap`, as proof
+`train`) — only when the train record proves it, and ccd decides that once, in
+one place, for every reader (`landedInTrain: true` on the row). The proof: the
+train PR the member names (a `train #<n>` comment on it, as a train leaves when
+it closes a member — every such reference is tried, newest first, and one
+GitHub says is no pull request in this repository is only a failed candidate),
+or one
+a search finds whose record lists the member's head sha, must be MERGED into
+the same base and its record must list the member at exactly the member's head;
+the reap also requires that the branch hold nothing beyond that head. A
+labelled PR whose train record was read and did not prove it (the train is
+CLOSED unmerged, lists another sha, GitHub says the number it names is no pull
+request here, or no train names it) reads as closed, with reason
+`train-unproven` (`trainUnproven: true` on the row), and the reap refuses it
+`not-merged`. Only such a definitive answer fails a candidate (D-7381): a train
+read that fails any other way (an HTTP 5xx, a rate limit, the network, auth, a
+timeout, a signal, an answer that is not a PR's JSON) is unread, as is a train
+that is still OPEN (it may yet merge) or whose state is missing or odd, and one unread
+candidate makes the whole record unread unless something proved the landing,
+even when the search fallback answered empty. A labelled PR whose train record
+could not be READ (no time left in the read's budget, a timeout, GitHub
+unreachable) is neither closed nor merged: it reads `unknown` with reason `train-unread` (`trainUnread: true` on
+the row; `pr-landing` adds `train` to the line's `unmeasured`), so nothing ends
+a run on it, and the reap refuses it `gh-unreadable` (D-7378). A CLOSED train
+that never merged proves nothing. The token's merge fact is the train PR's
+merge commit, so main later editing the same lines never turns a proven landing
+into a refusal. A proof, once made, is kept in `$REG/.train-proofs`, one line
+per member keyed by repository, base, number and head (a merged train never
+un-merges; a refusal is never kept). The `pr-state --project` sweep has no time
+left for train reads and reads only kept proofs, so the server follows a sweep
+that read `train-unread` with `ccd pr-train-prove --project <p>`: its own verb
+and timeout row, proving at most `PR_TRAIN_PROVE_MAX` members a call and
+keeping the proofs, so the next sweep reads `merged`. The prover is fair
+(D-7381): every attempt that does not prove leaves a tried line in
+`$REG/.train-tried` (outcome `failed` or `unread`, and the time; a separate
+file, never read as a proof), and each call asks the members with no tried line
+first, then the oldest tried. A member whose record was read and failed less
+than `PR_TRAIN_TRIED_TTL` (30 minutes) ago is not asked again, and the sweep
+reads it `train-unproven`, not `train-unread`, until the line expires; an
+`unread` outcome is asked again on the next call. Only a read that can make no
+gh call at all (the sweep) answers from a fresh `failed` line, and a kept proof
+is read before it: a read that asked GitHub and hit an unread candidate reads
+`train-unread` whatever the line says. A proof found by any read, `pr-landing`'s
+included (which keeps none), removes the member's tried line.
+
+**The train record (D-7335)** is the one machine-readable block in a train PR's
+body, and a train tool writes exactly one: an HTML comment on lines of its own,
+opened by `<!-- ccrc-train v1`, one `member #<n> <40-hex head sha>` line per
+member, closed by `-->`:
+
+```
+<!-- ccrc-train v1
+member #1797 0123456789abcdef0123456789abcdef01234567
+member #1800 89abcdef0123456789abcdef0123456789abcdef
+-->
+```
+
+A member line is exactly `member`, one space, `#` and the PR number, one space,
+and the full 40-character head sha in lowercase hex: no tabs, no second space,
+no short or uppercase sha. Leading and trailing spaces on a line are ignored;
+nothing else is. Tables,
+lists and prose beside the block are for people and are never parsed, so a
+body with only a table proves nothing. No block, two blocks, a block that never
+closes, a line inside it that is not a member line, or a member listed twice
+proves nothing for any member, and neither does a member listed at a sha other
+than its head.
+
+A coordinator
+proves the merge before closing the run from `landedInTrain: true` on the PR's
+row of `ccd pr-state --session <id>`. It names a label, never a path. `ccd` with no verb prints its
 usage, and `ccd caps` lists the verbs (and capability tokens) this copy
 implements — that list is the authority; the table below is a map:
 

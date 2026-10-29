@@ -21,19 +21,27 @@ export const AUTHDEAD_WRITERS: readonly string[];
 /** ccd's whole definition of `name` (its `name() {` line through its column-0 `}`, or a one-line definition), or null. */
 export function ccdFunctionDefinition(ccdSrc: string, name: string): string | null;
 export function renderAuthdeadBody(ccdSrc: string): string;
-/** One generated region: its BEGIN/END lines, the prefix it is recognised by, its report label and its renderer. */
+/** D-7321: the third region, `_api_server_cap` for `ccd/ccrc-api`, generated from the hook's `_hook_server_cap`. */
+export const APICAP_REGION_BEGIN: string;
+export const APICAP_REGION_END: string;
+/** The server-cap reader region's unstamped body, from the HOOK's text (`_hook_server_cap`'s body, renamed). */
+export function renderApicapBody(hookSrc: string): string;
+/** One generated region: its BEGIN/END lines, the prefix it is recognised by, its report label, the text it renders
+ *  from (`ccd`, or the `hook` beside it) and its renderer. */
 export interface GeneratedRegion {
-  readonly name: 'hook' | 'authdead';
+  readonly name: 'hook' | 'authdead' | 'apicap';
   readonly label: string;
   readonly begin: string;
   readonly end: string;
   readonly detect: string;
-  readonly render: (ccdSrc: string) => string;
+  readonly source: 'ccd' | 'hook';
+  readonly render: (src: string) => string;
 }
 export const REGIONS: readonly GeneratedRegion[];
 /** The region row `src` carries (whole or damaged), or null. */
 export function regionOf(src: string): GeneratedRegion | null;
-export function renderRegion(row: GeneratedRegion, ccdSrc: string): string;
+/** `hookSrc` (the sibling `session-hook.sh`) is read by a `source: 'hook'` row only, and required by it. */
+export function renderRegion(row: GeneratedRegion, ccdSrc: string, hookSrc?: string): string;
 export function extractRegion(row: GeneratedRegion, src: string): string | null;
-export function applyRegion(row: GeneratedRegion, src: string, ccdSrc: string): string;
-export function checkRegion(row: GeneratedRegion, src: string, ccdSrc: string): HookRegionStatus;
+export function applyRegion(row: GeneratedRegion, src: string, ccdSrc: string, hookSrc?: string): string;
+export function checkRegion(row: GeneratedRegion, src: string, ccdSrc: string, hookSrc?: string): HookRegionStatus;

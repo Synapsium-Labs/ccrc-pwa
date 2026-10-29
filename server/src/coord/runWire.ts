@@ -16,6 +16,9 @@ import { childrenOf, incarnationOf, unbornIncarnation, type Incarnation } from '
  *   - `RunSummary.childIds`: `childrenOf(claimant)`, the open runs the run's coordinator has working for it, each bound to the
  *     incarnation of the worker it was opened for. Sent on the live `{type:'runs'}` frame.
  *
+ * And a third, beside them on the same frame and on the same terms (D-7334, programme-boxes spec §2.5): `RunSummary.lastMoveAt`,
+ * the run's newest move as `CoordStore.runLastMoves` reads it, carried by `withLastMoves` below.
+ *
  * THE INCARNATION OF A SESSION is read from its registry mark exactly as `heldFor` and the drift lane read it: a `.child`
  * mark names the minting run, `childBirthOf` places that run's birth, and a session with no mark (a coordinator, a manual
  * workspace) or a mark that cannot be read has no birth and keeps the id-string rule. A worker the registry no longer lists
@@ -65,4 +68,29 @@ export function withChildIds(
     const childIds = run.claimedBy === null ? [] : childIdsFor(run.claimedBy);
     return childIds === null ? run : { ...run, childIds };
   });
+}
+
+/** `CoordStore.runLastMoves`' answer (D-7334), declared here by its consumer: each asked run's newest move, or null when it
+ *  has none, every asked id present; or the read's failure with its detail. */
+export type RunLastMovesRead =
+  | { readonly ok: true; readonly moves: ReadonlyMap<number, number | null> }
+  | { readonly ok: false; readonly detail: string };
+
+/** The one read `withLastMoves` needs from the store. */
+export interface LastMovesPort {
+  runLastMoves(runIds: readonly number[]): RunLastMovesRead;
+}
+
+/** `RunSummary.lastMoveAt` for every run in `runs`, in ONE read for the frame (D-7334). A run with no move carries `null`, which
+ *  the app's reader turns into its dispatch or open time. A read that fails leaves EVERY run without the field (absence permits:
+ *  the app then shows no movement, as for an older server, never a false quiet), and `onUnreadable` says why. */
+export function withLastMoves<R extends { readonly id: number }>(
+  port: LastMovesPort, runs: readonly R[], onUnreadable: (detail: string) => void,
+): (R & { readonly lastMoveAt?: number | null })[] {
+  const read = port.runLastMoves(runs.map((r) => r.id));
+  if (!read.ok) {
+    onUnreadable(read.detail);
+    return [...runs];
+  }
+  return runs.map((run) => ({ ...run, lastMoveAt: read.moves.get(run.id) ?? null }));
 }

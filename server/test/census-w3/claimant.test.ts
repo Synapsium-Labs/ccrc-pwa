@@ -143,4 +143,15 @@ describe('the claimant client census (D-7320)', () => {
     expect(calls.filter((s) => !s.guarded), 'a cap-reader call no $family test guards').toEqual([]);
     for (const d of server) expect(d.route, 'a claimant door').toMatch(/^POST \/api\//);
   });
+
+  // THE RATCHETS (spec §5.1 rule 3), each landed in the commit that reaches its count: Q3j's behaviour commit gives the
+  // four claimant rows their family column and makes the one guarded call of the cap reader.
+  it('REAL, pinned since Q3j: client rows whose only door is the old one: exactly 0 (D-7322)', () => {
+    expect(clientOldOnlyRows().map((r) => r.key)).toEqual([]);
+  });
+  it('REAL, pinned since Q3j: cap-reader calls in ccrc-api: exactly 1, guarded by the $family test before it (D-7322)', () => {
+    expect(capReaderCalls().map((s) => [s.guarded, s.text.trim()])).toEqual([
+      [true, 'if [[ -n "$family" ]] && _api_server_cap questions-v1; then'],
+    ]);
+  });
 });

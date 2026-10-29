@@ -22,6 +22,7 @@ import { isApprovalKebab } from '../src/coord/approvalsign.js';
 import { isDigestKebab } from '../src/coord/digest.js';
 import { isStallKebab, isStallCoordGate } from '../src/coord/stall.js';
 import { isQuestionPolicyKebab } from '../src/coord/questionPolicy.js';
+import { isDeadDispatchKebab } from '../src/coord/deadDispatch.js';
 import { isHibernateKebab } from '../src/coord/hibernate.js';
 import { isArchivedExpiryKebab } from '../src/archivedExpiry.js';
 import { isStallSettingsKebab } from '../src/coord/stallsettings.js';
@@ -1020,8 +1021,13 @@ describe('the rejection table is total, in both directions', () => {
         // THE QUESTION SWEEP'S DECIDERS (W3 Q3c, D-7027): `coord/questionPolicy.ts` names its answer words and the ask
         // read's stages as literals (`'push-and-drop'`, `'row-refused'`). A word decides the sweep's act, never a `refused`
         // or `reject.code`. Admitted through the exported guard, derived from that file's tables, never NOT_CODES.
-        || isQuestionPolicyKebab(tok),
-        `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode, SessionLifecycle, ReclaimRefuseCode, AskRefuseCode, RunRouteRefuseCode, SetAccountPoolsRefuseCode, UpdateStoreRefuseCode, child-reclaim word, stall-watch word, expiry word, stall-watch settings word, dead-coordinator word, temp-root collector word, delegation word, collector switch word, collector-switch route refusal, hibernation word, drift kind, notice mode, archive gate, stale-archive outcome, drift lane tag, stale-sibling claimant state, coord-blocked gate reason or question-sweep word`).toBe(true);
+        || isQuestionPolicyKebab(tok)
+        // THE DEAD-DISPATCH ACT (D-7319): `coord/deadDispatch.ts` and `coord/abandonDeadDispatch.ts` name why a run is kept
+        // (`'in-flight'`, `'child-workspace'`) and the switch door's refusals (`'state-unreadable'`) as literals. A keep
+        // reason rides a log line and the arm's re-measure, never a mail rejection or a run refusal. Admitted through the
+        // exported guard, derived from `DEAD_DISPATCH_KEEPS` and `DISPATCH_ABANDON_REFUSALS`, never NOT_CODES.
+        || isDeadDispatchKebab(tok),
+        `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode, SessionLifecycle, ReclaimRefuseCode, AskRefuseCode, RunRouteRefuseCode, SetAccountPoolsRefuseCode, UpdateStoreRefuseCode, child-reclaim word, stall-watch word, expiry word, stall-watch settings word, dead-coordinator word, temp-root collector word, delegation word, collector switch word, collector-switch route refusal, hibernation word, drift kind, notice mode, archive gate, stale-archive outcome, drift lane tag, stale-sibling claimant state, coord-blocked gate reason, question-sweep word or dead-dispatch word`).toBe(true);
     }
   });
 });

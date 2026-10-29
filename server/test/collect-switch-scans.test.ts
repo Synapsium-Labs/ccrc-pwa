@@ -130,8 +130,8 @@ const latchBeforeResolution = (j: Job): string | null => {
   return j.body.indexOf('collectLaneEffective(', latch[0]) > latch[0]! ? null : 'no resolution follows the latch';
 };
 const epochOutsideCallback = (method: string): string | null => {
-  const run = method.indexOf('this.deps.queue.run(');
-  if (run < 0) return 'no queue.run( in collectAct';
+  const run = method.indexOf('retireExecutor(this.deps.queue, ');   // C4n (D-7171): the queue call is retireExecutor's
+  if (run < 0) return 'no retireExecutor( in collectAct';
   const bind = /\bconst\s+epoch\s*=/.exec(method);
   if (bind === null || bind.index > run) return 'the job’s epoch is not bound before the queue callback';
   const tail = method.slice(run);
@@ -233,7 +233,7 @@ describe('the watcher queues the job with the epoch it stands under (path-identi
   const ACT_GOOD = [
     '  private collectAct(coord: CoordStore, id: string, pass: number, mono: number): void {',
     '    const epoch = (this.deps.fleetIdentity ?? NO_FLEET_IDENTITY).epochNow();',
-    '    void this.deps.queue.run(id, () => collectTempRoot({ coord }, { id, epoch }))',
+    '    void retireExecutor(this.deps.queue, id, () => collectTempRoot({ coord }, { id, epoch }))',
     '      .finally(() => { this.collectSettled(id, pass); });',
     '  }',
     '',

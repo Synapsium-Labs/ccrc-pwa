@@ -1161,6 +1161,7 @@ describe('the rulings: every egress of session-derived text goes through the mas
     '/api/sessions/:id/clip/:name': 'a file the operator uploaded, served back as it was',
     '/api/coord/caps': 'capacity settings',
     '/api/coord/collect-lane': "the collector's settings and counters",
+    '/api/coord/dispatch-abandon': "the dead-dispatch switch's choice and bound (D-7319)",
     '/api/approvals/:id/ruling': 'a signed ruling read by the fleet box (a mask would break the signature); its input is shape-redacted at write',
     '/api/approvals/key': 'a public key',
     '/api/updates': 'release metadata',

@@ -52,6 +52,10 @@ export const DEAD_COORDINATOR_LANE_LIVE_MARKER = 'dead-coordinator-lane-live';
 /** `$REG/child-stale-reclaim-live`: arms the child reclaim's stale arm (D-6639): a kept child idle for seven days is
  *  reclaimed. Absent, the lane records "child would be reclaimed (stale)" and acts on nothing. */
 export const CHILD_STALE_RECLAIM_LIVE_MARKER = 'child-stale-reclaim-live';
+/** `$REG/deps-shed-live`: arms the deps-shed arm of the run-done row (D-7278): a sleeping session's git-ignored,
+ *  untracked dependency directories are removed once its work is finished past the age. Absent, the arm asks the box's
+ *  dry run and records "dependencies would be removed" and removes nothing. No writer in the tree: the operator arms it. */
+export const DEPS_SHED_LIVE_MARKER = 'deps-shed-live';
 /** `$REG/child-superseded-reclaim-live`: arms the child reclaim's superseded-review release (D-6922):
  *  an earlier review child is reclaimed once a later review of the same run has closed, though the reviewed run is open.
  *  Absent, the lane records "review report would be reclaimed (superseded)" and acts on nothing. */
@@ -200,6 +204,11 @@ export const SWITCHES = {
   [CHILD_STALE_RECLAIM_LIVE_MARKER]: {
     storage: { marker: CHILD_STALE_RECLAIM_LIVE_MARKER }, default: 'absent: shadow, the lane records what it would reclaim',
     owner: 'C4', meaning: 'The stale arm acts: a kept child idle for seven days is reclaimed, its work pinned to the attic.',
+    writer: 'hand-only',
+  },
+  [DEPS_SHED_LIVE_MARKER]: {
+    storage: { marker: DEPS_SHED_LIVE_MARKER }, default: 'absent: shadow, the arm records what it would remove',
+    owner: 'C4', meaning: 'The deps-shed arm acts: a sleeping worker or coordinator whose work finished past the age has its ignored dependency directories removed; its worktree and every git fact stay.',
     writer: 'hand-only',
   },
   [CHILD_SUPERSEDED_RECLAIM_LIVE_MARKER]: {

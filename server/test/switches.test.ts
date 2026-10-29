@@ -19,7 +19,7 @@ import { STOP_DONE_DISABLED_MARKER } from '../src/stopDone.js';
 import { MAIL_GATE_BUSY_MARKER, MAIL_GATE_BUSY_SHADOW_MARKER, MAIL_GATE_STRICT_MARKER } from '../src/turnidle.js';
 import { isMarkerState } from '../../shared/api.js';
 import {
-  ASKS_DISABLED_MARKER, CHILD_RECLAIM_DISABLED_MARKER, CHILD_STALE_RECLAIM_LIVE_MARKER, CHILD_SUPERSEDED_RECLAIM_LIVE_MARKER, COLLECT_LOOSE_LIVE_MARKER, DRIFT_PUSH_LIVE_MARKER,
+  ASKS_DISABLED_MARKER, CHILD_RECLAIM_DISABLED_MARKER, CHILD_STALE_RECLAIM_LIVE_MARKER, CHILD_SUPERSEDED_RECLAIM_LIVE_MARKER, COLLECT_LOOSE_LIVE_MARKER, DEPS_SHED_LIVE_MARKER, DRIFT_PUSH_LIVE_MARKER,
   NESTED_RESCUE_LIVE_MARKER, ORPHAN_TREE_LIVE_MARKER, ORPHAN_TREE_RESCUE_LIVE_MARKER, SWITCHES, markerSwitchNames, readSwitches,
 } from '../../shared/switches.js';
 
@@ -76,7 +76,9 @@ describe('the switchboard: SWITCHES rows and readSwitches (D-5855)', () => {
     expect(DRIFT_PUSH_LIVE_MARKER).toBe('drift-push-live');
     // ARCH-77 (#812): child reclaim's own off switch, a hand-touched row with no writer in the tree.
     expect(CHILD_RECLAIM_DISABLED_MARKER).toBe('child-reclaim-disabled');
-    expect(markers.sort()).toEqual([...Object.values(TODAY), 'asks-disabled', 'landing-disabled', 'landing-checks-live', 'collect-loose-live', 'drift-push-live', 'child-reclaim-disabled', 'coordinator-roster-card-live'].sort());
+    // D-7278: the deps-shed arm's live switch, a hand-armed row with no writer in the tree.
+    expect(DEPS_SHED_LIVE_MARKER).toBe('deps-shed-live');
+    expect(markers.sort()).toEqual([...Object.values(TODAY), 'asks-disabled', 'landing-disabled', 'landing-checks-live', 'collect-loose-live', 'drift-push-live', 'child-reclaim-disabled', 'coordinator-roster-card-live', 'deps-shed-live'].sort());
     expect([...markerSwitchNames].sort()).toEqual(markers.sort());
   });
 

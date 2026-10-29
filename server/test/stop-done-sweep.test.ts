@@ -957,3 +957,26 @@ describe('stopDonePass: the feed pair and the switches, before and after the fun
       .toEqual([{ id: ID, kind: 'hibernated', runId: 10 }]);
   });
 });
+
+// CHARACTERIZATION (D-7278, the deps-shed arm; green on `main` before the arm): the run-done pass reads a sleeping row,
+// worker or coordinator, as already asleep and composes nothing for it, however long its run has been closed. What
+// sheds a sleeping row's dependencies is a separate pass (`depsShedPass`), never this one.
+describe('characterization: the run-done pass leaves a sleeping row alone (D-7278)', () => {
+  const ASLEEP = { stoppedBy: { at: NOW - 48 * HOUR, surface: 'agent' } } as const;
+  it('a sleeping worker whose run closed two days ago: no ccd call, no outcome, no feed row but the mail-only count', async () => {
+    const f = fake([ID]);
+    f.runs.set(ID, { runId: 10, state: 'done', closedAt: NOW - 48 * HOUR });
+    expect(await stopDonePass(f.deps, mem(), [row(ID, ASLEEP)], [rec(ID)], [])).toEqual([]);
+    expect(f.argv).toEqual([]);
+    expect(f.serialCalls).toBe(0);
+    expect(sleepRows(f)).toEqual([]);
+  });
+  it('a sleeping coordinator (no child marker, it claimed a run): no ccd call and no outcome', async () => {
+    const f = fake([]);
+    const coord = 'lane-a-project-a';
+    expect(await stopDonePass(f.deps, mem(), [row(coord, { ...ASLEEP, child: { kind: 'none' } as never })], [rec(coord)], []))
+      .toEqual([]);
+    expect(f.argv).toEqual([]);
+    expect(f.serialCalls).toBe(0);
+  });
+});

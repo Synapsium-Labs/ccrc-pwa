@@ -17,7 +17,7 @@
 //   (c) the rejection rows (D-7226): `propagate` readers reject the executor (no notice, no effect) and land in the
 //       caller's own sentence; `judged` readers answer their step's sentence;
 //   (d) child-spent's three `gone` sources (D-7230);
-//   (e) the held-at-the-act rows, and today's gap (child-spent's `reclaim-paused` read once, at 2b);
+//   (e) the held-at-the-act rows (child-spent's `reclaim-paused` re-read at step 6 since C4o, D-7401);
 //   (f) temp-orphan's synchronous tail (two probes);
 //   (g) the collector's call order;
 //   (h) the side-effect rows (D-7199);
@@ -171,6 +171,16 @@ const childRig = async (o: ChildOpts = {}) => {
       if (what === 'reject') throw new Error('EIO: the registry listing failed');
       if (what === 'null') return null;
       return base.io.readdir(p, timeoutMs, signal);
+    },
+    // Step 6's listing is the measured one (D-5969): it counts in the same registry-listing sequence as the plain ones.
+    async readdirMeasured(p: string, timeoutMs?: number, signal?: AbortSignal) {
+      if (p !== reg) return base.io.readdirMeasured(p, timeoutMs, signal);
+      listings += 1;
+      spy.log.push('readdirMeasured');
+      const what = hooks.listing?.(listings);
+      if (what === 'reject') throw new Error('EIO: the registry listing failed');
+      if (what === 'null') return { ok: false, reason: 'unreadable' };
+      return base.io.readdirMeasured(p, timeoutMs, signal);
     },
     async readFileMeasured(p: string, timeoutMs?: number, signal?: AbortSignal) {
       if (p === path.join(reg, `${KID}.generation`)) {
@@ -337,10 +347,11 @@ describe('child-spent (reclaimChild): the step matrix (C4h a)', () => {
     expect(await childReclaimPauseRead({ readdir: async () => [RECLAIM_PAUSE_MARKER] }, '/fixture/reg')).toBe('set');
   });
 
-  it('child-spent: the listing count of a clean pass is four plain readdirs (record, pause, disabled, disabled at the act)', async () => {
+  it('child-spent: the listing count of a clean pass is three plain readdirs (record, pause, disabled) and the act\'s one measured listing', async () => {
     const k = await childRig();
     expect(await reclaimChild(k.deps, k.req)).toMatchObject({ kind: 'reclaimed' });
-    expect(spy.log.filter((l) => l === 'readdir')).toHaveLength(4);
+    expect(spy.log.filter((l) => l === 'readdir' || l === 'readdirMeasured'))
+      .toEqual(['readdir', 'readdir', 'readdir', 'readdirMeasured']);
   });
 
   it('child-spent: the defer words are the ladder\'s own vocabulary', () => {
@@ -530,12 +541,23 @@ describe('child-spent (reclaimChild): rejections, gone, the act, effects, argv a
     expect(notifySpy.mock.calls.map((c) => c[1].title)).toEqual(['child reclaim deferred']);
   });
 
-  it("child-spent: TODAY'S GAP — reclaim-paused clean at 2b and raised from the next listing on still reaches the ws-reclaim argv (C4o flips this row)", async () => {
+  it('child-spent: held at the act — reclaim-paused clean at 2b and raised from the next listing on composes no ws-reclaim (C4o flipped this row, D-7401)', async () => {
+    // Before C4o the server composed ws-reclaim here and folded ccd's in-lock `paused` refusal; ccd's answer is still
+    // scripted, so a server that reached the argv again would read it.
     const k = await childRig();
     k.hooks.audit = () => { k.raise(RECLAIM_PAUSE_MARKER); };
     k.answers.act = () => k.actDoc({ refused: 'paused', detail: 'reclaim-paused is raised' });
-    expect(await reclaimChild(k.deps, k.req)).toEqual(deferredC(k, 'paused', 'reclaim-paused is raised'));
-    expect(k.argvs).toEqual([KAUDIT, kAct(k.runId)]);
+    expect(await reclaimChild(k.deps, k.req)).toEqual(deferredC(k, 'paused-at-server',
+      'reclaim-paused is raised: automatic reclamation is paused fleet-wide at the act'));
+    expect(k.argvs).toEqual([KAUDIT]);
+  });
+
+  it('child-spent: an unmeasurable listing at step 6 still answers the child-reclaim-disabled sentence', async () => {
+    const k = await childRig();
+    k.hooks.listing = (n) => (n === 4 ? 'null' : undefined);
+    expect(await reclaimChild(k.deps, k.req)).toEqual(deferredC(k, 'paused-at-server',
+      'the registry did not list, so a set child-reclaim-disabled cannot be ruled out at the act'));
+    expect(k.argvs).toEqual([KAUDIT]);
   });
 
   it('child-spent: the stale arm needs its own capability, and its flags ride both argvs', async () => {
@@ -1347,10 +1369,11 @@ describe('the difference table (C4h b; plan item 2 and item 16)', () => {
     expect([by('temp-orphan', 'propagate'), by('temp-orphan', 'judged')]).toEqual([4, 4]);
   });
 
-  it('the listing mode: child-spent takes plain readdirs, one per marker; the other two ONE measured listing per read', async () => {
+  it('the listing mode: child-spent takes plain readdirs at decide, one per marker, and one measured listing at the act; the other two ONE measured listing per read', async () => {
     const k = await childRig();
     await reclaimChild(k.deps, k.req);
-    expect(spy.log.filter((l) => l === 'readdir')).toHaveLength(4);
+    expect(spy.log.filter((l) => l === 'readdir' || l === 'readdirMeasured'))
+      .toEqual(['readdir', 'readdir', 'readdir', 'readdirMeasured']);
     spy.log.length = 0;
     const x = await expiryRig();
     await expireArchived(x.deps, x.req);
@@ -1542,7 +1565,10 @@ import {
 } from '../src/coord/childReclaim.js';
 import { readSessionRecord } from '../src/registry.js';
 import { readChildSiblings } from '../src/coord/siblingRead.js';
-import { CHILD_RECLAIM_DISABLED_UNREAD_SENTENCE, childReclaimDisabledSentence } from '../src/coord/childReclaimDisabled.js';
+import {
+  CHILD_RECLAIM_DISABLED_UNREAD_SENTENCE, childReclaimDisabledOf, childReclaimDisabledSentence,
+} from '../src/coord/childReclaimDisabled.js';
+import { readSwitches } from '../../shared/switches.js';
 import { ARCHIVE_EXPIRED_RETIRE, readExpiryStore, type ArchiveExpiredFacts, type ExpireArchivedRequest } from '../src/coord/expireArchived.js';
 import { parseExpireAudit } from '../src/archivedExpiry.js';
 import {
@@ -1627,6 +1653,18 @@ const childDisabledDetail = async (k: ChildRig, when: string): Promise<string | 
   if (state === 'set') return childReclaimDisabledSentence(when);
   return state === 'clear' ? null : `${CHILD_RECLAIM_DISABLED_UNREAD_SENTENCE}${when}`;
 };
+/** Step 6's two readings of its one measured listing: both markers, or both the rejection. */
+const childActSwitches = async (k: ChildRig) => {
+  let names: readonly string[] | null;
+  try {
+    const listed = await k.deps.io.readdirMeasured(k.deps.cfg.registryDir);
+    names = listed.ok ? listed.entries : null;
+  } catch (err) {
+    const rejected = new RetireRejected(err);
+    return { pause: rejected, disabled: rejected };
+  }
+  return { pause: readSwitches(names)[RECLAIM_PAUSE_MARKER], disabled: childReclaimDisabledOf(names) };
+};
 const childReaders = (k: ChildRig): Readers<ChildSpentFacts> => {
   const { deps, req } = k;
   const now = (): number => (deps.now ?? Date.now)();
@@ -1660,10 +1698,10 @@ const childReaders = (k: ChildRig): Readers<ChildSpentFacts> => {
     [RETIRE_STEPS.auditVerdict]: () => true,
     [RETIRE_STEPS.markerMatch]: () => true,
     [RETIRE_STEPS.auditGeneration]: () => true,
-    [RETIRE_STEPS.offSwitchLast]: () => childDisabledDetail(k, ' at the act'),
+    [RETIRE_STEPS.offSwitchLast]: () => childActSwitches(k),
   };
 };
-const CHILD_READS = (l: string): boolean => l === 'readdir' || l === 'generation' || l === 'presence' || l === 'store' || l === 'claims'
+const CHILD_READS = (l: string): boolean => l === 'readdir' || l === 'readdirMeasured' || l === 'generation' || l === 'presence' || l === 'store' || l === 'claims'
   || l.startsWith('argv:');
 /** The executor on one rig and the decider on its twin, each rig built by `make`: both outcomes, both read logs (each
  *  up to the act's argv). */
@@ -1784,7 +1822,7 @@ describe('decideRetire: child-spent over C4h\'s matrix (C4i; D-7166)', () => {
     expect(act.dec.ok && act.dec.d.decision, 'the act\'s own refusal is the act\'s, past the gate').toEqual({ act: true });
   });
 
-  it('child-spent: held at the act — the off switch at the act, the audit\'s generation, and today\'s gap (reclaim-paused read once)', async () => {
+  it('child-spent: held at the act — the off switch at the act, the audit\'s generation, and reclaim-paused at the act (C4o, D-7401)', async () => {
     const off = await childRow(undefined, (k) => { k.hooks.audit = () => { k.raise(CHILD_RECLAIM_DISABLED_MARKER); }; });
     expect(off.outcome).toEqual(deferredC(off.b, 'paused-at-server', 'child-reclaim-disabled is set at the act: child reclaim is switched off'));
     const gen = await childRow({ licence: 'g1' }, (k) => {
@@ -1793,7 +1831,8 @@ describe('decideRetire: child-spent over C4h\'s matrix (C4i; D-7166)', () => {
     });
     expect(gen.outcome).toMatchObject({ kind: 'deferred', why: 'generation-changed' });
     const gap = await childRow(undefined, (k) => { k.hooks.audit = () => { k.raise(RECLAIM_PAUSE_MARKER); }; });
-    expect(gap.dec.ok && gap.dec.d.decision, 'C4o flips this row').toEqual({ act: true });
+    expect(gap.outcome, 'C4o flipped this row').toEqual(deferredC(gap.b, 'paused-at-server',
+      'reclaim-paused is raised: automatic reclamation is paused fleet-wide at the act'));
     const stale = await childRow({ stale: true }, () => {});
     expect(stale.dec.ok && stale.dec.d.decision).toEqual({ act: true });
   });

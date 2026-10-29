@@ -279,10 +279,10 @@ describe('W7 PWA census: REAL rows (reporting, not ratcheting; spec §5.1 rule 3
 
   // Pinned exact by C7b (D-7180, D-7221): #1720 merged, leaving `HotFilesStrip`'s and `useFleetHealth`'s timers, which
   // C7m takes. The ratchet is `rings/pwa-one-owner.test.ts`'s one-owner block.
-  it('requestPolls(): 2 hand-written request polls, HotFilesStrip and useFleetHealth', () => {
+  it('requestPolls(): 0 hand-written request polls (HotFilesStrip and useFleetHealth are on usePoll, C7m)', () => {
     const sites = requestPolls();
-    held('requestPolls', sites, 2);
-    expect(sites.map((s) => s.file)).toEqual(['pwa/src/fleet/HotFilesStrip.tsx', 'pwa/src/fleet/useFleetHealth.ts']);
+    held('requestPolls', sites, 0);
+    expect(sites.map((s) => s.file)).toEqual([]);
   });
 
   // C7e (D-7183): EnvelopeSheet's busy comes from the answer lifecycle (Step 4), DialogSheet's writes are the
@@ -304,8 +304,8 @@ describe('W7 PWA census: REAL rows (reporting, not ratcheting; spec §5.1 rule 3
     held('clientPairingDefinitions', clientPairingDefinitions(), 0);
   });
 
-  it('paneTextDecisions(): 2 (COMPACTION_RE, showsPrompt)', () => {
-    held('paneTextDecisions', paneTextDecisions(), 2);
+  it('paneTextDecisions(): 1 (from 2: COMPACTION_RE deleted by C7i, D-7187; showsPrompt stays)', () => {
+    held('paneTextDecisions', paneTextDecisions(), 1);
   });
 
   // Exact on the merged tree: #1715 (one bucket vocabulary) landed before this task, so no band.
@@ -341,10 +341,10 @@ describe('W7 PWA census: REAL rows (reporting, not ratcheting; spec §5.1 rule 3
     held('storageTypes', storageTypes(), 1);
   });
 
-  it('pageClockSubscriptions(): 10 visibilitychange, 2 online', () => {
+  it('pageClockSubscriptions(): 1 visibilitychange, 1 online', () => {
     const sites = pageClockSubscriptions();
-    held('pageClockSubscriptions', sites, 12);
-    expect(countBy(sites, (s) => s.kind)).toEqual({ visibilitychange: 10, online: 2 });
+    held('pageClockSubscriptions', sites, 2);
+    expect(countBy(sites, (s) => s.kind)).toEqual({ visibilitychange: 1, online: 1 });
   });
 
   it('singleReaders(): api.feed 1, api.runs 1, api.projects 1 (calls and member references)', () => {
@@ -396,5 +396,29 @@ describe('W7 PWA census, C7q: transcriptCopyRules (D-7212)', () => {
     expect(sites.map((s) => [s.kind, `${s.file}#${s.symbol}`])).toEqual([
       ['copy', 'shared/ask-menu.ts#transcriptQuestion'], ['usable', 'shared/ask-menu.ts#usableQuestions'],
     ]);
+  });
+});
+
+// C7i (D-7187; OA-C16 (a)): Claude Code's prompt glyph has one pane-text spelling. Imported in the block, so the file's
+// header imports stay as other tasks append to them.
+describe('W7 PWA census: the prompt glyph\'s pane-text spellings (C7i, D-7187)', () => {
+  it('FIXTURE promptGlyphSpellings: a string that is the glyph counts; the glyph in a regex, a longer string and JSX text do not', async () => {
+    const { promptGlyphSpellingsIn } = await import('./pwa.js');
+    const got = run(promptGlyphSpellingsIn, [
+      "export const PROMPT_GLYPH = '❯';",
+      "export function startsWithPromptGlyph(row: string): boolean { return row.startsWith('❯'); }",
+      'const OPTION_RE = /^\\s*(❯)?\\s*(\\d+)\\.\\s+(.+)$/;',
+      "const hint = '❯ 1. Yes';",
+      'export const Row = () => <span>❯</span>;',
+    ].join('\n'));
+    // A module-scope binding is not a symbol (`scan/parse.ts`), so the constant's site is `(module)`.
+    expect(got.map((s) => [s.symbol, s.text, s.line])).toEqual([['(module)', "'❯'", 1], ['startsWithPromptGlyph', "'❯'", 2]]);
+  });
+
+  it('REAL promptGlyphSpellings(): 1 (from 2: drawerView.ts\'s PROMPT_GLYPH and dialog.ts#startsWithPromptGlyph import shared/pane-glyph.ts)', async () => {
+    const { promptGlyphSpellings } = await import('./pwa.js');
+    const sites = promptGlyphSpellings();
+    held('promptGlyphSpellings', sites, 1);
+    expect(sites.map((s) => `${s.file}#${s.symbol}`)).toEqual(['shared/pane-glyph.ts#(module)']);
   });
 });

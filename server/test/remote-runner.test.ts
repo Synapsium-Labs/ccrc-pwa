@@ -96,6 +96,11 @@ describe('per-verb timeouts', () => {
     [['ws-expire', '--expect', 'a'.repeat(64), '--session', 'x'], 240_000],
     // The child temp-root collector: a bounded idle walk, a quarantine move and a tree removal under the reap lock.
     [['ws-collect', '--expect', 'a'.repeat(64), '--session', 'x'], 240_000],
+    // The deps-shed act (D-7278) has ws-reap's row; its shadow, the dry run, a shorter one of its own (166 s of bounds),
+    // because it runs inside the run-done lane's single flight. `deps-shed-budget.test.ts` holds both sums.
+    [['ws-shed-deps', '--session', 'x', '--class', 'child'], 240_000],
+    [['ws-shed-deps', '--session', 'x', '--class', 'child', '--dry-run'], 180_000],
+    [['ws-shed-deps', '--session', 'x', '--class', 'coordinator', '--dry-run', '--surface', 'server', '--actor', 'deps-shed'], 180_000],
     // The two SPAWNING verbs (F8, 2026-08-12). Both run `_spawn`, which blocks
     // in `_accept_first_run_prompts` until the new pane renders a ready banner
     // — a COLD Claude Code start in a fresh workspace HOME, which on the live

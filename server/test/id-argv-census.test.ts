@@ -6,7 +6,7 @@
 // `verb-gate.test.ts` and `routes.test.ts`'s knownId census. A new call, or a new builder key, must classify itself
 // here, or this suite goes red.
 //
-// THE CLAIM: 45 id-taking calls across 13 files.
+// THE CLAIM: 46 id-taking calls across 14 files.
 //
 // Origins:
 //   `request`   a route's own parameter or body;
@@ -49,7 +49,7 @@ const ID_BUILDERS = {
   ensure: 'id', stopId: 'id', stopPair: 'id', forget: 'id', swap: 'id', swapCross: 'id',
   swapInterrupt: 'id', swapCrossInterrupt: 'id', hibernate: 'id',
   wsAdd: 'no-id', wsAddNamed: 'no-id', wsAddWorker: 'no-id',
-  prStateSession: 'id', prStateProject: 'no-id',
+  prStateSession: 'id', prStateProject: 'no-id', prTrainProve: 'no-id',
   // D-6784: `prLanding`'s ids ride inside `<id>:<pr>` pairs the builder validates itself, never as a bare argv word.
   // The lane's ids come from the registry listing (the project's own sessions), never from a request body; the
   // call site PL-4 adds must keep it so, since this row is not checked for a gate over where its ids come from.
@@ -58,6 +58,7 @@ const ID_BUILDERS = {
   wsReclaimAudit: 'id', wsReclaim: 'id', wsExpireAudit: 'id', wsExpire: 'id',
   wsCollectAudit: 'id', wsCollect: 'id', wsAttic: 'id',
   wsOrphanCensus: 'no-id', wsOrphanAudit: 'no-id', wsOrphan: 'no-id',   // an orphaned tree travels as hex, never as an id (D-6630)
+  wsShedDeps: 'id',
   wsCollectCensus: 'no-id', wsCollectLooseAudit: 'no-id', wsCollectLoose: 'no-id',   // a loose entry's name travels as hex, never as an id (D-6626)
   wsHold: 'id', wsRelease: 'id', wsRename: 'id', wsTitle: 'id',
   coordPause: 'no-id', reclaimPause: 'no-id', projectPoolSet: 'no-id', projectPoolClear: 'no-id',
@@ -101,6 +102,7 @@ const ID_PROBE = {
   wsExpire: ['probe-token', PROBE_ID, null],
   wsCollectAudit: [PROBE_ID],
   wsCollect: ['probe-token' as CollectToken, PROBE_ID, null],
+  wsShedDeps: [PROBE_ID, 'child', false, null],
   wsAttic: [PROBE_ID],
   wsHold: [PROBE_ID, 'a reason', null],
   wsRelease: [PROBE_ID, null],
@@ -469,6 +471,9 @@ const CENSUS: readonly CensusRow[] = [
   // whose record the listing built, and re-read it at the act through the watcher's `rowAtAct` (`readSessionRecord`,
   // whose `bad-id` acts on nothing). The verb question is `ccdCan(fleetState, 'hibernate')`, which composes no argv.
   { file: 'sleepLane.ts', scope: 'sleepAct', builder: 'hibernate', id: 'id', origin: ['registry'], gate: ['registry-refused', 'readSessionRecord'], entry: /\bconst id = row\.id;[\s\S]*?const fresh = await port\.rowAtAct\(rec\);\s*if \(!fresh\.ok\) return/ },
+  // depsShedPass.ts (D-7278): the deps-shed arm acts on a fleet row whose record the listing built, and re-reads it at the
+  // act through the watcher's `rowAtAct` (`readSessionRecord`, whose `bad-id` acts on nothing), as `sleepAct` does.
+  { file: 'depsShedPass.ts', scope: 'depsShedAct', builder: 'wsShedDeps', id: 'id', origin: ['registry'], gate: ['registry-refused', 'readSessionRecord'], entry: /\bconst id = row\.id;[\s\S]*?const fresh = await deps\.rowAtAct\(rec\);\s*if \(!fresh\.ok\) return/ },
   // watch.ts: the mail lane wakes a hibernated recipient only through a record the listing built (D-5242).
   { file: 'watch.ts', scope: 'mailPass', builder: 'ensure', id: 'd.toId', origin: ['stored', 'registry'], gate: ['registry-refused'], entry: /\bconst rec = records\.find\(\(r\) => r\.id === d\.toId\);[\s\S]*?if \(rec === undefined \|\| identity === null\) \{/ },
   // watch.ts: the naming sweep's rows come from the listing, which never builds a refused name; the `entry` ties the
@@ -506,7 +511,7 @@ function paired(): { readonly site: Site; readonly row: CensusRow }[] {
 describe('every id-taking argv call has an origin and a gate (spec §2.3)', () => {
   it('every CCD_ARGV key is classified id or no-id', () => {
     expect(Object.keys(ID_BUILDERS).sort()).toEqual(Object.keys(CCD_ARGV).sort());
-    expect(ID_KEYS).toHaveLength(30);
+    expect(ID_KEYS).toHaveLength(31);
     expect(Object.keys(ID_PROBE).sort()).toEqual([...ID_KEYS].sort());
     for (const k of ID_KEYS) {
       const args = ID_PROBE[k] as readonly unknown[];
@@ -525,7 +530,7 @@ describe('every id-taking argv call has an origin and a gate (spec §2.3)', () =
     }
   });
 
-  it('the header claim, "45 id-taking calls across 13 files", matches the scan', () => {
+  it('the header claim, "46 id-taking calls across 14 files", matches the scan', () => {
     const self = readFileSync(fileURLToPath(import.meta.url), 'utf8');
     const claim = /^\/\/ THE CLAIM: (\d+) id-taking calls across (\d+) files\b/m.exec(self);
     expect(claim, 'the census claim was removed or reworded without its guard').not.toBeNull();

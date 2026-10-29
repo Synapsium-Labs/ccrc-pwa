@@ -882,6 +882,38 @@ describe('the merged lane\'s surviving rungs choose the SENTENCE', () => {
     w.stop();
   });
 
+  it('a train-unread line asks pr-train-prove once, and the next sweep\'s merged line speaks (D-7378)', async () => {
+    // The sweep has no train budget, so a member a merge train landed reads
+    // `train-unread` until its proof is kept. The prover is a separate call
+    // after the sweep, and the NEXT sweep reads `merged` off the kept proof.
+    const home = seed(['demo-quiet-basin']);
+    const calls: string[][] = [];
+    const notify = vi.fn(async (_payload: PushPayload) => {});
+    const unread = JSON.parse(mergedLine('demo-quiet-basin')) as Record<string, any>;
+    unread.rows[0] = { ...unread.rows[0], state: 'CLOSED', mergedAt: null, mergeCommit: null,
+      closedAt: '2026-07-20T10:00:00Z', landedInTrain: false, trainUnproven: false, trainUnread: true };
+    Object.assign(unread, { phase: 'unknown', reason: 'train-unread' });
+    const w = new FleetWatcher(withFakeClock({ ...testDeps(home, runnerFor(JSON.stringify(unread), calls)), push: { notify } as never }), new Bus(), 10_000);
+    await w.tick();
+    await vi.waitFor(() => expect(w.currentPrStates().get('demo-quiet-basin')?.reason).toBe('train-unread'));
+    await vi.waitFor(() => expect(w.inFlight('pr')).toBeNull());
+    expect(calls.filter((c) => c[0] === 'pr-train-prove')).toEqual([['pr-train-prove', '--project', 'demo']]);
+    expect(notify).not.toHaveBeenCalled();
+
+    const landed = JSON.parse(mergedLine('demo-quiet-basin')) as Record<string, any>;
+    landed.rows[0] = { ...unread.rows[0], trainUnread: false, landedInTrain: true };
+    const before = calls.length;
+    (w as unknown as { deps: { runCcd: unknown } }).deps.runCcd =
+      testDeps(home, runnerFor(JSON.stringify(landed), calls)).runCcd;
+    w.kick('pr');
+    await w.tick();
+    await vi.waitFor(() => expect(notify).toHaveBeenCalledTimes(1));
+    expect(w.currentPrStates().get('demo-quiet-basin')?.phase).toBe('merged');
+    await vi.waitFor(() => expect(w.inFlight('pr')).toBeNull());
+    expect(calls.slice(before).some((c) => c[0] === 'pr-train-prove'), 'a measured sweep asks no prover').toBe(false);
+    w.stop();
+  });
+
   it('says nothing at all for a DEGRADED row, and everything for the same row measured', async () => {
     // `measuredIdentity(r) === null` no longer guards an act — there is none —
     // but it still guards the CLAIM. `held` reads null on a row whose files

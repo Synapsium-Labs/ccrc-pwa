@@ -29,6 +29,8 @@ import { parseStallDetail } from './stall.js';
 // their consumer, the L1 `stallsettings.ts`; the insert arm starts from its seed, and the no-op skip asks its compare.
 import { STALL_SETTINGS_SEED, stallPatchIsNoOp } from './stallsettings.js';
 import type { StallObservationRow, StallSettingsPatch, StallSettingsRead } from './stallsettings.js';
+import type { DispatchAbandonRead } from './deadDispatch.js';
+import type { DispatchAbandonChoice } from '../../../shared/dispatch-abandon.js';
 // The coordination fence's claim shape is declared by its CONSUMER, the L1
 // sweep file's `childReclaimCoordinated` (the same port rule as above); the
 // read below implements it.
@@ -74,9 +76,12 @@ import {
 import { isHaltingUpdate } from '../../../shared/update-move.js';
 import {
   CLEAR_REFUSED_STRANDS_TEXT,
+  MAIL_ROLE_IDS,
   holdReasonVerdict,
   type HoldReasonVerdict,
 } from './rundefs.js';
+// `runLastMoves`' answer is declared by its consumer, the runs frame's wire composer (D-7334).
+import type { RunLastMovesRead } from './runWire.js';
 import { reviveDec, reviveMeas, reviveObs, type JournalRow } from './journalparse.js';
 import { BRIEF_NOTICE_DETAIL, BRIEF_RETRY_DETAIL, WAVE_BRIEF_SUBJECT, type UnlandedBrief } from './briefwatch.js';
 import { MAIL_REPLAY_CEILING_ERROR } from './delivery.js';
@@ -4907,6 +4912,42 @@ export class CoordStore {
     });
   }
 
+  // ── the dead-dispatch act's switch and candidates (D-7319) ─────────────────────────────────────────────────
+  /** `dispatch_abandon_settings` (migration 33), read: the row's raw choice and write time, `absent` for a lost row, or
+   *  `unreadable` with the driver's detail. `stallSettings()`'s shape: prepared and run inside the `try`, never a throw.
+   *  Nothing is decided here: only an exact `on` arms the act, and `isDispatchAbandonChoice` says so at the reader. */
+  dispatchAbandonSetting(): DispatchAbandonRead {
+    try {
+      const r = this.db.prepare('SELECT choice, CAST(updatedAt AS TEXT) AS updatedText FROM dispatch_abandon_settings WHERE id = 1')
+        .get() as { choice: unknown; updatedText: unknown } | undefined;
+      if (r === undefined) return { kind: 'absent' };
+      const at = typeof r.updatedText === 'string' ? Number(r.updatedText) : NaN;
+      return { kind: 'row', choice: r.choice, updatedAt: Number.isSafeInteger(at) ? at : null };
+    } catch (err) {
+      return { kind: 'unreadable', detail: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
+  /** The switch's one writer, called only by `POST /api/coord/dispatch-abandon`: an upsert of the one row, in one
+   *  statement, then the read back. The route has validated `choice`. */
+  setDispatchAbandon(choice: DispatchAbandonChoice, at: number): DispatchAbandonRead {
+    this.db.prepare(
+      'INSERT INTO dispatch_abandon_settings (id, choice, updatedAt) VALUES (1, ?, ?) ' +
+      'ON CONFLICT(id) DO UPDATE SET choice = excluded.choice, updatedAt = excluded.updatedAt',
+    ).run(choice, at);
+    return this.dispatchAbandonSetting();
+  }
+
+  /** The act's candidates (D-7319): every `planned` run with no session whose dispatch stamp is at or before
+   *  `startedAtOrBefore`, oldest stamp first. Ids only: the executor reads each run whole (`run(id)`) and decides on it,
+   *  so this query is economy, never a permission. */
+  stalledDispatchRunIds(startedAtOrBefore: number): number[] {
+    return (this.db.prepare(
+      "SELECT CAST(id AS TEXT) AS idText FROM runs WHERE state = 'planned' AND sessionId IS NULL " +
+      'AND dispatchStartedAt IS NOT NULL AND dispatchStartedAt <= ? ORDER BY dispatchStartedAt, id',
+    ).all(startedAtOrBefore) as { idText: string }[]).map((r) => Number(r.idText)).filter((n) => Number.isSafeInteger(n));
+  }
+
   // ── the drift decider's reads (coordinator-durability tail spec §4.2, D-5921) ─────────────────────────────
   // Each is `{ ok: true, rows } | { ok: false, detail }`: a thrown statement or a value this process cannot prove is a
   // failure with its detail, never a throw and never an overloaded null. They read; the decider (`drift.ts`) judges.
@@ -4919,22 +4960,62 @@ export class CoordStore {
       const runs = this.db.prepare(
         `SELECT id, program, state, claimedBy, openedAt FROM runs WHERE state NOT IN ${TERMINAL_RUN_STATES_SQL} ORDER BY id`,
       ).all() as { id: unknown; program: string; state: string; claimedBy: string | null; openedAt: unknown }[];
-      const events = this.db.prepare(
-        "SELECT at, causedBy, CAST(detail AS TEXT) AS detail FROM run_events WHERE runId = ? AND causedBy <> 'operator' " +
-        'ORDER BY at DESC, id DESC',
-      );
+      const lastActAt = this.lastActReader();
       const out: DriftRunRow[] = [];
       for (const r of runs) {
-        let lastActAt: number | null = null;
-        for (const e of events.all(r.id as number) as { at: unknown; causedBy: string; detail: string | null }[]) {
-          if (parseStallDetail(e.detail) !== null) continue;
-          lastActAt = driftInt(e.at, 'run_events at');
-          break;
-        }
         out.push({ id: driftInt(r.id, 'runs id'), program: r.program, state: r.state, claimedBy: r.claimedBy,
-          openedAt: driftInt(r.openedAt, 'runs openedAt'), lastActAt });
+          openedAt: driftInt(r.openedAt, 'runs openedAt'), lastActAt: lastActAt(r.id as number) });
       }
       return { ok: true, rows: out };
+    } catch (err) {
+      return { ok: false, detail: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
+  /** The ACT rule, written once: `driftOpenRuns` and `runLastMoves` (D-7334) both read a run's newest act through it.
+   *  The answer for one run is the `at` of its newest `run_events` row that is neither caused by `'operator'` nor a stall
+   *  observation (`parseStallDetail` reads it), or null when there is none. Prepared once per read; it throws as the
+   *  statement does, and its callers turn that into their failure arm. The rows are walked newest first and the walk
+   *  stops at the first act (`iterate`, fix round 1, F5): the runs frame asks this for every open run on every tick, so
+   *  its cost follows the stall rows above the newest act, not the run's whole history. */
+  private lastActReader(): (runId: number) => number | null {
+    const events = this.db.prepare(
+      "SELECT at, causedBy, CAST(detail AS TEXT) AS detail FROM run_events WHERE runId = ? AND causedBy <> 'operator' " +
+      'ORDER BY at DESC, id DESC',
+    );
+    return (runId) => {
+      for (const e of events.iterate(runId) as Iterable<{ at: unknown; causedBy: string; detail: string | null }>) {
+        if (parseStallDetail(e.detail) !== null) continue;
+        return driftInt(e.at, 'run_events at');
+      }
+      return null;
+    };
+  }
+
+  /** `RunSummary.lastMoveAt` for each of `runIds` (D-7334; programme-boxes spec §2.5): the newer of the run's newest act
+   *  (`lastActReader`, the drift reader's rule) and its newest mail naming it from the run's worker, its reviewer or its
+   *  coordinator session — the run's `sessionId`, the `sessionId` of a review run whose `reviews` is this run, or its
+   *  `claimedBy` — never a role sender (`MAIL_ROLE_IDS`: the brief, rejections, close notices and stall checks move
+   *  nothing), and never another session's (fix round 1, F3), or null when it has neither. Every asked id is in the
+   *  answer. Two indexed statements a run (`run_events_by_run`; `mail_by_run`, its senders by the runs key and
+   *  `runs_by_reviews`), so its caller reads it once per frame, for the open runs only. A thrown statement or an
+   *  unprovable value is the failure arm. */
+  runLastMoves(runIds: readonly number[]): RunLastMovesRead {
+    try {
+      const lastActAt = this.lastActReader();
+      const roles = [...MAIL_ROLE_IDS];
+      const mail = this.db.prepare(
+        `SELECT MAX(at) AS at FROM mail WHERE runId = ? AND fromId NOT IN (${roles.map(() => '?').join(', ')}) ` +
+        'AND fromId IN (SELECT sessionId FROM runs WHERE id = ? UNION ALL SELECT claimedBy FROM runs WHERE id = ? ' +
+        'UNION ALL SELECT sessionId FROM runs WHERE reviews = ?)',
+      );
+      const moves = new Map<number, number | null>();
+      for (const id of runIds) {
+        const act = lastActAt(id);
+        const sent = driftIntOrNull((mail.get(id, ...roles, id, id, id) as { at: unknown }).at, 'mail at');
+        moves.set(id, act === null ? sent : sent === null ? act : Math.max(act, sent));
+      }
+      return { ok: true, moves };
     } catch (err) {
       return { ok: false, detail: err instanceof Error ? err.message : String(err) };
     }

@@ -238,6 +238,17 @@ describe('the notice bodies', () => {
   it('the merged brief asks for the merge proof', () => {
     expect(renderMergedBrief(ID, 42)).toContain('`gh pr view 42 --json state,headRefOid`');
   });
+
+  it('the merged brief accepts a PR a merge train landed and closed, the way the server read it', () => {
+    // `merged:#N` is mailed for a CLOSED PR that carries the train label
+    // (`isMergedRow`). A proof that demanded MERGED would leave the run at
+    // `merging`: the brief names the second proof, read from ccd, never a
+    // label name of its own.
+    const b = renderMergedBrief(ID, 42);
+    expect(b).toContain(`or, when it answers CLOSED, PR #42's row of \`ccd pr-state --session ${ID}\` reads `
+      + '`landedInTrain: true`');
+    expect(b).not.toContain('landed-in-train');
+  });
 });
 
 // `stall-vocabulary.test.ts`'s purity pin, for this file's header's claim: the coord-ring scan in

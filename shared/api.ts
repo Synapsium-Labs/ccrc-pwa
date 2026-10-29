@@ -949,6 +949,15 @@ export type PrChecks = 'pass' | 'fail' | 'pending' | 'unmeasured' | null;
  *
  * `cut-short`: ccrc's own read of the PRs was ended before it answered — the runner's kill or the server's wait (not GitHub)
  *
+ * `train-unproven` (D-7362) is the one reason a `closed` phase carries: GitHub says CLOSED and the PR wears the
+ * deployment's landed-in-train label, but ccd could not prove the landing from the train record (the train PR it names
+ * is MERGED and lists it at exactly its head). A label alone never makes a PR merged, so it stays closed and says why.
+ *
+ * `train-unread` (D-7378) is that same labelled CLOSED PR when its train record could not be READ at all: no budget
+ * (the `--project` sweep has none and reads only kept proofs), a timeout, GitHub unreachable. It is a failed read, so
+ * the phase is `unknown`: never `closed`, which would end a run on a PR that may well have landed. `ccd pr-train-prove`
+ * proves it and keeps the proof, and the next sweep reads `merged`.
+ *
  * Integration finding 7. This vocabulary lived in FOUR places: this union
  * (inline in `PrState.reason`), the snapshot-revival list below, `prstate.ts`'s
  * `REASONS` Set, and `PrKeycap.tsx`'s `REASON_TEXT`. Only the last of the four
@@ -966,7 +975,8 @@ export type PrReason =
   | 'timeout' | 'offline' | 'unauthenticated' | 'rate-limit'
   | 'no-remote' | 'unsupported' | 'agent-down' | 'error'
   | 'merge-unproven' | 'branch-drift'
-  | 'unavailable' | 'truncated' | 'cut-short';
+  | 'unavailable' | 'truncated' | 'cut-short'
+  | 'train-unproven' | 'train-unread';
 
 /**
  * The runtime list, derived from the type. `Record<PrReason, true>` is what
@@ -988,6 +998,7 @@ const PR_REASON_MAP: Record<PrReason, true> = {
   'no-remote': true, unsupported: true, 'agent-down': true, error: true,
   'merge-unproven': true, 'branch-drift': true,
   unavailable: true, truncated: true, 'cut-short': true,
+  'train-unproven': true, 'train-unread': true,
 };
 export const PR_REASONS: readonly PrReason[] = Object.keys(PR_REASON_MAP) as PrReason[];
 
@@ -1347,8 +1358,12 @@ export interface WsAudit {
   /** `contained` is the fifth proof and the one with no PR beside it: the
    *  branch was never pushed and its tip is an ancestor of a freshly fetched
    *  origin/HEAD, so nothing unique exists to lose. `pr.number` is `null` on
-   *  that verdict — the audit claims no merge it did not witness. */
-  merge: { proof: 'ancestor' | 'tree' | 'patch-id' | 'cherry' | 'contained' | null; fetchedAt: number | null };
+   *  that verdict — the audit claims no merge it did not witness.
+   *  `train` is the sixth: a PR a merge train landed and closed, proven by
+   *  the train record — the train PR it names is MERGED and lists it at
+   *  exactly its head sha; `pr.number` is that PR and `pr.mergeCommit` the
+   *  train PR's merge commit, since GitHub named no merge commit for it. */
+  merge: { proof: 'ancestor' | 'tree' | 'patch-id' | 'cherry' | 'contained' | 'train' | null; fetchedAt: number | null };
   transcript: string;
   /** The checkouts nested under this workspace's worktree — registered
    *  children ccd created plus any filesystem strays found beside them
@@ -3526,11 +3541,12 @@ const reviveAuditPr = (raw: unknown): AuditPr => {
   };
 };
 
-const PROOFS: readonly string[] = ['ancestor', 'tree', 'patch-id', 'cherry', 'contained'];
-type AuditMerge = { proof: 'ancestor' | 'tree' | 'patch-id' | 'cherry' | 'contained' | null; fetchedAt: number | null };
+const PROOFS: readonly string[] = ['ancestor', 'tree', 'patch-id', 'cherry', 'contained', 'train'];
+type AuditMerge = { proof: 'ancestor' | 'tree' | 'patch-id' | 'cherry' | 'contained' | 'train' | null; fetchedAt: number | null };
 /** `WsAudit.merge` — `proof` is a closed vocabulary (the four ways
  *  `_pr_state_one` can corroborate a merge, plus `contained` — the reap
- *  ladder's never-pushed-nothing-unique rung), validated the same way
+ *  ladder's never-pushed-nothing-unique rung — and `train`, its rung for
+ *  a PR closed as landed in a merge train), validated the same way
  *  `isPrPhase`/`isPrReason` validate theirs: cast the CONSTANT, never the
  *  input. `fetchedAt` is `null` until Phase C actually fetched — the field's
  *  own docstring on `WsAudit` is why `0` cannot stand in for that. */
@@ -4065,7 +4081,7 @@ export type FleetMsg =
   /** Build 7. ADDITIVE, so no FLEET_PROTO bump: an already-deployed PWA drops
    *  an unknown frame type silently (`pwa/src/stores/fleet.ts:54-73`), which is
    *  the one-way new-writer/old-reader rule this file states at :560-566. */
-  | { type: 'runs'; runs: RunSummary[] }
+  | { type: 'runs'; runs: RunSummary[]; /** D-7334: see `RunSummary.lastMoveAt`. */ stallQuietMs?: number }
   /** Build 4, spec §4.2. Additive on the same terms as `runs` above. */
   | { type: 'coord'; coord: CoordStatus }
   /** §1.6's census. Additive on the same terms as `runs`/`coord` above — an
@@ -6849,6 +6865,20 @@ export interface RunSummary {
    *  rides every run of that coordinator, so a reader holding one run needs no second lookup. Read it ONLY through
    *  `childIdsOf`; see there for what absent and empty mean. */
   childIds?: readonly number[];
+
+  /** D-7334 (programme-boxes spec §2.5): the `at` of this run's newest MOVE, or null when it has none. A move is an act row
+   *  by the drift reader's rule (not a stall observation, not `causedBy = 'operator'`) or a mail naming the run whose sender
+   *  is a session, never a role sender. Read once per frame for the open runs (`CoordStore.runLastMoves`, carried by
+   *  `withLastMoves` in `server/src/coord/runWire.ts`). ADDITIVE and OPTIONAL; `FLEET_PROTO` is not bumped. Read it ONLY
+   *  through `runLastMove` (`pwa/src/fleet/runWords.ts`): absent is an older server and reads null; null falls back to the
+   *  run's dispatch or open time (D-7338).
+   *
+   *  Its threshold rides beside the runs on the same frame, as `stallQuietMs` (`FleetMsg`'s `runs` member): the quiet time
+   *  the stall watch applies (the Settings choice, else `STALL_QUIET_MS`), so the app's stalled word and the stall watch
+   *  mean one thing by quiet. ADDITIVE: absent before the server's first runs frame, and from an older server, which also
+   *  sends no `lastMoveAt`, so nothing reads as stalled. Declared here, not on that member, so the frame's line in the
+   *  union does not move a cited line below it. */
+  lastMoveAt?: number | null;
 }
 
 /** Speed and quality per run (routing spec 2026-09-14 §6), READ-ONLY, from the
@@ -8057,7 +8087,7 @@ export type LifecycleAct =
                     // <to>" (no new dec key — the dec vocabulary is pinned at
                     // four). Additive on the wire, as every act is.
   | 'start' | 'ensure' | 'swap' | 'enable' | 'stop' | 'forget' | 'hibernate'   // `hibernate` (D-5242): `ccd hibernate`, a DELIBERATE stop of a long-idle session journalled before its own `unsupervise` row (surface `none`, which alone reads as a crash); its own act so the journal never needs a filter to tell a sleep from a stop; `ensure` wakes it
-  | 'shed-deps'     // ws-shed-deps (#1772): a sleeping session's git-ignored, untracked dependency
+  | 'shed-deps'     // ws-shed-deps (D-7278): a sleeping session's git-ignored, untracked dependency
                     // directories removed, server-composed. Its own act: it removes no workspace,
                     // puts down no session and changes no git fact, so no removal set counts it.
   | 'unarchive'     // a return verb's gate (wave 3b) or `_spawn_start` cleared
@@ -8570,6 +8600,9 @@ export interface LifecycleMeas {
    *  `refused` or `unmeasured` only — nothing waits on a clips directory's users. */
   readonly clipsKept: string | null;
   /** A `collect` `done`'s leaf (path-identity spec §3.4): see `COLLECT_LEAF_END_WORDS`, at the foot. */ readonly leaf: string | null;
+  /** The `--child` run marker a `ws-shed-deps` line was judged against (D-7278), beside its class in `mode`: the
+   *  decimal run id as ccd wrote it. Null: the session carries no marker (a coordinator, or a row with none), or another act. */
+  readonly childRun: string | null;
 }
 
 /** Derived from the interface, never restated beside it — `LIFECYCLE_ACT_MAP`'s
@@ -8592,6 +8625,7 @@ const LIFECYCLE_MEAS_KEY_MAP: Record<keyof LifecycleMeas, true> = {
   from: true, dropped: true, registered: true, state: true, bytes: true,
   resumed: true, tombstone: true, home: true, pool: true, reason: true,
   unremoved: true, childOf: true, wip: true, residueBytes: true, tmpRootKept: true, clipsKept: true, leaf: true,
+  childRun: true,
 };
 /** The one list `server/test/ccd-lifecycle-contain.test.ts` checks ccd's
  *  emitted keys against — imported, not re-typed, so the two sides cannot
@@ -11678,7 +11712,7 @@ export const DELEGATION_SPOOL_BOUNDS = {
  *  it by `ccd-spawn-child-settings.test.ts`. One `|`-joined string, not eight quoted literals, for the reason that
  *  list gives: the verb censuses count a quoted verb as a composer of it, and this list composes nothing. */
 const CHILD_DENY_CCD_VERBS: readonly string[] =
-  'ws-rm|ws-reap|ws-gc --prune|ws-archive|ws-restore|ws-reclaim|ws-expire|ws-collect|ws-orphan|scratch-rescue|roll|claude'.split('|');
+  'ws-rm|ws-reap|ws-gc --prune|ws-archive|ws-restore|ws-reclaim|ws-expire|ws-collect|ws-orphan|scratch-rescue|ws-shed-deps|roll|claude'.split('|');
 
 /** Whether the deny file also names each verb's path-qualified forms (`Bash(*\/ccd ws-rm:*)`,
  *  `Bash(~/.local/bin/ccd ws-rm:*)` and the like). FALSE until plan Task 13 records, on the rig, that Claude Code's

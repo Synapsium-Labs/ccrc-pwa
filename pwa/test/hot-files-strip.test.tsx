@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { ClaimSummary } from '../../shared/api';
-import { HotFilesStrip } from '../src/fleet/HotFilesStrip';
+import { CLAIMS_POLL_MS, HotFilesStrip } from '../src/fleet/HotFilesStrip';
 import { api } from '../src/lib/api';
 import { ICONS } from '../../ui/src/icons/lucide';
 
@@ -92,4 +92,69 @@ describe('HotFilesStrip', () => {
       expect(b.getAttribute('aria-label') ?? b.textContent ?? '').not.toMatch(/release|break/i);
     }
   });
+
+  // W7 C7m (D-7191): the request schedule, held across the move onto usePoll with refetchOnVisible: false. Today's
+  // strip never re-polls when the page becomes visible.
+  it('the request schedule: one on mount, one per CLAIMS_POLL_MS, none on a return to the page', async () => {
+    vi.useFakeTimers();
+    try {
+      const spy = stub([]);
+      render(<HotFilesStrip />);
+      expect(spy).toHaveBeenCalledTimes(1);
+      await act(async () => { await vi.advanceTimersByTimeAsync(2 * CLAIMS_POLL_MS); });
+      expect(spy).toHaveBeenCalledTimes(3);
+      Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
+      act(() => { document.dispatchEvent(new Event('visibilitychange')); });
+      Reflect.deleteProperty(document, 'visibilityState');
+      expect(spy).toHaveBeenCalledTimes(3);
+      await act(async () => { await vi.advanceTimersByTimeAsync(CLAIMS_POLL_MS); });
+      expect(spy).toHaveBeenCalledTimes(4);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // W7 C7m (D-7191), the named behaviour row: the strip gains usePoll's newest-issued guard.
+  it('never shows an older claims answer over a newer one: two overlapping requests answered out of order show the newer', async () => {
+    vi.useFakeTimers();
+    try {
+      const answers: ((r: { claims: ClaimSummary[] }) => void)[] = [];
+      vi.spyOn(api, 'claims').mockImplementation(() => new Promise((res) => { answers.push(res); }));
+      render(<HotFilesStrip />);
+      await act(async () => { await vi.advanceTimersByTimeAsync(CLAIMS_POLL_MS); });
+      expect(answers).toHaveLength(2);
+      const one = claim({ project: 'project-a', heldBy: 'session-a', paths: ['a.ts'] });
+      const two = claim({ id: 2, project: 'project-a', heldBy: 'session-b', paths: ['b.ts'] });
+      await act(async () => { answers[1]!({ claims: [one, two] }); await vi.advanceTimersByTimeAsync(0); });
+      expect(screen.getByText('2 files claimed')).toBeInTheDocument();
+      await act(async () => { answers[0]!({ claims: [one] }); await vi.advanceTimersByTimeAsync(0); });
+      expect(screen.getByText('2 files claimed')).toBeInTheDocument();
+      expect(screen.queryByText('1 file claimed')).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('a malformed or failed answer keeps the last good list', async () => {
+    vi.useFakeTimers();
+    try {
+      let n = 0;
+      vi.spyOn(api, 'claims').mockImplementation(async () => {
+        n += 1;
+        if (n === 1) return { claims: [claim({ project: 'project-a', heldBy: 'session-a', paths: ['a.ts'] })] };
+        if (n === 2) return { claims: null } as unknown as { claims: ClaimSummary[] };
+        if (n === 3) return null as unknown as { claims: ClaimSummary[] };
+        throw new Error('down');
+      });
+      render(<HotFilesStrip />);
+      await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+      expect(screen.getByText('1 file claimed')).toBeInTheDocument();
+      await act(async () => { await vi.advanceTimersByTimeAsync(3 * CLAIMS_POLL_MS); });
+      expect(n).toBe(4);
+      expect(screen.getByText('1 file claimed')).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
+

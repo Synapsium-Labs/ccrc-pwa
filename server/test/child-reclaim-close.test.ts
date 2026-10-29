@@ -589,15 +589,15 @@ describe('the two seams a runtime case cannot see', () => {
     // A reclaim started beside the queue instead of on it would race a
     // `POST /workspace/reap` of the same workspace; the timing a runtime case
     // would need to show that is not deterministic, so the seam is pinned by
-    // its text: the executor is reached through `deps.queue.run(sessionId, …)`
-    // and nowhere else in the file. ARCH-77 (#812): the child-reclaim-disabled gate runs inside that queued job, so queueing stays synchronous.
+    // its text: the executor is reached through `retireExecutor(deps.queue, sessionId, …)` (C4n, D-7171: the one
+    // owner of a retire's KeyedQueue run) and nowhere else in the file. ARCH-77 (#812): the child-reclaim-disabled gate runs inside that queued job, so queueing stays synchronous.
     const src = coordSrc('routes.ts');
-    expect(src).toContain('deps.queue.run(req.sessionId, () => childReclaimUnlessDisabled(');
-    // The gate is read off the port's own symbol, not a second literal pin: the port queues only through it.
+    // The call and the gate are read off the port's own symbol (scan/symbols.ts), not a literal pin: the port queues only through it.
     const port = sourceOfSymbol('server/src/coord/routes.ts', 'childReclaimPort');
+    expect(port).toContain('retireExecutor(deps.queue, req.sessionId, () => childReclaimUnlessDisabled(');
     // The queue is entered synchronously at close time; the gate sits INSIDE the queued job.
-    expect(port.indexOf('deps.queue.run(')).toBeGreaterThanOrEqual(0);
-    expect(port.indexOf('deps.queue.run(')).toBeLessThan(port.indexOf('childReclaimUnlessDisabled('));
+    expect(port.indexOf('retireExecutor(deps.queue, ')).toBeGreaterThanOrEqual(0);
+    expect(port.indexOf('retireExecutor(deps.queue, ')).toBeLessThan(port.indexOf('childReclaimUnlessDisabled('));
     expect(src.match(/reclaimChild\(/g) ?? []).toHaveLength(1);
   });
 });

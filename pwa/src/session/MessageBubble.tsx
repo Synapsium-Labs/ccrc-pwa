@@ -33,19 +33,24 @@ export function linkify(text: string): ReactNode[] {
 // A /compact turn injects a long "This session is being continued …/Summary:"
 // block that's noise to a reader driving the session. Collapse it to a quiet
 // card (like a tool call) — expandable when you actually want the recap.
-const COMPACTION_RE = /^\s*(?:\[[^\]]*]\s*)?This session is being continued from a previous conversation/;
 
 /** Whether this row renders as a `FoldedCard` — one collapsed row, whatever its
  *  text — rather than as its text: a /compact recap (user- or assistant-kind),
  *  or a `system` row carrying a BODY (more than one line) rather than a label.
  *  The harness's own system rows (`origin`) are pills and never fold.
  *
+ *  THE RECAP IS THE SERVER'S FACT (D-7187, ARCH-64): `ChatEvent`'s `compaction`
+ *  flag, set by `server/src/transcript/parse.ts` from Claude Code's
+ *  `isCompactSummary` marker or the recap sentence (D-7186). The PWA reads the
+ *  flag and matches no text; a row without it (a server older than C7h) folds
+ *  nothing and renders as its text.
+ *
  *  ONE DEFINITION for two readers: `MessageBubble` decides the fold by it, and
  *  the chat list prices the row by it (`ChatList.tsx`'s `shapeOf`) — a recap
  *  priced by its text was thousands of px for a 47px row. */
 export function foldsAway(event: MessageEvent): boolean {
   if (event.kind === 'system') return event.origin === undefined && event.text.includes('\n');
-  return COMPACTION_RE.test(event.text);
+  return event.compaction === true;
 }
 
 /** The fold, now used by TWO callers: the /compact recap above, and a `system`

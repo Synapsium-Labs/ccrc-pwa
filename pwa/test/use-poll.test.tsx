@@ -89,6 +89,27 @@ describe('usePoll', () => {
     expect(request).toHaveBeenCalledTimes(2);
   });
 
+  it('refetchOnVisible defaults to true: a page becoming visible re-polls (the four callers that pass nothing)', () => {
+    const request = vi.fn(() => new Promise<unknown>(() => {}));
+    renderHook(() => usePoll({ pollMs: 60_000, request, onOutcome: () => {} }));
+    setVisibility('visible');
+    act(() => { document.dispatchEvent(new Event('visibilitychange')); });
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+
+  it('refetchOnVisible: false does not re-poll on visible, and holds no visibilitychange listener', async () => {
+    vi.useFakeTimers();
+    const add = vi.spyOn(document, 'addEventListener');
+    const request = vi.fn(() => Promise.resolve('x'));
+    renderHook(() => usePoll({ pollMs: 1000, request, onOutcome: () => {}, refetchOnVisible: false }));
+    setVisibility('visible');
+    act(() => { document.dispatchEvent(new Event('visibilitychange')); });
+    expect(request).toHaveBeenCalledTimes(1);
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+    expect(request).toHaveBeenCalledTimes(2);   // the timer is unchanged
+    expect(add.mock.calls.filter(([type]) => type === 'visibilitychange')).toHaveLength(0);
+  });
+
   it('pollMs <= 0 is the injected mode: no request, no timer, no listener, reload() issues nothing and returns 0', () => {
     const add = vi.spyOn(document, 'addEventListener');
     const request = vi.fn(() => Promise.resolve('x'));

@@ -268,6 +268,13 @@ describe('the token gate is total, with the operator routes excluded BY NAME', (
    *  dark, and its GET half rides this entry as the caps and stall-watch reads
    *  do.
    *
+   *  `/api/coord/dispatch-abandon` (D-7319): the operator's switch on the act
+   *  that abandons a dispatch that never came back. Turning it on starts an
+   *  abandoning pass rather than releasing a wedge, so `UNGATED`'s argument
+   *  does not apply, and caps' argument holds: no machine lane calls it, and
+   *  the PWA holds no box token. Its GET half rides this entry as the caps,
+   *  stall-watch and collect-lane reads do.
+   *
    *  A BLIND SPOT, recorded beside the set rather than papered over by widening
    *  the scanner (coordinator ruling, wave 6 item 2). `POST /api/sessions/:id/
    *  kickoff` is the natural next member — SESSION_ONLY already holds four
@@ -283,6 +290,8 @@ describe('the token gate is total, with the operator routes excluded BY NAME', (
   const SESSION_ONLY = new Set([
     '/api/coord/caps', '/api/coord/reclaim-pause', '/api/coord/stall-watch', '/api/coord/collect-lane',
     '/api/coord/review-cap',
+    // D-7319: the dead-dispatch switch (see the docstring above).
+    '/api/coord/dispatch-abandon',
     // W3 Q3f (D-7030): the operator door of the question family (see the docstring above).
     '/api/questions/:id/answer',
   ]);

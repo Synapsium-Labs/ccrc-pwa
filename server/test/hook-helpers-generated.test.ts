@@ -16,7 +16,7 @@ import {
   AUTHDEAD_REGION_BEGIN, AUTHDEAD_REGION_END, AUTHDEAD_WRITERS, REGIONS, applyRegion, ccdFunctionDefinition, checkRegion, extractRegion,
   regionOf, renderRegion,
 } from '../../shared/hook-helpers.mjs';
-import { verifyMarker } from '../../shared/mark.mjs';
+import { markGenerated, verifyMarker } from '../../shared/mark.mjs';
 import { mkTmp } from './tmpHelpers.js';
 import { ghContainedEnv } from './ccdWsHelpers.js';
 
@@ -104,7 +104,7 @@ describe('the auth-dead writers region (D-7049)', () => {
   const defOf = (src: string, name: string): string | null => ccdFunctionDefinition(src, name);
 
   it('is a row of the one engine, beside the hook\'s, and the module names both', () => {
-    expect(REGIONS.map((r) => r.name)).toEqual(['hook', 'authdead']);
+    expect(REGIONS.map((r) => r.name)).toEqual(['hook', 'authdead', 'apicap']);
     expect(AD.begin).toBe(AUTHDEAD_REGION_BEGIN);
     expect(AD.end).toBe(AUTHDEAD_REGION_END);
     expect(regionOf(hook)).toBe(REGIONS[0]);
@@ -196,5 +196,89 @@ describe('_launchd_class sits in the platform block', () => {
       expect(block(src), `${name}: inside the block`).toMatch(/^_launchd_class\(\) \{$/m);
       expect(outside(src), `${name}: not outside the block`).not.toMatch(/^_launchd_class\(\) \{$/m);
     }
+  });
+});
+
+// D-7321 (K5 tail, Task Q3i; D-7329): the third region, `_api_server_cap` in `ccd/ccrc-api`, a byte copy of the hook's
+// `_hook_server_cap` under another name (ccrc-api sources nothing, so it cannot call the hook's). The first row whose
+// source is the hook beside ccd, not ccd itself; the engine hands that text to this row only.
+describe('the server-cap reader region in ccrc-api (D-7321)', () => {
+  const api = read('ccd/ccrc-api');
+  const AP = REGIONS.find((r) => r.name === 'apicap')!;
+  const HK = REGIONS.find((r) => r.name === 'hook')!;
+  const AD = REGIONS.find((r) => r.name === 'authdead')!;
+  const ref = (src: string): string => ccdFunctionDefinition(src, '_hook_server_cap')!;
+  const bodyOf = (def: string): string => def.slice(def.indexOf('\n') + 1);
+  const innerOf = (row: typeof AP, region: string): string => region.slice(row.begin.length + 1, region.length - row.end.length - 1);
+
+  it('ccrc-api\'s server-cap reader is current', () => {
+    expect(AP, 'the engine carries an apicap row').toBeDefined();
+    expect(regionOf(api)).toBe(AP);
+    expect(checkRegion(AP, api, ccd, hook)).toBe('current');
+    expect(extractRegion(AP, api)).toBe(renderRegion(AP, ccd, hook));
+    const inner = innerOf(AP, extractRegion(AP, api)!);
+    expect(inner.split('\n')[0]).toMatch(/^# ccrc:generated 1 sha256=[0-9a-f]{64}$/);
+    expect(verifyMarker(inner)).toBe('ccrc-unmodified');
+    const r = spawnSync('node', [path.join(root, 'shared/hook-helpers.mjs'), '--check', path.join(root, 'ccd/ccrc-api'), path.join(root, 'ccd/ccd')], { encoding: 'utf8' });
+    expect(r.stdout.trim()).toBe('hook-helpers: current');
+    expect(r.status).toBe(0);
+  });
+
+  it('the generated reader is named _api_server_cap', () => {
+    const want = `_api_server_cap() {\n${bodyOf(ref(hook))}\n`;
+    expect(AP.render(hook), 'the renderer renames the hook\'s reader').toBe(want);
+    expect(ccdFunctionDefinition(AP.render(hook), '_hook_server_cap'), 'the renderer keeps no hook name line').toBeNull();
+    const inner = innerOf(AP, extractRegion(AP, api)!);
+    expect(inner.split('\n').slice(1).join('\n')).toBe(want);
+    expect(ccdFunctionDefinition(api, '_api_server_cap')).not.toBeNull();
+    expect(api).not.toMatch(/^_hook_server_cap\(\)/m);
+    const rest = api.replace(extractRegion(AP, api)!, '');
+    expect(rest).not.toMatch(/^_api_server_cap\(\)/m);
+  });
+
+  it('a one-byte edit inside it reads edited, and stale once re-stamped over the edit', () => {
+    const region = extractRegion(AP, api)!;
+    const edited = region.replace('now - at <= 180', 'now - at <= 181');
+    expect(edited).not.toBe(region);
+    expect(checkRegion(AP, api.replace(region, edited), ccd, hook)).toBe('edited');
+    const blessed = `${AP.begin}\n${markGenerated(innerOf(AP, edited).split('\n').slice(1).join('\n'))}${AP.end}\n`;
+    expect(checkRegion(AP, api.replace(region, blessed), ccd, hook)).toBe('stale');
+    expect(checkRegion(AP, applyRegion(AP, api.replace(region, edited), ccd, hook), ccd, hook)).toBe('current');
+  });
+
+  it('an edit to the hook\'s reader makes ccrc-api\'s region stale', () => {
+    expect(checkRegion(AP, api, ccd, hook)).toBe('current');
+    const moved = hook.replace('{1,64})*$ ]] || return 1', '{1,63})*$ ]] || return 1');
+    expect(moved).not.toBe(hook);
+    expect(checkRegion(AP, api, ccd, moved)).toBe('stale');
+    expect(checkRegion(AP, api, ccd.replace('_authdead_clear() {', '_authdead_clear()  {'), hook)).toBe('current');
+  });
+
+  it('the hook and auth-dead regions render as on the base', () => {
+    expect(renderRegion(HK, ccd, hook)).toBe(extractRegion(HK, hook));
+    expect(renderRegion(AD, ccd, hook)).toBe(extractRegion(AD, probe));
+    expect(renderRegion(HK, ccd)).toBe(extractRegion(HK, hook));
+    expect(renderRegion(AD, ccd)).toBe(extractRegion(AD, probe));
+    for (const f of ['ccd/session-hook.sh', 'ccd/ccd-account-health']) {
+      const r = spawnSync('node', [path.join(root, 'shared/hook-helpers.mjs'), '--check', path.join(root, f), path.join(root, 'ccd/ccd')], { encoding: 'utf8' });
+      expect(r.stdout.trim(), f).toBe('hook-helpers: current');
+    }
+  });
+
+  it('`ccrc restamp ccd/ccrc-api` regenerates a hand-edited region from its own tree, then answers current', () => {
+    const t = mkTmp('ccrc-restamp-api-');
+    mkdirSync(join(t, 'ccd')); mkdirSync(join(t, 'shared'));
+    for (const f of ['ccd/ccd', 'ccd/session-hook.sh', 'shared/mark.mjs', 'shared/hook-helpers.mjs']) copyFileSync(join(root, f), join(t, f));
+    const f = join(t, 'ccd', 'ccrc-api');
+    writeFileSync(f, api.replace('now - at <= 180', 'now - at <= 300'));
+    const home = mkTmp('ccrc-restamp-api-home-');
+    const run = () => spawnSync('bash', [join(root, 'ccd', 'ccrc'), 'restamp', f], { env: ghContainedEnv(home, { ...process.env, HOME: home }), encoding: 'utf8' });
+    const r = run();
+    expect(r.status, r.stderr).toBe(0);
+    expect(r.stdout).toContain('server-cap reader regenerated');
+    expect(readFileSync(f, 'utf8')).toBe(api);
+    const again = run();
+    expect(again.status, again.stderr).toBe(0);
+    expect(again.stdout).toContain('server-cap reader already current');
   });
 });

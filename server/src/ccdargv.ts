@@ -1,6 +1,7 @@
 import type { FleetState } from './fleetstate.js';
 import { ROUTE_WRITABLE_FIELDS, type CollectToken, type OrphanToken, type RouteFields, type StopSurface } from '../../shared/api.js';
 import type { DocSectionSlug } from '../../shared/docs.js';
+import type { DepsShedClass } from './depsShed.js';
 
 declare const CcdArgvBrand: unique symbol;
 
@@ -544,6 +545,8 @@ export const CCD_ARGV = {
                    ...(slug === null ? [] : [slug]), ...decFlags(dec)]),
   prStateSession: (id: string) => argv(['pr-state', '--session', id]),
   prStateProject: (p: string)  => argv(['pr-state', '--project', p]),
+  // D-7378: the bounded train prover the PR sweep runs after `pr-state --project` when a line read `train-unread`.
+  prTrainProve: (p: string)    => argv(['pr-train-prove', '--project', p]),
   /** D-6784: the checks lane's read. One call names 1 to 16 `<id>:<pr>` pairs (ccd refuses more, and refuses the
    *  whole call), each id a registry id (no comma, no colon: they delimit the pairs; no leading dash; no repeat) and
    *  each pr a positive integer with no leading zero. The builder refuses all of these itself, so a bad pair throws
@@ -624,6 +627,13 @@ export const CCD_ARGV = {
    *  positional. Behind `ORPHAN_CAP`. Never `--force`. `CCD_ARGV` is the one place this argv is composed. */
   wsOrphan: (token: OrphanToken, hex: string, rescue: boolean, dec: ActorFlags | null) =>
     argv(['ws-orphan', '--expect', token, '--tree-hex', treeHex(hex), ...rescueFlag(rescue), ...decFlags(dec)]),
+  /** `ws-shed-deps --session <id> --class child|coordinator [--dry-run]` (D-7278; design note 2026-10-28 §4): the
+   *  deps-shed arm's ask, on its own granted prefix (`['ws-shed-deps','--session']`, enrolled in the agent's
+   *  `REQUIRED_VERB_FLAG`). The box re-proves the sleep, the class (a `child` needs its marker), its floor, once a sleep,
+   *  and git's own list of ignored, untracked directories, and removes only those; `--dry-run` (the arm's shadow) removes
+   *  nothing. The dec trails. Behind `SHED_DEPS_CAP`. Its one composer is the arm's pass (`depsShedPass.ts`). */
+  wsShedDeps: (id: string, cls: DepsShedClass, dryRun: boolean, dec: ActorFlags | null) =>
+    argv(['ws-shed-deps', '--session', id, '--class', cls, ...(dryRun ? ['--dry-run'] : []), ...decFlags(dec)]),
   /** `ws-audit --collect-census` (fleet disk retention spec 2026-10-23 section 2.4, D-6625/D-6626): the read-only census
    *  of the entries directly under `~/.cc-tmp`, classed, names as hex. Behind `COLLECT_LOOSE_CAP`. Granted by
    *  `['ws-audit','--collect-census']`; it destroys nothing. */
@@ -1133,6 +1143,10 @@ export const COLLECT_CAP = 'collect-v1';
  *  inode. Spelled ONCE in `server/src`; ccd's `echo orphan-v1` is the other. READ IT WITH `capSupported`/`ccdCan`, which
  *  refuse on no evidence: the verb it gates deletes. */
 export const ORPHAN_CAP = 'orphan-v1';
+/** The `ccd caps` token that says this box's ccd has the deps-shed verb (D-7278): `ws-shed-deps --session <id> --class
+ *  <class> [--dry-run]`, one ccd inode. Spelled ONCE in `server/src`; ccd's `echo shed-deps-v1` is the other. READ IT WITH
+ *  `capSupported`/`ccdCan`, which refuse on no evidence: the verb it gates deletes. */
+export const SHED_DEPS_CAP = 'shed-deps-v1';
 /** The `ccd caps` token that says this box's ccd has the collector's LOOSE arm (fleet disk retention spec 2026-10-23
  *  section 2.4, D-6625): `ws-audit --collect-census`, `ws-audit --loose-hex <hex> --collect` and
  *  `ws-collect --expect <token> --loose-hex <hex>` — one ccd inode. Distinct from `COLLECT_CAP`: a box with
@@ -1286,6 +1300,7 @@ export const CCD_CAN = {
   wsAddNamed: 'none', wsTitle: verbRow(WS_TITLE_VERB),
   prStateSession: verbRow('pr-state'), prStateProject: verbRow('pr-state'), prOpen: verbRow('pr-open'),
   prLanding: capRow('pr-landing-v1'),
+  prTrainProve: verbRow('pr-train-prove'),
   wsArchive: verbRow('ws-archive'), wsRestore: verbRow('ws-restore'),
   wsAudit: verbRow('ws-audit'), wsReap: verbRow('ws-reap'),
   wsReclaimAudit: verbRow('ws-audit'), wsReclaim: capRow(RECLAIM_CAP),
@@ -1293,6 +1308,8 @@ export const CCD_CAN = {
   wsCollectAudit: verbRow('ws-audit'), wsCollect: capRow(COLLECT_CAP),
   // The orphan lane's three rows all refuse on no evidence: the census and the audit are new flags an older ccd rejects.
   wsOrphanCensus: capRow(ORPHAN_CAP), wsOrphanAudit: capRow(ORPHAN_CAP), wsOrphan: capRow(ORPHAN_CAP),
+  // The deps-shed verb is new: an older ccd has none of it, and its dry run is the same row.
+  wsShedDeps: capRow(SHED_DEPS_CAP),
   // The loose arm's three rows all refuse on no evidence: the audit and the census are new flags an older ccd rejects.
   wsCollectCensus: capRow(COLLECT_LOOSE_CAP), wsCollectLooseAudit: capRow(COLLECT_LOOSE_CAP), wsCollectLoose: capRow(COLLECT_LOOSE_CAP),
   wsAttic: verbRow('ws-attic'),
