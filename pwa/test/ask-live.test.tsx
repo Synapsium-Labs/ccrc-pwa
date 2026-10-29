@@ -158,7 +158,7 @@ describe('Answer opens the one answer path, and does nothing else', () => {
   it('Answer does not POST anything — it raises the sheet', () => {
     // Negative pin. Every send path this could have reached is spied; the
     // control must touch none of them.
-    const answerAsk = vi.spyOn(api, 'answerAsk').mockResolvedValue(undefined as never);
+    const answerQuestion = vi.spyOn(api, 'answerQuestion').mockResolvedValue({ ok: true });
     const answerDialog = answers.answerDialog.mockReset().mockResolvedValue({ ok: true });
     const prompt = vi.spyOn(api, 'prompt').mockResolvedValue(undefined as never);
     const onAnswer = vi.fn();
@@ -167,7 +167,7 @@ describe('Answer opens the one answer path, and does nothing else', () => {
     fireEvent.click(answerBtn() as HTMLElement);
 
     expect(onAnswer).toHaveBeenCalledTimes(1);
-    expect(answerAsk).not.toHaveBeenCalled();
+    expect(answerQuestion).not.toHaveBeenCalled();
     expect(answerDialog).not.toHaveBeenCalled();
     expect(prompt).not.toHaveBeenCalled();
   });

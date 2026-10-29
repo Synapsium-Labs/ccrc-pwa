@@ -447,7 +447,7 @@ describe('push-sw: the answer-lifecycle region', () => {
     for (const action of ACTIONS) {
       for (const sid of SESSIONS) {
         const c = askCommandOf(action, sid);
-        expect(askRequestOf(action, sid), `${action} on ${String(sid)}`).toEqual(c === null ? null : { ...answerRequest(c) });
+        expect(askRequestOf(action, sid), `${action} on ${String(sid)}`).toEqual(c === null ? null : { ...answerRequest(c, false) });
       }
     }
   });

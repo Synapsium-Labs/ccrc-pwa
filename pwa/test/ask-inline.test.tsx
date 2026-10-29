@@ -26,7 +26,7 @@ import type { ChatEvent, Dialog, FleetSession } from '../../shared/api';
 import { api, ApiError, sendErrorText } from '../src/lib/api';
 import { ChatListInner } from '../src/session/ChatList';
 import { DialogSheet } from '../src/session/DialogSheet';
-import { answerSeam, type AnswerSeamMocks } from './answerSeam';
+import { answerSeam, spyApiAnswer, type AnswerSeamMocks } from './answerSeam';
 import { SessionScreen } from '../src/screens/SessionScreen';
 import { createFleetStore } from '../src/stores/fleet';
 import { createSessionStore, type SessionStore } from '../src/stores/session';
@@ -240,7 +240,7 @@ describe('Escape at the desk', () => {
 describe('the keys act only inside the inline card', () => {
   it('a digit pressed with focus on the page body does not answer an inline ask', () => {
     media(true);
-    const answer = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+    const answer = spyApiAnswer('answerDialog').mockReturnValue(new Promise(() => {}));
     const { arrive } = mount();
     arrive(1);
     const section = card();
@@ -275,7 +275,7 @@ describe('the keys act only inside the inline card', () => {
     ['at the desk, in the card', true],
   ])('the number keys and arrows answer inside the card as they do on the sheet (%s)', (_where, desk) => {
     media(desk, desk);
-    const answer = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+    const answer = spyApiAnswer('answerDialog').mockReturnValue(new Promise(() => {}));
     const { arrive } = mount();
     arrive(1);
     const scope = desk ? card() : dialogs()[0]!;
@@ -359,7 +359,7 @@ const otherAgedAsk = (): Dialog => {
 describe('the keys survive a screen change inside the card (D-6326)', () => {
   it('after a key answers a question in the card, the next question takes no focus and a digit sends nothing (R102)', async () => {
     media(true);
-    const answer = vi.spyOn(api, 'answerDialog').mockResolvedValueOnce({ ok: true, next: nextScreen() });
+    const answer = spyApiAnswer('answerDialog').mockResolvedValueOnce({ ok: true, next: nextScreen() });
     const { arrive } = mount();
     await frame(); // the composer's own session-open focus (a 0 ms timer) has run, as in a real session
     arrive(1);
@@ -382,7 +382,7 @@ describe('the keys survive a screen change inside the card (D-6326)', () => {
 
   it('a screen change takes no focus back from the composer the operator moved to after the key answer', async () => {
     media(true);
-    const answer = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+    const answer = spyApiAnswer('answerDialog').mockReturnValue(new Promise(() => {}));
     const { arrive, store } = mount();
     await frame();
     arrive(1);
@@ -436,7 +436,7 @@ describe('one keyboard engagement per logical ask (R64 F1, F2)', () => {
   it('a digit whose answer brings the review takes no focus on the review, and a next digit sends nothing (R102)', async () => {
     // Premises: the desk; fixture 1's envelope up; the answer's `next` is the review (review 917 F1's shape).
     media(true);
-    const answer = vi.spyOn(api, 'answerDialog').mockResolvedValueOnce({ ok: true, next: reviewDialog() });
+    const answer = spyApiAnswer('answerDialog').mockResolvedValueOnce({ ok: true, next: reviewDialog() });
     const { arrive } = mount();
     await frame();
     arrive(1);
@@ -471,7 +471,7 @@ describe('one keyboard engagement per logical ask (R64 F1, F2)', () => {
     expect(tab).toHaveBeenCalledTimes(1);
     expect(within(card()).getByText(QUESTION), 'premise: the question is back').toBeInTheDocument();
     expectNoRefocus(watch, at.node, 'the question');
-    const answer = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+    const answer = spyApiAnswer('answerDialog').mockReturnValue(new Promise(() => {}));
     expect(document.activeElement, 'the question: the premise of the digit is body focus, so it lands outside the card').toBe(document.body);
     key(document.activeElement ?? document.body, '2');
     expect(answer, 'a digit sends nothing').not.toHaveBeenCalled();
@@ -599,7 +599,7 @@ describe('one lifecycle generation in the ask identity (R69 F1, F4)', () => {
   it('an aged question\'s digit whose answer brings the review takes no focus on the review, and a next digit sends nothing (R102)', async () => {
     // Premises: the desk; fixture 2 (no envelope, the transcript's copy) up; the answer's `next` is the review (P1).
     media(true);
-    const answer = vi.spyOn(api, 'answerDialog').mockResolvedValueOnce({ ok: true, next: reviewDialog() });
+    const answer = spyApiAnswer('answerDialog').mockResolvedValueOnce({ ok: true, next: reviewDialog() });
     const { arrive, store } = mount();
     await frame();
     arrive(2);
@@ -637,7 +637,7 @@ describe('one lifecycle generation in the ask identity (R69 F1, F4)', () => {
     expect(tab).toHaveBeenCalledTimes(1);
     expect(within(card()).getByText(QUESTION), 'premise: the question is back').toBeInTheDocument();
     expectNoRefocus(watch, at.node, 'the aged question');
-    const answer = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+    const answer = spyApiAnswer('answerDialog').mockReturnValue(new Promise(() => {}));
     expect(document.activeElement, 'the aged question: the premise of the digit is body focus, so it lands outside the card').toBe(document.body);
     key(document.activeElement ?? document.body, '2');
     expect(answer, 'a digit sends nothing').not.toHaveBeenCalled();
@@ -647,7 +647,7 @@ describe('one lifecycle generation in the ask identity (R69 F1, F4)', () => {
     // Premises: fixture 2 up; the operator focuses its THIRD row and answers it; question 2 has two options, so that row's
     // node does not exist on the next screen (review 932's P2 passed only because the first row's node was reused).
     media(true);
-    const answer = vi.spyOn(api, 'answerDialog').mockResolvedValueOnce({ ok: true, next: agedQuestion2() });
+    const answer = spyApiAnswer('answerDialog').mockResolvedValueOnce({ ok: true, next: agedQuestion2() });
     const { arrive } = mount();
     await frame();
     arrive(2);
@@ -698,7 +698,7 @@ describe('one lifecycle generation in the ask identity (R69 F1, F4)', () => {
     // batch. The store held no envelope for that frame to clear, so it is the same ask. R102: the key was an ANSWER this
     // client sent, which released the keyboard at once, so neither the reconnect nor the next question takes focus.
     media(true);
-    const answer = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+    const answer = spyApiAnswer('answerDialog').mockReturnValue(new Promise(() => {}));
     const { arrive, store } = mount();
     await frame();
     arrive(2);
@@ -729,7 +729,7 @@ describe('one lifecycle generation in the ask identity (R69 F1, F4)', () => {
     // clears the pane's menu and paints the next aged question. With no hook envelope the pane's menu is all there is of the
     // ask, so a vanished menu is the ask's end and only the generation (`dialog_cleared` counts) can tell it from one ask.
     media(true);
-    vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+    spyApiAnswer('answerDialog').mockReturnValue(new Promise(() => {}));
     const { arrive, store } = mount();
     await frame();
     arrive(2);
@@ -753,7 +753,7 @@ describe('one lifecycle generation in the ask identity (R69 F1, F4)', () => {
     // for a hooked ask the hook is the lifecycle authority, so the pane's blink is not the ask's end. R102: the key was an
     // answer this client sent, which released the keyboard, so the question that returns takes no focus.
     media(true);
-    const answer = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+    const answer = spyApiAnswer('answerDialog').mockReturnValue(new Promise(() => {}));
     const { arrive, store } = mount();
     await frame();
     arrive(1);
@@ -783,7 +783,7 @@ describe('one lifecycle generation in the ask identity (R69 F1, F4)', () => {
     // body; the next aged question arrives. A repeated frame is no lifecycle event, and R102's release at the send (not
     // the frame) is what leaves the next question without focus.
     media(true);
-    const answer = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+    const answer = spyApiAnswer('answerDialog').mockReturnValue(new Promise(() => {}));
     const { arrive, store } = mount();
     await frame();
     arrive(2);
@@ -858,7 +858,7 @@ describe('a send this client initiates releases the keyboard (R102)', () => {
     // the store as a frame, which clears the in-flight marker (`[dialogId, closed]`) and re-enables the rows. The aged copy's
     // rows are keyed by position, so question 2 REUSES the node that holds focus.
     media(true);
-    const answer = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+    const answer = spyApiAnswer('answerDialog').mockReturnValue(new Promise(() => {}));
     const { arrive, store } = mount();
     await frame();
     arrive(2);
@@ -883,7 +883,7 @@ describe('a send this client initiates releases the keyboard (R102)', () => {
     // refuses every send. A refused claim initiated nothing, so it releases nothing; a later ArrowDown is not fenced.
     // Green before and after R102 (a regression guard against releasing before the refusals).
     media(true);
-    const answer = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+    const answer = spyApiAnswer('answerDialog').mockReturnValue(new Promise(() => {}));
     const { arrive, store } = mount();
     await frame();
     arrive(1);
@@ -903,7 +903,7 @@ describe('a send this client initiates releases the keyboard (R102)', () => {
     // Premises: no desk, no fine pointer: the Sheet. The release is the desk's alone (`useDesk()` at the seam), so the
     // phone's own per-hook engagement keeps carrying focus to the next question. Green before and after R102.
     media(false);
-    const answer = vi.spyOn(api, 'answerDialog').mockResolvedValueOnce({ ok: true, next: nextScreen() });
+    const answer = spyApiAnswer('answerDialog').mockResolvedValueOnce({ ok: true, next: nextScreen() });
     const { arrive } = mount();
     await frame();
     arrive(1);
@@ -932,7 +932,7 @@ describe('the keys in the card are fenced after a send and re-enter only deliber
   async function pendingAged() {
     media(true);
     let reply: (v: { ok: true; next: Dialog | null }) => void = () => {};
-    const answer = vi.spyOn(api, 'answerDialog').mockReturnValueOnce(new Promise((r) => { reply = r as typeof reply; }));
+    const answer = spyApiAnswer('answerDialog').mockReturnValueOnce(new Promise((r) => { reply = r as typeof reply; }));
     const m = mount({ events: [...EVENTS, ASK_CALL] });
     await frame();
     m.arrive(2);
@@ -961,7 +961,7 @@ describe('the keys in the card are fenced after a send and re-enter only deliber
   // cost: after a refused answer the operator re-enters).
   it('an answer refused on the same screen: a digit on the same row then sends nothing (R102, under R115)', async () => {
     media(true);
-    const answer = vi.spyOn(api, 'answerDialog').mockRejectedValueOnce(new ApiError(409, { ok: false, error: 'stale-dialog' }))
+    const answer = spyApiAnswer('answerDialog').mockRejectedValueOnce(new ApiError(409, { ok: false, error: 'stale-dialog' }))
       .mockReturnValue(new Promise(() => {}));
     const { arrive } = mount({ events: [...EVENTS, ASK_CALL] });
     await frame();
@@ -1302,7 +1302,7 @@ describe('a crossing between the phone and the desk carries no fence (R102)', ()
 
   it('(a) a phone key answer, then a crossing to the desk: a card row focused by script answers once on a digit', async () => {
     const w = crossing();
-    const answer = vi.spyOn(api, 'answerDialog').mockResolvedValueOnce({ ok: true, next: nextScreen() });
+    const answer = spyApiAnswer('answerDialog').mockResolvedValueOnce({ ok: true, next: nextScreen() });
     const { arrive } = mount();
     await frame();
     arrive(1);
@@ -1324,7 +1324,7 @@ describe('a crossing between the phone and the desk carries no fence (R102)', ()
   it('(b) a desk key answer, then a crossing below 900: a digit in the Sheet answers', async () => {
     const w = crossing();
     w.cross(true);
-    const answer = vi.spyOn(api, 'answerDialog').mockResolvedValueOnce({ ok: true, next: nextScreen() });
+    const answer = spyApiAnswer('answerDialog').mockResolvedValueOnce({ ok: true, next: nextScreen() });
     const { arrive } = mount();
     await frame();
     arrive(1);
@@ -1348,7 +1348,7 @@ describe('a crossing between the phone and the desk carries no fence (R102)', ()
     // inline card showing raises no fence, and the keyboard's engagement simply ends there.
     const w = crossing();
     w.cross(true);
-    const answer = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+    const answer = spyApiAnswer('answerDialog').mockReturnValue(new Promise(() => {}));
     const { arrive } = mount();
     await frame();
     arrive(2);
@@ -1451,7 +1451,7 @@ describe('a screen change this client did not send fences the card at the desk; 
     ['question to the review', reviewD, /^Submit answers/],
   ] as const)('hooked ask, %s: the new screen takes no focus and its keys are fenced', async (_what, next, row) => {
     media(true);
-    const answer = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+    const answer = spyApiAnswer('answerDialog').mockReturnValue(new Promise(() => {}));
     const { arrive, store } = mount();
     await frame();
     arrive(1);
@@ -1469,7 +1469,7 @@ describe('a screen change this client did not send fences the card at the desk; 
 
   it('hooked ask, the review to a question: the question takes no focus and its keys are fenced', async () => {
     media(true);
-    const answer = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+    const answer = spyApiAnswer('answerDialog').mockReturnValue(new Promise(() => {}));
     const { arrive, store } = mount();
     await frame();
     arrive(8);
@@ -1488,7 +1488,7 @@ describe('a screen change this client did not send fences the card at the desk; 
 
   it('aged ask, a question whose third row is gone on the next question: the next question takes no focus and its keys are fenced', async () => {
     media(true);
-    const answer = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+    const answer = spyApiAnswer('answerDialog').mockReturnValue(new Promise(() => {}));
     const { arrive, store } = mount();
     await frame();
     arrive(2);
@@ -1508,7 +1508,7 @@ describe('a screen change this client did not send fences the card at the desk; 
 
   it('aged ask, a question to the review: the review takes no focus and its keys are fenced', async () => {
     media(true);
-    const answer = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+    const answer = spyApiAnswer('answerDialog').mockReturnValue(new Promise(() => {}));
     const { arrive, store } = mount();
     await frame();
     arrive(2);
@@ -1527,7 +1527,7 @@ describe('a screen change this client did not send fences the card at the desk; 
 
   it('aged ask, the review to its question: the question takes no focus and its keys are fenced', async () => {
     media(true);
-    const answer = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+    const answer = spyApiAnswer('answerDialog').mockReturnValue(new Promise(() => {}));
     const { arrive, store } = mount();
     await frame();
     arrive(8);
@@ -1552,7 +1552,7 @@ describe('a screen change this client did not send fences the card at the desk; 
   /** Aged fixture 2 up, `prep` puts focus in the card; then a frame brings a DIFFERENT aged ask, with no clear. */
   async function otherAskOver(prep: (first: HTMLElement) => void) {
     media(true);
-    const answer = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+    const answer = spyApiAnswer('answerDialog').mockReturnValue(new Promise(() => {}));
     const { arrive, store } = mount({ events: [...EVENTS, ASK_CALL] });
     await frame();
     arrive(2);
@@ -1615,7 +1615,7 @@ describe('a screen change this client did not send fences the card at the desk; 
 
   it('with focus outside the card and no key pressed in it, the change fences nothing: Tab in, then a digit, answers', async () => {
     media(true);
-    const answer = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+    const answer = spyApiAnswer('answerDialog').mockReturnValue(new Promise(() => {}));
     const { arrive, store } = mount();
     await frame();
     arrive(2);
@@ -1632,7 +1632,7 @@ describe('a screen change this client did not send fences the card at the desk; 
   it('an ask that ENDS while the keyboard is engaged leaves no fence for the next one: Tab into it, then a digit, answers', async () => {
     // The fence protects keys on a screen that is showing; a clear shows none. The next ask arrives with focus outside it.
     media(true);
-    const answer = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+    const answer = spyApiAnswer('answerDialog').mockReturnValue(new Promise(() => {}));
     const { arrive, store } = mount();
     await frame();
     arrive(2);
@@ -1656,7 +1656,7 @@ describe('a screen change this client did not send fences the card at the desk; 
     // R115 joins the screen to the desk identity, and a hooked screen the pane does not show (no menu) is no screen, so the
     // flap is a change: an arrow-engaged keyboard is released and fenced, and a click re-enters. Not a residual: the safe side.
     media(true);
-    const answer = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+    const answer = spyApiAnswer('answerDialog').mockReturnValue(new Promise(() => {}));
     const { arrive, store } = mount();
     await frame();
     arrive(1);
@@ -1678,7 +1678,7 @@ describe('a screen change this client did not send fences the card at the desk; 
 
   it('the phone keeps its Sheet\'s behaviour: the same change leaves the reused row\'s keys live (a guard, green before and after)', async () => {
     media(false);
-    const answer = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+    const answer = spyApiAnswer('answerDialog').mockReturnValue(new Promise(() => {}));
     const { arrive, store } = mount();
     await frame();
     arrive(2);

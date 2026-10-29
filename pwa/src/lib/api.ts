@@ -3,13 +3,15 @@
 // ApiError { status, body } on non-2xx — callers branch on status/body
 // (e.g. 409 { error: 'draft-present', draft } from prompt).
 import type { AccountsResponse, AckAnswer, ApplyUpdateBody, CatalogueState, CatchUp, ClaimSummary, CollectLaneRequest, CollectLaneView, CoordCaps, CoordCapsView, FleetHealth, FleetSession, IntentWriteAnswer, LifecycleQueryResult, LoginRequest, MoveRequestAnswer, NotifyEvent, PaneHistoryReply, PasskeyAssertFinish, PasskeyAssertStart, PasskeyListResponse, PasskeyRegisterFinish, PasskeyRegisterStart, ProjectPoolWire, ProjectRow, PrView, ReapResult, ReviewCapLiftAnswer, ReviewCapView, RollbackUpdateBody, RouteField, RunSpend, RunSummary, SlashCommand, StagedClip, StallWatchRequest, StallWatchView, StepUpAnswer, StepUpStart, UpdatesView, WsAudit } from '../../../shared/api';
-import type { ArchiveAnswer, DialogAnswered, DialogTabRequest, DigestAnswer, DigestCorrectAnswer, DigestCorrectBody, InterruptRouteSource } from '../../../shared/api';
+import type { ArchiveAnswer, DialogAnswered, DialogTabRequest, DigestAnswer, DigestCorrectAnswer, DigestCorrectBody, InterruptRouteSource, QuestionAnswerBody } from '../../../shared/api';
 import type { LinearConnectionView } from '../../../shared/linear';
 import type { DispatchAbandonRequest, DispatchAbandonView } from '../../../shared/dispatch-abandon';
 import type { RotateAnswer } from '../../../shared/box-token';
 import type { ResolveRead } from '../fleet/workspaceNameWords';
 import { raiseAuthLostFrom } from './auth';
 import { ApiError } from './apiError';
+import { createServerCaps } from './serverCaps';
+import { questionAnswerRequest } from '../session/answerLifecycle';
 import { ANSWERED, answered, linearViewOf, rotateRefusalOf, readRotateStarted, linearNotConnectedOf, readResolve, readWorkspaceAdd, readWorkspaceTitle, archiveBody, workspaceAddBody, type ArchiveOptions, type UpdateIntentRequest, type WorkspaceAddAnswer, type WorkspaceAddOptions, type WorkspaceTitleAnswer, type WorkspaceTitleChange } from './wireReaders';
 import { TOKEN_ROTATE_PATH } from '../../../shared/box-token';
 import {
@@ -133,6 +135,8 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
     (await (await request(path, jsonInit(body))).json().catch(() => unreadable)) as T;
 
   const sid = (id: string): string => `/api/sessions/${encodeURIComponent(id)}`;
+  // W7 C7g (D-7185, D-7485): which door an operator's answer takes, read from `GET /health`'s `questions-v1`.
+  const caps = createServerCaps(fetchImpl);
 
   return {
     /**
@@ -582,6 +586,16 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
      *  answer the question the client was actually shown. */
     answerAsk: (id: string, askKey: string, optionIndexes: number[]) =>
       post(`${sid(id)}/ask`, { askKey, optionIndexes }),
+    /** Answer session `id`'s question (W7 C7g, D-7185, D-7485): an option row, the own words, a multiSelect set or a
+     *  hooked ask by option index, as `body` (`shared/api.ts#QuestionAnswerBody`). On a server that advertises
+     *  `questions-v1` (`serverCaps.ts`) it is W3 Q3f's `POST /api/questions/session-<id>/answer`; on any other, the old
+     *  door the body names, with that door's bytes (`answerLifecycle.ts#questionAnswerRequest`). Either answers the
+     *  same: the same core, its refusals by code (`DialogRefuseCode` and the rest, plus the family's `kind-mismatch`),
+     *  and a 200 whose `next` is read as a tapped row's is. */
+    answerQuestion: async (id: string, body: QuestionAnswerBody): Promise<DialogAnswered> => {
+      const req = questionAnswerRequest(id, body, await caps.questionsDoor());
+      return answered(await postRead<unknown>(req.path, ANSWERED, req.payload));
+    },
     /** One verified Enter on a box that already holds text — the rescue for a
      *  send whose Enter the pane swallowed twice.
      *
