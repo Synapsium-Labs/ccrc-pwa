@@ -10,6 +10,8 @@ import path from 'node:path';
 
 import { answerRegionOf, applyAnswerRegion, renderAnswerRegion } from './answerRegion';
 import { answerRequest, askCommandOf } from '../src/session/answerLifecycle';
+import { advertisesQuestions } from '../src/lib/serverCaps';
+import { HEALTH_CORPUS } from './healthCorpus';
 
 const SW_PATH = path.join(__dirname, '..', 'public', 'push-sw.js');
 const SRC = readFileSync(SW_PATH, 'utf8');
@@ -31,6 +33,11 @@ let shown: Shown[] = [];
 let opened: string[] = [];
 let posted: Posted[] = [];
 let fetchImpl: (url: string, init: { body: string }) => Promise<unknown>;
+// W7 C7g (D-7185, D-7485): the worker reads `GET /health` before it answers, to choose the door (`questions-v1`). The
+// read is answered here, apart from the answer's POST, so `posted` and `fetchImpl` keep meaning the answer alone. The
+// default is a server without the word, today's: every row below that does not set it answers through the old door.
+let gets: string[] = [];
+let healthImpl: () => Promise<unknown>;
 
 /** Load the real worker source against a fresh fake `self` + `fetch`. Both are
  *  function parameters, so the module's bare `self`/`fetch` references bind to
@@ -53,7 +60,8 @@ function load(): FakeSelf {
       openWindow: async (u) => { opened.push(u); },
     },
   };
-  const fetch = (url: string, init: { body: string }): Promise<unknown> => {
+  const fetch = (url: string, init: { body: string; method?: string }): Promise<unknown> => {
+    if (init.method === undefined) { gets.push(url); return healthImpl(); }
     posted.push({ url, body: JSON.parse(init.body) });
     return fetchImpl(url, init) as Promise<unknown>;
   };
@@ -89,8 +97,9 @@ async function push(self: FakeSelf, payload: unknown): Promise<void> {
 }
 
 beforeEach(() => {
-  shown = []; opened = []; posted = [];
+  shown = []; opened = []; posted = []; gets = [];
   fetchImpl = async () => ({ ok: true, json: async () => ({ ok: true }) });
+  healthImpl = async () => ({ ok: true, json: async () => ({ ok: true, build: null, caps: [] }) });
 });
 
 describe('push-sw: showing the notification', () => {
@@ -440,6 +449,85 @@ describe('push-sw: the answer-lifecycle region', () => {
         const c = askCommandOf(action, sid);
         expect(askRequestOf(action, sid), `${action} on ${String(sid)}`).toEqual(c === null ? null : { ...answerRequest(c) });
       }
+    }
+  });
+});
+
+// W7 C7g (D-7185, D-7485; ARCH-57 #792, PWA half): the notification answers through W3 Q3f's operator door on a server
+// that advertises `questions-v1`, and through the old door on any other (the rows above, whose default `/health` has no
+// such word). The door is chosen per tap from `GET /health`, by a reader rendered from `lib/serverCaps.ts`.
+describe('push-sw: the door, chosen from GET /health\'s questions-v1', () => {
+  const advertising = async () => ({ ok: true, json: async () => ({ ok: true, build: null, caps: ['ask-pairing-v1', 'questions-v1'] }) });
+
+  it('a questions-v1 server: ask:k1:2 on session-a is POST /api/questions/session-session-a/answer, {"kind":"ask",…}', async () => {
+    healthImpl = advertising;
+    const sent: { url: string; init: unknown }[] = [];
+    fetchImpl = async (url, init) => { sent.push({ url, init }); return { ok: true, json: async () => ({ ok: true }) }; };
+    const self = load();
+    await click(self, 'ask:k1:2', { sessionId: 'session-a' });
+    expect(gets).toEqual(['/health']);
+    expect(sent).toEqual([{
+      url: '/api/questions/session-session-a/answer',
+      init: { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{"kind":"ask","askKey":"k1","optionIndexes":[2]}' },
+    }]);
+  });
+
+  it('a questions-v1 server: the answer confirms with its label, and a refusal is worded from the table', async () => {
+    healthImpl = advertising;
+    let self = load();
+    await click(self, 'ask:abc123:1', { sessionId: 'cc-a' }, { actions: [{ action: 'ask:abc123:1', title: 'Blue' }] });
+    expect(posted).toEqual([{ url: '/api/questions/session-cc-a/answer', body: { kind: 'ask', askKey: 'abc123', optionIndexes: [1] } }]);
+    expect(shown.at(-1)!.title).toBe('Answered');
+    expect(shown.at(-1)!.opts.body).toBe('Blue');
+    fetchImpl = async () => ({ ok: false, status: 409, json: async () => ({ error: 'ask-mismatch' }) });
+    self = load();
+    await click(self, 'ask:abc123:0', { sessionId: 'cc-a' });
+    expect(shown.at(-1)!.opts.body).toBe('The question changed — open the session and read it.');
+  });
+
+  it('the family\'s own word, kind-mismatch, has a sentence of its own', async () => {
+    healthImpl = advertising;
+    fetchImpl = async () => ({ ok: false, status: 400, json: async () => ({ error: 'kind-mismatch' }) });
+    const self = load();
+    await click(self, 'ask:k:0', { sessionId: 'cc-a' });
+    expect(shown.at(-1)!.title).toBe("Couldn't answer");
+    expect(shown.at(-1)!.opts.body).not.toBe('No reason given (HTTP 400) — tap to open the session.');
+  });
+
+  it('a /health that fails, answers non-200 or cannot be read: the old door, and the answer still goes', async () => {
+    for (const h of [
+      async () => { throw new Error('offline'); },
+      async () => ({ ok: false, status: 502, json: async () => ({}) }),
+      async () => ({ ok: true, json: async () => { throw new Error('not json'); } }),
+    ]) {
+      posted = []; gets = [];
+      healthImpl = h;
+      const self = load();
+      await click(self, 'ask:k1:2', { sessionId: 'session-a' });
+      expect(gets).toEqual(['/health']);
+      expect(posted).toEqual([{ url: '/api/sessions/session-a/ask', body: { askKey: 'k1', optionIndexes: [2] } }]);
+    }
+  });
+
+  it('a malformed action reads no /health and sends nothing', async () => {
+    healthImpl = advertising;
+    const self = load();
+    await click(self, 'ask:k1:x', { sessionId: 'session-a' });
+    expect(gets).toEqual([]);
+    expect(posted).toEqual([]);
+  });
+
+  // The rendered reader and `serverCaps.ts#advertisesQuestions` over one corpus. `new Function` runs only the renderer's
+  // own output; the corpus values reach it as a fake fetch's answers, never as part of its body.
+  it('the rendered questionsDoor equals advertisesQuestions over the /health corpus', async () => {
+    const make = new Function('fetch', `${renderAnswerRegion()}\nreturn questionsDoor;`) as
+      (f: (url: string, init: unknown) => Promise<unknown>) => () => Promise<boolean>;
+    for (const [name, body, want] of HEALTH_CORPUS) {
+      const seen: unknown[] = [];
+      const questionsDoor = make(async (url, init) => { seen.push([url, init]); return { ok: true, json: async () => body }; });
+      expect(await questionsDoor(), name).toBe(want);
+      expect(advertisesQuestions(body), name).toBe(want);
+      expect(seen, name).toEqual([['/health', { cache: 'no-store' }]]);
     }
   });
 });
