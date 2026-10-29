@@ -55,7 +55,7 @@ import { useFleetFlows } from '../../fleet/FleetFlows';
 import { useFolded } from '../../fleet/foldState';
 import { cardsOf, childRunContext, fleetTree, parentIdOf, workingOn, type FleetTreeGroup } from '../../fleet/fleetTree';
 import { orphanNote } from '../../fleet/orphanWords';
-import { isRunClosed, runForSession } from '../../fleet/runWords';
+import { boundOpenRun, isRunClosed } from '../../fleet/runWords';
 import { SessionLine } from '../../fleet/SessionLine';
 import { markAllSeenLabel, useMarkSeen } from '../../fleet/markSeen';
 import { OPEN_RUNS, openSession } from '../../fleet/openers';
@@ -224,7 +224,7 @@ function StatusTable({ selectedId, phoneTab, onTab }: {
           onActions={onActions}
           roster={roster}
           projectPool={chrome.projects.poolFor(s.project)}
-          onOpenRun={runForSession(runs, s) === null ? null : OPEN_RUNS}
+          onOpenRun={boundOpenRun(runs, s) === null ? null : OPEN_RUNS}
           workingOn={workingOn(s, cards)}
           childRun={child}
           coordinator={orphan?.presence ?? null}

@@ -268,6 +268,19 @@ describe('status mode', () => {
     for (const w of ['waiting', 'exited', 'merged', 'needs you']) expect(code).not.toContain(`'${w}'`);
   });
 
+  // C7d's behaviour row, OA-C15 (a) (D-7265): the held cell's run-board door follows the wire's binding. A child the
+  // wire binds to the open run gets the door; the same child with no binding (#746's recycled id, or an older server's
+  // frame) reads its hold as text (a door before C7d, read off the id).
+  it('in status mode a held child\'s cell opens the run board only when the wire binds the run to it', () => {
+    const held = 'program:port-api wave:1/3 run:41';
+    const withHeld = (over: Partial<FleetSession>): FleetSession[] => FLEET.map((s) => (s.id === CHILD ? { ...s, held, ...over } : s));
+    mount(withHeld({}));
+    expect(groupOf('done').querySelector(`[data-row="${CHILD}"] .sess-held`)?.tagName).toBe('BUTTON');
+    cleanup();
+    mount(withHeld({ run: null, openRun: null }));
+    expect(groupOf('done').querySelector(`[data-row="${CHILD}"] .sess-held`)?.tagName).toBe('SPAN');
+  });
+
   it('in status mode a child row carries its coordinator\'s crumb; in project mode it nests as today', () => {
     mount();
     const child = groupOf('done').querySelector<HTMLElement>(`[data-row="${CHILD}"]`)!;
