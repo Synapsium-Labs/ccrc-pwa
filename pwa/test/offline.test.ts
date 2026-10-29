@@ -92,6 +92,39 @@ describe('fleet snapshot (lib/offline)', () => {
   });
 });
 
+// Landing order wave 4b (D-7481): the snapshot copies live frames, and a landing is optional and additive. It survives the
+// round trip, an absent key stays absent (never a clean landing), and a malformed one revives as no key, the session kept.
+describe('the landing radar reading in the snapshot (wave 4b)', () => {
+  const landing = {
+    at: '2026-10-29T12:00:00.000Z', pr: 12, head: 'abc1234', baseRef: 'main',
+    base: { state: 'conflict', paths: ['src/a.ts'] }, paired: true,
+    conflicts: [{ pr: 14, paths: ['src/x.ts'], pathsCut: false }], unmeasuredWith: [],
+    cut: { heads: false, pairs: false, unbound: false },
+  };
+
+  it('keeps `landing` through the round trip', () => {
+    saveFleetSnapshot([{ ...session('claude:ProjectC'), landing } as FleetSession]);
+    expect(loadFleetSnapshot()?.sessions[0]?.landing).toEqual(landing);
+  });
+
+  it('keeps no key as no key', () => {
+    saveFleetSnapshot([session('claude:ProjectC')]);
+    const s = loadFleetSnapshot()?.sessions[0];
+    expect(s).toBeDefined();
+    expect('landing' in s!).toBe(false);
+  });
+
+  it('gives no key for a malformed landing, and keeps the session', () => {
+    window.localStorage.setItem('ccrc.fleet-snapshot.v1', JSON.stringify({
+      savedAt: Date.now(), roster: [],
+      sessions: [{ ...session('claude:ProjectC'), landing: { ...landing, base: { state: 'fine' } } }],
+    }));
+    const s = loadFleetSnapshot()?.sessions[0];
+    expect(s?.id).toBe('claude:ProjectC');
+    expect('landing' in s!).toBe(false);
+  });
+});
+
 // Fix round 1, finding 3: a cold offline start hydrated `sessions` from the
 // snapshot but never `roster` — every account rendered as its raw wrapper id
 // (`claude9`, `claude-acme`) instead of the jargon-free label this module

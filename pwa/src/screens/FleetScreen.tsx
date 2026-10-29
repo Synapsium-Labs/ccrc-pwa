@@ -24,6 +24,7 @@ import { BannerStack } from '../fleet/BannerStack';
 import { fleetSummary } from '../fleet/fleetSummary';
 import { poolLagText } from '../fleet/poolLag';
 import { runsLineLabel, waitingOnYou } from '../fleet/navBadges';
+import { ConflictChip } from '../fleet/ConflictChip';
 import { HotFilesStrip } from '../fleet/HotFilesStrip';
 import { FleetCards } from '../fleet/FleetCards';
 import { BucketBar } from '../fleet/BucketBar';
@@ -294,6 +295,9 @@ export function FleetScreen({
       {/* Build 9's contested-files signal (D12 ruling 3) — renders itself or
           nothing, so it mounts unconditionally, the AccountsStrip rule. */}
       <HotFilesStrip />
+      {/* The landing radar's predicted-conflict chip (wave 4b, D-7480): read-only, renders nothing without a fresh
+          landing, and beside the strip rather than in the runs line for the strip's own reason. */}
+      <ConflictChip sessions={sessions} />
 
       {sessions.length === 0 && conn !== 'open' ? (
         <div className="fleet-list" data-loading="true">

@@ -1402,6 +1402,24 @@ describe('the fleet head holds one row, and the class chooser is not on it', () 
       .not.toContain('<HotFilesStrip');
   });
 
+  it('seats the predicted-conflict chip beside the hot-files strip, outside the runs line (wave 4b)', () => {
+    const screen = readFileSync(
+      path.join(import.meta.dirname, '..', 'src', 'screens', 'FleetScreen.tsx'), 'utf8');
+    const lineStart = screen.indexOf('<div className="fleet-runs-line">');
+    const strip = screen.indexOf('<HotFilesStrip />');
+    const chip = screen.indexOf('<ConflictChip sessions={sessions} />');
+    expect(lineStart).toBeGreaterThan(-1);
+    expect(strip).toBeGreaterThan(lineStart);
+    expect(chip, 'the chip left the fleet screen').toBeGreaterThan(-1);
+    // Directly after the strip: nothing but the chip's own comment sits between them.
+    expect(screen.slice(strip + '<HotFilesStrip />'.length, chip)).not.toMatch(/<[A-Za-z]/);
+    // The runs line closes before the strip, so the chip, after it, is outside the line.
+    expect(screen.slice(lineStart, strip), 'the chip was pulled inside the runs line').not.toContain('<ConflictChip');
+    // It is a pill in fleet.css, on the strip's own gutters.
+    const rule = ruleFor('.chip--conflict');
+    expect(declValue(rule, 'margin')?.replace(/\s+/g, ''), 'the strip\'s own gutters').toBe('0var(--sp-4)var(--sp-2)');
+  });
+
   it("lets the sheet's routing row shrink below its three selects", () => {
     // The same bug class as `.proj-card`'s `min-width: 0` above: a grid item's
     // automatic minimum size is its min-content, so a bare `1fr` track cannot

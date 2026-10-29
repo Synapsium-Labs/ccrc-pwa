@@ -344,9 +344,10 @@ describe('the ask surfaces speak plainly (D-6325)', () => {
 
 // The fleet list's words (D-6331, T3a): the card head, the claims strip and the class chooser, in both places it lives.
 // The bucket chips' files are read too (BucketBar.tsx, statusGroups.ts, markSeen.ts), and Instrument's FleetTable.tsx, whose group heads speak the same vocabulary.
+// The predicted-conflict chip's words are all in conflictWords.ts (wave 4b); ConflictChip.tsx holds no sentence of its own, so the scan reads zero strings there and would refuse it.
 const SRC = path.join(import.meta.dirname, '..', 'src');
 const FLEET_LIST = [
-  ...['ProjectCardHead.tsx', 'HotFilesStrip.tsx', 'NewSessionSheet.tsx', 'BucketBar.tsx', 'statusGroups.ts', 'markSeen.ts', 'classWords.ts'].map((f) => path.join(SRC, 'fleet', f)),
+  ...['ProjectCardHead.tsx', 'HotFilesStrip.tsx', 'NewSessionSheet.tsx', 'BucketBar.tsx', 'statusGroups.ts', 'markSeen.ts', 'classWords.ts', 'conflictWords.ts'].map((f) => path.join(SRC, 'fleet', f)),
   path.join(SRC, 'screens', 'FleetScreen.tsx'),
   path.join(SRC, 'skins', 'instrument', 'FleetTable.tsx'),
 ];
