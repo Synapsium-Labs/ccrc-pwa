@@ -29,14 +29,27 @@ export interface LandingFacts {
 type LandingIO = Pick<FleetIO, 'readFileMeasured' | 'lstatMeasured'>;
 type RegularRead = { ok: true; content: string } | { ok: false; reason: ReadFailure };
 
+type SizedIO = LandingIO & Pick<FleetIO, 'statMeasured'>;
+
 /** A regular file's bytes. A symlink or any other kind is `unreadable`, never its target's bytes; a failed lstat is
- *  `absent` only when it proved absence (`unmeasured` is an io that cannot answer, and is not absence). */
-export async function readRegular(io: LandingIO, file: string, signal?: AbortSignal): Promise<RegularRead> {
+ *  `absent` only when it proved absence (`unmeasured` is an io that cannot answer, and is not absence). With `maxBytes`
+ *  (the radar's `probe`, D-7482) the size is measured by `statMeasured` AFTER the kind check and BEFORE any read: a file
+ *  over the cap is `unreadable` and is never read, a failed stat keeps its own reason, and the bytes are checked against
+ *  the cap again after the read. Without it nothing changes for the other callers. */
+export async function readRegular(io: LandingIO, file: string, signal?: AbortSignal): Promise<RegularRead>;
+export async function readRegular(io: SizedIO, file: string, signal: AbortSignal | undefined, maxBytes: number): Promise<RegularRead>;
+export async function readRegular(io: LandingIO | SizedIO, file: string, signal?: AbortSignal, maxBytes?: number): Promise<RegularRead> {
   const kind = await io.lstatMeasured(file);
   if (!kind.ok) return { ok: false, reason: kind.reason === 'absent' ? 'absent' : 'unreadable' };
   if (kind.kind !== 'regular') return { ok: false, reason: 'unreadable' };
+  if (maxBytes !== undefined) {
+    const size = await (io as SizedIO).statMeasured(file);
+    if (!size.ok) return { ok: false, reason: size.reason };
+    if (size.size > maxBytes) return { ok: false, reason: 'unreadable' };
+  }
   const r = await io.readFileMeasured(file, undefined, signal);
-  return r.ok ? r : { ok: false, reason: r.reason };
+  if (!r.ok) return { ok: false, reason: r.reason };
+  return maxBytes !== undefined && Buffer.byteLength(r.content, 'utf8') > maxBytes ? { ok: false, reason: 'unreadable' } : r;
 }
 
 /** A pause marker, by lstat alone: any entry pauses, a proven absence runs, anything else is not known. */
@@ -75,23 +88,15 @@ export async function listRadarProjects(
   return { ok: true, names: r.entries.filter((n) => !n.startsWith('.lp.')) };
 }
 
-/** One project's `probe`, through `parseProbe`. The file counts only as a REGULAR file (`readRegular`), its size is
- *  measured BEFORE any read and a file over `RADAR_PROBE_MAX_BYTES` is never read (D-7482), and the bytes are checked
- *  against the cap again by the parser. A proven absence is `absent`; every other fault is `unreadable`, and the
- *  parser's own `stale` and `unmeasured` pass through unchanged. */
+/** One project's `probe`, through `readRegular` (the one regular-file reader, with the 512 KiB cap measured before the
+ *  read, D-7482) and then `parseProbe`, which checks the bytes again. A proven absence is `absent`; every other fault is
+ *  `unreadable`, and the parser's own `stale` and `unmeasured` pass through unchanged. */
 export async function readRadarProbe(
   io: Pick<FleetIO, 'readFileMeasured' | 'lstatMeasured' | 'statMeasured'>, registryDir: string, project: string,
   nowMs: number, signal?: AbortSignal,
 ): Promise<ProbeRead | { ok: false; reason: ReadFailure }> {
-  const file = path.join(registryDir, 'landing', project, 'probe');
-  const kind = await io.lstatMeasured(file);
-  if (!kind.ok) return { ok: false, reason: kind.reason === 'absent' ? 'absent' : 'unreadable' };
-  if (kind.kind !== 'regular') return { ok: false, reason: 'unreadable' };
-  const size = await io.statMeasured(file);
-  if (!size.ok) return { ok: false, reason: size.reason };
-  if (size.size > RADAR_PROBE_MAX_BYTES) return { ok: false, reason: 'unreadable' };
-  const r = await io.readFileMeasured(file, undefined, signal);
-  return r.ok ? parseProbe(r.content, project, nowMs) : { ok: false, reason: r.reason };
+  const r = await readRegular(io, path.join(registryDir, 'landing', project, 'probe'), signal, RADAR_PROBE_MAX_BYTES);
+  return r.ok ? parseProbe(r.content, project, nowMs) : r;
 }
 
 /** What one project's read came to in a pass: `readRadarProbe`'s answer, or `late` when it had not answered by the
