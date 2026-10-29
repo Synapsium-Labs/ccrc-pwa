@@ -11,7 +11,7 @@
 //
 // MUTATION TABLE (plan Task G3 Step 3; RUN, each mutant on the working tree, one at a time, with this suite,
 // status-groups.test.ts and instrument-list.test.tsx (the browser rows: instrument-desk.browser.test.ts -t "programmes"),
-// then restored from a saved copy with its sha256 checked; 23 run, 23 red; instrument-shell holds one more):
+// then restored from a saved copy with its sha256 checked; 26 run, 26 red; instrument-shell holds one more):
 //   a child row drawn outside its box (members not hidden) ..... 15 cases, here, status-groups and instrument-list
 //   counts taken from sessions (a box as its coordinator and
 //     children) instead of drawn rows ......................... 9 cases, "every group counts what it draws…" among them
@@ -25,6 +25,9 @@
 //   Needs you never held ........................................ instrument-list's held case, status-groups' held case
 //   Mark all seen leaving the coordinators out .................. "Mark all seen covers what a group draws…", here and in status-groups
 //   Programmes' door named for Needs you ........................ 3 cases, "Mark all seen covers what a group draws…" among them
+//   'programmes' dropped from markSeen's focus key ............. both door cases here (focus lands off the Programmes head)
+//   'programmes' dropped from markedSeenNote's key .............. both door cases here (`Needs you: 1 marked seen`)
+//   'programmes' dropped from FleetTable's label-ref key ........ "Mark all seen covers what a group draws…" (focus)
 //   the All tab counting sessions ............................... "Programmes is the tab after Needs you, and every tab counts what its group draws"
 //   PHONE_TABS without Programmes ............................... 4 cases, both phone cases here among them
 //   a head counting its rows only ............................... 6 cases, "every group counts what it draws…" among them
@@ -51,6 +54,7 @@ const { useFleetStore } = await import('../src/stores/fleet');
 const { api } = await import('../src/lib/api');
 const { GROUP_MODE_KEY } = await import('../src/skins/instrument/FleetTable');
 const { fleetHues } = await import('../src/fleet/programmeBoxes');
+const { acksSnapshot, isUnseen, resetAcks } = await import('../src/lib/seen');
 
 const TABLE_SRC = readFileSync(path.join(import.meta.dirname, '..', 'src', 'skins', 'instrument', 'FleetTable.tsx'), 'utf8');
 
@@ -199,6 +203,7 @@ describe("Instrument's Status view shows programmes, not children (G3, D-7333)",
   });
 
   it('Mark all seen covers what a group draws, coordinators included: Programmes says "n new" and offers its own door', () => {
+    resetAcks();
     const now = Date.now();
     const sessions = SESSIONS.map((s) => (s.id === 'coord-b' ? { ...s, bucket: 'done' as const, status: 'idle' as const, bucketSince: now } : s));
     mount(sessions);
@@ -209,6 +214,33 @@ describe("Instrument's Status view shows programmes, not children (G3, D-7333)",
     expect(within(programmes).queryByRole('button', { name: /^Mark all/ })).toBeNull();
     expect(document.activeElement).toBe(head(programmes));
     expect(within(table()).getByRole('status')).toHaveTextContent('Programmes: 1 marked seen');
+  });
+
+  it('a door acks exactly what its group draws: the coordinator and its drawn tray child, never a hidden child', () => {
+    resetAcks();
+    const now = Date.now();
+    const done = { bucket: 'done' as const, status: 'idle' as const, bucketSince: now };
+    // Needs you draws coord-a's box (coord-a, and a1, which asks) and lone-ask; a3 is hidden. Programmes draws coord-b's
+    // box; b1 is hidden. Every one of them is new.
+    const fresh = (s: FleetSession): FleetSession => ({ ...s, bucketSince: now });
+    const sessions = SESSIONS.map((s) => (['coord-a', 'a3', 'coord-b', 'b1'].includes(s.id) ? { ...s, ...done }
+      : ['a1', 'lone-ask'].includes(s.id) ? fresh(s) : s));
+    mount(sessions);
+    const byId = new Map(sessions.map((x) => [x.id, x] as const));
+    const unseen = (ids: string[]): boolean[] => ids.map((id) => isUnseen(byId.get(id)!, acksSnapshot()));
+
+    const needs = groupOf('attention');
+    expect(words(head(needs))).toMatch(/Needs you · 2 · 3 new/);
+    fireEvent.click(within(needs).getByRole('button', { name: 'Mark all seen, Needs you' }));
+    expect(unseen(['coord-a', 'a1', 'lone-ask', 'a3'])).toEqual([false, false, false, true]);
+    expect(within(table()).getByRole('status')).toHaveTextContent('Needs you: 3 marked seen');
+
+    const programmes = groupOf('programmes');
+    expect(words(head(programmes))).toMatch(/Programmes · 1 · 1 new$/);
+    fireEvent.click(within(programmes).getByRole('button', { name: 'Mark all seen, Programmes' }));
+    expect(unseen(['coord-b', 'b1'])).toEqual([false, true]);
+    expect(within(table()).getByRole('status')).toHaveTextContent('Programmes: 1 marked seen');
+    expect(document.activeElement).toBe(head(programmes));
   });
 
   it("a box's kicker names its project as well as its programme", () => {
