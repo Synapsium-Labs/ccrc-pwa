@@ -14,6 +14,7 @@ import type { DivergenceCensus } from '../fleet/integrityWords';
 import { keepRows } from '../fleet/keepRows';
 import type { AccountsConnect, AccountUsage, LaneWire, ProjectedHome } from '../../../shared/api';
 import { sameJson } from '../lib/sameJson';
+import { onOnline, onPageHidden, onPageVisible } from '../lib/pageClock';
 
 export interface FleetNotice {
   id: number;
@@ -389,6 +390,8 @@ export function createFleetStore(deps: FleetStoreDeps = {}): FleetStore {
       else if (document.visibilityState === 'hidden') flushSnapshot();
     };
     const onPageHide = (): void => flushSnapshot();
+    // The page clock's stops for this connection's three subscriptions (D-7191): visible, hidden and online.
+    let stopPageClock: (() => void)[] = [];
 
     // One read, not two (`sessions` and `roster` below both come off it) —
     // fix round 1, finding 3. Before this, a cold offline start hydrated
@@ -627,15 +630,15 @@ export function createFleetStore(deps: FleetStoreDeps = {}): FleetStore {
           makeSocket: deps.makeSocket,
         });
         socket.start();
-        document.addEventListener('visibilitychange', onVisible);
+        stopPageClock = [onPageVisible(onVisible), onPageHidden(onVisible)];
         window.addEventListener('pagehide', onPageHide);
-        window.addEventListener('online', nudge);
+        stopPageClock.push(onOnline(nudge));
       },
 
       disconnect() {
-        document.removeEventListener('visibilitychange', onVisible);
+        for (const stop of stopPageClock) stop();
+        stopPageClock = [];
         window.removeEventListener('pagehide', onPageHide);
-        window.removeEventListener('online', nudge);
         socket?.stop();
         socket = null;
         // The newest pending frame is written, then the window is closed so nothing fires after this and a later

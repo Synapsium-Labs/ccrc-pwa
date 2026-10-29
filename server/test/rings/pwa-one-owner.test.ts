@@ -1,8 +1,9 @@
 // ARCH-30 (#544): the PWA's poll primitive and wire-guard kit have ONE owner each.
 //  (1) `isRecord`, `isNum`, `isCount`, `isOneOf` (and the old `isObject`) are defined only in `pwa/src/lib/wire.ts`.
 //      Five copies had disagreed on what a count is, and 2^53 + 1 passed the loosest.
-//  (2) No `pwa/src/fleet/` file subscribes to `visibilitychange`: a fleet view re-polls through `lib/usePoll.ts`, the
-//      one file that holds that subscription for the fleet views.
+//  (2) No `pwa/src` file but the page clock, `lib/pageClock.ts`, subscribes to `visibilitychange` or `online` (D-7191,
+//      W7 C7m): a view, hook or store that acts on the page turning visible or hidden, or coming back online, goes
+//      through the clock (a fleet view through `lib/usePoll.ts`, which re-imports it).
 //  (3) ARCH-49: no `status === 'dead'` outside `pwa/src/fleet/presence.ts`, and no `coordPresence` (the block at the end).
 import { describe, expect, it } from 'vitest';
 import { parseFile, parseSource, type ParsedFile } from '../scan/parse.js';
@@ -13,11 +14,14 @@ import { fixture, singleReaders, singleReadersIn } from '../census-w7/pwa.js';
 
 const GUARDS = new Set(['isRecord', 'isObject', 'isNum', 'isCount', 'isOneOf']);
 const WIRE = 'pwa/src/lib/wire.ts';
-const POLL = 'pwa/src/lib/usePoll.ts';
+const POLL = 'pwa/src/lib/pageClock.ts';
 
 const guardDefinitions = (p: ParsedFile): string[] => p.symbols.filter((s) => GUARDS.has(s.name)).map((s) => s.name);
 const visibilitySubscriptions = (p: ParsedFile): number =>
   p.calls.filter((c) => c.name === 'addEventListener' && c.args[0]?.kind === 'string' && c.args[0].text === 'visibilitychange').length;
+const PAGE_CLOCK_EVENTS = new Set(['visibilitychange', 'online']);
+const pageClockSubscriptions = (p: ParsedFile): number =>
+  p.calls.filter((c) => c.name === 'addEventListener' && c.args[0]?.kind === 'string' && PAGE_CLOCK_EVENTS.has(c.args[0].text)).length;
 
 const parse = (file: string): ParsedFile => parseFile(path.join(REPO, file));
 const files = (): string[] => walkSrc({ roots: ['pwa/src'], min: 200 });
@@ -29,6 +33,8 @@ describe('the PWA poll primitive and wire-guard kit have one owner (ARCH-30, #54
     expect(guardDefinitions(parseSource('const isOther = (v: unknown): boolean => !!v;'))).toEqual([]);
     expect(visibilitySubscriptions(parseSource("document.addEventListener('visibilitychange', f);"))).toBe(1);
     expect(visibilitySubscriptions(parseSource("document.addEventListener('click', f);"))).toBe(0);
+    expect(pageClockSubscriptions(parseSource("window.addEventListener('online', f); document.addEventListener('visibilitychange', g);"))).toBe(2);
+    expect(pageClockSubscriptions(parseSource("window.addEventListener('pagehide', f);"))).toBe(0);
   });
 
   it('the guard kit is defined in lib/wire.ts and nowhere else in pwa/src', () => {
@@ -41,10 +47,15 @@ describe('the PWA poll primitive and wire-guard kit have one owner (ARCH-30, #54
     expect(where[WIRE]?.sort()).toEqual(['isCount', 'isNum', 'isOneOf', 'isRecord']);
   });
 
-  it('no pwa/src/fleet file subscribes to visibilitychange, and usePoll holds that subscription', () => {
-    const fleet = files().filter((f) => f.startsWith('pwa/src/fleet/'));
-    expect(fleet.length).toBeGreaterThan(20);
-    expect(fleet.filter((f) => visibilitySubscriptions(parse(f)) > 0)).toEqual([]);
+  it('no pwa/src file but lib/pageClock.ts subscribes to visibilitychange or online', () => {
+    const all = files();
+    expect(all.filter((f) => f.startsWith('pwa/src/fleet/')).length).toBeGreaterThan(20);
+    const where: Record<string, number> = {};
+    for (const f of all) {
+      const n = pageClockSubscriptions(parse(f));
+      if (n > 0) where[f] = n;
+    }
+    expect(where).toEqual({ [POLL]: 2 });
     expect(visibilitySubscriptions(parse(POLL))).toBe(1);
   });
 });
@@ -158,5 +169,23 @@ describe('the envelope pairing has one owner, the server (C7f, D-7184)', () => {
     const ported = CLIENT_PAIRING_NAMES.filter((n) => n !== 'prefixMatches' && n !== 'norm');
     expect(ported.filter((n) => !names.has(n))).toEqual([]);
     expect(names.has('framePairing')).toBe(true);
+  });
+});
+
+// ─── C7m (D-7191; ARCH-75 #810): one page clock, and no hand-written request poll ─────────────────────────────────
+// Read through W7's census (`census-w7/pwa.ts#pageClockSubscriptions` and `#requestPolls`), so the sites are the
+// syntax tree's: `visibilitychange` 10 → 1 and `online` 2 → 1, both in `lib/pageClock.ts`; hand-written request polls
+// 2 → 0 (`HotFilesStrip` and `useFleetHealth` poll through `usePoll`). Each may only go down (spec §5.1 rule 3).
+describe('the PWA has one page clock and no hand-written request poll (C7m, D-7191)', () => {
+  it('pageClockSubscriptions(): one visibilitychange and one online subscription, both in lib/pageClock.ts', async () => {
+    const { pageClockSubscriptions: clockSites } = await import('../census-w7/pwa.js');
+    expect(clockSites().map((s) => [s.file, s.kind])).toEqual([
+      ['pwa/src/lib/pageClock.ts', 'visibilitychange'],
+      ['pwa/src/lib/pageClock.ts', 'online'],
+    ]);
+  });
+
+  it('requestPolls(): no hand-written request poll is left in pwa/src', () => {
+    expect(requestPolls()).toEqual([]);
   });
 });
