@@ -145,12 +145,37 @@ const warnRe = (key: string, value: string, source: string, def: string): RegExp
 
 // ── the threshold-literal scanner ─────────────────────────────────────────
 // A numeric literal compared against a quantity, in a code line (a line whose first non-blank is `#` is a comment;
-// a trailing ` # …` is dropped): a `:=N` default, a `[ … -lt|-le|-gt|-ge|-eq|-ne N ]` test with N on either side, or
-// a `<`, `<=`, `>`, `>=`, `==`, `!=` against N inside `(( … ))`. Not a threshold: 0 and 1 (emptiness, presence,
-// a first item), and an exit status (`$?`, `$rc`, a name ending in `rc`) compared with a code such as timeout's 124.
+// a trailing ` # …` is dropped): a `:=N` default, a `:-N` fallback of any expansion (in a comparison or outside one,
+// so a default cannot come back as `"${GK[KEY]:-200}"`), a `[ … -lt|-le|-gt|-ge|-eq|-ne N ]` test with N on either
+// side, or a `<`, `<=`, `>`, `>=`, `==`, `!=` against N inside `(( … ))`, found by a balanced-paren match so a
+// `$(…)` or `$((…))` operand does not hide it. Not a threshold: 0 and 1 (emptiness, presence, a first item), and an
+// exit status (`$?`, `$rc`, a name ending in `rc`, or its fallback) compared with a code such as timeout's 124.
 const SCANNED = ['ccd/ccd-graph-sweep', 'ccd/graph-build', 'ccd/graph-resolve'] as const;
 const isStatus = (operand: string): boolean => /^"?\$\{?(\?|[A-Za-z_]*rc)(:-[0-9]+)?\}?"?$/.test(operand);
 const isThreshold = (n: string): boolean => /^\d+$/.test(n) && Number(n) > 1;
+/** The index of the `)` that balances the `(` at `i` (the line's end when it never closes). */
+function closeOf(l: string, i: number): number {
+  let depth = 0;
+  for (let j = i; j < l.length; j++) {
+    if (l[j] === '(') depth++;
+    else if (l[j] === ')' && --depth === 0) return j;
+  }
+  return l.length;
+}
+/** The bodies of the outermost `(( … ))` groups on a line, each to its balanced close, with every command
+ *  substitution `$( … )` in them blanked to `_`: its `2>/dev/null` is a redirection, not a comparison. */
+function arithBodies(l: string): string[] {
+  const out: string[] = [];
+  for (let i = l.indexOf('(('); i >= 0; i = l.indexOf('((', i)) {
+    const j = closeOf(l, i);
+    let body = l.slice(i + 2, j - 1);
+    for (let k = body.search(/\$\((?!\()/); k >= 0; k = body.search(/\$\((?!\()/))
+      body = body.slice(0, k) + '_' + body.slice(closeOf(body, k + 1) + 1);
+    out.push(body);
+    i = j + 1;
+  }
+  return out;
+}
 function thresholdLiterals(text: string): string[] {
   const out: string[] = [];
   for (const raw0 of text.split('\n')) {
@@ -158,14 +183,15 @@ function thresholdLiterals(text: string): string[] {
     const l = raw0.replace(/\s#\s.*$/, '');
     let hit = false;
     for (const m of l.matchAll(/:=(\d+)\}/g)) if (isThreshold(m[1])) hit = true;
+    for (const m of l.matchAll(/\$\{([^{}]*?):-(\d+)\}/g)) if (!isStatus('$' + m[1]) && isThreshold(m[2])) hit = true;
     for (const m of l.matchAll(/(\S+)\s+-(?:lt|le|gt|ge|eq|ne)\s+(\S+)/g)) {
       const a = m[1].replace(/^"|"$/g, '');
       const b = m[2].replace(/^"|"$/g, '');
       if (isStatus(m[1]) || isStatus(m[2])) continue;
       if (isThreshold(a) || isThreshold(b)) hit = true;
     }
-    for (const m of l.matchAll(/\(\(([^()]*)\)\)/g))
-      for (const c of m[1].matchAll(/(\S+)\s*(?:<=|>=|==|!=|<|>)\s*(\S+)/g)) {
+    for (const body of arithBodies(l))
+      for (const c of body.matchAll(/(\S+)\s*(?:<=|>=|==|!=|<|>)\s*(\S+)/g)) {
         if (isStatus(c[1]) || isStatus(c[2])) continue;
         if (isThreshold(c[1]) || isThreshold(c[2])) hit = true;
       }
