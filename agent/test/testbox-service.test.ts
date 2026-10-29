@@ -9,7 +9,7 @@ import { describe, it, expect, afterAll, vi } from 'vitest';
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import {
-  appendFileSync, chmodSync, closeSync, existsSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync,
+  appendFileSync, chmodSync, closeSync, existsSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync,
   utimesSync, writeFileSync,
 } from 'node:fs';
 import os from 'node:os';
@@ -949,12 +949,17 @@ describe('the socket fixture (spec §5 row 1): the longest names the suites buil
   const RUN_TMP_TAIL = Buffer.byteLength('/ccrc-testrun-XXXXXX/live.sock');
   /** A run TMPDIR (not /tmp, not under it on macOS) as long as one may be: the live.sock under it is exactly the
    *  platform's sun_path cap, the run-tmp parent's own limit. */
-  const made: string[] = [];
-  afterAll(() => { for (const d of made.splice(0)) rmSync(d, { recursive: true, force: true }); });
   const longestRunTmpdir = (): string => {
-    // Under the real /tmp, not os.tmpdir(): a suite run's own TMPDIR is a long run-tmp directory with no room left.
-    const base = mkdtempSync(path.join(realpathSync('/tmp'), 'ccrc-tb-sock-'));
-    made.push(base);
+    // Under the real /tmp, not the suite run's own TMPDIR (a long run-tmp directory with no room left), and still
+    // through the one registry: `mkTmp` reads os.tmpdir(), which reads TMPDIR at each call.
+    const prev = process.env.TMPDIR;
+    let base: string;
+    try {
+      process.env.TMPDIR = realpathSync('/tmp');
+      base = mkTmp('ccrc-tb-sock-');
+    } finally {
+      if (prev === undefined) delete process.env.TMPDIR; else process.env.TMPDIR = prev;
+    }
     const pad = SUN_PATH_MAX - RUN_TMP_TAIL - Buffer.byteLength(base) - 1;
     if (pad < 1) throw new Error(`the fixture temp root is too long to pad: ${base}`);
     const dir = path.join(base, 'p'.repeat(pad));
