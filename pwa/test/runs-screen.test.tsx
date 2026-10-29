@@ -3,6 +3,7 @@ import { StrictMode } from 'react';
 import { act, cleanup, render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { RUN_STATES, SPAWN_STALL_MS, type ChildReclaimStatus, type CoordCapsView, type FleetSession, type RunSpend, type RunSummary } from '../../shared/api';
 import { fleetSession, DEAD_LIFECYCLE } from './fleetFixture';
+import { withBindingFrames } from './runBindingFixture';
 import { RunsScreen } from '../src/screens/RunsScreen';
 import { navigate } from '../src/lib/router';
 import { CHILD_RECLAIM_CHIP_GLYPH, CROSSING_GLYPH, REVIEW_GLYPH, RUN_ORDER, RUN_WORD, childReclaimChip, childReclaimGone, childReclaimRefreshDue, childReclaimTitle, crossingNote, dispatchWindow, itemTallyLabel, programWave, programsWithOpenRun, resumeNote, runForSession, runHomeProject, runItems, runKindChip, waveLabel } from '../src/fleet/runWords';
@@ -50,9 +51,11 @@ const r = (over: Partial<RunSummary> = {}): RunSummary => ({
 
 const sess = (over: Partial<FleetSession> = {}): FleetSession => (fleetSession({ id: 'ccrc-pwa-clear-cove', project: 'ccrc-pwa', workspace: 'clear-cove', branch: 'ws/clear-cove', bucket: 'working', ...over }));
 
-const makeStore = (): FleetStore => createFleetStore({
+/** A fleet store fed as a current server feeds it (D-7182, C7d): each session a case writes carries the run binding the
+ *  server sends over the store's runs (`runBindingFixture.ts`). */
+const makeStore = (): FleetStore => withBindingFrames(createFleetStore({
   makeSocket: () => ({ onopen: null, onmessage: null, onclose: null, onerror: null, close(): void {} }) as unknown as WebSocket,
-});
+}));
 
 /** The caps dial's reader, held for every board render in this file. The screen
  *  injects it for the reason its own prop docstring gives: a loader left to the

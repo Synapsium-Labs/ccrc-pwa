@@ -53,6 +53,7 @@ import { act, cleanup, fireEvent, render, screen, within } from '@testing-librar
 import { INSTRUMENT, REFINED } from '@ccrc/ui';
 import type { FleetSession, RunSummary, SessionBucket } from '../../shared/api';
 import { fleetSession } from './fleetFixture';
+import { withRunBinding } from './runBindingFixture';
 import { effectiveValue, stripComments } from './cssRule';
 
 const { App } = await import('../src/app');
@@ -109,8 +110,9 @@ function stubWidth(desk: boolean, fine = true): void {
 let where = '/';
 function Where(): null { where = useLocation().path; return null; }
 
+/** A fleet frame and a runs frame from a current server: each session carries the run binding over `runs` (D-7182, C7d). */
 function mount(sessions: FleetSession[] = FLEET, runs: RunSummary[] = [RUN]): void {
-  act(() => useFleetStore.setState({ conn: 'open', sessions, runs, runsFrameSeen: true, fleetFrameSeen: true }));
+  act(() => useFleetStore.setState({ conn: 'open', sessions: withRunBinding(sessions, runs), runs, runsFrameSeen: true, fleetFrameSeen: true }));
   navigate('/');
   render(<><App /><Where /></>);
 }

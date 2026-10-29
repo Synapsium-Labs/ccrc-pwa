@@ -20,6 +20,7 @@ import { INSTRUMENT, PHOSPHOR, REFINED } from '@ccrc/ui';
 import { resolveChrome } from './harness';
 import { buildDist, openApp, removeDist, serveDist, type AppFixture, type DistServer } from './app';
 import { GROUP_MODE_KEY } from '../src/skins/instrument/FleetTable';
+import { withRunBinding } from '../test/runBindingFixture';
 
 const NOW = Date.now();
 
@@ -71,7 +72,8 @@ const FIXTURE: AppFixture = {
     '/api/accounts': { accounts: [], projected: null, roster: [{ id: 'lane-a', label: 'lane-a', hue: 'cyan', homeAble: true, hidden: false }] },
     '/api/runs': RUNS, '/api/claims': [],
   },
-  fleetFrames: [{ type: 'fleet', sessions: SESSIONS }, { type: 'runs', runs: RUNS }],
+  // The fleet frame of a current server: each worker carries the run binding over RUNS (D-7182, C7d).
+  fleetFrames: [{ type: 'fleet', sessions: withRunBinding(SESSIONS as never[], RUNS as never[]) }, { type: 'runs', runs: RUNS }],
 };
 
 const SKINS = [REFINED, INSTRUMENT] as const;

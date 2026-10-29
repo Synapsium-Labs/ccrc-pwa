@@ -15,6 +15,7 @@ import { setSkin } from '../src/lib/skin';
 import { SKIN_SETS } from '../src/skins';
 import { createFleetStore } from '../src/stores/fleet';
 import { renderFleet } from './fleetHost';
+import { withRunBinding } from './runBindingFixture';
 import { HOUR, NOW, answeredByCoordinator, asking, run, sess } from './rollupFixture';
 
 const noop = (): void => {};
@@ -30,14 +31,14 @@ function fleet(w1: Partial<FleetSession> = asking(), waveOf: number | null = 6):
   ];
   const lone = [sess('l1', 'project-c'), sess('l2', 'project-c')];
   const runs = kids.map((k, i) => run(10 + i, 'coord', k.id, { wave: i + 1, waveOf }));
-  return { sessions: [coord, ...kids, ...lone], runs };
+  return { sessions: withRunBinding([coord, ...kids, ...lone], runs), runs };
 }
 
 function drawCard(
   sessions: FleetSession[], runs: RunSummary[], project: string,
   { prefs = NO_ROLLUP_PREFS, collapsed }: { prefs?: RollupPrefs; collapsed?: boolean } = {},
 ): HTMLElement {
-  const tree = fleetTree(sessions, [], runs);
+  const tree = fleetTree(withRunBinding(sessions, runs), [], runs);
   const g = tree.find((x) => x.project === project);
   if (g === undefined) throw new Error(`no card ${project}`);
   const rollup = collapsed === undefined ? rollupFleet(tree, prefs, NOW, null).cards.get(project) : undefined;

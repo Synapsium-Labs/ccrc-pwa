@@ -16,6 +16,7 @@ import path from 'node:path';
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import type { ChildMark, CoordCapsView, FleetSession } from '../../shared/api';
 import { fleetSession } from './fleetFixture';
+import { withRunBinding } from './runBindingFixture';
 import { useState } from 'react';
 import type { ReactNode } from 'react';
 import { act, cleanup, render, screen, fireEvent, waitFor } from '@testing-library/react';
@@ -438,7 +439,9 @@ describe('the run board’s abandon control (Task 12, spec §4.3)', () => {
     ['no fleet row for the session', [], UNKNOWN],
   ])('the sheet the board opens says the right thing for %s', async (_name, sessions, expected) => {
     const store = makeStore();
-    act(() => { store.setState({ runs: [run()], runsFrameSeen: true, sessions, fleetFrameSeen: true }); });
+    // Each row carries the run binding the current server sends over the run (D-7182, C7d): the case is about the
+    // child mark, and the board finds the run's worker through its binding.
+    act(() => { store.setState({ runs: [run()], runsFrameSeen: true, sessions: withRunBinding(sessions, [run()]), fleetFrameSeen: true }); });
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } })));
     render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} loadSpend={NO_SPEND} />);
     fireEvent.click(screen.getByRole('button', { name: /abandon run 3/i }));

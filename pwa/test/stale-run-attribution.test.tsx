@@ -10,8 +10,10 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { cleanup, render } from '@testing-library/react';
 import type { FleetSession, RunSummary } from '../../shared/api';
 import { fleetSession } from './fleetFixture';
-import { childRunContext, coordinationLine, coordinationOf, fleetTree, parentIdOf } from '../src/fleet/fleetTree';
-import { orphanNote } from '../src/fleet/orphanWords';
+import * as tree from '../src/fleet/fleetTree';
+import { coordinationLine } from '../src/fleet/fleetTree';
+import * as orphan from '../src/fleet/orphanWords';
+import { withRunBinding } from './runBindingFixture';
 import { runBelongsTo, runForSession } from '../src/fleet/runWords';
 import { coordinatorPresence } from '../src/fleet/presence';
 import { cardFacts, headerFacts, sessionFacts } from '../src/fleet/sessionFacts';
@@ -19,6 +21,23 @@ import { ProjectCard } from '../src/fleet/ProjectCard';
 import type { FleetRow } from '../src/fleet/nestFleet';
 
 afterEach(cleanup);
+
+// The readers as a current server feeds them (D-7182, C7d): every session a case hands them carries the run binding the
+// server sends over that case's runs (`runBindingFixture.ts`, held to `bindingOf` by the server's parity test), so the
+// stale run 83, opened before the worker's minting run 504, binds no incarnation of it, as on the wire.
+type Runs = readonly RunSummary[];
+const bind = (s: FleetSession, runs: Runs): FleetSession => withRunBinding([s], runs)[0]!;
+const parentIdOf = (s: FleetSession, runs: Runs): string | null => tree.parentIdOf(bind(s, runs), runs);
+const childRunContext = (s: FleetSession, runs: Runs, find: (id: string) => FleetSession | null): ReturnType<typeof tree.childRunContext> =>
+  tree.childRunContext(bind(s, runs), runs, find);
+const coordinationOf = (s: FleetSession, sessions: readonly FleetSession[], runs: Runs): ReturnType<typeof tree.coordinationOf> =>
+  tree.coordinationOf(bind(s, runs), withRunBinding(sessions, runs), runs);
+const fleetTree = (sessions: FleetSession[], projects: readonly string[], runs: Runs): ReturnType<typeof tree.fleetTree> =>
+  tree.fleetTree(withRunBinding(sessions, runs), projects, runs);
+const orphanNote = (row: FleetRow, runs: Runs, project: string, live: readonly FleetSession[],
+  coordOf: (id: string) => FleetSession | null, frameSeen: boolean): ReturnType<typeof orphan.orphanNote> =>
+  orphan.orphanNote(row.kind === 'session' ? { ...row, session: bind(row.session, runs) } : row, runs, project,
+    withRunBinding(live, runs), coordOf, frameSeen);
 
 const NOW = 1_800_000_000_000;
 const WORKER = 'lane-a-project-a-quiet-basin';

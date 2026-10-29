@@ -7,7 +7,14 @@ import { fleetSession, hibernatedSession, DEAD_LIFECYCLE } from './fleetFixture'
 import type { ProjectPlacementRead } from '../src/fleet/placementWords';
 import { SPAWN_STALL_MS } from '../../shared/api';
 import { groupFleet, type FleetGroup } from '../src/fleet/groupFleet';
-import { NEST_BRACKET, POOL_UNAVAILABLE_TEXT, ProjectCard } from '../src/fleet/ProjectCard';
+import { NEST_BRACKET, POOL_UNAVAILABLE_TEXT, ProjectCard as Card } from '../src/fleet/ProjectCard';
+import { withRunBinding } from './runBindingFixture';
+
+/** The card as a current server feeds it (D-7182, C7d): each of the group's sessions carries the run binding the server
+ *  sends over the runs this render hands the card (`runBindingFixture.ts`), so a worker of a run on the card is that
+ *  run's bound worker, as it is on the wire. Every assertion below reads the real card. */
+const ProjectCard = (p: Parameters<typeof Card>[0]): ReturnType<typeof Card> =>
+  <Card {...p} group={{ ...p.group, sessions: withRunBinding(p.group.sessions, p.runs ?? []) }} />;
 import { waveLabel } from '../src/fleet/runWords';
 import { TEST_ROSTER } from './rosterFixture';
 import { WARN_GLYPH } from '@ccrc/ui';

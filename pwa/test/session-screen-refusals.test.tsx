@@ -10,6 +10,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import type { ReactNode } from 'react';
 import type { FleetSession } from '../../shared/api';
 import { fleetSession as baseSession, DEAD_LIFECYCLE } from './fleetFixture';
+import { withRunBinding } from './runBindingFixture';
 import { SessionScreen } from '../src/screens/SessionScreen';
 // W2 Task S2d: the session menu's items and the model/effort chips are command doors, run by the one layer
 // `app.tsx` mounts above the screen; a case that drives them mounts it beside, as the app does.
@@ -496,10 +497,11 @@ describe('the session header knows what the card knows (D-5545)', () => {
     act(() => {
       fleet.setState({
         roster: TEST_ROSTER, conn: 'open', fleetFrameSeen: true, runsFrameSeen: true,
-        sessions: [
+        // A frame as a current server sends it (D-7182, C7d): each session carries the run binding over these runs.
+        sessions: withRunBinding([
           fleetSession({ held: 'program:tidy-docs wave:3/5 run:44', child: { kind: 'child', runId: 44 }, role: 'child' }),
           baseSession({ id: 'claude:project-b', project: 'project-b', status: 'dead', bucket: 'dead', lifecycle: 'orphan' }),
-        ],
+        ], [run as never]),
         runs: [run],
       } as never);
     });
@@ -528,7 +530,7 @@ describe('the session header knows what the card knows (D-5545)', () => {
     act(() => {
       fleet.setState({
         roster: TEST_ROSTER, conn: 'open', fleetFrameSeen: true, runsFrameSeen: true,
-        sessions: [fleetSession({ held: 'program:tidy-docs wave:3/5 run:44', child: { kind: 'child', runId: 44 }, role: 'child' }), coord],
+        sessions: withRunBinding([fleetSession({ held: 'program:tidy-docs wave:3/5 run:44', child: { kind: 'child', runId: 44 }, role: 'child' }), coord], [run as never]),
         runs: [run],
       } as never);
     });

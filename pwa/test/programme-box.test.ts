@@ -11,6 +11,7 @@ import {
 } from '../src/fleet/programmeBoxes';
 import { runCard } from '../src/fleet/runWords';
 import { HOUR, MIN, NOW, asking, run, sess } from './rollupFixture';
+import { withRunBinding } from './runBindingFixture';
 
 const coord = sess('coord', 'project-c', { role: 'coordinator', status: 'busy', bucket: 'working' });
 const kid = (id: string, over: Partial<FleetSession> = {}): FleetSession => sess(id, 'project-c', { role: 'child', ...over });
@@ -20,6 +21,7 @@ const kid = (id: string, over: Partial<FleetSession> = {}): FleetSession => sess
 const boxesOf = (
   sessions: FleetSession[], runs: RunSummary[], lastMoveOf: (r: RunSummary) => number | null = () => null,
 ): ReturnType<typeof programmeBoxes> => {
+  sessions = withRunBinding(sessions, runs);
   const cards = cardsOf(sessions);
   const here = runs.filter((r) => runCard(r, cards) === 'project-c');
   const far = runs.filter((r) => runCard(r, cards) !== 'project-c');
@@ -208,7 +210,7 @@ describe('fleetTree\'s cross-card run index (`claimed`)', () => {
     const near = sess('w1', 'project-d', { role: 'child' });
     const far = sess('w9', 'project-c', { role: 'child' });
     const runs = [run(10, 'coord', 'w1', { project: 'project-d' }), run(30, 'coord', 'w9', { project: 'project-c' })];
-    const tree = fleetTree([c, near, far], [], runs);
+    const tree = fleetTree(withRunBinding([c, near, far], runs), [], runs);
     const card = (p: string) => tree.find((g) => g.project === p)!;
     expect(card('project-d').claimed.map((r) => r.id)).toEqual([30]);
     expect(card('project-d').runs.map((r) => r.id)).toEqual([10]);
@@ -234,7 +236,7 @@ describe('one programme, one hue across the fleet', () => {
     run(41, 'coord-s', 'ws', { program: 'search-index', project: 'project-c' }),
     run(42, 'coord-e', 'we', { program: 'docs-site', project: 'project-e' }),
   ];
-  const huesOf = (rs: RunSummary[]) => new Map(fleetTree(sessions, [], rs).map((g) => [g.project, Object.fromEntries(g.hues)]));
+  const huesOf = (rs: RunSummary[]) => new Map(fleetTree(withRunBinding(sessions, rs), [], rs).map((g) => [g.project, Object.fromEntries(g.hues)]));
 
   it('assigns the hues once over every open programme in the runs frame', () => {
     expect(Object.fromEntries(fleetHues(runs))).toEqual(Object.fromEntries(assignHues(['billing', 'search-index', 'docs-site'])));
