@@ -16,6 +16,24 @@ export interface CcdPrRow {
    *  one reader, `childSpent`'s incarnation placement, reads as UNDATED —
    *  never as old and never as new (child-reclamation spec §5.3). */
   createdAt?: string;
+  /** gh's own labels and close time, passed through unchanged. Neither is read
+   *  here: the label is read on the box, into `landedInTrain` below. */
+  labels?: unknown; closedAt?: string | null;
+  /** ccd's annotation, beside `ours`: a merge train PROVABLY landed this PR's
+   *  work and closed it — GitHub says CLOSED, the PR carries the deployment's
+   *  train label (ccd's `CCD_LANDED_LABEL`, default `landed-in-train`), AND the
+   *  train record proves it: the train PR is MERGED and its `ccrc-train v1`
+   *  block lists this PR at exactly its head sha (D-7362). The label alone is
+   *  never enough. The fleet box is the one reader of the label and the record,
+   *  so this side never names either. Absent on a row from an older ccd, which
+   *  reads as not landed. */
+  landedInTrain?: boolean;
+  /** ccd's other half of the same judgement: CLOSED with the train label and NOT proven by the train record, so
+   *  `closed` with reason `train-unproven`, never merged. Absent on a row from an older ccd. */
+  trainUnproven?: boolean;
+  /** The third answer (D-7378): CLOSED with the train label and the train record NOT READ (no budget, a timeout,
+   *  GitHub unreachable), so `unknown` with reason `train-unread` — unmeasured, never closed. */
+  trainUnread?: boolean;
 }
 
 export interface CcdPrLine {
@@ -135,8 +153,12 @@ const OID_RE = /^[0-9a-f]{7,40}$/;
  * as an identity — two PRs can share one.
  */
 export function isMergedRow(row: CcdPrRow, baseShort: string, registryBranch: string): boolean {
-  return row.state === 'MERGED' && typeof row.mergedAt === 'string'
-    && typeof row.mergeCommit?.oid === 'string' && OID_RE.test(row.mergeCommit.oid)
+  const merged = row.state === 'MERGED' && typeof row.mergedAt === 'string'
+    && typeof row.mergeCommit?.oid === 'string' && OID_RE.test(row.mergeCommit.oid);
+  // A PR closed as landed in a merge train is merged for every phase reader,
+  // with no merge commit behind it; ccd's `is_landed` is the same predicate.
+  const landed = row.state === 'CLOSED' && row.landedInTrain === true;
+  return (merged || landed)
     && row.isCrossRepository === false
     && row.baseRefName === baseShort
     && row.headRefName === registryBranch
@@ -218,7 +240,11 @@ export function phaseFor(line: CcdPrLine): PrState {
     checks, checkNames,
   };
   if (isMergedRow(row, line.baseShort, line.branch)) {
-    return { ...common, phase: 'merged', mergedAt: Date.parse(String(row.mergedAt)) };
+    // A train-landed PR is dated by its close, the moment the train closed it;
+    // a close time gh did not name is no date, never `NaN`.
+    const at = row.state === 'MERGED' ? row.mergedAt : row.closedAt;
+    const ms = typeof at === 'string' ? Date.parse(at) : Number.NaN;
+    return { ...common, phase: 'merged', mergedAt: Number.isNaN(ms) ? null : ms };
   }
   // gh says MERGED but a conjunct failed: never claim merged on a partial
   // match — both the archive trigger and the cleanup offer hang off it.
@@ -230,7 +256,12 @@ export function phaseFor(line: CcdPrLine): PrState {
   // for the same row (Task 3), and Step 6's agreement test pins the two equal on
   // `reason` as well as `phase`.
   if (row.state === 'MERGED') return { ...common, phase: 'unknown', reason: 'merge-unproven' };
-  if (row.state === 'CLOSED') return { ...common, phase: 'closed' };
+  // A train label whose record ccd did not READ (D-7378): unmeasured, never closed — ccd's `train-unread`.
+  if (row.state === 'CLOSED' && row.trainUnread === true) return { ...common, phase: 'unknown', reason: 'train-unread' };
+  // A train label ccd could not prove from the train record: closed, and why (`train-unproven`, D-7362).
+  if (row.state === 'CLOSED') {
+    return { ...common, phase: 'closed', reason: row.trainUnproven === true ? 'train-unproven' : null };
+  }
   return { ...common, phase: row.isDraft === true ? 'draft' : 'open' };
 }
 
@@ -417,6 +448,9 @@ export interface PrLandingLine {
   protectionNamed: string[];
   /** Required names the rules pin to an App. Absent from an older line, which reads as none. */
   pinnedNames: string[];
+  /** ccd's `landedInTrain` (see `CcdPrRow`): CLOSED, labelled, and proven by the train record. False when the line
+   *  does not say exactly `true`, including every line from an older ccd. */
+  landedInTrain: boolean;
   unmeasured: string[];
 }
 
@@ -466,6 +500,7 @@ export function readPrLandingLine(x: unknown): PrLandingLine | null {
     required, requiredCut: x['requiredCut'] === true,
     rulesNamed: strings(x['rulesNamed']), protectionNamed: strings(x['protectionNamed']),
     pinnedNames: strings(x['pinnedNames']),
+    landedInTrain: x['landedInTrain'] === true,
     unmeasured: shape ? [...unmeasured, 'shape'] : unmeasured,
   };
 }

@@ -545,6 +545,8 @@ export const CCD_ARGV = {
                    ...(slug === null ? [] : [slug]), ...decFlags(dec)]),
   prStateSession: (id: string) => argv(['pr-state', '--session', id]),
   prStateProject: (p: string)  => argv(['pr-state', '--project', p]),
+  // D-7378: the bounded train prover the PR sweep runs after `pr-state --project` when a line read `train-unread`.
+  prTrainProve: (p: string)    => argv(['pr-train-prove', '--project', p]),
   /** D-6784: the checks lane's read. One call names 1 to 16 `<id>:<pr>` pairs (ccd refuses more, and refuses the
    *  whole call), each id a registry id (no comma, no colon: they delimit the pairs; no leading dash; no repeat) and
    *  each pr a positive integer with no leading zero. The builder refuses all of these itself, so a bad pair throws
@@ -1298,6 +1300,7 @@ export const CCD_CAN = {
   wsAddNamed: 'none', wsTitle: verbRow(WS_TITLE_VERB),
   prStateSession: verbRow('pr-state'), prStateProject: verbRow('pr-state'), prOpen: verbRow('pr-open'),
   prLanding: capRow('pr-landing-v1'),
+  prTrainProve: verbRow('pr-train-prove'),
   wsArchive: verbRow('ws-archive'), wsRestore: verbRow('ws-restore'),
   wsAudit: verbRow('ws-audit'), wsReap: verbRow('ws-reap'),
   wsReclaimAudit: verbRow('ws-audit'), wsReclaim: capRow(RECLAIM_CAP),

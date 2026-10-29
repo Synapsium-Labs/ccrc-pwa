@@ -94,6 +94,23 @@ describe('pr-state fits inside the bound that kills it', () => {
       .toBeLessThanOrEqual(budgetS * (1 - LOCAL_LOOP_RESERVE));
   });
 
+  // THE TRAIN PROOF (D-7362). `--session` makes ONE rows call and may then
+  // spend PR_STATE_TRAIN_TIMEOUT on train records; `--project`, with the three
+  // calls above already at the edge of the bound, spends nothing on them and
+  // reads only the proofs already kept. Both halves are pinned.
+  it('--session: the rows call plus the train budget fit the bound', () => {
+    const sum = ccdSeconds('PR_GH_TIMEOUT') + ccdSeconds('PR_STATE_TRAIN_TIMEOUT');
+    expect(ccdSeconds('PR_STATE_TRAIN_TIMEOUT')).toBeGreaterThan(0);
+    expect(sum).toBeLessThanOrEqual((verbTimeoutMs('pr-state') / 1000) * (1 - LOCAL_LOOP_RESERVE));
+  });
+
+  it('--project spends no time on train records: its deadline is now, and only --session gets the budget', () => {
+    const src = ccdSource();
+    const body = src.slice(src.indexOf('\ncmd_pr_state()'), src.indexOf('\ncmd_pr_state()') + 40000);
+    expect(body).toContain('local _PR_TRAIN_DEADLINE=$SECONDS\n');
+    expect(body).toContain('[[ $mode == --session ]] && _PR_TRAIN_DEADLINE=$(( SECONDS + PR_STATE_TRAIN_TIMEOUT ))');
+  });
+
   it('each single call also fits the bound on its own — a trivially true check that stops a silly one', () => {
     // If any call alone could outlive the verb, the sum assertion above would
     // still be satisfiable by making the OTHERS tiny.
@@ -107,7 +124,10 @@ describe('pr-landing fits inside the bound that kills it (D-6784)', () => {
   // ONE uncached base: the loop over bases spends a single REST budget, and `ccd-pr-landing.test.ts` pins the cap with
   // a fixture call naming sessions on two uncached bases (at most 3 gh calls).
   // Each is counted: a call left out of this list is a call the bound no longer covers.
-  const CALLS = ['PR_LANDING_GQL_TIMEOUT', 'PR_LANDING_REST_TIMEOUT', 'PR_LANDING_REST_TIMEOUT'] as const;
+  // And the train proof's budget (D-7362), spent over every train-record read
+  // of the call together, each read bounded by what is left of it.
+  const CALLS = ['PR_LANDING_GQL_TIMEOUT', 'PR_LANDING_REST_TIMEOUT', 'PR_LANDING_REST_TIMEOUT',
+    'PR_LANDING_TRAIN_TIMEOUT'] as const;
 
   it('the pr-landing budget pin holds, every call counted', () => {
     const secs = CALLS.map((c) => ccdSeconds(c));
@@ -126,7 +146,9 @@ describe('pr-landing fits inside the bound that kills it (D-6784)', () => {
     const reads = new Set([...src.matchAll(/\$PR_LANDING_([A-Z]+)_TIMEOUT/g)].map((m) => `PR_LANDING_${m[1]}_TIMEOUT`));
     expect([...reads].sort()).toEqual([...new Set(CALLS)].sort());
     const gh = [...src.matchAll(/_plat_timeout "\$PR_LANDING_[A-Z]+_TIMEOUT" gh /g)].length;
-    expect(gh, 'a gh call this pin does not count').toBe(CALLS.length);
+    expect(gh, 'a gh call this pin does not count').toBe(CALLS.length - 1);
+    // The train budget is the deadline the train-record reads share, set once per call.
+    expect(src).toContain('local _PR_TRAIN_DEADLINE=$(( SECONDS + $PR_LANDING_TRAIN_TIMEOUT ))');
   });
 
   it('the rules loop hands the REST budget to one base only', () => {
@@ -138,5 +160,39 @@ describe('pr-landing fits inside the bound that kills it (D-6784)', () => {
 
   it('each call alone is under the bound', () => {
     for (const c of new Set(CALLS)) expect(ccdSeconds(c), c).toBeLessThan(verbTimeoutMs('pr-landing') / 1000);
+  });
+});
+
+describe('pr-train-prove fits inside its own bound, and pr-state keeps its own (D-7378)', () => {
+  // The bounded prover the 120 s sweep runs after `pr-state --project`: ONE row-window call (`_gh_pr_list`,
+  // PR_GH_TIMEOUT) and then PR_TRAIN_PROVE_TIMEOUT over every train read of the call together, each read bounded by
+  // what is left of it. Its own row in CCD_VERB_TIMEOUT_MS, so the coordMutex-held `pr-state` bound is not raised.
+  const CALLS = ['PR_GH_TIMEOUT', 'PR_TRAIN_PROVE_TIMEOUT'] as const;
+
+  it('the row window plus the train budget leave room for the per-workspace loop', () => {
+    const secs = CALLS.map((c) => ccdSeconds(c));
+    secs.forEach((s, i) => expect(s, `${CALLS[i]} read as zero`).toBeGreaterThan(0));
+    const budgetS = verbTimeoutMs('pr-train-prove') / 1000;
+    expect(budgetS, 'the outer bound read as zero').toBeGreaterThan(0);
+    const sum = secs.reduce((a, b) => a + b, 0);
+    expect(sum, `${secs.join('s + ')}s against ${budgetS}s`).toBeLessThanOrEqual(budgetS * (1 - LOCAL_LOOP_RESERVE));
+  });
+
+  it('K is small, and the deadline is set once per call from the prover budget', () => {
+    const k = ccdSeconds('PR_TRAIN_PROVE_MAX');
+    expect(k).toBeGreaterThan(0);
+    expect(k).toBeLessThanOrEqual(4);
+    const src = ccdSource();
+    const start = src.indexOf('\ncmd_pr_train_prove()');
+    expect(start, 'cmd_pr_train_prove moved').toBeGreaterThan(0);
+    const body = src.slice(start, src.indexOf('\n}\n', start));
+    expect(body).toContain('local _PR_TRAIN_DEADLINE=$(( SECONDS + PR_TRAIN_PROVE_TIMEOUT ))');
+    // Its gh reads are the row window and `_ws_train_record`'s, which take their bound from that deadline.
+    expect(body).toContain('rows=$(_gh_pr_list "$repo")');
+    expect(body).not.toMatch(/_plat_timeout [^\n]* gh /);
+  });
+
+  it('the pr-state bound is untouched by the prover: still the 25 s the three-call pin sums against', () => {
+    expect(verbTimeoutMs('pr-state')).toBe(25_000);
   });
 });

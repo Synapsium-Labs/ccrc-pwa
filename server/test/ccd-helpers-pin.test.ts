@@ -48,26 +48,26 @@ const otherShapes = (t: string): string[] => [
 const sorted = (xs: Iterable<string>): string[] => [...new Set(xs)].sort();
 
 describe('the token sets each scanner builds from the refusal helpers\' calls (D-7071): literal, both ways', () => {
-  it('wsaudit.test.ts, ccd-swap-refuse.test.ts and ccd-actor-flags.test.ts: the reap family over the whole source, 49 words', () => {
+  it('wsaudit.test.ts, ccd-swap-refuse.test.ts and ccd-actor-flags.test.ts: the reap family over the whole source, 50 words', () => {
     const WORDS = ['attached', 'base-missing', 'branch-elsewhere', 'branch-missing', 'child', 'child-branch-elsewhere', 'child-busy',
       'child-dirty', 'child-record-stale', 'child-unpushed', 'clips-unreadable', 'containment-unproven', 'detached-head', 'dirty-tree',
       'fetch-failed', 'foreign-worktree', 'gh-unreadable', 'held', 'in-use', 'incomplete-registry', 'live', 'merge-commit-missing',
       'nested-checkouts-present', 'no-bound-pr', 'no-remote', 'no-such-session', 'no-upstream', 'no-worktree-record', 'not-a-child',
-      'not-a-workspace', 'not-archived', 'not-expired', 'not-idle', 'paused', 'pr-fields-malformed', 'pr-head-not-ours',
+      'not-a-workspace', 'not-archived', 'not-expired', 'not-idle', 'not-merged', 'paused', 'pr-fields-malformed', 'pr-head-not-ours',
       'reap-in-progress', 'reclaim-in-progress', 'sensitive-ignored', 'session-busy', 'stash-unreadable', 'stashes-present',
       'state-changed', 'status-unknown', 'tree-busy', 'tree-differs', 'tree-unreadable', 'unpushed-commits', 'worktree-missing'];
-    expect(WORDS).toHaveLength(49);
+    expect(WORDS).toHaveLength(50);
     expect(refuseWords('reap')).toEqual(WORDS);
   });
 
-  it('workspace-refusal-census.test.ts: the reap family in `_ws_reap_eval`, 35 words', () => {
+  it('workspace-refusal-census.test.ts: the reap family in `_ws_reap_eval`, 36 words', () => {
     const WORDS = ['base-missing', 'branch-elsewhere', 'branch-missing', 'child-branch-elsewhere', 'child-busy', 'child-dirty',
       'child-record-stale', 'child-unpushed', 'clips-unreadable', 'detached-head', 'dirty-tree', 'fetch-failed', 'foreign-worktree',
       'gh-unreadable', 'incomplete-registry', 'merge-commit-missing', 'nested-checkouts-present', 'no-bound-pr', 'no-remote',
-      'no-such-session', 'no-upstream', 'no-worktree-record', 'not-a-workspace', 'not-archived', 'pr-fields-malformed',
+      'no-such-session', 'no-upstream', 'no-worktree-record', 'not-a-workspace', 'not-archived', 'not-merged', 'pr-fields-malformed',
       'pr-head-not-ours', 'sensitive-ignored', 'session-busy', 'stash-unreadable', 'stashes-present', 'status-unknown', 'tree-differs',
       'tree-unreadable', 'unpushed-commits', 'worktree-missing'];
-    expect(WORDS).toHaveLength(35);
+    expect(WORDS).toHaveLength(36);
     const [from, to] = functionSpan(src, '_ws_reap_eval');
     expect(refuseWords('reap', { from, to, codeOnly: true })).toEqual(WORDS);
   });

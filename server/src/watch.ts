@@ -8126,6 +8126,16 @@ export class FleetWatcher {
         // arm above already uses for the same reason.
         this.retainRepo(project, repoCellFor({ slug: line.repo }));
       }
+      // THE BOUNDED TRAIN PROVER (D-7378), a separate step with its own timeout row: `pr-state --project` has no room
+      // for a train read, so a member a merge train landed and closed reads `train-unread` (unmeasured) until its proof
+      // is kept. One `ccd pr-train-prove` proves a few such members once and keeps the proofs; the NEXT sweep reads
+      // `merged` from them, and `sweepMerged` and `sweepLanding` wake on that as on any merge. Asked only when a line
+      // read `train-unread`, and its answer is never a phase: a failure costs one sweep's wait, nothing else.
+      if (lines.some((l) => isFullLine(l) && phaseFor(l).reason === 'train-unread')
+        && ccdCan(this.deps.fleetState, 'prTrainProve')) {
+        const proved = await this.deps.runCcd(CCD_ARGV.prTrainProve(project));
+        if (!proved.ok) console.warn(`ccrc-server: train prover of ${project} failed (${failureDetail(proved)})`);
+      }
     }
     this.sweepMerged(records);
     this.sweepLanding(records);

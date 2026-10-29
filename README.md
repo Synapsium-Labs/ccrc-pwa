@@ -6740,7 +6740,81 @@ isolation boundary its test harness relies on:
 
 `ws-add` refuses below `CCD_DISK_FLOOR_GB` (default 10) GiB free on
 `~/worktrees` — an environment override `ccd` allows because it can only make
-`ccd` refuse, never aim it at a different tree. `ccd` with no verb prints its
+`ccd` refuse, never aim it at a different tree. `CCD_LANDED_LABEL` (default
+`landed-in-train`; set empty to turn it off) names the label a merge train puts
+on a member PR it closes after landing its work. The label is a claim, never
+the proof (D-7362): a CLOSED PR carrying it reads as merged — in `pr-state`'s
+phase, and so the archive reason, the cleanup bucket and the merged notice, in
+`pr-landing`, and in the cleanup itself (`ws-audit`/`ws-reap`, as proof
+`train`) — only when the train record proves it, and ccd decides that once, in
+one place, for every reader (`landedInTrain: true` on the row). The proof: the
+train PR the member names (a `train #<n>` comment on it, as a train leaves when
+it closes a member — every such reference is tried, newest first, and one
+GitHub says is no pull request in this repository is only a failed candidate),
+or one
+a search finds whose record lists the member's head sha, must be MERGED into
+the same base and its record must list the member at exactly the member's head;
+the reap also requires that the branch hold nothing beyond that head. A
+labelled PR whose train record was read and did not prove it (the train is
+CLOSED unmerged, lists another sha, GitHub says the number it names is no pull
+request here, or no train names it) reads as closed, with reason
+`train-unproven` (`trainUnproven: true` on the row), and the reap refuses it
+`not-merged`. Only such a definitive answer fails a candidate (D-7381): a train
+read that fails any other way (an HTTP 5xx, a rate limit, the network, auth, a
+timeout, a signal, an answer that is not a PR's JSON) is unread, as is a train
+that is still OPEN (it may yet merge) or whose state is missing or odd, and one unread
+candidate makes the whole record unread unless something proved the landing,
+even when the search fallback answered empty. A labelled PR whose train record
+could not be READ (no time left in the read's budget, a timeout, GitHub
+unreachable) is neither closed nor merged: it reads `unknown` with reason `train-unread` (`trainUnread: true` on
+the row; `pr-landing` adds `train` to the line's `unmeasured`), so nothing ends
+a run on it, and the reap refuses it `gh-unreadable` (D-7378). A CLOSED train
+that never merged proves nothing. The token's merge fact is the train PR's
+merge commit, so main later editing the same lines never turns a proven landing
+into a refusal. A proof, once made, is kept in `$REG/.train-proofs`, one line
+per member keyed by repository, base, number and head (a merged train never
+un-merges; a refusal is never kept). The `pr-state --project` sweep has no time
+left for train reads and reads only kept proofs, so the server follows a sweep
+that read `train-unread` with `ccd pr-train-prove --project <p>`: its own verb
+and timeout row, proving at most `PR_TRAIN_PROVE_MAX` members a call and
+keeping the proofs, so the next sweep reads `merged`. The prover is fair
+(D-7381): every attempt that does not prove leaves a tried line in
+`$REG/.train-tried` (outcome `failed` or `unread`, and the time; a separate
+file, never read as a proof), and each call asks the members with no tried line
+first, then the oldest tried. A member whose record was read and failed less
+than `PR_TRAIN_TRIED_TTL` (30 minutes) ago is not asked again, and the sweep
+reads it `train-unproven`, not `train-unread`, until the line expires; an
+`unread` outcome is asked again on the next call. Only a read that can make no
+gh call at all (the sweep) answers from a fresh `failed` line, and a kept proof
+is read before it: a read that asked GitHub and hit an unread candidate reads
+`train-unread` whatever the line says. A proof found by any read, `pr-landing`'s
+included (which keeps none), removes the member's tried line.
+
+**The train record (D-7335)** is the one machine-readable block in a train PR's
+body, and a train tool writes exactly one: an HTML comment on lines of its own,
+opened by `<!-- ccrc-train v1`, one `member #<n> <40-hex head sha>` line per
+member, closed by `-->`:
+
+```
+<!-- ccrc-train v1
+member #1797 0123456789abcdef0123456789abcdef01234567
+member #1800 89abcdef0123456789abcdef0123456789abcdef
+-->
+```
+
+A member line is exactly `member`, one space, `#` and the PR number, one space,
+and the full 40-character head sha in lowercase hex: no tabs, no second space,
+no short or uppercase sha. Leading and trailing spaces on a line are ignored;
+nothing else is. Tables,
+lists and prose beside the block are for people and are never parsed, so a
+body with only a table proves nothing. No block, two blocks, a block that never
+closes, a line inside it that is not a member line, or a member listed twice
+proves nothing for any member, and neither does a member listed at a sha other
+than its head.
+
+A coordinator
+proves the merge before closing the run from `landedInTrain: true` on the PR's
+row of `ccd pr-state --session <id>`. It names a label, never a path. `ccd` with no verb prints its
 usage, and `ccd caps` lists the verbs (and capability tokens) this copy
 implements — that list is the authority; the table below is a map:
 

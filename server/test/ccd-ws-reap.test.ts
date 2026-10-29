@@ -3,7 +3,7 @@ import { execFileSync, spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { CCD, WS_ADD, ghContainedEnv, ccdSource } from './ccdWsHelpers.js';
-import { CFG_DIR, GH_STUB, makePrHarness, mergedRow, type PrHarness } from './ccdPrHelpers.js';
+import { CFG_DIR, GH_STUB, landedRow, makePrHarness, mergedRow, trainComment, trainRow, type PrHarness } from './ccdPrHelpers.js';
 import { itLinux } from './platformFixtures.js';
 import { eventsOf, refusalsOf, holdCompactLock, compactLockPath,
   expectContentionClauses } from './lifecycleHelpers.js';
@@ -2431,6 +2431,79 @@ describe('child teardown (D2/D3)', () => {
  * tip — the rung resolves REAP_TIP itself, and this test is what pins that
  * (an empty old-value turns `update-ref -d` into an unconditional delete).
  */
+describe('a PR closed as landed in a merge train, end to end', () => {
+  it('reaps it exactly as a merged one: bound to its PR, proof train', () => {
+    // The train squashed this member with another one into a train PR and
+    // closed the member with the label, so gh names no merge commit at all.
+    const main = h.makeGhRepo('demo');
+    h.sh(`${WS_ADD} CCD_WS_SLUG=quiet-basin cmd_ws_add demo`);
+    const wt = path.join(h.home, 'worktrees', 'demo', 'quiet-basin');
+    fs.writeFileSync(path.join(wt, 'f1.txt'), 'work 1\n');
+    h.git(wt, 'add', 'f1.txt'); h.git(wt, 'commit', '-m', 'work 1');
+    const tip = h.git(wt, 'rev-parse', 'HEAD');
+    fs.writeFileSync(path.join(main, 'other.txt'), 'someone else\n');
+    h.git(main, 'add', 'other.txt'); h.git(main, 'commit', '-m', 'unrelated');
+    fs.writeFileSync(path.join(main, 'f1.txt'), 'work 1\n');
+    fs.writeFileSync(path.join(main, 'member-b.txt'), 'the other member\n');
+    h.git(main, 'add', '-A'); h.git(main, 'commit', '-m', 'train (#50)');
+    const train = h.git(main, 'rev-parse', 'HEAD');
+    h.git(main, 'push', 'origin', 'main');
+    h.git(wt, 'push', '-u', 'origin', 'ws/quiet-basin');
+    h.ghRows([landedRow(tip)]);
+    h.ghView(42, trainComment(50));
+    h.ghView(50, trainRow(50, train, [[42, tip], [43, 'b'.repeat(40)]]));
+    h.sh(`${ARCH} cmd_ws_archive --session demo-quiet-basin`);
+    const tok = tokenOf();
+    expect(tok, 'the audit must issue a token for a landed member').toMatch(/^[0-9a-f]{64}$/);
+    const r = reap(tok);
+    expect(r.code, `stderr: ${r.stderr}`).toBe(0);
+    const out = JSON.parse(r.stdout);
+    expect(out.reaped).toBe('demo-quiet-basin');
+    expect(out.pr).toBe(42);
+    expect(out.proof).toBe('train');
+    expect(fs.existsSync(wt)).toBe(false);
+    expect(h.git(main, 'branch', '--list', 'ws/quiet-basin')).toBe('');
+    const tomb = JSON.parse(fs.readFileSync(
+      path.join(h.home, '.cc-sessions', '.reaped', 'demo-quiet-basin.json'), 'utf8'));
+    expect(tomb.proof).toBe('train');
+    expect(tomb.mergeCommit).toBe(train);
+    expect(tomb.pr).toBe(42);
+  }, 30000);
+
+  it('reaps it after main later edited the very lines the train landed, naming the train PR\'s merge commit', () => {
+    // The proof is the train record, pinned to the train PR's merge commit, so
+    // a later PR that edits the same hunk cannot turn it into a refusal.
+    const main = h.makeGhRepo('demo');
+    h.sh(`${WS_ADD} CCD_WS_SLUG=quiet-basin cmd_ws_add demo`);
+    const wt = path.join(h.home, 'worktrees', 'demo', 'quiet-basin');
+    fs.writeFileSync(path.join(wt, 'f1.txt'), 'work 1\n');
+    h.git(wt, 'add', 'f1.txt'); h.git(wt, 'commit', '-m', 'work 1');
+    const tip = h.git(wt, 'rev-parse', 'HEAD');
+    fs.writeFileSync(path.join(main, 'f1.txt'), 'work 1\n');
+    fs.writeFileSync(path.join(main, 'member-b.txt'), 'the other member\n');
+    h.git(main, 'add', '-A'); h.git(main, 'commit', '-m', 'train (#50)');
+    const train = h.git(main, 'rev-parse', 'HEAD');
+    h.git(main, 'push', 'origin', 'main');
+    h.git(wt, 'push', '-u', 'origin', 'ws/quiet-basin');
+    h.ghRows([landedRow(tip)]);
+    h.ghView(42, trainComment(50));
+    h.ghView(50, trainRow(50, train, [[42, tip], [43, 'b'.repeat(40)]]));
+    h.sh(`${ARCH} cmd_ws_archive --session demo-quiet-basin`);
+    fs.writeFileSync(path.join(main, 'f1.txt'), 'work 1, edited by a later PR\n');
+    h.git(main, 'add', 'f1.txt'); h.git(main, 'commit', '-m', 'a later PR edits f1');
+    h.git(main, 'push', 'origin', 'main');
+    const tok = tokenOf();
+    expect(tok, 'the audit must issue a token for a landed member').toMatch(/^[0-9a-f]{64}$/);
+    const r = reap(tok);
+    expect(r.code, `stdout: ${r.stdout} stderr: ${r.stderr}`).toBe(0);
+    expect(JSON.parse(r.stdout).proof).toBe('train');
+    expect(fs.existsSync(wt)).toBe(false);
+    const tomb = JSON.parse(fs.readFileSync(
+      path.join(h.home, '.cc-sessions', '.reaped', 'demo-quiet-basin.json'), 'utf8'));
+    expect(tomb.mergeCommit).toBe(train);
+  }, 30000);
+});
+
 describe('the contained rung end to end', () => {
   it('reaps a never-pushed workspace origin already holds — pr null, proof contained', () => {
     const main = h.makeGhRepo('demo');

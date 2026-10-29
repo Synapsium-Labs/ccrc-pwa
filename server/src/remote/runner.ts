@@ -40,6 +40,10 @@ const CCD_VERB_TIMEOUT_MS: Record<string, number> = {
   // further uncached base answers rules-unread that pass, so the count does not grow with the number of bases.
   // `pr-timeout-budget.test.ts` sums them.
   'pr-landing': 25_000,
+  // D-7378: `pr-train-prove --project` makes one row-window call (`PR_GH_TIMEOUT`) and then spends at most
+  // `PR_TRAIN_PROVE_TIMEOUT` on train records, over at most `PR_TRAIN_PROVE_MAX` members. Its own row, so the sweep's
+  // `pr-state` bound (held inside `coordMutex` by `--session`) is not raised; `pr-timeout-budget.test.ts` sums it.
+  'pr-train-prove': 40_000,
   // Same reach as pr-state: it shells out to `git ls-remote` against origin
   // before it will rename. Without an entry it silently inherits the flat
   // 90 s, which is nine naming lanes' worth. It makes ONE network call, so it

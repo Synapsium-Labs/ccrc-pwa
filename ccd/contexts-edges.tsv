@@ -71,6 +71,7 @@ _pane_measurable -> _tmux_t
 _panescope_record -> _reg_set
 _pool_sync_installed -> _svc_plist
 _pr_bind_facts -> _reg_get
+_pr_num_valid -> _child_runid_valid
 _redrive_after_spawn -> _reg_get
 _redrive_after_spawn -> _tmux_at
 _reg_generation_read -> _compact_lock_same
@@ -374,6 +375,7 @@ cmd_menu -> cmd_ensure
 cmd_pr_landing -> _reg_get
 cmd_pr_open -> _reg_get
 cmd_pr_state -> _reg_get
+cmd_pr_train_prove -> _reg_get
 cmd_project_pool -> _ws_project_valid
 cmd_route -> _idle_for_keystroke
 cmd_route -> _pane_for_keystroke

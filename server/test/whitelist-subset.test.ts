@@ -497,6 +497,7 @@ describe('layer 2c — exact argv, not just prefix compliance (mutation-sweep fi
     wsAddWorker: ['ws-add', '--no-rc', '--child', '7', 'demo', '--surface', 'agent', '--actor', 'run:7 dispatch'],
     prStateSession: ['pr-state', '--session', 'demo-quiet-basin'],
     prStateProject: ['pr-state', '--project', 'demo'],
+    prTrainProve: ['pr-train-prove', '--project', 'demo'],
     prLanding: ['pr-landing', '--project', 'demo', '--sessions', 'demo-quiet-basin:41'],
     // SAMPLES.prOpen's fourth element is the STRING 'false' (SAMPLES is typed
     // unknown[] since wave 6, and the call site casts through `unknown[]`), which

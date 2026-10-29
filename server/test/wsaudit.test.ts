@@ -186,6 +186,17 @@ describe('parseAudit', () => {
     expect(audit?.sentence).toBe('');
   });
 
+  it('revives the train proof — a PR closed as landed in a merge train — and no unknown word', () => {
+    // A train-landed member is proven by its train record (`train`); an audit
+    // that carried it and then failed to revive would leave the cleanup offer
+    // a dead end. The word the reap no longer produces revives as nothing.
+    const pr = { number: 42, url: 'https://github.com/o/r/pull/42', mergeCommit: 'a'.repeat(40), headRefOid: 'b'.repeat(40) };
+    const audit = parseAudit(JSON.stringify({ ...FULL_AUDIT_INPUT, pr, merge: { proof: 'train', fetchedAt: 1 } }));
+    expect(audit?.merge.proof).toBe('train');
+    expect(parseAudit(JSON.stringify({ ...FULL_AUDIT_INPUT, merge: { proof: 'merge-tree', fetchedAt: 1 } }))).toBeNull();
+    expect(parseAudit(JSON.stringify({ ...FULL_AUDIT_INPUT, merge: { proof: 'landed', fetchedAt: 1 } }))).toBeNull();
+  });
+
   it('gives every non-reapable verdict a sentence, reap-interrupted included', () => {
     const audit = parseAudit(JSON.stringify({ ...FULL_AUDIT_INPUT, verdict: 'reap-interrupted', detail: 'x' }));
     expect(audit?.sentence).toMatch(/stopped part-way/i);
