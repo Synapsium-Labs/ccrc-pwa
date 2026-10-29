@@ -833,3 +833,24 @@ describe('child-spent runs through retireAct, and no retire executor keeps a gat
     expect(sites, sites.join(', ')).toEqual([]);
   });
 });
+
+// D-7171 (ARCH-44, consolidation plan 2026-10-27 Task C4n; spec K1 "Consumers move"). APPENDED. The four retire entries'
+// queue calls (`watch.ts#execChildReclaim`, `#collectAct`, `#archivedExpiryPass` and the close route's
+// `coord/routes.ts#childReclaimPort`) run through ONE owner, `retireExecutor.ts#retireExecutor` (L4, D-7198), whose body
+// is the `KeyedQueue` call. `retireQueueOwners()` read 4 at C4n's base (each by (a), its own `queue.run` site) and is
+// exact at 1 here; `retireQueueSites()` read 4 `via: queue.run` and 0 `via: retireExecutor`, and reads 0 and 4 here.
+describe('a retire entry reaches the session queue through one owner, retireExecutor (D-7171; ARCH-44 C4n)', () => {
+  it('retireQueueOwners() is exactly 1, retireExecutor.ts#retireExecutor (4 -> 1 at C4n)', async () => {
+    const { retireQueueOwners } = await import('../census-w4/retire.js');
+    const owners = retireQueueOwners().map((s) => s.symbol);
+    expect(owners, owners.join(', ')).toEqual(['server/src/retireExecutor.ts#retireExecutor']);
+  });
+
+  it('no retire entry is queued through queue.run (4 -> 0 at C4n), and exactly 4 through retireExecutor (0 -> 4 at C4n)', async () => {
+    const { retireQueueSites } = await import('../census-w4/retire.js');
+    const sites = retireQueueSites();
+    const via = (v: string): string[] => sites.filter((s) => s.via === v).map((s) => s.symbol);
+    expect(via('queue.run'), via('queue.run').join(', ')).toEqual([]);
+    expect(via('retireExecutor'), via('retireExecutor').join(', ')).toHaveLength(4);
+  });
+});

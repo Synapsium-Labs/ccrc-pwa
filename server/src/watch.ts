@@ -182,6 +182,7 @@ import {
   type ExpiryStoreRead,
 } from './archivedExpiry.js';
 import { childEverCoordinated, expireArchived, expireLaneLive, expiryReviewing, learnExpiry, recordExpireFeed } from './coord/expireArchived.js';
+import { retireExecutor } from './retireExecutor.js';
 import {
   deadAnchorNext, deadCoordinatorNewEpisode, deadCoordinatorAttention, deadCoordinatorBreaker,
   deadCoordinatorBreakerHeldKey, deadCoordinatorBreakerKey, deadCoordinatorCrash, deadCoordinatorDue, deadCoordinatorEntry, deadCoordinatorJournal, deadCoordinatorJournalSpawnedAt,
@@ -4799,7 +4800,7 @@ export class FleetWatcher {
     // the literal is built INSIDE the queue callback, so its members are
     // `deps`'s current answer WHEN THE JOB RUNS, never a snapshot taken when
     // the sweep queued it.
-    return this.deps.queue.run(req.sessionId, () => reclaimChild({
+    return retireExecutor(this.deps.queue, req.sessionId, () => reclaimChild({
       coord, io: this.deps.io, cfg: this.deps.cfg, runCcd: this.deps.runCcd,
       fleetState: this.deps.fleetState, viewers: this.deps.viewers, notifyLog: this.deps.notifyLog,
     }, req));
@@ -4992,7 +4993,7 @@ export class FleetWatcher {
     // read HERE, as the job is queued, never inside the callback. Its executor composes nothing when the epoch it reads
     // after its final listing differs, so a reconnect between the queueing and the job's start composes nothing.
     const epoch = this.collectSeenEpoch;
-    void this.deps.queue.run(id, () => collectTempRoot({
+    void retireExecutor(this.deps.queue, id, () => collectTempRoot({
       coord, io: this.deps.io, cfg: this.deps.cfg, runCcd: this.collectRunCcd(id), fleetState: this.deps.fleetState,
       viewers: this.deps.viewers, lane: this.collectPortFor(coord, id), observeIntervalMs: COLLECT_OBSERVE_INTERVAL_MS,
       control: this.collectControlDeps(coord), link: this.deps.fleetIdentity ?? NO_FLEET_IDENTITY,
@@ -5487,7 +5488,7 @@ export class FleetWatcher {
         .sort(([ia, a], [ib, b]) => a.nextAskAt - b.nextAskAt || (a.expiresAt ?? 0) - (b.expiresAt ?? 0) || (ia < ib ? -1 : 1))[0]!;
       const [id, entry] = pick;
       try {
-        const result = await this.deps.queue.run(id, () => expireArchived({
+        const result = await retireExecutor(this.deps.queue, id, () => expireArchived({
           coord, io: this.deps.io, cfg: this.deps.cfg, runCcd: this.deps.runCcd, fleetState: this.deps.fleetState,
           viewers: this.deps.viewers, notifyLog: this.deps.notifyLog,
         }, { sessionId: id, archivedAt: entry.archivedAt, expiresAt: entry.expiresAt!, childOf: childOfOf.get(id), rowUuid: rowUuidOf.get(id) ?? null }));

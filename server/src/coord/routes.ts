@@ -32,6 +32,7 @@ import { pageInbox, renderEnvelope, renderInboxEntry } from './envelope.js';
 import { MAIL_TOKEN_HEADER, checkMailToken } from './token.js';
 import { childReclaimGenerationRead } from './childReclaim.js';
 import { childReclaimUnlessDisabled } from './childReclaimDisabled.js';
+import { retireExecutor } from '../retireExecutor.js';
 import { DelegationCheckpointError, type DelegationDurability } from './delegation-checkpoint.js';
 import { COORDINATOR_INTENT_ACTIONS, COORDINATOR_INTENT_REFUSALS, declareCoordinatorIntent, formatDelegationInstant } from './delegation-model.js';
 import { readParentGenerations, settleParentIncarnations } from './gitref.js';
@@ -355,7 +356,7 @@ async function composeReviewCapAsk(coord: CoordStore, io: Deps['io'], work: numb
  */
 function childReclaimPort(deps: Deps, coord: CoordStore): (req: ChildReclaimRequest) => void {
   return (req) => {
-    void deps.queue.run(req.sessionId, () => childReclaimUnlessDisabled(
+    void retireExecutor(deps.queue, req.sessionId, () => childReclaimUnlessDisabled(
       { io: deps.io, registryDir: deps.cfg.registryDir, coord, notifyLog: deps.notifyLog },
       () => reclaimChild({
         coord, io: deps.io, cfg: deps.cfg, runCcd: deps.runCcd,
