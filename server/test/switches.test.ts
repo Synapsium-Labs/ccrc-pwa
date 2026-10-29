@@ -182,8 +182,8 @@ describe('the switchboard: SWITCHES rows and readSwitches (D-5855)', () => {
     expect(readSwitches(null)[TESTBOX_REMOTE_LIVE_MARKER]).toBe('unmeasurable');
   });
 
-  it('the table has 31 rows: 29 markers and 2 settings (30 at the test box contract\'s base)', () => {
-    expect([rows.length, markerRows.length, settingRows.length]).toEqual([31, 29, 2]);
+  it('the table has 32 rows: 29 markers and 3 settings (30 at the test box contract\'s base; roll-idle-targets the third setting)', () => {
+    expect([rows.length, markerRows.length, settingRows.length]).toEqual([32, 29, 3]);
   });
 
   it('a listing with reclaim-paused is set for it and clear for every other marker row', () => {
