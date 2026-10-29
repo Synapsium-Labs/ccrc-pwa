@@ -195,6 +195,56 @@ describe('parseRegistry (§4.1)', () => {
     expect(parseRegistry(r).baseUrl).toBe('https://vendor.example.com');
   });
 
+  // D-7308: the registry's baseUrl decides through the one endpoint gate, `BASE_URL_OK`, so it refuses what a roster
+  // `exec.baseUrl` refuses. Each refusal names the gate's reason word and never repeats the value it refused.
+  const baseUrlRefusal = (u: string): { field: string; message: string } => {
+    const r = good(); r['probe'] = 'compatible'; r['baseUrl'] = u;
+    try { parseRegistry(r); } catch (e) {
+      if (e instanceof RegistryInvalid) return { field: e.field, message: e.message };
+      throw e;
+    }
+    throw new Error(`parseRegistry accepted ${u}`);
+  };
+
+  it('refuses a baseUrl that carries a user name or password, naming base-url-credentials (D-7308)', () => {
+    for (const u of ['https://user:pass@vendor.example.com/v1', 'https://user@vendor.example.com/v1']) {
+      const got = baseUrlRefusal(u);
+      expect(got.field, u).toBe('baseUrl');
+      expect(got.message, u).toMatch(/base-url-credentials/);
+      expect(got.message, u).not.toContain('vendor.example.com');
+    }
+  });
+
+  it('refuses a baseUrl that carries a query, naming base-url-query (D-7308)', () => {
+    for (const u of ['https://vendor.example.com/v1?beta=true', 'https://vendor.example.com/v1?']) {
+      const got = baseUrlRefusal(u);
+      expect(got.field, u).toBe('baseUrl');
+      expect(got.message, u).toMatch(/base-url-query/);
+      expect(got.message, u).not.toContain('vendor.example.com');
+    }
+  });
+
+  it('refuses a baseUrl that carries a fragment, naming base-url-fragment (D-7308)', () => {
+    for (const u of ['https://vendor.example.com/v1#frag', 'https://vendor.example.com/v1#']) {
+      const got = baseUrlRefusal(u);
+      expect(got.field, u).toBe('baseUrl');
+      expect(got.message, u).toMatch(/base-url-fragment/);
+    }
+  });
+
+  it("stores an accepted baseUrl as the gate's normalised url (OA-BU1 (b), D-7460)", () => {
+    const r = good(); r['probe'] = 'compatible';
+    for (const [given, stored] of [
+      ['https://vendor.example.com', 'https://vendor.example.com/'],
+      ['HTTPS://Vendor.Example.COM/V1', 'https://vendor.example.com/V1'],
+      ['  https://vendor.example.com/v1  ', 'https://vendor.example.com/v1'],
+      ['http://127.0.0.1./v1', 'http://127.0.0.1/v1'],
+    ]) {
+      r['baseUrl'] = given;
+      expect(parseRegistry(r).baseUrl, given).toBe(stored);
+    }
+  });
+
   it('refuses a subagent that is not a class', () => {
     const r = good(); r['subagent'] = 'sonnet-class';
     expect(() => parseRegistry(r)).toThrow(/subagent/);

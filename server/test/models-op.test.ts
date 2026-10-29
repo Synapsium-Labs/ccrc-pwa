@@ -569,6 +569,14 @@ describe('init (§10, §13.1)', () => {
     expect(registryOf('router')['discovery']).toBe('catalogue');
   });
 
+  it('refuses a --base-url with a user name and password by the baseUrl field, and writes nothing (D-7308)', () => {
+    const r = op('init', '--file', rosterPath(), '--id', 'router', '--probe', 'compatible',
+      '--base-url', 'https://u:p@compatible.example.invalid');
+    expect(r.code).toBe(1);
+    expect(r.body['field']).toBe('baseUrl');
+    expect(fs.existsSync(regPath('router'))).toBe(false);
+  });
+
   it('refuses compatible with no --base-url, and writes nothing', () => {
     const r = op('init', '--file', rosterPath(), '--id', 'router', '--probe', 'compatible');
     expect(r.code).toBe(1);
