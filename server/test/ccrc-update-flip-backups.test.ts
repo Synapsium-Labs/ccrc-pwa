@@ -3304,12 +3304,18 @@ describe('ccrc backup and update: the coordination snapshot callers (delegation 
     // D-6747 (fix round 1, F6): digits the shell's integer test cannot compare (more than 18) are an unusable value, from the
     // file and from the environment alike: the gate WARNs and waits 90, never failing at its first probe. The probe moves the
     // shell's clock 30 s and `sleep` returns at once, so the window the gate used is the second count it reports.
+    // D-7330: the clock is a PLAIN variable. Bash's `SECONDS` keeps counting wall-clock seconds after an assignment, so a second
+    // boundary inside the run printed `after 121s`; `unset SECONDS` drops its special meaning (bash(1)), and the gate's
+    // `$SECONDS` reads then see only the fixture's 30 s steps. `slow` runs in the probe before its step (W24-H4's real wait);
+    // the script exits with the gate's own rc after printing where the fixture's clock stopped.
+    const fakeClockGate = (slow = ''): string => 'unset SECONDS; SECONDS=0; sleep() { :; }; '
+      + `_upd_gate_probe() { ${slow}SECONDS=$((SECONDS + 30)); UPD_GATE_WHY="fixture: never up"; return 1; }; `
+      + '_upd_gate server v2.0.0; set -- $?; echo "clock $SECONDS"; exit "$1"';
     for (const big of ['9223372036854775808', '99999999999999999999']) {
       for (const from of ['ccrc.env', 'the environment'] as const) {
         it(`W24-H2: CCRC_UPDATE_HEALTH_S=${big} from ${from} waits 90 and says so (D-6747)`, () => {
           const home = boxWith('ccrc-fx-w24-h2-', from === 'ccrc.env' ? `CCRC_UPDATE_HEALTH_S=${big}\n` : 'CCRC_ROLE=both\n');
-          const r = bareSourced(home, 'sleep() { :; }; _upd_gate_probe() { SECONDS=$((SECONDS + 30)); UPD_GATE_WHY="fixture: never up"; '
-            + 'return 1; }; _upd_gate server v2.0.0', from === 'ccrc.env' ? [] : [`CCRC_UPDATE_HEALTH_S=${big}`], ['timeout', '10']);
+          const r = bareSourced(home, fakeClockGate(), from === 'ccrc.env' ? [] : [`CCRC_UPDATE_HEALTH_S=${big}`], ['timeout', '10']);
           expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(1);
           const out = r.stdout.split('\n');
           expect(out).toContain(`update: WARN: CCRC_UPDATE_HEALTH_S='${big}' is not a number of seconds (digits only, at most 18) — using 90`);
@@ -3325,14 +3331,24 @@ describe('ccrc backup and update: the coordination snapshot callers (delegation 
       for (const from of ['ccrc.env', 'the environment'] as const) {
         it(`W24-H3: CCRC_UPDATE_HEALTH_S=${win} from ${from} is used as written, with no WARN (ruling 6)`, () => {
           const home = boxWith('ccrc-fx-w24-h3-', from === 'ccrc.env' ? `CCRC_UPDATE_HEALTH_S=${win}\n` : 'CCRC_ROLE=both\n');
-          const r = bareSourced(home, 'sleep() { :; }; _upd_gate_probe() { SECONDS=$((SECONDS + 30)); UPD_GATE_WHY="fixture: never up"; '
-            + 'return 1; }; _upd_gate server v2.0.0', from === 'ccrc.env' ? [] : [`CCRC_UPDATE_HEALTH_S=${win}`], ['timeout', '10']);
+          const r = bareSourced(home, fakeClockGate(), from === 'ccrc.env' ? [] : [`CCRC_UPDATE_HEALTH_S=${win}`], ['timeout', '10']);
           expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(1);
           expect(r.stdout).not.toContain('WARN');
           expect(r.stdout.split('\n')).toContain('update: gate FAILED after 120s — fixture: never up');
         });
       }
     }
+    // D-7330's control: the first probe really waits 1.1 s, so a wall-clock second boundary always falls inside the window. The
+    // gate still reports exactly 120, and the fixture's clock still reads 120 after it: a clock that counted wall time would say
+    // 121 here on every run, not one run in a hundred.
+    it('W24-H4: a wall-clock second boundary inside the gate window does not move the count it reports (D-7330)', () => {
+      const home = boxWith('ccrc-fx-w24-h4-', 'CCRC_UPDATE_HEALTH_S=120\n');
+      const r = bareSourced(home, fakeClockGate('[ "$SECONDS" = 0 ] && command sleep 1.1; '), [], ['timeout', '10']);
+      expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(1);
+      const out = r.stdout.split('\n');
+      expect(out).toContain('update: gate FAILED after 120s — fixture: never up');
+      expect(out).toContain('clock 120');
+    });
 
     // ── Task 4 (D-6594): the release mirror is a setting. W24-U2 holds `_upd_resolve`'s refusal, which the rollout pin (the
     // deploying machine's base) runs too; W24-U6's ssh stub reaches `cmd_rollout` in this file, and a leg with an `export` base
