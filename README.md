@@ -5116,7 +5116,8 @@ sleep executor (`server/src/rollLane.ts`) and ONE ccd verb, `ccd hibernate --rol
 the session and wakes it at once, for at most one session a sweep, on the serialiser and the session's queue, behind
 the wake budget as an automatic wake, and only on a box whose `ccd caps` lists `hibernate-roll`. ccd's refusal (a draft
 in the input, `esc to interrupt`, an attached terminal, `.no-roll`) is a skip, and nothing is woken; a failed wake
-exits 4 (`roll-wake-failed`) and leaves the session hibernated. Every skip is a `ccrc-server:
+exits 4 (`roll-wake-failed`) after ccd puts the session back to sleep (hibernated, unit stopped), so mail or an open
+screen wakes it; a call cut short or never answered journals `outcome unknown` and names the session to check. Every skip is a `ccrc-server:
 roll-skip <id>: <reason>` line. **Settings › Automation › Roll idle sessions** (`GET`/`POST /api/coord/roll-idle`, one
 `roll_settings` row) is `Coordinators` (the default) or `Off`. `$REG/hibernate-disabled` stops it too. The Claude
 Code binary trigger comes with `ccd roll` (binary-lifecycle wave 2). `ccrc update`'s supervisor sweep is unchanged: it

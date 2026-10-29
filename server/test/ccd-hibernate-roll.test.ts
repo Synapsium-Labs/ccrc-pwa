@@ -5,7 +5,8 @@
  * still runs ccd once and the journal carries one deliberate act. `--roll` keeps every hibernate refusal (busy, a
  * draft, an attached terminal, the turn marker, a hold, a fresh swap), refuses `.no-roll` as `opted-out` and NOT
  * `.no-hibernate`, and then wakes the session in the same verb (`cmd_ensure`). A failed wake exits 4 with
- * `ccd: roll-wake-failed`, leaving the hibernated row that mail or an open screen wakes.
+ * `ccd: roll-wake-failed` after putting the row back to sleep (the marker the wake cleared stamped again, the unit
+ * stopped), leaving the hibernated row that mail or an open screen wakes.
  *
  * THE FIXTURE is `ccd-hibernate.test.ts`'s: a fixture HOME, a stubbed `tmux` answering from files in HOME, logged
  * `systemctl`, and the pane's live file. The wake is `cmd_ensure` stubbed to log its call (or fail), so these rows
@@ -68,8 +69,8 @@ const marker = (): void => {
 };
 const idle = (): void => { seed(); pane('❯ '); live('idle'); marker(); attached('0'); };
 
-const run = (args: string, extra = ''): { rc: number; err: string; out: string } => {
-  const out = h.sh(`${STUBS} ${extra} ( cmd_hibernate ${args} ) 2>"$HOME/err"; echo "rc=$?"`, { TMUX: '' });
+const run = (args: string, extra = '', stubs = STUBS): { rc: number; err: string; out: string } => {
+  const out = h.sh(`${stubs} ${extra} ( cmd_hibernate ${args} ) 2>"$HOME/err"; echo "rc=$?"`, { TMUX: '' });
   const rc = Number(/rc=(\d+)\s*$/.exec(out)?.[1] ?? 'NaN');
   return { rc, out, err: fs.readFileSync(path.join(h.home, 'err'), 'utf8') };
 };
@@ -162,6 +163,25 @@ describe('ccd hibernate --roll: one verb sleeps and wakes (D-7458)', () => {
     expect(r.out).not.toContain('rolled');
     expect(has('hibernated'), 'the sanctioned hibernated row stands').toBe(true);
     expect(eventsOf(h.home, 'hibernate')).toHaveLength(1);
+  });
+
+  it('a failed wake through the REAL cmd_ensure puts the row back to sleep: .hibernated stands and the unit is stopped', () => {
+    idle();
+    // The real `cmd_ensure` clears `.hibernated` and `.stopped` before its spawn; the spawn is what fails here.
+    const real = STUBS.replace(/^\s*cmd_ensure\(\).*$/m, '');
+    expect(real).not.toContain('cmd_ensure');
+    const failing = '_alive() { ! grep -q kill-session "$HOME/ccd-calls" 2>/dev/null; }; '
+      + '_supervised_start() { echo "supervised-start $1" >> "$HOME/ccd-calls"; echo "ccd: $1: unit started but no pane appeared" >&2; return 1; };';
+    const r = run(`--roll --surface agent --actor 'sweep:roll' ${ID}`, failing, real);
+    expect(r.rc, r.err).toBe(4);
+    const at = calls().indexOf(`supervised-start ${ID}`);
+    expect(at, 'the real cmd_ensure reached its spawn').toBeGreaterThanOrEqual(0);
+    expect(r.err).toMatch(/ccd: roll-wake-failed — .* exited 1; it was put back to sleep/);
+    expect(r.out).not.toContain('rolled');
+    expect(has('hibernated'), 'the marker the wake cleared is stamped again').toBe(true);
+    expect(has('stopped'), 'the stop stamp the wake cleared is stamped again').toBe(true);
+    expect(calls().slice(at).some((l) => /^systemctl .*disable/.test(l)), 'the unit the wake enabled is stopped').toBe(true);
+    expect(eventsOf(h.home, 'hibernate'), 'still ONE deliberate act').toHaveLength(1);
   });
 
   it('a roll does not take a standing .hibernated as done: the re-measure runs and the act lands', () => {

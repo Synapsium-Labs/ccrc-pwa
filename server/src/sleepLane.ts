@@ -6,6 +6,7 @@ import type { SessionRecord } from './registry.js';
 import type { CoordStore } from './coord/store.js';
 import type { TurnVerdict } from './coord/archiveDoor.js';
 import { notify, type NoticeRecord } from './notice.js';
+import { ccdEnding } from './lifecycle.js';
 import { CCD_ARGV, HIBERNATE_HOLD_OK_CAP, HIBERNATE_ROLL_CAP, capSupported, ccdCan, sweepDec } from './ccdargv.js';
 import {
   HIBERNATE_ACT_LINE_MS, HIBERNATE_AFTER_HOURS_FILE, HIBERNATE_DISABLED_MARKER, HIBERNATE_LIVE_MARKER,
@@ -117,7 +118,12 @@ export type SleepActResult<V, St> =
   }
   | { readonly kind: 'held-at-act'; readonly verdict: V | null }
   | { readonly kind: 'skipped'; readonly detail: string; readonly by: 'verb' | 'ccd' | 'wake-budget' }
-  | { readonly kind: 'failed'; readonly detail: string; readonly by: 'ccd' | 'throw' }
+  | {
+    readonly kind: 'failed'; readonly detail: string; readonly by: 'ccd' | 'throw';
+    /** `unknown`, a `wake` lane's only (the roll, D-7458): the call was cut short or never answered (this server's wait
+     *  ran out, the link failed, the runner's deadline or a signal ended the child), so what ccd did is not known. */
+    readonly outcome?: 'unknown';
+  }
   | { readonly kind: 'switched-off'; readonly detail: MarkerSwitchName | typeof REGISTRY_UNLISTABLE };
 
 /** `switched-off`'s detail when the registry could not be listed at the act: it holds (fail shut, D-7047). */
@@ -390,6 +396,13 @@ export async function sleepAct<D extends SleepDepsBase, M, Row extends { readonl
         // The roll's sleep landed and its wake did not: a sanctioned hibernated row, which mail or an open screen wakes.
         if (wake && res.ran !== false && ROLL_WAKE_FAILED.test(res.stderr)) {
           return { kind: 'hibernated', verdict: v, store, woke: { failed: res.stderr } };
+        }
+        // A `wake` lane's call cut short or never answered: ccd may have slept the session, woken it, or be acting
+        // still, so the lane names it to be checked. A runner's own `spawn` answer is known not to have run, and stays
+        // a plain failure. The sleep lanes keep their answer as it was.
+        const ending = res.ran === false ? null : ccdEnding(res).kind;
+        if (wake && ((res.ran === false && res.reason !== 'spawn') || ending === 'deadline' || ending === 'signal')) {
+          return { kind: 'failed', detail: res.ran === false ? `${res.reason}: ${res.detail}` : res.stderr, by: 'ccd', outcome: 'unknown' };
         }
         return { kind: 'failed', detail: res.stderr, by: 'ccd' };
       }

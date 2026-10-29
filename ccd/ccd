@@ -29858,8 +29858,10 @@ cmd_hibernate() {   # [--roll] [--surface <word>] [--actor <text>] [--reason <te
   # differs from a plain hibernate in exactly three places: `.no-roll` refuses `opted-out` and `.no-hibernate` does
   # NOT (the operator's opt-out of sleep is not an opt-out of the roll, U4); a row already hibernated is not taken as
   # done (a roll needs a live pane to measure, so the re-measure below refuses it); and a failed wake exits 4 with
-  # `ccd: roll-wake-failed — …`, leaving the sanctioned hibernated row that mail, an open screen or a re-dispatch
-  # wakes. The deliberate act is ONE journal row, `hibernate`, its declared reason defaulted to `roll` (the wake's
+  # `ccd: roll-wake-failed — …` AFTER putting the row back to sleep: `cmd_ensure` clears `.hibernated` and enables the
+  # unit before its spawn can fail, which would leave a row neither hibernated nor running with a Restart=always unit
+  # retrying it, so the act is repeated (the marker re-stamped, the unit stopped, any late pane killed) and the row is
+  # the sanctioned hibernated one that mail, an open screen or a re-dispatch wakes. The deliberate act is ONE journal row, `hibernate`, its declared reason defaulted to `roll` (the wake's
   # `ensure` rows are the unit's own, as on every wake). It takes no value and, like `--hold-ok`, is not on the usage
   # line, which is pinned. `ccd caps` says `hibernate-roll`.
   local usage="usage: ccd hibernate [--surface <word>] [--actor <text>] [--reason <text>] <id>"
@@ -29979,7 +29981,15 @@ cmd_hibernate() {   # [--roll] [--surface <word>] [--actor <text>] [--reason <te
   local wrc=0
   ( cmd_ensure "$id" ) || wrc=$?
   if (( wrc != 0 )); then
-    echo "ccd: roll-wake-failed — $id was hibernated and its wake exited $wrc; it stays hibernated, and ccd ensure wakes it" >&2
+    # Back to sleep, in the act's own order: the marker first, then the unit, then a pane the unit may have raised late.
+    if _reg_set "$id" hibernated "$now $hours"; then
+      _ws_unsupervise "$id" ccd
+      tmux kill-session -t "$(_tmux_t "$id")" 2>/dev/null || true
+      echo "$(date '+%F %T') hibernate $id: roll wake failed (rc $wrc), back to sleep" >> "$REG/swap.log"
+      echo "ccd: roll-wake-failed — $id was hibernated and its wake exited $wrc; it was put back to sleep (hibernated, unit stopped), and mail, an open screen or ccd ensure wakes it" >&2
+    else
+      echo "ccd: roll-wake-failed — $id was hibernated and its wake exited $wrc, and $REG/$id.hibernated could not be written again: $id may be neither running nor hibernated; check it (ccd ensure $id)" >&2
+    fi
     exit 4
   fi
   echo "rolled $id"

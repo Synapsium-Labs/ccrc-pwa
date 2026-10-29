@@ -2733,7 +2733,7 @@ export function registerCoordRoutes(
     const body = req.body as { targets?: unknown } | null | undefined;
     const targets = body !== null && typeof body === 'object' ? body.targets : undefined;
     if (!isClaudeRollTargets(targets)) {
-      return reply.code(400).send({ ok: false, error: 'bad-request', detail: `targets must be one of ${CLAUDE_ROLL_TARGETS.join(', ')}` });
+      return refuseRoute(reply, 'bad-request', { detail: `targets must be one of ${CLAUDE_ROLL_TARGETS.join(', ')}` });
     }
     const w = deps.coord.setRollTargets(targets, Date.now());
     const before = rollTargetsOf(w.before);

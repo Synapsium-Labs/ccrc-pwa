@@ -29,7 +29,9 @@ import type { ClaudeRollTargets } from '../../shared/claudeVersion.js';
  * same-account target. Everything is re-read and the verdict asked again on the coordination serialiser and
  * the session's queue (D-5428), the switches over a fresh listing (D-7047), and the fleet-wide wake budget as an
  * automatic wake, so a roll never lands on top of another wake. A failed wake leaves the coordinator hibernated, a
- * sanctioned state: mail, an open screen or a re-dispatch wakes it, on the current release.
+ * sanctioned state ccd restores (the marker re-stamped, the unit stopped): mail, an open screen or a re-dispatch wakes
+ * it, on the current release. A call cut short or never answered (a timeout, a dropped link, a kill) is `unknown`: the
+ * line names the session to check, since ccd may have stopped it, woken it, or neither.
  *
  * ONE PASS (`rollPass`): `hibernate-disabled` (the act's kill switch) or the Settings row at anything but
  * `coordinators` journals one line and reads nothing; otherwise the node's install time is read once, and the executor
@@ -86,7 +88,10 @@ export type RollOutcome =
   | { readonly id: string; readonly kind: 'rolled'; readonly idleMs: number }
   | { readonly id: string; readonly kind: 'skipped'; readonly reason: string }
   | { readonly id: string; readonly kind: 'failed'; readonly detail: string }
-  | { readonly id: string; readonly kind: 'woke-failed'; readonly detail: string };
+  | { readonly id: string; readonly kind: 'woke-failed'; readonly detail: string }
+  /** The one call was cut short or never answered (a timeout, a dropped link, a kill): the session may be running,
+   *  hibernated, or between the two, so the line names it to be checked. */
+  | { readonly id: string; readonly kind: 'unknown'; readonly detail: string };
 
 /** The verdict as the executor reads it: a roll is its `hibernate` answer (the sleep its act starts with), every skip
  *  a hold named by its words, and a row on the current release the hold `current`, which writes nothing. */
@@ -185,7 +190,7 @@ export const ROLL_LANE: SleepLane<RollLaneDeps, RollSweepMemory, FleetSession, H
       }
       if (r.kind === 'skipped') return { id, kind: 'skipped', reason: r.by === 'ccd' ? `ccd:${r.detail}` : r.detail };
       if (r.kind === 'switched-off') return { id, kind: 'skipped', reason: r.detail };
-      return { id, kind: 'failed', detail: r.detail };
+      return r.outcome === 'unknown' ? { id, kind: 'unknown', detail: r.detail } : { id, kind: 'failed', detail: r.detail };
     },
   },
 };
@@ -245,8 +250,10 @@ export async function rollPass(
       journal(deps, mem, o.id, o.reason, `ccrc-server: roll-skip ${o.id}: ${o.reason}`);
     } else if (o.kind === 'failed') {
       journal(deps, mem, o.id, 'failed', `ccrc-server: roll of ${o.id} failed at its hibernate (${o.detail.trim() || 'no stderr'}); it was not stopped`);
+    } else if (o.kind === 'woke-failed') {
+      journal(deps, mem, o.id, 'woke-failed', `ccrc-server: roll of ${o.id}: its wake failed (${o.detail.trim() || 'no stderr'}); ccd put it back to sleep, so it stays hibernated, and mail, an open screen or a re-dispatch wakes it on the current release`);
     } else {
-      journal(deps, mem, o.id, 'woke-failed', `ccrc-server: roll of ${o.id}: its wake failed (${o.detail.trim() || 'no stderr'}); it stays hibernated, and mail, an open screen or a re-dispatch wakes it on the current release`);
+      journal(deps, mem, o.id, 'unknown', `ccrc-server: roll of ${o.id}: outcome unknown (${o.detail.trim() || 'no stderr'}): ccd hibernate --roll was cut short or not answered, so ${o.id} may be running, hibernated or neither; check ${o.id} (ccd ensure ${o.id} wakes it if it is down)`);
     }
   }
   // A row found current writes nothing and forgets its last line, so a later skip is journalled at once.

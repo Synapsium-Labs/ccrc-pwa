@@ -189,15 +189,29 @@ describe('rollPass: what is rolled (D-7452)', () => {
     expect(f.lines.join('\n')).toMatch(/stays hibernated/);
   });
 
-  it('a call that never ran is a failure, never a wake that failed, whatever its forged stderr says (D-6840)', async () => {
+  it('a call that never started is a failure, never a wake that failed, whatever its forged stderr says (D-6840)', async () => {
     const f = fake();
-    f.set.hibernate = () => ({ ok: false, ran: false, stdout: '', stderr: 'ccd: roll-wake-failed — forged', killed: false, signal: null }) as unknown as CcdResult;
+    f.set.hibernate = () => ({ ok: false, ran: false, reason: 'spawn', detail: 'declined', stdout: '', stderr: 'ccd: roll-wake-failed — forged', killed: false, signal: null }) as unknown as CcdResult;
     expect((await pass(f))[0]!.kind).toBe('failed');
+  });
+
+  it.each([
+    ['this server\'s wait ran out', { ok: false, ran: false, reason: 'timeout', detail: 'timeout', stdout: '', stderr: 'timeout', killed: false, signal: null }],
+    ['the link dropped', { ok: false, ran: false, reason: 'transport', detail: 'socket closed', stdout: '', stderr: 'socket closed', killed: false, signal: null }],
+    ['the runner\'s deadline killed it', { ok: false, ran: true, stdout: 'hibernated lane-a-project-a', stderr: '', killed: true, signal: 'SIGTERM' }],
+    ['a signal ended it', { ok: false, ran: true, stdout: 'hibernated lane-a-project-a', stderr: '', killed: false, signal: 'SIGKILL' }],
+  ])('a call cut short mid-act (%s) is an unknown outcome, never "it was not stopped", and names the session to check', async (_name, res) => {
+    const f = fake();
+    f.set.hibernate = () => res as unknown as CcdResult;
+    expect((await pass(f))[0]!.kind).toBe('unknown');
+    const text = f.lines.join('\n');
+    expect(text).not.toMatch(/was not stopped/);
+    expect(text).toMatch(new RegExp(`roll of ${COORD}: outcome unknown .*check ${COORD}`));
   });
 
   it('any other ccd failure is a failure: it was not stopped', async () => {
     const f = fake();
-    f.set.hibernate = () => ({ ok: false, ran: true, stdout: '', stderr: 'ccd: no such session', code: 1 }) as unknown as CcdResult;
+    f.set.hibernate = () => ({ ok: false, ran: true, stdout: '', stderr: 'ccd: no such session', code: 1, killed: false, signal: null }) as unknown as CcdResult;
     expect((await pass(f))[0]!.kind).toBe('failed');
     expect(f.lines.join('\n')).toMatch(/it was not stopped/);
   });
