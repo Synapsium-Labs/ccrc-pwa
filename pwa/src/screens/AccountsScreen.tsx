@@ -12,7 +12,7 @@
 // screen needs no poll of its own.
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import type { AccountUsage, ProjectedHome, RosterWire } from '../../../shared/api';
+import { isArchivedRow, type AccountUsage, type ProjectedHome, type RosterWire } from '../../../shared/api';
 import type { AccountPoolWire } from '../../../shared/poolrule';
 import { PageScaffold, Skeleton, toast, useNow } from '@ccrc/ui';
 import { AccountMeterRow } from '../fleet/AccountMeterRow';
@@ -317,13 +317,13 @@ export function AccountsScreen(): ReactNode {
           // workspace that is archived, mid-cleanup, or that the server does
           // not read alive is not load on this account, even though it still
           // carries the account's `wrapper` and stays in the fleet store until
-          // reaped. `archivedAt !== null` is `sessionBucket`'s own first check
-          // (shared/api.ts) — it alone covers both 'archived' and 'cleanup'.
+          // reaped. Archived is the server's bucket, `isArchivedRow` (shared/api.ts,
+          // OA-C15 (a), D-7188): it covers both 'archived' and 'cleanup'.
           // Live is the server's word (`presenceOf`, OA-C15 (a), D-7181): a
           // doubted, sleeping or old-server row is not counted, as today, and
           // a pane gone under `restarting` is the session itself, alive.
           const onAccount = sessions.filter(
-            (s) => s.wrapper === wrapper && s.archivedAt === null && presenceOf(s) === 'alive',
+            (s) => s.wrapper === wrapper && !isArchivedRow(s) && presenceOf(s) === 'alive',
           );
           // `accountPoolState`, not `accountPool` — this chip is the one
           // surface in the app whose whole job is to say WHICH carrier

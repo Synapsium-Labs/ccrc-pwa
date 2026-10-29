@@ -328,8 +328,9 @@ describe('W7 PWA census: REAL rows (reporting, not ratcheting; spec §5.1 rule 3
     expect(sites.map((s) => `${s.file}#${s.symbol}`)).toEqual(['shared/api.ts#BUCKET_RANK']);
   });
 
-  it('archivedChecks(): 8 absence checks on archivedAt', () => {
-    held('archivedChecks', archivedChecks(), 8);
+  // C7j Step 5 (D-7188, OA-C15 (a)): the 8 sites read `shared/api.ts#isArchivedRow`, the archived bucket or cleanup.
+  it('archivedChecks(): 0 (from 8: every site reads isArchivedRow)', () => {
+    held('archivedChecks', archivedChecks(), 0);
   });
 
   // C9 (D-6441) gave FleetScreen and Instrument's FleetTable one session opener (`fleet/openers.ts`): their two

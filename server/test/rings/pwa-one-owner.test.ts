@@ -290,3 +290,13 @@ describe('the buckets read in one order, shared/api.ts#BUCKET_RANK (C7j, D-7188)
     expect(sites).toEqual(['shared/api.ts#BUCKET_RANK']);
   });
 });
+
+// C7j Step 5 (D-7188, OA-C15 (a), D-7265): "is it archived" is read from the server's bucket through
+// `shared/api.ts#isArchivedRow` (archived or cleanup), never an absence check on `archivedAt`. Read through W7's census
+// (`census-w7/pwa.ts#archivedChecks`, whose FIXTURE row reds `archivedAt !== null` and `!= null`), imported in the block.
+describe('the PWA reads "archived" from the bucket, through isArchivedRow (C7j, D-7188)', () => {
+  it('archivedChecks(): 0 (from 8) absence checks on archivedAt in pwa/src; may only shrink', async () => {
+    const { archivedChecks } = await import('../census-w7/pwa.js');
+    expect(archivedChecks().map((s) => `${s.file}#${s.symbol}`)).toEqual([]);
+  });
+});
