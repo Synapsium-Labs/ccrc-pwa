@@ -282,10 +282,10 @@ describe('W7 PWA census: REAL rows (reporting, not ratcheting; spec §5.1 rule 3
   // claim map, and rowRun's call of runForSession).
   // C7d (D-7182): `runCard`'s two card lookups (D-7205) report as named, beside the new readers' by-id lookups,
   // `workerOf`'s one (D-7205) and `coordinatorOf`'s one (D-7207).
-  it('runMatchers(): 1 inline comparisons, 3 map lookups, runForSession 0 calls, childRunsSeen 1; 4 named by-id lookups in the readers', () => {
+  it('runMatchers(): 1 inline comparisons, 2 map lookups, runForSession 0 calls, childRunsSeen 1; 4 named by-id lookups in the readers', () => {
     const sites = runMatchers();
-    held('runMatchers', sites.filter((s) => s.kind !== 'named'), 5);
-    expect(countBy(sites, (s) => s.kind)).toEqual({ comparison: 1, lookup: 3, childRunsSeen: 1, named: 4 });
+    held('runMatchers', sites.filter((s) => s.kind !== 'named'), 4);
+    expect(countBy(sites, (s) => s.kind)).toEqual({ comparison: 1, lookup: 2, childRunsSeen: 1, named: 4 });
   });
 
   // Pinned exact by C7b (D-7180, D-7221): #1720 merged, leaving `HotFilesStrip`'s and `useFleetHealth`'s timers, which

@@ -448,6 +448,21 @@ describe('the run board’s abandon control (Task 12, spec §4.3)', () => {
     expect(await screen.findByText(expected)).toBeInTheDocument();
   });
 
+  // THE OLD-SERVER SKEW ROW (C7d, D-7182; the fixture re-point's one explicit row, PR body): a fleet frame from a
+  // server predating ARCH-61's server half carries no `run` or `openRun` key, so the board cannot tell the open run's
+  // worker from a recycled id and finds none (`workerOf`): the sheet hedges, as it does for no fleet row. Before C7d
+  // the board took the listed session by id and said the child sentence.
+  it('the sheet the board opens hedges for an older server that sends no run binding: an open run finds no worker', async () => {
+    const store = makeStore();
+    const s = sess({ child: { kind: 'child', runId: 3 } });
+    expect('run' in s || 'openRun' in s).toBe(false);
+    act(() => { store.setState({ runs: [run()], runsFrameSeen: true, sessions: [s], fleetFrameSeen: true }); });
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } })));
+    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} loadSpend={NO_SPEND} />);
+    fireEvent.click(screen.getByRole('button', { name: /abandon run 3/i }));
+    expect(await screen.findByText(UNKNOWN)).toBeInTheDocument();
+  });
+
   // D-287 (was D-B4-14): the fix round's own anchor — `RunsScreen.tsx:118-122` used to
   // wrap the whole row body in `<button className="run-open">`, and a
   // `<button>` inside a `<button>` is invalid HTML and unreachable to a

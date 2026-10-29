@@ -37,7 +37,7 @@ import type { ReactNode } from 'react';
 import { type CoordCapsView, type RunSpend, type RunSummary } from '../../../shared/api';
 import {
   FINISHED_FOLD, anyDispatchPending, finishedClock, finishedMoreLabel, isRunClosed, programWave, programsWithOpenRun, runClosedAt,
-  programmeTitle, runsByProgram, waveLabel,
+  programmeTitle, runsByProgram, waveLabel, workerOf,
 } from '../fleet/runWords';
 import { AbandonSheet, abandonChildOf } from '../fleet/AbandonSheet';
 import { LiftCapSheet } from '../fleet/LiftCapSheet';
@@ -116,9 +116,11 @@ export function RunsScreen({
 
   const sessionById = new Map(sessions.map((s) => [s.id, s] as const));
   // #166 wave 5 (spec §5.7): the abandon sheet's confirm line branches on the
-  // run's workspace's child mark, read off the fleet row this board already looks up.
-  const abandonSession = abandonTarget === null || abandonTarget.sessionId === null
-    ? undefined : sessionById.get(abandonTarget.sessionId);
+  // run's workspace's child mark, read off the fleet row of the run's worker.
+  // Abandon is offered on an open run only, so that is the session the wire
+  // binds to it (`workerOf`, D-7182): a recycled id, or an older server's frame
+  // with no binding, finds none, and the sheet hedges as it does for no row.
+  const abandonSession = abandonTarget === null ? undefined : workerOf(abandonTarget, sessionById) ?? undefined;
   // ACTIVE reads `live` the instant the socket has said anything at all
   // (`runsFrameSeen`) — including an honest `[]`, which is what a run
   // closing broadcasts. Falling back to `live.length > 0 ? live : cold`
