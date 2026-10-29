@@ -341,10 +341,10 @@ describe('W7 PWA census: REAL rows (reporting, not ratcheting; spec §5.1 rule 3
     held('storageTypes', storageTypes(), 1);
   });
 
-  it('pageClockSubscriptions(): 7 visibilitychange, 2 online', () => {
+  it('pageClockSubscriptions(): 6 visibilitychange, 2 online', () => {
     const sites = pageClockSubscriptions();
-    held('pageClockSubscriptions', sites, 9);
-    expect(countBy(sites, (s) => s.kind)).toEqual({ visibilitychange: 7, online: 2 });
+    held('pageClockSubscriptions', sites, 8);
+    expect(countBy(sites, (s) => s.kind)).toEqual({ visibilitychange: 6, online: 2 });
   });
 
   it('singleReaders(): api.feed 1, api.runs 1, api.projects 1 (calls and member references)', () => {
