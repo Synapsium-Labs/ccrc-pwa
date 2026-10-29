@@ -29,6 +29,7 @@
 import type { ReactNode } from 'react';
 import { Button } from '@ccrc/ui';
 import { navigate } from '../lib/router';
+import { sessionPath } from '../lib/routes';
 
 /** The one shape the sheet records when a queue fails, carried verbatim —
  *  `sessionId` is the id `startedSessionFor` MEASURED, and a retry must not
@@ -84,7 +85,7 @@ export function KickoffRecovery({ failure, retrying, onRetry }: {
       <Button
         variant="quiet"
         className={PROGRAM_GO}
-        onClick={() => navigate(`/s/${encodeURIComponent(failure.sessionId)}`)}
+        onClick={() => navigate(sessionPath(failure.sessionId))}
       >
         Open it without a brief
       </Button>

@@ -28,6 +28,7 @@ import { runSpendLine } from '../fleet/runSpendWords';
 import { useRunSpend } from './useRunSpend';
 import { formatAge, formatElapsed } from '../fleet/formatReset';
 import { navigate } from '../lib/router';
+import { sessionPath } from '../lib/routes';
 import '../fleet/fleet.css';
 
 // `memo` (D-6442, D-6438): the board re-renders each second while a dispatch is pending,
@@ -379,7 +380,7 @@ export const RunRow = memo(function RunRow({
     ? <li className="run-row" data-inert="true" title={rowTitle}>{body}{resumeButton}{abandonButton}</li>
     : (
       <li className="run-row" title={rowTitle}>
-        <button type="button" className="run-open" onClick={() => navigate(`/s/${encodeURIComponent(run.sessionId!)}`)}>
+        <button type="button" className="run-open" onClick={() => navigate(sessionPath(run.sessionId!))}>
           {body}
         </button>
         {resumeButton}

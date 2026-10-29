@@ -29,6 +29,7 @@ import { Button, Select, Sheet, toast } from '@ccrc/ui';
 import { accountIsHomeAble, accountLabel, accountPool, accountPoolState } from '../lib/accounts';
 import { api, apiErrorText, failedTo } from '../lib/api';
 import { navigate } from '../lib/router';
+import { sessionPath } from '../lib/routes';
 import { effortOptions, modelOptions } from '../lib/models';
 import { poolSide } from '../lib/pools';
 import { declaredAccountPool } from '../../../shared/poolrule';
@@ -390,7 +391,7 @@ export function NewSessionSheet({
             return;
           }
           onClose();
-          navigate(`/s/${encodeURIComponent(answer.id)}`);
+          navigate(sessionPath(answer.id));
           return;
         }
         toast(`Starting ${project.name} on ${accountLabel(roster, wrapper)}…`);
@@ -435,7 +436,7 @@ export function NewSessionSheet({
       }
       if (row === null) toast(said);
       onClose();
-      if (row !== null) navigate(`/s/${encodeURIComponent(row.id)}`);
+      if (row !== null) navigate(sessionPath(row.id));
     } catch (err) {
       if (preview.kind === 'named') {
         const refusal = classifyAddError(err);
