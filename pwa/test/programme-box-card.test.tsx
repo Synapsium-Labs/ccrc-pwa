@@ -152,6 +152,9 @@ describe('a programme box in its project card', () => {
     expect(drawCard(quiet.sessions, quiet.runs, 'project-c').querySelector('section.pg-box')?.getAttribute('data-state')).toBe('moving');
   });
 
+  // Vacuous in the app until Task G1: the rollup pins open a card whose rows need the operator, so a folded card
+  // never holds a box that needs; and no box reads stalled until G1 supplies the moves, the threshold and a clock.
+  // The card is folded by hand here (`collapsed`) to keep the branch pinned; G1 adds the real case through FleetCards.
   it('keeps a box that needs the operator on a folded card, and counts the rest', () => {
     const { sessions, runs } = fleet();
     const c = drawCard(sessions, runs, 'project-c', { collapsed: true });
@@ -174,6 +177,57 @@ describe('a programme box in its project card', () => {
     expect(lines).toHaveLength(1);
     expect(c.querySelector('.pg-tray')?.contains(lines[0]!)).toBe(true);
     expect(lines[0]!.textContent).toContain('port-api wave 5 in project-c');
+  });
+});
+
+describe('one programme, one hue across the fleet', () => {
+  // 'billing' and 'search-index' share an FNV bucket (cyan, programme-box.test.ts). Both coordinators sit on project-d;
+  // search-index's worker renders on project-c, under "Workers of programmes elsewhere".
+  const pair = (): { sessions: FleetSession[]; runs: RunSummary[] } => ({
+    sessions: [
+      sess('coord-b', 'project-d', { role: 'coordinator', status: 'busy', bucket: 'working' }),
+      sess('wb', 'project-d', { role: 'child' }),
+      sess('coord-s', 'project-d', { role: 'coordinator', status: 'busy', bucket: 'working' }),
+      sess('ws', 'project-c', { role: 'child', status: 'busy', bucket: 'working' }),
+    ],
+    runs: [
+      run(40, 'coord-b', 'wb', { program: 'billing', programTitle: 'Billing', project: 'project-d' }),
+      run(41, 'coord-s', 'ws', { program: 'search-index', programTitle: 'Search index', project: 'project-c', homeProject: 'project-d' }),
+    ],
+  });
+  const boxHue = (c: Element, title: string): string | null =>
+    [...c.querySelectorAll('section.pg-box')].find((b) => b.querySelector('.pg-title')?.textContent === title)
+      ?.getAttribute('data-hue') ?? null;
+
+  it('draws a far worker in its box\'s hue, on the other card', () => {
+    const { sessions, runs } = pair();
+    const home = drawCard(sessions, runs, 'project-d');
+    const hue = boxHue(home, 'Search index');
+    expect(hue).not.toBeNull();
+    expect(hue).not.toBe(boxHue(home, 'Billing'));
+    cleanup();
+    const far = drawCard(sessions, runs, 'project-c').querySelector('.pg-far');
+    expect(far?.textContent).toContain('ws');
+    expect(far?.getAttribute('data-hue')).toBe(hue);
+  });
+});
+
+describe('a box\'s far workers are the runs whose worker renders on another card', () => {
+  const coord = sess('coord', 'project-d', { role: 'coordinator', status: 'busy', bucket: 'working' });
+  const released = sess('wr', 'project-d', {
+    role: 'child', releasedFrom: { runId: 50, program: 'port-api', programTitle: null, claimedBy: 'coord', closedAt: NOW - HOUR, child: true },
+  });
+  const archived = sess('wa', 'project-d', { role: 'child', bucket: 'archived', status: 'dead' });
+
+  it.each([
+    ['in this card\'s Released fold', [coord, released], 'wr'],
+    ['in this card\'s Archived fold', [coord, archived], 'wa'],
+    ['gone from the fleet', [coord], 'ghost'],
+  ] as const)('draws no abroad line for a worker %s', (_why, sessions, worker) => {
+    const r = run(50, 'coord', worker, { project: 'project-d', wave: 2 });
+    const c = drawCard([...sessions], [r], 'project-d');
+    expect(c.querySelector('.proj-abroad-line')).toBeNull();
+    expect(c.textContent).not.toContain('in project-d');
   });
 });
 

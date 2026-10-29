@@ -178,7 +178,7 @@ describe.each(SKINS)('the programme box in %s', (skin) => {
   // The tray's row is the card's own row (`rowBody`): its tap surface is the row and its ⋯ button's hit overlay, measured
   // as instrument-desk.browser.test.ts measures them (the overlay's inset from the padding box).
   it('keeps the footer toggle and the asking worker\'s row and ⋯ at the 44 px tap floor under a coarse pointer', async () => {
-    for (const width of [390, 1280] as const) {
+    for (const width of WIDTHS) {
       const { ctx, page, errors } = await open(skin, PHOSPHOR, width, true);
       try {
         expect(await page.evaluate(() => matchMedia('(pointer: coarse)').matches), 'a coarse pointer').toBe(true);

@@ -3,21 +3,28 @@
 // is pinned in `programme-box-card.test.tsx`.
 import { describe, expect, it } from 'vitest';
 import type { FleetSession, RunSummary } from '../../shared/api';
-import { fleetTree } from '../src/fleet/fleetTree';
+import { cardsOf, fleetTree } from '../src/fleet/fleetTree';
 import { nestFleet } from '../src/fleet/nestFleet';
 import {
-  PROG_HUES, assignHues, boxNeeds, boxOrder, boxState, foldedCard, movementWords, programmeBoxes, rankBoxes,
+  PROG_HUES, assignHues, boxNeeds, boxOrder, boxState, fleetHues, foldedCard, movementWords, programmeBoxes, rankBoxes,
   type BoxState, type ProgrammeBoxView,
 } from '../src/fleet/programmeBoxes';
+import { runCard } from '../src/fleet/runWords';
 import { HOUR, MIN, NOW, asking, run, sess } from './rollupFixture';
 
 const coord = sess('coord', 'project-c', { role: 'coordinator', status: 'busy', bucket: 'working' });
 const kid = (id: string, over: Partial<FleetSession> = {}): FleetSession => sess(id, 'project-c', { role: 'child', ...over });
 
-/** One card's rows, nested exactly as the fleet tree nests them. */
+/** project-c's card: its rows nested exactly as the fleet tree nests them, its runs split as the tree splits them (the
+ *  worker renders here, or on another card), and the fleet's one hue map. */
 const boxesOf = (
   sessions: FleetSession[], runs: RunSummary[], lastMoveOf: (r: RunSummary) => number | null = () => null,
-): ReturnType<typeof programmeBoxes> => programmeBoxes(nestFleet(sessions, runs), runs, lastMoveOf);
+): ReturnType<typeof programmeBoxes> => {
+  const cards = cardsOf(sessions);
+  const here = runs.filter((r) => runCard(r, cards) === 'project-c');
+  const far = runs.filter((r) => runCard(r, cards) !== 'project-c');
+  return programmeBoxes(nestFleet(sessions, here), here, far, lastMoveOf, fleetHues(runs));
+};
 
 const only = (b: ReturnType<typeof programmeBoxes>): ProgrammeBoxView => {
   expect(b.boxes).toHaveLength(1);
@@ -153,6 +160,13 @@ describe('programmeBoxes', () => {
     expect(b.abroad.map((r) => r.id)).toEqual([30]);
   });
 
+  it('lists no abroad line for a claimed run whose worker reaches this card without being a row of it', () => {
+    // Its worker sits in this card's Released or Archived fold, or is gone with this card's project: `runCard` answers
+    // this card, so it renders on no other one.
+    const b = only(boxesOf([coord, kid('w1')], [run(10, 'coord', 'w1'), run(31, 'coord', 'ghost', { wave: 2 })]));
+    expect(b.abroad).toEqual([]);
+  });
+
   it('keeps the parent role of a coordinator that is also another coordinator\'s worker (nestFleet rule 4)', () => {
     const sub = kid('sub', { role: 'coordinator' });
     const runs = [run(10, 'coord', 'sub'), run(11, 'sub', 'w1'), run(12, 'coord', 'w2')];
@@ -202,7 +216,50 @@ describe('fleetTree\'s cross-card run index (`claimed`)', () => {
     expect(card('project-c').runs.map((r) => r.id)).toEqual([30]);
     // The card's box reads both lists: the far worker is its abroad, never a second copy of its row.
     const d = card('project-d');
-    expect(only(programmeBoxes(d.rows, [...d.runs, ...d.claimed], () => null)).abroad.map((r) => r.id)).toEqual([30]);
+    expect(only(programmeBoxes(d.rows, d.runs, d.claimed, () => null, d.hues)).abroad.map((r) => r.id)).toEqual([30]);
+  });
+});
+
+describe('one programme, one hue across the fleet', () => {
+  // project-d holds billing's and search-index's coordinators (one FNV bucket, cyan); search-index's worker renders on
+  // project-c; docs-site's coordinator and worker are on project-e.
+  const sessions = [
+    sess('coord-b', 'project-d', { role: 'coordinator' }), sess('wb', 'project-d', { role: 'child' }),
+    sess('coord-s', 'project-d', { role: 'coordinator' }), sess('ws', 'project-c', { role: 'child' }),
+    sess('coord-e', 'project-e', { role: 'coordinator' }), sess('we', 'project-e', { role: 'child' }),
+    sess('we2', 'project-e', { role: 'child' }),
+  ];
+  const runs = [
+    run(40, 'coord-b', 'wb', { program: 'billing', project: 'project-d' }),
+    run(41, 'coord-s', 'ws', { program: 'search-index', project: 'project-c' }),
+    run(42, 'coord-e', 'we', { program: 'docs-site', project: 'project-e' }),
+  ];
+  const huesOf = (rs: RunSummary[]) => new Map(fleetTree(sessions, [], rs).map((g) => [g.project, Object.fromEntries(g.hues)]));
+
+  it('assigns the hues once over every open programme in the runs frame', () => {
+    expect(Object.fromEntries(fleetHues(runs))).toEqual(Object.fromEntries(assignHues(['billing', 'search-index', 'docs-site'])));
+    const cards = huesOf(runs);
+    expect(cards.get('project-d')!['search-index']).toBe(cards.get('project-c')!['search-index']);
+    expect(cards.get('project-d')!['search-index']).not.toBe(cards.get('project-d')!.billing);
+  });
+
+  it('hands each card only its own programmes\' entries', () => {
+    const cards = huesOf(runs);
+    expect(Object.keys(cards.get('project-d')!).sort()).toEqual(['billing', 'search-index']);
+    expect(Object.keys(cards.get('project-c')!)).toEqual(['search-index']);
+    expect(Object.keys(cards.get('project-e')!)).toEqual(['docs-site']);
+  });
+
+  it('keeps a programme\'s hue when another card\'s programmes change, while the fleet\'s set of programmes holds', () => {
+    const before = huesOf(runs);
+    // project-e gains a second docs-site worker and its first moves on a wave: the fleet's set is unchanged.
+    const after = huesOf([...runs.slice(0, 2), { ...runs[2]!, wave: 2 }, run(43, 'coord-e', 'we2', { program: 'docs-site', project: 'project-e' })]);
+    expect(after.get('project-d')).toEqual(before.get('project-d'));
+    expect(after.get('project-c')).toEqual(before.get('project-c'));
+    // A programme that opens on project-e changes the fleet's set, and the map follows that set, nothing else.
+    const opened = [...runs, run(44, 'coord-e', 'we2', { program: 'port-api', project: 'project-e' })];
+    expect(huesOf(opened).get('project-d')).toEqual(
+      Object.fromEntries(['billing', 'search-index'].map((p) => [p, fleetHues(opened).get(p)])));
   });
 });
 
@@ -276,6 +333,8 @@ describe('boxOrder', () => {
       .toEqual([['asks', 'needs'], ['quiet', 'moving']]);
   });
 
+  // Vacuous in the app until Task G1 (the rollup pins open a card that needs the operator, and nothing stalls before
+  // G1's moves, threshold and clock); the branch is pinned here, and G1 adds the real case through FleetCards.
   it('keeps, on a folded card, the boxes that need the operator or have stalled, and counts the rest', () => {
     const ranked = [
       { state: 'needs' as const, view: view({ coordinatorId: 'a' }) },

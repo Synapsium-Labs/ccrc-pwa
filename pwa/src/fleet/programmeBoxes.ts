@@ -5,18 +5,21 @@
 //
 // MEMBERS. A box is a session on this card that claims an open run of another session (or of a spawn not yet
 // bound): its children are the rows `nestFleet` brackets under it, unchanged, and its far workers (`abroad`) are the
-// runs it claims whose worker renders on another card. ONE box per coordinator session: a coordinator holding open
+// runs it claims whose worker renders on another card (`fleetTree`'s `claimed`, by `runCard`). A claimed run whose
+// worker reaches this card without being a row of it (in its Released or Archived fold, or gone) is no far worker. ONE box per coordinator session: a coordinator holding open
 // runs of two programmes is led by the one with the most open work runs, a tie going to the newest run, and says
 // `more`. A coordinator with no open run is an ordinary row (`lone`). A worker whose claimant is not a box here, and
 // a spawn whose claimant is not on this card, is `elsewhere`: its programme's box is not on this card.
 //
 // STATE. `boxState` is one decider, in this order: needs (a drawn member is the operator's ask, `operatorAsk`), the
 // operator's pause, stalled (no move within the stall watch's quiet threshold), moving. Movement is an INPUT
-// (`lastMoveOf`, the run's last move, and the threshold): until the server sends either (Task G1) the card passes
-// `() => null` and `null`, so a box shows no movement readout and never reads stalled.
+// (`lastMoveOf`, the run's last move, the threshold and the card's clock): until Task G1 supplies the moves, the
+// threshold and a boundary clock, the card passes `() => null`, `null` and no clock, so a box shows no movement
+// readout and never reads stalled.
 //
-// HUE. Each programme on a card carries one of four cool hues (`assignHues`): the `--prog-*` aliases of the lane
-// hues, always beside the programme's title in words.
+// HUE. Each programme carries one of four cool hues (`assignHues`): the `--prog-*` aliases of the lane hues, always
+// beside the programme's title in words. The map is the FLEET's (`fleetHues`), assigned once per runs frame over every
+// open programme, so a programme keeps one hue on every card and in every view; a card is handed its own entries.
 import type { FleetSession, RunState, RunSummary } from '../../../shared/api';
 import type { FleetRow } from './nestFleet';
 import { formatReset } from './formatReset';
@@ -52,6 +55,20 @@ export function assignHues(slugs: readonly string[]): ReadonlyMap<string, ProgHu
   return out;
 }
 
+/** The fleet's one hue map: `assignHues` over every open programme in the runs frame. A programme's hue changes only
+ *  when the fleet's set of open programmes does, never with what another card holds. */
+export const fleetHues = (runs: readonly RunSummary[]): ReadonlyMap<string, ProgHue> => assignHues(runs.map((r) => r.program));
+
+/** A card's entries of the fleet's map: the programmes of `runs`, the runs the card can know of, in slug order. */
+export function cardHues(fleet: ReadonlyMap<string, ProgHue>, runs: readonly RunSummary[]): ReadonlyMap<string, ProgHue> {
+  const out = new Map<string, ProgHue>();
+  for (const slug of [...new Set(runs.map((r) => r.program))].sort()) {
+    const hue = fleet.get(slug);
+    if (hue !== undefined) out.set(slug, hue);
+  }
+  return out;
+}
+
 export type BoxState = 'needs' | 'stalled' | 'moving' | 'paused';
 
 export interface ProgrammeBoxView {
@@ -74,7 +91,7 @@ export interface ProgrammeBoxes {
   boxes: ProgrammeBoxView[];
   elsewhere: FleetRow[];
   lone: FleetRow[];
-  /** Every programme on this card, boxes and elsewhere workers alike, by slug. */
+  /** The hue of every programme on this card, boxes and elsewhere workers alike, by slug: the fleet's map. */
   hues: ReadonlyMap<string, ProgHue>;
 }
 
@@ -89,12 +106,16 @@ export function rowRun(row: FleetRow, runs: readonly RunSummary[]): RunSummary |
 }
 
 /** One card's boxes, the workers of programmes elsewhere, and the rows in no programme. `rows` is the card's tree
- *  (`nestFleet`'s order); `runs` is every open run this card can know of: those whose worker renders here and those
- *  a session here claims. */
+ *  (`nestFleet`'s order); `here` is the open runs whose worker renders on this card, and `far` those a session here
+ *  claims whose worker renders on another (`fleetTree`'s `runs` and `claimed`). `hues` is the fleet's map: a slug it
+ *  lacks takes its preferred hue, as `assignHues` gives a slug alone. */
 export function programmeBoxes(
-  rows: readonly FleetRow[], runs: readonly RunSummary[], lastMoveOf: (r: RunSummary) => number | null,
+  rows: readonly FleetRow[], here: readonly RunSummary[], far: readonly RunSummary[],
+  lastMoveOf: (r: RunSummary) => number | null, hues: ReadonlyMap<string, ProgHue>,
 ): ProgrammeBoxes {
   const onCard = new Set(rows.flatMap((r) => (r.kind === 'session' ? [r.session.id] : [])));
+  const runs = [...here, ...far];
+  const farIds = new Set(far.map((r) => r.id));
   const byId = new Map<number, RunSummary>();
   for (const r of runs) byId.set(r.id, r);
   const claims = new Map<string, RunSummary[]>();
@@ -117,7 +138,7 @@ export function programmeBoxes(
     const claimed = head.kind === 'session' ? claims.get(head.session.id) : undefined;
     if (head.kind === 'session' && claimed !== undefined) {
       drafts.push({ ...lead(claimed), coordinatorId: head.session.id, coordinator: head.session, children: kids,
-        abroad: claimed.filter((r) => r.sessionId !== null && !onCard.has(r.sessionId)).sort((a, b) => a.id - b.id),
+        abroad: claimed.filter((r) => farIds.has(r.id)).sort((a, b) => a.id - b.id),
         lastMoveAt: newest(claimed.map(lastMoveOf)) });
       continue;
     }
@@ -126,12 +147,8 @@ export function programmeBoxes(
     (far ? elsewhere : lone).push(head, ...kids);
   }
 
-  const slugs = [
-    ...drafts.flatMap((d) => (claims.get(d.coordinatorId) ?? []).map((r) => r.program)),
-    ...elsewhere.flatMap((r) => rowRun(r, runs)?.program ?? []),
-  ];
-  const hues = assignHues(slugs);
-  const boxes = drafts.map(({ slug, title, ...d }) => ({ ...d, lead: { slug, title, hue: hues.get(slug)! } }));
+  const hueOf = (slug: string): ProgHue => hues.get(slug) ?? PROG_HUES[fnv1a(slug) % PROG_HUES.length]!;
+  const boxes = drafts.map(({ slug, title, ...d }) => ({ ...d, lead: { slug, title, hue: hueOf(slug) } }));
   return { boxes, elsewhere, lone, hues };
 }
 

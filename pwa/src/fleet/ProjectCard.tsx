@@ -35,7 +35,7 @@ import { ProjectCardHead } from './ProjectCardHead';
 import type { CardRollup, RolledRow } from './rollup';
 import { CROSSING_GLYPH, DISPATCH_GLYPH, dispatchWindow, runForSession, waveLabel } from './runWords';
 import {
-  cardAbroad, foldedCard, programmeBoxes, rankBoxes, rowRun, trayOf, type BoxState, type ProgHue, type ProgrammeBoxView,
+  cardAbroad, fleetHues, foldedCard, programmeBoxes, rankBoxes, rowRun, trayOf, type BoxState, type ProgHue, type ProgrammeBoxView,
 } from './programmeBoxes';
 import { ProgrammeBox } from './ProgrammeBox';
 import { SessionLine } from './SessionLine';
@@ -72,9 +72,11 @@ export const NEST_BRACKET = '└─';
  *  Exported so the suite pins the sentence rather than a paraphrase of it. */
 export const POOL_UNAVAILABLE_TEXT = 'fleet ccd predates pools';
 
-/** A run's last move, until the server says (Task G1 replaces this and `QUIET_MS` at the box's one call site). */
+/** A run's last move, until the server says. Task G1 supplies the moves, the quiet threshold and a boundary clock (the
+ *  rollup's `nextRollupBoundary` idiom) at the box's one call site, in place of this, `QUIET_MS` and the test-only
+ *  `nowMs`. */
 const NO_MOVE = (): null => null;
-/** The stall watch's quiet threshold, until the server sends it (Task G1). */
+/** The stall watch's quiet threshold, until the server sends it (Task G1, with the moves and the clock). */
 const QUIET_MS: number | null = null;
 
 function PendingSpawn({ run, nowMs }: { run: RunSummary; nowMs: number | undefined }): ReactNode {
@@ -285,7 +287,10 @@ function ProjectCardView({
   // here, and those a session here claims (`fleetTree`'s `claimed`). The fold of each box's tray is the rollup's.
   const claimed = 'claimed' in group ? (group as FleetTreeGroup).claimed : [];
   const boxRuns = claimed.length === 0 ? runs : [...runs, ...claimed];
-  const prog = programmeBoxes(tree, boxRuns, NO_MOVE);
+  // The fleet's hue map, this card's entries (`fleetTree`). A group drawn without the tree has no fleet to read, so its
+  // own runs are the whole of what it knows.
+  const hues = 'hues' in group ? (group as FleetTreeGroup).hues : fleetHues(boxRuns);
+  const prog = programmeBoxes(tree, runs, claimed, NO_MOVE, hues);
   const ranked = rankBoxes(prog.boxes, nowMs ?? null, QUIET_MS, false);
   const folded = collapsed ? foldedCard(ranked, prog.elsewhere, prog.lone) : null;
   const shownAbroad = cardAbroad(abroad, prog.boxes);
