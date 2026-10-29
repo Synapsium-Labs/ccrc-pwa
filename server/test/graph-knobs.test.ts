@@ -221,7 +221,7 @@ describe('graph settings: _graph_knobs reads them through _ccrc_knob, _gr_knobs 
     const m = /^CCRC_SETTINGS=\(([^)]*)\)$/m.exec(read('ccd/ccrc'));
     const settings = m ? m[1].split(' ').filter((w) => w !== '') : [];
     expect(settings.filter((s) => s.startsWith('CCRC_GRAPH_')), 'the graph keys of CCRC_SETTINGS').toEqual(SPEC_KEYS);
-    expect(settings, 'counted exit: CCRC_SETTINGS 17 -> 39').toHaveLength(39);
+    expect(settings, 'counted exit: CCRC_SETTINGS 21 -> 43 (wave 29 added four)').toHaveLength(43);
     expect(raw(box()).map((f) => f[0])).toEqual(SPEC_KEYS);
   });
 
