@@ -6000,17 +6000,26 @@ It writes four JSON files, each `"v": 1`, under `~/.cc-sessions/landing/<project
 
 Anything the probe cannot measure is written as `unmeasured` with a why, and never as clean or green. That
 covers a failed fetch or gh call, a git child past its deadline (`timeout`), and an error before the first write.
-A child the project budget cut says `why: budget` at these sites: the scratch's `init`, the fetch URL's
-`ls-remote --get-url`, the fetch itself and the fetched base's `rev-parse` (in `probe` and `main-health`), and every
-`merge-tree` (a head's or a pair's verdict, and the lineage walk's merge step). A budget cut on the first read of
-`remote.origin.url`, whether the read itself was cut or `store.before`'s count had already spent the budget, writes
-`probe` and every lineage file `repo-unreadable` and `main-health` `fetch-failed`. `fetch-failed` also covers a scratch, alternates or refspec
-failure before the first write, since the probe's set has no closer word. A failed or cut fetch, or an error before the first write,
-rewrites `probe`, `main-health` and every lineage of the project, so none of them keeps an older measurement. A
-row the tick could not decide keeps its last lineage file, with that file's own `at`. This happens when the budget
-ran out after the fetch, when one row's read timed out or gave no readable answer, or when the tick never reached
-the project. Stage 4
-compares that file's tip with the live tip. In `probe`, a null `store.after` or `scratch.sizeKiB` means
+A child the project budget cut says `why: budget`, and so does a step the spent budget kept from starting. That
+happens at each of these: the scratch's `init`, the fetch URL's `ls-remote --get-url`, the fetch itself and the
+fetched base's `rev-parse` (in `probe` and `main-health`); every `merge-tree` of a head or a pair (in `probe`); the
+forge reads behind the base's checks (the rules, the branch view, the check runs and the status, in `main-health`);
+and the lineage walk, which checks the budget before each step and says `budget` for its `rev-list`, `merge-base`,
+`merge-tree` and tree reads (in a lineage file). A budget cut on the first read of `remote.origin.url`, whether the
+read itself was cut or `store.before`'s count had already spent the budget, writes `probe` `repo-unreadable`,
+`main-health` `fetch-failed`, and the lineage files `repo-unreadable` as the lineage pass decides them (below).
+`fetch-failed` also covers a scratch, alternates or refspec failure before the first write, since the probe's set
+has no closer word. A failed or cut fetch, or an error before the first write, rewrites `probe`, `main-health` and
+the project's lineage files, so none of them keeps an older measurement, with three exceptions: when the registry
+cannot be listed, no lineage file is written or removed; a row whose registry `.project` or `.branch` exists but
+cannot be read is held, and its file is left as it was; and a signal that interrupts the tick leaves the files as
+they were until the next tick. A row the tick could not decide keeps its last lineage file, with that file's own
+`at`. This happens when the budget ran out after the fetch, when one row's read timed out, was killed or answered
+anything but a sha (rc 0) or rc 1, when the tick never reached the project, when the registry could not be listed,
+and, on every route, when the row's registry files could not be read (the row is held). rc 1 is git's answer that
+the ref is not there: a missing ref, and also one git itself ignores as broken or cannot read. That row is decided,
+its file is removed, and stage 4 reads the absence as `lineage-unmeasured`. For a
+kept file, stage 4 compares its tip with the live tip. In `probe`, a null `store.after` or `scratch.sizeKiB` means
 that figure was not measured on that tick, for example because the tick was interrupted or the count failed.
 
 `enabled` is reconciled in one pass at the start of every tick that runs, before any project is measured. It is
