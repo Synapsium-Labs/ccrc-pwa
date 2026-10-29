@@ -5179,15 +5179,18 @@ hook header's `WHAT PASSES UNPARSED` list, each class pinned by a LISTED-pass ca
 a file, a word or path assembled at run time, a variable or quoted command word, a `gh alias`, the head
 grammar's own classes (`xargs`, `bash -c`, `eval`, a leading redirection, a path-spelled wrapper), an
 encoded, doubled-slash or case-variant merge path, a mutation word written with JSON `\u` escapes, a word
-broken by quotes before the prefilter sees it, and the ways to move `main` that are not merges (a ref
+broken by quotes before the prefilter sees it, a quoted or backticked `api` word, a `.` or `..` path
+segment, another HTTP client handed gh's credential (`curl` with `gh auth token`), a write of the base
+branch's rules or protection that removes the queue, and the ways to move `main` that are not merges (a ref
 `PATCH`, the `updateRef` family of mutations, `git push` to a protected branch), which are out of scope. It is
 a contract the fleet honours, not a wall, and a jq failure or a hook timeout fails it open.
 
 One narrow allowance exists (D-7249). The operator may create, by hand, a regular file at
 `$REG/admin-merge-allowed/<project>` (a dotless registry subdirectory, so no registry glob sees it; nothing in
 this tree writes it, and its content is never read). For a session of that project, read from its own
-`$REG/<id>.project` with no fallback to the session id, an absent, empty, off-class or symlinked marker reads
-as not allowed, and the allowance lifts only the admin half, only for a command in a fixed grammar and only under the
+`$REG/<id>.project` with no fallback to the session id, a `.project` that is absent, unreadable, empty or
+off-class, and an allowance that is a symlink or not a regular file, each read as not allowed, and the
+allowance lifts only the admin half, only for a command in a fixed grammar and only under the
 cap: exactly one admin merge of a PR named by number, optionally with `--match-head-commit <40 hex>`,
 `--squash`, `--merge`, `--rebase`, `--delete-branch` or `-d`, single-spaced, with nothing before or after it. It
 never lifts the `gh api` half, the over-cap reading or the worker deny. A repository `gh` resolves from

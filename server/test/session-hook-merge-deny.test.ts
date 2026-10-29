@@ -1197,6 +1197,24 @@ describe('the bypass deny (wave 2b)', () => {
       ]) expect(bash(c).deny, `refused: ${c}`).toBeNull();
     });
 
+    it('refuses an api word the strip joins back together: `gh a""pi` reads as `gh api` (the listed quoted-word pass is the whole word quoted)', () => {
+      expect(bash('gh a""pi -X PUT repos/o/r/pulls/42/merge').deny, 'gh a""pi went through').not.toBeNull();
+    });
+
+    // m4, a NAMED cost: the verdict block's comments mention `--admin` and the whole command is over the cap, so
+    // a real merge appended to it in ONE command is refused. The skill runs them as separate commands, and the
+    // reason tells the session to split.
+    it('the verdict block and an enqueue in ONE command is refused over the cap (named cost: run them as separate commands)', () => {
+      const one = `${verdictBlock()}\ngh pr checks 42 --required && gh pr merge 42 --match-head-commit ${SHA}`;
+      expect(Buffer.byteLength(one)).toBeGreaterThan(CAP);
+      const d = bash(one).deny;
+      expect(d, 'the named cost went away: update the hook header\'s cost paragraph').not.toBeNull();
+      expect(d).toContain('Split it into commands of at most');
+      expect(d).toContain('cannot tell prose from a command');
+      // The two commands apart, as the skill runs them: the enqueue alone passes.
+      expect(bash(`gh pr checks 42 --required && gh pr merge 42 --match-head-commit ${SHA}`).deny).toBeNull();
+    });
+
     it('the wide reading\'s cost, named: a real gh api call and an unrelated mutation word in one command is refused', () => {
       const d = bash('gh api repos/o/r/pulls/42; echo enqueuePullRequest').deny;
       expect(d, 'a real gh api head beside an unrelated mutation word went through').not.toBeNull();
@@ -1217,6 +1235,16 @@ describe('the bypass deny (wave 2b)', () => {
       // Broken before the prefilter: the payload holds none of the three trigger strings, so the arm never runs.
       ['gh api graphql -f query=enqueue""PullRequest', 'a word or path broken by quotes or a backslash'],
       ['xargs gh api -X PUT repos/o/r/pulls/42/merge', 'the head grammar\'s own classes'],
+      ['gh "api" -X PUT repos/o/r/pulls/42/merge', 'a quoted or backticked `api` word'],
+      ["gh 'api' -X PUT repos/o/r/pulls/42/merge", 'a quoted or backticked `api` word'],
+      ['`gh api -X PUT repos/o/r/pulls/42/merge`', 'a quoted or backticked `api` word'],
+      ['gh api -X PUT repos/o/r/pulls/42/./merge', 'a `.` or `..` path segment'],
+      ['gh api -X PUT repos/o/r/pulls/42/x/../merge', 'a `.` or `..` path segment'],
+      ['curl -X PUT -H "Authorization: Bearer $(gh auth token)" https://api.github.com/repos/o/r/pulls/42/merge',
+        'another HTTP client given gh\'s credential'],
+      ['GH_TOKEN=$(gh auth token) curl -X PUT https://api.github.com/repos/o/r/pulls/42/merge', 'another HTTP client given gh\'s credential'],
+      ['gh api -X PUT repos/o/r/rulesets/7 -f enforcement=disabled', 'a write of the base branch\'s rules or protection'],
+      ['gh api -X DELETE repos/o/r/branches/main/protection', 'a write of the base branch\'s rules or protection'],
       ['gh api -X PUT repos/o/r/pulls/42/%6derge', 'an encoded or non-canonical merge path'],
       ['gh api -X PUT repos/o/r/pulls/42//merge', 'an encoded or non-canonical merge path'],
       ['gh api -X POST repos/o/r//merges -f base=main -f head=x', 'an encoded or non-canonical merge path'],

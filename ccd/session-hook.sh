@@ -4104,6 +4104,20 @@ fi
 #   - a variable or quoted command word (`$GH api …`, `"gh" api …`): the strip
 #     drops the quoted word, so no `gh … api` head is left to ask about;
 #   - a `gh alias` (`gh alias set m 'api -X PUT'`);
+#   - a quoted or backticked `api` word (`gh "api" -X PUT …`, `gh 'api' …`, legacy
+#     backticks around the whole `gh api …`): the strip drops the quoted word or does
+#     not read the backtick as a command head. `gh a""pi …` is REFUSED, because
+#     the strip joins the halves into `api`;
+#   - a `.` or `..` path segment (`pulls/42/./merge`, `pulls/42/x/../merge`): the
+#     path test reads the text as written and does not normalise;
+#   - another HTTP client given gh's credential (`curl -X PUT -H "Authorization:
+#     Bearer $(gh auth token)" https://api.github.com/repos/<o>/<r>/pulls/<n>/merge`,
+#     `GH_TOKEN=$(gh auth token) curl …`, a script that reads `GH_TOKEN`): the hook
+#     asks about `gh`, not about the credential;
+#   - a write of the base branch's rules or protection that removes the queue, so
+#     that a plain merge then skips it (`gh api -X PUT repos/<o>/<r>/rulesets/<id>
+#     -f enforcement=disabled`, `gh api -X DELETE repos/<o>/<r>/branches/<b>/protection`):
+#     the coordinator skill forbids these writes as a rule of the skill only;
 #   - the head grammar's own classes, listed above for the merge head, pass the
 #     `gh api` head as they pass the merge head: `xargs gh api …`, `bash -c "…"`,
 #     `eval`, a leading redirection, an unlisted wrapper and a path-spelled wrapper;
@@ -4160,9 +4174,10 @@ fi
 # does the merge it runs carry `--admin`? `--admin` is read from the RAW command,
 # quotes included, once the STRIPPED text holds a real `gh … pr … merge` head,
 # in the same jq that strips (the verdict flags, below). The wide reading is on
-# purpose (D-7111): the strip deletes quoted spans, so a quoted `'--admin'`, one
-# after a `$(…)` argument, one after a backslash-newline and `--admin=true`
-# would otherwise be invisible. THE COST, named in the reason: a command that
+# purpose (D-7111): the strip deletes quoted spans, so a quoted `'--admin'` or
+# `"--admin"` vanishes from the stripped text, while an `--admin` after a `$(…)`
+# argument, after a backslash-newline, or written `--admin=true` (all three kept
+# by the strip) would defeat a per-segment flag parse. THE COST, named in the reason: a command that
 # holds a real merge head and an unrelated `--admin` mention (a merge, then
 # `git commit -m "never --admin"`, in one command) is refused too; run them as
 # separate commands. A held or child session gets WAVE 2's reason (asked
@@ -4345,7 +4360,9 @@ fi
 # escapes keep it one segment), a trailing `# comment`, a PR body that quotes or
 # merely mentions them in that order. It stays refused until it is split,
 # rephrased, or moved into a file. Since wave 2b the same cost falls on EVERY
-# session whose over-cap raw text also holds `--admin` anywhere (D-7115), or, for
+# session whose over-cap raw text also holds `--admin` anywhere (D-7115; a long
+# command that holds a real merge and any `--admin` mention, a comment included,
+# is refused over the cap), or, for
 # the `api` kind, a segment that names `gh` then `api` as words beside a mutation
 # word or the text `/merge` anywhere in the command (a wider reach than the
 # under-cap paths: `/merge` stands for both, and prose can hold it): the
