@@ -31,7 +31,7 @@ import { sessionLabel } from '../fleet/sessionLabel';
 import { PickSheet } from '../session/PickSheet';
 import { ReapSheet } from '../session/ReapSheet';
 import { useQueuedRoute } from '../session/useQueuedRoute';
-import { useEnsure } from '../session/useEnsure';
+import { ensureSession, useEnsure } from '../session/useEnsure';
 import { routeView } from '../session/routeView';
 import { substrateFaultTitle } from '../fleet/substrateWords';
 import { SessionChromeInputs, SessionHeader, type SessionHeaderProps } from '../session/SessionHeader';
@@ -123,7 +123,7 @@ export function useWakeOnOpen(
   // `pending`, and a failure toast's Wake checks before it calls.
   const wake = useCallback((): void => {
     set('pending');
-    api.ensure(id).then(
+    ensureSession(id).then(
       // A row still asleep stays `sent` (nothing more until it reads alive); a row that already reads alive
       // re-arms here, since the effect below skipped it while the call was out.
       () => { if (phase.current === 'pending') set(asleepRef.current ? 'sent' : 'armed'); },
