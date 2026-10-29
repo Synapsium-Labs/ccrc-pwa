@@ -22,6 +22,7 @@ import type { ReactNode } from 'react';
 import { isReclaimRefuseCode, type ReclaimRefuseCode, type RunSummary } from '../../../shared/api';
 import { Button, QC_ACTIONS, QC_CONSEQUENCE, Sheet, TextInput } from '@ccrc/ui';
 import { ApiError, UNKNOWN_RUN_TEXT, api, apiErrorText, isRegistryUnmeasurable, kickoffErrorText } from '../lib/api';
+import { ensureSession } from '../session/useEnsure';
 import './fleet.css';
 
 /** The reclaim refusals this sheet renders its OWN sentence for — a total
@@ -156,12 +157,13 @@ export function ResumeSheet({
   run,
   onClose,
   onDone,
-  ensure = api.ensure,
+  ensure = ensureSession,
   kickoff = api.kickoff,
   reclaimRun = api.reclaimRun,
 }: ResumeSheetProps & {
   /** Injectable for tests, `AbandonSheet`'s own `abandonRun` shape — each
-   *  defaults to the real client method, whose URL/method are pinned
+   *  defaults to the real client method (`ensure` through
+   *  `session/useEnsure.ts#ensureSession`, the one ensure, D-7189), whose URL/method are pinned
    *  separately in `api.test.ts` so this injection is never the ONLY coverage
    *  of a write path. */
   ensure?: (id: string) => Promise<void>;
