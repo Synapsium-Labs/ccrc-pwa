@@ -21,7 +21,9 @@
 //       is the base's except the named-difference rows of (d).
 //   (c) THE SIGNED RULING, END TO END: an allow ruled through `approvals rule` with a reason padded by one space at
 //       each end, fetched with `approvals ruling`, its canonical record bytes and signature held as literals, and
-//       `ccd/approval-verify.mjs`'s `verdictFor` accepting it under the fixture public key.
+//       `ccd/approval-verify.mjs`'s `verdictFor` accepting it under the fixture public key. Since Q3j the HOME's cap
+//       file lists `questions-v1`, so that row rules through the family; two more rows pin the same record bytes and
+//       signature through each path by name: the family's door, and the old door with the cap file absent.
 //   (d) THE NAMED-DIFFERENCE ROWS (D-7325), recorded as the base answers them (`EXPECTED`): the unconfigured box
 //       token's detail, the five contrary-kind bodies, and the non-object body. MEASURED, not assumed: the old doors
 //       ignore a contrary `kind` (an ask body with `"kind":"approval"` is pressed and recorded; an approval-shaped body
@@ -35,7 +37,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import type { AddressInfo } from 'node:net';
 import fs from 'node:fs';
 import path from 'node:path';
-import { approvalRulingBytes, renderServerCaps, SERVER_CAPS, type ApprovalRulingRecord } from '../../shared/api.js';
+import { approvalRulingBytes, renderServerCaps, SERVER_CAPS, SERVER_CAPS_FILE, type ApprovalRulingRecord } from '../../shared/api.js';
 import { verdictFor } from '../../ccd/approval-verify.mjs';
 import { CCRC_API } from './ccdWsHelpers.js';
 import { runClient, writeClientHome, type Run } from './ccrcApiClient.js';
@@ -359,6 +361,19 @@ describe('(c) the signed ruling, end to end', () => {
     const doors0 = r.doors().length;
     const ruled = await r.client('approvals rule', [String(r.approval)], json({ ...P, verdict: 'allow', reason: PADDED_REASON }));
     expect(r.doors().slice(doors0), 'the door the ruling reached').toEqual([`POST /api/questions/approval-${r.approval}/rule`]);
+    expect([statusOf(ruled), bodyOf(ruled.stdout)]).toEqual([200, '{"ok":true,"state":"allowed"}']);
+    const got = await runClient(r.home, ['approvals', 'ruling', String(r.approval), '--nonce', NONCE]);
+    const answer = JSON.parse(got.stdout) as { state: string; ruling: { record: ApprovalRulingRecord; sig: string } };
+    expect([approvalRulingBytes(answer.ruling.record), answer.ruling.sig]).toEqual([RULING_RECORD_BYTES, RULING_SIG]);
+  });
+  it('approvals rule through the old door, the cap file absent, signs the fixture ruling: the same record bytes and signature (D-7326)', async () => {
+    const r = await realServer();
+    // No cap file: questions-v1 is not advertised, so the client sends the old door, every non-advertised state's
+    // fallback until the old doors retire.
+    fs.rmSync(path.join(r.home, '.ccrc', SERVER_CAPS_FILE));
+    const doors0 = r.doors().length;
+    const ruled = await r.client('approvals rule', [String(r.approval)], json({ ...P, verdict: 'allow', reason: PADDED_REASON }));
+    expect(r.doors().slice(doors0), 'the door the ruling reached').toEqual([`POST /api/approvals/${r.approval}/rule`]);
     expect([statusOf(ruled), bodyOf(ruled.stdout)]).toEqual([200, '{"ok":true,"state":"allowed"}']);
     const got = await runClient(r.home, ['approvals', 'ruling', String(r.approval), '--nonce', NONCE]);
     const answer = JSON.parse(got.stdout) as { state: string; ruling: { record: ApprovalRulingRecord; sig: string } };
