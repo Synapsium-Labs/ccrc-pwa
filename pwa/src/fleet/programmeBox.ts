@@ -18,7 +18,7 @@
 import type { FleetSession, RunState, RunSummary } from '../../../shared/api';
 import type { FleetRow } from './nestFleet';
 import { formatReset } from './formatReset';
-import { operatorAsk } from './rollup';
+import { operatorAsk, summaryParts, type RolledRow } from './rollup';
 import { RUN_WORD, programWave, programmeTitle, runForSession } from './runWords';
 
 export const PROG_HUES = ['cyan', 'violet', 'magenta', 'blue'] as const;
@@ -192,4 +192,69 @@ export function boxOrder(
   const r = RANK[a.state] - RANK[b.state];
   if (r !== 0 || a.view.lastMoveAt === null || b.view.lastMoveAt === null) return r;
   return a.view.lastMoveAt - b.view.lastMoveAt;
+}
+
+/** The boxes in the card's order, each with its state. `now` is the card's clock; with none (the card reads no clock
+ *  of its own) there is no threshold to cross either, so no box reads stalled. */
+export function rankBoxes(
+  boxes: readonly ProgrammeBoxView[], now: number | null, quietMs: number | null, paused: boolean,
+): { state: BoxState; view: ProgrammeBoxView }[] {
+  return boxes
+    .map((view) => ({ view, state: boxState(view, boxNeeds(view), now ?? 0, now === null ? null : quietMs, paused) }))
+    .sort(boxOrder);
+}
+
+/** A folded project card (spec §2.3): the boxes that need the operator or have stalled stay drawn, and the rest of
+ *  the card is counted, a box as one and a row as one. */
+export function foldedCard<B extends { readonly state: BoxState }>(
+  ranked: readonly B[], elsewhere: readonly FleetRow[], lone: readonly FleetRow[],
+): { keep: B[]; more: number } {
+  const keep = ranked.filter((b) => b.state === 'needs' || b.state === 'stalled');
+  const rows = [...elsewhere, ...lone].filter((r) => r.depth === 0).length;
+  return { keep, more: ranked.length - keep.length + rows };
+}
+
+export type SummaryRow = Extract<RolledRow, { kind: 'summary' }>;
+
+/** A box's tray as the rollup folded it (`foldChildren`, unchanged): the child rows drawn under the coordinator,
+ *  and the summary row, which is the footer's state, when the rollup folded them. */
+export interface Tray { rows: FleetRow[]; summary: SummaryRow | null }
+
+export function trayOf(rolled: readonly RolledRow[], coordinatorId: string): Tray {
+  const at = rolled.findIndex((r) => r.depth === 0 && r.kind === 'session' && r.session.id === coordinatorId);
+  const tray: Tray = { rows: [], summary: null };
+  for (let i = at + 1; at >= 0 && i < rolled.length && rolled[i]!.depth === 1; i += 1) {
+    const r = rolled[i]!;
+    if (r.kind === 'summary') tray.summary = r;
+    else tray.rows.push(r);
+  }
+  return tray;
+}
+
+const rowId = (r: FleetRow): string => (r.kind === 'session' ? r.session.id : `spawn:${r.run.id}`);
+
+/** The footer's words, the existing children toggle's: folded, `2 more workers · 1 working` over the workers the tray
+ *  hides; open, `hide 3 workers`. `null` when the rollup did not fold the children, or folded nothing away. */
+export function footerWords(b: ProgrammeBoxView, tray: Tray): readonly string[] | null {
+  if (tray.summary === null) return null;
+  if (tray.summary.expanded) return [`hide ${tray.summary.total} ${tray.summary.total === 1 ? 'worker' : 'workers'}`];
+  const shown = new Set(tray.rows.map(rowId));
+  const hidden = b.children.filter((r) => !shown.has(rowId(r)));
+  if (hidden.length === 0) return null;
+  const working = summaryParts(hidden).slice(1).find((p) => p.word === 'working');
+  return [`${hidden.length} more ${hidden.length === 1 ? 'worker' : 'workers'}`, ...(working ? [`${working.n} working`] : [])];
+}
+
+/** The kicker's progress: `3/6 waves` with the share of a bar when the programme declared its total, `wave 62` with
+ *  no bar when it did not, nothing before a first work wave. */
+export function progressWords(p: ProgrammeBoxView['progress']): { text: string; share: number | null } | null {
+  if (p.wave <= 0) return null;
+  if (p.waveOf === null || p.waveOf <= 0) return { text: `wave ${p.wave}`, share: null };
+  return { text: `${p.wave}/${p.waveOf} waves`, share: Math.min(1, p.wave / p.waveOf) };
+}
+
+/** The card's own abroad list, less every run a box on it already lists in its tray. */
+export function cardAbroad(abroad: readonly RunSummary[], boxes: readonly ProgrammeBoxView[]): readonly RunSummary[] {
+  const listed = new Set(boxes.flatMap((b) => b.abroad.map((r) => r.id)));
+  return listed.size === 0 ? abroad : abroad.filter((r) => !listed.has(r.id));
 }

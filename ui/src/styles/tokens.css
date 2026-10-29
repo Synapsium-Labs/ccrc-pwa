@@ -251,6 +251,19 @@
   --acct-green:        #70D2AE;  /* green   — 7.73:1 on its tint (measured: node design/contrast-check.mjs) */
   --acct-green-tint:   #183027;
 
+  /* Programme hues (Task G2, a programme box in its project card): ALIASES of the four cool lane hues, never values
+     of their own, so every palette carries them and the contrast gate already measures each pair. A programme borrows
+     them beside its title in words, never as a chip, never glowing and never on a lane's own card; amber and green
+     are left out because they share a family with attention and working. */
+  --prog-cyan:         var(--acct-cyan);
+  --prog-cyan-tint:    var(--acct-cyan-tint);
+  --prog-violet:       var(--acct-violet);
+  --prog-violet-tint:  var(--acct-violet-tint);
+  --prog-magenta:      var(--acct-magenta);
+  --prog-magenta-tint: var(--acct-magenta-tint);
+  --prog-blue:         var(--acct-blue);
+  --prog-blue-tint:    var(--acct-blue-tint);
+
   /* One-variable account accent: screens stamp data-acct at their root and
      components style chips/headers against --acct-active only (rebinding
      selectors at the bottom of this file). The glow never rebinds — glow is

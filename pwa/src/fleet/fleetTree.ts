@@ -109,12 +109,15 @@ const latestPerSession = (
   runs.filter((r) => r.sessionId === null || runForSession(runs, byId.get(r.sessionId) ?? { id: r.sessionId }) === r);
 
 /** A card of the tree: `groupFleet`'s group, plus the rows `nestFleet` draws
- *  from it, the runs that drew them, and the runs this project is the HOME of
- *  that work on another card (`ProjectCard`'s `abroad`, spec §3 F4). */
+ *  from it, the runs that drew them, the runs this project is the HOME of
+ *  that work on another card (`ProjectCard`'s `abroad`, spec §3 F4), and the
+ *  runs a session on this card claims whose worker renders on another card
+ *  (Task G2: a programme box's far workers, its lead and its last move). */
 export interface FleetTreeGroup extends FleetGroup {
   readonly rows: readonly FleetRow[];
   readonly runs: readonly RunSummary[];
   readonly abroad: readonly RunSummary[];
+  readonly claimed: readonly RunSummary[];
 }
 
 /** The fleet as cards of nested rows. `runs` is the ACTIVE runs. Pure. */
@@ -135,6 +138,9 @@ export function fleetTree(
       // A run homed here and working elsewhere, minus one whose worker renders
       // on this very card — that run is a bracketed row here already (spec §6).
       abroad: runs.filter((r) => runHomeProject(r) === g.project && r.project !== g.project
+        && runCard(r, cards) !== g.project),
+      // The cross-card run index the box reads (Task G2): claimed here, drawn elsewhere, so not in `runs`.
+      claimed: runs.filter((r) => r.claimedBy !== null && cards.get(r.claimedBy) === g.project
         && runCard(r, cards) !== g.project),
     };
   });
