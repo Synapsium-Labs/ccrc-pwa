@@ -23345,7 +23345,7 @@ _tmux_new_session() {   # argv for `tmux new-session` -> runs it, PLACING the se
     # --slice IS NOT OPTIONAL, and it is the correction to this mechanism's
     # own first version (D-307 (was D-B8-11)). A user scope with no `--slice` defaults to
     # `app.slice`; the fleet's aggregate memory ceiling
-    # (deploy/systemd/app-claude-session.slice.d/limits.conf, MemoryMax=24G;
+    # (deploy/systemd/app-claude-session.slice.d/limits.conf, MemoryMax default 24G, the box's CCRC_SESSION_SLICE_MEMORY_MAX in ~/.ccrc/ccrc.env;
     # MemoryHigh deliberately `infinity` since 2026-09-09 — an aggregate
     # MemoryHigh throttles the whole slice, while an unreclaimable MemoryMax
     # breach invokes the cgroup-local OOM killer) hangs one level in, on
@@ -23357,7 +23357,7 @@ _tmux_new_session() {   # argv for `tmux new-session` -> runs it, PLACING the se
     # carried the whole fleet's memory out of its ceiling.
     #
     # Measured on the fleet host 2026-08-19, after the reboot that verified
-    # D-305 (was D-B8-9): `app-claude\x2dsession.slice` held 66 MB under a 24G cap — the
+    # D-305 (was D-B8-9): `app-claude\x2dsession.slice` held 66 MB under its 24G cap (the default) — the
     # supervise loops and nothing else — while `app.slice` held 17.6 GB
     # uncapped. Proved causal the same day on an isolated socket: a server
     # started inside the slice mints its pane scopes in that same slice.
