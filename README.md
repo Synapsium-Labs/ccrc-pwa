@@ -5164,8 +5164,52 @@ refused like a worker and is sent to the operator's shell. The deny is a contrac
 cannot parse (`bash -c "…"`, a quoted command word, a variable or alias, a path-spelled wrapper, and
 the rest) is listed in the hook's header, and a jq failure or a hook timeout fails it open
 (`server/test/session-hook-merge-deny.test.ts`). This tree changes no repository setting: requiring
-the queue is the operator's act, and denying `--admin` to every session, or a `gh api` merge, is not
-shipped.
+the queue is the operator's act.
+
+**The bypass deny (landing-order wave 2b).** A second question, asked of every session after the worker
+deny's and with its text unchanged, closes the two ways past the queue that the worker deny leaves open:
+the hook refuses `gh pr merge … --admin`, and a `gh api` call that reaches a merge (the pulls merge
+endpoint, the repository `merges` endpoint, and the `mergePullRequest`, `enqueuePullRequest`,
+`enablePullRequestAutoMerge` and `mergeBranch` mutations), in any session, held or not, coordinator
+included. It is the same arm, the same single `jq` and the same strip: once the stripped text holds a real
+`gh … pr … merge` head or `gh … api` head (the second head grammar is derived from the first's text, so the
+two cannot drift), the verdict is read from the raw command, quotes included. That wide reading is on purpose
+and its cost is named in the reason: a command that holds a real head beside an unrelated `--admin` or
+mutation word (a merge, then a `git commit -m "never --admin"`, in one command) is refused, so run them as
+separate commands. For the `gh api` half the raw text is first read quote-free (`'`, `"` and `\` removed), so
+`merge""PullRequest` and `pulls/"$n"/merge` are words and paths, and a merge path counts under either of two
+segment readings, one up to the next blank or `/` and one up to the next `/` or separator; the second reads
+`pulls/$(…)/merge` and `pulls/$((42|0))/merge` as paths, at the cost that `gh api repos/o/r/pulls/42 -f
+body=docs/merge` is refused too (pass the body as a file). Any method is refused, a `GET` of a merge path
+included, because a text-read exemption is defeated by a later `-X PUT`; `gh pr view <n> --json
+state,mergedAt` answers the same question. Text with no such head passes, so a commit message, a PR body or a
+mail that names these words is untouched, and so does everything the coordinator runs to land: the
+`--match-head-commit <sha>` enqueue, `--disable-auto` and every read of the landing verdict. Over the
+2048-byte parse cap the hook cannot parse, so an over-cap command whose raw text reads as an admin merge or a
+`gh api` merge is refused in every session, prose included, with a reason that gives both byte counts; send a
+long body as a file (`--body-file`) or split the command. What it does not read is listed, not closed, in the
+hook header's `WHAT PASSES UNPARSED` list, each class pinned by a LISTED-pass case: a query or body read from
+a file, a word or path assembled at run time, a variable or quoted command word, a `gh alias`, the head
+grammar's own classes (`xargs`, `bash -c`, `eval`, a leading redirection, a path-spelled wrapper), an
+encoded, doubled-slash or case-variant merge path, a mutation word written with JSON `\u` escapes, a word
+broken by quotes before the prefilter sees it, a quoted or backticked `api` word, a `.` or `..` path
+segment, another HTTP client handed gh's credential (`curl` with `gh auth token`), a write of the base
+branch's rules or protection that removes the queue, and the ways to move `main` that are not merges (a ref
+`PATCH`, the `updateRef` family of mutations, `git push` to a protected branch), which are out of scope. It is
+a contract the fleet honours, not a wall, and a jq failure or a hook timeout fails it open.
+
+One narrow allowance exists (D-7249). The operator may create, by hand, a regular file at
+`$REG/admin-merge-allowed/<project>` (a dotless registry subdirectory, so no registry glob sees it; nothing in
+this tree writes it, and its content is never read). For a session of that project, read from its own
+`$REG/<id>.project` with no fallback to the session id, a `.project` that is absent, unreadable, empty or
+off-class, and an allowance that is a symlink or not a regular file, each read as not allowed, and the
+allowance lifts only the admin half, only for a command in a fixed grammar and only under the
+cap: exactly one admin merge of a PR named by number, optionally with `--match-head-commit <40 hex>`,
+`--squash`, `--merge`, `--rebase`, `--delete-branch` or `-d`, single-spaced, with nothing before or after it. It
+never lifts the `gh api` half, the over-cap reading or the worker deny. A repository `gh` resolves from
+ambient state (a working directory left by an earlier call's `cd`, the checkout's remotes, the inherited
+environment) is a listed pass under it. The break-glass door for everyone else is the operator's own shell,
+which runs no hook, or GitHub's UI (R9).
 
 **Peers and claims (build 9).** Sessions that share a repository find each other and stake out paths
 through the server — `ccd` never sees a claim. `GET /api/peers?of=<id>` (or `?project=<slug>`,
@@ -5519,8 +5563,9 @@ is that the read side lives only where ccrc owns the file it is written in, and 
   to it on the `compact` source alone (R8, below) — and on a `PreToolUse` at most one of: the search
   gate's deny on a gated call (R5, below), the worker merge deny on a `gh pr merge` from a session whose
   hold names a programme wave or whose workspace carries the child marker (the landing-order rule, "The native merge queue" above: the
-  coordinator merges, workers never do; a speed bump on that one verb, not a wall — a `gh api` merge
-  passes it), the role-skill deny on a `Skill` call from a subagent (a payload with a non-empty
+  coordinator merges, workers never do; a speed bump on that one verb, not a wall — the bypass deny
+  (landing-order wave 2b, "The native merge queue" above) answers every session's `--admin` merge and `gh api`
+  merge in the same reason slot, with the worker deny's reason first), the role-skill deny on a `Skill` call from a subagent (a payload with a non-empty
   `agent_id`) that names `ccrc-worker`, `ccrc-reviewer` or `ccrc-coordinator`, exactly or behind one
   `<namespace>:` prefix, with the name read as Claude Code reads it (trimmed of JavaScript's `trim` set,
   then ONE leading `/` stripped, so ` ccrc-worker` and `/ccrc-worker` are the worker skill) (D-4934: those
