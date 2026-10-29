@@ -3369,7 +3369,9 @@ msid="${CLAUDE_CODE_SESSION_ID:-$psid}"
 # finishes after it is gone is taken by (a): whichever side of the generation's removal the write falls on, one of the two
 # sees it. NOT closed: a hook killed between its write and its re-check, after a purge that had already finished.
 # A REGULAR FILE OR NOTHING, as the history spool's append: a symlink, directory or FIFO at either path is neither read nor
-# written (builtin tests; a FIFO read would block the hook), and a `joinedprev` that is not one stops the rotation.
+# written (builtin tests; a FIFO read would block the hook), and a `joinedprev` that is not one stops the rotation. Both of its
+# guards refuse only a POSITIVE non-regular type (D-7503), as the entry guard does: `joinedprev` moves absent to regular (a
+# rotation's `mv -f`) and back (a purge's `rm -f`), and "absent or regular" probed as two `stat`s skipped a rotation on a move.
 # BOUNDED, BY RENAME: past JOIN_ROTATE_AT lines the Start that notices opens the file on its own fd, takes `flock -n` on it,
 # confirms the path still names that inode (a second descriptor of it, `-ef` the locked one, both through `/dev/fd`) and still
 # holds more than the cap, then `mv -f`s it whole to
@@ -3396,7 +3398,7 @@ _hook_join_record() {   # $aid -> 0 appended; 1 refused (never fatal: the caller
   { IFS= read -r -N "$JOIN_READ_MAX" cur < "$jf"; } 2>/dev/null
   nl="${cur//[!$'\n']/}"
   if (( ${#nl} > JOIN_ROTATE_AT )) && command -v flock >/dev/null 2>&1 \
-     && [[ ! -L "$jp" && ( -f "$jp" || ! -e "$jp" ) ]] && { exec {fd}<"$jf"; } 2>/dev/null; then
+     && [[ ! ( -L "$jp" || -d "$jp" || -p "$jp" || -S "$jp" || -b "$jp" || -c "$jp" ) ]] && { exec {fd}<"$jf"; } 2>/dev/null; then
     # TWO DESCRIPTORS ARE COMPARED, not the path and one of them: `-ef` follows a symlink to the same inode, so the link test is its
     # own conjunct; and on macOS `stat` of `/dev/fd/N` reports the real inode but the fdesc mount's device, so `"$jf" -ef /dev/fd/N`
     # is never true there and the rotation never ran (measured, D-5435). Both sides through `/dev/fd` carry the same device on either
@@ -3416,7 +3418,7 @@ _hook_join_record() {   # $aid -> 0 appended; 1 refused (never fatal: the caller
       # atomically (it refuses to move INTO a directory), but it is NOT used: this hook runs on macOS boxes too (the epoch
       # fallback at the top, the probe-macos leg), BSD `mv` has no `-T`, and an `mv` that errors there would leave a rotation that never
       # happens where Homebrew supplies `flock`. The re-test narrows the window instead, and the stock-macOS box has no `flock` at all.
-      (( ${#nl} > JOIN_ROTATE_AT )) && [[ ! -L "$jf" && ! -L "$jp" && ( -f "$jp" || ! -e "$jp" ) ]] && mv -f "$jf" "$jp" 2>/dev/null
+      (( ${#nl} > JOIN_ROTATE_AT )) && [[ ! -L "$jf" && ! ( -L "$jp" || -d "$jp" || -p "$jp" || -S "$jp" || -b "$jp" || -c "$jp" ) ]] && mv -f "$jf" "$jp" 2>/dev/null
     fi
     { exec {fd}<&-; } 2>/dev/null
   fi
@@ -3482,9 +3484,19 @@ fi
 # D-4176. The braces put the redirection's own failure under 2>/dev/null (the
 # note at the hookstate write below), and `|| true` keeps exit 0 on every path.
 # A REGULAR FILE OR NOTHING D-4418: a symlink (a dangling one too), FIFO or other
-# node at the path, or a symlinked spool/, writes no line (builtin tests). Bash has no
-# O_NOFOLLOW or O_NONBLOCK redirection, so a node swapped in after the test is opened:
-# a link is followed; a FIFO blocks until Claude Code kills the hook (install-session-hooks.sh HOOK_TIMEOUT_S).
+# node at the path, or a symlinked spool/, writes no line (builtin tests).
+# OPENED ONCE, WRITTEN THROUGH THAT DESCRIPTOR (D-7503). The drain renames the file
+# away every tick and the next hook creates it, so the path moves both ways, regular
+# to absent and absent to regular. "Absent or regular" is two `stat`s, and a move
+# between them refused a plain append in EITHER probe order (a lost line, measured).
+# So the guard refuses only a POSITIVE non-regular type, which no such move makes
+# true; the file is then opened for append on fd 9, and the line goes through fd 9
+# only if what it opened is a regular file and the path is still not a link. A drain
+# after the open gets the line in the renamed file. Bash has no O_NOFOLLOW or
+# O_NONBLOCK redirection, so a node swapped in between the guard and the open is
+# opened: a link is followed (an absent target is created empty, never written; one
+# swapped out again before the check is not seen); a FIFO blocks until Claude Code
+# kills the hook (install-session-hooks.sh HOOK_TIMEOUT_S).
 _hs="" _hs_g="" _hs_s="" _hs_f="" _hs_t="" _hs_p="$HOME/.ccrc/history/spool/$id.jsonl"
 if [[ -z "$paid" && -d "$HOME/.ccrc/history/spool" && ! -L "$HOME/.ccrc/history/spool" ]] && (( ${#id} <= 224 )); then
   case "$event" in
@@ -3518,7 +3530,7 @@ if [[ -z "$paid" && -d "$HOME/.ccrc/history/spool" && ! -L "$HOME/.ccrc/history/
       _hs+=",\"ts\":${_hs_s}${_hs_f:0:3}"
     fi
     _hs+='}'
-    [[ ! -L "$_hs_p" && ( -f "$_hs_p" || ! -e "$_hs_p" ) ]] && { printf '\n%s\n' "$_hs" >> "$_hs_p"; } 2>/dev/null || true
+    [[ ! ( -L "$_hs_p" || -d "$_hs_p" || -p "$_hs_p" || -S "$_hs_p" || -b "$_hs_p" || -c "$_hs_p" ) ]] && { { [[ -f /dev/fd/9 && ! -L "$_hs_p" ]] && { printf '\n%s\n' "$_hs" >&9; }; } 9>>"$_hs_p"; } 2>/dev/null || true
   fi
 fi
 # <<< history-spool
