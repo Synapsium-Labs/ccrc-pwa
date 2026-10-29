@@ -61,14 +61,17 @@
 // Desktop polish G3 (D-7333; RUN, this file alone with -t "programmes", each mutant restored from a saved copy with its
 // sha256 checked): the Status view's programme boxes at 390 and 1280 in both palettes, and the five phone tabs at 360.
 //   `.ins-tab` back to main's equal parts (`flex: 1 1 0; min-width: 0`, no `width: auto`)
-//                                                       both 360 cases and both 390 cases (`its words fit its tab`)
+//                                                       4 cases: both 390 cases (`its words fit its tab`), the 360 tab-row case
+//                                                       (`the tablist scrolls inside itself`) and the off-screen 360 case (its
+//                                                       precondition, `Needs you starts off screen`: squeezed, nothing scrolls)
 //   `.ins-tabs` without `overflow-x: auto` ............. the 360 case (`the tablist scrolls inside itself`)
 //   `.ins-tab` without `width: auto` ................... both 390 cases (`<tab>: in view`)
 //   the chosen tab not scrolled into view .............. both 360 cases (`the chosen tab is scrolled into view`)
 //   the scroll on first paint only (the effect's deps `[]`)
 //                                                       the 360 case that chooses Needs you off screen (fix round 1)
 //   `.pg-project` without `.pg-title`'s cut (programmeBox.css)
-//                                                       both 390 cases (`the long project name is cut…`, fix round 1)
+//                                                       both 390 cases (`the long project name is cut…`, fix round 1; each
+//                                                       term red on its own: the bare name wraps at its hyphens)
 // `flex: 1 1 0` alone with `width: auto` kept is NOT red: `min-width: auto` keeps each tab whole and the row scrolls, so
 // the five only share the row out equally, which nothing forbids.
 // The task's jsdom rows are test/status-programmes.test.tsx's header.
@@ -685,16 +688,16 @@ describe('the Status view shows programmes, not children (G3)', () => {
             expect(b.ratio, `${b.coord[0]}: the kicker's text on its band`).toBeGreaterThanOrEqual(4.5);
           }
           if (width === 390) {
-            // A long project name is cut with an ellipsis on the kicker's line, as the title is (fix round 1), never
-            // wrapped out of the box or clipped bare.
+            // A long project name is cut with an ellipsis on one line, as the title is (fix round 1), never wrapped at its
+            // hyphens or clipped bare: one line is the title's height.
             const cut = await page.evaluate(() => {
               const name = document.querySelector<HTMLElement>('.ins-table section.pg-box .pg-project')!;
               name.textContent = 'project-with-a-name-longer-than-any-phone-column-can-hold';
-              const k = name.closest('.pg-kicker')!.getBoundingClientRect();
+              const title = name.closest('.pg-kicker')!.querySelector('.pg-title')!.getBoundingClientRect();
               const r = name.getBoundingClientRect();
-              return { overflow: getComputedStyle(name).textOverflow, cut: name.scrollWidth > name.clientWidth, inside: r.right <= k.right + 0.5 };
+              return { overflow: getComputedStyle(name).textOverflow, cut: name.scrollWidth > name.clientWidth, oneLine: r.height <= title.height + 0.5 };
             });
-            expect(cut, 'the long project name is cut with an ellipsis inside its kicker').toEqual({ overflow: 'ellipsis', cut: true, inside: true });
+            expect(cut, 'the long project name is cut with an ellipsis on one line').toEqual({ overflow: 'ellipsis', cut: true, oneLine: true });
           }
           expect(errors).toEqual([]);
         } finally {

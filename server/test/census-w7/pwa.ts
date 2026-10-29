@@ -82,9 +82,12 @@ export function inlineDeadChecksIn(p: ParsedFile, file: string): W7Site[] {
 export const inlineDeadChecks = (): W7Site[] => overPwa(inlineDeadChecksIn);
 
 /** `coordPresence`'s definition (a symbol of that name, kind `definition`) and its calls (kind `call`), and each
- *  comparison of a value bound from a `coordPresence(…)` call with `'dead'` (kind `answer-dead`). 1 definition, 3 calls
- *  (`orphanNote`, `RunRow`, `SessionScreen`), 2 answer comparisons on the base (plan item 2). KNOWN WIDTH: an answer
- *  compared inline (`coordPresence(r) === 'dead'`) is counted as a call only. */
+ *  comparison of a value bound from a `coordPresence(…)` call with `'dead'` (kind `answer-dead`). 1 definition, 4 calls
+ *  (`orphanNote`, `RunRow`, `SessionScreen`, `statusView`), 3 answer comparisons (plan item 2's two, and `statusView`'s).
+ *  `statusView` (pwa/src/fleet/statusGroups.ts, desktop-polish G3) reads it to find a claimant measured dead, whose
+ *  workers are then lone rows with the orphan marker, never hidden members of its box: G3's orphan ruling as amended on
+ *  review 1177's N1, and the census row raised by the ruling on ask 190. KNOWN WIDTH: an answer compared inline
+ *  (`coordPresence(r) === 'dead'`) is counted as a call only. */
 export function coordPresenceSitesIn(p: ParsedFile, file: string): W7Site[] {
   const out: W7Site[] = [];
   for (const s of p.symbols) if (s.name.split('.').pop() === 'coordPresence') out.push({ file, symbol: s.name, line: s.line, text: lineStart(p.text, s.line).trim().slice(0, 140), kind: 'definition' });

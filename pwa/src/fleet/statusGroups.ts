@@ -47,11 +47,14 @@
 // and its far workers on others (a card's `elsewhere` row whose claimant is a box): hidden, and drawn in the box's tray
 // only while they ask the operator (`operatorAsk`) or the operator has one open (G3's Step 0 ruling). A worker whose claimant is a
 // box nowhere (the coordinator gone, or in a fold) stays a row of its own, so nothing is lost (the same ruling); so does every
-// row the tree does not draw (Released, Archived). The groups: Needs you (the boxes that need the operator, then the
+// row the tree does not draw (Released, Archived). So does a worker whose claimant is measured dead, though that claimant's
+// box still draws while its runs are open (G3's fix-round 2 ruling): the orphan marker's own presence word (`coordPresence`,
+// through the same lookup), so 'hibernated' (mail wakes it) and an unmeasured presence are not gone. The groups: Needs you (the boxes that need the operator, then the
 // rows in no programme that do), Programmes (the other boxes, in `boxOrder`), then `groupByStatus` over the rows in no
 // programme. Every group counts what it draws: a box counts one, and a hidden child counts nowhere.
 import { sessionAsk, substrateFault, type FleetSession, type SessionBucket } from '../../../shared/api';
 import { isUnseen, type Acks } from '../lib/seen';
+import { coordPresence } from './coordWords';
 import type { FleetTreeGroup } from './fleetTree';
 import type { FleetRow } from './nestFleet';
 import {
@@ -146,6 +149,8 @@ export interface StatusBox {
   readonly tray: Tray;
   /** Each tray row's own programme hue, by session id: the lead's, or another of this coordinator's programmes'. */
   readonly hues: ReadonlyMap<string, ProgHue>;
+  /** Its coordinator is measured dead: it heads none of its workers, which are rows of their own with the orphan marker. */
+  readonly gone: boolean;
 }
 
 export interface StatusViewGroup {
@@ -171,9 +176,12 @@ const rowSession = (r: FleetRow): FleetSession | null => (r.kind === 'session' ?
 /** The Status view's groups, every one in the fixed order, an empty one kept with a count of 0 (the view decides
  *  whether to show it). `tree` is the fleet's cards (`fleetTree`); movement is not wired yet (Task G1), so no box reads
  *  stalled and Programmes is in the tree's order. `selectedId` is the session the operator has open: a member keeps its
- *  place in its box's tray while open, by `foldChildren`'s own rule (G3's Step 0 ruling), and makes the box need nothing. */
+ *  place in its box's tray while open, by `foldChildren`'s own rule (G3's Step 0 ruling), and makes the box need nothing.
+ *  `coordOf` and `frameSeen` are what the orphan marker reads (`orphanNote`): a coordinator they measure dead keeps none
+ *  of its workers. */
 export function statusView(
   sessions: readonly FleetSession[], tree: readonly FleetTreeGroup[], acks: Acks, selectedId: string | null,
+  coordOf: (id: string) => FleetSession | null, frameSeen: boolean,
 ): StatusViewGroup[] {
   const cards = tree.map((g) => ({
     project: g.project, runs: [...g.runs, ...g.claimed], prog: programmeBoxes(g.rows, g.runs, g.claimed, () => null, g.hues),
@@ -182,6 +190,10 @@ export function statusView(
   // read on the card that draws it, with the hue of the programme it works for. A spawn is no member: the Status view
   // draws sessions only.
   const heads = new Set(cards.flatMap(({ prog }) => prog.boxes.map((b) => b.coordinatorId)));
+  const gone = new Set([...heads].filter((id) => {
+    const presence = coordPresence(id, coordOf(id), frameSeen);
+    return presence === 'dead';
+  }));
   const members = new Map<string, { session: FleetSession; hue: ProgHue | undefined }[]>();
   // A box's own children first, then its far workers, each in its card's order.
   const placed = [
@@ -189,7 +201,7 @@ export function statusView(
     ...cards.flatMap((c) => c.prog.elsewhere.map((row) => [c, rowRun(row, c.runs)?.claimedBy ?? null, row] as const)),
   ];
   for (const [{ runs, prog }, by, row] of placed) {
-    if (by === null || !heads.has(by) || row.kind !== 'session') continue;
+    if (by === null || !heads.has(by) || gone.has(by) || row.kind !== 'session') continue;
     const member = { session: row.session, hue: prog.hues.get(rowRun(row, runs)?.program ?? '') };
     members.set(by, [...(members.get(by) ?? []), member]);
   }
@@ -202,7 +214,10 @@ export function statusView(
       view, project,
       tray: { rows: drawn.map((m): FleetRow => ({ kind: 'session', depth: 1, session: m.session })), summary: null },
       hues: new Map(drawn.flatMap((m) => (m.hue === undefined ? [] : [[m.session.id, m.hue] as const]))),
-      state: boxState(view, boxNeeds(view) || mine.some((m) => operatorAsk(m.session)), 0, null, false),
+      // A gone box's children are rows of their own, so only its coordinator's own ask makes it need you.
+      state: boxState(view, gone.has(view.coordinatorId) ? operatorAsk(view.coordinator)
+        : boxNeeds(view) || mine.some((m) => operatorAsk(m.session)), 0, null, false),
+      gone: gone.has(view.coordinatorId),
     };
   })).sort(boxOrder);
   const lone = sessions.filter((s) => !inBox.has(s.id));

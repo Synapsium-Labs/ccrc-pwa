@@ -208,12 +208,16 @@ function StatusTable({ selectedId, phoneTab, onTab }: {
   const treeGroups = useMemo(() => fleetTree(sessions, chrome.projects.knownProjects, activeRuns, acks),
     [sessions, chrome.projects.knownProjects, activeRuns, acks]);
   const tree = useMemo(() => new Map<string, FleetTreeGroup>(treeGroups.map((g) => [g.project, g] as const)), [treeGroups]);
-  const groups = useMemo(() => statusView(sessions, treeGroups, acks, selectedId), [sessions, treeGroups, acks, selectedId]);
-  // Read by key, never compared: the group a key names is the model's answer (instrument-shell's scan).
-  const byId = new Map<StatusGroupId, StatusViewGroup>(groups.map((g) => [g.id, g] as const));
   // By id, once per fleet: what `sessions.find` answered, without a scan per row.
   const sessionById = useMemo(() => new Map(sessions.map((s) => [s.id, s] as const)), [sessions]);
   const lookup = useCallback((id: string): FleetSession | null => sessionById.get(id) ?? null, [sessionById]);
+  const groups = useMemo(() => statusView(sessions, treeGroups, acks, selectedId, lookup, frameSeen),
+    [sessions, treeGroups, acks, selectedId, lookup, frameSeen]);
+  // Read by key, never compared: the group a key names is the model's answer (instrument-shell's scan).
+  const byId = new Map<StatusGroupId, StatusViewGroup>(groups.map((g) => [g.id, g] as const));
+  // Where a worker's coordinator is drawn in this view: a box that keeps its workers. The orphan marker asks this in place
+  // of the card's live rows, so a worker whose coordinator is gone says so though that coordinator is a row of its card.
+  const keepers = useMemo(() => groups.flatMap((g) => g.boxes).filter((b) => !b.gone).map((b) => b.view.coordinator), [groups]);
   const onActions = useCallback((x: FleetSession): void => flows.openActions(x.id), [flows]);
 
   // A row of a group's list is an `li`; a row inside a box is a `div` (the box is no list), in its programme's hue.
@@ -221,7 +225,7 @@ function StatusTable({ selectedId, phoneTab, onTab }: {
     const card = tree.get(cards.get(s.id) ?? s.project) ?? null;
     const runs = card?.runs ?? activeRuns;
     const orphan = card === null ? null
-      : orphanNote({ kind: 'session', depth: 0, session: s }, card.runs, card.project, card.sessions, lookup, frameSeen);
+      : orphanNote({ kind: 'session', depth: 0, session: s }, card.runs, card.project, keepers, lookup, frameSeen);
     return (
       <Tag key={s.id} data-row={s.id} data-hue={hue} className="ins-row min-h-row">
         <SessionLine

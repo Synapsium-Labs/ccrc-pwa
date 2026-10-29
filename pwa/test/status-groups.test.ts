@@ -130,7 +130,8 @@ describe('statusView (Task G3, D-7333)', () => {
     run(1, 'c1', 'k1', { program: 'prog-a', project: 'project-a' }), run(2, 'c1', 'k2', { program: 'prog-a', project: 'project-a' }),
     run(3, 'c2', 'k3', { program: 'prog-b', project: 'project-b' }), run(4, 'c1', 'far', { program: 'prog-a', project: 'project-b' }),
   ];
-  const view = (s: FleetSession[] = fleet, r = runs) => statusView(s, fleetTree(s, ['project-a', 'project-b'], r), {}, null);
+  const lookupIn = (s: readonly FleetSession[]) => (id: string): FleetSession | null => s.find((x) => x.id === id) ?? null;
+  const view = (s: FleetSession[] = fleet, r = runs) => statusView(s, fleetTree(s, ['project-a', 'project-b'], r), {}, null, lookupIn(s), true);
   const ids = (xs: readonly FleetSession[]): string[] => xs.map((x) => x.id);
 
   it('the groups are Needs you, Programmes, then the buckets, Programmes labelled and open', () => {
@@ -181,7 +182,7 @@ describe('statusView (Task G3, D-7333)', () => {
   });
 
   it('the session the operator has open stays in its box\'s tray (G3\'s Step 0 ruling), and makes no box need anything', () => {
-    const g = statusView(fleet, fleetTree(fleet, ['project-a', 'project-b'], runs), {}, 'k3');
+    const g = statusView(fleet, fleetTree(fleet, ['project-a', 'project-b'], runs), {}, 'k3', lookupIn(fleet), true);
     expect(g[1]!.boxes[0]!.tray.rows.map((r) => (r.kind === 'session' ? r.session.id : ''))).toEqual(['k3']);
     expect(g[1]!.boxes[0]!.state).toBe('moving');
     expect(g[1]!.count).toBe(1);
@@ -191,6 +192,21 @@ describe('statusView (Task G3, D-7333)', () => {
     const s = [...fleet, sess('orphan', 'project-a', { bucket: 'working', status: 'busy' })];
     const g = view(s, [...runs, run(9, 'nobody', 'orphan', { program: 'prog-z', project: 'project-a' })]);
     expect(ids(g.find((x) => x.id === 'working')!.sessions)).toEqual(['orphan']);
+  });
+
+  it('a claimant measured dead keeps none of its workers: its box is gone and draws, its children are rows of their own (fix round 2)', () => {
+    const dead = { status: 'dead' as const, bucket: 'dead' as const, lifecycle: 'orphan' as const };
+    const s = fleet.map((x) => (x.id === 'c1' ? { ...x, ...dead } : x));
+    const g = view(s);
+    const all = g.flatMap((x) => x.boxes);
+    expect(all.find((b) => b.view.coordinatorId === 'c1')).toMatchObject({ gone: true, state: 'moving', tray: { rows: [] } });
+    expect(all.find((b) => b.view.coordinatorId === 'c2')!.gone).toBe(false);
+    // k1 asks, k2 is done, far is done on another card: each a row of its own, in its own status's group.
+    expect(ids(g.find((x) => x.id === 'attention')!.sessions)).toEqual(expect.arrayContaining(['k1', 'lone-a']));
+    expect(ids(g.find((x) => x.id === 'done')!.sessions)).toEqual(expect.arrayContaining(['k2', 'far']));
+    // The frame unseen measures nothing, so nothing is gone.
+    const unseen = statusView(s, fleetTree(s, ['project-a', 'project-b'], runs), {}, null, lookupIn(s), false);
+    expect(unseen.flatMap((x) => x.boxes).every((b) => !b.gone)).toBe(true);
   });
 
   it('with no open run it is groupByStatus exactly, and no Programmes', () => {

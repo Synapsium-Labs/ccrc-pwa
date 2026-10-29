@@ -11,7 +11,8 @@
 //
 // MUTATION TABLE (plan Task G3 Step 3; RUN, each mutant on the working tree, one at a time, with this suite,
 // status-groups.test.ts and instrument-list.test.tsx (the browser rows: instrument-desk.browser.test.ts -t "programmes"),
-// then restored from a saved copy with its sha256 checked; 26 run, 26 red; instrument-shell holds one more):
+// then restored from a saved copy with its sha256 checked: the task's 26 rows, fix round 1's four and fix round 2's five,
+// 35 in all, each run red; instrument-shell holds one more):
 //   a child row drawn outside its box (members not hidden) ..... 15 cases, here, status-groups and instrument-list
 //   counts taken from sessions (a box as its coordinator and
 //     children) instead of drawn rows ......................... 9 cases, "every group counts what it draws…" among them
@@ -36,7 +37,9 @@
 //   the far-worker line drawn in the status box ................. "a far worker that asks is drawn in its coordinator's box…"
 //   a tray handed a summary row (a footer) ...................... status-groups' tray case (`ProgrammeBox`'s mode draws no footer either way)
 //   `.ins-tab` back to main's equal parts (`flex: 1 1 0; min-width: 0`, no `width: auto`)
-//                                                                  browser: both 360 cases and both 390 cases (`its words fit its tab`)
+//                                                                  browser, 4 cases: both 390 cases (`its words fit its tab`), the 360
+//                                                                  tab-row case (`the tablist scrolls inside itself`) and the off-screen
+//                                                                  360 case (its precondition, `Needs you starts off screen`)
 //   `.ins-tabs` without `overflow-x: auto` ...................... browser: the 360 case (`the tablist scrolls inside itself`)
 //   `.ins-tab` without `width: auto` (the button's full width) .. browser: both 390 cases (`<tab>: in view`)
 //   the chosen tab not scrolled into view ....................... browser: both 360 cases (`the chosen tab is scrolled into view`)
@@ -48,6 +51,17 @@
 //   the orphan marker dropped in status mode (`coordinator={null}`)
 //                                                                  "a lone worker keeps its orphan marker in status mode…"
 //   `.pg-project` without `.pg-title`'s cut (programmeBox.css) .. browser: both 390 cases (`the long project name is cut…`)
+// Fix round 2 (review 1177, a dead claimant is gone) added five rows, each RUN red on its new cases and green restored:
+//   a dead claimant still heads its workers (no `gone` in the member loop)
+//                                                                  the four "…a dead claimant is gone…" card cases here, status-groups' dead-claimant case
+//   a gone box needing you through its children (`boxNeeds` for every box)
+//                                                                  "on the same card, an asking worker…", status-groups' dead-claimant case
+//                                                                  (on another card the far worker is none of the box's own children)
+//   the orphan marker asking the card's live rows, not the boxes that keep their workers (FleetTable)
+//                                                                  "on the same card, …" cases (no marker: the dead coordinator is a row of its card)
+//   a hibernated claimant counted gone (`!== 'alive'`) ........... "a hibernated claimant is not gone…"
+//   an unmeasured presence counted gone (`=== 'dead' || === 'unknown'`)
+//                                                                  "a claimant whose presence was not measured is not gone…", status-groups' frame case
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -332,6 +346,18 @@ describe("Instrument's Status view shows programmes, not children (G3, D-7333)",
     expect(marker?.textContent).toBe('coordinator gone');
   });
 
+  it('a lone worker of a claimant in the Released fold, measured dead, keeps its orphan marker too', () => {
+    const rel = sess('rel-coord', 'project-a', {
+      status: 'dead', bucket: 'done', lifecycle: 'orphan',
+      releasedFrom: { runId: 90, program: 'prog-old', programTitle: null, claimedBy: 'coord-a', closedAt: 1, child: true },
+    });
+    const sessions = [...SESSIONS, rel, sess('orphan', 'project-a', { bucket: 'working', status: 'busy' })];
+    mount(sessions, [...RUNS, run(8, 'rel-coord', 'orphan', { program: 'prog-c', project: 'project-a' })]);
+    const row = groupOf('working').querySelector<HTMLElement>('[data-row="orphan"]')!;
+    expect(row.closest('section.pg-box')).toBeNull();
+    expect(row.querySelector('[data-marker^="coordinator-"]')?.getAttribute('data-marker')).toBe('coordinator-gone');
+  });
+
   it('a box whose coordinator itself asks is in Needs you', () => {
     const sessions = SESSIONS.map((s) => (s.id === 'coord-b' ? { ...s, ...asking({ ask: null }) } : s));
     mount(sessions);
@@ -346,6 +372,69 @@ describe("Instrument's Status view shows programmes, not children (G3, D-7333)",
     expect(code).not.toMatch(/\bprogrammeBoxes\(|\brankBoxes\(|\bboxState\(|\boperatorAsk\(/);
     // The child crumb is gone from status mode (project mode never drew it).
     expect(code).not.toMatch(/ins-coord-crumb|\bparentIdOf\b/);
+  });
+});
+
+// A DEAD claimant is gone (G3's fix-round 2 ruling, archived or not): its workers are lone rows with the orphan marker,
+// in the groups their own status puts them in, never hidden members of its box. The box still draws while its runs are
+// open. A hibernated claimant is not gone (mail wakes it), and a presence the frame did not measure claims nothing.
+describe('a dead claimant is gone: its workers are lone orphan rows (G3 fix round 2)', () => {
+  const dead = { status: 'dead' as const, bucket: 'dead' as const, lifecycle: 'orphan' as const };
+  const fleet = (claimant: FleetSession, worker: Partial<FleetSession> = { bucket: 'working', status: 'busy' }) => ({
+    sessions: [...SESSIONS, claimant, sess('w', 'project-a', worker)],
+    runs: [...RUNS, run(9, claimant.id, 'w', { program: 'prog-d', programTitle: 'Programme D', project: 'project-a' })],
+  });
+  const marker = (row: Element): string | null =>
+    row.querySelector('[data-marker^="coordinator-"]')?.getAttribute('data-marker') ?? null;
+  const drawnOnce = (): void => {
+    expect(rowIds(table()).filter((id) => id === 'w')).toEqual(['w']);
+  };
+
+  for (const where of ['project-b', 'project-a'] as const) {
+    const card = where === 'project-b' ? 'on another card' : 'on the same card';
+    it(`${card}, a quiet worker is a lone row with the marker, and the dead claimant's box draws an empty tray`, () => {
+      const { sessions, runs } = fleet(sess('dc', where, dead));
+      mount(sessions, runs);
+      const working = groupOf('working');
+      expect(looseRows(working)).toEqual(expect.arrayContaining(['w']));
+      expect(marker(working.querySelector('[data-row="w"]')!)).toBe('coordinator-gone');
+      const box = boxOf(groupOf('programmes'), 'dc');
+      expect(box.querySelector('.pg-tray')).toBeNull();
+      drawnOnce();
+      expect(headCount(working)).toBe(2);
+      expect(headCount(groupOf('programmes'))).toBe(2);
+    });
+
+    it(`${card}, an asking worker is a lone row in Needs you, not in the box's tray, and the box needs nothing`, () => {
+      const { sessions, runs } = fleet(sess('dc', where, dead), asking({ ask: { state: 'held', parentId: 'dc', answeredBy: null } }));
+      mount(sessions, runs);
+      const needs = groupOf('attention');
+      expect(looseRows(needs)).toEqual(expect.arrayContaining(['w', 'lone-ask']));
+      expect(marker(needs.querySelector('[data-row="w"]')!)).toBe('coordinator-gone');
+      expect(boxes(needs).map((b) => rowIds(b.querySelector('.pg-coord')!))).toEqual([['coord-a']]);
+      expect(boxOf(groupOf('programmes'), 'dc').querySelector('.pg-tray')).toBeNull();
+      drawnOnce();
+      expect(headCount(needs)).toBe(3);
+    });
+  }
+
+  it('a hibernated claimant is not gone: its quiet worker stays a hidden member of its box', () => {
+    const { sessions, runs } = fleet(sess('dc', 'project-b', { ...dead, lifecycle: 'stopped', hibernatedAt: Date.now() - 3_600_000 }));
+    mount(sessions, runs);
+    expect(rowIds(table())).not.toContain('w');
+    expect(boxOf(groupOf('programmes'), 'dc')).toBeDefined();
+  });
+
+  it('a claimant whose presence was not measured is not gone: its worker stays a member', () => {
+    const { sessions, runs } = fleet(sess('dc', 'project-b', { ...dead, lifecycle: 'unmeasurable' }));
+    mount(sessions, runs);
+    expect(rowIds(table())).not.toContain('w');
+    // Asking, it is drawn in the box's tray, the box in Needs you.
+    cleanup();
+    const asked = fleet(sess('dc', 'project-b', { ...dead, lifecycle: 'unmeasurable' }),
+      asking({ ask: { state: 'held', parentId: 'dc', answeredBy: null } }));
+    mount(asked.sessions, asked.runs);
+    expect(rowIds(boxOf(groupOf('attention'), 'dc').querySelector('.pg-tray')!)).toEqual(['w']);
   });
 });
 
