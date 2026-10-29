@@ -804,7 +804,7 @@ describe('one writer per fact (ARCH-40): the switches whose writer set is alread
       'server/src/exec.ts': 1,
       'server/src/fleet.ts': 3,
       'server/src/hookstate.ts': 3,
-      'server/src/index.ts': 38,
+      'server/src/index.ts': 37,
       'server/src/inject/ask.ts': 4,
       'server/src/inject/send.ts': 3,
       'server/src/io.ts': 8,
