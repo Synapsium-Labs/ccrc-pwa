@@ -130,7 +130,7 @@ describe('statusView (Task G3, D-7333)', () => {
     run(1, 'c1', 'k1', { program: 'prog-a', project: 'project-a' }), run(2, 'c1', 'k2', { program: 'prog-a', project: 'project-a' }),
     run(3, 'c2', 'k3', { program: 'prog-b', project: 'project-b' }), run(4, 'c1', 'far', { program: 'prog-a', project: 'project-b' }),
   ];
-  const view = (s: FleetSession[] = fleet, r = runs) => statusView(s, fleetTree(s, ['project-a', 'project-b'], r), {});
+  const view = (s: FleetSession[] = fleet, r = runs) => statusView(s, fleetTree(s, ['project-a', 'project-b'], r), {}, null);
   const ids = (xs: readonly FleetSession[]): string[] => xs.map((x) => x.id);
 
   it('the groups are Needs you, Programmes, then the buckets, Programmes labelled and open', () => {
@@ -173,13 +173,18 @@ describe('statusView (Task G3, D-7333)', () => {
     expect(statusViewTotal(g)).toBe(4);
   });
 
-  it('Needs you is held while it draws anything; Mark all seen covers the lone rows and the trays, never a coordinator', () => {
+  it('Needs you is held while it draws anything; Mark all seen covers what a group draws, coordinators included', () => {
     const g = view();
     expect(g.map((x) => x.held)).toEqual([true, false, false, false, false, false, false, false]);
-    expect(ids(g[0]!.seen)).toEqual(['k1', 'lone-a']);
-    expect(g[1]!.seen).toEqual([]);
-    expect(g[1]!.seenKey).toBeNull();
-    expect(g[0]!.seenKey).toBe('attention');
+    expect(ids(g[0]!.seen)).toEqual(['c1', 'k1', 'lone-a']);
+    expect(ids(g[1]!.seen)).toEqual(['c2']);
+  });
+
+  it('the session the operator has open stays in its box\'s tray (G3\'s Step 0 ruling), and makes no box need anything', () => {
+    const g = statusView(fleet, fleetTree(fleet, ['project-a', 'project-b'], runs), {}, 'k3');
+    expect(g[1]!.boxes[0]!.tray.rows.map((r) => (r.kind === 'session' ? r.session.id : ''))).toEqual(['k3']);
+    expect(g[1]!.boxes[0]!.state).toBe('moving');
+    expect(g[1]!.count).toBe(1);
   });
 
   it('a worker whose claimant is a box nowhere stays a row of its own', () => {

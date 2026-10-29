@@ -47,7 +47,7 @@
 // value answers status. The phone tabs (below the desk query) are a view over the status groups, not a mode: Needs you,
 // Programmes, Done, Working, then All, which shows every group with its folds; each counts what its group draws. Both are one tab stop with roving focus: the arrow keys, Home and End move and choose
 // (the settings theme grid's pattern), and the tabs control the tabpanel that holds the groups.
-import { useCallback, useId, useMemo, useState, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useId, useMemo, useState, useSyncExternalStore } from 'react';
 import type { KeyboardEvent, ReactNode } from 'react';
 import { BareRow, Button, CountBadge } from '@ccrc/ui';
 import type { FleetSession } from '../../../../shared/api';
@@ -208,7 +208,7 @@ function StatusTable({ selectedId, phoneTab, onTab }: {
   const treeGroups = useMemo(() => fleetTree(sessions, chrome.projects.knownProjects, activeRuns, acks),
     [sessions, chrome.projects.knownProjects, activeRuns, acks]);
   const tree = useMemo(() => new Map<string, FleetTreeGroup>(treeGroups.map((g) => [g.project, g] as const)), [treeGroups]);
-  const groups = useMemo(() => statusView(sessions, treeGroups, acks), [sessions, treeGroups, acks]);
+  const groups = useMemo(() => statusView(sessions, treeGroups, acks, selectedId), [sessions, treeGroups, acks, selectedId]);
   // Read by key, never compared: the group a key names is the model's answer (instrument-shell's scan).
   const byId = new Map<StatusGroupId, StatusViewGroup>(groups.map((g) => [g.id, g] as const));
   // By id, once per fleet: what `sessions.find` answered, without a scan per row.
@@ -265,17 +265,22 @@ function StatusTable({ selectedId, phoneTab, onTab }: {
 
   const tabId = (t: PhoneTab): string => `${tabsId}-tab-${t}`;
   const panelId = `${tabsId}-panel`;
+  // Five tabs outgrow a phone's row, which scrolls sideways inside itself (instrument.css), so the chosen tab is
+  // brought into view whenever it changes, and on the first paint, where it is All, the last.
+  useEffect(() => {
+    if (phoneTab === null) return;
+    document.getElementById(`${tabsId}-tab-${phoneTab}`)?.scrollIntoView?.({ block: 'nearest', inline: 'nearest' });
+  }, [phoneTab, tabsId]);
   const body = shown.map((g) => {
     const open = isOpen(g);
     const hold = g.held;
-    const seenKey = g.seenKey;
     return (
       <section key={g.id} className="ins-group" data-status-group={g.id} aria-label={g.label}>
         {/* The fold row is a button, so the door beside it is its sibling, never inside it. `BareRow` takes no ref, so
             the focus target is found from the wrapper: the fold row, already focusable, needs no tabIndex. */}
         <div
           className="flex items-center"
-          ref={(el) => { if (seenKey !== null) labelRef(seenKey)(el?.querySelector<HTMLElement>('.ins-group-head') ?? null); }}
+          ref={(el) => labelRef(g.id)(el?.querySelector<HTMLElement>('.ins-group-head') ?? null)}
         >
           <BareRow
             className="ins-group-head min-w-0"
@@ -295,14 +300,14 @@ function StatusTable({ selectedId, phoneTab, onTab }: {
             )}
             {hold && <span className="sr-only">held open: a question here is waiting on you</span>}
           </BareRow>
-          {g.unseen > 0 && seenKey !== null && (
+          {g.unseen > 0 && (
             // The group is IN the name, as the chips' is: three badged groups are not three buttons named alike.
             <Button
               variant="ghost"
               size="fit"
               className="ins-group-seen shrink-0"
-              aria-label={markAllSeenLabel(seenKey)}
-              onClick={() => markSeen(seenKey, g.seen, g.unseen)}
+              aria-label={markAllSeenLabel(g.id)}
+              onClick={() => markSeen(g.id, g.seen, g.unseen)}
             >
               Mark all seen
             </Button>

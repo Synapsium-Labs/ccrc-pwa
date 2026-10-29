@@ -5,33 +5,37 @@
 // sessions in no programme; every group counts what it draws, a box as one. The decision is `statusGroups.ts`'s
 // (`statusView`), and `FleetTable` draws it. Project mode, and its bucket bar, are unchanged.
 //
-// RED FIRST on main (34ee3e3f8): every case below failed there but the bucket bar's, which pins project mode unchanged
-// (a mutant below turns it red), the status view drawing each child as a row of its own status group with no box and no
+// RED FIRST on main (34ee3e3f8): every case below failed there but the bucket bar's, which pins project mode unchanged and
+// so passes on main by design, the status view drawing each child as a row of its own status group with no box and no
 // Programmes group, and the phone's tabs reading Needs you, Done, Working, All.
 //
 // MUTATION TABLE (plan Task G3 Step 3; RUN, each mutant on the working tree, one at a time, with this suite,
 // status-groups.test.ts and instrument-list.test.tsx (the browser rows: instrument-desk.browser.test.ts -t "programmes"),
-// then restored from a saved copy with its sha256 checked; 19 run, 19 red):
-//   a child row drawn outside its box (members not hidden) ..... 14 cases, here, status-groups and instrument-list
+// then restored from a saved copy with its sha256 checked; 23 run, 23 red; instrument-shell holds one more):
+//   a child row drawn outside its box (members not hidden) ..... 15 cases, here, status-groups and instrument-list
 //   counts taken from sessions (a box as its coordinator and
-//     children) instead of drawn rows ......................... "every group counts what it draws…", the phone's tab counts, and 4 more
-//   the tray showing every member ............................... 15 cases, "the needing box's tray shows only the child that asks…" among them
-//   Programmes taking the needing boxes too ..................... 11 cases, "the groups are Needs you…" among them
-//   Programmes after Done (its order 1.5) ....................... 5 cases, statusGroups' order case among them
+//     children) instead of drawn rows ......................... 9 cases, "every group counts what it draws…" among them
+//   the tray showing every member ............................... 8 cases, "the needing box's tray shows only the child that asks…" among them
+//   the tray dropping the session the operator has open ......... "the session the operator has open stays in its box's tray…", here and in status-groups
+//   the open session making its box need you .................... status-groups' open-session case
+//   Programmes taking the needing boxes too ..................... 13 cases, "the groups are Needs you…" among them
+//   Programmes after Done (its order 1.5) ....................... 6 cases, statusGroups' order case among them
 //   far workers not members ..................................... "a far worker that asks is drawn in its coordinator's box…", and 4 in status-groups
 //   a box's needs ignoring its far workers' asks ................ status-groups' "a box that needs you only through a far worker…"
 //   Needs you never held ........................................ instrument-list's held case, status-groups' held case
-//   Mark all seen covering the coordinators ..................... status-groups' seen case
+//   Mark all seen leaving the coordinators out .................. "Mark all seen covers what a group draws…", here and in status-groups
+//   Programmes' door named for Needs you ........................ 3 cases, "Mark all seen covers what a group draws…" among them
 //   the All tab counting sessions ............................... "Programmes is the tab after Needs you, and every tab counts what its group draws"
 //   PHONE_TABS without Programmes ............................... 4 cases, both phone cases here among them
-//   a head counting its rows only ............................... 4 cases, "every group counts what it draws…" among them
-//   the boxes not drawn ......................................... 10 cases
+//   a head counting its rows only ............................... 6 cases, "every group counts what it draws…" among them
+//   the boxes not drawn ......................................... 11 cases
 //   the kicker without the project .............................. "a box's kicker names its project as well as its programme"
 //   the far-worker line drawn in the status box ................. "a far worker that asks is drawn in its coordinator's box…"
 //   a tray handed a summary row (a footer) ...................... status-groups' tray case (`ProgrammeBox`'s mode draws no footer either way)
 //   `.ins-tab` back to equal parts (`flex: 1 1 0`) .............. browser: the 360 case and both 390 cases (`its words fit its tab`)
 //   `.ins-tabs` without `overflow-x: auto` ...................... browser: the 360 case (`the tablist scrolls inside itself`)
-//   `.ins-tab` without `width: auto` (the button's full width) .. browser: both 390 cases (`Programmes is visible beside Needs you`)
+//   `.ins-tab` without `width: auto` (the button's full width) .. browser: both 390 cases (`<tab>: in view`)
+//   the chosen tab not scrolled into view ....................... browser: the 360 case (`the chosen tab is scrolled into view`)
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -181,6 +185,30 @@ describe("Instrument's Status view shows programmes, not children (G3, D-7333)",
     expect(table().querySelector('.proj-children-toggle')).toBeNull();
     // The quiet box draws no tray at all: none of its children asks.
     expect(boxOf(groupOf('programmes'), 'coord-b').querySelector('.pg-tray')).toBeNull();
+  });
+
+  it("the session the operator has open stays in its box's tray, though it does not ask (G3's Step 0 ruling)", () => {
+    act(() => useFleetStore.setState({ conn: 'open', sessions: SESSIONS, runs: RUNS, runsFrameSeen: true, fleetFrameSeen: true }));
+    navigate('/s/a2');
+    render(<App />);
+    const tray = boxOf(groupOf('attention'), 'coord-a').querySelector<HTMLElement>('.pg-tray')!;
+    expect(rowIds(tray)).toEqual(['a1', 'a2']);
+    // Drawn in its box, it is still counted nowhere: the box counts one.
+    expect(headCount(groupOf('attention'))).toBe(2);
+    expect(rowIds(table()).filter((id) => ['a3', 'b1', 'b2'].includes(id))).toEqual([]);
+  });
+
+  it('Mark all seen covers what a group draws, coordinators included: Programmes says "n new" and offers its own door', () => {
+    const now = Date.now();
+    const sessions = SESSIONS.map((s) => (s.id === 'coord-b' ? { ...s, bucket: 'done' as const, status: 'idle' as const, bucketSince: now } : s));
+    mount(sessions);
+    const programmes = groupOf('programmes');
+    expect(words(head(programmes))).toMatch(/Programmes · 1 · 1 new$/);
+    const door = within(programmes).getByRole('button', { name: 'Mark all seen, Programmes' });
+    fireEvent.click(door);
+    expect(within(programmes).queryByRole('button', { name: /^Mark all/ })).toBeNull();
+    expect(document.activeElement).toBe(head(programmes));
+    expect(within(table()).getByRole('status')).toHaveTextContent('Programmes: 1 marked seen');
   });
 
   it("a box's kicker names its project as well as its programme", () => {

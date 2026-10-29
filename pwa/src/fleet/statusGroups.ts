@@ -45,11 +45,11 @@
 // draws, given the fleet's tree: a coordinator's open work is its programme's box (G2's `programmeBoxes`, over each
 // card the tree built), and a child never draws as a row of its own. A box's members are its children on its own card
 // and its far workers on others (a card's `elsewhere` row whose claimant is a box): hidden, and drawn in the box's tray
-// only while they ask the operator (`operatorAsk`). A worker whose claimant is a box nowhere (the coordinator gone, or
-// in a fold) stays a row of its own, so nothing is lost; so does every row the tree does not draw (Released, Archived).
-// The groups: Needs you (the boxes that need the operator, then the rows in no programme that do), Programmes (the
-// other boxes, in `boxOrder`), then `groupByStatus` over the rows in no programme. Every group counts what it draws: a
-// box counts one, and a hidden child counts nowhere.
+// only while they ask the operator (`operatorAsk`) or the operator has one open (G3's Step 0 ruling). A worker whose claimant is a
+// box nowhere (the coordinator gone, or in a fold) stays a row of its own, so nothing is lost (the same ruling); so does every
+// row the tree does not draw (Released, Archived). The groups: Needs you (the boxes that need the operator, then the
+// rows in no programme that do), Programmes (the other boxes, in `boxOrder`), then `groupByStatus` over the rows in no
+// programme. Every group counts what it draws: a box counts one, and a hidden child counts nowhere.
 import { sessionAsk, substrateFault, type FleetSession, type SessionBucket } from '../../../shared/api';
 import { isUnseen, type Acks } from '../lib/seen';
 import type { FleetTreeGroup } from './fleetTree';
@@ -157,23 +157,24 @@ export interface StatusViewGroup {
   readonly sessions: readonly FleetSession[];
   /** What the group draws: each box as one, each row as one. */
   readonly count: number;
-  /** What Mark all seen acks, and `unseen` counts: the rows in no programme and the boxes' trays. A box's coordinator is
-   *  its programme's head, never a new row of the group. */
+  /** What Mark all seen acks, and `unseen` counts: what the group draws, each box's coordinator and tray, then the rows
+   *  in no programme. */
   readonly seen: readonly FleetSession[];
   readonly unseen: number;
   readonly folds: boolean;
   /** Held open whatever is stored: Needs you while it draws anything (the fleet rollup's rule 5, D-6088). */
   readonly held: boolean;
-  /** The bucket Mark all seen names, or `null` for Programmes, which holds no row of its own. */
-  readonly seenKey: SessionBucket | null;
 }
 
 const rowSession = (r: FleetRow): FleetSession | null => (r.kind === 'session' ? r.session : null);
 
 /** The Status view's groups, every one in the fixed order, an empty one kept with a count of 0 (the view decides
  *  whether to show it). `tree` is the fleet's cards (`fleetTree`); movement is not wired yet (Task G1), so no box reads
- *  stalled and Programmes is in the tree's order. */
-export function statusView(sessions: readonly FleetSession[], tree: readonly FleetTreeGroup[], acks: Acks): StatusViewGroup[] {
+ *  stalled and Programmes is in the tree's order. `selectedId` is the session the operator has open: a member keeps its
+ *  place in its box's tray while open, by `foldChildren`'s own rule (G3's Step 0 ruling), and makes the box need nothing. */
+export function statusView(
+  sessions: readonly FleetSession[], tree: readonly FleetTreeGroup[], acks: Acks, selectedId: string | null,
+): StatusViewGroup[] {
   const cards = tree.map((g) => ({
     project: g.project, runs: [...g.runs, ...g.claimed], prog: programmeBoxes(g.rows, g.runs, g.claimed, () => null, g.hues),
   }));
@@ -195,12 +196,13 @@ export function statusView(sessions: readonly FleetSession[], tree: readonly Fle
   // Drawn by a box: its coordinator, as its head, and every member, in its tray or nowhere.
   const inBox = new Set([...heads, ...[...members.values()].flat().map((m) => m.session.id)]);
   const boxes = cards.flatMap(({ project, prog }) => prog.boxes.map((view): StatusBox => {
-    const asks = (members.get(view.coordinatorId) ?? []).filter((m) => operatorAsk(m.session));
+    const mine = members.get(view.coordinatorId) ?? [];
+    const drawn = mine.filter((m) => operatorAsk(m.session) || m.session.id === selectedId);
     return {
       view, project,
-      tray: { rows: asks.map((m): FleetRow => ({ kind: 'session', depth: 1, session: m.session })), summary: null },
-      hues: new Map(asks.flatMap((m) => (m.hue === undefined ? [] : [[m.session.id, m.hue] as const]))),
-      state: boxState(view, boxNeeds(view) || asks.length > 0, 0, null, false),
+      tray: { rows: drawn.map((m): FleetRow => ({ kind: 'session', depth: 1, session: m.session })), summary: null },
+      hues: new Map(drawn.flatMap((m) => (m.hue === undefined ? [] : [[m.session.id, m.hue] as const]))),
+      state: boxState(view, boxNeeds(view) || mine.some((m) => operatorAsk(m.session)), 0, null, false),
     };
   })).sort(boxOrder);
   const lone = sessions.filter((s) => !inBox.has(s.id));
@@ -211,12 +213,15 @@ export function statusView(sessions: readonly FleetSession[], tree: readonly Fle
     const inBoxes = id === 'programmes' ? boxes.filter((b) => b.state !== 'needs')
       : id === 'attention' ? boxes.filter((b) => b.state === 'needs') : [];
     const rows = id === 'programmes' ? [] : byBucket.get(id)?.sessions ?? [];
-    const seen = [...inBoxes.flatMap((b) => b.tray.rows.map(rowSession).filter((s): s is FleetSession => s !== null)), ...rows];
+    const seen = [
+      ...inBoxes.flatMap((b) => [b.view.coordinator, ...b.tray.rows.map(rowSession).filter((s): s is FleetSession => s !== null)]),
+      ...rows,
+    ];
     const count = inBoxes.length + rows.length;
     return {
       id, label, boxes: inBoxes, sessions: rows, count, seen,
       unseen: seen.filter((s) => isUnseen(s, acks)).length,
-      folds, held: id === 'attention' && count > 0, seenKey: id === 'programmes' ? null : id,
+      folds, held: id === 'attention' && count > 0,
     };
   });
 }

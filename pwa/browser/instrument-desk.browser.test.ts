@@ -62,7 +62,8 @@
 // sha256 checked): the Status view's programme boxes at 390 and 1280 in both palettes, and the five phone tabs at 360.
 //   `.ins-tab` back to equal parts (`flex: 1 1 0`) ..... the 360 case and both 390 cases (`its words fit its tab`)
 //   `.ins-tabs` without `overflow-x: auto` ............. the 360 case (`the tablist scrolls inside itself`)
-//   `.ins-tab` without `width: auto` ................... both 390 cases (`Programmes is visible beside Needs you`)
+//   `.ins-tab` without `width: auto` ................... both 390 cases (`<tab>: in view`)
+//   the chosen tab not scrolled into view .............. the 360 case (`the chosen tab is scrolled into view`)
 // The task's jsdom rows are test/status-programmes.test.tsx's header.
 // `CCRC_SHOTS=<a directory outside the work tree>` writes one screenshot per palette and width there.
 //
@@ -608,10 +609,18 @@ describe('the Status view shows programmes, not children (G3)', () => {
       groups: [...table.querySelectorAll('[data-status-group]')].map((g) => g.getAttribute('data-status-group')),
       tabs: [...table.querySelectorAll('[role="tab"]')].map((t) => (t.textContent ?? '').replace(/\s+/g, ' ').trim()),
       // Each tab's box, and whether its words fit it: five tabs must never overprint (they scroll sideways instead).
-      tablistRight: table.querySelector('[role="tablist"]')?.getBoundingClientRect().right ?? 0,
+      tablist: (() => {
+        const r = table.querySelector('[role="tablist"]')?.getBoundingClientRect();
+        return { left: r?.left ?? 0, right: r?.right ?? 0 };
+      })(),
       tabBoxes: [...table.querySelectorAll<HTMLElement>('[role="tab"]')].map((t) => {
         const r = t.getBoundingClientRect();
-        return { left: r.left, right: r.right, whole: t.scrollWidth <= t.clientWidth };
+        const list = t.parentElement!;
+        const at = list.getBoundingClientRect().left - list.scrollLeft;
+        // Inside the row's scroll width: its box, in the row's own scroll coordinates, starts at or after 0 and ends
+        // at or before the scroll width.
+        const inRow = r.left - at >= 0 && r.right - at <= list.scrollWidth + 0.5;
+        return { left: r.left, right: r.right, whole: t.scrollWidth <= t.clientWidth, inRow };
       }),
       loose: [...table.querySelectorAll('[data-row]')].filter((r) => r.closest('section.pg-box') === null).map((r) => r.getAttribute('data-row')),
       boxes: [...table.querySelectorAll<HTMLElement>('section.pg-box')].map((box) => {
@@ -649,10 +658,14 @@ describe('the Status view shows programmes, not children (G3)', () => {
             expect(m.tabs).toEqual(['Needs you 2', 'Programmes 1', 'Done 1', 'Working 1', 'All 5']);
             m.tabBoxes.forEach((t, i) => {
               expect(t.whole, `${m.tabs[i]}: its words fit its tab`).toBe(true);
+              expect(t.inRow, `${m.tabs[i]}: inside the row's scroll width`).toBe(true);
               if (i > 0) expect(t.left, `${m.tabs[i]} starts after ${m.tabs[i - 1]} ends`).toBeGreaterThanOrEqual(m.tabBoxes[i - 1]!.right);
             });
-            // The two the operator reads first are on screen together, before any scroll.
-            expect(m.tabBoxes[1]!.right, 'Programmes is visible beside Needs you').toBeLessThanOrEqual(m.tablistRight);
+            // At 390 the five fit: every one is on screen inside the row, none scrolled away.
+            m.tabBoxes.forEach((t, i) => {
+              expect(t.left, `${m.tabs[i]}: in view`).toBeGreaterThanOrEqual(m.tablist.left - 0.5);
+              expect(t.right, `${m.tabs[i]}: in view`).toBeLessThanOrEqual(m.tablist.right + 0.5);
+            });
           }
           expect(m.boxes.map((b) => [b.group, b.coord, b.tray, b.foot])).toEqual([
             ['attention', ['billing-coord'], ['billing-w1'], false], ['programmes', ['port-coord'], [], false],
@@ -672,7 +685,7 @@ describe('the Status view shows programmes, not children (G3)', () => {
     }
   }
 
-  it('at 360 the five tabs scroll inside the tablist, each whole, and the page never scrolls sideways', async () => {
+  it('at 360 the five tabs scroll inside the tablist, each whole, the chosen one in view, and the page never scrolls sideways', async () => {
     const { ctx, page, errors } = await openStatus(PHOSPHOR, 360);
     try {
       const m = await page.evaluate(() => {
@@ -681,11 +694,18 @@ describe('the Status view shows programmes, not children (G3)', () => {
           page: document.documentElement.scrollWidth - document.documentElement.clientWidth,
           scrolls: list.scrollWidth > list.clientWidth && getComputedStyle(list).overflowX === 'auto',
           whole: [...list.querySelectorAll<HTMLElement>('[role="tab"]')].map((t) => t.scrollWidth <= t.clientWidth),
+          // The chosen tab (All, the default) is in view inside the row, scrolled there on load.
+          chosenInView: (() => {
+            const chosen = list.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]')!.getBoundingClientRect();
+            const row = list.getBoundingClientRect();
+            return chosen.left >= row.left - 0.5 && chosen.right <= row.right + 0.5;
+          })(),
         };
       });
       expect(m.page, 'sideways scroll').toBe(0);
       expect(m.scrolls, 'the tablist scrolls inside itself').toBe(true);
       expect(m.whole).toEqual([true, true, true, true, true]);
+      expect(m.chosenInView, 'the chosen tab is scrolled into view').toBe(true);
       expect(errors).toEqual([]);
     } finally {
       await ctx.close();
