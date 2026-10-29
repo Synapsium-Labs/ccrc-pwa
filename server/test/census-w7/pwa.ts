@@ -113,6 +113,13 @@ export const coordPresenceSites = (): W7Site[] => overPwa(coordPresenceSitesIn);
 const RUN_SIDE = new Set(['sessionId', 'claimedBy']);
 const RUN_KEY = /\.(?:sessionId|claimedBy)$/;
 
+/** Where the run binding's named readers live (D-7182, Task C7d), and the readers themselves: `workerOf`'s by-id arm and
+ *  `runCard`'s two card lookups (D-7205), `coordinatorOf`'s one (D-7207), `claimedRunsOf` (the coordinator side) and
+ *  `boundOpenRun` (the session's open bound run). A comparison or lookup inside one of them is reported as kind
+ *  `named`, never as an inline matcher; the may-only-shrink pins are `rings/pwa-one-owner.test.ts`'s run-binding block. */
+export const RUN_READER_FILE = 'pwa/src/fleet/runWords.ts';
+export const RUN_READERS: ReadonlySet<string> = new Set(['workerOf', 'coordinatorOf', 'claimedRunsOf', 'boundOpenRun', 'runCard']);
+
 /** The run-to-session matchers (plan item 3), by kind:
  *  - `comparison`: an equality comparison between a `sessionId` or `claimedBy` leaf and an `id` leaf, neither operand
  *    absent (4 on the base). `ev.sessionId !== ''` (no `id` leaf) and `r.claimedBy !== r.sessionId` (a run compared with
@@ -120,18 +127,20 @@ const RUN_KEY = /\.(?:sessionId|claimedBy)$/;
  *  - `lookup`: a `.get(…)` call (any receiver) whose one argument is a member expression ending in `.sessionId` or
  *    `.claimedBy`, the run-to-session map lookup where #746's recycled-id hazard lives (7 on the base); a `get` keyed on a
  *    session's own `id` is not one;
- *  - `runForSession` and `childRunsSeen`: each call of the two named readers (7 and 1 on the base).
+ *  - `runForSession` and `childRunsSeen`: each call of the two named readers (7 and 1 on the base);
+ *  - `named`: a comparison or lookup inside one of `RUN_READERS` in `RUN_READER_FILE` (D-7182, D-7205, D-7207, C7d).
  *  KNOWN WIDTH: the receiver of a lookup is not typed, so a `.get(ev.sessionId)` on a non-run event would count (none
  *  on the base); a comparison through a renamed local is not seen. */
 export function runMatchersIn(p: ParsedFile, file: string): W7Site[] {
   const out: W7Site[] = [];
+  const named = (start: number): boolean => file === RUN_READER_FILE && RUN_READERS.has(topSymbol(p, start));
   for (const c of p.comparisons) {
     if (c.absent) continue;
     const l = c.leftLeaf, r = c.rightLeaf;
-    if ((l !== null && RUN_SIDE.has(l) && r === 'id') || (r !== null && RUN_SIDE.has(r) && l === 'id')) out.push(cmpSite(p, file, c, 'comparison'));
+    if ((l !== null && RUN_SIDE.has(l) && r === 'id') || (r !== null && RUN_SIDE.has(r) && l === 'id')) out.push(cmpSite(p, file, c, named(c.start) ? 'named' : 'comparison'));
   }
   for (const c of p.calls) {
-    if (c.name === 'get' && c.callee.endsWith('.get') && c.args.length === 1 && c.args[0]!.kind === 'other' && RUN_KEY.test(c.args[0]!.text)) out.push(callSite(p, file, c, 'lookup'));
+    if (c.name === 'get' && c.callee.endsWith('.get') && c.args.length === 1 && c.args[0]!.kind === 'other' && RUN_KEY.test(c.args[0]!.text)) out.push(callSite(p, file, c, named(c.start) ? 'named' : 'lookup'));
     else if (c.name === 'runForSession' || c.name === 'childRunsSeen') out.push(callSite(p, file, c, c.name));
   }
   return out.sort((a, b) => a.line - b.line);
