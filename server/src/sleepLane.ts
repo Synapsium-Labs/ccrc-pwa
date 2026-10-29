@@ -369,7 +369,9 @@ export async function sleepAct<D extends SleepDepsBase, M, Row extends { readonl
       const { v, store } = await lane.asks.atAct(deps, f, again, rec);
       if (!isAsleep(v)) return { kind: 'held-at-act', verdict: v };
       // Never sent to a ccd that does not list the verb, asked again here where the lane says so.
-      if (lane.verb === 'arms-and-asked-at-act' && !laneVerb(lane.then, port.fleetState)) {
+      // The verb's own gate stays literal here (`verb-gate.test.ts` reads it); a `wake` lane also needs `--roll`.
+      if (lane.verb === 'arms-and-asked-at-act' && !(ccdCan(port.fleetState, 'hibernate')
+        && (lane.then !== 'wake' || capSupported(port.fleetState, HIBERNATE_ROLL_CAP)))) {
         return { kind: 'skipped', detail: 'no-verb', by: 'verb' };
       }
       // D-7047: the switches over a fresh listing, the read nearest the argv. No retry memory: the next pass asks again.

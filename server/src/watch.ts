@@ -2192,8 +2192,8 @@ export class FleetWatcher {
           release: async () => {
             try {
               const st = await this.deps.io.statMeasured(`${this.deps.cfg.ccrcDir}/${NODE_FILES.installed}`);
-              return st.ok ? st.mtimeMs : null;
-            } catch { return null; }
+              return st.ok ? { kind: 'installed', at: st.mtimeMs } : st.reason === 'absent' ? { kind: 'none' } : { kind: 'unreadable' };
+            } catch { return { kind: 'unreadable' }; }
           },
           liveWord: (rec) => liveWordFor(reads, rec), mark: (rec) => turnMarkFor(reads, rec),
           processStartedAt: (rec) => processStartedAtFor(reads, rec),

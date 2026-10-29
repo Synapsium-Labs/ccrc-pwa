@@ -481,7 +481,7 @@ describe('the hibernation lanes name themselves (D-5242, D-5427)', () => {
     expect(ROLL_SWEEP_ACTOR).toBe('sweep:roll');
     expect(ROLL_LANE.then).toBe('wake');
     // The wake rides the one argv: no second ccd call, no `ensure`, anywhere in the roll's files.
-    expect(src('rollLane.ts')).not.toMatch(/runCcd\(|CCD_ARGV\.ensure\(/);
+    expect(parsedFile('server/src/rollLane.ts').calls.filter((c) => c.name === 'runCcd' || c.name === 'ensure')).toEqual([]);
     expect(CCD_ARGV.hibernate('project-a-quiet-basin', sweepDec(NEW, ROLL_SWEEP_ACTOR), null, true))
       .toEqual(['hibernate', '--roll', 'project-a-quiet-basin', '--surface', 'agent', '--actor', 'sweep:roll']);
   });

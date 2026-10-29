@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest';
 import path from 'node:path';
 import { PRESENCE_OPEN_TTL_MS, type FleetSession } from '../../shared/api.js';
 import { CLAUDE_ROLL_TARGETS_DEFAULT, type ClaudeRollTargets } from '../../shared/claudeVersion.js';
-import { rollPass, type RollSweepDeps, type RollSweepMemory } from '../src/rollLane.js';
+import { rollPass, type ReleaseRead, type RollSweepDeps, type RollSweepMemory } from '../src/rollLane.js';
 import type { SleepActPort } from '../src/sleepLane.js';
 type RollActPort = SleepActPort<FleetSession>;
 import { ROLL_QUIET_MS } from '../src/coord/rollTarget.js';
@@ -44,7 +44,7 @@ interface Fake {
   deps: RollSweepDeps; lines: string[]; calls: string[][]; wakes: string[];
   set: { targets: ClaudeRollTargets | null; word: string; age: number; hibernate: (id: string) => CcdResult; wake: boolean };
 }
-function fake(o: { startedAt?: number | null; release?: number | null; verbs?: readonly string[] } = {}): Fake {
+function fake(o: { startedAt?: number | null; release?: ReleaseRead; verbs?: readonly string[] } = {}): Fake {
   const coord = new CoordStore(openCoordDb(path.join(mkTmp('ccrc-roll-'), '.ccrc', 'coord.db')));
   const lines: string[] = [];
   const calls: string[][] = [];
@@ -70,7 +70,7 @@ function fake(o: { startedAt?: number | null; release?: number | null; verbs?: r
       outstandingMailFor: (id: string, n?: number) => coord.outstandingMailFor(id, n),
     }),
     targets: () => set.targets,
-    release: async () => (o.release === undefined ? INSTALLED : o.release),
+    release: async () => o.release ?? { kind: 'installed', at: INSTALLED },
     viewers: { isOpen: () => false },
     liveWord: async () => ({ ok: true, word: set.word, since: null }),
     mark: async () => mark(set.age),
@@ -220,10 +220,17 @@ describe('rollPass: the setting and the switches (D-7453)', () => {
   });
 
   it('an install time that could not be read rolls nothing, in one line for the pass', async () => {
-    const f = fake({ release: null });
+    const f = fake({ release: { kind: 'unreadable' } });
     expect(await pass(f, [row(COORD), row(COORD2)])).toEqual([]);
     expect(f.calls).toEqual([]);
     expect(f.lines).toEqual([expect.stringMatching(/^ccrc-server: roll-skip all: release-unmeasured/)]);
+  });
+
+  it('a node with no completed install has no release to be behind on: nothing is rolled and nothing is written', async () => {
+    const f = fake({ release: { kind: 'none' } });
+    expect(await pass(f, [row(COORD), row(COORD2)])).toEqual([]);
+    expect(f.calls).toEqual([]);
+    expect(f.lines).toEqual([]);
   });
 
   it('hibernate-disabled rolls nothing', async () => {

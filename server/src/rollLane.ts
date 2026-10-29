@@ -47,8 +47,8 @@ export interface RollSweepDeps {
   readonly coord: IdleHoursCoordPort | undefined;
   /** The Settings row (`rollTargetsOf` over `CoordStore.rollSettings`); null when it could not be read. */
   readonly targets: () => ClaudeRollTargets | null;
-  /** When the node's current ccrc install completed: `~/.ccrc/installed`'s modification time; null unmeasured. */
-  readonly release: () => Promise<number | null>;
+  /** When the node's current ccrc install completed: `~/.ccrc/installed`'s modification time. */
+  readonly release: () => Promise<ReleaseRead>;
   readonly viewers: Pick<Viewers, 'isOpen'> | undefined;
   readonly liveWord: (rec: SessionRecord) => Promise<
     { ok: true; word: string; since: number | null } | { ok: false; reason: 'no-pane' | 'no-config-dir' | 'unmeasured' }>;
@@ -64,6 +64,17 @@ export interface RollSweepDeps {
   /** Null: the lane journals what it would roll and rolls nothing. */
   readonly act: SleepActPort<FleetSession> | null;
 }
+
+/** The node's install record, read for the roll. `none`: no completed install stands (a working-tree deploy, which
+ *  writes no record, or a dev box), so there is no release for a coordinator to be behind on, and the pass is silent,
+ *  as a row on the current release is. `unreadable`: it stands, or may, and could not be read: journalled, rolls
+ *  nothing. Two arms, never one null, because the pass answers them differently. */
+export type ReleaseRead =
+  | { readonly kind: 'installed'; readonly at: number }
+  | { readonly kind: 'none' }
+  | { readonly kind: 'unreadable' };
+
+const releaseAt = (r: ReleaseRead): number | null => (r.kind === 'installed' ? r.at : null);
 
 export interface RollSweepMemory {
   /** The last journal line per id (and the pass-level key `*`): when, and for what. */
@@ -150,7 +161,7 @@ export const ROLL_LANE: SleepLane<RollLaneDeps, RollSweepMemory, FleetSession, H
     },
     atAct: async (deps, f, row, rec) => {
       const { live, startedAt } = await liveOf(deps, rec);
-      const p: Pass = { ...deps.pass, targets: deps.targets(), release: await deps.release() };
+      const p: Pass = { ...deps.pass, targets: deps.targets(), release: releaseAt(await deps.release()) };
       const at = deps.now();
       const store = idleHoursBindings(deps)(row.id);
       return { v: ask(deps, p, f.names, row, store, live, startedAt, at), store };
@@ -207,7 +218,10 @@ export async function rollPass(
   if (!sessions.some((s) => records.some((r) => r.id === s.id))) return [];
   const afterMs = names.includes(HIBERNATE_AFTER_HOURS_FILE) ? hibernateAfterMs(await deps.readAfterHours()) : hibernateAfterMs(null);
   const armed = switches[HIBERNATE_LIVE_MARKER] === 'set' && ccdCan(deps.act?.fleetState, 'hibernate');
-  const release = await deps.release();
+  const read = await deps.release();
+  // No completed install on this node: nothing is behind, so nothing is a skip and nothing is written (D-7458).
+  if (read.kind === 'none') return [];
+  const release = releaseAt(read);
   if (release === null) {
     // Every row shares the node's install time, so its absence is one line for the pass, not one per coordinator.
     journal(deps, mem, '*', 'release-unmeasured', 'ccrc-server: roll-skip all: release-unmeasured (the node\'s ~/.ccrc/installed could not be read)');
