@@ -1358,6 +1358,18 @@ describe('the run board worker row carries the graph chip', () => {
     expect(screen.getByText('graph 0')).toBeInTheDocument();
   });
 
+  // C7d (D-7205): a FINISHED run's worker is the listed session carrying its id (`workerOf`'s by-id arm), because no
+  // wire fact tells a recycled id from the same incarnation for a closed run: the wire's binding names only the
+  // session's newest and newest open run. So a finished wave of a session now bound to its next wave keeps its
+  // worker's chip, as it did before C7d.
+  it('a finished wave of a live session keeps its worker\'s chip while the session is bound to its next wave', async () => {
+    const store = makeStore();
+    act(() => { store.setState({ runs: [r({ id: 10, wave: 4 })], runsFrameSeen: true, sessions: [sess({ graphQueries: 3 })] }); });
+    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [r({ id: 9, state: 'done', closedAt: Date.now() - 60_000 })] })} loadCaps={NO_CAPS} loadSpend={NO_SPEND} />);
+    expect(store.getState().sessions[0]?.run?.id).toBe(10);
+    await waitFor(() => expect(screen.getAllByText('graph 3')).toHaveLength(2));
+  });
+
   it('shows NO chip when nothing was measured', () => {
     board({ graphQueries: null });
     expect(screen.queryByText(/^graph /)).toBeNull();
