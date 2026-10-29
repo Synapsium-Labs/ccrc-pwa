@@ -677,7 +677,7 @@ describe('one writer per fact (ARCH-40): the switches whose writer set is alread
       'server/src/watch.ts': 68,   // W3 Q3d (D-7028): 79 - 10, the pins whose text moved to coord/questions.ts, re-keyed on scan/symbols.ts; C4n (D-7171): - 1, execChildReclaim's queue pin
       'server/src/server.ts': 23,
       'server/src/interruptlog.ts': 0,
-      'server/src/coord/routes.ts': 38,
+      'server/src/coord/routes.ts': 37,   // C4n (D-7171): 38 - 1, childReclaimPort's queue pin re-keyed on scan/symbols.ts
       'server/src/coord/childReclaim.ts': 6,
       'server/src/coord/expireArchived.ts': 0,
       'server/src/coord/collectTempRoot.ts': 0,
@@ -716,7 +716,7 @@ describe('one writer per fact (ARCH-40): the switches whose writer set is alread
   it('literal source pins over W1b\'s files may only shrink (D-6114; ARCH-06\'s counting rule)', () => {
     const CEILING: Record<string, number> = {
       'server/src/watch.ts': 68,   // W3 Q3d (D-7028): 79 - 10, the pins whose text moved to coord/questions.ts, re-keyed on scan/symbols.ts; C4n (D-7171): - 1, execChildReclaim's queue pin
-      'server/src/coord/routes.ts': 38,
+      'server/src/coord/routes.ts': 37,   // C4n (D-7171): 38 - 1, childReclaimPort's queue pin re-keyed on scan/symbols.ts
       'server/src/ccdargv.ts': 6,
       'server/src/registry.ts': 2,
       'server/src/coord/redact.ts': 0,
