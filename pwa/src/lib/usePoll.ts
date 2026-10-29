@@ -1,8 +1,9 @@
 // The PWA's ONE poll primitive (ARCH-30, #544): "the newest ISSUED request is authoritative, the page becoming visible
 // re-polls, and a write can drop every request issued before it". Four view hooks each carried a copy of it. The
-// caller owns the request, what an answer means and the state it lands in; this owns the issue counter, the timer and
-// the one `visibilitychange` listener the fleet views use.
+// caller owns the request, what an answer means and the state it lands in; this owns the issue counter and
+// the timer; the page becoming visible is the page clock's (`lib/pageClock.ts`, D-7191).
 import { useCallback, useEffect, useRef } from 'react';
+import { onPageVisible } from './pageClock';
 
 /** What a request came to: the raw answer, or the rejection. The caller reads it (a wire guard, a failure word). */
 export type PollOutcome = { ok: true; raw: unknown } | { ok: false; err: unknown };
@@ -24,16 +25,6 @@ export interface PollControl {
   /** Every request issued before this call now lands stale: a write's reply was installed and a poll must not put the
    *  old answer back. */
   supersede: () => void;
-}
-
-/** Run `handler` each time the page becomes visible; the returned function stops it. The ONLY `visibilitychange`
- *  subscription in the fleet views: `usePoll` and `useWhenVisible` both go through it. */
-export function onPageVisible(handler: () => void): () => void {
-  const listener = (): void => {
-    if (document.visibilityState === 'visible') handler();
-  };
-  document.addEventListener('visibilitychange', listener);
-  return () => document.removeEventListener('visibilitychange', listener);
 }
 
 /** `onPageVisible` as an effect, for a view that refreshes on return without polling (`useProjectRows`). `handler` may

@@ -1,8 +1,8 @@
 // ARCH-30 (#544): the PWA's poll primitive and wire-guard kit have ONE owner each.
 //  (1) `isRecord`, `isNum`, `isCount`, `isOneOf` (and the old `isObject`) are defined only in `pwa/src/lib/wire.ts`.
 //      Five copies had disagreed on what a count is, and 2^53 + 1 passed the loosest.
-//  (2) No `pwa/src/fleet/` file subscribes to `visibilitychange`: a fleet view re-polls through `lib/usePoll.ts`, the
-//      one file that holds that subscription for the fleet views.
+//  (2) No `pwa/src/fleet/` file subscribes to `visibilitychange`: a fleet view re-polls through `lib/usePoll.ts`, which
+//      subscribes through the page clock, `lib/pageClock.ts`, the one file that holds that subscription (D-7191).
 //  (3) ARCH-49: no `status === 'dead'` outside `pwa/src/fleet/presence.ts`, and no `coordPresence` (the block at the end).
 import { describe, expect, it } from 'vitest';
 import { parseFile, parseSource, type ParsedFile } from '../scan/parse.js';
@@ -13,7 +13,7 @@ import { fixture, singleReaders, singleReadersIn } from '../census-w7/pwa.js';
 
 const GUARDS = new Set(['isRecord', 'isObject', 'isNum', 'isCount', 'isOneOf']);
 const WIRE = 'pwa/src/lib/wire.ts';
-const POLL = 'pwa/src/lib/usePoll.ts';
+const POLL = 'pwa/src/lib/pageClock.ts';
 
 const guardDefinitions = (p: ParsedFile): string[] => p.symbols.filter((s) => GUARDS.has(s.name)).map((s) => s.name);
 const visibilitySubscriptions = (p: ParsedFile): number =>
@@ -41,7 +41,7 @@ describe('the PWA poll primitive and wire-guard kit have one owner (ARCH-30, #54
     expect(where[WIRE]?.sort()).toEqual(['isCount', 'isNum', 'isOneOf', 'isRecord']);
   });
 
-  it('no pwa/src/fleet file subscribes to visibilitychange, and usePoll holds that subscription', () => {
+  it('no pwa/src/fleet file subscribes to visibilitychange, and the page clock holds that subscription', () => {
     const fleet = files().filter((f) => f.startsWith('pwa/src/fleet/'));
     expect(fleet.length).toBeGreaterThan(20);
     expect(fleet.filter((f) => visibilitySubscriptions(parse(f)) > 0)).toEqual([]);
