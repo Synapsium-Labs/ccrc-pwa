@@ -3,13 +3,15 @@
 // ApiError { status, body } on non-2xx — callers branch on status/body
 // (e.g. 409 { error: 'draft-present', draft } from prompt).
 import type { AccountsResponse, AckAnswer, ApplyUpdateBody, CatalogueState, CatchUp, ClaimSummary, CollectLaneRequest, CollectLaneView, CoordCaps, CoordCapsView, FleetHealth, FleetSession, IntentWriteAnswer, LifecycleQueryResult, LoginRequest, MoveRequestAnswer, NotifyEvent, PaneHistoryReply, PasskeyAssertFinish, PasskeyAssertStart, PasskeyListResponse, PasskeyRegisterFinish, PasskeyRegisterStart, ProjectPoolWire, ProjectRow, PrView, ReapResult, ReviewCapLiftAnswer, ReviewCapView, RollbackUpdateBody, RouteField, RunSpend, RunSummary, SlashCommand, StagedClip, StallWatchRequest, StallWatchView, StepUpAnswer, StepUpStart, UpdatesView, WsAudit } from '../../../shared/api';
-import type { ArchiveAnswer, DialogAnswered, DialogTabRequest, DigestAnswer, DigestCorrectAnswer, DigestCorrectBody, InterruptRouteSource } from '../../../shared/api';
+import type { ArchiveAnswer, DialogAnswered, DialogTabRequest, DigestAnswer, DigestCorrectAnswer, DigestCorrectBody, InterruptRouteSource, QuestionAnswerBody } from '../../../shared/api';
 import type { LinearConnectionView } from '../../../shared/linear';
 import type { DispatchAbandonRequest, DispatchAbandonView } from '../../../shared/dispatch-abandon';
 import type { RotateAnswer } from '../../../shared/box-token';
 import type { ResolveRead } from '../fleet/workspaceNameWords';
 import { raiseAuthLostFrom } from './auth';
 import { ApiError } from './apiError';
+import { createServerCaps } from './serverCaps';
+import { questionAnswerRequest } from '../session/answerLifecycle';
 import { ANSWERED, answered, linearViewOf, rotateRefusalOf, readRotateStarted, linearNotConnectedOf, readResolve, readWorkspaceAdd, readWorkspaceTitle, archiveBody, workspaceAddBody, type ArchiveOptions, type UpdateIntentRequest, type WorkspaceAddAnswer, type WorkspaceAddOptions, type WorkspaceTitleAnswer, type WorkspaceTitleChange } from './wireReaders';
 import { TOKEN_ROTATE_PATH } from '../../../shared/box-token';
 import {
@@ -133,6 +135,8 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
     (await (await request(path, jsonInit(body))).json().catch(() => unreadable)) as T;
 
   const sid = (id: string): string => `/api/sessions/${encodeURIComponent(id)}`;
+  // W7 C7g (D-7185, D-7485): which door an operator's answer takes, read from `GET /health`'s `questions-v1`.
+  const caps = createServerCaps(fetchImpl);
 
   return {
     /**
@@ -555,33 +559,35 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
       // rather than spelled inline the way that door spells it (D-1150).
       return { queued: answer.queued !== false };
     },
-    answerDialog: async (id: string, dialogId: string, optionIndex: number): Promise<DialogAnswered> =>
-      answered(await postRead<unknown>(`${sid(id)}/dialog`, ANSWERED, { dialogId, optionIndex })),
-    /** Answer an AskUserQuestion in your own words, through its free-text ("Type something.") row (D-5047). The server
-     *  types `text` only once a capture proves the cursor on the empty row, and presses Enter only once a capture
-     *  proves the row holds exactly `text`. It refuses 400 `bad-text` for a text it will not type (`isDialogText`,
-     *  `shared/api.ts`), and 409 with a `DialogTextRefuseCode` otherwise. Typing changes the dialog's id, and a retry
-     *  with the same text, under the id the stream then shows, submits text a refused attempt left in the row. */
-    answerDialogText: async (id: string, dialogId: string, optionIndex: number, text: string): Promise<DialogAnswered> =>
-      answered(await postRead<unknown>(`${sid(id)}/dialog/text`, ANSWERED, { dialogId, optionIndex, text })),
-    /** Answer a multiSelect AskUserQuestion question (D-5048): `optionIndexes` are the printed digits of the boxes to
-     *  leave ticked (`Dialog.multi`'s options), the whole set, never a toggle. The server sends a digit only for each
-     *  box whose tick differs on the live pane, proves the ticks on a fresh capture, then commits with Tab and proves
-     *  the screen moved on. It refuses 400 `bad-indexes` for a set it will not send (`isDialogMultiIndexes`,
-     *  `shared/api.ts`: empty, repeated, or outside 1..9), and 409 with a `DialogMultiRefuseCode` otherwise. */
-    answerDialogMulti: async (id: string, dialogId: string, optionIndexes: readonly number[]): Promise<DialogAnswered> =>
-      answered(await postRead<unknown>(`${sid(id)}/dialog/multi`, ANSWERED, { dialogId, optionIndexes })),
     /** Move an AskUserQuestion's PANE to another tab (decision `ask-dialog-tab-route`): `prev`/`next` (the arrow keys),
      *  `submit` (the review), or question tab k with the tab the sheet believes is up as `from`. Arrows only, each step
      *  proved by the server. The 200 carries the screen the pane landed on as `next`, read like an answer's. */
     answerDialogTab: async (id: string, req: DialogTabRequest): Promise<DialogAnswered> =>
       answered(await postRead<unknown>(`${sid(id)}/dialog/tab`, ANSWERED, req)),
-    /** Answer a hook-reported question by option index. `askKey` is minted
-     *  server-side and carried verbatim: the server re-reads the CURRENT
-     *  envelope and refuses unless the key still matches, so this can only ever
-     *  answer the question the client was actually shown. */
-    answerAsk: (id: string, askKey: string, optionIndexes: number[]) =>
-      post(`${sid(id)}/ask`, { askKey, optionIndexes }),
+    /** Answer session `id`'s question (W7 C7g, D-7185, D-7485): an option row, the own words, a multiSelect set or a
+     *  hooked ask by option index, as `body` (`shared/api.ts#QuestionAnswerBody`). On a server that advertises
+     *  `questions-v1` (`serverCaps.ts`) it is W3 Q3f's `POST /api/questions/session-<id>/answer`; on any other, the old
+     *  door the body names, with that door's bytes (`answerLifecycle.ts#questionAnswerRequest`). Either answers the
+     *  same: the same core, its refusals by code (`DialogRefuseCode` and the rest, plus the family's `kind-mismatch`),
+     *  and a 200 whose `next` is read as a tapped row's is.
+     *
+     *  What each answer carries, as the four writers it replaced said (they went in C7g): an option row is answered by
+     *  INDEX, with the dialog it was shown. The own words (D-5047) are typed only once a capture proves the cursor on
+     *  the empty free-text row, and Enter is pressed only once a capture proves the row holds exactly `text`; a text the
+     *  server will not type is 400 `bad-text` (`isDialogText`), and typing changes the dialog's id. A multiSelect set
+     *  (D-5048) is the WHOLE set to leave ticked, never a toggle; a set it will not send is 400 `bad-indexes`
+     *  (`isDialogMultiIndexes`: empty, repeated, or outside 1..9). An ask's `askKey` is minted server-side and carried
+     *  verbatim: the server re-reads the CURRENT envelope and refuses unless the key still matches, so this can only
+     *  ever answer the question the client was shown. */
+    /** Which door an answer takes now: true on a server that advertises `questions-v1` (`serverCaps.ts`). Once any
+     *  read has settled it resolves at once with the last door the server gave, re-reading behind it when that is past
+     *  its lease; the sheet reads it when it mounts and when the page comes back into view, so a tap's request is
+     *  never one `GET /health` behind the tap. */
+    questionsDoor: (): Promise<boolean> => caps.questionsDoor(),
+    answerQuestion: async (id: string, body: QuestionAnswerBody): Promise<DialogAnswered> => {
+      const req = questionAnswerRequest(id, body, await caps.questionsDoor());
+      return answered(await postRead<unknown>(req.path, ANSWERED, req.payload));
+    },
     /** One verified Enter on a box that already holds text — the rescue for a
      *  send whose Enter the pane swallowed twice.
      *
@@ -589,7 +595,7 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
      *  `draft`, carried back verbatim). The server re-reads the box and refuses
      *  `box-mismatch` unless it still reads exactly that, so this can only ever
      *  submit the message the bubble is showing — the same correspondence rule
-     *  `answerAsk` applies with `askKey`. */
+     *  an ask's answer (`answerQuestion`) applies with `askKey`. */
     submit: (id: string, expect: string) => post(`${sid(id)}/submit`, { expect }),
     catchUp: (epoch: string | null, seq: number) =>
       getJson<CatchUp>(`/api/notifications/catchup?epoch=${encodeURIComponent(epoch ?? '')}&seq=${seq}`),

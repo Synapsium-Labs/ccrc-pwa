@@ -444,3 +444,56 @@ describe('W7 PWA census: the prompt glyph\'s pane-text spellings (C7i, D-7187)',
     expect(sites.map((s) => `${s.file}#${s.symbol}`)).toEqual(['shared/pane-glyph.ts#(module)']);
   });
 });
+
+// C7g (D-7185, D-7485; ARCH-57 #792, PWA half): the PWA answers operator questions through one writer,
+// `lib/api.ts#answerQuestion`, on W3 Q3f's door. Its counted exit is the old writers' names in code (10 on the base, 0
+// at the tip) and the old doors' paths, which survive only in the skew table a server without `questions-v1` is
+// answered through, and in push-sw.js's render of it. Imported in the block, so the file's header imports stay as other
+// tasks append to them.
+describe('W7 PWA census: the operator answer doors (C7g, D-7185, D-7485)', () => {
+  it('FIXTURE oldAnswerWriters: a definition, a call, a member reference and a Pick key count; answerDialogTab, a comment and an import do not', async () => {
+    const { oldAnswerWritersIn } = await import('./pwa.js');
+    const got = run(oldAnswerWritersIn, [
+      "import { answerAsk } from './x';",
+      'export const api = { answerDialog: async (id: string) => post(id), answerDialogTab: async (id: string) => post(id) };',
+      '// api.answerDialogMulti(id, d, [1]) in a comment',
+      'export function Sheet() { void api.answerDialogText(id, d, 1, t); const f = seam.answerDialogMulti; void api.answerDialogTab(id, r); }',
+      "export type Seam = Pick<Api, 'answerDialog' | 'answerQuestion'>;",
+    ].join('\n'), 'pwa/src/fixture.ts');
+    expect(got.map((s) => [s.kind, s.line])).toEqual([['reference', 2], ['call', 4], ['reference', 4], ['name', 5]]);
+  });
+
+  it('FIXTURE oldAnswerDoorPaths: an old door in a template counts as a door, in the skew table and the region by their kinds; /dialog/tab and the family do not', async () => {
+    const { oldAnswerDoorPathsIn } = await import('./pwa.js');
+    const ts = [
+      'export const writer = (id: string) => post(`${sid(id)}/dialog/multi`, {});',
+      "export const LEGACY_ANSWER_DOORS = { ask: '/ask', row: '/dialog' } as const;",
+      'export const tab = (id: string) => post(`${sid(id)}/dialog/tab`, {});',
+      "export const family = (id: string) => post('/api/questions/session-' + id + '/answer', {});",
+    ].join('\n');
+    expect(run(oldAnswerDoorPathsIn, ts, 'pwa/src/fixture.ts').map((s) => [s.kind, s.line])).toEqual([['door', 1], ['skew-table', 2], ['skew-table', 2]]);
+    const sw = [
+      "const a = fetch('/api/sessions/' + sid + '/ask');",
+      '// ccrc:generated answer-lifecycle BEGIN',
+      "const b = '/api/sessions/' + encodeURIComponent(sid) + '/ask';",
+      '// ccrc:generated answer-lifecycle END',
+    ].join('\n');
+    expect(run(oldAnswerDoorPathsIn, sw, PUSH_SW).map((s) => [s.kind, s.line])).toEqual([['door', 1], ['region', 3]]);
+  });
+
+  it('REAL oldAnswerWriters(): 0 (from 10): no pwa/src code names answerDialog, answerDialogText, answerDialogMulti or answerAsk', async () => {
+    const { oldAnswerWriters } = await import('./pwa.js');
+    held('oldAnswerWriters', oldAnswerWriters(), 0);
+  });
+
+  it('REAL oldAnswerDoorPaths(): 5 (from 9): the skew table\'s 4 and the region\'s 1; no door anywhere else', async () => {
+    const { oldAnswerDoorPaths } = await import('./pwa.js');
+    const sites = oldAnswerDoorPaths();
+    held('oldAnswerDoorPaths', sites, 5);
+    expect(sites.map((s) => [s.kind, s.file])).toEqual([
+      ['skew-table', 'pwa/src/session/answerLifecycle.ts'], ['skew-table', 'pwa/src/session/answerLifecycle.ts'],
+      ['skew-table', 'pwa/src/session/answerLifecycle.ts'], ['skew-table', 'pwa/src/session/answerLifecycle.ts'],
+      ['region', PUSH_SW],
+    ]);
+  });
+});

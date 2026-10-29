@@ -121,7 +121,7 @@
 //
 // D-5090 (plan docs/superpowers/plans/2026-10-15-ask-sheet-half.md, Task 3):
 // own words answer an AskUserQuestion THROUGH its free-text row
-// (`api.answerDialogText`, D-5047), in both sheets (`AskParts.tsx`'s
+// (`api.answerQuestion`'s own words, D-5047), in both sheets (`AskParts.tsx`'s
 // `OwnWords`). The reply this file used to send pressed the pane's `Chat about
 // this` row, which declines the WHOLE ask, then typed the text as a new prompt
 // while Claude carried on, and emptied the box before trying; it is deleted,
@@ -134,7 +134,7 @@
 //
 // D-5091 (Task 4): a multiSelect question the pane carries as `Dialog.multi`
 // is answered as boxes, in both sheets (`AskParts.tsx`'s `MultiPick`): the
-// commit sends the whole set through `api.answerDialogMulti` (D-5048). The
+// commit sends the whole set through `api.answerQuestion` (D-5048). The
 // operator's set and the commit's call live HERE too, for the same two
 // reasons: the boxes repaint under the same id while the server ticks them,
 // and an `ask_cleared` mid-commit hands the same set and call to the scraped
@@ -176,6 +176,7 @@ import {
 import { dialogMultiRefusal, dialogRefusal, dialogTabRefusal, dialogTextRefusal } from './askWords';
 import { useAskEngagement, useAskKeys } from './useAskKeys';
 import { api, ApiError, failedTo } from '../lib/api';
+import { onPageVisible } from '../lib/pageClock';
 import { backgroundTasksClause } from '../lib/refusalWords';
 import { getSessionStore, type SessionStore } from '../stores/session';
 import './chat.css';
@@ -230,6 +231,16 @@ export function DialogSheet({ id, store, onOpenTerminal, raise, asker = null, on
     if (!useStore.getState().askFrameSeen) return;
     useStore.getState().applyAnswered(answeredId, next);
   };
+  // W7 C7g (D-7185, D-7485): read which door an answer takes (`questions-v1`, `lib/serverCaps.ts`) when the sheet
+  // mounts, and again when the page comes back into view. The reader answers a tap at once with the last door the
+  // server gave and re-reads behind it once that is past its lease, so these reads keep it current and a tap's request
+  // goes out at once, never one `GET /health` read behind it. The page clock (`lib/pageClock.ts`) owns the
+  // `visibilitychange` subscription. A read, never an answer, so it is `api`'s (where the read is held), not the answer
+  // seam's.
+  useEffect(() => {
+    void api.questionsDoor();
+    return onPageVisible(() => { void api.questionsDoor(); });
+  }, []);
   const storeAsk = useStore((s) => s.ask);
   // D-7184: the server's pairing for the envelope and the dialog the store holds (the last frame's, `stores/session.ts`).
   const storePairing = useStore((s) => s.pairing);

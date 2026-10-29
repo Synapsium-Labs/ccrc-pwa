@@ -204,10 +204,13 @@ describe('the D-numbered replays', () => {
 
 interface Captured { method: string; path: string; headers: Record<string, string>; body: string }
 
-/** What a `lib/api.ts` writer sends, through a fetch that answers 200 `{ok:true}`. */
+/** What a `lib/api.ts` writer sends, through a fetch that answers 200 `{ok:true}`. W7 C7g (D-7185, D-7485): the
+ *  writer first reads `GET /health` to choose the door; that read is answered apart (a server without `questions-v1`,
+ *  so these rows are the old doors' bytes) and is not one of the requests the writer sends. */
 async function sent(write: (seam: AnswerSeam) => Promise<unknown>): Promise<Captured[]> {
   const out: Captured[] = [];
   const api = createApi((async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (String(input) === '/health') return new Response('{"ok":true,"caps":[]}', { status: 200, headers: { 'content-type': 'application/json' } });
     out.push({
       method: init?.method ?? 'GET', path: String(input),
       headers: { ...(init?.headers as Record<string, string>) }, body: String(init?.body),
@@ -218,7 +221,7 @@ async function sent(write: (seam: AnswerSeam) => Promise<unknown>): Promise<Capt
   return out;
 }
 const asCaptured = (c: AnswerCommand): Captured => {
-  const r = answerRequest(c);
+  const r = answerRequest(c, false);
   return { method: r.method, path: r.path, headers: { ...r.headers }, body: r.body };
 };
 
@@ -234,7 +237,9 @@ async function swSent(action: string, sessionId: string | null): Promise<{ posts
     registration: { showNotification: async () => {} },
     clients: { matchAll: async () => [], openWindow: async (u: string) => { opened.push(u); } },
   };
-  const fetch = async (url: string, init: { method: string; headers: Record<string, string>; body: string }) => {
+  const fetch = async (url: string, init: { method?: string; headers: Record<string, string>; body: string }) => {
+    // The worker's `GET /health` (C7g): a server without `questions-v1`, so the answer below is the old door's.
+    if (init.method === undefined) return { ok: true, json: async () => ({ ok: true, caps: [] }) };
     posts.push({ method: init.method, path: url, headers: { ...init.headers }, body: init.body });
     return { ok: true, json: async () => ({ ok: true }) };
   };
@@ -249,19 +254,21 @@ async function swSent(action: string, sessionId: string | null): Promise<{ posts
   return { posts, opened };
 }
 
+// W7 C7g (D-7185, D-7485): the rows below are a server WITHOUT `questions-v1`, where each answer still takes its old
+// door with today's bytes (the skew row); `answer-questions-door.test.ts` holds the family's door on a server with it.
 describe('answerRequest: one row per command kind, equal to what that kind\'s writer sends today', () => {
   const id = 'lane-a:project a/1';
-  it('answer = api.answerDialog', async () => {
+  it('answer = api.answerQuestion\'s option row, on a server without questions-v1', async () => {
     const c: AnswerCommand = { kind: 'answer', sessionId: id, dialogId: 'd1', optionIndex: 2 };
-    expect(await sent((a) => a.answerDialog(id, 'd1', 2))).toEqual([asCaptured(c)]);
+    expect(await sent((a) => a.answerQuestion(id, { kind: 'dialog', dialogId: 'd1', optionIndex: 2 }))).toEqual([asCaptured(c)]);
   });
-  it('text = api.answerDialogText', async () => {
+  it('text = api.answerQuestion\'s own words, on a server without questions-v1', async () => {
     const c: AnswerCommand = { kind: 'text', sessionId: id, dialogId: 'd1', optionIndex: 3, text: 'my words' };
-    expect(await sent((a) => a.answerDialogText(id, 'd1', 3, 'my words'))).toEqual([asCaptured(c)]);
+    expect(await sent((a) => a.answerQuestion(id, { kind: 'dialog', dialogId: 'd1', optionIndex: 3, text: 'my words' }))).toEqual([asCaptured(c)]);
   });
-  it('multi = api.answerDialogMulti', async () => {
+  it('multi = api.answerQuestion\'s multiSelect set, on a server without questions-v1', async () => {
     const c: AnswerCommand = { kind: 'multi', sessionId: id, dialogId: 'd1', optionIndexes: [3, 1] };
-    expect(await sent((a) => a.answerDialogMulti(id, 'd1', [3, 1]))).toEqual([asCaptured(c)]);
+    expect(await sent((a) => a.answerQuestion(id, { kind: 'dialog', multi: true, dialogId: 'd1', optionIndexes: [3, 1] }))).toEqual([asCaptured(c)]);
   });
   it('tab = api.answerDialogTab, with and without `from`', async () => {
     const c: AnswerCommand = { kind: 'tab', sessionId: id, dialogId: 'd1', to: 2, from: 1 };
@@ -290,23 +297,21 @@ describe('answerRequest: one row per command kind, equal to what that kind\'s wr
   });
 });
 
+// W7 C7g (D-7185, D-7485): the seam's answer writers are one, `answerQuestion`, with the family's body.
 describe('performAnswer: each sheet command goes to its writer on the seam, with the command\'s arguments', () => {
   it('routes every kind', async () => {
     const calls: unknown[][] = [];
     const rec = (name: string) => async (...args: unknown[]) => { calls.push([name, ...args]); return { ok: true } as never; };
-    const seam = {
-      answerDialog: rec('answerDialog'), answerDialogText: rec('answerDialogText'), answerDialogMulti: rec('answerDialogMulti'),
-      answerDialogTab: rec('answerDialogTab'), interrupt: rec('interrupt'),
-    } as unknown as AnswerSeam;
+    const seam = { answerQuestion: rec('answerQuestion'), answerDialogTab: rec('answerDialogTab'), interrupt: rec('interrupt') } as unknown as AnswerSeam;
     await performAnswer({ kind: 'answer', sessionId: SID, dialogId: 'd1', optionIndex: 2 }, seam);
     await performAnswer({ kind: 'text', sessionId: SID, dialogId: 'd1', optionIndex: 3, text: 'w' }, seam);
     await performAnswer({ kind: 'multi', sessionId: SID, dialogId: 'd1', optionIndexes: [1] }, seam);
     await performAnswer({ kind: 'tab', sessionId: SID, dialogId: 'd1', to: 'next' }, seam);
     await performAnswer({ kind: 'deny', sessionId: SID }, seam);
     expect(calls).toEqual([
-      ['answerDialog', SID, 'd1', 2],
-      ['answerDialogText', SID, 'd1', 3, 'w'],
-      ['answerDialogMulti', SID, 'd1', [1]],
+      ['answerQuestion', SID, { kind: 'dialog', dialogId: 'd1', optionIndex: 2 }],
+      ['answerQuestion', SID, { kind: 'dialog', dialogId: 'd1', optionIndex: 3, text: 'w' }],
+      ['answerQuestion', SID, { kind: 'dialog', multi: true, dialogId: 'd1', optionIndexes: [1] }],
       ['answerDialogTab', SID, { dialogId: 'd1', to: 'next' }],
       ['interrupt', SID, 'deny'],
     ]);

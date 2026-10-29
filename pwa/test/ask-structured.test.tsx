@@ -14,7 +14,7 @@ import type { ChatEvent, Dialog, FleetSession, HookAsk } from '../../shared/api'
 import { ToastHost } from '@ccrc/ui';
 import { api } from '../src/lib/api';
 import { DialogSheet } from '../src/session/DialogSheet';
-import { answerSeam, type AnswerSeamMocks } from './answerSeam';
+import { answerSeam, spyApiAnswer, type AnswerSeamMocks } from './answerSeam';
 import { heldAskLine } from '../src/session/askWords';
 import { SessionScreen } from '../src/screens/SessionScreen';
 import { createFleetStore } from '../src/stores/fleet';
@@ -740,7 +740,7 @@ describe('the ask holds through a reconnect, and an ask that ends closes with it
   );
 
   it('a reconnect keeps the Other field\'s node, its text and its focus, and sends work again once the connection speaks', () => {
-    const text = vi.spyOn(api, 'answerDialogText').mockReturnValue(new Promise(() => {}));
+    const text = spyApiAnswer('answerDialogText').mockReturnValue(new Promise(() => {}));
     const fx = askFixture(1);
     const store = connected(fx);
     mount(store);
@@ -769,8 +769,8 @@ describe('the ask holds through a reconnect, and an ask that ends closes with it
 
   it('a tap during the gap sends nothing', () => {
     holdClosingContent();
-    const option = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
-    const text = vi.spyOn(api, 'answerDialogText').mockReturnValue(new Promise(() => {}));
+    const option = spyApiAnswer('answerDialog').mockReturnValue(new Promise(() => {}));
+    const text = spyApiAnswer('answerDialogText').mockReturnValue(new Promise(() => {}));
     const tab = vi.spyOn(api, 'answerDialogTab').mockReturnValue(new Promise(() => {}));
     const store = connected(askFixture(1));
     mount(store);
@@ -977,7 +977,7 @@ describe('the ask holds through a reconnect, and an ask that ends closes with it
     'after a reconnect whose stream sends ask_cleared and no dialog, the pre-drop menu is not offered live: fixture %i',
     (n) => {
       holdClosingContent();
-      const answer = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+      const answer = spyApiAnswer('answerDialog').mockReturnValue(new Promise(() => {}));
       const interrupt = vi.spyOn(api, 'interrupt').mockResolvedValue(undefined as never);
       const store = connected(askFixture(n));
       mount(store);
@@ -1076,8 +1076,8 @@ describe('the ask holds through a reconnect, and an ask that ends closes with it
   it('hiding the sheet works in the gap, makes no call, and the hidden sheet stays hidden when the connection speaks', () => {
     holdClosingContent();
     const calls = [
-      vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {})),
-      vi.spyOn(api, 'answerDialogText').mockReturnValue(new Promise(() => {})),
+      spyApiAnswer('answerDialog').mockReturnValue(new Promise(() => {})),
+      spyApiAnswer('answerDialogText').mockReturnValue(new Promise(() => {})),
       vi.spyOn(api, 'interrupt').mockResolvedValue(undefined as never),
     ];
     const fx = askFixture(1);
@@ -1101,9 +1101,9 @@ describe('the ask holds through a reconnect, and an ask that ends closes with it
   });
 
   it('a tab move, a pick-several commit and the review\'s Submit send nothing in the gap', () => {
-    const answer = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+    const answer = spyApiAnswer('answerDialog').mockReturnValue(new Promise(() => {}));
     const tab = vi.spyOn(api, 'answerDialogTab').mockReturnValue(new Promise(() => {}));
-    const multi = vi.spyOn(api, 'answerDialogMulti').mockReturnValue(new Promise(() => {}));
+    const multi = spyApiAnswer('answerDialogMulti').mockReturnValue(new Promise(() => {}));
 
     // A multi-tab question (fixture 1): the strip's chip and the arrow key.
     const one = connected(askFixture(1));
@@ -1150,7 +1150,7 @@ describe('the ask holds through a reconnect, and an ask that ends closes with it
   // `answering…`, every row disabled and Escape refused, until a menu with another id arrives.
   it('the same menu asked again after an answered ask opens free: no in-flight marker, rows enabled, Escape hides it', async () => {
     holdClosingContent();
-    const answer = vi.spyOn(api, 'answerDialog').mockResolvedValue({ next: null } as never);
+    const answer = spyApiAnswer('answerDialog').mockResolvedValue({ next: null } as never);
     const fx = askFixture(4);
     const store = connected(fx);
     mount(store);
@@ -1184,7 +1184,7 @@ describe('the ask holds through a reconnect, and an ask that ends closes with it
   // ending, and the same screen coming back must not find them still set.
   it('own words sent before an ask ended do not lock the same question asked again', async () => {
     holdClosingContent();
-    const send = vi.spyOn(api, 'answerDialogText').mockResolvedValue({} as never);
+    const send = spyApiAnswer('answerDialogText').mockResolvedValue({} as never);
     const fx = askFixture(1);
     const store = connected(fx);
     mount(store);
@@ -1217,7 +1217,7 @@ describe('the ask holds through a reconnect, and an ask that ends closes with it
 
   it('a pick commit sent before an ask ended does not lock the same question asked again', async () => {
     holdClosingContent();
-    const commit = vi.spyOn(api, 'answerDialogMulti').mockResolvedValue({} as never);
+    const commit = spyApiAnswer('answerDialogMulti').mockResolvedValue({} as never);
     const base = askFixture(9).dialog!;
     const dialog: Dialog = { ...base, multi: { ...base.multi!, commit: 'Submit' } };
     const ask = { questions: [{
@@ -1253,7 +1253,7 @@ describe('the ask holds through a reconnect, and an ask that ends closes with it
     ['accepted but not yet moved on', () => Promise.resolve({} as never)],
   ])('a gap keeps an answer %s: the marker, the disabled rows and the refused dismissal, through the reconnect', async (_name, reply) => {
     holdClosingContent();
-    const answer = vi.spyOn(api, 'answerDialog').mockImplementation(reply);
+    const answer = spyApiAnswer('answerDialog').mockImplementation(reply);
     const fx = askFixture(4);
     const store = connected(fx);
     mount(store);
@@ -1303,8 +1303,8 @@ describe('the ask holds through a reconnect, and an ask that ends closes with it
     ['with a next', true],
   ])('own words whose reply settles in the gap stay landed through the reconnect, and no second answer goes: %s', async (_name, withNext) => {
     const reply = later<unknown>();
-    const text = vi.spyOn(api, 'answerDialogText').mockReturnValue(reply.promise as never);
-    const option = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+    const text = spyApiAnswer('answerDialogText').mockReturnValue(reply.promise as never);
+    const option = spyApiAnswer('answerDialog').mockReturnValue(new Promise(() => {}));
     const fx = askFixture(1);
     const store = connected(fx);
     mount(store);
@@ -1335,7 +1335,7 @@ describe('the ask holds through a reconnect, and an ask that ends closes with it
     ['with a next', true],
   ])('a pick commit whose reply settles in the gap stays landed through the reconnect, and no second commit goes: %s', async (_name, withNext) => {
     const reply = later<unknown>();
-    const commit = vi.spyOn(api, 'answerDialogMulti').mockReturnValue(reply.promise as never);
+    const commit = spyApiAnswer('answerDialogMulti').mockReturnValue(reply.promise as never);
     const base = askFixture(9).dialog!;
     const dialog: Dialog = { ...base, multi: { ...base.multi!, commit: 'Submit' } };
     const ask = { questions: [{
@@ -1375,7 +1375,7 @@ describe('the ask holds through a reconnect, and an ask that ends closes with it
   it('an answer\'s next that arrives in the gap is not taken as the current menu', async () => {
     holdClosingContent();
     const reply = later<unknown>();
-    vi.spyOn(api, 'answerDialog').mockReturnValue(reply.promise as never);
+    spyApiAnswer('answerDialog').mockReturnValue(reply.promise as never);
     const store = connected(askFixture(4));
     mount(store);
     fireEvent.click(screen.getByRole('button', { name: /^Yes, and auto-accept edits/ }));
