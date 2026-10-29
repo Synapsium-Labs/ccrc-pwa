@@ -182,6 +182,7 @@ import {
   type ExpiryStoreRead,
 } from './archivedExpiry.js';
 import { childEverCoordinated, expireArchived, expireLaneLive, expiryReviewing, learnExpiry, recordExpireFeed } from './coord/expireArchived.js';
+import { retireExecutor } from './retireExecutor.js';
 import {
   deadAnchorNext, deadCoordinatorNewEpisode, deadCoordinatorAttention, deadCoordinatorBreaker,
   deadCoordinatorBreakerHeldKey, deadCoordinatorBreakerKey, deadCoordinatorCrash, deadCoordinatorDue, deadCoordinatorEntry, deadCoordinatorJournal, deadCoordinatorJournalSpawnedAt,
@@ -4799,7 +4800,7 @@ export class FleetWatcher {
     // the literal is built INSIDE the queue callback, so its members are
     // `deps`'s current answer WHEN THE JOB RUNS, never a snapshot taken when
     // the sweep queued it.
-    return this.deps.queue.run(req.sessionId, () => reclaimChild({
+    return retireExecutor(this.deps.queue, req.sessionId, () => reclaimChild({
       coord, io: this.deps.io, cfg: this.deps.cfg, runCcd: this.deps.runCcd,
       fleetState: this.deps.fleetState, viewers: this.deps.viewers, notifyLog: this.deps.notifyLog,
     }, req));
