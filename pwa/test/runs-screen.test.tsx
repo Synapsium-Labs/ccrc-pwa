@@ -3,10 +3,10 @@ import { StrictMode } from 'react';
 import { act, cleanup, render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { RUN_STATES, SPAWN_STALL_MS, type ChildReclaimStatus, type CoordCapsView, type FleetSession, type RunSpend, type RunSummary } from '../../shared/api';
 import { fleetSession, DEAD_LIFECYCLE } from './fleetFixture';
-import { withBindingFrames } from './runBindingFixture';
+import { serverBinding, withBindingFrames } from './runBindingFixture';
 import { RunsScreen } from '../src/screens/RunsScreen';
 import { navigate } from '../src/lib/router';
-import { CHILD_RECLAIM_CHIP_GLYPH, CROSSING_GLYPH, REVIEW_GLYPH, RUN_ORDER, RUN_WORD, childReclaimChip, childReclaimGone, childReclaimRefreshDue, childReclaimTitle, crossingNote, dispatchWindow, itemTallyLabel, programWave, programsWithOpenRun, resumeNote, runForSession, runHomeProject, runItems, runKindChip, waveLabel } from '../src/fleet/runWords';
+import { CHILD_RECLAIM_CHIP_GLYPH, CROSSING_GLYPH, REVIEW_GLYPH, RUN_ORDER, RUN_WORD, childReclaimChip, childReclaimGone, childReclaimRefreshDue, childReclaimTitle, crossingNote, dispatchWindow, itemTallyLabel, programWave, programsWithOpenRun, resumeNote, boundOpenRun, runHomeProject, runItems, runKindChip, waveLabel } from '../src/fleet/runWords';
 import { spawnChip, spawnVerdictChip } from '../src/fleet/spawnWords';
 import { api } from '../src/lib/api';
 import { createFleetStore, useFleetStore, type FleetStore } from '../src/stores/fleet';
@@ -77,7 +77,12 @@ describe('the run vocabulary tracks RUN_STATES, not a hand-copied list', () => {
   });
 });
 
-describe('runForSession — the current wave during a boundary overlap (D-2616)', () => {
+// D-2616's rows, re-pointed from the deleted `runForSession` (D-7182) to the session's open bound run as the server binds
+// it (`runBindingFixture.ts#serverBinding`, held equal to `bindingOf`) and the PWA reads it (`boundOpenRun`).
+const runForSession = (runs: readonly RunSummary[], s: { id: string }): RunSummary | null =>
+  boundOpenRun(runs, { id: s.id, ...serverBinding(s, runs) });
+
+describe('the session\'s open bound run: the current wave during a boundary overlap (D-2616)', () => {
   it('chooses the newest matching run, not the outgoing wave returned by find()', () => {
     const outgoing = r({ id: 41, wave: 1, sessionId: 'shared-worker' });
     const incoming = r({ id: 44, wave: 2, sessionId: 'shared-worker', state: 'planned' });

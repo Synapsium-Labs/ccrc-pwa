@@ -2,7 +2,8 @@
 // docs/superpowers/plans/2026-10-27-consolidation-w7-pwa.md, item 3 and its lookup table; ARCH-61, D-7205, D-7207).
 // Written green on the old code, before C7d moves any reader: a closed-run row's verdict is pinned before C7d moves it.
 //
-// THE READERS, each through its own code: `runForSession` and `runBelongsTo` (the fleet's), the four inline matchers
+// THE READERS, each through its own code: `runForSession` and `runBelongsTo` (the fleet's, retired by C7d and kept
+// below as the record of the guess), the four inline matchers
 // (`sessionEntries`' claimed programmes, `ArchiveSheet`'s claimed open runs, `runBelongsTo`'s id rule, `PrSheet`'s open
 // run on the workspace), and the seven run-to-session map lookups: `RunsScreen`'s three (the abandon sheet's
 // `sessionById.get(abandonTarget.sessionId)`, read through the child word the sheet is handed, and each row's worker and
@@ -22,7 +23,23 @@ import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { childIdsOf, sessionRunOf, UNCHECKED_PR, type CoordCapsView, type FleetSession, type RunSpend, type RunSummary, type SessionRun } from '../../shared/api';
 import { fleetSession } from './fleetFixture';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
-import { runBelongsTo, runCard, runForSession } from '../src/fleet/runWords';
+import { childMarkOf, runCard } from '../src/fleet/runWords';
+
+/** THE RETIRED GUESS, kept as the record this table was judged against (C7d deletes `runForSession` and
+ *  `runBelongsTo` from `pwa/src`, D-7182). Before ARCH-61 the PWA guessed which run was a session's from the run's id
+ *  and the session's `.child` mark; the `runForSession` and `runBelongsTo` columns below keep what that guess answered,
+ *  byte for byte, beside the wire's own facts, so every C7d behaviour row stays readable as "the guess said X, the
+ *  wire says Y". No `pwa/src` file reads it. */
+const runBelongsTo = (run: { id: number; sessionId: string | null }, session: { id: string; child?: FleetSession['child'] }): boolean => {
+  if (run.sessionId !== session.id) return false;
+  const mark = childMarkOf(session);
+  return mark.kind !== 'child' || run.id >= mark.runId;
+};
+const runForSession = (runs: readonly RunSummary[], session: { id: string; child?: FleetSession['child'] }): RunSummary | null => {
+  let current: RunSummary | null = null;
+  for (const r of runs) if (runBelongsTo(r, session) && (current === null || r.id > current.id)) current = r;
+  return current;
+};
 import { cardsOf, fleetTree } from '../src/fleet/fleetTree';
 import { nestFleet, type FleetRow } from '../src/fleet/nestFleet';
 import { coordinatorPresence } from '../src/fleet/presence';
@@ -302,7 +319,7 @@ describe('nestFleet\'s attentionFirst lookup: the child order under one coordina
   // worker is in `attention`. Today a waiting worker's run sorts first whatever its binding, so the wave-2 row reads
   // above the wave-1 row. Item 3's table moves this lookup to `workerOf` by binding (an unbound worker does not sort its
   // run first), so the unbound and recycled rows are the ones C7d must name; the bound row is the control that keeps
-  // its order. Pinned twice: `fleetTree`'s rows (the fleet's own path, after its `runForSession` filter) and `nestFleet`
+  // its order. Pinned twice: `fleetTree`'s rows (the fleet's own path, after its binding filter, `workerOf`) and `nestFleet`
   // handed the runs directly (the comparator alone, no filter in front of it).
   const O = 'worker-o';
   const r60 = run(60, { sessionId: O, workspace: 'ws-o', branch: 'ws/ws-o', wave: 1 });

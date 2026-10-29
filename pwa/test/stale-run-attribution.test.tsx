@@ -14,7 +14,8 @@ import * as tree from '../src/fleet/fleetTree';
 import { coordinationLine } from '../src/fleet/fleetTree';
 import * as orphan from '../src/fleet/orphanWords';
 import { withRunBinding } from './runBindingFixture';
-import { runBelongsTo, runForSession } from '../src/fleet/runWords';
+import { boundOpenRun, workerOf } from '../src/fleet/runWords';
+import { serverBinding } from './runBindingFixture';
 import { coordinatorPresence } from '../src/fleet/presence';
 import { cardFacts, headerFacts, sessionFacts } from '../src/fleet/sessionFacts';
 import { ProjectCard } from '../src/fleet/ProjectCard';
@@ -86,7 +87,16 @@ const headerInput = (s: FleetSession, runs: readonly RunSummary[]) => {
   });
 };
 
-describe('runBelongsTo / runForSession — the one rule that attributes a run to a row (D-5828)', () => {
+// The rule that attributes a run to a row is the wire's binding now (D-7182): the server binds a run to the session's
+// incarnation (`bindingOf`, which `runBindingFixture.ts#serverBinding` is held equal to), and the PWA reads it through
+// `workerOf` (is this run the row's) and `boundOpenRun` (the row's open run). Re-pointed from the deleted
+// `runBelongsTo` / `runForSession` in the commit that deletes them; every assertion is the one they carried.
+const runBelongsTo = (r: RunSummary, s: { id: string; child?: FleetSession['child'] }): boolean =>
+  workerOf(r, new Map([[s.id, { id: s.id, ...serverBinding(s, [r]) }]])) !== null;
+const runForSession = (runs: readonly RunSummary[], s: { id: string; child?: FleetSession['child'] }): RunSummary | null =>
+  boundOpenRun(runs, { id: s.id, ...serverBinding(s, runs) });
+
+describe('the wire binding attributes a run to a row (D-5828, D-7182)', () => {
   it('ignores a run whose id is LOWER than the row\'s child-marker run', () => {
     expect(runBelongsTo(stale, worker())).toBe(false);
     expect(runForSession([stale], worker())).toBeNull();
