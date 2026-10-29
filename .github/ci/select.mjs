@@ -23,7 +23,7 @@ import { randomBytes } from 'node:crypto';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { readMap } from './testmap.mjs';
-import { readChanges, liveTestFiles, unsafeTestPaths, gitExistsAt, selectTests, gitStaleChanges, selectIgnoringUncertainty, uncertainTests, RULE_NAMES } from './select-tests.mjs';
+import { readChanges, liveTestFiles, unsafeTestPaths, gitExistsAt, selectTests, gitStaleChanges, selectIgnoringUncertainty, uncertainTests, vitestFollows, RULE_NAMES } from './select-tests.mjs';
 import { planShards, planTraceBatch, toMatrix, PROFILES } from './shards.mjs';
 
 /** @typedef {import('./testmap.mjs').TestMap} TestMap */
@@ -148,6 +148,30 @@ function liveTestsOrRefuse(repoDir) {
  *   `retrace` is what a REFRESH traces from: the selection without its uncertain-means-full answer, and the uncertain
  *   records themselves.
  */
+/** The map's selection for the changed paths vitest cannot relate (`vitestFollows` false): the test files, sorted, or
+ *  `'full'` when the map cannot bound them (one of them is a full trigger: the baseline reads it). No such path: `[]`.
+ *  @param {{ map: TestMap, changes: import('./select-tests.mjs').Change[], liveTests: string[], existsAt: (ref: string, p: string) => boolean }} args
+ *  @returns {string[] | 'full'} */
+export function untracedSelection({ map, changes, liveTests, existsAt }) {
+  const unfollowed = changes.filter((c) => !vitestFollows(c.path));
+  if (unfollowed.length === 0) return [];
+  const sel = selectIgnoringUncertainty({ map, changes: unfollowed, liveTests, existsAt });
+  if (sel.mode === 'full') return 'full';
+  return [...new Set(sel.tests.map((t) => t.file))].sort();
+}
+
+/** What the `untraced` output says for a pull request: the list as JSON, or `full` when nothing bounds it — the map
+ *  is unusable and some changed path is one vitest cannot follow (fast-plan.mjs then falls back to select's own
+ *  selection). Not a pull request: empty.
+ *  @param {{ isPr: boolean, untraced: string[] | 'full' | undefined, changedPaths: string[] | null }} args @returns {string} */
+export function untracedOutput({ isPr, untraced, changedPaths }) {
+  if (!isPr) return '';
+  if (untraced === 'full') return 'full';
+  if (Array.isArray(untraced)) return JSON.stringify(untraced);
+  if (changedPaths && changedPaths.every(vitestFollows)) return '[]';
+  return 'full';
+}
+
 function computeRealSelection(repoDir, mapFile, liveTests, baseRef) {
   try {
     // No map is the ordinary first-run state (no trusted main artifact yet),
@@ -198,7 +222,10 @@ function computeRealSelection(repoDir, mapFile, liveTests, baseRef) {
       selection: selectIgnoringUncertainty({ map, changes, liveTests, existsAt }),
       uncertain: uncertainTests({ map, liveTests, staleChanges, existsAt }),
     };
-    return { selection, map, retrace };
+    // The fast run's other half (operator ruling 2026-10-28): what the map selects for the changed paths vitest's
+    // import graph cannot follow (select-tests.mjs vitestFollows). fast-plan.mjs adds it to vitest's related tests.
+    const untraced = baseRef ? untracedSelection({ map, changes, liveTests, existsAt }) : undefined;
+    return { selection, map, retrace, untraced };
   } catch (e) {
     const msg = e && e.message ? String(e.message) : String(e);
     return { selection: { mode: 'full', reason: `selector error: ${msg || 'unknown error'}` }, map: null };
@@ -340,6 +367,18 @@ function floorListHit(floorListFile, selection) {
   return listed.some((f) => chosen.has(`server/${f}`) || chosen.has(f));
 }
 
+/** A pull request's changed paths from its merge base, for `untracedOutput` when the map gave no answer; null when
+ *  they cannot be read (the safe answer then is `full`). @param {string} repoDir @param {string | undefined} base */
+function prChangedPaths(repoDir, base) {
+  if (!base) return null;
+  try {
+    const from = execFileSync('git', ['merge-base', base, 'HEAD'], { cwd: repoDir, encoding: 'utf8' }).trim();
+    return readChanges(repoDir, from, 'HEAD').map((c) => c.path);
+  } catch {
+    return null;
+  }
+}
+
 function main() {
   const opt = parseArgs(process.argv.slice(2));
   const repoDir = opt.repo ?? process.cwd();
@@ -473,6 +512,7 @@ function main() {
     map_sha: mapSha,
     fallback,
     queued_count: String(queued ? queued.unmapped.length + queued.uncertain.length : 0),
+    untraced: untracedOutput({ isPr: event === 'pull_request', untraced: realSel?.untraced, changedPaths: event === 'pull_request' ? prChangedPaths(repoDir, opt.base) : null }),
   });
 
   /** @type {string[]} */

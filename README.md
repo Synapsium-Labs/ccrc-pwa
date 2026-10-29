@@ -6957,21 +6957,30 @@ must exist) with your real `HOME`, so ccd writes to your real `~/.cc-sessions` w
 serves the PWA through Vite with `/api` and `/ws` proxied to `127.0.0.1:7788`.
 
 **What CI runs** (`.github/workflows/ci.yml` — one pipeline, whose trigger picks the mode; design
-`docs/superpowers/specs/2026-09-23-ci-test-selection-design.md`). A **pull request** runs the server
-tests its change can affect — `.github/ci/select-tests.mjs` chooses them from a traced dependency map,
-sharded behind the required `test (server)` summary, which also needs `typecheck (server)` — while
-`test (agent)` and `test (pwa)` (vitest, then `tsc --noEmit`), `build-pwa` and `node-floor` (the floor test on exactly the `engines.node` version) run in full; `test-macos`
-runs the same selection and `probe-macos` a fixed probe; neither blocks a pull request, but
-`full-suite` needs `test-macos` and `node-floor`, so a red macOS or floor leg blocks a promotion to `stable`. A change under
-`.github/` or `server/scripts/`, to a `package.json` or lockfile, a `vitest.*config.*`, a
-`tsconfig*.json`, `.gitattributes` or `.npmrc`, a symlink, a path the map's own baseline reads, or a
-missing map runs the whole server suite instead. A **merge-queue** run (`merge_group`) runs what a
-pull request runs, minus the macOS legs. A **push to `main`** starts no run; an **hourly** refresh runs no test legs: it re-traces what
-every merge since the last one affected and refreshes the map. The **daily** run runs every leg in full, macOS included, ending
-in `full-suite` — skipped when `main`'s head already carries a green one from a trusted run;
-`gh workflow run ci.yml --ref <branch> -f mode=full` asks for a full run by hand. A promotion to
-`stable` needs a green `full-suite` on its commit, and `release-stable.yml` runs one first when none
-exists. So a green pull request proves its selection, not the whole suite.
+`docs/superpowers/specs/2026-09-23-ci-test-selection-design.md`). A **pull request** is the fast run (operator
+ruling 2026-10-28): every typecheck (`typecheck (server)`, the agent and pwa `tsc --noEmit`, `@ccrc/ui`'s), `build-pwa`,
+the static checks, the server tests vitest relates to the change from its merge base, the traced map's selection for
+every changed path vitest cannot follow (a ccd script, Python, a JSON or SQL fixture), the guard suites that scan the
+whole tree or the diff (the censuses, single-definition, deviation-refs, growth-check, ownership, the rings,
+ccd-contexts, dtbd, the tests-inclusive typecheck, the oss metadata, the pin suites, and every test that runs
+`git ls-files`, `git diff` or `git merge-base` itself), and the session-hook suites when `ccd/ccd`,
+`ccd/session-hook.sh` or `shared/api.ts` changed — `.github/ci/fast-plan.mjs` — and the agent and pwa tests the change can reach
+(`.github/ci/reach.mjs`). The browser suite, `node-floor`, the perf legs and the macOS legs do not run on it. The four
+required checks report on what ran. A head branch under `train/`, the `full-ci` label, or a change to shared
+infrastructure (under `.github/` or `server/scripts/`, a `package.json` or lockfile, a `vitest.*config.*`, a
+`tsconfig*.json`, `.gitattributes` or `.npmrc`) makes it the full run. A **merge-queue** run (`merge_group`) runs the
+full Linux suite — every server shard, the agent, pwa and browser tests and the node floor; `test (pwa)` refuses a red
+browser suite there and `test (server)` a red node floor, so either stops the merge (the perf legs stay advisory).
+Nothing reaches `main` through the queue without it. The one way around it is a bypass actor's direct merge
+(`gh pr merge --admin`, which the ruleset's admin bypass still allows): the required checks are then satisfied by the
+fast run, so such a merge lands only what the fast run tested. Don't do it; the daily `full-suite` is the next run that
+would catch what it skipped. The **macOS legs** (`test-macos`, `probe-macos`) live in `.github/workflows/macos.yml`: they run on every
+push to `main` (coalesced) and nightly, block no pull request and no queue entry, and a red one is a failing run on
+`main`. An **hourly** refresh runs no test legs: it re-traces what every merge since the last one affected and
+refreshes the map. The **daily** run runs every leg in full, macOS included, ending in `full-suite` — skipped when
+`main`'s head already carries a green one from a trusted run; `gh workflow run ci.yml --ref <branch> -f mode=full` asks
+for a full run by hand. A promotion to `stable` needs a green `full-suite` on its commit, and `release-stable.yml` runs
+one first when none exists. So a green pull request proves its fast checks; the merge queue proves the suite.
 
 ## Deploy
 
