@@ -814,3 +814,16 @@ describe('archive-expired runs through retireAct, its id judged before its capab
     }
   });
 });
+
+// D-7170 (ARCH-44, consolidation plan 2026-10-27 Task C4m; spec §5.7 "reasons migrate one PR each"). APPENDED.
+// `reclaimChild` runs child-spent's row, `CHILD_SPENT_RETIRE`, through the one executor loop (`retireLane.ts#retireAct`)
+// over its port (`childReclaimRetirePort`), so the last hand-written retire gate ladder, `childReclaimOutcome`, is gone.
+// `retireGateLadders()` (`census-w4/retire.ts`) read 3 at C4k's base and is exact at 0 here: the three executors share
+// one body and one gate decider (`retire.ts#decideRetire`), and a new ladder anywhere under server/src is red.
+describe('child-spent runs through retireAct, and no retire executor keeps a gate ladder of its own (D-7170; ARCH-44 C4m)', () => {
+  it('retireGateLadders() is exactly 0 (3 -> 0 over C4k, C4l and C4m; 1 -> 0 at C4m)', async () => {
+    const { retireGateLadders } = await import('../census-w4/retire.js');
+    const sites = retireGateLadders().map((s) => s.symbol);
+    expect(sites, sites.join(', ')).toEqual([]);
+  });
+});
