@@ -117,8 +117,12 @@ const SITES: readonly Site[] = [
   } },
 ];
 
-/** The row read by bucket: its `archivedAt` kept only when the bucket says archived (BARE) or archived or cleanup (BOTH). */
-const bare = (s: FleetSession): FleetSession => ({ ...s, archivedAt: s.bucket === 'archived' ? s.archivedAt : null });
+/** The row read by bucket: its `archivedAt` kept only when the bucket says archived (BARE) or archived or cleanup (BOTH).
+ *  BARE also files a `cleanup` row as the dead row a bare `bucket === 'archived'` reads it as, so the reading still
+ *  differs once the sites read the bucket instead of `archivedAt` (C7j Step 5, through `isArchivedRow`): a blind
+ *  column would read BOTH. */
+const bare = (s: FleetSession): FleetSession =>
+  ({ ...s, archivedAt: s.bucket === 'archived' ? s.archivedAt : null, ...(s.bucket === 'cleanup' ? { bucket: 'dead' as const } : {}) });
 const both = (s: FleetSession): FleetSession => ({ ...s, archivedAt: s.bucket === 'archived' || s.bucket === 'cleanup' ? s.archivedAt : null });
 
 interface Cell { readonly row: Row; readonly verdict: string; readonly bare: string; readonly both: string }

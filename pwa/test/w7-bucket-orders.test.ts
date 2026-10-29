@@ -115,6 +115,49 @@ describe('every surface over the mixed fixture', () => {
   });
 });
 
+/** A desk (laptop 1280, wide 1920: `DESK_QUERY` matches) or a phone (360, 390: it does not). jsdom has no `matchMedia`,
+ *  so the rows above read the phone; the desk rows below stub it (C7j Step 0, after #1715). */
+function stubDesk(desk: boolean): void {
+  vi.stubGlobal('matchMedia', (q: string) => ({
+    matches: q.includes('min-width: 900px') ? desk : false,
+    media: q, onchange: null,
+    addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, dispatchEvent: () => false,
+  }));
+}
+
+describe('the board surfaces at each width (C7j Step 0: the rows C7a left for after #1715, D-7221)', () => {
+  afterEach(() => { vi.unstubAllGlobals(); });
+  for (const desk of [false, true]) {
+    const width = desk ? 'laptop and wide' : 'phone';
+    it(`Instrument project mode at ${width}: the bucket bar in RANK order, then the card`, () => {
+      stubDesk(desk);
+      window.localStorage.setItem(GROUP_MODE_KEY, 'project');
+      chromeApis();
+      act(() => { useFleetStore.setState({ conn: 'open', sessions: [...MIXED], fleetFrameSeen: true }); });
+      render(createElement(FleetChromeProvider, { store: useFleetStore }, createElement(FleetTable)));
+      expect(barOrder()).toEqual(['Needs you', 'Done', 'Idle', 'Working', 'Cleanup', 'Archived', 'Exited']);
+      expect(lineOrder()).toEqual(LINES_PROJECT_MODE);
+    });
+    it(`Instrument status mode at ${width}: no chips, and the group heads in STATUS_GROUPS order`, () => {
+      stubDesk(desk);
+      chromeApis();
+      act(() => { useFleetStore.setState({ conn: 'open', sessions: [...MIXED], fleetFrameSeen: true }); });
+      render(createElement(FleetChromeProvider, { store: useFleetStore }, createElement(FleetTable)));
+      expect(barOrder()).toEqual([]);
+      expect([...document.querySelectorAll('.ins-group')].map((e) => e.getAttribute('data-status-group'))).toEqual(['attention', 'done', 'working', 'idle', 'cleanup', 'archived', 'dead']);
+    });
+    it(`Refined at ${width}: the bucket bar in RANK order, and the list`, () => {
+      stubDesk(desk);
+      chromeApis();
+      const store = fleetStore();
+      act(() => { store.setState({ conn: 'open', sessions: [...MIXED], fleetFrameSeen: true }); });
+      render(createElement(FleetChromeProvider, { store }, createElement(FleetScreen, { store })));
+      expect(barOrder()).toEqual(['Needs you', 'Done', 'Idle', 'Working', 'Cleanup', 'Archived', 'Exited']);
+      expect(lineOrder()).toEqual(LINES_REFINED);
+    });
+  }
+});
+
 /** The lines each board draws, the card's order (fleetTree's): the archived row sits in its card's closed Archived fold. */
 const LINES_PROJECT_MODE: readonly string[] = ['attention', 'done', 'idle', 'working', 'cleanup', 'dead'];
 const LINES_REFINED: readonly string[] = ['attention', 'done', 'idle', 'working', 'cleanup', 'dead'];
