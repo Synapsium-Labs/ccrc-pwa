@@ -248,6 +248,7 @@ export interface RunCancel { readonly t: 'run.cancel'; readonly runId: string }
 
 export interface ToolsSync {
   readonly t: 'tools.sync';
+  /** The fleet host's release tag as cut, `v0.0.830` (the leading `v` kept). */
   readonly release: string;
   readonly versions: TestboxToolVersions;
   /** UTC ISO 8601 to the second. */
@@ -269,6 +270,7 @@ export interface StatusAnswer {
   readonly reason: string | null;
   readonly serviceVersion: string;
   readonly proto: number;
+  /** The release tag the box's tools were installed from, the same shape as `ToolsSync.release`. */
   readonly release: string;
   readonly tools: TestboxToolVersions;
   readonly sync: TestboxSync;
@@ -289,7 +291,11 @@ export type Read<T> = { readonly ok: true; readonly value: T } | { readonly ok: 
 // The checks the readers share. Each throws a `Refusal` with the field's path; the readers turn it into a reason.
 // ---------------------------------------------------------------------------------------------------------------
 
-class Refusal { constructor(readonly reason: string) {} }
+// A declared field, not a parameter property: the PWA compiles this file under `erasableSyntaxOnly`.
+class Refusal {
+  readonly reason: string;
+  constructor(reason: string) { this.reason = reason; }
+}
 const refuse = (at: string, why: string): never => { throw new Refusal(`${at}: ${why}`); };
 
 function has<K extends string>(map: Record<K, true>, v: unknown): v is K {
@@ -360,6 +366,11 @@ const name = (v: unknown, at: string): string => (typeof v === 'string' && NAME.
 const ENV_NAME = /^[A-Z_][A-Z0-9_]{0,127}$/;
 const BASE64 = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
 const version = (v: unknown, at: string): string => (isVersion(v) ? v : refuse(at, 'not a version'));
+/** The fleet host's release tag, as the release lane cuts it and the tools sync passes it on (deploy/release-artifact.sh's
+ *  SHAPE): `v<major>.<minor>.<patch>`, the leading `v` kept. A tool version's reader would refuse that `v`. */
+const RELEASE_TAG = /^v[0-9]+\.[0-9]+\.[0-9]+$/;
+const releaseTag = (v: unknown, at: string): string =>
+  (typeof v === 'string' && v.length <= 64 && RELEASE_TAG.test(v) ? v : refuse(at, 'not a release tag'));
 const utc = (v: unknown, at: string): string => (typeof v === 'string' && isUtcSecond(v) ? v : refuse(at, 'not a UTC time to the second'));
 
 /** A relative path inside the repository: no leading `/`, no `.` or `..` segment, no empty segment. */
@@ -437,7 +448,7 @@ function readRunCancel(o: Obj): RunCancel {
 
 function readToolsSync(o: Obj): ToolsSync {
   const f = exact(o, 'tools.sync', ['t', 'release', 'versions', 'measuredAt']);
-  return { t: 'tools.sync', release: version(f.release, 'release'), versions: tools(f.versions, 'versions'), measuredAt: utc(f.measuredAt, 'measuredAt') };
+  return { t: 'tools.sync', release: releaseTag(f.release, 'release'), versions: tools(f.versions, 'versions'), measuredAt: utc(f.measuredAt, 'measuredAt') };
 }
 
 function readStatusAnswer(o: Obj): StatusAnswer {
@@ -465,7 +476,7 @@ function readStatusAnswer(o: Obj): StatusAnswer {
   }, { unique: true });
   return {
     t: 'status', state, reason, serviceVersion: version(f.serviceVersion, 'serviceVersion'), proto: int(f.proto, 'proto', 1),
-    release: version(f.release, 'release'), tools: tools(f.tools, 'tools'),
+    release: releaseTag(f.release, 'release'), tools: tools(f.tools, 'tools'),
     sync: { state: word(TESTBOX_SYNC_STATE_MAP, sync.state, 'sync.state'), detail: textOrNull(sync.detail, 'sync.detail'), at: sync.at === null ? null : utc(sync.at, 'sync.at') },
     runs: { inProgress: int(runs.inProgress, 'runs.inProgress', 0, limit), limit }, queueDepth: int(f.queueDepth, 'queueDepth', 0),
     pristine, failedKeys, heldRunUsers: list(f.heldRunUsers, 'heldRunUsers', name, { unique: true }), repositories,
