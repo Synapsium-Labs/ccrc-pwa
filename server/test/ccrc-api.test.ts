@@ -24,6 +24,7 @@ import { CoordStore } from '../src/coord/store.js';
 import { hashLine } from '../src/auth/secret.js';
 import { CCRC_API, ghContainedEnv, harnessBin } from './ccdWsHelpers.js';
 import { clientRoutes } from './ccrcApiTable.js';
+import { runClient, writeClientHome, type Run } from './ccrcApiClient.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import { loopbackCurlFront } from './containedTools.js';
@@ -35,17 +36,6 @@ let seen: { method: string; url: string; auth: string | undefined; body: string 
 let reply: { code: number; body: string };
 
 const TOKEN = 'z'.repeat(64);
-
-/** The token file as it really ships: a `#`-comment preamble above ONE value
- *  line. Measured on the fleet host 2026-08-26 — 23 preamble lines above a
- *  64-char value — and reproduced here because a fixture holding a bare token
- *  would let a `cat`-shaped read pass this whole file. */
-const tokenDoc = (): string =>
-  ['# ccrc box token — do not commit, do not print.',
-   '# The server reads this with coord/token.ts\'s extractToken:',
-   '# first non-blank, non-# line, whitespace stripped.',
-   '',
-   TOKEN, ''].join('\n');
 
 beforeEach(async () => {
   home = mkTmp('ccrc-api-home-');
@@ -66,11 +56,7 @@ beforeEach(async () => {
   await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
   const port = (server.address() as AddressInfo).port;
 
-  fs.mkdirSync(path.join(home, '.ccrc'), { recursive: true });
-  fs.mkdirSync(path.join(home, '.cc-secrets'), { recursive: true });
-  fs.writeFileSync(path.join(home, '.ccrc', 'agent.env'),
-    `CCRC_AGENT_TOKEN=irrelevant\nCCRC_SERVER_URL=http://127.0.0.1:${port}\n`);
-  fs.writeFileSync(path.join(home, '.cc-secrets', 'ccrc-mail.token'), tokenDoc(), { mode: 0o600 });
+  writeClientHome(home, `http://127.0.0.1:${port}`, TOKEN);
 });
 
 afterEach(async () => {
@@ -78,46 +64,9 @@ afterEach(async () => {
   fs.rmSync(home, { recursive: true, force: true });
 });
 
-/** `stdinEpipe`: the child left before it read all of its stdin (a refusal that
- *  never reads it). That is the child's answer, not a harness failure, so it is
- *  recorded here and every other stdin error still throws. */
-type Run = { stdout: string; stderr: string; status: number; stdinEpipe: boolean };
-
-/** Runs the client. ASYNC, and that is not a style choice: the fake server above
- *  listens in THIS process, so a synchronous `execFileSync` would block the event
- *  loop for as long as the child runs — the server could never accept the
- *  connection, and every call would sit until curl's own `-m` bound expired.
- *  Measured while writing this file: 30047ms per case, `seen` empty, which reads
- *  exactly like a broken client and is not one.
- *
- *  Never rejects on a non-zero exit: the exit status is part of what these tests
- *  measure, so turning it into an exception would hide it. */
-function run(args: string[], input?: string,
-             overrides?: Record<string, string | undefined>): Promise<Run> {
-  const env = ghContainedEnv(home, { ...process.env, HOME: home }, { systemd: true, tmux: true });
-  // EXPLICIT, NEVER INHERITED. `process.env` is spread above, so a developer
-  // running this suite inside a tmux pane hands the child a real TMUX_PANE and
-  // the "no pane" case would measure their terminal instead of the fixture.
-  // `undefined` DELETES — the state cron and CI are actually in.
-  for (const [k, v] of Object.entries(overrides ?? {})) {
-    if (v === undefined) delete env[k]; else env[k] = v;
-  }
-  return new Promise<Run>((resolve) => {
-    const child = spawn(CCRC_API, args, { env });
-    let stdout = '', stderr = '', stdinEpipe = false;
-    child.stdout.on('data', (c) => { stdout += c; });
-    child.stderr.on('data', (c) => { stderr += c; });
-    child.stdin.on('error', (e: NodeJS.ErrnoException) => {
-      if (e.code !== 'EPIPE') throw e;
-      stdinEpipe = true;
-    });
-    // stdin is CLOSED unless a test supplies input. Left open, `--json -` would
-    // block in `cat` forever — the client is right to wait, so the harness must
-    // be explicit about there being nothing to read.
-    if (input !== undefined) child.stdin.end(input); else child.stdin.end();
-    child.on('close', (code) => resolve({ stdout, stderr, status: code ?? -1, stdinEpipe }));
-  });
-}
+/** Runs the client in this file's fixture HOME (`ccrcApiClient.ts#runClient`, moved there, D-7320). */
+const run = (args: string[], input?: string, overrides?: Record<string, string | undefined>): Promise<Run> =>
+  runClient(home, args, input, overrides);
 
 /** The two names this file used to have for one thing. `run` already captures
  *  both streams, so `runBoth` is the same call — kept as an alias only until the
