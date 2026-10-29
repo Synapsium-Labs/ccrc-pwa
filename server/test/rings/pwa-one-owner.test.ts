@@ -189,3 +189,34 @@ describe('the PWA has one page clock and no hand-written request poll (C7m, D-71
     expect(requestPolls()).toEqual([]);
   });
 });
+
+// ─── C7i (D-7187; ARCH-64 #799, the PWA half; OA-C16 (a), D-7265) ─────────────────────────────────────────────────
+// The PWA makes one pane-text decision of its own, `showsPrompt`, and it is LEGITIMATELY DIFFERENT: it renders the PTY
+// the drawer shows (the wrapped view offers the grid when no prompt glyph shows), it decides nothing sent, and the
+// server has no fact for it. The compaction fold is the server's flag (`foldsAway` reads `ChatEvent`'s `compaction`,
+// `COMPACTION_RE` is gone). Claude Code's prompt glyph has one spelling, `shared/pane-glyph.ts`, which the drawer's view
+// and the server's dialog parser import. Read through W7's census (`census-w7/pwa.ts#paneTextDecisions`,
+// `#promptGlyphSpellings`, whose FIXTURE rows red a definition or a spelling), imported in the block so the file's
+// header imports stay as other tasks append to them. Each may only go down (spec §5.1 rule 3).
+describe('the PWA folds on the server\'s compaction flag, and the prompt glyph has one spelling (C7i, D-7187)', () => {
+  const GLYPH = 'shared/pane-glyph.ts';
+
+  it('paneTextDecisions() 2 -> 1: only showsPrompt, named, in session/drawerView.ts', async () => {
+    const { paneTextDecisions } = await import('../census-w7/pwa.js');
+    expect(paneTextDecisions().map((s) => `${s.file}#${s.symbol}`)).toEqual(['pwa/src/session/drawerView.ts#showsPrompt']);
+  });
+
+  it('promptGlyphSpellings() 2 -> 1: the glyph is spelled once, in shared/pane-glyph.ts', async () => {
+    const { promptGlyphSpellings } = await import('../census-w7/pwa.js');
+    expect(promptGlyphSpellings().map((s) => s.file)).toEqual([GLYPH]);
+  });
+
+  it('the drawer\'s view and the dialog parser both import PROMPT_GLYPH from shared/pane-glyph.ts', () => {
+    for (const file of ['pwa/src/session/drawerView.ts', 'server/src/pane/dialog.ts']) {
+      const from = parse(file).imports
+        .filter((i) => i.kind === 'import' && !i.typeOnly && i.names.includes('PROMPT_GLYPH'))
+        .map((i) => path.posix.normalize(path.posix.join(path.posix.dirname(file), i.specifier)).replace(/\.js$/, '.ts').replace(/^(?!.*\.ts$)(.*)$/, '$1.ts'));
+      expect(from, file).toEqual([GLYPH]);
+    }
+  });
+});

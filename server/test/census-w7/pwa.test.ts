@@ -304,8 +304,8 @@ describe('W7 PWA census: REAL rows (reporting, not ratcheting; spec §5.1 rule 3
     held('clientPairingDefinitions', clientPairingDefinitions(), 0);
   });
 
-  it('paneTextDecisions(): 2 (COMPACTION_RE, showsPrompt)', () => {
-    held('paneTextDecisions', paneTextDecisions(), 2);
+  it('paneTextDecisions(): 1 (from 2: COMPACTION_RE deleted by C7i, D-7187; showsPrompt stays)', () => {
+    held('paneTextDecisions', paneTextDecisions(), 1);
   });
 
   // Exact on the merged tree: #1715 (one bucket vocabulary) landed before this task, so no band.
@@ -396,5 +396,29 @@ describe('W7 PWA census, C7q: transcriptCopyRules (D-7212)', () => {
     expect(sites.map((s) => [s.kind, `${s.file}#${s.symbol}`])).toEqual([
       ['copy', 'shared/ask-menu.ts#transcriptQuestion'], ['usable', 'shared/ask-menu.ts#usableQuestions'],
     ]);
+  });
+});
+
+// C7i (D-7187; OA-C16 (a)): Claude Code's prompt glyph has one pane-text spelling. Imported in the block, so the file's
+// header imports stay as other tasks append to them.
+describe('W7 PWA census: the prompt glyph\'s pane-text spellings (C7i, D-7187)', () => {
+  it('FIXTURE promptGlyphSpellings: a string that is the glyph counts; the glyph in a regex, a longer string and JSX text do not', async () => {
+    const { promptGlyphSpellingsIn } = await import('./pwa.js');
+    const got = run(promptGlyphSpellingsIn, [
+      "export const PROMPT_GLYPH = '❯';",
+      "export function startsWithPromptGlyph(row: string): boolean { return row.startsWith('❯'); }",
+      'const OPTION_RE = /^\\s*(❯)?\\s*(\\d+)\\.\\s+(.+)$/;',
+      "const hint = '❯ 1. Yes';",
+      'export const Row = () => <span>❯</span>;',
+    ].join('\n'));
+    // A module-scope binding is not a symbol (`scan/parse.ts`), so the constant's site is `(module)`.
+    expect(got.map((s) => [s.symbol, s.text, s.line])).toEqual([['(module)', "'❯'", 1], ['startsWithPromptGlyph', "'❯'", 2]]);
+  });
+
+  it('REAL promptGlyphSpellings(): 1 (from 2: drawerView.ts\'s PROMPT_GLYPH and dialog.ts#startsWithPromptGlyph import shared/pane-glyph.ts)', async () => {
+    const { promptGlyphSpellings } = await import('./pwa.js');
+    const sites = promptGlyphSpellings();
+    held('promptGlyphSpellings', sites, 1);
+    expect(sites.map((s) => `${s.file}#${s.symbol}`)).toEqual(['shared/pane-glyph.ts#(module)']);
   });
 });
