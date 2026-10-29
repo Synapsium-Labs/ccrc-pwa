@@ -63,7 +63,7 @@ const CONTRACT = [
   "Your requirements are the brief plus the plan file it names, including that plan's deviation ledger, and the plan's text governs over your recollection of the spec. Invoke the execution skill the brief names rather than improvising one.",
   "Large payloads travel as files: write the file, then name its ABSOLUTE path in the mail's `artifacts` (a relative entry is refused `bad-kind`). Never ask for content to be pasted into your pane (F7).",
   "Never run `ws-rm`, `ws-reap`, `ws-gc`, `ws-archive` or `ws-restore`. This workspace's lifecycle belongs to ccd and to the human, at any wave, for any reason.",
-  "A done-claim's fingerprint is measured ONCE and sent ONCE: `handoffCommit` must equal the branch tip you measured, and `prPhase` must be one of the eight enum words (`unchecked`, `none`, `no-commits`, `open`, `draft`, `merged`, `closed`, `unknown`). After `wave-done` you stop pushing — a new commit under your own claim makes it stale — and a rejected claim is never re-asserted without new commits and a fresh measurement.",
+  "A done-claim's fingerprint is measured ONCE and sent ONCE: `handoffCommit` must equal the branch tip you measured, and `prPhase` must be one of the eight enum words (`unchecked`, `none`, `no-commits`, `open`, `draft`, `merged`, `closed`, `unknown`). After `wave-done` you stop pushing — a new commit under your own claim makes it stale — and a rejected claim is never re-asserted without new commits and a fresh measurement. The one exception is a project your brief names as opted in to the radar's lineage: there, only when clause 16 licenses the absorption, you may push exactly one merge commit after `wave-done`, made by `git merge` of the brief's radar base with no conflict and no edit, amend or restamp, with nothing after it; your claim stands, and a `lineage-unmeasured` rejection is re-sent unchanged, at most twice, after the radar's next tick.",
   "Remote control is decided at your creation, not by you: dispatched workers spawn WITHOUT it (the 2026-08-13 ruling, task #37 — landed), declared by the dispatch path at `ws-add --no-rc` and stamped as the registry's `rc` field, while `~/.ccrc/remote-control` still governs every non-dispatched session on this box. Neither file is yours to write.",
   "Claim before you edit: `POST /api/claims` with every path this wave touches, all-or-nothing. A 409 is an answer, not an obstacle — it names the holder, and the holder IS the address: mail them through the response's own `mailHint` instead of editing anyway. Discovery is `GET /api/peers?of=<your id>`, history is `GET /api/lifecycle`, and each row's own lifecycle is what to read — never its archive stamp, which is silently false on some live rows. Peer mail is human-timescale: a busy peer answers when it next idles, so send once and work what is uncontested. Never invent a deviation number — the coordinator allocated this program's block at run-open, and a number you cannot get is `D-TBD-<slug>` plus a report, never a guess.",
   "When your workspace carries `graphify-out/graph.json`, a question about the codebase goes to `graphify query` before `grep` or a file read, and to `graphify path` / `graphify explain` for relationships and concepts — but weigh that answer by your SessionStart card: only `fresh` licenses taking it as read, while `N commits behind HEAD`, `not an ancestor of HEAD` (the graph was built on a tree yours cannot reach, so it describes code you do not have), `freshness unmeasured`, or no freshness clause at all makes every query answer a LEAD to verify by opening the file it names. Never run `graphify update` or any graphify build in the workspace: the sweep owns the write side, and a session-side build holds you at `working` for minutes and wedges the next dispatch as `worker-busy`.",
@@ -132,6 +132,43 @@ describe('the worker skill: its contract', () => {
     const line = skill.split('\n').find((l) => l.startsWith('18. '));
     expect(line).toContain('Every test and typecheck runs through `ccrc test -- <command>`');
     expect(line).toContain('never run one bare, and never under a `systemd-run` of your own');
+  });
+
+  // Landing order wave 4 (stage 4): clause 9 gains the one exception the server's lineage reader
+  // honours. The whole line is pinned as its own assertion, so dropping the exception from the
+  // skill alone (mutation S1) reds by name, and the two halves of the exception are named so that
+  // dropping "with nothing after it" from both copies (S2) reds by name too.
+  it('clause 9 carries the lineage exception, as one whole numbered line', () => {
+    expect(skill, 'SKILL.md no longer carries clause 9 as the whole line CONTRACT[8] pins')
+      .toContain(`\n9. ${CONTRACT[8]}\n`);
+    const line = skill.split('\n').find((l) => l.startsWith('9. '));
+    expect(line, 'SKILL.md has no clause 9').toBeTruthy();
+    for (const half of ['exactly one merge commit', 'with nothing after it']) {
+      expect(CONTRACT[8], `CONTRACT[8] lost: ${half}`).toContain(half);
+      expect(line, `clause 9 lost: ${half}`).toContain(half);
+    }
+    expect(line).toContain('only when clause 16 licenses the absorption');
+    expect(line).toContain('a `lineage-unmeasured` rejection is re-sent unchanged, at most twice, after the radar\'s next tick');
+  });
+
+  it('the stop-pushing paragraph and the unmeasured bullet carry the same exception (landing order wave 4)', () => {
+    const flat = skill.replace(/\s+/g, ' ');
+    const at = flat.indexOf('Then stop pushing (clause 9).');
+    expect(at, 'the stop-pushing paragraph is gone').toBeGreaterThanOrEqual(0);
+    const para = flat.slice(at, flat.indexOf('This workspace ends when the coordinator', at));
+    expect(para).toContain('In a project your brief names as opted in to the radar\'s lineage, the one clean merge clause 9 allows is not a stale-making commit');
+    expect(para).toContain('anything else still is');
+    // The bullet sits beside `rejected: stale-tip`, in the section that follows the reporting one,
+    // and names the server's two subjects (never a `rejected:` mail of the coordinator's own).
+    const bulletAt = flat.indexOf('**`wave-done-unmeasured` or `wave-advance-unmeasured`');
+    expect(bulletAt, 'the unmeasured bullet is gone').toBeGreaterThan(flat.indexOf('## When something is wrong'));
+    expect(bulletAt).toBeGreaterThan(flat.indexOf('**`rejected: stale-tip`.**'));
+    expect(bulletAt).toBeLessThan(flat.indexOf('**`rejected: pr-unmeasurable`'));
+    const bullet = flat.slice(bulletAt, flat.indexOf('**`rejected: pr-unmeasurable`'));
+    for (const w of ['lineage-unmeasured', 're-send the same `wave-done`, unchanged', 'after the radar\'s next tick',
+      'at most twice', 'then report it to your coordinator']) {
+      expect(bullet, `the unmeasured bullet lost: ${w}`).toContain(w);
+    }
   });
 
   it('carries all nineteen clauses verbatim', () => {

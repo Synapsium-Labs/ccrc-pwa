@@ -551,6 +551,7 @@ generated value is never hand-edited, and the contrast gate rules on the result 
 - **Done-fingerprint re-measures the WORKSPACE BRANCH** (`handoffCommit === branchTip`). A worker commits on its
   workspace branch, **never a separate feature branch** (a feature branch wedges every close with `stale-tip`).
   Re-measurement reads git ref files + `.prhistory` fresh, never the claim body.
+  For a project whose landing conf opts in (`$REG/landing/<project>/enabled`), the fingerprint also accepts a claimed tip that the conflict radar's lineage carries to the live tip through clean base merges, and the landing then binds that live tip; anything it cannot read answers as before, or `lineage-unmeasured`.
 - **One run row per wave; wave N+1 is a NEW `POST /api/runs`, not a reopen. Open wave N+1's run BEFORE closing
   wave N's** — close-first leaves zero open runs and the server retires the program, breaking
   `toId:'coordinator'` mail that carries NO `runId`. Mail naming a `runId` still resolves
