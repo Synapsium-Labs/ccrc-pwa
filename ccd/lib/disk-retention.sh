@@ -1435,8 +1435,8 @@ WS_SHED_SCAN_S_DEFAULT=30
 WS_SHED_QUICK_S=10
 WS_SHED_NAMES_DEFAULT=node_modules
 _ws_shed_int() {   # value default -> the value when it is a whole number of at most 10 digits, else the default; on stdout
-  local LC_ALL=C
-  if [[ ${1-} =~ ^[1-9][0-9]{0,9}$ ]]; then printf '%s' "$1"; else printf '%s' "$2"; fi
+  # The grammar is the run id's, read through its one definition (`_child_runid_valid`, ccd/ccd), ASCII in every locale.
+  if _child_runid_valid "${1-}"; then printf '%s' "$1"; else printf '%s' "$2"; fi
 }
 _ws_shed_floor() {   # -> the floor in seconds: CCD_DEPS_SHED_MIN_ASLEEP_S, never below the default (raise-only)
   local v; v=$(_ws_shed_int "${CCD_DEPS_SHED_MIN_ASLEEP_S-}" "$WS_SHED_MIN_ASLEEP_S_DEFAULT")
@@ -1520,7 +1520,7 @@ _ws_shed_spawn_held() {   # id -> rc 0 with _WS_SHED_HELD_WHY set when a wake mu
     local stale="ws-shed-deps's marker $m stands and its shed lock $l does not prove that removal over — refusing to create a pane for $1; once no \`ccd ws-shed-deps\` of $1 and no rm under its worktree runs, remove $m by hand and retry"
     [[ -f $m && ! -L $m ]] && _file_read_to mk "$m" || { _WS_SHED_HELD_WHY=$stale; return 0; }
     mpid=${mk%% *}; mdi=${mk#* }
-    [[ $mpid =~ ^[1-9][0-9]{0,9}$ && $mdi =~ ^[0-9]+:[0-9]+$ && $mk == "$mpid $mdi" ]] || { _WS_SHED_HELD_WHY=$stale; return 0; }
+    _child_runid_valid "$mpid" && [[ $mdi =~ ^[0-9]+:[0-9]+$ && $mk == "$mpid $mdi" ]] || { _WS_SHED_HELD_WHY=$stale; return 0; }
     [[ -f $l && ! -L $l ]] && command -v flock >/dev/null 2>&1 || { _WS_SHED_HELD_WHY=$stale; return 0; }
     di=$(_plat_devino "$l" 2>/dev/null) && [[ $di == "$mdi" ]] || { _WS_SHED_HELD_WHY=$stale; return 0; }
     { exec {fd}<"$l"; } 2>/dev/null || { _WS_SHED_HELD_WHY=$stale; return 0; }
