@@ -823,3 +823,62 @@ describe('tailRecordOf / continuationInTail (D-4940)', () => {
     expect(finishedTurnDecides('', OLD)).toBe(false);
   });
 });
+
+// D-7186 (Task C7h, the server half): `ChatEvent`'s user and assistant arms carry an optional `compaction: true` on a
+// /compact recap. Two sources, each its own row: Claude Code's `isCompactSummary` marker, and the recap pattern the PWA
+// folds by today (moved here unchanged, both forms: bare and after a bracketed tag). Absent, never `false`.
+describe('the compaction flag on user and assistant events (D-7186)', () => {
+  const RECAP = 'This session is being continued from a previous conversation that ran out of context.';
+  const T = '2026-10-29T00:00:00.000Z';
+  const parse = (o: object): ChatEvent[] => parseTranscriptLine(JSON.stringify(o));
+  const user = (content: unknown, extra: object = {}): ChatEvent[] =>
+    parse({ type: 'user', uuid: 'u1', timestamp: T, ...extra, message: { role: 'user', content } });
+  const assistant = (content: unknown): ChatEvent[] =>
+    parse({ type: 'assistant', uuid: 'a1', timestamp: T, message: { role: 'assistant', content } });
+
+  it('the marker: an isCompactSummary user record carries the flag, whatever its words', () => {
+    expect(user(RECAP, { isCompactSummary: true })).toEqual([{ kind: 'user', uuid: 'u1', ts: T, text: RECAP, compaction: true }]);
+    expect(user('Summary of the work so far.', { isCompactSummary: true }))
+      .toEqual([{ kind: 'user', uuid: 'u1', ts: T, text: 'Summary of the work so far.', compaction: true }]);
+    expect(user([{ type: 'text', text: 'Summary in a block.' }], { isCompactSummary: true }))
+      .toEqual([{ kind: 'user', uuid: 'u1', ts: T, text: 'Summary in a block.', compaction: true }]);
+  });
+
+  it('the pattern: a user- or assistant-kind text that opens with the recap carries the flag, bare or after a bracketed tag', () => {
+    expect(user(RECAP)).toEqual([{ kind: 'user', uuid: 'u1', ts: T, text: RECAP, compaction: true }]);
+    expect(user(`  [summary] ${RECAP}`)).toEqual([{ kind: 'user', uuid: 'u1', ts: T, text: `  [summary] ${RECAP}`, compaction: true }]);
+    expect(user([{ type: 'text', text: RECAP }])).toEqual([{ kind: 'user', uuid: 'u1', ts: T, text: RECAP, compaction: true }]);
+    expect(assistant(RECAP)).toEqual([{ kind: 'assistant', uuid: 'a1', ts: T, text: RECAP, compaction: true }]);
+    expect(assistant([{ type: 'text', text: RECAP }, { type: 'text', text: 'more' }]))
+      .toEqual([{ kind: 'assistant', uuid: 'a1', ts: T, text: `${RECAP}\nmore`, compaction: true }]);
+  });
+
+  it('no flag, and no key: the recap quoted mid-text, another case, an ordinary turn', () => {
+    for (const events of [user(`Earlier it said: ${RECAP}`), user(RECAP.toLowerCase()), assistant(`As the note says: ${RECAP}`),
+      user('hello'), assistant([{ type: 'text', text: 'a reply' }])]) {
+      expect(events).toHaveLength(1);
+      expect('compaction' in events[0]!).toBe(false);
+    }
+  });
+
+  it('only the user and assistant arms carry it: a meta summary is a system row, a tool block is its own event', () => {
+    const meta = user(RECAP, { isCompactSummary: true, isMeta: true });
+    expect(meta).toEqual([{ kind: 'system', uuid: 'u1', ts: T, text: RECAP }]);
+    const mixed = assistant([{ type: 'text', text: RECAP }, { type: 'tool_use', id: 't1', name: 'Read', input: {} }]);
+    expect(mixed.map((e) => [e.kind, 'compaction' in e])).toEqual([['assistant', true], ['tool_use', false]]);
+  });
+
+  it('over the transcript fixtures: no event carries the flag (neither file holds a recap)', () => {
+    const dir = path.dirname(fixture);
+    const events = ['transcript-sample.jsonl', 'transcript-ask-2col.jsonl'].flatMap((f) =>
+      readFileSync(path.join(dir, f), 'utf8').split('\n').filter((l) => l.trim() !== '').flatMap(parseTranscriptLine));
+    expect(events.length).toBeGreaterThan(0);
+    expect(events.filter((e) => 'compaction' in e)).toEqual([]);
+  });
+
+  it('a fleet-shaped summary (the recap and its closing sentence) carries the flag', () => {
+    const summary = { type: 'user', isCompactSummary: true, uuid: 's1', timestamp: T,
+      message: { role: 'user', content: `${RECAP} Continue the conversation from where it left off without asking the user any further questions.` } };
+    expect(parse(summary).map((e) => [e.kind, (e as { compaction?: true }).compaction])).toEqual([['user', true]]);
+  });
+});
