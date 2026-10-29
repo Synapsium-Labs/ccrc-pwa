@@ -31,6 +31,7 @@ import { resolveChrome } from './harness';
 import { buildDist, openApp, removeDist, serveDist, type AppFixture, type AppView, type DistServer } from './app';
 import { fleetSession } from '../test/fleetFixture';
 import { ASKER_PROJECT, ASKER_SESSION, LONG_QUESTION, askFixture, longHookEnvelope } from '../test/askFixtures';
+import { servedSocket } from '../test/wirePairing';
 import type { HookAsk } from '../../shared/api';
 
 const VIEWS: AppView[] = [REFINED, INSTRUMENT].flatMap((skin) => [PHOSPHOR, 'light'].flatMap((theme) =>
@@ -130,6 +131,7 @@ async function openAndMeasure(view: AppView, twice = false): Promise<{ measured:
   const opened = await openApp(browser!, view, FIXTURE);
   try {
     await opened.ctx.routeWebSocket(/\/ws\/session\//, (ws) => {
+      servedSocket(ws);
       for (const frame of FRAMES(twice)) ws.send(JSON.stringify(frame));
     });
     await opened.page.goto(`${server!.origin}/s/${SESSION.id}`);
@@ -282,6 +284,7 @@ describe('a reconnect keeps the open ask on screen (D-6325)', () => {
       let askAt = 0;
       let connections = 0;
       await opened.ctx.routeWebSocket(/\/ws\/session\//, (ws) => {
+        servedSocket(ws);
         connections += 1;
         if (connections === 1) {
           for (const frame of FRAMES(false)) ws.send(JSON.stringify(frame));

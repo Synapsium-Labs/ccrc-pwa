@@ -38,6 +38,7 @@ import { buildDist, openApp, removeDist, serveDist, type AppFixture, type AppVie
 import { sendErrorText } from '../src/lib/api';
 import { fleetSession } from '../test/fleetFixture';
 import { ASKER_PROJECT, ASKER_SESSION, HOOK_QUESTIONS, askFixture, longHookEnvelope } from '../test/askFixtures';
+import { pairedFrames, servedSocket } from '../test/wirePairing';
 import type { Dialog } from '../../shared/api';
 
 const VIEWS: AppView[] = [REFINED, INSTRUMENT].flatMap((skin) => [PHOSPHOR, 'light'].flatMap((theme) =>
@@ -129,6 +130,7 @@ async function openAndMeasure(view: AppView): Promise<{ measured: Measure; error
   const opened = await openApp(browser!, view, FIXTURE);
   try {
     await opened.ctx.routeWebSocket(/\/ws\/session\//, (ws) => {
+      servedSocket(ws);
       for (const frame of FRAMES()) ws.send(JSON.stringify(frame));
     });
     await opened.page.goto(`${server!.origin}/s/${SESSION.id}`);
@@ -273,6 +275,7 @@ describe('the inline ask\'s keys at the desk (R41 F4, D-6326)', () => {
         if (r.method() === 'POST' && new URL(r.url()).pathname === `/api/sessions/${SESSION.id}/dialog`) answers.push(r.postData() ?? '');
       });
       await opened.ctx.routeWebSocket(/\/ws\/session\//, (ws) => {
+        servedSocket(ws);
         for (const frame of FRAMES()) ws.send(JSON.stringify(frame));
       });
       await opened.page.goto(`${server!.origin}/s/${SESSION.id}`);
@@ -335,6 +338,7 @@ describe('Go to question at the desk (R64 F5, D-6326)', () => {
     const opened = await openApp(browser!, view, FIXTURE);
     try {
       await opened.ctx.routeWebSocket(/\/ws\/session\//, (ws) => {
+        servedSocket(ws);
         for (const frame of WITH_CALL()) ws.send(JSON.stringify(frame));
       });
       await opened.page.goto(`${server!.origin}/s/${SESSION.id}`);
@@ -432,6 +436,7 @@ describe('Go to question reveals the focused option (R69 F3, D-6326)', () => {
     const opened = await openApp(browser!, view, FIXTURE);
     try {
       await opened.ctx.routeWebSocket(/\/ws\/session\//, (ws) => {
+        servedSocket(ws);
         for (const frame of WITH_CALL(frames)) ws.send(JSON.stringify(frame));
       });
       await opened.page.goto(`${server!.origin}/s/${SESSION.id}`);
@@ -500,6 +505,7 @@ describe('Go to question with an answer in flight (R69 F7, D-6326)', () => {
     const opened = await openApp(browser!, { skin: REFINED, theme: PHOSPHOR, width: 1280 }, FIXTURE);
     try {
       await opened.ctx.routeWebSocket(/\/ws\/session\//, (ws) => {
+        servedSocket(ws);
         for (const frame of WITH_CALL()) ws.send(JSON.stringify(frame));
       });
       const answers: string[] = [];
@@ -608,6 +614,7 @@ describe('Go to question draws a keyboard focus indicator on the card section (R
     const opened = await openApp(browser!, view, FIXTURE);
     try {
       await opened.ctx.routeWebSocket(/\/ws\/session\//, (ws) => {
+        servedSocket(ws);
         for (const frame of WITH_CALL(framesOf(n))) ws.send(JSON.stringify(frame));
       });
       const answers: string[] = [];
@@ -695,6 +702,7 @@ describe('Go to question draws a keyboard focus indicator on the card section (R
     const opened = await openApp(browser!, { skin: REFINED, theme: PHOSPHOR, width: 1280 }, FIXTURE);
     try {
       await opened.ctx.routeWebSocket(/\/ws\/session\//, (ws) => {
+        servedSocket(ws);
         for (const frame of WITH_CALL(FRAMES())) ws.send(JSON.stringify(frame));
       });
       await opened.page.goto(`${server!.origin}/s/${SESSION.id}`);
@@ -834,6 +842,7 @@ async function openR93(view: AppView, o: { busy?: boolean } = {}) {
   const opened = await openApp(browser!, view, { ...FIXTURE, fleetFrames: [{ type: 'fleet', sessions: [busy ? SESSION : R93_IDLE] }] });
   let sock: { send(m: string): void } | undefined;
   await opened.ctx.routeWebSocket(/\/ws\/session\//, (ws) => {
+    servedSocket(ws);
     sock = ws;
     for (const f of [BACKLOG, { type: 'status', status: busy ? 'busy' : 'idle', statusUpdatedAt: null }]) ws.send(JSON.stringify(f));
   });
@@ -1149,8 +1158,14 @@ describe('R89 S1: a held Retry looks disabled (D-6326)', () => {
 // flight across a frame leaves nothing focused on the reused node. Only a reply that lands before that frame (a fast server:
 // here the held request is off, so the page's `fetch` answers in the same task) leaves a re-enabled node still holding focus,
 // which is what the cases that need that shape (`answered()`) use. The cases about a request in flight use the held one.
+//
+// C7f (D-7220, D-7363): the server sends the `dialog` frame for an answer's `next` BEFORE it replies (`answered:<id>` on
+// the bus, then the reply), and that frame carries the pairing the sheet reads. So the page-side reply first hands the
+// session socket that frame, once (the stream sends no frame for a screen it already sent), as a `message` event on the
+// page's own socket, paired by the server's rule; then it resolves.
 type Probe = {
   __posts: string[]; __pending: Array<() => void>; __hold: boolean; __next: unknown; __reply: () => boolean;
+  __frame: string; __framed: boolean; __session: WebSocket | null;
   __clicks: string[]; __focusins: string[]; __row: Element | null;
 };
 const AGED_Q2 = (): Dialog => {
@@ -1174,17 +1189,31 @@ const Q2_TEXT = HOOK_QUESTIONS[1]!.question;
 /** An opened desk page over aged fixture 2, with the page-side request control and logs installed. */
 async function openAged() {
   const opened = await openApp(browser!, DESK_VIEW, FIXTURE);
-  await opened.ctx.addInitScript((next: unknown) => {
+  await opened.ctx.addInitScript(({ next, frame }: { next: unknown; frame: string }) => {
     const w = window as unknown as Probe;
     const real = window.fetch.bind(window);
     w.__posts = []; w.__pending = []; w.__hold = false; w.__next = next; w.__clicks = []; w.__focusins = []; w.__row = null;
+    w.__frame = frame; w.__framed = false; w.__session = null;
+    const RealSocket = window.WebSocket;
+    window.WebSocket = class extends RealSocket {
+      constructor(url: string | URL, protocols?: string | string[]) {
+        super(url, protocols);
+        if (String(url).includes('/ws/session/')) w.__session = this;
+      }
+    };
     window.fetch = (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
       const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
       if (init?.method === 'POST' && /\/api\/sessions\/[^/]+\/dialog$/.test(new URL(url, location.href).pathname)) {
         w.__posts.push(String(init.body));
         return new Promise<Response>((resolve) => {
-          const done = (): void => resolve(new Response(JSON.stringify({ ok: true, next: w.__next }),
-            { status: 200, headers: { 'content-type': 'application/json' } }));
+          const done = (): void => {
+            if (!w.__framed && w.__session !== null) {
+              w.__framed = true;
+              w.__session.dispatchEvent(new MessageEvent('message', { data: w.__frame }));
+            }
+            resolve(new Response(JSON.stringify({ ok: true, next: w.__next }),
+              { status: 200, headers: { 'content-type': 'application/json' } }));
+          };
           if (w.__hold) w.__pending.push(done);
           else done();
         });
@@ -1200,10 +1229,11 @@ async function openAged() {
     const inCard = (e: Event): boolean => e.target instanceof Element && e.target.closest('[data-ask-surface="inline"]') !== null;
     document.addEventListener('click', (e) => { if (inCard(e)) w.__clicks.push((e.target as Element).tagName); }, true);
     document.addEventListener('focusin', (e) => { if (inCard(e)) w.__focusins.push((e.target as Element).tagName); }, true);
-  }, AGED_Q2());
+  }, { next: AGED_Q2(), frame: JSON.stringify(pairedFrames([...askFixture(2).frames, { type: 'dialog', dialog: AGED_Q2() }]).at(-1)) });
   let sock: { send(m: string): void; close(): void } | undefined;
   const sockets: number[] = [];
   await opened.ctx.routeWebSocket(/\/ws\/session\//, (ws) => {
+    servedSocket(ws);
     sock = ws;
     sockets.push(sockets.length);
     for (const f of AGED_FRAMES()) ws.send(JSON.stringify(f));
@@ -1551,6 +1581,7 @@ describe('the kept Other on a return to its question, desk and phone (R102)', ()
     try {
       let sock: { send(m: string): void } | undefined;
       await opened.ctx.routeWebSocket(/\/ws\/session\//, (ws) => {
+        servedSocket(ws);
         sock = ws;
         for (const f of [BACKLOG, { type: 'status', status: 'busy', statusUpdatedAt: null }, ...askFixture(1).frames]) ws.send(JSON.stringify(f));
       });

@@ -19,6 +19,7 @@ import {
 } from '../src/session/askKeys';
 import { DIALOG_TAB_REFUSE_TEXT } from '../src/session/askWords';
 import { createSessionStore } from '../src/stores/session';
+import { served } from './wirePairing';
 import { CC296_LONG, TOOLS_SIZES, pane } from './askPanes';
 import { declValue, ruleIn } from './cssRule';
 import { askFixture } from './askFixtures';
@@ -132,9 +133,9 @@ const review = (): Dialog => pane('cc296-ask-2q-long-review');
 const frame = async (): Promise<void> => act(async () => { await new Promise((r) => setTimeout(r, 40)); });
 
 function renderAsk(first: Dialog, envelope: typeof CC296_LONG | null = CC296_LONG, extra?: React.ReactNode) {
-  const store = createSessionStore(SESSION_ID, {
+  const store = served(createSessionStore(SESSION_ID, {
     makeSocket: fakeSocket, api: { prompt: vi.fn().mockResolvedValue(undefined) },
-  });
+  }));
   act(() => {
     store.getState().apply({ type: 'ask_cleared' });
     store.getState().apply({ type: 'dialog', dialog: first });

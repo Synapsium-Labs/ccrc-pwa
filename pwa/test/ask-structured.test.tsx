@@ -19,6 +19,7 @@ import { heldAskLine } from '../src/session/askWords';
 import { SessionScreen } from '../src/screens/SessionScreen';
 import { createFleetStore } from '../src/stores/fleet';
 import { createSessionStore, type SessionStore } from '../src/stores/session';
+import { served } from './wirePairing';
 import {
   ASKER_COORD, ASKER_PROJECT, ASKER_SESSION, ASK_DEBRIS, DEBRIS_LABEL, HOOK_QUESTIONS, askFixture, type AskFixture,
 } from './askFixtures';
@@ -53,7 +54,7 @@ const fakeSocket = (): WebSocket =>
 
 /** A store holding what `fx`'s frames left, applied in the order the stream sent them. */
 function storeFor(fx: AskFixture): SessionStore {
-  const store = createSessionStore(ID, { makeSocket: fakeSocket, api: { prompt: vi.fn().mockResolvedValue(undefined) } });
+  const store = served(createSessionStore(ID, { makeSocket: fakeSocket, api: { prompt: vi.fn().mockResolvedValue(undefined) } }));
   act(() => {
     for (const frame of fx.frames) store.getState().apply(frame);
   });
@@ -133,7 +134,7 @@ describe('no text from Dialog.body, Dialog.raw, Dialog.title or a scraped label 
         options: multi.multi!.options.map((o) => ({ ...o, description: DEBRIS_LABEL })),
       },
     };
-    const store = createSessionStore(ID, { makeSocket: fakeSocket, api: { prompt: vi.fn().mockResolvedValue(undefined) } });
+    const store = served(createSessionStore(ID, { makeSocket: fakeSocket, api: { prompt: vi.fn().mockResolvedValue(undefined) } }));
     act(() => {
       store.getState().apply({ type: 'dialog', dialog });
       store.getState().apply({
@@ -160,7 +161,7 @@ describe('no text from Dialog.body, Dialog.raw, Dialog.title or a scraped label 
   ])('a pick-several question with the cursor on a commit row labelled %j names it %j, never the pane\'s label', (commit, word) => {
     const multi = askFixture(9).dialog!;
     const dialog: Dialog = { ...multi, multi: { ...multi.multi!, commit, cursor: 'commit' } };
-    const store = createSessionStore(ID, { makeSocket: fakeSocket, api: { prompt: vi.fn().mockResolvedValue(undefined) } });
+    const store = served(createSessionStore(ID, { makeSocket: fakeSocket, api: { prompt: vi.fn().mockResolvedValue(undefined) } }));
     act(() => {
       store.getState().apply({ type: 'dialog', dialog });
       store.getState().apply({
@@ -274,7 +275,7 @@ describe('the tab strip (D-6325)', () => {
       raw: fx.dialog!.raw.replace(/^←.*→$/m, '←  ☐ Alpha  ☒ Beta  ☐ Gamma  ✔ Submit  →'),
     };
     expect(dialog.raw).toContain('Alpha');
-    const store = createSessionStore(ID, { makeSocket: fakeSocket, api: { prompt: vi.fn().mockResolvedValue(undefined) } });
+    const store = served(createSessionStore(ID, { makeSocket: fakeSocket, api: { prompt: vi.fn().mockResolvedValue(undefined) } }));
     act(() => {
       store.getState().apply({ type: 'dialog', dialog });
       store.getState().apply({ type: 'ask', ask: fx.ask!, key: null });
@@ -294,7 +295,7 @@ describe('the tab strip (D-6325)', () => {
     const ask = structuredClone(fx.ask!);
     if (!('questions' in ask)) throw new Error('fixture 1 is a question envelope');
     delete ask.questions[1]!.header;
-    const store = createSessionStore(ID, { makeSocket: fakeSocket, api: { prompt: vi.fn().mockResolvedValue(undefined) } });
+    const store = served(createSessionStore(ID, { makeSocket: fakeSocket, api: { prompt: vi.fn().mockResolvedValue(undefined) } }));
     act(() => {
       store.getState().apply({ type: 'dialog', dialog: fx.dialog! });
       store.getState().apply({ type: 'ask', ask, key: null });
@@ -305,7 +306,7 @@ describe('the tab strip (D-6325)', () => {
     // Two tabs on the pane for three questions: the words cannot be matched to the marks, so there is no strip.
     cleanup();
     const two: Dialog = { ...fx.dialog!, raw: fx.dialog!.raw.replace(/^←.*→$/m, '←  ☐ Alpha  ☐ Beta  ✔ Submit  →') };
-    const store2 = createSessionStore(ID, { makeSocket: fakeSocket, api: { prompt: vi.fn().mockResolvedValue(undefined) } });
+    const store2 = served(createSessionStore(ID, { makeSocket: fakeSocket, api: { prompt: vi.fn().mockResolvedValue(undefined) } }));
     act(() => {
       store2.getState().apply({ type: 'dialog', dialog: two });
       store2.getState().apply({ type: 'ask', ask: fx.ask!, key: null });
@@ -487,7 +488,7 @@ describe('the rows\' copy: Recommended, label over description, Other (D-6325)',
         { index: 5, label: 'Chat about this' },
       ],
     };
-    const store = createSessionStore(ID, { makeSocket: fakeSocket, api: { prompt: vi.fn().mockResolvedValue(undefined) } });
+    const store = served(createSessionStore(ID, { makeSocket: fakeSocket, api: { prompt: vi.fn().mockResolvedValue(undefined) } }));
     act(() => {
       store.getState().apply({ type: 'dialog', dialog });
       store.getState().apply({ type: 'ask', ask, key: null });
@@ -593,7 +594,7 @@ describe('the rows\' copy: Recommended, label over description, Other (D-6325)',
     cleanup();
     // A pick-several question: the boxes, no Other row, and the line that sends the operator to the terminal.
     const multi = askFixture(9).dialog!;
-    const store = createSessionStore(ID, { makeSocket: fakeSocket, api: { prompt: vi.fn().mockResolvedValue(undefined) } });
+    const store = served(createSessionStore(ID, { makeSocket: fakeSocket, api: { prompt: vi.fn().mockResolvedValue(undefined) } }));
     act(() => {
       store.getState().apply({ type: 'dialog', dialog: multi });
       store.getState().apply({
@@ -673,10 +674,10 @@ describe('the ask holds through a reconnect, and an ask that ends closes with it
   function connected(fx: AskFixture): SessionStore {
     sockets = [];
     const mine = sockets;
-    const store = createSessionStore(ID, {
+    const store = served(createSessionStore(ID, {
       makeSocket: (url) => new ScriptedSocket(url, mine) as unknown as WebSocket,
       api: { prompt: vi.fn().mockResolvedValue(undefined) },
-    });
+    }));
     built.push(store);
     act(() => {
       store.getState().connect();
