@@ -1139,11 +1139,14 @@ export interface ChildSpentActSwitches {
   readonly disabled: MarkerState | RetireRejected;
 }
 
-/** Step 6's reader: the one listing the act already takes, read for both markers (no second registry read). */
+/** Step 6's reader: the one listing the act already takes, read for both markers (no second registry read). It reads
+ *  `readdirMeasured` (D-5969's ratchet: a listing whose failure decides reads the measured listing), collapsed here to
+ *  the same `null` the plain listing gave, so an absent or unreadable registry is `unmeasurable` for both markers. */
 async function childSpentActSwitches(deps: ChildReclaimDeps): Promise<ChildSpentActSwitches> {
   let names: readonly string[] | null;
   try {
-    names = await deps.io.readdir(deps.cfg.registryDir);
+    const listed = await deps.io.readdirMeasured(deps.cfg.registryDir);
+    names = listed.ok ? listed.entries : null;
   } catch (err) {
     const rejected = new RetireRejected(err);
     return { pause: rejected, disabled: rejected };
@@ -2392,8 +2395,8 @@ export const CHILD_SPENT_RETIRE: RetireReason<ChildReclaimRequest, ChildSpentFac
  *   each at the clock's own read, as before.
  * - `switches`: `childReclaimPauseRead`, not edited (D-7224), so a rejecting `readdir` lands on step 2b's own sentence
  *   (its mode is `judged`). `off-switch`: `childReclaimDisabledDetail`, a plain listing of its own (ARCH-77).
- *   `off-switch-last`: `childSpentActSwitches`, the act's one plain listing read for both markers (D-7172); a rejecting
- *   `readdir` is folded into both readings, so the step's mode stays `propagate` with nothing to propagate.
+ *   `off-switch-last`: `childSpentActSwitches`, the act's one measured listing read for both markers (D-7172); a
+ *   rejecting `readdirMeasured` is folded into both readings, so the step's mode stays `propagate` with nothing to propagate.
  * - `generation`: re-read only for a request that carries a licence (spec §5.5); close's `none` reads nothing.
  * - `presence`: `viewers.isVisible`, asked only until the request's defer ceiling.
  * - `capability`: `reclaim-v1`, then, for a stale request only, `reclaim-stale-v1` (D-6639).

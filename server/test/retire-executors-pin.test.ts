@@ -172,6 +172,16 @@ const childRig = async (o: ChildOpts = {}) => {
       if (what === 'null') return null;
       return base.io.readdir(p, timeoutMs, signal);
     },
+    // Step 6's listing is the measured one (D-5969): it counts in the same registry-listing sequence as the plain ones.
+    async readdirMeasured(p: string, timeoutMs?: number, signal?: AbortSignal) {
+      if (p !== reg) return base.io.readdirMeasured(p, timeoutMs, signal);
+      listings += 1;
+      spy.log.push('readdirMeasured');
+      const what = hooks.listing?.(listings);
+      if (what === 'reject') throw new Error('EIO: the registry listing failed');
+      if (what === 'null') return { ok: false, reason: 'unreadable' };
+      return base.io.readdirMeasured(p, timeoutMs, signal);
+    },
     async readFileMeasured(p: string, timeoutMs?: number, signal?: AbortSignal) {
       if (p === path.join(reg, `${KID}.generation`)) {
         spy.log.push('generation');
@@ -337,10 +347,11 @@ describe('child-spent (reclaimChild): the step matrix (C4h a)', () => {
     expect(await childReclaimPauseRead({ readdir: async () => [RECLAIM_PAUSE_MARKER] }, '/fixture/reg')).toBe('set');
   });
 
-  it('child-spent: the listing count of a clean pass is four plain readdirs (record, pause, disabled, disabled at the act)', async () => {
+  it('child-spent: the listing count of a clean pass is three plain readdirs (record, pause, disabled) and the act\'s one measured listing', async () => {
     const k = await childRig();
     expect(await reclaimChild(k.deps, k.req)).toMatchObject({ kind: 'reclaimed' });
-    expect(spy.log.filter((l) => l === 'readdir')).toHaveLength(4);
+    expect(spy.log.filter((l) => l === 'readdir' || l === 'readdirMeasured'))
+      .toEqual(['readdir', 'readdir', 'readdir', 'readdirMeasured']);
   });
 
   it('child-spent: the defer words are the ladder\'s own vocabulary', () => {
@@ -1358,10 +1369,11 @@ describe('the difference table (C4h b; plan item 2 and item 16)', () => {
     expect([by('temp-orphan', 'propagate'), by('temp-orphan', 'judged')]).toEqual([4, 4]);
   });
 
-  it('the listing mode: child-spent takes plain readdirs, one per marker; the other two ONE measured listing per read', async () => {
+  it('the listing mode: child-spent takes plain readdirs at decide, one per marker, and one measured listing at the act; the other two ONE measured listing per read', async () => {
     const k = await childRig();
     await reclaimChild(k.deps, k.req);
-    expect(spy.log.filter((l) => l === 'readdir')).toHaveLength(4);
+    expect(spy.log.filter((l) => l === 'readdir' || l === 'readdirMeasured'))
+      .toEqual(['readdir', 'readdir', 'readdir', 'readdirMeasured']);
     spy.log.length = 0;
     const x = await expiryRig();
     await expireArchived(x.deps, x.req);
@@ -1641,10 +1653,13 @@ const childDisabledDetail = async (k: ChildRig, when: string): Promise<string | 
   if (state === 'set') return childReclaimDisabledSentence(when);
   return state === 'clear' ? null : `${CHILD_RECLAIM_DISABLED_UNREAD_SENTENCE}${when}`;
 };
-/** Step 6's two readings of its one plain listing: both markers, or both the rejection. */
+/** Step 6's two readings of its one measured listing: both markers, or both the rejection. */
 const childActSwitches = async (k: ChildRig) => {
   let names: readonly string[] | null;
-  try { names = await k.deps.io.readdir(k.deps.cfg.registryDir); } catch (err) {
+  try {
+    const listed = await k.deps.io.readdirMeasured(k.deps.cfg.registryDir);
+    names = listed.ok ? listed.entries : null;
+  } catch (err) {
     const rejected = new RetireRejected(err);
     return { pause: rejected, disabled: rejected };
   }
@@ -1686,7 +1701,7 @@ const childReaders = (k: ChildRig): Readers<ChildSpentFacts> => {
     [RETIRE_STEPS.offSwitchLast]: () => childActSwitches(k),
   };
 };
-const CHILD_READS = (l: string): boolean => l === 'readdir' || l === 'generation' || l === 'presence' || l === 'store' || l === 'claims'
+const CHILD_READS = (l: string): boolean => l === 'readdir' || l === 'readdirMeasured' || l === 'generation' || l === 'presence' || l === 'store' || l === 'claims'
   || l.startsWith('argv:');
 /** The executor on one rig and the decider on its twin, each rig built by `make`: both outcomes, both read logs (each
  *  up to the act's argv). */
