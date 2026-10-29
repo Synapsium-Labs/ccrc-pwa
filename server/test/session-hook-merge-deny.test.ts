@@ -973,6 +973,10 @@ describe('the bypass deny (wave 2b)', () => {
       const other = path.join(home, 'another-checkout');
       fs.mkdirSync(other);
       expect(bash('gh pr merge 42 --admin', false, other).deny, 'the listed pass was refused: update the hook header\'s list').toBeNull();
+      // The class is named in the header's gh api list, found by its phrase like the other LISTED rows.
+      const hk = fs.readFileSync(HOOK, 'utf8');
+      const list = hk.slice(hk.indexOf('# WHAT PASSES UNPARSED, the `gh api` half'), hk.indexOf('# The hook is a contract the fleet honours'));
+      expect(list, 'the header list does not name the allowance\'s ambient-state class').toContain('a repository gh resolves from ambient');
     });
   });
 
@@ -1018,6 +1022,13 @@ describe('the bypass deny (wave 2b)', () => {
   // The allowance never lifts it. The classes it cannot read are LISTED passes, each pinned below.
   describe('the gh api deny', () => {
     const hookText = fs.readFileSync(HOOK, 'utf8');
+    /** The header's gh api list of what passes unparsed, between its heading and the paragraph after it. */
+    const listText = (): string => {
+      const a = hookText.indexOf('# WHAT PASSES UNPARSED, the `gh api` half');
+      const b = hookText.indexOf('# The hook is a contract the fleet honours', a);
+      if (a < 0 || b < 0) throw new Error('the hook header no longer has the gh api list of what passes unparsed');
+      return hookText.slice(a, b);
+    };
     const heredocQuery = (word: string): string =>
       `gh api graphql --input - <<'EOF'\n{"query":"mutation { ${word}(input: {pullRequestId: \\"x\\"}) { clientMutationId } }"}\nEOF`;
 
@@ -1050,6 +1061,77 @@ describe('the bypass deny (wave 2b)', () => {
         'gh api -X POST repos/o/r/merges -f base=main -f head=x',
         'gh api -X PUT repos/o/r/pulls/"$n"/merge', "gh api -X PUT repos/o/r/pulls/42/'merge'",
       ]) expect(bash(c).deny, `not denied: ${c}`).not.toBeNull();
+    });
+
+    // I1: a word spelled with adjacent quotes or a backslash is the same word to the shell, so the text is
+    // tested with every quote and backslash removed. Each spelling keeps `merge` or `Merge` in the payload
+    // (the arm's prefilter reads the payload as JSON text, so a word broken inside `enqueue…` skips the arm: LISTED below).
+    const BROKEN: Array<[string, string]> = [['merge', 'PullRequest'], ['merge', 'Branch'], ['enablePullRequestAuto', 'Merge']];
+    const IN_WORD = ['""', "''", '\\'];
+    it('refuses a mutation word broken by adjacent quotes or a backslash, under the cap and over it', () => {
+      const cases: string[] = [
+        'gh api graphql -f query="mutation { merge""PullRequest(input: {pullRequestId: 1}) { clientMutationId } }"',
+        'gh api graphql -f query="mutation { merge"\'PullRequest\'"(input: {pullRequestId: 1}) { clientMutationId } }"',
+        "gh api graphql -f query=merge'PullRequest'",
+        'gh api graphql -f query="mutation { merge\\PullRequest }"',
+        // Formerly a LISTED pass: with its quotes removed its text holds the word whole, so it is read now.
+        'q="merge""PullRequest"; gh api graphql -f query="mutation { $q }"',
+      ];
+      for (const [a, b] of BROKEN) for (const sep of IN_WORD) cases.push(`gh api graphql -f query=${a}${sep}${b}`);
+      for (const c of cases) {
+        expect(flagsOf(c), `no w flag: ${c}`).toContain('w');
+        expect(bash(c).deny, `not denied under the cap: ${c}`).not.toBeNull();
+        const long = over(c);
+        expect(strip(long), `no api kind over the cap: ${c}`).toMatch(/:api$/);
+        expect(bash(long).deny, `not denied over the cap: ${c}`).not.toBeNull();
+      }
+    });
+
+    // I2: a path segment runs to the next `/` or separator, so a `$(…)` operand is read as part of the path.
+    it('refuses a path whose number is a command substitution', () => {
+      for (const c of [
+        'gh api -X PUT repos/o/r/pulls/$(gh pr view --json number -q .number)/merge',
+        'gh api -X PUT repos/o/r/pulls/$(echo 42)/merge',
+        'gh api -X PUT repos/$(echo o)/$(echo r)/merges',
+      ]) {
+        expect(flagsOf(c), `no p flag: ${c}`).toContain('p');
+        expect(bash(c).deny, `not denied: ${c}`).not.toBeNull();
+      }
+    });
+
+    // M3: a backslash in the word or the path is dropped like a quote, once the payload wakes the arm
+    // (`-f merge_method=squash` holds the `merge` the payload needs).
+    it('refuses a path broken by a backslash, under the cap and over it', () => {
+      const c = 'gh api -X PUT repos/o/r/pulls/42/m\\erge -f merge_method=squash';
+      expect(flagsOf(c)).toContain('p');
+      expect(bash(c).deny).not.toBeNull();
+      expect(bash(over(c)).deny).not.toBeNull();
+    });
+
+    it('answers a cap-sized run of path starts with long segments, and no merge path, in bounded time', () => {
+      // `pulls/` and `repos/` repeated with long runs between them, and the `merge` the payload needs for the
+      // arm to run: each start reads its own segments once, so the cost is linear in the command.
+      for (const unit of ['pulls/' + 'a b'.repeat(40) + ' ', 'repos/' + 'a'.repeat(100) + '/', 'pulls/$(' + 'x '.repeat(50) + ')']) {
+        const c = sized('gh api x ' + unit, ' echo merge', CAP);
+        expect(Buffer.byteLength(c)).toBe(CAP);
+        const r = timed(c);
+        expect(r.deny, `a non-merge was denied: ${JSON.stringify(unit)}`).toBeNull();
+        expect(r.ms, `the hook took ${r.ms} ms on ${JSON.stringify(unit)}`).toBeLessThan(1500);
+      }
+    }, 60000);
+
+    // M6: the reason spells the four words by hand; it must name exactly the set the jq program tests.
+    it('the reason names exactly the mutation words the jq program tests', () => {
+      const d = bash('gh api --method GET repos/o/r/pulls/42/merge').deny ?? '';
+      const named = /a merge mutation \(([^)]*)\)/.exec(d);
+      expect(named, 'the reason no longer names the mutation words in parentheses').not.toBeNull();
+      const inReason = [...(named?.[1] ?? '').matchAll(/`(\w+)`/g)].map((m) => m[1]).sort();
+      const set = /def MUT: \[([^\]]*)\];/.exec(stripProgram());
+      expect(set, 'the jq program no longer defines MUT as a list').not.toBeNull();
+      const inProgram = [...(set?.[1] ?? '').matchAll(/"(\w+)"/g)].map((m) => m[1]).sort();
+      expect(inProgram).toHaveLength(4);
+      expect(inReason, 'the reason and the jq program name different mutation words').toEqual(inProgram);
+      expect(inProgram).toEqual([...MUTATIONS].sort());
     });
 
     it('names the substitute for the GET it refuses, and its own sentence for the wide reading', () => {
@@ -1116,9 +1198,19 @@ describe('the bypass deny (wave 2b)', () => {
       ['gh api graphql -F query=@mutation.graphql', 'a query or body read from a file'],
       ['gh api graphql --input body.json', 'a query or body read from a file'],
       ['cat f | gh api graphql --input -', 'a query or body read from a file'],
-      ['q="merge""PullRequest"; gh api graphql -f query="mutation { $q }"', 'a word or path assembled at run time'],
-      ['gh api -X PUT repos/o/r/pulls/$(echo 42)/merge', 'a word or path assembled at run time'],
-      ['gh api -X PUT repos/o/r/pulls/42/m\\erge', 'a word or path assembled at run time'],
+      // The word is assembled in variables, so the text never holds it whole, with or without its quotes.
+      ['q=merge; r=PullRequest; gh api graphql -f query="mutation { $q$r }"', 'a word or path assembled at run time'],
+      ['gh api -X PUT repos/o/r/pulls/$(cat /tmp/n)/merge', 'a word or path assembled at run time'],
+      ['gh api -X PUT repos/o/r/pulls/42/m""erge', 'a word or path broken by quotes or a backslash'],
+      ['xargs gh api -X PUT repos/o/r/pulls/42/merge', 'the head grammar\'s own classes'],
+      ['gh api -X PUT repos/o/r/pulls/42/%6derge', 'an encoded or non-canonical merge path'],
+      ['gh api -X PUT repos/o/r/pulls/42//merge', 'an encoded or non-canonical merge path'],
+      ['gh api -X POST repos/o/r//merges -f base=main -f head=x', 'an encoded or non-canonical merge path'],
+      ['gh api -X PUT repos/o/r/pulls/42/Merge', 'an encoded or non-canonical merge path'],
+      ['gh api graphql --input - <<\'EOF\'\n{"query":"mutation { \\u0065nqueuePullRequest(input: {pullRequestId: \\"x\\"}) { clientMutationId } }"}\nEOF',
+        'a mutation word written with JSON `\\u` escapes'],
+      ['gh api graphql -f query=\'mutation { \\u006dergePullRequest(input: {pullRequestId: 1}) { clientMutationId } }\'',
+        'a mutation word written with JSON `\\u` escapes'],
       ['$GH api -X PUT repos/o/r/pulls/42/merge', 'a variable or quoted command word'],
       ['"gh" api -X PUT repos/o/r/pulls/42/merge', 'a variable or quoted command word'],
       ["gh alias set m 'api -X PUT'", 'a `gh alias`'],
@@ -1127,7 +1219,7 @@ describe('the bypass deny (wave 2b)', () => {
       ['git push origin HEAD:main', 'ways to move `main` that are not merges'],
     ])('LISTED pass: %j (%s)', (c, cls) => {
       expect(bash(c).deny, 'the listed pass was refused: update the hook header\'s list').toBeNull();
-      expect(hookText, `the hook header's WHAT PASSES UNPARSED list does not name the class "${cls}"`).toContain(cls);
+      expect(listText(), `the hook header's gh api list of what passes unparsed does not name the class "${cls}"`).toContain(cls);
     });
 
     it('the head grammar is GH_MERGE_RE\'s with `api` for `pr … merge`, derived from its text', () => {
@@ -1218,7 +1310,10 @@ describe('the bypass deny (wave 2b)', () => {
     it('answers 100 KB of api shapes in bounded time', () => {
       // Many segments that pass the whole-command prefilter and the per-segment one: the first segment
       // that reads as an api call ends the search; the reversed words never do.
-      for (const [unit, tail, denied] of [['gh api x/merge;', '', true], ['api gh;', '/merge', false], ['gh api;', '', false]] as const) {
+      // The quote-dense and backslash-dense shapes cost the three fixed-string split-and-joins that make
+      // the quote-free text the api kind reads; each ends in a real api command, so the kind is reached.
+      for (const [unit, tail, denied] of [['gh api x/merge;', '', true], ['api gh;', '/merge', false], ['gh api;', '', false],
+        ['"', '\ngh api x/merge', true], ["'", '\ngh api x/merge', true], ['\\', '\ngh api x/merge', true]] as const) {
         const c = sized(unit, tail, 100000);
         const r = timed(c);
         expect(r.deny !== null, `${JSON.stringify(unit)}: denied ${r.deny !== null}`).toBe(denied);

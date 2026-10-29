@@ -4098,12 +4098,26 @@ fi
 #   - a query or body read from a file (`-F query=@mutation.graphql`,
 #     `--input body.json`, `cat f | gh api graphql --input -`): the file's text is
 #     never in the command;
-#   - a word or path assembled at run time (`q="merge""PullRequest"`, a path in a
-#     variable built from pieces, a `$(…)` with a blank in a path word such as
-#     `pulls/$(echo 42)/merge`, a backslash inside the word);
+#   - a word or path assembled at run time (`q=merge; r=PullRequest`, a path in a
+#     variable built from pieces, a `$(…)` operand that holds a `/` or a separator
+#     such as `pulls/$(cat /tmp/n)/merge`): the text never holds the word whole;
 #   - a variable or quoted command word (`$GH api …`, `"gh" api …`): the strip
 #     drops the quoted word, so no `gh … api` head is left to ask about;
 #   - a `gh alias` (`gh alias set m 'api -X PUT'`);
+#   - the head grammar's own classes, listed above for the merge head, pass the
+#     `gh api` head as they pass the merge head: `xargs gh api …`, `bash -c "…"`,
+#     `eval`, a leading redirection, an unlisted wrapper and a path-spelled wrapper;
+#   - an encoded or non-canonical merge path: a percent-encoded character
+#     (`pulls/42/%6derge`), a doubled slash (`pulls/42//merge`, `repos/o/r//merges`)
+#     or a case variant (`pulls/42/Merge`): the path test reads the text as written;
+#   - a mutation word written with JSON `\u` escapes in a `--input -` body or a
+#     `-f query=` value (`enqueuePullRequest`): the escape is the body's, not
+#     the shell's, and the hook does not decode JSON. Such a payload can also skip
+#     the bash prefilter, which reads only `merge`, `Merge` and `enqueuePullRequest`;
+#   - a word or path broken by quotes or a backslash so that none of those three
+#     strings stays whole in the payload (`pulls/42/m""erge`): the arm never runs
+#     (the quote-free reading above catches it only when the payload wakes the arm,
+#     for example through another `merge`);
 #   - under the operator's allowance only, a repository gh resolves from ambient
 #     state rather than from the command: a working directory in another checkout
 #     left by an earlier call's `cd` (the Bash tool keeps its directory between
@@ -4160,13 +4174,18 @@ fi
 # in every session, by the same single jq and with the same reason prefix. Once the
 # STRIPPED text holds a real `gh … api` head (GH_API_RE: GH_MERGE_RE's head grammar
 # with `api` for `pr … merge`, derived from its text, so the two never drift) the
-# RAW command is asked for a mutation word (`w`: the fixed-string `contains` of any
-# of `mergePullRequest`, `enqueuePullRequest`, `enablePullRequestAutoMerge` or
-# `mergeBranch`, the set written once in the jq program) or a merge path (`p`: the
-# raw text with every `'` and `"` removed, so `pulls/"$n"/merge` and
-# `pulls/42/'merge'` are paths, tested for `pulls/<seg>/merge` or
-# `repos/<seg>/<seg>/merges`, each END-BOUNDED so `pulls/42/merges/x` is not one,
-# and possessive, so the test cannot backtrack). Any METHOD is refused, a GET
+# RAW command is read, with every `'`, `"` and `\` removed first (fixed-string
+# split and join, so `merge""PullRequest`, `merge'PullRequest'`, `pulls/"$n"/merge`,
+# `pulls/42/'merge'` and `m\erge` are words and paths), for a mutation word (`w`:
+# the fixed-string `contains` of any of `mergePullRequest`, `enqueuePullRequest`,
+# `enablePullRequestAutoMerge` or `mergeBranch`, the set written once in the jq
+# program) or a merge path (`p`: `pulls/<seg>/merge` or `repos/<seg>/<seg>/merges`,
+# each END-BOUNDED so `pulls/42/merges/x` is not one, and possessive, so the test
+# cannot backtrack). A segment is read up to the next `/` or separator (`;` `&` `|`
+# or a newline), blanks, `(` and `)` included, so a `$(…)` operand is read as part of
+# the path: `pulls/$(gh pr view --json number -q .number)/merge` and
+# `pulls/$(echo 42)/merge` are paths, while a `$(…)` that holds a `;` `&` `|`
+# or a `/` is not (below). Any METHOD is refused, a GET
 # included (D-7112): a text-read GET exemption is defeated by a later `-X PUT` or a
 # `GET` inside a quoted field, and `gh pr view <n> --json state,mergedAt` answers
 # the same question, which the reason names. The wide reading is the same on
@@ -4179,14 +4198,14 @@ fi
 # THE VERDICT FLAGS. The strip's answer carries them, computed in the same jq.
 # Under the cap it is `=<flags><US><stripped>`, `<US>` the unit separator (0x1f)
 # and `<flags>` a string over `a` (the raw text holds the substring `--admin`), `s`
-# (the whole raw command matches ALLOW_ADMIN_RE, below), `w` (the raw text holds a
-# mutation word) and `p` (the quote-free raw text holds a merge path), in that
+# (the whole raw command matches ALLOW_ADMIN_RE, below), `w` (the quote-free raw text
+# holds a mutation word) and `p` (the quote-free raw text holds a merge path), in that
 # order. Over the cap it is `!<bytes>:<kinds>`, `<kinds>` a comma-separated subset
 # of `merge` (wave 2's `ocwords`), `admin` (`ocwords` AND the fixed string
 # `--admin` anywhere in the raw command) and `api` (`ocapiwords`: one segment, from
 # the same fixed-string `ocsegs` split, holds the words `gh` then `api` as an
-# `ocafter` bounded word match reads them, AND the raw text holds a mutation word
-# or the fixed string `/merge`, which stands for BOTH paths over the cap: its
+# `ocafter` bounded word match reads them, AND the quote-free raw text holds a mutation
+# word or the fixed string `/merge`, which stands for BOTH paths over the cap: its
 # wider reach, any `gh … api` segment beside the text `/merge` anywhere, is part of
 # the named over-cap cost below). No `splits(` regex call is added. Over the cap
 # wave 2's reason fires only when `<kinds>` holds `merge`, the bypass question
@@ -4222,11 +4241,12 @@ fi
 # substring prefilter costs no fork (`merge`, `Merge` and `enqueuePullRequest`:
 # bash glob tests are case-sensitive, and the last two names hold no lowercase
 # `merge`), and only a Bash payload carrying one of them pays the one jq for its
-# command, which also computes the flags (four fixed-string tests, one anchored
-# `test` and one linear, possessive path `test` over the quote-free text; no new
-# call; the path test runs under the cap only, the four mutation tests on either side). The hold is read through `_ct_read` and
-# judged by `CCRC_HOLD_WAVE_RE` under `CCRC_HOLD_MAX` — the card's own reader,
-# shape and bound — so an absent, unreadable, empty, oversized or non-wave hold
+# command, which also computes the flags: five fixed-string tests (`--admin` and the
+# four mutation words), one anchored `test` and one linear, possessive path `test`,
+# the last two under the cap only, plus three fixed-string split-and-joins that make
+# the quote-free text (`'`, `"`, `\`); no new call. The hold is read through
+# `_ct_read` and judged by `CCRC_HOLD_WAVE_RE` under `CCRC_HOLD_MAX` — the card's
+# own reader, shape and bound — so an absent, unreadable, empty, oversized or non-wave hold
 # is not a worker wave, exactly as the card declines to call it one; such a
 # session is then asked only whether it is a marked child.
 #
@@ -4426,14 +4446,15 @@ def ocwords: contains("gh") and contains("merge")
 def ocapi: ocafter("(^|[^A-Za-z0-9_])gh(?=\\s)") | ocafter("\\sapi($|[\\s`()<>])");
 def MUT: ["mergePullRequest", "enqueuePullRequest", "enablePullRequestAutoMerge", "mergeBranch"];
 def mutword: . as $s | any(MUT[]; . as $w | $s | contains($w));
-def ocapiwords: contains("gh") and contains("api") and (mutword or contains("/merge"))
+def unq: split($q) | join("") | split("\"") | join("") | split("\\") | join("");
+def ocapiwords: contains("gh") and contains("api")
+  and ((unq) as $u | ($u | mutword) or ($u | contains("/merge")))
   and any(ocsegs[] | select(contains("gh") and contains("api")) | ocapi; true);
 def ockinds: (ocwords) as $m | (ocapiwords) as $a
   | [(if $m then "merge" else empty end), (if $m and contains("--admin") then "admin" else empty end), (if $a then "api" else empty end)] | join(",");
-def unq: split($q) | join("") | split("\"") | join("");
-def mergepath: "pulls/[^[:space:]/]++/merge(?![A-Za-z0-9_-])|repos/[^[:space:]/]++/[^[:space:]/]++/merges(?![A-Za-z0-9_-])";
-def vflags: (if contains("--admin") then "a" else "" end) + (if test($allow) then "s" else "" end)
-  + (if mutword then "w" else "" end) + (if (unq | test(mergepath)) then "p" else "" end);
+def mergepath: "pulls/[^;&|\\n/]++/merge(?![A-Za-z0-9_-])|repos/[^;&|\\n/]++/[^;&|\\n/]++/merges(?![A-Za-z0-9_-])";
+def vflags: (unq) as $u | (if contains("--admin") then "a" else "" end) + (if test($allow) then "s" else "" end)
+  + (if ($u | mutword) then "w" else "" end) + (if ($u | test(mergepath)) then "p" else "" end);
 def capped(f): (.tool_input.command // "") as $c
   | if ($c | type) == "string" and ($c | utf8bytelength) > $cap
     then ($c | ockinds) as $k | (if $k == "" then "" else "!\($c | utf8bytelength):\($k)" end)
