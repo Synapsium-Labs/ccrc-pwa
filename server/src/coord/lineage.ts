@@ -7,7 +7,7 @@
  * table row.
  *
  * The parser reads only the shapes the radar writes (`lineage_unmeasured`, `lineage_pass` and `walk_lineage` in
- * `ccd/ccd-land-probe`), and refuses a doc the radar's writers cannot produce (D-7469). The three shapes: a failed fetch
+ * `ccd/ccd-land-probe`), and refuses a doc those writers do not produce from real merges (D-7469). The three shapes: a failed fetch
  * (`unmeasured`, a `why`, no base, no stop, an empty chain), a walk under a measured base (`measured`, no `why`, a stop),
  * and a walk cut under one (`unmeasured`, a `why`, `stop: 'unmeasured'`, a partial chain). Every one carries the row's
  * `branch`. A walk of `LINEAGE_MAX_CHAIN` entries stopped at its limit, so it is `measured` with `stop: 'limit'`; a
@@ -121,13 +121,15 @@ export function parseLineage(
     if (!isRecord(e) || !isSha(e.merge) || !isSha(e.p1) || !isSha(e.p2)) return bad;
     chain.push({ merge: e.merge, p1: e.p1, p2: e.p2 });
   }
-  // A chain is a walk under a measured base, and a walk ends with a stop (fix round 1, F1).
-  if (chain.length > 0 && (base === undefined || stop === undefined)) return bad;
+  // A chain is a walk under a measured base (fix round 1, F1). That the walk ends with a stop is the rules above: a
+  // measured doc and a base-bearing unmeasured one each carry one.
+  if (chain.length > 0 && base === undefined) return bad;
   if (chain.length > 0 && chain[0]!.merge !== tip) return bad;
   for (let i = 0; i + 1 < chain.length; i++) if (chain[i]!.p1 !== chain[i + 1]!.merge) return bad;
   // A walk stops with `limit` exactly when its chain reaches its step count, whose maximum is the length cap (D-7469); a
   // `limit` walk of fewer entries stays readable (the step count is a knob).
-  if (chain.length === LINEAGE_MAX_CHAIN && (!measured || stop !== 'limit')) return bad;
+  // Only a measured doc can say `limit` (the `state`/`stop` rules above), so this is the measured `limit` walk.
+  if (chain.length === LINEAGE_MAX_CHAIN && stop !== 'limit') return bad;
   // A first-parent walk of two-parent merges: no merge of one commit with itself, and no commit walked twice.
   if (chain.some((e) => e.p1 === e.p2)) return bad;
   if (new Set(chain.map((e) => e.merge)).size !== chain.length) return bad;

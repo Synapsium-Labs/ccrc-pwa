@@ -12552,8 +12552,8 @@ export interface AdvanceOk {
 export const FRESH_FUTURE_SKEW_S = 60;
 
 /** A radar file's clock, read as fresh: written at most `freshS` ago and at most FRESH_FUTURE_SKEW_S ahead (D-7475). The
- *  one rule of every reader of the landing radar's files (the `enabled` marker and a lineage doc on the server, and the
- *  `probe` doc on the server and in the PWA), so no reader keeps a copy. `at` is the file's own string, read as
+ *  one rule of the landing radar's files: the server's readers of the `enabled` marker and a lineage doc take it, and so
+ *  will wave 4b's readers of the `probe` doc on the server and in the PWA, so no reader keeps a copy. `at` is the file's own string, read as
  *  `Date.parse` reads it; a missing, non-string or unparseable one is not fresh. Pure: `nowMs` is the caller's clock. */
 export function freshWithin(at: unknown, freshS: number, nowMs: number): boolean {
   if (typeof at !== 'string') return false;

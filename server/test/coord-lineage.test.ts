@@ -149,21 +149,26 @@ describe('parseLineage: the radar writes three shapes only (fix round 1, F1)', (
     })).toEqual({ answer: 'unmeasured', detail: 'lineage-unreadable' });
   };
 
+  // Wave 4c (D-7469): every unmeasured case carries its `why`, so the `why` rule is not what refuses it. (a) and (b) are
+  // still refused twice, by the no-base-no-stop rule and by the chain-without-base rule; (f) is the chain rule alone.
   it("(a) state: 'unmeasured', stop: 'unmeasured', a chain holding the claim and base: null", () => {
-    refused({ state: 'unmeasured', stop: 'unmeasured', base: null });
+    refused({ state: 'unmeasured', why: 'budget', stop: 'unmeasured', base: null });
   });
   it("(b) the same with no base key", () => {
-    refused({ state: 'unmeasured', stop: 'unmeasured', base: undefined });
+    refused({ state: 'unmeasured', why: 'budget', stop: 'unmeasured', base: undefined });
   });
   it("(c) state: 'unmeasured' beside a measured stop (conflict), a sha base and a chain holding the claim", () => {
-    refused({ state: 'unmeasured', stop: 'conflict' });
+    refused({ state: 'unmeasured', why: 'budget', stop: 'conflict' });
   });
   it("(d) state: 'measured' beside stop: 'unmeasured', a sha base and a chain holding the claim", () => {
     refused({ state: 'measured', stop: 'unmeasured' });
   });
   it("(e) state: 'unmeasured', a sha base, a chain holding the claim and no stop", () => {
-    refused({ state: 'unmeasured', stop: undefined });
-    refused({ state: 'unmeasured', stop: null });
+    refused({ state: 'unmeasured', why: 'budget', stop: undefined });
+    refused({ state: 'unmeasured', why: 'budget', stop: null });
+  });
+  it("(f) the failed fetch's shape (no base, no stop) beside a chain holding the claim: a chain is a walk under a base", () => {
+    refused({ ...FETCH_FAILED, tip: sha(1), chain: THREE });
   });
 
   describe('controls: the shapes the radar writes stay readable', () => {
