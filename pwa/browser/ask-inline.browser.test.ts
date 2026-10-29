@@ -1670,3 +1670,69 @@ describe('a tapped row answers through the question family\'s door on a question
     }, 90_000);
   }
 });
+
+// W7 C7g (D-7185, D-7485): a tap never waits on the `GET /health` read. The sheet read the door when it mounted; then
+// `/health` stops answering (a stalled server), and the tap's POST must still be issued at once, on the last door the
+// server gave: the family's door when the sheet has been open past the read's lease (the page's `Date` is moved past
+// `SERVER_CAPS_HOLD_MS`), and the old `/dialog` when the mount read failed. Before the fix both taps waited on the hung
+// re-read and posted nothing.
+describe('a tap\'s answer is issued at once, never one /health read behind it (W7 C7g)', () => {
+  const HOLD_VIEWS: AppView[] = [
+    { skin: REFINED, theme: PHOSPHOR, width: 390 }, { skin: REFINED, theme: PHOSPHOR, width: 1280 },
+    { skin: INSTRUMENT, theme: 'light', width: 390 }, { skin: INSTRUMENT, theme: 'light', width: 1280 },
+  ];
+  const V1 = JSON.stringify({ ok: true, build: null, caps: ['ask-pairing-v1', 'questions-v1'] });
+  for (const mount of ['past the lease', 'after a failed mount read'] as const) {
+    for (const view of HOLD_VIEWS) {
+      it(`${mount}: ${named(view)}`, async () => {
+        const opened = await openApp(browser!, view, FIXTURE);
+        try {
+          await opened.page.clock.setFixedTime(NOW * 1000);
+          let healthReads = 0;
+          let stalled = false;
+          await opened.page.route('**/health', (route) => {
+            healthReads += 1;
+            if (stalled) return; // never answered
+            if (mount === 'after a failed mount read') { void route.abort('connectionrefused'); return; }
+            void route.fulfill({ status: 200, contentType: 'application/json', body: V1 });
+          });
+          const family: string[] = [];
+          await opened.page.route(`**/api/questions/session-${SESSION.id}/answer`, (route) => {
+            family.push(route.request().postData() ?? '');
+            void route.fulfill({ status: 200, contentType: 'application/json', body: '{"ok":true}' });
+          });
+          const old: string[] = [];
+          opened.page.on('request', (r) => {
+            if (r.method() === 'POST' && new URL(r.url()).pathname === `/api/sessions/${SESSION.id}/dialog`) old.push(r.postData() ?? '');
+          });
+          await opened.ctx.routeWebSocket(/\/ws\/session\//, (ws) => {
+            servedSocket(ws);
+            for (const frame of FRAMES()) ws.send(JSON.stringify(frame));
+          });
+          await opened.page.goto(`${server!.origin}/s/${SESSION.id}`);
+          const option = view.width >= 1280 ? `${CARD} button.opt` : '.sheet-panel button.opt';
+          await opened.page.waitForSelector(option, { timeout: 30_000 });
+          await expect.poll(() => healthReads, { timeout: 10_000, interval: 50 }).toBeGreaterThanOrEqual(1);
+          await opened.page.waitForTimeout(800);
+          stalled = true;
+          if (mount === 'past the lease') await opened.page.clock.setFixedTime(NOW * 1000 + 60_001);
+          const before = healthReads;
+          await opened.page.locator(option).nth(1).click();
+          if (mount === 'past the lease') {
+            await expect.poll(() => family.length, { timeout: 3_000, interval: 50 }).toBe(1);
+            expect(JSON.parse(family[0]!), 'the second row answers option 2, on the family\'s door').toMatchObject({ kind: 'dialog', optionIndex: 2 });
+            expect(old, 'nothing goes to the old door').toEqual([]);
+          } else {
+            await expect.poll(() => old.length, { timeout: 3_000, interval: 50 }).toBe(1);
+            expect(JSON.parse(old[0]!), 'the second row answers option 2, on the old door').toMatchObject({ optionIndex: 2 });
+            expect(family, 'nothing goes to the family\'s door').toEqual([]);
+          }
+          expect(healthReads, 'the tap re-read /health behind the answer').toBeGreaterThan(before);
+          expect(opened.errors).toEqual([]);
+        } finally {
+          await opened.ctx.close();
+        }
+      }, 90_000);
+    }
+  }
+});
