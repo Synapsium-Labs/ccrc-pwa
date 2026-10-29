@@ -102,7 +102,7 @@ export interface LandingFacts {
   /** The survivor run's current episode head (`currentEpisode(run.id).head`): the head the advance VERIFIED, which is
    *  the live tip when it accepted a claim through the radar's lineage (landing order wave 4, D-7102). `null` is a run
    *  with no episode head, and its brief prints exactly the text it always did. Read once, just before a mail is
-   *  composed, and never for a notice that ends without one. */
+   *  composed, never for a notice that ends without one, and for a dequeue only of a run at `merging` (D-7470). */
   head?: string | null;
 }
 
