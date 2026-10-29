@@ -23,6 +23,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { FleetSession } from '../../../shared/api';
 import { apiErrorText, kickoffErrorText } from '../lib/api';
 import { navigate } from '../lib/router';
+import { sessionPath } from '../lib/routes';
 import type { FleetStore } from '../stores/fleet';
 import {
   START_PROGRAM_WAIT_MS, liveIdsIn, startErrorText, startedSessionFor,
@@ -179,7 +180,7 @@ export function useProgramAttempt(
       .then(() => {
         if (gen.current !== w.mine) return; // superseded — a later close/open owns the phase now
         setStarting(false);
-        navigate(`/s/${encodeURIComponent(session.id)}`);
+        navigate(sessionPath(session.id));
       })
       .catch((err: unknown) => {
         if (gen.current !== w.mine) return; // superseded — a later close/open owns the phase now
@@ -330,7 +331,7 @@ export function useProgramAttempt(
       await queueKickoff(k.sessionId, { slug: k.slug, title: k.title });
       if (gen.current !== mine) return; // superseded — a later close/open owns the phase now
       setFailure(null);
-      navigate(`/s/${encodeURIComponent(k.sessionId)}`);
+      navigate(sessionPath(k.sessionId));
     } catch (err: unknown) {
       if (gen.current !== mine) return; // superseded — the block this would re-plant is retired
       setFailure({ ...k, why: kickoffErrorText(apiErrorText(err)) });
