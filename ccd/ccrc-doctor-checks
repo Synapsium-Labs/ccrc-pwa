@@ -8399,9 +8399,12 @@ _check_scope-sweep() {
 # came back unmeasured (", K unmeasured") when some but not all did.
 # AN INTERRUPTED TICK READS AS A RUNNING ONE (review 1140 F2, accepted): a SIGTERM or SIGINT leaves the probe in the interim
 # record's shape (R7: store.after and scratch.sizeKiB null), so until the next tick rewrites the trio this check reads it as a
-# tick still running, and its PASS line carries the previous tick's main-health verdict. That is what it shows during every
-# running tick too, bounded by the next tick and by the stale arm. Telling an interrupted tick from a running one needs an
-# explicit marker, which is a later wave's to add if a reader needs it.
+# tick still running. Its PASS line carries the previous tick's main-health verdict when the signal landed before this tick's
+# main-health write, and this tick's when it landed after that write and before the closing rewrite's nulling test (review
+# 1143 A1). A signal before the tick's first `probe` write leaves the previous complete record, and one recorded after the
+# nulling test leaves the measured record whole. That is what it shows during every running tick too, bounded by the next
+# tick and by the stale arm. Telling an interrupted tick from a running one needs an explicit marker, which is a later wave's
+# to add if a reader needs it.
 # A red base is likewise a fact about the repository, and the PASS line says "red". The PASS line per project reads
 # `<project>: N heads, M conflicting with <base>, <base> green; store +K objects, scratch S KiB this tick`: the store figure is
 # the change in the project's object count over its last tick (the probe's scratch is meant to keep it at +0, spec 12).

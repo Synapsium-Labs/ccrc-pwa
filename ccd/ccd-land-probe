@@ -70,9 +70,10 @@
 #   4. For each conf, sorted, while the tick budget lasts: parse it, skip a paused project, then within the project
 #      budget record store.before, read the open heads, then make the scratch and fetch, measure base x head and the
 #      pairs, write `probe`, `main-health` and each lineage (a failed or cut fetch, or a scratch, alternates or
-#      refspec failure or any other exception before the first write, writes all of them unmeasured as
-#      `fetch-failed`: the probe's set has no closer word), rewrite `probe` with store.after and the scratch size,
-#      remove the scratch.
+#      refspec failure or any other exception before the first write, writes them unmeasured as `fetch-failed`: the
+#      probe's set has no closer word; a lineage is left as it was when the registry cannot be listed, when its
+#      registry row cannot be read, and when a signal interrupts the tick), rewrite `probe` with store.after and the
+#      scratch size, remove the scratch.
 #   5. Exit 0, or 128 plus the number of a signal recorded or held after the last checkpoint.
 #
 # PATHS
@@ -213,8 +214,9 @@ OPTION_PREFIXES = ('-c', '--config-env', '-C', '--git-dir', '--work-tree', '--ex
 # checked wherever its element stands, before an operand or after one. A literal `--` is admitted for the fetch alone,
 # and after it git reads operands only, so the door refuses every element that starts with `-` (answering `option
 # <opt>`); the prefix rule above still runs first. This is a deliberate departure from the plan's prefix deny list
-# (fix round 1, review 1109, F2 and A9; fix round 2, review 1125). Bound once, here, and never written: R5b's AST census
-# refuses a rebinding, an item or attribute store, a delete and a method call on it anywhere else (review 1140 A2).
+# (fix round 1, review 1109, F2 and A9; fix round 2, review 1125). Bound once, here, and read only in git_check: R5b's
+# AST census pins every node that names it, exactly (this binding and git_check's two reads), so a rebinding, a store, a
+# delete, a method call, a copy or an alias anywhere else is red (review 1140 A2, review 1143 F4).
 OPTION_FORMS = {
     ('project', 'rev-parse'): ('--verify', '-q'),
     ('project', 'rev-list'): (),
@@ -300,7 +302,7 @@ def git_check(where, args):
         for p in OPTION_PREFIXES:
             if a.startswith(p):
                 raise ProbeRefused('option ' + p)
-    # Read by subscript: R5b's census refuses any write to the table and any method called on it (review 1140 A2).
+    # Read by subscript and `in`: these two reads are the only ones R5b's census admits (review 1140 A2, review 1143 F4).
     forms = OPTION_FORMS[(where, sub)] if (where, sub) in OPTION_FORMS else ()
     past = False   # after the fetch's `--`: git reads operands only, and the door refuses every dash-led one
     for a in args[1:]:
@@ -871,45 +873,103 @@ def read_small(path, cap=4096):
         os.close(fd)
 
 
-def reg_field(rid, field):
-    data = read_small(REG + '/' + rid + '.' + field)
-    if data is None or len(data) > 4096:
-        return None
+# A registry field that exists but cannot be read whole: never None (absent) and never a string (review 1143 F6).
+UNREADABLE = object()
+
+
+def read_reg_field(path, cap=4096):
+    """read_small's measured sibling, for the registry fields: None only when the open answers ENOENT (the field is
+    absent), UNREADABLE for every other failure (any other open or read error, a symlink, which O_NOFOLLOW answers
+    ELOOP, or a file that is not regular), else at most cap + 1 bytes."""
     try:
-        text = data.decode('utf-8')
-    except UnicodeDecodeError:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except FileNotFoundError:
         return None
-    text = text.rstrip('\n')
-    return None if '\n' in text else text
+    except OSError:
+        return UNREADABLE
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            return UNREADABLE
+        return os.read(fd, cap + 1)
+    except OSError:
+        return UNREADABLE
+    finally:
+        os.close(fd)
+
+
+def reg_field(rid, field):
+    """One registry field: None when it is absent, its one line as text, or UNREADABLE when it exists but cannot be
+    read whole (an open or read error, a symlink, not a regular file, over 4096 bytes, not UTF-8, more than one line).
+    The probe never narrows a distinction it received: an unreadable field is not an absent one."""
+    data = read_reg_field(REG + '/' + rid + '.' + field)
+    if data is None:
+        return None
+    text = None
+    if data is not UNREADABLE and len(data) <= 4096:
+        try:
+            text = data.decode('utf-8').rstrip('\n')
+        except UnicodeDecodeError:
+            text = None
+    if text is None or '\n' in text:
+        return UNREADABLE
+    return text
+
+
+Rows = namedtuple('Rows', ['rows', 'held'])   # the project's rows as (id, branch), and the ids of the rows held
 
 
 def project_rows(project):
-    """Every registry row of the project: (id, branch), the branch None when it cannot be read."""
-    rows = []
+    """The project's registry rows, or None when the registry cannot be listed (no row can be decided then).
+    Rows(rows, held): rows are (id, branch), the branch None when the row has no `.branch`; held are the ids of the
+    rows that could not be read: an unreadable `.project`, or a `.project` naming this project beside an unreadable
+    `.branch`. A held row has no branch to report, so it never reaches measure or qualifying, and its id goes straight
+    into the prune's keep set: its old lineage file is neither rewritten nor removed, on any route. Holding an id that
+    is not this project's is harmless, because the prune reads only this project's directory. Each call that cannot
+    list, or that holds a row, logs one line of fixed words, with no path and no id."""
     try:
         names = sorted(os.listdir(REG))
     except OSError:
-        return rows
+        log('lineage-skip: the registry could not be listed')
+        return None
+    rows = []
+    held = set()
     for n in names:
         if not n.endswith('.project'):
             continue
         rid = n[:-len('.project')]
-        if not is_registry_id(rid) or reg_field(rid, 'project') != project:
+        if not is_registry_id(rid):
             continue
-        rows.append((rid, reg_field(rid, 'branch')))
-    return rows
+        proj = reg_field(rid, 'project')
+        if proj is UNREADABLE:
+            held.add(rid)
+            continue
+        if proj != project:
+            continue
+        branch = reg_field(rid, 'branch')
+        if branch is UNREADABLE:
+            held.add(rid)
+            continue
+        rows.append((rid, branch))
+    if held:
+        log('lineage-skip: a registry row could not be read')
+    return Rows(rows, held)
 
 
 def qualifying(rows):
     """(the rows that qualify for a lineage file, the rows left undecided as (id, branch)). Only a ws/ branch is read,
     each row on its own, with `rev-parse --verify -q refs/heads/<branch>`, and only two answers decide: rc 0 with a
-    40-hex sha qualifies, and rc 1 (the ref is missing) does not qualify. A branch the git door refuses cannot qualify
-    either (decided, logged once). Every other answer leaves the row undecided: rc None (a deadline, a spent budget, a
-    recorded signal, a spawn failure), a negative rc (a child a signal killed: the handler's own kill, or a stop that
-    signalled the child directly), 128 (an unreadable repository) or any other value. An undecided row's previous file
-    stays on a measured base; on a failed fetch, and in the before-first-write fallback, it is rewritten unmeasured
-    with tip null. Never pruned: the checkpoint after the read is a no-op in the fallback (CLOSING), so this rule is
-    what keeps a killed read from deciding the row."""
+    40-hex sha qualifies, and rc 1 (git answers that the ref is not there: a missing ref, and also one git itself
+    ignores as broken or cannot read) does not qualify. Git gives no distinction through this door, so the probe takes
+    its answer (review 1143 F1): such a row's old file is pruned, and wave 4 reads the absent file as
+    `lineage-unmeasured`. A branch the git door refuses cannot qualify either (decided, logged once), and neither can a
+    row with no `.branch` or a branch outside ws/. Every other answer leaves the row undecided: rc None (a deadline, a
+    spent budget, a recorded signal, a spawn failure), a negative rc (a child a signal killed: the handler's own kill,
+    or a stop that signalled the child directly), 128 (an unreadable repository), rc 0 with an answer that is not 40
+    hex, or any other value. An undecided row's previous file stays on a measured base; on a failed fetch, and in the
+    before-first-write fallback, it is rewritten unmeasured with tip null. Never pruned: the checkpoint after the read
+    is a no-op in the fallback (CLOSING), so this rule is what keeps a killed read from deciding the row. A HELD row
+    (project_rows: its `.project` or `.branch` could not be read) never reaches here: it has no branch to report, so it
+    gets no unmeasured rewrite, and it is held whole, its old file neither rewritten nor removed, not undecided."""
     out = []
     undecided = []
     for rid, branch in rows:
@@ -1169,13 +1229,18 @@ def write_lineage_unmeasured(project, ldir, rid, branch, tip, why):
     write_json(ldir, rid + '.lineage', lineage_unmeasured(project, rid, branch, tip, why))
 
 
-def lineage_pass(project, ldir, rows, base_sha, fail_why):
-    """Write each qualifying row's lineage, and remove the stale files. base_sha None is a failed fetch (or one the
-    budget cut): every qualifying row gets the unmeasured shape, and so does every row the local read left undecided
-    when it has an old file, whose tip is then unknown (null): no old record outlives a failed fetch. With a measured
-    base an undecided row keeps its previous file. One row never costs another: a failure inside a row is that row's
-    alone."""
-    quals, undecided = qualifying(rows)
+def lineage_pass(project, ldir, listing, base_sha, fail_why):
+    """Write each qualifying row's lineage, and remove the stale files. listing is project_rows' answer. base_sha None
+    is a failed fetch (or one the budget cut): every qualifying row gets the unmeasured shape, and so does every row
+    the local read left undecided when it has an old file, whose tip is then unknown (null). An old record outlives a
+    failed fetch only when the registry cannot be listed (listing None: no lineage file is written and none is
+    removed), when a registry row cannot be read (held: its id is kept, its file untouched), or when a signal
+    interrupts the tick (A6: on a failed or cut fetch, or a slug that is None, CLOSING is false, so a signal raises at
+    qualifying's checkpoint, before any row is rewritten). With a measured base an undecided row keeps its previous
+    file. One row never costs another: a failure inside a row is that row's alone."""
+    if listing is None:
+        return
+    quals, undecided = qualifying(listing.rows)
     if base_sha is None:
         for rid, branch in undecided:
             try:
@@ -1199,13 +1264,13 @@ def lineage_pass(project, ldir, rows, base_sha, fail_why):
             write_json(ldir, rid + '.lineage', doc)
         except Exception as e:
             log('lineage-error: one registry row was not measured (%s)' % type(e).__name__)
-    prune_lineage(ldir, set(q[0] for q in quals) | set(u[0] for u in undecided))
+    prune_lineage(ldir, set(q[0] for q in quals) | set(u[0] for u in undecided) | listing.held)
 
 
-def guarded_lineage(project, ldir, rows, base_sha, fail_why):
+def guarded_lineage(project, ldir, listing, base_sha, fail_why):
     """The lineage pass must never stop the final probe rewrite behind it."""
     try:
-        lineage_pass(project, ldir, rows, base_sha, fail_why)
+        lineage_pass(project, ldir, listing, base_sha, fail_why)
     except Exception as e:
         log('lineage-error: the lineage pass stopped (%s)' % type(e).__name__)
 
@@ -1237,7 +1302,10 @@ def measure(base_sha, heads, rows):
 
 def finish_probe(ldir, doc, store, interrupted):
     """The probe's closing rewrite (store.after, scratch.sizeKiB, elapsedMs), run from probe_project's finally once the
-    first `probe` write happened, so the record is complete however the tick ended. What was measured stands (state, why,
+    first `probe` write happened, so the record is complete however the tick ended, with one exception (review 1143
+    A6): on a failed or cut fetch, or a slug that is None, a signal raised inside write_failed's lineage pass leaves
+    `first` unset, so this does not run, and `probe` keeps write_failed's first record, which has the interim shape
+    (store.after and scratch.sizeKiB null) and its unmeasured state and why. What was measured stands (state, why,
     heads, pairs, at are not touched); each figure that cannot be measured stays null. A tick being terminated measures
     nothing more (no child is started), and writes the record as it is. A signal recorded before the nulling test below
     (before the rewrite, or while its count or size is measured) makes it an interrupted record too (store.after and
@@ -1257,15 +1325,16 @@ def finish_probe(ldir, doc, store, interrupted):
     write_json(ldir, 'probe', doc)
 
 
-def write_failed(project, ldir, base_ref, rows, store, fail, child):
-    """The unmeasured trio: `probe` (why fail[0]), `main-health` (why fail[1]) and every lineage (why fail[2]). Returns
-    the probe record, for the closing rewrite."""
+def write_failed(project, ldir, base_ref, listing, store, fail, child):
+    """The unmeasured trio: `probe` (why fail[0]), `main-health` (why fail[1]) and the lineages (why fail[2]), as
+    lineage_pass decides them: none when the registry cannot be listed, and never a held row's. Returns the probe
+    record, for the closing rewrite."""
     first = probe_doc(project, base_ref, None, 'unmeasured', fail[0], [], False, [], [], False, store, None)
     note_unmeasured(project, 'probe', fail[0], child)
     write_json(ldir, 'probe', first)
     note_unmeasured(project, 'main-health', fail[1], child)
     write_json(ldir, 'main-health', unmeasured_health(project, None, fail[1]))
-    guarded_lineage(project, ldir, rows, None, fail[2])
+    guarded_lineage(project, ldir, listing, None, fail[2])
     return first
 
 
@@ -1279,13 +1348,13 @@ def probe_project(project, conf):
     base_ref = conf['base']
     SCRATCH = None
     first = None   # the probe record, once it has been written the first time
-    rows = None
+    listing = None   # project_rows' answer: None until it is read, and None when the registry cannot be listed
     store = {'before': None, 'after': None}
     interrupted = False
     try:
         store['before'] = store_counts()
         checkpoint()
-        rows = project_rows(project)
+        listing = project_rows(project)
         r = git_ro('project', ['config', '--get', 'remote.origin.url'], GIT_T)
         checkpoint()
         slug = repo_slug(r.out.rstrip('\n')) if r.rc == 0 else None
@@ -1299,10 +1368,10 @@ def probe_project(project, conf):
             why, base_sha, fail_child = fetch_into_scratch(base_ref, heads if gh_ok else [])
             fail = (why, 'budget' if why == 'budget' else 'fetch-failed', 'fetch-failed') if why else None
         if fail:
-            first = write_failed(project, ldir, base_ref, rows, store, fail, fail_child)
+            first = write_failed(project, ldir, base_ref, listing, store, fail, fail_child)
         else:
             if gh_ok:
-                hs, pair_heads, pairs, pairs_cut = measure(base_sha, heads, rows)
+                hs, pair_heads, pairs, pairs_cut = measure(base_sha, heads, listing.rows if listing is not None else [])
                 first = probe_doc(project, base_ref, base_sha, 'measured', None, hs, heads_cut, pairs, pair_heads, pairs_cut, store, None)
             else:
                 first = probe_doc(project, base_ref, base_sha, 'unmeasured', 'gh-failed', [], False, [], [], False, store, None)
@@ -1312,19 +1381,21 @@ def probe_project(project, conf):
             if verdict['state'] == 'unmeasured':
                 note_unmeasured(project, 'main-health', verdict['why'], verdict.get('child'))
             write_json(ldir, 'main-health', health_doc(project, base_sha, verdict))
-            guarded_lineage(project, ldir, rows, base_sha, None)
+            guarded_lineage(project, ldir, listing, base_sha, None)
     except BaseException as e:
         CLOSING = True
         # A checkpoint's SystemExit, or an exception with a signal recorded: measure nothing more.
         interrupted = not isinstance(e, Exception) or SIGNALLED is not None
         if first is None and not interrupted:
             # An exception or a refusal before the first write (a scratch or alternates failure, a refused refspec):
-            # the old files must not outlive it as if they were this tick's. The child an exception left in flight is
-            # killed before the fallback starts one of its own.
+            # the old files must not outlive it as if they were this tick's, except where lineage_pass leaves them:
+            # when the registry cannot be listed, when a registry row cannot be read (held), and when a signal
+            # interrupts the tick. A listing still None is read again here; None again means the same thing. The child
+            # an exception left in flight is killed before the fallback starts one of its own.
             kill_inflight()
             try:
-                first = write_failed(project, ldir, base_ref, rows if rows is not None else project_rows(project), store,
-                                     ('fetch-failed', 'fetch-failed', 'fetch-failed'), None)
+                first = write_failed(project, ldir, base_ref, listing if listing is not None else project_rows(project),
+                                     store, ('fetch-failed', 'fetch-failed', 'fetch-failed'), None)
             except Exception as e2:
                 log('project-error %s: the unmeasured records were not written (%s)' % (project, type(e2).__name__))
         raise

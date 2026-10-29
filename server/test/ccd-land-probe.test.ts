@@ -1612,6 +1612,145 @@ describe('ccd-land-probe: only rc 0 and rc 1 decide a row (fix round 3, review 1
     expect(fx.readJson('probe').state).toBe('measured');
     expect(fx.exists(ALPHA), 'the old file of a row whose branch is gone').toBe(false);
   });
+
+  /** One answer of the row's `rev-parse` that must leave it undecided: the old file byte-identical after a measured
+   *  tick, and rewritten unmeasured with `tip: null` after a failed-fetch tick (review 1143 F7). */
+  const undecidedEverywhere = (name: string, act: string): void => {
+    fx.addHead(1, { 'a.txt': 'a\n' });
+    fx.addRow('lane-a-proj-a-alpha', 'ws/alpha');
+    fx.conf(fx.project, 'lineage=on\n');
+    const old = measuredOnce();
+    fx.wrapGit(`case " $* " in *"refs/heads/ws/alpha"*) ${act};; esac`);
+    expect(fx.run().status, `${name}, measured base`).toBe(0);
+    expect(fx.readJson('probe').state, name).toBe('measured');
+    expect(fs.readFileSync(path.join(fx.landDir, ALPHA), 'utf8'), `${name}, measured base: the old file`).toBe(old);
+
+    measuredOnce();
+    fx.wrapGit(`case " $* " in *" fetch "*) exit 1;; *"refs/heads/ws/alpha"*) ${act};; esac`);
+    expect(fx.run().status, `${name}, failed fetch`).toBe(0);
+    expect(fx.readJson('probe'), name).toMatchObject({ state: 'unmeasured', why: 'fetch-failed' });
+    expect(fx.readJson(ALPHA), `${name}, failed fetch`).toMatchObject({ state: 'unmeasured', why: 'fetch-failed', tip: null, chain: [] });
+  };
+
+  it('F7-a an answer of rc 0 that is not 40 hex leaves the row undecided: kept on a measured base, rewritten with tip null on a failed fetch (review 1143 F7)', { timeout: 120_000 }, () => {
+    undecidedEverywhere('rc 0, not hex', 'echo not-a-sha; exit 0');
+  });
+
+  it('F7-b an answer of rc 2 leaves the row undecided: kept on a measured base, rewritten with tip null on a failed fetch (review 1143 F7)', { timeout: 120_000 }, () => {
+    undecidedEverywhere('rc 2', 'exit 2');
+  });
+});
+
+describe('ccd-land-probe: a registry the probe cannot read decides no row (fix round 4, review 1143 F5, F6)', () => {
+  const ALPHA = 'lane-a-proj-a-alpha';
+  const BETA = 'lane-a-proj-a-beta';
+  const FAIL_FETCH = 'case " $* " in *" fetch "*) exit 1;; esac';
+  const file = (id: string): string => path.join(fx.landDir, `${id}.lineage`);
+  const bytes = (id: string): string => fs.readFileSync(file(id), 'utf8');
+  /** The given ws/ rows, measured once so each has an old lineage file; the old bytes, by id. */
+  const seeded = (ids: string[]): Record<string, string> => {
+    fx.addHead(1, { 'a.txt': 'a\n' });
+    for (const id of ids) fx.addRow(id, `ws/${id.slice('lane-a-proj-a-'.length)}`);
+    fx.conf(fx.project, 'lineage=on\n');
+    expect(fx.run().status).toBe(0);
+    const old: Record<string, string> = {};
+    for (const id of ids) {
+      expect(fx.readJson(`${id}.lineage`).state, id).toBe('measured');
+      old[id] = bytes(id);
+    }
+    return old;
+  };
+  const unchanged = (old: Record<string, string>, what: string): void => {
+    for (const [id, text] of Object.entries(old)) {
+      expect(fs.existsSync(file(id)), `${what}: ${id}.lineage is still there`).toBe(true);
+      expect(bytes(id), `${what}: ${id}.lineage is byte-identical`).toBe(text);
+    }
+  };
+  const lines = (stderr: string): string[] => stderr.split('\n').filter(Boolean);
+  /** The fixed skip line is said, and no line names a path, nor any of `ids`. */
+  const said = (stderr: string, line: string, ids: string[], what: string): void => {
+    expect(lines(stderr), `${what}: the skip line`).toContain(`land-probe: lineage-skip: ${line}`);
+    for (const l of lines(stderr)) {
+      expect(l, `${what}: a line names a path`).not.toContain(h.home);
+      expect(l, `${what}: a line names a path`).not.toContain('.cc-sessions');
+      for (const id of ids) expect(l, `${what}: a line names ${id}`).not.toContain(id);
+    }
+  };
+
+  it('F5-a a registry that can be traversed but not listed (mode 0311) keeps every old lineage byte-identical, on a measured tick and on a failed fetch', { timeout: 120_000 }, () => {
+    const old = seeded([ALPHA, BETA]);
+    fs.chmodSync(fx.reg, 0o311);
+    try {
+      const m = fx.run();
+      expect(m.status, 'measured tick').toBe(0);
+      expect(fx.readJson('probe').state, 'measured tick').toBe('measured');
+      unchanged(old, 'measured tick');
+      said(m.stderr, 'the registry could not be listed', [ALPHA, BETA], 'measured tick');
+
+      fx.wrapGit(FAIL_FETCH);
+      const f = fx.run();
+      expect(f.status, 'failed fetch').toBe(0);
+      expect(fx.readJson('probe'), 'failed fetch').toMatchObject({ state: 'unmeasured', why: 'fetch-failed' });
+      unchanged(old, 'failed fetch');
+      said(f.stderr, 'the registry could not be listed', [ALPHA, BETA], 'failed fetch');
+    } finally {
+      fs.chmodSync(fx.reg, 0o755);
+    }
+  });
+
+  it('F6-a a .branch that cannot be read (mode 000) holds its row: the old file is byte-identical on a measured tick and on a failed fetch, and the other row is measured', { timeout: 120_000 }, () => {
+    const old = seeded([ALPHA, BETA]);
+    const branch = path.join(fx.reg, `${ALPHA}.branch`);
+    fs.chmodSync(branch, 0o000);
+    try {
+      const m = fx.run();
+      expect(m.status, 'measured tick').toBe(0);
+      unchanged({ [ALPHA]: old[ALPHA]! }, 'measured tick');
+      expect(fx.readJson(`${BETA}.lineage`).state, 'the other row').toBe('measured');
+      said(m.stderr, 'a registry row could not be read', [ALPHA], 'measured tick');
+
+      fx.wrapGit(FAIL_FETCH);
+      const f = fx.run();
+      expect(f.status, 'failed fetch').toBe(0);
+      unchanged({ [ALPHA]: old[ALPHA]! }, 'failed fetch');
+      expect(fx.readJson(`${BETA}.lineage`), 'the other row').toMatchObject({ state: 'unmeasured', why: 'fetch-failed' });
+      said(f.stderr, 'a registry row could not be read', [ALPHA], 'failed fetch');
+    } finally {
+      fs.chmodSync(branch, 0o644);
+    }
+  });
+
+  it('F6-b a .branch holding two lines holds its row: the old file is byte-identical on a measured tick', { timeout: 90_000 }, () => {
+    const old = seeded([ALPHA]);
+    fs.writeFileSync(path.join(fx.reg, `${ALPHA}.branch`), 'ws/alpha\nws/other\n');
+    const m = fx.run();
+    expect(m.status).toBe(0);
+    unchanged(old, 'measured tick');
+    said(m.stderr, 'a registry row could not be read', [ALPHA], 'measured tick');
+  });
+
+  it('F6-c a .project that cannot be read (mode 000) holds its row: the old file is byte-identical on a measured tick', { timeout: 90_000 }, () => {
+    const old = seeded([ALPHA]);
+    const project = path.join(fx.reg, `${ALPHA}.project`);
+    fs.chmodSync(project, 0o000);
+    try {
+      const m = fx.run();
+      expect(m.status).toBe(0);
+      unchanged(old, 'measured tick');
+      said(m.stderr, 'a registry row could not be read', [ALPHA], 'measured tick');
+    } finally {
+      fs.chmodSync(project, 0o644);
+    }
+  });
+
+  it('F6-d (control) a .branch that is absent is decided: the row has no branch, and its old file is pruned', { timeout: 90_000 }, () => {
+    seeded([ALPHA]);
+    fs.rmSync(path.join(fx.reg, `${ALPHA}.branch`));
+    const m = fx.run();
+    expect(m.status).toBe(0);
+    expect(fx.exists(`${ALPHA}.lineage`), 'the old file of a row with no .branch').toBe(false);
+    expect(m.stderr).not.toContain('lineage-skip');
+  });
 });
 
 describe('ccd-land-probe: a failure never leaves an old record (fix round 1, review 1109 F6, A3, A5, A12)', () => {
