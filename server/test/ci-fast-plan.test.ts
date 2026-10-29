@@ -10,7 +10,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { fastSelection, relatedFromVitestList, guardTests, parseUntraced, GUARD_TESTS, PIN_MAP_CARRIED, TREE_READER, SESSION_HOOK_TRIGGERS } from '../../.github/ci/fast-plan.mjs';
+import { fastSelection, relatedFromVitestList, guardTests, parseUntraced, scanShape, scansSourceTree, treeScanners, GUARD_TESTS, PIN_MAP_CARRIED, SCANNER_MAX_MS, TREE_READER, SESSION_HOOK_TRIGGERS } from '../../.github/ci/fast-plan.mjs';
 import { liveTestFiles, vitestFollows } from '../../.github/ci/select-tests.mjs';
 import { untracedOutput } from '../../.github/ci/select.mjs';
 
@@ -118,6 +118,70 @@ describe('the guard suites: patterns, less the map-carried pins, plus every test
     expect(guardTests(['server/test/x.test.ts'], () => { throw new Error('EACCES'); })).toEqual(['server/test/x.test.ts']);
     expect(guardTests(['server/test/x.test.ts'], () => 'import { x } from "../src/x.js";')).toEqual([]);
     expect(GUARD_TESTS.length).toBeGreaterThan(0);
+  });
+});
+
+// A whole-tree ratchet passed its pull request run and then ejected that PR from the merge queue: it walks
+// server/src with readdirSync and reads every file as text, so vitest relates it to no change. Every test that lists
+// a source tree itself is a guard, as long as its file is cheap enough to run on every pull request.
+describe('the tree scanners: every test that lists a source tree itself runs on every fast pull request', () => {
+  const live = liveTestFiles(ROOT);
+  const read = (f: string): string => readFileSync(path.join(ROOT, f), 'utf8');
+
+  it('a pull request touching only server/src/coord/childReclaim.ts runs the plain io.readdir ratchet (fleetio-contract)', () => {
+    const guards = guardTests(live, read);
+    const sel = fastSelection({ live, related: [], guards, changed: ['server/src/coord/childReclaim.ts'] });
+    expect(sel.files).toContain('server/test/fleetio-contract.test.ts');
+  });
+
+  it('the scanners this tree has are found, each by the call that lists a source root', () => {
+    const memo = new Map();
+    for (const f of ['fleetio-contract', 'coord-routes-single-file', 'landing-words', 'no-routing-keystroke-from-server', 'readme-holds',
+      'run-binding', 'license', 'module-format']) {
+      expect(scansSourceTree(`server/test/${f}.test.ts`, read, memo), f).not.toBeNull();
+    }
+    // Through a census helper: the test calls a helper's scanner, and lists nothing itself.
+    expect(scansSourceTree('server/test/census-w5/accountMarkers.test.ts', read, memo)).not.toBeNull();
+    // A fixture suite that lists its own temp dirs, or a fixture tree's `ccd`, is not a scanner.
+    for (const f of ['ccrc-update-kept', 'tmp-sweep', 'ccrc-sweep-window', 'history-lib']) {
+      expect(scansSourceTree(`server/test/${f}.test.ts`, read, memo), f).toBeNull();
+    }
+  });
+
+  it('scanShape: a lister called on a source root, a name bound to one, a loop over roots; never a fixture dir or a comment', () => {
+    const scans = (src: string): boolean => scanShape(src).hit !== null;
+    expect(scans("const SRC = path.join(here, '..', 'src');\nconst walk = (d) => readdirSync(d).flatMap((n) => walk(n));\nwalk(SRC);")).toBe(true);
+    expect(scans("readdirSync(path.join(REPO, 'server', 'src'), { recursive: true });")).toBe(true);
+    expect(scans("for (const d of ['server/src', 'shared']) {\n  walk(path.join(root, d));\n}\nfunction walk(x) { return readdirSync(x); }")).toBe(true);
+    expect(scans("globSync('**/*.ts', { cwd: 'pwa/src' });")).toBe(true);
+    expect(scans("const ccd = readdirSync(path.join(REPO, 'ccd'));")).toBe(true);
+    // A file or a subdirectory under a root, a fixture base, a comment, a root that is only read: not a scan.
+    expect(scans("readdirSync(path.join(REPO, 'shared', 'api.ts'));")).toBe(false);
+    expect(scans("readdirSync(path.join(here, '..', 'src', 'coord'));")).toBe(false);
+    expect(scans("readdirSync(join(home, 'ccd'));")).toBe(false);
+    expect(scans("// readdirSync(path.join(REPO, 'server/src'))\nreaddirSync(tmp);")).toBe(false);
+    expect(scans("readFileSync(path.join(REPO, 'shared'), 'utf8'); readdirSync(tmp);")).toBe(false);
+    // A loop variable is bound for the loop's body only, not for a later call that reuses the name.
+    expect(scans("for (const f of ['server/src']) {\n  x(f);\n}\nreaddirSync(f);")).toBe(false);
+  });
+
+  it('a scanner whose file measured over SCANNER_MAX_MS is left to the merge queue; an unmeasured one runs', () => {
+    const light = 'server/test/fleetio-contract.test.ts';
+    const scanners = treeScanners(live, read).map((s) => s.file);
+    expect(scanners).toContain(light);
+    const heavyOne = scanners.find((f) => !GUARD_TESTS.some((re) => re.test(f)) && f !== light) ?? '';
+    expect(heavyOne).not.toBe('');
+    const guards = guardTests(live, read, { [light]: 100, [heavyOne]: SCANNER_MAX_MS + 1 });
+    expect(guards).toContain(light);
+    expect(guards).not.toContain(heavyOne);
+    expect(guardTests(live, read, {})).toContain(heavyOne);
+    // The cap never drops a pattern guard.
+    expect(guardTests(live, read, { 'server/test/deviation-refs.test.ts': 10 * SCANNER_MAX_MS })).toContain('server/test/deviation-refs.test.ts');
+  });
+
+  it('the map-carried pins stay out even when they scan', () => {
+    const scanners = treeScanners(live, read).map((s) => s.file);
+    for (const f of PIN_MAP_CARRIED) expect(scanners, f).not.toContain(f);
   });
 });
 
