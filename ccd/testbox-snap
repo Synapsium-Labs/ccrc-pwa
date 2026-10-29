@@ -1,0 +1,323 @@
+#!/usr/bin/env bash
+# testbox-snap — the test box's transport, fleet host side (D-7405; spec §2.1).
+#
+#   testbox-snap --git-url-base <url> --mirror-path <path> \
+#                --untracked-file-max <bytes> --snapshot-max <bytes> \
+#                --deny-globs '<glob> ...' [--output <path>]... [--ssh-key <file>]
+#
+# WHAT. Sends the session's git state to the test box's mirror as scratch refs under one fresh
+# refs/ccrc-test/<run-id>/, and prints the run frame's git fields (shared/testbox.ts RunSubmit: runId, branch, refs,
+# outputs, forward) as one JSON line on stdout, exit 0. The state is sent, not a commit of it: HEAD, the branch (in the
+# frame), origin/main as the base, the two overrides CCRC_HISTORY_BASE and CCRC_LEDGER_BASE when the environment sets
+# them, and, for a dirty tree, two carrier commits S_I (the staged tree, parent HEAD) and S_W (the worktree tree,
+# parent S_I) pushed as .../snap.
+#
+# FALLS BACK, NEVER BREAKS A RUN. Every refusal prints exactly one `test box: <reason>` line on stdout, in
+# shared/testbox.ts TESTBOX_FALLBACK's words, and exits 3; the caller runs the command locally with that reason. A
+# usage error exits 2.
+#
+# THE SESSION IS NEVER WRITTEN. Every git call runs with the five git location variables scrubbed (GIT_DIR,
+# GIT_WORK_TREE, GIT_INDEX_FILE, GIT_COMMON_DIR, GIT_OBJECT_DIRECTORY: a polluted GIT_DIR has written into the real
+# repository before), hooks off and automatic gc off. The clean check runs with GIT_OPTIONAL_LOCKS=0 so it never
+# refreshes the session's index. The trees are built on a COPY of the session's index (the copy keeps the stat cache,
+# so only files whose stat changed are rehashed). Nothing here writes the session's index, stash, refs, reflogs or
+# worktree files; the only writes are loose objects, which nothing references after the push and git gc collects.
+#
+# NEVER ORIGIN. The push refuses a mirror URL equal (before or after url.<base>.insteadOf) to any URL of any of the
+# clone's own remotes, and names explicit refs/ccrc-test/<run-id>/* destinations only, with --no-verify (the session's
+# pre-push hook stays out), no tags and no submodules.
+#
+# SETTINGS. The two size caps, the deny globs, the mirror URL base and the declared build outputs are the caller's
+# (the wrapper reads them through ccrc's one settings reader: CCRC_TESTBOX_UNTRACKED_FILE_MAX,
+# CCRC_TESTBOX_SNAPSHOT_MAX, CCRC_TESTBOX_DENY_GLOBS, CCRC_TESTBOX_GIT_URL_BASE, CCRC_TESTBOX_GIT_KEY). This file reads
+# no settings file and holds no threshold of its own; the sizes arrive in bytes.
+set -uo pipefail
+
+_tbs_usage() {
+  printf 'usage: testbox-snap --git-url-base <url> --mirror-path <path> --untracked-file-max <bytes> --snapshot-max <bytes> --deny-globs <list> [--output <path>]... [--ssh-key <file>]\n' >&2
+  exit 2
+}
+
+# One line, no control characters: a path or a git message inside a reason stays on the reason's line.
+_tbs_line() { local s=$1; s=${s//[[:cntrl:]]/?}; printf '%s' "$s"; }
+
+# The fallback: one `test box: <reason>` line, exit 3.
+_tbs_fall() { printf 'test box: %s\n' "$(_tbs_line "$1")"; exit 3; }
+
+# The first line of a captured stderr file, for a reason's detail.
+_tbs_first() { local l=''; [[ -s $1 ]] && IFS= read -r l < "$1"; printf '%s' "${l:-no detail}"; }
+
+# git with the five location variables scrubbed, hooks and automatic maintenance off.
+_tbs_git() {
+  env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_COMMON_DIR -u GIT_OBJECT_DIRECTORY \
+    git -c core.hooksPath=/dev/null -c gc.auto=0 -c maintenance.auto=false "$@"
+}
+
+# The same, on the index copy only (never the session's index). A split index is written whole into the copy, so no
+# shared index file is written into the session's git directory.
+_tbs_gix() {
+  env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_COMMON_DIR -u GIT_OBJECT_DIRECTORY \
+    GIT_INDEX_FILE="$TBS_INDEX" \
+    git -c core.hooksPath=/dev/null -c gc.auto=0 -c maintenance.auto=false -c core.splitIndex=false "$@"
+}
+
+# JSON string literal.
+_tbs_json() {
+  local s=$1 out='' c i hex
+  s=${s//\\/\\\\}; s=${s//\"/\\\"}
+  s=${s//$'\n'/\\n}; s=${s//$'\t'/\\t}; s=${s//$'\r'/\\r}
+  if [[ $s == *[[:cntrl:]]* ]]; then
+    for ((i = 0; i < ${#s}; i++)); do
+      c=${s:i:1}
+      if [[ $c == [[:cntrl:]] ]]; then printf -v hex '\\u%04x' "'$c"; out+=$hex; else out+=$c; fi
+    done
+    s=$out
+  fi
+  printf '"%s"' "$s"
+}
+
+# ---- arguments ---------------------------------------------------------------------------------------------------
+TBS_URL_BASE='' TBS_MIRROR_PATH='' TBS_UNTRACKED_MAX='' TBS_SNAPSHOT_MAX='' TBS_DENY='' TBS_SSH_KEY=''
+TBS_HAVE_BASE=0 TBS_HAVE_MIRROR=0 TBS_HAVE_DENY=0
+TBS_OUTPUTS_DECLARED=()
+while (($#)); do
+  case $1 in
+    --git-url-base) (($# >= 2)) || _tbs_usage; TBS_URL_BASE=$2; TBS_HAVE_BASE=1; shift 2 ;;
+    --mirror-path) (($# >= 2)) || _tbs_usage; TBS_MIRROR_PATH=$2; TBS_HAVE_MIRROR=1; shift 2 ;;
+    --untracked-file-max) (($# >= 2)) || _tbs_usage; TBS_UNTRACKED_MAX=$2; shift 2 ;;
+    --snapshot-max) (($# >= 2)) || _tbs_usage; TBS_SNAPSHOT_MAX=$2; shift 2 ;;
+    --deny-globs) (($# >= 2)) || _tbs_usage; TBS_DENY=$2; TBS_HAVE_DENY=1; shift 2 ;;
+    --output) (($# >= 2)) || _tbs_usage; TBS_OUTPUTS_DECLARED+=("$2"); shift 2 ;;
+    --ssh-key) (($# >= 2)) || _tbs_usage; TBS_SSH_KEY=$2; shift 2 ;;
+    *) _tbs_usage ;;
+  esac
+done
+((TBS_HAVE_BASE && TBS_HAVE_MIRROR && TBS_HAVE_DENY)) || _tbs_usage
+[[ $TBS_UNTRACKED_MAX =~ ^[0-9]+$ && $TBS_SNAPSHOT_MAX =~ ^[0-9]+$ ]] || _tbs_usage
+
+TBS_TMP=$(mktemp -d "${TMPDIR:-/tmp}/testbox-snap.XXXXXX") || _tbs_fall 'unreachable (snapshot: no temporary directory)'
+trap 'rm -rf "$TBS_TMP"' EXIT
+TBS_INDEX="$TBS_TMP/index"
+
+# ---- _tbs_runid: 32 lowercase hex characters from /dev/urandom ---------------------------------------------------
+_tbs_runid() {
+  TBS_RUNID=$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')
+  [[ $TBS_RUNID =~ ^[0-9a-f]{32}$ ]] || _tbs_fall 'unreachable (snapshot: no random run id)'
+}
+
+# ---- _tbs_state: HEAD, the branch, the base and the two overrides (spec §2.1 "What a submission carries") ---------
+_tbs_state() {
+  local top name value sha
+  top=$(_tbs_git rev-parse --show-toplevel 2>/dev/null) || _tbs_fall 'unreachable (snapshot: not inside a git work tree)'
+  cd "$top" || _tbs_fall 'unreachable (snapshot: cannot enter the work tree)'
+  TBS_TOP=$top
+  TBS_HEAD=$(_tbs_git rev-parse --verify --quiet --end-of-options 'HEAD^{commit}') || _tbs_fall 'unreachable (snapshot: HEAD names no commit)'
+  TBS_BRANCH=$(_tbs_git symbolic-ref --quiet --short HEAD) || TBS_BRANCH=''
+  TBS_BASE=$(_tbs_git rev-parse --verify --quiet --end-of-options 'origin/main^{commit}') || TBS_BASE=''
+  TBS_FWD_NAMES=() TBS_FWD_VALUES=() TBS_OVR_REFS=() TBS_OVR_SHAS=()
+  for name in CCRC_HISTORY_BASE CCRC_LEDGER_BASE; do
+    [[ -n ${!name+x} ]] || continue
+    value=${!name}
+    TBS_FWD_NAMES+=("$name")
+    if [[ -n $value ]] && sha=$(_tbs_git rev-parse --verify --quiet --end-of-options "$value^{commit}"); then
+      TBS_FWD_VALUES+=("$sha")
+      case $name in
+        CCRC_HISTORY_BASE) TBS_OVR_REFS+=(history-base) ;;
+        CCRC_LEDGER_BASE) TBS_OVR_REFS+=(ledger-base) ;;
+      esac
+      TBS_OVR_SHAS+=("$sha")
+    else
+      # Unresolvable here: forwarded unchanged, so the guard refuses it on both sides the same way.
+      TBS_FWD_VALUES+=("$value")
+    fi
+  done
+}
+
+# ---- _tbs_clean: empty porcelain output is a clean tree; the session's index is not refreshed ----------------------
+_tbs_clean() {
+  GIT_OPTIONAL_LOCKS=0 _tbs_git status --porcelain=v1 -z --untracked-files=all > "$TBS_TMP/status" 2> "$TBS_TMP/err" \
+    || _tbs_fall "unreachable (git status: $(_tbs_first "$TBS_TMP/err"))"
+  if [[ -s $TBS_TMP/status ]]; then TBS_DIRTY=1; else TBS_DIRTY=0; fi
+}
+
+# ---- the index copy: the session's own index (a linked worktree's own), copied with its stat cache ----------------
+_tbs_index_copy() {
+  local ix
+  ix=$(_tbs_git rev-parse --git-path index) || _tbs_fall 'unreachable (snapshot: no index path)'
+  [[ $ix == /* ]] || ix="$TBS_TOP/$ix"
+  if [[ -f $ix ]]; then cp -p "$ix" "$TBS_INDEX" || _tbs_fall 'unreachable (snapshot: cannot copy the index)'; fi
+  # Refresh the COPY's stat cache, so a file whose stat alone changed is not counted as modified below.
+  _tbs_gix update-index -q --refresh > /dev/null 2>&1 || true
+  if [[ -n $(_tbs_gix ls-files -u) ]]; then _tbs_fall 'unmerged paths'; fi
+}
+
+# Sizes of the NUL-separated paths in $1 that exist, one `<size>` line per path, written as two parallel files
+# ($1.paths NUL-separated, $1.sizes newline-separated).
+_tbs_sizes() {
+  local p
+  : > "$1.paths"
+  while IFS= read -r -d '' p; do
+    if [[ -L $p || -e $p ]]; then printf '%s\0' "$p" >> "$1.paths"; fi
+  done < "$1"
+  if [[ -s $1.paths ]]; then
+    xargs -0 "${TBS_STAT[@]}" < "$1.paths" > "$1.sizes" 2>/dev/null || _tbs_fall 'unreachable (snapshot: cannot read file sizes)'
+  else
+    : > "$1.sizes"
+  fi
+}
+
+# ---- _tbs_deny: untracked, unignored paths against the deny globs (spec §2.3) --------------------------------------
+_tbs_deny() {
+  local p g base hits='' globs
+  set -f
+  read -r -a globs <<< "$TBS_DENY"
+  set +f
+  ((${#globs[@]})) || return 0
+  while IFS= read -r -d '' p; do
+    base=${p##*/}
+    for g in "${globs[@]}"; do
+      # shellcheck disable=SC2053 # the right side is a glob on purpose
+      if [[ $base == $g || $p == $g ]]; then hits+="${hits:+ }$p"; break; fi
+    done
+  done < "$TBS_TMP/untracked"
+  [[ -z $hits ]] || _tbs_fall "snapshot refused ($hits)"
+}
+
+# ---- _tbs_caps: one untracked file over the file cap, or everything over the snapshot cap, is never hashed ---------
+_tbs_caps() {
+  local p s total=0 big_p='' big_s=-1 ubig_p='' ubig_s=-1
+  _tbs_sizes "$TBS_TMP/untracked"
+  _tbs_sizes "$TBS_TMP/modified"
+  while IFS= read -r -d '' p <&3 && IFS= read -r s <&4; do
+    total=$((total + s))
+    if ((s > ubig_s)); then ubig_s=$s; ubig_p=$p; fi
+    if ((s > big_s)); then big_s=$s; big_p=$p; fi
+  done 3< "$TBS_TMP/untracked.paths" 4< "$TBS_TMP/untracked.sizes"
+  while IFS= read -r -d '' p <&3 && IFS= read -r s <&4; do
+    total=$((total + s))
+    if ((s > big_s)); then big_s=$s; big_p=$p; fi
+  done 3< "$TBS_TMP/modified.paths" 4< "$TBS_TMP/modified.sizes"
+  if [[ -n $ubig_p ]] && ((ubig_s > TBS_UNTRACKED_MAX)); then _tbs_fall "snapshot too large ($ubig_p $ubig_s)"; fi
+  if ((total > TBS_SNAPSHOT_MAX)); then _tbs_fall "snapshot too large ($big_p $big_s)"; fi
+}
+
+
+# ---- _tbs_trees: I, W, S_I and S_W, on the index copy, with a fixed identity and no signing ------------------------
+# commit-tree <tree> <parent>, message on stdin. The identity and date are fixed, so no identity or signing prompt can
+# block; the two commits only carry the trees, and nothing on the box checks them out.
+_tbs_commit() {
+  GIT_AUTHOR_NAME='ccrc test box' GIT_AUTHOR_EMAIL='snapshot@testbox.invalid' \
+    GIT_AUTHOR_DATE='1970-01-01T00:00:00+0000' GIT_COMMITTER_NAME='ccrc test box' \
+    GIT_COMMITTER_EMAIL='snapshot@testbox.invalid' GIT_COMMITTER_DATE='1970-01-01T00:00:00+0000' \
+    _tbs_gix -c commit.gpgSign=false commit-tree "$1" -p "$2" 2> "$TBS_TMP/err"
+}
+_tbs_trees() {
+  TBS_I=$(_tbs_gix write-tree 2> "$TBS_TMP/err") || _tbs_fall "unreachable (git write-tree: $(_tbs_first "$TBS_TMP/err"))"
+  _tbs_gix add -A -- :/ > /dev/null 2> "$TBS_TMP/err" || _tbs_fall "unreachable (git add: $(_tbs_first "$TBS_TMP/err"))"
+  TBS_W=$(_tbs_gix write-tree 2> "$TBS_TMP/err") || _tbs_fall "unreachable (git write-tree: $(_tbs_first "$TBS_TMP/err"))"
+  TBS_SI=$(printf 'ccrc test box: staged tree\n' | _tbs_commit "$TBS_I" "$TBS_HEAD") \
+    || _tbs_fall "unreachable (git commit-tree: $(_tbs_first "$TBS_TMP/err"))"
+  TBS_SW=$(printf 'ccrc test box: worktree tree\n' | _tbs_commit "$TBS_W" "$TBS_SI") \
+    || _tbs_fall "unreachable (git commit-tree: $(_tbs_first "$TBS_TMP/err"))"
+}
+
+# ---- _tbs_outputs: the declared build outputs the local tree has (spec §2.2) ---------------------------------------
+_tbs_outputs() {
+  local o
+  TBS_OUTPUTS=()
+  for o in ${TBS_OUTPUTS_DECLARED[@]+"${TBS_OUTPUTS_DECLARED[@]}"}; do
+    if [[ -e $TBS_TOP/$o ]]; then TBS_OUTPUTS+=("$o"); fi
+  done
+}
+
+# A URL's comparable form: no file:// scheme, no trailing slash or .git, and a local directory by its real path.
+_tbs_norm() {
+  local u=$1 d
+  u=${u#file://}
+  while [[ $u == */ && $u != / ]]; do u=${u%/}; done
+  for d in "$u" "$u.git" "${u%.git}"; do
+    if [[ $d == /* && -d $d ]]; then (cd "$d" 2>/dev/null && pwd -P) && return 0; fi
+  done
+  u=${u%.git}
+  printf '%s\n' "$u"
+}
+
+# ---- _tbs_push: exactly the run's refs, to the mirror, never to a remote of this clone -----------------------------
+_tbs_push() {
+  local url path base name u mine eff refs=() i
+  # The base, then the row's absolute mirror path: `ssh://<user>@<host>/` and `/srv/m.git` give
+  # `ssh://<user>@<host>/srv/m.git`; a scheme alone (`file://`) keeps its two slashes.
+  path=$TBS_MIRROR_PATH base=$TBS_URL_BASE
+  [[ $path == /* ]] || _tbs_fall 'unreachable (push: the mirror path is not absolute)'
+  while [[ $base == */ && $base != *:// ]]; do base=${base%/}; done
+  url=$base$path
+  [[ -n $url && $url != -* ]] || _tbs_fall 'unreachable (push: no mirror URL)'
+  eff=$(_tbs_git ls-remote --get-url "$url" 2>/dev/null) || eff=$url
+  local cands=("$url" "$eff")
+  [[ -n $TBS_URL_BASE ]] && cands+=("$TBS_URL_BASE")
+  while IFS= read -r name; do
+    [[ -n $name ]] || continue
+    while IFS= read -r u; do
+      [[ -n $u ]] || continue
+      mine=$(_tbs_norm "$u")
+      for i in "${cands[@]}"; do
+        if [[ $(_tbs_norm "$i") == "$mine" ]]; then
+          _tbs_fall "unreachable (push: the mirror URL is this clone's remote $name)"
+        fi
+      done
+    done < <(_tbs_git remote get-url --all "$name" 2>/dev/null; _tbs_git remote get-url --push --all "$name" 2>/dev/null)
+  done < <(_tbs_git remote 2>/dev/null)
+
+  TBS_REFS=(head)
+  refs+=("$TBS_HEAD:refs/ccrc-test/$TBS_RUNID/head")
+  if [[ -n $TBS_BASE ]]; then TBS_REFS+=(base); refs+=("$TBS_BASE:refs/ccrc-test/$TBS_RUNID/base"); fi
+  if ((TBS_DIRTY)); then TBS_REFS+=(snap); refs+=("$TBS_SW:refs/ccrc-test/$TBS_RUNID/snap"); fi
+  for i in ${TBS_OVR_REFS[@]+"${!TBS_OVR_REFS[@]}"}; do
+    TBS_REFS+=("${TBS_OVR_REFS[$i]}")
+    refs+=("${TBS_OVR_SHAS[$i]}:refs/ccrc-test/$TBS_RUNID/${TBS_OVR_REFS[$i]}")
+  done
+  if [[ -n $TBS_SSH_KEY ]]; then
+    local q
+    printf -v q '%q' "$TBS_SSH_KEY"
+    export GIT_SSH_COMMAND="ssh -i $q -o IdentitiesOnly=yes -o BatchMode=yes"
+  fi
+  _tbs_git -c push.gpgSign=false -c push.followTags=false -c push.recurseSubmodules=no \
+    push --no-verify --atomic --porcelain "$url" "${refs[@]}" > /dev/null 2> "$TBS_TMP/err" \
+    || _tbs_fall "unreachable (git push: $(_tbs_first "$TBS_TMP/err"))"
+}
+
+# ---- the frame's git fields ----------------------------------------------------------------------------------------
+_tbs_frame() {
+  local out sep i
+  out="{\"runId\":$(_tbs_json "$TBS_RUNID"),\"branch\":"
+  if [[ -n $TBS_BRANCH ]]; then out+=$(_tbs_json "$TBS_BRANCH"); else out+=null; fi
+  out+=',"refs":['; sep=''
+  for i in "${TBS_REFS[@]}"; do out+="$sep$(_tbs_json "$i")"; sep=,; done
+  out+='],"outputs":['; sep=''
+  for i in ${TBS_OUTPUTS[@]+"${TBS_OUTPUTS[@]}"}; do out+="$sep$(_tbs_json "$i")"; sep=,; done
+  out+='],"forward":{'; sep=''
+  for i in ${TBS_FWD_NAMES[@]+"${!TBS_FWD_NAMES[@]}"}; do
+    out+="$sep$(_tbs_json "${TBS_FWD_NAMES[$i]}"):$(_tbs_json "${TBS_FWD_VALUES[$i]}")"; sep=,
+  done
+  out+='}}'
+  printf '%s\n' "$out"
+}
+
+if stat -c %s / > /dev/null 2>&1; then TBS_STAT=(stat -c %s --); else TBS_STAT=(stat -f %z --); fi
+
+_tbs_runid
+_tbs_state
+_tbs_clean
+if ((TBS_DIRTY)); then
+  _tbs_index_copy
+  _tbs_gix ls-files -o --exclude-standard -z > "$TBS_TMP/untracked" 2> "$TBS_TMP/err" \
+    || _tbs_fall "unreachable (git ls-files: $(_tbs_first "$TBS_TMP/err"))"
+  _tbs_gix diff-files --name-only -z > "$TBS_TMP/modified" 2> "$TBS_TMP/err" \
+    || _tbs_fall "unreachable (git diff-files: $(_tbs_first "$TBS_TMP/err"))"
+  _tbs_deny
+  _tbs_caps
+  _tbs_trees
+fi
+_tbs_outputs
+_tbs_push
+_tbs_frame
