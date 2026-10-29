@@ -145,8 +145,8 @@ const warnRe = (key: string, value: string, source: string, def: string): RegExp
 
 // ── the threshold-literal scanner ─────────────────────────────────────────
 // A numeric literal compared against a quantity, in a code line (a line whose first non-blank is `#` is a comment;
-// a trailing ` # …` is dropped): a `:=N` default, a `:-N` fallback of any expansion (in a comparison or outside one,
-// so a default cannot come back as `"${GK[KEY]:-200}"`), a `[ … -lt|-le|-gt|-ge|-eq|-ne N ]` test with N on either
+// a trailing ` # …` is dropped): an expansion's default or fallback in any spelling (`:=N`, `=N`, `:-N`, `-N`, N bare
+// or quoted; in a comparison or outside one, so a default cannot come back as `"${GK[KEY]:-200}"`), a `[ … -lt|-le|-gt|-ge|-eq|-ne N ]` test with N on either
 // side, or a `<`, `<=`, `>`, `>=`, `==`, `!=` against N inside `(( … ))`, found by a balanced-paren match so a
 // `$(…)` or `$((…))` operand does not hide it. Not a threshold: 0 and 1 (emptiness, presence, a first item), and an
 // exit status (`$?`, `$rc`, a name ending in `rc`, or its fallback) compared with a code such as timeout's 124.
@@ -182,8 +182,8 @@ function thresholdLiterals(text: string): string[] {
     if (/^\s*#/.test(raw0)) continue;
     const l = raw0.replace(/\s#\s.*$/, '');
     let hit = false;
-    for (const m of l.matchAll(/:=(\d+)\}/g)) if (isThreshold(m[1])) hit = true;
-    for (const m of l.matchAll(/\$\{([^{}]*?):-(\d+)\}/g)) if (!isStatus('$' + m[1]) && isThreshold(m[2])) hit = true;
+    // every default spelling an expansion has: `:-N`, `-N`, `:=N`, `=N`, with N bare or in matching quotes
+    for (const m of l.matchAll(/\$\{([^{}]*?):?[-=](["']?)(\d+)\2\}/g)) if (!isStatus('$' + m[1]) && isThreshold(m[3])) hit = true;
     for (const m of l.matchAll(/(\S+)\s+-(?:lt|le|gt|ge|eq|ne)\s+(\S+)/g)) {
       const a = m[1].replace(/^"|"$/g, '');
       const b = m[2].replace(/^"|"$/g, '');
