@@ -3645,7 +3645,7 @@ _hook_spool_append() {   # $dsp_line, with $dsp_bucket $dsp_cut $dsp_cwd from th
   [[ "$g2" == "$dsp_gen" ]] || return 1
   [[ -d "$dsp_dir" && ! -L "$dsp_dir" ]] || return 1
   f="$dsp_dir/$dsp_bucket.spool"
-  [[ ! -L "$f" && ( -f "$f" || ! -e "$f" ) ]] || return 1
+  [[ ! -L "$f" && ( ! -e "$f" || -f "$f" ) ]] || return 1   # ABSENCE FIRST (D-7448): a racing hook may create the bucket between the two probes, and absent-to-regular is the only move a current bucket makes, so this order never refuses a bucket being born, where `-f || ! -e` did (a lost line, measured)
   [[ -e "$f" ]] || fresh=1
   { printf '%s\n' "$dsp_line" >> "$f"; } 2>/dev/null || return 1
   [[ -z "$fresh" ]] || _hook_spool_prune "$dsp_dir" "$dsp_cut" || true
