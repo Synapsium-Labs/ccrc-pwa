@@ -214,16 +214,17 @@ async function rowFacts(sc: Scenario): Promise<Record<number, Record<string, unk
 
 describe('the run binding table (#746 fixture): today\'s readers, row by row', () => {
   // C7d's behaviour rows, OA-C15 (a) (D-7265), each marked where it differs from the pins C7a wrote green on the old
-  // code: an OPEN run's worker is the session the wire binds to it, so the abandon sheet finds no worker for run 10 of
-  // "two runs naming one worker" (the worker's binding names 11), for the recycled id (83) and for the undecidable
-  // binding (51), and hedges ('unknown'; 'child' before). Every closed run's row and every coordinator is today's.
+  // code: an OPEN run's worker is the session the wire binds to it, so the run row (`worker`: W before) and the abandon
+  // sheet find no worker for run 10 of "two runs naming one worker" (the worker's binding names 11), for the recycled
+  // id (83) and for the undecidable binding (51), and the sheet hedges ('unknown'; 'child' before). Every closed run's
+  // row, every coordinator, `coordPresence` and every Resume door is today's.
   const PINS: Record<string, unknown> = {
     'two runs naming one worker': {
-      10: { question: 'which live session is this open run\'s worker', wire: { sessionRunOf: 11, openRunOf: 11, childIds: 'absent' }, runForSession: 11, runBelongsTo: true, worker: W, coordSession: C, coordPresence: 'dead', resumeDoor: true, abandonChild: 'unknown', runCard: 'project-a', paletteClaims: true, treeRow: 'project-a:depth1' },
+      10: { question: 'which live session is this open run\'s worker', wire: { sessionRunOf: 11, openRunOf: 11, childIds: 'absent' }, runForSession: 11, runBelongsTo: true, worker: null, coordSession: C, coordPresence: 'dead', resumeDoor: true, abandonChild: 'unknown', runCard: 'project-a', paletteClaims: true, treeRow: 'project-a:depth1' },
       11: { question: 'which live session is this open run\'s worker', wire: { sessionRunOf: 11, openRunOf: 11, childIds: 'absent' }, runForSession: 11, runBelongsTo: true, worker: W, coordSession: C, coordPresence: 'dead', resumeDoor: true, abandonChild: 'child', runCard: 'project-a', paletteClaims: true, treeRow: 'project-a:depth1' },
     },
     'a recycled id, as a worker (#746: a run opened before the workspace\'s own run)': {
-      83: { question: 'which live session is this open run\'s worker', wire: { sessionRunOf: null, openRunOf: null, childIds: 'absent' }, runForSession: null, runBelongsTo: false, worker: W, coordSession: C, coordPresence: 'dead', resumeDoor: true, abandonChild: 'unknown', runCard: 'project-a', paletteClaims: true, treeRow: 'project-a:depth0' },
+      83: { question: 'which live session is this open run\'s worker', wire: { sessionRunOf: null, openRunOf: null, childIds: 'absent' }, runForSession: null, runBelongsTo: false, worker: null, coordSession: C, coordPresence: 'dead', resumeDoor: true, abandonChild: 'unknown', runCard: 'project-a', paletteClaims: true, treeRow: 'project-a:depth0' },
     },
     'a recycled id, as a coordinator (no wire fact binds the claimant\'s incarnation)': {
       12: { question: 'which listed session carries the claimant id', wire: { sessionRunOf: 12, openRunOf: 12, childIds: [] }, runForSession: 12, runBelongsTo: true, worker: W, coordSession: C, coordPresence: 'alive', resumeDoor: false, abandonChild: 'child', runCard: 'project-a', paletteClaims: true, treeRow: 'project-a:depth1' },
@@ -248,7 +249,7 @@ describe('the run binding table (#746 fixture): today\'s readers, row by row', (
     // C7d's behaviour rows, OA-C15 (a) (D-7265): an open run's worker is the session the wire binds to it, so a worker
     // the wire does not bind is not bracketed under the run's claimant (fleetTree, `treeRow`: depth1 before).
     'an open run whose worker binding is undecidable (no run key on the worker)': {
-      51: { question: 'which live session is this open run\'s worker', wire: { sessionRunOf: null, openRunOf: null, childIds: 'absent' }, runForSession: 51, runBelongsTo: true, worker: W, coordSession: C, coordPresence: 'dead', resumeDoor: true, abandonChild: 'unknown', runCard: 'project-a', paletteClaims: true, treeRow: 'project-a:depth0' },
+      51: { question: 'which live session is this open run\'s worker', wire: { sessionRunOf: null, openRunOf: null, childIds: 'absent' }, runForSession: 51, runBelongsTo: true, worker: null, coordSession: C, coordPresence: 'dead', resumeDoor: true, abandonChild: 'unknown', runCard: 'project-a', paletteClaims: true, treeRow: 'project-a:depth0' },
     },
     'an open run on a tick whose childIds are empty (the registry was unlistable)': {
       52: { question: 'which live session is this open run\'s worker', wire: { sessionRunOf: 52, openRunOf: 52, childIds: [] }, runForSession: 52, runBelongsTo: true, worker: W, coordSession: C, coordPresence: 'dead', resumeDoor: true, abandonChild: 'child', runCard: 'project-a', paletteClaims: true, treeRow: 'project-a:depth1' },

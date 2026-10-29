@@ -996,6 +996,15 @@ describe('the run row renders its session’s spawn verdict (Task 5)', () => {
     expect(chip()?.textContent).toBe('? quarantined');
   });
 
+  // C7d's behaviour row, OA-C15 (a) (D-7265): the row's session is the run's BOUND worker. A listed session that carries
+  // the open run's id but that the wire binds to another run (#746's recycled id) is not this run's worker, so its
+  // verdict is not this row's ('blocked' before C7d, read off the id).
+  it('says nothing for an open run whose id names a session the wire binds to another run (a recycled id, #746)', () => {
+    const other = { id: 999, state: 'working' as const, claimedBy: 'claude:other-coordinator' };
+    withSession({ spawnState: 'blocked', run: other, openRun: other });
+    expect(chip()).toBeNull();
+  });
+
   it('says nothing at all for a run whose session the fleet frame has not named', () => {
     // The `planned` row's ordinary shape: no session id yet, so no session to
     // read a verdict off. A chip here would be a claim about a pane that does
