@@ -854,3 +854,66 @@ describe('a retire entry reaches the session queue through one owner, retireExec
     expect(via('retireExecutor'), via('retireExecutor').join(', ')).toHaveLength(4);
   });
 });
+
+// D-7304 (ARCH-72, plan 2026-10-29-consolidation-k16-panescope-reader.md Task C5m; OA-C21 ruled (a) under D-7401).
+// APPENDED. Spec K16's last bullet ("they share one reader of `$REG/<id>.panescope`") is met in ANOTHER FORM: the
+// marker has one writer (`_panescope_record`) and one reader (`_end_cause`, the restart-cause classifier), both in
+// ccd, and the two acts read no marker at all. The cap (`ccd-cap-scopes`) and the stop (`ccd-scope-sweep`) each read
+// systemd's list of `tmux-spawn-*.scope` units, and those two reads stay two, pinned by name as legitimately
+// different: the cap over-includes and fails toward capping, the stop under-includes and fails toward not stopping.
+// Every name comes from the census (`census-w5/paneScopes.ts`, D-7303), never a source pin here; the marker check
+// reads the two acts' parsed code lines (`census-w5/accountMarkers.ts#bashBodies`, comments stripped). The doctor's
+// two read-only listers act on nothing and are reported, not pinned. The census modules are loaded inside the rows.
+describe('the pane scope marker keeps one reader and one writer, and the two acts read no marker (D-7304; spec K16\'s last bullet met in another form, OA-C21 (a), D-7401)', () => {
+  const CAP = 'ccd/ccd-cap-scopes';
+  const SWEEP = 'ccd/ccd-scope-sweep';
+  /** The marker's field token or path, as a whole word: `panescope`, not `_panescope_record`. */
+  const MARKER_TOKEN = /(?<![A-Za-z0-9_])panescope(?![A-Za-z0-9_])/;
+
+  it('panescopeReaders() is exactly ccd/ccd#_end_cause (1 at C5m\'s base; may only shrink)', async () => {
+    const { panescopeReaders } = await import('../census-w5/paneScopes.js');
+    expect(panescopeReaders().map((s) => s.name)).toEqual(['ccd/ccd#_end_cause']);
+  });
+
+  it('panescopeWriters() is exactly ccd/ccd#_panescope_record (1 at C5m\'s base; may only shrink); _reg_purge\'s suffix glob is reported apart, not counted', async () => {
+    const { panescopeSuffixPurgers, panescopeWriterLines, panescopeWriters } = await import('../census-w5/paneScopes.js');
+    const purgers = panescopeSuffixPurgers().map((s) => s.name);
+    console.log(`D-7304 apart: panescopeSuffixPurgers ${purgers.join(', ')}; panescopeWriterLines ${panescopeWriterLines().length}`);
+    expect(panescopeWriters().map((s) => s.name)).toEqual(['ccd/ccd#_panescope_record']);
+  });
+
+  it('neither act names the marker on a code line: ccd/ccd-cap-scopes and ccd/ccd-scope-sweep, 0 (pinned)', async () => {
+    const { bashBodies, shippedBashPrograms } = await import('../census-w5/accountMarkers.js');
+    const { panescopeReaders, panescopeWriters } = await import('../census-w5/paneScopes.js');
+    expect(shippedBashPrograms(), 'both acts are shipped bash programs the census reads').toEqual(expect.arrayContaining([CAP, SWEEP]));
+    const hits = [CAP, SWEEP].flatMap((file) => bashBodies(readFileSync(path.join(ccrcRoot, file), 'utf8'))
+      .flatMap((b) => b.lines.filter((r) => MARKER_TOKEN.test(r.code)).map((r) => `${file}#${b.name}:${r.line}  ${r.raw.trim()}`)));
+    expect(hits, 'a code line of an act that names the marker').toEqual([]);
+    const sites = [...panescopeReaders(), ...panescopeWriters()].filter((s) => s.file === CAP || s.file === SWEEP);
+    expect(sites.map((s) => s.name), 'a census reader or writer inside an act').toEqual([]);
+  });
+
+  it('the acting pane-scope listers are exactly the cap and the stop, two and legitimately different; the doctor\'s two read-only listers are reported apart, not pinned', async () => {
+    const { paneScopeListers } = await import('../census-w5/paneScopes.js');
+    const all = paneScopeListers();
+    console.log(`D-7304 apart (read-only, act on nothing): ${all.filter((s) => !s.acts).map((s) => s.name).join(', ')}`);
+    expect(all.filter((s) => s.acts).map((s) => s.name)).toEqual([`${CAP}#<top-level>`, `${SWEEP}#<top-level>`]);
+  });
+
+  it('the cap\'s list over-includes (no --plain, every slice, the first column), failing toward capping', async () => {
+    const { paneScopeListers } = await import('../census-w5/paneScopes.js');
+    const cap = paneScopeListers().filter((s) => s.acts && s.name === `${CAP}#<top-level>`);
+    expect(cap.map((s) => ({ name: s.name, plain: s.plain }))).toEqual([{ name: `${CAP}#<top-level>`, plain: false }]);
+  });
+
+  it('the stop\'s list under-includes (--plain, then its own filters), failing toward not stopping: the opposite safety direction', async () => {
+    const { paneScopeListers } = await import('../census-w5/paneScopes.js');
+    const stop = paneScopeListers().filter((s) => s.acts && s.name === `${SWEEP}#<top-level>`);
+    expect(stop.map((s) => ({ name: s.name, plain: s.plain }))).toEqual([{ name: `${SWEEP}#<top-level>`, plain: true }]);
+  });
+
+  it('paneScopeActs() is exactly the cap\'s set-property and the stop\'s stop (2 at C5m\'s base; may only shrink)', async () => {
+    const { paneScopeActs } = await import('../census-w5/paneScopes.js');
+    expect(paneScopeActs().map((s) => s.name)).toEqual([`${CAP}#<top-level>:set-property`, `${SWEEP}#<top-level>:stop`]);
+  });
+});
