@@ -171,3 +171,21 @@ describe('the envelope pairing has one owner, the server (C7f, D-7184)', () => {
     expect(names.has('framePairing')).toBe(true);
   });
 });
+
+// ─── C7m (D-7191; ARCH-75 #810): one page clock, and no hand-written request poll ─────────────────────────────────
+// Read through W7's census (`census-w7/pwa.ts#pageClockSubscriptions` and `#requestPolls`), so the sites are the
+// syntax tree's: `visibilitychange` 10 → 1 and `online` 2 → 1, both in `lib/pageClock.ts`; hand-written request polls
+// 2 → 0 (`HotFilesStrip` and `useFleetHealth` poll through `usePoll`). Each may only go down (spec §5.1 rule 3).
+describe('the PWA has one page clock and no hand-written request poll (C7m, D-7191)', () => {
+  it('pageClockSubscriptions(): one visibilitychange and one online subscription, both in lib/pageClock.ts', async () => {
+    const { pageClockSubscriptions: clockSites } = await import('../census-w7/pwa.js');
+    expect(clockSites().map((s) => [s.file, s.kind])).toEqual([
+      ['pwa/src/lib/pageClock.ts', 'visibilitychange'],
+      ['pwa/src/lib/pageClock.ts', 'online'],
+    ]);
+  });
+
+  it('requestPolls(): no hand-written request poll is left in pwa/src', () => {
+    expect(requestPolls()).toEqual([]);
+  });
+});
