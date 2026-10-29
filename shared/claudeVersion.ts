@@ -56,6 +56,16 @@ export const CLAUDE_ROLL_MODES = ['off', 'manual', 'auto'] as const;
 export type ClaudeRollMode = (typeof CLAUDE_ROLL_MODES)[number];
 export const CLAUDE_ROLL_MODE_DEFAULT: ClaudeRollMode = 'manual';
 
+/** Which sessions an AUTOMATIC roll may take (D-7443, the operator's rule of
+ *  2026-10-29: "always auto-roll all coordinators when they go idle, but never
+ *  auto-roll any non-coordinators"). `coordinators`, the default, is that rule;
+ *  `all` lets the scheduler take an idle child too. A manual roll (the
+ *  operator's Restart, a `ccd` verb) never reads this. A session the scheduler
+ *  skips picks up a new build when it next starts for another reason. */
+export const CLAUDE_ROLL_TARGETS = ['coordinators', 'all'] as const;
+export type ClaudeRollTargets = (typeof CLAUDE_ROLL_TARGETS)[number];
+export const CLAUDE_ROLL_TARGETS_DEFAULT: ClaudeRollTargets = 'coordinators';
+
 /** The lane kinds a (node, lane kind) target is kept for (spec §10.1). */
 export const CLAUDE_LANE_KINDS = ['anthropic', 'codex'] as const;
 export type ClaudeLaneKind = (typeof CLAUDE_LANE_KINDS)[number];
