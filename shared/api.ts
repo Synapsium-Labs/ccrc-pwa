@@ -4055,7 +4055,7 @@ export type FleetMsg =
   /** Build 7. ADDITIVE, so no FLEET_PROTO bump: an already-deployed PWA drops
    *  an unknown frame type silently (`pwa/src/stores/fleet.ts:54-73`), which is
    *  the one-way new-writer/old-reader rule this file states at :560-566. */
-  | { type: 'runs'; runs: RunSummary[] }
+  | { type: 'runs'; runs: RunSummary[]; /** D-7334: see `RunSummary.lastMoveAt`. */ stallQuietMs?: number }
   /** Build 4, spec §4.2. Additive on the same terms as `runs` above. */
   | { type: 'coord'; coord: CoordStatus }
   /** §1.6's census. Additive on the same terms as `runs`/`coord` above — an
@@ -6813,6 +6813,20 @@ export interface RunSummary {
    *  rides every run of that coordinator, so a reader holding one run needs no second lookup. Read it ONLY through
    *  `childIdsOf`; see there for what absent and empty mean. */
   childIds?: readonly number[];
+
+  /** D-7334 (programme-boxes spec §2.5): the `at` of this run's newest MOVE, or null when it has none. A move is an act row
+   *  by the drift reader's rule (not a stall observation, not `causedBy = 'operator'`) or a mail naming the run whose sender
+   *  is a session, never a role sender. Read once per frame for the open runs (`CoordStore.runLastMoves`, carried by
+   *  `withLastMoves` in `server/src/coord/runWire.ts`). ADDITIVE and OPTIONAL; `FLEET_PROTO` is not bumped. Read it ONLY
+   *  through `runLastMove` (`pwa/src/fleet/runWords.ts`): absent is an older server and reads null; null falls back to the
+   *  run's dispatch or open time (D-7338).
+   *
+   *  Its threshold rides beside the runs on the same frame, as `stallQuietMs` (`FleetMsg`'s `runs` member): the quiet time
+   *  the stall watch applies (the Settings choice, else `STALL_QUIET_MS`), so the app's stalled word and the stall watch
+   *  mean one thing by quiet. ADDITIVE: absent before the server's first runs frame, and from an older server, which also
+   *  sends no `lastMoveAt`, so nothing reads as stalled. Declared here, not on that member, so the frame's line in the
+   *  union does not move a cited line below it. */
+  lastMoveAt?: number | null;
 }
 
 /** Speed and quality per run (routing spec 2026-09-14 §6), READ-ONLY, from the
