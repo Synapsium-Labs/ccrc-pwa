@@ -415,13 +415,10 @@ describe('W7 PWA census: the prompt glyph\'s pane-text spellings (C7i, D-7187)',
     expect(got.map((s) => [s.symbol, s.text, s.line])).toEqual([['(module)', "'❯'", 1], ['startsWithPromptGlyph', "'❯'", 2]]);
   });
 
-  it('REAL promptGlyphSpellings(): 2 (drawerView.ts\'s PROMPT_GLYPH, dialog.ts#startsWithPromptGlyph)', async () => {
+  it('REAL promptGlyphSpellings(): 1 (from 2: drawerView.ts\'s PROMPT_GLYPH and dialog.ts#startsWithPromptGlyph import shared/pane-glyph.ts)', async () => {
     const { promptGlyphSpellings } = await import('./pwa.js');
     const sites = promptGlyphSpellings();
-    held('promptGlyphSpellings', sites, 2);
-    expect(sites.map((s) => `${s.file}#${s.symbol}`)).toEqual([
-      'pwa/src/session/drawerView.ts#(module)',
-      'server/src/pane/dialog.ts#startsWithPromptGlyph',
-    ]);
+    held('promptGlyphSpellings', sites, 1);
+    expect(sites.map((s) => `${s.file}#${s.symbol}`)).toEqual(['shared/pane-glyph.ts#(module)']);
   });
 });

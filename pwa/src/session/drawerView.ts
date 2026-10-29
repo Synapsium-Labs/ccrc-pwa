@@ -81,9 +81,12 @@ export function wrapWidth(glassPx: number, cellPx: number, gutterPx: number): nu
   return Number.isFinite(w) && w >= 1 ? w : 1;
 }
 
-/** Claude Code's prompt and menu cursor, U+276F. Its absence for
- *  `NOT_CLAUDE_MS` is the one sign that the pane is something else. */
-export const PROMPT_GLYPH = '❯';
+/** Claude Code's prompt and menu cursor, U+276F: the one spelling, in
+ *  `shared/pane-glyph.ts` (D-7187), which the server's dialog parser reads too.
+ *  Its absence for `NOT_CLAUDE_MS` is the one sign that the pane is something
+ *  else. Imported here, beside its readers, and re-exported for them. */
+import { PROMPT_GLYPH } from '../../../shared/pane-glyph';
+export { PROMPT_GLYPH };
 /** How long a screen may go without `PROMPT_GLYPH` before the wrapped view
  *  offers the grid (spec §5.3). A display hint: it decides nothing sent. */
 export const NOT_CLAUDE_MS = 2000;

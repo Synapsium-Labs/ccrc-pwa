@@ -8,6 +8,7 @@ import { describe, it, expect } from 'vitest';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { startsWithPromptGlyph } from '../src/pane/dialog.js';
+import { PROMPT_GLYPH as SHARED_GLYPH } from '../../shared/pane-glyph.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const drawerView = async (): Promise<{ PROMPT_GLYPH: string; showsPrompt: (rows: readonly string[]) => boolean }> =>
@@ -19,6 +20,12 @@ describe('the prompt glyph is U+276F in the drawer and the dialog parser (C7i, D
   it('the drawer\'s PROMPT_GLYPH is the one code point U+276F, UTF-8 e2 9d af', async () => {
     const { PROMPT_GLYPH } = await drawerView();
     expect([PROMPT_GLYPH.length, PROMPT_GLYPH.codePointAt(0), hex(PROMPT_GLYPH)]).toEqual([1, 0x276f, 'e29daf']);
+  });
+
+  it('the one spelling, shared/pane-glyph.ts, is the same character, and the drawer re-exports it unchanged', async () => {
+    const { PROMPT_GLYPH } = await drawerView();
+    expect([SHARED_GLYPH.length, SHARED_GLYPH.codePointAt(0), hex(SHARED_GLYPH)]).toEqual([1, 0x276f, 'e29daf']);
+    expect(PROMPT_GLYPH).toBe(SHARED_GLYPH);
   });
 
   it('the dialog parser\'s verdicts: a row that starts with U+276F, and the look-alikes that do not', () => {
