@@ -275,7 +275,11 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   JSON/SQL fixtures; `vitestFollows` in select-tests.mjs), the guard suites that scan the whole tree or the diff
   (censuses, single-definition, deviation-refs, growth-check, ownership, rings, ccd-contexts, dtbd, `typecheck-tests`,
   `oss-metadata`, the `*-pin` suites less `PIN_MAP_CARRIED`, and every test whose source runs `git ls-files`,
-  `git diff` or `git merge-base` itself: `TREE_READER`), and every `session-hook*` suite when `ccd/ccd`,
+  `git diff` or `git merge-base` itself: `TREE_READER`; and every test that lists a source tree itself — `server/src`,
+  `shared`, `pwa/src`, `agent/src` or `ccd` — whose file took at most `SCANNER_MAX_MS` on the last full run, the heavier
+  ones named in the summary and left to the queue: the full run RECORDS which tests list a root (a setup file wraps fs's
+  listers, `.github/ci/tree-scanners.mjs`, published as the `tree-scanners` artifact beside `testtimes`), unioned with
+  the static `scansSourceTree`, which stands alone when no artifact is readable), and every `session-hook*` suite when `ccd/ccd`,
   `ccd/session-hook.sh` or `shared/api.ts` changed (`.github/ci/fast-plan.mjs`, the `fast-plan` job), packed by measured duration behind the
   required summary `test (server)`; and the agent and pwa TESTS only when the change can reach them
   (`.github/ci/reach.mjs`: a package skips only when every changed file is under a directory it never reads, so `agent`

@@ -691,6 +691,62 @@ describe('ci.yml: times-build reads a single-artifact pattern download too (D-67
   });
 });
 
+// D-7455: a full run records the tree scanners (server/test/tree-scans.setup.mjs) beside the durations, times-build
+// publishes them as `tree-scanners`, and fast-plan fetches and reads them the way it does `testtimes`.
+describe('ci.yml: the tree scanners travel as the durations do (D-7455)', () => {
+  it('a full run\'s shard loads the capture and keeps its lines; no other run does', () => {
+    const st = step(job('server-shard'), 'Test');
+    expect(st).toMatch(/^ {10}CCRC_TREE_SCANS_OUT: \$\{\{ needs\.select\.outputs\.tests == 'full' && format\('\{0\}\/scans\.jsonl', runner\.temp\) \|\| '' \}\}$/m);
+    const keep = step(job('server-shard'), 'Keep the tree scans');
+    expect(keep).toMatch(/^ {8}if: always\(\) && needs\.select\.outputs\.tests == 'full'$/m);
+    expect(keep).toMatch(/^ {10}name: scans-\$\{\{ matrix\.shard \}\}\n {10}path: \$\{\{ runner\.temp \}\}\/scans\.jsonl\n/m);
+    // The setup file is added by the select config only when the variable names a file.
+    const cfg = read('server/vitest.select.config.ts');
+    expect(cfg).toContain("if (process.env.CCRC_TREE_SCANS_OUT) {");
+    expect(cfg).toContain("'test/tree-scans.setup.mjs']");
+  });
+
+  it('times-build publishes tree-scanners beside testtimes; fast-plan fetches both with one lookup and hands --scanners', () => {
+    expect(step(job('times-build'), 'Fetch the tree scans')).toMatch(/^ {10}pattern: scans-\*\n {10}path: \$\{\{ runner\.temp \}\}\/scans$/m);
+    const keep = step(job('times-build'), 'Keep the tree scanners as an artifact');
+    expect(keep).toMatch(/^ {8}if: steps\.scans\.outputs\.publish == 'true'$/m);
+    expect(keep).toMatch(/^ {10}name: tree-scanners\n {10}path: \$\{\{ runner\.temp \}\}\/ci-cache\/tree-scanners\.json\n/m);
+    const fetch = runScript(step(job('fast-plan'), 'Fetch the newest trusted durations'));
+    expect(fetch).toContain('for name in testtimes tree-scanners; do\n');
+    expect(fetch).toContain('main-artifact.mjs --repo "$REPO" --repo-id "$REPO_ID" --name "$name")');
+    expect(fetch).toContain('gh run download "$run_id" --repo "$REPO" -n "$name" -D "$RUNNER_TEMP/ci-cache"');
+    expect(runScript(step(job('fast-plan'), 'Plan'))).toContain('if [ -f "$RUNNER_TEMP/ci-cache/tree-scanners.json" ]; then args+=(--scanners "$RUNNER_TEMP/ci-cache/tree-scanners.json"); fi\n');
+  });
+
+  function merge(layout: Record<string, string>): { status: number | null, output: string, argv: string, rt: string } {
+    const ws = mkTmp('ccrc-ci-scans-');
+    const rt = join(ws, 'rt');
+    mkdirSync(join(rt, 'scans'), { recursive: true });
+    for (const [rel, body] of Object.entries(layout)) {
+      mkdirSync(path.dirname(join(rt, 'scans', rel)), { recursive: true });
+      writeFileSync(join(rt, 'scans', rel), body);
+    }
+    const bin = fakeBin({ node: 'printf "%s\\n" "$@" > "$NODE_LOG"' });
+    const log = join(ws, 'node.log');
+    const r = runStep(step(job('times-build'), 'Merge the tree scans'), ws, { PATH: `${bin}:${process.env.PATH}`, RUNNER_TEMP: rt, NODE_LOG: log });
+    return { status: r.status, output: r.output, argv: existsSync(log) ? readFileSync(log, 'utf8') : '', rt };
+  }
+  const head = (rt: string): string => `.github/ci/tree-scanners.mjs\nmerge\n--out\n${rt}/ci-cache/tree-scanners.json\n`;
+
+  it('Merge the tree scans reads both download layouts (D-6740), and publishes nothing, without failing, when no shard wrote one', () => {
+    const one = merge({ 'scans.jsonl': '' });
+    expect(one.status).toBe(0);
+    expect(one.argv).toBe(`${head(one.rt)}${one.rt}/scans/scans.jsonl\n`);
+    expect(one.output).toBe('publish=true\n');
+    const two = merge({ 'scans.jsonl': '', 'scans-1/scans.jsonl': '', 'scans-2/scans.jsonl': '' });
+    expect(two.argv).toBe(`${head(two.rt)}${two.rt}/scans/scans-1/scans.jsonl\n${two.rt}/scans/scans-2/scans.jsonl\n`);
+    const none = merge({ 'scans-1/other.json': '' });
+    expect(none.status).toBe(0);
+    expect(none.output).toBe('publish=false\n');
+    expect(none.argv, 'tree-scanners.mjs never ran').toBe('');
+  });
+});
+
 /** A scratch dir holding fake binaries, put first on PATH for a step's script. */
 function fakeBin(bins: Record<string, string>): string {
   const dir = mkTmp('ccrc-ci-fakebin-');

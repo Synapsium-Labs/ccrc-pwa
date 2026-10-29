@@ -461,6 +461,7 @@ jobs:
       - uses: ./.github/actions/server-deps
         with:
           platform: linux
+      # The durations, and the tree scanners the last full run recorded (D-7455): the same lookup for both.
       - name: Fetch the newest trusted durations
         env:
           GITHUB_TOKEN: ${{ github.token }}
@@ -469,12 +470,14 @@ jobs:
           REPO_ID: ${{ github.repository_id }}
         run: |
           mkdir -p "$RUNNER_TEMP/ci-cache"
-          out=$(GITHUB_OUTPUT='' node .github/ci/main-artifact.mjs --repo "$REPO" --repo-id "$REPO_ID" --name testtimes)
-          printf '%s\n' "$out"
-          run_id=$(printf '%s\n' "$out" | sed -n 's/^run_id=//p')
-          if [ -n "$run_id" ]; then
-            gh run download "$run_id" --repo "$REPO" -n testtimes -D "$RUNNER_TEMP/ci-cache" || echo "::warning::could not download testtimes from run $run_id; planning without it"
-          fi
+          for name in testtimes tree-scanners; do
+            out=$(GITHUB_OUTPUT='' node .github/ci/main-artifact.mjs --repo "$REPO" --repo-id "$REPO_ID" --name "$name")
+            printf '%s\n' "$out"
+            run_id=$(printf '%s\n' "$out" | sed -n 's/^run_id=//p')
+            if [ -n "$run_id" ]; then
+              gh run download "$run_id" --repo "$REPO" -n "$name" -D "$RUNNER_TEMP/ci-cache" || echo "::warning::could not download $name from run $run_id; planning without it"
+            fi
+          done
       # Local binary, never npx (see server-shard). `vitest list --filesOnly` collects no test, and prints `[]` when
       # no test relates to the change. `--json` stays last: followed by a word it names a file to write. An exit other
       # than 0 removes the report, and fast-plan.mjs falls back.
@@ -493,6 +496,7 @@ jobs:
           (cd server && ./node_modules/.bin/vitest list --filesOnly --changed "$mb" --json > "$RUNNER_TEMP/related.json") || { rm -f "$RUNNER_TEMP/related.json"; echo "::warning::vitest list failed; the fast plan falls back"; }
           args=(--repo "$GITHUB_WORKSPACE" --base "$mb" --related "$RUNNER_TEMP/related.json" --untraced "$RUNNER_TEMP/untraced.json" --fallback-matrix "$FALLBACK_MATRIX" --fallback-count "$FALLBACK_COUNT")
           if [ -f "$RUNNER_TEMP/ci-cache/testtimes.json" ]; then args+=(--times "$RUNNER_TEMP/ci-cache/testtimes.json"); fi
+          if [ -f "$RUNNER_TEMP/ci-cache/tree-scanners.json" ]; then args+=(--scanners "$RUNNER_TEMP/ci-cache/tree-scanners.json"); fi
           node .github/ci/fast-plan.mjs "${args[@]}"
 
   # The selected server tests, split across runners (design 2026-09-23 §7).
@@ -572,13 +576,17 @@ jobs:
       # `xa.test.ts`), so the shard's list goes through vitest.select.config.ts,
       # whose include is exactly the listed paths. The file-times reporter
       # (whole-file wall time, hooks and collection included) is the per-file
-      # durations the daily run publishes for the next plan.
+      # durations the daily run publishes for the next plan. In a full run,
+      # CCRC_TREE_SCANS_OUT also loads the tree-scan capture
+      # (vitest.select.config.ts, .github/ci/tree-scanners.mjs, D-7455): the
+      # test files that listed a source root, published as `tree-scanners`.
       - name: Test
         working-directory: server
         env:
           FILES: ${{ matrix.files }}
           VITEST_SHARD: ${{ matrix.vitest_shard }}
           WORKERS: ${{ matrix.workers }}
+          CCRC_TREE_SCANS_OUT: ${{ needs.select.outputs.tests == 'full' && format('{0}/scans.jsonl', runner.temp) || '' }}
         run: |
           echo "$FILES" | tr ' ' '\n' > "$RUNNER_TEMP/tests.txt"
           CCRC_FILE_TIMES_OUT="$RUNNER_TEMP/times.json" CCRC_TEST_LIST="$RUNNER_TEMP/tests.txt" ./node_modules/.bin/vitest run --config vitest.select.config.ts ${VITEST_SHARD:+--shard=$VITEST_SHARD} --maxWorkers="$WORKERS" --reporter=default --reporter=../.github/ci/file-times-reporter.mjs
@@ -590,6 +598,16 @@ jobs:
           name: times-${{ matrix.shard }}
           path: ${{ runner.temp }}/times.json
           if-no-files-found: warn
+          retention-days: 3
+
+      # A shard none of whose files listed a source root writes no scans.jsonl.
+      - name: Keep the tree scans
+        if: always() && needs.select.outputs.tests == 'full'
+        uses: actions/upload-artifact@v7
+        with:
+          name: scans-${{ matrix.shard }}
+          path: ${{ runner.temp }}/scans.jsonl
+          if-no-files-found: ignore
           retention-days: 3
 
   server-typecheck:
@@ -1557,6 +1575,38 @@ jobs:
         with:
           name: testtimes
           path: ${{ runner.temp }}/ci-cache/testtimes.json
+          if-no-files-found: error
+          retention-days: 14
+      # The tree scanners the shards recorded (D-7455, .github/ci/tree-scanners.mjs), merged into
+      # tree-scanners.json and published beside testtimes; fast-plan reads it as it reads testtimes. Both layouts
+      # as for the durations (D-6740). No shard's scans means none is published, and fast-plan uses the static
+      # detector alone (it unions the two otherwise): never a failure of this job, whose durations are already kept.
+      - name: Fetch the tree scans
+        uses: actions/download-artifact@v8
+        continue-on-error: true
+        with:
+          pattern: scans-*
+          path: ${{ runner.temp }}/scans
+      - name: Merge the tree scans
+        id: scans
+        run: |
+          shopt -s nullglob
+          reports=("$RUNNER_TEMP"/scans/*/scans.jsonl)
+          shopt -u nullglob
+          if [ "${#reports[@]}" -eq 0 ] && [ -f "$RUNNER_TEMP/scans/scans.jsonl" ]; then reports=("$RUNNER_TEMP/scans/scans.jsonl"); fi
+          if [ "${#reports[@]}" -eq 0 ]; then
+            echo "::warning::no shard left a scans.jsonl; no tree-scanners artifact is published"
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          node .github/ci/tree-scanners.mjs merge --out "$RUNNER_TEMP/ci-cache/tree-scanners.json" "${reports[@]}"
+          echo "publish=true" >> "$GITHUB_OUTPUT"
+      - name: Keep the tree scanners as an artifact
+        if: steps.scans.outputs.publish == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: tree-scanners
+          path: ${{ runner.temp }}/ci-cache/tree-scanners.json
           if-no-files-found: error
           retention-days: 14
 
