@@ -37,7 +37,8 @@ import { DelegationCheckpointError, type DelegationDurability } from './delegati
 import { COORDINATOR_INTENT_ACTIONS, COORDINATOR_INTENT_REFUSALS, declareCoordinatorIntent, formatDelegationInstant } from './delegation-model.js';
 import { readParentGenerations, settleParentIncarnations } from './gitref.js';
 import { NO_SESSION, type GateDecision } from '../auth/gate.js';
-import { verifyDone, type DoneClaim } from './fingerprint.js';
+import { BASE_ONLY_MERGE, verifyDone, type DoneClaim } from './fingerprint.js';
+import { doneRejectionMail } from './closeDecide.js';
 import { advanceGate, advanceRequest, type AdvanceBody } from './advance.js';
 import { REVIEW_ROUND_CAP, reviewCapAsk, reviewCapNotice, reviewFindingsOf } from './reviewcap.js';
 import { dispatchRun, type DispatchOutcome, type DispatchRunDeps, capsMeasured } from './dispatch.js';
@@ -1859,7 +1860,7 @@ export function registerCoordRoutes(
       if (!measured.ok) {
         coord.recordRejection({ code: measured.code, runId: id, toId: run.sessionId, detail: measured.detail });
         queueSystemMail(coord, run, { fromId: 'coordinator', toId: run.sessionId, runId: id,
-          kind: 'status', subject: 'wave-advance-rejected', body: `${measured.code}: ${measured.detail}` });
+          kind: 'status', ...doneRejectionMail('advance', measured) });
         return reply.code(409).send({ ok: false, reject: { code: measured.code, detail: measured.detail } });
       }
       verdict = measured;
@@ -1873,7 +1874,9 @@ export function registerCoordRoutes(
     if (to === 'merging' && verdict !== null) {
       const listing = await deps.io.readdir(deps.cfg.registryDir);
       episodeMode = checksModeAt(readSwitches(listing), ccdCan(deps.fleetState, 'prLanding'), verdict.measured);
-      detail = mergingAtDetail(claim.handoffCommit, verdict.measured.prNumber ?? null, episodeMode);
+      // The head the server VERIFIED (D-7102): the claim's own on an ordinary advance, the live tip on one accepted
+      // through the radar's lineage. The landing compares a PR head to this, and a brief prints it.
+      detail = mergingAtDetail(verdict.measured.branchTip, verdict.measured.prNumber ?? null, episodeMode);
     }
     const adv = detail === undefined ? coord.advance(id, to, 'coordinator') : coord.advance(id, to, 'coordinator', detail);
     if (!adv.ok) return reply.code(409).send({ ok: false, reject: adv });
@@ -1883,9 +1886,12 @@ export function registerCoordRoutes(
     const after = coord.run(id);
     if (!after.ok) return refuseRoute(reply, 'run-unreadable', { detail: after.detail });
     if (after.run === null) return refuseAdvance(reply, { reject: { code: 'unknown-run' } });
-    return reply.code(200).send(episodeMode === 'live'
-      ? { ok: true, run: toRunSummary(after.run), checksMail: CHECKS_MAIL_TOKEN } satisfies AdvanceOk
-      : { ok: true, run: toRunSummary(after.run) } satisfies AdvanceOk);
+    return reply.code(200).send({
+      ok: true, run: toRunSummary(after.run),
+      ...(episodeMode === 'live' ? { checksMail: CHECKS_MAIL_TOKEN } : {}),
+      // Only an advance accepted through the lineage names its head: absent means the claim was the head.
+      ...(verdict?.measured.via === BASE_ONLY_MERGE ? { verifiedHead: verdict.measured.branchTip } : {}),
+    } satisfies AdvanceOk);
   };
 
   /**

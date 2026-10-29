@@ -477,6 +477,31 @@ describe('golden fixtures (spec §1 measured times)', () => {
     expect(stallVerdict(stallInput({ mail: [done, rejected], worker }), rejected.at + STALL_QUIET_MS)).toEqual(r1(T));
   });
 
+  // Landing order wave 4: the server's radar-timing answers (`wave-done-unmeasured`, `wave-advance-unmeasured`) are mail
+  // TO the worker, like the rejection above: the ball is the worker's, who owes the same claim again after the radar's
+  // next tick. The re-sent wave-done is the worker's own, so it passes the ball to the coordinator as any wave-done does.
+  it.each(['wave-done-unmeasured', 'wave-advance-unmeasured'])(
+    'after %s and before the re-send the ball is with the worker; the re-sent wave-done passes it to the coordinator', (subject) => {
+      const T = t('2026-10-28T14:00:00Z');
+      const done = mailRow(2801, T, WORKER, 'coordinator', 'status', WAVE_DONE_SUBJECT);
+      const unmeasured = mailRow(2802, T + 10 * MIN, 'coordinator', WORKER, 'status', subject);
+      const resent = mailRow(2803, T + 30 * MIN, WORKER, 'coordinator', 'status', WAVE_DONE_SUBJECT);
+      const worker = workerAt({ live: liveWord('idle', T + MIN) });
+      expect(stallFacts(stallInput({ mail: [done, unmeasured], worker })).ball).toBe('worker');
+      expect(stallVerdict(stallInput({ mail: [done, unmeasured], worker }), unmeasured.at + STALL_QUIET_MS - 1)).toEqual(NONE);
+      expect(stallVerdict(stallInput({ mail: [done, unmeasured], worker }), unmeasured.at + STALL_QUIET_MS)).toEqual(r1(T));
+      expect(stallFacts(stallInput({ mail: [done, unmeasured, resent], worker })).ball).toBe('coordinator');
+    });
+
+  it('review-done-unmeasured, mail TO the reviewer, keeps the reviewer\'s ball the same way', () => {
+    const T = t('2026-10-28T15:00:00Z');
+    const done = mailRow(2811, T, WORKER, 'coordinator', 'status', REVIEW_DONE_SUBJECT);
+    const unmeasured = mailRow(2812, T + 10 * MIN, 'coordinator', WORKER, 'status', 'review-done-unmeasured');
+    expect(stallFacts(stallInput({ mail: [done, unmeasured] })).ball).toBe('worker');
+    expect(stallFacts(stallInput({ mail: [done, unmeasured, mailRow(2813, T + 20 * MIN, WORKER, 'coordinator', 'status', REVIEW_DONE_SUBJECT)] })).ball)
+      .toBe('coordinator');
+  });
+
   it('two overlapping runs on one session are judged once, on the most recently dispatched, with the mail of both', () => {
     const run29 = runRow({ id: 29, dispatchedAt: t('2026-09-08T09:00:00Z'), claimedBy: 'demo-old-coord', wave: 3 });
     const run31 = runRow({ id: 31, dispatchedAt: t('2026-09-10T08:00:00Z'), claimedBy: COORD, wave: 4 });

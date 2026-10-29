@@ -5970,17 +5970,21 @@ export const MAIL_REJECT_CODES = [
   'no-handoff-commit',
   // review-run verdicts (design 2026-09-14 §5.3)
   'stale-review', 'report-unreadable',
+  // landing order wave 4 (D-7107): the radar has not measured the live tip yet. A verdict, not a counted refusal.
+  'lineage-unmeasured',
 ] as const;
 export type MailRejectCode = (typeof MAIL_REJECT_CODES)[number];
 
 /**
- * The done-authority subset of `MAIL_REJECT_CODES` — the eight a wave-done claim
+ * The done-authority subset of `MAIL_REJECT_CODES` — the nine a wave-done claim
  * or a forward advance can be refused with, as distinct from the ingress,
  * peer-bound and delivery families above: four a work run's claim alone
  * (`stale-tip`, `pr-regressed`, `pr-unmeasurable`, `no-handoff-commit`), two
  * shared by the branch resolution both verifiers run (`tip-unmeasurable`,
  * `branch-unmeasurable`), two a review run's alone (`stale-review`,
- * `report-unreadable`) (D-2797).
+ * `report-unreadable`) (D-2797), and one both verifiers share on a project the
+ * operator opted in to the radar's lineage (`lineage-unmeasured`, landing order
+ * wave 4): a verdict code, but NOT a refusal — see `DONE_REFUSAL_CODES`.
  *
  * The as-const idiom (`CLAIM_STATES`) rather than the union-first `PR_REASON_MAP`
  * one: the ARRAY is the single definition and the type follows it, because wave
@@ -5998,8 +6002,20 @@ export const DONE_AUTHORITY_CODES = [
   'pr-unmeasurable', 'no-handoff-commit',
   // review-run verdicts (design 2026-09-14 §5.3)
   'stale-review', 'report-unreadable',
+  // landing order wave 4 (D-7107)
+  'lineage-unmeasured',
 ] as const satisfies readonly MailRejectCode[];
 export type DoneRejectCode = (typeof DONE_AUTHORITY_CODES)[number];
+
+/**
+ * The done-authority codes that COUNT as a refusal (D-7107): every one but `lineage-unmeasured`, which is the radar's
+ * timing and not a fact about the claim. Every refusal count reads this list and never `DONE_AUTHORITY_CODES`:
+ * `closeRefusals`, `firstSubmission`, run health's `doneRejects` and `lastRejectCode`, and so the PWA chip. The
+ * unmeasured answer is still recorded (`mail_rejections`) and mailed, so a re-sent `wave-done` still counts in
+ * `waveDoneMails`. DERIVED by `.filter`, never typed out: `core-vocab.test.ts` reds on a hand-typed copy.
+ */
+export const DONE_REFUSAL_CODES: readonly Exclude<DoneRejectCode, 'lineage-unmeasured'>[] =
+  DONE_AUTHORITY_CODES.filter((c): c is Exclude<DoneRejectCode, 'lineage-unmeasured'> => c !== 'lineage-unmeasured');
 
 // NO `isDoneRejectCode` PREDICATE, deliberately. Every sibling vocabulary here
 // exports one because something reads a raw string back through it; nothing does
@@ -6551,7 +6567,8 @@ export interface RunHealth {
    *  the ceiling is the signal, and quiet siblings must not dilute it. */
   readonly mailReplayMax: number;
   /** How many done-authority refusals this run has collected
-   *  (`DONE_AUTHORITY_CODES`); other reject families are not counted. */
+   *  (`DONE_REFUSAL_CODES`: the authority codes less `lineage-unmeasured`, which is
+   *  the radar's timing and no refusal); other reject families are not counted. */
   readonly doneRejects: number;
   /** The newest one's code, or null when there are none. FREE TEXT on the wire in
    *  `MailSummary.lastError`'s sense — `mail_rejections.code` is stored
@@ -6889,7 +6906,8 @@ export interface RunSummary {
  *  would otherwise have to test `closedAt` as a second condition to know which
  *  zeroes it may believe. So `activeMs` (`wallMs - holdMs`) is a ceiling
  *  whenever this is true, and a total only when it is false. `closeRefusals` is the
- *  count of `mail_rejections` rows with a `DONE_AUTHORITY_CODES` code for this
+ *  count of `mail_rejections` rows with a `DONE_REFUSAL_CODES` code (the authority
+ *  codes less `lineage-unmeasured`) for this
  *  run — the rows `closeRun` writes for a refused wave-done — and
  *  `firstSubmission` is `closeRefusals === 0` once the run is done, null
  *  before.
@@ -12502,8 +12520,15 @@ export type DeadCause = typeof DEAD_CAUSES[number];
 /** The answer of a successful `POST /api/runs/:id/advance`. `checksMail` is the capability token of PR landing in ccrc
  *  (stage 1, spec §3.7): present only on an advance to `merging` whose episode was decided `live`, so a coordinator that
  *  reads it knows the server will mail the checks and may end its turn. Its one reader is the coordinator, through the
- *  answer `ccrc-api runs advance` prints. */
-export interface AdvanceOk { ok: true; run: RunSummary; checksMail?: typeof CHECKS_MAIL_TOKEN }
+ *  answer `ccrc-api runs advance` prints.
+ *
+ *  `verifiedHead` (landing order wave 4, D-7102) is the live branch tip a stale claim was accepted AT, on a project the
+ *  operator opted in to the radar's lineage: the episode's head and the landing's recorded head. ABSENT means the claim
+ *  itself was the head (every other advance, and every project not opted in). ADDITIVE and optional (`FLEET_PROTO`
+ *  untouched); its one reader is the coordinator skill's text, which binds it wherever it spells `<handoffCommit>`. */
+export interface AdvanceOk {
+  ok: true; run: RunSummary; checksMail?: typeof CHECKS_MAIL_TOKEN; verifiedHead?: string;
+}
 
 /** `FleetHealth`'s host-pressure block (#1170), at the foot as an interface merge, the disk block's rule, so no line
  *  cited above moves. */

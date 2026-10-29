@@ -429,6 +429,13 @@ when you re-measure it, and a brief, a ledger entry or a review note may cite
 the branch name and expect it to resolve. Releasing the hold (or closing every
 run naming the session) un-freezes it, and the next sweep may rename it then.
 
+**A brief for an opted-in project says so.** A brief for a project whose `$REG/landing/<project>/enabled` exists names
+the opt-in and the radar's base. The worker's clause 9 exception and the reviewer's clause 3 exception apply only
+where the brief says so, and a brief for any other project says nothing of them. Name the base in that brief as a
+ref name, `origin/<base>`, where `<base>` is the PR's base branch (`gh pr view <n> --json baseRefName`), and never as
+a sha. The radar walks against its conf's `base=`, which defaults to `main`; where the two differ, a merge the radar
+cannot place on its base gets today's answer (`stale-tip` or `stale-review`).
+
 Then **end your turn.** Do not sleep-poll. Do not "check in five minutes". The
 delivery lane will inject the worker's mail into your session when it is idle,
 and that injection is your next turn.
@@ -592,7 +599,10 @@ same, and shows as `absent`.
   (from `awaiting-review` ONLY — see above) — re-measured. Send it when a
   `status`/`wave-done` mail carries a claimed fingerprint (`{branchTip,
   prNumber, prPhase, handoffCommit}`). Submit that fingerprint **exactly as
-  the worker reported it** — never rebuild it by pairing a freshly re-measured
+  the worker reported it** (the one exception is the recorded head in §5:
+  while the same wave-done is still being answered after an advance answered
+  `verifiedHead`, the later advances and the close submit that `verifiedHead`
+  as both tips) — never rebuild it by pairing a freshly re-measured
   `branchTip` with the mail's ORIGINAL `handoffCommit`; see the
   `no-handoff-commit` row below for what that specific mix produces. Re-
   measuring locally first (read-only ccd is fine here: `ccd pr-state
@@ -618,6 +628,7 @@ same, and shows as `absent`.
 | `cap-review-rounds` | on an OPEN of a review run: the work run already has three review runs, in any state. The server raised one ask to the operator carrying the run, its round count and the last review's open findings (the refusal body carries the same under `ask`). Do not retry the open and do not look for another way to start a review: the operator lifts the cap per run, and a further open then succeeds. Meanwhile rule on the findings you already hold. |
 | `stale-review` | the reviewed branch's live tip is not the `reviewedTip` the report describes — the worker pushed after wave-done, or the report is about an older tip. Do not rule on it: close the review run with body `{"state":"failed"}` (no fingerprint needed), mail the worker the code and detail verbatim, and open a fresh review run against the live tip once its re-measured wave-done arrives. (A malformed `reviewedTip` reaching the verifier directly also answers this code, but the close route refuses that shape as `bad-request` first.) |
 | `report-unreadable` | the report path the reviewer named cannot be opened — absent or unreadable. Close the review run with body `{"state":"failed"}` (no fingerprint needed) and open a new one; the reviewer's clause 7 says the report is written by temp-then-rename, so a half-written file is never the cause. |
+| `lineage-unmeasured` | in a project the operator opted in to the radar's lineage, the live tip is not the claim and the radar has not yet measured the clean merges between them. It is a wait, not a refusal: the server has already mailed the claim's sender, which re-sends the same claim unchanged after the radar's next tick, at most twice. Re-sending means repeating the call that answered it, the same advance or the same close, so a re-sent `wave-done` that reaches you with the run already at `awaiting-review` is not a fresh wave-done and needs no new review run. The advance and the work close mail the worker, and the review close mails the reviewer. You send no `rejected:` mail for it, and you act only when the sender reports it. `detail` says why (`not-yet-measured`, `lineage-stale`, `older-than-the-live-tip` and the like). |
 
 **`pr-unmeasurable` has two causes, and they need different responses.** The
 server returns it both for a transient re-read failure (`detail` reads like
@@ -638,6 +649,11 @@ Mail the code back to the worker — `POST /api/mail` (§3's body shape), kind
 `answer`, subject `rejected: <code>`, `toId` the worker's session id, `runId`
 this run's id — and leave the run alone. A stale `wave-done` must never
 settle a wave.
+
+**Except `lineage-unmeasured`.** The server has already mailed that answer to whoever sent the claim, under its own
+subject (`wave-done-unmeasured`, `wave-advance-unmeasured` or `review-done-unmeasured`), so send no
+`rejected: lineage-unmeasured` mail. The sender re-sends the same claim after the radar's next tick, at most twice, and
+you act only when it reports the answer.
 
 **Put `reject.detail` in that mail's body, verbatim.** The code alone is not
 always the whole message: `pr-unmeasurable` above means two different things —
@@ -739,6 +755,17 @@ an operator/DB act, not a client one — or address the mail with an explicit
 `resolveCoordinator(runId)` answers off that run's own claim regardless of
 program state. **Open first** — the new run keeps the count above zero the
 whole time, which is the only prevention this ordering rule buys.
+
+**The recorded head.** In §5 and §5b, `<handoffCommit>` is the recorded head: the advance answer's `verifiedHead` when
+present, otherwise the head the server's dequeue or merged brief prints. An advance answer with no `verifiedHead` means
+the claim you submitted was itself the verified head. On a project the operator opted in to the radar's lineage the
+recorded head can be the live tip rather than the tip the worker claimed, and it is the head every spelling below
+binds: the native-queue enqueue, the spent-producer arm and the MERGED proof. When an advance answered `verifiedHead`,
+every later advance of that run and its close that answer the same wave-done submit the worker's fingerprint with
+`branchTip` and `handoffCommit` both set to that `verifiedHead` (the server's own answer, not a fresh measurement), so
+the ordinary path verifies the head that is landing. That rule ends with the wave-done it answered: once the run goes
+back to `working` (a send-back, or a lost merge race recorded from `merging`) or a fresh `wave-done` arrives, submit
+the worker's fingerprint exactly as the worker reports it.
 
 1. Dispatch a review run and rule on its report (SKILL.md steps 5–6, clause 12); this session never reads the diff itself.
 2. Update the ledger — Waves row, Decisions, Carried constraints, and the

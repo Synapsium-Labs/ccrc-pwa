@@ -874,3 +874,278 @@ describe('verifyReviewDone — a report and its tip are one pair (design 2026-09
     expect(calls.filter((c) => c[0] === 'pr-state')).toEqual([]);
   });
 });
+
+// ── landing order wave 4: the opted-in lineage path ─────────────────────────────────────────────────────────────────
+//
+// In a project the operator opted in, a claim that the radar's lineage proves is the live tip minus clean merges of
+// the base is ACCEPTED, and the live tip becomes the verified one. Every row below runs for BOTH verifiers
+// (`verifyDone` and `verifyReviewDone`), which answer `stale-tip` and `stale-review` today. The files are seeded under
+// `home/.cc-sessions/landing/demo/` the way wave 3b's probe writes them. The mismatch table above stays untouched and
+// green: a project with no `enabled` marker answers byte for byte as before.
+import { symlinkSync as linkFile } from 'node:fs';
+
+describe('the opted-in lineage path (landing order wave 4)', () => {
+  const LIVE = OTHER;                         // the branch's tip now; the claim (TIP) is its first parent
+  const BASE = 'c'.repeat(40);
+  const NOW = Date.parse('2026-10-28T09:00:00Z');
+  const iso = (offS: number): string => new Date(NOW + offS * 1000).toISOString();
+  const LOOSE = (root: string, branch: string = BRANCH): string => path.join(root, 'demo', '.git', 'refs', 'heads', ...branch.split('/'));
+
+  /** A full registry row, the helper the `findings 1` describe above writes, with the project and branch as inputs. */
+  const seedRow = (home: string, over: Record<string, string | null> = {}): void => {
+    const reg = path.join(home, '.cc-sessions');
+    mkdirSync(reg, { recursive: true });
+    const fields: Record<string, string | null> = {
+      wrapper: 'claude', project: PROJECT, workdir: '/w/demo/quiet-mesa', uuid: 'a'.repeat(36),
+      started: '1', workspace: 'quiet-mesa', branch: BRANCH, ...over,
+    };
+    for (const [k, v] of Object.entries(fields)) if (v !== null) writeFileSync(path.join(reg, `${SESSION}.${k}`), v);
+  };
+  const doc = (over: Record<string, unknown> = {}): Record<string, unknown> => ({
+    v: 1, project: PROJECT, id: SESSION, at: iso(-10), state: 'measured', branch: BRANCH, tip: LIVE, base: BASE,
+    chain: [{ merge: LIVE, p1: TIP, p2: BASE }], stop: 'not-a-merge', ...over,
+  });
+  const marker = (over: Record<string, unknown> = {}): string => JSON.stringify({ v: 1, project: PROJECT, at: iso(-10), ...over });
+
+  interface World { deps: ReturnType<typeof fingerprintDeps>; root: string; home: string; landing: string; report: string }
+  /** A fleet fixture: the registry row, the git ref at `LIVE`, a fresh `enabled` marker and an accepting lineage. Each
+   *  of `marker`/`lineage` is the file's text, or `null` for no file; `row` overrides the registry fields. */
+  const world = (o: { marker?: string | null; lineage?: string | null; row?: Record<string, string | null>; branch?: string;
+    withRow?: boolean; io?: (io: FleetIO, root: string) => FleetIO } = {}): World => {
+    const home = mkTmp('ccrc-fp-');
+    const branch = o.branch ?? BRANCH;
+    if (o.withRow !== false) seedRow(home, { branch, ...(o.row ?? {}) });
+    const root = project(LIVE, null, branch);
+    const landing = path.join(home, '.cc-sessions', 'landing', PROJECT);
+    mkdirSync(landing, { recursive: true });
+    const m = o.marker === undefined ? marker() : o.marker;
+    if (m !== null) writeFileSync(path.join(landing, 'enabled'), m);
+    const l = o.lineage === undefined ? JSON.stringify(doc()) : o.lineage;
+    if (l !== null) writeFileSync(path.join(landing, `${SESSION}.lineage`), l);
+    const base = fingerprintDeps(runnerFor('open'), root, home);
+    const deps = { ...base, now: () => NOW, ...(o.io === undefined ? {} : { io: o.io(base.io, root) }) };
+    return { deps, root, home, landing, report: reportPath(root) };
+  };
+  const reportPath = (dir: string): string => {
+    const p = path.join(dir, 'review-report.md'); writeFileSync(p, '# review\n'); return p;
+  };
+
+  interface Answer { ok: boolean; code?: string; detail?: string; tip?: string; via?: string }
+  const norm = (r: { ok: true; measured: { tip?: string; branchTip?: string; via?: string } } | { ok: false; code: string; detail: string }): Answer =>
+    r.ok ? { ok: true, tip: r.measured.branchTip ?? r.measured.tip!, ...(r.measured.via === undefined ? {} : { via: r.measured.via }) }
+      : { ok: false, code: r.code, detail: r.detail };
+  const VERIFIERS: Record<string, { today: string; run: (w: World, run?: typeof RUN) => Promise<Answer> }> = {
+    verifyDone: { today: 'stale-tip', run: async (w, run = RUN) => norm(await verifyDone(w.deps, run, FIXED_CLAIM)) },
+    verifyReviewDone: { today: 'stale-review',
+      run: async (w, run = RUN) => norm(await verifyReviewDone(w.deps, run, { reviewedTip: TIP, report: w.report })) },
+  };
+
+  describe.each(Object.keys(VERIFIERS))('%s', (name) => {
+    const v = VERIFIERS[name]!;
+    const today = v.today;
+    /** What the SAME claim answers in a world with no landing directory at all: today's answer, byte for byte. */
+    const baseline = async (): Promise<Answer> => {
+      const w = world({ marker: null, lineage: null });
+      return v.run(w);
+    };
+
+    it('accepts: the live tip is the verified one, and the verdict says how', async () => {
+      const res = await v.run(world());
+      expect(res).toEqual({ ok: true, tip: LIVE, via: 'base-only-merge' });
+    });
+
+    it('a project with no enabled marker answers exactly today, whatever else is on disk', async () => {
+      const before = await baseline();
+      expect(before).toMatchObject({ ok: false, code: today });
+      expect(before.detail).not.toMatch(/\((landing|lineage)/);
+      const res = await v.run(world({ marker: null }));
+      expect(res).toEqual(before);
+    });
+
+    describe('the marker', () => {
+      it.each([
+        ['is not JSON', 'not json'],
+        ['is version 2', marker({ v: 2 })],
+        ['names another project', marker({ project: 'proj-b' })],
+      ])('that %s is landing-marker-unreadable, and the refusal stays today\'s', async (_n, text) => {
+        const res = await v.run(world({ marker: text }));
+        expect(res).toMatchObject({ ok: false, code: today });
+        expect(res.detail).toMatch(/ \(landing-marker-unreadable\)$/);
+      });
+
+      it('that cannot be read (the file exists, its bytes do not come back) is unreadable, never absent', async () => {
+        const w = world();
+        const file = path.join(w.landing, 'enabled');
+        chmodSync(file, 0o000);
+        try {
+          const res = await v.run(w);
+          expect(res).toMatchObject({ ok: false, code: today });
+          expect(res.detail).toMatch(/ \(landing-marker-unreadable\)$/);
+        } finally { chmodSync(file, 0o644); }
+      });
+
+      it('that is a symlink is unreadable: only a regular file counts', async () => {
+        const w = world({ marker: null });
+        const real = path.join(w.home, 'real-enabled');
+        writeFileSync(real, marker());
+        linkFile(real, path.join(w.landing, 'enabled'));
+        const res = await v.run(w);
+        expect(res.detail).toMatch(/ \(landing-marker-unreadable\)$/);
+      });
+
+      it('older than 1200 s, or more than 60 s in the future, is landing-marker-stale; 1199 s old is trusted', async () => {
+        for (const at of [iso(-1201), iso(61)]) {
+          const res = await v.run(world({ marker: marker({ at }) }));
+          expect(res).toMatchObject({ ok: false, code: today });
+          expect(res.detail).toMatch(/ \(landing-marker-stale\)$/);
+        }
+        expect(await v.run(world({ marker: marker({ at: iso(-1199) }) }))).toMatchObject({ ok: true });
+      });
+    });
+
+    describe('the pause markers', () => {
+      it('the global pause, or the project\'s, answers today with no detail of its own', async () => {
+        const before = await baseline();
+        for (const file of ['land-probe-paused', path.join('landing', PROJECT, 'paused')]) {
+          const w = world();
+          writeFileSync(path.join(w.home, '.cc-sessions', file), '');
+          expect(await v.run(w), file).toEqual(before);
+        }
+      });
+
+      it('a pause marker whose type cannot be measured is a pause, not a green light', async () => {
+        const before = await baseline();
+        const res = await v.run(world({ io: (io) => ({
+          ...io,
+          lstatMeasured: async (p: string) => (p.endsWith('land-probe-paused') ? { ok: false as const, reason: 'unreadable' as const } : io.lstatMeasured(p)),
+        }) }));
+        expect(res).toEqual(before);
+      });
+    });
+
+    describe('a row the radar never measures answers today, detail lineage-not-expected (D-7105)', () => {
+      const notExpected = (res: Answer): void => {
+        expect(res).toMatchObject({ ok: false, code: today });
+        expect(res.detail).toMatch(/ \(lineage-not-expected\)$/);
+      };
+      it('the run-row fallback: the registry has no row for the session', async () => {
+        notExpected(await v.run(world({ withRow: false })));
+      });
+      it('a branch outside ws/', async () => {
+        notExpected(await v.run(world({ branch: 'feature/quiet-mesa' })));
+      });
+      it('a registry row of another project', async () => {
+        notExpected(await v.run(world({ row: { project: 'proj-b' } })));
+      });
+      it('a row with no .project, which reads as its own id', async () => {
+        notExpected(await v.run(world({ row: { project: null } })));
+      });
+    });
+
+    describe('the lineage file', () => {
+      const unmeasured = (res: Answer, detail: string): void => {
+        expect(res).toMatchObject({ ok: false, code: 'lineage-unmeasured' });
+        expect(res.detail).toBe(detail);
+      };
+      it('absent: not-yet-measured', async () => { unmeasured(await v.run(world({ lineage: null })), 'not-yet-measured'); });
+      it('malformed: lineage-unreadable', async () => { unmeasured(await v.run(world({ lineage: '{nope' })), 'lineage-unreadable'); });
+      it('older than 2400 s: lineage-stale; 2399 s old accepts', async () => {
+        unmeasured(await v.run(world({ lineage: JSON.stringify(doc({ at: iso(-2401) })) })), 'lineage-stale');
+        expect(await v.run(world({ lineage: JSON.stringify(doc({ at: iso(-2399) })) }))).toMatchObject({ ok: true });
+      });
+      it('for another branch is unreadable, never accepted', async () => {
+        unmeasured(await v.run(world({ lineage: JSON.stringify(doc({ branch: 'ws/other' })) })), 'lineage-unreadable');
+      });
+      it('whose tip is older than the live tip waits for the next tick, even with the claim in its chain', async () => {
+        const OLD = 'd'.repeat(40);
+        const lineage = JSON.stringify(doc({ tip: OLD, chain: [{ merge: OLD, p1: TIP, p2: BASE }] }));
+        unmeasured(await v.run(world({ lineage })), 'older-than-the-live-tip');
+      });
+      it('a partly-measured doc without the claim waits; a measured one without it is today\'s refusal', async () => {
+        const OTHER_CHAIN = [{ merge: LIVE, p1: 'e'.repeat(40), p2: BASE }];
+        unmeasured(await v.run(world({ lineage: JSON.stringify(doc({ state: 'unmeasured', stop: 'unmeasured', chain: OTHER_CHAIN })) })),
+          'partly-measured');
+        const res = await v.run(world({ lineage: JSON.stringify(doc({ chain: OTHER_CHAIN })) }));
+        expect(res).toMatchObject({ ok: false, code: today });
+        expect(res.detail).toEqual((await baseline()).detail);
+      });
+      it('a partly-measured doc accepts a claim its chain does hold (D-7106)', async () => {
+        const lineage = JSON.stringify(doc({ state: 'unmeasured', stop: 'unmeasured' }));
+        expect(await v.run(world({ lineage }))).toEqual({ ok: true, tip: LIVE, via: 'base-only-merge' });
+      });
+      it('an unmeasured doc with no base that holds the claim is lineage-unreadable, never an accept (fix round 1, F1)', async () => {
+        const lineage = JSON.stringify(doc({ state: 'unmeasured', stop: 'unmeasured', base: null }));
+        unmeasured(await v.run(world({ lineage })), 'lineage-unreadable');
+      });
+      it('is never read through a symlink', async () => {
+        const w = world({ lineage: null });
+        const real = path.join(w.home, 'real.lineage');
+        writeFileSync(real, JSON.stringify(doc()));
+        linkFile(real, path.join(w.landing, `${SESSION}.lineage`));
+        unmeasured(await v.run(w), 'lineage-unreadable');
+      });
+    });
+
+    describe('the tip is read once more after an accept', () => {
+      /** Answers `first` to the first read of the branch ref's loose file and `then` to every later one. */
+      const twice = (root: string, first: string, then: 'absent' | string) => (io: FleetIO): FleetIO => {
+        let reads = 0;
+        return {
+          ...io,
+          readFileMeasured: async (p, ...rest) => {
+            if (p !== LOOSE(root)) return io.readFileMeasured(p, ...rest);
+            reads += 1;
+            if (reads === 1) return { ok: true, content: `${first}\n` };
+            return then === 'absent' ? { ok: false, reason: 'absent' } : { ok: true, content: `${then}\n` };
+          },
+        };
+      };
+      const withTwice = (first: string, then: 'absent' | string): World =>
+        world({ io: (io, root) => twice(root, first, then)(io) });
+
+      it('a tip that moved between the reads is the stale refusal, never an accept', async () => {
+        const res = await v.run(withTwice(LIVE, 'f'.repeat(40)));
+        expect(res).toMatchObject({ ok: false, code: today, detail: 'the tip moved between reads' });
+      });
+
+      it('a re-read that finds no ref is tip-unmeasurable, never folded into "moved" and never an accept', async () => {
+        const res = await v.run(withTwice(LIVE, 'absent'));
+        expect(res).toMatchObject({ ok: false, code: 'tip-unmeasurable' });
+        expect(res.detail).toContain(`no readable ref for ${BRANCH} under ${PROJECT}`);
+      });
+
+      it('a TAG named refs/heads/ws/quiet-mesa, with the branch gone, answers tip-unmeasurable: the re-read is by full ref name', async () => {
+        const w = withTwice(LIVE, 'absent');
+        const tag = path.join(w.root, 'demo', '.git', 'refs', 'tags', 'refs', 'heads', 'ws', 'quiet-mesa');
+        mkdirSync(path.dirname(tag), { recursive: true });
+        writeFileSync(tag, `${LIVE}\n`);
+        const res = await v.run(w);
+        expect(res).toMatchObject({ ok: false, code: 'tip-unmeasurable' });
+      });
+    });
+  });
+
+  describe('verifyDone: the PR checks still run on the live head', () => {
+    it('an accepted tip with a PR that closed is pr-regressed, not an accept', async () => {
+      const w = world();
+      const deps = { ...w.deps, runCcd: fingerprintDeps(runnerFor('closed'), w.root, w.home).runCcd };
+      expect(await verifyDone(deps, RUN, FIXED_CLAIM)).toMatchObject({ ok: false, code: 'pr-regressed' });
+    });
+
+    it('measured.branchTip is the LIVE tip and measured.via names the lineage; an ordinary ok carries no via', async () => {
+      const w = world();
+      const res = await verifyDone(w.deps, RUN, FIXED_CLAIM);
+      expect(res).toMatchObject({ ok: true, measured: { branchTip: LIVE, prNumber: 42, prPhase: 'open', via: 'base-only-merge' } });
+      const plain = await verifyDone(fingerprintDeps(runnerFor('open'), project(TIP, null)), RUN, FIXED_CLAIM);
+      expect(plain.ok && 'via' in plain.measured).toBe(false);
+    });
+  });
+
+  it('the clock is the dep\'s: without one the radar\'s files age against the real time', async () => {
+    const real = Date.now();
+    const at = new Date(real - 5000).toISOString();
+    const w = world({ marker: marker({ at }), lineage: JSON.stringify(doc({ at })) });
+    const noClock = fingerprintDeps(runnerFor('open'), w.root, w.home);
+    expect(await verifyDone(noClock, RUN, FIXED_CLAIM)).toMatchObject({ ok: true, measured: { branchTip: LIVE } });
+  });
+});

@@ -20,7 +20,7 @@ const frontmatter = skill.slice(4, skill.indexOf('\n---', 4));
 const CONTRACT = [
   "Learn who you are on EVERY call: `fromId` and `fromUuid` come from `ccrc-api whoami`, which reads the pane you are in and REFUSES rather than naming another session. Re-read them each time; a uuid you cached is guaranteed stale after the `/clear` dispatch runs.",
   "Ack before you act, keyed on the row's DELIVERY id, never the mail row's own `id`. Reply to the coordinator through mail (`toId:'coordinator'`, with the `runId` of THIS review run), never by typing into your own pane.",
-  "Measure the reviewed tip ONCE, before you read a line: `reviewedTip` is the 40-hex sha of the worker branch the brief names, read from this repository's own ref (`git rev-parse refs/heads/ws/<worker-slug>`). Every finding cites that sha. If the ref moves while you read, say so in the report and stop — a report about two tips is a report about neither.",
+  "Measure the reviewed tip ONCE, before you read a line: `reviewedTip` is the 40-hex sha of the worker branch the brief names, read from this repository's own ref (`git rev-parse refs/heads/ws/<worker-slug>`). Every finding cites that sha. If the ref moves while you read, say so in the report and stop — a report about two tips is a report about neither. In a project your brief names as opted in to the radar's lineage, a move whose only new commit is a clean merge of the radar base on top of the tip you read is not a move: keep reading at that tip.",
   "Read in YOUR OWN worktree only: `git checkout --detach <reviewedTip>` here, and never `checkout` the worker's branch, never commit, amend, rebase, cherry-pick, reset or push it, never open a PR on it, and never `git worktree add` or `remove` anything. This workspace's own branch (`ws/<slug>`) stays where dispatch left it; you land nothing on it.",
   "Run the SDD shape the brief names and nothing lighter: the review lenses over the wave's whole diff against the plan file the brief names (that plan's text governs over your recollection of the spec), then the whole-branch pass, then the suites the plan says to run, in this worktree, at `reviewedTip`.",
   "Report, never rule. This session never calls `POST /api/runs/:id/advance`, `POST /api/runs/:id/close`, `POST /api/runs/:id/dispatch` or `POST /api/ledger/deviations` on any run, never mails the worker, never sends work back and never allocates a deviation number. A finding that needs a ruling is written as such in the report — `needs a ruling:` and the question — and the coordinator rules.",
@@ -146,6 +146,47 @@ describe('the reviewer skill: its contract', () => {
     // skill's own trigger word for word, so the description excludes it in so many words.
     expect(frontmatter.toLowerCase()).toContain(
       'never use it inside a subagent — a review lens agent, or any session started by another session\'s agent tool or a workflow agent() call, is a subagent and returns its findings to its parent without sending mail.');
+  });
+
+  // Landing order wave 4 (stage 4): clause 3 gains one exception, the TIP MOVED bullet and the
+  // stale-review prose are qualified with it, and a new bullet names the server's
+  // `review-done-unmeasured` mail. S3 drops the exception, S4 drops the bullet.
+  it('clause 3 carries the lineage exception, as one whole numbered line', () => {
+    const line = skill.split('\n').find((l) => l.startsWith('3. '));
+    expect(line, 'SKILL.md has no clause 3').toBeTruthy();
+    expect(line).toBe(`3. ${CONTRACT[2]}`);
+    const exception = 'In a project your brief names as opted in to the radar\'s lineage, a move whose only new commit is a clean merge of the radar base on top of the tip you read is not a move: keep reading at that tip.';
+    expect(CONTRACT[2], 'CONTRACT[2] lost the exception').toContain(exception);
+    expect(line, 'clause 3 lost the exception').toContain(exception);
+  });
+
+  it('qualifies the TIP MOVED bullet and the stale-review prose, and spells out the clean-merge check in three steps', () => {
+    const flat = skill.replace(/\s+/g, ' ');
+    const prose = flat.slice(flat.indexOf('**Clause 3 is the one the server checks.**'), flat.indexOf('**Clause 4 is what makes you safe'));
+    expect(prose).toContain('except, in a project your brief names as opted in to the radar\'s lineage, one clean merge of the radar base');
+    const at = flat.indexOf('- **The worker branch moved while you read**');
+    expect(at, 'the TIP MOVED bullet is gone').toBeGreaterThan(flat.indexOf('## When something is wrong'));
+    const bullet = flat.slice(at, flat.indexOf('- **The plan the brief names cannot be resolved**'));
+    expect(bullet).toContain('`TIP MOVED: read <tip>, now <new>`');
+    expect(bullet).toContain('except, in a project your brief names as opted in to the radar\'s lineage, a move whose only new commit is a clean merge of the radar base on top of the tip you read (clause 3)');
+    for (const step of ['`git rev-list --parents -n 1 <new>` shows two parents, the first of which is the tip you read',
+      '`git merge-base --is-ancestor <second> origin/<base>`',
+      '`git merge-tree --write-tree` of the two parents equals `<new>^{tree}`']) {
+      expect(bullet, `the clean-merge check lost: ${step}`).toContain(step);
+    }
+    expect(bullet).toContain('If any step fails, it is a move');
+  });
+
+  it('tells the reviewer to re-send the same review-done on review-done-unmeasured, twice at most, and that it is not a rewrite', () => {
+    const flat = skill.replace(/\s+/g, ' ');
+    const at = flat.indexOf('- **A `review-done-unmeasured` mail arrives**');
+    expect(at, 'the review-done-unmeasured bullet is gone').toBeGreaterThan(flat.indexOf('## When something is wrong'));
+    const bullet = flat.slice(at);   // the last bullet of the skill
+    for (const w of ['re-send the same `review-done` mail, unchanged', 'after the radar\'s next tick', 'at most twice',
+      'then report it to your coordinator',
+      'Sending the same mail again is not rewriting the report that clause 7 freezes']) {
+      expect(bullet, `the review-done-unmeasured bullet lost: ${w}`).toContain(w);
+    }
   });
 
   it('states the review-done mail shape the close route re-measures', () => {

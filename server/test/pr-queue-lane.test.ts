@@ -26,6 +26,7 @@ import type { PushPayload } from '../src/push.js';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import type { RunState } from '../../shared/api.js';
+import { mergingAtDetail } from '../../shared/landing.js';
 import { HIBERNATE_DISABLED_MARKER } from '../src/coord/hibernate.js';
 
 const ID = 'demo-quiet-basin';
@@ -264,6 +265,49 @@ describe('the landing lane — a merge while the run waits at merging', () => {
       expect(f.mail(), JSON.stringify(opts)).toEqual([]);
       f.stop();
     }
+  });
+});
+
+describe('the landing briefs carry the run\'s recorded episode head (landing order wave 4, D-7102)', () => {
+  const HEAD = 'c'.repeat(40);
+  /** A run that reached `merging` through the advance, whose transition row records the episode at `head`. */
+  const bodyOf = (f: Awaited<ReturnType<typeof harness>>): string =>
+    (f.coord.db.prepare('SELECT body FROM mail WHERE id = ?').get(f.mail()[0]!.id) as { body: string }).body;
+  const atMerging = async (first: string, head: string | null) => {
+    const f = await harness(first, { state: 'awaiting-review' });
+    expect(f.coord.advance(f.firstRunId, 'merging', 'coordinator',
+      head === null ? undefined : mergingAtDetail(head, 42, 'off')).ok).toBe(true);
+    return f;
+  };
+
+  it('the dequeue mail prints the head the advance verified', async () => {
+    const f = await atMerging(openLine({ queue: 'dequeued', queueAt: T1 }), HEAD);
+    await f.sweep();
+    const body = bodyOf(f);
+    expect(body).toBe(renderDequeueBrief(ID, 42, HEAD));
+    expect(body).toContain(`\`${HEAD}\``);
+    f.stop();
+  });
+
+  it('the merged mail prints the head the advance verified', async () => {
+    const f = await atMerging(mergedLine({ queue: 'landed', queueAt: T2 }), HEAD);
+    await f.sweep();
+    const body = bodyOf(f);
+    expect(body).toBe(renderMergedBrief(ID, 42, HEAD));
+    expect(body).toContain(`\`${HEAD}\``);
+    f.stop();
+  });
+
+  it('a run with no episode head gets exactly the text it always did', async () => {
+    const d = await atMerging(openLine({ queue: 'dequeued', queueAt: T1 }), null);
+    await d.sweep();
+    expect(bodyOf(d)).toBe(renderDequeueBrief(ID, 42));
+    expect(bodyOf(d)).not.toContain('recorded head');
+    d.stop();
+    const m = await atMerging(mergedLine({ queue: 'landed', queueAt: T2 }), null);
+    await m.sweep();
+    expect(bodyOf(m)).toBe(renderMergedBrief(ID, 42));
+    m.stop();
   });
 });
 
