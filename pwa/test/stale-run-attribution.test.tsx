@@ -123,6 +123,14 @@ describe('orphanNote — no false "coordinator gone" from a stale run (D-5828)',
     expect(orphanNote(depth0(plain), [stale], 'project-a', [liveCoord, plain], lookup, true)?.presence).toBe('dead');
   });
 
+  // C7d's behaviour row, OA-C15 (a) (D-7265): the marker follows the wire's binding. A row the server binds to no
+  // open run (an older server's frame has no binding at all) carries no marker, whatever run names its id ('dead'
+  // before C7d, read off the id).
+  it('a row the wire binds to no open run carries no marker, though a run claimed by a dead coordinator names its id', () => {
+    const unbound = worker({ child: { kind: 'none' }, role: null, run: null, openRun: null });
+    expect(orphanNote(depth0(unbound), [stale], 'project-a', [liveCoord, unbound], lookup, true)).toBeNull();
+  });
+
   it('a successor run claimed by a dead coordinator still marks the row — the guard hides only older runs', () => {
     const successor = run({ id: 612, wave: 4 });
     expect(orphanNote(depth0(worker()), [successor], 'project-a', [liveCoord, worker()], lookup, true)?.presence)
