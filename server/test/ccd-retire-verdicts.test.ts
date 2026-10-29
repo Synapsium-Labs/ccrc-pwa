@@ -79,7 +79,7 @@ import { GH_STUB, makePrHarness, mergedRow, type PrHarness } from './ccdPrHelper
 import { CHILD_ENV, CHILD_STUBS, makeChild } from './childReclaimFixture.js';
 import { EXP_STUBS, NOW, makeArchived } from './wsExpireFixture.js';
 import { IDLE_FLOOR_SEAM, makeOrphan, COL_ID } from './wsCollectFixture.js';
-import { mergeBaseText } from './mergeBase.js';
+import { mergeBaseFiles } from './mergeBase.js';
 import { ccdLauncherIn } from './consolidationCensus.js';
 import { mkTmp } from './tmpHelpers.js';
 
@@ -335,17 +335,30 @@ export function listing(home: string): string[] {
   return out;
 }
 
-/** The merge-base's ccd, extracted into a tmp tree with its library beside it, or null with no origin/main or merge-base. */
+/** The merge-base's ccd, extracted into a tmp tree with every file the base's own `ccd/lib/` holds beside it, each at
+ *  its repo-relative path (D-7496: a base on either side of a library move runs), or null with no origin/main or
+ *  merge-base, or when the body or the listing cannot be read. It runs at collection time, so it never throws. */
 function baseCcd(): string | null {
-  const body = mergeBaseText(ROOT, path.relative(ROOT, CCD));
-  const lib = mergeBaseText(ROOT, path.relative(ROOT, CCD_LIB));
-  if (body === null || lib === null) return null;
+  const libs = mergeBaseFiles(ROOT, path.relative(ROOT, path.dirname(CCD_LIB)));
+  if (libs === null) return null;
+  const show = (rel: string): Buffer =>
+    execFileSync('git', ['show', `${libs.base}:${rel}`], { cwd: ROOT, stdio: 'pipe', maxBuffer: 64 * 1024 * 1024 });
+  let body: Buffer;
+  let files: [string, Buffer][];
+  try {
+    body = show(path.relative(ROOT, CCD));
+    files = libs.files.map((rel) => [rel, show(rel)]);
+  } catch {
+    return null;
+  }
   const dir = mkTmp('c5d-base-ccd-');
   const launcher = ccdLauncherIn(dir);
-  const libAt = path.join(dir, path.relative(ROOT, CCD_LIB));
-  fs.mkdirSync(path.dirname(libAt), { recursive: true });
+  fs.mkdirSync(path.dirname(launcher), { recursive: true });
   fs.writeFileSync(launcher, body, { mode: 0o755 });
-  fs.writeFileSync(libAt, lib);
+  for (const [rel, bytes] of files) {
+    fs.mkdirSync(path.dirname(path.join(dir, rel)), { recursive: true });
+    fs.writeFileSync(path.join(dir, rel), bytes);
+  }
   return launcher;
 }
 
@@ -559,6 +572,19 @@ describe.skipIf(!LINUX)('the retire-verdict table: every row through every retir
       console.warn('retire-verdicts: skipped the differential half, no origin/main or merge-base in this checkout');
       ctx.skip();
     }
+  });
+
+  it('the extracted tree holds every file the merge-base\'s own ccd/lib holds, and that is not nothing (D-7496)', (ctx) => {
+    if (base === null) { ctx.skip(); return; } // the case above fails on CI without a base
+    const lib = path.relative(ROOT, path.dirname(CCD_LIB));
+    const git = (args: string[]): string => execFileSync('git', args, { cwd: ROOT, encoding: 'utf8', stdio: 'pipe' });
+    const at = git(['merge-base', 'origin/main', 'HEAD']).trim();
+    const want = git(['ls-tree', '-r', '-z', '--name-only', at, '--', `${lib}/`]).split('\0').filter(Boolean).sort();
+    const tree = path.dirname(path.dirname(base));
+    const got = fs.readdirSync(path.join(tree, lib), { recursive: true, withFileTypes: true })
+      .filter((e) => !e.isDirectory()).map((e) => path.relative(tree, path.join(e.parentPath, e.name))).sort();
+    expect(want.length).toBeGreaterThan(0);
+    expect(got).toEqual(want);
   });
 
   for (const def of ROWS) {

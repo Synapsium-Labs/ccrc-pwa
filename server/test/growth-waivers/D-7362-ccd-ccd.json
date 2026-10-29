@@ -1,7 +1,0 @@
-{
-  "file": "ccd/ccd",
-  "maxDelta": 490,
-  "d": "D-7362",
-  "reason": "the train proof of a member a merge train landed (D-7335, D-7362, D-7378, D-7381): `_pr_py`'s `train-refs` and `train-check` modes reading the one `ccrc-train v1` block, `_ws_train_record` with its per-verb budget and definitive-answer rule, the kept proofs and tried records with their readers and writer, `_pr_train_proofs` run once before every reader annotates its rows, the reap's train rung and its four refusals, the bounded `pr-train-prove` verb, and `_pr_num_valid`; measured +490 net code lines against the merge-base; kept inline because every piece extends an existing owner in ccd (the PR lane's `_pr_py` and its readers, and the reap's ladder) and a split would need a digest-checked install of its own",
-  "added": "2026-10-29"
-}

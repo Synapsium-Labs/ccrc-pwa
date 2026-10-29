@@ -33,31 +33,44 @@ export const CCD_LIB = path.resolve(__dirname, '../../ccd/lib/disk-retention.sh'
 /** The committed placeholder for the library pin (D-6913): like line 2's stamp, the digest is written at install time. */
 export const CCD_LIB_PIN_PLACEHOLDER = '__CCD_LIB_SHA256=stamp-at-install';
 
+/** The second library `CCD` loads at its foot (D-7463): the train proof, beside the first in `ccd/lib/`, pinned the same way. */
+export const CCD_TRAIN_LIB = path.resolve(__dirname, '../../ccd/lib/train-proof.sh');
+
+/** Its committed pin placeholder, rendered at install time like `CCD_LIB_PIN_PLACEHOLDER`. */
+export const CCD_TRAIN_LIB_PIN_PLACEHOLDER = '__CCD_LIB_TRAIN_SHA256=stamp-at-install';
+
+/** Every library `CCD` loads, in load order: the file and the name it is installed under in `lib/` beside the body. */
+export const CCD_LIBS: readonly string[] = [CCD_LIB, CCD_TRAIN_LIB];
+
 /** The docs redactor's two files (D-7077, OA-C11 (a)): installed beside the body in `shared/`, read by the installer from the
  *  tree's `shared/`, and pinned by digest in the body like the library. */
 export const CCD_REDACT = path.resolve(__dirname, '../../shared/redact.mjs');
 export const CCD_REDACT_CLI = path.resolve(__dirname, '../../shared/redact-cli.mjs');
 
-/** What `ccd/ccd-entry-install.py` publishes for a ccd source beside library bytes `lib` and the redactor's two files
- *  (`shared`, the repository's by default): the three pin placeholders rendered to their files' SHA-256 FIRST, then the line-2
- *  placeholder swapped, in place, for the marker `markGenerated` writes, so the stamp covers the pins. A mirror for fixtures;
- *  `ccd-entry-install.test.ts` holds it equal to the installer's real output. */
+/** What `ccd/ccd-entry-install.py` publishes for a ccd source beside library bytes `lib`, the redactor's two files
+ *  (`shared`, the repository's by default) and the train-proof library's bytes (`train`, the repository's by default): the
+ *  four pin placeholders rendered to their files' SHA-256 FIRST, then the line-2 placeholder swapped, in place, for the
+ *  marker `markGenerated` writes, so the stamp covers the pins. A mirror for fixtures; `ccd-entry-install.test.ts` holds it
+ *  equal to the installer's real output. */
 export function installedCcdBody(
   source: string, lib: string | Buffer,
   shared: { redact: string | Buffer; cli: string | Buffer } = { redact: fs.readFileSync(CCD_REDACT), cli: fs.readFileSync(CCD_REDACT_CLI) },
+  train: string | Buffer = fs.readFileSync(CCD_TRAIN_LIB),
 ): string {
   const digest = createHash('sha256').update(lib).digest('hex');
   const sha = (b: string | Buffer): string => createHash('sha256').update(b).digest('hex');
   const lines = source.replace(/^__CCD_REDACT_SHA256=stamp-at-install$/m, `__CCD_REDACT_SHA256=${sha(shared.redact)}`)
     .replace(/^__CCD_REDACT_CLI_SHA256=stamp-at-install$/m, `__CCD_REDACT_CLI_SHA256=${sha(shared.cli)}`)
-    .replace(/^__CCD_LIB_SHA256=stamp-at-install$/m, `__CCD_LIB_SHA256=${digest}`).split('\n');
+    .replace(/^__CCD_LIB_SHA256=stamp-at-install$/m, `__CCD_LIB_SHA256=${digest}`)
+    .replace(/^__CCD_LIB_TRAIN_SHA256=stamp-at-install$/m, `__CCD_LIB_TRAIN_SHA256=${sha(train)}`).split('\n');
   if ((lines[1] ?? '').startsWith('# ccrc:stamp-at-install')) lines.splice(1, 1);
   return markGenerated(lines.join('\n'));
 }
 
 let ccdSourceMemo: string | undefined;
 /** ccd's whole shell source as ONE text (D-6913): `ccd/ccd` with each `# @ccd-lib:<id>` pointer line replaced
- *  by that region of the library, back where the code sat before it moved. Every test that SCANS ccd's text reads it through
+ *  by that region of its library (any of `CCD_LIBS`; an id names one region across them all), back where the code sat
+ *  before it moved. Every test that SCANS ccd's text reads it through
  *  here, so a moved region stays under the same scanner, the same marker pair and the same ordering; a bare
  *  `readFileSync(CCD, 'utf8')` would read ccd without the moved code, and a scan would pass over less than it did.
  *  `ccd-lib-load.test.ts` holds that no test reads it bare. Tests about the FILES (the stamp, the digest, the install)
@@ -65,10 +78,16 @@ let ccdSourceMemo: string | undefined;
 export function ccdSource(): string {
   if (ccdSourceMemo !== undefined) return ccdSourceMemo;
   const main = fs.readFileSync(CCD, 'utf8');
-  if (!fs.existsSync(CCD_LIB)) return (ccdSourceMemo = main);
-  const parts = fs.readFileSync(CCD_LIB, 'utf8').split(/^# @ccd-lib:(\w+)\n/m);
   const regions = new Map<string, string>();
-  for (let i = 1; i + 1 < parts.length; i += 2) regions.set(parts[i]!, parts[i + 1]!.replace(/\n+$/, ''));
+  for (const lib of CCD_LIBS) {
+    if (!fs.existsSync(lib)) continue;
+    const parts = fs.readFileSync(lib, 'utf8').split(/^# @ccd-lib:(\w+)\n/m);
+    for (let i = 1; i + 1 < parts.length; i += 2) {
+      if (regions.has(parts[i]!)) throw new Error(`ccdSource: the region id ${parts[i]} is named twice across ccd's libraries`);
+      regions.set(parts[i]!, parts[i + 1]!.replace(/\n+$/, ''));
+    }
+  }
+  if (regions.size === 0) return (ccdSourceMemo = main);
   return (ccdSourceMemo = main.replace(/^# @ccd-lib:(\w+)\b.*$/gm, (line, id: string) => regions.get(id) ?? line));
 }
 
@@ -148,10 +167,11 @@ export function installDirectEntry(home: string, opts: { body?: string | Buffer 
   fs.rmSync(body, { force: true });
   fs.writeFileSync(body, bodyBytes, { mode: 0o644 });
   fs.chmodSync(body, 0o644);
-  // The library the body loads (D-6913), where the installer puts it: `lib/` beside the body.
-  if (fs.existsSync(CCD_LIB)) {
+  // The libraries the body loads (D-6913, D-7463), where the installer puts them: `lib/` beside the body.
+  for (const lib of CCD_LIBS) {
+    if (!fs.existsSync(lib)) continue;
     fs.mkdirSync(path.join(libexec, 'lib'), { recursive: true });
-    fs.copyFileSync(CCD_LIB, path.join(libexec, 'lib', 'disk-retention.sh'));
+    fs.copyFileSync(lib, path.join(libexec, 'lib', path.basename(lib)));
   }
   // The docs redactor (D-7077), where the installer puts it: `shared/` beside the body.
   fs.mkdirSync(path.join(libexec, 'shared'), { recursive: true });

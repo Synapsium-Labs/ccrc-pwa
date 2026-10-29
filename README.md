@@ -6663,9 +6663,10 @@ you need to reason about one.*
   the body at `~/.local/libexec/ccrc/ccd` and, at `~/.local/bin/ccd`, a
   standard-library Python launcher rendered from `ccd-entry.py` by
   `ccd-entry-install.py` (what it decides before Bash starts is "Only the
-  launcher starts a reclaim", under Fleet coordination), plus the library the
+  launcher starts a reclaim", under Fleet coordination), plus the libraries the
   body pins and loads at its foot, `lib/disk-retention.sh` (the fleet
-  disk-retention verbs; installed first, at `~/.local/libexec/ccrc/lib/`, #1279); `ccrc`, the box
+  disk-retention verbs; installed first, at `~/.local/libexec/ccrc/lib/`, #1279) and
+  `lib/train-proof.sh` (the train proof of a PR a merge train landed, beside it, D-7463); `ccrc`, the box
   lifecycle CLI, with the files it sources or execs (`ccrc-doctor-checks`,
   `ccrc-wrapper-shape`, `ccrc-adopt`); `session-hook.sh` (the Claude Code hook that reports each
   session's state), `install-session-hooks.sh` (the idempotent installer that
@@ -7413,6 +7414,7 @@ incomplete outright, so no flip ever returns to it:
 # The ccd PAIR goes back together, body first (D-3696).
 restore() { cp -a "$1" "$2.restore" && mv -f "$2.restore" "$2"; }
 [ ! -f ~/ccrc-backups/<ts>/ccd-lib-disk-retention.sh ] || restore ~/ccrc-backups/<ts>/ccd-lib-disk-retention.sh ~/.local/libexec/ccrc/lib/disk-retention.sh   # the body's library, when the backup has one
+[ ! -f ~/ccrc-backups/<ts>/ccd-lib-train-proof.sh ] || restore ~/ccrc-backups/<ts>/ccd-lib-train-proof.sh ~/.local/libexec/ccrc/lib/train-proof.sh   # its second library, when the backup has one
 restore ~/ccrc-backups/<ts>/ccd-body ~/.local/libexec/ccrc/ccd
 restore ~/ccrc-backups/<ts>/ccd ~/.local/bin/ccd
 restore ~/ccrc-backups/<ts>/notify.sh ~/.cc-sessions/notify.sh
@@ -7727,6 +7729,9 @@ These conventions carry more weight here than style:
   renders the digest of the library it publishes into the installed body BEFORE it stamps it, so
   the stamp covers the pin. Editing the library needs no restamp. The library must end in exactly
   one newline and carry no NUL byte (the body hashes it as bash reads it), or the install refuses.
+  `ccd/lib/train-proof.sh` (the train proof, D-7463) is the second library and is treated the same
+  way, its pin `__CCD_LIB_TRAIN_SHA256=stamp-at-install`; the body reads and checks both before it
+  evaluates either.
   `ccd/session-hook.sh` carries a generated helpers region (`shared/hook-helpers.mjs`);
   after editing `ccd/ccd`'s epoch helper, or on a conflict in the region's stamp line, run
   `bash ccd/ccrc restamp ccd/session-hook.sh`; `hook-helpers-generated.test.ts` reds when the

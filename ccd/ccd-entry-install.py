@@ -75,14 +75,22 @@
 # or the previous library is restored (ccrc update's backup carries it as
 # ccd-lib-disk-retention.sh).
 #
+# THE SECOND LIBRARY (D-7463): `lib/train-proof.sh`, the train proof, beside
+# the first and treated exactly as it is: pinned in the body's text
+# (`__CCD_LIB_TRAIN_SHA256`, one placeholder line, rendered here by
+# `render_lib_pin`), held to the same one-newline, no-NUL shape, staged beside
+# the first in `lib/` and renamed right after it, before the body (ccrc
+# update's backup carries it as ccd-lib-train-proof.sh).
+#
 # The library HALF also holds the docs redactor (D-7077, OA-C11 (a)):
 # `shared/redact.mjs` and `shared/redact-cli.mjs`, published into `shared/`
 # beside the body and pinned by digest in its text like the library
 # (`__CCD_REDACT_SHA256`, `__CCD_REDACT_CLI_SHA256`, each rendered from exactly
 # one placeholder line, or the install refuses before anything moves). The
 # half's three files are staged together and renamed in the order
-# shared/redact.mjs, shared/redact-cli.mjs, lib/disk-retention.sh, before the
-# body; a failure after any of them moved is the library half's failure.
+# shared/redact.mjs, shared/redact-cli.mjs, lib/disk-retention.sh,
+# lib/train-proof.sh, before the body; a failure after any of them moved is the
+# library half's failure.
 #
 # The library must end in exactly one newline and carry no NUL byte. The body
 # hashes the file as bash reads it (`$(<file)` drops NULs and every trailing
@@ -113,6 +121,8 @@ SHEBANG_FLAGS = ' -IS'
 
 LIB_PIN = re.compile(rb'^__CCD_LIB_SHA256=([0-9a-f]{64})$', re.M)
 LIB_PIN_PLACEHOLDER = re.compile(rb'^__CCD_LIB_SHA256=stamp-at-install$', re.M)
+TRAIN_LIB_PIN = re.compile(rb'^__CCD_LIB_TRAIN_SHA256=([0-9a-f]{64})$', re.M)
+TRAIN_LIB_PIN_PLACEHOLDER = re.compile(rb'^__CCD_LIB_TRAIN_SHA256=stamp-at-install$', re.M)
 REDACT_PINS = ('__CCD_REDACT_SHA256', '__CCD_REDACT_CLI_SHA256')
 PLACEHOLDER_PYTHON = '@CCRC_' + 'PYTHON3@'
 PLACEHOLDER_DIGEST = '@CCRC_' + 'CCD_SHA256@'
@@ -141,6 +151,8 @@ ENTRY_DEST = '.local/bin/ccd'
 BODY_DEST = '.local/libexec/ccrc/ccd'
 LIB_SOURCE = 'ccd/lib/disk-retention.sh'
 LIB_DEST = '.local/libexec/ccrc/lib/disk-retention.sh'
+TRAIN_LIB_SOURCE = 'ccd/lib/train-proof.sh'
+TRAIN_LIB_DEST = '.local/libexec/ccrc/lib/train-proof.sh'
 REDACT_SOURCE = 'shared/redact.mjs'
 REDACT_DEST = '.local/libexec/ccrc/shared/redact.mjs'
 REDACT_CLI_SOURCE = 'shared/redact-cli.mjs'
@@ -175,10 +187,20 @@ def stamp_body(data):
     return b'\n'.join(lines)
 
 
-def render_lib_pin(data, lib_digest):
+def render_lib_pin(data, lib_digest, placeholder=LIB_PIN_PLACEHOLDER, name=b'__CCD_LIB_SHA256'):
     """The body with every pin placeholder line replaced, in place, by the library's digest (THE LIBRARY, above).
     `install` then requires exactly one pin, naming the library it publishes; this only renders."""
-    return LIB_PIN_PLACEHOLDER.sub(b'__CCD_LIB_SHA256=' + lib_digest.encode('ascii'), data)
+    return placeholder.sub(name + b'=' + lib_digest.encode('ascii'), data)
+
+
+def read_lib(tree, source):
+    """A library's bytes from the tree, refused unless they end in exactly one newline and hold no NUL (THE LIBRARY)."""
+    data = read_regular(os.path.join(tree, *source.split('/')))
+    if b'\0' in data or not data.endswith(b'\n') or data.endswith(b'\n\n'):
+        raise Refused('%s must end in exactly one newline and contain no NUL byte: the body hashes the file as bash reads it,'
+                      ' which drops NULs and trailing newlines, so any other file is one the body would refuse; fix the file'
+                      ' in the source tree' % source)
+    return data
 
 
 def render_redact_pins(data, digests):
@@ -481,12 +503,10 @@ def sweep(directory, pattern, is_dir):
 
 def install(tree, home):
     python = check_interpreter()
-    lib_data = read_regular(os.path.join(tree, *LIB_SOURCE.split('/')))
-    if b'\0' in lib_data or not lib_data.endswith(b'\n') or lib_data.endswith(b'\n\n'):
-        raise Refused('%s must end in exactly one newline and contain no NUL byte: the body hashes the file as bash reads it,'
-                      ' which drops NULs and trailing newlines, so any other file is one the body would refuse; fix the file'
-                      ' in the source tree' % LIB_SOURCE)
+    lib_data = read_lib(tree, LIB_SOURCE)
     lib_digest = hashlib.sha256(lib_data).hexdigest()
+    train_data = read_lib(tree, TRAIN_LIB_SOURCE)
+    train_digest = hashlib.sha256(train_data).hexdigest()
     redact_data = read_regular(os.path.join(tree, *REDACT_SOURCE.split('/')))
     cli_data = read_regular(os.path.join(tree, *REDACT_CLI_SOURCE.split('/')))
     # The pins first, then the stamp over them, then the launcher's digest over all (THE LIBRARY, above).
@@ -498,6 +518,13 @@ def install(tree, home):
         raise Refused('%s is not the library %s pins once rendered (%d pin line(s)): a body published ahead of a library it'
                       ' cannot verify would refuse every ccd start; %s must carry exactly one `__CCD_LIB_SHA256=stamp-at-install`'
                       ' line, which this install renders' % (LIB_SOURCE, BODY_SOURCE, len(pins), BODY_SOURCE))
+    pinned = render_lib_pin(pinned, train_digest, TRAIN_LIB_PIN_PLACEHOLDER, b'__CCD_LIB_TRAIN_SHA256')
+    pins = TRAIN_LIB_PIN.findall(pinned)
+    if len(pins) != 1 or pins[0].decode('ascii') != train_digest:
+        raise Refused('%s is not the library %s pins once rendered (%d pin line(s)): a body published ahead of a library it'
+                      ' cannot verify would refuse every ccd start; %s must carry exactly one'
+                      ' `__CCD_LIB_TRAIN_SHA256=stamp-at-install` line, which this install renders'
+                      % (TRAIN_LIB_SOURCE, BODY_SOURCE, len(pins), BODY_SOURCE))
     body_data = stamp_body(pinned)
     template = read_regular(os.path.join(tree, *TEMPLATE_SOURCE.split('/'))).decode('utf-8')
     digest = hashlib.sha256(body_data).hexdigest()
@@ -506,6 +533,7 @@ def install(tree, home):
     entry_dest = os.path.join(home, *ENTRY_DEST.split('/'))
     body_dest = os.path.join(home, *BODY_DEST.split('/'))
     lib_dest = os.path.join(home, *LIB_DEST.split('/'))
+    train_dest = os.path.join(home, *TRAIN_LIB_DEST.split('/'))
     redact_dest = os.path.join(home, *REDACT_DEST.split('/'))
     cli_dest = os.path.join(home, *REDACT_CLI_DEST.split('/'))
     bindir = os.path.dirname(entry_dest)
@@ -522,7 +550,7 @@ def install(tree, home):
     if derived is None or os.path.realpath(derived) != os.path.realpath(body_dest):
         raise Refused('%s resolves to %s, whose launcher would look for its body at %s, not at %s — this'
                       ' ~/.local layout cannot host the direct entry' % (entry_dest, os.path.realpath(entry_dest), derived, body_dest))
-    for dest in (redact_dest, cli_dest, lib_dest, body_dest, entry_dest):
+    for dest in (redact_dest, cli_dest, lib_dest, train_dest, body_dest, entry_dest):
         destination_kind(dest)
     for d in (bindir, libexec, libdir, shareddir):
         os.makedirs(d, mode=0o755, exist_ok=True)
@@ -537,10 +565,11 @@ def install(tree, home):
     half = [[beside(REDACT_DEST), redact_dest, redact_data, '.1'], [beside(REDACT_CLI_DEST), cli_dest, cli_data, '.2']]
     half = [h + [converged(h[1], h[2], BODY_MODE)] for h in half]
     lib_state = converged(lib_dest, lib_data, BODY_MODE)
+    train_state = converged(train_dest, train_data, BODY_MODE)
     body_state = converged(body_dest, body_data, BODY_MODE)
     entry_state = converged(entry_dest, entry_data, ENTRY_MODE)
 
-    staged_lib = staged_body = staged_entry = None
+    staged_lib = staged_train = staged_body = staged_entry = None
     staged_half = [None, None]
     moved = []
     lib_moved = []
@@ -555,6 +584,7 @@ def install(tree, home):
         for i, (_name, _dest, data, slot, state) in enumerate(half):
             staged_half[i] = stage(shareddir, data, BODY_MODE, slot) if state == 'differ' else None
         staged_lib = stage(libdir, lib_data, BODY_MODE) if lib_state == 'differ' else None
+        staged_train = stage(libdir, train_data, BODY_MODE, '.1') if train_state == 'differ' else None
         staged_body = stage(libexec, body_data, BODY_MODE) if body_state == 'differ' else None
         staged_entry = stage(bindir, entry_data, ENTRY_MODE) if entry_state == 'differ' else None
         # The pair the self-test runs is the pair that will be live: each half
@@ -563,8 +593,9 @@ def install(tree, home):
         # the kernel has started its launcher (review 216, F4).
         self_test(home, staged_entry or entry_dest, staged_body or body_dest,
                   live=tuple(d for d, s in ((entry_dest, staged_entry), (body_dest, staged_body)) if s is None))
-        if (staged_half == [None, None] and staged_lib is None and staged_body is None and staged_entry is None
-                and [h[4] for h in half] == ['same', 'same'] and lib_state == body_state == entry_state == 'same'):
+        if (staged_half == [None, None] and staged_lib is None and staged_train is None and staged_body is None
+                and staged_entry is None and [h[4] for h in half] == ['same', 'same']
+                and lib_state == train_state == body_state == entry_state == 'same'):
             say('converged — the launcher, the body and the library already carry these bytes')
             return 0
         # The library goes FIRST: the body that lands next pins it. A standing body from before the library does not read it;
@@ -596,6 +627,19 @@ def install(tree, home):
             lib_moved.append(beside(LIB_DEST))
             postcondition(lib_dest, lib_data, BODY_MODE, 'library')
             say('library published at %s (replaced: %s)' % (lib_dest, kind))
+        # The second library right after the first, and before the body that pins both (THE SECOND LIBRARY, above).
+        if train_state == 'mode':
+            repair_mode(train_dest, BODY_MODE)
+            say_repaired(train_dest, BODY_MODE)
+        if staged_train is not None:
+            kind = destination_kind(train_dest)
+            os.replace(staged_train, train_dest)
+            staged_train = None
+            if 'library' not in moved:
+                moved.append('library')
+            lib_moved.append(beside(TRAIN_LIB_DEST))
+            postcondition(train_dest, train_data, BODY_MODE, 'library')
+            say('library published at %s (replaced: %s)' % (train_dest, kind))
         if body_state == 'mode':
             repair_mode(body_dest, BODY_MODE)
             say_repaired(body_dest, BODY_MODE)
@@ -628,7 +672,8 @@ def install(tree, home):
                      ' move. A body that stands from before the library does not read it, and one that pins this very library'
                      ' starts as it did; but a standing body that pins a DIFFERENT library now refuses every ccd start'
                      ' (lib-digest) until the new body lands. Re-run this install to converge the pair, or restore the'
-                     ' previous library (ccrc update\'s backup carries it as ccd-lib-disk-retention.sh)'
+                     ' previous library (ccrc update\'s backup carries it as ccd-lib-disk-retention.sh, and the second as'
+                     ' ccd-lib-train-proof.sh)'
                      '; of the library half, these were renamed: %s' % ', '.join(lib_moved))
         elif 'launcher' in moved and entry_proved:
             state = ('the launcher was renamed into place and re-measured as the file just staged, so what stands'
@@ -655,7 +700,7 @@ def install(tree, home):
         quiet_stdout()
         return 2
     finally:
-        for p in staged_half + [staged_lib, staged_body, staged_entry]:
+        for p in staged_half + [staged_lib, staged_train, staged_body, staged_entry]:
             if p is not None:
                 try:
                     os.unlink(p)

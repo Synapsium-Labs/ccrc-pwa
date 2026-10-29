@@ -60,3 +60,15 @@ export function mergeBaseText(cwd: string, rel: string): string | null {
     return null;
   }
 }
+
+/** The merge-base with `origin/main` and every file its tree holds under `dir` (repo-relative, recursive), or null when
+ *  there is no `origin/main`, no merge-base or no readable listing. */
+export function mergeBaseFiles(cwd: string, dir: string): { base: string; files: string[] } | null {
+  try {
+    const base = execFileSync('git', ['merge-base', 'origin/main', 'HEAD'], { cwd, encoding: 'utf8', stdio: 'pipe' }).trim();
+    const out = execFileSync('git', ['ls-tree', '-r', '-z', '--name-only', base, '--', `${dir}/`], { cwd, encoding: 'utf8', stdio: 'pipe' });
+    return { base, files: out.split('\0').filter(Boolean) };
+  } catch {
+    return null;
+  }
+}

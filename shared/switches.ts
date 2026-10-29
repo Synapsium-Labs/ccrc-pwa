@@ -86,6 +86,12 @@ export const DRIFT_PUSH_LIVE_MARKER = 'drift-push-live';
  *  the coordinator reclaim. Touched only by hand: no writer in the tree. The child-spent reader lands with that reason's change. */
 export const CHILD_RECLAIM_DISABLED_MARKER = 'child-reclaim-disabled';
 
+/** `$REG/testbox-remote-live` (D-7404; test box spec 2026-10-28 §2.7): the test box's remote switch. Absent, every
+ *  `ccrc test` run is local; stood, a run goes to the test box when spec §2.4's checks pass. The wrapper reads it
+ *  itself, so the switch works with the server down. Its writer, `ccd testbox-remote` behind the switch route, lands
+ *  with the test box plan's TB9; its reader, the wrapper, with TB8. Until then nothing in the tree holds it. */
+export const TESTBOX_REMOTE_LIVE_MARKER = 'testbox-remote-live';
+
 /** The spec's bounded contexts (consolidation spec 2026-10-19 §2), the `owner` of a row. */
 export const SWITCH_OWNER_MAP = {
   C1: 'Fleet Registry & Accounts',
@@ -257,6 +263,11 @@ export const SWITCHES = {
     storage: { setting: 'collect_lane_settings.choice' }, default: 'off', owner: 'C4',
     meaning: 'The Settings arm of the collector: only an exact live choice arms it.',
     writer: 'POST /api/coord/collect-lane',
+  },
+  [TESTBOX_REMOTE_LIVE_MARKER]: {
+    storage: { marker: TESTBOX_REMOTE_LIVE_MARKER }, default: 'absent: every run is local', owner: 'C2',
+    meaning: 'Test runs go to the test box when its checks pass; any run that cannot falls back to the local tests slice and says why.',
+    writer: 'ccd testbox-remote, through POST /api/testbox/switch',
   },
 } as const satisfies Readonly<Record<string, SwitchRow>>;
 
