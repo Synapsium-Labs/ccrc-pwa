@@ -60,6 +60,9 @@
 //    question and the review screen unanswerable. The tappable question is
 //    now the one the PANE is painting (`askLive.ts`'s `liveQuestion`), the
 //    others are listed read-only, and the review's own rows are offered.
+//    SUPERSEDED in turn by D-7184 (W7 Task C7f): which question the pane is
+//    painting is the SERVER's answer, the frames' `pairing` the store holds
+//    (`server/src/pane/askPairing.ts`), never computed here; see below.
 //  - A blank/empty envelope (no questions, or a blank first question) has
 //    nothing accessible of its own to show, so it is treated as absent and
 //    the sheet falls through to the scraped dialog entirely.
@@ -79,7 +82,8 @@
 // could still show question 1's rows enabled; a tap then walked question 2's
 // menu to question 1's index. Wrong answer, sent silently. `canAnswer` is now
 // a real correspondence check, not a null check:
-//  - Questions: `questionCorresponds` (`askLive.ts`) requires `dialog`
+//  - Questions: `questionCorresponds` (`askLive.ts`; since D-7184 the
+//    server's, read here as the frames' `pairing`) requires `dialog`
 //    to be non-null, PARSED, and to have an option at every position the
 //    envelope's first question does, each one a normalized prefix-match
 //    (case/whitespace-insensitive, either side may be the truncated one —
@@ -153,7 +157,7 @@
 
 import { useEffect, useLayoutEffect, useReducer, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import { backgroundOnlyRefusal, type Dialog, type DialogTabTarget, type HookAsk } from '../../../shared/api';
+import { backgroundOnlyRefusal, type AskPairing, type Dialog, type DialogTabTarget, type HookAsk } from '../../../shared/api';
 import { parseAskTabs } from '../../../shared/ask-menu';
 import { OptionRow, toast, useDesk } from '@ccrc/ui';
 import { EnvelopeSheet, TerminalCta } from './EnvelopeSheet';
@@ -162,7 +166,7 @@ import {
   AskHeader, AskReview, AskTabs, KICKER_CHOICE, KICKER_WAITING, REVIEW_TITLE, keyed, lit, type Asker, type Picks, type Words,
 } from './AskParts';
 import {
-  askScreen, askSource, isUsableAsk, paneTicks, picksUncommitted, questionKey, shownQuestion, type AskSource, type ShownQuestion,
+  askSource, isUsableAsk, pairingFor, paneTicks, picksUncommitted, questionKey, type AskSource, type ShownQuestion,
 } from './askLive';
 import { keyTabs, questionKeys, reviewKeys, rowKey, type KeyScreen } from './askKeys';
 import {
@@ -209,6 +213,11 @@ export interface DialogSheetProps {
  *  sentence is worded from the error where it is today (`askWords.ts`), never from this. */
 const refusalToken = (err: unknown): RefusalToken => (err instanceof ApiError ? err.message : 'failed');
 
+/** D-7213: what the sheet shows of a structured question while there is no menu at all (`dialog` null: the hook's envelope
+ *  before the pane paints it, where no server sends a pairing): question 1, read-only, placed nowhere. A CONSTANT, not a
+ *  pairing: with no dialog there is nothing to pair against, so it is the same on every server. Its screen is null. */
+export const UNPLACED_VIEW: ShownQuestion = { live: null, named: null, shown: 0, placed: null };
+
 
 export function DialogSheet({ id, store, onOpenTerminal, raise, asker = null, onInline, answers = api }: DialogSheetProps): ReactNode {
   const useStore = store ?? getSessionStore(id);
@@ -222,6 +231,8 @@ export function DialogSheet({ id, store, onOpenTerminal, raise, asker = null, on
     useStore.getState().applyAnswered(answeredId, next);
   };
   const storeAsk = useStore((s) => s.ask);
+  // D-7184: the server's pairing for the envelope and the dialog the store holds (the last frame's, `stores/session.ts`).
+  const storePairing = useStore((s) => s.pairing);
   const live = useStore((s) => s.askFrameSeen);
   // D-6325, decision `the-ask-holds-through-a-reconnect` (F2) and its exit (F3). The surface is LIVE exactly while
   // `askFrameSeen` holds (this connection has spoken about the envelope). What is SHOWN is the INPUTS of the last live
@@ -235,20 +246,33 @@ export function DialogSheet({ id, store, onOpenTerminal, raise, asker = null, on
   // The ref is written during render, idempotently (the same render writes the same value); it holds the store it
   // belongs to, so another session's surface is never carried over.
   const liveSource = askSource({ ask: storeAsk, dialog: storeDialog, askFrameSeen: live });
-  const shownRef = useRef<{ store: SessionStore; ask: HookAsk | null; dialog: Dialog | null; closed: boolean } | null>(null);
+  // D-7184: the hold records the pairing beside the envelope and the dialog it held, so a held or closing surface keeps
+  // the pairing it was showing.
+  const shownRef = useRef<{
+    store: SessionStore; ask: HookAsk | null; dialog: Dialog | null; pairing: AskPairing | null; closed: boolean;
+  } | null>(null);
   if (shownRef.current !== null && shownRef.current.store !== useStore) shownRef.current = null;
   if (live && liveSource.kind !== 'none') {
-    shownRef.current = { store: useStore, ask: storeAsk, dialog: storeDialog, closed: false };
+    shownRef.current = { store: useStore, ask: storeAsk, dialog: storeDialog, pairing: storePairing, closed: false };
   } else if (live && shownRef.current !== null && !shownRef.current.closed) {
     shownRef.current = { ...shownRef.current, closed: true };
   }
   const held = shownRef.current;
   const dialog = held === null ? storeDialog : held.dialog;
   const hookAsk = held === null ? storeAsk : held.ask;
+  const pairing = held === null ? storePairing : held.pairing;
   const closed = held !== null && held.closed;
   // D-6325: what an ask surface may show, decided once per render and before any branch returns (hooks run every
   // render). Everything below renders from it. A held surface is decided as it was when it was live.
   const source = held === null ? liveSource : askSource({ ask: hookAsk, dialog, askFrameSeen: true });
+  // D-7184, D-7213: the pairing of the question shown, read off the wire (`pairingFor`: a pairing from the other source,
+  // or one that does not fit the questions, is none). A structured question is shown placed by it; with no dialog, as
+  // the constant unplaced view; and with a dialog and no pairing, as the UNPAIRED view: the terminal door, never a guessed
+  // pairing (a server without C7q, or an answer's reply ahead of its `dialog` frame, D-7220).
+  const paired = pairingFor(source, pairing);
+  const view: ShownQuestion | null = source.kind !== 'structured' ? null
+    : dialog === null ? UNPLACED_VIEW
+      : paired === null ? null : { live: paired.live, named: paired.named, shown: paired.shown, placed: paired.placed };
 
   // D-7183: the answer's lifecycle (`answerLifecycle.ts`), one instance per sheet, updated synchronously at dispatch. The
   // option whose answer is in flight, or landed and waiting for the pane to move on, is its `answeringOption`.
@@ -407,8 +431,10 @@ export function DialogSheet({ id, store, onOpenTerminal, raise, asker = null, on
   // focus.
   const askEpoch = useStore((s) => s.askEpoch);
   const askLike = source.kind === 'structured' || source.kind === 'review' || source.kind === 'ask-unreadable';
-  // An approval is one screen; a question ask is one per question plus its review (`askScreen`).
-  const screenNow = !hooked ? null : 'approval' in envelope ? (dialog === null ? null : 'approval') : askScreen(envelope, dialog);
+  // An approval is one screen; a question ask is one per question plus its review: the hook pairing's `screen` (D-7213,
+  // `q<i>` or `review`), null with no dialog or no pairing (a screen the sheet cannot place).
+  const screenNow = !hooked ? null : 'approval' in envelope ? (dialog === null ? null : 'approval')
+    : dialog === null ? null : (paired?.screen ?? null);
   const desk = useDesk();
   // R115: the screen showing, joined to the identity at the desk only (hooked: `screenNow`; otherwise the pane dialog's id).
   const screenKey = hooked ? screenNow : (dialog?.id ?? null);
@@ -634,11 +660,15 @@ export function DialogSheet({ id, store, onOpenTerminal, raise, asker = null, on
 
   if (source.kind === 'none') return null;
 
+  // What the surface draws: a structured question with a dialog and no pairing (`view` null) is the UNPAIRED view, the
+  // terminal door (`ask-unreadable`'s). The dismissal and the keyboard's identity above read `source` itself, so the
+  // hook's ask stays the same ask through the unpaired window.
+  const drawn = source.kind === 'structured' && view === null ? { kind: 'ask-unreadable' as const } : source;
+
   // ONE container for every kind of surface (D-6325): the drawer is rendered here, once, at one place in the tree, and
   // each kind only chooses its header, its title and what goes inside, so moving between kinds (the last question to the
   // review) never remounts it. Dismissal is `close`, which refuses while any send is in flight.
-  const view = source.kind === 'structured' ? shownQuestion({ questions: source.questions }, dialog) : null;
-  const frame = askFrame(source, view, asker);
+  const frame = askFrame(drawn, view, asker);
   // The way out of a surface that cannot be answered here: hide it and open the terminal.
   const leave = (): void => {
     machine.dispatch({ type: 'leave', ...hiding });
@@ -646,14 +676,14 @@ export function DialogSheet({ id, store, onOpenTerminal, raise, asker = null, on
   };
 
   let surface: ReactNode;
-  if (source.kind === 'approval' || source.kind === 'structured') {
+  if (drawn.kind === 'approval' || drawn.kind === 'structured') {
     // The approval, and Claude's own question (the hook's envelope, or the transcript's copy once that has aged out): the
     // one hardened sender's content (`EnvelopeSheet`), whose SEND goes through the functions above.
     surface = (
       <EnvelopeSheet
-        ask={source.kind === 'approval' ? { approval: source.approval } : { questions: source.questions }}
+        ask={drawn.kind === 'approval' ? { approval: drawn.approval } : { questions: drawn.questions }}
         view={view}
-        from={source.kind === 'structured' ? source.from : 'hook'}
+        from={drawn.kind === 'structured' ? drawn.from : 'hook'}
         dialog={dialog}
         life={lifeNow}
         gap={gap}
@@ -669,13 +699,13 @@ export function DialogSheet({ id, store, onOpenTerminal, raise, asker = null, on
         engagement={engagement}
       />
     );
-  } else if (source.kind === 'review') {
+  } else if (drawn.kind === 'review') {
     // The review screen an ask ends on (D-5089), one render for every source of copy (D-6325): titled `Review your
     // answers` and answered by the pane's own rows, never the pane's words. The strip is drawn when the structured copy
     // and the pane's tab row agree on the count (`summary` carries the marks only then).
     if (dialog === null) return null; // unreachable: the review is the pane's, so `askSource` had a dialog
-    const chips = source.summary.length > 0 && source.summary.every((q) => q.answered !== null)
-      ? source.summary.map((q) => ({ header: q.header, answered: q.answered === true }))
+    const chips = drawn.summary.length > 0 && drawn.summary.every((q) => q.answered !== null)
+      ? drawn.summary.map((q) => ({ header: q.header, answered: q.answered === true }))
       : null;
     surface = (
       <div
@@ -696,8 +726,8 @@ export function DialogSheet({ id, store, onOpenTerminal, raise, asker = null, on
         <AskReview
           dialogId={dialog.id}
           selectedIndex={dialog.selectedIndex}
-          rows={source.rows}
-          summary={source.summary}
+          rows={drawn.rows}
+          summary={drawn.summary}
           answering={answering}
           locked={locked}
           gap={gap}
@@ -706,10 +736,10 @@ export function DialogSheet({ id, store, onOpenTerminal, raise, asker = null, on
         />
       </div>
     );
-  } else if (source.kind === 'ask-unreadable' || source.kind === 'terminal-only') {
+  } else if (drawn.kind === 'ask-unreadable' || drawn.kind === 'terminal-only') {
     // Ask evidence on the pane and no copy of the question that fully lines up, or a pane nothing could be read off with
     // no sign of an ask: the surface says so and offers the terminal. Nothing the pane painted is shown, and nothing is
-    // offered to tap.
+    // offered to tap. D-7184: and a question the server sent no pairing for (the unpaired view).
     surface = <TerminalCta onOpen={leave} onLater={close} />;
   } else {
     // A menu that is no AskUserQuestion (a plan approval, a TUI prompt): no copy of it exists but the pane's parse, so its
@@ -719,7 +749,7 @@ export function DialogSheet({ id, store, onOpenTerminal, raise, asker = null, on
       <>
         <div ref={keys.root} hidden />
         <div className="opts">
-          {source.options.map((o) => {
+          {drawn.options.map((o) => {
             const selected = lit(keys, o.index);
             const waiting = answering === o.index;
             return (
@@ -773,7 +803,7 @@ const WAITING_TITLE = 'Claude is waiting on the terminal.';
 
 /** The header and the title of the one container, for each kind of surface (D-6325, R4): the same `AskHeader` for all of
  *  them, with the kicker, and the question's own chip and `n of N`, that the kind has. `view` is the question showing
- *  (`shownQuestion`), non-null exactly for a structured question. */
+ *  (the wire's pairing, or the constant unplaced view; D-7184), non-null for every structured question drawn. */
 function askFrame(
   source: Exclude<AskSource, { kind: 'none' }>,
   view: ShownQuestion | null,

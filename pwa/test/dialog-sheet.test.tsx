@@ -21,6 +21,7 @@ import {
 import { DialogSheet } from '../src/session/DialogSheet';
 import { answerSeam, type AnswerSeamMocks } from './answerSeam';
 import { createSessionStore } from '../src/stores/session';
+import { served } from './wirePairing';
 import { atBlock, declValue, effectiveValue, norm, ruleIn, selectorsOf } from './cssRule';
 import {
   CACHING_TRACING,
@@ -126,10 +127,10 @@ const TWO_COL: AskEnvelope = {
 };
 
 const makeStore = () => {
-  const store = createSessionStore(SESSION_ID, {
+  const store = served(createSessionStore(SESSION_ID, {
     makeSocket: fakeSocket,
     api: { prompt: vi.fn().mockResolvedValue(undefined) },
-  });
+  }));
   act(() => store.getState().apply({ type: 'ask_cleared' }));
   return store;
 };
@@ -1537,7 +1538,7 @@ describe('own words go through the free-text row (D-5090)', () => {
   const CHAT_SAYS = 'Declines this ask so you can talk it over in the chat.';
   const renderAsk = (ask: HookAsk | null, dialog: Dialog | null) => {
     const prompt = vi.fn().mockResolvedValue(undefined);
-    const store = createSessionStore(SESSION_ID, { makeSocket: fakeSocket, api: { prompt } });
+    const store = served(createSessionStore(SESSION_ID, { makeSocket: fakeSocket, api: { prompt } }));
     act(() => store.getState().apply({ type: 'ask_cleared' }));
     act(() => {
       if (dialog) store.getState().apply({ type: 'dialog', dialog });
@@ -3062,7 +3063,7 @@ describe('the sheet can always submit (the 2026-10-16 report)', () => {
   const review = (): Dialog => pane('cc296-ask-2q-long-review');
   const CTA = /Open terminal to answer/;
   const render296 = (first: Dialog | null) => {
-    const store = createSessionStore(SESSION_ID, { makeSocket: fakeSocket, api: { prompt: vi.fn().mockResolvedValue(undefined) } });
+    const store = served(createSessionStore(SESSION_ID, { makeSocket: fakeSocket, api: { prompt: vi.fn().mockResolvedValue(undefined) } }));
     act(() => store.getState().apply({ type: 'ask_cleared' }));
     act(() => {
       if (first) store.getState().apply({ type: 'dialog', dialog: first });

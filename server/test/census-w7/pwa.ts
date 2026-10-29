@@ -249,7 +249,8 @@ const moduleDefinitions = (p: ParsedFile, file: string, names: readonly string[]
 };
 
 /** A module-scope definition (a top-level function or a module-scope binding) named one of `CLIENT_PAIRING_NAMES`, in
- *  any PWA source. 9 on the base, all in `session/askLive.ts`. A helper inlined into its caller leaves the count.
+ *  any PWA source. 9 on the base, all in `session/askLive.ts`; 0 since C7f (D-7184), which reads the wire's pairing. A
+ *  helper inlined into its caller leaves the count.
  *  KNOWN WIDTH: a definition under another name is not seen (the name list is closed, and reviewed). */
 export const clientPairingDefinitionsIn = (p: ParsedFile, file: string): W7Site[] => moduleDefinitions(p, file, CLIENT_PAIRING_NAMES);
 export const clientPairingDefinitions = (): W7Site[] => overPwa(clientPairingDefinitionsIn);

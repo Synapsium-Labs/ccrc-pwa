@@ -11,11 +11,17 @@
 // sheet's pairing (`live`, `named`, `placed`; `shown` is always 0, the copy is one question), whether the sheet renders
 // the copy's question, and the option index a tap on its first row sends (`api.answerDialog`), rendered through
 // `DialogSheet` itself.
+//
+// C7f (D-7184): the client pairs nothing now, so each row's input gains the wire's `pairing`, on its `dialog` frame as
+// the server sends it (`ask_cleared` first, with no dialog sent yet, carries none): C7q's recorded table
+// (`transcript-corpus.json`) where it holds the row, else the server's rule (`wirePairing.ts`, D-7363) for the PWA's
+// wider corpus (the 2.1.296 ask and the screens the server's corpus does not hold). No `expect` changes.
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { createElement } from 'react';
 import { act, cleanup, fireEvent, render } from '@testing-library/react';
 import type { Dialog, HookAskQuestion } from '../../shared/api';
-import { askSource, shownQuestion } from '../src/session/askLive';
+import type { AskPairing } from '../../shared/api';
+import { askSource } from '../src/session/askLive';
 import { DialogSheet } from '../src/session/DialogSheet';
 import { createSessionStore } from '../src/stores/session';
 import { api } from '../src/lib/api';
@@ -24,6 +30,7 @@ import {
 } from './askPanes';
 import { askFixture } from './askFixtures';
 import panes from './ask-panes.json';
+import { recordedPairing, wirePairing } from './wirePairing';
 
 const SESSION_ID = 'lane-a:project-a';
 const ENVELOPES: Record<string, AskEnvelope> = { COLOUR_ONE, FRUIT_DRINK, CACHING_TRACING, FOUR_Q, COLOUR_FEATURES, DRINK_FEATURES_TOOLS, PETS_SIZE_MODE, CC296_LONG };
@@ -36,18 +43,28 @@ const transcribed = (dialog: Dialog, q: HookAskQuestion): Dialog => ({
   ask: { question: q.question, ...(q.header === undefined ? {} : { header: q.header }), multiSelect: q.multiSelect === true, options: q.options.map((o) => ({ ...o })) },
 });
 
-interface Row { readonly name: string; readonly dialog: Dialog }
+interface Row { readonly name: string; readonly dialog: Dialog; readonly pairing: AskPairing | null }
+
+/** The wire's pairing for a transcript row: C7q's recorded row by its name, else the server's rule. */
+const pairingOf = (name: string, dialog: Dialog): AskPairing | null => {
+  const recorded = recordedPairing(`transcript: ${name}, no envelope`);
+  return recorded === undefined ? wirePairing(null, dialog) : recorded;
+};
 function corpus(): Row[] {
   const out: Row[] = [];
   for (const [env, e] of Object.entries(ENVELOPES)) {
     e.questions.forEach((q, i) => {
       if (q.multiSelect === true) return;
-      for (const p of PARSED) out.push({ name: `${env}.q${i + 1} on ${p}`, dialog: transcribed(pane(p), q) });
+      for (const p of PARSED) {
+        const name = `${env}.q${i + 1} on ${p}`;
+        const dialog = transcribed(pane(p), q);
+        out.push({ name, dialog, pairing: pairingOf(name, dialog) });
+      }
     });
   }
   for (let n = 0; n <= 11; n++) {
     const f = askFixture(n);
-    if (f.ask === null && f.dialog !== null && f.askFrameSeen) out.push({ name: `askFixture(${n})`, dialog: f.dialog });
+    if (f.ask === null && f.dialog !== null && f.askFrameSeen) out.push({ name: `askFixture(${n})`, dialog: f.dialog, pairing: wirePairing(null, f.dialog) });
   }
   return out;
 }
@@ -55,9 +72,12 @@ function corpus(): Row[] {
 const fakeSocket = (): WebSocket => ({ onopen: null, onmessage: null, onclose: null, onerror: null, close(): void {} }) as unknown as WebSocket;
 
 /** Render the sheet over `dialog` with no hook envelope, and tap the copy's first row. */
-function sheet(dialog: Dialog): { question: boolean; tap: number | 'none' } {
+function sheet(dialog: Dialog, pairing: AskPairing | null): { question: boolean; tap: number | 'none' } {
   const store = createSessionStore(SESSION_ID, { makeSocket: fakeSocket, api: { prompt: vi.fn().mockResolvedValue(undefined) } });
-  act(() => { store.getState().apply({ type: 'ask_cleared' }); store.getState().apply({ type: 'dialog', dialog }); });
+  act(() => {
+    store.getState().apply({ type: 'ask_cleared' });
+    store.getState().apply(pairing === null ? { type: 'dialog', dialog } : { type: 'dialog', dialog, pairing });
+  });
   const answer = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
   render(createElement(DialogSheet, { id: SESSION_ID, store }));
   // The copy's first line, as written or with its Markdown marks rendered away (the sheet may render either).
@@ -81,8 +101,8 @@ describe('the transcript-copy rows (askSource answers structured from the transc
     for (const r of corpus()) {
       const src = askSource({ ask: null, dialog: r.dialog, askFrameSeen: true });
       if (src.kind !== 'structured' || src.from !== 'transcript') { others += 1; continue; }
-      const p = shownQuestion({ questions: src.questions }, r.dialog);
-      const s = sheet(r.dialog);
+      const p = r.pairing ?? { live: null, named: null, placed: null, shown: 0 };
+      const s = sheet(r.dialog, r.pairing);
       rows.push(`${r.name}: live ${String(p.live)} named ${String(p.named)} placed ${String(p.placed)} shown ${p.shown} | question ${s.question ? 'shown' : 'absent'} | tap ${String(s.tap)}`);
     }
     console.log(`w7-transcript-pairing: ${rows.length} transcript rows, ${others} rows answered otherwise\n${rows.map((x) => `  ${x}`).join('\n')}`);

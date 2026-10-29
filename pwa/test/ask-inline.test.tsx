@@ -30,6 +30,7 @@ import { answerSeam, type AnswerSeamMocks } from './answerSeam';
 import { SessionScreen } from '../src/screens/SessionScreen';
 import { createFleetStore } from '../src/stores/fleet';
 import { createSessionStore, type SessionStore } from '../src/stores/session';
+import { served } from './wirePairing';
 import { askFixture, HOOK_QUESTIONS } from './askFixtures';
 import { fleetSession } from './fleetFixture';
 
@@ -91,7 +92,7 @@ const ASK_CALL: ChatEvent = {
 function mount(o: { status?: 'idle' | 'busy'; events?: ChatEvent[]; row?: FleetSession } = {}) {
   const status = o.status ?? 'idle';
   const prompt = vi.fn().mockResolvedValue(undefined);
-  const store: SessionStore = createSessionStore(ID, { makeSocket: fakeSocket, api: { prompt } });
+  const store: SessionStore = served(createSessionStore(ID, { makeSocket: fakeSocket, api: { prompt } }), { frameFirst: true });
   const row: FleetSession = o.row ?? fleetSession({ id: ID, wrapper: 'lane-a', home: 'lane-a', project: 'project-a', status });
   const fleet = createFleetStore({ makeSocket: fakeSocket });
   act(() => fleet.setState({ sessions: [row], conn: 'open' }));
@@ -829,7 +830,7 @@ describe('one lifecycle generation in the ask identity (R69 F1, F4)', () => {
   });
 
   it('the store\'s askEpoch counts the clears that end an ask: an ask_cleared of a held envelope, a dialog_cleared with none held', () => {
-    const store = createSessionStore(ID, { makeSocket: fakeSocket });
+    const store = served(createSessionStore(ID, { makeSocket: fakeSocket }), { frameFirst: true });
     const epoch = (): number => store.getState().askEpoch;
     expect(epoch(), 'it starts at 0').toBe(0);
     for (const f of askFixture(1).frames) store.getState().apply(f);
@@ -1108,7 +1109,7 @@ describe('the keys in the card are fenced after a send and re-enter only deliber
       // the nonce that button bumps, set on a real `DialogSheet`.
       media(true);
       const answer = answers.answerDialog.mockReset().mockResolvedValueOnce({ ok: true, next: agedQuestion2() });
-      const store = createSessionStore(ID, { makeSocket: fakeSocket });
+      const store = served(createSessionStore(ID, { makeSocket: fakeSocket }), { frameFirst: true });
       for (const f of askFixture(2).frames) store.getState().apply(f);
       const view = render(<DialogSheet answers={answers} id={ID} store={store} raise={0} />);
       const first = opt(card(), /^Redis/);
@@ -1382,7 +1383,7 @@ describe('a raise rendered in one batch with a Deny\'s completion unlocks nothin
     let reply: () => void = () => {};
     const interrupt = answers.interrupt.mockReset().mockReturnValueOnce(new Promise<void>((r) => { reply = r; }));
     const answer = answers.answerDialog.mockReset().mockReturnValue(new Promise(() => {}));
-    const store = createSessionStore(ID, { makeSocket: fakeSocket });
+    const store = served(createSessionStore(ID, { makeSocket: fakeSocket }), { frameFirst: true });
     for (const f of askFixture(7).frames) store.getState().apply(f);
     const host = document.createElement('div');
     document.body.appendChild(host);
@@ -1712,7 +1713,7 @@ describe('a send claimed after an eligible raise renders and before its effect r
     const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
     const answer = answers.answerDialog.mockReset().mockResolvedValueOnce({ ok: true, next: agedQuestion2() })
       .mockReturnValue(new Promise(() => {}));
-    const store = createSessionStore(ID, { makeSocket: fakeSocket });
+    const store = served(createSessionStore(ID, { makeSocket: fakeSocket }), { frameFirst: true });
     for (const f of askFixture(2).frames) store.getState().apply(f);
     const host = document.createElement('div');
     document.body.appendChild(host);
@@ -1757,7 +1758,7 @@ describe('a send claimed after an eligible raise renders and before its effect r
     const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
     const answer = answers.answerDialog.mockReset().mockRejectedValueOnce(new ApiError(409, { ok: false, error: 'stale-dialog' }))
       .mockReturnValue(new Promise(() => {}));
-    const store = createSessionStore(ID, { makeSocket: fakeSocket });
+    const store = served(createSessionStore(ID, { makeSocket: fakeSocket }), { frameFirst: true });
     for (const f of askFixture(2).frames) store.getState().apply(f);
     const host = document.createElement('div');
     document.body.appendChild(host);
@@ -1955,7 +1956,7 @@ describe('the transcript stops repeating the ask the card already shows', () => 
       scrolled.push(this);
     });
     const prompt = vi.fn().mockResolvedValue(undefined);
-    const store = createSessionStore(ID, { makeSocket: fakeSocket, api: { prompt } });
+    const store = served(createSessionStore(ID, { makeSocket: fakeSocket, api: { prompt } }), { frameFirst: true });
     const fx = askFixture(1);
     act(() => { for (const f of fx.frames) store.getState().apply(f); });
     const outside = document.createElement('button');
@@ -1986,7 +1987,7 @@ describe.each([
 ] as const)('the terminal-door surface at the desk (fixture %i, %s)', (n, _surface) => {
   /** `DialogSheet` alone over fixture `n`'s frames, with the terminal door stubbed. */
   function mountDoor() {
-    const store = createSessionStore(ID, { makeSocket: fakeSocket, api: { prompt: vi.fn().mockResolvedValue(undefined) } });
+    const store = served(createSessionStore(ID, { makeSocket: fakeSocket, api: { prompt: vi.fn().mockResolvedValue(undefined) } }), { frameFirst: true });
     act(() => { for (const f of askFixture(n).frames) store.getState().apply(f); });
     const onOpenTerminal = vi.fn();
     render(<DialogSheet answers={answers} id={ID} store={store} onOpenTerminal={onOpenTerminal} />);
@@ -2515,10 +2516,10 @@ class ScriptedSocket {
 function mountLive() {
   const sockets: ScriptedSocket[] = [];
   const prompt = vi.fn().mockResolvedValue(undefined);
-  const store: SessionStore = createSessionStore(ID, {
+  const store: SessionStore = served(createSessionStore(ID, {
     makeSocket: (url) => new ScriptedSocket(url, sockets) as unknown as WebSocket,
     api: { prompt },
-  });
+  }), { frameFirst: true });
   const row: FleetSession = fleetSession({ id: ID, wrapper: 'lane-a', home: 'lane-a', project: 'project-a', status: 'idle' });
   const fleet = createFleetStore({ makeSocket: fakeSocket });
   act(() => fleet.setState({ sessions: [row], conn: 'open' }));

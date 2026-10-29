@@ -1,7 +1,12 @@
 // What a live AskUserQuestion pane is showing, read for the sheet (D-5089, plan
-// docs/superpowers/plans/2026-10-15-ask-sheet-half.md, Task 1): which of the envelope's questions the pane is painting,
-// the one its title names when labels cannot say, the review screen an ask ends on, the free-text row under a
-// question's options, and the `Chat about this` row under that.
+// docs/superpowers/plans/2026-10-15-ask-sheet-half.md, Task 1): the review screen an ask ends on, the free-text row under
+// a question's options, and the `Chat about this` row under that.
+//
+// D-7184 (W7 Task C7f; ARCH-58's PWA half): WHICH of the envelope's questions the pane is painting, and the one its title
+// names, are the server's answer now (`server/src/pane/askPairing.ts`, the frames' `pairing`), read here by `pairingFor`
+// for the question `askSource` shows. The client's own pairing (`questionCorresponds`, `titleMatches`, `liveQuestion`,
+// `namedQuestion`, `shownQuestion`, `askScreen`, `WRAP_BAR_RE` and their helpers `prefixMatches` and `norm`) is deleted:
+// one rule, the server's.
 //
 // D-6325: `askSource` (below) decides what an ask surface may SHOW, and nothing here hands the pane's text to a
 // renderer any more. `paneQuestion` and `reviewSummary`, which did, are deleted: the functions that remain read the pane
@@ -22,7 +27,7 @@
 // - a multiSelect question's boxes are its own options, read into `Dialog.multi` (D-5048), and the answer lists the
 //   boxes in the order they became ticked (`cc300-ask-review-tick-order`); the last question's commit row reads
 //   `Submit` and lands on the review (D-5091).
-import type { Dialog, DialogMulti, HookAsk } from '../../../shared/api';
+import type { AskPairing, Dialog, DialogMulti, HookAsk } from '../../../shared/api';
 import {
   ASK_TAB_ROW_RE,
   CHAT_ABOUT_ROW_RE,
@@ -46,127 +51,17 @@ export interface AskQuestions {
   readonly questions: readonly StructuredQuestion[];
 }
 
-/** Mirrors server/src/transcript/ask.ts's `pairMatches`/`norm`: normalize by
- *  trim + lowercase + collapsed whitespace, then compare as prefixes, since
- *  either side may be the truncated one (leftCol cuts a scraped label at a
- *  run of two spaces or the two-column gutter). Reimplemented here — not
- *  imported — because the pwa doesn't depend on server code; keep this
- *  identical to ask.ts's rule or the two layers' notion of "the same
- *  question" drifts apart. */
-const norm = (s: string): string => s.toLowerCase().replace(/\s+/g, ' ').trim();
-const prefixMatches = (a: string, b: string): boolean => {
-  const [x, y] = [norm(a), norm(b)];
-  return x !== '' && y !== '' && (x.startsWith(y) || y.startsWith(x));
-};
-
-/** C1: does the envelope question `q` describe the same live menu `dialog`
- *  is showing? `liveQuestion` asks it of EVERY question of the envelope
- *  (D-5089), never the first alone. `answer()` types `dialog`'s pane by INDEX, so this
- *  has to be sure the envelope's copy and the pane's rows are the same
- *  question before a tap is allowed to walk it — every one of the envelope's
- *  options must line up with the pane's option at that same position (no
- *  forgiveness the way ask.ts's `alignAsk` allows when merely deciding which
- *  question is on screen: here the index is about to be TYPED). I1: an
- *  unparsed `dialog` never corresponds — it has no reliable per-position
- *  labels to compare (a multi-select menu parses this way — by its footer on
- *  older builds, by its row checkboxes on 2.1.280; so does a capture taken
- *  mid-redraw), so treating it as a match would answer a tap
- *  by sending a stray arrow-key walk into a pane that isn't the numbered
- *  menu it looks like.
- *
- *  D-5091: except through `Dialog.multi`, the one unparsed menu whose rows WERE
- *  read per position (D-5048): a multiSelect question's boxes, answered by
- *  their digits through `/dialog/multi`, never by a walk. The kinds must agree:
- *  a `multiSelect` question corresponds only to a pane carrying `multi`, and
- *  any other question only to a parsed menu, so a box is never answered by one
- *  tap and a row never by a set of ticks. Against the boxes the count must be
- *  EQUAL, not merely covered: they are the question's own options, where a
- *  parsed menu's rows run on past them (the free-text row, `Chat about this`). */
-export function questionCorresponds(q: StructuredQuestion, dialog: Dialog | null): boolean {
-  if (dialog === null) return false;
-  if (q.multiSelect === true || dialog.multi !== undefined) {
-    const boxes = dialog.multi?.options;
-    if (q.multiSelect !== true || boxes === undefined || boxes.length !== q.options.length) return false;
-    return q.options.every((o, i) => prefixMatches(boxes[i]!.label, o.label));
-  }
-  if (!dialog.parsed) return false;
-  if (dialog.options.length < q.options.length) return false;
-  return q.options.every((o, i) => prefixMatches(dialog.options[i]!.label, o.label));
-}
-
-/** A wrapped question's rows are painted under a `│ ` bar, and the pane's title is the last of them, bar included. */
-const WRAP_BAR_RE = /^\s*│\s*/;
-
-/** Does the pane's `title` name `question`? The title, with a leading `│ ` stripped, is a SUFFIX of the question once
- *  both are normalized (`norm`): a question that fits one row is its whole text, a wrapped one is its last row.
- *  Markdown is literal on screen, so nothing is unescaped. An empty title names nothing. */
-export function titleMatches(question: string, title: string): boolean {
-  const t = norm(title.replace(WRAP_BAR_RE, ''));
-  return t !== '' && norm(question).endsWith(t);
-}
-
-/**
- * Which of the envelope's questions is the pane painting, as an index into `ask.questions`, or null when that cannot
- * be told. A tap on the sheet types the pane's option by index, so a wrong answer here is a wrong answer sent.
- *
- * Labels decide first. The candidates are the questions with options that correspond to the pane's rows by position
- * (`questionCorresponds`). EXACTLY ONE candidate wins on its own, whatever the title reads: question texts are unique
- * in a tool call, and a title made mandatory would turn a question that answers today into "can't be matched"
- * whenever Claude Code paints its text differently from the envelope (the diagnosis's correction). Two or more
- * candidates (Yes/No asked twice) are a tie, which only the title breaks (`titleMatches`): exactly one survivor wins,
- * and anything else is null. No candidate is null. A one-question envelope therefore keeps the labels-only rule.
- *
- * Never a candidate: a question listing no options (`every` over none is vacuously true, so it would match any parsed
- * pane). A `multiSelect` one is a candidate only against the boxes of `Dialog.multi` (D-5091), never against a parsed
- * menu, where one tap would tick a box and answer nothing (`questionCorresponds` holds both rules).
- */
-export function liveQuestion(ask: AskQuestions, dialog: Dialog | null): number | null {
-  const candidates = ask.questions
-    .map((q, i) => ({ q, i }))
-    .filter(({ q }) => q.options.length > 0 && questionCorresponds(q, dialog));
-  if (candidates.length === 1) return candidates[0]!.i;
-  if (candidates.length === 0 || dialog === null) return null;
-  const named = candidates.filter(({ q }) => titleMatches(q.question, dialog.title));
-  return named.length === 1 ? named[0]!.i : null;
-}
-
-/** The one question whose text the pane's title names (`titleMatches`), as an index into `ask.questions`, else null.
- *  It names what labels cannot reach, such as a multiSelect question (unparsed, so nothing corresponds), so the sheet
- *  can say which question is up even when it cannot answer it. */
-export function namedQuestion(ask: AskQuestions, dialog: Dialog | null): number | null {
-  if (dialog === null) return null;
-  const named = ask.questions.flatMap((q, i) => (titleMatches(q.question, dialog.title) ? [i] : []));
-  return named.length === 1 ? named[0]! : null;
-}
-
 /** Which question of the envelope the sheet is showing, worked out once for everything that draws it (D-6325: the header
  *  in `DialogSheet`'s one container, and the question's rows in `EnvelopeSheet`). `live` is the question the pane is
- *  painting (`liveQuestion`) and `named` the one its title names (`namedQuestion`); `shown` is what the sheet displays:
- *  the live question, else the named one, else question 1, displayed read-only and never answered; `placed` is where
- *  the pane IS (`live ?? named`, else null: the fallback to question 1 is a display, not a position). */
+ *  painting and `named` the one its title names; `shown` is what the sheet displays: the live question, else the named
+ *  one, else question 1, displayed read-only and never answered; `placed` is where the pane IS (`live ?? named`, else
+ *  null: the fallback to question 1 is a display, not a position). D-7184: read off the wire's `pairing` (`pairingFor`),
+ *  or `DialogSheet`'s constant unplaced view when there is no dialog. */
 export interface ShownQuestion {
   readonly live: number | null;
   readonly named: number | null;
   readonly shown: number;
   readonly placed: number | null;
-}
-
-export function shownQuestion(ask: AskQuestions, dialog: Dialog | null): ShownQuestion {
-  const live = liveQuestion(ask, dialog);
-  const named = namedQuestion(ask, dialog);
-  return { live, named, shown: live ?? named ?? 0, placed: live ?? named };
-}
-
-/** Which screen of the ask the pane is on, by QUESTION IDENTITY (decision `ask-envelope-dismissal-per-screen`):
- *  `review` for the review screen (`isAskReview`), `q<i>` for question `i` (`liveQuestion`, else `namedQuestion` by its
- *  title), or null for a screen the sheet cannot place (no menu, or an unparsed or unmatched grab). Never the raw
- *  dialog id: that hashes every row's label, so typing into the free-text row in the terminal repaints the SAME
- *  question under a new id, and a mid-redraw grab of it comes back unparsed under another. */
-export function askScreen(ask: AskQuestions, dialog: Dialog | null): string | null {
-  if (dialog === null) return null;
-  if (isAskReview(dialog)) return 'review';
-  const i = liveQuestion(ask, dialog) ?? namedQuestion(ask, dialog);
-  return i === null ? null : `q${i}`;
 }
 
 /** Is the pane on the review screen an ask ends on? `reviewRows` (`shared/ask-menu.ts`) says, and which rows are its
@@ -415,6 +310,30 @@ function hasAskEvidence(dialog: Dialog): boolean {
  *
  * PURE: values in, a value out; the store's types are not imported here.
  */
+/**
+ * The wire's pairing (D-7184, W7 Task C7f) for what `source` shows, or null for none. The server pairs (`sessionws.ts`'s
+ * `paired`, from `server/src/pane/askPairing.ts`) and the store holds the last frame's (`stores/session.ts`); this only
+ * says whether that pairing is the one for the question shown:
+ *  - a `structured` question is paired only by a pairing whose `from` is its own (`'hook'` when absent): a pairing from
+ *    the other source is no pairing;
+ *  - D-7364: nor is one that does not fit the questions (a `corresponds` entry per question, `shown` among them, `live`
+ *    and `placed` null or among them), so a skewed frame never indexes past the questions;
+ *  - the `review` screen is read for its `screen` (the dismissal key, D-7213): the hook's pairing, `from` absent;
+ *  - anything else shows no question, and has none.
+ * It reads the pairing; it never computes one.
+ */
+export function pairingFor(source: AskSource, pairing: AskPairing | null): AskPairing | null {
+  if (pairing === null) return null;
+  const from = pairing.from ?? 'hook';
+  if (source.kind === 'review') return from === 'hook' ? pairing : null;
+  if (source.kind !== 'structured' || from !== source.from) return null;
+  const n = source.questions.length;
+  const among = (i: number | null): boolean => i === null || (Number.isInteger(i) && i >= 0 && i < n);
+  const fits = pairing.corresponds.length === n && among(pairing.shown) && among(pairing.live) && among(pairing.named)
+    && among(pairing.placed);
+  return fits ? pairing : null;
+}
+
 export function askSource({ ask, dialog, askFrameSeen }: AskSourceInput): AskSource {
   if (!askFrameSeen) return { kind: 'none' };
   const envelope = isUsableAsk(ask) ? ask : null;
