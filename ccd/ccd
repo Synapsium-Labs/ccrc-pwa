@@ -5937,8 +5937,8 @@ def is_landed(r, branch, base_short):
     # merge commit behind it. Kept OUT of `is_merged`, whose other caller is the
     # reap's `pick`, which proves the tree against `mergeCommit.oid` — a landed
     # member has none, so `pick` answers it on its own arm (`landed` where the
-    # oid would be) and `_ws_reap_eval` proves it against the train's landing
-    # commit on origin's default branch instead (`_ws_train_landing`).
+    # oid would be) and `_ws_reap_eval` proves it by the train record instead
+    # (`_ws_train_record`), pinned to the train PR's merge commit.
     return r.get('landedInTrain') is True and bound(r, branch, base_short)
 
 def pick(rows, branch, base_short):
@@ -6558,7 +6558,7 @@ elif mode == 'pick':
         # for the phase, with NO merge commit to prove against. The literal
         # word `landed` stands where the oid would be — never an empty field,
         # which `IFS=$'\t' read` would collapse — and `_ws_reap_eval` swaps it
-        # for the train's landing commit before any git command sees it.
+        # for the train PR's merge commit before any git command sees it.
         sys.stdout.write('\t'.join([
             str(chosen.get('number') or ''), str(chosen.get('url') or ''), 'landed',
             str(chosen.get('headRefOid') or ''),
@@ -6571,6 +6571,76 @@ elif mode == 'pick':
             str((chosen.get('mergeCommit') or {}).get('oid') or ''),
             str(chosen.get('headRefOid') or ''),
         ]) + '\n')
+
+elif mode == 'train-refs':
+    # The train PRs a member's comments name: `train #<n>` in any comment, the
+    # comment a merge train leaves when it closes a member with the label.
+    # Newest comment first, each number once, at most `cap`. Only digits leave
+    # here, so the shell can anchor them before any reaches an argv.
+    (member, cap) = sys.argv[2:4]
+    try:
+        doc = json.loads(sys.stdin.read() or 'null')
+    except ValueError:
+        doc = None
+    comments = doc.get('comments') if isinstance(doc, dict) else None
+    seen = []
+    for c in reversed(comments if isinstance(comments, list) else []):
+        body = c.get('body') if isinstance(c, dict) else None
+        if not isinstance(body, str):
+            continue
+        for m in re.finditer(r'(?i)\btrain\s+#([1-9][0-9]{0,9})\b', body):
+            if m.group(1) != member and m.group(1) not in seen:
+                seen.append(m.group(1))
+    sys.stdout.write(''.join(n + '\n' for n in seen[:int(cap)]))
+
+elif mode == 'train-check':
+    # THE TRAIN RECORD. stdin is one train PR (`gh pr view`) or a list of them
+    # (`gh pr list --search`). A train proves the member landed when it is
+    # MERGED into the member's base, from this repository, with a merge commit,
+    # and its body lists the member — a list item `#<member>` with one 40-hex
+    # sha — at exactly the member's head, every line that names the member
+    # agreeing. Prints `<train>\t<merge oid>` for the first that proves; else
+    # `!<sentence>` for the first candidate's reason, or nothing when there was
+    # no candidate at all.
+    (member, head, base_short) = sys.argv[2:5]
+    try:
+        doc = json.loads(sys.stdin.read() or 'null')
+    except ValueError:
+        doc = None
+    cands = doc if isinstance(doc, list) else [doc] if isinstance(doc, dict) else []
+    ITEM = re.compile(r'^\s*(?:[-*+]|[0-9]+[.)])\s+#([0-9]+)(?![0-9])(.*)$')
+    SHA = re.compile(r'(?<![0-9A-Za-z])[0-9a-f]{40}(?![0-9A-Za-z])')
+    why = None
+    for t in cands:
+        if not isinstance(t, dict):
+            continue
+        n = t.get('number')
+        if not isinstance(n, int) or str(n) == member:
+            continue
+        oid = (t.get('mergeCommit') or {}).get('oid')
+        if (t.get('state') != 'MERGED' or not isinstance(t.get('mergedAt'), str)
+                or not isinstance(oid, str) or re.fullmatch(r'[0-9a-f]{40}', oid) is None):
+            why = why or 'train #%d is %s, not merged' % (n, str(t.get('state') or 'unreadable').lower())
+            continue
+        if t.get('baseRefName') != base_short or t.get('isCrossRepository') is not False:
+            why = why or 'train #%d did not merge into %s from this repository' % (n, base_short)
+            continue
+        body = t.get('body') if isinstance(t.get('body'), str) else ''
+        shas = []
+        for line in body.splitlines():
+            m = ITEM.match(line)
+            if m and m.group(1) == member:
+                shas.append(SHA.findall(m.group(2)))
+        if not shas:
+            why = why or 'train #%d does not list #%s' % (n, member)
+            continue
+        if any(len(x) != 1 or x[0] != head for x in shas):
+            why = why or 'train #%d lists #%s at a different commit than its head %s' % (n, member, head)
+            continue
+        sys.stdout.write('%d\t%s\n' % (n, oid))
+        sys.exit(0)
+    if why:
+        sys.stdout.write('!' + why + '\n')
 
 elif mode == 'bind':
     # `pr-landing`'s binding (spec 3.3): `annotate` then `pick` over the ONE row a GraphQL alias answered, in a
@@ -12704,67 +12774,51 @@ _ws_merge_proof() {   # main M tip -> 0, with the passing rung in _WS_PROOF
   return 1
 }
 
-_ws_merge_tree_proof() {   # main L tip -> 0 when the landing commit L carries every change on tip
-  # A PR closed as landed in a merge train, proven against the train's LANDING
-  # COMMIT `L` (`_ws_train_landing` finds it; `_ws_reap_eval`'s rung 2 calls
-  # this for that arm ONLY) — never against origin's current head, which a
-  # later PR editing the same lines would make conflict FOR EVER. Two arms,
-  # both asked of `L` and its first parent `P`, the default branch the train
-  # landed on:
-  #   1. merging tip into `P` gives exactly `L`'s tree: `L` is this member and
-  #      nothing else (a one-member train);
-  #   2. merging tip into `L` changes nothing, AND every path tip changes is a
-  #      path `L` changed from `P`: the member's own diff is contained in the
-  #      landing commit's, beside another member's.
-  # A commit the train never landed makes both differ, and a conflict exits
-  # non-zero. A `merge-tree` that did not run — a git older than 2.38, a failed
-  # read — prints no tree, and BOTH sides must be a 40-hex oid before they are
-  # compared, so two empty answers never agree.
-  local main="$1" L="$2" tip="$3" P t m mb p
-  m=$(git -C "$main" rev-parse --verify --quiet "$L^{tree}" 2>/dev/null) || return 1
-  [[ "$m" =~ ^[0-9a-f]{40}$ ]] || return 1
-  P=$(git -C "$main" rev-parse --verify --quiet "$L^1^{commit}" 2>/dev/null) || return 1
-  t=$(git -C "$main" merge-tree --write-tree -- "$P" "$tip" 2>/dev/null) \
-    && [[ "$t" =~ ^[0-9a-f]{40}$ && "$t" == "$m" ]] && return 0
-  t=$(git -C "$main" merge-tree --write-tree -- "$L" "$tip" 2>/dev/null) || return 1
-  [[ "$t" =~ ^[0-9a-f]{40}$ && "$t" == "$m" ]] || return 1
-  mb=$(git -C "$main" merge-base -- "$P" "$tip" 2>/dev/null) || return 1
-  # Each path the member changed must differ between `P` and `L` — `diff
-  # --quiet` exits 1 for "differs", 0 for "the same", anything else for a read
-  # that failed, and only 1 passes. NUL-delimited and `:(literal)`, so no path
-  # is ever read as an option or a glob.
-  while IFS= read -r -d '' p; do
-    git -C "$main" diff --quiet "$P" "$L" -- ":(literal)$p" 2>/dev/null
-    [[ $? -eq 1 ]] || return 1
-  done < <(git -C "$main" diff --name-only -z --no-renames "$mb" "$tip" -- 2>/dev/null)
-  return 0
-}
+# How many train PRs a member's comments may name before `_ws_train_record`
+# stops asking: each is one `gh pr view` inside ws-audit's runner budget.
+WS_TRAIN_REFS_MAX=2
 
-# How many default-branch commits naming the member `_ws_train_landing` tries.
-WS_TRAIN_LANDING_MAX=20
-
-_ws_train_landing() {   # main ref number tip -> the train's landing commit on stdout, 0; else 1
-  # THE COMMIT THE TRAIN LANDED AS: a commit on `ref`'s first-parent history
-  # (origin's default branch) whose message names the member as `#<number>` —
-  # the train PR's squash lists its members. Newest first; the first that
-  # `_ws_merge_proof` or `_ws_merge_tree_proof` proves is the answer. When none
-  # proves, the NEWEST is answered anyway, so the ladder's own refusal prints
-  # the diff against it; when none names the member at all, nothing is
-  # answered and the caller refuses. `#420` never names `#42`: the number is
-  # bounded on both sides. The number is GitHub's, so it is anchored to digits
-  # before it is spliced into the pattern.
-  local main="$1" ref="$2" n="$3" tip="$4" c first=""
-  [[ "$n" =~ ^[1-9][0-9]{0,9}$ ]] || return 1
-  while IFS= read -r c; do
-    [[ "$c" =~ ^[0-9a-f]{40}$ ]] || continue
-    [[ -n "$first" ]] || first="$c"
-    if _ws_merge_proof "$main" "$c" "$tip" || _ws_merge_tree_proof "$main" "$c" "$tip"; then
-      printf '%s\n' "$c"; return 0
-    fi
-  done < <(git -C "$main" log --first-parent --format=%H --extended-regexp \
-             --grep="(^|[^0-9A-Za-z_])#$n([^0-9]|\$)" --max-count="$WS_TRAIN_LANDING_MAX" "$ref" -- 2>/dev/null)
-  [[ -n "$first" ]] || return 1
-  printf '%s\n' "$first"
+_ws_train_record() {   # main repo number headOid baseShort -> 0 with the train PR's merge commit in _WS_TRAIN_MERGE; else 1 (not landed) or 2 (gh unreadable), the sentence in _WS_TRAIN_WHY. Called directly, never in $(…), so both globals reach the caller
+  # THE PROOF FOR A PR CLOSED AS LANDED IN A MERGE TRAIN, and it is the TRAIN
+  # RECORD, never a tree merge. A train squashes its members together and
+  # resolves their overlaps, so no member's tree need be in the landing commit
+  # — two members editing one hunk each fail any tree comparison — and main
+  # editing those lines later makes a merge into its head conflict for ever.
+  # What does hold is what the train itself wrote down: the train PR the member
+  # names (in the comment the train leaves on it, `train #<n>`), or one found by
+  # its member list (a search on the member's head sha), is MERGED and lists
+  # this member at exactly this member's head sha (`_pr_py train-check`).
+  # `pick` already bound the member: CLOSED with the label, ours, head reachable
+  # from the branch. Every number and sha placed in a gh argv is anchored first
+  # (spec §7): the member number and head are checked here, a train number by
+  # `train-refs`'s digit-only output and again below.
+  local main="$1" repo="$2" n="$3" head="$4" base="$5" out t ans why=""
+  _WS_TRAIN_WHY="" _WS_TRAIN_MERGE=""
+  [[ "$n" =~ ^[1-9][0-9]{0,9}$ && "$head" =~ ^[0-9a-f]{40}$ ]] \
+    || { _WS_TRAIN_WHY="gh named #$n at '$head', not a full head sha a train record can list"; return 1; }
+  local fields=number,state,mergedAt,mergeCommit,body,baseRefName,isCrossRepository
+  out=$(_plat_timeout "$PR_GH_TIMEOUT" gh pr view "$n" --repo "$repo" --json comments 2>/dev/null) \
+    || { _WS_TRAIN_WHY="could not read the comments on #$n"; return 2; }
+  while IFS= read -r t; do
+    [[ "$t" =~ ^[1-9][0-9]{0,9}$ ]] || continue
+    ans=$(_plat_timeout "$PR_GH_TIMEOUT" gh pr view "$t" --repo "$repo" --json "$fields" 2>/dev/null) \
+      || { _WS_TRAIN_WHY="could not read train #$t, which #$n names"; return 2; }
+    ans=$(printf '%s' "$ans" | _pr_py train-check "$n" "$head" "$base")
+    case "$ans" in
+      '!'*) [[ -n "$why" ]] || why="${ans#!}" ;;
+      ?*)   _WS_TRAIN_MERGE="${ans#*$'\t'}"; return 0 ;;
+    esac
+  done < <(printf '%s' "$out" | _pr_py train-refs "$n" "$WS_TRAIN_REFS_MAX")
+  out=$(_plat_timeout "$PR_GH_TIMEOUT" gh pr list --repo "$repo" --state merged --limit 5 \
+          --search "$head in:body" --json "$fields" 2>/dev/null) \
+    || { _WS_TRAIN_WHY="could not search for a train listing #$n"; return 2; }
+  ans=$(printf '%s' "$out" | _pr_py train-check "$n" "$head" "$base")
+  case "$ans" in
+    '!'*) [[ -n "$why" ]] || why="${ans#!}" ;;
+    ?*)   _WS_TRAIN_MERGE="${ans#*$'\t'}"; return 0 ;;
+  esac
+  _WS_TRAIN_WHY="${why:-no merged train PR names #$n or lists it at $head}"
+  return 1
 }
 
 _ws_fingerprint() {   # id branch tip headOid mergeOid proof dirty igndigest sensdigest stashes wthead baseOid clipsDigest childrenDigest
@@ -13677,30 +13731,26 @@ _ws_reap_eval() {   # id -> 0 when reapable, else REAP_VERDICT names the refusal
   esac
   IFS=$'\t' read -r REAP_PRNUM REAP_PRURL REAP_MERGE REAP_HEADOID <<< "$row"
   # A PR CLOSED AS LANDED IN A MERGE TRAIN (`pick`'s `landed`). The train
-  # landed this member's work through a train PR, squashed beside other
-  # members', and closed the member, so GitHub names no merge commit and none
-  # of `_ws_merge_proof`'s rungs can see the work inside a commit that carries
-  # someone else's too. The proof is asked of the train's LANDING COMMIT on
-  # origin's default branch (the symref rung 1 just re-derived from the
-  # remote): the first-parent commit whose message names this PR, found by
-  # `_ws_train_landing` — `_ws_merge_proof` first, then `merge-tree` against
-  # it and its first parent. PINNED to that commit, never to origin's current
-  # head: a later PR that edits the lines the train landed would make a merge
-  # into the head conflict for ever, and a head that moves would move the
-  # token with it (`state-changed` between the sheet and the tap for nothing).
-  # REAP_MERGE becomes the landing commit, so the token is over the very
-  # commit the proof ran against, and the audit and the tombstone name it
-  # where a merge commit would be. The label is GitHub's claim; this rung is
-  # what stops a label on unlanded work from deleting anything. A later revert
-  # on main does not un-land it, exactly as for a MERGED PR: the work is in
-  # history at the landing commit.
+  # landed this member's work through a train PR, squashed and resolved beside
+  # other members', and closed the member, so GitHub names no merge commit and
+  # no tree comparison can tell this member's work from the rest. The proof is
+  # the TRAIN RECORD (`_ws_train_record`): the train PR the member names is
+  # MERGED and lists it at exactly its head sha. REAP_MERGE becomes the train
+  # PR's merge commit, so the token, the audit and the tombstone are pinned to
+  # it, never to origin's current head: main later editing the same lines, or
+  # reverting them, does not un-land it, exactly as for a MERGED PR. The label
+  # is GitHub's claim; this rung is what stops a label on unlanded work from
+  # deleting anything, and the tip check below what stops a commit the train
+  # never saw.
   if [[ "$REAP_MERGE" == landed ]]; then
     landed=1
-    REAP_MERGE=""
-    [[ -n "${obase:-}" ]] \
-      || { _ws_refuse tree-differs "the PR was closed as landed in a merge train, and $ancwhy, so its landing commit could not be looked for"; return 1; }
-    REAP_MERGE=$(_ws_train_landing "$main" "$obase" "$REAP_PRNUM" "$REAP_TIP") \
-      || { _ws_refuse tree-differs "the PR was closed as landed in a merge train, but no commit on $obase names #$REAP_PRNUM, so its work could not be compared against anything"; return 1; }
+    local trc
+    _ws_train_record "$main" "$repo" "$REAP_PRNUM" "$REAP_HEADOID" "$baseShort"; trc=$?
+    case "$trc" in
+      0) REAP_MERGE="$_WS_TRAIN_MERGE" ;;
+      2) _ws_refuse gh-unreadable "the PR was closed as landed in a merge train, but $_WS_TRAIN_WHY"; return 1 ;;
+      *) _ws_refuse not-merged "the PR was closed as landed in a merge train, but $_WS_TRAIN_WHY"; return 1 ;;
+    esac
   fi
   # §7's argv boundary, restated on THIS side of the split — because the split
   # is what can move a value out of the field that was anchored and into one
@@ -13739,10 +13789,19 @@ _ws_reap_eval() {   # id -> 0 when reapable, else REAP_VERDICT names the refusal
     || { _ws_refuse pr-fields-malformed "gh named mergeCommit='$REAP_MERGE' headRefOid='$REAP_HEADOID'"; return 1; }
   git -C "$main" cat-file -e "${REAP_MERGE}^{commit}" 2>/dev/null \
     || { _ws_refuse merge-commit-missing "$REAP_MERGE is not in the object store after a fetch"; return 1; }
-  if _ws_merge_proof "$main" "$REAP_MERGE" "$REAP_TIP"; then
+  if (( landed )); then
+    # The train record lists the member at its head, and `pick` bound a head
+    # reachable from our tip, so the tip being an ancestor of that head means
+    # the two are the same commit: nothing on the branch is beyond what the
+    # train landed.
+    if git -C "$main" merge-base --is-ancestor -- "$REAP_TIP" "$REAP_HEADOID" 2>/dev/null; then
+      REAP_PROOF=train
+    else
+      _ws_refuse tree-differs "the branch carries commits beyond the head the train landed: $(git -C "$main" diff --stat "$REAP_HEADOID" "$REAP_TIP" -- | head -5; git -C "$main" log --oneline "$REAP_HEADOID".."$REAP_TIP" | head -5)"
+      return 1
+    fi
+  elif _ws_merge_proof "$main" "$REAP_MERGE" "$REAP_TIP"; then
     REAP_PROOF="$_WS_PROOF"
-  elif (( landed )) && _ws_merge_tree_proof "$main" "$REAP_MERGE" "$REAP_TIP"; then
-    REAP_PROOF=merge-tree
   else
     _ws_refuse tree-differs "$(git -C "$main" diff --stat "$REAP_MERGE" "$REAP_TIP" -- | head -5; git -C "$main" log --oneline "$REAP_MERGE".."$REAP_TIP" | head -5)"
     return 1

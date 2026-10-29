@@ -1348,12 +1348,11 @@ export interface WsAudit {
    *  branch was never pushed and its tip is an ancestor of a freshly fetched
    *  origin/HEAD, so nothing unique exists to lose. `pr.number` is `null` on
    *  that verdict — the audit claims no merge it did not witness.
-   *  `merge-tree` is the sixth: a PR a merge train landed and closed, whose
-   *  work the train's landing commit (the default-branch commit whose message
-   *  names the PR) is proven to carry; `pr.number` is that PR and
-   *  `pr.mergeCommit` that landing commit, the one the proof ran against,
-   *  since the train named no merge commit for it. */
-  merge: { proof: 'ancestor' | 'tree' | 'patch-id' | 'cherry' | 'contained' | 'merge-tree' | null; fetchedAt: number | null };
+   *  `train` is the sixth: a PR a merge train landed and closed, proven by
+   *  the train record — the train PR it names is MERGED and lists it at
+   *  exactly its head sha; `pr.number` is that PR and `pr.mergeCommit` the
+   *  train PR's merge commit, since GitHub named no merge commit for it. */
+  merge: { proof: 'ancestor' | 'tree' | 'patch-id' | 'cherry' | 'contained' | 'train' | null; fetchedAt: number | null };
   transcript: string;
   /** The checkouts nested under this workspace's worktree — registered
    *  children ccd created plus any filesystem strays found beside them
@@ -3531,11 +3530,11 @@ const reviveAuditPr = (raw: unknown): AuditPr => {
   };
 };
 
-const PROOFS: readonly string[] = ['ancestor', 'tree', 'patch-id', 'cherry', 'contained', 'merge-tree'];
-type AuditMerge = { proof: 'ancestor' | 'tree' | 'patch-id' | 'cherry' | 'contained' | 'merge-tree' | null; fetchedAt: number | null };
+const PROOFS: readonly string[] = ['ancestor', 'tree', 'patch-id', 'cherry', 'contained', 'train'];
+type AuditMerge = { proof: 'ancestor' | 'tree' | 'patch-id' | 'cherry' | 'contained' | 'train' | null; fetchedAt: number | null };
 /** `WsAudit.merge` — `proof` is a closed vocabulary (the four ways
  *  `_pr_state_one` can corroborate a merge, plus `contained` — the reap
- *  ladder's never-pushed-nothing-unique rung — and `merge-tree`, its rung for
+ *  ladder's never-pushed-nothing-unique rung — and `train`, its rung for
  *  a PR closed as landed in a merge train), validated the same way
  *  `isPrPhase`/`isPrReason` validate theirs: cast the CONSTANT, never the
  *  input. `fetchedAt` is `null` until Phase C actually fetched — the field's
