@@ -1881,7 +1881,7 @@ describe('FleetScreen', () => {
 // the SAME `sessions` array the project cards below iterate, so the head can
 // never disagree with its own rows.
 describe('bucket sections', () => {
-  it('renders one section per non-empty bucket, in RANK order, and none for an empty one', () => {
+  it('renders one section per non-empty bucket, in BUCKET_ORDER (Working above Idle, OA-C14 (a), D-7188), and none for an empty one', () => {
     const store = makeStore();
     renderFleet(<FleetScreen store={store} />);
     seed(store, {
@@ -1894,7 +1894,7 @@ describe('bucket sections', () => {
     });
 
     const heads = screen.getAllByText(/^(Needs you|Working|Done|Idle|Cleanup|Archived|Exited)$/);
-    expect(heads.map((h) => h.textContent)).toEqual(['Needs you', 'Idle', 'Working']);
+    expect(heads.map((h) => h.textContent)).toEqual(['Needs you', 'Working', 'Idle']);
     // No section rendered for a bucket with zero members.
     expect(screen.queryByText('Done')).not.toBeInTheDocument();
     expect(screen.queryByText('Cleanup')).not.toBeInTheDocument();

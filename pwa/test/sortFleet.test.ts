@@ -12,7 +12,7 @@ describe('sortFleet', () => {
   // (server/test/bucket.test.ts), not here. sortFleet only decides what ORDER
   // the seven buckets read in, so every fixture below sets `bucket` directly
   // rather than the `status`/`dialogPending` this function no longer reads.
-  it('sorts attention → done → idle → working → cleanup → archived → dead, recent-first within a bucket', () => {
+  it('sorts attention → done → working → idle → cleanup → archived → dead, recent-first within a bucket (BUCKET_ORDER, OA-C14 (a), D-7188)', () => {
     const fleet: FleetSession[] = [
       s({ id: 'dead-old', bucket: 'dead', statusUpdatedAt: 1 }),
       s({ id: 'working-new', bucket: 'working', statusUpdatedAt: 900 }),
@@ -27,10 +27,10 @@ describe('sortFleet', () => {
     expect(sortFleet(fleet).map((x) => x.id)).toEqual([
       'needs',        // attention: 0
       'done-1',       // done: 1
-      'idle-new',     // idle: 2, newest first
-      'idle-old',
-      'working-new',  // working: 3
+      'working-new',  // working: 2, newest first
       'working-old',
+      'idle-new',     // idle: 3
+      'idle-old',
       'cleanup-1',    // cleanup: 4
       'archived-1',   // archived: 5
       'dead-old',     // dead: 6
