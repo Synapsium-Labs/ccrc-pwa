@@ -914,6 +914,21 @@ describe('the bypass deny (wave 2b)', () => {
       expect(bash(ADMIN).deny, 'a project value over the bound reached the allowance').not.toBeNull();
     });
 
+    // 132 and 133 characters: `_ct_read` cuts at CCRC_ID_MAX (128) inside the blanks, then trims to `proj-a`.
+    it.each([122, 123])('refuses a .project of proj-a, %i spaces and junk, which filled the read (wave 2b fix round 1)', (n) => {
+      allow('proj-a');
+      project(`proj-a${' '.repeat(n)}junk`);
+      const d = bash(ADMIN).deny;
+      expect(d, `proj-a + ${n} spaces + junk reached the allowance`).not.toBeNull();
+      expect(d).toMatch(/^ccrc: `--admin` and `gh api` merges are refused in every session/);
+    });
+
+    it('the control for an over-long .project: the newline `ccd` writes is a short read, trimmed, and allowed', () => {
+      allow('proj-a');
+      project('proj-a\n');
+      expect(bash(ADMIN).deny, 'a well-formed .project was refused').toBeNull();
+    });
+
     it('refuses an allowance that is a symlink to a regular file, or a directory', () => {
       project('proj-a');
       fs.mkdirSync(reg('admin-merge-allowed'), { recursive: true });
@@ -1103,6 +1118,19 @@ describe('the bypass deny (wave 2b)', () => {
         expect(flagsOf(c), `no p flag: ${c}`).toContain('p');
         expect(bash(c).deny, `not denied: ${c}`).not.toBeNull();
       }
+    });
+
+    it.each([
+      ['gh api repos/o/r/pulls/42;x/merge', 'glued `pulls/<n>;x/merge`'],
+      ['gh api repos/o/r/pulls/42 > out/merge', 'redirect target (`> out/merge`'],
+    ])('the separator-bounded reading\'s named cost: %j is refused (%s)', (c, phrase) => {
+      const d = bash(c).deny;
+      expect(d, 'the named cost went away: update the hook header\'s THE COST of the api half').not.toBeNull();
+      expect(d).toContain('name an output file another way, or pass a body with `-F body=@<file>`');
+      const a = hookText.indexOf('# THE COST of the api half under the cap');
+      const b = hookText.indexOf('# The cap also BOUNDS', a);
+      if (a < 0 || b < 0) throw new Error('the hook header no longer has THE COST of the api half');
+      expect(hookText.slice(a, b).replace(/\n# /g, ' '), `the header's api cost does not name "${phrase}"`).toContain(phrase);
     });
 
     // M3: a backslash in the word or the path is dropped like a quote, once the payload wakes the arm
@@ -1328,6 +1356,15 @@ describe('the bypass deny (wave 2b)', () => {
       }
     });
 
+    it('refuses an over-cap --raw-field mutation, naming the api kind (wave 2b fix round 1)', () => {
+      const c = over(`gh api graphql --raw-field query='mutation { mergePullRequest(input: {pullRequestId: "x"}) { clientMutationId } }'`);
+      expect(strip(c)).toBe(`!${Buffer.byteLength(c)}:api`);
+      const d = bash(c).deny;
+      expect(d, 'an over-cap --raw-field mutation went through').not.toBeNull();
+      expect(d).toContain('parse cap');
+      expect(d).toContain('a `gh … api` command that names a merge mutation');
+    });
+
     it('refuses the two mutations that hold no lowercase merge, from a HOME whose path holds none, over the cap too', () => {
       expect(home).not.toContain('merge');
       for (const word of ['enqueuePullRequest', 'enablePullRequestAutoMerge']) {
@@ -1469,8 +1506,10 @@ describe('the bypass deny (wave 2b)', () => {
       expect(lines('echo enablePullRequestAutoMerge').length - lines('echo enablePullRequestAutoMarge').length,
         'the auto-merge mutation (it holds `Merge`)').toBe(1);
       expect(lines('echo mergeBranch').length - lines('echo margeBranch').length, 'the branch mutation (it holds `merge`)').toBe(1);
-      // The control: two different commands that wake no trigger word cost the same number of jq calls.
-      expect(lines('echo hello').length - lines('echo world').length, 'the control').toBe(0);
+      // The controls, which a wider prefilter reds (wave 2b fix round 1): an upper-case MERGE and the bare
+      // `PullRequest` wake nothing.
+      expect(lines('echo MERGE').length - lines('echo MARGE').length, 'an upper-case MERGE reached the strip').toBe(0);
+      expect(lines('echo PullRequest').length - lines('echo PullRequezt').length, 'a bare PullRequest reached the strip').toBe(0);
     });
   });
 });

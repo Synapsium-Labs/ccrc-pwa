@@ -412,9 +412,13 @@ _hook_graph_card() {
 # exactly the "silently truncated into a passing value" failure fix round 1
 # (finding 2) named. Reading the LARGER of this file's two length constants
 # means a value genuinely within `CCRC_PROJ_MAX` is always captured whole (a
-# short read), while anything longer is truncated at a length that STILL
-# exceeds `CCRC_PROJ_MAX` (128 > 64) — so the length gate downstream still
-# correctly refuses it instead of silently accepting the truncated prefix.
+# short read). A length gate on `CT_V` alone does NOT refuse a longer value:
+# the trim runs AFTER the cut, so a short value padded with blanks past
+# `CCRC_ID_MAX` (`proj-a`, 122 spaces, `junk`) is cut inside the blanks and
+# trimmed back to `proj-a`, under any length gate. A caller that must refuse
+# an over-long value also checks `CT_RAWN < CCRC_ID_MAX` (a value that filled
+# the read is refused), as the merge arm's allowance and the generation reader
+# do.
 #
 # `read -N` returns 1 on a SHORT READ (fewer than the requested count because
 # EOF arrived first) — the NORMAL case for every field this function reads,
@@ -4127,7 +4131,7 @@ fi
 #     variant (`pulls/42/Merge`), which wake the arm and which the path test does not
 #     read, since it reads the text as written;
 #   - a mutation word written with JSON `\u` escapes in a `--input -` body or a
-#     `-f query=` value (`enqueuePullRequest`): the escape is the body's, not
+#     `-f query=` value (`\u0065nqueuePullRequest`): the escape is the body's, not
 #     the shell's, and the hook does not decode JSON. Such a payload can also skip
 #     the bash prefilter, which reads only `merge`, `Merge` and `enqueuePullRequest`;
 #   - a word or path broken by quotes or a backslash so that none of those three
@@ -4365,7 +4369,9 @@ fi
 # is refused over the cap), or, for
 # the `api` kind, a segment that names `gh` then `api` as words beside a mutation
 # word or the text `/merge` anywhere in the command (a wider reach than the
-# under-cap paths: `/merge` stands for both, and prose can hold it): the
+# under-cap paths: `/merge` stands for both and has no end bound, so it also
+# catches `/merges`, and a path merely starting `/merge`, such as
+# `docs/merge-queue.md` or `/merged`, is enough; prose can hold it): the
 # reason says to split the command or pass the text as a file, says the hook
 # cannot tell prose from a command over the cap, and gives both byte counts. The coordinator accepted it (ruling 3510): of
 # 3,537 over-cap fleet commands in another two-day window, the segment rule
@@ -4394,8 +4400,11 @@ fi
 # Classified, not closed (the stopping line, ruled 2026-10-03).
 # THE COST of the api half under the cap, accepted: the separator-bounded path reading
 # crosses blanks, so a non-merge `gh api` call whose later argument ends in `/merge`
-# (`gh api repos/o/r/pulls/42 -f body=docs/merge`) is refused too. Run it as a
-# separate command or pass the body as a file.
+# (`gh api repos/o/r/pulls/42 -f body=docs/merge`) is refused too, and so is one
+# whose redirect target (`> out/merge`, `> "$TMPDIR/merge.json"`) or quoted string
+# (`--jq '.head.ref == "ws/merge"'`) holds `/merge` after `pulls/<n>`, and the
+# glued `pulls/<n>;x/merge`. Run it as a separate command, name the output file
+# another way, or pass the body as a file (`-F body=@<file>`).
 # The cap also BOUNDS every superlinear walk above: the strip and GH_MERGE_RE
 # never read more than MERGE_PARSE_CAP bytes, so the 36-200 KB timings above
 # are what the cap prevents, not what a command costs.
@@ -4529,12 +4538,16 @@ if [[ "$event" == PreToolUse && "${tool:-}" == Bash \
     elif [[ -n "$mbypass" ]]; then
       # THE OPERATOR'S ALLOWANCE (D-7249), under the cap only and only for a command the grammar reads as
       # exactly one admin merge (`s`). The session's project is read from its own registry row, never
-      # from the id or the cwd: absent, empty, unreadable or off-class reads as not allowed. No fork.
+      # from the id or the cwd: absent, empty, unreadable, off-class or one that filled the read
+      # (`CT_RAWN`, see `_ct_read`) reads as not allowed. No fork. What keeps the allowance off the
+      # over-cap and api forms is the grammar (`s` is set only under the cap, only for text
+      # ALLOW_ADMIN_RE matches) and the branch order (the over-cap reason is chosen before `mallow`
+      # is read); `-z "$mover"` and `-z "$mapi"` are defence in depth, which no test can red.
       mallow=""
       if [[ -z "$mover" && -z "$mapi" && "$mflags" == *s* ]] && _ct_read "$REG/$id.project" && [[ -n "$CT_V" ]]; then
         case "$CT_V" in
           *[!$CCRC_PROJ_CLASS]*) ;;
-          *) if (( ${#CT_V} <= CCRC_PROJ_MAX )) && [[ -f "$REG/admin-merge-allowed/$CT_V" && ! -L "$REG/admin-merge-allowed/$CT_V" ]]; then mallow=1; fi ;;
+          *) if (( ${#CT_V} <= CCRC_PROJ_MAX && CT_RAWN < CCRC_ID_MAX )) && [[ -f "$REG/admin-merge-allowed/$CT_V" && ! -L "$REG/admin-merge-allowed/$CT_V" ]]; then mallow=1; fi ;;
         esac
       fi
       if [[ -n "$mover" ]]; then
@@ -4550,7 +4563,7 @@ if [[ "$event" == PreToolUse && "${tool:-}" == Bash \
         mreason+=" Land a PR with \`gh pr merge <n> --match-head-commit <sha>\`, which enqueues it, and read whether it merged with \`gh pr view <n> --json state,mergedAt\`. A bypass is R9's door: the operator's own shell or GitHub's UI."
         if [[ -n "$mapi" ]]; then
           mreason+=" A \`gh api\` call is refused when its command names a merge mutation (\`mergePullRequest\`, \`enqueuePullRequest\`, \`enablePullRequestAutoMerge\`, \`mergeBranch\`) or a merge path (\`repos/<o>/<r>/pulls/<n>/merge\`, \`repos/<o>/<r>/merges\`), by any method, a GET included: the hook cannot tell a read of the merge path from a write, so \`gh pr view <n> --json state,mergedAt\` is how a session asks whether a PR merged."
-          mreason+=" Note that the whole command is read, quoted text included, once it holds a \`gh api\` or merge command, so a real \`gh api\` call and an unrelated mention of a mutation word or merge path in one command is refused too: run them as separate commands."
+          mreason+=" Note that the whole command is read, quoted text included, once it holds a \`gh api\` or merge command, so a real \`gh api\` call and an unrelated mention of a mutation word or merge path in one command is refused too: run them as separate commands, name an output file another way, or pass a body with \`-F body=@<file>\`."
         else
           mreason+=" Note that the whole command is read, quoted text included, once it holds a merge or api command, so a real \`gh pr merge\` and an unrelated \`--admin\` in one command is refused too: run them as separate commands."
         fi
