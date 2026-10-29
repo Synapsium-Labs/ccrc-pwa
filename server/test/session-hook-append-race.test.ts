@@ -68,30 +68,43 @@ describe('the history spool append under a drain that renames the file away (D-7
    *  it is absent, so the path moves both ways under the appender: regular to absent (the drain) and absent to regular
    *  (the sibling). In `guard` mode the appender spins on `code` alone and counts each false evaluation, a refused append.
    *  In `append` mode it runs `code` as the whole statement with a numbered `$_hs`; every line written lands in the spool
-   *  file or a drained one, so the lines missing from all of them are the appends the statement refused. */
-  const race = (mode: 'guard' | 'append', code: string, n: number): { ran: number; refused: number; found: number } => {
+   *  file or a drained one, so the lines missing from all of them are the appends the statement refused.
+   *  `lanes` runs that many such races at once, each in its own directory: on macOS a `stat` of `/dev/fd/N` fails for a
+   *  moment while a rename runs, and it shows up only when the box is busy (one lane alone measured no miss; eight at
+   *  once missed about one append in 200 through a `-f /dev/fd/9` check). */
+  const race = (mode: 'guard' | 'append', code: string, n: number, lanes = 1): { ran: number; refused: number; found: number } => {
     const work = path.join(dir, `race-${Math.random().toString(36).slice(2)}`);
     fs.mkdirSync(work);
     const driver = [
       '#!/usr/bin/env bash',
-      '# $1 the work directory, $2 the number of drains',
-      '_hs_p="$1/s.jsonl" n=$2 stop="$1/.stop"',
-      '( for ((k = 0; k < n; k++)); do mv -f "$_hs_p" "$1/drained.$k" 2>/dev/null; done; : > "$stop" ) &',
-      '( until [[ -e "$stop" ]]; do [[ -e "$_hs_p" ]] || : >> "$_hs_p"; done ) &',
-      'i=0 refused=0',
-      'until [[ -e "$stop" ]]; do',
-      '  i=$((i + 1)); _hs="L$i"',
-      mode === 'guard' ? `  ${code} || refused=$((refused + 1))` : `  ${code}`,
-      'done',
+      '# $1 the work directory, $2 the number of drains in each lane, $3 the number of lanes',
+      'lane() {   # $1 the lane directory, $2 the number of drains',
+      '  _hs_p="$1/s.jsonl" n=$2 stop="$1/.stop"',
+      '  ( for ((k = 0; k < n; k++)); do mv -f "$_hs_p" "$1/drained.$k" 2>/dev/null; done; : > "$stop" ) &',
+      '  ( until [[ -e "$stop" ]]; do [[ -e "$_hs_p" ]] || : >> "$_hs_p"; done ) &',
+      '  i=0 refused=0',
+      '  until [[ -e "$stop" ]]; do',
+      '    i=$((i + 1)); _hs="L$i"',
+      mode === 'guard' ? `    ${code} || refused=$((refused + 1))` : `    ${code}`,
+      '  done',
+      '  wait',
+      '  printf \'%s %s\\n\' "$i" "$refused"',
+      '}',
+      'for ((l = 0; l < $3; l++)); do mkdir "$1/lane.$l"; ( lane "$1/lane.$l" "$2" > "$1/lane.$l.out" ) & done',
       'wait',
-      'printf \'%s %s\\n\' "$i" "$refused"',
+      'ran=0 refused=0',
+      'for ((l = 0; l < $3; l++)); do read -r a b < "$1/lane.$l.out"; ran=$((ran + a)) refused=$((refused + b)); done',
+      'printf \'%s %s\\n\' "$ran" "$refused"',
       '',
     ].join('\n');
-    const [ran, refused] = drive('history-race.sh', driver, [work, String(n)]).trim().split(' ').map(Number);
+    const [ran, refused] = drive('history-race.sh', driver, [work, String(n), String(lanes)]).trim().split(' ').map(Number);
     let found = 0;
-    for (const f of fs.readdirSync(work)) {
-      if (f === '.stop') continue;
-      found += fs.readFileSync(path.join(work, f), 'utf8').split('\n').filter((l) => /^L\d+$/.test(l)).length;
+    for (let l = 0; l < lanes; l++) {
+      const lane = path.join(work, `lane.${l}`);
+      for (const f of fs.readdirSync(lane)) {
+        if (f === '.stop') continue;
+        found += fs.readFileSync(path.join(lane, f), 'utf8').split('\n').filter((x) => /^L\d+$/.test(x)).length;
+      }
     }
     return { ran: ran!, refused: refused!, found };
   };
@@ -107,8 +120,8 @@ describe('the history spool append under a drain that renames the file away (D-7
     expect(r.refused).toBe(0);
   }, 180_000);
 
-  it('the shipped append loses no line while the drain renames the file away and a sibling creates it', () => {
-    const r = race('append', historyAppendLine(), 600);
+  it('the shipped append loses no line while the drain renames the file away and a sibling creates it, eight races at once', () => {
+    const r = race('append', historyAppendLine(), 1500, 8);
     expect(r.ran, 'the appender ran').toBeGreaterThan(0);
     expect(r.found, 'every append landed in the spool file or a drained one').toBe(r.ran);
   }, 180_000);

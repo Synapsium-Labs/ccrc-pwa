@@ -3491,7 +3491,12 @@ fi
 # between them refused a plain append in EITHER probe order (a lost line, measured).
 # So the guard refuses only a POSITIVE non-regular type, which no such move makes
 # true; the file is then opened for append on fd 9, and the line goes through fd 9
-# only if what it opened is a regular file and the path is still not a link. A drain
+# only if what it opened is not a positive non-regular type either and the path is
+# still not a link. The descriptor's check is positive too (D-7503): on macOS a
+# `stat` of `/dev/fd/9` fails for a moment while a rename runs, so `-f /dev/fd/9`
+# read false for an open regular file and lost the line (measured under load). A FIFO
+# swapped in has blocked at the open, and a directory cannot be opened for append,
+# so nothing that matters reaches the write unchecked. A drain
 # after the open gets the line in the renamed file. Bash has no O_NOFOLLOW or
 # O_NONBLOCK redirection, so a node swapped in between the guard and the open is
 # opened: a link is followed (an absent target is created empty, never written; one
@@ -3530,7 +3535,7 @@ if [[ -z "$paid" && -d "$HOME/.ccrc/history/spool" && ! -L "$HOME/.ccrc/history/
       _hs+=",\"ts\":${_hs_s}${_hs_f:0:3}"
     fi
     _hs+='}'
-    [[ ! ( -L "$_hs_p" || -d "$_hs_p" || -p "$_hs_p" || -S "$_hs_p" || -b "$_hs_p" || -c "$_hs_p" ) ]] && { { [[ -f /dev/fd/9 && ! -L "$_hs_p" ]] && { printf '\n%s\n' "$_hs" >&9; }; } 9>>"$_hs_p"; } 2>/dev/null || true
+    [[ ! ( -L "$_hs_p" || -d "$_hs_p" || -p "$_hs_p" || -S "$_hs_p" || -b "$_hs_p" || -c "$_hs_p" ) ]] && { { [[ ! ( -p /dev/fd/9 || -S /dev/fd/9 || -c /dev/fd/9 || -b /dev/fd/9 || -d /dev/fd/9 ) && ! -L "$_hs_p" ]] && { printf '\n%s\n' "$_hs" >&9; }; } 9>>"$_hs_p"; } 2>/dev/null || true
   fi
 fi
 # <<< history-spool

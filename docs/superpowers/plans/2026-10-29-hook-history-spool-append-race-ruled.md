@@ -8,7 +8,7 @@
 
 1. refuses only a POSITIVE non-regular type at the path: a symlink (live or dangling), a directory, a FIFO, a socket or a device. No move between absent and regular makes any of these true. A FIFO is still never opened, and a directory is still refused before the open.
 2. opens the file for append once, on fd 9, as a redirection on a group (no `exec`, nothing forks, and bash restores fd 9 after it);
-3. writes the line through fd 9 only if `/dev/fd/9` is a regular file and the path is still not a link.
+3. writes the line through fd 9 only if `/dev/fd/9` is not a positive non-regular type either (a FIFO, socket, device or directory) and the path is still not a link. This check is positive too: on macOS a `stat` of `/dev/fd/9` fails for a moment while a concurrent rename runs, so a `-f /dev/fd/9` check read false for an open regular file and lost the line. Measured on macOS with eight races at once: about one append in 200 was lost through `-f`, and none through the positive form. A FIFO swapped in has already blocked at the open, and a directory cannot be opened for append.
 
 A drain that renames the file after the open gets the line in the renamed file, which it reads like any other.
 
@@ -19,7 +19,7 @@ A drain that renames the file after the open gets the line in the renamed file, 
 **Tests.** `server/test/session-hook-append-race.test.ts` adds the rows. Each runs a fixed driver script; paths and counts reach it as arguments.
 
 - *History, guard.* The shipped guard spins against a drain and a sibling and never refuses. The control rows run the old guard and the swapped guard, and each must refuse.
-- *History, append.* The shipped statement appends numbered lines through the same race, and every line is found in the spool file or a drained one.
+- *History, append.* The shipped statement appends numbered lines through the same race, eight races at once so the box is busy, and every line is found in the spool file or a drained one.
 - *History, interleaving.* The real hook runs with a `DEBUG` trap that acts on the first command after the guard. A symlink swapped in there never receives the line (on main the line was written into the link's target). A drain that renames the file there gets the line in the renamed file, and no new spool file is made (on main the line made a new spool file).
 - *Join.* The two shipped `joinedprev` guards never refuse while the target is renamed in and purged; the old two must refuse. Both still refuse a live or dangling symlink, a directory and a FIFO, and pass absent or regular.
 
