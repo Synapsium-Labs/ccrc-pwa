@@ -167,7 +167,7 @@ export function parseProbe(content: string, project: string, nowMs: number): Pro
 
 /** A listed registry record of the doc's project, as the lane reads it (`sessionBranchOf` and `sessionPrOf` of
  *  `fleet.ts` are the two derivations the branch and the PR come from): the session's CURRENT branch, and its PR with
- *  `open` meaning `phase === 'open'`. */
+ *  `open` meaning `phase` is `'open'` or `'draft'` (D-7515: a draft is an open PR to GitHub and to the radar). */
 export interface RadarRow {
   id: string;
   branch: string | null;
