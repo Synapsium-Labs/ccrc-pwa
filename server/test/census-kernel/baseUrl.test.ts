@@ -46,8 +46,10 @@ describe('gateDefinitions — every const BASE_URL_OK, definitions and declarati
   });
 
   it('real tree: 2 definitions and 1 declaration (characterization)', () => {
+    // Re-pointed in the move commit (D-7306): the title names the plan base's count; the one implementation is the
+    // `.mjs`, and `shared/base-url.ts` re-exports it.
     expect(gateDefinitions()).toEqual({
-      definitions: ['shared/base-url.mjs#BASE_URL_OK', 'shared/base-url.ts#BASE_URL_OK'],
+      definitions: ['shared/base-url.mjs#BASE_URL_OK'],
       declarations: ['shared/base-url.d.mts#BASE_URL_OK'],
     });
   });
@@ -68,9 +70,8 @@ describe('loopbackSets — every array literal of exactly the three loopback hos
   });
 
   it('real tree: 3 sets, one of them in another order (characterization)', () => {
-    expect(loopbackSets()).toEqual([
-      'shared/base-url.mjs#LOOPBACK_HOSTS', 'shared/base-url.ts#LOOPBACK_HOSTS', 'shared/models.mjs#LOOPBACK_HOSTS',
-    ]);
+    // Re-pointed in the move commit (D-7306): the title names the plan base's count; the `.ts` copy is gone.
+    expect(loopbackSets()).toEqual(['shared/base-url.mjs#LOOPBACK_HOSTS', 'shared/models.mjs#LOOPBACK_HOSTS']);
   });
 });
 
@@ -88,9 +89,11 @@ describe('verdictTypeDecls — the type aliases of BaseUrlRefusal and BaseUrlVer
   });
 
   it('real tree: each declared twice (characterization)', () => {
+    // Re-pointed in the move commit (D-7307): the title names the plan base's count; `shared/base-url.d.mts` now
+    // imports both types from the `.ts`.
     expect(verdictTypeDecls()).toEqual({
-      BaseUrlRefusal: ['shared/base-url.d.mts', 'shared/base-url.ts'],
-      BaseUrlVerdict: ['shared/base-url.d.mts', 'shared/base-url.ts'],
+      BaseUrlRefusal: ['shared/base-url.ts'],
+      BaseUrlVerdict: ['shared/base-url.ts'],
     });
   });
 });
