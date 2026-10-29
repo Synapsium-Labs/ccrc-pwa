@@ -104,7 +104,6 @@ describe('the switchboard: SWITCHES rows and readSwitches (D-5855)', () => {
     expect(Object.fromEntries(settingRows.map(([k, r]) => [k, 'setting' in r.storage ? r.storage.setting : null]))).toEqual({
       'stall-watch-level': 'stall_settings.level',
       'collect-lane-choice': 'collect_lane_settings.choice',
-      'dispatch-abandon-choice': 'dispatch_abandon_settings.choice',
     });
   });
 
@@ -117,14 +116,13 @@ describe('the switchboard: SWITCHES rows and readSwitches (D-5855)', () => {
     }
   });
 
-  it('the writers are the ones the tree has: two route-backed ccd verbs, three settings routes, the rest by hand', () => {
+  it('the writers are the ones the tree has: two route-backed ccd verbs, two settings routes, the rest by hand', () => {
     const writers = Object.fromEntries(rows.filter(([, r]) => r.writer !== 'hand-only').map(([k, r]) => [k, r.writer]));
     expect(writers).toEqual({
       'coordinator-paused': 'ccd coord-pause, through POST /api/coord/pause',
       'reclaim-paused': 'ccd reclaim-pause, through POST /api/coord/reclaim-pause',
       'stall-watch-level': 'POST /api/coord/stall-watch',
       'collect-lane-choice': 'POST /api/coord/collect-lane',
-      'dispatch-abandon-choice': 'POST /api/coord/dispatch-abandon',
     });
   });
 

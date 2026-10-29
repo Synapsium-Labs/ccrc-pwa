@@ -258,12 +258,6 @@ export const SWITCHES = {
     meaning: 'The Settings arm of the collector: only an exact live choice arms it.',
     writer: 'POST /api/coord/collect-lane',
   },
-  'dispatch-abandon-choice': {
-    storage: { setting: 'dispatch_abandon_settings.choice' }, default: 'on', owner: 'C5',
-    meaning: 'A run whose dispatch never came back is abandoned by the server and its coordinator mailed (D-7319); '
-      + 'only an exact on arms it.',
-    writer: 'POST /api/coord/dispatch-abandon',
-  },
 } as const satisfies Readonly<Record<string, SwitchRow>>;
 
 export type SwitchName = keyof typeof SWITCHES;
