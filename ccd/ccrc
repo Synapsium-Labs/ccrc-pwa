@@ -20784,7 +20784,7 @@ _upd_rerun_hint() {
 # name outside it, and the census (ccrc-settings-census.test.ts) derives from it, never from a copy. The fleet box's sweeps
 # read the last four names too (wave 29, D-6981; D-7500), through ccd/lib/ccrc-settings.sh, which `node deploy/gen-settings-lib.mjs`
 # regenerates after any edit to this line, to `_ccrc_knob` or to the `_box_*` model.
-CCRC_SETTINGS=(CCRC_BACKUP_KEEP CCRC_BACKUP_DATA_KEEP CCRC_VERSIONS_KEEP CCRC_UPDATE_HEALTH_S CCRC_UPDATE_DEADLINE_MS CCRC_RELEASE_BASE_URL CCRC_MODELS_ADVANCE_BUDGET_S CCRC_SESSION_SLICE_MEMORY_MAX CCRC_SESSION_SLICE_SWAP_MAX CCRC_TEST_SLICE_MEMORY_MAX CCRC_TEST_SLICE_SWAP_MAX CCRC_TEST_SLICE_CPU_WEIGHT CCRC_TEST_SLICE_CPU_QUOTA CCRC_TEST_SLICE_IO_WEIGHT CCRC_TEST_HEAVY_SLOTS CCRC_TEST_WIDE_FILES CCRC_TEST_PRESSURE_MAX CCRC_KEEPALIVE_MODEL CCRC_KEEPALIVE_PROMPT CCRC_KEEPALIVE_FRESH CCRC_USAGE_SWEEP_DAYS)
+CCRC_SETTINGS=(CCRC_BACKUP_KEEP CCRC_BACKUP_DATA_KEEP CCRC_VERSIONS_KEEP CCRC_UPDATE_HEALTH_S CCRC_UPDATE_DEADLINE_MS CCRC_RELEASE_BASE_URL CCRC_MODELS_ADVANCE_BUDGET_S CCRC_SESSION_SLICE_MEMORY_MAX CCRC_SESSION_SLICE_SWAP_MAX CCRC_TEST_SLICE_MEMORY_MAX CCRC_TEST_SLICE_SWAP_MAX CCRC_TEST_SLICE_CPU_WEIGHT CCRC_TEST_SLICE_CPU_QUOTA CCRC_TEST_SLICE_IO_WEIGHT CCRC_TEST_HEAVY_SLOTS CCRC_TEST_WIDE_FILES CCRC_TEST_PRESSURE_MAX CCRC_GRAPH_STORE CCRC_GRAPH_SOURCE_REF CCRC_GRAPH_REPOS_EXCLUDE CCRC_GRAPH_REFRESH_SECS CCRC_GRAPH_FETCH_SECS CCRC_GRAPH_FULL_REBUILD_SECS CCRC_GRAPH_INCREMENTAL_MAX_FILES CCRC_GRAPH_FULL_FAIL_MAX CCRC_GRAPH_FAIL_BACKOFF_SECS CCRC_GRAPH_BUDGET CCRC_GRAPH_BUILD_TIMEOUT CCRC_GRAPH_SLOT_WAIT_SECS CCRC_GRAPH_BUILD_NICE CCRC_GRAPH_MAX_WORKERS CCRC_GRAPH_MAX_SHRINK_PCT CCRC_GRAPH_KEEP_BUILDS CCRC_GRAPH_BUILD_GRACE_SECS CCRC_GRAPH_MIGRATE_BUDGET CCRC_GRAPH_HOOKSTATE_FRESH_SECS CCRC_GRAPH_GATE_MAX_DIFF_PCT CCRC_GRAPH_GATE_MAX_DENIALS CCRC_GRAPH_CARD_DIFF_LIST_MAX CCRC_KEEPALIVE_MODEL CCRC_KEEPALIVE_PROMPT CCRC_KEEPALIVE_FRESH CCRC_USAGE_SWEEP_DAYS)
 
 # ── _ccrc_knob <KEY> <default> [file] — ONE reader for every setting (D-6587) ──
 # The process environment, else ~/.ccrc/ccrc.env alone, else <default>: wave 23's `_bak_data_keep` read with its knob made
@@ -27444,6 +27444,40 @@ _test_knobs() {
   _ccrc_knob CCRC_TEST_HEAVY_SLOTS 2 file; _test_knob_say CCRC_TEST_HEAVY_SLOTS 2 $?
   _ccrc_knob CCRC_TEST_WIDE_FILES 3 file; _test_knob_say CCRC_TEST_WIDE_FILES 3 $?
   _ccrc_knob CCRC_TEST_PRESSURE_MAX 0; _test_knob_say CCRC_TEST_PRESSURE_MAX 0 $?
+}
+# ── _graph_knobs [file] — the graph sweep's settings (D-7348; graph revision 2, spec §5) ──
+# The 22 graph settings of spec §5.4, in its order, read through `_ccrc_knob` like every other setting and printed one line
+# each through `_test_knob_say` (`KEY<US>default<US>value<US>from`, the same lines `_test_knobs` prints). ccd/graph-resolve
+# (`_gr_knobs`) owns what each value means and keeps the default for a value that is not its shape, as ccd/ccrc-test does
+# for `_test_knobs`. No mode is the sweep's: the environment, else ~/.ccrc/ccrc.env, else the default (its unit sets no
+# environment, so a test's fixture environment is the only one it sees). `file` is the doctor's: ccrc.env alone, which is
+# what the sweep's unit reads. The defaults are neutral, no box's measurements; three are the sweep's own today
+# (BUILD_TIMEOUT 600, MAX_WORKERS 4, HOOKSTATE_FRESH_SECS 1800). REPOS_EXCLUDE's default is the empty string, spelled `''`
+# so the settings census reads it as a default.
+_graph_knobs() {   # [file]
+  local m="${1:-}"
+  _ccrc_knob CCRC_GRAPH_STORE "$HOME/.ccrc/graphs" ${m:+"$m"}; _test_knob_say CCRC_GRAPH_STORE "$HOME/.ccrc/graphs" $?
+  _ccrc_knob CCRC_GRAPH_SOURCE_REF origin/HEAD ${m:+"$m"}; _test_knob_say CCRC_GRAPH_SOURCE_REF origin/HEAD $?
+  _ccrc_knob CCRC_GRAPH_REPOS_EXCLUDE '' ${m:+"$m"}; _test_knob_say CCRC_GRAPH_REPOS_EXCLUDE '' $?
+  _ccrc_knob CCRC_GRAPH_REFRESH_SECS 900 ${m:+"$m"}; _test_knob_say CCRC_GRAPH_REFRESH_SECS 900 $?
+  _ccrc_knob CCRC_GRAPH_FETCH_SECS 900 ${m:+"$m"}; _test_knob_say CCRC_GRAPH_FETCH_SECS 900 $?
+  _ccrc_knob CCRC_GRAPH_FULL_REBUILD_SECS 86400 ${m:+"$m"}; _test_knob_say CCRC_GRAPH_FULL_REBUILD_SECS 86400 $?
+  _ccrc_knob CCRC_GRAPH_INCREMENTAL_MAX_FILES 200 ${m:+"$m"}; _test_knob_say CCRC_GRAPH_INCREMENTAL_MAX_FILES 200 $?
+  _ccrc_knob CCRC_GRAPH_FULL_FAIL_MAX 2 ${m:+"$m"}; _test_knob_say CCRC_GRAPH_FULL_FAIL_MAX 2 $?
+  _ccrc_knob CCRC_GRAPH_FAIL_BACKOFF_SECS 21600 ${m:+"$m"}; _test_knob_say CCRC_GRAPH_FAIL_BACKOFF_SECS 21600 $?
+  _ccrc_knob CCRC_GRAPH_BUDGET 4 ${m:+"$m"}; _test_knob_say CCRC_GRAPH_BUDGET 4 $?
+  _ccrc_knob CCRC_GRAPH_BUILD_TIMEOUT 600 ${m:+"$m"}; _test_knob_say CCRC_GRAPH_BUILD_TIMEOUT 600 $?
+  _ccrc_knob CCRC_GRAPH_SLOT_WAIT_SECS 600 ${m:+"$m"}; _test_knob_say CCRC_GRAPH_SLOT_WAIT_SECS 600 $?
+  _ccrc_knob CCRC_GRAPH_BUILD_NICE 15 ${m:+"$m"}; _test_knob_say CCRC_GRAPH_BUILD_NICE 15 $?
+  _ccrc_knob CCRC_GRAPH_MAX_WORKERS 4 ${m:+"$m"}; _test_knob_say CCRC_GRAPH_MAX_WORKERS 4 $?
+  _ccrc_knob CCRC_GRAPH_MAX_SHRINK_PCT 20 ${m:+"$m"}; _test_knob_say CCRC_GRAPH_MAX_SHRINK_PCT 20 $?
+  _ccrc_knob CCRC_GRAPH_KEEP_BUILDS 2 ${m:+"$m"}; _test_knob_say CCRC_GRAPH_KEEP_BUILDS 2 $?
+  _ccrc_knob CCRC_GRAPH_BUILD_GRACE_SECS 3600 ${m:+"$m"}; _test_knob_say CCRC_GRAPH_BUILD_GRACE_SECS 3600 $?
+  _ccrc_knob CCRC_GRAPH_MIGRATE_BUDGET 8 ${m:+"$m"}; _test_knob_say CCRC_GRAPH_MIGRATE_BUDGET 8 $?
+  _ccrc_knob CCRC_GRAPH_HOOKSTATE_FRESH_SECS 1800 ${m:+"$m"}; _test_knob_say CCRC_GRAPH_HOOKSTATE_FRESH_SECS 1800 $?
+  _ccrc_knob CCRC_GRAPH_GATE_MAX_DIFF_PCT 25 ${m:+"$m"}; _test_knob_say CCRC_GRAPH_GATE_MAX_DIFF_PCT 25 $?
+  _ccrc_knob CCRC_GRAPH_GATE_MAX_DENIALS 3 ${m:+"$m"}; _test_knob_say CCRC_GRAPH_GATE_MAX_DENIALS 3 $?
+  _ccrc_knob CCRC_GRAPH_CARD_DIFF_LIST_MAX 20 ${m:+"$m"}; _test_knob_say CCRC_GRAPH_CARD_DIFF_LIST_MAX 20 $?
 }
 _usage_test_paragraph() {
   printf '\n%s' \
