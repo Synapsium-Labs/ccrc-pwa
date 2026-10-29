@@ -45,7 +45,7 @@ const COMPACTION_RE = /^\s*(?:\[[^\]]*]\s*)?This session is being continued from
  *  priced by its text was thousands of px for a 47px row. */
 export function foldsAway(event: MessageEvent): boolean {
   if (event.kind === 'system') return event.origin === undefined && event.text.includes('\n');
-  return COMPACTION_RE.test(event.text);
+  return event.compaction === true || COMPACTION_RE.test(event.text);
 }
 
 /** The fold, now used by TWO callers: the /compact recap above, and a `system`
