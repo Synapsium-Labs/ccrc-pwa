@@ -3,11 +3,12 @@
 //
 // THE SCOPE, STATED. It reads `ccd/ccrc`, `ccd/ccrc-doctor-checks` (which
 // `cmd_doctor` sources) and `deploy/ccrc.env.example`, plus README's
-// `**ccrc's own settings.**` paragraph. It does not read the ccd-* sibling
-// scripts, `ccd/ccgpt-runtime`, `ccd/ccrc-models-probe`, `ccd/ccrc-codex` or
-// the `deploy/*.mjs` helpers ccrc runs: the wave-24 plan's "Not in this wave"
-// names each of their CCRC_ reads with a class. C6 alone also knows
-// `CCRC_SIGSTORE_TRUSTED_ROOT` by name, so the example never offers it.
+// `**ccrc's own settings.**` paragraph. Since wave 29 (D-6981) the ccd-* sweeps
+// read four of the settings through the same reader, sourced from
+// ccd/lib/ccrc-settings.sh, so the defaults (C2) and the takers (C4) are read
+// from `SIBLING_FILES` too; the W29 describe below reads those files whole and
+// the node helpers ccrc runs. C6 alone also knows `CCRC_SIGSTORE_TRUSTED_ROOT`
+// by name, so the example never offers it.
 //
 // WHAT IT DERIVES, AND WHAT IT HOLDS BY HAND. The settings come from the one
 // `CCRC_SETTINGS=(…)` line of ccd/ccrc, never from a second list here, and
@@ -63,6 +64,7 @@
 // leading spaces, `export CCRC_X=`, `# export CCRC_X=`).
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -78,6 +80,18 @@ const CODE: Record<CodeFile, string> = {
   'ccd/ccrc': codeOf(read('ccd/ccrc')),
   'ccd/ccrc-doctor-checks': codeOf(read('ccd/ccrc-doctor-checks')),
 };
+/** The bash executables `_inst_bins` places (each `_inst_atomic "$tree/ccd/<name>"` source whose first line is a bash
+ *  shebang), plus `ccd/ccrc-models-probe`, which ccrc runs from its tree and never places (wave 29, D-6982). */
+const SIBLING_FILES: readonly string[] = (() => {
+  const ccrc = read('ccd/ccrc');
+  const body = /^_inst_bins\(\) \{[\s\S]*?\n\}$/m.exec(ccrc)?.[0] ?? '';
+  const placed = [...codeOf(body).matchAll(/_inst_atomic "\$tree\/(ccd\/[^"]+)"/g)].map((m) => m[1]!);
+  return [...new Set([...placed, 'ccd/ccrc-models-probe'])]
+    .filter((f) => /^#!.*\bbash\b/.test(read(f).split('\n', 1)[0]!)).sort();
+})();
+const SIBLING_CODE: Record<string, string> = Object.fromEntries(SIBLING_FILES.map((f) => [f, codeOf(read(f))]));
+/** Every file whose literal `_ccrc_knob`/`_keep_knob` calls C2 and C4 read. */
+const KNOB_CODE = (): string[] => [...FILES.map((f) => CODE[f]), ...SIBLING_FILES.map((f) => SIBLING_CODE[f]!)];
 const EXAMPLE = read('deploy/ccrc.env.example');
 const README = read('README.md');
 
@@ -92,7 +106,7 @@ const SETTINGS: string[] = (() => {
   return m ? m[1].split(' ').filter((w) => w !== '') : [];
 })();
 
-type EnvOnlyClass = 'call-bound' | 'fixture-path' | 'per-run' | 'rollout' | 'handshake' | 'constant';
+type EnvOnlyClass = 'call-bound' | 'fixture-path' | 'per-run' | 'rollout' | 'handshake' | 'constant' | 'tuning';
 /** D-6588's 42 environment-only names and D-6921's one. Each is a reasoned
  *  exception: a value for one call, one test, one run or one process, never a
  *  box's setting. */
@@ -149,9 +163,14 @@ const ENV_ONLY: Record<string, { cls: EnvOnlyClass; why: string }> = {
   CCRC_HERE: { cls: 'constant', why: 'ccd/ccrc sets it to its own directory, and ccd/ccrc-doctor-checks resolves itself only when it is unset.' },
 };
 
-/** Read by a helper ccrc runs, not by ccd/ccrc: C6 alone knows it. */
-const HELPER_ENV_ONLY: Record<string, string> = {
-  CCRC_SIGSTORE_TRUSTED_ROOT: 'deploy/verify-provenance.mjs reads it; a file line must never choose the provenance trust root',
+/** Read by a node helper ccrc runs, not by ccd/ccrc: C6 and W29-S3 know them (wave 29 measures the whole set). */
+const HELPER_ENV_ONLY: Record<string, { cls: EnvOnlyClass; why: string }> = {
+  CCRC_SIGSTORE_TRUSTED_ROOT: { cls: 'fixture-path', why: 'deploy/verify-provenance.mjs reads it; a file line must never choose the provenance trust root.' },
+  CCRC_RECALL_ARM: { cls: 'per-run', why: 'ccd/history/cli.mjs reads it as the arm of one recall, which its caller sets for that run.' },
+  CCRC_RECALL_ASOF: { cls: 'per-run', why: 'ccd/history/cli.mjs reads it as the as-of point of one recall, set for that run.' },
+  CCRC_RECALL_SESSION: { cls: 'per-run', why: 'ccd/history/cli.mjs reads it as the session one recall is for, set for that run.' },
+  CCRC_SESSION_GENERATION: { cls: 'per-run', why: 'ccd/history/cli.mjs reads it as the calling session\'s generation, which its environment carries for that session alone.' },
+  CCRC_MODELS_NOW: { cls: 'fixture-path', why: 'deploy/models-op.mjs reads it as the clock a test pins, in place of the time now.' },
 };
 
 /** The keys ccrc reads from the server's files, where the server reads them (D-6588). */
@@ -208,8 +227,8 @@ function envReads(code: string): Set<string> {
  *  not the argument (`… 900000; else`, `… 3; then`). */
 function defaultsOf(): Map<string, Set<string>> {
   const out = new Map<string, Set<string>>();
-  for (const f of FILES)
-    for (const m of CODE[f].matchAll(/\b(?:_ccrc_knob|_keep_knob) (CCRC_[A-Z0-9_]+) ("[^"]*"|[^\s;&|)]+)/g)) {
+  for (const code of KNOB_CODE())
+    for (const m of code.matchAll(/\b(?:_ccrc_knob|_keep_knob) (CCRC_[A-Z0-9_]+) ("[^"]*"|[^\s;&|)]+)/g)) {
       if (m[2] === '""') continue;
       if (!out.has(m[1])) out.set(m[1], new Set());
       out.get(m[1])!.add(m[2]);
@@ -355,8 +374,8 @@ describe('W24: every ccrc setting is read through _ccrc_knob, and every environm
   it('C4: _ccrc_knob and _keep_knob take a setting by its literal name, every setting is taken somewhere, and only two calls pass a name in a variable', () => {
     const literal = new Set<string>();
     const variable: string[] = [];
+    for (const code of KNOB_CODE()) for (const m of code.matchAll(/\b(?:_ccrc_knob|_keep_knob) (CCRC_[A-Z0-9_]+)/g)) literal.add(m[1]);
     for (const f of FILES) {
-      for (const m of CODE[f].matchAll(/\b(?:_ccrc_knob|_keep_knob) (CCRC_[A-Z0-9_]+)/g)) literal.add(m[1]);
       // Quoted or not: `_ccrc_knob $name 5` passes a name in a variable as surely as `"$name"`, so quotes are dropped from what is listed.
       for (const m of CODE[f].matchAll(/\b(?:_ccrc_knob|_keep_knob) "?\$[^\s"]*"?/g))
         variable.push(`${m[0].replace(/"/g, '')} in ${ownerOf(CODE[f], m.index!)}`);
@@ -504,5 +523,249 @@ describe('W24: every ccrc setting is read through _ccrc_knob, and every environm
     const miscounted = Object.entries(SOURCING_BODIES).filter(([o, e]) => (counts.get(o) ?? 0) !== e.count)
       .map(([o, e]) => `${o}: ${counts.get(o) ?? 0} sourcings, listed as ${e.count}`);
     expect({ faults, miscounted }).toEqual({ faults: [], miscounted: [] });
+  });
+});
+
+// ── W29 (D-6982): the ccd-* sweeps and the node helpers ───────────────────────────────────────────────────────────
+// Wave 24 read ccd/ccrc and the doctor's checks; the sweeps sourced nothing of ccrc's, so a CCRC_ name they read was
+// environment-only by construction. Since wave 29 two of them read four settings through ccd/lib/ccrc-settings.sh,
+// and this describe holds the rest of what they and the node helpers read to a reason. ccd-graph-sweep is not one of
+// them (D-7500): the graphify r2 wave gives the graph settings their own reader and meaning, so its two operator
+// numbers stay environment-only here until that wave moves them. Its scope: SIBLING_FILES (the
+// bash executables `_inst_bins` places, derived, plus ccd/ccrc-models-probe) and HELPER_FILES (the tracked `.mjs`
+// files ccd/ccrc names in its code). WHAT IT DOES NOT CATCH, as C5 and C6 do not: a bare `$NAME` read with no
+// default, a node read through destructuring or `process.env[k]` with `k` a variable, and a python helper's reads.
+
+/** A sweep's own policy number its header does not offer an operator, overridable for tests (the `tuning` class), and
+ *  every other CCRC_ name a sibling reads from the environment outside the reader. Names wave 24's ENV_ONLY already
+ *  classes (the health timeout, the cgroup and proc roots) are not repeated here. */
+const SIBLING_ENV_ONLY: Record<string, { cls: EnvOnlyClass; why: string }> = {
+  CCRC_GRAPH_BUDGET: { cls: 'tuning', why: 'ccd-graph-sweep stops a pass after this many tree rebuilds, environment-only until the graphify r2 wave reads it through ccrc\'s reader with its new meaning (D-7500).' },
+  CCRC_GRAPH_MAX_WORKERS: { cls: 'call-bound', why: 'ccd-graph-sweep hands one engine build this many workers, environment-only until the graphify r2 wave reads it through ccrc\'s reader (D-7500).' },
+  CCRC_GRAPH_BUILD_TIMEOUT: { cls: 'call-bound', why: 'ccd-graph-sweep bounds one engine build with it (`timeout` around `graphify update`), overridable so a test need not wait out 600 s.' },
+  CCRC_GRAPH_STALE_ESCAPE_COMMITS: { cls: 'tuning', why: 'ccd-graph-sweep\'s stale-escape rule rebuilds a tree this many commits behind whatever its idle gate says, a policy number its header does not offer an operator.' },
+  CCRC_GRAPH_STALE_ESCAPE_SECS: { cls: 'tuning', why: 'ccd-graph-sweep\'s stale-escape rule rebuilds a graph this old whatever its idle gate says, a policy number its header does not offer an operator.' },
+  CCRC_GRAPH_HOOKSTATE_FRESH_SECS: { cls: 'tuning', why: 'ccd-graph-sweep\'s idle gate trusts a hookstate pointer this young, a guard number its header does not offer an operator.' },
+  CCRC_KEEPALIVE_TURN_TIMEOUT: { cls: 'call-bound', why: 'ccd-telemetry-keepalive bounds one turn with it (`timeout` around the wrapper), overridable so a test need not wait it out.' },
+  CCRC_KEEPALIVE_BACKOFF_AFTER: { cls: 'tuning', why: 'ccd-telemetry-keepalive\'s backoff starts after this many failed turns in a row, one of the three plain numbers its header argues rather than offers.' },
+  CCRC_KEEPALIVE_BACKOFF_BASE: { cls: 'tuning', why: 'ccd-telemetry-keepalive\'s backoff window starts here and doubles, one of the three plain numbers its header argues rather than offers.' },
+  CCRC_KEEPALIVE_BACKOFF_MAX: { cls: 'tuning', why: 'ccd-telemetry-keepalive\'s backoff window stops doubling here, one of the three plain numbers its header argues rather than offers.' },
+  CCRC_TREE: { cls: 'fixture-path', why: 'ccd-usage-sweep reads shared/models.mjs from the deployed tree there, which a test points at the checkout.' },
+  CCRC_POOL_SYNC_TIMEOUT: { cls: 'call-bound', why: 'ccd-pool-sync bounds its one call to the server with it.' },
+  CCRC_UPDATE_SYNC_TIMEOUT: { cls: 'call-bound', why: 'ccd-update-sync bounds its one call to the server with it.' },
+  CCRC_HEALTH_URL: { cls: 'fixture-path', why: 'ccd-account-health probes this endpoint, which a test points at a loopback fake.' },
+  CCRC_AUTH_TIMEOUT: { cls: 'call-bound', why: 'The account-connection helper bounds one sign-in child with it.' },
+  CCRC_AUTH_TICK: { cls: 'call-bound', why: 'The account-connection helper polls one sign-in at this interval.' },
+  CCRC_AUTH_PUMP_GRACE: { cls: 'call-bound', why: 'The account-connection helper\'s pump waits this margin past one child\'s deadline before its backstop acts (D-2736).' },
+  CCRC_AUTH_SCRIPT: { cls: 'fixture-path', why: 'The account-connection helper names its pty vehicle with it, so a test can make it absent without emptying PATH (its header\'s testability argument).' },
+  CCRC_AUTH_NO_MAIN: { cls: 'fixture-path', why: 'The account-connection helper\'s one-line test seam: set, sourcing it runs nothing, so a test asserts one function at a time.' },
+  CCRC_UPSTREAM: { cls: 'constant', why: 'The roster projection (accounts.sh), which the account-connection helper and ccrc-codex source, sets it to the roster\'s upstream id; no box setting.' },
+  CCRC_RUNTIME_PIP_S: { cls: 'call-bound', why: 'ccgpt-runtime bounds one pip run of a runtime build with it.' },
+  CCRC_RUNTIME_PROBE_S: { cls: 'call-bound', why: 'ccgpt-runtime bounds one probe of a built runtime with it.' },
+  CCRC_CODEX_PYTHON: { cls: 'handshake', why: 'ccrc\'s models refresh hands ccrc-models-probe the codex lane\'s interpreter in it, and unsets it for every other row.' },
+  CCRC_MODELS_AUTH_LIB: { cls: 'handshake', why: 'ccrc\'s models refresh hands ccrc-models-probe the auth library\'s path in it, and unsets it for every other row.' },
+  CCRC_MODELS_PROBE_FIXTURE: { cls: 'fixture-path', why: 'ccrc-models-probe\'s one test seam: a file whose bytes stand in for the network answer.' },
+};
+
+/** The tracked `.mjs` files ccd/ccrc names in a code line, by repository path or by a path that ends with the file's
+ *  path below its top directory (`$CCRC_HERE/history/cli.mjs`, `$HOME/.cc-sessions/compact-card.mjs`). */
+const HELPER_FILES: readonly string[] = (() => {
+  const code = codeOf(read('ccd/ccrc'));
+  const tracked = execFileSync('git', ['ls-files', '-z', '--', 'deploy', 'ccd', 'shared'], { cwd: REPO, encoding: 'utf8' })
+    .split('\0').filter((f) => f.endsWith('.mjs'));
+  return tracked.filter((f) => code.includes(f) || code.includes('/' + f.slice(f.indexOf('/') + 1))).sort();
+})();
+const helperReads = (): Map<string, Set<string>> => {
+  const out = new Map<string, Set<string>>();
+  for (const f of HELPER_FILES)
+    for (const m of read(f).matchAll(/process\.env(?:\.|\[['"])(CCRC_[A-Z0-9_]+)/g)) {
+      if (!out.has(m[1]!)) out.set(m[1]!, new Set());
+      out.get(m[1]!)!.add(f);
+    }
+  return out;
+};
+
+/** The two loader lines every sweep that reads a setting spells, byte for byte (Task 3). */
+const LOADER = [
+  '_settings_lib="${BASH_SOURCE[0]%/*}/lib/ccrc-settings.sh"; [ -f "$_settings_lib" ] || _settings_lib="$HOME/.local/libexec/ccrc/ccrc-settings.sh"',
+  '. "$_settings_lib" 2>/dev/null && declare -F _ccrc_knob >/dev/null 2>&1 || { echo "${0##*/}: the settings reader is missing or broken (~/.local/libexec/ccrc/ccrc-settings.sh) — this pass did nothing; \'ccrc update --force\' places it" >&2; exit 1; }',
+] as const;
+
+/** The settings a sibling takes by a literal `_ccrc_knob` call, by file. */
+const siblingTakes = (): Map<string, string[]> => new Map(SIBLING_FILES.map((f) =>
+  [f, [...SIBLING_CODE[f]!.matchAll(/\b_ccrc_knob (CCRC_[A-Z0-9_]+)/g)].map((m) => m[1]!)]));
+
+/** Each `ccrc.env` on a line that is not the tilde spelling inside quotes, which bash never expands, so it can only name
+ *  the file in a message and never open it. */
+const unquotedCcrcEnv = (line: string): boolean => {
+  let q: '' | '"' | "'" = '';
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i]!;
+    if (q === '' && c === '\\') { i++; continue; }
+    if (q === '"' && c === '\\') { i++; continue; }
+    if (q === '' && (c === '"' || c === "'")) { q = c; continue; }
+    if (q !== '' && c === q) { q = ''; continue; }
+    if (line.startsWith('ccrc.env', i) && (q === '' || !line.slice(0, i).endsWith('~/.ccrc/'))) return true;
+  }
+  return false;
+};
+
+describe('W29: the ccd-* sweeps read their settings through the shared reader file, and every other CCRC_ name a placed helper reads is a reasoned exception', () => {
+  it('the inputs are what they say: the sweeps that read settings are siblings, and the helper set holds the files it names', () => {
+    for (const f of ['ccd/ccd-graph-sweep', 'ccd/ccd-telemetry-keepalive', 'ccd/ccd-usage-sweep', 'ccd/ccrc-models-probe'])
+      expect(SIBLING_FILES, 'SIBLING_FILES').toContain(f);
+    expect(SIBLING_FILES, 'the generated reader is sourced, never a placed executable').not.toContain('ccd/lib/ccrc-settings.sh');
+    for (const f of ['deploy/verify-provenance.mjs', 'deploy/models-op.mjs', 'ccd/history/cli.mjs'])
+      expect(HELPER_FILES, 'HELPER_FILES').toContain(f);
+  });
+
+  it('W29-S1: every setting a sweep reads is taken once, as _ccrc_knob NAME <default> && NAME="$KNOB", and never expanded with a default', () => {
+    const faults: string[] = [];
+    const taken = new Set([...siblingTakes().values()].flat());
+    expect(taken.size, 'non-vacuity: the sweeps take settings').toBeGreaterThan(0);
+    for (const S of SETTINGS.filter((x) => taken.has(x))) {
+      const shape = new RegExp('^_ccrc_knob ' + S + ' ("[^"]*"|\\S+) && ' + S + '="\\$KNOB" \\|\\| \\{');
+      const at: string[] = [];
+      for (const f of SIBLING_FILES) {
+        const lines = SIBLING_CODE[f]!.split('\n');
+        lines.forEach((l, i) => {
+          if (shape.test(l)) {
+            at.push(f);
+            const above = lines.slice(0, i).find((u) => new RegExp('\\$\\{?' + S + '(?![A-Za-z0-9_])').test(u));
+            if (above !== undefined) faults.push(`${f}: ${S} is expanded above its read: ${above.trim()}`);
+          }
+          if (new RegExp('\\$\\{' + S + ':?[-=+?]').test(l)) faults.push(`${f}: ${S} expanded with a default: ${l.trim()}`);
+        });
+      }
+      if (at.length !== 1) faults.push(`${S}: ${at.length} reads of the knob shape (${at.join(', ')}), not one`);
+    }
+    for (const [f, names] of siblingTakes()) for (const n of names) if (!SETTINGS.includes(n)) faults.push(`${f}: _ccrc_knob ${n} is not a setting`);
+    expect(faults).toEqual([]);
+  });
+
+  it('W29-S2: every CCRC_ name a sweep reads from the environment is a setting or a reasoned exception, and every exception is still read', () => {
+    const reads = new Set<string>();
+    for (const f of SIBLING_FILES) for (const n of envReads(SIBLING_CODE[f]!)) reads.add(n);
+    const known = [...Object.keys(SIBLING_ENV_ONLY), ...Object.keys(ENV_ONLY)];
+    expect({
+      unclassified: diff(reads, known),
+      aSetting: [...reads].filter((n) => SETTINGS.includes(n)).sort(),
+      noLongerRead: diff(Object.keys(SIBLING_ENV_ONLY), reads),
+      inBoth: Object.keys(SIBLING_ENV_ONLY).filter((n) => n in ENV_ONLY).sort(),
+    }).toEqual({ unclassified: [], aSetting: [], noLongerRead: [], inBoth: [] });
+    for (const [n, e] of Object.entries(SIBLING_ENV_ONLY)) expect(e.why, `${n}'s reason is one sentence`).toMatch(/^[^\n]+\.$/);
+  });
+
+  it('W29-S3: every CCRC_ name a node helper reads is in HELPER_ENV_ONLY, and no exception is documented as a ccrc.env line', () => {
+    const reads = helperReads();
+    expect({ unclassified: diff(reads.keys(), Object.keys(HELPER_ENV_ONLY)), noLongerRead: diff(Object.keys(HELPER_ENV_ONLY), reads.keys()) })
+      .toEqual({ unclassified: [], noLongerRead: [] });
+    for (const [n, e] of Object.entries(HELPER_ENV_ONLY)) expect(e.why, `${n}'s reason is one sentence`).toMatch(/^[^\n]+\.$/);
+    const names = [...Object.keys(SIBLING_ENV_ONLY), ...Object.keys(HELPER_ENV_ONLY)];
+    expect(names.filter((n) => new RegExp('^(# )?' + n + '=', 'm').test(EXAMPLE))).toEqual([]);
+  });
+
+  // The helper scan below catches only literal ccrc.env beside a direct fs opener on the same line. It does not
+  // trace paths or wrapper calls: history/cli.mjs's readRole -> readBounded(P.ccrcEnv) -> readBoxEnvValue reads
+  // CCRC_ROLE through history/lib.mjs's own parser, outside this guard; it is not one of the six sweep settings.
+  it('W29-S4: siblings have no direct box-env reader, and helpers have no same-line literal ccrc.env fs open', () => {
+    const faults: string[] = [];
+    const SOURCE = /(?:^|[;&|({]|\b(?:then|do|else|if|while|until)\b|!)[ \t]*(?:\.|source)[ \t]+(?:--[ \t]+)?("[^"]*"|'[^']*'|[^\s;&|)]+)/g;
+    for (const f of SIBLING_FILES)
+      for (const l of SIBLING_CODE[f]!.split('\n')) {
+        if (unquotedCcrcEnv(l)) faults.push(`${f}: names ccrc.env other than in a quoted ~/.ccrc/ccrc.env message: ${l.trim()}`);
+        if (/\bBOX_ENV_FILE\b/.test(l)) faults.push(`${f}: names BOX_ENV_FILE: ${l.trim()}`);
+        if (/\b(?:_box_env_value|_box_unit_env|_box_unit_env_shell|_box_env_has_nul)\b/.test(l)) faults.push(`${f}: calls a box-env reader: ${l.trim()}`);
+        if (/^\s*(?:function\s+)?(?:_ccrc_knob|_box_[A-Za-z0-9_]*)\s*\(\)/.test(l)) faults.push(`${f}: defines a reader function: ${l.trim()}`);
+        if (l.includes('index(t, k "=") != 1')) faults.push(`${f}: holds the reader's awk program: ${l.trim()}`);
+        for (const m of l.matchAll(SOURCE)) {
+          const op = m[1]!;
+          if (op === '"$_settings_lib"') continue;
+          if (/ccrc\.env|BOX_ENV_FILE|\.ccrc\//.test(op) && !/accounts\.sh|ACCOUNTS_SH|cx_roster/.test(op)) faults.push(`${f}: sources ${op}: ${l.trim()}`);
+        }
+      }
+    for (const f of HELPER_FILES)
+      for (const l of read(f).split('\n'))
+        if (/ccrc\.env/.test(l) && /\b(?:readFileSync|createReadStream|openSync)\b/.test(l)) faults.push(`${f}: reads ccrc.env: ${l.trim()}`);
+    expect(faults).toEqual([]);
+  });
+
+  it('W29-S5: the loader is one spelling, and comes before the first knob', () => {
+    const faults: string[] = [];
+    let readers = 0;
+    for (const f of SIBLING_FILES) {
+      const lines = SIBLING_CODE[f]!.split('\n');
+      const first = lines.findIndex((l) => /\b_ccrc_knob\b/.test(l) && l !== LOADER[1]);   // the loader's `declare -F` is not a read
+      if (first < 0) {
+        if (lines.some((l) => l.includes('_settings_lib'))) faults.push(`${f}: names _settings_lib but reads no setting`);
+        continue;
+      }
+      readers++;
+      const at = lines.findIndex((l) => l === LOADER[0]);
+      if (lines.filter((l) => l === LOADER[0]).length !== 1 || lines.filter((l) => l === LOADER[1]).length !== 1) faults.push(`${f}: the loader's two lines, byte for byte, once each`);
+      else if (lines[at + 1] !== LOADER[1] || at + 1 >= first) faults.push(`${f}: the loader is not two adjacent lines above the first _ccrc_knob`);
+    }
+    expect(readers, 'non-vacuity: two sweeps read settings (D-7500: not the graph sweep)').toBe(2);
+    expect(faults).toEqual([]);
+  });
+
+  it('W29-S6: a unit that runs a sweep reading a setting gives it no shell, no EnvironmentFile= and no CCRC_ environment', () => {
+    const faults: string[] = [];
+    for (const [f, names] of siblingTakes()) {
+      if (names.length === 0) continue;
+      const n = f.slice('ccd/'.length);
+      const unit = codeOf(read(`deploy/systemd/${n}.service`)).split('\n');
+      if (unit.some((l) => /^\s*EnvironmentFile=/.test(l))) faults.push(`${n}.service: EnvironmentFile=`);
+      if (unit.some((l) => /^\s*Environment=.*\bCCRC_/.test(l))) faults.push(`${n}.service: Environment= names a CCRC_ value`);
+      const exec = unit.filter((l) => /^\s*ExecStart=/.test(l));
+      if (exec.length !== 1 || exec[0] !== `ExecStart=%h/.local/bin/${n}`) faults.push(`${n}.service: ExecStart is ${JSON.stringify(exec)}, not the bare script`);
+    }
+    expect(faults).toEqual([]);
+  });
+
+  it('W29-S7: a sweep assigns none of the reader\'s names', () => {
+    const ASSIGN = /(?:^|[\s;&|(])(?:(?:local|declare|typeset|export|readonly)(?:\s+-[A-Za-z]+)*\s+)?(KNOB|KNOB_FROM|KNOB_WHY|BOX_ENV_FILE|CCRC_SETTINGS|BUE_[A-Z0-9_]+|BEW_[A-Z0-9_]+)(?:\[[^\]]*\])?\+?=/;
+    const hits: string[] = [];
+    for (const f of SIBLING_FILES) for (const l of SIBLING_CODE[f]!.split('\n')) if (ASSIGN.test(l)) hits.push(`${f}: ${l.trim()}`);
+    expect(hits).toEqual([]);
+  });
+
+  it('W29-S9: the doctor\'s list of the sweeps\' settings is the set the sweeps take', () => {
+    const m = /^\s*local sweeps=" ([A-Z0-9_ ]+) "$/m.exec(CODE['ccd/ccrc-doctor-checks']);
+    expect(m, '_check_box-settings names the sweeps\' settings in one `local sweeps=" … "` line').not.toBeNull();
+    expect(m![1]!.split(' ').sort()).toEqual([...new Set([...siblingTakes().values()].flat())].sort());
+  });
+});
+
+// ── W29 (R38, D-6983): the validators of values ccrc reads from outside spell their digits ────────────────────────────
+// A bracket range is collation-dependent: under en_US.UTF-8 on Linux, `[0-9]` takes `²`, `٣` and `５` as digits
+// (measured), so a validator of an operator's value spells the ten digits, as R34 spelled `_keep_ok`. The scope is the
+// seven bodies R38 named and, in each sweep, every `=~` test of a setting or of the keepalive's `${!knob}` loop; about 93
+// internal-format ranges (tags, pids, hashes) are carried as one issue (Reading 15).
+describe('W29 (R38): the validators of outside values spell their digits', () => {
+  const RANGE = /=~[^\n]*\[[^\]\n]*[0-9]-[0-9]/;
+  const BODIES = ['cmd_wrappers', '_acct_candidates', '_codex_port_ok', '_upd_deadline_ms', '_upd_watchdog_probe_gap_s', '_upd_sweep', '_keep_ok'];
+  it('W29-A1: the validators of outside values spell their digits', () => {
+    const hits: string[] = [];
+    let seen = 0;
+    for (const fn of BODIES) {
+      const span = bodySpan(CODE['ccd/ccrc'], fn);
+      expect(span, `ccd/ccrc defines ${fn}`).not.toBeNull();
+      for (const l of CODE['ccd/ccrc'].slice(span!.start, span!.end).split('\n')) {
+        if (!l.includes('=~')) continue;
+        seen++;
+        if (RANGE.test(l)) hits.push(`ccd/ccrc ${fn}: ${l.trim()}`);
+      }
+    }
+    const TESTED = /\[\[ "\$\{?(?:!knob|(CCRC_[A-Z0-9_]+))\}?" =~/;
+    for (const f of SIBLING_FILES)
+      for (const l of SIBLING_CODE[f]!.split('\n')) {
+        const m = TESTED.exec(l);
+        if (m === null || (m[1] !== undefined && !SETTINGS.includes(m[1]))) continue;
+        seen++;
+        if (RANGE.test(l)) hits.push(`${f}: ${l.trim()}`);
+      }
+    expect(seen, 'non-vacuity: the scope holds validators').toBeGreaterThanOrEqual(11);
+    expect(hits).toEqual([]);
   });
 });

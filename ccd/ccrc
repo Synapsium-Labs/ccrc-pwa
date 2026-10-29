@@ -2747,7 +2747,7 @@ EOF
 # `_upd_rollback_no_restore` and `_upd_restore` inherit it as `$reason`);
 # `$UPD_GATE_WHY` directly (`_upd_gate`'s two echoes, `cmd_update`'s exit-4
 # echo). `ccd/ccd-update-sync`, another executable, redacts at its own `say`
-# with the home rule and the `://` scheme rule alone: it prints no release base.
+# with its own copy of all three rules (wave 29, R45, D-6984; its header says how).
 _upd_redact() {
   local s="${1:-}" LC_ALL=C
   # The userinfo strip is bounded to characters a URL authority allows
@@ -4556,7 +4556,7 @@ cmd_wrappers() {
     || _ccrc_die "the manifest from $gen has no summary line, so there is nothing to check the wrapper records against — nothing was written"
   local f
   for f in "$sum_total" "$sum_gen" "$sum_up" "$sum_ext" "$sum_codex"; do
-    [[ "$f" =~ ^[0-9]+$ ]] \
+    [[ "$f" =~ ^[0123456789]+$ ]] \
       || _ccrc_die "the manifest from $gen has a summary whose counts are not all numbers — nothing was written"
   done
   [ "$sum_total" -eq "$((sum_gen + sum_up + sum_ext + sum_codex))" ] \
@@ -4709,7 +4709,7 @@ cmd_wrappers() {
   fi
   for ((wi = 0; wi < ${#wit_cand[@]}; wi++)); do
     wf="${wit_cand[$wi]}"; wname="${wf##*/}"; wsz="${wit_size[$wi]}"
-    [[ "$wsz" =~ ^[0-9]+$ ]] || { wit_blind="$wit_blind $wname"; continue; }
+    [[ "$wsz" =~ ^[0123456789]+$ ]] || { wit_blind="$wit_blind $wname"; continue; }
     [ "$wsz" -gt "$WRAPPER_WITNESS_MAX_BYTES" ] && continue
     # ITS OWN `-r` TEST, and this is not belt-and-braces. `_wrap_parse_shape`
     # folds "I could not read it" into "not a wrapper" (its `[ -r ]` guard),
@@ -6816,7 +6816,7 @@ _acct_candidates() {
     # callers already in this tree pass `-L` for the same reason (:2601,
     # ccrc-doctor-checks:2542).
     sz="$(_plat_size -L -- "$f" 2>/dev/null)" || sz=""
-    [[ "$sz" =~ ^[0-9]+$ ]] \
+    [[ "$sz" =~ ^[0123456789]+$ ]] \
       || _acct_refuse 1 unmeasurable "stat could not size $WRAPPER_BIN_DIR/$name, and a pick list that reported a launcher without its size would be inviting a choice on no evidence. Nothing was written."
     [ "$sz" -le "$WRAPPER_OVERSIZE_BYTES" ] || continue
     _wrap_is_script "$f" || continue
@@ -12384,7 +12384,7 @@ _codex_tier_ok() {   # <token> -> 0 iff it is one of CODEX_TIERS
 }
 
 _codex_port_ok() {   # <token> -> 0 iff it can be a TCP port
-  [[ "${1:-}" =~ ^[1-9][0-9]{0,4}$ ]] && [ "$1" -le 65535 ]
+  [[ "${1:-}" =~ ^[123456789][0123456789]{0,4}$ ]] && [ "$1" -le 65535 ]
 }
 
 # THE ONE tier -> port mapping (the fix wave's ruling: four hand-written
@@ -16743,6 +16743,12 @@ _inst_bins() {   # what has to be ON PATH: ccrc's own executables, and the launc
     _inst_atomic "$tree/ccd/ccrc-codex"      "$bin/ccrc-codex"      755
     lane_bins=", ccgpt-auth.py, ccgpt-proxy.py, ccgpt-usage.py, ccgpt-runtime, ccrc-codex" lane_note=""
   fi
+  # The settings reader the ccd-* sweeps source (wave 29, D-6980): generated from this file's `_ccrc_knob` closure
+  # (deploy/gen-settings-lib.mjs), 0644, beside ccd's body and off PATH, on every OS and role, and HERE, above the sweeps
+  # it serves, so no sweep this run places runs without it. Not `_inst_files`, which skips a server-role box whole.
+  mkdir -p "$HOME/.local/libexec/ccrc" || _ccrc_die "cannot create \$HOME/.local/libexec/ccrc"
+  _inst_atomic "$tree/ccd/lib/ccrc-settings.sh" "$HOME/.local/libexec/ccrc/ccrc-settings.sh" 644
+  echo "install: lib: ccrc-settings.sh (the settings reader the ccd-* sweeps source) in \$HOME/.local/libexec/ccrc"
   # `ccd-cap-scopes` FINDS UNCAPPED tmux pane CGROUP SCOPES and caps them.
   # macOS has neither cgroups nor scopes, and `_inst_units`' Darwin arm
   # installs no timer to run it — so placing the binary there would put a file
@@ -20775,8 +20781,10 @@ _upd_rerun_hint() {
 # from, or whether a step runs at all: an operator sets it once for the box, and an act run with no operator's shell (a
 # console-driven update, the watchdog, a timer) must honour it, so `_ccrc_knob` reads it from ~/.ccrc/ccrc.env too. Every
 # other CCRC_ name ccrc reads stays environment-only, in a reasoned class. This line is the one list: `_ccrc_knob` reads no
-# name outside it, and the census (ccrc-settings-census.test.ts) derives from it, never from a copy.
-CCRC_SETTINGS=(CCRC_BACKUP_KEEP CCRC_BACKUP_DATA_KEEP CCRC_VERSIONS_KEEP CCRC_UPDATE_HEALTH_S CCRC_UPDATE_DEADLINE_MS CCRC_RELEASE_BASE_URL CCRC_MODELS_ADVANCE_BUDGET_S CCRC_SESSION_SLICE_MEMORY_MAX CCRC_SESSION_SLICE_SWAP_MAX CCRC_TEST_SLICE_MEMORY_MAX CCRC_TEST_SLICE_SWAP_MAX CCRC_TEST_SLICE_CPU_WEIGHT CCRC_TEST_SLICE_CPU_QUOTA CCRC_TEST_SLICE_IO_WEIGHT CCRC_TEST_HEAVY_SLOTS CCRC_TEST_WIDE_FILES CCRC_TEST_PRESSURE_MAX)
+# name outside it, and the census (ccrc-settings-census.test.ts) derives from it, never from a copy. The fleet box's sweeps
+# read the last four names too (wave 29, D-6981; D-7500), through ccd/lib/ccrc-settings.sh, which `node deploy/gen-settings-lib.mjs`
+# regenerates after any edit to this line, to `_ccrc_knob` or to the `_box_*` model.
+CCRC_SETTINGS=(CCRC_BACKUP_KEEP CCRC_BACKUP_DATA_KEEP CCRC_VERSIONS_KEEP CCRC_UPDATE_HEALTH_S CCRC_UPDATE_DEADLINE_MS CCRC_RELEASE_BASE_URL CCRC_MODELS_ADVANCE_BUDGET_S CCRC_SESSION_SLICE_MEMORY_MAX CCRC_SESSION_SLICE_SWAP_MAX CCRC_TEST_SLICE_MEMORY_MAX CCRC_TEST_SLICE_SWAP_MAX CCRC_TEST_SLICE_CPU_WEIGHT CCRC_TEST_SLICE_CPU_QUOTA CCRC_TEST_SLICE_IO_WEIGHT CCRC_TEST_HEAVY_SLOTS CCRC_TEST_WIDE_FILES CCRC_TEST_PRESSURE_MAX CCRC_KEEPALIVE_MODEL CCRC_KEEPALIVE_PROMPT CCRC_KEEPALIVE_FRESH CCRC_USAGE_SWEEP_DAYS)
 
 # ── _ccrc_knob <KEY> <default> [file] — ONE reader for every setting (D-6587) ──
 # The process environment, else ~/.ccrc/ccrc.env alone, else <default>: wave 23's `_bak_data_keep` read with its knob made
@@ -20874,7 +20882,7 @@ _upd_deadline_ms() {   # [min|max]
   for f in "" ${1:+"$BOX_ENV_FILE" "$CCRC_EXPOSURE_FILE"}; do
     if [ -z "$f" ]; then _ccrc_knob CCRC_UPDATE_DEADLINE_MS 900000; else BOX_ENV_FILE="$f" _ccrc_knob CCRC_UPDATE_DEADLINE_MS 900000 file; fi && v="$KNOB" || v=""
     [ -z "$f" ] || [ "$KNOB_FROM" != default ] || continue
-    [[ "$v" =~ ^[1-9][0-9]{0,14}$ ]] || { v=900000; rc=1; }
+    [[ "$v" =~ ^[123456789][0123456789]{0,14}$ ]] || { v=900000; rc=1; }
     [ "$v" -le "$hi" ] || hi="$v"
     [ -n "$lo" ] && [ "$lo" -le "$v" ] || lo="$v"
   done
@@ -20893,7 +20901,7 @@ _upd_deadline_ms() {   # [min|max]
 _upd_watchdog_probe_gap_s() {
   local v="${CCRC_WATCHDOG_PROBE_GAP_S:-}"
   if [ -z "$v" ]; then printf '%s' 5; return 0; fi
-  if [[ "$v" =~ ^[0-9]+$ ]]; then printf '%s' "$v"; return 0; fi
+  if [[ "$v" =~ ^[0123456789]+$ ]]; then printf '%s' "$v"; return 0; fi
   echo "watchdog: CCRC_WATCHDOG_PROBE_GAP_S='$v' is not digits-only — using 5" >&2
   printf '%s' 5
 }
@@ -24336,7 +24344,7 @@ _upd_sweep() {
   fi
   local -a units=() missing=() crash=() unrec=() ncfail=()
   local vdir="" vjobs="${CCRC_SWEEP_VERIFY_JOBS:-128}" i j k r lrc d o cu _cl cw _cs _cd clist crc=0 m inb cb kc=0 mn=0 rfail="" lpid="" ltrap=""
-  [[ "$vjobs" =~ ^[1-9][0-9]{0,3}$ ]] || vjobs=128
+  [[ "$vjobs" =~ ^[123456789][0123456789]{0,3}$ ]] || vjobs=128
   # A unit the pre-restart listing showed `activating` or `failed` is never verified, even when this listing shows it
   # active (wave 16, D-5136; one absent from that listing, or shown in any other state, is still verified). Type=simple
   # reads `active` the moment try-restart forks it, so a crash-looping one is usually here: it goes to `pback`, named below.
@@ -26988,6 +26996,9 @@ _uninst_tree_bins() {
   # declaration): they stay with mail.token.
   rm -f -- "$BOX_TOKEN_GENERATION_FILE" "$BOX_TOKEN_SYNC_REPORT" \
     || _ccrc_die "removing the box token's generation record and sync report failed"
+  # The settings reader `_inst_bins` places beside ccd's body (wave 29, D-6980), by name, before the libexec rmdir below.
+  rm -f -- "$HOME/.local/libexec/ccrc/ccrc-settings.sh" || _ccrc_die "removing the settings reader from \$HOME/.local/libexec/ccrc failed"
+  echo "uninstall: tree: ccrc-settings.sh removed from \$HOME/.local/libexec/ccrc"
   # ONE RULE, and the `rm -f` below IS the census: every executable
   # `_inst_bins` writes into `$HOME/.local/bin` is removed here, because an
   # uninstall that removed a binary's units (above) and left the binary itself

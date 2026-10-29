@@ -1171,7 +1171,7 @@ export function thinBackups({ own = null, verified = null, dirs, keep, by, until
   const mib = (bytes) => Math.floor(bytes / 1048576);
   const sum = (dropped) => dropped.reduce((s, d) => s + d.bytes, 0);
   let counted = 0; let preMigration = 0; let thinned = 0; let left = 0; let refused = 0; let spent = 0;
-  let stopped = false; let timedOut = false; let refUv = null; let ownQ = null; let longest = null;
+  let stopped = false; let timedOut = false; let refUv = null; let lowUv = null; let ownQ = null; let longest = null;
   const result = () => ({ kept: counted + preMigration, thinned, left, refused, stopped });
   const summary = () => {
     if (thinned > 0 || refused > 0 || stopped || timedOut) out(`coordination data sets: ${counted + preMigration} kept, ${thinned} thinned this run, ${left} left as they are`);
@@ -1184,8 +1184,15 @@ export function thinBackups({ own = null, verified = null, dirs, keep, by, until
     return m.startsWith(`${err.code}: `) ? m : `${err.code}: ${m}`;
   };
   const hasDb = (q) => q.source === 'legacy' || q.manifest.members.coordDb.present;
-  /** The schema version the pre-migration check compares against: the first counted set that has a coord.db. */
-  const noteCounted = (dir, q) => { if (refUv === null && hasDb(q)) refUv = dbUserVersion(fs, path.join(dir, DB_FILE)); };
+  /** The schema version the pre-migration check compares against: the first counted set that has a coord.db. And the lowest
+   *  version among the counted sets whose header reads (wave 29, R46, D-6985): when one already predates `refUv`, the count keeps a
+   *  set from before the migration, so the pre-migration keep's purpose is met. A header that does not read gives no credit. */
+  const noteCounted = (dir, q) => {
+    if (!hasDb(q)) return;
+    const uv = dbUserVersion(fs, path.join(dir, DB_FILE));
+    if (refUv === null) refUv = uv;
+    if (uv !== null && (lowUv === null || uv < lowUv)) lowUv = uv;
+  };
   const secs = () => now().getTime() / 1000;
   /** Whether a full verification started now could pass `until` (D-6464). */
   const late = () => until !== null && secs() + (longest ?? VERIFY_ESTIMATE_S) > until;
@@ -1335,7 +1342,7 @@ export function thinBackups({ own = null, verified = null, dirs, keep, by, until
       // dir past the count is thinned on the reading the pass took, before the count's verifications ran (minutes, under the lock):
       // harmless, because nothing else of ccrc's writes a backup dir while the lock is held (review 806 F8).
       if (sparse) { left++; continue; }
-      if (preMigration === 0 && refUv !== null && hasDb(q)) {
+      if (preMigration === 0 && refUv !== null && !(lowUv !== null && lowUv < refUv) && hasDb(q)) {
         const uv = dbUserVersion(fs, path.join(dir, DB_FILE));
         if (uv !== null && uv < refUv) {
           if (dir !== verP && spent >= budget) { stop(walk.slice(at)); break; }

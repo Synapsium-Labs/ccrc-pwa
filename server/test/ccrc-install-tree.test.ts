@@ -1085,6 +1085,41 @@ describe('ccrc install: the executables and files it installs', () => {
     expect(mode(bin)).toBe(0o755);
   });
 
+  // wave 29 (D-6980): the settings reader the ccd-* sweeps source, generated from ccd/ccrc, lands beside ccd's body on
+  // every OS and role — above `_inst_bins`' Darwin test, so before any sweep it serves — with a line of its own.
+  const settingsLib = (home: string): string => join(home, '.local', 'libexec', 'ccrc', 'ccrc-settings.sh');
+  const LIB_LINE = 'install: lib: ccrc-settings.sh (the settings reader the ccd-* sweeps source) in $HOME/.local/libexec/ccrc';
+  const libLines = (stdout: string): string[] => stdout.split('\n').filter((l) => l.startsWith('install: lib:'));
+  it.each(['linux', 'darwin'] as const)('W29-I1: %s places the settings reader beside ccd\'s body, 0644, with its own line', (os) => {
+    let home = installed.home;
+    let stdout = installed.r.stdout;
+    if (os === 'darwin') {
+      // The Darwin arm forced on Linux, as the GPT-lane row below does: the exit code is not asserted, because a later
+      // step speaks BSD userland; what `_inst_bins` did is.
+      home = freshBox('ccrc-install-settings-lib-darwin-');
+      mkdirSync(join(home, '.ccrc'), { recursive: true });
+      writeFileSync(join(home, '.ccrc', 'agent.env'),
+        'CCRC_SERVER_URL=http://127.0.0.1:7788\nCCRC_AGENT_TOKEN=fixture-not-a-real-token\n');
+      const r = runInstall(home, ['install', '--role', 'both'], { OSTYPE: 'darwin23' }, { umask: '077' });
+      expect(r.stdout, `the Darwin arm was not taken\n${r.stderr}`).toMatch(/^install: units: .* in \$HOME\/Library\/LaunchAgents \(launchd\)$/m);
+      stdout = r.stdout;
+    }
+    expect(existsSync(settingsLib(home)), `the settings reader never reached ~/.local/libexec/ccrc on ${os}`).toBe(true);
+    expect(readFileSync(settingsLib(home))).toEqual(readFileSync(join(REPO, 'ccd', 'lib', 'ccrc-settings.sh')));
+    expect(mode(settingsLib(home))).toBe(0o644);
+    expect(libLines(stdout)).toEqual([LIB_LINE]);
+  });
+
+  it('W29-I2: a server-role box places it too', () => {
+    const home = freshBox('ccrc-install-settings-lib-server-');
+    gitInit(treeRoot(home));
+    const r = runInstall(home, ['install', '--role', 'server'], {}, { umask: '077' });
+    expect(r.code, r.stderr).toBe(0);
+    expect(readFileSync(settingsLib(home))).toEqual(readFileSync(join(REPO, 'ccd', 'lib', 'ccrc-settings.sh')));
+    expect(mode(settingsLib(home))).toBe(0o644);
+    expect(libLines(r.stdout)).toEqual([LIB_LINE]);
+  });
+
   itLinux('ccd-graph-sweep lands beside it too (graphify Task 10, O3/O6b) — every role, but not Darwin', () => {
     // Mirrors the `ccd-cap-scopes` case above, byte for byte: `_inst_bins`
     // ships this one on every role the same way, and rides the same darwin
