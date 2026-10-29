@@ -5830,6 +5830,9 @@ mode = sys.argv[1]
 # like `abc` do the same. `is_merged` reads `mergeCommit.oid` through it as a
 # SHAPE check only — a merge commit is never an identity, two PRs can share one.
 OID = re.compile(r'^[0-9a-f]{7,40}$')
+# A PR number: the run id's grammar (`_child_runid_valid`, a positive decimal of at most ten
+# digits), spelled once in this program because python cannot call the bash helper.
+PR_NUM = r'[1-9][0-9]{0,9}'
 
 def rows_in():
     """The rows, or None for A BODY WE COULD NOT READ — which is NOT `[]`.
@@ -5905,7 +5908,7 @@ LANDED_LABEL = os.environ.get('PR_LANDED_LABEL', '')
 def train_proofs():
     got = {}
     for l in os.environ.get('PR_TRAIN_PROOFS', '').splitlines():
-        m = re.fullmatch(r'([1-9][0-9]{0,9}) ([0-9a-f]{40}) ([1-9][0-9]{0,9}) ([0-9a-f]{40})', l)
+        m = re.fullmatch(rf'({PR_NUM}) ([0-9a-f]{{40}}) ({PR_NUM}) ([0-9a-f]{{40}})', l)
         if m:
             got[(m.group(1), m.group(2))] = (m.group(3), m.group(4))
     return got
@@ -5919,7 +5922,7 @@ def train_proofs():
 def train_refused():
     got = set()
     for l in os.environ.get('PR_TRAIN_REFUSED', '').splitlines():
-        m = re.fullmatch(r'([1-9][0-9]{0,9}) ([0-9a-f]{40})', l)
+        m = re.fullmatch(rf'({PR_NUM}) ([0-9a-f]{{40}})', l)
         if m:
             got.add((m.group(1), m.group(2)))
     return got
@@ -6666,7 +6669,7 @@ elif mode == 'train-refs':
         body = c.get('body') if isinstance(c, dict) else None
         if not isinstance(body, str):
             continue
-        for m in re.finditer(r'(?i)\btrain\s+#([1-9][0-9]{0,9})\b', body):
+        for m in re.finditer(rf'(?i)\btrain\s+#({PR_NUM})\b', body):
             if m.group(1) != member and m.group(1) not in seen:
                 seen.append(m.group(1))
     sys.stdout.write(''.join(n + '\n' for n in seen))
@@ -6701,7 +6704,7 @@ elif mode == 'train-check':
         sys.exit(0)
     cands = doc if isinstance(doc, list) else [doc]
     OPEN, CLOSE = '<!-- ccrc-train v1', '-->'
-    MEMBER = re.compile(r'member #([1-9][0-9]{0,9}) ([0-9a-f]{40})')
+    MEMBER = re.compile(rf'member #({PR_NUM}) ([0-9a-f]{{40}})')
 
     def train_block(body):
         # -> ({member number: head sha}, None) or (None, why).
@@ -6835,14 +6838,18 @@ _ws_slug_valid() { [[ "$1" =~ ^[a-z0-9][a-z0-9-]{1,30}$ ]]; }
 # marker `$REG/<id>.shedding`, which no alias glob reaches, and the gate fails closed on it
 # (DEPSSHED region).
 #
-# NOT reachable this way, and this set IS the boundary — SIXTEEN dot-prefixed
-# artifacts live under `$REG`; the eight above are reachable, these eight are
+# NOT reachable this way, and this set IS the boundary — EIGHTEEN dot-prefixed
+# artifacts live under `$REG`; the eight above are reachable, these ten are
 # not. THE CARDINAL IS MEASURED NOW, and it had to be: this paragraph said
 # EIGHT about a tree that already held nine, because `.account-placement.lock`
 # landed with `ccrc account` and nothing here reds when prose drifts.
 # `ccd-account-auth.test.ts`'s "the dot-prefixed registry inventory is a
 # census, not a memory" derives the number from the shipped bash and refuses
-# a paragraph that disagrees with it. The eight: `$REG/.carry.lock` (no id is the dash-free `.carry`);
+# a paragraph that disagrees with it. The ten: `$REG/.carry.lock` (no id is the dash-free `.carry`);
+# `$REG/.train-proofs` and `$REG/.train-tried` (D-7362, D-7381: the PR lane's kept train proofs and its tried
+# records, `PR_TRAIN_PROOFS_FILE` and `PR_TRAIN_TRIED_FILE`; neither name has a dot after its leading one, so no
+# `<id>.<field>` split leaves an id at all, and `.train-tried`'s `.tmp.XXXXXX` staging files, counted WITH it,
+# carry the second dot the `*.*` skip below excludes);
 # `$REG/.orphan-<sha16>.lock` (DR-17, D-6629: `ccd ws-orphan`'s per-tree lock; its suffix is the sha16 of a PATH, not
 # a `<project>-<slug>` id, so no `_reg_purge` glob can match it);
 # `$REG/.lifecycle/` (the lifecycle journal — a dotted DIRECTORY for
@@ -11695,7 +11702,7 @@ cmd_pr_train_prove() {   # ccd pr-train-prove --project <project> [--max <K>]
   for id in "${ids[@]}"; do
     _pr_bind_facts "$id" "$main" "" || continue
     while IFS=$'\t' read -r c h; do
-      [[ "$c" =~ ^[1-9][0-9]{0,9}$ && "$h" =~ ^[0-9a-f]{40}$ ]] || continue
+      _pr_num_valid "$c" && [[ "$h" =~ ^[0-9a-f]{40}$ ]] || continue
       key="$c $h $baseShort"
       [[ -n "${seen[$key]:-}" ]] && continue
       seen[$key]=1
@@ -13099,7 +13106,7 @@ _ws_train_tried_fresh_failed() {   # repo base number head -> 0 when the member'
 
 _ws_train_tried_put() {   # repo base number head outcome -> replaces the member's tried line with `outcome` now (`failed` or `unread`), or removes it when outcome is empty. Best effort: a file that cannot be written orders nothing and proves nothing
   local f="$REG/$PR_TRAIN_TRIED_FILE" tmp now
-  _ws_train_keyable "$1" "$2" && [[ "$3" =~ ^[1-9][0-9]{0,9}$ && "$4" =~ ^[0-9a-f]{40}$ ]] || return 0
+  _ws_train_keyable "$1" "$2" && _pr_num_valid "$3" && [[ "$4" =~ ^[0-9a-f]{40}$ ]] || return 0
   [[ -z "$5" || "$5" == failed || "$5" == unread ]] || return 0
   [[ -n "$5" || -f "$f" ]] || return 0
   _now_s_to now
@@ -13119,6 +13126,8 @@ _ws_train_left() {   # -> on stdout, the seconds the next train-record gh call m
   printf '%s' "$l"
 }
 
+_pr_num_valid() { _child_runid_valid "$@"; }   # value -> 0 iff it is a legal PR number: the run id's grammar (a positive decimal of at most ten digits, ASCII in every locale), spelled once in _child_runid_valid
+
 _ws_train_keyable() {   # repo base -> 0 when both may stand as one field of a kept-proof line: the slug's own spelling, and a base name with no space, no leading dash and nothing outside a ref's usual letters
   [[ "$1" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ && "$2" =~ ^[A-Za-z0-9._/-]+$ && "$2" != -* ]]
 }
@@ -13129,8 +13138,9 @@ _ws_train_kept() {   # repo base number head -> 0 with the kept proof's train in
   kept=$(awk -v r="$1" -v b="$2" -v n="$3" -v h="$4" \
            '$1 == r && $2 == b && $3 == n && $4 == h && NF == 6 { print $5 " " $6; exit }' \
            "$REG/$PR_TRAIN_PROOFS_FILE" 2>/dev/null)
-  [[ "$kept" =~ ^([1-9][0-9]{0,9})\ ([0-9a-f]{40})$ ]] || return 1
+  [[ "$kept" =~ ^([^ ]+)\ ([0-9a-f]{40})$ ]] || return 1
   _WS_TRAIN_NUM="${BASH_REMATCH[1]}" _WS_TRAIN_MERGE="${BASH_REMATCH[2]}"
+  _pr_num_valid "$_WS_TRAIN_NUM" || { _WS_TRAIN_NUM="" _WS_TRAIN_MERGE=""; return 1; }
 }
 
 _ws_train_record() {   # main repo number headOid baseShort [keep] -> 0 with the train PR in _WS_TRAIN_NUM and its merge commit in _WS_TRAIN_MERGE; else 1 (not landed) or 2 (GitHub could not be reached, or the budget ran out, before anything proved it), the sentence in _WS_TRAIN_WHY. Called directly, never in $(…), so the globals reach the caller
@@ -13178,7 +13188,7 @@ _ws_train_record() {   # main repo number headOid baseShort [keep] -> 0 with the
   # digit-only output and again below.
   local main="$1" repo="$2" n="$3" head="$4" base="$5" keep="${6:-0}" out t ans why="" unreach=0 left rc errf
   _WS_TRAIN_WHY="" _WS_TRAIN_MERGE="" _WS_TRAIN_NUM=""
-  [[ "$n" =~ ^[1-9][0-9]{0,9}$ && "$head" =~ ^[0-9a-f]{40}$ ]] \
+  _pr_num_valid "$n" && [[ "$head" =~ ^[0-9a-f]{40}$ ]] \
     || { _WS_TRAIN_WHY="gh named #$n at '$head', not a full head sha a train record can list"; return 1; }
   # A proof already kept answers without a gh call, before any tried line is
   # consulted, and clears a stale one (round 7).
@@ -13198,7 +13208,7 @@ _ws_train_record() {   # main repo number headOid baseShort [keep] -> 0 with the
   errf=$(_plat_mktemp 2>/dev/null) || errf=""
   if out=$(_plat_timeout "$left" gh pr view "$n" --repo "$repo" --json comments 2>/dev/null); then
     while IFS= read -r t; do
-      [[ "$t" =~ ^[1-9][0-9]{0,9}$ ]] || continue
+      _pr_num_valid "$t" || continue
       left=$(_ws_train_left) || { unreach=1; break; }
       if ans=$(_plat_timeout "$left" gh pr view "$t" --repo "$repo" --json "$fields" 2>"${errf:-/dev/null}"); then :
       else
@@ -13240,7 +13250,7 @@ _ws_train_record() {   # main repo number headOid baseShort [keep] -> 0 with the
       unreach=1
     fi
   fi
-  if [[ "$_WS_TRAIN_NUM" =~ ^[1-9][0-9]{0,9}$ && "$_WS_TRAIN_MERGE" =~ ^[0-9a-f]{40}$ ]]; then
+  if _pr_num_valid "$_WS_TRAIN_NUM" && [[ "$_WS_TRAIN_MERGE" =~ ^[0-9a-f]{40}$ ]]; then
     if [[ "$keep" == 1 ]] && _ws_train_keyable "$repo" "$base"; then
       printf '%s %s %s %s %s %s\n' "$repo" "$base" "$n" "$head" "$_WS_TRAIN_NUM" "$_WS_TRAIN_MERGE" \
         >> "$REG/$PR_TRAIN_PROOFS_FILE" 2>/dev/null || true
@@ -13277,7 +13287,7 @@ _pr_train_proofs() {   # main repo branch baseShort keep rows -> _PR_TRAIN_PROOF
   local main="$1" repo="$2" branch="$3" base="$4" keep="$5" rows="$6" c h rc
   _PR_TRAIN_PROOFS="" _PR_TRAIN_FAILS="" _PR_TRAIN_REFUSED=""
   while IFS=$'\t' read -r c h; do
-    [[ "$c" =~ ^[1-9][0-9]{0,9}$ && "$h" =~ ^[0-9a-f]{40}$ ]] || continue
+    _pr_num_valid "$c" && [[ "$h" =~ ^[0-9a-f]{40}$ ]] || continue
     _ws_train_record "$main" "$repo" "$c" "$h" "$base" "$keep"; rc=$?
     if (( rc == 0 )); then
       _PR_TRAIN_PROOFS+="$c $h $_WS_TRAIN_NUM $_WS_TRAIN_MERGE"$'\n'

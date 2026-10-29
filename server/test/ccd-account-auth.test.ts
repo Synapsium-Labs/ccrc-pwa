@@ -194,6 +194,16 @@ describe('the dot-prefixed registry inventory is a census, not a memory', () => 
       + "os.path.join(reg, '.prstate-' + id_ + '.lock')",
   };
 
+  /** Named through a constant, `"$REG/$<CONSTANT>"`, so the literal scan cannot
+   *  see it: each maps to its constant, and each is SELF-CHECKED below — absent
+   *  from the scan (or it is stale), assigned `<CONSTANT>=.<name>` and read
+   *  through `"$REG/$<CONSTANT>"` in ccd's source (or it names nothing). Owner
+   *  and reason: the PR lane's kept train proofs (D-7362), appended by
+   *  `_ws_train_record` and read by `_ws_train_kept`. */
+  const CONSTANT_NAMED: Record<string, string> = {
+    'train-proofs': 'PR_TRAIN_PROOFS_FILE',
+  };
+
   /** Written by a bash file the scan sees, and NOT YET in the paragraph, because
    *  the paragraph lives in `ccd/ccd`, which an open PR holds (the accounts
    *  plan's freeze; D-5755 (13f)). Each entry is checked in both directions: it
@@ -264,12 +274,22 @@ describe('the dot-prefixed registry inventory is a census, not a memory', () => 
       expect(region, `$REG/.${name} exists and the R-3 boundary paragraph does not name it`)
         .toContain(`.${name}`);
     }
+    for (const [name, constant] of Object.entries(CONSTANT_NAMED)) {
+      expect(found, `$REG/.${name} is now reachable by the literal scan — drop its CONSTANT_NAMED entry`)
+        .not.toContain(name);
+      expect(src, `ccd no longer assigns ${constant}=.${name} — drop its CONSTANT_NAMED entry`)
+        .toMatch(new RegExp(`^${constant}=\\.${name}$`, 'm'));
+      expect(src, `ccd no longer reads "$REG/$${constant}" — drop its CONSTANT_NAMED entry`)
+        .toContain(`"$REG/$${constant}"`);
+      expect(region, `$REG/.${name} exists and the R-3 boundary paragraph does not name it`)
+        .toContain(`.${name}`);
+    }
     // The cardinal is DERIVED, not remembered: what the scan found, plus the
     // declared blind spots, plus the two whose name is an interpolated id.
     // That arithmetic is what keeps the written number tied to a measurement.
     const total = found.length - Object.keys(PENDING_PARAGRAPH).length + Object.keys(UNSCANNABLE).length
-      + VARIABLE_NAMED;
-    expect(region, `the boundary paragraph's cardinal disagrees with the ${total} artifacts measured (${found.length} scanned + ${Object.keys(UNSCANNABLE).length} unscannable + ${VARIABLE_NAMED} variable-named)`)
+      + Object.keys(CONSTANT_NAMED).length + VARIABLE_NAMED;
+    expect(region, `the boundary paragraph's cardinal disagrees with the ${total} artifacts measured (${found.length} scanned + ${Object.keys(UNSCANNABLE).length} unscannable + ${Object.keys(CONSTANT_NAMED).length} constant-named + ${VARIABLE_NAMED} variable-named)`)
       .toContain(`${CARDINAL[total]} dot-prefixed`);
   });
 });
