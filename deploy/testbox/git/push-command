@@ -36,5 +36,7 @@ for row in "$table"/*.json; do
   if [[ $m == "$want" ]]; then found=$m; break; fi
 done
 [[ -n $found ]] || deny 'not a mirror the repository table lists'
+# The mirror is the service's and the push user only a member of its group: without the exception git refuses the
+# repository as of dubious ownership. The exception names the listed mirror only, on this one command line.
 exec env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_COMMON_DIR -u GIT_OBJECT_DIRECTORY \
-  git receive-pack "$found"
+  git -c "safe.directory=$found" receive-pack "$found"

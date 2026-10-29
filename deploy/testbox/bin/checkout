@@ -16,7 +16,8 @@
 #      puts the index back to I, then git update-index -q --refresh.
 #
 # Every git call runs with GIT_CONFIG_NOSYSTEM=1, -c core.hooksPath=/dev/null and the five git location variables
-# scrubbed; the call that reads the mirror also passes -c safe.directory=<mirror> (the mirror is the service's). A
+# scrubbed; the fetch that reads the mirror runs its upload-pack as `git -c safe.directory=<mirror> upload-pack` (the
+# mirror is the service's, and git does not hand the fetch's own -c settings to a local upload-pack). A
 # failed step prints one `test box: prepare failed (git <step>: <detail>)` line (shared/testbox.ts TESTBOX_FALLBACK)
 # and exits 3; a usage error exits 2.
 set -uo pipefail
@@ -60,8 +61,11 @@ printf '%s\n' "$mirror/objects" > "$dest/.git/objects/info/alternates" 2> "$ERR"
 cd "$dest" || fail init
 g remote add origin "$url" || fail init
 
-# 2. the run's refs, and nothing else of the mirror's.
-g -c "safe.directory=$mirror" fetch -q --no-tags --no-write-fetch-head "$mirror" \
+# 2. the run's refs, and nothing else of the mirror's. The mirror is the service's, so its upload-pack needs the
+#    safe.directory exception; git drops the fetch's own -c settings from the local upload-pack's environment, so the
+#    exception goes on upload-pack's command line (a shell word, the mirror single-quoted).
+q=${mirror//\'/\'\\\'\'}
+g fetch -q --no-tags --no-write-fetch-head --upload-pack="git -c safe.directory='$q' upload-pack" "$mirror" \
   "refs/ccrc-test/$runid/*:refs/ccrc-test/run/*" || fail fetch
 g rev-parse --verify --quiet 'refs/ccrc-test/run/head^{commit}' > /dev/null || { : > "$ERR"; fail fetch "the run has no head ref"; }
 

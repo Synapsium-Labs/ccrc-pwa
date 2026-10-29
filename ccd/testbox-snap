@@ -24,7 +24,7 @@
 # worktree files; the only writes are loose objects, which nothing references after the push and git gc collects.
 #
 # NEVER ORIGIN. The push refuses a mirror URL equal (before or after url.<base>.insteadOf) to any URL of any of the
-# clone's own remotes, and names explicit refs/ccrc-test/<run-id>/* destinations only, with --no-verify (the session's
+# clone's own remotes (a network URL compared by host and path, whatever its scheme, user, port, spelling or case), and names explicit refs/ccrc-test/<run-id>/* destinations only, with --no-verify (the session's
 # pre-push hook stays out), no tags and no submodules.
 #
 # SETTINGS. The two size caps, the deny globs, the mirror URL base and the declared build outputs are the caller's
@@ -230,11 +230,30 @@ _tbs_outputs() {
   done
 }
 
-# A URL's comparable form: no file:// scheme, no trailing slash or .git, and a local directory by its real path.
+# A network URL's comparable form: `//<host>/<path>`, whatever the scheme or spelling. ssh://[user@]host[:port]/path,
+# https://host/path and the scp form [user@]host:path all name the same repository when host and path agree, so the
+# scheme, the user and the port are dropped, the host and the path are lowercased (a hosting site's paths are not
+# case-sensitive), and a leading slash and a trailing .git are stripped. Folding more spellings together only refuses
+# more pushes: never origin is the one thing the comparison is for.
+_tbs_netkey() {
+  local host=$1 p=$2
+  host=${host##*@}
+  if [[ $host == \[*\]* ]]; then host=${host%%]*}]; else host=${host%%:*}; fi
+  while [[ $p == /* ]]; do p=${p#/}; done
+  while [[ $p == */ ]]; do p=${p%/}; done
+  p=${p%.git}
+  printf '//%s/%s\n' "$host" "$p" | tr '[:upper:]' '[:lower:]'
+}
+
+# A URL's comparable form: a network URL by _tbs_netkey; otherwise no file:// scheme, no trailing slash or .git, and a
+# local directory by its real path.
 _tbs_norm() {
   local u=$1 d
   u=${u#file://}
   while [[ $u == */ && $u != / ]]; do u=${u%/}; done
+  local scheme_re='^[A-Za-z][A-Za-z0-9+.-]*://([^/]*)(.*)$' scp_re='^([^/:[]+|[^/:[]*\[[^]/]*\]):(.*)$'
+  if [[ $u =~ $scheme_re ]]; then _tbs_netkey "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}"; return 0; fi
+  if [[ $u != /* && $u =~ $scp_re ]]; then _tbs_netkey "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}"; return 0; fi
   for d in "$u" "$u.git" "${u%.git}"; do
     if [[ $d == /* && -d $d ]]; then (cd "$d" 2>/dev/null && pwd -P) && return 0; fi
   done
