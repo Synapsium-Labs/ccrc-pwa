@@ -6178,9 +6178,9 @@ and without the probe's `-c` settings, and it reads refs only. The other childre
 the scratch, under the prefix. A `core.alternateRefsCommand` in the operator's own config is one of the fetch's own
 config-driven commands, like its credential helper and its ssh command.
 
-`ccrc doctor`'s `land-probe` check reads these files, and so does a person. Nothing else reads them yet: wave 4 of
-the landing-order programme adds the lineage acceptance, which reads `enabled` and the `.lineage` files, and wave 4b
-adds the server's reader and the PWA chip.
+`ccrc doctor`'s `land-probe` check reads these files, and so does a person. Wave 4 of the landing-order programme's
+lineage acceptance reads `enabled` and the `.lineage` files. Wave 4b's server reader and the fleet screen's
+predicted-conflict chip read `probe`; doctor and a person read the rest.
 
 ### Temp-dir reaper (ccd-tmp-sweep)
 
