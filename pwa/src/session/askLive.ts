@@ -22,7 +22,7 @@
 // - a multiSelect question's boxes are its own options, read into `Dialog.multi` (D-5048), and the answer lists the
 //   boxes in the order they became ticked (`cc300-ask-review-tick-order`); the last question's commit row reads
 //   `Submit` and lands on the review (D-5091).
-import type { Dialog, DialogMulti, HookAsk } from '../../../shared/api';
+import type { AskPairing, Dialog, DialogMulti, HookAsk } from '../../../shared/api';
 import {
   ASK_TAB_ROW_RE,
   CHAT_ABOUT_ROW_RE,
@@ -415,6 +415,30 @@ function hasAskEvidence(dialog: Dialog): boolean {
  *
  * PURE: values in, a value out; the store's types are not imported here.
  */
+/**
+ * The wire's pairing (D-7184, W7 Task C7f) for what `source` shows, or null for none. The server pairs (`sessionws.ts`'s
+ * `paired`, from `server/src/pane/askPairing.ts`) and the store holds the last frame's (`stores/session.ts`); this only
+ * says whether that pairing is the one for the question shown:
+ *  - a `structured` question is paired only by a pairing whose `from` is its own (`'hook'` when absent): a pairing from
+ *    the other source is no pairing;
+ *  - D-7364: nor is one that does not fit the questions (a `corresponds` entry per question, `shown` among them, `live`
+ *    and `placed` null or among them), so a skewed frame never indexes past the questions;
+ *  - the `review` screen is read for its `screen` (the dismissal key, D-7213): the hook's pairing, `from` absent;
+ *  - anything else shows no question, and has none.
+ * It reads the pairing; it never computes one.
+ */
+export function pairingFor(source: AskSource, pairing: AskPairing | null): AskPairing | null {
+  if (pairing === null) return null;
+  const from = pairing.from ?? 'hook';
+  if (source.kind === 'review') return from === 'hook' ? pairing : null;
+  if (source.kind !== 'structured' || from !== source.from) return null;
+  const n = source.questions.length;
+  const among = (i: number | null): boolean => i === null || (Number.isInteger(i) && i >= 0 && i < n);
+  const fits = pairing.corresponds.length === n && among(pairing.shown) && among(pairing.live) && among(pairing.named)
+    && among(pairing.placed);
+  return fits ? pairing : null;
+}
+
 export function askSource({ ask, dialog, askFrameSeen }: AskSourceInput): AskSource {
   if (!askFrameSeen) return { kind: 'none' };
   const envelope = isUsableAsk(ask) ? ask : null;
