@@ -255,8 +255,10 @@ const moduleDefinitions = (p: ParsedFile, file: string, names: readonly string[]
 export const clientPairingDefinitionsIn = (p: ParsedFile, file: string): W7Site[] => moduleDefinitions(p, file, CLIENT_PAIRING_NAMES);
 export const clientPairingDefinitions = (): W7Site[] => overPwa(clientPairingDefinitionsIn);
 
-/** The pane-text decisions the PWA makes on its own (plan items 7 and 8): `COMPACTION_RE` (which decides `foldsAway`) and
- *  `showsPrompt` (the drawer's prompt judgement). 2 on the base. KNOWN WIDTH: a closed name list. */
+/** The pane-text decisions the PWA makes on its own (plan items 7 and 8): `COMPACTION_RE` (which decided `foldsAway`) and
+ *  `showsPrompt` (the drawer's prompt judgement). 2 on the base; 1 since C7i (D-7187): `foldsAway` reads the server's
+ *  compaction flag, and `showsPrompt` stays, named (it renders the PTY the drawer shows). `COMPACTION_RE` stays on the
+ *  list so a pattern put back reds. KNOWN WIDTH: a closed name list. */
 export const PANE_TEXT_DECISION_NAMES: readonly string[] = ['COMPACTION_RE', 'showsPrompt'];
 export const paneTextDecisionsIn = (p: ParsedFile, file: string): W7Site[] => moduleDefinitions(p, file, PANE_TEXT_DECISION_NAMES);
 export const paneTextDecisions = (): W7Site[] => overPwa(paneTextDecisionsIn);

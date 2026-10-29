@@ -1,6 +1,7 @@
 // `MessageBubble.tsx#foldsAway` over the PWA's own Markdown corpus, pinned before C7i (D-7179; Task C7a Step 5; plan
-// docs/superpowers/plans/2026-10-27-consolidation-w7-pwa.md, item 7; ARCH-64). `COMPACTION_RE` decides the fold for a
-// user- and an assistant-kind row; a `system` row folds on a body. The PWA package reads no server fixture
+// docs/superpowers/plans/2026-10-27-consolidation-w7-pwa.md, item 7; ARCH-64). Since C7i (D-7187) the server's
+// `compaction` flag decides the fold for a user- and an assistant-kind row (the PWA's `COMPACTION_RE` is gone); a
+// `system` row folds on a body. The PWA package reads no server fixture
 // (`accounts-pool.test.ts`'s note): the server-side row is `server/test/w7-compaction-parity.test.ts`, over the
 // server's transcript fixtures, which imports `foldsAway` by path.
 import { describe, it, expect } from 'vitest';

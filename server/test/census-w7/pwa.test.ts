@@ -304,8 +304,8 @@ describe('W7 PWA census: REAL rows (reporting, not ratcheting; spec §5.1 rule 3
     held('clientPairingDefinitions', clientPairingDefinitions(), 0);
   });
 
-  it('paneTextDecisions(): 2 (COMPACTION_RE, showsPrompt)', () => {
-    held('paneTextDecisions', paneTextDecisions(), 2);
+  it('paneTextDecisions(): 1 (from 2: COMPACTION_RE deleted by C7i, D-7187; showsPrompt stays)', () => {
+    held('paneTextDecisions', paneTextDecisions(), 1);
   });
 
   // Exact on the merged tree: #1715 (one bucket vocabulary) landed before this task, so no band.
