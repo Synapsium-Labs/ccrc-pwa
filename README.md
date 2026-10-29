@@ -6732,11 +6732,33 @@ bucket and the merged notice treat it as a merge. The cleanup itself
 (`ws-audit`/`ws-reap`) has no merge commit to prove against for such a PR, so
 it proves it by the train record instead, as proof `train`: the train PR the
 member names (a `train #<n>` comment on it, as a train leaves when it closes a
-member), or one found by its member list, must be MERGED into the same base and
-list the member as `- #<n> <head sha>` at exactly the member's head, and the
-branch must hold nothing beyond that head. The token's merge fact is the train
+member), or one a search finds whose record lists the member's head sha, must
+be MERGED into the same base and its record must list the member at exactly the
+member's head, and the branch must hold nothing beyond that head. A CLOSED
+train that never merged proves nothing. The token's merge fact is the train
 PR's merge commit, so main later editing the same lines never turns a proven
-landing into a refusal. A coordinator
+landing into a refusal.
+
+**The train record (D-7335)** is the one machine-readable block in a train PR's
+body, and a train tool writes exactly one: an HTML comment on lines of its own,
+opened by `<!-- ccrc-train v1`, one `member #<n> <40-hex head sha>` line per
+member, closed by `-->`:
+
+```
+<!-- ccrc-train v1
+member #1797 0123456789abcdef0123456789abcdef01234567
+member #1800 89abcdef0123456789abcdef0123456789abcdef
+-->
+```
+
+Leading and trailing spaces on a line are ignored; nothing else is. Tables,
+lists and prose beside the block are for people and are never parsed, so a
+body with only a table proves nothing. No block, two blocks, a block that never
+closes, a line inside it that is not a member line, or a member listed twice
+proves nothing for any member, and neither does a member listed at a sha other
+than its head.
+
+A coordinator
 proves the merge before closing the run from `landedInTrain: true` on the PR's
 row of `ccd pr-state --session <id>`. It names a label, never a path. `ccd` with no verb prints its
 usage, and `ccd caps` lists the verbs (and capability tokens) this copy
