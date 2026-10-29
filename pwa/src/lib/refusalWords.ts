@@ -2,7 +2,7 @@
 // Pure (L1): no fetch, no store, no component. `lib/api.ts` re-exports all of it, so each existing import and every
 // screen keeps its line (ARCH-13b, #557).
 import type {
-  AskRefuseCode, InterruptRefusal, MoveSkipWhy, RunRouteRefuseCode, SetAccountPoolsRefuseCode, UpdateRouteError,
+  AskRefuseCode, InterruptRefusal, MoveSkipWhy, QuestionDoorRefusal, RunRouteRefuseCode, SetAccountPoolsRefuseCode, UpdateRouteError,
 } from '../../../shared/api';
 import { ARCHIVE_REFUSALS, type ArchiveRefusal } from '../../../shared/api';
 import { SWAP_REFUSALS, type SwapRefusal } from '../../../shared/api';
@@ -607,6 +607,17 @@ export const NOTIFICATION_REFUSAL_TEXT: Readonly<Record<string, string>> = {
   'menu-mismatch': 'The terminal is showing something else now.',
   'not-alive': 'That session is no longer running.',
   'unknown-session': 'That session is gone.',
+};
+
+/**
+ * The notification's words for W3 Q3f's door family's own refusal (W7 C7g, D-7185, D-7485), beside
+ * `NOTIFICATION_REFUSAL_TEXT`, which stays as it was: on a `questions-v1` server the notification answers through
+ * `POST /api/questions/session-<id>/answer`, which can also refuse `kind-mismatch` (an id or body of the other
+ * principal's kind; the worker builds neither). `push-sw.js`'s generated region renders both tables into its one
+ * `REFUSAL` lookup. Total over `shared/api.ts#QUESTION_DOOR_REFUSALS`.
+ */
+export const NOTIFICATION_QUESTION_DOOR_TEXT: Readonly<Record<QuestionDoorRefusal, string>> = {
+  'kind-mismatch': "That answer didn't fit this session's question — open the session.",
 };
 
 /** An account-pool write's refusals (`SetAccountPoolsRefuseCode`) in words. No screen renders it yet. */

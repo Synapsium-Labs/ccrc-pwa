@@ -10,8 +10,8 @@
 // routes' tables.
 import {
   DIALOG_MULTI_REFUSE_CODES, DIALOG_REFUSE_CODES, DIALOG_TAB_REFUSE_CODES, DIALOG_TEXT_MAX, DIALOG_TEXT_REFUSE_CODES,
-  isDialogMultiIndexes, isDialogText, type DialogMulti, type DialogMultiRefuseCode, type DialogRefuseCode,
-  type DialogTabRefuseCode, type DialogTextRefuseCode,
+  isDialogMultiIndexes, isDialogText, QUESTION_DOOR_REFUSALS, type DialogMulti, type DialogMultiRefuseCode, type DialogRefuseCode,
+  type DialogTabRefuseCode, type DialogTextRefuseCode, type QuestionDoorRefusal,
 } from '../../../shared/api';
 import { ApiError, failedTo, sendErrorText } from '../lib/api';
 import { commitWord } from './askLive';
@@ -28,6 +28,19 @@ const MOVED_ON = 'That question moved on in the terminal';
 /** Every own-words refusal leaves the text in the field (D-5090: kept until a call answers ok), and the sentences that
  *  could leave the operator wondering say so in these words. */
 const TEXT_KEPT = 'Your text is still here.';
+
+/** What the sheet says when W3 Q3f's door family (`POST /api/questions/session-<id>/answer`, W7 C7g, D-7185, D-7485)
+ *  refuses with its own word, whichever answer it refused (a row, the own words, a set). `kind-mismatch` is an id or a
+ *  body of the other principal's kind: the sheet builds neither, so it names no cause the operator could fix here and
+ *  sends them to the terminal. Total over `QUESTION_DOOR_REFUSALS`. */
+export const QUESTION_DOOR_REFUSE_TEXT: Readonly<Record<QuestionDoorRefusal, string>> = {
+  'kind-mismatch': "The server couldn't take that answer for this session's question, so nothing was pressed. Answer it in the terminal.",
+};
+
+/** The family's own sentence for `err`, or null when `err` is not one of its words. */
+const questionDoorRefusal = (err: unknown): string | null =>
+  err instanceof ApiError && Object.prototype.hasOwnProperty.call(QUESTION_DOOR_REFUSALS, err.message)
+    ? QUESTION_DOOR_REFUSE_TEXT[err.message as QuestionDoorRefusal] : null;
 
 /** What the sheet says when the free-text route refuses, by its code. Every refusal leaves the text in the field, so
  *  none of these asks the operator to type it again, and none promises a next step the sheet does not then offer:
@@ -55,7 +68,7 @@ const isDialogTextRefuseCode = (code: string): code is DialogTextRefuseCode =>
  *  `error`), else the app's one sentence for a write that did not go through. */
 export function dialogTextRefusal(err: unknown): string {
   if (err instanceof ApiError && isDialogTextRefuseCode(err.message)) return DIALOG_TEXT_REFUSE_TEXT[err.message];
-  return failedTo('answer', err);
+  return questionDoorRefusal(err) ?? failedTo('answer', err);
 }
 
 /**
@@ -152,7 +165,7 @@ const isDialogMultiRefuseCode = (code: string): code is DialogMultiRefuseCode =>
  *  write that did not go through. */
 export function dialogMultiRefusal(err: unknown): string {
   if (err instanceof ApiError && isDialogMultiRefuseCode(err.message)) return DIALOG_MULTI_REFUSE_TEXT[err.message];
-  return failedTo('answer', err);
+  return questionDoorRefusal(err) ?? failedTo('answer', err);
 }
 
 /**
@@ -195,7 +208,7 @@ const isDialogRefuseCode = (code: string): code is DialogRefuseCode =>
 /** The sentence for a refused tap: the route's refusal by its code (`stale-dialog` by which sheet is showing,
  *  `underEnvelope`), else the app's one sentence for a write that did not go through. */
 export function dialogRefusal(err: unknown, underEnvelope: boolean): string {
-  if (!(err instanceof ApiError) || !isDialogRefuseCode(err.message)) return failedTo('answer', err);
+  if (!(err instanceof ApiError) || !isDialogRefuseCode(err.message)) return questionDoorRefusal(err) ?? failedTo('answer', err);
   return err.message === 'stale-dialog' && underEnvelope ? STALE_UNDER_ENVELOPE : DIALOG_REFUSE_TEXT[err.message];
 }
 
