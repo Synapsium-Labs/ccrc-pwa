@@ -94,7 +94,7 @@ export interface LandingFacts {
   /** `readCoordinatorOfRun(run.id)`: asked only of a run. `null` is a run with no coordinator; `{ok:false}` is a run row
    *  that could not be read, which defers (never "nobody to tell", which latches a merge and records a dequeue). */
   coordinator?: string | null | { readonly ok: false; readonly detail: string };
-  /** The survivor run's own state, read for a merge only. `null` is a run row that is gone. */
+  /** The survivor run's own state, read for a merge, and for a named dequeue. `null` is a run row that is gone. */
   runState?: { ok: true; state: string | null } | { ok: false; detail: string };
   /** The durable "already told" answer: a mail through `hasMailWithSubject` when a coordinator is named, the feed
    *  notice's key through `hasNotice` when none is (D-5860). */
@@ -168,11 +168,22 @@ export function landingVerdict(a: LandingAsk, f: LandingFacts): LandingStep {
     return named ? { step: 'toldMail', runId: run.id, toId: coordinator, subject } : { step: 'toldFeed', key: a.key, body };
   }
   if (f.told) return LATCH;
-  if (named && f.head === undefined) return { step: 'head', runId: run.id };
+  // D-7470: a named dequeue binds the episode head only of a run still at `merging`. A run sent back to `working`
+  // has left that episode, so its brief carries no recorded-head line and no `head` is read. No coordinator named:
+  // no brief, so no read.
+  let head: string | null = null;
+  if (named) {
+    if (f.runState === undefined) return { step: 'runState', runId: run.id };
+    if (!f.runState.ok) return { step: 'defer', detail: f.runState.detail };
+    if (f.runState.state === 'merging') {
+      if (f.head === undefined) return { step: 'head', runId: run.id };
+      head = f.head;
+    }
+  }
   return { step: 'deliver',
     mail: named
       ? { fromId: 'operator', toId: coordinator, runId: run.id, kind: 'status',
-          subject, body: renderDequeueBrief(a.sessionId, a.number, f.head ?? null) }
+          subject, body: renderDequeueBrief(a.sessionId, a.number, head) }
       : null,
     // `recordAlways`: the record of a removal is never presence-gated.
     record: { title: `⤺ dequeued › ${a.workspace}`, body, runId: run?.id ?? null,
