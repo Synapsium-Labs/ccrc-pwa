@@ -323,9 +323,10 @@ describe('the one retire executor loop, retireAct (ARCH-44, C4j)', () => {
     expect(callers).toEqual([`${LOOP}#retireAct`]);
   });
 
-  it('REAL retire.ts and retireLane.ts are L1', () => {
+  it('REAL retire.ts and retireLane.ts are L1; retireExecutor.ts is L4 (C4n, D-7198)', () => {
     expect(serverRing('server/src/retire.ts')).toEqual({ ring: 'L1', why: 'no outer-ring fact' });
     expect(serverRing(LOOP)).toEqual({ ring: 'L1', why: 'no outer-ring fact' });
+    expect(serverRing('server/src/retireExecutor.ts')).toEqual({ ring: 'L4', why: 'declares L4 in its header' });
   });
 
   it('REAL retireAct never reads a reason\'s name: the identifier `name` is referenced nowhere in its body', () => {
