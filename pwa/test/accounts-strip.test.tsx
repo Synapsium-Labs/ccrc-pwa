@@ -856,6 +856,19 @@ describe('the lanes fold (S5b, D-6530)', () => {
       expect(panelOf(container)).toBeNull();
     });
 
+    it("a poll that re-sorts the lane of the panel card holding focus onto the line moves focus to that lane's line card, and the panel stays open", async () => {
+      const container = await openPanel();
+      const card = panelCardsOf(container)[0]!;
+      const moved = names.accounts.find((a) => labelOf(a.wrapper) === nameOf(card))!.wrapper;
+      act(() => { card.focus(); });
+      stubLanes(names.accounts.map((a) => (a.wrapper === moved ? { ...a, five: 0, seven: 0, fiveRolledOver: false } : a)));
+      expect(card.isConnected).toBe(false);
+      expect(panelCardsOf(container).map(nameOf)).not.toContain(labelOf(moved));
+      expect(document.activeElement).toBe(lineCardsOf(container).find((c) => nameOf(c) === labelOf(moved)));
+      // Only a tap, Escape, a card's door or the panel going moot closes it; a poll that leaves lanes folded is none.
+      expect(panelOf(container)).not.toBeNull();
+    });
+
     it('a tap on a line card opens that lane and opens no panel', async () => {
       const container = await mountPhone();
       fireEvent.pointerDown(lineCardsOf(container)[1]!);
@@ -1152,7 +1165,7 @@ describe('the lanes fold (S5b, D-6530)', () => {
   });
 
   // ── the desk's hover and focus flyout (R120, strip-hover-flyout) ──
-  // The folded desk line opens a panel under it holding every lane. The delays are fake timers; the strip is rendered
+  // The folded desk line opens a panel under it holding the lanes the line folds away (Task C13). The delays are fake timers; the strip is rendered
   // and its lanes found under real ones, since `findBy` polls with timers a fake clock would starve.
   describe('the flyout (strip-hover-flyout)', () => {
     afterEach(() => { vi.useRealTimers(); });
@@ -1639,6 +1652,26 @@ describe('the lanes fold (S5b, D-6530)', () => {
       act(() => { lineCardsOf(container)[0]!.focus(); });
       fireEvent.pointerLeave(groupOf(container));
       advance(50);
+      expect(flyoutOf(container)).not.toBeNull();
+    });
+
+    it("a poll that re-sorts the lane of the flyout card holding focus onto the line moves focus to that lane's line card, and the flyout, with the pointer on it, stays open", async () => {
+      const container = await openByHover();
+      const card = flyCardsOf(container)[0]!;
+      const moved = names.accounts.find((a) => labelOf(a.wrapper) === nameOf(card))!.wrapper;
+      // The line's tab stop is its first card's lane, which the move pushes along: the line's own hand-back target is then
+      // another card than the moved lane's, so only following the lane lands focus on it.
+      act(() => { lineCardsOf(container)[0]!.focus(); });
+      act(() => { card.focus(); });
+      // The store's next answer has that lane freest of all: it goes to the front of the line, and its flyout card leaves
+      // the DOM while it holds focus (no blur is fired).
+      stubLanes(names.accounts.map((a) => (a.wrapper === moved ? { ...a, five: 0, seven: 0, fiveRolledOver: false } : a)));
+      expect(card.isConnected).toBe(false);
+      expect(lineCardsOf(container).map(nameOf)).toContain(labelOf(moved));
+      expect(flyCardsOf(container).map(nameOf)).not.toContain(labelOf(moved));
+      expect(document.activeElement).toBe(lineCardsOf(container).find((c) => nameOf(c) === labelOf(moved)));
+      // The close rules are unchanged: the pointer is still on the strip, so the flyout stays open past its grace.
+      advance(FLYOUT_CLOSE_MS * 2);
       expect(flyoutOf(container)).not.toBeNull();
     });
 

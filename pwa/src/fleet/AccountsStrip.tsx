@@ -211,14 +211,18 @@ export function AccountsStrip({ store = useFleetStore }: { store?: FleetStore } 
   // placeholder door when there is no line either (a poll left no live lane). It moves focus only from the page (the
   // body, or nothing: a card that left the DOM drops it there) or from a card of the flyout or panel being closed: a
   // flag gone stale (a poll dropped the focused card's lane, which fires no blur) must never pull focus out of a field,
-  // or off All accounts in the strip's own end cell, where the operator has since put it (review 1131 A1).
-  const handFocusBack = (held: { current: boolean }, to: 'line' | 'control'): void => {
+  // or off All accounts in the strip's own end cell, where the operator has since put it (review 1131 A1). With `lane`,
+  // the held card's lane that a poll or a new fold count has moved onto the line (below), focus goes to that lane's line
+  // card first: its panel card left the DOM holding focus, and the lane is still drawn, once, on the line (Task C13).
+  const handFocusBack = (held: { current: boolean }, to: 'line' | 'control', lane?: string): void => {
     if (!held.current) return;
     held.current = false;
     const at = document.activeElement;
     if (at !== null && at !== document.body && at.closest('.accounts-flyout') === null) return;
+    const onLine = lane === undefined ? undefined : cardRefs.current.get(lane);
     const control = to === 'control' ? controlRef.current : null;
-    if (control !== null) control.focus();
+    if (onLine !== undefined) onLine.focus();
+    else if (control !== null) control.focus();
     else if (lineStop !== undefined) cardRefs.current.get(lineStop)?.focus();
     else doorRef.current?.focus();
   };
@@ -233,6 +237,17 @@ export function AccountsStrip({ store = useFleetStore }: { store?: FleetStore } 
     setFlyOpen(false);
     setFlyStopId(null);
   }, [flyoutOn]);
+  // The panel's stop is a lane the line folds away (`flyStop`); a poll's re-sort, or a resize that changes the fold's
+  // count, can move it onto the line, and the card holding focus leaves the panel. The one hand-back then follows the
+  // lane to its line card, for whichever panel held focus (review 1142 F1). A lane gone altogether is not on the line,
+  // so nothing runs here, and the close's hand-back takes it later, as before. A focused LINE card whose lane folds
+  // away is not followed into the panel.
+  const stopOnLine = flyStopId !== null && fold.shown.some((a) => a.wrapper === flyStopId) ? flyStopId : null;
+  useEffect(() => {
+    if (stopOnLine === null) return;
+    handFocusBack(flyHeld, 'line', stopOnLine);
+    handFocusBack(panelHeld, 'control', stopOnLine);
+  }, [stopOnLine]);
   // The panel's close hands focus back through the one hand-back: to the control, or the line's tab stop without one.
   const closePanel = (): void => {
     handFocusBack(panelHeld, 'control');
