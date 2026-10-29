@@ -23,7 +23,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkTmp, removeTmpFixturesEachTest } from './tmpHelpers.js';
-import { IS_DARWIN, itLinux } from './platformFixtures.js';
+import { platformContrast } from './platformFixtures.js';
 
 removeTmpFixturesEachTest();
 
@@ -33,8 +33,6 @@ const SELF = 'server/test/testbox-pins.test.ts';
 const HAS_FLOCK = spawnSync('sh', ['-c', 'command -v flock'], { encoding: 'utf8' }).status === 0;
 /** macOS: a heavy run's queue needs `flock`, which macOS does not ship; without one the wrapper says so, a line these
  *  literals do not hold. Linux (CI and the fleet host) always has it. */
-const itDarwinQueue = it.skipIf(!IS_DARWIN || !HAS_FLOCK);
-const itDarwin = it.skipIf(!IS_DARWIN);
 
 const SYSTEMCTL = `#!/bin/sh
 printf '%s\\n' "$*" >> "$HOME/systemctl.log"
@@ -135,64 +133,76 @@ const USAGE_PIN: Pin = {
 };
 
 describe('wrapperToday(): the switch off is today (D-7402)', () => {
-  itLinux('a light vitest run: in the slice, at once, its own exit', () => {
-    expect(today(VITEST)).toEqual({
-      stdout: 'vitest stub ran\n', stderr: '', status: 0,
-      systemctl: RUN_SYSTEMCTL,
-      systemdRun: [`${RUN_PREFIX} --description=ccrc test: ./node_modules/.bin/vitest run test/a.test.ts -- ./node_modules/.bin/vitest run test/a.test.ts`],
-      commands: ['vitest run test/a.test.ts'],
-    });
+  // Each pinned command is one claim with two arms. Linux (CI and the fleet host) runs it in the slice; macOS has no
+  // user manager, so the run is not contained and says so, and the queue still applies.
+  const DARWIN_SAYS = 'ccrc test: this box has no systemd user manager (macOS), so the run is not contained; the queue still applies\n';
+  platformContrast('a light vitest run', {
+    darwin: ['uncontained, says so, its own exit', () => {
+      expect(today(VITEST)).toEqual({
+        stdout: 'vitest stub ran\n', stderr: DARWIN_SAYS, status: 0, systemctl: [], systemdRun: [], commands: ['vitest run test/a.test.ts'],
+      });
+    }],
+    linux: ['in the slice, at once, its own exit', () => {
+      expect(today(VITEST)).toEqual({
+        stdout: 'vitest stub ran\n', stderr: '', status: 0,
+        systemctl: RUN_SYSTEMCTL,
+        systemdRun: [`${RUN_PREFIX} --description=ccrc test: ./node_modules/.bin/vitest run test/a.test.ts -- ./node_modules/.bin/vitest run test/a.test.ts`],
+        commands: ['vitest run test/a.test.ts'],
+      });
+    }],
   });
-  itLinux('a --heavy tsc run: queued for a slot, in the slice, its own exit', () => {
-    expect(today(TSC)).toEqual({
-      stdout: 'tsc stub ran\n', stderr: '', status: 1,
-      systemctl: RUN_SYSTEMCTL,
-      systemdRun: [`${RUN_PREFIX} --description=ccrc test: ./node_modules/.bin/tsc --noEmit -- ./node_modules/.bin/tsc --noEmit`],
-      commands: ['tsc --noEmit'],
-    });
+  // The heavy rows' darwin arm needs `flock` for the queue (see HAS_FLOCK); a Mac without one has nothing to pin here,
+  // the same early return ccrc-test-wrapper.test.ts's queue contrast takes.
+  platformContrast('a --heavy tsc run', {
+    darwin: ['uncontained, says so, its own exit', () => {
+      if (!HAS_FLOCK) return;
+      expect(today(TSC)).toEqual({
+        stdout: 'tsc stub ran\n', stderr: DARWIN_SAYS, status: 1, systemctl: [], systemdRun: [], commands: ['tsc --noEmit'],
+      });
+    }],
+    linux: ['queued for a slot, in the slice, its own exit', () => {
+      expect(today(TSC)).toEqual({
+        stdout: 'tsc stub ran\n', stderr: '', status: 1,
+        systemctl: RUN_SYSTEMCTL,
+        systemdRun: [`${RUN_PREFIX} --description=ccrc test: ./node_modules/.bin/tsc --noEmit -- ./node_modules/.bin/tsc --noEmit`],
+        commands: ['tsc --noEmit'],
+      });
+    }],
   });
-  itLinux('npm test reads heavy: queued for a slot, in the slice, its own exit', () => {
-    expect(today(NPM_TEST)).toEqual({
-      stdout: 'npm stub ran\n', stderr: '', status: 0,
-      systemctl: RUN_SYSTEMCTL,
-      systemdRun: [`${RUN_PREFIX} --description=ccrc test: npm test -- npm test`],
-      commands: ['npm test'],
-    });
+  platformContrast('npm test reads heavy', {
+    darwin: ['uncontained, says so, its own exit', () => {
+      if (!HAS_FLOCK) return;
+      expect(today(NPM_TEST)).toEqual({
+        stdout: 'npm stub ran\n', stderr: DARWIN_SAYS, status: 0, systemctl: [], systemdRun: [], commands: ['npm test'],
+      });
+    }],
+    linux: ['queued for a slot, in the slice, its own exit', () => {
+      expect(today(NPM_TEST)).toEqual({
+        stdout: 'npm stub ran\n', stderr: '', status: 0,
+        systemctl: RUN_SYSTEMCTL,
+        systemdRun: [`${RUN_PREFIX} --description=ccrc test: npm test -- npm test`],
+        commands: ['npm test'],
+      });
+    }],
   });
-  itLinux('--status: one line, the slice and the queue', () => {
-    expect(today(STATUS)).toEqual({
-      stdout: 'ccrctests.slice holds 1.5G of its 6.0G memory cap, swap cap 1.0G, CPU weight 20, CPU quota 4s per second, IO weight 20; heavy slots 0 of 2 held, 0 waiting\n',
-      stderr: '', status: 0,
-      systemctl: ['--user show ccrctests.slice -p LoadState -p MemoryCurrent -p MemoryMax -p MemorySwapMax -p CPUWeight -p CPUQuotaPerSecUSec -p IOWeight'],
-      systemdRun: [], commands: [],
-    });
+  platformContrast('--status', {
+    darwin: ['says runs are not contained', () => {
+      expect(today(STATUS)).toEqual({
+        stdout: 'no user manager here, so runs are not contained; heavy slots 0 of 2 held, 0 waiting\n',
+        stderr: '', status: 0, systemctl: [], systemdRun: [], commands: [],
+      });
+    }],
+    linux: ['one line, the slice and the queue', () => {
+      expect(today(STATUS)).toEqual({
+        stdout: 'ccrctests.slice holds 1.5G of its 6.0G memory cap, swap cap 1.0G, CPU weight 20, CPU quota 4s per second, IO weight 20; heavy slots 0 of 2 held, 0 waiting\n',
+        stderr: '', status: 0,
+        systemctl: ['--user show ccrctests.slice -p LoadState -p MemoryCurrent -p MemoryMax -p MemorySwapMax -p CPUWeight -p CPUQuotaPerSecUSec -p IOWeight'],
+        systemdRun: [], commands: [],
+      });
+    }],
   });
   it('a usage error: exit 2, one line and the usage, nothing forked', () => {
     expect(today(USAGE)).toEqual(USAGE_PIN);
-  });
-
-  // macOS: no user manager, so the run is not contained and says so; the queue still applies.
-  const DARWIN_SAYS = 'ccrc test: this box has no systemd user manager (macOS), so the run is not contained; the queue still applies\n';
-  itDarwin('macOS: a light vitest run, uncontained, says so, its own exit', () => {
-    expect(today(VITEST)).toEqual({
-      stdout: 'vitest stub ran\n', stderr: DARWIN_SAYS, status: 0, systemctl: [], systemdRun: [], commands: ['vitest run test/a.test.ts'],
-    });
-  });
-  itDarwinQueue('macOS: a --heavy tsc run, uncontained, says so, its own exit', () => {
-    expect(today(TSC)).toEqual({
-      stdout: 'tsc stub ran\n', stderr: DARWIN_SAYS, status: 1, systemctl: [], systemdRun: [], commands: ['tsc --noEmit'],
-    });
-  });
-  itDarwinQueue('macOS: npm test, uncontained, says so, its own exit', () => {
-    expect(today(NPM_TEST)).toEqual({
-      stdout: 'npm stub ran\n', stderr: DARWIN_SAYS, status: 0, systemctl: [], systemdRun: [], commands: ['npm test'],
-    });
-  });
-  itDarwin('macOS: --status says runs are not contained', () => {
-    expect(today(STATUS)).toEqual({
-      stdout: 'no user manager here, so runs are not contained; heavy slots 0 of 2 held, 0 waiting\n',
-      stderr: '', status: 0, systemctl: [], systemdRun: [], commands: [],
-    });
   });
 });
 
