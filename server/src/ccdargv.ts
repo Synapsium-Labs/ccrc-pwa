@@ -405,7 +405,8 @@ export const CCD_ARGV = {
    *  `hibernate-verb-dec-and-idempotence` (D-5424)).
    *  Sent only behind `verbSupported` (the box's `ccd caps` lists `hibernate`); `ensure` wakes it. `roll` (D-7458)
    *  makes it the automatic roll's act: `.no-roll` refuses instead of `.no-hibernate`, and ccd wakes it in the same
-   *  verb, exiting 4 with `ccd: roll-wake-failed` when the wake fails. */
+   *  verb, exiting 4 with `ccd: roll-wake-failed` when the wake fails and the row is back asleep, 5 with
+   *  `ccd: roll-wake-unrestored` when it could not be put back. */
   hibernate: (id: string, dec: ActorFlags | null, holdOk: string | null = null, roll = false) =>
     argv(['hibernate', ...rollFlags(roll), ...holdOkFlags(holdOk), id, ...decFlags(dec)]),
   swap:      (id: string, w: string) => argv(['swap', id, w]),

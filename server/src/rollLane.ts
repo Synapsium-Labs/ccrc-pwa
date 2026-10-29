@@ -24,14 +24,17 @@ import type { ClaudeRollTargets } from '../../shared/claudeVersion.js';
  * half (a draft in the input box, `esc to interrupt`, an attached terminal, the turn marker's `done`, `bg` and `crons`, a
  * swap landing, `.no-roll`; NOT `.no-hibernate`) and refuses `ccd: session-busy: <reason>` at exit 3, which is a skip,
  * and nothing is woken. The wake clears the marker and starts the unit, whose spawn resumes the same conversation on the
- * release the node now runs; a failed wake exits 4 (`roll-wake-failed`). Sent only to a box whose `ccd caps` lists
+ * release the node now runs; a failed wake exits 4 (`roll-wake-failed`), or 5 (`roll-wake-unrestored`) when ccd could
+ * not put the row back to sleep. Sent only to a box whose `ccd caps` lists
  * `hibernate-roll`. Not `ccd roll`: it does not exist yet (binary-lifecycle wave 2). Not a swap: `cmd_swap` refuses a
  * same-account target. Everything is re-read and the verdict asked again on the coordination serialiser and
  * the session's queue (D-5428), the switches over a fresh listing (D-7047), and the fleet-wide wake budget as an
  * automatic wake, so a roll never lands on top of another wake. A failed wake leaves the coordinator hibernated, a
  * sanctioned state ccd restores (the marker re-stamped, the unit stopped): mail, an open screen or a re-dispatch wakes
- * it, on the current release. A call cut short or never answered (a timeout, a dropped link, a kill) is `unknown`: the
- * line names the session to check, since ccd may have stopped it, woken it, or neither.
+ * it, on the current release. A failed wake ccd could NOT put back to sleep is `woke-unrestored`, never "stays
+ * hibernated": the line names the session to check. A call cut short or never answered (a timeout, a dropped link, a
+ * kill), or one whose ending the runner did not measure, is `unknown`: the line names the session to check, since ccd
+ * may have stopped it, woken it, or neither.
  *
  * ONE PASS (`rollPass`): `hibernate-disabled` (the act's kill switch) or the Settings row at anything but
  * `coordinators` journals one line and reads nothing; otherwise the node's install time is read once, and the executor
@@ -89,6 +92,9 @@ export type RollOutcome =
   | { readonly id: string; readonly kind: 'skipped'; readonly reason: string }
   | { readonly id: string; readonly kind: 'failed'; readonly detail: string }
   | { readonly id: string; readonly kind: 'woke-failed'; readonly detail: string }
+  /** The wake failed AND ccd could not write `.hibernated` again (`roll-wake-unrestored`, exit 5): the session may be
+   *  neither running nor hibernated, so the line names it to be checked, and never says it stays hibernated. */
+  | { readonly id: string; readonly kind: 'woke-unrestored'; readonly detail: string }
   /** The one call was cut short or never answered (a timeout, a dropped link, a kill): the session may be running,
    *  hibernated, or between the two, so the line names it to be checked. */
   | { readonly id: string; readonly kind: 'unknown'; readonly detail: string };
@@ -182,7 +188,8 @@ export const ROLL_LANE: SleepLane<RollLaneDeps, RollSweepMemory, FleetSession, H
       : v.act === 'hibernate' ? { id, kind: 'skipped', reason: 'one-per-pass' } : null),
     acted: (id, v, r) => {
       if (r.kind === 'hibernated') {
-        return r.woke === undefined || r.woke === true ? { id, kind: 'rolled', idleMs: v.idleMs } : { id, kind: 'woke-failed', detail: r.woke.failed };
+        if (r.woke === undefined || r.woke === true) return { id, kind: 'rolled', idleMs: v.idleMs };
+        return r.woke.restored ? { id, kind: 'woke-failed', detail: r.woke.failed } : { id, kind: 'woke-unrestored', detail: r.woke.failed };
       }
       if (r.kind === 'held-at-act') {
         const w = r.verdict === null ? 'idle-gate:unmeasured' : r.verdict.act === 'hold' ? r.verdict.reason : 'idle-gate:unmeasured';
@@ -252,6 +259,8 @@ export async function rollPass(
       journal(deps, mem, o.id, 'failed', `ccrc-server: roll of ${o.id} failed at its hibernate (${o.detail.trim() || 'no stderr'}); it was not stopped`);
     } else if (o.kind === 'woke-failed') {
       journal(deps, mem, o.id, 'woke-failed', `ccrc-server: roll of ${o.id}: its wake failed (${o.detail.trim() || 'no stderr'}); ccd put it back to sleep, so it stays hibernated, and mail, an open screen or a re-dispatch wakes it on the current release`);
+    } else if (o.kind === 'woke-unrestored') {
+      journal(deps, mem, o.id, 'woke-unrestored', `ccrc-server: roll of ${o.id}: its wake failed (${o.detail.trim() || 'no stderr'}) and ccd could not write its hibernated marker again, so it was not restored: the session may be neither running nor hibernated; check ${o.id} (ccd ensure ${o.id} wakes it if it is down)`);
     } else {
       journal(deps, mem, o.id, 'unknown', `ccrc-server: roll of ${o.id}: outcome unknown (${o.detail.trim() || 'no stderr'}): ccd hibernate --roll was cut short or not answered, so ${o.id} may be running, hibernated or neither; check ${o.id} (ccd ensure ${o.id} wakes it if it is down)`);
     }

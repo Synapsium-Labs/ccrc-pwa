@@ -113,15 +113,18 @@ export type SleepActResult<V, St> =
   | {
     readonly kind: 'hibernated'; readonly verdict: Asleep<V>; readonly store: St;
     /** A `then: 'wake'` lane's wake, inside its one `ccd hibernate --roll` (D-7458): `true`, or ccd's stderr when the
-     *  sleep landed and the wake failed (`roll-wake-failed`, exit 4); absent for a lane that stays asleep. */
-    readonly woke?: true | { readonly failed: string };
+     *  sleep landed and the wake failed. `restored: true` is `roll-wake-failed` (exit 4): ccd put the row back to sleep,
+     *  the sanctioned hibernated row. `restored: false` is `roll-wake-unrestored` (exit 5): the marker could not be
+     *  written again, so the row may be neither running nor hibernated. Absent for a lane that stays asleep. */
+    readonly woke?: true | { readonly failed: string; readonly restored: boolean };
   }
   | { readonly kind: 'held-at-act'; readonly verdict: V | null }
   | { readonly kind: 'skipped'; readonly detail: string; readonly by: 'verb' | 'ccd' | 'wake-budget' }
   | {
     readonly kind: 'failed'; readonly detail: string; readonly by: 'ccd' | 'throw';
     /** `unknown`, a `wake` lane's only (the roll, D-7458): the call was cut short or never answered (this server's wait
-     *  ran out, the link failed, the runner's deadline or a signal ended the child), so what ccd did is not known. */
+     *  ran out, the link failed, the runner's deadline or a signal ended the child), or how it ended was not measured
+     *  (the runner sent no signal half, `ccdEnding`'s `unmeasured`), so what ccd did is not known. */
     readonly outcome?: 'unknown';
   }
   | { readonly kind: 'switched-off'; readonly detail: MarkerSwitchName | typeof REGISTRY_UNLISTABLE };
@@ -244,8 +247,11 @@ export interface SleepLane<D extends SleepDepsBase, M, Row extends { readonly su
 
 /** ccd's refusal of an act it re-measured as not idle (`_hib_refuse`, exit 3): `ccd: session-busy: <reason>`. */
 const SESSION_BUSY = /ccd: session-busy: ?(\S*)/;
-/** `cmd_hibernate --roll`'s exit-4 line (D-7458): the sleep landed and the wake did not. */
+/** `cmd_hibernate --roll`'s exit-4 line (D-7458): the sleep landed, the wake did not, and ccd put the row back to sleep. */
 const ROLL_WAKE_FAILED = /ccd: roll-wake-failed/;
+/** `cmd_hibernate --roll`'s exit-5 line: the sleep landed, the wake did not, and `.hibernated` could not be written
+ *  again, so the row was NOT restored. A phrase of its own, so it is never read as the exit-4 one. */
+const ROLL_WAKE_UNRESTORED = /ccd: roll-wake-unrestored/;
 
 /** Whether the box can run this lane's act: `hibernate` listed, and for a `wake` lane the `--roll` flag too. */
 export const laneVerb = (then: 'stay-asleep' | 'wake', fleetState: FleetState | undefined): boolean =>
@@ -395,13 +401,19 @@ export async function sleepAct<D extends SleepDepsBase, M, Row extends { readonl
         if (busy !== null) return { kind: 'skipped', detail: busy[1] || 'busy', by: 'ccd' };
         // The roll's sleep landed and its wake did not: a sanctioned hibernated row, which mail or an open screen wakes.
         if (wake && res.ran !== false && ROLL_WAKE_FAILED.test(res.stderr)) {
-          return { kind: 'hibernated', verdict: v, store, woke: { failed: res.stderr } };
+          return { kind: 'hibernated', verdict: v, store, woke: { failed: res.stderr, restored: true } };
         }
-        // A `wake` lane's call cut short or never answered: ccd may have slept the session, woken it, or be acting
-        // still, so the lane names it to be checked. A runner's own `spawn` answer is known not to have run, and stays
-        // a plain failure. The sleep lanes keep their answer as it was.
+        // The sleep landed, the wake did not, and the marker could not be written again: NOT the hibernated row.
+        if (wake && res.ran !== false && ROLL_WAKE_UNRESTORED.test(res.stderr)) {
+          return { kind: 'hibernated', verdict: v, store, woke: { failed: res.stderr, restored: false } };
+        }
+        // A `wake` lane's call cut short, never answered, or ended in a way nobody measured (`unmeasured`: the runner
+        // sent no signal half): ccd may have slept the session, woken it, or be acting still, so the lane names it to
+        // be checked. A runner's own `spawn` answer is known not to have run, and stays a plain failure. The sleep
+        // lanes keep their answer as it was.
         const ending = res.ran === false ? null : ccdEnding(res).kind;
-        if (wake && ((res.ran === false && res.reason !== 'spawn') || ending === 'deadline' || ending === 'signal')) {
+        if (wake && ((res.ran === false && res.reason !== 'spawn') || ending === 'deadline' || ending === 'signal'
+          || ending === 'unmeasured')) {
           return { kind: 'failed', detail: res.ran === false ? `${res.reason}: ${res.detail}` : res.stderr, by: 'ccd', outcome: 'unknown' };
         }
         return { kind: 'failed', detail: res.stderr, by: 'ccd' };

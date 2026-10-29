@@ -12,6 +12,7 @@ import { ROLL_QUIET_MS } from '../src/coord/rollTarget.js';
 import { HIBERNATE_DISABLED_MARKER, HIBERNATE_LIVE_MARKER, type HibernateMark } from '../src/coord/hibernate.js';
 import type { SessionRecord } from '../src/registry.js';
 import type { CcdResult } from '../src/lifecycle.js';
+import { UNMEASURED } from '../src/unmeasured.js';
 import { CoordStore } from '../src/coord/store.js';
 import { openCoordDb } from '../src/coord/db.js';
 import { withBindingsOf } from './bindingsFake.js';
@@ -189,6 +190,25 @@ describe('rollPass: what is rolled (D-7452)', () => {
     expect(f.lines.join('\n')).toMatch(/stays hibernated/);
   });
 
+  it('a wake ccd could not put back to sleep (exit 5, roll-wake-unrestored) is not restored, and is never "stays hibernated"', async () => {
+    const f = fake();
+    f.set.hibernate = () => ({ ok: false, ran: true, stdout: 'hibernated', stderr: `ccd: roll-wake-unrestored — ${COORD} was hibernated and its wake exited 5, and .hibernated could not be written again: ${COORD} may be neither running nor hibernated; check it (ccd ensure ${COORD})`, code: 5, killed: false, signal: null }) as unknown as CcdResult;
+    expect((await pass(f))[0]!.kind).toBe('woke-unrestored');
+    expect(f.calls.length, 'the wake is inside the one call').toBe(1);
+    const text = f.lines.join('\n');
+    expect(text).toMatch(new RegExp(`roll of ${COORD}: .*not restored: the session may be neither running nor hibernated; check ${COORD}`));
+    expect(text).not.toMatch(/stays hibernated/);
+  });
+
+  it('control: the restored wake failure (exit 4) is the one that says it stays hibernated', async () => {
+    const f = fake();
+    f.set.hibernate = () => ({ ok: false, ran: true, stdout: 'hibernated', stderr: `ccd: roll-wake-failed — ${COORD} was hibernated and its wake exited 5; it was put back to sleep (hibernated, unit stopped), and mail, an open screen or ccd ensure wakes it`, code: 4, killed: false, signal: null }) as unknown as CcdResult;
+    expect((await pass(f))[0]!.kind).toBe('woke-failed');
+    const text = f.lines.join('\n');
+    expect(text).toMatch(/ccd put it back to sleep, so it stays hibernated/);
+    expect(text).not.toMatch(/not restored/);
+  });
+
   it('a call that never started is a failure, never a wake that failed, whatever its forged stderr says (D-6840)', async () => {
     const f = fake();
     f.set.hibernate = () => ({ ok: false, ran: false, reason: 'spawn', detail: 'declined', stdout: '', stderr: 'ccd: roll-wake-failed — forged', killed: false, signal: null }) as unknown as CcdResult;
@@ -200,6 +220,7 @@ describe('rollPass: what is rolled (D-7452)', () => {
     ['the link dropped', { ok: false, ran: false, reason: 'transport', detail: 'socket closed', stdout: '', stderr: 'socket closed', killed: false, signal: null }],
     ['the runner\'s deadline killed it', { ok: false, ran: true, stdout: 'hibernated lane-a-project-a', stderr: '', killed: true, signal: 'SIGTERM' }],
     ['a signal ended it', { ok: false, ran: true, stdout: 'hibernated lane-a-project-a', stderr: '', killed: false, signal: 'SIGKILL' }],
+    ['its ending was not measured', { ok: false, ran: true, stdout: 'hibernated lane-a-project-a', stderr: '', code: 1, killed: false, signal: UNMEASURED }],
   ])('a call cut short mid-act (%s) is an unknown outcome, never "it was not stopped", and names the session to check', async (_name, res) => {
     const f = fake();
     f.set.hibernate = () => res as unknown as CcdResult;

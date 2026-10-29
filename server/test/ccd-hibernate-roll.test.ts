@@ -6,7 +6,8 @@
  * draft, an attached terminal, the turn marker, a hold, a fresh swap), refuses `.no-roll` as `opted-out` and NOT
  * `.no-hibernate`, and then wakes the session in the same verb (`cmd_ensure`). A failed wake exits 4 with
  * `ccd: roll-wake-failed` after putting the row back to sleep (the marker the wake cleared stamped again, the unit
- * stopped), leaving the hibernated row that mail or an open screen wakes.
+ * stopped, the `.woke` stamp the wake wrote put back), leaving the hibernated row that mail or an open screen wakes.
+ * When the marker cannot be written again it exits 5 with `ccd: roll-wake-unrestored` instead: not that row.
  *
  * THE FIXTURE is `ccd-hibernate.test.ts`'s: a fixture HOME, a stubbed `tmux` answering from files in HOME, logged
  * `systemctl`, and the pane's live file. The wake is `cmd_ensure` stubbed to log its call (or fail), so these rows
@@ -181,6 +182,54 @@ describe('ccd hibernate --roll: one verb sleeps and wakes (D-7458)', () => {
     expect(has('hibernated'), 'the marker the wake cleared is stamped again').toBe(true);
     expect(has('stopped'), 'the stop stamp the wake cleared is stamped again').toBe(true);
     expect(calls().slice(at).some((l) => /^systemctl .*disable/.test(l)), 'the unit the wake enabled is stopped').toBe(true);
+    expect(eventsOf(h.home, 'hibernate'), 'still ONE deliberate act').toHaveLength(1);
+  });
+
+  it('a failed wake through the REAL cmd_ensure takes back the .woke stamp it wrote when none stood: nothing woke', () => {
+    idle();
+    const real = STUBS.replace(/^\s*cmd_ensure\(\).*$/m, '');
+    const failing = '_alive() { ! grep -q kill-session "$HOME/ccd-calls" 2>/dev/null; }; '
+      + '_supervised_start() { echo "supervised-start $1" >> "$HOME/ccd-calls"; echo "ccd: $1: unit started but no pane appeared" >&2; return 1; };';
+    const r = run(`--roll --surface agent --actor 'sweep:roll' ${ID}`, failing, real);
+    expect(r.rc, r.err).toBe(4);
+    expect(calls()).toContain(`supervised-start ${ID}`);
+    expect(has('woke'), 'a wake that failed leaves no wake stamp').toBe(false);
+  });
+
+  it('a failed wake through the REAL cmd_ensure puts an earlier wake\'s .woke stamp back, unchanged', () => {
+    idle();
+    const real = STUBS.replace(/^\s*cmd_ensure\(\).*$/m, '');
+    const failing = '_alive() { ! grep -q kill-session "$HOME/ccd-calls" 2>/dev/null; }; '
+      + '_supervised_start() { echo "supervised-start $1" >> "$HOME/ccd-calls"; echo "ccd: $1: unit started but no pane appeared" >&2; return 1; };';
+    fs.writeFileSync(regPath('woke'), '1700000000');
+    const r2 = run(`--roll --surface agent --actor 'sweep:roll' ${ID}`, failing, real);
+    expect(r2.rc, r2.err).toBe(4);
+    expect(fs.readFileSync(regPath('woke'), 'utf8').trim(), 'the stamp that stood before the wake').toBe('1700000000');
+  });
+
+  it('control: a wake that succeeds through the REAL cmd_ensure keeps the .woke stamp it wrote', () => {
+    idle();
+    const real = STUBS.replace(/^\s*cmd_ensure\(\).*$/m, '');
+    const starting = '_alive() { ! grep -q kill-session "$HOME/ccd-calls" 2>/dev/null; }; '
+      + '_supervised_start() { echo "supervised-start $1" >> "$HOME/ccd-calls"; return 0; };';
+    const r = run(`--roll --surface agent --actor 'sweep:roll' ${ID}`, starting, real);
+    expect(r.rc, r.err).toBe(0);
+    expect(r.out).toContain(`rolled ${ID}`);
+    expect(calls(), 'the real cmd_ensure reached its spawn').toContain(`supervised-start ${ID}`);
+    expect(has('woke'), 'the wake stamped .woke').toBe(true);
+  });
+
+  it('a failed wake whose .hibernated cannot be written again exits 5 with roll-wake-unrestored, never roll-wake-failed', () => {
+    idle();
+    // The wake clears the marker, then the registry refuses it: a directory stands where the file would go.
+    const unwritable = 'cmd_ensure() { echo "ensure $*" >> "$HOME/ccd-calls"; rm -f -- "$REG/$1.hibernated"; '
+      + 'mkdir -p -- "$REG/$1.hibernated"; echo "ccd: spawn failed" >&2; return 5; };';
+    const r = roll('', unwritable);
+    expect(r.rc, r.err).toBe(5);
+    expect(r.err).toMatch(/ccd: roll-wake-unrestored — .* exited 5, and .*hibernated could not be written again: .* may be neither running nor hibernated/);
+    expect(r.err).not.toContain('roll-wake-failed');
+    expect(r.out).not.toContain('rolled');
+    expect(fs.statSync(regPath('hibernated')).isFile(), 'no hibernated marker file stands').toBe(false);
     expect(eventsOf(h.home, 'hibernate'), 'still ONE deliberate act').toHaveLength(1);
   });
 

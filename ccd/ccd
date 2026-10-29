@@ -29860,8 +29860,10 @@ cmd_hibernate() {   # [--roll] [--surface <word>] [--actor <text>] [--reason <te
   # done (a roll needs a live pane to measure, so the re-measure below refuses it); and a failed wake exits 4 with
   # `ccd: roll-wake-failed — …` AFTER putting the row back to sleep: `cmd_ensure` clears `.hibernated` and enables the
   # unit before its spawn can fail, which would leave a row neither hibernated nor running with a Restart=always unit
-  # retrying it, so the act is repeated (the marker re-stamped, the unit stopped, any late pane killed) and the row is
-  # the sanctioned hibernated one that mail, an open screen or a re-dispatch wakes. The deliberate act is ONE journal row, `hibernate`, its declared reason defaulted to `roll` (the wake's
+  # retrying it, so the act is repeated (the marker re-stamped, the unit stopped, any late pane killed, the `.woke`
+  # stamp the wake wrote put back) and the row is the sanctioned hibernated one that mail, an open screen or a
+  # re-dispatch wakes. When the marker cannot be written again the row is NOT restored: exit 5,
+  # `ccd: roll-wake-unrestored — …`, a phrase of its own, since that row may be neither running nor hibernated. The deliberate act is ONE journal row, `hibernate`, its declared reason defaulted to `roll` (the wake's
   # `ensure` rows are the unit's own, as on every wake). It takes no value and, like `--hold-ok`, is not on the usage
   # line, which is pinned. `ccd caps` says `hibernate-roll`.
   local usage="usage: ccd hibernate [--surface <word>] [--actor <text>] [--reason <text>] <id>"
@@ -29978,19 +29980,29 @@ cmd_hibernate() {   # [--roll] [--surface <word>] [--actor <text>] [--reason <te
   (( lc_roll )) || return 0
   # 3. The roll's wake (D-7458): `cmd_ensure` clears `.hibernated`, writes `.woke` and starts the unit, whose spawn
   #    resumes the conversation. In a subshell, so its `die` ends the wake and not this verb's answer.
-  local wrc=0
+  #    `.woke` is read first: the wake stamps it, and a wake that failed did not wake anything (below).
+  local wrc=0 lc_woke='' lc_had_woke=0
+  if [[ -e "$REG/$id.woke" || -L "$REG/$id.woke" ]]; then lc_had_woke=1; IFS= read -r lc_woke < "$REG/$id.woke" 2>/dev/null || true; fi
   ( cmd_ensure "$id" ) || wrc=$?
   if (( wrc != 0 )); then
     # Back to sleep, in the act's own order: the marker first, then the unit, then a pane the unit may have raised late.
     if _reg_set "$id" hibernated "$now $hours"; then
       _ws_unsupervise "$id" ccd
       tmux kill-session -t "$(_tmux_t "$id")" 2>/dev/null || true
+      # The `.woke` stamp `cmd_ensure` wrote goes back to what stood before it: nothing woke, so it must neither hold
+      # the auto-swap's cooldown (`_standdown_note … woke`) nor read as fresh activity to the stale-archive lane.
+      if (( lc_had_woke )); then _reg_set "$id" woke "$lc_woke" || true; else rm -f -- "$REG/$id.woke"; fi
       echo "$(date '+%F %T') hibernate $id: roll wake failed (rc $wrc), back to sleep" >> "$REG/swap.log"
       echo "ccd: roll-wake-failed — $id was hibernated and its wake exited $wrc; it was put back to sleep (hibernated, unit stopped), and mail, an open screen or ccd ensure wakes it" >&2
-    else
-      echo "ccd: roll-wake-failed — $id was hibernated and its wake exited $wrc, and $REG/$id.hibernated could not be written again: $id may be neither running nor hibernated; check it (ccd ensure $id)" >&2
+      exit 4
     fi
-    exit 4
+    # NOT RESTORED: the wake cleared `.hibernated` and the marker could not be written again, so the row is not the
+    # sanctioned hibernated one. Its own exit (5) and its own phrase, never `roll-wake-failed`: a caller that reads
+    # exit 4 as "stays hibernated" must not read this as that. `.woke` is left as the wake wrote it (a registry that
+    # refused the marker is not trusted with a second write here).
+    echo "$(date '+%F %T') hibernate $id: roll wake failed (rc $wrc), NOT restored: .hibernated could not be written" 2>/dev/null >> "$REG/swap.log" || true
+    echo "ccd: roll-wake-unrestored — $id was hibernated and its wake exited $wrc, and $REG/$id.hibernated could not be written again: $id may be neither running nor hibernated; check it (ccd ensure $id)" >&2
+    exit 5
   fi
   echo "rolled $id"
 }
