@@ -318,13 +318,14 @@ const pairingDefinitions = (root: string, names: Readonly<Record<'server' | 'pwa
 
 /** The normalize-and-prefix rule's definitions (a `function`, `const` or `let` of the name): server `pairMatches`,
  *  PWA `prefixMatches`. 2 at the base, one per side; Q3g keeps the server at 1 (moved into `pane/askPairing.ts`, with
- *  `transcript/ask.ts` re-exporting it), and W7 takes the PWA's to 0. */
+ *  `transcript/ask.ts` re-exporting it), and W7 takes the PWA's to 0 (Task C7f, D-7184: 1 -> 0). */
 export function envelopePairingRules(root: string = REPO): PairingRuleSite[] {
   return pairingDefinitions(root, { server: ['pairMatches', 'prefixMatches'], pwa: ['prefixMatches', 'pairMatches'] });
 }
 
 /** The pairing's title-matching definitions (`titleMatches`, `WRAP_BAR_RE`), either side. At the base only the PWA's
- *  (`askLive.ts`, 2 names); server-side envelope pairing 0, until Q3g's port. */
+ *  (`askLive.ts`, 2 names); server-side envelope pairing 0, until Q3g's port. W7 Task C7f (D-7184) takes the PWA's to 0
+ *  (2 -> 0): the server's port is the one. */
 export function envelopePairingTitleRules(root: string = REPO): PairingRuleSite[] {
   return pairingDefinitions(root, { server: ['titleMatches', 'WRAP_BAR_RE'], pwa: ['titleMatches', 'WRAP_BAR_RE'] });
 }

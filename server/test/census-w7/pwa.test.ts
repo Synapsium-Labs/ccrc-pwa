@@ -299,8 +299,9 @@ describe('W7 PWA census: REAL rows (reporting, not ratcheting; spec §5.1 rule 3
     held('dialogSheetStates', dialogSheetStates(), 3);
   });
 
-  it('clientPairingDefinitions(): 9, prefixMatches and norm among them', () => {
-    held('clientPairingDefinitions', clientPairingDefinitions(), 9);
+  // C7f (D-7184): the sheets read the wire's pairing, and the nine definitions are deleted.
+  it('clientPairingDefinitions(): 0 (from 9: the seven pairing functions and constant, prefixMatches and norm)', () => {
+    held('clientPairingDefinitions', clientPairingDefinitions(), 0);
   });
 
   it('paneTextDecisions(): 2 (COMPACTION_RE, showsPrompt)', () => {

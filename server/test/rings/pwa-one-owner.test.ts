@@ -139,3 +139,24 @@ describe('the PWA reads a session\'s presence through fleet/presence.ts (ARCH-49
     expect(coordPresenceSites()).toEqual([]);
   });
 });
+
+// C7f (D-7184; ARCH-58 #793, the PWA half): the envelope pairing has one owner, the server (`server/src/pane/askPairing.ts`,
+// attached to the frames by `sessionws.ts#paired`). The PWA reads the frames' `pairing` (`stores/session.ts`, read by
+// `askLive.ts#pairingFor`) and defines none of the client pairing's nine names. Read through W7's census
+// (`census-w7/pwa.ts#clientPairingDefinitions`, whose FIXTURE row reds a definition), imported in the block so the file's
+// header imports stay as other tasks append to them. May only stay at 0.
+describe('the envelope pairing has one owner, the server (C7f, D-7184)', () => {
+  it('clientPairingDefinitions() 9 -> 0: no PWA source defines a client pairing name', async () => {
+    const { clientPairingDefinitions } = await import('../census-w7/pwa.js');
+    expect(clientPairingDefinitions().map((s) => `${s.file}#${s.symbol}`)).toEqual([]);
+  });
+
+  it('the server\'s port defines the pairing the PWA gave up, in pane/askPairing.ts', async () => {
+    const { CLIENT_PAIRING_NAMES } = await import('../census-w7/pwa.js');
+    const port = parse('server/src/pane/askPairing.ts');
+    const names = new Set([...port.symbols.map((s) => s.name), ...port.bindings.map((b) => b.name)]);
+    const ported = CLIENT_PAIRING_NAMES.filter((n) => n !== 'prefixMatches' && n !== 'norm');
+    expect(ported.filter((n) => !names.has(n))).toEqual([]);
+    expect(names.has('framePairing')).toBe(true);
+  });
+});

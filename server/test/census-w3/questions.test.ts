@@ -244,11 +244,14 @@ describe('W3 question census (slug question-census)', () => {
       .toEqual(QUESTION_STORE_EXCLUDED.map((x) => `${x.file} | ${x.symbol} | ${x.method}`));
   });
 
-  it('REAL: the pairing rule\'s definitions, one server and one PWA at most, printed for the PR body', () => {
+  // W7 C7f (D-7184): the PWA's pairing is deleted, so its side reads 0 on both rows (1 -> 0 and 2 -> 0).
+  it('REAL: the pairing rule\'s definitions, one server and no PWA (C7f), printed for the PR body', () => {
     const rules = envelopePairingRules();
+    const titles = envelopePairingTitleRules();
     show('envelopePairingRules', rules);
-    show('envelopePairingTitleRules', envelopePairingTitleRules());
+    show('envelopePairingTitleRules', titles);
     expect(rules.filter((s) => s.side === 'server').length, 'the server keeps one normalize-and-prefix definition').toBe(1);
-    expect(rules.filter((s) => s.side === 'pwa').length).toBeLessThanOrEqual(1);
+    expect(rules.filter((s) => s.side === 'pwa').length, 'C7f: the PWA defines no normalize-and-prefix rule').toBe(0);
+    expect(titles.filter((s) => s.side === 'pwa').length, 'C7f: the PWA defines no title rule').toBe(0);
   });
 });
