@@ -602,6 +602,28 @@ describe.runIf(LINUX)('a box move: a recorded device this host does not mount', 
     expect(fieldState('demo-moved', cur)).toBe('valid');
   }, 90_000);
 
+  // The vanished-fork reclaim: the child's own tree is gone, so target 0 is never asked, and neither is the table's
+  // M request. The D requests ask the table alone, so the moved row is placed by its path all the same.
+  it('the child’s own tree vanished — the moved row is still placed by its path: reclaimable, the table asked for D alone', () => {
+    const { c, cur, body } = movedRow(unmountedDev(8));
+    fs.rmSync(c.wt, { recursive: true, force: true });
+    placed(evalOf(h, { pre: BTIME('1111') }), 'the audit, the child’s tree gone');
+    expect(fs.readFileSync(path.join(REG(), 'demo-moved.workdirid'), 'utf8'), 'nothing was written').toBe(body);
+    expect(fieldState('demo-moved', cur)).toBe('valid');
+    evalOf(h, { pre: `${walkSpy} ${BTIME('1111')}` });
+    const toks = walkCalls()[0]!.split(' ').slice(1);
+    expect(toks, 'no target 0 and no M, but one D by field').toEqual(expect.arrayContaining(['D0', 'F0']));
+    expect(toks.includes('T0') || toks.includes('M0'), toks.join(' ')).toBe(false);
+  }, 90_000);
+
+  it('CONTROL: the child’s own tree vanished, and the moved row’s recorded device IS mounted here — still holds', () => {
+    const dev = Number(h.sh(`stat -c %d '${fs.realpathSync(h.home)}'`));
+    expect(Number.isInteger(dev) && dev > 0, 'the CONTROL: a device').toBe(true);
+    const { c } = movedRow(dev, undefined, () => fs.realpathSync(mk('the-original')));
+    fs.rmSync(c.wt, { recursive: true, force: true });
+    answers(evalOf(h, { pre: BTIME('1111') }), 'unmeasured', `registry row(s) demo-moved ${UNREC}`);
+  }, 90_000);
+
   it('CONTROL: the same row whose recorded device IS mounted here (copied within one file system) still holds — unmeasured', () => {
     const dev = Number(h.sh(`stat -c %d '${fs.realpathSync(h.home)}'`));
     expect(Number.isInteger(dev) && dev > 0, 'the CONTROL: a device').toBe(true);
@@ -639,7 +661,7 @@ describe.runIf(LINUX)('a box move: a recorded device this host does not mount', 
       `registry row(s) demo-moved ${UNREC}`);
   }, 90_000);
 
-  it('the one walk asks each valid field’s device (D) before its recorded path (F), only beside the table', () => {
+  it('the one walk asks each valid field’s device (D) before its recorded path (F), beside the table’s own request', () => {
     movedRow(unmountedDev(8));
     evalOf(h, { pre: `${walkSpy} ${BTIME('1111')}` });
     const toks = walkCalls()[0]!.split(' ').slice(1);

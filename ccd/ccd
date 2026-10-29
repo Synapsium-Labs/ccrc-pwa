@@ -30936,8 +30936,9 @@ _ws_reclaim_workdir_shared() {   # id workdir -> rc 0 with _WS_SHARED_ROWS = the
   # The child is target 0 only when its own spelling resolved `complete` and
   # its tree stands. Bash's `pwd -P` keeps a link target's leading `//`, which
   # Linux reads as `/` and the table never writes, so it is collapsed. Each
-  # standing directory leaf is target 1 or 2. The table is asked only with
-  # target 0; a seam that names no table holds the child, never "no mount".
+  # standing directory leaf is target 1 or 2. The table's M request is asked
+  # only with target 0 (its D requests, below, need no target); a seam that
+  # names no table holds the child, never "no mount".
   if [[ "$minebasis" == complete && -d "$mine" ]]; then
     t0="$mine"; [[ "$t0" != //[!/]* ]] || t0="${t0#/}"
     req+=("T"$'\t'0$'\t'"$t0")
@@ -31041,9 +31042,12 @@ _ws_reclaim_workdir_shared() {   # id workdir -> rc 0 with _WS_SHARED_ROWS = the
       [[ "$efx" == T$'\t'0$'\t'* ]] || continue
       wbt+=("${efx#T$'\t'0$'\t'}"); efbt0=$(( ${#wbt[@]} - 1 )); break
     done
-    # A BOX MOVE (rule (d)'s one release, below): each field's recorded device, asked of the table, only where the
-    # table itself is asked (target 0 standing, Linux). Before the F requests, so those stay the last of the list.
-    if (( mreq )) && [[ -n "$mi" ]]; then
+    # A BOX MOVE (rule (d)'s one release, below): each field's recorded device, asked of the table on Linux whether
+    # or not target 0 stands. A child whose own tree vanished asks no T0 and no M, so the table is read here for the
+    # D requests alone; a table that cannot be read asks none, and every such row holds. Before the F requests, so
+    # those stay the last of the list.
+    [[ "$CCD_OS" == darwin ]] || (( mreq )) || mi=$(_ws_collect_mountinfo)
+    if [[ -n "$mi" ]]; then
       for (( eff = 0; eff < ${#efo[@]}; eff++ )); do req+=("D"$'\t'"$eff"$'\t'"${efi[eff]%%:*}"); done
     fi
     for (( eff = 0; eff < ${#efo[@]}; eff++ )); do
@@ -31419,6 +31423,13 @@ _ws_reclaim_moved_check() {   # nested -> rc 0 when no checkout in nested (resol
   # limit, a stated residual (`moved-check-misses-a-subdirectory-of-a-moved-tree`):
   # a row that entered a SUBDIRECTORY of a moved tree recorded that
   # subdirectory, which is no checkout's root, so it matches nothing here.
+  # And after a box move: a registry copied onto new hardware keeps the old
+  # host's identities, so a recovered row's recorded identity names a device
+  # this host does not have and matches no checkout here until its session
+  # starts again and writes a fresh field. The admin-directory arm above
+  # still holds a moved tree git records; a tree git keeps no record of is
+  # matched by nothing (the rows rung's box-move release places by path only,
+  # and never feeds this check).
   local p pg o g r erc uwhy=''
   _WS_MOVED_WHY=''
   [[ -n "$_WS_RECORDED_GDIRS$_WS_RECORDED_IDS" ]] || return 0
