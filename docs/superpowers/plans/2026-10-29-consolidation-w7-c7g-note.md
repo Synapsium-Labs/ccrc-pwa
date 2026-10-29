@@ -23,5 +23,5 @@ Task C7g of `2026-10-27-consolidation-w7-pwa.md` (`D-7185`; ARCH-57 #792, PWA ha
 
 ## The skew rows (spec §5.1 rule 1c)
 
-- **A new PWA against a server without `questions-v1`** (an older server, or a rollback): `lib/serverCaps.ts` reads `GET /health`. With the word absent, the request is unreadable, or the request fails, both the sheets (`api.answerQuestion`) and the notification answer through the old door, with today's bytes. The cost: one `GET /health` per answer, held for 60 s by the sheets and made on every tap by the notification.
+- **A new PWA against a server without `questions-v1`** (an older server, or a rollback): `lib/serverCaps.ts` reads `GET /health`. If the word is absent, the body cannot be read, or the request fails, both the sheets (`api.answerQuestion`) and the notification answer through the old door, with today's bytes. The cost on the sheets: one `GET /health` when `DialogSheet` mounts. Any answer the server gives is held for 60 s, and only a failed request is read again on the next answer, so a tap's request goes out at once. The cost on the notification: one `GET /health` per tap, before its POST.
 - **An old PWA against a new server**: Q3f's aliases answer it, unchanged (`question-doors.test.ts`'s pairs hold the new path equal to the old door).
