@@ -266,15 +266,18 @@ describe('the matchers that ask the coordinator side (ArchiveSheet, PrSheet)', (
   // `ArchiveSheet`'s claimed open runs of the claimant (`r.claimedBy === session.id`), and `PrSheet`'s open run on the
   // worker's workspace (`r.sessionId === id`): both match by id, so the recycled-id rows count today.
   const MATCHERS: Record<string, unknown> = {
-    'two runs naming one worker': { archiveAsksClaimant: 2, prOpenRunOnWorker: 10 },
-    'a recycled id, as a worker (#746: a run opened before the workspace\'s own run)': { archiveAsksClaimant: 1, prOpenRunOnWorker: 83 },
+    // C7d's behaviour rows, OA-C15 (a) (D-7265): the PR sheet's open run is the one the wire binds to the workspace
+    // (`sessionRunOf(s, 'open')`), so the note names run 11, not the older run 10 that names the id (10 before), and
+    // names no run for the recycled id (83 before) or the undecidable binding (51 before).
+    'two runs naming one worker': { archiveAsksClaimant: 2, prOpenRunOnWorker: 11 },
+    'a recycled id, as a worker (#746: a run opened before the workspace\'s own run)': { archiveAsksClaimant: 1, prOpenRunOnWorker: null },
     'a recycled id, as a coordinator (no wire fact binds the claimant\'s incarnation)': { archiveAsksClaimant: 1, prOpenRunOnWorker: 12 },
     'the open-vs-newest pair (a newer run closed while an older one is open)': { archiveAsksClaimant: 1, prOpenRunOnWorker: 20 },
     'a closed run of a live session, as its worker': { archiveAsksClaimant: 0, prOpenRunOnWorker: null },
     'a closed run of a live session, as its coordinator': { archiveAsksClaimant: 0, prOpenRunOnWorker: null },
     'an older closed run of a live session, beside its newer bound run': { archiveAsksClaimant: 1, prOpenRunOnWorker: 41 },
     'an open planned run with sessionId null': { archiveAsksClaimant: 1, prOpenRunOnWorker: null },
-    'an open run whose worker binding is undecidable (no run key on the worker)': { archiveAsksClaimant: 1, prOpenRunOnWorker: 51 },
+    'an open run whose worker binding is undecidable (no run key on the worker)': { archiveAsksClaimant: 1, prOpenRunOnWorker: null },
     'an open run on a tick whose childIds are empty (the registry was unlistable)': { archiveAsksClaimant: 1, prOpenRunOnWorker: 52 },
     'an open run with no childIds key (an emitter that does not compute it)': { archiveAsksClaimant: 1, prOpenRunOnWorker: 53 },
   };
