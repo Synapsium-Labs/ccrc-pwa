@@ -3647,6 +3647,7 @@ describe('landing order wave 4: the lineage-unmeasured text, the recorded head a
   it('the opt-in paragraph says the base is a ref name read from the PR, and what a mismatch with the radar costs', () => {
     expect(wl).toContain('says nothing of them. ' +
       'Name the base in that brief as a ref name, `origin/<base>`, where `<base>` is the PR\'s base branch (`gh pr view <n> --json baseRefName`), and never as a sha. ' +
+      'Before a PR exists, as in a first worker brief, `<base>` is the repository\'s default branch, read as a ref name with `gh repo view <owner/repo> --json defaultBranchRef -q .defaultBranchRef.name`. ' +
       'The radar walks against its conf\'s `base=`, which defaults to `main`; where the two differ, a merge the radar cannot place on its base gets today\'s answer (`stale-tip` or `stale-review`).');
   });
 
@@ -3655,7 +3656,7 @@ describe('landing order wave 4: the lineage-unmeasured text, the recorded head a
     for (const s of [
       'It is a wait, not a refusal', 'Except `lineage-unmeasured`', 'is never a failed review run', 'is never ruled on, even when its close was accepted',
       'is the recorded head', 'names the opt-in and the radar\'s base', 'When an advance answered `verifiedHead`',
-      'That rule ends with the wave-done it answered', 'Open a fresh review run against the live tip', 'Name the base in that brief as a ref name',
+      'That rule ends with the wave-done it answered', 'Open a fresh review run against the live tip', 'Name the base in that brief as a ref name', 'Before a PR exists, as in a first worker brief',
       'The radar walks against its conf', 'the one exception is the recorded head in §5',
     ]) {
       // Whitespace-flattened: the new paragraphs wrap at about 120 columns (final review F-H).

@@ -433,8 +433,10 @@ run naming the session) un-freezes it, and the next sweep may rename it then.
 the opt-in and the radar's base. The worker's clause 9 exception and the reviewer's clause 3 exception apply only
 where the brief says so, and a brief for any other project says nothing of them. Name the base in that brief as a
 ref name, `origin/<base>`, where `<base>` is the PR's base branch (`gh pr view <n> --json baseRefName`), and never as
-a sha. The radar walks against its conf's `base=`, which defaults to `main`; where the two differ, a merge the radar
-cannot place on its base gets today's answer (`stale-tip` or `stale-review`).
+a sha. Before a PR exists, as in a first worker brief, `<base>` is the repository's default branch, read as a ref name
+with `gh repo view <owner/repo> --json defaultBranchRef -q .defaultBranchRef.name`. The radar walks against its conf's
+`base=`, which defaults to `main`; where the two differ, a merge the radar cannot place on its base gets today's answer
+(`stale-tip` or `stale-review`).
 
 Then **end your turn.** Do not sleep-poll. Do not "check in five minutes". The
 delivery lane will inject the worker's mail into your session when it is idle,
