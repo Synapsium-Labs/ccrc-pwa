@@ -6,16 +6,37 @@
  */
 import { describe, it, expect } from 'vitest';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
+import fs, { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync } from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { fastSelection, relatedFromVitestList, guardTests, parseUntraced, blankComments, scanShape, scansSourceTree, treeScanners, GUARD_TESTS, PIN_MAP_CARRIED, SCANNER_MAX_MS, TREE_READER, SESSION_HOOK_TRIGGERS } from '../../.github/ci/fast-plan.mjs';
+import { fastSelection, relatedFromVitestList, guardTests, parseUntraced, scanShape, scansSourceTree, treeScanners, GUARD_TESTS, PIN_MAP_CARRIED, SCANNER_MAX_MS, TREE_READER, SESSION_HOOK_TRIGGERS } from '../../.github/ci/fast-plan.mjs';
 import { liveTestFiles, vitestFollows } from '../../.github/ci/select-tests.mjs';
 import { untracedOutput } from '../../.github/ci/select.mjs';
+import { globBase, mergeScans, parseScanLines, readTreeScanners, rootOf, wrapListers } from '../../.github/ci/tree-scanners.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const PLAN = path.join(ROOT, '.github', 'ci', 'fast-plan.mjs');
+
+/** The static detector's positive shapes. The scanShape row holds that the detector finds each; the SELF-CHECK runs each
+ *  under the runtime capture and holds that the capture records it (the runtime set is a superset of the static set). */
+const STATIC_SCANS: string[] = [
+  "const SRC = path.join(here, '..', 'src');\nconst walk = (d) => readdirSync(d).flatMap((n) => walk(n));\nwalk(SRC);",
+  "readdirSync(path.join(REPO, 'server', 'src'), { recursive: true });",
+  "for (const d of ['server/src', 'shared']) {\n  walk(path.join(root, d));\n}\nfunction walk(x) { return readdirSync(x); }",
+  "globSync('**/*.ts', { cwd: 'pwa/src' });",
+  "const ccd = readdirSync(path.join(REPO, 'ccd'));",
+  "const root = path.join(REPO, 'server/src');\nfs.readdirSync(root);",
+  "fsp.readdir(path.join(REPO, 'shared'));",
+  "fs.promises.readdir(path.join(REPO, 'pwa', 'src'));",
+  "function walk(d) { return fs.readdirSync(d).flatMap((n) => walk(n)); }\nconst all = [...walk('ccd'), ...walk('server/src')];",
+  "const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');\nreaddirSync(path.join(root, 'src'));",
+  "describe('x', () => {\n  let SRC_DIR = '';\n  beforeAll(() => {\n    SRC_DIR = path.resolve(here, '..', '..', 'agent', 'src');\n  });\n  it('y', () => {\n    readdirSync(SRC_DIR);\n  });\n});",
+  "const CCD = path.resolve(__dirname, '../../ccd/ccd');\nconst ccdDir = path.dirname(CCD);\nreaddirSync(ccdDir);",
+  "const srcRoot = path.resolve(here, '..', 'src');\nconst sources = (dir = srcRoot) =>\n  readdirSync(dir);\nsources();",
+  "['deploy', 'ccd'].flatMap((d) => walk(path.join(REPO, d)));\nfunction walk(x) { return readdirSync(x); }",
+];
 
 const LIVE = [
   'server/test/a.test.ts',
@@ -154,11 +175,7 @@ describe('the tree scanners: every test that lists a source tree itself runs on 
 
   it('scanShape: a lister called on a source root, a name bound to one, a loop over roots; never a fixture dir or a comment', () => {
     const scans = (src: string): boolean => scanShape(src).hit !== null;
-    expect(scans("const SRC = path.join(here, '..', 'src');\nconst walk = (d) => readdirSync(d).flatMap((n) => walk(n));\nwalk(SRC);")).toBe(true);
-    expect(scans("readdirSync(path.join(REPO, 'server', 'src'), { recursive: true });")).toBe(true);
-    expect(scans("for (const d of ['server/src', 'shared']) {\n  walk(path.join(root, d));\n}\nfunction walk(x) { return readdirSync(x); }")).toBe(true);
-    expect(scans("globSync('**/*.ts', { cwd: 'pwa/src' });")).toBe(true);
-    expect(scans("const ccd = readdirSync(path.join(REPO, 'ccd'));")).toBe(true);
+    for (const src of STATIC_SCANS) expect(scans(src), src).toBe(true);
     // A file or a subdirectory under a root, a fixture base, a comment, a root that is only read: not a scan.
     expect(scans("readdirSync(path.join(REPO, 'shared', 'api.ts'));")).toBe(false);
     expect(scans("readdirSync(path.join(here, '..', 'src', 'coord'));")).toBe(false);
@@ -168,21 +185,12 @@ describe('the tree scanners: every test that lists a source tree itself runs on 
     // A loop variable is bound for the loop's body only, not for a later call that reuses the name.
     expect(scans("for (const f of ['server/src']) {\n  x(f);\n}\nreaddirSync(f);")).toBe(false);
     // Reached through a namespace or an object, or spread: the name lists, whatever it is reached through.
-    expect(scans("const root = path.join(REPO, 'server/src');\nfs.readdirSync(root);")).toBe(true);
-    expect(scans("fsp.readdir(path.join(REPO, 'shared'));")).toBe(true);
-    expect(scans("fs.promises.readdir(path.join(REPO, 'pwa', 'src'));")).toBe(true);
-    expect(scans("function walk(d) { return fs.readdirSync(d).flatMap((n) => walk(n)); }\nconst all = [...walk('ccd'), ...walk('server/src')];")).toBe(true);
     // A name bound to a package dir, with 'src' joined on; never with a subdirectory joined after it.
-    expect(scans("const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');\nreaddirSync(path.join(root, 'src'));")).toBe(true);
     expect(scans("const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');\nreaddirSync(path.join(root, 'src', 'coord'));")).toBe(false);
     // A name declared first and assigned a root later (a beforeAll): bound for its declaration's block.
-    expect(scans("describe('x', () => {\n  let SRC_DIR = '';\n  beforeAll(() => {\n    SRC_DIR = path.resolve(here, '..', '..', 'agent', 'src');\n  });\n  it('y', () => {\n    readdirSync(SRC_DIR);\n  });\n});")).toBe(true);
     // The directory of a file directly in a root; a default parameter that aliases a root binding.
-    expect(scans("const CCD = path.resolve(__dirname, '../../ccd/ccd');\nconst ccdDir = path.dirname(CCD);\nreaddirSync(ccdDir);")).toBe(true);
-    expect(scans("const srcRoot = path.resolve(here, '..', 'src');\nconst sources = (dir = srcRoot) =>\n  readdirSync(dir);\nsources();")).toBe(true);
     // A root after another literal segment is a fixture's path, not the tree; an array of roots is still roots.
     expect(scans("readdirSync(join(home, '.local', 'bin', 'ccd'));")).toBe(false);
-    expect(scans("['deploy', 'ccd'].flatMap((d) => walk(path.join(REPO, d)));\nfunction walk(x) { return readdirSync(x); }")).toBe(true);
   });
 
   it('a scanner whose file measured over SCANNER_MAX_MS is left to the merge queue; an unmeasured one runs', () => {
@@ -200,57 +208,136 @@ describe('the tree scanners: every test that lists a source tree itself runs on 
     expect(guardTests(live, read, { 'server/test/deviation-refs.test.ts': 10 * SCANNER_MAX_MS })).toContain('server/test/deviation-refs.test.ts');
   });
 
-  // The rule's recall, checked against a deliberately broad net: every server test whose code names a source root and
-  // lists a directory in any form is either found by the rule or excused here, by name, with its reason. A scanner the
-  // rule misses fails here, on the pull request that adds it, instead of slipping to the merge queue.
-  it('SELF-CHECK: every server test that names a source root and lists a directory is found, or excused by name', () => {
-    const Rq = String.raw`['"\x60](?:(?:server|pwa|agent)\/src|shared|ccd|deploy)\/?['"\x60]`;
-    const NAMES_ROOT = new RegExp([
-      String.raw`['"\x60](?:\.\.\/)*(?:server|pwa|agent)\/src\/?['"\x60]`,
-      String.raw`['"\x60](?:\.\.\/)*(?:shared|ccd)\/['"\x60]`,
-      String.raw`(?:join|resolve)\(\s*[\w$.]*(?:repo|root|here|dirname)[\w$.]*(?:\([^()\n]*\))?\s*,\s*(?:['"\x60]\.\.['"\x60]\s*,\s*)*['"\x60](?:shared|ccd)['"\x60]\s*\)`,
-      String.raw`\[\s*${Rq}(?:\s*,\s*${Rq})+\s*\]`,
-      String.raw`['"\x60](?:server|pwa|agent|\.\.)['"\x60]\s*,\s*['"\x60]src['"\x60]\s*\)`,
-      String.raw`\b[\w$]*(?:repo|root|here|server|pkg)[\w$]*\s*,\s*['"\x60]src['"\x60]\s*\)`,
-    ].join('|'), 'i');
-    const LISTS_DIR = /\b(?:readdirSync|readdir|opendirSync|opendir|globSync|glob)\s*\(/;
-    const EXCUSED: Record<string, string> = {
-      'server/test/auth-passkey.test.ts': 'walks four ccd/*-skill subdirectories, not a root',
-      'server/test/ccd-account-auth.test.ts': 'lists ccd/lib, a subdirectory; its other listings are fixture registries',
-      'server/test/ccrc-codex-bridge.test.ts': 'hands the ccd dir to python as an argv path; lists only fixture dirs and /proc',
-      'server/test/ccrc-codex-lifecycle.test.ts': 'symlinks shared into a fixture box; lists only fixture dirs',
-      'server/test/ccrc-models-advance.test.ts': 'symlinks shared into a fixture box; lists deploy (not a source root)',
-      'server/test/ccrc-models-lock.test.ts': 'symlinks shared into a fixture box; lists only fixture dirs',
-      'server/test/ccrc-models.test.ts': 'symlinks shared into a fixture box; lists deploy and fixture dirs',
-      'server/test/ccrc-update-fetch.test.ts': 'expects a path under the ccd dir in argv; lists only fixture dirs',
-      'server/test/ccrc-wrappers.test.ts': 'reads single files from the ccd dir; lists only fixture dirs',
-      'server/test/child-reclaim-generation-lane.test.ts': 'reads single files from server/src; lists a fixture registry',
-      'server/test/ci-trace-run.test.ts': 'writes a fixture script that links shared; walks server/test, not a source root',
-      'server/test/models-op.test.ts': 'rewrites an import to the shared dir; lists only fixture dirs',
-      'server/test/session-hook.test.ts': 'quotes `ccd/` in an expected sentence; lists only fixture registries',
-      'server/test/token-rotation-real-verb.test.ts': 'compares argv against the ccd dir; lists only fixture dirs',
-    };
-    const memo = new Map();
+  // The capture holds the fallback: every shape the static detector finds, run for real under the runtime capture, is
+  // recorded. A static shape the capture missed fails here, unit-level, instead of a scanner dropping out of the plan
+  // when the artifact replaces the detector.
+  it('SELF-CHECK: the runtime capture records every static positive shape (runtime is a superset of static)', async () => {
+    const here = path.join(ROOT, 'server', 'test');
+    const roots = new Set<string>();
+    const match = rootOf(ROOT, tmpdir(), ROOT);
+    const restore = wrapListers(fs, (listed: unknown, cwd: string | undefined) => { const r = match(listed, cwd); if (r) roots.add(r); });
+    syncBuiltinESMExports();
     const missed: string[] = [];
-    const candidates: string[] = [];
-    for (const f of live.filter((x) => x.startsWith('server/test/'))) {
-      const code = blankComments(read(f));
-      if (!NAMES_ROOT.test(code) || !LISTS_DIR.test(code)) continue;
-      candidates.push(f);
-      if (scansSourceTree(f, read, memo) === null && !(f in EXCUSED)) missed.push(f);
+    try {
+      for (const src of STATIC_SCANS) {
+        roots.clear();
+        const run = (fn: () => void): void => { fn(); };
+        const body = src.replace(/import\.meta\.url/g, 'importMetaUrl');
+        // A fixture runs against the real tree; a recursive walk that wanders off it throws, after the first listing.
+        try {
+          const r = new Function('path', 'fs', 'fsp', 'readdirSync', 'globSync', 'fileURLToPath', 'REPO', 'here', 'root', '__dirname', 'importMetaUrl', 'home', 'tmp', 'describe', 'beforeAll', 'it', 'x', `return (async () => {\n${body}\n})();`)(
+            path, fs, fs.promises, fs.readdirSync, fs.globSync, fileURLToPath, ROOT, here, ROOT, here, `file://${here}/x.test.ts`, tmpdir(), tmpdir(), (_: string, f: () => void) => run(f), run, (_: string, f: () => void) => run(f), () => {},
+          ) as Promise<unknown>;
+          await r.catch(() => {});
+        } catch { /* recorded before it threw */ }
+        if (roots.size === 0) missed.push(src);
+      }
+    } finally {
+      restore();
+      syncBuiltinESMExports();
     }
-    expect(candidates.length, 'the net caught the scanners it was built from').toBeGreaterThan(50);
-    expect(missed, 'tree scanners the rule does not find: teach scansSourceTree their shape, or excuse a fixture-only file in EXCUSED').toEqual([]);
-    // An excuse stays honest: it names a file the net still catches and the rule still does not find.
-    for (const [f, why] of Object.entries(EXCUSED)) {
-      expect(candidates, `${f} (${why}) is no longer caught by the net: drop its excuse`).toContain(f);
-      expect(scansSourceTree(f, read, memo), `${f} is found by the rule now: drop its excuse`).toBeNull();
-    }
+    expect(STATIC_SCANS.length).toBeGreaterThan(10);
+    expect(missed, 'static shapes the capture does not record').toEqual([]);
   });
 
   it('the map-carried pins stay out even when they scan', () => {
     const scanners = treeScanners(live, read).map((s) => s.file);
     for (const f of PIN_MAP_CARRIED) expect(scanners, f).not.toContain(f);
+  });
+});
+
+describe('the tree-scan capture (tree-scanners.mjs): what a full run records, and how the plan reads it', () => {
+  /** Runs `fn` with fs's listers wrapped (and the ESM named imports synced), answering the roots it listed. */
+  const captured = async (fn: () => unknown): Promise<string[]> => {
+    const roots = new Set<string>();
+    const match = rootOf(ROOT);
+    const restore = wrapListers(fs, (listed: unknown, cwd: string | undefined) => { const r = match(listed, cwd); if (r) roots.add(r); });
+    syncBuiltinESMExports();
+    try { await fn(); } finally { restore(); syncBuiltinESMExports(); }
+    return [...roots].sort();
+  };
+
+  it('a test that lists path.dirname(CCD) is recorded as a ccd scan, through the named import too', async () => {
+    const CCD = path.join(ROOT, 'ccd', 'ccd');
+    expect(await captured(() => readdirSync(path.dirname(CCD)))).toEqual(['ccd']);
+    expect(await captured(() => fs.promises.readdir(path.join(ROOT, 'server', 'src', 'coord')))).toEqual(['server/src']);
+    expect(await captured(() => fs.globSync('**/*.ts', { cwd: path.join(ROOT, 'pwa', 'src') }))).toEqual(['pwa/src']);
+    expect(await captured(() => fs.opendirSync(path.join(ROOT, 'shared')).closeSync())).toEqual(['shared']);
+    // A listing that throws is still a listing, and the error reaches the caller unchanged.
+    let err: unknown = null;
+    expect(await captured(() => { try { readdirSync(path.join(ROOT, 'agent', 'src', 'no-such-dir')); } catch (e) { err = e; } })).toEqual(['agent/src']);
+    expect((err as NodeJS.ErrnoException).code).toBe('ENOENT');
+    // Under the full run's own capture (fs already wrapped), a second capture records too, and both see the listing.
+    let inner: string[] = [];
+    expect(await captured(async () => { inner = await captured(() => readdirSync(path.join(ROOT, 'shared'))); })).toEqual(['shared']);
+    expect(inner).toEqual(['shared']);
+  });
+
+  it('a fixture temp dir is not recorded, even one holding a ccd/ or server/src', async () => {
+    const box = mkdtempSync(path.join(tmpdir(), 'ccrc-scan-fixture-'));
+    mkdirSync(path.join(box, 'ccd'));
+    mkdirSync(path.join(box, 'server', 'src'), { recursive: true });
+    expect(await captured(() => { readdirSync(path.join(box, 'ccd')); readdirSync(path.join(box, 'server', 'src')); readdirSync(box); })).toEqual([]);
+    // Nor a file or directory outside the five roots, nor a read that lists nothing.
+    expect(await captured(() => { readdirSync(path.join(ROOT, 'docs')); readFileSync(path.join(ROOT, 'shared', 'api.ts')); })).toEqual([]);
+    // A repository that itself sits in the temp tree still has its roots.
+    const repo = mkdtempSync(path.join(tmpdir(), 'ccrc-scan-repo-'));
+    expect(rootOf(repo, tmpdir())(path.join(repo, 'ccd'))).toBe('ccd');
+    expect(rootOf(repo, tmpdir())(path.join(box, 'ccd'))).toBeNull();
+  });
+
+  it('globBase, the shard lines and their merge', () => {
+    expect(globBase('**/*.ts')).toBe('.');
+    expect(globBase('server/src/**/*.ts')).toBe('server/src');
+    expect(globBase('/abs/ccd/*')).toBe('/abs/ccd');
+    const lines = parseScanLines('{"file":"server/test/a.test.ts","roots":["ccd"]}\n{torn\n{"file":"server/test/a.test.ts","roots":["shared"]}\n{"file":"server/test/b.test.ts","roots":["docs"]}\n');
+    expect(lines).toHaveLength(2);
+    expect(mergeScans(lines)).toEqual({ 'server/test/a.test.ts': ['ccd', 'shared'] });
+    // The CLI times-build runs: every shard's lines into one { file: roots }, which readTreeScanners reads back.
+    const dir = mkdtempSync(path.join(tmpdir(), 'ccrc-scans-merge-'));
+    writeFileSync(path.join(dir, '1.jsonl'), '{"file":"server/test/a.test.ts","roots":["ccd"]}\n');
+    writeFileSync(path.join(dir, '2.jsonl'), '{"file":"server/test/b.test.ts","roots":["server/src"]}\n{"file":"server/test/a.test.ts","roots":["ccd"]}\n');
+    const r = spawnSync('node', [path.join(ROOT, '.github', 'ci', 'tree-scanners.mjs'), 'merge', '--out', path.join(dir, 'out', 'tree-scanners.json'), path.join(dir, '1.jsonl'), path.join(dir, '2.jsonl')], { encoding: 'utf8' });
+    expect(r.status, r.stderr).toBe(0);
+    expect(readTreeScanners(path.join(dir, 'out', 'tree-scanners.json'))).toEqual({ 'server/test/a.test.ts': ['ccd'], 'server/test/b.test.ts': ['server/src'] });
+    expect(spawnSync('node', [path.join(ROOT, '.github', 'ci', 'tree-scanners.mjs'), 'merge', '--out', path.join(dir, 'x.json')], { encoding: 'utf8' }).status).not.toBe(0);
+  });
+
+  it('readTreeScanners reads the artifact, and answers null when it is missing or not that shape', () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'ccrc-tree-scanners-'));
+    const ok = path.join(dir, 'ok.json');
+    writeFileSync(ok, JSON.stringify({ 'server/test/a.test.ts': ['server/src'] }));
+    expect(readTreeScanners(ok)).toEqual({ 'server/test/a.test.ts': ['server/src'] });
+    expect(readTreeScanners(path.join(dir, 'missing.json'))).toBeNull();
+    expect(readTreeScanners(undefined)).toBeNull();
+    for (const [name, body] of [['torn', '{'], ['list', '[]'], ['root', '{"server/test/a.test.ts":["docs"]}'], ['key', '{"/etc/x":["ccd"]}']]) {
+      writeFileSync(path.join(dir, `${name}.json`), body);
+      expect(readTreeScanners(path.join(dir, `${name}.json`)), name).toBeNull();
+    }
+  });
+
+  it('the plan adds every recorded scanner under SCANNER_MAX_MS, and only those; a missing artifact falls back to static', () => {
+    const live = liveTestFiles(ROOT);
+    const read = (f: string): string => readFileSync(path.join(ROOT, f), 'utf8');
+    // tmp-sweep is no scanner to the static detector; recorded, it is one. fleetio-contract is a static scanner the
+    // recording left out: the record replaces the detector, it does not add to it.
+    const recordedOnly = 'server/test/tmp-sweep.test.ts';
+    const staticOnly = 'server/test/fleetio-contract.test.ts';
+    const heavy = 'server/test/ccrc-sweep-window.test.ts';
+    expect(scansSourceTree(recordedOnly, read)).toBeNull();
+    const recorded = { [recordedOnly]: ['server/src'], [heavy]: ['ccd'] };
+    const guards = guardTests(live, read, { [heavy]: SCANNER_MAX_MS + 1 }, recorded);
+    expect(guards).toContain(recordedOnly);
+    expect(guards).not.toContain(staticOnly);
+    expect(guards).not.toContain(heavy);
+    expect(treeScanners(live, read, null, recorded).map((t) => t.file).sort()).toEqual([heavy, recordedOnly].sort());
+    // The pattern guards and the tree readers stay, whatever was recorded.
+    expect(guards).toContain('server/test/deviation-refs.test.ts');
+    // No artifact (or an unreadable one): the static detector, exactly as before.
+    const fallback = guardTests(live, read, null, readTreeScanners(path.join(tmpdir(), 'no-such-tree-scanners.json')));
+    expect(fallback).toEqual(guardTests(live, read));
+    expect(fallback).toContain(staticOnly);
+    expect(fallback).not.toContain(recordedOnly);
   });
 });
 
@@ -365,6 +452,21 @@ describe('fast-plan.mjs: the CLI plans the shards, and falls back rather than an
     expect(r.out.server_matrix).toBe('{"include":[{"shard":1}]}');
     expect(r.out.count).toBe('9');
     expect(r.out.fallback).not.toBe('');
+  });
+
+  it('--scanners hands in the recorded tree scanners; a missing file plans as without it', () => {
+    const dir = repo();
+    const rel = path.join(dir, '..', `rel-${path.basename(dir)}.json`);
+    writeFileSync(rel, '[]');
+    const scanners = path.join(dir, '..', `scanners-${path.basename(dir)}.json`);
+    writeFileSync(scanners, JSON.stringify({ 'server/test/a.test.ts': ['server/src'] }));
+    const r = run(dir, rel, ['--fallback-matrix', '{"include":[]}', '--fallback-count', '9', '--scanners', scanners]);
+    expect(r.status).toBe(0);
+    expect(r.out.count).toBe(String(GUARDS.length + 3));
+    expect(r.out.server_matrix).toContain('test/a.test.ts');
+    const none = run(dir, rel, ['--fallback-matrix', '{"include":[]}', '--fallback-count', '9', '--scanners', path.join(dir, 'missing.json')]);
+    expect(none.out.count).toBe(String(GUARDS.length + 2));
+    expect(none.out.server_matrix).not.toContain('test/a.test.ts');
   });
 
   it('a failure with no fallback handed in fails the step: never a green over nothing', () => {
