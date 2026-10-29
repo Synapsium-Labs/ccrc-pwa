@@ -332,7 +332,7 @@ const GATES = {
   },
   /** The child-reclaim executor defers a bad id before either of its builders. */
   'child-reclaim-outcome': {
-    file: 'coord/childReclaim.ts', scope: 'childReclaimOutcome',
+    file: 'coord/childReclaim.ts', scope: 'childSpentRecordJudge',
     re: /deferred\('marker-unreadable', 'the session id is not a registry id'\)/,
   },
   /** The stale-archive act asks the capability once more, nearest the argv, after `rowNow` re-read the row. */
