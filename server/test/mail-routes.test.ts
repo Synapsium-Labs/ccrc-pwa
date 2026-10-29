@@ -671,6 +671,13 @@ describe('the rejection table is total, in both directions', () => {
       'wave-done-rejected',   // mail SUBJECT text (close's own rejection)
       'wave-advance-rejected', // mail SUBJECT text (advance's own rejection, review findings 1/15)
       'review-done-rejected', // mail SUBJECT text (the review close's own rejection, design 2026-09-14)
+      // LANDING ORDER WAVE 4, Task 2: the radar-timing answer's three mail SUBJECTS (`closeDecide.ts`'s
+      // `doneRejectionMail`), beside the three refusal subjects above, and `measured.via`'s one word. Subjects are
+      // mail text, never a wire code; the code they carry, `lineage-unmeasured`, is a `MAIL_REJECT_CODES` member.
+      'wave-done-unmeasured',
+      'wave-advance-unmeasured',
+      'review-done-unmeasured',
+      'base-only-merge',      // `fingerprint.ts`'s `measured.via`: a server-internal verdict word, answered on the wire as `verifiedHead`
       'awaiting-review',      // a RunState value (advance's own target list), not a mail code
       'enter-ignored',        // a `SendResult` error (`inject/send.ts`), reached here as
                               // half of `rundefs.ts`'s `CLEAR_REFUSED_STRANDS_TEXT` — the

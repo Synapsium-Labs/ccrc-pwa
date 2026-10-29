@@ -85,7 +85,7 @@ import {
   splitDeadCoordinatorBreakerHeld, type DeadAnchor, type DeadCoordinatorBreakerMember, type DeadCoordinatorJournalRow,
 } from '../deadCoordinator.js';
 import {
-  CLAIM_HARD_CAP_MS, CLAIM_LEASE_MS, DONE_AUTHORITY_CODES, REVIEW_DONE_SUBJECT,
+  CLAIM_HARD_CAP_MS, CLAIM_LEASE_MS, DONE_REFUSAL_CODES, REVIEW_DONE_SUBJECT,
   isAskReleaseReason, isAskState, isClaimState, isDeviationAllocState, isLifecycleAct, isLifecycleGapReason,
   isLifecycleOutcome,
   isMailDeliveryState, isMailGate, isMailKind, isNotifyKind, isProgramState, isRunKind, isRunState,
@@ -4538,8 +4538,10 @@ export class CoordStore {
 
   /**
    * THE ONE COUNT of a run's refused wave-dones — the `mail_rejections` rows
-   * `closeRun` writes through `recordRejection` with a `DONE_AUTHORITY_CODES`
-   * code — and, riding the same statement, the newest one's code.
+   * `closeRun` writes through `recordRejection` with a `DONE_REFUSAL_CODES`
+   * code (the done-authority codes less `lineage-unmeasured`, which is the
+   * radar's timing and no refusal, D-7107) — and, riding the same statement,
+   * the newest one's code.
    *
    * Private because it is a measurement two PUBLIC surfaces must agree on, not
    * a surface of its own: `runHealth`'s `doneRejects`/`lastRejectCode` (what
@@ -4570,13 +4572,13 @@ export class CoordStore {
     // syntax error.
     if (runIds.length === 0) return out;
     const ph = placeholders(runIds.length);
-    const codes = placeholders(DONE_AUTHORITY_CODES.length);
+    const codes = placeholders(DONE_REFUSAL_CODES.length);
     for (const row of this.db.prepare(
       'SELECT r.runId AS runId, count(*) AS c, ' +
       '(SELECT x.code FROM mail_rejections x WHERE x.runId = r.runId ' +
       `AND x.code IN (${codes}) ORDER BY x.at DESC, x.id DESC LIMIT 1) AS lastCode ` +
       `FROM mail_rejections r WHERE r.runId IN (${ph}) AND r.code IN (${codes}) GROUP BY r.runId`,
-    ).all(...DONE_AUTHORITY_CODES, ...runIds, ...DONE_AUTHORITY_CODES) as unknown as
+    ).all(...DONE_REFUSAL_CODES, ...runIds, ...DONE_REFUSAL_CODES) as unknown as
       { runId: number; c: number; lastCode: string | null }[]) {
       out.set(row.runId, { count: row.c, lastCode: row.lastCode });
     }

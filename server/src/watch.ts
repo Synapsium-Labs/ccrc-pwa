@@ -8357,9 +8357,9 @@ export class FleetWatcher {
       try {
         const facts: LandingFacts = {};
         let run: OpenSibling | null = null;
-        // ENDS: every step that is not an end records one fact (`runs`, `coordinator`, `runState`, `told`) that
-        // `landingVerdict` then reads as made, and the facts have those four keys (`told` once: the mail proof or
-        // the feed proof, never both), so at most four reads precede an end. The switch is exhaustive: a new step
+        // ENDS: every step that is not an end records one fact (`runs`, `coordinator`, `runState`, `told`, `head`) that
+        // `landingVerdict` then reads as made, and the facts have those five keys (`told` once: the mail proof or
+        // the feed proof, never both), so at most five reads precede an end. The switch is exhaustive: a new step
         // kind is a compile error here, never a silent delivery.
         steps: for (;;) {
           const s = landingVerdict(ask, facts);
@@ -8382,6 +8382,10 @@ export class FleetWatcher {
             }
             case 'toldMail':
               facts.told = coord.hasMailWithSubject('operator', s.runId, s.toId, s.subject);
+              break;
+            case 'head':
+              // The head the advance verified (the live tip after a lineage accept), carried into the brief as a value.
+              facts.head = coord.currentEpisode(s.runId)?.head ?? null;
               break;
             case 'toldFeed':
               facts.told = coord.hasNotice('queue', r.id, s.key, s.body);

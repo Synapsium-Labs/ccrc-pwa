@@ -90,7 +90,7 @@ describe('landingVerdict — a dequeue', () => {
   });
 
   it('open run + coordinator, not yet told: a status mail from the operator AND the feed record', () => {
-    const v = step(ask(), { runs: { ok: true, run: { id: 7 } }, coordinator: COORD, told: false });
+    const v = step(ask(), { runs: { ok: true, run: { id: 7 } }, coordinator: COORD, told: false, head: null });
     expect(v).toEqual({
       step: 'deliver',
       mail: { fromId: 'operator', toId: COORD, runId: 7, kind: 'status',
@@ -132,7 +132,7 @@ describe('landingVerdict — a dequeue', () => {
 
   it('a removal without a time falls back to the subject per PR, and says so in the record', () => {
     const a = ask({ queue: { state: 'dequeued', at: null } });
-    const v = step(a, { runs: { ok: true, run: { id: 7 } }, coordinator: COORD, told: false });
+    const v = step(a, { runs: { ok: true, run: { id: 7 } }, coordinator: COORD, told: false, head: null });
     expect(v).toMatchObject({ mail: { subject: dequeuedSubject(42, null) },
       record: { body: `PR #42 left the merge queue without landing; GitHub does not re-enqueue it. Mailed coordinator ${COORD}.` } });
   });
@@ -163,7 +163,8 @@ describe('landingVerdict — a merge', () => {
   it('merging: asks for the mail-subject proof, then mails merged:#<n> and records nothing', () => {
     const f: LandingFacts = { runs, coordinator: COORD, runState: { ok: true, state: 'merging' } };
     expect(step(merged(), f)).toEqual({ step: 'toldMail', runId: 7, toId: COORD, subject: mergedSubject(42) });
-    expect(step(merged(), { ...f, told: false })).toEqual({
+    expect(step(merged(), { ...f, told: false })).toEqual({ step: 'head', runId: 7 });
+    expect(step(merged(), { ...f, told: false, head: null })).toEqual({
       step: 'deliver',
       mail: { fromId: 'operator', toId: COORD, runId: 7, kind: 'status',
         subject: mergedSubject(42), body: renderMergedBrief(ID, 42) },
@@ -181,6 +182,47 @@ describe('landingVerdict — a merge', () => {
   it('already told (durable): latch, say nothing', () => {
     expect(step(merged(), { runs, coordinator: COORD, runState: { ok: true, state: 'merging' }, told: true }))
       .toEqual({ step: 'latch' });
+  });
+});
+
+describe('landingVerdict — the episode head (landing order wave 4, D-7102)', () => {
+  const runs: LandingFacts['runs'] = { ok: true, run: { id: 7 } };
+  const HEAD = 'c'.repeat(40);
+
+  it('a dequeue that names a coordinator reads the episode head once, after "not told" and before the mail', () => {
+    const f: LandingFacts = { runs, coordinator: COORD, told: false };
+    expect(step(ask(), f)).toEqual({ step: 'head', runId: 7 });
+    expect(step(ask(), { ...f, head: HEAD })).toMatchObject({ step: 'deliver', mail: { body: renderDequeueBrief(ID, 42, HEAD) } });
+  });
+
+  it('a dequeue with nobody to mail reads no head: the record alone is delivered', () => {
+    expect(step(ask(), { runs: { ok: true, run: null }, told: false })).toMatchObject({ step: 'deliver', mail: null });
+    expect(step(ask(), { runs, coordinator: null, told: false })).toMatchObject({ step: 'deliver', mail: null });
+  });
+
+  it('a notice that ends without a mail reads no head: told already, or not at merging', () => {
+    expect(step(ask(), { runs, coordinator: COORD, told: true })).toEqual({ step: 'latch' });
+    expect(step(merged(), { runs, coordinator: COORD, runState: { ok: true, state: 'working' } })).toEqual({ step: 'latch' });
+  });
+
+  it('the dequeue brief prints the episode head as a value; the merged brief does too', () => {
+    const d = step(ask(), { runs, coordinator: COORD, told: false, head: HEAD });
+    const m = step(merged(), { runs, coordinator: COORD, runState: { ok: true, state: 'merging' }, told: false, head: HEAD });
+    for (const v of [d, m]) {
+      expect(v.step).toBe('deliver');
+      const body = v.step === 'deliver' ? v.mail?.body ?? '' : '';
+      expect(body).toContain(`recorded head (its verified handoffCommit) is \`${HEAD}\``);
+    }
+    expect(m).toMatchObject({ mail: { body: renderMergedBrief(ID, 42, HEAD) } });
+  });
+
+  it('with no episode head, or one that is no 40-hex sha, a brief prints exactly the text it always did', () => {
+    expect(renderDequeueBrief(ID, 42, null)).toBe(renderDequeueBrief(ID, 42));
+    expect(renderMergedBrief(ID, 42, null)).toBe(renderMergedBrief(ID, 42));
+    expect(renderDequeueBrief(ID, 42, 'not-a-sha')).toBe(renderDequeueBrief(ID, 42));
+    expect(renderMergedBrief(ID, 42, 'C'.repeat(40))).toBe(renderMergedBrief(ID, 42));
+    expect(renderDequeueBrief(ID, 42)).not.toContain('recorded head');
+    expect(renderMergedBrief(ID, 42)).not.toContain('recorded head');
   });
 });
 

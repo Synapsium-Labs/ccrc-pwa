@@ -20,7 +20,7 @@ import { GITHUB_TEXT_PREFACE, untrustedBlock } from './untrusted.js';
  * TWO FUNCTIONS, because the reads depend on earlier answers (the coordinator is asked of a run the survivor pick
  * returned; "already told" is asked of a subject and a coordinator). `landingAsk` answers what the line asks for.
  * `landingVerdict` is then called with the facts read SO FAR and answers the next step: a read it still needs
- * (`runs`, `coordinator`, `runState`, `toldMail`, `toldFeed`), or an end (`defer`, `latch`, `deliver`). The caller
+ * (`runs`, `coordinator`, `runState`, `toldMail`, `toldFeed`, `head`), or an end (`defer`, `latch`, `deliver`). The caller
  * performs the step, records the answer in the facts, and asks again. Reads happen in exactly the order the lane
  * always made them, and nothing is read that no decision needs. Step names are single words on purpose:
  * `mail-routes.test.ts` scans this directory for quoted kebab words.
@@ -99,6 +99,11 @@ export interface LandingFacts {
   /** The durable "already told" answer: a mail through `hasMailWithSubject` when a coordinator is named, the feed
    *  notice's key through `hasNotice` when none is (D-5860). */
   told?: boolean;
+  /** The survivor run's current episode head (`currentEpisode(run.id).head`): the head the advance VERIFIED, which is
+   *  the live tip when it accepted a claim through the radar's lineage (landing order wave 4, D-7102). `null` is a run
+   *  with no episode head, and its brief prints exactly the text it always did. Read once, just before a mail is
+   *  composed, and never for a notice that ends without one. */
+  head?: string | null;
 }
 
 export interface LandingMail {
@@ -116,6 +121,8 @@ export type LandingStep =
   | { step: 'coordinator'; runId: number }
   | { step: 'runState'; runId: number }
   | { step: 'toldMail'; runId: number; toId: string; subject: string }
+  /** The episode head the mail's brief prints, read from the run's current episode. */
+  | { step: 'head'; runId: number }
   /** D-5860: `key` is read first (`hasNotice`); `body` matches only a row archived before the key existed. */
   | { step: 'toldFeed'; key: string; body: string }
   /** Say a warning, latch NOTHING: the next sweep re-reads. */
@@ -146,9 +153,10 @@ export function landingVerdict(a: LandingAsk, f: LandingFacts): LandingStep {
     const subject = mergedSubject(a.number);
     if (f.told === undefined) return { step: 'toldMail', runId: run.id, toId: coordinator, subject };
     if (f.told) return LATCH;
+    if (f.head === undefined) return { step: 'head', runId: run.id };
     return { step: 'deliver',
       mail: { fromId: 'operator', toId: coordinator, runId: run.id, kind: 'status',
-        subject, body: renderMergedBrief(a.sessionId, a.number) },
+        subject, body: renderMergedBrief(a.sessionId, a.number, f.head) },
       record: null };
   }
   const subject = dequeuedSubject(a.number, a.at);
@@ -160,10 +168,11 @@ export function landingVerdict(a: LandingAsk, f: LandingFacts): LandingStep {
     return named ? { step: 'toldMail', runId: run.id, toId: coordinator, subject } : { step: 'toldFeed', key: a.key, body };
   }
   if (f.told) return LATCH;
+  if (named && f.head === undefined) return { step: 'head', runId: run.id };
   return { step: 'deliver',
     mail: named
       ? { fromId: 'operator', toId: coordinator, runId: run.id, kind: 'status',
-          subject, body: renderDequeueBrief(a.sessionId, a.number) }
+          subject, body: renderDequeueBrief(a.sessionId, a.number, f.head ?? null) }
       : null,
     // `recordAlways`: the record of a removal is never presence-gated.
     record: { title: `⤺ dequeued › ${a.workspace}`, body, runId: run?.id ?? null,
@@ -171,6 +180,14 @@ export function landingVerdict(a: LandingAsk, f: LandingFacts): LandingStep {
 }
 
 // ── the notice bodies ─────────────────────────────────────────────────────────────────────────────────────────
+
+/** The line that carries the run's recorded head into a brief as a VALUE (landing order wave 4, D-7102), so a
+ *  coordinator that ended its turn still has it: the advance verified it, and on an advance accepted through the
+ *  radar's lineage it is the live tip, not the claim. Empty for no head (or a head that is no 40-hex sha), so such a
+ *  brief reads exactly as it always did. */
+function recordedHeadLine(head: string | null, use: string): string {
+  return head !== null && isHead40(head) ? `The run's recorded head (its verified handoffCommit) is \`${head}\`: ${use}.\n` : '';
+}
 
 /** The dequeue notice's body. Every value in it is this server's own — a PR
  *  number, a registry-validated session id — and nothing GitHub wrote (the
@@ -180,9 +197,10 @@ export function landingVerdict(a: LandingAsk, f: LandingFacts): LandingStep {
  *  queue branch's commit, which the PR head's checks never include, so they
  *  can read green while the queue reads red. A fix round disarms first: an
  *  armed auto-merge would queue whatever head the round pushes. */
-export function renderDequeueBrief(sessionId: string, pr: number): string {
+export function renderDequeueBrief(sessionId: string, pr: number, head: string | null = null): string {
   return `PR #${pr} (workspace \`${sessionId}\`) was removed from this repository's merge queue without landing. ` +
     `GitHub does not re-enqueue a PR after a failed group.\n` +
+    recordedHeadLine(head, 'use it for `<handoffCommit>` below') +
     `Read why from the QUEUE's own CI run, not the PR's checks — they ran on a different commit and can read green: ` +
     `\`gh run list --event merge_group --limit 20 --json databaseId,headBranch,conclusion\` finds it by its ` +
     `\`headBranch\` (\`gh-readonly-queue/<base>/pr-${pr}-…\`), \`gh run view <id> --log-failed\` says why, and ` +
@@ -197,8 +215,9 @@ export function renderDequeueBrief(sessionId: string, pr: number): string {
 /** The merged notice's body — the same provenance rule as the dequeue's. It
  *  asks for the merge PROOF before the close, because a merged PR is not yet
  *  proof that the exact head the review read is the one that landed. */
-export function renderMergedBrief(sessionId: string, pr: number): string {
+export function renderMergedBrief(sessionId: string, pr: number, head: string | null = null): string {
   return `PR #${pr} (workspace \`${sessionId}\`) merged while its run waited at \`merging\`.\n` +
+    recordedHeadLine(head, 'the head the merge must have landed at') +
     `Prove it from your own shell — \`gh pr view ${pr} --json state,headRefOid\` answers MERGED with ` +
     `\`headRefOid\` equal to the run's verified handoffCommit — then close the run as ` +
     `references/wave-lifecycle.md §5 closes a producer.\n\n` +

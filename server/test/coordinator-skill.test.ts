@@ -3531,3 +3531,80 @@ describe('wave-lifecycle route default (D-6794)', () => {
     expect(text).not.toContain('sends the identical bare argv it always has');
   });
 });
+
+// Landing order wave 4, Task 2: the coordinator text for the lineage step. Every sentence below is pinned VERBATIM with
+// its server behaviour (`fingerprint.ts`'s lineage step, `closeDecide.ts`'s `doneRejectionMail`, `routes.ts`'s
+// `verifiedHead`), and holds no double quote, like every pinned clause. The code census above
+// ('mentions every declared MailRejectCode') is what requires the word at all; these pin what the skill says of it.
+describe('landing order wave 4: the lineage-unmeasured text, the recorded head and the brief\'s opt-in', () => {
+  const wl = flat(refs('wave-lifecycle.md'));
+  const step6 = (): string => {
+    const start = skill.indexOf('6. **Rule on the report**');
+    expect(start, 'SKILL.md lost step 6').toBeGreaterThanOrEqual(0);
+    return flat(skill.slice(start, skill.indexOf('**Same project:**', start)));
+  };
+
+  it('the reject.code table explains the word: a wait, mailed by the server, re-sent by the sender, no rejected: mail from the coordinator', () => {
+    expect(wl).toContain('| `lineage-unmeasured` | in a project the operator opted in to the radar\'s lineage, the live tip is not the claim and the radar has not yet measured the clean merges between them. ' +
+      'It is a wait, not a refusal: the server has already mailed the claim\'s sender, which re-sends the same claim unchanged after the radar\'s next tick. ' +
+      'The advance and the work close mail the worker, and the review close mails the reviewer. ' +
+      'You send no `rejected:` mail for it, and you act only when the sender reports it twice.');
+  });
+
+  it('the paragraph after the rejected: instruction carves the word out, naming the server\'s three subjects', () => {
+    expect(wl).toContain('**Except `lineage-unmeasured`.** The server has already mailed that answer to whoever sent the claim, under its own subject ' +
+      '(`wave-done-unmeasured`, `wave-advance-unmeasured` or `review-done-unmeasured`), so send no `rejected: lineage-unmeasured` mail. ' +
+      'The sender re-sends the same claim after the radar\'s next tick, and you act only when it reports the answer twice.');
+    // The carve-out comes after the instruction it carves out of, and before the detail paragraph.
+    const at = (needle: string): number => wl.indexOf(needle);
+    expect(at('**Except `lineage-unmeasured`.**')).toBeGreaterThan(at('A stale `wave-done` must never settle a wave.'));
+    expect(at('**Except `lineage-unmeasured`.**')).toBeLessThan(at('**Put `reject.detail` in that mail\'s body, verbatim.**'));
+  });
+
+  it('SKILL.md step 6 says the three things: never a failed review run, what stale-review means in an opted-in project, and TIP MOVED', () => {
+    const six = step6();
+    expect(six).toContain('`lineage-unmeasured` on a review close is never a failed review run: the server has already mailed the reviewer, ' +
+      'who re-sends its unchanged `review-done` after the radar\'s next tick, so close nothing, open nothing and send no `rejected:` mail until it does.');
+    expect(six).toContain('In a project the brief names as opted in to the radar\'s lineage, `stale-review` means a push the lineage could not prove clean; ' +
+      'everywhere else it means what it means today.');
+    expect(six).toContain('A report whose first line is `TIP MOVED` is never ruled on, even when its close was accepted.');
+  });
+
+  it('the recorded head is defined ONCE, before §5\'s first <handoffCommit> spelling', () => {
+    const rule = 'In §5 and §5b, `<handoffCommit>` is the recorded head: the advance answer\'s `verifiedHead` when present, ' +
+      'otherwise the head the server\'s dequeue or merged brief prints.';
+    expect(wl).toContain(rule);
+    expect(wl.split(rule), 'the rule is written once').toHaveLength(2);
+    const five = wl.indexOf('## 5 — The boundary');
+    expect(five).toBeGreaterThanOrEqual(0);
+    expect(wl.indexOf(rule), 'the rule sits in §5').toBeGreaterThan(five);
+    expect(wl.indexOf(rule), 'the rule comes before the first <handoffCommit> spelling of §5').toBeLessThan(wl.indexOf('<handoffCommit>', five));
+    expect(wl).toContain('An advance answer with no `verifiedHead` means the claim you submitted was itself the verified head.');
+  });
+
+  it('the verdict block itself is untouched by the rule: it still takes PR=<pr> HC=<handoffCommit> and holds no verifiedHead', () => {
+    const text = refs('wave-lifecycle.md');
+    const open = text.indexOf('( # The landing verdict');
+    const block = text.slice(open, text.indexOf('\n)\n```', open));
+    expect(block).toContain('PR=<pr> HC=<handoffCommit>');
+    expect(block).not.toContain('verifiedHead');
+  });
+
+  it('a brief for a project whose enabled marker exists names the opt-in and the radar\'s base', () => {
+    expect(wl).toContain('A brief for a project whose `$REG/landing/<project>/enabled` exists names the opt-in and the radar\'s base. ' +
+      'The worker\'s clause 9 exception and the reviewer\'s clause 3 exception apply only where the brief says so, and a brief for any other project says nothing of them.');
+  });
+
+  it('no new sentence carries a double quote, and the word is in the corpus the census reads', () => {
+    for (const code of ['lineage-unmeasured']) expect(allSkillText).toContain(code);
+    for (const s of [
+      'It is a wait, not a refusal', 'Except `lineage-unmeasured`', 'is never a failed review run', 'is never ruled on, even when its close was accepted',
+      'is the recorded head', 'names the opt-in and the radar\'s base',
+    ]) {
+      const at = allSkillText.indexOf(s);
+      expect(at, s).toBeGreaterThanOrEqual(0);
+      const sentence = allSkillText.slice(at, allSkillText.indexOf('. ', at));
+      expect(sentence, `a double quote in the sentence beginning ${s}`).not.toContain('"');
+    }
+  });
+});

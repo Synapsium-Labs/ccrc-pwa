@@ -429,6 +429,8 @@ when you re-measure it, and a brief, a ledger entry or a review note may cite
 the branch name and expect it to resolve. Releasing the hold (or closing every
 run naming the session) un-freezes it, and the next sweep may rename it then.
 
+**A brief for an opted-in project says so.** A brief for a project whose `$REG/landing/<project>/enabled` exists names the opt-in and the radar's base. The worker's clause 9 exception and the reviewer's clause 3 exception apply only where the brief says so, and a brief for any other project says nothing of them.
+
 Then **end your turn.** Do not sleep-poll. Do not "check in five minutes". The
 delivery lane will inject the worker's mail into your session when it is idle,
 and that injection is your next turn.
@@ -618,6 +620,7 @@ same, and shows as `absent`.
 | `cap-review-rounds` | on an OPEN of a review run: the work run already has three review runs, in any state. The server raised one ask to the operator carrying the run, its round count and the last review's open findings (the refusal body carries the same under `ask`). Do not retry the open and do not look for another way to start a review: the operator lifts the cap per run, and a further open then succeeds. Meanwhile rule on the findings you already hold. |
 | `stale-review` | the reviewed branch's live tip is not the `reviewedTip` the report describes — the worker pushed after wave-done, or the report is about an older tip. Do not rule on it: close the review run with body `{"state":"failed"}` (no fingerprint needed), mail the worker the code and detail verbatim, and open a fresh review run against the live tip once its re-measured wave-done arrives. (A malformed `reviewedTip` reaching the verifier directly also answers this code, but the close route refuses that shape as `bad-request` first.) |
 | `report-unreadable` | the report path the reviewer named cannot be opened — absent or unreadable. Close the review run with body `{"state":"failed"}` (no fingerprint needed) and open a new one; the reviewer's clause 7 says the report is written by temp-then-rename, so a half-written file is never the cause. |
+| `lineage-unmeasured` | in a project the operator opted in to the radar's lineage, the live tip is not the claim and the radar has not yet measured the clean merges between them. It is a wait, not a refusal: the server has already mailed the claim's sender, which re-sends the same claim unchanged after the radar's next tick. The advance and the work close mail the worker, and the review close mails the reviewer. You send no `rejected:` mail for it, and you act only when the sender reports it twice. `detail` says why (`not-yet-measured`, `lineage-stale`, `older-than-the-live-tip` and the like). |
 
 **`pr-unmeasurable` has two causes, and they need different responses.** The
 server returns it both for a transient re-read failure (`detail` reads like
@@ -638,6 +641,8 @@ Mail the code back to the worker — `POST /api/mail` (§3's body shape), kind
 `answer`, subject `rejected: <code>`, `toId` the worker's session id, `runId`
 this run's id — and leave the run alone. A stale `wave-done` must never
 settle a wave.
+
+**Except `lineage-unmeasured`.** The server has already mailed that answer to whoever sent the claim, under its own subject (`wave-done-unmeasured`, `wave-advance-unmeasured` or `review-done-unmeasured`), so send no `rejected: lineage-unmeasured` mail. The sender re-sends the same claim after the radar's next tick, and you act only when it reports the answer twice.
 
 **Put `reject.detail` in that mail's body, verbatim.** The code alone is not
 always the whole message: `pr-unmeasurable` above means two different things —
@@ -739,6 +744,8 @@ an operator/DB act, not a client one — or address the mail with an explicit
 `resolveCoordinator(runId)` answers off that run's own claim regardless of
 program state. **Open first** — the new run keeps the count above zero the
 whole time, which is the only prevention this ordering rule buys.
+
+**The recorded head.** In §5 and §5b, `<handoffCommit>` is the recorded head: the advance answer's `verifiedHead` when present, otherwise the head the server's dequeue or merged brief prints. An advance answer with no `verifiedHead` means the claim you submitted was itself the verified head. On a project the operator opted in to the radar's lineage the recorded head can be the live tip rather than the tip the worker claimed, and it is the head every spelling below binds: the native-queue enqueue, the spent-producer arm and the MERGED proof.
 
 1. Dispatch a review run and rule on its report (SKILL.md steps 5–6, clause 12); this session never reads the diff itself.
 2. Update the ledger — Waves row, Decisions, Carried constraints, and the

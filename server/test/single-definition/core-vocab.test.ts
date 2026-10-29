@@ -339,6 +339,30 @@ describe('Build 7 nouns', () => {
     expect(ALL.filter((f) => COPY.test(readFileSync(f, 'utf8'))).map(rel)).toEqual([]);
   });
 
+  // Landing order wave 4 (D-7107, annex R5). `DONE_REFUSAL_CODES` is the done-authority list LESS `lineage-unmeasured`,
+  // and every refusal count reads it (`closeRefusals`, `firstSubmission`, run health, the PWA chip). A hand-typed copy
+  // is a third spelling of the same members, and the next code added to `DONE_AUTHORITY_CODES` would be counted by one
+  // list and silently not by the other. So it is defined once, in `shared/api.ts`, and BUILT by `.filter` from
+  // `DONE_AUTHORITY_CODES`. The second scan is the hand-typed copy itself: a literal that opens with the authority
+  // list's first two members, anchored the way the case above anchors its `Extract` copy, so a reorder cannot slip past.
+  it('defines DONE_REFUSAL_CODES exactly once, built by .filter from DONE_AUTHORITY_CODES, and never as a literal copy', () => {
+    const DEF = /^\s*export const DONE_REFUSAL_CODES\b/m;
+    const BUILT = /^export const DONE_REFUSAL_CODES\b[^=]*=\s*DONE_AUTHORITY_CODES\s*\.filter\(/m;
+    const LITERAL_COPY = /\[\s*'stale-tip'\s*,\s*'tip-unmeasurable'/g;
+    // CONTROL: the scans see what they claim to see, so a green run is not an empty one.
+    expect(BUILT.test("export const DONE_REFUSAL_CODES: readonly X[] =\n  DONE_AUTHORITY_CODES.filter((c) => c !== 'y');")).toBe(true);
+    expect(BUILT.test("export const DONE_REFUSAL_CODES = ['stale-tip', 'tip-unmeasurable'] as const;")).toBe(false);
+    expect(BUILT.test('export const DONE_REFUSAL_CODES = DONE_AUTHORITY_CODES;')).toBe(false);
+    expect("const x = ['stale-tip', 'tip-unmeasurable', 'branch-unmeasurable'];".match(LITERAL_COPY)).toHaveLength(1);
+
+    expect(ALL.filter((f) => DEF.test(readFileSync(f, 'utf8'))).map(rel)).toEqual(['shared/api.ts']);
+    const api = readFileSync(path.join(ccrcRoot, 'shared/api.ts'), 'utf8');
+    expect(BUILT.test(api), 'DONE_REFUSAL_CODES is not built by .filter from DONE_AUTHORITY_CODES').toBe(true);
+    // Exactly one literal list opens with the authority list's first two members: DONE_AUTHORITY_CODES' own.
+    const copies = ALL.flatMap((f) => (readFileSync(f, 'utf8').match(LITERAL_COPY) ?? []).map(() => rel(f)));
+    expect(copies, 'a hand-typed copy of the done-authority list').toEqual(['shared/api.ts']);
+  });
+
   // D-1319. `runHealth`'s statement (1) reuses `DELIBERATE_CANCEL_ERRORS_SQL`
   // "rather than respelling the two literals", and said in the same breath that
   // `single-definition.test.ts` forbids the second copy. IT DID NOT — this file

@@ -4640,3 +4640,323 @@ describe('POST /api/runs kind:review (design 2026-09-14 §5.1)', () => {
     expect(events.map((e) => e.toState)).not.toContain('closing');
   });
 });
+
+// ── landing order wave 4: an opted-in project's clean main merge, through the run routes ───────────────────────────
+//
+// A claim T whose branch now sits at L (T plus one clean merge of the base) is ACCEPTED when the radar's lineage says
+// so; the server then binds L, the head it verified, wherever it records or compares a landing head. When the radar
+// has not measured L yet the answer is `lineage-unmeasured`, mailed under its own subject to whoever sent the claim.
+// Everything is a fixture HOME; the existing rows of this file are untouched, and a project with no `enabled` marker
+// answers exactly as they say.
+import { landingLineAct, landingVerdict, renderDequeueBrief, renderMergedBrief, landingAsk } from '../src/coord/landing.js';
+import type { PrLandingLine } from '../src/prstate.js';
+import { DONE_REFUSAL_CODES } from '../../shared/api.js';
+
+describe('an opted-in project: the lineage through the run routes (landing order wave 4)', () => {
+  let app: FastifyInstance | undefined;
+  afterEach(async () => { if (app) await app.close(); app = undefined; });
+
+  const LIVE = OTHER_TIP;                       // the branch now; the claim (TIP) is the first parent of its merge
+  const BASE = 'c'.repeat(40);
+  const SID = 'demo-lin1';
+  const BRANCH = `ws/${SID}`;
+  const nowIso = (offS = 0): string => new Date(Date.now() + offS * 1000).toISOString();
+  const doc = (id: string, branch: string, over: Record<string, unknown> = {}): string => JSON.stringify({
+    v: 1, project: PROJECT, id, at: nowIso(-5), state: 'measured', branch, tip: LIVE, base: BASE,
+    chain: [{ merge: LIVE, p1: TIP, p2: BASE }], stop: 'not-a-merge', ...over });
+  /** Wave 3b's two files, as the radar writes them. `lineage: null` writes none (not yet measured). */
+  const optIn = (home: string, id: string, branch: string, o: { marker?: boolean; lineage?: string | null } = {}): void => {
+    const dir = path.join(home, '.cc-sessions', 'landing', PROJECT);
+    mkdirSync(dir, { recursive: true });
+    if (o.marker !== false) writeFileSync(path.join(dir, 'enabled'), JSON.stringify({ v: 1, project: PROJECT, at: nowIso(-5) }));
+    const l = o.lineage === undefined ? doc(id, branch) : o.lineage;
+    if (l !== null) writeFileSync(path.join(dir, `${id}.lineage`), l);
+  };
+  const CLAIM = { branchTip: TIP, prNumber: 7, prPhase: 'open', handoffCommit: TIP };
+  const openPr = (id: string, branch: string) => ({ ran: true as const, code: 0,
+    stdout: `${ccdLine(id, branch, [prRow(branch, 'OPEN')])}\n`, stderr: '' });
+
+  /** A work run dispatched and `working` on a branch at LIVE, in an opted-in project (unless `marker: false`). */
+  const workRun = async (o: { marker?: boolean; lineage?: string | null; io?: (io: FleetIO) => FleetIO } = {}) => {
+    const home = mkTmp('ccrc-runs-');
+    const root = gitRoot(PROJECT, BRANCH, LIVE);
+    const { run, calls } = makeRunner(home, { wsAddCreates: [SID], prState: openPr(SID, BRANCH) });
+    const base = testDeps(home, run);
+    const w = await openApp(home, run, { cfg: { ...base.cfg, projectsRoot: root },
+      ...(o.io === undefined ? {} : { io: o.io(base.io) }) });
+    app = w.app;
+    const opened = (await postOpen(app)).json() as { id: number };
+    await postDispatch(app, opened.id);
+    optIn(home, SID, BRANCH, o);
+    expect((await postAdvance(app, opened.id, { to: 'working', fingerprint: { branchTip: '', prNumber: null, prPhase: 'none', handoffCommit: '' } })).statusCode).toBe(200);
+    return { ...w, home, root, id: opened.id, calls,
+      advance: (to: string) => postAdvance(app!, opened.id, { to, fingerprint: CLAIM }) };
+  };
+  /** Every mail of a run: its subject, recipient and delivery state. */
+  const mailOf = (coord: CoordStore, runId: number): { subject: string; toId: string; state: string }[] =>
+    coord.db.prepare('SELECT m.subject AS subject, d.toId AS toId, d.state AS state FROM mail m JOIN mail_deliveries d ON d.mailId = m.id ' +
+      'WHERE m.runId = ? ORDER BY m.id').all(runId) as { subject: string; toId: string; state: string }[];
+  const unmeasuredMail = (coord: CoordStore, runId: number) =>
+    mailOf(coord, runId).filter((m) => /-(unmeasured|rejected)$/.test(m.subject));
+
+  describe('an accepted advance binds the head it verified', () => {
+    it('to awaiting-review answers verifiedHead: the live tip', async () => {
+      const f = await workRun();
+      const res = await f.advance('awaiting-review');
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toMatchObject({ ok: true, run: { state: 'awaiting-review' }, verifiedHead: LIVE });
+    });
+
+    it('to merging writes merging-at:<LIVE>:…, answers verifiedHead, and the landing reads edge for a PR head of LIVE', async () => {
+      const f = await workRun();
+      expect((await f.advance('awaiting-review')).statusCode).toBe(200);
+      const res = await f.advance('merging');
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toMatchObject({ ok: true, run: { state: 'merging' }, verifiedHead: LIVE });
+      const ep = f.coord.currentEpisode(f.id)!;
+      expect(ep.head).toBe(LIVE);
+      expect(ep.pr).toBe(7);
+      const detail = f.coord.db.prepare("SELECT detail FROM run_events WHERE runId = ? AND toState = 'merging' AND fromState <> 'merging'")
+        .get(f.id) as { detail: string };
+      expect(detail.detail.startsWith(`merging-at:${LIVE}:7:`)).toBe(true);
+
+      const line = (head: string): PrLandingLine => ({
+        id: SID, bound: true, number: 7, state: 'OPEN', isDraft: false, base: 'main', head,
+        required: [], requiredCut: false, rulesNamed: [], protectionNamed: [], pinnedNames: [], unmeasured: [] });
+      expect(landingLineAct({ pr: ep.pr!, head: ep.head }, line(LIVE))).toEqual({ act: 'edge' });
+      expect(landingLineAct({ pr: ep.pr!, head: ep.head }, line(TIP))).toEqual({ act: 'moved', head: TIP });
+    });
+
+    it('the dequeue brief and the merged brief each print the recorded head, which is LIVE and not the claim', async () => {
+      const f = await workRun();
+      await f.advance('awaiting-review');
+      await f.advance('merging');
+      const head = f.coord.currentEpisode(f.id)!.head;
+      const base = { runs: { ok: true as const, run: { id: f.id } }, coordinator: CLAIMED_BY, told: false, head };
+      const dq = landingVerdict(landingAsk({ sessionId: SID, workspace: SID, number: 7, phase: 'open',
+        queue: { state: 'dequeued', at: null } }, new Set())!, base);
+      const mg = landingVerdict(landingAsk({ sessionId: SID, workspace: SID, number: 7, phase: 'merged',
+        queue: { state: 'landed', at: null } }, new Set())!, { ...base, runState: { ok: true, state: 'merging' } });
+      expect(dq).toMatchObject({ step: 'deliver', mail: { body: renderDequeueBrief(SID, 7, LIVE) } });
+      expect(mg).toMatchObject({ step: 'deliver', mail: { body: renderMergedBrief(SID, 7, LIVE) } });
+      for (const v of [dq, mg]) {
+        const body = v.step === 'deliver' ? v.mail?.body ?? '' : '';
+        expect(body).toContain(LIVE);
+        expect(body).not.toContain(TIP);
+      }
+    });
+
+    it('an ordinary advance carries no verifiedHead, and its episode head is the claim', async () => {
+      const home = mkTmp('ccrc-runs-');
+      const root = gitRoot(PROJECT, BRANCH, TIP);
+      const { run } = makeRunner(home, { wsAddCreates: [SID], prState: openPr(SID, BRANCH) });
+      const base = testDeps(home, run);
+      const w = await openApp(home, run, { cfg: { ...base.cfg, projectsRoot: root } }); app = w.app;
+      const opened = (await postOpen(app)).json() as { id: number };
+      await postDispatch(app, opened.id);
+      await postAdvance(app, opened.id, { to: 'working', fingerprint: { branchTip: '', prNumber: null, prPhase: 'none', handoffCommit: '' } });
+      expect((await postAdvance(app, opened.id, { to: 'awaiting-review', fingerprint: CLAIM })).json()).not.toHaveProperty('verifiedHead');
+      const res = await postAdvance(app, opened.id, { to: 'merging', fingerprint: CLAIM });
+      expect(res.json()).not.toHaveProperty('verifiedHead');
+      expect(w.coord.currentEpisode(opened.id)!.head).toBe(TIP);
+    });
+  });
+
+  describe('an accepted close records the head it verified', () => {
+    it('handoffCommit is the live tip, not the claim', async () => {
+      const f = await workRun();
+      const res = await postClose(app!, f.id, { fingerprint: CLAIM, final: true });
+      expect(res.statusCode).toBe(200);
+      expect(okRun(f.coord.run(f.id))!.state).toBe('done');
+      expect(okRun(f.coord.run(f.id))!.handoffCommit).toBe(LIVE);
+    });
+
+    it('an ordinary close still records the claim (the abandon of a claim is pinned above, unchanged)', async () => {
+      const home = mkTmp('ccrc-runs-');
+      const root = gitRoot(PROJECT, BRANCH, TIP);
+      const { run } = makeRunner(home, { wsAddCreates: [SID], prState: openPr(SID, BRANCH) });
+      const base = testDeps(home, run);
+      const w = await openApp(home, run, { cfg: { ...base.cfg, projectsRoot: root } }); app = w.app;
+      const opened = (await postOpen(app)).json() as { id: number };
+      await postDispatch(app, opened.id);
+      expect((await postClose(app, opened.id, { fingerprint: CLAIM, final: true })).statusCode).toBe(200);
+      expect(okRun(w.coord.run(opened.id))!.handoffCommit).toBe(TIP);
+    });
+  });
+
+  describe('the tip is read once more after an accept', () => {
+    /** The branch's loose ref answers LIVE the first time and `then` after. */
+    const twice = (then: 'absent' | string) => (io: FleetIO): FleetIO => {
+      let reads = 0;
+      return { ...io, readFileMeasured: async (p, ...rest) => {
+        if (!p.endsWith(path.join('refs', 'heads', 'ws', SID))) return io.readFileMeasured(p, ...rest);
+        reads += 1;
+        if (reads === 1) return { ok: true, content: `${LIVE}\n` };
+        return then === 'absent' ? { ok: false, reason: 'absent' } : { ok: true, content: `${then}\n` };
+      } };
+    };
+
+    it('a null on the re-read answers today\'s tip-unmeasurable, never an accept, and the run does not move', async () => {
+      const f = await workRun({ io: twice('absent') });
+      const res = await f.advance('awaiting-review');
+      expect(res.statusCode).toBe(409);
+      expect(res.json()).toMatchObject({ ok: false, reject: { code: 'tip-unmeasurable' } });
+      expect(okRun(f.coord.run(f.id))!.state).toBe('working');
+    });
+
+    it('a tip that moved between the reads is stale-tip with the moved detail', async () => {
+      const f = await workRun({ io: twice('f'.repeat(40)) });
+      const res = await f.advance('awaiting-review');
+      expect(res.json()).toMatchObject({ ok: false, reject: { code: 'stale-tip', detail: 'the tip moved between reads' } });
+    });
+  });
+
+  describe('lineage-unmeasured: recorded, mailed under its own subject, and never a refusal', () => {
+    it('an advance answers 409 reject.code, and queues one wave-advance-unmeasured mail to the worker', async () => {
+      const f = await workRun({ lineage: null });
+      const res = await f.advance('awaiting-review');
+      expect(res.statusCode).toBe(409);
+      expect(res.json()).toEqual({ ok: false, reject: { code: 'lineage-unmeasured', detail: 'not-yet-measured' } });
+      expect(okRun(f.coord.run(f.id))!.state).toBe('working');
+      const mail = unmeasuredMail(f.coord, f.id);
+      expect(mail).toEqual([{ subject: 'wave-advance-unmeasured', toId: SID, state: expect.any(String) }]);
+      const body = (f.coord.db.prepare("SELECT body FROM mail WHERE subject = 'wave-advance-unmeasured'").get() as { body: string }).body;
+      expect(body).toBe('lineage-unmeasured: not-yet-measured — re-send the same claim, unchanged, after the radar\'s next tick ' +
+        '(usually within 5 minutes); after two such answers, report it to your coordinator');
+      expect(f.coord.rejections().map((r) => r.code)).toEqual(['lineage-unmeasured']);
+    });
+
+    it('a work close answers error: lineage-unmeasured, mails wave-done-unmeasured to the worker, and fleet acts nothing', async () => {
+      const f = await workRun({ lineage: null });
+      f.calls.length = 0;
+      const res = await postClose(app!, f.id, { fingerprint: CLAIM, final: true });
+      expect(res.statusCode).toBe(409);
+      expect(res.json()).toMatchObject({ ok: false, error: 'lineage-unmeasured', detail: 'not-yet-measured' });
+      expect(unmeasuredMail(f.coord, f.id)).toEqual([{ subject: 'wave-done-unmeasured', toId: SID, state: expect.any(String) }]);
+      expect(okRun(f.coord.run(f.id))!.state).toBe('working');
+      expect(f.calls.map((c) => c[0])).not.toContain('ws-release');
+    });
+
+    it('two identical retries queue ONE mail', async () => {
+      const f = await workRun({ lineage: null });
+      await f.advance('awaiting-review');
+      await f.advance('awaiting-review');
+      await postClose(app!, f.id, { fingerprint: CLAIM, final: true });
+      await postClose(app!, f.id, { fingerprint: CLAIM, final: true });
+      const subjects = unmeasuredMail(f.coord, f.id).map((m) => m.subject).sort();
+      expect(subjects).toEqual(['wave-advance-unmeasured', 'wave-done-unmeasured']);
+    });
+
+    it('an outstanding wave-done-rejected does not swallow the unmeasured one (and the reverse)', async () => {
+      // Not opted in yet: the stale claim is a plain refusal and queues wave-done-rejected.
+      const f = await workRun({ marker: false, lineage: null });
+      expect((await postClose(app!, f.id, { fingerprint: CLAIM, final: true })).json()).toMatchObject({ error: 'stale-tip' });
+      expect(unmeasuredMail(f.coord, f.id).map((m) => m.subject)).toEqual(['wave-done-rejected']);
+      // The operator opts in; the radar has not measured L yet.
+      optIn(f.home, SID, BRANCH, { lineage: null });
+      expect((await postClose(app!, f.id, { fingerprint: CLAIM, final: true })).json()).toMatchObject({ error: 'lineage-unmeasured' });
+      expect(unmeasuredMail(f.coord, f.id).map((m) => m.subject)).toEqual(['wave-done-rejected', 'wave-done-unmeasured']);
+    });
+
+    it('a stale lineage is lineage-unmeasured too, detail lineage-stale', async () => {
+      const f = await workRun({ lineage: doc(SID, BRANCH, { at: nowIso(-2500) }) });
+      expect((await f.advance('awaiting-review')).json()).toMatchObject({ reject: { code: 'lineage-unmeasured', detail: 'lineage-stale' } });
+    });
+  });
+
+  describe('a project with no enabled marker answers exactly today', () => {
+    it('the advance is a plain stale-tip with wave-advance-rejected mail, whatever a lineage file says', async () => {
+      const f = await workRun({ marker: false });
+      const res = await f.advance('awaiting-review');
+      expect(res.statusCode).toBe(409);
+      expect(res.json()).toMatchObject({ ok: false, reject: { code: 'stale-tip' } });
+      expect((res.json() as { reject: { detail: string } }).reject.detail).not.toMatch(/\((landing|lineage)/);
+      expect(unmeasuredMail(f.coord, f.id).map((m) => m.subject)).toEqual(['wave-advance-rejected']);
+      expect(f.coord.rejections().map((r) => r.code)).toEqual(['stale-tip']);
+    });
+
+    it('the close is a plain stale-tip with wave-done-rejected mail', async () => {
+      const f = await workRun({ marker: false });
+      const res = await postClose(app!, f.id, { fingerprint: CLAIM, final: true });
+      expect(res.json()).toMatchObject({ ok: false, error: 'stale-tip' });
+      expect(unmeasuredMail(f.coord, f.id).map((m) => m.subject)).toEqual(['wave-done-rejected']);
+    });
+  });
+
+  describe('the review close', () => {
+    const TIPW = 'c'.repeat(40);
+    const WID = 'demo-w1';
+    /** The review fixture of the review-run describe above, with the radar's files for the reviewed run and its branch at
+     *  LIVE: the reviewer read TIPW, the first parent of the one clean merge of the base since. */
+    const reviewRun = async (o: { lineage?: string | null; marker?: boolean } = {}) => {
+      const home = mkTmp('ccrc-runs-');
+      const root = gitRoot(PROJECT, `ws/${WID}`, LIVE);
+      const { run, calls } = makeRunner(home, { wsAddCreates: [WID] });
+      const w = await openApp(home, run, { cfg: { projectsRoot: root } }); app = w.app;
+      const opened = (await postOpen(app)).json() as { id: number };
+      await postDispatch(app, opened.id);
+      seed(home, 'demo-r1');
+      expect(w.coord.advance(opened.id, 'working', 'test').ok).toBe(true);
+      expect(w.coord.advance(opened.id, 'awaiting-review', 'test').ok).toBe(true);
+      const r = (await postOpen(app, { program: OPEN_BODY.program, title: 'Review wave 1', kind: 'review', reviews: opened.id,
+        claimedBy: CLAIMED_BY, homeProject: PROJECT })).json() as { id: number };
+      w.coord.markDispatched(r.id, 'demo-r1', 'r1', 'ws/r1', false);
+      expect(w.coord.advance(r.id, 'dispatched', 'test').ok).toBe(true);
+      expect(w.coord.advance(r.id, 'working', 'test').ok).toBe(true);
+      const report = path.join(root, 'report.md'); writeFileSync(report, '# findings\n');
+      const lineage = o.lineage === undefined
+        ? JSON.stringify({ v: 1, project: PROJECT, id: WID, at: nowIso(-5), state: 'measured', branch: `ws/${WID}`, tip: LIVE,
+          base: BASE, chain: [{ merge: LIVE, p1: TIPW, p2: BASE }], stop: 'not-a-merge' })
+        : o.lineage;
+      optIn(home, WID, `ws/${WID}`, { ...(o.marker === undefined ? {} : { marker: o.marker }), lineage });
+      calls.length = 0;
+      return { w, workId: opened.id, reviewId: r.id, report, calls };
+    };
+
+    it('a review of the claimed tip is accepted across the clean merge, and the review run closes done', async () => {
+      const f = await reviewRun();
+      const res = await postClose(app!, f.reviewId, { fingerprint: { reviewedTip: TIPW, report: f.report } });
+      expect(res.statusCode).toBe(200);
+      expect(okRun(f.w.coord.run(f.reviewId))!.state).toBe('done');
+      expect(okRun(f.w.coord.run(f.workId))!.state).toBe('awaiting-review');
+    });
+
+    it('an unmeasured lineage is error: lineage-unmeasured, mailed to the REVIEWER as review-done-unmeasured, with no fleet act', async () => {
+      const f = await reviewRun({ lineage: null });
+      const res = await postClose(app!, f.reviewId, { fingerprint: { reviewedTip: TIPW, report: f.report } });
+      expect(res.statusCode).toBe(409);
+      expect(res.json()).toMatchObject({ ok: false, error: 'lineage-unmeasured', detail: 'not-yet-measured' });
+      expect(okRun(f.w.coord.run(f.reviewId))!.state).toBe('working');
+      expect(f.calls).toEqual([]);
+      expect(unmeasuredMail(f.w.coord, f.reviewId)).toEqual([{ subject: 'review-done-unmeasured', toId: 'demo-r1', state: expect.any(String) }]);
+      expect(f.w.coord.rejections().filter((r) => r.runId === f.reviewId).map((r) => r.code)).toEqual(['lineage-unmeasured']);
+    });
+
+    it('with no enabled marker it is today\'s stale-review and review-done-rejected', async () => {
+      const f = await reviewRun({ marker: false });
+      const res = await postClose(app!, f.reviewId, { fingerprint: { reviewedTip: TIPW, report: f.report } });
+      expect(res.json()).toMatchObject({ ok: false, error: 'stale-review' });
+      expect(unmeasuredMail(f.w.coord, f.reviewId).map((m) => m.subject)).toEqual(['review-done-rejected']);
+    });
+  });
+
+  describe('lineage-unmeasured is never counted as a refusal (D-7107)', () => {
+    it('two unmeasured answers and then an accepted close: closeRefusals 0, firstSubmission true, doneRejects 0', async () => {
+      const f = await workRun({ lineage: null });
+      await f.advance('awaiting-review');
+      await postClose(app!, f.id, { fingerprint: CLAIM, final: true });
+      optIn(f.home, SID, BRANCH);                                    // the radar's next tick measured L
+      expect((await postClose(app!, f.id, { fingerprint: CLAIM, final: true })).statusCode).toBe(200);
+      const signals = f.coord.runSignals(f.id);
+      expect(signals).toMatchObject({ closeRefusals: 0, firstSubmission: true });
+      const health = f.coord.runHealth([f.id], [CLAIMED_BY]).get(f.id)!;
+      expect(health).toMatchObject({ doneRejects: 0, lastRejectCode: null });
+      expect(f.coord.rejections().map((r) => r.code)).toEqual(['lineage-unmeasured', 'lineage-unmeasured']);
+    });
+
+    it('the refusal list is the done-authority list less that one word', () => {
+      expect(DONE_REFUSAL_CODES).not.toContain('lineage-unmeasured');
+      expect(DONE_REFUSAL_CODES).toContain('stale-tip');
+    });
+  });
+});
