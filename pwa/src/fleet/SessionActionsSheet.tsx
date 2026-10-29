@@ -31,6 +31,7 @@ import { HoldControl } from './HoldControl';
 import { RenameSheet } from './RenameSheet';
 import { ArchiveSheet, isPutAway, restoreReachesEnsure, restoreSession } from './ArchiveSheet';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
+import { useEnsure } from '../session/useEnsure';
 import './fleet.css';
 
 /** Release's consequence sentence — what releasing the hold actually changes,
@@ -83,7 +84,7 @@ export function SessionActionsSheet({
   // Every hook runs BEFORE the null guard below: `session` goes null whenever
   // the sheet closes, and a conditional hook would throw on that render.
   const [swapOpen, setSwapOpen] = useState(false);
-  const [restarting, setRestarting] = useState(false);
+  const { busy: restarting, ensure: ensureNow } = useEnsure();
   const [archBusy, setArchBusy] = useState(false);
   /** The one Archive's sheet (workspace lifecycle §5.2) is open over this one. It hosts every refusal the archive
    *  door can answer — the `run-open` claim this sheet used to hold as `conflict` among them. */
@@ -153,21 +154,11 @@ export function SessionActionsSheet({
   const fault = substrateFault(session);
   const faultTitle = substrateFaultTitle(session);
 
-  const restart = async (): Promise<void> => {
-    if (restarting) return;
-    setRestarting(true);
-    try {
-      await api.ensure(session.id);
-      onClose();
-    } catch (err) {
-      // apiErrorText, never err.message: the runCcd routes fail as
-      // 502 { ok, stderr } with no `error` key, so err.message yields the
-      // generic "request failed (502)" and ccd's refusal never reaches anyone.
-      toast(failedTo(hibernatedSince(session) !== null ? 'wake' : 'restart', err), 'error');
-    } finally {
-      setRestarting(false);
-    }
-  };
+  // apiErrorText (through failedTo), never err.message: the runCcd routes fail as
+  // 502 { ok, stderr } with no `error` key, so err.message yields the
+  // generic "request failed (502)" and ccd's refusal never reaches anyone.
+  const restart = (): Promise<void> =>
+    ensureNow(session.id, (err) => failedTo(hibernatedSince(session) !== null ? 'wake' : 'restart', err), onClose);
 
   // Workspace lifecycle §5.2: every session offers Archive, and every session already put away offers Restore.
   const putAway = isPutAway(session);
