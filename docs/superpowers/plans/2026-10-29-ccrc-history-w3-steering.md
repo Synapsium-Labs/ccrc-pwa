@@ -530,10 +530,24 @@ The evidence returned per backend:
 | §7.3 breaker: 5, 24 h, half-open, per backend by producer, in SQLite, file per backend, unreadable is open | Task 4 (PX15, PX21, PX26) |
 | §7.4 parser and receipt gate | W1-B2, already merged; Task 2 adds the stale-file case (PX5), Task 6 the node read |
 | §7.5 spike, one session per backend, bars per backend | Task 7; CP-62 |
-| §7.7 failure table | Tasks 3 to 5, row by row |
+| §7.7 failure table | Tasks 3 to 5, row by row (the table below) |
 | §9.4 `history-steer-files`, `history-switches` | Tasks 2, 5 |
 | §10.7 W3 row, W3 kill rule | Arming section; Task 7's report |
 | R-B1 to R-B4 preserved; W2 not shortened | Global Constraints, the gate box |
+
+Spec §7.7's failure table, row by row:
+
+| §7.7 row | Direction | Test, and its task |
+|---|---|---|
+| Scope `ambiguous`, rc 1, or no transcript path | no print | PX10 and the scope cases of `_hook_history_scope_verdict` (Task 3) |
+| Steer file oversized, starts with `{`, wrong first line, unreadable | no print | PX20, PX17, PX12 (Task 3) |
+| Steer file absent | the generic variant | PX18 (Task 3) |
+| Hook, any error | exit 0, never 2 | PX12, and every Task 3 case asserts exit 0 |
+| Parser, no receipt | `not-requested`, native leaf | PX19 (W1-B2, already merged) |
+| Parser, no block, wrong id, analysis-only | native or degraded, counted | PX2, PX5, PX6 (W1-B2), plus Review Focus 3 (Task 2) |
+| Breaker file unreadable | open: the generic text | PX21 (Task 4) |
+| Current lane unreadable or unknown | `unknown`: not armed, breaker open | PX27's unreadable case (Task 5) |
+| Previous leaf or child not steered `ok`, or unreadable | no gist quoted | PX23 (Task 1), PX14's child cases (Task 6) |
 
 ## Open decisions (not settled by this plan)
 
