@@ -7,7 +7,7 @@
 // `preview` too; a question the app cannot read says so and offers the terminal (`DialogSheet`'s `ask-unreadable`), and
 // the scraped sheet that used to take over is gone. It draws no drawer of its own: `DialogSheet` renders `AskSurface`
 // (`AskSurface.tsx`: the Sheet below 900, an inline card at the desk, D-6326) once for every kind of surface, with the
-// header and the title worked out there (`shownQuestion`), and this is what goes inside it. The review screen is rendered by `DialogSheet` for every source of copy, so it is not here.
+// header and the title worked out there (the wire's `pairing`, D-7184), and this is what goes inside it. The review screen is rendered by `DialogSheet` for every source of copy, so it is not here.
 //
 // `TerminalCta` is written once, here, and `DialogSheet` imports it for its `ask-unreadable` and `terminal-only` surfaces:
 // copy written twice drifts in a way no type catches.
@@ -19,8 +19,8 @@ import type { Dialog, DialogTabTarget } from '../../../shared/api';
 import { parseAskTabs } from '../../../shared/ask-menu';
 import { Button, OptionRow } from '@ccrc/ui';
 import { AskContainer } from './AskSurface';
-// C1's correspondence check lives in `askLive.ts` (D-5089), beside the rules that choose which question is live:
-// `liveQuestion` applies it to EVERY question of the envelope, and the title only breaks a tie.
+// C1's correspondence check (D-5089) is the SERVER's since D-7184 (`server/src/pane/askPairing.ts`): it applies it to
+// EVERY question of the envelope, the title only breaking a tie, and this content reads the answer (`view`).
 import { chatRow, freeTextSlot, headerTab, optionCopy, tabChips, type AskQuestions, type ShownQuestion } from './askLive';
 import {
   AskTabs, ChatRow, FOOT_PLAIN, FOOT_WITH_OTHER, MultiPick, OptionPreview, OtherQuestions, OwnWords,
@@ -67,8 +67,8 @@ export function TerminalCta({ onOpen, onLater }: { onOpen: () => void; onLater: 
  * Fail-visible: `onSelectOption` IS the controller's `answer()`, passed down verbatim, so a tap here walks the live pane
  * exactly as every other surface's option tap does, and that walk needs `dialog` (it re-parses the PANE, which the
  * envelope has none of its own). `dialog` can be non-null and still describe a DIFFERENT question than this one, so
- * `canAnswer` below is a real correspondence check (`questionCorresponds` for questions, a Yes-first check for an
- * approval), not a bare null check. Numbered options and Allow (the same call at index 1) are tappable only when `dialog`
+ * `canAnswer` below is a real correspondence check (the server's `questionCorresponds`, read as the pairing's `live`
+ * since D-7184, for questions, a Yes-first check for an approval), not a bare null check. Numbered options and Allow (the same call at index 1) are tappable only when `dialog`
  * is non-null, parsed, AND describes the same thing; otherwise they render visibly disabled behind the "Open terminal to
  * answer"/"Not now" CTA. Deny has no such dependency: Escape has no option index to walk to, so the controller sends
  * `api.interrupt` for it (the same call SessionScreen's stop button makes), and it stays enabled regardless of `dialog`.
@@ -93,8 +93,10 @@ export function EnvelopeSheet({
 }: {
   /** What `askSource` says to show: a permission request, or Claude's own questions (D-6325). */
   ask: { approval: { tool: string; summary: string } } | AskQuestions;
-  /** Which of the questions is showing (`shownQuestion`), worked out by the controller because the container's header
-   *  reads it too; null for an approval. */
+  /** Which of the questions is showing: the wire's pairing as the controller read it (D-7184, `askLive.ts#pairingFor`),
+   *  or its constant unplaced view with no dialog (D-7213), worked out by the controller because the container's header
+   *  reads it too; null for an approval. The controller never hands an unpaired question here: that is the terminal
+   *  door. */
   view: ShownQuestion | null;
   /** Where the questions came from: the hook's envelope, or the transcript's copy once that has aged out. Only the
    *  wrapper's `data-source` says which; the surface is the same. */
@@ -139,7 +141,8 @@ export function EnvelopeSheet({
   const denying = isDenying(life);
   // D-5089: WHICH question, before anything about it. The hook writes every question of an ask at once and keeps the
   // envelope until the tool call ends, while the pane paints one question at a time and then the review screen. So
-  // the sheet answers the question the PANE is painting (`liveQuestion`: labels first, a unique correspondence winning
+  // the sheet answers the question the PANE is painting (the pairing's `live`, D-7184, the server's rule: labels first,
+  // a unique correspondence winning
   // on its own, the title breaking only a tie), not `questions[0]`. The review is told first (`askSource`, D-6325:
   // `DialogSheet` renders it and this sheet never sees it), because a question whose labels happen to read like its
   // two rows must never be taken for it. `shown` is what the sheet displays: the live question, else the one the pane's
@@ -172,7 +175,8 @@ export function EnvelopeSheet({
   const severalAnswers = questions !== null && named !== null && live === null
     && questions.questions[named]!.multiSelect === true;
   // C1: a real correspondence check, not a null check — see fix round 3 in
-  // the file header and `questionCorresponds` (`askLive.ts`). Approval and questions
+  // the file header and `questionCorresponds` (the server's, `pane/askPairing.ts`, read as the pairing since D-7184).
+  // Approval and questions
   // use different rules because they answer differently: Allow always types
   // index 1, so the one thing that has to be true is that index 1 on the
   // pane reads like "Yes" (the file's longstanding assumption, now asserted
