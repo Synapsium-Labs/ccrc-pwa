@@ -10,8 +10,8 @@
 // 1280 and 1920 no `+ New` is mounted (the bar's button is the door). Instrument's phone keeps today's head and round
 // `+` (S11). With seventeen lanes at 360 and 390 the folded strip's four cards read most free first, each shows its
 // windows, every countdown it prints is seen (a client rect inside the card, not covered), and All accounts has a row of
-// its own under the cards; the same checks run over the phone's PANEL, which holds all seventeen (T2c, D-6329; R18 F4,
-// F5; S5c).
+// its own under the cards; the same checks run over the phone's PANEL, which holds the thirteen lanes the line folds
+// away (T2c, D-6329; R18 F4, F5; S5c; Task C13).
 //
 // THE FOLD AND THE PHONE'S PANEL (desktop polish S5b, D-6530; S5c, phone-strip-tap-panel, phone-fold-two-lines). Below
 // 900 px the strip is always folded and the stored choice (`seedStripExpanded`) is neither read nor written. With the
@@ -20,9 +20,11 @@
 // not measured here, and jsdom, which evaluates no stylesheet, cannot hold it either), eight in two rows of four from
 // 700 (700 and 899); the control and All accounts share one row, nothing scrolls sideways, and the first session row sits
 // at most 440 px down in Refined and at most 540 px down in Instrument at 390x844, with the choice stored expanded too.
-// A real tap on the control (`locator.tap()`, a touch screen below 900) opens the panel: every lane in order, hung from
+// A real tap on the control (`locator.tap()`, a touch screen below 900) opens the panel: the lanes the line folds away, in
+// order, each lane drawn once across the line and the panel (Task C13), hung from
 // the strip's bottom edge, drawn over the content with no push of the page, bounded by the room left under the strip and
-// scrolling inside itself when it is taller (also with a release waiting). A tap outside the strip and the panel, Escape
+// scrolling inside itself when it is taller (also with a release waiting, a case run at 390x744 so that the panel of
+// thirteen scrolls: at 844 it fits Instrument's room, review 1142 measured). A tap outside the strip and the panel, Escape
 // and a second tap on the control close it; closing leaves focus on the control, on screen.
 //
 // Run: `( cd pwa && CCRC_CHROME=<a Chrome or Chromium binary> ./node_modules/.bin/vitest run --config vitest.browser.config.ts browser/refined-phone.browser.test.ts )`.
@@ -350,7 +352,7 @@ function cardFaults({ expected, cardSel, inside }: { expected: Array<{ label: st
 describe("with 17 lanes the phone's strip keeps every card readable", () => {
   for (const theme of THEMES) {
     for (const width of [360, 390]) {
-      it(`with 17 lanes at 360 and 390 the folded line's four cards and the tapped panel's seventeen run most free first, each shows its windows and every countdown it prints is seen, a long label is cut inside its card, All accounts sits on a row under the cards, and nothing scrolls sideways: ${theme}, ${width}px`, async () => {
+      it(`with 17 lanes at 360 and 390 the folded line's four cards and the tapped panel's thirteen folded-away lanes run most free first, each lane once, each shows its windows and every countdown it prints is seen, a long label is cut inside its card, All accounts sits on a row under the cards, and nothing scrolls sideways: ${theme}, ${width}px`, async () => {
         const { ctx, page, errors, order } = await openFolded({ skin: REFINED, theme, width }, 4);
         const { cases } = seventeen();
         const expected = mostFreeFirst(cases).map((c) => ({ label: c.label, windows: c.windows, counted: c.counted }));
@@ -382,9 +384,10 @@ describe("with 17 lanes the phone's strip keeps every card readable", () => {
           });
           expect([...cardsOfLine, ...end], 'the folded line').toEqual([]);
 
-          // The panel a real tap opens: all seventeen, each scrolled into the panel's visible box before it is judged.
+          // The panel a real tap opens: the thirteen lanes the line folds away, continuing its order (Task C13), each
+          // scrolled into the panel's visible box before it is judged.
           await openPanel(page);
-          const inPanel = await page.evaluate(cardFaults, { expected, cardSel: '.accounts-flyout .account-gauge', inside: '.accounts-flyout' });
+          const inPanel = await page.evaluate(cardFaults, { expected: expected.slice(4), cardSel: '.accounts-flyout .account-gauge', inside: '.accounts-flyout' });
           const sideways = await page.evaluate(() => {
             const out: string[] = [];
             if (document.documentElement.scrollWidth > window.innerWidth + 0.5) out.push('the page scrolls sideways');
@@ -599,6 +602,8 @@ describe('the folded phone strip is four cards and one control', () => {
 // What the tapped panel measures: boxes and words, judged in Node.
 interface PanelMeasure {
   names: string[];
+  /** The line's own cards, the strip's direct children (the panel's cards sit in the end cell). */
+  lineNames: string[];
   panelTop: number; panelBottom: number; panelClient: number; panelScroll: number; overflowY: string; position: string;
   stripBottom: number; vh: number; docHeight: number; firstRowTop: number;
   controlHeight: number; controlExpanded: string | null; controlsId: string | null; panelId: string;
@@ -631,6 +636,7 @@ function measurePanel(reach: boolean): PanelMeasure {
   const at = document.elementFromPoint(px, py);
   return {
     names: cards.map((c) => c.querySelector('.account-gauge-label')?.textContent ?? ''),
+    lineNames: [...strip.querySelectorAll<HTMLElement>(':scope > .account-gauge')].map((c) => c.querySelector('.account-gauge-label')?.textContent ?? ''),
     panelTop: fr.top, panelBottom: fr.bottom, panelClient: fly.clientHeight, panelScroll: fly.scrollHeight, overflowY: getComputedStyle(fly).overflowY, position: getComputedStyle(fly).position,
     stripBottom: sr.bottom, vh: window.innerHeight, ...before, docScrollTop: docTop,
     controlHeight: cr.height, controlExpanded: control.getAttribute('aria-expanded'), controlsId: control.getAttribute('aria-controls'), panelId: fly.id,
@@ -657,20 +663,27 @@ function pointOutside(): { x: number; y: number } | null {
   return null;
 }
 
-// The phone's panel at 390x844: a tap on the control opens every lane in a panel that hangs from the strip, is drawn over
+// The phone's panel at 390x844: a tap on the control opens the lanes the line folds away (every lane drawn once across the
+// line and the panel) in a panel that hangs from the strip, is drawn over
 // the content, is bounded by the room under the strip, and closes on a tap outside, on Escape and on a second tap.
 const PANEL_VIEWS: AppView[] = [REFINED, INSTRUMENT].flatMap((skin) => THEMES.map((theme) => ({ skin, theme, width: 390 })));
 
 describe("the phone's panel", () => {
   for (const view of PANEL_VIEWS) {
-    it(`a tap on the control opens all seventeen lanes in a panel under the strip, over the content, within the viewport, pushing nothing; a tap outside and Escape close it: ${named(view)}`, async () => {
+    it(`a tap on the control opens the thirteen lanes the line folds away in a panel under the strip, over the content, within the viewport, pushing nothing; a tap outside and Escape close it: ${named(view)}`, async () => {
       const { ctx, page, errors, order } = await openFolded(view, 4);
       try {
         const before = await page.evaluate(measurePanelBaseline);
         await openPanel(page);
         const m = await page.evaluate(measurePanel, true);
         const out: string[] = [];
-        if (m.names.join('|') !== order.join('|')) out.push(`the panel reads [${m.names}], not every lane most free first [${order}]`);
+        // Every lane drawn once across the line and the panel: the panel holds the folded-away lanes, continuing the
+        // line's most-free-first order from its last card (Task C13).
+        const both = m.lineNames.filter((n) => m.names.includes(n));
+        if (both.length > 0) out.push(`[${both}] are drawn on the line and in the panel`);
+        if ([...m.lineNames, ...m.names].join('|') !== order.join('|')) {
+          out.push(`the line [${m.lineNames}] then the panel [${m.names}] do not read every lane once, most free first [${order}]`);
+        }
         if (m.position !== 'absolute') out.push(`the panel is ${m.position}-positioned`);
         if (m.panelTop < m.stripBottom - 0.5) out.push(`the panel (top ${m.panelTop}) is not under the strip (bottom ${m.stripBottom})`);
         if (m.panelBottom > m.vh + 0.5) out.push(`the panel (bottom ${m.panelBottom}) runs below the viewport (${m.vh})`);
@@ -710,6 +723,11 @@ describe("the phone's panel", () => {
     it(`with a release waiting the panel stays inside the viewport, bounded by the room under the strip, and scrolls inside itself to its last card: ${named(view)}`, async () => {
       const { ctx, page, errors } = await openFolded(view, 4, false, undefined, true);
       try {
+        // A shorter phone (390x744), so that the panel scrolls: it holds the thirteen folded-away lanes (Task C13), which
+        // fit Instrument's room under the strip at 844 (review 1142 measured about 106 px to spare there, and about 8 px of
+        // scrolling at 744).
+        await page.setViewportSize({ width: view.width, height: 744 });
+        await page.waitForTimeout(300);
         const before = await page.evaluate(measurePanelBaseline);
         await openPanel(page);
         const m = await page.evaluate(measurePanel, true);

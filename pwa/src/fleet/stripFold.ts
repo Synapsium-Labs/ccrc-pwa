@@ -32,9 +32,10 @@ export const FLYOUT_OPEN_MS = 150;
  *  the grace in which a pointer crossing the gap between the line and the panel, or coming back, keeps it. */
 export const FLYOUT_CLOSE_MS = 250;
 
-/** The flyout group's accessible name (strip-hover-flyout): what it holds. The line's group is named by
- *  `lanesRowLabel`, and the two never share a name, so a screen reader does not meet two identical groups. */
-export const FLYOUT_LABEL = 'every lane';
+/** The flyout group's accessible name (strip-hover-flyout): what it holds, the lanes the line folds away, the "+n more"
+ *  the control counts (Task C13). The line's group is named by `lanesRowLabel`, and the two never share a name, so a
+ *  screen reader does not meet two identical groups. */
+export const FLYOUT_LABEL = 'more lanes';
 
 /** A lane card's floor in px: the one place the figure is written. It reaches the lanes row's grid as the custom
  *  property `--lane-card-min` (written by the strip), so the grid's tracks and `rowFit`'s count agree. */

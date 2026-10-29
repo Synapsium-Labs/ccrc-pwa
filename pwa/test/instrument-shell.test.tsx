@@ -146,7 +146,10 @@
 //   the moot flyout's focus hand-back removed ......... "a flyout made moot while a card of it holds focus hands the focus to the line's tab stop, never to the page: another tab expands the strip"
 //                                                         (fix round 1: the reset called `setFlyOpen(false)` directly, so a focused flyout card was unmounted and focus fell to the page)
 //   a second copy of the card markup ................... "the flyout's cards render through the line's own card code: one card markup in the component"
-//   the flyout's cards from `shown`, not `live` ........ thirteen accounts-strip cases ("…holding every lane in lanesByFree's order", …); lanes-row (4 of 72) "hovering the folded line opens a flyout below it, …"
+//   the panel's cards from `live` or `shown`, or the split off by one either way, not `fold.hidden` (Task C13)
+//                                                       accounts-strip "the flyout holds only the lanes the line folds away: …" and the cases that count the panel;
+//                                                         lanes-row (4 of 89) "hovering the folded line opens a flyout below it, …"; refined-phone browser (4 of 41) "a tap on the control opens the thirteen lanes …"
+//   the desk flyout's offset (`left`/`right` 0) ........ lanes-row (4 of 89) "hovering the folded line opens a flyout below it, … its cards in the line's tracks, …" (Task C13)
 //   focusout ignoring `relatedTarget` .................. "focus leaving the strip closes it, and focus moving between the line and the flyout does not"
 //   pointer enter not cancelling a pending close ....... "leaving the line and the flyout closes it after FLYOUT_CLOSE_MS; coming back within the grace keeps it"
 //   focus between the strip's own cards opening it again "Escape stays shut for a keyboard user: an arrow move between the line's cards does not open it again"
@@ -542,7 +545,7 @@ describe('the lanes fold (S5b, D-6530)', () => {
     expect(document.querySelectorAll('.accounts-strip')).toHaveLength(1);
   });
 
-  it("a tap on the control in Instrument's phone fleet column opens the panel holding all 17 lanes (S5c)", async () => {
+  it("a tap on the control in Instrument's phone fleet column opens the panel holding the 13 lanes the line folds away (S5c, C13)", async () => {
     const f = seventeenLanes(Math.floor(Date.now() / 1000));
     vi.spyOn(api, 'accounts').mockResolvedValue({ accounts: f.accounts, projected: { wrapper: 'w0', score: 0 }, roster: f.roster });
     stubWidth(false);
@@ -554,11 +557,16 @@ describe('the lanes fold (S5b, D-6530)', () => {
     fireEvent.click(more);
     const panel = strip.querySelector<HTMLElement>('.accounts-flyout');
     expect(panel).not.toBeNull();
-    expect(panel!.querySelectorAll('.account-gauge')).toHaveLength(17);
+    expect(panel!.querySelectorAll('.account-gauge')).toHaveLength(13);
     expect(more).toHaveAttribute('aria-expanded', 'true');
     expect(more).toHaveAttribute('aria-controls', panel!.id);
-    // The line is still four cards: the panel is over the content, the strip is not expanded in place.
-    expect([...strip.children].filter((c) => c.classList.contains('account-gauge'))).toHaveLength(4);
+    // The line is still four cards: the panel is over the content, the strip is not expanded in place. No lane is drawn
+    // on both.
+    const line = [...strip.children].filter((c) => c.classList.contains('account-gauge'));
+    expect(line).toHaveLength(4);
+    const label = (c: Element): string => c.querySelector('.account-gauge-label')?.textContent ?? '';
+    const inPanel = [...panel!.querySelectorAll('.account-gauge')].map(label);
+    expect(line.map(label).filter((n) => inPanel.includes(n))).toEqual([]);
   });
 });
 

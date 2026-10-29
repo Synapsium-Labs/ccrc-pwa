@@ -133,17 +133,20 @@
     gap: var(--sp-2);
     margin: 0;
   }
-  /* The flyout (R120, strip-hover-flyout): every lane's card in a panel under the folded line, drawn over the content
-     and pushing none of it down. It is out of flow, hung from the line's bottom edge (`top: 100%` of the strip, which
-     is `position: relative` above) and spanning its width, above the frame's content in the sheet layer. Its cards
-     wrap in the line's own tracks and gap, the same card in the same floor. Taller than the room under the line, it
-     scrolls itself: at most 70% of the viewport's height, since the line sits at the top of the window. Layer, hairline
-     and the pop shadow: the surface the other floating panels use, no token of its own. */
+  /* The flyout (R120, strip-hover-flyout): the cards of the lanes the folded line leaves out (Task C13), in a panel
+     under the line, drawn over the content and pushing none of it down. It is out of flow, hung from the line's bottom
+     edge (`top: 100%` of the strip, which is `position: relative` above), above the frame's content in the sheet layer.
+     Its cards wrap in the line's own tracks and gap, the same card in the same floor, and its columns sit under the
+     line's: the panel reaches out past the strip's edges by its own padding and border, so its content box is the
+     strip's width at the strip's left and its auto-fill tracks are the line's, track for track, while the panel does
+     not scroll (a classic scrollbar, once it scrolls, narrows its content box and so its tracks). Taller than the room
+     under the line, it scrolls itself: at most 70% of the viewport's height, since the line sits at the top of the
+     window. Layer, hairline and the pop shadow: the surface the other floating panels use, no token of its own. */
   .shell-accounts .accounts-flyout {
     position: absolute;
     top: 100%;
-    left: 0;
-    right: 0;
+    left: calc(-1 * (var(--sp-2) + 1px));
+    right: calc(-1 * (var(--sp-2) + 1px));
     z-index: var(--z-sheet);
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(var(--lane-card-min), 1fr));

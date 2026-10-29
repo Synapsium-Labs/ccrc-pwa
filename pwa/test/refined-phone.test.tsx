@@ -14,6 +14,7 @@ import { INSTRUMENT, REFINED, toast } from '@ccrc/ui';
 import type { AccountUsage, RunSummary } from '../../shared/api';
 import { fleetSession } from './fleetFixture';
 import { seventeenLanes } from './seventeenLanes';
+import { lanesByFree } from '../src/fleet/laneOrder';
 import { pageAt, treeOk, treeResponse } from './docsFixtures';
 import type { DocsVisit } from '../src/docs/useDocsVisit';
 
@@ -240,12 +241,13 @@ describe("Refined's phone header (W2 Task S5)", () => {
     expect(document.querySelectorAll('.accounts-strip')).toHaveLength(1);
   });
 
-  // The phone's rule (S5c, phone-strip-tap-panel): the control opens a panel of every lane instead of expanding the strip,
-  // and the stored choice is the desk's alone, so nothing is remembered and a remount finds the strip as it began.
+  // The phone's rule (S5c, phone-strip-tap-panel): the control opens a panel of the lanes the line folds away (Task C13:
+  // every lane drawn once across the line and the panel) instead of expanding the strip, and the stored choice is the
+  // desk's alone, so nothing is remembered and a remount finds the strip as it began.
   const lineNames = (strip: HTMLElement): string[] =>
     [...strip.children].filter((c) => c.classList.contains('account-gauge')).map((c) => c.querySelector('.account-gauge-label')?.textContent ?? '');
 
-  it('a tap on the control opens a panel of all 17 lanes over a line that stays four, stores nothing, and a remount finds it closed', async () => {
+  it('a tap on the control opens a panel of the 13 folded lanes, in order, under a line that stays four, stores nothing, and a remount finds it closed', async () => {
     stubSeventeen();
     atWidth(390);
     const first = render(<App />);
@@ -254,8 +256,11 @@ describe("Refined's phone header (W2 Task S5)", () => {
     fireEvent.click(within(strip).getByRole('button', { name: /^\+13 more/ }));
     const panel = strip.querySelector<HTMLElement>('.accounts-flyout');
     expect(panel).not.toBeNull();
-    expect(panel!.querySelectorAll('.account-gauge')).toHaveLength(17);
-    expect(lineNames(strip)).toHaveLength(4);
+    const f = seventeenLanes(nowSec);
+    const order = lanesByFree(f.accounts).map((a) => f.roster.find((r) => r.id === a.wrapper)!.label);
+    const inPanel = [...panel!.querySelectorAll('.account-gauge')].map((c) => c.querySelector('.account-gauge-label')?.textContent ?? '');
+    expect(lineNames(strip)).toEqual(order.slice(0, 4));
+    expect(inPanel).toEqual(order.slice(4));
     expect(within(strip).getByRole('button', { name: /^\+13 more/ })).toHaveAttribute('aria-controls', panel!.id);
     expect(window.localStorage.getItem('ccrc-accounts-strip')).toBeNull();
     first.unmount();
