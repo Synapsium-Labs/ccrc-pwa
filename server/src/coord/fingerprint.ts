@@ -1,16 +1,17 @@
 /**
  * L3 adapter (declared): re-measures a done claim, reads and decides nothing about the world beyond that. It reads the
  * registry, the branch's ref files and, since landing order wave 4, the radar's `enabled` and `<id>.lineage` files,
- * all through the `FleetIO` port, and asks `ccd pr-state` through `RunCcd`. Its imports by themselves read as L1
- * (no `node:*` builtin but none that does I/O), but the I/O it makes is real, and `lineageRead.ts`, the reader of the
- * radar's files, is a declared L3 reader it takes a runtime import of: a file that depends on an adapter is one.
+ * all through the `FleetIO` port, and asks `ccd pr-state` through `RunCcd`. It imports no `node:*` module, so its
+ * import block alone would not mark it as an adapter, but the I/O it makes is real. It also takes a runtime import of
+ * `lineageRead.ts`, the reader of the radar's files, which is itself a declared L3 reader, and a file that depends on
+ * an adapter is one.
  * The lineage DECISION is `lineage.ts`'s (pure, L1); this file reads, asks it, and re-reads the tip once after an accept.
  */
 import { CCD_ARGV, ccdCan } from '../ccdargv.js';
 import { isFullLine, parsePrLines, phaseFor, type CcdPrLine } from '../prstate.js';
 import { measuredIdentity, readRegistryMeasured } from '../registry.js';
 import { readBranchTip } from './gitref.js';
-import { decideLineage } from './lineage.js';
+import { decideLineage, lineageQualifies } from './lineage.js';
 import { readLandingFacts } from './lineageRead.js';
 import type { CcrcConfig } from '../config.js';
 import type { FleetState } from '../fleetstate.js';
@@ -242,8 +243,8 @@ const MOVED_DETAIL = 'the tip moved between reads';
  * the lineage file and the first read are evidence about one moment, and the second read is what binds the accepted tip
  * to the moment of the verdict. The decision is `lineage.ts`'s (pure); this function reads and re-reads.
  *
- * `qualifies` restates the probe's own predicate (D-7105): a registry record naming this run's project, on a `ws/`
- * branch. A row the radar never measures gets today's refusal, never a wait for a file that cannot come. Nothing
+ * `lineageQualifies` (`lineage.ts`) is the probe's own predicate (D-7105): a registry record naming this run's project,
+ * on a `ws/` branch. A row the radar never measures gets today's refusal, never a wait for a file that cannot come. Nothing
  * here reads before `resolveDoneBranch`'s `isRegistryId` check has passed, and `readBranchTip` has already guarded the
  * project and the branch as path segments; the id is checked once more because it names a file below.
  */
@@ -256,7 +257,7 @@ async function settleStaleTip(
     deps.io, deps.cfg.registryDir, work.project, work.sessionId, branch, (deps.now ?? Date.now)());
   const decision = decideLineage({
     claim: claimTip, live: liveTip, ...facts,
-    qualifies: project !== null && project === work.project && branch.startsWith('ws/'),
+    qualifies: lineageQualifies(project, work.project, branch),
   });
   if (decision.answer === 'today') return decision.detail === undefined ? { kind: 'today' } : { kind: 'today', detail: decision.detail };
   if (decision.answer === 'unmeasured') return { kind: 'unmeasured', detail: decision.detail };

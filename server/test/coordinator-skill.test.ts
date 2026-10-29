@@ -3546,15 +3546,16 @@ describe('landing order wave 4: the lineage-unmeasured text, the recorded head a
 
   it('the reject.code table explains the word: a wait, mailed by the server, re-sent by the sender, no rejected: mail from the coordinator', () => {
     expect(wl).toContain('| `lineage-unmeasured` | in a project the operator opted in to the radar\'s lineage, the live tip is not the claim and the radar has not yet measured the clean merges between them. ' +
-      'It is a wait, not a refusal: the server has already mailed the claim\'s sender, which re-sends the same claim unchanged after the radar\'s next tick. ' +
+      'It is a wait, not a refusal: the server has already mailed the claim\'s sender, which re-sends the same claim unchanged after the radar\'s next tick, at most twice. ' +
+      'Re-sending means repeating the call that answered it, the same advance or the same close, so a re-sent `wave-done` that reaches you with the run already at `awaiting-review` is not a fresh wave-done and needs no new review run. ' +
       'The advance and the work close mail the worker, and the review close mails the reviewer. ' +
-      'You send no `rejected:` mail for it, and you act only when the sender reports it twice.');
+      'You send no `rejected:` mail for it, and you act only when the sender reports it.');
   });
 
   it('the paragraph after the rejected: instruction carves the word out, naming the server\'s three subjects', () => {
     expect(wl).toContain('**Except `lineage-unmeasured`.** The server has already mailed that answer to whoever sent the claim, under its own subject ' +
       '(`wave-done-unmeasured`, `wave-advance-unmeasured` or `review-done-unmeasured`), so send no `rejected: lineage-unmeasured` mail. ' +
-      'The sender re-sends the same claim after the radar\'s next tick, and you act only when it reports the answer twice.');
+      'The sender re-sends the same claim after the radar\'s next tick, at most twice, and you act only when it reports the answer.');
     // The carve-out comes after the instruction it carves out of, and before the detail paragraph.
     const at = (needle: string): number => wl.indexOf(needle);
     expect(at('**Except `lineage-unmeasured`.**')).toBeGreaterThan(at('A stale `wave-done` must never settle a wave.'));
@@ -3580,6 +3581,10 @@ describe('landing order wave 4: the lineage-unmeasured text, the recorded head a
     expect(wl.indexOf(rule), 'the rule sits in §5').toBeGreaterThan(five);
     expect(wl.indexOf(rule), 'the rule comes before the first <handoffCommit> spelling of §5').toBeLessThan(wl.indexOf('<handoffCommit>', five));
     expect(wl).toContain('An advance answer with no `verifiedHead` means the claim you submitted was itself the verified head.');
+    // Final review F-A: once an advance answered `verifiedHead`, the later advances and the close submit it as both tips.
+    expect(wl).toContain('When an advance answered `verifiedHead`, every later advance of that run and its close submit the worker\'s fingerprint ' +
+      'with `branchTip` and `handoffCommit` both set to that `verifiedHead` (the server\'s own answer, not a fresh measurement), ' +
+      'so the ordinary path verifies the head that is landing.');
   });
 
   it('the verdict block itself is untouched by the rule: it still takes PR=<pr> HC=<handoffCommit> and holds no verifiedHead', () => {
@@ -3599,11 +3604,13 @@ describe('landing order wave 4: the lineage-unmeasured text, the recorded head a
     for (const code of ['lineage-unmeasured']) expect(allSkillText).toContain(code);
     for (const s of [
       'It is a wait, not a refusal', 'Except `lineage-unmeasured`', 'is never a failed review run', 'is never ruled on, even when its close was accepted',
-      'is the recorded head', 'names the opt-in and the radar\'s base',
+      'is the recorded head', 'names the opt-in and the radar\'s base', 'When an advance answered `verifiedHead`',
     ]) {
-      const at = allSkillText.indexOf(s);
+      // Whitespace-flattened: the new paragraphs wrap at about 120 columns (final review F-H).
+      const flatAll = flat(allSkillText);
+      const at = flatAll.indexOf(s);
       expect(at, s).toBeGreaterThanOrEqual(0);
-      const sentence = allSkillText.slice(at, allSkillText.indexOf('. ', at));
+      const sentence = flatAll.slice(at, flatAll.indexOf('. ', at));
       expect(sentence, `a double quote in the sentence beginning ${s}`).not.toContain('"');
     }
   });

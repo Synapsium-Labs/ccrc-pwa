@@ -6551,7 +6551,8 @@ export interface RunHealth {
    *  the ceiling is the signal, and quiet siblings must not dilute it. */
   readonly mailReplayMax: number;
   /** How many done-authority refusals this run has collected
-   *  (`DONE_AUTHORITY_CODES`); other reject families are not counted. */
+   *  (`DONE_REFUSAL_CODES`: the authority codes less `lineage-unmeasured`, which is
+   *  the radar's timing and no refusal); other reject families are not counted. */
   readonly doneRejects: number;
   /** The newest one's code, or null when there are none. FREE TEXT on the wire in
    *  `MailSummary.lastError`'s sense — `mail_rejections.code` is stored
@@ -6875,7 +6876,8 @@ export interface RunSummary {
  *  would otherwise have to test `closedAt` as a second condition to know which
  *  zeroes it may believe. So `activeMs` (`wallMs - holdMs`) is a ceiling
  *  whenever this is true, and a total only when it is false. `closeRefusals` is the
- *  count of `mail_rejections` rows with a `DONE_AUTHORITY_CODES` code for this
+ *  count of `mail_rejections` rows with a `DONE_REFUSAL_CODES` code (the authority
+ *  codes less `lineage-unmeasured`) for this
  *  run — the rows `closeRun` writes for a refused wave-done — and
  *  `firstSubmission` is `closeRefusals === 0` once the run is done, null
  *  before.

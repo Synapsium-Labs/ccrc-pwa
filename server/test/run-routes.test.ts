@@ -4771,6 +4771,21 @@ describe('an opted-in project: the lineage through the run routes (landing order
       expect(okRun(f.coord.run(f.id))!.handoffCommit).toBe(LIVE);
     });
 
+    it('F-A: after an accepted advance, a close submitting the verifiedHead as branchTip and handoffCommit succeeds with the marker gone, and records it', async () => {
+      const f = await workRun();
+      const adv = await f.advance('awaiting-review');
+      expect(adv.statusCode).toBe(200);
+      const verifiedHead = (adv.json() as { verifiedHead: string }).verifiedHead;
+      expect(verifiedHead).toBe(LIVE);
+      // The radar is paused, off or stale between the advance and the close: the marker (and the lineage) are gone.
+      rmSync(path.join(f.home, '.cc-sessions', 'landing', PROJECT, 'enabled'));
+      rmSync(path.join(f.home, '.cc-sessions', 'landing', PROJECT, `${SID}.lineage`));
+      const res = await postClose(app!, f.id, { fingerprint: { ...CLAIM, branchTip: verifiedHead, handoffCommit: verifiedHead }, final: true });
+      expect(res.statusCode).toBe(200);
+      expect(okRun(f.coord.run(f.id))!.state).toBe('done');
+      expect(okRun(f.coord.run(f.id))!.handoffCommit).toBe(LIVE);
+    });
+
     it('an ordinary close still records the claim (the abandon of a claim is pinned above, unchanged)', async () => {
       const home = mkTmp('ccrc-runs-');
       const root = gitRoot(PROJECT, BRANCH, TIP);
@@ -4822,7 +4837,7 @@ describe('an opted-in project: the lineage through the run routes (landing order
       expect(mail).toEqual([{ subject: 'wave-advance-unmeasured', toId: SID, state: expect.any(String) }]);
       const body = (f.coord.db.prepare("SELECT body FROM mail WHERE subject = 'wave-advance-unmeasured'").get() as { body: string }).body;
       expect(body).toBe('lineage-unmeasured: not-yet-measured — re-send the same claim, unchanged, after the radar\'s next tick ' +
-        '(usually within 5 minutes); after two such answers, report it to your coordinator');
+        '(usually within 5 minutes), at most twice; if it is still answered this way, report it to your coordinator');
       expect(f.coord.rejections().map((r) => r.code)).toEqual(['lineage-unmeasured']);
     });
 

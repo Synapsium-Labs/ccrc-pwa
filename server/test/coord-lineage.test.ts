@@ -7,7 +7,7 @@ import { describe, expect, it } from 'vitest';
 import { localIO, type FleetIO, type MeasuredPathKind } from '../src/io.js';
 import {
   LAND_PROBE_ENABLED_FRESH_S, LINEAGE_FRESH_S, LINEAGE_MAX_BYTES,
-  decideLineage, parseEnabled, parseLineage,
+  decideLineage, lineageQualifies, parseEnabled, parseLineage,
   type LineageInput, type LineageRead,
 } from '../src/coord/lineage.js';
 import { readLandingFacts } from '../src/coord/lineageRead.js';
@@ -491,5 +491,20 @@ describe('readLandingFacts', () => {
     };
     await facts(io, dir);
     expect(read.filter((p) => /probe$|main-health/.test(p))).toEqual([]);
+  });
+});
+
+// Final review F-D: the probe's own predicate (D-7105), restated once, in L1: a registry record naming this run's
+// project, on a `ws/` branch. Anything else is a row the radar never measures.
+describe('lineageQualifies: the predicate the radar measures by', () => {
+  it.each([
+    ['a record project of null', null, 'proj-a', 'ws/alpha', false],
+    ['a record project that is not the run\'s', 'proj-b', 'proj-a', 'ws/alpha', false],
+    ['a branch that is not under ws/', 'proj-a', 'proj-a', 'feature/alpha', false],
+    ['a branch that only contains ws/', 'proj-a', 'proj-a', 'x/ws/alpha', false],
+    ['an empty branch', 'proj-a', 'proj-a', '', false],
+    ['the same project on a ws/ branch', 'proj-a', 'proj-a', 'ws/alpha', true],
+  ] as const)('%s -> %s', (_name, recordProject, runProject, branch, want) => {
+    expect(lineageQualifies(recordProject, runProject, branch)).toBe(want);
   });
 });

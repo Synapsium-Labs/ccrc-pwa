@@ -11,7 +11,7 @@
  * `$REG` is writable by every fleet session, so acceptance through these files is attribution-grade, like
  * `handoffCommit` itself: this file proves the files agree with themselves and with the live tip, no more.
  */
-import type { ReadFailure } from '../io.js';
+import type { ReadFailure } from '../../../shared/agent-protocol.js';
 
 /** The `enabled` marker is trusted for four timer intervals (D-7104): a radar that stopped ticking cannot keep
  *  acceptance alive. */
@@ -135,10 +135,17 @@ export interface LineageInput {
   marker: MarkerRead;
   globalPause: PauseRead;
   projectPause: PauseRead;
-  /** The probe's qualifying row, restated by the caller (D-7105): a registry record, a `ws/` branch, the run's
+  /** The probe's qualifying row (D-7105), the caller's `lineageQualifies`: a registry record, a `ws/` branch, the run's
    *  project. `false` means the radar never measures this row, so no file will come. */
   qualifies: boolean;
   lineage: LineageRead;
+}
+
+/** The probe's own predicate (D-7105), restated once, here in L1: a registry record naming this run's project, on a
+ *  `ws/` branch. `recordProject` is the project the registry record resolves to, `null` when it names none. A row
+ *  that fails it is one the radar never measures, so the caller gets today's refusal and never waits for a file. */
+export function lineageQualifies(recordProject: string | null, runProject: string, branch: string): boolean {
+  return recordProject !== null && recordProject === runProject && branch.startsWith('ws/');
 }
 
 /** `today` is the caller's existing refusal, its detail extended by ` (<detail>)` when one is given; `unmeasured`

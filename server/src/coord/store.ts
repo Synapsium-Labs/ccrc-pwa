@@ -4109,7 +4109,8 @@ export class CoordStore {
    *  pair `hold done` with the next `release done`; a swap is ONE `done` row
    *  in ccd's journal (no intent, no landing pair — `ccd/ccd:17166`), so it is
    *  COUNTED and flagged, never timed. Refused wave-dones are the
-   *  `mail_rejections` rows `closeRun` records with a DONE_AUTHORITY code,
+   *  `mail_rejections` rows `closeRun` records with a `DONE_REFUSAL_CODES` code
+   *  (the authority codes less `lineage-unmeasured`),
    *  counted through `doneRejectCount` — the SAME private statement
    *  `runHealth`'s `doneRejects` rides, so `GET /api/runs` and
    *  `GET /api/runs/:id/signals` cannot drift apart (R7-3).

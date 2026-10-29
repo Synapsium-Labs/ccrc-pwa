@@ -67,7 +67,7 @@ export function doneRejectionMail(door: DoneClaimDoor, v: { code: DoneRejectCode
   if (v.code !== 'lineage-unmeasured') return { subject: subjects.rejected, body: `${v.code}: ${v.detail}` };
   return { subject: subjects.unmeasured,
     body: `${v.code}: ${v.detail} — re-send the same claim, unchanged, after the radar's next tick (usually within 5 ` +
-      'minutes); after two such answers, report it to your coordinator' };
+      'minutes), at most twice; if it is still answered this way, report it to your coordinator' };
 }
 
 /** The `handoffCommit` a work close records (landing order wave 4, D-7102). When `verifyDone` ran, the head it
