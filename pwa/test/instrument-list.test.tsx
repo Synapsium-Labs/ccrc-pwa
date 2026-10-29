@@ -53,6 +53,7 @@ import { act, cleanup, fireEvent, render, screen, within } from '@testing-librar
 import { INSTRUMENT, REFINED } from '@ccrc/ui';
 import type { FleetSession, RunSummary, SessionBucket } from '../../shared/api';
 import { fleetSession } from './fleetFixture';
+import { withRunBinding } from './runBindingFixture';
 import { effectiveValue, stripComments } from './cssRule';
 
 const { App } = await import('../src/app');
@@ -109,8 +110,9 @@ function stubWidth(desk: boolean, fine = true): void {
 let where = '/';
 function Where(): null { where = useLocation().path; return null; }
 
+/** A fleet frame and a runs frame from a current server: each session carries the run binding over `runs` (D-7182, C7d). */
 function mount(sessions: FleetSession[] = FLEET, runs: RunSummary[] = [RUN]): void {
-  act(() => useFleetStore.setState({ conn: 'open', sessions, runs, runsFrameSeen: true, fleetFrameSeen: true }));
+  act(() => useFleetStore.setState({ conn: 'open', sessions: withRunBinding(sessions, runs), runs, runsFrameSeen: true, fleetFrameSeen: true }));
   navigate('/');
   render(<><App /><Where /></>);
 }
@@ -264,6 +266,19 @@ describe('status mode', () => {
     expect(code).not.toMatch(/Record<\s*SessionBucket/);
     expect(code).not.toMatch(/\bSTATE_WORD\b/);
     for (const w of ['waiting', 'exited', 'merged', 'needs you']) expect(code).not.toContain(`'${w}'`);
+  });
+
+  // C7d's behaviour row, OA-C15 (a) (D-7265): the held cell's run-board door follows the wire's binding. A child the
+  // wire binds to the open run gets the door; the same child with no binding (#746's recycled id, or an older server's
+  // frame) reads its hold as text (a door before C7d, read off the id).
+  it('in status mode a held child\'s cell opens the run board only when the wire binds the run to it', () => {
+    const held = 'program:port-api wave:1/3 run:41';
+    const withHeld = (over: Partial<FleetSession>): FleetSession[] => FLEET.map((s) => (s.id === CHILD ? { ...s, held, ...over } : s));
+    mount(withHeld({}));
+    expect(groupOf('done').querySelector(`[data-row="${CHILD}"] .sess-held`)?.tagName).toBe('BUTTON');
+    cleanup();
+    mount(withHeld({ run: null, openRun: null }));
+    expect(groupOf('done').querySelector(`[data-row="${CHILD}"] .sess-held`)?.tagName).toBe('SPAN');
   });
 
   it('in status mode a child row carries its coordinator\'s crumb; in project mode it nests as today', () => {

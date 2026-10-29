@@ -220,3 +220,60 @@ describe('the PWA folds on the server\'s compaction flag, and the prompt glyph h
     }
   });
 });
+
+// ─── C7d (D-7182, D-7205, D-7207, D-7214; ARCH-61 #796, the PWA half; spec K10) ──────────────────────────────────
+// The PWA reads which run is a session's from the wire (`FleetSession.run`, `.openRun`, through `sessionRunOf`): no
+// `pwa/src` file compares a run's `sessionId` or `claimedBy` with a session id, or keys a session map on one, outside
+// the named readers in `fleet/runWords.ts` (`workerOf`, `coordinatorOf`, `claimedRunsOf`, `boundOpenRun`, and `runCard`,
+// the card lookup). Inside them the by-id lookups are named and counted: `workerOf`'s one (its closed-run arm, D-7205),
+// `runCard`'s two (D-7205) and `coordinatorOf`'s one (D-7207). `childRunsSeen` stays a named reader of the `.child` mark
+// (D-7214). The guess (`runForSession`, `runBelongsTo`) is gone, and the palette's order is the fleet tree's. Read
+// through W7's census (`census-w7/pwa.ts#runMatchers`, whose FIXTURE rows red a matcher and a named lookup), imported in
+// the block so the file's header imports stay as other tasks append to them. Each count may only go down.
+describe('the PWA reads the run binding from the wire (C7d, D-7182)', () => {
+  const site = (s: { file: string; symbol: string }): string => `${s.file}#${s.symbol}`;
+
+  it('runMatchers(): 0 inline comparisons, 0 map lookups and 0 runForSession calls outside the named readers', async () => {
+    const { runMatchers } = await import('../census-w7/pwa.js');
+    const inline = runMatchers().filter((s) => s.kind === 'comparison' || s.kind === 'lookup' || s.kind === 'runForSession');
+    expect(inline.map((s) => `${site(s)} ${s.text}`)).toEqual([]);
+  });
+
+  it('the named by-id lookups: 4, workerOf\'s closed-run arm and runCard\'s two (D-7205), coordinatorOf\'s one (D-7207); may only shrink', async () => {
+    const { runMatchers } = await import('../census-w7/pwa.js');
+    const named = runMatchers().filter((s) => s.kind === 'named').map(site);
+    expect(named.length).toBeLessThanOrEqual(4);
+    expect(named.sort()).toEqual([
+      'pwa/src/fleet/runWords.ts#coordinatorOf', 'pwa/src/fleet/runWords.ts#runCard', 'pwa/src/fleet/runWords.ts#runCard',
+      'pwa/src/fleet/runWords.ts#workerOf',
+    ]);
+  });
+
+  it('childRunsSeen: 1 call, a named reader of the .child mark (D-7214), in useColdRuns; may only shrink', async () => {
+    const { runMatchers } = await import('../census-w7/pwa.js');
+    const calls = runMatchers().filter((s) => s.kind === 'childRunsSeen').map(site);
+    expect(calls.length).toBeLessThanOrEqual(1);
+    expect(calls).toEqual(['pwa/src/screens/useColdRuns.ts#useColdRuns']);
+  });
+
+  it('runForSession and runBelongsTo: 0 definitions in pwa/src', () => {
+    const defs = files().flatMap((f) => parse(f).symbols.filter((s) => ['runForSession', 'runBelongsTo'].includes(s.name.split('.').pop()!)).map((s) => `${f}#${s.name}`));
+    expect(defs).toEqual([]);
+  });
+
+  it('fleetOrder calls fleetTree, and composes no order of its own (no groupFleet or nestFleet call)', async () => {
+    const { enclosingSymbol } = await import('../census-w7/pwa.js');
+    const p = parse('pwa/src/command/commands.ts');
+    const inOrder = p.calls.filter((c) => enclosingSymbol(p, c.start).split('.')[0] === 'fleetOrder').map((c) => c.name);
+    expect(inOrder).toContain('fleetTree');
+    expect(inOrder.filter((n) => n === 'groupFleet' || n === 'nestFleet')).toEqual([]);
+  });
+
+  it('CONTROL: the census reports an inline matcher, a named lookup and a runForSession call where it sees one', async () => {
+    const { fixture, runMatchersIn } = await import('../census-w7/pwa.js');
+    const kinds = (text: string, file: string): string[] => runMatchersIn(fixture(text, file), file).map((s) => s.kind);
+    expect(kinds('export const f = (r: R, s: S) => r.claimedBy === s.id;', 'pwa/src/command/sessionEntries.ts')).toEqual(['comparison']);
+    expect(kinds('export function workerOf(run: R, m: M) { return m.get(run.sessionId); }', 'pwa/src/fleet/runWords.ts')).toEqual(['named']);
+    expect(kinds('export const g = (runs: R[], s: S) => runForSession(runs, s);', 'pwa/src/fleet/x.ts')).toEqual(['runForSession']);
+  });
+});

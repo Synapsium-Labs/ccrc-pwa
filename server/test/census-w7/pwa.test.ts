@@ -88,6 +88,15 @@ describe('W7 PWA census: FIXTURE rows (each query against one counted site and o
     ]);
   });
 
+  it('runMatchers: a lookup inside a named run reader in runWords.ts reports as named; the same text elsewhere, or in another symbol, is a lookup (C7d, D-7182)', () => {
+    const text = [
+      'export function workerOf(run: R, sessionsById: Map<string, S>) { return sessionsById.get(run.sessionId) ?? null; }',
+      'export function other(run: R, sessionsById: Map<string, S>) { return sessionsById.get(run.claimedBy) ?? null; }',
+    ].join('\n');
+    expect(run(runMatchersIn, text, 'pwa/src/fleet/runWords.ts').map((s) => [s.kind, s.symbol])).toEqual([['named', 'workerOf'], ['lookup', 'other']]);
+    expect(run(runMatchersIn, text, 'pwa/src/fleet/other.ts').map((s) => [s.kind, s.symbol])).toEqual([['lookup', 'workerOf'], ['lookup', 'other']]);
+  });
+
   it('requestPolls: a setInterval whose handler calls api.* counts; a clock tick beside a request, usePoll and the stores do not', () => {
     const src = [
       'export function Strip() {',
@@ -271,10 +280,12 @@ describe('W7 PWA census: REAL rows (reporting, not ratcheting; spec §5.1 rule 3
 
   // Desktop-polish Task G2 added three: the programme box's own matches (fleetTree's `claimed` index, programmeBoxes'
   // claim map, and rowRun's call of runForSession).
-  it('runMatchers(): 4 inline comparisons, 9 map lookups, runForSession 8 calls, childRunsSeen 1', () => {
+  // C7d (D-7182): `runCard`'s two card lookups (D-7205) report as named, beside the new readers' by-id lookups,
+  // `workerOf`'s one (D-7205) and `coordinatorOf`'s one (D-7207).
+  it('runMatchers(): 0 inline comparisons, 0 map lookups, runForSession 0 calls, childRunsSeen 1; 4 named by-id lookups in the readers', () => {
     const sites = runMatchers();
-    held('runMatchers', sites, 22);
-    expect(countBy(sites, (s) => s.kind)).toEqual({ comparison: 4, lookup: 9, runForSession: 8, childRunsSeen: 1 });
+    held('runMatchers', sites.filter((s) => s.kind !== 'named'), 1);
+    expect(countBy(sites, (s) => s.kind)).toEqual({ childRunsSeen: 1, named: 4 });
   });
 
   // Pinned exact by C7b (D-7180, D-7221): #1720 merged, leaving `HotFilesStrip`'s and `useFleetHealth`'s timers, which

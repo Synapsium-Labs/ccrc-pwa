@@ -7,7 +7,14 @@ import { fleetSession, hibernatedSession, DEAD_LIFECYCLE } from './fleetFixture'
 import type { ProjectPlacementRead } from '../src/fleet/placementWords';
 import { SPAWN_STALL_MS } from '../../shared/api';
 import { groupFleet, type FleetGroup } from '../src/fleet/groupFleet';
-import { NEST_BRACKET, POOL_UNAVAILABLE_TEXT, ProjectCard } from '../src/fleet/ProjectCard';
+import { NEST_BRACKET, POOL_UNAVAILABLE_TEXT, ProjectCard as Card } from '../src/fleet/ProjectCard';
+import { withRunBinding } from './runBindingFixture';
+
+/** The card as a current server feeds it (D-7182, C7d): each of the group's sessions carries the run binding the server
+ *  sends over the runs this render hands the card (`runBindingFixture.ts`), so a worker of a run on the card is that
+ *  run's bound worker, as it is on the wire. Every assertion below reads the real card. */
+const ProjectCard = (p: Parameters<typeof Card>[0]): ReturnType<typeof Card> =>
+  <Card {...p} group={{ ...p.group, sessions: withRunBinding(p.group.sessions, p.runs ?? []) }} />;
 import { waveLabel } from '../src/fleet/runWords';
 import { TEST_ROSTER } from './rosterFixture';
 import { WARN_GLYPH } from '@ccrc/ui';
@@ -598,6 +605,15 @@ describe('the held cell opens the run board when a run is actually on it (Task 5
                         onOpen={() => {}} onActions={() => {}} />);
     expect(cell()?.tagName).toBe('SPAN');
     expect(document.querySelector('button.sess-held')).toBeNull();
+  });
+
+  // C7d's behaviour row, OA-C15 (a) (D-7265): the door follows the wire's binding. A run that names the session by id
+  // but that the server binds to no incarnation of it (#746's recycled id, or an older server's frame with no binding)
+  // is not the session's run, so the hold reads as the inert text it is (a door before C7d).
+  it('opens no door for an open run that names the session but that the wire does not bind to it', () => {
+    render(<ProjectCard group={grp({ sessions: [{ ...heldWorker, run: null, openRun: null }] })} runs={[childRun]} nowMs={FROZEN}
+                        onOpen={() => {}} onActions={() => {}} />);
+    expect(cell()?.tagName).toBe('SPAN');
   });
 
   it('opens no door for a run that names a DIFFERENT session on the same card', () => {

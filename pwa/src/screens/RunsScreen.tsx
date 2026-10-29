@@ -37,7 +37,7 @@ import type { ReactNode } from 'react';
 import { type CoordCapsView, type RunSpend, type RunSummary } from '../../../shared/api';
 import {
   FINISHED_FOLD, anyDispatchPending, finishedClock, finishedMoreLabel, isRunClosed, programWave, programsWithOpenRun, runClosedAt,
-  programmeTitle, runsByProgram, waveLabel,
+  programmeTitle, runsByProgram, waveLabel, coordinatorOf, workerOf,
 } from '../fleet/runWords';
 import { AbandonSheet, abandonChildOf } from '../fleet/AbandonSheet';
 import { LiftCapSheet } from '../fleet/LiftCapSheet';
@@ -116,9 +116,11 @@ export function RunsScreen({
 
   const sessionById = new Map(sessions.map((s) => [s.id, s] as const));
   // #166 wave 5 (spec §5.7): the abandon sheet's confirm line branches on the
-  // run's workspace's child mark, read off the fleet row this board already looks up.
-  const abandonSession = abandonTarget === null || abandonTarget.sessionId === null
-    ? undefined : sessionById.get(abandonTarget.sessionId);
+  // run's workspace's child mark, read off the fleet row of the run's worker.
+  // Abandon is offered on an open run only, so that is the session the wire
+  // binds to it (`workerOf`, D-7182): a recycled id, or an older server's frame
+  // with no binding, finds none, and the sheet hedges as it does for no row.
+  const abandonSession = abandonTarget === null ? undefined : workerOf(abandonTarget, sessionById) ?? undefined;
   // ACTIVE reads `live` the instant the socket has said anything at all
   // (`runsFrameSeen`) — including an honest `[]`, which is what a run
   // closing broadcasts. Falling back to `live.length > 0 ? live : cold`
@@ -266,8 +268,10 @@ export function RunsScreen({
       key={run.id}
       run={run}
       nowMs={nowMs}
-      session={run.sessionId === null ? null : sessionById.get(run.sessionId) ?? null}
-      coordSession={run.claimedBy === null ? null : sessionById.get(run.claimedBy) ?? null}
+      // The run's worker (`workerOf`, D-7182: an open run's bound worker, a finished run's by-id arm, D-7205) and its
+      // claimant (`coordinatorOf`, by id for every run, D-7207), so every row keeps today's coordinator and Resume door.
+      session={workerOf(run, sessionById)}
+      coordSession={coordinatorOf(run, sessionById)}
       frameSeen={fleetFrameSeen}
       programHasOpenRun={programsOpen.has(run.program)}
       onAbandon={setAbandonTarget}

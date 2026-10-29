@@ -13,7 +13,7 @@
 // SAY and WHEN TO STAY SILENT; none of it renders.
 import type { FleetSession, RunSummary } from '../../../shared/api';
 import { coordinatorPresence, type CoordinatorPresence } from './presence';
-import { crossingNote, runForSession } from './runWords';
+import { boundOpenRun, crossingNote } from './runWords';
 import type { FleetRow } from './nestFleet';
 
 export interface OrphanNote {
@@ -91,9 +91,9 @@ export function orphanNote(
   frameSeen: boolean,
 ): OrphanNote | null {
   if (row.kind !== 'session' || row.depth !== 0) return null;
-  // D-5828: the SESSION, not its id — a run opened for an earlier workspace of the same name (its id below this
-  // row's child-marker run) is not this worker's, and its claimant being gone says nothing about this row.
-  const run = runForSession(runs, row.session);
+  // The wire's binding, not the id (D-7182, #746): a run opened for an earlier workspace of the same name binds no
+  // incarnation of this one, so its claimant being gone says nothing about this row.
+  const run = boundOpenRun(runs, row.session);
   if (run === null) return null;
   const parent = run.claimedBy;
   if (parent === null || parent === row.session.id) return null;

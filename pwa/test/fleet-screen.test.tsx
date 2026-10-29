@@ -4,6 +4,7 @@ import type { ReactNode } from 'react';
 import userEvent from '@testing-library/user-event';
 import { SPAWN_STALL_MS, type FleetSession, type NodeWire, type ProjectPoolsWire, type ProjectRow, type RunSummary, type UpdatesView } from '../../shared/api';
 import { fleetSession, DEAD_LIFECYCLE } from './fleetFixture';
+import { withRunBinding } from './runBindingFixture';
 import { createFleetStore, useFleetStore, type FleetStore } from '../src/stores/fleet';
 import { ApiError, api } from '../src/lib/api';
 import { ack, FEED_ACK_KEY, loadAcks, resetAcks } from '../src/lib/seen';
@@ -146,9 +147,12 @@ const latestFleetSocket = (): FleetSocket => {
   return socket;
 };
 
+/** A frame as a current server sends it (D-7182, C7d): seeded sessions carry the run binding the server sends over the
+ *  runs the store holds once the patch lands (`runBindingFixture.ts`). */
 const seed = (store: FleetStore, patch: Partial<ReturnType<FleetStore['getState']>>): void => {
   act(() => {
-    store.setState(patch);
+    store.setState(patch.sessions === undefined ? patch
+      : { ...patch, sessions: withRunBinding(patch.sessions, patch.runs ?? store.getState().runs) });
   });
 };
 

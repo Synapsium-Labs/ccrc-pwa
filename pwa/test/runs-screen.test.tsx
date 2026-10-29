@@ -3,9 +3,10 @@ import { StrictMode } from 'react';
 import { act, cleanup, render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { RUN_STATES, SPAWN_STALL_MS, type ChildReclaimStatus, type CoordCapsView, type FleetSession, type RunSpend, type RunSummary } from '../../shared/api';
 import { fleetSession, DEAD_LIFECYCLE } from './fleetFixture';
+import { serverBinding, withBindingFrames } from './runBindingFixture';
 import { RunsScreen } from '../src/screens/RunsScreen';
 import { navigate } from '../src/lib/router';
-import { CHILD_RECLAIM_CHIP_GLYPH, CROSSING_GLYPH, REVIEW_GLYPH, RUN_ORDER, RUN_WORD, childReclaimChip, childReclaimGone, childReclaimRefreshDue, childReclaimTitle, crossingNote, dispatchWindow, itemTallyLabel, programWave, programsWithOpenRun, resumeNote, runForSession, runHomeProject, runItems, runKindChip, waveLabel } from '../src/fleet/runWords';
+import { CHILD_RECLAIM_CHIP_GLYPH, CROSSING_GLYPH, REVIEW_GLYPH, RUN_ORDER, RUN_WORD, childReclaimChip, childReclaimGone, childReclaimRefreshDue, childReclaimTitle, crossingNote, dispatchWindow, itemTallyLabel, programWave, programsWithOpenRun, resumeNote, boundOpenRun, runHomeProject, runItems, runKindChip, waveLabel } from '../src/fleet/runWords';
 import { spawnChip, spawnVerdictChip } from '../src/fleet/spawnWords';
 import { api } from '../src/lib/api';
 import { createFleetStore, useFleetStore, type FleetStore } from '../src/stores/fleet';
@@ -50,9 +51,11 @@ const r = (over: Partial<RunSummary> = {}): RunSummary => ({
 
 const sess = (over: Partial<FleetSession> = {}): FleetSession => (fleetSession({ id: 'ccrc-pwa-clear-cove', project: 'ccrc-pwa', workspace: 'clear-cove', branch: 'ws/clear-cove', bucket: 'working', ...over }));
 
-const makeStore = (): FleetStore => createFleetStore({
+/** A fleet store fed as a current server feeds it (D-7182, C7d): each session a case writes carries the run binding the
+ *  server sends over the store's runs (`runBindingFixture.ts`). */
+const makeStore = (): FleetStore => withBindingFrames(createFleetStore({
   makeSocket: () => ({ onopen: null, onmessage: null, onclose: null, onerror: null, close(): void {} }) as unknown as WebSocket,
-});
+}));
 
 /** The caps dial's reader, held for every board render in this file. The screen
  *  injects it for the reason its own prop docstring gives: a loader left to the
@@ -74,7 +77,12 @@ describe('the run vocabulary tracks RUN_STATES, not a hand-copied list', () => {
   });
 });
 
-describe('runForSession — the current wave during a boundary overlap (D-2616)', () => {
+// D-2616's rows, re-pointed from the deleted `runForSession` (D-7182) to the session's open bound run as the server binds
+// it (`runBindingFixture.ts#serverBinding`, held equal to `bindingOf`) and the PWA reads it (`boundOpenRun`).
+const runForSession = (runs: readonly RunSummary[], s: { id: string }): RunSummary | null =>
+  boundOpenRun(runs, { id: s.id, ...serverBinding(s, runs) });
+
+describe('the session\'s open bound run: the current wave during a boundary overlap (D-2616)', () => {
   it('chooses the newest matching run, not the outgoing wave returned by find()', () => {
     const outgoing = r({ id: 41, wave: 1, sessionId: 'shared-worker' });
     const incoming = r({ id: 44, wave: 2, sessionId: 'shared-worker', state: 'planned' });
@@ -993,6 +1001,15 @@ describe('the run row renders its session’s spawn verdict (Task 5)', () => {
     expect(chip()?.textContent).toBe('? quarantined');
   });
 
+  // C7d's behaviour row, OA-C15 (a) (D-7265): the row's session is the run's BOUND worker. A listed session that carries
+  // the open run's id but that the wire binds to another run (#746's recycled id) is not this run's worker, so its
+  // verdict is not this row's ('blocked' before C7d, read off the id).
+  it('says nothing for an open run whose id names a session the wire binds to another run (a recycled id, #746)', () => {
+    const other = { id: 999, state: 'working' as const, claimedBy: 'claude:other-coordinator' };
+    withSession({ spawnState: 'blocked', run: other, openRun: other });
+    expect(chip()).toBeNull();
+  });
+
   it('says nothing at all for a run whose session the fleet frame has not named', () => {
     // The `planned` row's ordinary shape: no session id yet, so no session to
     // read a verdict off. A chip here would be a claim about a pane that does
@@ -1339,6 +1356,18 @@ describe('the run board worker row carries the graph chip', () => {
   it('shows graph 0 — the row this chip exists for is the one that read nothing', () => {
     board({ graphQueries: 0 });
     expect(screen.getByText('graph 0')).toBeInTheDocument();
+  });
+
+  // C7d (D-7205): a FINISHED run's worker is the listed session carrying its id (`workerOf`'s by-id arm), because no
+  // wire fact tells a recycled id from the same incarnation for a closed run: the wire's binding names only the
+  // session's newest and newest open run. So a finished wave of a session now bound to its next wave keeps its
+  // worker's chip, as it did before C7d.
+  it('a finished wave of a live session keeps its worker\'s chip while the session is bound to its next wave', async () => {
+    const store = makeStore();
+    act(() => { store.setState({ runs: [r({ id: 10, wave: 4 })], runsFrameSeen: true, sessions: [sess({ graphQueries: 3 })] }); });
+    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [r({ id: 9, state: 'done', closedAt: Date.now() - 60_000 })] })} loadCaps={NO_CAPS} loadSpend={NO_SPEND} />);
+    expect(store.getState().sessions[0]?.run?.id).toBe(10);
+    await waitFor(() => expect(screen.getAllByText('graph 3')).toHaveLength(2));
   });
 
   it('shows NO chip when nothing was measured', () => {

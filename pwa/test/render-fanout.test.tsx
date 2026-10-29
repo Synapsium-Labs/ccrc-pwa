@@ -22,6 +22,7 @@ import { useFleetFlows, type FleetFlowDoors } from '../src/fleet/FleetFlows';
 import { SessionScreen } from '../src/screens/SessionScreen';
 import { App } from '../src/app';
 import { fleetSession } from './fleetFixture';
+import { serverBinding } from './runBindingFixture';
 
 // Only ToastHost is replaced: the real @ccrc/ui is spread, so every other export is the shipped one.
 const toastCount = vi.hoisted(() => ({ renders: 0 }));
@@ -57,9 +58,10 @@ const C = 'ws-c';
 const row = (over: Partial<FleetSession> = {}): FleetSession => fleetSession({
   wrapper: 'lane-a', home: 'lane-a', project: 'project-a', status: 'idle', bucket: 'idle', ...over,
 });
+/** ws-a carries the run binding the current server sends for it over `runForA` (D-7182, C7d). */
 const wsA = (over: Partial<FleetSession> = {}): FleetSession => row({
   id: A, project: 'project-b', workspace: 'quiet-river', role: 'child', child: { kind: 'child', runId: 39 },
-  boardProject: 'project-a', ...over,
+  boardProject: 'project-a', ...serverBinding({ id: A, child: { kind: 'child', runId: 39 } }, [runForA]), ...over,
 });
 const wsB = (over: Partial<FleetSession> = {}): FleetSession => row({
   id: B, project: 'project-c', workspace: 'amber-reef', name: 'other worker', ...over,

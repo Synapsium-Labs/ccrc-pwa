@@ -8,7 +8,7 @@
 // claimant. A coordinator (`coordinatorRole`, never a claim) ranks first on an equal match, then the other sessions,
 // then the exited ones.
 import { boardHome, type FleetSession, type RunSummary } from '../../../shared/api';
-import { isRunClosed, programmeTitle } from '../fleet/runWords';
+import { claimedRunsOf, isRunClosed, programmeTitle } from '../fleet/runWords';
 import { COORDINATOR_WORD, coordinatorRole } from '../fleet/sessionFacts';
 import { sessionLabel } from '../fleet/sessionLabel';
 import type { Command } from './registry';
@@ -37,7 +37,7 @@ export function sessionEntries(
     const title = sessionLabel(s);
     const lead = coordinatorRole(s);
     const card = boardHome(s);
-    const programmes = open.filter((r) => r.claimedBy === s.id).flatMap((r) => [programmeTitle(r.program, open), r.program]);
+    const programmes = claimedRunsOf(open, s.id).flatMap((r) => [programmeTitle(r.program, open), r.program]);
     const terms = [s.name, s.workspace, s.branch, s.project, card === s.project ? null : card, ...programmes]
       .filter((t): t is string => typeof t === 'string' && t.trim() !== '');
     return {
