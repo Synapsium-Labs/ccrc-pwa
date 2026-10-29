@@ -6,7 +6,7 @@
 
 **The plans this one finishes.** The W3 questions plan (`docs/superpowers/plans/2026-10-26-consolidation-w3-questions.md`), §Out of scope, bullet 2: "Removing the aliases (W7's tail, after `questions-v1` gates the PWA). That also needs `ccrc-api`'s claimant calls moved to `/api/questions/*`, a ccd change deployed agent-first, which this plan names and does not plan." This plan is that plan. The W7 PWA plan (`docs/superpowers/plans/2026-10-27-consolidation-w7-pwa.md`) retires only the operator aliases (its C7p row: "the claimant doors ccd calls stay"), and its "What W7 must not change" lists "**The claimant doors ccd calls** (`POST /api/asks/:id/…`, `/api/approvals/:id/…`): their clients are ccd bytes outside this wave". This plan owns those bytes and those doors.
 
-**Status:** rev 2 (2026-10-29; rev 0 and rev 1 the same day, §Review log). No operator act is open (§Operator acts). Two rulings already made decide this plan's two real choices: OA-C7 (a), 2026-10-26 (the path picks the principal; the family's claimant doors are `/rule` and `/release`), and OA-C17 (a), ruled 2026-10-28 (`docs/superpowers/plans/2026-10-28-w7-operator-acts-ruled.md`: a sibling that cannot import a definition carries a generated region, held byte-equal by a test). Two more bind it:
+**Status:** rev 3 (2026-10-29; rev 0, rev 1 and rev 2 the same day, §Review log). No operator act is open (§Operator acts). Two rulings already made decide this plan's two real choices: OA-C7 (a), 2026-10-26 (the path picks the principal; the family's claimant doors are `/rule` and `/release`), and OA-C17 (a), ruled 2026-10-28 (`docs/superpowers/plans/2026-10-28-w7-operator-acts-ruled.md`: a sibling that cannot import a definition carries a generated region, held byte-equal by a test). Two more bind it:
 
 - **Operator ruling, 2026-10-26: the architecture refactor goes first.** Feature PRs already in review may land first; a series PR open when one lands rebases.
 - **The approval's signed ruling does not change.** No task edits `ccd/approval-verify.mjs`, `server/src/coord/approvalsign.ts`, `shared/api.ts#approvalRulingBytes` or the claimant's core (`server/src/coord/questions.ts#createQuestions`'s `rule` and `release`). `server/test/approval-signing-pin.test.ts` (`VERIFY_SHA256`, the fixture record's bytes and signature) runs unedited and green in every task's first commit and its Verify list.
@@ -146,16 +146,16 @@ This plan keeps its queries in its own module, as the retire and sleep plans do:
 - [ ] **Step 1:** `ccrcApiTable.ts` and the two suites' import moves (one commit, imports only), then the pin and the census module, green on the old code.
 - [ ] **Step 2: Mutation table, RUN** (each mutant on a scratch copy, reverted after):
 
-  | Mutant | Expected red |
-  |---|---|
-  | `ccrc-api`: the `asks.answer` row's path changed to `/api/asks/{id}/rule` | "asks answer sends POST /api/asks/<n>/answer, in every cap state" |
-  | `ccrc-api`: `--json -`'s body read with `$(cat)` replaced by `$(head -c 64)` | "each mailed body reaches the server byte for byte" |
-  | `routes.ts`: the old ask door's `requireAttribution` call dropped | "asks answer: a wrong fromUuid is refused, nothing pressed" |
-  | `routes.ts`: the old approval door's widening-field loop dropped | "approvals rule: permanent is bad-request, nothing signed" |
-  | `questions.ts`: `rule`'s approval arm signs with `reason` trimmed | "the signed ruling's record bytes and signature are the fixture's" (the row's reason has a space at each end, so the trimmed record differs) |
-  | `ccrcApiTable.ts`: comment lines read as rows | `claimant.test.ts`: "FIXTURE: a commented row is not a row" |
-  | `capReaderDefinitions()`: region bounds ignored | `claimant.test.ts`: "FIXTURE: a copy inside a region is generated" |
-  | `capReaderCalls()`: the `$family` test read anywhere on the line | `claimant.test.ts`: "FIXTURE: a call before the family test is unguarded" |
+  | Mutant | Expected red | Measured (2026-10-29) |
+  |---|---|---|
+  | `ccrc-api`: the `asks.answer` row's path changed to `/api/asks/{id}/rule` | "asks answer sends POST /api/asks/<n>/answer, in every cap state" | not run: its row is this task's own and does not exist on `origin/main` `60acb9157`; Step 2 runs it |
+  | `ccrc-api`: `--json -`'s body read with `$(cat)` replaced by `$(head -c 64)` | "each mailed body reaches the server byte for byte" | not run: its row is this task's own and does not exist on `origin/main` `60acb9157`; Step 2 runs it |
+  | `routes.ts`: the old ask door's `requireAttribution` call dropped | "asks answer: a wrong fromUuid is refused, nothing pressed" | not run: its row is this task's own and does not exist on `origin/main` `60acb9157`; Step 2 runs it |
+  | `routes.ts`: the old approval door's widening-field loop dropped | "approvals rule: permanent is bad-request, nothing signed" | not run: its row is this task's own and does not exist on `origin/main` `60acb9157`; Step 2 runs it |
+  | `questions.ts`: `rule`'s approval arm signs with `reason` trimmed | "the signed ruling's record bytes and signature are the fixture's" (the row's reason has a space at each end, so the trimmed record differs) | not run: its row is this task's own and does not exist on `origin/main` `60acb9157`; Step 2 runs it |
+  | `ccrcApiTable.ts`: comment lines read as rows | `claimant.test.ts`: "FIXTURE: a commented row is not a row" | not run: its row is this task's own and does not exist on `origin/main` `60acb9157`; Step 2 runs it |
+  | `capReaderDefinitions()`: region bounds ignored | `claimant.test.ts`: "FIXTURE: a copy inside a region is generated" | not run: its row is this task's own and does not exist on `origin/main` `60acb9157`; Step 2 runs it |
+  | `capReaderCalls()`: the `$family` test read anywhere on the line | `claimant.test.ts`: "FIXTURE: a call before the family test is unguarded" | not run: its row is this task's own and does not exist on `origin/main` `60acb9157`; Step 2 runs it |
 
 - [ ] **Step 3: Verify,** one file at a time: `claimant-client-pin.test.ts`, `census-w3/claimant.test.ts`, `census-w3/questions.test.ts`, `ccrc-api.test.ts`, `ccrc-api-closed.test.ts`, `approval-signing-pin.test.ts`, `question-doors-pin.test.ts`, `question-doors.test.ts`, `question-doors-posture.test.ts`, `approvals-routes.test.ts`, `asks-routes.test.ts`; then both `tsc` runs.
 
@@ -178,12 +178,12 @@ This plan keeps its queries in its own module, as the retire and sleep plans do:
 - [ ] **Step 2:** the engine row and the region, generated; green.
 - [ ] **Step 3: Mutation table, RUN:**
 
-  | Mutant | Expected red |
-  |---|---|
-  | the region's lease `180` hand-edited to `300` | "ccrc-api's server-cap reader is current" |
-  | `_hook_server_cap`'s word class edited in the hook, region not regenerated | "an edit to the hook's reader makes ccrc-api's region stale" |
-  | `renderApicapBody` reads the hook's function name line too | "the generated reader is named _api_server_cap" |
-  | the engine passes the hook's text to the `hook` row | "the hook and auth-dead regions render as on the base" |
+  | Mutant | Expected red | Measured (2026-10-29) |
+  |---|---|---|
+  | the region's lease `180` hand-edited to `300` | "ccrc-api's server-cap reader is current" | not run: its row is this task's own and does not exist on `origin/main` `60acb9157`; Step 3 runs it |
+  | `_hook_server_cap`'s word class edited in the hook, region not regenerated | "an edit to the hook's reader makes ccrc-api's region stale" | not run: its row is this task's own and does not exist on `origin/main` `60acb9157`; Step 3 runs it |
+  | `renderApicapBody` reads the hook's function name line too | "the generated reader is named _api_server_cap" | not run: its row is this task's own and does not exist on `origin/main` `60acb9157`; Step 3 runs it |
+  | the engine passes the hook's text to the `hook` row | "the hook and auth-dead regions render as on the base" | not run: its row is this task's own and does not exist on `origin/main` `60acb9157`; Step 3 runs it |
 
 - [ ] **Step 4: Verify:** `hook-helpers-generated.test.ts`, `census-w3/claimant.test.ts` (generated 1), `claimant-client-pin.test.ts` (unedited, green), `ccrc-api.test.ts`, `ccrc-api-closed.test.ts` (the "sources nothing" and closed-table rows), `ccrc-api-ship.test.ts`, `ownership.test.ts`, `session-hook-compact-carry.test.ts`, `server-caps.test.ts`; `bash -n ccd/ccrc-api`; both `tsc` runs.
 
@@ -213,16 +213,16 @@ This plan keeps its queries in its own module, as the retire and sleep plans do:
 - [ ] **Step 4:** the skew suite.
 - [ ] **Step 5: Mutation table, RUN:**
 
-  | Mutant | Expected red |
-  |---|---|
-  | the cap check removed (family always) | "an absent cap file sends the old door" and the skew row (a) |
-  | the stale arm read as current (lease ignored) | "a cap file 181 s old sends the old door" |
-  | the splice overwrites a caller's `kind` | "a body naming kind is left alone: asks answer with kind approval is the approval arm's bad-request" and "asks release with kind approval is kind-mismatch" (the overwrite makes both succeed) |
-  | `approvals.rule`'s template spelled `ask-{id}` | the real-server row "approvals rule through the family signs the fixture ruling" (the spliced kind is `ask`, so the ask arm answers `400 bad-request`; nothing signed) |
-  | the kind read from the caller's body instead of the template | "the spliced kind is the row's" |
-  | `_api_server_cap` called for every row (the call moved above the `$family` test) | `census-w3/claimant.test.ts`: "cap-reader calls in ccrc-api: exactly 1, guarded" |
-  | the coordinator-skill exemption for `POST /api/questions/:id/rule` **removed** and the corpus sentence naming it dropped | "names every coordinator-domain route the server registers" (with the exemption kept, the loop's `if (EXEMPT.has(r)) continue` skips the route and nothing flags an exemption that is no longer needed, so that variant cannot red; Step 3 removes the exemption only after the sentence lands) |
-  | the `kind` splice added to a fifth row (`runs.open` given a family template) | `ccrc-api-closed.test.ts`: "fills a body on exactly two rows and splices the family's kind on the four claimant rows" |
+  | Mutant | Expected red | Measured (2026-10-29) |
+  |---|---|---|
+  | the cap check removed (family always) | "an absent cap file sends the old door" and the skew row (a) | not run: its row is this task's own and does not exist on `origin/main` `60acb9157`; Step 5 runs it |
+  | the stale arm read as current (lease ignored) | "a cap file 181 s old sends the old door" | not run: its row is this task's own and does not exist on `origin/main` `60acb9157`; Step 5 runs it |
+  | the splice overwrites a caller's `kind` | "a body naming kind is left alone: asks answer with kind approval is the approval arm's bad-request" and "asks release with kind approval is kind-mismatch" (the overwrite makes both succeed) | not run: its row is this task's own and does not exist on `origin/main` `60acb9157`; Step 5 runs it |
+  | `approvals.rule`'s template spelled `ask-{id}` | the real-server row "approvals rule through the family signs the fixture ruling" (the spliced kind is `ask`, so the ask arm answers `400 bad-request`; nothing signed) | not run: its row is this task's own and does not exist on `origin/main` `60acb9157`; Step 5 runs it |
+  | the kind read from the caller's body instead of the template | "the spliced kind is the row's" | not run: its row is this task's own and does not exist on `origin/main` `60acb9157`; Step 5 runs it |
+  | `_api_server_cap` called for every row (the call moved above the `$family` test) | `census-w3/claimant.test.ts`: "cap-reader calls in ccrc-api: exactly 1, guarded" | not run: its row is this task's own and does not exist on `origin/main` `60acb9157`; Step 5 runs it |
+  | every corpus sentence naming `POST /api/questions/:id/rule` dropped: **both** of the sentences Files adds to `wave-lifecycle.md` (the ask lane's and the approval lane's), the exemption list as this task leaves it (without the entry) | "names every coordinator-domain route the server registers" | **red** on `origin/main` `60acb9157` with this task's tip simulated (the two lane sentences added, both family exemptions removed: 208 passed), then both sentences dropped: 1 failed (`POST /api/questions/:id/rule is registered in coord/routes.ts but is named nowhere in the route corpus`). rev 2's spelling ("the corpus sentence", one) **stays green**: dropping either lane's sentence alone leaves the other naming the route, 208 passed each way. With the exemption kept, the loop's `if (EXEMPT.has(r)) continue` skips the route and nothing flags a stale exemption, so that variant cannot red either; Step 3 removes the exemption only after the sentences land. On `origin/main` `60acb9157` as it stands (no sentence yet), the exemption removed alone: 1 failed, the same message |
+  | the `kind` splice added to a fifth row (`runs.open` given a family template) | `ccrc-api-closed.test.ts`: "fills a body on exactly two rows and splices the family's kind on the four claimant rows" | not run: its row is this task's own and does not exist on `origin/main` `60acb9157`; Step 5 runs it |
 
 - [ ] **Step 6: Verify:** `claimant-client-pin.test.ts`, `claimant-client-skew.test.ts`, `census-w3/claimant.test.ts`, `ccrc-api.test.ts`, `ccrc-api-closed.test.ts` (the body-fill census, re-pointed, and the executable-corpus parity: the skill blocks call the same verbs), `coordinator-skill.test.ts`, `worker-skill.test.ts`, `approval-signing-pin.test.ts`, `question-doors.test.ts`, `question-doors-pin.test.ts`, `approvals-routes.test.ts`, `asks-routes.test.ts`, `approvals-brief.test.ts`, `hook-helpers-generated.test.ts`; `bash -n ccd/ccrc-api`; both `tsc` runs.
 
@@ -235,7 +235,7 @@ This plan keeps its queries in its own module, as the retire and sleep plans do:
 **Files:**
 - Modify `server/src/coord/approvalguard.ts`: the `the approval surface` pattern gains one alternation, `\/api\/questions\/approval-` (any id after it; the word boundary is not needed because the prefix already ends in `-`), and nothing else.
 - Modify `ccd/session-hook.sh`: `fmatch`'s `surface` line gains the same alternation in its jq spelling (`"|/api/questions/approval-"`), and the comment above `APPROVAL_FORBIDDEN_JQ` that lists the surface names it. The deny sentence (`areason`) is unchanged: it names the surface by example, and a pinned sentence is not re-worded for an example.
-- Modify `server/test/fixtures/approvals/guard-corpus.json`: rows `curl -s -X POST http://127.0.0.1:7788/api/questions/approval-1/rule` and `…/approval-1/release` (forbidden, `surface`), and `…/api/questions/ask-1/rule` and `…/ask-1/release` (**not** forbidden: a worker answers its own children's asks, worker clause 13), each read by both copies through the existing suites.
+- Modify `server/test/fixtures/approvals/guard-corpus.json`: rows `curl -s -X POST http://127.0.0.1:7788/api/questions/approval-1/rule` and `…/approval-1/release` (forbidden, `surface`), and `…/api/questions/ask-1/rule` and `…/ask-1/release` (**not** forbidden: a worker answers its own children's asks, worker clause 13; class `escalate`, which is what the classifier answers for them on the tip, measured on `origin/main` `60acb9157` with the alternation simulated), each read by both copies through the existing suites.
 - Modify `server/test/session-hook-approval-deny.test.ts`: its list of denied surface commands gains the two approval rows (its existing `/api/approvals/1/rule` row stays).
 
 - [ ] **Step 0:** re-measure both copies' `surface` pattern, the corpus's readers, and #1772's hunks in both files; confirm `xmatch` needs no row (a `$VAR` before a path is not a program).
@@ -243,11 +243,11 @@ This plan keeps its queries in its own module, as the retire and sleep plans do:
 - [ ] **Step 2:** both alternations; green. Its own behaviour commit, before and after rows in the PR body.
 - [ ] **Step 3: Mutation table, RUN:**
 
-  | Mutant | Expected red |
-  |---|---|
-  | the classifier's alternation dropped | `approvalguard.test.ts`: the approval-1 rule row |
-  | the hook's alternation dropped | `session-hook-approval-wait.test.ts`'s corpus parity and `session-hook-approval-deny.test.ts` |
-  | the alternation widened to `\/api\/questions\/` | the ask-1 rows (not forbidden) |
+  | Mutant | Expected red | Measured (2026-10-29) |
+  |---|---|---|
+  | the classifier's alternation dropped | `approvalguard.test.ts`: the approval-1 rule row | **red** on `origin/main` `60acb9157` with this task's tip simulated (both alternations, the four corpus rows, the two deny rows; tip: 992, 289 and 66 passed), the classifier's alternation dropped: `approvalguard.test.ts` 2 failed (the approval-1 rule and release rows), `session-hook-approval-deny.test.ts` 1 failed |
+  | the hook's alternation dropped | `session-hook-approval-wait.test.ts`'s corpus parity and `session-hook-approval-deny.test.ts` | **red**, same simulation, the hook's alternation dropped: `session-hook-approval-deny.test.ts` 3 failed, `session-hook-approval-wait.test.ts` 1 failed (its forbidden-rows parity); `approvalguard.test.ts` green, as expected |
+  | the alternation widened to `\/api\/questions\/` | the ask-1 rows (not forbidden) | **red**, same simulation, both copies widened: `approvalguard.test.ts` 2 failed (the ask-1 rows, classified `escalate` on the tip, become `forbidden`); the hook's copy widened alone: `session-hook-approval-deny.test.ts` 1 failed. The ask-1 rows' class on the tip is `escalate` (measured), so the corpus rows carry `"class": "escalate"` |
 
 - [ ] **Step 4: Verify:** `approvalguard.test.ts`, `session-hook-approval-deny.test.ts`, `session-hook-approval-wait.test.ts`, `session-hook-account-deny.test.ts`, `claimant-client-pin.test.ts` (unedited), `approval-signing-pin.test.ts`; `bash -n ccd/session-hook.sh`; both `tsc` runs.
 
@@ -273,13 +273,13 @@ This plan keeps its queries in its own module, as the retire and sleep plans do:
 - [ ] **Step 4:** the corpus and docs commits; then the ratchets.
 - [ ] **Step 5: Mutation table, RUN:**
 
-  | Mutant | Expected red |
-  |---|---|
-  | one alias left registered | `census-w3/claimant.test.ts`: "claimant doors: exactly 2" |
-  | the client's old-door fallback kept for an absent cap file | "an absent cap file sends the family" |
-  | the `no-questions-door` refusal dropped (a fresh file without the word sends the family) | "a server that lists words without questions-v1 is refused locally, nothing sent" |
-  | clause 11 still names `POST /api/asks/:id/answer` | `coordinator-skill.test.ts`: "names no route the server does not register" |
-  | a re-pointed pin row's expectation edited | the reviewer's diff check: expectation cells byte-identical (the PR body prints the cell diff, which is empty) |
+  | Mutant | Expected red | Measured (2026-10-29) |
+  |---|---|---|
+  | one alias left registered | `census-w3/claimant.test.ts`: "claimant doors: exactly 2" | not run: its row is this task's own and does not exist on `origin/main` `60acb9157`; Step 5 runs it |
+  | the client's old-door fallback kept for an absent cap file | "an absent cap file sends the family" | not run: its row is this task's own and does not exist on `origin/main` `60acb9157`; Step 5 runs it |
+  | the `no-questions-door` refusal dropped (a fresh file without the word sends the family) | "a server that lists words without questions-v1 is refused locally, nothing sent" | not run: its row is this task's own and does not exist on `origin/main` `60acb9157`; Step 5 runs it |
+  | clause 11 still names `POST /api/asks/:id/answer` | `coordinator-skill.test.ts`: "names no route the server does not register" | **red** on `origin/main` `60acb9157` with the alias simulated deleted (the `app.post('/api/asks/:id/answer'` registration renamed away) and `wave-lifecycle.md`'s mention re-pointed to the verb, clause 11 kept: 1 failed; control, clause 11 re-pointed too: 1 passed |
+  | a re-pointed pin row's expectation edited | the reviewer's diff check: expectation cells byte-identical (the PR body prints the cell diff, which is empty) | not a test row: the reviewer runs the diff on the task's PR, and the PR body records it |
 
 - [ ] **Step 6: Verify:** every suite of Q3j's Verify list, plus `auth-gate.test.ts`, `routes.test.ts`, `box-token-census.test.ts`, `registry-refused-census.test.ts`, `coord-pause-route.test.ts`, `question-doors-posture.test.ts`, `census-w3/questions.test.ts`, `growth-check.test.ts`; `bash -n ccd/ccrc-api`; both `tsc` runs.
 
@@ -337,3 +337,4 @@ D-7320 to D-7329, issued by the allocator on 2026-10-29 for this plan (count 10)
 - rev 0 (2026-10-29): written from measurements on `origin/main` `b9f672354` (§What the measurement found) and the open PRs of that day (29).
 - rev 1 (2026-10-29): re-based on `origin/main` `10212486f` (16 releases carry Q3f; open-PR holders re-listed). Two review findings fixed. (1) Q3j's FIFO row could not be built: the reader's `<` open blocks on a FIFO with no writer, so the row would hang the suite; replaced by the `capReaderCalls()` census and the hazard named (D-7339). (2) The contrary-kind difference was wrong for `rule`: the family picks its body arm by the body's `kind` before the id/kind check, so the mailed bodies with a contrary kind are the other arm's `400 bad-request` and only `release` (or a body well formed for the contrary kind) reaches `kind-mismatch`; item 2, Review focus 4, Q3h's bodies, Q3j's pin flip, mutation rows and exit, and D-7325 now state each after-value.
 - rev 2 (2026-10-29): three review findings fixed, measured on `origin/main` `10212486f`. (1) Q3h's trimmed-reason mutant could not red its row: neither `approvalsHarness.ts`'s `rule` reason nor the signing pin's fixture reason has surrounding whitespace; the signed-ruling row now names `' a cleanup inside your worktree '`, which both doors pass on untrimmed. (2) Q3j's exemption mutant left the tree as on the base (the coverage loop skips any `EXEMPT` route and nothing flags a stale exemption); the mutant is now the exemption removed with the sentence dropped. (3) Q3j's `kind` splice is a third body fill that `ccrc-api-closed.test.ts`'s D-5298 census could not see (its scan matches only the `$key == … && -n "$body"` spelling); Q3j's Files, Step 3, Verify list, exit gate and mutation table, the named-exception list and Q3l now re-point it.
+- rev 3 (2026-10-29): one review finding fixed, measured on `origin/main` `60acb9157`. Q3j's exemption mutant as rev 2 spelled it ("the exemption removed and the corpus sentence dropped") stays green on the task's tip: Files adds two sentences naming `POST /api/questions/:id/rule` (the ask lane's and the approval lane's in `wave-lifecycle.md`), so dropping either one leaves the other naming the route (tip simulated: 208 passed with either sentence dropped). The mutant is now both sentences dropped, which reds "names every coordinator-domain route the server registers" (1 failed, the route named nowhere). Every mutation table gained a "Measured" column: each row was applied on a scratch copy and run where its row can run before its task lands (Q3j's exemption row, Q3k's three rows with Q3k's tip simulated, Q3l's clause-11 row with the alias simulated deleted), each recorded red with its counts; the rows whose test is written by their own task are marked not run, with the step that runs them. Q3k's ask-1 corpus rows now name the class the classifier answers for them on the tip, `escalate`.
