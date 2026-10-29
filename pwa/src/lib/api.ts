@@ -579,8 +579,10 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
      *  (`isDialogMultiIndexes`: empty, repeated, or outside 1..9). An ask's `askKey` is minted server-side and carried
      *  verbatim: the server re-reads the CURRENT envelope and refuses unless the key still matches, so this can only
      *  ever answer the question the client was shown. */
-    /** Which door an answer takes now: true on a server that advertises `questions-v1` (`serverCaps.ts`). The sheet
-     *  reads it when it mounts, so the first tap's request is not one `GET /health` behind the tap. */
+    /** Which door an answer takes now: true on a server that advertises `questions-v1` (`serverCaps.ts`). Once any
+     *  read has settled it resolves at once with the last door the server gave, re-reading behind it when that is past
+     *  its lease; the sheet reads it when it mounts and when the page comes back into view, so a tap's request is
+     *  never one `GET /health` behind the tap. */
     questionsDoor: (): Promise<boolean> => caps.questionsDoor(),
     answerQuestion: async (id: string, body: QuestionAnswerBody): Promise<DialogAnswered> => {
       const req = questionAnswerRequest(id, body, await caps.questionsDoor());

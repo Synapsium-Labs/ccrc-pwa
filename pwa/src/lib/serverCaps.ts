@@ -18,7 +18,7 @@ export const QUESTIONS_CAP = 'questions-v1' satisfies ServerCap;
  *  rendered reader is built from these three. */
 export const SERVER_CAPS_READ = { path: '/health', cache: 'no-store', word: QUESTIONS_CAP } as const;
 
-/** How long a read that answered is held before the next answer reads again. */
+/** How long a read that answered is fresh. Past it the held door is still answered at once, and read again behind it. */
 export const SERVER_CAPS_HOLD_MS = 60_000;
 
 /** Does a `GET /health` answer advertise `questions-v1`? A body that is not an object, or a `caps` that is not a list,
@@ -31,24 +31,36 @@ export function advertisesQuestions(health: unknown): boolean {
 
 export interface ServerCaps {
   /** True when this server advertises `questions-v1`: the operator's answer takes the family's door. False when it
-   *  does not, or when `/health` could not be read: the old door, which every server before C7p answers. */
+   *  does not, or when `/health` has never been answered: the old door, which every server before C7p answers. Once
+   *  any read has settled it resolves at once (`createServerCaps`). */
   questionsDoor(): Promise<boolean>;
 }
 
-/** One reader over `fetchImpl`. A read the server answered is held for `SERVER_CAPS_HOLD_MS`, by `now`'s clock: a 200
- *  whose body advertises the word as true, and any other answer (a non-200, a body that is not JSON) as false. A
- *  request that failed (no answer at all) reads as false and is NOT held, so the next answer reads again. Answers made
- *  while a read is under way share it. Holding what the server said is what lets the sheet read the door before the
- *  first tap (`DialogSheet`), so a tap's request goes out at once and is never one `/health` read behind it. */
+/** One reader over `fetchImpl`, stale-while-revalidate: an answer never waits on a read once any read has settled.
+ *
+ *  - A read the server answered is held: a 200 whose body advertises the word as true, and any other answer (a
+ *    non-200, a body that is not JSON) as false. It is fresh for `SERVER_CAPS_HOLD_MS`, by `now`'s clock.
+ *  - Past that, the held door is answered at once and one read starts behind it; its answer is served from then on.
+ *  - A request that failed (no answer at all) changes nothing held: the last door the server gave is still answered,
+ *    or the old door (false) when the server never gave one, which every server before C7p answers. It is not fresh,
+ *    so the next answer reads again, behind it.
+ *  - Only an answer before the first read has settled waits, and it shares that read. Answers made while a read is
+ *    under way share it.
+ *
+ *  The sheet reads when it mounts and when the page comes back into view (`DialogSheet`), so a tap's request is
+ *  issued at once, never one `/health` read behind the tap, however long the sheet has been open. */
 export function createServerCaps(fetchImpl: typeof fetch, now: () => number = () => Date.now()): ServerCaps {
+  /** The last door the server gave, and when it gave it. */
   let held: { at: number; door: boolean } | null = null;
+  /** Has any read settled, answered or failed. Until one has, an answer waits for the first read. */
+  let settled = false;
   let reading: Promise<boolean> | null = null;
   const read = async (): Promise<boolean> => {
     let res: Response;
     try {
       res = await fetchImpl(SERVER_CAPS_READ.path, { cache: SERVER_CAPS_READ.cache });
     } catch {
-      return false;
+      return held?.door ?? false;
     }
     let door = false;
     if (res.ok) {
@@ -61,11 +73,16 @@ export function createServerCaps(fetchImpl: typeof fetch, now: () => number = ()
     held = { at: now(), door };
     return door;
   };
+  const reread = (): Promise<boolean> => {
+    reading ??= read().finally(() => { settled = true; reading = null; });
+    return reading;
+  };
   return {
     questionsDoor: () => {
       if (held !== null && now() - held.at < SERVER_CAPS_HOLD_MS) return Promise.resolve(held.door);
-      reading ??= read().finally(() => { reading = null; });
-      return reading;
+      if (!settled) return reread();
+      void reread();
+      return Promise.resolve(held?.door ?? false);
     },
   };
 }
