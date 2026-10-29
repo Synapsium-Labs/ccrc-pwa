@@ -4919,7 +4919,7 @@ describe('the compaction card — the two documents say what the code does (spec
       .filter((e) => e.isFile())
       .map((e) => [e.name, fs.readFileSync(path.join(dir, e.name), 'utf8')] as [string, string]), ...libs];
   };
-  const SCANNED = ['session-hook.sh', 'ccd', 'lib/disk-retention.sh'];
+  const SCANNED = ['session-hook.sh', 'ccd', 'lib/disk-retention.sh', 'lib/train-proof.sh'];   // the second library's comments too (D-7463)
   /** NOT FUNCTIONS, and each is here for a stated reason rather than because it
    *  was in the way. All three are declared by the GENERATED roster projection
    *  (`~/.ccrc/accounts.sh`, `shared/generate.mjs`), which this repo builds but

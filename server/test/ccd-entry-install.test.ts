@@ -18,7 +18,7 @@ import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { mkTmp } from './tmpHelpers.js';
-import { CCD, CCD_LIB, CCD_LIB_PIN_PLACEHOLDER, CCD_REDACT, CCD_REDACT_CLI, canonicalPython3, ghContainedEnv, installedCcdBody } from './ccdWsHelpers.js';
+import { CCD, CCD_LIB, CCD_LIB_PIN_PLACEHOLDER, CCD_TRAIN_LIB, CCD_REDACT, CCD_REDACT_CLI, canonicalPython3, ghContainedEnv, installedCcdBody } from './ccdWsHelpers.js';
 import { itLinux } from './platformFixtures.js';
 import { verifyMarker } from '../../shared/mark.mjs';
 
@@ -45,9 +45,12 @@ const body = (): string => path.join(home, '.local', 'libexec', 'ccrc', 'ccd');
  *  the pin (install-time stamping; ccd-install-stamp.test.ts owns the stamp rule, this file the pin). */
 const stampedTreeBody = (): Buffer =>
   Buffer.from(installedCcdBody(fs.readFileSync(path.join(tree(), 'ccd/ccd'), 'utf8'), fs.readFileSync(path.join(tree(), 'ccd/lib/disk-retention.sh')),
-    { redact: fs.readFileSync(path.join(tree(), 'shared/redact.mjs')), cli: fs.readFileSync(path.join(tree(), 'shared/redact-cli.mjs')) }));
+    { redact: fs.readFileSync(path.join(tree(), 'shared/redact.mjs')), cli: fs.readFileSync(path.join(tree(), 'shared/redact-cli.mjs')) },
+    fs.readFileSync(path.join(tree(), 'ccd/lib/train-proof.sh'))));
 /** The library the body pins and loads (D-6913), where the publisher puts it: `lib/` beside the body. */
 const lib = (): string => path.join(home, '.local', 'libexec', 'ccrc', 'lib', 'disk-retention.sh');
+/** The second library (D-7463), beside the first. */
+const trainLib = (): string => path.join(home, '.local', 'libexec', 'ccrc', 'lib', 'train-proof.sh');
 const sha = (p: string): string => createHash('sha256').update(fs.readFileSync(p)).digest('hex');
 
 /** The template's self-test branch, extended by a fixture HOOK that runs
@@ -78,17 +81,24 @@ const HOOK = [
  *  appends to the body; `installer` rewrites the helper's text (a fixture
  *  failure at a step no hook can reach); `lib` rewrites the library; `pin` rewrites the body's pin line (the committed one is
  *  the placeholder the installer renders, D-6913). */
-function plantTree(o: { template?: (t: string) => string; ccd?: string; installer?: (t: string) => string; lib?: (t: string) => string; pin?: (line: string) => string } = {}): void {
+function plantTree(o: {
+  template?: (t: string) => string; ccd?: string; installer?: (t: string) => string; lib?: (t: string) => string; pin?: (line: string) => string;
+  train?: (t: string) => string; trainPin?: (line: string) => string;
+} = {}): void {
   const dir = path.join(tree(), 'ccd');
   fs.mkdirSync(path.join(dir, 'lib'), { recursive: true });
   const libText = o.lib ? o.lib(fs.readFileSync(CCD_LIB, 'utf8')) : fs.readFileSync(CCD_LIB, 'utf8');
   fs.writeFileSync(path.join(dir, 'lib', 'disk-retention.sh'), libText);
+  // The second library (D-7463), `train` rewriting it as `lib` rewrites the first.
+  const trainText = o.train ? o.train(fs.readFileSync(CCD_TRAIN_LIB, 'utf8')) : fs.readFileSync(CCD_TRAIN_LIB, 'utf8');
+  fs.writeFileSync(path.join(dir, 'lib', 'train-proof.sh'), trainText);
   // The docs redactor's two files (D-7077), which the installer publishes beside the library and pins in the body.
   fs.mkdirSync(path.join(tree(), 'shared'), { recursive: true });
   fs.copyFileSync(CCD_REDACT, path.join(tree(), 'shared', 'redact.mjs'));
   fs.copyFileSync(CCD_REDACT_CLI, path.join(tree(), 'shared', 'redact-cli.mjs'));
   let bodyText = fs.readFileSync(CCD, 'utf8') + (o.ccd ?? '');
   if (o.pin) bodyText = bodyText.replace(/^__CCD_LIB_SHA256=.*$/m, o.pin);
+  if (o.trainPin) bodyText = bodyText.replace(/^__CCD_LIB_TRAIN_SHA256=.*$/m, o.trainPin);
   fs.writeFileSync(path.join(dir, 'ccd'), bodyText, { mode: 0o755 });
   const tpl = fs.readFileSync(path.join(REPO, 'ccd', 'ccd-entry.py'), 'utf8');
   fs.writeFileSync(path.join(dir, 'ccd-entry.py'), o.template ? o.template(tpl) : tpl);
@@ -182,6 +192,11 @@ function assertPair(): void {
   expect(fs.statSync(lib()).mode & 0o777).toBe(0o644);
   expect(fs.readFileSync(lib()).equals(fs.readFileSync(path.join(tree(), 'ccd/lib/disk-retention.sh'))), 'the library is the tree\'s').toBe(true);
   expect(/^__CCD_LIB_SHA256=([0-9a-f]{64})$/m.exec(fs.readFileSync(body(), 'utf8'))?.[1], 'the published body pins the published library').toBe(sha(lib()));
+  // The second library (D-7463), held to the same four facts.
+  expect(fs.lstatSync(trainLib()).isFile(), 'the train-proof library is a regular file, not a link').toBe(true);
+  expect(fs.statSync(trainLib()).mode & 0o777).toBe(0o644);
+  expect(fs.readFileSync(trainLib()).equals(fs.readFileSync(path.join(tree(), 'ccd/lib/train-proof.sh'))), 'the train-proof library is the tree\'s').toBe(true);
+  expect(/^__CCD_LIB_TRAIN_SHA256=([0-9a-f]{64})$/m.exec(fs.readFileSync(body(), 'utf8'))?.[1], 'the published body pins the published train-proof library').toBe(sha(trainLib()));
   const text = fs.readFileSync(entry(), 'utf8');
   expect(text.split('\n')[0]).toBe(`#!${RENDERED} -IS`);
   expect(/^BODY_SHA256 = '([0-9a-f]{64})'$/m.exec(text)?.[1], 'the launcher names the published body').toBe(sha(body()));
@@ -944,6 +959,80 @@ describe('a refused run changes nothing, and nothing is called converged without
 // The installer publishes `shared/redact.mjs` and `shared/redact-cli.mjs` into `shared/` beside the body, staged in their own
 // slots (`.ccd.ccrc-stage.<pid>.1` and `.2`, so the second never unlinks the first), renamed before the library and the body,
 // and renders each one's digest into the body from exactly one placeholder line.
+describe('the second library, lib/train-proof.sh: published, pinned and refused exactly as the first (D-7463)', () => {
+  it('a fresh install publishes it after the first library and before the body', () => {
+    plantTree();
+    const r = helper(['install', tree(), home]);
+    expect(r.code, r.stderr).toBe(0);
+    const said = r.stdout.split('\n').filter((l) => / published at /.test(l));
+    const at = (n: string): number => said.findIndex((l) => l.includes(n));
+    expect(at('lib/disk-retention.sh')).toBeGreaterThan(-1);
+    expect(at('lib/train-proof.sh'), 'after the first library').toBeGreaterThan(at('lib/disk-retention.sh'));
+    expect(at('body published'), 'before the body that pins it').toBeGreaterThan(at('lib/train-proof.sh'));
+    assertPair();
+    assertNoLeftovers();
+  }, 60_000);
+
+  it('changed out of band, it is republished alone; mode drift is repaired in place', () => {
+    plantTree();
+    expect(helper(['install', tree(), home]).code).toBe(0);
+    const [e, b, l] = [ident(entry()), ident(body()), ident(lib())];
+    fs.appendFileSync(trainLib(), '\n# edited on the box\n');
+    const r = helper(['install', tree(), home]);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toContain('library published');
+    expect(r.stdout).not.toContain('body published');
+    expect([ident(entry()), ident(body()), ident(lib())]).toEqual([e, b, l]);
+    assertPair();
+    const before = ident(trainLib());
+    fs.chmodSync(trainLib(), 0o600);
+    const m = helper(['install', tree(), home]);
+    expect(m.code, m.stderr).toBe(0);
+    expect(m.stdout).toMatch(/lib\/train-proof\.sh: mode repaired to 644/);
+    expect(ident(trainLib())).toBe(before);
+    assertPair();
+  }, 60_000);
+
+  it('its digest is rendered into the body\'s one pin line before the stamp, and a changed file needs no source edit', () => {
+    plantTree({ train: (l) => `${l}# a library edit\n` });
+    const r = helper(['install', tree(), home]);
+    expect(r.code, r.stderr).toBe(0);
+    const installed = fs.readFileSync(body(), 'utf8');
+    expect(installed.match(/^__CCD_LIB_TRAIN_SHA256=.*$/gm)).toEqual([`__CCD_LIB_TRAIN_SHA256=${sha(trainLib())}`]);
+    expect(verifyMarker(installed)).toBe('ccrc-unmodified');
+    expect(verifyMarker(installed.replace(/^__CCD_LIB_TRAIN_SHA256=.*$/m, '__CCD_LIB_TRAIN_SHA256=stamp-at-install')), 'the stamp covers the pin').toBe('ccrc-edited');
+    assertPair();
+  }, 60_000);
+
+  for (const [what, trainPin] of [
+    ['no train pin line at all', (): string => '# no pin'],
+    ['two train pin placeholders', (): string => '__CCD_LIB_TRAIN_SHA256=stamp-at-install\n__CCD_LIB_TRAIN_SHA256=stamp-at-install'],
+    ['a literal digest of another file', (): string => `__CCD_LIB_TRAIN_SHA256=${'0'.repeat(64)}`],
+  ] as const) {
+    it(`a body with ${what} is refused before anything is created`, () => {
+      plantTree({ trainPin });
+      const r = helper(['install', tree(), home]);
+      expect(r.code, r.stderr).toBe(1);
+      expect(r.stderr).toMatch(/ccd\/lib\/train-proof\.sh is not the library .* pins/);
+      expect([fs.existsSync(path.join(home, '.local', 'libexec')), fs.existsSync(entry())]).toEqual([false, false]);
+    }, 60_000);
+  }
+
+  for (const [shape, edit] of [
+    ['no trailing newline', (l: string) => l.replace(/\n+$/, '')],
+    ['two trailing newlines', (l: string) => `${l}\n`],
+    ['a NUL byte', (l: string) => `\0${l}`],
+  ] as const) {
+    it(`a train-proof library with ${shape} is refused before anything is created`, () => {
+      plantTree({ train: edit });
+      const r = helper(['install', tree(), home]);
+      expect(r.code, r.stderr).toBe(1);
+      expect(r.stderr).toContain('ccd/lib/train-proof.sh must end in exactly one newline and contain no NUL byte');
+      expect([fs.existsSync(path.join(home, '.local', 'libexec')), fs.existsSync(entry())]).toEqual([false, false]);
+    }, 60_000);
+  }
+});
+
 describe('the docs redactor half: published beside the body, pinned, staged in slots (D-7077, D-7128)', () => {
   const shared = (f: string): string => path.join(home, '.local', 'libexec', 'ccrc', 'shared', f);
   const pinOf = (name: string): string | undefined => new RegExp(`^${name}=([0-9a-f]{64})$`, 'm').exec(fs.readFileSync(body(), 'utf8'))?.[1];
@@ -967,7 +1056,7 @@ describe('the docs redactor half: published beside the body, pinned, staged in s
       expect(pinOf('__CCD_REDACT_CLI_SHA256'), 'the body pins the published redact-cli.mjs').toBe(sha(shared('redact-cli.mjs')));
       // One `library published` line per file of the half, in its rename order, all before the body.
       const said = r.stdout.split('\n').filter((l) => l.includes('library published at'));
-      expect(said.map((l) => /published at \S*\/libexec\/ccrc\/(\S+) /.exec(l)?.[1])).toEqual(['shared/redact.mjs', 'shared/redact-cli.mjs', 'lib/disk-retention.sh']);
+      expect(said.map((l) => /published at \S*\/libexec\/ccrc\/(\S+) /.exec(l)?.[1])).toEqual(['shared/redact.mjs', 'shared/redact-cli.mjs', 'lib/disk-retention.sh', 'lib/train-proof.sh']);
       expect(r.stdout.indexOf('library published')).toBeLessThan(r.stdout.indexOf('body published'));
       assertPair();
       assertNoLeftovers();
@@ -1013,7 +1102,7 @@ describe('the docs redactor half: published beside the body, pinned, staged in s
     expect(r.code, r.stderr).toBe(2);
     expect(r.stderr).toContain('refused after the library moved');
     expect(r.stderr).toContain('the library was renamed into place');
-    expect(r.stderr).toContain('; of the library half, these were renamed: shared/redact.mjs, shared/redact-cli.mjs, lib/disk-retention.sh\n');
+    expect(r.stderr).toContain('; of the library half, these were renamed: shared/redact.mjs, shared/redact-cli.mjs, lib/disk-retention.sh, lib/train-proof.sh\n');
     expect(r.stderr).not.toContain('the body was renamed into place');
     expect(fs.existsSync(body())).toBe(false);
   }, 60_000);

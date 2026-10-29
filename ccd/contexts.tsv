@@ -4,7 +4,8 @@
 # aggregate). D-6054 (ARCH-34, #536). Data only: no installer reads it, and ccd/ccd never sources it.
 # server/test/ccd-contexts.test.ts holds it: every definition has exactly one row, every row names a definition,
 # and the cross-context reference count may only shrink. A NEW FUNCTION NEEDS A ROW in the same change.
-# Rows are in definition order, ccd/ccd first and then ccd/lib/disk-retention.sh (which ccd loads at its foot, D-6913):
+# Rows are in definition order, ccd/ccd first and then its libraries in load order, ccd/lib/disk-retention.sh (D-6913)
+# and ccd/lib/train-proof.sh (D-7463), which ccd loads at its foot:
 # <function name><TAB><context>.
 _plat_mv_notdir	K
 _plat_ln_swap	K
@@ -178,7 +179,6 @@ cmd_ws_attic	C4
 _pr_bind_facts	C4
 _pr_state_one	C4
 cmd_pr_state	C4
-cmd_pr_train_prove	C4
 _gh_pr_landing_query	C4
 _pr_landing_py	C4
 _pr_landing_rules	C4
@@ -195,15 +195,6 @@ _ws_sensitive_inside	C4
 _ws_collect_ignored	C4
 _ws_collect_ignored_settled	C4
 _ws_merge_proof	C4
-_ws_train_tried_get	C4
-_ws_train_tried_fresh_failed	C4
-_ws_train_tried_put	C4
-_ws_train_left	C4
-_pr_num_valid	C4
-_ws_train_keyable	C4
-_ws_train_kept	C4
-_ws_train_record	C4
-_pr_train_proofs	C4
 _ws_fingerprint	C4
 _ws_reap_reset	C4
 _ws_refuse	C4
@@ -810,3 +801,14 @@ _ws_shed_asleep_why	C4
 _ws_shed_run	C4
 cmd_ws_shed_deps	C4
 _ws_shed_locked	C4
+_pr_train_py	C4
+cmd_pr_train_prove	C4
+_ws_train_tried_get	C4
+_ws_train_tried_fresh_failed	C4
+_ws_train_tried_put	C4
+_ws_train_left	C4
+_pr_num_valid	C4
+_ws_train_keyable	C4
+_ws_train_kept	C4
+_ws_train_record	C4
+_pr_train_proofs	C4

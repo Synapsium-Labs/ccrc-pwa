@@ -1,4 +1,6 @@
 // D-6913 (GitHub #1279): ccd/ccd loads the fleet disk-retention code from ccd/lib/disk-retention.sh.
+// D-7463: and the train proof from ccd/lib/train-proof.sh, its second library, loaded, pinned and refused exactly as the
+// first: every file is read and every digest checked before ANY file is evaluated.
 //
 // The file is shell that ccd EVALUATES, so the load is a trust boundary. These tests pin what it promises:
 //   1. the committed ccd carries only the pin's fixed placeholder (the installer renders the digest, as it stamps line 2),
@@ -13,30 +15,41 @@ import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { CCD, CCD_LIB_PIN_PLACEHOLDER, ghContainedEnv, installDirectEntry, installedCcdBody, makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
+import {
+  CCD, CCD_LIB_PIN_PLACEHOLDER, CCD_TRAIN_LIB, CCD_TRAIN_LIB_PIN_PLACEHOLDER, ghContainedEnv, installDirectEntry, installedCcdBody,
+  makeCcdHarness, type CcdHarness,
+} from './ccdWsHelpers.js';
 import { markGenerated } from '../../shared/mark.mjs';
 
 const REPO = path.resolve(__dirname, '..', '..');
 const LIB = path.join(REPO, 'ccd', 'lib', 'disk-retention.sh');
 /** What the moved code defines, one name per region: the orphan verb, the nested rescue, the stale arm, the loose arm. */
 const MOVED = ['cmd_ws_orphan', '_ws_nested_rescue', '_ws_stale_argv', '_ws_loose_collect', 'cmd_scratch_rescue'] as const;
+/** The second library (D-7463) and what it defines: the train record's python, the prover, the record and the proofs. */
+const TRAIN_LIB = CCD_TRAIN_LIB;
+const TRAIN_MOVED = ['_pr_train_py', 'cmd_pr_train_prove', '_ws_train_record', '_pr_train_proofs', '_pr_num_valid', '_ws_train_kept'] as const;
+const sha = (b: Buffer | string): string => createHash('sha256').update(b).digest('hex');
 
 let h: CcdHarness;
 let dir: string;
 beforeEach(() => { h = makeCcdHarness('ccrc-lib-load-'); dir = path.join(h.home, 'tree'); });
 afterEach(() => { h.cleanup(); });
 
-/** A copy of ccd and its library at `<home>/tree/{ccd,lib/disk-retention.sh}`, the library through `mutate`
- *  (`null` leaves it out). The body is the INSTALLED form by default (its pin rendered to the shipped library, then stamped,
- *  as ccd-entry-install.py publishes it), so `mutate` is a library changed after install; `body: 'source'` plants the
- *  committed file as it stands, both placeholders in place, and a function plants what it returns. */
-function plant(mutate: ((t: string) => string | null) = (t) => t, body: 'installed' | 'source' | ((src: string) => string) = 'installed'): string {
+/** A copy of ccd and its libraries at `<home>/tree/{ccd,lib/disk-retention.sh,lib/train-proof.sh}`, the first library
+ *  through `mutate` and the second through `mutateTrain` (`null` leaves one out). The body is the INSTALLED form by default
+ *  (its pins rendered to the shipped libraries, then stamped, as ccd-entry-install.py publishes it), so a mutation is a
+ *  library changed after install; `body: 'source'` plants the committed file as it stands, every placeholder in place, and a
+ *  function plants what it returns. */
+function plant(mutate: ((t: string) => string | null) = (t) => t, body: 'installed' | 'source' | ((src: string) => string) = 'installed',
+  mutateTrain: (t: string) => string | null = (t) => t): string {
   fs.mkdirSync(path.join(dir, 'lib'), { recursive: true });
   const ccd = path.join(dir, 'ccd');
   const src = fs.readFileSync(CCD, 'utf8');
   fs.writeFileSync(ccd, body === 'source' ? src : body === 'installed' ? installedCcdBody(src, fs.readFileSync(LIB)) : body(src), { mode: 0o755 });
   const lib = mutate(fs.readFileSync(LIB, 'utf8'));
   if (lib !== null) fs.writeFileSync(path.join(dir, 'lib', 'disk-retention.sh'), lib);
+  const train = mutateTrain(fs.readFileSync(TRAIN_LIB, 'utf8'));
+  if (train !== null) fs.writeFileSync(path.join(dir, 'lib', 'train-proof.sh'), train);
   return ccd;
 }
 const MARK = (): string => path.join(h.home, 'lib-ran');
@@ -49,7 +62,7 @@ function driver(name: string, body: string): string {
   fs.writeFileSync(file, `${body}\n`, { mode: 0o644 });
   return file;
 }
-const SOURCED = `source "$1"; rc=$?; echo "rc=$rc"; for f in ${MOVED.join(' ')}; do declare -F "$f" >/dev/null && echo "has $f"; done`;
+const SOURCED = `source "$1"; rc=$?; echo "rc=$rc"; for f in ${[...MOVED, ...TRAIN_MOVED].join(' ')}; do declare -F "$f" >/dev/null && echo "has $f"; done`;
 function sourced(ccd: string, extra: NodeJS.ProcessEnv = {}): { out: string; err: string } {
   const r = spawnSync('bash', [driver('sourced.sh', SOURCED), ccd],
     { encoding: 'utf8', cwd: h.home, env: ghContainedEnv(h.home, h.env(extra), { systemd: true, tmux: true, net: true }) });
@@ -68,6 +81,27 @@ describe('the library and the pin', () => {
     const text = bytes.toString('utf8');
     expect(text.endsWith('\n') && !text.endsWith('\n\n'), 'exactly one trailing newline').toBe(true);
     expect(bytes.includes(0), 'no NUL byte: `$(<file)` would drop it and the digest would disagree').toBe(false);
+  });
+
+  it('the second library\'s pin is a placeholder too, and the file has the same one shape (D-7463)', () => {
+    const ccdText = fs.readFileSync(CCD, 'utf8');
+    expect(ccdText.match(/^__CCD_LIB_TRAIN_SHA256=.*$/gm), 'ccd/ccd carries exactly one train pin line, the placeholder')
+      .toEqual([CCD_TRAIN_LIB_PIN_PLACEHOLDER]);
+    const bytes = fs.readFileSync(TRAIN_LIB);
+    const text = bytes.toString('utf8');
+    expect(text.endsWith('\n') && !text.endsWith('\n\n'), 'exactly one trailing newline').toBe(true);
+    expect(bytes.includes(0), 'no NUL byte').toBe(false);
+  });
+
+  it('the train proof is in its library and no longer in ccd/ccd (D-7463)', () => {
+    const ccd = fs.readFileSync(CCD, 'utf8');
+    const lib = fs.readFileSync(TRAIN_LIB, 'utf8');
+    for (const f of TRAIN_MOVED) {
+      expect(new RegExp(`^${f}\\(\\) \\{`, 'm').test(lib), `${f} is defined in the train-proof library`).toBe(true);
+      expect(new RegExp(`^${f}\\(\\) \\{`, 'm').test(ccd), `${f} is not defined in ccd/ccd`).toBe(false);
+    }
+    expect(ccd, 'the train record\'s python left _pr_py').not.toContain("mode == 'train-check'");
+    expect(lib).toContain("elif mode == 'train-check':");
   });
 
   it('the moved code is in the library and no longer in ccd/ccd', () => {
@@ -101,7 +135,7 @@ describe('a faithful copy loads', () => {
     const r = sourced(plant());
     expect(r.err).toBe('');
     expect(r.out).toContain('rc=0');
-    for (const f of MOVED) expect(r.out, f).toContain(`has ${f}`);
+    for (const f of [...MOVED, ...TRAIN_MOVED]) expect(r.out, f).toContain(`has ${f}`);
   });
 });
 
@@ -140,12 +174,26 @@ describe('installed or source checkout: only a body with BOTH placeholders skips
 
   it('a real pin with line 2 still the placeholder is not a source checkout: the digest is checked', () => {
     const pinnedOnly = (src: string): string =>
-      src.replace(CCD_LIB_PIN_PLACEHOLDER, `__CCD_LIB_SHA256=${createHash('sha256').update(fs.readFileSync(LIB)).digest('hex')}`);
+      src.replace(CCD_LIB_PIN_PLACEHOLDER, `__CCD_LIB_SHA256=${sha(fs.readFileSync(LIB))}`)
+        .replace(CCD_TRAIN_LIB_PIN_PLACEHOLDER, `__CCD_LIB_TRAIN_SHA256=${sha(fs.readFileSync(TRAIN_LIB))}`);
     expect(sourced(plant((t) => t, pinnedOnly)).out).toContain('rc=0');
     const r = sourced(plant((t) => t + RAN, pinnedOnly));
     expect(r.err).toContain('ccd: refused (lib-digest)');
     expect(r.out).toContain('rc=125');
     expect(fs.existsSync(MARK())).toBe(false);
+  });
+
+  it('one pin rendered and the other still a placeholder is a broken install: lib-digest, nothing evaluated (D-7463)', () => {
+    for (const half of [
+      (src: string): string => src.replace(CCD_LIB_PIN_PLACEHOLDER, `__CCD_LIB_SHA256=${sha(fs.readFileSync(LIB))}`),
+      (src: string): string => src.replace(CCD_TRAIN_LIB_PIN_PLACEHOLDER, `__CCD_LIB_TRAIN_SHA256=${sha(fs.readFileSync(TRAIN_LIB))}`),
+    ]) {
+      const r = sourced(plant((t) => t + RAN, half, (t) => t + RAN));
+      expect(r.err).toContain('ccd: refused (lib-digest)');
+      expect(r.out).toContain('rc=125');
+      expect(r.out).not.toContain('has ');
+      expect(fs.existsSync(MARK())).toBe(false);
+    }
   });
 });
 
@@ -239,6 +287,32 @@ describe('a library that is not the pinned one refuses the start and runs nothin
     });
   }
 
+  // THE SECOND LIBRARY (D-7463) refuses as the first does, and before EITHER is evaluated: the first library, faithful, does
+  // not run when the second is not what was shipped (none of its names is defined).
+  const trainRefusals: Array<[string, (t: string) => string | null, string]> = [
+    ['one appended line', (t) => t + RAN, 'lib-digest'],
+    ['one byte changed', (t) => t.replace('train-check', 'train-checK'), 'lib-digest'],
+    ['an empty file', () => '', 'lib-digest'],
+    ['no file at all', () => null, 'lib-missing'],
+  ];
+  for (const [name, mutate, word] of trainRefusals) {
+    it(`the train-proof library, ${name}: sourced, status 125 with the ${word} line, neither library's names defined`, () => {
+      const r = sourced(plant((t) => t, 'installed', mutate));
+      expect(r.err).toContain(`ccd: refused (${word})`);
+      expect(r.err).toContain('train-proof.sh');
+      expect(r.out).toContain('rc=125');
+      expect(r.out).not.toContain('has ');
+      expect(fs.existsSync(MARK())).toBe(false);
+    });
+    it(`the train-proof library, ${name}: executed, exit 125 for a verb that never touches it`, () => {
+      const ccd = plant((t) => t, 'installed', mutate);
+      const r = spawnSync('bash', [ccd, 'version'], { encoding: 'utf8', cwd: h.home, env: ghContainedEnv(h.home, h.env(), { systemd: true, tmux: true, net: true }) });
+      expect(r.status).toBe(125);
+      expect(r.stderr).toContain(`ccd: refused (${word})`);
+      expect(r.stdout).toBe('');
+    });
+  }
+
   it('a symbolic link in the library\'s place is refused, even to the right bytes', () => {
     const ccd = plant(() => null);
     const real = path.join(h.home, 'elsewhere.sh');
@@ -253,6 +327,15 @@ describe('a library that is not the pinned one refuses the start and runs nothin
     const e = installDirectEntry(h.home);
     fs.appendFileSync(path.join(path.dirname(e.body), 'lib', 'disk-retention.sh'), RAN);
     const r = spawnSync(e.entry, ['ws-orphan', '--expect', 'x'], { encoding: 'utf8', cwd: h.home, env: h.env() });
+    expect(r.status).toBe(125);
+    expect(r.stderr).toContain('ccd: refused (lib-digest)');
+    expect(fs.existsSync(MARK())).toBe(false);
+  });
+
+  it('through the installed direct entry: a tampered train-proof library refuses before any verb runs, status 125 (D-7463)', () => {
+    const e = installDirectEntry(h.home);
+    fs.appendFileSync(path.join(path.dirname(e.body), 'lib', 'train-proof.sh'), RAN);
+    const r = spawnSync(e.entry, ['pr-train-prove', '--project', 'x'], { encoding: 'utf8', cwd: h.home, env: h.env() });
     expect(r.status).toBe(125);
     expect(r.stderr).toContain('ccd: refused (lib-digest)');
     expect(fs.existsSync(MARK())).toBe(false);
