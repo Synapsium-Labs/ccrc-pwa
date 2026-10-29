@@ -5,6 +5,9 @@
 //    snapshot after every frame as the same frames without it, and that snapshot holds no `pairing` anywhere. The old
 //    reducer's `dialog` arm keeps `msg.dialog`, so a `pairing` placed inside `dialog` would reach the snapshot and red
 //    this row;
+//    C7f (D-7184) gives the reducer its reader: it keeps the frames' `pairing` at the snapshot's top level, and nothing
+//    else. So the fold compares the snapshots with that one key set aside, and the rest of the snapshot, `dialog`
+//    included, must still hold no `pairing` anywhere (the inside-`dialog` guard this row exists for);
 //  - a NEW client and an old server: a frame without `pairing` is the pre-W3 frame byte for byte (no key, not even an
 //    undefined one), and the frames that carry it are those bytes plus the one top-level key.
 import { describe, expect, it } from 'vitest';
@@ -44,11 +47,16 @@ describe('the pairing field across a version skew (Task Q3g, rule 1c)', () => {
     const frames = (await runScenario(sc)).map((f) => f.frame);
     let withField = EMPTY;
     let without = EMPTY;
+    /** The snapshot with the reducer's own top-level `pairing` (C7f's reader) set aside. */
+    const rest = (snap: Snapshot): Snapshot => {
+      const { pairing: _p, ...others } = snap;
+      return others;
+    };
     for (const f of frames) {
       withField = applySessionMsg(withField, f);
       without = applySessionMsg(without, withoutPairing(f));
-      expect(withField, `${sc.name}: after ${f.type}`).toEqual(without);
-      expect(JSON.stringify(withField), `${sc.name}: after ${f.type}, the old client holds no pairing`).not.toContain('"pairing":');
+      expect(rest(withField), `${sc.name}: after ${f.type}`).toEqual(rest(without));
+      expect(JSON.stringify(rest(withField)), `${sc.name}: after ${f.type}, no pairing outside the top-level field`).not.toContain('"pairing":');
     }
   }, 30_000);
 

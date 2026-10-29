@@ -7,6 +7,7 @@ import {
   composePrompt,
   PRESENCE_REFRESH_MS,
   SECRET_MASK,
+  type AskPairing,
   type ChatEvent,
   type Dialog,
   type HookAsk,
@@ -117,6 +118,15 @@ export interface SessionState {
    *  showing stays up, read-only, and sends nothing (`the-ask-holds-through-a-reconnect`). Per connection, never
    *  persisted. */
   askFrameSeen: boolean;
+  /** D-7184 (W7 Task C7f; ARCH-58's PWA half): which of the shown questions the pane is painting, as the server paired
+   *  it (`AskPairing`), read off the frames and never computed here. ONE rule, the server's own
+   *  (`server/src/sessionws.ts#paired`): every `ask`, `dialog` and `ask_cleared` frame replaces it with its own `pairing`,
+   *  a frame without the field clearing it (D-7211: an `ask_cleared` carries the transcript copy's); a `dialog_cleared`
+   *  frame and the socket leaving `open` clear it. So it is only ever the pairing the last frame carried, for the dialog
+   *  the store holds, never an older frame's beside a newer dialog. The one writer that is not a frame is
+   *  `applyAnswered` (D-7220), which clears it with every new dialog it writes (D-7367: not the one it holds). Null: no
+   *  pairing (the sheet's unpaired view with a dialog, its constant unplaced view without one, D-7213). */
+  pairing: AskPairing | null;
   /** R69: the client-side LIFECYCLE generation of the ask: a count, starting at 0, that the reducer raises one frame at a
    *  time (so a clear inside a batch of frames is counted whatever React batches) in exactly two cases:
    *  - an `ask_cleared` frame while the store HOLDS an envelope (`ask` not null): the hook ended its ask. With none held it
@@ -186,7 +196,11 @@ export interface SessionState {
    *  `next`), applied by the sheet that sent the answer. It replaces `dialog` only while the store still holds the
    *  screen that was answered (`answeredId`), or no screen at all: a frame the stream delivered since is newer, and
    *  wins. A no-menu poll that cleared `dialog` before the answer came back is exactly what it overrides (the
-   *  2026-10-16 report). `next: null` clears it, as `dialog_cleared` would. */
+   *  2026-10-16 report). `next: null` clears it, as `dialog_cleared` would.
+   *  D-7220: whenever it writes a dialog it clears `pairing` in the same `set`, since the reply carries none and the
+   *  `dialog` frame that pairs `next` travels on the socket, unordered with the reply; when it writes nothing (a frame
+   *  delivered a newer dialog first) the pairing stays, the frame's. D-7367: a `next` with the id of the dialog the
+   *  store holds is the same screen, which the stream sends no frame for, so its pairing stays too. */
   applyAnswered(answeredId: string, next: Dialog | null): void;
   connect(): void;
   disconnect(): void;
@@ -207,6 +221,9 @@ export type SessionSnapshot = Pick<
   askFrameSeen?: boolean;
   /** R69. Optional HERE only, as `askFrameSeen`: `snapshotOf` always carries it, and a snapshot built without it reads 0. */
   askEpoch?: number;
+  /** D-7184. Optional HERE only, as `askFrameSeen`: `snapshotOf` always carries it, and a snapshot built without it
+   *  reads as none. */
+  pairing?: AskPairing | null;
   /** D-5560. Optional HERE only: `snapshotOf` always carries both, and a
    *  snapshot built without them (the reducer's own suites) reads as no rows. */
   workflows?: WorkflowView[];
@@ -304,10 +321,12 @@ export function applySessionMsg(s: SessionSnapshot, msg: SessionStreamMsg): Sess
       };
     case 'status':
       return { ...s, status: msg.status, statusUpdatedAt: msg.statusUpdatedAt };
+    // D-7184: `pairing` follows the server's attach rule (`sessionws.ts#paired`): each of `dialog`, `ask` and
+    // `ask_cleared` replaces it with its own, absent clearing it; `dialog_cleared` carries none.
     case 'dialog':
-      return { ...s, dialog: msg.dialog };
+      return { ...s, dialog: msg.dialog, pairing: msg.pairing ?? null };
     case 'dialog_cleared':
-      return { ...s, dialog: null, askEpoch: (s.askEpoch ?? 0) + (s.ask === null ? 1 : 0) };
+      return { ...s, dialog: null, pairing: null, askEpoch: (s.askEpoch ?? 0) + (s.ask === null ? 1 : 0) };
     case 'tasks':
       return { ...s, tasks: msg.tasks, tasksTouchedAt: msg.touchedAt };
     case 'workflows':
@@ -327,9 +346,11 @@ export function applySessionMsg(s: SessionSnapshot, msg: SessionStreamMsg): Sess
     // connection has not spoken about it.
     // Either frame is this connection's statement about the envelope, so either sets `askFrameSeen` (D-6325).
     case 'ask':
-      return { ...s, ask: msg.ask, askFrameSeen: true };
+      return { ...s, ask: msg.ask, askFrameSeen: true, pairing: msg.pairing ?? null };
     case 'ask_cleared':
-      return { ...s, ask: null, askFrameSeen: true, askEpoch: (s.askEpoch ?? 0) + (s.ask === null ? 0 : 1) };
+      return {
+        ...s, ask: null, askFrameSeen: true, pairing: msg.pairing ?? null, askEpoch: (s.askEpoch ?? 0) + (s.ask === null ? 0 : 1),
+      };
     case 'rotated':
       // FIVE transcript facts die with the transcript (final review, Minor 6;
       // `fileMeasured` joined them with the measured-read completion) — only
@@ -382,6 +403,7 @@ const snapshotOf = (s: SessionState): SessionSnapshot => ({
   ask: s.ask,
   askFrameSeen: s.askFrameSeen,
   askEpoch: s.askEpoch,
+  pairing: s.pairing,
   tasks: s.tasks,
   tasksTouchedAt: s.tasksTouchedAt,
   workflows: s.workflows,
@@ -801,6 +823,7 @@ export function createSessionStore(id: string, deps: SessionStoreDeps = {}): Ses
       ask: null,
       askFrameSeen: false,
       askEpoch: 0,
+      pairing: null,
       tasks: [],
       workflows: [],
       workflowsUnreadable: false,
@@ -814,7 +837,12 @@ export function createSessionStore(id: string, deps: SessionStoreDeps = {}): Ses
       conn: 'connecting',
 
       applyAnswered(answeredId, next) {
-        set((s) => (s.dialog === null || s.dialog.id === answeredId ? { dialog: next } : {}));
+        // D-7220: a dialog written here clears the pairing (the reply carries none; `next`'s `dialog` frame pairs it).
+        // D-7367: except `next` the store already holds (the same dialog id): the stream sends no frame for an unchanged
+        // screen (`sessionws.ts#nextDialogFrame`), so the pairing the last frame carried is still the one for it.
+        set((s) => (s.dialog === null || s.dialog.id === answeredId
+          ? { dialog: next, pairing: next !== null && s.dialog !== null && next.id === s.dialog.id ? s.pairing : null }
+          : {}));
       },
 
       apply(msg) {
@@ -877,7 +905,8 @@ export function createSessionStore(id: string, deps: SessionStoreDeps = {}): Ses
           // but never the absence of one, so a menu kept from before the drop would be read as current once that frame
           // arrived, and offered live. The sheet's hold keeps its own copy. A connect whose first pane read fails shows no
           // menu until the next tick frames one.
-          onState: (conn) => set(conn === 'open' ? { conn } : { conn, askFrameSeen: false, dialog: null }),
+          // D-7184: the pairing falls with the dialog it was for; the new stream's first frames send their own.
+          onState: (conn) => set(conn === 'open' ? { conn } : { conn, askFrameSeen: false, dialog: null, pairing: null }),
           // Re-stated on EVERY open, automatic reconnects included: the
           // server's presence registry is keyed per connection, so a reconnect
           // starts with no claim at all and a session the operator is still
@@ -954,7 +983,7 @@ export function createSessionStore(id: string, deps: SessionStoreDeps = {}): Ses
         //
         // `askFrameSeen` (D-6325) goes with the `ask` it qualifies: the next connection has not spoken yet.
         set({
-          ask: null, askFrameSeen: false, mail: [], status: null, statusUpdatedAt: null, workflows: [], workflowsUnreadable: false,
+          ask: null, askFrameSeen: false, pairing: null, mail: [], status: null, statusUpdatedAt: null, workflows: [], workflowsUnreadable: false,
         });
       },
 
