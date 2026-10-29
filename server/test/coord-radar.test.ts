@@ -185,6 +185,19 @@ describe('parseProbe: the files', () => {
     unreadable(read(worked({ pairHeads: [14, 0] })));
   });
 
+  // Wave 3b's pair {12, 14} stays valid in every doc below, so only the pairHeads check can refuse them: a list that
+  // merely omits 12 or 14 is also refused by the pairs check, and proves nothing about pairHeads.
+  it('pairHeads refused on its own: one extra bad entry beside a valid list and valid pairs is unreadable', () => {
+    expect(read(worked({ pairHeads: [14, 12] })).ok).toBe(true);                 // CONTROL: the valid list reads
+    unreadable(read(worked({ pairHeads: [14, 12, 99] })));                       // a PR that is no head
+    unreadable(read(worked({ pairHeads: [14, 12, 12] })));                       // a repeat
+    unreadable(read(worked({ pairHeads: [14, 12, 13] })));                       // 13 is the head with a null id
+    unreadable(read(worked({ pairHeads: [14, 12, '15'] })));                     // a non-number
+    unreadable(read(worked({ pairHeads: [14, 12, '12'] })));                     // a non-number that spells a head's PR
+    unreadable(read(worked({ pairHeads: 14 })));                                 // a non-array
+    unreadable(read(worked({ pairHeads: { 0: 14, 1: 12, length: 2 } })));        // an array-like object
+  });
+
   it('pairHeads has no upper length bound: eleven bound heads read (the radar knob is unbounded)', () => {
     const heads = Array.from({ length: 11 }, (_v, i) => ({
       pr: 100 - i, head: sha(100 - i), branch: `ws/h${i}`, id: `lane-a-proj-a-h${i}`, base: { state: 'clean' },
