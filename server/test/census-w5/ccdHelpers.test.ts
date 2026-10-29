@@ -18,7 +18,7 @@ import path from 'node:path';
 import { ccdLauncherIn } from '../consolidationCensus.js';
 import { ccdSource } from '../ccdWsHelpers.js';
 import {
-  functionSpan, markedSpan, reapLockWrappers, refuseCalls, refuseHelperDefs, refuseWords, regPurgeCallLines, tailCallers,
+  functionSpan, lockDeclineSites, markedSpan, REAP_LOCK_RUNNER, reapLockWrappers, refuseCalls, refuseHelperDefs, refuseWords, regPurgeCallLines, tailCallers,
   tailStepHelpers, TAIL_FNS, TAIL_REAP_SIDE, TAIL_STEP_HELPERS, tokenMinters,
 } from './ccdHelpers.js';
 import { expectReportRow } from './reportRow.js';
@@ -182,6 +182,70 @@ describe('reapLockWrappers: the shared reap lock\'s wrappers (D-7071)', () => {
     console.log(`census reapLockWrappers: ${r.wrappers.length}\n${r.wrappers.map((n) => `  ${n}`).join('\n')}\n  other shapes, not counted:\n${r.others.map((n) => `    ${n}`).join('\n')}`);
     expectReportRow('reapLockWrappers', r.wrappers, ['cmd_ws_reap', 'cmd_ws_reclaim', 'cmd_ws_expire', 'cmd_ws_collect'], ['_ws_reap_lock_run'], 1);
     expect([...r.others].sort()).toEqual(['_ws_collect_audit_contained', '_ws_collect_registered', '_ws_expire_spawn_gate', 'cmd_ws_restore']);
+  });
+});
+
+describe('lockDeclineSites: the reap-lock runner\'s calls and its own decline lines (D-7076)', () => {
+  // Built, not written as a definition, as the REPORT rows below build theirs (the harness scan, D-6051).
+  const R = REAP_LOCK_RUNNER;
+  const PLANTED_RUN = [
+    SH.trimEnd(),
+    `${R}() {   # act verb id busy cmd...`,
+    '  # a comment naming `_lc_refuse "$act" "$id" commented-out "x"` is no line of the runner\'s',
+    '  local act="$1" verb="$2" id="$3" busy="$4"; shift 4',
+    '  command -v flock >/dev/null 2>&1 \\',
+    '    || _lc_refuse "$act" "$id" flock-unavailable \\',
+    '         "flock is missing"',
+    '  exec {lfd}>>"$lock" || _lc_refuse "$act" "$id" "$tok" "cannot open $lock"',
+    '  flock -n "$lfd" || {',
+    '    _lc_emit "$act" refused "$id" "" verb "$verb" refusal in-progress detail "$busy"',
+    '    printf \'{"refused":"in-progress","detail":%s,"paths":[]}\\n\' "$(_json_str "$busy")"',
+    '    return 0',
+    '  }',
+    '  "$@"',
+    '}',
+    'cmd_a() {',
+    `  ${R} reap ws-reap "$id" "busy $id" _a_locked "$token" "$id"`,
+    `  # ${R} expire ws-expire "$id" "a comment is no call" _x`,
+    '}',
+    'cmd_b() {',
+    `  out=$(${R} "$act" ws-b "$id" "busy" _b_locked)`,
+    '}',
+    `${R}_not() { :; }`,
+    '',
+  ].join('\n');
+
+  it('FIXTURE: the runner\'s lines once, by name, a non-literal token read as null; each code-line call with its literal words; a comment, a definition and a longer name are no call', () => {
+    const r = lockDeclineSites(PLANTED_RUN);
+    expect(r.runner).not.toBeNull();
+    expect(r.runner!.name).toBe(R);
+    expect(r.runner!.refuses.map((x) => [x.token, x.sentence])).toEqual([['flock-unavailable', 'flock is missing'], [null, 'cannot open $lock']]);
+    expect(r.runner!.emits.map((x) => x.token)).toEqual(['in-progress']);
+    expect(r.runner!.printfs.map((x) => x.token)).toEqual(['in-progress']);
+    expect(r.calls.map((c) => [c.fn, c.act, c.verb, c.busy, c.cmd])).toEqual([
+      ['cmd_a', 'reap', 'ws-reap', 'busy $id', '_a_locked "$token" "$id"'],
+      ['cmd_b', null, 'ws-b', 'busy', '_b_locked)'],
+    ]);
+    expect(PLANTED_RUN.slice(r.calls[0]!.offset).startsWith(`${R} reap`), 'an offset is an offset of the text read').toBe(true);
+    expect(lockDeclineSites(`${SH}cmd_a() { :; }\n`)).toEqual({ runner: null, calls: [] });
+  });
+
+  it('REAL: the runner\'s two refusals, its decline and its document, by name; each call is one destructive verb\'s, with its act and verb', () => {
+    const r = lockDeclineSites();
+    console.log(`census lockDeclineSites: ${r.calls.length} calls\n${r.calls.map((c) => `  ${c.fn}: ${c.act} ${c.verb}`).join('\n')}`);
+    expect(r.runner, 'the runner is defined').not.toBeNull();
+    expect(r.runner!.refuses.map((x) => [x.token, x.sentence])).toEqual([
+      ['flock-unavailable', 'flock (util-linux) is unavailable — refusing to run the destructive verb unserialised'],
+      ['lock-unopenable', 'cannot open the reap lock at $lock'],
+    ]);
+    expect(r.runner!.emits.map((x) => x.token)).toEqual(['in-progress']);
+    expect(r.runner!.printfs.map((x) => x.token)).toEqual(['in-progress']);
+    const VERBS: Record<string, [string, string]> = {
+      cmd_ws_reap: ['reap', 'ws-reap'], cmd_ws_reclaim: ['reclaim', 'ws-reclaim'],
+      cmd_ws_expire: ['expire', 'ws-expire'], cmd_ws_collect: ['collect', 'ws-collect'],
+    };
+    for (const c of r.calls) expect([c.fn, c.act, c.verb], c.text).toEqual([c.fn, ...(VERBS[c.fn ?? ''] ?? ['not a destructive verb', ''])]);
+    expect(new Set(r.calls.map((c) => c.fn)).size, 'one call per verb').toBe(r.calls.length);
   });
 });
 

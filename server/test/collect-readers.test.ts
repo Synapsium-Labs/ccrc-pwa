@@ -18,7 +18,7 @@ import {
 } from '../src/collectLane.js';
 import { SENTENCES } from '../src/wsaudit.js';
 import { ccdSource } from './ccdWsHelpers.js';
-import { refuseWords } from './census-w5/ccdHelpers.js';
+import { lockDeclineSites, refuseWords } from './census-w5/ccdHelpers.js';
 import { codeOnly } from './sourceScan.js';
 import { makePrHarness, type PrHarness } from './ccdPrHelpers.js';
 import { COL_ID, COL_RUN, WRONG_TOKEN, collectAudit, collectVerb, makeOrphan, regOf } from './wsCollectFixture.js';
@@ -87,13 +87,16 @@ const auditJournaledFromCcd = (): string[] => {
   return uniq([...doc.matchAll(/^\s+([a-z-]+)\)\s+_lc_emit collect refused "\$id" "" verb ws-audit refusal ([a-z-]+) /gm)]
     .map((m) => { expect(m[2], 'the case arm journals its own word').toBe(m[1]); return m[1]!; }));
 };
-/** Every message `cmd_ws_collect` dies with before its lock: each `die "…"`, and each `_lc_refuse collect`'s message.
+/** Every message `cmd_ws_collect` dies with before its lock: each `die "…"`, and each `_lc_refuse collect`'s message;
+ *  and, when it calls the reap-lock runner (D-7076), the runner's two `_lc_refuse` messages, read off it by name.
  *  A message ccd builds with a variable is read up to the `$`, its fixed prefix. */
 const diesFromCcd = (): string[] => {
   const region = bashCode(between('\ncmd_ws_collect() {', '\n_ws_collect_locked() {'));
   const re = /\bdie "((?:[^"\\]|\\.)*)"|_lc_refuse\s+collect\s+"\$id"\s+\S+[\s\\]*"((?:[^"\\]|\\.)*)"/g;
-  return uniq([...region.matchAll(re)].map((m) => {
-    const t = (m[1] ?? m[2])!;
+  const lock = lockDeclineSites(ccdSource());
+  const lockDies = lock.runner && lock.calls.some((c) => c.fn === 'cmd_ws_collect' && c.act === 'collect')
+    ? lock.runner.refuses.map((r) => r.sentence ?? '') : [];
+  return uniq([...[...region.matchAll(re)].map((m) => (m[1] ?? m[2])!), ...lockDies].map((t) => {
     const d = t.indexOf('$');
     return d === -1 ? t : t.slice(0, d);
   }));

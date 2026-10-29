@@ -251,6 +251,8 @@ _ws_orphan_locked -> _lc_tx
 _ws_orphan_refused -> _lc_emit
 _ws_reap_eval -> _reg_get
 _ws_reap_eval -> _ws_status
+_ws_reap_lock_run -> _lc_emit
+_ws_reap_lock_run -> _lc_refuse
 _ws_reap_locked -> _lc_emit
 _ws_reap_locked -> _reg_get
 _ws_reap_locked -> _ws_status
@@ -479,13 +481,9 @@ cmd_ws_audit -> _reg_get
 cmd_ws_audit -> _transcript_path
 cmd_ws_audit -> _ws_unit_state
 cmd_ws_collect -> _lc_dec_ok
-cmd_ws_collect -> _lc_emit
-cmd_ws_collect -> _lc_refuse
 cmd_ws_collect -> _lc_surface_norm
 cmd_ws_expire -> _child_runid_valid
 cmd_ws_expire -> _lc_dec_ok
-cmd_ws_expire -> _lc_emit
-cmd_ws_expire -> _lc_refuse
 cmd_ws_expire -> _lc_surface_norm
 cmd_ws_hold -> _lc_dec_ok
 cmd_ws_hold -> _lc_done
@@ -496,11 +494,8 @@ cmd_ws_hold -> _reg_set
 cmd_ws_orphan -> _lc_dec_ok
 cmd_ws_orphan -> _lc_refuse
 cmd_ws_orphan -> _lc_surface_norm
-cmd_ws_reap -> _lc_emit
-cmd_ws_reap -> _lc_refuse
 cmd_ws_reclaim -> _child_runid_valid
 cmd_ws_reclaim -> _lc_dec_ok
-cmd_ws_reclaim -> _lc_emit
 cmd_ws_reclaim -> _lc_refuse
 cmd_ws_reclaim -> _lc_surface_norm
 cmd_ws_release -> _lc_dec_ok

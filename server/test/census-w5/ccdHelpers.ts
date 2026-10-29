@@ -17,7 +17,7 @@
 // definition through its closing brace (`accountMarkers.ts#bashBodies`); a nested definition belongs to its parent.
 import { bashCodeOf, ccdCallGraph, REPO } from '../consolidationCensus.js';
 import { ccdSource } from '../ccdWsHelpers.js';
-import { bashBodies, ccdProgramBodies, maskQuoted } from './accountMarkers.js';
+import { bashBodies, ccdProgramBodies, maskQuoted, type BashBody } from './accountMarkers.js';
 
 /** The two families a refusal belongs to. */
 export type RefuseFamily = 'reap' | 'collect';
@@ -210,6 +210,103 @@ export function reapLockWrappers(src: string = ccdSource()): { wrappers: string[
     (wrapper ? wrappers : others).push(b.name);
   }
   return { wrappers, others };
+}
+
+/** The one reap-lock runner (D-7076; ARCH-45, C5g): ws-reap, ws-reclaim, ws-expire and ws-collect take the shared
+ *  `.reap-<id>.lock` through it, each with its act and verb as literal words and its own in-progress sentence. */
+export const REAP_LOCK_RUNNER = '_ws_reap_lock_run';
+
+/** One call of the runner: its enclosing function (`null` at the top level), its act and verb when each is a literal
+ *  word (else `null`), its busy sentence when it is one double-quoted argument after `"$id"` (else `null`), the
+ *  command it runs (the rest of the line), and where it stands in the text the query read. */
+export interface LockRunnerCall {
+  readonly fn: string | null;
+  readonly act: string | null;
+  readonly verb: string | null;
+  readonly busy: string | null;
+  readonly cmd: string;
+  readonly line: number;
+  readonly offset: number;
+  readonly text: string;
+}
+
+/** One line of the runner's own decline: its token when it is a literal word (else `null`), and the 1-based line of
+ *  the command's first line with that logical line's text (continuations joined). */
+export interface LockRunnerToken { readonly token: string | null; readonly line: number; readonly text: string }
+
+/** One of the runner's `_lc_refuse "$act" "$id" <token> "<sentence>"` calls; `sentence` is `null` when it is not one
+ *  double-quoted argument. */
+export interface LockRunnerRefuse extends LockRunnerToken { readonly sentence: string | null }
+
+/** The runner's own lines, once, by name: its `_lc_refuse` calls (flock unavailable, the lock unopenable), its
+ *  `_lc_emit "$act" refused …` decline and its `{"refused":"in-progress",…}` printf. */
+export interface LockRunnerSites {
+  readonly name: string;
+  readonly line: number;
+  readonly refuses: readonly LockRunnerRefuse[];
+  readonly emits: readonly LockRunnerToken[];
+  readonly printfs: readonly LockRunnerToken[];
+}
+
+const LITERAL_TOKEN = /^[a-z][a-z0-9-]*$/;
+const RUNNER_CALL = new RegExp(`(?<![A-Za-z0-9_$-])${REAP_LOCK_RUNNER}[ \\t]+(.*)$`);
+
+/** A body's code lines joined at each trailing `\`, with the 1-based line each logical line starts on. */
+function logicalLines(lines: BashBody['lines']): { line: number; code: string }[] {
+  const out: { line: number; code: string }[] = [];
+  let open = false;
+  for (const l of lines) {
+    const code = bashCodeOf(l.raw);
+    if (open) out[out.length - 1]!.code = `${out[out.length - 1]!.code.replace(/\\$/, '')} ${code.trim()}`;
+    else out.push({ line: l.line, code });
+    open = /\\$/.test(out[out.length - 1]!.code);
+  }
+  return out;
+}
+
+/** The lock-decline sites the reap-lock runner holds (D-7076): every call of `REAP_LOCK_RUNNER` on a code line, in
+ *  order, and the runner's own decline lines once, by name (`runner` is `null` while it is not defined). Read off the
+ *  same text the census reads, so each `offset` compares with `src.indexOf(…)` offsets. */
+export function lockDeclineSites(src: string = ccdSource()): { runner: LockRunnerSites | null; calls: LockRunnerCall[] } {
+  const starts: number[] = [0, 0];
+  for (let i = 0; i < src.length; i++) if (src[i] === '\n') starts.push(i + 1);
+  const bodies = bashBodies(src);
+  const calls: LockRunnerCall[] = [];
+  for (const b of bodies) {
+    for (const l of logicalLines(b.lines)) {
+      const m = RUNNER_CALL.exec(l.code);
+      if (!m) continue;
+      const args = m[1]!.trim();
+      const a = /^(\S+)\s+(\S+)\s+"\$id"\s+"((?:[^"\\]|\\.)*)"\s+(.*)$/.exec(args);
+      const words = args.split(/\s+/);
+      calls.push({
+        fn: b.fn ? b.name : null,
+        act: /^[a-z]+$/.test(words[0] ?? '') ? words[0]! : null,
+        verb: /^ws-[a-z]+$/.test(words[1] ?? '') ? words[1]! : null,
+        busy: a ? a[3]! : null,
+        cmd: a ? a[4]!.trim() : args,
+        line: l.line,
+        offset: starts[l.line]! + l.code.indexOf(REAP_LOCK_RUNNER),
+        text: l.code.trim(),
+      });
+    }
+  }
+  const def = bodies.find((b) => b.fn && b.name === REAP_LOCK_RUNNER);
+  if (!def) return { runner: null, calls };
+  const refuses: LockRunnerRefuse[] = [];
+  const emits: LockRunnerToken[] = [];
+  const printfs: LockRunnerToken[] = [];
+  const tok = (w: string | undefined): string | null => (w !== undefined && LITERAL_TOKEN.test(w) ? w : null);
+  for (const l of logicalLines(def.lines)) {
+    const text = l.code.trim();
+    const r = /(?<![A-Za-z0-9_])_lc_refuse\s+"\$act"\s+"\$id"\s+(\S+)(?:\s+"((?:[^"\\]|\\.)*)")?/.exec(l.code);
+    if (r) refuses.push({ token: tok(r[1]), sentence: r[2] ?? null, line: l.line, text });
+    const e = /(?<![A-Za-z0-9_])_lc_emit\s+"\$act"\s+refused\s+"\$id"\s+""\s+verb\s+"\$verb"\s+refusal\s+(\S+)/.exec(l.code);
+    if (e) emits.push({ token: tok(e[1]), line: l.line, text });
+    const p = /\bprintf\s+'\{"refused":"([^"]*)"/.exec(l.code);
+    if (p) printfs.push({ token: tok(p[1]), line: l.line, text });
+  }
+  return { runner: { name: def.name, line: def.lines[0]!.line, refuses, emits, printfs }, calls };
 }
 
 /** The tail steps ARCH-45 names (spec K2: the attic pin is two, a catalogue reason; D-7074), each a named helper. */

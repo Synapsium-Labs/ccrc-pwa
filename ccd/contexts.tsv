@@ -206,6 +206,7 @@ _ws_tombstone	C4
 _ws_tombstone_reclip	C4
 _ws_tomb_str	C4
 _ws_tomb_children	C4
+_ws_reap_lock_run	C4
 cmd_ws_reap	C4
 _crumb_parse	C4
 _ws_reap_locked	C4

@@ -36,7 +36,7 @@ import { SENTENCES } from '../src/wsaudit.js';
 import { LC_REASON_MAX_BYTES, LC_REFUSAL_TOKENS, holdReason } from '../../shared/api.js';
 import { testDeps } from './helpers.js';
 import { ccdSource } from './ccdWsHelpers.js';
-import { refuseWords } from './census-w5/ccdHelpers.js';
+import { lockDeclineSites, refuseWords } from './census-w5/ccdHelpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import { makePrHarness, type PrHarness } from './ccdPrHelpers.js';
 import { CHILD_ID, childReclaimVerb, evalOf, makeChild } from './childReclaimFixture.js';
@@ -140,9 +140,15 @@ describe('the fifteen words', () => {
     expect(begin, 'the RECLAIM region is missing its BEGIN marker').toBeGreaterThan(0);
     expect(end).toBeGreaterThan(begin);
     const region = ccd.slice(begin, end).split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
+    // The region's lock decline is its call of the reap-lock runner (D-7076), whose in-progress document stands in the
+    // runner: when a call for `reclaim` lies in the region, the runner's document word is the region's too.
+    const lock = lockDeclineSites(ccd);
+    const declines = lock.runner && lock.calls.some((c) => c.act === 'reclaim' && c.offset >= begin && c.offset < end)
+      ? lock.runner.printfs.map((p) => String(p.token)) : [];
     const harvested = new Set([
       ...refuseWords('reap', { from: begin, to: end, codeOnly: true }),
       ...[...region.matchAll(/"refused":"([a-z][a-z-]*)"/g)].map((m) => m[1]!),
+      ...declines,
       ...PIN_WORDS(region),
     ]);
     expect(PIN_WORDS(region).sort(), 'guards the guard: the pin names both rescue words').toEqual(NESTED_RESCUE_WORDS);
@@ -364,11 +370,17 @@ describe('parseChildReclaimResult', () => {
     // the pinned subject, silently. A message ccd builds with an interpolated
     // variable (only the lock path today) is returned up to the `$`, its
     // fixed prefix.
+    // The two lock dies stand in the reap-lock runner (D-7076), which `cmd_ws_reclaim` calls: when it does, their
+    // sentences are read off the runner by name, after the verb's own.
+    const lock = lockDeclineSites(ccdSrc);
+    const lockDies = lock.runner && lock.calls.some((c) => c.fn === 'cmd_ws_reclaim' && c.act === 'reclaim')
+      ? lock.runner.refuses.map((r) => r.sentence ?? '') : [];
     const dieMessage = (needle: string): string => {
       const re = /\bdie "((?:[^"\\]|\\.)*)"|_lc_refuse\s+reclaim\s+"\$id"\s+\S+[\s\\]*"((?:[^"\\]|\\.)*)"/g;
       let m: RegExpExecArray | null;
-      while ((m = re.exec(region)) !== null) {
-        const text = m[1] ?? m[2];
+      const texts: string[] = [];
+      while ((m = re.exec(region)) !== null) texts.push((m[1] ?? m[2])!);
+      for (const text of [...texts, ...lockDies]) {
         if (text.includes(needle)) {
           const dollar = text.indexOf('$');
           return dollar === -1 ? text : text.slice(0, dollar);
