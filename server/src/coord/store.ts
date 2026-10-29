@@ -4950,21 +4950,26 @@ export class CoordStore {
   }
 
   /** `RunSummary.lastMoveAt` for each of `runIds` (D-7334; programme-boxes spec §2.5): the newer of the run's newest act
-   *  (`lastActReader`, the drift reader's rule) and its newest mail whose sender is a session, never a role sender
-   *  (`MAIL_ROLE_IDS`: the brief, rejections, close notices and stall checks move nothing), or null when it has neither.
-   *  Every asked id is in the answer. Two indexed statements a run (`run_events_by_run`, `mail_by_run`), so its caller
-   *  reads it once per frame, for the open runs only. A thrown statement or an unprovable value is the failure arm. */
+   *  (`lastActReader`, the drift reader's rule) and its newest mail naming it from the run's worker, its reviewer or its
+   *  coordinator session — the run's `sessionId`, the `sessionId` of a review run whose `reviews` is this run, or its
+   *  `claimedBy` — never a role sender (`MAIL_ROLE_IDS`: the brief, rejections, close notices and stall checks move
+   *  nothing), and never another session's (fix round 1, F3), or null when it has neither. Every asked id is in the
+   *  answer. Two indexed statements a run (`run_events_by_run`; `mail_by_run`, its senders by the runs key and
+   *  `runs_by_reviews`), so its caller reads it once per frame, for the open runs only. A thrown statement or an
+   *  unprovable value is the failure arm. */
   runLastMoves(runIds: readonly number[]): RunLastMovesRead {
     try {
       const lastActAt = this.lastActReader();
       const roles = [...MAIL_ROLE_IDS];
       const mail = this.db.prepare(
-        `SELECT MAX(at) AS at FROM mail WHERE runId = ? AND fromId NOT IN (${roles.map(() => '?').join(', ')})`,
+        `SELECT MAX(at) AS at FROM mail WHERE runId = ? AND fromId NOT IN (${roles.map(() => '?').join(', ')}) ` +
+        'AND fromId IN (SELECT sessionId FROM runs WHERE id = ? UNION ALL SELECT claimedBy FROM runs WHERE id = ? ' +
+        'UNION ALL SELECT sessionId FROM runs WHERE reviews = ?)',
       );
       const moves = new Map<number, number | null>();
       for (const id of runIds) {
         const act = lastActAt(id);
-        const sent = driftIntOrNull((mail.get(id, ...roles) as { at: unknown }).at, 'mail at');
+        const sent = driftIntOrNull((mail.get(id, ...roles, id, id, id) as { at: unknown }).at, 'mail at');
         moves.set(id, act === null ? sent : sent === null ? act : Math.max(act, sent));
       }
       return { ok: true, moves };
